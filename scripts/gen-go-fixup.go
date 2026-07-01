@@ -39,14 +39,14 @@ import (
 //
 // The multiline `(?s)` flag lets `.` match newlines so we capture the entire
 // inline struct definition, including its body.
+// Matches both the agent `fallback_models` field (FallbackModels) and the memory
+// `recap_fallback_models` field (RecapFallbackModels) — the `[A-Za-z]*` prefix on
+// the field name plus the `[a-z_]*` prefix on the json tag cover both. The rewrite
+// preserves the captured field name ($1) so each field keeps its own name and
+// becomes `*[]FallbackModel`.
 var fallbackModelsInline = regexp.MustCompile(
-	`(?s)(FallbackModels)\s+\*\[\]struct\s*\{[^}]*?\}\s*(` + "`json:\"fallback_models[^\"]*\"`" + `)`,
+	`(?s)([A-Za-z]*FallbackModels)\s+\*\[\]struct\s*\{[^}]*?\}\s*(` + "`json:\"[a-z_]*fallback_models[^\"]*\"`" + `)`,
 )
-
-// rewriter maps a (fieldName → replacement) pair to the Go fragment that
-// should appear in its place. The replacement is a complete `Field *[]Type`
-// declaration followed by the same json tag.
-const fallbackModelRewrite = `FallbackModels *[]FallbackModel `
 
 // delegationEdgesInline matches the inline anonymous struct that oapi-codegen
 // emits for the `edges: [{ $ref: WorkspaceDelegationEdge }]` arrays on
@@ -118,7 +118,7 @@ var rewriteRules = []rewriteRule{
 	{
 		name:    "fallback_models",
 		inline:  fallbackModelsInline,
-		rewrite: fallbackModelRewrite + "$2",
+		rewrite: "$1 *[]FallbackModel $2",
 	},
 	{
 		name:    "delegation_edges",

@@ -201,11 +201,13 @@ func (r OmnipusRetentionConfig) RetentionSessionDays() int {
 func (r OmnipusRetentionConfig) IsDisabled() bool { return r.Disabled }
 
 // RetentionMemoryRetrosDays returns the configured retro retention, defaulting
-// to 30. Spec v7 FR-034 — used by MemoryStore.SweepRetros and the recall search
+// to 180. Retrospecives outlive their transcripts (session default is 90 days)
+// so reflections remain queryable long after the raw transcript is swept.
+// Spec v7 FR-034 — used by MemoryStore.SweepRetros and the recall search
 // window for retrospectives.
 func (r OmnipusRetentionConfig) RetentionMemoryRetrosDays() int {
 	if r.MemoryRetrosDays <= 0 {
-		return 30
+		return 180
 	}
 	return r.MemoryRetrosDays
 }
@@ -1379,41 +1381,17 @@ type AgentDefaults struct {
 	// BootstrapRecapMaxPerMinute rate-limits the bootstrap pass. Default 5.
 	BootstrapRecapMaxPerMinute int `json:"bootstrap_recap_max_per_minute" env:"OMNIPUS_AGENTS_DEFAULTS_BOOTSTRAP_RECAP_MAX_PER_MINUTE"`
 
-	// BootstrapRecapDailyBudgetUSD caps total estimated spend across a single
-	// bootstrap pass. Units: USD. Default 1.00. Per-process-boot, not calendar-day.
-	BootstrapRecapDailyBudgetUSD float64 `json:"bootstrap_recap_daily_budget_usd" env:"OMNIPUS_AGENTS_DEFAULTS_BOOTSTRAP_RECAP_DAILY_BUDGET_USD"`
+	// RecapModel is the model slug used for session recap / summarisation. A
+	// fast, cheap model is recommended. Empty → falls back to GetModelName()
+	// (the overall default model), then to the session's own agent model.
+	RecapModel string `json:"recap_model,omitempty" env:"OMNIPUS_AGENTS_DEFAULTS_RECAP_MODEL"`
 
-	// RecapModelAllowList overrides the compiled-in cheap-model allow-list used
-	// by FR-029a to fail-closed at boot if recap_model is too expensive. Empty
-	// slice → use the package-level default.
-	//
-	// Entries are PREFIX-matched against the resolved recap model name
-	// (strings.HasPrefix). An operator adding "claude-sonnet-" matches every
-	// claude-sonnet release; writing "claude-sonnet-*" literally will not
-	// match anything because the asterisk is treated as part of the prefix.
-	RecapModelAllowList []string `json:"recap_model_allow_list,omitempty"`
-}
-
-// DefaultRecapModelAllowList is the compiled-in set of models considered cheap
-// enough for session-end recaps under SC-010b. Spec v7 FR-029a. If you add a
-// model family here, confirm its input pricing is ≤ $1/Mtok and it does not
-// charge for thinking/reasoning tokens by default.
-var DefaultRecapModelAllowList = []string{
-	"claude-sonnet-",
-	"claude-haiku-",
-	"gpt-4o-mini",
-	"gpt-4.1-mini",
-	"z-ai/glm-",
-	"gemini-flash-",
-}
-
-// ResolveRecapModelAllowList returns the configured allow-list if non-empty,
-// else the compiled default.
-func (d *AgentDefaults) ResolveRecapModelAllowList() []string {
-	if len(d.RecapModelAllowList) > 0 {
-		return d.RecapModelAllowList
-	}
-	return DefaultRecapModelAllowList
+	// RecapFallbackModels is the ordered fallback chain for the recap model,
+	// tried in order when the primary recap model fails — same shape and
+	// behaviour as an agent's FallbackModels field. Each entry carries its
+	// own Provider so the fallback can route through a different provider than
+	// the primary.
+	RecapFallbackModels FallbackModelSlice `json:"recap_fallback_models,omitempty"`
 }
 
 // GetIdleTimeoutMinutes returns the idle timeout, defaulting to 30.
@@ -1430,14 +1408,6 @@ func (d *AgentDefaults) GetBootstrapRecapMaxPerMinute() int {
 		return 5
 	}
 	return d.BootstrapRecapMaxPerMinute
-}
-
-// GetBootstrapRecapDailyBudgetUSD returns the cost cap, defaulting to $1.00.
-func (d *AgentDefaults) GetBootstrapRecapDailyBudgetUSD() float64 {
-	if d.BootstrapRecapDailyBudgetUSD <= 0 {
-		return 1.00
-	}
-	return d.BootstrapRecapDailyBudgetUSD
 }
 
 const DefaultMaxMediaSize = 20 * 1024 * 1024 // 20 MB

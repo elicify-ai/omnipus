@@ -688,6 +688,16 @@ type WorkspaceMemberHeartbeat = Partial<{
   body: string;
   session_id: string;
 }>;
+type MemorySettings = Partial<{
+  auto_recap_enabled: boolean;
+  idle_timeout_minutes: number;
+  bootstrap_recap_enabled: boolean;
+  bootstrap_recap_max_per_minute: number;
+  recap_model: string;
+  recap_fallback_models: Array<FallbackModel>;
+  session_days: number;
+  memory_retros_days: number;
+}>;
 type WorkspaceUpdateRequest = Partial<{
   name: string;
   description: string;
@@ -1635,14 +1645,14 @@ export const PerformanceSettingsUpdate = z
     tools_on_demand: z.boolean(),
   })
   .partial();
-export const MemorySettings = z
+export const MemorySettings: z.ZodType<MemorySettings> = z
   .object({
     auto_recap_enabled: z.boolean(),
     idle_timeout_minutes: z.number().int(),
     bootstrap_recap_enabled: z.boolean(),
     bootstrap_recap_max_per_minute: z.number().int(),
-    bootstrap_recap_daily_budget_usd: z.number(),
-    recap_model_allow_list: z.array(z.string()),
+    recap_model: z.string().max(256),
+    recap_fallback_models: z.array(FallbackModel),
     session_days: z.number().int(),
     memory_retros_days: z.number().int(),
   })

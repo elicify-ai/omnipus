@@ -48,24 +48,26 @@ func (a *restAPI) getMemorySettings(w http.ResponseWriter, _ *http.Request) {
 	ret := cfg.Storage.Retention
 
 	resp := gen.MemorySettings{
-		AutoRecapEnabled:             boolPtr(d.AutoRecapEnabled),
-		BootstrapRecapEnabled:        boolPtr(d.BootstrapRecapEnabled),
-		BootstrapRecapMaxPerMinute:   intPtr(d.BootstrapRecapMaxPerMinute),
-		BootstrapRecapDailyBudgetUsd: memoryFloat64Ptr(d.BootstrapRecapDailyBudgetUSD),
-		IdleTimeoutMinutes:           intPtr(d.IdleTimeoutMinutes),
-		SessionDays:                  intPtr(ret.RetentionSessionDays()),
-		MemoryRetrosDays:             intPtr(ret.RetentionMemoryRetrosDays()),
+		AutoRecapEnabled:           boolPtr(d.AutoRecapEnabled),
+		BootstrapRecapEnabled:      boolPtr(d.BootstrapRecapEnabled),
+		BootstrapRecapMaxPerMinute: intPtr(d.BootstrapRecapMaxPerMinute),
+		IdleTimeoutMinutes:         intPtr(d.IdleTimeoutMinutes),
+		SessionDays:                intPtr(ret.RetentionSessionDays()),
+		MemoryRetrosDays:           intPtr(ret.RetentionMemoryRetrosDays()),
 	}
-	// RecapModelAllowList: when empty, return an empty slice so the SPA gets
-	// [] instead of null (Zod schema expects array).
-	if len(d.RecapModelAllowList) > 0 {
-		list := make([]string, len(d.RecapModelAllowList))
-		copy(list, d.RecapModelAllowList)
-		resp.RecapModelAllowList = &list
-	} else {
-		empty := []string{}
-		resp.RecapModelAllowList = &empty
+	// RecapModel: always emit a string (empty string when not configured).
+	recapModel := d.RecapModel
+	resp.RecapModel = &recapModel
+	// RecapFallbackModels: translate config FallbackModel → wire FallbackModel.
+	// Always emit an array (empty slice, not null) so the SPA gets [] rather than null.
+	wireFallbacks := make([]gen.FallbackModel, 0, len(d.RecapFallbackModels))
+	for _, fm := range d.RecapFallbackModels {
+		wireFallbacks = append(wireFallbacks, gen.FallbackModel{
+			Model:    fm.Model,
+			Provider: &fm.Provider,
+		})
 	}
+	resp.RecapFallbackModels = &wireFallbacks
 	jsonOK(w, resp)
 }
 
@@ -82,10 +84,6 @@ func (a *restAPI) putMemorySettings(w http.ResponseWriter, r *http.Request) {
 	// Validate values before touching disk.
 	if req.BootstrapRecapMaxPerMinute != nil && *req.BootstrapRecapMaxPerMinute < 0 {
 		jsonErr(w, http.StatusBadRequest, "bootstrap_recap_max_per_minute must be ≥ 0")
-		return
-	}
-	if req.BootstrapRecapDailyBudgetUsd != nil && *req.BootstrapRecapDailyBudgetUsd < 0 {
-		jsonErr(w, http.StatusBadRequest, "bootstrap_recap_daily_budget_usd must be ≥ 0")
 		return
 	}
 	if req.IdleTimeoutMinutes != nil && *req.IdleTimeoutMinutes < 0 {
@@ -122,14 +120,23 @@ func (a *restAPI) putMemorySettings(w http.ResponseWriter, r *http.Request) {
 		if req.BootstrapRecapMaxPerMinute != nil {
 			defaults["bootstrap_recap_max_per_minute"] = *req.BootstrapRecapMaxPerMinute
 		}
-		if req.BootstrapRecapDailyBudgetUsd != nil {
-			defaults["bootstrap_recap_daily_budget_usd"] = *req.BootstrapRecapDailyBudgetUsd
-		}
 		if req.IdleTimeoutMinutes != nil {
 			defaults["idle_timeout_minutes"] = *req.IdleTimeoutMinutes
 		}
-		if req.RecapModelAllowList != nil {
-			defaults["recap_model_allow_list"] = *req.RecapModelAllowList
+		if req.RecapModel != nil {
+			defaults["recap_model"] = *req.RecapModel
+		}
+		if req.RecapFallbackModels != nil {
+			// Translate wire []FallbackModel → plain []map[string]any for JSON storage.
+			raw := make([]map[string]any, 0, len(*req.RecapFallbackModels))
+			for _, fm := range *req.RecapFallbackModels {
+				entry := map[string]any{"model": fm.Model}
+				if fm.Provider != nil && *fm.Provider != "" {
+					entry["provider"] = *fm.Provider
+				}
+				raw = append(raw, entry)
+			}
+			defaults["recap_fallback_models"] = raw
 		}
 
 		// storage.retention section. The canonical layout is top-level
@@ -173,11 +180,4 @@ func setRetentionFields(m map[string]any, sessionDays, memoryRetrosDays *int) er
 		retention["memory_retros_days"] = *memoryRetrosDays
 	}
 	return nil
-}
-
-// memoryFloat64Ptr returns a pointer to f. A local helper since the gateway
-// package only has intPtr (schedules.go) and boolPtr (rest.go) out of the box.
-func memoryFloat64Ptr(f float64) *float64 {
-	v := f
-	return &v
 }

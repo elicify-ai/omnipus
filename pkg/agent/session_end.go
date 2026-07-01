@@ -138,13 +138,22 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 	}
 	historyText := prefix + combined
 
-	// Resolve recap model (FR-029): prefer LightModel when AutoRecapEnabled.
-	recapModel := ""
-	if al.cfg.Agents.Defaults.Routing != nil && al.cfg.Agents.Defaults.AutoRecapEnabled {
-		recapModel = al.cfg.Agents.Defaults.Routing.LightModel
+	// Resolve primary recap model.
+	// Priority: recap_model config → overall default model → session agent model.
+	recapModel := al.cfg.Agents.Defaults.RecapModel
+	if recapModel == "" {
+		recapModel = al.cfg.Agents.Defaults.GetModelName()
 	}
 	if recapModel == "" {
 		recapModel = agentInst.Model
+	}
+
+	// Build the fallback candidate list: [primaryRecapModel, ...RecapFallbackModels].
+	// Each config.FallbackModel carries its own Provider for cross-provider fallback.
+	candidates := make([]providers.FallbackCandidate, 0, 1+len(al.cfg.Agents.Defaults.RecapFallbackModels))
+	candidates = append(candidates, providers.FallbackCandidate{Model: recapModel})
+	for _, fm := range al.cfg.Agents.Defaults.RecapFallbackModels {
+		candidates = append(candidates, providers.FallbackCandidate{Provider: fm.Provider, Model: fm.Model})
 	}
 
 	// Build recap prompt.
@@ -169,7 +178,31 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	resp, llmErr := agentInst.Provider.Chat(ctx, msgs, nil, recapModel, opts)
+	// Attempt the recap against each candidate in order, falling through to the
+	// next on any error. This is a simpler "try in sequence" loop rather than
+	// FallbackChain.Execute, which requires classifiable provider errors to retry;
+	// for the recap we want ANY error to trigger the next fallback.
+	var resp *providers.LLMResponse
+	var llmErr error
+	for _, candidate := range candidates {
+		p := agentInst.GetProviderForCandidate(candidate)
+		if p == nil {
+			p = agentInst.Provider
+		}
+		r, err := p.Chat(ctx, msgs, nil, candidate.Model, opts)
+		if err == nil {
+			resp = r
+			llmErr = nil
+			break
+		}
+		slog.Warn("session_end: recap candidate failed, trying next",
+			"session_id", sessionID,
+			"agent_id", agentInst.ID,
+			"model", candidate.Model,
+			"error", err.Error(),
+		)
+		llmErr = err
+	}
 
 	if llmErr != nil {
 		slog.Warn("session_end: llm call failed",
@@ -428,7 +461,6 @@ func classifyLLMError(err error) string {
 //
 // Early-returns if AutoRecapEnabled or BootstrapRecapEnabled is false.
 // Rate-limits starts to GetBootstrapRecapMaxPerMinute per minute.
-// Caps total estimated cost at GetBootstrapRecapDailyBudgetUSD.
 //
 // Sessions are a gateway-wide resource, NOT per-agent — so the sessions
 // directory is walked exactly once. Each session's owning agent is resolved
@@ -455,7 +487,6 @@ func (al *AgentLoop) BootstrapRecapPass(ctx context.Context) {
 	}
 
 	maxPerMinute := defaults.GetBootstrapRecapMaxPerMinute()
-	budgetUSD := defaults.GetBootstrapRecapDailyBudgetUSD()
 
 	// Rate limiter: one slot every (60/maxPerMinute) seconds. Guard against
 	// sub-second intervals on a high max per minute.
@@ -466,11 +497,8 @@ func (al *AgentLoop) BootstrapRecapPass(ctx context.Context) {
 	ticker := time.NewTicker(intervalBetweenStarts)
 	defer ticker.Stop()
 
-	var accumulatedCostUSD float64
-	const costPerRecapUSD = 1e-5 // rough estimate: ~1000 tokens × $0.00001/token
-
 	// SF2: counters for the pass-complete summary log.
-	var processed, skippedBudget, errored int
+	var processed, errored int
 
 	sessionsBaseDir := al.sharedSessionStore.BaseDir()
 	entries, err := os.ReadDir(sessionsBaseDir)
@@ -486,7 +514,6 @@ func (al *AgentLoop) BootstrapRecapPass(ctx context.Context) {
 		if ctx.Err() != nil {
 			slog.Info("session_end: bootstrap recap pass complete (context canceled)",
 				"processed", processed,
-				"skipped_budget", skippedBudget,
 				"errored", errored,
 			)
 			return
@@ -528,29 +555,16 @@ func (al *AgentLoop) BootstrapRecapPass(ctx context.Context) {
 			continue
 		}
 
-		if accumulatedCostUSD+costPerRecapUSD > budgetUSD {
-			al.auditRecap(sessionID, agentInst.ID, "bootstrap", "skipped_budget_exceeded")
-			skippedBudget++
-			slog.Info("session_end: bootstrap recap: budget exceeded",
-				"accumulated_usd", accumulatedCostUSD,
-				"budget_usd", budgetUSD,
-			)
-			// Keep iterating to count remaining budget-skipped sessions.
-			continue
-		}
-
 		select {
 		case <-ctx.Done():
 			slog.Info("session_end: bootstrap recap pass complete (context canceled)",
 				"processed", processed,
-				"skipped_budget", skippedBudget,
 				"errored", errored,
 			)
 			return
 		case <-ticker.C:
 		}
 
-		accumulatedCostUSD += costPerRecapUSD
 		al.CloseSession(sessionID, "bootstrap")
 		processed++
 	}
@@ -558,7 +572,6 @@ func (al *AgentLoop) BootstrapRecapPass(ctx context.Context) {
 	// SF2: emit a single summary so operators can audit the pass at a glance.
 	slog.Info("session_end: bootstrap recap pass complete",
 		"processed", processed,
-		"skipped_budget", skippedBudget,
 		"errored", errored,
 	)
 }

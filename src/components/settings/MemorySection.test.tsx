@@ -3,7 +3,8 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { act } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemorySection } from './MemorySection'
-import { fetchMemorySettings, updateMemorySettings } from '@/lib/api'
+import { fetchMemorySettings, updateMemorySettings, fetchProviders } from '@/lib/api'
+import type { Provider } from '@/lib/api'
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
@@ -13,6 +14,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     ...actual,
     fetchMemorySettings: vi.fn(),
     updateMemorySettings: vi.fn(),
+    fetchProviders: vi.fn(),
   }
 })
 
@@ -27,11 +29,21 @@ const DEFAULT_SETTINGS = {
   idle_timeout_minutes: 30,
   bootstrap_recap_enabled: false,
   bootstrap_recap_max_per_minute: 5,
-  bootstrap_recap_daily_budget_usd: 0.5,
-  recap_model_allow_list: [] as string[],
+  recap_model: '',
+  recap_fallback_models: [] as Array<{ model: string; provider?: string }>,
   session_days: 90,
-  memory_retros_days: 365,
+  memory_retros_days: 180,
 }
+
+const MOCK_PROVIDERS: Provider[] = [
+  {
+    id: 'openrouter',
+    name: 'openrouter',
+    display_name: 'OpenRouter',
+    status: 'connected',
+    models: ['google/gemini-2.5-flash', 'anthropic/claude-3.5-haiku'],
+  } as Provider,
+]
 
 function makeClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -51,6 +63,7 @@ describe('MemorySection', () => {
   beforeEach(() => {
     vi.mocked(fetchMemorySettings).mockResolvedValue({ ...DEFAULT_SETTINGS })
     vi.mocked(updateMemorySettings).mockResolvedValue({ ...DEFAULT_SETTINGS })
+    vi.mocked(fetchProviders).mockResolvedValue(MOCK_PROVIDERS)
   })
 
   it('renders a loading skeleton while fetching', () => {
@@ -60,7 +73,7 @@ describe('MemorySection', () => {
     expect(screen.queryByText('Memory & Recap')).toBeNull()
   })
 
-  it('renders all 8 settings fields once data loads', async () => {
+  it('renders all settings fields once data loads', async () => {
     renderSection()
 
     // Section heading
@@ -70,13 +83,26 @@ describe('MemorySection', () => {
     expect(screen.getByRole('switch', { name: /auto recap/i })).toBeInTheDocument()
     expect(screen.getByRole('switch', { name: /bootstrap recap/i })).toBeInTheDocument()
 
-    // Number fields are hidden when toggles are off; we check for visible ones
+    // Summarization model section
+    expect(screen.getByText('Summarization model')).toBeInTheDocument()
+    expect(screen.getByText(/recap runs a background summarization call/i)).toBeInTheDocument()
+
     // Session retention and memory retros are always visible
     expect(screen.getByLabelText('Session retention')).toBeInTheDocument()
     expect(screen.getByLabelText('Memory retrospective retention')).toBeInTheDocument()
 
-    // Model allow-list section
-    expect(screen.getByText(/recap model allow-list/i)).toBeInTheDocument()
+    // Removed fields must NOT be present
+    expect(screen.queryByText(/recap model allow-list/i)).toBeNull()
+    expect(screen.queryByLabelText('Bootstrap recap daily budget')).toBeNull()
+  })
+
+  it('does NOT render the allow-list editor or USD budget field', async () => {
+    renderSection()
+    await screen.findByText('Memory & Recap')
+
+    expect(screen.queryByText(/recap model allow-list/i)).toBeNull()
+    expect(screen.queryByLabelText(/daily budget/i)).toBeNull()
+    expect(screen.queryByText(/usd \/ day/i)).toBeNull()
   })
 
   it('shows idle-timeout field only when auto_recap_enabled is true', async () => {
@@ -93,20 +119,21 @@ describe('MemorySection', () => {
     expect(screen.getByLabelText('Idle timeout')).toBeInTheDocument()
   })
 
-  it('shows bootstrap-specific fields only when bootstrap_recap_enabled is true', async () => {
+  it('shows bootstrap rate-limit field only when bootstrap_recap_enabled is true', async () => {
     renderSection()
     await screen.findByText('Memory & Recap')
 
     // Initially hidden
     expect(screen.queryByLabelText('Bootstrap recap rate limit')).toBeNull()
-    expect(screen.queryByLabelText('Bootstrap recap daily budget')).toBeNull()
 
     // Toggle bootstrap recap on
     const bootstrapToggle = screen.getByRole('switch', { name: /bootstrap recap/i })
     fireEvent.click(bootstrapToggle)
 
     expect(screen.getByLabelText('Bootstrap recap rate limit')).toBeInTheDocument()
-    expect(screen.getByLabelText('Bootstrap recap daily budget')).toBeInTheDocument()
+
+    // USD budget must never appear regardless of toggle state
+    expect(screen.queryByLabelText('Bootstrap recap daily budget')).toBeNull()
   })
 
   it('calls updateMemorySettings with the correct payload when Save is clicked', async () => {
@@ -133,7 +160,40 @@ describe('MemorySection', () => {
     })
   })
 
-  it('persists all 8 fields in the save payload (round-trip)', async () => {
+  it('sends recap_model and recap_fallback_models in the save payload when set', async () => {
+    const saved: Record<string, unknown> = {}
+    vi.mocked(updateMemorySettings).mockImplementation(async (body) => {
+      Object.assign(saved, body)
+      return body
+    })
+
+    // Seed with a pre-configured recap_model and one fallback
+    vi.mocked(fetchMemorySettings).mockResolvedValue({
+      ...DEFAULT_SETTINGS,
+      recap_model: 'google/gemini-2.5-flash',
+      recap_fallback_models: [{ model: 'anthropic/claude-3.5-haiku', provider: 'openrouter' }],
+    })
+
+    renderSection()
+    await screen.findByText('Memory & Recap')
+
+    const saveBtn = screen.getByRole('button', { name: /save memory settings/i })
+    await act(async () => { fireEvent.click(saveBtn) })
+
+    await waitFor(() => expect(vi.mocked(updateMemorySettings)).toHaveBeenCalled())
+
+    expect(saved).toHaveProperty('recap_model', 'google/gemini-2.5-flash')
+    expect(saved).toHaveProperty('recap_fallback_models')
+    const fallbacks = saved['recap_fallback_models'] as Array<{ model: string; provider?: string }>
+    expect(fallbacks).toHaveLength(1)
+    expect(fallbacks[0]).toMatchObject({ model: 'anthropic/claude-3.5-haiku' })
+
+    // Removed fields must NOT appear in the payload
+    expect(saved).not.toHaveProperty('bootstrap_recap_daily_budget_usd')
+    expect(saved).not.toHaveProperty('recap_model_allow_list')
+  })
+
+  it('omits recap_model from payload when empty', async () => {
     const saved: Record<string, unknown> = {}
     vi.mocked(updateMemorySettings).mockImplementation(async (body) => {
       Object.assign(saved, body)
@@ -148,49 +208,67 @@ describe('MemorySection', () => {
 
     await waitFor(() => expect(vi.mocked(updateMemorySettings)).toHaveBeenCalled())
 
-    // Verify all 8 fields are present
+    // recap_model should be omitted (undefined) when empty
+    expect(saved['recap_model']).toBeUndefined()
+  })
+
+  it('persists the core fields in the save payload (round-trip)', async () => {
+    const saved: Record<string, unknown> = {}
+    vi.mocked(updateMemorySettings).mockImplementation(async (body) => {
+      Object.assign(saved, body)
+      return body
+    })
+
+    renderSection()
+    await screen.findByText('Memory & Recap')
+
+    const saveBtn = screen.getByRole('button', { name: /save memory settings/i })
+    await act(async () => { fireEvent.click(saveBtn) })
+
+    await waitFor(() => expect(vi.mocked(updateMemorySettings)).toHaveBeenCalled())
+
+    // Core fields are always present
     expect(saved).toHaveProperty('auto_recap_enabled')
     expect(saved).toHaveProperty('idle_timeout_minutes')
     expect(saved).toHaveProperty('bootstrap_recap_enabled')
     expect(saved).toHaveProperty('bootstrap_recap_max_per_minute')
-    expect(saved).toHaveProperty('bootstrap_recap_daily_budget_usd')
-    expect(saved).toHaveProperty('recap_model_allow_list')
     expect(saved).toHaveProperty('session_days')
     expect(saved).toHaveProperty('memory_retros_days')
+
+    // Removed fields must NOT appear
+    expect(saved).not.toHaveProperty('bootstrap_recap_daily_budget_usd')
+    expect(saved).not.toHaveProperty('recap_model_allow_list')
   })
 
-  it('adds and removes a model slug in the allow-list', async () => {
-    renderSection()
-    await screen.findByText('Memory & Recap')
-
-    // Add a model slug
-    const modelInput = screen.getByRole('textbox', { name: /new model slug/i })
-    fireEvent.change(modelInput, { target: { value: 'google/gemini-2.5-flash' } })
-    fireEvent.click(screen.getByRole('button', { name: /add model/i }))
-
-    expect(screen.getByText('google/gemini-2.5-flash')).toBeInTheDocument()
-
-    // Remove it
-    fireEvent.click(screen.getByRole('button', { name: /remove model google\/gemini-2\.5-flash/i }))
-    await waitFor(() => {
-      expect(screen.queryByText('google/gemini-2.5-flash')).toBeNull()
-    })
-  })
-
-  it('prevents adding a duplicate model slug', async () => {
+  it('renders a fallback-model row from fetched settings', async () => {
     vi.mocked(fetchMemorySettings).mockResolvedValue({
       ...DEFAULT_SETTINGS,
-      recap_model_allow_list: ['anthropic/claude-3.5-haiku'],
+      recap_fallback_models: [{ model: 'anthropic/claude-3.5-haiku', provider: 'openrouter' }],
     })
 
     renderSection()
     await screen.findByText('Memory & Recap')
 
-    const modelInput = screen.getByRole('textbox', { name: /new model slug/i })
-    fireEvent.change(modelInput, { target: { value: 'anthropic/claude-3.5-haiku' } })
-    fireEvent.click(screen.getByRole('button', { name: /add model/i }))
+    // The fallback row should be visible
+    expect(screen.getByTestId('recap-fallback-row-anthropic/claude-3.5-haiku')).toBeInTheDocument()
+    expect(screen.getByTestId('recap-fallback-model-anthropic/claude-3.5-haiku')).toHaveTextContent('anthropic/claude-3.5-haiku')
+  })
 
-    expect(screen.getByText('Already in the list.')).toBeInTheDocument()
+  it('removes a fallback model when X is clicked', async () => {
+    vi.mocked(fetchMemorySettings).mockResolvedValue({
+      ...DEFAULT_SETTINGS,
+      recap_fallback_models: [{ model: 'anthropic/claude-3.5-haiku', provider: 'openrouter' }],
+    })
+
+    renderSection()
+    await screen.findByText('Memory & Recap')
+
+    const removeBtn = screen.getByTestId('recap-fallback-remove-anthropic/claude-3.5-haiku')
+    fireEvent.click(removeBtn)
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('recap-fallback-row-anthropic/claude-3.5-haiku')).toBeNull()
+    })
   })
 
   it('shows an error message when fetchMemorySettings fails', async () => {
@@ -207,8 +285,8 @@ describe('MemorySection', () => {
       idle_timeout_minutes: 45,
       bootstrap_recap_enabled: false,
       bootstrap_recap_max_per_minute: 10,
-      bootstrap_recap_daily_budget_usd: 1.5,
-      recap_model_allow_list: ['z-ai/glm-5.2'],
+      recap_model: '',
+      recap_fallback_models: [],
       session_days: 60,
       memory_retros_days: 180,
     })
@@ -231,8 +309,5 @@ describe('MemorySection', () => {
     // memory_retros_days
     const retrosInput = screen.getByLabelText('Memory retrospective retention')
     expect(retrosInput).toHaveValue(180)
-
-    // recap_model_allow_list
-    expect(screen.getByText('z-ai/glm-5.2')).toBeInTheDocument()
   })
 })

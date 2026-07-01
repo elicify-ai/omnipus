@@ -5900,26 +5900,26 @@ type MeInfoRole string
 
 // MemorySettings Global memory and recap/retention settings. Backed by agents.defaults.* and storage.retention fields in config.json. Readable and writable by any authenticated user (operator decision, A2/G-02). Never exposes secrets — the endpoint reads/writes only the listed fields.
 type MemorySettings struct {
-	// AutoRecapEnabled Whether automatic session recap (context compaction summary) is enabled globally. Maps to agents.defaults.auto_recap_enabled in config.json.
+	// AutoRecapEnabled Whether automatic session recap (context compaction summary) is enabled globally. Maps to agents.defaults.auto_recap_enabled. Seeded ON on a fresh install; existing configs keep their stored value.
 	AutoRecapEnabled *bool `json:"auto_recap_enabled,omitempty"`
 
-	// BootstrapRecapDailyBudgetUsd Maximum USD spend allowed for bootstrap recaps in a single calendar day. Maps to agents.defaults.bootstrap_recap_daily_budget_usd.
-	BootstrapRecapDailyBudgetUsd *float64 `json:"bootstrap_recap_daily_budget_usd,omitempty"`
-
-	// BootstrapRecapEnabled Whether boot-time recap (summarise all sessions on gateway start) is enabled. Maps to agents.defaults.bootstrap_recap_enabled.
+	// BootstrapRecapEnabled Whether boot-time recap (summarise orphaned sessions on gateway start) is enabled. Maps to agents.defaults.bootstrap_recap_enabled. Seeded ON on a fresh install; existing configs keep their stored value.
 	BootstrapRecapEnabled *bool `json:"bootstrap_recap_enabled,omitempty"`
 
-	// BootstrapRecapMaxPerMinute Maximum number of bootstrap recap operations to run per minute (rate-limit). Maps to agents.defaults.bootstrap_recap_max_per_minute.
+	// BootstrapRecapMaxPerMinute Maximum number of bootstrap recap operations to run per minute (rate-limit / throttle). This is the only bound on a boot sweep. Maps to agents.defaults.bootstrap_recap_max_per_minute.
 	BootstrapRecapMaxPerMinute *int `json:"bootstrap_recap_max_per_minute,omitempty"`
 
 	// IdleTimeoutMinutes Minutes of inactivity after which a session is considered idle and a recap is triggered. Maps to agents.defaults.idle_timeout_minutes.
 	IdleTimeoutMinutes *int `json:"idle_timeout_minutes,omitempty"`
 
-	// MemoryRetrosDays Number of days to retain memory retrospective files. Maps to storage.retention.memory_retros_days.
+	// MemoryRetrosDays Number of days to retain memory retrospective files. Defaults longer than session retention (180 vs 90) so reflections outlive their transcripts. Maps to storage.retention.memory_retros_days.
 	MemoryRetrosDays *int `json:"memory_retros_days,omitempty"`
 
-	// RecapModelAllowList Model slugs permitted for recap/compaction LLM calls. Empty list = any configured model is allowed. Maps to agents.defaults.recap_model_allow_list.
-	RecapModelAllowList *[]string `json:"recap_model_allow_list,omitempty"`
+	// RecapFallbackModels Ordered fallback chain for the recap model, tried in order when the primary recap model fails — same shape and behaviour as an agent's fallback_models. Maps to agents.defaults.recap_fallback_models.
+	RecapFallbackModels *[]FallbackModel `json:"recap_fallback_models,omitempty"`
+
+	// RecapModel Model slug used for session recap / summarization. A fast, cheap model is recommended. Empty → falls back to agents.defaults.model_name (the overall default model), then to the session's own agent model. Maps to agents.defaults.recap_model.
+	RecapModel *string `json:"recap_model,omitempty"`
 
 	// SessionDays Number of days to retain session JSONL files before the retention sweep removes them. Maps to storage.retention.session_days.
 	SessionDays *int `json:"session_days,omitempty"`

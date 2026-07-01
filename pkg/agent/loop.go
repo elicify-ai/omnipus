@@ -431,22 +431,6 @@ var ErrReloadNotConfigured = errors.New("reload not configured")
 // reload will call ClearReloadPending when it completes, unblocking any poller.
 var ErrReloadAlreadyInProgress = errors.New("reload already in progress")
 
-// RecapModelBootError is returned by NewAgentLoop when AutoRecapEnabled is true
-// and the resolved recap model is not in the cheap-model allow-list (FR-029a).
-// Callers should map this to a non-zero exit code and log the message.
-type RecapModelBootError struct {
-	Model     string
-	AllowList []string
-}
-
-func (e *RecapModelBootError) Error() string {
-	return fmt.Sprintf(
-		"config error: recap_model %q is not in the cheap-model allow-list %v; "+
-			"set cfg.Routing.LightModel to a supported model or set AutoRecapEnabled=false",
-		e.Model, e.AllowList,
-	)
-}
-
 // perCandidateTimeoutFromConfig derives a per-candidate timeout for the fallback
 // chain from the provider config. It uses the RequestTimeout of the first provider
 // that has a positive RequestTimeout value, falling back to the providers package
@@ -466,9 +450,7 @@ func perCandidateTimeoutFromConfig(cfg *config.Config) time.Duration {
 }
 
 // NewAgentLoop constructs an AgentLoop from the given config, message bus, and LLM provider.
-// Returns (*AgentLoop, nil) on success. Returns (nil, *RecapModelBootError) when
-// AutoRecapEnabled is true and the recap model fails the allow-list gate (FR-029a) —
-// callers should treat this as a fatal configuration error and abort boot.
+// Returns (*AgentLoop, nil) on success or (nil, error) on a fatal configuration error.
 func NewAgentLoop(
 	cfg *config.Config,
 	msgBus *bus.MessageBus,
@@ -782,39 +764,6 @@ func NewAgentLoop(
 	// the policy auditor and sandbox backend wired in. Registering the same
 	// tool name overwrites the previous entry (see ToolRegistry.Register).
 	al.wireExecToolDeps()
-
-	// FR-029a: Validate the recap model allow-list at boot.
-	// If AutoRecapEnabled is true and the resolved recap model doesn't match any
-	// pattern in the allow-list, log an error and exit — misconfigured recap model
-	// must not allow silent fallback to an expensive model at runtime.
-	if cfg.Agents.Defaults.AutoRecapEnabled {
-		var recapModel string
-		if cfg.Agents.Defaults.Routing != nil {
-			recapModel = cfg.Agents.Defaults.Routing.LightModel
-		}
-		if recapModel == "" {
-			// Use the default agent's primary model.
-			if defaultAgent := registry.GetDefaultAgent(); defaultAgent != nil {
-				recapModel = defaultAgent.Model
-			}
-		}
-		if recapModel != "" {
-			allowList := cfg.Agents.Defaults.ResolveRecapModelAllowList()
-			matched := false
-			for _, pattern := range allowList {
-				if strings.HasPrefix(recapModel, pattern) {
-					matched = true
-					break
-				}
-			}
-			if !matched {
-				return nil, &RecapModelBootError{
-					Model:     recapModel,
-					AllowList: allowList,
-				}
-			}
-		}
-	}
 
 	// Fix A (FR-057): wire the environment provider into every agent's
 	// ContextBuilder now that the sandbox backend is known. Also register each

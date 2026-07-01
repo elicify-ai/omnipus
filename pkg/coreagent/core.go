@@ -642,6 +642,23 @@ func SeedConfig(cfg *config.Config) bool {
 
 	modified := false
 
+	// Fresh-install defaults: enable recap + bootstrap recap so new installs
+	// get session summaries out of the box. Only fires when NO agents exist
+	// yet (the agents list is empty — the hallmark of a first boot). Existing
+	// configs keep their stored values; SeedConfig runs on every boot so
+	// touching these fields unconditionally would override operator changes.
+	isFreshInstall := len(existing) == 0
+	if isFreshInstall {
+		if !cfg.Agents.Defaults.AutoRecapEnabled {
+			cfg.Agents.Defaults.AutoRecapEnabled = true
+			modified = true
+		}
+		if !cfg.Agents.Defaults.BootstrapRecapEnabled {
+			cfg.Agents.Defaults.BootstrapRecapEnabled = true
+			modified = true
+		}
+	}
+
 	// Re-enforce identity fields on existing core agents (tamper protection + rename).
 	// Also apply idempotent profile migrations: if an existing core agent's
 	// SandboxProfile is empty, fill it with the seed value. This covers the case
