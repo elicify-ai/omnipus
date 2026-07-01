@@ -63,6 +63,14 @@ type ContextBuilder struct {
 	// available tools, skills, providers, and system defaults.
 	resourcesInjector func() string
 
+	// delegationInjector is an optional per-turn callback that renders the
+	// "## Delegation" block for this agent. Unlike resourcesInjector it is
+	// called in buildDynamicContext (the UN-CACHED path) so that a runtime
+	// change to the delegation policy is reflected on the very next turn
+	// without waiting for the cached system-prompt to expire. Set via
+	// WithDelegationInjector; wired by wireEnvProviders in loop_env.go.
+	delegationInjector func() string
+
 	// env carries the environment provider + any per-builder env state. Split
 	// into a nested struct so context_env.go owns the mutation surface without
 	// touching the core ContextBuilder definition.
@@ -73,6 +81,16 @@ type ContextBuilder struct {
 // to inject into the system prompt (e.g., available tools catalog for Ava).
 func (cb *ContextBuilder) WithResourcesInjector(fn func() string) *ContextBuilder {
 	cb.resourcesInjector = fn
+	return cb
+}
+
+// WithDelegationInjector installs the per-turn delegation context callback. fn
+// is called on every turn from buildDynamicContext (the UN-CACHED path) so that
+// any runtime change to the delegation policy is reflected on the agent's next
+// turn without waiting for the cached system-prompt to expire. Passing nil
+// disables the block (no delegation section is appended).
+func (cb *ContextBuilder) WithDelegationInjector(fn func() string) *ContextBuilder {
+	cb.delegationInjector = fn
 	return cb
 }
 
@@ -708,6 +726,14 @@ func (cb *ContextBuilder) buildDynamicContext(channel, chatID, senderID, senderD
 	}
 	if senderLine := formatCurrentSenderLine(senderID, senderDisplayName); senderLine != "" {
 		fmt.Fprintf(&sb, "\n\n## Current Sender\n%s", senderLine)
+	}
+
+	// Delegation block: injected per-turn so a runtime policy change is
+	// visible on the agent's NEXT turn (not mtime-cached like the static prompt).
+	if cb.delegationInjector != nil {
+		if block := cb.delegationInjector(); block != "" {
+			fmt.Fprintf(&sb, "\n\n%s", block)
+		}
 	}
 
 	return sb.String()
