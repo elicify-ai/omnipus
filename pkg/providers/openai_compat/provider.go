@@ -363,6 +363,16 @@ func parseStreamResponse(
 	}
 
 	if err := scanner.Err(); err != nil {
+		// If the caller's context was cancelled or timed out, our own ctx.Done()
+		// watchdog goroutine (ChatStream) closed resp.Body to unblock this scanner
+		// — the resulting "http2: response body closed" is NOT a server-side
+		// connection drop but a cancellation/timeout. Surface the context error so
+		// callers classify it correctly (context.Canceled → clean cancel;
+		// context.DeadlineExceeded → llm_timeout) instead of misreading it as a
+		// transient stream reset and retrying a request the caller already abandoned.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
 		return nil, fmt.Errorf("streaming read error: %w", err)
 	}
 	if malformedChunks > 0 {
