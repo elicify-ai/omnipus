@@ -228,7 +228,7 @@ func NewAgentInstance(
 		// (e.g., GPT-4o 128k ctx / 16k out, Claude 200k ctx / 8k out).
 		// 4x is a conservative lower bound that avoids premature
 		// summarization while remaining safe — the reactive
-		// forceCompression handles any overshoot.
+		// windowTrim (context paging) handles any overshoot.
 		contextWindow = maxTokens * 4
 	}
 

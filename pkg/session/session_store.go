@@ -35,6 +35,12 @@ type SessionStore interface {
 	SetHistory(key string, history []providers.Message)
 	// TruncateHistory keeps only the last keepLast messages.
 	TruncateHistory(key string, keepLast int)
+	// RollbackAppended truncates the on-disk archive to targetArchiveLen physical
+	// lines, leaving meta.Skip untouched (clamped if needed). This is the
+	// Skip-preserving primitive for undoing messages appended during an aborted
+	// turn without destroying the eviction archive. If targetArchiveLen >=
+	// current archive line count, it is a no-op.
+	RollbackAppended(key string, targetArchiveLen int)
 	// Save persists any pending state to durable storage.
 	// context-paging: Save MUST NOT compact the JSONL file (FR-005).
 	Save(key string) error

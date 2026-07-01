@@ -752,6 +752,17 @@ func (us *UnifiedStore) TruncateHistory(sessionKey string, keepLast int) {
 	}
 }
 
+// RollbackAppended implements SessionStore — Skip-preserving rollback primitive.
+// Truncates the on-disk archive to targetArchiveLen physical lines without
+// touching meta.Skip (clamped if needed). Used by turn-abort and hard-abort
+// to remove only the messages appended during the current turn, so that evicted
+// turns are never destroyed (SC-001).
+func (us *UnifiedStore) RollbackAppended(sessionKey string, targetArchiveLen int) {
+	if err := us.backend.RollbackAppended(context.Background(), sessionKey, targetArchiveLen); err != nil {
+		slog.Error("unified_store: rollback appended", "key", sessionKey, "error", err)
+	}
+}
+
 // ReadArchive implements SessionStore — returns the full archived log for
 // sessionKey from line 0, ignoring meta.Skip. Evicted (skipped) turns are
 // included. Each ArchivedMessage carries the per-line TS written by addMsg

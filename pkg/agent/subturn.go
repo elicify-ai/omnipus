@@ -889,6 +889,7 @@ type ephemeralSessionStoreIface interface {
 	SetHistory(key string, history []providers.Message)
 	TruncateHistory(key string, keepLast int)
 	ReadArchive(ctx context.Context, key string) ([]memory.ArchivedMessage, error)
+	RollbackAppended(key string, targetArchiveLen int)
 	Save(key string) error
 	Close() error
 }
@@ -916,9 +917,13 @@ func (e *ephemeralSessionStore) GetHistory(_ string) []providers.Message {
 }
 
 // ReadArchive returns the ephemeral in-memory history as ArchivedMessage
-// values with TS=0 (this backend keeps no per-line timestamps and never
-// evicts to disk, so the full history is the archive). Satisfies the
-// session.SessionStore interface (FR-016).
+// values with TS=0. This backend is a bounded in-memory ring (capacity
+// maxEphemeralHistorySize): it keeps NO per-line timestamps and NEVER
+// evicts turns to disk. Because there is no Skip-based windowing and no
+// append-only JSONL archive, ReadArchive == GetHistory — it returns the
+// complete in-memory slice; there is no separate line-0 archive that
+// recall or breadcrumb logic can dip into for additional evicted turns.
+// Satisfies the session.SessionStore interface (FR-016).
 func (e *ephemeralSessionStore) ReadArchive(_ context.Context, _ string) ([]memory.ArchivedMessage, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -965,6 +970,23 @@ func (e *ephemeralSessionStore) TruncateHistory(_ string, keepLast int) {
 
 func (e *ephemeralSessionStore) Save(_ string) error { return nil }
 func (e *ephemeralSessionStore) Close() error        { return nil }
+
+// RollbackAppended truncates the in-memory history to its first
+// targetArchiveLen messages, discarding anything appended after that point.
+// The ephemeral backend has no Skip/archive split, so truncating to
+// targetArchiveLen IS the rollback (mirrors JSONLStore.RollbackAppended
+// dropping the appended tail). A target >= current length is a no-op.
+// Satisfies session.SessionStore (used by hard-abort turn rollback).
+func (e *ephemeralSessionStore) RollbackAppended(_ string, targetArchiveLen int) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if targetArchiveLen < 0 {
+		targetArchiveLen = 0
+	}
+	if targetArchiveLen < len(e.history) {
+		e.history = e.history[:targetArchiveLen]
+	}
+}
 
 func (e *ephemeralSessionStore) truncateLocked() {
 	if len(e.history) > maxEphemeralHistorySize {

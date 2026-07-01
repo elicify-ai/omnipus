@@ -120,11 +120,15 @@ func (sm *SessionManager) GetHistory(key string) []providers.Message {
 	return history
 }
 
-// ReadArchive implements SessionStore. The legacy SessionManager is an
-// in-memory store with no append-only JSONL archive, so it returns the
-// current in-memory messages wrapped as ArchivedMessage with TS=0 (no
-// per-line timestamps are available in this backend). Callers must treat
-// TS==0 as "unknown/earlier" (FR-017 backward-compat rule).
+// ReadArchive implements SessionStore. SessionManager is a pure in-memory
+// backend that never evicts turns to disk (no Skip-based windowing, no
+// append-only JSONL archive). Consequently ReadArchive == GetHistory:
+// it returns the complete current in-memory message slice wrapped as
+// ArchivedMessage with TS=0 (no per-line timestamps exist in this
+// backend). There is NO line-0 archive here — recall and breadcrumb
+// callers that rely on evicted turns find nothing extra beyond what
+// GetHistory already returns. Callers must treat TS==0 as
+// "unknown/earlier" (FR-017 backward-compat rule).
 func (sm *SessionManager) ReadArchive(_ context.Context, key string) ([]memory.ArchivedMessage, error) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
@@ -314,6 +318,32 @@ func (sm *SessionManager) loadSessions() error {
 // SessionStore interface so callers can release resources uniformly.
 func (sm *SessionManager) Close() error {
 	return nil
+}
+
+// RollbackAppended implements SessionStore for the in-memory backend.
+// SessionManager has no append-only JSONL archive and no Skip concept, so
+// this is equivalent to keeping only the first targetArchiveLen messages.
+// In practice it should never be reached for agent-loop abort paths because
+// those paths require an archive-backed store — but it must satisfy the interface.
+func (sm *SessionManager) RollbackAppended(key string, targetArchiveLen int) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	session, ok := sm.sessions[key]
+	if !ok {
+		return
+	}
+	if targetArchiveLen < 0 {
+		targetArchiveLen = 0
+	}
+	if targetArchiveLen >= len(session.Messages) {
+		return
+	}
+	// Truncate to the first targetArchiveLen messages.
+	msgs := make([]providers.Message, targetArchiveLen)
+	copy(msgs, session.Messages[:targetArchiveLen])
+	session.Messages = msgs
+	session.Updated = time.Now()
 }
 
 // SetHistory updates the messages of a session.

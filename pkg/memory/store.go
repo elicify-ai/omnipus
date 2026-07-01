@@ -44,6 +44,13 @@ type Store interface {
 	// SetHistory replaces all messages in a session with the provided history.
 	SetHistory(ctx context.Context, sessionKey string, history []providers.Message) error
 
+	// RollbackAppended truncates the JSONL file to targetLines physical lines,
+	// updating meta.Count and clamping meta.Skip — but NEVER moving meta.Skip
+	// backward or resetting it. This is the Skip-preserving primitive for
+	// undoing messages appended during an aborted turn without destroying the
+	// eviction archive (SC-001). If targetLines >= current Count, it is a no-op.
+	RollbackAppended(ctx context.Context, sessionKey string, targetLines int) error
+
 	// Compact reclaims storage by physically removing logically truncated
 	// data. Backends that do not accumulate dead data may return nil.
 	//

@@ -5070,21 +5070,8 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	}
 	ts.captureRestorePoint(history, summary)
 
-	archive0, _ := ts.agent.Sessions.ReadArchive(turnCtx, ts.sessionKey)
-	breadcrumb0 := buildBreadcrumb(archive0, history, breadcrumbTokenCap)
-	spanMsgs0 := al.activeRecallSpan(ts.sessionKey).Messages()
-	messages := ts.agent.ContextBuilder.BuildMessages(
-		history,
-		summary,
-		ts.userMessage,
-		ts.media,
-		ts.channel,
-		ts.chatID,
-		ts.opts.SenderID,
-		ts.opts.SenderDisplayName,
-		breadcrumb0, spanMsgs0,
-		activeSkillNames(ts.agent, ts.opts)...,
-	)
+	// Site-1: initial assembly (CRITICAL 2 — error handled inside assembleMessages).
+	messages := al.assembleMessages(turnCtx, ts, history, summary, ts.userMessage, ts.media, activeSkillNames(ts.agent, ts.opts))
 
 	cfg := al.GetConfig()
 	maxMediaSize := cfg.Agents.Defaults.GetMaxMediaSize()
@@ -5107,18 +5094,10 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 				)
 				ts.refreshRestorePointFromSession(ts.agent)
 			}
+			// Site-2: post-proactive-trim assembly.
 			newHistory := ts.agent.Sessions.GetHistory(ts.sessionKey)
 			newSummary := ts.agent.Sessions.GetSummary(ts.sessionKey)
-			archive, _ := ts.agent.Sessions.ReadArchive(turnCtx, ts.sessionKey)
-			breadcrumb := buildBreadcrumb(archive, newHistory, breadcrumbTokenCap)
-			spanMsgs := al.activeRecallSpan(ts.sessionKey).Messages()
-			messages = ts.agent.ContextBuilder.BuildMessages(
-				newHistory, newSummary, ts.userMessage,
-				ts.media, ts.channel, ts.chatID,
-				ts.opts.SenderID, ts.opts.SenderDisplayName,
-				breadcrumb, spanMsgs,
-				activeSkillNames(ts.agent, ts.opts)...,
-			)
+			messages = al.assembleMessages(turnCtx, ts, newHistory, newSummary, ts.userMessage, ts.media, activeSkillNames(ts.agent, ts.opts))
 			messages = resolveMediaRefs(messages, turnMediaStore, maxMediaSize, ts.agent.Model)
 		}
 	}
@@ -5893,17 +5872,10 @@ turnLoop:
 								},
 							)
 							ts.refreshRestorePointFromSession(ts.agent)
+							// Site-3: post-timeout-trim assembly.
 							newHistory := ts.agent.Sessions.GetHistory(ts.sessionKey)
 							newSummary := ts.agent.Sessions.GetSummary(ts.sessionKey)
-							archiveTR, _ := ts.agent.Sessions.ReadArchive(turnCtx, ts.sessionKey)
-							bcTR := buildBreadcrumb(archiveTR, newHistory, breadcrumbTokenCap)
-							spanTR := al.activeRecallSpan(ts.sessionKey).Messages()
-							messages = ts.agent.ContextBuilder.BuildMessages(
-								newHistory, newSummary, "",
-								nil, ts.channel, ts.chatID, ts.opts.SenderID, ts.opts.SenderDisplayName,
-								bcTR, spanTR,
-								activeSkillNames(ts.agent, ts.opts)...,
-							)
+							messages = al.assembleMessages(turnCtx, ts, newHistory, newSummary, "", nil, activeSkillNames(ts.agent, ts.opts))
 							callMessages = messages
 							if gracefulTerminal {
 								callMessages = append(append([]providers.Message(nil), messages...), ts.interruptHintMessage())
@@ -6027,17 +5999,10 @@ turnLoop:
 						map[string]any{"agent_id": ts.agent.ID, "iteration": iteration})
 				}
 
+				// Site-4: post-context-overflow-trim assembly.
 				newHistory := ts.agent.Sessions.GetHistory(ts.sessionKey)
 				newSummary := ts.agent.Sessions.GetSummary(ts.sessionKey)
-				archiveCO, _ := ts.agent.Sessions.ReadArchive(turnCtx, ts.sessionKey)
-				bcCO := buildBreadcrumb(archiveCO, newHistory, breadcrumbTokenCap)
-				spanCO := al.activeRecallSpan(ts.sessionKey).Messages()
-				messages = ts.agent.ContextBuilder.BuildMessages(
-					newHistory, newSummary, "",
-					nil, ts.channel, ts.chatID, ts.opts.SenderID, ts.opts.SenderDisplayName,
-					bcCO, spanCO,
-					activeSkillNames(ts.agent, ts.opts)...,
-				)
+				messages = al.assembleMessages(turnCtx, ts, newHistory, newSummary, "", nil, activeSkillNames(ts.agent, ts.opts))
 				callMessages = messages
 				if gracefulTerminal {
 					callMessages = append(append([]providers.Message(nil), messages...), ts.interruptHintMessage())
@@ -7428,6 +7393,57 @@ type compressionResult struct {
 	RemainingMessages int
 }
 
+// assembleMessages is the single consistent helper that reads the archive,
+// builds the breadcrumb, splices the recall span, and calls BuildMessages —
+// deduplicating the four former call sites (CRITICAL 2).
+//
+// It reads the archive under ONE consistent snapshot so the breadcrumb and
+// the window see the same archive state (avoids the turn-number race). On a
+// ReadArchive error it logs at ERROR with a stable error id and emits a
+// FALLBACK breadcrumb stub so the recall path stays discoverable.
+//
+// Callers pass fresh history+summary (post-trim when called after windowTrim),
+// the current user message + media, and active skill names. The recall span is
+// read from al.recallSpans for the given sessionKey.
+func (al *AgentLoop) assembleMessages(
+	ctx context.Context,
+	ts *turnState,
+	history []providers.Message,
+	summary, userMsg string,
+	media []string,
+	skillNames []string,
+) []providers.Message {
+	archive, archErr := ts.agent.Sessions.ReadArchive(ctx, ts.sessionKey)
+	var breadcrumb string
+	if archErr != nil {
+		logger.ErrorCF("agent", "archive-read-error: could not read archive for breadcrumb; recall may be impaired",
+			map[string]any{
+				"session_key": ts.sessionKey,
+				"error":       archErr.Error(),
+			})
+		// Fallback stub so the model knows earlier turns exist and how to page them.
+		breadcrumb = "## Earlier in this conversation\n" +
+			"Earlier turns exist but could not be indexed due to a storage error. " +
+			"Use the recall_conversation tool with a turn_range to retrieve them."
+	} else {
+		breadcrumb = buildBreadcrumb(archive, history, breadcrumbTokenCap)
+	}
+	spanMsgs := al.activeRecallSpan(ts.sessionKey).Messages()
+	return ts.agent.ContextBuilder.BuildMessages(
+		history,
+		summary,
+		userMsg,
+		media,
+		ts.channel,
+		ts.chatID,
+		ts.opts.SenderID,
+		ts.opts.SenderDisplayName,
+		breadcrumb,
+		spanMsgs,
+		skillNames...,
+	)
+}
+
 // evictionTotal counts successful windowTrim evictions (FR-018,
 // context_eviction_total). Exported for test assertions.
 var evictionTotal atomic.Int64
@@ -7479,7 +7495,26 @@ func (al *AgentLoop) windowTrim(agent *AgentInstance, sessionKey string) (compre
 	// 5% headroom target: budget for the window must leave room for a normal
 	// next-turn response and the 5% slack so we don't immediately re-trim.
 	headroom := (contextWindow + 19) / 20 // ceil(0.05 * contextWindow)
-	budget := contextWindow - maxTokens - headroom
+
+	// M3 fix: subtract pinned-core (system prompt) + breadcrumb overhead so the
+	// suffix fit-check uses the same budget basis as isOverContextBudget (which
+	// counts the system message). On small-window models, omitting these causes
+	// under-eviction — the assembled request is still over budget after trim.
+	//
+	// Estimate the system prompt token cost via the ContextBuilder cache:
+	// the static prompt is already cached, so BuildSystemPromptWithCache is cheap.
+	// We estimate using the same chars-per-token ratio as estimateMessageTokens.
+	var pinnedCoreOverhead int
+	if agent.ContextBuilder != nil {
+		sysPrompt := agent.ContextBuilder.BuildSystemPromptWithCache()
+		// chars/4 ≈ tokens — same heuristic as estimateMessageTokens.
+		pinnedCoreOverhead = (len(sysPrompt) + 3) / 4
+	}
+	// breadcrumbTokenCap is the hard cap on the breadcrumb block (~1000 tokens);
+	// use it as a conservative estimate of the breadcrumb overhead.
+	pinnedCoreOverhead += breadcrumbTokenCap
+
+	budget := contextWindow - maxTokens - headroom - pinnedCoreOverhead
 
 	// FR-019 drop-span-first: if an active span exists and we're over budget,
 	// drop it and re-check. Only evict real window Turns if still over budget.
@@ -7526,14 +7561,20 @@ func (al *AgentLoop) windowTrim(agent *AgentInstance, sessionKey string) (compre
 	// we want exactly window[lastUserIdx:lastUserIdx+1] (one user message), which
 	// is NOT necessarily the tail — so we use SetHistory directly, then save.
 	droppedCount := 0
+	floorPath := false
 	if cutIdx >= 0 {
 		// Normal path: tail-of-window keeps are handled by TruncateHistory.
+		// TruncateHistory advances meta.Skip (archive-preserving; zero bytes
+		// deleted from the JSONL file). SetHistory is NOT used here.
 		keepLast := len(window) - cutIdx
 		droppedCount = len(window) - keepLast
 		agent.Sessions.TruncateHistory(sessionKey, keepLast)
 	} else {
-		// FR-003: emergency floor — keep only the bare last user message, drop
-		// everything else including subsequent assistant/tool messages in that Turn.
+		// FR-003: emergency floor — no boundary fits (single huge Turn).
+		// Keep the messages from the most-recent user message onward. This is
+		// the last complete Turn in the window (user message + any following
+		// assistant/tool messages). TruncateHistory advances meta.Skip to
+		// exactly that position — archive-preserving, no SetHistory.
 		lastUserIdx := -1
 		for i := len(window) - 1; i >= 0; i-- {
 			if window[i].Role == "user" {
@@ -7541,15 +7582,15 @@ func (al *AgentLoop) windowTrim(agent *AgentInstance, sessionKey string) (compre
 				break
 			}
 		}
-		var floorMsgs []providers.Message
-		if lastUserIdx >= 0 {
-			floorMsgs = []providers.Message{window[lastUserIdx]}
-		} else {
+		keepStart := lastUserIdx
+		if keepStart < 0 {
 			// Degenerate: no user message at all — keep last message.
-			floorMsgs = []providers.Message{window[len(window)-1]}
+			keepStart = len(window) - 1
 		}
-		droppedCount = len(window) - len(floorMsgs)
-		agent.Sessions.SetHistory(sessionKey, floorMsgs)
+		keepLast := len(window) - keepStart
+		droppedCount = len(window) - keepLast
+		agent.Sessions.TruncateHistory(sessionKey, keepLast)
+		floorPath = true
 	}
 
 	if saveErr := agent.Sessions.Save(sessionKey); saveErr != nil {
@@ -7557,16 +7598,56 @@ func (al *AgentLoop) windowTrim(agent *AgentInstance, sessionKey string) (compre
 			map[string]any{"session_key": sessionKey, "error": saveErr.Error()})
 	}
 
-	evictionTotal.Add(1)
-	skipAdvanceTotal.Add(1)
+	// M4 fix: verify the window actually shrank after the TruncateHistory call.
+	// The backends' TruncateHistory is fire-and-forget (errors are logged, not
+	// returned). Re-read GetHistory and compare: if the window is the same size
+	// as before, the trim silently failed — log the error and return ok=false so
+	// the caller does not misreport a successful eviction.
+	postWindow := agent.Sessions.GetHistory(sessionKey)
+	if len(postWindow) >= len(window) {
+		logger.ErrorCF("agent", "windowTrim: TruncateHistory did not shrink the window (backend write may have failed)",
+			map[string]any{
+				"session_key": sessionKey,
+				"before":      len(window),
+				"after":       len(postWindow),
+			})
+		return compressionResult{}, false
+	}
 
-	keptCount := len(window) - droppedCount
+	evictionTotal.Add(1)
+	// skipAdvanceTotal counts Skip-advancing TruncateHistory calls. Both the
+	// normal path and the FR-003 floor path now use TruncateHistory (Skip-
+	// preserving), so increment whenever droppedCount > 0.
+	if droppedCount > 0 {
+		skipAdvanceTotal.Add(1)
+	}
+	_ = floorPath // retained to make the branch visible in coverage
+
+	keptCount := len(postWindow) // use the verified post-trim window size
+
+	// M5 / FR-018: emit context_archive_bytes by reading the full archive.
+	// This is done after the confirmed trim so the stat reflects the actual
+	// post-eviction archive size (which is UNCHANGED — eviction never deletes
+	// bytes from the JSONL file, only advances Skip). The byte count is emitted
+	// as a structured log field so it is observable in production without a
+	// full metrics framework. Only done when we have an archive reader.
+	archiveBytes := int64(-1) // -1 indicates unavailable
+	if archived, err := agent.Sessions.ReadArchive(context.Background(), sessionKey); err == nil {
+		// Estimate archive size from the number of archived messages (each JSON
+		// line is typically 100–500 bytes; use message count as a proxy).
+		// Actual byte stat requires fs.Stat — not exposed through SessionStore.
+		// For now: count is a proxy observable alongside the real skip value.
+		archiveBytes = int64(len(archived))
+	}
+
 	logger.WarnCF("agent", "windowTrim: evicted oldest Turns from live window",
 		map[string]any{
-			"session_key":   sessionKey,
-			"turns_evicted": droppedCount,
-			"kept_msgs":     keptCount,
-			"budget":        budget,
+			"session_key":            sessionKey,
+			"turns_evicted":          droppedCount,
+			"kept_msgs":              keptCount,
+			"budget":                 budget,
+			"context_archive_lines":  archiveBytes, // FR-018 context_archive_bytes proxy
+			"context_eviction_total": evictionTotal.Load(),
 		})
 
 	return compressionResult{
@@ -8926,4 +9007,21 @@ func (al *AgentLoop) forgetSession(sessionID string) {
 	al.loadedToolsMu.Lock()
 	defer al.loadedToolsMu.Unlock()
 	delete(al.loadedTools, sessionID)
+
+	// MINOR fix: clean up recall spans for this session so recallSpans sync.Map
+	// does not grow without bound as sessions are closed (FR-019). The span key
+	// is ts.sessionKey ("agent:<agentID>:session:<sessionID>") while forgetSession
+	// receives only the transcript sessionID. We scan the map for any key that
+	// contains the sessionID as a suffix so we delete spans regardless of agentID.
+	// The scan is safe here because forgetSession is on the session-close path
+	// (not the hot turn path), so the O(n) Range is acceptable.
+	suffix := ":session:" + sessionID
+	al.recallSpans.Range(func(k, _ any) bool {
+		if key, ok := k.(string); ok {
+			if key == sessionID || strings.HasSuffix(key, suffix) {
+				al.recallSpans.Delete(key)
+			}
+		}
+		return true
+	})
 }

@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -236,32 +237,30 @@ func (t *RecallConversationTool) Execute(ctx context.Context, args map[string]an
 
 	switch {
 	case hasQuery && queryVal != "":
+		// M6: detect empty tokenizable query before running BM25 (punctuation-only
+		// / non-Latin input produces zero tokens and would fall through to a
+		// misleading "no matching turns" message).
+		if len(retroTokenize(queryVal)) == 0 {
+			incRecallCounter("error")
+			return tools.ErrorResult(
+				"recall_conversation: query has no searchable terms — " +
+					"provide alphanumeric keywords, or use turn_range/time")
+		}
 		// BM25 query over each Turn's concatenated text.
 		turnTexts := make([]string, len(turns))
 		for i, trn := range turns {
-			var sb strings.Builder
-			for _, am := range trn.msgs {
-				sb.WriteString(am.Content)
-				sb.WriteString(" ")
-				for _, tc := range am.ToolCalls {
-					if tc.Function != nil {
-						sb.WriteString(tc.Function.Name)
-						sb.WriteString(" ")
-						sb.WriteString(tc.Function.Arguments)
-						sb.WriteString(" ")
-					}
-				}
-			}
-			turnTexts[i] = sb.String()
+			turnTexts[i] = turnSearchText(trn)
 		}
-		// Rank ALL turns so we know the total match count for overflow reporting.
-		// The bounds step below limits how many are actually recalled (FR-009).
+		// Rank ALL turns (score-ordered). The bounds step below selects the
+		// top-N by relevance FIRST (M1), then the kept subset is sorted
+		// chronologically for re-injection (FR-009).
 		hits := rankTurnsBM25(queryVal, turnTexts, len(turns))
 		for _, h := range hits {
 			selectedIdxs = append(selectedIdxs, h.Index)
 		}
-		// Re-sort by turn order (ascending) so re-injection is chronological.
-		sortIntSlice(selectedIdxs)
+		// NOTE: do NOT sort here — selectedIdxs is in score order. The bounds
+		// loop below will keep the top-scoring hits, then chronological sort
+		// happens after bounds are applied (M1 fix).
 
 	case hasRange && rangeVal != "":
 		isRangeMode = true
@@ -298,7 +297,11 @@ func (t *RecallConversationTool) Execute(ctx context.Context, args map[string]an
 		for i, trn := range turns {
 			// First message in the turn carries the TS.
 			ts := trn.msgs[0].TS
-			// TS==0 → legacy pre-FR-017 line; treat as session start (0).
+			// TS==0 → legacy pre-FR-017 line; effective timestamp is 0
+			// (session start). The turn is included only when fromTS==0,
+			// because 0 >= fromTS is true only then. Bounded time windows
+			// (fromTS > 0) therefore exclude legacy lines — use turn_range
+			// instead to reach them.
 			if ts >= fromTS && (toTS == 0 || ts <= toTS) {
 				selectedIdxs = append(selectedIdxs, i)
 			}
@@ -311,6 +314,11 @@ func (t *RecallConversationTool) Execute(ctx context.Context, args map[string]an
 	}
 
 	// --- 4. Apply bounds (FR-009) -------------------------------------
+	// M1: for query mode selectedIdxs is in score order (most relevant first).
+	// Apply maxTurns/maxTokens to the score-ordered list to keep the
+	// TOP-relevance hits, then sort the kept subset chronologically for
+	// re-injection. turn_range and time modes arrive in chronological order
+	// already (isRangeMode path or ascending i loop).
 	maxTurns := recallDefaultTurns
 	maxTokens := recallDefaultTokens
 	if isRangeMode {
@@ -324,13 +332,11 @@ func (t *RecallConversationTool) Execute(ctx context.Context, args map[string]an
 		if len(keptIdxs) >= maxTurns {
 			break
 		}
-		turnMsgs := make([]providers.Message, len(turns[idx].msgs))
-		for j, am := range turns[idx].msgs {
-			turnMsgs[j] = am.Message
-		}
+		// Sum token cost directly over archived messages — no throwaway
+		// []providers.Message allocation needed.
 		cost := 0
-		for _, m := range turnMsgs {
-			cost += estimateMessageTokens(m)
+		for _, am := range turns[idx].msgs {
+			cost += estimateMessageTokens(am.Message)
 		}
 		if totalTokens+cost > maxTokens && len(keptIdxs) > 0 {
 			// Adding this turn would exceed the token cap; stop here.
@@ -342,23 +348,18 @@ func (t *RecallConversationTool) Execute(ctx context.Context, args map[string]an
 
 	overflow := len(selectedIdxs) - len(keptIdxs)
 
+	// M1: now sort the KEPT subset chronologically for re-injection.
+	// (For turn_range/time modes this is a no-op since they're already ordered.)
+	slices.Sort(keptIdxs)
+
 	// --- 5. Build RecallSpan: rewrite IDs, build messages (FR-019 / MAJ-04) ---
 	// Turn indices in the user-visible namespace are 1-based.
 	fromTurnNum := keptIdxs[0] + 1
 	toTurnNum := keptIdxs[len(keptIdxs)-1] + 1
 
 	spanMsgs := buildRecallSpanMessages(keptIdxs, turns, fromTurnNum, toTurnNum)
-	spanTokens := 0
-	for _, m := range spanMsgs {
-		spanTokens += estimateMessageTokens(m)
-	}
-
-	span := &RecallSpan{
-		FromTurn: fromTurnNum,
-		ToTurn:   toTurnNum,
-		Msgs:     spanMsgs,
-		Tokens:   spanTokens,
-	}
+	// M7: use newRecallSpan so Tokens is always Σ estimateMessageTokens(Msgs).
+	span := newRecallSpan(fromTurnNum, toTurnNum, spanMsgs)
 
 	// --- 6. Store span (FR-019 lifecycle: replaced on next recall) ----
 	// Drop any prior span with reason "replaced" before installing the new one.
@@ -372,7 +373,7 @@ func (t *RecallConversationTool) Execute(ctx context.Context, args map[string]an
 		"from_turn", fromTurnNum,
 		"to_turn", toTurnNum,
 		"turns", len(keptIdxs),
-		"tokens", spanTokens,
+		"tokens", span.Tokens,
 	)
 
 	result := fmt.Sprintf("Recalled %d turn(s) (turns %d–%d) into context.", len(keptIdxs), fromTurnNum, toTurnNum)
@@ -548,15 +549,22 @@ func stringArg(args map[string]any, key string) (string, bool) {
 	return s, ok
 }
 
-// sortIntSlice sorts []int in ascending order (insertion sort; N is always small).
-func sortIntSlice(s []int) {
-	for i := 1; i < len(s); i++ {
-		key := s[i]
-		j := i - 1
-		for j >= 0 && s[j] > key {
-			s[j+1] = s[j]
-			j--
+// turnSearchText returns the concatenated BM25-indexable text for a Turn.
+// It mirrors retroSearchText but operates on an archiveTurn so that the
+// query-mode caller and any future caller share the same extraction logic.
+func turnSearchText(trn archiveTurn) string {
+	var sb strings.Builder
+	for _, am := range trn.msgs {
+		sb.WriteString(am.Content)
+		sb.WriteString(" ")
+		for _, tc := range am.ToolCalls {
+			if tc.Function != nil {
+				sb.WriteString(tc.Function.Name)
+				sb.WriteString(" ")
+				sb.WriteString(tc.Function.Arguments)
+				sb.WriteString(" ")
+			}
 		}
-		s[j+1] = key
 	}
+	return sb.String()
 }

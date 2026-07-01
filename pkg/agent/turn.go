@@ -134,7 +134,8 @@ type turnState struct {
 	concurrencySem       chan struct{}          // Semaphore for limiting concurrent SubTurns
 	isFinished           atomic.Bool            // Whether this turn has finished
 	session              session.SessionStore   // Session store reference
-	initialHistoryLength int                    // Snapshot of history length at turn start
+	initialHistoryLength int                    // Snapshot of window (GetHistory) length at turn start
+	initialArchiveLen    int                    // Snapshot of archive (ReadArchive) line count at turn start — for Skip-preserving rollback
 	// parentSpawnCallID is the ToolCall.ID of the spawn tool call in the parent turn that
 	// triggered this sub-turn. Set by spawnSubTurn at child construction (FR-H-003).
 	// Empty for root turns. Used to populate ParentSpawnCallID on ToolExec* payloads
@@ -258,10 +259,21 @@ func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScop
 		finishedChan: make(chan struct{}),
 	}
 
-	// Bind session store and capture initial history length for rollback logic
+	// Bind session store and capture initial history/archive lengths for rollback.
+	// initialArchiveLen is the number of physical lines in the archive at turn
+	// start; used by restoreSession and HardAbort to roll back only the messages
+	// appended during this turn (Skip-preserving rollback via RollbackAppended).
 	if agent != nil && agent.Sessions != nil {
 		ts.session = agent.Sessions
 		ts.initialHistoryLength = len(agent.Sessions.GetHistory(opts.SessionKey))
+		if archived, err := agent.Sessions.ReadArchive(context.Background(), opts.SessionKey); err == nil {
+			ts.initialArchiveLen = len(archived)
+		} else {
+			// If ReadArchive fails (new session, missing file), fall back to the
+			// window length. The rollback will be slightly conservative (keeps more
+			// archive than strictly necessary) but never destroys evicted turns.
+			ts.initialArchiveLen = ts.initialHistoryLength
+		}
 	}
 
 	// Bind transcript store for persisting tool calls
@@ -700,11 +712,16 @@ func (ts *turnState) refreshRestorePointFromSession(agent *AgentInstance) {
 
 func (ts *turnState) restoreSession(agent *AgentInstance) error {
 	ts.mu.RLock()
-	history := append([]providers.Message(nil), ts.restorePointHistory...)
 	summary := ts.restorePointSummary
+	targetLen := ts.initialArchiveLen
 	ts.mu.RUnlock()
 
-	agent.Sessions.SetHistory(ts.sessionKey, history)
+	// Skip-preserving rollback: truncate the archive back to the line count
+	// captured at turn start, leaving meta.Skip untouched so evicted turns are
+	// not destroyed (SC-001). SetHistory is explicitly NOT used here — it would
+	// overwrite the entire JSONL file and reset Skip=0, permanently deleting
+	// any evicted turns that preceded this turn (CRITICAL 1, path 2).
+	agent.Sessions.RollbackAppended(ts.sessionKey, targetLen)
 	agent.Sessions.SetSummary(ts.sessionKey, summary)
 	return agent.Sessions.Save(ts.sessionKey)
 }

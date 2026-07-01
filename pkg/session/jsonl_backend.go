@@ -74,6 +74,14 @@ func (b *JSONLBackend) TruncateHistory(key string, keepLast int) {
 	}
 }
 
+// RollbackAppended implements SessionStore — truncates the on-disk archive to
+// targetArchiveLen lines, leaving meta.Skip untouched (Skip-preserving rollback).
+func (b *JSONLBackend) RollbackAppended(key string, targetArchiveLen int) {
+	if err := b.store.RollbackAppended(context.Background(), key, targetArchiveLen); err != nil {
+		slog.Error("session: rollback appended", "key", key, "error", err)
+	}
+}
+
 // Save persists session state. Since the JSONL store fsyncs every write
 // immediately, the data is already durable.
 //

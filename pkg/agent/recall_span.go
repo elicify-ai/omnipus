@@ -6,19 +6,21 @@
 package agent
 
 import (
+	"fmt"
 	"sync/atomic"
 
 	"github.com/dapicom-ai/omnipus/pkg/providers"
 )
 
 // recallSpanDropCounters tracks recall_span_dropped_total{reason} (FR-018).
-// Each key is a reason string ("replaced" | "pressure" | "aged"); values are
-// *atomic.Int64 so the map is written once at init and read-only afterward —
-// no lock required on the hot path.
+// Each key is a reason string ("replaced" | "pressure" | "aged" | "other");
+// values are *atomic.Int64 so the map is written once at init and read-only
+// afterward — no lock required on the hot path.
 var recallSpanDropCounters = map[string]*atomic.Int64{
 	"replaced": new(atomic.Int64),
 	"pressure": new(atomic.Int64),
 	"aged":     new(atomic.Int64),
+	"other":    new(atomic.Int64),
 }
 
 // RecallSpanDropCount returns the total count for a given reason (for tests
@@ -37,13 +39,13 @@ func RecallSpanDropCount(reason string) int64 {
 // single source of truth) and is dropped-first under budget pressure so it can
 // never cause eviction of real window Turns.
 //
-// SCAFFOLD: the field set and the Messages() body are the minimum needed for
-// windowTrim (eviction) and BuildMessages (assembly) to compile against a
-// stable contract. The recall_conversation agent fills in the real construction
-// (BM25/turn_range/time selection, whole-Turn grouping, id rewriting, bounds).
+// Construct exclusively via newRecallSpan so Tokens is always consistent with
+// Msgs. Read the span via Messages() and the Tokens field.
 type RecallSpan struct {
-	// FromTurn/ToTurn are the archive Turn indices this span covers (for the
-	// demarcation marker "Recalled earlier turns {FromTurn}-{ToTurn}").
+	// FromTurn and ToTurn record the 1-based Turn ordinals (as grouped by
+	// parseTurnBoundaries over the full archive) this span covers. They are
+	// written at construction time for the demarcation marker
+	// "Recalled earlier turns {FromTurn}-{ToTurn}" and for observability.
 	FromTurn int
 	ToTurn   int
 
@@ -53,8 +55,32 @@ type RecallSpan struct {
 	Msgs []providers.Message
 
 	// Tokens is the estimated token cost of Msgs (the recallResultTokens term
-	// of the FR-009 fit invariant), measured once at build time.
+	// of the FR-009 fit invariant), computed from Msgs at construction time by
+	// newRecallSpan and guaranteed to equal Σ estimateMessageTokens(Msgs).
 	Tokens int
+}
+
+// newRecallSpan constructs a RecallSpan, computing Tokens from msgs so the
+// field is always consistent with Msgs (M7). fromTurn and toTurn are 1-based
+// Turn ordinals. Panics if fromTurn > toTurn or msgs is empty — callers must
+// guarantee non-empty selection and valid range before calling.
+func newRecallSpan(fromTurn, toTurn int, msgs []providers.Message) *RecallSpan {
+	if fromTurn > toTurn {
+		panic(fmt.Sprintf("newRecallSpan: fromTurn %d > toTurn %d", fromTurn, toTurn))
+	}
+	if len(msgs) == 0 {
+		panic("newRecallSpan: msgs must not be empty")
+	}
+	tokens := 0
+	for _, m := range msgs {
+		tokens += estimateMessageTokens(m)
+	}
+	return &RecallSpan{
+		FromTurn: fromTurn,
+		ToTurn:   toTurn,
+		Msgs:     msgs,
+		Tokens:   tokens,
+	}
 }
 
 // Messages returns the span's reconstructed provider messages for assembly.
@@ -99,14 +125,14 @@ func (al *AgentLoop) dropRecallSpan(sessionKey, reason string) {
 // recordRecallSpanDropped increments recall_span_dropped_total{reason} (FR-018).
 // Known reasons: "replaced" (next recall replaced it), "pressure" (dropped
 // first under budget), "aged" (future turn-age expiry, placeholder).
-// Unknown reasons are accepted and counted under the "replaced" bucket to
-// avoid panics from future callers — the same convention as log/slog's
-// catch-all handling.
+// Unknown reasons are counted under the dedicated "other" bucket so they are
+// observable without misattributing them to a known cause.
 func recordRecallSpanDropped(reason string) {
 	if c, ok := recallSpanDropCounters[reason]; ok {
 		c.Add(1)
 		return
 	}
-	// Unknown reason — count under "replaced" rather than silently drop.
-	recallSpanDropCounters["replaced"].Add(1)
+	// Unknown reason — count under "other" rather than silently drop or
+	// misattribute to a known bucket.
+	recallSpanDropCounters["other"].Add(1)
 }

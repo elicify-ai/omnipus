@@ -589,3 +589,180 @@ func TestBreadcrumb_NoEviction(t *testing.T) {
 		t.Errorf("expected empty breadcrumb when no eviction, got %q", bc)
 	}
 }
+
+// TestBreadcrumb_TurnOrdinalMatchesRecallConversation verifies that the Turn
+// ordinals in the breadcrumb match what recall_conversation(turn_range:"N-M")
+// would use — i.e., 1-based Turn ordinals over the full archive, NOT message
+// indices (MAJOR fix: breadcrumb was numbering by message index before).
+//
+// Archive layout (5 Turns, each with 2 messages):
+//
+//	Turn 1: msgs[0]=user, msgs[1]=assistant
+//	Turn 2: msgs[2]=user, msgs[3]=assistant
+//	Turn 3: msgs[4]=user, msgs[5]=assistant
+//	Turn 4: msgs[6]=user, msgs[7]=assistant  ← live window starts here
+//	Turn 5: msgs[8]=user, msgs[9]=assistant
+//
+// After eviction: archive[:6] is evicted (Turns 1–3), archive[6:] is window.
+// Correct breadcrumb ordinals: Turn 1, Turn 2, Turn 3.
+// Old (buggy) code: "turn 1", "turn 3", "turn 5" (message indices 0, 2, 4 + 1).
+func TestBreadcrumb_TurnOrdinalMatchesRecallConversation(t *testing.T) {
+	old := breadcrumbNowFn
+	breadcrumbNowFn = func() time.Time { return fixedNow }
+	defer func() { breadcrumbNowFn = old }()
+
+	ts := fixedNow.Add(-1 * time.Hour).Unix()
+
+	// 5 Turns × 2 messages each = 10 archived messages.
+	archive := []memory.ArchivedMessage{
+		// Turn 1 (archive indices 0–1)
+		makeMsgAM("user", "Turn 1 user message", ts),
+		makeMsgAM("assistant", "Turn 1 assistant reply", ts),
+		// Turn 2 (archive indices 2–3)
+		makeMsgAM("user", "Turn 2 user message", ts),
+		makeMsgAM("assistant", "Turn 2 assistant reply", ts),
+		// Turn 3 (archive indices 4–5)
+		makeMsgAM("user", "Turn 3 user message", ts),
+		makeMsgAM("assistant", "Turn 3 assistant reply", ts),
+		// Turn 4 (archive indices 6–7) — in live window
+		makeMsgAM("user", "Turn 4 user message", ts),
+		makeMsgAM("assistant", "Turn 4 assistant reply", ts),
+		// Turn 5 (archive indices 8–9) — in live window
+		makeMsgAM("user", "Turn 5 user message", ts),
+		makeMsgAM("assistant", "Turn 5 assistant reply", ts),
+	}
+
+	// Live window = last 4 messages (Turns 4 and 5).
+	window := []providers.Message{
+		makeMsg("user", "Turn 4 user message"),
+		makeMsg("assistant", "Turn 4 assistant reply"),
+		makeMsg("user", "Turn 5 user message"),
+		makeMsg("assistant", "Turn 5 assistant reply"),
+	}
+
+	bc := buildBreadcrumb(archive, window, breadcrumbTokenCap)
+
+	if bc == "" {
+		t.Fatal("expected non-empty breadcrumb for evicted archive")
+	}
+
+	// The breadcrumb must list Turn ordinals 1, 2, 3 — NOT message indices 1, 3, 5.
+	// We verify each Turn appears with its correct ordinal.
+	for _, want := range []string{"turn 1", "turn 2", "turn 3"} {
+		if !strings.Contains(bc, want) {
+			t.Errorf("breadcrumb missing expected ordinal %q; got:\n%s", want, bc)
+		}
+	}
+
+	// The buggy message-index values (3, 5) must NOT appear as turn numbers.
+	// (They could appear in snippet text but not as "turn N" patterns.)
+	for _, bad := range []string{"turn 3\n", "turn 5\n"} {
+		// Only check for "turn 5" / "turn 3" as standalone turn markers;
+		// "Turn 3 user" in the snippet is fine.
+		_ = bad // checked implicitly by the positive assertions above
+	}
+
+	// The breadcrumb must NOT claim "turn 5" for any evicted chunk since
+	// Turn 5 is in the live window, not evicted.
+	// Split on "turn " and check that 4 and 5 don't appear as evicted ordinals.
+	// We check the whole block doesn't contain "turn 4" or "turn 5" as ordinals.
+	// (They can appear in snippet text, e.g. "Turn 4 user message".)
+	// We look for the pattern "- turn N" which is how we format ordinals.
+	for _, bad := range []string{"- turn 4", "- turn 5"} {
+		if strings.Contains(bc, bad) {
+			t.Errorf("breadcrumb contains live-window turn ordinal %q; evicted turns are 1-3; got:\n%s", bad, bc)
+		}
+	}
+}
+
+// TestBuildMessages_SpanOrphanToolCallDropped verifies that a recall span
+// containing an orphaned assistant tool_call (no matching tool result) is
+// sanitized by BuildMessages — the orphan is dropped and the assembled provider
+// request has no unresolved tool_call_id (CRITICAL fix: SIGKILL/OOM-mid-turn
+// scenario → 400 from strict providers).
+func TestBuildMessages_SpanOrphanToolCallDropped(t *testing.T) {
+	tmpDir := setupWorkspace(t, map[string]string{
+		"AGENT.md": "# Agent\nTest agent.",
+	})
+	defer os.RemoveAll(tmpDir)
+
+	cb := NewContextBuilder(tmpDir)
+
+	// Recall span: an archived Turn that was interrupted mid-execution.
+	// The assistant called a tool (tool_call_id "recall_arc0_1") but the
+	// matching tool result was never written (SIGKILL/OOM scenario).
+	orphanToolCallID := "recall_arc0_1"
+	orphanSpan := []providers.Message{
+		{
+			Role:    "user",
+			Content: "Can you read a file?",
+		},
+		{
+			Role: "assistant",
+			ToolCalls: []providers.ToolCall{
+				{
+					ID:   orphanToolCallID,
+					Type: "function",
+					Function: &providers.FunctionCall{
+						Name:      "file.read",
+						Arguments: `{"path":"/tmp/test.txt"}`,
+					},
+				},
+			},
+		},
+		// Note: NO matching tool result — this is the orphan scenario.
+	}
+
+	// Window: a normal turn in the live window.
+	windowHistory := []providers.Message{
+		makeMsg("user", "What did you find?"),
+		makeMsg("assistant", "I couldn't complete the read earlier."),
+	}
+
+	msgs := cb.BuildMessages(
+		windowHistory,
+		"",
+		"Please try again",
+		nil,
+		"test", "chat1", "user1", "Alice",
+		"", // no breadcrumb
+		orphanSpan,
+	)
+
+	// Verify no orphan tool_call_id survives in the assembled messages.
+	for _, m := range msgs {
+		// Check assistant messages: if they have ToolCalls, every ID must be
+		// matched by a following tool result.
+		if m.Role == "assistant" && len(m.ToolCalls) > 0 {
+			for _, tc := range m.ToolCalls {
+				if tc.ID == orphanToolCallID {
+					t.Errorf("orphan tool_call_id %q survived sanitization in assistant message", orphanToolCallID)
+				}
+			}
+		}
+		// Check tool messages: the orphan's result was never written, so no
+		// tool message with this ID should appear either.
+		if m.Role == "tool" && m.ToolCallID == orphanToolCallID {
+			t.Errorf("orphan tool result with id %q found in assembled messages", orphanToolCallID)
+		}
+	}
+
+	// The window history (non-orphan messages) must survive intact.
+	found := 0
+	for _, m := range msgs {
+		if m.Role == "user" && m.Content == "What did you find?" {
+			found++
+		}
+		if m.Role == "assistant" && m.Content == "I couldn't complete the read earlier." {
+			found++
+		}
+	}
+	if found != 2 {
+		t.Errorf("expected both window messages to survive sanitization, found %d", found)
+	}
+
+	// Current user message is last.
+	if msgs[len(msgs)-1].Content != "Please try again" {
+		t.Errorf("last message should be current user message, got %q", msgs[len(msgs)-1].Content)
+	}
+}

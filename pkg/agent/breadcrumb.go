@@ -16,8 +16,15 @@ import (
 )
 
 // breadcrumbTokenCap is the maximum token budget for the entire breadcrumb
-// block injected into the system message (FR-007). Estimated at ~4 chars/token.
+// block injected into the system message (FR-007).
 const breadcrumbTokenCap = 1000
+
+// breadcrumbCharsPerToken is the chars-per-token divisor used by
+// estimateBreadcrumbTokens. We use 4 (i.e. ~250 tokens/kB), a deliberately
+// coarser estimate than context_budget.go's 2.5 chars/token heuristic, so the
+// ~1000-token cap remains honest for ASCII breadcrumb prose (pure prose has
+// longer average token length than mixed code+prose).
+const breadcrumbCharsPerToken = 4
 
 // breadcrumbNowFn is the clock used by buildBreadcrumb for relative timestamps.
 // Tests replace this to get deterministic output; production uses time.Now.
@@ -65,15 +72,21 @@ func buildBreadcrumb(archive []memory.ArchivedMessage, window []providers.Messag
 		return ""
 	}
 
-	// Build per-turn ranges. A "turn" spans from turnStarts[i] to
-	// turnStarts[i+1]-1 (or end). Turn numbers are 1-based for human display
-	// and match the archive index + 1.
+	// Build per-turn ranges. A Turn is a user-message group (user → assistant
+	// → tool → …). Each chunk represents exactly one Turn. turnOrdinal is the
+	// 1-based Turn ordinal over the FULL archive, matching the ordinal that
+	// recall_conversation(turn_range:"N-M") uses — so the model can copy a
+	// range directly from the breadcrumb into the tool call.
+	//
+	// Because the archive starts at line 0 and the evicted prefix contains the
+	// oldest Turns (Turns 1…K), chunk[i] is always Turn i+1.
 	type turnChunk struct {
-		startIdx int // index into archive (0-based)
-		endIdx   int // inclusive
-		ts       int64
-		snippet  string
-		entities string
+		turnOrdinal int // 1-based Turn ordinal in the full archive
+		msgStart    int // first message index in evicted (for TS/snippet lookup)
+		msgEnd      int // last message index in evicted (inclusive)
+		ts          int64
+		snippet     string
+		entities    string
 	}
 
 	chunks := make([]turnChunk, len(turnStarts))
@@ -100,11 +113,12 @@ func buildBreadcrumb(archive []memory.ArchivedMessage, window []providers.Messag
 		ents := extractEntities(fullUserContent)
 
 		chunks[i] = turnChunk{
-			startIdx: start,
-			endIdx:   end,
-			ts:       ts,
-			snippet:  snippet,
-			entities: ents,
+			turnOrdinal: i + 1, // 1-based: chunk 0 → Turn 1, chunk 1 → Turn 2, …
+			msgStart:    start,
+			msgEnd:      end,
+			ts:          ts,
+			snippet:     snippet,
+			entities:    ents,
 		}
 	}
 
@@ -118,9 +132,10 @@ func buildBreadcrumb(archive []memory.ArchivedMessage, window []providers.Messag
 	truncatedAt := -1
 	for i := len(chunks) - 1; i >= 0; i-- {
 		c := chunks[i]
-		// Turn numbers are 1-based in the archive.
-		turnA := c.startIdx + 1
-		turnB := c.endIdx + 1
+		// Use the 1-based Turn ordinal so the model can copy it directly into
+		// recall_conversation(turn_range:"N-M"). Each chunk is exactly one Turn,
+		// so turnOrdinal is both the start and end of the range.
+		turnOrdinal := c.turnOrdinal
 
 		var relTime string
 		if c.ts == 0 {
@@ -134,12 +149,7 @@ func buildBreadcrumb(archive []memory.ArchivedMessage, window []providers.Messag
 			entPart = " · " + c.entities
 		}
 
-		var line string
-		if turnA == turnB {
-			line = fmt.Sprintf("- turn %d · %s · %q%s", turnA, relTime, c.snippet, entPart)
-		} else {
-			line = fmt.Sprintf("- turns %d–%d · %s · %q%s", turnA, turnB, relTime, c.snippet, entPart)
-		}
+		line := fmt.Sprintf("- turn %d · %s · %q%s", turnOrdinal, relTime, c.snippet, entPart)
 
 		lineTokens := estimateBreadcrumbTokens(line)
 		if budgetUsed+lineTokens > tokenCap {
@@ -291,8 +301,6 @@ func extractEntities(text string) string {
 	}
 	taggedWords := make([]capWord, len(words))
 	for i, w := range words {
-		r, _ := firstRune(w)
-		isCap := r != 0 && unicode.IsUpper(r)
 		sentInit := false
 		if i == 0 {
 			sentInit = true
@@ -309,14 +317,13 @@ func extractEntities(text string) string {
 			return !unicode.IsLetter(r) && !unicode.IsDigit(r)
 		})
 		taggedWords[i] = capWord{word: cleanW, sentenceInitial: sentInit}
-		_ = isCap
 	}
 
 	i := 0
 	for i < len(taggedWords) {
 		// Check if this word is a non-sentence-initial Capitalized word.
 		tw := taggedWords[i]
-		r, _ := firstRune(tw.word)
+		r := firstRune(tw.word)
 		if r == 0 || !unicode.IsUpper(r) || tw.sentenceInitial {
 			i++
 			continue
@@ -327,7 +334,7 @@ func extractEntities(text string) string {
 		j := i + 1
 		for j < len(taggedWords) {
 			next := taggedWords[j]
-			nr, _ := firstRune(next.word)
+			nr := firstRune(next.word)
 			if nr != 0 && unicode.IsUpper(nr) && !next.sentenceInitial {
 				run = append(run, next.word)
 				j++
@@ -344,16 +351,12 @@ func extractEntities(text string) string {
 	return strings.Join(result, ", ")
 }
 
-// firstRune returns the first rune of s and its byte width.
-// Returns (0, 0) on empty or invalid input.
-func firstRune(s string) (rune, int) {
-	if s == "" {
-		return 0, 0
-	}
+// firstRune returns the first rune of s, or 0 on empty/invalid input.
+func firstRune(s string) rune {
 	for _, r := range s {
-		return r, 1
+		return r
 	}
-	return 0, 0
+	return 0
 }
 
 // isFilePath returns true when token looks like a file path: contains '/' or
@@ -388,12 +391,12 @@ func isAlphaNum(s string) bool {
 	return len(s) > 0
 }
 
-// estimateBreadcrumbTokens is a cheap token estimator for the breadcrumb budget
-// (~4 chars/token, consistent with the context_budget.go heuristic of 2.5 chars/token
-// but we use a slightly coarser estimate here since breadcrumb content is mainly
-// ASCII prose). We use len/4 as specified in the task.
+// estimateBreadcrumbTokens estimates the token cost of s for the breadcrumb cap
+// (FR-007). Uses breadcrumbCharsPerToken (4 chars/token), which is coarser than
+// context_budget.go's 2.5 chars/token because breadcrumb prose is mostly ASCII
+// with long words — the coarser divisor keeps the ~1000-token cap honest.
 func estimateBreadcrumbTokens(s string) int {
-	n := len(s) / 4
+	n := len(s) / breadcrumbCharsPerToken
 	if n < 1 && len(s) > 0 {
 		return 1
 	}
