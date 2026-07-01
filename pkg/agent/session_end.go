@@ -157,8 +157,23 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 
 	// Build the fallback candidate list: [primaryRecapModel, ...RecapFallbackModels].
 	// Each config.FallbackModel carries its own Provider for cross-provider fallback.
+	//
+	// Resolve the PRIMARY recap model's Provider the same way the agent turn does
+	// (resolveModelRef → the configured provider that owns the credentials). This
+	// is load-bearing: the fallback executor calls stripProviderPrefix(model,
+	// candidate.Provider) before the upstream API call, so a provider-prefixed
+	// model_name (e.g. "openrouter/z-ai/glm-5.2" — the form onboarding writes)
+	// is only reduced to the upstream-valid "z-ai/glm-5.2" when the candidate's
+	// Provider is set. Without it the prefixed model is sent RAW and OpenRouter
+	// rejects it ("... is not a valid model ID"), the recap falls back to a
+	// heuristic stub, and last-session.md loses the real summary. The turn path
+	// resolves Provider; the recap MUST match it.
 	candidates := make([]providers.FallbackCandidate, 0, 1+len(snapCfg.Agents.Defaults.RecapFallbackModels))
-	candidates = append(candidates, providers.FallbackCandidate{Model: recapModel})
+	primaryCandidate := providers.FallbackCandidate{Model: recapModel}
+	if ref, ok := resolveModelRef(snapCfg, recapModel); ok {
+		primaryCandidate = providers.FallbackCandidate{Model: ref.Model, Provider: ref.Provider}
+	}
+	candidates = append(candidates, primaryCandidate)
 	for _, fm := range snapCfg.Agents.Defaults.RecapFallbackModels {
 		candidates = append(candidates, providers.FallbackCandidate{Provider: fm.Provider, Model: fm.Model})
 	}
