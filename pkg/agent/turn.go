@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"fmt"
+	"math"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -269,10 +271,16 @@ func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScop
 		if archived, err := agent.Sessions.ReadArchive(context.Background(), opts.SessionKey); err == nil {
 			ts.initialArchiveLen = len(archived)
 		} else {
-			// If ReadArchive fails (new session, missing file), fall back to the
-			// window length. The rollback will be slightly conservative (keeps more
-			// archive than strictly necessary) but never destroys evicted turns.
-			ts.initialArchiveLen = ts.initialHistoryLength
+			// ReadArchive failed (new session, missing file, transient I/O error).
+			// Use math.MaxInt so that any subsequent RollbackAppended call is a
+			// guaranteed no-op (RollbackAppended treats target >= Count as no-op).
+			// Falling back to initialHistoryLength (the post-Skip window length,
+			// which is SMALLER than the true archive) would cause a rollback to
+			// truncate the archive to fewer lines than it already has — silently
+			// destroying evicted turns (SC-001 violation).
+			logger.WarnCF("agent", "newTurnState: ReadArchive failed; rollback will be no-op for this turn",
+				map[string]any{"session_key": opts.SessionKey, "error": err.Error()})
+			ts.initialArchiveLen = math.MaxInt
 		}
 	}
 
@@ -723,6 +731,29 @@ func (ts *turnState) restoreSession(agent *AgentInstance) error {
 	// any evicted turns that preceded this turn (CRITICAL 1, path 2).
 	agent.Sessions.RollbackAppended(ts.sessionKey, targetLen)
 	agent.Sessions.SetSummary(ts.sessionKey, summary)
+
+	// M4 mirror: verify the rollback actually took effect. RollbackAppended is
+	// fire-and-forget (no error return). Re-read the archive and confirm the
+	// length dropped to <= targetLen. Skip verification when targetLen is
+	// math.MaxInt (ReadArchive failed at turn start — rollback was a no-op by
+	// design, so there is nothing meaningful to verify).
+	if targetLen != math.MaxInt {
+		if postArchive, readErr := agent.Sessions.ReadArchive(context.Background(), ts.sessionKey); readErr == nil {
+			if len(postArchive) > targetLen {
+				logger.ErrorCF("agent", "restoreSession: rollback did not shrink archive to target",
+					map[string]any{
+						"session_key": ts.sessionKey,
+						"target":      targetLen,
+						"after":       len(postArchive),
+					})
+				return fmt.Errorf("restoreSession: RollbackAppended did not take effect (archive len %d > target %d)", len(postArchive), targetLen)
+			}
+		}
+		// If ReadArchive itself fails here, we can't verify — fall through and
+		// let Save() persist whatever state the backend is in. The caller
+		// (interrupt handler) logs the restoreSession error if we return one.
+	}
+
 	return agent.Sessions.Save(ts.sessionKey)
 }
 

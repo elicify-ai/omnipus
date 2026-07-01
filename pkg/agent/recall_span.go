@@ -42,34 +42,52 @@ func RecallSpanDropCount(reason string) int64 {
 // Construct exclusively via newRecallSpan so Tokens is always consistent with
 // Msgs. Read the span via Messages() and the Tokens field.
 type RecallSpan struct {
-	// FromTurn and ToTurn record the 1-based Turn ordinals (as grouped by
-	// parseTurnBoundaries over the full archive) this span covers. They are
-	// written at construction time for the demarcation marker
-	// "Recalled earlier turns {FromTurn}-{ToTurn}" and for observability.
+	// FromTurn and ToTurn are the minimum and maximum 1-based Turn ordinals
+	// present in this span (as grouped by parseTurnBoundaries over the full
+	// archive). They represent the extent of the kept turns, NOT a coverage
+	// claim: for sparse recalls (query/time mode) some ordinals between
+	// FromTurn and ToTurn may not be present. Use Ordinals for the exact set.
 	FromTurn int
 	ToTurn   int
+
+	// Ordinals is the sorted list of 1-based Turn ordinals actually present
+	// in this span. For turn_range mode the set is always contiguous; for
+	// query/time mode it may be sparse (non-adjacent ordinals). Never empty.
+	Ordinals []int
 
 	// Msgs are the reconstructed, provider-valid messages (marker + whole
 	// Turns with rewritten recall_* tool_call_ids), ready to splice between
 	// the breadcrumb and the sliding window.
 	Msgs []providers.Message
 
-	// Tokens is the estimated token cost of Msgs (the recallResultTokens term
-	// of the FR-009 fit invariant), computed from Msgs at construction time by
-	// newRecallSpan and guaranteed to equal Σ estimateMessageTokens(Msgs).
+	// Tokens is an upper-bound estimate of the token cost of Msgs (the
+	// recallResultTokens term of the FR-009 fit invariant), computed from the
+	// raw Msgs at construction time by newRecallSpan and guaranteed to equal
+	// Σ estimateMessageTokens(Msgs). The actual injected cost may be lower
+	// because BuildMessages runs Msgs through sanitizeHistoryForProvider (which
+	// may drop messages); drift is in the safe direction (over-estimate →
+	// over-evict, never under-evict).
 	Tokens int
 }
 
 // newRecallSpan constructs a RecallSpan, computing Tokens from msgs so the
-// field is always consistent with Msgs (M7). fromTurn and toTurn are 1-based
-// Turn ordinals. Panics if fromTurn > toTurn or msgs is empty — callers must
-// guarantee non-empty selection and valid range before calling.
-func newRecallSpan(fromTurn, toTurn int, msgs []providers.Message) *RecallSpan {
+// field is always consistent with Msgs (M7). ordinals is the sorted list of
+// 1-based Turn ordinals actually present in the span; fromTurn and toTurn are
+// derived as ordinals[0] and ordinals[len-1] (min and max present). Panics if
+// ordinals is empty, if fromTurn < 1, or if msgs is empty — callers must
+// guarantee non-empty selection and valid ordinals before calling.
+func newRecallSpan(fromTurn, toTurn int, msgs []providers.Message, ordinals []int) *RecallSpan {
+	if fromTurn < 1 {
+		panic(fmt.Sprintf("newRecallSpan: fromTurn %d < 1 (Turn ordinals are 1-based)", fromTurn))
+	}
 	if fromTurn > toTurn {
 		panic(fmt.Sprintf("newRecallSpan: fromTurn %d > toTurn %d", fromTurn, toTurn))
 	}
 	if len(msgs) == 0 {
 		panic("newRecallSpan: msgs must not be empty")
+	}
+	if len(ordinals) == 0 {
+		panic("newRecallSpan: ordinals must not be empty")
 	}
 	tokens := 0
 	for _, m := range msgs {
@@ -78,6 +96,7 @@ func newRecallSpan(fromTurn, toTurn int, msgs []providers.Message) *RecallSpan {
 	return &RecallSpan{
 		FromTurn: fromTurn,
 		ToTurn:   toTurn,
+		Ordinals: ordinals,
 		Msgs:     msgs,
 		Tokens:   tokens,
 	}

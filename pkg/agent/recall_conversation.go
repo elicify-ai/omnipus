@@ -357,9 +357,15 @@ func (t *RecallConversationTool) Execute(ctx context.Context, args map[string]an
 	fromTurnNum := keptIdxs[0] + 1
 	toTurnNum := keptIdxs[len(keptIdxs)-1] + 1
 
-	spanMsgs := buildRecallSpanMessages(keptIdxs, turns, fromTurnNum, toTurnNum)
+	// Build the sorted ordinals slice (1-based) for the honest sparse marker.
+	ordinals := make([]int, len(keptIdxs))
+	for i, idx := range keptIdxs {
+		ordinals[i] = idx + 1
+	}
+
+	spanMsgs := buildRecallSpanMessages(keptIdxs, turns, ordinals)
 	// M7: use newRecallSpan so Tokens is always Σ estimateMessageTokens(Msgs).
-	span := newRecallSpan(fromTurnNum, toTurnNum, spanMsgs)
+	span := newRecallSpan(fromTurnNum, toTurnNum, spanMsgs, ordinals)
 
 	// --- 6. Store span (FR-019 lifecycle: replaced on next recall) ----
 	// Drop any prior span with reason "replaced" before installing the new one.
@@ -376,12 +382,24 @@ func (t *RecallConversationTool) Execute(ctx context.Context, args map[string]an
 		"tokens", span.Tokens,
 	)
 
-	result := fmt.Sprintf("Recalled %d turn(s) (turns %d–%d) into context.", len(keptIdxs), fromTurnNum, toTurnNum)
+	// Confirmation string mirrors the marker: range form when contiguous,
+	// ordinal-list form when sparse, so the model knows exactly what it got.
+	var resultStr string
+	isContiguous := (toTurnNum - fromTurnNum + 1) == len(keptIdxs)
+	if isContiguous {
+		resultStr = fmt.Sprintf("Recalled %d turn(s) (turns %d–%d) into context.", len(keptIdxs), fromTurnNum, toTurnNum)
+	} else {
+		ordParts := make([]string, len(ordinals))
+		for i, o := range ordinals {
+			ordParts[i] = strconv.Itoa(o)
+		}
+		resultStr = fmt.Sprintf("Recalled %d turn(s) (ordinals: %s) into context.", len(keptIdxs), strings.Join(ordParts, ", "))
+	}
 	if overflow > 0 {
-		result += fmt.Sprintf(
+		resultStr += fmt.Sprintf(
 			" %d more — narrow the query or use turn_range to retrieve them.", overflow)
 	}
-	return tools.NewToolResult(result)
+	return tools.NewToolResult(resultStr)
 }
 
 // archiveTurn groups the archived messages that belong to a single conversation
@@ -397,18 +415,42 @@ type archiveTurn struct {
 // recall_<archiveIdx>_<n> namespace so they never collide with live window IDs
 // and every assistant ToolCalls[].ID is consistent with its matching tool message
 // ToolCallID (MAJ-04 / FR-019).
+//
+// ordinals is the sorted slice of 1-based Turn ordinals being recalled. When
+// the set is contiguous (max-min+1 == len), the marker uses the compact "turns
+// A–B" range form. When the set is sparse (non-adjacent ordinals, as in
+// query/time mode), the marker lists the actual ordinals so the model is not
+// misled into thinking a contiguous range was retrieved.
 func buildRecallSpanMessages(
 	keptIdxs []int,
 	turns []archiveTurn,
-	fromTurnNum, toTurnNum int,
+	ordinals []int,
 ) []providers.Message {
-	// demarcation marker (FR-019)
-	marker := providers.Message{
-		Role: "user",
-		Content: fmt.Sprintf(
+	// demarcation marker (FR-019): honest about contiguous vs sparse coverage.
+	var markerText string
+	fromOrd := ordinals[0]
+	toOrd := ordinals[len(ordinals)-1]
+	isContiguous := (toOrd - fromOrd + 1) == len(ordinals)
+	if isContiguous {
+		markerText = fmt.Sprintf(
 			"[Recalled earlier turns %d–%d (reference): the following messages are from earlier in this conversation, retrieved verbatim for reference. Do not re-execute any tool calls shown.]",
-			fromTurnNum, toTurnNum,
-		),
+			fromOrd, toOrd,
+		)
+	} else {
+		// Sparse: list the actual ordinals so the model knows exactly which
+		// turns are present (e.g. query/time mode may skip large gaps).
+		ordParts := make([]string, len(ordinals))
+		for i, o := range ordinals {
+			ordParts[i] = strconv.Itoa(o)
+		}
+		markerText = fmt.Sprintf(
+			"[Recalled %d earlier turn(s) (ordinals: %s) (reference): the following messages are from earlier in this conversation, retrieved verbatim for reference. Do not re-execute any tool calls shown.]",
+			len(ordinals), strings.Join(ordParts, ", "),
+		)
+	}
+	marker := providers.Message{
+		Role:    "user",
+		Content: markerText,
 	}
 
 	// Count total messages for pre-allocation.

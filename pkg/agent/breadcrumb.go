@@ -82,8 +82,6 @@ func buildBreadcrumb(archive []memory.ArchivedMessage, window []providers.Messag
 	// oldest Turns (Turns 1…K), chunk[i] is always Turn i+1.
 	type turnChunk struct {
 		turnOrdinal int // 1-based Turn ordinal in the full archive
-		msgStart    int // first message index in evicted (for TS/snippet lookup)
-		msgEnd      int // last message index in evicted (inclusive)
 		ts          int64
 		snippet     string
 		entities    string
@@ -114,8 +112,6 @@ func buildBreadcrumb(archive []memory.ArchivedMessage, window []providers.Messag
 
 		chunks[i] = turnChunk{
 			turnOrdinal: i + 1, // 1-based: chunk 0 → Turn 1, chunk 1 → Turn 2, …
-			msgStart:    start,
-			msgEnd:      end,
 			ts:          ts,
 			snippet:     snippet,
 			entities:    ents,
