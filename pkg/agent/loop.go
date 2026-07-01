@@ -7507,8 +7507,10 @@ func (al *AgentLoop) windowTrim(agent *AgentInstance, sessionKey string) (compre
 	var pinnedCoreOverhead int
 	if agent.ContextBuilder != nil {
 		sysPrompt := agent.ContextBuilder.BuildSystemPromptWithCache()
-		// chars/4 ≈ tokens — same heuristic as estimateMessageTokens.
-		pinnedCoreOverhead = (len(sysPrompt) + 3) / 4
+		// chars*2/5 ≈ tokens — exactly the same heuristic as estimateMessageTokens
+		// (which uses chars*2/5 after adding per-message overhead). chars/4 would
+		// underestimate by ~38%, causing under-eviction on small-window models.
+		pinnedCoreOverhead = len(sysPrompt) * 2 / 5
 	}
 	// breadcrumbTokenCap is the hard cap on the breadcrumb block (~1000 tokens);
 	// use it as a conservative estimate of the breadcrumb overhead.
@@ -7518,15 +7520,15 @@ func (al *AgentLoop) windowTrim(agent *AgentInstance, sessionKey string) (compre
 
 	// FR-019 drop-span-first: if an active span exists and we're over budget,
 	// drop it and re-check. Only evict real window Turns if still over budget.
-	currentWindowTokens := 0
-	for _, m := range window {
-		currentWindowTokens += estimateMessageTokens(m)
-	}
+	currentWindowTokens := sumMessageTokens(window)
 	if recallSpan != nil && (currentWindowTokens+toolDefsTokens+recallSpanTokens+maxTokens > contextWindow) {
 		al.dropRecallSpan(sessionKey, "pressure")
 		recallSpanTokens = 0
-		// Re-check: if dropping the span was enough, return without trimming.
-		if currentWindowTokens+toolDefsTokens+maxTokens <= contextWindow {
+		// Re-check against the same budget basis used for the suffix fit-check
+		// below (contextWindow − maxTokens − headroom − pinnedCoreOverhead).
+		// Using raw contextWindow here would pass cases that the suffix walk
+		// would still reject, causing unnecessary evictions on the next call.
+		if currentWindowTokens+toolDefsTokens <= budget {
 			return compressionResult{}, false
 		}
 	}
@@ -7542,10 +7544,7 @@ func (al *AgentLoop) windowTrim(agent *AgentInstance, sessionKey string) (compre
 			continue
 		}
 		suffix := window[b:]
-		suffixTokens := 0
-		for _, m := range suffix {
-			suffixTokens += estimateMessageTokens(m)
-		}
+		suffixTokens := sumMessageTokens(suffix)
 		if suffixTokens+toolDefsTokens+recallSpanTokens <= budget {
 			cutIdx = b
 			break
@@ -7554,14 +7553,15 @@ func (al *AgentLoop) windowTrim(agent *AgentInstance, sessionKey string) (compre
 
 	// Determine how many messages to keep (tail of the live window).
 	// cutIdx >= 0: normal path — keep window[cutIdx:].
-	// cutIdx < 0 (FR-003 floor): keep only the bare last user message.
+	// cutIdx < 0 (FR-003 floor): keep from the most-recent user message onward
+	//   (the last complete Turn in the live window).
 	//
-	// TruncateHistory(n) keeps the last n messages from the session.  That works
-	// for the normal path because keptHistory IS the tail.  For the FR-003 floor
-	// we want exactly window[lastUserIdx:lastUserIdx+1] (one user message), which
-	// is NOT necessarily the tail — so we use SetHistory directly, then save.
+	// Both paths call TruncateHistory (Skip-advancing, archive-preserving; zero
+	// bytes deleted from the JSONL file). SetHistory is NEVER used — it would
+	// overwrite the entire JSONL and reset Skip=0, permanently destroying evicted
+	// turns (SC-001). The floor keeps window[lastUserIdx:] — the user message and
+	// any following assistant/tool messages — not just the bare user message.
 	droppedCount := 0
-	floorPath := false
 	if cutIdx >= 0 {
 		// Normal path: tail-of-window keeps are handled by TruncateHistory.
 		// TruncateHistory advances meta.Skip (archive-preserving; zero bytes
@@ -7590,7 +7590,6 @@ func (al *AgentLoop) windowTrim(agent *AgentInstance, sessionKey string) (compre
 		keepLast := len(window) - keepStart
 		droppedCount = len(window) - keepLast
 		agent.Sessions.TruncateHistory(sessionKey, keepLast)
-		floorPath = true
 	}
 
 	if saveErr := agent.Sessions.Save(sessionKey); saveErr != nil {
@@ -7621,7 +7620,6 @@ func (al *AgentLoop) windowTrim(agent *AgentInstance, sessionKey string) (compre
 	if droppedCount > 0 {
 		skipAdvanceTotal.Add(1)
 	}
-	_ = floorPath // retained to make the branch visible in coverage
 
 	keptCount := len(postWindow) // use the verified post-trim window size
 
@@ -7631,13 +7629,20 @@ func (al *AgentLoop) windowTrim(agent *AgentInstance, sessionKey string) (compre
 	// bytes from the JSONL file, only advances Skip). The byte count is emitted
 	// as a structured log field so it is observable in production without a
 	// full metrics framework. Only done when we have an archive reader.
-	archiveBytes := int64(-1) // -1 indicates unavailable
+	archiveBytes := int64(-1) // -1 indicates unavailable (sentinel; explained below)
 	if archived, err := agent.Sessions.ReadArchive(context.Background(), sessionKey); err == nil {
 		// Estimate archive size from the number of archived messages (each JSON
 		// line is typically 100–500 bytes; use message count as a proxy).
 		// Actual byte stat requires fs.Stat — not exposed through SessionStore.
 		// For now: count is a proxy observable alongside the real skip value.
 		archiveBytes = int64(len(archived))
+	} else {
+		// M5: ReadArchive error post-eviction — the eviction itself succeeded
+		// (M4 verified the window shrank), but the archive byte stat is
+		// unavailable. Log at DEBUG so operators can correlate -1 in the warn
+		// below with a transient I/O issue without polluting the warn stream.
+		logger.DebugCF("agent", "windowTrim: M5 ReadArchive failed; context_archive_lines will be -1 (sentinel)",
+			map[string]any{"session_key": sessionKey, "error": err.Error()})
 	}
 
 	logger.WarnCF("agent", "windowTrim: evicted oldest Turns from live window",
@@ -7707,15 +7712,23 @@ func decideSwitchCompressAction(currentConvTokens, newContextWindow int) SwitchA
 	return SwitchActionCompress
 }
 
+// sumMessageTokens sums estimateMessageTokens across a message slice.
+// It is the single consistent call site for token-counting a []providers.Message
+// so that the heuristic (chars*2/5) is applied uniformly across windowTrim,
+// estimateHistoryTokens, and any future callers.
+func sumMessageTokens(msgs []providers.Message) int {
+	total := 0
+	for _, m := range msgs {
+		total += estimateMessageTokens(m)
+	}
+	return total
+}
+
 // estimateHistoryTokens is a small helper that sums estimateMessageTokens
 // across a history slice. The loop's switch-time compress path uses it to
 // compute the "current conversation size" fed into decideSwitchCompressAction.
 func estimateHistoryTokens(history []providers.Message) int {
-	total := 0
-	for _, m := range history {
-		total += estimateMessageTokens(m)
-	}
-	return total
+	return sumMessageTokens(history)
 }
 
 // handleModelSwitch is the switch-time re-window path (FR-011). It is invoked
@@ -8204,11 +8217,7 @@ func (al *AgentLoop) summarizeBatch(
 // Counts Content, ToolCalls arguments, and ToolCallID metadata so that
 // tool-heavy conversations are not systematically undercounted.
 func (al *AgentLoop) estimateTokens(messages []providers.Message) int {
-	total := 0
-	for _, m := range messages {
-		total += estimateMessageTokens(m)
-	}
-	return total
+	return sumMessageTokens(messages)
 }
 
 func (al *AgentLoop) handleCommand(

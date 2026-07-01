@@ -287,11 +287,10 @@ func TestRecallConversation_OutputBounded(t *testing.T) {
 	}
 
 	// Verify the turn count in the span is ≤ recallDefaultTurns (8).
-	// The span has a marker + up to 8 turns' messages.
-	// Count distinct turns by FromTurn/ToTurn range.
-	turnCount := span.ToTurn - span.FromTurn + 1
-	if turnCount > recallDefaultTurns {
-		t.Errorf("expected ≤%d turns in span, got %d", recallDefaultTurns, turnCount)
+	// Use len(Ordinals) — the authoritative count of kept turns — rather than
+	// the ToTurn-FromTurn+1 range arithmetic which overcounts for sparse recalls.
+	if len(span.Ordinals) > recallDefaultTurns {
+		t.Errorf("expected ≤%d turns in span (Ordinals), got %d", recallDefaultTurns, len(span.Ordinals))
 	}
 
 	// The result must mention "N more" when truncated.
@@ -622,6 +621,141 @@ func TestRecallConversation_QueryBM25_TopRelevanceKept(t *testing.T) {
 	}
 }
 
+// --- Sparse marker: query/time modes produce honest non-contiguous marker ----
+
+// TestRecallConversation_SparseMarker verifies that when BM25/time mode returns
+// non-contiguous turns, the demarcation marker and confirmation string list the
+// actual ordinals rather than advertising a contiguous range.
+//
+// Fixture: 5 turns where the query term appears only in turns 1 and 5, so
+// keptIdxs = [0, 4] → ordinals [1, 5] (non-contiguous; gap at 2,3,4).
+// The old code would have emitted "turns 1–5" (implying 5 turns); the fix
+// must emit the explicit ordinal list.
+func TestRecallConversation_SparseMarker(t *testing.T) {
+	const nonce = "SPARSE_NONCE_ZETA"
+	archive := &stubArchive{msgs: []memory.ArchivedMessage{
+		makeUserMsg("turn one " + nonce + " first occurrence"),
+		makeAssistantMsg("reply one"),
+		makeUserMsg("turn two completely unrelated"),
+		makeAssistantMsg("reply two"),
+		makeUserMsg("turn three also unrelated"),
+		makeAssistantMsg("reply three"),
+		makeUserMsg("turn four nothing interesting"),
+		makeAssistantMsg("reply four"),
+		makeUserMsg("turn five " + nonce + " second occurrence"),
+		makeAssistantMsg("reply five"),
+	}}
+	setter := newStubSpanSetter()
+	tool := makeTool(archive, setter)
+
+	ctx := makeCtx("sess-sparse")
+	result := tool.Execute(ctx, map[string]any{"query": nonce})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.ForLLM)
+	}
+
+	span := setter.spans["sess-sparse"]
+	if span == nil {
+		t.Fatal("no span was set")
+	}
+
+	// Must have exactly the turns that contain the nonce (turns 1 and 5).
+	// Ordinals must be [1, 5] — non-contiguous.
+	if len(span.Ordinals) != 2 {
+		t.Errorf("expected 2 ordinals, got %d: %v", len(span.Ordinals), span.Ordinals)
+	}
+	if span.FromTurn != 1 || span.ToTurn != 5 {
+		t.Errorf("expected FromTurn=1 ToTurn=5, got %d/%d", span.FromTurn, span.ToTurn)
+	}
+
+	// The demarcation marker in Msgs[0] must list ordinals, NOT "turns 1–5".
+	if len(span.Msgs) == 0 {
+		t.Fatal("span has no messages")
+	}
+	markerContent := span.Msgs[0].Content
+	if strings.Contains(markerContent, "turns 1–5") {
+		t.Errorf("sparse marker must not claim contiguous 'turns 1–5': %q", markerContent)
+	}
+	if !strings.Contains(markerContent, "1") || !strings.Contains(markerContent, "5") {
+		t.Errorf("sparse marker must list ordinals 1 and 5: %q", markerContent)
+	}
+	// The marker must mention "ordinals" or count-based language (not a range dash).
+	if !strings.Contains(markerContent, "ordinals") {
+		t.Errorf("sparse marker should mention 'ordinals': %q", markerContent)
+	}
+
+	// The confirmation result must also use ordinal-list form, not "turns 1–5".
+	if strings.Contains(result.ForLLM, "turns 1–5") {
+		t.Errorf("confirmation string must not claim contiguous 'turns 1–5': %q", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "ordinals") {
+		t.Errorf("confirmation string should mention 'ordinals': %q", result.ForLLM)
+	}
+}
+
+// TestRecallSpan_Ordinals_ContiguousRange verifies that turn_range mode (which
+// always produces a contiguous set) populates Ordinals correctly and that the
+// marker uses the compact "turns A–B" form (not the sparse ordinal-list form).
+func TestRecallSpan_Ordinals_ContiguousRange(t *testing.T) {
+	archive := &stubArchive{msgs: []memory.ArchivedMessage{
+		makeUserMsg("turn one"),
+		makeAssistantMsg("reply one"),
+		makeUserMsg("turn two"),
+		makeAssistantMsg("reply two"),
+		makeUserMsg("turn three"),
+		makeAssistantMsg("reply three"),
+	}}
+	setter := newStubSpanSetter()
+	tool := makeTool(archive, setter)
+
+	ctx := makeCtx("sess-contiguous")
+	result := tool.Execute(ctx, map[string]any{"turn_range": "1-3"})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.ForLLM)
+	}
+
+	span := setter.spans["sess-contiguous"]
+	if span == nil {
+		t.Fatal("no span set")
+	}
+
+	// Ordinals must be [1, 2, 3].
+	if len(span.Ordinals) != 3 {
+		t.Errorf("expected 3 ordinals, got %d: %v", len(span.Ordinals), span.Ordinals)
+	}
+	for i, want := range []int{1, 2, 3} {
+		if span.Ordinals[i] != want {
+			t.Errorf("Ordinals[%d] = %d, want %d", i, span.Ordinals[i], want)
+		}
+	}
+
+	// Marker must use the compact range form.
+	if len(span.Msgs) == 0 {
+		t.Fatal("span has no messages")
+	}
+	markerContent := span.Msgs[0].Content
+	if !strings.Contains(markerContent, "turns 1–3") {
+		t.Errorf("contiguous marker should use 'turns 1–3': %q", markerContent)
+	}
+	if strings.Contains(markerContent, "ordinals") {
+		t.Errorf("contiguous marker should not mention 'ordinals': %q", markerContent)
+	}
+}
+
+// TestRecallSpan_NewRecallSpan_FromTurnZeroPanics verifies the fromTurn>=1
+// invariant: passing fromTurn=0 must panic.
+func TestRecallSpan_NewRecallSpan_FromTurnZeroPanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected panic for fromTurn=0, but did not panic")
+		}
+	}()
+	_ = newRecallSpan(0, 1,
+		[]providers.Message{{Role: "user", Content: "x"}},
+		[]int{1},
+	)
+}
+
 // --- M6: empty-tokenizable query returns distinct error ---------------------
 
 // TestRecallConversation_EmptyTokenizableQuery verifies that a query whose
@@ -666,7 +800,7 @@ func TestRecallSpan_NewRecallSpan_TokensConsistent(t *testing.T) {
 		{Role: "user", Content: "hello world this is a test message"},
 		{Role: "assistant", Content: "acknowledgment response with some words"},
 	}
-	span := newRecallSpan(1, 1, spanMsgs)
+	span := newRecallSpan(1, 1, spanMsgs, []int{1})
 
 	// Independently compute the expected token sum.
 	expected := 0

@@ -96,7 +96,7 @@ func TestRecallSpan_DroppedFirstUnderPressure(t *testing.T) {
 		for i := 0; i < 20; i++ {
 			spanMsgs = append(spanMsgs, providers.Message{Role: "user", Content: bigMsg})
 		}
-		bigSpan := newRecallSpan(1, 5, spanMsgs)
+		bigSpan := newRecallSpan(1, 5, spanMsgs, []int{1, 2, 3, 4, 5})
 		al.setRecallSpan(sk, bigSpan)
 
 		// Verify the span is active before the trim.
@@ -158,7 +158,7 @@ func TestRecallSpan_DroppedFirstUnderPressure(t *testing.T) {
 		// Install a small span (doesn't change the outcome — window is still over budget
 		// after span drop).
 		tinySpanMsgs := []providers.Message{trimTestMsg("user", "short recalled msg")}
-		al2.setRecallSpan(sk2, newRecallSpan(1, 1, tinySpanMsgs))
+		al2.setRecallSpan(sk2, newRecallSpan(1, 1, tinySpanMsgs, []int{1}))
 
 		pressureBefore := RecallSpanDropCount("pressure")
 
@@ -231,7 +231,7 @@ func TestFitInvariantHolds_WindowPlusRecall(t *testing.T) {
 		{Role: "user", Content: "Can you elaborate on continents?"},
 		{Role: "assistant", Content: "There are seven continents on Earth."},
 	}
-	span := newRecallSpan(1, 2, spanMsgs)
+	span := newRecallSpan(1, 2, spanMsgs, []int{1, 2})
 
 	breadcrumb := "## Earlier in this conversation (evicted from the live window)\n" +
 		"Use the recall_conversation tool to read any of these verbatim.\n" +
