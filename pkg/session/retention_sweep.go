@@ -45,17 +45,6 @@ func (us *UnifiedStore) RetentionSweep(retentionDays int) (int, error) {
 			if path == us.baseDir {
 				return nil
 			}
-			rel, err := filepath.Rel(us.baseDir, path)
-			if err != nil {
-				return err
-			}
-			parts := strings.SplitN(rel, string(filepath.Separator), 2)
-			if len(parts) == 1 {
-				name := parts[0]
-				if name == ".context" {
-					return filepath.SkipDir
-				}
-			}
 			return nil
 		}
 
@@ -71,9 +60,6 @@ func (us *UnifiedStore) RetentionSweep(retentionDays int) (int, error) {
 		if len(parts) < 2 {
 			return nil
 		}
-		if parts[0] == ".context" {
-			return nil
-		}
 
 		info, err := d.Info()
 		if err != nil {
@@ -86,7 +72,11 @@ func (us *UnifiedStore) RetentionSweep(retentionDays int) (int, error) {
 				slog.Warn("session: retention_sweep: delete failed", "file", path, "error", delErr)
 			} else {
 				removed++
-				touchedSessionDirs[filepath.Join(us.baseDir, parts[0])] = struct{}{}
+				// Only track session dirs for empty-dir cleanup; .context/ is a
+				// shared archive container — do not queue it for removal.
+				if parts[0] != ".context" {
+					touchedSessionDirs[filepath.Join(us.baseDir, parts[0])] = struct{}{}
+				}
 			}
 		}
 

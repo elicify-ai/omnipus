@@ -752,9 +752,28 @@ func (us *UnifiedStore) TruncateHistory(sessionKey string, keepLast int) {
 	}
 }
 
-// Save implements SessionStore — compacts the context backend.
+// ReadArchive implements SessionStore — returns the full archived log for
+// sessionKey from line 0, ignoring meta.Skip. Evicted (skipped) turns are
+// included. Each ArchivedMessage carries the per-line TS written by addMsg
+// (FR-016/FR-017). Legacy lines pre-dating the TS stamp unmarshal with TS==0.
+func (us *UnifiedStore) ReadArchive(ctx context.Context, sessionKey string) ([]memory.ArchivedMessage, error) {
+	msgs, err := us.backend.ReadArchive(ctx, sessionKey)
+	if err != nil {
+		slog.Error("unified_store: read archive", "key", sessionKey, "error", err)
+		return nil, err
+	}
+	return msgs, nil
+}
+
+// Save implements SessionStore — ensures all writes are durable.
+// Since the JSONL backend fsyncs every write immediately, the data is
+// already durable at this point.
+//
+// context-paging (FR-005): Save does NOT compact the JSONL file. Evicted
+// (skipped) lines must remain on disk so recall_conversation can reach them.
+// The retention sweep is the sole legitimate deleter of context.jsonl content.
 func (us *UnifiedStore) Save(sessionKey string) error {
-	return us.backend.Compact(context.Background(), sessionKey)
+	return nil
 }
 
 // Close implements SessionStore.
