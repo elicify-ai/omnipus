@@ -1,0 +1,328 @@
+// memory_context_integration_test.go — integration tests for memory-context wiring gaps.
+//
+// These tests use a real AgentLoop / MemoryStore with a stub provider (mockProvider).
+// They close three specific coverage gaps that were only partially verified elsewhere:
+//
+//  1. AutoInject20Recent — GetMemoryContext injects EXACTLY 20 of 25 written memories.
+//  2. RecallSpansThreeScopes — recall_memory search + GetMemoryContext coverage of
+//     long-term memory, last-session.md, and retrospectives.
+//  3. ContextCompactionOverflow — forceCompression fires and produces a well-formed
+//     (non-corrupt) reduced history with a compression note.
+//
+// Build: CGO_ENABLED=0 go test -tags goolm,stdjson -run '^TestIntegration_' -p 1 ./pkg/agent/
+// Traces to: pkg/agent/memory.go GetMemoryContext (line 936), pkg/agent/loop.go forceCompression (line 7411).
+
+package agent
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/dapicom-ai/omnipus/pkg/providers"
+	"github.com/dapicom-ai/omnipus/pkg/tools"
+)
+
+// ---------------------------------------------------------------------------
+// 1. TestIntegration_AutoInject20Recent
+//
+// BDD:
+//   Given a MemoryStore with 25 written long-term memories
+//   When GetMemoryContext is called (which is what BuildSystemPrompt injects)
+//   Then exactly 20 memories appear, not all 25 and not fewer
+//
+// The "20" cap is the SearchEntries("", 20) call at memory.go:936.
+// Existing tests (TestMemoryStore_GetMemoryContext_ContainsBothSections) only
+// verify section presence — NOT the 20-memory count boundary.
+//
+// Note on ordering: SearchEntries("", 20) uses BM25 score ordering (all-zero
+// scores with empty query fall back to mtime ordering when the filesystem
+// provides distinct mtimes). This test asserts the COUNT boundary only, not
+// which specific 5 are excluded, since mtime granularity on fast filesystems
+// can collapse multiple writes into the same second.
+//
+// Traces to: pkg/agent/memory.go line 936 (GetMemoryContext → SearchEntries("", 20))
+// ---------------------------------------------------------------------------
+
+func TestIntegration_AutoInject20Recent(t *testing.T) {
+	workspace := t.TempDir()
+	home := t.TempDir()
+
+	ms := NewMemoryStore(workspace, home)
+	defer ms.Close()
+
+	// Write 25 memories with distinct, identifiable prefix so we can count them.
+	const total = 25
+	for i := 1; i <= total; i++ {
+		// Format: "ctxIT_mem_NN_unique_fact" — zero-padded so string search is unambiguous.
+		content := "ctxIT_mem_" + fmt.Sprintf("%02d", i) + "_unique_fact"
+		if err := ms.AppendLongTerm(content, "reference"); err != nil {
+			t.Fatalf("AppendLongTerm(%d): %v", i, err)
+		}
+	}
+
+	// GetMemoryContext injects at most 20 entries via SearchEntries("", 20).
+	ctx := ms.GetMemoryContext()
+
+	if !strings.Contains(ctx, "## Long-term memory") {
+		t.Fatal("GetMemoryContext missing '## Long-term memory' section with 25 memories written")
+	}
+
+	// Count how many ctxIT_mem_ markers appear in the output.
+	// Each memory contributes exactly one "ctxIT_mem_NN_unique_fact" substring.
+	count := strings.Count(ctx, "ctxIT_mem_")
+	assert.Equal(t, 20, count,
+		"GetMemoryContext must inject exactly 20 memories (SearchEntries cap = 20), not %d; "+
+			"writing 25 must trigger the cap and exclude 5", count)
+
+	// Differentiation guard: confirm two distinct memories appear with different content.
+	// If the function returned a hardcoded or empty response, this would catch it.
+	assert.Contains(t, ctx, "ctxIT_mem_01_unique_fact",
+		"at least some memories from the written set must appear")
+	// Count is already verified = 20; confirm a specific one appears so the
+	// assertion is on real content, not just "it didn't crash".
+	assert.True(t, strings.Contains(ctx, "ctxIT_mem_25_unique_fact") ||
+		strings.Contains(ctx, "ctxIT_mem_24_unique_fact") ||
+		strings.Contains(ctx, "ctxIT_mem_23_unique_fact"),
+		"at least one of the most-recently written memories must appear in the 20-entry window")
+}
+
+// ---------------------------------------------------------------------------
+// 2. TestIntegration_RecallSpansThreeScopes
+//
+// BDD:
+//   Given a MemoryStore with:
+//     - a long-term memory containing "ctxIT_topic_flock"
+//     - a last-session.md containing "ctxIT_topic_flock"
+//     - a retrospective containing "ctxIT_topic_flock"
+//   When recall_memory is called for query "ctxIT_topic_flock"
+//   Then long-term memory results are returned (via SearchEntries)
+//   AND when GetMemoryContext is called, last-session content appears
+//   AND retrospectives do NOT appear in GetMemoryContext or recall_memory
+//     (this is the documented gap: recall spans long-term only; retros are
+//      private reflection artifacts surfaced only via ReadRetros / BuildSystemPrompt
+//      if wired — currently they are NOT wired into GetMemoryContext either).
+//
+// The RecallMemoryTool description comment says "searches long-term memory,
+// last session, and retrospectives" but the implementation at memory.go:936 only
+// covers long-term + last-session via GetMemoryContext, and the RecallMemoryTool
+// itself only covers long-term memories. This test verifies the ACTUAL behavior
+// (not the aspirational doc comment) and makes the gap explicit.
+//
+// Traces to: pkg/tools/memory.go:298 (RecallMemoryTool comment)
+//            pkg/agent/memory.go:927 (GetMemoryContext — no retro section)
+// ---------------------------------------------------------------------------
+
+func TestIntegration_RecallSpansThreeScopes(t *testing.T) {
+	workspace := t.TempDir()
+	home := t.TempDir()
+
+	ms := NewMemoryStore(workspace, home)
+	defer ms.Close()
+
+	adapter := NewMemoryStoreAdapter(ms)
+
+	const needle = "ctxIT_topic_flock"
+
+	// 1. Seed a long-term memory.
+	if err := ms.AppendLongTerm(needle+" is the canonical concurrency primitive", "lesson_learned"); err != nil {
+		t.Fatalf("AppendLongTerm: %v", err)
+	}
+
+	// 2. Seed a last-session.md.
+	if err := ms.WriteLastSession("## Last session\nWe applied " + needle + " everywhere."); err != nil {
+		t.Fatalf("WriteLastSession: %v", err)
+	}
+
+	// 3. Seed a retrospective.
+	sessionID := "ctxIT-session-001"
+	retro := Retro{
+		Timestamp:        time.Now().UTC(),
+		Trigger:          TriggerJoined,
+		WentWell:         []string{needle + " adoption succeeded"},
+		NeedsImprovement: []string{"document " + needle + " rationale"},
+	}
+	if err := ms.AppendRetro(sessionID, retro); err != nil {
+		t.Fatalf("AppendRetro: %v", err)
+	}
+
+	// -- Section A: recall_memory tool covers long-term memories ---------------
+	recallTool := tools.NewRecallMemoryTool(adapter)
+	recallResult := recallTool.Execute(context.Background(), map[string]any{
+		"query": needle,
+	})
+	require.NotNil(t, recallResult, "recall_memory must not return nil")
+	require.False(t, recallResult.IsError, "recall_memory returned error: %s", recallResult.ForLLM)
+
+	// Long-term memory hit is present.
+	assert.Contains(t, recallResult.ForLLM, needle,
+		"recall_memory must surface the long-term memory entry matching the query")
+
+	// Differentiation: a different query must NOT find it.
+	recallResultOther := recallTool.Execute(context.Background(), map[string]any{
+		"query": "completely_unrelated_xyz987",
+	})
+	require.NotNil(t, recallResultOther)
+	assert.NotContains(t, recallResultOther.ForLLM, needle,
+		"recall_memory must not return memories for an unrelated query (differentiation test)")
+
+	// -- Section B: GetMemoryContext covers long-term + last-session -----------
+	memCtx := ms.GetMemoryContext()
+
+	assert.Contains(t, memCtx, "## Last Session",
+		"GetMemoryContext must include the ## Last Session section")
+	assert.Contains(t, memCtx, needle,
+		"GetMemoryContext must surface needle from both last-session and long-term memory")
+	assert.Contains(t, memCtx, "## Long-term memory",
+		"GetMemoryContext must include the ## Long-term memory section")
+
+	// -- Section C: retrospectives are NOT included by GetMemoryContext --------
+	// This asserts the ACTUAL behavior and makes the gap explicit:
+	// the RecallMemoryTool comment claims "searches ... retrospectives" but the
+	// implementation does not surface retro content via recall or GetMemoryContext.
+	// If this assertion fails it means retros WERE wired in — update the comment
+	// in pkg/tools/memory.go:298 and this explanation accordingly.
+	assert.NotContains(t, memCtx, "ctxIT-session-001",
+		"GetMemoryContext does NOT include retrospective content (retros are private reflection artifacts)")
+	assert.NotContains(t, recallResult.ForLLM, "Went well",
+		"recall_memory must not surface retro content; RecallMemoryTool only covers long-term memories")
+
+	// ReadRetros DOES surface the retro (verifying it was written correctly).
+	retros, err := ms.ReadRetros(1)
+	require.NoError(t, err, "ReadRetros must not error")
+	require.NotEmpty(t, retros, "ReadRetros must find the written retrospective")
+	retroFound := false
+	for _, r := range retros {
+		for _, item := range r.WentWell {
+			if strings.Contains(item, needle) {
+				retroFound = true
+				break
+			}
+		}
+	}
+	assert.True(t, retroFound,
+		"ReadRetros must surface the retrospective content — it was written correctly but is not exposed via recall_memory or GetMemoryContext")
+}
+
+// ---------------------------------------------------------------------------
+// 3. TestIntegration_ContextCompactionOverflow
+//
+// BDD:
+//   Given an AgentInstance with a small ContextWindow (e.g. 1000 tokens)
+//   And a session history that exceeds the window (many large messages)
+//   When forceCompression is called
+//   Then:
+//     - compression fires (returns ok=true)
+//     - the resulting history has fewer messages (oldest ~50% dropped)
+//     - the message sequence is well-formed (no orphaned tool_result, no empty roles)
+//     - a compression note is stored in the session summary
+//     - a distinctive early user fact is NOT in the remaining history (it was dropped)
+//     - the most-recent user message IS in the remaining history (kept)
+//
+// Traces to: pkg/agent/loop.go line 7411 (forceCompression)
+//            pkg/agent/loop.go line 7444 ("Emergency compression dropped")
+// ---------------------------------------------------------------------------
+
+func TestIntegration_ContextCompactionOverflow(t *testing.T) {
+	al, _, _, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+
+	agent := al.GetRegistry().GetDefaultAgent()
+	require.NotNil(t, agent, "default agent must exist after NewAgentLoop")
+
+	// Set a small context window to make forceCompression trigger reliably.
+	agent.ContextWindow = 1000
+	agent.MaxTokens = 512
+
+	const sessionKey = "ctxIT-compaction-session"
+
+	// Build a history large enough to exceed the window.
+	// We use 8 messages (4 turns): user/assistant pairs.
+	// The earliest user message has a distinctive "ctxIT_early_fact" marker.
+	// The latest user message has a "ctxIT_recent_question" marker.
+	history := []providers.Message{
+		{Role: "user", Content: "ctxIT_early_fact: we decided to use flock for all writes"},
+		{Role: "assistant", Content: strings.Repeat("acknowledged, I will use flock. ", 20)},
+		{Role: "user", Content: strings.Repeat("next step: configure the sandbox. ", 20)},
+		{Role: "assistant", Content: strings.Repeat("sandbox configured successfully. ", 20)},
+		{Role: "user", Content: strings.Repeat("now run the test suite. ", 20)},
+		{Role: "assistant", Content: strings.Repeat("test suite passed, all green. ", 20)},
+		{Role: "user", Content: strings.Repeat("apply the landlock policy. ", 20)},
+		{Role: "assistant", Content: "ctxIT_recent_question: landlock policy applied, any final steps?"},
+	}
+
+	agent.Sessions.SetHistory(sessionKey, history)
+	require.NoError(t, agent.Sessions.Save(sessionKey))
+
+	beforeCount := len(history)
+
+	// -- Act: invoke forceCompression directly --------------------------------
+	result, ok := al.forceCompression(agent, sessionKey)
+
+	// -- Assert: compression fired (ok=true) ----------------------------------
+	require.True(t, ok,
+		"forceCompression must return ok=true for a history with %d messages (> 2)", beforeCount)
+
+	assert.Greater(t, result.DroppedMessages, 0,
+		"DroppedMessages must be > 0 after compression")
+	assert.Greater(t, result.RemainingMessages, 0,
+		"RemainingMessages must be > 0 after compression; must not drop everything")
+	assert.Equal(t, beforeCount, result.DroppedMessages+result.RemainingMessages,
+		"DroppedMessages + RemainingMessages must equal original count")
+
+	// -- Assert: resulting history is well-formed -----------------------------
+	remaining := agent.Sessions.GetHistory(sessionKey)
+	require.Equal(t, result.RemainingMessages, len(remaining),
+		"Sessions.GetHistory must reflect the compressed count")
+
+	for i, msg := range remaining {
+		assert.NotEmpty(t, msg.Role,
+			"message[%d] has empty role — history is corrupt after compression", i)
+		assert.True(t, msg.Role == "user" || msg.Role == "assistant" || msg.Role == "tool",
+			"message[%d] has unexpected role %q", i, msg.Role)
+	}
+
+	// No orphaned tool_result: every "tool" role message must be immediately
+	// preceded (in the remaining history) by an assistant message that contains
+	// tool calls, OR the entire preceding sequence must be valid. We check the
+	// simpler invariant: no "tool" message appears without a preceding "assistant".
+	for i, msg := range remaining {
+		if msg.Role == "tool" {
+			assert.Greater(t, i, 0,
+				"tool_result at index 0 is orphaned — no preceding assistant message")
+			if i > 0 {
+				assert.Equal(t, "assistant", remaining[i-1].Role,
+					"tool_result at index %d must be immediately preceded by an assistant message", i)
+			}
+		}
+	}
+
+	// -- Assert: earliest fact was dropped, most-recent kept ------------------
+	// The early user fact was in the oldest messages. After dropping ~50%, it must
+	// be gone. The most-recent assistant message (ctxIT_recent_question) must survive.
+	allRemaining := strings.Join(func() []string {
+		out := make([]string, len(remaining))
+		for i, m := range remaining {
+			out[i] = m.Content
+		}
+		return out
+	}(), " ")
+
+	assert.NotContains(t, allRemaining, "ctxIT_early_fact",
+		"oldest user message (ctxIT_early_fact) must have been dropped by compression")
+
+	assert.Contains(t, allRemaining, "ctxIT_recent_question",
+		"most-recent assistant message (ctxIT_recent_question) must survive compression")
+
+	// -- Assert: compression note is in the session summary ------------------
+	summary := agent.Sessions.GetSummary(sessionKey)
+	assert.Contains(t, summary, "Emergency compression dropped",
+		"session summary must contain the compression note after forceCompression")
+	assert.Contains(t, summary, "context limit",
+		"session summary compression note must mention 'context limit'")
+}
