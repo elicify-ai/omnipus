@@ -7,7 +7,6 @@ package agent
 
 import (
 	"context"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -21,36 +20,14 @@ import (
 // Helpers
 // ---------------------------------------------------------------------------
 
-// buildPolicyWith constructs a DelegationPolicy with the given target agent IDs
-// using all delegation modes.
-func buildPolicyWith(ids ...string) *config.DelegationPolicy {
-	refs := make([]config.AgentRef, len(ids))
-	for i, id := range ids {
-		refs[i] = config.AgentRef{Kind: "local", ID: id}
-	}
-	return &config.DelegationPolicy{To: refs}
-}
-
-// wireTestLoop builds a minimal AgentLoop + a config with an agent that has
-// the given per-agent DelegationPolicy. Returns the loop, the agentID, and
-// the ContextBuilder wired for that agent. Caller owns al.Close().
-//
-// agentID should be one of the seeded core agents (e.g. "ava") or a custom
-// id. We rely on SeedConfig so the registry has a proper agent instance.
-func wireTestLoop(t *testing.T, agentID string, perAgentPolicy *config.DelegationPolicy) (*AgentLoop, *ContextBuilder) {
+// wireTestLoopWithGraph builds a minimal AgentLoop for agentID. Unlike the
+// old wireTestLoop, it does NOT set a per-agent config DelegationPolicy (since
+// the new injector ignores config and reads the workspace graph). The caller is
+// responsible for seeding the workspace graph via seedWorkspaceGraph before
+// exercising the injector. Caller owns al.Close().
+func wireTestLoopWithGraph(t *testing.T, agentID string) (*AgentLoop, *ContextBuilder) {
 	t.Helper()
-	home := t.TempDir()
-	t.Setenv("OMNIPUS_HOME", home)
-
 	cfg := minimalTestConfig(t)
-	// Install the per-agent policy (may be nil to rely on defaults).
-	for i := range cfg.Agents.List {
-		if cfg.Agents.List[i].ID == agentID {
-			cfg.Agents.List[i].DelegationPolicy = perAgentPolicy
-			break
-		}
-	}
-	cfg.Agents.Defaults.Workspace = filepath.Join(home, "default-workspace")
 	cfg.Agents.Defaults.ModelName = "test-model"
 	cfg.Agents.Defaults.MaxTokens = 4096
 
@@ -69,23 +46,16 @@ func wireTestLoop(t *testing.T, agentID string, perAgentPolicy *config.Delegatio
 	return al, inst.ContextBuilder
 }
 
-// reloadWithPolicy rebuilds the loop's config with an updated per-agent
-// delegation policy for agentID, then calls ReloadProviderAndConfig. Returns
+// reloadLoop rebuilds the loop's config (no per-agent policy changes since the
+// injector is graph-authoritative), then calls ReloadProviderAndConfig. Returns
 // the (new) ContextBuilder for agentID after the reload.
-func reloadWithPolicy(t *testing.T, al *AgentLoop, agentID string, policy *config.DelegationPolicy) *ContextBuilder {
+func reloadLoop(t *testing.T, al *AgentLoop, agentID string) *ContextBuilder {
 	t.Helper()
 	liveCfg := al.GetConfig()
-	// Build a fresh Config so we don't share mutexes.
 	newCfg := &config.Config{}
 	newCfg.Agents.Defaults = liveCfg.Agents.Defaults
-	// Copy the agent list, updating the target agent's policy.
 	newCfg.Agents.List = make([]config.AgentConfig, len(liveCfg.Agents.List))
 	copy(newCfg.Agents.List, liveCfg.Agents.List)
-	for i := range newCfg.Agents.List {
-		if newCfg.Agents.List[i].ID == agentID {
-			newCfg.Agents.List[i].DelegationPolicy = policy
-		}
-	}
 	if err := al.ReloadProviderAndConfig(context.Background(), &mockProvider{}, newCfg); err != nil {
 		t.Fatalf("ReloadProviderAndConfig: %v", err)
 	}
@@ -97,330 +67,155 @@ func reloadWithPolicy(t *testing.T, al *AgentLoop, agentID string, policy *confi
 }
 
 // ---------------------------------------------------------------------------
-// TestDelegationWiring_RuntimeRefresh (P1 replacement — real path)
+// TestDelegationWiring_GraphSource
 //
-// Drives the REAL reload path:
-//  1. Build AgentLoop with agent "ava" allowed to delegate to "ray".
-//  2. Wire is installed by wireEnvProviders at loop init.
-//  3. Assert Phase A: "ray" in the dynamic context block.
-//  4. Call ReloadProviderAndConfig with a NEW config that removes "ray".
-//     wireDelegationInjectors is called internally on the new registry.
-//  5. The SAME ContextBuilder pointer that was wired at Phase A (retrieved via
-//     the new registry) now yields a context WITHOUT "ray" — no manual re-wire.
-//
-// This validates the closure reads al.GetConfig()/al.GetRegistry() on every
-// call, not snapshots captured at wire time.
+// Proves the injector reads the workspace graph, NOT the config policy.
+// Seeds a workspace with a mia→ray edge; expects ray in the block.
 // ---------------------------------------------------------------------------
 
-func TestDelegationWiring_RuntimeRefresh(t *testing.T) {
-	// Not parallel: uses t.Setenv via wireTestLoop (Go restriction).
+func TestDelegationWiring_GraphSource(t *testing.T) {
+	// seedWorkspaceGraph sets OMNIPUS_HOME to a fresh temp dir.
+	const wsID = "01JWWIRINGTEST0000000001"
+	home := seedWorkspaceGraph(t, wsID, true, []graphEdge{
+		edge("ava", "ray", nil, nil), // ava→ray in default workspace
+	})
+	_ = home
+
 	const agentID = "ava"
-	// Phase A: ava may delegate to ray.
-	al, _ := wireTestLoop(t, agentID, buildPolicyWith("ray"))
+	al, cb := wireTestLoopWithGraph(t, agentID)
+	_ = al
 
-	// Retrieve the wired ContextBuilder from the live registry.
-	instA, ok := al.GetRegistry().GetAgent(agentID)
-	if !ok || instA == nil {
-		t.Fatal("Phase A: ava not in registry")
+	// workspaceID="" → injector resolves the default workspace (wsID flagged is_default).
+	got := cb.buildDynamicContext("", "", "", "", "")
+	if !strings.Contains(got, "## Delegation") {
+		t.Fatalf("Delegation block missing.\ngot: %s", got)
 	}
-	cbA := instA.ContextBuilder
+	if !strings.Contains(got, "ray") {
+		t.Fatalf("expected 'ray' in Delegation block (from graph edge ava→ray).\ngot: %s", got)
+	}
+}
 
-	got1 := cbA.buildDynamicContext("", "", "", "")
-	if !strings.Contains(got1, "## Delegation") {
-		t.Fatalf("Phase A: Delegation block missing.\ngot: %s", got1)
-	}
+// ---------------------------------------------------------------------------
+// TestDelegationWiring_RuntimeGraphRefresh (P1 replacement)
+//
+// Proves the injector re-reads the graph per-call: edit the workspace file on
+// disk without rebuilding the checker, and the NEXT call reflects the new graph.
+// ---------------------------------------------------------------------------
+
+func TestDelegationWiring_RuntimeGraphRefresh(t *testing.T) {
+	const wsID = "01JWWIRINGRR000000000001"
+	// Phase A: ava→ray edge present.
+	home := seedWorkspaceGraph(t, wsID, true, []graphEdge{
+		edge("ava", "ray", nil, nil),
+	})
+
+	const agentID = "ava"
+	al, cb := wireTestLoopWithGraph(t, agentID)
+	_ = al
+
+	// Phase A: ray must appear.
+	got1 := cb.buildDynamicContext("", "", "", "", "")
 	if !strings.Contains(got1, "ray") {
 		t.Fatalf("Phase A: expected 'ray' in Delegation block.\ngot: %s", got1)
 	}
 
-	// Phase B: reload with policy that removes ray (ava → nobody).
-	// We do NOT manually call wireDelegationInjectors — the reload must do it.
-	cbB := reloadWithPolicy(t, al, agentID, buildPolicyWith())
+	// Phase B: rewrite the workspace graph to REMOVE the ava→ray edge.
+	rewriteWorkspaceGraph(t, home, wsID, true, nil)
 
-	got2 := cbB.buildDynamicContext("", "", "", "")
+	// The SAME ContextBuilder — no rebuild — now reads the updated graph.
+	got2 := cb.buildDynamicContext("", "", "", "", "")
 	if strings.Contains(got2, "ray") {
-		t.Fatalf("Phase B: 'ray' must be gone after reload removing it.\ngot: %s", got2)
+		t.Fatalf("Phase B: 'ray' must be gone after graph edit.\ngot: %s", got2)
 	}
 	if !strings.Contains(got2, "cannot delegate") {
-		t.Fatalf("Phase B: empty To must render 'cannot delegate'.\ngot: %s", got2)
+		t.Fatalf("Phase B: empty graph must render 'cannot delegate'.\ngot: %s", got2)
 	}
 }
 
 // ---------------------------------------------------------------------------
-// TestDelegationWiring_RuntimeRefresh_AddTarget
+// TestDelegationWiring_RuntimeGraphRefresh_AddEdge
 //
-// Inverse of the removal test: an agent that initially cannot delegate gains
-// a target after reload.
+// Inverse: an agent that initially cannot delegate gains a target after the
+// workspace graph is edited (no checker rebuild).
 // ---------------------------------------------------------------------------
 
-func TestDelegationWiring_RuntimeRefresh_AddTarget(t *testing.T) {
-	// Not parallel: uses t.Setenv via wireTestLoop (Go restriction).
+func TestDelegationWiring_RuntimeGraphRefresh_AddEdge(t *testing.T) {
+	const wsID = "01JWWIRINGRA000000000001"
+	// Phase A: no delegation edges.
+	home := seedWorkspaceGraph(t, wsID, true, nil)
+
 	const agentID = "ava"
-	// Phase A: ava has nil policy → cannot delegate.
-	al, _ := wireTestLoop(t, agentID, nil)
+	al, cb := wireTestLoopWithGraph(t, agentID)
+	_ = al
 
-	instA, ok := al.GetRegistry().GetAgent(agentID)
-	if !ok || instA == nil {
-		t.Fatal("Phase A: ava not in registry")
+	got1 := cb.buildDynamicContext("", "", "", "", "")
+	// Without edges, the injector renders cannot-delegate.
+	if !strings.Contains(got1, "cannot delegate") {
+		t.Logf("Phase A: got: %s", got1)
 	}
-	// Note: Ava's core seed already has a delegation policy (coreAgentDelegation).
-	// We need to verify the state the policy resolver produces.
-	got1 := instA.ContextBuilder.buildDynamicContext("", "", "", "")
-	// Record whether delegation is currently allowed (may be from seed).
-	phase1HasDelegation := strings.Contains(got1, "ray")
 
-	// Phase B: add ray explicitly.
-	cbB := reloadWithPolicy(t, al, agentID, buildPolicyWith("ray"))
-	got2 := cbB.buildDynamicContext("", "", "", "")
+	// Phase B: add ava→ray edge without rebuilding the loop.
+	rewriteWorkspaceGraph(t, home, wsID, true, []graphEdge{
+		edge("ava", "ray", nil, nil),
+	})
 
+	got2 := cb.buildDynamicContext("", "", "", "", "")
 	if !strings.Contains(got2, "## Delegation") {
-		t.Fatalf("Phase B: Delegation block missing after adding ray.\ngot: %s", got2)
+		t.Fatalf("Phase B: Delegation block missing after adding edge.\ngot: %s", got2)
 	}
 	if !strings.Contains(got2, "ray") {
-		t.Fatalf("Phase B: 'ray' must appear after adding it.\ngot: %s", got2)
+		t.Fatalf("Phase B: 'ray' must appear after adding edge.\ngot: %s", got2)
 	}
-	// Suppress unused var warning; the behaviour is captured in Phase B check above.
-	_ = phase1HasDelegation
-}
-
-// ---------------------------------------------------------------------------
-// TestDelegationWiring_RuntimeRefresh_FullRemoval
-//
-// ava+ray → ava-only → nobody → cannot delegate.
-// Proves step-by-step target removal propagates via the real reload path.
-// ---------------------------------------------------------------------------
-
-func TestDelegationWiring_RuntimeRefresh_FullRemoval(t *testing.T) {
-	// Not parallel: uses t.Setenv via wireTestLoop (Go restriction).
-	const agentID = "jim"
-	// Seed: jim allowed to delegate to ava and ray.
-	al, _ := wireTestLoop(t, agentID, buildPolicyWith("ava", "ray"))
-
-	instA, ok := al.GetRegistry().GetAgent(agentID)
-	if !ok || instA == nil {
-		t.Fatal("step 0: jim not in registry")
-	}
-	got0 := instA.ContextBuilder.buildDynamicContext("", "", "", "")
-	if !strings.Contains(got0, "ava") || !strings.Contains(got0, "ray") {
-		t.Fatalf("step 0: both ava and ray expected.\ngot: %s", got0)
-	}
-
-	// Step 1: remove ray.
-	cb1 := reloadWithPolicy(t, al, agentID, buildPolicyWith("ava"))
-	got1 := cb1.buildDynamicContext("", "", "", "")
-	if strings.Contains(got1, "ray") {
-		t.Fatalf("step 1: 'ray' must be gone.\ngot: %s", got1)
-	}
-	if !strings.Contains(got1, "ava") {
-		t.Fatalf("step 1: 'ava' must still be present.\ngot: %s", got1)
-	}
-
-	// Step 2: remove ava → empty → cannot delegate.
-	cb2 := reloadWithPolicy(t, al, agentID, buildPolicyWith())
-	got2 := cb2.buildDynamicContext("", "", "", "")
-	if strings.Contains(got2, "ava") || strings.Contains(got2, "ray") {
-		t.Fatalf("step 2: no delegation targets expected.\ngot: %s", got2)
-	}
-	if !strings.Contains(got2, "cannot delegate") {
-		t.Fatalf("step 2: empty To must render 'cannot delegate'.\ngot: %s", got2)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// TestDelegationWiring_DefaultsLevelPolicy
-//
-// Proves fix #1: an agent with NO per-agent DelegationPolicy inherits from
-// defaults.DelegationPolicy and the context block lists the defaults targets.
-// This exercises the path that was BROKEN before the fix (the old injector
-// only read inst.DelegationPolicy, missing the defaults fallback).
-// ---------------------------------------------------------------------------
-
-func TestDelegationWiring_DefaultsLevelPolicy(t *testing.T) {
-	// Not parallel: uses t.Setenv (Go restriction).
-	home := t.TempDir()
-	t.Setenv("OMNIPUS_HOME", home)
-
-	// Build a config where the agent has nil per-agent policy
-	// but defaults.DelegationPolicy allows delegation to "ray".
-	cfg := minimalTestConfig(t)
-	cfg.Agents.Defaults.Workspace = filepath.Join(home, "default-workspace")
-	cfg.Agents.Defaults.ModelName = "test-model"
-	cfg.Agents.Defaults.MaxTokens = 4096
-	cfg.Agents.Defaults.DelegationPolicy = buildPolicyWith("ray")
-
-	// Use "mia" — core seed gives her nil delegation policy so the defaults path fires.
-	const agentID = "mia"
-	for i := range cfg.Agents.List {
-		if cfg.Agents.List[i].ID == agentID {
-			cfg.Agents.List[i].DelegationPolicy = nil
-		}
-	}
-
-	msgBus := bus.NewMessageBus()
-	t.Cleanup(func() { msgBus.Close() })
-	al, err := NewAgentLoop(cfg, msgBus, &mockProvider{})
-	if err != nil {
-		t.Fatalf("NewAgentLoop: %v", err)
-	}
-	t.Cleanup(func() { al.Close() })
-
-	inst, ok := al.GetRegistry().GetAgent(agentID)
-	if !ok || inst == nil || inst.ContextBuilder == nil {
-		t.Fatalf("agent %q not in registry", agentID)
-	}
-
-	got := inst.ContextBuilder.buildDynamicContext("", "", "", "")
-	if !strings.Contains(got, "## Delegation") {
-		t.Fatalf("Delegation block missing — defaults-level policy not applied.\ngot: %s", got)
-	}
-	if !strings.Contains(got, "ray") {
-		t.Fatalf("'ray' must appear (from defaults.DelegationPolicy) even though per-agent policy is nil.\ngot: %s", got)
-	}
-	if strings.Contains(got, "cannot delegate") {
-		t.Fatalf("must NOT say 'cannot delegate' when defaults allow ray.\ngot: %s", got)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// TestDelegationWiring_DefaultsLevelPolicy_Reload
-//
-// Proves the defaults-level policy is also picked up after a hot-reload that
-// changes defaults.DelegationPolicy.
-// ---------------------------------------------------------------------------
-
-func TestDelegationWiring_DefaultsLevelPolicy_Reload(t *testing.T) {
-	// Not parallel: uses t.Setenv (Go restriction).
-	home := t.TempDir()
-	t.Setenv("OMNIPUS_HOME", home)
-
-	// Phase A: no defaults policy.
-	cfg := minimalTestConfig(t)
-	cfg.Agents.Defaults.Workspace = filepath.Join(home, "default-workspace")
-	cfg.Agents.Defaults.ModelName = "test-model"
-	cfg.Agents.Defaults.MaxTokens = 4096
-	cfg.Agents.Defaults.DelegationPolicy = nil
-
-	const agentID = "mia"
-	for i := range cfg.Agents.List {
-		if cfg.Agents.List[i].ID == agentID {
-			cfg.Agents.List[i].DelegationPolicy = nil
-		}
-	}
-
-	msgBus := bus.NewMessageBus()
-	t.Cleanup(func() { msgBus.Close() })
-	al, err := NewAgentLoop(cfg, msgBus, &mockProvider{})
-	if err != nil {
-		t.Fatalf("NewAgentLoop: %v", err)
-	}
-	t.Cleanup(func() { al.Close() })
-
-	instA, ok := al.GetRegistry().GetAgent(agentID)
-	if !ok || instA == nil {
-		t.Fatal("Phase A: mia not in registry")
-	}
-	gotA := instA.ContextBuilder.buildDynamicContext("", "", "", "")
-	// Without any policy, mia (whose core seed has nil delegation) cannot delegate.
-	// (Core seed might not override for mia — what matters is the result matches enforcement.)
-	// Record Phase A state.
-	phaseAHasRay := strings.Contains(gotA, "ray")
-
-	// Phase B: reload with defaults policy allowing "ray".
-	newCfg := &config.Config{}
-	newCfg.Agents.Defaults = cfg.Agents.Defaults
-	newCfg.Agents.Defaults.DelegationPolicy = buildPolicyWith("ray")
-	newCfg.Agents.List = make([]config.AgentConfig, len(cfg.Agents.List))
-	copy(newCfg.Agents.List, cfg.Agents.List)
-	for i := range newCfg.Agents.List {
-		if newCfg.Agents.List[i].ID == agentID {
-			newCfg.Agents.List[i].DelegationPolicy = nil
-		}
-	}
-	if err := al.ReloadProviderAndConfig(context.Background(), &mockProvider{}, newCfg); err != nil {
-		t.Fatalf("ReloadProviderAndConfig: %v", err)
-	}
-
-	instB, ok := al.GetRegistry().GetAgent(agentID)
-	if !ok || instB == nil {
-		t.Fatal("Phase B: mia not in registry after reload")
-	}
-	gotB := instB.ContextBuilder.buildDynamicContext("", "", "", "")
-
-	if !strings.Contains(gotB, "## Delegation") {
-		t.Fatalf("Phase B: Delegation block missing after setting defaults policy.\ngot: %s", gotB)
-	}
-	if !strings.Contains(gotB, "ray") {
-		t.Fatalf("Phase B: 'ray' must appear from defaults.DelegationPolicy after reload.\ngot: %s", gotB)
-	}
-	_ = phaseAHasRay
 }
 
 // ---------------------------------------------------------------------------
 // TestDelegationWiring_BootPath
 //
 // Proves wireEnvProviders (boot path) installs the delegation injector:
-// immediately after NewAgentLoop returns, an agent with a policy already
-// renders the Delegation block without any manual call to wireDelegationInjectors.
+// immediately after NewAgentLoop returns, an agent renders the Delegation block
+// consistent with the on-disk workspace graph.
 // ---------------------------------------------------------------------------
 
 func TestDelegationWiring_BootPath(t *testing.T) {
-	// Not parallel: uses t.Setenv (Go restriction).
-	home := t.TempDir()
-	t.Setenv("OMNIPUS_HOME", home)
+	const wsID = "01JWWIRINGBOOT00000000001"
+	seedWorkspaceGraph(t, wsID, true, []graphEdge{
+		edge("jim", "ava", nil, nil),
+		edge("jim", "ray", nil, nil),
+	})
 
-	cfg := minimalTestConfig(t)
-	cfg.Agents.Defaults.Workspace = filepath.Join(home, "default-workspace")
-	cfg.Agents.Defaults.ModelName = "test-model"
-	cfg.Agents.Defaults.MaxTokens = 4096
-
-	// Jim's core seed has a delegation policy; just verify it renders at boot.
 	const agentID = "jim"
-
-	msgBus := bus.NewMessageBus()
-	t.Cleanup(func() { msgBus.Close() })
-	al, err := NewAgentLoop(cfg, msgBus, &mockProvider{})
-	if err != nil {
-		t.Fatalf("NewAgentLoop: %v", err)
-	}
-	t.Cleanup(func() { al.Close() })
+	al, _ := wireTestLoopWithGraph(t, agentID)
+	_ = al
 
 	inst, ok := al.GetRegistry().GetAgent(agentID)
 	if !ok || inst == nil || inst.ContextBuilder == nil {
 		t.Fatalf("agent %q not in registry at boot", agentID)
 	}
 
-	got := inst.ContextBuilder.buildDynamicContext("", "", "", "")
+	got := inst.ContextBuilder.buildDynamicContext("", "", "", "", "")
 	if !strings.Contains(got, "## Delegation") {
-		t.Fatalf("boot path: Delegation block missing for %q (core seed should have a policy).\ngot: %s", agentID, got)
+		t.Fatalf("boot path: Delegation block missing for %q.\ngot: %s", agentID, got)
+	}
+	if !strings.Contains(got, "ava") {
+		t.Fatalf("boot path: 'ava' must appear (graph edge jim→ava).\ngot: %s", got)
 	}
 }
 
 // ---------------------------------------------------------------------------
 // TestDelegationWiring_AgentAddedOnReload
 //
-// An agent that did not exist at boot must receive a delegation injector
-// after it is added via ReloadProviderAndConfig.
+// An agent that did not exist at boot receives a delegation injector after
+// being added via ReloadProviderAndConfig.
 // ---------------------------------------------------------------------------
 
 func TestDelegationWiring_AgentAddedOnReload(t *testing.T) {
-	// Not parallel: uses t.Setenv (Go restriction).
-	home := t.TempDir()
-	t.Setenv("OMNIPUS_HOME", home)
+	const wsID = "01JWWIRINGNEW0000000001"
+	seedWorkspaceGraph(t, wsID, true, []graphEdge{
+		edge("custom-helper", "ray", nil, nil),
+	})
 
-	cfg := minimalTestConfig(t)
-	cfg.Agents.Defaults.Workspace = filepath.Join(home, "default-workspace")
-	cfg.Agents.Defaults.ModelName = "test-model"
-	cfg.Agents.Defaults.MaxTokens = 4096
+	al, _ := wireTestLoopWithGraph(t, "ava")
 
-	msgBus := bus.NewMessageBus()
-	t.Cleanup(func() { msgBus.Close() })
-	al, err := NewAgentLoop(cfg, msgBus, &mockProvider{})
-	if err != nil {
-		t.Fatalf("NewAgentLoop: %v", err)
-	}
-	t.Cleanup(func() { al.Close() })
-
-	// Reload with a brand-new custom agent that has a delegation policy.
 	const newAgentID = "custom-helper"
 	liveCfg := al.GetConfig()
 	newCfg := &config.Config{}
@@ -428,9 +223,8 @@ func TestDelegationWiring_AgentAddedOnReload(t *testing.T) {
 	newCfg.Agents.List = make([]config.AgentConfig, len(liveCfg.Agents.List))
 	copy(newCfg.Agents.List, liveCfg.Agents.List)
 	newCfg.Agents.List = append(newCfg.Agents.List, config.AgentConfig{
-		ID:               newAgentID,
-		Name:             "Custom Helper",
-		DelegationPolicy: buildPolicyWith("ray"),
+		ID:   newAgentID,
+		Name: "Custom Helper",
 	})
 	if err := al.ReloadProviderAndConfig(context.Background(), &mockProvider{}, newCfg); err != nil {
 		t.Fatalf("ReloadProviderAndConfig adding new agent: %v", err)
@@ -441,12 +235,12 @@ func TestDelegationWiring_AgentAddedOnReload(t *testing.T) {
 		t.Fatalf("new agent %q not in registry after reload", newAgentID)
 	}
 
-	got := inst.ContextBuilder.buildDynamicContext("", "", "", "")
+	got := inst.ContextBuilder.buildDynamicContext("", "", "", "", "")
 	if !strings.Contains(got, "## Delegation") {
 		t.Fatalf("new agent added on reload: Delegation block missing.\ngot: %s", got)
 	}
 	if !strings.Contains(got, "ray") {
-		t.Fatalf("new agent added on reload: 'ray' must appear in Delegation block.\ngot: %s", got)
+		t.Fatalf("new agent added on reload: 'ray' must appear (graph edge custom-helper→ray).\ngot: %s", got)
 	}
 }
 
@@ -455,27 +249,15 @@ func TestDelegationWiring_AgentAddedOnReload(t *testing.T) {
 //
 // Race-detector test: concurrent buildDynamicContext renders on one goroutine
 // while ReloadProviderAndConfig swaps the registry on another. Must be race-free.
-//
-// Run with: go test -race -run TestDelegationWiring_Race ./pkg/agent/ -p 1
 // ---------------------------------------------------------------------------
 
 func TestDelegationWiring_Race_ConcurrentRenderAndSwap(t *testing.T) {
-	// Do NOT call t.Parallel() — this test is deliberately -p 1 (per CLAUDE.md OOM notes).
-	home := t.TempDir()
-	t.Setenv("OMNIPUS_HOME", home)
+	const wsID = "01JWWIRINGRACE00000000001"
+	home := seedWorkspaceGraph(t, wsID, true, []graphEdge{
+		edge("ava", "ray", nil, nil),
+	})
 
-	cfg := minimalTestConfig(t)
-	cfg.Agents.Defaults.Workspace = filepath.Join(home, "default-workspace")
-	cfg.Agents.Defaults.ModelName = "test-model"
-	cfg.Agents.Defaults.MaxTokens = 4096
-
-	msgBus := bus.NewMessageBus()
-	t.Cleanup(func() { msgBus.Close() })
-	al, err := NewAgentLoop(cfg, msgBus, &mockProvider{})
-	if err != nil {
-		t.Fatalf("NewAgentLoop: %v", err)
-	}
-	t.Cleanup(func() { al.Close() })
+	al, _ := wireTestLoopWithGraph(t, "ava")
 
 	const agentID = "ava"
 	inst, ok := al.GetRegistry().GetAgent(agentID)
@@ -484,9 +266,7 @@ func TestDelegationWiring_Race_ConcurrentRenderAndSwap(t *testing.T) {
 	}
 	cb := inst.ContextBuilder
 
-	// Render goroutine: repeatedly call buildDynamicContext on the original
-	// ContextBuilder. After the swap, the injector closure reads the new
-	// registry/config — the output may change, but it must never panic or race.
+	// Render goroutine.
 	var renderWG sync.WaitGroup
 	stop := make(chan struct{})
 	renderWG.Add(1)
@@ -497,29 +277,26 @@ func TestDelegationWiring_Race_ConcurrentRenderAndSwap(t *testing.T) {
 			case <-stop:
 				return
 			default:
-				_ = cb.buildDynamicContext("", "", "", "")
+				_ = cb.buildDynamicContext("", "", "", "", "")
 			}
 		}
 	}()
 
-	// Swap goroutine: perform a small number of reloads with alternating policies.
-	swapPolicies := []*config.DelegationPolicy{
-		buildPolicyWith("ray"),
-		buildPolicyWith("ray", "jim"),
-		buildPolicyWith(),
-		buildPolicyWith("ray"),
+	// Graph-edit goroutine: alternate between adding and removing the edge.
+	edgeSets := [][]graphEdge{
+		{edge("ava", "ray", nil, nil)},
+		nil,
+		{edge("ava", "ray", []string{"await"}, nil)},
+		nil,
 	}
-	for _, policy := range swapPolicies {
+	for _, es := range edgeSets {
+		rewriteWorkspaceGraph(t, home, wsID, true, es)
+		// Also exercise hot-reload path.
 		liveCfg := al.GetConfig()
 		newCfg := &config.Config{}
 		newCfg.Agents.Defaults = liveCfg.Agents.Defaults
 		newCfg.Agents.List = make([]config.AgentConfig, len(liveCfg.Agents.List))
 		copy(newCfg.Agents.List, liveCfg.Agents.List)
-		for i := range newCfg.Agents.List {
-			if newCfg.Agents.List[i].ID == agentID {
-				newCfg.Agents.List[i].DelegationPolicy = policy
-			}
-		}
 		if err := al.ReloadProviderAndConfig(context.Background(), &mockProvider{}, newCfg); err != nil {
 			close(stop)
 			renderWG.Wait()
@@ -533,28 +310,22 @@ func TestDelegationWiring_Race_ConcurrentRenderAndSwap(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestDelegationWiring_NilPolicyRendersCannotDelegate
+// TestDelegationWiring_NilInjectorNoBlock
 //
-// Nil DelegationPolicy must render the "cannot delegate" text and must be
-// present in the dynamic (non-cached) context.
+// When no delegationInjector is set, buildDynamicContext must not emit any
+// delegation section (no panic, no spurious output).
 // ---------------------------------------------------------------------------
 
-func TestDelegationWiring_NilPolicyRendersCannotDelegate(t *testing.T) {
+func TestDelegationWiring_NilInjectorNoBlock(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 
-	cb := NewContextBuilder(dir)
-	cb.WithDelegationInjector(func() string {
-		return buildDelegationContext(nil, func(id string) (string, bool) { return "", false })
-	})
+	cb := NewContextBuilder(dir) // no WithDelegationInjector call
 
-	got := cb.buildDynamicContext("", "", "", "")
+	got := cb.buildDynamicContext("", "", "", "", "")
 
-	if !strings.Contains(got, "## Delegation") {
-		t.Fatalf("nil policy: Delegation block missing from dynamic context.\ngot: %s", got)
-	}
-	if !strings.Contains(got, "cannot delegate") {
-		t.Fatalf("nil policy: expected 'cannot delegate' text.\ngot: %s", got)
+	if strings.Contains(got, "## Delegation") {
+		t.Errorf("with no injector set, Delegation block must not appear.\ngot: %s", got)
 	}
 }
 
@@ -563,8 +334,6 @@ func TestDelegationWiring_NilPolicyRendersCannotDelegate(t *testing.T) {
 //
 // The delegation block must appear in the DYNAMIC section (the part of the
 // system message that is rebuilt each turn), NOT in the cached static prompt.
-// Concretely: BuildSystemPromptWithCache must NOT contain the delegation block,
-// but buildDynamicContext must.
 // ---------------------------------------------------------------------------
 
 func TestDelegationWiring_BlockInDynamicNotCachedSection(t *testing.T) {
@@ -574,7 +343,7 @@ func TestDelegationWiring_BlockInDynamicNotCachedSection(t *testing.T) {
 	delegationBlock := "## Delegation\nSentinel delegation text"
 
 	cb := NewContextBuilder(dir)
-	cb.WithDelegationInjector(func() string { return delegationBlock })
+	cb.WithDelegationInjector(func(_ string) string { return delegationBlock })
 
 	// The static cached prompt must NOT contain the delegation block.
 	staticPrompt := cb.BuildSystemPromptWithCache()
@@ -583,29 +352,170 @@ func TestDelegationWiring_BlockInDynamicNotCachedSection(t *testing.T) {
 	}
 
 	// The dynamic context MUST contain the delegation block.
-	dynamic := cb.buildDynamicContext("", "", "", "")
+	dynamic := cb.buildDynamicContext("", "", "", "", "")
 	if !strings.Contains(dynamic, "Sentinel delegation text") {
 		t.Errorf("delegation block must appear in buildDynamicContext output; got:\n%s", dynamic)
 	}
 }
 
 // ---------------------------------------------------------------------------
-// TestDelegationWiring_NoInjectorNoBlock
+// TestDelegationWiring_FailClosedWhenNoDefaultWorkspace
 //
-// When no delegationInjector is set, buildDynamicContext must not emit any
-// delegation section (no panic, no spurious output).
+// When OMNIPUS_HOME has no default workspace and the turn carries no workspaceID,
+// the injector must render fail-closed "cannot delegate".
 // ---------------------------------------------------------------------------
 
-func TestDelegationWiring_NoInjectorNoBlock(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
+func TestDelegationWiring_FailClosedWhenNoDefaultWorkspace(t *testing.T) {
+	// Use a fresh empty home with no workspace files.
+	home := t.TempDir()
+	t.Setenv("OMNIPUS_HOME", home)
 
-	cb := NewContextBuilder(dir) // no WithDelegationInjector call
+	const agentID = "ava"
+	al, cb := wireTestLoopWithGraph(t, agentID)
+	_ = al
 
-	got := cb.buildDynamicContext("", "", "", "")
+	got := cb.buildDynamicContext("", "", "", "", "")
+	// Must fail-closed: no workspace ⇒ "cannot delegate".
+	if !strings.Contains(got, "cannot delegate") {
+		t.Fatalf("expected fail-closed 'cannot delegate' when no default workspace, got:\n%s", got)
+	}
+}
 
-	if strings.Contains(got, "## Delegation") {
-		t.Errorf("with no injector set, Delegation block must not appear.\ngot: %s", got)
+// ---------------------------------------------------------------------------
+// TestDelegationWiring_FailClosedWhenWorkspaceUnreadable
+//
+// A turn bound to a non-existent workspace renders fail-closed.
+// ---------------------------------------------------------------------------
+
+func TestDelegationWiring_FailClosedWhenWorkspaceUnreadable(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("OMNIPUS_HOME", home)
+
+	const agentID = "ava"
+	al, cb := wireTestLoopWithGraph(t, agentID)
+	_ = al
+
+	// Pass a workspace ID that does not exist on disk.
+	const missingWS = "01JWWIRINGMISS00000000001"
+	got := cb.buildDynamicContext(missingWS, "", "", "", "")
+	if !strings.Contains(got, "cannot delegate") {
+		t.Fatalf("expected fail-closed 'cannot delegate' for unreadable workspace, got:\n%s", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestDelegationWiring_WorkspaceIDThreaded
+//
+// When the turn is bound to a specific workspaceID (not the default), the
+// injector reads THAT workspace's graph, not the default one.
+// ---------------------------------------------------------------------------
+
+func TestDelegationWiring_WorkspaceIDThreaded(t *testing.T) {
+	const (
+		wsDefault = "01JWWIRINGWSA0000000001"
+		wsBound   = "01JWWIRINGWSB0000000001"
+	)
+	// Default workspace: ava→ray.
+	home := seedWorkspaceGraph(t, wsDefault, true, []graphEdge{
+		edge("ava", "ray", nil, nil),
+	})
+	// Bound workspace: ava→jim only (NOT ray).
+	writeWorkspaceFileForTest(t, home, wsBound, false, []graphEdge{
+		edge("ava", "jim", nil, nil),
+	})
+
+	const agentID = "ava"
+	al, cb := wireTestLoopWithGraph(t, agentID)
+	_ = al
+
+	// Without workspaceID (resolves to default): ray must appear.
+	gotDefault := cb.buildDynamicContext("", "", "", "", "")
+	if !strings.Contains(gotDefault, "ray") {
+		t.Fatalf("default workspace: expected 'ray'; got:\n%s", gotDefault)
+	}
+
+	// With bound workspaceID (wsBound): jim must appear, ray must NOT.
+	gotBound := cb.buildDynamicContext(wsBound, "", "", "", "")
+	if !strings.Contains(gotBound, "jim") {
+		t.Fatalf("bound workspace: expected 'jim'; got:\n%s", gotBound)
+	}
+	if strings.Contains(gotBound, "ray") {
+		t.Fatalf("bound workspace: 'ray' must NOT appear (not in wsBound graph); got:\n%s", gotBound)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestDelegationWiring_Parity_AdvertisedMatchesEnforced
+//
+// This is the parity test: seeds a graph (mia→ray await+background only,
+// NO mia→ava), renders the delegation block for mia, and asserts:
+//   (a) 'ray' appears with exactly the await+background tools, NO create_task.
+//   (b) 'ava' does NOT appear.
+//   (c) buildDelegationDenyChecker for mia→ray allows await and background,
+//       denies task — matching (a) exactly.
+//   (d) buildDelegationDenyChecker for mia→ava denies — matching (b) exactly.
+//
+// This proves advertisement == enforcement by construction.
+// ---------------------------------------------------------------------------
+
+func TestDelegationWiring_Parity_AdvertisedMatchesEnforced(t *testing.T) {
+	const wsID = "01JWWIRINGPARITY000000001"
+	seedWorkspaceGraph(t, wsID, true, []graphEdge{
+		// mia→ray: await+background only, no task.
+		edge("mia", "ray", []string{"await", "background"}, nil),
+		// No mia→ava edge.
+	})
+
+	const agentID = "mia"
+	al, cb := wireTestLoopWithGraph(t, agentID)
+	_ = al
+
+	// (a) render the delegation block.
+	got := cb.buildDynamicContext(wsID, "", "", "", "")
+
+	// ray must appear.
+	if !strings.Contains(got, "ray") {
+		t.Fatalf("parity: expected 'ray' in delegation block.\ngot: %s", got)
+	}
+	// await and background tools for ray.
+	if !strings.Contains(got, `run_subagent(agent_id="ray"`) {
+		t.Errorf("parity: run_subagent for ray must appear (await); got:\n%s", got)
+	}
+	if !strings.Contains(got, `spawn(agent_id="ray"`) {
+		t.Errorf("parity: spawn for ray must appear (background); got:\n%s", got)
+	}
+	// task must NOT appear for ray.
+	if strings.Contains(got, `create_task(agent_id="ray"`) {
+		t.Errorf("parity: create_task for ray must NOT appear (task mode not in edge); got:\n%s", got)
+	}
+
+	// (b) ava must NOT appear.
+	if strings.Contains(got, "ava") {
+		t.Errorf("parity: 'ava' must NOT appear (no mia→ava edge); got:\n%s", got)
+	}
+
+	// (c) gate: mia→ray await allowed.
+	checkAwait := buildDelegationDenyChecker("mia", nil, config.AgentDefaults{},
+		config.DelegationModeAwait, nil)
+	if denial := checkAwait(ctxWS(wsID, 0), "ray"); denial != nil {
+		t.Errorf("parity: gate must allow mia→ray await (advertised); got deny: %+v", denial)
+	}
+	// (c) gate: mia→ray background allowed.
+	checkBG := buildDelegationDenyChecker("mia", nil, config.AgentDefaults{},
+		config.DelegationModeBackground, nil)
+	if denial := checkBG(ctxWS(wsID, 0), "ray"); denial != nil {
+		t.Errorf("parity: gate must allow mia→ray background (advertised); got deny: %+v", denial)
+	}
+	// (c) gate: mia→ray task DENIED (not advertised, not in edge).
+	checkTask := buildDelegationDenyChecker("mia", nil, config.AgentDefaults{},
+		config.DelegationModeTask, nil)
+	if denial := checkTask(ctxWS(wsID, 0), "ray"); denial == nil {
+		t.Errorf("parity: gate must DENY mia→ray task (not in edge Modes); got allow")
+	}
+
+	// (d) gate: mia→ava denied (no edge).
+	if denial := checkAwait(ctxWS(wsID, 0), "ava"); denial == nil {
+		t.Errorf("parity: gate must DENY mia→ava (no edge); got allow")
 	}
 }
 
@@ -656,7 +566,6 @@ func TestResolveDelegationLabel_CoreAgent(t *testing.T) {
 			// Verify against the core-agent Name to ensure no double-Subtitle appending.
 			ca := coreagent.ByID(coreagent.CoreAgentID(tc.agentID))
 			if ca != nil && ca.Subtitle != "" {
-				// Count occurrences of Subtitle in label: must be exactly 1.
 				count := strings.Count(label, ca.Subtitle)
 				if count > 1 {
 					t.Errorf("resolveDelegationLabel(%q): Subtitle %q appears %d times in label %q (want ≤1)",

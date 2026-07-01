@@ -215,6 +215,7 @@ func TestBuildMessages_ReplaysWindowNotEvicted(t *testing.T) {
 		"", // no legacy summary
 		"What else?",
 		nil,
+		"",
 		"test", "chat1", "user1", "Alice",
 		breadcrumb, nil,
 	)
@@ -285,6 +286,7 @@ func TestBuildMessages_NoEviction_FullWindow(t *testing.T) {
 		"", // no legacy summary
 		"How are you?",
 		nil,
+		"",
 		"test", "chat1", "", "",
 		"", nil, // no breadcrumb, no recall span
 	)
@@ -365,6 +367,7 @@ func TestBuildMessages_SpanPlacedAfterBreadcrumbBeforeWindow(t *testing.T) {
 		"",
 		"Current question",
 		nil,
+		"",
 		"test", "chat1", "", "",
 		breadcrumb, recallSpan,
 	)
@@ -724,6 +727,7 @@ func TestBuildMessages_SpanOrphanToolCallDropped(t *testing.T) {
 		"",
 		"Please try again",
 		nil,
+		"",
 		"test", "chat1", "user1", "Alice",
 		"", // no breadcrumb
 		orphanSpan,

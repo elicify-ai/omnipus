@@ -431,6 +431,7 @@ func TestAssembleMessages_ReadArchiveError_FallsBackToBreadcrumb(t *testing.T) {
 		"",
 		currentMsg,
 		nil,
+		"",
 		"test", "readarchive-error-fallback", "", "",
 		fallbackBreadcrumb,
 		nil, // no recall span
@@ -476,6 +477,7 @@ func TestAssembleMessages_ReadArchiveError_FallsBackToBreadcrumb(t *testing.T) {
 		"",
 		currentMsg,
 		nil,
+		"",
 		"test", "readarchive-error-fallback", "", "",
 		explicitBreadcrumb,
 		nil,

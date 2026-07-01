@@ -25,32 +25,34 @@ func resolveTestLabel(id string) (string, bool) {
 
 func ptr(n int) *int { return &n }
 
-func TestBuildDelegationContext_NilPolicy(t *testing.T) {
-	got := buildDelegationContext(nil, resolveTestLabel)
+// makeTarget builds a delegationTarget from the test label map. Returns a
+// target with empty Label when id is unknown (buildDelegationContext will skip it).
+func makeTarget(id string, modes []config.DelegationMode, depth *int) delegationTarget {
+	label, _ := resolveTestLabel(id)
+	return delegationTarget{ID: id, Label: label, Modes: modes, Depth: depth}
+}
+
+func TestBuildDelegationContext_NoTargets(t *testing.T) {
+	got := buildDelegationContext(nil, 0)
 	want := "## Delegation\nYou cannot delegate to other agents — complete the task yourself."
 	if got != want {
-		t.Errorf("nil policy:\ngot:  %q\nwant: %q", got, want)
+		t.Errorf("nil targets:\ngot:  %q\nwant: %q", got, want)
 	}
 }
 
-func TestBuildDelegationContext_EmptyTo(t *testing.T) {
-	policy := &config.DelegationPolicy{
-		To: []config.AgentRef{}, // explicit empty slice
-	}
-	got := buildDelegationContext(policy, resolveTestLabel)
+func TestBuildDelegationContext_EmptyTargets(t *testing.T) {
+	got := buildDelegationContext([]delegationTarget{}, 0)
 	want := "## Delegation\nYou cannot delegate to other agents — complete the task yourself."
 	if got != want {
-		t.Errorf("empty To:\ngot:  %q\nwant: %q", got, want)
+		t.Errorf("empty targets:\ngot:  %q\nwant: %q", got, want)
 	}
 }
 
 func TestBuildDelegationContext_SingleTargetAllModes(t *testing.T) {
-	policy := &config.DelegationPolicy{
-		To:    []config.AgentRef{{Kind: "local", ID: "ava"}},
-		Modes: nil, // nil = all three modes
-		Depth: ptr(3),
+	targets := []delegationTarget{
+		makeTarget("ava", nil, ptr(3)), // nil Modes = all three
 	}
-	got := buildDelegationContext(policy, resolveTestLabel)
+	got := buildDelegationContext(targets, 3)
 
 	// Must contain the header.
 	if !strings.Contains(got, "## Delegation") {
@@ -64,11 +66,9 @@ func TestBuildDelegationContext_SingleTargetAllModes(t *testing.T) {
 	if !strings.Contains(got, "run_subagent") {
 		t.Error("missing run_subagent tool")
 	}
-	// spawn must use agent_id= (NOT agent=). Anchor on distinctive prefix.
 	if !strings.Contains(got, `spawn(agent_id=`) {
 		t.Errorf("missing spawn(agent_id= tool call; got:\n%s", got)
 	}
-	// create_task (NOT task_create — the retired name). Must have agent_id param.
 	if !strings.Contains(got, `create_task(agent_id=`) {
 		t.Errorf("missing create_task(agent_id= tool call; got:\n%s", got)
 	}
@@ -76,7 +76,7 @@ func TestBuildDelegationContext_SingleTargetAllModes(t *testing.T) {
 	if !strings.Contains(got, `"ava"`) {
 		t.Errorf("missing concrete agent id 'ava' in tool calls; got:\n%s", got)
 	}
-	// run_subagent now targets a named agent by id (await mode).
+	// run_subagent targets a named agent by id (await mode).
 	if !strings.Contains(got, `run_subagent(agent_id="ava"`) {
 		t.Errorf("run_subagent must target the named agent via agent_id; got:\n%s", got)
 	}
@@ -91,11 +91,10 @@ func TestBuildDelegationContext_SingleTargetAllModes(t *testing.T) {
 }
 
 func TestBuildDelegationContext_ModesAwaitOnly(t *testing.T) {
-	policy := &config.DelegationPolicy{
-		To:    []config.AgentRef{{Kind: "local", ID: "ava"}},
-		Modes: []config.DelegationMode{config.DelegationModeAwait},
+	targets := []delegationTarget{
+		makeTarget("ava", []config.DelegationMode{config.DelegationModeAwait}, nil),
 	}
-	got := buildDelegationContext(policy, resolveTestLabel)
+	got := buildDelegationContext(targets, 0)
 
 	// Only run_subagent must appear; spawn and create_task must NOT.
 	if !strings.Contains(got, "run_subagent") {
@@ -108,26 +107,22 @@ func TestBuildDelegationContext_ModesAwaitOnly(t *testing.T) {
 	if strings.Contains(got, "create_task") {
 		t.Errorf("create_task must NOT appear when Modes=[await]; got:\n%s", got)
 	}
-	// Footer must note the mode restriction.
-	if !strings.Contains(got, "allowed modes: await") {
-		t.Errorf("missing mode footer; got:\n%s", got)
-	}
 	// run_subagent targets the named agent by id (await mode).
 	if !strings.Contains(got, `run_subagent(agent_id="ava"`) {
 		t.Errorf("run_subagent must target the named agent via agent_id; got:\n%s", got)
 	}
+	// No mode footer — the new implementation renders the global depth footer only.
+	if !strings.Contains(got, "max chain depth: uncapped") {
+		t.Errorf("missing uncapped depth footer; got:\n%s", got)
+	}
 }
 
 func TestBuildDelegationContext_TwoTargets(t *testing.T) {
-	policy := &config.DelegationPolicy{
-		To: []config.AgentRef{
-			{Kind: "local", ID: "ava"},
-			{Kind: "local", ID: "ray"},
-		},
-		Modes: nil, // all modes
-		Depth: nil, // uncapped
+	targets := []delegationTarget{
+		makeTarget("ava", nil, nil),
+		makeTarget("ray", nil, nil),
 	}
-	got := buildDelegationContext(policy, resolveTestLabel)
+	got := buildDelegationContext(targets, 0)
 
 	// Both subagent sections must be present.
 	if !strings.Contains(got, "### → Ava (Builder: implementation & code)") {
@@ -136,7 +131,7 @@ func TestBuildDelegationContext_TwoTargets(t *testing.T) {
 	if !strings.Contains(got, "### → Ray (Scout: research & browsing)") {
 		t.Errorf("missing ray section; got:\n%s", got)
 	}
-	// Each target's ID must appear in spawn(agent_id= and create_task(agent_id= calls.
+	// Each target's ID must appear in spawn and create_task calls.
 	if !strings.Contains(got, `spawn(agent_id="ava"`) {
 		t.Errorf("missing spawn(agent_id=\"ava\" in tool calls; got:\n%s", got)
 	}
@@ -156,102 +151,49 @@ func TestBuildDelegationContext_TwoTargets(t *testing.T) {
 }
 
 func TestBuildDelegationContext_UnknownTargetSkipped(t *testing.T) {
-	policy := &config.DelegationPolicy{
-		To: []config.AgentRef{
-			{Kind: "local", ID: "nonexistent-agent"},
-		},
-		Modes: nil,
+	targets := []delegationTarget{
+		// Empty label = unknown/unresolvable target.
+		{ID: "nonexistent-agent", Label: "", Modes: nil, Depth: nil},
 	}
-	got := buildDelegationContext(policy, resolveTestLabel)
+	got := buildDelegationContext(targets, 0)
 
 	// All targets skipped → cannot-delegate message.
 	if !strings.Contains(got, "You cannot delegate to other agents") {
 		t.Errorf("expected cannot-delegate text when all targets skipped; got:\n%s", got)
 	}
-	// No section header should appear.
 	if strings.Contains(got, "### →") {
 		t.Errorf("unknown target must be skipped but a section header appeared; got:\n%s", got)
 	}
-	// No tool lines expected.
 	if strings.Contains(got, "run_subagent") {
 		t.Errorf("no tool lines expected when all targets skipped; got:\n%s", got)
 	}
 }
 
-func TestBuildDelegationContext_WildcardTarget(t *testing.T) {
-	policy := &config.DelegationPolicy{
-		To: []config.AgentRef{
-			{Kind: "local", ID: "*"},
-		},
-		Modes: nil,
-		Depth: nil,
-	}
-	// resolveLabel must NOT be called for "*"; pass a function that panics to verify.
-	panicResolver := func(id string) (string, bool) {
-		t.Fatalf("resolveLabel must not be called for wildcard; called with id=%q", id)
-		return "", false
-	}
-	got := buildDelegationContext(policy, panicResolver)
-
-	if !strings.Contains(got, "### → any available agent") {
-		t.Errorf("wildcard label wrong; got:\n%s", got)
-	}
-	// The wildcard section must instruct the agent to replace <id> — NOT emit "agent_id=\"*\"".
-	if strings.Contains(got, `agent_id="*"`) {
-		t.Errorf("must not emit uncallable agent_id=\"*\"; got:\n%s", got)
-	}
-	// Must hint at using a concrete id.
-	if !strings.Contains(got, "<id>") {
-		t.Errorf("wildcard section must include <id> placeholder hint; got:\n%s", got)
-	}
-}
-
 func TestBuildDelegationContext_DepthUncapped(t *testing.T) {
-	policy := &config.DelegationPolicy{
-		To:    []config.AgentRef{{Kind: "local", ID: "ava"}},
-		Depth: nil,
-	}
-	got := buildDelegationContext(policy, resolveTestLabel)
+	targets := []delegationTarget{makeTarget("ava", nil, nil)}
+	got := buildDelegationContext(targets, 0)
 	if !strings.Contains(got, "max chain depth: uncapped") {
-		t.Errorf("nil Depth must render as uncapped; got:\n%s", got)
+		t.Errorf("globalDepthCap=0 must render as uncapped; got:\n%s", got)
 	}
 }
 
-// TestBuildDelegationContext_DepthZero verifies that Depth=ptr(0) is treated as
-// uncapped (ResolveDelegationDepth returns 0 for <=0 Depth), matching enforcement.
-func TestBuildDelegationContext_DepthZero(t *testing.T) {
-	policy := &config.DelegationPolicy{
-		To:    []config.AgentRef{{Kind: "local", ID: "ava"}},
-		Depth: ptr(0),
-	}
-	got := buildDelegationContext(policy, resolveTestLabel)
-	if !strings.Contains(got, "max chain depth: uncapped") {
-		t.Errorf("Depth=ptr(0) must render as uncapped (enforcement treats it as uncapped); got:\n%s", got)
-	}
-}
-
-func TestBuildDelegationContext_DepthSet(t *testing.T) {
-	policy := &config.DelegationPolicy{
-		To:    []config.AgentRef{{Kind: "local", ID: "ava"}},
-		Depth: ptr(3),
-	}
-	got := buildDelegationContext(policy, resolveTestLabel)
+func TestBuildDelegationContext_GlobalDepthSet(t *testing.T) {
+	targets := []delegationTarget{makeTarget("ava", nil, nil)}
+	got := buildDelegationContext(targets, 3)
 	if !strings.Contains(got, "max chain depth: 3") {
-		t.Errorf("Depth=3 must render as '3'; got:\n%s", got)
+		t.Errorf("globalDepthCap=3 must render as '3'; got:\n%s", got)
 	}
 }
 
 func TestBuildDelegationContext_BackgroundModeOnly(t *testing.T) {
-	policy := &config.DelegationPolicy{
-		To:    []config.AgentRef{{Kind: "local", ID: "ava"}},
-		Modes: []config.DelegationMode{config.DelegationModeBackground},
+	targets := []delegationTarget{
+		makeTarget("ava", []config.DelegationMode{config.DelegationModeBackground}, nil),
 	}
-	got := buildDelegationContext(policy, resolveTestLabel)
+	got := buildDelegationContext(targets, 0)
 
 	if strings.Contains(got, "run_subagent") {
 		t.Errorf("run_subagent must NOT appear when Modes=[background]; got:\n%s", got)
 	}
-	// Anchor on spawn( to avoid substring match with check_spawn_status.
 	if !strings.Contains(got, "spawn(agent_id=") {
 		t.Errorf("spawn(agent_id= must appear for background mode; got:\n%s", got)
 	}
@@ -261,16 +203,14 @@ func TestBuildDelegationContext_BackgroundModeOnly(t *testing.T) {
 }
 
 func TestBuildDelegationContext_TaskModeOnly(t *testing.T) {
-	policy := &config.DelegationPolicy{
-		To:    []config.AgentRef{{Kind: "local", ID: "ava"}},
-		Modes: []config.DelegationMode{config.DelegationModeTask},
+	targets := []delegationTarget{
+		makeTarget("ava", []config.DelegationMode{config.DelegationModeTask}, nil),
 	}
-	got := buildDelegationContext(policy, resolveTestLabel)
+	got := buildDelegationContext(targets, 0)
 
 	if strings.Contains(got, "run_subagent") {
 		t.Errorf("run_subagent must NOT appear when Modes=[task]; got:\n%s", got)
 	}
-	// Anchor on spawn( to avoid substring match with check_spawn_status.
 	if strings.Contains(got, "spawn(") {
 		t.Errorf("spawn must NOT appear when Modes=[task]; got:\n%s", got)
 	}
@@ -281,14 +221,13 @@ func TestBuildDelegationContext_TaskModeOnly(t *testing.T) {
 
 // TestBuildDelegationContext_TwoModeSubset verifies a [background, task] subset.
 func TestBuildDelegationContext_TwoModeSubset(t *testing.T) {
-	policy := &config.DelegationPolicy{
-		To: []config.AgentRef{{Kind: "local", ID: "ava"}},
-		Modes: []config.DelegationMode{
+	targets := []delegationTarget{
+		makeTarget("ava", []config.DelegationMode{
 			config.DelegationModeBackground,
 			config.DelegationModeTask,
-		},
+		}, nil),
 	}
-	got := buildDelegationContext(policy, resolveTestLabel)
+	got := buildDelegationContext(targets, 0)
 
 	// await must be absent.
 	if strings.Contains(got, "run_subagent") {
@@ -301,44 +240,27 @@ func TestBuildDelegationContext_TwoModeSubset(t *testing.T) {
 	if !strings.Contains(got, "create_task(agent_id=") {
 		t.Errorf("create_task(agent_id= must appear for task mode; got:\n%s", got)
 	}
-	// Footer must list both modes.
-	if !strings.Contains(got, "allowed modes:") {
-		t.Errorf("missing allowed modes footer; got:\n%s", got)
-	}
-	if !strings.Contains(got, "background") {
-		t.Errorf("footer must include 'background'; got:\n%s", got)
-	}
-	if !strings.Contains(got, "task") {
-		t.Errorf("footer must include 'task'; got:\n%s", got)
-	}
 }
 
 // TestBuildDelegationContext_MixedTargets verifies that known targets render and
 // unknown targets are skipped, leaving only the known ones' sections.
 func TestBuildDelegationContext_MixedTargets(t *testing.T) {
-	policy := &config.DelegationPolicy{
-		To: []config.AgentRef{
-			{Kind: "local", ID: "ava"},
-			{Kind: "local", ID: "nonexistent"},
-			{Kind: "local", ID: "ray"},
-		},
-		Modes: nil,
-		Depth: nil,
+	targets := []delegationTarget{
+		makeTarget("ava", nil, nil),
+		{ID: "nonexistent", Label: "", Modes: nil, Depth: nil}, // unknown, must be skipped
+		makeTarget("ray", nil, nil),
 	}
-	got := buildDelegationContext(policy, resolveTestLabel)
+	got := buildDelegationContext(targets, 0)
 
-	// ava and ray must render.
 	if !strings.Contains(got, "### → Ava (Builder: implementation & code)") {
 		t.Errorf("missing ava section; got:\n%s", got)
 	}
 	if !strings.Contains(got, "### → Ray (Scout: research & browsing)") {
 		t.Errorf("missing ray section; got:\n%s", got)
 	}
-	// nonexistent must be silently dropped (no section for it).
 	if strings.Contains(got, "nonexistent") {
 		t.Errorf("nonexistent target must be skipped; got:\n%s", got)
 	}
-	// Tool calls for each real target.
 	if !strings.Contains(got, `spawn(agent_id="ava"`) {
 		t.Errorf("missing spawn(agent_id=\"ava\"; got:\n%s", got)
 	}
@@ -347,17 +269,14 @@ func TestBuildDelegationContext_MixedTargets(t *testing.T) {
 	}
 }
 
-// TestBuildDelegationContext_AllSkipped verifies that when all To entries are
-// skipped (all unknown), the result is the clean cannot-delegate text.
+// TestBuildDelegationContext_AllSkipped verifies that when all entries have empty
+// labels (all unknown), the result is the clean cannot-delegate text.
 func TestBuildDelegationContext_AllSkipped(t *testing.T) {
-	policy := &config.DelegationPolicy{
-		To: []config.AgentRef{
-			{Kind: "local", ID: "ghost1"},
-			{Kind: "local", ID: "ghost2"},
-		},
-		Modes: nil,
+	targets := []delegationTarget{
+		{ID: "ghost1", Label: "", Modes: nil, Depth: nil},
+		{ID: "ghost2", Label: "", Modes: nil, Depth: nil},
 	}
-	got := buildDelegationContext(policy, resolveTestLabel)
+	got := buildDelegationContext(targets, 0)
 
 	if !strings.Contains(got, "You cannot delegate to other agents") {
 		t.Errorf("all-skipped must produce cannot-delegate text; got:\n%s", got)
@@ -367,49 +286,61 @@ func TestBuildDelegationContext_AllSkipped(t *testing.T) {
 	}
 }
 
-// TestBuildDelegationContext_NonLocalKindSkipped verifies that refs with a
-// non-local Kind (e.g. "remote-a2a") are skipped, mirroring CanSpawnSubagent.
-func TestBuildDelegationContext_NonLocalKindSkipped(t *testing.T) {
-	policy := &config.DelegationPolicy{
-		To: []config.AgentRef{
-			{Kind: "remote-a2a", ID: "ava"},
-		},
-		Modes: nil,
+// TestBuildDelegationContext_PerTargetOnwardForbidden verifies that when a
+// target's edge Depth is <= 0, a note about no onward delegation is emitted
+// for that target only, while other targets are unaffected.
+func TestBuildDelegationContext_PerTargetOnwardForbidden(t *testing.T) {
+	targets := []delegationTarget{
+		makeTarget("ava", nil, ptr(0)), // Depth=0: cannot delegate onward
+		makeTarget("ray", nil, nil),    // Depth=nil: inherits, no note
 	}
-	got := buildDelegationContext(policy, resolveTestLabel)
+	got := buildDelegationContext(targets, 0)
 
-	// remote-a2a refs must be skipped → cannot-delegate text.
-	if !strings.Contains(got, "You cannot delegate to other agents") {
-		t.Errorf("remote-a2a ref must be skipped; got:\n%s", got)
+	// Both sections must appear.
+	if !strings.Contains(got, "### → Ava") {
+		t.Errorf("missing ava section; got:\n%s", got)
 	}
-	if strings.Contains(got, "### →") {
-		t.Errorf("no section headers expected for remote-a2a; got:\n%s", got)
+	if !strings.Contains(got, "### → Ray") {
+		t.Errorf("missing ray section; got:\n%s", got)
+	}
+	// Depth=0 note must appear (contains the onward delegation message).
+	if !strings.Contains(got, "cannot delegate onward") {
+		t.Errorf("missing onward-forbidden note for depth=0 target; got:\n%s", got)
 	}
 }
 
-// TestBuildDelegationContext_UnknownModeFooter verifies that an unrecognized
-// mode value is omitted from the footer (no tool line was emitted for it).
-func TestBuildDelegationContext_UnknownModeFooter(t *testing.T) {
-	policy := &config.DelegationPolicy{
-		To: []config.AgentRef{{Kind: "local", ID: "ava"}},
-		// Mix a known mode with a bogus one.
-		Modes: []config.DelegationMode{
-			config.DelegationModeBackground,
-			config.DelegationMode("unicorn"), // unrecognized
-		},
+// TestBuildDelegationContext_PerTargetModeSubset verifies that when two targets
+// have different mode subsets, each renders only its own tools.
+func TestBuildDelegationContext_PerTargetModeSubset(t *testing.T) {
+	targets := []delegationTarget{
+		// ava: await only
+		makeTarget("ava", []config.DelegationMode{config.DelegationModeAwait}, nil),
+		// ray: all modes
+		makeTarget("ray", nil, nil),
 	}
-	got := buildDelegationContext(policy, resolveTestLabel)
+	got := buildDelegationContext(targets, 0)
 
-	// spawn should appear (background is active).
-	if !strings.Contains(got, "spawn(agent_id=") {
-		t.Errorf("spawn(agent_id= must appear for background mode; got:\n%s", got)
+	// ava section: only run_subagent; spawn and create_task must NOT appear for ava.
+	// (ray also has run_subagent so we can't check absence globally — just check
+	// the ava section specifically by looking for spawn with ava's id.)
+	if strings.Contains(got, `spawn(agent_id="ava"`) {
+		t.Errorf("spawn for ava must NOT appear when ava edge is await-only; got:\n%s", got)
 	}
-	// "unicorn" must NOT appear in the footer.
-	if strings.Contains(got, "unicorn") {
-		t.Errorf("unrecognized mode 'unicorn' must not appear in footer; got:\n%s", got)
+	if strings.Contains(got, `create_task(agent_id="ava"`) {
+		t.Errorf("create_task for ava must NOT appear when ava edge is await-only; got:\n%s", got)
 	}
-	// footer must still list "background".
-	if !strings.Contains(got, "background") {
-		t.Errorf("footer must list 'background'; got:\n%s", got)
+	if !strings.Contains(got, `run_subagent(agent_id="ava"`) {
+		t.Errorf("run_subagent for ava must appear; got:\n%s", got)
+	}
+
+	// ray section: all three tools.
+	if !strings.Contains(got, `spawn(agent_id="ray"`) {
+		t.Errorf("spawn for ray must appear (all modes); got:\n%s", got)
+	}
+	if !strings.Contains(got, `create_task(agent_id="ray"`) {
+		t.Errorf("create_task for ray must appear (all modes); got:\n%s", got)
+	}
+	if !strings.Contains(got, `run_subagent(agent_id="ray"`) {
+		t.Errorf("run_subagent for ray must appear (all modes); got:\n%s", got)
 	}
 }
