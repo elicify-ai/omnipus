@@ -336,12 +336,14 @@ func TestArchivedMessage_RoundTrip(t *testing.T) {
 }
 
 // TestRollbackAppended verifies that RollbackAppended truncates the archive to
-// the requested line count while leaving meta.Skip untouched (SC-001).
+// the requested line count AND restores meta.Skip to the supplied targetSkip
+// (SC-001, SC-010 — mid-turn eviction fix).
 //
 // BDD: Given a session with 10 messages where Skip=3 (first 3 evicted),
 //
-//	When 4 more messages are appended and then rolled back via RollbackAppended(10),
-//	Then the archive has 10 lines (not 14), and Skip is still 3 (unchanged).
+//	When 4 more messages are appended and then rolled back via
+//	RollbackAppended(targetLines=10, targetSkip=3),
+//	Then the archive has 10 lines (not 14), and Skip is restored to 3.
 func TestRollbackAppended(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
@@ -385,8 +387,9 @@ func TestRollbackAppended(t *testing.T) {
 		t.Fatalf("before rollback: expected %d lines, got %d", initial+extra, beforeRollback)
 	}
 
-	// Roll back to initial line count.
-	if err := store.RollbackAppended(ctx, key, initial); err != nil {
+	// Roll back to initial line count, restoring Skip to the turn-start value
+	// (targetSkip = initialArchiveLen - initialHistoryLength = 10 - 7 = 3).
+	if err := store.RollbackAppended(ctx, key, initial, skipCount); err != nil {
 		t.Fatalf("RollbackAppended: %v", err)
 	}
 
@@ -396,13 +399,13 @@ func TestRollbackAppended(t *testing.T) {
 		t.Fatalf("after rollback: expected %d lines, got %d", initial, afterLines)
 	}
 
-	// Skip must be unchanged at skipCount.
+	// Skip must be restored to skipCount (the turn-start value).
 	metaAfter, err := store.readMeta(key)
 	if err != nil {
 		t.Fatalf("readMeta after rollback: %v", err)
 	}
 	if metaAfter.Skip != skipCount {
-		t.Errorf("after rollback: Skip = %d, want %d (must be unchanged)", metaAfter.Skip, skipCount)
+		t.Errorf("after rollback: Skip = %d, want %d (must be restored to turn-start value)", metaAfter.Skip, skipCount)
 	}
 
 	// ReadArchive must return the first initial messages.
@@ -420,7 +423,8 @@ func TestRollbackAppended(t *testing.T) {
 }
 
 // TestRollbackAppended_NoopWhenTargetGeCount verifies that RollbackAppended
-// is a no-op when targetLines >= the current line count.
+// does not rewrite the JSONL file when targetLines >= the current line count,
+// but still updates Skip when targetSkip differs from the current Skip.
 func TestRollbackAppended_NoopWhenTargetGeCount(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
@@ -435,8 +439,8 @@ func TestRollbackAppended_NoopWhenTargetGeCount(t *testing.T) {
 	path := store.jsonlPath(key)
 	before := countFileLines(t, path)
 
-	// Calling with target == current count is a no-op.
-	if err := store.RollbackAppended(ctx, key, n); err != nil {
+	// Calling with target == current count, targetSkip=0: file unchanged.
+	if err := store.RollbackAppended(ctx, key, n, 0); err != nil {
 		t.Fatalf("RollbackAppended noop: %v", err)
 	}
 	after := countFileLines(t, path)
@@ -444,8 +448,8 @@ func TestRollbackAppended_NoopWhenTargetGeCount(t *testing.T) {
 		t.Errorf("no-op case: expected %d lines, got %d", before, after)
 	}
 
-	// Calling with target > count is also a no-op.
-	if err := store.RollbackAppended(ctx, key, n+100); err != nil {
+	// Calling with target > count is also a no-op for the file.
+	if err := store.RollbackAppended(ctx, key, n+100, 0); err != nil {
 		t.Fatalf("RollbackAppended noop (>count): %v", err)
 	}
 	after2 := countFileLines(t, path)

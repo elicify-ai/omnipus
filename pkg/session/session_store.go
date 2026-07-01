@@ -36,11 +36,14 @@ type SessionStore interface {
 	// TruncateHistory keeps only the last keepLast messages.
 	TruncateHistory(key string, keepLast int)
 	// RollbackAppended truncates the on-disk archive to targetArchiveLen physical
-	// lines, leaving meta.Skip untouched (clamped if needed). This is the
-	// Skip-preserving primitive for undoing messages appended during an aborted
-	// turn without destroying the eviction archive. If targetArchiveLen >=
-	// current archive line count, it is a no-op.
-	RollbackAppended(key string, targetArchiveLen int)
+	// lines and restores meta.Skip = min(targetSkip, targetArchiveLen). The Skip
+	// restore is required to fix the mid-turn eviction bug: if windowTrim advanced
+	// Skip during a live turn and the turn then aborts, the old clamp-forward
+	// (Skip = Count) would shrink the visible window below the pre-turn size.
+	// Callers compute: targetSkip = initialArchiveLen - initialHistoryLength.
+	// If targetArchiveLen >= current archive line count, the file is not rewritten
+	// but Skip is still restored if it has drifted.
+	RollbackAppended(key string, targetArchiveLen, targetSkip int)
 	// Save persists any pending state to durable storage.
 	// context-paging: Save MUST NOT compact the JSONL file (FR-005).
 	Save(key string) error

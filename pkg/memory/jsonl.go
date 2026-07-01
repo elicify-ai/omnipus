@@ -414,19 +414,28 @@ func (s *JSONLStore) TruncateHistory(
 }
 
 // RollbackAppended truncates the JSONL file to the first targetLines
-// non-empty lines and updates meta.Count accordingly. meta.Skip is LEFT
-// UNTOUCHED (clamped to the new Count if it would exceed it).
+// non-empty lines, sets meta.Count = targetLines, and restores
+// meta.Skip = min(targetSkip, targetLines).
 //
-// This is the Skip-preserving rollback primitive used by turn-abort and
-// hard-abort to remove only the messages appended during the current turn,
-// without touching evicted (skipped) turns. It is the ONLY correct way to
-// undo turn appends after eviction has occurred — SetHistory would overwrite
-// the archive and reset Skip=0, permanently deleting evicted turns (SC-001).
+// The Skip restore is the fix for the mid-turn eviction bug (SC-001, SC-010):
+// if windowTrim advanced Skip during a live turn and the turn then aborts,
+// the clamp-forward (Skip = Count when Skip > Count) would shrink the visible
+// window below the pre-turn size. By restoring Skip to its turn-start value
+// (targetSkip = initialArchiveLen - initialHistoryLength), GetHistory returns
+// exactly the messages that were visible when the turn started.
+//
+// Callers compute targetSkip = initialArchiveLen - initialHistoryLength.
+// targetSkip is always clamped: meta.Skip = min(targetSkip, targetLines) so
+// Skip never exceeds the new Count. If targetSkip < 0, it is treated as 0.
+//
+// This is the ONLY correct way to undo turn appends after eviction has
+// occurred — SetHistory would overwrite the archive and reset Skip=0,
+// permanently deleting evicted turns (SC-001).
 //
 // If targetLines >= meta.Count (nothing to remove), the method returns nil
 // immediately without touching the file.
 func (s *JSONLStore) RollbackAppended(
-	_ context.Context, sessionKey string, targetLines int,
+	_ context.Context, sessionKey string, targetLines, targetSkip int,
 ) error {
 	l := s.sessionLock(sessionKey)
 	l.Lock()
@@ -449,6 +458,19 @@ func (s *JSONLStore) RollbackAppended(
 	}
 	if targetLines >= meta.Count {
 		// Nothing to roll back — the file is already at or below targetLines.
+		// Still restore Skip to targetSkip so mid-turn evictions are undone
+		// even when no new messages were appended during the turn.
+		if targetSkip < 0 {
+			targetSkip = 0
+		}
+		if targetSkip > meta.Count {
+			targetSkip = meta.Count
+		}
+		if meta.Skip != targetSkip {
+			meta.Skip = targetSkip
+			meta.UpdatedAt = time.Now()
+			return s.writeMeta(sessionKey, meta)
+		}
 		return nil
 	}
 
@@ -463,11 +485,17 @@ func (s *JSONLStore) RollbackAppended(
 		kept = all[:targetLines]
 	}
 
-	// Update meta: Count shrinks, Skip clamped so it never exceeds Count.
-	meta.Count = len(kept)
-	if meta.Skip > meta.Count {
-		meta.Skip = meta.Count
+	// Clamp targetSkip to [0, len(kept)].
+	if targetSkip < 0 {
+		targetSkip = 0
 	}
+	if targetSkip > len(kept) {
+		targetSkip = len(kept)
+	}
+
+	// Update meta: Count shrinks, Skip restored to turn-start value.
+	meta.Count = len(kept)
+	meta.Skip = targetSkip
 	meta.UpdatedAt = time.Now()
 
 	// Write meta BEFORE rewriting the file. If we crash between the two

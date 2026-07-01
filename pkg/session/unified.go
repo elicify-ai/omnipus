@@ -752,13 +752,15 @@ func (us *UnifiedStore) TruncateHistory(sessionKey string, keepLast int) {
 	}
 }
 
-// RollbackAppended implements SessionStore — Skip-preserving rollback primitive.
-// Truncates the on-disk archive to targetArchiveLen physical lines without
-// touching meta.Skip (clamped if needed). Used by turn-abort and hard-abort
-// to remove only the messages appended during the current turn, so that evicted
-// turns are never destroyed (SC-001).
-func (us *UnifiedStore) RollbackAppended(sessionKey string, targetArchiveLen int) {
-	if err := us.backend.RollbackAppended(context.Background(), sessionKey, targetArchiveLen); err != nil {
+// RollbackAppended implements SessionStore — truncates the on-disk archive to
+// targetArchiveLen physical lines and restores meta.Skip = min(targetSkip,
+// targetArchiveLen). This is the fix for the mid-turn eviction bug: if
+// windowTrim advanced Skip during a live turn and the turn then aborts,
+// restoring Skip to its turn-start value ensures GetHistory returns exactly
+// the pre-turn live window (SC-001, SC-010).
+// Callers compute: targetSkip = initialArchiveLen - initialHistoryLength.
+func (us *UnifiedStore) RollbackAppended(sessionKey string, targetArchiveLen, targetSkip int) {
+	if err := us.backend.RollbackAppended(context.Background(), sessionKey, targetArchiveLen, targetSkip); err != nil {
 		slog.Error("unified_store: rollback appended", "key", sessionKey, "error", err)
 	}
 }

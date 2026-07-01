@@ -45,11 +45,19 @@ type Store interface {
 	SetHistory(ctx context.Context, sessionKey string, history []providers.Message) error
 
 	// RollbackAppended truncates the JSONL file to targetLines physical lines,
-	// updating meta.Count and clamping meta.Skip — but NEVER moving meta.Skip
-	// backward or resetting it. This is the Skip-preserving primitive for
-	// undoing messages appended during an aborted turn without destroying the
-	// eviction archive (SC-001). If targetLines >= current Count, it is a no-op.
-	RollbackAppended(ctx context.Context, sessionKey string, targetLines int) error
+	// setting meta.Count = targetLines and restoring meta.Skip = min(targetSkip,
+	// targetLines). The Skip restore is the fix for the mid-turn eviction bug: if
+	// windowTrim advanced Skip during a turn and the turn then aborts,
+	// RollbackAppended MUST restore Skip to its turn-start value so that
+	// GetHistory returns the exact pre-turn live window (SC-001, SC-010).
+	//
+	// Callers compute: targetSkip = initialArchiveLen - initialHistoryLength
+	// (the Skip value at turn start, before any mid-turn evictions).
+	//
+	// If targetLines >= current Count, the method is a no-op. targetSkip is
+	// always clamped: meta.Skip = min(targetSkip, targetLines) so Skip never
+	// exceeds the new Count.
+	RollbackAppended(ctx context.Context, sessionKey string, targetLines, targetSkip int) error
 
 	// Compact reclaims storage by physically removing logically truncated
 	// data. Backends that do not accumulate dead data may return nil.
