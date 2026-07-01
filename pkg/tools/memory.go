@@ -91,8 +91,8 @@ type RoomMemorySearcher interface {
 // simply return long-term hits only.
 type RetroSearcher interface {
 	// SearchRetros returns retrospective records whose content matches query,
-	// newest-first, capped at limit. Retros carry no stable memory ID, so recall
-	// appends them after long-term hits and does not citation-track them.
+	// ranked by BM25 relevance, capped at limit. Retros carry no stable memory ID,
+	// so recall appends them after long-term hits and does not citation-track them.
 	SearchRetros(query string, limit int) ([]MemoryEntry, error)
 }
 

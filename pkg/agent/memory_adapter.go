@@ -109,11 +109,11 @@ func (a *MemoryStoreAdapter) SearchEntriesInRoom(query string, limit int, scope 
 
 // --- tools.RetroSearcher implementation -------------------------------------
 
-// SearchRetros implements tools.RetroSearcher. It returns retrospectives from
-// the private room whose content (recap + went-well + needs-improvement) matches
-// the query — case-insensitive literal substring, the same semantics as
-// long-term search — newest-first, capped at limit. This is what lets
-// recall_memory span past reflections, not just long-term memories.
+// SearchRetros implements tools.RetroSearcher. It returns retrospectives from the
+// private room whose content (recap + went-well + needs-improvement) matches the
+// query, ranked by BM25 relevance (same k1/b parameters bleve uses for long-term
+// recall), capped at limit. This lets recall_memory span past reflections with
+// consistent lexical ranking, not just long-term memories.
 func (a *MemoryStoreAdapter) SearchRetros(query string, limit int) ([]tools.MemoryEntry, error) {
 	if limit <= 0 {
 		limit = 20
@@ -122,22 +122,15 @@ func (a *MemoryStoreAdapter) SearchRetros(query string, limit int) ([]tools.Memo
 	if err != nil {
 		return nil, err
 	}
-	needle := strings.ToLower(strings.TrimSpace(query))
-	out := make([]tools.MemoryEntry, 0, limit)
-	for _, r := range retros {
-		content := retroSearchText(r)
-		if needle != "" && !strings.Contains(strings.ToLower(content), needle) {
-			continue
-		}
+	ranked := rankRetrosBM25(retros, query, limit)
+	out := make([]tools.MemoryEntry, 0, len(ranked))
+	for _, r := range ranked {
 		out = append(out, tools.MemoryEntry{
 			Timestamp: r.Timestamp,
 			Category:  "retrospective",
-			Content:   content,
+			Content:   retroSearchText(r),
 			Title:     "Retrospective",
 		})
-		if len(out) >= limit {
-			break
-		}
 	}
 	return out, nil
 }
