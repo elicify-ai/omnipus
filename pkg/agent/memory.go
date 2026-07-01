@@ -11,7 +11,7 @@
 //   - Shared workspace room:    workspaces/<id>/.omnipus/
 //
 // Per-memory files follow FR-7.2 (full frontmatter, every field present).
-// The 3 tools (remember/recall_memory/retrospective) are re-pointed here.
+// The 4 tools (remember/recall_memory/recall_conversation/run_retrospective) use this store.
 //
 // GREENFIELD: old MEMORY.md data is not migrated (FR-7.6 / operator D2 decision).
 

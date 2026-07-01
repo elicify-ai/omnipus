@@ -225,8 +225,8 @@ func (cb *ContextBuilder) getWorkspaceAndRules() string {
 %s
 ## Workspace
 Your workspace is at: %s
-- Private memory room: %s/.omnipus/memories/ (agent-only)
-- Shared memory room: workspace .omnipus/memories/ (when in a workspace session)
+- Shared memory room: workspace .omnipus/memories/ (shared with your whole workspace team — the DEFAULT for remember)
+- Private memory room: %s/.omnipus/memories/ (only you can see it)
 - Skills: %s/skills/{skill-name}/SKILL.md
 
 ## Rules
