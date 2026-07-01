@@ -7147,7 +7147,7 @@ export interface components {
         /** @description Global memory and recap/retention settings. Backed by agents.defaults.* and storage.retention fields in config.json. Readable and writable by any authenticated user (operator decision, A2/G-02). Never exposes secrets — the endpoint reads/writes only the listed fields. */
         MemorySettings: {
             /**
-             * @description Whether automatic session recap (context compaction summary) is enabled globally. Maps to agents.defaults.auto_recap_enabled in config.json.
+             * @description Whether automatic session recap (context compaction summary) is enabled globally. Maps to agents.defaults.auto_recap_enabled. Seeded ON on a fresh install; existing configs keep their stored value.
              * @example true
              */
             auto_recap_enabled?: boolean;
@@ -7157,37 +7157,30 @@ export interface components {
              */
             idle_timeout_minutes?: number;
             /**
-             * @description Whether boot-time recap (summarise all sessions on gateway start) is enabled. Maps to agents.defaults.bootstrap_recap_enabled.
-             * @example false
+             * @description Whether boot-time recap (summarise orphaned sessions on gateway start) is enabled. Maps to agents.defaults.bootstrap_recap_enabled. Seeded ON on a fresh install; existing configs keep their stored value.
+             * @example true
              */
             bootstrap_recap_enabled?: boolean;
             /**
-             * @description Maximum number of bootstrap recap operations to run per minute (rate-limit). Maps to agents.defaults.bootstrap_recap_max_per_minute.
+             * @description Maximum number of bootstrap recap operations to run per minute (rate-limit / throttle). This is the only bound on a boot sweep. Maps to agents.defaults.bootstrap_recap_max_per_minute.
              * @example 5
              */
             bootstrap_recap_max_per_minute?: number;
             /**
-             * Format: double
-             * @description Maximum USD spend allowed for bootstrap recaps in a single calendar day. Maps to agents.defaults.bootstrap_recap_daily_budget_usd.
-             * @example 0.5
+             * @description Model slug used for session recap / summarization. A fast, cheap model is recommended. Empty → falls back to agents.defaults.model_name (the overall default model), then to the session's own agent model. Maps to agents.defaults.recap_model.
+             * @example z-ai/glm-4-flash
              */
-            bootstrap_recap_daily_budget_usd?: number;
-            /**
-             * @description Model slugs permitted for recap/compaction LLM calls. Empty list = any configured model is allowed. Maps to agents.defaults.recap_model_allow_list.
-             * @example [
-             *       "google/gemini-2.5-flash",
-             *       "anthropic/claude-3.5-haiku"
-             *     ]
-             */
-            recap_model_allow_list?: string[];
+            recap_model?: string;
+            /** @description Ordered fallback chain for the recap model, tried in order when the primary recap model fails — same shape and behaviour as an agent's fallback_models. Maps to agents.defaults.recap_fallback_models. */
+            recap_fallback_models?: components["schemas"]["FallbackModel"][];
             /**
              * @description Number of days to retain session JSONL files before the retention sweep removes them. Maps to storage.retention.session_days.
              * @example 90
              */
             session_days?: number;
             /**
-             * @description Number of days to retain memory retrospective files. Maps to storage.retention.memory_retros_days.
-             * @example 365
+             * @description Number of days to retain memory retrospective files. Defaults longer than session retention (180 vs 90) so reflections outlive their transcripts. Maps to storage.retention.memory_retros_days.
+             * @example 180
              */
             memory_retros_days?: number;
         };

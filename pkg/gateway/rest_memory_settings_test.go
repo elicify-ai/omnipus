@@ -38,7 +38,12 @@ func TestMemorySettings_GetReturnsDefaults(t *testing.T) {
 	assert.NotNil(t, resp.BootstrapRecapEnabled, "bootstrap_recap_enabled must be present")
 	assert.NotNil(t, resp.SessionDays, "session_days must be present")
 	assert.NotNil(t, resp.MemoryRetrosDays, "memory_retros_days must be present")
-	assert.NotNil(t, resp.RecapModelAllowList, "recap_model_allow_list must be present (array, not null)")
+	// Default retention for retros is 180 (not 30).
+	assert.Equal(t, 180, *resp.MemoryRetrosDays, "memory_retros_days default must be 180")
+	// recap_model is present (may be empty string on a default config).
+	assert.NotNil(t, resp.RecapModel, "recap_model must be present")
+	// recap_fallback_models is present as an array (not null).
+	assert.NotNil(t, resp.RecapFallbackModels, "recap_fallback_models must be present (array, not null)")
 }
 
 // TestMemorySettings_PutUpdatesAndReturnsNewValues verifies that PUT
@@ -104,6 +109,68 @@ func TestMemorySettings_MethodNotAllowed(t *testing.T) {
 	}
 }
 
+// TestMemorySettings_RecapModelRoundTrip verifies that recap_model and
+// recap_fallback_models can be written via PUT and read back via GET.
+func TestMemorySettings_RecapModelRoundTrip(t *testing.T) {
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+	tmpDir := t.TempDir()
+	t.Setenv("OMNIPUS_HOME", tmpDir)
+
+	cfgJSON := `{"version":1,"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096},"list":[{"id":"test-agent","name":"Test Agent","type":"custom"}]}}`
+	cfgPath := filepath.Join(tmpDir, "config.json")
+	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgJSON), 0o600))
+
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: tmpDir,
+				ModelName: "test-model",
+				MaxTokens: 4096,
+			},
+			List: []config.AgentConfig{
+				{ID: "test-agent", Name: "Test Agent", Type: config.AgentTypeCustom},
+			},
+		},
+	}
+	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
+	api := &restAPI{agentLoop: al, homePath: tmpDir}
+
+	body := `{"recap_model":"claude-haiku-3","recap_fallback_models":[{"model":"gpt-4o-mini","provider":"openai"}]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/settings/memory", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	api.HandleMemorySettings(w, r)
+	require.Equal(t, http.StatusOK, w.Code, "PUT body: %s", w.Body.String())
+
+	var resp gen.MemorySettings
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.NotNil(t, resp.RecapModel)
+	assert.Equal(t, "claude-haiku-3", *resp.RecapModel, "recap_model must round-trip")
+	require.NotNil(t, resp.RecapFallbackModels)
+	require.Len(t, *resp.RecapFallbackModels, 1, "recap_fallback_models must have 1 entry")
+	fb := (*resp.RecapFallbackModels)[0]
+	assert.Equal(t, "gpt-4o-mini", fb.Model)
+	require.NotNil(t, fb.Provider)
+	assert.Equal(t, "openai", *fb.Provider)
+}
+
+// TestMemorySettings_RetentionRetrosDefault verifies that the default
+// memory_retros_days is 180 (not the old 30).
+func TestMemorySettings_RetentionRetrosDefault(t *testing.T) {
+	api := buildExecutorTestAPI(t)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/settings/memory", nil)
+	api.HandleMemorySettings(w, r)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp gen.MemorySettings
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.NotNil(t, resp.MemoryRetrosDays)
+	assert.Equal(t, 180, *resp.MemoryRetrosDays, "default memory_retros_days must be 180")
+}
+
 // TestMemorySettings_PutValidatesNegativeValues verifies that negative values
 // for bounded fields are rejected with 400.
 func TestMemorySettings_PutValidatesNegativeValues(t *testing.T) {
@@ -117,7 +184,6 @@ func TestMemorySettings_PutValidatesNegativeValues(t *testing.T) {
 		{"negative memory_retros_days", `{"memory_retros_days":-5}`},
 		{"negative idle_timeout_minutes", `{"idle_timeout_minutes":-1}`},
 		{"negative bootstrap_recap_max_per_minute", `{"bootstrap_recap_max_per_minute":-1}`},
-		{"negative bootstrap_recap_daily_budget_usd", `{"bootstrap_recap_daily_budget_usd":-0.01}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

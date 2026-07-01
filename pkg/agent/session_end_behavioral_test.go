@@ -8,9 +8,8 @@ package agent
 import (
 	"context"
 	"encoding/json"
-	"errors"
+	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -70,9 +69,8 @@ func TestRunRecap_HappyPath_PersistsLastSessionAndRetro(t *testing.T) {
 
 	cfg := &config.Config{}
 	cfg.Agents.Defaults.AutoRecapEnabled = true
-	// Force the LightModel path so we can assert it's picked and it passes
-	// the boot-time allow-list gate.
-	cfg.Agents.Defaults.Routing = &config.RoutingConfig{LightModel: "claude-haiku-3"}
+	// Configure a specific recap model so the resolution is deterministic.
+	cfg.Agents.Defaults.RecapModel = "claude-haiku-3"
 
 	script := &scriptedProvider{
 		responseBody: `{"recap":"we shipped","went_well":["tests"],"needs_improvement":["log noise"],"worth_remembering":[]}`,
@@ -302,75 +300,23 @@ func TestRunRecap_JSONParseError_WritesFallback(t *testing.T) {
 	}
 }
 
-// TestNewAgentLoop_RecapAllowListBootGate covers FR-029a:
-// when AutoRecapEnabled=true AND the resolved recap model is NOT in the
-// allow-list, NewAgentLoop must return a *RecapModelBootError. We test this
-// via a subprocess re-exec so that the test binary's exit code can be asserted:
-// mustNewAgentLoop calls t.Fatal on error, which causes the child to exit non-zero.
-func TestNewAgentLoop_RecapAllowListBootGate(t *testing.T) {
-	if os.Getenv("OMNIPUS_TEST_BOOT_GATE_CHILD") == "1" {
-		// Child: invoke NewAgentLoop with a model not in the allow-list.
-		// mustNewAgentLoop calls t.Fatal when NewAgentLoop returns an error,
-		// causing the child test binary to exit with status 1.
-		cfg := &config.Config{}
-		cfg.Agents.Defaults.AutoRecapEnabled = true
-		cfg.Agents.Defaults.Routing = &config.RoutingConfig{
-			LightModel: "expensive/opus-7", // explicitly not in the default allow-list
-		}
-		al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
-		_ = al
-		// If we reach this line the gate did not fire — signal that via exit 0.
-		os.Exit(0)
-	}
-
-	// Parent: re-run ourselves with the sentinel set.
-	cmd := exec.Command(os.Args[0], "-test.run=TestNewAgentLoop_RecapAllowListBootGate")
-	cmd.Env = append(os.Environ(), "OMNIPUS_TEST_BOOT_GATE_CHILD=1")
-	out, err := cmd.CombinedOutput()
-	if err == nil {
-		t.Fatalf("child did NOT exit non-zero; boot gate did not fire. Output:\n%s", out)
-	}
-	// An *exec.ExitError with a non-zero exit code is the expected outcome.
-	// Any other error (e.g., re-exec failure) counts as a real test failure.
-	if _, ok := err.(*exec.ExitError); !ok {
-		t.Fatalf("unexpected error type from child: %T %v", err, err)
-	}
-	// Message check — surface the child's log so a regression in the error
-	// text is visible in CI.
-	if !strings.Contains(string(out), "recap_model") && !strings.Contains(string(out), "allow-list") {
-		t.Errorf("child exit was non-zero but stderr did not mention recap_model/allow-list; output:\n%s", out)
-	}
-}
-
-// TestNewAgentLoop_RecapModelNotInAllowList_ReturnsError covers the post-#7 fix
-// for FR-029a: NewAgentLoop must return a *RecapModelBootError (not os.Exit)
-// when AutoRecapEnabled is true and the recap model is not in the allow-list.
-// This is the direct (non-subprocess) version of TestNewAgentLoop_RecapAllowListBootGate.
-func TestNewAgentLoop_RecapModelNotInAllowList_ReturnsError(t *testing.T) {
+// TestNewAgentLoop_AnyModelBoots verifies that the recap-model boot gate is
+// gone: NewAgentLoop must succeed regardless of what model is configured for
+// recap, including models that were previously blocked by the allow-list.
+func TestNewAgentLoop_AnyModelBoots(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Agents.Defaults.AutoRecapEnabled = true
-	cfg.Agents.Defaults.Routing = &config.RoutingConfig{
-		LightModel: "expensive/opus-7", // not in the default allow-list
+	// Previously "expensive/opus-7" would have triggered RecapModelBootError.
+	// After the gate removal, NewAgentLoop must succeed.
+	cfg.Agents.Defaults.RecapModel = "expensive/opus-7"
+	al, err := NewAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{})
+	if err != nil {
+		t.Fatalf("NewAgentLoop must succeed with any recap model; got error: %v", err)
 	}
-	_, err := NewAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{})
-	if err == nil {
-		t.Fatal("NewAgentLoop must return an error when recap model is not in allow-list")
+	if al == nil {
+		t.Fatal("NewAgentLoop returned nil loop without error")
 	}
-	var bootErr *RecapModelBootError
-	if !errors.As(err, &bootErr) {
-		t.Fatalf("expected *RecapModelBootError, got %T: %v", err, err)
-	}
-	if bootErr.Model != "expensive/opus-7" {
-		t.Errorf("RecapModelBootError.Model = %q, want %q", bootErr.Model, "expensive/opus-7")
-	}
-	if len(bootErr.AllowList) == 0 {
-		t.Error("RecapModelBootError.AllowList must not be empty")
-	}
-	// Verify error string mentions the key identifiers for operator clarity.
-	msg := err.Error()
-	if !strings.Contains(msg, "recap_model") && !strings.Contains(msg, "allow-list") {
-		t.Errorf("error message %q must mention recap_model and allow-list", msg)
-	}
+	al.Close()
 }
 
 // TestBootstrapRecapPass_SkippedByDefault verifies FR-032a: without the
@@ -551,4 +497,182 @@ func ensureJSONMarshalsSessionEndEntry(t *testing.T) {
 
 func TestTranscriptEntry_TimestampJSONField(t *testing.T) {
 	ensureJSONMarshalsSessionEndEntry(t)
+}
+
+// modelSwitchProvider is a scriptedProvider variant that returns an error when
+// Chat is called for a specific "fail model" and succeeds for any other model.
+// Used to exercise the recap fallback chain: primary fails → fallback used.
+type modelSwitchProvider struct {
+	mu          sync.Mutex
+	failModel   string
+	callCount   int
+	lastModel   string
+	successBody string
+}
+
+func (m *modelSwitchProvider) Chat(
+	_ context.Context,
+	_ []providers.Message,
+	_ []providers.ToolDefinition,
+	model string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	m.mu.Lock()
+	m.callCount++
+	m.lastModel = model
+	m.mu.Unlock()
+	if model == m.failModel {
+		return nil, fmt.Errorf("provider: model %q unavailable (simulated)", model)
+	}
+	return &providers.LLMResponse{Content: m.successBody}, nil
+}
+
+func (m *modelSwitchProvider) GetDefaultModel() string { return "switch-model" }
+
+// TestRunRecap_FallbackChain_PrimaryFails verifies that when the primary recap
+// model returns an error, runRecap falls through to the first fallback and
+// produces a retro using the fallback model's response.
+func TestRunRecap_FallbackChain_PrimaryFails(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("OMNIPUS_HOME", home)
+
+	const primaryModel = "primary-model"
+	const fallbackModel = "fallback-model"
+
+	cfg := &config.Config{}
+	cfg.Agents.Defaults.AutoRecapEnabled = true
+	cfg.Agents.Defaults.RecapModel = primaryModel
+	cfg.Agents.Defaults.RecapFallbackModels = config.FallbackModelSlice{
+		{Model: fallbackModel, Provider: ""},
+	}
+
+	prov := &modelSwitchProvider{
+		failModel:   primaryModel,
+		successBody: `{"recap":"fallback recap","went_well":["fallback"],"needs_improvement":[],"worth_remembering":[]}`,
+	}
+
+	msgBus := bus.NewMessageBus()
+	al := mustNewAgentLoop(t, cfg, msgBus, prov)
+	t.Cleanup(func() { al.Close() })
+
+	store, err := session.NewUnifiedStore(filepath.Join(home, "sessions"))
+	if err != nil {
+		t.Fatalf("NewUnifiedStore: %v", err)
+	}
+	al.sharedSessionStore = store
+
+	agentCfg := &config.AgentConfig{ID: "fallback-agent", Name: "Fallback"}
+	ag := NewAgentInstance(agentCfg, &cfg.Agents.Defaults, cfg, prov)
+	ag.Workspace = filepath.Join(home, "agents", "fallback-agent")
+	ag.ContextBuilder = NewContextBuilder(ag.Workspace).WithAgentInfo("fallback-agent", "Fallback")
+	al.registry.mu.Lock()
+	al.registry.agents[agentCfg.ID] = ag
+	al.registry.mu.Unlock()
+
+	meta, err := store.NewSession(session.SessionTypeChat, "web", "fallback-agent")
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	_ = store.AppendTranscript(meta.ID, session.TranscriptEntry{
+		Role:      "user",
+		Content:   "trigger fallback recap",
+		AgentID:   "fallback-agent",
+		Timestamp: time.Now().UTC(),
+	})
+
+	al.CloseSession(meta.ID, "explicit")
+
+	// Wait for the recap goroutine to complete.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if countRetrosFor(t, ag.Workspace, meta.ID) > 0 {
+			break
+		}
+		time.Sleep(30 * time.Millisecond)
+	}
+
+	if countRetrosFor(t, ag.Workspace, meta.ID) == 0 {
+		t.Fatal("expected a retro to be written via fallback model; none found")
+	}
+
+	// The provider must have been called at least twice: once for the failing
+	// primary model and once (successfully) for the fallback model.
+	prov.mu.Lock()
+	calls := prov.callCount
+	last := prov.lastModel
+	prov.mu.Unlock()
+
+	if calls < 2 {
+		t.Errorf("expected ≥2 Chat calls (primary fail + fallback success); got %d", calls)
+	}
+	if last != fallbackModel {
+		t.Errorf("last Chat call model = %q, want %q (fallback)", last, fallbackModel)
+	}
+}
+
+// TestRunRecap_ModelResolution_UsesRecapModelField verifies the new priority
+// order for recap model resolution: RecapModel config field takes precedence
+// over GetModelName() and the session agent's own model.
+func TestRunRecap_ModelResolution_UsesRecapModelField(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("OMNIPUS_HOME", home)
+
+	const recapModel = "configured-recap-model"
+
+	cfg := &config.Config{}
+	cfg.Agents.Defaults.AutoRecapEnabled = true
+	cfg.Agents.Defaults.RecapModel = recapModel
+	cfg.Agents.Defaults.ModelName = "default-model" // must NOT be used
+
+	script := &scriptedProvider{
+		responseBody: `{"recap":"ok","went_well":[],"needs_improvement":[],"worth_remembering":[]}`,
+	}
+
+	msgBus := bus.NewMessageBus()
+	al := mustNewAgentLoop(t, cfg, msgBus, script)
+	t.Cleanup(func() { al.Close() })
+
+	store, err := session.NewUnifiedStore(filepath.Join(home, "sessions"))
+	if err != nil {
+		t.Fatalf("NewUnifiedStore: %v", err)
+	}
+	al.sharedSessionStore = store
+
+	agentCfg := &config.AgentConfig{ID: "model-res-agent", Name: "ModelRes"}
+	ag := NewAgentInstance(agentCfg, &cfg.Agents.Defaults, cfg, script)
+	ag.Model = "agent-own-model" // must NOT be used when RecapModel is set
+	ag.Workspace = filepath.Join(home, "agents", "model-res-agent")
+	ag.ContextBuilder = NewContextBuilder(ag.Workspace).WithAgentInfo("model-res-agent", "ModelRes")
+	al.registry.mu.Lock()
+	al.registry.agents[agentCfg.ID] = ag
+	al.registry.mu.Unlock()
+
+	meta, err := store.NewSession(session.SessionTypeChat, "web", "model-res-agent")
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	_ = store.AppendTranscript(meta.ID, session.TranscriptEntry{
+		Role:      "user",
+		Content:   "test model resolution",
+		AgentID:   "model-res-agent",
+		Timestamp: time.Now().UTC(),
+	})
+
+	al.CloseSession(meta.ID, "explicit")
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if countRetrosFor(t, ag.Workspace, meta.ID) > 0 {
+			break
+		}
+		time.Sleep(30 * time.Millisecond)
+	}
+
+	script.mu.Lock()
+	usedModel := script.lastModel
+	script.mu.Unlock()
+
+	if usedModel != recapModel {
+		t.Errorf("recap used model %q, want configured RecapModel %q", usedModel, recapModel)
+	}
 }
