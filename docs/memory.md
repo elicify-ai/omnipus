@@ -180,7 +180,7 @@ These are all explicitly future work — don't rely on them, don't promise them 
 | Capability | Status | Pointer |
 |---|---|---|
 | Cross-agent shared memory | Not built. Every memory store is rooted at `<agent_id>/memory/` — agents cannot see each other's memories. | v0.3 Rooms redesign |
-| Semantic search / embeddings | Not built. `recall_memory` is case-insensitive literal substring; no tokenization, no BM25, no vectors. | v0.3 plans `bleve` (BM25, MoreLikeThis) — no embedding model |
+| Semantic search / embeddings | Not built (no vectors/embeddings). `recall_memory` is lexical **bleve BM25** (scorch, pure-Go) over long-term memories **and retrospectives**, with a case-insensitive substring-scan fallback when a room index is unavailable. | Vectors/`MoreLikeThis` reserved for v0.3 — no embedding model |
 | Dreamcatcher consolidation pass | Not built. `worth_remembering` from auto-recap is parsed but discarded — no promotion to `MEMORY.md`. | v0.3 design doc §D5 |
 | Maps of Content (MOCs) | Not built. No auto-maintained index files; no graph traversal. | v0.3 design doc §D12 |
 | Wikilinks / graph edges | Not built. `MEMORY.md` blocks are flat; no `[[id]]` resolution, no `.index/edges.jsonl`. | v0.3 design doc §D9–D11 |
