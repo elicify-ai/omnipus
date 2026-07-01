@@ -227,6 +227,64 @@ func TestRecallMemoryTool_BasicFlow(t *testing.T) {
 	}
 }
 
+// retroStubStore implements MemorySearcher + RetroSearcher so recall_memory
+// spans long-term memories AND retrospectives (finding #1 fix).
+type retroStubStore struct {
+	entries []tools.MemoryEntry
+	retros  []tools.MemoryEntry
+}
+
+func (s *retroStubStore) SearchEntries(query string, limit int) ([]tools.MemoryEntry, error) {
+	return s.entries, nil
+}
+
+func (s *retroStubStore) SearchRetros(query string, limit int) ([]tools.MemoryEntry, error) {
+	return s.retros, nil
+}
+
+// TestRecallMemoryTool_SpansRetrospectives verifies recall_memory appends retro
+// hits alongside long-term memories when the store implements tools.RetroSearcher.
+func TestRecallMemoryTool_SpansRetrospectives(t *testing.T) {
+	store := &retroStubStore{
+		entries: []tools.MemoryEntry{
+			{Timestamp: time.Now().UTC(), Category: "lesson_learned", Content: "flock is the concurrency primitive"},
+		},
+		retros: []tools.MemoryEntry{
+			{Timestamp: time.Now().UTC(), Category: "retrospective", Title: "Retrospective", Content: "Went well: shipped flock. Needs improvement: document the rationale."},
+		},
+	}
+	res := tools.NewRecallMemoryTool(store).Execute(context.Background(), map[string]any{"query": "flock"})
+	if res == nil || res.IsError {
+		t.Fatalf("recall_memory failed: %+v", res)
+	}
+	if !strings.Contains(res.ForLLM, "flock is the concurrency primitive") {
+		t.Errorf("recall must surface the long-term memory; got: %q", res.ForLLM)
+	}
+	if !strings.Contains(res.ForLLM, "Went well") {
+		t.Errorf("recall must surface matching retrospective content (recall spans retros); got: %q", res.ForLLM)
+	}
+	if !strings.Contains(res.ForLLM, "retrospective") {
+		t.Errorf("recall retro hits must be labelled retrospective; got: %q", res.ForLLM)
+	}
+}
+
+// TestRecallMemoryTool_NoRetroSearcher_LongTermOnly is the backward-compat guard:
+// a store that does NOT implement RetroSearcher returns only long-term hits.
+func TestRecallMemoryTool_NoRetroSearcher_LongTermOnly(t *testing.T) {
+	dir := t.TempDir()
+	store := newSimpleMemStore(dir) // MemorySearcher only, no RetroSearcher
+	if err := store.AppendLongTerm("flock is the primitive", "lesson_learned"); err != nil {
+		t.Fatalf("AppendLongTerm: %v", err)
+	}
+	res := tools.NewRecallMemoryTool(store).Execute(context.Background(), map[string]any{"query": "flock"})
+	if res == nil || res.IsError {
+		t.Fatalf("recall_memory failed: %+v", res)
+	}
+	if strings.Contains(res.ForLLM, "Went well") || strings.Contains(res.ForLLM, "retrospective") {
+		t.Errorf("a store without RetroSearcher must not surface retro content; got: %q", res.ForLLM)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // #15 — TestRecallMemoryTool_NoAuditEntryForReads
 // Traces to: env-awareness-and-memory-spec.md FR-014
