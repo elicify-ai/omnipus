@@ -322,10 +322,11 @@ func (sm *SessionManager) Close() error {
 
 // RollbackAppended implements SessionStore for the in-memory backend.
 // SessionManager has no append-only JSONL archive and no Skip concept, so
-// this is equivalent to keeping only the first targetArchiveLen messages.
-// In practice it should never be reached for agent-loop abort paths because
-// those paths require an archive-backed store — but it must satisfy the interface.
-func (sm *SessionManager) RollbackAppended(key string, targetArchiveLen int) {
+// this truncates to the first targetArchiveLen messages. targetSkip is accepted
+// for interface compatibility but has no effect (no Skip windowing here).
+// In practice this is never reached for agent-loop abort paths because those
+// paths require an archive-backed store — but it must satisfy the interface.
+func (sm *SessionManager) RollbackAppended(key string, targetArchiveLen, _ int) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 

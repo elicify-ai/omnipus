@@ -75,9 +75,12 @@ func (b *JSONLBackend) TruncateHistory(key string, keepLast int) {
 }
 
 // RollbackAppended implements SessionStore — truncates the on-disk archive to
-// targetArchiveLen lines, leaving meta.Skip untouched (Skip-preserving rollback).
-func (b *JSONLBackend) RollbackAppended(key string, targetArchiveLen int) {
-	if err := b.store.RollbackAppended(context.Background(), key, targetArchiveLen); err != nil {
+// targetArchiveLen lines and restores meta.Skip = min(targetSkip, targetArchiveLen).
+// This fixes the mid-turn eviction bug: if windowTrim advanced Skip during a live
+// turn and the turn then aborts, restoring Skip to targetSkip ensures GetHistory
+// returns the exact pre-turn live window (SC-001, SC-010).
+func (b *JSONLBackend) RollbackAppended(key string, targetArchiveLen, targetSkip int) {
+	if err := b.store.RollbackAppended(context.Background(), key, targetArchiveLen, targetSkip); err != nil {
 		slog.Error("session: rollback appended", "key", key, "error", err)
 	}
 }

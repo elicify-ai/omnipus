@@ -722,14 +722,31 @@ func (ts *turnState) restoreSession(agent *AgentInstance) error {
 	ts.mu.RLock()
 	summary := ts.restorePointSummary
 	targetLen := ts.initialArchiveLen
+	initialHistLen := ts.initialHistoryLength
 	ts.mu.RUnlock()
 
-	// Skip-preserving rollback: truncate the archive back to the line count
-	// captured at turn start, leaving meta.Skip untouched so evicted turns are
-	// not destroyed (SC-001). SetHistory is explicitly NOT used here — it would
-	// overwrite the entire JSONL file and reset Skip=0, permanently deleting
-	// any evicted turns that preceded this turn (CRITICAL 1, path 2).
-	agent.Sessions.RollbackAppended(ts.sessionKey, targetLen)
+	// Compute the Skip value at turn start.
+	// targetSkip = initialArchiveLen - initialHistoryLength derives the Skip
+	// cursor that was in effect before this turn began. If windowTrim advanced
+	// Skip mid-turn and the turn is now aborting, restoring Skip to this value
+	// ensures GetHistory returns exactly the pre-turn live window (SC-001, SC-010).
+	// Guard: when initialArchiveLen == math.MaxInt (ReadArchive failed at turn
+	// start, rollback is a no-op), pass targetSkip=0 — it is irrelevant because
+	// targetLen=MaxInt means RollbackAppended exits early before touching Skip.
+	targetSkip := 0
+	if targetLen != math.MaxInt {
+		targetSkip = targetLen - initialHistLen
+		if targetSkip < 0 {
+			targetSkip = 0
+		}
+	}
+
+	// Rollback: truncate the archive back to the line count captured at turn
+	// start AND restore meta.Skip to its turn-start value so mid-turn evictions
+	// are undone. SetHistory is explicitly NOT used here — it would overwrite
+	// the entire JSONL file and reset Skip=0, permanently deleting any evicted
+	// turns that preceded this turn (CRITICAL 1, path 2).
+	agent.Sessions.RollbackAppended(ts.sessionKey, targetLen, targetSkip)
 	agent.Sessions.SetSummary(ts.sessionKey, summary)
 
 	// M4 mirror: verify the rollback actually took effect. RollbackAppended is
