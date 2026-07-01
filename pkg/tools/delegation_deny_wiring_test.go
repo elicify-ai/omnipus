@@ -261,7 +261,7 @@ func TestSubagentTool_DelegationDenyChecker_Aborts(t *testing.T) {
 		return NewToolResult("ran"), nil
 	}))
 
-	tool.SetDelegationDenyChecker(func(context.Context) *DelegationDenial {
+	tool.SetDelegationDenyChecker(func(_ context.Context, _ string) *DelegationDenial {
 		return &DelegationDenial{
 			Reason:        "delegation depth cap reached",
 			Policy:        DenyDepth,

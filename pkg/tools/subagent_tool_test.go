@@ -130,7 +130,16 @@ func TestSubagentTool_Parameters(t *testing.T) {
 		t.Errorf("Label type should be 'string', got: %v", label["type"])
 	}
 
-	// Check required fields
+	// Verify agent_id parameter (optional named-agent targeting)
+	agentID, ok := props["agent_id"].(map[string]any)
+	if !ok {
+		t.Fatal("agent_id parameter should exist")
+	}
+	if agentID["type"] != "string" {
+		t.Errorf("agent_id type should be 'string', got: %v", agentID["type"])
+	}
+
+	// Check required fields — only task is required; agent_id and label are optional
 	required, ok := params["required"].([]string)
 	if !ok {
 		t.Fatal("Required should be a string array")
@@ -322,5 +331,152 @@ func TestSubagentTool_ForUserTruncation(t *testing.T) {
 	// ForLLM should have full content
 	if !strings.Contains(result.ForLLM, longTask[:50]) {
 		t.Error("ForLLM should contain reference to original task")
+	}
+}
+
+// capturingSpawner records the SubTurnConfig it was called with.
+type capturingSpawner struct {
+	lastCfg SubTurnConfig
+}
+
+func (c *capturingSpawner) SpawnSubTurn(_ context.Context, cfg SubTurnConfig) (*ToolResult, error) {
+	c.lastCfg = cfg
+	return &ToolResult{
+		ForLLM:  "Task completed: " + cfg.SystemPrompt,
+		ForUser: "Task completed",
+	}, nil
+}
+
+// TestSubagentTool_Execute_WithAgentID verifies that supplying agent_id sets
+// TargetAgentID in the SubTurnConfig passed to SpawnSubTurn, and that the
+// delegation gate receives the target id.
+func TestSubagentTool_Execute_WithAgentID(t *testing.T) {
+	provider := &MockLLMProvider{}
+	manager := NewSubagentManager(provider, "test-model", "/tmp/test")
+	tool := NewSubagentTool(manager)
+
+	cs := &capturingSpawner{}
+	tool.SetSpawner(cs)
+
+	// Install a permissive gate that records the target id it was called with.
+	var gateTarget string
+	tool.SetDelegationDenyChecker(func(_ context.Context, targetAgentID string) *DelegationDenial {
+		gateTarget = targetAgentID
+		return nil // allow
+	})
+
+	ctx := context.Background()
+	args := map[string]any{
+		"task":     "Summarise the logs",
+		"label":    "log-summary",
+		"agent_id": "worker-agent-abc",
+	}
+
+	result := tool.Execute(ctx, args)
+
+	if result.IsError {
+		t.Fatalf("Expected success, got error: %s", result.ForLLM)
+	}
+
+	// Gate must have received the target agent id.
+	if gateTarget != "worker-agent-abc" {
+		t.Errorf("gate received target %q, want %q", gateTarget, "worker-agent-abc")
+	}
+
+	// SpawnSubTurn must have received TargetAgentID.
+	if cs.lastCfg.TargetAgentID != "worker-agent-abc" {
+		t.Errorf("SpawnSubTurn TargetAgentID = %q, want %q", cs.lastCfg.TargetAgentID, "worker-agent-abc")
+	}
+
+	// Must be synchronous (await mode).
+	if cs.lastCfg.Async {
+		t.Error("run_subagent must set Async=false (await/blocking); got true")
+	}
+}
+
+// TestSubagentTool_Execute_WithAgentID_Denied verifies that a targeted
+// run_subagent(agent_id="X") where X is denied by the gate returns an error
+// and does NOT call SpawnSubTurn.
+func TestSubagentTool_Execute_WithAgentID_Denied(t *testing.T) {
+	provider := &MockLLMProvider{}
+	manager := NewSubagentManager(provider, "test-model", "/tmp/test")
+	tool := NewSubagentTool(manager)
+
+	cs := &capturingSpawner{}
+	tool.SetSpawner(cs)
+
+	const bannedAgent = "banned-agent-xyz"
+	tool.SetDelegationDenyChecker(func(_ context.Context, targetAgentID string) *DelegationDenial {
+		if targetAgentID == bannedAgent {
+			return &DelegationDenial{
+				Reason: "agent 'banned-agent-xyz' is not in your delegation allowlist",
+				Policy: DenyTrustSet,
+			}
+		}
+		return nil
+	})
+
+	ctx := context.Background()
+	args := map[string]any{
+		"task":     "do something",
+		"agent_id": bannedAgent,
+	}
+
+	result := tool.Execute(ctx, args)
+
+	if !result.IsError {
+		t.Error("Expected delegation denied error, got success")
+	}
+	if !strings.Contains(result.ForLLM, "delegation") {
+		t.Errorf("Error should mention delegation, got: %s", result.ForLLM)
+	}
+
+	// SpawnSubTurn must NOT have been called.
+	if cs.lastCfg.SystemPrompt != "" {
+		t.Error("SpawnSubTurn should not be called when gate denies")
+	}
+}
+
+// TestSubagentTool_Execute_NoAgentID_BackwardCompat verifies that omitting
+// agent_id preserves the previous behavior: TargetAgentID is empty (parent's
+// own soul runs) and the gate receives an empty target id.
+func TestSubagentTool_Execute_NoAgentID_BackwardCompat(t *testing.T) {
+	provider := &MockLLMProvider{}
+	manager := NewSubagentManager(provider, "test-model", "/tmp/test")
+	tool := NewSubagentTool(manager)
+
+	cs := &capturingSpawner{}
+	tool.SetSpawner(cs)
+
+	var gateTarget string
+	tool.SetDelegationDenyChecker(func(_ context.Context, targetAgentID string) *DelegationDenial {
+		gateTarget = targetAgentID
+		return nil // allow
+	})
+
+	ctx := context.Background()
+	args := map[string]any{
+		"task": "generic task, no named target",
+	}
+
+	result := tool.Execute(ctx, args)
+
+	if result.IsError {
+		t.Fatalf("Expected success, got error: %s", result.ForLLM)
+	}
+
+	// Gate must receive empty string (untargeted path).
+	if gateTarget != "" {
+		t.Errorf("gate received target %q, want empty (untargeted)", gateTarget)
+	}
+
+	// SpawnSubTurn must receive empty TargetAgentID (parent's own soul).
+	if cs.lastCfg.TargetAgentID != "" {
+		t.Errorf("SpawnSubTurn TargetAgentID = %q, want empty", cs.lastCfg.TargetAgentID)
+	}
+
+	// Must remain synchronous.
+	if cs.lastCfg.Async {
+		t.Error("run_subagent must set Async=false even without agent_id")
 	}
 }
