@@ -44,7 +44,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { expect, type Page } from '@playwright/test'
 import { test } from './fixtures/console-errors'
-import { chatInput, assistantMessages, newChatButton, selectAgent } from './fixtures/selectors'
+import { chatInput, assistantMessages, newChatButton } from './fixtures/selectors'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -291,35 +291,40 @@ test.beforeAll(async ({ browser }) => {
       originalAutoRecap = settings.auto_recap_enabled ?? null
     }
 
-    // Enable auto recap.
+    // Enable auto recap.  This must succeed — a silent failure here means
+    // CloseSession returns at the !AutoRecapEnabled gate and the test
+    // produces zero recap log lines, making the root cause invisible.
     const putResp = await page.request.put(`${BASE_URL}/api/v1/settings/memory`, {
       headers,
       data: { auto_recap_enabled: true },
       failOnStatusCode: false,
     })
     if (!putResp.ok()) {
-      // Log but don't throw — the test itself will fail with a more specific error
-      // if recap doesn't fire.
-      // eslint-disable-next-line no-console
-      console.warn(
-        `recap-continuity beforeAll: PUT /api/v1/settings/memory returned ${putResp.status()} — recap may not fire`,
+      throw new Error(
+        `recap-continuity beforeAll: PUT /api/v1/settings/memory returned ${putResp.status()} — ` +
+          `${await putResp.text()}`,
       )
     }
 
     // Confirm via GET that auto_recap_enabled is now true.
+    // Throw rather than warn: a silent mismatch produces a confusing "file never
+    // appears" failure with zero recap log lines instead of a clear root-cause error.
     const confirmResp = await page.request.get(`${BASE_URL}/api/v1/settings/memory`, {
       headers,
       failOnStatusCode: false,
     })
-    if (confirmResp.ok()) {
-      const confirmed = (await confirmResp.json()) as { auto_recap_enabled?: boolean }
-      if (confirmed.auto_recap_enabled !== true) {
-        // eslint-disable-next-line no-console
-        console.warn(
-          'recap-continuity beforeAll: auto_recap_enabled did not confirm as true — ' +
-            `got: ${JSON.stringify(confirmed.auto_recap_enabled)}`,
-        )
-      }
+    if (!confirmResp.ok()) {
+      throw new Error(
+        `recap-continuity beforeAll: GET /api/v1/settings/memory returned ${confirmResp.status()}`,
+      )
+    }
+    const confirmed = (await confirmResp.json()) as { auto_recap_enabled?: boolean }
+    if (confirmed.auto_recap_enabled !== true) {
+      throw new Error(
+        'recap-continuity beforeAll: auto_recap_enabled did not confirm as true after PUT — ' +
+          `got: ${JSON.stringify(confirmed.auto_recap_enabled)}. ` +
+          'CloseSession will return early and no recap log lines will appear.',
+      )
     }
   } finally {
     await page.close()
@@ -377,19 +382,17 @@ test(
     const inputLocator = chatInput(page)
     await expect(inputLocator).toBeVisible({ timeout: 20_000 })
 
-    // Switch to Jim for reliable non-tool responses.
-    // Mia has strong "guide persona" guardrails that may rephrase questions;
-    // Jim does direct inline generation, making recall assertions more stable.
-    await selectAgent(page, /Jim/i)
-
-    // Resolve the agent ID we'll use for disk assertions later.
+    // Use the default agent (mia) for chat. Mia handles acknowledgement
+    // requests reliably; the NONCE persistence test only needs the agent to
+    // acknowledge and have a non-empty transcript — any chat-capable agent works.
+    //
+    // NOTE: we resolved the agent ID from the API (not from the UI picker)
+    // to avoid a mismatch: selectAgent(Jim) + resolveDefaultAgentID() → mia
+    // would create a mia session while the SPA had Jim selected, causing the
+    // transcript to be routed to mia's session but the disk-poll to also look
+    // in mia's workspace — which is actually correct. However, keeping the
+    // selection and the session creation consistent removes all ambiguity.
     const agentId = await resolveDefaultAgentID(page)
-
-    // Start with a fresh chat to guarantee a clean transcript baseline.
-    const newChatBtn = newChatButton(page)
-    await expect(newChatBtn).toBeVisible({ timeout: 10_000 })
-    await newChatBtn.click()
-    await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
 
     // ── Step 1: Create the session via the REST API so we have its ID ─────────
 
@@ -454,7 +457,7 @@ test(
     // Start a brand-new chat session.  The previous session is closed; its recap
     // lives in last-session.md.  When the agent processes the first turn of a
     // new session, ReadLastSession injects that file into the system prompt.
-    await newChatBtn.click()
+    await newChatButton(page).click()
     await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
     await expect(inputLocator).toBeVisible({ timeout: 10_000 })
 

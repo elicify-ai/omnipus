@@ -73,6 +73,7 @@ func (al *AgentLoop) CloseSession(sessionID, trigger string) {
 // Runs in a goroutine; a top-level recover() prevents a panic in any
 // subsystem (provider, JSON parse, file I/O) from killing the gateway process.
 func (al *AgentLoop) runRecap(sessionID, trigger string) {
+	slog.Debug("session_end: runRecap started", "session_id", sessionID, "trigger", trigger)
 	defer func() {
 		if r := recover(); r != nil {
 			slog.Error("session_end: runRecap panic recovered",
@@ -391,6 +392,11 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 		return
 	}
 
+	slog.Info("session_end: writing LAST_SESSION.md",
+		"session_id", sessionID,
+		"agent_id", agentInst.ID,
+		"workspace", agentInst.Workspace,
+	)
 	if err := memory.WriteLastSession(parsed.Recap); err != nil {
 		slog.Warn("session_end: failed to write LAST_SESSION.md",
 			"session_id", sessionID,
@@ -477,6 +483,12 @@ func (al *AgentLoop) writeHeuristicFallbackRetroWithCount(
 	recap := fmt.Sprintf("Session %s ended. Turns: %d. Tool calls: %d. Fallback reason: %s.",
 		sessionID, turnCount, toolCallCount, fallbackReason)
 
+	slog.Info("session_end: fallback: writing LAST_SESSION.md",
+		"session_id", sessionID,
+		"agent_id", agentInst.ID,
+		"workspace", agentInst.Workspace,
+		"fallback_reason", fallbackReason,
+	)
 	if err := memory.WriteLastSession(recap); err != nil {
 		slog.Warn("session_end: fallback: failed to write LAST_SESSION.md",
 			"session_id", sessionID,
