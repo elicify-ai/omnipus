@@ -16,8 +16,10 @@ package gateway
 // config.json via safeUpdateConfigJSON (no SaveConfig — keys are preserved).
 
 import (
+	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 )
@@ -97,6 +99,14 @@ func (a *restAPI) putMemorySettings(w http.ResponseWriter, r *http.Request) {
 	if req.MemoryRetrosDays != nil && *req.MemoryRetrosDays < 0 {
 		jsonErr(w, http.StatusBadRequest, "memory_retros_days must be ≥ 0")
 		return
+	}
+	if req.RecapFallbackModels != nil {
+		for i, fm := range *req.RecapFallbackModels {
+			if strings.TrimSpace(fm.Model) == "" {
+				jsonErr(w, http.StatusBadRequest, fmt.Sprintf("recap_fallback_models[%d]: model must not be empty", i))
+				return
+			}
+		}
 	}
 
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error { //nolint:gocritic

@@ -172,24 +172,60 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 		},
 	}
 
-	// Self-bounded at 60s. On graceful shutdown, AgentLoop.Close() waits for this
-	// goroutine to finish (recapWG) rather than canceling it, so the recap runs
-	// to completion within the 70s shutdown budget (#265).
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
+	// Build a provider pool for the recap candidates so each fallback routes
+	// through its own configured provider (parity with agent turn fallbacks,
+	// FR-007). The agent's own providerPool only contains its turn candidates;
+	// recap candidates are separate config fields and are never included there.
+	// We build a one-off pool here using the same buildProviderPool helper.
+	recapProviderPool := buildProviderPool(al.cfg, candidates)
+
+	// resolveRecapProvider mirrors GetProviderForCandidate but consults the
+	// one-off recap pool first, then the agent's turn pool (single-passthrough
+	// case), and finally falls back to the agent's primary provider.
+	resolveRecapProvider := func(candidate providers.FallbackCandidate) providers.LLMProvider {
+		pinned := strings.TrimSpace(candidate.Provider)
+		if pinned != "" && recapProviderPool != nil {
+			if p, ok := recapProviderPool[pinned]; ok && p != nil {
+				return p
+			}
+		}
+		// Single passthrough provider (empty Provider on candidate): use the
+		// agent's primary provider — same as the pre-fix behavior and the
+		// correct path when all recap candidates share the agent's provider.
+		p := agentInst.GetProviderForCandidate(candidate)
+		if p != nil {
+			return p
+		}
+		return agentInst.Provider
+	}
+
+	// Self-bounded overall at 60s. Divide the budget evenly across candidates
+	// so a slow primary cannot exhaust the deadline and leave fallbacks with an
+	// already-expired context. Each candidate gets its own fresh timeout derived
+	// from its share of the overall budget (minimum 10s to avoid starving
+	// fallbacks on short budgets with many candidates).
+	const overallBudget = 60 * time.Second
+	const minPerCandidate = 10 * time.Second
+	numCandidates := len(candidates)
+	if numCandidates == 0 {
+		numCandidates = 1
+	}
+	perCandidateTimeout := overallBudget / time.Duration(numCandidates)
+	if perCandidateTimeout < minPerCandidate {
+		perCandidateTimeout = minPerCandidate
+	}
 
 	// Attempt the recap against each candidate in order, falling through to the
-	// next on any error. This is a simpler "try in sequence" loop rather than
-	// FallbackChain.Execute, which requires classifiable provider errors to retry;
-	// for the recap we want ANY error to trigger the next fallback.
+	// next on any error. Each candidate gets its own fresh context so a stuck
+	// primary cannot consume the entire budget and leave fallbacks with an
+	// already-expired deadline.
 	var resp *providers.LLMResponse
 	var llmErr error
 	for _, candidate := range candidates {
-		p := agentInst.GetProviderForCandidate(candidate)
-		if p == nil {
-			p = agentInst.Provider
-		}
-		r, err := p.Chat(ctx, msgs, nil, candidate.Model, opts)
+		p := resolveRecapProvider(candidate)
+		candidateCtx, candidateCancel := context.WithTimeout(context.Background(), perCandidateTimeout)
+		r, err := p.Chat(candidateCtx, msgs, nil, candidate.Model, opts)
+		candidateCancel()
 		if err == nil {
 			resp = r
 			llmErr = nil

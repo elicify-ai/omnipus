@@ -62,7 +62,8 @@ func (s *scriptedProvider) GetDefaultModel() string { return "scripted-model" }
 // TestRunRecap_HappyPath_PersistsLastSessionAndRetro exercises #35 end-to-end:
 // a transcript is written, CloseSession is invoked, and after the recap
 // goroutine completes the MemoryStore must contain LAST_SESSION.md + a retro.
-// Also pins FR-029a cost-guard opts onto the Chat request.
+// Also pins FR-029a cost-guard opts (max_tokens=250, extended_thinking=false,
+// extra_body.reasoning.exclude=true) onto the Chat request.
 func TestRunRecap_HappyPath_PersistsLastSessionAndRetro(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", home)
@@ -160,7 +161,7 @@ func TestRunRecap_HappyPath_PersistsLastSessionAndRetro(t *testing.T) {
 		t.Errorf("opts.extra_body.reasoning.exclude must be true; got %v", eb)
 	}
 	if script.lastModel != "claude-haiku-3" {
-		t.Errorf("recap model = %q, want claude-haiku-3 (LightModel)", script.lastModel)
+		t.Errorf("recap model = %q, want claude-haiku-3 (recap_model config)", script.lastModel)
 	}
 
 	// A retro file must exist too — date-directory under .omnipus/retros/.
@@ -230,7 +231,7 @@ func TestRunRecap_JSONParseError_WritesFallback(t *testing.T) {
 
 	cfg := &config.Config{}
 	cfg.Agents.Defaults.AutoRecapEnabled = true
-	cfg.Agents.Defaults.Routing = &config.RoutingConfig{LightModel: "claude-haiku-3"}
+	cfg.Agents.Defaults.RecapModel = "claude-haiku-3"
 
 	script := &scriptedProvider{responseBody: "I'm not JSON, sorry"}
 
@@ -330,7 +331,6 @@ func TestBootstrapRecapPass_SkippedByDefault(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Agents.Defaults.AutoRecapEnabled = true
 	cfg.Agents.Defaults.BootstrapRecapEnabled = false // default — must stay false
-	cfg.Agents.Defaults.Routing = &config.RoutingConfig{LightModel: "claude-haiku-3"}
 
 	script := &scriptedProvider{}
 
@@ -376,7 +376,6 @@ func TestBootstrapRecapPass_OneIterationPerSession(t *testing.T) {
 	cfg.Agents.Defaults.AutoRecapEnabled = true
 	cfg.Agents.Defaults.BootstrapRecapEnabled = true
 	cfg.Agents.Defaults.BootstrapRecapMaxPerMinute = 60 // will be floored to 1s by guard
-	cfg.Agents.Defaults.Routing = &config.RoutingConfig{LightModel: "claude-haiku-3"}
 
 	// Scripted provider returns a valid recap so runRecap succeeds and the
 	// retro file appears — which is our "processed once" signal.

@@ -6,6 +6,20 @@ import { MemorySection } from './MemorySection'
 import { fetchMemorySettings, updateMemorySettings, fetchProviders } from '@/lib/api'
 import type { Provider } from '@/lib/api'
 
+// ResizeObserver is required by cmdk (used inside ModelSelector popovers);
+// jsdom does not implement it. Polyfill with a noop so popover-open tests work.
+class ResizeObserverStub {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+if (typeof globalThis.ResizeObserver === 'undefined') {
+  vi.stubGlobal('ResizeObserver', ResizeObserverStub)
+}
+if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = function () {}
+}
+
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -269,6 +283,70 @@ describe('MemorySection', () => {
     await waitFor(() => {
       expect(screen.queryByTestId('recap-fallback-row-anthropic/claude-3.5-haiku')).toBeNull()
     })
+  })
+
+  it('selecting a primary model via ModelSelector sets recap_model and Save includes it in the PUT body', async () => {
+    const saved: Record<string, unknown> = {}
+    vi.mocked(updateMemorySettings).mockImplementation(async (body) => {
+      Object.assign(saved, body)
+      return body
+    })
+
+    renderSection()
+    await screen.findByText('Memory & Recap')
+
+    // Open the primary model selector popover
+    const trigger = screen.getByTestId('recap-model-trigger')
+    fireEvent.click(trigger)
+
+    // The popover renders CommandItems as [role=option] or text nodes.
+    // Find the model by its visible text content inside the open Command list.
+    const modelItem = await screen.findByText('google/gemini-2.5-flash')
+    fireEvent.click(modelItem)
+
+    // The popover should close and the trigger should now display the selection.
+    // Save and confirm the PUT body carries recap_model.
+    const saveBtn = screen.getByRole('button', { name: /save memory settings/i })
+    await act(async () => { fireEvent.click(saveBtn) })
+
+    await waitFor(() => expect(vi.mocked(updateMemorySettings)).toHaveBeenCalled())
+
+    expect(saved['recap_model']).toBe('google/gemini-2.5-flash')
+  })
+
+  it('adding a fallback via the add-selector appends a new row, and Save includes it in recap_fallback_models', async () => {
+    const saved: Record<string, unknown> = {}
+    vi.mocked(updateMemorySettings).mockImplementation(async (body) => {
+      Object.assign(saved, body)
+      return body
+    })
+
+    renderSection()
+    await screen.findByText('Memory & Recap')
+
+    // Open the "add fallback" ModelSelector popover
+    const addTrigger = screen.getByTestId('recap-fallback-add-trigger')
+    fireEvent.click(addTrigger)
+
+    // Select a model from the open popover
+    const modelItem = await screen.findByText('anthropic/claude-3.5-haiku')
+    fireEvent.click(modelItem)
+
+    // A new fallback row must appear
+    await waitFor(() => {
+      expect(screen.getByTestId('recap-fallback-row-anthropic/claude-3.5-haiku')).toBeInTheDocument()
+    })
+
+    // Save and confirm the fallback appears in the PUT body
+    const saveBtn = screen.getByRole('button', { name: /save memory settings/i })
+    await act(async () => { fireEvent.click(saveBtn) })
+
+    await waitFor(() => expect(vi.mocked(updateMemorySettings)).toHaveBeenCalled())
+
+    const fallbacks = saved['recap_fallback_models'] as Array<{ model: string; provider?: string }>
+    expect(Array.isArray(fallbacks)).toBe(true)
+    expect(fallbacks).toHaveLength(1)
+    expect(fallbacks[0]).toMatchObject({ model: 'anthropic/claude-3.5-haiku' })
   })
 
   it('shows an error message when fetchMemorySettings fails', async () => {
