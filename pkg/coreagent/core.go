@@ -262,11 +262,10 @@ func coreAgentSeed(
 			base[b] = config.ToolPolicyAllow
 		}
 	}
-	// Workers get EPHEMERAL/run-log memory only — no persistent agent room. Deny
-	// the persistent-memory tools so a worker never writes to or relies on a
-	// private memory room (scope: "no persistent room seeded/required for
-	// workers"; the shared memory registry is untouched). serve_web is also
-	// pointless for a delegation-only leaf, so drop it from the worker rail.
+	// Workers get EPHEMERAL/run-log memory only — no persistent room. Deny
+	// the persistent-memory tools so a worker never writes to or relies on
+	// any memory room (scope: "no persistent room seeded/required for workers").
+	// serve_web is pointless for a delegation-only leaf, so drop it too.
 	if IsWorkerID(id) {
 		base["remember"] = config.ToolPolicyDeny
 		base["recall_memory"] = config.ToolPolicyDeny
