@@ -137,12 +137,13 @@ func (t *RememberTool) Name() string           { return "remember" }
 func (t *RememberTool) Scope() ToolScope       { return ScopeGeneral }
 func (t *RememberTool) Category() ToolCategory { return CategoryMemory }
 func (t *RememberTool) Description() string {
-	return "Persist a fact, decision, reference, or lesson to long-term memory. " +
-		"Use category 'key_decision' for decisions made, 'reference' for reference information, " +
-		"or 'lesson_learned' for retrospective lessons. Each memory is stored as a structured " +
-		"file with full metadata. Use room='shared' to write to the workspace shared room (visible " +
-		"to all agents in this workspace), 'private' for agent-only memory. Default: shared when " +
-		"in a workspace session, private otherwise."
+	return "Save something worth keeping for later: a decision, a useful fact or reference, or a " +
+		"lesson learned. Use this whenever you learn something you — or a teammate agent — will " +
+		"likely need again in a future conversation. By DEFAULT the memory is SHARED with your " +
+		"workspace team, so every agent working in this workspace can recall it; set room='private' " +
+		"only for notes meant just for you. category must be one of: 'key_decision' (a decision that " +
+		"was made), 'reference' (useful reference information), or 'lesson_learned' (something to do " +
+		"differently next time)."
 }
 
 func (t *RememberTool) Parameters() map[string]any {
@@ -161,8 +162,9 @@ func (t *RememberTool) Parameters() map[string]any {
 			"room": map[string]any{
 				"type": "string",
 				"enum": []string{"private", "shared"},
-				"description": "Room to write to: 'private' (agent-only) or 'shared' (workspace-wide). " +
-					"Default: shared when in a workspace session, private otherwise.",
+				"description": "Who can see this memory: 'shared' = your whole workspace team (the " +
+					"default — use it whenever a teammate agent might need this), 'private' = only you. " +
+					"Leave unset to use the default (shared).",
 			},
 		},
 		"required": []string{"content", "category"},
@@ -331,11 +333,11 @@ func (t *RecallMemoryTool) Name() string           { return "recall_memory" }
 func (t *RecallMemoryTool) Scope() ToolScope       { return ScopeGeneral }
 func (t *RecallMemoryTool) Category() ToolCategory { return CategoryMemory }
 func (t *RecallMemoryTool) Description() string {
-	return "Search durable long-term memory. Returns matching entries newest-first. " +
-		"Use this when you need to recall a past decision, reference, or lesson. " +
-		"Use room='both' (default) to search all available rooms, 'private' for agent-only, " +
-		"'shared' for workspace-wide memories. " +
-		"For earlier turns of THIS conversation, use recall_conversation instead."
+	return "Look up something saved earlier with the remember tool — a decision, fact, reference, " +
+		"or lesson — including past session retrospectives. Use this when you need information from " +
+		"a PREVIOUS conversation. By default it searches everything available to you: your workspace " +
+		"team's shared memories plus your own private notes. " +
+		"Note: to find something said earlier in the CURRENT conversation, use recall_conversation instead."
 }
 
 func (t *RecallMemoryTool) Parameters() map[string]any {
@@ -351,9 +353,10 @@ func (t *RecallMemoryTool) Parameters() map[string]any {
 				"description": "Maximum number of results (default 20, max 50).",
 			},
 			"room": map[string]any{
-				"type":        "string",
-				"enum":        []string{"private", "shared", "both"},
-				"description": "Room scope: 'private' (agent-only), 'shared' (workspace), or 'both' (default).",
+				"type": "string",
+				"enum": []string{"private", "shared", "both"},
+				"description": "Where to search: 'both' (the default — your team's shared memories AND " +
+					"your private notes), 'shared' (team memories only), or 'private' (your own notes only).",
 			},
 		},
 		"required": []string{"query"},
@@ -485,9 +488,9 @@ func (t *RetrospectiveTool) Name() string           { return "run_retrospective"
 func (t *RetrospectiveTool) Scope() ToolScope       { return ScopeGeneral }
 func (t *RetrospectiveTool) Category() ToolCategory { return CategoryMemory }
 func (t *RetrospectiveTool) Description() string {
-	return "Record a session retrospective after confirming its contents with the user. " +
-		"Captures what went well and what needs improvement for future reference. " +
-		"Call this at the end of a productive session after the user has reviewed the summary."
+	return "At the end of a productive session, record what went well and what to improve next " +
+		"time — but only after the user has reviewed and confirmed the summary. The retrospective " +
+		"is saved to memory and can be found later with recall_memory."
 }
 
 func (t *RetrospectiveTool) Parameters() map[string]any {
