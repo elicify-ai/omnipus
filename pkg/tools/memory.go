@@ -334,7 +334,8 @@ func (t *RecallMemoryTool) Description() string {
 	return "Search durable long-term memory. Returns matching entries newest-first. " +
 		"Use this when you need to recall a past decision, reference, or lesson. " +
 		"Use room='both' (default) to search all available rooms, 'private' for agent-only, " +
-		"'shared' for workspace-wide memories."
+		"'shared' for workspace-wide memories. " +
+		"For earlier turns of THIS conversation, use recall_conversation instead."
 }
 
 func (t *RecallMemoryTool) Parameters() map[string]any {

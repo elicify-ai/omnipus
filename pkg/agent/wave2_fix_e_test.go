@@ -15,8 +15,8 @@
 //   - W2-20 #2 (CRITICAL): per-turn Model field via agent loop never asserted.
 //     A regression that drops the `Model: ts.lastProducedModel` line in
 //     appendAssistantTranscript would currently pass every existing test.
-//   - W2-20 #3 (CRITICAL): summarizeDroppedTurns length cap (≤50% new window)
-//     never asserted. FR-011/Q5.
+//   - W2-20 #3 (CRITICAL): summarizeDroppedTurns length cap — removed;
+//     summarizeDroppedTurns deleted as part of context-paging epic (FR-011/Q5).
 //   - W2-20 #4 (HIGH): updates existing substring-on-Content assertions to
 //     assert `e.Status == "error"` directly (the contract).
 //   - W2-27 (MEDIUM): provider tie-break ordering (openrouter vs vivgrid),
@@ -31,8 +31,8 @@
 //	        so replay shows it.
 //	FR-002: any provider error MUST emit EventKindError with ErrorPayload AND
 //	        write a system entry to the JSONL transcript.
-//	FR-011: at model switch, summarizeDroppedTurns MUST bound its request to
-//	        ≤50% of the new model's context window.
+//	FR-011: at model switch, windowTrim re-fits the window to the new budget;
+//	        no LLM call is made (summarizeDroppedTurns deleted).
 //	FR-013: per-turn Model field recorded on every assistant message.
 //	FR-014: Status="error" on transcript error entries (NOT a substring of
 //	        Content) — the replay path depends on it.
@@ -44,10 +44,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -369,67 +367,11 @@ func TestRunTurn_StampsModelFieldOnAssistantEntry(t *testing.T) {
 		expectedModel, asst.Model)
 }
 
-// =============================================================================
-// W2-20 #3 — summarizeDroppedTurns length cap (≤50% of new window)
-// =============================================================================
-//
-// FR-011 / Q5: the summary's token cap must be ≤50% of the new model's
-// context window. We drive summarizeDroppedTurns with newContextWindow=4000
-// and assert the prompt to the LLM embeds a budget of exactly 2000 (50%),
-// NOT the full 4000.
-//
-// We use the recordingSummaryProvider from switch_compress_test.go (same
-// package) — it captures the messages sent to the LLM. The opts map is
-// passed by summarizeDroppedTurns but not captured by chatCall, so we
-// assert the budget in the prompt text (which strconv.Itoa-budgets the cap into).
-func TestSummarizeDroppedTurns_Respects50PercentCap(t *testing.T) {
-	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled
-	defer cleanup()
-
-	recProv := &recordingSummaryProvider{
-		summary: "tiny summary",
-	}
-	agent := al.GetRegistry().GetDefaultAgent()
-	require.NotNil(t, agent)
-	// Clear MaxTokens so the budget is governed by newContextWindow/2
-	// and not clamped down to MaxTokens (we want to assert the ≥50% rule
-	// is the one that applies).
-	agent.MaxTokens = 0
-	agent.Provider = recProv
-
-	dropped := []providers.Message{
-		{Role: "user", Content: "short"},
-		{Role: "assistant", Content: "ok"},
-	}
-
-	const newContextWindow = 4000
-	const expectedMaxBudget = 2000 // 50% of newContextWindow
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	_, err := al.summarizeDroppedTurns(ctx, agent, dropped, newContextWindow)
-	require.NoError(t, err)
-
-	require.Len(t, recProv.chatCalls, 1, "summarizeDroppedTurns must call Chat exactly once")
-	call := recProv.chatCalls[0]
-
-	// The prompt itself includes the budget number, so we can lock the cap
-	// from the prompt text. messages[0].Content embeds strconv.Itoa(summaryBudget),
-	// which is newContextWindow/2 = 2000.
-	require.NotEmpty(t, call.Messages, "summary call must include a prompt")
-	prompt := call.Messages[0].Content
-	require.Contains(t, prompt, strconv.Itoa(expectedMaxBudget),
-		"W2-20 #3: summarizeDroppedTurns must ask the LLM for ≤50%% of newContextWindow; "+
-			"expected prompt to mention %d tokens, got: %q", expectedMaxBudget, prompt)
-
-	// The full window number (4000) must NOT appear as a stand-alone token
-	// in the budget clause. We check the prompt text embeds "2000" but
-	// not "4000" (or the substring "≤4000"). This catches a regression
-	// that sets the budget to newContextWindow instead of newContextWindow/2.
-	require.NotContains(t, prompt, "≤"+strconv.Itoa(newContextWindow),
-		"prompt must NOT request the full context window as the budget; got: %q", prompt)
-}
+// (W2-20 #3 — TestSummarizeDroppedTurns_Respects50PercentCap removed:
+// summarizeDroppedTurns is deleted as part of the context-paging epic.
+// handleModelSwitch now uses windowTrim (FR-011) with no LLM call.
+// The windowTrim budget arithmetic is covered by TestWindowTrim_* in
+// window_trim_test.go and TestModelSwitch_ReWindowsNoSummary.)
 
 // =============================================================================
 // W2-27 — appendErrorTranscript no-op paths

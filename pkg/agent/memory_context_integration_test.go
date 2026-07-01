@@ -6,11 +6,11 @@
 //  1. AutoInject20Recent — GetMemoryContext injects EXACTLY 20 of 25 written memories.
 //  2. RecallSpansThreeScopes — recall_memory search + GetMemoryContext coverage of
 //     long-term memory, last-session.md, and retrospectives.
-//  3. ContextCompactionOverflow — forceCompression fires and produces a well-formed
-//     (non-corrupt) reduced history with a compression note.
+//  3. ContextWindowTrimOverflow — windowTrim fires and produces a well-formed
+//     (non-corrupt) reduced history without writing a compression summary.
 //
 // Build: CGO_ENABLED=0 go test -tags goolm,stdjson -run '^TestIntegration_' -p 1 ./pkg/agent/
-// Traces to: pkg/agent/memory.go GetMemoryContext (line 936), pkg/agent/loop.go forceCompression (line 7411).
+// Traces to: pkg/agent/memory.go GetMemoryContext (line 936), pkg/agent/loop.go windowTrim.
 
 package agent
 
@@ -220,17 +220,16 @@ func TestIntegration_RecallSpansThreeScopes(t *testing.T) {
 // BDD:
 //   Given an AgentInstance with a small ContextWindow (e.g. 1000 tokens)
 //   And a session history that exceeds the window (many large messages)
-//   When forceCompression is called
+//   When windowTrim is called
 //   Then:
-//     - compression fires (returns ok=true)
-//     - the resulting history has fewer messages (oldest ~50% dropped)
+//     - trim fires (returns ok=true)
+//     - the resulting history has fewer messages (oldest Turns evicted to budget)
 //     - the message sequence is well-formed (no orphaned tool_result, no empty roles)
-//     - a compression note is stored in the session summary
-//     - a distinctive early user fact is NOT in the remaining history (it was dropped)
+//     - NO compression note is stored in the session summary (FR-004)
+//     - a distinctive early user fact is NOT in the remaining history (it was evicted)
 //     - the most-recent user message IS in the remaining history (kept)
 //
-// Traces to: pkg/agent/loop.go line 7411 (forceCompression)
-//            pkg/agent/loop.go line 7444 ("Emergency compression dropped")
+// Traces to: pkg/agent/loop.go windowTrim (FR-001/002/003/004)
 // ---------------------------------------------------------------------------
 
 func TestIntegration_ContextCompactionOverflow(t *testing.T) {
@@ -240,7 +239,8 @@ func TestIntegration_ContextCompactionOverflow(t *testing.T) {
 	agent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, agent, "default agent must exist after NewAgentLoop")
 
-	// Set a small context window to make forceCompression trigger reliably.
+	// Set a small context window to make windowTrim trigger reliably.
+	// budget = 1000 - 512 - ceil(0.05*1000) = 1000 - 512 - 50 = 438 tokens
 	agent.ContextWindow = 1000
 	agent.MaxTokens = 512
 
@@ -249,7 +249,7 @@ func TestIntegration_ContextCompactionOverflow(t *testing.T) {
 	// Build a history large enough to exceed the window.
 	// We use 8 messages (4 turns): user/assistant pairs.
 	// The earliest user message has a distinctive "ctxIT_early_fact" marker.
-	// The latest user message has a "ctxIT_recent_question" marker.
+	// The latest assistant message has a "ctxIT_recent_question" marker.
 	history := []providers.Message{
 		{Role: "user", Content: "ctxIT_early_fact: we decided to use flock for all writes"},
 		{Role: "assistant", Content: strings.Repeat("acknowledged, I will use flock. ", 20)},
@@ -266,36 +266,33 @@ func TestIntegration_ContextCompactionOverflow(t *testing.T) {
 
 	beforeCount := len(history)
 
-	// -- Act: invoke forceCompression directly --------------------------------
-	result, ok := al.forceCompression(agent, sessionKey)
+	// -- Act: invoke windowTrim directly --------------------------------------
+	result, ok := al.windowTrim(agent, sessionKey)
 
-	// -- Assert: compression fired (ok=true) ----------------------------------
+	// -- Assert: trim fired (ok=true) ----------------------------------------
 	require.True(t, ok,
-		"forceCompression must return ok=true for a history with %d messages (> 2)", beforeCount)
+		"windowTrim must return ok=true for a history with %d messages (> 2)", beforeCount)
 
 	assert.Greater(t, result.DroppedMessages, 0,
-		"DroppedMessages must be > 0 after compression")
+		"DroppedMessages must be > 0 after trim")
 	assert.Greater(t, result.RemainingMessages, 0,
-		"RemainingMessages must be > 0 after compression; must not drop everything")
+		"RemainingMessages must be > 0 after trim; must not drop everything")
 	assert.Equal(t, beforeCount, result.DroppedMessages+result.RemainingMessages,
 		"DroppedMessages + RemainingMessages must equal original count")
 
 	// -- Assert: resulting history is well-formed -----------------------------
 	remaining := agent.Sessions.GetHistory(sessionKey)
 	require.Equal(t, result.RemainingMessages, len(remaining),
-		"Sessions.GetHistory must reflect the compressed count")
+		"Sessions.GetHistory must reflect the trimmed count")
 
 	for i, msg := range remaining {
 		assert.NotEmpty(t, msg.Role,
-			"message[%d] has empty role — history is corrupt after compression", i)
+			"message[%d] has empty role — history is corrupt after trim", i)
 		assert.True(t, msg.Role == "user" || msg.Role == "assistant" || msg.Role == "tool",
 			"message[%d] has unexpected role %q", i, msg.Role)
 	}
 
-	// No orphaned tool_result: every "tool" role message must be immediately
-	// preceded (in the remaining history) by an assistant message that contains
-	// tool calls, OR the entire preceding sequence must be valid. We check the
-	// simpler invariant: no "tool" message appears without a preceding "assistant".
+	// No orphaned tool_result: check the simpler invariant.
 	for i, msg := range remaining {
 		if msg.Role == "tool" {
 			assert.Greater(t, i, 0,
@@ -308,8 +305,6 @@ func TestIntegration_ContextCompactionOverflow(t *testing.T) {
 	}
 
 	// -- Assert: earliest fact was dropped, most-recent kept ------------------
-	// The early user fact was in the oldest messages. After dropping ~50%, it must
-	// be gone. The most-recent assistant message (ctxIT_recent_question) must survive.
 	allRemaining := strings.Join(func() []string {
 		out := make([]string, len(remaining))
 		for i, m := range remaining {
@@ -319,15 +314,20 @@ func TestIntegration_ContextCompactionOverflow(t *testing.T) {
 	}(), " ")
 
 	assert.NotContains(t, allRemaining, "ctxIT_early_fact",
-		"oldest user message (ctxIT_early_fact) must have been dropped by compression")
+		"oldest user message (ctxIT_early_fact) must have been evicted by windowTrim")
 
-	assert.Contains(t, allRemaining, "ctxIT_recent_question",
-		"most-recent assistant message (ctxIT_recent_question) must survive compression")
+	// With a very small context window (cw=1000, mt=512) the tool-definition
+	// tokens alone (~5876) exceed the history budget, so windowTrim always hits
+	// the FR-003 emergency floor: only the last USER message is retained (the
+	// assistant response is also dropped because even the bare user message may
+	// exceed budget when tool defs are included).  The key invariant is that the
+	// most-recent USER content survives and the early fact is gone.
+	assert.Contains(t, allRemaining, "apply the landlock policy",
+		"most-recent user message content must survive trim (FR-003 floor keeps last user msg)")
 
-	// -- Assert: compression note is in the session summary ------------------
+	// -- Assert: NO compression summary (FR-004) ------------------------------
+	// windowTrim MUST NOT write an "Emergency compression dropped" marker.
 	summary := agent.Sessions.GetSummary(sessionKey)
-	assert.Contains(t, summary, "Emergency compression dropped",
-		"session summary must contain the compression note after forceCompression")
-	assert.Contains(t, summary, "context limit",
-		"session summary compression note must mention 'context limit'")
+	assert.NotContains(t, summary, "Emergency compression dropped",
+		"windowTrim MUST NOT write a compression summary marker (FR-004)")
 }
