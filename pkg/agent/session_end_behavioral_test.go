@@ -25,7 +25,7 @@ import (
 // scriptedProvider is a mockProvider with a predetermined Chat response and
 // call-count observation. Exercises the session-end code path without a real
 // LLM. Records the last request so tests can assert recap-option hygiene
-// (max_tokens=250, extended_thinking=false, extra_body.reasoning.exclude=true).
+// (max_tokens=512, extended_thinking=false, extra_body.reasoning.enabled=false).
 type scriptedProvider struct {
 	mu           sync.Mutex
 	responseBody string
@@ -62,8 +62,8 @@ func (s *scriptedProvider) GetDefaultModel() string { return "scripted-model" }
 // TestRunRecap_HappyPath_PersistsLastSessionAndRetro exercises #35 end-to-end:
 // a transcript is written, CloseSession is invoked, and after the recap
 // goroutine completes the MemoryStore must contain LAST_SESSION.md + a retro.
-// Also pins FR-029a cost-guard opts (max_tokens=250, extended_thinking=false,
-// extra_body.reasoning.exclude=true) onto the Chat request.
+// Also pins FR-029a cost-guard opts (max_tokens=512, extended_thinking=false,
+// extra_body.reasoning.enabled=false) onto the Chat request.
 func TestRunRecap_HappyPath_PersistsLastSessionAndRetro(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", home)
@@ -139,15 +139,17 @@ func TestRunRecap_HappyPath_PersistsLastSessionAndRetro(t *testing.T) {
 		t.Errorf("last-session.md missing recap content; got:\n%s", lastSessionBytes)
 	}
 
-	// FR-029a: recap Chat call must set max_tokens=250, extended_thinking=false,
-	// and extra_body.reasoning.exclude=true.
+	// FR-029a: recap Chat call must set max_tokens=512, extended_thinking=false,
+	// and extra_body.reasoning.enabled=false (reasoning DISABLED — exclude only
+	// hides it while still consuming the token budget, starving glm-class recaps
+	// to empty content).
 	script.mu.Lock()
 	defer script.mu.Unlock()
 	if script.callCount != 1 {
 		t.Errorf("scripted Chat calls = %d, want 1", script.callCount)
 	}
-	if mt, _ := script.lastOpts["max_tokens"].(int); mt != 250 {
-		t.Errorf("opts.max_tokens = %v, want 250", script.lastOpts["max_tokens"])
+	if mt, _ := script.lastOpts["max_tokens"].(int); mt != 512 {
+		t.Errorf("opts.max_tokens = %v, want 512", script.lastOpts["max_tokens"])
 	}
 	if et, _ := script.lastOpts["extended_thinking"].(bool); et {
 		t.Error("opts.extended_thinking must be false")
@@ -157,8 +159,8 @@ func TestRunRecap_HappyPath_PersistsLastSessionAndRetro(t *testing.T) {
 		t.Fatal("opts.extra_body missing")
 	}
 	reasoning, _ := eb["reasoning"].(map[string]any)
-	if reasoning == nil || reasoning["exclude"] != true {
-		t.Errorf("opts.extra_body.reasoning.exclude must be true; got %v", eb)
+	if reasoning == nil || reasoning["enabled"] != false {
+		t.Errorf("opts.extra_body.reasoning.enabled must be false; got %v", eb)
 	}
 	if script.lastModel != "claude-haiku-3" {
 		t.Errorf("recap model = %q, want claude-haiku-3 (recap_model config)", script.lastModel)
