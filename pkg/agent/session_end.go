@@ -169,20 +169,24 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 		{Role: "user", Content: historyText + "\n\n" + recapPrompt},
 	}
 
-	// Cost-guard options (FR-029a): hard output cap + reasoning DISABLED.
+	// Cost-guard options (FR-029a): output cap + reasoning hints.
 	//
-	// reasoning:{enabled:false} (not exclude:true). On reasoning models like
-	// glm-5.2, exclude:true only HIDES reasoning from the response while the model
-	// still GENERATES it — so a low max_tokens is entirely consumed by reasoning
-	// and the recap comes back with empty content (finish=length), which parses
-	// to nothing and falls back to an "llm_error" stub. enabled:false stops the
-	// reasoning generation so the whole budget goes to the JSON recap. Verified
-	// against glm-5.2: enabled:false yields a complete recap within the cap; the
-	// budget is raised to 512 for headroom on fuller recaps (still cheap: one
-	// call per session close). extended_thinking:false is kept for Anthropic-style
-	// providers that honor it.
+	// max_tokens=2048: reasoning models like glm-5.2 on OpenRouter/Fireworks
+	// ignore the reasoning:{enabled:false} hint and always generate an internal
+	// reasoning trace before emitting content. With max_tokens=512 the reasoning
+	// trace itself consumes the entire budget (observed: ~435–566 reasoning tokens)
+	// leaving content=null, which JSON-parses to "" and falls into the
+	// json_parse_error fallback path — the nonce never lands in last-session.md.
+	// Raising to 2048 gives reasoning models ample room: ~500 reasoning + ~500
+	// content = 1000 tokens total, still well within the 2048 cap. The extra
+	// tokens are cheap (one call per session close, paid only when the LLM
+	// actually generates tokens, not just allocated). extended_thinking:false is
+	// kept for Anthropic-style providers that honour it and skip the reasoning
+	// phase entirely when set. reasoning:{enabled:false} is left in the
+	// extra_body because it DOES work on some OpenRouter routes and upstream
+	// providers, and is harmlessly ignored elsewhere.
 	opts := map[string]any{
-		"max_tokens":        512,
+		"max_tokens":        2048,
 		"extended_thinking": false,
 		"extra_body": map[string]any{
 			"reasoning": map[string]any{"enabled": false},
@@ -341,6 +345,17 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 
 	var parsed recapJSON
 	responseText := resp.Content
+
+	// Reasoning-model fallback: some providers (e.g. glm-5.2 on OpenRouter/Fireworks)
+	// ignore the reasoning:{enabled:false} hint and generate a reasoning trace. When
+	// content is empty but resp.Reasoning is non-empty, the model likely drafted its
+	// JSON inside the reasoning trace (observed pattern: the trace ends with a JSON
+	// block). Scan the reasoning field for a JSON object so the recap succeeds without
+	// requiring a retry with a different token budget.
+	if strings.TrimSpace(responseText) == "" && resp.Reasoning != "" {
+		responseText = extractJSONFromText(resp.Reasoning)
+	}
+
 	if parseErr := json.Unmarshal([]byte(responseText), &parsed); parseErr != nil {
 		// Model returned something that is not the expected JSON envelope.
 		// The raw body can still be useful for debugging recap-prompt regressions,
@@ -542,6 +557,51 @@ func (al *AgentLoop) AgentForSession(sessionID string) (*AgentInstance, error) {
 // classifyLLMError returns a short error class string for audit/fallback logging.
 // Falling into the "llm_error" default is logged at Warn so operators can see
 // the unclassified underlying error rather than just the bucket label.
+// extractJSONFromText scans text for the last outermost JSON object literal
+// (a "{...}" block). This is used as a fallback when a reasoning model places
+// its recap JSON inside the reasoning trace rather than in the content field.
+//
+// Strategy: walk backwards from the last '}' to find the matching '{', ignoring
+// nested objects. Returns the extracted JSON string, or "" if none found.
+func extractJSONFromText(text string) string {
+	// Find the last closing brace.
+	lastClose := strings.LastIndex(text, "}")
+	if lastClose < 0 {
+		return ""
+	}
+	// Walk backwards to find the matching opening brace, tracking nesting depth.
+	depth := 0
+	for i := lastClose; i >= 0; i-- {
+		switch text[i] {
+		case '}':
+			depth++
+		case '{':
+			depth--
+			if depth == 0 {
+				candidate := text[i : lastClose+1]
+				// Quick sanity check: must be parseable as a JSON object.
+				var probe map[string]any
+				if json.Unmarshal([]byte(candidate), &probe) == nil {
+					return candidate
+				}
+				// Not valid JSON — continue scanning for an earlier match.
+				// Update lastClose to look for the next-outermost block.
+				lastClose = i - 1
+				if lastClose < 0 {
+					return ""
+				}
+				lastClose = strings.LastIndex(text[:lastClose+1], "}")
+				if lastClose < 0 {
+					return ""
+				}
+				depth = 0
+				i = lastClose + 1 // restart scan from new lastClose (loop will decrement)
+			}
+		}
+	}
+	return ""
+}
+
 func classifyLLMError(err error) string {
 	if err == nil {
 		return ""
