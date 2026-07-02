@@ -17,7 +17,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -92,6 +91,10 @@ type AgentLoop struct {
 	mu               sync.RWMutex
 
 	// Concurrent turn management
+	// recallSpans holds the transient in-memory recall span per session
+	// (FR-019): key sessionKey (string), value *RecallSpan. Never persisted;
+	// set by recall_conversation, read/dropped by windowTrim + assembly.
+	recallSpans        sync.Map     // key: sessionKey (string), value: *RecallSpan
 	activeTurnStates   sync.Map     // key: sessionKey (string), value: *turnState
 	subTurnCounter     atomic.Int64 // Counter for generating unique SubTurn IDs
 	sessionActiveAgent sync.Map     // key: "session:"+sessionID (string), value: agentID (string); set by handoff, cleared on agent deletion
@@ -104,6 +107,13 @@ type AgentLoop struct {
 	// or file missing on disk). Observable via GetMediaRefsDropped for tests and
 	// diagnostics; incremented atomically from resolveMediaRefs hot path.
 	mediaRefsDropped atomic.Int64
+
+	// driftDropped counts bound-instance drift drops: inbound messages on a
+	// workspace-bound channel instance whose configured agent is unresolvable
+	// (deleted or a worker — not a chat target). Each drop increments this
+	// counter exactly once at the processMessage rejection point (ADR-029
+	// FR-028 / MAJ-003). Observable via GetDriftDropped for tests and diagnostics.
+	driftDropped atomic.Int64
 
 	reloadFunc    func() error
 	reloadPending atomic.Bool // set by TriggerReload; cleared by ClearReloadPending (called from gateway executeReload)
@@ -1418,15 +1428,27 @@ func registerSharedTools(
 			return al.GetRegistry()
 		}
 		onHandoffFrontend := func(evt tools.HandoffEvent) {
-			// Override is keyed by session_id so each session carries its own
-			// handoff state. Switching to another session never inherits this.
-			if evt.SessionID == "" {
-				return
+			// The next turn resolves the active agent via sessionScopeKey(msg):
+			//   webchat inbound carries a SessionID          → "session:"+SessionID
+			//   channel inbound (whatsapp/telegram/…) has NO → "chat:"+channel+":"+chatID
+			// Store the override under the SAME key(s) the inbound path will read.
+			// The session-scoped key backs GetSessionActiveAgent + the in-turn
+			// active-agent resolver; the chat-scoped key is what channel inbound
+			// messages actually look up — without it a channel handoff is silently
+			// dropped and routing falls back to ResolveRoute (the "agent stays" bug).
+			var keys []string
+			if evt.SessionID != "" {
+				keys = append(keys, "session:"+evt.SessionID)
 			}
-			if evt.AgentID == "" {
-				al.sessionActiveAgent.Delete("session:" + evt.SessionID)
-			} else {
-				al.sessionActiveAgent.Store("session:"+evt.SessionID, evt.AgentID)
+			if evt.Channel != "" && evt.Channel != "webchat" && evt.ChatID != "" {
+				keys = append(keys, "chat:"+evt.Channel+":"+evt.ChatID)
+			}
+			for _, k := range keys {
+				if evt.AgentID == "" {
+					al.sessionActiveAgent.Delete(k)
+				} else {
+					al.sessionActiveAgent.Store(k, evt.AgentID)
+				}
 			}
 		}
 		getContextWindow := func(targetAgentID string) int {
@@ -1621,11 +1643,14 @@ func registerSharedTools(
 				}
 				return false
 			})
-			// FR-6.2: full-policy gate for the synchronous "await" mode. The sync
-			// subagent tool has no explicit target, so the trust check is "can
-			// delegate at all"; mode + depth still apply.
-			subagentTool.SetDelegationDenyChecker(buildSubagentDelegationDenyChecker(
-				subagentAgentCfg, cfg.Agents.Defaults,
+			// FR-6.2: full-policy gate for the synchronous "await" mode. Uses the
+			// same buildDelegationDenyChecker as spawn (DelegationModeBackground)
+			// but with DelegationModeAwait, so targeted run_subagent(agent_id="X")
+			// is checked against the caller→X edge for the "await" mode, and
+			// untargeted run_subagent falls back to evalUntargetedDelegation.
+			subagentTool.SetDelegationDenyChecker(buildDelegationDenyChecker(
+				currentAgentID, subagentAgentCfg, cfg.Agents.Defaults,
+				config.DelegationModeAwait, registry,
 			))
 			agent.Tools.Register(subagentTool)
 
@@ -1759,6 +1784,19 @@ func registerSharedTools(
 					al.browserMgr = mgr
 					al.mu.Unlock()
 				}
+			}
+		}
+
+		// recall_conversation (FR-008, FR-013, FR-019): session-scoped archive
+		// paging. The archive reader is the shared session store (ReadArchive
+		// reads the full log including evicted turns); the span setter is the
+		// AgentLoop itself (setRecallSpan / dropRecallSpan on al.recallSpans).
+		// The routing session key is read from ctx at Execute time
+		// (tools.ToolSessionKey) — no per-agent construction needed.
+		// Excluded for the "main" gateway agent (no memory tools there either).
+		if agentID != "main" {
+			if sharedSessionStore := al.GetSessionStore(); sharedSessionStore != nil {
+				agent.Tools.Register(NewRecallConversationTool(sharedSessionStore, al))
 			}
 		}
 
@@ -2332,32 +2370,6 @@ func (al *AgentLoop) NewSysagentDelegationDeny() func(ctx context.Context, calle
 			config.DelegationModeTask, nil,
 		)
 		return gate(ctx, targetAgentID)
-	}
-}
-
-// buildSubagentDelegationDenyChecker returns the per-workspace, graph-authoritative
-// gate for the synchronous subagent tool (mode = "await"). The sync subagent tool
-// has no explicit target, so the trust check is "can this agent delegate at all"
-// in the effective workspace graph (at least one outgoing edge whose modes permit
-// "await"), then mode and depth apply identically to the targeted path.
-//
-// The graph (workspaces/<id>.json) is the SOLE runtime authority; the per-agent
-// config.DelegationPolicy is seed-only and is not consulted here. FAIL-CLOSED on
-// graph load failure or a missing workspace. The agentCfg parameter is retained
-// for the call-site signature but only its ID is used; defaults supplies the
-// global depth ceiling.
-func buildSubagentDelegationDenyChecker(
-	agentCfg *config.AgentConfig,
-	defaults config.AgentDefaults,
-) func(ctx context.Context) *tools.DelegationDenial {
-	var callerAgentID string
-	if agentCfg != nil {
-		callerAgentID = agentCfg.ID
-	}
-	globalDepthCap := defaults.SubTurn.MaxDepth
-
-	return func(ctx context.Context) *tools.DelegationDenial {
-		return evalUntargetedDelegation(ctx, callerAgentID, config.DelegationModeAwait, globalDepthCap)
 	}
 }
 
@@ -3208,6 +3220,11 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 		al.wireSysagentDepsLocked(registry, al.sysagentDeps)
 	}
 
+	// Re-wire per-turn delegation injectors on the new registry so that the
+	// updated DelegationPolicy (from the fresh AgentInstances) is reflected
+	// on every agent's next turn without a static-prompt cache bust.
+	wireDelegationInjectors(al, registry)
+
 	// Atomically swap the config and registry under write lock
 	// This ensures readers see a consistent pair
 	al.mu.Lock()
@@ -3580,12 +3597,25 @@ func (al *AgentLoop) rebuildChannelSessionIndex() {
 
 // resolveOrCreateChannelSession returns the shared session ID for (channel, chatID),
 // creating a new session in the shared store if none exists yet.
+// workspaceID is stamped onto newly-created sessions when non-empty (ADR-029
+// FR-022: a session created by a bound channel instance inherits the instance's
+// workspace_id). Already-existing sessions are NOT patched — the index hit
+// returns the existing ID unchanged (workspace_id was set at creation time).
 // Returns "" if the shared store is unavailable or inputs are empty.
-func (al *AgentLoop) resolveOrCreateChannelSession(channel, chatID, agentID, displayName string) string {
+func (al *AgentLoop) resolveOrCreateChannelSession(channel, instanceID, chatID, agentID, displayName, workspaceID string) string {
 	if al.sharedSessionStore == nil || channel == "" || chatID == "" {
 		return ""
 	}
-	key := channel + "/" + chatID
+	// Index by the channel INSTANCE, not the bare type, so two instances of the
+	// same type (e.g. whatsapp.eu and whatsapp.us) sharing a chat ID get DISTINCT
+	// sessions (ADR-029 FR-022 / US-9 — BUG-2). instanceID is the canonical
+	// instance identity (== channel for legacy single-instance); fall back
+	// defensively when unstamped.
+	indexID := instanceID
+	if indexID == "" {
+		indexID = channel
+	}
+	key := indexID + "/" + chatID
 	if v, ok := al.channelSessionIdx.Load(key); ok {
 		return v.(string)
 	}
@@ -3598,6 +3628,13 @@ func (al *AgentLoop) resolveOrCreateChannelSession(channel, chatID, agentID, dis
 		logger.WarnCF("agent", "Failed to create channel session",
 			map[string]any{"channel": channel, "chat_id": chatID, "error": err.Error()})
 		return ""
+	}
+	// FR-022: stamp workspace_id on newly-created sessions for bound instances.
+	if workspaceID != "" {
+		if patchErr := al.sharedSessionStore.SetMeta(meta.ID, session.MetaPatch{WorkspaceID: &workspaceID}); patchErr != nil {
+			logger.WarnCF("agent", "Failed to stamp workspace_id on channel session",
+				map[string]any{"session_id": meta.ID, "workspace_id": workspaceID, "error": patchErr.Error()})
+		}
 	}
 	al.channelSessionIdx.Store(key, meta.ID)
 	return meta.ID
@@ -3839,6 +3876,14 @@ func (al *AgentLoop) GetMediaStore() media.MediaStore {
 // on disk). Safe for concurrent access; incremented on the hot turn path.
 func (al *AgentLoop) GetMediaRefsDropped() int64 {
 	return al.mediaRefsDropped.Load()
+}
+
+// GetDriftDropped returns the cumulative count of bound-instance drift drops:
+// inbound messages on a workspace-bound channel instance whose configured agent
+// was unresolvable (deleted or a worker). Safe for concurrent access;
+// incremented atomically in resolveMessageRoute (ADR-029 FR-028 / MAJ-003).
+func (al *AgentLoop) GetDriftDropped() int64 {
+	return al.driftDropped.Load()
 }
 
 // SetTranscriber injects a voice transcriber for agent-level audio transcription.
@@ -4279,6 +4324,40 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 
 	route, agent, routeErr := al.resolveMessageRoute(msg)
 	if routeErr != nil {
+		// ADR-029 FR-028/MAJ-003: emit the drift-drop counter and audit event
+		// exactly once — here, at the single point where the message is actually
+		// rejected.  resolveMessageRoute returns route.Drop=true only for
+		// workspace-bound instances whose configured agent is unresolvable
+		// (deleted or a worker).  resolveMessageRoute itself is side-effect-free
+		// w.r.t. this counter so that its multiple callers (resolveSteeringTarget,
+		// buildContinuationTarget) do not double-count the same drop.
+		if route.Drop {
+			instanceID := inboundInstanceID(msg)
+			wsID := ""
+			intendedAgent := ""
+			if identity := al.resolveInboundIdentity(instanceID); identity != nil {
+				intendedAgent = strings.TrimSpace(identity.ID)
+			}
+			if cfg := al.GetConfig(); cfg != nil {
+				if inst, ok := cfg.Channels[instanceID]; ok {
+					wsID = inst.WorkspaceID
+				}
+			}
+			al.driftDropped.Add(1)
+			if al.auditLogger != nil {
+				_ = al.auditLogger.Log(&audit.Entry{
+					Event:    audit.EventChannelRoutingDriftDrop,
+					Decision: audit.DecisionDeny,
+					Details: map[string]any{
+						"instance_id":       instanceID,
+						"workspace_id":      wsID,
+						"intended_agent_id": intendedAgent,
+						"chat_id":           msg.ChatID,
+						"reason":            "bound agent unresolvable (deleted or worker — not a chat target)",
+					},
+				})
+			}
+		}
 		return "", nil, routeErr
 	}
 
@@ -4305,9 +4384,20 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 
 	// For non-webchat channel messages arriving without a session ID, create or
 	// resume a persistent shared session so they appear in the session history panel.
+	// FR-022 (ADR-029): for a bound channel instance, stamp the session with the
+	// instance's workspace_id so it appears linked to the right workspace.
 	if msg.SessionID == "" && msg.Channel != "webchat" && msg.Channel != "system" && msg.Channel != "" {
+		instanceSessionID := inboundInstanceID(msg)
+		sessionWorkspaceID := ""
+		if instanceSessionID != "" {
+			if sessionCfg := al.GetConfig(); sessionCfg != nil {
+				if instCfg, ok := sessionCfg.Channels[instanceSessionID]; ok {
+					sessionWorkspaceID = instCfg.WorkspaceID
+				}
+			}
+		}
 		if sid := al.resolveOrCreateChannelSession(
-			msg.Channel, msg.ChatID, agent.ID, msg.Sender.DisplayName,
+			msg.Channel, instanceSessionID, msg.ChatID, agent.ID, msg.Sender.DisplayName, sessionWorkspaceID,
 		); sid != "" {
 			msg.SessionID = sid
 		}
@@ -4559,16 +4649,59 @@ func (al *AgentLoop) resolveMessageRoute(msg bus.InboundMessage) (routing.Resolv
 	}
 
 	instanceID := inboundInstanceID(msg)
+	identity := al.resolveInboundIdentity(instanceID)
+
+	// ADR-029 FR-012/FR-014: set BoundInstance=true when the instance is
+	// workspace-bound AND carries an agent-kind identity. Both conditions must
+	// hold: a bare identity without a workspace (legacy routing) must not trigger
+	// the drift-drop guard, and a workspace binding without an agent identity
+	// cannot be drift-checked (nothing to validate). The drift guard inside
+	// ResolveRoute then enforces that a workspace-bound instance never falls back
+	// to the global default when its agent is unresolvable.
+	var boundInstance bool
+	if identity != nil && strings.ToLower(strings.TrimSpace(identity.Kind)) == "agent" {
+		if cfg := al.GetConfig(); cfg != nil {
+			if inst, ok := cfg.Channels[instanceID]; ok && inst.WorkspaceID != "" {
+				boundInstance = true
+			}
+		}
+	}
+
 	route := registry.ResolveRoute(routing.RouteInput{
-		Channel:    msg.Channel,
-		AccountID:  inboundMetadata(msg, metadataKeyAccountID),
-		Peer:       extractPeer(msg),
-		ParentPeer: extractParentPeer(msg),
-		GuildID:    inboundMetadata(msg, metadataKeyGuildID),
-		TeamID:     inboundMetadata(msg, metadataKeyTeamID),
-		InstanceID: instanceID,
-		Identity:   al.resolveInboundIdentity(instanceID),
+		Channel:       msg.Channel,
+		AccountID:     inboundMetadata(msg, metadataKeyAccountID),
+		Peer:          extractPeer(msg),
+		ParentPeer:    extractParentPeer(msg),
+		GuildID:       inboundMetadata(msg, metadataKeyGuildID),
+		TeamID:        inboundMetadata(msg, metadataKeyTeamID),
+		InstanceID:    instanceID,
+		Identity:      identity,
+		BoundInstance: boundInstance,
 	})
+
+	// ADR-029 FR-012/FR-028: a drift drop means the bound agent is unresolvable.
+	// Do NOT call GetDefaultAgent — enter the FR-015 unroutable path directly.
+	// The counter increment and audit event are emitted ONCE at the processMessage
+	// rejection point (the single true drop site), NOT here.  resolveMessageRoute
+	// is a side-effect-free resolver: multiple call sites (resolveSteeringTarget,
+	// buildContinuationTarget) invoke it on the same message, so any emission here
+	// would fire multiple times per inbound message and corrupt the FR-028/MAJ-003
+	// counter and audit trail.  Return the route with Drop=true so the caller can
+	// detect the drift condition and emit the structured event exactly once.
+	if route.Drop {
+		intendedAgent := ""
+		if identity != nil {
+			intendedAgent = strings.TrimSpace(identity.ID)
+		}
+		logger.WarnCF("agent", "Bound-instance drift drop: configured agent unresolvable; message rejected (ADR-029 FR-012)",
+			map[string]any{
+				"instance_id": instanceID,
+				"channel":     msg.Channel,
+				"chat_id":     msg.ChatID,
+				"matched_by":  route.MatchedBy,
+			})
+		return route, nil, fmt.Errorf("no agent available for route (agent_id=%s)", intendedAgent)
+	}
 
 	agent, ok := registry.GetAgent(route.AgentID)
 	if !ok {
@@ -4611,11 +4744,23 @@ func sessionScopeKey(msg bus.InboundMessage) string {
 // agentSessionKey builds the per-agent session key combining agentID with the
 // message's scope bucket. Uses session-scoped format when SessionID is known;
 // falls back to chat-scoped format for channels that haven't minted a session.
+//
+// For channel inbound, the chat-scoped key uses msg.InstanceID when non-empty
+// (ADR-029 FR-023, MAJ-002): two instances of the same channel type (e.g.
+// "whatsapp.eu" and "whatsapp.us") with the same ChatID must NOT share a
+// transcript key. Legacy channels that have not yet been updated to stamp
+// InstanceID fall back to msg.Channel (the type), preserving existing behavior.
 func agentSessionKey(agentID string, msg bus.InboundMessage) string {
 	if msg.SessionID != "" {
 		return fmt.Sprintf("agent:%s:session:%s", agentID, msg.SessionID)
 	}
-	return fmt.Sprintf("agent:%s:chat:%s:%s", agentID, msg.Channel, msg.ChatID)
+	// Use the stamped InstanceID when available (per-instance isolation);
+	// fall back to the channel type for adapters that have not yet been updated.
+	instanceOrChannel := msg.Channel
+	if msg.InstanceID != "" {
+		instanceOrChannel = msg.InstanceID
+	}
+	return fmt.Sprintf("agent:%s:chat:%s:%s", agentID, instanceOrChannel, msg.ChatID)
 }
 
 func (al *AgentLoop) resolveSteeringTarget(msg bus.InboundMessage) (string, string, bool) {
@@ -5054,17 +5199,8 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	}
 	ts.captureRestorePoint(history, summary)
 
-	messages := ts.agent.ContextBuilder.BuildMessages(
-		history,
-		summary,
-		ts.userMessage,
-		ts.media,
-		ts.channel,
-		ts.chatID,
-		ts.opts.SenderID,
-		ts.opts.SenderDisplayName,
-		activeSkillNames(ts.agent, ts.opts)...,
-	)
+	// Site-1: initial assembly (CRITICAL 2 — error handled inside assembleMessages).
+	messages := al.assembleMessages(turnCtx, ts, history, summary, ts.userMessage, ts.media, activeSkillNames(ts.agent, ts.opts))
 
 	cfg := al.GetConfig()
 	maxMediaSize := cfg.Agents.Defaults.GetMaxMediaSize()
@@ -5073,9 +5209,9 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	if !ts.opts.NoHistory {
 		toolDefs := ts.agent.Tools.ToProviderDefs()
 		if isOverContextBudget(ts.agent.ContextWindow, messages, toolDefs, ts.agent.MaxTokens) {
-			logger.WarnCF("agent", "Proactive compression: context budget exceeded before LLM call",
+			logger.WarnCF("agent", "Proactive window trim: context budget exceeded before LLM call",
 				map[string]any{"session_key": ts.sessionKey})
-			if compression, ok := al.forceCompression(ts.agent, ts.sessionKey); ok {
+			if compression, ok := al.windowTrim(ts.agent, ts.sessionKey); ok {
 				al.emitEvent(
 					EventKindContextCompress,
 					ts.eventMeta("runTurn", "turn.context.compress"),
@@ -5087,14 +5223,10 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 				)
 				ts.refreshRestorePointFromSession(ts.agent)
 			}
+			// Site-2: post-proactive-trim assembly.
 			newHistory := ts.agent.Sessions.GetHistory(ts.sessionKey)
 			newSummary := ts.agent.Sessions.GetSummary(ts.sessionKey)
-			messages = ts.agent.ContextBuilder.BuildMessages(
-				newHistory, newSummary, ts.userMessage,
-				ts.media, ts.channel, ts.chatID,
-				ts.opts.SenderID, ts.opts.SenderDisplayName,
-				activeSkillNames(ts.agent, ts.opts)...,
-			)
+			messages = al.assembleMessages(turnCtx, ts, newHistory, newSummary, ts.userMessage, ts.media, activeSkillNames(ts.agent, ts.opts))
 			messages = resolveMediaRefs(messages, turnMediaStore, maxMediaSize, ts.agent.Model)
 		}
 	}
@@ -5848,7 +5980,7 @@ turnLoop:
 						callMessages, toolDefs, ts.agent.MaxTokens,
 					) {
 						compactionAttemptedOnTimeout = true
-						if compression, ok := al.forceCompression(ts.agent, ts.sessionKey); ok {
+						if compression, ok := al.windowTrim(ts.agent, ts.sessionKey); ok {
 							al.emitEvent(
 								EventKindContextCompress,
 								ts.eventMeta("runTurn", "turn.context.compress"),
@@ -5869,20 +6001,17 @@ turnLoop:
 								},
 							)
 							ts.refreshRestorePointFromSession(ts.agent)
+							// Site-3: post-timeout-trim assembly.
 							newHistory := ts.agent.Sessions.GetHistory(ts.sessionKey)
 							newSummary := ts.agent.Sessions.GetSummary(ts.sessionKey)
-							messages = ts.agent.ContextBuilder.BuildMessages(
-								newHistory, newSummary, "",
-								nil, ts.channel, ts.chatID, ts.opts.SenderID, ts.opts.SenderDisplayName,
-								activeSkillNames(ts.agent, ts.opts)...,
-							)
+							messages = al.assembleMessages(turnCtx, ts, newHistory, newSummary, "", nil, activeSkillNames(ts.agent, ts.opts))
 							callMessages = messages
 							if gracefulTerminal {
 								callMessages = append(append([]providers.Message(nil), messages...), ts.interruptHintMessage())
 							}
 						} else {
-							// Compaction failed: return partial content + timeout message.
-							logger.WarnCF("agent", "Compaction failed during timeout recovery; returning partial response",
+							// Trim failed: return partial content + timeout message.
+							logger.WarnCF("agent", "Window trim failed during timeout recovery; returning partial response",
 								map[string]any{"agent_id": ts.agent.ID, "iteration": iteration})
 							break
 						}
@@ -5978,7 +6107,7 @@ turnLoop:
 					}
 				}
 
-				if compression, ok := al.forceCompression(ts.agent, ts.sessionKey); ok {
+				if compression, ok := al.windowTrim(ts.agent, ts.sessionKey); ok {
 					al.emitEvent(
 						EventKindContextCompress,
 						ts.eventMeta("runTurn", "turn.context.compress"),
@@ -5990,22 +6119,19 @@ turnLoop:
 					)
 					ts.refreshRestorePointFromSession(ts.agent)
 				} else {
-					// C3: compaction returned ok=false (nothing to compress). Mark the
+					// C3: windowTrim returned ok=false (nothing to trim). Mark the
 					// flag so the NEXT retry attempt will break rather than burning more
 					// budget on identical data. We still allow this single retry through
 					// because the provider might succeed without context reduction.
 					contextCompressionFailed = true
-					logger.WarnCF("agent", "Compaction failed during context overflow recovery; will not retry further",
+					logger.WarnCF("agent", "Window trim failed during context overflow recovery; will not retry further",
 						map[string]any{"agent_id": ts.agent.ID, "iteration": iteration})
 				}
 
+				// Site-4: post-context-overflow-trim assembly.
 				newHistory := ts.agent.Sessions.GetHistory(ts.sessionKey)
 				newSummary := ts.agent.Sessions.GetSummary(ts.sessionKey)
-				messages = ts.agent.ContextBuilder.BuildMessages(
-					newHistory, newSummary, "",
-					nil, ts.channel, ts.chatID, ts.opts.SenderID, ts.opts.SenderDisplayName,
-					activeSkillNames(ts.agent, ts.opts)...,
-				)
+				messages = al.assembleMessages(turnCtx, ts, newHistory, newSummary, "", nil, activeSkillNames(ts.agent, ts.opts))
 				callMessages = messages
 				if gracefulTerminal {
 					callMessages = append(append([]providers.Message(nil), messages...), ts.interruptHintMessage())
@@ -7396,75 +7522,272 @@ type compressionResult struct {
 	RemainingMessages int
 }
 
-// forceCompression aggressively reduces context when the limit is hit.
-// It drops the oldest ~50% of Turns (a Turn is a complete user→LLM→response
-// cycle, as defined in #1316), so tool-call sequences are never split.
+// assembleMessages is the single consistent helper that reads the archive,
+// builds the breadcrumb, splices the recall span, and calls BuildMessages —
+// deduplicating the four former call sites (CRITICAL 2).
 //
-// If the history is a single Turn with no safe split point, the function
-// falls back to keeping only the most recent user message. This breaks
-// Turn atomicity as a last resort to avoid a context-exceeded loop.
+// It reads the archive under ONE consistent snapshot so the breadcrumb and
+// the window see the same archive state (avoids the turn-number race). On a
+// ReadArchive error it logs at ERROR with a stable error id and emits a
+// FALLBACK breadcrumb stub so the recall path stays discoverable.
 //
-// Session history contains only user/assistant/tool messages — the system
-// prompt is built dynamically by BuildMessages and is NOT stored here.
-// The compression note is recorded in the session summary so that
-// BuildMessages can include it in the next system prompt.
-func (al *AgentLoop) forceCompression(agent *AgentInstance, sessionKey string) (compressionResult, bool) {
-	history := agent.Sessions.GetHistory(sessionKey)
-	if len(history) <= 2 {
+// Callers pass fresh history+summary (post-trim when called after windowTrim),
+// the current user message + media, and active skill names. The recall span is
+// read from al.recallSpans for the given sessionKey.
+func (al *AgentLoop) assembleMessages(
+	ctx context.Context,
+	ts *turnState,
+	history []providers.Message,
+	summary, userMsg string,
+	media []string,
+	skillNames []string,
+) []providers.Message {
+	archive, archErr := ts.agent.Sessions.ReadArchive(ctx, ts.sessionKey)
+	var breadcrumb string
+	if archErr != nil {
+		logger.ErrorCF("agent", "archive-read-error: could not read archive for breadcrumb; recall may be impaired",
+			map[string]any{
+				"session_key": ts.sessionKey,
+				"error":       archErr.Error(),
+			})
+		// Fallback stub so the model knows earlier turns exist and how to page them.
+		breadcrumb = "## Earlier in this conversation\n" +
+			"Earlier turns exist but could not be indexed due to a storage error. " +
+			"Use the recall_conversation tool with a turn_range to retrieve them."
+	} else {
+		breadcrumb = buildBreadcrumb(archive, history, breadcrumbTokenCap)
+	}
+	spanMsgs := al.activeRecallSpan(ts.sessionKey).Messages()
+	return ts.agent.ContextBuilder.BuildMessages(
+		history,
+		summary,
+		userMsg,
+		media,
+		ts.opts.WorkspaceID,
+		ts.channel,
+		ts.chatID,
+		ts.opts.SenderID,
+		ts.opts.SenderDisplayName,
+		breadcrumb,
+		spanMsgs,
+		skillNames...,
+	)
+}
+
+// evictionTotal counts successful windowTrim evictions (FR-018,
+// context_eviction_total). Exported for test assertions.
+var evictionTotal atomic.Int64
+
+// skipAdvanceTotal counts TruncateHistory calls that actually advanced Skip
+// (FR-018, context_skip_advance_total). Exported for test assertions.
+var skipAdvanceTotal atomic.Int64
+
+// windowTrim replaces forceCompression (FR-001/002/003/004). It evicts the
+// oldest whole Turn(s) from the live window by advancing meta.Skip until the
+// assembled token budget fits, deleting zero bytes from disk.
+//
+// Algorithm (FR-001):
+//  1. Read the current post-Skip live window via GetHistory.
+//  2. If len(window) <= 2, nothing to trim — return false.
+//  3. Drop the recall span first (FR-019) if active and over budget; re-check.
+//  4. Build the 5%-headroom budget target.
+//  5. Walk Turn boundaries from oldest-first; pick the smallest b such that
+//     window[b:] + toolDefs + recallSpanTokens fits in budget.
+//  6. keepLast = len(window) - b; call TruncateHistory (window-relative).
+//  7. FR-003 floor: if no boundary fits (single huge Turn), keep only the
+//     most-recent user Turn and terminate.
+//
+// Returns a compressionResult with DroppedMessages/RemainingMessages for
+// event emission, and ok=true when eviction actually occurred.
+func (al *AgentLoop) windowTrim(agent *AgentInstance, sessionKey string) (compressionResult, bool) {
+	window := agent.Sessions.GetHistory(sessionKey)
+	if len(window) <= 1 {
+		// Nothing to evict: a single-message window cannot be shrunk further.
 		return compressionResult{}, false
 	}
 
-	// Split at a Turn boundary so no tool-call sequence is torn apart.
-	// splitHistoryAtTurnMidpoint gives us (dropped, kept, ok); ok=false
-	// means no safe boundary — we then fall back to keeping only the
-	// most recent user message (Turn atomicity last-resort break).
-	var keptHistory []providers.Message
-	_, kept, ok := splitHistoryAtTurnMidpoint(history)
-	if !ok {
-		// No safe Turn boundary — the entire history is a single Turn
-		// (e.g. one user message followed by a massive tool response).
-		// Keeping everything would leave the agent stuck in a context-
-		// exceeded loop, so fall back to keeping only the most recent
-		// user message. This breaks Turn atomicity as a last resort.
-		for i := len(history) - 1; i >= 0; i-- {
-			if history[i].Role == "user" {
-				keptHistory = []providers.Message{history[i]}
+	toolDefs := agent.Tools.ToProviderDefs()
+	toolDefsTokens := estimateToolDefsTokens(toolDefs)
+
+	// Recall span tokens — updated after a potential drop below.
+	recallSpan := al.activeRecallSpan(sessionKey)
+	recallSpanTokens := 0
+	if recallSpan != nil {
+		recallSpanTokens = recallSpan.Tokens
+	}
+
+	contextWindow := agent.ContextWindow
+	if contextWindow <= 0 {
+		contextWindow = 128000
+	}
+	maxTokens := agent.MaxTokens
+
+	// 5% headroom target: budget for the window must leave room for a normal
+	// next-turn response and the 5% slack so we don't immediately re-trim.
+	headroom := (contextWindow + 19) / 20 // ceil(0.05 * contextWindow)
+
+	// M3 fix: subtract pinned-core (system prompt) + breadcrumb overhead so the
+	// suffix fit-check uses the same budget basis as isOverContextBudget (which
+	// counts the system message). On small-window models, omitting these causes
+	// under-eviction — the assembled request is still over budget after trim.
+	//
+	// Estimate the system prompt token cost via the ContextBuilder cache:
+	// the static prompt is already cached, so BuildSystemPromptWithCache is cheap.
+	// We estimate using the same chars-per-token ratio as estimateMessageTokens.
+	var pinnedCoreOverhead int
+	if agent.ContextBuilder != nil {
+		sysPrompt := agent.ContextBuilder.BuildSystemPromptWithCache()
+		// chars*2/5 ≈ tokens — exactly the same heuristic as estimateMessageTokens
+		// (which uses chars*2/5 after adding per-message overhead). chars/4 would
+		// underestimate by ~38%, causing under-eviction on small-window models.
+		pinnedCoreOverhead = len(sysPrompt) * 2 / 5
+	}
+	// breadcrumbTokenCap is the hard cap on the breadcrumb block (~1000 tokens);
+	// use it as a conservative estimate of the breadcrumb overhead.
+	pinnedCoreOverhead += breadcrumbTokenCap
+
+	budget := contextWindow - maxTokens - headroom - pinnedCoreOverhead
+
+	// FR-019 drop-span-first: if an active span exists and we're over budget,
+	// drop it and re-check. Only evict real window Turns if still over budget.
+	currentWindowTokens := sumMessageTokens(window)
+	if recallSpan != nil && (currentWindowTokens+toolDefsTokens+recallSpanTokens+maxTokens > contextWindow) {
+		al.dropRecallSpan(sessionKey, "pressure")
+		recallSpanTokens = 0
+		// Re-check against the same budget basis used for the suffix fit-check
+		// below (contextWindow − maxTokens − headroom − pinnedCoreOverhead).
+		// Using raw contextWindow here would pass cases that the suffix walk
+		// would still reject, causing unnecessary evictions on the next call.
+		if currentWindowTokens+toolDefsTokens <= budget {
+			return compressionResult{}, false
+		}
+	}
+
+	// Walk Turn boundaries (oldest first) to find the smallest cut that fits.
+	boundaries := parseTurnBoundaries(window)
+
+	// Find the smallest boundary index b such that window[b:] fits in budget.
+	cutIdx := -1 // -1 means no boundary fits
+	for _, b := range boundaries {
+		if b == 0 {
+			// Boundary at 0 keeps everything — not a useful cut.
+			continue
+		}
+		suffix := window[b:]
+		suffixTokens := sumMessageTokens(suffix)
+		if suffixTokens+toolDefsTokens+recallSpanTokens <= budget {
+			cutIdx = b
+			break
+		}
+	}
+
+	// Determine how many messages to keep (tail of the live window).
+	// cutIdx >= 0: normal path — keep window[cutIdx:].
+	// cutIdx < 0 (FR-003 floor): keep from the most-recent user message onward
+	//   (the last complete Turn in the live window).
+	//
+	// Both paths call TruncateHistory (Skip-advancing, archive-preserving; zero
+	// bytes deleted from the JSONL file). SetHistory is NEVER used — it would
+	// overwrite the entire JSONL and reset Skip=0, permanently destroying evicted
+	// turns (SC-001). The floor keeps window[lastUserIdx:] — the user message and
+	// any following assistant/tool messages — not just the bare user message.
+	droppedCount := 0
+	if cutIdx >= 0 {
+		// Normal path: tail-of-window keeps are handled by TruncateHistory.
+		// TruncateHistory advances meta.Skip (archive-preserving; zero bytes
+		// deleted from the JSONL file). SetHistory is NOT used here.
+		keepLast := len(window) - cutIdx
+		droppedCount = len(window) - keepLast
+		agent.Sessions.TruncateHistory(sessionKey, keepLast)
+	} else {
+		// FR-003: emergency floor — no boundary fits (single huge Turn).
+		// Keep the messages from the most-recent user message onward. This is
+		// the last complete Turn in the window (user message + any following
+		// assistant/tool messages). TruncateHistory advances meta.Skip to
+		// exactly that position — archive-preserving, no SetHistory.
+		lastUserIdx := -1
+		for i := len(window) - 1; i >= 0; i-- {
+			if window[i].Role == "user" {
+				lastUserIdx = i
 				break
 			}
 		}
-	} else {
-		keptHistory = kept
+		keepStart := lastUserIdx
+		if keepStart < 0 {
+			// Degenerate: no user message at all — keep last message.
+			keepStart = len(window) - 1
+		}
+		keepLast := len(window) - keepStart
+		droppedCount = len(window) - keepLast
+		agent.Sessions.TruncateHistory(sessionKey, keepLast)
 	}
 
-	droppedCount := len(history) - len(keptHistory)
-
-	// Record compression in the session summary so BuildMessages includes it
-	// in the system prompt. We do not modify history messages themselves.
-	existingSummary := agent.Sessions.GetSummary(sessionKey)
-	compressionNote := fmt.Sprintf(
-		"[Emergency compression dropped %d oldest messages due to context limit]",
-		droppedCount,
-	)
-	if existingSummary != "" {
-		compressionNote = existingSummary + "\n\n" + compressionNote
-	}
-	agent.Sessions.SetSummary(sessionKey, compressionNote)
-
-	agent.Sessions.SetHistory(sessionKey, keptHistory)
 	if saveErr := agent.Sessions.Save(sessionKey); saveErr != nil {
-		logger.ErrorCF("agent", "forceCompression: failed to persist compressed session",
+		logger.ErrorCF("agent", "windowTrim: failed to persist trimmed session",
 			map[string]any{"session_key": sessionKey, "error": saveErr.Error()})
 	}
 
-	logger.WarnCF("agent", "Forced compression executed", map[string]any{
-		"session_key":  sessionKey,
-		"dropped_msgs": droppedCount,
-		"new_count":    len(keptHistory),
-	})
+	// M4 fix: verify the window actually shrank after the TruncateHistory call.
+	// The backends' TruncateHistory is fire-and-forget (errors are logged, not
+	// returned). Re-read GetHistory and compare: if the window is the same size
+	// as before, the trim silently failed — log the error and return ok=false so
+	// the caller does not misreport a successful eviction.
+	postWindow := agent.Sessions.GetHistory(sessionKey)
+	if len(postWindow) >= len(window) {
+		logger.ErrorCF("agent", "windowTrim: TruncateHistory did not shrink the window (backend write may have failed)",
+			map[string]any{
+				"session_key": sessionKey,
+				"before":      len(window),
+				"after":       len(postWindow),
+			})
+		return compressionResult{}, false
+	}
+
+	evictionTotal.Add(1)
+	// skipAdvanceTotal counts Skip-advancing TruncateHistory calls. Both the
+	// normal path and the FR-003 floor path now use TruncateHistory (Skip-
+	// preserving), so increment whenever droppedCount > 0.
+	if droppedCount > 0 {
+		skipAdvanceTotal.Add(1)
+	}
+
+	keptCount := len(postWindow) // use the verified post-trim window size
+
+	// M5 / FR-018: emit context_archive_bytes by reading the full archive.
+	// This is done after the confirmed trim so the stat reflects the actual
+	// post-eviction archive size (which is UNCHANGED — eviction never deletes
+	// bytes from the JSONL file, only advances Skip). The byte count is emitted
+	// as a structured log field so it is observable in production without a
+	// full metrics framework. Only done when we have an archive reader.
+	archiveBytes := int64(-1) // -1 indicates unavailable (sentinel; explained below)
+	if archived, err := agent.Sessions.ReadArchive(context.Background(), sessionKey); err == nil {
+		// Estimate archive size from the number of archived messages (each JSON
+		// line is typically 100–500 bytes; use message count as a proxy).
+		// Actual byte stat requires fs.Stat — not exposed through SessionStore.
+		// For now: count is a proxy observable alongside the real skip value.
+		archiveBytes = int64(len(archived))
+	} else {
+		// M5: ReadArchive error post-eviction — the eviction itself succeeded
+		// (M4 verified the window shrank), but the archive byte stat is
+		// unavailable. Log at DEBUG so operators can correlate -1 in the warn
+		// below with a transient I/O issue without polluting the warn stream.
+		logger.DebugCF("agent", "windowTrim: M5 ReadArchive failed; context_archive_lines will be -1 (sentinel)",
+			map[string]any{"session_key": sessionKey, "error": err.Error()})
+	}
+
+	logger.WarnCF("agent", "windowTrim: evicted oldest Turns from live window",
+		map[string]any{
+			"session_key":            sessionKey,
+			"turns_evicted":          droppedCount,
+			"kept_msgs":              keptCount,
+			"budget":                 budget,
+			"context_archive_lines":  archiveBytes, // FR-018 context_archive_bytes proxy
+			"context_eviction_total": evictionTotal.Load(),
+		})
 
 	return compressionResult{
 		DroppedMessages:   droppedCount,
-		RemainingMessages: len(keptHistory),
+		RemainingMessages: keptCount,
 	}, true
 }
 
@@ -7476,11 +7799,11 @@ type SwitchAction int
 
 const (
 	// SwitchActionNoop means the new window fits the current conversation;
-	// no compression needed.
+	// no re-window needed.
 	SwitchActionNoop SwitchAction = iota
 	// SwitchActionCompress means the new window is smaller than the current
-	// conversation; the loop MUST invoke summarizeDroppedTurns and then
-	// forceCompression before the next LLM call.
+	// conversation; handleModelSwitch MUST invoke windowTrim before the next
+	// LLM call (FR-011).
 	SwitchActionCompress
 )
 
@@ -7519,134 +7842,38 @@ func decideSwitchCompressAction(currentConvTokens, newContextWindow int) SwitchA
 	return SwitchActionCompress
 }
 
-// estimateHistoryTokens is a small helper that sums estimateMessageTokens
-// across a history slice. The loop's switch-time compress path uses it to
-// compute the "current conversation size" fed into decideSwitchCompressAction.
-func estimateHistoryTokens(history []providers.Message) int {
+// sumMessageTokens sums estimateMessageTokens across a message slice.
+// It is the single consistent call site for token-counting a []providers.Message
+// so that the heuristic (chars*2/5) is applied uniformly across windowTrim,
+// estimateHistoryTokens, and any future callers.
+func sumMessageTokens(msgs []providers.Message) int {
 	total := 0
-	for _, m := range history {
+	for _, m := range msgs {
 		total += estimateMessageTokens(m)
 	}
 	return total
 }
 
-// summarizeDroppedTurns makes a small LLM call asking the new model (or the
-// agent's configured provider) to produce a real prose summary of the
-// dropped turns. The returned summary is bounded to ≤50% of the new model's
-// context window (per FR-011) by passing a max_tokens request hint to the
-// provider; the actual response length is whatever the provider returns —
-// there is no post-hoc truncation, so a misbehaving provider may exceed
-// the budget. If the LLM call fails, the caller is expected to fall back
-// to forceCompression and surface a warning.
-//
-// We use the agent's currently configured provider/model so the summary is
-// cheap (already in the context, no new credential resolution). This matches
-// the spec direction in §13 FR-011.
-//
-// Parameters:
-//   - ctx:    request context (caller passes a sensible timeout).
-//   - agent:  the agent whose Provider will produce the summary.
-//   - dropped: the messages we are about to drop from history (in order,
-//     oldest first).
-//   - newContextWindow: the new model's context window — used to bound the
-//     summary's length to ≤50% (rounded down to whole tokens).
-//
-// Returns the summary string and any error from the LLM call. Pure I/O —
-// does not mutate the agent or the session.
-func (al *AgentLoop) summarizeDroppedTurns(
-	ctx context.Context,
-	agent *AgentInstance,
-	dropped []providers.Message,
-	newContextWindow int,
-) (string, error) {
-	if agent == nil || agent.Provider == nil {
-		return "", fmt.Errorf("summarizeDroppedTurns: nil agent/provider")
-	}
-
-	// Bound the summary to ≤50% of the new context window. MaxTokens on the
-	// agent is the OUTPUT cap; the agent's existing MaxTokens is also a
-	// reasonable ceiling on the summary size when the new window is very
-	// small.
-	summaryBudget := newContextWindow / 2
-	if agent.MaxTokens > 0 && agent.MaxTokens < summaryBudget {
-		summaryBudget = agent.MaxTokens
-	}
-	if summaryBudget <= 0 {
-		// Defensive floor: when the new model's resolved window is missing
-		// or non-positive, fall back to a small fixed budget so the prompt
-		// still asks for something bounded. The caller (handleModelSwitch)
-		// will route this through forceCompression on error, so a tight
-		// budget here is a deliberate last-resort cap.
-		logger.WarnCF("agent", "summarizeDroppedTurns: summaryBudget fell back to default 256",
-			map[string]any{
-				"new_context_window": newContextWindow,
-				"agent_max_tokens":   agent.MaxTokens,
-			})
-		summaryBudget = 256
-	}
-
-	// Build the prompt: render the dropped turns into a single transcript
-	// block, then ask the LLM to summarize. We deliberately keep the
-	// instruction short and the format request explicit ("plain prose, no
-	// markdown") so the new model gets a clean hint and no tool calls.
-	var b strings.Builder
-	b.WriteString("Summarize the key decisions, facts, and open questions from this conversation. Output ≤")
-	b.WriteString(strconv.Itoa(summaryBudget))
-	b.WriteString(" tokens. Plain prose, no markdown formatting beyond plain text.\n\n---\n")
-	for i, m := range dropped {
-		// Truncate per-message to avoid blowing the prompt on a single
-		// dropped message that itself was over-budget.
-		content := m.Content
-		if len(content) > 2000 {
-			content = content[:2000] + "…"
-		}
-		fmt.Fprintf(&b, "[%s] %s\n", m.Role, content)
-		if i == 16 {
-			b.WriteString("… (later messages truncated)\n")
-			break
-		}
-	}
-
-	prompt := []providers.Message{
-		{Role: "user", Content: b.String()},
-	}
-
-	model := agent.Model
-	if model == "" {
-		model = agent.Provider.GetDefaultModel()
-	}
-
-	resp, err := agent.Provider.Chat(ctx, prompt, nil, model, map[string]any{
-		"max_tokens": summaryBudget,
-	})
-	if err != nil {
-		return "", fmt.Errorf("summarizeDroppedTurns: provider chat: %w", err)
-	}
-	if resp == nil || strings.TrimSpace(resp.Content) == "" {
-		return "", fmt.Errorf("summarizeDroppedTurns: empty summary from provider")
-	}
-	return strings.TrimSpace(resp.Content), nil
+// estimateHistoryTokens is a small helper that sums estimateMessageTokens
+// across a history slice. The loop's switch-time compress path uses it to
+// compute the "current conversation size" fed into decideSwitchCompressAction.
+func estimateHistoryTokens(history []providers.Message) int {
+	return sumMessageTokens(history)
 }
 
-// handleModelSwitch is the switch-time compress path (FR-011, FR-012). It is
-// invoked when an incoming bus message carries a model_name metadata that
-// differs from the agent's current Model.
+// handleModelSwitch is the switch-time re-window path (FR-011). It is invoked
+// when an incoming bus message carries a model_name metadata that differs from
+// the agent's current Model.
 //
 // Behavior:
-//  1. Resolve the new model's ContextWindow. In this worktree we read it
-//     from the agent's stored defaults when available; otherwise we fall
-//     back to the agent's current ContextWindow (no shrink detected → noop).
+//  1. Resolve the new model's ContextWindow.
 //  2. Estimate the current conversation size.
-//  3. If decideSwitchCompressAction says Compress:
-//     - call summarizeDroppedTurns with the dropped turns (oldest first,
-//     after a single forceCompression pass that splits at a Turn
-//     boundary and keeps the most recent half);
-//     - on LLM error, fall back to the existing forceCompression path and
-//     emit a warn-level log;
-//     - prepend the synthetic system message to the kept history;
-//     - persist the session.
-//  4. Update agent.Model to the new model and return the agent for the
-//     caller to use as the turn's effective model.
+//  3. If decideSwitchCompressAction says Compress (downsize only), call
+//     windowTrim with the new budget — no LLM call, no summary written.
+//     windowTrim inherits FR-003's last-user-Turn floor (MAJ-06).
+//  4. Upsize (Noop): Skip stays forward-only (US-6.2). Extra room is used by
+//     new turns; evicted turns are reachable via recall_conversation.
+//  5. Update agent.Model to the new model and return the agent.
 //
 // The function is intentionally side-effect-light on the agent: it does NOT
 // touch agent.Provider / agent.Candidates — those are resolved by the
@@ -7683,9 +7910,9 @@ func (al *AgentLoop) handleModelSwitch(
 	// the configured default from cfg.Agents.Defaults.ContextWindow. On any
 	// miss (cfg nil, model unknown, defaults unset) fall back to the agent's
 	// existing ContextWindow — preserving the historical "treat unknown as
-	// fit" behavior so the next LLM call's forceCompression still trips on
-	// overflow. Force a 128k floor for sub-zero agent defaults so decision
-	// logic still has a sane bound.
+	// fit" behavior so the next LLM call's windowTrim still fires on overflow.
+	// Force a 128k floor for sub-zero agent defaults so decision logic still
+	// has a sane bound.
 	newContextWindow := agent.ContextWindow
 	if newContextWindow <= 0 {
 		newContextWindow = 128000
@@ -7698,7 +7925,7 @@ func (al *AgentLoop) handleModelSwitch(
 		// it's a real entry in the registry). The actual window still comes
 		// from agent defaults — ModelConfig doesn't carry one. We deliberately
 		// keep the "unknown model = no-op switch" behavior (the next LLM
-		// call will trip on overflow, forceCompression will still fire), but
+		// call will trip on overflow and windowTrim will fire), but
 		// we MUST surface the miss to the operator via a WARN. Discarding the
 		// error (W4-4 silent-failure-A) would let a typo'd `metadata.model_name`
 		// from the operator silently route the next LLM call through the
@@ -7717,103 +7944,41 @@ func (al *AgentLoop) handleModelSwitch(
 		if cfg.Agents.Defaults.ContextWindow > 0 {
 			newContextWindow = cfg.Agents.Defaults.ContextWindow
 		}
+		// keep the "unknown model = no-op switch" behavior; the next LLM
+		// call's windowTrim will fire on overflow.
 	}
 
+	// FR-011: Re-window via windowTrim when the new model's window is
+	// smaller than the current conversation. windowTrim uses the agent's
+	// current ContextWindow; temporarily override it with newContextWindow
+	// so the trim targets the new model's budget.
+	//
+	// UPSIZE: Skip stays forward-only (US-6.2). Extra room goes to new
+	// turns; evicted turns are reachable via recall_conversation.
+	// DOWNSIZE: windowTrim inherits FR-003's last-user-Turn floor (MAJ-06).
+	// No summary is written — breadcrumb in BuildMessages is the only clue.
 	action := decideSwitchCompressAction(currentConvTokens, newContextWindow)
 	if action == SwitchActionCompress {
-		// 1. Drop the oldest ~half of turns (reuse the existing safe-split
-		//    logic in forceCompression) to recover headroom for the new
-		//    window. We do this BEFORE the LLM summary call so the dropped
-		//    set is small enough for a cheap summarization request.
-		dropped, kept := splitForSwitchCompress(history)
+		// Temporarily set the agent's context window to the new model's window
+		// so windowTrim computes the correct budget. We restore it after the
+		// trim; ApplyAgentModel (below) will set the canonical value.
+		oldContextWindow := agent.ContextWindow
+		agent.ContextWindow = newContextWindow
 
-		// 2. Ask the new model (via the agent's current provider) for a
-		//    prose summary of the dropped turns. On error, fall back to
-		//    the existing forceCompression note.
-		//
-		// Defensive timeout: the caller's context governs the LLM round-trip
-		// (ADR-005 — in-loop synchronous LLM calls are the caller's
-		// responsibility). 15s is generous for a short summarization prompt
-		// but short enough that a stuck provider cannot block the turn
-		// indefinitely.
-		sumCtx, sumCancel := context.WithTimeout(ctx, 15*time.Second)
-		var summary string
-		sumSummary, summaryErr := al.summarizeDroppedTurns(sumCtx, agent, dropped, newContextWindow)
-		sumCancel()
-		if summaryErr == nil {
-			summary = sumSummary
-		}
-		if summaryErr != nil {
-			logger.WarnCF("agent", "switch-time summarizeDroppedTurns failed; falling back to forceCompression",
+		if _, trimOK := al.windowTrim(agent, sessionKey); !trimOK {
+			logger.DebugCF("agent", "handleModelSwitch: windowTrim returned false (history too small to trim)",
+				map[string]any{"session_key": sessionKey})
+		} else {
+			logger.InfoCF("agent", "handleModelSwitch: re-windowed via windowTrim (no summary)",
 				map[string]any{
-					"session_key": sessionKey,
-					"old_model":   oldModel,
-					"new_model":   newModel,
-					"error":       summaryErr.Error(),
+					"session_key":        sessionKey,
+					"old_model":          oldModel,
+					"new_model":          newModel,
+					"new_context_window": newContextWindow,
 				})
-			// Per FR-011: the spec-correct fallback when the LLM summarization
-			// call fails is to invoke forceCompression — that path is the
-			// canonical "I could not summarize, so I'll drop more aggressively
-			// and surface a note" behavior and is what `forceCompression`
-			// already records in the session summary. We then build a brief
-			// meta-note that mentions the switch but does not attempt an
-			// additional LLM call. Persist via the same path so the next
-			// turn's system prompt can surface the note.
-			if _, compOK := al.forceCompression(agent, sessionKey); !compOK {
-				logger.DebugCF("agent", "handleModelSwitch: forceCompression returned false (history too small)",
-					map[string]any{"session_key": sessionKey})
-			}
-			summary = fmt.Sprintf(
-				"(summary unavailable: %s) — moved from %s to %s",
-				summaryErr.Error(),
-				oldModel,
-				newModel,
-			)
 		}
 
-		// 3. Strategy B for FR-012: route the switch summary into the dynamic
-		//    system prompt via Sessions.SetSummary instead of inserting a
-		//    separate role:"system" message into history. sanitizeHistoryForProvider
-		//    (context.go) deliberately drops every role:"system" message from
-		//    history before sending to the LLM because BuildMessages
-		//    constructs its own single system message — inserting a synthetic
-		//    here would be silently stripped (FR-012 violation). The summary
-		//    already carries the "moved from X to Y" wording.
-		switchNote := fmt.Sprintf(
-			"Conversation moved to %s from %s on %s.\n\n%s",
-			newModel,
-			oldModel,
-			time.Now().UTC().Format("2006-01-02 15:04:05 UTC"),
-			summary,
-		)
-		// Preserve any existing summary (e.g. an old forceCompression note)
-		// so we don't blow it away; append the switch note.
-		if existing := agent.Sessions.GetSummary(sessionKey); existing != "" {
-			switchNote = switchNote + "\n\n---\n\n" + existing
-		}
-		agent.Sessions.SetSummary(sessionKey, switchNote)
-
-		// 4. Trim the kept history to fit the new window. The switch note
-		//    lives in the session summary (consumed by BuildMessages), so we
-		//    do NOT prepend anything to the message list — that avoids the
-		//    "synthetic system message" history poll and the
-		//    sanitizeHistoryForProvider-strip bug.
-		newHistory := fitWithinBudget(kept, newContextWindow)
-
-		agent.Sessions.SetHistory(sessionKey, newHistory)
-		if saveErr := agent.Sessions.Save(sessionKey); saveErr != nil {
-			logger.ErrorCF("agent", "handleModelSwitch: failed to persist switched session",
-				map[string]any{"session_key": sessionKey, "error": saveErr.Error()})
-		}
-		logger.InfoCF("agent", "switch-time compress completed",
-			map[string]any{
-				"session_key":   sessionKey,
-				"old_model":     oldModel,
-				"new_model":     newModel,
-				"dropped":       len(dropped),
-				"kept":          len(kept),
-				"summary_chars": len(switchNote),
-			})
+		agent.ContextWindow = oldContextWindow
 	}
 
 	// 5. Orchestrate the full in-memory model swap under the agent mutex.
@@ -7834,53 +7999,6 @@ func (al *AgentLoop) handleModelSwitch(
 	}
 
 	return agent, nil
-}
-
-// splitForSwitchCompress splits history into (dropped, kept) for switch-time
-// compression. It is a thin wrapper over splitHistoryAtTurnMidpoint that
-// degrades to "keep everything" when no safe boundary exists — handleModelSwitch
-// is allowed to feed the full history to summarizeDroppedTurns if it has to,
-// because the next LLM call will still trip forceCompression on overflow.
-//
-// Call chain (Strategy B): handleModelSwitch → splitForSwitchCompress →
-// summarizeDroppedTurns writes the summary to Sessions.SetSummary (the
-// in-memory switch summary, NOT a history entry). The kept half is then
-// re-trimmed via fitWithinBudget to fit the new model's context window.
-// No synthetic anchor message is inserted into history under Strategy B.
-func splitForSwitchCompress(history []providers.Message) (dropped, kept []providers.Message) {
-	if len(history) == 0 {
-		return nil, nil
-	}
-	if d, k, ok := splitHistoryAtTurnMidpoint(history); ok {
-		return d, k
-	}
-	return nil, append([]providers.Message(nil), history...)
-}
-
-// fitWithinBudget aggressively trims history until its token estimate fits
-// within newContextWindow. With Strategy B the switch summary lives in
-// Sessions.GetSummary (not in history), so the first message here is a real
-// conversation turn — we are free to drop it if it overflows the window on
-// its own. The minimum result is an empty history (BuildMessages handles
-// empty history gracefully; the next-turn context-window check via
-// forceCompression is the last line of defense).
-func fitWithinBudget(history []providers.Message, newContextWindow int) []providers.Message {
-	if len(history) == 0 {
-		return history
-	}
-	for estimateHistoryTokens(history) > newContextWindow && len(history) > 0 {
-		// Drop from the tail backwards. When only one message remains and it
-		// still overflows, drop it too — Strategy B has no synthetic anchor
-		// to preserve, so an oversized last message is better dropped than
-		// left as guaranteed overflow. forceCompression at the next LLM call
-		// is the final defense.
-		if len(history) == 1 {
-			history = nil
-			break
-		}
-		history = history[:len(history)-1]
-	}
-	return history
 }
 
 // GetStartupInfo returns information about loaded tools and skills for logging.
@@ -8229,11 +8347,7 @@ func (al *AgentLoop) summarizeBatch(
 // Counts Content, ToolCalls arguments, and ToolCallID metadata so that
 // tool-heavy conversations are not systematically undercounted.
 func (al *AgentLoop) estimateTokens(messages []providers.Message) int {
-	total := 0
-	for _, m := range messages {
-		total += estimateMessageTokens(m)
-	}
-	return total
+	return sumMessageTokens(messages)
 }
 
 func (al *AgentLoop) handleCommand(
@@ -8505,19 +8619,22 @@ func inboundMetadata(msg bus.InboundMessage, key string) string {
 }
 
 // inboundInstanceID returns the channel-instance key a message arrived on
-// (Spec-2 FR-2.5). Channels MAY tag the instance explicitly via the
-// InboundMessage.InstanceID field (ADR-019 FR-4b) or, during the transition
-// off the metadata-smuggling pattern, the legacy "instance_id" metadata key;
-// in v0.1 (cap-1/type) the instance key equals the channel type, so an
-// untagged message falls back to msg.Channel. The result is lower-cased to
-// match the config map keys (which are channel-type names).
+// (Spec-2 FR-2.5, ADR-029 FR-023/MAJ-002).
+//
+// Source priority:
+//  1. msg.InstanceID — always stamped by the trusted BaseChannel adapter.
+//  2. msg.Channel    — legacy fallback for single-instance adapters that have
+//     not yet been updated to stamp InstanceID.
+//
+// The metadata["instance_id"] fallback that existed here has been removed
+// (S-4 / security review 2026-07-02): msg.InstanceID is now the authoritative
+// source stamped by the trusted adapter, and the Metadata map is
+// content-adjacent (caller-controlled), making it a spoofing footgun.
+// No adapter writes metadata["instance_id"] (confirmed by grep of pkg/channels/).
+//
+// The result is lower-cased to match the config map keys.
 func inboundInstanceID(msg bus.InboundMessage) string {
 	if id := strings.TrimSpace(msg.InstanceID); id != "" {
-		return strings.ToLower(id)
-	}
-	// Backward-compat fallback: channels still using the legacy metadata key
-	// during the FR-4b transition continue to work.
-	if id := strings.TrimSpace(inboundMetadata(msg, metadataKeyInstanceID)); id != "" {
 		return strings.ToLower(id)
 	}
 	return strings.ToLower(strings.TrimSpace(msg.Channel))
@@ -9032,4 +9149,21 @@ func (al *AgentLoop) forgetSession(sessionID string) {
 	al.loadedToolsMu.Lock()
 	defer al.loadedToolsMu.Unlock()
 	delete(al.loadedTools, sessionID)
+
+	// MINOR fix: clean up recall spans for this session so recallSpans sync.Map
+	// does not grow without bound as sessions are closed (FR-019). The span key
+	// is ts.sessionKey ("agent:<agentID>:session:<sessionID>") while forgetSession
+	// receives only the transcript sessionID. We scan the map for any key that
+	// contains the sessionID as a suffix so we delete spans regardless of agentID.
+	// The scan is safe here because forgetSession is on the session-close path
+	// (not the hot turn path), so the O(n) Range is acceptable.
+	suffix := ":session:" + sessionID
+	al.recallSpans.Range(func(k, _ any) bool {
+		if key, ok := k.(string); ok {
+			if key == sessionID || strings.HasSuffix(key, suffix) {
+				al.recallSpans.Delete(key)
+			}
+		}
+		return true
+	})
 }

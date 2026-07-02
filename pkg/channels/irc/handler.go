@@ -104,7 +104,7 @@ func (c *IRCChannel) onPrivmsg(conn *ircevent.Connection, e ircmsg.Message) {
 	if channels.DispatchCancelIfRecognized(
 		c.ctx,
 		content,
-		"irc",
+		c.Name(),
 		chatID,
 		nick,
 		c.GetCancelInterceptor(),

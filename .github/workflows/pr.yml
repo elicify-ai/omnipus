@@ -611,7 +611,8 @@ jobs:
             },
             "agents": {
               "defaults": {
-                "model_name": "openrouter-glm"
+                "model_name": "openrouter-glm",
+                "auto_recap_enabled": true
               }
             },
             "providers": [

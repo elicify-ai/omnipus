@@ -72,6 +72,7 @@ import {
   ToolRegistryEntry as ToolRegistryEntrySchema,
   ChannelEntry as ChannelEntrySchema,
   ChannelEnabledResponse as ChannelEnabledResponseSchema,
+  ChannelCreateResponse as ChannelCreateResponseSchema,
   Skill as SkillSchema,
   SkillSearchResult as SkillSearchResultSchema,
   SkillMarketplaceStatus as SkillMarketplaceStatusSchema,
@@ -307,6 +308,9 @@ import type {
   AgentCreateRequest,
   FallbackModel,
   ChannelRouting,
+  // ADR-029 channel-instance CRUD (US-6/US-10/US-11):
+  ChannelCreateRequest,
+  ChannelCreateResponse,
   // Level-1 workspaces + unified tasks + token stats (contract-first #8):
   Workspace,
   WorkspaceCreateRequest,
@@ -445,6 +449,9 @@ export type {
   AgentCreateRequest,
   FallbackModel,
   ChannelRouting,
+  // ADR-029 channel-instance CRUD (US-6/US-10/US-11):
+  ChannelCreateRequest,
+  ChannelCreateResponse,
   // Level-1 workspaces + unified tasks + token stats:
   Workspace,
   WorkspaceCreateRequest,
@@ -1720,6 +1727,31 @@ export function setChannelRouting(id: string, body: ChannelRouting): Promise<Cha
     { method: 'PUT', body: JSON.stringify(body) },
     ChannelRoutingSchema as ZodType<ChannelRouting>,
   )
+}
+
+// ── Channel-instance CRUD (ADR-029 US-6 / US-10 / US-11) ─────────────────────
+//
+// createChannelInstance  — POST /channels with {type, slug}; backend derives the
+//   instance key as "<type>.<slug>" (FR-017). Returns 201 ChannelCreateResponse
+//   on success; 400 for unknown type or malformed slug; 409 if the key already
+//   exists. Slug validation against [a-z0-9-]{1,32} is enforced client-side too
+//   (the dialog blocks submit) but the backend is the authoritative validator.
+//
+// deleteChannelInstance — DELETE /channels/{id}; returns 204 on success; 404 for
+//   unknown instance; 400 for malformed id. Removes config + credential refs +
+//   per-instance state directory (e.g. WhatsApp store.db). "webchat" is a
+//   built-in and cannot be deleted (backend returns 400).
+
+export function createChannelInstance(body: ChannelCreateRequest): Promise<ChannelCreateResponse> {
+  return request<ChannelCreateResponse>(
+    '/channels',
+    { method: 'POST', body: JSON.stringify(body) },
+    ChannelCreateResponseSchema as ZodType<ChannelCreateResponse>,
+  )
+}
+
+export function deleteChannelInstance(id: string): Promise<void> {
+  return request<void>(`/channels/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
 
 // ── Email Mailbox Account ─────────────────────────────────────────────────────

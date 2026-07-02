@@ -410,7 +410,7 @@ func (c *LINEChannel) processEvent(event lineEvent) {
 	if channels.DispatchCancelIfRecognized(
 		c.ctx,
 		content,
-		"line",
+		c.Name(),
 		chatID,
 		senderID,
 		c.GetCancelInterceptor(),

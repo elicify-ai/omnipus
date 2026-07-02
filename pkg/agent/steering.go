@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 
@@ -635,10 +636,45 @@ func (al *AgentLoop) HardAbort(sessionKey string) error {
 	ts.Finish(true)
 
 	// Roll back session history to the state before the turn started.
+	// SetHistory is explicitly NOT used here: it would overwrite the JSONL archive
+	// and reset Skip=0, permanently deleting any turns that were evicted (skipped)
+	// before this turn began (SC-001, CRITICAL 1 path 3).
+	// RollbackAppended truncates the appended tail AND restores meta.Skip to its
+	// turn-start value so mid-turn evictions (windowTrim calls during this turn)
+	// are undone — ensuring GetHistory returns the exact pre-turn live window.
 	if ts.session != nil {
-		history := ts.session.GetHistory(sessionKey)
-		if ts.initialHistoryLength < len(history) {
-			ts.session.SetHistory(sessionKey, history[:ts.initialHistoryLength])
+		targetLen := ts.initialArchiveLen
+		// targetSkip = initialArchiveLen - initialHistoryLength is the Skip cursor
+		// at turn start. Guard: when initialArchiveLen == math.MaxInt (ReadArchive
+		// failed at turn start, rollback is a no-op), pass 0 — irrelevant because
+		// RollbackAppended exits early before touching Skip when target >= Count.
+		targetSkip := 0
+		if targetLen != math.MaxInt {
+			targetSkip = targetLen - ts.initialHistoryLength
+			if targetSkip < 0 {
+				targetSkip = 0
+			}
+		}
+		ts.session.RollbackAppended(sessionKey, targetLen, targetSkip)
+
+		// M4 mirror: verify the rollback actually took effect. RollbackAppended is
+		// fire-and-forget (no error return). Re-read the archive and confirm the
+		// length dropped to <= targetLen. Skip verification when targetLen is
+		// math.MaxInt (ReadArchive failed at turn start — rollback was a no-op by
+		// design, so there is nothing meaningful to verify).
+		if targetLen != math.MaxInt {
+			if postArchive, readErr := ts.session.ReadArchive(context.Background(), sessionKey); readErr == nil {
+				if len(postArchive) > targetLen {
+					logger.ErrorCF("agent", "HardAbort: rollback did not shrink archive to target",
+						map[string]any{
+							"session_key": sessionKey,
+							"target":      targetLen,
+							"after":       len(postArchive),
+						})
+					return fmt.Errorf("HardAbort: RollbackAppended did not take effect (archive len %d > target %d)", len(postArchive), targetLen)
+				}
+			}
+			// If ReadArchive itself fails, we can't verify — fall through.
 		}
 	}
 

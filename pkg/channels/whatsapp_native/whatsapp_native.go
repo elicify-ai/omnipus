@@ -524,7 +524,7 @@ func (c *WhatsAppNativeChannel) handleIncoming(evt *events.Message) {
 	if channels.DispatchCancelIfRecognized(
 		c.runCtx,
 		content,
-		"whatsapp_native",
+		c.Name(),
 		chatID,
 		senderID,
 		c.GetCancelInterceptor(),

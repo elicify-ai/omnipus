@@ -25,7 +25,7 @@ import (
 // scriptedProvider is a mockProvider with a predetermined Chat response and
 // call-count observation. Exercises the session-end code path without a real
 // LLM. Records the last request so tests can assert recap-option hygiene
-// (max_tokens=250, extended_thinking=false, extra_body.reasoning.exclude=true).
+// (max_tokens=512, extended_thinking=false, extra_body.reasoning.enabled=false).
 type scriptedProvider struct {
 	mu           sync.Mutex
 	responseBody string
@@ -62,8 +62,8 @@ func (s *scriptedProvider) GetDefaultModel() string { return "scripted-model" }
 // TestRunRecap_HappyPath_PersistsLastSessionAndRetro exercises #35 end-to-end:
 // a transcript is written, CloseSession is invoked, and after the recap
 // goroutine completes the MemoryStore must contain LAST_SESSION.md + a retro.
-// Also pins FR-029a cost-guard opts (max_tokens=250, extended_thinking=false,
-// extra_body.reasoning.exclude=true) onto the Chat request.
+// Also pins FR-029a cost-guard opts (max_tokens=512, extended_thinking=false,
+// extra_body.reasoning.enabled=false) onto the Chat request.
 func TestRunRecap_HappyPath_PersistsLastSessionAndRetro(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", home)
@@ -139,15 +139,18 @@ func TestRunRecap_HappyPath_PersistsLastSessionAndRetro(t *testing.T) {
 		t.Errorf("last-session.md missing recap content; got:\n%s", lastSessionBytes)
 	}
 
-	// FR-029a: recap Chat call must set max_tokens=250, extended_thinking=false,
-	// and extra_body.reasoning.exclude=true.
+	// FR-029a: recap Chat call must set max_tokens=2048, extended_thinking=false,
+	// and extra_body.reasoning.enabled=false. max_tokens=2048 gives reasoning
+	// models (e.g. glm-5.2 on OpenRouter/Fireworks) enough budget to generate
+	// both the reasoning trace and the JSON content — the old 512-token cap was
+	// consumed entirely by reasoning (~500 tokens), leaving content=null.
 	script.mu.Lock()
 	defer script.mu.Unlock()
 	if script.callCount != 1 {
 		t.Errorf("scripted Chat calls = %d, want 1", script.callCount)
 	}
-	if mt, _ := script.lastOpts["max_tokens"].(int); mt != 250 {
-		t.Errorf("opts.max_tokens = %v, want 250", script.lastOpts["max_tokens"])
+	if mt, _ := script.lastOpts["max_tokens"].(int); mt != 2048 {
+		t.Errorf("opts.max_tokens = %v, want 2048", script.lastOpts["max_tokens"])
 	}
 	if et, _ := script.lastOpts["extended_thinking"].(bool); et {
 		t.Error("opts.extended_thinking must be false")
@@ -157,8 +160,8 @@ func TestRunRecap_HappyPath_PersistsLastSessionAndRetro(t *testing.T) {
 		t.Fatal("opts.extra_body missing")
 	}
 	reasoning, _ := eb["reasoning"].(map[string]any)
-	if reasoning == nil || reasoning["exclude"] != true {
-		t.Errorf("opts.extra_body.reasoning.exclude must be true; got %v", eb)
+	if reasoning == nil || reasoning["enabled"] != false {
+		t.Errorf("opts.extra_body.reasoning.enabled must be false; got %v", eb)
 	}
 	if script.lastModel != "claude-haiku-3" {
 		t.Errorf("recap model = %q, want claude-haiku-3 (recap_model config)", script.lastModel)
@@ -300,6 +303,264 @@ func TestRunRecap_JSONParseError_WritesFallback(t *testing.T) {
 		t.Errorf("fallback recap body missing 'Tool calls:' count; got:\n%s", retro)
 	}
 }
+
+// TestExtractJSONFromText covers the reasoning-extraction helper added to fix the
+// glm-5.2 / OpenRouter json_parse_error bug: when content=null but the reasoning
+// trace contains the drafted JSON, extractJSONFromText should recover it.
+func TestExtractJSONFromText(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  string // expected extracted JSON, or "" if nothing found
+	}{
+		{
+			name:  "simple_object",
+			input: `{"recap":"hi","went_well":[],"needs_improvement":[],"worth_remembering":[]}`,
+			want:  `{"recap":"hi","went_well":[],"needs_improvement":[],"worth_remembering":[]}`,
+		},
+		{
+			name: "json_after_reasoning_text",
+			input: `First I'll think about this...
+Then I'll produce the JSON:
+{"recap":"we shipped","went_well":["tests"],"needs_improvement":[],"worth_remembering":[]}`,
+			want: `{"recap":"we shipped","went_well":["tests"],"needs_improvement":[],"worth_remembering":[]}`,
+		},
+		{
+			name: "json_in_code_fence_prefix",
+			// Model drafts JSON inside a reasoning trace with a ``` fence
+			input: "reasoning step: produce JSON\n```json\n{\"recap\":\"done\",\"went_well\":[],\"needs_improvement\":[],\"worth_remembering\":[]}\n```",
+			want:  `{"recap":"done","went_well":[],"needs_improvement":[],"worth_remembering":[]}`,
+		},
+		{
+			name:  "no_json",
+			input: "no json here at all",
+			want:  "",
+		},
+		{
+			name:  "empty_string",
+			input: "",
+			want:  "",
+		},
+		{
+			name:  "nested_objects",
+			input: `some text {"outer":{"inner":"val"},"arr":[1,2]} trailing`,
+			want:  `{"outer":{"inner":"val"},"arr":[1,2]}`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := extractJSONFromText(tc.input)
+			if tc.want == "" {
+				if got != "" {
+					t.Errorf("extractJSONFromText(%q) = %q, want empty string", tc.input, got)
+				}
+				return
+			}
+			// Normalise both via JSON round-trip so whitespace differences don't matter.
+			var wantMap, gotMap map[string]any
+			if err := json.Unmarshal([]byte(tc.want), &wantMap); err != nil {
+				t.Fatalf("test case want is invalid JSON: %v", err)
+			}
+			if err := json.Unmarshal([]byte(got), &gotMap); err != nil {
+				t.Errorf("extractJSONFromText(%q) = %q which is not valid JSON: %v", tc.input, got, err)
+				return
+			}
+			wantBytes, _ := json.Marshal(wantMap)
+			gotBytes, _ := json.Marshal(gotMap)
+			if string(wantBytes) != string(gotBytes) {
+				t.Errorf("extractJSONFromText(%q)\n  got  %s\n  want %s", tc.input, gotBytes, wantBytes)
+			}
+		})
+	}
+}
+
+// TestRunRecap_ReasoningFallback_ExtractsJSONFromReasoning exercises the path
+// where the LLM returns content="" but reasoning contains the drafted JSON.
+// This is the glm-5.2 on OpenRouter/Fireworks behaviour when reasoning tokens
+// exhaust the budget — the model stops mid-reasoning with content=null.
+// The fix: extractJSONFromText scans resp.Reasoning and recovers the JSON.
+func TestRunRecap_ReasoningFallback_ExtractsJSONFromReasoning(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("OMNIPUS_HOME", home)
+
+	cfg := &config.Config{}
+	cfg.Agents.Defaults.AutoRecapEnabled = true
+	cfg.Agents.Defaults.RecapModel = "glm-reasoning-model"
+
+	// Simulate the glm-5.2 response: content is empty but reasoning has the JSON.
+	const recapText = "reasoning-extracted recap text sentinel"
+	reasoningWithJSON := `I will now produce the JSON as requested:
+{"recap":"` + recapText + `","went_well":["reasoning worked"],"needs_improvement":[],"worth_remembering":[]}`
+
+	reasoningScript := &reasoningOnlyProvider{reasoning: reasoningWithJSON}
+
+	msgBus := bus.NewMessageBus()
+	al := mustNewAgentLoop(t, cfg, msgBus, reasoningScript)
+	t.Cleanup(func() { al.Close() })
+
+	store, err := session.NewUnifiedStore(filepath.Join(home, "sessions"))
+	if err != nil {
+		t.Fatalf("NewUnifiedStore: %v", err)
+	}
+	al.sharedSessionStore = store
+
+	agentCfg := &config.AgentConfig{ID: "reasoning-agent", Name: "Reasoning"}
+	ag := NewAgentInstance(agentCfg, &cfg.Agents.Defaults, cfg, reasoningScript)
+	ag.Workspace = filepath.Join(home, "agents", "reasoning-agent")
+	ag.ContextBuilder = NewContextBuilder(ag.Workspace).WithAgentInfo("reasoning-agent", "Reasoning")
+	al.registry.mu.Lock()
+	al.registry.agents[agentCfg.ID] = ag
+	al.registry.mu.Unlock()
+
+	meta, err := store.NewSession(session.SessionTypeChat, "web", "reasoning-agent")
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	sessionID := meta.ID
+	if err := store.AppendTranscript(sessionID, session.TranscriptEntry{
+		Role: "user", Content: "what did we do?", Timestamp: time.Now().UTC(), AgentID: "reasoning-agent",
+	}); err != nil {
+		t.Fatalf("AppendTranscript: %v", err)
+	}
+
+	al.CloseSession(sessionID, "explicit")
+
+	// Wait for last-session.md — the reasoning-extraction path must succeed.
+	deadline := time.Now().Add(5 * time.Second)
+	var lastSessionBytes []byte
+	lastSessionPath := filepath.Join(ag.Workspace, ".omnipus", "last-session.md")
+	for time.Now().Before(deadline) {
+		data, readErr := os.ReadFile(lastSessionPath)
+		if readErr == nil {
+			lastSessionBytes = data
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if lastSessionBytes == nil {
+		t.Fatal("last-session.md not produced within deadline — reasoning-extraction fallback did not fire")
+	}
+	content := string(lastSessionBytes)
+	// Must be the real LLM recap (from reasoning extraction), not the heuristic fallback.
+	if !strings.Contains(content, recapText) {
+		t.Errorf("last-session.md does not contain expected recap text %q; got:\n%s", recapText, content)
+	}
+	if strings.Contains(content, "Fallback reason:") {
+		t.Errorf("last-session.md should contain LLM recap, not heuristic fallback; got:\n%s", content)
+	}
+}
+
+// fencedContentProvider returns the JSON recap wrapped in a ```json markdown
+// fence — the exact glm-5.2-on-OpenRouter pattern (content begins "```json\n{...")
+// that a raw json.Unmarshal rejects at char 0.
+type fencedContentProvider struct{ content string }
+
+func (f *fencedContentProvider) Chat(
+	_ context.Context,
+	_ []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	return &providers.LLMResponse{Content: f.content}, nil
+}
+
+func (f *fencedContentProvider) GetDefaultModel() string { return "glm-fenced-model" }
+
+// TestRunRecap_FencedContent verifies the recap parses a JSON envelope returned
+// inside a ```json markdown fence (glm-5.2 / OpenRouter routinely does this).
+// Before the fix, extractJSONFromText was only applied to resp.Reasoning, so a
+// raw json.Unmarshal(resp.Content) failed and the recap fell back to a heuristic
+// stub ("Turns: N ... Fallback reason: json_parse_error") that dropped the real
+// summary — the failure observed in the recap-continuity e2e.
+func TestRunRecap_FencedContent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("OMNIPUS_HOME", home)
+
+	cfg := &config.Config{}
+	cfg.Agents.Defaults.AutoRecapEnabled = true
+	cfg.Agents.Defaults.RecapModel = "glm-fenced-model"
+
+	const recapText = "fenced-content recap sentinel"
+	fenced := "```json\n{\"recap\":\"" + recapText +
+		"\",\"went_well\":[\"shipped\"],\"needs_improvement\":[],\"worth_remembering\":[]}\n```"
+	prov := &fencedContentProvider{content: fenced}
+
+	msgBus := bus.NewMessageBus()
+	al := mustNewAgentLoop(t, cfg, msgBus, prov)
+	t.Cleanup(func() { al.Close() })
+
+	store, err := session.NewUnifiedStore(filepath.Join(home, "sessions"))
+	if err != nil {
+		t.Fatalf("NewUnifiedStore: %v", err)
+	}
+	al.sharedSessionStore = store
+
+	agentCfg := &config.AgentConfig{ID: "fenced-agent", Name: "Fenced"}
+	ag := NewAgentInstance(agentCfg, &cfg.Agents.Defaults, cfg, prov)
+	ag.Workspace = filepath.Join(home, "agents", "fenced-agent")
+	ag.ContextBuilder = NewContextBuilder(ag.Workspace).WithAgentInfo("fenced-agent", "Fenced")
+	al.registry.mu.Lock()
+	al.registry.agents[agentCfg.ID] = ag
+	al.registry.mu.Unlock()
+
+	meta, err := store.NewSession(session.SessionTypeChat, "web", "fenced-agent")
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	sessionID := meta.ID
+	if err := store.AppendTranscript(sessionID, session.TranscriptEntry{
+		Role: "user", Content: "remember FALCON-XYZ", Timestamp: time.Now().UTC(), AgentID: "fenced-agent",
+	}); err != nil {
+		t.Fatalf("AppendTranscript: %v", err)
+	}
+
+	al.CloseSession(sessionID, "explicit")
+
+	deadline := time.Now().Add(5 * time.Second)
+	var lastSessionBytes []byte
+	lastSessionPath := filepath.Join(ag.Workspace, ".omnipus", "last-session.md")
+	for time.Now().Before(deadline) {
+		if data, readErr := os.ReadFile(lastSessionPath); readErr == nil {
+			lastSessionBytes = data
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if lastSessionBytes == nil {
+		t.Fatal("last-session.md not produced within deadline — fenced-content parse did not fire")
+	}
+	content := string(lastSessionBytes)
+	if !strings.Contains(content, recapText) {
+		t.Errorf("last-session.md missing recap text %q; got:\n%s", recapText, content)
+	}
+	if strings.Contains(content, "Fallback reason:") {
+		t.Errorf("last-session.md should contain the LLM recap, not a heuristic fallback; got:\n%s", content)
+	}
+}
+
+// reasoningOnlyProvider simulates a reasoning model that returns empty content
+// but populates the Reasoning field — the glm-5.2 / OpenRouter pattern when
+// the token budget is exhausted during the reasoning phase.
+type reasoningOnlyProvider struct {
+	reasoning string
+}
+
+func (r *reasoningOnlyProvider) Chat(
+	_ context.Context,
+	_ []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	return &providers.LLMResponse{
+		Content:   "",          // empty — simulates content=null
+		Reasoning: r.reasoning, // JSON is here instead
+	}, nil
+}
+
+func (r *reasoningOnlyProvider) GetDefaultModel() string { return "glm-reasoning-model" }
 
 // TestNewAgentLoop_AnyModelBoots verifies that the recap-model boot gate is
 // gone: NewAgentLoop must succeed regardless of what model is configured for

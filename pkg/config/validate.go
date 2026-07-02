@@ -368,3 +368,61 @@ func RepairMultipleDefaults(cfg *Config) {
 		"total_defaults_found", len(defaultIdxs),
 	)
 }
+
+// RepairStaleChannelWildcardBindings enforces the ADR-029 FR-029 two-representation
+// rule: a channel instance persists routing EITHER as cfg.Channels[id].{WorkspaceID,
+// Identity} (bound) OR as a channel-wildcard AgentBinding in cfg.Bindings (unbound).
+// The two are mutually exclusive per instance. When both are present (e.g. an
+// in-flight migration or a hand-edited config), the bound representation wins and the
+// stale wildcard binding is removed. Idempotent; mutates cfg.Bindings in-place.
+// Mirrors the RepairMultipleDefaults pattern (OBS-001).
+func RepairStaleChannelWildcardBindings(cfg *Config) {
+	if cfg == nil {
+		return
+	}
+	// Build a set of instance IDs that carry the bound representation:
+	// WorkspaceID is non-empty AND Identity.Kind == "agent" (non-empty ID).
+	boundIDs := make(map[string]struct{})
+	for id, inst := range cfg.Channels {
+		if inst.WorkspaceID == "" {
+			continue
+		}
+		if inst.Identity == nil {
+			continue
+		}
+		if strings.ToLower(strings.TrimSpace(inst.Identity.Kind)) != ChannelIdentityKindAgent {
+			continue
+		}
+		if strings.TrimSpace(inst.Identity.ID) == "" {
+			continue
+		}
+		boundIDs[strings.ToLower(id)] = struct{}{}
+	}
+	if len(boundIDs) == 0 {
+		return // nothing to repair
+	}
+
+	// Scan cfg.Bindings and drop wildcard entries whose channel matches a bound id.
+	var kept []AgentBinding
+	var dropped []string
+	for _, b := range cfg.Bindings {
+		ch := strings.ToLower(strings.TrimSpace(b.Match.Channel))
+		acc := strings.TrimSpace(b.Match.AccountID)
+		isWildcard := acc == "*" && b.Match.Peer == nil && b.Match.GuildID == "" && b.Match.TeamID == ""
+		if isWildcard {
+			if _, bound := boundIDs[ch]; bound {
+				dropped = append(dropped, ch)
+				continue
+			}
+		}
+		kept = append(kept, b)
+	}
+	if len(dropped) == 0 {
+		return
+	}
+	sort.Strings(dropped)
+	slog.Warn("config: channel instances have both bound Identity and wildcard binding; removing stale wildcard binding(s) (ADR-029 FR-029)",
+		"instance_ids", dropped,
+	)
+	cfg.Bindings = kept
+}

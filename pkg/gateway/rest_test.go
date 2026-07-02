@@ -946,10 +946,13 @@ func TestCreateAgent_WithToolsCfg(t *testing.T) {
 func TestCreateAgent_WithSkills(t *testing.T) {
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 
-	// Install the skills used by this test so validation passes.
+	// Install the skills used by this test so validation passes. These MUST match
+	// the skills requested in the POST body below (daily-briefing, summarize) —
+	// the create-agent handler rejects any skill id not present under
+	// OMNIPUS_BUILTIN_SKILLS with a 400 "unknown skill id".
 	skillsRoot := t.TempDir()
 	t.Setenv("OMNIPUS_BUILTIN_SKILLS", skillsRoot)
-	for _, id := range []string{"web-research", "code-review"} {
+	for _, id := range []string{"daily-briefing", "summarize"} {
 		require.NoError(t, os.MkdirAll(skillsRoot+"/"+id, 0o755))
 		require.NoError(
 			t,

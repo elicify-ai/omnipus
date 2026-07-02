@@ -15,9 +15,10 @@ type RouteInput struct {
 	ParentPeer *RoutePeer
 	GuildID    string
 	TeamID     string
-	// InstanceID is the channel-instance key the message arrived on. In v0.1
-	// (cap-1/type) this equals the channel type. Carried so identity-based
-	// routing can address the right instance once v0.3 lifts the cap. (FR-2.5)
+	// InstanceID is the channel-instance key the message arrived on. For a
+	// single-instance channel this equals the channel type (e.g. "telegram");
+	// for additional instances it is the namespaced key (e.g. "telegram.eu").
+	// Carried so identity-based routing can address the right instance. (FR-2.5)
 	InstanceID string
 	// Identity is the per-instance routing identity (Spec-2 US-5 / FR-2.9).
 	// When set with Kind=="agent" and a non-empty ID, the message is routed AS
@@ -25,6 +26,11 @@ type RouteInput struct {
 	// Identity) leaves the normal cascade in effect (peer→…→default). Populated
 	// by the agent loop from the inbound channel instance's persisted identity.
 	Identity *config.ChannelIdentity
+	// BoundInstance is set true when the inbound instance is workspace-bound
+	// (cfg.Channels[InstanceID].WorkspaceID is non-empty). Consumed by the
+	// WS-A drift branch in ResolveRoute to enforce the no-global-default rule
+	// for bound instances (ADR-029 FR-012/FR-014).
+	BoundInstance bool
 }
 
 // ResolvedRoute is the result of agent routing.
@@ -34,7 +40,13 @@ type ResolvedRoute struct {
 	AccountID      string
 	SessionKey     string
 	MainSessionKey string
-	MatchedBy      string // "identity.agent", "binding.peer", "binding.peer.parent", "binding.guild", "binding.team", "binding.account", "binding.channel", "default"
+	MatchedBy      string // "identity.agent", "binding.peer", "binding.peer.parent", "binding.guild", "binding.team", "binding.account", "binding.channel", "default", "bound.drift.drop"
+	// Drop is true when this route is a bound-instance drift drop: the instance
+	// is workspace-bound but its configured agent is unresolvable (deleted or a
+	// worker — not a chat target). The caller MUST NOT fall back to the global
+	// default — instead it enters the FR-015 unroutable path with a structured
+	// audit event (ADR-029 FR-012, FR-014, FR-028). WS-A wires the drop branch logic.
+	Drop bool
 }
 
 // RouteResolver determines which agent handles a message based on config bindings.
@@ -89,13 +101,44 @@ func (r *RouteResolver) ResolveRoute(input RouteInput) ResolvedRoute {
 	// connection acts AS agent X — this overrides every binding. A user-kind
 	// identity (or no identity) leaves the normal cascade in effect: the message
 	// is attributed to the user and routed by the binding rules below, ending at
-	// the default agent. pickAgentID validates X against the agent list and logs
-	// a fallback to default if it is unknown, so a stale identity can never drop
-	// the message.
+	// the default agent.
+	//
+	// ADR-029 FR-012/FR-013/FR-014 — bound-instance drift guard:
+	// For workspace-bound instances (BoundInstance=true), if the configured agent
+	// is unresolvable (deleted or a worker — not a chat target) the route MUST
+	// drop rather than fall through to pickAgentID's default fallback. A member
+	// merely removed from CoreTeam but still existing as a non-worker MUST still
+	// route (stale, FR-013). pickAgentID validates X against the agent list and
+	// logs a fallback to default only for NON-bound callers; for bound callers an
+	// unresolvable agent → Drop.
 	if input.Identity != nil {
 		kind := strings.ToLower(strings.TrimSpace(input.Identity.Kind))
 		if kind == "agent" && strings.TrimSpace(input.Identity.ID) != "" {
-			return choose(input.Identity.ID, "identity.agent")
+			agentID := strings.TrimSpace(input.Identity.ID)
+			if input.BoundInstance {
+				// Drift check: the agent must exist AND be a chat target (non-worker).
+				// Removal from CoreTeam alone is NOT a drift condition — the instance
+				// routes stale (FR-013) and the SPA shows a config-time warning only.
+				unresolvable := true
+				agents := r.cfg.Agents.List
+				for _, a := range agents {
+					if NormalizeAgentID(a.ID) == NormalizeAgentID(agentID) {
+						if a.IsChatTarget() {
+							unresolvable = false
+						}
+						break
+					}
+				}
+				if unresolvable {
+					return ResolvedRoute{
+						Channel:   channel,
+						AccountID: accountID,
+						MatchedBy: "bound.drift.drop",
+						Drop:      true,
+					}
+				}
+			}
+			return choose(agentID, "identity.agent")
 		}
 	}
 

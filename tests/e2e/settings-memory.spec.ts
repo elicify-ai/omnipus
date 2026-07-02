@@ -408,7 +408,8 @@ test('auto-recap toggle changes runtime behaviour (saved != ignored)', async ({ 
   const wsSendResult = await page.evaluate(
     async ({ baseUrl, sid, token }: { baseUrl: string; sid: string; token: string | null }) => {
       return new Promise<{ ok: boolean; error: string | null }>((resolve) => {
-        const wsUrl = baseUrl.replace(/^http/, 'ws') + '/ws';
+        // The gateway WS endpoint is /api/v1/chat/ws (not /ws — that serves the SPA).
+        const wsUrl = baseUrl.replace(/^http/, 'ws') + '/api/v1/chat/ws';
         const ws = new WebSocket(wsUrl);
         let authSent = false;
 
@@ -515,10 +516,11 @@ test('auto-recap toggle changes runtime behaviour (saved != ignored)', async ({ 
   ).toBe(true);
 
   // Send session_close for the second session.
+  // The gateway WS endpoint is /api/v1/chat/ws (not /ws — that serves the SPA).
   await page.evaluate(
     async ({ baseUrl, sid, token }: { baseUrl: string; sid: string; token: string | null }) => {
       return new Promise<void>((resolve) => {
-        const wsUrl = baseUrl.replace(/^http/, 'ws') + '/ws';
+        const wsUrl = baseUrl.replace(/^http/, 'ws') + '/api/v1/chat/ws';
         const ws = new WebSocket(wsUrl);
         ws.onopen = () => {
           if (token) ws.send(JSON.stringify({ type: 'auth', token }));

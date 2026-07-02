@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1487,16 +1486,13 @@ func (i ChannelIdentity) Validate() error {
 	}
 }
 
-// maxInstancesPerType is the cap-1 limit on instances per channel type.
-// v0.3 will lift this to allow multiple instances per type.
-const maxInstancesPerType = 1
-
 // ChannelInstanceConfig is the map value for Config.Channels.
-// The map is keyed by instance ID (currently equal to the channel type name in
-// v0.1 since the cap is 1/type). Each instance carries its type discriminator,
-// the common enabled flag, an optional identity override, and the full union of
-// all per-channel-type configuration fields — only the fields relevant to the
-// instance type are non-zero.
+// The map is keyed by instance ID (a bare type name like "telegram" for the
+// default instance, or a namespaced key like "telegram.eu" for additional
+// instances — multiple instances per type are supported). Each instance carries
+// its type discriminator, the common enabled flag, an optional identity
+// override, and the full union of all per-channel-type configuration fields —
+// only the fields relevant to the instance type are non-zero.
 //
 // Wire-format note: this struct is NOT a gateway wire type — it lives in config.json,
 // not in REST request/response bodies. The not-wire-format opt-out is not needed here
@@ -1506,6 +1502,8 @@ type ChannelInstanceConfig struct {
 	Type     string           `json:"type"`
 	Enabled  bool             `json:"enabled"`
 	Identity *ChannelIdentity `json:"identity,omitempty"`
+	// WorkspaceID binds this instance to one workspace (ADR-029). Empty = unbound.
+	WorkspaceID string `json:"workspace_id,omitempty"`
 
 	// --- Common per-channel fields shared across multiple channel types ---
 	AllowFrom          FlexibleStringSlice `json:"allow_from,omitempty"`
@@ -1626,6 +1624,34 @@ type ChannelInstanceConfig struct {
 	EmailUsername string `json:"username,omitempty"`
 }
 
+// ErrHalfBoundChannelInstance is the sentinel returned by ValidateChannels when
+// a channel instance carries a non-empty WorkspaceID but is missing the agent
+// identity required to fully bind it (Identity == nil, or Identity.Kind != "agent",
+// or Identity.ID == ""). A half-bound state is an operator error: the instance
+// would appear to be workspace-bound but routing would silently fall back to
+// unbound behavior (ADR-029 FR-029). Fail-loud at load matches the existing
+// type-vs-key mismatch error contract.
+var ErrHalfBoundChannelInstance = errors.New("channels: half-bound workspace instance (workspace_id set but agent identity missing or invalid)")
+
+// IsWorkspaceBound reports whether this instance is fully workspace-bound per
+// ADR-029 FR-029: WorkspaceID is non-empty AND Identity is non-nil AND
+// Identity.Kind == "agent" AND Identity.ID is non-empty. The routing layer
+// (pkg/routing/route.go) should set BoundInstance=true only when this predicate
+// is true. Call sites that just want to know "is this bound?" should prefer this
+// predicate over checking the individual fields directly.
+func (c ChannelInstanceConfig) IsWorkspaceBound() bool {
+	if strings.TrimSpace(c.WorkspaceID) == "" {
+		return false
+	}
+	if c.Identity == nil {
+		return false
+	}
+	if strings.ToLower(strings.TrimSpace(c.Identity.Kind)) != ChannelIdentityKindAgent {
+		return false
+	}
+	return strings.TrimSpace(c.Identity.ID) != ""
+}
+
 // knownChannelTypes is the set of supported channel type identifiers.
 // Any map entry whose key is not in this set is logged as WARN and dropped.
 var knownChannelTypes = map[string]struct{}{
@@ -1649,57 +1675,156 @@ var knownChannelTypes = map[string]struct{}{
 
 // normalizeChannelMap fills in the Type field from the map key when absent
 // (so JSON-loaded entries without an explicit "type" field get a default),
-// and drops entries whose keys are not in knownChannelTypes, emitting a
-// structured Warn for each unknown entry.
+// and drops entries whose effective channel type is not in knownChannelTypes,
+// emitting a structured Warn for each unknown entry.
+//
+// ADR-029 (Gate 0, FR-016): the effective type is resolved via ParseInstanceKey
+// so namespaced instance keys like "whatsapp.eu" (effective type: "whatsapp")
+// are KEPT rather than dropped. The entry is stored under its original key so
+// the instance ID (e.g. "whatsapp.eu") is preserved for per-instance routing.
+// The Type field is backfilled to the effective type when absent.
 func normalizeChannelMap(channels map[string]ChannelInstanceConfig) map[string]ChannelInstanceConfig {
 	out := make(map[string]ChannelInstanceConfig, len(channels))
 	for key, inst := range channels {
-		if _, ok := knownChannelTypes[key]; !ok {
+		// Determine effective type: explicit Type field wins; otherwise derive from
+		// the map key via ParseInstanceKey (pre-dot segment).
+		effectiveType := strings.TrimSpace(inst.Type)
+		if effectiveType == "" {
+			effectiveType, _ = ParseInstanceKey(key)
+		}
+		if _, ok := knownChannelTypes[effectiveType]; !ok {
 			slog.Warn("config: unknown channel type in channels map — ignoring legacy or unsupported section",
-				"key", key)
+				"key", key, "effective_type", effectiveType)
 			continue
 		}
+		// Backfill the Type field to the effective type when absent so the
+		// on-disk instance is self-describing.
 		if inst.Type == "" {
-			inst.Type = key
+			inst.Type = effectiveType
 		}
 		out[key] = inst
 	}
 	return out
 }
 
-// ErrChannelsCap1Violated is the sentinel wrapped by ValidateChannelsCap1 when
-// more than one instance of a channel type is present (Spec-2 FR-2.3). Callers
-// (e.g. the gateway) detect it with errors.Is to map the failure onto a clean
-// 422 "one-per-type" response rather than an opaque 500.
-var ErrChannelsCap1Violated = errors.New("channels: cap-1/type violated (v0.1 allows one instance per type)")
+// ParseInstanceKey splits a channel instance key into its base type and optional
+// slug. The delimiter is the FIRST dot (`.`), which is filesystem-safe on
+// Windows (unlike `:`) and legal as a JSON credential-store key, and no built-in
+// channel type name contains a dot, so the key is unambiguously splittable.
+//
+// Examples:
+//
+//	ParseInstanceKey("whatsapp")      → ("whatsapp", "")
+//	ParseInstanceKey("whatsapp.eu")   → ("whatsapp", "eu")
+//	ParseInstanceKey("google-chat.s") → ("google-chat", "s")
+//
+// The returned channelType is always the pre-dot segment (which may equal the
+// full key when there is no dot). The slug is everything after the first dot.
+func ParseInstanceKey(key string) (channelType, slug string) {
+	idx := strings.IndexByte(key, '.')
+	if idx < 0 {
+		return key, ""
+	}
+	return key[:idx], key[idx+1:]
+}
 
-// ValidateChannelsCap1 checks that there is at most one instance per channel
-// type in the map. Returns an error wrapping ErrChannelsCap1Violated and listing
-// all duplicate types. Called at config load time so a hand-edited config.json
-// with two telegram instances is rejected early rather than silently running the
-// second (FR-2.3: enforced at config LOAD, not just the API).
-func ValidateChannelsCap1(channels map[string]ChannelInstanceConfig) error {
-	typeCounts := make(map[string]int, len(channels))
+// ErrInvalidInstanceKey is the sentinel wrapped by ValidateInstanceKey when a
+// channel instance key does not meet the ADR-029 grammar requirements.
+var ErrInvalidInstanceKey = errors.New("channels: invalid instance key")
+
+// slugPattern matches a valid slug: lowercase alphanumeric and hyphens, 1–32 chars.
+// Defined once to avoid repeated string parsing.
+var slugPattern = func() func(string) bool {
+	return func(s string) bool {
+		if len(s) == 0 || len(s) > 32 {
+			return false
+		}
+		for _, r := range s {
+			if !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-') {
+				return false
+			}
+		}
+		return true
+	}
+}()
+
+// ValidateInstanceKey validates a channel instance key against the ADR-029
+// grammar (FR-017, locked). A key is valid if it is EITHER:
+//
+//   - a bare known channel type ("whatsapp", "telegram", …), or
+//   - a namespaced key "<type>.<slug>" where <type> ∈ knownChannelTypes and
+//     <slug> matches [a-z0-9-]{1,32} (all lowercase; uppercase → error).
+//
+// Returns an error wrapping ErrInvalidInstanceKey on failure.
+func ValidateInstanceKey(key string) error {
+	channelType, slug := ParseInstanceKey(key)
+	if _, ok := knownChannelTypes[channelType]; !ok {
+		return fmt.Errorf("%w: unknown base type %q in key %q", ErrInvalidInstanceKey, channelType, key)
+	}
+	if !strings.Contains(key, ".") {
+		// Bare type key (no delimiter) — valid.
+		return nil
+	}
+	// Namespaced key ("<type>.<slug>"): the slug must be well-formed. A trailing
+	// dot ("whatsapp.") yields an empty slug, which slugPattern rejects (BUG-1).
+	if !slugPattern(slug) {
+		return fmt.Errorf(
+			"%w: slug %q in key %q is invalid — must match [a-z0-9-]{1,32} (all lowercase, 1–32 chars)",
+			ErrInvalidInstanceKey, slug, key,
+		)
+	}
+	return nil
+}
+
+// ValidateChannels validates the channel instance map for ADR-029 compliance.
+// The one-per-type cap is lifted: N instances per type are allowed. Each key
+// must pass ValidateInstanceKey (known base type, well-formed slug) and each
+// workspace-bound entry must be FULLY bound (IsWorkspaceBound() == true) — a
+// half-bound instance (workspace_id set but agent identity absent or invalid)
+// is rejected to prevent silent routing degradation (ADR-029 FR-029).
+func ValidateChannels(channels map[string]ChannelInstanceConfig) error {
 	for key, inst := range channels {
-		// Effective type: the explicit Type field, or the map key when absent
-		// (the same inference normalizeChannelMap applies). Counting by effective
-		// type lets this run on a RAW map and still catch a duplicate hidden under
-		// a non-type key (e.g. "telegram-2" with type:telegram).
-		t := strings.TrimSpace(inst.Type)
-		if t == "" {
-			t = strings.TrimSpace(key)
+		channelType, slug := ParseInstanceKey(key)
+		// Cross-check FIRST: an entry that DECLARES a type must use a key whose
+		// derived base type matches. A mismatch (e.g. key "telegram-2" with
+		// type:"telegram") is an operator misconfiguration — the entry declares a
+		// known channel but the key is malformed — and is rejected loudly rather
+		// than silently dropped.
+		if inst.Type != "" && inst.Type != channelType {
+			return fmt.Errorf(
+				"channels: %w: entry %q declares type=%q but the key implies type=%q — use %q.<slug>",
+				ErrInvalidInstanceKey, key, inst.Type, channelType, inst.Type,
+			)
 		}
-		typeCounts[t]++
-	}
-	var dups []string
-	for t, n := range typeCounts {
-		if n > maxInstancesPerType {
-			dups = append(dups, fmt.Sprintf("%s (count=%d)", t, n))
+		// Undeclared unknown base type = legacy/unsupported section (e.g. a stale
+		// "maixcam" entry with no type field). These are gracefully DROPPED by
+		// normalizeChannelMap with a WARN — they must NOT hard-fail config load
+		// (T28: legacy sections are ignored, not fatal).
+		if _, ok := knownChannelTypes[channelType]; !ok {
+			continue
 		}
-	}
-	if len(dups) != 0 {
-		sort.Strings(dups)
-		return fmt.Errorf("%w: %s", ErrChannelsCap1Violated, strings.Join(dups, ", "))
+		// Known base type: a namespaced key's slug must be well-formed. Any dot in
+		// the key means it is namespaced, so a trailing dot ("whatsapp.", empty
+		// slug) is rejected here too (BUG-1) — slugPattern rejects the empty slug.
+		if strings.Contains(key, ".") && !slugPattern(slug) {
+			return fmt.Errorf(
+				"channels: %w: slug %q in key %q must match [a-z0-9-]{1,32} (all lowercase, 1–32 chars)",
+				ErrInvalidInstanceKey, slug, key,
+			)
+		}
+		// ADR-029 FR-029 half-bound guard: a workspace_id without a fully-qualified
+		// agent identity is an operator error. The instance would silently route as
+		// UNBOUND (BoundInstance=false) — the opposite of the operator's intent.
+		// Reject at load so the problem surfaces immediately rather than causing
+		// mysterious routing degradation at runtime. Full binding requires WorkspaceID
+		// non-empty AND Identity.Kind=="agent" AND Identity.ID non-empty; anything
+		// in between is half-bound and is rejected here.
+		if strings.TrimSpace(inst.WorkspaceID) != "" && !inst.IsWorkspaceBound() {
+			return fmt.Errorf(
+				"%w: instance %q has workspace_id=%q but is missing a valid agent identity (identity.kind==\"agent\" and non-empty identity.id are required)",
+				ErrHalfBoundChannelInstance, key, inst.WorkspaceID,
+			)
+		}
 	}
 	return nil
 }
@@ -3162,12 +3287,11 @@ func loadConfigInternal(path string, store CredentialStore) (*Config, error) {
 	if cfg.Channels == nil {
 		cfg.Channels = make(map[string]ChannelInstanceConfig)
 	}
-	// Cap-1 validation (FR-2.3): reject configs with >1 instance per channel type.
-	// Run on the RAW map BEFORE normalizeChannelMap drops unknown keys — otherwise
-	// a hand-edited duplicate under a non-type key (e.g. "telegram-2" with
-	// type:telegram) would be silently dropped rather than rejected. The check
-	// counts by effective type (the Type field, or the map key when Type is empty).
-	if err := ValidateChannelsCap1(cfg.Channels); err != nil {
+	// ADR-029 (v0.3): validate channel instance keys, effective types, and
+	// workspace binding completeness (half-bound instances are rejected).
+	// Run on the RAW map BEFORE normalizeChannelMap so malformed keys are
+	// caught before normalization silently discards them.
+	if err := ValidateChannels(cfg.Channels); err != nil {
 		return nil, err
 	}
 
@@ -3242,6 +3366,13 @@ func loadConfigInternal(path string, store CredentialStore) (*Config, error) {
 	// Hand-edited configs may contain multiple defaults; repair them now so the
 	// registry's GetDefaultAgent sees a clean canonical state (F11).
 	RepairMultipleDefaults(cfg)
+
+	// ADR-029 FR-029/OBS-001: enforce the two-representation rule. A channel
+	// instance that carries BOTH a bound representation (WorkspaceID + Identity)
+	// AND a stale channel-wildcard AgentBinding in cfg.Bindings is inconsistent —
+	// the bound representation wins. Drop the stale wildcard binding so the
+	// on-disk state is self-consistent after this load (mirrors RepairMultipleDefaults).
+	RepairStaleChannelWildcardBindings(cfg)
 
 	// Apply schedules guardrail defaults (#264 FR-003/FR-007) so a loaded
 	// config without a schedules block still gets 8 / 300.

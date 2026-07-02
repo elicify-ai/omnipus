@@ -15,9 +15,20 @@ type Store interface {
 	// AddFullMessage appends a complete message (with tool calls, etc.) to a session.
 	AddFullMessage(ctx context.Context, sessionKey string, msg providers.Message) error
 
-	// GetHistory returns all messages for a session in insertion order.
-	// Returns an empty slice (not nil) if the session does not exist.
+	// GetHistory returns the live window messages for a session in insertion order,
+	// honouring meta.Skip (evicted lines are excluded). Returns an empty slice
+	// (not nil) if the session does not exist.
 	GetHistory(ctx context.Context, sessionKey string) ([]providers.Message, error)
+
+	// ReadArchive returns the FULL archived log for a session from line 0,
+	// ignoring meta.Skip. Each ArchivedMessage carries the per-line write
+	// timestamp stamped by addMsg (FR-017). Legacy lines pre-dating the
+	// timestamp stamp unmarshal with TS==0 — callers must treat TS==0 as
+	// "unknown/earlier" and must not error on it.
+	//
+	// Use ReadArchive (not GetHistory) whenever evicted turns must be
+	// reachable — e.g. recall_conversation and the breadcrumb builder (FR-016).
+	ReadArchive(ctx context.Context, sessionKey string) ([]ArchivedMessage, error)
 
 	// GetSummary returns the conversation summary for a session.
 	// Returns an empty string if no summary exists.
@@ -33,8 +44,26 @@ type Store interface {
 	// SetHistory replaces all messages in a session with the provided history.
 	SetHistory(ctx context.Context, sessionKey string, history []providers.Message) error
 
+	// RollbackAppended truncates the JSONL file to targetLines physical lines,
+	// setting meta.Count = targetLines and restoring meta.Skip = min(targetSkip,
+	// targetLines). The Skip restore is the fix for the mid-turn eviction bug: if
+	// windowTrim advanced Skip during a turn and the turn then aborts,
+	// RollbackAppended MUST restore Skip to its turn-start value so that
+	// GetHistory returns the exact pre-turn live window (SC-001, SC-010).
+	//
+	// Callers compute: targetSkip = initialArchiveLen - initialHistoryLength
+	// (the Skip value at turn start, before any mid-turn evictions).
+	//
+	// If targetLines >= current Count, the method is a no-op. targetSkip is
+	// always clamped: meta.Skip = min(targetSkip, targetLines) so Skip never
+	// exceeds the new Count.
+	RollbackAppended(ctx context.Context, sessionKey string, targetLines, targetSkip int) error
+
 	// Compact reclaims storage by physically removing logically truncated
 	// data. Backends that do not accumulate dead data may return nil.
+	//
+	// context-paging: MUST NOT be called from any Save path — it destroys
+	// the recall archive (FR-005). Test-only; no production caller.
 	Compact(ctx context.Context, sessionKey string) error
 
 	// Close releases any resources held by the store.

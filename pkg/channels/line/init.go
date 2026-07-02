@@ -10,8 +10,8 @@ import (
 func init() {
 	channels.RegisterFactory(
 		"line",
-		func(cfg *config.Config, secrets credentials.SecretBundle, b *bus.MessageBus) (channels.Channel, error) {
-			inst := cfg.Channels["line"]
+		func(cfg *config.Config, instanceID string, secrets credentials.SecretBundle, b *bus.MessageBus) (channels.Channel, error) {
+			inst := cfg.Channels[instanceID]
 			return NewLINEChannel(config.InstanceToLINE(inst), secrets, b)
 		},
 	)

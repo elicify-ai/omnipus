@@ -302,13 +302,16 @@ var nonChatSubstrings = []string{
 
 // probeModelDefaults is the per-provider rules table for the default chat probe slug.
 // providerID keys are lowercase. The generic fallback ("") applies to any unknown provider.
+// These slugs are used ONLY when the catalog is empty (offline/CLI path) — when a live
+// catalog is available, pickProbeModel prefers a catalog entry over a slug not present
+// in the catalog, so stale entries here do not cause false Unreachable outcomes.
 var probeModelDefaults = map[string]string{
 	"openai":     "gpt-4o-mini",
 	"gemini":     "gemini-2.0-flash",
 	"google":     "gemini-2.0-flash",
 	"deepseek":   "deepseek-chat",
 	"groq":       "llama-3.1-8b-instant",
-	"openrouter": "meta-llama/llama-3.1-8b-instruct:free",
+	"openrouter": "meta-llama/llama-3.1-8b-instruct",
 	"anthropic":  "claude-3-haiku-20240307",
 	"zhipu":      "glm-4-flash",
 	"z-ai":       "glm-4-flash",
@@ -357,12 +360,13 @@ func pickProbeModel(catalog []string, providerID string) string {
 				return def
 			}
 		}
-		// Default not present in catalog — return the default anyway; a missing
-		// model slug degrades to Unreachable/Valid, never a false InvalidKey (R-E).
-		return def
+		// Default not present in catalog — do NOT return the stale slug; it would
+		// produce a false Unreachable outcome (a 404 "model not found" instead of a
+		// credential check). Fall through to the first chat-capable catalog entry.
 	}
 
-	// No rules-table default: return the first chat entry from the sorted catalog.
+	// No rules-table default, or the default is absent from the live catalog:
+	// return the first chat entry from the sorted catalog.
 	return chatEntries[0]
 }
 

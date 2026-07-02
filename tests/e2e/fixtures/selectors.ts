@@ -1,4 +1,4 @@
-import { type Page } from '@playwright/test';
+import { type Page, expect } from '@playwright/test';
 
 /**
  * Chat composer input — AssistantUI renders ComposerPrimitive.Input as a
@@ -15,16 +15,16 @@ export const sendButton = (page: Page) =>
   page.locator('button[aria-label="Send message"]').first();
 
 /**
- * Agent picker button — rendered in the <header> as a button whose text includes
- * the agent name followed by an em-dash (e.g. "Mia — Omnipus Guide").
- * Scoped to the banner landmark to avoid matching sidebar items.
+ * Agent picker button — rendered in the workspace top-bar ChatControls with
+ * data-testid="agent-picker-trigger". The button shows only the agent name
+ * (e.g. "Jim", "Mia") — NOT the old "Name — Tagline" format.
  *
- * Ground truth: header structure confirmed via Playwright MCP live inspection.
- * The button carries the full "Name — Tagline" text — match via em-dash presence.
- * The <header> has implicit ARIA role "banner" — use getByRole to locate it.
+ * Ground truth: ChatControls.tsx DropdownMenuTrigger > Button carries
+ * data-testid="agent-picker-trigger". Scoped to the banner landmark for
+ * stability; the testid gives an exact anchor that survives UI restructuring.
  */
 export const agentPicker = (page: Page) =>
-  page.getByRole('banner').locator('button').filter({ hasText: '—' }).first();
+  page.getByRole('banner').locator('[data-testid="agent-picker-trigger"]');
 
 /**
  * Completed assistant messages — only counts messages whose data-status is not
@@ -90,7 +90,6 @@ export const selectAgent = async (page: Page, name: string | RegExp = /Jim/i) =>
   await picker.click();
   await page.getByRole('menuitem', { name }).click();
   // Assert the picker label updated so we know the switch took effect.
-  const label = typeof name === 'string' ? new RegExp(name, 'i') : name;
-  await page.getByRole('banner').locator('button').filter({ hasText: label }).first()
-    .waitFor({ state: 'visible', timeout: 5_000 });
+  // ChatControls shows only the agent name (no em-dash tagline).
+  await expect(picker).toContainText(name, { timeout: 5_000 });
 };

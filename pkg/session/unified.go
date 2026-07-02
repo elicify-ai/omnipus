@@ -752,9 +752,41 @@ func (us *UnifiedStore) TruncateHistory(sessionKey string, keepLast int) {
 	}
 }
 
-// Save implements SessionStore — compacts the context backend.
+// RollbackAppended implements SessionStore — truncates the on-disk archive to
+// targetArchiveLen physical lines and restores meta.Skip = min(targetSkip,
+// targetArchiveLen). This is the fix for the mid-turn eviction bug: if
+// windowTrim advanced Skip during a live turn and the turn then aborts,
+// restoring Skip to its turn-start value ensures GetHistory returns exactly
+// the pre-turn live window (SC-001, SC-010).
+// Callers compute: targetSkip = initialArchiveLen - initialHistoryLength.
+func (us *UnifiedStore) RollbackAppended(sessionKey string, targetArchiveLen, targetSkip int) {
+	if err := us.backend.RollbackAppended(context.Background(), sessionKey, targetArchiveLen, targetSkip); err != nil {
+		slog.Error("unified_store: rollback appended", "key", sessionKey, "error", err)
+	}
+}
+
+// ReadArchive implements SessionStore — returns the full archived log for
+// sessionKey from line 0, ignoring meta.Skip. Evicted (skipped) turns are
+// included. Each ArchivedMessage carries the per-line TS written by addMsg
+// (FR-016/FR-017). Legacy lines pre-dating the TS stamp unmarshal with TS==0.
+func (us *UnifiedStore) ReadArchive(ctx context.Context, sessionKey string) ([]memory.ArchivedMessage, error) {
+	msgs, err := us.backend.ReadArchive(ctx, sessionKey)
+	if err != nil {
+		slog.Error("unified_store: read archive", "key", sessionKey, "error", err)
+		return nil, err
+	}
+	return msgs, nil
+}
+
+// Save implements SessionStore — ensures all writes are durable.
+// Since the JSONL backend fsyncs every write immediately, the data is
+// already durable at this point.
+//
+// context-paging (FR-005): Save does NOT compact the JSONL file. Evicted
+// (skipped) lines must remain on disk so recall_conversation can reach them.
+// The retention sweep is the sole legitimate deleter of context.jsonl content.
 func (us *UnifiedStore) Save(sessionKey string) error {
-	return us.backend.Compact(context.Background(), sessionKey)
+	return nil
 }
 
 // Close implements SessionStore.

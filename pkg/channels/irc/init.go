@@ -10,8 +10,8 @@ import (
 func init() {
 	channels.RegisterFactory(
 		"irc",
-		func(cfg *config.Config, secrets credentials.SecretBundle, b *bus.MessageBus) (channels.Channel, error) {
-			inst := cfg.Channels["irc"]
+		func(cfg *config.Config, instanceID string, secrets credentials.SecretBundle, b *bus.MessageBus) (channels.Channel, error) {
+			inst := cfg.Channels[instanceID]
 			if !inst.Enabled {
 				return nil, nil
 			}

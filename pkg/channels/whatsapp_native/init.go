@@ -12,12 +12,18 @@ import (
 func init() {
 	channels.RegisterFactory(
 		"whatsapp_native",
-		func(cfg *config.Config, _ credentials.SecretBundle, b *bus.MessageBus) (channels.Channel, error) {
-			inst := cfg.Channels["whatsapp"]
+		func(cfg *config.Config, instanceID string, _ credentials.SecretBundle, b *bus.MessageBus) (channels.Channel, error) {
+			inst := cfg.Channels[instanceID]
 			waCfg := config.InstanceToWhatsApp(inst)
 			storePath := waCfg.SessionStorePath
 			if storePath == "" {
-				storePath = filepath.Join(cfg.WorkspacePath(), "whatsapp")
+				// FR-018: per-instance store path so two WhatsApp instances
+				// (e.g. "whatsapp.eu" and "whatsapp.us") never share store.db.
+				// Legacy single-instance ("whatsapp") uses
+				// workspace/whatsapp/whatsapp/store.db — different from the old
+				// workspace/whatsapp/store.db, but v0.3 is a fresh-build so
+				// no migration is required.
+				storePath = filepath.Join(cfg.WorkspacePath(), "whatsapp", instanceID)
 			}
 			return NewWhatsAppNativeChannel(waCfg, b, storePath)
 		},

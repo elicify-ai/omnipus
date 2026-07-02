@@ -1030,120 +1030,6 @@ func (e ChannelConfigureRequestIdentityKind) Valid() bool {
 	}
 }
 
-// Defines values for ChannelEnabledResponseId.
-const (
-	ChannelEnabledResponseIdDingtalk   ChannelEnabledResponseId = "dingtalk"
-	ChannelEnabledResponseIdDiscord    ChannelEnabledResponseId = "discord"
-	ChannelEnabledResponseIdEmail      ChannelEnabledResponseId = "email"
-	ChannelEnabledResponseIdFeishu     ChannelEnabledResponseId = "feishu"
-	ChannelEnabledResponseIdGoogleChat ChannelEnabledResponseId = "google-chat"
-	ChannelEnabledResponseIdIrc        ChannelEnabledResponseId = "irc"
-	ChannelEnabledResponseIdLine       ChannelEnabledResponseId = "line"
-	ChannelEnabledResponseIdMatrix     ChannelEnabledResponseId = "matrix"
-	ChannelEnabledResponseIdQq         ChannelEnabledResponseId = "qq"
-	ChannelEnabledResponseIdSlack      ChannelEnabledResponseId = "slack"
-	ChannelEnabledResponseIdTelegram   ChannelEnabledResponseId = "telegram"
-	ChannelEnabledResponseIdWebchat    ChannelEnabledResponseId = "webchat"
-	ChannelEnabledResponseIdWecom      ChannelEnabledResponseId = "wecom"
-	ChannelEnabledResponseIdWeixin     ChannelEnabledResponseId = "weixin"
-	ChannelEnabledResponseIdWhatsapp   ChannelEnabledResponseId = "whatsapp"
-)
-
-// Valid indicates whether the value is a known member of the ChannelEnabledResponseId enum.
-func (e ChannelEnabledResponseId) Valid() bool {
-	switch e {
-	case ChannelEnabledResponseIdDingtalk:
-		return true
-	case ChannelEnabledResponseIdDiscord:
-		return true
-	case ChannelEnabledResponseIdEmail:
-		return true
-	case ChannelEnabledResponseIdFeishu:
-		return true
-	case ChannelEnabledResponseIdGoogleChat:
-		return true
-	case ChannelEnabledResponseIdIrc:
-		return true
-	case ChannelEnabledResponseIdLine:
-		return true
-	case ChannelEnabledResponseIdMatrix:
-		return true
-	case ChannelEnabledResponseIdQq:
-		return true
-	case ChannelEnabledResponseIdSlack:
-		return true
-	case ChannelEnabledResponseIdTelegram:
-		return true
-	case ChannelEnabledResponseIdWebchat:
-		return true
-	case ChannelEnabledResponseIdWecom:
-		return true
-	case ChannelEnabledResponseIdWeixin:
-		return true
-	case ChannelEnabledResponseIdWhatsapp:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for ChannelEntryId.
-const (
-	ChannelEntryIdDingtalk   ChannelEntryId = "dingtalk"
-	ChannelEntryIdDiscord    ChannelEntryId = "discord"
-	ChannelEntryIdEmail      ChannelEntryId = "email"
-	ChannelEntryIdFeishu     ChannelEntryId = "feishu"
-	ChannelEntryIdGoogleChat ChannelEntryId = "google-chat"
-	ChannelEntryIdIrc        ChannelEntryId = "irc"
-	ChannelEntryIdLine       ChannelEntryId = "line"
-	ChannelEntryIdMatrix     ChannelEntryId = "matrix"
-	ChannelEntryIdQq         ChannelEntryId = "qq"
-	ChannelEntryIdSlack      ChannelEntryId = "slack"
-	ChannelEntryIdTelegram   ChannelEntryId = "telegram"
-	ChannelEntryIdWebchat    ChannelEntryId = "webchat"
-	ChannelEntryIdWecom      ChannelEntryId = "wecom"
-	ChannelEntryIdWeixin     ChannelEntryId = "weixin"
-	ChannelEntryIdWhatsapp   ChannelEntryId = "whatsapp"
-)
-
-// Valid indicates whether the value is a known member of the ChannelEntryId enum.
-func (e ChannelEntryId) Valid() bool {
-	switch e {
-	case ChannelEntryIdDingtalk:
-		return true
-	case ChannelEntryIdDiscord:
-		return true
-	case ChannelEntryIdEmail:
-		return true
-	case ChannelEntryIdFeishu:
-		return true
-	case ChannelEntryIdGoogleChat:
-		return true
-	case ChannelEntryIdIrc:
-		return true
-	case ChannelEntryIdLine:
-		return true
-	case ChannelEntryIdMatrix:
-		return true
-	case ChannelEntryIdQq:
-		return true
-	case ChannelEntryIdSlack:
-		return true
-	case ChannelEntryIdTelegram:
-		return true
-	case ChannelEntryIdWebchat:
-		return true
-	case ChannelEntryIdWecom:
-		return true
-	case ChannelEntryIdWeixin:
-		return true
-	case ChannelEntryIdWhatsapp:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for ChannelEntryIdentityKind.
 const (
 	ChannelEntryIdentityKindAgent ChannelEntryIdentityKind = "agent"
@@ -1192,63 +1078,6 @@ func (e ChannelEntryTransport) Valid() bool {
 	case ChannelEntryTransportWebhook:
 		return true
 	case ChannelEntryTransportWebsocket:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for ChannelId.
-const (
-	Dingtalk   ChannelId = "dingtalk"
-	Discord    ChannelId = "discord"
-	Email      ChannelId = "email"
-	Feishu     ChannelId = "feishu"
-	GoogleChat ChannelId = "google-chat"
-	Irc        ChannelId = "irc"
-	Line       ChannelId = "line"
-	Matrix     ChannelId = "matrix"
-	Qq         ChannelId = "qq"
-	Slack      ChannelId = "slack"
-	Telegram   ChannelId = "telegram"
-	Webchat    ChannelId = "webchat"
-	Wecom      ChannelId = "wecom"
-	Weixin     ChannelId = "weixin"
-	Whatsapp   ChannelId = "whatsapp"
-)
-
-// Valid indicates whether the value is a known member of the ChannelId enum.
-func (e ChannelId) Valid() bool {
-	switch e {
-	case Dingtalk:
-		return true
-	case Discord:
-		return true
-	case Email:
-		return true
-	case Feishu:
-		return true
-	case GoogleChat:
-		return true
-	case Irc:
-		return true
-	case Line:
-		return true
-	case Matrix:
-		return true
-	case Qq:
-		return true
-	case Slack:
-		return true
-	case Telegram:
-		return true
-	case Webchat:
-		return true
-	case Wecom:
-		return true
-	case Weixin:
-		return true
-	case Whatsapp:
 		return true
 	default:
 		return false
@@ -1860,190 +1689,190 @@ func (e OperationResultValidationOutcome) Valid() bool {
 
 // Defines values for ProbeProviderRequestId.
 const (
-	AlibabaCoding          ProbeProviderRequestId = "alibaba-coding"
-	AlibabaCodingAnthropic ProbeProviderRequestId = "alibaba-coding-anthropic"
-	Anthropic              ProbeProviderRequestId = "anthropic"
-	AnthropicMessages      ProbeProviderRequestId = "anthropic-messages"
-	Antigravity            ProbeProviderRequestId = "antigravity"
-	Avian                  ProbeProviderRequestId = "avian"
-	Azure                  ProbeProviderRequestId = "azure"
-	AzureOpenai            ProbeProviderRequestId = "azure-openai"
-	Bedrock                ProbeProviderRequestId = "bedrock"
-	Cerebras               ProbeProviderRequestId = "cerebras"
-	ClaudeCli              ProbeProviderRequestId = "claude-cli"
-	Claudecli              ProbeProviderRequestId = "claudecli"
-	CodexCli               ProbeProviderRequestId = "codex-cli"
-	Codexcli               ProbeProviderRequestId = "codexcli"
-	CodingPlan             ProbeProviderRequestId = "coding-plan"
-	CodingPlanAnthropic    ProbeProviderRequestId = "coding-plan-anthropic"
-	Copilot                ProbeProviderRequestId = "copilot"
-	DashscopeIntl          ProbeProviderRequestId = "dashscope-intl"
-	DashscopeUs            ProbeProviderRequestId = "dashscope-us"
-	Deepseek               ProbeProviderRequestId = "deepseek"
-	DeepseekAnthropic      ProbeProviderRequestId = "deepseek-anthropic"
-	Gemini                 ProbeProviderRequestId = "gemini"
-	GithubCopilot          ProbeProviderRequestId = "github-copilot"
-	GlmCoding              ProbeProviderRequestId = "glm-coding"
-	Google                 ProbeProviderRequestId = "google"
-	Groq                   ProbeProviderRequestId = "groq"
-	Litellm                ProbeProviderRequestId = "litellm"
-	Longcat                ProbeProviderRequestId = "longcat"
-	Mimo                   ProbeProviderRequestId = "mimo"
-	Minimax                ProbeProviderRequestId = "minimax"
-	MinimaxAnthropic       ProbeProviderRequestId = "minimax-anthropic"
-	MinimaxCn              ProbeProviderRequestId = "minimax-cn"
-	MinimaxCnAnthropic     ProbeProviderRequestId = "minimax-cn-anthropic"
-	Mistral                ProbeProviderRequestId = "mistral"
-	Modelscope             ProbeProviderRequestId = "modelscope"
-	Moonshot               ProbeProviderRequestId = "moonshot"
-	MoonshotAnthropic      ProbeProviderRequestId = "moonshot-anthropic"
-	MoonshotCn             ProbeProviderRequestId = "moonshot-cn"
-	MoonshotCnAnthropic    ProbeProviderRequestId = "moonshot-cn-anthropic"
-	Novita                 ProbeProviderRequestId = "novita"
-	Nvidia                 ProbeProviderRequestId = "nvidia"
-	Ollama                 ProbeProviderRequestId = "ollama"
-	Openai                 ProbeProviderRequestId = "openai"
-	Openrouter             ProbeProviderRequestId = "openrouter"
-	Qwen                   ProbeProviderRequestId = "qwen"
-	QwenCoding             ProbeProviderRequestId = "qwen-coding"
-	QwenInternational      ProbeProviderRequestId = "qwen-international"
-	QwenIntl               ProbeProviderRequestId = "qwen-intl"
-	QwenUs                 ProbeProviderRequestId = "qwen-us"
-	Shengsuanyun           ProbeProviderRequestId = "shengsuanyun"
-	Vivgrid                ProbeProviderRequestId = "vivgrid"
-	Vllm                   ProbeProviderRequestId = "vllm"
-	Volcengine             ProbeProviderRequestId = "volcengine"
-	ZAi                    ProbeProviderRequestId = "z-ai"
-	ZAiAnthropic           ProbeProviderRequestId = "z-ai-anthropic"
-	ZAiCoding              ProbeProviderRequestId = "z-ai-coding"
-	Zai                    ProbeProviderRequestId = "zai"
-	Zhipu                  ProbeProviderRequestId = "zhipu"
-	ZhipuAnthropic         ProbeProviderRequestId = "zhipu-anthropic"
-	ZhipuCoding            ProbeProviderRequestId = "zhipu-coding"
+	ProbeProviderRequestIdAlibabaCoding          ProbeProviderRequestId = "alibaba-coding"
+	ProbeProviderRequestIdAlibabaCodingAnthropic ProbeProviderRequestId = "alibaba-coding-anthropic"
+	ProbeProviderRequestIdAnthropic              ProbeProviderRequestId = "anthropic"
+	ProbeProviderRequestIdAnthropicMessages      ProbeProviderRequestId = "anthropic-messages"
+	ProbeProviderRequestIdAntigravity            ProbeProviderRequestId = "antigravity"
+	ProbeProviderRequestIdAvian                  ProbeProviderRequestId = "avian"
+	ProbeProviderRequestIdAzure                  ProbeProviderRequestId = "azure"
+	ProbeProviderRequestIdAzureOpenai            ProbeProviderRequestId = "azure-openai"
+	ProbeProviderRequestIdBedrock                ProbeProviderRequestId = "bedrock"
+	ProbeProviderRequestIdCerebras               ProbeProviderRequestId = "cerebras"
+	ProbeProviderRequestIdClaudeCli              ProbeProviderRequestId = "claude-cli"
+	ProbeProviderRequestIdClaudecli              ProbeProviderRequestId = "claudecli"
+	ProbeProviderRequestIdCodexCli               ProbeProviderRequestId = "codex-cli"
+	ProbeProviderRequestIdCodexcli               ProbeProviderRequestId = "codexcli"
+	ProbeProviderRequestIdCodingPlan             ProbeProviderRequestId = "coding-plan"
+	ProbeProviderRequestIdCodingPlanAnthropic    ProbeProviderRequestId = "coding-plan-anthropic"
+	ProbeProviderRequestIdCopilot                ProbeProviderRequestId = "copilot"
+	ProbeProviderRequestIdDashscopeIntl          ProbeProviderRequestId = "dashscope-intl"
+	ProbeProviderRequestIdDashscopeUs            ProbeProviderRequestId = "dashscope-us"
+	ProbeProviderRequestIdDeepseek               ProbeProviderRequestId = "deepseek"
+	ProbeProviderRequestIdDeepseekAnthropic      ProbeProviderRequestId = "deepseek-anthropic"
+	ProbeProviderRequestIdGemini                 ProbeProviderRequestId = "gemini"
+	ProbeProviderRequestIdGithubCopilot          ProbeProviderRequestId = "github-copilot"
+	ProbeProviderRequestIdGlmCoding              ProbeProviderRequestId = "glm-coding"
+	ProbeProviderRequestIdGoogle                 ProbeProviderRequestId = "google"
+	ProbeProviderRequestIdGroq                   ProbeProviderRequestId = "groq"
+	ProbeProviderRequestIdLitellm                ProbeProviderRequestId = "litellm"
+	ProbeProviderRequestIdLongcat                ProbeProviderRequestId = "longcat"
+	ProbeProviderRequestIdMimo                   ProbeProviderRequestId = "mimo"
+	ProbeProviderRequestIdMinimax                ProbeProviderRequestId = "minimax"
+	ProbeProviderRequestIdMinimaxAnthropic       ProbeProviderRequestId = "minimax-anthropic"
+	ProbeProviderRequestIdMinimaxCn              ProbeProviderRequestId = "minimax-cn"
+	ProbeProviderRequestIdMinimaxCnAnthropic     ProbeProviderRequestId = "minimax-cn-anthropic"
+	ProbeProviderRequestIdMistral                ProbeProviderRequestId = "mistral"
+	ProbeProviderRequestIdModelscope             ProbeProviderRequestId = "modelscope"
+	ProbeProviderRequestIdMoonshot               ProbeProviderRequestId = "moonshot"
+	ProbeProviderRequestIdMoonshotAnthropic      ProbeProviderRequestId = "moonshot-anthropic"
+	ProbeProviderRequestIdMoonshotCn             ProbeProviderRequestId = "moonshot-cn"
+	ProbeProviderRequestIdMoonshotCnAnthropic    ProbeProviderRequestId = "moonshot-cn-anthropic"
+	ProbeProviderRequestIdNovita                 ProbeProviderRequestId = "novita"
+	ProbeProviderRequestIdNvidia                 ProbeProviderRequestId = "nvidia"
+	ProbeProviderRequestIdOllama                 ProbeProviderRequestId = "ollama"
+	ProbeProviderRequestIdOpenai                 ProbeProviderRequestId = "openai"
+	ProbeProviderRequestIdOpenrouter             ProbeProviderRequestId = "openrouter"
+	ProbeProviderRequestIdQwen                   ProbeProviderRequestId = "qwen"
+	ProbeProviderRequestIdQwenCoding             ProbeProviderRequestId = "qwen-coding"
+	ProbeProviderRequestIdQwenInternational      ProbeProviderRequestId = "qwen-international"
+	ProbeProviderRequestIdQwenIntl               ProbeProviderRequestId = "qwen-intl"
+	ProbeProviderRequestIdQwenUs                 ProbeProviderRequestId = "qwen-us"
+	ProbeProviderRequestIdShengsuanyun           ProbeProviderRequestId = "shengsuanyun"
+	ProbeProviderRequestIdVivgrid                ProbeProviderRequestId = "vivgrid"
+	ProbeProviderRequestIdVllm                   ProbeProviderRequestId = "vllm"
+	ProbeProviderRequestIdVolcengine             ProbeProviderRequestId = "volcengine"
+	ProbeProviderRequestIdZAi                    ProbeProviderRequestId = "z-ai"
+	ProbeProviderRequestIdZAiAnthropic           ProbeProviderRequestId = "z-ai-anthropic"
+	ProbeProviderRequestIdZAiCoding              ProbeProviderRequestId = "z-ai-coding"
+	ProbeProviderRequestIdZai                    ProbeProviderRequestId = "zai"
+	ProbeProviderRequestIdZhipu                  ProbeProviderRequestId = "zhipu"
+	ProbeProviderRequestIdZhipuAnthropic         ProbeProviderRequestId = "zhipu-anthropic"
+	ProbeProviderRequestIdZhipuCoding            ProbeProviderRequestId = "zhipu-coding"
 )
 
 // Valid indicates whether the value is a known member of the ProbeProviderRequestId enum.
 func (e ProbeProviderRequestId) Valid() bool {
 	switch e {
-	case AlibabaCoding:
+	case ProbeProviderRequestIdAlibabaCoding:
 		return true
-	case AlibabaCodingAnthropic:
+	case ProbeProviderRequestIdAlibabaCodingAnthropic:
 		return true
-	case Anthropic:
+	case ProbeProviderRequestIdAnthropic:
 		return true
-	case AnthropicMessages:
+	case ProbeProviderRequestIdAnthropicMessages:
 		return true
-	case Antigravity:
+	case ProbeProviderRequestIdAntigravity:
 		return true
-	case Avian:
+	case ProbeProviderRequestIdAvian:
 		return true
-	case Azure:
+	case ProbeProviderRequestIdAzure:
 		return true
-	case AzureOpenai:
+	case ProbeProviderRequestIdAzureOpenai:
 		return true
-	case Bedrock:
+	case ProbeProviderRequestIdBedrock:
 		return true
-	case Cerebras:
+	case ProbeProviderRequestIdCerebras:
 		return true
-	case ClaudeCli:
+	case ProbeProviderRequestIdClaudeCli:
 		return true
-	case Claudecli:
+	case ProbeProviderRequestIdClaudecli:
 		return true
-	case CodexCli:
+	case ProbeProviderRequestIdCodexCli:
 		return true
-	case Codexcli:
+	case ProbeProviderRequestIdCodexcli:
 		return true
-	case CodingPlan:
+	case ProbeProviderRequestIdCodingPlan:
 		return true
-	case CodingPlanAnthropic:
+	case ProbeProviderRequestIdCodingPlanAnthropic:
 		return true
-	case Copilot:
+	case ProbeProviderRequestIdCopilot:
 		return true
-	case DashscopeIntl:
+	case ProbeProviderRequestIdDashscopeIntl:
 		return true
-	case DashscopeUs:
+	case ProbeProviderRequestIdDashscopeUs:
 		return true
-	case Deepseek:
+	case ProbeProviderRequestIdDeepseek:
 		return true
-	case DeepseekAnthropic:
+	case ProbeProviderRequestIdDeepseekAnthropic:
 		return true
-	case Gemini:
+	case ProbeProviderRequestIdGemini:
 		return true
-	case GithubCopilot:
+	case ProbeProviderRequestIdGithubCopilot:
 		return true
-	case GlmCoding:
+	case ProbeProviderRequestIdGlmCoding:
 		return true
-	case Google:
+	case ProbeProviderRequestIdGoogle:
 		return true
-	case Groq:
+	case ProbeProviderRequestIdGroq:
 		return true
-	case Litellm:
+	case ProbeProviderRequestIdLitellm:
 		return true
-	case Longcat:
+	case ProbeProviderRequestIdLongcat:
 		return true
-	case Mimo:
+	case ProbeProviderRequestIdMimo:
 		return true
-	case Minimax:
+	case ProbeProviderRequestIdMinimax:
 		return true
-	case MinimaxAnthropic:
+	case ProbeProviderRequestIdMinimaxAnthropic:
 		return true
-	case MinimaxCn:
+	case ProbeProviderRequestIdMinimaxCn:
 		return true
-	case MinimaxCnAnthropic:
+	case ProbeProviderRequestIdMinimaxCnAnthropic:
 		return true
-	case Mistral:
+	case ProbeProviderRequestIdMistral:
 		return true
-	case Modelscope:
+	case ProbeProviderRequestIdModelscope:
 		return true
-	case Moonshot:
+	case ProbeProviderRequestIdMoonshot:
 		return true
-	case MoonshotAnthropic:
+	case ProbeProviderRequestIdMoonshotAnthropic:
 		return true
-	case MoonshotCn:
+	case ProbeProviderRequestIdMoonshotCn:
 		return true
-	case MoonshotCnAnthropic:
+	case ProbeProviderRequestIdMoonshotCnAnthropic:
 		return true
-	case Novita:
+	case ProbeProviderRequestIdNovita:
 		return true
-	case Nvidia:
+	case ProbeProviderRequestIdNvidia:
 		return true
-	case Ollama:
+	case ProbeProviderRequestIdOllama:
 		return true
-	case Openai:
+	case ProbeProviderRequestIdOpenai:
 		return true
-	case Openrouter:
+	case ProbeProviderRequestIdOpenrouter:
 		return true
-	case Qwen:
+	case ProbeProviderRequestIdQwen:
 		return true
-	case QwenCoding:
+	case ProbeProviderRequestIdQwenCoding:
 		return true
-	case QwenInternational:
+	case ProbeProviderRequestIdQwenInternational:
 		return true
-	case QwenIntl:
+	case ProbeProviderRequestIdQwenIntl:
 		return true
-	case QwenUs:
+	case ProbeProviderRequestIdQwenUs:
 		return true
-	case Shengsuanyun:
+	case ProbeProviderRequestIdShengsuanyun:
 		return true
-	case Vivgrid:
+	case ProbeProviderRequestIdVivgrid:
 		return true
-	case Vllm:
+	case ProbeProviderRequestIdVllm:
 		return true
-	case Volcengine:
+	case ProbeProviderRequestIdVolcengine:
 		return true
-	case ZAi:
+	case ProbeProviderRequestIdZAi:
 		return true
-	case ZAiAnthropic:
+	case ProbeProviderRequestIdZAiAnthropic:
 		return true
-	case ZAiCoding:
+	case ProbeProviderRequestIdZAiCoding:
 		return true
-	case Zai:
+	case ProbeProviderRequestIdZai:
 		return true
-	case Zhipu:
+	case ProbeProviderRequestIdZhipu:
 		return true
-	case ZhipuAnthropic:
+	case ProbeProviderRequestIdZhipuAnthropic:
 		return true
-	case ZhipuCoding:
+	case ProbeProviderRequestIdZhipuCoding:
 		return true
 	default:
 		return false
@@ -2182,6 +2011,63 @@ func (e ProviderValidationOutcome) Valid() bool {
 	case ProviderValidationOutcomeUnreachable:
 		return true
 	case ProviderValidationOutcomeValid:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ProviderCatalogEntryPlan.
+const (
+	ProviderCatalogEntryPlanCodingPlan  ProviderCatalogEntryPlan = "coding-plan"
+	ProviderCatalogEntryPlanStandardApi ProviderCatalogEntryPlan = "standard-api"
+)
+
+// Valid indicates whether the value is a known member of the ProviderCatalogEntryPlan enum.
+func (e ProviderCatalogEntryPlan) Valid() bool {
+	switch e {
+	case ProviderCatalogEntryPlanCodingPlan:
+		return true
+	case ProviderCatalogEntryPlanStandardApi:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ProviderCatalogEntryRegion.
+const (
+	China ProviderCatalogEntryRegion = "china"
+	Intl  ProviderCatalogEntryRegion = "intl"
+	Us    ProviderCatalogEntryRegion = "us"
+)
+
+// Valid indicates whether the value is a known member of the ProviderCatalogEntryRegion enum.
+func (e ProviderCatalogEntryRegion) Valid() bool {
+	switch e {
+	case China:
+		return true
+	case Intl:
+		return true
+	case Us:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ProviderCatalogEntryWire.
+const (
+	Anthropic        ProviderCatalogEntryWire = "anthropic"
+	OpenaiCompatible ProviderCatalogEntryWire = "openai-compatible"
+)
+
+// Valid indicates whether the value is a known member of the ProviderCatalogEntryWire enum.
+func (e ProviderCatalogEntryWire) Valid() bool {
+	switch e {
+	case Anthropic:
+		return true
+	case OpenaiCompatible:
 		return true
 	default:
 		return false
@@ -5160,17 +5046,35 @@ type ChannelConfigureRequest struct {
 // ChannelConfigureRequestIdentityKind Routing kind for this channel instance.
 type ChannelConfigureRequestIdentityKind string
 
+// ChannelCreateRequest Request body for POST /channels — creates a new channel instance. The instance key is derived as "<type>.<slug>" (ADR-029 FR-017).
+type ChannelCreateRequest struct {
+	// Slug Per-instance disambiguator matching [a-z0-9-]{1,32} (all lowercase, 1–32 chars). Combined with type to form the instance key "<type>.<slug>".
+	Slug string `json:"slug"`
+
+	// Type Base channel type (e.g. "whatsapp", "telegram"). Must be a known channel type as listed in the ChannelId registry.
+	Type string `json:"type"`
+}
+
+// ChannelCreateResponse Response body for POST /channels — the newly created channel instance.
+type ChannelCreateResponse struct {
+	// Enabled Whether the instance is currently enabled. Newly created instances start disabled (enabled: false) until configured and toggled.
+	Enabled bool `json:"enabled"`
+
+	// Id The fully-qualified instance key: "<type>.<slug>" (ADR-029 FR-017).
+	Id string `json:"id"`
+
+	// Type Base channel type.
+	Type string `json:"type"`
+}
+
 // ChannelEnabledResponse Response from PUT /api/v1/channels/{id}/enable and PUT /api/v1/channels/{id}/disable. Returns the channel ID and its new enabled state.
 type ChannelEnabledResponse struct {
 	// Enabled Whether the channel is now enabled.
 	Enabled bool `json:"enabled"`
 
-	// Id Stable identifier for a built-in channel.
-	Id ChannelEnabledResponseId `json:"id"`
+	// Id Identifies a channel instance. Either a bare base channel type (e.g. "whatsapp", "telegram") for legacy single-instance configurations, or a namespaced instance id of the form <type>.<slug> (e.g. "whatsapp.eu", "telegram.main-bot") for multi-instance deployments (ADR-029). The pre-dot segment is the base channel type; the slug is [a-z0-9-]{1,32}.
+	Id string `json:"id"`
 }
-
-// ChannelEnabledResponseId Stable identifier for a built-in channel.
-type ChannelEnabledResponseId string
 
 // ChannelEntry A communication channel entry returned by GET /api/v1/channels.
 type ChannelEntry struct {
@@ -5186,8 +5090,8 @@ type ChannelEntry struct {
 	// Enabled Whether this channel is currently enabled.
 	Enabled bool `json:"enabled"`
 
-	// Id Stable identifier for a built-in channel.
-	Id ChannelEntryId `json:"id"`
+	// Id Identifies a channel instance. Either a bare base channel type (e.g. "whatsapp", "telegram") for legacy single-instance configurations, or a namespaced instance id of the form <type>.<slug> (e.g. "whatsapp.eu", "telegram.main-bot") for multi-instance deployments (ADR-029). The pre-dot segment is the base channel type; the slug is [a-z0-9-]{1,32}.
+	Id string `json:"id"`
 
 	// Identity Identifies whether an inbound channel connection acts on behalf of a specific agent ("agent" kind) or routes as the default user ("user" kind). Persisted per channel instance; wired into ResolveRoute at routing time (Spec-2 FR-2.9).
 	Identity *struct {
@@ -5211,17 +5115,14 @@ type ChannelEntry struct {
 	Transport ChannelEntryTransport `json:"transport"`
 }
 
-// ChannelEntryId Stable identifier for a built-in channel.
-type ChannelEntryId string
-
 // ChannelEntryIdentityKind Routing kind for this channel instance.
 type ChannelEntryIdentityKind string
 
 // ChannelEntryTransport Transport mechanism used by this channel.
 type ChannelEntryTransport string
 
-// ChannelId Stable identifier for a built-in channel.
-type ChannelId string
+// ChannelId Identifies a channel instance. Either a bare base channel type (e.g. "whatsapp", "telegram") for legacy single-instance configurations, or a namespaced instance id of the form <type>.<slug> (e.g. "whatsapp.eu", "telegram.main-bot") for multi-instance deployments (ADR-029). The pre-dot segment is the base channel type; the slug is [a-z0-9-]{1,32}.
+type ChannelId = string
 
 // ChannelIdentity Identifies whether an inbound channel connection acts on behalf of a specific agent ("agent" kind) or routes as the default user ("user" kind). Persisted per channel instance; wired into ResolveRoute at routing time (Spec-2 FR-2.9).
 type ChannelIdentity struct {
@@ -5239,6 +5140,9 @@ type ChannelIdentityKind string
 type ChannelRouting struct {
 	// DefaultAgentId ID of the agent that handles this channel's inbound messages. Omitted or empty means fall back to the global default agent.
 	DefaultAgentId *string `json:"default_agent_id,omitempty"`
+
+	// WorkspaceId Workspace this channel instance is bound to. Required (non-empty) for a bound instance; empty/omitted = unbound (legacy default routing).
+	WorkspaceId *string `json:"workspace_id,omitempty"`
 }
 
 // ChannelTestResponse Response from POST /api/v1/channels/{id}/test. Returns whether required credentials are configured.
@@ -6420,6 +6324,48 @@ type ProviderStatus string
 
 // ProviderValidationOutcome Classified result of the key probe. "valid" — the key was accepted by the upstream provider. "invalid_key" — the upstream confirmed the key is wrong or revoked; this is the only outcome that blocks a save. "no_credit" — the key is valid but the account has insufficient credit or quota. "unreachable" — the upstream could not be reached (transport error, timeout, 5xx, 404, pre-auth 429); transient. "restricted" — the key works but the request was blocked by a region or permission policy on the provider side.
 type ProviderValidationOutcome string
+
+// ProviderCatalogEntry A single entry in the provider catalog — the curated, build-time-embedded registry of ~30 user-facing LLM provider variants. Each entry represents one billable endpoint (company × plan × region), not a raw protocol id. Delivered as a build-time go:embed artifact + a generated TypeScript catalog; never served from a live HTTP endpoint (FR-016, ADR-031 §6 G-2). The type is contract-defined (Constraint #8) so the same generated struct is used in the Go catalog SoT and the generated TS consumer. No secret fields.
+type ProviderCatalogEntry struct {
+	// Aliases Additional protocol ids that map to this catalog entry. Derived from the GetDefaultAPIBase switch: ids grouped in the same case share a base URL and are aliases. The aliases list excludes the canonical id itself. Used by the migration resolver to normalize stored alias ids to the canonical catalog entry (ADR-031 §7 G-4, FR-012, US-8).
+	Aliases *[]string `json:"aliases,omitempty"`
+
+	// Company Human-readable company/brand name. Used as the group header in the configured-providers list. Multiple catalog entries share the same company when one vendor exposes multiple endpoints (plan × region).
+	Company string `json:"company"`
+
+	// EndpointHint Curated display host for this endpoint (e.g. "api.z.ai/api/coding/paas/v4"). Hand-authored, NOT derived from GetDefaultAPIBase (which returns full URLs the display doesn't need). For deployment-configured providers, this is a placeholder template (e.g. "<resource>.openai.azure.com"). Shown in the subtitle and the variant config Sheet (ADR-031 R2-01/R2-03).
+	EndpointHint string `json:"endpointHint"`
+
+	// Id Canonical protocol identifier — matches a knownProtocols entry and a member of the ProbeProviderRequest id enum. Used as the primary key for probe, configure, and drift-guard lookups.
+	Id string `json:"id"`
+
+	// Label Full human-readable label for this variant in the form "<Brand> — <Access Type> [(Region)]". Carried on the wire so onboarding and Settings render identical text from one catalog source (ADR-031 FR-007, G-3=C safety guarantee). Example: "Zhipu / GLM — Coding Plan (International)".
+	Label string `json:"label"`
+
+	// LogoSlug Asset key for the <BrandIcon> component. Maps to a vendored SVG in src/assets/brand-logos/p_<logoSlug>.svg. When no SVG exists for the slug, BrandIcon falls back to a lettermark chip (FR-011, FR-013). Companies with no vendored SVG use a short id (e.g. "cerebras", "nvidia") which triggers the lettermark path.
+	LogoSlug string `json:"logoSlug"`
+
+	// Plan Billing plan for this variant. "standard-api" = pay-as-you-go per-token API (formerly "api" in the onboarding PLAN_LABELS). "coding-plan" = subscription-based coding plan (unchanged label). The legacy "anthropic" plan value is NOT in this enum — it was a mislabeled wire protocol; the wire field carries that information instead (ADR-031 FR-006).
+	Plan ProviderCatalogEntryPlan `json:"plan"`
+
+	// Region Deployment region, when the provider has a regional split. Omitted for providers with a single global endpoint (e.g. OpenAI, DeepSeek).
+	Region *ProviderCatalogEntryRegion `json:"region,omitempty"`
+
+	// Subtitle Short billing-model description and endpoint hint. Shown below the label in the picker and Sheet. Format: "<billing model> · <endpointHint>". Example: "Subscription (Coding Plan) · api.z.ai/api/coding/paas/v4".
+	Subtitle string `json:"subtitle"`
+
+	// Wire Wire protocol used to call this endpoint. Derived, not authored: "anthropic" when id matches /-anthropic$/ or id ∈ {anthropic, anthropic-messages, bedrock}; otherwise "openai-compatible" (ADR-031 FR-005). Shown as a badge in the UI — not a plan option.
+	Wire ProviderCatalogEntryWire `json:"wire"`
+}
+
+// ProviderCatalogEntryPlan Billing plan for this variant. "standard-api" = pay-as-you-go per-token API (formerly "api" in the onboarding PLAN_LABELS). "coding-plan" = subscription-based coding plan (unchanged label). The legacy "anthropic" plan value is NOT in this enum — it was a mislabeled wire protocol; the wire field carries that information instead (ADR-031 FR-006).
+type ProviderCatalogEntryPlan string
+
+// ProviderCatalogEntryRegion Deployment region, when the provider has a regional split. Omitted for providers with a single global endpoint (e.g. OpenAI, DeepSeek).
+type ProviderCatalogEntryRegion string
+
+// ProviderCatalogEntryWire Wire protocol used to call this endpoint. Derived, not authored: "anthropic" when id matches /-anthropic$/ or id ∈ {anthropic, anthropic-messages, bedrock}; otherwise "openai-compatible" (ADR-031 FR-005). Shown as a badge in the UI — not a plan option.
+type ProviderCatalogEntryWire string
 
 // ProviderUpdateRequest Request body for PUT /api/v1/providers/{id}. Adds or updates an LLM provider configuration. On new providers, api_key is required. On existing providers, api_key may be omitted to keep the current key.
 type ProviderUpdateRequest struct {
@@ -8830,6 +8776,9 @@ type ReAuthJSONRequestBody = ReAuthRequest
 
 // RegisterAdminJSONRequestBody defines body for RegisterAdmin for application/json ContentType.
 type RegisterAdminJSONRequestBody = RegisterAdminRequest
+
+// CreateChannelInstanceJSONRequestBody defines body for CreateChannelInstance for application/json ContentType.
+type CreateChannelInstanceJSONRequestBody = ChannelCreateRequest
 
 // ConfigureChannelJSONRequestBody defines body for ConfigureChannel for application/json ContentType.
 type ConfigureChannelJSONRequestBody ConfigureChannelJSONBody

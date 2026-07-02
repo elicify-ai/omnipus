@@ -463,17 +463,22 @@ func (s *finalizeHookStreamer) Finalize(ctx context.Context, content string) err
 	return nil
 }
 
-// initChannel is a helper that looks up a factory by name and creates the channel.
-// It returns an error if the factory is not registered or construction fails.
-func (m *Manager) initChannel(name, displayName string) error {
+// initChannel is a helper that looks up a factory by name and creates the
+// channel. instanceID is the config.Channels map key for this instance (e.g.
+// "whatsapp" for a bare-type key or "whatsapp.eu" for a namespaced instance).
+// It is passed through to the factory so the factory can select the right
+// config entry (ADR-029 Gate 0). It returns an error if the factory is not
+// registered or construction fails.
+func (m *Manager) initChannel(name, instanceID, displayName string) error {
 	f, ok := getFactory(name)
 	if !ok {
 		return fmt.Errorf("factory not registered for channel %q", displayName)
 	}
 	logger.DebugCF("channels", "Attempting to initialize channel", map[string]any{
-		"channel": displayName,
+		"channel":    displayName,
+		"instanceID": instanceID,
 	})
-	ch, err := f(m.config, m.secrets, m.bus)
+	ch, err := f(m.config, instanceID, m.secrets, m.bus)
 	if err != nil {
 		logger.ErrorCF("channels", "Failed to initialize channel", map[string]any{
 			"channel": displayName,
@@ -503,18 +508,29 @@ func (m *Manager) initChannel(name, displayName string) error {
 		}
 	}
 	// Inject pairing observer (#283) so QR/status updates reach the SPA. Capture
-	// the channel name so the observer can tag which channel emitted.
+	// the instanceID so the observer tags which instance emitted the event.
 	if m.pairingObserver != nil {
 		if obs, ok := ch.(PairingObservable); ok {
-			chName := name
+			instID := instanceID
 			obs.SetPairingObserver(func(status PairingStatus, qr, message string) {
-				m.pairingObserver(chName, status, qr, message)
+				m.pairingObserver(instID, status, qr, message)
 			})
 		}
 	}
-	m.channels[name] = ch
+	// Stamp the trusted instance key onto the channel so every inbound message
+	// carries the correct InstanceID (FR-020 / FR-021). The key is always the
+	// config-map instanceID, never derived from message content.
+	if setter, ok := ch.(interface{ SetInstanceID(id string) }); ok {
+		setter.SetInstanceID(instanceID)
+	}
+	// Key m.channels by instanceID (FR-015 / WS-B): supports N-per-type
+	// because "whatsapp.eu" and "whatsapp.us" occupy distinct slots. For
+	// legacy single-instance the instanceID equals the type name, so the
+	// behaviour is unchanged (e.g. "telegram" → m.channels["telegram"]).
+	m.channels[instanceID] = ch
 	logger.InfoCF("channels", "Channel enabled successfully", map[string]any{
-		"channel": displayName,
+		"channel":    displayName,
+		"instanceID": instanceID,
 	})
 	return nil
 }
@@ -624,13 +640,17 @@ func (m *Manager) initChannels(channels map[string]config.ChannelInstanceConfig)
 			// removed; on a lite/stub build (or an architecture where
 			// modernc.org/sqlite is unavailable) whatsapp_native fails to construct
 			// and we record a clear failure rather than silently no-op.
-			if err := m.initChannel(factoryName, "WhatsApp Native"); err != nil {
+			// initChannel keys m.channels by instanceID (FR-015 / WS-B resolved);
+			// for multi-instance "whatsapp.eu" and "whatsapp.us" get distinct slots.
+			if err := m.initChannel(factoryName, instanceID, "WhatsApp Native"); err != nil {
 				wrapped := fmt.Errorf(
 					"WhatsApp requires the native build (bridge removed); "+
 						"unavailable on this build variant: %w",
 					err,
 				)
-				m.recordChannelFailure(factoryName, "WhatsApp Native", wrapped)
+				// Record under instanceID (not factoryName) so degraded status
+				// refers to the operator-visible config key.
+				m.recordChannelFailure(instanceID, "WhatsApp Native", wrapped)
 			}
 			continue
 		}
@@ -647,8 +667,9 @@ func (m *Manager) initChannels(channels map[string]config.ChannelInstanceConfig)
 			}
 		}
 
-		if err := m.initChannel(factoryName, displayName); err != nil {
-			m.recordChannelFailure(factoryName, displayName, err)
+		// initChannel keys m.channels by instanceID (FR-015 / WS-B resolved).
+		if err := m.initChannel(factoryName, instanceID, displayName); err != nil {
+			m.recordChannelFailure(instanceID, displayName, err)
 		}
 	}
 
@@ -662,16 +683,22 @@ func (m *Manager) initChannels(channels map[string]config.ChannelInstanceConfig)
 	return bootFatalError(m.failedChannels)
 }
 
-// nonFatalChannels lists channels whose construction failure must NOT abort
-// gateway boot. whatsapp_native is non-fatal because on a lite/stub build (or an
-// arch where modernc.org/sqlite is unavailable) WhatsApp cannot construct, and
-// the legacy bridge fallback was removed. Aborting the whole gateway over it
-// would brick every other channel for an operator who left
-// channels.whatsapp.enabled=true. The failure is still recorded and surfaced as
-// degraded via FailedChannels, so status shows a clear "requires the native
-// build" message.
-var nonFatalChannels = map[string]struct{}{
-	"whatsapp_native": {},
+// isNonFatalChannelName reports whether a channel failure recorded under name
+// should NOT abort gateway boot. WhatsApp (any instance: bare "whatsapp",
+// namespaced "whatsapp.eu", etc.) and the legacy factory name "whatsapp_native"
+// are non-fatal: on a lite/stub build or an arch where modernc.org/sqlite is
+// unavailable WhatsApp cannot construct, and the legacy bridge fallback was
+// removed. Aborting the whole gateway over it would brick every other channel
+// for an operator who left channels.whatsapp.enabled=true. The failure is still
+// recorded and surfaced as degraded via FailedChannels, so status shows a clear
+// "requires the native build" message.
+//
+// Failures are now recorded under instanceID (e.g. "whatsapp", "whatsapp.eu"),
+// so we match on the "whatsapp" prefix or the legacy factory name.
+func isNonFatalChannelName(name string) bool {
+	return name == "whatsapp_native" ||
+		name == "whatsapp" ||
+		strings.HasPrefix(name, "whatsapp.")
 }
 
 // bootFatalError returns a joined error for the subset of failed channels whose
@@ -681,7 +708,7 @@ var nonFatalChannels = map[string]struct{}{
 func bootFatalError(failed []ChannelInitError) error {
 	joinedErrs := make([]error, 0, len(failed))
 	for i := range failed {
-		if _, nonFatal := nonFatalChannels[failed[i].Name]; nonFatal {
+		if isNonFatalChannelName(failed[i].Name) {
 			continue
 		}
 		joinedErrs = append(joinedErrs, &failed[i])

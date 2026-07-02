@@ -50,7 +50,7 @@ func TestChannelRegistryNoDisplacement(t *testing.T) {
 	sentinelCalled := false
 	RegisterFactory(
 		sentinelName,
-		func(cfg *config.Config, _ credentials.SecretBundle, b *bus.MessageBus) (Channel, error) {
+		func(cfg *config.Config, instanceID string, _ credentials.SecretBundle, b *bus.MessageBus) (Channel, error) {
 			sentinelCalled = true
 			return nil, nil
 		},
@@ -59,7 +59,7 @@ func TestChannelRegistryNoDisplacement(t *testing.T) {
 	// Registering another factory must not remove the sentinel
 	RegisterFactory(
 		"test-wave4-second",
-		func(cfg *config.Config, _ credentials.SecretBundle, b *bus.MessageBus) (Channel, error) {
+		func(cfg *config.Config, instanceID string, _ credentials.SecretBundle, b *bus.MessageBus) (Channel, error) {
 			return nil, nil
 		},
 	)
@@ -70,7 +70,7 @@ func TestChannelRegistryNoDisplacement(t *testing.T) {
 	assert.NotNil(t, f, "sentinel factory must not be nil after second RegisterFactory call")
 
 	// Verify it's actually our sentinel (call it)
-	_, _ = f(nil, nil, nil)
+	_, _ = f(nil, "", nil, nil)
 	assert.True(t, sentinelCalled, "sentinel factory must be callable and execute our implementation")
 }
 

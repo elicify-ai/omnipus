@@ -15,27 +15,11 @@ import (
 // fields are plain strings (*Ref), they survive JSON marshal/unmarshal without any
 // special handling.
 
-// configKeyToChannelName maps a channel instance id (= map key in Config.Channels)
-// to the factory name registered via channels.RegisterFactory. For almost all
-// channels the instance id IS the registered factory name; WhatsApp is the one
-// exception: instance id "whatsapp" → factory "whatsapp_native".
-//
-// Keeping channelHashes / compareChannels / toChannelConfig all keyed by the
-// REGISTERED name means StartAll and Reload agree, and m.channels[name] resolves.
-var configKeyToChannelName = map[string]string{
-	"whatsapp": "whatsapp_native",
-}
-
-// channelNameForConfigKey returns the registered channel name for a channel
-// instance id, applying configKeyToChannelName. Keys without an entry map to
-// themselves.
-func channelNameForConfigKey(instanceID string) string {
-	if name, ok := configKeyToChannelName[instanceID]; ok {
-		return name
-	}
-	return instanceID
-}
-
+// toChannelHashes produces a map from instanceID → config-hash for all enabled
+// channel instances. Both m.channels and m.channelHashes are keyed by instanceID
+// (FR-015 / WS-B), so compareChannels and Reload operate on a consistent key
+// space. Legacy single-instance names ("telegram", "whatsapp") behave
+// identically to before because their instanceID IS their type name.
 func toChannelHashes(cfg *config.Config) map[string]string {
 	result := make(map[string]string)
 	for instanceID, inst := range cfg.Channels {
@@ -49,8 +33,9 @@ func toChannelHashes(cfg *config.Config) map[string]string {
 			valueBytes = []byte("{}")
 		}
 		hash := md5.Sum(valueBytes)
-		// Key by the REGISTERED factory name so compareChannels and m.channels agree.
-		result[channelNameForConfigKey(instanceID)] = hex.EncodeToString(hash[:])
+		// Key by instanceID so m.channels[instanceID] and m.channelHashes[instanceID]
+		// refer to the same slot. Reload's "added/removed" diff is over instanceIDs.
+		result[instanceID] = hex.EncodeToString(hash[:])
 	}
 	return result
 }
@@ -74,23 +59,21 @@ func compareChannels(old, news map[string]string) (added, removed []string) {
 	return added, removed
 }
 
-// toChannelConfig returns the subset of cfg.Channels whose registered factory
-// names appear in list. The returned map is passed to initChannels on hot-reload.
+// toChannelConfig returns the subset of cfg.Channels whose instanceIDs appear
+// in list. The returned map is passed to initChannels on hot-reload. Both
+// m.channels and m.channelHashes are now keyed by instanceID (FR-015 / WS-B),
+// so list is a slice of instanceIDs (from compareChannels's "added" output).
 func toChannelConfig(cfg *config.Config, list []string) (map[string]config.ChannelInstanceConfig, error) {
+	wanted := make(map[string]struct{}, len(list))
+	for _, s := range list {
+		wanted[s] = struct{}{}
+	}
 	result := make(map[string]config.ChannelInstanceConfig, len(list))
 	for instanceID, inst := range cfg.Channels {
 		if !inst.Enabled {
 			continue
 		}
-		registeredName := channelNameForConfigKey(instanceID)
-		found := false
-		for _, s := range list {
-			if registeredName == s {
-				found = true
-				break
-			}
-		}
-		if !found {
+		if _, ok := wanted[instanceID]; !ok {
 			continue
 		}
 		result[instanceID] = inst
