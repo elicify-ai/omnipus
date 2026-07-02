@@ -27,7 +27,7 @@ import { useUiStore } from '@/store/ui'
 import { isApiError, type AgentToolsCfg, type FallbackModel, type RegistryTool } from '@/lib/api'
 import { AVATAR_COLORS_BY_NAME } from '@/lib/constants'
 import { useFocusRestore } from '@/hooks/useFocusRestore'
-import type { Provider, Skill } from '@/lib/api/generated/openapi-types'
+import type { Provider, Skill, CliValidateResponse } from '@/lib/api/generated/openapi-types'
 
 import { Step1Identity } from './wizard/Step1Identity'
 import { Step2Personality } from './wizard/Step2Personality'
@@ -62,6 +62,17 @@ export interface WizardSubmitPayload {
   executor_cli_path?: string
   executor_env_overrides?: Record<string, string>
   executor_cli_args?: string
+  /**
+   * external-executor-cli-path-detection spec (ADR-030) — UI-only, never
+   * forwarded to the wire (payloadToCreateRequest in CreateAgentModal.tsx
+   * never reads it). Set by `ExecutorInputs`' validate-on-blur whenever a
+   * `POST /system/cli-validate` call resolves to a definitive result;
+   * cleared (undefined) while unchecked/pending/errored so an in-flight or
+   * failed re-check never leaves a stale block in place (FR-019). Consumed
+   * below to gate the Create button on missing-binary/handshake-failed
+   * (FR-008/FR-018) — never on a raw `ok` boolean.
+   */
+  executor_cli_validation_reason?: CliValidateResponse['reason']
   // Advanced disclosure fields — W5. Each field matches the
   // `AgentCreateRequest` shape so the modal's payloadToCreateRequest
   // can forward them as-is. All optional.
@@ -258,6 +269,17 @@ export function CreateAgentWizard({
   const step2Valid = payload.soul.trim().length > 0
   const canAdvance = step === 1 ? step1Valid : step === 2 ? step2Valid : true
 
+  // external-executor-cli-path-detection spec FR-008/FR-018: block ONLY the
+  // final Create action on a definitive missing-binary/handshake-failed
+  // validate-on-blur result. Gated on `reason`, never a raw `ok` boolean —
+  // `unauthenticated` is a non-blocking warning and MUST NOT block. Any
+  // other state (unchecked/pending/errored) is FR-019's "no trap" default:
+  // allowed. Does not affect step-1→2 Next gating (only the Create button).
+  const cliValidationBlocked =
+    isExternal &&
+    (payload.executor_cli_validation_reason === 'missing-binary' ||
+      payload.executor_cli_validation_reason === 'handshake-failed')
+
   // B3: when Next is disabled, name the missing required field(s) so the user
   // isn't left staring at a greyed button with no explanation. Mirrors the
   // gating logic above (does NOT change it).
@@ -282,6 +304,15 @@ export function CreateAgentWizard({
     // but this check protects the API call if anything bypasses the gate.
     if (isExternal && !payload.executor_cli_path?.trim()) {
       setSubmitError('CLI path is required for an external subagent')
+      setSubmitting(false)
+      return
+    }
+    // FR-008/FR-018: the Create button is already disabled while
+    // cliValidationBlocked is true, but this defends the API call if
+    // anything bypasses the gate (e.g. a stale disabled prop during a fast
+    // re-render race).
+    if (cliValidationBlocked) {
+      setSubmitError(`CLI path failed validation (${payload.executor_cli_validation_reason}) — fix the path before creating.`)
       setSubmitting(false)
       return
     }
@@ -440,6 +471,15 @@ export function CreateAgentWizard({
               Missing: {missingLabels.join(', ')}
             </p>
           )}
+          {missingLabels.length === 0 && cliValidationBlocked && (
+            <p
+              role="alert"
+              data-testid="wizard-cli-validation-blocked"
+              className="text-xs text-[var(--color-error)] self-center sm:mr-auto sm:order-first"
+            >
+              CLI path failed validation ({payload.executor_cli_validation_reason}) — fix the path on step ① before creating.
+            </p>
+          )}
           <Button
             type="button"
             variant="ghost"
@@ -475,7 +515,7 @@ export function CreateAgentWizard({
             <Button
               type="button"
               onClick={handleSubmit}
-              disabled={!canAdvance || submitting}
+              disabled={!canAdvance || submitting || cliValidationBlocked}
               data-testid="wizard-create"
               className="h-11"
             >

@@ -12,6 +12,7 @@
 //   wizard-cli-chip (locked, only when initialCli is set),
 //   wizard-cli-path, wizard-env-overrides, wizard-cli-args
 
+import { useEffect, useState } from 'react'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import {
@@ -20,6 +21,11 @@ import {
 } from '../AgentFormFields'
 import { ModelSelector, type ModelGroup } from '@/components/ui/model-selector'
 import { InheritToggle } from './InheritToggle'
+import { CliPathValidationHint } from '../CliPathValidationHint'
+import { useCliPathValidation } from '@/hooks/useCliPathValidation'
+import { detectEntryFor, resolveCliDetectHint } from '@/lib/cliDetect'
+import { fetchCliDetect } from '@/lib/api'
+import type { CliDetect } from '@/lib/api'
 import type { IconName } from '@/lib/agentIcons'
 import type { StepProps, WizardCli } from './types'
 
@@ -208,6 +214,67 @@ export interface ExecutorInputsProps {
 export function ExecutorInputs({ payload, setField, lockedCli }: ExecutorInputsProps) {
   const envOverrides = payload.executor_env_overrides ?? {}
 
+  // external-executor-cli-path-detection spec (ADR-030) — US-1/US-2: probe
+  // the host once per mount (no query-client dependency, matching the
+  // `AgentListScreen` cli-detect pattern) so the path field can be prefilled
+  // per selected CLI. Detection failure is non-fatal — the field just stays
+  // manual (US-1 AC-3's "not found" hint degrades to "unknown").
+  const [cliDetect, setCliDetect] = useState<CliDetect | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    fetchCliDetect()
+      .then((d) => {
+        if (!cancelled) setCliDetect(d)
+      })
+      .catch(() => {
+        // Fail soft — no prefill, no crash (FR-019 spirit: detection is a
+        // convenience, never a blocker).
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  // US-1 AC-1/AC-2: prefill the detected absolute path when the field is
+  // EMPTY, once per CLI (re)selection. Deliberately does NOT depend on
+  // `payload.executor_cli_path` — re-reading it (not re-triggering on every
+  // keystroke) is what lets an operator's non-empty value stay authoritative
+  // without the effect fighting their edits (US-4).
+  useEffect(() => {
+    if (!payload.cli || !cliDetect) return
+    if ((payload.executor_cli_path ?? '').trim().length > 0) return
+    const entry = detectEntryFor(cliDetect, payload.cli)
+    if (entry?.installed && entry.path) {
+      setField('executor_cli_path', entry.path)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [payload.cli, cliDetect])
+
+  // US-3/US-5: validate-on-blur, debounced + cancel-in-flight (see the hook).
+  const cliValidation = useCliPathValidation()
+  const detectHint = resolveCliDetectHint(cliDetect, payload.cli)
+
+  // Lift the classification up onto the payload (UI-only field, never sent
+  // to the wire — see WizardSubmitPayload.executor_cli_validation_reason)
+  // so CreateAgentWizard can gate the Create button on it (FR-008/FR-018).
+  //
+  // IMPORTANT: this only WRITES on a definitive "result" — it deliberately
+  // does NOT clear the field on idle/pending/error. `<Step3Tools>` renders a
+  // SECOND, independent `<ExecutorInputs>` instance (so the executor block
+  // stays editable from step 3 without a 4th stepper step) with its own
+  // fresh `cliValidation` (starts at idle). If this effect cleared on every
+  // idle mount, mounting that second instance on step 3 would silently wipe
+  // a block set on step 1 the moment the operator reaches the Create button.
+  // Clearing instead happens explicitly at the two real invalidation points —
+  // editing the path and switching CLI (both below) — so a stale block never
+  // survives an actual edit (FR-019), but merely re-mounting the same
+  // unedited value does not resurrect an already-cleared verdict either.
+  useEffect(() => {
+    if (cliValidation.status.kind !== 'result') return
+    setField('executor_cli_validation_reason', cliValidation.status.result.reason)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cliValidation.status])
+
   function addEnvRow() {
     setField('executor_env_overrides', { ...envOverrides, '': '' })
   }
@@ -244,7 +311,18 @@ export function ExecutorInputs({ payload, setField, lockedCli }: ExecutorInputsP
                 <button
                   key={cli}
                   type="button"
-                  onClick={() => setField('cli', cli)}
+                  onClick={() => {
+                    // Switching CLI invalidates any verdict validated
+                    // against the previous CLI at this path. Clear both the
+                    // local hook (for THIS mount's hint) and the payload
+                    // field directly (the result-only sync effect above
+                    // deliberately does not clear on idle — see its
+                    // comment — so this explicit clear is what actually
+                    // lifts a stale block, FR-019).
+                    cliValidation.reset()
+                    setField('executor_cli_validation_reason', undefined)
+                    setField('cli', cli)
+                  }}
                   className={
                     selected
                       ? 'px-3 py-1.5 rounded-md text-xs font-medium border bg-[var(--color-accent)]/20 text-[var(--color-accent)] border-[var(--color-accent)]/40'
@@ -272,9 +350,27 @@ export function ExecutorInputs({ payload, setField, lockedCli }: ExecutorInputsP
           id="wizard-cli-path"
           data-testid="wizard-cli-path"
           value={payload.executor_cli_path ?? ''}
-          onChange={(e) => setField('executor_cli_path', e.target.value)}
+          onChange={(e) => {
+            // Editing invalidates any prior validate() verdict. Clear both
+            // the local hook (for THIS mount's hint) and the payload field
+            // directly — the result-only sync effect above deliberately
+            // does not clear on idle (see its comment), so this explicit
+            // clear is what actually lifts a stale block (FR-019).
+            cliValidation.reset()
+            setField('executor_cli_validation_reason', undefined)
+            setField('executor_cli_path', e.target.value)
+          }}
+          onBlur={(e) => {
+            if (!payload.cli) return
+            cliValidation.validate(payload.cli, e.target.value)
+          }}
           placeholder="/usr/local/bin/claude-code"
           className="font-mono text-xs"
+        />
+        <CliPathValidationHint
+          validation={cliValidation.status}
+          detectHint={detectHint}
+          testId="wizard-cli-path-status"
         />
         <p className="text-[11px] text-[var(--color-muted)]">
           Path to the CLI executable on the host.
