@@ -198,11 +198,11 @@ An operator going through onboarding wants the exact same logos and plan/region/
 An operator who already configured providers (possibly under alias ids like `z.ai`, or self-hosted `ollama`) wants them to keep working and display correctly after the redesign, so nothing they set up breaks.
 
 **Why this priority**: Breaking existing configs is unacceptable (Constraint #7).
-**Independent Test**: A config with `z.ai` renders under the canonical Zhipu group; a config with `ollama` renders under a "Self-hosted / Custom" group; an unrecognized id renders generically — none crash.
+**Independent Test**: A config with `z.ai` renders under the canonical Zhipu group; a config with `litellm` renders under a "Self-hosted / Custom" group; an unrecognized id renders generically — none crash.
 
 **Acceptance Scenarios**:
 1. **Given** a configured provider stored under an **alias** id (`z.ai`/`zai`/`glm-coding`), **When** the list renders, **Then** the alias is normalized to its canonical catalog entry and shown in the right company group.
-2. **Given** a configured **self-hosted** provider (`litellm`/`ollama`/`vllm`), which is `catalogVisible=false` (excluded from the roster), **When** the list renders, **Then** it appears in a "Self-hosted / Custom" group with its `endpointHint`, fully functional — NOT demoted to unknown.
+2. **Given** a configured **not-in-catalog self-hosted** runtime (`litellm`/`vllm`), **When** the list renders, **Then** it appears in a "Self-hosted / Custom" group with its `endpointHint`, fully functional — NOT demoted to unknown. (`ollama` is a first-class catalog provider — "Ollama (local)" — and resolves to its own company group, not Self-hosted/Custom.)
 3. **Given** a configured provider with a **truly unrecognized** id, **When** the list renders, **Then** it appears under a generic group with the raw id and does not crash.
 
 ### US-9 — Channels list: type-grouped binding-first rows + empty roster [T2] (P1, ADR-029-gated)
@@ -492,8 +492,9 @@ An operator on the login screen should not see a redundant "Set up Omnipus for t
 | z.ai | Zhipu / GLM (canonical) |
 | zai | Zhipu / GLM (canonical) |
 | glm-coding | Zhipu / GLM (canonical) |
-| ollama | Self-hosted / Custom |
-| litellm | Self-hosted / Custom |
+| ollama | Ollama (local) — first-class catalog provider |
+| litellm | Self-hosted / Custom (not-in-catalog runtime) |
+| vllm | Self-hosted / Custom (not-in-catalog runtime) |
 | some-unknown-x | Generic (raw id) |
 
 ### Feature: Channels grouped rows + Sheet create (US-9, US-10 — ADR-029-gated)
@@ -614,7 +615,7 @@ An operator on the login screen should not see a redundant "Set up Omnipus for t
 | 2 | z.ai | alias | Zhipu/GLM | Migration outline | normalize dot |
 | 3 | zai | alias | Zhipu/GLM | Migration outline | normalize |
 | 4 | glm-coding | alias | Zhipu/GLM | Migration outline | alias→z-ai-coding |
-| 5 | ollama | known-excluded | Self-hosted/Custom | Migration outline | catalogVisible=false |
+| 5 | ollama | in-catalog | Ollama (local) | Migration outline | first-class catalog provider, NOT self-hosted-override |
 | 6 | vllm | known-excluded | Self-hosted/Custom | Migration outline | localhost:8000 |
 | 7 | litellm | known-excluded | Self-hosted/Custom | Migration outline | localhost:4000 |
 | 8 | "" (empty) | null/edge | Generic (no crash) | Migration outline | defensive |
@@ -762,9 +763,9 @@ All items are either resolved by the ADR/decisions or accepted as low-risk assum
 - **Category**: Error.
 
 ### HO-5 (Error): Self-hosted survival
-- **Setup**: Configure an `ollama` provider on an older build; upgrade to the redesign.
+- **Setup**: Configure a `litellm` (or `vllm`) provider on an older build; upgrade to the redesign.
 - **Action**: Open Providers.
-- **Expected**: The ollama provider appears under "Self-hosted / Custom" with its localhost endpoint, still usable.
+- **Expected**: The provider appears under "Self-hosted / Custom" with its localhost endpoint, still usable. (A configured `ollama` instead appears under its first-class "Ollama (local)" group.)
 - **Category**: Error.
 
 ### HO-6 (Edge): Logo takedown resilience

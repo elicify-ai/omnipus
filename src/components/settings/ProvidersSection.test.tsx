@@ -349,10 +349,13 @@ describe('resolveCatalogEntry — migration dataset', () => {
     expect(result.entry?.id).toBe('z-ai-coding')
   })
 
-  it('#5 ollama → Self-hosted / Custom', () => {
+  it('#5 ollama → Ollama (local) [first-class catalog provider, NOT Self-hosted/Custom]', () => {
+    // ollama is in the catalog, so it resolves to its company group — it must
+    // NOT be force-routed to Self-hosted/Custom (that double-grouping bug would
+    // show a configured ollama under a different group than the roster does).
     const result = resolveCatalogEntry('ollama')
-    expect(result.group).toBe(SELF_HOSTED_CUSTOM_GROUP)
-    expect(result.entry).toBeUndefined()
+    expect(result.group).toBe('Ollama (local)')
+    expect(result.entry?.id).toBe('ollama')
   })
 
   it('#6 vllm → Self-hosted / Custom', () => {
