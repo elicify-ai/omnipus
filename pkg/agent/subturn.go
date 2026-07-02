@@ -499,10 +499,22 @@ func spawnSubTurn(
 	// silently dropped and native dispatch stays byte-for-byte unchanged for
 	// that case.
 	var targetAgent *AgentInstance
+	// FIX 3 (silent failure F1 / arch #5): when TargetAgentID is set but does
+	// not resolve (deleted/renamed delegate), the fallback below to the
+	// parent's own config must not be SILENT — the caller/LLM and the
+	// session/audit trail both need to learn a different agent ran than the
+	// one that was asked for. targetAgentUnresolved is only set in this
+	// branch, never for benign self-delegation (cfg.TargetAgentID == "").
+	var targetAgentUnresolved bool
+	var targetAgentFallbackWarning string
 	if cfg.TargetAgentID != "" {
 		if t, ok := al.registry.GetAgent(cfg.TargetAgentID); ok && t != nil {
 			targetAgent = t
 		} else {
+			targetAgentUnresolved = true
+			targetAgentFallbackWarning = fmt.Sprintf(
+				"[delegation warning: target agent %q was not found; ran with the parent's own configuration instead] ",
+				cfg.TargetAgentID)
 			slog.Warn("subturn: target agent not found in registry; dispatch falls back to parent's own executor config",
 				"target_agent_id", cfg.TargetAgentID, "parent_id", parentTS.turnID)
 		}
@@ -520,12 +532,30 @@ func spawnSubTurn(
 	// only when the DECISION is computed.
 	dispatchKind, dispatchErr := runner.ResolveDispatch(executorConfigOf(execSource))
 
+	// FIX 2 (data race): baseAgent.Model is one of the four fields
+	// (Model/Provider/Candidates/ThinkingLevel) protected by baseAgent.mu
+	// (see AgentInstance.mu's doc comment, instance.go:27-30) — it can be
+	// concurrently written by SwitchModel/ApplyAgentModel (loop.go
+	// ~3479-3496, which takes mu.Lock() around the full tuple flip) while a
+	// turn referencing this same live registry AgentInstance is in flight.
+	// Reading it unlocked would race. A brief RLock-snapshot-RUnlock here
+	// mirrors the existing sibling read-sites (loop.go:5249-5255,
+	// 5570-5572, 8554-8556) rather than nesting a lock inside the struct
+	// literal below. Verified deadlock-safe: runTurn's tool-dispatch loop
+	// (loop.go ~6900, which reaches here via the spawn/subagent tools) does
+	// NOT hold baseAgent.mu across the ExecuteWithContext call that
+	// eventually invokes spawnSubTurn, so this RLock cannot contend with a
+	// lock already held by our own call stack.
+	baseAgent.mu.RLock()
+	baseAgentModel := baseAgent.Model
+	baseAgent.mu.RUnlock()
+
 	ephemeralStore := newEphemeralSession(nil)
 	// Build a new AgentInstance from baseAgent fields to avoid copying the mutex.
 	agent := AgentInstance{
 		ID:                        baseAgent.ID,
 		Name:                      baseAgent.Name,
-		Model:                     baseAgent.Model,
+		Model:                     baseAgentModel,
 		Fallbacks:                 baseAgent.Fallbacks,
 		Workspace:                 baseAgent.Workspace,
 		MaxIterations:             baseAgent.MaxIterations,
@@ -556,8 +586,25 @@ func spawnSubTurn(
 	// mismatch in the native LLM-call resolution path, which would be a
 	// larger refactor outside this fix's scope.
 	if dispatchKind == runner.DispatchKindExternalCLI && targetAgent != nil {
+		// FIX 2 (data race): targetAgent is a LIVE registry pointer too — its
+		// Model is protected by targetAgent.mu the same as baseAgent.mu above.
+		// Snapshot under a brief RLock before assigning.
+		targetAgent.mu.RLock()
+		targetModel := targetAgent.Model
+		targetAgent.mu.RUnlock()
+
+		// FIX 1 (correctness, HIGH — wrong audit attribution): ID/Name must
+		// also come from the TARGET, not just Workspace/Model/MaxIterations/
+		// Subagents. Without this, childTS.agentID (set from agent.ID by
+		// newTurnState, turn.go:252) stays the PARENT's ID even though the
+		// run executes with the target's workspace/model — the human
+		// tool-approval broadcast (PolicyApprovalReq.AgentID), the transcript
+		// AgentID, and the SubTurnSpawn/End WS payloads would all attribute
+		// the delegated run to the wrong agent.
+		agent.ID = targetAgent.ID
+		agent.Name = targetAgent.Name
 		agent.Workspace = targetAgent.Workspace
-		agent.Model = targetAgent.Model
+		agent.Model = targetModel
 		agent.MaxIterations = targetAgent.MaxIterations
 		agent.Subagents = targetAgent.Subagents
 	}
@@ -645,6 +692,28 @@ func spawnSubTurn(
 	// carry the parent spawn's ToolCall.ID as ParentSpawnCallID.
 	childTS.parentSpawnCallID = parentSpawnCallID
 
+	// FIX 3 (silent failure F1 / arch #5): surface the target-resolution
+	// fallback in the session/audit trail — not just the process-log
+	// slog.Warn above — using the same EventKindError + appendErrorTranscript
+	// pair the LLM-call-error and rate-limit paths already use (loop.go
+	// ~965-991, ~6188-6200), so a session replay after page reload still
+	// shows the anomaly. The ToolResult.ForLLM prefix (surfacing it to the
+	// delegating caller/LLM) is applied uniformly for every return path in
+	// the cleanup defer below.
+	if targetAgentUnresolved {
+		al.emitEvent(
+			EventKindError,
+			childTS.eventMeta("spawnSubTurn", "subturn.delegation_fallback"),
+			ErrorPayload{
+				Stage:   "subturn_delegation",
+				Message: strings.TrimSpace(targetAgentFallbackWarning),
+			},
+		)
+		childTS.appendErrorTranscript(
+			EventKindError.String(), "spawnSubTurn", strings.TrimSpace(targetAgentFallbackWarning),
+		)
+	}
+
 	// Token budget initialization/inheritance
 	// If InitialTokenBudget is explicitly provided (e.g., by team tool), use it.
 	// Otherwise, inherit from parent's tokenBudget (for nested SubTurns).
@@ -721,6 +790,14 @@ func spawnSubTurn(
 				"panic", fmt.Sprintf("%v", r),
 				"stack", string(debug.Stack()),
 			)
+		}
+
+		// FIX 3 (silent failure F1 / arch #5): prefix the delegation-fallback
+		// warning onto ForLLM for every return path (dispatch-reject, external-cli,
+		// native, and the async-delivered copy below) — one insertion point so the
+		// caller/LLM sees it regardless of which branch produced the result.
+		if targetAgentUnresolved && result != nil {
+			result.ForLLM = targetAgentFallbackWarning + result.ForLLM
 		}
 
 		// Result Delivery Strategy (Async vs Sync)

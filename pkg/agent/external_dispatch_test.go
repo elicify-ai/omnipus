@@ -141,6 +141,51 @@ func TestExternalDispatch_StreamsOutput_RunsInWorkspaceDir(t *testing.T) {
 	}
 }
 
+// TestExternalDispatch_EmptyWorkspace_HardError proves that an external-cli
+// target with an empty Workspace is a hard dispatch-time error: ADR-032
+// removed the isolated-worktree/tempdir fallback, so there is nowhere to cwd
+// into and the run must fail cleanly before any process is spawned — not
+// silently fall back to some other directory. newExternalTestLoop
+// conveniently auto-fills an empty workspace with a real t.TempDir() (most
+// tests don't care about a specific path), so this test builds its own
+// turnState with an explicitly EMPTY workspace to exercise the guard.
+func TestExternalDispatch_EmptyWorkspace_HardError(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv(config.EnvHome, home)
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Provider: "mock"},
+		},
+	}
+	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &simpleMockProviderAPI{response: "ok"})
+	agent := &AgentInstance{
+		ID:        "ext-agent-empty-ws",
+		Name:      "External Agent Empty Workspace",
+		Workspace: "", // explicit empty — the case under test
+		Subagents: &config.SubagentsConfig{
+			Executor: &config.ExecutorConfig{Kind: config.ExecutorKindExternalCLI, CLI: "claude-code"},
+		},
+	}
+	ts := &turnState{
+		agent:               agent,
+		agentID:             agent.ID,
+		turnID:              "ext-run-empty-ws",
+		transcriptSessionID: "session_ext_empty_ws_test",
+	}
+
+	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task", 30*time.Second)
+	if err == nil {
+		t.Fatal("expected an error for an empty agent workspace, got nil")
+	}
+	if !strings.Contains(err.Error(), "agent workspace is empty") {
+		t.Errorf("error = %v, want it to contain %q", err, "agent workspace is empty")
+	}
+	if res != nil {
+		t.Errorf("expected nil result on empty-workspace failure, got %+v", res)
+	}
+}
+
 // TestExternalDispatch_ModelAutoSet proves the delegate's configured Model
 // (childTS.agent.Model) flows through to RunOptions.Model, which each driver's
 // buildArgs uses to auto-set the CLI's model flag (ADR-032 fix C).

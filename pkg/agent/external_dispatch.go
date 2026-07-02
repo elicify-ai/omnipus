@@ -57,6 +57,39 @@ func executorConfigOf(a *AgentInstance) *config.ExecutorConfig {
 	return a.Subagents.Executor
 }
 
+// workspaceRunLocks serializes external-CLI runs that target the SAME
+// workspace directory (FIX 4 / arch #2 warning). ADR-032 removed worktree
+// isolation — external-CLI sub-turns now run directly in the delegate
+// agent's own persistent workspace — so two concurrent sub-turns delegating
+// to the same agent (or to two agents that happen to share a workspace
+// path) would otherwise spawn two child CLI processes reading/writing the
+// same directory concurrently: file races, a corrupted git index, clobbered
+// output files. Keyed by the workspace's cleaned path; the mutex is held for
+// the FULL duration of the child run (acquired near the top of
+// runExternalCLISubTurn, released via defer), which is the window in which
+// the child process touches the workspace tree. Runs against distinct
+// workspace paths are never blocked by each other — only same-path runs
+// serialize.
+//
+// Entries are never removed from the map: a long-running gateway
+// accumulates one *sync.Mutex per distinct workspace path ever dispatched
+// to. That set is bounded by the number of configured external-cli
+// agents/workspaces (small, operator-controlled), not by run count, so the
+// unbounded map is an accepted trade-off rather than a leak.
+var workspaceRunLocks sync.Map // map[string]*sync.Mutex
+
+// acquireWorkspaceRunLock locks the mutex for workDir's cleaned path,
+// creating it on first use via LoadOrStore, and returns the unlock func.
+// Callers MUST `defer` the returned func so the lock releases even on an
+// early return or panic.
+func acquireWorkspaceRunLock(workDir string) func() {
+	key := filepath.Clean(workDir)
+	muAny, _ := workspaceRunLocks.LoadOrStore(key, &sync.Mutex{})
+	mu, _ := muAny.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
+
 // runExternalCLISubTurn executes a delegated sub-agent task through an external
 // CLI runner. It returns a tools.ToolResult mirroring the native sub-turn return
 // shape (ForLLM/ForUser carry the run's aggregated output; Err is set on failure).
@@ -111,6 +144,15 @@ func runExternalCLISubTurn(
 		return nil, fmt.Errorf("external-cli dispatch: ensuring workspace dir %q: %w", workDir, mkErr)
 	}
 
+	// FIX 4 (concurrency, arch #2 warning): serialize external-CLI runs that
+	// share this workspace directory — see workspaceRunLocks' doc comment.
+	// Held for the whole run (driver instantiation through the drain loop
+	// below) since that is the window during which the child process can
+	// touch the workspace tree. A different workspace path is never blocked
+	// by this.
+	releaseWorkspaceLock := acquireWorkspaceRunLock(workDir)
+	defer releaseWorkspaceLock()
+
 	// 2. Build the consent handler (wraps the gateway PolicyApprover; deny-by-default
 	//    when no approver is wired — loadToolApprover returns the fail-closed nop).
 	consent := &policyApproverConsent{
@@ -140,11 +182,16 @@ func runExternalCLISubTurn(
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	// FIX 5: hoist the repeated strings.TrimSpace(agent.Model) computation
+	// (previously done independently for the transcript model stamp below
+	// and again for RunOptions.Model further down) into a single local.
+	agentModel := strings.TrimSpace(agent.Model)
+
 	// Phase 1B FR-013: attribute the external-CLI sub-turn's transcript
 	// output to the agent's configured model. The external CLI runs its
 	// own LLM, but we record what model the agent would have used in the
 	// non-CLI path — consistent with how chat turns are attributed.
-	childTS.setLastProducedModel(strings.TrimSpace(agent.Model))
+	childTS.setLastProducedModel(agentModel)
 
 	// SECURITY (Spec-4 FR-5.3 / SEC-23): the spawned external CLI must NOT inherit
 	// the full gateway environment — that would leak OMNIPUS_MASTER_KEY (and every
@@ -188,7 +235,7 @@ func runExternalCLISubTurn(
 		// Fix C: auto-set the delegate's own configured model on the external
 		// CLI invocation. Each driver's buildArgs guards so an unmapped/empty
 		// model string is simply omitted rather than passed as garbage.
-		Model: strings.TrimSpace(agent.Model),
+		Model: agentModel,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("external-cli dispatch: driver start (%s): %w", cli, err)
