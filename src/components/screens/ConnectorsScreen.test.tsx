@@ -279,6 +279,49 @@ describe('ConnectorsScreen — type-grouped rows (US-9 AS-1)', () => {
     await screen.findByTestId('channel-type-group-telegram')
     expect(screen.queryByTestId('channel-type-group-discord')).not.toBeInTheDocument()
   })
+
+  it('does not render the empty-state roster when at least one type is configured (B2 — mutual exclusivity)', async () => {
+    // Mixed state: one configured type (telegram) + one unconfigured type
+    // (discord). FR-010's grouped-list/roster split is mutually exclusive —
+    // the grouped list wins as soon as ANY instance is configured, so the
+    // roster must be completely absent, not just missing a discord entry.
+    mockFetchChannels.mockResolvedValue([STUB_TELEGRAM, STUB_DISCORD_UNCONFIGURED])
+    const { ConnectorsScreen } = await import('./ConnectorsScreen')
+    render(React.createElement(ConnectorsScreen), { wrapper })
+
+    await screen.findByTestId('channel-type-group-telegram')
+    expect(screen.queryByTestId('channel-roster')).not.toBeInTheDocument()
+  })
+
+  it('resolves each row\'s workspace→agent binding independently via its own instance id (B1)', async () => {
+    // BDD: Given two same-type instances, When the list renders, Then each
+    // row's binding is resolved from ITS OWN routing query result, keyed by
+    // its own instance id — never leaking one row's binding into another's.
+    mockFetchChannels.mockResolvedValue([STUB_WHATSAPP_SALES, STUB_WHATSAPP_SUPPORT])
+    mockGetChannelRouting.mockImplementation((id: string) => {
+      if (id === 'whatsapp.sales') return Promise.resolve({ workspace_id: 'ws-1', default_agent_id: 'agent-1' })
+      if (id === 'whatsapp.support') return Promise.resolve({ workspace_id: 'ws-2', default_agent_id: 'agent-2' })
+      return Promise.resolve({})
+    })
+    mockFetchWorkspaces.mockResolvedValue([
+      { id: 'ws-1', name: 'Sales' },
+      { id: 'ws-2', name: 'Support' },
+    ])
+    mockFetchAgents.mockResolvedValue([
+      { id: 'agent-1', name: 'Mia' },
+      { id: 'agent-2', name: 'Jim' },
+    ])
+
+    const { ConnectorsScreen } = await import('./ConnectorsScreen')
+    render(React.createElement(ConnectorsScreen), { wrapper })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('channel-binding-whatsapp.sales')).toHaveTextContent('Sales → Mia')
+      expect(screen.getByTestId('channel-binding-whatsapp.support')).toHaveTextContent('Support → Jim')
+    })
+    expect(mockGetChannelRouting).toHaveBeenCalledWith('whatsapp.sales')
+    expect(mockGetChannelRouting).toHaveBeenCalledWith('whatsapp.support')
+  })
 })
 
 describe('ConnectorsScreen — binding-first row title (US-9 AS-2)', () => {
@@ -313,6 +356,48 @@ describe('ConnectorsScreen — binding-first row title (US-9 AS-2)', () => {
     })
   })
 
+  it('resolves the workspace name but falls back to the raw agent id when only the agent is unknown (B7)', async () => {
+    mockFetchChannels.mockResolvedValue([STUB_WHATSAPP_SALES])
+    mockGetChannelRouting.mockResolvedValue({ workspace_id: 'ws-1', default_agent_id: 'agent-ghost' })
+    mockFetchWorkspaces.mockResolvedValue([{ id: 'ws-1', name: 'Sales' }])
+    mockFetchAgents.mockResolvedValue([]) // agent-ghost not present
+
+    const { ConnectorsScreen } = await import('./ConnectorsScreen')
+    render(React.createElement(ConnectorsScreen), { wrapper })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('channel-binding-whatsapp.sales')).toHaveTextContent('Sales → agent-ghost')
+    })
+  })
+
+  it('falls back to the raw workspace id but resolves the agent name when only the workspace is unknown (B7)', async () => {
+    mockFetchChannels.mockResolvedValue([STUB_WHATSAPP_SALES])
+    mockGetChannelRouting.mockResolvedValue({ workspace_id: 'ws-ghost', default_agent_id: 'agent-1' })
+    mockFetchWorkspaces.mockResolvedValue([]) // ws-ghost not present
+    mockFetchAgents.mockResolvedValue([{ id: 'agent-1', name: 'Mia' }])
+
+    const { ConnectorsScreen } = await import('./ConnectorsScreen')
+    render(React.createElement(ConnectorsScreen), { wrapper })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('channel-binding-whatsapp.sales')).toHaveTextContent('ws-ghost → Mia')
+    })
+  })
+
+  it('shows "<Workspace> → unassigned agent" when routing has a workspace but no default agent (B5)', async () => {
+    mockFetchChannels.mockResolvedValue([STUB_WHATSAPP_SALES])
+    mockGetChannelRouting.mockResolvedValue({ workspace_id: 'ws-1' })
+    mockFetchWorkspaces.mockResolvedValue([{ id: 'ws-1', name: 'Sales' }])
+    mockFetchAgents.mockResolvedValue([])
+
+    const { ConnectorsScreen } = await import('./ConnectorsScreen')
+    render(React.createElement(ConnectorsScreen), { wrapper })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('channel-binding-whatsapp.sales')).toHaveTextContent('Sales → unassigned agent')
+    })
+  })
+
   it('shows "No workspace bound" when the instance has no routing binding', async () => {
     mockFetchChannels.mockResolvedValue([STUB_TELEGRAM])
     mockGetChannelRouting.mockResolvedValue({})
@@ -325,7 +410,10 @@ describe('ConnectorsScreen — binding-first row title (US-9 AS-2)', () => {
     })
   })
 
-  it('shows "No workspace bound" (never crashes) when the routing fetch rejects', async () => {
+  it('shows a distinct error state — never "No workspace bound" — when the routing fetch rejects (A1/B8)', async () => {
+    // "No workspace bound" asserts a known fact (we asked, and there's
+    // nothing). A rejected fetch means we DON'T KNOW — conflating the two
+    // would mislead an operator into thinking the channel is genuinely unbound.
     mockFetchChannels.mockResolvedValue([STUB_TELEGRAM])
     mockGetChannelRouting.mockRejectedValue(new Error('network error'))
 
@@ -333,8 +421,9 @@ describe('ConnectorsScreen — binding-first row title (US-9 AS-2)', () => {
     render(React.createElement(ConnectorsScreen), { wrapper })
 
     await waitFor(() => {
-      expect(screen.getByTestId('channel-binding-telegram')).toHaveTextContent('No workspace bound')
+      expect(screen.getByTestId('channel-binding-telegram')).toHaveTextContent("Couldn't load binding")
     })
+    expect(screen.getByTestId('channel-binding-telegram')).not.toHaveTextContent('No workspace bound')
     // Component tree must not have thrown — the row and its Configure action still render.
     expect(screen.getByLabelText('Configure telegram')).toBeInTheDocument()
   })
@@ -409,6 +498,31 @@ describe('ConnectorsScreen — create channel via Sheet, never a modal Dialog (U
 
     const sheet = await screen.findByTestId('create-channel-sheet')
     expect(within(sheet).getByTestId('create-channel-type-locked')).toHaveTextContent('WhatsApp')
+  })
+
+  it('clears the type lock when reopened via the global "Add channel" after a locked open (B6)', async () => {
+    mockFetchChannels.mockResolvedValue([STUB_WHATSAPP_SALES])
+    const user = userEvent.setup()
+    const { ConnectorsScreen } = await import('./ConnectorsScreen')
+    render(React.createElement(ConnectorsScreen), { wrapper })
+
+    // Open locked via the group's "Add another…".
+    const addAnother = await screen.findByTestId('channel-type-add-another-whatsapp')
+    await user.click(addAnother)
+    let sheet = await screen.findByTestId('create-channel-sheet')
+    expect(within(sheet).getByTestId('create-channel-type-locked')).toBeInTheDocument()
+
+    // Close it via Cancel.
+    await user.click(within(sheet).getByRole('button', { name: /cancel/i }))
+    await waitFor(() => {
+      expect(screen.queryByTestId('create-channel-sheet')).not.toBeInTheDocument()
+    })
+
+    // Reopen via the global "Add channel" entry point — must be pickable,
+    // with no residual lock from the previous locked open.
+    sheet = await openCreateSheetGlobal(user)
+    expect(within(sheet).getByTestId('create-channel-type-select')).toBeInTheDocument()
+    expect(within(sheet).queryByTestId('create-channel-type-locked')).not.toBeInTheDocument()
   })
 
   it('shows invalid slug hint when slug fails [a-z0-9-]{1,32} pattern', async () => {
@@ -495,6 +609,63 @@ describe('ConnectorsScreen — create channel via Sheet, never a modal Dialog (U
     // Sheet stays open on failure — the create did not silently succeed.
     expect(screen.getByTestId('create-channel-sheet')).toBeInTheDocument()
   })
+
+  it('shows the ApiError userMessage for a non-409 error status (B4)', async () => {
+    const { ApiError } = await import('@/lib/api-error')
+    const serverErr = new ApiError(500, 'The server is unavailable. Please try again in a moment.')
+    mockCreateChannelInstance.mockRejectedValueOnce(serverErr)
+
+    const user = userEvent.setup()
+    const { ConnectorsScreen } = await import('./ConnectorsScreen')
+    render(React.createElement(ConnectorsScreen), { wrapper })
+
+    await openCreateSheetGlobal(user)
+    await selectChannelType('Telegram')
+    const slugInput = screen.getByTestId('create-channel-slug-input')
+    await user.type(slugInput, 'eu')
+    await user.click(screen.getByTestId('create-channel-submit-btn'))
+
+    const serverError = await screen.findByTestId('create-channel-server-error')
+    expect(serverError.textContent).toMatch(/server is unavailable/i)
+  })
+
+  it('shows a generic actionable message — never the raw Error.message — for a non-ApiError failure (A5/B4)', async () => {
+    mockCreateChannelInstance.mockRejectedValueOnce(new Error('Unexpected token < in JSON at position 0'))
+
+    const user = userEvent.setup()
+    const { ConnectorsScreen } = await import('./ConnectorsScreen')
+    render(React.createElement(ConnectorsScreen), { wrapper })
+
+    await openCreateSheetGlobal(user)
+    await selectChannelType('Telegram')
+    const slugInput = screen.getByTestId('create-channel-slug-input')
+    await user.type(slugInput, 'eu')
+    await user.click(screen.getByTestId('create-channel-submit-btn'))
+
+    const serverError = await screen.findByTestId('create-channel-server-error')
+    expect(serverError.textContent).toMatch(/unexpected response from the server/i)
+    expect(serverError.textContent).not.toMatch(/unexpected token/i)
+  })
+
+  it('shows the generic message for an ApiSchemaError without leaking zod/response internals (A5/B4)', async () => {
+    const { ApiSchemaError } = await import('@/lib/api')
+    const schemaErr = new ApiSchemaError('/channels', [{ path: ['id'], message: 'Required' }], { foo: 'bar' })
+    mockCreateChannelInstance.mockRejectedValueOnce(schemaErr)
+
+    const user = userEvent.setup()
+    const { ConnectorsScreen } = await import('./ConnectorsScreen')
+    render(React.createElement(ConnectorsScreen), { wrapper })
+
+    await openCreateSheetGlobal(user)
+    await selectChannelType('Telegram')
+    const slugInput = screen.getByTestId('create-channel-slug-input')
+    await user.type(slugInput, 'eu')
+    await user.click(screen.getByTestId('create-channel-submit-btn'))
+
+    const serverError = await screen.findByTestId('create-channel-server-error')
+    expect(serverError.textContent).toMatch(/unexpected response from the server/i)
+    expect(serverError.textContent).not.toMatch(/zod|schema mismatch|Required/i)
+  })
 })
 
 // ── Delete instance (unchanged UX, still an AlertDialog confirmation) ─────────
@@ -547,10 +718,41 @@ describe('ConnectorsScreen — delete instance', () => {
   })
 })
 
+// ── Enable/Disable toggle (B3 — real ConnectorsScreen, not the -channels.test.tsx stub) ──
+
+describe('ConnectorsScreen — Enable/Disable toggle fires the real mutation', () => {
+  it('calls disableChannel for an enabled instance and enableChannel for a disabled one', async () => {
+    mockFetchChannels.mockResolvedValue([STUB_WHATSAPP_SALES, STUB_TELEGRAM])
+    mockDisableChannel.mockResolvedValueOnce({ id: 'whatsapp.sales', enabled: false })
+    mockEnableChannel.mockResolvedValueOnce({ id: 'telegram', enabled: true })
+
+    const user = userEvent.setup()
+    const { ConnectorsScreen } = await import('./ConnectorsScreen')
+    render(React.createElement(ConnectorsScreen), { wrapper })
+
+    // STUB_WHATSAPP_SALES.enabled === true -> the toggle reads "Disable".
+    const salesToggle = await screen.findByTestId('channel-toggle-whatsapp.sales')
+    expect(salesToggle).toHaveTextContent('Disable')
+    await user.click(salesToggle)
+    await waitFor(() => {
+      expect(mockDisableChannel).toHaveBeenCalledWith('whatsapp.sales')
+    })
+    expect(mockEnableChannel).not.toHaveBeenCalled()
+
+    // STUB_TELEGRAM.enabled === false -> the toggle reads "Enable".
+    const telegramToggle = await screen.findByTestId('channel-toggle-telegram')
+    expect(telegramToggle).toHaveTextContent('Enable')
+    await user.click(telegramToggle)
+    await waitFor(() => {
+      expect(mockEnableChannel).toHaveBeenCalledWith('telegram')
+    })
+  })
+})
+
 // ── Web Chat + Email stay outside the type-grouped/roster model ──────────────
 
 describe('ConnectorsScreen — built-in Web Chat is excluded from grouping/roster', () => {
-  it('renders Web Chat as an always-on built-in row, not inside the roster or a type group', async () => {
+  it('renders Web Chat as an always-on built-in row, separate from the (empty) Channels roster (B9)', async () => {
     mockFetchChannels.mockResolvedValue([STUB_WEBCHAT])
 
     const { ConnectorsScreen } = await import('./ConnectorsScreen')
@@ -560,8 +762,13 @@ describe('ConnectorsScreen — built-in Web Chat is excluded from grouping/roste
       expect(screen.getByTestId('channel-card-webchat')).toBeInTheDocument()
     })
     expect(screen.getByText('Always on')).toBeInTheDocument()
-    // Zero conversational instances configured -> Channels section shows its
-    // own (possibly empty) roster, not webchat.
-    expect(screen.queryByTestId('channel-roster-connect-webchat')).not.toBeInTheDocument()
+
+    // Zero conversational (non-webchat, non-email) instances are configured,
+    // so the Channels section renders its own empty-state roster — webchat is
+    // excluded from `channels` entirely (not merely absent from a testid that
+    // could never exist either way; see the retired tautological assertion).
+    const roster = await screen.findByTestId('channel-roster')
+    expect(within(roster).queryByText('Web Chat')).not.toBeInTheDocument()
+    expect(within(roster).queryAllByTestId(/^channel-roster-connect-/)).toHaveLength(0)
   })
 })
