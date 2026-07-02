@@ -6018,12 +6018,14 @@ func (a *restAPI) HandleChannels(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if len(parts) == 1 {
-			// GET /api/v1/channels/{id}
-			if r.Method == http.MethodGet {
+			switch r.Method {
+			case http.MethodGet:
 				a.getChannelConfig(w, channelID)
-				return
+			case http.MethodDelete:
+				a.deleteChannelInstance(w, channelID)
+			default:
+				jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 			}
-			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
 
@@ -6068,7 +6070,13 @@ func (a *restAPI) HandleChannels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if r.Method != http.MethodGet {
+	switch r.Method {
+	case http.MethodGet:
+		// fall through to list logic below
+	case http.MethodPost:
+		a.createChannelInstance(w, r)
+		return
+	default:
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
@@ -6735,6 +6743,184 @@ func (a *restAPI) setChannelRouting(w http.ResponseWriter, r *http.Request, chan
 		resp.DefaultAgentId = &id
 	}
 	jsonOK(w, resp)
+}
+
+// createChannelInstance handles POST /api/v1/channels (ADR-029 FR-024/FR-025,
+// US-6/US-10). Creates a new channel instance with key "<type>.<slug>".
+// The instance starts disabled (Enabled=false) and its config entry is written
+// via safeUpdateConfigJSON. Rejects on: unknown type (400), malformed slug (400),
+// duplicate key (409).
+func (a *restAPI) createChannelInstance(w http.ResponseWriter, r *http.Request) {
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	var req gen.CreateChannelInstanceJSONRequestBody
+	if !decodeAndValidate(w, r, "ChannelCreateRequest", &req, validateEnabled) {
+		return
+	}
+
+	chType := strings.ToLower(strings.TrimSpace(req.Type))
+	slug := strings.TrimSpace(req.Slug)
+
+	// Validate the base channel type.
+	if !validChannelIDs[chType] {
+		jsonErr(w, http.StatusBadRequest, fmt.Sprintf("unknown channel type %q", chType))
+		return
+	}
+
+	// Build the instance key and validate its full grammar (FR-017).
+	instanceKey := chType + "." + slug
+	if err := config.ValidateInstanceKey(instanceKey); err != nil {
+		jsonErr(w, http.StatusBadRequest, fmt.Sprintf("malformed slug: %v", err))
+		return
+	}
+
+	// Reject if the instance key already exists (409).
+	cfg := a.agentLoop.GetConfig()
+	if _, exists := cfg.Channels[instanceKey]; exists {
+		jsonErr(w, http.StatusConflict, fmt.Sprintf("channel instance %q already exists", instanceKey))
+		return
+	}
+
+	// Persist the new entry (disabled by default).
+	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
+		channels, _ := m["channels"].(map[string]any)
+		if channels == nil {
+			channels = map[string]any{}
+			m["channels"] = channels
+		}
+		// Double-check for races — another concurrent request may have inserted it.
+		if _, exists := channels[instanceKey]; exists {
+			return fmt.Errorf("channel instance %q already exists", instanceKey)
+		}
+		channels[instanceKey] = map[string]any{
+			"type":    chType,
+			"enabled": false,
+		}
+		m["channels"] = channels
+		return nil
+	}); err != nil {
+		// surfaced as 409 when the race guard fires, 500 otherwise
+		if strings.Contains(err.Error(), "already exists") {
+			jsonErr(w, http.StatusConflict, fmt.Sprintf("channel instance %q already exists", instanceKey))
+			return
+		}
+		slog.Error("rest: create channel instance: save config", "instance", instanceKey, "error", err)
+		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
+		return
+	}
+
+	slog.Info("rest: created channel instance", "id", instanceKey, "type", chType)
+	writeJSON(w, http.StatusCreated, gen.ChannelCreateResponse{
+		Id:      instanceKey,
+		Type:    chType,
+		Enabled: false,
+	})
+}
+
+// deleteChannelInstance handles DELETE /api/v1/channels/{id} (ADR-029 FR-025,
+// US-10/US-11). Removes the channel instance's config entry, credential refs,
+// any stale channel-wildcard binding for the id, and the per-instance state
+// directory (e.g. WhatsApp SQLite store).
+//
+// Teardown order (config removal first so a partial failure never leaves a
+// config pointing at a missing store):
+//  1. Collect credential ref names from the live config BEFORE writing.
+//  2. Remove config entry + stale wildcard binding via safeUpdateConfigJSON.
+//  3. Delete credential store entries (best-effort; orphaned blobs not fatal).
+//  4. Remove per-instance state directory (best-effort; stale dir not fatal).
+func (a *restAPI) deleteChannelInstance(w http.ResponseWriter, channelID string) {
+	// Grammar already validated by HandleChannels before we reach here.
+	// Existence check: require the instance to be in cfg.Channels.
+	cfg := a.agentLoop.GetConfig()
+	inst, exists := cfg.Channels[channelID]
+	if !exists {
+		jsonErr(w, http.StatusNotFound, "unknown instance")
+		return
+	}
+
+	// Snapshot credential ref names to delete AFTER the config write.
+	chBaseType, _ := config.ParseInstanceKey(channelID)
+	var credRefs []string
+	for _, field := range channelSensitiveFields[chBaseType] {
+		credRefs = append(credRefs, channelCredKey(channelID, field))
+	}
+
+	// Snapshot the WhatsApp store path (if applicable) before the config write.
+	// We derive the default path the same way init.go does: WorkspacePath()/whatsapp/<instanceID>.
+	// If SessionStorePath is explicitly set, use that; otherwise use the derived default.
+	var stateDir string
+	if chBaseType == "whatsapp" {
+		storePath := inst.SessionStorePath
+		if storePath == "" {
+			storePath = filepath.Join(cfg.WorkspacePath(), "whatsapp", channelID)
+		}
+		stateDir = storePath
+	}
+
+	// Step 2: remove config entry and stale wildcard binding atomically.
+	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
+		channels, _ := m["channels"].(map[string]any)
+		if channels != nil {
+			delete(channels, channelID)
+			if len(channels) == 0 {
+				delete(m, "channels")
+			} else {
+				m["channels"] = channels
+			}
+		}
+
+		// Remove any stale channel-wildcard binding for this instance (FR-029).
+		rawBindings, _ := m["bindings"].([]any)
+		if len(rawBindings) > 0 {
+			filtered := make([]any, 0, len(rawBindings))
+			for _, entry := range rawBindings {
+				bMap, ok := entry.(map[string]any)
+				if !ok {
+					filtered = append(filtered, entry)
+					continue
+				}
+				matchMap, _ := bMap["match"].(map[string]any)
+				if matchMap == nil {
+					filtered = append(filtered, entry)
+					continue
+				}
+				if isChannelWildcardRaw(matchMap, channelID) {
+					continue // drop stale wildcard
+				}
+				filtered = append(filtered, entry)
+			}
+			if len(filtered) == 0 {
+				delete(m, "bindings")
+			} else {
+				m["bindings"] = filtered
+			}
+		}
+		return nil
+	}); err != nil {
+		slog.Error("rest: delete channel instance: save config", "id", channelID, "error", err)
+		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
+		return
+	}
+
+	// Step 3: delete credential store entries (best-effort).
+	for _, refName := range credRefs {
+		if err := a.removeStoredCredential(refName); err != nil {
+			// removeStoredCredential returns nil for not-found keys; a real error
+			// means the store has an I/O problem. Log and continue — the config
+			// entry is already gone so this is an orphaned blob, not a live credential.
+			slog.Warn("rest: delete channel instance: remove credential", "id", channelID, "ref", refName, "error", err)
+		}
+	}
+
+	// Step 4: remove per-instance state directory (best-effort).
+	if stateDir != "" {
+		if err := os.RemoveAll(stateDir); err != nil {
+			slog.Warn("rest: delete channel instance: remove state dir",
+				"id", channelID, "dir", stateDir, "error", err)
+		}
+	}
+
+	slog.Info("rest: deleted channel instance", "id", channelID, "type", chBaseType)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, enabled bool) {

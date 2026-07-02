@@ -1760,11 +1760,12 @@ func ValidateInstanceKey(key string) error {
 	if _, ok := knownChannelTypes[channelType]; !ok {
 		return fmt.Errorf("%w: unknown base type %q in key %q", ErrInvalidInstanceKey, channelType, key)
 	}
-	if slug == "" {
-		// Bare type key — valid.
+	if !strings.Contains(key, ".") {
+		// Bare type key (no delimiter) — valid.
 		return nil
 	}
-	// Namespaced key: validate slug.
+	// Namespaced key ("<type>.<slug>"): the slug must be well-formed. A trailing
+	// dot ("whatsapp.") yields an empty slug, which slugPattern rejects (BUG-1).
 	if !slugPattern(slug) {
 		return fmt.Errorf(
 			"%w: slug %q in key %q is invalid — must match [a-z0-9-]{1,32} (all lowercase, 1–32 chars)",
@@ -1801,8 +1802,10 @@ func ValidateChannels(channels map[string]ChannelInstanceConfig) error {
 		if _, ok := knownChannelTypes[channelType]; !ok {
 			continue
 		}
-		// Known base type: a namespaced key's slug must be well-formed.
-		if slug != "" && !slugPattern(slug) {
+		// Known base type: a namespaced key's slug must be well-formed. Any dot in
+		// the key means it is namespaced, so a trailing dot ("whatsapp.", empty
+		// slug) is rejected here too (BUG-1) — slugPattern rejects the empty slug.
+		if strings.Contains(key, ".") && !slugPattern(slug) {
 			return fmt.Errorf(
 				"channels: %w: slug %q in key %q must match [a-z0-9-]{1,32} (all lowercase, 1–32 chars)",
 				ErrInvalidInstanceKey, slug, key,

@@ -157,7 +157,7 @@ func TestRebuildChannelSessionIndex_RestoresSessionIDs(t *testing.T) {
 	al.rebuildChannelSessionIndex()
 
 	// resolveOrCreateChannelSession must return the existing session ID (not create a new one).
-	resolved := al.resolveOrCreateChannelSession("telegram", "user-1", "agent-1", "Alice", "")
+	resolved := al.resolveOrCreateChannelSession("telegram", "telegram", "user-1", "agent-1", "Alice", "")
 	assert.Equal(t, sessionID1, resolved,
 		"after rebuildChannelSessionIndex, resolveOrCreateChannelSession must return the existing session ID")
 
@@ -179,10 +179,10 @@ func TestRebuildChannelSessionIndex_RestoresSessionIDs(t *testing.T) {
 func TestResolveOrCreateChannelSession_DeduplicatesSamePeer(t *testing.T) {
 	al, store := makeLoopWithSharedStore(t)
 
-	id1 := al.resolveOrCreateChannelSession("discord", "peer-9", "agent-1", "Bob", "")
+	id1 := al.resolveOrCreateChannelSession("discord", "discord", "peer-9", "agent-1", "Bob", "")
 	require.NotEmpty(t, id1, "first call must return a non-empty session ID")
 
-	id2 := al.resolveOrCreateChannelSession("discord", "peer-9", "agent-1", "Bob", "")
+	id2 := al.resolveOrCreateChannelSession("discord", "discord", "peer-9", "agent-1", "Bob", "")
 	assert.Equal(t, id1, id2,
 		"second call with same channel/chatID must return the same session ID (dedup)")
 
@@ -204,8 +204,8 @@ func TestResolveOrCreateChannelSession_DeduplicatesSamePeer(t *testing.T) {
 func TestResolveOrCreateChannelSession_DifferentPeersGetDifferentSessions(t *testing.T) {
 	al, store := makeLoopWithSharedStore(t)
 
-	idA := al.resolveOrCreateChannelSession("telegram", "peer-A", "agent-1", "Alice", "")
-	idB := al.resolveOrCreateChannelSession("telegram", "peer-B", "agent-1", "Bob", "")
+	idA := al.resolveOrCreateChannelSession("telegram", "telegram", "peer-A", "agent-1", "Alice", "")
+	idB := al.resolveOrCreateChannelSession("telegram", "telegram", "peer-B", "agent-1", "Bob", "")
 
 	require.NotEmpty(t, idA, "peer-A must get a session ID")
 	require.NotEmpty(t, idB, "peer-B must get a session ID")
@@ -229,7 +229,7 @@ func TestResolveOrCreateChannelSession_DifferentPeersGetDifferentSessions(t *tes
 func TestResolveOrCreateChannelSession_EmptyChatIDReturnsEmpty(t *testing.T) {
 	al, store := makeLoopWithSharedStore(t)
 
-	result := al.resolveOrCreateChannelSession("discord", "", "agent-1", "NoName", "")
+	result := al.resolveOrCreateChannelSession("discord", "discord", "", "agent-1", "NoName", "")
 	assert.Equal(t, "", result, "empty chatID must cause resolveOrCreateChannelSession to return ''")
 
 	sessions, err := store.ListSessions()
@@ -250,7 +250,7 @@ func TestResolveOrCreateChannelSession_EmptyChatIDReturnsEmpty(t *testing.T) {
 func TestResolveOrCreateChannelSession_TitleFallbackToChatID(t *testing.T) {
 	al, store := makeLoopWithSharedStore(t)
 
-	sessionID := al.resolveOrCreateChannelSession("slack", "room-99", "agent-1", "", "")
+	sessionID := al.resolveOrCreateChannelSession("slack", "slack", "room-99", "agent-1", "", "")
 	require.NotEmpty(t, sessionID, "must return a session ID even when displayName is empty")
 
 	meta, err := store.GetMeta(sessionID)

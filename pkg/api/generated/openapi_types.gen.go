@@ -4989,6 +4989,27 @@ type ChannelConfigureRequest struct {
 // ChannelConfigureRequestIdentityKind Routing kind for this channel instance.
 type ChannelConfigureRequestIdentityKind string
 
+// ChannelCreateRequest Request body for POST /channels — creates a new channel instance. The instance key is derived as "<type>.<slug>" (ADR-029 FR-017).
+type ChannelCreateRequest struct {
+	// Slug Per-instance disambiguator matching [a-z0-9-]{1,32} (all lowercase, 1–32 chars). Combined with type to form the instance key "<type>.<slug>".
+	Slug string `json:"slug"`
+
+	// Type Base channel type (e.g. "whatsapp", "telegram"). Must be a known channel type as listed in the ChannelId registry.
+	Type string `json:"type"`
+}
+
+// ChannelCreateResponse Response body for POST /channels — the newly created channel instance.
+type ChannelCreateResponse struct {
+	// Enabled Whether the instance is currently enabled. Newly created instances start disabled (enabled: false) until configured and toggled.
+	Enabled bool `json:"enabled"`
+
+	// Id The fully-qualified instance key: "<type>.<slug>" (ADR-029 FR-017).
+	Id string `json:"id"`
+
+	// Type Base channel type.
+	Type string `json:"type"`
+}
+
 // ChannelEnabledResponse Response from PUT /api/v1/channels/{id}/enable and PUT /api/v1/channels/{id}/disable. Returns the channel ID and its new enabled state.
 type ChannelEnabledResponse struct {
 	// Enabled Whether the channel is now enabled.
@@ -8656,6 +8677,9 @@ type ReAuthJSONRequestBody = ReAuthRequest
 
 // RegisterAdminJSONRequestBody defines body for RegisterAdmin for application/json ContentType.
 type RegisterAdminJSONRequestBody = RegisterAdminRequest
+
+// CreateChannelInstanceJSONRequestBody defines body for CreateChannelInstance for application/json ContentType.
+type CreateChannelInstanceJSONRequestBody = ChannelCreateRequest
 
 // ConfigureChannelJSONRequestBody defines body for ConfigureChannel for application/json ContentType.
 type ConfigureChannelJSONRequestBody ConfigureChannelJSONBody
