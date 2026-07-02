@@ -4,11 +4,18 @@
 // self-hosted id, or an unrecognised string) to a display group and, where
 // possible, a canonical ProviderCatalogEntry.
 //
-// Three cases (in priority order):
-//   1. Known self-hosted ids (ollama / litellm / vllm) → "Self-hosted / Custom"
-//      (they have localhost endpoints and need no cloud API key roster slot).
-//   2. Alias match → canonical catalog entry + that entry's company as group.
-//   3. Unrecognised / empty → generic group with raw id, no catalog entry.
+// Four cases (in priority order — catalog membership wins first):
+//   1. Exact canonical id in the catalog → that entry + entry.company.
+//   2. Alias match in the catalog → canonical entry + entry.company.
+//   3. Known self-hosted id that is NOT in the catalog (litellm / vllm) →
+//      "Self-hosted / Custom" (localhost endpoint, no cloud roster slot).
+//   4. Unrecognised / empty → generic "Other" group, no catalog entry.
+//
+// NB: `ollama` is a FIRST-CLASS catalog provider ("Ollama (local)"), so it
+// resolves via case 1 — it is NOT force-routed to Self-hosted / Custom (that was
+// the double-grouping bug: a configured ollama would appear under a different
+// group name than the roster shows it under). Only genuinely not-in-catalog
+// self-hosted runtimes (litellm/vllm) use the Self-hosted / Custom fallback.
 //
 // NEVER crashes: all inputs including "" and garbage strings are handled.
 
@@ -18,10 +25,11 @@ import type { ProviderCatalogEntry } from '@/lib/api/generated/openapi-types'
 export const SELF_HOSTED_CUSTOM_GROUP = 'Self-hosted / Custom'
 export const GENERIC_GROUP = 'Other'
 
-// Ids that are treated as "self-hosted" regardless of catalog membership.
-// These have localhost / local endpoints and should not appear in the cloud
-// provider roster; when already configured, they group under Self-hosted / Custom.
-const SELF_HOSTED_IDS = new Set(['ollama', 'litellm', 'vllm'])
+// Known self-hosted runtimes that are NOT offered in the catalog/roster. When
+// already configured they group under Self-hosted / Custom rather than "Other",
+// so they aren't demoted to "unknown" (ADR-031 §7 G-4 / MAJ-004). `ollama` is
+// deliberately absent — it is a catalog provider and resolves via the catalog.
+const SELF_HOSTED_IDS = new Set(['litellm', 'vllm'])
 
 export interface ResolvedCatalogEntry {
   /** Catalog entry if resolved; undefined for self-hosted-custom or unknown ids. */
@@ -33,10 +41,10 @@ export interface ResolvedCatalogEntry {
 /**
  * Resolve a stored provider id to a catalog entry and display group.
  *
- * Cases:
- *  - Self-hosted ids (ollama/litellm/vllm) → group "Self-hosted / Custom", no entry.
+ * Cases (catalog membership wins first):
  *  - Canonical catalog id (exact id match) → that entry + entry.company.
  *  - Alias id (matches entry.aliases) → canonical entry + entry.company.
+ *  - Known not-in-catalog self-hosted id (litellm/vllm) → "Self-hosted / Custom".
  *  - Empty / unrecognised → group "Other" with no entry.
  */
 export function resolveCatalogEntry(storedId: string): ResolvedCatalogEntry {
@@ -44,21 +52,21 @@ export function resolveCatalogEntry(storedId: string): ResolvedCatalogEntry {
     return { group: GENERIC_GROUP }
   }
 
-  // Priority 1: self-hosted ids → "Self-hosted / Custom"
-  if (SELF_HOSTED_IDS.has(storedId)) {
-    return { group: SELF_HOSTED_CUSTOM_GROUP }
-  }
-
-  // Priority 2: exact canonical id match
+  // Priority 1: exact canonical id match (a catalog provider like `ollama` wins here)
   const byId = PROVIDER_CATALOG.find((e) => e.id === storedId)
   if (byId) {
     return { entry: byId, group: byId.company }
   }
 
-  // Priority 3: alias match
+  // Priority 2: alias match → canonical entry
   const byAlias = PROVIDER_CATALOG.find((e) => e.aliases?.includes(storedId))
   if (byAlias) {
     return { entry: byAlias, group: byAlias.company }
+  }
+
+  // Priority 3: known self-hosted runtime not in the catalog → Self-hosted / Custom
+  if (SELF_HOSTED_IDS.has(storedId)) {
+    return { group: SELF_HOSTED_CUSTOM_GROUP }
   }
 
   // Fallback: unknown id
