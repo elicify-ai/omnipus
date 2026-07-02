@@ -128,19 +128,9 @@ func TestHandleChannels_SurfacesInstanceIDAndIdentity(t *testing.T) {
 	assert.Nil(t, webchat.Identity, "webchat (built-in) must have no identity")
 }
 
-// TestSetChannelEnabled_Cap1Duplicate422 covers FR-2.3 / US-2: when config.json
-// already holds two instances of one type (a hand-edited duplicate), a REST
-// config write surfaces the load-time cap-1 violation as a clean 422
-// "one-per-type" rather than an opaque 500.
-func TestSetChannelEnabled_Cap1Duplicate422(t *testing.T) {
-	api := newChannelTestAPI(
-		t,
-		`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],"channels":{"telegram":{"type":"telegram","enabled":true},"telegram-2":{"type":"telegram","enabled":true}}}`,
-	)
-
-	w := httptest.NewRecorder()
-	api.setChannelEnabled(w, "discord", true)
-	assert.Equal(t, http.StatusUnprocessableEntity, w.Code,
-		"cap-1 duplicate must surface as 422, not 500; body=%s", w.Body.String())
-	assert.Contains(t, strings.ToLower(w.Body.String()), "one-per-type")
-}
+// NOTE: the former TestSetChannelEnabled_Cap1Duplicate422 was removed with
+// ADR-029 — the one-instance-per-type cap is LIFTED (N instances per type are
+// now allowed and are the whole point of the feature). Instance-id UNIQUENESS
+// (a specific "<type>.<slug>" cannot be created twice) is covered by
+// TestCreateChannelInstance_Duplicate_Returns409; multi-instance activation by
+// TestInitChannels_NInstancesPerType / TestValidateChannels_MultipleInstancesPerTypeAllowed.
