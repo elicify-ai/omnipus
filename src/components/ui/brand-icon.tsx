@@ -38,6 +38,12 @@ function buildSanitizedMap(): Map<string, string> {
     if (!raw) continue
     const sanitized = DOMPurify.sanitize(raw, {
       USE_PROFILES: { svg: true, svgFilters: true },
+      // Drop <title>/<desc>: the wrapper <span> already carries the accessible
+      // name via aria-label (or aria-hidden when decorative), so an inner SVG
+      // <title> is redundant for AT AND leaks the brand name into the DOM as
+      // findable text — which double-matches getByText('OpenAI') in consumers
+      // that also render the brand name as adjacent text.
+      FORBID_TAGS: ['title', 'desc'],
     })
     map.set(slug, sanitized)
   }
