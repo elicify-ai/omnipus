@@ -424,7 +424,13 @@ function OnboardingWizard() {
   const handleSelectRegion = (region: ProviderCatalogEntry['region']) => {
     setSelectedRegion(region)
     const entry = resolveEntry(providers, selectedCompany, selectedPlan, region)
-    const resolvedId = entry?.id ?? ''
+    // Fall back to any entry for this company+plan (mirrors handleSelectPlan) so
+    // a region that doesn't resolve can never silently empty selectedProvider
+    // and collapse the API-key panel.
+    const resolvedId =
+      entry?.id ??
+      entriesForCompany(providers, selectedCompany).find((e) => e.plan === selectedPlan)?.id ??
+      ''
     setSelectedProvider(resolvedId)
     // Reset model list — different region = different endpoint + different models.
     setAvailableModels([])
