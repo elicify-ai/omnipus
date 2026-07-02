@@ -379,7 +379,11 @@ func TestPickProbeModel_DefaultNotInCatalogFallsToFirstChatEntry(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Errorf("pickProbeModel returned %q which is not in the expected chat catalog entries %v", got, catalogChatEntries)
+		t.Errorf(
+			"pickProbeModel returned %q which is not in the expected chat catalog entries %v",
+			got,
+			catalogChatEntries,
+		)
 	}
 }
 

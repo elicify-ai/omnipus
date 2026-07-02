@@ -258,6 +258,8 @@ components:
       $ref: ./components/schemas/SlashCommand.yaml
     ActivityEvent:
       $ref: ./components/schemas/ActivityEvent.yaml
+    ProviderCatalogEntry:
+      $ref: ./components/schemas/ProviderCatalogEntry.yaml
     UploadedFile:
       type: object
       description: >
@@ -366,6 +368,10 @@ components:
       $ref: ./components/schemas/ChannelTestResponse.yaml
     ChannelRouting:
       $ref: ./components/schemas/ChannelRouting.yaml
+    ChannelCreateRequest:
+      $ref: ./components/schemas/ChannelCreateRequest.yaml
+    ChannelCreateResponse:
+      $ref: ./components/schemas/ChannelCreateResponse.yaml
     Mailbox:
       $ref: ./components/schemas/Mailbox.yaml
     MailboxConfigureRequest:
@@ -2656,6 +2662,47 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+    post:
+      operationId: createChannelInstance
+      summary: Create a new channel instance
+      description: >
+        Creates a new channel instance with key "<type>.<slug>" (ADR-029 FR-017).
+        The instance starts disabled (enabled: false). Returns 409 if the
+        instance key already exists, 400 if the type is unknown or the slug
+        is malformed.
+      tags:
+      - Channels
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChannelCreateRequest'
+      responses:
+        '201':
+          description: Instance created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChannelCreateResponse'
+        '400':
+          description: Unknown channel type or malformed slug.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Instance key already exists.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Config write failure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /channels/{id}:
     get:
       operationId: getChannelConfig
@@ -2686,6 +2733,46 @@ paths:
                 additionalProperties: true
         '404':
           description: Channel ID not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      operationId: deleteChannelInstance
+      summary: Delete a channel instance
+      description: >
+        Deletes a channel instance: removes its config entry, credential refs,
+        any stale channel-wildcard binding, and its per-instance state directory
+        (e.g. WhatsApp store). Returns 404 for unknown instances and 400 for
+        malformed ids. Bare-type keys (e.g. "telegram") can be deleted;
+        "webchat" is a built-in and cannot be deleted.
+      tags:
+      - Channels
+      parameters:
+      - name: id
+        in: path
+        required: true
+        description: Channel instance ID to delete.
+        schema:
+          $ref: '#/components/schemas/ChannelId'
+        example: whatsapp.eu
+      responses:
+        '204':
+          description: Instance deleted successfully.
+        '400':
+          description: Malformed channel id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Instance not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Config write failure.
           content:
             application/json:
               schema:

@@ -434,15 +434,15 @@ func TestChannelRouting_TwoChannelsAreIsolated(t *testing.T) {
 		"discord must have null default_agent_id — telegram's binding must not contaminate it")
 }
 
-// TestSetChannelRouting_RejectsWorkerTarget verifies M1: PUT
-// /api/v1/channels/{id}/routing targeting a worker agent is rejected with 400 —
+// TestSetChannelRouting_RejectsWorkerTarget verifies M1/MIN-002: PUT
+// /api/v1/channels/{id}/routing targeting a worker agent is rejected with 422 —
 // a worker is not a chat target and cannot be a channel's default agent. A
 // control PUT targeting a base agent must still succeed (200).
 //
 // BDD: Given a base agent and a worker agent,
 //
 //	When PUT /api/v1/channels/telegram/routing with {"default_agent_id": "<worker>"},
-//	Then the request fails with 400 and the error mentions workers/chat targets;
+//	Then the request fails with 422 (MIN-002, standardized from 400) and the error mentions workers/chat targets;
 //	And a control PUT with the base agent returns 200.
 func TestSetChannelRouting_RejectsWorkerTarget(t *testing.T) {
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
@@ -480,8 +480,9 @@ func TestSetChannelRouting_RejectsWorkerTarget(t *testing.T) {
 		strings.NewReader(`{"default_agent_id": "worker"}`),
 	)
 	api.HandleChannels(w, r)
-	require.Equal(t, http.StatusBadRequest, w.Code,
-		"a worker target for channel routing must be rejected with 400")
+	// MIN-002: worker rejection standardized to 422 (was 400).
+	require.Equal(t, http.StatusUnprocessableEntity, w.Code,
+		"a worker target for channel routing must be rejected with 422 (MIN-002)")
 	assert.Contains(t, strings.ToLower(w.Body.String()), "worker",
 		"the error must explain a worker cannot be a channel's default agent")
 

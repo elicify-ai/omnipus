@@ -123,6 +123,14 @@ func IsValidEventName(e EventName) bool {
 		EventGatewayConfigInvalidValue,
 		EventTurnAbortedSyntheticLoop,
 		EventApproverFallback,
+		// Channel workspace-binding events (ADR-029).
+		// EventChannelRoutingDriftDrop is emitted when a workspace-bound instance's
+		// configured agent is unresolvable and the message is dropped.
+		// EventChannelRoutingChanged is emitted by the REST routing PUT handler
+		// whenever an operator updates a channel's workspace/agent binding.
+		EventChannelRoutingDriftDrop,
+		EventChannelRoutingChanged,
+		EventChannelInstanceDeleted,
 		// Cancel-flow events (FR-10, FR-11, FR-15, FR-17-21, FR-25a).
 		EventTurnCancelAttempt,
 		EventTurnCancelled,

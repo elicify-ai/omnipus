@@ -3403,6 +3403,24 @@ func TestContract_ChannelRouting_Populated(t *testing.T) {
 	mustPassComponent(t, "ChannelRouting", FixtureChannelRouting_Populated())
 }
 
+// TestContract_ChannelRouting_Bound verifies that a bound ChannelRouting
+// (workspace_id + default_agent_id set) produces schema-valid JSON (F-12/FR-026).
+// Traces to: ADR-029 MAJ-004, FR-029.
+func TestContract_ChannelRouting_Bound(t *testing.T) {
+	mustPassComponent(t, "ChannelRouting", FixtureChannelRouting_Bound())
+}
+
+// ── ChannelCreateResponse ─────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/ChannelCreateResponse.yaml
+
+func TestContract_ChannelCreateResponse_Populated(t *testing.T) {
+	mustPassComponent(t, "ChannelCreateResponse", ChannelCreateResponse{
+		Id:      "whatsapp.eu",
+		Type:    "whatsapp",
+		Enabled: false,
+	})
+}
+
 // ── CliDetect ──────────────────────────────────────────────────────────────────
 // Traces to: contracts/components/schemas/CliDetect.yaml
 // Restructured from three booleans to per-CLI {installed, path, source}

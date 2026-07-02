@@ -7,75 +7,50 @@ import (
 	"testing"
 )
 
-// TestValidateChannelsCap1_SingleInstanceAccepted is the FR-2.3 happy path: a map
+// TestValidateChannels_SingleInstanceAccepted is the ADR-029 happy path: a map
 // with one instance per type passes (no error). A valid single-instance config
 // must NOT be rejected.
-func TestValidateChannelsCap1_SingleInstanceAccepted(t *testing.T) {
+func TestValidateChannels_SingleInstanceAccepted(t *testing.T) {
 	channels := map[string]ChannelInstanceConfig{
 		"telegram": {Type: "telegram", Enabled: true},
 		"discord":  {Type: "discord", Enabled: false},
 	}
-	if err := ValidateChannelsCap1(channels); err != nil {
-		t.Fatalf("ValidateChannelsCap1 rejected a valid one-per-type map: %v", err)
+	if err := ValidateChannels(channels); err != nil {
+		t.Fatalf("ValidateChannels rejected a valid one-per-type map: %v", err)
 	}
 }
 
-// TestValidateChannelsCap1_EmptyAccepted confirms an empty/nil map is valid.
-func TestValidateChannelsCap1_EmptyAccepted(t *testing.T) {
-	if err := ValidateChannelsCap1(nil); err != nil {
+// TestValidateChannels_EmptyAccepted confirms an empty/nil map is valid.
+func TestValidateChannels_EmptyAccepted(t *testing.T) {
+	if err := ValidateChannels(nil); err != nil {
 		t.Fatalf("nil channels map should be valid, got: %v", err)
 	}
-	if err := ValidateChannelsCap1(map[string]ChannelInstanceConfig{}); err != nil {
+	if err := ValidateChannels(map[string]ChannelInstanceConfig{}); err != nil {
 		t.Fatalf("empty channels map should be valid, got: %v", err)
 	}
 }
 
-// TestValidateChannelsCap1_DuplicateTypeRejected covers FR-2.3 / US-2: two
-// instances of the same type violate the cap and the error wraps the sentinel
-// (so the gateway can map it to a 422).
-func TestValidateChannelsCap1_DuplicateTypeRejected(t *testing.T) {
+// TestValidateChannels_MultipleInstancesPerTypeAllowed verifies that ADR-029
+// lifts the old cap-1 restriction: two instances of the same type with valid
+// namespaced keys are now permitted.
+func TestValidateChannels_MultipleInstancesPerTypeAllowed(t *testing.T) {
 	channels := map[string]ChannelInstanceConfig{
-		"telegram":   {Type: "telegram", Enabled: true},
-		"telegram-2": {Type: "telegram", Enabled: true},
+		"telegram":    {Type: "telegram", Enabled: true},
+		"telegram.eu": {Type: "telegram", Enabled: true},
 	}
-	err := ValidateChannelsCap1(channels)
-	if err == nil {
-		t.Fatal("ValidateChannelsCap1 accepted two telegram instances; want cap-1 violation")
-	}
-	if !errors.Is(err, ErrChannelsCap1Violated) {
-		t.Fatalf("error does not wrap ErrChannelsCap1Violated: %v", err)
+	if err := ValidateChannels(channels); err != nil {
+		t.Fatalf("ValidateChannels rejected two telegram instances with valid namespaced keys (cap-1 was lifted): %v", err)
 	}
 }
 
-// TestNormalizeChannelMap_PopulatesTypeFromKey confirms an instance written
-// without an explicit type (e.g. by an early REST write) is normalized so its
-// Type equals the map key — which keeps cap-1 counting correct.
-func TestNormalizeChannelMap_PopulatesTypeFromKey(t *testing.T) {
-	in := map[string]ChannelInstanceConfig{
-		"telegram": {Enabled: true}, // no Type set
-	}
-	out := normalizeChannelMap(in)
-	inst, ok := out["telegram"]
-	if !ok {
-		t.Fatal("telegram instance dropped by normalizeChannelMap")
-	}
-	if inst.Type != "telegram" {
-		t.Errorf("Type = %q, want 'telegram' (inferred from map key)", inst.Type)
-	}
-	// And the normalized map passes cap-1 with one instance.
-	if err := ValidateChannelsCap1(out); err != nil {
-		t.Errorf("normalized single instance failed cap-1: %v", err)
-	}
-}
-
-// TestLoadConfig_RejectsDuplicateChannelType is the FR-2.3 / N5 load-path guard:
-// a hand-edited config.json carrying two instances of the same channel type
-// (here "telegram" + "telegram-2" both with type:telegram) MUST be rejected by
-// LoadConfig — not silently accepted and dropped by normalizeChannelMap. The
-// error must wrap ErrChannelsCap1Violated so the gateway can map it to a 422.
-// This locks in that cap-1 is enforced at config LOAD time (in addition to the
-// API 422 path), which is the N5 gap closure.
-func TestLoadConfig_RejectsDuplicateChannelType(t *testing.T) {
+// TestLoadConfig_RejectsInvalidInstanceKey is the ADR-029 Gate 0 load-path
+// guard: a config.json carrying a channel entry with an invalid instance key
+// (here "telegram-2" is not a known bare type and does not follow the
+// <type>.<slug> format) MUST be rejected by LoadConfig. The error wraps
+// ErrInvalidInstanceKey. (Prior to ADR-029 this tested cap-1 via
+// ErrChannelsCap1Violated; the cap is now lifted and key-grammar is enforced
+// instead.)
+func TestLoadConfig_RejectsInvalidInstanceKey(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.json")
 	if err := os.WriteFile(
@@ -95,10 +70,10 @@ func TestLoadConfig_RejectsDuplicateChannelType(t *testing.T) {
 
 	_, err := LoadConfig(configPath)
 	if err == nil {
-		t.Fatal("LoadConfig accepted a config with two telegram instances; want cap-1 rejection (N5)")
+		t.Fatal("LoadConfig accepted a config with an invalid instance key; want ErrInvalidInstanceKey rejection")
 	}
-	if !errors.Is(err, ErrChannelsCap1Violated) {
-		t.Fatalf("LoadConfig error does not wrap ErrChannelsCap1Violated: %v", err)
+	if !errors.Is(err, ErrInvalidInstanceKey) {
+		t.Fatalf("LoadConfig error does not wrap ErrInvalidInstanceKey: %v", err)
 	}
 }
 
@@ -140,5 +115,156 @@ func TestChannelInstanceConfig_IdentityRoundTrips(t *testing.T) {
 	}
 	if inst.Identity == nil || inst.Identity.Kind != "agent" || inst.Identity.ID != "concierge" {
 		t.Fatalf("identity not retained on the instance: %+v", inst.Identity)
+	}
+}
+
+// TestNormalizeChannelMap_PopulatesTypeFromKey confirms an instance written
+// without an explicit type (e.g. by an early REST write) is normalized so its
+// Type equals the map key — which keeps counting correct.
+func TestNormalizeChannelMap_PopulatesTypeFromKey(t *testing.T) {
+	in := map[string]ChannelInstanceConfig{
+		"telegram": {Enabled: true}, // no Type set
+	}
+	out := normalizeChannelMap(in)
+	inst, ok := out["telegram"]
+	if !ok {
+		t.Fatal("telegram instance dropped by normalizeChannelMap")
+	}
+	if inst.Type != "telegram" {
+		t.Errorf("Type = %q, want 'telegram' (inferred from map key)", inst.Type)
+	}
+}
+
+// TestIsWorkspaceBound_FullyBound confirms the predicate returns true when all
+// three workspace-binding conditions are met.
+func TestIsWorkspaceBound_FullyBound(t *testing.T) {
+	inst := ChannelInstanceConfig{
+		WorkspaceID: "ws-1",
+		Identity:    &ChannelIdentity{Kind: "agent", ID: "concierge"},
+	}
+	if !inst.IsWorkspaceBound() {
+		t.Fatal("IsWorkspaceBound returned false for a fully-bound instance")
+	}
+}
+
+// TestIsWorkspaceBound_NoWorkspaceID returns false when WorkspaceID is empty.
+func TestIsWorkspaceBound_NoWorkspaceID(t *testing.T) {
+	inst := ChannelInstanceConfig{
+		Identity: &ChannelIdentity{Kind: "agent", ID: "concierge"},
+	}
+	if inst.IsWorkspaceBound() {
+		t.Fatal("IsWorkspaceBound returned true when WorkspaceID is empty")
+	}
+}
+
+// TestIsWorkspaceBound_NilIdentity returns false when Identity is nil.
+func TestIsWorkspaceBound_NilIdentity(t *testing.T) {
+	inst := ChannelInstanceConfig{
+		WorkspaceID: "ws-1",
+		Identity:    nil,
+	}
+	if inst.IsWorkspaceBound() {
+		t.Fatal("IsWorkspaceBound returned true when Identity is nil")
+	}
+}
+
+// TestIsWorkspaceBound_WrongKind returns false when Identity.Kind is not "agent".
+func TestIsWorkspaceBound_WrongKind(t *testing.T) {
+	inst := ChannelInstanceConfig{
+		WorkspaceID: "ws-1",
+		Identity:    &ChannelIdentity{Kind: "user", ID: "alice"},
+	}
+	if inst.IsWorkspaceBound() {
+		t.Fatal("IsWorkspaceBound returned true when Identity.Kind is 'user'")
+	}
+}
+
+// TestIsWorkspaceBound_EmptyAgentID returns false when Identity.ID is empty.
+func TestIsWorkspaceBound_EmptyAgentID(t *testing.T) {
+	inst := ChannelInstanceConfig{
+		WorkspaceID: "ws-1",
+		Identity:    &ChannelIdentity{Kind: "agent", ID: ""},
+	}
+	if inst.IsWorkspaceBound() {
+		t.Fatal("IsWorkspaceBound returned true when Identity.ID is empty")
+	}
+}
+
+// TestValidateChannels_HalfBound_RejectsWorkspaceIDWithNilIdentity verifies
+// that ValidateChannels rejects a half-bound instance where WorkspaceID is set
+// but Identity is nil (ADR-029 FR-029 half-bound guard).
+func TestValidateChannels_HalfBound_RejectsWorkspaceIDWithNilIdentity(t *testing.T) {
+	channels := map[string]ChannelInstanceConfig{
+		"telegram": {
+			Type:        "telegram",
+			Enabled:     true,
+			WorkspaceID: "ws-abc",
+			Identity:    nil, // half-bound: workspace set, no identity
+		},
+	}
+	err := ValidateChannels(channels)
+	if err == nil {
+		t.Fatal("ValidateChannels accepted a half-bound instance (WorkspaceID set, Identity nil); want ErrHalfBoundChannelInstance")
+	}
+	if !errors.Is(err, ErrHalfBoundChannelInstance) {
+		t.Fatalf("error does not wrap ErrHalfBoundChannelInstance: %v", err)
+	}
+}
+
+// TestValidateChannels_HalfBound_RejectsWorkspaceIDWithUserKind verifies
+// that ValidateChannels rejects an instance with WorkspaceID set but
+// Identity.Kind != "agent" (half-bound: binding requires an agent identity).
+func TestValidateChannels_HalfBound_RejectsWorkspaceIDWithUserKind(t *testing.T) {
+	channels := map[string]ChannelInstanceConfig{
+		"telegram": {
+			Type:        "telegram",
+			Enabled:     true,
+			WorkspaceID: "ws-abc",
+			Identity:    &ChannelIdentity{Kind: "user", ID: "alice"},
+		},
+	}
+	err := ValidateChannels(channels)
+	if err == nil {
+		t.Fatal("ValidateChannels accepted a half-bound instance (Identity.Kind=user); want ErrHalfBoundChannelInstance")
+	}
+	if !errors.Is(err, ErrHalfBoundChannelInstance) {
+		t.Fatalf("error does not wrap ErrHalfBoundChannelInstance: %v", err)
+	}
+}
+
+// TestValidateChannels_HalfBound_RejectsWorkspaceIDWithEmptyAgentID verifies
+// that ValidateChannels rejects an instance with WorkspaceID set and
+// Identity.Kind=="agent" but empty Identity.ID (can't bind without an agent ID).
+func TestValidateChannels_HalfBound_RejectsWorkspaceIDWithEmptyAgentID(t *testing.T) {
+	channels := map[string]ChannelInstanceConfig{
+		"telegram": {
+			Type:        "telegram",
+			Enabled:     true,
+			WorkspaceID: "ws-abc",
+			Identity:    &ChannelIdentity{Kind: "agent", ID: ""},
+		},
+	}
+	err := ValidateChannels(channels)
+	if err == nil {
+		t.Fatal("ValidateChannels accepted a half-bound instance (Identity.ID empty); want ErrHalfBoundChannelInstance")
+	}
+	if !errors.Is(err, ErrHalfBoundChannelInstance) {
+		t.Fatalf("error does not wrap ErrHalfBoundChannelInstance: %v", err)
+	}
+}
+
+// TestValidateChannels_FullyBound_Accepted verifies that a fully-bound instance
+// (WorkspaceID + Identity.Kind=="agent" + non-empty Identity.ID) is accepted.
+func TestValidateChannels_FullyBound_Accepted(t *testing.T) {
+	channels := map[string]ChannelInstanceConfig{
+		"telegram": {
+			Type:        "telegram",
+			Enabled:     true,
+			WorkspaceID: "ws-abc",
+			Identity:    &ChannelIdentity{Kind: "agent", ID: "concierge"},
+		},
+	}
+	if err := ValidateChannels(channels); err != nil {
+		t.Fatalf("ValidateChannels rejected a fully-bound instance: %v", err)
 	}
 }

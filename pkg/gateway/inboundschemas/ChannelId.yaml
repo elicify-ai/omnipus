@@ -1,19 +1,9 @@
 title: ChannelId
-description: Stable identifier for a built-in channel.
+description: >
+  Identifies a channel instance. Either a bare base channel type
+  (e.g. "whatsapp", "telegram") for legacy single-instance configurations,
+  or a namespaced instance id of the form <type>.<slug> (e.g. "whatsapp.eu",
+  "telegram.main-bot") for multi-instance deployments (ADR-029).
+  The pre-dot segment is the base channel type; the slug is [a-z0-9-]{1,32}.
 type: string
-enum:
-  - webchat
-  - telegram
-  - discord
-  - slack
-  - whatsapp
-  - feishu
-  - dingtalk
-  - wecom
-  - weixin
-  - line
-  - qq
-  - irc
-  - matrix
-  - google-chat
-  - email
+pattern: '^[a-z0-9-]+(\.[a-z0-9-]+)?$'

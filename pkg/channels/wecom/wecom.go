@@ -148,8 +148,6 @@ func NewChannel(
 	return ch, nil
 }
 
-func (c *WeComChannel) Name() string { return "wecom" }
-
 func (c *WeComChannel) Start(ctx context.Context) error {
 	logger.InfoC("wecom", "Starting WeCom channel...")
 	c.ctx, c.cancel = context.WithCancel(ctx)
@@ -597,7 +595,7 @@ func (c *WeComChannel) dispatchIncoming(reqID string, msg wecomIncomingMessage) 
 	if channels.DispatchCancelIfRecognized(
 		c.ctx,
 		content,
-		"wecom",
+		c.Name(),
 		actualChatID,
 		senderID,
 		c.GetCancelInterceptor(),
