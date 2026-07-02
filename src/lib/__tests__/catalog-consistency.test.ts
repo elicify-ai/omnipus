@@ -11,6 +11,14 @@
 // that shared render trustworthy: uniqueness, well-formed labels, wire derivation
 // matching FR-005, and every display field non-empty. A regression that corrupts
 // a label/subtitle/wire here fails BOTH surfaces at once, which is the point.
+//
+// [C2] Cross-surface DOM-render parity is in the companion file:
+// src/lib/__tests__/onboarding-settings-parity.test.tsx
+// That file renders ProvidersSection with a mocked provider and asserts the DOM
+// shows the same catalog label/subtitle that -onboarding.test.tsx asserts on the
+// onboarding side.
+//
+// Traces to: connectors-providers-redesign-spec.md §7 SC-002 / US-7 / FR-019.
 
 import { describe, it, expect } from 'vitest'
 import { PROVIDER_CATALOG } from '@/lib/generated/providerCatalog'
@@ -100,3 +108,4 @@ describe('provider catalog — cross-surface consistency (SC-002 / FR-019)', () 
     }
   })
 })
+
