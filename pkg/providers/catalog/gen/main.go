@@ -96,7 +96,7 @@ func buildTSContent(entries interface{}, jsonData []byte) (string, error) {
 	sb.WriteString("\n")
 	sb.WriteString("import type { ProviderCatalogEntry } from '../api/generated/openapi-types'\n")
 	sb.WriteString("\n")
-	sb.WriteString("// PROVIDER_CATALOG is the curated registry of ~30 user-facing LLM provider\n")
+	sb.WriteString("// PROVIDER_CATALOG is the curated registry of 23 user-facing LLM provider\n")
 	sb.WriteString("// variants. Each entry covers one billable endpoint (company × plan × region).\n")
 	sb.WriteString("// Consumed by onboarding ModelKeyStep and Settings ProvidersSection.\n")
 	sb.WriteString("// Do NOT hand-edit — regenerate via go generate.\n")

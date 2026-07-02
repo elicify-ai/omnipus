@@ -148,8 +148,12 @@ describe('[C2] ProvidersSection renders catalog subtitle verbatim — settings D
     const entry = PROVIDER_CATALOG.find((e) => e.id === 'z-ai')
     expect(entry).toBeDefined()
     // These exact strings are also pinned in -onboarding.test.tsx §"the z-ai entry".
-    expect(entry!.label).toBe('Zhipu / GLM — Standard API (International)')
+    // Post provider-ux-fixes-plan FIX-4/FIX-5: single-plan-per-row labels carry
+    // no plan suffix (z-ai is the standard-api variant; the anthropic-wire
+    // sibling is merged into anthropic_id, not a separate label).
+    expect(entry!.label).toBe('Zhipu / GLM (International)')
     expect(entry!.subtitle).toBe('Pay-as-you-go, per token · api.z.ai/api/paas/v4')
     expect(entry!.logoSlug).toBe('zhipu')
+    expect(entry!.anthropic_id).toBe('z-ai-anthropic')
   })
 })
