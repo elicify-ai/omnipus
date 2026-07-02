@@ -1487,11 +1487,12 @@ func (i ChannelIdentity) Validate() error {
 }
 
 // ChannelInstanceConfig is the map value for Config.Channels.
-// The map is keyed by instance ID (currently equal to the channel type name in
-// v0.1 since the cap is 1/type). Each instance carries its type discriminator,
-// the common enabled flag, an optional identity override, and the full union of
-// all per-channel-type configuration fields — only the fields relevant to the
-// instance type are non-zero.
+// The map is keyed by instance ID (a bare type name like "telegram" for the
+// default instance, or a namespaced key like "telegram.eu" for additional
+// instances — multiple instances per type are supported). Each instance carries
+// its type discriminator, the common enabled flag, an optional identity
+// override, and the full union of all per-channel-type configuration fields —
+// only the fields relevant to the instance type are non-zero.
 //
 // Wire-format note: this struct is NOT a gateway wire type — it lives in config.json,
 // not in REST request/response bodies. The not-wire-format opt-out is not needed here

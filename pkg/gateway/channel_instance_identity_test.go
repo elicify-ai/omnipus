@@ -16,73 +16,96 @@ import (
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 )
 
-// TestConfigureChannel_PersistsIdentity covers Spec-2 US-5 / FR-2.5: a configure
-// request carrying a valid agent identity persists it (kind+id) and writes the
-// type discriminator, and a single-instance configure is accepted (not 422).
-func TestConfigureChannel_PersistsIdentity(t *testing.T) {
+// TestConfigureChannel_RejectsIdentity covers the FINAL-REVIEW HIGH security fix:
+// binding (identity) must NOT be settable via /configure — it bypasses the FR-006
+// CoreTeam-membership check that lives only in setChannelRouting. configureChannel
+// now rejects any identity field with 400 and directs the caller to the routing
+// endpoint, and persists NOTHING (the config entry is untouched).
+func TestConfigureChannel_RejectsIdentity(t *testing.T) {
 	api := newChannelTestAPI(t, `{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],"channels":{}}`)
 
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/channels/telegram/configure",
-		strings.NewReader(`{"identity":{"kind":"agent","id":"concierge"}}`))
-	r.Header.Set("Content-Type", "application/json")
-	api.configureChannel(w, r, "telegram")
-	require.Equal(t, http.StatusOK, w.Code, "single-instance configure must be accepted, body=%s", w.Body.String())
-
-	raw, err := os.ReadFile(api.homePath + "/config.json")
-	require.NoError(t, err)
-	var diskCfg map[string]any
-	require.NoError(t, json.Unmarshal(raw, &diskCfg))
-	tg := diskCfg["channels"].(map[string]any)["telegram"].(map[string]any)
-	assert.Equal(t, "telegram", tg["type"], "type discriminator must be persisted (FR-2.5)")
-	ident, ok := tg["identity"].(map[string]any)
-	require.True(t, ok, "identity must be persisted")
-	assert.Equal(t, "agent", ident["kind"])
-	assert.Equal(t, "concierge", ident["id"])
-}
-
-// TestConfigureChannel_RejectsInvalidIdentity covers the 422 validation path: an
-// agent-kind identity with no id is malformed and must be rejected up front so
-// identity routing is never a silent no-op.
-func TestConfigureChannel_RejectsInvalidIdentity(t *testing.T) {
-	api := newChannelTestAPI(t, `{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],"channels":{}}`)
-
+	// Even a well-formed agent identity is rejected — binding goes through routing.
 	for _, body := range []string{
-		`{"identity":{"kind":"agent"}}`,                    // missing id
-		`{"identity":{"kind":"agent","id":""}}`,            // empty id
-		`{"identity":{"kind":"bogus"}}`,                    // bad kind
-		`{"identity":{"id":"x"}}`,                          // missing kind
-		`{"identity":{"kind":"agent","id":"x","extra":1}}`, // unknown field
+		`{"identity":{"kind":"agent","id":"concierge"}}`, // well-formed but forbidden here
+		`{"identity":{"kind":"user"}}`,                   // user-kind override also forbidden
+		`{"identity":null}`,                              // even an explicit clear must route through /routing
 	} {
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest(http.MethodPut, "/api/v1/channels/telegram/configure", strings.NewReader(body))
 		r.Header.Set("Content-Type", "application/json")
 		api.configureChannel(w, r, "telegram")
-		assert.Equal(
-			t,
-			http.StatusUnprocessableEntity,
-			w.Code,
-			"invalid identity %q must be 422, body=%s",
-			body,
-			w.Body.String(),
-		)
+		assert.Equal(t, http.StatusBadRequest, w.Code,
+			"identity via configure %q must be 400, body=%s", body, w.Body.String())
+		assert.Contains(t, w.Body.String(), "routing",
+			"400 body must direct the caller to the routing endpoint, body=%s", w.Body.String())
 	}
+
+	// Nothing was persisted: the channels map is still empty (no telegram entry).
+	raw, err := os.ReadFile(api.homePath + "/config.json")
+	require.NoError(t, err)
+	var diskCfg map[string]any
+	require.NoError(t, json.Unmarshal(raw, &diskCfg))
+	channels, _ := diskCfg["channels"].(map[string]any)
+	_, hasTelegram := channels["telegram"]
+	assert.False(t, hasTelegram, "a rejected identity-configure must persist nothing")
 }
 
-// TestConfigureChannel_NullIdentityClears confirms an explicit null identity is a
-// clear (not a validation error).
-func TestConfigureChannel_NullIdentityClears(t *testing.T) {
-	api := newChannelTestAPI(
-		t,
-		`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],"channels":{"telegram":{"type":"telegram","enabled":false,"identity":{"kind":"agent","id":"x"}}}}`,
-	)
+// TestConfigureChannel_RejectsWorkspaceID covers the FINAL-REVIEW HIGH security
+// fix: workspace_id must NOT be settable via /configure. Persisting workspace_id
+// (with an identity) makes IsWorkspaceBound() true and routes a workspace's
+// inbound traffic at the configured agent WITHOUT the CoreTeam check. configure
+// rejects it with 400 and directs the caller to the routing endpoint.
+func TestConfigureChannel_RejectsWorkspaceID(t *testing.T) {
+	api := newChannelTestAPI(t, `{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],"channels":{}}`)
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/channels/telegram/configure",
-		strings.NewReader(`{"identity":null}`))
+		strings.NewReader(`{"workspace_id":"sales"}`))
 	r.Header.Set("Content-Type", "application/json")
 	api.configureChannel(w, r, "telegram")
-	require.Equal(t, http.StatusOK, w.Code, "null identity (clear) must be accepted, body=%s", w.Body.String())
+	assert.Equal(t, http.StatusBadRequest, w.Code,
+		"workspace_id via configure must be 400, body=%s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "routing",
+		"400 body must direct the caller to the routing endpoint, body=%s", w.Body.String())
+
+	// Nothing persisted.
+	raw, err := os.ReadFile(api.homePath + "/config.json")
+	require.NoError(t, err)
+	var diskCfg map[string]any
+	require.NoError(t, json.Unmarshal(raw, &diskCfg))
+	channels, _ := diskCfg["channels"].(map[string]any)
+	_, hasTelegram := channels["telegram"]
+	assert.False(t, hasTelegram, "a rejected workspace_id-configure must persist nothing")
+}
+
+// TestConfigureChannel_StripsFilesystemPathFields covers the FINAL-REVIEW HIGH
+// security fix: filesystem-path fields (session_store_path, crypto_database_path,
+// service_account_file) are stripped from a configure body so an attacker cannot
+// persist an attacker-chosen path that a later deleteChannelInstance would
+// os.RemoveAll. The configure succeeds (paths are silently ignored, not rejected)
+// but NONE of the path fields land in config.json.
+func TestConfigureChannel_StripsFilesystemPathFields(t *testing.T) {
+	api := newChannelTestAPI(t, `{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],"channels":{}}`)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/channels/whatsapp/configure",
+		strings.NewReader(`{"session_store_path":"/etc","crypto_database_path":"/root/.ssh","service_account_file":"/home/victim/secrets.json"}`))
+	r.Header.Set("Content-Type", "application/json")
+	api.configureChannel(w, r, "whatsapp")
+	require.Equal(t, http.StatusOK, w.Code,
+		"configure with only path fields must still succeed (paths stripped), body=%s", w.Body.String())
+
+	raw, err := os.ReadFile(api.homePath + "/config.json")
+	require.NoError(t, err)
+	var diskCfg map[string]any
+	require.NoError(t, json.Unmarshal(raw, &diskCfg))
+	channels, _ := diskCfg["channels"].(map[string]any)
+	wa, _ := channels["whatsapp"].(map[string]any)
+	require.NotNil(t, wa, "whatsapp entry must exist (type discriminator persisted)")
+	for _, f := range []string{"session_store_path", "crypto_database_path", "service_account_file"} {
+		_, present := wa[f]
+		assert.False(t, present, "filesystem-path field %q must be stripped, never persisted", f)
+	}
 }
 
 // TestHandleChannels_SurfacesInstanceIDAndIdentity covers FR-2.5: GET

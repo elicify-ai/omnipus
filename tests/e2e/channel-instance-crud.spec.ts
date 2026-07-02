@@ -34,11 +34,18 @@ const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
 void BASE_URL // used only for reference; actual calls are via page.goto
 
 // ── Stub data ────────────────────────────────────────────────────────────────
+//
+// The fixed backend emits ONE entry per cfg.Channels instance, keyed by
+// instance_id (e.g. "telegram.us" and "telegram.eu" are TWO distinct rows
+// even though they share type "telegram"). This stub faithfully mirrors that
+// shape: instance_id is always present and equals the config map key.
 
+// Pre-existing instance — a "telegram.us" entry that already exists before
+// the user adds "telegram.eu". This lets test (c+d) assert two-per-type.
 const STUB_CHANNELS_INITIAL = [
   {
     id: 'telegram',
-    instance_id: 'telegram',
+    instance_id: 'telegram.us',
     name: 'Telegram',
     transport: 'webhook',
     enabled: false,
@@ -46,6 +53,9 @@ const STUB_CHANNELS_INITIAL = [
   },
 ]
 
+// After POST /api/v1/channels (create telegram.eu) the backend re-lists ALL
+// instances. The new entry appears as a distinct per-instance row alongside
+// the pre-existing telegram.us — two rows for the same base type.
 const STUB_CHANNELS_AFTER_CREATE = [
   ...STUB_CHANNELS_INITIAL,
   {
@@ -98,8 +108,9 @@ async function registerBaseRoutes(
     }
   })
 
-  // Stub /api/v1/channels/telegram for GET config (needed by ChannelConfigPanel if opened)
-  await page.route('**/api/v1/channels/telegram', async (route: Route) => {
+  // Stub GET /api/v1/channels/<id> for any per-instance config fetch
+  // (needed by ChannelConfigPanel when opened for telegram.us or telegram.eu)
+  await page.route('**/api/v1/channels/telegram*', async (route: Route) => {
     if (route.request().method() === 'GET') {
       await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' })
     } else {
@@ -187,14 +198,21 @@ test(
 )
 
 // ── (c+d) Valid type + slug → POST fires → instance appears ─────────────────
+//
+// The fixed backend emits one row per cfg.Channels instance. After creating
+// telegram.eu the GET /channels response includes BOTH telegram.us (the
+// pre-existing instance) and telegram.eu (the newly created one) as distinct
+// per-instance entries — two rows for the same base type. This test asserts
+// that per-instance behaviour: both cards appear after the create.
 
 test(
   '(c+d) valid type+slug fires POST and the new instance appears in the channel list',
   async ({ page }) => {
     let capturedPostBody: string | null = null
 
-    // First GET returns the initial channel list; after POST + second GET returns
-    // the updated list (with telegram.eu).
+    // First GET returns the initial channel list (telegram.us already exists);
+    // after POST + second GET returns the updated list (telegram.us + telegram.eu).
+    // Both responses carry `instance_id` matching the per-instance backend shape.
     let getCallCount = 0
     await page.route('**/api/v1/channels', async (route: Route) => {
       if (route.request().method() === 'GET') {
@@ -210,8 +228,17 @@ test(
         await route.fulfill({
           status: 201,
           contentType: 'application/json',
-          body: JSON.stringify({ id: 'telegram.eu', type: 'telegram', enabled: false }),
+          body: JSON.stringify({ id: 'telegram.eu', instance_id: 'telegram.eu', type: 'telegram', enabled: false }),
         })
+      } else {
+        await route.continue()
+      }
+    })
+
+    // Stub per-instance config fetches (telegram.us, telegram.eu)
+    await page.route('**/api/v1/channels/telegram*', async (route: Route) => {
+      if (route.request().method() === 'GET') {
+        await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' })
       } else {
         await route.continue()
       }
@@ -227,9 +254,13 @@ test(
 
     await gotoConnectors(page)
 
+    // Pre-existing telegram.us card must be visible before any action
+    const existingCard = page.getByTestId('channel-card-telegram.us')
+    await expect(existingCard).toBeVisible({ timeout: 15_000 })
+
     // Open the dialog
     const addBtn = page.getByTestId('add-channel-instance-btn')
-    await expect(addBtn).toBeVisible({ timeout: 15_000 })
+    await expect(addBtn).toBeVisible({ timeout: 5_000 })
     await addBtn.click()
 
     const dialog = page.getByTestId('add-instance-dialog')
@@ -269,10 +300,16 @@ test(
     // Dialog should close after success
     await expect(dialog).not.toBeVisible({ timeout: 5_000 })
 
-    // (d) The new instance appears in the channel list with its namespaced id badge
+    // (d) Both per-instance rows appear in the channel list after the create.
+    // The pre-existing telegram.us row must still be present AND the new
+    // telegram.eu row must appear — proving the backend emits one row per
+    // instance (not one row per type).
     const newCard = page.getByTestId('channel-card-telegram.eu')
     await expect(newCard).toBeVisible({ timeout: 8_000 })
     await expect(newCard).toContainText('telegram.eu')
+    // Pre-existing instance must still be listed (two-per-type assertion)
+    await expect(existingCard).toBeVisible()
+    await expect(existingCard).toContainText('telegram.us')
   },
 )
 

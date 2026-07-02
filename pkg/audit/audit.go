@@ -122,6 +122,7 @@ func IsValidEventName(e EventName) bool {
 		// whenever an operator updates a channel's workspace/agent binding.
 		EventChannelRoutingDriftDrop,
 		EventChannelRoutingChanged,
+		EventChannelInstanceDeleted,
 		// Cancel-flow events (FR-10, FR-11, FR-15, FR-17-21, FR-25a).
 		EventTurnCancelAttempt,
 		EventTurnCancelled,

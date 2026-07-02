@@ -259,33 +259,42 @@ interface DeleteConfirmDialogProps {
 function DeleteConfirmDialog({ channel, onClose }: DeleteConfirmDialogProps) {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
+  const [deleteError, setDeleteError] = useState<string | null>(null)
 
   const instanceId = channel?.instance_id ?? channel?.id ?? ''
+  const isEnabled = channel?.enabled === true
 
   const { mutate: doDelete, isPending } = useMutation({
     mutationFn: () => deleteChannelInstance(instanceId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['channels'] })
       addToast({ message: `Channel instance "${instanceId}" deleted`, variant: 'success' })
+      setDeleteError(null)
       onClose()
     },
     onError: (err: Error) => {
       if (isApiError(err) && err.status === 404) {
         // Already gone — refresh the list and close
         queryClient.invalidateQueries({ queryKey: ['channels'] })
+        setDeleteError(null)
         onClose()
       } else {
-        addToast({
-          message: isApiError(err) ? err.userMessage : err.message,
-          variant: 'error',
-        })
-        onClose()
+        // Keep the dialog open and show the error inline so a failed
+        // destructive delete does not appear to succeed (dialog stays open).
+        setDeleteError(isApiError(err) ? err.userMessage : err.message)
       }
     },
   })
 
+  function handleOpenChange(open: boolean) {
+    if (!open) {
+      setDeleteError(null)
+      onClose()
+    }
+  }
+
   return (
-    <AlertDialog open={channel !== null} onOpenChange={(open) => { if (!open) onClose() }}>
+    <AlertDialog open={channel !== null} onOpenChange={handleOpenChange}>
       <AlertDialogContent data-testid="delete-instance-dialog">
         <AlertDialogHeader>
           <AlertDialogTitle className="font-headline text-[var(--color-secondary)]">
@@ -298,17 +307,35 @@ function DeleteConfirmDialog({ channel, onClose }: DeleteConfirmDialogProps) {
             </span>{' '}
             including its configuration, credentials, and per-instance state. This cannot be undone.
           </AlertDialogDescription>
+          {isEnabled && (
+            <p className="mt-2 text-xs text-amber-400" data-testid="delete-instance-enabled-warning">
+              This channel is enabled; deleting will stop it and remove its credentials and state.
+            </p>
+          )}
         </AlertDialogHeader>
+
+        {/* Inline error — keep dialog open on failure so the user knows the delete did not succeed */}
+        {deleteError && (
+          <div
+            className="flex items-start gap-2 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2"
+            data-testid="delete-instance-error"
+          >
+            <Warning size={14} className="text-red-400 mt-0.5 shrink-0" />
+            <p className="text-xs text-red-400">{deleteError}</p>
+          </div>
+        )}
+
         <AlertDialogFooter>
           <AlertDialogCancel
             disabled={isPending}
+            onClick={() => { setDeleteError(null); onClose() }}
             data-testid="delete-instance-cancel-btn"
           >
             Cancel
           </AlertDialogCancel>
           <AlertDialogAction
             disabled={isPending}
-            onClick={() => doDelete()}
+            onClick={() => { setDeleteError(null); doDelete() }}
             className="bg-red-600 hover:bg-red-700 text-white"
             data-testid="delete-instance-confirm-btn"
           >

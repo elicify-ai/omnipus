@@ -3880,7 +3880,7 @@ func (al *AgentLoop) GetMediaRefsDropped() int64 {
 
 // GetDriftDropped returns the cumulative count of bound-instance drift drops:
 // inbound messages on a workspace-bound channel instance whose configured agent
-// was unresolvable (deleted, disabled, or a worker). Safe for concurrent access;
+// was unresolvable (deleted or a worker). Safe for concurrent access;
 // incremented atomically in resolveMessageRoute (ADR-029 FR-028 / MAJ-003).
 func (al *AgentLoop) GetDriftDropped() int64 {
 	return al.driftDropped.Load()

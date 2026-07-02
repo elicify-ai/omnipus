@@ -15,9 +15,10 @@ type RouteInput struct {
 	ParentPeer *RoutePeer
 	GuildID    string
 	TeamID     string
-	// InstanceID is the channel-instance key the message arrived on. In v0.1
-	// (cap-1/type) this equals the channel type. Carried so identity-based
-	// routing can address the right instance once v0.3 lifts the cap. (FR-2.5)
+	// InstanceID is the channel-instance key the message arrived on. For a
+	// single-instance channel this equals the channel type (e.g. "telegram");
+	// for additional instances it is the namespaced key (e.g. "telegram.eu").
+	// Carried so identity-based routing can address the right instance. (FR-2.5)
 	InstanceID string
 	// Identity is the per-instance routing identity (Spec-2 US-5 / FR-2.9).
 	// When set with Kind=="agent" and a non-empty ID, the message is routed AS
