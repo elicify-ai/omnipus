@@ -315,37 +315,61 @@ function ChannelTypeGroup({
   )
 }
 
-// ── Empty-state roster (US-9 AS-3) ────────────────────────────────────────────
+// ── Available-channels roster (US-9 AS-3, restored original behavior) ────────
+//
+// "Configure" on a roster entry opens ChannelConfigPanel DIRECTLY on the bare
+// type key — the original one-click slide-over flow (token + routing + Save &
+// Enable). The slug-based CreateChannelSheet is ONLY for additional instances
+// ("+ Add another…" / "+ Add channel"); forcing it on the first configuration
+// of a type was an operator-rejected regression. The roster renders in BOTH
+// states: as the full empty-state grid when nothing is configured, and as a
+// compact "Available" section under the configured groups otherwise — every
+// channel stays reachable in one click at all times, like the original page.
 
 interface ChannelRosterProps {
   types: UnconfiguredChannelEntry[]
-  onConnect: (baseType: string) => void
+  onConfigureType: (channel: UnconfiguredChannelEntry) => void
+  /** 'grid' = empty-state; 'list' = the compact section under configured groups. */
+  variant: 'grid' | 'list'
 }
 
-function ChannelRoster({ types, onConnect }: ChannelRosterProps) {
+function ChannelRoster({ types, onConfigureType, variant }: ChannelRosterProps) {
   return (
-    <div data-testid="channel-roster" className="space-y-4">
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+    <div
+      data-testid={variant === 'grid' ? 'channel-roster' : 'channel-available'}
+      className="space-y-4"
+    >
+      <div
+        className={
+          variant === 'grid'
+            ? 'grid grid-cols-1 sm:grid-cols-2 gap-2'
+            : 'grid grid-cols-1 sm:grid-cols-3 gap-1.5'
+        }
+      >
         {types.map((channel) => {
           const baseType = deriveBaseType(channel)
           return (
             <button
               key={baseType}
               type="button"
-              onClick={() => onConnect(baseType)}
+              onClick={() => onConfigureType(channel)}
               data-testid={`channel-roster-connect-${baseType}`}
-              className="flex items-center gap-3 p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] hover:border-[var(--color-accent)]/50 transition-colors text-left"
+              className={
+                variant === 'grid'
+                  ? 'flex items-center gap-3 p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] hover:border-[var(--color-accent)]/50 transition-colors text-left'
+                  : 'flex items-center gap-2 px-3 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] hover:border-[var(--color-accent)]/50 transition-colors text-left'
+              }
             >
-              <BrandIcon slug={channelSlug(baseType)} size={22} label={channel.name} />
-              <span className="flex-1 min-w-0 font-medium text-sm text-[var(--color-secondary)]">
+              <BrandIcon slug={channelSlug(baseType)} size={variant === 'grid' ? 22 : 16} label={channel.name} />
+              <span className="flex-1 min-w-0 font-medium text-sm text-[var(--color-secondary)] truncate">
                 {channel.name}
               </span>
-              <span className="text-xs text-[var(--color-accent)] font-medium shrink-0">Connect</span>
+              <span className="text-xs text-[var(--color-accent)] font-medium shrink-0">Configure</span>
             </button>
           )
         })}
       </div>
-      <BrandDisclaimer />
+      {variant === 'grid' && <BrandDisclaimer />}
     </div>
   )
 }
@@ -793,6 +817,17 @@ export function ConnectorsScreen() {
     ? { mode: 'locked', baseType: createChannelBaseType }
     : { mode: 'pickable', knownTypes: knownBaseTypes }
 
+  // Roster "Configure" — the restored ORIGINAL flow: open ChannelConfigPanel
+  // directly on the bare type key (token + routing + Save & Enable in one
+  // slide-over). No slug, no instance creation for the first configuration.
+  const configureType = (channel: UnconfiguredChannelEntry) =>
+    setConfiguringChannel({
+      id: channel.instance_id ?? channel.id,
+      name: channel.name,
+      nativeAvailable: channel.native_available,
+      enabled: channel.enabled,
+    })
+
   // A11 — a single if/else render function instead of a 4-way nested ternary.
   // Composes with the outer isError gate (A2): the caller never invokes this
   // while `isError` is true (the whole content area is replaced by one
@@ -800,7 +835,7 @@ export function ConnectorsScreen() {
   function renderChannelsBody() {
     if (isLoading) return <SkeletonList />
     if (configuredInstances.length === 0) {
-      return <ChannelRoster types={unconfiguredChannels} onConnect={openCreateFor} />
+      return <ChannelRoster types={unconfiguredChannels} onConfigureType={configureType} variant="grid" />
     }
     return (
       <div className="space-y-6">
@@ -827,6 +862,17 @@ export function ConnectorsScreen() {
             onAddAnother={openCreateFor}
           />
         ))}
+        {/* Every not-yet-configured channel stays one click away, always —
+            the original page listed everything; hiding types behind the
+            slug-create flow was a functionality regression. */}
+        {unconfiguredChannels.length > 0 && (
+          <div className="space-y-2">
+            <h3 className="text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider">
+              Available
+            </h3>
+            <ChannelRoster types={unconfiguredChannels} onConfigureType={configureType} variant="list" />
+          </div>
+        )}
         <BrandDisclaimer />
       </div>
     )
