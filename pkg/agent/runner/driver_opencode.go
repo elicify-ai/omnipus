@@ -206,21 +206,61 @@ func (d *OpencodeDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEv
 	return ch, nil
 }
 
-// buildArgs constructs the opencode CLI argument list.
+// buildArgs constructs the opencode CLI argument list (ADR-032 fix C/D).
+//
+// IMPORTANT (ADR-032 defect fix): `opencode run` takes the message as a
+// POSITIONAL argument (`opencode run [message..]`) — there is no `--prompt`
+// flag (verified against a real `opencode run --help`, CLI v1.16.0; the prior
+// `--prompt` flag never existed on this CLI and every invocation would have
+// failed with an "unknown option" error). The message is delivered exactly
+// once, as the positional right after `run`; cmd.Stdin is always an empty
+// reader (see Run()) so the child never blocks on stdin and never sees the
+// prompt twice (M3 invariant preserved).
 func (d *OpencodeDriver) buildArgs(opts RunOptions) []string {
-	args := []string{"run", "--format", "json"}
-	if opts.RunID != "" {
-		args = append(args, "--session", opts.RunID)
-	}
+	args := []string{"run"}
 	if opts.Input != "" {
-		// M3: the prompt is delivered ONLY here (the `--prompt` flag), never also
-		// on stdin — see Run(), where cmd.Stdin is an empty reader. Passing it on
-		// both channels caused opencode to process the prompt twice.
-		args = append(args, "--prompt", opts.Input)
+		args = append(args, opts.Input)
 	}
+	args = append(args, "--format", "json")
+	if model := strings.TrimSpace(opts.Model); model != "" && looksLikeProviderModel(model) {
+		// ADR-032 fix C: opencode's --model expects "provider/model" — guard
+		// so a bare model name (not in that shape) is omitted rather than
+		// passed as garbage; the CLI falls back to its own configured default.
+		args = append(args, "--model", model)
+	}
+	// ADR-032 fix D: this opencode CLI version exposes no middle-ground
+	// "auto-accept edits" flag — only the interactive default (which blocks
+	// forever with no TTY to answer it) or a full bypass. Without SOME
+	// auto-approve mechanism a headless `run` invocation stalls indefinitely,
+	// so --dangerously-skip-permissions is used as the "auto" posture the
+	// operator decided on. This does not regress Omnipus's OWN consent
+	// routing for opencode, which is already best-effort/post-hoc regardless
+	// of this flag — see the POST-HOC note on OpencodeDriver.Decide: a
+	// tool.start event is only observed after the tool call has already
+	// begun, whether or not opencode itself was told to auto-approve.
+	args = append(args, "--dangerously-skip-permissions")
+	// NOTE: -s/--session <RunID> is deliberately NOT passed. opencode
+	// documents it as "session id to continue" — it resumes an EXISTING
+	// session, not creates a new one with a caller-chosen ID. opts.RunID here
+	// is always a freshly generated dispatch identifier opencode has never
+	// seen, so passing it would target a non-existent session.
 	// Append operator-supplied extra args (ExecutorConfig.cli_args, MAJ-5).
 	args = append(args, opts.CLIArgs...)
 	return args
+}
+
+// looksLikeProviderModel reports whether model is shaped like opencode's
+// expected "provider/model" form: exactly one '/' separator with non-empty
+// content on both sides. Used to guard the --model flag (ADR-032 fix C) so a
+// bare model name from an agent configured for a different CLI (claude/codex
+// use bare model names) is never passed to opencode as garbage.
+func looksLikeProviderModel(model string) bool {
+	idx := strings.IndexByte(model, '/')
+	if idx <= 0 || idx == len(model)-1 {
+		return false
+	}
+	// Reject a second '/' — "provider/model" is exactly two segments.
+	return strings.IndexByte(model[idx+1:], '/') == -1
 }
 
 // buildEnv builds the environment for the child process. See buildChildEnv:

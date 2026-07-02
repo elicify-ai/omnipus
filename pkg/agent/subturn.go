@@ -484,6 +484,42 @@ func spawnSubTurn(
 	if baseAgent == nil {
 		return nil, errors.New("parent turnState has no agent instance")
 	}
+
+	// ADR-032 / external-agent identity fix: resolve the actual DELEGATE named
+	// by TargetAgentID from the registry. Previously the dispatch-kind
+	// decision (native vs external-cli) and — for external-cli — the run's
+	// workspace/model/turn-cap/executor config always came from baseAgent
+	// (the PARENT doing the delegating), never the target. That meant (a) an
+	// external-cli worker could silently run natively whenever the PARENT's
+	// own Subagents.Executor was unset/native, and (b) an external-cli run
+	// always executed in the PARENT's workspace with the PARENT's model.
+	// Resolution is best-effort: an unresolvable target (deleted/renamed
+	// since delegation was configured, or self-delegation where
+	// TargetAgentID=="") falls back to baseAgent, so a sub-turn is never
+	// silently dropped and native dispatch stays byte-for-byte unchanged for
+	// that case.
+	var targetAgent *AgentInstance
+	if cfg.TargetAgentID != "" {
+		if t, ok := al.registry.GetAgent(cfg.TargetAgentID); ok && t != nil {
+			targetAgent = t
+		} else {
+			slog.Warn("subturn: target agent not found in registry; dispatch falls back to parent's own executor config",
+				"target_agent_id", cfg.TargetAgentID, "parent_id", parentTS.turnID)
+		}
+	}
+	execSource := baseAgent
+	if targetAgent != nil {
+		execSource = targetAgent
+	}
+	// Decide dispatch kind from the resolved DELEGATE's own executor config
+	// (not the parent's) — see the comment above. Resolved here, ahead of the
+	// AgentInstance build below, so the external-cli-only field overrides can
+	// be applied precisely when needed and left untouched for native dispatch.
+	// dispatchErr is consulted at the original dispatch site (step 8 below);
+	// resolving it early does not change when the sub-turn actually fails —
+	// only when the DECISION is computed.
+	dispatchKind, dispatchErr := runner.ResolveDispatch(executorConfigOf(execSource))
+
 	ephemeralStore := newEphemeralSession(nil)
 	// Build a new AgentInstance from baseAgent fields to avoid copying the mutex.
 	agent := AgentInstance{
@@ -510,6 +546,20 @@ func spawnSubTurn(
 		Router:                    baseAgent.Router,
 		LightCandidates:           baseAgent.LightCandidates,
 		LightProvider:             baseAgent.LightProvider,
+	}
+	// External-cli dispatch runs as a SEPARATE process outside Omnipus's own
+	// LLM-call machinery — runExternalCLISubTurn never consults
+	// Candidates/Provider/ProviderPool — so it is safe to source the run
+	// identity (workspace, model, turn cap, executor config) from the
+	// resolved TARGET here. Native dispatch is deliberately left untouched
+	// (still 100% baseAgent-sourced) to avoid a Model/Candidates/Provider
+	// mismatch in the native LLM-call resolution path, which would be a
+	// larger refactor outside this fix's scope.
+	if dispatchKind == runner.DispatchKindExternalCLI && targetAgent != nil {
+		agent.Workspace = targetAgent.Workspace
+		agent.Model = targetAgent.Model
+		agent.MaxIterations = targetAgent.MaxIterations
+		agent.Subagents = targetAgent.Subagents
 	}
 	// FR-H-006: exclude delegation tools from the child's registry so it cannot
 	// recursively spawn grandchildren or hand off. Registry-level filter — the
@@ -705,11 +755,14 @@ func spawnSubTurn(
 		}
 	}()
 
-	// 8. Execute the sub-turn. The executor on the sub-agent config decides HOW:
-	//    native → the Omnipus agent loop (default, unchanged); external-cli → an
-	//    external CLI runner driven in a worktree-isolated dir (Spec-4 FR-4/FR-5).
-	//    remote-a2a (reserved) and unknown kinds fail the sub-turn cleanly.
-	dispatchKind, dispatchErr := runner.ResolveDispatch(executorConfigOf(&agent))
+	// 8. Execute the sub-turn. The executor on the resolved DELEGATE's config
+	//    decides HOW: native → the Omnipus agent loop (default, unchanged);
+	//    external-cli → an external CLI runner driven directly in the
+	//    delegate's own workspace directory (ADR-032 relaxes the original
+	//    Spec-4 FR-5.3 worktree isolation for external CLIs). remote-a2a
+	//    (reserved) and unknown kinds fail the sub-turn cleanly.
+	//    dispatchKind/dispatchErr were already resolved above (from the
+	//    correct DELEGATE identity, before the AgentInstance was built).
 	if dispatchErr != nil {
 		err = dispatchErr
 		result = &tools.ToolResult{

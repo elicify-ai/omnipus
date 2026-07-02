@@ -247,10 +247,24 @@ func (d *CodexDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEvent
 	return ch, nil
 }
 
-// buildArgs constructs the codex CLI argument list (FR-5.2).
-// NOTE: --dangerously-bypass-approvals-and-sandbox is deliberately omitted (FR-5.3).
+// buildArgs constructs the codex CLI argument list (FR-5.2, ADR-032 fix C/D).
+// NOTE: --dangerously-bypass-approvals-and-sandbox is deliberately omitted
+// (FR-5.3); --sandbox workspace-write + --ask-for-approval never is used
+// instead (ADR-032 fix D — workspace-write, non-interactive posture without a
+// full bypass).
+//
+// IMPORTANT flag ordering: -a/--ask-for-approval is a GLOBAL codex flag and
+// errors ("unexpected argument '--ask-for-approval' found") when placed AFTER
+// the `exec` subcommand — it MUST precede `exec` (`codex --ask-for-approval
+// never exec ...`). --sandbox, by contrast, IS accepted as an exec-subcommand
+// flag and is placed after `exec` alongside the other exec flags.
 func (d *CodexDriver) buildArgs(opts RunOptions) []string {
-	args := []string{"exec", "--json", "--skip-git-repo-check", "--color", "never"}
+	// --ask-for-approval must come before the "exec" subcommand (see doc above).
+	args := []string{"--ask-for-approval", "never", "exec", "--json", "--sandbox", "workspace-write",
+		"--skip-git-repo-check", "--color", "never"}
+	if model := strings.TrimSpace(opts.Model); model != "" {
+		args = append(args, "-m", model)
+	}
 	if opts.WorkDir != "" {
 		args = append(args, "-C", opts.WorkDir)
 	}

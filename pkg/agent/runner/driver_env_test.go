@@ -199,36 +199,31 @@ func TestBuildChildEnv_NilFallsBackToOsEnviron(t *testing.T) {
 	}
 }
 
-// TestOpencodeDriver_PromptDeliveredExactlyOnce is the M3 regression test.
-//
-// Before the fix the opencode driver fed opts.Input on BOTH cmd.Stdin AND the
-// `--prompt` CLI arg, so opencode processed the prompt twice. The prompt must be
-// delivered through exactly one channel. buildArgs supplies `--prompt`; Run sets
-// stdin to an empty reader. This test asserts the arg side carries the prompt
-// exactly once (the stdin side is covered by Run's empty-reader contract).
+// TestOpencodeDriver_PromptDeliveredExactlyOnce is the M3 regression test,
+// updated for ADR-032: opencode's `run` command has no `--prompt` flag (a real
+// `opencode run --help` shows the message is a POSITIONAL argument —
+// `opencode run [message..]`). The prompt must still be delivered through
+// exactly one channel: buildArgs now supplies it as the positional argument
+// immediately after "run"; Run sets stdin to an empty reader. This test
+// asserts the positional carries the prompt exactly once (the stdin side is
+// covered by Run's empty-reader contract) and that no `--prompt` flag is ever
+// emitted (that flag does not exist on the real CLI and would error).
 func TestOpencodeDriver_PromptDeliveredExactlyOnce(t *testing.T) {
 	d := NewOpencodeDriver(nil)
 	const prompt = "do the thing"
 	args := d.buildArgs(RunOptions{Input: prompt})
 
-	flagCount := 0
+	if len(args) < 2 || args[0] != "run" || args[1] != prompt {
+		t.Fatalf("prompt must be the positional argument immediately after \"run\"; args=%v", args)
+	}
 	occurrences := 0
-	for i, a := range args {
+	for _, a := range args {
 		if a == "--prompt" {
-			flagCount++
+			t.Fatalf("--prompt is not a real opencode flag and must never be emitted; args=%v", args)
 		}
 		if a == prompt {
 			occurrences++
 		}
-		// the value must immediately follow its flag
-		if a == "--prompt" {
-			if i+1 >= len(args) || args[i+1] != prompt {
-				t.Fatalf("--prompt flag not followed by the prompt value; args=%v", args)
-			}
-		}
-	}
-	if flagCount != 1 {
-		t.Fatalf("expected exactly one --prompt flag, got %d; args=%v", flagCount, args)
 	}
 	if occurrences != 1 {
 		t.Fatalf(
@@ -238,12 +233,69 @@ func TestOpencodeDriver_PromptDeliveredExactlyOnce(t *testing.T) {
 		)
 	}
 
-	// An empty input must add neither the flag nor a stray value.
+	// An empty input must add no stray positional value — "run" is directly
+	// followed by the next flag, not an empty string.
 	emptyArgs := d.buildArgs(RunOptions{Input: ""})
-	for _, a := range emptyArgs {
-		if a == "--prompt" {
-			t.Fatalf("empty input must not produce a --prompt flag; args=%v", emptyArgs)
+	if len(emptyArgs) > 0 && emptyArgs[0] == "run" && len(emptyArgs) > 1 && emptyArgs[1] == "" {
+		t.Fatalf("empty input must not produce a stray positional arg; args=%v", emptyArgs)
+	}
+}
+
+// TestOpencodeDriver_BuildArgs_ModelGuardedByProviderModelShape asserts the
+// --model flag is only added when the model string is shaped like
+// "provider/model" (ADR-032 fix C) — a bare model name (as configured for
+// claude/codex agents) must be omitted rather than passed as garbage.
+func TestOpencodeDriver_BuildArgs_ModelGuardedByProviderModelShape(t *testing.T) {
+	d := NewOpencodeDriver(nil)
+
+	withShape := d.buildArgs(RunOptions{Input: "task", Model: "anthropic/claude-sonnet-4.6"})
+	if !containsSeq(withShape, "--model", "anthropic/claude-sonnet-4.6") {
+		t.Errorf("provider/model-shaped model must be passed via --model; args=%v", withShape)
+	}
+
+	bareModel := d.buildArgs(RunOptions{Input: "task", Model: "claude-sonnet-4.6"})
+	for _, a := range bareModel {
+		if a == "--model" {
+			t.Errorf("bare (non provider/model) model string must NOT produce --model; args=%v", bareModel)
 		}
+	}
+
+	empty := d.buildArgs(RunOptions{Input: "task", Model: ""})
+	for _, a := range empty {
+		if a == "--model" {
+			t.Errorf("empty model must NOT produce --model; args=%v", empty)
+		}
+	}
+}
+
+// TestOpencodeDriver_BuildArgs_NoSessionFlagForFreshRun asserts opts.RunID is
+// never passed via -s/--session — opencode documents that flag as "session id
+// to continue" (an existing session), and opts.RunID here is always a freshly
+// generated dispatch identifier opencode has never seen (ADR-032 fix C).
+func TestOpencodeDriver_BuildArgs_NoSessionFlagForFreshRun(t *testing.T) {
+	d := NewOpencodeDriver(nil)
+	args := d.buildArgs(RunOptions{Input: "task", RunID: "ext-1234567890"})
+	for _, a := range args {
+		if a == "--session" || a == "-s" {
+			t.Fatalf("a fresh RunID must not be passed via --session/-s; args=%v", args)
+		}
+	}
+}
+
+// TestOpencodeDriver_BuildArgs_AutoApprovePosture asserts the non-interactive
+// auto-approve flag is always present (ADR-032 fix D) so a headless run never
+// stalls waiting on an interactive permission prompt with no TTY to answer it.
+func TestOpencodeDriver_BuildArgs_AutoApprovePosture(t *testing.T) {
+	d := NewOpencodeDriver(nil)
+	args := d.buildArgs(RunOptions{Input: "task"})
+	found := false
+	for _, a := range args {
+		if a == "--dangerously-skip-permissions" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected --dangerously-skip-permissions (ADR-032 fix D auto posture); args=%v", args)
 	}
 }
 
