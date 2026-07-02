@@ -1,4 +1,5 @@
-// catalog-consistency.test.ts — ADR-031 Track 1, US-7 / FR-007 / FR-019 / SC-002.
+// catalog-consistency.test.ts — provider-ux-fixes-plan FIX-4/FIX-5/FIX-6 +
+// the original ADR-031 Track 1, US-7 / FR-007 / FR-019 / SC-002 guarantee.
 //
 // The blocking onboarding≡Settings consistency guarantee. Both surfaces
 // (onboarding ModelKeyStep — see -onboarding.test.tsx "US-7 / FR-019" block —
@@ -8,9 +9,9 @@
 // terminology + logos are identical by construction (SC-002 "0 diffs").
 //
 // This suite locks the catalog's internal consistency — the invariants that make
-// that shared render trustworthy: uniqueness, well-formed labels, wire derivation
-// matching FR-005, and every display field non-empty. A regression that corrupts
-// a label/subtitle/wire here fails BOTH surfaces at once, which is the point.
+// that shared render trustworthy: uniqueness, well-formed labels, wire derivation,
+// and every display field non-empty. A regression that corrupts a label/subtitle/
+// wire here fails BOTH surfaces at once, which is the point.
 //
 // [C2] Cross-surface DOM-render parity is in the companion file:
 // src/lib/__tests__/onboarding-settings-parity.test.tsx
@@ -18,28 +19,22 @@
 // shows the same catalog label/subtitle that -onboarding.test.tsx asserts on the
 // onboarding side.
 //
-// Traces to: connectors-providers-redesign-spec.md §7 SC-002 / US-7 / FR-019.
+// FIX-5 wire-merge: the catalog was reduced from ~30 entries to 23 by merging
+// the 7 pure anthropic-wire sibling entries into their primary entry's optional
+// `anthropic_id` field (e.g. `z-ai-anthropic` → `z-ai.anthropic_id`). Wire is no
+// longer a separate catalog row — see the anthropic_id invariants below.
+//
+// Traces to: docs/internal/specs/provider-ux-fixes-plan.md FIX-4/FIX-5/FIX-6;
+// connectors-providers-redesign-spec.md §7 SC-002 / US-7 / FR-019 (superseded
+// where in conflict, per the plan's header).
 
 import { describe, it, expect } from 'vitest'
 import { PROVIDER_CATALOG } from '@/lib/generated/providerCatalog'
 
-const PLAN_ACCESS_LABEL: Record<string, string> = {
-  'standard-api': 'Standard API',
-  'coding-plan': 'Coding Plan',
-}
-
-// FR-005 wire derivation rule, replicated here as the oracle.
-function expectedWire(id: string): 'anthropic' | 'openai-compatible' {
-  if (/-anthropic$/.test(id) || id === 'anthropic' || id === 'anthropic-messages' || id === 'bedrock') {
-    return 'anthropic'
-  }
-  return 'openai-compatible'
-}
-
-describe('provider catalog — cross-surface consistency (SC-002 / FR-019)', () => {
-  it('is non-empty and has a stable size (~30 curated user-facing entries)', () => {
-    expect(PROVIDER_CATALOG.length).toBeGreaterThanOrEqual(25)
-    expect(PROVIDER_CATALOG.length).toBeLessThanOrEqual(40)
+describe('provider catalog — cross-surface consistency (FIX-4/5/6, SC-002 / FR-019)', () => {
+  it('is non-empty and has a stable size (23 curated user-facing entries post wire-merge)', () => {
+    expect(PROVIDER_CATALOG.length).toBeGreaterThanOrEqual(20)
+    expect(PROVIDER_CATALOG.length).toBeLessThanOrEqual(35)
   })
 
   it('has unique ids (each entry = one billable endpoint)', () => {
@@ -64,25 +59,28 @@ describe('provider catalog — cross-surface consistency (SC-002 / FR-019)', () 
     }
   })
 
-  it('label encodes an access descriptor: plan label for openai-compatible, wire descriptor for anthropic (US-6)', () => {
-    // FR-006 access-type = plan; BUT the dual-wire Chinese providers expose an
-    // OpenAI-compatible AND an Anthropic-compatible endpoint at the SAME
-    // plan+region — so strict "plan-only" labels collide (z-ai vs z-ai-anthropic
-    // would both be "Zhipu / GLM — Standard API (International)"). The catalog
-    // therefore uses the wire descriptor ("Anthropic-compatible") as the access
-    // label for anthropic-wire variants, which keeps labels unique. The exact
-    // wording is flagged for the /ux-psychology review; the invariant here is
-    // that the label carries a MEANINGFUL access descriptor, never blank.
+  // FIX-4: real terminology — "Standard API" and "Anthropic-compatible" are
+  // retired wording; labels use "Pay-as-you-go API" / plain company name for
+  // standard-api entries, and always contain "Coding Plan" for coding-plan
+  // entries (never the other way around).
+  it('[FIX-4] no label contains the retired "Standard API" or "Anthropic-compatible" wording', () => {
     for (const e of PROVIDER_CATALOG) {
-      if (e.wire === 'anthropic') {
-        expect(e.label, `anthropic-wire label for ${e.id}`).toMatch(/Anthropic/)
+      expect(e.label, `label for ${e.id}`).not.toMatch(/Standard API/)
+      expect(e.label, `label for ${e.id}`).not.toMatch(/Anthropic-compatible/)
+    }
+  })
+
+  it('[FIX-4] label contains "Coding Plan" if and only if plan === coding-plan', () => {
+    for (const e of PROVIDER_CATALOG) {
+      if (e.plan === 'coding-plan') {
+        expect(e.label, `coding-plan label for ${e.id}`).toMatch(/Coding Plan/)
       } else {
-        expect(e.label, `openai-wire label for ${e.id}`).toContain(PLAN_ACCESS_LABEL[e.plan])
+        expect(e.label, `standard-api label for ${e.id}`).not.toMatch(/Coding Plan/)
       }
     }
   })
 
-  it('labels are unique (no two rows share a title — the dual-wire disambiguation works)', () => {
+  it('labels are unique (no two rows share a title)', () => {
     const labels = PROVIDER_CATALOG.map((e) => e.label)
     const dupes = labels.filter((l, i) => labels.indexOf(l) !== i)
     expect(dupes, `duplicate labels: ${dupes.join(', ')}`).toEqual([])
@@ -94,9 +92,39 @@ describe('provider catalog — cross-surface consistency (SC-002 / FR-019)', () 
     }
   })
 
-  it('wire is derived per FR-005 (openai-compatible unless anthropic-suffixed / in the anthropic set)', () => {
+  // FIX-5: post wire-merge, only the `anthropic` company entry itself carries
+  // wire: 'anthropic' as its primary wire — every other entry (including
+  // dual-wire providers) is 'openai-compatible' as its primary id, with the
+  // Anthropic-compatible sibling reachable only via `anthropic_id`.
+  it('[FIX-5] wire is openai-compatible for every primary id except the anthropic company entry', () => {
     for (const e of PROVIDER_CATALOG) {
-      expect(e.wire, `wire for ${e.id}`).toBe(expectedWire(e.id))
+      if (e.id === 'anthropic') {
+        expect(e.wire, `wire for ${e.id}`).toBe('anthropic')
+      } else {
+        expect(e.wire, `wire for ${e.id}`).toBe('openai-compatible')
+      }
+    }
+  })
+
+  it('[FIX-5] anthropic_id, when present, is unique, non-empty, and distinct from the entry id', () => {
+    const anthropicIds = PROVIDER_CATALOG.map((e) => e.anthropic_id).filter(
+      (v): v is string => !!v,
+    )
+    expect(new Set(anthropicIds).size).toBe(anthropicIds.length)
+    for (const e of PROVIDER_CATALOG) {
+      if (e.anthropic_id) {
+        expect(e.anthropic_id).not.toBe(e.id)
+        expect(e.anthropic_id.length).toBeGreaterThan(0)
+      }
+    }
+  })
+
+  it('[FIX-5] anthropic_id values never collide with a primary catalog id', () => {
+    const primaryIds = new Set(PROVIDER_CATALOG.map((e) => e.id))
+    for (const e of PROVIDER_CATALOG) {
+      if (e.anthropic_id) {
+        expect(primaryIds.has(e.anthropic_id), `${e.anthropic_id} collides with a primary id`).toBe(false)
+      }
     }
   })
 
@@ -108,4 +136,3 @@ describe('provider catalog — cross-surface consistency (SC-002 / FR-019)', () 
     }
   })
 })
-

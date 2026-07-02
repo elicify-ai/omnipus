@@ -52,24 +52,21 @@ type TestStatus = 'idle' | 'testing' | 'success' | 'error'
 //
 // Two-level grouped picker:
 //   L1 — Company tiles (one per distinct company); multi-variant companies show ▾
-//   L2 — Plan + Region segmented controls; wire shown as a badge per entry
-//        (wire is no longer a plan picker option — displayed as a badge instead).
+//   L2 — Plan + Region segmented controls. Wire (OpenAI- vs Anthropic-compatible)
+//        is NOT shown here — it is an internal config detail surfaced only as an
+//        Endpoint-format toggle inside Settings' config Sheet (provider-ux-fixes-plan
+//        FIX-5); quick-start onboarding always uses the entry's primary (default)
+//        endpoint. Only the resolved subtitle/endpoint hint is shown for context.
 
 // Providers that REQUIRE a custom endpoint to function. The probe will always
 // return "unknown provider" for these without an endpoint because no fixed
 // default base exists (e.g. Azure is per-resource-host).
 export const PROVIDERS_REQUIRING_ENDPOINT = new Set(['azure', 'azure-openai'])
 
-/** Human labels for the plan dimension (catalog convention). */
+/** Human labels for the plan dimension (catalog convention, provider-ux-fixes-plan FIX-4). */
 export const PLAN_LABELS: Record<ProviderCatalogEntry['plan'], string> = {
-  'standard-api': 'Standard API',
+  'standard-api': 'Pay-as-you-go API',
   'coding-plan': 'Coding Plan',
-}
-
-/** Human labels for the wire dimension — shown as a badge on tiles. */
-export const WIRE_LABELS: Record<ProviderCatalogEntry['wire'], string> = {
-  'openai-compatible': 'OpenAI-compatible',
-  'anthropic': 'Anthropic-compatible',
 }
 
 /** Human labels for the region dimension. */
@@ -162,8 +159,11 @@ function regionsForPlan(
   return result
 }
 
-/** Resolve the best catalog entry for (company, plan, region).
- *  When multiple entries match (different wire), prefers openai-compatible. */
+/** Resolve the catalog entry for (company, plan, region). Each dual-wire
+ *  provider is now a SINGLE merged catalog entry (the Anthropic-compatible
+ *  sibling lives in `anthropic_id`, not as a separate row) — so (company,
+ *  plan, region) is unique and no wire-preference tie-break is needed
+ *  (provider-ux-fixes-plan FIX-5 / "simplify carefully"). */
 function resolveEntry(
   catalog: ProviderCatalogEntry[],
   company: string,
@@ -172,14 +172,11 @@ function resolveEntry(
 ): ProviderCatalogEntry | undefined {
   const companyEntries = entriesForCompany(catalog, company)
   const planCandidates = companyEntries.filter((e) => e.plan === plan)
-  // If no regional split for this plan, return first match regardless of region.
+  // If no regional split for this plan, return the (unique) match regardless of region.
   if (planCandidates.every((e) => e.region === undefined)) {
-    // Prefer openai-compatible wire when multiple match.
-    return planCandidates.find((e) => e.wire === 'openai-compatible') ?? planCandidates[0]
+    return planCandidates[0]
   }
-  const regionCandidates = planCandidates.filter((e) => e.region === region)
-  // Prefer openai-compatible wire when multiple match.
-  return regionCandidates.find((e) => e.wire === 'openai-compatible') ?? regionCandidates[0]
+  return planCandidates.find((e) => e.region === region) ?? planCandidates[0]
 }
 
 /** The logoSlug for a company (taken from the first entry). */
@@ -1285,7 +1282,7 @@ function ModelKeyStep({
                     <strong style={{ color: 'var(--color-secondary)' }}>Coding Plan</strong>{' '}
                     = your subscription (separate billing).{' '}
                     <strong style={{ color: 'var(--color-secondary)' }}>
-                      Standard API
+                      Pay-as-you-go API
                     </strong>{' '}
                     bills per token. Wrong plan returns &ldquo;insufficient balance&rdquo;.
                   </span>
@@ -1331,25 +1328,13 @@ function ModelKeyStep({
                 </div>
               )}
 
-              {/* Wire badge — shown as an informational badge, not a picker (ADR-031) */}
-              {resolvedEntry?.wire && (
-                <div className="flex items-center gap-1.5">
-                  <span
-                    className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium"
-                    style={{
-                      backgroundColor: 'rgba(212,175,55,0.12)',
-                      color: 'var(--color-accent)',
-                      border: '1px solid rgba(212,175,55,0.25)',
-                    }}
-                  >
-                    {WIRE_LABELS[resolvedEntry.wire]}
-                  </span>
-                  {resolvedEntry.subtitle && (
-                    <p className="text-xs truncate" style={{ color: 'var(--color-muted)' }}>
-                      {resolvedEntry.subtitle}
-                    </p>
-                  )}
-                </div>
+              {/* Endpoint hint/subtitle only — wire (OpenAI- vs Anthropic-compatible)
+                  is an internal config detail, not shown in onboarding
+                  (provider-ux-fixes-plan FIX-5: the toggle lives in Settings). */}
+              {resolvedEntry?.subtitle && (
+                <p className="text-xs truncate" style={{ color: 'var(--color-muted)' }}>
+                  {resolvedEntry.subtitle}
+                </p>
               )}
 
               {/* Resolved endpoint hint — recognition + debuggability (spec requirement) */}
