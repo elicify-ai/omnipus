@@ -44,7 +44,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { expect, type Page } from '@playwright/test'
 import { test } from './fixtures/console-errors'
-import { chatInput, assistantMessages, newChatButton } from './fixtures/selectors'
+import { chatInput, assistantMessages } from './fixtures/selectors'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -456,19 +456,19 @@ test(
 
     // ── Step 5: Open a NEW session and verify recall ──────────────────────────
 
-    // Start a brand-new chat session.  The previous session is closed; its recap
-    // lives in last-session.md.  When the agent processes the first turn of a
-    // new session, ReadLastSession injects that file into the system prompt.
-
-    // Wait for the New Chat button to be actionable before clicking.
-    // (Matches the pattern in chat.spec.ts.)
-    await expect(newChatButton(page)).toBeVisible({ timeout: 15_000 })
-    await newChatButton(page).click()
+    // Start a brand-new chat session for the SAME agent. Its first turn triggers
+    // ReadLastSession, which injects last-session.md into the system prompt.
+    //
+    // We start it the SAME way as Step 1 (createSession via REST + navigate), NOT
+    // via the workspace "New Chat" button: a REST-created session with no workspace
+    // renders the inline ChatScreen, which has no workspace top-bar / "New Chat"
+    // button. createSession + goto is the flow proven to work for Step 1/2.
+    const recallSessionId = await createSession(page, agentId)
+    await page.goto(`/#/sessions/${recallSessionId}`)
+    await expect(inputLocator).toBeVisible({ timeout: 15_000 })
+    // Fresh session — no prior assistant turns; and let the SPA attach + WS connect.
     await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
-    await expect(inputLocator).toBeVisible({ timeout: 10_000 })
-
-    // Give the SPA a moment to reset the session and reconnect WS.
-    await page.waitForTimeout(1_500)
+    await page.waitForTimeout(2_000)
 
     const recallQuestion =
       'What was the launch codename I mentioned in our previous conversation?'
