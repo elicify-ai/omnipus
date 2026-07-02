@@ -683,10 +683,17 @@ export function getChannelFields(channelId: string): ChannelField[] {
   // caller passes an arbitrary string, so cast at the lookup site; an unknown id
   // simply falls through to the empty default.
   //
+  // ADR-029 namespaced instances use the key grammar `<type>.<slug>` (e.g.
+  // `telegram.sales`); the field catalog is per-TYPE, so derive the base type
+  // by stripping the slug. Without this, every namespaced instance resolved to
+  // zero fields and ChannelConfigPanel silently rendered nothing (found in
+  // live UAT — configuring a freshly created instance was impossible).
+  //
   // WHATSAPP_NATIVE_CHANNEL_ID ('whatsapp_native') is the internal registry name for
   // the whatsmeow channel; the REST API uses 'whatsapp' as the canonical ChannelId
   // (normalised in the backend). Both names must resolve to the same field descriptor
   // so the config panel works regardless of which ID the caller holds.
-  const normalised = channelId.toLowerCase() === WHATSAPP_NATIVE_CHANNEL_ID ? 'whatsapp' : channelId.toLowerCase()
+  const baseType = channelId.toLowerCase().split('.')[0]
+  const normalised = baseType === WHATSAPP_NATIVE_CHANNEL_ID ? 'whatsapp' : baseType
   return CHANNEL_FIELDS[normalised as ChannelId] ?? []
 }

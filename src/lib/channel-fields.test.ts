@@ -94,3 +94,24 @@ describe('getChannelFields — whatsapp_native normalisation', () => {
     expect(getChannelFields('whatsapp_native').length).toBeGreaterThan(0)
   })
 })
+
+describe('getChannelFields — ADR-029 namespaced instance keys (<type>.<slug>)', () => {
+  // Live-UAT regression: the field catalog is per-TYPE, but a namespaced
+  // instance id (telegram.sales) missed the lookup entirely, so
+  // ChannelConfigPanel rendered NOTHING for any operator-created instance.
+  it('resolves a namespaced instance id to its base type fields', () => {
+    expect(getChannelFields('telegram.sales')).toEqual(getChannelFields('telegram'))
+    expect(getChannelFields('telegram.sales').length).toBeGreaterThan(0)
+    expect(getChannelFields('discord.eu-support')).toEqual(getChannelFields('discord'))
+  })
+
+  it('namespaced whatsapp instances still normalise through the native alias', () => {
+    expect(getChannelFields('whatsapp.sales')).toEqual(getChannelFields('whatsapp'))
+    expect(getChannelFields('whatsapp.sales').length).toBeGreaterThan(0)
+  })
+
+  it('unknown base types still fall through to the empty default', () => {
+    expect(getChannelFields('nonexistent.sales')).toEqual([])
+    expect(getChannelFields('')).toEqual([])
+  })
+})
