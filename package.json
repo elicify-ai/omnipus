@@ -75,6 +75,7 @@
     "katex": "^0.17.0",
     "mermaid": "^11.15.0",
     "qrcode.react": "^4.2.0",
+    "react-day-picker": "^9.14.0",
     "react-markdown": "^10.1.0",
     "react-shiki": "^0.10.1",
     "rehype-katex": "^7.0.1",

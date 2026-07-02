@@ -2235,7 +2235,7 @@ func FixtureDelegationPolicy_InvalidJSON() []byte {
 
 func FixtureExecutorConfig_Populated() ExecutorConfig {
 	kind := ExternalCli
-	cli := ExecutorConfigCliClaudeCode
+	cli := ClaudeCode
 	return ExecutorConfig{
 		Kind: &kind,
 		Cli:  &cli,
@@ -2565,13 +2565,118 @@ func FixtureChannelRouting_Bound() ChannelRouting {
 
 // ── CliDetect ─────────────────────────────────────────────────────────────────
 // Traces to: contracts/components/schemas/CliDetect.yaml
+// Restructured from three booleans (hasClaude/hasCodex/hasOpencode) to
+// per-CLI {installed, path, source} objects (External-Executor CLI Path
+// Detection feature, ADR-030).
 
 func FixtureCliDetect_Populated() CliDetect {
+	claudePath := "/usr/local/bin/claude"
+	claudeSource := CliDetectClaudeSourcePath
+	opencodePath := "/home/dev/.local/bin/opencode"
+	opencodeSource := CliDetectOpencodeSourceWellKnown
 	return CliDetect{
-		HasClaude:   true,
-		HasCodex:    false,
-		HasOpencode: true,
+		Claude: struct {
+			Installed bool                   `json:"installed"`
+			Path      *string                `json:"path,omitempty"`
+			Source    *CliDetectClaudeSource `json:"source,omitempty"`
+		}{
+			Installed: true,
+			Path:      &claudePath,
+			Source:    &claudeSource,
+		},
+		Codex: struct {
+			Installed bool                  `json:"installed"`
+			Path      *string               `json:"path,omitempty"`
+			Source    *CliDetectCodexSource `json:"source,omitempty"`
+		}{
+			Installed: false,
+		},
+		Opencode: struct {
+			Installed bool                     `json:"installed"`
+			Path      *string                  `json:"path,omitempty"`
+			Source    *CliDetectOpencodeSource `json:"source,omitempty"`
+		}{
+			Installed: true,
+			Path:      &opencodePath,
+			Source:    &opencodeSource,
+		},
 	}
+}
+
+// FixtureCliDetect_ZeroValue — Go zero values. Expected to PASS: claude/codex/
+// opencode are present (required) and each satisfies its own required
+// "installed" field via its Go zero value (false); path/source are optional.
+func FixtureCliDetect_ZeroValue() CliDetect {
+	return CliDetect{}
+}
+
+// ── CliDetectEntry ────────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/CliDetectEntry.yaml
+
+func FixtureCliDetectEntry_Populated() CliDetectEntry {
+	path := "/usr/local/bin/codex"
+	source := CliDetectEntrySourcePath
+	return CliDetectEntry{
+		Installed: true,
+		Path:      &path,
+		Source:    &source,
+	}
+}
+
+// FixtureCliDetectEntry_NotInstalled — installed:false with path/source omitted,
+// the shape detection returns when a CLI cannot be located anywhere.
+func FixtureCliDetectEntry_NotInstalled() CliDetectEntry {
+	return CliDetectEntry{Installed: false}
+}
+
+// ── CliValidateRequest ───────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/CliValidateRequest.yaml
+
+func FixtureCliValidateRequest_Populated() CliValidateRequest {
+	return CliValidateRequest{
+		Cli:     CliValidateRequestCliClaudeCode,
+		CliPath: "/usr/local/bin/claude",
+	}
+}
+
+// FixtureCliValidateRequest_ZeroValue — Go zero values. Expected to FAIL
+// validation: cli is "" (not in [claude-code, codex, opencode]).
+func FixtureCliValidateRequest_ZeroValue() CliValidateRequest {
+	return CliValidateRequest{}
+}
+
+// ── CliValidateResponse ──────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/CliValidateResponse.yaml
+
+func FixtureCliValidateResponse_Populated() CliValidateResponse {
+	resolvedPath := "/usr/local/bin/claude"
+	version := "1.2.3"
+	detail := "OK"
+	return CliValidateResponse{
+		Ok:           true,
+		Reason:       CliValidateResponseReasonOk,
+		ResolvedPath: &resolvedPath,
+		Version:      &version,
+		Detail:       &detail,
+	}
+}
+
+// FixtureCliValidateResponse_MissingBinary — resolved_path/version absent, a
+// classified (never raw-stderr) detail. reason=missing-binary blocks Create/Save.
+func FixtureCliValidateResponse_MissingBinary() CliValidateResponse {
+	detail := "not found"
+	return CliValidateResponse{
+		Ok:     false,
+		Reason: CliValidateResponseReasonMissingBinary,
+		Detail: &detail,
+	}
+}
+
+// FixtureCliValidateResponse_ZeroValue — Go zero values. Expected to FAIL
+// validation: reason is "" (not in [ok, missing-binary, handshake-failed,
+// unauthenticated, unknown-cli]).
+func FixtureCliValidateResponse_ZeroValue() CliValidateResponse {
+	return CliValidateResponse{}
 }
 
 // ── SlashCommand ──────────────────────────────────────────────────────────────

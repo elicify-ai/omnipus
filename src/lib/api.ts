@@ -68,6 +68,8 @@ import {
   // Newly wired schemas:
   Provider as ProviderSchema,
   CliDetect as CliDetectSchema,
+  // external-executor-cli-path-detection spec (ADR-030): create-time validate.
+  CliValidateResponse as CliValidateResponseSchema,
   GatewayStatus as GatewayStatusSchema,
   ToolRegistryEntry as ToolRegistryEntrySchema,
   ChannelEntry as ChannelEntrySchema,
@@ -259,6 +261,9 @@ import type {
   Provider,
   ProviderUpdateRequest,
   CliDetect,
+  CliDetectEntry,
+  CliValidateRequest,
+  CliValidateResponse,
   GatewayStatus,
   Skill,
   SkillSearchResult,
@@ -400,6 +405,9 @@ export type {
   Agent,
   Provider,
   CliDetect,
+  CliDetectEntry,
+  CliValidateRequest,
+  CliValidateResponse,
   GatewayStatus,
   Skill,
   SkillSearchResult,
@@ -1505,6 +1513,29 @@ export function refreshProviderModels(id: string): Promise<Provider> {
 // surfacing a false "Could not detect installed external CLIs" banner.
 export function fetchCliDetect(): Promise<CliDetect> {
   return request<CliDetect>('/system/cli-detect', undefined, CliDetectSchema as ZodType<CliDetect>)
+}
+
+// fetchCliValidate performs a stateless, create-time check that a CLI binary
+// actually runs at the given path (external-executor-cli-path-detection spec
+// FR-006/FR-013/FR-014/FR-015/FR-017/FR-018). It spawns only `<cli> --version`
+// server-side (15s timeout, no shell) and returns exactly one classified
+// `reason`. Callers MUST gate blocking on `reason` (missing-binary /
+// handshake-failed), never on the raw `ok` boolean (FR-018) — `unauthenticated`
+// also reports ok=true but is a non-blocking warning. The endpoint is
+// `withAuth` (create-parity with `createAgent`), rate-limited, and audited
+// server-side — pass an AbortSignal so a debounced validate-on-blur caller can
+// cancel a stale in-flight request when the path changes again.
+export function fetchCliValidate(
+  cli: CliValidateRequest['cli'],
+  cliPath: string,
+  opts?: { signal?: AbortSignal },
+): Promise<CliValidateResponse> {
+  const body: CliValidateRequest = { cli, cli_path: cliPath }
+  return request<CliValidateResponse>(
+    '/system/cli-validate',
+    { method: 'POST', body: JSON.stringify(body), signal: opts?.signal },
+    CliValidateResponseSchema as ZodType<CliValidateResponse>,
+  )
 }
 
 export function rotateGatewayToken(): Promise<{ token: string }> {

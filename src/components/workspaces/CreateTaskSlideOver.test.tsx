@@ -11,11 +11,70 @@
  *   - Validation label: "Name" → "Title"
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest'
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { CreateTaskSlideOver } from './CreateTaskSlideOver'
+
+// DateTimePicker (shadcn Calendar + Select) needs these jsdom polyfills to open
+// (same gap noted in date-time-picker.test.tsx).
+beforeAll(() => {
+  if (!Element.prototype.hasPointerCapture) {
+    Element.prototype.hasPointerCapture = () => false
+  }
+  if (!Element.prototype.scrollIntoView) {
+    Element.prototype.scrollIntoView = () => {}
+  }
+  if (typeof window !== 'undefined' && !window.ResizeObserver) {
+    window.ResizeObserver = class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    } as unknown as typeof ResizeObserver
+  }
+})
+
+// Click a react-day-picker day cell (data-day="YYYY-MM-DD") inside an open DateTimePicker/DatePicker popover.
+function clickDay(isoDate: string) {
+  const btn = document.querySelector(`[data-day="${isoDate}"] button`)
+  if (!btn) throw new Error(`no day button for ${isoDate}`)
+  fireEvent.click(btn)
+}
+
+// Pick an option from an open DateTimePicker's Hour/Minute <Select>.
+function selectOption(comboboxName: string, optionName: string) {
+  fireEvent.click(screen.getByRole('combobox', { name: comboboxName }))
+  const option = screen.getByRole('option', { name: optionName })
+  fireEvent.pointerDown(option, { pointerId: 1, button: 0 })
+  fireEvent.click(option)
+}
+
+// When no value is set, the calendar opens on the real "today" month (react-day-picker's
+// own default), not the target month — navigate forward/back via the Nav buttons so the
+// target day is on-screen regardless of when the suite happens to run.
+function navigateToMonth(isoDate: string) {
+  const [y, m] = isoDate.split('-').map(Number)
+  const target = new Date(y, m - 1, 1)
+  const now = new Date()
+  const diff = (target.getFullYear() - now.getFullYear()) * 12 + (target.getMonth() - now.getMonth())
+  const label = diff >= 0 ? /go to the next month/i : /go to the previous month/i
+  for (let i = 0; i < Math.abs(diff); i++) {
+    fireEvent.click(screen.getByRole('button', { name: label }))
+  }
+}
+
+// Open a DateTimePicker (by its aria-label) and pick a full date + time.
+async function pickDateTime(
+  triggerLabel: RegExp,
+  { isoDate, hour, minute }: { isoDate: string; hour: string; minute: string },
+) {
+  fireEvent.click(await screen.findByRole('button', { name: triggerLabel }))
+  navigateToMonth(isoDate)
+  clickDay(isoDate)
+  selectOption('Hour', hour)
+  selectOption('Minute', minute)
+}
 
 // ── API mock ─────────────────────────────────────────────────────────────────
 
@@ -320,9 +379,8 @@ describe('CreateTaskSlideOver — full task UX fields (trigger / depends-on / du
     fireEvent.click(trigCombo)
     fireEvent.click(await screen.findByText(/once \(at a time\)/i))
 
-    // Fill the datetime-local input
-    const dt = await screen.findByLabelText(/trigger date and time/i)
-    fireEvent.change(dt, { target: { value: '2026-07-31T17:00' } })
+    // Pick the date + time via the DateTimePicker (calendar day + Hour/Minute selects)
+    await pickDateTime(/trigger date and time/i, { isoDate: '2026-07-31', hour: '17', minute: '00' })
 
     fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
     await waitFor(() => expect(vi.mocked(createTask)).toHaveBeenCalledOnce())
@@ -384,7 +442,9 @@ describe('CreateTaskSlideOver — full task UX fields (trigger / depends-on / du
     fireEvent.click(await screen.findByText(/once \(at a time\)/i))
 
     fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
-    expect(await screen.findByText(/pick a date and time/i)).toBeInTheDocument()
+    // Two DateTimePicker triggers (Trigger + Due) also show "Pick a date and time" as
+    // their empty placeholder, so match the error paragraph text uniquely.
+    expect(await screen.findByText(/pick a date and time for the one-time trigger/i)).toBeInTheDocument()
     expect(vi.mocked(createTask)).not.toHaveBeenCalled()
     delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
   })
@@ -415,7 +475,7 @@ describe('CreateTaskSlideOver — full task UX fields (trigger / depends-on / du
     renderSlideOver()
 
     fireEvent.change(screen.getByLabelText(/title/i), { target: { value: 'With due' } })
-    fireEvent.change(screen.getByLabelText(/^due date$/i), { target: { value: '2026-08-01T09:00' } })
+    await pickDateTime(/^due date$/i, { isoDate: '2026-08-01', hour: '09', minute: '00' })
 
     fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
     await waitFor(() => expect(vi.mocked(createTask)).toHaveBeenCalledOnce())

@@ -193,6 +193,58 @@ func TestSupportedCLIs(t *testing.T) {
 	}
 }
 
+// TestProbeVersion_ScrubsGatewaySecrets proves the CRIT env-scrub fix: the
+// `--version` probe spawns the child with sandbox.ScrubGatewayEnvForRunner(), so
+// a gateway secret in the parent env (OMNIPUS_MASTER_KEY) MUST NOT reach the
+// child, while the CLI's own credential env (ANTHROPIC_API_KEY, on the runner
+// allowlist) MUST still pass through so a legit handshake is unaffected.
+func TestProbeVersion_ScrubsGatewaySecrets(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell fixture")
+	}
+	// A gateway secret (must be scrubbed) and a runner-allowlisted credential
+	// (must be preserved) both live in the parent env for this test.
+	t.Setenv("OMNIPUS_MASTER_KEY", "super-secret-must-not-leak")
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-legit-keep-me")
+
+	dir := t.TempDir()
+	dump := filepath.Join(dir, "childenv.txt")
+	// The fake binary records the two vars as its child sees them, then prints a
+	// version so the handshake still succeeds. Pure shell expansion — no external
+	// binary needed, so it is robust against a minimal child PATH.
+	script := "#!/bin/sh\n" +
+		"{ echo \"OMNIPUS_MASTER_KEY=[$OMNIPUS_MASTER_KEY]\"; " +
+		"echo \"ANTHROPIC_API_KEY=[$ANTHROPIC_API_KEY]\"; } > '" + dump + "'\n" +
+		"echo 'claude 1.2.3'\n"
+	binPath := filepath.Join(dir, "claude")
+	if err := os.WriteFile(binPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	v, err := probeVersion(context.Background(), binPath, []string{"--version"})
+	if err != nil {
+		t.Fatalf("probeVersion errored on a valid handshake: %v", err)
+	}
+	if v != "1.2.3" {
+		t.Fatalf("version = %q, want 1.2.3 (scrub must not break a legit handshake)", v)
+	}
+
+	data, err := os.ReadFile(dump)
+	if err != nil {
+		t.Fatalf("read child env dump: %v", err)
+	}
+	got := string(data)
+	if strings.Contains(got, "super-secret-must-not-leak") {
+		t.Fatalf("gateway secret OMNIPUS_MASTER_KEY leaked into the probe child env:\n%s", got)
+	}
+	if !strings.Contains(got, "OMNIPUS_MASTER_KEY=[]") {
+		t.Fatalf("OMNIPUS_MASTER_KEY must be absent (empty) in the child env, got:\n%s", got)
+	}
+	if !strings.Contains(got, "ANTHROPIC_API_KEY=[sk-ant-legit-keep-me]") {
+		t.Fatalf("runner-allowlisted ANTHROPIC_API_KEY must be preserved for the CLI, got:\n%s", got)
+	}
+}
+
 func TestExtractVersion(t *testing.T) {
 	cases := map[string]string{
 		"claude 1.2.3":        "1.2.3",

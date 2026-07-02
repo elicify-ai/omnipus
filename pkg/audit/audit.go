@@ -58,6 +58,13 @@ const (
 	// (failed/expired). The QR-bearing "code" state is never logged (it is a
 	// scannable secret).
 	EventChannelPairing = "channel.pairing"
+	// EventCliValidate records a POST /system/cli-validate call, which spawns a
+	// caller-supplied external-CLI path (<cli> --version) to classify whether it
+	// runs (ADR-030 §11 FR-013). Details carry {cli, resolved_path, reason};
+	// Decision is allow when the binary runs (ok/unauthenticated) and deny when
+	// it is blocked (missing-binary/handshake-failed/unknown-cli). The classified
+	// reason — never raw stderr — is the only process output that reaches the log.
+	EventCliValidate = "cli.validate"
 )
 
 // Decision values for audit entries. Values are Decision-compatible
@@ -99,6 +106,7 @@ func IsValidEventName(e EventName) bool {
 		EventBootAbort,
 		EventProcessKillFailed,
 		EventChannelPairing,
+		EventCliValidate,
 		// Tool Registry redesign event names from events.go. These are
 		// emitted from the agent loop and the policy package.
 		EventToolPolicyDenyAttempted,

@@ -51,6 +51,7 @@ import { SandboxProfileSelector } from './SandboxProfileSelector'
 import { ShellDenyPatternsEditor } from './ShellDenyPatternsEditor'
 import { ExecutorSelector } from './ExecutorSelector'
 import { BehaviorFields, AvatarColorPicker, IconPicker, AvatarHeader } from './AgentFormFields'
+import { CliPathValidationHint } from './CliPathValidationHint'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import {
   fetchAgent,
@@ -77,6 +78,9 @@ import { formatTokens } from '@/lib/formatTokens'
 import { useUiStore } from '@/store/ui'
 import type { FallbackModel } from '@/lib/api/generated/openapi-types'
 import { type IconName } from '@/lib/agentIcons'
+import { cliValidationBlocked, useCliPathValidation } from '@/hooks/useCliPathValidation'
+import { useCliDetect } from '@/hooks/useCliDetect'
+import { detectEntryFor, resolveCliDetectHint } from '@/lib/cliDetect'
 
 /** Editor's fallback entry — `FallbackModel` from the contract with `provider` narrowed to required (the editor always populates it at hydration). */
 type FallbackEntry = FallbackModel & { provider: string }
@@ -177,11 +181,15 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // Guards auto-save from firing with default (empty) state before the first fetch resolves.
   const hasHydrated = useRef(false)
 
-  // I12: cache the executor kind+cli we've already passed the runner-test for,
-  // so the auto-save debounce (500 ms) doesn't re-fire the test on every
-  // unrelated keystroke while the user has external-cli selected. We re-test
-  // only when the kind or cli actually changes (or the agent id changes).
-  type ExecutorSig = { kind: ExecutorConfig['kind']; cli?: ExecutorConfig['cli']; agentId: string | null }
+  // I12: cache the executor kind+cli+cli_path we've already passed the
+  // runner-test for, so the auto-save debounce (500 ms) doesn't re-fire the
+  // test on every unrelated keystroke while the user has external-cli
+  // selected. We re-test when the kind, cli, OR cli_path changes (or the
+  // agent id changes) — code-review m2: `cli_path` MUST be part of the
+  // signature, otherwise a cli_path-only edit (kind/cli unchanged) would
+  // never re-trigger the server-side runner test before the new path
+  // persists, silently autosaving an unverified path.
+  type ExecutorSig = { kind: ExecutorConfig['kind']; cli?: ExecutorConfig['cli']; cli_path?: string; agentId: string | null }
   const testedExecutorSig = useRef<ExecutorSig | null>(null)
 
   // I2: conflict guard. Set in the 409 Conflict catch and cleared once the
@@ -273,6 +281,16 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // Spec-4 FR-4.1: sub-agent executor (native default / external-cli / remote-a2a).
   const [executor, setExecutor] = useState<ExecutorConfig | undefined>(undefined)
 
+  // external-executor-cli-path-detection spec (ADR-030) / US-5: same
+  // detect→prefill + validate-on-blur as the create wizard, because
+  // `cli_path` is mutable on edit (`cli` itself stays locked). Detection is
+  // shared with the create wizard via `useCliDetect` (Simplify F1), probed
+  // once while the Runtime tab's agent is a subagent_3p; `cliValidation`
+  // drives the inline status line and gates autosave the same way the
+  // wizard gates Create (FR-008/FR-018/FR-019).
+  const cliDetect = useCliDetect(agent?.type === 'subagent_3p')
+  const cliValidation = useCliPathValidation()
+
   // FR-016 / US-5: Heartbeat tab state — per-(workspace, agent) config, NOT
   // part of the agent autosave. Only meaningful when editAgentWorkspaceId is set.
   const [hbEnabled, setHbEnabled] = useState(false)
@@ -338,6 +356,20 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     setAgentSkills(agent.skills ?? [])
     hasHydrated.current = true
   }, [agentId, agent])
+
+  // US-1/US-5 AC-1: OFFER the detected absolute path when cli_path is EMPTY —
+  // purely derived (no state, no effect), so detection can NEVER itself mark
+  // the form dirty or commit into `executor`/`formData`. code-review M2a:
+  // the previous effect called `setExecutor` + `markDirty()` as soon as
+  // detection resolved, which meant merely OPENING a subagent_3p profile
+  // (before the operator touched anything) silently autosaved the detected
+  // path. The offered value is only committed into `executor.cli_path` when
+  // the operator actually edits the field (onChange) or leaves it with the
+  // offered value still showing (onBlur "confirms" it) — see the Input
+  // below. Never overwrites a non-empty value (US-4).
+  const detectedCliEntry = agent?.type === 'subagent_3p' ? detectEntryFor(cliDetect, executor?.cli) : undefined
+  const detectedCliPath = detectedCliEntry?.installed && detectedCliEntry.path ? detectedCliEntry.path : undefined
+  const offeredCliPath = (executor?.cli_path ?? '').trim().length === 0 ? detectedCliPath : undefined
 
   const timeoutPayload = timeoutSeconds > 0 ? timeoutSeconds : undefined
   const formData = useMemo(() => {
@@ -438,16 +470,36 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       // the form is re-hydrated from the server's current state — otherwise
       // the stale form would just 409 again on every debounce tick.
       if (conflictRef.current) return
+      // external-executor-cli-path-detection spec FR-008/FR-018/FR-019:
+      // block autosave when the last blur-triggered validate() call
+      // returned a definitive missing-binary/handshake-failed verdict for
+      // the CURRENT cli_path. Editing the path resets `cliValidation` to
+      // idle (see the Input's onChange below), so an unchecked/pending/
+      // errored state never blocks (no trap). This runs BEFORE the I12
+      // runner-test (which requires the agent to already be persisted) so a
+      // known-bad path never even reaches `updateAgent`.
+      if (data.executor?.kind === 'external-cli' && cliValidationBlocked(cliValidation.status)) {
+        const reason = cliValidation.status.kind === 'result' ? cliValidation.status.result.reason : 'unknown'
+        addToast({
+          message: `CLI path failed validation (${reason}). Fix the path before saving.`,
+          variant: 'error',
+        })
+        throw new Error(`CLI path validation failed: ${reason}`)
+      }
       // I12: when the agent's executor is external-cli, run the runner-test
-      // BEFORE allowing the save to commit. We re-test only when the kind+cli
-      // signature actually changes (or the agent id changes) so the auto-save
-      // debounce doesn't re-fire on every keystroke. On a failure, throw —
-      // useAutoSave catches and surfaces the error inline, the save is
-      // blocked, and the form stays dirty so the user can fix and retry.
+      // BEFORE allowing the save to commit. We re-test when the kind, cli, OR
+      // cli_path actually changes (or the agent id changes) so the auto-save
+      // debounce doesn't re-fire on every unrelated keystroke — but a path
+      // edit alone (code-review m2) MUST still re-fire the test, otherwise a
+      // definitively-bad path could silently persist unverified. On a
+      // failure, throw — useAutoSave catches and surfaces the error inline,
+      // the save is blocked, and the form stays dirty so the user can fix
+      // and retry.
       if (data.executor?.kind === 'external-cli' && agentId) {
         const sig: ExecutorSig = {
           kind: data.executor.kind,
           cli: data.executor.cli,
+          cli_path: data.executor.cli_path,
           agentId,
         }
         const last = testedExecutorSig.current
@@ -455,6 +507,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           || last.agentId !== sig.agentId
           || last.kind !== sig.kind
           || last.cli !== sig.cli
+          || last.cli_path !== sig.cli_path
         if (needsTest) {
           let result
           try {
@@ -1487,18 +1540,44 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               </div>
               <div
                 data-testid="profile-cli-path"
-                className="flex items-center gap-3"
+                className="space-y-1.5"
               >
-                <label className="text-xs text-[var(--color-muted)] w-44 shrink-0">CLI path</label>
-                <Input
-                  value={executor?.cli_path ?? ''}
-                  onChange={(e) => {
-                    markDirty()
-                    setExecutor((prev) => ({ ...(prev ?? { kind: 'external-cli', cli: executor?.cli ?? 'claude-code' }), cli_path: e.target.value }))
-                  }}
-                  placeholder="/usr/local/bin/claude"
-                  className="text-xs h-8 font-mono"
-                  disabled={isLocked}
+                <div className="flex items-center gap-3">
+                  <label className="text-xs text-[var(--color-muted)] w-44 shrink-0">CLI path</label>
+                  <Input
+                    value={executor?.cli_path ?? offeredCliPath ?? ''}
+                    onChange={(e) => {
+                      markDirty()
+                      // Editing invalidates any prior validate() verdict —
+                      // reset to idle so a stale block never survives an
+                      // edit (FR-019).
+                      cliValidation.reset()
+                      setExecutor((prev) => ({ ...(prev ?? { kind: 'external-cli', cli: executor?.cli ?? 'claude-code' }), cli_path: e.target.value }))
+                    }}
+                    onBlur={(e) => {
+                      const cli = executor?.cli ?? 'claude-code'
+                      // code-review M2a: commit an OFFERED (detected,
+                      // not-yet-typed) value into `executor.cli_path` at
+                      // blur — this is the "confirm" point. A field the
+                      // operator never focused never blurs, so merely
+                      // opening the profile still cannot autosave the
+                      // detected path; only actually visiting (and leaving)
+                      // the field counts as confirming it.
+                      if ((executor?.cli_path ?? '').trim().length === 0 && offeredCliPath) {
+                        markDirty()
+                        setExecutor((prev) => ({ ...(prev ?? { kind: 'external-cli', cli }), cli_path: offeredCliPath }))
+                      }
+                      cliValidation.validate(cli, e.target.value)
+                    }}
+                    placeholder="/usr/local/bin/claude"
+                    className="text-xs h-8 font-mono"
+                    disabled={isLocked}
+                  />
+                </div>
+                <CliPathValidationHint
+                  validation={cliValidation.status}
+                  detectHint={resolveCliDetectHint(cliDetect, executor?.cli)}
+                  testId="profile-cli-path-status"
                 />
               </div>
               <div data-testid="profile-env-overrides" className="space-y-2">

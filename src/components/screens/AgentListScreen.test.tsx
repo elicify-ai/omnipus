@@ -4,19 +4,37 @@ import { act } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AgentListScreen } from './AgentListScreen'
 import { useUiStore } from '@/store/ui'
-import type { Agent } from '@/lib/api'
+import type { Agent, CliDetect } from '@/lib/api'
 
 // W4 of agent-form-requirements: the roster's "+ Add Subagent (External)"
 // disclosure probes /api/v1/system/cli-detect on mount to grey-out missing
 // CLIs. The endpoint is out-of-scope for this wave — every test pins the
 // fetch mock to a deterministic shape (all available by default) so the
 // suite is stable whether or not the probe endpoint is wired up. Tests
-// that exercise the disabled-state path override the mock to return
-// `{ hasCodex: false }` via fetchMockReset.
+// that exercise the disabled-state path override the mock via
+// `makeCliDetect({ codex: false })`.
 // cli-detect now goes through the authed `fetchCliDetect()` (UAT fix) rather
 // than a raw `fetch`, so we mock that function instead of stubbing global fetch.
 const fetchSpy = vi.fn()
 vi.stubGlobal('fetch', fetchSpy)
+
+// CliDetect (external-executor-cli-path-detection spec, FR-001) is a per-CLI
+// object — `{ claude, codex, opencode }: { installed, path, source } }` —
+// not the old `{ hasClaude, hasCodex, hasOpencode }` booleans. This helper
+// builds a full object with sane defaults so tests can override just the
+// installed flag(s) they care about.
+function makeCliDetect(installed: { claude?: boolean; codex?: boolean; opencode?: boolean } = {}): CliDetect {
+  const entry = (isInstalled: boolean) => ({
+    installed: isInstalled,
+    path: isInstalled ? '/usr/local/bin/mock-cli' : null,
+    source: isInstalled ? ('path' as const) : null,
+  })
+  return {
+    claude: entry(installed.claude ?? true),
+    codex: entry(installed.codex ?? true),
+    opencode: entry(installed.opencode ?? true),
+  }
+}
 
 // Wave 2 — the Agents roster splits into two sections: "Base agents"
 // (type !== 'worker') and "Sub-agent workers" (type === 'worker').
@@ -103,7 +121,7 @@ beforeEach(() => {
   // missing-CLI scenario override this in their body.
   fetchSpy.mockReset()
   vi.mocked(fetchCliDetect).mockReset()
-  vi.mocked(fetchCliDetect).mockResolvedValue({ hasClaude: true, hasCodex: true, hasOpencode: true })
+  vi.mocked(fetchCliDetect).mockResolvedValue(makeCliDetect())
 })
 
 describe('AgentListScreen — base/worker partition', () => {
@@ -426,10 +444,10 @@ describe('AgentListScreen — external CLI sub-picker disclosure', () => {
     })
   })
 
-  it('renders the codex sub-option as disabled with a tooltip when hostClis.hasCodex is false', async () => {
+  it('renders the codex sub-option as disabled with a tooltip when hostClis.codex.installed is false', async () => {
     // Override the probe to report codex missing.
     vi.mocked(fetchCliDetect).mockReset()
-    vi.mocked(fetchCliDetect).mockResolvedValue({ hasClaude: true, hasCodex: false, hasOpencode: true })
+    vi.mocked(fetchCliDetect).mockResolvedValue(makeCliDetect({ codex: false }))
     vi.mocked(fetchAgents).mockResolvedValue([makeAgent({ id: 'mia', type: 'core' })])
     renderScreen()
     const workerSection = await screen.findByTestId('worker-agents-section')
