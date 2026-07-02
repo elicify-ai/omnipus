@@ -77,8 +77,9 @@ function LettermarkChip({ slug, size, className }: LettermarkChipProps) {
         height: size,
         minWidth: size,
         borderRadius: Math.round(size * 0.22),
-        background: 'var(--color-accent, #D4AF37)',
-        color: 'var(--color-primary, #0A0A0B)',
+        background: 'var(--color-surface-2, #1A1A1C)',
+        border: '1px solid var(--color-border, #2A2A2E)',
+        color: '#FFFFFF',
         fontFamily: 'var(--font-outfit, Outfit, sans-serif)',
         fontWeight: 700,
         fontSize,
@@ -145,6 +146,12 @@ export const BrandIcon = memo(function BrandIcon({
         display: 'inline-flex',
         alignItems: 'center',
         justifyContent: 'center',
+        // All brand marks render WHITE on the dark theme (operator-mandated):
+        // `color` drives the p_* marks (fill="currentColor"); the inherited CSS
+        // `fill` drives the c_* marks whose paths carry no fill attribute and
+        // would otherwise default to black.
+        color: '#FFFFFF',
+        fill: '#FFFFFF',
         width: size,
         height: size,
         minWidth: size,

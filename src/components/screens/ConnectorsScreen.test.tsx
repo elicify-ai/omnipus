@@ -533,25 +533,6 @@ describe('ConnectorsScreen — empty-state roster (US-9 AS-3)', () => {
     expect(screen.queryByTestId('create-channel-sheet')).not.toBeInTheDocument()
   })
 
-  it('the compact Available section lists unconfigured types under the groups — every channel stays one click away', async () => {
-    mockFetchChannels.mockResolvedValue([
-      STUB_WHATSAPP_SALES,
-      { ...STUB_DISCORD_UNCONFIGURED },
-    ])
-    const user = userEvent.setup()
-
-    const { ConnectorsScreen } = await import('./ConnectorsScreen')
-    render(React.createElement(ConnectorsScreen), { wrapper })
-
-    // Configured group renders AND the Available section lists discord.
-    expect(await screen.findByTestId('channel-type-group-whatsapp')).toBeInTheDocument()
-    const available = await screen.findByTestId('channel-available')
-    await user.click(within(available).getByTestId('channel-roster-connect-discord'))
-    expect(channelConfigPanelOpens.at(-1)).toMatchObject({ channelId: 'discord' })
-    // The grid empty-state roster itself must NOT render alongside groups.
-    expect(screen.queryByTestId('channel-roster')).not.toBeInTheDocument()
-  })
-
   it('the global "+ Add channel" button still opens the slug-create Sheet with an open type picker (multi-instance tool)', async () => {
     mockFetchChannels.mockResolvedValue([{ ...STUB_TELEGRAM, instance_id: undefined }])
     const user = userEvent.setup()

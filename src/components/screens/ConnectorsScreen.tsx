@@ -327,23 +327,12 @@ function ChannelTypeGroup({
 interface ChannelRosterProps {
   types: UnconfiguredChannelEntry[]
   onConfigureType: (channel: UnconfiguredChannelEntry) => void
-  /** 'grid' = empty-state; 'list' = the compact section under configured groups. */
-  variant: 'grid' | 'list'
 }
 
-function ChannelRoster({ types, onConfigureType, variant }: ChannelRosterProps) {
+function ChannelRoster({ types, onConfigureType }: ChannelRosterProps) {
   return (
-    <div
-      data-testid={variant === 'grid' ? 'channel-roster' : 'channel-available'}
-      className="space-y-4"
-    >
-      <div
-        className={
-          variant === 'grid'
-            ? 'grid grid-cols-1 sm:grid-cols-2 gap-2'
-            : 'grid grid-cols-1 sm:grid-cols-3 gap-1.5'
-        }
-      >
+    <div data-testid="channel-roster" className="space-y-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         {types.map((channel) => {
           const baseType = deriveBaseType(channel)
           return (
@@ -352,13 +341,9 @@ function ChannelRoster({ types, onConfigureType, variant }: ChannelRosterProps) 
               type="button"
               onClick={() => onConfigureType(channel)}
               data-testid={`channel-roster-connect-${baseType}`}
-              className={
-                variant === 'grid'
-                  ? 'flex items-center gap-3 p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] hover:border-[var(--color-accent)]/50 transition-colors text-left'
-                  : 'flex items-center gap-2 px-3 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] hover:border-[var(--color-accent)]/50 transition-colors text-left'
-              }
+              className="flex items-center gap-3 p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] hover:border-[var(--color-accent)]/50 transition-colors text-left"
             >
-              <BrandIcon slug={channelSlug(baseType)} size={variant === 'grid' ? 22 : 16} label={channel.name} />
+              <BrandIcon slug={channelSlug(baseType)} size={22} label={channel.name} />
               <span className="flex-1 min-w-0 font-medium text-sm text-[var(--color-secondary)] truncate">
                 {channel.name}
               </span>
@@ -367,7 +352,7 @@ function ChannelRoster({ types, onConfigureType, variant }: ChannelRosterProps) 
           )
         })}
       </div>
-      {variant === 'grid' && <BrandDisclaimer />}
+      <BrandDisclaimer />
     </div>
   )
 }
@@ -929,7 +914,7 @@ export function ConnectorsScreen() {
   function renderChannelsBody() {
     if (isLoading) return <SkeletonList />
     if (configuredInstances.length === 0) {
-      return <ChannelRoster types={unconfiguredChannels} onConfigureType={configureType} variant="grid" />
+      return <ChannelRoster types={unconfiguredChannels} onConfigureType={configureType} />
     }
     return (
       <div className="space-y-6">
@@ -956,17 +941,6 @@ export function ConnectorsScreen() {
             onAddAnother={openCreateFor}
           />
         ))}
-        {/* Every not-yet-configured channel stays one click away, always —
-            the original page listed everything; hiding types behind the
-            slug-create flow was a functionality regression. */}
-        {unconfiguredChannels.length > 0 && (
-          <div className="space-y-2">
-            <h3 className="text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider">
-              Available
-            </h3>
-            <ChannelRoster types={unconfiguredChannels} onConfigureType={configureType} variant="list" />
-          </div>
-        )}
         <BrandDisclaimer />
       </div>
     )
