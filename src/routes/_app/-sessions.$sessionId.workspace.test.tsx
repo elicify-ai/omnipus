@@ -306,4 +306,115 @@ describe('SessionRoute — Bug 2: deep-link redirects to workspace', () => {
       expect(activeSessionAfter).toBe(activeSessionBefore)
     },
   )
+
+  it(
+    'sessionByWorkspace is populated under wsId even when WS is offline and activeWorkspaceId was null',
+    async () => {
+      // BDD: This is the primary bug scenario.
+      //
+      //   Given the user opens a deep link to /sessions/{id} where the session
+      //   has workspace_id='ws-1', but:
+      //     - The WebSocket is NOT connected (offline path)
+      //     - activeWorkspaceId is null (user did not previously visit the workspace route)
+      //
+      //   When SessionRoute's useEffect fires and resolves the workspace,
+      //   Then setWorkspaceSessionDescriptor('ws-1', descriptor) is called BEFORE navigate(),
+      //   And sessionByWorkspace['ws-1'] holds the descriptor with the correct session id.
+      //
+      //   When enterWorkspaceChat('ws-1') fires on WorkspaceTabContainer mount,
+      //   Then descriptor.id === activeSessionId → no-op (startNewSession is NOT called).
+      //
+      // This test FAILS on the pre-fix version where:
+      //   - setActiveSession (offline path) only writes sessionByWorkspace[activeWorkspaceId]
+      //   - and activeWorkspaceId was null at that time → no write → descriptor undefined
+      //   → enterWorkspaceChat sees undefined → startNewSession() → session B minted
+      const detail = makeChatSessionWithWorkspace()
+      _mockUseQueryData = detail
+      _mockWorkspaces = [makeWorkspace('ws-1')]
+
+      // No WS connection — offline path.
+      // activeWorkspaceId is null — simulates fresh page load or landing from a
+      // non-workspace route.
+      useWorkspacesStore.setState({ activeWorkspaceId: null })
+
+      const Route = SessionRoute
+      if (!Route) throw new Error('SessionRoute not loaded')
+      await act(async () => { render(<Route />) })
+
+      // Wait for the redirect to fire.
+      await waitFor(() => {
+        expect(mockNavigate).toHaveBeenCalledWith({
+          to: '/workspaces/$workspaceId/chat',
+          params: { workspaceId: 'ws-1' },
+          replace: true,
+        })
+      })
+
+      // The descriptor MUST be written under ws-1 even though WS was offline and
+      // activeWorkspaceId was null when setActiveSession ran.
+      const descriptor = useSessionStore.getState().sessionByWorkspace['ws-1']
+      expect(descriptor).toBeTruthy()
+      expect(descriptor?.id).toBe(mockSessionId)
+
+      // activeSessionId must also be set (setActiveSession ran for offline path).
+      expect(useSessionStore.getState().activeSessionId).toBe(mockSessionId)
+
+      // Critical: enterWorkspaceChat must NOT call startNewSession.
+      // We set activeWorkspaceId to ws-1 (simulating the setActiveWorkspaceId
+      // call that happened in the route effect before the descriptor was written).
+      useWorkspacesStore.setState({ activeWorkspaceId: 'ws-1' })
+      const activeSessionBefore = useSessionStore.getState().activeSessionId
+      useSessionStore.getState().enterWorkspaceChat('ws-1')
+      expect(useSessionStore.getState().activeSessionId).toBe(activeSessionBefore)
+      // sessionByWorkspace must be unchanged (no startNewSession clobber).
+      expect(useSessionStore.getState().sessionByWorkspace['ws-1']?.id).toBe(mockSessionId)
+    },
+  )
+
+  it(
+    'opening an existing session adopts it: activeSessionId set to A, startNewSession NOT called',
+    async () => {
+      // BDD: Given the SPA navigates to /sessions/{A} where A has workspace_id='ws-1',
+      //   When the route resolves, attaches, and redirects to /workspaces/ws-1/chat,
+      //   Then activeSessionId is A throughout (no session B created),
+      //   And enterWorkspaceChat is safe to call (is a no-op).
+      //
+      // This is the regression test for the single conversation split bug:
+      // "a single conversation ends up split across two session ids."
+      const detail = makeChatSessionWithWorkspace()
+      _mockUseQueryData = detail
+      _mockWorkspaces = [makeWorkspace('ws-1')]
+
+      const mockConn = makeMockConnection()
+      useConnectionStore.setState({ connection: mockConn as never, isConnected: true })
+      // Simulate: user was on a DIFFERENT workspace before navigating to the session link.
+      useWorkspacesStore.setState({ activeWorkspaceId: 'ws-other' })
+      useSessionStore.setState({
+        activeSessionId: 'some-other-session',
+        sessionByWorkspace: {
+          'ws-other': { id: 'some-other-session', type: 'chat', title: null, agentId: 'jim' },
+        },
+      })
+
+      const Route = SessionRoute
+      if (!Route) throw new Error('SessionRoute not loaded')
+      await act(async () => { render(<Route />) })
+
+      await waitFor(() => {
+        expect(mockNavigate).toHaveBeenCalled()
+      })
+
+      // After the redirect, activeSessionId must be A (the opened session).
+      expect(useSessionStore.getState().activeSessionId).toBe(mockSessionId)
+      // sessionByWorkspace['ws-1'] must be set with A's descriptor.
+      const descriptor = useSessionStore.getState().sessionByWorkspace['ws-1']
+      expect(descriptor?.id).toBe(mockSessionId)
+
+      // enterWorkspaceChat('ws-1') must be a no-op — no startNewSession.
+      useWorkspacesStore.setState({ activeWorkspaceId: 'ws-1' })
+      useSessionStore.getState().enterWorkspaceChat('ws-1')
+      // activeSessionId unchanged.
+      expect(useSessionStore.getState().activeSessionId).toBe(mockSessionId)
+    },
+  )
 })

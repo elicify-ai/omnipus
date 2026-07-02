@@ -41,6 +41,16 @@ interface SessionStore {
   setAttachedContext: (type: Session['type'], title: string | null) => void
   startNewSession: (agentId?: string | null, agentType?: AgentKind | null) => void
   sessionByWorkspace: Record<string, WorkspaceSessionDescriptor | null>
+  /**
+   * Write a session descriptor for a specific workspace key directly, bypassing
+   * the activeWorkspaceId lookup.  Use this when the caller knows the target
+   * workspaceId explicitly (e.g. deep-link redirect in sessions.$sessionId.tsx)
+   * and needs to guarantee the write lands before enterWorkspaceChat fires.
+   */
+  setWorkspaceSessionDescriptor: (
+    workspaceId: string,
+    descriptor: WorkspaceSessionDescriptor | null
+  ) => void
   enterWorkspaceChat: (workspaceId: string) => void
 }
 
@@ -204,6 +214,15 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       attachedSessionType: type,
       attachedTaskTitle: title,
     })
+  },
+
+  setWorkspaceSessionDescriptor: (workspaceId, descriptor) => {
+    set((state) => ({
+      sessionByWorkspace: {
+        ...state.sessionByWorkspace,
+        [workspaceId]: descriptor,
+      },
+    }))
   },
 
   sessionByWorkspace: {},

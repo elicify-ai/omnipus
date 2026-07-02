@@ -238,3 +238,110 @@ describe('enterWorkspaceChat — workspace switch restores correct session', () 
     expect(useSessionStore.getState().activeSessionId).toBe('sess-ws2')
   })
 })
+
+describe('setWorkspaceSessionDescriptor — explicit descriptor write', () => {
+  beforeEach(resetAll)
+
+  it('writes the descriptor under the given workspaceId regardless of activeWorkspaceId', () => {
+    // BDD: Given activeWorkspaceId is null (user not currently on a workspace),
+    //   When setWorkspaceSessionDescriptor is called with an explicit wsId and descriptor,
+    //   Then sessionByWorkspace[wsId] holds that descriptor.
+    //
+    // This is the race-free handoff: the deep-link session route writes the
+    // descriptor by explicit key BEFORE navigate(), so WorkspaceTabContainer's
+    // enterWorkspaceChat fires AFTER the descriptor is already in place.
+    useWorkspacesStore.setState({ activeWorkspaceId: null })
+
+    useSessionStore.getState().setWorkspaceSessionDescriptor('ws-1', {
+      id: 'sess-deep-link',
+      type: 'chat',
+      title: 'Deep-linked chat',
+      agentId: 'mia',
+    })
+
+    const descriptor = useSessionStore.getState().sessionByWorkspace['ws-1']
+    expect(descriptor).toEqual({
+      id: 'sess-deep-link',
+      type: 'chat',
+      title: 'Deep-linked chat',
+      agentId: 'mia',
+    })
+  })
+
+  it('enterWorkspaceChat is a no-op after setWorkspaceSessionDescriptor when activeSessionId matches', () => {
+    // BDD: Given a deep-link route that:
+    //   1. Sets activeSessionId to A (via setActiveSession or attachToSession)
+    //   2. Calls setWorkspaceSessionDescriptor('ws-1', { id: A, ... })
+    //   3. Navigates to /workspaces/ws-1/chat
+    //   When WorkspaceTabContainer mounts and calls enterWorkspaceChat('ws-1'),
+    //   Then descriptor.id === activeSessionId → no-op (never calls startNewSession).
+    useWorkspacesStore.setState({ activeWorkspaceId: null })
+    useSessionStore.setState({ activeSessionId: 'sess-A' })
+
+    // Step 2: deep-link route writes the descriptor before navigate.
+    useSessionStore.getState().setWorkspaceSessionDescriptor('ws-1', {
+      id: 'sess-A',
+      type: 'chat',
+      title: null,
+      agentId: 'mia',
+    })
+
+    // Update workspace (simulating setActiveWorkspaceId call in the route effect).
+    useWorkspacesStore.setState({ activeWorkspaceId: 'ws-1' })
+
+    // Step 3: enterWorkspaceChat fires on WorkspaceTabContainer mount.
+    useSessionStore.getState().enterWorkspaceChat('ws-1')
+
+    // activeSessionId must remain 'sess-A' — no startNewSession fired.
+    expect(useSessionStore.getState().activeSessionId).toBe('sess-A')
+    // The descriptor must be unchanged.
+    expect(useSessionStore.getState().sessionByWorkspace['ws-1']).toEqual({
+      id: 'sess-A',
+      type: 'chat',
+      title: null,
+      agentId: 'mia',
+    })
+  })
+
+  it('can write null to mark a workspace as fresh (used by startNewSession callers)', () => {
+    useWorkspacesStore.setState({ activeWorkspaceId: 'ws-5' })
+    useSessionStore.setState({
+      sessionByWorkspace: {
+        'ws-5': { id: 'old-sess', type: 'chat', title: null, agentId: null },
+      },
+    })
+
+    useSessionStore.getState().setWorkspaceSessionDescriptor('ws-5', null)
+
+    expect(useSessionStore.getState().sessionByWorkspace['ws-5']).toBeNull()
+  })
+
+  it('preserves other workspace descriptors when writing for a specific workspace', () => {
+    useWorkspacesStore.setState({ activeWorkspaceId: null })
+    useSessionStore.setState({
+      sessionByWorkspace: {
+        'ws-other': { id: 'sess-other', type: 'chat', title: 'Other', agentId: 'jim' },
+      },
+    })
+
+    useSessionStore.getState().setWorkspaceSessionDescriptor('ws-new', {
+      id: 'sess-new',
+      type: 'task',
+      title: 'My task',
+      agentId: 'ava',
+    })
+
+    expect(useSessionStore.getState().sessionByWorkspace['ws-other']).toEqual({
+      id: 'sess-other',
+      type: 'chat',
+      title: 'Other',
+      agentId: 'jim',
+    })
+    expect(useSessionStore.getState().sessionByWorkspace['ws-new']).toEqual({
+      id: 'sess-new',
+      type: 'task',
+      title: 'My task',
+      agentId: 'ava',
+    })
+  })
+})
