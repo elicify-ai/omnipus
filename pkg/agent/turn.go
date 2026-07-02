@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"fmt"
+	"math"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -134,7 +136,8 @@ type turnState struct {
 	concurrencySem       chan struct{}          // Semaphore for limiting concurrent SubTurns
 	isFinished           atomic.Bool            // Whether this turn has finished
 	session              session.SessionStore   // Session store reference
-	initialHistoryLength int                    // Snapshot of history length at turn start
+	initialHistoryLength int                    // Snapshot of window (GetHistory) length at turn start
+	initialArchiveLen    int                    // Snapshot of archive (ReadArchive) line count at turn start — for Skip-preserving rollback
 	// parentSpawnCallID is the ToolCall.ID of the spawn tool call in the parent turn that
 	// triggered this sub-turn. Set by spawnSubTurn at child construction (FR-H-003).
 	// Empty for root turns. Used to populate ParentSpawnCallID on ToolExec* payloads
@@ -258,10 +261,27 @@ func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScop
 		finishedChan: make(chan struct{}),
 	}
 
-	// Bind session store and capture initial history length for rollback logic
+	// Bind session store and capture initial history/archive lengths for rollback.
+	// initialArchiveLen is the number of physical lines in the archive at turn
+	// start; used by restoreSession and HardAbort to roll back only the messages
+	// appended during this turn (Skip-preserving rollback via RollbackAppended).
 	if agent != nil && agent.Sessions != nil {
 		ts.session = agent.Sessions
 		ts.initialHistoryLength = len(agent.Sessions.GetHistory(opts.SessionKey))
+		if archived, err := agent.Sessions.ReadArchive(context.Background(), opts.SessionKey); err == nil {
+			ts.initialArchiveLen = len(archived)
+		} else {
+			// ReadArchive failed (new session, missing file, transient I/O error).
+			// Use math.MaxInt so that any subsequent RollbackAppended call is a
+			// guaranteed no-op (RollbackAppended treats target >= Count as no-op).
+			// Falling back to initialHistoryLength (the post-Skip window length,
+			// which is SMALLER than the true archive) would cause a rollback to
+			// truncate the archive to fewer lines than it already has — silently
+			// destroying evicted turns (SC-001 violation).
+			logger.WarnCF("agent", "newTurnState: ReadArchive failed; rollback will be no-op for this turn",
+				map[string]any{"session_key": opts.SessionKey, "error": err.Error()})
+			ts.initialArchiveLen = math.MaxInt
+		}
 	}
 
 	// Bind transcript store for persisting tool calls
@@ -700,12 +720,57 @@ func (ts *turnState) refreshRestorePointFromSession(agent *AgentInstance) {
 
 func (ts *turnState) restoreSession(agent *AgentInstance) error {
 	ts.mu.RLock()
-	history := append([]providers.Message(nil), ts.restorePointHistory...)
 	summary := ts.restorePointSummary
+	targetLen := ts.initialArchiveLen
+	initialHistLen := ts.initialHistoryLength
 	ts.mu.RUnlock()
 
-	agent.Sessions.SetHistory(ts.sessionKey, history)
+	// Compute the Skip value at turn start.
+	// targetSkip = initialArchiveLen - initialHistoryLength derives the Skip
+	// cursor that was in effect before this turn began. If windowTrim advanced
+	// Skip mid-turn and the turn is now aborting, restoring Skip to this value
+	// ensures GetHistory returns exactly the pre-turn live window (SC-001, SC-010).
+	// Guard: when initialArchiveLen == math.MaxInt (ReadArchive failed at turn
+	// start, rollback is a no-op), pass targetSkip=0 — it is irrelevant because
+	// targetLen=MaxInt means RollbackAppended exits early before touching Skip.
+	targetSkip := 0
+	if targetLen != math.MaxInt {
+		targetSkip = targetLen - initialHistLen
+		if targetSkip < 0 {
+			targetSkip = 0
+		}
+	}
+
+	// Rollback: truncate the archive back to the line count captured at turn
+	// start AND restore meta.Skip to its turn-start value so mid-turn evictions
+	// are undone. SetHistory is explicitly NOT used here — it would overwrite
+	// the entire JSONL file and reset Skip=0, permanently deleting any evicted
+	// turns that preceded this turn (CRITICAL 1, path 2).
+	agent.Sessions.RollbackAppended(ts.sessionKey, targetLen, targetSkip)
 	agent.Sessions.SetSummary(ts.sessionKey, summary)
+
+	// M4 mirror: verify the rollback actually took effect. RollbackAppended is
+	// fire-and-forget (no error return). Re-read the archive and confirm the
+	// length dropped to <= targetLen. Skip verification when targetLen is
+	// math.MaxInt (ReadArchive failed at turn start — rollback was a no-op by
+	// design, so there is nothing meaningful to verify).
+	if targetLen != math.MaxInt {
+		if postArchive, readErr := agent.Sessions.ReadArchive(context.Background(), ts.sessionKey); readErr == nil {
+			if len(postArchive) > targetLen {
+				logger.ErrorCF("agent", "restoreSession: rollback did not shrink archive to target",
+					map[string]any{
+						"session_key": ts.sessionKey,
+						"target":      targetLen,
+						"after":       len(postArchive),
+					})
+				return fmt.Errorf("restoreSession: RollbackAppended did not take effect (archive len %d > target %d)", len(postArchive), targetLen)
+			}
+		}
+		// If ReadArchive itself fails here, we can't verify — fall through and
+		// let Save() persist whatever state the backend is in. The caller
+		// (interrupt handler) logs the restoreSession error if we return one.
+	}
+
 	return agent.Sessions.Save(ts.sessionKey)
 }
 

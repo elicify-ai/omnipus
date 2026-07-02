@@ -769,7 +769,7 @@ func (c *MatrixChannel) handleMessageEvent(ctx context.Context, evt *event.Event
 	}
 
 	if channels.DispatchCancelIfRecognized(
-		c.baseContext(), content, "matrix", roomID, senderID, c.GetCancelInterceptor(), channels.CancelSendFn(c),
+		c.baseContext(), content, c.Name(), roomID, senderID, c.GetCancelInterceptor(), channels.CancelSendFn(c),
 	) {
 		return
 	}

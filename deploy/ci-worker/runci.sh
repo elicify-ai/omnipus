@@ -180,7 +180,7 @@ run_e2e() {
     "tool_policies": { "spawn": "allow" }
   },
   "agents": {
-    "defaults": { "model_name": "openrouter-glm" }
+    "defaults": { "model_name": "openrouter-glm", "auto_recap_enabled": true }
   },
   "providers": [
     {

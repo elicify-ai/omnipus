@@ -304,22 +304,7 @@ type ChannelEntry = {
   degraded?: boolean | undefined;
   degraded_reason?: string | undefined;
 };
-type ChannelId =
-  | "webchat"
-  | "telegram"
-  | "discord"
-  | "slack"
-  | "whatsapp"
-  | "feishu"
-  | "dingtalk"
-  | "wecom"
-  | "weixin"
-  | "line"
-  | "qq"
-  | "irc"
-  | "matrix"
-  | "google-chat"
-  | "email";
+type ChannelId = string;
 type ChannelIdentity = {
   kind: "agent" | "user";
   id?: string | undefined;
@@ -1657,29 +1642,13 @@ export const MemorySettings: z.ZodType<MemorySettings> = z
     memory_retros_days: z.number().int(),
   })
   .partial();
-export const ChannelId = z.enum([
-  "webchat",
-  "telegram",
-  "discord",
-  "slack",
-  "whatsapp",
-  "feishu",
-  "dingtalk",
-  "wecom",
-  "weixin",
-  "line",
-  "qq",
-  "irc",
-  "matrix",
-  "google-chat",
-  "email",
-]);
+export const ChannelId = z.string();
 export const ChannelIdentity: z.ZodType<ChannelIdentity> = z.object({
   kind: z.enum(["agent", "user"]),
   id: z.string().optional(),
 });
 export const ChannelEntry: z.ZodType<ChannelEntry> = z.object({
-  id: ChannelId,
+  id: ChannelId.regex(/^[a-z0-9-]+(\.[a-z0-9-]+)?$/),
   instance_id: z.string().optional(),
   name: z.string(),
   transport: z.enum([
@@ -1699,13 +1668,25 @@ export const ChannelEntry: z.ZodType<ChannelEntry> = z.object({
   degraded: z.boolean().optional(),
   degraded_reason: z.string().optional(),
 });
+export const ChannelCreateRequest = z.object({
+  type: z.string(),
+  slug: z.string().regex(/^[a-z0-9-]{1,32}$/),
+});
+export const ChannelCreateResponse = z.object({
+  id: z.string(),
+  type: z.string(),
+  enabled: z.boolean(),
+});
 export const ChannelEnabledResponse: z.ZodType<ChannelEnabledResponse> =
-  z.object({ id: ChannelId, enabled: z.boolean() });
+  z.object({
+    id: ChannelId.regex(/^[a-z0-9-]+(\.[a-z0-9-]+)?$/),
+    enabled: z.boolean(),
+  });
 export const ChannelTestResponse = z
   .object({ success: z.boolean(), message: z.string() })
   .passthrough();
 export const ChannelRouting = z
-  .object({ default_agent_id: z.string() })
+  .object({ default_agent_id: z.string(), workspace_id: z.string() })
   .partial();
 export const Mailbox = z.object({
   agent_id: z.string(),
@@ -2346,6 +2327,18 @@ export const RateLimitConfig = z
   })
   .partial()
   .passthrough();
+export const ProviderCatalogEntry = z.object({
+  id: z.string().min(1),
+  company: z.string().min(1),
+  plan: z.enum(["standard-api", "coding-plan"]),
+  region: z.enum(["intl", "china", "us"]).optional(),
+  wire: z.enum(["openai-compatible", "anthropic"]),
+  endpointHint: z.string().min(1),
+  logoSlug: z.string().min(1),
+  label: z.string().min(1),
+  subtitle: z.string().min(1),
+  aliases: z.array(z.string()).optional(),
+});
 export const BackupEntry = z.object({
   filename: z.string(),
   size_bytes: z.number().int().gte(0),
@@ -3186,6 +3179,39 @@ Includes session_start events from all agent stores and task lifecycle events.
     ],
   },
   {
+    method: "post",
+    path: "/channels",
+    alias: "createChannelInstance",
+    description: `Creates a new channel instance with key &quot;&lt;type&gt;.&lt;slug&gt;&quot; (ADR-029 FR-017). The instance starts disabled (enabled: false). Returns 409 if the instance key already exists, 400 if the type is unknown or the slug is malformed.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: ChannelCreateRequest,
+      },
+    ],
+    response: ChannelCreateResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Unknown channel type or malformed slug.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Instance key already exists.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Config write failure.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
     method: "get",
     path: "/channels/:id",
     alias: "getChannelConfig",
@@ -3204,6 +3230,39 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 404,
         description: `Channel ID not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "delete",
+    path: "/channels/:id",
+    alias: "deleteChannelInstance",
+    description: `Deletes a channel instance: removes its config entry, credential refs, any stale channel-wildcard binding, and its per-instance state directory (e.g. WhatsApp store). Returns 404 for unknown instances and 400 for malformed ids. Bare-type keys (e.g. &quot;telegram&quot;) can be deleted; &quot;webchat&quot; is a built-in and cannot be deleted.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string().regex(/^[a-z0-9-]+(\.[a-z0-9-]+)?$/),
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 400,
+        description: `Malformed channel id.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Instance not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Config write failure.`,
         schema: ErrorResponse,
       },
     ],
@@ -3301,7 +3360,7 @@ Includes session_start events from all agent stores and task lifecycle events.
         schema: z.string(),
       },
     ],
-    response: z.object({ default_agent_id: z.string() }).partial(),
+    response: ChannelRouting,
     errors: [
       {
         status: 401,
@@ -3331,7 +3390,7 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         name: "body",
         type: "Body",
-        schema: z.object({ default_agent_id: z.string() }).partial(),
+        schema: ChannelRouting,
       },
       {
         name: "id",
@@ -3339,7 +3398,7 @@ Includes session_start events from all agent stores and task lifecycle events.
         schema: z.string(),
       },
     ],
-    response: z.object({ default_agent_id: z.string() }).partial(),
+    response: ChannelRouting,
     errors: [
       {
         status: 400,

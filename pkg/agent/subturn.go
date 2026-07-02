@@ -16,6 +16,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/agent/runner"
 	"github.com/dapicom-ai/omnipus/pkg/coreagent"
 	"github.com/dapicom-ai/omnipus/pkg/logger"
+	"github.com/dapicom-ai/omnipus/pkg/memory"
 	"github.com/dapicom-ai/omnipus/pkg/providers"
 	"github.com/dapicom-ai/omnipus/pkg/session"
 	"github.com/dapicom-ai/omnipus/pkg/tools"
@@ -887,6 +888,8 @@ type ephemeralSessionStoreIface interface {
 	SetSummary(key, summary string)
 	SetHistory(key string, history []providers.Message)
 	TruncateHistory(key string, keepLast int)
+	ReadArchive(ctx context.Context, key string) ([]memory.ArchivedMessage, error)
+	RollbackAppended(key string, targetArchiveLen, targetSkip int)
 	Save(key string) error
 	Close() error
 }
@@ -911,6 +914,24 @@ func (e *ephemeralSessionStore) GetHistory(_ string) []providers.Message {
 	out := make([]providers.Message, len(e.history))
 	copy(out, e.history)
 	return out
+}
+
+// ReadArchive returns the ephemeral in-memory history as ArchivedMessage
+// values with TS=0. This backend is a bounded in-memory ring (capacity
+// maxEphemeralHistorySize): it keeps NO per-line timestamps and NEVER
+// evicts turns to disk. Because there is no Skip-based windowing and no
+// append-only JSONL archive, ReadArchive == GetHistory — it returns the
+// complete in-memory slice; there is no separate line-0 archive that
+// recall or breadcrumb logic can dip into for additional evicted turns.
+// Satisfies the session.SessionStore interface (FR-016).
+func (e *ephemeralSessionStore) ReadArchive(_ context.Context, _ string) ([]memory.ArchivedMessage, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	out := make([]memory.ArchivedMessage, len(e.history))
+	for i, m := range e.history {
+		out[i] = memory.ArchivedMessage{Message: m}
+	}
+	return out, nil
 }
 
 func (e *ephemeralSessionStore) GetSummary(_ string) string {
@@ -949,6 +970,31 @@ func (e *ephemeralSessionStore) TruncateHistory(_ string, keepLast int) {
 
 func (e *ephemeralSessionStore) Save(_ string) error { return nil }
 func (e *ephemeralSessionStore) Close() error        { return nil }
+
+// RollbackAppended truncates the in-memory history to its first
+// targetArchiveLen messages, discarding anything appended after that point.
+// targetSkip is accepted for interface compatibility but has no effect: the
+// ephemeral backend is a bounded in-memory ring with no Skip/archive split —
+// there is no eviction cursor to restore.
+//
+// Note: rollback is best-effort when the ephemeral ring has wrapped (i.e. a
+// sub-turn appended >maxEphemeralHistorySize messages and the ring discarded
+// the oldest). In that case targetArchiveLen no longer maps to the same
+// messages that were at the head before the ring wrapped, so the logical
+// pre-turn state cannot be perfectly restored. This is low-probability
+// (sub-turns are short) and the ephemeral store has no persistent archive.
+//
+// Satisfies session.SessionStore (used by hard-abort turn rollback).
+func (e *ephemeralSessionStore) RollbackAppended(_ string, targetArchiveLen, _ int) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if targetArchiveLen < 0 {
+		targetArchiveLen = 0
+	}
+	if targetArchiveLen < len(e.history) {
+		e.history = e.history[:targetArchiveLen]
+	}
+}
 
 func (e *ephemeralSessionStore) truncateLocked() {
 	if len(e.history) > maxEphemeralHistorySize {

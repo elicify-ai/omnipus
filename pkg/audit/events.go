@@ -128,6 +128,31 @@ const (
 	// sent >= 10 cancel requests within 60 seconds, suggesting runaway client
 	// logic or intentional abuse (FR-25a).
 	EventCancelAbusePattern = "cancel.abuse_pattern"
+
+	// EventChannelRoutingDriftDrop — WARN. A workspace-bound channel instance's
+	// configured agent is unresolvable (deleted or a worker): the
+	// inbound message is dropped rather than silently degraded to the global
+	// default (ADR-029 FR-012, FR-028). Fields emitted by the caller:
+	// {instance_id, workspace_id, intended_agent_id, chat_id, reason}.
+	EventChannelRoutingDriftDrop = "channel.routing.drift_drop"
+
+	// EventChannelRoutingChanged — INFO. An operator updated the workspace
+	// binding or routing configuration of a channel instance via the REST API
+	// (ADR-029 FR-029). Emitted by pkg/gateway/rest.go's channel routing PUT
+	// handler. Fields: {channel_id, workspace_id, agent_id, flow}.
+	EventChannelRoutingChanged = "channel.routing.changed"
+
+	// EventChannelInstanceDeleted — INFO. An operator deleted a channel instance
+	// via DELETE /api/v1/channels/{id} (ADR-029 FR-025). Emitted by
+	// pkg/gateway/rest.go's deleteChannelInstance handler after the config entry,
+	// credential refs, and per-instance state directory have been torn down.
+	// Deleting an instance is a destructive, admin-only, security-relevant action
+	// (it revokes stored encrypted credentials against the operator's explicit
+	// intent), so it MUST leave an audit trail even on the happy path. Fields:
+	// {channel_id, type, cleanup_failed}. cleanup_failed=true means at least one
+	// credential blob could not be removed and is now orphaned in the store — the
+	// operator asked to delete the credential but it remains encrypted at rest.
+	EventChannelInstanceDeleted = "channel.instance.deleted"
 )
 
 // ---------------------------------------------------------------------------

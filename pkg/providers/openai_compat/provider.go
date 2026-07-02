@@ -363,6 +363,16 @@ func parseStreamResponse(
 	}
 
 	if err := scanner.Err(); err != nil {
+		// If the caller's context was cancelled or timed out, our own ctx.Done()
+		// watchdog goroutine (ChatStream) closed resp.Body to unblock this scanner
+		// — the resulting "http2: response body closed" is NOT a server-side
+		// connection drop but a cancellation/timeout. Surface the context error so
+		// callers classify it correctly (context.Canceled → clean cancel;
+		// context.DeadlineExceeded → llm_timeout) instead of misreading it as a
+		// transient stream reset and retrying a request the caller already abandoned.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
 		return nil, fmt.Errorf("streaming read error: %w", err)
 	}
 	if malformedChunks > 0 {
@@ -418,6 +428,16 @@ func normalizeModel(model, apiBase string) string {
 	}
 
 	if strings.Contains(strings.ToLower(apiBase), "openrouter.ai") {
+		// OpenRouter model IDs are "<vendor>/<model>" (e.g. "z-ai/glm-5.2").
+		// Omnipus config may namespace them with an extra "openrouter/" prefix
+		// ("openrouter/z-ai/glm-5.2" — the form onboarding writes), which the
+		// upstream rejects ("... is not a valid model ID"). Strip that prefix —
+		// but ONLY when a vendor/model slash remains after it, so the genuine
+		// OpenRouter router model "openrouter/auto" (and "openrouter/auto:*") is
+		// left intact (it IS a valid upstream ID, not a namespace prefix).
+		if strings.EqualFold(before, "openrouter") && strings.Contains(after, "/") {
+			return after
+		}
 		return model
 	}
 

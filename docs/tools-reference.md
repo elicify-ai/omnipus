@@ -91,13 +91,16 @@ Registered by `pkg/tools/browser/register.go:39-49`. All seven are namespaced un
 
 ### Memory
 
+Four tools, grouped by intent. Agents always work inside a workspace, so the shared room is the default for writes.
+
 | Tool | What it does | Notes |
 |---|---|---|
-| `remember` | Persist a fact, decision, reference, or lesson to long-term memory (`MEMORY.md`). | `pkg/tools/memory.go:90`. |
-| `recall_memory` | Search durable memory (`MEMORY.md`), recent recaps (`LAST_SESSION.md`), and indexed session JSONL. | `pkg/tools/memory.go:262`. |
-| `retrospective` | Record a session retrospective after confirming its contents with the user. | `pkg/tools/memory.go:353`. |
+| `remember` | Save a durable fact, decision, reference, or lesson. Defaults to the shared workspace room so every agent on the team can recall it; pass `room='private'` for personal-only notes. | `pkg/tools/memory.go`. |
+| `recall_memory` | Look up durable cross-session memory — saved facts AND past retrospectives. Defaults to `room='both'` (shared + private). Use when the information comes from a previous conversation. | `pkg/tools/memory.go`. |
+| `recall_conversation` | Page back through earlier turns of the CURRENT conversation that scrolled out of the live context window. Not persisted — reads this session's own archive. | `pkg/agent/recall_conversation.go`. |
+| `run_retrospective` | Record what went well and what to improve at the end of a productive session, after the user has reviewed the summary. Retrospectives are returned by `recall_memory`. | `pkg/tools/memory.go`. |
 
-Note: the tool name for recall is `recall_memory`, not `recall`. The v0.3 Rooms redesign (`docs/internal/design/memory-redesign-2026-05.md`) plans a renamed three-tool surface (`remember`/`recall`/`retrospective`) but the current code ships `recall_memory`.
+The two-room topology (`pkg/agent/memory.go`, `pkg/memrooms/`): each workspace has a shared room (`workspaces/<id>/.omnipus/memories/`) and each agent has a private room (`agents/<id>/.omnipus/memories/`). `remember` defaults to shared; `recall_memory` defaults to both.
 
 ### Messaging
 

@@ -27,7 +27,10 @@ import { PROVIDER_HINTS } from '@/lib/constants'
 import { useUiStore } from '@/store/ui'
 import { useAuthStore } from '@/store/auth'
 import { ProviderValidationBanner } from '@/components/providers/ProviderValidationBanner'
-import type { ProviderValidation } from '@/lib/api/generated/openapi-types'
+import type { ProviderValidation, ProviderCatalogEntry } from '@/lib/api/generated/openapi-types'
+import { PROVIDER_CATALOG } from '@/lib/generated/providerCatalog'
+import { BrandIcon } from '@/components/ui/brand-icon'
+import { BrandDisclaimer } from '@/components/ui/brand-disclaimer'
 
 // First-launch onboarding flow — full-screen, outside AppShell.
 //
@@ -40,284 +43,52 @@ import type { ProviderValidation } from '@/lib/api/generated/openapi-types'
 type Step = 1 | 2 | 3
 type TestStatus = 'idle' | 'testing' | 'success' | 'error'
 
-// ── Provider data model ────────────────────────────────────────────────────────
+// ── Provider data model (ADR-031 Track 1) ─────────────────────────────────────
 //
-// Two-level grouped picker (spec: docs/internal/design/provider-picker-grouped-2026-06.md):
+// The picker sources from the shared PROVIDER_CATALOG (src/lib/generated/providerCatalog.ts)
+// instead of a local AVAILABLE_PROVIDERS array. Each ProviderCatalogEntry has:
+//   company, plan ('standard-api'|'coding-plan'), region? ('intl'|'china'|'us'),
+//   wire ('openai-compatible'|'anthropic'), id, label, subtitle, logoSlug, endpointHint.
+//
+// Two-level grouped picker:
 //   L1 — Company tiles (one per distinct company); multi-variant companies show ▾
-//   L2 — Plan + Region segmented controls (inline, only for multi-variant companies)
-//
-// Each ProviderVariant maps (company, plan, region) → backend probe id. The ids
-// below are all valid values in the ProbeProviderRequest enum (src/lib/api/generated/).
-
-export type ProviderVariant = {
-  /** Backend probe id — sent to probeProvider() and completeOnboardingTransaction() */
-  id: string
-  /** Company name — the L1 tile label and grouping key */
-  company: string
-  /** Additional search aliases (e.g. "glm", "kimi"). The company name itself is
-   *  always searched; aliases are extra terms. */
-  aliases?: string[]
-  /** Billing plan — drives the Plan segmented control */
-  plan: 'api' | 'coding' | 'anthropic'
-  /** Deployment region — drives the Region segmented control.
-   *  Omit for companies that have no regional split (DeepSeek, etc.). */
-  region?: 'intl' | 'china' | 'us'
-  /** Human-readable base URL shown small below the plan/region controls for
-   *  recognition + debuggability (spec: "show the resolved endpoint"). */
-  endpointHint?: string
-}
-
-// All supported providers as variants. AVAILABLE_PROVIDERS is kept exported
-// because the invariant test imports it and checks every `.id` is in the enum.
-// Single-option companies have exactly one variant; multi-variant companies
-// have multiple (UI derives Plan and Region options from the list).
-export const AVAILABLE_PROVIDERS: ProviderVariant[] = [
-  // ── Single-option companies ────────────────────────────────────────────────
-  {
-    id: 'openai',
-    company: 'OpenAI',
-    plan: 'api',
-    endpointHint: 'api.openai.com/v1',
-  },
-  {
-    id: 'anthropic',
-    company: 'Anthropic',
-    plan: 'api',
-    endpointHint: 'api.anthropic.com/v1',
-  },
-  {
-    id: 'google',
-    company: 'Google Gemini',
-    aliases: ['gemini', 'google'],
-    plan: 'api',
-    endpointHint: 'generativelanguage.googleapis.com',
-  },
-  {
-    id: 'openrouter',
-    company: 'OpenRouter',
-    plan: 'api',
-    endpointHint: 'openrouter.ai/api/v1',
-  },
-  {
-    id: 'groq',
-    company: 'Groq',
-    plan: 'api',
-    endpointHint: 'api.groq.com/openai/v1',
-  },
-  {
-    id: 'mistral',
-    company: 'Mistral',
-    plan: 'api',
-    endpointHint: 'api.mistral.ai/v1',
-  },
-  {
-    id: 'nvidia',
-    company: 'NVIDIA',
-    plan: 'api',
-    endpointHint: 'integrate.api.nvidia.com/v1',
-  },
-  {
-    id: 'cerebras',
-    company: 'Cerebras',
-    plan: 'api',
-    endpointHint: 'api.cerebras.ai/v1',
-  },
-  {
-    id: 'ollama',
-    company: 'Ollama (local)',
-    aliases: ['ollama', 'local'],
-    plan: 'api',
-    endpointHint: 'localhost:11434',
-  },
-  {
-    id: 'azure',
-    company: 'Azure OpenAI',
-    aliases: ['azure', 'microsoft'],
-    plan: 'api',
-    endpointHint: '<resource>.openai.azure.com',
-  },
-  // ── Zhipu / GLM (multi-variant: plan × region) ────────────────────────────
-  {
-    id: 'z-ai',
-    company: 'Zhipu / GLM',
-    aliases: ['glm', 'z.ai', 'zhipu', 'bigmodel'],
-    plan: 'api',
-    region: 'intl',
-    endpointHint: 'api.z.ai/api/paas/v4',
-  },
-  {
-    id: 'zhipu',
-    company: 'Zhipu / GLM',
-    aliases: ['glm', 'z.ai', 'zhipu', 'bigmodel'],
-    plan: 'api',
-    region: 'china',
-    endpointHint: 'open.bigmodel.cn/api/paas/v4',
-  },
-  {
-    id: 'z-ai-coding',
-    company: 'Zhipu / GLM',
-    aliases: ['glm', 'z.ai', 'zhipu', 'bigmodel'],
-    plan: 'coding',
-    region: 'intl',
-    endpointHint: 'api.z.ai/api/coding/paas/v4',
-  },
-  {
-    id: 'zhipu-coding',
-    company: 'Zhipu / GLM',
-    aliases: ['glm', 'z.ai', 'zhipu', 'bigmodel'],
-    plan: 'coding',
-    region: 'china',
-    endpointHint: 'open.bigmodel.cn/api/coding/paas/v4',
-  },
-  {
-    id: 'z-ai-anthropic',
-    company: 'Zhipu / GLM',
-    aliases: ['glm', 'z.ai', 'zhipu', 'bigmodel'],
-    plan: 'anthropic',
-    region: 'intl',
-    endpointHint: 'api.z.ai/api/anthropic/v1',
-  },
-  {
-    id: 'zhipu-anthropic',
-    company: 'Zhipu / GLM',
-    aliases: ['glm', 'z.ai', 'zhipu', 'bigmodel'],
-    plan: 'anthropic',
-    region: 'china',
-    endpointHint: 'open.bigmodel.cn/api/anthropic/v1',
-  },
-  // ── Moonshot / Kimi (multi-variant: plan × region) ────────────────────────
-  {
-    id: 'moonshot',
-    company: 'Moonshot / Kimi',
-    aliases: ['kimi', 'moonshot'],
-    plan: 'api',
-    region: 'intl',
-    endpointHint: 'api.moonshot.ai/v1',
-  },
-  {
-    id: 'moonshot-cn',
-    company: 'Moonshot / Kimi',
-    aliases: ['kimi', 'moonshot'],
-    plan: 'api',
-    region: 'china',
-    endpointHint: 'api.moonshot.cn/v1',
-  },
-  {
-    id: 'moonshot-anthropic',
-    company: 'Moonshot / Kimi',
-    aliases: ['kimi', 'moonshot'],
-    plan: 'anthropic',
-    region: 'intl',
-    endpointHint: 'api.moonshot.ai/anthropic/v1',
-  },
-  {
-    id: 'moonshot-cn-anthropic',
-    company: 'Moonshot / Kimi',
-    aliases: ['kimi', 'moonshot'],
-    plan: 'anthropic',
-    region: 'china',
-    endpointHint: 'api.moonshot.cn/anthropic/v1',
-  },
-  // ── MiniMax (multi-variant: plan × region) ────────────────────────────────
-  {
-    id: 'minimax',
-    company: 'MiniMax',
-    aliases: ['minimax'],
-    plan: 'api',
-    region: 'intl',
-    endpointHint: 'api.minimax.io/v1',
-  },
-  {
-    id: 'minimax-cn',
-    company: 'MiniMax',
-    aliases: ['minimax'],
-    plan: 'api',
-    region: 'china',
-    endpointHint: 'api.minimaxi.com/v1',
-  },
-  {
-    id: 'minimax-anthropic',
-    company: 'MiniMax',
-    aliases: ['minimax'],
-    plan: 'anthropic',
-    region: 'intl',
-    endpointHint: 'api.minimax.io/anthropic/v1',
-  },
-  {
-    id: 'minimax-cn-anthropic',
-    company: 'MiniMax',
-    aliases: ['minimax'],
-    plan: 'anthropic',
-    region: 'china',
-    endpointHint: 'api.minimaxi.com/anthropic/v1',
-  },
-  // ── DeepSeek (multi-variant: plan only, no region) ────────────────────────
-  {
-    id: 'deepseek',
-    company: 'DeepSeek',
-    aliases: ['deepseek'],
-    plan: 'api',
-    endpointHint: 'api.deepseek.com/v1',
-  },
-  {
-    id: 'deepseek-anthropic',
-    company: 'DeepSeek',
-    aliases: ['deepseek'],
-    plan: 'anthropic',
-    endpointHint: 'api.deepseek.com/anthropic/v1',
-  },
-  // ── Qwen / Alibaba (multi-variant: plan × region, anthropic has no region) ─
-  {
-    id: 'qwen',
-    company: 'Qwen / Alibaba',
-    aliases: ['qwen', 'dashscope', 'alibaba', 'tongyi'],
-    plan: 'api',
-    region: 'china',
-    endpointHint: 'dashscope.aliyuncs.com/compatible-mode/v1',
-  },
-  {
-    id: 'qwen-intl',
-    company: 'Qwen / Alibaba',
-    aliases: ['qwen', 'dashscope', 'alibaba', 'tongyi'],
-    plan: 'api',
-    region: 'intl',
-    endpointHint: 'dashscope-intl.aliyuncs.com/compatible-mode/v1',
-  },
-  {
-    id: 'qwen-us',
-    company: 'Qwen / Alibaba',
-    aliases: ['qwen', 'dashscope', 'alibaba', 'tongyi'],
-    plan: 'api',
-    region: 'us',
-    endpointHint: 'dashscope-us.aliyuncs.com/compatible-mode/v1',
-  },
-  {
-    id: 'coding-plan-anthropic',
-    company: 'Qwen / Alibaba',
-    aliases: ['qwen', 'dashscope', 'alibaba', 'tongyi'],
-    plan: 'anthropic',
-    // No region for Qwen anthropic (single endpoint)
-    endpointHint: 'coding-intl.dashscope.aliyuncs.com/apps/anthropic',
-  },
-]
+//   L2 — Plan + Region segmented controls; wire shown as a badge per entry
+//        (wire is no longer a plan picker option — displayed as a badge instead).
 
 // Providers that REQUIRE a custom endpoint to function. The probe will always
 // return "unknown provider" for these without an endpoint because no fixed
 // default base exists (e.g. Azure is per-resource-host).
 export const PROVIDERS_REQUIRING_ENDPOINT = new Set(['azure', 'azure-openai'])
 
-// Popular providers surfaced first in the onboarding selection grid to reduce
-// decision overload (Hick's law). Providers not listed here keep their original
-// order via a stable sort (see sortProvidersByPriority).
-const PROVIDER_PRIORITY = ['openai', 'anthropic', 'openrouter']
+/** Human labels for the plan dimension (catalog convention). */
+export const PLAN_LABELS: Record<ProviderCatalogEntry['plan'], string> = {
+  'standard-api': 'Standard API',
+  'coding-plan': 'Coding Plan',
+}
 
-// Stable sort that moves PROVIDER_PRIORITY entries to the front (in priority
-// order) and leaves every other provider in its original relative position.
-// Works on any list that has an `id` field (ProviderVariant or legacy shape).
+/** Human labels for the wire dimension — shown as a badge on tiles. */
+export const WIRE_LABELS: Record<ProviderCatalogEntry['wire'], string> = {
+  'openai-compatible': 'OpenAI-compatible',
+  'anthropic': 'Anthropic-compatible',
+}
+
+/** Human labels for the region dimension. */
+export const REGION_LABELS: Record<NonNullable<ProviderCatalogEntry['region']>, string> = {
+  intl: 'International',
+  china: 'China',
+  us: 'US',
+}
+
+// Priority companies — surfaced first in the grid (Hick's law: reduce decision overload).
+const PRIORITY_COMPANIES = ['OpenAI', 'Anthropic', 'OpenRouter']
+
+// Stable sort that moves PRIORITY_COMPANIES to the front. Exported for tests.
 export function sortProvidersByPriority<T extends { id: string }>(list: T[]): T[] {
+  // This function is now used only on id lists; company-level sorting happens inline.
+  const PRIORITY_IDS = ['openai', 'anthropic', 'openrouter']
   const rank = (id: string) => {
-    const i = PROVIDER_PRIORITY.indexOf(id)
-    return i === -1 ? PROVIDER_PRIORITY.length : i
+    const i = PRIORITY_IDS.indexOf(id)
+    return i === -1 ? PRIORITY_IDS.length : i
   }
   return list
     .map((p, index) => ({ p, index }))
@@ -325,94 +96,107 @@ export function sortProvidersByPriority<T extends { id: string }>(list: T[]): T[
     .map(({ p }) => p)
 }
 
-// ── Grouped-picker helpers ─────────────────────────────────────────────────────
+// ── Catalog-based grouped-picker helpers ───────────────────────────────────────
 
-/** Human labels for the plan dimension. */
-export const PLAN_LABELS: Record<ProviderVariant['plan'], string> = {
-  api: 'Pay-as-you-go API',
-  coding: 'Coding Plan',
-  anthropic: 'Anthropic API',
-}
-
-/** Human labels for the region dimension. */
-export const REGION_LABELS: Record<NonNullable<ProviderVariant['region']>, string> = {
-  intl: 'International',
-  china: 'China',
-  us: 'US',
-}
-
-/** Derive unique company names from the variant list (in declaration order). */
-function uniqueCompanies(variants: ProviderVariant[]): string[] {
+/** Derive unique company names from the catalog (in declaration order, priority first). */
+function uniqueCompanies(catalog: ProviderCatalogEntry[]): string[] {
   const seen = new Set<string>()
   const result: string[] = []
-  for (const v of variants) {
-    if (!seen.has(v.company)) {
-      seen.add(v.company)
-      result.push(v.company)
+  for (const e of catalog) {
+    if (!seen.has(e.company)) {
+      seen.add(e.company)
+      result.push(e.company)
     }
   }
+  // Priority companies first (stable sort).
+  const rank = (c: string) => {
+    const i = PRIORITY_COMPANIES.indexOf(c)
+    return i === -1 ? PRIORITY_COMPANIES.length : i
+  }
   return result
+    .map((c, i) => ({ c, i }))
+    .sort((a, b) => rank(a.c) - rank(b.c) || a.i - b.i)
+    .map(({ c }) => c)
 }
 
-/** All variants for a given company. */
-function variantsForCompany(variants: ProviderVariant[], company: string): ProviderVariant[] {
-  return variants.filter((v) => v.company === company)
+/** All catalog entries for a given company. */
+function entriesForCompany(catalog: ProviderCatalogEntry[], company: string): ProviderCatalogEntry[] {
+  return catalog.filter((e) => e.company === company)
 }
 
-/** True when a company has more than one variant (needs L2 plan/region UI). */
-function isMultiVariant(variants: ProviderVariant[], company: string): boolean {
-  return variantsForCompany(variants, company).length > 1
+/** True when a company has more than one catalog entry (needs L2 plan/region UI). */
+function isMultiVariant(catalog: ProviderCatalogEntry[], company: string): boolean {
+  return entriesForCompany(catalog, company).length > 1
 }
 
-/** Resolve a variant id from (company, plan, region). Returns undefined when no
- *  exact match exists (e.g. a plan has no regional split). */
-function resolveVariantId(
-  variants: ProviderVariant[],
-  company: string,
-  plan: ProviderVariant['plan'],
-  region: ProviderVariant['region'],
-): ProviderVariant | undefined {
-  const candidates = variantsForCompany(variants, company).filter((v) => v.plan === plan)
-  // If the plan has no regional split, region doesn't matter — return the single candidate.
-  if (candidates.every((c) => c.region === undefined)) return candidates[0]
-  return candidates.find((v) => v.region === region)
-}
-
-/** Plans offered by a company (in declaration order, unique). */
+/** Plans offered by a company (in catalog order, unique). */
 function plansForCompany(
-  variants: ProviderVariant[],
+  catalog: ProviderCatalogEntry[],
   company: string,
-): ProviderVariant['plan'][] {
-  const seen = new Set<ProviderVariant['plan']>()
-  const result: ProviderVariant['plan'][] = []
-  for (const v of variantsForCompany(variants, company)) {
-    if (!seen.has(v.plan)) {
-      seen.add(v.plan)
-      result.push(v.plan)
+): ProviderCatalogEntry['plan'][] {
+  const seen = new Set<ProviderCatalogEntry['plan']>()
+  const result: ProviderCatalogEntry['plan'][] = []
+  for (const e of entriesForCompany(catalog, company)) {
+    if (!seen.has(e.plan)) {
+      seen.add(e.plan)
+      result.push(e.plan)
     }
   }
   return result
 }
 
-/** Regions offered by a company for a given plan (undefined = no regional split). */
+/** Regions offered by a company for a given plan (unique, in catalog order). */
 function regionsForPlan(
-  variants: ProviderVariant[],
+  catalog: ProviderCatalogEntry[],
   company: string,
-  plan: ProviderVariant['plan'],
-): Array<NonNullable<ProviderVariant['region']>> {
-  return variantsForCompany(variants, company)
-    .filter((v) => v.plan === plan && v.region !== undefined)
-    .map((v) => v.region as NonNullable<ProviderVariant['region']>)
+  plan: ProviderCatalogEntry['plan'],
+): Array<NonNullable<ProviderCatalogEntry['region']>> {
+  const seen = new Set<NonNullable<ProviderCatalogEntry['region']>>()
+  const result: Array<NonNullable<ProviderCatalogEntry['region']>> = []
+  for (const e of entriesForCompany(catalog, company)) {
+    if (e.plan === plan && e.region !== undefined && !seen.has(e.region)) {
+      seen.add(e.region)
+      result.push(e.region)
+    }
+  }
+  return result
 }
 
-/** Filter company tiles by a search term (name + aliases, case-insensitive). */
-function filterCompanies(variants: ProviderVariant[], query: string): string[] {
+/** Resolve the best catalog entry for (company, plan, region).
+ *  When multiple entries match (different wire), prefers openai-compatible. */
+function resolveEntry(
+  catalog: ProviderCatalogEntry[],
+  company: string,
+  plan: ProviderCatalogEntry['plan'],
+  region: ProviderCatalogEntry['region'],
+): ProviderCatalogEntry | undefined {
+  const companyEntries = entriesForCompany(catalog, company)
+  const planCandidates = companyEntries.filter((e) => e.plan === plan)
+  // If no regional split for this plan, return first match regardless of region.
+  if (planCandidates.every((e) => e.region === undefined)) {
+    // Prefer openai-compatible wire when multiple match.
+    return planCandidates.find((e) => e.wire === 'openai-compatible') ?? planCandidates[0]
+  }
+  const regionCandidates = planCandidates.filter((e) => e.region === region)
+  // Prefer openai-compatible wire when multiple match.
+  return regionCandidates.find((e) => e.wire === 'openai-compatible') ?? regionCandidates[0]
+}
+
+/** The logoSlug for a company (taken from the first entry). */
+function logoSlugForCompany(catalog: ProviderCatalogEntry[], company: string): string {
+  return entriesForCompany(catalog, company)[0]?.logoSlug ?? ''
+}
+
+/** Filter company tiles by a search term (company name + entry aliases, case-insensitive). */
+function filterCompanies(catalog: ProviderCatalogEntry[], query: string): string[] {
   const q = query.trim().toLowerCase()
-  if (!q) return uniqueCompanies(variants)
-  const companies = uniqueCompanies(variants)
+  const companies = uniqueCompanies(catalog)
+  if (!q) return companies
   return companies.filter((company) => {
     if (company.toLowerCase().includes(q)) return true
-    const aliases = variants.find((v) => v.company === company)?.aliases ?? []
+    const aliases = catalog
+      .filter((e) => e.company === company)
+      .flatMap((e) => e.aliases ?? [])
     return aliases.some((a) => a.toLowerCase().includes(q))
   })
 }
@@ -536,8 +320,8 @@ function OnboardingWizard() {
   const { addToast } = useUiStore()
   const { appStateBannerMessage } = useRouteContext({ from: '/onboarding' })
 
-  // Always show all available providers in onboarding, regardless of API results
-  const providers = AVAILABLE_PROVIDERS
+  // Source providers from the shared catalog (ADR-031 Track 1).
+  const providers = PROVIDER_CATALOG
 
   const [step, setStep] = useState<Step>(1)
   const [direction, setDirection] = useState(1)
@@ -549,8 +333,8 @@ function OnboardingWizard() {
   // selectedCompany is the L1 company tile; selectedPlan/Region are the L2 controls.
   const [selectedProvider, setSelectedProvider] = useState('')
   const [selectedCompany, setSelectedCompany] = useState('')
-  const [selectedPlan, setSelectedPlan] = useState<ProviderVariant['plan']>('api')
-  const [selectedRegion, setSelectedRegion] = useState<ProviderVariant['region']>('intl')
+  const [selectedPlan, setSelectedPlan] = useState<ProviderCatalogEntry['plan']>('standard-api')
+  const [selectedRegion, setSelectedRegion] = useState<ProviderCatalogEntry['region']>('intl')
   const [apiKey, setApiKey] = useState('')
   const [endpoint, setEndpoint] = useState('')
   const [showKey, setShowKey] = useState(false)
@@ -599,33 +383,33 @@ function OnboardingWizard() {
     if (selectedCompany === company) return // already selected, no-op
     setSelectedCompany(company)
 
-    // Default plan to 'api'; default region to 'intl' (spec defaults).
-    const newPlan: ProviderVariant['plan'] = 'api'
-    const newRegion: ProviderVariant['region'] = 'intl'
+    // Default plan to 'standard-api'; default region to 'intl' (spec defaults).
+    const newPlan: ProviderCatalogEntry['plan'] = 'standard-api'
+    const newRegion: ProviderCatalogEntry['region'] = 'intl'
     setSelectedPlan(newPlan)
     setSelectedRegion(newRegion)
 
     // Resolve the backend id from the defaults.
-    const variant = resolveVariantId(providers, company, newPlan, newRegion)
-    const resolvedId = variant?.id ?? variantsForCompany(providers, company)[0]?.id ?? ''
+    const entry = resolveEntry(providers, company, newPlan, newRegion)
+    const resolvedId = entry?.id ?? entriesForCompany(providers, company)[0]?.id ?? ''
     setSelectedProvider(resolvedId)
     resetConnection()
   }
 
   // L2: User changes the plan. Re-resolve the id and reset the model list
   // (stale models from a different endpoint are wrong picks — spec requirement).
-  const handleSelectPlan = (plan: ProviderVariant['plan']) => {
+  const handleSelectPlan = (plan: ProviderCatalogEntry['plan']) => {
     setSelectedPlan(plan)
     // Check if this plan has regions.
     const regions = regionsForPlan(providers, selectedCompany, plan)
     let newRegion = selectedRegion
-    if (regions.length > 0 && !regions.includes(selectedRegion as NonNullable<ProviderVariant['region']>)) {
+    if (regions.length > 0 && !regions.includes(selectedRegion as NonNullable<ProviderCatalogEntry['region']>)) {
       // Current region not valid for this plan — default to intl or first available.
       newRegion = regions.includes('intl') ? 'intl' : regions[0]
       setSelectedRegion(newRegion)
     }
-    const variant = resolveVariantId(providers, selectedCompany, plan, newRegion)
-    const resolvedId = variant?.id ?? variantsForCompany(providers, selectedCompany).find(v => v.plan === plan)?.id ?? ''
+    const entry = resolveEntry(providers, selectedCompany, plan, newRegion)
+    const resolvedId = entry?.id ?? entriesForCompany(providers, selectedCompany).find(e => e.plan === plan)?.id ?? ''
     setSelectedProvider(resolvedId)
     // Reset model list — changing plan means a different endpoint and different models.
     setAvailableModels([])
@@ -637,10 +421,16 @@ function OnboardingWizard() {
   }
 
   // L2: User changes the region. Re-resolve the id and reset the model list.
-  const handleSelectRegion = (region: ProviderVariant['region']) => {
+  const handleSelectRegion = (region: ProviderCatalogEntry['region']) => {
     setSelectedRegion(region)
-    const variant = resolveVariantId(providers, selectedCompany, selectedPlan, region)
-    const resolvedId = variant?.id ?? ''
+    const entry = resolveEntry(providers, selectedCompany, selectedPlan, region)
+    // Fall back to any entry for this company+plan (mirrors handleSelectPlan) so
+    // a region that doesn't resolve can never silently empty selectedProvider
+    // and collapse the API-key panel.
+    const resolvedId =
+      entry?.id ??
+      entriesForCompany(providers, selectedCompany).find((e) => e.plan === selectedPlan)?.id ??
+      ''
     setSelectedProvider(resolvedId)
     // Reset model list — different region = different endpoint + different models.
     setAvailableModels([])
@@ -1176,7 +966,7 @@ function PasswordStep({
                   />
                 ))}
               </div>
-              <p className="text-[10px] mt-1 font-medium" style={{ color: strength.color }}>
+              <p className="text-xs mt-1 font-medium" style={{ color: strength.color }}>
                 {strength.label}
               </p>
             </div>
@@ -1275,14 +1065,14 @@ function ModelKeyStep({
   finishError,
   probeValidation,
 }: {
-  providers: ProviderVariant[]
+  providers: ProviderCatalogEntry[]
   selectedProvider: string
   selectedCompany: string
-  selectedPlan: ProviderVariant['plan']
-  selectedRegion: ProviderVariant['region']
+  selectedPlan: ProviderCatalogEntry['plan']
+  selectedRegion: ProviderCatalogEntry['region']
   onSelectCompany: (company: string) => void
-  onSelectPlan: (plan: ProviderVariant['plan']) => void
-  onSelectRegion: (region: ProviderVariant['region']) => void
+  onSelectPlan: (plan: ProviderCatalogEntry['plan']) => void
+  onSelectRegion: (region: ProviderCatalogEntry['region']) => void
   /** Kept for backward-compat paths (Azure direct click, etc.) */
   onSelect: (id: string) => void
   apiKey: string
@@ -1307,16 +1097,11 @@ function ModelKeyStep({
   const [searchQuery, setSearchQuery] = useState('')
 
   // Derive filtered company list (search + stable priority order for the grid).
-  const filteredCompanies = useMemo(() => {
-    const companies = filterCompanies(providers, searchQuery)
-    // Keep openai, anthropic, openrouter first within the filtered set.
-    const priorityCompanies = ['OpenAI', 'Anthropic', 'OpenRouter']
-    const rank = (c: string) => {
-      const i = priorityCompanies.indexOf(c)
-      return i === -1 ? priorityCompanies.length : i
-    }
-    return [...companies].sort((a, b) => rank(a) - rank(b) || 0)
-  }, [providers, searchQuery])
+  // filterCompanies already returns companies with priority companies first.
+  const filteredCompanies = useMemo(
+    () => filterCompanies(providers, searchQuery),
+    [providers, searchQuery],
+  )
 
   // Derive L2 options for the selected company.
   const companyPlans = selectedCompany ? plansForCompany(providers, selectedCompany) : []
@@ -1326,10 +1111,10 @@ function ModelKeyStep({
   const hasRegionForPlan = currentPlanRegions.length > 0
   const multiVariant = selectedCompany ? isMultiVariant(providers, selectedCompany) : false
 
-  // The resolved variant (for endpointHint display).
-  const resolvedVariant = selectedCompany
-    ? resolveVariantId(providers, selectedCompany, selectedPlan, selectedRegion) ??
-      variantsForCompany(providers, selectedCompany)[0]
+  // The resolved catalog entry (for endpointHint + wire badge display).
+  const resolvedEntry = selectedCompany
+    ? resolveEntry(providers, selectedCompany, selectedPlan, selectedRegion) ??
+      entriesForCompany(providers, selectedCompany)[0]
     : undefined
 
   // Build providerGroups for the ModelSelector.
@@ -1389,6 +1174,7 @@ function ModelKeyStep({
           {filteredCompanies.map((company) => {
             const isSelected = selectedCompany === company
             const multi = isMultiVariant(providers, company)
+            const slug = logoSlugForCompany(providers, company)
             return (
               <button
                 key={company}
@@ -1410,7 +1196,10 @@ function ModelKeyStep({
                       }
                 }
               >
-                <span className="truncate">{company}</span>
+                <span className="flex items-center gap-1.5 min-w-0">
+                  <BrandIcon slug={slug} size={16} decorative className="shrink-0" />
+                  <span className="truncate">{company}</span>
+                </span>
                 {multi && (
                   <CaretDown
                     size={11}
@@ -1488,7 +1277,7 @@ function ModelKeyStep({
                 </div>
                 {/* Anti-1113 helper — error-prevention copy (spec §"Error prevention") */}
                 <div
-                  className="flex items-start gap-1.5 mt-2 text-[10px] leading-snug"
+                  className="flex items-start gap-1.5 mt-2 text-xs leading-snug"
                   style={{ color: 'var(--color-muted)' }}
                 >
                   <Info size={11} className="shrink-0 mt-px" aria-hidden />
@@ -1496,7 +1285,7 @@ function ModelKeyStep({
                     <strong style={{ color: 'var(--color-secondary)' }}>Coding Plan</strong>{' '}
                     = your subscription (separate billing).{' '}
                     <strong style={{ color: 'var(--color-secondary)' }}>
-                      Pay-as-you-go API
+                      Standard API
                     </strong>{' '}
                     bills per token. Wrong plan returns &ldquo;insufficient balance&rdquo;.
                   </span>
@@ -1542,10 +1331,31 @@ function ModelKeyStep({
                 </div>
               )}
 
+              {/* Wire badge — shown as an informational badge, not a picker (ADR-031) */}
+              {resolvedEntry?.wire && (
+                <div className="flex items-center gap-1.5">
+                  <span
+                    className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium"
+                    style={{
+                      backgroundColor: 'rgba(212,175,55,0.12)',
+                      color: 'var(--color-accent)',
+                      border: '1px solid rgba(212,175,55,0.25)',
+                    }}
+                  >
+                    {WIRE_LABELS[resolvedEntry.wire]}
+                  </span>
+                  {resolvedEntry.subtitle && (
+                    <p className="text-xs truncate" style={{ color: 'var(--color-muted)' }}>
+                      {resolvedEntry.subtitle}
+                    </p>
+                  )}
+                </div>
+              )}
+
               {/* Resolved endpoint hint — recognition + debuggability (spec requirement) */}
-              {resolvedVariant?.endpointHint && (
-                <p className="text-[10px] font-mono" style={{ color: 'var(--color-muted)' }}>
-                  → {resolvedVariant.endpointHint}
+              {resolvedEntry?.endpointHint && (
+                <p className="text-xs font-mono" style={{ color: 'var(--color-muted)' }}>
+                  → {resolvedEntry.endpointHint}
                 </p>
               )}
             </div>
@@ -1595,7 +1405,7 @@ function ModelKeyStep({
                   </button>
                 </div>
                 <p
-                  className="text-[10px] mt-1.5 font-mono"
+                  className="text-xs mt-1.5 font-mono"
                   style={{ color: 'var(--color-muted)' }}
                 >
                   Stored encrypted with AES-256-GCM — never in plaintext
@@ -1622,7 +1432,7 @@ function ModelKeyStep({
                     className="font-mono text-sm"
                     autoComplete="off"
                   />
-                  <p className="text-[10px] mt-1.5" style={{ color: 'var(--color-muted)' }}>
+                  <p className="text-xs mt-1.5" style={{ color: 'var(--color-muted)' }}>
                     {selectedProvider === 'azure' || selectedProvider === 'azure-openai'
                       ? 'Your Azure OpenAI resource URL (per-deployment endpoint)'
                       : 'Custom base URL for this provider'}
@@ -1719,7 +1529,7 @@ function ModelKeyStep({
                         constrainToCatalog
                         allowFreeTextWhenEmpty
                       />
-                      <p className="text-[10px] mt-1.5" style={{ color: 'var(--color-muted)' }}>
+                      <p className="text-xs mt-1.5" style={{ color: 'var(--color-muted)' }}>
                         {availableModels.length > 0
                           ? 'This model will be used by default for agent tasks'
                           : 'Enter the model slug for this provider (e.g. MiniMax-M2.7)'}
@@ -1755,6 +1565,9 @@ function ModelKeyStep({
           <span>{finishError}</span>
         </div>
       )}
+
+      {/* Trademark disclaimer — required when BrandIcon logos are shown */}
+      <BrandDisclaimer />
 
       {/* Navigation */}
       <div className="flex items-center gap-3 pt-2">

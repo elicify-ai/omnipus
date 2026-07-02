@@ -651,7 +651,7 @@ func (c *QQChannel) handleC2CMessage() event.C2CMessageEventHandler {
 		if channels.DispatchCancelIfRecognized(
 			c.ctx,
 			content,
-			"qq",
+			c.Name(),
 			senderID,
 			senderID,
 			c.GetCancelInterceptor(),
@@ -740,7 +740,7 @@ func (c *QQChannel) handleGroupATMessage() event.GroupATMessageEventHandler {
 		if channels.DispatchCancelIfRecognized(
 			c.ctx,
 			content,
-			"qq",
+			c.Name(),
 			data.GroupID,
 			senderID,
 			c.GetCancelInterceptor(),

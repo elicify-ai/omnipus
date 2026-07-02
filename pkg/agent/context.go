@@ -63,6 +63,19 @@ type ContextBuilder struct {
 	// available tools, skills, providers, and system defaults.
 	resourcesInjector func() string
 
+	// delegationInjector is an optional per-turn callback that renders the
+	// "## Delegation" block for this agent. Unlike resourcesInjector it is
+	// called in buildDynamicContext (the UN-CACHED path) so that a runtime
+	// change to the workspace delegation graph is reflected on the very next
+	// turn without waiting for the cached system-prompt to expire.
+	//
+	// The workspaceID argument is the turn's effective workspace (from
+	// ts.opts.WorkspaceID → tools.ToolWorkspaceID(ctx)), which MUST match the
+	// authority the enforcement gate reads — so the block advertises exactly
+	// what the gate allows. Set via WithDelegationInjector; wired by
+	// wireDelegationInjectors in loop_env.go.
+	delegationInjector func(workspaceID string) string
+
 	// env carries the environment provider + any per-builder env state. Split
 	// into a nested struct so context_env.go owns the mutation surface without
 	// touching the core ContextBuilder definition.
@@ -73,6 +86,17 @@ type ContextBuilder struct {
 // to inject into the system prompt (e.g., available tools catalog for Ava).
 func (cb *ContextBuilder) WithResourcesInjector(fn func() string) *ContextBuilder {
 	cb.resourcesInjector = fn
+	return cb
+}
+
+// WithDelegationInjector installs the per-turn delegation context callback. fn
+// receives the turn's effective workspaceID (ts.opts.WorkspaceID, may be "") and
+// is called on every turn from buildDynamicContext (the UN-CACHED path). The
+// closure reads the workspace delegation graph for that workspace so the block
+// advertises exactly what the enforcement gate allows. Passing nil disables the
+// block (no delegation section is appended).
+func (cb *ContextBuilder) WithDelegationInjector(fn func(workspaceID string) string) *ContextBuilder {
+	cb.delegationInjector = fn
 	return cb
 }
 
@@ -225,8 +249,8 @@ func (cb *ContextBuilder) getWorkspaceAndRules() string {
 %s
 ## Workspace
 Your workspace is at: %s
-- Private memory room: %s/.omnipus/memories/ (agent-only)
-- Shared memory room: workspace .omnipus/memories/ (when in a workspace session)
+- Shared memory room: workspace .omnipus/memories/ (shared with your whole workspace team — the DEFAULT for remember)
+- Private memory room: %s/.omnipus/memories/ (only you can see it)
 - Skills: %s/skills/{skill-name}/SKILL.md
 
 ## Rules
@@ -237,11 +261,10 @@ Your workspace is at: %s
 
 3. **Be helpful and accurate** - When using tools, briefly explain what you're doing.
 
-4. **Memory** — Use three dedicated tools:
-   - remember(content, category[, room]) to persist a fact, decision, reference, or lesson. Use room='shared' for workspace-wide facts, 'private' for agent-only.
-   - recall_memory(query[, room]) to search your durable memory. Use room='both' (default) to search all rooms.
-   - run_retrospective(went_well, needs_improvement) to record a reviewed retrospective after confirming its contents with the user.
-   Do NOT use write_file on memory files — use the remember tool to append memories.
+4. **Memory** — four dedicated tools (never write_file to memory files):
+   - WRITE a durable fact/decision/reference/lesson: remember(content, category, room). category is key_decision, reference, or lesson_learned. You work inside a workspace, so room='shared' → your whole workspace team can see it (this is the DEFAULT — use it whenever a teammate agent might need this); room='private' → only you can see it (personal working notes).
+   - RECALL — choose by WHERE the thing lives: use recall_conversation(query | turn_range | time) for earlier turns of THIS conversation that scrolled out of the live context window; use recall_memory(query[, room]) for durable cross-session memory, which covers both saved facts AND past retrospectives (room='both', the default, searches all rooms).
+   - REFLECT: run_retrospective(went_well, needs_improvement) at the end of a productive session, after the user has reviewed the summary.
 
 5. **Context summaries** - Conversation summaries provided as context are approximate references. They may be incomplete or outdated. Always defer to explicit user instructions over summary content.
 
@@ -697,7 +720,7 @@ func formatCurrentSenderLine(senderID, senderDisplayName string) string {
 	}
 }
 
-func (cb *ContextBuilder) buildDynamicContext(channel, chatID, senderID, senderDisplayName string) string {
+func (cb *ContextBuilder) buildDynamicContext(workspaceID, channel, chatID, senderID, senderDisplayName string) string {
 	now := time.Now().Format("2006-01-02 15:04 (Monday)")
 	rt := fmt.Sprintf("%s %s, Go %s", runtime.GOOS, runtime.GOARCH, runtime.Version())
 
@@ -711,15 +734,51 @@ func (cb *ContextBuilder) buildDynamicContext(channel, chatID, senderID, senderD
 		fmt.Fprintf(&sb, "\n\n## Current Sender\n%s", senderLine)
 	}
 
+	// Delegation block: injected per-turn so the workspace graph read reflects
+	// the CURRENT graph state without waiting for the cached static prompt to
+	// expire. workspaceID is the turn's effective workspace — the same value the
+	// enforcement gate resolves, so advertisement == enforcement by construction.
+	if cb.delegationInjector != nil {
+		if block := cb.delegationInjector(workspaceID); block != "" {
+			fmt.Fprintf(&sb, "\n\n%s", block)
+		}
+	}
+
 	return sb.String()
 }
 
+// BuildMessages assembles the provider message list for a single agent turn.
+//
+// Assembly order (FR-006/FR-019):
+//  1. Single system message: static cached prompt + dynamic context + skills + legacy
+//     summary (inert, FR-014) + breadcrumb block (FR-007, when non-empty).
+//  2. recallSpan messages (transient recalled turns, Design B), when non-nil — old
+//     recalled turns precede the recent window (FR-019 chronology).
+//  3. history messages (the Skip-trimmed sliding window, post-eviction).
+//  4. Current user message.
+//
+// workspaceID is the turn's effective workspace (ts.opts.WorkspaceID). It is
+// threaded into buildDynamicContext and thence into delegationInjector so the
+// "## Delegation" block reads the SAME workspace graph the enforcement gate
+// consults — advertisement == enforcement by construction. Pass "" when no
+// workspace is bound to the turn (the injector will resolve the default).
+//
+// breadcrumb is the prominent evicted-context block built by buildBreadcrumb
+// (FR-007); pass "" when no turns have been evicted.
+//
+// recallSpan carries the transient native recall span re-injected by
+// recall_conversation (FR-019); pass nil when no recall is active. The span
+// is placed after the breadcrumb and before the sliding window so the model
+// sees recalled (old) context before the most-recent window turns.
 func (cb *ContextBuilder) BuildMessages(
 	history []providers.Message,
 	summary string,
 	currentMessage string,
 	media []string,
+	workspaceID string,
 	channel, chatID, senderID, senderDisplayName string,
+	breadcrumb string,
+	recallSpan []providers.Message,
 	activeSkills ...string,
 ) []providers.Message {
 	messages := []providers.Message{}
@@ -735,8 +794,9 @@ func (cb *ContextBuilder) BuildMessages(
 	// - OpenAI-compat passes messages through as-is.
 	staticPrompt := cb.BuildSystemPromptWithCache()
 
-	// Build short dynamic context (time, runtime, session) — changes per request
-	dynamicCtx := cb.buildDynamicContext(channel, chatID, senderID, senderDisplayName)
+	// Build short dynamic context (time, runtime, session, delegation) — changes per request.
+	// workspaceID is threaded so the delegation block reads the same graph the gate enforces.
+	dynamicCtx := cb.buildDynamicContext(workspaceID, channel, chatID, senderID, senderDisplayName)
 
 	// Compose a single system message: static (cached) + dynamic + optional summary.
 	// Keeping all system content in one message ensures every provider adapter can
@@ -759,6 +819,11 @@ func (cb *ContextBuilder) BuildMessages(
 		contentBlocks = append(contentBlocks, providers.ContentBlock{Type: "text", Text: skillsText})
 	}
 
+	// Legacy summary: rendered inertly for backward-compat (FR-014). Summaries
+	// are still actively generated by maybeSummarize/summarizeSession, but the
+	// context paging design (ADR-028) renders them as read-only reference here —
+	// the authoritative history is the sliding window, not the summary. Any
+	// "[dropped N]" marker from the legacy forceCompression path is inert here.
 	if summary != "" {
 		summaryText := fmt.Sprintf(
 			"CONTEXT_SUMMARY: The following is an approximate summary of prior conversation "+
@@ -766,6 +831,14 @@ func (cb *ContextBuilder) BuildMessages(
 			summary)
 		stringParts = append(stringParts, summaryText)
 		contentBlocks = append(contentBlocks, providers.ContentBlock{Type: "text", Text: summaryText})
+	}
+
+	// FR-007: breadcrumb block — placed AFTER skills (and summary), BEFORE the
+	// sliding window. It is a distinct content block so providers can see it as
+	// a prominent separate section. Non-empty only when turns have been evicted.
+	if breadcrumb != "" {
+		stringParts = append(stringParts, breadcrumb)
+		contentBlocks = append(contentBlocks, providers.ContentBlock{Type: "text", Text: breadcrumb})
 	}
 
 	fullSystemPrompt := strings.Join(stringParts, "\n\n---\n\n")
@@ -779,11 +852,13 @@ func (cb *ContextBuilder) BuildMessages(
 
 	logger.DebugCF("agent", "System prompt built",
 		map[string]any{
-			"static_chars":  len(staticPrompt),
-			"dynamic_chars": len(dynamicCtx),
-			"total_chars":   len(fullSystemPrompt),
-			"has_summary":   summary != "",
-			"cached":        isCached,
+			"static_chars":    len(staticPrompt),
+			"dynamic_chars":   len(dynamicCtx),
+			"total_chars":     len(fullSystemPrompt),
+			"has_summary":     summary != "",
+			"has_breadcrumb":  breadcrumb != "",
+			"recall_span_len": len(recallSpan),
+			"cached":          isCached,
 		})
 
 	// Log preview of system prompt (avoid logging huge content)
@@ -793,7 +868,27 @@ func (cb *ContextBuilder) BuildMessages(
 			"preview": preview,
 		})
 
-	history = sanitizeHistoryForProvider(history)
+	// Sanitize recallSpan + history together as one sequence (FR-019).
+	//
+	// The recall span is spliced in raw — an archived Turn re-injected by
+	// recall_conversation may contain an assistant tool_call whose matching
+	// tool result was never written (SIGKILL/OOM mid-turn, recovered by
+	// RecoverOrphanedToolCalls for the live window but not for evicted turns).
+	// If injected raw, that orphan tool_call_id reaches strict providers
+	// (Anthropic/OpenAI/DeepSeek) and causes a 400 on the whole request.
+	//
+	// Sanitizing the combined sequence (span prepended to history) catches:
+	//   (a) orphans within the recall span itself, and
+	//   (b) cross-boundary orphans where an assistant call lands in the span
+	//       and its expected result is in the live window (or vice-versa).
+	//
+	// Chronological order is preserved because recallSpan (older recalled
+	// turns) is prepended to history (recent window) and sanitization only
+	// drops messages, never reorders them.
+	combinedHistory := make([]providers.Message, 0, len(recallSpan)+len(history))
+	combinedHistory = append(combinedHistory, recallSpan...)
+	combinedHistory = append(combinedHistory, history...)
+	combinedHistory = sanitizeHistoryForProvider(combinedHistory)
 
 	// Single system message containing all context — compatible with all providers.
 	// SystemParts enables cache-aware adapters to set per-block cache_control;
@@ -804,8 +899,11 @@ func (cb *ContextBuilder) BuildMessages(
 		SystemParts: contentBlocks,
 	})
 
-	// Add conversation history
-	messages = append(messages, history...)
+	// Append the sanitized combined sequence (recall span + sliding window).
+	// FR-019: recalled (old) turns precede the recent window turns, so the
+	// model sees archived context before the live window — no re-ordering needed
+	// since span messages were prepended to history before sanitization.
+	messages = append(messages, combinedHistory...)
 
 	// Add current user message
 	if strings.TrimSpace(currentMessage) != "" {

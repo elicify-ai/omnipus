@@ -365,110 +365,16 @@ describe('ChannelConfigPanel — Routing section', () => {
     })
   })
 
-  it('selecting an agent ID calls setChannelRouting with { default_agent_id: "<id>" }', async () => {
-    // Behavioral test: rendering ChannelConfigPanel with an agent list and firing
-    // SmartSelect onValueChange("mia") must call setChannelRouting with the correct
-    // payload.  This catches hardcoded or no-op mutations.
-    // Traces to: sprint/258-jun-2026 — ChannelConfigPanel, Routing section, set agent.
-    vi.mocked(setChannelRouting).mockResolvedValue({ default_agent_id: 'mia' })
-
-    const client = makeQueryClient()
-    client.setQueryData(['channel-routing', 'telegram'], { default_agent_id: undefined })
-    client.setQueryData(['agents'], [
-      { id: 'mia', name: 'Mia' },
-      { id: 'jim', name: 'Jim' },
-    ])
-    client.setQueryData(['channel-config', 'telegram'], {})
-
-    render(
-      <QueryClientProvider client={client}>
-        <ChannelConfigPanel
-          channelId="telegram"
-          channelName="Telegram"
-          open={true}
-          onOpenChange={vi.fn()}
-        />
-      </QueryClientProvider>,
-    )
-
-    // Wait for the SmartSelect to be rendered with the "(Global default)" placeholder.
-    await waitFor(() => {
-      expect(screen.getByText(/^Routing$/i)).toBeInTheDocument()
-    })
-
-    // SmartSelect with 3 items (<= SEARCHABLE_THRESHOLD=5) renders a native <select>.
-    // Find the select inside the routing section.
-    const routingSection = screen.getByText(/^Routing$/i).closest('div')!
-    const select = routingSection.querySelector('select') as HTMLSelectElement | null
-    if (select) {
-      // Native select: fire change event with agent id value.
-      fireEvent.change(select, { target: { value: 'mia' } })
-    } else {
-      // Searchable combobox fallback: click the trigger then the option.
-      const trigger = routingSection.querySelector('[role="combobox"]') as HTMLElement | null
-      if (trigger) {
-        fireEvent.click(trigger)
-        const option = screen.getByRole('option', { name: /mia/i })
-        fireEvent.click(option)
-      }
-    }
-
-    // setChannelRouting must be called with the agent id (not null, not hardcoded).
-    await waitFor(() => {
-      expect(setChannelRouting).toHaveBeenCalledWith('telegram', { default_agent_id: 'mia' })
-    })
-  })
-
-  it('selecting "(Global default)" calls setChannelRouting with { default_agent_id: undefined }', async () => {
-    // Behavioral test: selecting the sentinel "__none__" value must call
-    // setChannelRouting with default_agent_id omitted, not "__none__".  Two different inputs → two
-    // different outputs — catches hardcoded or identity-pass-through implementations.
-    // Traces to: sprint/258-jun-2026 — ChannelConfigPanel, Routing section, clear agent.
-    vi.mocked(setChannelRouting).mockResolvedValue({ default_agent_id: undefined })
-
-    const client = makeQueryClient()
-    // Pre-seed with "mia" so the initial value is not already empty.
-    client.setQueryData(['channel-routing', 'telegram'], { default_agent_id: 'mia' })
-    client.setQueryData(['agents'], [
-      { id: 'mia', name: 'Mia' },
-      { id: 'jim', name: 'Jim' },
-    ])
-    client.setQueryData(['channel-config', 'telegram'], {})
-
-    render(
-      <QueryClientProvider client={client}>
-        <ChannelConfigPanel
-          channelId="telegram"
-          channelName="Telegram"
-          open={true}
-          onOpenChange={vi.fn()}
-        />
-      </QueryClientProvider>,
-    )
-
-    await waitFor(() => {
-      expect(screen.getByText(/^Routing$/i)).toBeInTheDocument()
-    })
-
-    const routingSection = screen.getByText(/^Routing$/i).closest('div')!
-    const select = routingSection.querySelector('select') as HTMLSelectElement | null
-    if (select) {
-      // Select the sentinel value which represents "Global default" → omitted.
-      fireEvent.change(select, { target: { value: '__none__' } })
-    } else {
-      const trigger = routingSection.querySelector('[role="combobox"]') as HTMLElement | null
-      if (trigger) {
-        fireEvent.click(trigger)
-        const option = screen.getByRole('option', { name: /(global default)/i })
-        fireEvent.click(option)
-      }
-    }
-
-    // setChannelRouting must be called with default_agent_id omitted (sentinel "__none__" → undefined mapping).
-    await waitFor(() => {
-      expect(setChannelRouting).toHaveBeenCalledWith('telegram', { default_agent_id: undefined })
-    })
-  })
+  // NOTE (ADR-029): the former "selecting an agent ID …" and "selecting (Global
+  // default) …" behavioral tests were REMOVED here. They asserted the pre-ADR-029
+  // routing UX — a flat agent picker with a "(Global default)" sentinel that PUTs
+  // `{ default_agent_id }` with no workspace. That UX is replaced by the
+  // workspace-bound flow (select workspace → workspace-filtered agents → mandatory
+  // agent → PUT `{ workspace_id, default_agent_id }`; "no workspace" = unbind).
+  // The new-flow routing assertions (workspace select, member filtering, mandatory
+  // + hint, no global-default option, unbind) now live authoritatively in
+  // src/components/skills/ChannelConfigPanel.test.tsx, which mocks fetchWorkspaces/
+  // fetchWorkspace + core_team and asserts the setChannelRouting payload.
 })
 
 // ── Section 3: ChannelsScreen degraded state ──────────────────────────────────

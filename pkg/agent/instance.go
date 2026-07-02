@@ -199,7 +199,8 @@ func NewAgentInstance(
 	}
 
 	// Memory tools (FR-016, FR-017): register remember, recall_memory, and
-	// retrospective for all agents except the main gateway agent.
+	// run_retrospective for all agents except the main gateway agent.
+	// recall_conversation is registered separately (loop.go) as it is session-scoped.
 	// Subagents DO receive these tools — they are not in the ExcludedSpawn/
 	// ExcludedSubagent/ExcludedHandoff lists so CloneExcept leaves them intact.
 	// Note: there is no "omnipus-system" runtime agent (CLAUDE.md). The check
@@ -228,7 +229,7 @@ func NewAgentInstance(
 		// (e.g., GPT-4o 128k ctx / 16k out, Claude 200k ctx / 8k out).
 		// 4x is a conservative lower bound that avoids premature
 		// summarization while remaining safe — the reactive
-		// forceCompression handles any overshoot.
+		// windowTrim (context paging) handles any overshoot.
 		contextWindow = maxTokens * 4
 	}
 

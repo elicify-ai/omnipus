@@ -36,6 +36,12 @@ type AgentRegistryReader interface {
 // HandoffEvent carries all context fields for a handoff or return-to-default event.
 // Using a struct avoids brittle positional arguments and makes call sites self-documenting.
 type HandoffEvent struct {
+	// Channel is the turn's channel (e.g. "webchat", "whatsapp", "telegram").
+	// Load-bearing for routing: channel inbound messages carry no SessionID, so
+	// their handoff override is keyed by chat scope ("chat:<channel>:<chatID>"),
+	// not "session:<id>". Without Channel a channel handoff is silently dropped
+	// and routing falls back to ResolveRoute (the "agent stays" bug).
+	Channel   string
 	ChatID    string
 	SessionID string
 	AgentID   string
@@ -219,6 +225,7 @@ func (t *HandoffTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 				"session_id", sessionID)
 		}
 		t.onHandoff(HandoffEvent{
+			Channel:   ToolChannel(ctx),
 			ChatID:    chatID,
 			SessionID: sessionID,
 			AgentID:   agentID,
@@ -396,6 +403,7 @@ func (t *ReturnToDefaultTool) Execute(ctx context.Context, args map[string]any) 
 				"session_id", sessionID)
 		}
 		t.onHandoff(HandoffEvent{
+			Channel:   ToolChannel(ctx),
 			ChatID:    chatID,
 			SessionID: sessionID,
 			AgentID:   defaultAgentID,

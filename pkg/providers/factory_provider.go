@@ -8,6 +8,7 @@ package providers
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -491,6 +492,21 @@ var knownProtocols = map[string]bool{
 // credential store or config.json.
 func IsKnownProtocol(protocol string) bool {
 	return knownProtocols[protocol]
+}
+
+// AllKnownProtocols returns the sorted slice of all protocol ids in
+// knownProtocols. This is the reflective accessor used by the catalog
+// drift-guard test (TestCatalog_DriftGuard_NewProtocolUntriagedFails) so that
+// adding a new id to knownProtocols without triaging it into the catalog OR
+// catalogExcluded causes CI to fail immediately — no hand-copied allKnown list
+// to forget to update.
+func AllKnownProtocols() []string {
+	out := make([]string, 0, len(knownProtocols))
+	for id := range knownProtocols {
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // GetDefaultAPIBase returns the default API base URL for a given protocol.

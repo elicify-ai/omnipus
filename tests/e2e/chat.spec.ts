@@ -127,7 +127,8 @@ test('(c) agent switch via picker: switch to a different agent, header area upda
   page,
 }) => {
   // The agent picker is the DropdownMenuTrigger in the header banner.
-  // Ground truth: button with em-dash in text ("Mia — Omnipus Guide"), confirmed via Playwright MCP.
+  // Ground truth: button carries data-testid="agent-picker-trigger" (ChatControls.tsx).
+  // Shows only the agent name (e.g. "Mia") — no em-dash tagline.
   const picker = agentPicker(page);
   await expect(picker).toBeVisible({ timeout: 15_000 });
 

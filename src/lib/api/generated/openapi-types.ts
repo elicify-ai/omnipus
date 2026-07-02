@@ -1017,7 +1017,11 @@ export interface paths {
          */
         get: operations["listChannels"];
         put?: never;
-        post?: never;
+        /**
+         * Create a new channel instance
+         * @description Creates a new channel instance with key "<type>.<slug>" (ADR-029 FR-017). The instance starts disabled (enabled: false). Returns 409 if the instance key already exists, 400 if the type is unknown or the slug is malformed.
+         */
+        post: operations["createChannelInstance"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1038,7 +1042,11 @@ export interface paths {
         get: operations["getChannelConfig"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Delete a channel instance
+         * @description Deletes a channel instance: removes its config entry, credential refs, any stale channel-wildcard binding, and its per-instance state directory (e.g. WhatsApp store). Returns 404 for unknown instances and 400 for malformed ids. Bare-type keys (e.g. "telegram") can be deleted; "webchat" is a built-in and cannot be deleted.
+         */
+        delete: operations["deleteChannelInstance"];
         options?: never;
         head?: never;
         patch?: never;
@@ -3908,10 +3916,9 @@ export interface components {
         };
         /**
          * ChannelId
-         * @description Stable identifier for a built-in channel.
-         * @enum {string}
+         * @description Identifies a channel instance. Either a bare base channel type (e.g. "whatsapp", "telegram") for legacy single-instance configurations, or a namespaced instance id of the form <type>.<slug> (e.g. "whatsapp.eu", "telegram.main-bot") for multi-instance deployments (ADR-029). The pre-dot segment is the base channel type; the slug is [a-z0-9-]{1,32}.
          */
-        ChannelId: "webchat" | "telegram" | "discord" | "slack" | "whatsapp" | "feishu" | "dingtalk" | "wecom" | "weixin" | "line" | "qq" | "irc" | "matrix" | "google-chat" | "email";
+        ChannelId: string;
         /**
          * ChannelIdentity
          * @description Identifies whether an inbound channel connection acts on behalf of a specific agent ("agent" kind) or routes as the default user ("user" kind). Persisted per channel instance; wired into ResolveRoute at routing time (Spec-2 FR-2.9).
@@ -4872,6 +4879,65 @@ export interface components {
              * @example New session
              */
             summary?: string;
+        };
+        /** @description A single entry in the provider catalog — the curated, build-time-embedded registry of ~30 user-facing LLM provider variants. Each entry represents one billable endpoint (company × plan × region), not a raw protocol id. Delivered as a build-time go:embed artifact + a generated TypeScript catalog; never served from a live HTTP endpoint (FR-016, ADR-031 §6 G-2). The type is contract-defined (Constraint #8) so the same generated struct is used in the Go catalog SoT and the generated TS consumer. No secret fields. */
+        ProviderCatalogEntry: {
+            /**
+             * @description Canonical protocol identifier — matches a knownProtocols entry and a member of the ProbeProviderRequest id enum. Used as the primary key for probe, configure, and drift-guard lookups.
+             * @example z-ai-coding
+             */
+            id: string;
+            /**
+             * @description Human-readable company/brand name. Used as the group header in the configured-providers list. Multiple catalog entries share the same company when one vendor exposes multiple endpoints (plan × region).
+             * @example Zhipu / GLM
+             */
+            company: string;
+            /**
+             * @description Billing plan for this variant. "standard-api" = pay-as-you-go per-token API (formerly "api" in the onboarding PLAN_LABELS). "coding-plan" = subscription-based coding plan (unchanged label). The legacy "anthropic" plan value is NOT in this enum — it was a mislabeled wire protocol; the wire field carries that information instead (ADR-031 FR-006).
+             * @example standard-api
+             * @enum {string}
+             */
+            plan: "standard-api" | "coding-plan";
+            /**
+             * @description Deployment region, when the provider has a regional split. Omitted for providers with a single global endpoint (e.g. OpenAI, DeepSeek).
+             * @example intl
+             * @enum {string}
+             */
+            region?: "intl" | "china" | "us";
+            /**
+             * @description Wire protocol used to call this endpoint. Derived, not authored: "anthropic" when id matches /-anthropic$/ or id ∈ {anthropic, anthropic-messages, bedrock}; otherwise "openai-compatible" (ADR-031 FR-005). Shown as a badge in the UI — not a plan option.
+             * @example openai-compatible
+             * @enum {string}
+             */
+            wire: "openai-compatible" | "anthropic";
+            /**
+             * @description Curated display host for this endpoint (e.g. "api.z.ai/api/coding/paas/v4"). Hand-authored, NOT derived from GetDefaultAPIBase (which returns full URLs the display doesn't need). For deployment-configured providers, this is a placeholder template (e.g. "<resource>.openai.azure.com"). Shown in the subtitle and the variant config Sheet (ADR-031 R2-01/R2-03).
+             * @example api.z.ai/api/coding/paas/v4
+             */
+            endpointHint: string;
+            /**
+             * @description Asset key for the <BrandIcon> component. Maps to a vendored SVG in src/assets/brand-logos/p_<logoSlug>.svg. When no SVG exists for the slug, BrandIcon falls back to a lettermark chip (FR-011, FR-013). Companies with no vendored SVG use a short id (e.g. "cerebras", "nvidia") which triggers the lettermark path.
+             * @example zhipu
+             */
+            logoSlug: string;
+            /**
+             * @description Full human-readable label for this variant in the form "<Brand> — <Access Type> [(Region)]". Carried on the wire so onboarding and Settings render identical text from one catalog source (ADR-031 FR-007, G-3=C safety guarantee). Example: "Zhipu / GLM — Coding Plan (International)".
+             * @example Zhipu / GLM — Coding Plan (International)
+             */
+            label: string;
+            /**
+             * @description Short billing-model description and endpoint hint. Shown below the label in the picker and Sheet. Format: "<billing model> · <endpointHint>". Example: "Subscription (Coding Plan) · api.z.ai/api/coding/paas/v4".
+             * @example Subscription (Coding Plan) · api.z.ai/api/coding/paas/v4
+             */
+            subtitle: string;
+            /**
+             * @description Additional protocol ids that map to this catalog entry. Derived from the GetDefaultAPIBase switch: ids grouped in the same case share a base URL and are aliases. The aliases list excludes the canonical id itself. Used by the migration resolver to normalize stored alias ids to the canonical catalog entry (ADR-031 §7 G-4, FR-012, US-8).
+             * @example [
+             *       "glm-coding",
+             *       "zhipu-coding"
+             *     ]
+             */
+            aliases?: string[];
         };
         /** @description Metadata for a single successfully uploaded file, as returned in the POST /upload response body's "files" array. Callers use the path field to construct the /api/v1/uploads/{session_id}/{filename} download URL. */
         UploadedFile: {
@@ -5958,6 +6024,48 @@ export interface components {
              * @example 550e8400-e29b-41d4-a716-446655440000
              */
             default_agent_id?: string;
+            /**
+             * @description Workspace this channel instance is bound to. Required (non-empty) for a bound instance; empty/omitted = unbound (legacy default routing).
+             * @example my-workspace
+             */
+            workspace_id?: string;
+        };
+        /**
+         * ChannelCreateRequest
+         * @description Request body for POST /channels — creates a new channel instance. The instance key is derived as "<type>.<slug>" (ADR-029 FR-017).
+         */
+        ChannelCreateRequest: {
+            /**
+             * @description Base channel type (e.g. "whatsapp", "telegram"). Must be a known channel type as listed in the ChannelId registry.
+             * @example whatsapp
+             */
+            type: string;
+            /**
+             * @description Per-instance disambiguator matching [a-z0-9-]{1,32} (all lowercase, 1–32 chars). Combined with type to form the instance key "<type>.<slug>".
+             * @example eu
+             */
+            slug: string;
+        };
+        /**
+         * ChannelCreateResponse
+         * @description Response body for POST /channels — the newly created channel instance.
+         */
+        ChannelCreateResponse: {
+            /**
+             * @description The fully-qualified instance key: "<type>.<slug>" (ADR-029 FR-017).
+             * @example whatsapp.eu
+             */
+            id: string;
+            /**
+             * @description Base channel type.
+             * @example whatsapp
+             */
+            type: string;
+            /**
+             * @description Whether the instance is currently enabled. Newly created instances start disabled (enabled: false) until configured and toggled.
+             * @example false
+             */
+            enabled: boolean;
         };
         /**
          * Mailbox
@@ -9723,6 +9831,57 @@ export interface operations {
             };
         };
     };
+    createChannelInstance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChannelCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Instance created. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelCreateResponse"];
+                };
+            };
+            /** @description Unknown channel type or malformed slug. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Instance key already exists. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Config write failure. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     getChannelConfig: {
         parameters: {
             query?: never;
@@ -9751,6 +9910,57 @@ export interface operations {
             };
             /** @description Channel ID not found. */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    deleteChannelInstance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Channel instance ID to delete.
+                 * @example whatsapp.eu
+                 */
+                id: components["schemas"]["ChannelId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Instance deleted successfully. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Malformed channel id. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Instance not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Config write failure. */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12743,6 +12953,7 @@ export type TranscribeResponse = components["schemas"]["TranscribeResponse"];
 export type Skill = components["schemas"]["Skill"];
 export type SlashCommand = components["schemas"]["SlashCommand"];
 export type ActivityEvent = components["schemas"]["ActivityEvent"];
+export type ProviderCatalogEntry = components["schemas"]["ProviderCatalogEntry"];
 export type UploadedFile = components["schemas"]["UploadedFile"];
 export type SandboxConfigUpdate = components["schemas"]["SandboxConfigUpdate"];
 export type Task = components["schemas"]["Task"];
@@ -12777,6 +12988,8 @@ export type RunnerTestResponse = components["schemas"]["RunnerTestResponse"];
 export type ChannelEnabledResponse = components["schemas"]["ChannelEnabledResponse"];
 export type ChannelTestResponse = components["schemas"]["ChannelTestResponse"];
 export type ChannelRouting = components["schemas"]["ChannelRouting"];
+export type ChannelCreateRequest = components["schemas"]["ChannelCreateRequest"];
+export type ChannelCreateResponse = components["schemas"]["ChannelCreateResponse"];
 export type Mailbox = components["schemas"]["Mailbox"];
 export type MailboxConfigureRequest = components["schemas"]["MailboxConfigureRequest"];
 export type BackupCreateResponse = components["schemas"]["BackupCreateResponse"];

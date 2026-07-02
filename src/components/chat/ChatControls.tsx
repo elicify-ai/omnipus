@@ -216,6 +216,7 @@ export function ChatControls({ className }: ChatControlsProps) {
           <Button
             variant="ghost"
             size="sm"
+            data-testid="agent-picker-trigger"
             className={cn(
               'flex items-center gap-2 h-8 px-2 text-xs font-medium max-w-[200px] min-w-0',
               'pointer-coarse:min-h-[44px] pointer-coarse:px-3',

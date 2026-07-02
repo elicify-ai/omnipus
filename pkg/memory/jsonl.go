@@ -18,6 +18,22 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/task"
 )
 
+// ArchivedMessage is a single line in context.jsonl.
+//
+// It embeds providers.Message so that JSON serialisation is flat:
+//
+//	{"role":"user","content":"hello","ts":1751234567}
+//
+// The ts field carries the Unix write timestamp stamped by addMsg (FR-017).
+// Legacy lines written before this change unmarshal with TS==0 — callers
+// treat TS==0 as "unknown/earlier" and must NOT error on it.
+// This type is an internal persistence format — it is NOT a gateway/SPA wire
+// type and must not be added to contracts/openapi.yaml.
+type ArchivedMessage struct {
+	providers.Message
+	TS int64 `json:"ts,omitempty"`
+}
+
 const (
 	// maxLineSize is the maximum size of a single JSON line in a .jsonl
 	// file. Tool results (read_file, web search, etc.) can be large, so
@@ -121,17 +137,23 @@ func (s *JSONLStore) writeMeta(key string, meta sessionMeta) error {
 // the first `skip` lines without unmarshaling them. This avoids the
 // cost of json.Unmarshal on logically truncated messages.
 // Malformed trailing lines (e.g. from a crash) are silently skipped.
-func readMessages(path string, skip int) ([]providers.Message, error) {
+//
+// Each line is unmarshalled into ArchivedMessage (FR-017). Legacy lines
+// that pre-date the TS stamp unmarshal with TS==0 — the embedded
+// providers.Message fields still populate correctly because ArchivedMessage
+// embeds providers.Message, so the JSON decoder fills Role/Content/etc.
+// from the same flat keys regardless of whether "ts" is present.
+func readMessages(path string, skip int) ([]ArchivedMessage, error) {
 	f, err := os.Open(path)
 	if os.IsNotExist(err) {
-		return []providers.Message{}, nil
+		return []ArchivedMessage{}, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("memory: open jsonl: %w", err)
 	}
 	defer f.Close()
 
-	var msgs []providers.Message
+	var msgs []ArchivedMessage
 	scanner := bufio.NewScanner(f)
 	// Allow large lines for tool results (read_file, web search, etc.).
 	scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
@@ -146,7 +168,7 @@ func readMessages(path string, skip int) ([]providers.Message, error) {
 		if lineNum <= skip {
 			continue
 		}
-		var msg providers.Message
+		var msg ArchivedMessage
 		if err := json.Unmarshal(line, &msg); err != nil {
 			// Corrupt line — likely a partial write from a crash.
 			// Log so operators know data was skipped, but don't
@@ -166,7 +188,7 @@ func readMessages(path string, skip int) ([]providers.Message, error) {
 	}
 
 	if msgs == nil {
-		msgs = []providers.Message{}
+		msgs = []ArchivedMessage{}
 	}
 	return msgs, nil
 }
@@ -211,13 +233,23 @@ func (s *JSONLStore) AddFullMessage(
 }
 
 // addMsg is the shared implementation for AddMessage and AddFullMessage.
+// Each message is persisted as an ArchivedMessage (FR-017): the providers.Message
+// fields are flattened into the JSON object alongside a "ts" field containing
+// the Unix write timestamp in seconds. This is backward-compatible: readers
+// that encounter a legacy line without "ts" will unmarshal TS==0.
 func (s *JSONLStore) addMsg(sessionKey string, msg providers.Message) error {
 	l := s.sessionLock(sessionKey)
 	l.Lock()
 	defer l.Unlock()
 
+	// Wrap the message with a write timestamp before marshalling (FR-017).
+	archived := ArchivedMessage{
+		Message: msg,
+		TS:      time.Now().Unix(),
+	}
+
 	// Append the message as a single JSON line.
-	line, err := json.Marshal(msg)
+	line, err := json.Marshal(archived)
 	if err != nil {
 		return fmt.Errorf("memory: marshal message: %w", err)
 	}
@@ -277,12 +309,37 @@ func (s *JSONLStore) GetHistory(
 
 	// Pass meta.Skip so readMessages skips those lines without
 	// unmarshaling them — avoids wasted CPU on truncated messages.
-	msgs, err := readMessages(s.jsonlPath(sessionKey), meta.Skip)
+	archived, err := readMessages(s.jsonlPath(sessionKey), meta.Skip)
 	if err != nil {
 		return nil, err
 	}
 
+	// Strip the TS wrapper — GetHistory callers are unchanged and receive
+	// plain providers.Message values (FR-017: TS is internal to the archive).
+	msgs := make([]providers.Message, len(archived))
+	for i, a := range archived {
+		msgs[i] = a.Message
+	}
 	return msgs, nil
+}
+
+// ReadArchive returns the FULL archived log for sessionKey from line 0,
+// ignoring meta.Skip entirely (FR-016). Each ArchivedMessage carries the
+// write timestamp (TS) stamped by addMsg. Legacy lines pre-dating FR-017
+// unmarshal with TS==0; callers must treat TS==0 as "unknown/earlier" and
+// must not error on it.
+//
+// ReadArchive is the only correct path for recall_conversation and the
+// breadcrumb builder — using GetHistory would miss evicted (skipped) turns.
+func (s *JSONLStore) ReadArchive(
+	_ context.Context, sessionKey string,
+) ([]ArchivedMessage, error) {
+	l := s.sessionLock(sessionKey)
+	l.Lock()
+	defer l.Unlock()
+
+	// skip=0 reads every line regardless of meta.Skip (FR-016).
+	return readMessages(s.jsonlPath(sessionKey), 0)
 }
 
 func (s *JSONLStore) GetSummary(
@@ -356,6 +413,103 @@ func (s *JSONLStore) TruncateHistory(
 	return s.writeMeta(sessionKey, meta)
 }
 
+// RollbackAppended truncates the JSONL file to the first targetLines
+// non-empty lines, sets meta.Count = targetLines, and restores
+// meta.Skip = min(targetSkip, targetLines).
+//
+// The Skip restore is the fix for the mid-turn eviction bug (SC-001, SC-010):
+// if windowTrim advanced Skip during a live turn and the turn then aborts,
+// the clamp-forward (Skip = Count when Skip > Count) would shrink the visible
+// window below the pre-turn size. By restoring Skip to its turn-start value
+// (targetSkip = initialArchiveLen - initialHistoryLength), GetHistory returns
+// exactly the messages that were visible when the turn started.
+//
+// Callers compute targetSkip = initialArchiveLen - initialHistoryLength.
+// targetSkip is always clamped: meta.Skip = min(targetSkip, targetLines) so
+// Skip never exceeds the new Count. If targetSkip < 0, it is treated as 0.
+//
+// This is the ONLY correct way to undo turn appends after eviction has
+// occurred — SetHistory would overwrite the archive and reset Skip=0,
+// permanently deleting evicted turns (SC-001).
+//
+// If targetLines >= meta.Count (nothing to remove), the method returns nil
+// immediately without touching the file.
+func (s *JSONLStore) RollbackAppended(
+	_ context.Context, sessionKey string, targetLines, targetSkip int,
+) error {
+	l := s.sessionLock(sessionKey)
+	l.Lock()
+	defer l.Unlock()
+
+	meta, err := s.readMeta(sessionKey)
+	if err != nil {
+		return err
+	}
+
+	// Reconcile meta.Count with actual line count (in case of a prior crash).
+	n, countErr := countLines(s.jsonlPath(sessionKey))
+	if countErr != nil {
+		return countErr
+	}
+	meta.Count = n
+
+	if targetLines < 0 {
+		targetLines = 0
+	}
+	if targetLines >= meta.Count {
+		// Nothing to roll back — the file is already at or below targetLines.
+		// Still restore Skip to targetSkip so mid-turn evictions are undone
+		// even when no new messages were appended during the turn.
+		if targetSkip < 0 {
+			targetSkip = 0
+		}
+		if targetSkip > meta.Count {
+			targetSkip = meta.Count
+		}
+		if meta.Skip != targetSkip {
+			meta.Skip = targetSkip
+			meta.UpdatedAt = time.Now()
+			return s.writeMeta(sessionKey, meta)
+		}
+		return nil
+	}
+
+	// Read the first targetLines lines from the archive. readMessages(path, 0)
+	// returns ALL lines; we keep only the first targetLines.
+	all, err := readMessages(s.jsonlPath(sessionKey), 0)
+	if err != nil {
+		return fmt.Errorf("memory: rollback_appended read: %w", err)
+	}
+	kept := all
+	if targetLines < len(kept) {
+		kept = all[:targetLines]
+	}
+
+	// Clamp targetSkip to [0, len(kept)].
+	if targetSkip < 0 {
+		targetSkip = 0
+	}
+	if targetSkip > len(kept) {
+		targetSkip = len(kept)
+	}
+
+	// Update meta: Count shrinks, Skip restored to turn-start value.
+	meta.Count = len(kept)
+	meta.Skip = targetSkip
+	meta.UpdatedAt = time.Now()
+
+	// Write meta BEFORE rewriting the file. If we crash between the two
+	// writes, meta.Count is the reduced value and the old (larger) file is
+	// still present — GetHistory will read more messages than Count says,
+	// which is "too many" (safe, conservative). The next rollback or
+	// TruncateHistory call corrects it via the countLines reconcile step.
+	if err := s.writeMeta(sessionKey, meta); err != nil {
+		return err
+	}
+
+	return s.rewriteJSONL(sessionKey, kept)
+}
+
 func (s *JSONLStore) SetHistory(
 	_ context.Context,
 	sessionKey string,
@@ -386,9 +540,21 @@ func (s *JSONLStore) SetHistory(
 		return err
 	}
 
-	return s.rewriteJSONL(sessionKey, history)
+	// SetHistory receives plain providers.Message slices; wrap each with TS=0
+	// (no write timestamp — these are externally-supplied replacements, not
+	// new appends from addMsg). Callers of GetHistory see only providers.Message
+	// after the TS is stripped, so round-trip fidelity is preserved.
+	archived := make([]ArchivedMessage, len(history))
+	for i, m := range history {
+		archived[i] = ArchivedMessage{Message: m}
+	}
+	return s.rewriteJSONL(sessionKey, archived)
 }
 
+// context-paging: MUST NOT be called from any Save path — it destroys the
+// recall archive (FR-005). This function is retained for direct unit tests
+// only. The retention sweep is the sole legitimate deleter of context.jsonl.
+//
 // Compact physically rewrites the JSONL file, dropping all logically
 // skipped lines. This reclaims disk space that accumulates after
 // repeated TruncateHistory calls.
@@ -410,7 +576,7 @@ func (s *JSONLStore) Compact(
 		return nil
 	}
 
-	// Read only the active messages, skipping truncated lines
+	// Read only the active messages (post-Skip), skipping truncated lines
 	// without unmarshaling them.
 	active, err := readMessages(s.jsonlPath(sessionKey), meta.Skip)
 	if err != nil {
@@ -434,10 +600,12 @@ func (s *JSONLStore) Compact(
 	return s.rewriteJSONL(sessionKey, active)
 }
 
-// rewriteJSONL atomically replaces the JSONL file with the given messages
+// rewriteJSONL atomically replaces the JSONL file with the given ArchivedMessages
 // using the project's standard WriteFileAtomic (temp + fsync + rename).
+// Each ArchivedMessage serialises as a flat JSON object containing all
+// providers.Message fields plus the "ts" timestamp (omitted when zero).
 func (s *JSONLStore) rewriteJSONL(
-	sessionKey string, msgs []providers.Message,
+	sessionKey string, msgs []ArchivedMessage,
 ) error {
 	var buf bytes.Buffer
 	for i, msg := range msgs {

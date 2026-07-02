@@ -2233,10 +2233,12 @@ func removeFactoryForTest(t *testing.T, name string) {
 // gateway-crash bug (part 1: defense-in-depth). It drives a real Reload that
 // enables WhatsApp while NO factory is registered for "whatsapp_native", so
 // initChannels records a failure and does NOT construct the channel — yet the
-// reload diff still lists "whatsapp_native" in `added`. Before the fix, the
-// added-start loop did `m.channels["whatsapp_native"].Start(ctx)` on a nil
-// channel and panicked, crashing the whole gateway. The nil guard must instead
-// record a degraded failure and return cleanly.
+// reload diff still lists "whatsapp" (the instanceID) in `added`. Before the
+// fix, the added-start loop hit m.channels[n] where n was nil and panicked.
+// The nil guard must instead record a degraded failure and return cleanly.
+//
+// ADR-029 / WS-B update: m.channels and m.channelHashes are now keyed by
+// instanceID ("whatsapp"), not the factory name ("whatsapp_native").
 func TestReload_AddedChannelMissingFromMap_NoPanic(t *testing.T) {
 	// Ensure no factory is registered for the WhatsApp native name for this test, and
 	// restore whatever was there afterward. unregisterFactory removes the entry; the
@@ -2277,33 +2279,41 @@ func TestReload_AddedChannelMissingFromMap_NoPanic(t *testing.T) {
 	}()
 
 	// The missing channel must be recorded as a degraded failure, not started.
+	// After ADR-029 / WS-B, the channel is NOT registered under the factory name
+	// "whatsapp_native" or the instanceID "whatsapp" — both must be absent.
 	if _, ok := m.GetChannel("whatsapp_native"); ok {
 		t.Fatalf("whatsapp_native must not be registered when its factory is missing")
+	}
+	if _, ok := m.GetChannel("whatsapp"); ok {
+		t.Fatalf("whatsapp must not be registered when the factory is missing")
 	}
 	failed := m.FailedChannels()
 	found := false
 	for _, f := range failed {
-		if f.Name == "whatsapp_native" {
+		// Failure is recorded under the instanceID or the factory name — either is OK.
+		if f.Name == "whatsapp_native" || f.Name == "whatsapp" {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Fatalf("expected a recorded channel failure for whatsapp_native, got: %+v", failed)
+		t.Fatalf("expected a recorded channel failure for whatsapp/whatsapp_native, got: %+v", failed)
 	}
 }
 
-// TestReload_EnableWhatsApp_StartsNativeChannel is the regression guard for the
-// root fix (part 2: name consistency). It registers a mock factory under the
+// TestReload_EnableWhatsApp_StartsNativeChannel is the regression guard for
+// name consistency after ADR-029 / WS-B. It registers a mock factory under the
 // REGISTERED name "whatsapp_native" (no real whatsmeow / network), enables the
-// "whatsapp" config key, and asserts the Reload diff resolves the config key to
-// the registered name so the channel is actually constructed, started, and
-// registered under "whatsapp_native" — and that no phantom "whatsapp" entry
-// lingers. Before the fix, `added` held "whatsapp" (config key), which never
-// matched m.channels and so never started.
+// "whatsapp" config key, and asserts the Reload:
+//   - resolves the instanceID so the channel is constructed and started.
+//   - registers the channel under instanceID "whatsapp" (not factory name).
+//   - commits the hash under instanceID "whatsapp" so subsequent reloads stable.
+//
+// Pre-ADR-029 the channel was registered as "whatsapp_native". WS-B changes
+// the invariant: m.channels["whatsapp"] is the correct post-reload entry.
 func TestReload_EnableWhatsApp_StartsNativeChannel(t *testing.T) {
 	started := make(chan struct{}, 1)
-	withFactory(t, "whatsapp_native", func(*config.Config, credentials.SecretBundle, *bus.MessageBus) (Channel, error) {
+	withFactory(t, "whatsapp_native", func(*config.Config, string, credentials.SecretBundle, *bus.MessageBus) (Channel, error) {
 		return &mockChannelStartSignal{started: started}, nil
 	})
 
@@ -2330,32 +2340,32 @@ func TestReload_EnableWhatsApp_StartsNativeChannel(t *testing.T) {
 		t.Fatalf("Reload: %v", err)
 	}
 
-	// The channel must be registered under the REGISTERED name, not the config key.
-	if _, ok := m.GetChannel("whatsapp_native"); !ok {
-		t.Fatalf("expected whatsapp_native to be registered after enabling WhatsApp")
+	// After WS-B: channel is registered under instanceID "whatsapp", not factory name.
+	if _, ok := m.GetChannel("whatsapp"); !ok {
+		t.Fatalf("expected channel to be registered under instanceID \"whatsapp\" after enabling WhatsApp")
 	}
-	if _, ok := m.GetChannel("whatsapp"); ok {
-		t.Fatalf("a phantom \"whatsapp\" channel must not be registered")
+	// The factory name "whatsapp_native" must NOT be a separate entry in m.channels.
+	if _, ok := m.GetChannel("whatsapp_native"); ok {
+		t.Fatalf("channel must NOT be registered under factory name \"whatsapp_native\" (use instanceID)")
 	}
 
 	// Start must have been called on the constructed channel.
 	select {
 	case <-started:
 	case <-time.After(2 * time.Second):
-		t.Fatal("whatsapp_native channel was never Start()ed after Reload")
+		t.Fatal("whatsapp channel was never Start()ed after Reload")
 	}
 
-	// The committed hash must be keyed by the registered name so subsequent reloads
-	// are stable (no spurious add/remove churn).
+	// The committed hash must be keyed by instanceID so subsequent reloads are stable.
 	m.mu.RLock()
-	_, hasNative := m.channelHashes["whatsapp_native"]
-	_, hasPhantom := m.channelHashes["whatsapp"]
+	_, hasInstanceID := m.channelHashes["whatsapp"]
+	_, hasFactoryName := m.channelHashes["whatsapp_native"]
 	m.mu.RUnlock()
-	if !hasNative {
-		t.Fatalf("channelHashes must be keyed by \"whatsapp_native\"; got %v", m.channelHashes)
+	if !hasInstanceID {
+		t.Fatalf("channelHashes must be keyed by instanceID \"whatsapp\"; got %v", m.channelHashes)
 	}
-	if hasPhantom {
-		t.Fatalf("channelHashes must not contain the phantom \"whatsapp\" key")
+	if hasFactoryName {
+		t.Fatalf("channelHashes must NOT contain factory name \"whatsapp_native\" key; got %v", m.channelHashes)
 	}
 }
 

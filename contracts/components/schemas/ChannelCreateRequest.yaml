@@ -1,0 +1,23 @@
+title: ChannelCreateRequest
+description: >
+  Request body for POST /channels — creates a new channel instance.
+  The instance key is derived as "<type>.<slug>" (ADR-029 FR-017).
+type: object
+required:
+  - type
+  - slug
+additionalProperties: false
+properties:
+  type:
+    type: string
+    description: >
+      Base channel type (e.g. "whatsapp", "telegram"). Must be a known
+      channel type as listed in the ChannelId registry.
+    example: "whatsapp"
+  slug:
+    type: string
+    description: >
+      Per-instance disambiguator matching [a-z0-9-]{1,32} (all lowercase,
+      1–32 chars). Combined with type to form the instance key "<type>.<slug>".
+    pattern: '^[a-z0-9-]{1,32}$'
+    example: "eu"

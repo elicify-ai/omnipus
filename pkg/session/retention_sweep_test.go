@@ -172,3 +172,117 @@ func TestRetentionSweep_KeepsDirWithLiveTranscript(t *testing.T) {
 	_, statErr = os.Stat(freshPath)
 	assert.NoError(t, statErr, "fresh .jsonl must not be deleted")
 }
+
+// createContextFile creates a .context/<sessionID>.jsonl file with the given
+// age, mirroring what UnifiedStore writes for the context archive.
+func createContextFile(t *testing.T, store *UnifiedStore, sessionID string, age time.Duration) string {
+	t.Helper()
+	contextDir := filepath.Join(store.baseDir, ".context")
+	require.NoError(t, os.MkdirAll(contextDir, 0o700))
+	filePath := filepath.Join(contextDir, sessionID+".jsonl")
+	require.NoError(t, os.WriteFile(filePath, []byte(`{"role":"user","content":"hello"}`+"\n"), 0o600))
+	mtime := time.Now().Add(-age)
+	require.NoError(t, os.Chtimes(filePath, mtime, mtime))
+	return filePath
+}
+
+// TestRetention_SweepsIdleContext_SparesActive (T20) verifies FR-012 / US-7:
+//
+//	(a) A session whose .context/<id>.jsonl is older than the retention cutoff IS swept.
+//	(b) A session written "now" (fresh mtime) is SPARED even though it has a .context/ archive.
+//
+// The ModTime-based logic that spares active sessions is the same mechanism used
+// for regular transcript .jsonl files — no special .context/ exemption applies.
+func TestRetention_SweepsIdleContext_SparesActive(t *testing.T) {
+	store := newUnifiedStoreForTest(t)
+
+	const retentionDays = 90
+
+	// (a) Idle session: context archive is 100 days old — beyond the 90-day window.
+	// Also create a matching transcript file that is equally aged so the session dir
+	// gets swept too; this exercises the full sweep including context cleanup.
+	idleContextPath := createContextFile(t, store, "sess-idle", 100*24*time.Hour)
+	createSessionFile(t, store, "sess-idle", "2026-01-01.jsonl", 100*24*time.Hour)
+
+	// (b) Active session: context archive has a fresh mtime (written "now").
+	activeContextPath := createContextFile(t, store, "sess-active", 0)
+	// The active session also has a fresh transcript.
+	createSessionFile(t, store, "sess-active", "2026-05-01.jsonl", 0)
+
+	removed, err := store.RetentionSweep(retentionDays)
+	require.NoError(t, err)
+
+	// (a) The idle context archive must be gone.
+	_, statErr := os.Stat(idleContextPath)
+	assert.True(t, os.IsNotExist(statErr),
+		"idle .context/<id>.jsonl (100d old) must be swept at the %d-day retention window", retentionDays)
+
+	// (b) The active context archive must survive.
+	_, statErr = os.Stat(activeContextPath)
+	assert.NoError(t, statErr,
+		"active .context/<id>.jsonl (fresh mtime) must be spared by the sweep")
+
+	// The idle session transcript was also swept; the removed count must be >= 2
+	// (the transcript + context file for the idle session, at minimum).
+	assert.GreaterOrEqual(t, removed, 2,
+		"sweep must count both the idle transcript and idle context archive as removed")
+}
+
+// createContextMetaFile creates a .context/<sessionID>.meta.json file alongside
+// a context .jsonl, mirroring the sidecar written by memory.JSONLStore.
+func createContextMetaFile(t *testing.T, store *UnifiedStore, sessionID string, age time.Duration) string {
+	t.Helper()
+	contextDir := filepath.Join(store.baseDir, ".context")
+	require.NoError(t, os.MkdirAll(contextDir, 0o700))
+	metaPath := filepath.Join(contextDir, sessionID+".meta.json")
+	require.NoError(t, os.WriteFile(metaPath,
+		[]byte(`{"key":"`+sessionID+`","skip":0,"count":3}`+"\n"), 0o600))
+	mtime := time.Now().Add(-age)
+	require.NoError(t, os.Chtimes(metaPath, mtime, mtime))
+	return metaPath
+}
+
+// TestRetention_ContextMetaRemovedWithJsonl (T21) verifies that when an aged
+// .context/<key>.jsonl is swept, its sibling .context/<key>.meta.json (which
+// holds the Skip/Count offset for memory.JSONLStore) is removed at the same
+// time. Without this, a recycled session key would read a stale Skip/Count
+// against a now-empty .jsonl and produce a phantom offset.
+//
+// Also asserts that the .meta.json of a SPARED (active) context .jsonl is
+// left untouched.
+func TestRetention_ContextMetaRemovedWithJsonl(t *testing.T) {
+	store := newUnifiedStoreForTest(t)
+
+	const retentionDays = 90
+
+	// --- aged session: both .jsonl and .meta.json are old ---
+	agedJSONL := createContextFile(t, store, "ctx-aged", 100*24*time.Hour)
+	agedMeta := createContextMetaFile(t, store, "ctx-aged", 100*24*time.Hour)
+
+	// --- active session: .jsonl and .meta.json are fresh ---
+	activeJSONL := createContextFile(t, store, "ctx-active", 0)
+	activeMeta := createContextMetaFile(t, store, "ctx-active", 0)
+
+	removed, err := store.RetentionSweep(retentionDays)
+	require.NoError(t, err)
+	// Only the aged .jsonl counts toward the removed tally (meta removal is
+	// a side-effect, not an independently counted file).
+	assert.Equal(t, 1, removed, "only the aged .context/<key>.jsonl is counted as removed")
+
+	// Aged .jsonl must be gone.
+	_, err = os.Stat(agedJSONL)
+	assert.True(t, os.IsNotExist(err), "aged .context/<key>.jsonl must be swept")
+
+	// Sibling .meta.json for the aged .jsonl must also be gone.
+	_, err = os.Stat(agedMeta)
+	assert.True(t, os.IsNotExist(err),
+		"aged .context/<key>.meta.json must be removed alongside its .jsonl")
+
+	// Active .jsonl must survive.
+	_, err = os.Stat(activeJSONL)
+	assert.NoError(t, err, "active .context/<key>.jsonl must not be swept")
+
+	// Active .meta.json must also survive.
+	_, err = os.Stat(activeMeta)
+	assert.NoError(t, err, "active .context/<key>.meta.json must not be removed")
+}
