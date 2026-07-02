@@ -83,10 +83,16 @@ type MessageLengthProvider interface {
 }
 
 type BaseChannel struct {
-	config              any
-	bus                 *bus.MessageBus
-	running             atomic.Bool
-	name                string
+	config  any
+	bus     *bus.MessageBus
+	running atomic.Bool
+	name    string
+	// instanceID is the channel-instance key (e.g. "telegram.main", "whatsapp.eu",
+	// or bare "telegram" for legacy single-instance). Set by the Manager via
+	// SetInstanceID after construction and stamped onto every inbound message
+	// (FR-020 / FR-021 — sourced from the adapter's configured key, never from
+	// message content, to prevent STRIDE identity spoofing).
+	instanceID          string
 	allowList           []string
 	maxMessageLength    int
 	groupTrigger        config.GroupTriggerConfig
@@ -164,6 +170,32 @@ func (c *BaseChannel) ShouldRespondInGroup(isMentioned bool, content string) (bo
 
 func (c *BaseChannel) Name() string {
 	return c.name
+}
+
+// InstanceID returns the channel-instance key stamped on every inbound message
+// (e.g. "whatsapp.eu" for a namespaced instance, or the bare type for legacy
+// single-instance channels). Set by the Manager via SetInstanceID.
+func (c *BaseChannel) InstanceID() string {
+	return c.instanceID
+}
+
+// SetInstanceID records the trusted instance key for this channel and also
+// updates c.name so that internal bus-key construction (placeholder / typing /
+// reaction entries keyed as "name:chatID") is consistent with the m.channels
+// map key that the dispatch loop passes as the name parameter. Called by
+// Manager.initChannel after construction; the key is always sourced from the
+// config map key, never from message content (FR-021 STRIDE spoofing guard).
+func (c *BaseChannel) SetInstanceID(id string) {
+	c.instanceID = id
+	// Keep c.name aligned with the instance key so that:
+	//   InboundMessage.Channel == m.channels key == preSend "name" == placeholder key.
+	// For legacy single-instance channels this is a no-op (instanceID == type name).
+	// For namespaced instances (e.g. "telegram.main") this changes c.name from
+	// "telegram" to "telegram.main", which is correct — every internal key must
+	// use the same identifier to avoid a preSend / RecordPlaceholder key mismatch.
+	if id != "" {
+		c.name = id
+	}
 }
 
 func (c *BaseChannel) ReasoningChannelID() string {
@@ -261,8 +293,18 @@ func (c *BaseChannel) HandleMessage(
 
 	scope := BuildMediaScope(c.name, chatID, messageID)
 
+	// Resolve the trusted instance key: prefer the explicitly set instanceID
+	// (populated by Manager.initChannel from the config map key); fall back to
+	// c.name for legacy single-instance channels where the two are identical.
+	// NEVER source this from message content (FR-021 / STRIDE spoofing guard).
+	instanceID := c.instanceID
+	if instanceID == "" {
+		instanceID = c.name
+	}
+
 	msg := bus.InboundMessage{
 		Channel:    c.name,
+		InstanceID: instanceID,
 		Sender:     sender,
 		ChatID:     chatID,
 		Content:    content,

@@ -6355,10 +6355,46 @@ func isChannelWildcardRaw(matchMap map[string]any, channelID string) bool {
 }
 
 // getChannelRouting handles GET /api/v1/channels/{id}/routing.
-// Returns the channel-wildcard AgentBinding for the given channel, or null agent ID
-// if none exists.
+// ADR-029 FR-029 / MAJ-004: for a BOUND instance (has WorkspaceID + agent Identity)
+// returns {workspace_id, default_agent_id} read from cfg.Channels[id]; for an
+// UNBOUND instance returns the legacy wildcard binding. The two representations are
+// mutually exclusive per instance. For routing endpoints, a well-formed instance id
+// that is not in cfg.Channels returns 404 "unknown instance" (FR-024/US-11 AC-2).
 func (a *restAPI) getChannelRouting(w http.ResponseWriter, channelID string) {
 	cfg := a.agentLoop.GetConfig()
+
+	// Per-instance existence check for routing endpoints (FR-024).
+	// A namespaced id like "whatsapp.eu" passes the base-type gate above but may
+	// not have an entry in cfg.Channels if it was never configured.
+	_, hasSlug := func() (string, bool) {
+		_, slug := config.ParseInstanceKey(channelID)
+		return slug, slug != ""
+	}()
+	if hasSlug {
+		// Namespaced key: require entry in cfg.Channels.
+		if _, exists := cfg.Channels[channelID]; !exists {
+			jsonErr(w, http.StatusNotFound, "unknown instance")
+			return
+		}
+	}
+
+	// Check for bound representation first (FR-029).
+	if inst, ok := cfg.Channels[channelID]; ok &&
+		inst.WorkspaceID != "" &&
+		inst.Identity != nil &&
+		strings.ToLower(strings.TrimSpace(inst.Identity.Kind)) == "agent" &&
+		strings.TrimSpace(inst.Identity.ID) != "" {
+		wsID := inst.WorkspaceID
+		agentID := inst.Identity.ID
+		resp := gen.ChannelRouting{
+			WorkspaceId:    &wsID,
+			DefaultAgentId: &agentID,
+		}
+		jsonOK(w, resp)
+		return
+	}
+
+	// Unbound: fall back to legacy wildcard binding.
 	idx := channelWildcardIdx(cfg.Bindings, channelID)
 	var resp gen.ChannelRouting
 	if idx >= 0 {
@@ -6369,7 +6405,14 @@ func (a *restAPI) getChannelRouting(w http.ResponseWriter, channelID string) {
 }
 
 // setChannelRouting handles PUT /api/v1/channels/{id}/routing.
-// Upserts (or removes) the channel-wildcard AgentBinding for the given channel.
+// ADR-029 FR-029 / MAJ-004 REWRITE:
+//   - When workspace_id is present (bound flow): writes cfg.Channels[id].WorkspaceID +
+//     cfg.Channels[id].Identity and REMOVES any stale channel-wildcard binding for id.
+//     Rejection set: empty default_agent_id → 422; agent ∉ workspace.CoreTeam → 422;
+//     worker agent → 422 (MIN-002, standardized from 400); unknown/archived workspace → 404.
+//   - When workspace_id is absent (unbound/legacy flow): keeps existing wildcard-binding
+//     upsert behavior unchanged (FR-005/FR-008 for the worker check still apply).
+//   - Emits a routing-change audit event in both flows (FR-030 / STRIDE repudiation).
 func (a *restAPI) setChannelRouting(w http.ResponseWriter, r *http.Request, channelID string) {
 	var req gen.SetChannelRoutingJSONRequestBody
 	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
@@ -6377,15 +6420,175 @@ func (a *restAPI) setChannelRouting(w http.ResponseWriter, r *http.Request, chan
 		return
 	}
 
+	// Per-instance existence check for routing endpoints (FR-024).
 	cfg := a.agentLoop.GetConfig()
+	_, hasSlug := func() (string, bool) {
+		_, slug := config.ParseInstanceKey(channelID)
+		return slug, slug != ""
+	}()
+	if hasSlug {
+		if _, exists := cfg.Channels[channelID]; !exists {
+			jsonErr(w, http.StatusNotFound, "unknown instance")
+			return
+		}
+	}
 
-	// Validate the agent ID when non-empty.
+	// Determine flow: bound (workspace_id present) or legacy (unbound).
+	workspaceID := ""
+	if req.WorkspaceId != nil {
+		workspaceID = strings.TrimSpace(*req.WorkspaceId)
+	}
+
+	if workspaceID != "" {
+		// ── Bound flow ──────────────────────────────────────────────────────────
+		// FR-005: empty default_agent_id → 422.
+		agentID := ""
+		if req.DefaultAgentId != nil {
+			agentID = strings.TrimSpace(*req.DefaultAgentId)
+		}
+		if agentID == "" {
+			jsonErr(w, http.StatusUnprocessableEntity, "default_agent_id is required for a bound instance")
+			return
+		}
+
+		// FR-007: unknown or archived workspace → 404.
+		ws, err := readWorkspaceFile(a.homePath, workspaceID)
+		if err != nil {
+			if errors.Is(err, errWorkspaceNotFound) {
+				jsonErr(w, http.StatusNotFound, "workspace not found")
+				return
+			}
+			slog.Error("rest: setChannelRouting: read workspace", "workspace_id", workspaceID, "error", err)
+			jsonErr(w, http.StatusInternalServerError, "internal server error")
+			return
+		}
+		if ws.Status == string(gen.WorkspaceStatusArchived) {
+			jsonErr(w, http.StatusNotFound, "workspace not found")
+			return
+		}
+
+		// FR-008: worker agent → 422 (MIN-002: was 400, standardized to 422).
+		var foundAgent *config.AgentConfig
+		for i := range cfg.Agents.List {
+			if cfg.Agents.List[i].ID == agentID {
+				ac := cfg.Agents.List[i]
+				foundAgent = &ac
+				break
+			}
+		}
+		if foundAgent == nil {
+			jsonErr(w, http.StatusUnprocessableEntity, fmt.Sprintf("agent %q not found", agentID))
+			return
+		}
+		if foundAgent.IsWorker() {
+			jsonErr(w, http.StatusUnprocessableEntity, "workers are not chat targets and cannot be a channel's default agent")
+			return
+		}
+
+		// FR-006: agent must be in the workspace's CoreTeam.
+		inTeam := false
+		for _, memberID := range ws.CoreTeam {
+			if memberID == agentID {
+				inTeam = true
+				break
+			}
+		}
+		if !inTeam {
+			jsonErr(w, http.StatusUnprocessableEntity,
+				fmt.Sprintf("agent %q is not a member of workspace %q", agentID, workspaceID))
+			return
+		}
+
+		// All validations passed — persist the bound representation.
+		if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
+			// Set cfg.Channels[id].workspace_id and identity.
+			channels, _ := m["channels"].(map[string]any)
+			if channels == nil {
+				channels = map[string]any{}
+				m["channels"] = channels
+			}
+			ch, _ := channels[channelID].(map[string]any)
+			if ch == nil {
+				ch = map[string]any{}
+			}
+			ch["workspace_id"] = workspaceID
+			ch["identity"] = map[string]any{
+				"kind": "agent",
+				"id":   agentID,
+			}
+			// Persist the type field if not already set (normalizeChannelMap backfills, but
+			// be explicit so the on-disk entry is self-describing).
+			if _, ok := ch["type"]; !ok {
+				baseType, _ := config.ParseInstanceKey(channelID)
+				ch["type"] = baseType
+			}
+			channels[channelID] = ch
+			m["channels"] = channels
+
+			// FR-029: remove any stale channel-wildcard binding for this instance.
+			rawBindings, _ := m["bindings"].([]any)
+			filtered := make([]any, 0, len(rawBindings))
+			for _, entry := range rawBindings {
+				bMap, ok := entry.(map[string]any)
+				if !ok {
+					filtered = append(filtered, entry)
+					continue
+				}
+				matchMap, _ := bMap["match"].(map[string]any)
+				if matchMap == nil {
+					filtered = append(filtered, entry)
+					continue
+				}
+				if isChannelWildcardRaw(matchMap, channelID) {
+					continue // drop the stale wildcard
+				}
+				filtered = append(filtered, entry)
+			}
+			if len(filtered) == 0 {
+				delete(m, "bindings")
+			} else {
+				m["bindings"] = filtered
+			}
+			return nil
+		}); err != nil {
+			slog.Error("rest: save config for channel routing (bound)", "channel_id", channelID, "error", err)
+			jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
+			return
+		}
+
+		// FR-030: emit routing-change audit event (STRIDE repudiation).
+		if a.auditor != nil {
+			_ = a.auditor.Log(&audit.Entry{
+				Event:    "channel.routing.changed",
+				Decision: audit.DecisionAllow,
+				Details: map[string]any{
+					"channel_id":   channelID,
+					"workspace_id": workspaceID,
+					"agent_id":     agentID,
+					"flow":         "bound",
+				},
+			})
+		}
+
+		// Return the bound representation.
+		wsIDCopy := workspaceID
+		agentIDCopy := agentID
+		jsonOK(w, gen.ChannelRouting{
+			WorkspaceId:    &wsIDCopy,
+			DefaultAgentId: &agentIDCopy,
+		})
+		return
+	}
+
+	// ── Unbound / legacy flow ────────────────────────────────────────────────
+	// Validate the agent ID when non-empty (FR-005/FR-008 still apply).
 	if req.DefaultAgentId != nil && *req.DefaultAgentId != "" {
 		agentID := *req.DefaultAgentId
 		var found *config.AgentConfig
 		for i := range cfg.Agents.List {
 			if cfg.Agents.List[i].ID == agentID {
-				found = &cfg.Agents.List[i]
+				ac := cfg.Agents.List[i]
+				found = &ac
 				break
 			}
 		}
@@ -6393,11 +6596,9 @@ func (a *restAPI) setChannelRouting(w http.ResponseWriter, r *http.Request, chan
 			jsonErr(w, http.StatusNotFound, fmt.Sprintf("agent %q not found", agentID))
 			return
 		}
-		// A worker is never a chat target (invoked only via delegation), so it
-		// cannot serve as a channel's default agent. Reject before any work,
-		// mirroring updateAgent's rejection of starring a worker as default (M1).
+		// MIN-002: standardize to 422 (was 400).
 		if found.IsWorker() {
-			jsonErr(w, http.StatusBadRequest, "workers are not chat targets and cannot be a channel's default agent")
+			jsonErr(w, http.StatusUnprocessableEntity, "workers are not chat targets and cannot be a channel's default agent")
 			return
 		}
 	}
@@ -6421,7 +6622,6 @@ func (a *restAPI) setChannelRouting(w http.ResponseWriter, r *http.Request, chan
 					continue
 				}
 				if isChannelWildcardRaw(matchMap, channelID) {
-					// This is the wildcard binding to remove — skip it.
 					continue
 				}
 				filtered = append(filtered, entry)
@@ -6467,6 +6667,23 @@ func (a *restAPI) setChannelRouting(w http.ResponseWriter, r *http.Request, chan
 		slog.Error("rest: save config for channel routing", "channel_id", channelID, "error", err)
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
 		return
+	}
+
+	// FR-030: emit routing-change audit event.
+	agentIDForAudit := ""
+	if req.DefaultAgentId != nil {
+		agentIDForAudit = *req.DefaultAgentId
+	}
+	if a.auditor != nil {
+		_ = a.auditor.Log(&audit.Entry{
+			Event:    "channel.routing.changed",
+			Decision: audit.DecisionAllow,
+			Details: map[string]any{
+				"channel_id": channelID,
+				"agent_id":   agentIDForAudit,
+				"flow":       "unbound",
+			},
+		})
 	}
 
 	// Return the resulting routing state.

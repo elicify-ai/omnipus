@@ -1799,19 +1799,31 @@ func ValidateInstanceKey(key string) error {
 // stop seeing that error — the correct behavior for v0.3.
 func ValidateChannels(channels map[string]ChannelInstanceConfig) error {
 	for key, inst := range channels {
-		if err := ValidateInstanceKey(key); err != nil {
-			return fmt.Errorf("channels: invalid key %q: %w", key, err)
+		channelType, slug := ParseInstanceKey(key)
+		// Cross-check FIRST: an entry that DECLARES a type must use a key whose
+		// derived base type matches. A mismatch (e.g. key "telegram-2" with
+		// type:"telegram") is an operator misconfiguration — the entry declares a
+		// known channel but the key is malformed — and is rejected loudly rather
+		// than silently dropped.
+		if inst.Type != "" && inst.Type != channelType {
+			return fmt.Errorf(
+				"channels: %w: entry %q declares type=%q but the key implies type=%q — use %q.<slug>",
+				ErrInvalidInstanceKey, key, inst.Type, channelType, inst.Type,
+			)
 		}
-		// Cross-check: if the entry carries an explicit Type, it must agree with
-		// the effective type derived from the key.
-		if inst.Type != "" {
-			effectiveType, _ := ParseInstanceKey(key)
-			if inst.Type != effectiveType {
-				return fmt.Errorf(
-					"channels: entry %q has type=%q but key implies type=%q — they must match",
-					key, inst.Type, effectiveType,
-				)
-			}
+		// Undeclared unknown base type = legacy/unsupported section (e.g. a stale
+		// "maixcam" entry with no type field). These are gracefully DROPPED by
+		// normalizeChannelMap with a WARN — they must NOT hard-fail config load
+		// (T28: legacy sections are ignored, not fatal).
+		if _, ok := knownChannelTypes[channelType]; !ok {
+			continue
+		}
+		// Known base type: a namespaced key's slug must be well-formed.
+		if slug != "" && !slugPattern(slug) {
+			return fmt.Errorf(
+				"channels: %w: slug %q in key %q must match [a-z0-9-]{1,32} (all lowercase, 1–32 chars)",
+				ErrInvalidInstanceKey, slug, key,
+			)
 		}
 	}
 	return nil
@@ -3355,6 +3367,13 @@ func loadConfigInternal(path string, store CredentialStore) (*Config, error) {
 	// Hand-edited configs may contain multiple defaults; repair them now so the
 	// registry's GetDefaultAgent sees a clean canonical state (F11).
 	RepairMultipleDefaults(cfg)
+
+	// ADR-029 FR-029/OBS-001: enforce the two-representation rule. A channel
+	// instance that carries BOTH a bound representation (WorkspaceID + Identity)
+	// AND a stale channel-wildcard AgentBinding in cfg.Bindings is inconsistent —
+	// the bound representation wins. Drop the stale wildcard binding so the
+	// on-disk state is self-consistent after this load (mirrors RepairMultipleDefaults).
+	RepairStaleChannelWildcardBindings(cfg)
 
 	// Apply schedules guardrail defaults (#264 FR-003/FR-007) so a loaded
 	// config without a schedules block still gets 8 / 300.
