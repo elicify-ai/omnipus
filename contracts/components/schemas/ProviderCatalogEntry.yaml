@@ -1,7 +1,7 @@
 type: object
 description: >
   A single entry in the provider catalog — the curated, build-time-embedded
-  registry of ~30 user-facing LLM provider variants. Each entry represents one
+  registry of 23 user-facing LLM provider variants. Each entry represents one
   billable endpoint (company × plan × region), not a raw protocol id.
   Delivered as a build-time go:embed artifact + a generated TypeScript catalog;
   never served from a live HTTP endpoint (FR-016, ADR-031 §6 G-2).
@@ -65,7 +65,8 @@ properties:
       Wire protocol used to call this endpoint. Derived, not authored:
       "anthropic" when id matches /-anthropic$/ or id ∈ {anthropic,
       anthropic-messages, bedrock}; otherwise "openai-compatible" (ADR-031
-      FR-005). Shown as a badge in the UI — not a plan option.
+      FR-005). Internal config detail — surfaced only via the Endpoint-format
+      toggle for dual-wire entries in Settings; never a UI badge or plan option.
     example: "openai-compatible"
   endpointHint:
     type: string
@@ -91,8 +92,9 @@ properties:
     type: string
     minLength: 1
     description: >
-      Full human-readable label for this variant in the form
-      "<Brand> — <Access Type> [(Region)]". Carried on the wire so onboarding
+      Full human-readable label for this variant. Standard-api entries use
+      "<Brand> [(Region)]" (no access-type suffix); coding-plan entries use
+      "<Brand> — Coding Plan [(Region)]". Carried on the wire so onboarding
       and Settings render identical text from one catalog source (ADR-031 FR-007,
       G-3=C safety guarantee). Example: "Zhipu / GLM — Coding Plan (International)".
     example: "Zhipu / GLM — Coding Plan (International)"

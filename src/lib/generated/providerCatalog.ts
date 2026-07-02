@@ -9,7 +9,7 @@
 
 import type { ProviderCatalogEntry } from '../api/generated/openapi-types'
 
-// PROVIDER_CATALOG is the curated registry of ~30 user-facing LLM provider
+// PROVIDER_CATALOG is the curated registry of 23 user-facing LLM provider
 // variants. Each entry covers one billable endpoint (company × plan × region).
 // Consumed by onboarding ModelKeyStep and Settings ProvidersSection.
 // Do NOT hand-edit — regenerate via go generate.
