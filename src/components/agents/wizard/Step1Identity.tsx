@@ -12,7 +12,7 @@
 //   wizard-cli-chip (locked, only when initialCli is set),
 //   wizard-cli-path, wizard-env-overrides, wizard-cli-args
 
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import {
@@ -23,9 +23,8 @@ import { ModelSelector, type ModelGroup } from '@/components/ui/model-selector'
 import { InheritToggle } from './InheritToggle'
 import { CliPathValidationHint } from '../CliPathValidationHint'
 import { useCliPathValidation } from '@/hooks/useCliPathValidation'
-import { detectEntryFor, resolveCliDetectHint } from '@/lib/cliDetect'
-import { fetchCliDetect } from '@/lib/api'
-import type { CliDetect } from '@/lib/api'
+import { useCliDetect } from '@/hooks/useCliDetect'
+import { detectEntryFor, resolveCliDetectHint, SUPPORTED_CLIS } from '@/lib/cliDetect'
 import type { IconName } from '@/lib/agentIcons'
 import type { StepProps, WizardCli } from './types'
 
@@ -218,22 +217,9 @@ export function ExecutorInputs({ payload, setField, lockedCli }: ExecutorInputsP
   // the host once per mount (no query-client dependency, matching the
   // `AgentListScreen` cli-detect pattern) so the path field can be prefilled
   // per selected CLI. Detection failure is non-fatal — the field just stays
-  // manual (US-1 AC-3's "not found" hint degrades to "unknown").
-  const [cliDetect, setCliDetect] = useState<CliDetect | null>(null)
-  useEffect(() => {
-    let cancelled = false
-    fetchCliDetect()
-      .then((d) => {
-        if (!cancelled) setCliDetect(d)
-      })
-      .catch(() => {
-        // Fail soft — no prefill, no crash (FR-019 spirit: detection is a
-        // convenience, never a blocker).
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [])
+  // manual (US-1 AC-3's "not found" hint degrades to "unknown"). Shared with
+  // `AgentProfile`'s Runtime tab via `useCliDetect` (Simplify F1).
+  const cliDetect = useCliDetect()
 
   // US-1 AC-1/AC-2: prefill the detected absolute path when the field is
   // EMPTY, once per CLI (re)selection. Deliberately does NOT depend on
@@ -305,7 +291,7 @@ export function ExecutorInputs({ payload, setField, lockedCli }: ExecutorInputsP
         <div className="space-y-2">
           <label className="text-sm font-medium">CLI runtime</label>
           <div className="flex gap-2 flex-wrap" data-testid="wizard-cli-chooser">
-            {(['claude-code', 'codex', 'opencode'] as WizardCli[]).map((cli) => {
+            {(SUPPORTED_CLIS as readonly WizardCli[]).map((cli) => {
               const selected = payload.cli === cli
               return (
                 <button

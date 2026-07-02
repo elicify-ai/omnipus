@@ -93,10 +93,22 @@ export function useCliPathValidation(): UseCliPathValidation {
   return { status, validate, reset }
 }
 
+/** True only for the two definitive reasons that block Create/Save
+ *  (FR-008/FR-018) — missing-binary and handshake-failed. Any other reason
+ *  (ok, unauthenticated, unknown-cli, or a future/stale value the SPA
+ *  bundle doesn't recognize) MUST allow save (FR-019 / F-17 stale-bundle
+ *  safety). The single source of truth for this predicate — used both by
+ *  `cliValidationBlocked()` below (gates the edit-form autosave) and by
+ *  `CreateAgentWizard`'s Create-button gate, so the two surfaces can never
+ *  drift on which reasons block. */
+export function isBlockingCliReason(reason: CliValidateResponse['reason'] | undefined): boolean {
+  return reason === 'missing-binary' || reason === 'handshake-failed'
+}
+
 /** True only for a definitive missing-binary/handshake-failed result — the
  *  only two reasons that block Create/Save (FR-008/FR-018). Any other state
  *  (idle, pending, error, ok, unauthenticated, or an unrecognized/stale
  *  `reason` value) MUST allow save (FR-019 / F-17 stale-bundle safety). */
 export function cliValidationBlocked(state: CliValidationState): boolean {
-  return state.kind === 'result' && (state.result.reason === 'missing-binary' || state.result.reason === 'handshake-failed')
+  return state.kind === 'result' && isBlockingCliReason(state.result.reason)
 }

@@ -27,6 +27,7 @@ import { useUiStore } from '@/store/ui'
 import { isApiError, type AgentToolsCfg, type FallbackModel, type RegistryTool } from '@/lib/api'
 import { AVATAR_COLORS_BY_NAME } from '@/lib/constants'
 import { useFocusRestore } from '@/hooks/useFocusRestore'
+import { isBlockingCliReason } from '@/hooks/useCliPathValidation'
 import type { Provider, Skill, CliValidateResponse } from '@/lib/api/generated/openapi-types'
 
 import { Step1Identity } from './wizard/Step1Identity'
@@ -271,14 +272,17 @@ export function CreateAgentWizard({
 
   // external-executor-cli-path-detection spec FR-008/FR-018: block ONLY the
   // final Create action on a definitive missing-binary/handshake-failed
-  // validate-on-blur result. Gated on `reason`, never a raw `ok` boolean —
-  // `unauthenticated` is a non-blocking warning and MUST NOT block. Any
-  // other state (unchecked/pending/errored) is FR-019's "no trap" default:
-  // allowed. Does not affect step-1→2 Next gating (only the Create button).
-  const cliValidationBlocked =
-    isExternal &&
-    (payload.executor_cli_validation_reason === 'missing-binary' ||
-      payload.executor_cli_validation_reason === 'handshake-failed')
+  // validate-on-blur result. Gated on `reason` via the shared
+  // `isBlockingCliReason` predicate (never a raw `ok` boolean) — the same
+  // predicate `AgentProfile`'s edit-form autosave gate uses, so the two
+  // surfaces can't drift on which reasons block. `unauthenticated` is a
+  // non-blocking warning and MUST NOT block. Any other state (unchecked/
+  // pending/errored) is FR-019's "no trap" default: allowed. Does not
+  // affect step-1→2 Next gating (only the Create button). Named
+  // `cliPathBlocked` (not `cliValidationBlocked`) to avoid colliding with
+  // the identically-named export from `useCliPathValidation`.
+  const cliPathBlocked =
+    isExternal && isBlockingCliReason(payload.executor_cli_validation_reason)
 
   // B3: when Next is disabled, name the missing required field(s) so the user
   // isn't left staring at a greyed button with no explanation. Mirrors the
@@ -308,10 +312,10 @@ export function CreateAgentWizard({
       return
     }
     // FR-008/FR-018: the Create button is already disabled while
-    // cliValidationBlocked is true, but this defends the API call if
+    // cliPathBlocked is true, but this defends the API call if
     // anything bypasses the gate (e.g. a stale disabled prop during a fast
     // re-render race).
-    if (cliValidationBlocked) {
+    if (cliPathBlocked) {
       setSubmitError(`CLI path failed validation (${payload.executor_cli_validation_reason}) — fix the path before creating.`)
       setSubmitting(false)
       return
@@ -471,7 +475,7 @@ export function CreateAgentWizard({
               Missing: {missingLabels.join(', ')}
             </p>
           )}
-          {missingLabels.length === 0 && cliValidationBlocked && (
+          {missingLabels.length === 0 && cliPathBlocked && (
             <p
               role="alert"
               data-testid="wizard-cli-validation-blocked"
@@ -515,7 +519,7 @@ export function CreateAgentWizard({
             <Button
               type="button"
               onClick={handleSubmit}
-              disabled={!canAdvance || submitting || cliValidationBlocked}
+              disabled={!canAdvance || submitting || cliPathBlocked}
               data-testid="wizard-create"
               className="h-11"
             >

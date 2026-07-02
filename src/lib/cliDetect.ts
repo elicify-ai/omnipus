@@ -6,11 +6,16 @@
 // lives here rather than being duplicated per component.
 
 import type { CliDetect, CliDetectEntry, CliValidateRequest } from './api'
+import { CliValidateRequest as CliValidateRequestSchema } from './api/generated/schemas'
 
 /** The three supported external-executor CLI identifiers (wire enum). */
 export type SupportedCli = CliValidateRequest['cli']
 
-export const SUPPORTED_CLIS: readonly SupportedCli[] = ['claude-code', 'codex', 'opencode'] as const
+/** Derived from the generated `CliValidateRequest` Zod schema's `cli` enum
+ *  (single source of truth — see Constraint #8) so a future 4th CLI added to
+ *  the wire contract can't silently drift out of sync with this hand-listed
+ *  array ever again. */
+export const SUPPORTED_CLIS: readonly SupportedCli[] = CliValidateRequestSchema.shape.cli.options
 
 /** Maps the executor CLI identifier to its `CliDetect` object key. */
 export const CLI_TO_DETECT_KEY: Record<SupportedCli, keyof CliDetect> = {
