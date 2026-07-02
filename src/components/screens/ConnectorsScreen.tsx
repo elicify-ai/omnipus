@@ -3,7 +3,6 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Gear, Envelope, Plus, Trash, Warning } from '@phosphor-icons/react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet'
 import {
@@ -33,9 +32,12 @@ import {
   createChannelInstance,
   deleteChannelInstance,
   getChannelRouting,
+  setChannelRouting,
   fetchWorkspaces,
+  fetchWorkspace,
   fetchAgents,
   isApiError,
+  isWorker,
   EMAIL_CHANNEL_ID,
 } from '@/lib/api'
 import type { ChannelEntry, ChannelCreateResponse } from '@/lib/api'
@@ -45,10 +47,6 @@ import { EmailMailboxPanel } from '@/components/connectors/EmailMailboxPanel'
 import { SkeletonList, ErrorState } from '@/components/shared/ListStates'
 import { ScreenHeader } from '@/components/layout/ScreenHeader'
 import { logError } from '@/lib/telemetry'
-
-// Slug validation: [a-z0-9-]{1,32} lowercase only, as per FR-017
-const SLUG_PATTERN = /^[a-z0-9-]{1,32}$/
-const SLUG_HINT = '1–32 characters, lowercase letters, numbers, and hyphens only'
 
 const WEBCHAT_ID = 'webchat'
 
@@ -391,7 +389,30 @@ interface CreateChannelSheetProps {
   onOpenChange: (open: boolean) => void
   selection: CreateChannelSelection
   typeDisplayName: Map<string, string>
+  /** All existing instance keys — used to auto-generate a unique key. */
+  existingInstanceIds: Set<string>
   onCreated: (created: ChannelCreateResponse) => void
+}
+
+// The instance key (<type>.<slug>) is a persistence detail the operator never
+// sees or types (operator-mandated: "my mom must understand the app"). It is
+// auto-derived from the chosen workspace's name and de-duplicated against the
+// existing instances of that type.
+function autoInstanceSlug(workspaceName: string, type: string, existing: Set<string>): string {
+  let base = workspaceName
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 24)
+    .replace(/-+$/g, '')
+  if (!base) base = 'main'
+  let slug = base
+  let n = 2
+  while (existing.has(`${type}.${slug}`)) {
+    slug = `${base}-${n}`
+    n += 1
+  }
+  return slug
 }
 
 function CreateChannelSheet({
@@ -399,6 +420,7 @@ function CreateChannelSheet({
   onOpenChange,
   selection,
   typeDisplayName,
+  existingInstanceIds,
   onCreated,
 }: CreateChannelSheetProps) {
   const { addToast } = useUiStore()
@@ -408,35 +430,90 @@ function CreateChannelSheet({
 
   // No `''` sentinel (A7) — "nothing chosen yet" is represented by `undefined`.
   const [selectedType, setSelectedType] = useState<string | undefined>(lockedType)
-  const [slug, setSlug] = useState('')
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | undefined>(undefined)
+  const [selectedAgentId, setSelectedAgentId] = useState<string | undefined>(undefined)
   const [serverError, setServerError] = useState<string | null>(null)
 
-  // Re-sync the locked/pre-filled type whenever the sheet is (re)opened for a
-  // different entry point (a different group's "Add another…", a roster
-  // "Connect", or the global "+ Add channel" which opens in pickable mode).
+  // Re-sync the locked/pre-filled type + reset the picks whenever the sheet is
+  // (re)opened for a different entry point.
   useEffect(() => {
-    if (open) setSelectedType(lockedType)
+    if (open) {
+      setSelectedType(lockedType)
+      setSelectedWorkspaceId(undefined)
+      setSelectedAgentId(undefined)
+      setServerError(null)
+    }
   }, [open, lockedType])
 
-  const slugValid = SLUG_PATTERN.test(slug)
-  // Derived, not stored (A9) — slug validity is a pure function of `slug`,
-  // so a parallel `slugError` useState could only ever drift out of sync.
-  const slugError = slug !== '' && !slugValid ? SLUG_HINT : null
-  const canSubmit = selectedType !== undefined && slugValid
+  // Workspace + agent pickers — same sources ChannelConfigPanel's routing
+  // section uses (active workspaces for picking; agent must be a non-worker
+  // member of the chosen workspace's core team, per ADR-029).
+  const { data: workspaces = [] } = useQuery({
+    queryKey: ['workspaces', { status: 'active' }],
+    queryFn: () => fetchWorkspaces({ status: 'active' }),
+    enabled: open,
+  })
+  const { data: agents = [] } = useQuery({
+    queryKey: ['agents'],
+    queryFn: fetchAgents,
+    enabled: open,
+  })
+  const { data: workspaceDetail } = useQuery({
+    queryKey: ['workspace', selectedWorkspaceId],
+    queryFn: () => fetchWorkspace(selectedWorkspaceId as string),
+    enabled: open && selectedWorkspaceId !== undefined,
+  })
+
+  const coreTeam = workspaceDetail?.core_team
+  const eligibleAgents = (() => {
+    const nonWorkers = agents.filter((a) => !isWorker(a))
+    if (!selectedWorkspaceId) return []
+    if (!coreTeam) return nonWorkers // detail loading or roster absent → don't block on it
+    return nonWorkers.filter((a) => coreTeam.includes(a.id))
+  })()
+
+  const selectedWorkspace = workspaces.find((w) => w.id === selectedWorkspaceId)
+  const canSubmit =
+    selectedType !== undefined && selectedWorkspaceId !== undefined && selectedAgentId !== undefined
 
   const { mutate: doCreate, isPending } = useMutation({
-    mutationFn: () => createChannelInstance({ type: selectedType ?? '', slug }),
+    mutationFn: async () => {
+      const type = selectedType as string
+      const slug = autoInstanceSlug(selectedWorkspace?.name ?? 'main', type, existingInstanceIds)
+      const created = await createChannelInstance({ type, slug })
+      // Persist the ADR-029 binding chosen in this dialog. A failure here must
+      // not orphan the flow — the instance exists; binding can be finished in
+      // Configure — so it is reported, not fatal.
+      try {
+        await setChannelRouting(created.id, {
+          workspace_id: selectedWorkspaceId,
+          default_agent_id: selectedAgentId,
+        })
+      } catch (err) {
+        logError({ event: 'createChannelBindingFailed', instanceId: created.id, message: (err as Error).message })
+        addToast({
+          message: 'Channel added, but assigning the workspace/agent failed — open Configure to finish.',
+          variant: 'error',
+        })
+      }
+      return created
+    },
     onSuccess: (created) => {
       queryClient.invalidateQueries({ queryKey: ['channels'] })
-      addToast({ message: `Channel instance "${created.id}" created`, variant: 'success' })
-      setSlug('')
+      queryClient.invalidateQueries({ queryKey: ['channel-routing', created.id] })
+      addToast({
+        message: `${typeDisplayName.get(created.type) ?? created.type} added — configure it to go live`,
+        variant: 'success',
+      })
       setServerError(null)
       onOpenChange(false)
       onCreated(created)
     },
     onError: (err: Error) => {
       if (isApiError(err) && err.status === 409) {
-        setServerError(`An instance with that id already exists: "${selectedType}.${slug}"`)
+        // The auto-key dedupes against the loaded list; a 409 means a race
+        // with another session. Retrying via a fresh submit regenerates.
+        setServerError('That channel was just added elsewhere — please try again.')
       } else if (isApiError(err)) {
         setServerError(err.userMessage)
       } else {
@@ -448,11 +525,6 @@ function CreateChannelSheet({
     },
   })
 
-  function handleSlugChange(value: string) {
-    setSlug(value)
-    setServerError(null)
-  }
-
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!canSubmit || isPending) return
@@ -461,10 +533,7 @@ function CreateChannelSheet({
   }
 
   function handleOpenChange(nextOpen: boolean) {
-    if (!nextOpen) {
-      setSlug('')
-      setServerError(null)
-    }
+    if (!nextOpen) setServerError(null)
     onOpenChange(nextOpen)
   }
 
@@ -479,20 +548,19 @@ function CreateChannelSheet({
       >
         <SheetHeader className="pb-4 border-b border-[var(--color-border)]">
           <SheetTitle className="font-headline text-base font-semibold text-[var(--color-secondary)]">
-            Connect a channel
+            Add a channel
           </SheetTitle>
           <SheetDescription className="text-xs text-[var(--color-muted)] leading-relaxed">
-            Create a new instance of a channel type. The instance key will be{' '}
-            <span className="font-mono text-xs">&lt;type&gt;.&lt;slug&gt;</span>
-            {' '}(e.g. <span className="font-mono text-xs">whatsapp.eu</span>).
+            Pick the channel, the workspace it serves, and the agent that answers.
+            It goes live once you configure its credentials.
           </SheetDescription>
         </SheetHeader>
 
         <form onSubmit={handleSubmit} className="space-y-4 pt-5">
-          {/* Channel type — locked when opened from a group/roster entry point */}
+          {/* Channel type — locked when opened from a group's "Add another…" */}
           <div className="space-y-1.5">
             <Label htmlFor="channel-type-select" className="text-xs font-medium text-[var(--color-secondary)]">
-              Channel type
+              Channel
             </Label>
             {selection.mode === 'locked' ? (
               <div
@@ -512,7 +580,7 @@ function CreateChannelSheet({
                   data-testid="create-channel-type-select"
                   className="w-full text-sm"
                 >
-                  <SelectValue placeholder="Select a channel type" />
+                  <SelectValue placeholder="Select a channel" />
                 </SelectTrigger>
                 <SelectContent>
                   {selection.knownTypes.map((t) => (
@@ -525,39 +593,59 @@ function CreateChannelSheet({
             )}
           </div>
 
-          {/* Slug */}
+          {/* Workspace (ADR-029: an instance serves exactly one workspace) */}
           <div className="space-y-1.5">
-            <Label htmlFor="channel-slug-input" className="text-xs font-medium text-[var(--color-secondary)]">
-              Slug
+            <Label htmlFor="channel-workspace-select" className="text-xs font-medium text-[var(--color-secondary)]">
+              Workspace
             </Label>
-            <Input
-              id="channel-slug-input"
-              data-testid="create-channel-slug-input"
-              value={slug}
-              onChange={(e) => handleSlugChange(e.target.value)}
-              placeholder="e.g. eu"
-              className="text-sm font-mono"
-              aria-describedby={slugError ? 'slug-error' : 'slug-hint'}
-              autoComplete="off"
-              spellCheck={false}
-            />
-            {slugError ? (
-              <p id="slug-error" className="text-xs text-red-400" data-testid="create-channel-slug-error">
-                {slugError}
-              </p>
-            ) : (
-              <p id="slug-hint" className="text-xs text-[var(--color-muted)]" data-testid="create-channel-slug-hint">
-                {SLUG_HINT}
-              </p>
-            )}
-            {selectedType && slug && !slugError && (
-              <p className="text-xs text-[var(--color-muted)]">
-                Instance key:{' '}
-                <span className="font-mono text-[var(--color-accent)]">
-                  {selectedType}.{slug}
-                </span>
-              </p>
-            )}
+            <Select
+              value={selectedWorkspaceId}
+              onValueChange={(v) => { setSelectedWorkspaceId(v); setSelectedAgentId(undefined); setServerError(null) }}
+            >
+              <SelectTrigger
+                id="channel-workspace-select"
+                data-testid="create-channel-workspace-select"
+                className="w-full text-sm"
+              >
+                <SelectValue placeholder="Select a workspace" />
+              </SelectTrigger>
+              <SelectContent>
+                {workspaces.map((w) => (
+                  <SelectItem key={w.id} value={w.id}>
+                    {w.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* Agent (member of the chosen workspace) */}
+          <div className="space-y-1.5">
+            <Label htmlFor="channel-agent-select" className="text-xs font-medium text-[var(--color-secondary)]">
+              Agent
+            </Label>
+            <Select
+              value={selectedAgentId}
+              onValueChange={(v) => { setSelectedAgentId(v); setServerError(null) }}
+            >
+              <SelectTrigger
+                id="channel-agent-select"
+                data-testid="create-channel-agent-select"
+                className="w-full text-sm"
+              >
+                <SelectValue placeholder={selectedWorkspaceId ? 'Select an agent' : 'Pick a workspace first'} />
+              </SelectTrigger>
+              <SelectContent>
+                {eligibleAgents.map((a) => (
+                  <SelectItem key={a.id} value={a.id}>
+                    {a.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-[var(--color-muted)]">
+              Messages on this channel go to this agent in this workspace.
+            </p>
           </div>
 
           {/* Server error */}
@@ -587,7 +675,7 @@ function CreateChannelSheet({
               disabled={!canSubmit || isPending}
               data-testid="create-channel-submit-btn"
             >
-              {isPending ? 'Creating…' : 'Connect'}
+              {isPending ? 'Adding…' : 'Add channel'}
             </Button>
           </div>
         </form>
@@ -728,6 +816,12 @@ export function ConnectorsScreen() {
   // instance_id on entries backed by a real config.Channels[] map key; the
   // static "available but unconfigured" placeholder rows omit it.
   const configuredInstances = channels.filter(isConfigured)
+  // Every instance key currently in use — the create Sheet dedupes its
+  // auto-generated key against this set.
+  const existingInstanceIds = useMemo(
+    () => new Set(allChannels.map((c) => c.instance_id).filter((v): v is string => v !== undefined)),
+    [allChannels],
+  )
   const unconfiguredChannels = channels.filter(isUnconfigured)
 
   // Derive the set of known base types (both configured and connectable) for
@@ -1046,6 +1140,7 @@ export function ConnectorsScreen() {
           onOpenChange={setCreateChannelOpen}
           selection={createChannelSelection}
           typeDisplayName={typeDisplayName}
+          existingInstanceIds={existingInstanceIds}
           onCreated={handleCreated}
         />
 

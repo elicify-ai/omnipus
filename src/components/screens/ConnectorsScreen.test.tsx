@@ -132,7 +132,9 @@ const mockDeleteChannelInstance = vi.fn()
 const mockEnableChannel = vi.fn()
 const mockDisableChannel = vi.fn()
 const mockGetChannelRouting = vi.fn()
+const mockSetChannelRouting = vi.fn()
 const mockFetchWorkspaces = vi.fn()
+const mockFetchWorkspace = vi.fn()
 const mockFetchAgents = vi.fn()
 
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -145,7 +147,9 @@ vi.mock('@/lib/api', async (importOriginal) => {
     enableChannel: mockEnableChannel,
     disableChannel: mockDisableChannel,
     getChannelRouting: mockGetChannelRouting,
+    setChannelRouting: mockSetChannelRouting,
     fetchWorkspaces: mockFetchWorkspaces,
+    fetchWorkspace: mockFetchWorkspace,
     fetchAgents: mockFetchAgents,
     isApiError: actual.isApiError,
     EMAIL_CHANNEL_ID: 'email',
@@ -222,7 +226,9 @@ beforeEach(() => {
   // fires never hangs or rejects unexpectedly.
   mockGetChannelRouting.mockResolvedValue({})
   mockFetchWorkspaces.mockResolvedValue([])
+  mockFetchWorkspace.mockResolvedValue({ id: 'ws1', name: 'Sales', core_team: ['mia'] })
   mockFetchAgents.mockResolvedValue([])
+  mockSetChannelRouting.mockResolvedValue({})
 })
 
 afterEach(() => {
@@ -240,6 +246,18 @@ async function openCreateSheetGlobal(user: ReturnType<typeof userEvent.setup>) {
 async function selectChannelType(typeName: string) {
   const option = await screen.findByRole('option', { name: typeName })
   fireEvent.click(option)
+}
+
+// Fill the mom-friendly create form: Channel + Workspace + Agent (no slug —
+// the instance key is auto-generated from the workspace name).
+async function fillCreateSheet(opts: { type?: string; workspace?: string; agent?: string } = {}) {
+  if (opts.type) await selectChannelType(opts.type)
+  if (opts.workspace) {
+    fireEvent.click(await screen.findByRole('option', { name: opts.workspace }))
+  }
+  if (opts.agent) {
+    fireEvent.click(await screen.findByRole('option', { name: opts.agent }))
+  }
 }
 
 // ── Grouping + roster ─────────────────────────────────────────────────────────
@@ -556,6 +574,12 @@ describe('ConnectorsScreen — empty-state roster (US-9 AS-3)', () => {
 describe('ConnectorsScreen — create channel via Sheet, never a modal Dialog (US-10 AS-1)', () => {
   beforeEach(() => {
     mockFetchChannels.mockResolvedValue([STUB_TELEGRAM])
+    mockFetchWorkspaces.mockResolvedValue([{ id: 'ws1', name: 'Sales' }])
+    mockFetchWorkspace.mockResolvedValue({ id: 'ws1', name: 'Sales', core_team: ['mia'] })
+    mockFetchAgents.mockResolvedValue([
+      { id: 'mia', name: 'Mia', type: 'core', locked: true },
+      { id: 'worker-1', name: 'Worker', type: 'Subagent' },
+    ])
   })
 
   it('the global "Add channel" button opens a Sheet with an open type picker (no modal Dialog)', async () => {
@@ -610,31 +634,29 @@ describe('ConnectorsScreen — create channel via Sheet, never a modal Dialog (U
     expect(within(sheet).queryByTestId('create-channel-type-locked')).not.toBeInTheDocument()
   })
 
-  it('shows invalid slug hint when slug fails [a-z0-9-]{1,32} pattern', async () => {
+  it('submit stays disabled until channel, workspace AND agent are all chosen — no slug field exists', async () => {
     const user = userEvent.setup()
     const { ConnectorsScreen } = await import('./ConnectorsScreen')
     render(React.createElement(ConnectorsScreen), { wrapper })
 
-    await openCreateSheetGlobal(user)
-    await selectChannelType('Telegram')
-
-    const slugInput = screen.getByTestId('create-channel-slug-input')
-    await user.type(slugInput, 'EU')
-
-    const errorHint = await screen.findByTestId('create-channel-slug-error')
-    expect(errorHint).toBeInTheDocument()
-    expect(errorHint.textContent).toMatch(/lowercase/i)
+    const sheet = await openCreateSheetGlobal(user)
+    // The instance key is auto-generated; the operator never types one.
+    expect(within(sheet).queryByTestId('create-channel-slug-input')).not.toBeInTheDocument()
 
     const submitBtn = screen.getByTestId('create-channel-submit-btn')
     expect(submitBtn).toBeDisabled()
+    await fillCreateSheet({ type: 'Telegram' })
+    expect(submitBtn).toBeDisabled()
+    await fillCreateSheet({ workspace: 'Sales' })
+    expect(submitBtn).toBeDisabled()
+    await fillCreateSheet({ agent: 'Mia' })
+    await waitFor(() => expect(submitBtn).not.toBeDisabled())
     expect(mockCreateChannelInstance).not.toHaveBeenCalled()
   })
 
-  it('fires POST with {type, slug} and then opens ChannelConfigPanel for the new instance', async () => {
-    // US-10 AS-2: completing the Sheet creates the instance via the ADR-029 path
-    // and immediately opens Configure so the operator sets its binding.
+  it('creates with an auto-generated key from the workspace name, persists the binding, and opens Configure', async () => {
     mockCreateChannelInstance.mockResolvedValueOnce({
-      id: 'telegram.eu-1',
+      id: 'telegram.sales',
       type: 'telegram',
       enabled: false,
     })
@@ -644,29 +666,53 @@ describe('ConnectorsScreen — create channel via Sheet, never a modal Dialog (U
     render(React.createElement(ConnectorsScreen), { wrapper })
 
     await openCreateSheetGlobal(user)
-    await selectChannelType('Telegram')
-
-    const slugInput = screen.getByTestId('create-channel-slug-input')
-    await user.type(slugInput, 'eu-1')
-
+    await fillCreateSheet({ type: 'Telegram', workspace: 'Sales', agent: 'Mia' })
     const submitBtn = screen.getByTestId('create-channel-submit-btn')
-    expect(submitBtn).not.toBeDisabled()
+    await waitFor(() => expect(submitBtn).not.toBeDisabled())
     await user.click(submitBtn)
 
+    // Key auto-derived from the workspace name — the operator typed nothing.
     await waitFor(() => {
-      expect(mockCreateChannelInstance).toHaveBeenCalledTimes(1)
+      expect(mockCreateChannelInstance).toHaveBeenCalledWith({ type: 'telegram', slug: 'sales' })
     })
-    expect(mockCreateChannelInstance).toHaveBeenCalledWith({ type: 'telegram', slug: 'eu-1' })
-
-    // The create Sheet closes...
+    // The ADR-029 binding chosen in the dialog is persisted immediately.
+    await waitFor(() => {
+      expect(mockSetChannelRouting).toHaveBeenCalledWith('telegram.sales', {
+        workspace_id: 'ws1',
+        default_agent_id: 'mia',
+      })
+    })
     await waitFor(() => {
       expect(screen.queryByTestId('create-channel-sheet')).not.toBeInTheDocument()
     })
-    // ...and ChannelConfigPanel opens for the new instance.
     await waitFor(() => {
-      expect(screen.getByTestId('channel-config-panel-telegram.eu-1')).toBeInTheDocument()
+      expect(screen.getByTestId('channel-config-panel-telegram.sales')).toBeInTheDocument()
     })
-    expect(channelConfigPanelOpens.at(-1)).toMatchObject({ channelId: 'telegram.eu-1', enabled: false })
+  })
+
+  it('de-duplicates the auto key when the workspace name is already taken for that type', async () => {
+    mockFetchChannels.mockResolvedValue([
+      { ...STUB_TELEGRAM, id: 'telegram.sales', instance_id: 'telegram.sales' },
+    ])
+    mockCreateChannelInstance.mockResolvedValueOnce({
+      id: 'telegram.sales-2',
+      type: 'telegram',
+      enabled: false,
+    })
+
+    const user = userEvent.setup()
+    const { ConnectorsScreen } = await import('./ConnectorsScreen')
+    render(React.createElement(ConnectorsScreen), { wrapper })
+
+    await openCreateSheetGlobal(user)
+    await fillCreateSheet({ type: 'Telegram', workspace: 'Sales', agent: 'Mia' })
+    const submitBtn = screen.getByTestId('create-channel-submit-btn')
+    await waitFor(() => expect(submitBtn).not.toBeDisabled())
+    await user.click(submitBtn)
+
+    await waitFor(() => {
+      expect(mockCreateChannelInstance).toHaveBeenCalledWith({ type: 'telegram', slug: 'sales-2' })
+    })
   })
 
   it('shows 409 conflict error inline when the instance key already exists', async () => {
@@ -679,17 +725,14 @@ describe('ConnectorsScreen — create channel via Sheet, never a modal Dialog (U
     render(React.createElement(ConnectorsScreen), { wrapper })
 
     await openCreateSheetGlobal(user)
-    await selectChannelType('Telegram')
-
-    const slugInput = screen.getByTestId('create-channel-slug-input')
-    await user.type(slugInput, 'eu')
-
+    await fillCreateSheet({ type: 'Telegram', workspace: 'Sales', agent: 'Mia' })
     const submitBtn = screen.getByTestId('create-channel-submit-btn')
+    await waitFor(() => expect(submitBtn).not.toBeDisabled())
     await user.click(submitBtn)
 
     const serverError = await screen.findByTestId('create-channel-server-error')
     expect(serverError).toBeInTheDocument()
-    expect(serverError.textContent).toMatch(/already exists/i)
+    expect(serverError.textContent).toMatch(/just added elsewhere/i)
 
     // Sheet stays open on failure — the create did not silently succeed.
     expect(screen.getByTestId('create-channel-sheet')).toBeInTheDocument()
@@ -705,9 +748,8 @@ describe('ConnectorsScreen — create channel via Sheet, never a modal Dialog (U
     render(React.createElement(ConnectorsScreen), { wrapper })
 
     await openCreateSheetGlobal(user)
-    await selectChannelType('Telegram')
-    const slugInput = screen.getByTestId('create-channel-slug-input')
-    await user.type(slugInput, 'eu')
+    await fillCreateSheet({ type: 'Telegram', workspace: 'Sales', agent: 'Mia' })
+    await waitFor(() => expect(screen.getByTestId('create-channel-submit-btn')).not.toBeDisabled())
     await user.click(screen.getByTestId('create-channel-submit-btn'))
 
     const serverError = await screen.findByTestId('create-channel-server-error')
@@ -722,9 +764,8 @@ describe('ConnectorsScreen — create channel via Sheet, never a modal Dialog (U
     render(React.createElement(ConnectorsScreen), { wrapper })
 
     await openCreateSheetGlobal(user)
-    await selectChannelType('Telegram')
-    const slugInput = screen.getByTestId('create-channel-slug-input')
-    await user.type(slugInput, 'eu')
+    await fillCreateSheet({ type: 'Telegram', workspace: 'Sales', agent: 'Mia' })
+    await waitFor(() => expect(screen.getByTestId('create-channel-submit-btn')).not.toBeDisabled())
     await user.click(screen.getByTestId('create-channel-submit-btn'))
 
     const serverError = await screen.findByTestId('create-channel-server-error')
@@ -742,9 +783,8 @@ describe('ConnectorsScreen — create channel via Sheet, never a modal Dialog (U
     render(React.createElement(ConnectorsScreen), { wrapper })
 
     await openCreateSheetGlobal(user)
-    await selectChannelType('Telegram')
-    const slugInput = screen.getByTestId('create-channel-slug-input')
-    await user.type(slugInput, 'eu')
+    await fillCreateSheet({ type: 'Telegram', workspace: 'Sales', agent: 'Mia' })
+    await waitFor(() => expect(screen.getByTestId('create-channel-submit-btn')).not.toBeDisabled())
     await user.click(screen.getByTestId('create-channel-submit-btn'))
 
     const serverError = await screen.findByTestId('create-channel-server-error')
