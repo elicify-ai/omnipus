@@ -67,24 +67,45 @@ function deriveBaseType(channel: ChannelEntry): string {
 
 // ── Configured-instance typing (A6) ───────────────────────────────────────────
 //
-// A ChannelEntry is "configured" (FR-008) iff the backend set `instance_id` —
-// it only does so for entries backed by a real config.Channels[] map key. The
-// static "available but unconfigured" placeholder rows omit it. Narrowing to
-// a dedicated type lets every configured-only component (row, group, delete
-// dialog) use `channel.instance_id` directly instead of a defensive
-// `channel.instance_id ?? channel.id` fallback that can never actually miss.
+// A ChannelEntry is "configured" (FR-008) iff the backend set `instance_id`
+// (only done for entries backed by a real config.Channels[] map key) AND it is
+// not a DefaultConfig template stub. DefaultConfig seeds a DISABLED, UNBOUND
+// stub for every base type under its bare-type key (telegram, discord, … — 12
+// of 13 types), so `instance_id !== undefined` alone misclassifies a fresh
+// install as "12 configured channels" and the roster never renders (the
+// channels twin of the provider template bug, found in live UAT against real
+// backend data). A bare-key entry that is neither enabled nor workspace-bound
+// is a template — "available", not configured; the moment the operator enables
+// it, binds it, or creates a namespaced <type>.<slug> instance it counts as
+// real. Known trade-off: a token saved on a bare stub left disabled AND
+// unbound keeps the type in the roster — acceptable, since Save & Enable is
+// the configure flow's primary action.
 
 type ConfiguredChannelEntry = ChannelEntry & { instance_id: string }
 
-function isConfigured(channel: ChannelEntry): channel is ConfiguredChannelEntry {
-  return channel.instance_id !== undefined
+function isTemplateStub(channel: ChannelEntry): boolean {
+  // Bare-type key = no "." (ADR-029 instance grammar is <type>.<slug>; only
+  // DefaultConfig and legacy single-instance configs use bare keys). A
+  // namespaced instance is always operator-created, so it is never a template
+  // even while disabled and unbound.
+  return (
+    channel.instance_id !== undefined &&
+    !channel.instance_id.includes('.') &&
+    !channel.enabled &&
+    channel.identity === undefined
+  )
 }
 
-/** The "available but unconfigured" placeholder shape — no instance_id. */
-type UnconfiguredChannelEntry = ChannelEntry & { instance_id?: undefined }
+function isConfigured(channel: ChannelEntry): channel is ConfiguredChannelEntry {
+  return channel.instance_id !== undefined && !isTemplateStub(channel)
+}
+
+/** "Available but unconfigured" — the static placeholder rows (no instance_id)
+ *  plus the DefaultConfig bare-type template stubs (see isTemplateStub). */
+type UnconfiguredChannelEntry = ChannelEntry
 
 function isUnconfigured(channel: ChannelEntry): channel is UnconfiguredChannelEntry {
-  return channel.instance_id === undefined
+  return channel.instance_id === undefined || isTemplateStub(channel)
 }
 
 // ── Channel instance row (US-9 AS-2: binding-first title) ────────────────────

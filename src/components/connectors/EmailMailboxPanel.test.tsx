@@ -112,7 +112,7 @@ function renderConnectorsScreen() {
   client.setQueryData(['channels'], [
     // instance_id set — a real configured instance (FR-008), not the static
     // "available but unconfigured" placeholder row.
-    { id: 'telegram', instance_id: 'telegram', name: 'Telegram', transport: 'webhook', enabled: false },
+    { id: 'telegram', instance_id: 'telegram', name: 'Telegram', transport: 'webhook', enabled: false, identity: { kind: 'agent', id: 'mia' } },
     { id: 'email', name: 'Email', transport: 'email', enabled: false },
   ])
 
@@ -130,7 +130,7 @@ describe('ConnectorsScreen — email mailbox account section', () => {
     vi.clearAllMocks()
     mockUiStore()
     vi.mocked(fetchChannels).mockResolvedValue([
-      { id: 'telegram', instance_id: 'telegram', name: 'Telegram', transport: 'webhook', enabled: false } as never,
+      { id: 'telegram', instance_id: 'telegram', name: 'Telegram', transport: 'webhook', enabled: false, identity: { kind: 'agent', id: 'mia' } } as never,
       { id: 'email', name: 'Email', transport: 'email', enabled: false } as never,
     ])
     vi.mocked(fetchMailboxConfig).mockResolvedValue({})

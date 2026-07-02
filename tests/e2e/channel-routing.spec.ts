@@ -47,6 +47,8 @@ const STUB_CHANNELS = [
     // ConnectorsScreen only renders channel-card rows (with Configure) for
     // configured instances; rows without instance_id go to the roster.
     instance_id: 'telegram',
+    // bound identity: bare-key disabled entries without one are DefaultConfig template stubs (roster, not a row)
+    identity: { kind: 'agent', id: 'mia' },
     name: 'Telegram',
     transport: 'webhook',
     enabled: false,

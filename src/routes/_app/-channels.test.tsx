@@ -118,6 +118,10 @@ function makeChannel(overrides: Partial<ChannelEntry> = {}): ChannelEntry {
     name: 'Telegram',
     transport: 'webhook',
     enabled: false,
+    // A disabled bare-key entry without an identity is a DefaultConfig
+    // template stub (not "configured"); real disabled instances carry their
+    // ADR-029 binding, so the factory defaults to one.
+    identity: { kind: 'agent', id: 'mia' },
     description: 'Telegram Bot integration',
     ...overrides,
   } as ChannelEntry
