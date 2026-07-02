@@ -169,11 +169,11 @@ test(
     await expect(addBtn).toBeVisible({ timeout: 15_000 })
     await addBtn.click()
 
-    const dialog = page.getByTestId('add-instance-dialog')
+    const dialog = page.getByTestId('create-channel-sheet')
     await expect(dialog).toBeVisible({ timeout: 8_000 })
 
     // Select a channel type — use the type selector
-    const typeSelect = dialog.getByTestId('add-instance-type-select')
+    const typeSelect = dialog.getByTestId('create-channel-type-select')
     await expect(typeSelect).toBeVisible({ timeout: 5_000 })
     // Click to open (Radix Select in real browser)
     await typeSelect.click()
@@ -183,16 +183,16 @@ test(
     await telegramOption.click()
 
     // Enter an invalid slug (uppercase — fails [a-z0-9-]{1,32})
-    const slugInput = dialog.getByTestId('add-instance-slug-input')
+    const slugInput = dialog.getByTestId('create-channel-slug-input')
     await slugInput.fill('EU')
 
     // Slug error hint must appear
-    const slugError = dialog.getByTestId('add-instance-slug-error')
+    const slugError = dialog.getByTestId('create-channel-slug-error')
     await expect(slugError).toBeVisible({ timeout: 5_000 })
     await expect(slugError).toContainText(/lowercase/i)
 
     // Submit button must be disabled
-    const submitBtn = dialog.getByTestId('add-instance-submit-btn')
+    const submitBtn = dialog.getByTestId('create-channel-submit-btn')
     await expect(submitBtn).toBeDisabled()
   },
 )
@@ -263,25 +263,25 @@ test(
     await expect(addBtn).toBeVisible({ timeout: 5_000 })
     await addBtn.click()
 
-    const dialog = page.getByTestId('add-instance-dialog')
+    const dialog = page.getByTestId('create-channel-sheet')
     await expect(dialog).toBeVisible({ timeout: 8_000 })
 
     // Select type
-    const typeSelect = dialog.getByTestId('add-instance-type-select')
+    const typeSelect = dialog.getByTestId('create-channel-type-select')
     await typeSelect.click()
     const telegramOption = page.getByRole('option', { name: 'telegram' })
     await expect(telegramOption).toBeVisible({ timeout: 5_000 })
     await telegramOption.click()
 
     // Enter a valid slug
-    const slugInput = dialog.getByTestId('add-instance-slug-input')
+    const slugInput = dialog.getByTestId('create-channel-slug-input')
     await slugInput.fill('eu')
 
     // No slug error must be shown
-    await expect(dialog.getByTestId('add-instance-slug-error')).not.toBeVisible()
+    await expect(dialog.getByTestId('create-channel-slug-error')).not.toBeVisible()
 
     // Submit
-    const submitBtn = dialog.getByTestId('add-instance-submit-btn')
+    const submitBtn = dialog.getByTestId('create-channel-submit-btn')
     await expect(submitBtn).not.toBeDisabled()
     await submitBtn.click()
 
