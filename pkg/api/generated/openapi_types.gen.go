@@ -1689,190 +1689,190 @@ func (e OperationResultValidationOutcome) Valid() bool {
 
 // Defines values for ProbeProviderRequestId.
 const (
-	AlibabaCoding          ProbeProviderRequestId = "alibaba-coding"
-	AlibabaCodingAnthropic ProbeProviderRequestId = "alibaba-coding-anthropic"
-	Anthropic              ProbeProviderRequestId = "anthropic"
-	AnthropicMessages      ProbeProviderRequestId = "anthropic-messages"
-	Antigravity            ProbeProviderRequestId = "antigravity"
-	Avian                  ProbeProviderRequestId = "avian"
-	Azure                  ProbeProviderRequestId = "azure"
-	AzureOpenai            ProbeProviderRequestId = "azure-openai"
-	Bedrock                ProbeProviderRequestId = "bedrock"
-	Cerebras               ProbeProviderRequestId = "cerebras"
-	ClaudeCli              ProbeProviderRequestId = "claude-cli"
-	Claudecli              ProbeProviderRequestId = "claudecli"
-	CodexCli               ProbeProviderRequestId = "codex-cli"
-	Codexcli               ProbeProviderRequestId = "codexcli"
-	CodingPlan             ProbeProviderRequestId = "coding-plan"
-	CodingPlanAnthropic    ProbeProviderRequestId = "coding-plan-anthropic"
-	Copilot                ProbeProviderRequestId = "copilot"
-	DashscopeIntl          ProbeProviderRequestId = "dashscope-intl"
-	DashscopeUs            ProbeProviderRequestId = "dashscope-us"
-	Deepseek               ProbeProviderRequestId = "deepseek"
-	DeepseekAnthropic      ProbeProviderRequestId = "deepseek-anthropic"
-	Gemini                 ProbeProviderRequestId = "gemini"
-	GithubCopilot          ProbeProviderRequestId = "github-copilot"
-	GlmCoding              ProbeProviderRequestId = "glm-coding"
-	Google                 ProbeProviderRequestId = "google"
-	Groq                   ProbeProviderRequestId = "groq"
-	Litellm                ProbeProviderRequestId = "litellm"
-	Longcat                ProbeProviderRequestId = "longcat"
-	Mimo                   ProbeProviderRequestId = "mimo"
-	Minimax                ProbeProviderRequestId = "minimax"
-	MinimaxAnthropic       ProbeProviderRequestId = "minimax-anthropic"
-	MinimaxCn              ProbeProviderRequestId = "minimax-cn"
-	MinimaxCnAnthropic     ProbeProviderRequestId = "minimax-cn-anthropic"
-	Mistral                ProbeProviderRequestId = "mistral"
-	Modelscope             ProbeProviderRequestId = "modelscope"
-	Moonshot               ProbeProviderRequestId = "moonshot"
-	MoonshotAnthropic      ProbeProviderRequestId = "moonshot-anthropic"
-	MoonshotCn             ProbeProviderRequestId = "moonshot-cn"
-	MoonshotCnAnthropic    ProbeProviderRequestId = "moonshot-cn-anthropic"
-	Novita                 ProbeProviderRequestId = "novita"
-	Nvidia                 ProbeProviderRequestId = "nvidia"
-	Ollama                 ProbeProviderRequestId = "ollama"
-	Openai                 ProbeProviderRequestId = "openai"
-	Openrouter             ProbeProviderRequestId = "openrouter"
-	Qwen                   ProbeProviderRequestId = "qwen"
-	QwenCoding             ProbeProviderRequestId = "qwen-coding"
-	QwenInternational      ProbeProviderRequestId = "qwen-international"
-	QwenIntl               ProbeProviderRequestId = "qwen-intl"
-	QwenUs                 ProbeProviderRequestId = "qwen-us"
-	Shengsuanyun           ProbeProviderRequestId = "shengsuanyun"
-	Vivgrid                ProbeProviderRequestId = "vivgrid"
-	Vllm                   ProbeProviderRequestId = "vllm"
-	Volcengine             ProbeProviderRequestId = "volcengine"
-	ZAi                    ProbeProviderRequestId = "z-ai"
-	ZAiAnthropic           ProbeProviderRequestId = "z-ai-anthropic"
-	ZAiCoding              ProbeProviderRequestId = "z-ai-coding"
-	Zai                    ProbeProviderRequestId = "zai"
-	Zhipu                  ProbeProviderRequestId = "zhipu"
-	ZhipuAnthropic         ProbeProviderRequestId = "zhipu-anthropic"
-	ZhipuCoding            ProbeProviderRequestId = "zhipu-coding"
+	ProbeProviderRequestIdAlibabaCoding          ProbeProviderRequestId = "alibaba-coding"
+	ProbeProviderRequestIdAlibabaCodingAnthropic ProbeProviderRequestId = "alibaba-coding-anthropic"
+	ProbeProviderRequestIdAnthropic              ProbeProviderRequestId = "anthropic"
+	ProbeProviderRequestIdAnthropicMessages      ProbeProviderRequestId = "anthropic-messages"
+	ProbeProviderRequestIdAntigravity            ProbeProviderRequestId = "antigravity"
+	ProbeProviderRequestIdAvian                  ProbeProviderRequestId = "avian"
+	ProbeProviderRequestIdAzure                  ProbeProviderRequestId = "azure"
+	ProbeProviderRequestIdAzureOpenai            ProbeProviderRequestId = "azure-openai"
+	ProbeProviderRequestIdBedrock                ProbeProviderRequestId = "bedrock"
+	ProbeProviderRequestIdCerebras               ProbeProviderRequestId = "cerebras"
+	ProbeProviderRequestIdClaudeCli              ProbeProviderRequestId = "claude-cli"
+	ProbeProviderRequestIdClaudecli              ProbeProviderRequestId = "claudecli"
+	ProbeProviderRequestIdCodexCli               ProbeProviderRequestId = "codex-cli"
+	ProbeProviderRequestIdCodexcli               ProbeProviderRequestId = "codexcli"
+	ProbeProviderRequestIdCodingPlan             ProbeProviderRequestId = "coding-plan"
+	ProbeProviderRequestIdCodingPlanAnthropic    ProbeProviderRequestId = "coding-plan-anthropic"
+	ProbeProviderRequestIdCopilot                ProbeProviderRequestId = "copilot"
+	ProbeProviderRequestIdDashscopeIntl          ProbeProviderRequestId = "dashscope-intl"
+	ProbeProviderRequestIdDashscopeUs            ProbeProviderRequestId = "dashscope-us"
+	ProbeProviderRequestIdDeepseek               ProbeProviderRequestId = "deepseek"
+	ProbeProviderRequestIdDeepseekAnthropic      ProbeProviderRequestId = "deepseek-anthropic"
+	ProbeProviderRequestIdGemini                 ProbeProviderRequestId = "gemini"
+	ProbeProviderRequestIdGithubCopilot          ProbeProviderRequestId = "github-copilot"
+	ProbeProviderRequestIdGlmCoding              ProbeProviderRequestId = "glm-coding"
+	ProbeProviderRequestIdGoogle                 ProbeProviderRequestId = "google"
+	ProbeProviderRequestIdGroq                   ProbeProviderRequestId = "groq"
+	ProbeProviderRequestIdLitellm                ProbeProviderRequestId = "litellm"
+	ProbeProviderRequestIdLongcat                ProbeProviderRequestId = "longcat"
+	ProbeProviderRequestIdMimo                   ProbeProviderRequestId = "mimo"
+	ProbeProviderRequestIdMinimax                ProbeProviderRequestId = "minimax"
+	ProbeProviderRequestIdMinimaxAnthropic       ProbeProviderRequestId = "minimax-anthropic"
+	ProbeProviderRequestIdMinimaxCn              ProbeProviderRequestId = "minimax-cn"
+	ProbeProviderRequestIdMinimaxCnAnthropic     ProbeProviderRequestId = "minimax-cn-anthropic"
+	ProbeProviderRequestIdMistral                ProbeProviderRequestId = "mistral"
+	ProbeProviderRequestIdModelscope             ProbeProviderRequestId = "modelscope"
+	ProbeProviderRequestIdMoonshot               ProbeProviderRequestId = "moonshot"
+	ProbeProviderRequestIdMoonshotAnthropic      ProbeProviderRequestId = "moonshot-anthropic"
+	ProbeProviderRequestIdMoonshotCn             ProbeProviderRequestId = "moonshot-cn"
+	ProbeProviderRequestIdMoonshotCnAnthropic    ProbeProviderRequestId = "moonshot-cn-anthropic"
+	ProbeProviderRequestIdNovita                 ProbeProviderRequestId = "novita"
+	ProbeProviderRequestIdNvidia                 ProbeProviderRequestId = "nvidia"
+	ProbeProviderRequestIdOllama                 ProbeProviderRequestId = "ollama"
+	ProbeProviderRequestIdOpenai                 ProbeProviderRequestId = "openai"
+	ProbeProviderRequestIdOpenrouter             ProbeProviderRequestId = "openrouter"
+	ProbeProviderRequestIdQwen                   ProbeProviderRequestId = "qwen"
+	ProbeProviderRequestIdQwenCoding             ProbeProviderRequestId = "qwen-coding"
+	ProbeProviderRequestIdQwenInternational      ProbeProviderRequestId = "qwen-international"
+	ProbeProviderRequestIdQwenIntl               ProbeProviderRequestId = "qwen-intl"
+	ProbeProviderRequestIdQwenUs                 ProbeProviderRequestId = "qwen-us"
+	ProbeProviderRequestIdShengsuanyun           ProbeProviderRequestId = "shengsuanyun"
+	ProbeProviderRequestIdVivgrid                ProbeProviderRequestId = "vivgrid"
+	ProbeProviderRequestIdVllm                   ProbeProviderRequestId = "vllm"
+	ProbeProviderRequestIdVolcengine             ProbeProviderRequestId = "volcengine"
+	ProbeProviderRequestIdZAi                    ProbeProviderRequestId = "z-ai"
+	ProbeProviderRequestIdZAiAnthropic           ProbeProviderRequestId = "z-ai-anthropic"
+	ProbeProviderRequestIdZAiCoding              ProbeProviderRequestId = "z-ai-coding"
+	ProbeProviderRequestIdZai                    ProbeProviderRequestId = "zai"
+	ProbeProviderRequestIdZhipu                  ProbeProviderRequestId = "zhipu"
+	ProbeProviderRequestIdZhipuAnthropic         ProbeProviderRequestId = "zhipu-anthropic"
+	ProbeProviderRequestIdZhipuCoding            ProbeProviderRequestId = "zhipu-coding"
 )
 
 // Valid indicates whether the value is a known member of the ProbeProviderRequestId enum.
 func (e ProbeProviderRequestId) Valid() bool {
 	switch e {
-	case AlibabaCoding:
+	case ProbeProviderRequestIdAlibabaCoding:
 		return true
-	case AlibabaCodingAnthropic:
+	case ProbeProviderRequestIdAlibabaCodingAnthropic:
 		return true
-	case Anthropic:
+	case ProbeProviderRequestIdAnthropic:
 		return true
-	case AnthropicMessages:
+	case ProbeProviderRequestIdAnthropicMessages:
 		return true
-	case Antigravity:
+	case ProbeProviderRequestIdAntigravity:
 		return true
-	case Avian:
+	case ProbeProviderRequestIdAvian:
 		return true
-	case Azure:
+	case ProbeProviderRequestIdAzure:
 		return true
-	case AzureOpenai:
+	case ProbeProviderRequestIdAzureOpenai:
 		return true
-	case Bedrock:
+	case ProbeProviderRequestIdBedrock:
 		return true
-	case Cerebras:
+	case ProbeProviderRequestIdCerebras:
 		return true
-	case ClaudeCli:
+	case ProbeProviderRequestIdClaudeCli:
 		return true
-	case Claudecli:
+	case ProbeProviderRequestIdClaudecli:
 		return true
-	case CodexCli:
+	case ProbeProviderRequestIdCodexCli:
 		return true
-	case Codexcli:
+	case ProbeProviderRequestIdCodexcli:
 		return true
-	case CodingPlan:
+	case ProbeProviderRequestIdCodingPlan:
 		return true
-	case CodingPlanAnthropic:
+	case ProbeProviderRequestIdCodingPlanAnthropic:
 		return true
-	case Copilot:
+	case ProbeProviderRequestIdCopilot:
 		return true
-	case DashscopeIntl:
+	case ProbeProviderRequestIdDashscopeIntl:
 		return true
-	case DashscopeUs:
+	case ProbeProviderRequestIdDashscopeUs:
 		return true
-	case Deepseek:
+	case ProbeProviderRequestIdDeepseek:
 		return true
-	case DeepseekAnthropic:
+	case ProbeProviderRequestIdDeepseekAnthropic:
 		return true
-	case Gemini:
+	case ProbeProviderRequestIdGemini:
 		return true
-	case GithubCopilot:
+	case ProbeProviderRequestIdGithubCopilot:
 		return true
-	case GlmCoding:
+	case ProbeProviderRequestIdGlmCoding:
 		return true
-	case Google:
+	case ProbeProviderRequestIdGoogle:
 		return true
-	case Groq:
+	case ProbeProviderRequestIdGroq:
 		return true
-	case Litellm:
+	case ProbeProviderRequestIdLitellm:
 		return true
-	case Longcat:
+	case ProbeProviderRequestIdLongcat:
 		return true
-	case Mimo:
+	case ProbeProviderRequestIdMimo:
 		return true
-	case Minimax:
+	case ProbeProviderRequestIdMinimax:
 		return true
-	case MinimaxAnthropic:
+	case ProbeProviderRequestIdMinimaxAnthropic:
 		return true
-	case MinimaxCn:
+	case ProbeProviderRequestIdMinimaxCn:
 		return true
-	case MinimaxCnAnthropic:
+	case ProbeProviderRequestIdMinimaxCnAnthropic:
 		return true
-	case Mistral:
+	case ProbeProviderRequestIdMistral:
 		return true
-	case Modelscope:
+	case ProbeProviderRequestIdModelscope:
 		return true
-	case Moonshot:
+	case ProbeProviderRequestIdMoonshot:
 		return true
-	case MoonshotAnthropic:
+	case ProbeProviderRequestIdMoonshotAnthropic:
 		return true
-	case MoonshotCn:
+	case ProbeProviderRequestIdMoonshotCn:
 		return true
-	case MoonshotCnAnthropic:
+	case ProbeProviderRequestIdMoonshotCnAnthropic:
 		return true
-	case Novita:
+	case ProbeProviderRequestIdNovita:
 		return true
-	case Nvidia:
+	case ProbeProviderRequestIdNvidia:
 		return true
-	case Ollama:
+	case ProbeProviderRequestIdOllama:
 		return true
-	case Openai:
+	case ProbeProviderRequestIdOpenai:
 		return true
-	case Openrouter:
+	case ProbeProviderRequestIdOpenrouter:
 		return true
-	case Qwen:
+	case ProbeProviderRequestIdQwen:
 		return true
-	case QwenCoding:
+	case ProbeProviderRequestIdQwenCoding:
 		return true
-	case QwenInternational:
+	case ProbeProviderRequestIdQwenInternational:
 		return true
-	case QwenIntl:
+	case ProbeProviderRequestIdQwenIntl:
 		return true
-	case QwenUs:
+	case ProbeProviderRequestIdQwenUs:
 		return true
-	case Shengsuanyun:
+	case ProbeProviderRequestIdShengsuanyun:
 		return true
-	case Vivgrid:
+	case ProbeProviderRequestIdVivgrid:
 		return true
-	case Vllm:
+	case ProbeProviderRequestIdVllm:
 		return true
-	case Volcengine:
+	case ProbeProviderRequestIdVolcengine:
 		return true
-	case ZAi:
+	case ProbeProviderRequestIdZAi:
 		return true
-	case ZAiAnthropic:
+	case ProbeProviderRequestIdZAiAnthropic:
 		return true
-	case ZAiCoding:
+	case ProbeProviderRequestIdZAiCoding:
 		return true
-	case Zai:
+	case ProbeProviderRequestIdZai:
 		return true
-	case Zhipu:
+	case ProbeProviderRequestIdZhipu:
 		return true
-	case ZhipuAnthropic:
+	case ProbeProviderRequestIdZhipuAnthropic:
 		return true
-	case ZhipuCoding:
+	case ProbeProviderRequestIdZhipuCoding:
 		return true
 	default:
 		return false
@@ -2011,6 +2011,63 @@ func (e ProviderValidationOutcome) Valid() bool {
 	case ProviderValidationOutcomeUnreachable:
 		return true
 	case ProviderValidationOutcomeValid:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ProviderCatalogEntryPlan.
+const (
+	ProviderCatalogEntryPlanCodingPlan  ProviderCatalogEntryPlan = "coding-plan"
+	ProviderCatalogEntryPlanStandardApi ProviderCatalogEntryPlan = "standard-api"
+)
+
+// Valid indicates whether the value is a known member of the ProviderCatalogEntryPlan enum.
+func (e ProviderCatalogEntryPlan) Valid() bool {
+	switch e {
+	case ProviderCatalogEntryPlanCodingPlan:
+		return true
+	case ProviderCatalogEntryPlanStandardApi:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ProviderCatalogEntryRegion.
+const (
+	China ProviderCatalogEntryRegion = "china"
+	Intl  ProviderCatalogEntryRegion = "intl"
+	Us    ProviderCatalogEntryRegion = "us"
+)
+
+// Valid indicates whether the value is a known member of the ProviderCatalogEntryRegion enum.
+func (e ProviderCatalogEntryRegion) Valid() bool {
+	switch e {
+	case China:
+		return true
+	case Intl:
+		return true
+	case Us:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ProviderCatalogEntryWire.
+const (
+	Anthropic        ProviderCatalogEntryWire = "anthropic"
+	OpenaiCompatible ProviderCatalogEntryWire = "openai-compatible"
+)
+
+// Valid indicates whether the value is a known member of the ProviderCatalogEntryWire enum.
+func (e ProviderCatalogEntryWire) Valid() bool {
+	switch e {
+	case Anthropic:
+		return true
+	case OpenaiCompatible:
 		return true
 	default:
 		return false
@@ -6267,6 +6324,48 @@ type ProviderStatus string
 
 // ProviderValidationOutcome Classified result of the key probe. "valid" — the key was accepted by the upstream provider. "invalid_key" — the upstream confirmed the key is wrong or revoked; this is the only outcome that blocks a save. "no_credit" — the key is valid but the account has insufficient credit or quota. "unreachable" — the upstream could not be reached (transport error, timeout, 5xx, 404, pre-auth 429); transient. "restricted" — the key works but the request was blocked by a region or permission policy on the provider side.
 type ProviderValidationOutcome string
+
+// ProviderCatalogEntry A single entry in the provider catalog — the curated, build-time-embedded registry of ~30 user-facing LLM provider variants. Each entry represents one billable endpoint (company × plan × region), not a raw protocol id. Delivered as a build-time go:embed artifact + a generated TypeScript catalog; never served from a live HTTP endpoint (FR-016, ADR-031 §6 G-2). The type is contract-defined (Constraint #8) so the same generated struct is used in the Go catalog SoT and the generated TS consumer. No secret fields.
+type ProviderCatalogEntry struct {
+	// Aliases Additional protocol ids that map to this catalog entry. Derived from the GetDefaultAPIBase switch: ids grouped in the same case share a base URL and are aliases. The aliases list excludes the canonical id itself. Used by the migration resolver to normalize stored alias ids to the canonical catalog entry (ADR-031 §7 G-4, FR-012, US-8).
+	Aliases *[]string `json:"aliases,omitempty"`
+
+	// Company Human-readable company/brand name. Used as the group header in the configured-providers list. Multiple catalog entries share the same company when one vendor exposes multiple endpoints (plan × region).
+	Company string `json:"company"`
+
+	// EndpointHint Curated display host for this endpoint (e.g. "api.z.ai/api/coding/paas/v4"). Hand-authored, NOT derived from GetDefaultAPIBase (which returns full URLs the display doesn't need). For deployment-configured providers, this is a placeholder template (e.g. "<resource>.openai.azure.com"). Shown in the subtitle and the variant config Sheet (ADR-031 R2-01/R2-03).
+	EndpointHint string `json:"endpointHint"`
+
+	// Id Canonical protocol identifier — matches a knownProtocols entry and a member of the ProbeProviderRequest id enum. Used as the primary key for probe, configure, and drift-guard lookups.
+	Id string `json:"id"`
+
+	// Label Full human-readable label for this variant in the form "<Brand> — <Access Type> [(Region)]". Carried on the wire so onboarding and Settings render identical text from one catalog source (ADR-031 FR-007, G-3=C safety guarantee). Example: "Zhipu / GLM — Coding Plan (International)".
+	Label string `json:"label"`
+
+	// LogoSlug Asset key for the <BrandIcon> component. Maps to a vendored SVG in src/assets/brand-logos/p_<logoSlug>.svg. When no SVG exists for the slug, BrandIcon falls back to a lettermark chip (FR-011, FR-013). Companies with no vendored SVG use a short id (e.g. "cerebras", "nvidia") which triggers the lettermark path.
+	LogoSlug string `json:"logoSlug"`
+
+	// Plan Billing plan for this variant. "standard-api" = pay-as-you-go per-token API (formerly "api" in the onboarding PLAN_LABELS). "coding-plan" = subscription-based coding plan (unchanged label). The legacy "anthropic" plan value is NOT in this enum — it was a mislabeled wire protocol; the wire field carries that information instead (ADR-031 FR-006).
+	Plan ProviderCatalogEntryPlan `json:"plan"`
+
+	// Region Deployment region, when the provider has a regional split. Omitted for providers with a single global endpoint (e.g. OpenAI, DeepSeek).
+	Region *ProviderCatalogEntryRegion `json:"region,omitempty"`
+
+	// Subtitle Short billing-model description and endpoint hint. Shown below the label in the picker and Sheet. Format: "<billing model> · <endpointHint>". Example: "Subscription (Coding Plan) · api.z.ai/api/coding/paas/v4".
+	Subtitle string `json:"subtitle"`
+
+	// Wire Wire protocol used to call this endpoint. Derived, not authored: "anthropic" when id matches /-anthropic$/ or id ∈ {anthropic, anthropic-messages, bedrock}; otherwise "openai-compatible" (ADR-031 FR-005). Shown as a badge in the UI — not a plan option.
+	Wire ProviderCatalogEntryWire `json:"wire"`
+}
+
+// ProviderCatalogEntryPlan Billing plan for this variant. "standard-api" = pay-as-you-go per-token API (formerly "api" in the onboarding PLAN_LABELS). "coding-plan" = subscription-based coding plan (unchanged label). The legacy "anthropic" plan value is NOT in this enum — it was a mislabeled wire protocol; the wire field carries that information instead (ADR-031 FR-006).
+type ProviderCatalogEntryPlan string
+
+// ProviderCatalogEntryRegion Deployment region, when the provider has a regional split. Omitted for providers with a single global endpoint (e.g. OpenAI, DeepSeek).
+type ProviderCatalogEntryRegion string
+
+// ProviderCatalogEntryWire Wire protocol used to call this endpoint. Derived, not authored: "anthropic" when id matches /-anthropic$/ or id ∈ {anthropic, anthropic-messages, bedrock}; otherwise "openai-compatible" (ADR-031 FR-005). Shown as a badge in the UI — not a plan option.
+type ProviderCatalogEntryWire string
 
 // ProviderUpdateRequest Request body for PUT /api/v1/providers/{id}. Adds or updates an LLM provider configuration. On new providers, api_key is required. On existing providers, api_key may be omitted to keep the current key.
 type ProviderUpdateRequest struct {

@@ -2327,6 +2327,18 @@ export const RateLimitConfig = z
   })
   .partial()
   .passthrough();
+export const ProviderCatalogEntry = z.object({
+  id: z.string().min(1),
+  company: z.string().min(1),
+  plan: z.enum(["standard-api", "coding-plan"]),
+  region: z.enum(["intl", "china", "us"]).optional(),
+  wire: z.enum(["openai-compatible", "anthropic"]),
+  endpointHint: z.string().min(1),
+  logoSlug: z.string().min(1),
+  label: z.string().min(1),
+  subtitle: z.string().min(1),
+  aliases: z.array(z.string()).optional(),
+});
 export const BackupEntry = z.object({
   filename: z.string(),
   size_bytes: z.number().int().gte(0),
