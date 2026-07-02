@@ -165,9 +165,10 @@ type RunOptions struct {
 	// SHOULD resume the run if a prior session with this ID exists (e.g. via
 	// `claude --resume <session-id>`). When empty, a new run is started.
 	RunID string
-	// WorkDir is the working directory for the external agent process.
-	// This SHOULD point to a git worktree or isolated temporary directory
-	// (per FR-5.3 — worktree isolation).
+	// WorkDir is the working directory for the external agent process. Per
+	// ADR-032 this is the delegate agent's own workspace directory (not an
+	// isolated git-worktree/temp-dir copy) — see
+	// docs/internal/architecture/ADR-032-external-agent-workspace-execution.md.
 	WorkDir string
 	// Input is the initial prompt/task text delivered to the external agent.
 	Input string
@@ -195,6 +196,13 @@ type RunOptions struct {
 	// override attempts on OMNIPUS_* keys (the base values are preserved) and
 	// logs one WARN per offending key.
 	EnvOverrides map[string]string
+
+	// Model is the delegate agent's own configured model (ADR-032 fix C). Each
+	// driver's buildArgs auto-sets the CLI's model flag from this value when
+	// non-empty; an empty value (or, for opencode, a value not shaped like
+	// "provider/model") is simply omitted so the CLI falls back to its own
+	// configured default rather than being passed a garbage flag value.
+	Model string
 }
 
 // ConnectionTestResult holds the outcome of an ExternalAgentRunner.Test call.

@@ -24,6 +24,26 @@ interface UseAutoSaveOptions {
    * per-user RBAC token); without it the flush will 401 and silently drop.
    */
   flushAuthToken?: string
+  /**
+   * Optional component-supplied override for the page-hide/unload flush.
+   * When provided, `flushBeacon` calls THIS instead of the built-in
+   * single-URL `fetch(flushUrl, { keepalive: true, ... })`. `flushUrl` /
+   * `flushAuthToken` are ignored when this is supplied.
+   *
+   * Needed when a component's `saveFn` writes to more than one endpoint in a
+   * load-bearing order (e.g. WorkspaceTeamTab's core_team-before-edges
+   * ordering — the delegation PUT validates edge endpoints against the
+   * STORED core_team, so a member added and connected in the same edit
+   * session must land in core_team first or the edges PUT 400s). The
+   * built-in single-`flushUrl` flush only knows how to PUT one endpoint, so
+   * it can't preserve that ordering during an emergency flush — it would
+   * PUT the edges endpoint alone, reintroducing the exact bug the ordering
+   * fix in `saveFn` was meant to close. The caller is responsible for its
+   * own keepalive fetch(es) and any error logging; this hook only decides
+   * WHEN to invoke it (hidden / beforeunload / pagehide, and only when
+   * `hasPendingChanges()` is true).
+   */
+  beaconFlush?: () => void
 }
 
 interface UseAutoSaveResult {
@@ -50,7 +70,7 @@ export function useAutoSave<T>(
   saveFn: (data: T) => Promise<unknown>,
   options?: UseAutoSaveOptions,
 ): UseAutoSaveResult {
-  const { debounceMs = 500, disabled = false, flushUrl, flushAuthToken } = options ?? {}
+  const { debounceMs = 500, disabled = false, flushUrl, flushAuthToken, beaconFlush } = options ?? {}
   const [status, setStatus] = useState<AutoSaveStatus>('idle')
   const [error, setError] = useState<string>()
   const [lastSavedAt, setLastSavedAt] = useState<Date | undefined>(undefined)
@@ -172,13 +192,27 @@ export function useAutoSave<T>(
   // sendBeacon flush would 401 and silently drop the pending edit. This
   // prevents silently losing edits on tab close, browser reload, or
   // background throttling.
+  //
+  // When `beaconFlush` is supplied it takes over entirely (see the option's
+  // doc comment) — the built-in single-URL fetch below is the default path
+  // used by the ~6 other callers that only ever write one endpoint.
   const flushBeacon = useCallback(() => {
-    if (!flushUrl || !initializedRef.current || !hasPendingChanges()) return
+    if ((!flushUrl && !beaconFlush) || !initializedRef.current || !hasPendingChanges()) return
+    if (beaconFlush) {
+      try {
+        beaconFlush()
+      } catch {
+        // Best-effort — a synchronously-throwing caller-supplied flush must
+        // not block the other unload listeners (beforeunload/pagehide) from
+        // running.
+      }
+      return
+    }
     const payload = JSON.stringify(latestDataRef.current)
     const headers: Record<string, string> = { 'Content-Type': 'application/json' }
     if (flushAuthToken) headers['Authorization'] = `Bearer ${flushAuthToken}`
     try {
-      void fetch(flushUrl, {
+      void fetch(flushUrl!, {
         method: 'PUT',
         keepalive: true,
         headers,
@@ -187,10 +221,10 @@ export function useAutoSave<T>(
     } catch {
       // Best-effort — browser may block outbound requests during unload.
     }
-  }, [flushUrl, flushAuthToken, hasPendingChanges])
+  }, [flushUrl, flushAuthToken, hasPendingChanges, beaconFlush])
 
   useEffect(() => {
-    if (!flushUrl || disabled) return
+    if ((!flushUrl && !beaconFlush) || disabled) return
 
     const onVisibilityChange = () => {
       if (document.hidden) flushBeacon()
@@ -207,7 +241,7 @@ export function useAutoSave<T>(
       window.removeEventListener('beforeunload', onBeforeUnload)
       window.removeEventListener('pagehide', onPageHide)
     }
-  }, [flushUrl, flushAuthToken, disabled, flushBeacon])
+  }, [flushUrl, flushAuthToken, disabled, flushBeacon, beaconFlush])
 
   // Cleanup on unmount: cancel timers and flush any pending save so changes
   // made just before navigation/unmount are not silently dropped.
