@@ -4,9 +4,11 @@ import { Info, UsersThree } from '@phosphor-icons/react'
 import {
   fetchAgents,
   fetchWorkspaceDelegation,
+  updateWorkspace,
   updateWorkspaceDelegation,
   workspacesQueryKeys,
   isWorker,
+  type Workspace,
   type WorkspaceDelegation,
 } from '@/lib/api'
 import { useAutoSave } from '@/hooks/useAutoSave'
@@ -36,8 +38,11 @@ import {
 // node to connect; click an edge → modes + depth). [+ Add agent] adds a node
 // (team membership); the node trash removes it (and its edges). Click a node →
 // the existing AgentProfile slide-over edits the GLOBAL agent definition.
-// Membership + edges both persist via updateWorkspaceDelegation (debounced
-// auto-save). Backed by the Sprint-3 per-workspace delegation contract.
+// Every save writes core_team (updateWorkspace) BEFORE edges
+// (updateWorkspaceDelegation) — the delegation PUT validates edge endpoints
+// against the STORED core_team, so a newly-added member must land there first
+// or drawing an edge to it 400s. Backed by the Sprint-3 per-workspace
+// delegation contract.
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface WorkspaceTeamTabProps {
@@ -137,6 +142,36 @@ export function WorkspaceTeamTab(_props: WorkspaceTeamTabProps) {
   const saveFn = useCallback(
     async (body: { edges: ReturnType<typeof buildSaveEdges> }) => {
       if (!hydratedRef.current) return
+
+      // P0 fix: persist team MEMBERSHIP before the edges PUT. The backend's
+      // delegation PUT (handleWorkspaceDelegationPut) validates every edge
+      // endpoint against the STORED core_team ∪ stored edges — computed BEFORE
+      // applying the incoming edge. An agent added to the team in this same
+      // edit session was never written to core_team, so drawing a delegation
+      // edge to it 400s ("not a member of the workspace team") unless
+      // core_team lands first. This ordering is load-bearing: if the core_team
+      // write throws, we must NOT proceed to the edges PUT — the throw
+      // propagates to useAutoSave's catch, which surfaces the error via
+      // AutoSaveIndicator instead of silently dropping the edit.
+      const members = editState?.members ?? []
+      const updatedWorkspace = await updateWorkspace(workspaceId, { core_team: members })
+
+      // Land the fresh core_team on every cache a consumer might read it from.
+      // NOTE: `invalidateQueries({ queryKey: workspacesQueryKeys.list() })` (no
+      // params) does NOT partial-match the `{status:'active'}` / `{status:
+      // 'archived'}` keyed list queries actually in use (TanStack's
+      // partialMatchKey requires the filter's key segments to structurally
+      // match the stored key's; `undefined` vs `{status:'active'}` mismatches)
+      // — so we write the exact keys directly instead of relying on that
+      // pattern (see also WorkspaceHeader.tsx / WorkspaceSettingsTab.tsx, which
+      // use the same no-op invalidate; out of scope to fix here).
+      queryClient.setQueryData<Workspace>(workspacesQueryKeys.detail(workspaceId), updatedWorkspace)
+      for (const status of ['active', 'archived'] as const) {
+        queryClient.setQueryData<Workspace[]>(workspacesQueryKeys.list({ status }), (prev) =>
+          prev?.map((w) => (w.id === workspaceId ? updatedWorkspace : w)),
+        )
+      }
+
       const resp = await updateWorkspaceDelegation(workspaceId, body.edges)
       // Adopt the server's computed team + edges as the new baseline so the next
       // refetch reconciles cleanly (no spurious dirty state).
@@ -144,9 +179,9 @@ export function WorkspaceTeamTab(_props: WorkspaceTeamTabProps) {
         workspacesQueryKeys.delegation(workspaceId),
         resp,
       )
-      baselineRef.current = stateKey(buildTeamEditState(resp, workspace.core_team ?? []))
+      baselineRef.current = stateKey(buildTeamEditState(resp, updatedWorkspace.core_team ?? []))
     },
-    [workspaceId, queryClient, workspace.core_team, stateKey],
+    [workspaceId, queryClient, editState, stateKey],
   )
 
   const {

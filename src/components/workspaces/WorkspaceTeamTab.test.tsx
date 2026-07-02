@@ -10,10 +10,11 @@
  */
 
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { Agent, Workspace, WorkspaceDelegation } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
+import type { WorkspaceTeamGraphProps } from './team/WorkspaceTeamGraph'
 
 // ── React Flow jsdom shims ──────────────────────────────────────────────────
 beforeAll(() => {
@@ -87,6 +88,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchAgents: vi.fn(),
     fetchWorkspaceDelegation: vi.fn(),
     updateWorkspaceDelegation: vi.fn(),
+    updateWorkspace: vi.fn(),
   }
 })
 
@@ -101,23 +103,55 @@ vi.mock('@/components/agents/AgentProfile', () => ({
   AgentProfile: () => <div data-testid="agent-profile-stub" />,
 }))
 
-import { fetchAgents, fetchWorkspaceDelegation } from '@/lib/api'
+// Wrap (not replace) the real WorkspaceTeamGraph so every existing test keeps
+// asserting against the real rendered DOM (node testids, react-flow classes,
+// etc.), while also capturing the live onConnect callback. React Flow drag
+// gestures aren't simulable in jsdom (no real layout/geometry — see the fixed
+// getBoundingClientRect shim above), so the "draw a delegation edge" step of
+// the P0 regression test below invokes the same onConnect handler the graph
+// would call on a real drop, instead of simulating pointer events.
+let capturedGraphProps: WorkspaceTeamGraphProps | null = null
+vi.mock('./team/WorkspaceTeamGraph', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./team/WorkspaceTeamGraph')>()
+  return {
+    ...actual,
+    WorkspaceTeamGraph: (props: WorkspaceTeamGraphProps) => {
+      capturedGraphProps = props
+      return <actual.WorkspaceTeamGraph {...props} />
+    },
+  }
+})
+
+import {
+  fetchAgents,
+  fetchWorkspaceDelegation,
+  updateWorkspace,
+  updateWorkspaceDelegation,
+  workspacesQueryKeys,
+} from '@/lib/api'
 import { WorkspaceTeamTab } from './WorkspaceTeamTab'
 
-function renderTab() {
+function renderTab(seed?: (client: QueryClient) => void) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
-  return render(
+  seed?.(client)
+  const utils = render(
     <QueryClientProvider client={client}>
       <WorkspaceTeamTab workspaceId="ws-1" />
     </QueryClientProvider>,
   )
+  return { ...utils, client }
 }
 
 beforeEach(() => {
+  capturedGraphProps = null
   vi.mocked(fetchAgents).mockResolvedValue(AGENTS)
   vi.mocked(fetchWorkspaceDelegation).mockResolvedValue(DELEGATION)
+  // Safe defaults so any save path that fires resolves instead of hitting an
+  // unconfigured mock (undefined) — individual tests override as needed.
+  vi.mocked(updateWorkspace).mockResolvedValue(WORKSPACE)
+  vi.mocked(updateWorkspaceDelegation).mockResolvedValue(DELEGATION)
 })
 
 describe('WorkspaceTeamTab', () => {
@@ -204,6 +238,105 @@ describe('WorkspaceTeamTab', () => {
     expect(screen.getByTestId('team-unsaved-members')).toHaveTextContent(
       /not connected yet/,
     )
+    // This banner reflects a real, still-current limitation (edges-only PUT):
+    // an edgeless, non-core member never triggers the debounced auto-save at
+    // all, so it is never persisted on its own — see the next test for what
+    // DOES persist it (drawing a delegation edge to it).
+  })
+
+  it('P0 regression: add a non-core agent, draw a delegation edge to it, save — persists core_team via updateWorkspace BEFORE the edges PUT', async () => {
+    // Traces to the P0 bug: the Team tab's auto-save PUT the edge set only,
+    // never core_team, so the backend's delegation PUT (which validates every
+    // edge endpoint against the STORED core_team) rejected the very edge the
+    // operator just drew to the agent they just added — a catch-22. The fix:
+    // updateWorkspace({core_team}) must land before updateWorkspaceDelegation.
+    vi.mocked(updateWorkspace).mockResolvedValue({
+      ...WORKSPACE,
+      core_team: ['mia', 'jim', 'planner', 'ray'],
+    })
+    vi.mocked(updateWorkspaceDelegation).mockResolvedValue({
+      workspace_id: 'ws-1',
+      team: ['mia', 'jim', 'planner', 'ray'],
+      edges: [
+        ...(DELEGATION.edges ?? []),
+        { from_agent: 'jim', to_agent: 'ray', modes: ['await', 'background', 'task'] },
+      ],
+    })
+
+    // Seed the status-keyed active list cache the way WorkspaceTabContainer's
+    // real useQuery would (that container is mocked out above) so we can
+    // assert the fix writes the exact key useActiveWorkspace's data flows
+    // through in production, not just the detail() cache.
+    const { client } = renderTab((c) =>
+      c.setQueryData(workspacesQueryKeys.list({ status: 'active' }), [WORKSPACE]),
+    )
+    await waitFor(() => expect(screen.getByTestId('team-add-agent')).toBeInTheDocument())
+
+    // Add Ray — a non-core agent — to the team (node only, no edge yet).
+    fireEvent.click(screen.getByTestId('team-add-agent'))
+    await waitFor(() =>
+      expect(screen.getByTestId('team-add-agent-option-ray')).toBeInTheDocument(),
+    )
+    fireEvent.click(screen.getByTestId('team-add-agent-option-ray'))
+    await waitFor(() => expect(screen.getByTestId('team-node-ray')).toBeInTheDocument())
+
+    // Draw a delegation edge jim -> ray. React Flow drag gestures aren't
+    // simulable in jsdom (see the shim note at the top of this file), so we
+    // invoke the same onConnect callback the graph calls on a real drop —
+    // captured off the real (wrapped, not stubbed) WorkspaceTeamGraph.
+    expect(capturedGraphProps).not.toBeNull()
+    act(() => {
+      capturedGraphProps!.onConnect('jim', 'ray')
+    })
+
+    // The debounced auto-save fires; both PUTs must land.
+    await waitFor(() => expect(updateWorkspace).toHaveBeenCalled(), { timeout: 3000 })
+    await waitFor(() => expect(updateWorkspaceDelegation).toHaveBeenCalled(), { timeout: 3000 })
+
+    // core_team is written with the full current membership, including ray.
+    expect(updateWorkspace).toHaveBeenCalledWith('ws-1', {
+      core_team: ['mia', 'jim', 'planner', 'ray'],
+    })
+    // The edges PUT carries the new jim->ray edge.
+    const edgesArg = vi.mocked(updateWorkspaceDelegation).mock.calls[0]?.[1]
+    expect(edgesArg).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ from_agent: 'jim', to_agent: 'ray' }),
+      ]),
+    )
+
+    // Ordering is load-bearing: core_team must commit before the edges PUT —
+    // otherwise the backend 400s ("not a member of the workspace team").
+    const coreTeamCallOrder = vi.mocked(updateWorkspace).mock.invocationCallOrder[0]
+    const edgesCallOrder = vi.mocked(updateWorkspaceDelegation).mock.invocationCallOrder[0]
+    expect(coreTeamCallOrder).toBeDefined()
+    expect(edgesCallOrder).toBeDefined()
+    expect(coreTeamCallOrder as number).toBeLessThan(edgesCallOrder as number)
+
+    // Both PUTs succeeded — the unsaved-members warning must clear for ray
+    // (it now has an incident edge, so isMemberPersisted is true regardless).
+    await waitFor(() => {
+      expect(screen.queryByTestId('team-unsaved-members')).toBeNull()
+    })
+
+    // The updated workspace (with ray in core_team) lands in every cache a
+    // consumer might read it from — the detail cache (read by AgentProfile's
+    // Heartbeat tab, FR-018/A5) and the status-keyed list caches (read by
+    // useActiveWorkspace / the Sidebar / ChatControls).
+    await waitFor(() => {
+      expect(client.getQueryData(workspacesQueryKeys.detail('ws-1'))).toEqual(
+        expect.objectContaining({ core_team: ['mia', 'jim', 'planner', 'ray'] }),
+      )
+    })
+    const activeList = client.getQueryData(
+      workspacesQueryKeys.list({ status: 'active' }),
+    ) as Workspace[] | undefined
+    expect(activeList?.find((w) => w.id === 'ws-1')?.core_team).toEqual([
+      'mia',
+      'jim',
+      'planner',
+      'ray',
+    ])
   })
 
   it('passes the workspaceId to openEditAgentSlideOver when a node edit button is clicked (FR-018 / A5)', async () => {
