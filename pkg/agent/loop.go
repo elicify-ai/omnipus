@@ -3602,11 +3602,20 @@ func (al *AgentLoop) rebuildChannelSessionIndex() {
 // workspace_id). Already-existing sessions are NOT patched — the index hit
 // returns the existing ID unchanged (workspace_id was set at creation time).
 // Returns "" if the shared store is unavailable or inputs are empty.
-func (al *AgentLoop) resolveOrCreateChannelSession(channel, chatID, agentID, displayName, workspaceID string) string {
+func (al *AgentLoop) resolveOrCreateChannelSession(channel, instanceID, chatID, agentID, displayName, workspaceID string) string {
 	if al.sharedSessionStore == nil || channel == "" || chatID == "" {
 		return ""
 	}
-	key := channel + "/" + chatID
+	// Index by the channel INSTANCE, not the bare type, so two instances of the
+	// same type (e.g. whatsapp.eu and whatsapp.us) sharing a chat ID get DISTINCT
+	// sessions (ADR-029 FR-022 / US-9 — BUG-2). instanceID is the canonical
+	// instance identity (== channel for legacy single-instance); fall back
+	// defensively when unstamped.
+	indexID := instanceID
+	if indexID == "" {
+		indexID = channel
+	}
+	key := indexID + "/" + chatID
 	if v, ok := al.channelSessionIdx.Load(key); ok {
 		return v.(string)
 	}
@@ -4388,7 +4397,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 			}
 		}
 		if sid := al.resolveOrCreateChannelSession(
-			msg.Channel, msg.ChatID, agent.ID, msg.Sender.DisplayName, sessionWorkspaceID,
+			msg.Channel, instanceSessionID, msg.ChatID, agent.ID, msg.Sender.DisplayName, sessionWorkspaceID,
 		); sid != "" {
 			msg.SessionID = sid
 		}

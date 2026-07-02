@@ -1017,7 +1017,11 @@ export interface paths {
          */
         get: operations["listChannels"];
         put?: never;
-        post?: never;
+        /**
+         * Create a new channel instance
+         * @description Creates a new channel instance with key "<type>.<slug>" (ADR-029 FR-017). The instance starts disabled (enabled: false). Returns 409 if the instance key already exists, 400 if the type is unknown or the slug is malformed.
+         */
+        post: operations["createChannelInstance"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1038,7 +1042,11 @@ export interface paths {
         get: operations["getChannelConfig"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Delete a channel instance
+         * @description Deletes a channel instance: removes its config entry, credential refs, any stale channel-wildcard binding, and its per-instance state directory (e.g. WhatsApp store). Returns 404 for unknown instances and 400 for malformed ids. Bare-type keys (e.g. "telegram") can be deleted; "webchat" is a built-in and cannot be deleted.
+         */
+        delete: operations["deleteChannelInstance"];
         options?: never;
         head?: never;
         patch?: never;
@@ -5964,6 +5972,43 @@ export interface components {
             workspace_id?: string;
         };
         /**
+         * ChannelCreateRequest
+         * @description Request body for POST /channels — creates a new channel instance. The instance key is derived as "<type>.<slug>" (ADR-029 FR-017).
+         */
+        ChannelCreateRequest: {
+            /**
+             * @description Base channel type (e.g. "whatsapp", "telegram"). Must be a known channel type as listed in the ChannelId registry.
+             * @example whatsapp
+             */
+            type: string;
+            /**
+             * @description Per-instance disambiguator matching [a-z0-9-]{1,32} (all lowercase, 1–32 chars). Combined with type to form the instance key "<type>.<slug>".
+             * @example eu
+             */
+            slug: string;
+        };
+        /**
+         * ChannelCreateResponse
+         * @description Response body for POST /channels — the newly created channel instance.
+         */
+        ChannelCreateResponse: {
+            /**
+             * @description The fully-qualified instance key: "<type>.<slug>" (ADR-029 FR-017).
+             * @example whatsapp.eu
+             */
+            id: string;
+            /**
+             * @description Base channel type.
+             * @example whatsapp
+             */
+            type: string;
+            /**
+             * @description Whether the instance is currently enabled. Newly created instances start disabled (enabled: false) until configured and toggled.
+             * @example false
+             */
+            enabled: boolean;
+        };
+        /**
          * Mailbox
          * @description An agent's email mailbox account (M11). Email is a TOOL surface, not a conversational channel: a mailbox is owned by exactly one agent and surfaces in exactly one workspace (per-(agent, workspace), cap-1 in 0.1.0). The mailbox password is stored in the encrypted credential store and is NEVER returned by this endpoint — the `configured` flag reports whether a password is on file.
          */
@@ -9727,6 +9772,57 @@ export interface operations {
             };
         };
     };
+    createChannelInstance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChannelCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Instance created. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelCreateResponse"];
+                };
+            };
+            /** @description Unknown channel type or malformed slug. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Instance key already exists. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Config write failure. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     getChannelConfig: {
         parameters: {
             query?: never;
@@ -9755,6 +9851,57 @@ export interface operations {
             };
             /** @description Channel ID not found. */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    deleteChannelInstance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Channel instance ID to delete.
+                 * @example whatsapp.eu
+                 */
+                id: components["schemas"]["ChannelId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Instance deleted successfully. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Malformed channel id. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Instance not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Config write failure. */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12781,6 +12928,8 @@ export type RunnerTestResponse = components["schemas"]["RunnerTestResponse"];
 export type ChannelEnabledResponse = components["schemas"]["ChannelEnabledResponse"];
 export type ChannelTestResponse = components["schemas"]["ChannelTestResponse"];
 export type ChannelRouting = components["schemas"]["ChannelRouting"];
+export type ChannelCreateRequest = components["schemas"]["ChannelCreateRequest"];
+export type ChannelCreateResponse = components["schemas"]["ChannelCreateResponse"];
 export type Mailbox = components["schemas"]["Mailbox"];
 export type MailboxConfigureRequest = components["schemas"]["MailboxConfigureRequest"];
 export type BackupCreateResponse = components["schemas"]["BackupCreateResponse"];

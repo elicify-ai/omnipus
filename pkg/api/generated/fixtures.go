@@ -2551,6 +2551,18 @@ func FixtureChannelRouting_Populated() ChannelRouting {
 	return ChannelRouting{DefaultAgentId: &id}
 }
 
+// FixtureChannelRouting_Bound returns a fully-bound ChannelRouting (F-12/FR-026):
+// both workspace_id and default_agent_id are set, as returned by getChannelRouting
+// for a bound instance (ADR-029 MAJ-004 / FR-029).
+func FixtureChannelRouting_Bound() ChannelRouting {
+	id := "agent-a"
+	wsID := "my-workspace"
+	return ChannelRouting{
+		WorkspaceId:    &wsID,
+		DefaultAgentId: &id,
+	}
+}
+
 // ── CliDetect ─────────────────────────────────────────────────────────────────
 // Traces to: contracts/components/schemas/CliDetect.yaml
 

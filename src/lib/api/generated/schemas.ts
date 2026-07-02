@@ -1668,6 +1668,15 @@ export const ChannelEntry: z.ZodType<ChannelEntry> = z.object({
   degraded: z.boolean().optional(),
   degraded_reason: z.string().optional(),
 });
+export const ChannelCreateRequest = z.object({
+  type: z.string(),
+  slug: z.string().regex(/^[a-z0-9-]{1,32}$/),
+});
+export const ChannelCreateResponse = z.object({
+  id: z.string(),
+  type: z.string(),
+  enabled: z.boolean(),
+});
 export const ChannelEnabledResponse: z.ZodType<ChannelEnabledResponse> =
   z.object({
     id: ChannelId.regex(/^[a-z0-9-]+(\.[a-z0-9-]+)?$/),
@@ -3158,6 +3167,39 @@ Includes session_start events from all agent stores and task lifecycle events.
     ],
   },
   {
+    method: "post",
+    path: "/channels",
+    alias: "createChannelInstance",
+    description: `Creates a new channel instance with key &quot;&lt;type&gt;.&lt;slug&gt;&quot; (ADR-029 FR-017). The instance starts disabled (enabled: false). Returns 409 if the instance key already exists, 400 if the type is unknown or the slug is malformed.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: ChannelCreateRequest,
+      },
+    ],
+    response: ChannelCreateResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Unknown channel type or malformed slug.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Instance key already exists.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Config write failure.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
     method: "get",
     path: "/channels/:id",
     alias: "getChannelConfig",
@@ -3176,6 +3218,39 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 404,
         description: `Channel ID not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "delete",
+    path: "/channels/:id",
+    alias: "deleteChannelInstance",
+    description: `Deletes a channel instance: removes its config entry, credential refs, any stale channel-wildcard binding, and its per-instance state directory (e.g. WhatsApp store). Returns 404 for unknown instances and 400 for malformed ids. Bare-type keys (e.g. &quot;telegram&quot;) can be deleted; &quot;webchat&quot; is a built-in and cannot be deleted.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string().regex(/^[a-z0-9-]+(\.[a-z0-9-]+)?$/),
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 400,
+        description: `Malformed channel id.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Instance not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Config write failure.`,
         schema: ErrorResponse,
       },
     ],

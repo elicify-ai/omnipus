@@ -1,0 +1,25 @@
+title: ChannelCreateResponse
+description: >
+  Response body for POST /channels — the newly created channel instance.
+type: object
+required:
+  - id
+  - type
+  - enabled
+additionalProperties: false
+properties:
+  id:
+    type: string
+    description: >
+      The fully-qualified instance key: "<type>.<slug>" (ADR-029 FR-017).
+    example: "whatsapp.eu"
+  type:
+    type: string
+    description: Base channel type.
+    example: "whatsapp"
+  enabled:
+    type: boolean
+    description: >
+      Whether the instance is currently enabled. Newly created instances
+      start disabled (enabled: false) until configured and toggled.
+    example: false
