@@ -4621,11 +4621,23 @@ func sessionScopeKey(msg bus.InboundMessage) string {
 // agentSessionKey builds the per-agent session key combining agentID with the
 // message's scope bucket. Uses session-scoped format when SessionID is known;
 // falls back to chat-scoped format for channels that haven't minted a session.
+//
+// For channel inbound, the chat-scoped key uses msg.InstanceID when non-empty
+// (ADR-029 FR-023, MAJ-002): two instances of the same channel type (e.g.
+// "whatsapp.eu" and "whatsapp.us") with the same ChatID must NOT share a
+// transcript key. Legacy channels that have not yet been updated to stamp
+// InstanceID fall back to msg.Channel (the type), preserving existing behavior.
 func agentSessionKey(agentID string, msg bus.InboundMessage) string {
 	if msg.SessionID != "" {
 		return fmt.Sprintf("agent:%s:session:%s", agentID, msg.SessionID)
 	}
-	return fmt.Sprintf("agent:%s:chat:%s:%s", agentID, msg.Channel, msg.ChatID)
+	// Use the stamped InstanceID when available (per-instance isolation);
+	// fall back to the channel type for adapters that have not yet been updated.
+	instanceOrChannel := msg.Channel
+	if msg.InstanceID != "" {
+		instanceOrChannel = msg.InstanceID
+	}
+	return fmt.Sprintf("agent:%s:chat:%s:%s", agentID, instanceOrChannel, msg.ChatID)
 }
 
 func (al *AgentLoop) resolveSteeringTarget(msg bus.InboundMessage) (string, string, bool) {

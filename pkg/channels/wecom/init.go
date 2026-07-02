@@ -10,8 +10,8 @@ import (
 func init() {
 	channels.RegisterFactory(
 		"wecom",
-		func(cfg *config.Config, secrets credentials.SecretBundle, b *bus.MessageBus) (channels.Channel, error) {
-			inst := cfg.Channels["wecom"]
+		func(cfg *config.Config, instanceID string, secrets credentials.SecretBundle, b *bus.MessageBus) (channels.Channel, error) {
+			inst := cfg.Channels[instanceID]
 			return NewChannel(config.InstanceToWeCom(inst), secrets, b)
 		},
 	)

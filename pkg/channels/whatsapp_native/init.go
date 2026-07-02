@@ -12,8 +12,8 @@ import (
 func init() {
 	channels.RegisterFactory(
 		"whatsapp_native",
-		func(cfg *config.Config, _ credentials.SecretBundle, b *bus.MessageBus) (channels.Channel, error) {
-			inst := cfg.Channels["whatsapp"]
+		func(cfg *config.Config, instanceID string, _ credentials.SecretBundle, b *bus.MessageBus) (channels.Channel, error) {
+			inst := cfg.Channels[instanceID]
 			waCfg := config.InstanceToWhatsApp(inst)
 			storePath := waCfg.SessionStorePath
 			if storePath == "" {

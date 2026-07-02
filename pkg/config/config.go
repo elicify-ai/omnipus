@@ -1506,6 +1506,8 @@ type ChannelInstanceConfig struct {
 	Type     string           `json:"type"`
 	Enabled  bool             `json:"enabled"`
 	Identity *ChannelIdentity `json:"identity,omitempty"`
+	// WorkspaceID binds this instance to one workspace (ADR-029). Empty = unbound.
+	WorkspaceID string `json:"workspace_id,omitempty"`
 
 	// --- Common per-channel fields shared across multiple channel types ---
 	AllowFrom          FlexibleStringSlice `json:"allow_from,omitempty"`
@@ -1649,18 +1651,32 @@ var knownChannelTypes = map[string]struct{}{
 
 // normalizeChannelMap fills in the Type field from the map key when absent
 // (so JSON-loaded entries without an explicit "type" field get a default),
-// and drops entries whose keys are not in knownChannelTypes, emitting a
-// structured Warn for each unknown entry.
+// and drops entries whose effective channel type is not in knownChannelTypes,
+// emitting a structured Warn for each unknown entry.
+//
+// ADR-029 (Gate 0, FR-016): the effective type is resolved via ParseInstanceKey
+// so namespaced instance keys like "whatsapp.eu" (effective type: "whatsapp")
+// are KEPT rather than dropped. The entry is stored under its original key so
+// the instance ID (e.g. "whatsapp.eu") is preserved for per-instance routing.
+// The Type field is backfilled to the effective type when absent.
 func normalizeChannelMap(channels map[string]ChannelInstanceConfig) map[string]ChannelInstanceConfig {
 	out := make(map[string]ChannelInstanceConfig, len(channels))
 	for key, inst := range channels {
-		if _, ok := knownChannelTypes[key]; !ok {
+		// Determine effective type: explicit Type field wins; otherwise derive from
+		// the map key via ParseInstanceKey (pre-dot segment).
+		effectiveType := strings.TrimSpace(inst.Type)
+		if effectiveType == "" {
+			effectiveType, _ = ParseInstanceKey(key)
+		}
+		if _, ok := knownChannelTypes[effectiveType]; !ok {
 			slog.Warn("config: unknown channel type in channels map — ignoring legacy or unsupported section",
-				"key", key)
+				"key", key, "effective_type", effectiveType)
 			continue
 		}
+		// Backfill the Type field to the effective type when absent so the
+		// on-disk instance is self-describing.
 		if inst.Type == "" {
-			inst.Type = key
+			inst.Type = effectiveType
 		}
 		out[key] = inst
 	}
@@ -1700,6 +1716,103 @@ func ValidateChannelsCap1(channels map[string]ChannelInstanceConfig) error {
 	if len(dups) != 0 {
 		sort.Strings(dups)
 		return fmt.Errorf("%w: %s", ErrChannelsCap1Violated, strings.Join(dups, ", "))
+	}
+	return nil
+}
+
+// ParseInstanceKey splits a channel instance key into its base type and optional
+// slug. The delimiter is the FIRST dot (`.`), which is filesystem-safe on
+// Windows (unlike `:`) and legal as a JSON credential-store key, and no built-in
+// channel type name contains a dot, so the key is unambiguously splittable.
+//
+// Examples:
+//
+//	ParseInstanceKey("whatsapp")      → ("whatsapp", "")
+//	ParseInstanceKey("whatsapp.eu")   → ("whatsapp", "eu")
+//	ParseInstanceKey("google-chat.s") → ("google-chat", "s")
+//
+// The returned channelType is always the pre-dot segment (which may equal the
+// full key when there is no dot). The slug is everything after the first dot.
+func ParseInstanceKey(key string) (channelType, slug string) {
+	idx := strings.IndexByte(key, '.')
+	if idx < 0 {
+		return key, ""
+	}
+	return key[:idx], key[idx+1:]
+}
+
+// ErrInvalidInstanceKey is the sentinel wrapped by ValidateInstanceKey when a
+// channel instance key does not meet the ADR-029 grammar requirements.
+var ErrInvalidInstanceKey = errors.New("channels: invalid instance key")
+
+// slugPattern matches a valid slug: lowercase alphanumeric and hyphens, 1–32 chars.
+// Defined once to avoid repeated string parsing.
+var slugPattern = func() func(string) bool {
+	return func(s string) bool {
+		if len(s) == 0 || len(s) > 32 {
+			return false
+		}
+		for _, r := range s {
+			if !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-') {
+				return false
+			}
+		}
+		return true
+	}
+}()
+
+// ValidateInstanceKey validates a channel instance key against the ADR-029
+// grammar (FR-017, locked). A key is valid if it is EITHER:
+//
+//   - a bare known channel type ("whatsapp", "telegram", …), or
+//   - a namespaced key "<type>.<slug>" where <type> ∈ knownChannelTypes and
+//     <slug> matches [a-z0-9-]{1,32} (all lowercase; uppercase → error).
+//
+// Returns an error wrapping ErrInvalidInstanceKey on failure.
+func ValidateInstanceKey(key string) error {
+	channelType, slug := ParseInstanceKey(key)
+	if _, ok := knownChannelTypes[channelType]; !ok {
+		return fmt.Errorf("%w: unknown base type %q in key %q", ErrInvalidInstanceKey, channelType, key)
+	}
+	if slug == "" {
+		// Bare type key — valid.
+		return nil
+	}
+	// Namespaced key: validate slug.
+	if !slugPattern(slug) {
+		return fmt.Errorf(
+			"%w: slug %q in key %q is invalid — must match [a-z0-9-]{1,32} (all lowercase, 1–32 chars)",
+			ErrInvalidInstanceKey, slug, key,
+		)
+	}
+	return nil
+}
+
+// ValidateChannels validates the channel instance map for ADR-029 compliance.
+// It replaces ValidateChannelsCap1 for v0.3: the one-per-type cap is LIFTED
+// (N instances per type are allowed), but each key must pass ValidateInstanceKey
+// and each entry's effective type must be a known channel type.
+//
+// ValidateChannelsCap1 is kept as a back-compat alias that calls this function
+// when the result is compatible (always returns nil when N>1 is present, which
+// is now valid). Callers that still detect ErrChannelsCap1Violated will simply
+// stop seeing that error — the correct behavior for v0.3.
+func ValidateChannels(channels map[string]ChannelInstanceConfig) error {
+	for key, inst := range channels {
+		if err := ValidateInstanceKey(key); err != nil {
+			return fmt.Errorf("channels: invalid key %q: %w", key, err)
+		}
+		// Cross-check: if the entry carries an explicit Type, it must agree with
+		// the effective type derived from the key.
+		if inst.Type != "" {
+			effectiveType, _ := ParseInstanceKey(key)
+			if inst.Type != effectiveType {
+				return fmt.Errorf(
+					"channels: entry %q has type=%q but key implies type=%q — they must match",
+					key, inst.Type, effectiveType,
+				)
+			}
+		}
 	}
 	return nil
 }
@@ -3162,12 +3275,12 @@ func loadConfigInternal(path string, store CredentialStore) (*Config, error) {
 	if cfg.Channels == nil {
 		cfg.Channels = make(map[string]ChannelInstanceConfig)
 	}
-	// Cap-1 validation (FR-2.3): reject configs with >1 instance per channel type.
-	// Run on the RAW map BEFORE normalizeChannelMap drops unknown keys — otherwise
-	// a hand-edited duplicate under a non-type key (e.g. "telegram-2" with
-	// type:telegram) would be silently dropped rather than rejected. The check
-	// counts by effective type (the Type field, or the map key when Type is empty).
-	if err := ValidateChannelsCap1(cfg.Channels); err != nil {
+	// ADR-029 (v0.3): validate channel instance keys and effective types.
+	// ValidateChannels replaces the old cap-1 check (ValidateChannelsCap1):
+	// the one-per-type cap is lifted; N instances per type are now allowed.
+	// Run on the RAW map BEFORE normalizeChannelMap so malformed keys are
+	// caught before normalization silently discards them.
+	if err := ValidateChannels(cfg.Channels); err != nil {
 		return nil, err
 	}
 

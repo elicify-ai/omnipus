@@ -9,10 +9,12 @@ import (
 )
 
 // ChannelFactory is a constructor function that creates a Channel from config,
-// a resolved SecretBundle, and a message bus. The bundle supplies all plaintext
-// secrets without touching the process environment.
+// an instance ID, a resolved SecretBundle, and a message bus. The instanceID
+// identifies which config.ChannelInstanceConfig entry to use (the map key in
+// cfg.Channels), enabling N-per-type support (ADR-029). The bundle supplies all
+// plaintext secrets without touching the process environment.
 // Each channel subpackage registers one or more factories via init().
-type ChannelFactory func(cfg *config.Config, secrets credentials.SecretBundle, bus *bus.MessageBus) (Channel, error)
+type ChannelFactory func(cfg *config.Config, instanceID string, secrets credentials.SecretBundle, bus *bus.MessageBus) (Channel, error)
 
 // PrerequisiteChecker verifies an enabled channel instance has the config
 // fields its factory needs before construction is attempted. It returns

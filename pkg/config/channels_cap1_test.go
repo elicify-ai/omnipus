@@ -68,14 +68,14 @@ func TestNormalizeChannelMap_PopulatesTypeFromKey(t *testing.T) {
 	}
 }
 
-// TestLoadConfig_RejectsDuplicateChannelType is the FR-2.3 / N5 load-path guard:
-// a hand-edited config.json carrying two instances of the same channel type
-// (here "telegram" + "telegram-2" both with type:telegram) MUST be rejected by
-// LoadConfig — not silently accepted and dropped by normalizeChannelMap. The
-// error must wrap ErrChannelsCap1Violated so the gateway can map it to a 422.
-// This locks in that cap-1 is enforced at config LOAD time (in addition to the
-// API 422 path), which is the N5 gap closure.
-func TestLoadConfig_RejectsDuplicateChannelType(t *testing.T) {
+// TestLoadConfig_RejectsInvalidInstanceKey is the ADR-029 Gate 0 load-path
+// guard: a config.json carrying a channel entry with an invalid instance key
+// (here "telegram-2" is not a known bare type and does not follow the
+// <type>.<slug> format) MUST be rejected by LoadConfig. The error wraps
+// ErrInvalidInstanceKey. (Prior to ADR-029 this tested cap-1 via
+// ErrChannelsCap1Violated; the cap is now lifted and key-grammar is enforced
+// instead.)
+func TestLoadConfig_RejectsInvalidInstanceKey(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.json")
 	if err := os.WriteFile(
@@ -95,10 +95,10 @@ func TestLoadConfig_RejectsDuplicateChannelType(t *testing.T) {
 
 	_, err := LoadConfig(configPath)
 	if err == nil {
-		t.Fatal("LoadConfig accepted a config with two telegram instances; want cap-1 rejection (N5)")
+		t.Fatal("LoadConfig accepted a config with an invalid instance key; want ErrInvalidInstanceKey rejection")
 	}
-	if !errors.Is(err, ErrChannelsCap1Violated) {
-		t.Fatalf("LoadConfig error does not wrap ErrChannelsCap1Violated: %v", err)
+	if !errors.Is(err, ErrInvalidInstanceKey) {
+		t.Fatalf("LoadConfig error does not wrap ErrInvalidInstanceKey: %v", err)
 	}
 }
 

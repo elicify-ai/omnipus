@@ -128,6 +128,13 @@ const (
 	// sent >= 10 cancel requests within 60 seconds, suggesting runaway client
 	// logic or intentional abuse (FR-25a).
 	EventCancelAbusePattern = "cancel.abuse_pattern"
+
+	// EventChannelRoutingDriftDrop — WARN. A workspace-bound channel instance's
+	// configured agent is unresolvable (deleted, disabled, or a worker): the
+	// inbound message is dropped rather than silently degraded to the global
+	// default (ADR-029 FR-012, FR-028). Fields emitted by the caller:
+	// {instance_id, workspace_id, intended_agent_id, chat_id, reason}.
+	EventChannelRoutingDriftDrop = "channel.routing.drift_drop"
 )
 
 // ---------------------------------------------------------------------------
