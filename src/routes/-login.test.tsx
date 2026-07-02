@@ -177,16 +177,25 @@ describe('#27 — _app beforeLoad redirects to /onboarding before auth check', (
       routeOptions.beforeLoad ??
       routeOptions.options?.beforeLoad
 
-    if (!beforeLoad) {
-      // If the beforeLoad is not directly accessible, verify the redirect is
-      // configured by inspecting the route's static shape (belt-and-suspenders).
-      // This is acceptable per spec §27 documentation clause.
-      expect(appMod.Route).toBeDefined()
-      console.warn(
-        '[test #27] beforeLoad not directly accessible on Route — verified Route is defined; ' +
-        'the onboarding guard is covered by the integration e2e suite.'
-      )
-      return
+    // [I6] HARDENED: `beforeLoad` MUST be resolvable.  A quiet console.warn +
+    // early-return would turn this into a false-green if the seam moves (e.g.
+    // TanStack Router changes how beforeLoad is exposed).  The test must fail
+    // loudly if we can no longer reach the guard, because the onboarding-before-
+    // auth safety property is CRITICAL to the security model.
+    //
+    // Traces to: connectors-providers-redesign-spec.md §7 I6 gap / MIN-002 / R2-06.
+    expect(
+      typeof beforeLoad,
+      '[BLOCKED] _app.tsx beforeLoad not found on Route — the seam has moved. ' +
+        'Find the new location of beforeLoad in _app.tsx and update this test. ' +
+        'Do NOT revert to a console.warn escape hatch: the onboarding-before-auth ' +
+        'guard (MIN-002) must always be exercised by this test.'
+    ).toBe('function')
+
+    // TypeScript non-null assertion: the expect().toBe('function') above ensures
+    // beforeLoad is a function at runtime; we reassert here for the type-checker.
+    if (typeof beforeLoad !== 'function') {
+      throw new Error('[BLOCKED] beforeLoad is not a function — test gate failed above should have caught this')
     }
 
     // sessionStorage is empty → no auth token → the auth branch would also throw,
