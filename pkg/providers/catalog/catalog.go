@@ -8,7 +8,7 @@
 // AVAILABLE_PROVIDERS.  Each entry covers one billable endpoint identified by
 // (company × plan × region).
 //
-// The slice is serialised to pkg/providers/catalog/data/providers_catalog.json
+// The slice is serialized to pkg/providers/catalog/data/providers_catalog.json
 // and a matching TypeScript constant in src/lib/generated/providerCatalog.ts by
 // the generator in pkg/providers/catalog/gen/main.go (invoked via go:generate).
 // Both artifacts are committed and consumed at build time — NO live HTTP endpoint

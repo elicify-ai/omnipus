@@ -18,6 +18,7 @@
 //	#13 TestCatalog_EmbedMatchesGeneratedTS      — JSON embed and TS catalog are identical
 //
 // Traces to: spec §7, ADR-031 §6 G-2, FR-003, FR-005, FR-006, FR-020, US-1.
+
 package catalog
 
 import (
@@ -29,10 +30,11 @@ import (
 	"strings"
 	"testing"
 
-	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
-	"github.com/dapicom-ai/omnipus/pkg/providers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
+	"github.com/dapicom-ai/omnipus/pkg/providers"
 )
 
 // loadProbeProviderIDEnum parses contracts/components/schemas/ProbeProviderRequest.yaml
@@ -384,7 +386,7 @@ func TestContract_ProviderCatalogEntry_Shape(t *testing.T) {
 	require.NoError(t, err, "must marshal to JSON")
 
 	// Verify required fields are present in the JSON.
-	var doc map[string]interface{}
+	var doc map[string]any
 	require.NoError(t, json.Unmarshal(raw, &doc))
 	for _, required := range []string{"id", "company", "plan", "wire", "endpointHint", "logoSlug", "label", "subtitle"} {
 		_, ok := doc[required]
@@ -396,7 +398,7 @@ func TestContract_ProviderCatalogEntry_Shape(t *testing.T) {
 	// Verify wire enum value.
 	assert.Equal(t, "openai-compatible", doc["wire"], "wire field must be 'openai-compatible'")
 	// Verify aliases are present.
-	aliasesVal, ok := doc["aliases"].([]interface{})
+	aliasesVal, ok := doc["aliases"].([]any)
 	assert.True(t, ok, "aliases field must be an array")
 	assert.Len(t, aliasesVal, 1, "aliases must have 1 entry")
 
@@ -413,7 +415,7 @@ func TestContract_ProviderCatalogEntry_Shape(t *testing.T) {
 	}
 	rawMin, err := json.Marshal(minimalEntry)
 	require.NoError(t, err, "minimal entry must marshal to JSON")
-	var docMin map[string]interface{}
+	var docMin map[string]any
 	require.NoError(t, json.Unmarshal(rawMin, &docMin))
 	_, hasRegion := docMin["region"]
 	assert.False(t, hasRegion, "region must be omitted when nil (omitempty)")
@@ -439,7 +441,6 @@ func TestCatalog_AliasEndpointEquality(t *testing.T) {
 		}
 		canonicalBase := providers.GetDefaultAPIBase(e.Id)
 		for _, alias := range *e.Aliases {
-			alias := alias
 			t.Run(e.Id+"/"+alias, func(t *testing.T) {
 				aliasBase := providers.GetDefaultAPIBase(alias)
 				assert.Equal(t, canonicalBase, aliasBase,
