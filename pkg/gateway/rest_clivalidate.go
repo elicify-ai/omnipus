@@ -36,6 +36,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -52,6 +53,13 @@ import (
 // IP. A caller already at the cap is rejected fast with 429 rather than queued —
 // no silent wait, no unbounded fan-out of caller-supplied spawns.
 var cliValidateInflight = newInflightLimiter(2)
+
+// cliTestConnection performs the actual spawn-based connection test. It is a
+// package var (not a direct runner.TestConnectionWithPath call) so tests can
+// inject a deterministic / blocking stand-in to exercise the per-caller
+// in-flight cap without spawning a real binary. In production this is always
+// runner.TestConnectionWithPath.
+var cliTestConnection = runner.TestConnectionWithPath
 
 // inflightLimiter is a per-key bounded counter used to cap concurrent in-flight
 // operations for one caller.
@@ -126,13 +134,18 @@ func (a *restAPI) HandleSystemCliValidate(w http.ResponseWriter, r *http.Request
 	}
 	defer cliValidateInflight.release(key)
 
-	// Trim leading/trailing whitespace on the path (D-3.5) before classifying.
-	resp := a.validateCLI(r.Context(), string(req.Cli), strings.TrimSpace(req.CliPath))
+	// Trim leading/trailing whitespace on the path (D-3.5) before classifying,
+	// but keep the RAW requested value for the audit record (M-1 — forensics need
+	// exactly what the caller asked for, including a no-spawn classification).
+	rawPath := req.CliPath
+	resp := a.validateCLI(r.Context(), string(req.Cli), strings.TrimSpace(rawPath))
 
-	// Audit exactly one event per call (FR-013), including the no-spawn
-	// classifications (unknown-cli / empty / non-regular). Best-effort: an audit
-	// write failure must NEVER fail the request (never crash on audit).
-	a.auditCliValidate(string(req.Cli), resp)
+	// Audit exactly one event per call (FR-013 / M-1), including the no-spawn
+	// classifications (unknown-cli / empty / non-regular). The authenticated
+	// caller is attributed and the raw requested path is recorded even when no
+	// spawn occurred. Best-effort: an audit write failure must NEVER fail the
+	// request (never crash on audit).
+	a.auditCliValidate(r, string(req.Cli), rawPath, resp)
 
 	jsonOK(w, resp)
 }
@@ -148,17 +161,27 @@ func (a *restAPI) validateCLI(ctx context.Context, cli, cliPath string) gen.CliV
 		return buildCliValidateResponse(gen.CliValidateResponseReasonUnknownCli, nil, nil)
 	}
 	// 2. Empty path — short-circuit to missing-binary; NEVER a silent $PATH
-	//    fallback (FR-014).
+	//    fallback (FR-014). This MUST stay before the LookPath resolve below so an
+	//    empty path never triggers a $PATH search for the default binary name.
 	if cliPath == "" {
 		return buildCliValidateResponse(gen.CliValidateResponseReasonMissingBinary, nil, nil)
 	}
-	// 3. Pre-spawn target constraint (FR-013): must be a regular, executable
-	//    file. No basename / identity check (operator decision — F-03).
-	if !isRegularExecutableFile(cliPath) {
+	// 3. Pre-spawn target constraint (FR-013 / MAJ-004): resolve the spawn target
+	//    the SAME way the runtime spawn does before guarding it, so the guard is
+	//    authoritative over what would actually be exec'd. exec.LookPath handles
+	//    BOTH a bare name (resolved via $PATH — the US-4 override case a raw
+	//    os.Stat wrongly rejected) AND an absolute/relative path (stat'd as-is).
+	//    A LookPath miss OR a resolved target that is not a REGULAR executable
+	//    file (e.g. a FIFO or device the OS reports X_OK on) classifies
+	//    missing-binary WITHOUT a spawn. No basename / identity check (F-03).
+	resolvedTarget, lpErr := exec.LookPath(cliPath)
+	if lpErr != nil || !isRegularExecutableFile(resolvedTarget) {
 		return buildCliValidateResponse(gen.CliValidateResponseReasonMissingBinary, nil, nil)
 	}
-	// 4. Delegate to the shared connection test AS-IS (no identity extension).
-	res := runner.TestConnectionWithPath(ctx, cli, cliPath)
+	// 4. Delegate to the shared connection test AS-IS (no identity extension). It
+	//    re-resolves cliPath itself with the identical precedence, so passing the
+	//    raw cliPath keeps Test validating exactly what a real run would exec.
+	res := cliTestConnection(ctx, cli, cliPath)
 	reason := mapValidateReason(res.Reason)
 
 	var resolved, version *string
@@ -281,11 +304,25 @@ func buildCliValidateResponse(reason gen.CliValidateResponseReason, resolved, ve
 	}
 }
 
-// auditCliValidate emits exactly one audit event per validate call with the
-// {cli, resolved_path, reason} triple (FR-013). Best-effort: a nil auditor or a
-// write error is logged and swallowed — audit failure must never fail the
-// diagnostic (never crash on audit write).
-func (a *restAPI) auditCliValidate(cli string, resp gen.CliValidateResponse) {
+// cliValidateAuditUser returns the authenticated principal's username for audit
+// attribution (M-1), from the same UserContextKey source cliValidateCallerKey
+// reads. It returns "" for the dev-bypass / env-token paths that carry no user
+// context — an empty User is the documented, never-guessed default (audit.Entry).
+func cliValidateAuditUser(r *http.Request) string {
+	if u, ok := r.Context().Value(UserContextKey{}).(*config.UserConfig); ok && u != nil {
+		return u.Username
+	}
+	return ""
+}
+
+// auditCliValidate emits exactly one audit event per validate call carrying the
+// authenticated caller (Entry.User — M-1), the RAW requested path, the resolved
+// path, and the reason (FR-013). requested_path is recorded even for no-spawn
+// classifications (unknown-cli / empty / non-regular) where resolved_path is
+// empty, so an audit reviewer can always see exactly what was asked for.
+// Best-effort: a nil auditor or a write error is logged and swallowed — audit
+// failure must never fail the diagnostic (never crash on audit write).
+func (a *restAPI) auditCliValidate(r *http.Request, cli, requestedPath string, resp gen.CliValidateResponse) {
 	if a.auditor == nil {
 		return
 	}
@@ -300,10 +337,12 @@ func (a *restAPI) auditCliValidate(cli string, resp gen.CliValidateResponse) {
 	if err := a.auditor.Log(&audit.Entry{
 		Event:    audit.EventCliValidate,
 		Decision: decision,
+		User:     cliValidateAuditUser(r),
 		Details: map[string]any{
-			"cli":           cli,
-			"resolved_path": resolved,
-			"reason":        string(resp.Reason),
+			"cli":            cli,
+			"requested_path": requestedPath,
+			"resolved_path":  resolved,
+			"reason":         string(resp.Reason),
 		},
 	}); err != nil {
 		slog.Warn("audit write failed", "event", audit.EventCliValidate, "error", err)

@@ -2083,27 +2083,47 @@ func (a *restAPI) HandleSystemCliDetect(w http.ResponseWriter, r *http.Request) 
 	resp.Claude.Installed = c.Installed
 	if c.Installed {
 		resp.Claude.Path = strPtr(c.Path)
-		src := gen.CliDetectClaudeSource(c.Source)
-		resp.Claude.Source = &src
+		if wire := cliDetectSourceWire(c.Source); wire != "" {
+			src := gen.CliDetectClaudeSource(wire)
+			resp.Claude.Source = &src
+		}
 	}
 
 	cx := all["codex"]
 	resp.Codex.Installed = cx.Installed
 	if cx.Installed {
 		resp.Codex.Path = strPtr(cx.Path)
-		src := gen.CliDetectCodexSource(cx.Source)
-		resp.Codex.Source = &src
+		if wire := cliDetectSourceWire(cx.Source); wire != "" {
+			src := gen.CliDetectCodexSource(wire)
+			resp.Codex.Source = &src
+		}
 	}
 
 	oc := all["opencode"]
 	resp.Opencode.Installed = oc.Installed
 	if oc.Installed {
 		resp.Opencode.Path = strPtr(oc.Path)
-		src := gen.CliDetectOpencodeSource(oc.Source)
-		resp.Opencode.Source = &src
+		if wire := cliDetectSourceWire(oc.Source); wire != "" {
+			src := gen.CliDetectOpencodeSource(wire)
+			resp.Opencode.Source = &src
+		}
 	}
 
 	jsonOK(w, resp)
+}
+
+// cliDetectSourceWire validates a clidetect.Source against the known set and
+// returns its wire string, or "" for an unexpected value. The detector only ever
+// emits the two known sources, so this is defense-in-depth: a future/unknown
+// value normalizes to an omitted Source rather than being reflected onto the
+// wire enum unvalidated.
+func cliDetectSourceWire(s clidetect.Source) string {
+	switch s {
+	case clidetect.SourcePath, clidetect.SourceWellKnown:
+		return string(s)
+	default:
+		return ""
+	}
 }
 
 // isExternalSubagent reports whether the persisted agent is a subagent_3p

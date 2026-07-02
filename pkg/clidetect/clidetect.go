@@ -33,23 +33,28 @@ import (
 	"strings"
 )
 
-// Source classifies how a binary was located.
+// Source classifies how a binary was located. It is a distinct string type (not
+// a bare string) so the two legal values are the only ones an API surface has to
+// consider — an unexpected value is a normalization concern the wire mapper
+// handles, not a free-form string.
+type Source string
+
 const (
 	// SourcePath means the binary was resolved via the gateway process's $PATH.
-	SourcePath = "path"
+	SourcePath Source = "path"
 	// SourceWellKnown means the binary was found only by scanning the curated
 	// per-OS well-known install directories.
-	SourceWellKnown = "well-known"
+	SourceWellKnown Source = "well-known"
 )
 
 // Result is the detection outcome for a single CLI. When Installed is false,
-// Path and Source are the empty string.
+// Path is "" and Source is the empty Source.
 type Result struct {
 	Installed bool
 	// Path is the absolute, symlink-resolved path to the binary when Installed.
 	Path string
 	// Source is SourcePath or SourceWellKnown when Installed, "" otherwise.
-	Source string
+	Source Source
 }
 
 // cliBinaries maps the executor `cli` value to its binary name. Keys match
@@ -149,7 +154,7 @@ func (d *detector) detect(cli string) Result {
 // EvalSymlinks is best-effort: on error (e.g. a dangling shim) we fall back to
 // filepath.Abs of the raw hit and STILL report installed — the binary was found
 // and is executable; only the canonicalization failed.
-func (d *detector) resolve(raw, source string) Result {
+func (d *detector) resolve(raw string, source Source) Result {
 	resolved := raw
 	if ev, err := d.evalSymlinks(raw); err == nil && ev != "" {
 		resolved = ev

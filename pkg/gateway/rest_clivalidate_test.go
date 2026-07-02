@@ -17,11 +17,14 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/dapicom-ai/omnipus/pkg/agent/runner"
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/audit"
 	"github.com/dapicom-ai/omnipus/pkg/config"
@@ -96,6 +99,44 @@ func TestValidateCLI_NonRegularOrMissingTarget(t *testing.T) {
 			assert.Nil(t, resp.ResolvedPath)
 		})
 	}
+}
+
+// TestValidateCLI_BareNameResolvedViaPATH proves the MAJ-004 fix: a BARE cli
+// name (not an absolute path) that resolves on $PATH must NOT be blocked as
+// missing-binary by the pre-spawn guard — the runtime spawn resolves it the same
+// way (US-4). Before the fix the guard os.Stat'd the raw bare name (a $PATH-less
+// stat) and wrongly classified missing-binary. Here the bare "claude" resolves
+// to a real fake on $PATH, so the guard passes and the spawn lands on
+// unauthenticated (runs + version, no creds) — anything but missing-binary.
+func TestValidateCLI_BareNameResolvedViaPATH(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script fixture is POSIX")
+	}
+	dir := t.TempDir()
+	// A fake "claude" on $PATH that prints a version and exits 0.
+	bin := filepath.Join(dir, "claude")
+	require.NoError(t, os.WriteFile(bin, []byte("#!/bin/sh\necho 'claude 1.2.3'\n"), 0o755))
+	t.Setenv("PATH", dir)
+
+	// Clear every claude-code credential source so the handshake lands on
+	// unauthenticated deterministically (proving the guard let the spawn happen).
+	empty := t.TempDir()
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
+	t.Setenv("CLAUDE_CONFIG_DIR", empty)
+	t.Setenv("HOME", empty)
+
+	api, cleanup := newTestRestAPI(t)
+	defer cleanup()
+
+	// BARE NAME, not an absolute path.
+	resp := api.validateCLI(context.Background(), "claude-code", "claude")
+	assert.NotEqual(t, gen.CliValidateResponseReasonMissingBinary, resp.Reason,
+		"a bare name resolvable on $PATH must NOT be blocked missing-binary (MAJ-004 / US-4)")
+	assert.Equal(t, gen.CliValidateResponseReasonUnauthenticated, resp.Reason,
+		"the bare name resolved, ran, and reported a version but has no creds → unauthenticated")
+	require.NotNil(t, resp.Version)
+	assert.Equal(t, "1.2.3", *resp.Version)
 }
 
 // TestValidateCLI_HandshakeFailed: a runnable target that does not print a
@@ -212,6 +253,104 @@ func TestInflightLimiter(t *testing.T) {
 	assert.False(t, l.acquire("bob"), "back at cap after re-acquire")
 }
 
+// TestHandleSystemCliValidate_InflightCapHandler drives the real HANDLER (not
+// just the limiter unit) under concurrency: two in-flight requests for ONE caller
+// occupy the per-caller cap (2) while blocked inside an injected spawn, so a 3rd
+// request from the SAME caller is rejected fast with 429 + Retry-After — and a
+// DIFFERENT caller (distinct key) is unaffected, acquiring its own slot and
+// reaching the spawn. Proves the cap is per-caller and enforced at the handler,
+// not merely on the limiter (FR-013).
+func TestHandleSystemCliValidate_InflightCapHandler(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script fixture is POSIX")
+	}
+	api, cleanup := newTestRestAPI(t)
+	defer cleanup()
+
+	// A real regular executable so the pre-spawn guard (LookPath + regular-file)
+	// passes and control reaches the injected connection test. Its body is never
+	// run — cliTestConnection is swapped for a blocking stand-in below.
+	realBin := writeScript(t, "#!/bin/sh\nexit 0\n")
+	body := `{"cli":"claude-code","cli_path":"` + realBin + `"}`
+
+	entered := make(chan struct{}, 8) // one signal per spawn that reaches the test
+	release := make(chan struct{})    // closed once to unblock all held spawns
+	var once sync.Once
+	closeRelease := func() { once.Do(func() { close(release) }) }
+	// Close on any exit path (including t.Fatalf's Goexit) so blocked goroutines
+	// never leak and never leave global in-flight slots occupied for later tests.
+	defer closeRelease()
+
+	orig := cliTestConnection
+	cliTestConnection = func(_ context.Context, _, _ string) runner.ConnectionTestResult {
+		entered <- struct{}{}
+		<-release
+		return runner.ConnectionTestResult{OK: false, Reason: runner.ReasonUnauthenticated, CLIVersion: "1.2.3"}
+	}
+	defer func() { cliTestConnection = orig }()
+
+	waitEntered := func(n int) {
+		for i := 0; i < n; i++ {
+			select {
+			case <-entered:
+			case <-time.After(5 * time.Second):
+				t.Fatalf("timed out waiting for spawn entry %d/%d", i+1, n)
+			}
+		}
+	}
+
+	// Two concurrent holders for caller "bob" (makeNonAdminCtxRequest → user:bob).
+	bobCodes := make(chan int, 2)
+	fireBob := func() {
+		req := makeNonAdminCtxRequest(http.MethodPost, "/api/v1/system/cli-validate", body)
+		w := httptest.NewRecorder()
+		api.HandleSystemCliValidate(w, req)
+		bobCodes <- w.Code
+	}
+	go fireBob()
+	go fireBob()
+	waitEntered(2) // both bob requests now hold a slot each, blocked in the spawn
+
+	// 3rd bob request is OVER the per-caller cap → immediate 429 (never enters the
+	// spawn, so no `entered` signal), with a Retry-After header.
+	req3 := makeNonAdminCtxRequest(http.MethodPost, "/api/v1/system/cli-validate", body)
+	w3 := httptest.NewRecorder()
+	api.HandleSystemCliValidate(w3, req3)
+	require.Equal(t, http.StatusTooManyRequests, w3.Code,
+		"3rd concurrent request from the same caller must be 429; body=%s", w3.Body.String())
+	assert.NotEmpty(t, w3.Header().Get("Retry-After"), "429 must carry Retry-After")
+
+	// A DIFFERENT caller (IP-keyed, no user context → key != user:bob) is NOT
+	// blocked by bob's cap: it acquires its own slot and reaches the spawn.
+	diffCode := make(chan int, 1)
+	go func() {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/system/cli-validate", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.RemoteAddr = "203.0.113.9:1234"
+		w := httptest.NewRecorder()
+		api.HandleSystemCliValidate(w, req)
+		diffCode <- w.Code
+	}()
+	waitEntered(1) // the different caller reached the spawn → unaffected by bob's cap
+
+	// Release everyone; all three that reached the spawn must succeed (200).
+	closeRelease()
+	for i := 0; i < 2; i++ {
+		select {
+		case code := <-bobCodes:
+			assert.Equal(t, http.StatusOK, code, "a held bob request must complete 200 after release")
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for a held bob request to complete")
+		}
+	}
+	select {
+	case code := <-diffCode:
+		assert.Equal(t, http.StatusOK, code, "the different caller must complete 200")
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the different caller to complete")
+	}
+}
+
 // --- Endpoint: create-parity auth ---
 
 // TestHandleSystemCliValidate_CreateParity_NonAdminAllowed proves the handler is
@@ -310,7 +449,9 @@ func TestHandleSystemCliValidate_RateLimited(t *testing.T) {
 // --- Endpoint: audit ---
 
 // TestHandleSystemCliValidate_AuditEmitted asserts exactly ONE audit event per
-// call carrying the {cli, resolved_path, reason} triple (FR-013 / SC-009).
+// call carrying the authenticated caller (User — M-1) plus the {cli,
+// requested_path, resolved_path, reason} details (FR-013 / SC-009), including on
+// a no-spawn (missing-binary) classification.
 func TestHandleSystemCliValidate_AuditEmitted(t *testing.T) {
 	api, cleanup := newTestRestAPI(t)
 	defer cleanup()
@@ -320,9 +461,12 @@ func TestHandleSystemCliValidate_AuditEmitted(t *testing.T) {
 	require.NoError(t, err)
 	api.auditor = logger
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/system/cli-validate",
-		strings.NewReader(`{"cli":"claude-code","cli_path":""}`))
-	req.Header.Set("Content-Type", "application/json")
+	// Inject an authenticated non-admin caller ("bob") so the audit User is
+	// populated from the request context (M-1). A raw path with surrounding
+	// whitespace proves the RAW requested value is recorded even though the
+	// classifier trims it — the target is still empty→missing-binary (no spawn).
+	req := makeNonAdminCtxRequest(http.MethodPost, "/api/v1/system/cli-validate",
+		`{"cli":"claude-code","cli_path":"   "}`)
 	w := httptest.NewRecorder()
 	api.HandleSystemCliValidate(w, req)
 	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
@@ -337,10 +481,14 @@ func TestHandleSystemCliValidate_AuditEmitted(t *testing.T) {
 		}
 	}
 	require.Len(t, found, 1, "exactly one cli.validate audit event per call")
+	assert.Equal(t, "bob", found[0]["user"], "audit entry must attribute the authenticated caller (M-1)")
 	details, ok := found[0]["details"].(map[string]any)
 	require.True(t, ok, "audit entry must carry details")
 	assert.Equal(t, "claude-code", details["cli"])
 	assert.Equal(t, "missing-binary", details["reason"])
+	reqPath, hasRequested := details["requested_path"]
+	assert.True(t, hasRequested, "audit details must record the raw requested_path even on a no-spawn denial")
+	assert.Equal(t, "   ", reqPath, "requested_path must be the RAW (untrimmed) caller value")
 	_, hasResolved := details["resolved_path"]
 	assert.True(t, hasResolved, "audit details must include resolved_path")
 }

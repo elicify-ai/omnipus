@@ -316,6 +316,36 @@ func TestCompareNodeVersion(t *testing.T) {
 	}
 }
 
+// TestCandidateDirs_Darwin asserts the macOS candidate ordering: the Homebrew
+// prefix (/opt/homebrew/bin on Apple Silicon) is present AND precedes the
+// home-rooted dirs, so a brew-installed CLI is preferred over a per-user install.
+func TestCandidateDirs_Darwin(t *testing.T) {
+	home := t.TempDir()
+	d := baseDetector("darwin", home, alwaysMiss)
+	dirs := d.candidateDirs("claude")
+
+	pos := func(want string) int {
+		for i, dir := range dirs {
+			if dir == want {
+				return i
+			}
+		}
+		return -1
+	}
+
+	brew := pos("/opt/homebrew/bin")
+	if brew < 0 {
+		t.Fatalf("darwin candidateDirs must include /opt/homebrew/bin, got %v", dirs)
+	}
+	homeLocal := pos(filepath.Join(home, ".local", "bin"))
+	if homeLocal < 0 {
+		t.Fatalf("darwin candidateDirs must include the home ~/.local/bin, got %v", dirs)
+	}
+	if brew >= homeLocal {
+		t.Errorf("/opt/homebrew/bin (idx %d) must precede home dirs (idx %d): %v", brew, homeLocal, dirs)
+	}
+}
+
 // TestDetectAll_KeysAndNoSpawn asserts DetectAll returns all three cli keys and
 // (implicitly) spawns nothing — it only ever calls lookPath/stat, never exec.
 func TestDetectAll_KeysAndNoSpawn(t *testing.T) {
