@@ -1,12 +1,22 @@
-// Package catalog is the backend-owned single source of truth for the ~30
+// Package catalog is the backend-owned single source of truth for the 23
 // user-facing LLM provider variants available in the Omnipus picker.
 //
 // # Design
 //
-// Entries is a hand-authored slice of ProviderCatalogEntry values seeded from
-// the 30 variants that previously lived in src/routes/onboarding.tsx as
-// AVAILABLE_PROVIDERS.  Each entry covers one billable endpoint identified by
-// (company × plan × region).
+// Entries is a hand-authored slice of ProviderCatalogEntry values. Each entry
+// covers one billable endpoint identified by (company × plan × region). Wire
+// (OpenAI- vs Anthropic-compatible) is NOT a separate catalog row: per
+// docs/internal/specs/provider-ux-fixes-plan.md FIX-5, one account/API key
+// commonly exposes both an OpenAI-compatible and an Anthropic-compatible base
+// URL, so the Anthropic-compatible sibling id is folded into its primary
+// entry's AnthropicId field rather than shipped as its own row. The catalog
+// was 30 entries before this merge (7 pure anthropic-wire siblings absorbed:
+// z-ai-anthropic, zhipu-anthropic, moonshot-anthropic, moonshot-cn-anthropic,
+// minimax-anthropic, minimax-cn-anthropic, deepseek-anthropic; plus the Qwen
+// Coding Plan entry renamed from coding-plan-anthropic to coding-plan with
+// coding-plan-anthropic demoted to its AnthropicId — see the "coding-plan"
+// entry below for the GetDefaultAPIBase / ProbeProviderRequest check that
+// justified promoting it to primary).
 //
 // The slice is serialized to pkg/providers/catalog/data/providers_catalog.json
 // and a matching TypeScript constant in src/lib/generated/providerCatalog.ts by
@@ -27,6 +37,9 @@
 //	otherwise "openai-compatible"
 //
 // Wire is set explicitly in Entries so the rule is checkable by TestWireDerivation_Table.
+// Every primary entry's own Wire is validated against DeriveWire(id); when an
+// entry carries an AnthropicId, that sibling id is independently validated to
+// derive to "anthropic" and to be a known protocol (see LoadCatalog).
 //
 // # Alias convention
 //
@@ -48,6 +61,7 @@ import (
 	"strings"
 
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
+	"github.com/dapicom-ai/omnipus/pkg/providers"
 )
 
 // providersCatalogJSON is the embedded generated JSON artifact.
@@ -85,9 +99,21 @@ func aliasesPtr(aa ...string) *[]string {
 	return &aa
 }
 
+// anthropicIDPtr wraps a sibling Anthropic-wire protocol id as *string, or
+// nil when the entry has no Anthropic-compatible sibling endpoint (FIX-5).
+func anthropicIDPtr(id string) *string {
+	if id == "" {
+		return nil
+	}
+	return &id
+}
+
 // entry constructs a ProviderCatalogEntry using the provided fields.
 // w is passed explicitly so the caller documents the expected wire protocol;
-// the drift-guard test asserts it matches the derivation rule.
+// the drift-guard test asserts it matches the derivation rule. anthropicID,
+// when non-empty, is the sibling protocol id exposing the Anthropic-compatible
+// endpoint for the same account/API key (FIX-5) — set AnthropicId, never a
+// separate catalog row.
 func entry(
 	id, company string,
 	plan gen.ProviderCatalogEntryPlan,
@@ -95,6 +121,7 @@ func entry(
 	region *gen.ProviderCatalogEntryRegion,
 	endpointHint, logoSlug, label, subtitle string,
 	aliases *[]string,
+	anthropicID string,
 ) gen.ProviderCatalogEntry {
 	return gen.ProviderCatalogEntry{
 		Id:           id,
@@ -107,15 +134,20 @@ func entry(
 		Label:        label,
 		Subtitle:     subtitle,
 		Aliases:      aliases,
+		AnthropicId:  anthropicIDPtr(anthropicID),
 	}
 }
 
-// standardAPILabel returns a "<Brand> — Standard API [(Region)]" label.
-func standardAPILabel(brand string, region *gen.ProviderCatalogEntryRegion) string {
+// companyLabel returns a plain "<Brand> [(Region)]" label for a pay-as-you-go
+// (standard-api) entry — NO plan-name suffix. Wire (OpenAI- vs
+// Anthropic-compatible) is a config detail, never label text (FIX-4/FIX-5,
+// docs/internal/specs/provider-ux-fixes-plan.md): "Standard API" and
+// "Anthropic-compatible" must never appear in a catalog label.
+func companyLabel(brand string, region *gen.ProviderCatalogEntryRegion) string {
 	if region == nil {
-		return brand + " — Standard API"
+		return brand
 	}
-	return brand + " — Standard API (" + regionDisplayName(*region) + ")"
+	return brand + " (" + regionDisplayName(*region) + ")"
 }
 
 // codingPlanLabel returns a "<Brand> — Coding Plan [(Region)]" label.
@@ -124,15 +156,6 @@ func codingPlanLabel(brand string, region *gen.ProviderCatalogEntryRegion) strin
 		return brand + " — Coding Plan"
 	}
 	return brand + " — Coding Plan (" + regionDisplayName(*region) + ")"
-}
-
-// anthropicLabel returns a "<Brand> — Anthropic-compatible [(Region)]" label
-// for entries that use the Anthropic wire protocol.
-func anthropicLabel(brand string, region *gen.ProviderCatalogEntryRegion) string {
-	if region == nil {
-		return brand + " — Anthropic-compatible"
-	}
-	return brand + " — Anthropic-compatible (" + regionDisplayName(*region) + ")"
 }
 
 func regionDisplayName(r gen.ProviderCatalogEntryRegion) string {
@@ -148,7 +171,7 @@ func regionDisplayName(r gen.ProviderCatalogEntryRegion) string {
 	}
 }
 
-// subtitleAPI returns the subtitle for a Standard API entry.
+// subtitleAPI returns the subtitle for a pay-as-you-go (standard-api) entry.
 func subtitleAPI(hint string) string {
 	return "Pay-as-you-go, per token · " + hint
 }
@@ -158,20 +181,15 @@ func subtitleCoding(hint string) string {
 	return "Subscription (Coding Plan) · " + hint
 }
 
-// subtitleAnthropic returns the subtitle for an Anthropic-compatible entry.
-func subtitleAnthropic(hint string) string {
-	return "Pay-as-you-go, per token (Anthropic-compatible) · " + hint
-}
-
 // Entries is the authoritative Go slice of user-facing provider variants.
-// Seeded from the 30 entries previously in onboarding.tsx AVAILABLE_PROVIDERS.
 // Companies with no vendored SVG use a short lettermark-fallback logoSlug
 // (azure, cerebras, nvidia, ollama — BrandIcon will render a lettermark for
 // those; ollama has no p_ollama.svg so it lettermarks intentionally).
 //
-// Ordering mirrors AVAILABLE_PROVIDERS: single-option companies first, then
-// multi-variant families in the same order (Zhipu, Moonshot, MiniMax, DeepSeek,
-// Qwen/Alibaba).
+// Ordering: single-option companies first, then multi-variant families in the
+// same order (Zhipu, Moonshot, MiniMax, DeepSeek, Qwen/Alibaba). Dual-wire
+// families carry their Anthropic-compatible sibling id in AnthropicId rather
+// than as a separate row (FIX-5).
 var Entries = []gen.ProviderCatalogEntry{
 	// ── Single-option companies ───────────────────────────────────────────────
 
@@ -182,9 +200,10 @@ var Entries = []gen.ProviderCatalogEntry{
 		nil,
 		"api.openai.com/v1",
 		"openai",
-		standardAPILabel("OpenAI", nil),
+		companyLabel("OpenAI", nil),
 		subtitleAPI("api.openai.com/v1"),
 		nil,
+		"",
 	),
 	entry(
 		"anthropic", "Anthropic",
@@ -193,9 +212,10 @@ var Entries = []gen.ProviderCatalogEntry{
 		nil,
 		"api.anthropic.com/v1",
 		"anthropic",
-		anthropicLabel("Anthropic", nil),
-		subtitleAnthropic("api.anthropic.com/v1"),
+		companyLabel("Anthropic", nil),
+		subtitleAPI("api.anthropic.com/v1"),
 		aliasesPtr("anthropic-messages"),
+		"",
 	),
 	entry(
 		"google", "Google Gemini",
@@ -204,9 +224,10 @@ var Entries = []gen.ProviderCatalogEntry{
 		nil,
 		"generativelanguage.googleapis.com",
 		"gemini",
-		standardAPILabel("Google Gemini", nil),
+		companyLabel("Google Gemini", nil),
 		subtitleAPI("generativelanguage.googleapis.com"),
 		aliasesPtr("gemini"),
+		"",
 	),
 	entry(
 		"openrouter", "OpenRouter",
@@ -215,9 +236,10 @@ var Entries = []gen.ProviderCatalogEntry{
 		nil,
 		"openrouter.ai/api/v1",
 		"openrouter",
-		standardAPILabel("OpenRouter", nil),
+		companyLabel("OpenRouter", nil),
 		subtitleAPI("openrouter.ai/api/v1"),
 		nil,
+		"",
 	),
 	entry(
 		"groq", "Groq",
@@ -226,9 +248,10 @@ var Entries = []gen.ProviderCatalogEntry{
 		nil,
 		"api.groq.com/openai/v1",
 		"groq",
-		standardAPILabel("Groq", nil),
+		companyLabel("Groq", nil),
 		subtitleAPI("api.groq.com/openai/v1"),
 		nil,
+		"",
 	),
 	entry(
 		"mistral", "Mistral",
@@ -237,9 +260,10 @@ var Entries = []gen.ProviderCatalogEntry{
 		nil,
 		"api.mistral.ai/v1",
 		"mistral",
-		standardAPILabel("Mistral", nil),
+		companyLabel("Mistral", nil),
 		subtitleAPI("api.mistral.ai/v1"),
 		nil,
+		"",
 	),
 	entry(
 		"nvidia", "NVIDIA",
@@ -248,9 +272,10 @@ var Entries = []gen.ProviderCatalogEntry{
 		nil,
 		"integrate.api.nvidia.com/v1",
 		"nvidia",
-		standardAPILabel("NVIDIA", nil),
+		companyLabel("NVIDIA", nil),
 		subtitleAPI("integrate.api.nvidia.com/v1"),
 		nil,
+		"",
 	),
 	entry(
 		"cerebras", "Cerebras",
@@ -259,9 +284,10 @@ var Entries = []gen.ProviderCatalogEntry{
 		nil,
 		"api.cerebras.ai/v1",
 		"cerebras",
-		standardAPILabel("Cerebras", nil),
+		companyLabel("Cerebras", nil),
 		subtitleAPI("api.cerebras.ai/v1"),
 		nil,
+		"",
 	),
 	entry(
 		"ollama", "Ollama (local)",
@@ -270,9 +296,10 @@ var Entries = []gen.ProviderCatalogEntry{
 		nil,
 		"localhost:11434",
 		"ollama",
-		standardAPILabel("Ollama (local)", nil),
+		companyLabel("Ollama (local)", nil),
 		subtitleAPI("localhost:11434"),
 		nil,
+		"",
 	),
 	entry(
 		"azure", "Azure OpenAI",
@@ -281,12 +308,13 @@ var Entries = []gen.ProviderCatalogEntry{
 		nil,
 		"<resource>.openai.azure.com",
 		"azure",
-		standardAPILabel("Azure OpenAI", nil),
+		companyLabel("Azure OpenAI", nil),
 		subtitleAPI("<resource>.openai.azure.com"),
 		aliasesPtr("azure-openai"),
+		"",
 	),
 
-	// ── Zhipu / GLM (plan × region) ──────────────────────────────────────────
+	// ── Zhipu / GLM (plan × region; anthropic-wire siblings merged, FIX-5) ────
 
 	entry(
 		"z-ai", "Zhipu / GLM",
@@ -295,9 +323,10 @@ var Entries = []gen.ProviderCatalogEntry{
 		regionPtr("intl"),
 		"api.z.ai/api/paas/v4",
 		"zhipu",
-		standardAPILabel("Zhipu / GLM", regionPtr("intl")),
+		companyLabel("Zhipu / GLM", regionPtr("intl")),
 		subtitleAPI("api.z.ai/api/paas/v4"),
 		aliasesPtr("z.ai", "zai"),
+		"z-ai-anthropic",
 	),
 	entry(
 		"zhipu", "Zhipu / GLM",
@@ -306,9 +335,10 @@ var Entries = []gen.ProviderCatalogEntry{
 		regionPtr("china"),
 		"open.bigmodel.cn/api/paas/v4",
 		"zhipu",
-		standardAPILabel("Zhipu / GLM", regionPtr("china")),
+		companyLabel("Zhipu / GLM", regionPtr("china")),
 		subtitleAPI("open.bigmodel.cn/api/paas/v4"),
 		nil,
+		"zhipu-anthropic",
 	),
 	entry(
 		"z-ai-coding", "Zhipu / GLM",
@@ -320,6 +350,7 @@ var Entries = []gen.ProviderCatalogEntry{
 		codingPlanLabel("Zhipu / GLM", regionPtr("intl")),
 		subtitleCoding("api.z.ai/api/coding/paas/v4"),
 		aliasesPtr("glm-coding"),
+		"",
 	),
 	entry(
 		"zhipu-coding", "Zhipu / GLM",
@@ -331,31 +362,10 @@ var Entries = []gen.ProviderCatalogEntry{
 		codingPlanLabel("Zhipu / GLM", regionPtr("china")),
 		subtitleCoding("open.bigmodel.cn/api/coding/paas/v4"),
 		nil,
-	),
-	entry(
-		"z-ai-anthropic", "Zhipu / GLM",
-		gen.ProviderCatalogEntryPlanStandardApi,
-		wire("z-ai-anthropic"),
-		regionPtr("intl"),
-		"api.z.ai/api/anthropic/v1",
-		"zhipu",
-		anthropicLabel("Zhipu / GLM", regionPtr("intl")),
-		subtitleAnthropic("api.z.ai/api/anthropic/v1"),
-		nil,
-	),
-	entry(
-		"zhipu-anthropic", "Zhipu / GLM",
-		gen.ProviderCatalogEntryPlanStandardApi,
-		wire("zhipu-anthropic"),
-		regionPtr("china"),
-		"open.bigmodel.cn/api/anthropic/v1",
-		"zhipu",
-		anthropicLabel("Zhipu / GLM", regionPtr("china")),
-		subtitleAnthropic("open.bigmodel.cn/api/anthropic/v1"),
-		nil,
+		"",
 	),
 
-	// ── Moonshot / Kimi (plan × region) ──────────────────────────────────────
+	// ── Moonshot / Kimi (plan × region; anthropic-wire siblings merged) ──────
 
 	entry(
 		"moonshot", "Moonshot / Kimi",
@@ -364,9 +374,10 @@ var Entries = []gen.ProviderCatalogEntry{
 		regionPtr("intl"),
 		"api.moonshot.ai/v1",
 		"kimi",
-		standardAPILabel("Moonshot / Kimi", regionPtr("intl")),
+		companyLabel("Moonshot / Kimi", regionPtr("intl")),
 		subtitleAPI("api.moonshot.ai/v1"),
 		nil,
+		"moonshot-anthropic",
 	),
 	entry(
 		"moonshot-cn", "Moonshot / Kimi",
@@ -375,34 +386,13 @@ var Entries = []gen.ProviderCatalogEntry{
 		regionPtr("china"),
 		"api.moonshot.cn/v1",
 		"kimi",
-		standardAPILabel("Moonshot / Kimi", regionPtr("china")),
+		companyLabel("Moonshot / Kimi", regionPtr("china")),
 		subtitleAPI("api.moonshot.cn/v1"),
 		nil,
-	),
-	entry(
-		"moonshot-anthropic", "Moonshot / Kimi",
-		gen.ProviderCatalogEntryPlanStandardApi,
-		wire("moonshot-anthropic"),
-		regionPtr("intl"),
-		"api.moonshot.ai/anthropic/v1",
-		"kimi",
-		anthropicLabel("Moonshot / Kimi", regionPtr("intl")),
-		subtitleAnthropic("api.moonshot.ai/anthropic/v1"),
-		nil,
-	),
-	entry(
-		"moonshot-cn-anthropic", "Moonshot / Kimi",
-		gen.ProviderCatalogEntryPlanStandardApi,
-		wire("moonshot-cn-anthropic"),
-		regionPtr("china"),
-		"api.moonshot.cn/anthropic/v1",
-		"kimi",
-		anthropicLabel("Moonshot / Kimi", regionPtr("china")),
-		subtitleAnthropic("api.moonshot.cn/anthropic/v1"),
-		nil,
+		"moonshot-cn-anthropic",
 	),
 
-	// ── MiniMax (plan × region) ───────────────────────────────────────────────
+	// ── MiniMax (plan × region; anthropic-wire siblings merged) ──────────────
 
 	entry(
 		"minimax", "MiniMax",
@@ -411,9 +401,10 @@ var Entries = []gen.ProviderCatalogEntry{
 		regionPtr("intl"),
 		"api.minimax.io/v1",
 		"minimax",
-		standardAPILabel("MiniMax", regionPtr("intl")),
+		companyLabel("MiniMax", regionPtr("intl")),
 		subtitleAPI("api.minimax.io/v1"),
 		nil,
+		"minimax-anthropic",
 	),
 	entry(
 		"minimax-cn", "MiniMax",
@@ -422,34 +413,13 @@ var Entries = []gen.ProviderCatalogEntry{
 		regionPtr("china"),
 		"api.minimaxi.com/v1",
 		"minimax",
-		standardAPILabel("MiniMax", regionPtr("china")),
+		companyLabel("MiniMax", regionPtr("china")),
 		subtitleAPI("api.minimaxi.com/v1"),
 		nil,
-	),
-	entry(
-		"minimax-anthropic", "MiniMax",
-		gen.ProviderCatalogEntryPlanStandardApi,
-		wire("minimax-anthropic"),
-		regionPtr("intl"),
-		"api.minimax.io/anthropic/v1",
-		"minimax",
-		anthropicLabel("MiniMax", regionPtr("intl")),
-		subtitleAnthropic("api.minimax.io/anthropic/v1"),
-		nil,
-	),
-	entry(
-		"minimax-cn-anthropic", "MiniMax",
-		gen.ProviderCatalogEntryPlanStandardApi,
-		wire("minimax-cn-anthropic"),
-		regionPtr("china"),
-		"api.minimaxi.com/anthropic/v1",
-		"minimax",
-		anthropicLabel("MiniMax", regionPtr("china")),
-		subtitleAnthropic("api.minimaxi.com/anthropic/v1"),
-		nil,
+		"minimax-cn-anthropic",
 	),
 
-	// ── DeepSeek (plan only, no region) ──────────────────────────────────────
+	// ── DeepSeek (plan only, no region; anthropic-wire sibling merged) ───────
 
 	entry(
 		"deepseek", "DeepSeek",
@@ -458,23 +428,13 @@ var Entries = []gen.ProviderCatalogEntry{
 		nil,
 		"api.deepseek.com/v1",
 		"deepseek",
-		standardAPILabel("DeepSeek", nil),
+		companyLabel("DeepSeek", nil),
 		subtitleAPI("api.deepseek.com/v1"),
 		nil,
-	),
-	entry(
-		"deepseek-anthropic", "DeepSeek",
-		gen.ProviderCatalogEntryPlanStandardApi,
-		wire("deepseek-anthropic"),
-		nil,
-		"api.deepseek.com/anthropic/v1",
-		"deepseek",
-		anthropicLabel("DeepSeek", nil),
-		subtitleAnthropic("api.deepseek.com/anthropic/v1"),
-		nil,
+		"deepseek-anthropic",
 	),
 
-	// ── Qwen / Alibaba (plan × region; anthropic has no region) ──────────────
+	// ── Qwen / Alibaba (plan × region) ────────────────────────────────────────
 
 	entry(
 		"qwen", "Qwen / Alibaba",
@@ -483,9 +443,10 @@ var Entries = []gen.ProviderCatalogEntry{
 		regionPtr("china"),
 		"dashscope.aliyuncs.com/compatible-mode/v1",
 		"qwen",
-		standardAPILabel("Qwen / Alibaba", regionPtr("china")),
+		companyLabel("Qwen / Alibaba", regionPtr("china")),
 		subtitleAPI("dashscope.aliyuncs.com/compatible-mode/v1"),
 		nil,
+		"",
 	),
 	entry(
 		"qwen-intl", "Qwen / Alibaba",
@@ -494,9 +455,10 @@ var Entries = []gen.ProviderCatalogEntry{
 		regionPtr("intl"),
 		"dashscope-intl.aliyuncs.com/compatible-mode/v1",
 		"qwen",
-		standardAPILabel("Qwen / Alibaba", regionPtr("intl")),
+		companyLabel("Qwen / Alibaba", regionPtr("intl")),
 		subtitleAPI("dashscope-intl.aliyuncs.com/compatible-mode/v1"),
 		aliasesPtr("qwen-international", "dashscope-intl"),
+		"",
 	),
 	entry(
 		"qwen-us", "Qwen / Alibaba",
@@ -505,20 +467,33 @@ var Entries = []gen.ProviderCatalogEntry{
 		regionPtr("us"),
 		"dashscope-us.aliyuncs.com/compatible-mode/v1",
 		"qwen",
-		standardAPILabel("Qwen / Alibaba", regionPtr("us")),
+		companyLabel("Qwen / Alibaba", regionPtr("us")),
 		subtitleAPI("dashscope-us.aliyuncs.com/compatible-mode/v1"),
 		aliasesPtr("dashscope-us"),
+		"",
 	),
+	// "coding-plan" is the promoted primary for the Qwen/Alibaba Coding Plan
+	// (formerly a standalone "coding-plan-anthropic" entry). Both
+	// GetDefaultAPIBase("coding-plan") (non-empty, pkg/providers/factory_provider.go)
+	// and ProbeProviderRequest's id enum (contracts/components/schemas/ProbeProviderRequest.yaml)
+	// carry "coding-plan" as an OpenAI-compatible endpoint, so it satisfies the
+	// same primary-entry contract as every other id in this catalog; the
+	// Anthropic-compatible endpoint (coding-intl.dashscope.aliyuncs.com/apps/anthropic)
+	// is demoted to AnthropicId. "alibaba-coding" and "qwen-coding" share
+	// coding-plan's GetDefaultAPIBase case and are promoted from
+	// catalogExcluded to real aliases; "alibaba-coding-anthropic" (the former
+	// alias of coding-plan-anthropic) stays excluded — see catalog_test.go.
 	entry(
-		"coding-plan-anthropic", "Qwen / Alibaba",
+		"coding-plan", "Qwen / Alibaba",
 		gen.ProviderCatalogEntryPlanCodingPlan,
-		wire("coding-plan-anthropic"),
+		wire("coding-plan"),
 		nil,
-		"coding-intl.dashscope.aliyuncs.com/apps/anthropic",
+		"coding-intl.dashscope.aliyuncs.com/v1",
 		"qwen",
-		anthropicLabel("Qwen / Alibaba", nil)+" (Coding Plan)",
-		subtitleCoding("coding-intl.dashscope.aliyuncs.com/apps/anthropic"),
-		aliasesPtr("alibaba-coding-anthropic"),
+		codingPlanLabel("Qwen / Alibaba", nil),
+		subtitleCoding("coding-intl.dashscope.aliyuncs.com/v1"),
+		aliasesPtr("alibaba-coding", "qwen-coding"),
+		"coding-plan-anthropic",
 	),
 }
 
@@ -530,6 +505,12 @@ var Entries = []gen.ProviderCatalogEntry{
 // field does not match DeriveWire(entry.Id), an error is returned.  This
 // ensures ANY consumer of the embedded JSON — not just in-repo Entries — gets
 // the wire-consistency guarantee at runtime rather than only at CI time.
+//
+// AnthropicId consistency is also validated (FIX-5): when an entry carries a
+// non-nil AnthropicId, that sibling id must itself derive to the "anthropic"
+// wire (it is the Anthropic-compatible endpoint for the same account/key) and
+// must be a known protocol — otherwise the config/probe path would accept a
+// choice that CreateProviderFromConfig cannot route.
 func LoadCatalog() ([]gen.ProviderCatalogEntry, error) {
 	var out []gen.ProviderCatalogEntry
 	if err := json.Unmarshal(providersCatalogJSON, &out); err != nil {
@@ -542,6 +523,24 @@ func LoadCatalog() ([]gen.ProviderCatalogEntry, error) {
 				"catalog: entry[%d] id=%q: Wire=%q does not match DeriveWire=%q (FR-005); "+
 					"run go generate ./pkg/providers/catalog/... to regenerate providers_catalog.json",
 				i, e.Id, e.Wire, expected,
+			)
+		}
+		if e.AnthropicId == nil {
+			continue
+		}
+		anthropicID := *e.AnthropicId
+		if got := DeriveWire(anthropicID); got != gen.Anthropic {
+			return nil, fmt.Errorf(
+				"catalog: entry[%d] id=%q: AnthropicId=%q must derive to the anthropic wire, got %q (FIX-5); "+
+					"run go generate ./pkg/providers/catalog/... to regenerate providers_catalog.json",
+				i, e.Id, anthropicID, got,
+			)
+		}
+		if !providers.IsKnownProtocol(anthropicID) {
+			return nil, fmt.Errorf(
+				"catalog: entry[%d] id=%q: AnthropicId=%q is not a known protocol (FIX-5); "+
+					"add it to knownProtocols in pkg/providers/factory_provider.go",
+				i, e.Id, anthropicID,
 			)
 		}
 	}

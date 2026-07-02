@@ -6534,6 +6534,9 @@ type ProviderCatalogEntry struct {
 	// Aliases Additional protocol ids that map to this catalog entry. Derived from the GetDefaultAPIBase switch: ids grouped in the same case share a base URL and are aliases. The aliases list excludes the canonical id itself. Used by the migration resolver to normalize stored alias ids to the canonical catalog entry (ADR-031 §7 G-4, FR-012, US-8).
 	Aliases *[]string `json:"aliases,omitempty"`
 
+	// AnthropicId Sibling protocol id exposing the Anthropic-compatible endpoint for the same account/API key (e.g. z-ai → z-ai-anthropic). Present only for dual-wire providers; the UI offers it as an endpoint-format choice inside config, never as a separate provider row.
+	AnthropicId *string `json:"anthropic_id,omitempty"`
+
 	// Company Human-readable company/brand name. Used as the group header in the configured-providers list. Multiple catalog entries share the same company when one vendor exposes multiple endpoints (plan × region).
 	Company string `json:"company"`
 

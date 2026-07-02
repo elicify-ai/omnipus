@@ -4958,6 +4958,11 @@ export interface components {
              *     ]
              */
             aliases?: string[];
+            /**
+             * @description Sibling protocol id exposing the Anthropic-compatible endpoint for the same account/API key (e.g. z-ai → z-ai-anthropic). Present only for dual-wire providers; the UI offers it as an endpoint-format choice inside config, never as a separate provider row.
+             * @example z-ai-anthropic
+             */
+            anthropic_id?: string;
         };
         /** @description Metadata for a single successfully uploaded file, as returned in the POST /upload response body's "files" array. Callers use the path field to construct the /api/v1/uploads/{session_id}/{filename} download URL. */
         UploadedFile: {
