@@ -15,8 +15,8 @@
 //	    importing the generated TS type.  Consumed by the SPA picker components.
 //
 // Parity: both outputs are derived from the same catalog.Entries slice so they
-// are byte-identical in field values.  The catalogGeneratedTs.matchesEmbed.test
-// (#13) asserts this at CI time.
+// are byte-identical in field values.  TestCatalog_EmbedMatchesGeneratedTS
+// in pkg/providers/catalog/catalog_test.go (#13) asserts this at CI time.
 //
 // Build constraint "ignore" prevents this file from being compiled into the
 // binary. It is only run by go generate.
@@ -44,6 +44,10 @@ func main() {
 	repoRoot := filepath.Join(filepath.Dir(thisFile), "..", "..", "..", "..")
 
 	entries := catalog.Entries
+	if len(entries) == 0 {
+		fmt.Fprintln(os.Stderr, "gen: refusing to write empty catalog")
+		os.Exit(1)
+	}
 
 	// ── 1. Emit providers_catalog.json ───────────────────────────────────────
 	jsonData, err := json.MarshalIndent(entries, "", "  ")
@@ -86,8 +90,8 @@ func buildTSContent(entries interface{}, jsonData []byte) (string, error) {
 	sb.WriteString("// Source of truth: pkg/providers/catalog/catalog.go → Entries\n")
 	sb.WriteString("// Regenerate: go generate ./pkg/providers/catalog/...\n")
 	sb.WriteString("//\n")
-	sb.WriteString("// Parity assertion: catalogGeneratedTs.matchesEmbed.test (#13) in\n")
-	sb.WriteString("// src/routes/-onboarding.test.tsx confirms this file equals the\n")
+	sb.WriteString("// Parity assertion: TestCatalog_EmbedMatchesGeneratedTS (#13) in\n")
+	sb.WriteString("// pkg/providers/catalog/catalog_test.go confirms this file equals the\n")
 	sb.WriteString("// embedded providers_catalog.json in field values.\n")
 	sb.WriteString("\n")
 	sb.WriteString("import type { ProviderCatalogEntry } from '../api/generated/openapi-types'\n")

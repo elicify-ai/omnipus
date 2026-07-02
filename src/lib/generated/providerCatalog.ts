@@ -3,8 +3,8 @@
 // Source of truth: pkg/providers/catalog/catalog.go → Entries
 // Regenerate: go generate ./pkg/providers/catalog/...
 //
-// Parity assertion: catalogGeneratedTs.matchesEmbed.test (#13) in
-// src/routes/-onboarding.test.tsx confirms this file equals the
+// Parity assertion: TestCatalog_EmbedMatchesGeneratedTS (#13) in
+// pkg/providers/catalog/catalog_test.go confirms this file equals the
 // embedded providers_catalog.json in field values.
 
 import type { ProviderCatalogEntry } from '../api/generated/openapi-types'

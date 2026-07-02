@@ -12,6 +12,9 @@
 //	#6  TestCatalog_NoSecretsInPayload           — no credential fields in JSON
 //	#7  TestWireDerivation_Table                 — DeriveWire matches rule for all ids
 //	#8  TestContract_ProviderCatalogEntry_Shape  — Go type marshals schema-valid JSON
+//	#9  TestCatalog_AliasEndpointEquality        — alias GetDefaultAPIBase == canonical
+//	#10 TestCatalog_LoadCatalogWireConsistency   — LoadCatalog wire-consistency check
+//	#11 TestCatalog_LogoSlugCoverage             — every logoSlug has SVG or is intentional lettermark
 //	#13 TestCatalog_EmbedMatchesGeneratedTS      — JSON embed and TS catalog are identical
 //
 // Traces to: spec §7, ADR-031 §6 G-2, FR-003, FR-005, FR-006, FR-020, US-1.
@@ -32,71 +35,54 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// probeProviderIDEnum is the complete set of ids from
-// contracts/components/schemas/ProbeProviderRequest.yaml.
-// Re-homed from src/routes/-onboarding.test.tsx:1029-1074 (spec §7 regression).
-// Update this set only when ProbeProviderRequest.yaml is updated.
-var probeProviderIDEnum = map[string]bool{
-	"anthropic":                true,
-	"anthropic-messages":       true,
-	"openai":                   true,
-	"openrouter":               true,
-	"gemini":                   true,
-	"google":                   true,
-	"ollama":                   true,
-	"azure":                    true,
-	"azure-openai":             true,
-	"bedrock":                  true,
-	"litellm":                  true,
-	"groq":                     true,
-	"zhipu":                    true,
-	"z-ai":                     true,
-	"zai":                      true,
-	"z-ai-coding":              true,
-	"glm-coding":               true,
-	"zhipu-coding":             true,
-	"z-ai-anthropic":           true,
-	"zhipu-anthropic":          true,
-	"moonshot-anthropic":       true,
-	"moonshot-cn-anthropic":    true,
-	"minimax-anthropic":        true,
-	"minimax-cn-anthropic":     true,
-	"deepseek-anthropic":       true,
-	"nvidia":                   true,
-	"moonshot":                 true,
-	"moonshot-cn":              true,
-	"shengsuanyun":             true,
-	"deepseek":                 true,
-	"cerebras":                 true,
-	"vivgrid":                  true,
-	"volcengine":               true,
-	"vllm":                     true,
-	"qwen":                     true,
-	"qwen-intl":                true,
-	"qwen-international":       true,
-	"dashscope-intl":           true,
-	"qwen-us":                  true,
-	"dashscope-us":             true,
-	"mistral":                  true,
-	"avian":                    true,
-	"longcat":                  true,
-	"modelscope":               true,
-	"novita":                   true,
-	"coding-plan":              true,
-	"alibaba-coding":           true,
-	"qwen-coding":              true,
-	"mimo":                     true,
-	"minimax":                  true,
-	"minimax-cn":               true,
-	"coding-plan-anthropic":    true,
-	"alibaba-coding-anthropic": true,
-	"antigravity":              true,
-	"claude-cli":               true,
-	"claudecli":                true,
-	"codex-cli":                true,
-	"codexcli":                 true,
-	"github-copilot":           true,
-	"copilot":                  true,
+// loadProbeProviderIDEnum parses contracts/components/schemas/ProbeProviderRequest.yaml
+// at test time and returns the set of ids from the enum field.  Using the real YAML
+// file (not a hand-copied map) means adding a value to ProbeProviderRequest.yaml
+// without triaging it into the catalog immediately causes Test #3 to go red.
+func loadProbeProviderIDEnum(t *testing.T) map[string]bool {
+	t.Helper()
+	_, thisFile, _, ok := runtime.Caller(0)
+	require.True(t, ok, "runtime.Caller must succeed")
+	repoRoot := findRepoRoot(t, filepath.Dir(thisFile))
+	yamlPath := filepath.Join(repoRoot, "contracts", "components", "schemas", "ProbeProviderRequest.yaml")
+	raw, err := os.ReadFile(yamlPath)
+	require.NoError(t, err, "must read ProbeProviderRequest.yaml (run: make gen-contracts to regenerate)")
+
+	// Minimal YAML parsing: extract the enum block under "id:".
+	// We avoid importing a full YAML library by parsing lines directly —
+	// the file has a simple, machine-generated structure.
+	//
+	// The enum block looks like:
+	//   enum:
+	//     - anthropic
+	//     - openai
+	//     ...
+	//
+	// We walk lines, find "    enum:", then collect "      - <value>" lines
+	// until a line without that prefix is encountered.
+	lines := strings.Split(string(raw), "\n")
+	inEnum := false
+	result := make(map[string]bool)
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "enum:" {
+			inEnum = true
+			continue
+		}
+		if inEnum {
+			if strings.HasPrefix(trimmed, "- ") {
+				id := strings.TrimPrefix(trimmed, "- ")
+				result[strings.TrimSpace(id)] = true
+			} else if trimmed != "" {
+				// Non-list, non-empty line ends the enum block.
+				break
+			}
+		}
+	}
+	require.NotEmpty(t, result,
+		"loadProbeProviderIDEnum: parsed 0 values from ProbeProviderRequest.yaml — "+
+			"check that the enum: block is present and correctly formatted")
+	return result
 }
 
 // catalogExcluded is the hand-authored set of knownProtocols ids that are
@@ -132,7 +118,8 @@ var catalogExcluded = map[string]bool{
 	// but may appear in the "Self-hosted / Custom" group when configured).
 	"litellm": true,
 	"vllm":    true,
-	"ollama":  false, // ollama IS in the catalog; listed here explicitly to document it is NOT excluded
+	// ollama IS in the catalog; listed here explicitly to document it is NOT excluded
+	"ollama": false,
 
 	// Qwen/Alibaba alternative ids not given their own catalog entry
 	"coding-plan":    true,
@@ -151,6 +138,27 @@ var catalogExcluded = map[string]bool{
 
 	// Deployment-configured; intentionally excluded from user-selectable roster
 	"bedrock": true,
+}
+
+// intentionalLettermark is the set of logoSlugs that intentionally have no
+// vendored p_<slug>.svg in src/assets/brand-logos/.
+// Companies in this set use a generated lettermark in the UI (BrandIcon renders
+// the first letter of the company name).
+//
+// Adding a new catalog entry with a logoSlug that has no SVG and is not in this
+// set will cause TestCatalog_LogoSlugCoverage to fail, prompting the developer
+// to either vendor the SVG or explicitly document the intent here.
+//
+// Verified against the actual vendored files under src/assets/brand-logos/:
+//   - azure:    no p_azure.svg   → lettermark
+//   - cerebras: no p_cerebras.svg → lettermark
+//   - nvidia:   no p_nvidia.svg  → lettermark
+//   - ollama:   no p_ollama.svg  → lettermark
+var intentionalLettermark = map[string]bool{
+	"azure":    true,
+	"cerebras": true,
+	"nvidia":   true,
+	"ollama":   true, // no p_ollama.svg; lettermark intentional
 }
 
 // catalogIDs returns the set of canonical ids for all catalog entries.
@@ -202,13 +210,23 @@ func TestCatalog_DriftGuard_IdIsKnownProtocol(t *testing.T) {
 // ── Test #3 ──────────────────────────────────────────────────────────────────
 
 // TestCatalog_DriftGuard_IdInProbeEnum asserts every catalog id is a member of
-// the ProbeProviderRequest id enum.  Re-homes the invariant from
-// src/routes/-onboarding.test.tsx:1029-1074.
+// the ProbeProviderRequest id enum.  The enum values are parsed at test time from
+// contracts/components/schemas/ProbeProviderRequest.yaml — NOT a hand-copied map
+// — so adding a value to the YAML without triaging it into the catalog causes
+// this test to fail.
+// Re-homes the invariant formerly in
+// "Re-homed from the former `AVAILABLE_PROVIDERS ⊆ ProbeProviderRequest` test
+// in `src/routes/-onboarding.test.tsx`".
 // Traces to spec §7 #3, FR-003 property (c), ADR-031 §6 G-2 R3/MAJ-001.
+//
+// Note: aliases need NOT be ProbeProviderRequest enum members — they are
+// display-only ids used by the migration resolver. Only canonical catalog ids
+// must be in the ProbeProviderRequest enum.
 func TestCatalog_DriftGuard_IdInProbeEnum(t *testing.T) {
+	probeEnum := loadProbeProviderIDEnum(t)
 	for _, e := range Entries {
 		t.Run(e.Id, func(t *testing.T) {
-			assert.True(t, probeProviderIDEnum[e.Id],
+			assert.True(t, probeEnum[e.Id],
 				"catalog entry id %q must be in the ProbeProviderRequest id enum; "+
 					"if you added a new provider, update ProbeProviderRequest.yaml + regen", e.Id)
 		})
@@ -251,45 +269,21 @@ func TestCatalog_DriftGuard_BaseNonEmptyOrExempt(t *testing.T) {
 // knownProtocols is either a catalog id, a catalog alias, or explicitly listed
 // in catalogExcluded.  A newly-added protocol that is none of the three causes
 // this test to fail, blocking CI until a human triages it.
+//
+// The real knownProtocols map is accessed via providers.AllKnownProtocols() —
+// NOT a hand-copied list — so adding a new id to knownProtocols without
+// updating this test still causes CI to fail (the guard is non-vacuous).
+//
 // Traces to spec §7 #5, FR-003 property (b), ADR-031 §6 G-2 R2-07, MAJ-001.
 func TestCatalog_DriftGuard_NewProtocolUntriagedFails(t *testing.T) {
 	ids := catalogIDs()
 	aliases := catalogAliasIDs()
 
-	// Enumerate all known protocols via the package-level knownProtocols map.
-	// We cannot import the unexported map directly, so we probe via IsKnownProtocol
-	// against a hard-coded list that mirrors the map.  This list must be kept
-	// in sync with pkg/providers/factory_provider.go:424-486.
-	//
-	// If a new protocol is added to knownProtocols and NOT to this list, the
-	// new protocol will be silently untested.  To prevent that, we assert the
-	// total count matches.
-	allKnown := []string{
-		"openai", "azure", "azure-openai", "bedrock", "litellm", "openrouter",
-		"groq", "zhipu", "z-ai", "z.ai", "zai", "z-ai-coding", "glm-coding",
-		"zhipu-coding", "z-ai-anthropic", "zhipu-anthropic", "moonshot-anthropic",
-		"moonshot-cn-anthropic", "minimax-anthropic", "minimax-cn-anthropic",
-		"deepseek-anthropic", "gemini", "google", "nvidia", "ollama", "moonshot",
-		"moonshot-cn", "shengsuanyun", "deepseek", "cerebras", "vivgrid",
-		"volcengine", "vllm", "qwen", "qwen-intl", "qwen-international",
-		"dashscope-intl", "qwen-us", "dashscope-us", "mistral", "avian",
-		"longcat", "modelscope", "novita", "coding-plan", "alibaba-coding",
-		"qwen-coding", "mimo", "minimax", "minimax-cn", "anthropic",
-		"anthropic-messages", "coding-plan-anthropic", "alibaba-coding-anthropic",
-		"antigravity", "claude-cli", "claudecli", "codex-cli", "codexcli",
-		"github-copilot", "copilot",
-	}
-	// Verify every id in our list is actually known (prevents stale entries here).
-	for _, id := range allKnown {
-		require.True(t, providers.IsKnownProtocol(id),
-			"allKnown list contains %q which IsKnownProtocol does not recognise — "+
-				"update allKnown in TestCatalog_DriftGuard_NewProtocolUntriagedFails", id)
-	}
-
-	// The list must have exactly 61 entries (mirrors factory_provider.go count).
-	require.Len(t, allKnown, 61,
-		"allKnown must have exactly 61 entries (mirrors knownProtocols in factory_provider.go); "+
-			"if you added a new protocol, add it here AND either to catalog.Entries or catalogExcluded")
+	// Enumerate all known protocols via the reflective accessor, which iterates
+	// the real knownProtocols map in pkg/providers/factory_provider.go.
+	// Adding a new id to knownProtocols without updating catalogExcluded or
+	// catalog.Entries will cause the untriaged assertion below to fail.
+	allKnown := providers.AllKnownProtocols()
 
 	// For each known protocol, assert it is triaged.
 	var untriaged []string
@@ -425,6 +419,116 @@ func TestContract_ProviderCatalogEntry_Shape(t *testing.T) {
 	assert.False(t, hasRegion, "region must be omitted when nil (omitempty)")
 	_, hasAliases := docMin["aliases"]
 	assert.False(t, hasAliases, "aliases must be omitted when nil (omitempty)")
+}
+
+// ── Test #9 ──────────────────────────────────────────────────────────────────
+
+// TestCatalog_AliasEndpointEquality asserts that for every catalog entry with
+// aliases, GetDefaultAPIBase(alias) == GetDefaultAPIBase(entry.Id) for each
+// alias.  The migration resolver assumes aliases share the canonical endpoint;
+// this test protects that correctness assumption.
+//
+// Note: aliases need NOT be ProbeProviderRequest enum members (they are
+// display-only ids used by the migration resolver, not probe targets).
+//
+// Traces to ADR-031 §5 migration resolver, FR-003 property (a).
+func TestCatalog_AliasEndpointEquality(t *testing.T) {
+	for _, e := range Entries {
+		if e.Aliases == nil {
+			continue
+		}
+		canonicalBase := providers.GetDefaultAPIBase(e.Id)
+		for _, alias := range *e.Aliases {
+			alias := alias
+			t.Run(e.Id+"/"+alias, func(t *testing.T) {
+				aliasBase := providers.GetDefaultAPIBase(alias)
+				assert.Equal(t, canonicalBase, aliasBase,
+					"alias %q of catalog entry %q must return the same GetDefaultAPIBase as the canonical id; "+
+						"the migration resolver relies on this for normalisation — fix GetDefaultAPIBase "+
+						"in pkg/providers/factory_provider.go", alias, e.Id)
+			})
+		}
+	}
+}
+
+// ── Test #10 ─────────────────────────────────────────────────────────────────
+
+// TestCatalog_LoadCatalogWireConsistency asserts that LoadCatalog() returns
+// entries whose Wire field matches DeriveWire(id) for every entry.
+// LoadCatalog() itself returns an error on wire mismatch (see catalog.go),
+// so this test also validates that the embedded JSON was generated from a
+// consistent Entries slice.
+// Traces to ADR-031 FR-005, spec §7 #7.
+func TestCatalog_LoadCatalogWireConsistency(t *testing.T) {
+	entries, err := LoadCatalog()
+	require.NoError(t, err,
+		"LoadCatalog must not return an error — if it does, the embedded "+
+			"providers_catalog.json has a wire mismatch; run go generate ./pkg/providers/catalog/... "+
+			"to regenerate from the canonical Entries slice")
+	for _, e := range entries {
+		t.Run(e.Id, func(t *testing.T) {
+			expected := DeriveWire(e.Id)
+			assert.Equal(t, expected, e.Wire,
+				"LoadCatalog entry %q: Wire field %q must match DeriveWire(%q) = %q; "+
+					"regenerate providers_catalog.json via go generate", e.Id, e.Wire, e.Id, expected)
+		})
+	}
+}
+
+// ── Test #11 ─────────────────────────────────────────────────────────────────
+
+// TestCatalog_LogoSlugCoverage asserts that every catalog entry's logoSlug
+// either has a vendored p_<slug>.svg file in src/assets/brand-logos/ OR is
+// listed in intentionalLettermark.  This catches slug typos and missing assets.
+//
+// Verified intentional lettermarks (no p_<slug>.svg as of 2026-07):
+//   - azure:    no p_azure.svg   → lettermark
+//   - cerebras: no p_cerebras.svg → lettermark
+//   - nvidia:   no p_nvidia.svg  → lettermark
+//   - ollama:   no p_ollama.svg  → lettermark (intentional)
+//
+// Traces to ADR-031 FR-013, spec §7 #11.
+func TestCatalog_LogoSlugCoverage(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	require.True(t, ok, "runtime.Caller must succeed")
+	repoRoot := findRepoRoot(t, filepath.Dir(thisFile))
+	logoDir := filepath.Join(repoRoot, "src", "assets", "brand-logos")
+
+	// Build the set of slugs that already have vendored SVGs.
+	entries, err := os.ReadDir(logoDir)
+	if err != nil {
+		// If the logo directory doesn't exist (e.g. in a slim checkout), skip
+		// rather than hard-fail — the CI runner has a full checkout.
+		t.Skipf("brand-logos directory not found at %s: %v", logoDir, err)
+	}
+	vendoredSlugs := make(map[string]bool)
+	for _, entry := range entries {
+		name := entry.Name()
+		if strings.HasPrefix(name, "p_") && strings.HasSuffix(name, ".svg") {
+			slug := strings.TrimSuffix(strings.TrimPrefix(name, "p_"), ".svg")
+			vendoredSlugs[slug] = true
+		}
+	}
+
+	seen := make(map[string]bool)
+	for _, e := range Entries {
+		slug := e.LogoSlug
+		if seen[slug] {
+			continue // already checked this slug
+		}
+		seen[slug] = true
+		t.Run(slug, func(t *testing.T) {
+			if vendoredSlugs[slug] || intentionalLettermark[slug] {
+				return
+			}
+			t.Errorf(
+				"logoSlug %q (used by entry %q) has no vendored p_%s.svg in src/assets/brand-logos/ "+
+					"and is not in intentionalLettermark; either add the SVG or add the slug to "+
+					"intentionalLettermark in catalog_test.go with a comment explaining the intent",
+				slug, e.Id, slug,
+			)
+		})
+	}
 }
 
 // findRepoRoot walks up from dir until it finds a directory containing go.mod,
