@@ -12,12 +12,12 @@
 
 ## Post-Grill Revisions (Round 1)
 
-`/grill-spec` returned **BLOCK** (review: `external-executor-cli-path-detection-spec-review.md`, 1 CRITICAL / 7 MAJOR / 6 MINOR). This section records the resolutions; the normative body below has been **edited in place** to match — no residual contradictions (Round-2 G2-02/G2-03 fixed). Round-2 additions (RBAC gating, target constraints, per-reason fields, identity matchers) are folded in here and into the body. New requirements: FR-013…FR-018.
+`/grill-spec` returned **BLOCK** (review: `external-executor-cli-path-detection-spec-review.md`, 1 CRITICAL / 7 MAJOR / 6 MINOR). This section records the resolutions; the normative body below has been **edited in place** to match — no residual contradictions (Round-2 G2-02/G2-03 fixed). Round-2/3 additions (create-parity gating + basename target constraint, per-reason fields, non-result handling) are folded in here and into the body. **Operator decisions (Round 3):** the Test button is gated at create-parity (not admin); the tool check requires only that the binary **runs and returns a valid version** — no per-CLI name match. New requirements: FR-013…FR-019.
 
 ### Design decisions (mirrored in ADR §11)
 - **F-01 (CRITICAL) — validate hardening.** `POST /system/cli-validate` MUST apply `withRateLimit` and MUST audit the executed-path event `{cli, resolved_path, reason}`. Detection stays unaudited (no subprocess). Amends the Non-Behaviors ("must not audit" now applies to **detection only**) and NFR-3.
 - **F-02 — detect↔runtime symmetry.** Prefill MUST write the **absolute** detected path; validation and the runtime spawn resolve the exact `cli_path`. **D-3.1 corrected:** empty `cli_path` → `missing-binary` (NOT "$PATH default"). Guarantees detected == runs.
-- **F-03 — CLI identity.** The handshake MUST verify the `--version` output matches a per-CLI identity matcher; a wrong binary (e.g. `/usr/bin/node` under `claude-code`) → `handshake-failed`. **Corrects US-3 AC-2 / D-2.2.**
+- **F-03 — handshake (operator decision).** The handshake MUST confirm the binary **runs and returns a valid version-shaped response**. **No per-CLI name match** is required — a tool that returns any valid version passes (the operator judged this sufficient; a mis-pointed but runnable binary is accepted). Failure to run / no version → `handshake-failed`. Keeps `conntest` **reused as-is** — no identity extension.
 - **F-06 — HOME-unset.** The scan MUST tolerate `os.UserHomeDir()` failure (passwd fallback or skip `~` candidates), so it works under systemd with `HOME` unset.
 
 ### Corrections
@@ -46,16 +46,17 @@ CliValidateResponse:  { ok: bool, reason: enum[ok, missing-binary, handshake-fai
 | unknown-cli | false | null | null | "unsupported cli" |
 
 - **Blocking keys off `reason` only** (never raw `!ok`): block on `missing-binary`/`handshake-failed`; warn on `unauthenticated`; allow `ok`. (`ok` is retained for convenience but MUST NOT drive gating — G2-07.)
-- **Per-CLI identity matcher** (case-insensitive, applied to the `--version` banner; exact tokens to be confirmed against real CLI output — spike A-3): `claude-code`→contains `claude`; `codex`→contains `codex`; `opencode`→contains `opencode`. On mismatch → `handshake-failed` (G2-04).
+- **Handshake = runs + valid version** (operator decision): the binary must execute and emit a valid version-shaped response; **no per-CLI name match**. A runnable binary that returns a version passes; a binary that won't run or emits no version → `handshake-failed`. `conntest`'s existing version check is sufficient — reused as-is (this reverts the Round-2 identity-matcher idea).
 - **`EvalSymlinks` error** (dangling link): fall back to `Abs` of the raw hit, still `installed:true` (G2-11). **`source`** reflects *how located* (PATH lookup vs dir scan), independent of resolved location (G2-12). Validate is intentionally **stricter** than runtime (fail-closed at create), not a symmetry guarantee (G2-13).
 
 ### New functional requirements
-- **FR-013**: `cli-validate` MUST be gated `withAuth → RequireAdmin`, apply a **dedicated** rate limiter, **reject non-regular / non-executable target files before spawn**, **cap concurrent in-flight validations (≤2)**, and emit an audit event `{cli, resolved_path, reason}` per call. `[F-01 / G2-01]`
+- **FR-013**: `cli-validate` MUST be gated `withAuth` (**create-parity** — the same authorization as `createAgent`, so a non-admin operator who can add the assistant can also validate; it is **not** an admin route, so the `RequireNotBypass`/e2e concern does not apply). It MUST apply a **dedicated** rate limiter, **reject a target that is not a regular executable file, or whose basename does not match the selected CLI's expected binary** (`claude`/`codex`/`opencode`), before spawn, **cap concurrent in-flight validations (≤2)**, and emit an audit event `{cli, resolved_path, reason}` per call. `[F-01 / G2-01 / C1 — operator: "anyone who can add the assistant"]`
 - **FR-014**: Prefill MUST be absolute; validation + runtime resolve exactly `cli_path`; empty `cli_path` MUST classify `missing-binary`. `[F-02]`
-- **FR-015**: The handshake MUST confirm `--version` output matches a per-CLI identity matcher; non-match → `handshake-failed`. `[F-03]`
+- **FR-015**: The handshake MUST confirm the binary runs and returns a valid version-shaped response (no per-CLI name match — operator decision); failure to run / no version → `handshake-failed`. `[F-03]`
 - **FR-016**: The well-known scan MUST tolerate `os.UserHomeDir()` failure without erroring. `[F-06]`
 - **FR-017**: `cli-validate` responses MUST carry a classified `detail`, never raw stderr. `[F-08]`
 - **FR-018**: The endpoint MUST map `ReasonOK` ("") → `reason:"ok"`; the SPA MUST gate Create on `reason ∈ {missing-binary, handshake-failed}`. `[F-05]`
+- **FR-019**: Create/Save MUST block **only** on a definitive `missing-binary`/`handshake-failed` result. Before validation completes (debounced/in-flight) or if it cannot complete (rate-limited / timeout / network error), the SPA MUST show a soft "not verified yet" / "couldn't verify" notice and **allow** save — never trap the operator. `[M1/M4]`
 
 ### Per-OS well-known candidate dirs (acceptance)
 - **Linux:** `/usr/local/bin`, `/usr/bin`, `~/.local/bin`, `~/.npm-global/bin`, newest `~/.nvm/versions/node/*/bin`, `~/.bun/bin`, `~/.deno/bin`, `~/.cargo/bin`, `/snap/bin`
@@ -87,7 +88,7 @@ CliValidateResponse:  { ok: bool, reason: enum[ok, missing-binary, handshake-fai
 
 ## Available Reference Patterns
 
-No `docs/reference/` implementation library applies. The in-repo reusable pattern is **`pkg/agent/runner/conntest.go`** (`TestConnectionWithPath`) — the existing missing-binary → `--version` handshake → unauthenticated classifier. The new validate endpoint MUST reuse it, **extended** with a per-CLI identity matcher (FR-015) and an empty-path guard (FR-014), rather than re-implement classification. `[FACT]`
+No `docs/reference/` implementation library applies. The in-repo reusable pattern is **`pkg/agent/runner/conntest.go`** (`TestConnectionWithPath`) — the existing missing-binary → `--version` handshake → unauthenticated classifier. The new validate endpoint MUST reuse it **as-is** (its version-shape handshake is sufficient — no identity extension), adding only a handler-level empty-path guard (FR-014 → `missing-binary`) and the pre-spawn target constraint (FR-013). `[FACT]`
 
 ## Existing Codebase Context
 
@@ -98,7 +99,7 @@ No `docs/reference/` implementation library applies. The in-repo reusable patter
 | `cliProbeLookPath` (`pkg/gateway/rest.go:2060`) | modify | Swappable `exec.LookPath`. Replaced by a `pkg/clidetect` call. |
 | `gen.CliDetect` (`contracts/components/schemas/CliDetect.yaml`) | modify | Booleans → per-CLI `{installed, path, source}`. Contract-first regen. |
 | `pkg/clidetect` (new) | create | Pure-Go detector: LookPath → per-OS well-known scan. |
-| `runner.TestConnectionWithPath` (`pkg/agent/runner/conntest.go:146`) | call + extend | Reused and extended with a per-CLI identity matcher (FR-015); `runner-test` also gains identity checking (regression note). |
+| `runner.TestConnectionWithPath` (`pkg/agent/runner/conntest.go:146`) | call | Reused **as-is** (version-shape handshake is sufficient); the new handler adds an empty-path guard + target constraint around it. `runner-test` unchanged. |
 | `restAPI.testAgentRunner` (`pkg/gateway/rest.go:1189`) | reference | Existing agent-scoped consumer of `TestConnectionWithPath`; unchanged. |
 | `gen.CliValidateRequest/Response` (new schemas) | create | `{cli, cli_path}` → `{ok, reason, resolved_path, version, detail}`. |
 | `Step1Identity.tsx:274-276` | modify | Path input: prefill from detect; add validate-on-blur state. |
@@ -218,7 +219,7 @@ As an operator on Linux, macOS, or Windows, detection uses the right binary name
 **Gateway endpoints (SPA ↔ gateway)**
 - `GET /system/cli-detect` → `CliDetect { claude|codex|opencode: {installed, path, source} }`.
 - `POST /system/cli-validate` `{cli, cli_path}` → `CliValidate { ok, reason, resolved_path, version?, detail }`.
-- `cli-detect`: `withAuth`, read-only, unaudited. `cli-validate`: `withAuth` → `RequireAdmin`, dedicated rate limiter, audited, rejects non-regular/non-executable targets before spawn, and caps concurrent in-flight validations (FR-013).
+- `cli-detect`: `withAuth`, read-only, unaudited. `cli-validate`: `withAuth` (create-parity with `createAgent`), dedicated rate limiter, audited, rejects a target that isn't a regular executable whose basename matches the selected CLI, and caps concurrent in-flight validations (FR-013).
 
 ## BDD Scenarios
 
@@ -347,7 +348,7 @@ Feature: External-executor CLI path detection
 | 21 | `TestValidate_AdminOnly` | Integration | validate admin-only | Non-admin `user` → 403; non-regular/non-executable target rejected. |
 | 22 | `TestValidate_RateLimited` | Integration | validate rate-limited | Past the dedicated limiter → 429; concurrency cap holds. |
 | 23 | `TestValidate_AuditEmitted` | Integration | audit | One audit event `{cli, resolved_path, reason}` per call. |
-| 24 | `TestValidate_WrongBinaryIdentity` | Unit | identity | `/usr/bin/node` under claude-code → handshake-failed. |
+| 24 | `TestValidate_RunsNoVersion` | Unit | handshake | A binary that emits no version → handshake-failed; a runnable binary returning any valid version passes. |
 | 25 | `TestValidate_EmptyPathMissing` | Unit | empty→missing | Empty cli_path short-circuits to missing-binary. |
 | 26 | `TestDetect_HomeUnset` | Unit | HOME unset | `os.UserHomeDir` error → passwd fallback / skip ~ gracefully. |
 | 27 | `TestValidate_DetailSanitized` / `TestValidate_ReasonOKMapping` | Unit | detail/ok | detail carries no raw stderr; `ReasonOK` ("") → "ok". |
@@ -417,9 +418,10 @@ Modifies existing functionality (the `CliDetect` wire shape + `HandleSystemCliDe
 - **SC-007**: All 27 TDD-plan tests pass; `tsc -b`, vitest, `CGO_ENABLED=0 go test -tags goolm,stdjson`, and `make verify-contracts` green.
 - **SC-008**: `cli-validate` returns 403 for a non-admin `user` role and 429 past its dedicated rate limit. `[FR-013]`
 - **SC-009**: Each `cli-validate` call emits exactly one audit event `{cli, resolved_path, reason}`. `[FR-013]`
-- **SC-010**: `claude-code` pointed at `/usr/bin/node` yields `handshake-failed` (identity matcher). `[FR-015]`
+- **SC-010**: A runnable binary that returns a valid version passes; a path that won't run or returns no version yields `handshake-failed`. `[FR-015]`
 - **SC-011**: With `HOME` unset, detection still resolves a binary in a passwd-home well-known dir. `[FR-016]`
-- **SC-012**: `cli-validate.detail` contains no substring of the process stderr (classified message only). `[FR-017]`
+- **SC-012**: `cli-validate.detail` equals one of the fixed allowlisted messages for its `reason` (equality-checked; never raw stderr). `[FR-017]`
+- **SC-013**: Submitting before validation returns, or when validation is rate-limited / errors, still allows save (no trap) and shows a soft notice. `[FR-019]`
 
 ## Traceability Matrix
 
@@ -439,7 +441,8 @@ Modifies existing functionality (the `CliDetect` wire shape + `HandleSystemCliDe
 | FR-012 | US-3 edge | unknown CLI no spawn | TestValidate_UnknownCLI |
 | FR-013 | US-3 | validate is admin-only + rate-limited + audited | TestValidate_AdminOnly, TestValidate_RateLimited, TestValidate_AuditEmitted |
 | FR-014 | US-4 | empty cli_path is missing | TestValidate_EmptyPathMissing |
-| FR-015 | US-3 | wrong binary rejected | TestValidate_WrongBinaryIdentity |
+| FR-015 | US-3 | runs + valid version required | TestValidate_RunsNoVersion |
+| FR-019 | US-3 | non-result save handling | Step1Identity.prefillValidate.test |
 | FR-016 | US-2 | HOME unset | TestDetect_HomeUnset |
 | FR-017 | US-3 | detail classified | TestValidate_DetailSanitized |
 | FR-018 | US-3 | ReasonOK→ok; gate on reason | TestValidate_ReasonOKMapping |
@@ -475,4 +478,4 @@ Modifies existing functionality (the `CliDetect` wire shape + `HandleSystemCliDe
 
 ## Regression Impact Summary
 
-Modifies `CliDetect` wire + `HandleSystemCliDetect`, and **extends** `conntest`'s handshake with a per-CLI identity matcher — so `POST /agents/{id}/runner-test` also begins rejecting wrong binaries (intended strict improvement; update its tests). `CliDetect` consumers migrated in-change: `AgentListScreen.tsx`, `src/lib/api.ts` (`fetchCliDetect`/`CliDetectSchema`), `src/lib/api.cli-detect.test.ts`. No agent-loop, sandbox, or spawn-path changes.
+Modifies `CliDetect` wire + `HandleSystemCliDetect`. `conntest` / `runner-test` are **reused unchanged** (no identity extension — operator decision). `CliDetect` consumers migrated in-change: `AgentListScreen.tsx`, `src/lib/api.ts` (`fetchCliDetect`/`CliDetectSchema`), `src/lib/api.cli-detect.test.ts`. No agent-loop, sandbox, or spawn-path changes.
