@@ -22,31 +22,30 @@ import (
 	"github.com/stretchr/testify/require"
 
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
+	"github.com/dapicom-ai/omnipus/pkg/clidetect"
 )
 
 // --- /api/v1/system/cli-detect ---
 
-// TestHandleSystemCliDetect_OK verifies the handler returns 200 with the
-// three boolean fields. The probe function is replaced with a deterministic
-// stub that reports `claude` present and the others missing, so the test
-// does not depend on the developer's local PATH.
+// TestHandleSystemCliDetect_OK verifies the handler returns 200 with the new
+// per-CLI {installed, path, source} shape. The detection function is replaced
+// with a deterministic stub (claude present via $PATH, the others missing) so
+// the test does not depend on the developer's local host layout.
 //
-// BDD: Given the gateway process PATH probe returns {claude: present, codex:
-// missing, opencode: missing}, When GET /api/v1/system/cli-detect is called,
-// Then the response has status 200 with {hasClaude: true, hasCodex: false,
-// hasOpencode: false}.
-// Traces to: agent-form-requirements.md §5.1 — "the 3 '+ Add (External)'
-// sub-pickers are disabled when their CLI is not installed".
+// BDD: Given detection returns {claude: installed on PATH, codex: missing,
+// opencode: missing}, When GET /api/v1/system/cli-detect is called, Then the
+// response is 200 with claude.installed=true (path + source="path") and the
+// others installed=false with null path/source.
+// Traces to: external-executor-cli-path-detection-spec.md FR-001/FR-011.
 func TestHandleSystemCliDetect_OK(t *testing.T) {
-	orig := cliProbeLookPath
-	t.Cleanup(func() { cliProbeLookPath = orig })
+	orig := cliDetectAll
+	t.Cleanup(func() { cliDetectAll = orig })
 
-	cliProbeLookPath = func(binary string) (string, error) {
-		switch binary {
-		case "claude":
-			return "/usr/local/bin/claude", nil
-		default:
-			return "", &notFoundError{binary: binary}
+	cliDetectAll = func() map[string]clidetect.Result {
+		return map[string]clidetect.Result{
+			"claude-code": {Installed: true, Path: "/usr/local/bin/claude", Source: clidetect.SourcePath},
+			"codex":       {},
+			"opencode":    {},
 		}
 	}
 
@@ -61,22 +60,32 @@ func TestHandleSystemCliDetect_OK(t *testing.T) {
 
 	var resp gen.CliDetect
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.True(t, resp.HasClaude, "claude should be reported present")
-	assert.False(t, resp.HasCodex, "codex should be reported missing")
-	assert.False(t, resp.HasOpencode, "opencode should be reported missing")
+	assert.True(t, resp.Claude.Installed, "claude should be reported installed")
+	require.NotNil(t, resp.Claude.Path)
+	assert.Equal(t, "/usr/local/bin/claude", *resp.Claude.Path)
+	require.NotNil(t, resp.Claude.Source)
+	assert.Equal(t, gen.CliDetectClaudeSource("path"), *resp.Claude.Source)
+
+	assert.False(t, resp.Codex.Installed, "codex should be reported missing")
+	assert.Nil(t, resp.Codex.Path, "missing CLI must have null path")
+	assert.Nil(t, resp.Codex.Source, "missing CLI must have null source")
+	assert.False(t, resp.Opencode.Installed, "opencode should be reported missing")
+	assert.Nil(t, resp.Opencode.Path)
+	assert.Nil(t, resp.Opencode.Source)
 }
 
-// TestHandleSystemCliDetect_AllPresent verifies the handler returns 200 with
-// all three booleans true when every probe succeeds.
-//
-// BDD: Given all three CLIs are installed, When GET /api/v1/system/cli-detect
-// is called, Then all three booleans are true.
+// TestHandleSystemCliDetect_AllPresent verifies all three CLIs are reported
+// installed, exercising both source variants ("path" and "well-known").
 func TestHandleSystemCliDetect_AllPresent(t *testing.T) {
-	orig := cliProbeLookPath
-	t.Cleanup(func() { cliProbeLookPath = orig })
+	orig := cliDetectAll
+	t.Cleanup(func() { cliDetectAll = orig })
 
-	cliProbeLookPath = func(binary string) (string, error) {
-		return "/usr/local/bin/" + binary, nil
+	cliDetectAll = func() map[string]clidetect.Result {
+		return map[string]clidetect.Result{
+			"claude-code": {Installed: true, Path: "/usr/local/bin/claude", Source: clidetect.SourcePath},
+			"codex":       {Installed: true, Path: "/home/dev/.local/bin/codex", Source: clidetect.SourceWellKnown},
+			"opencode":    {Installed: true, Path: "/opt/homebrew/bin/opencode", Source: clidetect.SourceWellKnown},
+		}
 	}
 
 	api, cleanup := newTestRestAPI(t)
@@ -90,22 +99,27 @@ func TestHandleSystemCliDetect_AllPresent(t *testing.T) {
 
 	var resp gen.CliDetect
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.True(t, resp.HasClaude)
-	assert.True(t, resp.HasCodex)
-	assert.True(t, resp.HasOpencode)
+	assert.True(t, resp.Claude.Installed)
+	assert.True(t, resp.Codex.Installed)
+	assert.True(t, resp.Opencode.Installed)
+	require.NotNil(t, resp.Codex.Source)
+	assert.Equal(t, gen.CliDetectCodexSource("well-known"), *resp.Codex.Source)
+	require.NotNil(t, resp.Opencode.Path)
+	assert.Equal(t, "/opt/homebrew/bin/opencode", *resp.Opencode.Path)
 }
 
-// TestHandleSystemCliDetect_AllMissing verifies the handler returns 200 with
-// all three booleans false when every probe fails.
-//
-// BDD: Given no CLIs are installed, When GET /api/v1/system/cli-detect is
-// called, Then all three booleans are false (the SPA grey-out state).
+// TestHandleSystemCliDetect_AllMissing verifies the SPA grey-out state: every
+// CLI installed=false with null path/source.
 func TestHandleSystemCliDetect_AllMissing(t *testing.T) {
-	orig := cliProbeLookPath
-	t.Cleanup(func() { cliProbeLookPath = orig })
+	orig := cliDetectAll
+	t.Cleanup(func() { cliDetectAll = orig })
 
-	cliProbeLookPath = func(binary string) (string, error) {
-		return "", &notFoundError{binary: binary}
+	cliDetectAll = func() map[string]clidetect.Result {
+		return map[string]clidetect.Result{
+			"claude-code": {},
+			"codex":       {},
+			"opencode":    {},
+		}
 	}
 
 	api, cleanup := newTestRestAPI(t)
@@ -119,9 +133,10 @@ func TestHandleSystemCliDetect_AllMissing(t *testing.T) {
 
 	var resp gen.CliDetect
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.False(t, resp.HasClaude)
-	assert.False(t, resp.HasCodex)
-	assert.False(t, resp.HasOpencode)
+	assert.False(t, resp.Claude.Installed)
+	assert.Nil(t, resp.Claude.Path)
+	assert.False(t, resp.Codex.Installed)
+	assert.False(t, resp.Opencode.Installed)
 }
 
 // TestHandleSystemCliDetect_MethodNotAllowed verifies the handler rejects
@@ -224,15 +239,4 @@ func TestHandleAgentsDelete_NotFound(t *testing.T) {
 	api.HandleAgents(w, r)
 
 	assert.Equal(t, http.StatusNotFound, w.Code)
-}
-
-// notFoundError is a minimal os/exec.ErrNotStandin for tests — keeps the
-// stub independent of the real os/exec error type so the test does not
-// depend on the exact error format returned by the runtime.
-type notFoundError struct {
-	binary string
-}
-
-func (e *notFoundError) Error() string {
-	return "executable file not found in $PATH: " + e.binary
 }

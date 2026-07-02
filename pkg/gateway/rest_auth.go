@@ -189,6 +189,12 @@ var (
 	// (sensitive), but a legitimate user may mistype a few times; tighter than
 	// login, not punitive (Spec-6 FR-12.2).
 	reauthLimiter = newAPIRateLimiter(10, 1*time.Minute)
+	// /api/v1/system/cli-validate — 20 requests/minute per IP. DEDICATED limiter
+	// (ADR-030 §11 FR-013), distinct from validateLimiter (the /auth/validate
+	// limiter). Tighter than the read-only endpoints because each call spawns a
+	// caller-supplied path (<cli> --version); validate-on-blur is debounced on
+	// the SPA so 20/min is ample for legitimate editing.
+	cliValidateLimiter = newAPIRateLimiter(20, 1*time.Minute)
 )
 
 // clientIP extracts the client IP from the request, checking X-Forwarded-For first.
