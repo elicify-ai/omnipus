@@ -1273,6 +1273,126 @@ func (e ChannelIdentityKind) Valid() bool {
 	}
 }
 
+// Defines values for CliDetectClaudeSource.
+const (
+	CliDetectClaudeSourcePath      CliDetectClaudeSource = "path"
+	CliDetectClaudeSourceWellKnown CliDetectClaudeSource = "well-known"
+)
+
+// Valid indicates whether the value is a known member of the CliDetectClaudeSource enum.
+func (e CliDetectClaudeSource) Valid() bool {
+	switch e {
+	case CliDetectClaudeSourcePath:
+		return true
+	case CliDetectClaudeSourceWellKnown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CliDetectCodexSource.
+const (
+	CliDetectCodexSourcePath      CliDetectCodexSource = "path"
+	CliDetectCodexSourceWellKnown CliDetectCodexSource = "well-known"
+)
+
+// Valid indicates whether the value is a known member of the CliDetectCodexSource enum.
+func (e CliDetectCodexSource) Valid() bool {
+	switch e {
+	case CliDetectCodexSourcePath:
+		return true
+	case CliDetectCodexSourceWellKnown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CliDetectOpencodeSource.
+const (
+	CliDetectOpencodeSourcePath      CliDetectOpencodeSource = "path"
+	CliDetectOpencodeSourceWellKnown CliDetectOpencodeSource = "well-known"
+)
+
+// Valid indicates whether the value is a known member of the CliDetectOpencodeSource enum.
+func (e CliDetectOpencodeSource) Valid() bool {
+	switch e {
+	case CliDetectOpencodeSourcePath:
+		return true
+	case CliDetectOpencodeSourceWellKnown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CliDetectEntrySource.
+const (
+	CliDetectEntrySourcePath      CliDetectEntrySource = "path"
+	CliDetectEntrySourceWellKnown CliDetectEntrySource = "well-known"
+)
+
+// Valid indicates whether the value is a known member of the CliDetectEntrySource enum.
+func (e CliDetectEntrySource) Valid() bool {
+	switch e {
+	case CliDetectEntrySourcePath:
+		return true
+	case CliDetectEntrySourceWellKnown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CliValidateRequestCli.
+const (
+	CliValidateRequestCliClaudeCode CliValidateRequestCli = "claude-code"
+	CliValidateRequestCliCodex      CliValidateRequestCli = "codex"
+	CliValidateRequestCliOpencode   CliValidateRequestCli = "opencode"
+)
+
+// Valid indicates whether the value is a known member of the CliValidateRequestCli enum.
+func (e CliValidateRequestCli) Valid() bool {
+	switch e {
+	case CliValidateRequestCliClaudeCode:
+		return true
+	case CliValidateRequestCliCodex:
+		return true
+	case CliValidateRequestCliOpencode:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CliValidateResponseReason.
+const (
+	CliValidateResponseReasonHandshakeFailed CliValidateResponseReason = "handshake-failed"
+	CliValidateResponseReasonMissingBinary   CliValidateResponseReason = "missing-binary"
+	CliValidateResponseReasonOk              CliValidateResponseReason = "ok"
+	CliValidateResponseReasonUnauthenticated CliValidateResponseReason = "unauthenticated"
+	CliValidateResponseReasonUnknownCli      CliValidateResponseReason = "unknown-cli"
+)
+
+// Valid indicates whether the value is a known member of the CliValidateResponseReason enum.
+func (e CliValidateResponseReason) Valid() bool {
+	switch e {
+	case CliValidateResponseReasonHandshakeFailed:
+		return true
+	case CliValidateResponseReasonMissingBinary:
+		return true
+	case CliValidateResponseReasonOk:
+		return true
+	case CliValidateResponseReasonUnauthenticated:
+		return true
+	case CliValidateResponseReasonUnknownCli:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DevicePairedStatus.
 const (
 	DevicePairedStatusActive  DevicePairedStatus = "active"
@@ -1353,19 +1473,19 @@ func (e DoctorResultIssuesSeverity) Valid() bool {
 
 // Defines values for ExecutorConfigCli.
 const (
-	ExecutorConfigCliClaudeCode ExecutorConfigCli = "claude-code"
-	ExecutorConfigCliCodex      ExecutorConfigCli = "codex"
-	ExecutorConfigCliOpencode   ExecutorConfigCli = "opencode"
+	ClaudeCode ExecutorConfigCli = "claude-code"
+	Codex      ExecutorConfigCli = "codex"
+	Opencode   ExecutorConfigCli = "opencode"
 )
 
 // Valid indicates whether the value is a known member of the ExecutorConfigCli enum.
 func (e ExecutorConfigCli) Valid() bool {
 	switch e {
-	case ExecutorConfigCliClaudeCode:
+	case ClaudeCode:
 		return true
-	case ExecutorConfigCliCodex:
+	case Codex:
 		return true
-	case ExecutorConfigCliOpencode:
+	case Opencode:
 		return true
 	default:
 		return false
@@ -3810,22 +3930,22 @@ func (e ClearAllSessions200JSONResponseBodyStatus) Valid() bool {
 
 // Defines values for GetTokenStatsParamsPeriod.
 const (
-	GetTokenStatsParamsPeriodAll   GetTokenStatsParamsPeriod = "all"
-	GetTokenStatsParamsPeriodDay   GetTokenStatsParamsPeriod = "day"
-	GetTokenStatsParamsPeriodMonth GetTokenStatsParamsPeriod = "month"
-	GetTokenStatsParamsPeriodWeek  GetTokenStatsParamsPeriod = "week"
+	All   GetTokenStatsParamsPeriod = "all"
+	Day   GetTokenStatsParamsPeriod = "day"
+	Month GetTokenStatsParamsPeriod = "month"
+	Week  GetTokenStatsParamsPeriod = "week"
 )
 
 // Valid indicates whether the value is a known member of the GetTokenStatsParamsPeriod enum.
 func (e GetTokenStatsParamsPeriod) Valid() bool {
 	switch e {
-	case GetTokenStatsParamsPeriodAll:
+	case All:
 		return true
-	case GetTokenStatsParamsPeriodDay:
+	case Day:
 		return true
-	case GetTokenStatsParamsPeriodMonth:
+	case Month:
 		return true
-	case GetTokenStatsParamsPeriodWeek:
+	case Week:
 		return true
 	default:
 		return false
@@ -5250,17 +5370,101 @@ type ChannelTestResponse struct {
 	Success bool `json:"success"`
 }
 
-// CliDetect Host-side CLI detection result. Probes whether each external-CLI runner binary is on PATH for the gateway process. Used by the roster screen's "+ Add Subagent (External)" disclosure to grey-out CLIs that the host cannot actually run (saves the operator a wizard failure at runtime).
+// CliDetect Host-side CLI detection result. Probes whether each external-CLI runner binary (claude-code/codex/opencode) is present for the gateway process — searching $PATH first, then a curated per-OS well-known-install-location list — and returns the resolved absolute path and how it was found. Used by the roster screen's "+ Add Subagent (External)" disclosure to grey-out CLIs the host cannot actually run, and by the create wizard / edit form to prefill the executor cli_path field. Read-only, unaudited — detection never spawns a subprocess.
 type CliDetect struct {
-	// HasClaude Whether the `claude` binary (Claude Code, "claude-code" CLI) is on PATH for the gateway process.
-	HasClaude bool `json:"hasClaude"`
+	// Claude Host-side detection result for a single external-CLI runner binary (claude-code/codex/opencode). The gateway searches its own $PATH first, then a curated per-OS well-known-install-location list, and reports which strategy found the binary via `source`. Detection is a filesystem probe only — it never spawns a subprocess.
+	Claude struct {
+		// Installed Whether the binary was located on $PATH or in a well-known install directory.
+		Installed bool `json:"installed"`
 
-	// HasCodex Whether the `codex` binary (Codex CLI) is on PATH.
-	HasCodex bool `json:"hasCodex"`
+		// Path Absolute, symlink-resolved path to the binary. Null when installed=false. This is the exact value the SPA prefills into the executor cli_path field — detection, validation, and the runtime spawn all resolve this same path.
+		Path *string `json:"path,omitempty"`
 
-	// HasOpencode Whether the `opencode` binary is on PATH.
-	HasOpencode bool `json:"hasOpencode"`
+		// Source How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
+		Source *CliDetectClaudeSource `json:"source,omitempty"`
+	} `json:"claude"`
+
+	// Codex Host-side detection result for a single external-CLI runner binary (claude-code/codex/opencode). The gateway searches its own $PATH first, then a curated per-OS well-known-install-location list, and reports which strategy found the binary via `source`. Detection is a filesystem probe only — it never spawns a subprocess.
+	Codex struct {
+		// Installed Whether the binary was located on $PATH or in a well-known install directory.
+		Installed bool `json:"installed"`
+
+		// Path Absolute, symlink-resolved path to the binary. Null when installed=false. This is the exact value the SPA prefills into the executor cli_path field — detection, validation, and the runtime spawn all resolve this same path.
+		Path *string `json:"path,omitempty"`
+
+		// Source How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
+		Source *CliDetectCodexSource `json:"source,omitempty"`
+	} `json:"codex"`
+
+	// Opencode Host-side detection result for a single external-CLI runner binary (claude-code/codex/opencode). The gateway searches its own $PATH first, then a curated per-OS well-known-install-location list, and reports which strategy found the binary via `source`. Detection is a filesystem probe only — it never spawns a subprocess.
+	Opencode struct {
+		// Installed Whether the binary was located on $PATH or in a well-known install directory.
+		Installed bool `json:"installed"`
+
+		// Path Absolute, symlink-resolved path to the binary. Null when installed=false. This is the exact value the SPA prefills into the executor cli_path field — detection, validation, and the runtime spawn all resolve this same path.
+		Path *string `json:"path,omitempty"`
+
+		// Source How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
+		Source *CliDetectOpencodeSource `json:"source,omitempty"`
+	} `json:"opencode"`
 }
+
+// CliDetectClaudeSource How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
+type CliDetectClaudeSource string
+
+// CliDetectCodexSource How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
+type CliDetectCodexSource string
+
+// CliDetectOpencodeSource How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
+type CliDetectOpencodeSource string
+
+// CliDetectEntry Host-side detection result for a single external-CLI runner binary (claude-code/codex/opencode). The gateway searches its own $PATH first, then a curated per-OS well-known-install-location list, and reports which strategy found the binary via `source`. Detection is a filesystem probe only — it never spawns a subprocess.
+type CliDetectEntry struct {
+	// Installed Whether the binary was located on $PATH or in a well-known install directory.
+	Installed bool `json:"installed"`
+
+	// Path Absolute, symlink-resolved path to the binary. Null when installed=false. This is the exact value the SPA prefills into the executor cli_path field — detection, validation, and the runtime spawn all resolve this same path.
+	Path *string `json:"path,omitempty"`
+
+	// Source How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
+	Source *CliDetectEntrySource `json:"source,omitempty"`
+}
+
+// CliDetectEntrySource How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
+type CliDetectEntrySource string
+
+// CliValidateRequest Request body for POST /api/v1/system/cli-validate. Stateless, create-time validation of an external-executor CLI: confirms the binary at cli_path actually runs and reports a version, before the operator saves the subagent_3p agent. Reuses runner.TestConnectionWithPath verbatim — the same handshake used by the post-create /agents/{id}/runner/test endpoint.
+type CliValidateRequest struct {
+	// Cli The external CLI tool being validated. Matches ExecutorConfig.cli.
+	Cli CliValidateRequestCli `json:"cli"`
+
+	// CliPath Filesystem path to the CLI binary to validate — either the detected prefill or an operator-entered override. An empty value is classified "missing-binary" without a spawn attempt; the target MUST be a regular, executable file before it is spawned.
+	CliPath string `json:"cli_path"`
+}
+
+// CliValidateRequestCli The external CLI tool being validated. Matches ExecutorConfig.cli.
+type CliValidateRequestCli string
+
+// CliValidateResponse Result of POST /api/v1/system/cli-validate. Classifies whether the given cli_path is a runnable, version-reporting instance of the selected CLI. The handshake only requires that the binary runs and returns a valid version-shaped response — no per-CLI identity/name match is performed. Blocking is keyed off `reason` alone (never the raw `ok` boolean): the SPA blocks Create/Save on "missing-binary" or "handshake-failed", warns-but-allows on "unauthenticated", and allows on "ok". `detail` is always one of a fixed set of classified messages — never raw stderr from the spawned process.
+type CliValidateResponse struct {
+	// Detail Fixed, classified human-readable message for the reason — never raw stderr from the spawned process. One of a small allowlisted set per reason (e.g. "OK", "installed; not logged in", "not found", "did not run or returned no version", "unsupported cli").
+	Detail *string `json:"detail,omitempty"`
+
+	// Ok True when the binary is present, runs, and returns a valid version-shaped response (reason "ok" or "unauthenticated"). Retained for convenience only — clients MUST gate blocking on `reason`, not on this field, because "unauthenticated" also reports ok=true but must not be conflated with "ok".
+	Ok bool `json:"ok"`
+
+	// Reason Classification of the validation result. "ok": binary runs and reports a version, believed authenticated. "missing-binary": cli_path is empty, absent, or not a regular executable file — blocks Create/Save. "handshake-failed": the target ran but did not return a valid version-shaped response within the timeout — blocks Create/Save. "unauthenticated": the binary runs and reports a version but has no usable credentials — non-blocking warning, Create/Save allowed. "unknown-cli": the `cli` value is not one of the supported executors; no subprocess is spawned. Maps runner.ReasonOK (empty string) to "ok".
+	Reason CliValidateResponseReason `json:"reason"`
+
+	// ResolvedPath Absolute path actually spawned. Populated for "ok" and "unauthenticated", and for "handshake-failed" when a target was found to spawn. Null for "missing-binary" and "unknown-cli".
+	ResolvedPath *string `json:"resolved_path,omitempty"`
+
+	// Version Version string reported by the CLI's `--version` handshake. Populated only for "ok" and "unauthenticated"; null otherwise.
+	Version *string `json:"version,omitempty"`
+}
+
+// CliValidateResponseReason Classification of the validation result. "ok": binary runs and reports a version, believed authenticated. "missing-binary": cli_path is empty, absent, or not a regular executable file — blocks Create/Save. "handshake-failed": the target ran but did not return a valid version-shaped response within the timeout — blocks Create/Save. "unauthenticated": the binary runs and reports a version but has no usable credentials — non-blocking warning, Create/Save allowed. "unknown-cli": the `cli` value is not one of the supported executors; no subprocess is spawned. Maps runner.ReasonOK (empty string) to "ok".
+type CliValidateResponseReason string
 
 // CredentialRotateRequest Request body for POST /api/v1/credentials/rotate. Re-encrypts the entire credential vault under a new passphrase-derived key (Argon2id). Sensitive change — requires a re-auth consent token in the X-Reauth-Token header (Spec-6 FR-12.2 / ADR-022).
 type CredentialRotateRequest struct {
@@ -8920,6 +9124,9 @@ type InstallSkillJSONRequestBody = SkillInstallRequest
 
 // PatchAppStateJSONRequestBody defines body for PatchAppState for application/json ContentType.
 type PatchAppStateJSONRequestBody = AppStatePatchRequest
+
+// PostSystemCliValidateJSONRequestBody defines body for PostSystemCliValidate for application/json ContentType.
+type PostSystemCliValidateJSONRequestBody = CliValidateRequest
 
 // CreateTaskJSONRequestBody defines body for CreateTask for application/json ContentType.
 type CreateTaskJSONRequestBody = TaskCreateRequest

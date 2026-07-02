@@ -579,6 +579,16 @@ type ChannelConfigureRequest = Partial<
     [key: string]: any;
   }
 >;
+type CliDetect = {
+  claude: CliDetectEntry;
+  codex: CliDetectEntry;
+  opencode: CliDetectEntry;
+};
+type CliDetectEntry = {
+  installed: boolean;
+  path?: (string | null) | undefined;
+  source?: ("path" | "well-known" | null) | undefined;
+};
 type Schedule = {
   id: string;
   name: string;
@@ -2317,13 +2327,33 @@ export const TokenUsageSummary: z.ZodType<TokenUsageSummary> = z
     partial_error_count: z.number().int().gte(0).optional(),
   })
   .passthrough();
-export const CliDetect = z
-  .object({
-    hasClaude: z.boolean(),
-    hasCodex: z.boolean(),
-    hasOpencode: z.boolean(),
-  })
-  .passthrough();
+export const CliDetectEntry: z.ZodType<CliDetectEntry> = z.object({
+  installed: z.boolean(),
+  path: z.string().nullish(),
+  source: z.enum(["path", "well-known"]).nullish(),
+});
+export const CliDetect: z.ZodType<CliDetect> = z.object({
+  claude: CliDetectEntry,
+  codex: CliDetectEntry,
+  opencode: CliDetectEntry,
+});
+export const CliValidateRequest = z.object({
+  cli: z.enum(["claude-code", "codex", "opencode"]),
+  cli_path: z.string(),
+});
+export const CliValidateResponse = z.object({
+  ok: z.boolean(),
+  reason: z.enum([
+    "ok",
+    "missing-binary",
+    "handshake-failed",
+    "unauthenticated",
+    "unknown-cli",
+  ]),
+  resolved_path: z.string().nullish(),
+  version: z.string().nullish(),
+  detail: z.string().optional(),
+});
 export const OnboardingCompleteResponse: z.ZodType<OnboardingCompleteResponse> =
   LoginResponse;
 export const AgentSession = z
@@ -5690,7 +5720,7 @@ Polled by the SPA StatusBar every 15 seconds.
     method: "get",
     path: "/system/cli-detect",
     alias: "getHostCliDetect",
-    description: `Reports whether the gateway process can locate each of the three external-CLI runners on its PATH. Read-only, idempotent, and unaudited — the SPA roster uses this to grey-out CLIs the host cannot run instead of letting the operator hit a wizard failure at runtime. Pure Go probe (no shell-out).
+    description: `Reports, per external-CLI runner (claude-code/codex/opencode), whether the gateway process can locate its binary — searching $PATH first, then a curated per-OS well-known-install-location list — and returns the resolved absolute path plus which strategy found it. Read-only, idempotent, and unaudited (no subprocess spawned). The SPA roster uses this to grey-out CLIs the host cannot run, and the create wizard / edit form use the returned path to prefill executor.cli_path. Pure Go probe (no shell-out).
 `,
     requestFormat: "json",
     response: CliDetect,
@@ -5698,6 +5728,39 @@ Polled by the SPA StatusBar every 15 seconds.
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/system/cli-validate",
+    alias: "postSystemCliValidate",
+    description: `Stateless, create-time validation for an external-executor CLI: confirms the binary at cli_path actually runs and reports a version, before the operator saves the subagent_3p agent. Reuses runner.TestConnectionWithPath verbatim (the same handshake as POST /agents/{id}/runner/test) — the only requirement is that the binary runs and returns a valid version-shaped response; no per-CLI identity/name match is performed. Gated withAuth at create-parity (the same authorization as createAgent — not an admin-only route). Rejects a target that is not a regular, executable file before spawning it (classified &quot;missing-binary&quot;, no spawn attempt). Applies a dedicated rate limiter and a small per-caller in-flight concurrency cap, and emits one audit event {cli, resolved_path, reason} per call — validation spawns a caller-supplied path, unlike the unaudited cli-detect probe.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: CliValidateRequest,
+      },
+    ],
+    response: CliValidateResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
         schema: ErrorResponse,
       },
     ],

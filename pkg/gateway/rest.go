@@ -20,7 +20,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -41,6 +40,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/audit"
 	"github.com/dapicom-ai/omnipus/pkg/channels"
 	whatsappnative "github.com/dapicom-ai/omnipus/pkg/channels/whatsapp_native"
+	"github.com/dapicom-ai/omnipus/pkg/clidetect"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/coreagent"
 	"github.com/dapicom-ai/omnipus/pkg/credentials"
@@ -2053,37 +2053,77 @@ func (a *restAPI) deleteAgent(w http.ResponseWriter, id string) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// cliProbeLookPath is the probe function used by HandleSystemCliDetect. It is
-// a package-level var (rather than a direct call to exec.LookPath) so unit
-// tests can swap in a deterministic implementation without OS-level mocking.
-// In production this is always exec.LookPath.
-var cliProbeLookPath = exec.LookPath
+// cliDetectAll is the detection function used by HandleSystemCliDetect. It is a
+// package-level var (rather than a direct clidetect.DetectAll call) so unit
+// tests can swap in a deterministic map without depending on the host layout.
+// In production this is always clidetect.DetectAll.
+var cliDetectAll = clidetect.DetectAll
 
 // HandleSystemCliDetect handles GET /api/v1/system/cli-detect.
 //
-// Reports whether each of the three external-CLI runner binaries is on PATH
-// for the gateway process. The roster screen uses this to grey-out CLIs the
-// host cannot run so operators don't have to discover a missing binary inside
-// the wizard.
+// Reports, per external-CLI runner (claude-code / codex / opencode), whether the
+// binary is installed and — when it is — its absolute resolved path and how it
+// was located ("path" via the gateway $PATH, "well-known" via a curated per-OS
+// install-dir scan). The roster screen greys-out CLIs the host cannot run, and
+// the create wizard / edit form prefill the executor cli_path field from `path`.
 //
-// Pure Go probe (no shell-out). Idempotent and unaudited — this is a
-// read-only diagnostic. LookPath returns (path, err); any non-nil error is
-// treated as "not on PATH".
+// Pure-Go filesystem probe — detection NEVER spawns a subprocess (FR-004) and is
+// unaudited by design: no caller-supplied path is executed here (auditing is
+// reserved for cli-validate, which does spawn). withAuth only.
 func (a *restAPI) HandleSystemCliDetect(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	probe := func(binary string) bool {
-		_, err := cliProbeLookPath(binary)
-		return err == nil
+	all := cliDetectAll()
+
+	var resp gen.CliDetect
+
+	c := all["claude-code"]
+	resp.Claude.Installed = c.Installed
+	if c.Installed {
+		resp.Claude.Path = strPtr(c.Path)
+		if wire := cliDetectSourceWire(c.Source); wire != "" {
+			src := gen.CliDetectClaudeSource(wire)
+			resp.Claude.Source = &src
+		}
 	}
-	resp := gen.CliDetect{
-		HasClaude:   probe("claude"),
-		HasCodex:    probe("codex"),
-		HasOpencode: probe("opencode"),
+
+	cx := all["codex"]
+	resp.Codex.Installed = cx.Installed
+	if cx.Installed {
+		resp.Codex.Path = strPtr(cx.Path)
+		if wire := cliDetectSourceWire(cx.Source); wire != "" {
+			src := gen.CliDetectCodexSource(wire)
+			resp.Codex.Source = &src
+		}
 	}
+
+	oc := all["opencode"]
+	resp.Opencode.Installed = oc.Installed
+	if oc.Installed {
+		resp.Opencode.Path = strPtr(oc.Path)
+		if wire := cliDetectSourceWire(oc.Source); wire != "" {
+			src := gen.CliDetectOpencodeSource(wire)
+			resp.Opencode.Source = &src
+		}
+	}
+
 	jsonOK(w, resp)
+}
+
+// cliDetectSourceWire validates a clidetect.Source against the known set and
+// returns its wire string, or "" for an unexpected value. The detector only ever
+// emits the two known sources, so this is defense-in-depth: a future/unknown
+// value normalizes to an omitted Source rather than being reflected onto the
+// wire enum unvalidated.
+func cliDetectSourceWire(s clidetect.Source) string {
+	switch s {
+	case clidetect.SourcePath, clidetect.SourceWellKnown:
+		return string(s)
+	default:
+		return ""
+	}
 }
 
 // isExternalSubagent reports whether the persisted agent is a subagent_3p
@@ -3910,6 +3950,17 @@ func (a *restAPI) putUserContext(w http.ResponseWriter, r *http.Request) {
 func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	cm.RegisterHTTPHandler("/api/v1/state", a.withOptionalAuth(a.HandleState))
 	cm.RegisterHTTPHandler("/api/v1/system/cli-detect", a.withAuth(a.HandleSystemCliDetect))
+	// POST /api/v1/system/cli-validate — spawns a caller-supplied path
+	// (<cli> --version), so it is hardened as a privileged diagnostic (ADR-030
+	// §11 F-01). CREATE-PARITY auth: plain withAuth, exactly like createAgent /
+	// HandleAgents below — NOT admin, NOT RequireNotBypass (anyone who can add
+	// the subagent can validate it). A DEDICATED rate limiter (cliValidateLimiter,
+	// distinct from validateLimiter) throttles the spawn endpoint; the handler
+	// additionally enforces a per-caller in-flight cap and audits each call.
+	cm.RegisterHTTPHandler(
+		"/api/v1/system/cli-validate",
+		a.withAuth(withRateLimit(cliValidateLimiter, a.HandleSystemCliValidate)),
+	)
 	cm.RegisterHTTPHandler("/api/v1/status", a.withAuth(a.HandleStatus))
 	cm.RegisterHTTPHandler("/api/v1/tasks", a.withAuth(a.HandleTasks))
 	cm.RegisterHTTPHandler("/api/v1/tasks/", a.withAuth(a.HandleTasks))

@@ -1,20 +1,23 @@
+title: CliDetect
 type: object
 description: >
-  Host-side CLI detection result. Probes whether each external-CLI runner binary
-  is on PATH for the gateway process. Used by the roster screen's
-  "+ Add Subagent (External)" disclosure to grey-out CLIs that the host cannot
-  actually run (saves the operator a wizard failure at runtime).
+  Host-side CLI detection result. Probes whether each external-CLI runner
+  binary (claude-code/codex/opencode) is present for the gateway process —
+  searching $PATH first, then a curated per-OS well-known-install-location
+  list — and returns the resolved absolute path and how it was found. Used
+  by the roster screen's "+ Add Subagent (External)" disclosure to grey-out
+  CLIs the host cannot actually run, and by the create wizard / edit form to
+  prefill the executor cli_path field. Read-only, unaudited — detection never
+  spawns a subprocess.
 required:
-  - hasClaude
-  - hasCodex
-  - hasOpencode
+  - claude
+  - codex
+  - opencode
+additionalProperties: false
 properties:
-  hasClaude:
-    type: boolean
-    description: Whether the `claude` binary (Claude Code, "claude-code" CLI) is on PATH for the gateway process.
-  hasCodex:
-    type: boolean
-    description: Whether the `codex` binary (Codex CLI) is on PATH.
-  hasOpencode:
-    type: boolean
-    description: Whether the `opencode` binary is on PATH.
+  claude:
+    $ref: './CliDetectEntry.yaml'
+  codex:
+    $ref: './CliDetectEntry.yaml'
+  opencode:
+    $ref: './CliDetectEntry.yaml'

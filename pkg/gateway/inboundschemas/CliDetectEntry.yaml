@@ -1,0 +1,37 @@
+title: CliDetectEntry
+description: >
+  Host-side detection result for a single external-CLI runner binary
+  (claude-code/codex/opencode). The gateway searches its own $PATH first,
+  then a curated per-OS well-known-install-location list, and reports which
+  strategy found the binary via `source`. Detection is a filesystem probe
+  only — it never spawns a subprocess.
+type: object
+required:
+  - installed
+additionalProperties: false
+properties:
+  installed:
+    type: boolean
+    description: Whether the binary was located on $PATH or in a well-known install directory.
+    example: true
+  path:
+    type: string
+    nullable: true
+    description: >
+      Absolute, symlink-resolved path to the binary. Null when installed=false.
+      This is the exact value the SPA prefills into the executor cli_path field —
+      detection, validation, and the runtime spawn all resolve this same path.
+    example: "/usr/local/bin/claude"
+  source:
+    type: string
+    nullable: true
+    enum:
+      - path
+      - well-known
+    description: >
+      How the binary was located: "path" when found via the gateway process's
+      $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only
+      by scanning the curated per-OS candidate directories. Null when
+      installed=false. $PATH results take precedence over well-known when both
+      are present.
+    example: "path"

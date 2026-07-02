@@ -1,0 +1,29 @@
+title: CliValidateRequest
+description: >
+  Request body for POST /api/v1/system/cli-validate. Stateless, create-time
+  validation of an external-executor CLI: confirms the binary at cli_path
+  actually runs and reports a version, before the operator saves the
+  subagent_3p agent. Reuses runner.TestConnectionWithPath verbatim — the same
+  handshake used by the post-create /agents/{id}/runner/test endpoint.
+type: object
+required:
+  - cli
+  - cli_path
+additionalProperties: false
+properties:
+  cli:
+    type: string
+    enum:
+      - claude-code
+      - codex
+      - opencode
+    description: The external CLI tool being validated. Matches ExecutorConfig.cli.
+    example: "claude-code"
+  cli_path:
+    type: string
+    description: >
+      Filesystem path to the CLI binary to validate — either the detected
+      prefill or an operator-entered override. An empty value is classified
+      "missing-binary" without a spawn attempt; the target MUST be a regular,
+      executable file before it is spawned.
+    example: "/usr/local/bin/claude"
