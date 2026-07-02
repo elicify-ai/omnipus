@@ -451,6 +451,95 @@ func TestRunRecap_ReasoningFallback_ExtractsJSONFromReasoning(t *testing.T) {
 	}
 }
 
+// fencedContentProvider returns the JSON recap wrapped in a ```json markdown
+// fence — the exact glm-5.2-on-OpenRouter pattern (content begins "```json\n{...")
+// that a raw json.Unmarshal rejects at char 0.
+type fencedContentProvider struct{ content string }
+
+func (f *fencedContentProvider) Chat(
+	_ context.Context,
+	_ []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	return &providers.LLMResponse{Content: f.content}, nil
+}
+
+func (f *fencedContentProvider) GetDefaultModel() string { return "glm-fenced-model" }
+
+// TestRunRecap_FencedContent verifies the recap parses a JSON envelope returned
+// inside a ```json markdown fence (glm-5.2 / OpenRouter routinely does this).
+// Before the fix, extractJSONFromText was only applied to resp.Reasoning, so a
+// raw json.Unmarshal(resp.Content) failed and the recap fell back to a heuristic
+// stub ("Turns: N ... Fallback reason: json_parse_error") that dropped the real
+// summary — the failure observed in the recap-continuity e2e.
+func TestRunRecap_FencedContent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("OMNIPUS_HOME", home)
+
+	cfg := &config.Config{}
+	cfg.Agents.Defaults.AutoRecapEnabled = true
+	cfg.Agents.Defaults.RecapModel = "glm-fenced-model"
+
+	const recapText = "fenced-content recap sentinel"
+	fenced := "```json\n{\"recap\":\"" + recapText +
+		"\",\"went_well\":[\"shipped\"],\"needs_improvement\":[],\"worth_remembering\":[]}\n```"
+	prov := &fencedContentProvider{content: fenced}
+
+	msgBus := bus.NewMessageBus()
+	al := mustNewAgentLoop(t, cfg, msgBus, prov)
+	t.Cleanup(func() { al.Close() })
+
+	store, err := session.NewUnifiedStore(filepath.Join(home, "sessions"))
+	if err != nil {
+		t.Fatalf("NewUnifiedStore: %v", err)
+	}
+	al.sharedSessionStore = store
+
+	agentCfg := &config.AgentConfig{ID: "fenced-agent", Name: "Fenced"}
+	ag := NewAgentInstance(agentCfg, &cfg.Agents.Defaults, cfg, prov)
+	ag.Workspace = filepath.Join(home, "agents", "fenced-agent")
+	ag.ContextBuilder = NewContextBuilder(ag.Workspace).WithAgentInfo("fenced-agent", "Fenced")
+	al.registry.mu.Lock()
+	al.registry.agents[agentCfg.ID] = ag
+	al.registry.mu.Unlock()
+
+	meta, err := store.NewSession(session.SessionTypeChat, "web", "fenced-agent")
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	sessionID := meta.ID
+	if err := store.AppendTranscript(sessionID, session.TranscriptEntry{
+		Role: "user", Content: "remember FALCON-XYZ", Timestamp: time.Now().UTC(), AgentID: "fenced-agent",
+	}); err != nil {
+		t.Fatalf("AppendTranscript: %v", err)
+	}
+
+	al.CloseSession(sessionID, "explicit")
+
+	deadline := time.Now().Add(5 * time.Second)
+	var lastSessionBytes []byte
+	lastSessionPath := filepath.Join(ag.Workspace, ".omnipus", "last-session.md")
+	for time.Now().Before(deadline) {
+		if data, readErr := os.ReadFile(lastSessionPath); readErr == nil {
+			lastSessionBytes = data
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if lastSessionBytes == nil {
+		t.Fatal("last-session.md not produced within deadline — fenced-content parse did not fire")
+	}
+	content := string(lastSessionBytes)
+	if !strings.Contains(content, recapText) {
+		t.Errorf("last-session.md missing recap text %q; got:\n%s", recapText, content)
+	}
+	if strings.Contains(content, "Fallback reason:") {
+		t.Errorf("last-session.md should contain the LLM recap, not a heuristic fallback; got:\n%s", content)
+	}
+}
+
 // reasoningOnlyProvider simulates a reasoning model that returns empty content
 // but populates the Reasoning field — the glm-5.2 / OpenRouter pattern when
 // the token budget is exhausted during the reasoning phase.
