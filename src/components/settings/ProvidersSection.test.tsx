@@ -173,6 +173,23 @@ describe('ProvidersSection — #17 zero-model provider stays listed', () => {
       expect(screen.getByTestId('provider-row-openrouter')).toBeInTheDocument()
     })
   })
+
+  // [I3] Strengthen: zero-model provider also shows a status badge.
+  // Mirrors the error-badge assertion in test #16 so both invalid-key AND
+  // zero-model states have equivalent status-visibility guarantees.
+  // Traces to: connectors-providers-redesign-spec.md §7 I3 gap / US-3 AS-4.
+  it('[I3] zero-model provider renders a connected-badge (status is visible)', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([
+      { ...OPENROUTER_PROVIDER, models: [], status: 'connected' },
+    ] as never)
+    renderSection()
+    await waitFor(() => {
+      expect(screen.getByTestId('provider-row-openrouter')).toBeInTheDocument()
+    })
+    // The connected badge must be present — a zero-model row is NOT a reason to
+    // omit the status indicator (same invariant as the error badge in test #16).
+    expect(screen.getByTestId('connected-badge-openrouter')).toBeInTheDocument()
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -281,6 +298,43 @@ describe('ProvidersSection — #22 view-only variant, key editable', () => {
     const apiKeyInput = screen.getByTestId('api-key-input-z-ai-coding')
     expect(apiKeyInput.tagName).toBe('INPUT')
   })
+
+  // [I4] Strengthen: assert Region, Wire, AND Endpoint inside variant-info
+  // contain no editable elements (no <input>, <textarea>, or contenteditable).
+  // Only the API key input (outside variant-info) may be editable.
+  // Traces to: connectors-providers-redesign-spec.md §7 I4 gap / US-5 AS-3.
+  it('[I4] variant-info section contains NO editable form controls', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([ZHIPU_CODING_PROVIDER] as never)
+    renderSection()
+    await waitFor(() => screen.getByTestId('configure-btn-z-ai-coding'))
+    fireEvent.click(screen.getByTestId('configure-btn-z-ai-coding'))
+    await waitFor(() => screen.getByTestId('variant-info'))
+
+    const variantInfo = screen.getByTestId('variant-info')
+
+    // No <input> elements inside variant-info
+    expect(variantInfo.querySelectorAll('input')).toHaveLength(0)
+    // No <textarea> elements inside variant-info
+    expect(variantInfo.querySelectorAll('textarea')).toHaveLength(0)
+    // No contenteditable elements inside variant-info
+    expect(variantInfo.querySelectorAll('[contenteditable]')).toHaveLength(0)
+
+    // Double-check specific fields individually
+    const planEl = within(variantInfo).getByTestId('variant-plan')
+    expect(planEl.tagName).not.toBe('INPUT')
+    expect(planEl.tagName).not.toBe('TEXTAREA')
+    expect(planEl.getAttribute('contenteditable')).toBeNull()
+
+    const regionEl = within(variantInfo).getByTestId('variant-region')
+    expect(regionEl.tagName).not.toBe('INPUT')
+    expect(regionEl.tagName).not.toBe('TEXTAREA')
+    expect(regionEl.getAttribute('contenteditable')).toBeNull()
+
+    const endpointEl = within(variantInfo).getByTestId('variant-endpoint')
+    expect(endpointEl.tagName).not.toBe('INPUT')
+    expect(endpointEl.tagName).not.toBe('TEXTAREA')
+    expect(endpointEl.getAttribute('contenteditable')).toBeNull()
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -380,6 +434,45 @@ describe('resolveCatalogEntry — migration dataset', () => {
     const result = resolveCatalogEntry('zzz-unknown')
     expect(result.group).toBe(GENERIC_GROUP)
     expect(result.entry).toBeUndefined()
+  })
+
+  // [I2] Orphan-alias migration: a stored id that is an alias in NO current catalog entry.
+  // Expected: resolves to Generic group, entry undefined, NO throw.
+  // Traces to: connectors-providers-redesign-spec.md §7 I2 gap.
+  it('#10 z-ai-legacy-removed → Other (alias in no catalog entry, no throw)', () => {
+    const result = resolveCatalogEntry('z-ai-legacy-removed')
+    // This id does not exist in the catalog and is not a known alias anywhere.
+    // It must not throw and must not incorrectly match a catalog entry.
+    expect(result.group).toBe(GENERIC_GROUP)
+    expect(result.entry).toBeUndefined()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// [I5] BrandDisclaimer visibility — FR-014 requires the trademark notice
+// wherever brand marks appear (empty-roster AND populated-list).
+//
+// Traces to: connectors-providers-redesign-spec.md §7 I5 gap / FR-014 / US-2 AS-3.
+// ---------------------------------------------------------------------------
+
+import { BRAND_DISCLAIMER_TEXT } from '@/components/ui/brand-disclaimer'
+
+describe('ProvidersSection — [I5] BrandDisclaimer present wherever marks appear', () => {
+  it('disclaimer renders on the empty-state roster (no providers configured)', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([] as never)
+    renderSection()
+    await waitFor(() => screen.getByTestId('provider-roster'))
+    // FR-014: the trademark disclaimer must be present in the DOM wherever brand logos
+    // are rendered — including the empty-state roster (which shows BrandIcon logos).
+    expect(screen.getByText(BRAND_DISCLAIMER_TEXT)).toBeInTheDocument()
+  })
+
+  it('disclaimer renders on the populated configured-providers list', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([ANTHROPIC_PROVIDER] as never)
+    renderSection()
+    await waitFor(() => screen.getByTestId('provider-row-anthropic'))
+    // FR-014: the trademark disclaimer must be present in the populated list view too.
+    expect(screen.getByText(BRAND_DISCLAIMER_TEXT)).toBeInTheDocument()
   })
 })
 

@@ -23,6 +23,7 @@ import { describe, it, expect } from 'vitest'
 import { readdirSync, readFileSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
+import DOMPurify from 'dompurify'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const LOGOS_DIR = join(__dirname)
@@ -43,6 +44,123 @@ const DENY_PATTERNS: Array<{ name: string; re: RegExp }> = [
     re: /(?:xlink:href|href)\s*=\s*["']https?:\/\//i,
   },
 ]
+
+// ---------------------------------------------------------------------------
+// C3 — Positive-control: the deny-detection logic fires on known-bad inputs.
+//
+// These tests prove the DENY_PATTERNS regex set actually catches malicious SVG
+// payloads — not just that current files are clean.  A regression where someone
+// softens a pattern (e.g. makes the <script> regex case-sensitive only) would
+// silently pass the file-scan tests above but FAIL these positive controls.
+//
+// Traces to: connectors-providers-redesign-spec.md §7 test #11 (C3 gap).
+// ---------------------------------------------------------------------------
+
+const MALICIOUS_SVG_FIXTURES: Array<{ name: string; svg: string; matchedBy: string }> = [
+  {
+    name: '<script> tag',
+    svg: '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>',
+    matchedBy: '<script>',
+  },
+  {
+    name: '@import via <style>',
+    svg: '<svg xmlns="http://www.w3.org/2000/svg"><style>@import url(https://evil.example/x)</style></svg>',
+    matchedBy: '<style>',
+  },
+  {
+    name: 'onload event handler',
+    svg: '<svg xmlns="http://www.w3.org/2000/svg" onload="x()"></svg>',
+    matchedBy: 'on*= event handler',
+  },
+  {
+    name: 'javascript: href',
+    svg: '<svg xmlns="http://www.w3.org/2000/svg"><a href="javascript:alert(1)"><path/></a></svg>',
+    matchedBy: 'javascript: URL',
+  },
+  {
+    name: '<use> with data: href',
+    svg: '<svg xmlns="http://www.w3.org/2000/svg"><use href="data:image/svg+xml,..."></use></svg>',
+    matchedBy: '<use>',
+  },
+  {
+    name: '<foreignObject> HTML injection',
+    svg: '<svg xmlns="http://www.w3.org/2000/svg"><foreignObject><div>xss</div></foreignObject></svg>',
+    matchedBy: '<foreignObject>',
+  },
+  {
+    name: 'external xlink:href',
+    svg: '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><image xlink:href="https://evil.example/track.svg"/></svg>',
+    matchedBy: 'external href',
+  },
+]
+
+describe('Brand logo SVG deny-pattern positive controls (C3)', () => {
+  it('has at least one malicious fixture per deny-pattern category', () => {
+    // Ensure every deny-pattern is exercised by at least one fixture.
+    const coveredPatterns = new Set(MALICIOUS_SVG_FIXTURES.map((f) => f.matchedBy))
+    for (const { name } of DENY_PATTERNS) {
+      expect(coveredPatterns.has(name), `No fixture covers deny-pattern "${name}"`).toBe(true)
+    }
+  })
+
+  for (const fixture of MALICIOUS_SVG_FIXTURES) {
+    it(`deny-pattern correctly fires on: ${fixture.name}`, () => {
+      const pattern = DENY_PATTERNS.find((p) => p.name === fixture.matchedBy)
+      // This proves the deny-pattern regex exists and catches the payload.
+      expect(pattern, `No deny-pattern named "${fixture.matchedBy}"`).toBeDefined()
+      expect(fixture.svg).toMatch(pattern!.re)
+    })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// C3 — DOMPurify sanitization-behavior test.
+//
+// The deny-patterns above catch raw SVG files at commit time.  This test
+// verifies that DOMPurify with the EXACT config used by BrandIcon actually
+// strips a known-malicious payload — proving the runtime security control
+// works, not just the static guard.
+//
+// Config mirrors brand-icon.tsx::buildSanitizedMap().
+// ---------------------------------------------------------------------------
+
+const DOMPUR_CONFIG = {
+  USE_PROFILES: { svg: true, svgFilters: true },
+  // Identical to the FORBID_TAGS list in brand-icon.tsx.
+  FORBID_TAGS: ['title', 'desc'],
+}
+
+describe('DOMPurify sanitization behavior (C3 — runtime security control)', () => {
+  it('removes <script> from a malicious SVG payload', () => {
+    const malicious = '<svg><script>alert(1)</script><title>x</title><path/></svg>'
+    const clean = DOMPurify.sanitize(malicious, DOMPUR_CONFIG)
+    expect(clean).not.toContain('<script')
+  })
+
+  it('removes <title> via FORBID_TAGS (not just security — prevents AT double-read)', () => {
+    const withTitle = '<svg><title>OpenAI</title><path/></svg>'
+    const clean = DOMPurify.sanitize(withTitle, DOMPUR_CONFIG)
+    expect(clean).not.toContain('<title')
+  })
+
+  it('preserves <path> (structural SVG element survives sanitization)', () => {
+    const safe = '<svg><path d="M0 0h24v24H0z"/></svg>'
+    const clean = DOMPurify.sanitize(safe, DOMPUR_CONFIG)
+    expect(clean).toContain('<path')
+  })
+
+  it('strips both <script> and <title> while keeping <path> in one pass', () => {
+    const mixed = '<svg><script>alert(1)</script><title>x</title><path d="M0 0"/></svg>'
+    const clean = DOMPurify.sanitize(mixed, DOMPUR_CONFIG)
+    expect(clean).not.toContain('<script')
+    expect(clean).not.toContain('<title')
+    expect(clean).toContain('<path')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Original guard tests follow.
+// ---------------------------------------------------------------------------
 
 describe('Brand logo SVG sanitization guard (test #11)', () => {
   it('finds at least one vendored SVG file', () => {

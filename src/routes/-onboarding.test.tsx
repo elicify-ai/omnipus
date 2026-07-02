@@ -63,6 +63,11 @@ vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: '/test-avatar.
 import { configureProvider, probeProvider, completeOnboardingTransaction } from '@/lib/api'
 import { evaluatePasswordStrength, friendlyProbeError, PROVIDERS_REQUIRING_ENDPOINT, sortProvidersByPriority, PLAN_LABELS, REGION_LABELS, WIRE_LABELS } from './onboarding'
 import { PROVIDER_CATALOG } from '@/lib/generated/providerCatalog'
+import { readFileSync } from 'fs'
+import { join, dirname } from 'path'
+import { fileURLToPath } from 'url'
+
+const __dirname_onboarding = dirname(fileURLToPath(import.meta.url))
 
 // Cache the dynamically imported component across all tests so the first import's
 // transform cost (~20s) only pays once and doesn't time out individual tests.
@@ -1091,5 +1096,45 @@ describe('PROVIDER_CATALOG — onboarding sources catalog verbatim (US-7 / FR-01
     expect(entry).toBeDefined()
     expect(entry!.label).toBe('OpenAI — Standard API')
     expect(entry!.logoSlug).toBe('openai')
+  })
+
+  // [SC-009] The SPA MUST consume the provider catalog via a static import, NOT
+  // a live /providers/catalog HTTP fetch.  ADR-031 explicitly rejected a live
+  // catalog endpoint (G-2=B: build-time embed, not a live endpoint).
+  //
+  // We verify this by:
+  // (a) Confirming PROVIDER_CATALOG is a non-empty array (static import works).
+  // (b) Reading the source files of onboarding.tsx and ProvidersSection.tsx and
+  //     asserting they contain NO fetch('/providers/catalog') call.
+  //
+  // This is a source-scan, not a mock-level test — it verifies the property at
+  // the code level, where a mock might hide a real fetch call.
+  //
+  // Traces to: connectors-providers-redesign-spec.md §7 SC-009; ADR-031 §"Out of scope".
+  it('[SC-009] PROVIDER_CATALOG is a non-empty array consumed via static import', () => {
+    // Proves the static import itself works at runtime.
+    expect(Array.isArray(PROVIDER_CATALOG)).toBe(true)
+    expect(PROVIDER_CATALOG.length).toBeGreaterThan(0)
+  })
+
+  it('[SC-009] onboarding.tsx source does not fetch /providers/catalog (static-only)', () => {
+    // Read the source file and assert no live catalog fetch exists.
+    const src = readFileSync(
+      join(__dirname_onboarding, 'onboarding.tsx'),
+      'utf-8',
+    )
+    expect(src, 'onboarding.tsx must not call a /providers/catalog endpoint').not.toContain(
+      '/providers/catalog',
+    )
+  })
+
+  it('[SC-009] ProvidersSection.tsx source does not fetch /providers/catalog (static-only)', () => {
+    const src = readFileSync(
+      join(__dirname_onboarding, '../components/settings/ProvidersSection.tsx'),
+      'utf-8',
+    )
+    expect(src, 'ProvidersSection.tsx must not call a /providers/catalog endpoint').not.toContain(
+      '/providers/catalog',
+    )
   })
 })
