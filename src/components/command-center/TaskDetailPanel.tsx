@@ -56,9 +56,10 @@ import { cn } from '@/lib/utils'
 import {
   type TriggerKind,
   buildTrigger,
-  toDatetimeLocalValue,
   datetimeLocalToMs,
   datetimeLocalToIso,
+  datetimeLocalToDate,
+  dateToDatetimeLocal,
 } from '@/components/workspaces/taskFormFields'
 
 // ── Status config ──────────────────────────────────────────────────────────────
@@ -125,12 +126,20 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
   const [triggerAtDraft, setTriggerAtDraft] = useState<Date | null>(
     typeof task?.trigger?.config?.at_ms === 'number' ? new Date(task.trigger.config.at_ms) : null,
   )
-  const [dueDraft, setDueDraft] = useState<Date | null>(task?.due ? new Date(task.due) : null)
+  const [dueDraft, setDueDraft] = useState<Date | null>(datetimeLocalToDate(task?.due))
   // Autosave indicator — every field change fires an immediate mutation; this
   // mirrors the AgentProfile / Gateway pattern so the user sees Saving…/Saved.
   const [saveStatus, setSaveStatus] = useState<AutoSaveStatus>('idle')
   const [saveError, setSaveError] = useState<string | undefined>(undefined)
 
+  // Resync everything EXCEPT the due/trigger-at drafts when the task's identity
+  // (id/prompt/workspace_id) actually changes — i.e. a different task was
+  // selected, or the prompt was saved elsewhere. Deliberately NOT keyed on
+  // task?.due / task?.trigger?.config?.at_ms: a due/trigger autosave PATCH
+  // invalidates the tasks query, which hands this component a new `task`
+  // object with the SAME id/prompt/workspace_id — if this effect also fired
+  // on that resync, it would wipe an in-progress, unsaved prompt edit out from
+  // under the user (data loss). See the sibling effect below for due/trigger.
   useEffect(() => {
     setPromptDraft(task?.prompt ?? '')
     setEditingPrompt(false)
@@ -139,11 +148,19 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
     setTriggerError('')
     setDueError('')
     setStatusError('')
-    setTriggerAtDraft(typeof task?.trigger?.config?.at_ms === 'number' ? new Date(task.trigger.config.at_ms) : null)
-    setDueDraft(task?.due ? new Date(task.due) : null)
     setSaveStatus('idle')
     setSaveError(undefined)
-  }, [task?.id, task?.prompt, task?.workspace_id, task?.due, task?.trigger?.config?.at_ms])
+  }, [task?.id, task?.prompt, task?.workspace_id])
+
+  // Resync ONLY the due/trigger-at drafts when the task's due date or
+  // one-time trigger changes — including the same-identity resync described
+  // above (a due/trigger PATCH's own success should still reflect the saved
+  // value once the query refetches). Split out from the effect above so this
+  // resync can never touch promptDraft/editingPrompt/todos/errors.
+  useEffect(() => {
+    setTriggerAtDraft(typeof task?.trigger?.config?.at_ms === 'number' ? new Date(task.trigger.config.at_ms) : null)
+    setDueDraft(datetimeLocalToDate(task?.due))
+  }, [task?.id, task?.due, task?.trigger?.config?.at_ms])
 
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
 
@@ -181,6 +198,29 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
   // linger between unrelated edits.
   const savedFadeRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => () => { if (savedFadeRef.current) clearTimeout(savedFadeRef.current) }, [])
+
+  // Debounce the due/trigger-at DateTimePicker autosave: day, hour, and minute
+  // are three separate onChange firings for a single logical edit, so PATCHing
+  // on every one of them sends 3 sequential requests with intermediate
+  // (partially-composed) values — chatty, and a race if they resolve out of
+  // order. Coalesce into ONE PATCH per field ~500ms after the user stops
+  // picking (cancel-in-flight: each new pick within the window replaces the
+  // pending commit). Keyed per field (not a single shared timer) so editing
+  // due and trigger-at close together doesn't drop one of them.
+  const dateCommitTimers = useRef<Partial<Record<'due' | 'triggerAt', ReturnType<typeof setTimeout>>>>({})
+  useEffect(() => () => {
+    Object.values(dateCommitTimers.current).forEach((t) => { if (t) clearTimeout(t) })
+  }, [])
+
+  function scheduleDateCommit(field: 'due' | 'triggerAt', commit: () => void) {
+    const timers = dateCommitTimers.current
+    const pending = timers[field]
+    if (pending) clearTimeout(pending)
+    timers[field] = setTimeout(() => {
+      delete timers[field]
+      commit()
+    }, 500)
+  }
 
   const { mutate: doUpdate } = useMutation({
     mutationFn: (data: TaskUpdateRequest) => {
@@ -612,7 +652,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
             value={triggerAtDraft}
             onChange={(d) => {
               setTriggerAtDraft(d)
-              handleTriggerAtChange(d ? toDatetimeLocalValue(d.getTime()) : '')
+              scheduleDateCommit('triggerAt', () => handleTriggerAtChange(dateToDatetimeLocal(d)))
             }}
             className="mt-1.5"
           />
@@ -713,7 +753,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
           value={dueDraft}
           onChange={(d) => {
             setDueDraft(d)
-            handleDueChange(d ? toDatetimeLocalValue(d.getTime()) : '')
+            scheduleDateCommit('due', () => handleDueChange(dateToDatetimeLocal(d)))
           }}
         />
         {dueError && (

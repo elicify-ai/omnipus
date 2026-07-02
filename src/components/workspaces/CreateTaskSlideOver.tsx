@@ -42,9 +42,10 @@ import { PRIORITY_BADGE } from './TaskCard'
 import {
   type TriggerKind,
   buildTrigger,
-  toDatetimeLocalValue,
   datetimeLocalToMs,
   datetimeLocalToIso,
+  datetimeLocalToDate,
+  dateToDatetimeLocal,
 } from './taskFormFields'
 
 interface CreateTaskSlideOverProps {
@@ -449,9 +450,9 @@ export function CreateTaskSlideOver({
             {form.triggerKind === 'once' && (
               <DateTimePicker
                 aria-label="Trigger date and time"
-                value={form.triggerAt ? new Date(form.triggerAt) : null}
+                value={datetimeLocalToDate(form.triggerAt)}
                 onChange={(d) => {
-                  setForm((s) => ({ ...s, triggerAt: d ? toDatetimeLocalValue(d.getTime()) : '' }))
+                  setForm((s) => ({ ...s, triggerAt: dateToDatetimeLocal(d) }))
                   setTriggerError('')
                 }}
                 className="mt-1"
@@ -555,8 +556,8 @@ export function CreateTaskSlideOver({
             <DateTimePicker
               id="ct-due"
               aria-label="Due date"
-              value={form.due ? new Date(form.due) : null}
-              onChange={(d) => setForm((s) => ({ ...s, due: d ? toDatetimeLocalValue(d.getTime()) : '' }))}
+              value={datetimeLocalToDate(form.due)}
+              onChange={(d) => setForm((s) => ({ ...s, due: dateToDatetimeLocal(d) }))}
             />
           </div>
 

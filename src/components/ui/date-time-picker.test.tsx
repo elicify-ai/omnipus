@@ -88,6 +88,44 @@ describe('DateTimePicker — day selection', () => {
     clickDay('2026-06-20')
     expect(screen.getByRole('combobox', { name: 'Hour' })).toBeInTheDocument()
   })
+
+  it('clicking the already-selected day clears the value (react-day-picker single-select deselects on reclick)', () => {
+    const onChange = vi.fn()
+    render(<DateTimePicker value={new Date(2026, 5, 15, 9, 30)} onChange={onChange} aria-label="Trigger at" />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger at' }))
+    clickDay('2026-06-15')
+
+    expect(onChange).toHaveBeenCalledOnce()
+    expect(onChange).toHaveBeenCalledWith(null)
+  })
+
+  it('picking a day with no prior value defaults the time to a deterministic midnight, not "now"', () => {
+    // Fix: handleDaySelect used to fall back to `now.getHours()/getMinutes()`
+    // for a fresh (value=null) day-only pick — nondeterministic and surprising
+    // for a due date. It must default to 00:00 regardless of the wall-clock
+    // time the pick happens to occur at.
+    vi.useFakeTimers()
+    try {
+      // "Now" is deliberately NOT midnight — proves the picked time doesn't leak in.
+      vi.setSystemTime(new Date(2026, 5, 15, 14, 45))
+
+      const onChange = vi.fn()
+      render(<DateTimePicker value={null} onChange={onChange} aria-label="Trigger at" />)
+      fireEvent.click(screen.getByRole('button', { name: 'Trigger at' }))
+      clickDay('2026-06-15')
+
+      expect(onChange).toHaveBeenCalledOnce()
+      const [next] = onChange.mock.calls[0] as [Date]
+      expect(next.getFullYear()).toBe(2026)
+      expect(next.getMonth()).toBe(5)
+      expect(next.getDate()).toBe(15)
+      expect(next.getHours()).toBe(0)
+      expect(next.getMinutes()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
 
 describe('DateTimePicker — hour/minute selects', () => {
@@ -116,6 +154,20 @@ describe('DateTimePicker — hour/minute selects', () => {
     const [next] = onChange.mock.calls[0] as [Date]
     expect(next.getMinutes()).toBe(45)
     expect(next.getHours()).toBe(9)
+    expect(next.getDate()).toBe(15)
+  })
+
+  it('selecting hour 00 sets getHours() to exactly 0 (midnight is not falsy-skipped)', () => {
+    const onChange = vi.fn()
+    render(<DateTimePicker value={new Date(2026, 5, 15, 9, 30)} onChange={onChange} aria-label="Trigger at" />)
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger at' }))
+
+    selectOption('Hour', '00')
+
+    expect(onChange).toHaveBeenCalledOnce()
+    const [next] = onChange.mock.calls[0] as [Date]
+    expect(next.getHours()).toBe(0)
+    expect(next.getMinutes()).toBe(30)
     expect(next.getDate()).toBe(15)
   })
 

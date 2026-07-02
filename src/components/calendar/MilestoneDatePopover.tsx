@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import {
   Dialog,
@@ -41,6 +41,10 @@ export function MilestoneDatePopover({
   // Local date string state — YYYY-MM-DD
   const [dateValue, setDateValue] = useState<string>('')
 
+  // DatePicker forwards its ref to the trigger <Button>, so focus can be
+  // driven directly via a ref instead of a DOM id lookup.
+  const inputRef = useRef<HTMLButtonElement>(null)
+
   // Prefill the date input whenever the dialog opens (milestone becomes non-null).
   // Controlled-open prefill ownership is the dialog's: it reads milestone.due_date.
   useEffect(() => {
@@ -52,13 +56,11 @@ export function MilestoneDatePopover({
   // Focus the date picker trigger on open. This setTimeout is LOAD-BEARING: without it
   // Radix's focus trap would land on the first tabbable element (the Cancel button).
   // Moving focus explicitly to the trigger lets the user start editing immediately (C-4).
-  // DatePicker's trigger is a plain <Button> (no ref forwarding), so focus is driven via
-  // the DOM id it renders with rather than a React ref.
   useEffect(() => {
     if (milestone != null) {
       // Small defer so the dialog animation does not fight focus management.
       const id = setTimeout(() => {
-        document.getElementById('milestone-date-input')?.focus()
+        inputRef.current?.focus()
       }, 50)
       return () => clearTimeout(id)
     }
@@ -153,6 +155,7 @@ export function MilestoneDatePopover({
               Due date
             </label>
             <DatePicker
+              ref={inputRef}
               id="milestone-date-input"
               value={parseLocalDate(dateValue)}
               onChange={(d) => setDateValue(d ? formatLocalDate(d) : '')}

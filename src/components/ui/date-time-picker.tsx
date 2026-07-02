@@ -1,16 +1,16 @@
 import * as React from 'react'
-import { CalendarBlank, Clock } from '@phosphor-icons/react'
+import { Clock } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Calendar } from '@/components/ui/calendar'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { DATE_TRIGGER_CLASSNAME } from '@/components/ui/date-picker'
-import { cn } from '@/lib/utils'
+import { DateTriggerButton } from '@/components/ui/date-picker'
 
 // Date + time picker — replaces native `<input type="datetime-local">`
-// (ADR-030 §10). Same Input-matched trigger as DatePicker; the popover adds
-// two shadcn <Select> dropdowns (hour 00–23, minute 00–59 by `minuteStep`)
-// below the calendar instead of a native `<input type="time">`.
+// (ADR-030 §10). Same Input-matched trigger as DatePicker (shared via
+// DateTriggerButton); the popover adds two shadcn <Select> dropdowns (hour
+// 00–23, minute 00–59 by `minuteStep`) below the calendar instead of a
+// native `<input type="time">`.
 export interface DateTimePickerProps {
   value: Date | null
   onChange: (date: Date | null) => void
@@ -52,16 +52,19 @@ function formatDateTimeDisplay(date: Date): string {
   })
 }
 
-function DateTimePicker({
-  value,
-  onChange,
-  placeholder = 'Pick a date and time',
-  id,
-  'aria-label': ariaLabel,
-  disabled,
-  className,
-  minuteStep = 5,
-}: DateTimePickerProps) {
+const DateTimePicker = React.forwardRef<HTMLButtonElement, DateTimePickerProps>(function DateTimePicker(
+  {
+    value,
+    onChange,
+    placeholder = 'Pick a date and time',
+    id,
+    'aria-label': ariaLabel,
+    disabled,
+    className,
+    minuteStep = 5,
+  },
+  ref,
+) {
   const [open, setOpen] = React.useState(false)
   const minutes = React.useMemo(
     () => minuteOptions(minuteStep, value ? value.getMinutes() : null),
@@ -73,9 +76,12 @@ function DateTimePicker({
       onChange(null)
       return
     }
-    const now = new Date()
-    const hours = value ? value.getHours() : now.getHours()
-    const mins = value ? value.getMinutes() : now.getMinutes()
+    // A day-only pick with no prior value defaults the time-of-day to
+    // midnight (00:00) — deterministic, not "now". A due date or a one-time
+    // trigger picked by day alone should mean "the start of that day", not
+    // whatever wall-clock time happened to be showing when the user clicked.
+    const hours = value ? value.getHours() : 0
+    const mins = value ? value.getMinutes() : 0
     onChange(new Date(day.getFullYear(), day.getMonth(), day.getDate(), hours, mins, 0, 0))
   }
 
@@ -94,19 +100,16 @@ function DateTimePicker({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button
-          type="button"
+        <DateTriggerButton
+          ref={ref}
           id={id}
           aria-label={ariaLabel}
-          variant="outline"
           disabled={disabled}
-          className={cn(DATE_TRIGGER_CLASSNAME, className)}
+          className={className}
+          hasValue={!!value}
         >
-          <CalendarBlank size={16} className="shrink-0 opacity-70" aria-hidden="true" />
-          <span className={cn('truncate', !value && 'text-[var(--color-muted)]')}>
-            {value ? formatDateTimeDisplay(value) : placeholder}
-          </span>
-        </Button>
+          {value ? formatDateTimeDisplay(value) : placeholder}
+        </DateTriggerButton>
       </PopoverTrigger>
       <PopoverContent className="w-auto p-0" align="start">
         <Calendar
@@ -151,7 +154,7 @@ function DateTimePicker({
       </PopoverContent>
     </Popover>
   )
-}
+})
 DateTimePicker.displayName = 'DateTimePicker'
 
 export { DateTimePicker }

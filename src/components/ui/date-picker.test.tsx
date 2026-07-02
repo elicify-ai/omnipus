@@ -66,4 +66,15 @@ describe('DatePicker — selection', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Due date' }))
     expect(document.querySelector('[data-day="2026-09-03"]')).toBeInTheDocument()
   })
+
+  it('clicking the already-selected day clears the value (react-day-picker single-select deselects on reclick)', () => {
+    const onChange = vi.fn()
+    render(<DatePicker value={new Date(2026, 5, 15)} onChange={onChange} aria-label="Due date" />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Due date' }))
+    clickDay('2026-06-15')
+
+    expect(onChange).toHaveBeenCalledOnce()
+    expect(onChange).toHaveBeenCalledWith(null)
+  })
 })

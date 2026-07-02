@@ -24,7 +24,7 @@ import {
 } from '@/lib/api'
 import type { Schedule, ScheduleCreate, ScheduleUpdate, ScheduleTrigger } from '@/lib/api/generated/openapi-types'
 import { useUiStore } from '@/store/ui'
-import { toDatetimeLocalValue } from '@/components/workspaces/taskFormFields'
+import { datetimeLocalToDate, dateToDatetimeLocal } from '@/components/workspaces/taskFormFields'
 import { triggerSummary } from './SchedulesList'
 import {
   UNIT_MS,
@@ -672,8 +672,8 @@ function WhenSection({ form, setValue, triggerServerError }: WhenSectionProps) {
         <Field label="Run at" htmlFor="schedule-at">
           <DateTimePicker
             id="schedule-at"
-            value={form.atLocal ? new Date(form.atLocal) : null}
-            onChange={(d) => setValue('atLocal', d ? toDatetimeLocalValue(d.getTime()) : '')}
+            value={datetimeLocalToDate(form.atLocal)}
+            onChange={(d) => setValue('atLocal', dateToDatetimeLocal(d))}
           />
         </Field>
       )}
