@@ -9,11 +9,68 @@
  * the 7-state lifecycle: inbox/next/planning/in_progress/blocked/done/failed.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { useState } from 'react'
+import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest'
 import { render, screen, fireEvent, act, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { TaskDetailPanel } from './TaskDetailPanel'
-import type { Task } from '@/lib/api'
+import type { Task, TaskUpdateRequest } from '@/lib/api'
+
+// DateTimePicker (shadcn Calendar + Select) needs these jsdom polyfills to open
+// (same gap noted in date-time-picker.test.tsx).
+beforeAll(() => {
+  if (!Element.prototype.hasPointerCapture) {
+    Element.prototype.hasPointerCapture = () => false
+  }
+  if (!Element.prototype.scrollIntoView) {
+    Element.prototype.scrollIntoView = () => {}
+  }
+  if (typeof window !== 'undefined' && !window.ResizeObserver) {
+    window.ResizeObserver = class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    } as unknown as typeof ResizeObserver
+  }
+})
+
+// Click a react-day-picker day cell (data-day="YYYY-MM-DD") inside an open DateTimePicker popover.
+function clickDay(isoDate: string) {
+  const btn = document.querySelector(`[data-day="${isoDate}"] button`)
+  if (!btn) throw new Error(`no day button for ${isoDate}`)
+  fireEvent.click(btn)
+}
+
+// Pick an option from an open DateTimePicker's Hour/Minute <Select>.
+function selectOption(comboboxName: string, optionName: string) {
+  fireEvent.click(screen.getByRole('combobox', { name: comboboxName }))
+  const option = screen.getByRole('option', { name: optionName })
+  fireEvent.pointerDown(option, { pointerId: 1, button: 0 })
+  fireEvent.click(option)
+}
+
+// When no value is set, the calendar opens on the real "today" month (react-day-picker's
+// own default), not the target month — navigate forward/back via the Nav buttons so the
+// target day is on-screen regardless of when the suite happens to run.
+function navigateToMonth(isoDate: string) {
+  const [y, m] = isoDate.split('-').map(Number)
+  const target = new Date(y, m - 1, 1)
+  const now = new Date()
+  const diff = (target.getFullYear() - now.getFullYear()) * 12 + (target.getMonth() - now.getMonth())
+  const label = diff >= 0 ? /go to the next month/i : /go to the previous month/i
+  for (let i = 0; i < Math.abs(diff); i++) {
+    fireEvent.click(screen.getByRole('button', { name: label }))
+  }
+}
+
+// Open the "Due date" DateTimePicker and pick a full date + time.
+async function pickDueDateTime({ isoDate, hour, minute }: { isoDate: string; hour: string; minute: string }) {
+  fireEvent.click(await screen.findByRole('button', { name: /due date/i }))
+  navigateToMonth(isoDate)
+  clickDay(isoDate)
+  selectOption('Hour', hour)
+  selectOption('Minute', minute)
+}
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
@@ -441,20 +498,126 @@ describe('TaskDetailPanel — editable trigger', () => {
     const arg = lastUpdateArg(updateTask)
     expect(arg.trigger?.config.cron_expr).toBe('15 6 * * *')
   })
+
+  it('picking a date + time for the "Once" trigger PATCHes trigger.config.at_ms', async () => {
+    // Note: triggerKind (and therefore whether the "Once" DateTimePicker is
+    // rendered at all) is derived straight from `task.trigger?.type`, not
+    // from any local echo of a SmartSelect pick — this test's `task` prop
+    // (via renderPanel) is static, so it starts already on the "once" kind
+    // with no at_ms yet (mirrors a freshly-created once-trigger task), rather
+    // than switching kinds through the SmartSelect mid-test.
+    const { updateTask } = await import('@/lib/api')
+    renderPanel(makeTask({ id: 'task-trig-once', status: 'next', trigger: { type: 'once', config: {} } }))
+
+    fireEvent.click(await screen.findByRole('button', { name: /trigger date and time/i }))
+    navigateToMonth('2026-09-10')
+    clickDay('2026-09-10')
+    selectOption('Hour', '08')
+    selectOption('Minute', '15')
+
+    const expectedAtMs = new Date('2026-09-10T08:15').getTime()
+    // Debounced autosave — poll the LAST recorded PATCH until it reflects the
+    // fully-composed pick (robust regardless of how many PATCHes preceded it).
+    await waitFor(() => {
+      const arg = lastUpdateArg(updateTask)
+      expect(arg.trigger?.type).toBe('once')
+      expect(arg.trigger?.config.at_ms).toBe(expectedAtMs)
+    }, { timeout: 3000 })
+  })
 })
 
 describe('TaskDetailPanel — editable due date', () => {
-  it('setting a due date PATCHes due as RFC3339 on blur', async () => {
+  it('setting a due date PATCHes due as RFC3339', async () => {
     const { updateTask } = await import('@/lib/api')
     renderPanel(makeTask({ id: 'task-due', status: 'next' }))
 
-    const due = await screen.findByLabelText(/due date/i)
-    fireEvent.change(due, { target: { value: '2026-09-10T12:30' } })
-    fireEvent.blur(due)
+    await pickDueDateTime({ isoDate: '2026-09-10', hour: '12', minute: '30' })
 
-    await waitFor(() => expect(vi.mocked(updateTask)).toHaveBeenCalled())
+    // Debounced autosave (~500ms after the last pick) — give it room beyond
+    // the default waitFor timeout so this isn't a timing-flaky assertion.
+    await waitFor(() => expect(vi.mocked(updateTask)).toHaveBeenCalled(), { timeout: 3000 })
     const arg = lastUpdateArg(updateTask)
     expect(arg.due).toBe(new Date('2026-09-10T12:30').toISOString())
+  })
+
+  it('a day→hour→minute pick sequence results in a single PATCH carrying the final composed value', async () => {
+    // Reviewer fix: day, hour, and minute each fire a separate onChange from
+    // the DateTimePicker. Before debouncing, each one PATCHed independently —
+    // 3 sequential requests with intermediate (partially-composed) values,
+    // and a risk of them resolving out of order. Now they coalesce into ONE
+    // PATCH carrying the final, fully-composed date.
+    const { updateTask } = await import('@/lib/api')
+    renderPanel(makeTask({ id: 'task-due-single-patch', status: 'next' }))
+
+    await pickDueDateTime({ isoDate: '2026-09-10', hour: '12', minute: '30' })
+
+    await waitFor(() => expect(vi.mocked(updateTask)).toHaveBeenCalled(), { timeout: 3000 })
+    // Give any (incorrect) extra debounced PATCHes a moment to have fired too.
+    await new Promise((resolve) => setTimeout(resolve, 200))
+
+    expect(vi.mocked(updateTask)).toHaveBeenCalledTimes(1)
+    const arg = lastUpdateArg(updateTask)
+    expect(arg.due).toBe(new Date('2026-09-10T12:30').toISOString())
+  })
+})
+
+// ── CRITICAL data-loss regression: due-date autosave must not wipe an
+// unsaved prompt edit ──────────────────────────────────────────────────────
+//
+// TaskDetailPanel's `task` prop is not query-owned by this component — the
+// real host screen re-renders it with a NEW `task` object whenever the tasks
+// query refetches (e.g. because TaskDetailPanel's own due/trigger autosave
+// PATCH invalidated it). Before the fix, a single resync useEffect keyed
+// partly on task?.due / task?.trigger?.config?.at_ms re-fired on that resync
+// and reset promptDraft/editingPrompt — silently discarding whatever the
+// user had typed. This harness reproduces that resync by having the mocked
+// updateTask feed the patched fields back into a task object held in local
+// state, exactly mirroring the parent's useQuery→find(task.id) round trip.
+describe('TaskDetailPanel — prompt draft survives a due-date autosave (data-loss regression)', () => {
+  it('editing the prompt then picking a due date does not wipe the unsaved prompt text', async () => {
+    const { updateTask } = await import('@/lib/api')
+
+    const baseTask = makeTask({ id: 'task-preserve-prompt', status: 'next', prompt: 'Original prompt' })
+    let applyPatch: (patch: TaskUpdateRequest) => void = () => {}
+
+    function Harness() {
+      const [task, setTask] = useState<Task>(baseTask)
+      applyPatch = (patch) => setTask((prev) => ({ ...prev, ...patch }))
+      return (
+        <QueryClientProvider client={makeClient()}>
+          <TaskDetailPanel task={task} onClose={vi.fn()} />
+        </QueryClientProvider>
+      )
+    }
+
+    vi.mocked(updateTask).mockImplementation(async (_id: string, patch: TaskUpdateRequest) => {
+      // Mirrors the real flow: the PATCH succeeds, the tasks query is
+      // invalidated, and the parent hands TaskDetailPanel a NEW task object
+      // (same id/prompt/workspace_id, updated due) — done here synchronously
+      // via the harness's own state instead of a real query round trip.
+      applyPatch(patch)
+      return { ...baseTask, ...patch } as Task
+    })
+
+    render(<Harness />)
+
+    // Start editing the prompt — unsaved.
+    fireEvent.click(await screen.findByLabelText(/edit prompt/i))
+    const promptBox = document.querySelector('textarea') as HTMLTextAreaElement
+    expect(promptBox).toBeTruthy()
+    fireEvent.change(promptBox, { target: { value: 'Unsaved draft text' } })
+
+    // Now pick a due date — the resulting (debounced) PATCH feeds a new task
+    // object back in via applyPatch, same id/prompt/workspace_id, new due.
+    await pickDueDateTime({ isoDate: '2026-09-10', hour: '12', minute: '30' })
+
+    await waitFor(() => expect(vi.mocked(updateTask)).toHaveBeenCalled(), { timeout: 3000 })
+
+    // The unsaved prompt edit must survive: still in edit mode, still showing
+    // the draft text — NOT reset to the (stale) saved prompt.
+    const promptBoxAfter = document.querySelector('textarea') as HTMLTextAreaElement | null
+    expect(promptBoxAfter).toBeTruthy()
+    expect(promptBoxAfter).toHaveValue('Unsaved draft text')
   })
 })
 
@@ -525,11 +688,15 @@ describe('TaskDetailPanel — editable todos checklist', () => {
 describe('TaskDetailPanel — clearing a due date (clear_due)', () => {
   it('PATCHes clear_due:true and never sends due:"" when the field is cleared', async () => {
     const { updateTask } = await import('@/lib/api')
-    renderPanel(makeTask({ id: 'task-clear-due', status: 'next', due: '2026-09-10T12:30:00Z' }))
+    const dueIso = '2026-09-10T12:30:00Z'
+    renderPanel(makeTask({ id: 'task-clear-due', status: 'next', due: dueIso }))
 
-    const due = await screen.findByLabelText(/due date/i)
-    fireEvent.change(due, { target: { value: '' } })
-    fireEvent.blur(due)
+    // Clear by clicking the already-selected day again — react-day-picker's single-select
+    // mode (required=false, the default) deselects and fires onSelect(undefined).
+    fireEvent.click(await screen.findByRole('button', { name: /due date/i }))
+    const selectedDate = new Date(dueIso)
+    const localIso = `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, '0')}-${String(selectedDate.getDate()).padStart(2, '0')}`
+    clickDay(localIso)
 
     // Clears via the unambiguous flag; never sends the broken empty string.
     await vi.waitFor(() => {
@@ -595,9 +762,7 @@ describe('TaskDetailPanel — autosave indicator', () => {
     vi.mocked(updateTask).mockResolvedValue({} as never)
     renderPanel(makeTask({ id: 'task-autosave', status: 'next' }))
 
-    const due = await screen.findByLabelText(/due date/i)
-    fireEvent.change(due, { target: { value: '2026-09-10T12:30' } })
-    fireEvent.blur(due)
+    await pickDueDateTime({ isoDate: '2026-09-10', hour: '12', minute: '30' })
 
     await waitFor(() => expect(vi.mocked(updateTask)).toHaveBeenCalled())
     await screen.findByText(/saved/i)

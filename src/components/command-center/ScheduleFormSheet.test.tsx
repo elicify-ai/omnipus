@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ScheduleFormSheet } from './ScheduleFormSheet'
@@ -592,5 +592,87 @@ describe('ScheduleFormSheet — workers excluded from the owner picker', () => {
     const body = vi.mocked(createSchedule).mock.calls[0][0]
     // The first non-worker agent (Mia) is chosen, NOT the default:true worker.
     expect(body.owner_agent_id).toBe('mia')
+  })
+})
+
+// ── DateTimePicker round-trip for "Run at" (kind:'at') ─────────────────────
+//
+// The "Once" trigger's date/time is picked via the shadcn DateTimePicker
+// (Popover + Calendar + Hour/Minute <Select>s), not a native
+// `<input type="datetime-local">`. This exercises the full pick → submit →
+// payload path end to end (complementing the pure-function coverage in
+// taskFormFields.test.ts and cronRoundTrip.test.ts).
+
+describe('ScheduleFormSheet — DateTimePicker round-trip for "Run at" (kind:\'at\')', () => {
+  beforeAll(() => {
+    if (!Element.prototype.hasPointerCapture) {
+      Element.prototype.hasPointerCapture = () => false
+    }
+    if (!Element.prototype.scrollIntoView) {
+      Element.prototype.scrollIntoView = () => {}
+    }
+    if (typeof window !== 'undefined' && !window.ResizeObserver) {
+      window.ResizeObserver = class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      } as unknown as typeof ResizeObserver
+    }
+  })
+
+  function runAtTrigger(): HTMLElement {
+    const el = document.getElementById('schedule-at')
+    if (!el) throw new Error('Run at trigger not found')
+    return el
+  }
+
+  function clickDay(isoDate: string) {
+    const btn = document.querySelector(`[data-day="${isoDate}"] button`)
+    if (!btn) throw new Error(`no day button for ${isoDate}`)
+    fireEvent.click(btn)
+  }
+
+  function selectOption(comboboxName: string, optionName: string) {
+    fireEvent.click(screen.getByRole('combobox', { name: comboboxName }))
+    const option = screen.getByRole('option', { name: optionName })
+    fireEvent.pointerDown(option, { pointerId: 1, button: 0 })
+    fireEvent.click(option)
+  }
+
+  // The calendar opens on real "today" (react-day-picker's own default) when
+  // no value is set yet — navigate to the target month regardless of when
+  // the suite happens to run (same pattern as date-time-picker.test.tsx).
+  function navigateToMonth(isoDate: string) {
+    const [y, m] = isoDate.split('-').map(Number)
+    const target = new Date(y, m - 1, 1)
+    const now = new Date()
+    const diff = (target.getFullYear() - now.getFullYear()) * 12 + (target.getMonth() - now.getMonth())
+    const label = diff >= 0 ? /go to the next month/i : /go to the previous month/i
+    for (let i = 0; i < Math.abs(diff); i++) {
+      fireEvent.click(screen.getByRole('button', { name: label }))
+    }
+  }
+
+  it('picking a date + time in the "Run at" picker submits the matching at_ms', async () => {
+    renderForm({ defaultOwnerAgentId: 'mia' })
+    await screen.findByText('New schedule')
+
+    fireEvent.change(screen.getByPlaceholderText(/Daily PR summary/i), { target: { value: 'T' } })
+    fireEvent.change(screen.getByPlaceholderText(/Summarize today/i), { target: { value: 'M' } })
+
+    // Default trigger mode is already "Once" (AC4) — open the "Run at"
+    // DateTimePicker directly and pick a specific date + time.
+    fireEvent.click(runAtTrigger())
+    navigateToMonth('2026-09-10')
+    clickDay('2026-09-10')
+    selectOption('Hour', '12')
+    selectOption('Minute', '30')
+
+    fireEvent.click(screen.getByRole('button', { name: /create schedule/i }))
+
+    await waitFor(() => expect(createSchedule).toHaveBeenCalledTimes(1))
+    const body = vi.mocked(createSchedule).mock.calls[0][0]
+    expect(body.trigger.kind).toBe('at')
+    expect(body.trigger.at_ms).toBe(new Date(2026, 8, 10, 12, 30).getTime())
   })
 })
