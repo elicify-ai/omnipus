@@ -289,7 +289,7 @@ function ProviderConfigSheet({
                   <span className="text-[var(--color-muted)] mr-1.5">Wire</span>
                   <Badge
                     variant="muted"
-                    className="font-normal text-[10px]"
+                    className="font-normal text-xs"
                     data-testid="variant-wire-badge"
                   >
                     {wireBadgeLabel(entry.wire)}
@@ -361,7 +361,7 @@ function ProviderConfigSheet({
                 <label className="text-xs font-medium text-[var(--color-muted)] mb-1.5 block">
                   Models
                 </label>
-                <p className="text-[10px] text-[var(--color-muted)] mb-2">
+                <p className="text-xs text-[var(--color-muted)] mb-2">
                   This provider has no live model list — add the model slugs you want available in the picker.
                 </p>
                 {models.length > 0 ? (
@@ -384,7 +384,7 @@ function ProviderConfigSheet({
                     ))}
                   </ul>
                 ) : (
-                  <p className="text-[10px] text-[var(--color-muted)] mb-2 italic">
+                  <p className="text-xs text-[var(--color-muted)] mb-2 italic">
                     No models added yet.
                   </p>
                 )}
@@ -673,7 +673,7 @@ export function ProvidersSection() {
                 {group.items[0]?.entry && (
                   <button
                     type="button"
-                    className="text-[10px] text-[var(--color-accent)] hover:underline"
+                    className="text-xs text-[var(--color-accent)] hover:underline"
                     onClick={() => {
                       const entry = group.items[0]?.entry
                       if (entry) openConnectSheet(entry)
@@ -719,7 +719,7 @@ export function ProvidersSection() {
                             {entry && (
                               <Badge
                                 variant="muted"
-                                className="font-normal text-[10px]"
+                                className="font-normal text-xs"
                                 data-testid={`wire-badge-${provider.id}`}
                               >
                                 {wireBadgeLabel(entry.wire)}
@@ -749,17 +749,17 @@ export function ProvidersSection() {
                             )}
                           </div>
                           {subtitle && (
-                            <p className="text-[10px] text-[var(--color-muted)] mt-0.5">
+                            <p className="text-xs text-[var(--color-muted)] mt-0.5">
                               {subtitle}
                             </p>
                           )}
                           {provider.models && provider.models.length > 0 && (
-                            <p className="text-[10px] text-[var(--color-muted)] mt-0.5 font-mono">
+                            <p className="text-xs text-[var(--color-muted)] mt-0.5 font-mono">
                               {provider.models.slice(0, 3).join(', ')}{provider.models.length > 3 ? ` +${provider.models.length - 3}` : ''}
                             </p>
                           )}
                           {provider.error && (
-                            <p className="text-[10px] text-[var(--color-error)] mt-0.5">{provider.error}</p>
+                            <p className="text-xs text-[var(--color-error)] mt-0.5">{provider.error}</p>
                           )}
                         </div>
 

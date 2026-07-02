@@ -966,7 +966,7 @@ function PasswordStep({
                   />
                 ))}
               </div>
-              <p className="text-[10px] mt-1 font-medium" style={{ color: strength.color }}>
+              <p className="text-xs mt-1 font-medium" style={{ color: strength.color }}>
                 {strength.label}
               </p>
             </div>
@@ -1277,7 +1277,7 @@ function ModelKeyStep({
                 </div>
                 {/* Anti-1113 helper — error-prevention copy (spec §"Error prevention") */}
                 <div
-                  className="flex items-start gap-1.5 mt-2 text-[10px] leading-snug"
+                  className="flex items-start gap-1.5 mt-2 text-xs leading-snug"
                   style={{ color: 'var(--color-muted)' }}
                 >
                   <Info size={11} className="shrink-0 mt-px" aria-hidden />
@@ -1335,7 +1335,7 @@ function ModelKeyStep({
               {resolvedEntry?.wire && (
                 <div className="flex items-center gap-1.5">
                   <span
-                    className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium"
+                    className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium"
                     style={{
                       backgroundColor: 'rgba(212,175,55,0.12)',
                       color: 'var(--color-accent)',
@@ -1345,7 +1345,7 @@ function ModelKeyStep({
                     {WIRE_LABELS[resolvedEntry.wire]}
                   </span>
                   {resolvedEntry.subtitle && (
-                    <p className="text-[10px] truncate" style={{ color: 'var(--color-muted)' }}>
+                    <p className="text-xs truncate" style={{ color: 'var(--color-muted)' }}>
                       {resolvedEntry.subtitle}
                     </p>
                   )}
@@ -1354,7 +1354,7 @@ function ModelKeyStep({
 
               {/* Resolved endpoint hint — recognition + debuggability (spec requirement) */}
               {resolvedEntry?.endpointHint && (
-                <p className="text-[10px] font-mono" style={{ color: 'var(--color-muted)' }}>
+                <p className="text-xs font-mono" style={{ color: 'var(--color-muted)' }}>
                   → {resolvedEntry.endpointHint}
                 </p>
               )}
@@ -1405,7 +1405,7 @@ function ModelKeyStep({
                   </button>
                 </div>
                 <p
-                  className="text-[10px] mt-1.5 font-mono"
+                  className="text-xs mt-1.5 font-mono"
                   style={{ color: 'var(--color-muted)' }}
                 >
                   Stored encrypted with AES-256-GCM — never in plaintext
@@ -1432,7 +1432,7 @@ function ModelKeyStep({
                     className="font-mono text-sm"
                     autoComplete="off"
                   />
-                  <p className="text-[10px] mt-1.5" style={{ color: 'var(--color-muted)' }}>
+                  <p className="text-xs mt-1.5" style={{ color: 'var(--color-muted)' }}>
                     {selectedProvider === 'azure' || selectedProvider === 'azure-openai'
                       ? 'Your Azure OpenAI resource URL (per-deployment endpoint)'
                       : 'Custom base URL for this provider'}
@@ -1529,7 +1529,7 @@ function ModelKeyStep({
                         constrainToCatalog
                         allowFreeTextWhenEmpty
                       />
-                      <p className="text-[10px] mt-1.5" style={{ color: 'var(--color-muted)' }}>
+                      <p className="text-xs mt-1.5" style={{ color: 'var(--color-muted)' }}>
                         {availableModels.length > 0
                           ? 'This model will be used by default for agent tasks'
                           : 'Enter the model slug for this provider (e.g. MiniMax-M2.7)'}
