@@ -13,6 +13,7 @@ function SessionRoute() {
   const attachToSession = useSessionStore((s) => s.attachToSession)
   const setActiveSession = useSessionStore((s) => s.setActiveSession)
   const setAttachedContext = useSessionStore((s) => s.setAttachedContext)
+  const setWorkspaceSessionDescriptor = useSessionStore((s) => s.setWorkspaceSessionDescriptor)
   const setActiveWorkspaceId = useWorkspacesStore((s) => s.setActiveWorkspaceId)
   const attachedRef = useRef<string | null>(null)
   const redirectedRef = useRef(false)
@@ -36,15 +37,23 @@ function SessionRoute() {
     enabled: !!detail?.session?.workspace_id,
   })
 
-  // Bug 2 fix: redirect /sessions/{id} into the session's workspace.
+  // Deep-link adoption: redirect /sessions/{id} into the session's workspace.
   //
   // When a session has a workspace_id that resolves to an active workspace,
   // bind the workspace, attach the session, and navigate to /workspaces/{wsId}/chat
   // so WorkspaceTabContainer owns session lifecycle going forward.
   //
-  // The redirect writes sessionByWorkspace[wsId] = descriptor before navigating,
-  // so when WorkspaceTabContainer's enterWorkspaceChat fires on mount it sees
-  // descriptor.id === activeSessionId and is a no-op (handoff contract).
+  // Race-free handoff contract (three-step guarantee):
+  //   1. setActiveWorkspaceId(wsId) — bind workspace BEFORE writing the descriptor
+  //      so the activeWorkspaceId key used by attachToSession matches wsId.
+  //   2. setWorkspaceSessionDescriptor(wsId, descriptor) — write the descriptor
+  //      unconditionally by explicit key, bypassing the activeWorkspaceId lookup
+  //      inside attachToSession.  This write MUST happen before navigate() so that
+  //      WorkspaceTabContainer.enterWorkspaceChat sees descriptor.id === activeSessionId
+  //      on mount and takes the no-op path (never calls startNewSession).
+  //   3. attach_session frame — sent via attachToSession (WS connected) or deferred
+  //      to WsLifecycle.onConnected via reattachActiveSession (WS offline path).
+  //      The frame ensures the backend's per-connection sessionID map is updated.
   //
   // Fallback: if workspace_id is absent, or the workspace doesn't exist in the
   // active list, render ChatScreen inline (legacy behaviour).
@@ -61,13 +70,28 @@ function SessionRoute() {
 
     if (wsId && targetWorkspace) {
       redirectedRef.current = true
-      // Bind workspace first so sessionByWorkspace writes land under the right key.
+
+      // Step 1: bind workspace so subsequent store writes use the correct key.
       setActiveWorkspaceId(wsId)
 
+      // Step 2: write the descriptor by explicit key BEFORE navigate().
+      // This guarantees WorkspaceTabContainer.enterWorkspaceChat sees the
+      // descriptor and takes the no-op path regardless of WS state.
+      const descriptor = {
+        id: session.id,
+        type: session.type,
+        title: session.title ?? null,
+        agentId: headerAgentId ?? null,
+      }
+      setWorkspaceSessionDescriptor(wsId, descriptor)
+
+      // Step 3: send attach_session frame (or defer to onConnected path).
       if (connection && attachedRef.current !== session.id) {
         attachedRef.current = session.id
         attachToSession(session.id, session.type, session.title ?? undefined, headerAgentId)
       } else if (!connection) {
+        // Offline: setActiveSession records the session so reattachActiveSession
+        // can send the frame once the WS connects (WsLifecycle.onConnected path).
         setActiveSession(session.id, headerAgentId, null)
       }
 
@@ -105,6 +129,7 @@ function SessionRoute() {
     attachToSession,
     setActiveSession,
     setAttachedContext,
+    setWorkspaceSessionDescriptor,
     setActiveWorkspaceId,
     navigate,
   ])
