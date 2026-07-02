@@ -145,6 +145,15 @@ function renderTab(seed?: (client: QueryClient) => void) {
 }
 
 beforeEach(() => {
+  // Clear call history from the PREVIOUS test — the vi.mock() factory above
+  // creates these vi.fn()s once for the whole file, and vitest does not
+  // clear mock call logs between tests by default. Without this, a test that
+  // asserts on call count/order (e.g. `.not.toHaveBeenCalled()`,
+  // `.mock.calls[0]`) can pass or fail depending on what earlier tests in
+  // this file happened to call — including the async unmount-flush that
+  // useAutoSave fires on cleanup() (see src/test/setup.ts) when a test ends
+  // with unsaved pending changes.
+  vi.clearAllMocks()
   capturedGraphProps = null
   vi.mocked(fetchAgents).mockResolvedValue(AGENTS)
   vi.mocked(fetchWorkspaceDelegation).mockResolvedValue(DELEGATION)
@@ -263,13 +272,15 @@ describe('WorkspaceTeamTab', () => {
       ],
     })
 
-    // Seed the status-keyed active list cache the way WorkspaceTabContainer's
-    // real useQuery would (that container is mocked out above) so we can
-    // assert the fix writes the exact key useActiveWorkspace's data flows
-    // through in production, not just the detail() cache.
-    const { client } = renderTab((c) =>
-      c.setQueryData(workspacesQueryKeys.list({ status: 'active' }), [WORKSPACE]),
-    )
+    // Seed the status-keyed active AND archived list caches the way
+    // WorkspaceTabContainer's real useQuery would (that container is mocked
+    // out above) so we can assert the fix writes BOTH exact keys the saveFn
+    // loop iterates over (`for (const status of ['active', 'archived'])`),
+    // not just the detail() cache or the active list alone.
+    const { client } = renderTab((c) => {
+      c.setQueryData(workspacesQueryKeys.list({ status: 'active' }), [WORKSPACE])
+      c.setQueryData(workspacesQueryKeys.list({ status: 'archived' }), [WORKSPACE])
+    })
     await waitFor(() => expect(screen.getByTestId('team-add-agent')).toBeInTheDocument())
 
     // Add Ray — a non-core agent — to the team (node only, no edge yet).
@@ -337,6 +348,155 @@ describe('WorkspaceTeamTab', () => {
       'planner',
       'ray',
     ])
+    // The archived-status-keyed list cache must ALSO be updated — the saveFn
+    // loop writes both `{status:'active'}` and `{status:'archived'}` keys
+    // unconditionally (a workspace can be archived while this tab is still
+    // mounted, e.g. a background archive from another tab), and only the
+    // active-list assertion above was previously covered.
+    const archivedList = client.getQueryData(
+      workspacesQueryKeys.list({ status: 'archived' }),
+    ) as Workspace[] | undefined
+    expect(archivedList?.find((w) => w.id === 'ws-1')?.core_team).toEqual([
+      'mia',
+      'jim',
+      'planner',
+      'ray',
+    ])
+  })
+
+  it('partial-failure ordering: updateWorkspace rejects — updateWorkspaceDelegation is never called and status becomes error', async () => {
+    // If the core_team write itself fails, the edges PUT must NEVER fire —
+    // otherwise the backend could accept an edge referencing a member that
+    // was never actually persisted to core_team.
+    vi.mocked(updateWorkspace).mockRejectedValue(new Error('core_team PUT failed'))
+
+    renderTab()
+    await waitFor(() => expect(screen.getByTestId('team-add-agent')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByTestId('team-add-agent'))
+    await waitFor(() =>
+      expect(screen.getByTestId('team-add-agent-option-ray')).toBeInTheDocument(),
+    )
+    fireEvent.click(screen.getByTestId('team-add-agent-option-ray'))
+    await waitFor(() => expect(screen.getByTestId('team-node-ray')).toBeInTheDocument())
+
+    expect(capturedGraphProps).not.toBeNull()
+    act(() => {
+      capturedGraphProps!.onConnect('jim', 'ray')
+    })
+
+    await waitFor(() => expect(updateWorkspace).toHaveBeenCalled(), { timeout: 3000 })
+
+    // The error surfaces via AutoSaveIndicator.
+    await waitFor(
+      () => {
+        expect(screen.getByText('core_team PUT failed')).toBeInTheDocument()
+      },
+      { timeout: 3000 },
+    )
+
+    // The edges PUT must never have been reached.
+    expect(updateWorkspaceDelegation).not.toHaveBeenCalled()
+  })
+
+  it('F4 inverse partial-failure: updateWorkspace resolves but updateWorkspaceDelegation rejects — surfaces a distinguishing message', async () => {
+    vi.mocked(updateWorkspace).mockResolvedValue({
+      ...WORKSPACE,
+      core_team: ['mia', 'jim', 'planner', 'ray'],
+    })
+    vi.mocked(updateWorkspaceDelegation).mockRejectedValue(new Error('edges PUT failed'))
+
+    renderTab()
+    await waitFor(() => expect(screen.getByTestId('team-add-agent')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByTestId('team-add-agent'))
+    await waitFor(() =>
+      expect(screen.getByTestId('team-add-agent-option-ray')).toBeInTheDocument(),
+    )
+    fireEvent.click(screen.getByTestId('team-add-agent-option-ray'))
+    await waitFor(() => expect(screen.getByTestId('team-node-ray')).toBeInTheDocument())
+
+    expect(capturedGraphProps).not.toBeNull()
+    act(() => {
+      capturedGraphProps!.onConnect('jim', 'ray')
+    })
+
+    await waitFor(() => expect(updateWorkspace).toHaveBeenCalled(), { timeout: 3000 })
+    await waitFor(() => expect(updateWorkspaceDelegation).toHaveBeenCalled(), { timeout: 3000 })
+
+    // F4: the surfaced message must distinguish "team membership saved, but
+    // delegation edges failed" from a generic/undifferentiated save failure.
+    await waitFor(
+      () => {
+        expect(
+          screen.getByText(
+            'Team membership saved, but delegation edges failed: edges PUT failed',
+          ),
+        ).toBeInTheDocument()
+      },
+      { timeout: 3000 },
+    )
+  })
+
+  it('F3: the page-hide beacon fires the core_team PUT before the edges PUT for a newly added member + edge', async () => {
+    // Regression for F3: the emergency-flush beacon (visibilitychange/
+    // beforeunload/pagehide) must honor the same core_team-before-edges
+    // ordering as the debounced saveFn — otherwise a member added and
+    // connected right before a tab switch/close reintroduces the P0 bug on
+    // the one path the P0 fix didn't cover (the built-in single-URL beacon
+    // would PUT only the edges endpoint, which the backend rejects because
+    // the new member was never written to core_team).
+    const fetchSpy = vi
+      .spyOn(window, 'fetch')
+      .mockResolvedValue(new Response('{}', { status: 200 }))
+
+    renderTab()
+    await waitFor(() => expect(screen.getByTestId('team-add-agent')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByTestId('team-add-agent'))
+    await waitFor(() =>
+      expect(screen.getByTestId('team-add-agent-option-ray')).toBeInTheDocument(),
+    )
+    fireEvent.click(screen.getByTestId('team-add-agent-option-ray'))
+    await waitFor(() => expect(screen.getByTestId('team-node-ray')).toBeInTheDocument())
+
+    // Draw the delegation edge — same onConnect invocation as the P0 test.
+    expect(capturedGraphProps).not.toBeNull()
+    act(() => {
+      capturedGraphProps!.onConnect('jim', 'ray')
+    })
+
+    // Fire the unload beacon IMMEDIATELY — well inside the 500ms debounce
+    // window, so the debounced saveFn (updateWorkspace/updateWorkspaceDelegation)
+    // has not fired yet. This is exactly the F3 finding's scenario.
+    act(() => {
+      window.dispatchEvent(new Event('pagehide'))
+    })
+    expect(updateWorkspace).not.toHaveBeenCalled()
+    expect(updateWorkspaceDelegation).not.toHaveBeenCalled()
+
+    // The beacon's two ordered keepalive PUTs must land — core_team first.
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2))
+
+    const [coreTeamCall, edgesCall] = fetchSpy.mock.calls
+    expect(coreTeamCall[0]).toBe('/api/v1/workspaces/ws-1')
+    expect(coreTeamCall[1]).toMatchObject({ method: 'PUT', keepalive: true })
+    expect(JSON.parse(coreTeamCall[1]?.body as string)).toEqual({
+      core_team: ['mia', 'jim', 'planner', 'ray'],
+    })
+
+    expect(edgesCall[0]).toBe('/api/v1/workspaces/ws-1/delegation')
+    expect(edgesCall[1]).toMatchObject({ method: 'PUT', keepalive: true })
+    const edgesBody = JSON.parse(edgesCall[1]?.body as string) as {
+      edges: Array<{ from_agent: string; to_agent: string }>
+    }
+    expect(edgesBody.edges).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ from_agent: 'jim', to_agent: 'ray' }),
+      ]),
+    )
+
+    fetchSpy.mockRestore()
   })
 
   it('passes the workspaceId to openEditAgentSlideOver when a node edit button is clicked (FR-018 / A5)', async () => {

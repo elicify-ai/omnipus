@@ -8,8 +8,12 @@ import {
   updateWorkspaceDelegation,
   workspacesQueryKeys,
   isWorker,
+  ApiError,
+  isApiError,
   type Workspace,
   type WorkspaceDelegation,
+  type WorkspaceUpdateRequest,
+  type WorkspaceDelegationUpdateRequest,
 } from '@/lib/api'
 import { useAutoSave } from '@/hooks/useAutoSave'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
@@ -172,17 +176,102 @@ export function WorkspaceTeamTab(_props: WorkspaceTeamTabProps) {
         )
       }
 
-      const resp = await updateWorkspaceDelegation(workspaceId, body.edges)
-      // Adopt the server's computed team + edges as the new baseline so the next
-      // refetch reconciles cleanly (no spurious dirty state).
-      queryClient.setQueryData<WorkspaceDelegation>(
-        workspacesQueryKeys.delegation(workspaceId),
-        resp,
-      )
-      baselineRef.current = stateKey(buildTeamEditState(resp, updatedWorkspace.core_team ?? []))
+      // F4: core_team is durably saved as of this point. If the edges PUT
+      // below throws, a bare rethrow would surface via AutoSaveIndicator as
+      // an undifferentiated "save failed" message — indistinguishable from
+      // "nothing was saved at all" (e.g. if updateWorkspace itself had
+      // thrown, above). Wrap the error so the message tells the operator
+      // team membership DID land and only the delegation graph didn't. We
+      // still rethrow (never swallow) so useAutoSave's catch marks the save
+      // 'error' and keeps the edit pending/retryable.
+      try {
+        const resp = await updateWorkspaceDelegation(workspaceId, body.edges)
+        // Adopt the server's computed team + edges as the new baseline so the
+        // next refetch reconciles cleanly (no spurious dirty state).
+        queryClient.setQueryData<WorkspaceDelegation>(
+          workspacesQueryKeys.delegation(workspaceId),
+          resp,
+        )
+        baselineRef.current = stateKey(buildTeamEditState(resp, updatedWorkspace.core_team ?? []))
+      } catch (err) {
+        const detail = isApiError(err)
+          ? err.userMessage
+          : err instanceof Error
+            ? err.message
+            : String(err)
+        const message = `Team membership saved, but delegation edges failed: ${detail}`
+        throw isApiError(err)
+          ? new ApiError(err.status, message, { code: err.code, body: err.body, cause: err })
+          : new Error(message, { cause: err })
+      }
     },
     [workspaceId, queryClient, editState, stateKey],
   )
+
+  // ── F3 — emergency-flush ordering ────────────────────────────────────────
+  // The page-hide/unload beacon (useAutoSave's `flushBeacon`) must honor the
+  // SAME core_team-before-edges ordering as `saveFn` above, or it reintroduces
+  // the exact P0 bug on the one path the P0 fix didn't cover: add a brand-new
+  // member, draw an edge to it, then switch tabs/close within the 500ms
+  // debounce — the built-in single-URL beacon would PUT the edges endpoint
+  // alone, the backend validates the new edge's endpoint against the STORED
+  // core_team (which never got the new member), and the PUT 400s. The
+  // fire-and-forget `void fetch(...)` in the default beacon has no `.catch`,
+  // so that 400 is entirely silent and the edit vanishes.
+  //
+  // Fix: fire the SAME two PUTs `saveFn` would, in the same order, as
+  // `keepalive` requests. Note the honesty caveat: `keepalive: true` lets each
+  // individual fetch survive page teardown, but chaining the second fetch off
+  // the first's promise via `.then()` does NOT — if the page is torn down
+  // between the two requests, only core_team lands. That is still a strict
+  // improvement over the pre-fix behavior (edges PUT alone, silently 400ing):
+  // firing core_team first makes the 400 essentially impossible in practice,
+  // and the worst case leaves core_team saved (self-heals on next visit — the
+  // "not connected yet" banner already surfaces this state) rather than a
+  // total silent loss of the edit.
+  //
+  // FOLLOW-UP: the definitive fix is an atomic single-PUT delegation endpoint
+  // that accepts `{core_team, edges}` together — a Constraint #8 contract
+  // change (new/extended wire schema), deferred.
+  const beaconFlush = useCallback(() => {
+    if (!hydratedRef.current || !editState) return
+    const token = readAuthToken()
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+    if (token) headers['Authorization'] = `Bearer ${token}`
+
+    const putKeepalive = (url: string, payload: unknown, label: string): Promise<void> =>
+      fetch(url, {
+        method: 'PUT',
+        keepalive: true,
+        headers,
+        body: JSON.stringify(payload),
+      })
+        .then((res) => {
+          if (!res.ok) {
+            // Match the useAutoSave.ts unmount-flush precedent: a failed
+            // best-effort flush is at least discoverable in the console
+            // rather than silently dropped.
+            console.error(
+              `[WorkspaceTeamTab] beacon flush (${label}) failed:`,
+              res.status,
+              res.statusText,
+            )
+          }
+        })
+        .catch((err) => {
+          console.error(`[WorkspaceTeamTab] beacon flush (${label}) failed:`, err)
+        })
+
+    const coreTeamUrl = `/api/v1/workspaces/${encodeURIComponent(workspaceId)}`
+    const edgesUrl = `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/delegation`
+    const coreTeamBody: WorkspaceUpdateRequest = { core_team: editState.members }
+    const edgesBody: WorkspaceDelegationUpdateRequest = { edges: buildSaveEdges(editState) }
+
+    // Ordered: edges only fires once the core_team fetch has settled.
+    void putKeepalive(coreTeamUrl, coreTeamBody, 'core_team').then(() =>
+      putKeepalive(edgesUrl, edgesBody, 'edges'),
+    )
+  }, [workspaceId, editState])
 
   const {
     status: saveStatus,
@@ -190,8 +279,10 @@ export function WorkspaceTeamTab(_props: WorkspaceTeamTabProps) {
     lastSavedAt,
   } = useAutoSave(saveBody, saveFn, {
     disabled: !hydratedRef.current || editState === null,
-    flushUrl: `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/delegation`,
-    flushAuthToken: readAuthToken(),
+    // F3: use the component-supplied ordered flush (core_team, then edges)
+    // instead of the built-in single-URL beacon — see the comment above
+    // `beaconFlush`'s definition for why.
+    beaconFlush,
   })
 
   // ── Derived ───────────────────────────────────────────────────────────────

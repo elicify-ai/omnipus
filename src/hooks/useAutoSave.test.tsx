@@ -165,6 +165,97 @@ describe('useAutoSave', () => {
     expect(saveFn).toHaveBeenLastCalledWith({ v: 2 })
   })
 
+  // ── F3: component-supplied beaconFlush override ─────────────────────────
+
+  it('F3: calls beaconFlush instead of the built-in single-URL fetch when both are supplied', () => {
+    const saveFn = vi.fn().mockResolvedValue(undefined)
+    const beaconFlush = vi.fn()
+    let data = { name: 'initial' }
+
+    const { rerender } = renderHook(
+      ({ d }) =>
+        useAutoSave(d, saveFn, {
+          flushUrl: '/api/v1/agents/test',
+          flushAuthToken: 'tok',
+          debounceMs: 10000,
+          beaconFlush,
+        }),
+      { initialProps: { d: data } },
+    )
+
+    // Create a pending change (debounce never fires — 10s delay).
+    data = { name: 'changed' }
+    rerender({ d: data })
+
+    act(() => {
+      window.dispatchEvent(new Event('pagehide'))
+    })
+
+    expect(beaconFlush).toHaveBeenCalledTimes(1)
+    // The built-in flush must NOT also fire — beaconFlush fully replaces it.
+    expect(window.fetch).not.toHaveBeenCalled()
+  })
+
+  it('F3: beaconFlush is NOT called when there are no pending changes', () => {
+    const saveFn = vi.fn().mockResolvedValue(undefined)
+    const beaconFlush = vi.fn()
+
+    renderHook(
+      ({ d }) => useAutoSave(d, saveFn, { debounceMs: 10000, beaconFlush }),
+      { initialProps: { d: { name: 'unchanged' } } },
+    )
+
+    act(() => {
+      window.dispatchEvent(new Event('pagehide'))
+    })
+
+    expect(beaconFlush).not.toHaveBeenCalled()
+  })
+
+  it('F3: a synchronously-throwing beaconFlush does not crash the flush path', () => {
+    const saveFn = vi.fn().mockResolvedValue(undefined)
+    const beaconFlush = vi.fn(() => {
+      throw new Error('boom')
+    })
+    let data = { name: 'initial' }
+
+    const { rerender } = renderHook(
+      ({ d }) => useAutoSave(d, saveFn, { debounceMs: 10000, beaconFlush }),
+      { initialProps: { d: data } },
+    )
+
+    data = { name: 'changed' }
+    rerender({ d: data })
+
+    expect(() => {
+      act(() => {
+        window.dispatchEvent(new Event('pagehide'))
+      })
+    }).not.toThrow()
+
+    expect(beaconFlush).toHaveBeenCalledTimes(1)
+  })
+
+  it('F3: registers flush listeners when only beaconFlush is supplied (no flushUrl)', () => {
+    const saveFn = vi.fn().mockResolvedValue(undefined)
+    const beaconFlush = vi.fn()
+    let data = { name: 'initial' }
+
+    const { rerender } = renderHook(
+      ({ d }) => useAutoSave(d, saveFn, { debounceMs: 10000, beaconFlush }),
+      { initialProps: { d: data } },
+    )
+
+    data = { name: 'changed' }
+    rerender({ d: data })
+
+    act(() => {
+      window.dispatchEvent(new Event('pagehide'))
+    })
+
+    expect(beaconFlush).toHaveBeenCalledTimes(1)
+  })
+
   it('does NOT re-flush on unmount after a successful save (no pending changes)', async () => {
     const saveFn = vi.fn().mockResolvedValue(undefined)
     let data = { v: 1 }
