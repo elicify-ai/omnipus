@@ -509,8 +509,8 @@ Feature: Endpoint and lifecycle
 | 23c | `TestConfigRepair_RejectsBothRepresentations` | Integration | FR-029/OBS-001 | an instance with both `Identity` and a stale wildcard binding is normalized/rejected at load |
 | 23d | `TestSetChannelRouting_EmitsAuditEvent` | Integration | FR-030 | a re-bind writes a routing-change audit event |
 | 24 | `channel-routing.spec.ts` (Playwright) | E2E | US-1/2/3 | workspace select → filtered agents → invalid-not-persisted + hint |
-| 25 | `multi-instance-routing.spec.ts` (Playwright) | E2E | US-6/7/9 | two instances route independently, distinct sessions |
-| 26 | `bound-drift.spec.ts` (Playwright) | E2E | US-5 | delete bound agent → inbound rejected, not default |
+| ~~25~~ | ~~`multi-instance-routing.spec.ts`~~ **OUT OF SCOPE** | — | US-6/7/9 | Requires real channel INBOUND (a live WhatsApp/Telegram message), which Playwright cannot inject deterministically (it drives only the browser + REST/WS). Covered instead at the integration layer where inbound is bus-injected: `TestInitChannels_NInstancesPerType`, `TestInstanceID_DrivesPriority0_EndToEnd` (O-2), `TestSessionCreation_TwoInstancesDifferentWorkspaces`. |
+| ~~26~~ | ~~`bound-drift.spec.ts`~~ **OUT OF SCOPE** | — | US-5 | Same reason (needs real channel inbound). Covered by `TestResolveMessageRoute_BoundDrop_SkipsGetDefaultAgent`, `TestDriftDrop_EmitsAuditEntry_WithRequiredFields`, `TestDriftDrop_ExactlyOneEntryPerMessage`. |
 
 **Order:** Unit (1–12) → Integration (13–23) → E2E (24–26). Within levels, foundations (config/key/route fields) before consumers.
 
@@ -604,13 +604,13 @@ New regression tests: `TestResolveMessageRoute_Unbound_DefaultUnchanged` (#11), 
 - **FR-030 (routing-change audit, STRIDE repudiation)**: `setChannelRouting` MUST emit an audit event recording who re-bound an instance to which agent/workspace, so a silent re-bind of a workspace's channel leaves a trail.
 
 ### Success Criteria
-- **SC-001**: Over the inbound messages exercised by `multi-instance-routing.spec.ts` (`whatsapp.eu`→sales/ray, `whatsapp.us`→ops/mia), 100% of `eu` inbound route to `ray` and 100% of `us` inbound to `mia`; 0 cross-routes.
+- **SC-001**: Verified at the integration layer (real channel-inbound e2e is out of scope, TDD #25). Two bound same-type instances (`whatsapp.eu`→sales, `whatsapp.us`→ops) route each inbound only to their own workspace's member agent; 0 cross-routes — `TestInstanceID_DrivesPriority0_EndToEnd` + `TestInitChannels_NInstancesPerType`.
 - **SC-002**: 100% of PUTs with a bound `workspace_id` and empty agent return 422; 0 persist a binding.
 - **SC-003**: The agent picker renders exactly `|core_team \ workers|` entries for the selected workspace (verified for ≥3 workspace fixtures).
-- **SC-004**: Over the inbound messages in `bound-drift.spec.ts`, with a bound agent deleted, 0 reach the global default and 100% emit a `channel.routing.drift_drop` audit event (asserted by reading the audit log) and increment the drift counter.
+- **SC-004**: Verified at the integration layer (real channel-inbound e2e is out of scope, TDD #26). With a bound agent deleted, 0 inbound reach the global default and 100% emit a `channel.routing.drift_drop` audit event (asserted by reading the audit log) + increment the drift counter — `TestResolveMessageRoute_BoundDrop_SkipsGetDefaultAgent`, `TestDriftDrop_EmitsAuditEntry_WithRequiredFields`, `TestDriftDrop_ExactlyOneEntryPerMessage`.
 - **SC-005**: Two same-type instances use 2 distinct store directories and 2 distinct credential keys; 0 shared files.
 - **SC-006**: A config with a `whatsapp.eu` key loads with that entry present (0 dropped by `normalizeChannelMap`).
-- **SC-007**: In `TestSessionCreation_InheritsWorkspaceID` (#20) and `multi-instance-routing.spec.ts`, 100% of sessions created by a bound instance have `workspace_id` == the instance's workspace.
+- **SC-007**: In `TestSessionCreation_InheritsWorkspaceID` (#20) and `TestSessionCreation_TwoInstancesDifferentWorkspaces`, 100% of sessions created by a bound instance have `workspace_id` == the instance's workspace.
 - **SC-008**: `make verify-contracts`, `go test -tags goolm,stdjson`, `npm run typecheck`, `npx vitest run` all exit 0; the 3 new E2E specs pass on the CI worker.
 - **SC-009**: The existing `route_explicit_priority_test.go` suite passes unchanged (regression).
 
@@ -644,7 +644,7 @@ New regression tests: `TestResolveMessageRoute_Unbound_DefaultUnchanged` (#11), 
 | FR-025 | US-10 | Workspace/instance lifecycle | #21, #22 |
 | FR-026 | (cross) | Contract additions | #23 |
 | FR-027 | US-5 | `MatchedBy` distinguishes routes | #7 |
-| FR-028 | US-5 | Drift audit event + counter | #26, SC-004 |
+| FR-028 | US-5 | Drift audit event + counter | `TestDriftDrop_EmitsAuditEntry_WithRequiredFields`, `TestDriftDrop_ExactlyOneEntryPerMessage`, SC-004 |
 | FR-029 | US-3 | GET round-trip of a bound instance | #15, #23c |
 | FR-030 | US-3 | (STRIDE repudiation) | #23d |
 
