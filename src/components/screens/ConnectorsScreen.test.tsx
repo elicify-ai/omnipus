@@ -164,13 +164,17 @@ function wrapper({ children }: { children: React.ReactNode }) {
   return React.createElement(QueryClientProvider, { client: makeClient() }, children)
 }
 
-// A configured instance (has instance_id — FR-008's "configured" test).
+// A configured instance (FR-008). NB: a bare-type key that is disabled AND
+// unbound is a DefaultConfig template stub (isTemplateStub in the component) —
+// a REAL disabled bare-key instance is modeled by carrying an ADR-029 identity
+// binding, which is what distinguishes it from the seeded template on the wire.
 const STUB_TELEGRAM = {
   id: 'telegram',
   instance_id: 'telegram',
   name: 'Telegram',
   transport: 'webhook' as const,
   enabled: false,
+  identity: { kind: 'agent' as const, id: 'mia' },
   description: 'Telegram Bot API',
 }
 
@@ -446,6 +450,54 @@ describe('ConnectorsScreen — empty-state roster (US-9 AS-3)', () => {
 
     // FR-014 disclaimer present in the roster too.
     expect(screen.getByText(/trademarks of their respective owners/i)).toBeInTheDocument()
+  })
+
+  it('treats DefaultConfig bare-type template stubs as unconfigured — a fresh install shows the roster, not 12 groups (live-UAT regression)', async () => {
+    // The REAL fresh-install shape: DefaultConfig seeds a disabled, unbound
+    // stub under the bare-type key for 12 of the 13 types. instance_id IS set
+    // for all of them — only the template heuristic keeps the roster visible.
+    const templates = [
+      'telegram', 'discord', 'slack', 'whatsapp', 'matrix', 'irc',
+      'line', 'qq', 'weixin', 'wecom', 'feishu', 'dingtalk',
+    ].map((id) => ({
+      id,
+      instance_id: id,
+      name: id,
+      transport: 'webhook' as const,
+      enabled: false,
+      description: '',
+    }))
+    mockFetchChannels.mockResolvedValue(templates)
+
+    const { ConnectorsScreen } = await import('./ConnectorsScreen')
+    render(React.createElement(ConnectorsScreen), { wrapper })
+
+    const roster = await screen.findByTestId('channel-roster')
+    expect(within(roster).getByTestId('channel-roster-connect-telegram')).toBeInTheDocument()
+    expect(within(roster).getByTestId('channel-roster-connect-dingtalk')).toBeInTheDocument()
+    // Not a single template stub may render as a configured group.
+    expect(screen.queryAllByTestId(/^channel-type-group-/)).toHaveLength(0)
+  })
+
+  it('a bare-key stub that is bound (or enabled) is configured, not a template', async () => {
+    const stub = {
+      id: 'telegram',
+      instance_id: 'telegram',
+      name: 'Telegram',
+      transport: 'webhook' as const,
+      enabled: false,
+      description: '',
+    }
+    mockFetchChannels.mockResolvedValue([
+      { ...stub, identity: { kind: 'agent' as const, id: 'mia' } },
+    ])
+
+    const { ConnectorsScreen } = await import('./ConnectorsScreen')
+    render(React.createElement(ConnectorsScreen), { wrapper })
+
+    // Renders as a configured group row, and the roster stays hidden.
+    expect(await screen.findByTestId('channel-type-group-telegram')).toBeInTheDocument()
+    expect(screen.queryByTestId('channel-roster')).not.toBeInTheDocument()
   })
 
   it('opens the create Sheet pre-filled with the clicked type when Connect is clicked', async () => {
