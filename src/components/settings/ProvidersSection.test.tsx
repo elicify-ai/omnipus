@@ -1,10 +1,16 @@
 /**
- * ProvidersSection.test.tsx — ADR-031 Track 1 Providers redesign tests.
+ * ProvidersSection.test.tsx — Provider UX fixes (docs/internal/specs/provider-ux-fixes-plan.md)
+ * + ADR-031 Track 1 Providers redesign tests it supersedes where they conflict.
  *
  * Covers:
  *   - Original re-auth / manual-model / live-model tests (updated for Sheet)
- *   - Spec tests #14–#24 (configured-only, roster, Sheet, grouped rows, etc.)
- *   - Migration dataset (9-row resolveCatalogEntry tests)
+ *   - FIX-1: no "Add another…" control anywhere
+ *   - FIX-2: flat row for a single configured company variant; group header only for ≥2
+ *   - FIX-3: configured-only list, empty state, always-visible "Connect a provider",
+ *            picker Sheet (search + catalog grouped by company, excludes configured)
+ *   - FIX-4: real terminology ("Pay-as-you-go API" / "Coding Plan", no "Standard API")
+ *   - FIX-5: Endpoint-format toggle + "Anthropic endpoint" row chip
+ *   - Migration dataset (resolveCatalogEntry, incl. anthropic_id case)
  *   - Settings-side catalog label consistency (US-7)
  */
 
@@ -52,12 +58,17 @@ function renderSection() {
   )
 }
 
-// Standard connected providers for grouping tests.
+// Standard connected providers for grouping tests. status:'connected' (not
+// 'disconnected') — GET /providers also reports ~25 forever-keyless template
+// rows as status:'disconnected' (Provider.yaml), so "configured" now means
+// status !== 'disconnected'. A disconnected fixture here would be filtered
+// out of the main list entirely (see the dedicated template-filtering
+// describe block below).
 const ANTHROPIC_PROVIDER = {
   id: 'anthropic',
   name: 'anthropic',
   display_name: 'Anthropic',
-  status: 'disconnected',
+  status: 'connected',
   models: [],
 }
 
@@ -94,145 +105,235 @@ beforeEach(() => {
 })
 
 // ---------------------------------------------------------------------------
-// Spec test #14 — empty-state roster
+// FIX-3 — empty state: compact message + "Connect a provider", no roster
 // ---------------------------------------------------------------------------
 
-describe('ProvidersSection — #14 empty roster', () => {
-  it('shows the catalog roster when no providers are configured', async () => {
+describe('ProvidersSection — FIX-3 empty state', () => {
+  it('shows a compact message and a single "Connect a provider" CTA, no default-visible roster', async () => {
     vi.mocked(api.fetchProviders).mockResolvedValue([] as never)
     renderSection()
     await waitFor(() => {
-      // roster container is present
-      expect(screen.getByTestId('provider-roster')).toBeInTheDocument()
+      expect(screen.getByTestId('providers-empty-state')).toBeInTheDocument()
     })
-    // OpenAI entry is in the roster
-    expect(screen.getByTestId('roster-entry-openai')).toBeInTheDocument()
-    // Connect button present
-    expect(screen.getByTestId('connect-btn-openai')).toBeInTheDocument()
+    expect(screen.getByText(/no providers configured yet/i)).toBeInTheDocument()
+    expect(screen.getByTestId('connect-provider-btn')).toBeInTheDocument()
+    // No wall-of-roster entries rendered by default.
+    expect(screen.queryByTestId('roster-entry-openai')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('provider-picker-sheet')).not.toBeInTheDocument()
   })
 
-  it('clicking Connect on a roster entry opens a Sheet (not inline expand)', async () => {
+  it('clicking "Connect a provider" opens the picker Sheet (not the connect form directly)', async () => {
     vi.mocked(api.fetchProviders).mockResolvedValue([] as never)
     renderSection()
-    await waitFor(() => screen.getByTestId('connect-btn-openai'))
-    fireEvent.click(screen.getByTestId('connect-btn-openai'))
+    await waitFor(() => screen.getByTestId('connect-provider-btn'))
+    fireEvent.click(screen.getByTestId('connect-provider-btn'))
+    await waitFor(() => {
+      expect(screen.getByTestId('provider-picker-sheet')).toBeInTheDocument()
+    })
+    // The connect form (config Sheet) is not open yet — only the picker.
+    expect(screen.queryByTestId('provider-config-sheet')).not.toBeInTheDocument()
+    expect(screen.getByTestId('picker-entry-openai')).toBeInTheDocument()
+  })
+
+  it('selecting a picker entry transitions to the connect form Sheet', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([] as never)
+    renderSection()
+    await waitFor(() => screen.getByTestId('connect-provider-btn'))
+    fireEvent.click(screen.getByTestId('connect-provider-btn'))
+    await waitFor(() => screen.getByTestId('picker-entry-openai'))
+    fireEvent.click(screen.getByTestId('picker-entry-openai'))
     await waitFor(() => {
       expect(screen.getByTestId('provider-config-sheet')).toBeInTheDocument()
     })
-    // No inline expand section
-    expect(screen.queryByTestId('expandedProvider')).not.toBeInTheDocument()
+    expect(screen.getByTestId('api-key-input-openai')).toBeInTheDocument()
+    // The picker Sheet closed once an entry was chosen.
+    expect(screen.queryByTestId('provider-picker-sheet')).not.toBeInTheDocument()
   })
 })
 
 // ---------------------------------------------------------------------------
-// Spec test #15 — configured-only list
+// FIX-3 — configured-only list; "Connect a provider" always available
 // ---------------------------------------------------------------------------
 
-describe('ProvidersSection — #15 configured-only list', () => {
+describe('ProvidersSection — FIX-3 configured-only list', () => {
   it('shows only configured providers, not the full catalog', async () => {
     vi.mocked(api.fetchProviders).mockResolvedValue([ANTHROPIC_PROVIDER] as never)
     renderSection()
     await waitFor(() => {
       expect(screen.getByTestId('provider-row-anthropic')).toBeInTheDocument()
     })
-    // No roster shown
-    expect(screen.queryByTestId('provider-roster')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('providers-empty-state')).not.toBeInTheDocument()
     // A catalog entry not in the response is not rendered
     expect(screen.queryByTestId('provider-row-openai')).not.toBeInTheDocument()
   })
-})
 
-// ---------------------------------------------------------------------------
-// Spec test #16 — invalid-key provider stays listed
-// ---------------------------------------------------------------------------
+  it('"Connect a provider" is visible at the section header when providers exist (previously no way to add more)', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([ANTHROPIC_PROVIDER] as never)
+    renderSection()
+    await waitFor(() => screen.getByTestId('provider-row-anthropic'))
+    expect(screen.getByTestId('connect-provider-btn')).toBeInTheDocument()
+  })
 
-describe('ProvidersSection — #16 invalid-key provider stays listed', () => {
-  it('an error-status provider remains in the list with an error badge', async () => {
+  it('the picker excludes already-configured catalog entries', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([ANTHROPIC_PROVIDER] as never)
+    renderSection()
+    await waitFor(() => screen.getByTestId('connect-provider-btn'))
+    fireEvent.click(screen.getByTestId('connect-provider-btn'))
+    await waitFor(() => screen.getByTestId('provider-picker-sheet'))
+    // anthropic is configured — excluded from the picker.
+    expect(screen.queryByTestId('picker-entry-anthropic')).not.toBeInTheDocument()
+    // openai is not configured — still offered.
+    expect(screen.getByTestId('picker-entry-openai')).toBeInTheDocument()
+  })
+
+  it('the picker excludes the canonical entry for an alias-stored provider (z.ai → z-ai)', async () => {
     vi.mocked(api.fetchProviders).mockResolvedValue([
-      { ...ANTHROPIC_PROVIDER, status: 'error' },
+      { id: 'z.ai', name: 'z.ai', display_name: 'z.ai', status: 'connected', models: [] },
     ] as never)
     renderSection()
-    await waitFor(() => {
-      expect(screen.getByTestId('provider-row-anthropic')).toBeInTheDocument()
-    })
-    expect(screen.getByTestId('error-badge-anthropic')).toBeInTheDocument()
+    await waitFor(() => screen.getByTestId('connect-provider-btn'))
+    fireEvent.click(screen.getByTestId('connect-provider-btn'))
+    await waitFor(() => screen.getByTestId('provider-picker-sheet'))
+    // Stored under the alias 'z.ai' — resolves to the canonical 'z-ai' entry,
+    // which must be excluded (not offered a second time under its canonical id).
+    expect(screen.queryByTestId('picker-entry-z-ai')).not.toBeInTheDocument()
+    expect(screen.getByTestId('picker-entry-openai')).toBeInTheDocument()
   })
-})
 
-// ---------------------------------------------------------------------------
-// Spec test #17 — zero-model provider stays listed
-// ---------------------------------------------------------------------------
-
-describe('ProvidersSection — #17 zero-model provider stays listed', () => {
-  it('a connected provider with zero models is not hidden', async () => {
+  it('the picker excludes the canonical entry for an anthropic_id-stored provider (z-ai-anthropic → z-ai)', async () => {
     vi.mocked(api.fetchProviders).mockResolvedValue([
-      { ...OPENROUTER_PROVIDER, models: [] },
+      { id: 'z-ai-anthropic', name: 'z-ai-anthropic', display_name: 'z-ai-anthropic', status: 'connected', models: [] },
     ] as never)
     renderSection()
-    await waitFor(() => {
-      expect(screen.getByTestId('provider-row-openrouter')).toBeInTheDocument()
-    })
+    await waitFor(() => screen.getByTestId('connect-provider-btn'))
+    fireEvent.click(screen.getByTestId('connect-provider-btn'))
+    await waitFor(() => screen.getByTestId('provider-picker-sheet'))
+    // Stored under the anthropic_id sibling — resolves to the canonical
+    // 'z-ai' entry, which must be excluded.
+    expect(screen.queryByTestId('picker-entry-z-ai')).not.toBeInTheDocument()
+    expect(screen.getByTestId('picker-entry-openai')).toBeInTheDocument()
   })
 
-  // [I3] Strengthen: zero-model provider also shows a status badge.
-  // Mirrors the error-badge assertion in test #16 so both invalid-key AND
-  // zero-model states have equivalent status-visibility guarantees.
-  // Traces to: connectors-providers-redesign-spec.md §7 I3 gap / US-3 AS-4.
-  it('[I3] zero-model provider renders a connected-badge (status is visible)', async () => {
+  it('search filters the picker catalog by company/label', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([ANTHROPIC_PROVIDER] as never)
+    renderSection()
+    await waitFor(() => screen.getByTestId('connect-provider-btn'))
+    fireEvent.click(screen.getByTestId('connect-provider-btn'))
+    await waitFor(() => screen.getByTestId('provider-picker-sheet'))
+    fireEvent.change(screen.getByTestId('picker-search-input'), { target: { value: 'zhipu' } })
+    await waitFor(() => {
+      expect(screen.getByTestId('picker-entry-z-ai')).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('picker-entry-openai')).not.toBeInTheDocument()
+  })
+
+  it('shows an "all configured" message when every catalog entry is already configured', async () => {
+    const allConfigured = PROVIDER_CATALOG.map((e) => ({
+      id: e.id,
+      name: e.id,
+      display_name: e.label,
+      status: 'connected',
+      models: [],
+    }))
+    vi.mocked(api.fetchProviders).mockResolvedValue(allConfigured as never)
+    renderSection()
+    await waitFor(() => screen.getByTestId('connect-provider-btn'))
+    fireEvent.click(screen.getByTestId('connect-provider-btn'))
+    await waitFor(() => screen.getByTestId('provider-picker-sheet'))
+    expect(screen.getByText(/all available providers are already configured/i)).toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Template-provider filtering — GET /providers reports ~25 forever-keyless
+// template ModelConfigs (pkg/config/defaults.go DefaultConfig) as
+// status:'disconnected' on every real install. These must never count as
+// "configured": they'd make the empty state unreachable, wall the main list
+// with ~20 "Not configured" rows, and wrongly exclude never-touched entries
+// (e.g. OpenAI) from the picker.
+// ---------------------------------------------------------------------------
+
+describe('ProvidersSection — template-provider filtering (realistic GET /providers shape)', () => {
+  const TEMPLATE_PROVIDERS = PROVIDER_CATALOG.slice(0, 12).map((e) => ({
+    id: e.id,
+    name: e.id,
+    display_name: e.label,
+    status: 'disconnected',
+    models: [],
+  }))
+
+  it('renders the empty state when only disconnected template rows exist', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue(TEMPLATE_PROVIDERS as never)
+    renderSection()
+    await waitFor(() => {
+      expect(screen.getByTestId('providers-empty-state')).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId(`provider-row-${TEMPLATE_PROVIDERS[0].id}`)).not.toBeInTheDocument()
+  })
+
+  it('the picker does NOT exclude template-only (disconnected) entries', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue(TEMPLATE_PROVIDERS as never)
+    renderSection()
+    await waitFor(() => screen.getByTestId('connect-provider-btn'))
+    fireEvent.click(screen.getByTestId('connect-provider-btn'))
+    await waitFor(() => screen.getByTestId('provider-picker-sheet'))
+    // openai is a disconnected template row above — still offered, not treated
+    // as already configured.
+    expect(screen.getByTestId('picker-entry-openai')).toBeInTheDocument()
+  })
+
+  it('a connected provider mixed with disconnected templates is excluded from the picker and listed alone', async () => {
     vi.mocked(api.fetchProviders).mockResolvedValue([
-      { ...OPENROUTER_PROVIDER, models: [], status: 'connected' },
+      ...TEMPLATE_PROVIDERS,
+      { ...ANTHROPIC_PROVIDER, status: 'connected' },
     ] as never)
     renderSection()
-    await waitFor(() => {
-      expect(screen.getByTestId('provider-row-openrouter')).toBeInTheDocument()
-    })
-    // The connected badge must be present — a zero-model row is NOT a reason to
-    // omit the status indicator (same invariant as the error badge in test #16).
-    expect(screen.getByTestId('connected-badge-openrouter')).toBeInTheDocument()
+    await waitFor(() => screen.getByTestId('provider-row-anthropic'))
+    expect(screen.queryByTestId('providers-empty-state')).not.toBeInTheDocument()
+    // Only the connected provider renders — the template rows do not.
+    expect(screen.queryByTestId(`provider-row-${TEMPLATE_PROVIDERS[0].id}`)).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('connect-provider-btn'))
+    await waitFor(() => screen.getByTestId('provider-picker-sheet'))
+    expect(screen.queryByTestId('picker-entry-anthropic')).not.toBeInTheDocument()
+    expect(screen.getByTestId('picker-entry-openai')).toBeInTheDocument()
   })
 })
 
 // ---------------------------------------------------------------------------
-// Spec test #18 — Configure opens a Sheet, not inline expand
+// FIX-1 — no "Add another…" control anywhere
 // ---------------------------------------------------------------------------
 
-describe('ProvidersSection — #18 configure opens Sheet', () => {
-  it('clicking Configure opens a Sheet panel, not an inline expand section', async () => {
+describe('ProvidersSection — FIX-1 no Add another', () => {
+  it('never renders an "Add another…" affordance, even for a grouped multi-variant company', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([
+      ZHIPU_STD_PROVIDER,
+      ZHIPU_CODING_PROVIDER,
+    ] as never)
     renderSection()
-    await waitFor(() => screen.getByTestId('configure-btn-anthropic'))
-    fireEvent.click(screen.getByTestId('configure-btn-anthropic'))
-    await waitFor(() => {
-      expect(screen.getByTestId('provider-config-sheet')).toBeInTheDocument()
-    })
-    // There must be no old-style inline expand
-    // (the form content is inside the sheet, not a separate section in the row)
-    expect(screen.getByTestId(`api-key-input-anthropic`)).toBeInTheDocument()
+    await waitFor(() => screen.getByTestId('provider-group-Zhipu / GLM'))
+    expect(screen.queryByText(/add another/i)).not.toBeInTheDocument()
+    expect(screen.queryByTestId('add-another-Zhipu / GLM')).not.toBeInTheDocument()
   })
 })
 
 // ---------------------------------------------------------------------------
-// Spec test #19 — connect from roster uses same Sheet
+// FIX-2 — flat row for a single configured variant; group header only for ≥2
 // ---------------------------------------------------------------------------
 
-describe('ProvidersSection — #19 connect uses Sheet', () => {
-  it('clicking Connect on a roster entry opens the Sheet, not a modal Dialog', async () => {
-    vi.mocked(api.fetchProviders).mockResolvedValue([] as never)
+describe('ProvidersSection — FIX-2 flat vs grouped rows', () => {
+  it('a single configured company variant renders as a FLAT row (no group wrapper)', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([ANTHROPIC_PROVIDER] as never)
     renderSection()
-    await waitFor(() => screen.getByTestId('connect-btn-openai'))
-    fireEvent.click(screen.getByTestId('connect-btn-openai'))
-    await waitFor(() => {
-      expect(screen.getByTestId('provider-config-sheet')).toBeInTheDocument()
-    })
-    // The sheet should have an API key input
-    expect(screen.getByTestId('api-key-input-openai')).toBeInTheDocument()
+    await waitFor(() => screen.getByTestId('provider-row-anthropic'))
+    // No group-header wrapper for a lone configured provider.
+    expect(screen.queryByTestId('provider-group-Anthropic')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('group-header-Anthropic')).not.toBeInTheDocument()
+    // The flat row title is the full catalog label (company context, since no
+    // group header supplies it).
+    expect(screen.getByTestId('provider-row-title-anthropic').textContent).toBe('Anthropic')
   })
-})
 
-// ---------------------------------------------------------------------------
-// Spec test #20 — grouped variant rows
-// ---------------------------------------------------------------------------
-
-describe('ProvidersSection — #20 grouped variant rows', () => {
   it('two Zhipu variants render under one Zhipu / GLM group header', async () => {
     vi.mocked(api.fetchProviders).mockResolvedValue([
       ZHIPU_STD_PROVIDER,
@@ -247,15 +348,12 @@ describe('ProvidersSection — #20 grouped variant rows', () => {
     // Group header label
     expect(screen.getByTestId('group-header-Zhipu / GLM')).toBeInTheDocument()
   })
-})
 
-// ---------------------------------------------------------------------------
-// Spec test #21 — row title omits company prefix
-// ---------------------------------------------------------------------------
-
-describe('ProvidersSection — #21 row title no company prefix', () => {
-  it('Zhipu Coding Plan row shows "Coding Plan · International", not "Zhipu — Coding Plan"', async () => {
-    vi.mocked(api.fetchProviders).mockResolvedValue([ZHIPU_CODING_PROVIDER] as never)
+  it('grouped row title omits the company prefix (already in the group header)', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([
+      ZHIPU_STD_PROVIDER,
+      ZHIPU_CODING_PROVIDER,
+    ] as never)
     renderSection()
     await waitFor(() => screen.getByTestId('provider-row-title-z-ai-coding'))
     const title = screen.getByTestId('provider-row-title-z-ai-coding').textContent
@@ -263,86 +361,97 @@ describe('ProvidersSection — #21 row title no company prefix', () => {
     expect(title).not.toMatch(/zhipu/i)
   })
 
-  it('z-ai (Standard API intl) row shows "Standard API · International"', async () => {
-    vi.mocked(api.fetchProviders).mockResolvedValue([ZHIPU_STD_PROVIDER] as never)
+  it('a lone provider that mixes with a grouped company still renders flat for its own company', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([
+      ANTHROPIC_PROVIDER,
+      ZHIPU_STD_PROVIDER,
+      ZHIPU_CODING_PROVIDER,
+    ] as never)
     renderSection()
-    await waitFor(() => screen.getByTestId('provider-row-title-z-ai'))
-    expect(screen.getByTestId('provider-row-title-z-ai').textContent).toBe('Standard API · International')
+    await waitFor(() => screen.getByTestId('provider-row-anthropic'))
+    // Anthropic (1 variant) is flat.
+    expect(screen.queryByTestId('provider-group-Anthropic')).not.toBeInTheDocument()
+    // Zhipu / GLM (2 variants) is grouped.
+    expect(screen.getByTestId('provider-group-Zhipu / GLM')).toBeInTheDocument()
   })
 })
 
 // ---------------------------------------------------------------------------
-// Spec test #22 — view-only variant fields, key editable
+// Configure opens a Sheet; invalid-key / zero-model providers stay listed
 // ---------------------------------------------------------------------------
 
-describe('ProvidersSection — #22 view-only variant, key editable', () => {
-  it('Sheet shows Plan/Region/Wire/Endpoint as read-only; API key input is editable', async () => {
+describe('ProvidersSection — configure Sheet + status visibility', () => {
+  it('an error-status provider remains in the list with an error badge', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([
+      { ...ANTHROPIC_PROVIDER, status: 'error' },
+    ] as never)
+    renderSection()
+    await waitFor(() => {
+      expect(screen.getByTestId('provider-row-anthropic')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('error-badge-anthropic')).toBeInTheDocument()
+  })
+
+  it('a connected provider with zero models is not hidden and shows a connected badge', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([
+      { ...OPENROUTER_PROVIDER, models: [], status: 'connected' },
+    ] as never)
+    renderSection()
+    await waitFor(() => {
+      expect(screen.getByTestId('provider-row-openrouter')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('connected-badge-openrouter')).toBeInTheDocument()
+  })
+
+  it('clicking Configure opens a Sheet panel, not an inline expand section', async () => {
+    renderSection()
+    await waitFor(() => screen.getByTestId('configure-btn-anthropic'))
+    fireEvent.click(screen.getByTestId('configure-btn-anthropic'))
+    await waitFor(() => {
+      expect(screen.getByTestId('provider-config-sheet')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId(`api-key-input-anthropic`)).toBeInTheDocument()
+  })
+
+  it('view-only Sheet fields: Plan/Region/Endpoint are read-only; API key input is editable', async () => {
     vi.mocked(api.fetchProviders).mockResolvedValue([ZHIPU_CODING_PROVIDER] as never)
     renderSection()
     await waitFor(() => screen.getByTestId('configure-btn-z-ai-coding'))
     fireEvent.click(screen.getByTestId('configure-btn-z-ai-coding'))
     await waitFor(() => screen.getByTestId('provider-config-sheet'))
 
-    // Variant info section must be present
     expect(screen.getByTestId('variant-info')).toBeInTheDocument()
-    // Plan is shown as text, not an input
     expect(screen.getByTestId('variant-plan').tagName).not.toBe('INPUT')
     expect(screen.getByTestId('variant-plan').textContent).toBe('Coding Plan')
-    // Region shown
     expect(screen.getByTestId('variant-region').textContent).toBe('International')
-    // Wire badge shown
-    expect(screen.getByTestId('variant-wire-badge')).toBeInTheDocument()
-    // Endpoint shown as text
     expect(screen.getByTestId('variant-endpoint')).toBeInTheDocument()
-    // API key input IS editable
+
+    const variantInfo = screen.getByTestId('variant-info')
+    expect(variantInfo.querySelectorAll('input')).toHaveLength(0)
+    expect(variantInfo.querySelectorAll('textarea')).toHaveLength(0)
+    expect(variantInfo.querySelectorAll('[contenteditable]')).toHaveLength(0)
+
     const apiKeyInput = screen.getByTestId('api-key-input-z-ai-coding')
     expect(apiKeyInput.tagName).toBe('INPUT')
   })
 
-  // [I4] Strengthen: assert Region, Wire, AND Endpoint inside variant-info
-  // contain no editable elements (no <input>, <textarea>, or contenteditable).
-  // Only the API key input (outside variant-info) may be editable.
-  // Traces to: connectors-providers-redesign-spec.md §7 I4 gap / US-5 AS-3.
-  it('[I4] variant-info section contains NO editable form controls', async () => {
-    vi.mocked(api.fetchProviders).mockResolvedValue([ZHIPU_CODING_PROVIDER] as never)
+  it('the Sheet never shows a "Wire" field — wire is not a display row (FIX-5)', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([ANTHROPIC_PROVIDER] as never)
     renderSection()
-    await waitFor(() => screen.getByTestId('configure-btn-z-ai-coding'))
-    fireEvent.click(screen.getByTestId('configure-btn-z-ai-coding'))
-    await waitFor(() => screen.getByTestId('variant-info'))
-
-    const variantInfo = screen.getByTestId('variant-info')
-
-    // No <input> elements inside variant-info
-    expect(variantInfo.querySelectorAll('input')).toHaveLength(0)
-    // No <textarea> elements inside variant-info
-    expect(variantInfo.querySelectorAll('textarea')).toHaveLength(0)
-    // No contenteditable elements inside variant-info
-    expect(variantInfo.querySelectorAll('[contenteditable]')).toHaveLength(0)
-
-    // Double-check specific fields individually
-    const planEl = within(variantInfo).getByTestId('variant-plan')
-    expect(planEl.tagName).not.toBe('INPUT')
-    expect(planEl.tagName).not.toBe('TEXTAREA')
-    expect(planEl.getAttribute('contenteditable')).toBeNull()
-
-    const regionEl = within(variantInfo).getByTestId('variant-region')
-    expect(regionEl.tagName).not.toBe('INPUT')
-    expect(regionEl.tagName).not.toBe('TEXTAREA')
-    expect(regionEl.getAttribute('contenteditable')).toBeNull()
-
-    const endpointEl = within(variantInfo).getByTestId('variant-endpoint')
-    expect(endpointEl.tagName).not.toBe('INPUT')
-    expect(endpointEl.tagName).not.toBe('TEXTAREA')
-    expect(endpointEl.getAttribute('contenteditable')).toBeNull()
+    await waitFor(() => screen.getByTestId('configure-btn-anthropic'))
+    fireEvent.click(screen.getByTestId('configure-btn-anthropic'))
+    await waitFor(() => screen.getByTestId('provider-config-sheet'))
+    expect(screen.queryByTestId('variant-wire-badge')).not.toBeInTheDocument()
+    expect(screen.queryByText(/^Wire$/)).not.toBeInTheDocument()
   })
 })
 
 // ---------------------------------------------------------------------------
-// Spec test #23 — plan labels from catalog, no "Anthropic API"/"Token Plan"
+// FIX-4 — real terminology: "Pay-as-you-go API" / "Coding Plan"
 // ---------------------------------------------------------------------------
 
-describe('ProvidersSection — #23 plan labels from catalog', () => {
-  it('variant row title uses "Standard API" and "Coding Plan", not "Anthropic API"', async () => {
+describe('ProvidersSection — FIX-4 real terminology', () => {
+  it('variant row titles use "Pay-as-you-go API" / "Coding Plan"; never "Standard API"', async () => {
     vi.mocked(api.fetchProviders).mockResolvedValue([
       ZHIPU_STD_PROVIDER,
       ZHIPU_CODING_PROVIDER,
@@ -350,15 +459,16 @@ describe('ProvidersSection — #23 plan labels from catalog', () => {
     renderSection()
     await waitFor(() => screen.getByTestId('provider-row-z-ai'))
     const allText = document.body.textContent ?? ''
-    expect(allText).not.toMatch(/Anthropic API/)
-    expect(allText).not.toMatch(/Token Plan/)
-    expect(allText).toMatch(/Standard API/)
+    expect(allText).not.toMatch(/Standard API/)
+    expect(allText).not.toMatch(/Anthropic-compatible/)
+    expect(allText).toMatch(/Pay-as-you-go API/)
     expect(allText).toMatch(/Coding Plan/)
+    expect(screen.getByTestId('provider-row-title-z-ai').textContent).toBe('Pay-as-you-go API · International')
   })
 })
 
 // ---------------------------------------------------------------------------
-// Spec test #24 (settings-side) — renders catalog label verbatim
+// #24 (settings-side) — renders catalog label verbatim
 // ---------------------------------------------------------------------------
 
 describe('ProvidersSection — #24 settings-side catalog label', () => {
@@ -375,7 +485,208 @@ describe('ProvidersSection — #24 settings-side catalog label', () => {
 })
 
 // ---------------------------------------------------------------------------
-// Migration dataset — resolveCatalogEntry (spec test #12)
+// FIX-5 — Endpoint-format toggle + "Anthropic endpoint" chip
+// ---------------------------------------------------------------------------
+
+describe('ProvidersSection — FIX-5 endpoint-format toggle', () => {
+  it('the connect Sheet shows the toggle for a dual-wire entry (z-ai has anthropic_id)', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([] as never)
+    renderSection()
+    await waitFor(() => screen.getByTestId('connect-provider-btn'))
+    fireEvent.click(screen.getByTestId('connect-provider-btn'))
+    await waitFor(() => screen.getByTestId('picker-entry-z-ai'))
+    fireEvent.click(screen.getByTestId('picker-entry-z-ai'))
+    await waitFor(() => screen.getByTestId('provider-config-sheet'))
+
+    expect(screen.getByTestId('endpoint-format-toggle-z-ai')).toBeInTheDocument()
+    expect(screen.getByTestId('endpoint-format-openai-z-ai')).toBeInTheDocument()
+    expect(screen.getByTestId('endpoint-format-anthropic-z-ai')).toBeInTheDocument()
+    // OpenAI-compatible is the default selection.
+    expect(screen.getByTestId('endpoint-format-openai-z-ai')).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByText(/same account and api key/i)).toBeInTheDocument()
+  })
+
+  it('the connect Sheet shows NO toggle for a single-wire entry (openai has no anthropic_id)', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([] as never)
+    renderSection()
+    await waitFor(() => screen.getByTestId('connect-provider-btn'))
+    fireEvent.click(screen.getByTestId('connect-provider-btn'))
+    await waitFor(() => screen.getByTestId('picker-entry-openai'))
+    fireEvent.click(screen.getByTestId('picker-entry-openai'))
+    await waitFor(() => screen.getByTestId('provider-config-sheet'))
+    expect(screen.queryByTestId('endpoint-format-toggle-openai')).not.toBeInTheDocument()
+  })
+
+  it('selecting Anthropic-compatible and connecting submits configureProvider with the anthropic_id', async () => {
+    vi.mocked(api.reAuth).mockResolvedValue({ verified: true, token: 'reauth_tok', expires_in: 300 } as never)
+    vi.mocked(api.configureProvider).mockResolvedValue({ ...ZHIPU_STD_PROVIDER, id: 'z-ai-anthropic' } as never)
+    vi.mocked(api.fetchProviders).mockResolvedValue([] as never)
+
+    renderSection()
+    await waitFor(() => screen.getByTestId('connect-provider-btn'))
+    fireEvent.click(screen.getByTestId('connect-provider-btn'))
+    await waitFor(() => screen.getByTestId('picker-entry-z-ai'))
+    fireEvent.click(screen.getByTestId('picker-entry-z-ai'))
+    await waitFor(() => screen.getByTestId('provider-config-sheet'))
+
+    fireEvent.click(screen.getByTestId('endpoint-format-anthropic-z-ai'))
+    expect(screen.getByTestId('endpoint-format-anthropic-z-ai')).toHaveAttribute('aria-checked', 'true')
+
+    fireEvent.change(screen.getByTestId('api-key-input-z-ai'), { target: { value: 'sk-zai-secret' } })
+    fireEvent.click(screen.getByTestId('save-provider-z-ai'))
+
+    await waitFor(() => screen.getByTestId('reauth-password-input'))
+    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'mypassword' } })
+    fireEvent.click(screen.getByTestId('reauth-confirm'))
+
+    await waitFor(() => {
+      expect(api.configureProvider).toHaveBeenCalledWith(
+        'z-ai-anthropic',
+        'sk-zai-secret',
+        undefined,
+        undefined,
+        'reauth_tok',
+        undefined,
+      )
+    })
+  })
+
+  // BUG #2: draft state (apiKeys etc.) used to be keyed by the raw providerId,
+  // which diverges from the submitted mutation id when the connect-mode
+  // toggle is flipped to Anthropic-compatible (draftKey stays 'z-ai'; the
+  // mutation submits 'z-ai-anthropic') — so the typed plaintext key was never
+  // cleared from memory after a successful anthropic-format connect.
+  it('clears the typed key from draft state after an anthropic-format connect (canonical draft key, not the mutation id)', async () => {
+    vi.mocked(api.reAuth).mockResolvedValue({ verified: true, token: 'reauth_tok', expires_in: 300 } as never)
+    vi.mocked(api.configureProvider).mockResolvedValue({ ...ZHIPU_STD_PROVIDER, id: 'z-ai-anthropic' } as never)
+    vi.mocked(api.fetchProviders)
+      .mockResolvedValueOnce([] as never)
+      .mockResolvedValue([
+        { ...ZHIPU_STD_PROVIDER, id: 'z-ai-anthropic', name: 'z-ai-anthropic' },
+      ] as never)
+
+    renderSection()
+    await waitFor(() => screen.getByTestId('connect-provider-btn'))
+    fireEvent.click(screen.getByTestId('connect-provider-btn'))
+    await waitFor(() => screen.getByTestId('picker-entry-z-ai'))
+    fireEvent.click(screen.getByTestId('picker-entry-z-ai'))
+    await waitFor(() => screen.getByTestId('provider-config-sheet'))
+
+    fireEvent.click(screen.getByTestId('endpoint-format-anthropic-z-ai'))
+    fireEvent.change(screen.getByTestId('api-key-input-z-ai'), { target: { value: 'sk-zai-secret' } })
+    fireEvent.click(screen.getByTestId('save-provider-z-ai'))
+
+    await waitFor(() => screen.getByTestId('reauth-password-input'))
+    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'mypassword' } })
+    fireEvent.click(screen.getByTestId('reauth-confirm'))
+
+    // Clean success closes the Sheet.
+    await waitFor(() => {
+      expect(screen.queryByTestId('provider-config-sheet')).not.toBeInTheDocument()
+    })
+
+    // Re-open the now-configured provider in configure mode — the typed key
+    // must not have survived under a stale draft key.
+    await waitFor(() => screen.getByTestId('configure-btn-z-ai-anthropic'))
+    fireEvent.click(screen.getByTestId('configure-btn-z-ai-anthropic'))
+    await waitFor(() => screen.getByTestId('provider-config-sheet'))
+    expect(screen.getByTestId('api-key-input-z-ai-anthropic')).toHaveValue('')
+  })
+
+  it('a provider configured under an anthropic_id shows the muted "Anthropic endpoint" chip on its row', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([
+      { ...ZHIPU_STD_PROVIDER, id: 'z-ai-anthropic', name: 'z-ai-anthropic' },
+    ] as never)
+    renderSection()
+    await waitFor(() => screen.getByTestId('provider-row-z-ai-anthropic'))
+    expect(screen.getByTestId('anthropic-endpoint-chip-z-ai-anthropic')).toBeInTheDocument()
+    expect(screen.getByText('Anthropic endpoint')).toBeInTheDocument()
+  })
+
+  it('a provider configured under the primary (openai-compatible) id shows NO chip', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([ZHIPU_STD_PROVIDER] as never)
+    renderSection()
+    await waitFor(() => screen.getByTestId('provider-row-z-ai'))
+    expect(screen.queryByTestId('anthropic-endpoint-chip-z-ai')).not.toBeInTheDocument()
+    expect(screen.queryByText('Anthropic endpoint')).not.toBeInTheDocument()
+  })
+
+  // FIX-1 (critical): the toggle used to stay interactive in configure mode,
+  // so re-saving a provider with the toggle flipped resubmitted under a
+  // DIFFERENT id — the backend PUT matches by exact id and APPENDS a new
+  // entry on mismatch (no provider DELETE exists), silently forking one
+  // provider into two orphaned duplicates. Configure mode now renders the
+  // endpoint format read-only; only connect mode's toggle is interactive.
+  it('configure mode shows the endpoint format read-only (Anthropic-compatible) for a provider stored under anthropic_id — no interactive toggle', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([
+      { ...ZHIPU_STD_PROVIDER, id: 'z-ai-anthropic', name: 'z-ai-anthropic' },
+    ] as never)
+    renderSection()
+    await waitFor(() => screen.getByTestId('configure-btn-z-ai-anthropic'))
+    fireEvent.click(screen.getByTestId('configure-btn-z-ai-anthropic'))
+    await waitFor(() => screen.getByTestId('provider-config-sheet'))
+
+    expect(screen.getByTestId('variant-endpoint-format').textContent).toBe('Anthropic-compatible endpoint')
+    expect(screen.getByText(/endpoint format is chosen when connecting a provider/i)).toBeInTheDocument()
+    // No interactive toggle anywhere in the Sheet.
+    expect(screen.queryByTestId('endpoint-format-toggle-z-ai')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('endpoint-format-anthropic-z-ai')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('endpoint-format-openai-z-ai')).not.toBeInTheDocument()
+    expect(screen.queryByRole('radiogroup', { name: /endpoint format/i })).not.toBeInTheDocument()
+  })
+
+  it('configure mode shows the endpoint format read-only (OpenAI-compatible) for a provider stored under the primary id', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([ZHIPU_STD_PROVIDER] as never)
+    renderSection()
+    await waitFor(() => screen.getByTestId('configure-btn-z-ai'))
+    fireEvent.click(screen.getByTestId('configure-btn-z-ai'))
+    await waitFor(() => screen.getByTestId('provider-config-sheet'))
+
+    expect(screen.getByTestId('variant-endpoint-format').textContent).toBe('OpenAI-compatible endpoint')
+    expect(screen.queryByTestId('endpoint-format-toggle-z-ai')).not.toBeInTheDocument()
+  })
+
+  it('configure-mode save on an anthropic_id-stored provider (key-only change) submits configureProvider with the STORED id, never canonicalizing', async () => {
+    vi.mocked(api.reAuth).mockResolvedValue({ verified: true, token: 'reauth_tok', expires_in: 300 } as never)
+    vi.mocked(api.configureProvider).mockResolvedValue({ ...ZHIPU_STD_PROVIDER, id: 'z-ai-anthropic' } as never)
+    vi.mocked(api.fetchProviders).mockResolvedValue([
+      { ...ZHIPU_STD_PROVIDER, id: 'z-ai-anthropic', name: 'z-ai-anthropic' },
+    ] as never)
+
+    renderSection()
+    await waitFor(() => screen.getByTestId('configure-btn-z-ai-anthropic'))
+    fireEvent.click(screen.getByTestId('configure-btn-z-ai-anthropic'))
+    await waitFor(() => screen.getByTestId('provider-config-sheet'))
+
+    // With the toggle read-only, there is no way to flip the endpoint format
+    // in configure mode.
+    expect(screen.queryByRole('radio', { name: /openai-compatible/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('radio', { name: /anthropic-compatible/i })).not.toBeInTheDocument()
+
+    fireEvent.change(screen.getByTestId('api-key-input-z-ai-anthropic'), { target: { value: 'sk-zai-secret-2' } })
+    fireEvent.click(screen.getByTestId('save-provider-z-ai-anthropic'))
+
+    await waitFor(() => screen.getByTestId('reauth-password-input'))
+    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'mypassword' } })
+    fireEvent.click(screen.getByTestId('reauth-confirm'))
+
+    await waitFor(() => {
+      // Submitted verbatim as 'z-ai-anthropic' (the STORED id) — never
+      // canonicalized to 'z-ai', which would fork the config into two entries.
+      expect(api.configureProvider).toHaveBeenCalledWith(
+        'z-ai-anthropic',
+        'sk-zai-secret-2',
+        undefined,
+        undefined,
+        'reauth_tok',
+        undefined,
+      )
+    })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Migration dataset — resolveCatalogEntry (spec test #12 + FIX-5 anthropic_id)
 // ---------------------------------------------------------------------------
 
 describe('resolveCatalogEntry — migration dataset', () => {
@@ -383,6 +694,7 @@ describe('resolveCatalogEntry — migration dataset', () => {
     const result = resolveCatalogEntry('z-ai')
     expect(result.group).toBe('Zhipu / GLM')
     expect(result.entry?.id).toBe('z-ai')
+    expect(result.viaAnthropicId).toBeUndefined()
   })
 
   it('#2 z.ai → Zhipu / GLM (alias)', () => {
@@ -404,9 +716,6 @@ describe('resolveCatalogEntry — migration dataset', () => {
   })
 
   it('#5 ollama → Ollama (local) [first-class catalog provider, NOT Self-hosted/Custom]', () => {
-    // ollama is in the catalog, so it resolves to its company group — it must
-    // NOT be force-routed to Self-hosted/Custom (that double-grouping bug would
-    // show a configured ollama under a different group than the roster does).
     const result = resolveCatalogEntry('ollama')
     expect(result.group).toBe('Ollama (local)')
     expect(result.entry?.id).toBe('ollama')
@@ -436,42 +745,59 @@ describe('resolveCatalogEntry — migration dataset', () => {
     expect(result.entry).toBeUndefined()
   })
 
-  // [I2] Orphan-alias migration: a stored id that is an alias in NO current catalog entry.
-  // Expected: resolves to Generic group, entry undefined, NO throw.
-  // Traces to: connectors-providers-redesign-spec.md §7 I2 gap.
   it('#10 z-ai-legacy-removed → Other (alias in no catalog entry, no throw)', () => {
     const result = resolveCatalogEntry('z-ai-legacy-removed')
-    // This id does not exist in the catalog and is not a known alias anywhere.
-    // It must not throw and must not incorrectly match a catalog entry.
     expect(result.group).toBe(GENERIC_GROUP)
     expect(result.entry).toBeUndefined()
+  })
+
+  // [FIX-5] anthropic_id resolution — a stored id of the merged Anthropic-wire
+  // sibling protocol resolves to the PRIMARY catalog entry, flagged so the row
+  // can show the "Anthropic endpoint" chip.
+  it('#11 z-ai-anthropic → Zhipu / GLM entry via anthropic_id (viaAnthropicId: true)', () => {
+    const result = resolveCatalogEntry('z-ai-anthropic')
+    expect(result.group).toBe('Zhipu / GLM')
+    expect(result.entry?.id).toBe('z-ai')
+    expect(result.viaAnthropicId).toBe(true)
+  })
+
+  it('#12 moonshot-anthropic → Moonshot / Kimi entry via anthropic_id (viaAnthropicId: true)', () => {
+    const result = resolveCatalogEntry('moonshot-anthropic')
+    expect(result.group).toBe('Moonshot / Kimi')
+    expect(result.entry?.id).toBe('moonshot')
+    expect(result.viaAnthropicId).toBe(true)
+  })
+
+  it('#13 coding-plan-anthropic → Qwen / Alibaba entry via anthropic_id (viaAnthropicId: true)', () => {
+    const result = resolveCatalogEntry('coding-plan-anthropic')
+    expect(result.group).toBe('Qwen / Alibaba')
+    expect(result.entry?.id).toBe('coding-plan')
+    expect(result.viaAnthropicId).toBe(true)
   })
 })
 
 // ---------------------------------------------------------------------------
-// [I5] BrandDisclaimer visibility — FR-014 requires the trademark notice
-// wherever brand marks appear (empty-roster AND populated-list).
-//
-// Traces to: connectors-providers-redesign-spec.md §7 I5 gap / FR-014 / US-2 AS-3.
+// BrandDisclaimer visibility — FR-014 requires the trademark notice wherever
+// brand marks appear (populated list AND the picker Sheet, which now carries
+// the logos that used to live in the always-visible roster).
 // ---------------------------------------------------------------------------
 
 import { BRAND_DISCLAIMER_TEXT } from '@/components/ui/brand-disclaimer'
 
-describe('ProvidersSection — [I5] BrandDisclaimer present wherever marks appear', () => {
-  it('disclaimer renders on the empty-state roster (no providers configured)', async () => {
-    vi.mocked(api.fetchProviders).mockResolvedValue([] as never)
-    renderSection()
-    await waitFor(() => screen.getByTestId('provider-roster'))
-    // FR-014: the trademark disclaimer must be present in the DOM wherever brand logos
-    // are rendered — including the empty-state roster (which shows BrandIcon logos).
-    expect(screen.getByText(BRAND_DISCLAIMER_TEXT)).toBeInTheDocument()
-  })
-
+describe('ProvidersSection — BrandDisclaimer present wherever marks appear', () => {
   it('disclaimer renders on the populated configured-providers list', async () => {
     vi.mocked(api.fetchProviders).mockResolvedValue([ANTHROPIC_PROVIDER] as never)
     renderSection()
     await waitFor(() => screen.getByTestId('provider-row-anthropic'))
-    // FR-014: the trademark disclaimer must be present in the populated list view too.
+    expect(screen.getByText(BRAND_DISCLAIMER_TEXT)).toBeInTheDocument()
+  })
+
+  it('disclaimer renders inside the picker Sheet (brand logos shown per catalog entry)', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([] as never)
+    renderSection()
+    await waitFor(() => screen.getByTestId('connect-provider-btn'))
+    fireEvent.click(screen.getByTestId('connect-provider-btn'))
+    await waitFor(() => screen.getByTestId('provider-picker-sheet'))
     expect(screen.getByText(BRAND_DISCLAIMER_TEXT)).toBeInTheDocument()
   })
 })
@@ -541,6 +867,20 @@ describe('ProvidersSection — original re-auth tests', () => {
     await waitFor(() => {
       expect(screen.getByText(/failed to load providers/i)).toBeInTheDocument()
     })
+  })
+
+  it('on a fetch error, does NOT also show the empty-state message — and "Connect a provider" stays reachable', async () => {
+    vi.mocked(api.fetchProviders).mockRejectedValue(new Error('boom'))
+    renderSection()
+    await waitFor(() => {
+      expect(screen.getByTestId('providers-error')).toBeInTheDocument()
+    })
+    // The empty-state's own "No providers configured yet" copy must not render
+    // alongside the error (previously both showed at once).
+    expect(screen.queryByTestId('providers-empty-state')).not.toBeInTheDocument()
+    expect(screen.queryByText(/no providers configured yet/i)).not.toBeInTheDocument()
+    // The header "Connect a provider" CTA remains reachable despite the error.
+    expect(screen.getByTestId('connect-provider-btn')).toBeInTheDocument()
   })
 })
 

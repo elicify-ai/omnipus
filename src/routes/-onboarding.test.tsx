@@ -61,7 +61,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
 vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: '/test-avatar.svg' }))
 
 import { configureProvider, probeProvider, completeOnboardingTransaction } from '@/lib/api'
-import { evaluatePasswordStrength, friendlyProbeError, PROVIDERS_REQUIRING_ENDPOINT, sortProvidersByPriority, PLAN_LABELS, REGION_LABELS, WIRE_LABELS } from './onboarding'
+import { evaluatePasswordStrength, friendlyProbeError, PROVIDERS_REQUIRING_ENDPOINT, PLAN_LABELS, REGION_LABELS } from './onboarding'
 import { PROVIDER_CATALOG } from '@/lib/generated/providerCatalog'
 import { readFileSync } from 'fs'
 import { join, dirname } from 'path'
@@ -629,25 +629,6 @@ describe('PROVIDERS_REQUIRING_ENDPOINT', () => {
 })
 
 // =====================================================================
-// sortProvidersByPriority — covers new China/intl variants
-// =====================================================================
-
-describe('sortProvidersByPriority — provider list ordering', () => {
-  it('moves openai/anthropic/openrouter to the front', () => {
-    const list = [
-      { id: 'qwen', display_name: 'Qwen (China)' },
-      { id: 'openai', display_name: 'OpenAI' },
-      { id: 'anthropic', display_name: 'Anthropic' },
-      { id: 'openrouter', display_name: 'OpenRouter' },
-    ]
-    const sorted = sortProvidersByPriority(list)
-    expect(sorted[0].id).toBe('openai')
-    expect(sorted[1].id).toBe('anthropic')
-    expect(sorted[2].id).toBe('openrouter')
-  })
-})
-
-// =====================================================================
 // Provider list — China/intl variants present in the UI
 // =====================================================================
 
@@ -685,15 +666,17 @@ describe('OnboardingWizard — company grid (grouped picker)', () => {
     expect(screen.queryByRole('button', { name: /MiniMax \(International\)/i })).not.toBeInTheDocument()
   })
 
-  it('shows Plan controls (standard-api/coding-plan) when Zhipu/GLM tile is clicked; wire shown as badge not plan', async () => {
+  it('shows Plan controls (standard-api/coding-plan) when Zhipu/GLM tile is clicked; no wire control at all', async () => {
     await goToStep3()
     fireEvent.click(screen.getByRole('button', { name: /Zhipu \/ GLM/i }))
     await waitFor(() => {
       expect(screen.getByRole('button', { name: PLAN_LABELS['standard-api'] })).toBeInTheDocument()
       expect(screen.getByRole('button', { name: PLAN_LABELS['coding-plan'] })).toBeInTheDocument()
     })
-    // Wire is shown as a badge (WIRE_LABELS), not as a plan picker button (ADR-031).
-    expect(screen.queryByRole('button', { name: WIRE_LABELS['anthropic'] })).not.toBeInTheDocument()
+    // Wire (OpenAI- vs Anthropic-compatible) is an internal config detail, not
+    // shown in onboarding at all (provider-ux-fixes-plan FIX-5) — no
+    // "Anthropic-compatible" text anywhere on the L2 panel.
+    expect(screen.queryByText(/Anthropic-compatible/i)).not.toBeInTheDocument()
   })
 
   it('shows Region controls (intl/china) for Zhipu/GLM on api plan', async () => {
@@ -711,7 +694,7 @@ describe('OnboardingWizard — company grid (grouped picker)', () => {
     fireEvent.click(screen.getByRole('button', { name: /Zhipu \/ GLM/i }))
     await waitFor(() => screen.getByRole('button', { name: PLAN_LABELS['standard-api'] }))
     // Plan defaults to standard-api, region defaults to intl → id should be z-ai
-    // (openai-compatible takes priority over anthropic wire when both match).
+    // (the only catalog entry for this company+plan+region since wire merged).
     fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'test-key' } })
     fireEvent.click(screen.getByRole('button', { name: /connect & load models/i }))
     await waitFor(() => {
@@ -731,6 +714,21 @@ describe('OnboardingWizard — company grid (grouped picker)', () => {
     fireEvent.click(screen.getByRole('button', { name: /connect & load models/i }))
     await waitFor(() => {
       expect(probeProvider).toHaveBeenCalledWith('zhipu-coding', 'test-key', undefined)
+    })
+  })
+
+  it('resolves the correct id for Qwen/Alibaba Coding Plan (single entry, no region split): coding-plan', async () => {
+    vi.mocked(probeProvider).mockResolvedValue({ success: true })
+    await goToStep3()
+    fireEvent.click(screen.getByRole('button', { name: /Qwen \/ Alibaba/i }))
+    await waitFor(() => screen.getByRole('button', { name: PLAN_LABELS['coding-plan'] }))
+    fireEvent.click(screen.getByRole('button', { name: PLAN_LABELS['coding-plan'] }))
+    // The Coding Plan variant has no regional split — no Region control renders.
+    expect(screen.queryByRole('group', { name: /select region/i })).not.toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'test-key' } })
+    fireEvent.click(screen.getByRole('button', { name: /connect & load models/i }))
+    await waitFor(() => {
+      expect(probeProvider).toHaveBeenCalledWith('coding-plan', 'test-key', undefined)
     })
   })
 
@@ -781,16 +779,14 @@ describe('OnboardingWizard — company grid (grouped picker)', () => {
     })
   })
 
-  it('DeepSeek shows Standard API plan; wire shown as badge; no Region controls', async () => {
+  it('DeepSeek is single-variant: no Plan/Region controls at all (one click straight to API key)', async () => {
     await goToStep3()
     fireEvent.click(screen.getByRole('button', { name: /DeepSeek/i }))
-    await waitFor(() => {
-      // DeepSeek has only standard-api plan (both wire variants share the same plan).
-      expect(screen.getByRole('button', { name: PLAN_LABELS['standard-api'] })).toBeInTheDocument()
-    })
-    // Wire is shown as badge, not as a plan button (ADR-031).
-    expect(screen.queryByRole('button', { name: WIRE_LABELS['anthropic'] })).not.toBeInTheDocument()
-    // DeepSeek has no regional split.
+    await waitFor(() => screen.getByLabelText('API Key'))
+    // DeepSeek has exactly one catalog entry post wire-merge (standard-api, no
+    // region) — it is NOT multi-variant, so no Plan/Region L2 panel renders.
+    expect(screen.queryByRole('button', { name: PLAN_LABELS['standard-api'] })).not.toBeInTheDocument()
+    expect(screen.queryByText(/Anthropic-compatible/i)).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: REGION_LABELS.intl })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: REGION_LABELS.china })).not.toBeInTheDocument()
   })
@@ -1041,9 +1037,9 @@ describe('OnboardingWizard — finish', () => {
 // re-homed to Go: TestCatalog_DriftGuard_IdInProbeEnum (already green).
 // =====================================================================
 
-describe('PROVIDER_CATALOG — onboarding sources catalog verbatim (US-7 / FR-019)', () => {
-  it('PROVIDER_CATALOG is non-empty and has 30 entries', () => {
-    expect(PROVIDER_CATALOG.length).toBe(30)
+describe('PROVIDER_CATALOG — onboarding sources catalog verbatim (US-7 / FR-019, FIX-4/5)', () => {
+  it('PROVIDER_CATALOG is non-empty and has 23 entries (post FIX-5 wire-merge: 30 → 23)', () => {
+    expect(PROVIDER_CATALOG.length).toBe(23)
   })
 
   it('every entry has required fields: id, company, label, subtitle, logoSlug, plan, wire', () => {
@@ -1058,24 +1054,24 @@ describe('PROVIDER_CATALOG — onboarding sources catalog verbatim (US-7 / FR-01
     }
   })
 
-  it('catalog has entries for Zhipu/GLM: 3 plan×wire combos × 2 regions = 6 entries', () => {
+  it('catalog has entries for Zhipu/GLM: 2 plans × 2 regions = 4 entries (wire merged into anthropic_id)', () => {
     const entries = PROVIDER_CATALOG.filter((e) => e.company === 'Zhipu / GLM')
-    expect(entries).toHaveLength(6)
+    expect(entries).toHaveLength(4)
   })
 
-  it('catalog has entries for Moonshot/Kimi: 3 wire combos × 2 regions = 4 entries', () => {
+  it('catalog has entries for Moonshot/Kimi: 1 plan × 2 regions = 2 entries (wire merged into anthropic_id)', () => {
     const entries = PROVIDER_CATALOG.filter((e) => e.company === 'Moonshot / Kimi')
-    expect(entries).toHaveLength(4)
-  })
-
-  it('catalog has entries for MiniMax: 2 wire combos × 2 regions = 4 entries', () => {
-    const entries = PROVIDER_CATALOG.filter((e) => e.company === 'MiniMax')
-    expect(entries).toHaveLength(4)
-  })
-
-  it('catalog has entries for DeepSeek: 2 wire combos, no region = 2 entries', () => {
-    const entries = PROVIDER_CATALOG.filter((e) => e.company === 'DeepSeek')
     expect(entries).toHaveLength(2)
+  })
+
+  it('catalog has entries for MiniMax: 1 plan × 2 regions = 2 entries (wire merged into anthropic_id)', () => {
+    const entries = PROVIDER_CATALOG.filter((e) => e.company === 'MiniMax')
+    expect(entries).toHaveLength(2)
+  })
+
+  it('catalog has entries for DeepSeek: 1 plan, no region = 1 entry (wire merged into anthropic_id)', () => {
+    const entries = PROVIDER_CATALOG.filter((e) => e.company === 'DeepSeek')
+    expect(entries).toHaveLength(1)
   })
 
   it('catalog has entries for Qwen/Alibaba: 3 api regions + 1 coding-plan = 4 entries', () => {
@@ -1083,18 +1079,19 @@ describe('PROVIDER_CATALOG — onboarding sources catalog verbatim (US-7 / FR-01
     expect(entries).toHaveLength(4)
   })
 
-  it('the z-ai entry label and subtitle match catalog verbatim (US-7 consistency)', () => {
+  it('the z-ai entry label and subtitle match catalog verbatim (US-7 consistency, FIX-4)', () => {
     const entry = PROVIDER_CATALOG.find((e) => e.id === 'z-ai')
     expect(entry).toBeDefined()
-    expect(entry!.label).toBe('Zhipu / GLM — Standard API (International)')
+    expect(entry!.label).toBe('Zhipu / GLM (International)')
     expect(entry!.subtitle).toBe('Pay-as-you-go, per token · api.z.ai/api/paas/v4')
     expect(entry!.logoSlug).toBe('zhipu')
+    expect(entry!.anthropic_id).toBe('z-ai-anthropic')
   })
 
-  it('openai entry label and subtitle match catalog verbatim', () => {
+  it('openai entry label and subtitle match catalog verbatim (FIX-4: no plan suffix for single-plan companies)', () => {
     const entry = PROVIDER_CATALOG.find((e) => e.id === 'openai')
     expect(entry).toBeDefined()
-    expect(entry!.label).toBe('OpenAI — Standard API')
+    expect(entry!.label).toBe('OpenAI')
     expect(entry!.logoSlug).toBe('openai')
   })
 

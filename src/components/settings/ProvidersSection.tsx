@@ -1,16 +1,29 @@
-// ProvidersSection.tsx — ADR-031 Track 1: Providers redesign.
+// ProvidersSection.tsx — Provider UX fixes (supersedes the ADR-031 Track 1
+// roster/grouping/terminology choices per docs/internal/specs/provider-ux-fixes-plan.md).
+//
+// Corrected domain model: a provider is a global, single-instance API config.
+// There is exactly ONE config per catalog entry — no "instances", no
+// workspace/agent binding, no "Add another". The only real variant axes are
+// plan (pay-as-you-go vs Coding Plan) and region (intl/china/us). Wire
+// (OpenAI- vs Anthropic-compatible) is NOT a separate provider — one
+// account/key exposes both base URLs; it is an internal config detail
+// surfaced only as an Endpoint-format toggle inside the config Sheet.
 //
 // Implements:
-//   FR-008  configured-only list; empty → catalog roster
-//   FR-009  Sheet slide-out for config AND connect (no inline expand)
-//   FR-010  company-grouped, binding-first variant rows
-//   FR-011  view-only Plan/Region/Wire/Endpoint in Sheet; only API key editable
-//   FR-012  migration: alias→canonical, self-hosted→group, unknown→generic
-//   FR-013  <BrandIcon> + lettermark fallback
-//   FR-014  <BrandDisclaimer> wherever marks appear
-//   US-7    label/subtitle/logoSlug verbatim from PROVIDER_CATALOG
+//   FIX-1  no per-company "Add another…" control
+//   FIX-2  company group header only when ≥2 configured variants; else a flat row
+//   FIX-3  configured-only list; empty state + always-visible "Connect a provider"
+//          opens an on-demand picker Sheet (search + catalog grouped by company,
+//          excluding already-configured entries)
+//   FIX-4  real terminology — "Pay-as-you-go API" / "Coding Plan", no "Standard API"
+//   FIX-5  Endpoint-format toggle (OpenAI-compatible / Anthropic-compatible) for
+//          dual-wire catalog entries; muted "Anthropic endpoint" chip on the row
+//   FIX-6  migration: alias / anthropic_id → canonical, self-hosted→group, unknown→generic
+//   FR-009 Sheet slide-out for config AND connect (no inline expand)
+//   FR-013 <BrandIcon> + lettermark fallback
+//   FR-014 <BrandDisclaimer> wherever marks appear
 
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   CheckCircle,
@@ -22,6 +35,7 @@ import {
   X,
   CaretRight,
   Globe,
+  MagnifyingGlass,
 } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -44,6 +58,7 @@ import {
 } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { PROVIDER_HINTS } from '@/lib/constants'
+import { PLAN_LABELS, REGION_LABELS } from '@/lib/providerLabels'
 import { providerCatalogMode } from '@/lib/agents/providerCatalog'
 import { ReAuthDialog } from './ReAuthDialog'
 import { ProviderValidationBanner } from '@/components/providers/ProviderValidationBanner'
@@ -53,62 +68,114 @@ import type { ProviderValidation, Provider } from '@/lib/api/generated/openapi-t
 import type { ProviderCatalogEntry } from '@/lib/api/generated/openapi-types'
 
 // A pending provider edit captured before the re-auth prompt; replayed once the
-// consent token is minted. `key` carries an API-key change (empty string = no
-// key change); `models` carries a manual model-slug catalogue replacement
-// (undefined = leave the catalogue unchanged).
+// consent token is minted. `id` is the id submitted to the PUT (resolveSubmitId).
+// `draftKey` is the canonical per-provider draft-state key (sheetDraftKey) —
+// carried through so the mutation's success/close handlers clear the SAME key
+// the Sheet read from, even when `id` diverges from it (alias / anthropic_id
+// storage, or the connect-mode endpoint-format toggle). `key` carries an
+// API-key change (empty string = no key change); `models` carries a manual
+// model-slug catalogue replacement (undefined = leave the catalogue unchanged).
 type PendingProviderChange = {
   id: string
+  draftKey: string
   key: string
   models?: string[]
 }
 
 // The item shown in the Sheet — either an existing configured provider (configure
-// mode) or a catalog entry for first-time setup (connect mode).
+// mode) or a catalog entry for first-time setup (connect mode). `viaAnthropicId`
+// (configure mode only) is threaded from resolveCatalogEntry at the point the
+// Sheet was opened — the single source of truth for whether the stored
+// provider.id is the entry's primary id or its anthropic_id sibling, so the
+// read-only endpoint-format display doesn't need to re-derive it.
 type SheetTarget =
-  | { mode: 'configure'; provider: Provider; entry?: ProviderCatalogEntry }
+  | { mode: 'configure'; provider: Provider; entry?: ProviderCatalogEntry; viaAnthropicId?: boolean }
   | { mode: 'connect'; entry: ProviderCatalogEntry }
 
-// Map a plan value to a human-readable access type label (FR-006).
-function planLabel(plan: 'standard-api' | 'coding-plan'): string {
-  if (plan === 'coding-plan') return 'Coding Plan'
-  return 'Standard API'
+// Which endpoint protocol a dual-wire catalog entry gets configured under
+// (FIX-5). 'openai' → entry.id (default). 'anthropic' → entry.anthropic_id.
+type EndpointFormat = 'openai' | 'anthropic'
+
+// A catalog entry known to expose an Anthropic-compatible sibling endpoint —
+// narrows `anthropic_id` from optional to required so callers (the toggle,
+// the read-only configure-mode display) don't need to re-check it.
+type DualWireCatalogEntry = ProviderCatalogEntry & { anthropic_id: string }
+
+function isDualWire(entry: ProviderCatalogEntry): entry is DualWireCatalogEntry {
+  return !!entry.anthropic_id
 }
 
-// Map a region value to a human-readable string.
-function regionLabel(region?: 'intl' | 'china' | 'us'): string {
-  if (region === 'intl') return 'International'
-  if (region === 'china') return 'China'
-  if (region === 'us') return 'US'
-  return ''
-}
-
-// Derive the variant row title from the catalog entry.
-// Format: "<Access Type> · <Region>" (region omitted when absent).
-// This is the binding-first title without the redundant company prefix (FR-010).
+// Derive the variant row title from the catalog entry, used ONLY inside a
+// grouped company block (company name is already in the group header there).
+// Format: "<Plan> · <Region>" (region omitted when absent).
 function variantRowTitle(entry: ProviderCatalogEntry): string {
-  const plan = planLabel(entry.plan)
-  const region = regionLabel(entry.region)
+  const plan = PLAN_LABELS[entry.plan]
+  const region = entry.region ? REGION_LABELS[entry.region] : ''
   return region ? `${plan} · ${region}` : plan
 }
 
-// Wire badge text (FR-005).
-function wireBadgeLabel(wire: 'openai-compatible' | 'anthropic'): string {
-  return wire === 'anthropic' ? 'Anthropic-compatible' : 'OpenAI-compatible'
+// Backend seeds ~25 keyless template ModelConfigs (pkg/config/defaults.go)
+// and GET /providers reports ALL of them forever as status:'disconnected'
+// (Provider.yaml: "disconnected" = "no key available or fallback default
+// entry"). Only providers the user actually attempted to configure (a stored
+// key that connected, or one that errored) count as "configured" for the
+// list/grouping/picker-exclusion purposes below — otherwise the empty state
+// is unreachable and the picker wrongly excludes every never-touched
+// template (e.g. OpenAI) on a fresh install.
+function isConfigured(provider: Provider): boolean {
+  return provider.status !== 'disconnected'
 }
 
-// Group configured providers by company using the migration resolver.
+// Fallback display-name chain shared by the Sheet title and row titles when
+// no catalog entry resolved for a provider (e.g. a manual/self-hosted id).
+function displayName(provider: Provider | null | undefined, fallbackId: string): string {
+  return provider?.display_name ?? provider?.name ?? fallbackId
+}
+
+// Resolve the id used for the outgoing PUT. Configure mode always submits
+// the STORED provider id verbatim — canonicalizing an alias or anthropic_id
+// sibling to the catalog's primary id here would silently fork the
+// persisted config into two entries (the backend PUT matches by exact id and
+// APPENDS on mismatch; there is no provider DELETE). Connect mode resolves
+// the toggle's chosen endpoint id from the catalog entry.
+function resolveSubmitId(target: SheetTarget, endpointFormat: EndpointFormat): string {
+  if (target.mode === 'configure') return target.provider.id
+  const { entry } = target
+  return isDualWire(entry) && endpointFormat === 'anthropic' ? entry.anthropic_id : entry.id
+}
+
+// The canonical per-provider draft-state key (apiKeys/showKey/draftModels/
+// newModel/saveValidation/endpointFormats) — the catalog entry id when one
+// resolved, else the raw provider/target id. Stable across the connect-mode
+// endpoint-format toggle and across which literal id (canonical, alias, or
+// anthropic_id sibling) a configured provider happens to be stored under, so
+// a typed-but-unsaved key or validation banner never gets stranded under a
+// stale key (BUG: previously keyed by the raw id, which could diverge from
+// the id the mutation's onSuccess cleanup used).
+function sheetDraftKey(target: SheetTarget): string {
+  if (target.mode === 'configure') return target.entry?.id ?? target.provider.id
+  return target.entry.id
+}
+
+interface ProviderGroupItem {
+  provider: Provider
+  entry?: ProviderCatalogEntry
+  viaAnthropicId?: boolean
+}
+
 interface ProviderGroup {
   group: string
   logoSlug?: string
-  items: Array<{ provider: Provider; entry?: ProviderCatalogEntry }>
+  items: ProviderGroupItem[]
 }
 
+// Group configured providers by company using the migration resolver.
 function groupProviders(providers: Provider[]): ProviderGroup[] {
   const order: string[] = []
   const map = new Map<string, ProviderGroup>()
 
   for (const provider of providers) {
-    const { entry, group } = resolveCatalogEntry(provider.id)
+    const { entry, group, viaAnthropicId } = resolveCatalogEntry(provider.id)
     if (!map.has(group)) {
       order.push(group)
       map.set(group, {
@@ -117,29 +184,49 @@ function groupProviders(providers: Provider[]): ProviderGroup[] {
         items: [],
       })
     }
-    map.get(group)!.items.push({ provider, entry })
+    map.get(group)!.items.push({ provider, entry, viaAnthropicId })
   }
 
   return order.map((g) => map.get(g)!)
 }
 
-// Empty-state roster: catalog entries grouped by company.
-interface RosterGroup {
+// The set of catalog entry ids that are already configured — an id is
+// "configured" if ANY fetched provider.id resolves to that entry (via
+// resolveCatalogEntry, including alias / anthropic_id matches). Used to
+// exclude entries from the picker (FIX-3). Callers MUST pass an
+// already-filtered (isConfigured) list — a raw GET /providers response
+// includes ~25 forever-disconnected template rows that are never
+// "configured" and must not exclude anything from the picker.
+function configuredEntryIds(providers: Provider[]): Set<string> {
+  const ids = new Set<string>()
+  for (const p of providers) {
+    const { entry } = resolveCatalogEntry(p.id)
+    if (entry) ids.add(entry.id)
+  }
+  return ids
+}
+
+// Catalog entries grouped by company, excluding already-configured ids and
+// filtered by a free-text search (company name, label, or alias).
+interface CatalogGroup {
   company: string
   logoSlug: string
   entries: ProviderCatalogEntry[]
 }
 
-function buildRoster(): RosterGroup[] {
-  // The roster IS the catalog — every user-facing provider is connectable,
-  // including `ollama` (a first-class "Ollama (local)" catalog entry that
-  // onboarding also offers; excluding it here would make Settings inconsistent
-  // with onboarding). Genuinely not-in-catalog runtimes (litellm/vllm) simply
-  // aren't in PROVIDER_CATALOG, so they never appear here anyway.
+function buildCatalogGroups(excludeIds: Set<string>, query: string): CatalogGroup[] {
+  const q = query.trim().toLowerCase()
   const order: string[] = []
-  const map = new Map<string, RosterGroup>()
+  const map = new Map<string, CatalogGroup>()
 
   for (const entry of PROVIDER_CATALOG) {
+    if (excludeIds.has(entry.id)) continue
+    if (q) {
+      const haystack = [entry.company, entry.label, ...(entry.aliases ?? [])]
+        .join(' ')
+        .toLowerCase()
+      if (!haystack.includes(q)) continue
+    }
     if (!map.has(entry.company)) {
       order.push(entry.company)
       map.set(entry.company, {
@@ -154,7 +241,59 @@ function buildRoster(): RosterGroup[] {
   return order.map((c) => map.get(c)!)
 }
 
-const PROVIDER_ROSTER = buildRoster()
+// ---------------------------------------------------------------------------
+// Sub-component: Endpoint-format toggle (FIX-5)
+// ---------------------------------------------------------------------------
+
+function EndpointFormatToggle({
+  entry,
+  value,
+  onChange,
+}: {
+  entry: DualWireCatalogEntry
+  value: EndpointFormat
+  onChange: (v: EndpointFormat) => void
+}) {
+  const optionClass = (active: boolean) =>
+    'flex-1 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] ' +
+    (active
+      ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/10 text-[var(--color-accent)]'
+      : 'border-[var(--color-border)] text-[var(--color-secondary)] hover:border-[var(--color-muted)]')
+
+  return (
+    <div data-testid={`endpoint-format-toggle-${entry.id}`}>
+      <label className="text-xs font-medium text-[var(--color-muted)] mb-1.5 block">
+        Endpoint format
+      </label>
+      <div className="flex gap-1.5" role="radiogroup" aria-label="Endpoint format">
+        <button
+          type="button"
+          role="radio"
+          aria-checked={value === 'openai'}
+          onClick={() => onChange('openai')}
+          data-testid={`endpoint-format-openai-${entry.id}`}
+          className={optionClass(value === 'openai')}
+        >
+          OpenAI-compatible (default)
+        </button>
+        <button
+          type="button"
+          role="radio"
+          aria-checked={value === 'anthropic'}
+          onClick={() => onChange('anthropic')}
+          data-testid={`endpoint-format-anthropic-${entry.id}`}
+          className={optionClass(value === 'anthropic')}
+        >
+          Anthropic-compatible
+        </button>
+      </div>
+      <p className="text-xs text-[var(--color-muted)] mt-1.5">
+        Same account and API key; choose the endpoint your tools expect. Anthropic-compatible
+        suits Claude-Code-style clients.
+      </p>
+    </div>
+  )
+}
 
 // ---------------------------------------------------------------------------
 // Sub-component: Provider config Sheet (configure OR connect)
@@ -174,8 +313,10 @@ interface ProviderConfigSheetProps {
   setNewModel: React.Dispatch<React.SetStateAction<Record<string, string>>>
   saveValidation: Record<string, ProviderValidation | undefined>
   setSaveValidation: React.Dispatch<React.SetStateAction<Record<string, ProviderValidation | undefined>>>
+  endpointFormats: Record<string, EndpointFormat>
+  setEndpointFormats: React.Dispatch<React.SetStateAction<Record<string, EndpointFormat>>>
   isSaving: boolean
-  requestChange: (id: string, key: string, models?: string[]) => void
+  requestChange: (id: string, draftKey: string, key: string, models?: string[]) => void
   refreshing: Record<string, boolean>
   handleRefreshModels: (id: string) => void
   testing: Record<string, boolean>
@@ -196,6 +337,8 @@ function ProviderConfigSheet({
   setNewModel,
   saveValidation,
   setSaveValidation,
+  endpointFormats,
+  setEndpointFormats,
   isSaving,
   requestChange,
   refreshing,
@@ -207,34 +350,50 @@ function ProviderConfigSheet({
 
   // Determine the provider id and entry in both modes.
   const providerId = target.mode === 'configure' ? target.provider.id : target.entry.id
-  const entry = target.mode === 'configure' ? target.entry : target.entry
+  const entry = target.entry
 
   // For the provider object in configure mode.
   const provider = target.mode === 'configure' ? target.provider : null
 
+  // Canonical draft-state key — see sheetDraftKey's doc comment. Stable
+  // across the connect-mode toggle and across alias/anthropic_id storage.
+  const draftKey = sheetDraftKey(target)
+
   const catalogMode = provider ? providerCatalogMode(provider) : 'live'
   const hint = PROVIDER_HINTS[providerId] ?? 'Enter your API key'
 
-  const sheetTitle = entry ? entry.label : (provider?.display_name ?? provider?.name ?? providerId)
+  const sheetTitle = entry ? entry.label : displayName(provider, providerId)
   const sheetDescription =
     target.mode === 'connect'
       ? 'Enter your API key to connect this provider.'
       : 'Update the API key for this provider.'
 
+  // Endpoint-format toggle (FIX-5, connect mode only — see the read-only
+  // display in the variant-info block for configure mode). Only meaningful
+  // when the entry has a sibling anthropic_id. Default selection: 'openai'
+  // (connect mode always starts from the primary endpoint).
+  const endpointFormat = endpointFormats[draftKey] ?? 'openai'
+  const resolvedSubmitId = resolveSubmitId(target, endpointFormat)
+
+  // Configure mode: whether the STORED provider is reachable via the
+  // anthropic_id sibling — threaded from resolveCatalogEntry at Sheet-open
+  // time (single source of truth, see SheetTarget's doc comment).
+  const viaAnthropicId = target.mode === 'configure' ? !!target.viaAnthropicId : false
+
   const handleClose = () => {
     onOpenChange(false)
-    setSaveValidation((prev) => ({ ...prev, [providerId]: undefined }))
+    setSaveValidation((prev) => ({ ...prev, [draftKey]: undefined }))
     setDraftModels((prev) => {
-      const { [providerId]: _drop, ...rest } = prev
+      const { [draftKey]: _drop, ...rest } = prev
       return rest
     })
-    setNewModel((prev) => ({ ...prev, [providerId]: '' }))
+    setNewModel((prev) => ({ ...prev, [draftKey]: '' }))
   }
 
   const canSave = (() => {
-    const keyChanged = !!(apiKeys[providerId]?.trim())
+    const keyChanged = !!(apiKeys[draftKey]?.trim())
     if (catalogMode !== 'manual') return keyChanged
-    const modelsChanged = draftModels[providerId] !== undefined
+    const modelsChanged = draftModels[draftKey] !== undefined
     return keyChanged || modelsChanged
   })()
 
@@ -258,7 +417,12 @@ function ProviderConfigSheet({
         </SheetHeader>
 
         <div className="space-y-5 overflow-y-auto pr-1">
-          {/* View-only variant info (FR-011) */}
+          {/* View-only variant info — Plan/Region/Endpoint(+format). Wire is a
+              config detail, not a display row (FIX-5) — the Endpoint-format
+              toggle below is interactive ONLY in connect mode; configure mode
+              shows it here read-only (the backend PUT matches by exact id and
+              APPENDS a new entry on mismatch — there is no provider DELETE,
+              so the format can never be changed after the first connect). */}
           {entry && (
             <div
               className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] px-4 py-3 space-y-2"
@@ -271,7 +435,7 @@ function ProviderConfigSheet({
                     className="text-[var(--color-secondary)] font-medium"
                     data-testid="variant-plan"
                   >
-                    {planLabel(entry.plan)}
+                    {PLAN_LABELS[entry.plan]}
                   </span>
                 </div>
                 {entry.region && (
@@ -281,20 +445,10 @@ function ProviderConfigSheet({
                       className="text-[var(--color-secondary)] font-medium"
                       data-testid="variant-region"
                     >
-                      {regionLabel(entry.region)}
+                      {REGION_LABELS[entry.region]}
                     </span>
                   </div>
                 )}
-                <div>
-                  <span className="text-[var(--color-muted)] mr-1.5">Wire</span>
-                  <Badge
-                    variant="muted"
-                    className="font-normal text-xs"
-                    data-testid="variant-wire-badge"
-                  >
-                    {wireBadgeLabel(entry.wire)}
-                  </Badge>
-                </div>
                 <div className="w-full">
                   <span className="text-[var(--color-muted)] mr-1.5">Endpoint</span>
                   <span
@@ -304,8 +458,34 @@ function ProviderConfigSheet({
                     {entry.endpointHint}
                   </span>
                 </div>
+                {target.mode === 'configure' && isDualWire(entry) && (
+                  <div className="w-full">
+                    <span className="text-[var(--color-muted)] mr-1.5">Endpoint format</span>
+                    <span
+                      className="text-[var(--color-secondary)] font-medium"
+                      data-testid="variant-endpoint-format"
+                    >
+                      {viaAnthropicId ? 'Anthropic-compatible endpoint' : 'OpenAI-compatible endpoint'}
+                    </span>
+                  </div>
+                )}
               </div>
+              {target.mode === 'configure' && isDualWire(entry) && (
+                <p className="text-xs text-[var(--color-muted)]" data-testid="endpoint-format-readonly-note">
+                  Endpoint format is chosen when connecting a provider.
+                </p>
+              )}
             </div>
+          )}
+
+          {/* Endpoint-format toggle — connect mode only, dual-wire entries
+              only (FIX-5). Configure mode shows the read-only field above. */}
+          {target.mode === 'connect' && entry && isDualWire(entry) && (
+            <EndpointFormatToggle
+              entry={entry}
+              value={endpointFormat}
+              onChange={(v) => setEndpointFormats((prev) => ({ ...prev, [draftKey]: v }))}
+            />
           )}
 
           {/* API Key input */}
@@ -315,10 +495,10 @@ function ProviderConfigSheet({
             </label>
             <div className="relative">
               <Input
-                type={showKey[providerId] ? 'text' : 'password'}
-                value={apiKeys[providerId] ?? ''}
+                type={showKey[draftKey] ? 'text' : 'password'}
+                value={apiKeys[draftKey] ?? ''}
                 onChange={(e) =>
-                  setApiKeys((prev) => ({ ...prev, [providerId]: e.target.value }))
+                  setApiKeys((prev) => ({ ...prev, [draftKey]: e.target.value }))
                 }
                 placeholder={hint}
                 className="pr-9 font-mono text-xs"
@@ -328,32 +508,32 @@ function ProviderConfigSheet({
               <button
                 type="button"
                 onClick={() =>
-                  setShowKey((prev) => ({ ...prev, [providerId]: !prev[providerId] }))
+                  setShowKey((prev) => ({ ...prev, [draftKey]: !prev[draftKey] }))
                 }
                 className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[var(--color-muted)] hover:text-[var(--color-secondary)]"
-                aria-label={showKey[providerId] ? 'Hide API key' : 'Show API key'}
+                aria-label={showKey[draftKey] ? 'Hide API key' : 'Show API key'}
               >
-                {showKey[providerId] ? <EyeSlash size={14} /> : <Eye size={14} />}
+                {showKey[draftKey] ? <EyeSlash size={14} /> : <Eye size={14} />}
               </button>
             </div>
           </div>
 
           {/* Manual model-slug editor — only for configure mode on manual providers */}
           {provider && catalogMode === 'manual' && (() => {
-            const models = draftModels[providerId] ?? provider.models ?? []
-            const pendingSlug = (newModel[providerId] ?? '').trim()
+            const models = draftModels[draftKey] ?? provider.models ?? []
+            const pendingSlug = (newModel[draftKey] ?? '').trim()
             const addSlug = () => {
               if (!pendingSlug || models.includes(pendingSlug)) return
               setDraftModels((prev) => ({
                 ...prev,
-                [providerId]: [...models, pendingSlug],
+                [draftKey]: [...models, pendingSlug],
               }))
-              setNewModel((prev) => ({ ...prev, [providerId]: '' }))
+              setNewModel((prev) => ({ ...prev, [draftKey]: '' }))
             }
             const removeSlug = (slug: string) => {
               setDraftModels((prev) => ({
                 ...prev,
-                [providerId]: models.filter((m) => m !== slug),
+                [draftKey]: models.filter((m) => m !== slug),
               }))
             }
             return (
@@ -390,9 +570,9 @@ function ProviderConfigSheet({
                 )}
                 <div className="flex gap-2">
                   <Input
-                    value={newModel[providerId] ?? ''}
+                    value={newModel[draftKey] ?? ''}
                     onChange={(e) =>
-                      setNewModel((prev) => ({ ...prev, [providerId]: e.target.value }))
+                      setNewModel((prev) => ({ ...prev, [draftKey]: e.target.value }))
                     }
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') {
@@ -420,9 +600,9 @@ function ProviderConfigSheet({
           })()}
 
           {/* Save-validation banner */}
-          {saveValidation[providerId] && (
+          {saveValidation[draftKey] && (
             <ProviderValidationBanner
-              validation={saveValidation[providerId]}
+              validation={saveValidation[draftKey]}
               data-testid={`save-validation-banner-${providerId}`}
             />
           )}
@@ -469,12 +649,12 @@ function ProviderConfigSheet({
               <Button
                 size="sm"
                 onClick={() => {
-                  const key = (apiKeys[providerId] ?? '').trim()
+                  const key = (apiKeys[draftKey] ?? '').trim()
                   const models =
                     catalogMode === 'manual' && provider
-                      ? (draftModels[providerId] ?? provider.models ?? [])
+                      ? (draftModels[draftKey] ?? provider.models ?? [])
                       : undefined
-                  requestChange(providerId, key, models)
+                  requestChange(resolvedSubmitId, draftKey, key, models)
                 }}
                 disabled={isSaving || !canSave}
                 data-testid={`save-provider-${providerId}`}
@@ -497,6 +677,222 @@ function ProviderConfigSheet({
 }
 
 // ---------------------------------------------------------------------------
+// Sub-component: Provider picker Sheet (FIX-3) — search + catalog grouped by
+// company, excluding already-configured entries. Selecting an entry hands off
+// to the connect form (ProviderConfigSheet, mode: connect).
+// ---------------------------------------------------------------------------
+
+interface ProviderPickerSheetProps {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  query: string
+  onQueryChange: (query: string) => void
+  groups: CatalogGroup[]
+  allConfigured: boolean
+  onSelect: (entry: ProviderCatalogEntry) => void
+}
+
+function ProviderPickerSheet({
+  open,
+  onOpenChange,
+  query,
+  onQueryChange,
+  groups,
+  allConfigured,
+  onSelect,
+}: ProviderPickerSheetProps) {
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent side="right" widthClass="w-[90vw] sm:max-w-lg" data-testid="provider-picker-sheet">
+        <SheetHeader className="mb-4">
+          <SheetTitle>Connect a provider</SheetTitle>
+          <SheetDescription>Choose a provider to connect an API key.</SheetDescription>
+        </SheetHeader>
+
+        <div className="space-y-4 overflow-y-auto pr-1">
+          <div className="relative">
+            <MagnifyingGlass
+              size={13}
+              className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-[var(--color-muted)]"
+            />
+            <Input
+              type="search"
+              value={query}
+              onChange={(e) => onQueryChange(e.target.value)}
+              placeholder="Search providers…"
+              className="pl-8 text-sm h-8"
+              aria-label="Search providers"
+              data-testid="picker-search-input"
+            />
+          </div>
+
+          {groups.length === 0 ? (
+            <p className="text-sm text-[var(--color-muted)] text-center py-6">
+              {allConfigured
+                ? 'All available providers are already configured.'
+                : `No providers match "${query}".`}
+            </p>
+          ) : (
+            groups.map((group) => (
+              <div key={group.company} data-testid={`picker-group-${group.company}`}>
+                <div className="flex items-center gap-2 mb-1.5">
+                  <BrandIcon slug={group.logoSlug} size={16} decorative />
+                  <span className="text-xs font-semibold text-[var(--color-secondary)] uppercase tracking-wide">
+                    {group.company}
+                  </span>
+                </div>
+                <div className="space-y-1">
+                  {group.entries.map((entry) => (
+                    <button
+                      key={entry.id}
+                      type="button"
+                      onClick={() => onSelect(entry)}
+                      className="w-full flex items-center justify-between gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2 text-left transition-colors hover:border-[var(--color-accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
+                      data-testid={`picker-entry-${entry.id}`}
+                    >
+                      <span className="min-w-0">
+                        <span className="block text-sm font-medium text-[var(--color-secondary)] truncate">
+                          {entry.label}
+                        </span>
+                        <span className="block text-xs text-[var(--color-muted)] truncate">
+                          {entry.subtitle}
+                        </span>
+                      </span>
+                      <CaretRight size={12} className="shrink-0 text-[var(--color-muted)]" aria-hidden />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))
+          )}
+
+          <BrandDisclaimer className="mt-2" />
+        </div>
+      </SheetContent>
+    </Sheet>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Sub-component: a single configured-provider row (flat or inside a group)
+// ---------------------------------------------------------------------------
+
+function ProviderRow({
+  provider,
+  entry,
+  viaAnthropicId,
+  title,
+  showIcon,
+  onConfigure,
+  testValidation,
+}: {
+  provider: Provider
+  entry?: ProviderCatalogEntry
+  viaAnthropicId?: boolean
+  title: string
+  showIcon: boolean
+  onConfigure: () => void
+  testValidation?: ProviderValidation
+}) {
+  const connected = provider.status === 'connected'
+  const catalogMode = providerCatalogMode(provider)
+  const subtitle = entry?.subtitle
+
+  return (
+    <div
+      className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden"
+      data-testid={`provider-row-${provider.id}`}
+    >
+      {/* Test-validation warning banner */}
+      {testValidation && (
+        <ProviderValidationBanner
+          validation={testValidation}
+          data-testid={`test-validation-banner-${provider.id}`}
+        />
+      )}
+
+      <div className="flex items-center gap-3 px-4 py-3">
+        {showIcon && (
+          entry ? (
+            <BrandIcon slug={entry.logoSlug} size={22} decorative className="shrink-0" />
+          ) : (
+            <Globe size={22} className="text-[var(--color-muted)] shrink-0" aria-hidden="true" />
+          )
+        )}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span
+              className="text-sm font-medium text-[var(--color-secondary)]"
+              data-testid={`provider-row-title-${provider.id}`}
+            >
+              {title}
+            </span>
+            {/* Anthropic-endpoint chip (FIX-5) — only when configured under anthropic_id */}
+            {viaAnthropicId && (
+              <Badge
+                variant="muted"
+                className="font-normal text-[10px]"
+                data-testid={`anthropic-endpoint-chip-${provider.id}`}
+              >
+                Anthropic endpoint
+              </Badge>
+            )}
+            {connected ? (
+              <Badge data-testid={`connected-badge-${provider.id}`} variant="success" className="gap-1">
+                <CheckCircle size={10} weight="fill" /> Connected
+              </Badge>
+            ) : provider.status === 'error' ? (
+              <Badge
+                variant="error"
+                className="gap-1"
+                data-testid={`error-badge-${provider.id}`}
+              >
+                <XCircle size={10} weight="fill" /> Error
+              </Badge>
+            ) : (
+              <Badge variant="muted" data-testid={`disconnected-badge-${provider.id}`}>
+                Not configured
+              </Badge>
+            )}
+            {connected && (
+              <Badge variant="muted" className="font-normal">
+                {catalogMode === 'live' ? 'Live model list' : 'Manual models'}
+              </Badge>
+            )}
+          </div>
+          {subtitle && (
+            <p className="text-xs text-[var(--color-muted)] mt-0.5">
+              {subtitle}
+            </p>
+          )}
+          {provider.models && provider.models.length > 0 && (
+            <p className="text-xs text-[var(--color-muted)] mt-0.5 font-mono">
+              {provider.models.slice(0, 3).join(', ')}{provider.models.length > 3 ? ` +${provider.models.length - 3}` : ''}
+            </p>
+          )}
+          {provider.error && (
+            <p className="text-xs text-[var(--color-error)] mt-0.5">{provider.error}</p>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2 shrink-0">
+          <Button
+            size="sm"
+            onClick={onConfigure}
+            className="h-7 px-3 text-xs"
+            data-testid={`configure-btn-${provider.id}`}
+          >
+            {connected ? 'Edit' : (
+              <><CaretRight size={11} /> Configure</>
+            )}
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Main ProvidersSection
 // ---------------------------------------------------------------------------
 
@@ -508,6 +904,10 @@ export function ProvidersSection() {
   const [sheetTarget, setSheetTarget] = useState<SheetTarget | null>(null)
   const [sheetOpen, setSheetOpen] = useState(false)
 
+  // Picker Sheet state (FIX-3)
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const [pickerQuery, setPickerQuery] = useState('')
+
   const [apiKeys, setApiKeys] = useState<Record<string, string>>({})
   const [showKey, setShowKey] = useState<Record<string, boolean>>({})
   const [testing, setTesting] = useState<Record<string, boolean>>({})
@@ -516,6 +916,7 @@ export function ProvidersSection() {
   const [testValidation, setTestValidation] = useState<Record<string, ProviderValidation | undefined>>({})
   const [draftModels, setDraftModels] = useState<Record<string, string[]>>({})
   const [newModel, setNewModel] = useState<Record<string, string>>({})
+  const [endpointFormats, setEndpointFormats] = useState<Record<string, EndpointFormat>>({})
 
   const [pending, setPending] = useState<PendingProviderChange | null>(null)
   const [reauthOpen, setReauthOpen] = useState(false)
@@ -526,16 +927,21 @@ export function ProvidersSection() {
   })
 
   const { mutate: applyChange, isPending: isSaving } = useMutation({
-    mutationFn: ({ id, key, token, models }: { id: string; key: string; token: string; models?: string[] }) =>
+    mutationFn: ({ id, key, token, models }: { id: string; draftKey: string; key: string; token: string; models?: string[] }) =>
       configureProvider(id, key === '' ? undefined : key, undefined, undefined, token, models),
-    onSuccess: (provider, { id }) => {
+    // Destructure `draftKey` (NOT `id`) — the canonical draft-state key set by
+    // requestChange, so the typed key / validation banner is cleared under the
+    // SAME key the Sheet is reading from, regardless of which literal id the
+    // PUT actually submitted (BUG #2: previously cleared by mutation `id`,
+    // which can diverge from the draft key on alias / anthropic_id storage).
+    onSuccess: (provider, { draftKey }) => {
       queryClient.invalidateQueries({ queryKey: ['providers'] })
       const validation = provider.validation
       if (validation?.outcome === 'invalid_key') {
         // invalid_key is the ONE outcome the contract says blocks a usable
         // provider. Do NOT report a green success — surface an error and keep
         // the sheet open with the banner so the user can correct the key.
-        setSaveValidation((prev) => ({ ...prev, [id]: validation }))
+        setSaveValidation((prev) => ({ ...prev, [draftKey]: validation }))
         addToast({
           message: validation.message ?? 'Key rejected — the provider was saved but will not work until you fix the key',
           variant: 'error',
@@ -544,15 +950,15 @@ export function ProvidersSection() {
         // Non-blocking outcomes (no_credit / unreachable / restricted): saved
         // successfully; keep the sheet open so the amber warning banner is
         // visible. (Unchanged from prior behavior.)
-        setSaveValidation((prev) => ({ ...prev, [id]: validation }))
+        setSaveValidation((prev) => ({ ...prev, [draftKey]: validation }))
         addToast({ message: 'Provider saved', variant: 'success' })
       } else {
-        setSaveValidation((prev) => ({ ...prev, [id]: undefined }))
+        setSaveValidation((prev) => ({ ...prev, [draftKey]: undefined }))
         addToast({ message: 'Provider saved', variant: 'success' })
         setSheetOpen(false)
       }
       setPending(null)
-      setApiKeys((prev) => ({ ...prev, [id]: '' }))
+      setApiKeys((prev) => ({ ...prev, [draftKey]: '' }))
     },
     onError: (err: Error) => {
       addToast({ message: isApiError(err) ? err.userMessage : err.message, variant: 'error' })
@@ -560,15 +966,15 @@ export function ProvidersSection() {
     },
   })
 
-  const requestChange = (id: string, key: string, models?: string[]) => {
-    setSaveValidation((prev) => ({ ...prev, [id]: undefined }))
-    setPending({ id, key, models })
+  const requestChange = (id: string, draftKey: string, key: string, models?: string[]) => {
+    setSaveValidation((prev) => ({ ...prev, [draftKey]: undefined }))
+    setPending({ id, draftKey, key, models })
     setReauthOpen(true)
   }
 
   const onReAuthConfirmed = (token: string) => {
     if (!pending) return
-    applyChange({ id: pending.id, key: pending.key, token, models: pending.models })
+    applyChange({ id: pending.id, draftKey: pending.draftKey, key: pending.key, token, models: pending.models })
   }
 
   const handleRefreshModels = async (id: string) => {
@@ -610,8 +1016,8 @@ export function ProvidersSection() {
   }
 
   const openConfigureSheet = (provider: Provider) => {
-    const { entry } = resolveCatalogEntry(provider.id)
-    setSheetTarget({ mode: 'configure', provider, entry })
+    const { entry, viaAnthropicId } = resolveCatalogEntry(provider.id)
+    setSheetTarget({ mode: 'configure', provider, entry, viaAnthropicId })
     setSheetOpen(true)
   }
 
@@ -620,23 +1026,57 @@ export function ProvidersSection() {
     setSheetOpen(true)
   }
 
-  const groups = groupProviders(providers)
-  const hasConfigured = providers.length > 0
+  const openPicker = () => {
+    setPickerQuery('')
+    setPickerOpen(true)
+  }
+
+  // Only providers the user actually attempted to configure — see
+  // isConfigured's doc comment (backend seeds ~25 forever-disconnected
+  // template rows that must never appear as "configured").
+  const configuredProviders = useMemo(() => providers.filter(isConfigured), [providers])
+  const groups = groupProviders(configuredProviders)
+  const hasConfigured = configuredProviders.length > 0
+
+  const excludeIds = useMemo(() => configuredEntryIds(configuredProviders), [configuredProviders])
+  const catalogGroups = useMemo(
+    () => buildCatalogGroups(excludeIds, pickerQuery),
+    [excludeIds, pickerQuery],
+  )
+  const allConfigured = excludeIds.size >= PROVIDER_CATALOG.length
 
   return (
     <div className="space-y-4">
-      <div>
-        <h2 className="font-headline font-bold text-base text-[var(--color-secondary)]">Providers</h2>
-        <p className="text-xs text-[var(--color-muted)] mt-0.5">
-          API keys are stored encrypted in credentials.json — never in config.json.
-        </p>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h2 className="font-headline font-bold text-base text-[var(--color-secondary)]">Providers</h2>
+          <p className="text-xs text-[var(--color-muted)] mt-0.5">
+            API keys are stored encrypted in credentials.json — never in config.json.
+          </p>
+        </div>
+        {/* Connect a provider — always available once at least one provider is
+            configured (FIX-3: there was previously no way to add a provider
+            after the first), and also on a fetch error so the CTA stays
+            reachable even though the body below suppresses the empty-state's
+            own copy of this button to avoid showing two conflicting messages
+            at once. */}
+        {(hasConfigured || providersError) && (
+          <Button
+            size="sm"
+            onClick={openPicker}
+            className="h-8 px-3 text-xs shrink-0 gap-1.5"
+            data-testid="connect-provider-btn"
+          >
+            <Plus size={12} weight="bold" /> Connect a provider
+          </Button>
+        )}
       </div>
 
-      {providersError && (
-        <p className="text-sm text-red-400">Failed to load providers. Please try again.</p>
-      )}
-
-      {isLoading ? (
+      {providersError ? (
+        <p className="text-sm text-red-400" data-testid="providers-error">
+          Failed to load providers. Please try again.
+        </p>
+      ) : isLoading ? (
         <div className="space-y-2">
           {[1, 2, 3].map((i) => (
             <div
@@ -646,13 +1086,34 @@ export function ProvidersSection() {
           ))}
         </div>
       ) : hasConfigured ? (
-        /* ── Configured-only list, grouped by company ── */
+        /* ── Configured-only list, grouped only when a company has ≥2
+             configured variants (FIX-2); a single configured provider is a
+             flat row with its own BrandIcon + entry.label. ── */
         <div className="space-y-4">
-          {groups.map((group) => (
-            <div key={group.group} data-testid={`provider-group-${group.group}`}>
-              {/* Company group header */}
-              <div className="flex items-center justify-between mb-1.5">
-                <div className="flex items-center gap-2">
+          {groups.map((group) => {
+            if (group.items.length === 1) {
+              const { provider, entry, viaAnthropicId } = group.items[0]
+              const title = entry ? entry.label : displayName(provider, provider.id)
+              return (
+                <ProviderRow
+                  key={provider.id}
+                  provider={provider}
+                  entry={entry}
+                  viaAnthropicId={viaAnthropicId}
+                  title={title}
+                  showIcon
+                  onConfigure={() => openConfigureSheet(provider)}
+                  testValidation={testValidation[provider.id]}
+                />
+              )
+            }
+
+            return (
+              <div key={group.group} data-testid={`provider-group-${group.group}`}>
+                {/* Company group header — only rendered here, when ≥2 variants
+                    are configured (FIX-2). The per-group "Add another…"
+                    control is gone (FIX-1). */}
+                <div className="flex items-center gap-2 mb-1.5">
                   {group.logoSlug ? (
                     <BrandIcon
                       slug={group.logoSlug}
@@ -669,176 +1130,59 @@ export function ProvidersSection() {
                     {group.group}
                   </span>
                 </div>
-                {/* "Add another…" for catalog-resolved groups */}
-                {group.items[0]?.entry && (
-                  <button
-                    type="button"
-                    className="text-xs text-[var(--color-accent)] hover:underline"
-                    onClick={() => {
-                      const entry = group.items[0]?.entry
-                      if (entry) openConnectSheet(entry)
-                    }}
-                    data-testid={`add-another-${group.group}`}
-                  >
-                    + Add another…
-                  </button>
-                )}
-              </div>
 
-              <div className="space-y-1.5">
-                {group.items.map(({ provider, entry }) => {
-                  const connected = provider.status === 'connected'
-                  const catalogMode = providerCatalogMode(provider)
-                  const rowTitle = entry ? variantRowTitle(entry) : (provider.display_name ?? provider.name ?? provider.id)
-                  const subtitle = entry?.subtitle
-
-                  return (
-                    <div
+                <div className="space-y-1.5">
+                  {group.items.map(({ provider, entry, viaAnthropicId }) => (
+                    <ProviderRow
                       key={provider.id}
-                      className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden"
-                      data-testid={`provider-row-${provider.id}`}
-                    >
-                      {/* Test-validation warning banner */}
-                      {testValidation[provider.id] && (
-                        <ProviderValidationBanner
-                          validation={testValidation[provider.id]}
-                          data-testid={`test-validation-banner-${provider.id}`}
-                        />
-                      )}
-
-                      <div className="flex items-center gap-3 px-4 py-3">
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span
-                              className="text-sm font-medium text-[var(--color-secondary)]"
-                              data-testid={`provider-row-title-${provider.id}`}
-                            >
-                              {rowTitle}
-                            </span>
-                            {/* Wire badge (FR-010 / FR-005) */}
-                            {entry && (
-                              <Badge
-                                variant="muted"
-                                className="font-normal text-xs"
-                                data-testid={`wire-badge-${provider.id}`}
-                              >
-                                {wireBadgeLabel(entry.wire)}
-                              </Badge>
-                            )}
-                            {connected ? (
-                              <Badge data-testid={`connected-badge-${provider.id}`} variant="success" className="gap-1">
-                                <CheckCircle size={10} weight="fill" /> Connected
-                              </Badge>
-                            ) : provider.status === 'error' ? (
-                              <Badge
-                                variant="error"
-                                className="gap-1"
-                                data-testid={`error-badge-${provider.id}`}
-                              >
-                                <XCircle size={10} weight="fill" /> Error
-                              </Badge>
-                            ) : (
-                              <Badge variant="muted" data-testid={`disconnected-badge-${provider.id}`}>
-                                Not configured
-                              </Badge>
-                            )}
-                            {connected && (
-                              <Badge variant="muted" className="font-normal">
-                                {catalogMode === 'live' ? 'Live model list' : 'Manual models'}
-                              </Badge>
-                            )}
-                          </div>
-                          {subtitle && (
-                            <p className="text-xs text-[var(--color-muted)] mt-0.5">
-                              {subtitle}
-                            </p>
-                          )}
-                          {provider.models && provider.models.length > 0 && (
-                            <p className="text-xs text-[var(--color-muted)] mt-0.5 font-mono">
-                              {provider.models.slice(0, 3).join(', ')}{provider.models.length > 3 ? ` +${provider.models.length - 3}` : ''}
-                            </p>
-                          )}
-                          {provider.error && (
-                            <p className="text-xs text-[var(--color-error)] mt-0.5">{provider.error}</p>
-                          )}
-                        </div>
-
-                        <div className="flex items-center gap-2 shrink-0">
-                          <Button
-                            size="sm"
-                            onClick={() => openConfigureSheet(provider)}
-                            className="h-7 px-3 text-xs"
-                            data-testid={`configure-btn-${provider.id}`}
-                          >
-                            {connected ? 'Edit' : (
-                              <><CaretRight size={11} /> Configure</>
-                            )}
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
-                  )
-                })}
+                      provider={provider}
+                      entry={entry}
+                      viaAnthropicId={viaAnthropicId}
+                      title={entry ? variantRowTitle(entry) : displayName(provider, provider.id)}
+                      showIcon={false}
+                      onConfigure={() => openConfigureSheet(provider)}
+                      testValidation={testValidation[provider.id]}
+                    />
+                  ))}
+                </div>
               </div>
-            </div>
-          ))}
+            )
+          })}
 
           {/* Trademark disclaimer whenever brand marks are shown */}
           <BrandDisclaimer className="mt-2" />
         </div>
       ) : (
-        /* ── Empty-state roster (FR-008, US-3) ── */
-        <div className="space-y-4" data-testid="provider-roster">
-          <p className="text-sm text-[var(--color-muted)]">
-            No providers configured yet. Connect one to get started.
-          </p>
-
-          {PROVIDER_ROSTER.map((rosterGroup) => (
-            <div key={rosterGroup.company} data-testid={`roster-group-${rosterGroup.company}`}>
-              <div className="flex items-center gap-2 mb-1.5">
-                <BrandIcon slug={rosterGroup.logoSlug} size={18} decorative />
-                <span className="text-xs font-semibold text-[var(--color-secondary)] uppercase tracking-wide">
-                  {rosterGroup.company}
-                </span>
-              </div>
-
-              <div className="space-y-1">
-                {rosterGroup.entries.map((entry) => (
-                  <div
-                    key={entry.id}
-                    className="flex items-center justify-between rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] px-4 py-2.5"
-                    data-testid={`roster-entry-${entry.id}`}
-                  >
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-medium text-[var(--color-secondary)]">
-                          {variantRowTitle(entry)}
-                        </span>
-                        <Badge variant="muted" className="text-[11px]" data-testid={`roster-wire-${entry.id}`}>
-                          {wireBadgeLabel(entry.wire)}
-                        </Badge>
-                      </div>
-                      <p className="text-xs text-[var(--color-muted)] mt-0.5">{entry.subtitle}</p>
-                    </div>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="h-7 px-3 text-xs shrink-0"
-                      onClick={() => openConnectSheet(entry)}
-                      data-testid={`connect-btn-${entry.id}`}
-                    >
-                      Connect
-                    </Button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
-
-          {/* Trademark disclaimer for the roster (brand marks displayed) */}
-          <BrandDisclaimer className="mt-2" />
+        /* ── Empty state (FIX-3) — no default-visible roster; a compact
+             message + one primary "Connect a provider" CTA. ── */
+        <div
+          className="rounded-lg border border-dashed border-[var(--color-border)] bg-[var(--color-surface-1)] px-4 py-8 text-center space-y-3"
+          data-testid="providers-empty-state"
+        >
+          <p className="text-sm text-[var(--color-muted)]">No providers configured yet.</p>
+          <Button
+            onClick={openPicker}
+            className="gap-1.5"
+            data-testid="connect-provider-btn"
+          >
+            <Plus size={13} weight="bold" /> Connect a provider
+          </Button>
         </div>
       )}
+
+      {/* Provider picker Sheet (FIX-3) */}
+      <ProviderPickerSheet
+        open={pickerOpen}
+        onOpenChange={setPickerOpen}
+        query={pickerQuery}
+        onQueryChange={setPickerQuery}
+        groups={catalogGroups}
+        allConfigured={allConfigured}
+        onSelect={(entry) => {
+          setPickerOpen(false)
+          openConnectSheet(entry)
+        }}
+      />
 
       {/* Provider config/connect Sheet */}
       <ProviderConfigSheet
@@ -847,10 +1191,11 @@ export function ProvidersSection() {
         onOpenChange={(o) => {
           setSheetOpen(o)
           if (!o) {
-            // Clean up on close
+            // Clean up on close — same canonical draft key the Sheet reads
+            // from (sheetDraftKey), so the banner never survives under a
+            // stale key (BUG #2, see PendingProviderChange's doc comment).
             if (sheetTarget) {
-              const id = sheetTarget.mode === 'configure' ? sheetTarget.provider.id : sheetTarget.entry.id
-              setSaveValidation((prev) => ({ ...prev, [id]: undefined }))
+              setSaveValidation((prev) => ({ ...prev, [sheetDraftKey(sheetTarget)]: undefined }))
             }
           }
         }}
@@ -864,6 +1209,8 @@ export function ProvidersSection() {
         setNewModel={setNewModel}
         saveValidation={saveValidation}
         setSaveValidation={setSaveValidation}
+        endpointFormats={endpointFormats}
+        setEndpointFormats={setEndpointFormats}
         isSaving={isSaving}
         requestChange={requestChange}
         refreshing={refreshing}

@@ -4,20 +4,22 @@
 //
 // Test coverage:
 //
-//	#1  TestCatalog_ParsesAndCountIsExpected    — embedded JSON → 30 entries
+//	#1  TestCatalog_ParsesAndCountIsExpected    — embedded JSON → 23 entries
 //	#2  TestCatalog_DriftGuard_IdIsKnownProtocol  — every id IsKnownProtocol
-//	#3  TestCatalog_DriftGuard_IdInProbeEnum      — every id ∈ ProbeProviderRequest enum
+//	#3  TestCatalog_DriftGuard_IdInProbeEnum      — every id AND anthropic_id ∈ ProbeProviderRequest enum
 //	#4  TestCatalog_DriftGuard_BaseNonEmptyOrExempt — GetDefaultAPIBase non-empty or exempt
-//	#5  TestCatalog_DriftGuard_NewProtocolUntriagedFails — catalogExcluded completeness
+//	#5  TestCatalog_DriftGuard_NewProtocolUntriagedFails — catalogExcluded completeness (anthropic_id counts as covered)
 //	#6  TestCatalog_NoSecretsInPayload           — no credential fields in JSON
 //	#7  TestWireDerivation_Table                 — DeriveWire matches rule for all ids
 //	#8  TestContract_ProviderCatalogEntry_Shape  — Go type marshals schema-valid JSON
 //	#9  TestCatalog_AliasEndpointEquality        — alias GetDefaultAPIBase == canonical
 //	#10 TestCatalog_LoadCatalogWireConsistency   — LoadCatalog wire-consistency check
 //	#11 TestCatalog_LogoSlugCoverage             — every logoSlug has SVG or is intentional lettermark
+//	#12 TestCatalog_AnthropicIdEndpointNonEmpty  — GetDefaultAPIBase(anthropic_id) non-empty for every dual-wire entry
 //	#13 TestCatalog_EmbedMatchesGeneratedTS      — JSON embed and TS catalog are identical
 //
-// Traces to: spec §7, ADR-031 §6 G-2, FR-003, FR-005, FR-006, FR-020, US-1.
+// Traces to: spec §7, ADR-031 §6 G-2, FR-003, FR-005, FR-006, FR-020, US-1,
+// docs/internal/specs/provider-ux-fixes-plan.md FIX-4/FIX-5/FIX-6.
 
 package catalog
 
@@ -96,16 +98,20 @@ func loadProbeProviderIDEnum(t *testing.T) map[string]bool {
 // (human-in-the-loop enforcement, per ADR-031 §6 G-2 R2-07).
 var catalogExcluded = map[string]bool{
 	// Pure aliases (same endpoint as a catalog entry)
-	"z.ai":                     true, // alias of z-ai
-	"zai":                      true, // alias of z-ai
-	"glm-coding":               true, // alias of z-ai-coding
-	"azure-openai":             true, // alias of azure
-	"gemini":                   true, // alias of google
-	"anthropic-messages":       true, // alias of anthropic
-	"qwen-international":       true, // alias of qwen-intl
-	"dashscope-intl":           true, // alias of qwen-intl
-	"dashscope-us":             true, // alias of qwen-us
-	"alibaba-coding-anthropic": true, // alias of coding-plan-anthropic
+	"z.ai":               true, // alias of z-ai
+	"zai":                true, // alias of z-ai
+	"glm-coding":         true, // alias of z-ai-coding
+	"azure-openai":       true, // alias of azure
+	"gemini":             true, // alias of google
+	"anthropic-messages": true, // alias of anthropic
+	"qwen-international": true, // alias of qwen-intl
+	"dashscope-intl":     true, // alias of qwen-intl
+	"dashscope-us":       true, // alias of qwen-us
+	// alias of coding-plan's AnthropicId sibling (coding-plan-anthropic), not
+	// of coding-plan's own OpenAI-compatible endpoint — cannot be a catalog
+	// Aliases entry (TestCatalog_AliasEndpointEquality would fail) so it stays
+	// triaged here (FIX-5, provider-ux-fixes-plan.md).
+	"alibaba-coding-anthropic": true,
 
 	// CLI executor / non-API-key ids
 	"claude-cli":     true,
@@ -123,10 +129,16 @@ var catalogExcluded = map[string]bool{
 	// ollama IS in the catalog; listed here explicitly to document it is NOT excluded
 	"ollama": false,
 
-	// Qwen/Alibaba alternative ids not given their own catalog entry
-	"coding-plan":    true,
-	"alibaba-coding": true,
-	"qwen-coding":    true,
+	// NOTE: "coding-plan", "alibaba-coding", "qwen-coding" moved OUT of this
+	// exclusion set — "coding-plan" is now the catalog primary id for the
+	// Qwen/Alibaba Coding Plan entry and "alibaba-coding"/"qwen-coding" are
+	// its real Aliases (FIX-5 Qwen-coding-plan promotion; see catalog.go
+	// "coding-plan" entry comment). The 7 FIX-5 anthropic-wire merge siblings
+	// (z-ai-anthropic, zhipu-anthropic, moonshot-anthropic,
+	// moonshot-cn-anthropic, minimax-anthropic, minimax-cn-anthropic,
+	// deepseek-anthropic) plus coding-plan-anthropic are likewise NOT listed
+	// here — they are triaged as covered via catalogAnthropicIDs() below,
+	// since each is some entry's AnthropicId.
 
 	// Chinese provider infra / aggregator ids not given catalog entries
 	"shengsuanyun": true,
@@ -186,14 +198,31 @@ func catalogAliasIDs() map[string]bool {
 	return aliases
 }
 
+// catalogAnthropicIDs returns the set of AnthropicId values across all catalog
+// entries — the sibling protocol ids exposing each entry's Anthropic-compatible
+// endpoint (FIX-5). A knownProtocols id that equals some entry's AnthropicId is
+// catalog-covered even though it is not itself an entry id or a plain alias.
+func catalogAnthropicIDs() map[string]bool {
+	ids := make(map[string]bool)
+	for _, e := range Entries {
+		if e.AnthropicId == nil {
+			continue
+		}
+		ids[*e.AnthropicId] = true
+	}
+	return ids
+}
+
 // ── Test #1 ──────────────────────────────────────────────────────────────────
 
 // TestCatalog_ParsesAndCountIsExpected asserts the embedded JSON parses to
-// exactly 30 entries.  Traces to spec §7 #1, US-1 AS-1.
+// exactly 23 entries (30 - 7 FIX-5 anthropic-wire sibling merges; the Qwen
+// Coding Plan promotion renames an existing entry and does not change the
+// count).  Traces to spec §7 #1, US-1 AS-1, provider-ux-fixes-plan.md FIX-5.
 func TestCatalog_ParsesAndCountIsExpected(t *testing.T) {
 	entries, err := LoadCatalog()
 	require.NoError(t, err, "LoadCatalog must not fail")
-	assert.Len(t, entries, 30, "catalog must have exactly 30 entries")
+	assert.Len(t, entries, 23, "catalog must have exactly 23 entries")
 }
 
 // ── Test #2 ──────────────────────────────────────────────────────────────────
@@ -216,14 +245,18 @@ func TestCatalog_DriftGuard_IdIsKnownProtocol(t *testing.T) {
 // contracts/components/schemas/ProbeProviderRequest.yaml — NOT a hand-copied map
 // — so adding a value to the YAML without triaging it into the catalog causes
 // this test to fail.
-// Re-homes the invariant formerly in
-// "Re-homed from the former `AVAILABLE_PROVIDERS ⊆ ProbeProviderRequest` test
-// in `src/routes/-onboarding.test.tsx`".
+// Re-homed from the former `AVAILABLE_PROVIDERS ⊆ ProbeProviderRequest` test
+// in `src/routes/-onboarding.test.tsx`.
 // Traces to spec §7 #3, FR-003 property (c), ADR-031 §6 G-2 R3/MAJ-001.
 //
 // Note: aliases need NOT be ProbeProviderRequest enum members — they are
 // display-only ids used by the migration resolver. Only canonical catalog ids
 // must be in the ProbeProviderRequest enum.
+//
+// AnthropicId siblings (FIX-5) ARE probe targets in their own right — the
+// Settings "Endpoint format" toggle probes/configures entry.AnthropicId
+// directly when the operator picks "Anthropic-compatible" — so every non-nil
+// AnthropicId must also be a ProbeProviderRequest enum member.
 func TestCatalog_DriftGuard_IdInProbeEnum(t *testing.T) {
 	probeEnum := loadProbeProviderIDEnum(t)
 	for _, e := range Entries {
@@ -231,6 +264,14 @@ func TestCatalog_DriftGuard_IdInProbeEnum(t *testing.T) {
 			assert.True(t, probeEnum[e.Id],
 				"catalog entry id %q must be in the ProbeProviderRequest id enum; "+
 					"if you added a new provider, update ProbeProviderRequest.yaml + regen", e.Id)
+		})
+		if e.AnthropicId == nil {
+			continue
+		}
+		t.Run(e.Id+"/anthropic_id", func(t *testing.T) {
+			assert.True(t, probeEnum[*e.AnthropicId],
+				"catalog entry %q: AnthropicId %q must be in the ProbeProviderRequest id enum "+
+					"(FIX-5 — the endpoint-format toggle probes this id directly)", e.Id, *e.AnthropicId)
 		})
 	}
 }
@@ -276,10 +317,17 @@ func TestCatalog_DriftGuard_BaseNonEmptyOrExempt(t *testing.T) {
 // NOT a hand-copied list — so adding a new id to knownProtocols without
 // updating this test still causes CI to fail (the guard is non-vacuous).
 //
-// Traces to spec §7 #5, FR-003 property (b), ADR-031 §6 G-2 R2-07, MAJ-001.
+// A knownProtocols id is triaged when it is a catalog id, a catalog Aliases
+// entry, some entry's AnthropicId (FIX-5 — the id is real work, just merged
+// into its primary entry instead of shipped as its own row), or explicitly
+// listed in catalogExcluded.
+//
+// Traces to spec §7 #5, FR-003 property (b), ADR-031 §6 G-2 R2-07, MAJ-001,
+// provider-ux-fixes-plan.md FIX-6.
 func TestCatalog_DriftGuard_NewProtocolUntriagedFails(t *testing.T) {
 	ids := catalogIDs()
 	aliases := catalogAliasIDs()
+	anthropicIDs := catalogAnthropicIDs()
 
 	// Enumerate all known protocols via the reflective accessor, which iterates
 	// the real knownProtocols map in pkg/providers/factory_provider.go.
@@ -292,8 +340,9 @@ func TestCatalog_DriftGuard_NewProtocolUntriagedFails(t *testing.T) {
 	for _, id := range allKnown {
 		inCatalog := ids[id]
 		isAlias := aliases[id]
+		isAnthropicSibling := anthropicIDs[id]
 		excluded, hasExclusion := catalogExcluded[id]
-		if inCatalog || isAlias || (hasExclusion && excluded) {
+		if inCatalog || isAlias || isAnthropicSibling || (hasExclusion && excluded) {
 			continue
 		}
 		untriaged = append(untriaged, id)
@@ -301,8 +350,8 @@ func TestCatalog_DriftGuard_NewProtocolUntriagedFails(t *testing.T) {
 	assert.Empty(t, untriaged,
 		"the following knownProtocols ids are not triaged: %v\n"+
 			"For each: either add a ProviderCatalogEntry to pkg/providers/catalog/catalog.go, "+
-			"or add it to catalogExcluded in catalog_test.go with a comment explaining why "+
-			"it is excluded from the user-facing catalog", untriaged)
+			"set it as an entry's AnthropicId, or add it to catalogExcluded in catalog_test.go "+
+			"with a comment explaining why it is excluded from the user-facing catalog", untriaged)
 }
 
 // ── Test #6 ──────────────────────────────────────────────────────────────────
@@ -367,20 +416,23 @@ func TestWireDerivation_Table(t *testing.T) {
 // pkg/api/generated/contract_test.go.
 // Traces to spec §7 #8, FR-020.
 func TestContract_ProviderCatalogEntry_Shape(t *testing.T) {
-	// A fully-populated entry (all fields set, including optional region and aliases).
+	// A fully-populated entry (all fields set, including optional region,
+	// aliases, and anthropic_id — the FIX-5 dual-wire sibling field).
 	region := gen.ProviderCatalogEntryRegion("intl")
-	aliases := []string{"glm-coding"}
+	aliases := []string{"z.ai", "zai"}
+	anthropicID := "z-ai-anthropic"
 	entry := gen.ProviderCatalogEntry{
-		Id:           "z-ai-coding",
+		Id:           "z-ai",
 		Company:      "Zhipu / GLM",
-		Plan:         gen.ProviderCatalogEntryPlanCodingPlan,
+		Plan:         gen.ProviderCatalogEntryPlanStandardApi,
 		Wire:         gen.OpenaiCompatible,
 		Region:       &region,
-		EndpointHint: "api.z.ai/api/coding/paas/v4",
+		EndpointHint: "api.z.ai/api/paas/v4",
 		LogoSlug:     "zhipu",
-		Label:        "Zhipu / GLM — Coding Plan (International)",
-		Subtitle:     "Subscription (Coding Plan) · api.z.ai/api/coding/paas/v4",
+		Label:        "Zhipu / GLM (International)",
+		Subtitle:     "Pay-as-you-go, per token · api.z.ai/api/paas/v4",
 		Aliases:      &aliases,
+		AnthropicId:  &anthropicID,
 	}
 	raw, err := json.Marshal(entry)
 	require.NoError(t, err, "must marshal to JSON")
@@ -394,13 +446,15 @@ func TestContract_ProviderCatalogEntry_Shape(t *testing.T) {
 	}
 
 	// Verify plan enum value.
-	assert.Equal(t, "coding-plan", doc["plan"], "plan field must be 'coding-plan'")
+	assert.Equal(t, "standard-api", doc["plan"], "plan field must be 'standard-api'")
 	// Verify wire enum value.
 	assert.Equal(t, "openai-compatible", doc["wire"], "wire field must be 'openai-compatible'")
 	// Verify aliases are present.
 	aliasesVal, ok := doc["aliases"].([]any)
 	assert.True(t, ok, "aliases field must be an array")
-	assert.Len(t, aliasesVal, 1, "aliases must have 1 entry")
+	assert.Len(t, aliasesVal, 2, "aliases must have 2 entries")
+	// Verify anthropic_id (FIX-5) round-trips under its snake_case wire name.
+	assert.Equal(t, "z-ai-anthropic", doc["anthropic_id"], "anthropic_id field must round-trip")
 
 	// An entry without optional fields must also marshal cleanly.
 	minimalEntry := gen.ProviderCatalogEntry{
@@ -410,7 +464,7 @@ func TestContract_ProviderCatalogEntry_Shape(t *testing.T) {
 		Wire:         gen.OpenaiCompatible,
 		EndpointHint: "api.openai.com/v1",
 		LogoSlug:     "openai",
-		Label:        "OpenAI — Standard API",
+		Label:        "OpenAI",
 		Subtitle:     "Pay-as-you-go, per token · api.openai.com/v1",
 	}
 	rawMin, err := json.Marshal(minimalEntry)
@@ -421,6 +475,8 @@ func TestContract_ProviderCatalogEntry_Shape(t *testing.T) {
 	assert.False(t, hasRegion, "region must be omitted when nil (omitempty)")
 	_, hasAliases := docMin["aliases"]
 	assert.False(t, hasAliases, "aliases must be omitted when nil (omitempty)")
+	_, hasAnthropicID := docMin["anthropic_id"]
+	assert.False(t, hasAnthropicID, "anthropic_id must be omitted when nil (omitempty)")
 }
 
 // ── Test #9 ──────────────────────────────────────────────────────────────────
@@ -548,6 +604,28 @@ func findRepoRoot(t *testing.T, dir string) string {
 	}
 }
 
+// ── Test #12 ─────────────────────────────────────────────────────────────────
+
+// TestCatalog_AnthropicIdEndpointNonEmpty asserts that for every catalog entry
+// with a non-nil AnthropicId, GetDefaultAPIBase(anthropicId) returns a
+// non-empty base URL — i.e. the sibling Anthropic-compatible endpoint that
+// FIX-5's "Endpoint format" toggle would configure actually exists and is
+// routable by CreateProviderFromConfig.
+// Traces to provider-ux-fixes-plan.md FIX-5/FIX-6.
+func TestCatalog_AnthropicIdEndpointNonEmpty(t *testing.T) {
+	for _, e := range Entries {
+		if e.AnthropicId == nil {
+			continue
+		}
+		t.Run(e.Id, func(t *testing.T) {
+			base := providers.GetDefaultAPIBase(*e.AnthropicId)
+			assert.NotEmpty(t, base,
+				"entry %q: GetDefaultAPIBase(AnthropicId=%q) must not be empty — "+
+					"the sibling Anthropic-compatible endpoint must exist", e.Id, *e.AnthropicId)
+		})
+	}
+}
+
 // ── Test #13 ─────────────────────────────────────────────────────────────────
 
 // TestCatalog_EmbedMatchesGeneratedTS asserts that the embedded
@@ -600,9 +678,10 @@ func TestCatalog_EmbedMatchesGeneratedTS(t *testing.T) {
 		assert.Equal(t, embedded.LogoSlug, ts.LogoSlug, "entry[%d] logoSlug mismatch", i)
 		assert.Equal(t, embedded.Label, ts.Label, "entry[%d] label mismatch", i)
 		assert.Equal(t, embedded.Subtitle, ts.Subtitle, "entry[%d] subtitle mismatch", i)
-		// Region and Aliases are both optional but must match.
+		// Region, Aliases, and AnthropicId are all optional but must match.
 		assert.Equal(t, embedded.Region, ts.Region, "entry[%d] region mismatch", i)
 		assert.Equal(t, embedded.Aliases, ts.Aliases, "entry[%d] aliases mismatch", i)
+		assert.Equal(t, embedded.AnthropicId, ts.AnthropicId, "entry[%d] anthropic_id mismatch", i)
 	}
 }
 
@@ -664,8 +743,9 @@ func TestCatalog_UniqueIDs(t *testing.T) {
 	}
 }
 
-// TestCatalog_LabelContainsBrand asserts every label starts with the company name,
-// which is the "<Brand> — <Access Type>..." format contract.
+// TestCatalog_LabelContainsBrand asserts every label starts with the company
+// name — "<Brand>[ (Region)]" for pay-as-you-go entries, "<Brand> — Coding
+// Plan[ (Region)]" for coding-plan entries (FIX-4).
 func TestCatalog_LabelContainsBrand(t *testing.T) {
 	for _, e := range Entries {
 		t.Run(e.Id, func(t *testing.T) {
@@ -729,4 +809,240 @@ func TestCatalog_AnthropicWireEntriesHaveAnthropicSuffix(t *testing.T) {
 					"and is not in the explicit set {anthropic,anthropic-messages,bedrock}", e.Id)
 		})
 	}
+}
+
+// ── FIX-4 label-terminology invariants ────────────────────────────────────────
+// (docs/internal/specs/provider-ux-fixes-plan.md FIX-4/FIX-6)
+
+// TestCatalog_NoLabelContainsRetiredWording asserts no catalog label contains
+// the retired "Standard API" or "Anthropic-compatible" wording. FIX-4 deletes
+// "Standard API" everywhere (single-plan entries get no plan suffix at all)
+// and FIX-5 makes wire a config detail, never label text.
+func TestCatalog_NoLabelContainsRetiredWording(t *testing.T) {
+	for _, e := range Entries {
+		t.Run(e.Id, func(t *testing.T) {
+			assert.NotContains(t, e.Label, "Standard API",
+				"entry %q: label %q must not contain retired wording 'Standard API' (FIX-4)", e.Id, e.Label)
+			assert.NotContains(t, e.Label, "Anthropic-compatible",
+				"entry %q: label %q must not contain retired wording 'Anthropic-compatible' (FIX-5 — "+
+					"wire is a config detail, never label text)", e.Id, e.Label)
+		})
+	}
+}
+
+// TestCatalog_LabelContainsCodingPlanIffPlanIsCodingPlan asserts the label
+// contains "Coding Plan" if and only if plan == coding-plan (FIX-4/FIX-6).
+func TestCatalog_LabelContainsCodingPlanIffPlanIsCodingPlan(t *testing.T) {
+	for _, e := range Entries {
+		t.Run(e.Id, func(t *testing.T) {
+			hasCodingPlanText := strings.Contains(e.Label, "Coding Plan")
+			isCodingPlan := e.Plan == gen.ProviderCatalogEntryPlanCodingPlan
+			assert.Equal(t, isCodingPlan, hasCodingPlanText,
+				"entry %q: label %q contains 'Coding Plan'=%v but plan=%q (isCodingPlan=%v) — "+
+					"these must agree", e.Id, e.Label, hasCodingPlanText, e.Plan, isCodingPlan)
+		})
+	}
+}
+
+// TestCatalog_LabelsUniquePlain asserts every catalog label is globally unique
+// under plain string equality. Before FIX-5's wire merge, dual-wire siblings
+// relied on the wire descriptor ("Anthropic-compatible") to disambiguate an
+// otherwise-identical plan+region label; now that those siblings are merged
+// into AnthropicId, uniqueness holds naturally from company+plan+region alone
+// with no wire-descriptor crutch needed.
+func TestCatalog_LabelsUniquePlain(t *testing.T) {
+	seen := make(map[string]string, len(Entries)) // label -> first id that used it
+	for _, e := range Entries {
+		if prior, ok := seen[e.Label]; ok {
+			t.Errorf("duplicate label %q shared by entries %q and %q", e.Label, prior, e.Id)
+			continue
+		}
+		seen[e.Label] = e.Id
+	}
+}
+
+// ── AnthropicId hardening (LoadCatalog invariants) ────────────────────────────
+
+// TestCatalog_AnthropicIdConsistency exercises the three LoadCatalog
+// AnthropicId invariants directly against the factored-out validateEntry /
+// validateDisjointIDs helpers, so each rule is unit-testable without
+// regenerating providers_catalog.json:
+//
+//	(a) an anthropic-wire primary cannot also declare a sibling AnthropicId
+//	(b) AnthropicId must not equal the entry's own id (self-reference)
+//	(c) ids, aliases, and anthropic_id values must be mutually disjoint
+//	    across the whole catalog
+//
+// Each negative case is a deliberately-bad entry constructed in the test.
+// Traces to the "LoadCatalog additions" fix-wave item (backend hardening).
+func TestCatalog_AnthropicIdConsistency(t *testing.T) {
+	t.Run("rule_a_anthropic_wire_primary_with_sibling_is_rejected", func(t *testing.T) {
+		anthropicID := "some-anthropic"
+		bad := gen.ProviderCatalogEntry{
+			Id:          "bad-entry",
+			Wire:        gen.Anthropic, // primary itself claims the anthropic wire
+			AnthropicId: &anthropicID,
+		}
+		err := validateEntry(bad)
+		require.Error(t, err, "an anthropic-wire primary must not also declare AnthropicId")
+		assert.Contains(t, err.Error(), "bad-entry")
+	})
+
+	t.Run("rule_b_self_reference_is_rejected", func(t *testing.T) {
+		selfID := "self-ref"
+		bad := gen.ProviderCatalogEntry{
+			Id:          selfID,
+			Wire:        gen.OpenaiCompatible,
+			AnthropicId: &selfID,
+		}
+		err := validateEntry(bad)
+		require.Error(t, err, "AnthropicId must not equal the entry's own id")
+		assert.Contains(t, err.Error(), selfID)
+	})
+
+	t.Run("rule_c_id_vs_alias_collision_is_rejected", func(t *testing.T) {
+		aliases := []string{"collide"}
+		bad := []gen.ProviderCatalogEntry{
+			{Id: "collide", Wire: gen.OpenaiCompatible},
+			{Id: "other", Wire: gen.OpenaiCompatible, Aliases: &aliases},
+		}
+		err := validateDisjointIDs(bad)
+		require.Error(t, err, "an id used as another entry's alias must be rejected")
+		assert.Contains(t, err.Error(), "collide")
+	})
+
+	t.Run("rule_c_anthropic_id_vs_id_collision_is_rejected", func(t *testing.T) {
+		anthropicID := "sibling"
+		bad := []gen.ProviderCatalogEntry{
+			{Id: "sibling", Wire: gen.OpenaiCompatible},
+			{Id: "primary", Wire: gen.OpenaiCompatible, AnthropicId: &anthropicID},
+		}
+		err := validateDisjointIDs(bad)
+		require.Error(t, err, "an id used as another entry's AnthropicId must be rejected")
+		assert.Contains(t, err.Error(), "sibling")
+	})
+
+	t.Run("rule_c_duplicate_alias_across_entries_is_rejected", func(t *testing.T) {
+		aliasesA := []string{"shared-alias"}
+		aliasesB := []string{"shared-alias"}
+		bad := []gen.ProviderCatalogEntry{
+			{Id: "a", Wire: gen.OpenaiCompatible, Aliases: &aliasesA},
+			{Id: "b", Wire: gen.OpenaiCompatible, Aliases: &aliasesB},
+		}
+		err := validateDisjointIDs(bad)
+		require.Error(t, err, "two entries must not share the same alias")
+		assert.Contains(t, err.Error(), "shared-alias")
+	})
+
+	t.Run("positive_control_valid_entry_passes_rules_a_and_b", func(t *testing.T) {
+		anthropicID := "z-ai-anthropic"
+		aliases := []string{"z.ai", "zai"}
+		good := gen.ProviderCatalogEntry{
+			Id:          "z-ai",
+			Wire:        gen.OpenaiCompatible,
+			AnthropicId: &anthropicID,
+			Aliases:     &aliases,
+		}
+		assert.NoError(t, validateEntry(good),
+			"a valid openai-wire entry with a distinct AnthropicId must pass rules (a)/(b)")
+		assert.NoError(t, validateDisjointIDs([]gen.ProviderCatalogEntry{good}),
+			"a single valid entry with distinct id/aliases/anthropic_id must pass the disjointness check")
+	})
+
+	t.Run("real_catalog_passes_all_three_rules", func(t *testing.T) {
+		for _, e := range Entries {
+			assert.NoError(t, validateEntry(e), "entry %q must pass validateEntry", e.Id)
+		}
+		assert.NoError(t, validateDisjointIDs(Entries), "the real catalog must pass the global disjointness check")
+	})
+}
+
+// TestValidateCatalog_NegativeCases feeds deliberately-corrupted
+// []gen.ProviderCatalogEntry slices through validateCatalog — the exact
+// validation path LoadCatalog runs against the unmarshaled embedded JSON —
+// and asserts each specific error fires. Using validateCatalog directly
+// (rather than corrupting providers_catalog.json on disk) means these tests
+// don't need to fake the go:embed FS.
+//
+// Covers: FR-005 wire mismatch, AnthropicId wire mismatch, AnthropicId not a
+// known protocol, rule (a) anthropic-wire owner with a sibling, rule (b)
+// self-reference, rule (c) duplicate ids — plus a positive control.
+func TestValidateCatalog_NegativeCases(t *testing.T) {
+	t.Run("wire_mismatch_fails", func(t *testing.T) {
+		// "openai" derives to openai-compatible; claiming Anthropic is a lie.
+		bad := []gen.ProviderCatalogEntry{
+			{Id: "openai", Wire: gen.Anthropic},
+		}
+		err := validateCatalog(bad)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "does not match DeriveWire")
+	})
+
+	t.Run("anthropic_id_wire_mismatch_fails", func(t *testing.T) {
+		// AnthropicId "openai" derives to openai-compatible, not anthropic.
+		anthropicID := "openai"
+		bad := []gen.ProviderCatalogEntry{
+			{Id: "z-ai", Wire: gen.OpenaiCompatible, AnthropicId: &anthropicID},
+		}
+		err := validateCatalog(bad)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "must derive to the anthropic wire")
+	})
+
+	t.Run("anthropic_id_unknown_protocol_fails", func(t *testing.T) {
+		// Ends in "-anthropic" so DeriveWire says anthropic, but it is not in
+		// knownProtocols — an unroutable sibling.
+		anthropicID := "totally-fake-anthropic"
+		bad := []gen.ProviderCatalogEntry{
+			{Id: "z-ai", Wire: gen.OpenaiCompatible, AnthropicId: &anthropicID},
+		}
+		err := validateCatalog(bad)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "is not a known protocol")
+	})
+
+	t.Run("rule_a_anthropic_wire_owner_with_sibling_fails", func(t *testing.T) {
+		anthropicID := "z-ai-anthropic"
+		bad := []gen.ProviderCatalogEntry{
+			{Id: "anthropic", Wire: gen.Anthropic, AnthropicId: &anthropicID},
+		}
+		err := validateCatalog(bad)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "must be")
+		assert.Contains(t, err.Error(), "openai-compatible")
+	})
+
+	t.Run("rule_b_self_reference_fails", func(t *testing.T) {
+		selfID := "z-ai"
+		bad := []gen.ProviderCatalogEntry{
+			{Id: selfID, Wire: gen.OpenaiCompatible, AnthropicId: &selfID},
+		}
+		err := validateCatalog(bad)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "self-reference")
+	})
+
+	t.Run("rule_c_duplicate_ids_fail", func(t *testing.T) {
+		bad := []gen.ProviderCatalogEntry{
+			{Id: "openai", Wire: gen.OpenaiCompatible},
+			{Id: "openai", Wire: gen.OpenaiCompatible},
+		}
+		err := validateCatalog(bad)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "claimed twice")
+	})
+
+	t.Run("positive_control_valid_slice_passes", func(t *testing.T) {
+		anthropicID := "z-ai-anthropic"
+		aliases := []string{"z.ai", "zai"}
+		good := []gen.ProviderCatalogEntry{
+			{Id: "openai", Wire: gen.OpenaiCompatible},
+			{Id: "z-ai", Wire: gen.OpenaiCompatible, AnthropicId: &anthropicID, Aliases: &aliases},
+		}
+		assert.NoError(t, validateCatalog(good), "a clean, mutually-disjoint slice must pass validateCatalog")
+	})
+
+	t.Run("real_catalog_passes_validateCatalog", func(t *testing.T) {
+		assert.NoError(t, validateCatalog(Entries), "the real catalog.Entries must pass validateCatalog")
+	})
 }

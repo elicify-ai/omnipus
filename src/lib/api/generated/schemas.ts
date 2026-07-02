@@ -2368,6 +2368,7 @@ export const ProviderCatalogEntry = z.object({
   label: z.string().min(1),
   subtitle: z.string().min(1),
   aliases: z.array(z.string()).optional(),
+  anthropic_id: z.string().min(1).optional(),
 });
 export const BackupEntry = z.object({
   filename: z.string(),

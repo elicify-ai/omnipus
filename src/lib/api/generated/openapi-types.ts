@@ -4900,7 +4900,7 @@ export interface components {
              */
             summary?: string;
         };
-        /** @description A single entry in the provider catalog — the curated, build-time-embedded registry of ~30 user-facing LLM provider variants. Each entry represents one billable endpoint (company × plan × region), not a raw protocol id. Delivered as a build-time go:embed artifact + a generated TypeScript catalog; never served from a live HTTP endpoint (FR-016, ADR-031 §6 G-2). The type is contract-defined (Constraint #8) so the same generated struct is used in the Go catalog SoT and the generated TS consumer. No secret fields. */
+        /** @description A single entry in the provider catalog — the curated, build-time-embedded registry of 23 user-facing LLM provider variants. Each entry represents one billable endpoint (company × plan × region), not a raw protocol id. Delivered as a build-time go:embed artifact + a generated TypeScript catalog; never served from a live HTTP endpoint (FR-016, ADR-031 §6 G-2). The type is contract-defined (Constraint #8) so the same generated struct is used in the Go catalog SoT and the generated TS consumer. No secret fields. */
         ProviderCatalogEntry: {
             /**
              * @description Canonical protocol identifier — matches a knownProtocols entry and a member of the ProbeProviderRequest id enum. Used as the primary key for probe, configure, and drift-guard lookups.
@@ -4925,7 +4925,7 @@ export interface components {
              */
             region?: "intl" | "china" | "us";
             /**
-             * @description Wire protocol used to call this endpoint. Derived, not authored: "anthropic" when id matches /-anthropic$/ or id ∈ {anthropic, anthropic-messages, bedrock}; otherwise "openai-compatible" (ADR-031 FR-005). Shown as a badge in the UI — not a plan option.
+             * @description Wire protocol used to call this endpoint. Derived, not authored: "anthropic" when id matches /-anthropic$/ or id ∈ {anthropic, anthropic-messages, bedrock}; otherwise "openai-compatible" (ADR-031 FR-005). Internal config detail — surfaced only via the Endpoint-format toggle for dual-wire entries in Settings; never a UI badge or plan option.
              * @example openai-compatible
              * @enum {string}
              */
@@ -4941,7 +4941,7 @@ export interface components {
              */
             logoSlug: string;
             /**
-             * @description Full human-readable label for this variant in the form "<Brand> — <Access Type> [(Region)]". Carried on the wire so onboarding and Settings render identical text from one catalog source (ADR-031 FR-007, G-3=C safety guarantee). Example: "Zhipu / GLM — Coding Plan (International)".
+             * @description Full human-readable label for this variant. Standard-api entries use "<Brand> [(Region)]" (no access-type suffix); coding-plan entries use "<Brand> — Coding Plan [(Region)]". Carried on the wire so onboarding and Settings render identical text from one catalog source (ADR-031 FR-007, G-3=C safety guarantee). Example: "Zhipu / GLM — Coding Plan (International)".
              * @example Zhipu / GLM — Coding Plan (International)
              */
             label: string;
@@ -4958,6 +4958,11 @@ export interface components {
              *     ]
              */
             aliases?: string[];
+            /**
+             * @description Sibling protocol id exposing the Anthropic-compatible endpoint for the same account/API key (e.g. z-ai → z-ai-anthropic). Present only for dual-wire providers; the UI offers it as an endpoint-format choice inside config, never as a separate provider row.
+             * @example z-ai-anthropic
+             */
+            anthropic_id?: string;
         };
         /** @description Metadata for a single successfully uploaded file, as returned in the POST /upload response body's "files" array. Callers use the path field to construct the /api/v1/uploads/{session_id}/{filename} download URL. */
         UploadedFile: {
