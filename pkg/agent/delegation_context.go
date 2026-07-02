@@ -54,11 +54,12 @@ type delegationTarget struct {
 func buildDelegationContext(targets []delegationTarget, globalDepthCap int) string {
 	// No targets → cannot delegate.
 	if len(targets) == 0 {
-		return "## Delegation\nYou cannot delegate to other agents — complete the task yourself."
+		return "## Delegation\nYou cannot delegate to other agents in this workspace — complete the task yourself. Do not call list_agents or search memory to look for delegation targets; there are none configured for you here."
 	}
 
 	var sb strings.Builder
 	sb.WriteString("## Delegation")
+	sb.WriteString("\n\nThis is your COMPLETE, authoritative delegation roster for THIS workspace. Answer any \"who can I delegate to\" question directly from this list — do NOT call list_agents or search memory to determine your delegation targets.")
 
 	// renderedCount tracks how many target sections were actually emitted.
 	// If every target has an empty label (unresolvable), fall through to the
@@ -119,8 +120,15 @@ func buildDelegationContext(targets []delegationTarget, globalDepthCap int) stri
 
 	// All-targets-skipped guard.
 	if renderedCount == 0 {
-		return "## Delegation\nYou cannot delegate to other agents — complete the task yourself."
+		return "## Delegation\nYou cannot delegate to other agents in this workspace — complete the task yourself. Do not call list_agents or search memory to look for delegation targets; there are none configured for you here."
 	}
+
+	// Exclusivity footer: makes clear that attempting to delegate to any agent
+	// not listed above will be denied — all three delegation tools are gated by
+	// the same workspace trust set. This directly addresses the observed
+	// misbehaviour where an agent called list_agents and then attempted to
+	// delegate to unlisted agents via create_task.
+	sb.WriteString("\n\nThese are your ONLY permitted delegation targets. spawn / create_task / run_subagent to any other agent WILL be denied — do not attempt it.")
 
 	// Footer: global depth ceiling.
 	if globalDepthCap <= 0 {
