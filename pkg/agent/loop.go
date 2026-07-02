@@ -110,9 +110,9 @@ type AgentLoop struct {
 
 	// driftDropped counts bound-instance drift drops: inbound messages on a
 	// workspace-bound channel instance whose configured agent is unresolvable
-	// (deleted, disabled, or a worker). Each drop increments this counter
-	// (ADR-029 FR-028 / MAJ-003). Observable via GetDriftDropped for tests and
-	// diagnostics.
+	// (deleted or a worker — not a chat target). Each drop increments this
+	// counter exactly once at the processMessage rejection point (ADR-029
+	// FR-028 / MAJ-003). Observable via GetDriftDropped for tests and diagnostics.
 	driftDropped atomic.Int64
 
 	reloadFunc    func() error
@@ -4315,6 +4315,40 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 
 	route, agent, routeErr := al.resolveMessageRoute(msg)
 	if routeErr != nil {
+		// ADR-029 FR-028/MAJ-003: emit the drift-drop counter and audit event
+		// exactly once — here, at the single point where the message is actually
+		// rejected.  resolveMessageRoute returns route.Drop=true only for
+		// workspace-bound instances whose configured agent is unresolvable
+		// (deleted or a worker).  resolveMessageRoute itself is side-effect-free
+		// w.r.t. this counter so that its multiple callers (resolveSteeringTarget,
+		// buildContinuationTarget) do not double-count the same drop.
+		if route.Drop {
+			instanceID := inboundInstanceID(msg)
+			wsID := ""
+			intendedAgent := ""
+			if identity := al.resolveInboundIdentity(instanceID); identity != nil {
+				intendedAgent = strings.TrimSpace(identity.ID)
+			}
+			if cfg := al.GetConfig(); cfg != nil {
+				if inst, ok := cfg.Channels[instanceID]; ok {
+					wsID = inst.WorkspaceID
+				}
+			}
+			al.driftDropped.Add(1)
+			if al.auditLogger != nil {
+				_ = al.auditLogger.Log(&audit.Entry{
+					Event:    audit.EventChannelRoutingDriftDrop,
+					Decision: audit.DecisionDeny,
+					Details: map[string]any{
+						"instance_id":       instanceID,
+						"workspace_id":      wsID,
+						"intended_agent_id": intendedAgent,
+						"chat_id":           msg.ChatID,
+						"reason":            "bound agent unresolvable (deleted or worker — not a chat target)",
+					},
+				})
+			}
+		}
 		return "", nil, routeErr
 	}
 
@@ -4638,43 +4672,26 @@ func (al *AgentLoop) resolveMessageRoute(msg bus.InboundMessage) (routing.Resolv
 
 	// ADR-029 FR-012/FR-028: a drift drop means the bound agent is unresolvable.
 	// Do NOT call GetDefaultAgent — enter the FR-015 unroutable path directly.
-	// Emit a structured audit event and increment the drift counter (MAJ-003).
+	// The counter increment and audit event are emitted ONCE at the processMessage
+	// rejection point (the single true drop site), NOT here.  resolveMessageRoute
+	// is a side-effect-free resolver: multiple call sites (resolveSteeringTarget,
+	// buildContinuationTarget) invoke it on the same message, so any emission here
+	// would fire multiple times per inbound message and corrupt the FR-028/MAJ-003
+	// counter and audit trail.  Return the route with Drop=true so the caller can
+	// detect the drift condition and emit the structured event exactly once.
 	if route.Drop {
-		cfg := al.GetConfig()
-		wsID := ""
 		intendedAgent := ""
 		if identity != nil {
 			intendedAgent = strings.TrimSpace(identity.ID)
 		}
-		if cfg != nil {
-			if inst, ok := cfg.Channels[instanceID]; ok {
-				wsID = inst.WorkspaceID
-			}
-		}
-		al.driftDropped.Add(1)
-		if al.auditLogger != nil {
-			_ = al.auditLogger.Log(&audit.Entry{
-				Event:    audit.EventChannelRoutingDriftDrop,
-				Decision: audit.DecisionDeny,
-				Details: map[string]any{
-					"instance_id":       instanceID,
-					"workspace_id":      wsID,
-					"intended_agent_id": intendedAgent,
-					"chat_id":           msg.ChatID,
-					"reason":            "bound agent unresolvable (deleted, disabled, or worker)",
-				},
-			})
-		}
 		logger.WarnCF("agent", "Bound-instance drift drop: configured agent unresolvable; message rejected (ADR-029 FR-012)",
 			map[string]any{
-				"instance_id":       instanceID,
-				"workspace_id":      wsID,
-				"intended_agent_id": intendedAgent,
-				"channel":           msg.Channel,
-				"chat_id":           msg.ChatID,
-				"matched_by":        route.MatchedBy,
+				"instance_id": instanceID,
+				"channel":     msg.Channel,
+				"chat_id":     msg.ChatID,
+				"matched_by":  route.MatchedBy,
 			})
-		return routing.ResolvedRoute{}, nil, fmt.Errorf("no agent available for route (agent_id=%s)", intendedAgent)
+		return route, nil, fmt.Errorf("no agent available for route (agent_id=%s)", intendedAgent)
 	}
 
 	agent, ok := registry.GetAgent(route.AgentID)
@@ -8593,19 +8610,22 @@ func inboundMetadata(msg bus.InboundMessage, key string) string {
 }
 
 // inboundInstanceID returns the channel-instance key a message arrived on
-// (Spec-2 FR-2.5). Channels MAY tag the instance explicitly via the
-// InboundMessage.InstanceID field (ADR-019 FR-4b) or, during the transition
-// off the metadata-smuggling pattern, the legacy "instance_id" metadata key;
-// in v0.1 (cap-1/type) the instance key equals the channel type, so an
-// untagged message falls back to msg.Channel. The result is lower-cased to
-// match the config map keys (which are channel-type names).
+// (Spec-2 FR-2.5, ADR-029 FR-023/MAJ-002).
+//
+// Source priority:
+//  1. msg.InstanceID — always stamped by the trusted BaseChannel adapter.
+//  2. msg.Channel    — legacy fallback for single-instance adapters that have
+//     not yet been updated to stamp InstanceID.
+//
+// The metadata["instance_id"] fallback that existed here has been removed
+// (S-4 / security review 2026-07-02): msg.InstanceID is now the authoritative
+// source stamped by the trusted adapter, and the Metadata map is
+// content-adjacent (caller-controlled), making it a spoofing footgun.
+// No adapter writes metadata["instance_id"] (confirmed by grep of pkg/channels/).
+//
+// The result is lower-cased to match the config map keys.
 func inboundInstanceID(msg bus.InboundMessage) string {
 	if id := strings.TrimSpace(msg.InstanceID); id != "" {
-		return strings.ToLower(id)
-	}
-	// Backward-compat fallback: channels still using the legacy metadata key
-	// during the FR-4b transition continue to work.
-	if id := strings.TrimSpace(inboundMetadata(msg, metadataKeyInstanceID)); id != "" {
 		return strings.ToLower(id)
 	}
 	return strings.ToLower(strings.TrimSpace(msg.Channel))

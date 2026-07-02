@@ -355,7 +355,11 @@ export function ChannelConfigPanel({
   })
 
   // selected workspace detail — needed for core_team membership
-  const { data: selectedWorkspace } = useQuery({
+  const {
+    data: selectedWorkspace,
+    isError: workspaceLoadError,
+    isLoading: workspaceDetailLoading,
+  } = useQuery({
     queryKey: ['workspaces', selectedWorkspaceId],
     queryFn: () => fetchWorkspace(selectedWorkspaceId),
     enabled: open && !isWebchat && selectedWorkspaceId !== '',
@@ -367,7 +371,8 @@ export function ChannelConfigPanel({
   const filteredAgents = (() => {
     const nonWorkers = agents.filter((a) => !isWorker(a))
     if (!selectedWorkspaceId) return nonWorkers
-    if (!coreTeam) return [] // workspace loading
+    if (workspaceDetailLoading || workspaceLoadError) return [] // workspace loading or errored
+    if (!coreTeam) return [] // workspace loaded but core_team absent
     return nonWorkers.filter((a) => coreTeam.includes(a.id))
   })()
 
@@ -739,10 +744,20 @@ export function ChannelConfigPanel({
                           value={selectedWorkspaceId || '__none__'}
                           onValueChange={(v) => {
                             const next = v === '__none__' ? '' : v
+                            const wasbound = selectedWorkspaceId !== ''
                             setSelectedWorkspaceId(next)
                             // Changing workspace clears the agent selection (member set changed)
                             setSelectedAgentId('__none__')
-                            // Do not persist: workspace + agent required together (FR-001)
+                            if (next === '') {
+                              // Unbind: user selected "No workspace" on a previously-bound
+                              // channel — persist immediately with no workspace_id or
+                              // default_agent_id so the backend clears the binding (FR-001).
+                              if (wasbound) {
+                                doSaveRoutingDebounced(undefined, undefined)
+                              }
+                              // If already unbound, nothing changed — no PUT needed.
+                            }
+                            // Bound flow: do not persist until agent is also chosen (FR-001).
                           }}
                           placeholder="No workspace (global default routing)"
                           items={[
@@ -764,6 +779,24 @@ export function ChannelConfigPanel({
                       {agentsError ? (
                         <p className="text-xs text-[var(--color-error)]">
                           Couldn&apos;t load agent list.
+                        </p>
+                      ) : isBoundFlow && workspaceLoadError ? (
+                        // Workspace detail fetch failed — show a distinct, actionable error.
+                        // Distinct from the loading/empty-core_team states (Finding #1).
+                        <p
+                          data-testid="routing-workspace-load-error"
+                          className="text-xs text-[var(--color-error)]"
+                        >
+                          Couldn&apos;t load workspace members — try again.{' '}
+                          <button
+                            type="button"
+                            className="underline hover:no-underline"
+                            onClick={() =>
+                              queryClient.invalidateQueries({ queryKey: ['workspaces', selectedWorkspaceId] })
+                            }
+                          >
+                            Retry
+                          </button>
                         </p>
                       ) : isBoundFlow && coreTeam !== null && coreTeam.length === 0 ? (
                         // FR-009: empty core_team — can't select anything
@@ -807,8 +840,9 @@ export function ChannelConfigPanel({
                         </div>
                       )}
 
-                      {/* FR-004 / US-3 AC-1: hint when workspace chosen but no agent selected */}
-                      {isBoundFlow && (selectedAgentId === '__none__' || selectedAgentId === '') && !(coreTeam !== null && coreTeam.length === 0) && (
+                      {/* FR-004 / US-3 AC-1: hint when workspace chosen but no agent selected.
+                          Not shown during a workspace load error (separate error state handles that). */}
+                      {isBoundFlow && !workspaceLoadError && (selectedAgentId === '__none__' || selectedAgentId === '') && !(coreTeam !== null && coreTeam.length === 0) && (
                         <p
                           data-testid="routing-agent-required-hint"
                           className="text-xs text-[var(--color-error)]"

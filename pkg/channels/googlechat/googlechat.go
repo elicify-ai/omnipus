@@ -131,9 +131,6 @@ func NewGoogleChatChannel(
 	return ch, nil
 }
 
-// Name returns "google-chat".
-func (c *GoogleChatChannel) Name() string { return "google-chat" }
-
 // Start initializes the channel.
 func (c *GoogleChatChannel) Start(ctx context.Context) error {
 	c.ctx, c.cancel = context.WithCancel(ctx)

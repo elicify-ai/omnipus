@@ -412,9 +412,15 @@ func TestTypedEnums_IsValidEventName(t *testing.T) {
 		{"project.create valid (back-compat)", audit.EventName("project.create"), true},
 		{"project.update valid (back-compat)", audit.EventName("project.update"), true},
 		{"project.delete valid (back-compat)", audit.EventName("project.delete"), true},
+		// Channel workspace-binding events (ADR-029). Both must be in the
+		// allowlist or every drift-drop / routing-update trips the unknown-event
+		// warn-once and pollutes the operator log.
+		{"channel.routing.drift_drop valid", audit.EventChannelRoutingDriftDrop, true},
+		{"channel.routing.changed valid", audit.EventChannelRoutingChanged, true},
 		{"empty rejected", "", false},
 		{"typo rejected", "tool_calll", false},
 		{"workspace typo rejected", audit.EventName("workspace.craete"), false},
+		{"channel.routing typo rejected", audit.EventName("channel.routing.drift_dropp"), false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

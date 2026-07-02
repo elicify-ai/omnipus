@@ -135,6 +135,13 @@ const (
 	// default (ADR-029 FR-012, FR-028). Fields emitted by the caller:
 	// {instance_id, workspace_id, intended_agent_id, chat_id, reason}.
 	EventChannelRoutingDriftDrop = "channel.routing.drift_drop"
+
+	// EventChannelRoutingChanged — INFO. An operator updated the workspace
+	// binding or routing configuration of a channel instance via the REST API
+	// (ADR-029 FR-029). Emitted by pkg/gateway/rest.go's channel routing PUT
+	// handler. Fields: {instance_id, workspace_id, agent_id, prev_workspace_id,
+	// prev_agent_id}.
+	EventChannelRoutingChanged = "channel.routing.changed"
 )
 
 // ---------------------------------------------------------------------------

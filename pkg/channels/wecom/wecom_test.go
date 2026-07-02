@@ -585,6 +585,19 @@ func TestSendMedia_SendsActiveFile(t *testing.T) {
 	}
 }
 
+func TestWeComChannel_NameReflectsInstanceID(t *testing.T) {
+	ch := newTestWeComChannel(t, bus.NewMessageBus())
+	if ch.Name() != "wecom" {
+		t.Errorf("Name() before SetInstanceID = %q, want %q", ch.Name(), "wecom")
+	}
+	// After SetInstanceID, Name() must return the instance key so that
+	// InboundMessage.Channel == manager map key == ch.Name().
+	ch.SetInstanceID("wecom.eu")
+	if ch.Name() != "wecom.eu" {
+		t.Errorf("Name() after SetInstanceID = %q, want %q", ch.Name(), "wecom.eu")
+	}
+}
+
 func newTestWeComChannel(t *testing.T, messageBus *bus.MessageBus) *WeComChannel {
 	t.Helper()
 

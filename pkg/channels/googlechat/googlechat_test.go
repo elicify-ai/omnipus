@@ -96,6 +96,12 @@ func TestNewGoogleChatChannel_WebhookMode(t *testing.T) {
 	if ch.Name() != "google-chat" {
 		t.Errorf("Name() = %q, want %q", ch.Name(), "google-chat")
 	}
+	// After SetInstanceID, Name() must reflect the instance key, not the
+	// hardcoded literal — this is the invariant: ch.Name() == manager map key.
+	ch.SetInstanceID("google-chat.eu")
+	if ch.Name() != "google-chat.eu" {
+		t.Errorf("Name() after SetInstanceID = %q, want %q", ch.Name(), "google-chat.eu")
+	}
 	if ch.mode != "webhook" {
 		t.Errorf("mode = %q, want %q", ch.mode, "webhook")
 	}

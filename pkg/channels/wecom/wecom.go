@@ -148,8 +148,6 @@ func NewChannel(
 	return ch, nil
 }
 
-func (c *WeComChannel) Name() string { return "wecom" }
-
 func (c *WeComChannel) Start(ctx context.Context) error {
 	logger.InfoC("wecom", "Starting WeCom channel...")
 	c.ctx, c.cancel = context.WithCancel(ctx)
