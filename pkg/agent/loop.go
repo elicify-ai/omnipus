@@ -1421,15 +1421,27 @@ func registerSharedTools(
 			return al.GetRegistry()
 		}
 		onHandoffFrontend := func(evt tools.HandoffEvent) {
-			// Override is keyed by session_id so each session carries its own
-			// handoff state. Switching to another session never inherits this.
-			if evt.SessionID == "" {
-				return
+			// The next turn resolves the active agent via sessionScopeKey(msg):
+			//   webchat inbound carries a SessionID          → "session:"+SessionID
+			//   channel inbound (whatsapp/telegram/…) has NO → "chat:"+channel+":"+chatID
+			// Store the override under the SAME key(s) the inbound path will read.
+			// The session-scoped key backs GetSessionActiveAgent + the in-turn
+			// active-agent resolver; the chat-scoped key is what channel inbound
+			// messages actually look up — without it a channel handoff is silently
+			// dropped and routing falls back to ResolveRoute (the "agent stays" bug).
+			var keys []string
+			if evt.SessionID != "" {
+				keys = append(keys, "session:"+evt.SessionID)
 			}
-			if evt.AgentID == "" {
-				al.sessionActiveAgent.Delete("session:" + evt.SessionID)
-			} else {
-				al.sessionActiveAgent.Store("session:"+evt.SessionID, evt.AgentID)
+			if evt.Channel != "" && evt.Channel != "webchat" && evt.ChatID != "" {
+				keys = append(keys, "chat:"+evt.Channel+":"+evt.ChatID)
+			}
+			for _, k := range keys {
+				if evt.AgentID == "" {
+					al.sessionActiveAgent.Delete(k)
+				} else {
+					al.sessionActiveAgent.Store(k, evt.AgentID)
+				}
 			}
 		}
 		getContextWindow := func(targetAgentID string) int {
