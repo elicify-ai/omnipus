@@ -11,8 +11,10 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
+import { DatePicker } from '@/components/ui/date-picker'
 import { createMilestone, milestonesQueryKeys, isApiError } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
+import { parseLocalDate, formatLocalDate } from '@/lib/calendar/eventMapping'
 
 interface CreateMilestoneSlideOverProps {
   open: boolean
@@ -112,12 +114,10 @@ export function CreateMilestoneSlideOver({
             <Label htmlFor="cm-due" className="text-[var(--color-secondary)]">
               Due date
             </Label>
-            <Input
+            <DatePicker
               id="cm-due"
-              type="date"
-              value={form.due_date}
-              onChange={(e) => setForm((s) => ({ ...s, due_date: e.target.value }))}
-              className="bg-[var(--color-surface-2)] border-[var(--color-border)] text-[var(--color-secondary)]"
+              value={parseLocalDate(form.due_date)}
+              onChange={(d) => setForm((s) => ({ ...s, due_date: d ? formatLocalDate(d) : '' }))}
             />
           </div>
 

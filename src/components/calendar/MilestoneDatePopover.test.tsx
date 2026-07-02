@@ -9,14 +9,46 @@
  * Strategy: mount MilestoneDatePopover wrapped in QueryClientProvider + mock
  * updateMilestone / addToast. Fire submit/cancel interactions with RTL and assert
  * on API calls, toast variant, and dialog open/closed state.
+ *
+ * The date field is a shadcn DatePicker (Popover + Calendar), not a native
+ * `<input type="date">` (ADR-030 §10) — days are picked via react-day-picker's
+ * `data-day="YYYY-MM-DD"` day-cell attribute rather than by typing into an input.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, waitFor, act } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
+import { render, screen, waitFor, act, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MilestoneDatePopover } from './MilestoneDatePopover'
 import type { MilestoneTarget } from './types'
+
+// Click a react-day-picker day cell (data-day="YYYY-MM-DD") inside the open DatePicker popover.
+function clickDay(isoDate: string) {
+  const btn = document.querySelector(`[data-day="${isoDate}"] button`)
+  if (!btn) throw new Error(`no day button for ${isoDate}`)
+  fireEvent.click(btn)
+}
+
+// The DatePicker trigger — queried by its DOM id (DatePicker forwards `id` to the
+// trigger <Button>, same identifier the old native input used).
+function dateTrigger(): HTMLElement {
+  const el = document.getElementById('milestone-date-input')
+  if (!el) throw new Error('date trigger not found')
+  return el
+}
+
+// When no value is set, the calendar opens on the real "today" month (react-day-picker's
+// own default), not the target month — navigate forward/back via the Nav buttons so the
+// target day is on-screen regardless of when the suite happens to run.
+function navigateToMonth(isoDate: string) {
+  const [y, m] = isoDate.split('-').map(Number)
+  const target = new Date(y, m - 1, 1)
+  const now = new Date()
+  const diff = (target.getFullYear() - now.getFullYear()) * 12 + (target.getMonth() - now.getMonth())
+  const label = diff >= 0 ? /go to the next month/i : /go to the previous month/i
+  for (let i = 0; i < Math.abs(diff); i++) {
+    fireEvent.click(screen.getByRole('button', { name: label }))
+  }
+}
 
 // ── 1. Mock @/lib/api ─────────────────────────────────────────────────────────
 
@@ -106,22 +138,20 @@ describe('MilestoneDatePopover — prefill (spec §9 #18 / FR-009 / C-5)', () =>
     // Traces to: workspace-calendar-fullcalendar-spec.md §9 #18 / US-5/AS-2 / C-5
     // BDD: Given the dialog opens with milestone.due_date = "2026-06-25",
     // When the dialog renders,
-    // Then the date input value is "2026-06-25".
+    // Then the DatePicker trigger shows "Jun 25, 2026".
 
     renderPopover({ milestone: makeMilestone({ due_date: '2026-06-25' }) })
 
-    const input = screen.getByTestId('milestone-date-input') as HTMLInputElement
-    expect(input.value).toBe('2026-06-25')
+    expect(dateTrigger()).toHaveTextContent('Jun 25, 2026')
   })
 
   it('prefills empty string when milestone.due_date is null', async () => {
     // Traces to: workspace-calendar-fullcalendar-spec.md §9 #18 / C-5
-    // BDD: Given milestone.due_date is null, the input starts empty.
+    // BDD: Given milestone.due_date is null, the DatePicker starts empty (placeholder shown).
 
     renderPopover({ milestone: makeMilestone({ due_date: null }) })
 
-    const input = screen.getByTestId('milestone-date-input') as HTMLInputElement
-    expect(input.value).toBe('')
+    expect(dateTrigger()).toHaveTextContent('Pick a date')
   })
 
   it('differentiation: two different milestone.due_dates prefill two different values', async () => {
@@ -132,16 +162,14 @@ describe('MilestoneDatePopover — prefill (spec §9 #18 / FR-009 / C-5)', () =>
     const { unmount: unmount1 } = renderPopover({
       milestone: makeMilestone({ id: 'ms-A', due_date: '2026-06-01' }),
     })
-    const input1 = screen.getByTestId('milestone-date-input') as HTMLInputElement
-    expect(input1.value).toBe('2026-06-01')
+    expect(dateTrigger()).toHaveTextContent('Jun 1, 2026')
     unmount1()
 
     // Second render: ms-B with due_date "2026-07-15"
     renderPopover({
       milestone: makeMilestone({ id: 'ms-B', due_date: '2026-07-15' }),
     })
-    const input2 = screen.getByTestId('milestone-date-input') as HTMLInputElement
-    expect(input2.value).toBe('2026-07-15')
+    expect(dateTrigger()).toHaveTextContent('Jul 15, 2026')
   })
 })
 
@@ -159,7 +187,8 @@ describe('MilestoneDatePopover — empty date disables Save (spec §9 #18)', () 
   it('Save button is disabled after clearing a non-null due_date (clear-to-null path is unreachable via UI)', async () => {
     // Traces to: workspace-calendar-fullcalendar-spec.md §9 #18 / FR-009 / C-5
     // BDD: Given the dialog opens with a non-null due_date ("2026-06-25"),
-    // When the user clears the input to empty,
+    // When the user clears the date by clicking the already-selected day again
+    // (react-day-picker single-select deselects on a repeat click),
     // Then the Save button is DISABLED — confirming the clear-to-null path is
     // intentionally unreachable via normal UI interaction (Save is gated on !dateValue).
     //
@@ -170,12 +199,12 @@ describe('MilestoneDatePopover — empty date disables Save (spec §9 #18)', () 
 
     renderPopover({ milestone: makeMilestone({ due_date: '2026-06-25' }) })
 
-    const input = screen.getByTestId('milestone-date-input') as HTMLInputElement
     // Prefilled with "2026-06-25" — Save is enabled
     expect(screen.getByTestId('milestone-date-save')).not.toBeDisabled()
 
-    // Clear the input — simulates the user selecting all and deleting
-    await userEvent.clear(input)
+    // Clear the date — open the picker and click the already-selected day to deselect it.
+    fireEvent.click(dateTrigger())
+    clickDay('2026-06-25')
 
     // After clearing, dateValue is '' → Save must be disabled (button disabled={!dateValue})
     expect(screen.getByTestId('milestone-date-save')).toBeDisabled()
@@ -188,8 +217,9 @@ describe('MilestoneDatePopover — empty date disables Save (spec §9 #18)', () 
 
     renderPopover({ milestone: makeMilestone({ due_date: null }) })
 
-    const input = screen.getByTestId('milestone-date-input')
-    await userEvent.type(input, '2026-08-01')
+    fireEvent.click(dateTrigger())
+    navigateToMonth('2026-08-01')
+    clickDay('2026-08-01')
 
     const saveBtn = screen.getByTestId('milestone-date-save')
     expect(saveBtn).not.toBeDisabled()
@@ -217,10 +247,10 @@ describe('MilestoneDatePopover — Save success (spec §9 #18 / FR-010 / I-5)', 
       onRescheduled,
     })
 
-    // Change the date value to something new
-    const input = screen.getByTestId('milestone-date-input') as HTMLInputElement
-    await userEvent.clear(input)
-    await userEvent.type(input, '2026-06-28')
+    // Change the date value to something new — same month as the prefill (June 2026),
+    // so no calendar navigation is needed.
+    fireEvent.click(dateTrigger())
+    clickDay('2026-06-28')
 
     await act(async () => {
       screen.getByTestId('milestone-date-save').click()
@@ -260,9 +290,8 @@ describe('MilestoneDatePopover — Save success (spec §9 #18 / FR-010 / I-5)', 
       onClose: onClose1,
     })
 
-    const input1 = screen.getByTestId('milestone-date-input') as HTMLInputElement
-    await userEvent.clear(input1)
-    await userEvent.type(input1, '2026-06-10')
+    fireEvent.click(dateTrigger())
+    clickDay('2026-06-10')
     await act(async () => {
       screen.getByTestId('milestone-date-save').click()
     })
@@ -281,9 +310,8 @@ describe('MilestoneDatePopover — Save success (spec §9 #18 / FR-010 / I-5)', 
       onClose: onClose2,
     })
 
-    const input2 = screen.getByTestId('milestone-date-input') as HTMLInputElement
-    await userEvent.clear(input2)
-    await userEvent.type(input2, '2026-07-20')
+    fireEvent.click(dateTrigger())
+    clickDay('2026-07-20')
     await act(async () => {
       screen.getByTestId('milestone-date-save').click()
     })
@@ -342,7 +370,7 @@ describe('MilestoneDatePopover — closed when milestone is null', () => {
 
     renderPopover({ milestone: null })
 
-    // The dialog should be closed — no date input visible
-    expect(screen.queryByTestId('milestone-date-input')).not.toBeInTheDocument()
+    // The dialog should be closed — no DatePicker trigger visible
+    expect(document.getElementById('milestone-date-input')).not.toBeInTheDocument()
   })
 })

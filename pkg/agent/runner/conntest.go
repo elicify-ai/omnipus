@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/dapicom-ai/omnipus/pkg/providers"
+	"github.com/dapicom-ai/omnipus/pkg/sandbox"
 )
 
 // versionProbeTimeout bounds the `--version` handshake. A CLI that can't print
@@ -214,10 +215,24 @@ func probeVersion(ctx context.Context, binPath string, args []string) (string, e
 	cctx, cancel := context.WithTimeout(ctx, versionProbeTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(cctx, binPath, args...)
-	// The version probe inherits the gateway env (default exec.Cmd behavior):
-	// `--version` needs only PATH/HOME, makes no network call, and the binary is
-	// the operator-installed trusted CLI — this is a presence/handshake check,
-	// not a confined run, so no scrub is required here.
+	// SECURITY (env scrub — CRIT fix): this probe spawns a CALLER-SUPPLIED path
+	// (the cli-validate create-parity endpoint reaches here), so it must NOT
+	// inherit the full gateway env. Scrub to the runner env-allowlist: the CLI's
+	// own credential env (ANTHROPIC_API_KEY, OPENAI_API_KEY, CLAUDE_CONFIG_DIR,
+	// CODEX_HOME, …) is preserved so a legit `--version` handshake is unaffected,
+	// but gateway secrets (OMNIPUS_MASTER_KEY, the bearer token, FLY_API_TOKEN, …)
+	// are stripped — a `--version` probe cannot exfil them. This mirrors the
+	// runtime dispatch path (external_dispatch.go, which also uses
+	// sandbox.ScrubGatewayEnvForRunner) and additionally hardens the pre-existing
+	// runner-test path.
+	cmd.Env = sandbox.ScrubGatewayEnvForRunner()
+	// Make the context timeout a HARD upper bound: WaitDelay caps how long Wait
+	// blocks on still-open child I/O (pipes) after the deadline fires or the
+	// process exits. Without it, a double-forking `--version` that leaves a
+	// grandchild holding stdout/stderr open could pin the caller's in-flight
+	// slot past the 15s context timeout. 3s is ample for a version banner to
+	// flush after the process itself has been signaled.
+	cmd.WaitDelay = 3 * time.Second
 	out, err := cmd.CombinedOutput()
 	text := strings.TrimSpace(string(out))
 	if err != nil {

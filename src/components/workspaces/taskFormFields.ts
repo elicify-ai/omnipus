@@ -58,6 +58,29 @@ export function datetimeLocalToIso(value: string): string | null {
   return Number.isNaN(d.getTime()) ? null : d.toISOString()
 }
 
+/**
+ * Convert a `datetime-local` input value (or any date-ish string, e.g. an
+ * RFC3339 `due` timestamp) to a `Date`, built on `datetimeLocalToMs`.
+ * Returns null when missing/empty/invalid — the inline
+ * `value ? new Date(value) : null` pattern this replaces at DateTimePicker
+ * call sites, minus the risk of silently constructing an Invalid Date.
+ */
+export function datetimeLocalToDate(value?: string | null): Date | null {
+  if (!value) return null
+  const ms = datetimeLocalToMs(value)
+  return ms == null ? null : new Date(ms)
+}
+
+/**
+ * Convert a `Date` (or null) to the `datetime-local` input value a
+ * DateTimePicker's `onChange` hands to form state, built on
+ * `toDatetimeLocalValue`. Returns '' for null — the inline
+ * `d ? toDatetimeLocalValue(d.getTime()) : ''` pattern this replaces.
+ */
+export function dateToDatetimeLocal(date: Date | null): string {
+  return date ? toDatetimeLocalValue(date.getTime()) : ''
+}
+
 /** Human label for a trigger summary line. */
 export function triggerSummary(trigger?: TaskTrigger | null): string {
   if (!trigger || trigger.type === 'manual') return 'Manual (drag to run)'

@@ -21,20 +21,18 @@ import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from '@/
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { useUiStore } from '@/store/ui'
 import { fetchAgents, fetchWorkspaces, updateAgent, fetchCliDetect, isApiError, isWorker } from '@/lib/api'
-import type { Agent, Workspace } from '@/lib/api'
+import type { Agent, Workspace, CliDetect } from '@/lib/api'
 import { useAuthStore } from '@/store/auth'
 import { ScreenHeader } from '@/components/layout/ScreenHeader'
 
-interface HostClis {
-  hasClaude: boolean
-  hasCodex: boolean
-  hasOpencode: boolean
-}
-
-const OPTIMISTIC_HOST_CLIS: HostClis = {
-  hasClaude: true,
-  hasCodex: true,
-  hasOpencode: true,
+// CliDetect (external-executor-cli-path-detection spec, FR-001/FR-011) is a
+// per-CLI object — `{ claude, codex, opencode }: CliDetectEntry` — each entry
+// carrying `{ installed, path, source }`. WizardCli spells "claude-code" while
+// the wire key is "claude"; the mapping is inlined below in `cliAvailable`.
+const OPTIMISTIC_HOST_CLIS: CliDetect = {
+  claude: { installed: true, path: null, source: null },
+  codex: { installed: true, path: null, source: null },
+  opencode: { installed: true, path: null, source: null },
 }
 
 const CLI_LABELS: Record<WizardCli, string> = {
@@ -124,7 +122,7 @@ interface AgentsLibraryViewProps {
   workspaces: Workspace[]
   onSetDefault: (agent: Agent) => void
   openCreateAgentModal: (type: 'Main' | 'Subagent' | 'subagent_3p', cli?: WizardCli) => void
-  hostClis: HostClis
+  hostClis: CliDetect
   cliDetectFailed: boolean
   externalMenuOpen: boolean
   setExternalMenuOpen: (open: boolean) => void
@@ -164,9 +162,9 @@ function AgentsLibraryView({
   const builtInAgents = filteredAgents.filter((a) => a.type === 'core' && a.locked)
 
   const cliAvailable: Record<WizardCli, boolean> = {
-    'claude-code': hostClis.hasClaude,
-    codex: hostClis.hasCodex,
-    opencode: hostClis.hasOpencode,
+    'claude-code': hostClis.claude.installed,
+    codex: hostClis.codex.installed,
+    opencode: hostClis.opencode.installed,
   }
   const cliTooltip: Record<WizardCli, string> = {
     'claude-code': 'Claude Code is not installed on this host',
@@ -515,7 +513,7 @@ export function AgentListScreen() {
   }, [isLoading, agents])
 
   // Host-CLI detection — W4 of agent-form-requirements.
-  const [hostClis, setHostClis] = useState<HostClis>(OPTIMISTIC_HOST_CLIS)
+  const [hostClis, setHostClis] = useState<CliDetect>(OPTIMISTIC_HOST_CLIS)
   const [externalMenuOpen, setExternalMenuOpen] = useState(false)
   const [cliDetectFailed, setCliDetectFailed] = useState(false)
   useEffect(() => {

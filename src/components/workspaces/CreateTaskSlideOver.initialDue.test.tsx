@@ -80,33 +80,44 @@ beforeEach(() => {
   mockAddToast.mockReset()
 })
 
+// DateTimePicker's formatted trigger label — matches formatDateTimeDisplay() in date-time-picker.tsx.
+function formatDueLabel(datetimeLocal: string): string {
+  return new Date(datetimeLocal).toLocaleString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe('CreateTaskSlideOver — initialDue prop (F-07)', () => {
   it('seeds the due input when initialDue is provided and slide-over opens', () => {
     // BDD: Given CreateTaskSlideOver opens with initialDue="2026-06-22T00:00",
     // When the component renders,
-    // Then the due date input's value is "2026-06-22T00:00".
+    // Then the due date DateTimePicker trigger shows the formatted seeded value.
     renderSlideOver({ initialDue: '2026-06-22T00:00' })
 
-    const dueInput = screen.getByLabelText(/^due date$/i) as HTMLInputElement
-    expect(dueInput.value).toBe('2026-06-22T00:00')
+    const dueTrigger = screen.getByRole('button', { name: /^due date$/i })
+    expect(dueTrigger).toHaveTextContent(formatDueLabel('2026-06-22T00:00'))
   })
 
   it('leaves the due input empty when initialDue is NOT provided (no regression)', () => {
     // BDD: Given CreateTaskSlideOver opens without an initialDue prop,
     // When the component renders,
-    // Then the due date input is empty (default behavior preserved).
+    // Then the due date DateTimePicker shows its empty placeholder (default behavior preserved).
     renderSlideOver()
 
-    const dueInput = screen.getByLabelText(/^due date$/i) as HTMLInputElement
-    expect(dueInput.value).toBe('')
+    const dueTrigger = screen.getByRole('button', { name: /^due date$/i })
+    expect(dueTrigger).toHaveTextContent('Pick a date and time')
   })
 
   it('updates the due field when the slide-over is reopened with a different initialDue', () => {
     // BDD: Given CreateTaskSlideOver is first opened with initialDue="2026-06-22T00:00",
     // When it is closed then reopened with initialDue="2026-07-04T09:30",
-    // Then the due date input shows "2026-07-04T09:30".
+    // Then the due date DateTimePicker trigger shows the "2026-07-04T09:30" formatting.
     const onOpenChange = vi.fn()
     const { rerender } = render(
       <QueryClientProvider client={makeClient()}>
@@ -120,8 +131,8 @@ describe('CreateTaskSlideOver — initialDue prop (F-07)', () => {
     )
 
     // Verify initial seed
-    let dueInput = screen.getByLabelText(/^due date$/i) as HTMLInputElement
-    expect(dueInput.value).toBe('2026-06-22T00:00')
+    let dueTrigger = screen.getByRole('button', { name: /^due date$/i })
+    expect(dueTrigger).toHaveTextContent(formatDueLabel('2026-06-22T00:00'))
 
     // Close (reset)
     fireEvent.click(screen.getByRole('button', { name: /cancel/i }))
@@ -138,7 +149,7 @@ describe('CreateTaskSlideOver — initialDue prop (F-07)', () => {
       </QueryClientProvider>,
     )
 
-    dueInput = screen.getByLabelText(/^due date$/i) as HTMLInputElement
-    expect(dueInput.value).toBe('2026-07-04T09:30')
+    dueTrigger = screen.getByRole('button', { name: /^due date$/i })
+    expect(dueTrigger).toHaveTextContent(formatDueLabel('2026-07-04T09:30'))
   })
 })
