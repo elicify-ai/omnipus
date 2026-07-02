@@ -14,6 +14,7 @@ package gateway
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -26,27 +27,49 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/audit"
 	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/dapicom-ai/omnipus/pkg/gateway/ctxkey"
 )
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-// createChannelInstanceReq issues POST /api/v1/channels with the given JSON body.
+// withAdminChannelCtx seeds the request context the way the production
+// withAuth + configSnapshotMiddleware chain does for an authenticated admin:
+// an admin RoleContextKey and a non-bypass *config.Config snapshot. The create
+// and delete channel verbs are now admin-gated via adminWrap
+// (withAuth → RequireAdmin → RequireNotBypass) inside HandleChannels, so a
+// direct HandleChannels call must supply both or the admin chain rejects it
+// (401 for a missing role, 503 for a missing/bypass config snapshot).
+func withAdminChannelCtx(api *restAPI, r *http.Request) *http.Request {
+	ctx := context.WithValue(r.Context(), RoleContextKey{}, config.UserRoleAdmin)
+	// Provide a non-bypass config snapshot so RequireNotBypass lets the request
+	// through. api.agentLoop.GetConfig() has DevModeBypass=false by default in the
+	// test fixture.
+	ctx = context.WithValue(ctx, ctxkey.ConfigContextKey{}, api.agentLoop.GetConfig())
+	return r.WithContext(ctx)
+}
+
+// createChannelInstanceReq issues POST /api/v1/channels with the given JSON body
+// as an authenticated admin (create is admin-gated).
 func createChannelInstanceReq(t *testing.T, api *restAPI, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/channels",
 		strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
+	r = withAdminChannelCtx(api, r)
 	w := httptest.NewRecorder()
 	api.HandleChannels(w, r)
 	return w
 }
 
-// deleteChannelInstanceReq issues DELETE /api/v1/channels/{id}.
+// deleteChannelInstanceReq issues DELETE /api/v1/channels/{id} as an
+// authenticated admin (delete is admin-gated).
 func deleteChannelInstanceReq(t *testing.T, api *restAPI, channelID string) *httptest.ResponseRecorder {
 	t.Helper()
 	r := httptest.NewRequest(http.MethodDelete, "/api/v1/channels/"+channelID, nil)
+	r = withAdminChannelCtx(api, r)
 	w := httptest.NewRecorder()
 	api.HandleChannels(w, r)
 	return w
@@ -591,4 +614,164 @@ func TestDeleteChannelInstance_BareTypeKey(t *testing.T) {
 	cfg := api.agentLoop.GetConfig()
 	_, exists := cfg.Channels["telegram"]
 	assert.False(t, exists, "telegram must be removed from cfg.Channels after delete")
+}
+
+// ── FINAL-REVIEW MAJOR: listChannels emits one entry per instance ────────────
+
+// TestListChannels_TwoSameTypeInstances_TwoDistinctEntries verifies the MAJOR
+// fix: after creating whatsapp.eu + whatsapp.us, GET /api/v1/channels lists BOTH
+// as distinct entries (not collapsed to one "whatsapp" row), each carrying its
+// own instance_id. Previously the byType overlay collapsed same-type instances
+// last-writer-wins, hiding every instance after the first (US-6/US-11).
+func TestListChannels_TwoSameTypeInstances_TwoDistinctEntries(t *testing.T) {
+	api := newChannelTestAPI(t, `{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],"channels":{`+
+		`"whatsapp.eu":{"type":"whatsapp","enabled":true},`+
+		`"whatsapp.us":{"type":"whatsapp","enabled":false}}}`)
+	require.NoError(t, api.refreshConfigAndRewireServices(api.configPath()))
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/channels", nil)
+	api.HandleChannels(w, r)
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+	var entries []gen.ChannelEntry
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &entries))
+
+	// Collect the two whatsapp instance entries by their instance_id.
+	byInstanceID := map[string]gen.ChannelEntry{}
+	var bareWhatsapp int
+	for _, e := range entries {
+		baseType, _ := config.ParseInstanceKey(string(e.Id))
+		if baseType != "whatsapp" {
+			continue
+		}
+		if e.InstanceId != nil {
+			byInstanceID[*e.InstanceId] = e
+		} else {
+			bareWhatsapp++
+		}
+	}
+
+	// Both configured instances must appear as distinct entries.
+	eu, hasEU := byInstanceID["whatsapp.eu"]
+	us, hasUS := byInstanceID["whatsapp.us"]
+	require.True(t, hasEU, "whatsapp.eu must be a distinct entry; got entries=%+v", entries)
+	require.True(t, hasUS, "whatsapp.us must be a distinct entry; got entries=%+v", entries)
+	assert.Equal(t, "whatsapp.eu", string(eu.Id), "eu entry id must be the instance key")
+	assert.Equal(t, "whatsapp.us", string(us.Id), "us entry id must be the instance key")
+	assert.True(t, eu.Enabled, "whatsapp.eu was configured enabled")
+	assert.False(t, us.Enabled, "whatsapp.us was configured disabled")
+	// Because a whatsapp instance IS configured, there must be NO static
+	// "available but unconfigured" bare "whatsapp" row.
+	assert.Zero(t, bareWhatsapp, "no static bare-whatsapp row when instances exist")
+
+	// A base type with no configured instance still appears once (unconfigured).
+	var telegramCount int
+	for _, e := range entries {
+		if string(e.Id) == "telegram" {
+			telegramCount++
+			assert.Nil(t, e.InstanceId, "unconfigured telegram row has no instance_id")
+			assert.False(t, e.Enabled, "unconfigured telegram row is disabled")
+		}
+	}
+	assert.Equal(t, 1, telegramCount, "telegram (no instance) must appear exactly once")
+}
+
+// ── FINAL-REVIEW MEDIUM: create/delete are admin-gated ───────────────────────
+
+// TestCreateChannelInstance_NonAdmin_Forbidden verifies POST /channels is
+// admin-only: an authenticated non-admin user gets 403 and nothing is persisted.
+func TestCreateChannelInstance_NonAdmin_Forbidden(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/channels",
+		strings.NewReader(`{"type":"whatsapp","slug":"eu"}`))
+	r.Header.Set("Content-Type", "application/json")
+	ctx := context.WithValue(r.Context(), RoleContextKey{}, config.UserRoleUser)
+	ctx = context.WithValue(ctx, ctxkey.ConfigContextKey{}, api.agentLoop.GetConfig())
+	w := httptest.NewRecorder()
+	api.HandleChannels(w, r.WithContext(ctx))
+
+	assert.Equal(t, http.StatusForbidden, w.Code,
+		"non-admin POST /channels must be 403; body=%s", w.Body.String())
+	_, exists := api.agentLoop.GetConfig().Channels["whatsapp.eu"]
+	assert.False(t, exists, "a forbidden create must persist nothing")
+}
+
+// TestCreateChannelInstance_NoRole_Unauthorized verifies POST /channels with no
+// role in context (unauthenticated at the admin layer) is 401.
+func TestCreateChannelInstance_NoRole_Unauthorized(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/channels",
+		strings.NewReader(`{"type":"whatsapp","slug":"eu"}`))
+	r.Header.Set("Content-Type", "application/json")
+	// No RoleContextKey; provide a config snapshot so we isolate the 401 (missing
+	// role) from the 503 (missing config) path.
+	ctx := context.WithValue(r.Context(), ctxkey.ConfigContextKey{}, api.agentLoop.GetConfig())
+	w := httptest.NewRecorder()
+	api.HandleChannels(w, r.WithContext(ctx))
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code,
+		"POST /channels with no role must be 401; body=%s", w.Body.String())
+}
+
+// TestDeleteChannelInstance_NonAdmin_Forbidden verifies DELETE /channels/{id} is
+// admin-only: an authenticated non-admin gets 403 and the instance survives.
+func TestDeleteChannelInstance_NonAdmin_Forbidden(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+	seedChannelInstance(t, api, "whatsapp.eu")
+
+	r := httptest.NewRequest(http.MethodDelete, "/api/v1/channels/whatsapp.eu", nil)
+	ctx := context.WithValue(r.Context(), RoleContextKey{}, config.UserRoleUser)
+	ctx = context.WithValue(ctx, ctxkey.ConfigContextKey{}, api.agentLoop.GetConfig())
+	w := httptest.NewRecorder()
+	api.HandleChannels(w, r.WithContext(ctx))
+
+	assert.Equal(t, http.StatusForbidden, w.Code,
+		"non-admin DELETE must be 403; body=%s", w.Body.String())
+	_, exists := api.agentLoop.GetConfig().Channels["whatsapp.eu"]
+	assert.True(t, exists, "a forbidden delete must NOT remove the instance")
+}
+
+// ── FINAL-REVIEW MEDIUM: delete emits an audit event ─────────────────────────
+
+// TestDeleteChannelInstance_EmitsAuditEvent verifies a successful delete emits a
+// channel.instance.deleted audit entry with channel_id, type, and
+// cleanup_failed=false (happy path — no orphaned credential).
+func TestDeleteChannelInstance_EmitsAuditEvent(t *testing.T) {
+	api, auditDir := newTestAPIWithAuditor(t)
+	seedChannelInstance(t, api, "whatsapp.eu")
+
+	w := deleteChannelInstanceReq(t, api, "whatsapp.eu")
+	require.Equal(t, http.StatusNoContent, w.Code, "delete must succeed; body=%s", w.Body.String())
+
+	entries := readAuditEventsForTest(t, auditDir)
+	require.NotEmpty(t, entries, "audit log must be non-empty after a delete")
+
+	var found bool
+	for _, e := range entries {
+		if e["event"] != string(audit.EventChannelInstanceDeleted) {
+			continue
+		}
+		found = true
+		assert.Equal(t, string(audit.DecisionAllow), e["decision"],
+			"happy-path delete decision must be allow")
+		details, _ := e["details"].(map[string]any)
+		require.NotNil(t, details, "delete audit entry must have a details map")
+		assert.Equal(t, "whatsapp.eu", details["channel_id"], "audit channel_id must match")
+		assert.Equal(t, "whatsapp", details["type"], "audit type must be the base type")
+		assert.Equal(t, false, details["cleanup_failed"],
+			"cleanup_failed must be false on the happy path")
+		break
+	}
+	assert.True(t, found,
+		"a channel.instance.deleted audit event must be emitted (ADR-029 FR-025); got events: %v",
+		func() []string {
+			var evts []string
+			for _, e := range entries {
+				evts = append(evts, fmt.Sprintf("%v", e["event"]))
+			}
+			return evts
+		}())
 }

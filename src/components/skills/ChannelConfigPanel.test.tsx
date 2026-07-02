@@ -1383,21 +1383,46 @@ describe('ChannelConfigPanel — no global default in bound flow (US-3 / FR-003)
     mockUiStore()
   })
 
+  afterEach(() => {
+    delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
+  })
+
   it('does not show (Global default) option when workspace is selected', async () => {
+    // jsdom lacks scrollIntoView; Radix Select calls it when opening the listbox.
+    Element.prototype.scrollIntoView = vi.fn()
+
     renderWithWorkspace({
       routing: { workspace_id: 'sales' },
       workspaceDetail: WS_SALES,
     })
 
-    await waitFor(() =>
-      expect(screen.getByTestId('routing-agent-select')).toBeInTheDocument(),
-    )
-
-    const agentContainer = screen.getByTestId('routing-agent-select')
+    // Wait for the agent select to be enabled (workspace data loaded → bound flow)
     await waitFor(() => {
-      const options = agentContainer.querySelectorAll('option')
-      const texts = Array.from(options).map((o) => o.textContent?.trim())
-      expect(texts).not.toContain('(Global default)')
+      const agentContainer = screen.getByTestId('routing-agent-select')
+      const triggers = agentContainer.querySelectorAll('[role="combobox"], button[aria-haspopup="listbox"]')
+      const notDisabled = Array.from(triggers).some(
+        (el) => !(el as HTMLButtonElement | HTMLSelectElement).disabled,
+      )
+      expect(notDisabled).toBe(true)
+    })
+
+    // Open the Radix Select — options only render when the popover is open.
+    const agentContainer = screen.getByTestId('routing-agent-select')
+    const trigger =
+      agentContainer.querySelector('[role="combobox"]') ??
+      agentContainer.querySelector('button[aria-haspopup="listbox"]')
+    await act(async () => {
+      if (trigger) fireEvent.click(trigger)
+    })
+
+    // Assert on [role="option"] items rendered into the portal — (Global default)
+    // must NOT appear as an option in the bound flow.
+    await waitFor(() => {
+      const optionEls = Array.from(document.querySelectorAll('[role="option"]'))
+        .map((el) => el.textContent?.trim())
+      expect(optionEls.some((t) => t?.includes('Global default'))).toBe(false)
+      // The bound flow should offer at least the workspace members (Mia, Ray).
+      expect(optionEls.some((t) => t === 'Mia' || t === 'Ray')).toBe(true)
     })
   })
 

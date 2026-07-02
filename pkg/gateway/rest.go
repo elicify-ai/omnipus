@@ -356,6 +356,22 @@ func (a *restAPI) adminWrap(h http.HandlerFunc) http.HandlerFunc {
 	)
 }
 
+// requireAdminAuthz composes ONLY the admin authorization layers
+// (RequireAdmin → RequireNotBypass → h), WITHOUT re-running withAuth. Use this
+// to gate a specific verb inside a handler that is ALREADY registered under
+// withAuth (e.g. the shared /api/v1/channels dispatcher): withAuth has already
+// verified the Bearer token and written the role + config snapshot into the
+// request context, so wrapping the whole adminWrap chain again would
+// double-authenticate (and, on a context-only test call, spuriously 401 on the
+// re-auth). RequireAdmin reads the role from context; RequireNotBypass reads the
+// config snapshot from context — both are present post-withAuth. It mirrors the
+// authorization half of adminWrap so the two stay in lockstep.
+func (a *restAPI) requireAdminAuthz(h http.HandlerFunc) http.HandlerFunc {
+	return middleware.RequireAdmin(
+		middleware.RequireNotBypass(h),
+	).ServeHTTP
+}
+
 // writeJSON marshals body and writes it with the given status code. The
 // Content-Type is set BEFORE WriteHeader so it is honored regardless of status
 // — once WriteHeader is called the header map is flushed and later Set calls are
@@ -6022,7 +6038,15 @@ func (a *restAPI) HandleChannels(w http.ResponseWriter, r *http.Request) {
 			case http.MethodGet:
 				a.getChannelConfig(w, channelID)
 			case http.MethodDelete:
-				a.deleteChannelInstance(w, channelID)
+				// FINAL-REVIEW MEDIUM: DELETE is a high-blast-radius destructive verb
+				// (os.RemoveAll on the instance state dir + credential deletion), so it
+				// must be admin-only. The /channels route is already registered under
+				// withAuth, so apply only the admin authorization layers
+				// (RequireAdmin → RequireNotBypass) here — re-running withAuth would
+				// double-authenticate.
+				a.requireAdminAuthz(func(w http.ResponseWriter, r *http.Request) {
+					a.deleteChannelInstance(w, channelID)
+				})(w, r)
 			default:
 				jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 			}
@@ -6074,130 +6098,98 @@ func (a *restAPI) HandleChannels(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		// fall through to list logic below
 	case http.MethodPost:
-		a.createChannelInstance(w, r)
+		// FINAL-REVIEW MEDIUM: POST creates a channel instance (a destructive,
+		// config-mutating admin action). The /channels route is already registered
+		// under withAuth, so apply only the admin authorization layers
+		// (RequireAdmin → RequireNotBypass), mirroring the other high-blast-radius
+		// admin routes without re-running withAuth.
+		a.requireAdminAuthz(a.createChannelInstance)(w, r)
 		return
 	default:
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	cfg := a.agentLoop.GetConfig()
-	// channelEnabledByType returns true when any instance of the given channel type
-	// is enabled in the map. In v0.1 cap-1 guarantees at most one instance per type.
-	channelEnabledByType := func(channelType string) bool {
-		for _, inst := range cfg.Channels {
-			if inst.Type == channelType && inst.Enabled {
-				return true
-			}
-		}
-		return false
-	}
+
+	// FINAL-REVIEW MAJOR: emit ONE ChannelEntry per configured instance, not one
+	// per base type. The previous design collapsed all instances of a type into a
+	// single row (byType last-writer-wins), so a second instance (whatsapp.eu +
+	// whatsapp.us) was invisible and unmanageable — defeating US-6/US-11.
+	//
+	// Shape now:
+	//   1. webchat (built-in, always first, always enabled, no instance entry).
+	//   2. One entry per key in cfg.Channels — id == instance_id == the map key,
+	//      with base-type metadata (name/transport/description) looked up from
+	//      channelBaseTypes, plus per-instance enabled + identity.
+	//   3. One "available but unconfigured" entry per base type that has NO
+	//      configured instance (so the operator can still discover + add it).
 	channels := []gen.ChannelEntry{
 		{Id: "webchat", Name: "Web Chat", Transport: "websocket", Enabled: true, Description: "Built-in browser chat"},
-		{
-			Id:          "telegram",
-			Name:        "Telegram",
-			Transport:   "webhook",
-			Enabled:     channelEnabledByType("telegram"),
-			Description: "Telegram Bot API",
-		},
-		{
-			Id:          "discord",
-			Name:        "Discord",
-			Transport:   "websocket",
-			Enabled:     channelEnabledByType("discord"),
-			Description: "Discord Gateway",
-		},
-		{
-			Id:          "slack",
-			Name:        "Slack",
-			Transport:   "websocket",
-			Enabled:     channelEnabledByType("slack"),
-			Description: "Slack Socket Mode",
-		},
-		{
-			Id:              "whatsapp",
-			Name:            "WhatsApp",
-			Transport:       "native",
-			Enabled:         channelEnabledByType("whatsapp"),
-			Description:     "WhatsApp (native, whatsmeow)",
-			NativeAvailable: boolPtr(whatsappnative.NativeAvailable),
-		},
-		{
-			Id:          "feishu",
-			Name:        "Feishu / Lark",
-			Transport:   "webhook",
-			Enabled:     channelEnabledByType("feishu"),
-			Description: "Feishu (Lark) Bot",
-		},
-		{
-			Id:          "dingtalk",
-			Name:        "DingTalk",
-			Transport:   "webhook",
-			Enabled:     channelEnabledByType("dingtalk"),
-			Description: "DingTalk Bot",
-		},
-		{
-			Id:          "wecom",
-			Name:        "WeCom",
-			Transport:   "webhook",
-			Enabled:     channelEnabledByType("wecom"),
-			Description: "WeCom (WeChat Work) Bot",
-		},
-		{
-			Id:          "weixin",
-			Name:        "Weixin",
-			Transport:   "webhook",
-			Enabled:     channelEnabledByType("weixin"),
-			Description: "Weixin (WeChat) Official Account",
-		},
-		{
-			Id:          "line",
-			Name:        "LINE",
-			Transport:   "webhook",
-			Enabled:     channelEnabledByType("line"),
-			Description: "LINE Messaging API",
-		},
-		{
-			Id:          "qq",
-			Name:        "QQ",
-			Transport:   "websocket",
-			Enabled:     channelEnabledByType("qq"),
-			Description: "QQ via napcat",
-		},
-		{
-			Id:          "irc",
-			Name:        "IRC",
-			Transport:   "tcp",
-			Enabled:     channelEnabledByType("irc"),
-			Description: "Internet Relay Chat",
-		},
-		{
-			Id:          "matrix",
-			Name:        "Matrix",
-			Transport:   "http",
-			Enabled:     channelEnabledByType("matrix"),
-			Description: "Matrix protocol",
-		},
-		{
-			Id:          "google-chat",
-			Name:        "Google Chat",
-			Transport:   "webhook",
-			Enabled:     channelEnabledByType("google-chat"),
-			Description: "Google Chat (webhook or service account)",
-		},
-		// M11: email is NOT listed here — it is a TOOL surface (per-agent mailbox,
-		// GET/PUT/DELETE /api/v1/agents/{id}/mailbox), not a conversational channel.
 	}
 
-	// Overlay per-instance surface (Spec-2 FR-2.5): instance_id and identity.
-	// For each list entry that maps to a configured channel instance, expose the
-	// map key (instance_id) and the persisted routing identity so the SPA can
-	// address per-instance configure/enable/routing endpoints and render the
-	// identity override without re-deriving it. In v0.1 cap-1 the instance key
-	// equals the channel type, so the entry id matches the map key by type; we
-	// look up the instance by matching Type to keep this correct if a future map
-	// key diverges from the type. webchat is built-in and has no instance entry.
-	applyInstanceOverlay(channels, cfg.Channels)
+	// Track which base types already have at least one configured instance so we
+	// can append the static "unconfigured" rows for the rest.
+	configuredTypes := make(map[string]bool, len(cfg.Channels))
+
+	// Deterministic ordering: configured instances sorted by their map key so the
+	// list is stable across requests (Go map iteration is randomized).
+	instanceKeys := make([]string, 0, len(cfg.Channels))
+	for key := range cfg.Channels {
+		instanceKeys = append(instanceKeys, key)
+	}
+	sort.Strings(instanceKeys)
+
+	for _, key := range instanceKeys {
+		inst := cfg.Channels[key]
+		baseType := strings.ToLower(strings.TrimSpace(inst.Type))
+		if baseType == "" {
+			baseType, _ = config.ParseInstanceKey(key)
+		}
+		meta, known := channelBaseTypes[baseType]
+		if !known {
+			// An unknown/legacy type persisted in config still gets a row so the
+			// operator can see and delete it; fall back to sensible defaults.
+			meta = channelBaseTypeMeta{name: baseType, transport: "webhook", description: baseType}
+		}
+		configuredTypes[baseType] = true
+
+		instanceID := key
+		entry := gen.ChannelEntry{
+			Id:          key,
+			InstanceId:  &instanceID,
+			Name:        meta.name,
+			Transport:   gen.ChannelEntryTransport(meta.transport),
+			Enabled:     inst.Enabled,
+			Description: meta.description,
+		}
+		if baseType == "whatsapp" {
+			entry.NativeAvailable = boolPtr(whatsappnative.NativeAvailable)
+		}
+		if ident := identityForInstance(inst.Identity); ident != nil {
+			entry.Identity = ident
+		}
+		channels = append(channels, entry)
+	}
+
+	// Append the static "available but unconfigured" rows in the canonical base-type
+	// order for every type with no configured instance.
+	for _, baseType := range channelBaseTypeOrder {
+		if configuredTypes[baseType] {
+			continue
+		}
+		meta := channelBaseTypes[baseType]
+		entry := gen.ChannelEntry{
+			Id:          baseType,
+			Name:        meta.name,
+			Transport:   gen.ChannelEntryTransport(meta.transport),
+			Enabled:     false,
+			Description: meta.description,
+		}
+		if baseType == "whatsapp" {
+			entry.NativeAvailable = boolPtr(whatsappnative.NativeAvailable)
+		}
+		channels = append(channels, entry)
+	}
 
 	// Overlay degraded state from the runtime channel manager. Channels that
 	// failed to construct at startup are marked degraded=true with the init
@@ -6206,20 +6198,22 @@ func (a *restAPI) HandleChannels(w http.ResponseWriter, r *http.Request) {
 	if mgr := a.agentLoop.GetChannelManager(); mgr != nil {
 		failed := mgr.FailedChannels()
 		applyDegradedOverlay(channels, failed)
-		// Warn for any failed channel whose (normalised) id has no matching entry
-		// in the channels list — these are dead channels that would otherwise be
-		// silently invisible to operators.
+		// Warn for any failed channel whose (normalised) base type has no matching
+		// entry in the channels list — these are dead channels that would otherwise
+		// be silently invisible to operators. Entry ids may now be per-instance
+		// keys ("whatsapp.eu"), so match on the base type extracted from each id.
 		if len(failed) > 0 {
-			entryIDs := make(map[string]struct{}, len(channels))
+			entryBaseTypes := make(map[string]struct{}, len(channels))
 			for _, e := range channels {
-				entryIDs[string(e.Id)] = struct{}{}
+				bt, _ := config.ParseInstanceKey(string(e.Id))
+				entryBaseTypes[bt] = struct{}{}
 			}
 			for _, f := range failed {
 				id := f.Name
 				if id == "whatsapp_native" {
 					id = "whatsapp"
 				}
-				if _, matched := entryIDs[id]; !matched {
+				if _, matched := entryBaseTypes[id]; !matched {
 					slog.Warn(
 						"channels: failed channel has no matching entry in channels list",
 						"registry_id", f.Name,
@@ -6239,13 +6233,19 @@ func (a *restAPI) HandleChannels(w http.ResponseWriter, r *http.Request) {
 // extracted from HandleChannels so that it can be unit-tested without a full
 // REST stack.
 //
-// Normalisation rule: "whatsapp_native" maps to the list entry "whatsapp"
-// because both the bridge and native transports share a single ChannelEntry.
+// Normalisation rule: "whatsapp_native" maps to the "whatsapp" base type because
+// both the bridge and native transports share the WhatsApp channel type.
+//
+// Matching is by BASE TYPE (config.ParseInstanceKey of the entry id) so that a
+// per-instance entry ("whatsapp.eu") is correctly marked when its base type
+// ("whatsapp") failed to construct, and every instance of a failing type is
+// flagged. A base-type entry ("telegram") parses to itself, so the existing
+// base-type overlay tests keep passing unchanged.
 func applyDegradedOverlay(channelList []gen.ChannelEntry, failed []channels.ChannelInitError) {
 	if len(failed) == 0 {
 		return
 	}
-	// Build a map of normalised registry-id → error reason.
+	// Build a map of normalised registry-id (base type) → error reason.
 	degradedMap := make(map[string]string, len(failed))
 	for _, f := range failed {
 		id := f.Name
@@ -6255,7 +6255,8 @@ func applyDegradedOverlay(channelList []gen.ChannelEntry, failed []channels.Chan
 		degradedMap[id] = f.Err.Error()
 	}
 	for i := range channelList {
-		if reason, ok := degradedMap[string(channelList[i].Id)]; ok {
+		baseType, _ := config.ParseInstanceKey(string(channelList[i].Id))
+		if reason, ok := degradedMap[baseType]; ok {
 			r := reason
 			channelList[i].Degraded = boolPtr(true)
 			channelList[i].DegradedReason = &r
@@ -6263,68 +6264,76 @@ func applyDegradedOverlay(channelList []gen.ChannelEntry, failed []channels.Chan
 	}
 }
 
-// applyInstanceOverlay populates instance_id and identity on each list entry
-// that maps to a configured channel instance (Spec-2 FR-2.5). It is a pure
-// function extracted from HandleChannels so it can be unit-tested without a full
-// REST stack.
-//
-// Matching rule: an entry maps to an instance when the instance's Type equals
-// the entry id (the v0.1 cap-1 contract: instance key == channel type). The
-// instance_id surfaced is the actual config map key, so the SPA addresses the
-// right per-instance endpoint even if a future key diverges from the type.
-// Entries with no configured instance (e.g. the built-in webchat, or a channel
-// type the operator has never touched) are left untouched.
-func applyInstanceOverlay(channelList []gen.ChannelEntry, instances map[string]config.ChannelInstanceConfig) {
-	if len(instances) == 0 {
-		return
+// channelBaseTypeMeta is the static presentation metadata for a base channel
+// type: the human-readable name, transport label, and description surfaced in
+// each ChannelEntry. It is type-level (shared by every instance of the type).
+type channelBaseTypeMeta struct {
+	name        string
+	transport   string
+	description string
+}
+
+// channelBaseTypes maps base channel type → its presentation metadata. This is
+// the single source of truth for the name/transport/description of every
+// conversational channel row (both configured instances and the static
+// "available but unconfigured" rows). Email is intentionally absent — it is a
+// TOOL surface (per-agent mailbox), not a conversational channel.
+var channelBaseTypes = map[string]channelBaseTypeMeta{
+	"telegram":    {name: "Telegram", transport: "webhook", description: "Telegram Bot API"},
+	"discord":     {name: "Discord", transport: "websocket", description: "Discord Gateway"},
+	"slack":       {name: "Slack", transport: "websocket", description: "Slack Socket Mode"},
+	"whatsapp":    {name: "WhatsApp", transport: "native", description: "WhatsApp (native, whatsmeow)"},
+	"feishu":      {name: "Feishu / Lark", transport: "webhook", description: "Feishu (Lark) Bot"},
+	"dingtalk":    {name: "DingTalk", transport: "webhook", description: "DingTalk Bot"},
+	"wecom":       {name: "WeCom", transport: "webhook", description: "WeCom (WeChat Work) Bot"},
+	"weixin":      {name: "Weixin", transport: "webhook", description: "Weixin (WeChat) Official Account"},
+	"line":        {name: "LINE", transport: "webhook", description: "LINE Messaging API"},
+	"qq":          {name: "QQ", transport: "websocket", description: "QQ via napcat"},
+	"irc":         {name: "IRC", transport: "tcp", description: "Internet Relay Chat"},
+	"matrix":      {name: "Matrix", transport: "http", description: "Matrix protocol"},
+	"google-chat": {name: "Google Chat", transport: "webhook", description: "Google Chat (webhook or service account)"},
+}
+
+// channelBaseTypeOrder is the canonical display order for the static
+// "available but unconfigured" rows (Go map iteration is randomized, so a fixed
+// slice keeps the list stable across requests).
+var channelBaseTypeOrder = []string{
+	"telegram", "discord", "slack", "whatsapp", "feishu", "dingtalk",
+	"wecom", "weixin", "line", "qq", "irc", "matrix", "google-chat",
+}
+
+// identityForInstance converts a persisted config.ChannelIdentity into the
+// generated ChannelEntry.Identity anonymous-struct pointer, or nil when the
+// instance has no identity or a malformed one (a bad persisted identity is
+// dropped rather than emitting a schema-invalid entry). Extracted so the
+// per-instance list construction stays readable.
+func identityForInstance(identity *config.ChannelIdentity) *struct {
+	Id   *string                      `json:"id,omitempty"`
+	Kind gen.ChannelEntryIdentityKind `json:"kind"`
+} {
+	if identity == nil {
+		return nil
 	}
-	// Index instances by type → (key, identity) for an O(1) lookup per entry.
-	type instMeta struct {
-		key      string
-		identity *config.ChannelIdentity
+	var entryKind gen.ChannelEntryIdentityKind
+	switch strings.ToLower(strings.TrimSpace(identity.Kind)) {
+	case "agent":
+		entryKind = gen.ChannelEntryIdentityKindAgent
+	case "user":
+		entryKind = gen.ChannelEntryIdentityKindUser
+	default:
+		return nil
 	}
-	byType := make(map[string]instMeta, len(instances))
-	for key, inst := range instances {
-		t := strings.ToLower(strings.TrimSpace(inst.Type))
-		if t == "" {
-			t = strings.ToLower(strings.TrimSpace(key))
-		}
-		byType[t] = instMeta{key: key, identity: inst.Identity}
+	ident := &struct { // not-wire-format: pointer to the generated gen.ChannelEntry.Identity anonymous field type — not a parallel wire type
+		Id   *string                      `json:"id,omitempty"`
+		Kind gen.ChannelEntryIdentityKind `json:"kind"`
+	}{
+		Kind: entryKind,
 	}
-	for i := range channelList {
-		meta, ok := byType[strings.ToLower(string(channelList[i].Id))]
-		if !ok {
-			continue
-		}
-		instanceID := meta.key
-		channelList[i].InstanceId = &instanceID
-		if meta.identity == nil {
-			continue
-		}
-		kind := strings.ToLower(strings.TrimSpace(meta.identity.Kind))
-		// Only surface a well-formed identity; a malformed persisted identity is
-		// ignored rather than emitting a schema-invalid entry.
-		var entryKind gen.ChannelEntryIdentityKind
-		switch kind {
-		case "agent":
-			entryKind = gen.ChannelEntryIdentityKindAgent
-		case "user":
-			entryKind = gen.ChannelEntryIdentityKindUser
-		default:
-			continue
-		}
-		ident := struct { // not-wire-format: composite literal of the generated gen.ChannelEntry.Identity anonymous field type — not a parallel wire type
-			Id   *string                      `json:"id,omitempty"`
-			Kind gen.ChannelEntryIdentityKind `json:"kind"`
-		}{
-			Kind: entryKind,
-		}
-		if id := strings.TrimSpace(meta.identity.ID); id != "" {
-			idCopy := id
-			ident.Id = &idCopy
-		}
-		channelList[i].Identity = &ident
+	if id := strings.TrimSpace(identity.ID); id != "" {
+		idCopy := id
+		ident.Id = &idCopy
 	}
+	return ident
 }
 
 // validChannelIDs is the set of base channel types that can be toggled via the
@@ -6400,12 +6409,11 @@ func (a *restAPI) getChannelRouting(w http.ResponseWriter, channelID string) {
 		}
 	}
 
-	// Check for bound representation first (FR-029).
-	if inst, ok := cfg.Channels[channelID]; ok &&
-		inst.WorkspaceID != "" &&
-		inst.Identity != nil &&
-		strings.ToLower(strings.TrimSpace(inst.Identity.Kind)) == "agent" &&
-		strings.TrimSpace(inst.Identity.ID) != "" {
+	// Check for bound representation first (FR-029). Use the single-source-of-truth
+	// predicate so this GET path cannot diverge from the config layer's definition
+	// of "bound" (e.g. the inline check previously omitted the TrimSpace on
+	// WorkspaceID that IsWorkspaceBound applies).
+	if inst, ok := cfg.Channels[channelID]; ok && inst.IsWorkspaceBound() {
 		wsID := inst.WorkspaceID
 		agentID := inst.Identity.ID
 		resp := gen.ChannelRouting{
@@ -6724,7 +6732,7 @@ func (a *restAPI) setChannelRouting(w http.ResponseWriter, r *http.Request, chan
 	}
 	if a.auditor != nil {
 		_ = a.auditor.Log(&audit.Entry{
-			Event:    "channel.routing.changed",
+			Event:    audit.EventChannelRoutingChanged,
 			Decision: audit.DecisionAllow,
 			Details: map[string]any{
 				"channel_id": channelID,
@@ -6901,13 +6909,39 @@ func (a *restAPI) deleteChannelInstance(w http.ResponseWriter, channelID string)
 		return
 	}
 
-	// Step 3: delete credential store entries (best-effort).
+	// Step 2b (FINAL-REVIEW Medium-High — leaked running channel): reload the
+	// manager NOW, after the config entry is removed but BEFORE the credential and
+	// state-dir teardown. ChannelManager.Reload stops any channel dropped from the
+	// config, so a deleted-while-ENABLED instance's goroutine/connection is torn
+	// down instead of continuing to process inbound with credentials we are about
+	// to delete. Doing it before the cred/state teardown means Stop() still has the
+	// live credentials and store files it may need to close cleanly. In the
+	// unit-test environment TriggerReload is a no-op (ErrReloadNotConfigured), so
+	// this is safe to call unconditionally.
+	if a.agentLoop != nil {
+		if err := a.triggerReloadAndWait(); err != nil {
+			// A genuine reload failure means the (now config-less) channel may still
+			// be running. Log it but continue the teardown — we must still remove the
+			// credentials/state the operator asked to delete, and the config entry is
+			// already gone so a subsequent reload will converge.
+			slog.Error("rest: delete channel instance: reload after config removal failed",
+				"id", channelID, "error", err)
+		}
+	}
+
+	// Step 3: delete credential store entries. An orphaned encrypted secret left
+	// behind against the operator's explicit "delete this instance" intent is a
+	// security-relevant outcome (the credential remains recoverable at rest), so a
+	// real store fault is escalated to Error (with a correlatable errorId) and
+	// surfaced in the audit event via cleanup_failed=true. removeStoredCredential
+	// returns nil for not-found keys, so only a genuine I/O/store fault trips this.
+	cleanupFailed := false
 	for _, refName := range credRefs {
 		if err := a.removeStoredCredential(refName); err != nil {
-			// removeStoredCredential returns nil for not-found keys; a real error
-			// means the store has an I/O problem. Log and continue — the config
-			// entry is already gone so this is an orphaned blob, not a live credential.
-			slog.Warn("rest: delete channel instance: remove credential", "id", channelID, "ref", refName, "error", err)
+			cleanupFailed = true
+			errorID := uuid.NewString()
+			slog.Error("rest: delete channel instance: remove credential failed — orphaned encrypted secret",
+				"id", channelID, "ref", refName, "error", err, "errorId", errorID)
 		}
 	}
 
@@ -6919,7 +6953,27 @@ func (a *restAPI) deleteChannelInstance(w http.ResponseWriter, channelID string)
 		}
 	}
 
-	slog.Info("rest: deleted channel instance", "id", channelID, "type", chBaseType)
+	// FINAL-REVIEW MEDIUM: emit an audit event for the destructive delete (ADR-029
+	// FR-025 / STRIDE repudiation). A channel-instance delete revokes stored
+	// credentials and removes state; it MUST leave an audit trail even on the happy
+	// path. cleanup_failed=true flags an orphaned encrypted blob for the operator.
+	if a.auditor != nil {
+		decision := audit.DecisionAllow
+		if cleanupFailed {
+			decision = audit.DecisionError
+		}
+		_ = a.auditor.Log(&audit.Entry{
+			Event:    audit.EventChannelInstanceDeleted,
+			Decision: decision,
+			Details: map[string]any{
+				"channel_id":     channelID,
+				"type":           chBaseType,
+				"cleanup_failed": cleanupFailed,
+			},
+		})
+	}
+
+	slog.Info("rest: deleted channel instance", "id", channelID, "type", chBaseType, "cleanup_failed", cleanupFailed)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -7000,6 +7054,22 @@ var channelSensitiveFields = map[string][]string{
 	"email": {"password"},
 }
 
+// channelFilesystemPathFields is the set of ChannelInstanceConfig JSON keys that
+// hold a filesystem path. They must never be settable through PUT
+// /channels/{id}/configure: deleteChannelInstance does os.RemoveAll on the
+// derived (or persisted) SessionStorePath, so an attacker-persisted path turns a
+// later delete into arbitrary-directory deletion. These are deployment/operator
+// concerns, not UI config — configureChannel strips them so the derived default
+// is always used. Sourced from a grep of config.ChannelInstanceConfig for
+// path-typed string fields (session_store_path, crypto_database_path,
+// service_account_file). If a new path-typed field is added to that struct, add
+// it here too.
+var channelFilesystemPathFields = []string{
+	"session_store_path",   // WhatsApp
+	"crypto_database_path", // Matrix
+	"service_account_file", // Google Chat
+}
+
 // channelRequiredFields maps channel base TYPE to fields that must be non-empty
 // for the channel to work. Keyed by base TYPE for the same reason as
 // channelSensitiveFields — required fields are type-level knowledge, not
@@ -7051,58 +7121,6 @@ func redactChannelConfig(channelID string, cfg map[string]any) map[string]any {
 	return out
 }
 
-// validateChannelIdentity validates the per-instance routing identity supplied
-// in a configure request body (Spec-2 US-5 / FR-2.9). It mirrors the
-// ChannelIdentity contract: required "kind" in {agent,user}; "id" required and
-// non-empty when kind=="agent" (the target agent), forbidden/ignored otherwise;
-// no unknown fields. Returns "" when valid, or a human-readable reason.
-func validateChannelIdentity(raw any) string {
-	obj, ok := raw.(map[string]any)
-	if !ok {
-		return "must be an object with a \"kind\" field"
-	}
-	for k := range obj {
-		switch k {
-		case "kind", "id":
-		default:
-			return fmt.Sprintf("unknown field %q", k)
-		}
-	}
-	kindRaw, present := obj["kind"]
-	if !present {
-		return "\"kind\" is required"
-	}
-	kind, isStr := kindRaw.(string)
-	if !isStr {
-		return "\"kind\" must be a string"
-	}
-	kind = strings.ToLower(strings.TrimSpace(kind))
-	switch kind {
-	case "agent":
-		idRaw, hasID := obj["id"]
-		if !hasID {
-			return "\"id\" is required when kind is \"agent\""
-		}
-		idStr, idIsStr := idRaw.(string)
-		if !idIsStr {
-			return "\"id\" must be a string"
-		}
-		if strings.TrimSpace(idStr) == "" {
-			return "\"id\" must be non-empty when kind is \"agent\""
-		}
-	case "user":
-		// id is optional and ignored for user-kind.
-		if idRaw, hasID := obj["id"]; hasID {
-			if _, idIsStr := idRaw.(string); !idIsStr {
-				return "\"id\" must be a string"
-			}
-		}
-	default:
-		return fmt.Sprintf("\"kind\" must be \"agent\" or \"user\", got %q", kind)
-	}
-	return ""
-}
-
 // getChannelConfig handles GET /api/v1/channels/{id}.
 // Returns the channel's config with credential fields redacted.
 func (a *restAPI) getChannelConfig(w http.ResponseWriter, channelID string) {
@@ -7131,19 +7149,45 @@ func (a *restAPI) configureChannel(w http.ResponseWriter, r *http.Request, chann
 	// persist it as a config field (it is not part of ChannelInstanceConfig).
 	delete(updates, "instance_id")
 
-	// Validate the optional per-instance identity (Spec-2 US-5 / FR-2.9) before
-	// any write. A malformed identity must be rejected up front (422) rather than
-	// silently dropped, otherwise identity-based routing would be a no-op without
-	// the operator ever knowing. The field is persisted as-is and later wired
-	// into ResolveRoute for inbound messages on this instance.
-	if raw, present := updates["identity"]; present {
-		if raw == nil {
-			// Explicit null clears the identity override.
-			delete(updates, "identity")
-		} else if errMsg := validateChannelIdentity(raw); errMsg != "" {
-			jsonErr(w, http.StatusUnprocessableEntity, fmt.Sprintf("invalid identity: %s", errMsg))
-			return
-		}
+	// SECURITY (FINAL-REVIEW HIGH — membership-bypass): the request body schema is
+	// additionalProperties:true and this handler blind-merges every remaining field
+	// into the persisted ChannelInstanceConfig below. Two classes of field must
+	// NEVER be settable through /configure or the merge becomes an authorization
+	// and filesystem-integrity hole:
+	//
+	//   1. Workspace binding (workspace_id + identity). Persisting these here binds
+	//      the instance to an arbitrary agent WITHOUT the FR-006 CoreTeam-membership
+	//      check that lives only in setChannelRouting. An attacker could set
+	//      workspace_id + identity{kind:agent,id:<non-member>} to route a
+	//      workspace's inbound traffic at an agent that is not on its team
+	//      (IsWorkspaceBound() would then be true and ResolveRoute would honor it).
+	//      Binding MUST go through PUT /channels/{id}/routing, which validates the
+	//      workspace, the agent, worker-ness, and CoreTeam membership. Reject
+	//      (not silently strip) so a client using the wrong endpoint gets told.
+	//
+	//   2. Filesystem-path fields (session_store_path, crypto_database_path,
+	//      service_account_file). deleteChannelInstance calls os.RemoveAll on the
+	//      instance's SessionStorePath; a caller who persists an attacker-chosen
+	//      path here turns a later delete into arbitrary-directory deletion. These
+	//      paths are operator/deployment concerns, not UI-settable config — strip
+	//      them so the derived-default path is always used.
+	if _, present := updates["workspace_id"]; present {
+		jsonErr(w, http.StatusBadRequest,
+			"workspace_id cannot be set via configure; use PUT /api/v1/channels/{id}/routing")
+		return
+	}
+	if _, present := updates["identity"]; present {
+		jsonErr(w, http.StatusBadRequest,
+			"identity cannot be set via configure; use PUT /api/v1/channels/{id}/routing")
+		return
+	}
+	// Filesystem-path fields (grep of config.ChannelInstanceConfig for path-typed
+	// fields: session_store_path [WhatsApp], crypto_database_path [Matrix],
+	// service_account_file [Google Chat]). Stripped, not rejected — they are not
+	// part of the UI configure surface, so a stray value is silently ignored
+	// rather than failing an otherwise-valid save.
+	for _, pathField := range channelFilesystemPathFields {
+		delete(updates, pathField)
 	}
 
 	// SEC-23 / #289: route secret fields into the encrypted credential store and

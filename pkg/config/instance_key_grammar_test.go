@@ -48,16 +48,13 @@ func TestInstanceKeyGrammar_DS2_Table(t *testing.T) {
 		// DS-2 row 3: "whatsapp." — empty slug → must reject.
 		// Traces to: DS-2/3, FR-017 boundary.
 		//
-		// BUG DETECTED (reported, not fixed — qa-lead policy): ValidateInstanceKey
-		// treats "whatsapp." as a bare type key because ParseInstanceKey returns
-		// slug="" when the trailing dot produces an empty suffix, and the
-		// slug=="" branch returns nil ("Bare type key — valid").  The dot is
-		// present in the key string, so "whatsapp." is NOT a bare type key —
-		// it is a malformed namespaced key with an empty slug that must be
-		// rejected per DS-2 row 3 and FR-017.
-		// Fix required in ValidateInstanceKey: distinguish "bare type" (no dot
-		// at all) from "namespaced with empty slug" (trailing dot).
-		// Tracked as a production bug; this test is expected to FAIL until fixed.
+		// BUG-1 (fixed): ValidateInstanceKey previously treated "whatsapp." as a
+		// bare type key because ParseInstanceKey returned slug="" on a trailing
+		// dot, and the slug=="" branch returned nil ("Bare type key — valid").
+		// The fix distinguishes "bare type" (no dot at all) from "namespaced
+		// with empty slug" (trailing dot), rejecting the latter per DS-2 row 3
+		// and FR-017. This test now passes (wantErr: true). Do NOT reconcile it
+		// to wantErr:false — trailing-dot keys must remain rejected.
 		{
 			name:        "DS-2/3 whatsapp.: empty slug rejected",
 			key:         "whatsapp.",
