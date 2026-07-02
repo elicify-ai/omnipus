@@ -10,8 +10,8 @@ import (
 func init() {
 	channels.RegisterFactory(
 		"slack",
-		func(cfg *config.Config, secrets credentials.SecretBundle, b *bus.MessageBus) (channels.Channel, error) {
-			inst := cfg.Channels["slack"]
+		func(cfg *config.Config, instanceID string, secrets credentials.SecretBundle, b *bus.MessageBus) (channels.Channel, error) {
+			inst := cfg.Channels[instanceID]
 			return NewSlackChannel(config.InstanceToSlack(inst), secrets, b)
 		},
 	)

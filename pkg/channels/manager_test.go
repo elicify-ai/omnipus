@@ -2303,7 +2303,7 @@ func TestReload_AddedChannelMissingFromMap_NoPanic(t *testing.T) {
 // matched m.channels and so never started.
 func TestReload_EnableWhatsApp_StartsNativeChannel(t *testing.T) {
 	started := make(chan struct{}, 1)
-	withFactory(t, "whatsapp_native", func(*config.Config, credentials.SecretBundle, *bus.MessageBus) (Channel, error) {
+	withFactory(t, "whatsapp_native", func(*config.Config, string, credentials.SecretBundle, *bus.MessageBus) (Channel, error) {
 		return &mockChannelStartSignal{started: started}, nil
 	})
 

@@ -5994,7 +5994,11 @@ func (a *restAPI) HandleChannels(w http.ResponseWriter, r *http.Request) {
 	if sub != "" {
 		parts := strings.SplitN(sub, "/", 2)
 		channelID := parts[0]
-		if !validChannelIDs[gen.ChannelId(channelID)] {
+		// Accept both bare type keys ("whatsapp") and per-instance keys
+		// ("whatsapp.eu"): extract the base type and validate against known types.
+		// Per-instance existence is validated per-endpoint (ADR-029 Gate 0).
+		baseChannelType, _ := config.ParseInstanceKey(channelID)
+		if !validChannelIDs[baseChannelType] {
 			jsonErr(w, http.StatusNotFound, fmt.Sprintf("channel %q not found", channelID))
 			return
 		}
@@ -6301,18 +6305,19 @@ func applyInstanceOverlay(channelList []gen.ChannelEntry, instances map[string]c
 	}
 }
 
-// validChannelIDs is the set of channel IDs that can be toggled via the API.
-// "webchat" is always enabled and intentionally excluded.
+// validChannelIDs is the set of base channel types that can be toggled via the
+// API. "webchat" is always enabled and intentionally excluded.
 //
-// drift-guard: keyed by the generated gen.ChannelId enum and populated with the
-// named enum constants (not string literals), so removing or renaming a ChannelId
-// value breaks this build until the list is brought back in sync with the contract.
-var validChannelIDs = map[gen.ChannelId]bool{
-	gen.Telegram: true, gen.Discord: true, gen.Slack: true, gen.Whatsapp: true,
-	gen.Feishu: true, gen.Dingtalk: true, gen.Wecom: true, gen.Weixin: true,
-	gen.Line: true, gen.Qq: true, gen.Irc: true,
-	gen.Matrix: true, gen.GoogleChat: true,
-	gen.Email: true,
+// Keyed by plain string literals (base channel type) because ChannelId is now a
+// validated pattern (^[a-z0-9-]+(\.[a-z0-9-]+)?$) rather than a closed enum.
+// Per-instance IDs like "whatsapp.eu" are accepted by extracting the base type
+// via config.ParseInstanceKey before the lookup (ADR-029 Gate 0).
+var validChannelIDs = map[string]bool{
+	"telegram": true, "discord": true, "slack": true, "whatsapp": true,
+	"feishu": true, "dingtalk": true, "wecom": true, "weixin": true,
+	"line": true, "qq": true, "irc": true,
+	"matrix": true, "google-chat": true,
+	"email": true,
 }
 
 // channelWildcardIdx returns the index of the channel-wildcard AgentBinding
@@ -6476,7 +6481,8 @@ func (a *restAPI) setChannelRouting(w http.ResponseWriter, r *http.Request, chan
 }
 
 func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, enabled bool) {
-	if !validChannelIDs[gen.ChannelId(channelID)] {
+	baseType, _ := config.ParseInstanceKey(channelID)
+	if !validChannelIDs[baseType] {
 		jsonErr(w, http.StatusNotFound, fmt.Sprintf("channel %q not found", channelID))
 		return
 	}
@@ -6491,11 +6497,10 @@ func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, ena
 			ch = map[string]any{}
 			channels[channelID] = ch
 		}
-		// Persist the type discriminator (Spec-2 FR-2.5). In v0.1 cap-1 the map
-		// key equals the channel type, so write it explicitly rather than relying
-		// solely on load-time normalizeChannelMap inference — this keeps the
-		// on-disk instance self-describing and makes cap-1 validation deterministic.
-		ch["type"] = channelID
+		// Persist the type discriminator. For bare type keys the base type equals
+		// the key; for namespaced instance keys ("whatsapp.eu") the type is the
+		// pre-dot segment (ADR-029 Gate 0 / FR-017).
+		ch["type"] = baseType
 		ch["enabled"] = enabled
 		return nil
 	}); err != nil {
@@ -6542,56 +6547,53 @@ func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, ena
 			return
 		}
 	}
-	jsonOK(w, gen.ChannelEnabledResponse{Id: gen.ChannelEnabledResponseId(channelID), Enabled: enabled})
+	jsonOK(w, gen.ChannelEnabledResponse{Id: channelID, Enabled: enabled})
 }
 
 // channelSensitiveFields maps channel TYPE to their secret/credential field names.
 // These are redacted in GET responses (replaced with "[configured]" if set).
-// Keyed by TYPE (not instance ID) because field sensitivity is type-level knowledge
-// shared across all instances of that type (SEC-23 type-vs-instance boundary).
-//
-// drift-guard: keyed by the generated gen.ChannelId enum with named enum
-// constants, so removing/renaming a ChannelId value breaks this build.
-var channelSensitiveFields = map[gen.ChannelId][]string{
-	gen.Telegram:   {"token"},
-	gen.Discord:    {"token"},
-	gen.Slack:      {"bot_token", "app_token"},
-	gen.Feishu:     {"app_secret", "encrypt_key", "verification_token"},
-	gen.Matrix:     {"access_token", "crypto_passphrase"},
-	gen.Line:       {"channel_secret", "channel_access_token"},
-	gen.Dingtalk:   {"client_secret"},
-	gen.Qq:         {"app_secret"},
-	gen.Wecom:      {"secret"},
-	gen.Irc:        {"password", "nickserv_password", "sasl_password"},
-	gen.Weixin:     {"token"},
-	gen.Whatsapp:   {},
-	gen.GoogleChat: {"webhook_url", "service_account_json"},
+// Keyed by base channel TYPE (not instance ID) because field sensitivity is
+// type-level knowledge shared across all instances of that type
+// (SEC-23 type-vs-instance boundary). Lookups use the base type extracted from
+// the instance key via config.ParseInstanceKey (ADR-029 Gate 0).
+var channelSensitiveFields = map[string][]string{
+	"telegram":    {"token"},
+	"discord":     {"token"},
+	"slack":       {"bot_token", "app_token"},
+	"feishu":      {"app_secret", "encrypt_key", "verification_token"},
+	"matrix":      {"access_token", "crypto_passphrase"},
+	"line":        {"channel_secret", "channel_access_token"},
+	"dingtalk":    {"client_secret"},
+	"qq":          {"app_secret"},
+	"wecom":       {"secret"},
+	"irc":         {"password", "nickserv_password", "sasl_password"},
+	"weixin":      {"token"},
+	"whatsapp":    {},
+	"google-chat": {"webhook_url", "service_account_json"},
 	// email: password is the only secret field (username is public config, not a secret).
-	gen.Email: {"password"},
+	"email": {"password"},
 }
 
-// channelRequiredFields maps channel TYPE to fields that must be non-empty for the
-// channel to work. Keyed by TYPE for the same reason as channelSensitiveFields —
-// required fields are type-level knowledge, not instance-specific.
-//
-// drift-guard: keyed by the generated gen.ChannelId enum with named enum
-// constants, so removing/renaming a ChannelId value breaks this build.
-var channelRequiredFields = map[gen.ChannelId][]string{
-	gen.Telegram:   {"token"},
-	gen.Discord:    {"token"},
-	gen.Slack:      {"bot_token"},
-	gen.Feishu:     {"app_id", "app_secret"},
-	gen.Matrix:     {"homeserver", "user_id", "access_token"},
-	gen.Line:       {"channel_secret", "channel_access_token"},
-	gen.Dingtalk:   {"client_id", "client_secret"},
-	gen.Qq:         {"app_id", "app_secret"},
-	gen.Wecom:      {"bot_id", "secret"},
-	gen.Irc:        {"server", "nick"},
-	gen.Weixin:     {"token"},
-	gen.Whatsapp:   {},
-	gen.GoogleChat: {},
+// channelRequiredFields maps channel base TYPE to fields that must be non-empty
+// for the channel to work. Keyed by base TYPE for the same reason as
+// channelSensitiveFields — required fields are type-level knowledge, not
+// instance-specific. Lookups use config.ParseInstanceKey (ADR-029 Gate 0).
+var channelRequiredFields = map[string][]string{
+	"telegram":    {"token"},
+	"discord":     {"token"},
+	"slack":       {"bot_token"},
+	"feishu":      {"app_id", "app_secret"},
+	"matrix":      {"homeserver", "user_id", "access_token"},
+	"line":        {"channel_secret", "channel_access_token"},
+	"dingtalk":    {"client_id", "client_secret"},
+	"qq":          {"app_id", "app_secret"},
+	"wecom":       {"bot_id", "secret"},
+	"irc":         {"server", "nick"},
+	"weixin":      {"token"},
+	"whatsapp":    {},
+	"google-chat": {},
 	// email: imap_host, smtp_host, username, and password (credential) are all required.
-	gen.Email: {"imap_host", "smtp_host", "username", "password"},
+	"email": {"imap_host", "smtp_host", "username", "password"},
 }
 
 // redactChannelConfig returns a copy of cfg with sensitive fields replaced by a
@@ -6604,7 +6606,8 @@ func redactChannelConfig(channelID string, cfg map[string]any) map[string]any {
 	for k, v := range cfg {
 		out[k] = v
 	}
-	for _, field := range channelSensitiveFields[gen.ChannelId(channelID)] {
+	baseType, _ := config.ParseInstanceKey(channelID)
+	for _, field := range channelSensitiveFields[baseType] {
 		// A set <field>_ref means a credential is stored → mark configured.
 		if ref, _ := out[field+"_ref"].(string); strings.TrimSpace(ref) != "" {
 			out[field] = "[configured]"
@@ -6722,8 +6725,11 @@ func (a *restAPI) configureChannel(w http.ResponseWriter, r *http.Request, chann
 	// reads its secret via the *_ref (e.g. token_ref); an inline plaintext secret
 	// is both a plaintext-at-rest violation AND unreadable by the constructor —
 	// so a UI-configured token-based channel would never start.
+	// Sensitive-field lookup uses the base type (ADR-029 Gate 0): per-instance
+	// keys like "whatsapp.eu" use the same type-level field set as "whatsapp".
+	chBaseType, _ := config.ParseInstanceKey(channelID)
 	var clearedRefs []string // credentials to delete AFTER the config write commits
-	for _, field := range channelSensitiveFields[gen.ChannelId(channelID)] {
+	for _, field := range channelSensitiveFields[chBaseType] {
 		raw, present := updates[field]
 		if !present {
 			continue
@@ -6768,14 +6774,14 @@ func (a *restAPI) configureChannel(w http.ResponseWriter, r *http.Request, chann
 		for k, v := range updates {
 			ch[k] = v
 		}
-		// Persist the type discriminator (Spec-2 FR-2.5): the map key equals the
-		// channel type in v0.1 cap-1, so record it explicitly so the on-disk
-		// instance is self-describing and cap-1 validation is deterministic.
-		ch["type"] = channelID
+		// Persist the type discriminator: for a bare type key ("whatsapp") the
+		// base type equals the key; for a namespaced instance key ("whatsapp.eu")
+		// the type is the pre-dot segment (ADR-029 Gate 0 / FR-017).
+		ch["type"] = chBaseType
 		// Invariant (#289/SEC-23): a known secret field is never stored inline in
 		// config.json — it lives only in the credential store via its <field>_ref.
 		// This also scrubs any stale plaintext left by the pre-#289 blind merge.
-		for _, field := range channelSensitiveFields[gen.ChannelId(channelID)] {
+		for _, field := range channelSensitiveFields[chBaseType] {
 			delete(ch, field)
 		}
 		channels[channelID] = ch
@@ -6817,10 +6823,11 @@ func (a *restAPI) testChannel(w http.ResponseWriter, channelID string) {
 		return
 	}
 
-	cid := gen.ChannelId(channelID)
-	required := channelRequiredFields[cid]
-	sensitive := make(map[string]bool, len(channelSensitiveFields[cid]))
-	for _, f := range channelSensitiveFields[cid] {
+	// Use the base channel type for type-level field lookups (ADR-029 Gate 0).
+	testBaseType, _ := config.ParseInstanceKey(channelID)
+	required := channelRequiredFields[testBaseType]
+	sensitive := make(map[string]bool, len(channelSensitiveFields[testBaseType]))
+	for _, f := range channelSensitiveFields[testBaseType] {
 		sensitive[f] = true
 	}
 	var missing []string

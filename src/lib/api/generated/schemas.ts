@@ -304,22 +304,7 @@ type ChannelEntry = {
   degraded?: boolean | undefined;
   degraded_reason?: string | undefined;
 };
-type ChannelId =
-  | "webchat"
-  | "telegram"
-  | "discord"
-  | "slack"
-  | "whatsapp"
-  | "feishu"
-  | "dingtalk"
-  | "wecom"
-  | "weixin"
-  | "line"
-  | "qq"
-  | "irc"
-  | "matrix"
-  | "google-chat"
-  | "email";
+type ChannelId = string;
 type ChannelIdentity = {
   kind: "agent" | "user";
   id?: string | undefined;
@@ -1657,29 +1642,13 @@ export const MemorySettings: z.ZodType<MemorySettings> = z
     memory_retros_days: z.number().int(),
   })
   .partial();
-export const ChannelId = z.enum([
-  "webchat",
-  "telegram",
-  "discord",
-  "slack",
-  "whatsapp",
-  "feishu",
-  "dingtalk",
-  "wecom",
-  "weixin",
-  "line",
-  "qq",
-  "irc",
-  "matrix",
-  "google-chat",
-  "email",
-]);
+export const ChannelId = z.string();
 export const ChannelIdentity: z.ZodType<ChannelIdentity> = z.object({
   kind: z.enum(["agent", "user"]),
   id: z.string().optional(),
 });
 export const ChannelEntry: z.ZodType<ChannelEntry> = z.object({
-  id: ChannelId,
+  id: ChannelId.regex(/^[a-z0-9-]+(\.[a-z0-9-]+)?$/),
   instance_id: z.string().optional(),
   name: z.string(),
   transport: z.enum([
@@ -1700,12 +1669,15 @@ export const ChannelEntry: z.ZodType<ChannelEntry> = z.object({
   degraded_reason: z.string().optional(),
 });
 export const ChannelEnabledResponse: z.ZodType<ChannelEnabledResponse> =
-  z.object({ id: ChannelId, enabled: z.boolean() });
+  z.object({
+    id: ChannelId.regex(/^[a-z0-9-]+(\.[a-z0-9-]+)?$/),
+    enabled: z.boolean(),
+  });
 export const ChannelTestResponse = z
   .object({ success: z.boolean(), message: z.string() })
   .passthrough();
 export const ChannelRouting = z
-  .object({ default_agent_id: z.string() })
+  .object({ default_agent_id: z.string(), workspace_id: z.string() })
   .partial();
 export const Mailbox = z.object({
   agent_id: z.string(),
@@ -3301,7 +3273,7 @@ Includes session_start events from all agent stores and task lifecycle events.
         schema: z.string(),
       },
     ],
-    response: z.object({ default_agent_id: z.string() }).partial(),
+    response: ChannelRouting,
     errors: [
       {
         status: 401,
@@ -3331,7 +3303,7 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         name: "body",
         type: "Body",
-        schema: z.object({ default_agent_id: z.string() }).partial(),
+        schema: ChannelRouting,
       },
       {
         name: "id",
@@ -3339,7 +3311,7 @@ Includes session_start events from all agent stores and task lifecycle events.
         schema: z.string(),
       },
     ],
-    response: z.object({ default_agent_id: z.string() }).partial(),
+    response: ChannelRouting,
     errors: [
       {
         status: 400,

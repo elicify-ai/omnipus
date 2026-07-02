@@ -25,6 +25,11 @@ type RouteInput struct {
 	// Identity) leaves the normal cascade in effect (peer→…→default). Populated
 	// by the agent loop from the inbound channel instance's persisted identity.
 	Identity *config.ChannelIdentity
+	// BoundInstance is set true when the inbound instance is workspace-bound
+	// (cfg.Channels[InstanceID].WorkspaceID is non-empty). Consumed by the
+	// WS-A drift branch in ResolveRoute to enforce the no-global-default rule
+	// for bound instances (ADR-029 FR-012/FR-014).
+	BoundInstance bool
 }
 
 // ResolvedRoute is the result of agent routing.
@@ -34,7 +39,13 @@ type ResolvedRoute struct {
 	AccountID      string
 	SessionKey     string
 	MainSessionKey string
-	MatchedBy      string // "identity.agent", "binding.peer", "binding.peer.parent", "binding.guild", "binding.team", "binding.account", "binding.channel", "default"
+	MatchedBy      string // "identity.agent", "binding.peer", "binding.peer.parent", "binding.guild", "binding.team", "binding.account", "binding.channel", "default", "bound.drift.drop"
+	// Drop is true when this route is a bound-instance drift drop: the instance
+	// is workspace-bound but its configured agent is unresolvable (deleted,
+	// disabled, or a worker). The caller MUST NOT fall back to the global default
+	// — instead it enters the FR-015 unroutable path with a structured audit
+	// event (ADR-029 FR-012, FR-014, FR-028). WS-A wires the drop branch logic.
+	Drop bool
 }
 
 // RouteResolver determines which agent handles a message based on config bindings.

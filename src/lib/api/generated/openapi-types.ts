@@ -3908,10 +3908,9 @@ export interface components {
         };
         /**
          * ChannelId
-         * @description Stable identifier for a built-in channel.
-         * @enum {string}
+         * @description Identifies a channel instance. Either a bare base channel type (e.g. "whatsapp", "telegram") for legacy single-instance configurations, or a namespaced instance id of the form <type>.<slug> (e.g. "whatsapp.eu", "telegram.main-bot") for multi-instance deployments (ADR-029). The pre-dot segment is the base channel type; the slug is [a-z0-9-]{1,32}.
          */
-        ChannelId: "webchat" | "telegram" | "discord" | "slack" | "whatsapp" | "feishu" | "dingtalk" | "wecom" | "weixin" | "line" | "qq" | "irc" | "matrix" | "google-chat" | "email";
+        ChannelId: string;
         /**
          * ChannelIdentity
          * @description Identifies whether an inbound channel connection acts on behalf of a specific agent ("agent" kind) or routes as the default user ("user" kind). Persisted per channel instance; wired into ResolveRoute at routing time (Spec-2 FR-2.9).
@@ -5958,6 +5957,11 @@ export interface components {
              * @example 550e8400-e29b-41d4-a716-446655440000
              */
             default_agent_id?: string;
+            /**
+             * @description Workspace this channel instance is bound to. Required (non-empty) for a bound instance; empty/omitted = unbound (legacy default routing).
+             * @example my-workspace
+             */
+            workspace_id?: string;
         };
         /**
          * Mailbox

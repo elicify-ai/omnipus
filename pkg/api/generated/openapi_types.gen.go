@@ -1030,120 +1030,6 @@ func (e ChannelConfigureRequestIdentityKind) Valid() bool {
 	}
 }
 
-// Defines values for ChannelEnabledResponseId.
-const (
-	ChannelEnabledResponseIdDingtalk   ChannelEnabledResponseId = "dingtalk"
-	ChannelEnabledResponseIdDiscord    ChannelEnabledResponseId = "discord"
-	ChannelEnabledResponseIdEmail      ChannelEnabledResponseId = "email"
-	ChannelEnabledResponseIdFeishu     ChannelEnabledResponseId = "feishu"
-	ChannelEnabledResponseIdGoogleChat ChannelEnabledResponseId = "google-chat"
-	ChannelEnabledResponseIdIrc        ChannelEnabledResponseId = "irc"
-	ChannelEnabledResponseIdLine       ChannelEnabledResponseId = "line"
-	ChannelEnabledResponseIdMatrix     ChannelEnabledResponseId = "matrix"
-	ChannelEnabledResponseIdQq         ChannelEnabledResponseId = "qq"
-	ChannelEnabledResponseIdSlack      ChannelEnabledResponseId = "slack"
-	ChannelEnabledResponseIdTelegram   ChannelEnabledResponseId = "telegram"
-	ChannelEnabledResponseIdWebchat    ChannelEnabledResponseId = "webchat"
-	ChannelEnabledResponseIdWecom      ChannelEnabledResponseId = "wecom"
-	ChannelEnabledResponseIdWeixin     ChannelEnabledResponseId = "weixin"
-	ChannelEnabledResponseIdWhatsapp   ChannelEnabledResponseId = "whatsapp"
-)
-
-// Valid indicates whether the value is a known member of the ChannelEnabledResponseId enum.
-func (e ChannelEnabledResponseId) Valid() bool {
-	switch e {
-	case ChannelEnabledResponseIdDingtalk:
-		return true
-	case ChannelEnabledResponseIdDiscord:
-		return true
-	case ChannelEnabledResponseIdEmail:
-		return true
-	case ChannelEnabledResponseIdFeishu:
-		return true
-	case ChannelEnabledResponseIdGoogleChat:
-		return true
-	case ChannelEnabledResponseIdIrc:
-		return true
-	case ChannelEnabledResponseIdLine:
-		return true
-	case ChannelEnabledResponseIdMatrix:
-		return true
-	case ChannelEnabledResponseIdQq:
-		return true
-	case ChannelEnabledResponseIdSlack:
-		return true
-	case ChannelEnabledResponseIdTelegram:
-		return true
-	case ChannelEnabledResponseIdWebchat:
-		return true
-	case ChannelEnabledResponseIdWecom:
-		return true
-	case ChannelEnabledResponseIdWeixin:
-		return true
-	case ChannelEnabledResponseIdWhatsapp:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for ChannelEntryId.
-const (
-	ChannelEntryIdDingtalk   ChannelEntryId = "dingtalk"
-	ChannelEntryIdDiscord    ChannelEntryId = "discord"
-	ChannelEntryIdEmail      ChannelEntryId = "email"
-	ChannelEntryIdFeishu     ChannelEntryId = "feishu"
-	ChannelEntryIdGoogleChat ChannelEntryId = "google-chat"
-	ChannelEntryIdIrc        ChannelEntryId = "irc"
-	ChannelEntryIdLine       ChannelEntryId = "line"
-	ChannelEntryIdMatrix     ChannelEntryId = "matrix"
-	ChannelEntryIdQq         ChannelEntryId = "qq"
-	ChannelEntryIdSlack      ChannelEntryId = "slack"
-	ChannelEntryIdTelegram   ChannelEntryId = "telegram"
-	ChannelEntryIdWebchat    ChannelEntryId = "webchat"
-	ChannelEntryIdWecom      ChannelEntryId = "wecom"
-	ChannelEntryIdWeixin     ChannelEntryId = "weixin"
-	ChannelEntryIdWhatsapp   ChannelEntryId = "whatsapp"
-)
-
-// Valid indicates whether the value is a known member of the ChannelEntryId enum.
-func (e ChannelEntryId) Valid() bool {
-	switch e {
-	case ChannelEntryIdDingtalk:
-		return true
-	case ChannelEntryIdDiscord:
-		return true
-	case ChannelEntryIdEmail:
-		return true
-	case ChannelEntryIdFeishu:
-		return true
-	case ChannelEntryIdGoogleChat:
-		return true
-	case ChannelEntryIdIrc:
-		return true
-	case ChannelEntryIdLine:
-		return true
-	case ChannelEntryIdMatrix:
-		return true
-	case ChannelEntryIdQq:
-		return true
-	case ChannelEntryIdSlack:
-		return true
-	case ChannelEntryIdTelegram:
-		return true
-	case ChannelEntryIdWebchat:
-		return true
-	case ChannelEntryIdWecom:
-		return true
-	case ChannelEntryIdWeixin:
-		return true
-	case ChannelEntryIdWhatsapp:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for ChannelEntryIdentityKind.
 const (
 	ChannelEntryIdentityKindAgent ChannelEntryIdentityKind = "agent"
@@ -1192,63 +1078,6 @@ func (e ChannelEntryTransport) Valid() bool {
 	case ChannelEntryTransportWebhook:
 		return true
 	case ChannelEntryTransportWebsocket:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for ChannelId.
-const (
-	Dingtalk   ChannelId = "dingtalk"
-	Discord    ChannelId = "discord"
-	Email      ChannelId = "email"
-	Feishu     ChannelId = "feishu"
-	GoogleChat ChannelId = "google-chat"
-	Irc        ChannelId = "irc"
-	Line       ChannelId = "line"
-	Matrix     ChannelId = "matrix"
-	Qq         ChannelId = "qq"
-	Slack      ChannelId = "slack"
-	Telegram   ChannelId = "telegram"
-	Webchat    ChannelId = "webchat"
-	Wecom      ChannelId = "wecom"
-	Weixin     ChannelId = "weixin"
-	Whatsapp   ChannelId = "whatsapp"
-)
-
-// Valid indicates whether the value is a known member of the ChannelId enum.
-func (e ChannelId) Valid() bool {
-	switch e {
-	case Dingtalk:
-		return true
-	case Discord:
-		return true
-	case Email:
-		return true
-	case Feishu:
-		return true
-	case GoogleChat:
-		return true
-	case Irc:
-		return true
-	case Line:
-		return true
-	case Matrix:
-		return true
-	case Qq:
-		return true
-	case Slack:
-		return true
-	case Telegram:
-		return true
-	case Webchat:
-		return true
-	case Wecom:
-		return true
-	case Weixin:
-		return true
-	case Whatsapp:
 		return true
 	default:
 		return false
@@ -5165,12 +4994,9 @@ type ChannelEnabledResponse struct {
 	// Enabled Whether the channel is now enabled.
 	Enabled bool `json:"enabled"`
 
-	// Id Stable identifier for a built-in channel.
-	Id ChannelEnabledResponseId `json:"id"`
+	// Id Identifies a channel instance. Either a bare base channel type (e.g. "whatsapp", "telegram") for legacy single-instance configurations, or a namespaced instance id of the form <type>.<slug> (e.g. "whatsapp.eu", "telegram.main-bot") for multi-instance deployments (ADR-029). The pre-dot segment is the base channel type; the slug is [a-z0-9-]{1,32}.
+	Id string `json:"id"`
 }
-
-// ChannelEnabledResponseId Stable identifier for a built-in channel.
-type ChannelEnabledResponseId string
 
 // ChannelEntry A communication channel entry returned by GET /api/v1/channels.
 type ChannelEntry struct {
@@ -5186,8 +5012,8 @@ type ChannelEntry struct {
 	// Enabled Whether this channel is currently enabled.
 	Enabled bool `json:"enabled"`
 
-	// Id Stable identifier for a built-in channel.
-	Id ChannelEntryId `json:"id"`
+	// Id Identifies a channel instance. Either a bare base channel type (e.g. "whatsapp", "telegram") for legacy single-instance configurations, or a namespaced instance id of the form <type>.<slug> (e.g. "whatsapp.eu", "telegram.main-bot") for multi-instance deployments (ADR-029). The pre-dot segment is the base channel type; the slug is [a-z0-9-]{1,32}.
+	Id string `json:"id"`
 
 	// Identity Identifies whether an inbound channel connection acts on behalf of a specific agent ("agent" kind) or routes as the default user ("user" kind). Persisted per channel instance; wired into ResolveRoute at routing time (Spec-2 FR-2.9).
 	Identity *struct {
@@ -5211,17 +5037,14 @@ type ChannelEntry struct {
 	Transport ChannelEntryTransport `json:"transport"`
 }
 
-// ChannelEntryId Stable identifier for a built-in channel.
-type ChannelEntryId string
-
 // ChannelEntryIdentityKind Routing kind for this channel instance.
 type ChannelEntryIdentityKind string
 
 // ChannelEntryTransport Transport mechanism used by this channel.
 type ChannelEntryTransport string
 
-// ChannelId Stable identifier for a built-in channel.
-type ChannelId string
+// ChannelId Identifies a channel instance. Either a bare base channel type (e.g. "whatsapp", "telegram") for legacy single-instance configurations, or a namespaced instance id of the form <type>.<slug> (e.g. "whatsapp.eu", "telegram.main-bot") for multi-instance deployments (ADR-029). The pre-dot segment is the base channel type; the slug is [a-z0-9-]{1,32}.
+type ChannelId = string
 
 // ChannelIdentity Identifies whether an inbound channel connection acts on behalf of a specific agent ("agent" kind) or routes as the default user ("user" kind). Persisted per channel instance; wired into ResolveRoute at routing time (Spec-2 FR-2.9).
 type ChannelIdentity struct {
@@ -5239,6 +5062,9 @@ type ChannelIdentityKind string
 type ChannelRouting struct {
 	// DefaultAgentId ID of the agent that handles this channel's inbound messages. Omitted or empty means fall back to the global default agent.
 	DefaultAgentId *string `json:"default_agent_id,omitempty"`
+
+	// WorkspaceId Workspace this channel instance is bound to. Required (non-empty) for a bound instance; empty/omitted = unbound (legacy default routing).
+	WorkspaceId *string `json:"workspace_id,omitempty"`
 }
 
 // ChannelTestResponse Response from POST /api/v1/channels/{id}/test. Returns whether required credentials are configured.

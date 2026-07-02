@@ -463,17 +463,22 @@ func (s *finalizeHookStreamer) Finalize(ctx context.Context, content string) err
 	return nil
 }
 
-// initChannel is a helper that looks up a factory by name and creates the channel.
-// It returns an error if the factory is not registered or construction fails.
-func (m *Manager) initChannel(name, displayName string) error {
+// initChannel is a helper that looks up a factory by name and creates the
+// channel. instanceID is the config.Channels map key for this instance (e.g.
+// "whatsapp" for a bare-type key or "whatsapp.eu" for a namespaced instance).
+// It is passed through to the factory so the factory can select the right
+// config entry (ADR-029 Gate 0). It returns an error if the factory is not
+// registered or construction fails.
+func (m *Manager) initChannel(name, instanceID, displayName string) error {
 	f, ok := getFactory(name)
 	if !ok {
 		return fmt.Errorf("factory not registered for channel %q", displayName)
 	}
 	logger.DebugCF("channels", "Attempting to initialize channel", map[string]any{
-		"channel": displayName,
+		"channel":    displayName,
+		"instanceID": instanceID,
 	})
-	ch, err := f(m.config, m.secrets, m.bus)
+	ch, err := f(m.config, instanceID, m.secrets, m.bus)
 	if err != nil {
 		logger.ErrorCF("channels", "Failed to initialize channel", map[string]any{
 			"channel": displayName,
@@ -624,7 +629,9 @@ func (m *Manager) initChannels(channels map[string]config.ChannelInstanceConfig)
 			// removed; on a lite/stub build (or an architecture where
 			// modernc.org/sqlite is unavailable) whatsapp_native fails to construct
 			// and we record a clear failure rather than silently no-op.
-			if err := m.initChannel(factoryName, "WhatsApp Native"); err != nil {
+			// Pass instanceID so the factory selects the right config entry
+			// (ADR-029 Gate 0). TODO(WS-B): key m.channels by instanceID for multi-instance.
+			if err := m.initChannel(factoryName, instanceID, "WhatsApp Native"); err != nil {
 				wrapped := fmt.Errorf(
 					"WhatsApp requires the native build (bridge removed); "+
 						"unavailable on this build variant: %w",
@@ -647,7 +654,8 @@ func (m *Manager) initChannels(channels map[string]config.ChannelInstanceConfig)
 			}
 		}
 
-		if err := m.initChannel(factoryName, displayName); err != nil {
+		// TODO(WS-B): key m.channels by instanceID for multi-instance support.
+		if err := m.initChannel(factoryName, instanceID, displayName); err != nil {
 			m.recordChannelFailure(factoryName, displayName, err)
 		}
 	}

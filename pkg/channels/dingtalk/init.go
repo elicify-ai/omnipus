@@ -10,8 +10,8 @@ import (
 func init() {
 	channels.RegisterFactory(
 		"dingtalk",
-		func(cfg *config.Config, secrets credentials.SecretBundle, b *bus.MessageBus) (channels.Channel, error) {
-			inst := cfg.Channels["dingtalk"]
+		func(cfg *config.Config, instanceID string, secrets credentials.SecretBundle, b *bus.MessageBus) (channels.Channel, error) {
+			inst := cfg.Channels[instanceID]
 			return NewDingTalkChannel(config.InstanceToDingTalk(inst), secrets, b)
 		},
 	)
