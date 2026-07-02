@@ -89,8 +89,10 @@ func (d *OpencodeDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEv
 		cmd.Dir = opts.WorkDir
 	}
 	cmd.Env = d.buildEnv(opts)
-	// M3: the prompt is delivered exactly once, via the `--prompt` CLI argument
-	// (see buildArgs). It MUST NOT also be written to stdin — feeding it on both
+	// M3: the prompt is delivered exactly once, as the POSITIONAL argument
+	// after the "--" end-of-options separator (see buildArgs; opencode's
+	// `run` command has no `--prompt` flag — that flag never existed on this
+	// CLI). It MUST NOT also be written to stdin — feeding it on both
 	// channels makes opencode process the prompt twice. stdin is always an empty
 	// reader so the child does not block waiting on it.
 	cmd.Stdin = bytes.NewReader(nil)
@@ -206,27 +208,50 @@ func (d *OpencodeDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEv
 	return ch, nil
 }
 
-// buildArgs constructs the opencode CLI argument list (ADR-032 fix C/D).
+// buildArgs constructs the opencode CLI argument list (ADR-032 fix C/D, N-1,
+// M-1).
 //
 // IMPORTANT (ADR-032 defect fix): `opencode run` takes the message as a
 // POSITIONAL argument (`opencode run [message..]`) — there is no `--prompt`
 // flag (verified against a real `opencode run --help`, CLI v1.16.0; the prior
 // `--prompt` flag never existed on this CLI and every invocation would have
 // failed with an "unknown option" error). The message is delivered exactly
-// once, as the positional right after `run`; cmd.Stdin is always an empty
-// reader (see Run()) so the child never blocks on stdin and never sees the
-// prompt twice (M3 invariant preserved).
+// once; cmd.Stdin is always an empty reader (see Run()) so the child never
+// blocks on stdin and never sees the prompt twice (M3 invariant preserved).
+//
+// N-1 (arg-injection): opts.Input is delegated task text that may be
+// LLM-authored / prompt-injection-influenced. opencode's yargs-based parser
+// recognizes registered --flags regardless of their position in argv, so a
+// naive positional message beginning with e.g. "--model" or "--session"
+// would be parsed as a FLAG, not message text, potentially altering the run
+// (session hijack, model override, or losing the message entirely). Verified
+// against the installed opencode v1.16.0 binary: `opencode run
+// --nonexistent-flag` fails immediately at argv-parse time with a usage
+// error (exit 1), while `opencode run -- --nonexistent-flag` proceeds past
+// parsing into actual message handling — confirming yargs honors the
+// standard `--` end-of-options separator. The message is therefore placed
+// LAST, after a literal "--", with every driver flag (including the
+// filtered opts.CLIArgs) preceding it — see driver_env_test.go and
+// argsafety_test.go for the regression coverage.
 func (d *OpencodeDriver) buildArgs(opts RunOptions) []string {
-	args := []string{"run"}
-	if opts.Input != "" {
-		args = append(args, opts.Input)
-	}
-	args = append(args, "--format", "json")
-	if model := strings.TrimSpace(opts.Model); model != "" && looksLikeProviderModel(model) {
-		// ADR-032 fix C: opencode's --model expects "provider/model" — guard
-		// so a bare model name (not in that shape) is omitted rather than
-		// passed as garbage; the CLI falls back to its own configured default.
-		args = append(args, "--model", model)
+	args := []string{"run", "--format", "json"}
+	if model := strings.TrimSpace(opts.Model); model != "" {
+		if looksLikeProviderModel(model) {
+			// ADR-032 fix C: opencode's --model expects "provider/model" —
+			// guard so a bare model name (not in that shape) is omitted
+			// rather than passed as garbage; the CLI falls back to its own
+			// configured default.
+			args = append(args, "--model", model)
+		} else {
+			// Unlike every other omission path in this file, a non-empty
+			// but wrongly-shaped model was previously dropped with ZERO
+			// logging — silently leaving the CLI on its own default model,
+			// which could be a materially different (and differently
+			// priced/capable) model than the operator configured. Warn so
+			// this is visible in the run log.
+			slog.Warn("runner/opencode: configured model not in provider/model shape — omitting --model; CLI will use its own default",
+				"run_id", opts.RunID, "configured_model", model)
+		}
 	}
 	// ADR-032 fix D: this opencode CLI version exposes no middle-ground
 	// "auto-accept edits" flag — only the interactive default (which blocks
@@ -245,7 +270,20 @@ func (d *OpencodeDriver) buildArgs(opts RunOptions) []string {
 	// is always a freshly generated dispatch identifier opencode has never
 	// seen, so passing it would target a non-existent session.
 	// Append operator-supplied extra args (ExecutorConfig.cli_args, MAJ-5).
-	args = append(args, opts.CLIArgs...)
+	// ADR-032 fix M-1: a redundant/conflicting copy of the driver's own
+	// --dangerously-skip-permissions flag is stripped first — see
+	// argsafety.go. This filter applies to opts.CLIArgs ONLY; the driver's
+	// own --dangerously-skip-permissions flag above is never touched.
+	kept, dropped := filterDangerousCLIArgs("opencode", opts.CLIArgs)
+	logDroppedCLIArgs("runner/opencode", "opencode", opts.RunID, dropped)
+	args = append(args, kept...)
+	// ADR-032 fix N-1: the literal "--" end-of-options separator forces
+	// everything after it to be treated as positional message content,
+	// regardless of what it looks like — see the buildArgs doc comment above.
+	args = append(args, "--")
+	if opts.Input != "" {
+		args = append(args, opts.Input)
+	}
 	return args
 }
 

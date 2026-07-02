@@ -269,8 +269,15 @@ func (d *CodexDriver) buildArgs(opts RunOptions) []string {
 		args = append(args, "-C", opts.WorkDir)
 	}
 	// Append operator-supplied extra args (ExecutorConfig.cli_args, MAJ-5) before
-	// the trailing "-" so the stdin sentinel stays last.
-	args = append(args, opts.CLIArgs...)
+	// the trailing "-" so the stdin sentinel stays last. ADR-032 fix M-1: a
+	// flag that could re-enable a full sandbox bypass (--sandbox
+	// danger-full-access) or reintroduce an unanswerable approval gate
+	// (--ask-for-approval) is stripped first — see argsafety.go. This filter
+	// applies to opts.CLIArgs ONLY; the driver's own --sandbox workspace-write
+	// / --ask-for-approval never flags above are never touched.
+	kept, dropped := filterDangerousCLIArgs("codex", opts.CLIArgs)
+	logDroppedCLIArgs("runner/codex", "codex", opts.RunID, dropped)
+	args = append(args, kept...)
 	args = append(args, "-") // read prompt from stdin
 	return args
 }

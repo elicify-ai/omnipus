@@ -272,8 +272,14 @@ func (d *ClaudeDriver) buildArgs(opts RunOptions) []string {
 		args = append(args, "--max-turns", fmt.Sprintf("%d", opts.MaxTurns))
 	}
 	// Append operator-supplied extra args (ExecutorConfig.cli_args, MAJ-5) before
-	// the trailing "-" so the stdin sentinel stays last.
-	args = append(args, opts.CLIArgs...)
+	// the trailing "-" so the stdin sentinel stays last. ADR-032 fix M-1: a
+	// flag that could re-enable a full permission bypass (or escalate
+	// --permission-mode to "bypassPermissions") is stripped first — see
+	// argsafety.go. This filter applies to opts.CLIArgs ONLY; the driver's
+	// own --permission-mode acceptEdits flag above is never touched.
+	kept, dropped := filterDangerousCLIArgs("claude", opts.CLIArgs)
+	logDroppedCLIArgs("runner/claude", "claude", opts.RunID, dropped)
+	args = append(args, kept...)
 	args = append(args, "-") // read prompt from stdin
 	return args
 }
