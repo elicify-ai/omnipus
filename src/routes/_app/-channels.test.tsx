@@ -39,6 +39,13 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchAgents: vi.fn(),
     configureChannel: vi.fn(),
     testChannel: vi.fn(),
+    // ADR-031 Track 2 — ConnectorsScreen resolves each configured instance's
+    // workspace→agent binding via these (same helpers ChannelConfigPanel
+    // uses); mock them explicitly so Section 3 (real ConnectorsScreen) never
+    // falls through to a real fetch() in Node.
+    fetchWorkspaces: vi.fn(),
+    createChannelInstance: vi.fn(),
+    deleteChannelInstance: vi.fn(),
   }
 })
 
@@ -83,6 +90,7 @@ import {
   getChannelRouting,
   setChannelRouting,
   fetchAgents,
+  fetchWorkspaces,
 } from '@/lib/api'
 import type { ChannelEntry } from '@/lib/api'
 import { ChannelConfigPanel } from '@/components/skills/ChannelConfigPanel'
@@ -98,9 +106,15 @@ function makeQueryClient() {
   })
 }
 
+// Defaults to a CONFIGURED instance (instance_id === id), matching the real
+// backend shape for an entry backed by a cfg.Channels[] map key (FR-008 —
+// "configured" = has a persisted config entry). Pass `instance_id: undefined`
+// explicitly to model the "available but unconfigured" static placeholder row.
 function makeChannel(overrides: Partial<ChannelEntry> = {}): ChannelEntry {
+  const id = overrides.id ?? 'telegram'
   return {
-    id: 'telegram',
+    id,
+    instance_id: id,
     name: 'Telegram',
     transport: 'webhook',
     enabled: false,
@@ -397,6 +411,12 @@ describe('ChannelsScreen — degraded channel state', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockUiStore()
+    // ConnectorsScreen resolves each configured row's workspace→agent binding
+    // via these queries — give them deterministic empty defaults so the
+    // "No workspace bound" fallback renders instead of an unmocked real fetch.
+    vi.mocked(getChannelRouting).mockResolvedValue({})
+    vi.mocked(fetchWorkspaces).mockResolvedValue([])
+    vi.mocked(fetchAgents).mockResolvedValue([])
   })
 
   it('shows "Failed to start" badge (not "Enabled") for a degraded channel', async () => {
