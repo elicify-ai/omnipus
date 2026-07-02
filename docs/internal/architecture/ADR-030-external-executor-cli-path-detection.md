@@ -193,3 +193,15 @@ CONFIDENCE: High
 ```
 
 **DoD.** vitest for the 3 components + updated call-site tests · `tsc -b` + vitest green · Playwright verify the trigger height matches a sibling input and the calendar renders in dark theme. **Wave:** frontend-lead builds dep + 3 components → fan-out migrate the 7 sites (parallel by file) → qa-lead → visual-qa → 7-reviewer gate.
+
+## 11. Revisions — Post-Grill Round 1 (security hardening)
+
+`/grill-spec` returned **BLOCK** (review: `docs/internal/specs/external-executor-cli-path-detection-spec-review.md`, 1 CRITICAL / 7 MAJOR). The findings below revise decisions in §2/§6 and **supersede** the earlier text where they conflict. All move strictly toward the project's security-first posture (Constraint #7).
+
+- **F-01 (CRITICAL) — validate hardening.** `POST /system/cli-validate` executes a caller-supplied path; it MUST apply `withRateLimit` and MUST audit the executed-path event (`{cli, resolved_path, reason}`). This overrides NFR-3 / the "must not audit" Non-Behavior **for validation only** — detection stays unaudited (no subprocess). `[Decision]`
+- **F-02 — detect↔runtime symmetry.** Prefill MUST write the **absolute** detected path; validation and the runtime spawn resolve the exact `cli_path`; an empty `cli_path` classifies `missing-binary` (never a silent `$PATH` fallback). Guarantees "detected == runs"; no spawn-resolver change. `[Decision]`
+- **F-03 — CLI identity.** The `--version` handshake MUST confirm the output identifies the expected CLI (per-CLI matcher), so a wrong binary (e.g. `/usr/bin/node`) yields `handshake-failed`, not a false pass. `[Decision]`
+- **F-06 — HOME-unset.** The well-known scan MUST tolerate `os.UserHomeDir()` failure (systemd, `HOME` unset): passwd-DB fallback or skip `~`-rooted candidates rather than erroring. `[Decision]`
+- **F-04/F-05/F-07/F-08 + minors** are spec-level corrections (canonical `source:"path"`; concrete `CliDetect`/`CliValidate` schemas; `ReasonOK`→`"ok"` mapping; gate Create on `reason ∈ {missing-binary,handshake-failed}` not raw `!ok`; concrete well-known list promoted to acceptance with a real-install SC-001; classified `detail`, never raw stderr) — detailed in the spec's "Post-Grill Revisions (Round 1)" section.
+
+CONFIDENCE: High — resolutions add security/correctness only; no new one-way doors. The validate endpoint is now audited + throttled like a privileged diagnostic.

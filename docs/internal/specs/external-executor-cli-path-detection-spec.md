@@ -10,6 +10,54 @@
 
 `subagent_3p` agents delegate to an external CLI (`claude-code`, `codex`, `opencode`) spawned at `ExecutorConfig.cli_path`. Today (1) detection computes the path via `exec.LookPath` then discards it, returning only booleans; (2) the SPA "prefill" is a static placeholder; (3) validation is only reachable after the agent is saved. This feature makes detection return the real path (searching `$PATH` **and** well-known install locations), prefills it per selected CLI, and validates at create-time that the CLI runs there — while preserving manual override.
 
+## Post-Grill Revisions (Round 1)
+
+`/grill-spec` returned **BLOCK** (review: `external-executor-cli-path-detection-spec-review.md`, 1 CRITICAL / 7 MAJOR / 6 MINOR). This section records the resolution of **every** finding and **supersedes** conflicting text below. New requirements are FR-013…FR-018.
+
+### Design decisions (mirrored in ADR §11)
+- **F-01 (CRITICAL) — validate hardening.** `POST /system/cli-validate` MUST apply `withRateLimit` and MUST audit the executed-path event `{cli, resolved_path, reason}`. Detection stays unaudited (no subprocess). Amends the Non-Behaviors ("must not audit" now applies to **detection only**) and NFR-3.
+- **F-02 — detect↔runtime symmetry.** Prefill MUST write the **absolute** detected path; validation and the runtime spawn resolve the exact `cli_path`. **D-3.1 corrected:** empty `cli_path` → `missing-binary` (NOT "$PATH default"). Guarantees detected == runs.
+- **F-03 — CLI identity.** The handshake MUST verify the `--version` output matches a per-CLI identity matcher; a wrong binary (e.g. `/usr/bin/node` under `claude-code`) → `handshake-failed`. **Corrects US-3 AC-2 / D-2.2.**
+- **F-06 — HOME-unset.** The scan MUST tolerate `os.UserHomeDir()` failure (passwd fallback or skip `~` candidates), so it works under systemd with `HOME` unset.
+
+### Corrections
+- **F-04 — enum + schemas.** Canonical `source` value is **`"path"`** (lowercase) everywhere; all BDD/D-1/UX uses of `"PATH"` are corrected to `"path"`. Wire schemas defined below.
+- **F-05 — `ok` mapping.** `runner.ReasonOK` is the empty string; the endpoint MUST map it to `reason:"ok"`. **FR-008 corrected:** gate Create on `reason ∈ {missing-binary, handshake-failed}`, never on raw `!ok` (which would wrongly block `unauthenticated`).
+- **F-07 — concrete list is acceptance, not a spike.** The per-OS candidate dirs (below) are part of the spec. **SC-001 corrected** to assert detection of a **real** binary installed to `~/.local/bin` and removed from `$PATH` (integration test), not injected fakes.
+- **F-08 — response hygiene.** `CliValidateResponse.detail` is a fixed, classified message per reason — **never raw stderr**. `resolved_path` is returned (`withAuth`-only).
+- **Minors (F-09…F-17).** Scan uses a `LookPath`-consistent executable-eligibility check (mode/`PATHEXT`), not bare `os.Stat`; Windows cases are table-driven so they run on Linux CI; `~/.nvm/versions/node/*` selects the **highest** version; validate-on-blur is **debounced ≥400 ms** and cancels in-flight; the SPA tolerates unknown `source`/`reason` values (stale-bundle safety).
+
+### Wire schemas (contract-first — Constraint #8)
+```yaml
+CliDetect:            { claude: CliDetectEntry, codex: CliDetectEntry, opencode: CliDetectEntry }   # required all 3
+CliDetectEntry:       { installed: bool, path: string|null (absolute), source: enum[path, well-known]|null }
+CliValidateRequest:   { cli: enum[claude-code, codex, opencode], cli_path: string }                 # required both
+CliValidateResponse:  { ok: bool, reason: enum[ok, missing-binary, handshake-failed, unauthenticated, unknown-cli],
+                        resolved_path: string|null, version: string|null, detail: string (classified, no stderr) }
+```
+
+### New functional requirements
+- **FR-013**: `cli-validate` MUST apply `withRateLimit` and emit an audit event `{cli, resolved_path, reason}` per call. `[F-01]`
+- **FR-014**: Prefill MUST be absolute; validation + runtime resolve exactly `cli_path`; empty `cli_path` MUST classify `missing-binary`. `[F-02]`
+- **FR-015**: The handshake MUST confirm `--version` output matches a per-CLI identity matcher; non-match → `handshake-failed`. `[F-03]`
+- **FR-016**: The well-known scan MUST tolerate `os.UserHomeDir()` failure without erroring. `[F-06]`
+- **FR-017**: `cli-validate` responses MUST carry a classified `detail`, never raw stderr. `[F-08]`
+- **FR-018**: The endpoint MUST map `ReasonOK` ("") → `reason:"ok"`; the SPA MUST gate Create on `reason ∈ {missing-binary, handshake-failed}`. `[F-05]`
+
+### Per-OS well-known candidate dirs (acceptance)
+- **Linux:** `/usr/local/bin`, `/usr/bin`, `~/.local/bin`, `~/.npm-global/bin`, newest `~/.nvm/versions/node/*/bin`, `~/.bun/bin`, `~/.deno/bin`, `~/.cargo/bin`, `/snap/bin`
+- **macOS:** `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin`, + npm/nvm/bun as above
+- **Windows:** `%APPDATA%\npm` (`.cmd`/`.exe` via `PATHEXT`), `%LOCALAPPDATA%\Programs\<tool>`, `%ProgramFiles%\...`
+
+### Added BDD / dataset rows
+- BDD (Error Path, Traces US-3): **Wrong binary rejected** — `claude-code` → `/usr/bin/node` → `handshake-failed` `[FR-015]`.
+- BDD (Error Path, Traces US-4): **Empty cli_path is missing** — empty → `missing-binary` `[FR-014]`.
+- BDD (Edge, Traces US-2): **HOME unset** — scan uses passwd home, still finds well-known binaries `[FR-016]`.
+- BDD (Error Path, Traces US-3): **validate is rate-limited** — N rapid calls → 429 after the limit `[FR-013]`.
+- **D-2.6**: `cli_path=/usr/bin/node`, `cli=claude-code` → `handshake-failed`. **D-3.1 corrected**: empty → `missing-binary`.
+
+---
+
 ## Actors
 
 | Actor | Role |
