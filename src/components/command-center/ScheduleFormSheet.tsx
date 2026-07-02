@@ -14,6 +14,7 @@ import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { SmartSelect } from '@/components/ui/smart-select'
+import { DateTimePicker } from '@/components/ui/date-time-picker'
 import {
   fetchAgents,
   createSchedule,
@@ -23,6 +24,7 @@ import {
 } from '@/lib/api'
 import type { Schedule, ScheduleCreate, ScheduleUpdate, ScheduleTrigger } from '@/lib/api/generated/openapi-types'
 import { useUiStore } from '@/store/ui'
+import { toDatetimeLocalValue } from '@/components/workspaces/taskFormFields'
 import { triggerSummary } from './SchedulesList'
 import {
   UNIT_MS,
@@ -668,12 +670,10 @@ function WhenSection({ form, setValue, triggerServerError }: WhenSectionProps) {
       {/* Once */}
       {form.friendlyMode === 'once' && (
         <Field label="Run at" htmlFor="schedule-at">
-          <Input
+          <DateTimePicker
             id="schedule-at"
-            type="datetime-local"
-            value={form.atLocal}
-            onChange={(e) => setValue('atLocal', e.target.value)}
-            className="text-xs"
+            value={form.atLocal ? new Date(form.atLocal) : null}
+            onChange={(d) => setValue('atLocal', d ? toDatetimeLocalValue(d.getTime()) : '')}
           />
         </Field>
       )}

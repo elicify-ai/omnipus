@@ -9,11 +9,67 @@
  * the 7-state lifecycle: inbox/next/planning/in_progress/blocked/done/failed.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest'
 import { render, screen, fireEvent, act, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { TaskDetailPanel } from './TaskDetailPanel'
 import type { Task } from '@/lib/api'
+
+// DateTimePicker (shadcn Calendar + Select) needs these jsdom polyfills to open
+// (same gap noted in date-time-picker.test.tsx).
+beforeAll(() => {
+  if (!Element.prototype.hasPointerCapture) {
+    Element.prototype.hasPointerCapture = () => false
+  }
+  if (!Element.prototype.scrollIntoView) {
+    Element.prototype.scrollIntoView = () => {}
+  }
+  if (typeof window !== 'undefined' && !window.ResizeObserver) {
+    window.ResizeObserver = class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    } as unknown as typeof ResizeObserver
+  }
+})
+
+// Click a react-day-picker day cell (data-day="YYYY-MM-DD") inside an open DateTimePicker popover.
+function clickDay(isoDate: string) {
+  const btn = document.querySelector(`[data-day="${isoDate}"] button`)
+  if (!btn) throw new Error(`no day button for ${isoDate}`)
+  fireEvent.click(btn)
+}
+
+// Pick an option from an open DateTimePicker's Hour/Minute <Select>.
+function selectOption(comboboxName: string, optionName: string) {
+  fireEvent.click(screen.getByRole('combobox', { name: comboboxName }))
+  const option = screen.getByRole('option', { name: optionName })
+  fireEvent.pointerDown(option, { pointerId: 1, button: 0 })
+  fireEvent.click(option)
+}
+
+// When no value is set, the calendar opens on the real "today" month (react-day-picker's
+// own default), not the target month — navigate forward/back via the Nav buttons so the
+// target day is on-screen regardless of when the suite happens to run.
+function navigateToMonth(isoDate: string) {
+  const [y, m] = isoDate.split('-').map(Number)
+  const target = new Date(y, m - 1, 1)
+  const now = new Date()
+  const diff = (target.getFullYear() - now.getFullYear()) * 12 + (target.getMonth() - now.getMonth())
+  const label = diff >= 0 ? /go to the next month/i : /go to the previous month/i
+  for (let i = 0; i < Math.abs(diff); i++) {
+    fireEvent.click(screen.getByRole('button', { name: label }))
+  }
+}
+
+// Open the "Due date" DateTimePicker and pick a full date + time.
+async function pickDueDateTime({ isoDate, hour, minute }: { isoDate: string; hour: string; minute: string }) {
+  fireEvent.click(await screen.findByRole('button', { name: /due date/i }))
+  navigateToMonth(isoDate)
+  clickDay(isoDate)
+  selectOption('Hour', hour)
+  selectOption('Minute', minute)
+}
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
@@ -444,13 +500,11 @@ describe('TaskDetailPanel — editable trigger', () => {
 })
 
 describe('TaskDetailPanel — editable due date', () => {
-  it('setting a due date PATCHes due as RFC3339 on blur', async () => {
+  it('setting a due date PATCHes due as RFC3339', async () => {
     const { updateTask } = await import('@/lib/api')
     renderPanel(makeTask({ id: 'task-due', status: 'next' }))
 
-    const due = await screen.findByLabelText(/due date/i)
-    fireEvent.change(due, { target: { value: '2026-09-10T12:30' } })
-    fireEvent.blur(due)
+    await pickDueDateTime({ isoDate: '2026-09-10', hour: '12', minute: '30' })
 
     await waitFor(() => expect(vi.mocked(updateTask)).toHaveBeenCalled())
     const arg = lastUpdateArg(updateTask)
@@ -525,11 +579,15 @@ describe('TaskDetailPanel — editable todos checklist', () => {
 describe('TaskDetailPanel — clearing a due date (clear_due)', () => {
   it('PATCHes clear_due:true and never sends due:"" when the field is cleared', async () => {
     const { updateTask } = await import('@/lib/api')
-    renderPanel(makeTask({ id: 'task-clear-due', status: 'next', due: '2026-09-10T12:30:00Z' }))
+    const dueIso = '2026-09-10T12:30:00Z'
+    renderPanel(makeTask({ id: 'task-clear-due', status: 'next', due: dueIso }))
 
-    const due = await screen.findByLabelText(/due date/i)
-    fireEvent.change(due, { target: { value: '' } })
-    fireEvent.blur(due)
+    // Clear by clicking the already-selected day again — react-day-picker's single-select
+    // mode (required=false, the default) deselects and fires onSelect(undefined).
+    fireEvent.click(await screen.findByRole('button', { name: /due date/i }))
+    const selectedDate = new Date(dueIso)
+    const localIso = `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, '0')}-${String(selectedDate.getDate()).padStart(2, '0')}`
+    clickDay(localIso)
 
     // Clears via the unambiguous flag; never sends the broken empty string.
     await vi.waitFor(() => {
@@ -595,9 +653,7 @@ describe('TaskDetailPanel — autosave indicator', () => {
     vi.mocked(updateTask).mockResolvedValue({} as never)
     renderPanel(makeTask({ id: 'task-autosave', status: 'next' }))
 
-    const due = await screen.findByLabelText(/due date/i)
-    fireEvent.change(due, { target: { value: '2026-09-10T12:30' } })
-    fireEvent.blur(due)
+    await pickDueDateTime({ isoDate: '2026-09-10', hour: '12', minute: '30' })
 
     await waitFor(() => expect(vi.mocked(updateTask)).toHaveBeenCalled())
     await screen.findByText(/saved/i)

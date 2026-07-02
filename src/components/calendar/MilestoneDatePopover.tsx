@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import {
   Dialog,
@@ -8,8 +8,10 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { DatePicker } from '@/components/ui/date-picker'
 import { updateMilestone } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
+import { parseLocalDate, formatLocalDate } from '@/lib/calendar/eventMapping'
 import type { MilestoneDatePopoverProps } from './types'
 
 /**
@@ -35,7 +37,6 @@ export function MilestoneDatePopover({
   onRescheduled,
 }: MilestoneDatePopoverProps) {
   const addToast = useUiStore((s) => s.addToast)
-  const inputRef = useRef<HTMLInputElement>(null)
 
   // Local date string state — YYYY-MM-DD
   const [dateValue, setDateValue] = useState<string>('')
@@ -48,14 +49,16 @@ export function MilestoneDatePopover({
     }
   }, [milestone])
 
-  // Focus the date input on open. This setTimeout is LOAD-BEARING: without it Radix's
-  // focus trap would land on the first tabbable element (the Cancel button). Moving focus
-  // explicitly to the input lets the user start editing immediately (C-4).
+  // Focus the date picker trigger on open. This setTimeout is LOAD-BEARING: without it
+  // Radix's focus trap would land on the first tabbable element (the Cancel button).
+  // Moving focus explicitly to the trigger lets the user start editing immediately (C-4).
+  // DatePicker's trigger is a plain <Button> (no ref forwarding), so focus is driven via
+  // the DOM id it renders with rather than a React ref.
   useEffect(() => {
     if (milestone != null) {
       // Small defer so the dialog animation does not fight focus management.
       const id = setTimeout(() => {
-        inputRef.current?.focus()
+        document.getElementById('milestone-date-input')?.focus()
       }, 50)
       return () => clearTimeout(id)
     }
@@ -149,24 +152,10 @@ export function MilestoneDatePopover({
             >
               Due date
             </label>
-            <input
-              ref={inputRef}
+            <DatePicker
               id="milestone-date-input"
-              type="date"
-              value={dateValue}
-              onChange={(e) => setDateValue(e.target.value)}
-              data-testid="milestone-date-input"
-              className={[
-                'h-10 w-full rounded-md border border-[var(--color-border)]',
-                'bg-[var(--color-surface-2)] px-3 py-2',
-                'text-sm text-[var(--color-secondary)]',
-                'placeholder:text-[var(--color-muted)]',
-                'focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)] focus:ring-offset-2',
-                'focus:ring-offset-[var(--color-surface-1)]',
-                'disabled:cursor-not-allowed disabled:opacity-50',
-                // date inputs in Chromium need explicit color-scheme to honour dark bg
-                '[color-scheme:dark]',
-              ].join(' ')}
+              value={parseLocalDate(dateValue)}
+              onChange={(d) => setDateValue(d ? formatLocalDate(d) : '')}
               disabled={mutation.isPending}
               aria-label="New due date"
             />

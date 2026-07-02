@@ -27,6 +27,7 @@ import {
 import { SmartSelect } from '@/components/ui/smart-select'
 import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
+import { DateTimePicker } from '@/components/ui/date-time-picker'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -117,6 +118,14 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
   const [triggerError, setTriggerError] = useState('')
   const [dueError, setDueError] = useState('')
   const [statusError, setStatusError] = useState('')
+  // DateTimePicker is fully controlled (value/onChange) — day, hour, and minute
+  // picks each fire a separate onChange that must compose on top of the prior
+  // pick, so these hold the in-progress edit and are re-synced from the task
+  // whenever the server value changes (e.g. after a successful autosave PATCH).
+  const [triggerAtDraft, setTriggerAtDraft] = useState<Date | null>(
+    typeof task?.trigger?.config?.at_ms === 'number' ? new Date(task.trigger.config.at_ms) : null,
+  )
+  const [dueDraft, setDueDraft] = useState<Date | null>(task?.due ? new Date(task.due) : null)
   // Autosave indicator — every field change fires an immediate mutation; this
   // mirrors the AgentProfile / Gateway pattern so the user sees Saving…/Saved.
   const [saveStatus, setSaveStatus] = useState<AutoSaveStatus>('idle')
@@ -130,9 +139,11 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
     setTriggerError('')
     setDueError('')
     setStatusError('')
+    setTriggerAtDraft(typeof task?.trigger?.config?.at_ms === 'number' ? new Date(task.trigger.config.at_ms) : null)
+    setDueDraft(task?.due ? new Date(task.due) : null)
     setSaveStatus('idle')
     setSaveError(undefined)
-  }, [task?.id, task?.prompt, task?.workspace_id])
+  }, [task?.id, task?.prompt, task?.workspace_id, task?.due, task?.trigger?.config?.at_ms])
 
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
 
@@ -596,12 +607,14 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
           ]}
         />
         {triggerKind === 'once' && (
-          <Input
+          <DateTimePicker
             aria-label="Trigger date and time"
-            type="datetime-local"
-            defaultValue={toDatetimeLocalValue(typeof triggerCfg.at_ms === 'number' ? triggerCfg.at_ms : undefined)}
-            onBlur={(e) => handleTriggerAtChange(e.target.value)}
-            className="mt-1.5 text-xs"
+            value={triggerAtDraft}
+            onChange={(d) => {
+              setTriggerAtDraft(d)
+              handleTriggerAtChange(d ? toDatetimeLocalValue(d.getTime()) : '')
+            }}
+            className="mt-1.5"
           />
         )}
         {triggerKind === 'every' && (
@@ -695,13 +708,13 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
 
       {/* Due date (editable) */}
       <Field label="Due date">
-        <Input
+        <DateTimePicker
           aria-label="Due date"
-          type="datetime-local"
-          defaultValue={toDatetimeLocalValue(task.due)}
-          key={task.id + (task.due ?? '')}
-          onBlur={(e) => handleDueChange(e.target.value)}
-          className="text-xs"
+          value={dueDraft}
+          onChange={(d) => {
+            setDueDraft(d)
+            handleDueChange(d ? toDatetimeLocalValue(d.getTime()) : '')
+          }}
         />
         {dueError && (
           <p className="text-xs text-[var(--color-error)] mt-1.5">{dueError}</p>

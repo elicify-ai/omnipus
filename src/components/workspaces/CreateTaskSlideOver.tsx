@@ -22,6 +22,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Checkbox } from '@/components/ui/checkbox'
 import { SmartSelect } from '@/components/ui/smart-select'
+import { DateTimePicker } from '@/components/ui/date-time-picker'
 import {
   createTask,
   updateTask,
@@ -41,6 +42,7 @@ import { PRIORITY_BADGE } from './TaskCard'
 import {
   type TriggerKind,
   buildTrigger,
+  toDatetimeLocalValue,
   datetimeLocalToMs,
   datetimeLocalToIso,
 } from './taskFormFields'
@@ -445,12 +447,14 @@ export function CreateTaskSlideOver({
             </Select>
 
             {form.triggerKind === 'once' && (
-              <Input
+              <DateTimePicker
                 aria-label="Trigger date and time"
-                type="datetime-local"
-                value={form.triggerAt}
-                onChange={(e) => { setForm((s) => ({ ...s, triggerAt: e.target.value })); setTriggerError('') }}
-                className="mt-1 text-xs"
+                value={form.triggerAt ? new Date(form.triggerAt) : null}
+                onChange={(d) => {
+                  setForm((s) => ({ ...s, triggerAt: d ? toDatetimeLocalValue(d.getTime()) : '' }))
+                  setTriggerError('')
+                }}
+                className="mt-1"
               />
             )}
             {form.triggerKind === 'every' && (
@@ -548,13 +552,11 @@ export function CreateTaskSlideOver({
             <Label htmlFor="ct-due" className="text-[var(--color-secondary)]">
               Due date
             </Label>
-            <Input
+            <DateTimePicker
               id="ct-due"
               aria-label="Due date"
-              type="datetime-local"
-              value={form.due}
-              onChange={(e) => setForm((s) => ({ ...s, due: e.target.value }))}
-              className="text-xs"
+              value={form.due ? new Date(form.due) : null}
+              onChange={(d) => setForm((s) => ({ ...s, due: d ? toDatetimeLocalValue(d.getTime()) : '' }))}
             />
           </div>
 
