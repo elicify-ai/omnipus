@@ -21,6 +21,8 @@
 // self-hosted runtimes (litellm/vllm) use the Self-hosted / Custom fallback.
 //
 // NEVER crashes: all inputs including "" and garbage strings are handled.
+//
+// Extended by FIX-5 (anthropic_id matching) — see provider-ux-fixes-plan.md.
 
 import { PROVIDER_CATALOG } from '@/lib/generated/providerCatalog'
 import type { ProviderCatalogEntry } from '@/lib/api/generated/openapi-types'

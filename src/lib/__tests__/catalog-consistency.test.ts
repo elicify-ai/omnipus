@@ -33,8 +33,7 @@ import { PROVIDER_CATALOG } from '@/lib/generated/providerCatalog'
 
 describe('provider catalog — cross-surface consistency (FIX-4/5/6, SC-002 / FR-019)', () => {
   it('is non-empty and has a stable size (23 curated user-facing entries post wire-merge)', () => {
-    expect(PROVIDER_CATALOG.length).toBeGreaterThanOrEqual(20)
-    expect(PROVIDER_CATALOG.length).toBeLessThanOrEqual(35)
+    expect(PROVIDER_CATALOG.length).toBe(23)
   })
 
   it('has unique ids (each entry = one billable endpoint)', () => {

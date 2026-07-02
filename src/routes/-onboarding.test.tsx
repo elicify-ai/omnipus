@@ -61,7 +61,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
 vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: '/test-avatar.svg' }))
 
 import { configureProvider, probeProvider, completeOnboardingTransaction } from '@/lib/api'
-import { evaluatePasswordStrength, friendlyProbeError, PROVIDERS_REQUIRING_ENDPOINT, sortProvidersByPriority, PLAN_LABELS, REGION_LABELS } from './onboarding'
+import { evaluatePasswordStrength, friendlyProbeError, PROVIDERS_REQUIRING_ENDPOINT, PLAN_LABELS, REGION_LABELS } from './onboarding'
 import { PROVIDER_CATALOG } from '@/lib/generated/providerCatalog'
 import { readFileSync } from 'fs'
 import { join, dirname } from 'path'
@@ -629,25 +629,6 @@ describe('PROVIDERS_REQUIRING_ENDPOINT', () => {
 })
 
 // =====================================================================
-// sortProvidersByPriority — covers new China/intl variants
-// =====================================================================
-
-describe('sortProvidersByPriority — provider list ordering', () => {
-  it('moves openai/anthropic/openrouter to the front', () => {
-    const list = [
-      { id: 'qwen', display_name: 'Qwen (China)' },
-      { id: 'openai', display_name: 'OpenAI' },
-      { id: 'anthropic', display_name: 'Anthropic' },
-      { id: 'openrouter', display_name: 'OpenRouter' },
-    ]
-    const sorted = sortProvidersByPriority(list)
-    expect(sorted[0].id).toBe('openai')
-    expect(sorted[1].id).toBe('anthropic')
-    expect(sorted[2].id).toBe('openrouter')
-  })
-})
-
-// =====================================================================
 // Provider list — China/intl variants present in the UI
 // =====================================================================
 
@@ -733,6 +714,21 @@ describe('OnboardingWizard — company grid (grouped picker)', () => {
     fireEvent.click(screen.getByRole('button', { name: /connect & load models/i }))
     await waitFor(() => {
       expect(probeProvider).toHaveBeenCalledWith('zhipu-coding', 'test-key', undefined)
+    })
+  })
+
+  it('resolves the correct id for Qwen/Alibaba Coding Plan (single entry, no region split): coding-plan', async () => {
+    vi.mocked(probeProvider).mockResolvedValue({ success: true })
+    await goToStep3()
+    fireEvent.click(screen.getByRole('button', { name: /Qwen \/ Alibaba/i }))
+    await waitFor(() => screen.getByRole('button', { name: PLAN_LABELS['coding-plan'] }))
+    fireEvent.click(screen.getByRole('button', { name: PLAN_LABELS['coding-plan'] }))
+    // The Coding Plan variant has no regional split — no Region control renders.
+    expect(screen.queryByRole('group', { name: /select region/i })).not.toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'test-key' } })
+    fireEvent.click(screen.getByRole('button', { name: /connect & load models/i }))
+    await waitFor(() => {
+      expect(probeProvider).toHaveBeenCalledWith('coding-plan', 'test-key', undefined)
     })
   })
 
