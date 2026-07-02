@@ -244,7 +244,9 @@ An operator on the login screen should not see a redundant "Set up Omnipus for t
 - **`/api/v1/state` unreachable on a fresh install** → `_app.tsx` sends the user to `/login`; with the button removed there is no onboarding affordance there (accepted — a dead `/state` is a broader failure; R2-06).
 - **A provider configured with an alias whose canonical entry was later removed from the catalog** → falls through to the generic group with the raw id (US-8/AS-3).
 - **Two variants of the same company both configured** → both render as separate endpoint-rows under one header (US-5/AS-1).
-- **ADR-029 still `Proposed` at implementation time** → Track 2 (US-9/US-10) MUST NOT ship; Track 1 + foundation + login proceed.
+- **ADR-029 still `Proposed` at implementation time** → Track 2 (US-9/US-10) MUST NOT ship; Track 1 + foundation + login proceed. **[RESOLVED: ADR-029 Accepted 2026-07-02.]**
+- **Web Chat (built-in singleton)** → has no `instance_id`, no ADR-029 binding, and its `/channels/webchat/*` sub-routes 404 (excluded from `validChannelIDs`) — so it belongs to NEITHER the type-grouped list NOR the roster. It renders as its own "Built-in / Always on" row without Configure/Enable controls (the old screen's webchat toggle 404'd — removing it is a bug fix, not scope creep).
+- **Channel create flow is deliberately TWO chained Sheets, not one multi-step Sheet**: `CreateChannelSheet` (type → slug) closes on success and immediately opens `ChannelConfigPanel` (workspace → agent) for the new instance. This satisfies US-10 AS-2's outcome (Sheet-based, ADR-029 path, instance appears grouped) while reusing the already-reviewed workspace/agent picker instead of duplicating it inside the create Sheet.
 
 ---
 
@@ -675,7 +677,7 @@ An operator on the login screen should not see a redundant "Set up Omnipus for t
 - **FR-015**: Vendored SVGs MUST be sanitized (allow-list via DOMPurify at build time); a check MUST fail on any disallowed element/attribute. *(US-2; ADR FR-12/R2-09)*
 - **FR-016**: The catalog MUST NOT be served from a live HTTP endpoint (embed only). *(US-1; embed decision)*
 - **FR-017**: The login "Set up Omnipus…" button + `Rocket` import MUST be removed; the `login.tsx:32-38` post-login redirect MUST be retained. *(US-11; ADR FR-9, MIN-002)*
-- **FR-018**: Track 2 (Channels UI: US-9/US-10) MUST NOT ship until ADR-029 is `Accepted`; Track 1 + foundation + login proceed independently. *(sequencing; ADR §7/R2-11)*
+- **FR-018**: Track 2 (Channels UI: US-9/US-10) MUST NOT ship until ADR-029 is `Accepted`; Track 1 + foundation + login proceed independently. *(sequencing; ADR §7/R2-11)* **[SATISFIED 2026-07-02: ADR-029 flipped to Accepted — operator-ratified; R4 F-01 resolved in implementation; see the ADR-029 status note.]**
 - **FR-019**: The onboarding↔Settings consistency test MUST be a blocking acceptance criterion. *(US-7; ADR R3/MAJ-003)*
 - **FR-020**: The `ProviderCatalogEntry` type MUST be contract-defined (`contracts/components/schemas/`) and generated to Go + TS; no hand-written cross-boundary type. *(Constraint #8)*
 
