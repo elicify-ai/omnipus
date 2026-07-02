@@ -151,6 +151,7 @@ test('(c) clicking Configure opens the channel config panel sheet', async ({ pag
       body: JSON.stringify([
         {
           id: 'telegram',
+          instance_id: 'telegram',
           name: 'Telegram',
           transport: 'webhook',
           enabled: false,
@@ -250,7 +251,7 @@ test(
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify([
-          { id: 'telegram', name: 'Telegram', transport: 'webhook', enabled: false, description: '' },
+          { id: 'telegram', instance_id: 'telegram', name: 'Telegram', transport: 'webhook', enabled: false, description: '' },
         ]),
       })
     })
@@ -365,7 +366,7 @@ test(
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify([
-          { id: 'telegram', name: 'Telegram', transport: 'webhook', enabled: false, description: '' },
+          { id: 'telegram', instance_id: 'telegram', name: 'Telegram', transport: 'webhook', enabled: false, description: '' },
         ]),
       })
     })
