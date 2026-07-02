@@ -366,10 +366,19 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 	// ignore the reasoning:{enabled:false} hint and generate a reasoning trace. When
 	// content is empty but resp.Reasoning is non-empty, the model likely drafted its
 	// JSON inside the reasoning trace (observed pattern: the trace ends with a JSON
-	// block). Scan the reasoning field for a JSON object so the recap succeeds without
-	// requiring a retry with a different token budget.
+	// block). Fall back to the reasoning trace so the recap succeeds without a retry.
 	if strings.TrimSpace(responseText) == "" && resp.Reasoning != "" {
-		responseText = extractJSONFromText(resp.Reasoning)
+		responseText = resp.Reasoning
+	}
+
+	// Unwrap the JSON envelope. glm-5.2 (and other providers) frequently return the
+	// JSON inside a ```json fence or with surrounding prose — observed verbatim:
+	// content begins "```json\n{...", which a raw json.Unmarshal rejects at char 0.
+	// extractJSONFromText backward-scans for the outermost VALID {…} object; only
+	// override when it finds one, so a model that already returned bare JSON is
+	// unaffected.
+	if extracted := extractJSONFromText(responseText); extracted != "" {
+		responseText = extracted
 	}
 
 	if parseErr := json.Unmarshal([]byte(responseText), &parsed); parseErr != nil {
