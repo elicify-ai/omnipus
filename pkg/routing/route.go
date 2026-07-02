@@ -100,13 +100,43 @@ func (r *RouteResolver) ResolveRoute(input RouteInput) ResolvedRoute {
 	// connection acts AS agent X — this overrides every binding. A user-kind
 	// identity (or no identity) leaves the normal cascade in effect: the message
 	// is attributed to the user and routed by the binding rules below, ending at
-	// the default agent. pickAgentID validates X against the agent list and logs
-	// a fallback to default if it is unknown, so a stale identity can never drop
-	// the message.
+	// the default agent.
+	//
+	// ADR-029 FR-012/FR-013/FR-014 — bound-instance drift guard:
+	// For workspace-bound instances (BoundInstance=true), if the configured agent
+	// is unresolvable (deleted, disabled, or a worker) the route MUST drop rather
+	// than fall through to pickAgentID's default fallback. A member merely removed
+	// from CoreTeam but still existing+enabled+non-worker MUST still route (stale).
+	// pickAgentID validates X against the agent list and logs a fallback to default
+	// only for NON-bound callers; for bound callers an unresolvable agent → Drop.
 	if input.Identity != nil {
 		kind := strings.ToLower(strings.TrimSpace(input.Identity.Kind))
 		if kind == "agent" && strings.TrimSpace(input.Identity.ID) != "" {
-			return choose(input.Identity.ID, "identity.agent")
+			agentID := strings.TrimSpace(input.Identity.ID)
+			if input.BoundInstance {
+				// Drift check: the agent must exist AND be enabled AND be a chat target.
+				// Removal from CoreTeam alone is NOT a drift condition — the instance
+				// routes stale (FR-013) and the SPA shows a config-time warning only.
+				unresolvable := true
+				agents := r.cfg.Agents.List
+				for _, a := range agents {
+					if NormalizeAgentID(a.ID) == NormalizeAgentID(agentID) {
+						if a.IsChatTarget() {
+							unresolvable = false
+						}
+						break
+					}
+				}
+				if unresolvable {
+					return ResolvedRoute{
+						Channel:   channel,
+						AccountID: accountID,
+						MatchedBy: "bound.drift.drop",
+						Drop:      true,
+					}
+				}
+			}
+			return choose(agentID, "identity.agent")
 		}
 	}
 

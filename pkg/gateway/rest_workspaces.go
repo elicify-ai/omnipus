@@ -1026,6 +1026,16 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
+	// ADR-029 FR-025/MAJ-005: disable and unbind all channel instances bound to
+	// this workspace BEFORE removing the workspace file. If this config write fails
+	// the delete aborts with 500, leaving the workspace + bindings fully consistent
+	// (no orphan). Ordering guarantee: config unbind → workspace file delete.
+	if err := unbindChannelInstancesForWorkspace(a, id); err != nil {
+		slog.Error("rest: delete workspace: cascade channel unbind", "id", id, "error", err)
+		jsonErr(w, http.StatusInternalServerError, "failed to unbind channel instances for workspace")
+		return
+	}
+
 	path := filepath.Join(a.homePath, "workspaces", id+".json")
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		slog.Error("rest: delete workspace: remove file", "id", id, "error", err)
@@ -1126,4 +1136,49 @@ func deduplicateStrings(in []string) []string {
 		}
 	}
 	return out
+}
+
+// unbindChannelInstancesForWorkspace disables and unbinds every channel instance
+// bound to workspaceID. Called from handleWorkspaceDelete BEFORE the workspace
+// file is removed (ADR-029 FR-025/MAJ-005) so that a config-write failure aborts
+// the delete cleanly with no orphan. "Unbind" clears BOTH WorkspaceID AND Identity
+// (leaving Identity would make the next inbound drift on a now-missing workspace)
+// and sets Enabled=false. If no instances are bound this is a no-op returning nil.
+func unbindChannelInstancesForWorkspace(a *restAPI, workspaceID string) error {
+	cfg := a.agentLoop.GetConfig()
+	// Identify bound instances.
+	var boundKeys []string
+	for key, inst := range cfg.Channels {
+		if inst.WorkspaceID == workspaceID {
+			boundKeys = append(boundKeys, key)
+		}
+	}
+	if len(boundKeys) == 0 {
+		return nil // nothing to do
+	}
+	sort.Strings(boundKeys) // deterministic order for logging
+
+	return a.safeUpdateConfigJSON(func(m map[string]any) error {
+		channels, _ := m["channels"].(map[string]any)
+		if channels == nil {
+			// No channels section in raw JSON — nothing to unbind.
+			return nil
+		}
+		for _, key := range boundKeys {
+			ch, _ := channels[key].(map[string]any)
+			if ch == nil {
+				ch = map[string]any{}
+			}
+			// Clear workspace binding and identity; disable the instance.
+			delete(ch, "workspace_id")
+			delete(ch, "identity")
+			ch["enabled"] = false
+			channels[key] = ch
+		}
+		m["channels"] = channels
+
+		slog.Info("rest: workspace delete: disabled and unbound channel instances",
+			"workspace_id", workspaceID, "instance_ids", boundKeys)
+		return nil
+	})
 }

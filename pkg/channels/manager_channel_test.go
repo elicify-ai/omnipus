@@ -63,16 +63,20 @@ func TestToChannelHashes(t *testing.T) {
 	assert.Equal(t, false, tgInst2.Enabled)
 }
 
-// TestToChannelHashes_WhatsAppMapsToNativeName is the function-level regression
-// guard for the gateway-crash bug: the WhatsApp config lives under the JSON key
-// "whatsapp", but initChannels registers the channel in m.channels under the
-// REGISTERED name "whatsapp_native". The reload diff (compareChannels) must emit
-// the registered name so m.channels[name] resolves — otherwise the Reload
-// added-start loop dereferences a nil channel and crashes the whole gateway.
+// TestToChannelHashes_WhatsAppKeysByInstanceID is the function-level regression
+// guard for ADR-029 Gate-1 WS-B: the WhatsApp config lives under the JSON key
+// "whatsapp" (or "whatsapp.eu" for namespaced instances). m.channels and
+// m.channelHashes are both keyed by instanceID so the reload diff
+// (compareChannels) produces instanceID-keyed added/removed lists.
 //
-// This asserts purely at the function level (toChannelHashes / compareChannels /
+// Pre-ADR-029 the hash was keyed by "whatsapp_native" (the factory name) so
+// that initChannels used m.channels["whatsapp_native"]. That invariant is gone:
+// initChannel now keys m.channels by instanceID, so hashes must also key by
+// instanceID. This test asserts the new correct behaviour.
+//
+// Asserting purely at the function level (toChannelHashes / compareChannels /
 // toChannelConfig) so it needs no real whatsmeow connection or network.
-func TestToChannelHashes_WhatsAppMapsToNativeName(t *testing.T) {
+func TestToChannelHashes_WhatsAppKeysByInstanceID(t *testing.T) {
 	cfg := config.DefaultConfig()
 	waInst := cfg.Channels["whatsapp"]
 	waInst.Enabled = true
@@ -80,30 +84,29 @@ func TestToChannelHashes_WhatsAppMapsToNativeName(t *testing.T) {
 
 	hashes := toChannelHashes(cfg)
 
-	// The hash map must be keyed by the REGISTERED name, never the config key.
-	if _, ok := hashes["whatsapp_native"]; !ok {
-		t.Fatalf("toChannelHashes must key enabled WhatsApp under the registered name "+
-			"\"whatsapp_native\"; got keys: %v", hashes)
+	// The hash map must be keyed by the instanceID ("whatsapp"), NOT the factory name.
+	if _, ok := hashes["whatsapp"]; !ok {
+		t.Fatalf("toChannelHashes must key enabled WhatsApp under instanceID "+
+			"\"whatsapp\"; got keys: %v", hashes)
 	}
-	if _, ok := hashes["whatsapp"]; ok {
-		t.Fatalf("toChannelHashes must NOT key WhatsApp under the raw config key "+
-			"\"whatsapp\" (that name has no channel in m.channels); got keys: %v", hashes)
+	if _, ok := hashes["whatsapp_native"]; ok {
+		t.Fatalf("toChannelHashes must NOT key WhatsApp under factory name "+
+			"\"whatsapp_native\" (FR-015/WS-B: m.channels is keyed by instanceID); got keys: %v", hashes)
 	}
 
 	// A reload that enables WhatsApp (empty old map → enabled new map) must produce
-	// added = ["whatsapp_native"] and NO phantom "whatsapp" added / "whatsapp_native"
-	// removed split.
+	// added = ["whatsapp"] and nothing removed.
 	added, removed := compareChannels(map[string]string{}, hashes)
-	assert.EqualValues(t, []string{"whatsapp_native"}, added,
-		"enabling WhatsApp must add the registered name, not the config key")
+	assert.EqualValues(t, []string{"whatsapp"}, added,
+		"enabling WhatsApp must add the instanceID \"whatsapp\", not the factory name")
 	assert.EqualValues(t, []string(nil), removed,
 		"enabling WhatsApp must not mark anything removed")
 
 	// toChannelConfig must still select the WhatsApp config block when the list
-	// holds the REGISTERED name — otherwise initChannels would never see it enabled.
+	// holds the instanceID — otherwise initChannels would never see it enabled.
 	cc, err := toChannelConfig(cfg, added)
 	assert.NoError(t, err)
 	waResult := config.InstanceToWhatsApp(cc["whatsapp"])
 	assert.True(t, waResult.Enabled,
-		"toChannelConfig must populate WhatsApp.Enabled when list holds \"whatsapp_native\"")
+		"toChannelConfig must populate WhatsApp.Enabled when list holds \"whatsapp\"")
 }

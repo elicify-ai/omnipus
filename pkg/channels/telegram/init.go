@@ -11,7 +11,7 @@ func init() {
 	channels.RegisterFactory(
 		"telegram",
 		func(cfg *config.Config, instanceID string, secrets credentials.SecretBundle, b *bus.MessageBus) (channels.Channel, error) {
-			return NewTelegramChannel(cfg, secrets, b)
+			return NewTelegramChannel(cfg, instanceID, secrets, b)
 		},
 	)
 }

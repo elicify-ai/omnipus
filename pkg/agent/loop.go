@@ -108,6 +108,13 @@ type AgentLoop struct {
 	// diagnostics; incremented atomically from resolveMediaRefs hot path.
 	mediaRefsDropped atomic.Int64
 
+	// driftDropped counts bound-instance drift drops: inbound messages on a
+	// workspace-bound channel instance whose configured agent is unresolvable
+	// (deleted, disabled, or a worker). Each drop increments this counter
+	// (ADR-029 FR-028 / MAJ-003). Observable via GetDriftDropped for tests and
+	// diagnostics.
+	driftDropped atomic.Int64
+
 	reloadFunc    func() error
 	reloadPending atomic.Bool // set by TriggerReload; cleared by ClearReloadPending (called from gateway executeReload)
 
@@ -3590,8 +3597,12 @@ func (al *AgentLoop) rebuildChannelSessionIndex() {
 
 // resolveOrCreateChannelSession returns the shared session ID for (channel, chatID),
 // creating a new session in the shared store if none exists yet.
+// workspaceID is stamped onto newly-created sessions when non-empty (ADR-029
+// FR-022: a session created by a bound channel instance inherits the instance's
+// workspace_id). Already-existing sessions are NOT patched — the index hit
+// returns the existing ID unchanged (workspace_id was set at creation time).
 // Returns "" if the shared store is unavailable or inputs are empty.
-func (al *AgentLoop) resolveOrCreateChannelSession(channel, chatID, agentID, displayName string) string {
+func (al *AgentLoop) resolveOrCreateChannelSession(channel, chatID, agentID, displayName, workspaceID string) string {
 	if al.sharedSessionStore == nil || channel == "" || chatID == "" {
 		return ""
 	}
@@ -3608,6 +3619,13 @@ func (al *AgentLoop) resolveOrCreateChannelSession(channel, chatID, agentID, dis
 		logger.WarnCF("agent", "Failed to create channel session",
 			map[string]any{"channel": channel, "chat_id": chatID, "error": err.Error()})
 		return ""
+	}
+	// FR-022: stamp workspace_id on newly-created sessions for bound instances.
+	if workspaceID != "" {
+		if patchErr := al.sharedSessionStore.SetMeta(meta.ID, session.MetaPatch{WorkspaceID: &workspaceID}); patchErr != nil {
+			logger.WarnCF("agent", "Failed to stamp workspace_id on channel session",
+				map[string]any{"session_id": meta.ID, "workspace_id": workspaceID, "error": patchErr.Error()})
+		}
 	}
 	al.channelSessionIdx.Store(key, meta.ID)
 	return meta.ID
@@ -3849,6 +3867,14 @@ func (al *AgentLoop) GetMediaStore() media.MediaStore {
 // on disk). Safe for concurrent access; incremented on the hot turn path.
 func (al *AgentLoop) GetMediaRefsDropped() int64 {
 	return al.mediaRefsDropped.Load()
+}
+
+// GetDriftDropped returns the cumulative count of bound-instance drift drops:
+// inbound messages on a workspace-bound channel instance whose configured agent
+// was unresolvable (deleted, disabled, or a worker). Safe for concurrent access;
+// incremented atomically in resolveMessageRoute (ADR-029 FR-028 / MAJ-003).
+func (al *AgentLoop) GetDriftDropped() int64 {
+	return al.driftDropped.Load()
 }
 
 // SetTranscriber injects a voice transcriber for agent-level audio transcription.
@@ -4315,9 +4341,20 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 
 	// For non-webchat channel messages arriving without a session ID, create or
 	// resume a persistent shared session so they appear in the session history panel.
+	// FR-022 (ADR-029): for a bound channel instance, stamp the session with the
+	// instance's workspace_id so it appears linked to the right workspace.
 	if msg.SessionID == "" && msg.Channel != "webchat" && msg.Channel != "system" && msg.Channel != "" {
+		instanceSessionID := inboundInstanceID(msg)
+		sessionWorkspaceID := ""
+		if instanceSessionID != "" {
+			if sessionCfg := al.GetConfig(); sessionCfg != nil {
+				if instCfg, ok := sessionCfg.Channels[instanceSessionID]; ok {
+					sessionWorkspaceID = instCfg.WorkspaceID
+				}
+			}
+		}
 		if sid := al.resolveOrCreateChannelSession(
-			msg.Channel, msg.ChatID, agent.ID, msg.Sender.DisplayName,
+			msg.Channel, msg.ChatID, agent.ID, msg.Sender.DisplayName, sessionWorkspaceID,
 		); sid != "" {
 			msg.SessionID = sid
 		}
@@ -4569,16 +4606,76 @@ func (al *AgentLoop) resolveMessageRoute(msg bus.InboundMessage) (routing.Resolv
 	}
 
 	instanceID := inboundInstanceID(msg)
+	identity := al.resolveInboundIdentity(instanceID)
+
+	// ADR-029 FR-012/FR-014: set BoundInstance=true when the instance is
+	// workspace-bound AND carries an agent-kind identity. Both conditions must
+	// hold: a bare identity without a workspace (legacy routing) must not trigger
+	// the drift-drop guard, and a workspace binding without an agent identity
+	// cannot be drift-checked (nothing to validate). The drift guard inside
+	// ResolveRoute then enforces that a workspace-bound instance never falls back
+	// to the global default when its agent is unresolvable.
+	var boundInstance bool
+	if identity != nil && strings.ToLower(strings.TrimSpace(identity.Kind)) == "agent" {
+		if cfg := al.GetConfig(); cfg != nil {
+			if inst, ok := cfg.Channels[instanceID]; ok && inst.WorkspaceID != "" {
+				boundInstance = true
+			}
+		}
+	}
+
 	route := registry.ResolveRoute(routing.RouteInput{
-		Channel:    msg.Channel,
-		AccountID:  inboundMetadata(msg, metadataKeyAccountID),
-		Peer:       extractPeer(msg),
-		ParentPeer: extractParentPeer(msg),
-		GuildID:    inboundMetadata(msg, metadataKeyGuildID),
-		TeamID:     inboundMetadata(msg, metadataKeyTeamID),
-		InstanceID: instanceID,
-		Identity:   al.resolveInboundIdentity(instanceID),
+		Channel:       msg.Channel,
+		AccountID:     inboundMetadata(msg, metadataKeyAccountID),
+		Peer:          extractPeer(msg),
+		ParentPeer:    extractParentPeer(msg),
+		GuildID:       inboundMetadata(msg, metadataKeyGuildID),
+		TeamID:        inboundMetadata(msg, metadataKeyTeamID),
+		InstanceID:    instanceID,
+		Identity:      identity,
+		BoundInstance: boundInstance,
 	})
+
+	// ADR-029 FR-012/FR-028: a drift drop means the bound agent is unresolvable.
+	// Do NOT call GetDefaultAgent — enter the FR-015 unroutable path directly.
+	// Emit a structured audit event and increment the drift counter (MAJ-003).
+	if route.Drop {
+		cfg := al.GetConfig()
+		wsID := ""
+		intendedAgent := ""
+		if identity != nil {
+			intendedAgent = strings.TrimSpace(identity.ID)
+		}
+		if cfg != nil {
+			if inst, ok := cfg.Channels[instanceID]; ok {
+				wsID = inst.WorkspaceID
+			}
+		}
+		al.driftDropped.Add(1)
+		if al.auditLogger != nil {
+			_ = al.auditLogger.Log(&audit.Entry{
+				Event:    audit.EventChannelRoutingDriftDrop,
+				Decision: audit.DecisionDeny,
+				Details: map[string]any{
+					"instance_id":       instanceID,
+					"workspace_id":      wsID,
+					"intended_agent_id": intendedAgent,
+					"chat_id":           msg.ChatID,
+					"reason":            "bound agent unresolvable (deleted, disabled, or worker)",
+				},
+			})
+		}
+		logger.WarnCF("agent", "Bound-instance drift drop: configured agent unresolvable; message rejected (ADR-029 FR-012)",
+			map[string]any{
+				"instance_id":       instanceID,
+				"workspace_id":      wsID,
+				"intended_agent_id": intendedAgent,
+				"channel":           msg.Channel,
+				"chat_id":           msg.ChatID,
+				"matched_by":        route.MatchedBy,
+			})
+		return routing.ResolvedRoute{}, nil, fmt.Errorf("no agent available for route (agent_id=%s)", intendedAgent)
+	}
 
 	agent, ok := registry.GetAgent(route.AgentID)
 	if !ok {
