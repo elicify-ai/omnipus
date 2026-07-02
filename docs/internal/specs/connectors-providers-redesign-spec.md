@@ -797,6 +797,7 @@ All items are either resolved by the ADR/decisions or accepted as low-risk assum
 - Q: How is the catalog delivered to the SPA? → A: **Build-time `go:embed` artifact + generated TS**, no live endpoint (removes pre-auth surface + network dep).
 - Q: Rollback for the onboarding step swap? → A: **Git-revert-and-redeploy**; no SPA feature-flag infra exists and none is built.
 - Q: Scope? → A: **Complete** ADR-031 (both tracks + onboarding + login), structured as Track 1 (Providers, ships first) and Track 2 (Channels, ADR-029-gated).
+- Q: (implementation review) The 7 anthropic-wire variants (`z-ai-anthropic`, etc.) share `(company, plan, region)` with an OpenAI-compatible sibling and, because wire is a read-only badge not a picker (FR-006), the onboarding picker resolves ties to openai-compatible — so they are **not selectable during onboarding** (23/30 catalog entries reachable there). → A: **Accepted, by design.** Onboarding is a curated quick-start that defaults to the OpenAI-compatible endpoint; the **Settings Providers roster surfaces every catalog variant** (each wire as its own Connect-able row with a wire badge), so an operator who specifically wants a provider's Anthropic-compatible endpoint configures it there. Making wire a picker in onboarding would contradict FR-006. Documented so the 23-vs-30 gap is intentional, not emergent.
 
 ## Notes for `/taskify`
 - **Two sprints/epics**: Track 1 (foundation + Providers + onboarding consistency + login) and Track 2 (Channels, gated on ADR-029).
