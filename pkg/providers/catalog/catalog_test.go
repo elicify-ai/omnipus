@@ -245,9 +245,8 @@ func TestCatalog_DriftGuard_IdIsKnownProtocol(t *testing.T) {
 // contracts/components/schemas/ProbeProviderRequest.yaml — NOT a hand-copied map
 // — so adding a value to the YAML without triaging it into the catalog causes
 // this test to fail.
-// Re-homes the invariant formerly in
-// "Re-homed from the former `AVAILABLE_PROVIDERS ⊆ ProbeProviderRequest` test
-// in `src/routes/-onboarding.test.tsx`".
+// Re-homed from the former `AVAILABLE_PROVIDERS ⊆ ProbeProviderRequest` test
+// in `src/routes/-onboarding.test.tsx`.
 // Traces to spec §7 #3, FR-003 property (c), ADR-031 §6 G-2 R3/MAJ-001.
 //
 // Note: aliases need NOT be ProbeProviderRequest enum members — they are
@@ -860,4 +859,190 @@ func TestCatalog_LabelsUniquePlain(t *testing.T) {
 		}
 		seen[e.Label] = e.Id
 	}
+}
+
+// ── AnthropicId hardening (LoadCatalog invariants) ────────────────────────────
+
+// TestCatalog_AnthropicIdConsistency exercises the three LoadCatalog
+// AnthropicId invariants directly against the factored-out validateEntry /
+// validateDisjointIDs helpers, so each rule is unit-testable without
+// regenerating providers_catalog.json:
+//
+//	(a) an anthropic-wire primary cannot also declare a sibling AnthropicId
+//	(b) AnthropicId must not equal the entry's own id (self-reference)
+//	(c) ids, aliases, and anthropic_id values must be mutually disjoint
+//	    across the whole catalog
+//
+// Each negative case is a deliberately-bad entry constructed in the test.
+// Traces to the "LoadCatalog additions" fix-wave item (backend hardening).
+func TestCatalog_AnthropicIdConsistency(t *testing.T) {
+	t.Run("rule_a_anthropic_wire_primary_with_sibling_is_rejected", func(t *testing.T) {
+		anthropicID := "some-anthropic"
+		bad := gen.ProviderCatalogEntry{
+			Id:          "bad-entry",
+			Wire:        gen.Anthropic, // primary itself claims the anthropic wire
+			AnthropicId: &anthropicID,
+		}
+		err := validateEntry(bad)
+		require.Error(t, err, "an anthropic-wire primary must not also declare AnthropicId")
+		assert.Contains(t, err.Error(), "bad-entry")
+	})
+
+	t.Run("rule_b_self_reference_is_rejected", func(t *testing.T) {
+		selfID := "self-ref"
+		bad := gen.ProviderCatalogEntry{
+			Id:          selfID,
+			Wire:        gen.OpenaiCompatible,
+			AnthropicId: &selfID,
+		}
+		err := validateEntry(bad)
+		require.Error(t, err, "AnthropicId must not equal the entry's own id")
+		assert.Contains(t, err.Error(), selfID)
+	})
+
+	t.Run("rule_c_id_vs_alias_collision_is_rejected", func(t *testing.T) {
+		aliases := []string{"collide"}
+		bad := []gen.ProviderCatalogEntry{
+			{Id: "collide", Wire: gen.OpenaiCompatible},
+			{Id: "other", Wire: gen.OpenaiCompatible, Aliases: &aliases},
+		}
+		err := validateDisjointIDs(bad)
+		require.Error(t, err, "an id used as another entry's alias must be rejected")
+		assert.Contains(t, err.Error(), "collide")
+	})
+
+	t.Run("rule_c_anthropic_id_vs_id_collision_is_rejected", func(t *testing.T) {
+		anthropicID := "sibling"
+		bad := []gen.ProviderCatalogEntry{
+			{Id: "sibling", Wire: gen.OpenaiCompatible},
+			{Id: "primary", Wire: gen.OpenaiCompatible, AnthropicId: &anthropicID},
+		}
+		err := validateDisjointIDs(bad)
+		require.Error(t, err, "an id used as another entry's AnthropicId must be rejected")
+		assert.Contains(t, err.Error(), "sibling")
+	})
+
+	t.Run("rule_c_duplicate_alias_across_entries_is_rejected", func(t *testing.T) {
+		aliasesA := []string{"shared-alias"}
+		aliasesB := []string{"shared-alias"}
+		bad := []gen.ProviderCatalogEntry{
+			{Id: "a", Wire: gen.OpenaiCompatible, Aliases: &aliasesA},
+			{Id: "b", Wire: gen.OpenaiCompatible, Aliases: &aliasesB},
+		}
+		err := validateDisjointIDs(bad)
+		require.Error(t, err, "two entries must not share the same alias")
+		assert.Contains(t, err.Error(), "shared-alias")
+	})
+
+	t.Run("positive_control_valid_entry_passes_rules_a_and_b", func(t *testing.T) {
+		anthropicID := "z-ai-anthropic"
+		aliases := []string{"z.ai", "zai"}
+		good := gen.ProviderCatalogEntry{
+			Id:          "z-ai",
+			Wire:        gen.OpenaiCompatible,
+			AnthropicId: &anthropicID,
+			Aliases:     &aliases,
+		}
+		assert.NoError(t, validateEntry(good),
+			"a valid openai-wire entry with a distinct AnthropicId must pass rules (a)/(b)")
+		assert.NoError(t, validateDisjointIDs([]gen.ProviderCatalogEntry{good}),
+			"a single valid entry with distinct id/aliases/anthropic_id must pass the disjointness check")
+	})
+
+	t.Run("real_catalog_passes_all_three_rules", func(t *testing.T) {
+		for _, e := range Entries {
+			assert.NoError(t, validateEntry(e), "entry %q must pass validateEntry", e.Id)
+		}
+		assert.NoError(t, validateDisjointIDs(Entries), "the real catalog must pass the global disjointness check")
+	})
+}
+
+// TestValidateCatalog_NegativeCases feeds deliberately-corrupted
+// []gen.ProviderCatalogEntry slices through validateCatalog — the exact
+// validation path LoadCatalog runs against the unmarshaled embedded JSON —
+// and asserts each specific error fires. Using validateCatalog directly
+// (rather than corrupting providers_catalog.json on disk) means these tests
+// don't need to fake the go:embed FS.
+//
+// Covers: FR-005 wire mismatch, AnthropicId wire mismatch, AnthropicId not a
+// known protocol, rule (a) anthropic-wire owner with a sibling, rule (b)
+// self-reference, rule (c) duplicate ids — plus a positive control.
+func TestValidateCatalog_NegativeCases(t *testing.T) {
+	t.Run("wire_mismatch_fails", func(t *testing.T) {
+		// "openai" derives to openai-compatible; claiming Anthropic is a lie.
+		bad := []gen.ProviderCatalogEntry{
+			{Id: "openai", Wire: gen.Anthropic},
+		}
+		err := validateCatalog(bad)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "does not match DeriveWire")
+	})
+
+	t.Run("anthropic_id_wire_mismatch_fails", func(t *testing.T) {
+		// AnthropicId "openai" derives to openai-compatible, not anthropic.
+		anthropicID := "openai"
+		bad := []gen.ProviderCatalogEntry{
+			{Id: "z-ai", Wire: gen.OpenaiCompatible, AnthropicId: &anthropicID},
+		}
+		err := validateCatalog(bad)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "must derive to the anthropic wire")
+	})
+
+	t.Run("anthropic_id_unknown_protocol_fails", func(t *testing.T) {
+		// Ends in "-anthropic" so DeriveWire says anthropic, but it is not in
+		// knownProtocols — an unroutable sibling.
+		anthropicID := "totally-fake-anthropic"
+		bad := []gen.ProviderCatalogEntry{
+			{Id: "z-ai", Wire: gen.OpenaiCompatible, AnthropicId: &anthropicID},
+		}
+		err := validateCatalog(bad)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "is not a known protocol")
+	})
+
+	t.Run("rule_a_anthropic_wire_owner_with_sibling_fails", func(t *testing.T) {
+		anthropicID := "z-ai-anthropic"
+		bad := []gen.ProviderCatalogEntry{
+			{Id: "anthropic", Wire: gen.Anthropic, AnthropicId: &anthropicID},
+		}
+		err := validateCatalog(bad)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "must be")
+		assert.Contains(t, err.Error(), "openai-compatible")
+	})
+
+	t.Run("rule_b_self_reference_fails", func(t *testing.T) {
+		selfID := "z-ai"
+		bad := []gen.ProviderCatalogEntry{
+			{Id: selfID, Wire: gen.OpenaiCompatible, AnthropicId: &selfID},
+		}
+		err := validateCatalog(bad)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "self-reference")
+	})
+
+	t.Run("rule_c_duplicate_ids_fail", func(t *testing.T) {
+		bad := []gen.ProviderCatalogEntry{
+			{Id: "openai", Wire: gen.OpenaiCompatible},
+			{Id: "openai", Wire: gen.OpenaiCompatible},
+		}
+		err := validateCatalog(bad)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "claimed twice")
+	})
+
+	t.Run("positive_control_valid_slice_passes", func(t *testing.T) {
+		anthropicID := "z-ai-anthropic"
+		aliases := []string{"z.ai", "zai"}
+		good := []gen.ProviderCatalogEntry{
+			{Id: "openai", Wire: gen.OpenaiCompatible},
+			{Id: "z-ai", Wire: gen.OpenaiCompatible, AnthropicId: &anthropicID, Aliases: &aliases},
+		}
+		assert.NoError(t, validateCatalog(good), "a clean, mutually-disjoint slice must pass validateCatalog")
+	})
+
+	t.Run("real_catalog_passes_validateCatalog", func(t *testing.T) {
+		assert.NoError(t, validateCatalog(Entries), "the real catalog.Entries must pass validateCatalog")
+	})
 }

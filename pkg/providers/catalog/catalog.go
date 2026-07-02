@@ -473,12 +473,14 @@ var Entries = []gen.ProviderCatalogEntry{
 		"",
 	),
 	// "coding-plan" is the promoted primary for the Qwen/Alibaba Coding Plan
-	// (formerly a standalone "coding-plan-anthropic" entry). Both
+	// (formerly a standalone "coding-plan-anthropic" entry).
 	// GetDefaultAPIBase("coding-plan") (non-empty, pkg/providers/factory_provider.go)
-	// and ProbeProviderRequest's id enum (contracts/components/schemas/ProbeProviderRequest.yaml)
-	// carry "coding-plan" as an OpenAI-compatible endpoint, so it satisfies the
-	// same primary-entry contract as every other id in this catalog; the
-	// Anthropic-compatible endpoint (coding-intl.dashscope.aliyuncs.com/apps/anthropic)
+	// returns a real base URL, and "coding-plan" is present in the
+	// ProbeProviderRequest id enum (contracts/components/schemas/ProbeProviderRequest.yaml)
+	// and derives to the openai-compatible wire (no -anthropic suffix), so it
+	// satisfies the same primary-entry contract as every other id in this
+	// catalog; the Anthropic-compatible endpoint
+	// (coding-intl.dashscope.aliyuncs.com/apps/anthropic)
 	// is demoted to AnthropicId. "alibaba-coding" and "qwen-coding" share
 	// coding-plan's GetDefaultAPIBase case and are promoted from
 	// catalogExcluded to real aliases; "alibaba-coding-anthropic" (the former
@@ -497,54 +499,184 @@ var Entries = []gen.ProviderCatalogEntry{
 	),
 }
 
-// LoadCatalog unmarshals the embedded providers_catalog.json into a slice of
-// ProviderCatalogEntry values.  Call this instead of reading Entries directly
-// when you need the round-trip guarantee (generator test compares both).
+// validateEntry checks per-entry AnthropicId invariants that are independent
+// of any other entry in the catalog:
 //
-// Wire consistency is validated at load time (FR-005): if any entry's Wire
-// field does not match DeriveWire(entry.Id), an error is returned.  This
-// ensures ANY consumer of the embedded JSON — not just in-repo Entries — gets
-// the wire-consistency guarantee at runtime rather than only at CI time.
+//   - (a) an anthropic-wire primary cannot also declare a sibling
+//     AnthropicId — Wire must be "openai-compatible" whenever AnthropicId is
+//     set, since AnthropicId exists precisely to carry the entry's
+//     Anthropic-compatible sibling; an anthropic-wire primary pointing at
+//     another sibling would mean the entry itself is not the OpenAI-compatible
+//     leg the toggle assumes.
+//   - (b) AnthropicId must not equal the entry's own Id (self-reference) —
+//     the sibling must be a distinct protocol id.
 //
-// AnthropicId consistency is also validated (FIX-5): when an entry carries a
-// non-nil AnthropicId, that sibling id must itself derive to the "anthropic"
-// wire (it is the Anthropic-compatible endpoint for the same account/key) and
-// must be a known protocol — otherwise the config/probe path would accept a
-// choice that CreateProviderFromConfig cannot route.
-func LoadCatalog() ([]gen.ProviderCatalogEntry, error) {
-	var out []gen.ProviderCatalogEntry
-	if err := json.Unmarshal(providersCatalogJSON, &out); err != nil {
-		return nil, fmt.Errorf("catalog: unmarshal providers_catalog.json: %w", err)
+// Factored out of LoadCatalog so both rules are independently unit-testable
+// (TestCatalog_AnthropicIdConsistency) without regenerating
+// providers_catalog.json.
+func validateEntry(e gen.ProviderCatalogEntry) error {
+	if e.AnthropicId == nil {
+		return nil
 	}
-	for i, e := range out {
+	if e.Wire != gen.OpenaiCompatible {
+		return fmt.Errorf(
+			"entry id=%q: Wire=%q must be %q when AnthropicId is set — "+
+				"an anthropic-wire primary cannot also point at a sibling endpoint",
+			e.Id, e.Wire, gen.OpenaiCompatible,
+		)
+	}
+	if *e.AnthropicId == e.Id {
+		return fmt.Errorf(
+			"entry id=%q: AnthropicId must not equal the entry's own id (self-reference)",
+			e.Id,
+		)
+	}
+	return nil
+}
+
+// validateDisjointIDs asserts that every Id, Aliases entry, and AnthropicId
+// value across the whole catalog is mutually distinct: (c) a global
+// disjointness pass. A collision — the same protocol id claimed by two
+// entries, whether as a canonical id, an alias, or an AnthropicId sibling —
+// would mean CreateProviderFromConfig cannot route the id unambiguously.
+//
+// Factored out of LoadCatalog so it is independently unit-testable
+// (TestCatalog_AnthropicIdConsistency) without regenerating
+// providers_catalog.json.
+func validateDisjointIDs(entries []gen.ProviderCatalogEntry) error {
+	type owner struct {
+		source string // "id", "alias", or "anthropic_id"
+		entry  string // owning entry's canonical Id
+	}
+	seen := make(map[string]owner, len(entries)*2)
+	claim := func(val, source, entryID string) error {
+		if val == "" {
+			return nil
+		}
+		if prior, ok := seen[val]; ok {
+			return fmt.Errorf(
+				"id %q is claimed twice — first as %s of entry %q, again as %s of entry %q; "+
+					"ids, aliases, and anthropic_id values must be mutually disjoint across the whole catalog",
+				val, prior.source, prior.entry, source, entryID,
+			)
+		}
+		seen[val] = owner{source: source, entry: entryID}
+		return nil
+	}
+	for _, e := range entries {
+		if err := claim(e.Id, "id", e.Id); err != nil {
+			return err
+		}
+		if e.Aliases != nil {
+			for _, a := range *e.Aliases {
+				if err := claim(a, "alias", e.Id); err != nil {
+					return err
+				}
+			}
+		}
+		if e.AnthropicId != nil {
+			if err := claim(*e.AnthropicId, "anthropic_id", e.Id); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// validateCatalog runs every LoadCatalog invariant against an in-memory
+// slice of entries:
+//
+//   - FR-005 wire-derivation consistency (entry.Wire == DeriveWire(entry.Id))
+//   - the two per-entry AnthropicId rules in validateEntry (an anthropic-wire
+//     primary cannot also declare AnthropicId; AnthropicId cannot
+//     self-reference)
+//   - AnthropicId-derives-to-the-anthropic-wire and
+//     AnthropicId-is-a-known-protocol (FIX-5)
+//   - the global validateDisjointIDs pass (ids, aliases, and anthropic_id
+//     values must be mutually disjoint across every entry)
+//
+// Factored out of LoadCatalog so tests can feed a deliberately-corrupted
+// slice through the exact same validation path the embedded JSON goes
+// through, without needing to fake the go:embed FS.
+func validateCatalog(entries []gen.ProviderCatalogEntry) error {
+	for i, e := range entries {
 		expected := DeriveWire(e.Id)
 		if e.Wire != expected {
-			return nil, fmt.Errorf(
-				"catalog: entry[%d] id=%q: Wire=%q does not match DeriveWire=%q (FR-005); "+
-					"run go generate ./pkg/providers/catalog/... to regenerate providers_catalog.json",
+			return fmt.Errorf(
+				"entry[%d] id=%q: Wire=%q does not match DeriveWire=%q (FR-005)",
 				i, e.Id, e.Wire, expected,
 			)
+		}
+		if err := validateEntry(e); err != nil {
+			return fmt.Errorf("entry[%d]: %w", i, err)
 		}
 		if e.AnthropicId == nil {
 			continue
 		}
 		anthropicID := *e.AnthropicId
 		if got := DeriveWire(anthropicID); got != gen.Anthropic {
-			return nil, fmt.Errorf(
-				"catalog: entry[%d] id=%q: AnthropicId=%q must derive to the anthropic wire, got %q (FIX-5); "+
-					"run go generate ./pkg/providers/catalog/... to regenerate providers_catalog.json",
+			return fmt.Errorf(
+				"entry[%d] id=%q: AnthropicId=%q must derive to the anthropic wire, got %q (FIX-5)",
 				i, e.Id, anthropicID, got,
 			)
 		}
 		if !providers.IsKnownProtocol(anthropicID) {
-			return nil, fmt.Errorf(
-				"catalog: entry[%d] id=%q: AnthropicId=%q is not a known protocol (FIX-5); "+
+			return fmt.Errorf(
+				"entry[%d] id=%q: AnthropicId=%q is not a known protocol (FIX-5); "+
 					"add it to knownProtocols in pkg/providers/factory_provider.go",
 				i, e.Id, anthropicID,
 			)
 		}
 	}
+	if err := validateDisjointIDs(entries); err != nil {
+		return err
+	}
+	return nil
+}
+
+// LoadCatalog unmarshals the embedded providers_catalog.json into a slice of
+// ProviderCatalogEntry values.  Call this instead of reading Entries directly
+// when you need the round-trip guarantee (generator test compares both).
+//
+// All validation (FR-005 wire-derivation consistency, the AnthropicId
+// invariants, and global id/alias/anthropic_id disjointness — see
+// validateCatalog) runs against the unmarshaled slice, so any caller of
+// LoadCatalog gets the full guarantee.
+//
+// This package's init() additionally calls LoadCatalog() once on import and
+// panics on any validation failure — for a build-time-embedded artifact
+// (this catalog is never served over HTTP, ADR-031 FR-016), a corrupt embed
+// IS a broken build. That means the guarantee is enforced for ANY Go binary,
+// test, or tool that imports this package — including
+// `go generate ./pkg/providers/catalog/...`, which imports catalog via
+// ./gen/main.go — not only callers that explicitly invoke LoadCatalog.
+func LoadCatalog() ([]gen.ProviderCatalogEntry, error) {
+	var out []gen.ProviderCatalogEntry
+	if err := json.Unmarshal(providersCatalogJSON, &out); err != nil {
+		return nil, fmt.Errorf("catalog: unmarshal providers_catalog.json: %w", err)
+	}
+	if err := validateCatalog(out); err != nil {
+		return nil, fmt.Errorf(
+			"catalog: %w; run go generate ./pkg/providers/catalog/... to regenerate providers_catalog.json",
+			err,
+		)
+	}
 	return out, nil
+}
+
+// init performs the package's boot-time self-check: it calls LoadCatalog()
+// once on import and panics with a clear message if the embedded
+// providers_catalog.json fails validation. See the LoadCatalog doc comment
+// for what "boot-time" means for this build-time-embedded, never-served-live
+// package — the check fires whenever any Go binary, test, or tool imports
+// pkg/providers/catalog.
+func init() {
+	if _, err := LoadCatalog(); err != nil {
+		panic(fmt.Sprintf(
+			"pkg/providers/catalog: embedded providers_catalog.json failed validation on package init: %v",
+			err,
+		))
+	}
 }
 
 // DeriveWire returns the wire protocol for a given protocol id using FR-005.

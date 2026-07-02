@@ -6529,7 +6529,7 @@ type ProviderStatus string
 // ProviderValidationOutcome Classified result of the key probe. "valid" — the key was accepted by the upstream provider. "invalid_key" — the upstream confirmed the key is wrong or revoked; this is the only outcome that blocks a save. "no_credit" — the key is valid but the account has insufficient credit or quota. "unreachable" — the upstream could not be reached (transport error, timeout, 5xx, 404, pre-auth 429); transient. "restricted" — the key works but the request was blocked by a region or permission policy on the provider side.
 type ProviderValidationOutcome string
 
-// ProviderCatalogEntry A single entry in the provider catalog — the curated, build-time-embedded registry of ~30 user-facing LLM provider variants. Each entry represents one billable endpoint (company × plan × region), not a raw protocol id. Delivered as a build-time go:embed artifact + a generated TypeScript catalog; never served from a live HTTP endpoint (FR-016, ADR-031 §6 G-2). The type is contract-defined (Constraint #8) so the same generated struct is used in the Go catalog SoT and the generated TS consumer. No secret fields.
+// ProviderCatalogEntry A single entry in the provider catalog — the curated, build-time-embedded registry of 23 user-facing LLM provider variants. Each entry represents one billable endpoint (company × plan × region), not a raw protocol id. Delivered as a build-time go:embed artifact + a generated TypeScript catalog; never served from a live HTTP endpoint (FR-016, ADR-031 §6 G-2). The type is contract-defined (Constraint #8) so the same generated struct is used in the Go catalog SoT and the generated TS consumer. No secret fields.
 type ProviderCatalogEntry struct {
 	// Aliases Additional protocol ids that map to this catalog entry. Derived from the GetDefaultAPIBase switch: ids grouped in the same case share a base URL and are aliases. The aliases list excludes the canonical id itself. Used by the migration resolver to normalize stored alias ids to the canonical catalog entry (ADR-031 §7 G-4, FR-012, US-8).
 	Aliases *[]string `json:"aliases,omitempty"`
@@ -6546,7 +6546,7 @@ type ProviderCatalogEntry struct {
 	// Id Canonical protocol identifier — matches a knownProtocols entry and a member of the ProbeProviderRequest id enum. Used as the primary key for probe, configure, and drift-guard lookups.
 	Id string `json:"id"`
 
-	// Label Full human-readable label for this variant in the form "<Brand> — <Access Type> [(Region)]". Carried on the wire so onboarding and Settings render identical text from one catalog source (ADR-031 FR-007, G-3=C safety guarantee). Example: "Zhipu / GLM — Coding Plan (International)".
+	// Label Full human-readable label for this variant. Standard-api entries use "<Brand> [(Region)]" (no access-type suffix); coding-plan entries use "<Brand> — Coding Plan [(Region)]". Carried on the wire so onboarding and Settings render identical text from one catalog source (ADR-031 FR-007, G-3=C safety guarantee). Example: "Zhipu / GLM — Coding Plan (International)".
 	Label string `json:"label"`
 
 	// LogoSlug Asset key for the <BrandIcon> component. Maps to a vendored SVG in src/assets/brand-logos/p_<logoSlug>.svg. When no SVG exists for the slug, BrandIcon falls back to a lettermark chip (FR-011, FR-013). Companies with no vendored SVG use a short id (e.g. "cerebras", "nvidia") which triggers the lettermark path.
@@ -6561,7 +6561,7 @@ type ProviderCatalogEntry struct {
 	// Subtitle Short billing-model description and endpoint hint. Shown below the label in the picker and Sheet. Format: "<billing model> · <endpointHint>". Example: "Subscription (Coding Plan) · api.z.ai/api/coding/paas/v4".
 	Subtitle string `json:"subtitle"`
 
-	// Wire Wire protocol used to call this endpoint. Derived, not authored: "anthropic" when id matches /-anthropic$/ or id ∈ {anthropic, anthropic-messages, bedrock}; otherwise "openai-compatible" (ADR-031 FR-005). Shown as a badge in the UI — not a plan option.
+	// Wire Wire protocol used to call this endpoint. Derived, not authored: "anthropic" when id matches /-anthropic$/ or id ∈ {anthropic, anthropic-messages, bedrock}; otherwise "openai-compatible" (ADR-031 FR-005). Internal config detail — surfaced only via the Endpoint-format toggle for dual-wire entries in Settings; never a UI badge or plan option.
 	Wire ProviderCatalogEntryWire `json:"wire"`
 }
 
@@ -6571,7 +6571,7 @@ type ProviderCatalogEntryPlan string
 // ProviderCatalogEntryRegion Deployment region, when the provider has a regional split. Omitted for providers with a single global endpoint (e.g. OpenAI, DeepSeek).
 type ProviderCatalogEntryRegion string
 
-// ProviderCatalogEntryWire Wire protocol used to call this endpoint. Derived, not authored: "anthropic" when id matches /-anthropic$/ or id ∈ {anthropic, anthropic-messages, bedrock}; otherwise "openai-compatible" (ADR-031 FR-005). Shown as a badge in the UI — not a plan option.
+// ProviderCatalogEntryWire Wire protocol used to call this endpoint. Derived, not authored: "anthropic" when id matches /-anthropic$/ or id ∈ {anthropic, anthropic-messages, bedrock}; otherwise "openai-compatible" (ADR-031 FR-005). Internal config detail — surfaced only via the Endpoint-format toggle for dual-wire entries in Settings; never a UI badge or plan option.
 type ProviderCatalogEntryWire string
 
 // ProviderUpdateRequest Request body for PUT /api/v1/providers/{id}. Adds or updates an LLM provider configuration. On new providers, api_key is required. On existing providers, api_key may be omitted to keep the current key.
