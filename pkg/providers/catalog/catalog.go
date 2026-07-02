@@ -166,7 +166,8 @@ func subtitleAnthropic(hint string) string {
 // Entries is the authoritative Go slice of user-facing provider variants.
 // Seeded from the 30 entries previously in onboarding.tsx AVAILABLE_PROVIDERS.
 // Companies with no vendored SVG use a short lettermark-fallback logoSlug
-// (cerebras, nvidia, azure — BrandIcon will render a lettermark for those).
+// (azure, cerebras, nvidia, ollama — BrandIcon will render a lettermark for
+// those; ollama has no p_ollama.svg so it lettermarks intentionally).
 //
 // Ordering mirrors AVAILABLE_PROVIDERS: single-option companies first, then
 // multi-variant families in the same order (Zhipu, Moonshot, MiniMax, DeepSeek,
@@ -524,10 +525,25 @@ var Entries = []gen.ProviderCatalogEntry{
 // LoadCatalog unmarshals the embedded providers_catalog.json into a slice of
 // ProviderCatalogEntry values.  Call this instead of reading Entries directly
 // when you need the round-trip guarantee (generator test compares both).
+//
+// Wire consistency is validated at load time (FR-005): if any entry's Wire
+// field does not match DeriveWire(entry.Id), an error is returned.  This
+// ensures ANY consumer of the embedded JSON — not just in-repo Entries — gets
+// the wire-consistency guarantee at runtime rather than only at CI time.
 func LoadCatalog() ([]gen.ProviderCatalogEntry, error) {
 	var out []gen.ProviderCatalogEntry
 	if err := json.Unmarshal(providersCatalogJSON, &out); err != nil {
 		return nil, fmt.Errorf("catalog: unmarshal providers_catalog.json: %w", err)
+	}
+	for i, e := range out {
+		expected := DeriveWire(e.Id)
+		if e.Wire != expected {
+			return nil, fmt.Errorf(
+				"catalog: entry[%d] id=%q: Wire=%q does not match DeriveWire=%q (FR-005); "+
+					"run go generate ./pkg/providers/catalog/... to regenerate providers_catalog.json",
+				i, e.Id, e.Wire, expected,
+			)
+		}
 	}
 	return out, nil
 }
