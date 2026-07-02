@@ -245,20 +245,41 @@ func (d *ClaudeDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEven
 	return ch, nil
 }
 
-// buildArgs constructs the claude CLI argument list (FR-5.2).
-// NOTE: --dangerously-skip-permissions is deliberately omitted (FR-5.3 / US-5).
+// buildArgs constructs the claude CLI argument list (FR-5.2, ADR-032 fix C).
+// NOTE: --dangerously-skip-permissions is deliberately omitted (FR-5.3 / US-5);
+// --permission-mode acceptEdits is used instead (ADR-032 fix D — workspace-write,
+// non-interactive posture without a full bypass).
+//
+// --resume is deliberately NOT passed: opts.RunID is a freshly generated
+// dispatch identifier ("subturn-N" / "ext-<nanos>"), never a real prior claude
+// session ID, and `claude --resume <id>` errors when no session with that ID
+// exists. --session-id would need a valid UUID (opts.RunID is not one), so it
+// is also omitted — every run simply starts fresh (ADR-032 fix C).
 func (d *ClaudeDriver) buildArgs(opts RunOptions) []string {
-	args := []string{"-p", "--output-format", "stream-json", "--no-chrome"}
-	if opts.RunID != "" {
-		// Pass session ID for resume support (FR-5.1 / US-3).
-		args = append(args, "--resume", opts.RunID)
+	// --verbose is REQUIRED for --output-format stream-json to actually emit
+	// its event stream (ADR-032 fix C) — without it the driver's NDJSON parser
+	// sees nothing.
+	args := []string{"-p", "--output-format", "stream-json", "--verbose", "--no-chrome"}
+	if model := strings.TrimSpace(opts.Model); model != "" {
+		args = append(args, "--model", model)
 	}
+	// Non-interactive workspace-write posture (ADR-032 fix D): acceptEdits
+	// auto-approves file edits without the full --dangerously-skip-permissions
+	// bypass, so a headless run does not stall waiting on a TTY prompt that
+	// will never come.
+	args = append(args, "--permission-mode", "acceptEdits")
 	if opts.MaxTurns > 0 {
 		args = append(args, "--max-turns", fmt.Sprintf("%d", opts.MaxTurns))
 	}
 	// Append operator-supplied extra args (ExecutorConfig.cli_args, MAJ-5) before
-	// the trailing "-" so the stdin sentinel stays last.
-	args = append(args, opts.CLIArgs...)
+	// the trailing "-" so the stdin sentinel stays last. ADR-032 fix M-1: a
+	// flag that could re-enable a full permission bypass (or escalate
+	// --permission-mode to "bypassPermissions") is stripped first — see
+	// argsafety.go. This filter applies to opts.CLIArgs ONLY; the driver's
+	// own --permission-mode acceptEdits flag above is never touched.
+	kept, dropped := filterDangerousCLIArgs("claude", opts.CLIArgs)
+	logDroppedCLIArgs("runner/claude", "claude", opts.RunID, dropped)
+	args = append(args, kept...)
 	args = append(args, "-") // read prompt from stdin
 	return args
 }

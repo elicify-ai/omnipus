@@ -6,20 +6,24 @@
 // is reached ONLY when the resolved sub-agent's SubagentsConfig.Executor resolves
 // to runner.DispatchKindExternalCLI (see runner.ResolveDispatch).
 //
-// Flow (FR-5.1 / FR-5.2 / FR-5.3 / FR-5.4):
+// Flow (FR-5.1 / FR-5.2 / FR-5.4; FR-5.3 as amended by ADR-032):
 //
-//  1. PrepareWorkspace — a git worktree of the agent's workspace (or an isolated
-//     temp dir if the workspace is not a git repo). This is Omnipus's FS boundary;
-//     the external CLI's OWN sandbox is the kernel boundary (operator decision —
-//     no new Omnipus confiner).
+//  1. Resolve the run's working directory — the DELEGATE's own workspace
+//     directory (ADR-032, 2026-07: runs execute IN the agent's real workspace,
+//     not an isolated git-worktree/temp-dir copy — see
+//     docs/internal/architecture/ADR-032-external-agent-workspace-execution.md).
+//     The external CLI's OWN sandbox remains the kernel boundary (operator
+//     decision — no new Omnipus confiner).
 //  2. NewDriver — instantiate the claude-code / codex / opencode driver.
 //  3. Run — drive the CLI with the delegated input + a per-run timeout and turn
-//     cap derived from sub-turn config.
+//     cap derived from sub-turn config, with the delegate's own model auto-set.
 //  4. Stream events through ConsentDispatcher: permission-requests route to the
 //     Omnipus consent layer (best-effort post-hoc — a DENY cancels the run); all
 //     events (output/tool-call/diff/error) are written to the sub-agent session
 //     transcript so the SPA renders the run inline.
-//  5. Teardown — remove the worktree/temp dir, including on crash paths.
+//
+// No teardown step: the workspace directory is the agent's persistent working
+// tree, not a scratch dir — it is left in place after the run.
 
 package agent
 
@@ -53,12 +57,51 @@ func executorConfigOf(a *AgentInstance) *config.ExecutorConfig {
 	return a.Subagents.Executor
 }
 
+// workspaceRunLocks serializes external-CLI runs that target the SAME
+// workspace directory (FIX 4 / arch #2 warning). ADR-032 removed worktree
+// isolation — external-CLI sub-turns now run directly in the delegate
+// agent's own persistent workspace — so two concurrent sub-turns delegating
+// to the same agent (or to two agents that happen to share a workspace
+// path) would otherwise spawn two child CLI processes reading/writing the
+// same directory concurrently: file races, a corrupted git index, clobbered
+// output files. Keyed by the workspace's cleaned path; the mutex is held for
+// the FULL duration of the child run (acquired near the top of
+// runExternalCLISubTurn, released via defer), which is the window in which
+// the child process touches the workspace tree. Runs against distinct
+// workspace paths are never blocked by each other — only same-path runs
+// serialize.
+//
+// Entries are never removed from the map: a long-running gateway
+// accumulates one *sync.Mutex per distinct workspace path ever dispatched
+// to. That set is bounded by the number of configured external-cli
+// agents/workspaces (small, operator-controlled), not by run count, so the
+// unbounded map is an accepted trade-off rather than a leak.
+var workspaceRunLocks sync.Map // map[string]*sync.Mutex
+
+// acquireWorkspaceRunLock locks the mutex for workDir's cleaned path,
+// creating it on first use via LoadOrStore, and returns the unlock func.
+// Callers MUST `defer` the returned func so the lock releases even on an
+// early return or panic.
+func acquireWorkspaceRunLock(workDir string) func() {
+	key := filepath.Clean(workDir)
+	muAny, _ := workspaceRunLocks.LoadOrStore(key, &sync.Mutex{})
+	mu, _ := muAny.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
+
 // runExternalCLISubTurn executes a delegated sub-agent task through an external
 // CLI runner. It returns a tools.ToolResult mirroring the native sub-turn return
 // shape (ForLLM/ForUser carry the run's aggregated output; Err is set on failure).
 //
 // childTS is the sub-turn's turnState (used for transcript writes + agent ID).
 // task is the delegated input prompt. timeout bounds the whole run.
+//
+// childTS.agent is the resolved DELEGATE's own AgentInstance (spawnSubTurn
+// sources Workspace/Model/MaxIterations/Subagents from the TARGET named by
+// TargetAgentID when dispatch resolves to external-cli — see subturn.go), so
+// every field read below already reflects the delegate's own identity, not
+// the delegating parent's.
 func runExternalCLISubTurn(
 	ctx context.Context,
 	al *AgentLoop,
@@ -80,20 +123,35 @@ func runExternalCLISubTurn(
 		runID = fmt.Sprintf("ext-%d", time.Now().UnixNano())
 	}
 
-	// 1. Prepare an isolated filesystem boundary (worktree if the workspace is a
-	//    git repo, else an isolated temp dir). Always torn down — including crash.
-	ws, err := runner.PrepareWorkspace(ctx, runID, agent.Workspace)
-	if err != nil {
-		return nil, fmt.Errorf("external-cli dispatch: workspace prepare: %w", err)
+	// 1. Resolve the run's working directory: the DELEGATE'S OWN workspace
+	//    directory (ADR-032, 2026-07). External-CLI runs now execute directly
+	//    in the agent's workspace — NOT an isolated git-worktree/temp-dir copy
+	//    — so the CLI can see (and write to) the files the delegating
+	//    conversation actually cares about. This intentionally relaxes the
+	//    original Spec-4 FR-5.3 worktree-isolation boundary for external CLIs
+	//    specifically; see
+	//    docs/internal/architecture/ADR-032-external-agent-workspace-execution.md.
+	//    The external CLI's OWN sandbox (Codex = Landlock/seccomp; Claude
+	//    Code = its permission model; opencode = its own tool gating) remains
+	//    the enforced security boundary — Omnipus adds no new confiner either
+	//    way, isolated or not. No teardown is needed: this is the agent's
+	//    persistent workspace, not a scratch directory.
+	workDir := strings.TrimSpace(agent.Workspace)
+	if workDir == "" {
+		return nil, fmt.Errorf("external-cli dispatch: agent workspace is empty — cannot run %s", cli)
 	}
-	defer func() {
-		tdCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if tErr := ws.Teardown(tdCtx); tErr != nil {
-			slog.Warn("external-cli dispatch: workspace teardown failed",
-				"run_id", runID, "dir", ws.Dir, "err", tErr)
-		}
-	}()
+	if mkErr := os.MkdirAll(workDir, 0o755); mkErr != nil {
+		return nil, fmt.Errorf("external-cli dispatch: ensuring workspace dir %q: %w", workDir, mkErr)
+	}
+
+	// FIX 4 (concurrency, arch #2 warning): serialize external-CLI runs that
+	// share this workspace directory — see workspaceRunLocks' doc comment.
+	// Held for the whole run (driver instantiation through the drain loop
+	// below) since that is the window during which the child process can
+	// touch the workspace tree. A different workspace path is never blocked
+	// by this.
+	releaseWorkspaceLock := acquireWorkspaceRunLock(workDir)
+	defer releaseWorkspaceLock()
 
 	// 2. Build the consent handler (wraps the gateway PolicyApprover; deny-by-default
 	//    when no approver is wired — loadToolApprover returns the fail-closed nop).
@@ -124,11 +182,16 @@ func runExternalCLISubTurn(
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	// FIX 5: hoist the repeated strings.TrimSpace(agent.Model) computation
+	// (previously done independently for the transcript model stamp below
+	// and again for RunOptions.Model further down) into a single local.
+	agentModel := strings.TrimSpace(agent.Model)
+
 	// Phase 1B FR-013: attribute the external-CLI sub-turn's transcript
 	// output to the agent's configured model. The external CLI runs its
 	// own LLM, but we record what model the agent would have used in the
 	// non-CLI path — consistent with how chat turns are attributed.
-	childTS.setLastProducedModel(strings.TrimSpace(agent.Model))
+	childTS.setLastProducedModel(agentModel)
 
 	// SECURITY (Spec-4 FR-5.3 / SEC-23): the spawned external CLI must NOT inherit
 	// the full gateway environment — that would leak OMNIPUS_MASTER_KEY (and every
@@ -147,7 +210,7 @@ func runExternalCLISubTurn(
 	// NO new confiner — the CLI self-sandboxes; Omnipus controls egress via
 	// proxy injection. Graceful degradation: an empty address (proxy could not
 	// start) means no injection — the run proceeds under the CLI's own sandbox +
-	// the git-worktree FS boundary.
+	// the workspace FS boundary.
 	childEnv = injectRunnerEgressProxy(childEnv, al.runnerEgressProxyAddr())
 
 	// MAJ-5: consume the agent's ExecutorConfig (cli_path / cli_args /
@@ -161,7 +224,7 @@ func runExternalCLISubTurn(
 
 	evCh, err := driver.Run(runCtx, runner.RunOptions{
 		RunID:          runID,
-		WorkDir:        ws.Dir,
+		WorkDir:        workDir,
 		Input:          task,
 		Env:            childEnv,
 		TimeoutSeconds: timeoutSecs,
@@ -169,13 +232,17 @@ func runExternalCLISubTurn(
 		CLIPath:        execCfg.CLIPath,
 		CLIArgs:        cliArgs,
 		EnvOverrides:   execCfg.EnvOverrides,
+		// Fix C: auto-set the delegate's own configured model on the external
+		// CLI invocation. Each driver's buildArgs guards so an unmapped/empty
+		// model string is simply omitted rather than passed as garbage.
+		Model: agentModel,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("external-cli dispatch: driver start (%s): %w", cli, err)
 	}
 
 	slog.Info("external-cli dispatch: run started",
-		"run_id", runID, "cli", cli, "work_dir", ws.Dir, "mode", ws.Mode,
+		"run_id", runID, "cli", cli, "work_dir", workDir,
 		"timeout_s", timeoutSecs, "max_turns", maxTurns, "agent_id", childTS.agentID)
 
 	// 5. Route events through the consent dispatcher and drain into the transcript.

@@ -80,16 +80,23 @@ func TestIntegration_AutoInject20Recent(t *testing.T) {
 		"GetMemoryContext must inject exactly 20 memories (SearchEntries cap = 20), not %d; "+
 			"writing 25 must trigger the cap and exclude 5", count)
 
-	// Differentiation guard: confirm two distinct memories appear with different content.
-	// If the function returned a hardcoded or empty response, this would catch it.
-	assert.Contains(t, ctx, "ctxIT_mem_01_unique_fact",
-		"at least some memories from the written set must appear")
-	// Count is already verified = 20; confirm a specific one appears so the
-	// assertion is on real content, not just "it didn't crash".
-	assert.True(t, strings.Contains(ctx, "ctxIT_mem_25_unique_fact") ||
-		strings.Contains(ctx, "ctxIT_mem_24_unique_fact") ||
-		strings.Contains(ctx, "ctxIT_mem_23_unique_fact"),
-		"at least one of the most-recently written memories must appear in the 20-entry window")
+	// Differentiation guard: the injected window must hold 20 DISTINCT written
+	// memories (not one repeated, not hardcoded/empty). We deliberately do NOT
+	// assert WHICH 20 of the 25 appear: all 25 are written within a single
+	// filesystem mtime tick, so the recency ordering (SearchEntries mtime
+	// fallback for an empty query — see the note above) ties and the excluded 5
+	// are non-deterministic. Asserting a specific id (e.g. the oldest mem_01, or
+	// the newest mem_25) was a flaky bug — it passed only when the mtime
+	// collision happened to include that id. In production, memories are created
+	// over real time (distinct mtimes), so this collision is a test-only artifact.
+	distinct := 0
+	for i := 1; i <= total; i++ {
+		if strings.Contains(ctx, "ctxIT_mem_"+fmt.Sprintf("%02d", i)+"_unique_fact") {
+			distinct++
+		}
+	}
+	assert.Equal(t, 20, distinct,
+		"the injected window must contain exactly 20 DISTINCT written memories, got %d", distinct)
 }
 
 // ---------------------------------------------------------------------------
