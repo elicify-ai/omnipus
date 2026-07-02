@@ -3405,9 +3405,54 @@ func TestContract_ChannelRouting_Populated(t *testing.T) {
 
 // ── CliDetect ──────────────────────────────────────────────────────────────────
 // Traces to: contracts/components/schemas/CliDetect.yaml
+// Restructured from three booleans to per-CLI {installed, path, source}
+// objects (External-Executor CLI Path Detection feature, ADR-030).
 
 func TestContract_CliDetect_Populated(t *testing.T) {
 	mustPassComponent(t, "CliDetect", FixtureCliDetect_Populated())
+}
+
+func TestContract_CliDetect_ZeroValue(t *testing.T) {
+	mustPassComponent(t, "CliDetect", FixtureCliDetect_ZeroValue())
+}
+
+// ── CliDetectEntry ────────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/CliDetectEntry.yaml
+
+func TestContract_CliDetectEntry_Populated(t *testing.T) {
+	mustPassComponent(t, "CliDetectEntry", FixtureCliDetectEntry_Populated())
+}
+
+func TestContract_CliDetectEntry_NotInstalled(t *testing.T) {
+	mustPassComponent(t, "CliDetectEntry", FixtureCliDetectEntry_NotInstalled())
+}
+
+// ── CliValidateRequest ───────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/CliValidateRequest.yaml
+
+func TestContract_CliValidateRequest_Populated(t *testing.T) {
+	mustPassComponent(t, "CliValidateRequest", FixtureCliValidateRequest_Populated())
+}
+
+func TestContract_CliValidateRequest_ZeroValueRejected(t *testing.T) {
+	mustFailComponent(t, "CliValidateRequest", FixtureCliValidateRequest_ZeroValue(),
+		"cli must be one of [claude-code, codex, opencode]")
+}
+
+// ── CliValidateResponse ──────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/CliValidateResponse.yaml
+
+func TestContract_CliValidateResponse_Populated(t *testing.T) {
+	mustPassComponent(t, "CliValidateResponse", FixtureCliValidateResponse_Populated())
+}
+
+func TestContract_CliValidateResponse_MissingBinary(t *testing.T) {
+	mustPassComponent(t, "CliValidateResponse", FixtureCliValidateResponse_MissingBinary())
+}
+
+func TestContract_CliValidateResponse_ZeroValueRejected(t *testing.T) {
+	mustFailComponent(t, "CliValidateResponse", FixtureCliValidateResponse_ZeroValue(),
+		"reason must be one of [ok, missing-binary, handshake-failed, unauthenticated, unknown-cli]")
 }
 
 // ── ScheduleTrigger (B2 regression guards) ───────────────────────────────────

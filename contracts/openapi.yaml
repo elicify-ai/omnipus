@@ -446,6 +446,12 @@ components:
       $ref: ./components/schemas/ChannelConfigureRequest.yaml
     CliDetect:
       $ref: ./components/schemas/CliDetect.yaml
+    CliDetectEntry:
+      $ref: ./components/schemas/CliDetectEntry.yaml
+    CliValidateRequest:
+      $ref: ./components/schemas/CliValidateRequest.yaml
+    CliValidateResponse:
+      $ref: ./components/schemas/CliValidateResponse.yaml
     RetentionUpdateRequest:
       $ref: ./components/schemas/RetentionUpdateRequest.yaml
     McpToolsListResponse:
@@ -5647,26 +5653,75 @@ paths:
   /system/cli-detect:
     get:
       operationId: getHostCliDetect
-      summary: Probe host PATH for the three external-CLI runners
+      summary: Probe host PATH and well-known locations for the three external-CLI runners
       description: >
-        Reports whether the gateway process can locate each of the three
-        external-CLI runners on its PATH. Read-only, idempotent, and
-        unaudited — the SPA roster uses this to grey-out CLIs the host
-        cannot run instead of letting the operator hit a wizard failure at
-        runtime. Pure Go probe (no shell-out).
+        Reports, per external-CLI runner (claude-code/codex/opencode), whether
+        the gateway process can locate its binary — searching $PATH first,
+        then a curated per-OS well-known-install-location list — and returns
+        the resolved absolute path plus which strategy found it. Read-only,
+        idempotent, and unaudited (no subprocess spawned). The SPA roster uses
+        this to grey-out CLIs the host cannot run, and the create wizard /
+        edit form use the returned path to prefill executor.cli_path. Pure Go
+        probe (no shell-out).
       tags:
       - system
       security:
       - BearerAuth: []
       responses:
         '200':
-          description: CLI availability probe result.
+          description: Per-CLI detection result (installed, resolved path, source).
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/CliDetect'
         '401':
           $ref: '#/components/responses/401Unauthorized'
+  /system/cli-validate:
+    post:
+      operationId: postSystemCliValidate
+      summary: Validate that an external-CLI binary runs at a given path
+      description: >
+        Stateless, create-time validation for an external-executor CLI:
+        confirms the binary at cli_path actually runs and reports a version,
+        before the operator saves the subagent_3p agent. Reuses
+        runner.TestConnectionWithPath verbatim (the same handshake as
+        POST /agents/{id}/runner/test) — the only requirement is that the
+        binary runs and returns a valid version-shaped response; no per-CLI
+        identity/name match is performed. Gated withAuth at create-parity
+        (the same authorization as createAgent — not an admin-only route).
+        Rejects a target that is not a regular, executable file before
+        spawning it (classified "missing-binary", no spawn attempt). Applies
+        a dedicated rate limiter and a small per-caller in-flight
+        concurrency cap, and emits one audit event {cli, resolved_path,
+        reason} per call — validation spawns a caller-supplied path, unlike
+        the unaudited cli-detect probe.
+      tags:
+      - system
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CliValidateRequest'
+      responses:
+        '200':
+          description: >
+            Validation classification. Always 200 (even for missing-binary /
+            handshake-failed / unknown-cli) — the classification result is
+            carried in the response body's `reason` field, not the HTTP
+            status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CliValidateResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
 
 security:
 - BearerAuth: []
