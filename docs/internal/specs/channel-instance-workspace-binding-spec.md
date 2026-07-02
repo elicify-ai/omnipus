@@ -544,7 +544,7 @@ Feature: Endpoint and lifecycle
 |---|---|---|---|---|
 | 1 | present, in team | routed | no | US-4/AC-1 |
 | 2 | deleted | drop+alert | no | US-5/AC-1 |
-| 3 | disabled | drop+alert | no | US-5 (MAJ-003) |
+| 3 | ~~disabled~~ (N/A — no agent-disabled state in the model) | — | — | impl-reconciled FR-013 |
 | 4 | worker | drop+alert | no | US-5 |
 | 5 | removed from team, exists | routed (stale)+warn | no | US-5/AC-3 |
 | 6 | in team, **workspace archived** | routed (stale)+warn | no | MAJ-006/FR-013 |
@@ -584,7 +584,7 @@ New regression tests: `TestResolveMessageRoute_Unbound_DefaultUnchanged` (#11), 
 - **FR-010**: A bound instance MUST route ordinary inbound to its member agent via the Priority-0 identity override.
 - **FR-011**: Routing precedence MUST remain: explicit `agent_id` > active handoff pin > instance identity > bindings > default.
 - **FR-012**: A bound instance MUST NOT route to the global default; drift MUST drop-and-alert.
-- **FR-013**: The drift trigger MUST include agent deleted, disabled, or worker; a member merely removed from `core_team` but still existing MUST route stale. **Workspace state (MAJ-006):** an *archived* (not deleted) workspace whose bound agent is still valid MUST route **stale-but-functional** (mirrors the CoreTeam-removal rule), with a SPA config-time warning — drift drops only on *agent* state, never merely because the workspace is archived. A *deleted* workspace cannot route because FR-025 unbinds its instances. (Write-time, FR-007, still rejects binding to an archived/unknown workspace with 404 — write-time and route-time are distinct.)
+- **FR-013**: The drift trigger MUST include agent **deleted** or **turned into a worker** (non-chat-target). **Note (impl-reconciled):** the current agent model has **no per-agent enabled/disabled flag** (`AgentConfig` has no `Enabled` field; the registry registers all agents), so "disabled" is **not a representable state** and maps to N/A — the representable unresolvable states are {deleted, worker}. A member merely removed from `core_team` but still existing MUST route stale. **Workspace state (MAJ-006):** an *archived* (not deleted) workspace whose bound agent is still valid MUST route **stale-but-functional** (mirrors the CoreTeam-removal rule), with a SPA config-time warning — drift drops only on *agent* state, never merely because the workspace is archived. A *deleted* workspace cannot route because FR-025 unbinds its instances. (Write-time, FR-007, still rejects binding to an archived/unknown workspace with 404 — write-time and route-time are distinct.)
 - **FR-014**: The system MUST carry the drift signal via additive `RouteInput.BoundInstance` and `ResolvedRoute.Drop`, without reordering the priority cascade.
 - **FR-015**: The system MUST allow N>1 instances of the same channel type.
 - **FR-016**: `normalizeChannelMap` MUST match `knownChannelTypes` on the effective `Type`, not the raw key.
