@@ -43,6 +43,10 @@ void BASE_URL // used only for reference; actual calls are via page.goto
 const STUB_CHANNELS = [
   {
     id: 'telegram',
+    // instance_id marks this as a CONFIGURED instance — the redesigned
+    // ConnectorsScreen only renders channel-card rows (with Configure) for
+    // configured instances; rows without instance_id go to the roster.
+    instance_id: 'telegram',
     name: 'Telegram',
     transport: 'webhook',
     enabled: false,

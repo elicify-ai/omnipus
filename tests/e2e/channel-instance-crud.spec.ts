@@ -1,14 +1,16 @@
 /**
  * channel-instance-crud.spec.ts — E2E tests for the channel add-instance / delete flow.
  *
- * Tests exercise US-6 / US-10 / US-11 from the channel-instance-workspace-binding
- * spec:
+ * Tests exercise the channel create/delete + grouped-IA flows from the
+ * connectors-providers-redesign spec (US-9 / US-10), which supersede the
+ * original channel-instance-workspace-binding CRUD scenarios these tests were
+ * first written against:
  *
- *   (a) US-6 / FR-015: "Add instance" button renders on the Connectors screen
- *       and opens a dialog with a type selector and a slug input.
+ *   (a) FR-009 / US-10: "Add channel" button renders on the Connectors screen
+ *       and opens a Sheet with a type selector and a slug input.
  *   (b) US-6 / FR-017: Invalid slug (uppercase/special chars) → submit blocked
  *       and the slug hint is shown.
- *   (c) US-6 / FR-015: Valid type + slug → POST fires with {type, slug} and the
+ *   (c) US-10, AS-2: Valid type + slug → POST fires with {type, slug} and the
  *       new instance appears in the list (create→appears flow).
  *   (d) US-11: The new namespaced instance id (e.g. "telegram.eu") is shown as a
  *       badge on the channel card.
@@ -16,6 +18,8 @@
  *       confirming fires DELETE and the instance disappears from the list
  *       (delete→gone flow).
  *   (f) US-10: Cancelling the delete dialog fires no DELETE.
+ *   (g) US-9, AS-1/AS-2: Instances group under their channel type, and a
+ *       configured row shows its workspace→agent binding title.
  *
  * Architecture:
  *   - All external API calls are intercepted with page.route() stubs so the
@@ -24,7 +28,7 @@
  *     on initial load.
  *   - data-testid selectors are used throughout for stable targeting.
  *
- * Traces to: channel-instance-workspace-binding-spec.md US-6/US-10/US-11.
+ * Traces to: connectors-providers-redesign-spec.md US-9/US-10.
  */
 
 import { expect, type Page, type Route } from '@playwright/test'
@@ -118,6 +122,21 @@ async function registerBaseRoutes(
     }
   })
 
+  // Stub GET /api/v1/channels/<id>/routing — the redesigned rows
+  // (ChannelInstanceRow) fire getChannelRouting(instanceId) per rendered row
+  // to resolve their workspace→agent binding title. Without this stub the
+  // request falls through to the real gateway, violating this file's
+  // documented hermeticity. Defaults to an unbound instance ({}); individual
+  // tests may override with a more specific page.route() after calling this
+  // helper.
+  await page.route('**/api/v1/channels/*/routing', async (route: Route) => {
+    if (route.request().method() === 'GET') {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' })
+    } else {
+      await route.continue()
+    }
+  })
+
   // Stub agents and workspaces to prevent 404s if polled
   await page.route('**/api/v1/agents', async (route: Route) => {
     if (route.request().method() === 'GET') {
@@ -145,14 +164,14 @@ async function gotoConnectors(page: Page) {
 // ── (a) Add-instance button renders ─────────────────────────────────────────
 
 test(
-  '(a) "Add instance" button renders on the Connectors screen',
+  '(a) "Add channel" button renders on the Connectors screen',
   async ({ page }) => {
     await registerBaseRoutes(page)
     await gotoConnectors(page)
 
     const addBtn = page.getByTestId('add-channel-instance-btn')
     await expect(addBtn).toBeVisible({ timeout: 15_000 })
-    await expect(addBtn).toContainText(/add instance/i)
+    await expect(addBtn).toContainText(/add channel/i)
   },
 )
 
@@ -164,16 +183,16 @@ test(
     await registerBaseRoutes(page)
     await gotoConnectors(page)
 
-    // Open the add-instance dialog
+    // Open the create-channel Sheet
     const addBtn = page.getByTestId('add-channel-instance-btn')
     await expect(addBtn).toBeVisible({ timeout: 15_000 })
     await addBtn.click()
 
-    const dialog = page.getByTestId('add-instance-dialog')
+    const dialog = page.getByTestId('create-channel-sheet')
     await expect(dialog).toBeVisible({ timeout: 8_000 })
 
     // Select a channel type — use the type selector
-    const typeSelect = dialog.getByTestId('add-instance-type-select')
+    const typeSelect = dialog.getByTestId('create-channel-type-select')
     await expect(typeSelect).toBeVisible({ timeout: 5_000 })
     // Click to open (Radix Select in real browser)
     await typeSelect.click()
@@ -183,16 +202,16 @@ test(
     await telegramOption.click()
 
     // Enter an invalid slug (uppercase — fails [a-z0-9-]{1,32})
-    const slugInput = dialog.getByTestId('add-instance-slug-input')
+    const slugInput = dialog.getByTestId('create-channel-slug-input')
     await slugInput.fill('EU')
 
     // Slug error hint must appear
-    const slugError = dialog.getByTestId('add-instance-slug-error')
+    const slugError = dialog.getByTestId('create-channel-slug-error')
     await expect(slugError).toBeVisible({ timeout: 5_000 })
     await expect(slugError).toContainText(/lowercase/i)
 
     // Submit button must be disabled
-    const submitBtn = dialog.getByTestId('add-instance-submit-btn')
+    const submitBtn = dialog.getByTestId('create-channel-submit-btn')
     await expect(submitBtn).toBeDisabled()
   },
 )
@@ -263,25 +282,25 @@ test(
     await expect(addBtn).toBeVisible({ timeout: 5_000 })
     await addBtn.click()
 
-    const dialog = page.getByTestId('add-instance-dialog')
+    const dialog = page.getByTestId('create-channel-sheet')
     await expect(dialog).toBeVisible({ timeout: 8_000 })
 
     // Select type
-    const typeSelect = dialog.getByTestId('add-instance-type-select')
+    const typeSelect = dialog.getByTestId('create-channel-type-select')
     await typeSelect.click()
     const telegramOption = page.getByRole('option', { name: 'telegram' })
     await expect(telegramOption).toBeVisible({ timeout: 5_000 })
     await telegramOption.click()
 
     // Enter a valid slug
-    const slugInput = dialog.getByTestId('add-instance-slug-input')
+    const slugInput = dialog.getByTestId('create-channel-slug-input')
     await slugInput.fill('eu')
 
     // No slug error must be shown
-    await expect(dialog.getByTestId('add-instance-slug-error')).not.toBeVisible()
+    await expect(dialog.getByTestId('create-channel-slug-error')).not.toBeVisible()
 
     // Submit
-    const submitBtn = dialog.getByTestId('add-instance-submit-btn')
+    const submitBtn = dialog.getByTestId('create-channel-submit-btn')
     await expect(submitBtn).not.toBeDisabled()
     await submitBtn.click()
 
@@ -310,6 +329,14 @@ test(
     // Pre-existing instance must still be listed (two-per-type assertion)
     await expect(existingCard).toBeVisible()
     await expect(existingCard).toContainText('telegram.us')
+
+    // TDD #31 / US-9, AS-1: instances group under their channel type — one
+    // "telegram" group header contains BOTH per-instance rows, not two
+    // separate top-level cards.
+    const telegramGroup = page.getByTestId('channel-type-group-telegram')
+    await expect(telegramGroup).toBeVisible()
+    await expect(telegramGroup.getByTestId('channel-card-telegram.us')).toBeVisible()
+    await expect(telegramGroup.getByTestId('channel-card-telegram.eu')).toBeVisible()
   },
 )
 
@@ -471,5 +498,92 @@ test(
 
     // The card must still be visible (not deleted)
     await expect(card).toBeVisible({ timeout: 5_000 })
+  },
+)
+
+// ── (g) Instance row shows the workspace→agent binding ──────────────────────
+//
+// TDD #31 / US-9, AS-2 (connectors-providers-redesign-spec.md): "Given an
+// instance whatsapp.sales bound to workspace 'Sales' / agent 'Mia', when its
+// row renders, then the title reads 'Sales → Mia'." This test exercises the
+// same binding-title behaviour on the pre-existing telegram.us fixture: the
+// row resolves its routing (workspace_id + default_agent_id) and the
+// workspace/agent id lists to human-readable names.
+
+test(
+  '(g) configured instance row shows the "Sales → Mia" workspace→agent binding',
+  async ({ page }) => {
+    await registerBaseRoutes(page)
+
+    // Override the base (unbound) routing stub: telegram.us is bound to
+    // workspace "ws1" / agent "mia".
+    await page.route('**/api/v1/channels/*/routing', async (route: Route) => {
+      if (route.request().method() === 'GET') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ workspace_id: 'ws1', default_agent_id: 'mia' }),
+        })
+      } else {
+        await route.continue()
+      }
+    })
+
+    // Override the base (empty-array) workspaces/agents stubs with
+    // name-bearing fixtures so the row can resolve "ws1" -> "Sales" and
+    // "mia" -> "Mia". Full required-field shapes per the Workspace/Agent
+    // contract schemas (contracts/components/schemas/{Workspace,Agent}.yaml)
+    // so the SPA's runtime zod validation doesn't drop the entries.
+    await page.route('**/api/v1/workspaces?**', async (route: Route) => {
+      if (route.request().method() === 'GET') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify([
+            {
+              id: 'ws1',
+              name: 'Sales',
+              status: 'active',
+              pinned: false,
+              pin_order: 0,
+              task_count: 0,
+              created_at: '2026-06-08T14:22:00Z',
+              updated_at: '2026-06-08T14:22:00Z',
+            },
+          ]),
+        })
+      } else {
+        await route.continue()
+      }
+    })
+    await page.route('**/api/v1/agents', async (route: Route) => {
+      if (route.request().method() === 'GET') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify([
+            {
+              id: 'mia',
+              name: 'Mia',
+              type: 'core',
+              locked: true,
+              status: 'active',
+              soul: '',
+              timeout_seconds: 300,
+              max_tool_iterations: 25,
+              steering_mode: 'one-at-a-time',
+            },
+          ]),
+        })
+      } else {
+        await route.continue()
+      }
+    })
+
+    await gotoConnectors(page)
+
+    const binding = page.getByTestId('channel-binding-telegram.us')
+    await expect(binding).toBeVisible({ timeout: 15_000 })
+    await expect(binding).toContainText('Sales → Mia')
   },
 )

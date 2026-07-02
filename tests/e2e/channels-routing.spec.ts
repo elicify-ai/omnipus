@@ -121,9 +121,10 @@ test('(b) channel feed renders at least one channel card', async ({ page }) => {
   // Wait for either channel cards or the empty state — both are valid depending
   // on whether channels are configured in the CI gateway.
   // ConnectorsScreen renders channel cards as div[data-testid="channel-card-{id}"].
-  // If no channels are configured, an empty state paragraph is shown instead.
+  // If no channels are configured, the empty-state roster (US-9, AS-3) renders
+  // instead, identified by [data-testid="channel-roster"].
   const channelContent = page.locator(
-    '[data-testid^="channel-card-"], p:has-text("No channels configured.")',
+    '[data-testid^="channel-card-"], [data-testid="channel-roster"]',
   )
   // Allow for data to load (API round-trip + React render).
   await expect(channelContent.first()).toBeVisible({ timeout: 15_000 })
@@ -151,6 +152,7 @@ test('(c) clicking Configure opens the channel config panel sheet', async ({ pag
       body: JSON.stringify([
         {
           id: 'telegram',
+          instance_id: 'telegram',
           name: 'Telegram',
           transport: 'webhook',
           enabled: false,
@@ -250,7 +252,7 @@ test(
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify([
-          { id: 'telegram', name: 'Telegram', transport: 'webhook', enabled: false, description: '' },
+          { id: 'telegram', instance_id: 'telegram', name: 'Telegram', transport: 'webhook', enabled: false, description: '' },
         ]),
       })
     })
@@ -365,7 +367,7 @@ test(
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify([
-          { id: 'telegram', name: 'Telegram', transport: 'webhook', enabled: false, description: '' },
+          { id: 'telegram', instance_id: 'telegram', name: 'Telegram', transport: 'webhook', enabled: false, description: '' },
         ]),
       })
     })
