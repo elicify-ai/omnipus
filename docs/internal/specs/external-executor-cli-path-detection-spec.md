@@ -12,7 +12,7 @@
 
 ## Post-Grill Revisions (Round 1)
 
-`/grill-spec` returned **BLOCK** (review: `external-executor-cli-path-detection-spec-review.md`, 1 CRITICAL / 7 MAJOR / 6 MINOR). This section records the resolutions; the normative body below has been **edited in place** to match — no residual contradictions (Round-2 G2-02/G2-03 fixed). Round-2/3 additions (create-parity gating + basename target constraint, per-reason fields, non-result handling) are folded in here and into the body. **Operator decisions (Round 3):** the Test button is gated at create-parity (not admin); the tool check requires only that the binary **runs and returns a valid version** — no per-CLI name match. New requirements: FR-013…FR-019.
+`/grill-spec` returned **BLOCK** (review: `external-executor-cli-path-detection-spec-review.md`, 1 CRITICAL / 7 MAJOR / 6 MINOR). This section records the resolutions; the normative body below has been **edited in place** to match — no residual contradictions (Round-2 G2-02/G2-03 fixed). Round-2/3/4 additions (create-parity gating, regular-executable target check → `missing-binary`, per-reason fields, non-result handling) are folded in here and into the body. **Operator decisions (Round 3):** the Test button is gated at create-parity (not admin); the tool check requires only that the binary **runs and returns a valid version** — no per-CLI name match. New requirements: FR-013…FR-019.
 
 ### Design decisions (mirrored in ADR §11)
 - **F-01 (CRITICAL) — validate hardening.** `POST /system/cli-validate` MUST apply `withRateLimit` and MUST audit the executed-path event `{cli, resolved_path, reason}`. Detection stays unaudited (no subprocess). Amends the Non-Behaviors ("must not audit" now applies to **detection only**) and NFR-3.
@@ -36,13 +36,13 @@ CliValidateResponse:  { ok: bool, reason: enum[ok, missing-binary, handshake-fai
                         resolved_path: string|null, version: string|null, detail: string (classified, no stderr) }
 ```
 
-### Per-reason response fields, identity matchers, blocking rule
+### Per-reason response fields & blocking rule
 | reason | ok | resolved_path | version | detail |
 |---|---|---|---|---|
 | ok | true | absolute resolved path | version string | "OK" |
 | unauthenticated | true | absolute resolved path | version string | "installed; not logged in" |
 | missing-binary | false | null | null | "not found" (never the raw path stderr) |
-| handshake-failed | false | resolved path (if any) | null | "did not identify as \<cli\>" |
+| handshake-failed | false | resolved path (if any) | null | "did not run or returned no version" |
 | unknown-cli | false | null | null | "unsupported cli" |
 
 - **Blocking keys off `reason` only** (never raw `!ok`): block on `missing-binary`/`handshake-failed`; warn on `unauthenticated`; allow `ok`. (`ok` is retained for convenience but MUST NOT drive gating — G2-07.)
@@ -50,7 +50,7 @@ CliValidateResponse:  { ok: bool, reason: enum[ok, missing-binary, handshake-fai
 - **`EvalSymlinks` error** (dangling link): fall back to `Abs` of the raw hit, still `installed:true` (G2-11). **`source`** reflects *how located* (PATH lookup vs dir scan), independent of resolved location (G2-12). Validate is intentionally **stricter** than runtime (fail-closed at create), not a symmetry guarantee (G2-13).
 
 ### New functional requirements
-- **FR-013**: `cli-validate` MUST be gated `withAuth` (**create-parity** — the same authorization as `createAgent`, so a non-admin operator who can add the assistant can also validate; it is **not** an admin route, so the `RequireNotBypass`/e2e concern does not apply). It MUST apply a **dedicated** rate limiter, **reject a target that is not a regular executable file, or whose basename does not match the selected CLI's expected binary** (`claude`/`codex`/`opencode`), before spawn, **cap concurrent in-flight validations (≤2)**, and emit an audit event `{cli, resolved_path, reason}` per call. `[F-01 / G2-01 / C1 — operator: "anyone who can add the assistant"]`
+- **FR-013**: `cli-validate` MUST be gated `withAuth` (**create-parity** — the same authorization as `createAgent`; a non-admin `user` who can add the assistant can also validate; **not** an admin route, so `RequireNotBypass`/e2e do not apply). It MUST apply a **dedicated** rate limiter (a `validateLimiter` modeled on the existing config limiter), **reject a target that is not a regular, executable file before spawn** (classified `missing-binary` — **no basename/identity check**, consistent with the no-identity decision), **cap in-flight validations per caller** (small, e.g. 2 — *per-caller*, not global, to avoid self-DoS), and emit an audit event `{cli, resolved_path, reason}` per call. `[F-01 / G2-01 / C1]`
 - **FR-014**: Prefill MUST be absolute; validation + runtime resolve exactly `cli_path`; empty `cli_path` MUST classify `missing-binary`. `[F-02]`
 - **FR-015**: The handshake MUST confirm the binary runs and returns a valid version-shaped response (no per-CLI name match — operator decision); failure to run / no version → `handshake-failed`. `[F-03]`
 - **FR-016**: The well-known scan MUST tolerate `os.UserHomeDir()` failure without erroring. `[F-06]`
@@ -64,11 +64,11 @@ CliValidateResponse:  { ok: bool, reason: enum[ok, missing-binary, handshake-fai
 - **Windows:** `%APPDATA%\npm` (`.cmd`/`.exe` via `PATHEXT`), `%LOCALAPPDATA%\Programs\<tool>`, `%ProgramFiles%\...`
 
 ### Added BDD / dataset rows
-- BDD (Error Path, Traces US-3): **Wrong binary rejected** — `claude-code` → `/usr/bin/node` → `handshake-failed` `[FR-015]`.
+- BDD (Error Path, Traces US-3): **Won't-run rejected** — a target that isn't a runnable executable → `missing-binary`; one that runs but emits no version → `handshake-failed` `[FR-015]`. (Per the no-identity decision, a runnable binary returning any valid version passes, even if mis-pointed.)
 - BDD (Error Path, Traces US-4): **Empty cli_path is missing** — empty → `missing-binary` `[FR-014]`.
 - BDD (Edge, Traces US-2): **HOME unset** — scan uses passwd home, still finds well-known binaries `[FR-016]`.
 - BDD (Error Path, Traces US-3): **validate is rate-limited** — N rapid calls → 429 after the limit `[FR-013]`.
-- **D-2.6**: `cli_path=/usr/bin/node`, `cli=claude-code` → `handshake-failed`. **D-3.1 corrected**: empty → `missing-binary`.
+- **D-2.6**: a non-regular / non-executable target → `missing-binary`; a runnable binary that emits no version → `handshake-failed`. **D-3.1**: empty → `missing-binary`. (A runnable binary returning a version passes — no identity check.)
 
 ---
 
@@ -219,7 +219,7 @@ As an operator on Linux, macOS, or Windows, detection uses the right binary name
 **Gateway endpoints (SPA ↔ gateway)**
 - `GET /system/cli-detect` → `CliDetect { claude|codex|opencode: {installed, path, source} }`.
 - `POST /system/cli-validate` `{cli, cli_path}` → `CliValidate { ok, reason, resolved_path, version?, detail }`.
-- `cli-detect`: `withAuth`, read-only, unaudited. `cli-validate`: `withAuth` (create-parity with `createAgent`), dedicated rate limiter, audited, rejects a target that isn't a regular executable whose basename matches the selected CLI, and caps concurrent in-flight validations (FR-013).
+- `cli-detect`: `withAuth`, read-only, unaudited. `cli-validate`: `withAuth` (create-parity with `createAgent`), dedicated rate limiter, audited, rejects a target that isn't a regular executable file (→ `missing-binary`), and caps in-flight validations per caller (FR-013).
 
 ## BDD Scenarios
 
@@ -345,7 +345,7 @@ Feature: External-executor CLI path detection
 | 18 | `Step1Identity.prefillValidate.test` | Unit (vitest) | US-1/US-3/US-4 | Prefill-on-select, no-clobber, validate-on-blur, block rules. |
 | 19 | `AgentProfile.cliPathValidate.test` | Unit (vitest) | US-5 | Edit-form prefill + validate-on-blur. |
 | 20 | `external-executor-create.e2e` | E2E | US-1+US-3 happy | Wizard: select CLI → prefilled → validate ok → create. |
-| 21 | `TestValidate_AdminOnly` | Integration | validate admin-only | Non-admin `user` → 403; non-regular/non-executable target rejected. |
+| 21 | `TestValidate_CreateParity` | Integration | validate authz | Non-admin `user` who can create → allowed; non-regular/non-executable target → missing-binary. |
 | 22 | `TestValidate_RateLimited` | Integration | validate rate-limited | Past the dedicated limiter → 429; concurrency cap holds. |
 | 23 | `TestValidate_AuditEmitted` | Integration | audit | One audit event `{cli, resolved_path, reason}` per call. |
 | 24 | `TestValidate_RunsNoVersion` | Unit | handshake | A binary that emits no version → handshake-failed; a runnable binary returning any valid version passes. |
@@ -388,7 +388,7 @@ Feature: External-executor CLI path detection
 
 Modifies existing functionality (the `CliDetect` wire shape + `HandleSystemCliDetect`).
 1. Behaviours to preserve: the roster screen must still grey-out CLIs the host cannot run; `POST /agents/{id}/runner-test` must be unchanged.
-2. Existing tests to update: `HandleSystemCliDetect` unit tests (new shape), `AgentListScreen` + `src/lib/api.cli-detect.test.ts` (restructured `CliDetect`), and `conntest`/`runner-test` tests (now identity-checked).
+2. Existing tests to update: `HandleSystemCliDetect` unit tests (new shape), `AgentListScreen` + `src/lib/api.cli-detect.test.ts` (restructured `CliDetect`). `conntest` / `runner-test` tests are **unchanged** (no identity extension).
 3. New regression tests: `AgentListScreen.cliDetect.test` against the restructured `CliDetect`; a contract test asserting the old boolean consumers are fully migrated.
 4. Regression dataset: reuse D-1 to assert "installed" truthiness matches the old boolean semantics (installed==true iff old hasX==true).
 
@@ -416,7 +416,7 @@ Modifies existing functionality (the `CliDetect` wire shape + `HandleSystemCliDe
 - **SC-005**: `make verify-contracts` passes with the new `CliDetect`/`CliValidate` schemas; no hand-written wire types.
 - **SC-006**: Detection returns without spawning a subprocess (asserted by test doubles / no `--version` call in the detect path).
 - **SC-007**: All 27 TDD-plan tests pass; `tsc -b`, vitest, `CGO_ENABLED=0 go test -tags goolm,stdjson`, and `make verify-contracts` green.
-- **SC-008**: `cli-validate` returns 403 for a non-admin `user` role and 429 past its dedicated rate limit. `[FR-013]`
+- **SC-008**: `cli-validate` is reachable by a non-admin `user` who can create agents (create-parity), and returns 429 past its dedicated rate limit. `[FR-013]`
 - **SC-009**: Each `cli-validate` call emits exactly one audit event `{cli, resolved_path, reason}`. `[FR-013]`
 - **SC-010**: A runnable binary that returns a valid version passes; a path that won't run or returns no version yields `handshake-failed`. `[FR-015]`
 - **SC-011**: With `HOME` unset, detection still resolves a binary in a passwd-home well-known dir. `[FR-016]`
@@ -439,7 +439,7 @@ Modifies existing functionality (the `CliDetect` wire shape + `HandleSystemCliDe
 | FR-010 | US-4 | manual override validated | Step1Identity.prefillValidate.test |
 | FR-011 | Regression | (schema) | TestCliDetectContract, AgentListScreen.cliDetect.test |
 | FR-012 | US-3 edge | unknown CLI no spawn | TestValidate_UnknownCLI |
-| FR-013 | US-3 | validate is admin-only + rate-limited + audited | TestValidate_AdminOnly, TestValidate_RateLimited, TestValidate_AuditEmitted |
+| FR-013 | US-3 | validate is create-parity + rate-limited + audited | TestValidate_CreateParity, TestValidate_RateLimited, TestValidate_AuditEmitted |
 | FR-014 | US-4 | empty cli_path is missing | TestValidate_EmptyPathMissing |
 | FR-015 | US-3 | runs + valid version required | TestValidate_RunsNoVersion |
 | FR-019 | US-3 | non-result save handling | Step1Identity.prefillValidate.test |
