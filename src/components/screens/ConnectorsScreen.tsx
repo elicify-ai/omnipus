@@ -25,6 +25,7 @@ import {
 } from '@/components/ui/select'
 import { BrandIcon } from '@/components/ui/brand-icon'
 import { BrandDisclaimer } from '@/components/ui/brand-disclaimer'
+import { channelSlug } from '@/components/ui/channel-logo'
 import {
   fetchChannels,
   enableChannel,
@@ -43,6 +44,7 @@ import { ChannelConfigPanel } from '@/components/skills/ChannelConfigPanel'
 import { EmailMailboxPanel } from '@/components/connectors/EmailMailboxPanel'
 import { SkeletonList, ErrorState } from '@/components/shared/ListStates'
 import { ScreenHeader } from '@/components/layout/ScreenHeader'
+import { logError } from '@/lib/telemetry'
 
 // Slug validation: [a-z0-9-]{1,32} lowercase only, as per FR-017
 const SLUG_PATTERN = /^[a-z0-9-]{1,32}$/
@@ -50,40 +52,59 @@ const SLUG_HINT = '1–32 characters, lowercase letters, numbers, and hyphens on
 
 const WEBCHAT_ID = 'webchat'
 
-/** Derives the base channel type from a ChannelEntry.
- * For bare-type entries (e.g. "telegram") the id is the type.
- * For namespaced entries (e.g. "whatsapp.eu") the type is the pre-dot segment.
- * The backend also provides `instance_id` which equals the config map key.
+/**
+ * Derives the base channel type from a ChannelEntry. For bare-type entries
+ * (e.g. "telegram") the id is the type. For namespaced entries (e.g.
+ * "whatsapp.eu") the type is the pre-dot segment. `instance_id` (when
+ * present) equals the config map key and is preferred over `id`, since the
+ * backend's static "available but unconfigured" placeholder rows only set `id`.
  */
 function deriveBaseType(channel: ChannelEntry): string {
-  // instance_id is the config map key; for bare-type channels id == instance_id == type
   const key = channel.instance_id ?? channel.id
   const dotIdx = key.indexOf('.')
   return dotIdx >= 0 ? key.slice(0, dotIdx) : key
 }
 
-// Channel base type -> <BrandIcon> logoSlug (ADR-031 Track 2, US-9). Only the
-// following channel marks are vendored: telegram, discord, matrix, whatsapp,
-// googlechat, line, wechat, tencentqq (src/assets/brand-logos/c_*.svg). Any
-// other base type (slack, feishu, dingtalk, wecom, irc) has no vendored asset
-// and falls back to <BrandIcon>'s lettermark automatically — never throws.
-function channelSlug(baseType: string): string {
-  switch (baseType) {
-    case 'google-chat':
-      return 'googlechat'
-    case 'weixin':
-      return 'wechat'
-    case 'qq':
-      return 'tencentqq'
-    default:
-      return baseType
-  }
+// ── Configured-instance typing (A6) ───────────────────────────────────────────
+//
+// A ChannelEntry is "configured" (FR-008) iff the backend set `instance_id` —
+// it only does so for entries backed by a real config.Channels[] map key. The
+// static "available but unconfigured" placeholder rows omit it. Narrowing to
+// a dedicated type lets every configured-only component (row, group, delete
+// dialog) use `channel.instance_id` directly instead of a defensive
+// `channel.instance_id ?? channel.id` fallback that can never actually miss.
+
+type ConfiguredChannelEntry = ChannelEntry & { instance_id: string }
+
+function isConfigured(channel: ChannelEntry): channel is ConfiguredChannelEntry {
+  return channel.instance_id !== undefined
+}
+
+/** The "available but unconfigured" placeholder shape — no instance_id. */
+type UnconfiguredChannelEntry = ChannelEntry & { instance_id?: undefined }
+
+function isUnconfigured(channel: ChannelEntry): channel is UnconfiguredChannelEntry {
+  return channel.instance_id === undefined
 }
 
 // ── Channel instance row (US-9 AS-2: binding-first title) ────────────────────
 
+// Hoisted to module scope (A10) — a fixed lookup table, not per-render state.
+type ConnectionStatus = 'degraded' | 'enabled' | 'unconfigured'
+
+const STATUS_BADGE: Record<ConnectionStatus, { variant: 'error' | 'success' | 'muted'; label: string }> = {
+  degraded:     { variant: 'error',   label: 'Failed to start' },
+  enabled:      { variant: 'success', label: 'Enabled' },
+  unconfigured: { variant: 'muted',   label: 'Not configured' },
+}
+
+function connectionStatusOf(channel: ChannelEntry): ConnectionStatus {
+  if (channel.degraded === true) return 'degraded'
+  return channel.enabled ? 'enabled' : 'unconfigured'
+}
+
 interface ChannelInstanceRowProps {
-  channel: ChannelEntry
+  channel: ConfiguredChannelEntry
   workspaceNameById: Map<string, string>
   agentNameById: Map<string, string>
   onConfigure: () => void
@@ -99,16 +120,24 @@ function ChannelInstanceRow({
   onToggle,
   onDelete,
 }: ChannelInstanceRowProps) {
-  const instanceId = channel.instance_id ?? channel.id
+  const instanceId = channel.instance_id
 
   // Resolve the ADR-029 workspace→agent binding via the same routing endpoint
   // ChannelConfigPanel uses (shared TanStack Query cache key). A fetch failure
-  // must never crash the row — it degrades to the "No workspace bound" fallback.
-  const { data: routing, isLoading: routingLoading } = useQuery({
+  // must never crash the row — it renders a distinct error state (A1) instead
+  // of masquerading as "No workspace bound" (those are different facts: one
+  // means "we don't know", the other means "we know there's nothing").
+  const { data: routing, isLoading: routingLoading, isError: routingIsError } = useQuery({
     queryKey: ['channel-routing', instanceId],
     queryFn: () => getChannelRouting(instanceId),
     retry: false,
   })
+
+  useEffect(() => {
+    if (routingIsError) {
+      logError({ event: 'channelRoutingFetchFailed', instanceId })
+    }
+  }, [routingIsError, instanceId])
 
   const workspaceId = routing?.workspace_id
   const agentId = routing?.default_agent_id
@@ -118,13 +147,8 @@ function ChannelInstanceRow({
   const workspaceName = workspaceId ? workspaceNameById.get(workspaceId) ?? workspaceId : undefined
   const agentName = agentId ? agentNameById.get(agentId) ?? agentId : undefined
 
-  const isDegraded = channel.degraded === true
-  const connectionStatus = isDegraded ? 'degraded' : channel.enabled ? 'enabled' : 'unconfigured'
-  const statusBadge: Record<'degraded' | 'enabled' | 'unconfigured', { variant: 'error' | 'success' | 'muted'; label: string }> = {
-    degraded:     { variant: 'error',   label: 'Failed to start' },
-    enabled:      { variant: 'success', label: 'Enabled' },
-    unconfigured: { variant: 'muted',   label: 'Not configured' },
-  }
+  const connectionStatus = connectionStatusOf(channel)
+  const isDegraded = connectionStatus === 'degraded'
 
   return (
     <div
@@ -133,7 +157,14 @@ function ChannelInstanceRow({
     >
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
-          {routingLoading ? (
+          {routingIsError ? (
+            <span
+              className="font-medium text-sm text-[var(--color-error)]"
+              data-testid={`channel-binding-${instanceId}`}
+            >
+              Couldn&apos;t load binding
+            </span>
+          ) : routingLoading ? (
             <span className="text-sm text-[var(--color-muted)]" data-testid={`channel-binding-${instanceId}`}>
               Loading binding…
             </span>
@@ -156,10 +187,10 @@ function ChannelInstanceRow({
             {instanceId}
           </Badge>
           <Badge
-            variant={statusBadge[connectionStatus].variant}
+            variant={STATUS_BADGE[connectionStatus].variant}
             className="text-[10px]"
           >
-            {statusBadge[connectionStatus].label}
+            {STATUS_BADGE[connectionStatus].label}
           </Badge>
         </div>
         {isDegraded && channel.degraded_reason && (
@@ -182,6 +213,8 @@ function ChannelInstanceRow({
           type="button"
           onClick={onToggle}
           className="text-xs text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] transition-colors font-medium"
+          aria-label={`${channel.enabled ? 'Disable' : 'Enable'} ${instanceId}`}
+          data-testid={`channel-toggle-${instanceId}`}
         >
           {channel.enabled ? 'Disable' : 'Enable'}
         </button>
@@ -204,12 +237,12 @@ function ChannelInstanceRow({
 interface ChannelTypeGroupProps {
   baseType: string
   displayName: string
-  instances: ChannelEntry[]
+  instances: ConfiguredChannelEntry[]
   workspaceNameById: Map<string, string>
   agentNameById: Map<string, string>
-  onConfigure: (channel: ChannelEntry) => void
-  onToggle: (channel: ChannelEntry) => void
-  onDelete: (channel: ChannelEntry) => void
+  onConfigure: (channel: ConfiguredChannelEntry) => void
+  onToggle: (channel: ConfiguredChannelEntry) => void
+  onDelete: (channel: ConfiguredChannelEntry) => void
   onAddAnother: (baseType: string) => void
 }
 
@@ -243,7 +276,7 @@ function ChannelTypeGroup({
       </div>
       <div className="space-y-2">
         {instances.map((channel) => {
-          const instanceId = channel.instance_id ?? channel.id
+          const instanceId = channel.instance_id
           return (
             <ChannelInstanceRow
               key={instanceId}
@@ -264,7 +297,7 @@ function ChannelTypeGroup({
 // ── Empty-state roster (US-9 AS-3) ────────────────────────────────────────────
 
 interface ChannelRosterProps {
-  types: ChannelEntry[]
+  types: UnconfiguredChannelEntry[]
   onConnect: (baseType: string) => void
 }
 
@@ -298,13 +331,20 @@ function ChannelRoster({ types, onConnect }: ChannelRosterProps) {
 
 // ── Create-channel Sheet (US-10 — replaces the modal AddInstanceDialog) ──────
 
+// Discriminated selection state (A7): either the sheet was opened from a
+// group's "Add another…"/a roster "Connect" (type locked, no picker), or from
+// the global "+ Add channel" entry point (type open for picking from the
+// known roster). Replaces the old `defaultType?: string` + `knownTypes`
+// pairing, which let a caller pass both/neither with no compile-time check
+// that they were used consistently.
+type CreateChannelSelection =
+  | { mode: 'locked'; baseType: string }
+  | { mode: 'pickable'; knownTypes: string[] }
+
 interface CreateChannelSheetProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  /** Pre-selected + locked channel type when opened from a group's "Add another…" or a roster "Connect". */
-  defaultType?: string
-  /** List of known base channel types for the type selector (global "+ Add channel" entry point). */
-  knownTypes: string[]
+  selection: CreateChannelSelection
   typeDisplayName: Map<string, string>
   onCreated: (created: ChannelCreateResponse) => void
 }
@@ -312,36 +352,39 @@ interface CreateChannelSheetProps {
 function CreateChannelSheet({
   open,
   onOpenChange,
-  defaultType,
-  knownTypes,
+  selection,
   typeDisplayName,
   onCreated,
 }: CreateChannelSheetProps) {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
 
-  const [selectedType, setSelectedType] = useState(defaultType ?? '')
+  const lockedType = selection.mode === 'locked' ? selection.baseType : undefined
+
+  // No `''` sentinel (A7) — "nothing chosen yet" is represented by `undefined`.
+  const [selectedType, setSelectedType] = useState<string | undefined>(lockedType)
   const [slug, setSlug] = useState('')
-  const [slugError, setSlugError] = useState<string | null>(null)
   const [serverError, setServerError] = useState<string | null>(null)
 
   // Re-sync the locked/pre-filled type whenever the sheet is (re)opened for a
   // different entry point (a different group's "Add another…", a roster
-  // "Connect", or the global "+ Add channel" which passes no defaultType).
+  // "Connect", or the global "+ Add channel" which opens in pickable mode).
   useEffect(() => {
-    if (open) setSelectedType(defaultType ?? '')
-  }, [open, defaultType])
+    if (open) setSelectedType(lockedType)
+  }, [open, lockedType])
 
   const slugValid = SLUG_PATTERN.test(slug)
-  const canSubmit = selectedType !== '' && slugValid
+  // Derived, not stored (A9) — slug validity is a pure function of `slug`,
+  // so a parallel `slugError` useState could only ever drift out of sync.
+  const slugError = slug !== '' && !slugValid ? SLUG_HINT : null
+  const canSubmit = selectedType !== undefined && slugValid
 
   const { mutate: doCreate, isPending } = useMutation({
-    mutationFn: () => createChannelInstance({ type: selectedType, slug }),
+    mutationFn: () => createChannelInstance({ type: selectedType ?? '', slug }),
     onSuccess: (created) => {
       queryClient.invalidateQueries({ queryKey: ['channels'] })
       addToast({ message: `Channel instance "${created.id}" created`, variant: 'success' })
       setSlug('')
-      setSlugError(null)
       setServerError(null)
       onOpenChange(false)
       onCreated(created)
@@ -352,7 +395,10 @@ function CreateChannelSheet({
       } else if (isApiError(err)) {
         setServerError(err.userMessage)
       } else {
-        setServerError(err.message)
+        // Never surface a raw Error.message (e.g. an ApiSchemaError's
+        // internals — zod issue paths, raw response body) to the user (A5).
+        setServerError('Unexpected response from the server. Please refresh and try again.')
+        logError({ event: 'createChannelInstanceFailed', message: err.message })
       }
     },
   })
@@ -360,18 +406,11 @@ function CreateChannelSheet({
   function handleSlugChange(value: string) {
     setSlug(value)
     setServerError(null)
-    if (value === '') {
-      setSlugError(null)
-    } else if (!SLUG_PATTERN.test(value)) {
-      setSlugError(SLUG_HINT)
-    } else {
-      setSlugError(null)
-    }
   }
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (!canSubmit) return
+    if (!canSubmit || isPending) return
     setServerError(null)
     doCreate()
   }
@@ -379,13 +418,12 @@ function CreateChannelSheet({
   function handleOpenChange(nextOpen: boolean) {
     if (!nextOpen) {
       setSlug('')
-      setSlugError(null)
       setServerError(null)
     }
     onOpenChange(nextOpen)
   }
 
-  const lockedTypeName = defaultType ? typeDisplayName.get(defaultType) ?? defaultType : null
+  const lockedTypeName = lockedType ? typeDisplayName.get(lockedType) ?? lockedType : null
 
   return (
     <Sheet open={open} onOpenChange={handleOpenChange}>
@@ -411,12 +449,12 @@ function CreateChannelSheet({
             <Label htmlFor="channel-type-select" className="text-xs font-medium text-[var(--color-secondary)]">
               Channel type
             </Label>
-            {defaultType ? (
+            {selection.mode === 'locked' ? (
               <div
                 className="flex items-center gap-2 p-2.5 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)]"
                 data-testid="create-channel-type-locked"
               >
-                <BrandIcon slug={channelSlug(defaultType)} size={18} label={lockedTypeName ?? defaultType} />
+                <BrandIcon slug={channelSlug(selection.baseType)} size={18} label={lockedTypeName ?? selection.baseType} />
                 <span className="text-sm text-[var(--color-secondary)]">{lockedTypeName}</span>
               </div>
             ) : (
@@ -432,7 +470,7 @@ function CreateChannelSheet({
                   <SelectValue placeholder="Select a channel type" />
                 </SelectTrigger>
                 <SelectContent>
-                  {knownTypes.map((t) => (
+                  {selection.knownTypes.map((t) => (
                     <SelectItem key={t} value={t}>
                       {typeDisplayName.get(t) ?? t}
                     </SelectItem>
@@ -516,7 +554,7 @@ function CreateChannelSheet({
 // ── Delete confirmation dialog ────────────────────────────────────────────────
 
 interface DeleteConfirmDialogProps {
-  channel: ChannelEntry | null
+  channel: ConfiguredChannelEntry | null
   onClose: () => void
 }
 
@@ -525,7 +563,7 @@ function DeleteConfirmDialog({ channel, onClose }: DeleteConfirmDialogProps) {
   const queryClient = useQueryClient()
   const [deleteError, setDeleteError] = useState<string | null>(null)
 
-  const instanceId = channel?.instance_id ?? channel?.id ?? ''
+  const instanceId = channel?.instance_id ?? ''
   const isEnabled = channel?.enabled === true
 
   const { mutate: doDelete, isPending } = useMutation({
@@ -622,10 +660,10 @@ export function ConnectorsScreen() {
 
   // Create-channel Sheet state (US-10)
   const [createChannelOpen, setCreateChannelOpen] = useState(false)
-  const [createChannelDefaultType, setCreateChannelDefaultType] = useState<string | undefined>(undefined)
+  const [createChannelBaseType, setCreateChannelBaseType] = useState<string | undefined>(undefined)
 
   // Delete confirmation state
-  const [channelToDelete, setChannelToDelete] = useState<ChannelEntry | null>(null)
+  const [channelToDelete, setChannelToDelete] = useState<ConfiguredChannelEntry | null>(null)
 
   const { data: allChannels = [], isLoading, isError } = useQuery({
     queryKey: ['channels'],
@@ -644,43 +682,32 @@ export function ConnectorsScreen() {
   // "Configured" (FR-008) = has a persisted instance — the backend only sets
   // instance_id on entries backed by a real config.Channels[] map key; the
   // static "available but unconfigured" placeholder rows omit it.
-  const configuredInstances = channels.filter((c) => c.instance_id !== undefined)
-  const unconfiguredChannels = channels.filter((c) => c.instance_id === undefined)
+  const configuredInstances = channels.filter(isConfigured)
+  const unconfiguredChannels = channels.filter(isUnconfigured)
 
   // Derive the set of known base types (both configured and connectable) for
   // the create-Sheet's type picker.
   const knownBaseTypes = Array.from(new Set(channels.map(deriveBaseType))).sort()
 
-  // baseType -> human display name (identical across every instance of a type).
-  const typeDisplayName = useMemo(() => {
-    const map = new Map<string, string>()
+  // Single pass over `channels` (A12) — baseType -> display name, baseType ->
+  // native_available (WhatsApp-only capability flag), and baseType -> its
+  // configured instances all fall out of one iteration instead of three
+  // separate O(n) useMemos with an identical [channels] dependency.
+  const { typeDisplayName, nativeAvailableByType, groupedInstances } = useMemo(() => {
+    const typeDisplayName = new Map<string, string>()
+    const nativeAvailableByType = new Map<string, boolean | undefined>()
+    const groupedInstances = new Map<string, ConfiguredChannelEntry[]>()
     for (const c of channels) {
       const baseType = deriveBaseType(c)
-      if (!map.has(baseType)) map.set(baseType, c.name)
+      if (!typeDisplayName.has(baseType)) typeDisplayName.set(baseType, c.name)
+      if (c.native_available !== undefined) nativeAvailableByType.set(baseType, c.native_available)
+      if (isConfigured(c)) {
+        const arr = groupedInstances.get(baseType) ?? []
+        arr.push(c)
+        groupedInstances.set(baseType, arr)
+      }
     }
-    return map
-  }, [channels])
-
-  // baseType -> native_available (WhatsApp-only capability flag) so a newly
-  // created instance's Configure sheet knows whether native pairing is offered.
-  const nativeAvailableByType = useMemo(() => {
-    const map = new Map<string, boolean | undefined>()
-    for (const c of channels) {
-      if (c.native_available !== undefined) map.set(deriveBaseType(c), c.native_available)
-    }
-    return map
-  }, [channels])
-
-  const groupedInstances = useMemo(() => {
-    const map = new Map<string, ChannelEntry[]>()
-    for (const c of channels) {
-      if (c.instance_id === undefined) continue
-      const baseType = deriveBaseType(c)
-      const arr = map.get(baseType) ?? []
-      arr.push(c)
-      map.set(baseType, arr)
-    }
-    return map
+    return { typeDisplayName, nativeAvailableByType, groupedInstances }
   }, [channels])
 
   const groupedTypeOrder = useMemo(() => Array.from(groupedInstances.keys()).sort(), [groupedInstances])
@@ -689,18 +716,27 @@ export function ConnectorsScreen() {
   // uses (agents) so the TanStack Query cache is shared; workspaces are fetched
   // with status "all" (not "active") so an archived-but-bound workspace still
   // resolves to a name instead of falling back to its raw id.
-  const { data: workspaces = [] } = useQuery({
+  const { data: workspaces = [], isError: workspacesError } = useQuery({
     queryKey: ['workspaces', { status: 'all' }],
     queryFn: () => fetchWorkspaces({ status: 'all' }),
     enabled: configuredInstances.length > 0,
   })
-  const { data: agentsList = [] } = useQuery({
+  const { data: agentsList = [], isError: agentsListError } = useQuery({
     queryKey: ['agents'],
     queryFn: fetchAgents,
     enabled: configuredInstances.length > 0,
   })
   const workspaceNameById = useMemo(() => new Map(workspaces.map((w) => [w.id, w.name])), [workspaces])
   const agentNameById = useMemo(() => new Map(agentsList.map((a) => [a.id, a.name])), [agentsList])
+
+  // A3 — a workspaces/agents fetch failure silently degrades every row's
+  // binding to raw ids; log it once (per transition) rather than staying quiet.
+  useEffect(() => {
+    if (workspacesError) logError({ event: 'workspacesFetchFailed' })
+  }, [workspacesError])
+  useEffect(() => {
+    if (agentsListError) logError({ event: 'agentsFetchFailed' })
+  }, [agentsListError])
 
   const { mutate: doToggleChannel } = useMutation({
     mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
@@ -714,19 +750,65 @@ export function ConnectorsScreen() {
   })
 
   function openCreateFor(baseType?: string) {
-    setCreateChannelDefaultType(baseType)
+    setCreateChannelBaseType(baseType)
     setCreateChannelOpen(true)
   }
 
   function handleCreated(created: ChannelCreateResponse) {
-    // Immediately open Configure on the new instance so the operator sets its
-    // workspace→agent binding without an extra click (US-10 AS-2).
+    // The create flow is a deliberate two-step handoff (US-10 AS-2), not a
+    // single combined form: CreateChannelSheet only mints the instance
+    // (type + slug); this callback then immediately opens ChannelConfigPanel
+    // for it so the operator sets its workspace→agent binding as the very
+    // next step, without an extra click to find and open Configure themselves.
     setConfiguringChannel({
       id: created.id,
       name: typeDisplayName.get(created.type) ?? created.type,
       nativeAvailable: nativeAvailableByType.get(created.type),
       enabled: created.enabled,
     })
+  }
+
+  const createChannelSelection: CreateChannelSelection = createChannelBaseType
+    ? { mode: 'locked', baseType: createChannelBaseType }
+    : { mode: 'pickable', knownTypes: knownBaseTypes }
+
+  // A11 — a single if/else render function instead of a 4-way nested ternary.
+  // Composes with the outer isError gate (A2): the caller never invokes this
+  // while `isError` is true (the whole content area is replaced by one
+  // hoisted ErrorState instead), so it only has loading/empty/populated to handle.
+  function renderChannelsBody() {
+    if (isLoading) return <SkeletonList />
+    if (configuredInstances.length === 0) {
+      return <ChannelRoster types={unconfiguredChannels} onConnect={openCreateFor} />
+    }
+    return (
+      <div className="space-y-6">
+        {groupedTypeOrder.map((baseType) => (
+          <ChannelTypeGroup
+            key={baseType}
+            baseType={baseType}
+            displayName={typeDisplayName.get(baseType) ?? baseType}
+            instances={groupedInstances.get(baseType) ?? []}
+            workspaceNameById={workspaceNameById}
+            agentNameById={agentNameById}
+            onConfigure={(channel) =>
+              setConfiguringChannel({
+                id: channel.instance_id,
+                name: channel.name,
+                nativeAvailable: channel.native_available,
+                enabled: channel.enabled,
+              })
+            }
+            onToggle={(channel) =>
+              doToggleChannel({ id: channel.instance_id, enabled: channel.enabled })
+            }
+            onDelete={(channel) => setChannelToDelete(channel)}
+            onAddAnother={openCreateFor}
+          />
+        ))}
+        <BrandDisclaimer />
+      </div>
+    )
   }
 
   return (
@@ -759,127 +841,117 @@ export function ConnectorsScreen() {
           )}
         </div>
 
-        {/* ── Email Mailbox Account (M11 — email is a tool, not a channel) ── */}
-        <div className="mb-8">
-          <div className="flex items-center gap-2 mb-3">
-            <h2 className="text-xs font-semibold text-[var(--color-secondary)] uppercase tracking-wider">
-              Email
-            </h2>
-          </div>
-          <div
-            data-testid="email-mailbox-card"
-            className="flex items-center gap-3 p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)]"
-          >
-            <Envelope size={20} weight="duotone" className="text-[var(--color-accent)] shrink-0" />
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="font-medium text-sm text-[var(--color-secondary)]">
-                  Email Mailbox
-                </span>
-                <Badge variant="outline" className="text-[10px] font-mono">
-                  imap + smtp
-                </Badge>
-                {emailChannel?.enabled ? (
-                  <Badge variant="success" className="text-[10px]">
-                    Active
-                  </Badge>
-                ) : (
-                  <Badge variant="muted" className="text-[10px]">
-                    Not configured
-                  </Badge>
-                )}
+        {/* A2 — a channels-list fetch failure must not silently degrade the
+            Email/Web Chat sections (both read from the same `allChannels`
+            query) into misleading "Not configured" / dropped states. One
+            hoisted error banner replaces all three data sections; the panels
+            and dialogs below stay mounted since they're independent overlays,
+            not part of the list. */}
+        {isError ? (
+          <ErrorState message="Could not load channels." />
+        ) : (
+          <>
+            {/* ── Email Mailbox Account (M11 — email is a tool, not a channel) ── */}
+            <div className="mb-8">
+              <div className="flex items-center gap-2 mb-3">
+                <h2 className="text-xs font-semibold text-[var(--color-secondary)] uppercase tracking-wider">
+                  Email
+                </h2>
               </div>
-              <p className="mt-0.5 text-[10px] text-[var(--color-muted)]">
-                The agent reads its inbox on heartbeat. Unhandled mail becomes Board tasks.
-              </p>
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <button
-                type="button"
-                onClick={() => setMailboxPanelOpen(true)}
-                className="flex items-center gap-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors font-medium"
-                aria-label="Configure email mailbox account"
-                data-testid="email-mailbox-configure-btn"
+              <div
+                data-testid="email-mailbox-card"
+                className="flex items-center gap-3 p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)]"
               >
-                <Gear size={13} />
-                Configure
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* ── Web Chat (built-in, singleton, always on — no ADR-029 binding) ── */}
-        {webchatChannel && (
-          <div className="mb-8">
-            <div className="flex items-center gap-2 mb-3">
-              <h2 className="text-xs font-semibold text-[var(--color-secondary)] uppercase tracking-wider">
-                Built-in
-              </h2>
-            </div>
-            <div
-              data-testid={`channel-card-${webchatChannel.id}`}
-              className="flex items-center gap-3 p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)]"
-            >
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="font-medium text-sm text-[var(--color-secondary)]">
-                    {webchatChannel.name}
-                  </span>
-                  <Badge variant="success" className="text-[10px]">
-                    Always on
-                  </Badge>
+                <Envelope size={20} weight="duotone" className="text-[var(--color-accent)] shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-medium text-sm text-[var(--color-secondary)]">
+                      Email Mailbox
+                    </span>
+                    <Badge variant="outline" className="text-[10px] font-mono">
+                      imap + smtp
+                    </Badge>
+                    {emailChannel?.enabled ? (
+                      <Badge variant="success" className="text-[10px]">
+                        Active
+                      </Badge>
+                    ) : (
+                      <Badge variant="muted" className="text-[10px]">
+                        Not configured
+                      </Badge>
+                    )}
+                  </div>
+                  <p className="mt-0.5 text-[10px] text-[var(--color-muted)]">
+                    The agent reads its inbox on heartbeat. Unhandled mail becomes Board tasks.
+                  </p>
                 </div>
-                <p className="mt-0.5 text-[10px] text-[var(--color-muted)]">
-                  Built into every Omnipus install. No configuration needed.
-                </p>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setMailboxPanelOpen(true)}
+                    className="flex items-center gap-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors font-medium"
+                    aria-label="Configure email mailbox account"
+                    data-testid="email-mailbox-configure-btn"
+                  >
+                    <Gear size={13} />
+                    Configure
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
-        )}
 
-        {/* ── Channels (conversational, type-grouped instances) ── */}
-        <div>
-          <div className="flex items-center gap-2 mb-3">
-            <h2 className="text-xs font-semibold text-[var(--color-secondary)] uppercase tracking-wider">
-              Channels
-            </h2>
-          </div>
+            {/* ── Web Chat (built-in, singleton, always on — no ADR-029 binding) ── */}
+            {webchatChannel && (
+              <div className="mb-8">
+                <div className="flex items-center gap-2 mb-3">
+                  <h2 className="text-xs font-semibold text-[var(--color-secondary)] uppercase tracking-wider">
+                    Built-in
+                  </h2>
+                </div>
+                <div
+                  data-testid={`channel-card-${webchatChannel.id}`}
+                  className="flex items-center gap-3 p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)]"
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-medium text-sm text-[var(--color-secondary)]">
+                        {webchatChannel.name}
+                      </span>
+                      <Badge variant="success" className="text-[10px]">
+                        Always on
+                      </Badge>
+                    </div>
+                    <p className="mt-0.5 text-[10px] text-[var(--color-muted)]">
+                      Built into every Omnipus install. No configuration needed.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
 
-          {isError ? (
-            <ErrorState message="Could not load channels." />
-          ) : isLoading ? (
-            <SkeletonList />
-          ) : configuredInstances.length === 0 ? (
-            <ChannelRoster types={unconfiguredChannels} onConnect={openCreateFor} />
-          ) : (
-            <div className="space-y-6">
-              {groupedTypeOrder.map((baseType) => (
-                <ChannelTypeGroup
-                  key={baseType}
-                  baseType={baseType}
-                  displayName={typeDisplayName.get(baseType) ?? baseType}
-                  instances={groupedInstances.get(baseType) ?? []}
-                  workspaceNameById={workspaceNameById}
-                  agentNameById={agentNameById}
-                  onConfigure={(channel) =>
-                    setConfiguringChannel({
-                      id: channel.instance_id ?? channel.id,
-                      name: channel.name,
-                      nativeAvailable: channel.native_available,
-                      enabled: channel.enabled,
-                    })
-                  }
-                  onToggle={(channel) =>
-                    doToggleChannel({ id: channel.instance_id ?? channel.id, enabled: channel.enabled })
-                  }
-                  onDelete={(channel) => setChannelToDelete(channel)}
-                  onAddAnother={openCreateFor}
-                />
-              ))}
-              <BrandDisclaimer />
+            {/* ── Channels (conversational, type-grouped instances) ── */}
+            <div>
+              <div className="flex items-center gap-2 mb-3">
+                <h2 className="text-xs font-semibold text-[var(--color-secondary)] uppercase tracking-wider">
+                  Channels
+                </h2>
+              </div>
+
+              {/* A3 — a workspaces/agents fetch failure silently degrades every
+                  row's binding to raw ids; surface it once, near the heading. */}
+              {(workspacesError || agentsListError) && (
+                <p
+                  className="text-xs text-[var(--color-error)] mb-2"
+                  data-testid="channel-names-error-notice"
+                >
+                  Couldn&apos;t load workspace/agent names — showing raw IDs
+                </p>
+              )}
+
+              {renderChannelsBody()}
             </div>
-          )}
-        </div>
+          </>
+        )}
 
         {/* Channel config slide-over */}
         {configuringChannel && (
@@ -905,8 +977,7 @@ export function ConnectorsScreen() {
         <CreateChannelSheet
           open={createChannelOpen}
           onOpenChange={setCreateChannelOpen}
-          defaultType={createChannelDefaultType}
-          knownTypes={knownBaseTypes}
+          selection={createChannelSelection}
           typeDisplayName={typeDisplayName}
           onCreated={handleCreated}
         />
