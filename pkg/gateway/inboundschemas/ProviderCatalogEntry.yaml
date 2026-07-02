@@ -117,3 +117,12 @@ properties:
     example:
       - "glm-coding"
       - "zhipu-coding"
+  anthropic_id:
+    type: string
+    minLength: 1
+    description: >
+      Sibling protocol id exposing the Anthropic-compatible endpoint for the
+      same account/API key (e.g. z-ai → z-ai-anthropic). Present only for
+      dual-wire providers; the UI offers it as an endpoint-format choice
+      inside config, never as a separate provider row.
+    example: "z-ai-anthropic"
