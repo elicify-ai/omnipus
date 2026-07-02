@@ -31,6 +31,7 @@ import type { ProviderValidation, ProviderCatalogEntry } from '@/lib/api/generat
 import { PROVIDER_CATALOG } from '@/lib/generated/providerCatalog'
 import { BrandIcon } from '@/components/ui/brand-icon'
 import { BrandDisclaimer } from '@/components/ui/brand-disclaimer'
+import { PLAN_LABELS, REGION_LABELS } from '@/lib/providerLabels'
 
 // First-launch onboarding flow — full-screen, outside AppShell.
 //
@@ -63,35 +64,13 @@ type TestStatus = 'idle' | 'testing' | 'success' | 'error'
 // default base exists (e.g. Azure is per-resource-host).
 export const PROVIDERS_REQUIRING_ENDPOINT = new Set(['azure', 'azure-openai'])
 
-/** Human labels for the plan dimension (catalog convention, provider-ux-fixes-plan FIX-4). */
-export const PLAN_LABELS: Record<ProviderCatalogEntry['plan'], string> = {
-  'standard-api': 'Pay-as-you-go API',
-  'coding-plan': 'Coding Plan',
-}
-
-/** Human labels for the region dimension. */
-export const REGION_LABELS: Record<NonNullable<ProviderCatalogEntry['region']>, string> = {
-  intl: 'International',
-  china: 'China',
-  us: 'US',
-}
+// Plan/region labels live in src/lib/providerLabels.ts (shared with Settings'
+// ProvidersSection, provider-ux-fixes-plan FIX-4) — re-exported here so
+// existing `from './onboarding'` imports (incl. tests) keep working.
+export { PLAN_LABELS, REGION_LABELS }
 
 // Priority companies — surfaced first in the grid (Hick's law: reduce decision overload).
 const PRIORITY_COMPANIES = ['OpenAI', 'Anthropic', 'OpenRouter']
-
-// Stable sort that moves PRIORITY_COMPANIES to the front. Exported for tests.
-export function sortProvidersByPriority<T extends { id: string }>(list: T[]): T[] {
-  // This function is now used only on id lists; company-level sorting happens inline.
-  const PRIORITY_IDS = ['openai', 'anthropic', 'openrouter']
-  const rank = (id: string) => {
-    const i = PRIORITY_IDS.indexOf(id)
-    return i === -1 ? PRIORITY_IDS.length : i
-  }
-  return list
-    .map((p, index) => ({ p, index }))
-    .sort((a, b) => rank(a.p.id) - rank(b.p.id) || a.index - b.index)
-    .map(({ p }) => p)
-}
 
 // ── Catalog-based grouped-picker helpers ───────────────────────────────────────
 
@@ -176,7 +155,20 @@ function resolveEntry(
   if (planCandidates.every((e) => e.region === undefined)) {
     return planCandidates[0]
   }
-  return planCandidates.find((e) => e.region === region) ?? planCandidates[0]
+  const exactRegionMatch = planCandidates.find((e) => e.region === region)
+  if (!exactRegionMatch && region !== undefined && import.meta.env.DEV) {
+    // Falling back to planCandidates[0] silently substitutes a DIFFERENT
+    // region's entry rather than returning undefined (which would collapse
+    // the API-key panel — see handleSelectRegion's own fallback). Not
+    // triggerable today: every (company, plan, region) combination the L1/L2
+    // UI can produce has a matching catalog entry. Warn loudly in dev so a
+    // future catalog edit that breaks this invariant is caught immediately
+    // instead of silently resolving to the wrong provider id.
+    console.warn(
+      `[onboarding] resolveEntry: no exact region match for ${company}/${plan}/${region} — falling back to ${planCandidates[0]?.id ?? '(none)'}`,
+    )
+  }
+  return exactRegionMatch ?? planCandidates[0]
 }
 
 /** The logoSlug for a company (taken from the first entry). */

@@ -41,13 +41,17 @@ function wrapper({ children }: { children: React.ReactNode }) {
 beforeEach(() => {
   // Clear call history so tests don't bleed into each other
   vi.clearAllMocks()
-  // Seed all 5 providers in disconnected state so tests can find them by name
+  // Seed all 5 providers already CONNECTED (status:'connected'), not
+  // 'disconnected'. GET /providers also reports ~25 forever-keyless template
+  // rows as status:'disconnected' (Provider.yaml: "no key available or
+  // fallback default entry") — ProvidersSection now filters those out of its
+  // main list entirely, so a disconnected fixture here would never render.
   vi.mocked(fetchProviders).mockResolvedValue([
-    { id: 'openai', name: 'OpenAI', display_name: 'OpenAI', status: 'disconnected', models: [] },
-    { id: 'anthropic', name: 'Anthropic', display_name: 'Anthropic', status: 'disconnected', models: [] },
-    { id: 'google', name: 'Google Gemini', display_name: 'Google Gemini', status: 'disconnected', models: [] },
-    { id: 'groq', name: 'Groq', display_name: 'Groq', status: 'disconnected', models: [] },
-    { id: 'openrouter', name: 'OpenRouter', display_name: 'OpenRouter', status: 'disconnected', models: [] },
+    { id: 'openai', name: 'OpenAI', display_name: 'OpenAI', status: 'connected', models: ['gpt-4o'] },
+    { id: 'anthropic', name: 'Anthropic', display_name: 'Anthropic', status: 'connected', models: ['claude-sonnet-4-5'] },
+    { id: 'google', name: 'Google Gemini', display_name: 'Google Gemini', status: 'connected', models: ['gemini-2.5-flash'] },
+    { id: 'groq', name: 'Groq', display_name: 'Groq', status: 'connected', models: ['llama-3.3-70b'] },
+    { id: 'openrouter', name: 'OpenRouter', display_name: 'OpenRouter', status: 'connected', models: ['openrouter/auto'] },
   ])
   vi.mocked(configureProvider).mockResolvedValue({ id: 'openai', name: 'OpenAI', status: 'connected', models: [] })
   vi.mocked(testProvider).mockResolvedValue({ success: true })
@@ -105,7 +109,8 @@ describe('provider save & connect integration (test #27)', () => {
     render(<ProvidersSection />, { wrapper })
 
     await screen.findByText('OpenAI')
-    const configBtns = screen.getAllByRole('button', { name: /configure/i })
+    // Providers are connected — the row action reads "Edit", not "Configure".
+    const configBtns = screen.getAllByRole('button', { name: /configure|edit/i })
     fireEvent.click(configBtns[0])
 
     // Do NOT enter a key — Save & Connect should be disabled, so the re-auth
@@ -118,23 +123,19 @@ describe('provider save & connect integration (test #27)', () => {
 
   it('shows "Connected" badge after successful provider save', async () => {
     // Traces to: wave5a-wire-ui-spec.md — AC2: badge updates after save
-    // Initial fetch returns all providers disconnected; after save, anthropic shows connected.
-    vi.mocked(fetchProviders)
-      .mockResolvedValueOnce([
-        { id: 'openai', name: 'OpenAI', display_name: 'OpenAI', status: 'disconnected', models: [] },
-        { id: 'anthropic', name: 'Anthropic', display_name: 'Anthropic', status: 'disconnected', models: [] },
-        { id: 'google', name: 'Google Gemini', display_name: 'Google Gemini', status: 'disconnected', models: [] },
-        { id: 'groq', name: 'Groq', display_name: 'Groq', status: 'disconnected', models: [] },
-        { id: 'openrouter', name: 'OpenRouter', display_name: 'OpenRouter', status: 'disconnected', models: [] },
-      ])
-      .mockResolvedValue([{ id: 'anthropic', name: 'Anthropic', display_name: 'Anthropic', status: 'connected', models: ['claude-sonnet-4-6'] }])
+    // Initial fetch returns all providers already connected (see beforeEach's
+    // comment on why 'disconnected' fixtures don't render); after save,
+    // anthropic's model list updates.
+    vi.mocked(fetchProviders).mockResolvedValue([
+      { id: 'anthropic', name: 'Anthropic', display_name: 'Anthropic', status: 'connected', models: ['claude-sonnet-4-6'] },
+    ])
 
     render(<ProvidersSection />, { wrapper })
     await screen.findByText('Anthropic')
 
-    // Expand Anthropic's inline form — it's at index 1 in the [openai, anthropic, ...] order.
-    const configBtns = screen.getAllByRole('button', { name: /configure/i })
-    fireEvent.click(configBtns[1])
+    // Expand Anthropic's inline form — the only configured provider here.
+    const configBtns = screen.getAllByRole('button', { name: /configure|edit/i })
+    fireEvent.click(configBtns[0])
     // API key inputs are type="password" — not accessible as role="textbox"; use placeholder.
     const keyInput = screen.getByPlaceholderText(/sk-ant/i)
     fireEvent.change(keyInput, { target: { value: 'sk-ant-valid-key' } })
