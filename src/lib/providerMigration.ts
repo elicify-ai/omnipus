@@ -31,7 +31,7 @@ export const GENERIC_GROUP = 'Other'
 // deliberately absent — it is a catalog provider and resolves via the catalog.
 const SELF_HOSTED_IDS = new Set(['litellm', 'vllm'])
 
-export interface ResolvedCatalogEntry {
+export interface ResolvedCatalogEntry { // not-wire-format: local migration-resolver result (a display group + optional ProviderCatalogEntry); never serialized or crosses the gateway/SPA boundary
   /** Catalog entry if resolved; undefined for self-hosted-custom or unknown ids. */
   entry?: ProviderCatalogEntry
   /** Display group name to use in the grouped list. */
