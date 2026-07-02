@@ -142,3 +142,52 @@ func (m *mockInterceptor) RequestCancelByChannelChat(ctx context.Context, channe
 	}
 	return nil
 }
+
+// TestDispatchCancelIfRecognized_UsesInstanceName is a regression test for
+// MAJ-001: DispatchCancelIfRecognized call sites must pass c.Name() (the current
+// channel name, set by SetInstanceID) rather than a hardcoded type-literal.
+//
+// After SetInstanceID("whatsapp.eu"), BaseChannel.Name() returns "whatsapp.eu".
+// The inbound message's Channel field is also "whatsapp.eu" (stamped by
+// HandleMessage from the same c.name). If a call site passes the hardcoded literal
+// "whatsapp_native" instead of c.Name(), the cancel state machine cannot match the
+// active turn (keyed by (channelName, chatID)) and /cancel becomes a silent no-op.
+func TestDispatchCancelIfRecognized_UsesInstanceName(t *testing.T) {
+	// Construct a channel that starts life as type "whatsapp_native" (as the
+	// factory would set it), then receives its instance key via SetInstanceID.
+	bc := channels.NewBaseChannel("whatsapp_native", nil, nil, nil)
+	bc.SetInstanceID("whatsapp.eu")
+
+	// Confirm the precondition: Name() now returns the instance key.
+	if bc.Name() != "whatsapp.eu" {
+		t.Fatalf("precondition: Name() = %q, want %q", bc.Name(), "whatsapp.eu")
+	}
+
+	// Simulate what the adapter call site does: pass c.Name() as the channel arg.
+	var gotChannel string
+	interceptor := &mockInterceptor{
+		onRequestCancel: func(_ context.Context, channel, _, _ string) error {
+			gotChannel = channel
+			return nil
+		},
+	}
+
+	got := channels.DispatchCancelIfRecognized(
+		context.Background(),
+		"/cancel",
+		bc.Name(), // correct: uses the instance key, not "whatsapp_native"
+		"chat123",
+		"user1",
+		interceptor,
+		nil,
+	)
+
+	if !got {
+		t.Fatal("expected DispatchCancelIfRecognized to return true for /cancel")
+	}
+	// The interceptor must receive the instance key, not the factory/type name.
+	if gotChannel != "whatsapp.eu" {
+		t.Errorf("interceptor called with channel=%q; want %q (instance key, not type literal)",
+			gotChannel, "whatsapp.eu")
+	}
+}

@@ -595,7 +595,7 @@ func (c *WeComChannel) dispatchIncoming(reqID string, msg wecomIncomingMessage) 
 	if channels.DispatchCancelIfRecognized(
 		c.ctx,
 		content,
-		"wecom",
+		c.Name(),
 		actualChatID,
 		senderID,
 		c.GetCancelInterceptor(),

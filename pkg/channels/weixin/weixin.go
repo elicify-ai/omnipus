@@ -378,7 +378,7 @@ func (c *WeixinChannel) handleInboundMessage(ctx context.Context, msg WeixinMess
 	if channels.DispatchCancelIfRecognized(
 		ctx,
 		content,
-		"weixin",
+		c.Name(),
 		fromUserID,
 		fromUserID,
 		c.GetCancelInterceptor(),
