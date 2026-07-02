@@ -6002,6 +6002,20 @@ func (a *restAPI) HandleChannels(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, http.StatusNotFound, fmt.Sprintf("channel %q not found", channelID))
 			return
 		}
+		// FR-024 / S-1+S-2: enforce the full ADR-029 instance-key grammar at the
+		// write boundary BEFORE any credential or config write reaches disk.
+		// ParseInstanceKey only extracts the base type; it does not validate the
+		// slug. An attacker with a valid session could otherwise send
+		// PUT /channels/whatsapp.BAD/configure with an uppercase or overlong slug,
+		// causing safeUpdateConfigJSON to persist the malformed key — which makes
+		// LoadConfig abort on next boot (boot-brick) and leaves an orphaned
+		// credential under the attacker-chosen key.
+		// Return 400 "malformed channel id" (distinct from the 404 "not found"
+		// above) so callers can distinguish unknown-type from bad-grammar.
+		if err := config.ValidateInstanceKey(channelID); err != nil {
+			jsonErr(w, http.StatusBadRequest, "malformed channel id")
+			return
+		}
 
 		if len(parts) == 1 {
 			// GET /api/v1/channels/{id}
@@ -6440,6 +6454,17 @@ func (a *restAPI) setChannelRouting(w http.ResponseWriter, r *http.Request, chan
 	}
 
 	if workspaceID != "" {
+		// S-5: validate workspace_id grammar before building any filesystem path.
+		// A workspace_id from the request body is only TrimSpace'd; without a
+		// positive-allowlist check, a value such as "../../../etc/passwd" would
+		// reach filepath.Join(home, "workspaces", id+".json") and probe outside
+		// the data root. validateEntityID is the same traversal guard used by
+		// handleWorkspaceGet and all other per-entity FS handlers in this file.
+		if err := validateEntityID(workspaceID); err != nil {
+			jsonErr(w, http.StatusBadRequest, "malformed workspace_id")
+			return
+		}
+
 		// ── Bound flow ──────────────────────────────────────────────────────────
 		// FR-005: empty default_agent_id → 422.
 		agentID := ""
@@ -6559,7 +6584,7 @@ func (a *restAPI) setChannelRouting(w http.ResponseWriter, r *http.Request, chan
 		// FR-030: emit routing-change audit event (STRIDE repudiation).
 		if a.auditor != nil {
 			_ = a.auditor.Log(&audit.Entry{
-				Event:    "channel.routing.changed",
+				Event:    audit.EventChannelRoutingChanged,
 				Decision: audit.DecisionAllow,
 				Details: map[string]any{
 					"channel_id":   channelID,
@@ -6604,6 +6629,21 @@ func (a *restAPI) setChannelRouting(w http.ResponseWriter, r *http.Request, chan
 	}
 
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
+		// FR-029 (bound→unbound): clear workspace_id and identity from the
+		// channel entry so that a previously-bound instance is fully unbound.
+		// Without this, cfg.Channels[id].WorkspaceID persists across the PUT
+		// and RepairStaleChannelWildcardBindings drops the new wildcard on
+		// next config load — leaving the bound representation intact and
+		// silently discarding the caller's unbind intent.
+		if channels, _ := m["channels"].(map[string]any); channels != nil {
+			if ch, _ := channels[channelID].(map[string]any); ch != nil {
+				delete(ch, "workspace_id")
+				delete(ch, "identity")
+				channels[channelID] = ch
+				m["channels"] = channels
+			}
+		}
+
 		// Read the bindings array from the raw JSON map.
 		rawBindings, _ := m["bindings"].([]any)
 
@@ -6721,23 +6761,6 @@ func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, ena
 		ch["enabled"] = enabled
 		return nil
 	}); err != nil {
-		// Cap-1 (FR-2.3): a config that now holds >1 instance of a type (e.g. a
-		// pre-existing hand-edited duplicate surfaced by the load-time validator)
-		// is a client-correctable constraint violation, not a server fault —
-		// return a clean 422 "one-per-type" rather than an opaque 500.
-		if errors.Is(err, config.ErrChannelsCap1Violated) {
-			slog.Warn(
-				"rest: set channel enabled rejected by cap-1",
-				"channel",
-				channelID,
-				"enabled",
-				enabled,
-				"error",
-				err,
-			)
-			jsonErr(w, http.StatusUnprocessableEntity, "one-per-type in v0.1.0: "+err.Error())
-			return
-		}
 		slog.Error("rest: set channel enabled", "channel", channelID, "enabled", enabled, "error", err)
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
 		return
@@ -7005,15 +7028,6 @@ func (a *restAPI) configureChannel(w http.ResponseWriter, r *http.Request, chann
 		updatedCh = ch
 		return nil
 	}); err != nil {
-		// Cap-1 (FR-2.3): surface a >1-instance-per-type violation as a clean 422
-		// "one-per-type" rather than an opaque 500. Note the credential write above
-		// has already committed; the config write is reverted (the refresh failed),
-		// so a retry after the operator removes the duplicate succeeds.
-		if errors.Is(err, config.ErrChannelsCap1Violated) {
-			slog.Warn("rest: configure channel rejected by cap-1", "channel", channelID, "error", err)
-			jsonErr(w, http.StatusUnprocessableEntity, "one-per-type in v0.1.0: "+err.Error())
-			return
-		}
 		slog.Error("rest: configure channel", "channel", channelID, "error", err)
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
 		return

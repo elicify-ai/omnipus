@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1487,10 +1486,6 @@ func (i ChannelIdentity) Validate() error {
 	}
 }
 
-// maxInstancesPerType is the cap-1 limit on instances per channel type.
-// v0.3 will lift this to allow multiple instances per type.
-const maxInstancesPerType = 1
-
 // ChannelInstanceConfig is the map value for Config.Channels.
 // The map is keyed by instance ID (currently equal to the channel type name in
 // v0.1 since the cap is 1/type). Each instance carries its type discriminator,
@@ -1628,6 +1623,34 @@ type ChannelInstanceConfig struct {
 	EmailUsername string `json:"username,omitempty"`
 }
 
+// ErrHalfBoundChannelInstance is the sentinel returned by ValidateChannels when
+// a channel instance carries a non-empty WorkspaceID but is missing the agent
+// identity required to fully bind it (Identity == nil, or Identity.Kind != "agent",
+// or Identity.ID == ""). A half-bound state is an operator error: the instance
+// would appear to be workspace-bound but routing would silently fall back to
+// unbound behavior (ADR-029 FR-029). Fail-loud at load matches the existing
+// type-vs-key mismatch error contract.
+var ErrHalfBoundChannelInstance = errors.New("channels: half-bound workspace instance (workspace_id set but agent identity missing or invalid)")
+
+// IsWorkspaceBound reports whether this instance is fully workspace-bound per
+// ADR-029 FR-029: WorkspaceID is non-empty AND Identity is non-nil AND
+// Identity.Kind == "agent" AND Identity.ID is non-empty. The routing layer
+// (pkg/routing/route.go) should set BoundInstance=true only when this predicate
+// is true. Call sites that just want to know "is this bound?" should prefer this
+// predicate over checking the individual fields directly.
+func (c ChannelInstanceConfig) IsWorkspaceBound() bool {
+	if strings.TrimSpace(c.WorkspaceID) == "" {
+		return false
+	}
+	if c.Identity == nil {
+		return false
+	}
+	if strings.ToLower(strings.TrimSpace(c.Identity.Kind)) != ChannelIdentityKindAgent {
+		return false
+	}
+	return strings.TrimSpace(c.Identity.ID) != ""
+}
+
 // knownChannelTypes is the set of supported channel type identifiers.
 // Any map entry whose key is not in this set is logged as WARN and dropped.
 var knownChannelTypes = map[string]struct{}{
@@ -1681,43 +1704,6 @@ func normalizeChannelMap(channels map[string]ChannelInstanceConfig) map[string]C
 		out[key] = inst
 	}
 	return out
-}
-
-// ErrChannelsCap1Violated is the sentinel wrapped by ValidateChannelsCap1 when
-// more than one instance of a channel type is present (Spec-2 FR-2.3). Callers
-// (e.g. the gateway) detect it with errors.Is to map the failure onto a clean
-// 422 "one-per-type" response rather than an opaque 500.
-var ErrChannelsCap1Violated = errors.New("channels: cap-1/type violated (v0.1 allows one instance per type)")
-
-// ValidateChannelsCap1 checks that there is at most one instance per channel
-// type in the map. Returns an error wrapping ErrChannelsCap1Violated and listing
-// all duplicate types. Called at config load time so a hand-edited config.json
-// with two telegram instances is rejected early rather than silently running the
-// second (FR-2.3: enforced at config LOAD, not just the API).
-func ValidateChannelsCap1(channels map[string]ChannelInstanceConfig) error {
-	typeCounts := make(map[string]int, len(channels))
-	for key, inst := range channels {
-		// Effective type: the explicit Type field, or the map key when absent
-		// (the same inference normalizeChannelMap applies). Counting by effective
-		// type lets this run on a RAW map and still catch a duplicate hidden under
-		// a non-type key (e.g. "telegram-2" with type:telegram).
-		t := strings.TrimSpace(inst.Type)
-		if t == "" {
-			t = strings.TrimSpace(key)
-		}
-		typeCounts[t]++
-	}
-	var dups []string
-	for t, n := range typeCounts {
-		if n > maxInstancesPerType {
-			dups = append(dups, fmt.Sprintf("%s (count=%d)", t, n))
-		}
-	}
-	if len(dups) != 0 {
-		sort.Strings(dups)
-		return fmt.Errorf("%w: %s", ErrChannelsCap1Violated, strings.Join(dups, ", "))
-	}
-	return nil
 }
 
 // ParseInstanceKey splits a channel instance key into its base type and optional
@@ -1789,14 +1775,11 @@ func ValidateInstanceKey(key string) error {
 }
 
 // ValidateChannels validates the channel instance map for ADR-029 compliance.
-// It replaces ValidateChannelsCap1 for v0.3: the one-per-type cap is LIFTED
-// (N instances per type are allowed), but each key must pass ValidateInstanceKey
-// and each entry's effective type must be a known channel type.
-//
-// ValidateChannelsCap1 is kept as a back-compat alias that calls this function
-// when the result is compatible (always returns nil when N>1 is present, which
-// is now valid). Callers that still detect ErrChannelsCap1Violated will simply
-// stop seeing that error — the correct behavior for v0.3.
+// The one-per-type cap is lifted: N instances per type are allowed. Each key
+// must pass ValidateInstanceKey (known base type, well-formed slug) and each
+// workspace-bound entry must be FULLY bound (IsWorkspaceBound() == true) — a
+// half-bound instance (workspace_id set but agent identity absent or invalid)
+// is rejected to prevent silent routing degradation (ADR-029 FR-029).
 func ValidateChannels(channels map[string]ChannelInstanceConfig) error {
 	for key, inst := range channels {
 		channelType, slug := ParseInstanceKey(key)
@@ -1823,6 +1806,19 @@ func ValidateChannels(channels map[string]ChannelInstanceConfig) error {
 			return fmt.Errorf(
 				"channels: %w: slug %q in key %q must match [a-z0-9-]{1,32} (all lowercase, 1–32 chars)",
 				ErrInvalidInstanceKey, slug, key,
+			)
+		}
+		// ADR-029 FR-029 half-bound guard: a workspace_id without a fully-qualified
+		// agent identity is an operator error. The instance would silently route as
+		// UNBOUND (BoundInstance=false) — the opposite of the operator's intent.
+		// Reject at load so the problem surfaces immediately rather than causing
+		// mysterious routing degradation at runtime. Full binding requires WorkspaceID
+		// non-empty AND Identity.Kind=="agent" AND Identity.ID non-empty; anything
+		// in between is half-bound and is rejected here.
+		if strings.TrimSpace(inst.WorkspaceID) != "" && !inst.IsWorkspaceBound() {
+			return fmt.Errorf(
+				"%w: instance %q has workspace_id=%q but is missing a valid agent identity (identity.kind==\"agent\" and non-empty identity.id are required)",
+				ErrHalfBoundChannelInstance, key, inst.WorkspaceID,
 			)
 		}
 	}
@@ -3287,9 +3283,8 @@ func loadConfigInternal(path string, store CredentialStore) (*Config, error) {
 	if cfg.Channels == nil {
 		cfg.Channels = make(map[string]ChannelInstanceConfig)
 	}
-	// ADR-029 (v0.3): validate channel instance keys and effective types.
-	// ValidateChannels replaces the old cap-1 check (ValidateChannelsCap1):
-	// the one-per-type cap is lifted; N instances per type are now allowed.
+	// ADR-029 (v0.3): validate channel instance keys, effective types, and
+	// workspace binding completeness (half-bound instances are rejected).
 	// Run on the RAW map BEFORE normalizeChannelMap so malformed keys are
 	// caught before normalization silently discards them.
 	if err := ValidateChannels(cfg.Channels); err != nil {

@@ -41,10 +41,10 @@ type ResolvedRoute struct {
 	MainSessionKey string
 	MatchedBy      string // "identity.agent", "binding.peer", "binding.peer.parent", "binding.guild", "binding.team", "binding.account", "binding.channel", "default", "bound.drift.drop"
 	// Drop is true when this route is a bound-instance drift drop: the instance
-	// is workspace-bound but its configured agent is unresolvable (deleted,
-	// disabled, or a worker). The caller MUST NOT fall back to the global default
-	// — instead it enters the FR-015 unroutable path with a structured audit
-	// event (ADR-029 FR-012, FR-014, FR-028). WS-A wires the drop branch logic.
+	// is workspace-bound but its configured agent is unresolvable (deleted or a
+	// worker — not a chat target). The caller MUST NOT fall back to the global
+	// default — instead it enters the FR-015 unroutable path with a structured
+	// audit event (ADR-029 FR-012, FR-014, FR-028). WS-A wires the drop branch logic.
 	Drop bool
 }
 
@@ -104,17 +104,18 @@ func (r *RouteResolver) ResolveRoute(input RouteInput) ResolvedRoute {
 	//
 	// ADR-029 FR-012/FR-013/FR-014 — bound-instance drift guard:
 	// For workspace-bound instances (BoundInstance=true), if the configured agent
-	// is unresolvable (deleted, disabled, or a worker) the route MUST drop rather
-	// than fall through to pickAgentID's default fallback. A member merely removed
-	// from CoreTeam but still existing+enabled+non-worker MUST still route (stale).
-	// pickAgentID validates X against the agent list and logs a fallback to default
-	// only for NON-bound callers; for bound callers an unresolvable agent → Drop.
+	// is unresolvable (deleted or a worker — not a chat target) the route MUST
+	// drop rather than fall through to pickAgentID's default fallback. A member
+	// merely removed from CoreTeam but still existing as a non-worker MUST still
+	// route (stale, FR-013). pickAgentID validates X against the agent list and
+	// logs a fallback to default only for NON-bound callers; for bound callers an
+	// unresolvable agent → Drop.
 	if input.Identity != nil {
 		kind := strings.ToLower(strings.TrimSpace(input.Identity.Kind))
 		if kind == "agent" && strings.TrimSpace(input.Identity.ID) != "" {
 			agentID := strings.TrimSpace(input.Identity.ID)
 			if input.BoundInstance {
-				// Drift check: the agent must exist AND be enabled AND be a chat target.
+				// Drift check: the agent must exist AND be a chat target (non-worker).
 				// Removal from CoreTeam alone is NOT a drift condition — the instance
 				// routes stale (FR-013) and the SPA shows a config-time warning only.
 				unresolvable := true

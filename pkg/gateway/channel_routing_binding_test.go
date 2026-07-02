@@ -426,3 +426,98 @@ func TestWorkspaceDelete_DefaultWorkspace_Returns409(t *testing.T) {
 	_, statErr := os.Stat(wsPath)
 	assert.NoError(t, statErr, "default workspace file must still exist after failed delete")
 }
+
+// ── S-1+S-2: HandleChannels slug grammar enforcement ─────────────────────────
+
+// TestHandleChannels_BadSlug_Returns400_NothingWritten verifies that
+// PUT /channels/whatsapp.BAD/<action> (uppercase slug) is rejected at the
+// HandleChannels gate with 400 "malformed channel id" BEFORE any credential or
+// config write, closing the boot-brick / orphaned-credential path (S-1+S-2).
+//
+// Uses /routing (a read-only probe for config) so nothing is written even
+// before the grammar check — the assertion then proves the check fired first.
+func TestHandleChannels_BadSlug_Returns400_NothingWritten(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	// Snapshot the raw config.json before the request.
+	cfgPathBefore := api.homePath + "/config.json"
+	before, err := os.ReadFile(cfgPathBefore)
+	require.NoError(t, err)
+
+	// PUT /api/v1/channels/whatsapp.BAD/routing — uppercase slug violates ADR-029
+	// grammar (slugPattern requires [a-z0-9-]{1,32}).
+	r := httptest.NewRequest(http.MethodPut,
+		"/api/v1/channels/whatsapp.BAD/routing",
+		strings.NewReader(`{"default_agent_id":"mia"}`))
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	api.HandleChannels(w, r)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code,
+		"uppercase slug must be rejected with 400 (S-1+S-2); body=%s", w.Body.String())
+
+	// Confirm no config write occurred (on-disk content unchanged).
+	after, err := os.ReadFile(cfgPathBefore)
+	require.NoError(t, err)
+	assert.Equal(t, string(before), string(after),
+		"config.json must not be modified when the channel id grammar check fires")
+}
+
+// ── Fix 2: bound→unbound transition clears WorkspaceID and Identity ──────────
+
+// TestSetChannelRouting_UnbindClears_WorkspaceID_And_Identity verifies FR-029:
+// a PUT without workspace_id on a previously-bound instance clears WorkspaceID
+// and Identity so the next getChannelRouting returns the unbound representation.
+//
+// Without the fix, safeUpdateConfigJSON preserved the bound representation and
+// RepairStaleChannelWildcardBindings dropped the new wildcard on next load,
+// silently losing the unbind intent.
+func TestSetChannelRouting_UnbindClears_WorkspaceID_And_Identity(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+	addAgentsToAPI(t, api, []config.AgentConfig{
+		{ID: "mia", Default: true},
+		{ID: "ray"},
+	})
+	writeTestWorkspaceJSON(t, api, "sales", "active", []string{"mia", "ray"}, false)
+	seedChannelInstance(t, api, "whatsapp.eu")
+
+	// Step 1: bind the instance.
+	putW := setChannelRoutingReq(t, api, "whatsapp.eu",
+		`{"workspace_id":"sales","default_agent_id":"ray"}`)
+	require.Equal(t, http.StatusOK, putW.Code, "initial bind must succeed: %s", putW.Body.String())
+
+	// Verify it is bound.
+	cfg := api.agentLoop.GetConfig()
+	inst, ok := cfg.Channels["whatsapp.eu"]
+	require.True(t, ok, "channel entry must exist after bind")
+	require.Equal(t, "sales", inst.WorkspaceID, "pre-condition: WorkspaceID must be 'sales'")
+	require.NotNil(t, inst.Identity, "pre-condition: Identity must be set")
+
+	// Step 2: unbind by sending a PUT without workspace_id.
+	unbindW := setChannelRoutingReq(t, api, "whatsapp.eu",
+		`{"default_agent_id":"mia"}`)
+	require.Equal(t, http.StatusOK, unbindW.Code, "unbind must succeed (200): %s", unbindW.Body.String())
+
+	// Assert WorkspaceID and Identity are cleared in the live config.
+	afterCfg := api.agentLoop.GetConfig()
+	afterInst, instExists := afterCfg.Channels["whatsapp.eu"]
+	if instExists {
+		assert.Empty(t, afterInst.WorkspaceID,
+			"WorkspaceID must be cleared after unbound PUT (FR-029 mutual-exclusivity)")
+		assert.Nil(t, afterInst.Identity,
+			"Identity must be cleared after unbound PUT (FR-029 mutual-exclusivity)")
+	}
+	// If the entry is fully absent that is also a valid cleared state.
+
+	// Assert GET returns the unbound (wildcard) representation, not the old bound one.
+	getW := getChannelRoutingReq(t, api, "whatsapp.eu")
+	require.Equal(t, http.StatusOK, getW.Code)
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(getW.Body.Bytes(), &resp))
+	wsVal, hasWS := resp["workspace_id"]
+	if hasWS && wsVal != nil && wsVal != "" {
+		t.Errorf("GET after unbind must not return workspace_id; got %v", wsVal)
+	}
+	assert.Equal(t, "mia", resp["default_agent_id"],
+		"GET after unbind must return the new wildcard agent_id")
+}

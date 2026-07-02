@@ -549,3 +549,129 @@ test(
     expect(body.default_agent_id).toBe('mia')
   },
 )
+
+// ── (g) Finding #1: workspace load error → routing-workspace-load-error shown ──
+//
+// When the workspace detail fetch fails (500), the agent picker must NOT appear
+// silently empty — the distinct routing-workspace-load-error element must render.
+
+test(
+  '(g) workspace fetch failure shows routing-workspace-load-error, not silent empty agent picker',
+  async ({ page }) => {
+    // Bind the channel to "sales" in the routing response so the workspace
+    // detail fetch is triggered when the panel opens.
+    await registerBaseRoutes(page, {
+      routingResponse: { workspace_id: 'sales', default_agent_id: undefined },
+    })
+
+    // Override the workspace detail endpoint to return 500 for 'sales'
+    await page.route('**/api/v1/workspaces/sales', async (route: Route) => {
+      if (route.request().method() === 'GET') {
+        await route.fulfill({ status: 500, body: 'Internal Server Error' })
+      } else {
+        await route.continue()
+      }
+    })
+
+    const sheet = await openTelegramPanel(page)
+    await expect(sheet.getByText(/^Routing$/i)).toBeVisible({ timeout: 10_000 })
+
+    // The distinct error element must appear
+    await expect(
+      sheet.locator('[data-testid="routing-workspace-load-error"]'),
+    ).toBeVisible({ timeout: 10_000 })
+
+    // The agent picker must NOT render silently empty
+    await expect(
+      sheet.locator('[data-testid="routing-agent-select"]'),
+    ).not.toBeVisible()
+
+    // The required-agent hint must NOT coexist with the error (it would be misleading)
+    await expect(
+      sheet.locator('[data-testid="routing-agent-required-hint"]'),
+    ).not.toBeVisible()
+  },
+)
+
+// ── (h) Finding #2: unbind flow → PUT fires with no workspace_id ───────────────
+//
+// When the user selects "No workspace" on a currently-bound channel instance,
+// a PUT must fire immediately with no workspace_id and no default_agent_id so
+// the backend clears the binding.
+
+test(
+  '(h) selecting "No workspace" on a bound channel fires PUT with no workspace_id',
+  async ({ page }) => {
+    let capturedUnbindBody: string | null = null
+
+    // Channel starts bound to 'sales'
+    await registerBaseRoutes(page, {
+      routingResponse: { workspace_id: 'sales', default_agent_id: 'mia' },
+    })
+
+    // Intercept the PUT to capture the unbind payload
+    await page.route('**/api/v1/channels/telegram/routing', async (route: Route) => {
+      if (route.request().method() === 'PUT') {
+        capturedUnbindBody = route.request().postData()
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: capturedUnbindBody ?? '{}',
+        })
+      } else {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ workspace_id: 'sales', default_agent_id: 'mia' }),
+        })
+      }
+    })
+
+    const sheet = await openTelegramPanel(page)
+    await expect(sheet.getByText(/^Routing$/i)).toBeVisible({ timeout: 10_000 })
+
+    // Select "No workspace" to unbind
+    const wsContainer = sheet.locator('[data-testid="routing-workspace-select"]')
+    await expect(wsContainer).toBeVisible({ timeout: 10_000 })
+
+    const wsNativeSelect = wsContainer.locator('select')
+    const wsHasNative = (await wsNativeSelect.count()) > 0
+
+    if (wsHasNative) {
+      await wsNativeSelect.selectOption({ value: '__none__' })
+    } else {
+      const wsTrigger = wsContainer.locator('button[aria-haspopup="listbox"]')
+      await expect(wsTrigger).toBeVisible({ timeout: 5_000 })
+      await wsTrigger.click()
+      await page.getByRole('option', { name: /No workspace/i }).first().click()
+    }
+
+    // Wait for the debounced PUT to fire (400ms debounce + some margin)
+    await expect
+      .poll(() => capturedUnbindBody, {
+        timeout: 5_000,
+        message: 'PUT /channels/telegram/routing was not called after selecting No workspace',
+      })
+      .not.toBeNull()
+
+    // Verify the unbind PUT shape: no workspace_id, no default_agent_id
+    const body = JSON.parse(capturedUnbindBody!) as {
+      workspace_id?: string
+      default_agent_id?: string
+    }
+    expect(body.workspace_id === undefined || body.workspace_id === '').toBe(true)
+    expect(body.default_agent_id === undefined || body.default_agent_id === '').toBe(true)
+
+    // After unbind, the agent selector must be disabled (unbound flow)
+    const agentContainer = sheet.locator('[data-testid="routing-agent-select"]')
+    await expect(agentContainer).toBeVisible({ timeout: 5_000 })
+    const agentNativeSelect = agentContainer.locator('select')
+    const agentHasNative = (await agentNativeSelect.count()) > 0
+    if (agentHasNative) {
+      await expect(agentNativeSelect).toBeDisabled()
+    } else {
+      const agentTrigger = agentContainer.locator('button[aria-haspopup="listbox"]')
+      await expect(agentTrigger).toBeDisabled()
+    }
+  },
+)
