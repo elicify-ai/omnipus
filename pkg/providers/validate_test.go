@@ -324,16 +324,62 @@ func TestPickProbeModel_SkipsNonChat(t *testing.T) {
 		t.Errorf("pickProbeModel([embed,gpt-4o-mini,dall-e], openai) = %q, want gpt-4o-mini", got)
 	}
 
-	// OpenRouter — should return the rules-table default chat slug (R-E: no account-filter).
-	catalogOR := []string{"openai/gpt-4o", "text-embedding-ada-002", "meta-llama/llama-3.1-8b-instruct:free"}
+	// OpenRouter — catalog contains the current rules-table default (meta-llama/llama-3.1-8b-instruct).
+	// pickProbeModel should prefer the default when it IS in the catalog.
+	catalogOR := []string{"openai/gpt-4o", "text-embedding-ada-002", "meta-llama/llama-3.1-8b-instruct"}
 	got = pickProbeModel(catalogOR, "openrouter")
-	// Rules-table default is "meta-llama/llama-3.1-8b-instruct:free" which is in the catalog.
-	if got == "" {
-		t.Errorf("pickProbeModel(openrouter catalog) returned empty; want a chat slug")
+	// Rules-table default is "meta-llama/llama-3.1-8b-instruct" which is present in the catalog.
+	if got != "meta-llama/llama-3.1-8b-instruct" {
+		t.Errorf("pickProbeModel(openrouter catalog with default) = %q, want meta-llama/llama-3.1-8b-instruct", got)
 	}
 	// Must not be the embedding entry.
 	if strings.Contains(strings.ToLower(got), "embed") {
 		t.Errorf("pickProbeModel returned an embedding model: %q", got)
+	}
+}
+
+// ── TestPickProbeModel_DefaultNotInCatalogFallsToFirstChatEntry ───────────────
+// Regression test for the bug where pickProbeModel returned a rules-table default
+// that was NOT present in the fetched catalog, causing a false Unreachable outcome.
+// When the default is absent from the catalog, the function must return a catalog
+// entry instead of the absent slug.
+
+func TestPickProbeModel_DefaultNotInCatalogFallsToFirstChatEntry(t *testing.T) {
+	t.Parallel()
+
+	// OpenRouter catalog that does NOT contain the rules-table default.
+	// This simulates the real scenario: the old ":free" slug was deprecated and
+	// removed from the catalog; the probe must pick a live model instead.
+	catalogOR := []string{"openai/gpt-4o", "text-embedding-ada-002", "anthropic/claude-3-haiku"}
+	got := pickProbeModel(catalogOR, "openrouter")
+
+	// Must NOT return the rules-table default (it's not in the catalog).
+	def := probeModelDefaults["openrouter"]
+	if got == def {
+		t.Errorf("pickProbeModel returned rules-table default %q which is not in catalog — "+
+			"this would produce a false Unreachable (404 model-not-found vs. key check)", got)
+	}
+	// Must return a non-empty chat-capable model from the catalog.
+	if got == "" {
+		t.Errorf("pickProbeModel returned empty string; want a chat slug from the catalog")
+	}
+	// Must not be an embedding/non-chat model.
+	for _, sub := range nonChatSubstrings {
+		if strings.Contains(strings.ToLower(got), sub) {
+			t.Errorf("pickProbeModel returned non-chat model %q (contains %q)", got, sub)
+		}
+	}
+	// Must be one of the chat entries from the catalog.
+	catalogChatEntries := []string{"openai/gpt-4o", "anthropic/claude-3-haiku"} // embed excluded
+	found := false
+	for _, m := range catalogChatEntries {
+		if got == m {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("pickProbeModel returned %q which is not in the expected chat catalog entries %v", got, catalogChatEntries)
 	}
 }
 
