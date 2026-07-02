@@ -1,0 +1,68 @@
+title: CliValidateResponse
+description: >
+  Result of POST /api/v1/system/cli-validate. Classifies whether the given
+  cli_path is a runnable, version-reporting instance of the selected CLI.
+  The handshake only requires that the binary runs and returns a
+  valid version-shaped response — no per-CLI identity/name match is
+  performed. Blocking is keyed off `reason` alone (never the raw `ok`
+  boolean): the SPA blocks Create/Save on "missing-binary" or
+  "handshake-failed", warns-but-allows on "unauthenticated", and allows on
+  "ok". `detail` is always one of a fixed set of classified messages — never
+  raw stderr from the spawned process.
+type: object
+required:
+  - ok
+  - reason
+additionalProperties: false
+properties:
+  ok:
+    type: boolean
+    description: >
+      True when the binary is present, runs, and returns a valid
+      version-shaped response (reason "ok" or "unauthenticated"). Retained
+      for convenience only — clients MUST gate blocking on `reason`, not on
+      this field, because "unauthenticated" also reports ok=true but must not
+      be conflated with "ok".
+    example: true
+  reason:
+    type: string
+    enum:
+      - ok
+      - missing-binary
+      - handshake-failed
+      - unauthenticated
+      - unknown-cli
+    description: >
+      Classification of the validation result. "ok": binary runs and reports
+      a version, believed authenticated. "missing-binary": cli_path is empty,
+      absent, or not a regular executable file — blocks Create/Save.
+      "handshake-failed": the target ran but did not return a valid
+      version-shaped response within the timeout — blocks Create/Save.
+      "unauthenticated": the binary runs and reports a version but has no
+      usable credentials — non-blocking warning, Create/Save allowed.
+      "unknown-cli": the `cli` value is not one of the supported executors;
+      no subprocess is spawned. Maps runner.ReasonOK (empty string) to "ok".
+    example: "ok"
+  resolved_path:
+    type: string
+    nullable: true
+    description: >
+      Absolute path actually spawned. Populated for "ok" and
+      "unauthenticated", and for "handshake-failed" when a target was found
+      to spawn. Null for "missing-binary" and "unknown-cli".
+    example: "/usr/local/bin/claude"
+  version:
+    type: string
+    nullable: true
+    description: >
+      Version string reported by the CLI's `--version` handshake. Populated
+      only for "ok" and "unauthenticated"; null otherwise.
+    example: "1.2.3"
+  detail:
+    type: string
+    description: >
+      Fixed, classified human-readable message for the reason — never raw
+      stderr from the spawned process. One of a small allowlisted set per
+      reason (e.g. "OK", "installed; not logged in", "not found", "did not
+      run or returned no version", "unsupported cli").
+    example: "OK"

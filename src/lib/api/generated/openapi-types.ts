@@ -2401,12 +2401,32 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Probe host PATH for the three external-CLI runners
-         * @description Reports whether the gateway process can locate each of the three external-CLI runners on its PATH. Read-only, idempotent, and unaudited — the SPA roster uses this to grey-out CLIs the host cannot run instead of letting the operator hit a wizard failure at runtime. Pure Go probe (no shell-out).
+         * Probe host PATH and well-known locations for the three external-CLI runners
+         * @description Reports, per external-CLI runner (claude-code/codex/opencode), whether the gateway process can locate its binary — searching $PATH first, then a curated per-OS well-known-install-location list — and returns the resolved absolute path plus which strategy found it. Read-only, idempotent, and unaudited (no subprocess spawned). The SPA roster uses this to grey-out CLIs the host cannot run, and the create wizard / edit form use the returned path to prefill executor.cli_path. Pure Go probe (no shell-out).
          */
         get: operations["getHostCliDetect"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/system/cli-validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Validate that an external-CLI binary runs at a given path
+         * @description Stateless, create-time validation for an external-executor CLI: confirms the binary at cli_path actually runs and reports a version, before the operator saves the subagent_3p agent. Reuses runner.TestConnectionWithPath verbatim (the same handshake as POST /agents/{id}/runner/test) — the only requirement is that the binary runs and returns a valid version-shaped response; no per-CLI identity/name match is performed. Gated withAuth at create-parity (the same authorization as createAgent — not an admin-only route). Rejects a target that is not a regular, executable file before spawning it (classified "missing-binary", no spawn attempt). Applies a dedicated rate limiter and a small per-caller in-flight concurrency cap, and emits one audit event {cli, resolved_path, reason} per call — validation spawns a caller-supplied path, unlike the unaudited cli-detect probe.
+         */
+        post: operations["postSystemCliValidate"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6733,14 +6753,85 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
-        /** @description Host-side CLI detection result. Probes whether each external-CLI runner binary is on PATH for the gateway process. Used by the roster screen's "+ Add Subagent (External)" disclosure to grey-out CLIs that the host cannot actually run (saves the operator a wizard failure at runtime). */
+        /**
+         * CliDetect
+         * @description Host-side CLI detection result. Probes whether each external-CLI runner binary (claude-code/codex/opencode) is present for the gateway process — searching $PATH first, then a curated per-OS well-known-install-location list — and returns the resolved absolute path and how it was found. Used by the roster screen's "+ Add Subagent (External)" disclosure to grey-out CLIs the host cannot actually run, and by the create wizard / edit form to prefill the executor cli_path field. Read-only, unaudited — detection never spawns a subprocess.
+         */
         CliDetect: {
-            /** @description Whether the `claude` binary (Claude Code, "claude-code" CLI) is on PATH for the gateway process. */
-            hasClaude: boolean;
-            /** @description Whether the `codex` binary (Codex CLI) is on PATH. */
-            hasCodex: boolean;
-            /** @description Whether the `opencode` binary is on PATH. */
-            hasOpencode: boolean;
+            claude: components["schemas"]["CliDetectEntry"];
+            codex: components["schemas"]["CliDetectEntry"];
+            opencode: components["schemas"]["CliDetectEntry"];
+        };
+        /**
+         * CliDetectEntry
+         * @description Host-side detection result for a single external-CLI runner binary (claude-code/codex/opencode). The gateway searches its own $PATH first, then a curated per-OS well-known-install-location list, and reports which strategy found the binary via `source`. Detection is a filesystem probe only — it never spawns a subprocess.
+         */
+        CliDetectEntry: {
+            /**
+             * @description Whether the binary was located on $PATH or in a well-known install directory.
+             * @example true
+             */
+            installed: boolean;
+            /**
+             * @description Absolute, symlink-resolved path to the binary. Null when installed=false. This is the exact value the SPA prefills into the executor cli_path field — detection, validation, and the runtime spawn all resolve this same path.
+             * @example /usr/local/bin/claude
+             */
+            path?: string | null;
+            /**
+             * @description How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
+             * @example path
+             * @enum {string|null}
+             */
+            source?: "path" | "well-known" | null;
+        };
+        /**
+         * CliValidateRequest
+         * @description Request body for POST /api/v1/system/cli-validate. Stateless, create-time validation of an external-executor CLI: confirms the binary at cli_path actually runs and reports a version, before the operator saves the subagent_3p agent. Reuses runner.TestConnectionWithPath verbatim — the same handshake used by the post-create /agents/{id}/runner/test endpoint.
+         */
+        CliValidateRequest: {
+            /**
+             * @description The external CLI tool being validated. Matches ExecutorConfig.cli.
+             * @example claude-code
+             * @enum {string}
+             */
+            cli: "claude-code" | "codex" | "opencode";
+            /**
+             * @description Filesystem path to the CLI binary to validate — either the detected prefill or an operator-entered override. An empty value is classified "missing-binary" without a spawn attempt; the target MUST be a regular, executable file before it is spawned.
+             * @example /usr/local/bin/claude
+             */
+            cli_path: string;
+        };
+        /**
+         * CliValidateResponse
+         * @description Result of POST /api/v1/system/cli-validate. Classifies whether the given cli_path is a runnable, version-reporting instance of the selected CLI. The handshake only requires that the binary runs and returns a valid version-shaped response — no per-CLI identity/name match is performed. Blocking is keyed off `reason` alone (never the raw `ok` boolean): the SPA blocks Create/Save on "missing-binary" or "handshake-failed", warns-but-allows on "unauthenticated", and allows on "ok". `detail` is always one of a fixed set of classified messages — never raw stderr from the spawned process.
+         */
+        CliValidateResponse: {
+            /**
+             * @description True when the binary is present, runs, and returns a valid version-shaped response (reason "ok" or "unauthenticated"). Retained for convenience only — clients MUST gate blocking on `reason`, not on this field, because "unauthenticated" also reports ok=true but must not be conflated with "ok".
+             * @example true
+             */
+            ok: boolean;
+            /**
+             * @description Classification of the validation result. "ok": binary runs and reports a version, believed authenticated. "missing-binary": cli_path is empty, absent, or not a regular executable file — blocks Create/Save. "handshake-failed": the target ran but did not return a valid version-shaped response within the timeout — blocks Create/Save. "unauthenticated": the binary runs and reports a version but has no usable credentials — non-blocking warning, Create/Save allowed. "unknown-cli": the `cli` value is not one of the supported executors; no subprocess is spawned. Maps runner.ReasonOK (empty string) to "ok".
+             * @example ok
+             * @enum {string}
+             */
+            reason: "ok" | "missing-binary" | "handshake-failed" | "unauthenticated" | "unknown-cli";
+            /**
+             * @description Absolute path actually spawned. Populated for "ok" and "unauthenticated", and for "handshake-failed" when a target was found to spawn. Null for "missing-binary" and "unknown-cli".
+             * @example /usr/local/bin/claude
+             */
+            resolved_path?: string | null;
+            /**
+             * @description Version string reported by the CLI's `--version` handshake. Populated only for "ok" and "unauthenticated"; null otherwise.
+             * @example 1.2.3
+             */
+            version?: string | null;
+            /**
+             * @description Fixed, classified human-readable message for the reason — never raw stderr from the spawned process. One of a small allowlisted set per reason (e.g. "OK", "installed; not logged in", "not found", "did not run or returned no version", "unsupported cli").
+             * @example OK
+             */
+            detail?: string;
         };
         /**
          * RetentionUpdateRequest
@@ -12647,7 +12738,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description CLI availability probe result. */
+            /** @description Per-CLI detection result (installed, resolved path, source). */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -12657,6 +12748,33 @@ export interface operations {
                 };
             };
             401: components["responses"]["401Unauthorized"];
+        };
+    };
+    postSystemCliValidate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CliValidateRequest"];
+            };
+        };
+        responses: {
+            /** @description Validation classification. Always 200 (even for missing-binary / handshake-failed / unknown-cli) — the classification result is carried in the response body's `reason` field, not the HTTP status. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CliValidateResponse"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            429: components["responses"]["429TooManyRequests"];
         };
     };
 }
@@ -12811,6 +12929,9 @@ export type AgentOwnershipUpdateRequest = components["schemas"]["AgentOwnershipU
 export type BearerToken = components["schemas"]["BearerToken"];
 export type ChannelConfigureRequest = components["schemas"]["ChannelConfigureRequest"];
 export type CliDetect = components["schemas"]["CliDetect"];
+export type CliDetectEntry = components["schemas"]["CliDetectEntry"];
+export type CliValidateRequest = components["schemas"]["CliValidateRequest"];
+export type CliValidateResponse = components["schemas"]["CliValidateResponse"];
 export type RetentionUpdateRequest = components["schemas"]["RetentionUpdateRequest"];
 export type McpToolsListResponse = components["schemas"]["McpToolsListResponse"];
 export type McpToolCallRequest = components["schemas"]["McpToolCallRequest"];

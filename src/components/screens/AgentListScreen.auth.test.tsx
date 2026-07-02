@@ -64,10 +64,17 @@ function renderScreen() {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  // Default: successful cli-detect response.
+  // Default: successful cli-detect response. CliDetect (external-executor-
+  // cli-path-detection spec) is a per-CLI object — `{ claude, codex,
+  // opencode }: { installed, path, source } }` — not the old
+  // `{ hasClaude, hasCodex, hasOpencode }` booleans.
   fetchSpy.mockResolvedValue({
     ok: true,
-    json: async () => ({ hasClaude: true, hasCodex: true, hasOpencode: true }),
+    json: async () => ({
+      claude: { installed: true, path: '/usr/local/bin/claude', source: 'path' },
+      codex: { installed: true, path: '/usr/local/bin/codex', source: 'path' },
+      opencode: { installed: true, path: '/usr/local/bin/opencode', source: 'path' },
+    }),
   })
 })
 
