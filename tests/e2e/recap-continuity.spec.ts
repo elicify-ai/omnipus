@@ -159,6 +159,75 @@ async function createSession(page: Page, agentID: string): Promise<string> {
 }
 
 /**
+ * Install WS interceptors to capture the session_id the SPA actually uses for the
+ * fact-message turn.  Two capture paths:
+ *
+ * 1. Outgoing `{ type: "message", session_id: "<id>" }` frame — works when the SPA
+ *    attaches to the REST-created session (activeSessionId != null at send time).
+ *
+ * 2. Incoming `{ type: "done", session_id: "<id>" }` frame — works when the SPA
+ *    sends `session_id: null` (gateway mints a new id and echoes it in `done`).
+ *    The `done` frame is authoritative: it is the id the gateway used for the turn.
+ *
+ * The captured value is stored in `window.__spa_last_session_id`.
+ * Must be called BEFORE the fact message is sent.
+ */
+async function installSpaSessionCapture(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const g = globalThis as any
+    g.__spa_last_session_id = null
+
+    // Path 1: intercept outgoing frames (message with explicit session_id).
+    const origSend = WebSocket.prototype.send
+    WebSocket.prototype.send = function (this: WebSocket, data: string | ArrayBufferLike | Blob | ArrayBufferView) {
+      try {
+        if (typeof data === 'string') {
+          const parsed = JSON.parse(data) as { type?: string; session_id?: string | null }
+          if (parsed.type === 'message' && parsed.session_id) {
+            g.__spa_last_session_id = parsed.session_id
+          }
+        }
+      } catch {
+        // Non-JSON data — ignore.
+      }
+      return origSend.call(this, data)
+    }
+
+    // Path 2: listen for the incoming `done` frame on the existing open WS.
+    // The `done` frame always carries the authoritative session_id from the gateway,
+    // even when the SPA sent session_id: null (gateway mints a new id).
+    const sockets: WebSocket[] = Array.isArray(g.__ws_instances)
+      ? (g.__ws_instances as WebSocket[]).filter((s: WebSocket) => s.readyState === 1)
+      : []
+    const ws = sockets[sockets.length - 1]
+    if (ws) {
+      ws.addEventListener('message', (evt: MessageEvent) => {
+        try {
+          const parsed = JSON.parse(evt.data as string) as { type?: string; session_id?: string }
+          if (parsed.type === 'done' && parsed.session_id && !g.__spa_last_session_id) {
+            g.__spa_last_session_id = parsed.session_id
+          }
+        } catch {
+          // Non-JSON — ignore.
+        }
+      })
+    }
+  })
+}
+
+/**
+ * Read the session_id the SPA used when sending the fact message.
+ * Returns null if the interceptor was not installed or no message-type frame was sent yet.
+ */
+async function getSpaSessionId(page: Page): Promise<string | null> {
+  return page.evaluate(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return (globalThis as any).__spa_last_session_id as string | null
+  })
+}
+
+/**
  * Send a `session_close` WS frame using the live WebSocket the SPA has open.
  *
  * The frame must be:
@@ -409,6 +478,13 @@ test(
 
     // ── Step 2: Send distinctive fact ─────────────────────────────────────────
 
+    // Install the WS send-interceptor BEFORE sending the fact message so we can
+    // capture the session_id the SPA actually uses in the outgoing message frame.
+    // The SPA may route to a different session than the REST-created `sessionId`
+    // when enterWorkspaceChat calls startNewSession() (e.g. when sessionByWorkspace
+    // is unpopulated on first mount). We need the real session_id for session_close.
+    await installSpaSessionCapture(page)
+
     const factMessage =
       `Remember for later: the launch codename is ${NONCE}. ` +
       `Please acknowledge that you've noted it.`
@@ -430,10 +506,17 @@ test(
 
     // ── Step 3: Trigger recap via session_close WS frame ──────────────────────
 
-    const ackReceived = await sendSessionCloseFrame(page, sessionId)
+    // Resolve the effective session id: prefer what the SPA actually sent the fact
+    // to (captured via WS interceptor). Fall back to the REST-created sessionId only
+    // if the interceptor missed it (should not happen in normal flow).
+    const capturedSessionId = await getSpaSessionId(page)
+    const effectiveSessionId = capturedSessionId ?? sessionId
+
+    const ackReceived = await sendSessionCloseFrame(page, effectiveSessionId)
     expect(
       ackReceived,
-      `session_close_ack was NOT received within 10s for session ${sessionId}.\n` +
+      `session_close_ack was NOT received within 10s for session ${effectiveSessionId}.\n` +
+        `(REST-created session: ${sessionId}, SPA-captured session: ${capturedSessionId ?? 'none'})\n` +
         'This means the WS handler did not process the session_close frame.\n' +
         'Check: (a) WS is connected, (b) session_id is valid, (c) gateway logs for errors.',
     ).toBe(true)
