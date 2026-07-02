@@ -443,7 +443,7 @@ describe('ConnectorsScreen — empty-state roster (US-9 AS-3)', () => {
     const roster = await screen.findByTestId('channel-roster')
     expect(within(roster).getByTestId('channel-roster-connect-discord')).toBeInTheDocument()
     expect(within(roster).getByTestId('channel-roster-connect-telegram')).toBeInTheDocument()
-    expect(within(roster).getAllByText('Connect').length).toBeGreaterThan(0)
+    expect(within(roster).getAllByText('Configure').length).toBeGreaterThan(0)
 
     // No grouped list must render at the same time (mutually exclusive, FR-010).
     expect(screen.queryByTestId('channel-type-group-discord')).not.toBeInTheDocument()
@@ -500,21 +500,54 @@ describe('ConnectorsScreen — empty-state roster (US-9 AS-3)', () => {
     expect(screen.queryByTestId('channel-roster')).not.toBeInTheDocument()
   })
 
-  it('opens the create Sheet pre-filled with the clicked type when Connect is clicked', async () => {
+  it('roster Configure opens ChannelConfigPanel DIRECTLY on the bare type — the original one-click flow, no slug/create step (operator-mandated)', async () => {
+    mockFetchChannels.mockResolvedValue([{ ...STUB_TELEGRAM, instance_id: undefined, identity: undefined }])
+    const user = userEvent.setup()
+
+    const { ConnectorsScreen } = await import('./ConnectorsScreen')
+    render(React.createElement(ConnectorsScreen), { wrapper })
+
+    await user.click(await screen.findByTestId('channel-roster-connect-telegram'))
+
+    // ChannelConfigPanel (stubbed above) opens with the BARE type id — the
+    // token+routing slide-over, not the slug-create Sheet.
+    expect(channelConfigPanelOpens.at(-1)).toMatchObject({ channelId: 'telegram', channelName: 'Telegram' })
+    expect(screen.queryByTestId('create-channel-sheet')).not.toBeInTheDocument()
+  })
+
+  it('the compact Available section lists unconfigured types under the groups — every channel stays one click away', async () => {
+    mockFetchChannels.mockResolvedValue([
+      STUB_WHATSAPP_SALES,
+      { ...STUB_DISCORD_UNCONFIGURED },
+    ])
+    const user = userEvent.setup()
+
+    const { ConnectorsScreen } = await import('./ConnectorsScreen')
+    render(React.createElement(ConnectorsScreen), { wrapper })
+
+    // Configured group renders AND the Available section lists discord.
+    expect(await screen.findByTestId('channel-type-group-whatsapp')).toBeInTheDocument()
+    const available = await screen.findByTestId('channel-available')
+    await user.click(within(available).getByTestId('channel-roster-connect-discord'))
+    expect(channelConfigPanelOpens.at(-1)).toMatchObject({ channelId: 'discord' })
+    // The grid empty-state roster itself must NOT render alongside groups.
+    expect(screen.queryByTestId('channel-roster')).not.toBeInTheDocument()
+  })
+
+  it('the global "+ Add channel" button still opens the slug-create Sheet with an open type picker (multi-instance tool)', async () => {
     mockFetchChannels.mockResolvedValue([{ ...STUB_TELEGRAM, instance_id: undefined }])
     const user = userEvent.setup()
 
     const { ConnectorsScreen } = await import('./ConnectorsScreen')
     render(React.createElement(ConnectorsScreen), { wrapper })
 
-    const connectBtn = await screen.findByTestId('channel-roster-connect-telegram')
-    await user.click(connectBtn)
+    await user.click(await screen.findByTestId('add-channel-instance-btn'))
 
     const sheet = await screen.findByTestId('create-channel-sheet')
     expect(sheet).toBeInTheDocument()
-    // Type is locked (pre-filled), not an open picker.
-    expect(within(sheet).getByTestId('create-channel-type-locked')).toHaveTextContent('Telegram')
-    expect(within(sheet).queryByTestId('create-channel-type-select')).not.toBeInTheDocument()
+    // Global entry point → type is pickable, not locked.
+    expect(within(sheet).getByTestId('create-channel-type-select')).toBeInTheDocument()
+    expect(within(sheet).queryByTestId('create-channel-type-locked')).not.toBeInTheDocument()
   })
 })
 
