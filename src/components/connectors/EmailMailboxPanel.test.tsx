@@ -41,6 +41,10 @@ vi.mock('@/lib/api', async (importOriginal) => {
     saveMailboxConfig: vi.fn(),
     fetchAgents: vi.fn(),
     fetchWorkspaces: vi.fn(),
+    // ADR-031 Track 2 — ConnectorsScreen resolves each configured row's
+    // workspace→agent binding via getChannelRouting; mock it so the real
+    // (unmocked) implementation never fires a network call in Node.
+    getChannelRouting: vi.fn(),
     enableChannel: vi.fn(),
     disableChannel: vi.fn(),
     isApiError: vi.fn(() => false),
@@ -65,6 +69,7 @@ import {
   fetchAgents,
   fetchWorkspaces,
   fetchChannels,
+  getChannelRouting,
 } from '@/lib/api'
 import { EmailMailboxPanel } from './EmailMailboxPanel'
 import { ConnectorsScreen } from '@/components/screens/ConnectorsScreen'
@@ -105,7 +110,9 @@ function renderPanel(configOverrides?: Record<string, unknown>) {
 function renderConnectorsScreen() {
   const client = makeQueryClient()
   client.setQueryData(['channels'], [
-    { id: 'telegram', name: 'Telegram', transport: 'webhook', enabled: false },
+    // instance_id set — a real configured instance (FR-008), not the static
+    // "available but unconfigured" placeholder row.
+    { id: 'telegram', instance_id: 'telegram', name: 'Telegram', transport: 'webhook', enabled: false },
     { id: 'email', name: 'Email', transport: 'email', enabled: false },
   ])
 
@@ -123,12 +130,13 @@ describe('ConnectorsScreen — email mailbox account section', () => {
     vi.clearAllMocks()
     mockUiStore()
     vi.mocked(fetchChannels).mockResolvedValue([
-      { id: 'telegram', name: 'Telegram', transport: 'webhook', enabled: false } as never,
+      { id: 'telegram', instance_id: 'telegram', name: 'Telegram', transport: 'webhook', enabled: false } as never,
       { id: 'email', name: 'Email', transport: 'email', enabled: false } as never,
     ])
     vi.mocked(fetchMailboxConfig).mockResolvedValue({})
     vi.mocked(fetchAgents).mockResolvedValue([])
     vi.mocked(fetchWorkspaces).mockResolvedValue([])
+    vi.mocked(getChannelRouting).mockResolvedValue({})
   })
 
   it('renders the email mailbox account card', async () => {
