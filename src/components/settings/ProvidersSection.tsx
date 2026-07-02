@@ -131,14 +131,15 @@ interface RosterGroup {
 }
 
 function buildRoster(): RosterGroup[] {
-  // Exclude self-hosted (ollama, litellm, vllm) from the roster as they need
-  // no cloud API key and are not user-facing in the standard picker.
-  const EXCLUDED = new Set(['ollama', 'litellm', 'vllm'])
+  // The roster IS the catalog — every user-facing provider is connectable,
+  // including `ollama` (a first-class "Ollama (local)" catalog entry that
+  // onboarding also offers; excluding it here would make Settings inconsistent
+  // with onboarding). Genuinely not-in-catalog runtimes (litellm/vllm) simply
+  // aren't in PROVIDER_CATALOG, so they never appear here anyway.
   const order: string[] = []
   const map = new Map<string, RosterGroup>()
 
   for (const entry of PROVIDER_CATALOG) {
-    if (EXCLUDED.has(entry.id)) continue
     if (!map.has(entry.company)) {
       order.push(entry.company)
       map.set(entry.company, {
@@ -530,7 +531,19 @@ export function ProvidersSection() {
     onSuccess: (provider, { id }) => {
       queryClient.invalidateQueries({ queryKey: ['providers'] })
       const validation = provider.validation
-      if (validation && validation.outcome !== 'valid') {
+      if (validation?.outcome === 'invalid_key') {
+        // invalid_key is the ONE outcome the contract says blocks a usable
+        // provider. Do NOT report a green success — surface an error and keep
+        // the sheet open with the banner so the user can correct the key.
+        setSaveValidation((prev) => ({ ...prev, [id]: validation }))
+        addToast({
+          message: validation.message ?? 'Key rejected — the provider was saved but will not work until you fix the key',
+          variant: 'error',
+        })
+      } else if (validation && validation.outcome !== 'valid') {
+        // Non-blocking outcomes (no_credit / unreachable / restricted): saved
+        // successfully; keep the sheet open so the amber warning banner is
+        // visible. (Unchanged from prior behavior.)
         setSaveValidation((prev) => ({ ...prev, [id]: validation }))
         addToast({ message: 'Provider saved', variant: 'success' })
       } else {
@@ -797,10 +810,15 @@ export function ProvidersSection() {
                     data-testid={`roster-entry-${entry.id}`}
                   >
                     <div className="min-w-0">
-                      <span className="text-sm font-medium text-[var(--color-secondary)]">
-                        {variantRowTitle(entry)}
-                      </span>
-                      <p className="text-[10px] text-[var(--color-muted)] mt-0.5">{entry.subtitle}</p>
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium text-[var(--color-secondary)]">
+                          {variantRowTitle(entry)}
+                        </span>
+                        <Badge variant="muted" className="text-[11px]" data-testid={`roster-wire-${entry.id}`}>
+                          {wireBadgeLabel(entry.wire)}
+                        </Badge>
+                      </div>
+                      <p className="text-xs text-[var(--color-muted)] mt-0.5">{entry.subtitle}</p>
                     </div>
                     <Button
                       size="sm"
