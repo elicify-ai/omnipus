@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { motion } from 'framer-motion'
-import { Eye, EyeSlash, SpinnerGap, ArrowRight, User, Key, Rocket } from '@phosphor-icons/react'
+import { Eye, EyeSlash, SpinnerGap, ArrowRight, User, Key } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { login, fetchAppState, isApiError } from '@/lib/api'
@@ -175,19 +175,6 @@ function LoginScreen() {
           </Button>
         </form>
 
-        {/* First time? Set up Omnipus */}
-        <div className="mt-6 text-center">
-          <button
-            type="button"
-            onClick={() => navigate({ to: '/onboarding' })}
-            // Pad to a 44px-high mobile tap target without growing the visual text.
-            className="inline-flex items-center justify-center gap-2 min-h-11 px-2 text-sm transition-colors hover:underline"
-            style={{ color: 'var(--color-muted)' }}
-          >
-            <Rocket size={14} />
-            Set up Omnipus for the first time
-          </button>
-        </div>
       </motion.div>
     </div>
   )
