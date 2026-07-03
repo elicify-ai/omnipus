@@ -127,6 +127,15 @@ async function fillAndAdvanceToStep3(opts?: { initialType?: 'Main' | 'Subagent' 
   fireEvent.change(screen.getByTestId('wizard-soul'), {
     target: { value: 'You are a focused research assistant.' },
   })
+
+  // subagent_3p is a TWO-step wizard (2026-07-03): tools/skills/fallback
+  // never apply to an external runner and its old step ③ only duplicated
+  // step ①'s runner config — Create lives on step ② for that type.
+  if (type === 'subagent_3p') {
+    expect(await screen.findByTestId('wizard-create')).toBeInTheDocument()
+    return
+  }
+
   await waitFor(() => {
     expect(screen.getByTestId('wizard-next-2')).not.toBeDisabled()
   })
@@ -138,8 +147,7 @@ async function fillAndAdvanceToStep3(opts?: { initialType?: 'Main' | 'Subagent' 
     const t = screen.getByTestId('wizard-inherit-tools') as HTMLInputElement
     if (t.checked) fireEvent.click(t)
   }
-  // All fields are wire-optional for Main / Subagent, hidden entirely for
-  // subagent_3p. Just confirm the step renders.
+  // All fields are wire-optional for Main / Subagent. Just confirm the step renders.
   expect(await screen.findByTestId('wizard-create')).toBeInTheDocument()
 }
 
@@ -433,7 +441,7 @@ describe('CreateAgentModal — submit success path', () => {
     fireEvent.change(screen.getByTestId('wizard-cli-path'), { target: { value: '/usr/local/bin/claude-code' } })
     fireEvent.click(screen.getByTestId('wizard-next-1'))
     fireEvent.change(screen.getByTestId('wizard-soul'), { target: { value: 'hi' } })
-    fireEvent.click(screen.getByTestId('wizard-next-2'))
+    // Two-step wizard for external runners (2026-07-03): Create is on step 2.
     fireEvent.click(await screen.findByTestId('wizard-create'))
     await waitFor(() => expect(onCreate).toHaveBeenCalled())
     const call = onCreate.mock.calls.at(-1)![0]
@@ -619,10 +627,20 @@ describe('CreateAgentModal — create/edit parity fixes (P3, 2026-07-03)', () =>
     expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
-  it('subagent_3p step 3 does NOT offer the skills mapping (external runners cannot load Omnipus skills)', async () => {
+  it('subagent_3p wizard is TWO steps — no Tools step, no skills mapping, Create on step 2', async () => {
     renderModal({ open: true, onClose: vi.fn(), initialType: 'subagent_3p' })
     await fillAndAdvanceToStep3({ initialType: 'subagent_3p' })
+    // Create is reachable on step 2; the Tools step (and its skills/tools
+    // blocks) does not exist for external runners.
+    expect(screen.getByTestId('wizard-create')).toBeInTheDocument()
+    expect(screen.queryByTestId('wizard-next-2')).toBeNull()
     expect(screen.queryByTestId('wizard-skills')).toBeNull()
+    expect(screen.queryByTestId('wizard-tools-cfg')).toBeNull()
+    // The stepper shows exactly two steps.
+    const stepper = screen.getByTestId('wizard-stepper')
+    expect(stepper.textContent).toContain('Identity')
+    expect(stepper.textContent).toContain('Personality')
+    expect(stepper.textContent).not.toContain('Tools')
   })
 
   it('native Subagent step 3 still offers the skills mapping', async () => {
