@@ -1028,15 +1028,36 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           {/* Model Configuration — picker, unresolved-slug indicator, fallback editor */}
           <section className="space-y-3">
             <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Model</p>
-            {providersError && (
+            {providersError && !isExternalAgent && (
               <p className="text-xs text-[var(--color-warning)]">
                 Could not load providers. You can still enter a model slug manually.
               </p>
             )}
-            {/* UAT model-catalog fix: CONSTRAINED picker fed the connected-
+            {isExternalAgent ? (
+              /* External CLI workers: FREE TEXT, never the connected-model
+                 catalogue. The model slug is handed to the runner as --model
+                 (ADR-032) and resolved by the CLI's OWN provider and auth —
+                 the Omnipus provider catalogue is the wrong universe for it
+                 (operator finding, 2026-07-03). */
+              <div className="space-y-1.5">
+                <Input
+                  data-testid="external-model-input"
+                  value={model}
+                  onChange={(e) => { markDirty(); setModel(e.target.value) }}
+                  placeholder="claude-sonnet-4-6"
+                  className="text-sm font-mono"
+                />
+                <p className="text-xs text-[var(--color-muted)]">
+                  Passed to the external CLI as its model flag. The runner uses its
+                  own provider and authentication — enter any model slug the CLI
+                  supports, independent of the providers connected here.
+                </p>
+              </div>
+            ) : (
+            /* UAT model-catalog fix: CONSTRAINED picker fed the connected-
                 provider catalogue. Selection is limited to real models, so an
                 unresolvable slug cannot be saved here and the inline
-                "unresolved" warning can no longer occur. */}
+                "unresolved" warning can no longer occur. */
             <ModelSelector
               models={availableModels}
               value={model}
@@ -1053,6 +1074,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               allowFreeTextWhenEmpty={providersError}
               emptyCatalogHint="Connect a provider in Settings to pick a model"
             />
+            )}
             {isLocked && (
               <div className="space-y-1.5">
                 <p className="text-xs text-[var(--color-muted)]">Fallback models</p>
@@ -2091,7 +2113,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           )}
           <TabsTrigger value="basics" data-testid="tab-basics" className="font-headline">Basics</TabsTrigger>
           <TabsTrigger value="personality" data-testid="tab-personality" className="font-headline">Personality</TabsTrigger>
-          <TabsTrigger value="tools" data-testid="tab-tools" className="font-headline">Tools</TabsTrigger>
+          {!isExternalAgent && (
+            <TabsTrigger value="tools" data-testid="tab-tools" className="font-headline">Tools</TabsTrigger>
+          )}
           {isExternalAgent && (
             <TabsTrigger value="runtime" data-testid="tab-runtime" className="font-headline">Runtime</TabsTrigger>
           )}
@@ -2118,13 +2142,16 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             the Advanced tab per the spec matrix. */}
         <TabsContent value="personality" className="space-y-5">{personalityPanel}</TabsContent>
 
-        {/* ── TOOLS TAB ─────────────────────────────────────────────────
-            Tool policy editor + Skills picker. Native workers (no
-            user-added overrides) collapse the editor to a read-only
-            summary; external-cli workers see the full editor. The
-            fallback models editor stays here too — FR-007 says fallbacks
-            are part of the tool chain. */}
-        <TabsContent value="tools" className="space-y-6">{toolsPanel}</TabsContent>
+        {/* ── TOOLS TAB (hidden for subagent_3p) ────────────────────────
+            Tool policy editor + Skills picker, live-editable for Main and
+            native Subagents alike. External CLI workers have no Omnipus
+            tool chain (the runner brings its own tools), so every section
+            in this panel is out of scope for them and the whole tab is
+            omitted. The fallback models editor stays here too — FR-007
+            says fallbacks are part of the tool chain. */}
+        {!isExternalAgent && (
+          <TabsContent value="tools" className="space-y-6">{toolsPanel}</TabsContent>
+        )}
 
         {/* ── RUNTIME TAB (subagent_3p only) ─────────────────────────────
             Spec-4 / §6.4: the Runtime tab is rendered for
@@ -2170,10 +2197,12 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           <AccordionTrigger data-testid="accordion-personality" className="font-headline">Personality</AccordionTrigger>
           <AccordionContent>{personalityPanel}</AccordionContent>
         </AccordionItem>
+      {!isExternalAgent && (
         <AccordionItem value="tools">
           <AccordionTrigger data-testid="accordion-tools" className="font-headline">Tools</AccordionTrigger>
           <AccordionContent>{toolsPanel}</AccordionContent>
         </AccordionItem>
+      )}
       {isExternalAgent && (
         <AccordionItem value="runtime">
           <AccordionTrigger data-testid="accordion-runtime" className="font-headline">Runtime</AccordionTrigger>
