@@ -119,6 +119,22 @@ const mockLockedWorkerAgent: Agent = {
   locked: true,
 }
 
+// W2c / field matrix (docs/internal/architecture/agent-types-field-matrix.md):
+// isExternal/isNativeWorker are TYPE-based, not executor-based — a
+// `subagent_3p` agent is the ONLY kind that is genuinely external. This
+// fixture is the canonical "truly external" agent (contrast with
+// `mockWorkerAgent`, which is `type: 'Subagent'` — native — even though it
+// happens to carry an `external-cli` executor value in some fixtures above;
+// that combination is legacy-test shorthand, not a real subagent_3p).
+const mockSubagent3pAgent: Agent = {
+  ...mockCoreAgent,
+  id: 'external-researcher',
+  name: 'External Researcher',
+  type: 'subagent_3p',
+  description: 'Delegation-only worker on an external CLI runner',
+  executor: { kind: 'external-cli', cli: 'claude-code' },
+}
+
 function makeClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false } } })
 }
@@ -267,17 +283,21 @@ describe('AgentProfile — locked core agent sections (test #13)', () => {
     vi.mocked(fetchAgent).mockResolvedValue(mockLockedCoreAgent)
   })
 
-  it('does NOT show Rate Limits for locked core agents', async () => {
-    // Traces to: wave5a-wire-ui-spec.md — US-7 AC3: locked agents hide rate limits
-    // Wave 5: open the Advanced tab and confirm the "Use global defaults"
-    // copy is absent (the entire Rate Limits section is omitted for
-    // locked agents).
+  it('shows Rate Limits for locked core agents, editable (operator decision 2026-07-03)', async () => {
+    // Traces to: agent-types-field-matrix.md — rate_limits is mutable on the
+    // backend for locked agents; the UI now exposes it (superseding the old
+    // "locked agents hide rate limits" behavior — only identity/soul/skills
+    // stay 403'd for locked core agents).
     renderProfile('mia')
     await screen.findByText('Mia')
     switchTab('tab-advanced')
-    // Use a small wait to let Radix activate the panel.
-    await new Promise((r) => setTimeout(r, 50))
-    expect(screen.queryByText(/Use global defaults/i)).toBeNull()
+    const toggle = await screen.findByText(/Use global defaults/i)
+    expect(toggle).toBeInTheDocument()
+    // The "Use global defaults" switch is interactive (not disabled).
+    const section = toggle.closest('section') as HTMLElement
+    const globalDefaultsSwitch = section.querySelector('button[role="switch"]') as HTMLButtonElement
+    expect(globalDefaultsSwitch).not.toBeNull()
+    expect(globalDefaultsSwitch.disabled).toBe(false)
   })
 
   it('does NOT show Save button for locked core agent', async () => {
@@ -541,51 +561,35 @@ describe('AgentProfile — Executor section is worker-only (Spec-4)', () => {
   })
 })
 
-// Wave 6 / G10 — when the worker's executor is external-cli, Omnipus'
-// sandbox_profile is ignored at runtime; the operator needs a visible
-// callout so the chosen profile isn't mistaken for an enforcement guarantee.
-// Worker accordions are default-open (W6-B1 / I1) so the Sandbox block is
-// rendered on mount; no extra click is needed.
-describe('AgentProfile — Sandbox callout when executor is external-cli (G10)', () => {
-  it('renders the "sandbox ignored" callout for external-cli workers with a non-off profile', async () => {
-    vi.mocked(fetchAgent).mockResolvedValue({
-      ...mockWorkerAgent,
-      executor: { kind: 'external-cli', cli: 'claude-code' },
-      sandbox_profile: 'workspace',
-    })
-    renderProfile('web-researcher')
-    const callouts = await screen.findAllByTestId('sandbox-external-cli-ignored-callout')
-    expect(callouts.length).toBeGreaterThanOrEqual(1)
-    const callout = callouts[0]
-    expect(callout).toHaveAttribute('role', 'note')
-    expect(callout).toHaveAttribute('aria-live', 'polite')
-    expect(callout).toHaveTextContent(/sandbox profile is ignored when executor\.kind=external-cli/i)
-    expect(callout).toHaveTextContent(/external CLI manages its own isolation/i)
+// W2c (rewrite of former Wave 6 / G10) — per the field matrix
+// (docs/internal/architecture/agent-types-field-matrix.md), sandbox_profile
+// + shell_policy apply to Main AND native Subagent, and are hidden ONLY for
+// subagent_3p (the external runner manages its own isolation). The old
+// "sandbox ignored" callout (gated on executor.kind, not agent.type) is
+// retired — the section simply does not render for subagent_3p, and DOES
+// render (editable) for a native Subagent, even one whose `executor` field
+// happens to carry an external-cli value (type is authoritative, not the
+// locally-editable executor state).
+describe('AgentProfile — Sandbox section visibility by agent kind (field matrix)', () => {
+  it('does NOT render the Sandbox section for a subagent_3p agent', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue(mockSubagent3pAgent)
+    renderProfile('external-researcher')
+    await screen.findByText('External Researcher')
+    expect(screen.queryByText(/^Sandbox$/)).toBeNull()
+    expect(screen.queryByTestId('sandbox-profile-radio-workspace')).toBeNull()
   })
 
-  it('does NOT render the callout for native workers even with a non-off profile', async () => {
+  it('renders an EDITABLE Sandbox section for a native Subagent', async () => {
     vi.mocked(fetchAgent).mockResolvedValue({
       ...mockWorkerAgent,
-      executor: { kind: 'native' },
       sandbox_profile: 'workspace',
     })
     renderProfile('web-researcher')
     await screen.findByText('Web Researcher')
-    expect(screen.queryByTestId('sandbox-external-cli-ignored-callout')).toBeNull()
-  })
-
-  it('does NOT render the callout when a legacy sandbox_profile of "off" is present (warning would be redundant)', async () => {
-    // O13: 'off' is retired from the per-agent enum, but a legacy agent config
-    // may still carry it on the wire — the callout must stay suppressed. We cast
-    // because the generated Agent type no longer admits 'off'.
-    vi.mocked(fetchAgent).mockResolvedValue({
-      ...mockWorkerAgent,
-      executor: { kind: 'external-cli', cli: 'claude-code' },
-      sandbox_profile: 'off' as never,
-    })
-    renderProfile('web-researcher')
-    await screen.findByText('Web Researcher')
-    expect(screen.queryByTestId('sandbox-external-cli-ignored-callout')).toBeNull()
+    expect(await screen.findAllByText(/^Sandbox$/)).not.toHaveLength(0)
+    const radios = await screen.findAllByTestId('sandbox-profile-radio-workspace')
+    expect(radios.length).toBeGreaterThanOrEqual(1)
+    expect((radios[0] as HTMLInputElement).disabled).toBe(false)
   })
 })
 
@@ -1482,11 +1486,15 @@ describe('AgentProfile — subagent_3p payload restriction', () => {
     expect(payload).not.toHaveProperty('fallback_models')
     expect(payload).not.toHaveProperty('model_params')
     expect(payload).not.toHaveProperty('delegation_policy')
+    // Operator decision (agent-types-field-matrix.md "Open decisions" #1):
+    // max_tool_iterations is excluded for subagent_3p.
+    expect(payload).not.toHaveProperty('max_tool_iterations')
 
     // Allowed fields SHOULD be present
     expect(payload).toHaveProperty('name')
     expect(payload).toHaveProperty('executor')
     expect(payload).toHaveProperty('updated_at')
+    // timeout_seconds STAYS for subagent_3p (operator decision: keep).
   })
 })
 
@@ -1782,21 +1790,196 @@ describe('AgentProfile — max tool calls per turn (zero-clobber P0 fix)', () =>
   })
 })
 
-describe('AgentProfile — skills hidden for external-cli workers (P3, 2026-07-03)', () => {
-  it('a subagent_3p (external-cli) worker gets NO Skills section', async () => {
+describe('AgentProfile — skills visibility by agent kind (field matrix, W2c)', () => {
+  it('a subagent_3p (truly external, type-based) agent gets NO Skills section', async () => {
     // External CLI runners (claude-code / codex / opencode) can never load
-    // Omnipus skills — offering the mapping was a lie. The old gate
-    // (!isNativeWorkerAgent) let external workers through.
-    vi.mocked(fetchAgent).mockResolvedValue({
-      ...mockWorkerAgent,
-      executor: { kind: 'external-cli', cli: 'claude-code' },
-    })
-    renderProfile('web-researcher')
-    await screen.findByText('Web Researcher')
+    // Omnipus skills — offering the mapping was a lie. The gate is now
+    // TYPE-based (isExternal from agentKindFlags), not executor-based —
+    // only a genuine `type: 'subagent_3p'` agent hides this section.
+    vi.mocked(fetchAgent).mockResolvedValue(mockSubagent3pAgent)
+    renderProfile('external-researcher')
+    await screen.findByText('External Researcher')
     switchTab('tab-tools')
-    // The tab renders (fallback models etc.) but the Skills section must not.
+    // The tab renders (fallback models etc. hidden too) but the Skills
+    // section must not.
     await waitFor(() => {
       expect(screen.queryByText(/^Skills$/i)).toBeNull()
     })
+  })
+
+  it('a native Subagent (type: Subagent) DOES get a Skills section (matrix: optional/inherit)', async () => {
+    // The old (!isWorkerAgent) gate over-corrected and hid Skills for every
+    // worker, including native Subagents that may legitimately be granted
+    // skills. mockWorkerAgent is `type: 'Subagent'` — always native per
+    // agentKindFlags, regardless of its (legacy-shorthand) executor value.
+    vi.mocked(fetchAgent).mockResolvedValue(mockWorkerAgent)
+    renderProfile('web-researcher')
+    await screen.findByText('Web Researcher')
+    switchTab('tab-tools')
+    expect(await screen.findByText(/^Skills$/i)).toBeInTheDocument()
+  })
+})
+
+// W2c — Tools & Permissions section visibility by agent kind (field matrix).
+// subagent_3p hides it entirely (the external runner has its own tools; the
+// old read-only-collapse path for zero-override native workers is retired —
+// a fresh native Subagent now gets the LIVE editor, not a summary box).
+describe('AgentProfile — Tools & Permissions visibility by agent kind (field matrix, W2c)', () => {
+  it('hides Tools & Permissions for a subagent_3p agent', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue(mockSubagent3pAgent)
+    renderProfile('external-researcher')
+    await screen.findByText('External Researcher')
+    switchTab('tab-tools')
+    await waitFor(() => {
+      expect(screen.queryByText(/Tools.*Permissions/i)).toBeNull()
+    })
+  })
+
+  it('shows the LIVE Tools & Permissions editor for a native Subagent (no read-only collapse)', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue(mockWorkerAgent)
+    renderProfile('web-researcher')
+    await screen.findByText('Web Researcher')
+    switchTab('tab-tools')
+    expect(await screen.findByText(/Tools.*Permissions/i)).toBeInTheDocument()
+    // The retired read-only-collapse summary must never render.
+    expect(screen.queryByTestId('native-worker-tools-readonly')).toBeNull()
+  })
+})
+
+// W2c — Fallback models section visibility by agent kind (field matrix).
+// subagent_3p hides it (the runner manages its own retries); every other
+// kind (including Main) keeps it.
+describe('AgentProfile — Fallback models visibility by agent kind (field matrix, W2c)', () => {
+  it('hides Fallback models for a subagent_3p agent', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue(mockSubagent3pAgent)
+    renderProfile('external-researcher')
+    await screen.findByText('External Researcher')
+    switchTab('tab-tools')
+    await waitFor(() => {
+      expect(screen.queryByText(/^Fallback models$/i)).toBeNull()
+    })
+  })
+
+  it('shows Fallback models for a Main agent', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue({ ...mockCoreAgent, type: 'Main' })
+    renderProfile('general-assistant')
+    await screen.findByText('General Assistant')
+    switchTab('tab-tools')
+    expect(await screen.findByText(/^Fallback models$/i)).toBeInTheDocument()
+  })
+})
+
+// W2c — Max tool calls per turn visibility by agent kind (field matrix,
+// "Open decisions" #1: subagent_3p EXCLUDES max_tool_iterations).
+describe('AgentProfile — Max tool calls per turn visibility by agent kind (field matrix, W2c)', () => {
+  it('hides the Max tool calls input for a subagent_3p agent', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue(mockSubagent3pAgent)
+    renderProfile('external-researcher')
+    await screen.findByText('External Researcher')
+    switchTab('tab-advanced')
+    await waitFor(() => {
+      expect(screen.queryByTestId('agent-max-tool-calls-input')).toBeNull()
+    })
+    // Turn timeout STAYS for subagent_3p (operator decision: keep).
+    expect(screen.getByTestId('agent-timeout-input')).toBeInTheDocument()
+  })
+
+  it('shows the Max tool calls input for a native Subagent', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue(mockWorkerAgent)
+    renderProfile('web-researcher')
+    await screen.findByText('Web Researcher')
+    switchTab('tab-advanced')
+    expect(await screen.findByTestId('agent-max-tool-calls-input')).toBeInTheDocument()
+  })
+
+  it('never PUTs max_tool_iterations for a subagent_3p agent', async () => {
+    vi.mocked(fetchAgent).mockReset().mockResolvedValue(mockSubagent3pAgent)
+    vi.mocked(updateAgent).mockReset().mockResolvedValue(mockSubagent3pAgent)
+    renderProfile('external-researcher')
+    await screen.findByText('External Researcher')
+    const nameInputs = screen.getAllByDisplayValue('External Researcher')
+    fireEvent.change(nameInputs[0], { target: { value: 'Renamed External' } })
+    await waitFor(() => {
+      expect(vi.mocked(updateAgent)).toHaveBeenCalled()
+    }, { timeout: 5000 })
+    const payload = vi.mocked(updateAgent).mock.calls[0][1] as Record<string, unknown>
+    expect(payload).not.toHaveProperty('max_tool_iterations')
+    // timeout_seconds stays allowed on the wire for subagent_3p.
+    expect(payload).toHaveProperty('name', 'Renamed External')
+  })
+})
+
+// W2c — locked core agents: description/color/icon become visible READ-ONLY
+// (previously hidden entirely), and Sampling/Rate Limits/Execution become
+// EDITABLE (previously hidden entirely). Operator decision 2026-07-03.
+describe('AgentProfile — locked core agent identity fields: visible read-only (W2c)', () => {
+  it('shows the description as a disabled, read-only textarea', async () => {
+    // Desktop Tabs AND mobile Accordion both default to "basics" and are
+    // simultaneously mounted (established pattern in this file — see the
+    // O13 sandbox tests' use of getAllBy*), so use the *All* query variant.
+    vi.mocked(fetchAgent).mockResolvedValue(mockLockedCoreAgent)
+    renderProfile('mia')
+    await screen.findByText('Mia')
+    const descriptions = await screen.findAllByTestId('agent-description-input')
+    expect(descriptions.length).toBeGreaterThanOrEqual(1)
+    const description = descriptions[0] as HTMLTextAreaElement
+    expect(description.disabled).toBe(true)
+    expect(description.readOnly).toBe(true)
+    expect(description.value).toBe(mockLockedCoreAgent.description)
+  })
+
+  it('shows a static read-only avatar color swatch (not the interactive picker)', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue({ ...mockLockedCoreAgent, color: '#D4AF37' })
+    renderProfile('mia')
+    await screen.findByText('Mia')
+    expect((await screen.findAllByTestId('avatar-color-readonly')).length).toBeGreaterThanOrEqual(1)
+    expect(screen.queryByTestId('avatar-color-Forge Gold')).toBeNull()
+  })
+
+  it('shows a static read-only avatar icon (not the interactive picker)', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue(mockLockedCoreAgent)
+    renderProfile('mia')
+    await screen.findByText('Mia')
+    expect((await screen.findAllByTestId('avatar-icon-readonly')).length).toBeGreaterThanOrEqual(1)
+    expect(screen.queryByTestId('avatar-icon-trigger')).toBeNull()
+  })
+})
+
+describe('AgentProfile — locked core agent Sampling/Execution: editable (W2c)', () => {
+  it('shows an interactive Sampling parameters disclosure for a locked core agent', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue(mockLockedCoreAgent)
+    renderProfile('mia')
+    await screen.findByText('Mia')
+    const toggles = await screen.findAllByText(/Sampling parameters/i)
+    fireEvent.click(toggles[0])
+    const tempLabels = await screen.findAllByText(/^Temperature$/i)
+    expect(tempLabels.length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('shows an interactive Execution section (timeout + max tool calls) for a locked core agent', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue(mockLockedCoreAgent)
+    renderProfile('mia')
+    await screen.findByText('Mia')
+    switchTab('tab-advanced')
+    const timeoutInput = await screen.findByTestId('agent-timeout-input')
+    expect((timeoutInput as HTMLInputElement).disabled).toBe(false)
+    const maxToolCallsInput = await screen.findByTestId('agent-max-tool-calls-input')
+    expect((maxToolCallsInput as HTMLInputElement).disabled).toBe(false)
+  })
+
+  it('persists a sampling-parameter edit through updateAgent for a locked core agent', async () => {
+    vi.mocked(fetchAgent).mockReset().mockResolvedValue(mockLockedCoreAgent)
+    vi.mocked(updateAgent).mockReset().mockResolvedValue(mockLockedCoreAgent)
+    renderProfile('mia')
+    await screen.findByText('Mia')
+    const toggles = await screen.findAllByText(/Sampling parameters/i)
+    fireEvent.click(toggles[0])
+    const tempSliders = await screen.findAllByTestId('range-field-temperature')
+    fireEvent.change(tempSliders[0], { target: { value: '1.5' } })
+    await waitFor(() => {
+      expect(vi.mocked(updateAgent)).toHaveBeenCalled()
+    }, { timeout: 3000 })
+    const last = vi.mocked(updateAgent).mock.calls.at(-1)!
+    expect((last[1] as Record<string, unknown>).model_params).toMatchObject({ temperature: 1.5 })
   })
 })

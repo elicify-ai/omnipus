@@ -62,7 +62,6 @@ import {
   fetchActivity,
   fetchSkills,
   testAgentRunner,
-  isWorker,
   workspacesQueryKeys,
   type Agent,
   type ActivityEvent,
@@ -76,7 +75,9 @@ import { isApiError } from '@/lib/api-error'
 import { formatTokens } from '@/lib/formatTokens'
 import { useUiStore } from '@/store/ui'
 import type { FallbackModel } from '@/lib/api/generated/openapi-types'
-import { type IconName } from '@/lib/agentIcons'
+import { type IconName, getIconComponent } from '@/lib/agentIcons'
+import { avatarColorName } from '@/lib/constants'
+import { agentKindFlags } from '@/lib/agentKind'
 import { cliValidationBlocked, useCliPathValidation } from '@/hooks/useCliPathValidation'
 import { useCliDetect } from '@/hooks/useCliDetect'
 import { detectEntryFor, resolveCliDetectHint } from '@/lib/cliDetect'
@@ -397,6 +398,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       max_cost_per_day: maxCostPerDay !== '' ? maxCostPerDay : undefined,
     }
     if (isSubagent3p) {
+      // Operator decision (agent-types-field-matrix.md, "Open decisions" #1):
+      // subagent_3p EXCLUDES max_tool_iterations — the external CLI runs its
+      // own tool loop, and the backend now rejects the field for this type.
+      // timeout_seconds STAYS (process-level kill for a hung CLI).
       return {
         ...identity,
         model,
@@ -405,7 +410,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         soul,
         rate_limits: rateLimits,
         timeout_seconds: timeoutPayload,
-        max_tool_iterations: maxToolIterations,
         executor,
       }
     }
@@ -825,8 +829,13 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     )
   }
 
-  const isLocked = agent.locked === true
-  const canEdit = !isLocked
+  // Kind derivation — single source of truth is agentKindFlags (per
+  // docs/internal/architecture/agent-types-field-matrix.md). isExternal /
+  // isNativeWorker are TYPE-based (agent.type), not derived from the
+  // locally-editable executor state: a `Subagent` is always native and a
+  // `subagent_3p` is always external — only the legacy `worker` type is
+  // ambiguous and falls back to the fetched agent's executor.kind.
+  const { isLocked, isWorker: isWorkerAgent, isExternal: isExternalAgent, isNativeWorker: isNativeWorkerAgent } = agentKindFlags(agent)
   // Past the early returns, `agent` is non-null and `agentId` is the id used
   // to fetch it. Narrow once for child components that take `string`.
   const resolvedAgentId = agentId as string
@@ -838,28 +847,20 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // the agent itself, so we branch once here and let the JSX ask `isWorkerAgent`
   // to decide which accordions render. See the contract schema for the
   // `worker` type value: contracts/components/schemas/Agent.yaml.
-  const isWorkerAgent = isWorker(agent)
-  // W6-C1 / M11: native workers are delegation-only labour agents. Their
-  // Tools / Skills / Sandbox settings are inherited from the caller and
-  // have no effect on a native runtime, so the lower accordions are
-  // hidden for them. External-cli workers still need those accordions
-  // because the external runner respects the policy. The callout at the
-  // top of the profile explains the omission.
-  const isNativeWorkerAgent = isWorkerAgent && (!executor || executor.kind === 'native')
+  // Field matrix: native Subagents may set Tools / Skills / Sandbox
+  // explicitly OR inherit them from the delegating caller — only
+  // subagent_3p (isExternalAgent) hides them, since the external runner
+  // manages its own tools/skills/isolation.
   // FR-016 / FR-025 / US-5: show the Heartbeat tab only when the slide-over
   // was opened from a workspace Team tab (editAgentWorkspaceId is set) AND the
   // agent is not a worker (`!isWorker()` per A2/F-08). Workers are
   // delegation-only and have no heartbeat concept.
   const showHeartbeatTab = editAgentWorkspaceId !== null && !isWorkerAgent
 
-  // The Advanced tab collapses to just the Activity feed when every editable
-  // sub-section is hidden: Rate Limits + Execution require `!isLocked`, and the
-  // Executor summary only renders for native (non-subagent_3p) workers. When
-  // that's the case (e.g. a locked core agent), label the tab "Activity"
-  // instead of "Advanced" since Activity is the only thing in it.
-  const advancedOnlyActivity =
-    isLocked && !(isWorkerAgent && agent.type !== 'subagent_3p')
-  const advancedTabLabel = advancedOnlyActivity ? 'Activity' : 'Advanced'
+  // Operator decision (agent-types-field-matrix.md): locked core agents now
+  // get editable Rate Limits + Execution knobs too, so the Advanced tab
+  // always has more than the Activity feed — the tab is always "Advanced".
+  const advancedTabLabel = 'Advanced'
 
 
   // Section panels shared by desktop Tabs and mobile Accordion.
@@ -881,21 +882,27 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   placeholder="Agent name"
                   className="text-sm"
                 />
-                {canEdit && (
-                  <Textarea
-                    value={description}
-                    onChange={(e) => { markDirty(); setDescription(e.target.value) }}
-                    placeholder="Short description of this agent's purpose"
-                    rows={2}
-                    className="text-sm resize-none"
-                  />
-                )}
+                {/* Operator decision 2026-07-03: description becomes visible
+                    READ-ONLY for locked core agents (previously hidden
+                    entirely) — mirrors the name input's disabled+readOnly
+                    treatment above. */}
+                <Textarea
+                  data-testid="agent-description-input"
+                  value={description}
+                  disabled={isLocked}
+                  readOnly={isLocked}
+                  onChange={isLocked ? undefined : (e) => { markDirty(); setDescription(e.target.value) }}
+                  placeholder="Short description of this agent's purpose"
+                  rows={2}
+                  className="text-sm resize-none"
+                />
               </div>
-              {/* W6-B4 / G3: Default agent toggle. Hidden for locked core
-                  agents (locked roster: Mia is the seeded default and the
-                  field is immutable for them). Hidden for workers — the
-                  locked concept makes "default" a non-worker concept. */}
-              {canEdit && !isWorkerAgent && (
+              {/* W6-B4 / G3: Default agent toggle. Locked core agents keep
+                  this editable (operator decision 2026-07-03 — execution/
+                  identity display knobs unhide for locked). Hidden for
+                  workers — the locked concept makes "default" a non-worker
+                  concept. */}
+              {!isWorkerAgent && (
                 <div
                   data-testid="default-toggle-row"
                   className="flex items-center justify-between gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2.5"
@@ -932,7 +939,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   />
                 </div>
               )}
-              {canEdit && !isWorkerAgent && (() => {
+              {!isWorkerAgent && (() => {
                 const dp = agent.delegation_policy
                 const toCount = dp?.to?.length ?? 0
                 const acceptFromCount = dp?.accept_from?.length ?? 0
@@ -964,26 +971,49 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   </div>
                 )
               })()}
-              {canEdit && (
-                <div className="space-y-1.5">
-                  <p className="text-xs text-[var(--color-muted)]">Avatar color</p>
+              {/* Operator decision 2026-07-03: color/icon become visible
+                  READ-ONLY for locked core agents (previously hidden
+                  entirely) — a static swatch/icon+label, not the
+                  interactive picker (which has no readOnly mode). */}
+              <div className="space-y-1.5">
+                <p className="text-xs text-[var(--color-muted)]">Avatar color</p>
+                {isLocked ? (
+                  <div className="flex items-center gap-2" data-testid="avatar-color-readonly">
+                    <span
+                      className="w-7 h-7 rounded-full shrink-0 border border-[var(--color-border)]"
+                      style={{ backgroundColor: selectedColor || 'var(--color-surface-3)' }}
+                      aria-hidden="true"
+                    />
+                    <span className="text-xs text-[var(--color-secondary)]">
+                      {avatarColorName(selectedColor)}
+                    </span>
+                  </div>
+                ) : (
                   <AvatarColorPicker
                     value={selectedColor ?? ''}
                     onChange={(color) => { markDirty(); setSelectedColor(color) }}
                     testIdPrefix="avatar-color"
                   />
-                </div>
-              )}
-              {canEdit && (
-                <div className="space-y-1.5">
-                  <p className="text-xs text-[var(--color-muted)]">Avatar icon</p>
+                )}
+              </div>
+              <div className="space-y-1.5">
+                <p className="text-xs text-[var(--color-muted)]">Avatar icon</p>
+                {isLocked ? (
+                  <div className="flex items-center gap-2" data-testid="avatar-icon-readonly">
+                    {(() => {
+                      const ReadOnlyIcon = getIconComponent(selectedIcon)
+                      return <ReadOnlyIcon size={18} className="text-[var(--color-secondary)]" aria-hidden="true" />
+                    })()}
+                    <span className="text-xs text-[var(--color-secondary)]">{selectedIcon}</span>
+                  </div>
+                ) : (
                   <IconPicker
                     value={selectedIcon}
                     onChange={(icon) => { markDirty(); setSelectedIcon(icon) }}
                     triggerTestId="avatar-icon-trigger"
                   />
-                </div>
-              )}
+                )}
+              </div>
             </div>
           </section>
 
@@ -1059,60 +1089,63 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 </div>
               </div>
             )}
-            {/* Sampling parameters — collapsed disclosure */}
-            {canEdit && (
-              <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden">
-                <button
-                  type="button"
-                  onClick={() => setAdvancedOpen((o) => !o)}
-                  className="flex items-center justify-between w-full px-3 py-2.5 text-sm font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
-                >
-                  <span>Sampling parameters</span>
-                  {advancedOpen ? <CaretUp size={13} /> : <CaretDown size={13} />}
-                </button>
-                {advancedOpen && (
-                  <div className="px-3 pb-3 space-y-4 border-t border-[var(--color-border)]">
-                    <RangeField
-                      label="Temperature"
-                      caption="Higher = more creative / less predictable (0–2, default 1)"
-                      value={temperature}
-                      min={0}
-                      max={2}
-                      step={0.05}
-                      onChange={(v) => { markDirty(); setTemperature(v) }}
-                      format={(v) => v.toFixed(2)}
-                    />
-                    <RangeField
-                      label="Max tokens"
-                      caption="Maximum length of each reply"
-                      value={maxTokens}
-                      min={256}
-                      max={32768}
-                      step={256}
-                      onChange={(v) => { markDirty(); setMaxTokens(v) }}
-                      format={(v) => v.toLocaleString()}
-                    />
-                    <RangeField
-                      label="Top P"
-                      caption="Nucleus sampling mass — 1.0 disables it (default 1)"
-                      value={topP}
-                      min={0}
-                      max={1}
-                      step={0.01}
-                      onChange={(v) => { markDirty(); setTopP(v) }}
-                      format={(v) => v.toFixed(2)}
-                    />
-                  </div>
-                )}
-              </div>
-            )}
+            {/* Sampling parameters — collapsed disclosure. Operator decision
+                2026-07-03: editable for locked core agents too (model,
+                sampling, rate limits, and execution knobs ARE mutable on the
+                backend for locked agents — only identity/soul/skills are
+                403'd). */}
+            <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setAdvancedOpen((o) => !o)}
+                className="flex items-center justify-between w-full px-3 py-2.5 text-sm font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
+              >
+                <span>Sampling parameters</span>
+                {advancedOpen ? <CaretUp size={13} /> : <CaretDown size={13} />}
+              </button>
+              {advancedOpen && (
+                <div className="px-3 pb-3 space-y-4 border-t border-[var(--color-border)]">
+                  <RangeField
+                    label="Temperature"
+                    caption="Higher = more creative / less predictable (0–2, default 1)"
+                    value={temperature}
+                    min={0}
+                    max={2}
+                    step={0.05}
+                    onChange={(v) => { markDirty(); setTemperature(v) }}
+                    format={(v) => v.toFixed(2)}
+                  />
+                  <RangeField
+                    label="Max tokens"
+                    caption="Maximum length of each reply"
+                    value={maxTokens}
+                    min={256}
+                    max={32768}
+                    step={256}
+                    onChange={(v) => { markDirty(); setMaxTokens(v) }}
+                    format={(v) => v.toLocaleString()}
+                  />
+                  <RangeField
+                    label="Top P"
+                    caption="Nucleus sampling mass — 1.0 disables it (default 1)"
+                    value={topP}
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    onChange={(v) => { markDirty(); setTopP(v) }}
+                    format={(v) => v.toFixed(2)}
+                  />
+                </div>
+              )}
+            </div>
           </section>
 
           {/* Sandbox — editable for ALL agents including locked core agents
-              (O13: locked status does NOT extend to the sandbox profile),
-              hidden for native workers (delegation-only labour agents; sandbox
-              is inherited from the caller). */}
-          {!isNativeWorkerAgent && (
+              (O13: locked status does NOT extend to the sandbox profile) and
+              for native Subagents (matrix: O or inherit); hidden ONLY for
+              subagent_3p (external-cli) — the external runner manages its
+              own isolation. */}
+          {!isExternalAgent && (
             <section className="space-y-3">
               <div className="flex items-center gap-2">
                 <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Sandbox</p>
@@ -1136,20 +1169,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                     >
                       This is a built-in core agent, but its sandbox profile is still editable.
                     </p>
-                  )}
-                  {isWorkerAgent && executor?.kind === 'external-cli' && sandboxProfile && sandboxProfile !== 'off' && (
-                    <div
-                      data-testid="sandbox-external-cli-ignored-callout"
-                      role="note"
-                      aria-live="polite"
-                      className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2.5"
-                    >
-                      <WarningCircle size={14} weight="fill" className="text-amber-400 shrink-0 mt-0.5" aria-hidden="true" />
-                      <p className="text-[11px] text-amber-200 leading-snug">
-                        Sandbox profile is ignored when executor.kind=external-cli.
-                        The external CLI manages its own isolation.
-                      </p>
-                    </div>
                   )}
                   <SandboxProfileSelector
                     value={sandboxProfile}
@@ -1205,7 +1224,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   const toolsPanel = (
     <div className="space-y-6">
 
-          {/* Fallback models */}
+          {/* Fallback models — hidden for subagent_3p (the runner manages
+              its own retries; the field is not settable for this type per
+              the field matrix). */}
+          {!isExternalAgent && (
           <section className="space-y-3">
             <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Fallback models</p>
             <p className="text-xs text-[var(--color-muted)]">Tried in order if the primary model fails.</p>
@@ -1360,9 +1382,13 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               </div>
             )}
           </section>
+          )}
 
-          {/* Tools & Permissions */}
-          {(!isNativeWorkerAgent || Object.keys(toolsCfg.builtin?.policies ?? {}).length > 0) && (
+          {/* Tools & Permissions — hidden for subagent_3p (the external
+              runner has its own tools; per-tool CLI flags govern instead
+              per the field matrix). Native workers (and every other kind)
+              get the LIVE editor — no more read-only collapse. */}
+          {!isExternalAgent && (
             <section className="space-y-3">
               <div className="flex items-center gap-2">
                 <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Tools &amp; Permissions</p>
@@ -1376,45 +1402,22 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   )
                 })()}
               </div>
-              {(() => {
-                const overrideCount = Object.keys(toolsCfg.builtin?.policies ?? {}).length
-                const collapseToReadOnly = isNativeWorkerAgent && overrideCount === 0
-                if (!collapseToReadOnly) {
-                  return (
-                    <ToolsAndPermissions
-                      agentId={agentId}
-                      agentType={agent.type}
-                      isLocked={isLocked}
-                      tools={toolsCfg}
-                      onChange={setToolsCfg}
-                    />
-                  )
-                }
-                return (
-                  <div
-                    data-testid="native-worker-tools-readonly"
-                    className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2.5"
-                  >
-                    <p className="text-sm text-[var(--color-secondary)]">
-                      Built-in tool policies (read-only)
-                    </p>
-                    <p className="text-[11px] text-[var(--color-muted)] leading-snug mt-0.5">
-                      Native workers run with a compiled allow/deny rail — the seeded
-                      system and memory entries cannot be edited from the UI. Add
-                      explicit overrides only if your task requires non-default behaviour;
-                      otherwise leave this empty to inherit the inherited rail.
-                    </p>
-                  </div>
-                )
-              })()}
+              <ToolsAndPermissions
+                agentId={agentId}
+                agentType={agent.type}
+                isLocked={isLocked}
+                tools={toolsCfg}
+                onChange={setToolsCfg}
+              />
             </section>
           )}
-
-          {/* Skills — Main/core agents only. Native workers were excluded per
-              M11; external-cli (subagent_3p) and remote runners can never load
-              Omnipus skills, so offering the mapping was a lie (P3 bug,
-              2026-07-03). */}
-          {!isWorkerAgent && (
+          {/* Skills — Main/core/Subagent (native worker). Per the field
+              matrix a native Subagent may optionally be granted skills (or
+              inherit); only subagent_3p (external-cli) hides this — an
+              external runner can never load Omnipus skills, so offering the
+              mapping was a lie (P3 bug, 2026-07-03; the old !isWorkerAgent
+              gate over-corrected and hid this for native Subagents too). */}
+          {!isExternalAgent && (
             <section className="space-y-3">
               <div className="flex items-center gap-2">
                 <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Skills</p>
@@ -1600,9 +1603,11 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   const advancedPanel = (
     <div className="space-y-6">
 
-          {/* Rate Limits — editable for unlocked agents, hidden for locked. */}
-          {!isLocked && (
-            <section className="space-y-3">
+          {/* Rate Limits — editable for ALL agents including locked core
+              agents (operator decision 2026-07-03: rate_limits is mutable on
+              the backend for locked agents — only identity/soul/skills are
+              403'd). */}
+          <section className="space-y-3">
               <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Rate Limits</p>
               <div className="space-y-3">
                 <div className="flex items-center justify-between py-1">
@@ -1613,7 +1618,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   <Switch
                     checked={useGlobalRateLimits}
                     onCheckedChange={(v) => { markDirty(); setUseGlobalRateLimits(v) }}
-                    disabled={!canEdit}
                   />
                 </div>
                 {!useGlobalRateLimits && (
@@ -1627,7 +1631,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                         onChange={(e) => { markDirty(); setMaxLlmCallsPerHour(e.target.value === '' ? '' : Number(e.target.value)) }}
                         placeholder="Unlimited"
                         className="text-xs h-8"
-                        disabled={!canEdit}
                       />
                     </div>
                     <div className="flex items-center gap-3">
@@ -1639,7 +1642,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                         onChange={(e) => { markDirty(); setMaxToolCallsPerMinute(e.target.value === '' ? '' : Number(e.target.value)) }}
                         placeholder="Unlimited"
                         className="text-xs h-8"
-                        disabled={!canEdit}
                       />
                     </div>
                     <div className="flex items-center gap-3">
@@ -1652,19 +1654,18 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                         onChange={(e) => { markDirty(); setMaxCostPerDay(e.target.value === '' ? '' : Number(e.target.value)) }}
                         placeholder="Unlimited"
                         className="text-xs h-8"
-                        disabled={!canEdit}
                       />
                     </div>
                   </div>
                 )}
               </div>
-            </section>
-          )}
+          </section>
 
-          {/* Execution — base agents and external-cli workers. Locked core
-              agents skip this sub-block (they run on a built-in policy). */}
-          {!isLocked && (
-            <section className="space-y-3">
+          {/* Execution — ALL agents including locked core agents (operator
+              decision 2026-07-03: timeout/max-tool-iterations/steering are
+              mutable on the backend for locked agents). Max tool calls
+              is further hidden for subagent_3p (see below). */}
+          <section className="space-y-3">
               <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Execution</p>
               <div className="space-y-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4">
                 <div className="flex items-center gap-3">
@@ -1694,34 +1695,40 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                     className="text-xs h-8"
                   />
                 </div>
-                <div className="flex items-center gap-3">
-                  <label className="text-xs text-[var(--color-muted)] w-44 shrink-0">
-                    Max tool calls per turn
-                    <span className="block text-[10px] text-[var(--color-muted)]/70">
-                      Per single turn (one message, task, or heartbeat run) — the
-                      turn pauses at the limit and can be continued. Default: 200.
-                    </span>
-                  </label>
-                  <Input
-                    type="number"
-                    min={1}
-                    data-testid="agent-max-tool-calls-input"
-                    value={maxToolIterationsDraft}
-                    onChange={(e) => {
-                      const raw = e.target.value
-                      setMaxToolIterationsDraft(raw)
-                      const parsed = Number(raw)
-                      // Commit (and autosave) only a real value >= 1; clearing
-                      // the field to type never persists a 0 again.
-                      if (raw !== '' && Number.isInteger(parsed) && parsed >= 1) {
-                        markDirty()
-                        setMaxToolIterations(parsed)
-                      }
-                    }}
-                    onBlur={() => setMaxToolIterationsDraft(String(maxToolIterations))}
-                    className="text-xs h-8"
-                  />
-                </div>
+                {/* Max tool calls per turn — excluded for subagent_3p (operator
+                    decision, agent-types-field-matrix.md "Open decisions" #1):
+                    the external CLI runs its own tool loop, and the backend
+                    now rejects the field for this type. */}
+                {!isExternalAgent && (
+                  <div className="flex items-center gap-3">
+                    <label className="text-xs text-[var(--color-muted)] w-44 shrink-0">
+                      Max tool calls per turn
+                      <span className="block text-[10px] text-[var(--color-muted)]/70">
+                        Per single turn (one message, task, or heartbeat run) — the
+                        turn pauses at the limit and can be continued. Default: 200.
+                      </span>
+                    </label>
+                    <Input
+                      type="number"
+                      min={1}
+                      data-testid="agent-max-tool-calls-input"
+                      value={maxToolIterationsDraft}
+                      onChange={(e) => {
+                        const raw = e.target.value
+                        setMaxToolIterationsDraft(raw)
+                        const parsed = Number(raw)
+                        // Commit (and autosave) only a real value >= 1; clearing
+                        // the field to type never persists a 0 again.
+                        if (raw !== '' && Number.isInteger(parsed) && parsed >= 1) {
+                          markDirty()
+                          setMaxToolIterations(parsed)
+                        }
+                      }}
+                      onBlur={() => setMaxToolIterationsDraft(String(maxToolIterations))}
+                      className="text-xs h-8"
+                    />
+                  </div>
+                )}
                 {/* Steering mode — Main only. Workers and subagent_3p do
                     not have a chat surface that consumes concurrent
                     messages, so steering is a Main concept. */}
@@ -1746,7 +1753,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 )}
               </div>
             </section>
-          )}
 
           {/* Executor summary — all workers (base + external). subagent_3p's
               full editor is in the Runtime tab. Locked core workers are
@@ -2028,17 +2034,15 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           it's their run-time surface; Behavior's persona/heartbeat sub-blocks
           don't apply). Schedules, Sessions, Activity stay collapsed — they're
           reference material, not editing surfaces. */}
-      {/* W6-C1 / M11: native-worker delegation-only callout. Native workers
-          (default executor.kind) are delegation-only labour agents — they
-          are not chat targets and they run with a compiled allow/deny
-          rail. Their Tools, Skills, and Sandbox settings are inherited
-          from the caller (the agent that delegates work to them) and
-          editing them on the worker has no runtime effect. Surface this
-          prominently at the top of the profile so the operator
-          understands why the lower accordions are absent (or collapsed
-          to a summary). External-cli workers DO need their own Tools /
-          Sandbox because the external runner respects them — the
-          callout only renders for native workers. */}
+      {/* W6-C1 / M11 (copy updated 2026-07-03 per agent-types-field-matrix.md):
+          native-worker delegation-only callout. Native Subagents are
+          delegation-only labour agents — they are not chat targets. Their
+          Tools, Skills, and Sandbox settings may be set explicitly below OR
+          left to inherit from the delegating caller at run time (matrix: O
+          or inherit) — unlike the old copy, editing them here DOES take
+          effect on a native (in-process) runtime. Surface this prominently
+          at the top of the profile so the operator understands the
+          delegation-only framing before touching the rest of the form. */}
       {isNativeWorkerAgent && (
         <div
           data-testid="native-worker-delegation-callout"
@@ -2057,11 +2061,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               This is a delegation-only worker
             </p>
             <p className="text-[12px] text-[var(--color-muted)] leading-snug mt-0.5">
-              Tools, Skills, and Sandbox settings are inherited from the
-              agent that delegates work to this worker and have no
-              effect on a native (in-process) runtime. Configure them on
-              the caller, or switch this worker to an external runtime
-              (Executor accordion) to make them local.
+              Never a chat target — this agent only runs when another agent
+              delegates a task to it. Tools, Skills, and Sandbox below may be
+              set explicitly or left to inherit from the delegating caller at
+              run time.
             </p>
           </div>
         </div>
@@ -2350,6 +2353,7 @@ function RangeField({ label, caption, value, min, max, step, onChange, format }:
       </div>
       <input
         type="range"
+        data-testid={`range-field-${label.toLowerCase().replace(/\s+/g, '-')}`}
         min={min}
         max={max}
         step={step}

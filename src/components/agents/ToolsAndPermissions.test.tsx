@@ -470,6 +470,94 @@ describe('ToolsAndPermissions — locked agent (B-2 / US-D5 / #332)', () => {
   })
 })
 
+// W2c — field matrix (docs/internal/architecture/agent-types-field-matrix.md):
+// tools_cfg is "—" for subagent_3p. The parent AgentProfile already hides the
+// whole Tools & Permissions section for external agents; this component adds
+// a defense-in-depth guard (disabled editor + explanatory notice + autosave
+// gated off) for any other caller.
+describe('ToolsAndPermissions — external-cli agent (subagent_3p) is read-only (field matrix, W2c)', () => {
+  it('shows the external-CLI explanatory notice for agentType=subagent_3p', async () => {
+    renderWithQuery(
+      <ToolsAndPermissions
+        agentId="ext-1"
+        agentType="subagent_3p"
+        tools={DEFAULT_TOOLS_CFG}
+        onChange={NOOP_CHANGE}
+      />
+    )
+    await waitFor(() => {
+      expect(screen.getByTestId('external-cli-tools-notice')).toBeInTheDocument()
+    })
+    // The locked-agent notice is a different message and must not co-render.
+    expect(screen.queryByTestId('locked-agent-readonly-notice')).toBeNull()
+  })
+
+  it('does NOT show the notice for a native agent kind (Main)', async () => {
+    renderWithQuery(
+      <ToolsAndPermissions
+        agentId="agent-1"
+        agentType="Main"
+        tools={DEFAULT_TOOLS_CFG}
+        onChange={NOOP_CHANGE}
+      />
+    )
+    await waitFor(() => {
+      expect(document.querySelector('[data-testid="tool-policy-editor"]')).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('external-cli-tools-notice')).toBeNull()
+  })
+
+  it('renders the ToolPolicyEditor disabled for agentType=subagent_3p', async () => {
+    renderWithQuery(
+      <ToolsAndPermissions
+        agentId="ext-1"
+        agentType="subagent_3p"
+        tools={DEFAULT_TOOLS_CFG}
+        onChange={NOOP_CHANGE}
+      />
+    )
+    await waitFor(() => {
+      expect(document.querySelector('[data-testid="preset-cautious"]')).toBeInTheDocument()
+    })
+    const cautious = document.querySelector('[data-testid="preset-cautious"]') as HTMLButtonElement
+    expect(cautious.disabled).toBe(true)
+  })
+
+  it('does NOT call updateAgentTools for agentType=subagent_3p even on a preset click attempt', async () => {
+    renderWithQuery(
+      <ToolsAndPermissions
+        agentId="ext-1"
+        agentType="subagent_3p"
+        tools={DEFAULT_TOOLS_CFG}
+        onChange={NOOP_CHANGE}
+      />
+    )
+    await waitFor(() => {
+      expect(document.querySelector('[data-testid="preset-cautious"]')).toBeInTheDocument()
+    })
+    // A disabled native <button> does not dispatch its click handler.
+    fireEvent.click(document.querySelector('[data-testid="preset-cautious"]')!)
+    await new Promise((r) => setTimeout(r, 50))
+    expect(api.updateAgentTools).not.toHaveBeenCalled()
+    expect(mockRunGated).not.toHaveBeenCalled()
+  })
+
+  it('does NOT show the AutoSaveIndicator save-status row for agentType=subagent_3p', async () => {
+    renderWithQuery(
+      <ToolsAndPermissions
+        agentId="ext-1"
+        agentType="subagent_3p"
+        tools={DEFAULT_TOOLS_CFG}
+        onChange={NOOP_CHANGE}
+      />
+    )
+    await waitFor(() => {
+      expect(document.querySelector('[data-testid="tool-policy-editor"]')).toBeInTheDocument()
+    })
+    expect(screen.queryByText(/override.*Default:/i)).toBeNull()
+  })
+})
+
 describe('ToolsAndPermissions — no spurious PUT on tab open (bug fix)', () => {
   it('does NOT call updateAgentTools when the Tools tab opens and data arrives from server', async () => {
     // This is the core regression test. When agentToolsData arrives from the
