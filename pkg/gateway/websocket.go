@@ -222,7 +222,7 @@ type WSHandler struct {
 	// Injected at boot by the gateway after construction.  Nil until then.
 	approvalRegV2 *approvalRegistryV2
 
-	// devicePairingRegistry tracks in-flight device pairing requests awaiting admin approval.
+	// devicePairingRegistry tracks in-flight device pairing requests awaiting operator approval.
 	devicePairingRegistry *devicePairingRegistry
 
 	// pairingStore is the global device pairing state (pending + paired devices).
@@ -297,7 +297,7 @@ type wsConn struct {
 
 	// pairingSubs tracks which channels this connection wants whatsapp_pairing
 	// (QR/status) frames for, so the QR secret is delivered only to the operator
-	// viewing that channel's pairing UI rather than every admin tab (#283,
+	// viewing that channel's pairing UI rather than every connected tab (#283,
 	// Option B). Guarded by pairingSubsMu; written by the inbound read loop and
 	// read by the event forwarder. Nil until the first subscribe.
 	pairingSubsMu sync.Mutex
@@ -1256,8 +1256,8 @@ func (h *WSHandler) handleChatMessage(
 			CanonicalID: "webchat_user",
 		},
 		// FR-017: carry the WS-authenticated gateway principal (set at auth
-		// time, e.g. "cli" or an admin username) so the agent loop can stamp
-		// audit.Entry.User for turn attribution. This is the ONLY site that sets
+		// time, e.g. "cli" or the account's username) so the agent loop can
+		// stamp audit.Entry.User for turn attribution. This is the ONLY site that sets
 		// GatewayUserID — it is a dedicated carrier, NOT Sender.Username, so that
 		// platform channels (which fill Sender.Username with the platform handle)
 		// can never have their sender misattributed as a gateway principal.
@@ -2471,7 +2471,7 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 			// #283: WhatsApp linked-device pairing (QR + status). Not tied to a
 			// chatID. Delivered only to connections that subscribed to this
 			// channel's pairing UI (Option B), so the QR pairing secret isn't
-			// broadcast to every authenticated admin tab.
+			// broadcast to every connected tab.
 			p, ok := evt.Payload.(agent.WhatsAppPairingPayload)
 			if !ok {
 				continue
@@ -2558,7 +2558,7 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 		case agent.EventKindTaskStatusChanged:
 			// A workflow task's status changed (queued→running→completed/failed).
 			// Not tied to a specific chatID — broadcast to every connection so
-			// any admin viewing the tasks board sees live updates. The SPA
+			// anyone viewing the tasks board sees live updates. The SPA
 			// invalidates its tasks TanStack Query cache on receipt.
 			p, ok := evt.Payload.(agent.TaskStatusChangedPayload)
 			if !ok {
