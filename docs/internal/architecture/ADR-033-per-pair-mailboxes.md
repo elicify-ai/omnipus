@@ -1,0 +1,50 @@
+# ADR-033: Per-(Agent, Workspace) Email Mailboxes
+
+- **Status:** **Accepted** (2026-07-03, retroactive — ratifies operator decisions made live during the 2026-07-03 session; implemented on `hotfix/v0.1.1`, commits `6e3bdbe8` (pair model), `b85766c1` (test migration), `bf7dd681` (7-reviewer fix wave). Written after implementation at the architect reviewer's recommendation: the shipped model contradicted the locked `.preview-doc/channels.html` ownership statement, and the only prior paper trail was commit messages.)
+- **Date:** 2026-07-03
+- **Deciders:** Daniel Piatkowski (operator, all three decisions verbatim in session), architecture
+- **Supersedes:** the mailbox-ownership statements in `.preview-doc/channels.html` (locked 2026-06-21): *"Keyed by (agent, workspace) 1:1 — one mailbox per agent, living in one workspace"* and the *"v0.3: per-agent mailboxes (cap lifts)"* milestone. A dated supersession note has been added to that document.
+- **Release phase note:** this is workspace-topology-adjacent work that CLAUDE.md's routing rule assigns to v0.3, shipped on `hotfix/v0.1.1` by explicit operator direction during a live UX session (the same session that shipped the ADR-031 connectors work this builds on). The timing trade-off was deliberate: the mailbox feature was actively broken (the SPA called a dead endpoint), and fixing it surfaced the ownership question immediately.
+
+---
+
+## 1. Problem
+
+M11 shipped email as a TOOL surface (not a conversational channel): one mailbox account (IMAP/SMTP credentials), owned by exactly one agent, surfacing in exactly one workspace, with a **cap of one mailbox per workspace** enforced by `ValidateMailboxesCap1`/`ErrMailboxesCap1Violated`. The SPA configured it through the legacy `/channels/email` path, which the ADR-029 instance-key grammar gate had silently killed (email is deliberately not a channel type → 400 on every verb; the panel hung on skeletons forever).
+
+Repairing the dead seam re-opened the ownership question. The operator decided, in three explicit steps during the session:
+
+1. *"Remove the policy check, enable mailboxes for everyone"* — every agent may own a mailbox (cap-1-per-workspace removed).
+2. *"That is not right, it should be for all channel combination of agent and workspace — an agent can have in different workspaces different roles"* — the unit of ownership is the **(agent, workspace) pair**: the same agent holds a *different* mailbox in each workspace, because it plays different roles there.
+3. The email tools must resolve which mailbox to use **structurally, never via a model-supplied parameter** (operator, verbatim: "the tool must detect it on its own; this can not be a parameter set by the LLM").
+
+## 2. Decision
+
+**A mailbox belongs to one (agent, workspace) pair. Any number of pairs may exist.**
+
+- **Config:** `Config.Mailboxes` is `MailboxesConfig = map[agentID]map[workspaceID]MailboxConfig` (`pkg/config/config.go`). The inner map key is the authoritative workspace address; `MailboxConfig.WorkspaceID` is a mirror normalized on load. A custom `UnmarshalJSON` migrates the legacy flat agent-keyed shape (lifted under its embedded `workspace_id`; workspace-less legacy entries dropped with WARN). Shape detection is **strict**: all-objects = nested, all-scalars = legacy, a mix = hard load error (one corrupt value must not silently destroy a valid multi-workspace roster — reviewer finding, fixed in `bf7dd681`).
+- **Wire (contract-first #8):** `GET/PUT/DELETE /api/v1/agents/{id}/mailboxes/{workspaceId}` — the pair rides in the path, `MailboxConfigureRequest` carries no `workspace_id` (the body cannot disagree with the path; precedent: `/workspaces/{id}/milestones/{milestoneId}`). `GET /api/v1/mailboxes` lists every pair and never 404s (empty list = none) so the SPA needs no per-agent probe requests (whose 404s polluted the console and would trip the e2e zero-console-errors gate). `Mailbox.workspace_id` is **required** on the wire, serialized from the authoritative pair key — never from the mutable mirror.
+- **Credentials:** stored per pair — `mailbox_<agentID>_<workspaceID>_password` (AES-256-GCM store, SEC-23). Legacy per-agent refs (`mailbox_<agentID>_password`) are honored as-stored for migrated configs; new writes always use the pair key; delete cleans up both.
+- **Tools:** the five email tools (`read_inbox · search_email · read_message · send_email · reply`) are registered **once per agent** that owns ≥1 enabled, password-resolvable pair. Each tool holds the agent's full `tools.EmailTransports` (workspace → transport map) and resolves the active workspace from the turn context via `tools.ToolWorkspaceID(ctx)` — the same context stamp the memory/task/todo tools use. Resolution rules (test-pinned): bound workspace → that mailbox only; bound workspace without a mailbox → error naming the workspaces that do have one; unbound turn + exactly one mailbox → graceful fallback; unbound + several → refuse to guess. There is **no tool parameter** for workspace or mailbox; the model cannot address another workspace's or agent's inbox.
+- **Inbound:** the heartbeat drainer creates Board tasks for unhandled mail **in the mailbox's own workspace**, assigned to its owning agent — multiple inboxes per workspace stay unambiguous because each task carries its pair's identity.
+- **Tool policy:** enabling a mailbox fills in missing `allow` entries for the five email tools on deny-by-default agents (`grantEmailToolAllows`). Rationale: only the Assistant seed carried the allows (M11's "the Assistant owns the mailbox" assumption), so a mailbox configured for any other agent registered tools that policy silently hid. Enabling a mailbox is the operator's explicit opt-in — the wire contract's `enabled` field literally means "register the email tools." Explicit operator-set entries (allow/ask/deny) are never overridden; only missing entries are filled. **This is a second documented exception to Hard Constraint #6's deny-by-default posture** (the first: workspace shell tools under an active sandbox). There is deliberately no revoke-on-delete: granted entries are indistinguishable from operator-set ones, and tool *registration* is separately gated on live mailbox presence, so the policy entries are inert without a mailbox.
+- **Lifecycle:** mailbox save 404s when the target workspace does not exist (same `loadWorkspace` idiom as every workspace-scoped handler). Workspace deletion cascades over bound mailboxes (config entries + per-pair credentials), mirroring the ADR-029 `unbindChannelInstancesForWorkspace` precedent, best-effort with logging.
+- **Move semantics (UI):** changing a mailbox's agent or workspace is a **move** = save-new-pair-first, delete-old-only-on-success (a failed move leaves the old mailbox intact). Because credentials are pair-keyed, a move can never carry the old password — the panel **requires re-entering it** with honest help text, and suppresses the "(stored)" hint while a move is pending. Creating or moving onto a pair that already has a mailbox is blocked in the panel (the PUT is an upsert; unguarded it would silently overwrite).
+
+## 3. Alternatives considered
+
+- **Keep 1:1 (one mailbox per agent, in one workspace)** — the locked preview-doc model. Rejected by the operator: an agent's role differs per workspace, and its inbox should too. The 1:1 model also forced the "which workspace does the Assistant's mail land in" question to have exactly one answer per agent forever.
+- **One mailbox per workspace (the M11 cap)** — rejected first; it prevented multiple agents in one workspace from having their own inboxes.
+- **Mailbox as a channel instance (ADR-029 machinery)** — rejected earlier by M11 and reaffirmed: email is pull-on-heartbeat over tools, not a push conversational stream; wedging it into the channel manager would buy nothing but the singleton problems channels just escaped.
+- **Backend "rename pair" endpoint for moves** (re-points the credential instead of requiring re-entry) — deferred. Require-password-on-move is honest, simple, and shipped; a rename endpoint is additive if move friction proves real.
+
+## 4. Open decision points (explicitly unresolved)
+
+- **`core_team` alignment (pending operator decision):** ADR-029 requires a channel-bound agent to be a `core_team` member of the workspace; mailboxes currently have **no such check** — any agent may hold a mailbox in any existing workspace. The operator was asked and has not yet decided (session 2026-07-03; question stands). Until decided, the divergence is deliberate-by-default: mailboxes are a tool surface, not chat routing. If "require core_team" is chosen: backend 422 + the panel filters agents by the selected workspace's team (same UX as channel binding).
+- **v0.3 reconciliation:** the Workspaces redesign should treat this ADR as the canonical mailbox model and update the concept docs accordingly (the preview-doc's Email sections now carry a supersession note rather than a rewrite).
+
+## 5. Consequences
+
+- Positive: per-role inboxes; multiple agents' mailboxes per workspace; structural workspace isolation at the tool layer; no silent-dead-tools for non-Assistant agents; clean migration of existing configs; list endpoint with no console-visible probe noise.
+- Negative / accepted: a move requires retyping the password (credential is pair-keyed); the policy grant is a documented constraint-#6 exception without revoke symmetry; two implementations of the legacy-shape fold exist (typed `UnmarshalJSON` for reads; raw-map fold in the gateway write path, which must preserve unknown fields — deliberately not merged, cross-referenced in comments, same strict rule enforced in both, drift guarded by tests).
+- Test surface: migration (nested/legacy/mixed-document/malformed-mixed), pair CRUD incl. same-agent-two-workspaces and delete-isolation, per-pair credential keys + legacy cleanup, workspace-resolution matrix, end-to-end tool wiring, policy-grant semantics, cascade, move safety, duplicate-pair guard — all on `hotfix/v0.1.1`, CI green.
