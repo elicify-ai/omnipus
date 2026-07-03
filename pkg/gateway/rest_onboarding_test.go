@@ -375,7 +375,7 @@ func TestHandleCompleteOnboarding_ThenLogin(t *testing.T) {
 	// Step 3: Validate the login token.
 	// HandleValidateToken expects UserContextKey set by withAuth middleware.
 	// In unit tests we inject it manually, simulating what withAuth does.
-	adminUser := &config.UserConfig{Username: "admin", Role: config.UserRoleAdmin}
+	adminUser := &config.UserConfig{Username: "admin"}
 	validateReq := httptest.NewRequest(http.MethodGet, "/api/v1/auth/validate", nil)
 	validateReq.Header.Set("Authorization", "Bearer "+loginToken)
 	validateReq = validateReq.WithContext(context.WithValue(validateReq.Context(), UserContextKey{}, adminUser))

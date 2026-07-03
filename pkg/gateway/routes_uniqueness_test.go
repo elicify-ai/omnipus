@@ -16,10 +16,10 @@ import (
 // TestRegisterHTTPHandler_NoDuplicatePatterns guards against the class of bug
 // where two route registrations for the same path silently collide — Go's
 // underlying mux takes the last registration, which can downgrade a fully
-// wrapped chain (withAuth → RequireAdmin → CSRF → RequireNotBypass) to a
-// lighter one without anyone noticing. This exact scenario shipped in commit
-// edb5a57 and had to be fixed in b95edc4; the test is the structural
-// defense so it never recurs.
+// wrapped chain (withAuth → CSRF → RequireNotBypass) to a lighter one
+// without anyone noticing. This exact scenario shipped in commit edb5a57
+// and had to be fixed in b95edc4; the test is the structural defense so it
+// never recurs.
 //
 // Implementation: scan the compiled `rest.go` source for every
 // `cm.RegisterHTTPHandler("<pattern>", ...)` call and assert each literal

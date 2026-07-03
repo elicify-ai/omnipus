@@ -36,23 +36,22 @@ import (
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 // withAdminChannelCtx seeds the request context the way the production
-// withAuth + configSnapshotMiddleware chain does for an authenticated admin:
-// an admin RoleContextKey and a non-bypass *config.Config snapshot. The create
-// and delete channel verbs are now admin-gated via adminWrap
-// (withAuth → RequireAdmin → RequireNotBypass) inside HandleChannels, so a
-// direct HandleChannels call must supply both or the admin chain rejects it
-// (401 for a missing role, 503 for a missing/bypass config snapshot).
+// withAuth + configSnapshotMiddleware chain does for an authenticated
+// caller: a non-bypass *config.Config snapshot. The create and delete
+// channel verbs are gated via requireAdminAuthz (RequireNotBypass) inside
+// HandleChannels — under the single-user model there is no separate role
+// check, so a direct HandleChannels call only needs the config snapshot (503
+// for a missing/bypass config snapshot).
 func withAdminChannelCtx(api *restAPI, r *http.Request) *http.Request {
-	ctx := context.WithValue(r.Context(), RoleContextKey{}, config.UserRoleAdmin)
 	// Provide a non-bypass config snapshot so RequireNotBypass lets the request
 	// through. api.agentLoop.GetConfig() has DevModeBypass=false by default in the
 	// test fixture.
-	ctx = context.WithValue(ctx, ctxkey.ConfigContextKey{}, api.agentLoop.GetConfig())
+	ctx := context.WithValue(r.Context(), ctxkey.ConfigContextKey{}, api.agentLoop.GetConfig())
 	return r.WithContext(ctx)
 }
 
-// createChannelInstanceReq issues POST /api/v1/channels with the given JSON body
-// as an authenticated admin (create is admin-gated).
+// createChannelInstanceReq issues POST /api/v1/channels with the given JSON
+// body as an authenticated caller (create is bypass-gated).
 func createChannelInstanceReq(t *testing.T, api *restAPI, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/channels",
@@ -65,7 +64,7 @@ func createChannelInstanceReq(t *testing.T, api *restAPI, body string) *httptest
 }
 
 // deleteChannelInstanceReq issues DELETE /api/v1/channels/{id} as an
-// authenticated admin (delete is admin-gated).
+// authenticated caller (delete is bypass-gated).
 func deleteChannelInstanceReq(t *testing.T, api *restAPI, channelID string) *httptest.ResponseRecorder {
 	t.Helper()
 	r := httptest.NewRequest(http.MethodDelete, "/api/v1/channels/"+channelID, nil)
@@ -675,87 +674,6 @@ func TestListChannels_TwoSameTypeInstances_TwoDistinctEntries(t *testing.T) {
 		}
 	}
 	assert.Equal(t, 1, telegramCount, "telegram (no instance) must appear exactly once")
-}
-
-// ── FINAL-REVIEW MEDIUM: create/delete are admin-gated ───────────────────────
-
-// TestCreateChannelInstance_NonAdmin_Forbidden used to verify POST /channels
-// is admin-only: an authenticated non-admin user gets 403 and nothing is
-// persisted. Single-user model (operator directive, 2026-07): a
-// Gateway.Users entry that requests role="user" is normalized to admin by
-// config.LoadConfig's load-time self-heal (config.normalizeAdminOnlyRoles)
-// before it can ever reach request handling. RequireAdmin's code is
-// unchanged (still denies a literal non-admin role) but no authenticated
-// caller can carry one anymore. This test is deliberately flipped (not
-// deleted) to prove the new outcome: the SAME "user"-configured account
-// that used to be denied here now succeeds, via the real config-loading
-// choke point rather than a hand-asserted role literal.
-func TestCreateChannelInstance_NonAdmin_Forbidden(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-
-	resolvedRole := normalizedRoleForUser(t, "bob", "user")
-	require.Equal(t, config.UserRoleAdmin, resolvedRole,
-		"single-user model: config.LoadConfig must normalize role=user to admin")
-
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/channels",
-		strings.NewReader(`{"type":"whatsapp","slug":"eu"}`))
-	r.Header.Set("Content-Type", "application/json")
-	ctx := context.WithValue(r.Context(), RoleContextKey{}, resolvedRole)
-	ctx = context.WithValue(ctx, ctxkey.ConfigContextKey{}, api.agentLoop.GetConfig())
-	w := httptest.NewRecorder()
-	api.HandleChannels(w, r.WithContext(ctx))
-
-	require.Equal(t, http.StatusCreated, w.Code,
-		"normalized-to-admin caller's POST /channels must succeed; body=%s", w.Body.String())
-	_, exists := api.agentLoop.GetConfig().Channels["whatsapp.eu"]
-	assert.True(t, exists, "the create must persist the channel instance")
-}
-
-// TestCreateChannelInstance_NoRole_Unauthorized verifies POST /channels with no
-// role in context (unauthenticated at the admin layer) is 401.
-func TestCreateChannelInstance_NoRole_Unauthorized(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/channels",
-		strings.NewReader(`{"type":"whatsapp","slug":"eu"}`))
-	r.Header.Set("Content-Type", "application/json")
-	// No RoleContextKey; provide a config snapshot so we isolate the 401 (missing
-	// role) from the 503 (missing config) path.
-	ctx := context.WithValue(r.Context(), ctxkey.ConfigContextKey{}, api.agentLoop.GetConfig())
-	w := httptest.NewRecorder()
-	api.HandleChannels(w, r.WithContext(ctx))
-
-	assert.Equal(t, http.StatusUnauthorized, w.Code,
-		"POST /channels with no role must be 401; body=%s", w.Body.String())
-}
-
-// TestDeleteChannelInstance_NonAdmin_Forbidden used to verify DELETE
-// /channels/{id} is admin-only: an authenticated non-admin gets 403 and the
-// instance survives. Single-user model (operator directive, 2026-07): same
-// normalization as TestCreateChannelInstance_NonAdmin_Forbidden — a
-// Gateway.Users entry that requests role="user" is normalized to admin by
-// config.LoadConfig's load-time self-heal before it ever reaches request
-// handling, so this test is deliberately flipped (not deleted) to prove the
-// new outcome: the normalized-to-admin caller's delete now succeeds and the
-// instance is removed.
-func TestDeleteChannelInstance_NonAdmin_Forbidden(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-	seedChannelInstance(t, api, "whatsapp.eu")
-
-	resolvedRole := normalizedRoleForUser(t, "bob", "user")
-	require.Equal(t, config.UserRoleAdmin, resolvedRole,
-		"single-user model: config.LoadConfig must normalize role=user to admin")
-
-	r := httptest.NewRequest(http.MethodDelete, "/api/v1/channels/whatsapp.eu", nil)
-	ctx := context.WithValue(r.Context(), RoleContextKey{}, resolvedRole)
-	ctx = context.WithValue(ctx, ctxkey.ConfigContextKey{}, api.agentLoop.GetConfig())
-	w := httptest.NewRecorder()
-	api.HandleChannels(w, r.WithContext(ctx))
-
-	assert.Equal(t, http.StatusNoContent, w.Code,
-		"normalized-to-admin caller's DELETE must succeed; body=%s", w.Body.String())
-	_, exists := api.agentLoop.GetConfig().Channels["whatsapp.eu"]
-	assert.False(t, exists, "the delete must remove the instance")
 }
 
 // ── FINAL-REVIEW MEDIUM: delete emits an audit event ─────────────────────────

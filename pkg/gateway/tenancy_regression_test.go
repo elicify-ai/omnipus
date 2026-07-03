@@ -109,10 +109,10 @@ func TestTask_CrossOwnerMilestoneFK_Accepted(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	r.URL.Path = "/api/v1/tasks"
-	r = r.WithContext(contextWithUserRole(r.Context(), "bob", config.UserRoleUser))
+	r = r.WithContext(contextWithUser(r.Context(), "bob"))
 	api.agentLoop.GetConfig().Gateway.Users = []config.UserConfig{
-		{Username: "alice", Role: config.UserRoleUser},
-		{Username: "bob", Role: config.UserRoleUser},
+		{Username: "alice"},
+		{Username: "bob"},
 	}
 
 	api.HandleTasks(w, r)
@@ -143,7 +143,7 @@ func TestTenancy_MultiUser_CrossOwnerWorkspace_Returns200(t *testing.T) {
 		strings.NewReader(`{"name":"Alice Workspace"}`))
 	r.Header.Set("Content-Type", "application/json")
 	r.URL.Path = "/api/v1/workspaces"
-	r = r.WithContext(contextWithUserRole(r.Context(), "alice", config.UserRoleAdmin))
+	r = r.WithContext(contextWithUser(r.Context(), "alice"))
 	api.HandleWorkspaces(w, r)
 	require.Equal(t, http.StatusCreated, w.Code, "alice must be able to create a workspace; body=%s", w.Body.String())
 	var ws gen.Workspace
@@ -151,15 +151,15 @@ func TestTenancy_MultiUser_CrossOwnerWorkspace_Returns200(t *testing.T) {
 
 	// Enable multi-user mode by adding two users to the config.
 	api.agentLoop.GetConfig().Gateway.Users = []config.UserConfig{
-		{Username: "alice", Role: config.UserRoleAdmin},
-		{Username: "bob", Role: config.UserRoleUser},
+		{Username: "alice"},
+		{Username: "bob"},
 	}
 
 	// bob GETs alice's workspace — must succeed (FR-1.9: owner is attribution-only).
 	ww := httptest.NewRecorder()
 	rr := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/"+ws.Id, nil)
 	rr.URL.Path = "/api/v1/workspaces/" + ws.Id
-	rr = rr.WithContext(contextWithUserRole(rr.Context(), "bob", config.UserRoleUser))
+	rr = rr.WithContext(contextWithUser(rr.Context(), "bob"))
 	api.HandleWorkspaces(ww, rr)
 	assert.Equal(t, http.StatusOK, ww.Code,
 		"bob must be able to GET alice's workspace in multi-user mode (FR-1.9); body=%s", ww.Body.String())
@@ -192,14 +192,14 @@ func TestTenancy_SingleUser_SharedWorkspace_Accessible(t *testing.T) {
 
 	// Single-user mode: only one user in config.
 	api.agentLoop.GetConfig().Gateway.Users = []config.UserConfig{
-		{Username: "alice", Role: config.UserRoleUser},
+		{Username: "alice"},
 	}
 
 	// alice can GET the unowned workspace in single-user mode.
 	ww := httptest.NewRecorder()
 	rr := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/"+ws.Id, nil)
 	rr.URL.Path = "/api/v1/workspaces/" + ws.Id
-	rr = rr.WithContext(contextWithUserRole(rr.Context(), "alice", config.UserRoleUser))
+	rr = rr.WithContext(contextWithUser(rr.Context(), "alice"))
 	api.HandleWorkspaces(ww, rr)
 	assert.Equal(t, http.StatusOK, ww.Code,
 		"alice can access unowned workspace in single-user mode; body=%s", ww.Body.String())
@@ -356,7 +356,7 @@ func TestTenancy_MultiUser_CrossOwnerTask_Returns200(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(taskBody))
 	r.Header.Set("Content-Type", "application/json")
 	r.URL.Path = "/api/v1/tasks"
-	r = r.WithContext(contextWithUserRole(r.Context(), "alice", config.UserRoleAdmin))
+	r = r.WithContext(contextWithUser(r.Context(), "alice"))
 	api.HandleTasks(w, r)
 	require.Equal(t, http.StatusCreated, w.Code)
 	var createdTask gen.Task
@@ -375,8 +375,8 @@ func TestTenancy_MultiUser_CrossOwnerTask_Returns200(t *testing.T) {
 
 	// Enable multi-user mode.
 	api.agentLoop.GetConfig().Gateway.Users = []config.UserConfig{
-		{Username: "alice", Role: config.UserRoleAdmin},
-		{Username: "bob", Role: config.UserRoleUser},
+		{Username: "alice"},
+		{Username: "bob"},
 	}
 
 	// bob GETs alice's task — FR-1.9: must succeed.
@@ -384,7 +384,7 @@ func TestTenancy_MultiUser_CrossOwnerTask_Returns200(t *testing.T) {
 		ww := httptest.NewRecorder()
 		rr := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/"+createdTask.Id, nil)
 		rr.URL.Path = "/api/v1/tasks/" + createdTask.Id
-		rr = rr.WithContext(contextWithUserRole(rr.Context(), "bob", config.UserRoleUser))
+		rr = rr.WithContext(contextWithUser(rr.Context(), "bob"))
 		api.HandleTasks(ww, rr)
 		assert.Equal(t, http.StatusOK, ww.Code,
 			"bob's GET on alice's task must return 200 (FR-1.9); body=%s", ww.Body.String())
@@ -399,7 +399,7 @@ func TestTenancy_MultiUser_CrossOwnerTask_Returns200(t *testing.T) {
 			strings.NewReader(`{"status":"next","description":"bob's update"}`))
 		rr.Header.Set("Content-Type", "application/json")
 		rr.URL.Path = "/api/v1/tasks/" + createdTask.Id
-		rr = rr.WithContext(contextWithUserRole(rr.Context(), "bob", config.UserRoleUser))
+		rr = rr.WithContext(contextWithUser(rr.Context(), "bob"))
 		api.HandleTasks(ww, rr)
 		assert.Equal(t, http.StatusOK, ww.Code,
 			"bob's PATCH on alice's task must return 200 (FR-1.9); body=%s", ww.Body.String())

@@ -25,7 +25,6 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/audit"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/gateway/ctxkey"
-	"github.com/dapicom-ai/omnipus/pkg/gateway/middleware"
 )
 
 // sandboxConfigPUT issues PUT /api/v1/security/sandbox-config with the
@@ -265,7 +264,6 @@ func TestHandleSandboxConfig_SSRFAllowInternal_WildcardLogged(t *testing.T) {
 
 	ctx := context.WithValue(context.Background(), ctxkey.UserContextKey{},
 		&config.UserConfig{Username: "alice"})
-	ctx = context.WithValue(ctx, RoleContextKey{}, config.UserRoleAdmin)
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/sandbox-config",
@@ -333,80 +331,6 @@ func TestHandleSandboxConfig_PartialRestartFlag(t *testing.T) {
 	assert.Equal(t, true, resp["requires_restart"])
 }
 
-// TestHandleSandboxConfig_NonAdmin403 used to verify that a user-role GET
-// receives 403 Forbidden. Under the single-user model (operator directive:
-// "we have now a one user instance ... remove the admin only logic from the
-// entire system"), a Gateway.Users entry that requests role="user" is
-// normalized to admin by config.LoadConfig's load-time self-heal
-// (config.normalizeAdminOnlyRoles) before it can ever reach request
-// handling — the sandbox-config "god-mode toggle" is exactly the endpoint
-// the operator flagged as still gating on the retired admin/user
-// distinction. RequireAdmin's code is unchanged (still denies a literal
-// non-admin role) but no authenticated caller can carry one anymore. This
-// test is deliberately flipped (not deleted) to prove the new outcome: the
-// SAME "user"-configured account that used to be denied here now succeeds,
-// via the real config-loading choke point rather than a hand-asserted role
-// literal. Uses GET (not PUT) to isolate the admin gate from the unrelated
-// FR-12.2 re-auth-consent gate that putSandboxConfig separately enforces.
-func TestHandleSandboxConfig_NonAdmin403(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-
-	resolvedRole := normalizedRoleForUser(t, "bob", "user")
-	require.Equal(t, config.UserRoleAdmin, resolvedRole,
-		"single-user model: config.LoadConfig must normalize role=user to admin")
-
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodGet, "/api/v1/security/sandbox-config", nil)
-	ctx := context.WithValue(r.Context(), ctxkey.RoleContextKey{}, resolvedRole)
-	r = r.WithContext(ctx)
-	middleware.RequireAdmin(http.HandlerFunc(api.HandleSandboxConfig)).ServeHTTP(w, r)
-	assert.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-}
-
-// TestHandleSandboxConfig_PUT_NormalizedAdmin_EndToEnd proves a real
-// single-user-model account can complete the state-changing PUT — the
-// actual god-mode-toggle surface — end-to-end with a valid re-auth token.
-// TestHandleSandboxConfig_NonAdmin403 above deliberately narrows its
-// coverage to GET to isolate the RequireAdmin gate from the unrelated
-// FR-12.2 re-auth-consent gate that putSandboxConfig separately enforces;
-// this test fills that gap. It drives the full inner admin chain
-// (RequireAdmin → RequireNotBypass, mirroring adminWrap's production
-// ordering minus withAuth — the bearer-token half of withAuth is exercised
-// elsewhere, e.g. TestAdminRoutes_UnauthenticatedRequestsRejected) plus a
-// freshly minted re-auth consent token, for a Gateway.Users account that was
-// seeded with role="user" and normalized to admin by config.LoadConfig —
-// proving the single-user model reaches all the way through the PUT, not
-// just the GET.
-func TestHandleSandboxConfig_PUT_NormalizedAdmin_EndToEnd(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-
-	resolvedUser := normalizedUserForRole(t, "bob", "user")
-	require.Equal(t, config.UserRoleAdmin, resolvedUser.Role,
-		"single-user model: config.LoadConfig must normalize role=user to admin")
-
-	token, err := api.reauthStoreOrInit().mint(resolvedUser.Username)
-	require.NoError(t, err, "minting a re-auth consent token must not fail")
-
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/sandbox-config",
-		strings.NewReader(`{"mode":"permissive"}`))
-	r.Header.Set("Content-Type", "application/json")
-	r.Header.Set(reAuthHeader, token)
-	ctx := context.WithValue(r.Context(), UserContextKey{}, resolvedUser)
-	ctx = context.WithValue(ctx, RoleContextKey{}, resolvedUser.Role)
-	ctx = context.WithValue(ctx, ctxkey.ConfigContextKey{}, api.agentLoop.GetConfig())
-	r = r.WithContext(ctx)
-
-	w := httptest.NewRecorder()
-	api.requireAdminAuthz(api.HandleSandboxConfig)(w, r)
-
-	require.Equal(t, http.StatusOK, w.Code,
-		"normalized-to-admin caller with a valid re-auth token must complete the PUT end-to-end; body: %s",
-		w.Body.String())
-	var resp map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, true, resp["saved"])
-}
-
 func TestHandleSandboxConfig_MethodNotAllowed(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	w := httptest.NewRecorder()
@@ -436,7 +360,6 @@ func TestHandleSandboxConfig_EmitsAuditEntry(t *testing.T) {
 	// of EmitSecuritySettingChange in pkg/audit.
 	ctx := context.WithValue(context.Background(), ctxkey.UserContextKey{},
 		&config.UserConfig{Username: "admin"})
-	ctx = context.WithValue(ctx, RoleContextKey{}, config.UserRoleAdmin)
 
 	require.NoError(t, audit.EmitSecuritySettingChange(
 		ctx, logger,

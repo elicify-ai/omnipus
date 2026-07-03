@@ -91,8 +91,8 @@ func collectPaths(body map[string]any) map[string]struct{} {
 				next = prefix + "." + k
 			}
 			// Keys that already contain dots are treated as dotted paths —
-			// merging with any ancestor prefix so {"gateway":{"users.role":...}}
-			// is recorded as "gateway.users.role" (no special-case needed;
+			// merging with any ancestor prefix so {"gateway":{"users.username":...}}
+			// is recorded as "gateway.users.username" (no special-case needed;
 			// standard string concatenation does the right thing).
 			walk(next, child)
 		}

@@ -7,12 +7,24 @@
 package middleware
 
 import (
+	"encoding/json"
 	"log/slog"
 	"net/http"
 
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/gateway/ctxkey"
 )
+
+// writeJSONErr writes {"error": msg} with the given HTTP status. A post-header
+// encode failure is unactionable (the status is already on the wire) and is
+// logged at debug level; the caller still sees the correct status.
+func writeJSONErr(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(map[string]string{"error": msg}); err != nil {
+		slog.Debug("writeJSONErr: encode failed", "error", err)
+	}
+}
 
 // RequireNotBypass gates admin-only user-management and security-setting
 // endpoints. When gateway.dev_mode_bypass is true every request is auth'd

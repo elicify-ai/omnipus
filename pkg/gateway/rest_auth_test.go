@@ -463,7 +463,6 @@ func TestHandleValidateToken_ValidToken(t *testing.T) {
 	// after a successful config reload).
 	testUser := &config.UserConfig{
 		Username: "testuser",
-		Role:     config.UserRoleAdmin,
 	}
 	validateReq := httptest.NewRequest(http.MethodGet, "/api/v1/auth/validate", nil)
 	validateReq.Header.Set("Authorization", "Bearer "+token)
@@ -528,133 +527,6 @@ func TestHandleValidateToken_MethodNotAllowed(t *testing.T) {
 	w := httptest.NewRecorder()
 
 	api.HandleValidateToken(w, req)
-
-	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
-}
-
-// --- HandleRegisterAdmin tests ---
-
-// TestHandleRegisterAdmin_Success verifies that POST /api/v1/auth/register-admin
-// creates an admin user and returns a token.
-// BDD: Given no admin user exists,
-// When POST /api/v1/auth/register-admin {"username":"admin","password":"secretpassword"} is called,
-// Then 200 with {"token":"<token>","role":"admin","username":"admin"}.
-func TestHandleRegisterAdmin_Success(t *testing.T) {
-	api := newTestRestAPIWithHomeAuth(t)
-
-	body := `{"username":"admin","password":"secretpassword"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register-admin", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-
-	api.HandleRegisterAdmin(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-	var resp map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.NotEmpty(t, resp["token"], "token must be non-empty")
-	assert.Equal(t, "admin", resp["role"])
-	assert.Equal(t, "admin", resp["username"])
-}
-
-// TestHandleRegisterAdmin_WeakPassword verifies that POST /api/v1/auth/register-admin
-// with a password shorter than 8 characters returns 400.
-// BDD: Given a password "short" (less than 8 characters),
-// When POST /api/v1/auth/register-admin {"username":"admin","password":"short"} is called,
-// Then 400 with {"error":"password must be at least 8 characters"}.
-func TestHandleRegisterAdmin_WeakPassword(t *testing.T) {
-	api := newTestRestAPIWithHomeAuth(t)
-
-	body := `{"username":"admin","password":"short"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register-admin", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-
-	api.HandleRegisterAdmin(w, req)
-
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-	var resp map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, "password must be at least 8 characters", resp["error"])
-}
-
-// TestHandleRegisterAdmin_EmptyUsername verifies that POST /api/v1/auth/register-admin
-// with empty username returns 400.
-// BDD: Given an empty username,
-// When POST /api/v1/auth/register-admin {"username":"","password":"secretpassword"} is called,
-// Then 400 with {"error":"username and password are required"}.
-func TestHandleRegisterAdmin_EmptyUsername(t *testing.T) {
-	api := newTestRestAPIWithHomeAuth(t)
-
-	body := `{"username":"","password":"secretpassword"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register-admin", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-
-	api.HandleRegisterAdmin(w, req)
-
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-}
-
-// TestHandleRegisterAdmin_EmptyPassword verifies that POST /api/v1/auth/register-admin
-// with empty password returns 400.
-// BDD: Given an empty password,
-// When POST /api/v1/auth/register-admin {"username":"admin","password":""} is called,
-// Then 400 with {"error":"username and password are required"}.
-func TestHandleRegisterAdmin_EmptyPassword(t *testing.T) {
-	api := newTestRestAPIWithHomeAuth(t)
-
-	body := `{"username":"admin","password":""}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register-admin", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-
-	api.HandleRegisterAdmin(w, req)
-
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-}
-
-// TestHandleRegisterAdmin_AlreadyExists verifies that POST /api/v1/auth/register-admin
-// returns 409 Conflict when an admin already exists.
-// BDD: Given an admin user already exists,
-// When POST /api/v1/auth/register-admin is called again,
-// Then 409 with {"error":"admin already registered"}.
-func TestHandleRegisterAdmin_AlreadyExists(t *testing.T) {
-	api := newTestRestAPIWithHomeAuth(t)
-
-	// Register first admin
-	body1 := `{"username":"admin1","password":"password123"}`
-	req1 := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register-admin", strings.NewReader(body1))
-	req1.Header.Set("Content-Type", "application/json")
-	w1 := httptest.NewRecorder()
-	api.HandleRegisterAdmin(w1, req1)
-	require.Equal(t, http.StatusOK, w1.Code)
-
-	// Try to register second admin
-	body2 := `{"username":"admin2","password":"password456"}`
-	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register-admin", strings.NewReader(body2))
-	req2.Header.Set("Content-Type", "application/json")
-	w2 := httptest.NewRecorder()
-	api.HandleRegisterAdmin(w2, req2)
-
-	assert.Equal(t, http.StatusConflict, w2.Code)
-	var resp map[string]any
-	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &resp))
-	assert.Equal(t, "admin already registered", resp["error"])
-}
-
-// TestHandleRegisterAdmin_MethodNotAllowed verifies that GET /api/v1/auth/register-admin
-// returns 405.
-// BDD: Given a GET request to /auth/register-admin,
-// When the request is processed,
-// Then 405 Method Not Allowed is returned.
-func TestHandleRegisterAdmin_MethodNotAllowed(t *testing.T) {
-	api := newTestRestAPIWithHomeAuth(t)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/register-admin", nil)
-	w := httptest.NewRecorder()
-
-	api.HandleRegisterAdmin(w, req)
 
 	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
 }
@@ -817,8 +689,8 @@ func newTestRestAPIWithUser(t *testing.T, username, password string) (*restAPI, 
 
 // injectUser returns a copy of r with a UserContextKey injected into the context,
 // simulating what withAuth middleware does after a successful token validation.
-func injectUser(r *http.Request, username string, role config.UserRole) *http.Request {
-	user := &config.UserConfig{Username: username, Role: role}
+func injectUser(r *http.Request, username string) *http.Request {
+	user := &config.UserConfig{Username: username}
 	ctx := context.WithValue(r.Context(), UserContextKey{}, user)
 	return r.WithContext(ctx)
 }
@@ -834,7 +706,7 @@ func TestHandleLogout_Success(t *testing.T) {
 
 	// POST /auth/logout with user injected into context (simulates withAuth middleware).
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
-	req = injectUser(req, "logoutuser", config.UserRoleAdmin)
+	req = injectUser(req, "logoutuser")
 	w := httptest.NewRecorder()
 
 	api.HandleLogout(w, req)
@@ -908,7 +780,7 @@ func TestHandleLogout_RevokesOnlyPresentedToken(t *testing.T) {
 	// Logout presenting tok1.
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
 	req.Header.Set("Authorization", "Bearer "+tok1)
-	req = injectUser(req, "multiuser", config.UserRoleAdmin)
+	req = injectUser(req, "multiuser")
 	w := httptest.NewRecorder()
 	api.HandleLogout(w, req)
 	require.Equal(t, http.StatusNoContent, w.Code, "logout must return 204")
@@ -970,7 +842,7 @@ func TestHandleLogout_MethodNotAllowed(t *testing.T) {
 	api, _ := newTestRestAPIWithUser(t, "logoutuser4", "password123")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/logout", nil)
-	req = injectUser(req, "logoutuser4", config.UserRoleAdmin)
+	req = injectUser(req, "logoutuser4")
 	w := httptest.NewRecorder()
 
 	api.HandleLogout(w, req)
@@ -993,7 +865,7 @@ func TestHandleChangePassword_Success(t *testing.T) {
 	body := `{"current_password":"OldPass123","new_password":"NewPass456"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/change-password", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req = injectUser(req, "cpuser", config.UserRoleAdmin)
+	req = injectUser(req, "cpuser")
 	w := httptest.NewRecorder()
 
 	api.HandleChangePassword(w, req)
@@ -1034,7 +906,7 @@ func TestHandleChangePassword_NewPasswordEnablesLogin(t *testing.T) {
 	cpBody := `{"current_password":"OldPass999","new_password":"NewPass999"}`
 	cpReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/change-password", strings.NewReader(cpBody))
 	cpReq.Header.Set("Content-Type", "application/json")
-	cpReq = injectUser(cpReq, "cpuser2", config.UserRoleAdmin)
+	cpReq = injectUser(cpReq, "cpuser2")
 	cpW := httptest.NewRecorder()
 	api.HandleChangePassword(cpW, cpReq)
 	require.Equal(t, http.StatusOK, cpW.Code, "change-password must succeed")
@@ -1064,7 +936,7 @@ func TestHandleChangePassword_OldPasswordRejectedAfterChange(t *testing.T) {
 	cpBody := `{"current_password":"OldPassXXX","new_password":"NewPassXXX"}`
 	cpReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/change-password", strings.NewReader(cpBody))
 	cpReq.Header.Set("Content-Type", "application/json")
-	cpReq = injectUser(cpReq, "cpuser3", config.UserRoleAdmin)
+	cpReq = injectUser(cpReq, "cpuser3")
 	cpW := httptest.NewRecorder()
 	api.HandleChangePassword(cpW, cpReq)
 	require.Equal(t, http.StatusOK, cpW.Code)
@@ -1091,7 +963,7 @@ func TestHandleChangePassword_WrongCurrentPassword(t *testing.T) {
 	body := `{"current_password":"WrongPassword","new_password":"NewPass456"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/change-password", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req = injectUser(req, "cpuser4", config.UserRoleAdmin)
+	req = injectUser(req, "cpuser4")
 	w := httptest.NewRecorder()
 
 	api.HandleChangePassword(w, req)
@@ -1115,7 +987,7 @@ func TestHandleChangePassword_TooShort(t *testing.T) {
 	body := `{"current_password":"RealPass","new_password":"short"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/change-password", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req = injectUser(req, "cpuser5", config.UserRoleAdmin)
+	req = injectUser(req, "cpuser5")
 	w := httptest.NewRecorder()
 
 	api.HandleChangePassword(w, req)
@@ -1139,7 +1011,7 @@ func TestHandleChangePassword_ExactlyEightChars(t *testing.T) {
 	body := `{"current_password":"OldPass8","new_password":"12345678"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/change-password", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req = injectUser(req, "cpuser6", config.UserRoleAdmin)
+	req = injectUser(req, "cpuser6")
 	w := httptest.NewRecorder()
 
 	api.HandleChangePassword(w, req)
@@ -1163,7 +1035,7 @@ func TestHandleChangePassword_MissingFields(t *testing.T) {
 	body := `{}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/change-password", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req = injectUser(req, "cpuser7", config.UserRoleAdmin)
+	req = injectUser(req, "cpuser7")
 	w := httptest.NewRecorder()
 
 	api.HandleChangePassword(w, req)
@@ -1183,7 +1055,7 @@ func TestHandleChangePassword_MethodNotAllowed(t *testing.T) {
 	api, _ := newTestRestAPIWithUser(t, "cpuser8", "AnyPass123")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/change-password", nil)
-	req = injectUser(req, "cpuser8", config.UserRoleAdmin)
+	req = injectUser(req, "cpuser8")
 	w := httptest.NewRecorder()
 
 	api.HandleChangePassword(w, req)
@@ -1678,7 +1550,6 @@ func TestHandleValidateToken_TriggerReloadNotConfigured(t *testing.T) {
 
 	testUser := &config.UserConfig{
 		Username: "testuser",
-		Role:     config.UserRoleAdmin,
 	}
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/auth/validate", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -1747,7 +1618,7 @@ func TestHandleChangePassword_InvalidatesExistingToken(t *testing.T) {
 	cpBody := `{"current_password":"OldTokenPass1","new_password":"NewTokenPass2"}`
 	cpReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/change-password", strings.NewReader(cpBody))
 	cpReq.Header.Set("Content-Type", "application/json")
-	cpReq = injectUser(cpReq, "tknuser", config.UserRoleAdmin)
+	cpReq = injectUser(cpReq, "tknuser")
 	cpW := httptest.NewRecorder()
 	api.HandleChangePassword(cpW, cpReq)
 	require.Equal(t, http.StatusOK, cpW.Code,

@@ -8,10 +8,6 @@
 // lookup uses the exact concrete type, so the key type must be shared).
 package ctxkey
 
-// RoleContextKey is the context key for storing the authenticated user's role.
-// The value stored is a config.UserRole (string alias).
-type RoleContextKey struct{}
-
 // UserContextKey is the context key for storing the authenticated *config.UserConfig.
 type UserContextKey struct{}
 

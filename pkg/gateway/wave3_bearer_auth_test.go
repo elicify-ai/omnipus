@@ -105,7 +105,7 @@ func TestBearerTokenConstantTimeComparison(t *testing.T) {
 // Traces to: wave3-skill-ecosystem-spec.md line 846 (Test #16 — unset token = allow all)
 // BDD: Given OMNIPUS_BEARER_TOKEN is not set,
 // When any request arrives,
-// Then checkBearerAuth returns AuthResult{Authenticated: true, Role: "admin"} (auth not configured → dev mode).
+// Then checkBearerAuth returns AuthResult{Authenticated: true} (auth not configured → dev mode).
 
 func TestBearerAuthDisabledWhenTokenUnset(t *testing.T) {
 	// Traces to: wave3-skill-ecosystem-spec.md line 846 (Test #16)
@@ -126,5 +126,4 @@ func TestBearerAuthDisabledWhenTokenUnset(t *testing.T) {
 	got := checkBearerAuth(context.Background(), w, r, cfg)
 	assert.True(t, got.Authenticated, "auth must pass when OMNIPUS_BEARER_TOKEN is not configured")
 	assert.Equal(t, 200, w.Code, "no 401 written when token not configured")
-	assert.Equal(t, config.UserRoleAdmin, got.Role, "dev mode should return admin role")
 }

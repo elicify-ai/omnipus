@@ -62,7 +62,6 @@ func buildUserWithSessionHash(t *testing.T, username, plaintext string) config.U
 	require.NoError(t, err)
 	return config.UserConfig{
 		Username:         username,
-		Role:             config.UserRoleAdmin,
 		SessionTokenHash: config.BcryptHash(hash),
 	}
 }
@@ -75,7 +74,6 @@ func buildUserWithBearerHash(t *testing.T, username, plaintext string) config.Us
 	require.NoError(t, err)
 	return config.UserConfig{
 		Username:  username,
-		Role:      config.UserRoleAdmin,
 		TokenHash: config.BcryptHash(hash),
 	}
 }
@@ -476,7 +474,6 @@ func TestRequireSessionCookieOrBearer_BothSameUser_Passes(t *testing.T) {
 	bearerHash, _ := bcrypt.GenerateFromPassword([]byte(bearerPlain), bcrypt.MinCost)
 	alice := config.UserConfig{
 		Username:         "alice",
-		Role:             config.UserRoleAdmin,
 		SessionTokenHash: config.BcryptHash(sessionHash),
 		TokenHash:        config.BcryptHash(bearerHash),
 	}
@@ -507,12 +504,10 @@ func TestRequireSessionCookieOrBearer_BothDifferentUsers_CookieWins_LogEmitted(t
 	bearerHash, _ := bcrypt.GenerateFromPassword([]byte(bearerPlain), bcrypt.MinCost)
 	alice := config.UserConfig{
 		Username:         "alice",
-		Role:             config.UserRoleAdmin,
 		SessionTokenHash: config.BcryptHash(sessionHash),
 	}
 	bob := config.UserConfig{
 		Username:  "bob",
-		Role:      config.UserRoleAdmin,
 		TokenHash: config.BcryptHash(bearerHash),
 	}
 	cfg := &config.Config{
@@ -627,10 +622,9 @@ func TestRequireSessionCookieOrBearer_AuthMismatchLogLevel_Debug(t *testing.T) {
 	bearerHash, _ := bcrypt.GenerateFromPassword([]byte(bearerPlain), bcrypt.MinCost)
 	alice := config.UserConfig{
 		Username:         "alice",
-		Role:             config.UserRoleAdmin,
 		SessionTokenHash: config.BcryptHash(sessionHash),
 	}
-	bob := config.UserConfig{Username: "bob", Role: config.UserRoleAdmin, TokenHash: config.BcryptHash(bearerHash)}
+	bob := config.UserConfig{Username: "bob", TokenHash: config.BcryptHash(bearerHash)}
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{
 			Users:                []config.UserConfig{alice, bob},

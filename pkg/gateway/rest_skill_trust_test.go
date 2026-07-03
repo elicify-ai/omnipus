@@ -22,13 +22,14 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/audit"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/gateway/ctxkey"
-	"github.com/dapicom-ai/omnipus/pkg/gateway/middleware"
 )
 
-// withNonAdminRole injects config.UserRoleUser into the request context,
-// simulating an authenticated non-admin user.
+// withNonAdminRole injects a distinct authenticated identity ("bob") into
+// the request context. Under the single-user model there is no role left to
+// differentiate; this just supplies a caller identity distinct from
+// withAdminRole's "admin" for tests that need one.
 func withNonAdminRole(r *http.Request) *http.Request {
-	ctx := context.WithValue(r.Context(), RoleContextKey{}, config.UserRoleUser)
+	ctx := context.WithValue(r.Context(), UserContextKey{}, &config.UserConfig{Username: "bob"})
 	return r.WithContext(ctx)
 }
 
@@ -118,37 +119,6 @@ func TestHandleSkillTrust_HotReload(t *testing.T) {
 	assert.Equal(t, false, resp["requires_restart"], "skill_trust is a hot-reload setting")
 }
 
-// TestHandleSkillTrust_NonAdmin403 used to verify that a non-admin
-// authenticated user receives 403 when attempting PUT. Single-user model
-// (operator directive, 2026-07): a Gateway.Users entry that requests
-// role="user" is normalized to admin by config.LoadConfig's load-time
-// self-heal (config.normalizeAdminOnlyRoles) before it can ever reach
-// request handling. RequireAdmin's code is unchanged (still denies a
-// literal non-admin role) but no authenticated caller can carry one
-// anymore. This test is deliberately flipped (not deleted) to prove the new
-// outcome: the SAME "user"-configured account that used to be denied here
-// now succeeds, via the real config-loading choke point rather than a
-// hand-asserted role literal.
-func TestHandleSkillTrust_NonAdmin403(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-
-	resolvedRole := normalizedRoleForUser(t, "bob", "user")
-	require.Equal(t, config.UserRoleAdmin, resolvedRole,
-		"single-user model: config.LoadConfig must normalize role=user to admin")
-
-	payload := `{"level":"warn_unverified"}`
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/skill-trust", strings.NewReader(payload))
-	r.Header.Set("Content-Type", "application/json")
-	ctx := context.WithValue(r.Context(), RoleContextKey{}, resolvedRole)
-	r = r.WithContext(ctx)
-	// Route through RequireAdmin as adminWrap does at registration time — the
-	// inner handler no longer re-wraps it.
-	middleware.RequireAdmin(http.HandlerFunc(api.HandleSkillTrust)).ServeHTTP(w, r)
-
-	assert.Equal(t, http.StatusOK, w.Code, "normalized-to-admin caller must succeed; body: %s", w.Body.String())
-}
-
 // TestHandleSkillTrust_MethodNotAllowed verifies that POST and DELETE return 405.
 func TestHandleSkillTrust_MethodNotAllowed(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
@@ -176,7 +146,6 @@ func TestHandleSkillTrust_EmitsAuditEntry(t *testing.T) {
 
 	ctx := context.WithValue(context.Background(), ctxkey.UserContextKey{},
 		&config.UserConfig{Username: "admin"})
-	ctx = context.WithValue(ctx, RoleContextKey{}, config.UserRoleAdmin)
 
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/skill-trust",
 		strings.NewReader(`{"level":"block_unverified"}`))

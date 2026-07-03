@@ -622,11 +622,13 @@ func (r *scheduledRunner) pushNotification(n notifications.Notification, recipie
 }
 
 // resolveRecipients returns the deduped set of usernames to notify (W-7): the
-// schedule's CreatedBy user and the owning agent's OwnerUsername. If neither is
-// resolvable, it falls back to every admin USERNAME so each admin gets a
-// persisted, per-user notification they can read after a restart (M4). Only if
-// there are no users at all does it return the admin-broadcast sentinel, which
-// is a live-push-only target (never persisted; see onFailure).
+// schedule's CreatedBy user. Single-user product: ownership/role are no longer
+// access-control concepts, so when CreatedBy is not resolvable (e.g. a
+// pre-existing job with no creator recorded), it falls back to the sole
+// account. Only if there are no users at all does it return the
+// admin-broadcast sentinel, which is a live-push-only target (never
+// persisted; see onFailure) — WS delivery is unconditional now, so it
+// correctly reaches whoever is connected.
 func (r *scheduledRunner) resolveRecipients(job *cron.CronJob, cfg *config.Config) []string {
 	seen := map[string]bool{}
 	var out []string
@@ -639,27 +641,12 @@ func (r *scheduledRunner) resolveRecipients(job *cron.CronJob, cfg *config.Confi
 	}
 
 	add(job.CreatedBy)
-	if cfg != nil {
-		if owner := findAgentConfig(cfg, job.AgentID); owner != nil {
-			add(owner.OwnerUsername)
-		}
-	}
-
-	if len(out) == 0 {
-		// Neither resolvable → notify all admins. Persist per-admin so each gets
-		// their own read state; if there are no users at all, fall back to the
-		// broadcast sentinel for the live push only.
-		if cfg != nil {
-			for i := range cfg.Gateway.Users {
-				if cfg.Gateway.Users[i].Role == config.UserRoleAdmin {
-					add(cfg.Gateway.Users[i].Username)
-				}
-			}
-		}
+	if len(out) == 0 && cfg != nil && len(cfg.Gateway.Users) > 0 {
+		add(cfg.Gateway.Users[0].Username) // the sole account
 	}
 	if len(out) == 0 {
-		// No persistable recipient (zero admin users). The failure can only be
-		// live-broadcast to any connected admin WS — if none is open, the alert
+		// No persistable recipient (zero users at all). The failure can only be
+		// live-broadcast to any connected WS — if none is open, the alert
 		// would otherwise vanish. Log at WARN so the failure is still recorded in
 		// gateway.log for after-the-fact diagnosis (finding M4).
 		logger.WarnCF("gateway", "schedule-failure notification has no persistable recipient; live-broadcast only",
@@ -881,20 +868,17 @@ func (a *restAPI) HandleSchedules(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (a *restAPI) handleListSchedules(w http.ResponseWriter, user *config.UserConfig) {
+func (a *restAPI) handleListSchedules(w http.ResponseWriter, _ *config.UserConfig) {
 	jobs := a.cronSvc().ListJobs(true)
 	// Build a slice of the generated Schedule type, then round-trip the whole
 	// list into gen.ScheduleList. The ScheduleList element is structurally
 	// identical to gen.Schedule, so the JSON marshal/unmarshal maps cleanly
 	// without any hand-written wire-format struct (hard-constraint #8).
 	//
-	// B3: a non-admin only sees schedules whose owning agent they may access;
-	// admins see all.
+	// Single-user product: every authenticated caller sees every schedule —
+	// ownership is no longer an access-control concept.
 	items := make([]gen.Schedule, 0, len(jobs))
 	for _, job := range jobs {
-		if code, _ := a.authorizeScheduleAccess(user, job); code != 0 {
-			continue
-		}
 		items = append(items, toSchedule(job))
 	}
 	buf, err := json.Marshal(map[string][]gen.Schedule{"schedules": items})
@@ -910,14 +894,10 @@ func (a *restAPI) handleListSchedules(w http.ResponseWriter, user *config.UserCo
 	jsonOK(w, out)
 }
 
-func (a *restAPI) handleGetSchedule(w http.ResponseWriter, user *config.UserConfig, id string) {
+func (a *restAPI) handleGetSchedule(w http.ResponseWriter, _ *config.UserConfig, id string) {
 	job, ok := a.cronSvc().GetJob(id)
 	if !ok {
 		jsonErr(w, http.StatusNotFound, "schedule not found")
-		return
-	}
-	if code, msg := a.authorizeScheduleAccess(user, job); code != 0 {
-		jsonErr(w, code, msg)
 		return
 	}
 	jsonOK(w, toSchedule(job))
@@ -938,22 +918,11 @@ func (a *restAPI) handleCreateSchedule(w http.ResponseWriter, r *http.Request, u
 	// schedule cadence — workers execute one delegated task at a time. Reject
 	// creating a schedule whose owner is a worker at the write gate so the
 	// call never lands a runnable job that the fire path would only reject
-	// at execution time. Mirrors the in-flight guard in
-	// RunScheduled and the default/chat guards elsewhere. Fired BEFORE the
-	// owner-authz check so a non-admin who names a worker owner gets the
-	// actionable 400 (the owner-validity problem) rather than a 403 (a
-	// permissions problem) — the operator cannot schedule for this agent
-	// at all, regardless of who owns it, and surfacing that 400 first
-	// short-circuits the leak.
+	// at execution time. Mirrors the in-flight guard in RunScheduled and the
+	// default/chat guards elsewhere.
 	if owner := findAgentConfig(a.agentLoop.GetConfig(), req.OwnerAgentId); owner != nil && owner.IsWorker() {
 		jsonErr(w, http.StatusBadRequest,
 			"a worker cannot own a schedule (workers are not chat targets and run only via delegation)")
-		return
-	}
-
-	// Owner authz (W-6): the caller must be permitted to use the chosen owner.
-	if code, msg := a.authorizeScheduleOwner(user, req.OwnerAgentId); code != 0 {
-		jsonErr(w, code, msg)
 		return
 	}
 
@@ -1005,16 +974,10 @@ func (a *restAPI) handleCreateSchedule(w http.ResponseWriter, r *http.Request, u
 	jsonCreated(w, toSchedule(*job))
 }
 
-func (a *restAPI) handleUpdateSchedule(w http.ResponseWriter, r *http.Request, user *config.UserConfig, id string) {
+func (a *restAPI) handleUpdateSchedule(w http.ResponseWriter, r *http.Request, _ *config.UserConfig, id string) {
 	job, ok := a.cronSvc().GetJob(id)
 	if !ok {
 		jsonErr(w, http.StatusNotFound, "schedule not found")
-		return
-	}
-	// B3: gate on the EXISTING job's owner first — a non-owner non-admin may not
-	// mutate someone else's schedule even if they leave the owner unchanged.
-	if code, msg := a.authorizeScheduleAccess(user, job); code != 0 {
-		jsonErr(w, code, msg)
 		return
 	}
 	var req gen.ScheduleUpdate
@@ -1023,16 +986,12 @@ func (a *restAPI) handleUpdateSchedule(w http.ResponseWriter, r *http.Request, u
 		return
 	}
 
-	// Re-authorize when the owner changes (PUT re-authorizes owner if changed).
+	// Worker-tier guard: a worker is not a chat target and never runs on a
+	// schedule cadence — block ownership reassignment to a worker the same
+	// way the create gate does. The fire path also rejects worker owners at
+	// run time; failing here keeps the API consistent and surfaces the
+	// reason to the operator before any persistence.
 	if req.OwnerAgentId != nil && *req.OwnerAgentId != job.AgentID {
-		// Write-time guard: a worker is not a chat target and never runs on
-		// a schedule cadence — block ownership reassignment to a worker the
-		// same way the create gate does. The fire path also rejects worker
-		// owners at run time; failing here keeps the API consistent and
-		// surfaces the reason to the operator before any persistence. Fired
-		// BEFORE the owner re-authz so a non-admin who targets a worker gets
-		// the actionable 400 (the owner-validity problem) rather than a 403
-		// (a permissions problem).
 		if newOwner := findAgentConfig(
 			a.agentLoop.GetConfig(),
 			*req.OwnerAgentId,
@@ -1040,10 +999,6 @@ func (a *restAPI) handleUpdateSchedule(w http.ResponseWriter, r *http.Request, u
 			newOwner.IsWorker() {
 			jsonErr(w, http.StatusBadRequest,
 				"a worker cannot own a schedule (workers are not chat targets and run only via delegation)")
-			return
-		}
-		if code, msg := a.authorizeScheduleOwner(user, *req.OwnerAgentId); code != 0 {
-			jsonErr(w, code, msg)
 			return
 		}
 		job.AgentID = *req.OwnerAgentId
@@ -1102,14 +1057,9 @@ func (a *restAPI) handleUpdateSchedule(w http.ResponseWriter, r *http.Request, u
 	jsonOK(w, toSchedule(job))
 }
 
-func (a *restAPI) handleDeleteSchedule(w http.ResponseWriter, user *config.UserConfig, id string) {
-	job, ok := a.cronSvc().GetJob(id)
-	if !ok {
+func (a *restAPI) handleDeleteSchedule(w http.ResponseWriter, _ *config.UserConfig, id string) {
+	if _, ok := a.cronSvc().GetJob(id); !ok {
 		jsonErr(w, http.StatusNotFound, "schedule not found")
-		return
-	}
-	if code, msg := a.authorizeScheduleAccess(user, job); code != 0 {
-		jsonErr(w, code, msg)
 		return
 	}
 	if !a.cronSvc().RemoveJob(id) {
@@ -1119,14 +1069,9 @@ func (a *restAPI) handleDeleteSchedule(w http.ResponseWriter, user *config.UserC
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (a *restAPI) handleRunSchedule(w http.ResponseWriter, user *config.UserConfig, id string) {
-	job, ok := a.cronSvc().GetJob(id)
-	if !ok {
+func (a *restAPI) handleRunSchedule(w http.ResponseWriter, _ *config.UserConfig, id string) {
+	if _, ok := a.cronSvc().GetJob(id); !ok {
 		jsonErr(w, http.StatusNotFound, "schedule not found")
-		return
-	}
-	if code, msg := a.authorizeScheduleAccess(user, job); code != 0 {
-		jsonErr(w, code, msg)
 		return
 	}
 	status, sessionID, runErr := a.cronSvc().RunNow(id)
@@ -1148,14 +1093,10 @@ func (a *restAPI) handleRunSchedule(w http.ResponseWriter, user *config.UserConf
 	jsonOK(w, res)
 }
 
-func (a *restAPI) handlePauseSchedule(w http.ResponseWriter, user *config.UserConfig, id string) {
+func (a *restAPI) handlePauseSchedule(w http.ResponseWriter, _ *config.UserConfig, id string) {
 	job, ok := a.cronSvc().GetJob(id)
 	if !ok {
 		jsonErr(w, http.StatusNotFound, "schedule not found")
-		return
-	}
-	if code, msg := a.authorizeScheduleAccess(user, job); code != 0 {
-		jsonErr(w, code, msg)
 		return
 	}
 	updated := a.cronSvc().EnableJob(id, !job.Enabled)
@@ -1164,44 +1105,6 @@ func (a *restAPI) handlePauseSchedule(w http.ResponseWriter, user *config.UserCo
 		return
 	}
 	jsonOK(w, toSchedule(*updated))
-}
-
-// authorizeScheduleOwner validates that user may own a schedule for ownerAgentID
-// (W-6). Returns (0,"") on success or an (httpStatus, message) on failure.
-func (a *restAPI) authorizeScheduleOwner(user *config.UserConfig, ownerAgentID string) (int, string) {
-	cfg := a.agentLoop.GetConfig()
-	owner := findAgentConfig(cfg, ownerAgentID)
-	if owner == nil {
-		return http.StatusBadRequest, "owner_agent_id is not a known agent"
-	}
-	if err := config.AuthorizeAgentAccess(user, owner); err != nil {
-		return http.StatusForbidden, "not permitted to schedule for this agent"
-	}
-	return 0, ""
-}
-
-// authorizeScheduleAccess gates a single-schedule operation (get/update/delete/
-// run/pause) on the authenticated user (B3). Access is owner-of-the-schedule's-
-// OWNING-agent (or the agent's system/core carve-out, per AuthorizeAgentAccess):
-// the user may act on a schedule only if they could schedule for its owner
-// agent in the first place. Returns (0,"") on success or an (httpStatus,
-// message) to reject with. An owner agent that no longer exists in config maps
-// to 403 (not 404) so a deleted-agent schedule is not enumerable by probing
-// ids. No local admin-bypass here — AuthorizeAgentAccess is the single choke
-// point for per-user agent-data privacy (an admin-bypass here would silently
-// defeat it for anyone who creates a second account, same class of gap fixed
-// in config.AuthorizeAgentAccess itself).
-func (a *restAPI) authorizeScheduleAccess(user *config.UserConfig, job cron.CronJob) (int, string) {
-	cfg := a.agentLoop.GetConfig()
-	owner := findAgentConfig(cfg, job.AgentID)
-	if owner == nil {
-		// Non-admin, owner agent unknown: deny without leaking existence.
-		return http.StatusForbidden, "not permitted to access this schedule"
-	}
-	if err := config.AuthorizeAgentAccess(user, owner); err != nil {
-		return http.StatusForbidden, "not permitted to access this schedule"
-	}
-	return 0, ""
 }
 
 // validateTrigger checks a cron schedule's trigger fields. Returns (message,

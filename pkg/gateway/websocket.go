@@ -263,10 +263,9 @@ type wsConn struct {
 	doneCh         chan struct{}
 	closeOnce      sync.Once
 	droppedTokens  atomic.Int32
-	droppedFrames  atomic.Int32    // non-critical outbound frames dropped due to backpressure
-	inboundDropped atomic.Int32    // inbound items dropped: schema validation failures + invalid/oversized media refs
-	role           config.UserRole // RBAC role resolved at auth time
-	userID         string          // username resolved at auth time; used for session_state scoping (FR-073)
+	droppedFrames  atomic.Int32 // non-critical outbound frames dropped due to backpressure
+	inboundDropped atomic.Int32 // inbound items dropped: schema validation failures + invalid/oversized media refs
+	userID         string       // username resolved at auth time; used for session_state scoping (FR-073)
 
 	// Replay-mode divert (W1-1): during replay, live events arriving via
 	// sendConnGenFrame are redirected into replayDivertCh instead of sendCh so
@@ -624,9 +623,10 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // authenticateWS reads the first frame and validates the token.
-// Supports RBAC: checks config.Gateway.Users first (bcrypt), then falls back to
-// OMNIPUS_BEARER_TOKEN env var for backward compatibility.
-// Sets wc.role to the resolved role on success.
+// Checks the single human account (Gateway.Users[0]) first (bcrypt), then the
+// CLI's dedicated Gateway.CLIToken, then falls back to OMNIPUS_BEARER_TOKEN
+// env var for backward compatibility. Sets wc.userID to the resolved
+// identity on success.
 func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn) bool {
 	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 	_, data, err := conn.ReadMessage()
@@ -650,18 +650,34 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn) bool {
 	cfg := h.agentLoop.GetConfig()
 	rawToken := authFrame.Token
 
-	// 1. Check per-user list (RBAC — bearer-token SET lookup, SEC-1).
+	// 1. The single human account (Gateway.Users[0], if configured).
+	// Single-user model: Gateway.Users holds at most one entry now, so this is
+	// a direct check rather than a loop (SEC-1).
 	if len(cfg.Gateway.Users) > 0 {
-		for i := range cfg.Gateway.Users {
-			user := cfg.Gateway.Users[i]
-			if user.VerifyToken(rawToken) == nil {
-				wc.role = user.Role
-				wc.userID = user.Username // FR-073: needed for session_state user scoping
-				conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-				return true
-			}
+		if cfg.Gateway.Users[0].VerifyToken(rawToken) == nil {
+			wc.userID = cfg.Gateway.Users[0].Username // FR-073: needed for session_state user scoping
+			conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+			return true
 		}
-		// Token not in user list — reject.
+	}
+
+	// 2. The CLI's dedicated token — decoupled from the human account (see
+	// GatewayConfig.CLIToken doc). Verified via the same shared helper that
+	// UserConfig.VerifyToken uses internally, with no legacy hash to check.
+	if cfg.Gateway.CLIToken != nil {
+		if config.VerifyTokenAgainst([]config.TokenEntry{*cfg.Gateway.CLIToken}, "", rawToken) == nil {
+			wc.userID = "cli"
+			conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+			return true
+		}
+	}
+
+	// Auth is configured (a human account and/or a CLI token exist) but the
+	// presented token matched neither — reject without falling through to the
+	// legacy env-token path below. This preserves prior behavior: once any
+	// account-based auth is configured, an unmatched token is rejected
+	// immediately rather than being checked against OMNIPUS_BEARER_TOKEN.
+	if len(cfg.Gateway.Users) > 0 || cfg.Gateway.CLIToken != nil {
 		sendGenWSFrame(conn, generated.ErrorFrame{
 			Type:    string(generated.WsFrameTypeError),
 			Message: "unauthorized: invalid token",
@@ -673,12 +689,11 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn) bool {
 		return false
 	}
 
-	// 2. Fallback: legacy OMNIPUS_BEARER_TOKEN env var (treated as admin role).
+	// 3. Fallback: legacy OMNIPUS_BEARER_TOKEN env var.
 	required := os.Getenv("OMNIPUS_BEARER_TOKEN")
 	if required == "" {
 		if cfg.Gateway.DevModeBypass {
-			// Dev mode: allow without auth, treated as admin.
-			wc.role = config.UserRoleAdmin
+			// Dev mode: allow without auth.
 			conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 			return true
 		}
@@ -704,7 +719,6 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn) bool {
 		)
 		return false
 	}
-	wc.role = config.UserRoleAdmin
 	conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 	return true
 }
@@ -940,14 +954,9 @@ func (h *WSHandler) readLoop(ctx context.Context, conn *websocket.Conn, wc *wsCo
 		case string(generated.WsFrameTypeWhatsappPairingSubscribe):
 			// #283 (Option B): scope whatsapp_pairing frames to the connection(s)
 			// viewing a channel's pairing UI so the QR secret isn't broadcast to
-			// every admin tab. active=true subscribes this conn; false clears it.
-			if wc.role != config.UserRoleAdmin {
-				sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-					Type:    string(generated.WsFrameTypeError),
-					Message: "whatsapp_pairing_subscribe requires admin role",
-				})
-				continue
-			}
+			// every tab. active=true subscribes this conn; false clears it. Any
+			// connection reaching this point in readLoop is already authenticated
+			// (single-account model), so no further role gate applies.
 			var f generated.WhatsAppPairingSubscribeFrame
 			if err := json.Unmarshal(data, &f); err != nil {
 				slog.Warn("ws: malformed whatsapp_pairing_subscribe frame", "error", err)
@@ -2508,18 +2517,16 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 		case agent.EventKindNotification:
 			// #264: a user-facing notification (e.g. a scheduled run failed).
 			// Delivered ONLY to the recipient user's connections (filtered by
-			// wc.userID) so it never leaks to other admins' tabs. The
-			// NotificationAdminBroadcast sentinel fans out to admin-role
-			// connections when no specific recipient could be resolved.
+			// wc.userID) so it never leaks to other tabs/sessions. The
+			// NotificationAdminBroadcast sentinel fans out to every connected
+			// client unconditionally when no specific recipient could be
+			// resolved — under the single-user model, "broadcast to admins" and
+			// "broadcast to the one account's connections" are the same thing.
 			p, ok := evt.Payload.(agent.NotificationPayload)
 			if !ok {
 				continue
 			}
-			if p.Recipient == agent.NotificationAdminBroadcast {
-				if wc.role != config.UserRoleAdmin {
-					continue
-				}
-			} else if wc.userID != p.Recipient {
+			if p.Recipient != agent.NotificationAdminBroadcast && wc.userID != p.Recipient {
 				continue
 			}
 			notifF := generated.NotificationFrame{

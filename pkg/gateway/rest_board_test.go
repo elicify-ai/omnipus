@@ -35,7 +35,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
-	"github.com/dapicom-ai/omnipus/pkg/config"
 )
 
 // --- helpers for the unified /api/v1/tasks surface ---------------------------
@@ -898,7 +897,7 @@ func TestHandleTasks_OwnershipScoping(t *testing.T) {
 	rPost := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(body))
 	rPost.Header.Set("Content-Type", "application/json")
 	rPost.URL.Path = "/api/v1/tasks"
-	rPost = rPost.WithContext(contextWithUserRole(rPost.Context(), "alice", config.UserRoleUser))
+	rPost = rPost.WithContext(contextWithUser(rPost.Context(), "alice"))
 	api.HandleTasks(wPost, rPost)
 	require.Equal(t, http.StatusCreated, wPost.Code, "alice POST must return 201; body=%s", wPost.Body.String())
 	var tsk gen.Task
@@ -912,7 +911,7 @@ func TestHandleTasks_OwnershipScoping(t *testing.T) {
 	wGetBob := httptest.NewRecorder()
 	rGetBob := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/"+tsk.Id, nil)
 	rGetBob.URL.Path = "/api/v1/tasks/" + tsk.Id
-	rGetBob = rGetBob.WithContext(contextWithUserRole(rGetBob.Context(), "bob", config.UserRoleUser))
+	rGetBob = rGetBob.WithContext(contextWithUser(rGetBob.Context(), "bob"))
 	api.HandleTasks(wGetBob, rGetBob)
 	assert.Equal(t, http.StatusOK, wGetBob.Code,
 		"FR-1.9: bob must get 200 on alice's task (owner attribution-only); body=%s", wGetBob.Body.String())
@@ -921,7 +920,7 @@ func TestHandleTasks_OwnershipScoping(t *testing.T) {
 	wListBob := httptest.NewRecorder()
 	rListBob := httptest.NewRequest(http.MethodGet, "/api/v1/tasks", nil)
 	rListBob.URL.Path = "/api/v1/tasks"
-	rListBob = rListBob.WithContext(contextWithUserRole(rListBob.Context(), "bob", config.UserRoleUser))
+	rListBob = rListBob.WithContext(contextWithUser(rListBob.Context(), "bob"))
 	api.HandleTasks(wListBob, rListBob)
 	require.Equal(t, http.StatusOK, wListBob.Code)
 	var listItems []gen.Task
@@ -938,7 +937,7 @@ func TestHandleTasks_OwnershipScoping(t *testing.T) {
 	wGetAdmin := httptest.NewRecorder()
 	rGetAdmin := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/"+tsk.Id, nil)
 	rGetAdmin.URL.Path = "/api/v1/tasks/" + tsk.Id
-	rGetAdmin = rGetAdmin.WithContext(contextWithUserRole(rGetAdmin.Context(), "admin", config.UserRoleAdmin))
+	rGetAdmin = rGetAdmin.WithContext(contextWithUser(rGetAdmin.Context(), "admin"))
 	api.HandleTasks(wGetAdmin, rGetAdmin)
 	assert.Equal(t, http.StatusOK, wGetAdmin.Code,
 		"admin must get 200 on alice's task; body=%s", wGetAdmin.Body.String())
