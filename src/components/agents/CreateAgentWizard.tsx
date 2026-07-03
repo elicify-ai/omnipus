@@ -191,9 +191,17 @@ function initialPayload(initialType: WizardType, initialCli?: WizardCli): Wizard
     soul: '',
     heartbeat_enabled: false,
     heartbeat_interval: 1800,
+    // Per the field matrix (docs/internal/architecture/agent-types-field-matrix.md)
+    // timeout_seconds is O for every user-creatable type, so it always seeds.
+    // max_tool_iterations is excluded for subagent_3p (the external CLI runs
+    // its own loop — the "pending operator decision" resolved to exclude).
+    // steering_mode is a Main-surface concept only (workers are forced
+    // one-at-a-time server-side) — seeding it for a worker payload would
+    // carry a field its variant can't have even though payloadToCreateRequest
+    // already filters it; the Advanced UI also reads this default.
     timeout_seconds: 300,
-    max_tool_iterations: 200,
-    steering_mode: 'one-at-a-time',
+    ...(initialType !== 'subagent_3p' ? { max_tool_iterations: 200 } : {}),
+    ...(initialType === 'Main' ? { steering_mode: 'one-at-a-time' as const } : {}),
     // Inherit-from-caller toggles default OFF so the corresponding editors
     // (model picker, tools, skills, sandbox) render by default and the
     // operator makes an explicit choice. Inheritance stays an opt-in via the
@@ -459,7 +467,18 @@ export function CreateAgentWizard({
             </div>
           )}
           {step === 1 && <Step1Identity {...stepProps} />}
-          {step === 2 && <Step2Personality {...stepProps} />}
+          {step === 2 && (
+            <>
+              <Step2Personality {...stepProps} />
+              {/* External (subagent_3p) is a 2-step wizard — there is no
+                  step 3 to host the Advanced disclosure, so it mounts at
+                  the end of step 2 instead. `<Advanced>` renders its own
+                  slim variant for subagent_3p (timeout + rate limits only —
+                  see wizard/Advanced.tsx), so this is safe to always mount
+                  when isExternal without duplicating the full-agent knobs. */}
+              {isExternal && <Advanced {...stepProps} />}
+            </>
+          )}
           {step === 3 && (
             <>
               <Step3Tools {...stepProps} />
