@@ -28,6 +28,7 @@ import { ToolPolicyEditor } from '@/components/shared/ToolPolicyEditor'
 import type { ToolPolicyValue } from '@/components/shared/ToolPolicyEditor'
 import type { ToolPolicy } from '@/components/shared/PolicyBadge'
 import { resolvePolicy } from '@/lib/toolCategories'
+import { isExternalType } from '@/lib/agentKind'
 import {
   fetchRegistryTools,
   fetchAgentTools,
@@ -83,13 +84,20 @@ function valueToCfg(value: ToolPolicyValue, existing: AgentToolsCfg): AgentTools
 
 export function ToolsAndPermissions({
   agentId,
-  agentType: _agentType,
+  agentType,
   isLocked = false,
   tools,
   onChange,
 }: ToolsAndPermissionsProps) {
   const queryClient = useQueryClient()
   const addToast = useUiStore((s) => s.addToast)
+
+  // Field matrix (docs/internal/architecture/agent-types-field-matrix.md):
+  // tools_cfg is "—" for subagent_3p — the external runner has its own
+  // tools; per-tool CLI flags govern instead. AgentProfile already hides
+  // the whole Tools & Permissions section for external agents; this is the
+  // defense-in-depth guard for any other caller of this component.
+  const isExternal = isExternalType(agentType)
 
   // Re-auth gate — mirrors GlobalToolPoliciesSection (SecuritySection.tsx).
   // The gate opens a consent dialog if the server returns a re-auth 403.
@@ -201,7 +209,7 @@ export function ToolsAndPermissions({
       onChange(result.config)
       queryClient.invalidateQueries({ queryKey: ['agent-tools', id] })
     },
-    { disabled: isLocked || !isDraftReady },
+    { disabled: isLocked || isExternal || !isDraftReady },
   )
 
   // Surface runGated cancellation and API errors as toasts. useAutoSave catches
@@ -223,7 +231,7 @@ export function ToolsAndPermissions({
   // observe the change and fire the debounced gated PUT with the latest value.
   // It never skips or drops an edit regardless of in-flight saves.
   function handleEditorChange(next: ToolPolicyValue) {
-    if (isLocked || !agentId) return
+    if (isLocked || isExternal || !agentId) return
     setEditorValue(next)
   }
 
@@ -273,6 +281,23 @@ export function ToolsAndPermissions({
         </div>
       )}
 
+      {/* Field matrix: subagent_3p read-only notice (defense-in-depth — the
+          parent AgentProfile already hides this whole section for external
+          agents; this covers any other caller). */}
+      {isExternal && !isLocked && (
+        <div
+          data-testid="external-cli-tools-notice"
+          className="flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2"
+        >
+          <Info size={13} className="text-[var(--color-muted)] shrink-0 mt-0.5" />
+          <p className="text-[11px] text-[var(--color-muted)] leading-relaxed">
+            Tool policies do not apply to agents running on an external CLI runner —
+            the runner manages its own tool access. Configure per-tool flags on the
+            runner instead.
+          </p>
+        </div>
+      )}
+
       {/* Shell/filesystem conflict banner */}
       {shellFsConflict && (
         <div
@@ -294,8 +319,8 @@ export function ToolsAndPermissions({
         </div>
       )}
 
-      {/* Save status — hidden for locked agents (no writes ever fire) */}
-      {!isLocked && (
+      {/* Save status — hidden for locked/external agents (no writes ever fire) */}
+      {!isLocked && !isExternal && (
         <div className="flex items-center gap-3">
           <AutoSaveIndicator status={saveStatus} error={saveError} />
           <span className="text-[10px] text-[var(--color-muted)]">
@@ -315,7 +340,7 @@ export function ToolsAndPermissions({
         tools={registryTools}
         value={editorValue}
         onChange={handleEditorChange}
-        disabled={isLocked}
+        disabled={isLocked || isExternal}
         globalPolicies={globalPolicyValue}
       />
 
