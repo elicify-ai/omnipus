@@ -13,11 +13,22 @@ import (
 // rest_agent_delegation.go — mapping/validation helpers for the agent
 // delegation_policy wire field.
 //
-// delegation_policy is part of the AgentCreateRequest / AgentUpdateRequest /
+// delegation_policy is part of the AgentCreateRequestMain /
+// AgentCreateRequestSubagent / AgentCreateRequestSubagent3p / AgentUpdateRequest /
 // Agent generated contract types but was previously never mapped to
 // config.AgentConfig.DelegationPolicy — so the field was write-dropped on
 // create/update and never echoed on GET. These helpers do the mapping in one
 // place for createAgent, updateAgent, getAgent, and listAgents.
+//
+// W1 (agent-types-field-matrix.md discriminated union) split the single
+// create-time AgentCreateRequest into three named variants with distinct
+// generated Go types, each with its own anonymous DelegationPolicy struct
+// (oapi-codegen inlines it per-usage). delegation_policy is allowed on ALL
+// THREE variants (behavior change from the flat contract: a 3p create with
+// delegation_policy used to 400, now 201), so createAgent needs one
+// extractor per variant — delegationInputFromCreateRequestMain / …Subagent /
+// …Subagent3p below — all normalizing into the same variant-agnostic
+// delegationPolicyInput so buildDelegationPolicy is written once.
 //
 // v0.1.0 semantics (Spec-3):
 //   - to / modes / depth are ENFORCED.
@@ -66,11 +77,106 @@ type delegationPolicyInput struct {
 	Budget     *config.DelegationBudget
 }
 
-// delegationInputFromCreateRequest normalises the create-request inline policy
-// struct into delegationPolicyInput. Returns nil when req carries no policy.
+// delegationInputFromCreateRequestMain normalises the AgentCreateRequestMain
+// inline policy struct into delegationPolicyInput. Returns nil when req
+// carries no policy.
 //
-//nolint:dupl // parallel to delegationInputFromUpdateRequest — distinct oapi-codegen inline types (Create vs Update), intentionally not merged.
-func delegationInputFromCreateRequest(req *gen.AgentCreateRequest) *delegationPolicyInput {
+//nolint:dupl // parallel to …Subagent / …Subagent3p / delegationInputFromUpdateRequest — distinct oapi-codegen inline types per variant, intentionally not merged.
+func delegationInputFromCreateRequestMain(req *gen.AgentCreateRequestMain) *delegationPolicyInput {
+	if req == nil || req.DelegationPolicy == nil {
+		return nil
+	}
+	dp := req.DelegationPolicy
+	out := &delegationPolicyInput{Depth: dp.Depth}
+	if dp.To != nil {
+		refs := make([]delegationRefInput, 0, len(*dp.To))
+		for _, r := range *dp.To {
+			refs = append(refs, delegationRefInput{Kind: string(r.Kind), ID: r.Id})
+		}
+		out.To = &refs
+	}
+	if dp.AcceptFrom != nil {
+		refs := make([]delegationRefInput, 0, len(*dp.AcceptFrom))
+		for _, r := range *dp.AcceptFrom {
+			refs = append(refs, delegationRefInput{Kind: string(r.Kind), ID: r.Id})
+		}
+		out.AcceptFrom = &refs
+	}
+	if dp.Modes != nil {
+		modes := make([]string, 0, len(*dp.Modes))
+		for _, m := range *dp.Modes {
+			modes = append(modes, string(m))
+		}
+		out.Modes = &modes
+	}
+	if dp.Budget != nil {
+		out.HasBudget = true
+		out.Budget = &config.DelegationBudget{}
+		if dp.Budget.MaxCostUsd != nil {
+			out.Budget.MaxCostUSD = *dp.Budget.MaxCostUsd
+		}
+		if dp.Budget.MaxTokens != nil {
+			out.Budget.MaxTokens = *dp.Budget.MaxTokens
+		}
+	}
+	return out
+}
+
+// delegationInputFromCreateRequestSubagent normalises the
+// AgentCreateRequestSubagent inline policy struct into delegationPolicyInput.
+// Returns nil when req carries no policy.
+//
+//nolint:dupl // parallel to …Main / …Subagent3p / delegationInputFromUpdateRequest — distinct oapi-codegen inline types per variant, intentionally not merged.
+func delegationInputFromCreateRequestSubagent(req *gen.AgentCreateRequestSubagent) *delegationPolicyInput {
+	if req == nil || req.DelegationPolicy == nil {
+		return nil
+	}
+	dp := req.DelegationPolicy
+	out := &delegationPolicyInput{Depth: dp.Depth}
+	if dp.To != nil {
+		refs := make([]delegationRefInput, 0, len(*dp.To))
+		for _, r := range *dp.To {
+			refs = append(refs, delegationRefInput{Kind: string(r.Kind), ID: r.Id})
+		}
+		out.To = &refs
+	}
+	if dp.AcceptFrom != nil {
+		refs := make([]delegationRefInput, 0, len(*dp.AcceptFrom))
+		for _, r := range *dp.AcceptFrom {
+			refs = append(refs, delegationRefInput{Kind: string(r.Kind), ID: r.Id})
+		}
+		out.AcceptFrom = &refs
+	}
+	if dp.Modes != nil {
+		modes := make([]string, 0, len(*dp.Modes))
+		for _, m := range *dp.Modes {
+			modes = append(modes, string(m))
+		}
+		out.Modes = &modes
+	}
+	if dp.Budget != nil {
+		out.HasBudget = true
+		out.Budget = &config.DelegationBudget{}
+		if dp.Budget.MaxCostUsd != nil {
+			out.Budget.MaxCostUSD = *dp.Budget.MaxCostUsd
+		}
+		if dp.Budget.MaxTokens != nil {
+			out.Budget.MaxTokens = *dp.Budget.MaxTokens
+		}
+	}
+	return out
+}
+
+// delegationInputFromCreateRequestSubagent3p normalises the
+// AgentCreateRequestSubagent3p inline policy struct into delegationPolicyInput.
+// Returns nil when req carries no policy. delegation_policy is a behavior
+// change for this variant (W2a): a subagent_3p create with delegation_policy
+// used to 400 under the flat contract; the discriminated union now allows it
+// on every variant (subagent_3p is a valid delegation *target* — see the
+// field matrix "delegation_policy / can_delegate_to" row).
+//
+//nolint:dupl // parallel to …Main / …Subagent / delegationInputFromUpdateRequest — distinct oapi-codegen inline types per variant, intentionally not merged.
+func delegationInputFromCreateRequestSubagent3p(req *gen.AgentCreateRequestSubagent3p) *delegationPolicyInput {
 	if req == nil || req.DelegationPolicy == nil {
 		return nil
 	}

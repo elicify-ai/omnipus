@@ -2306,21 +2306,33 @@ func FixturePerformanceSettings_ZeroValue() PerformanceSettings {
 	return PerformanceSettings{}
 }
 
-// ── AgentCreateRequest ────────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/AgentCreateRequest.yaml
+// ── AgentCreateRequestMain / AgentCreateRequestSubagent / AgentCreateRequestSubagent3p ──
+// Traces to: contracts/components/schemas/AgentCreateRequest{Main,Subagent,Subagent3p}.yaml
+//
+// W1 turned the single flat AgentCreateRequest into a discriminated union —
+// one named Go type per agent type, each with additionalProperties: false.
+// Field allocation per docs/internal/architecture/agent-types-field-matrix.md:
+//   - Main: full field set (voice, steering_mode included), no executor.
+//   - Subagent: like Main minus voice/steering_mode, no executor (server
+//     derives native).
+//   - Subagent3p: ONLY type/name/description/model/provider/color/icon/
+//     rate_limits/soul/delegation_policy/executor/timeout_seconds — executor
+//     is REQUIRED. All Main/Subagent-only fields (tools_cfg, skills,
+//     fallback_models, model_params, sandbox_profile, shell_policy, voice,
+//     steering_mode, max_tool_iterations) do not exist as properties on this
+//     variant at all.
 
-func FixtureAgentCreateRequest_Populated() AgentCreateRequest {
-	t := AgentCreateRequestTypeMain
+func FixtureAgentCreateRequestMain_Populated() AgentCreateRequestMain {
 	color := "#D4AF37"
 	icon := "Robot"
 	model := "claude-sonnet-4-6"
 	enabled := true
-	defaultPolicy := AgentCreateRequestToolsCfgBuiltinDefaultPolicyAllow
-	deny := AgentCreateRequestToolsCfgBuiltinPoliciesDeny
-	sandbox := AgentCreateRequestSandboxProfileWorkspace
-	steering := AgentCreateRequestSteeringModeOneAtATime
-	mode := AgentCreateRequestDelegationPolicyModesAwait
-	toKind := AgentCreateRequestDelegationPolicyToKindLocal
+	defaultPolicy := AgentCreateRequestMainToolsCfgBuiltinDefaultPolicyAllow
+	deny := AgentCreateRequestMainToolsCfgBuiltinPoliciesDeny
+	sandbox := AgentCreateRequestMainSandboxProfileWorkspace
+	steering := AgentCreateRequestMainSteeringModeOneAtATime
+	mode := AgentCreateRequestMainDelegationPolicyModesAwait
+	toKind := AgentCreateRequestMainDelegationPolicyToKindLocal
 	description := "Focused research assistant"
 	temperature := 0.7
 	maxTokens := 4096
@@ -2328,16 +2340,20 @@ func FixtureAgentCreateRequest_Populated() AgentCreateRequest {
 	maxCost := 5.0
 	maxCalls := 100
 	maxTools := 60
+	maxToolIterations := 60
+	voice := "alloy"
 
-	return AgentCreateRequest{
-		Name:        "Research Bot",
-		Type:        &t,
-		Description: &description,
-		Model:       &model,
-		Color:       &color,
-		Icon:        &icon,
-		Soul:        "You are a focused research assistant.",
-		Skills:      &[]string{"web-research"},
+	return AgentCreateRequestMain{
+		Name:              "Research Bot",
+		Type:              AgentCreateRequestMainTypeMain,
+		Description:       &description,
+		Model:             &model,
+		Color:             &color,
+		Icon:              &icon,
+		Soul:              "You are a focused research assistant.",
+		Skills:            &[]string{"web-research"},
+		MaxToolIterations: &maxToolIterations,
+		Voice:             &voice,
 		FallbackModels: &[]FallbackModel{
 			{Model: "claude-sonnet-4-6", Provider: strPtr("anthropic")},
 		},
@@ -2371,31 +2387,31 @@ func FixtureAgentCreateRequest_Populated() AgentCreateRequest {
 		},
 		DelegationPolicy: &struct {
 			AcceptFrom *[]struct {
-				Id   string                                           `json:"id"`
-				Kind AgentCreateRequestDelegationPolicyAcceptFromKind `json:"kind"`
+				Id   string                                               `json:"id"`
+				Kind AgentCreateRequestMainDelegationPolicyAcceptFromKind `json:"kind"`
 			} `json:"accept_from,omitempty"`
 			Budget *struct {
 				MaxCostUsd *float64 `json:"max_cost_usd,omitempty"`
 				MaxTokens  *int     `json:"max_tokens,omitempty"`
 			} `json:"budget,omitempty"`
-			Depth *int                                       `json:"depth,omitempty"`
-			Modes *[]AgentCreateRequestDelegationPolicyModes `json:"modes,omitempty"`
+			Depth *int                                           `json:"depth,omitempty"`
+			Modes *[]AgentCreateRequestMainDelegationPolicyModes `json:"modes,omitempty"`
 			To    *[]struct {
-				Id   string                                   `json:"id"`
-				Kind AgentCreateRequestDelegationPolicyToKind `json:"kind"`
+				Id   string                                       `json:"id"`
+				Kind AgentCreateRequestMainDelegationPolicyToKind `json:"kind"`
 			} `json:"to,omitempty"`
 		}{
 			Depth: intPtr(3),
-			Modes: &[]AgentCreateRequestDelegationPolicyModes{mode},
+			Modes: &[]AgentCreateRequestMainDelegationPolicyModes{mode},
 			To: &[]struct {
-				Id   string                                   `json:"id"`
-				Kind AgentCreateRequestDelegationPolicyToKind `json:"kind"`
+				Id   string                                       `json:"id"`
+				Kind AgentCreateRequestMainDelegationPolicyToKind `json:"kind"`
 			}{{Id: "ray", Kind: toKind}},
 		},
 		ToolsCfg: &struct {
 			Builtin *struct {
-				DefaultPolicy *AgentCreateRequestToolsCfgBuiltinDefaultPolicy       `json:"default_policy,omitempty"`
-				Policies      *map[string]AgentCreateRequestToolsCfgBuiltinPolicies `json:"policies,omitempty"`
+				DefaultPolicy *AgentCreateRequestMainToolsCfgBuiltinDefaultPolicy       `json:"default_policy,omitempty"`
+				Policies      *map[string]AgentCreateRequestMainToolsCfgBuiltinPolicies `json:"policies,omitempty"`
 			} `json:"builtin,omitempty"`
 			Mcp *struct {
 				Servers *[]struct {
@@ -2405,11 +2421,11 @@ func FixtureAgentCreateRequest_Populated() AgentCreateRequest {
 			} `json:"mcp,omitempty"`
 		}{
 			Builtin: &struct {
-				DefaultPolicy *AgentCreateRequestToolsCfgBuiltinDefaultPolicy       `json:"default_policy,omitempty"`
-				Policies      *map[string]AgentCreateRequestToolsCfgBuiltinPolicies `json:"policies,omitempty"`
+				DefaultPolicy *AgentCreateRequestMainToolsCfgBuiltinDefaultPolicy       `json:"default_policy,omitempty"`
+				Policies      *map[string]AgentCreateRequestMainToolsCfgBuiltinPolicies `json:"policies,omitempty"`
 			}{
 				DefaultPolicy: &defaultPolicy,
-				Policies: &map[string]AgentCreateRequestToolsCfgBuiltinPolicies{
+				Policies: &map[string]AgentCreateRequestMainToolsCfgBuiltinPolicies{
 					"system.*": deny,
 				},
 			},
@@ -2429,15 +2445,213 @@ func FixtureAgentCreateRequest_Populated() AgentCreateRequest {
 	}
 }
 
-// FixtureAgentCreateRequest_InvalidType returns a request whose type value is
-// not in the enum. JSON Schema validation must reject it.
-func FixtureAgentCreateRequest_InvalidType() AgentCreateRequest {
-	t := AgentCreateRequestType("not-a-valid-type")
-	return AgentCreateRequest{
+// FixtureAgentCreateRequestMain_InvalidType returns a Main request whose type
+// value is not "Main". JSON Schema validation must reject it (enum: [Main]).
+func FixtureAgentCreateRequestMain_InvalidType() AgentCreateRequestMain {
+	return AgentCreateRequestMain{
 		Name: "Bad Type",
-		Type: &t,
+		Type: AgentCreateRequestMainType("not-a-valid-type"),
 		Soul: "Valid soul content.",
 	}
+}
+
+func FixtureAgentCreateRequestSubagent_Populated() AgentCreateRequestSubagent {
+	color := "#4287f5"
+	icon := "Robot"
+	model := "claude-sonnet-4-6"
+	description := "Native delegation-only research worker"
+	defaultPolicy := AgentCreateRequestSubagentToolsCfgBuiltinDefaultPolicyAllow
+	deny := AgentCreateRequestSubagentToolsCfgBuiltinPoliciesDeny
+	sandbox := AgentCreateRequestSubagentSandboxProfileWorkspace
+	mode := AgentCreateRequestSubagentDelegationPolicyModesTask
+	toKind := AgentCreateRequestSubagentDelegationPolicyToKindLocal
+	maxToolIterations := 40
+
+	return AgentCreateRequestSubagent{
+		Name:              "Research Worker",
+		Type:              AgentCreateRequestSubagentTypeSubagent,
+		Description:       &description,
+		Model:             &model,
+		Color:             &color,
+		Icon:              &icon,
+		Soul:              "You are a focused research worker invoked only via delegation.",
+		Skills:            &[]string{"web-research"},
+		MaxToolIterations: &maxToolIterations,
+		FallbackModels: &[]FallbackModel{
+			{Model: "claude-sonnet-4-6", Provider: strPtr("anthropic")},
+		},
+		SandboxProfile: &sandbox,
+		DelegationPolicy: &struct {
+			AcceptFrom *[]struct {
+				Id   string                                                   `json:"id"`
+				Kind AgentCreateRequestSubagentDelegationPolicyAcceptFromKind `json:"kind"`
+			} `json:"accept_from,omitempty"`
+			Budget *struct {
+				MaxCostUsd *float64 `json:"max_cost_usd,omitempty"`
+				MaxTokens  *int     `json:"max_tokens,omitempty"`
+			} `json:"budget,omitempty"`
+			Depth *int                                               `json:"depth,omitempty"`
+			Modes *[]AgentCreateRequestSubagentDelegationPolicyModes `json:"modes,omitempty"`
+			To    *[]struct {
+				Id   string                                           `json:"id"`
+				Kind AgentCreateRequestSubagentDelegationPolicyToKind `json:"kind"`
+			} `json:"to,omitempty"`
+		}{
+			Depth: intPtr(1),
+			Modes: &[]AgentCreateRequestSubagentDelegationPolicyModes{mode},
+			To: &[]struct {
+				Id   string                                           `json:"id"`
+				Kind AgentCreateRequestSubagentDelegationPolicyToKind `json:"kind"`
+			}{{Id: "ray", Kind: toKind}},
+		},
+		ToolsCfg: &struct {
+			Builtin *struct {
+				DefaultPolicy *AgentCreateRequestSubagentToolsCfgBuiltinDefaultPolicy       `json:"default_policy,omitempty"`
+				Policies      *map[string]AgentCreateRequestSubagentToolsCfgBuiltinPolicies `json:"policies,omitempty"`
+			} `json:"builtin,omitempty"`
+			Mcp *struct {
+				Servers *[]struct {
+					Id    string    `json:"id"`
+					Tools *[]string `json:"tools,omitempty"`
+				} `json:"servers,omitempty"`
+			} `json:"mcp,omitempty"`
+		}{
+			Builtin: &struct {
+				DefaultPolicy *AgentCreateRequestSubagentToolsCfgBuiltinDefaultPolicy       `json:"default_policy,omitempty"`
+				Policies      *map[string]AgentCreateRequestSubagentToolsCfgBuiltinPolicies `json:"policies,omitempty"`
+			}{
+				DefaultPolicy: &defaultPolicy,
+				Policies: &map[string]AgentCreateRequestSubagentToolsCfgBuiltinPolicies{
+					"system.*": deny,
+				},
+			},
+		},
+	}
+}
+
+// FixtureAgentCreateRequestSubagent_InvalidType returns a Subagent request
+// whose type value is not "Subagent". JSON Schema validation must reject it.
+func FixtureAgentCreateRequestSubagent_InvalidType() AgentCreateRequestSubagent {
+	return AgentCreateRequestSubagent{
+		Name: "Bad Type",
+		Type: AgentCreateRequestSubagentType("not-a-valid-type"),
+		Soul: "Valid soul content.",
+	}
+}
+
+// FixtureAgentCreateRequestSubagent3p_Populated — every field this variant
+// allows: type/name/description/model/provider/color/icon/rate_limits/soul/
+// delegation_policy/executor/timeout_seconds. executor is REQUIRED.
+func FixtureAgentCreateRequestSubagent3p_Populated() AgentCreateRequestSubagent3p {
+	color := "#f542a7"
+	icon := "Terminal"
+	model := "claude-sonnet-4-6"
+	provider := "anthropic"
+	description := "External-CLI delegation-only worker"
+	enabled := true
+	maxCost := 5.0
+	maxCalls := 100
+	maxTools := 60
+	timeoutSeconds := 300
+	mode := AgentCreateRequestSubagent3pDelegationPolicyModesTask
+	toKind := AgentCreateRequestSubagent3pDelegationPolicyToKindLocal
+	cli := AgentCreateRequestSubagent3pExecutorCliClaudeCode
+	cliPath := "/usr/local/bin/claude"
+
+	return AgentCreateRequestSubagent3p{
+		Name:           "Claude Code Worker",
+		Type:           Subagent3p,
+		Description:    &description,
+		Model:          &model,
+		Provider:       &provider,
+		Color:          &color,
+		Icon:           &icon,
+		Soul:           "You are a focused worker running on the claude-code CLI.",
+		TimeoutSeconds: &timeoutSeconds,
+		RateLimits: &struct {
+			MaxCostPerDay         *float64 `json:"max_cost_per_day,omitempty"`
+			MaxLlmCallsPerHour    *int     `json:"max_llm_calls_per_hour,omitempty"`
+			MaxToolCallsPerMinute *int     `json:"max_tool_calls_per_minute,omitempty"`
+			UseGlobalDefaults     *bool    `json:"use_global_defaults,omitempty"`
+		}{
+			UseGlobalDefaults:     &enabled,
+			MaxCostPerDay:         &maxCost,
+			MaxLlmCallsPerHour:    &maxCalls,
+			MaxToolCallsPerMinute: &maxTools,
+		},
+		DelegationPolicy: &struct {
+			AcceptFrom *[]struct {
+				Id   string                                                     `json:"id"`
+				Kind AgentCreateRequestSubagent3pDelegationPolicyAcceptFromKind `json:"kind"`
+			} `json:"accept_from,omitempty"`
+			Budget *struct {
+				MaxCostUsd *float64 `json:"max_cost_usd,omitempty"`
+				MaxTokens  *int     `json:"max_tokens,omitempty"`
+			} `json:"budget,omitempty"`
+			Depth *int                                                 `json:"depth,omitempty"`
+			Modes *[]AgentCreateRequestSubagent3pDelegationPolicyModes `json:"modes,omitempty"`
+			To    *[]struct {
+				Id   string                                             `json:"id"`
+				Kind AgentCreateRequestSubagent3pDelegationPolicyToKind `json:"kind"`
+			} `json:"to,omitempty"`
+		}{
+			Depth: intPtr(1),
+			Modes: &[]AgentCreateRequestSubagent3pDelegationPolicyModes{mode},
+			To: &[]struct {
+				Id   string                                             `json:"id"`
+				Kind AgentCreateRequestSubagent3pDelegationPolicyToKind `json:"kind"`
+			}{{Id: "ray", Kind: toKind}},
+		},
+		Executor: struct {
+			Cli          *AgentCreateRequestSubagent3pExecutorCli  `json:"cli,omitempty"`
+			CliArgs      *string                                   `json:"cli_args,omitempty"`
+			CliPath      *string                                   `json:"cli_path,omitempty"`
+			EnvOverrides *map[string]string                        `json:"env_overrides,omitempty"`
+			Kind         *AgentCreateRequestSubagent3pExecutorKind `json:"kind,omitempty"`
+		}{
+			Cli:     &cli,
+			CliPath: &cliPath,
+		},
+	}
+}
+
+// FixtureAgentCreateRequestSubagent3p_InvalidType returns a subagent_3p
+// request whose type value is not "subagent_3p". JSON Schema validation must
+// reject it.
+func FixtureAgentCreateRequestSubagent3p_InvalidType() AgentCreateRequestSubagent3p {
+	cli := AgentCreateRequestSubagent3pExecutorCliCodex
+	cliPath := "/usr/local/bin/codex"
+	return AgentCreateRequestSubagent3p{
+		Name: "Bad Type",
+		Type: AgentCreateRequestSubagent3pType("not-a-valid-type"),
+		Soul: "Valid soul content.",
+		Executor: struct {
+			Cli          *AgentCreateRequestSubagent3pExecutorCli  `json:"cli,omitempty"`
+			CliArgs      *string                                   `json:"cli_args,omitempty"`
+			CliPath      *string                                   `json:"cli_path,omitempty"`
+			EnvOverrides *map[string]string                        `json:"env_overrides,omitempty"`
+			Kind         *AgentCreateRequestSubagent3pExecutorKind `json:"kind,omitempty"`
+		}{
+			Cli:     &cli,
+			CliPath: &cliPath,
+		},
+	}
+}
+
+// FixtureAgentCreateRequestSubagent3p_ForbiddenField proves the discriminated
+// union's additionalProperties:false rejects a field this variant structurally
+// does not carry. Built from raw JSON (not the Go struct — the field does not
+// exist on AgentCreateRequestSubagent3p, so there is no way to set it via the
+// typed struct at all) to exercise the schema's additionalProperties gate
+// directly.
+func FixtureAgentCreateRequestSubagent3p_ForbiddenFieldJSON() []byte {
+	return []byte(`{
+		"type": "subagent_3p",
+		"name": "Bad 3p",
+		"soul": "Valid soul content.",
+		"executor": {"cli": "codex", "cli_path": "/usr/local/bin/codex"},
+		"tools_cfg": {"builtin": {"default_policy": "allow"}}
+	}`)
 }
 
 // ── AgentUpdateRequest ───────────────────────────────────────────────────────

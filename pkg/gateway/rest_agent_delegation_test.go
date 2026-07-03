@@ -265,7 +265,7 @@ func TestUpdateAgent_DelegationPreservesInertAcceptFrom(t *testing.T) {
 func TestCreateAgent_DelegationPolicyPersists(t *testing.T) {
 	api := buildDelegationTestAPI(t)
 
-	body := `{"name":"Delegator","soul":"delegator-soul","delegation_policy":{"to":[{"kind":"local","id":"ava"}],"modes":["await"],"depth":1}}`
+	body := `{"name":"Delegator","type":"Main","soul":"delegator-soul","delegation_policy":{"to":[{"kind":"local","id":"ava"}],"modes":["await"],"depth":1}}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
@@ -291,12 +291,13 @@ func TestCreateAgent_DelegationPolicyPersists(t *testing.T) {
 // TestCreateAgent_DelegationUnknownTarget_400 rejects an unknown local target on create.
 func TestCreateAgent_DelegationUnknownTarget_400(t *testing.T) {
 	api := buildDelegationTestAPI(t)
-	body := `{"name":"Delegator","delegation_policy":{"to":[{"kind":"local","id":"ghost"}]}}`
+	body := `{"name":"Delegator","type":"Main","soul":"delegator-soul","delegation_policy":{"to":[{"kind":"local","id":"ghost"}]}}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 	assert.Equal(t, http.StatusBadRequest, w.Code, "want 400; body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "does not exist", "the 400 must be the delegation-target check, not an unrelated 400")
 }
 
 // TestUpdateAgent_DelegationRemoteA2AAccepted proves a remote-a2a target is
