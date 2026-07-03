@@ -626,7 +626,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     // Locked agents can still save model and tool changes — do not disable auto-save
     {
       // I13: best-effort flush of pending edits on tab close / page hide /
-      // unload. The gateway validates every PUT against the per-user RBAC
+      // unload. The gateway validates every PUT against the account's
       // bearer token, so the flush must carry Authorization (sendBeacon
       // can't, which is why useAutoSave now uses fetch keepalive). The token
       // is read from the same store the REST client uses (sessionStorage

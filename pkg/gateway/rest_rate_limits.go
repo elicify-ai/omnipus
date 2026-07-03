@@ -22,8 +22,9 @@ import (
 // GET  /api/v1/security/rate-limits — returns current config + live daily cost.
 // PUT  /api/v1/security/rate-limits — partial update to config.sandbox.rate_limits.
 //
-// PUT is admin-only. Strict type validation rejects JSON strings in numeric
-// fields, floats in integer fields, negative values, NaN/Inf, and overflow.
+// PUT requires authentication only (single-user model). Strict type
+// validation rejects JSON strings in numeric fields, floats in integer
+// fields, negative values, NaN/Inf, and overflow.
 // Changes are hot-reloaded (requires_restart: false) via the 2-second config
 // poll in the agent loop.
 

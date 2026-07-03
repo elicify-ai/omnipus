@@ -21,7 +21,7 @@ interface UseAutoSaveOptions {
    * Optional bearer token sent as `Authorization: Bearer <token>` on the
    * keepalive flush request. Required when the flush endpoint requires auth
    * (the Omnipus gateway validates every state-changing call against the
-   * per-user RBAC token); without it the flush will 401 and silently drop.
+   * account's bearer token); without it the flush will 401 and silently drop.
    */
   flushAuthToken?: string
   /**
@@ -188,7 +188,7 @@ export function useAutoSave<T>(
   // Uses `fetch(..., { keepalive: true })` rather than `navigator.sendBeacon`
   // because keepalive fetch can carry an `Authorization: Bearer` header —
   // the Omnipus gateway validates every state-changing call against the
-  // per-user RBAC token, and sendBeacon cannot set request headers, so a
+  // account's bearer token, and sendBeacon cannot set request headers, so a
   // sendBeacon flush would 401 and silently drop the pending edit. This
   // prevents silently losing edits on tab close, browser reload, or
   // background throttling.

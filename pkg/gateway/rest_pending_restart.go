@@ -65,7 +65,7 @@ type pendingRestartEntry = gen.PendingRestartEntry
 // A set-then-revert scenario (admin writes X→Y then Y→X before restart)
 // correctly produces an empty array, clearing the UI banner without a restart.
 //
-// Admin-only: non-admin callers receive 403.
+// Gated by adminWrap (withAuth → RequireNotBypass); dev_mode_bypass returns 503.
 func (a *restAPI) HandlePendingRestart(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")

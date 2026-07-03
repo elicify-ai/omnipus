@@ -20,7 +20,8 @@ import (
 //
 // PUT accepts {"enabled": bool} and persists to config.sandbox.audit_log via
 // safeUpdateConfigJSON. Emits a security_setting_change audit entry before
-// returning. Admin-only; non-admin requests receive 403.
+// returning. Gated by adminWrap (withAuth → RequireNotBypass); dev_mode_bypass
+// returns 503.
 //
 // Response shape:
 //

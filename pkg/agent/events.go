@@ -463,15 +463,17 @@ type RateLimitPayload struct {
 
 // NotificationAdminBroadcast is the sentinel Recipient value used when a
 // notification could not be routed to a specific user and must reach every
-// admin connection instead (W-7 fallback).
+// connected client instead (single-user model — no role distinction; W-7
+// fallback). The constant name is kept for historical/call-site continuity.
 const NotificationAdminBroadcast = "*admin*"
 
 // NotificationPayload carries a user-facing notification for the live WS push
 // (#264). It is delivered ONLY to connections whose userID equals Recipient
-// (or, when Recipient == NotificationAdminBroadcast, to admin-role connections).
+// (or, when Recipient == NotificationAdminBroadcast, to every connected
+// client — single-user model, no role distinction).
 type NotificationPayload struct {
 	// Recipient is the username the notification is for, or
-	// NotificationAdminBroadcast to fan out to all admins.
+	// NotificationAdminBroadcast to fan out to every connected client.
 	Recipient        string `json:"recipient"`
 	ID               string `json:"id"`
 	NotificationType string `json:"notification_type"`
