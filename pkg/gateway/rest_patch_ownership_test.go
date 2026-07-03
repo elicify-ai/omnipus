@@ -183,18 +183,35 @@ func doPatchOwnership(
 // Traces to: path-sandbox-and-capability-tiers-spec.md
 // ---------------------------------------------------------------------------
 
+// TestPatchOwnership_NonAdminForbidden used to verify that a non-admin
+// caller is rejected with 403. Single-user model (operator directive,
+// 2026-07): a Gateway.Users entry that requests role="user" is normalized to
+// admin by config.LoadConfig's load-time self-heal
+// (config.normalizeAdminOnlyRoles) before it can ever reach request
+// handling. patchAgentOwnership's own admin check is unchanged (still denies
+// a literal non-admin role) but no authenticated caller can carry one
+// anymore — the *config.UserConfig this handler reads from UserContextKey{}
+// is exactly the kind of record config.LoadConfig produces in production.
+// This test is deliberately flipped (not deleted) to prove the new outcome:
+// the SAME "user"-configured account that used to be denied here now
+// succeeds, via the real config-loading choke point rather than a
+// hand-constructed UserConfig literal.
 func TestPatchOwnership_NonAdminForbidden(t *testing.T) {
 	api, _, _ := newPatchOwnershipAPI(t, "admin", nil)
 
-	nonAdmin := &config.UserConfig{Username: "regularuser", Role: config.UserRoleUser}
+	resolvedUser := normalizedUserForRole(t, "regularuser", "user")
+	require.Equal(t, config.UserRoleAdmin, resolvedUser.Role,
+		"single-user model: config.LoadConfig must normalize role=user to admin")
+
 	w := doPatchOwnership(t, api, "custom-agent-1",
 		map[string]any{"owner_username": "admin"},
-		nonAdmin, nil)
+		resolvedUser, nil)
 
-	require.Equal(t, http.StatusForbidden, w.Code)
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Contains(t, resp["error"], "admin only")
+	assert.Equal(t, true, resp["success"])
+	assert.Equal(t, "admin", resp["owner_username"], "new owner must be admin")
 }
 
 // ---------------------------------------------------------------------------

@@ -396,13 +396,31 @@ func TestHandleUsersList_NoHashesInResponse(t *testing.T) {
 	assert.Equal(t, false, byUser["bob"]["has_active_token"])
 }
 
-// TestHandleUsersList_NonAdmin403 verifies user-role callers receive 403.
+// TestHandleUsersList_NonAdmin403 used to verify user-role callers receive
+// 403. Single-user model (operator directive, 2026-07): a Gateway.Users
+// entry that requests role="user" is normalized to admin by
+// config.LoadConfig's load-time self-heal (config.normalizeAdminOnlyRoles)
+// before it can ever reach request handling. RequireAdmin's code is
+// unchanged (still denies a literal non-admin role) but no authenticated
+// caller can carry one anymore. This test is deliberately flipped (not
+// deleted) to prove the new outcome: the SAME "user"-configured account
+// that used to be denied here now succeeds, via the real config-loading
+// choke point rather than a hand-asserted role literal.
 func TestHandleUsersList_NonAdmin403(t *testing.T) {
 	api, _, _ := newUserMgmtAPIWithAdmin(t)
+
+	resolvedUser := normalizedUserForRole(t, "bob", "user")
+	require.Equal(t, config.UserRoleAdmin, resolvedUser.Role,
+		"single-user model: config.LoadConfig must normalize role=user to admin")
+
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/users", nil)
+	ctx := context.WithValue(r.Context(), RoleContextKey{}, resolvedUser.Role)
+	ctx = context.WithValue(ctx, ctxkey.UserContextKey{}, resolvedUser)
+	r = r.WithContext(ctx)
+
 	w := httptest.NewRecorder()
-	middleware.RequireAdmin(http.HandlerFunc(api.HandleUsersList)).
-		ServeHTTP(w, nonAdminRequest(http.MethodGet, "/api/v1/users", ""))
-	assert.Equal(t, http.StatusForbidden, w.Code)
+	middleware.RequireAdmin(http.HandlerFunc(api.HandleUsersList)).ServeHTTP(w, r)
+	assert.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 }
 
 // --- HandleUserDelete ---
@@ -610,24 +628,40 @@ func TestHandleUserChangeRole_RejectsInvalidRole(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
-// TestHandleUserDelete_NonAdmin403 verifies that a user-role (non-admin) caller
-// receives 403 when attempting DELETE /api/v1/users/{username}.
-//
-// The matrix test TestAdminRoutes_AdminOnly already covers this route through
-// the inner middleware chain. This per-handler test makes the admin gate visible
-// to anyone reading rest_users_test.go and exercises the same check at the
-// handler level, providing defense-in-depth against a middleware rewiring.
+// TestHandleUserDelete_NonAdmin403 used to verify that a user-role
+// (non-admin) caller receives 403 when attempting DELETE
+// /api/v1/users/{username}. Single-user model (operator directive,
+// 2026-07): a Gateway.Users entry that requests role="user" is normalized to
+// admin by config.LoadConfig's load-time self-heal
+// (config.normalizeAdminOnlyRoles) before it can ever reach request
+// handling. RequireAdmin's code is unchanged (still denies a literal
+// non-admin role) but no authenticated caller can carry one anymore. This
+// test is deliberately flipped (not deleted) to prove the new outcome: the
+// SAME "user"-configured account that used to be denied 403 at the
+// RequireAdmin gate now passes through to the handler — which returns 404
+// because "sometarget" is not a seeded user, proving the request reached
+// real handler logic rather than being denied at the door.
 //
 // Traces to: temporal-puzzling-melody.md Wave 1C — per-handler NonAdmin403
 // coverage gap identified by test-analyzer #3.
 func TestHandleUserDelete_NonAdmin403(t *testing.T) {
 	api, _, _ := newUserMgmtAPIWithAdmin(t)
+
+	resolvedUser := normalizedUserForRole(t, "bob", "user")
+	require.Equal(t, config.UserRoleAdmin, resolvedUser.Role,
+		"single-user model: config.LoadConfig must normalize role=user to admin")
+
+	r := httptest.NewRequest(http.MethodDelete, "/api/v1/users/sometarget", nil)
+	ctx := context.WithValue(r.Context(), RoleContextKey{}, resolvedUser.Role)
+	ctx = context.WithValue(ctx, ctxkey.UserContextKey{}, resolvedUser)
+	r = r.WithContext(ctx)
+
 	w := httptest.NewRecorder()
 	middleware.RequireAdmin(
 		http.HandlerFunc(api.HandleUserDelete),
-	).ServeHTTP(w, nonAdminRequest(http.MethodDelete, "/api/v1/users/sometarget", ""))
-	assert.Equal(t, http.StatusForbidden, w.Code,
-		"user-role caller must receive 403 on DELETE /api/v1/users/{username}")
+	).ServeHTTP(w, r)
+	assert.Equal(t, http.StatusNotFound, w.Code,
+		"user-role caller now passes RequireAdmin; handler 404s because sometarget doesn't exist")
 }
 
 // TestHandleUserChangeRole_NonAdmin403 used to verify that a user-role
@@ -795,14 +829,33 @@ func TestHandleUserResetPassword_CanLoginWithNewPassword(t *testing.T) {
 	assert.Regexp(t, canonicalTokenRE, resp["token"], "login must issue a canonical bearer")
 }
 
-// TestHandleUserResetPassword_NonAdmin403 verifies user-role → 403.
+// TestHandleUserResetPassword_NonAdmin403 used to verify user-role → 403.
+// Single-user model (operator directive, 2026-07): a Gateway.Users entry
+// that requests role="user" is normalized to admin by config.LoadConfig's
+// load-time self-heal (config.normalizeAdminOnlyRoles) before it can ever
+// reach request handling. RequireAdmin's code is unchanged (still denies a
+// literal non-admin role) but no authenticated caller can carry one
+// anymore. This test is deliberately flipped (not deleted) to prove the new
+// outcome: the SAME "user"-configured account that used to be denied here
+// now succeeds, via the real config-loading choke point rather than a
+// hand-asserted role literal.
 func TestHandleUserResetPassword_NonAdmin403(t *testing.T) {
 	api, _, _ := newUserMgmtAPIWithAdmin(t)
+
+	resolvedUser := normalizedUserForRole(t, "bob", "user")
+	require.Equal(t, config.UserRoleAdmin, resolvedUser.Role,
+		"single-user model: config.LoadConfig must normalize role=user to admin")
+
 	body := `{"password":"new-password-22"}`
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/users/admin/password", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	ctx := context.WithValue(r.Context(), RoleContextKey{}, resolvedUser.Role)
+	ctx = context.WithValue(ctx, ctxkey.UserContextKey{}, resolvedUser)
+	r = r.WithContext(ctx)
+
 	w := httptest.NewRecorder()
-	middleware.RequireAdmin(http.HandlerFunc(api.HandleUserResetPassword)).
-		ServeHTTP(w, nonAdminRequest(http.MethodPut, "/api/v1/users/admin/password", body))
-	assert.Equal(t, http.StatusForbidden, w.Code)
+	middleware.RequireAdmin(http.HandlerFunc(api.HandleUserResetPassword)).ServeHTTP(w, r)
+	assert.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 }
 
 // TestHandleUserResetPassword_NotFound_Returns404 verifies unknown user → 404.
