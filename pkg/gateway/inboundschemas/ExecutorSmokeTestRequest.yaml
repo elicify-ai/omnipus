@@ -1,0 +1,31 @@
+type: object
+description: >
+  Stateless request to actually run a trivial, real prompt through an
+  external-CLI worker's real dispatch path (the same driver.Run() a genuine
+  subagent_3p delegation uses) and return the real response. Distinct from
+  the zero-token POST /agents/{id}/runner/test (binary-present → version
+  handshake → credential-file-presence only, never spends a token) — this
+  spawns a real, authenticated subprocess and costs real model usage, so it
+  is an explicit operator action, never automatic. Body-driven and
+  agent-agnostic (mirrors POST /agents/executor-preview and
+  POST /system/cli-validate) so it works from the create wizard, where no
+  agent id exists yet, and from an existing agent's edit form alike.
+required:
+  - cli
+additionalProperties: false
+properties:
+  cli:
+    $ref: './ExternalCli.yaml'
+    x-go-type: ExternalCliTool
+  model:
+    type: string
+    maxLength: 256
+    description: Model slug/shape to run with, same semantics as ExecutorCommandPreviewRequest.model.
+  cli_path:
+    type: string
+    maxLength: 4096
+    description: Optional executor.cli_path override, same semantics as ExecutorCommandPreviewRequest.cli_path.
+  cli_args:
+    type: string
+    maxLength: 4096
+    description: Free-form additional CLI arguments, same tokenizer and safety filter as ExecutorConfig.cli_args.

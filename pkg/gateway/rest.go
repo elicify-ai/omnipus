@@ -1086,6 +1086,42 @@ func (a *restAPI) HandleAgents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// POST /api/v1/agents/executor-preview — stateless real-command preview
+	// (rest_executor_preview.go). Same agentID-SLOT carve-out pattern as
+	// executor-defaults immediately above (see that block's comment for why
+	// this is structurally different from the sessions/runner/tools/mailboxes
+	// sub-path guards below). Body-driven and agent-agnostic — mirrors POST
+	// /system/cli-validate — so it works both from the create wizard, where no
+	// agent id exists yet, and from an existing agent's edit form.
+	if agentID == "executor-preview" && subPath == "" {
+		if r.Method != http.MethodPost {
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		a.postAgentsExecutorPreview(w, r)
+		return
+	}
+
+	// POST /api/v1/agents/executor-smoke-test — actually RUN a bounded, real
+	// test prompt through an external-CLI worker's real dispatch path
+	// (rest_executor_smoketest.go). Same agentID-SLOT carve-out pattern as
+	// executor-preview/executor-defaults immediately above. Unlike those two
+	// (stateless computation only, no spawn), this endpoint DOES spend real
+	// model tokens and DOES run a real, authenticated subprocess — it
+	// enforces its own dedicated rate limit (smokeTestLimiter) and per-caller
+	// in-flight cap (smokeTestInflight) inline, since it shares this route's
+	// registration-time auth wrapping (api.withAuth(api.HandleAgents), same
+	// create-parity as executor-preview) rather than getting its own
+	// dedicated top-level route like /system/cli-validate does.
+	if agentID == "executor-smoke-test" && subPath == "" {
+		if r.Method != http.MethodPost {
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		a.postAgentsExecutorSmokeTest(w, r)
+		return
+	}
+
 	// Validate agentID before any filesystem operations (path traversal guard, C1).
 	if agentID != "" {
 		if err := validateEntityID(agentID); err != nil {
@@ -1267,7 +1303,7 @@ func (a *restAPI) listExecutorDefaults(w http.ResponseWriter) {
 				"--permission-mode acceptEdits",
 				"--max-turns <configured max turns> (only when a turn cap is configured)",
 			},
-			Notes: "The prompt is delivered via stdin — a trailing \"-\" argument tells claude to read it from stdin — never via a --prompt flag or positional argument. --resume/--session-id are never passed; every run starts a fresh claude session. --dangerously-skip-permissions is never passed (--permission-mode acceptEdits is the non-interactive posture used instead). Operator cli_args are appended after this list; an attempt to re-add --dangerously-skip-permissions, escalate --permission-mode to bypassPermissions, or change --output-format away from stream-json is dropped with a WARN (see argsafety.go) — the last one because the driver's own NDJSON stream parser requires stream-json output.",
+			Notes: "The prompt is delivered via stdin, with no positional prompt argument at all — never via a --prompt flag. --resume/--session-id are never passed; every run starts a fresh claude session. --dangerously-skip-permissions is never passed (--permission-mode acceptEdits is the non-interactive posture used instead). Operator cli_args are appended after this list; an attempt to re-add --dangerously-skip-permissions, escalate --permission-mode to bypassPermissions, or change --output-format away from stream-json is dropped with a WARN (see argsafety.go) — the last one because the driver's own NDJSON stream parser requires stream-json output.",
 		},
 		{
 			Cli: gen.Codex,

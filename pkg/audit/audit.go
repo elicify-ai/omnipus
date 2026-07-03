@@ -65,6 +65,16 @@ const (
 	// it is blocked (missing-binary/handshake-failed/unknown-cli). The classified
 	// reason — never raw stderr — is the only process output that reaches the log.
 	EventCliValidate = "cli.validate"
+	// EventExecutorSmokeTest records a POST /agents/executor-smoke-test call,
+	// which spawns a caller-influenced external-CLI binary/path to run a real,
+	// bounded test prompt (unlike cli-validate's zero-token --version probe,
+	// this spends real model usage). Details carry {cli, binary, ok} only —
+	// never response_text (the model's actual answer) or cli_args, either of
+	// which could plausibly carry operator-sensitive content.
+	// Decision is allow when the run produced a real response (ok=true) and
+	// deny otherwise (missing binary, handshake/timeout/turn-cap failure, or a
+	// denied/errored run).
+	EventExecutorSmokeTest = "executor.smoke_test"
 )
 
 // Decision values for audit entries. Values are Decision-compatible
@@ -107,6 +117,7 @@ func IsValidEventName(e EventName) bool {
 		EventProcessKillFailed,
 		EventChannelPairing,
 		EventCliValidate,
+		EventExecutorSmokeTest,
 		// Tool Registry redesign event names from events.go. These are
 		// emitted from the agent loop and the policy package.
 		EventToolPolicyDenyAttempted,

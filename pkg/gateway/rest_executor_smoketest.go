@@ -1,0 +1,607 @@
+//go:build !cgo
+
+// rest_executor_smoketest.go — POST /api/v1/agents/executor-smoke-test.
+//
+// Stateless, agent-agnostic: actually RUNS a trivial, real prompt through an
+// external-CLI worker's real dispatch path (the same driver.Run() a genuine
+// subagent_3p delegation uses — pkg/agent/runner/driver_{claude,codex,
+// opencode}.go via runner.NewDriver) and returns the real response. Distinct
+// from:
+//   - POST /agents/executor-preview (rest_executor_preview.go): computes argv
+//     only, never spawns anything.
+//   - POST /agents/{id}/runner/test and POST /system/cli-validate
+//     (rest_clivalidate.go): binary-present → version handshake →
+//     credential-file-presence only, WITHOUT running any real work (no model
+//     tokens spent) — see runner/conntest.go's doc.
+//
+// This endpoint DOES spend real model tokens and DOES run a real,
+// authenticated subprocess, so it is meaningfully more sensitive than either
+// of the above. It is hardened the same way rest_clivalidate.go hardens its
+// own caller-influenced spawn, PLUS the additional controls a real (not
+// --version-only) run needs:
+//
+//   - Auth: withAuth at CREATE-PARITY, inherited from HandleAgents'
+//     registration (api.withAuth(api.HandleAgents) in gateway.go) — same as
+//     executor-preview and executor-defaults, which are carved out of the
+//     same route.
+//   - Rate limit + per-caller in-flight cap: a DEDICATED pair
+//     (smokeTestLimiter, smokeTestInflight), more conservative than
+//     cli-validate's (cliValidateLimiter, cliValidateInflight) — see those
+//     vars' doc comments for the justification (this endpoint is materially
+//     more expensive per call: real tokens + a real subprocess held for up to
+//     smokeTestTimeoutSeconds, vs. a ~15s zero-token --version probe).
+//   - Pre-spawn guard: the resolved target (cli_path override, else the
+//     driver's own default binary name) MUST be a regular, executable file on
+//     $PATH — reuses isRegularExecutableFile (rest_clivalidate.go) — before
+//     any subprocess is started.
+//   - Bounded run: a fixed, hardcoded trivial prompt (not operator-
+//     configurable in this pass), a small MaxTurns cap, and a short
+//     TimeoutSeconds — see the consts below for the exact values and
+//     rationale.
+//   - Dangerous cli_args are filtered via the SAME denylist executor-preview
+//     already surfaces (runner.FilterDangerousCLIArgsDetailed) before ever
+//     reaching RunOptions — defense in depth on top of each driver's own
+//     internal filtering in buildArgs().
+//   - Consent: every event is routed through the REAL runner.ConsentDispatcher
+//     / runner.RouteConsent (the identical wiring pkg/agent/external_dispatch.go
+//     uses for production dispatch), with a nil ConsentHandler. A nil handler
+//     makes RouteConsent deny AND audit-log every permission request by
+//     default (FR-5.1), and ConsentDispatcher calls driver.Decide(decision) so
+//     the driver actually cancels the run on a denial (see runner/consent.go's
+//     POST-HOC CONSENT LIMITATION doc) instead of the denial being silently
+//     dropped until the outer timeout fires — see drainSmokeTestRun's
+//     EventKindPermissionRequest case below.
+//   - Scrubbed child env: sandbox.ScrubGatewayEnvForRunner() — the same
+//     allowlist real dispatch uses (pkg/agent/external_dispatch.go) — so the
+//     spawned CLI never inherits gateway secrets (OMNIPUS_MASTER_KEY, bearer
+//     tokens, ...).
+//   - Ephemeral workspace: a fresh, dedicated scratch directory under
+//     $OMNIPUS_HOME/executor-smoke-test-runs — NEVER a real agent's
+//     persistent workspace — removed (defer os.RemoveAll) once the run ends,
+//     success or failure.
+//   - Audit: exactly one audit event {cli, binary, ok} per call
+//     (audit.EventExecutorSmokeTest) — deliberately NEVER response_text (the
+//     model's actual answer) or cli_args, either of which could plausibly
+//     carry operator-sensitive content; a boolean outcome + the CLI identity
+//     is enough for an audit trail's purpose here.
+//
+// Note: this endpoint is reachable before an agent exists (create wizard) or
+// is saved, and for opencode specifically this means one click grants the
+// CLI's fully-bypassed permission mode (opencode's own always-on
+// --dangerously-skip-permissions, ADR-032 fix D — see driver_opencode.go) on
+// a real, credentialed subprocess — bounded by the rate limiter, the
+// smokeTestTimeoutSeconds timeout, and the smokeTestMaxTurns cap, but a
+// deliberate tradeoff consistent with this endpoint's stateless,
+// agent-agnostic design, not an oversight.
+
+package gateway
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/dapicom-ai/omnipus/pkg/agent/runner"
+	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
+	"github.com/dapicom-ai/omnipus/pkg/audit"
+	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/dapicom-ai/omnipus/pkg/sandbox"
+)
+
+// smokeTestPrompt is the fixed, hardcoded trivial test prompt run through the
+// real dispatch path. Deliberately NOT operator-configurable in this pass
+// (out of scope) — a predictable, cheap arithmetic question any working
+// CLI+model combination answers in one turn, so a non-answer is a meaningful
+// signal rather than a prompt-design artifact.
+const smokeTestPrompt = "What is 1+1? Reply with only the digit, nothing else."
+
+// smokeTestMaxTurns bounds the run to a small number of agentic turns. 3 is
+// ample for one-line arithmetic; needing more turns to answer it signals
+// something is wrong (a misbehaving CLI/model looping), and the cap cutting
+// the run short there is the cap doing its job, not a bug.
+const smokeTestMaxTurns = 3
+
+// smokeTestTimeoutSeconds bounds the whole run's wall-clock time, passed as
+// RunOptions.TimeoutSeconds (each driver enforces it internally via its own
+// context.WithTimeout — see e.g. driver_claude.go's Run). 30s is generous for
+// a trivial prompt (process startup + one real model round trip) while
+// keeping a caller-triggered spawn short-lived; a var (not const) so tests
+// can shorten it to exercise the timeout path without a real 30s wait.
+var smokeTestTimeoutSeconds = 30
+
+// smokeTestDrainGrace is added on top of smokeTestTimeoutSeconds for the
+// HANDLER's own context deadline — a belt-and-suspenders backstop on top of
+// RunOptions.TimeoutSeconds (which each driver enforces internally): enough
+// slack for the driver to notice its own timeout, emit its terminal
+// EventKindError, and close the channel, without the handler's own deadline
+// racing the driver's cleanup. If a driver ever fails to close its channel at
+// all, this is what still bounds the handler's response time.
+const smokeTestDrainGrace = 10 * time.Second
+
+// smokeTestCancelGrace bounds how long runExecutorSmokeTest waits, after the
+// outer context ends (client disconnect, or the smokeTestDrainGrace
+// backstop), for the driver to confirm its subprocess has actually exited
+// (its raw event channel closing) before proceeding to `defer
+// os.RemoveAll(workDir)`. See drainUntilClosedOrGrace's doc for why this
+// matters and why `out` (the consent-routed channel) is not itself a
+// reliable signal for this wait.
+const smokeTestCancelGrace = 3 * time.Second
+
+// smokeTestRunsSubdir is the $OMNIPUS_HOME subdirectory holding ephemeral
+// per-run scratch directories for executor-smoke-test runs. Deliberately a
+// SIBLING of runner.RunsRoot()'s "runner-runs" (not reused): the reaper
+// (pkg/agent/runner/reaper.go) scans specifically "runner-runs" for orphans
+// left behind by a crashed REAL dispatch, so this namespace must not be
+// swept into it. A smoke-test run is PRIMARILY torn down by this handler
+// itself (defer os.RemoveAll, success or failure, plus drainUntilClosedOrGrace
+// waiting out a client-disconnect race — see runExecutorSmokeTest) — but
+// that assumption was proven not airtight (a crash, or a wait that outruns
+// smokeTestCancelGrace, can still leak a dir), so gateway.go additionally
+// runs sweepSmokeTestOrphans() as a boot-time backstop for this namespace
+// specifically, mirroring ReapOrphans' "everything present at boot is an
+// orphan" reasoning without needing the git-worktree-aware teardown that
+// function has (every entry here is a plain os.MkdirTemp dir, never a
+// worktree).
+const smokeTestRunsSubdir = "executor-smoke-test-runs"
+
+// smokeTestLimiter is a DEDICATED, more conservative rate limiter than
+// cliValidateLimiter (20/min): this endpoint spends real model tokens and
+// holds a real subprocess for up to smokeTestTimeoutSeconds, materially more
+// expensive per call than cli-validate's zero-token `--version` probe (~15s
+// cap, no tokens). 5/min per IP is ample for an operator manually verifying a
+// config change while remaining well short of a meaningful cost-abuse
+// budget.
+var smokeTestLimiter = newAPIRateLimiter(5, 1*time.Minute)
+
+// smokeTestNewDriver is the driver factory used by runExecutorSmokeTest. It
+// is a package var (not a direct runner.NewDriver call) SOLELY so in-package
+// tests can inject a fake/stub runner.ExternalAgentRunner and exercise the
+// handler's rate-limit/in-flight-cap logic deterministically, without a real
+// subprocess's timing. This mirrors pkg/agent/external_dispatch.go's own
+// newExternalDriver package var, added for the identical reason. Production
+// always uses runner.NewDriver. Tests that need to prove the REAL dispatch
+// path (argv construction, env scrubbing, NDJSON parsing) leave this at its
+// default and drive a real stub-script binary via cli_path instead — see
+// rest_executor_smoketest_test.go's happy-path/error/timeout tests.
+var smokeTestNewDriver = runner.NewDriver
+
+// smokeTestInflight caps concurrent in-flight smoke tests PER CALLER at 1 —
+// tighter than cliValidateInflight's 2, since one held slot here occupies a
+// real subprocess + real token spend for up to smokeTestTimeoutSeconds (vs.
+// cli-validate's ~15s zero-token version probe). A DISTINCT instance from
+// cliValidateInflight is used deliberately rather than sharing it: the two
+// endpoints have very different cost profiles, and coupling their budgets
+// would let cheap cli-validate traffic from one caller starve that same
+// caller's smoke-test slot (or vice versa) for no operational benefit — each
+// gets its own, independently tunable budget instead.
+var smokeTestInflight = newInflightLimiter(1)
+
+// postAgentsExecutorSmokeTest handles POST /api/v1/agents/executor-smoke-test
+// (operationId postAgentsExecutorSmokeTest). Decodes and validates the
+// request body, enforces the dedicated rate limit + per-caller in-flight cap,
+// runs a real bounded test turn through the real driver dispatch path in an
+// ephemeral scratch workspace, audits the outcome, and returns the result.
+// Always responds 200 once a verdict is reached (including a bounded-out or
+// failed run) — the outcome rides in the body's ok/error fields, matching
+// cli-validate's convention of using the body for domain-level failure.
+func (a *restAPI) postAgentsExecutorSmokeTest(w http.ResponseWriter, r *http.Request) {
+	// No method check here: this handler's only call site (HandleAgents in
+	// rest.go) already gates on POST before ever reaching this function —
+	// mirrors its sibling postAgentsExecutorPreview, which correctly omits
+	// the same redundant re-check.
+
+	// Dedicated rate limit (smokeTestLimiter — see its doc for why this is a
+	// separate, more conservative budget than cliValidateLimiter). Applied
+	// inline rather than via the withRateLimit registration wrapper other
+	// dedicated-limiter endpoints use, because this endpoint shares its
+	// route's registration (api.withAuth(api.HandleAgents)) with the rest of
+	// /api/v1/agents/* — it is carved out of agentID inside the handler body,
+	// not given its own top-level route like /system/cli-validate.
+	ip := clientIP(r)
+	if !smokeTestLimiter.allow(ip) {
+		retryAfter := smokeTestLimiter.retryAfter(ip)
+		w.Header().Set("Retry-After", fmt.Sprintf("%d", retryAfter))
+		slog.Warn("executor-smoke-test: rate limit exceeded", "ip", ip, "retry_after", retryAfter)
+		jsonErr(w, http.StatusTooManyRequests, fmt.Sprintf("rate limit exceeded, retry after %d seconds", retryAfter))
+		return
+	}
+
+	var req gen.ExecutorSmokeTestRequest
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "ExecutorSmokeTestRequest", &req, validateEnabled) {
+		return
+	}
+
+	cli := string(req.Cli)
+	if !requireSupportedCLI(w, cli) {
+		return
+	}
+
+	// Per-caller in-flight cap (mirrors cli-validate's FR-013 pattern) —
+	// acquire BEFORE any spawn; a caller already at the cap is rejected fast
+	// (no queue, no silent wait).
+	key := cliValidateCallerKey(r)
+	if !smokeTestInflight.acquire(key) {
+		w.Header().Set("Retry-After", "1")
+		jsonErr(w, http.StatusTooManyRequests, "too many concurrent smoke tests in flight; retry shortly")
+		return
+	}
+	defer smokeTestInflight.release(key)
+
+	model := derefTrimStr(req.Model)
+	cliPath := derefTrimStr(req.CliPath)
+	cliArgsRaw := derefStr(req.CliArgs)
+
+	resp, resolvedBinary := a.runExecutorSmokeTest(r.Context(), cli, model, cliPath, cliArgsRaw)
+	a.auditExecutorSmokeTest(r, cli, resolvedBinary, resp)
+	jsonOK(w, resp)
+}
+
+// smokeTestOK builds a successful ExecutorSmokeTestResponse: ok=true,
+// response_text populated, error left nil. Paired with smokeTestFail so the
+// invariant "exactly one of response_text/error is populated, gated by ok"
+// — which nothing in the generated type itself enforces — is maintained at
+// ONE pair of construction sites instead of six independent struct literals
+// that each had to get it right by hand.
+func smokeTestOK(responseText string, durationMs int) gen.ExecutorSmokeTestResponse {
+	return gen.ExecutorSmokeTestResponse{
+		Ok:           true,
+		ResponseText: strPtr(responseText),
+		DurationMs:   durationMs,
+	}
+}
+
+// smokeTestFail builds a failed ExecutorSmokeTestResponse: ok=false, error
+// populated, response_text left nil. See smokeTestOK's doc.
+func smokeTestFail(errMsg string, durationMs int) gen.ExecutorSmokeTestResponse {
+	return gen.ExecutorSmokeTestResponse{
+		Ok:         false,
+		Error:      strPtr(errMsg),
+		DurationMs: durationMs,
+	}
+}
+
+// runExecutorSmokeTest performs the actual dispatch without any HTTP
+// concern, so it is directly unit-testable. It returns the wire response
+// plus the resolved binary path/name (for the caller's audit record — the
+// wire response schema deliberately does not carry this).
+func (a *restAPI) runExecutorSmokeTest(
+	ctx context.Context,
+	cli, model, cliPath, cliArgsRaw string,
+) (gen.ExecutorSmokeTestResponse, string) {
+	start := time.Now()
+	durationMs := func() int { return int(time.Since(start).Milliseconds()) }
+
+	// Pre-spawn guard (mirrors validateCLI's fail-closed pre-spawn check in
+	// rest_clivalidate.go): resolve the spawn target the SAME way the runtime
+	// spawn does, before guarding it, so the guard is authoritative over what
+	// would actually be exec'd. Unlike cli-validate (which treats an empty
+	// cli_path as missing-binary WITHOUT a spawn — it validates a
+	// caller-typed override specifically), an empty cli_path here is the
+	// NORMAL "use the configured default" case, matching executor-preview and
+	// real dispatch — so it resolves to the driver's own default binary name
+	// via $PATH instead of short-circuiting.
+	target := cliPath
+	if target == "" {
+		target = runner.DefaultCLIBinary(cli)
+	}
+	resolvedTarget, lpErr := exec.LookPath(target)
+	if lpErr != nil || !isRegularExecutableFile(resolvedTarget) {
+		return smokeTestFail(
+			fmt.Sprintf("%q CLI binary not found or not executable (%s)", cli, target),
+			durationMs(),
+		), target
+	}
+	resolvedBinary := absResolvePath(target)
+
+	// Ephemeral scratch workspace — NEVER a real agent's persistent
+	// workspace. Removed unconditionally once the run ends, success or
+	// failure.
+	root := filepath.Join(config.OmnipusHomeDir(), smokeTestRunsSubdir)
+	if mkRootErr := os.MkdirAll(root, 0o700); mkRootErr != nil {
+		return smokeTestFail(
+			fmt.Sprintf("could not prepare scratch workspace: %v", mkRootErr),
+			durationMs(),
+		), resolvedBinary
+	}
+	workDir, mkErr := os.MkdirTemp(root, "run-")
+	if mkErr != nil {
+		return smokeTestFail(fmt.Sprintf("could not create scratch workspace: %v", mkErr), durationMs()), resolvedBinary
+	}
+	defer func() {
+		if rmErr := os.RemoveAll(workDir); rmErr != nil {
+			slog.Warn("executor-smoke-test: failed to remove ephemeral workspace",
+				"dir", workDir, "err", rmErr)
+		}
+	}()
+
+	runID := fmt.Sprintf("smoke-%d", time.Now().UnixNano())
+
+	// filterKey is the internal denylist key each driver's OWN buildArgs
+	// passes to filterDangerousCLIArgs — "claude", not the wire
+	// "claude-code"; codex/opencode's wire and internal names coincide.
+	// Shared with executor-preview via the ONE runner.FilterKey helper (see
+	// its doc) instead of each endpoint re-deriving this mapping
+	// independently.
+	filterKey := runner.FilterKey(cli)
+	parsedArgs := runner.ParseCLIArgs(cliArgsRaw, runID)
+	// Defense in depth: filter dangerous cli_args here too, on top of each
+	// driver's own internal filterDangerousCLIArgs call in buildArgs() — a
+	// dangerous arg cannot sneak into a REAL run through either path. Dropped
+	// tokens are already logged by the driver's own internal call
+	// (logDroppedCLIArgs), so the detail return here is intentionally
+	// discarded — this call's only job is to make sure the ARGV actually
+	// passed to Run never carries a denylisted flag.
+	safeArgs, _ := runner.FilterDangerousCLIArgsDetailed(filterKey, parsedArgs)
+
+	// Belt-and-suspenders context: RunOptions.TimeoutSeconds is what each
+	// driver enforces internally (its own context.WithTimeout, firing at
+	// exactly smokeTestTimeoutSeconds and emitting its own EventKindError —
+	// see driver_claude.go's Run). This outer deadline is strictly WIDER
+	// (+smokeTestDrainGrace) so the driver's own timeout always fires first
+	// in the normal case; it only matters as a backstop if a driver were to
+	// fail to close its event channel after its own timeout fires.
+	runCtx, cancel := context.WithTimeout(
+		ctx, time.Duration(smokeTestTimeoutSeconds)*time.Second+smokeTestDrainGrace)
+	defer cancel()
+
+	// Consent: a trivial arithmetic prompt should never need to call a tool.
+	// NewDriver's consent parameter only stores a reference on the returned
+	// driver for the driver's OWN later use (e.g. a future interactive
+	// resume path) — no driver reads it internally to gate anything today.
+	// Deny-by-default is NOT implemented here; it is enforced below by
+	// routing every event through the real runner.ConsentDispatcher with a
+	// nil handler (see the file-header "Consent" bullet). Passing nil here
+	// too keeps the driver's own stored field consistent with that posture.
+	driver, err := smokeTestNewDriver(cli, nil)
+	if err != nil {
+		return smokeTestFail(fmt.Sprintf("could not construct driver: %v", err), durationMs()), resolvedBinary
+	}
+
+	evCh, runErr := driver.Run(runCtx, runner.RunOptions{
+		RunID:          runID,
+		WorkDir:        workDir,
+		Input:          smokeTestPrompt,
+		Env:            sandbox.ScrubGatewayEnvForRunner(),
+		TimeoutSeconds: smokeTestTimeoutSeconds,
+		MaxTurns:       smokeTestMaxTurns,
+		CLIPath:        cliPath,
+		CLIArgs:        safeArgs,
+		Model:          model,
+	})
+	if runErr != nil {
+		return smokeTestFail(fmt.Sprintf("failed to start %s: %v", cli, runErr), durationMs()), resolvedBinary
+	}
+
+	slog.Info("executor-smoke-test: run started",
+		"run_id", runID, "cli", cli, "timeout_s", smokeTestTimeoutSeconds, "max_turns", smokeTestMaxTurns)
+
+	// Route every event through the REAL runner.ConsentDispatcher (the same
+	// wiring pkg/agent/external_dispatch.go uses for production dispatch) —
+	// NOT a bespoke drain that only understands output/error events and
+	// silently drops permission requests. A nil handler makes RouteConsent
+	// deny + audit-log every request (FR-5.1); ConsentDispatcher then calls
+	// driver.Decide(decision), which the driver treats as a run-canceling
+	// denial. drainSmokeTestRun's EventKindPermissionRequest case (below)
+	// surfaces this as a specific error the instant the (already-decided)
+	// event is forwarded, rather than waiting for that cancellation to
+	// unwind into the generic timeout path.
+	out := make(chan runner.RunEvent, 64)
+	go func() {
+		defer close(out)
+		runner.ConsentDispatcher(runCtx, evCh, driver, runID, "", nil, out)
+	}()
+
+	responseText, ok, errMsg := drainSmokeTestRun(runCtx, out)
+
+	// If runCtx ended (client disconnect, or this handler's own
+	// smokeTestDrainGrace backstop — NOT the normal "the run finished"
+	// path), the subprocess's exec.CommandContext is a CHILD of this same
+	// ctx so a kill has been REQUESTED, but "requested" is not "has
+	// exited" — drainSmokeTestRun's ctx.Done() branch returns without
+	// waiting for that. Returning now would let the `defer
+	// os.RemoveAll(workDir)` above race a still-alive subprocess that may
+	// still be writing into the very directory about to be removed.
+	// Explicitly Cancel() (idempotent; belt-and-suspenders on top of the
+	// already-propagated ctx cancellation) and wait — bounded by
+	// smokeTestCancelGrace so a driver that never closes its channel still
+	// cannot hang the handler forever — for evCh (the driver's OWN raw
+	// channel, not `out`: ConsentDispatcher stops reading evCh as soon as
+	// ITS ctx is Done too, so `out` closing is not a reliable "the
+	// subprocess is gone" signal here) to actually close before proceeding.
+	if runCtx.Err() != nil {
+		driver.Cancel()
+		drainUntilClosedOrGrace(evCh, smokeTestCancelGrace)
+	}
+
+	var resp gen.ExecutorSmokeTestResponse
+	if ok {
+		resp = smokeTestOK(responseText, durationMs())
+	} else {
+		resp = smokeTestFail(errMsg, durationMs())
+	}
+
+	slog.Info("executor-smoke-test: run finished",
+		"run_id", runID, "cli", cli, "ok", ok, "duration_ms", resp.DurationMs)
+
+	return resp, resolvedBinary
+}
+
+// smokeTestPermissionDeniedErr is the specific, non-generic error surfaced
+// when a smoke-test run attempts a tool call — deny-by-default (FR-5.1)
+// means this always aborts the run, so a caller must be told exactly why the
+// run failed rather than seeing the generic timeout message a silently
+// dropped permission-request event would otherwise fall through to.
+const smokeTestPermissionDeniedErr = "the CLI attempted a tool call, which is denied by default for this test"
+
+// drainSmokeTestRun consumes the CONSENT-ROUTED event stream (ch is the `out`
+// channel runner.ConsentDispatcher forwards to — see runExecutorSmokeTest),
+// concatenating every EventKindOutput chunk into the final response text
+// (mirrors external_dispatch.go's drainExternalRun aggregation pattern — a
+// strings.Builder accumulating ev.Output.Text). It returns as soon as a
+// terminal condition is reached:
+//
+//   - EventKindPermissionRequest: by the time this event reaches ch,
+//     ConsentDispatcher has ALREADY routed it through RouteConsent (denied,
+//     since runExecutorSmokeTest wires a nil ConsentHandler — FR-5.1) and
+//     called driver.Decide(false), which the driver treats as a
+//     run-canceling denial (see runner/consent.go's POST-HOC CONSENT
+//     LIMITATION doc). Return the specific smokeTestPermissionDeniedErr
+//     immediately instead of waiting for that cancellation to unwind into
+//     the generic timeout/EOF path below.
+//   - EventKindError: ok=false, errMsg from the event (or a generic fallback
+//     when the event carries no message). A "run exceeded timeout (FR-5.4)"
+//     message from the driver's OWN internal timeout naturally satisfies the
+//     "timeout-shaped error" requirement without any special-casing here.
+//   - The channel closes (run ended, with or without an explicit
+//     EventKindEnd — NOTE: a successful claude-code run's final "result" line
+//     is itself emitted as EventKindOutput, not followed by a separate
+//     EventKindEnd; external_dispatch.go's own drain loop treats channel
+//     close as the authoritative "the run is over" signal for exactly this
+//     reason, and this mirrors that): ok=true only when the accumulated text
+//     is non-empty (the whole point of a smoke test is confirming a REAL
+//     response came back — an empty-output "success" is not proof of
+//     anything and is reported as a failure).
+//   - ctx.Done() fires before any of the above: ok=false with a
+//     timeout-shaped error (the backstop path — see smokeTestDrainGrace's
+//     doc).
+func drainSmokeTestRun(ctx context.Context, ch <-chan runner.RunEvent) (responseText string, ok bool, errMsg string) {
+	var sb strings.Builder
+	for {
+		select {
+		case <-ctx.Done():
+			return strings.TrimSpace(
+				sb.String(),
+			), false, "executor smoke test timeout: run did not complete before the bound was reached"
+		case ev, chOk := <-ch:
+			if !chOk {
+				out := strings.TrimSpace(sb.String())
+				if out == "" {
+					return out, false, "run completed with no textual output"
+				}
+				return out, true, ""
+			}
+			switch ev.Kind {
+			case runner.EventKindOutput:
+				if ev.Output != nil {
+					sb.WriteString(ev.Output.Text)
+				}
+			case runner.EventKindError:
+				msg := "run failed"
+				if ev.Err != nil && ev.Err.Message != "" {
+					msg = ev.Err.Message
+				}
+				return strings.TrimSpace(sb.String()), false, msg
+			case runner.EventKindPermissionRequest:
+				return strings.TrimSpace(sb.String()), false, smokeTestPermissionDeniedErr
+			}
+			// Other event kinds (start/tool-call/diff/tool-result) are
+			// ignored for the smoke test's purposes: it is a trivial Q&A
+			// that carries no further signal for a pass/fail verdict.
+		}
+	}
+}
+
+// drainUntilClosedOrGrace discards every remaining event on ch — the
+// driver's OWN raw event channel (evCh), NOT the consent-routed `out`
+// runner.ConsentDispatcher writes to; ConsentDispatcher's own select also has
+// a `<-ctx.Done()` case that returns immediately without draining evCh, so
+// `out` closing is not a reliable "the subprocess actually exited" signal —
+// until ch closes or graceTimeout elapses, whichever comes first. Uses its
+// own time.Timer rather than deriving from the (already-canceled) outer ctx,
+// so the wait itself is not immediately short-circuited by the very
+// cancellation it exists to wait out.
+func drainUntilClosedOrGrace(ch <-chan runner.RunEvent, graceTimeout time.Duration) {
+	timer := time.NewTimer(graceTimeout)
+	defer timer.Stop()
+	for {
+		select {
+		case _, chOk := <-ch:
+			if !chOk {
+				return
+			}
+		case <-timer.C:
+			return
+		}
+	}
+}
+
+// sweepSmokeTestOrphans removes every directory under
+// $OMNIPUS_HOME/executor-smoke-test-runs left behind by a prior gateway
+// process that never got to run its own `defer os.RemoveAll(workDir)` (see
+// runExecutorSmokeTest) — a crash, SIGKILL, or a client-disconnect race that
+// outran even drainUntilClosedOrGrace's bounded wait. Mirrors
+// runner.ReapOrphans' "everything present at boot is an orphan" reasoning
+// (pkg/agent/runner/reaper.go): this directory is a dedicated root nothing
+// else writes to, and postAgentsExecutorSmokeTest only creates entries AFTER
+// boot, so there is no live run to mis-classify by sweeping at boot, before
+// any new smoke-test run can be dispatched. Unlike ReapOrphans, no
+// git-worktree-aware teardown is needed: every entry here is a plain
+// os.MkdirTemp scratch dir, never a git worktree, so a flat os.RemoveAll per
+// entry suffices. Resilient: a single entry's removal failure is recorded and
+// the sweep continues; a missing root is not an error (nothing to sweep).
+func sweepSmokeTestOrphans() (removed int, errs []error) {
+	root := filepath.Join(config.OmnipusHomeDir(), smokeTestRunsSubdir)
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, []error{fmt.Errorf("reading executor-smoke-test-runs root %q: %w", root, err)}
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		dir := filepath.Join(root, e.Name())
+		if rmErr := os.RemoveAll(dir); rmErr != nil {
+			errs = append(errs, fmt.Errorf("removing %q: %w", dir, rmErr))
+			slog.Warn("gateway: executor-smoke-test orphan sweep failed to remove dir", "dir", dir, "error", rmErr)
+			continue
+		}
+		removed++
+		slog.Info("gateway: executor-smoke-test orphan sweep removed dir", "dir", dir)
+	}
+	return removed, errs
+}
+
+// auditExecutorSmokeTest emits exactly one audit event per call carrying the
+// authenticated caller (Entry.User, mirroring cli-validate's M-1
+// attribution), the cli, the resolved binary, and the ok outcome (FR-013-
+// style minimal record). Deliberately excludes response_text (the model's
+// actual answer) and cli_args — either could plausibly carry
+// operator-sensitive content, and a boolean outcome + the CLI identity is
+// enough for an audit trail's purpose here. Best-effort: a nil auditor or a
+// write error is logged and swallowed — audit failure must never fail the
+// diagnostic.
+func (a *restAPI) auditExecutorSmokeTest(
+	r *http.Request,
+	cli, resolvedBinary string,
+	resp gen.ExecutorSmokeTestResponse,
+) {
+	if a.auditor == nil {
+		return
+	}
+	decision := audit.DecisionDeny
+	if resp.Ok {
+		decision = audit.DecisionAllow
+	}
+	if err := a.auditor.Log(&audit.Entry{
+		Event:    audit.EventExecutorSmokeTest,
+		Decision: decision,
+		User:     cliValidateAuditUser(r),
+		Details: map[string]any{
+			"cli":    cli,
+			"binary": resolvedBinary,
+			"ok":     resp.Ok,
+		},
+	}); err != nil {
+		slog.Warn("audit write failed", "event", audit.EventExecutorSmokeTest, "error", err)
+	}
+}

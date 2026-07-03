@@ -255,6 +255,16 @@ func (d *ClaudeDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEven
 // session ID, and `claude --resume <id>` errors when no session with that ID
 // exists. --session-id would need a valid UUID (opts.RunID is not one), so it
 // is also omitted — every run simply starts fresh (ADR-032 fix C).
+//
+// No positional prompt argument is appended (not even a trailing "-"). A "-"
+// token is NOT a documented stdin sentinel for this CLI — live-tested against
+// the real binary (v2.1.199): `claude -p - --output-format json < /dev/null`
+// succeeds and proceeds past the "input required" check, proving "-" is read
+// as a literal one-character prompt string, not a stdin marker. The
+// documented AND empirically-confirmed-working pattern is simpler: omit the
+// positional prompt entirely and let `claude -p` consume all of stdin
+// automatically when no positional prompt is given. opts.Input is piped to
+// cmd.Stdin in Run() (not here) and needs no positional counterpart.
 func (d *ClaudeDriver) buildArgs(opts RunOptions) []string {
 	// --verbose is REQUIRED for --output-format stream-json to actually emit
 	// its event stream (ADR-032 fix C) — without it the driver's NDJSON parser
@@ -271,8 +281,10 @@ func (d *ClaudeDriver) buildArgs(opts RunOptions) []string {
 	if opts.MaxTurns > 0 {
 		args = append(args, "--max-turns", fmt.Sprintf("%d", opts.MaxTurns))
 	}
-	// Append operator-supplied extra args (ExecutorConfig.cli_args, MAJ-5) before
-	// the trailing "-" so the stdin sentinel stays last. ADR-032 fix M-1: a
+	// Append operator-supplied extra args (ExecutorConfig.cli_args, MAJ-5) last —
+	// there is no trailing positional/stdin-sentinel token to keep after them
+	// (see the buildArgs doc comment above: no "-" is appended; opts.Input
+	// reaches the child exclusively via cmd.Stdin in Run()). ADR-032 fix M-1: a
 	// flag that could re-enable a full permission bypass (or escalate
 	// --permission-mode to "bypassPermissions") is stripped first — see
 	// argsafety.go. This filter applies to opts.CLIArgs ONLY; the driver's
@@ -280,7 +292,6 @@ func (d *ClaudeDriver) buildArgs(opts RunOptions) []string {
 	kept, dropped := filterDangerousCLIArgs("claude", opts.CLIArgs)
 	logDroppedCLIArgs("runner/claude", "claude", opts.RunID, dropped)
 	args = append(args, kept...)
-	args = append(args, "-") // read prompt from stdin
 	return args
 }
 
@@ -452,6 +463,12 @@ func (d *ClaudeDriver) parseResultEvent(raw []byte, runID string) (RunEvent, boo
 		Result    string `json:"result"`
 		Error     string `json:"error"`
 		SessionID string `json:"session_id"`
+		// IsError is authoritative over Subtype: a live auth-failure payload
+		// has been observed as {"subtype":"success","is_error":true,
+		// "result":"Not logged in · Please run /login",...} — subtype claims
+		// success while is_error reports the real outcome. Every caller of
+		// this event MUST check IsError, not just Subtype.
+		IsError bool `json:"is_error"`
 	}
 	if err := json.Unmarshal(raw, &ev); err != nil {
 		return RunEvent{}, false
@@ -461,6 +478,21 @@ func (d *ClaudeDriver) parseResultEvent(raw []byte, runID string) (RunEvent, boo
 	}
 	switch ev.Subtype {
 	case "success":
+		if ev.IsError {
+			// subtype "success" with is_error true: the real error text lives
+			// in Result for this shape (e.g. "Not logged in · Please run
+			// /login"), not Error — fall back to a generic message only when
+			// Result is also empty.
+			msg := ev.Result
+			if msg == "" {
+				msg = "claude reported an error result"
+			}
+			return RunEvent{
+				Kind:  EventKindError,
+				RunID: runID,
+				Err:   &ErrorEvent{Message: msg, Fatal: true},
+			}, true
+		}
 		if ev.Result != "" {
 			return RunEvent{
 				Kind:   EventKindOutput,

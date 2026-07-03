@@ -1,0 +1,93 @@
+type: object
+description: >
+  The REAL, computed command Omnipus would run for the previewed executor
+  settings — argv sourced from the same buildArgs() each driver uses at real
+  dispatch time, not a hand-maintained description. Purely informational;
+  nothing here is persisted. cli_args tokens the safety filter would strip at
+  real dispatch time are surfaced in dropped_args rather than silently
+  omitted, so the operator can see and fix a mistyped or disallowed argument
+  before saving instead of discovering later (via a server log line they
+  never see) that it was ignored.
+required:
+  - binary
+  - argv
+  - command_line
+  - prompt_delivery
+  - dropped_args
+additionalProperties: false
+properties:
+  binary:
+    type: string
+    description: >
+      The resolved binary name or path that would be spawned — the previewed
+      cli_path verbatim when non-empty, otherwise the CLI's bare default
+      command name (resolved via the OS $PATH at actual spawn time, which
+      this preview cannot see into).
+    example: claude
+  argv:
+    type: array
+    items:
+      type: string
+    description: >
+      The exact, ordered argument list that would be passed to the binary,
+      already reflecting the previewed model/cli_path/cli_args/
+      max_tool_iterations and with any denylisted cli_args tokens already
+      removed (see dropped_args for what was removed and why). Does not
+      include a token for the task prompt itself for claude-code or codex
+      (delivered via stdin, not argv — see prompt_delivery); for opencode the
+      literal placeholder "<prompt>" appears in the position the real task
+      prompt would occupy.
+    example:
+      - "-p"
+      - "--output-format"
+      - "stream-json"
+      - "--verbose"
+      - "--no-chrome"
+      - "--model"
+      - "sonnet"
+      - "--permission-mode"
+      - "acceptEdits"
+  command_line:
+    type: string
+    description: >
+      argv joined into a single, shell-quoted display string (binary first),
+      suitable for showing directly in the UI or copying into a terminal.
+    example: 'claude -p --output-format stream-json --verbose --no-chrome --model sonnet --permission-mode acceptEdits'
+  prompt_delivery:
+    type: string
+    enum:
+      - stdin
+      - "positional argument after --"
+    description: >
+      How the actual task prompt (soul + instructions, composed at real
+      dispatch time) reaches this CLI — never a --prompt flag on any of the
+      three supported CLIs. claude-code and codex read it from stdin; opencode
+      receives it as the last positional argument after a literal "--"
+      end-of-options separator.
+  model_dropped_reason:
+    type: string
+    description: >
+      Present only when a non-empty model was previewed but --model/-m was
+      omitted from argv because it does not fit the target CLI's required
+      shape (opencode requires "provider/model"). Absent when the model was
+      applied as given or no model was previewed.
+  dropped_args:
+    type: array
+    description: >
+      Every token from the previewed cli_args that the safety filter
+      (argsafety.go) removed before it reached argv, with why. Empty when
+      cli_args was empty or every token was kept.
+    items:
+      type: object
+      required:
+        - flag
+        - reason
+      additionalProperties: false
+      properties:
+        flag:
+          type: string
+          description: The exact cli_args token (or flag=value pair) that was dropped.
+        reason:
+          type: string
+          description: Why this token is not permitted for this CLI.
+    example: []

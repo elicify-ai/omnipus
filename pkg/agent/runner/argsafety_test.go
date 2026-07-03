@@ -489,3 +489,77 @@ func containsFlag(args []string, flag string) bool {
 	}
 	return false
 }
+
+// --- FilterDangerousCLIArgsDetailed (exported, used by rest_executor_preview.go) ---
+
+// TestFilterDangerousCLIArgsDetailed_MatchesFlagOnlyVariant proves the
+// exported detailed function agrees with the unexported flag-only
+// filterDangerousCLIArgs on both kept and dropped-flag sets — it is a strict
+// superset (adds Reason), not a different filtering decision.
+func TestFilterDangerousCLIArgsDetailed_MatchesFlagOnlyVariant(t *testing.T) {
+	args := []string{"--verbose", "--dangerously-skip-permissions", "--permission-mode", "bypassPermissions", "--foo"}
+
+	wantKept, wantDropped := filterDangerousCLIArgs("claude", args)
+	gotKept, gotDetailed := FilterDangerousCLIArgsDetailed("claude", args)
+
+	if strings.Join(gotKept, ",") != strings.Join(wantKept, ",") {
+		t.Fatalf("kept mismatch: detailed=%v flag-only=%v", gotKept, wantKept)
+	}
+	if len(gotDetailed) != len(wantDropped) {
+		t.Fatalf("dropped count mismatch: detailed=%v flag-only=%v", gotDetailed, wantDropped)
+	}
+	for i, d := range gotDetailed {
+		if d.Flag != wantDropped[i] {
+			t.Fatalf("dropped[%d].Flag = %q, want %q", i, d.Flag, wantDropped[i])
+		}
+		if d.Reason == "" {
+			t.Fatalf("dropped[%d] (%q) has an empty Reason", i, d.Flag)
+		}
+	}
+}
+
+// TestFilterDangerousCLIArgsDetailed_ReasonsPerCLI proves every denylisted
+// entry across all three CLIs carries a non-empty Reason — a bare flag name
+// with no explanation would defeat the point of the executor-preview
+// endpoint's dropped_args field.
+func TestFilterDangerousCLIArgsDetailed_ReasonsPerCLI(t *testing.T) {
+	cases := []struct {
+		cli  string
+		args []string
+	}{
+		{"claude", []string{"--dangerously-skip-permissions"}},
+		{"claude", []string{"--permission-mode", "bypassPermissions"}},
+		{"claude", []string{"--output-format", "text"}},
+		{"codex", []string{"--dangerously-bypass-approvals-and-sandbox"}},
+		{"codex", []string{"--sandbox", "danger-full-access"}},
+		{"codex", []string{"--ask-for-approval", "on-failure"}},
+		{"codex", []string{"--json"}},
+		{"opencode", []string{"--dangerously-skip-permissions"}},
+		{"opencode", []string{"--format", "text"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.cli+"/"+strings.Join(tc.args, "_"), func(t *testing.T) {
+			_, dropped := FilterDangerousCLIArgsDetailed(tc.cli, tc.args)
+			if len(dropped) == 0 {
+				t.Fatalf("expected at least one dropped entry for %v", tc.args)
+			}
+			for _, d := range dropped {
+				if d.Reason == "" {
+					t.Fatalf("dropped flag %q has an empty Reason", d.Flag)
+				}
+			}
+		})
+	}
+}
+
+// TestFilterDangerousCLIArgsDetailed_EmptyWhenNothingDropped proves a benign
+// args slice returns a nil/empty dropped slice, not a slice of empty entries.
+func TestFilterDangerousCLIArgsDetailed_EmptyWhenNothingDropped(t *testing.T) {
+	kept, dropped := FilterDangerousCLIArgsDetailed("claude", []string{"--add-dir", "/tmp/x"})
+	if len(dropped) != 0 {
+		t.Fatalf("expected no dropped entries; got %v", dropped)
+	}
+	if !containsSeq(kept, "--add-dir", "/tmp/x") {
+		t.Fatalf("expected benign args preserved; kept=%v", kept)
+	}
+}

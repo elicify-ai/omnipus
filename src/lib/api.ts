@@ -72,6 +72,18 @@ import {
   // Agent System P0 fix: real auto-applied CLI flags (replaces misleading
   // placeholder ghost-text in the executor cli_args field).
   ExecutorDefaults as ExecutorDefaultsSchema,
+  // Real, live command-line preview for a subagent_3p executor's current
+  // settings (replaces the static AutoAppliedFlags description with the
+  // ACTUAL computed argv/command_line for what the operator has typed).
+  // Only the RESPONSE schema is needed — fetchExecutorPreview's request body
+  // is a plain outbound POST, validated server-side, not SPA-edge-validated
+  // (same as fetchCliValidate's CliValidateRequest above).
+  ExecutorCommandPreviewResponse as ExecutorCommandPreviewResponseSchema,
+  // Real, imperative "send a test message" run for a subagent_3p executor
+  // (POST /agents/executor-smoke-test) — same "response schema only" rule as
+  // ExecutorCommandPreviewResponse above; the request body is validated
+  // server-side.
+  ExecutorSmokeTestResponse as ExecutorSmokeTestResponseSchema,
   GatewayStatus as GatewayStatusSchema,
   ToolRegistryEntry as ToolRegistryEntrySchema,
   ChannelEntry as ChannelEntrySchema,
@@ -366,6 +378,13 @@ import type {
   // Spec-4 — sub-agent executor + external-CLI runner test (contract-first #8):
   ExecutorConfig,
   RunnerTestResponse,
+  // Real, live command-line preview for a subagent_3p executor (contract-first #8):
+  ExecutorCommandPreviewRequest,
+  ExecutorCommandPreviewResponse,
+  // Real, imperative "send a test message" run for a subagent_3p executor
+  // (contract-first #8):
+  ExecutorSmokeTestRequest,
+  ExecutorSmokeTestResponse,
   // Version drift detection (used by useVersionCheck):
   VersionResponse,
   // Voice provider capability detection (used by voice-provider-detect):
@@ -504,6 +523,12 @@ export type {
   // Spec-4 — sub-agent executor + external-CLI runner test:
   ExecutorConfig,
   RunnerTestResponse,
+  // Real, live command-line preview for a subagent_3p executor:
+  ExecutorCommandPreviewRequest,
+  ExecutorCommandPreviewResponse,
+  // Real, imperative "send a test message" run for a subagent_3p executor:
+  ExecutorSmokeTestRequest,
+  ExecutorSmokeTestResponse,
   // O4 gateway self-restart:
   GatewayRestartResponse,
   // O14 god-mode switch:
@@ -1593,6 +1618,56 @@ export function fetchExecutorDefaults(): Promise<ExecutorDefaults[]> {
     '/agents/executor-defaults',
     undefined,
     z.array(ExecutorDefaultsSchema) as ZodType<ExecutorDefaults[]>,
+  )
+}
+
+// fetchExecutorPreview computes the REAL command line Omnipus would spawn for
+// a subagent_3p external-CLI worker with the given settings — argv sourced
+// from the same buildArgs() logic each driver (claude/codex/opencode) uses at
+// real dispatch time, not a hand-maintained description like
+// fetchExecutorDefaults above. Stateless and body-driven (mirrors
+// fetchCliValidate) so it works both from the create wizard, where no agent
+// id exists yet, and from an existing agent's edit form. Any cli_args token
+// the safety filter would strip at real dispatch time is excluded from the
+// previewed argv and reported instead in the response's dropped_args, so the
+// operator sees before saving that something they typed will be silently
+// ignored. Pass an AbortSignal so a debounced live-preview caller can cancel
+// a stale in-flight request when a field changes again.
+export function fetchExecutorPreview(
+  req: ExecutorCommandPreviewRequest,
+  opts?: { signal?: AbortSignal },
+): Promise<ExecutorCommandPreviewResponse> {
+  return request<ExecutorCommandPreviewResponse>(
+    '/agents/executor-preview',
+    { method: 'POST', body: JSON.stringify(req), signal: opts?.signal },
+    ExecutorCommandPreviewResponseSchema as ZodType<ExecutorCommandPreviewResponse>,
+  )
+}
+
+// fetchExecutorSmokeTest actually RUNS a trivial, real prompt through a
+// subagent_3p external-CLI worker's real dispatch path (the same
+// driver.Run() a genuine delegation uses) and returns the real response.
+// Unlike fetchExecutorPreview above (config-only, argv computation, never
+// spawns anything), this spends real model usage and holds a real
+// subprocess open for up to ~30s (rest_executor_smoketest.go's bounded
+// timeout/turn cap) — an explicit operator action only, never called
+// automatically. Stateless and body-driven (mirrors fetchExecutorPreview and
+// fetchCliValidate) so it works both from the create wizard, where no agent
+// id exists yet, and from an existing agent's edit form. Always resolves
+// (never rejects) for a domain-level failure — a failed run comes back as a
+// 200 with `ok: false` and `error` set, matching fetchCliValidate's
+// convention of using the body for domain-level failure rather than 4xx/5xx;
+// this only rejects (throws ApiError) for a genuine transport/auth/rate-limit
+// failure. Pass an AbortSignal so the caller can cancel a stale in-flight
+// run when a rapid re-click fires a new one, or on unmount.
+export function fetchExecutorSmokeTest(
+  req: ExecutorSmokeTestRequest,
+  opts?: { signal?: AbortSignal },
+): Promise<ExecutorSmokeTestResponse> {
+  return request<ExecutorSmokeTestResponse>(
+    '/agents/executor-smoke-test',
+    { method: 'POST', body: JSON.stringify(req), signal: opts?.signal },
+    ExecutorSmokeTestResponseSchema as ZodType<ExecutorSmokeTestResponse>,
   )
 }
 

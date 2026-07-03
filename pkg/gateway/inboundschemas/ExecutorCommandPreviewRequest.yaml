@@ -1,0 +1,51 @@
+type: object
+description: >
+  Stateless request to preview the REAL command line Omnipus would spawn for
+  a subagent_3p external-CLI worker with these settings — computed by calling
+  the same buildArgs() logic each driver uses at real dispatch time
+  (pkg/agent/runner/driver_{claude,codex,opencode}.go via the
+  BuildClaudeArgs/BuildCodexArgs/BuildOpencodeArgs cross-package export), not
+  a hand-maintained approximation. Body-driven and agent-agnostic (mirrors
+  POST /system/cli-validate) so it works both from the create wizard, where
+  no agent id exists yet, and from an existing agent's edit form.
+required:
+  - cli
+additionalProperties: false
+properties:
+  cli:
+    $ref: './ExternalCli.yaml'
+    x-go-type: ExternalCliTool
+  model:
+    type: string
+    maxLength: 256
+    description: >
+      Model slug/shape to preview with. Omit or leave empty to preview the
+      "no model configured" case (the --model/-m flag is simply absent from
+      the resulting command for claude-code and codex; for opencode the flag
+      is also absent when the value is not "provider/model"-shaped — see the
+      response's model_dropped_reason for that case).
+  cli_path:
+    type: string
+    maxLength: 4096
+    description: >
+      Optional executor.cli_path override to preview. Empty means "resolved
+      via the OS $PATH at spawn time" and the response's binary field reflects
+      that (the bare command name, not an absolute path).
+  cli_args:
+    type: string
+    maxLength: 4096
+    description: >
+      Free-form additional CLI arguments to preview, same shape and same
+      tokenizer as ExecutorConfig.cli_args. Any token the safety filter would
+      strip at real dispatch time is NOT included in the previewed command —
+      it is reported instead in the response's dropped_args, so the operator
+      sees before saving that an argument they typed will be silently ignored
+      and why.
+  max_tool_iterations:
+    type: integer
+    minimum: 0
+    description: >
+      Optional turn cap to preview (mirrors AgentConfig.max_tool_iterations).
+      Omitted or zero previews with the external-CLI dispatch default (50) —
+      the same fallback runExternalCLISubTurn applies when an agent has no
+      explicit cap.

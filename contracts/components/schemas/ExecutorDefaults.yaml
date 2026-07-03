@@ -49,7 +49,6 @@ properties:
       any of the three supported CLIs) and any other non-obvious behavior not
       captured by the flag list above.
     example: >
-      The prompt is delivered via stdin (a trailing "-" argument tells claude
-      to read it from stdin) — never via a --prompt flag or positional
-      argument. --resume/--session-id are never passed; every run starts a
-      fresh claude session.
+      The prompt is delivered via stdin, with no positional prompt argument
+      at all — never via a --prompt flag. --resume/--session-id are never
+      passed; every run starts a fresh claude session.

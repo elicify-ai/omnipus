@@ -129,8 +129,8 @@ func TestExternalDispatch_StreamsOutput_RunsInWorkspaceDir(t *testing.T) {
 	if opts[0].TimeoutSeconds != 30 {
 		t.Errorf("driver TimeoutSeconds = %d, want 30", opts[0].TimeoutSeconds)
 	}
-	if opts[0].MaxTurns != defaultExternalMaxTurns {
-		t.Errorf("driver MaxTurns = %d, want %d", opts[0].MaxTurns, defaultExternalMaxTurns)
+	if opts[0].MaxTurns != DefaultExternalMaxTurns {
+		t.Errorf("driver MaxTurns = %d, want %d", opts[0].MaxTurns, DefaultExternalMaxTurns)
 	}
 
 	// ADR-032: the workspace dir is the agent's PERSISTENT tree — it must NOT

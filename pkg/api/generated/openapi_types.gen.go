@@ -1418,6 +1418,24 @@ func (e DoctorResultIssuesSeverity) Valid() bool {
 	}
 }
 
+// Defines values for ExecutorCommandPreviewResponsePromptDelivery.
+const (
+	PositionalArgumentAfter ExecutorCommandPreviewResponsePromptDelivery = "positional argument after --"
+	Stdin                   ExecutorCommandPreviewResponsePromptDelivery = "stdin"
+)
+
+// Valid indicates whether the value is a known member of the ExecutorCommandPreviewResponsePromptDelivery enum.
+func (e ExecutorCommandPreviewResponsePromptDelivery) Valid() bool {
+	switch e {
+	case PositionalArgumentAfter:
+		return true
+	case Stdin:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ExecutorConfigKind.
 const (
 	ExternalCli ExecutorConfigKind = "external-cli"
@@ -4012,7 +4030,7 @@ type Agent struct {
 
 	// Executor Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
 	// "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
-	// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude and codex receive the soul+instructions prompt via stdin (a trailing "-" argument tells each to read from stdin); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like sandbox_profile / shell_policy / tools_cfg / fallback_models / model_params / skills / delegation_policy are hidden for subagent_3p agents and rejected 400 on PUT if set.
+	// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude receives the soul+instructions prompt via stdin with NO positional prompt argument at all (a bare "-" is read by this CLI as a literal one-character prompt string, not a stdin sentinel, so none is appended — claude -p consumes all of stdin automatically when no positional prompt is given); codex also receives it via stdin, but signals that with a trailing "-" positional argument (a real stdin sentinel for this CLI); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like sandbox_profile / shell_policy / tools_cfg / fallback_models / model_params / skills / delegation_policy are hidden for subagent_3p agents and rejected 400 on PUT if set.
 	// "cli" (required for subagent_3p agents when kind="external-cli") is locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
 	// "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
 	// The "kind" field is derived server-side from the agent's type (Main -> native, Subagent -> native, subagent_3p -> external-cli). It is exposed in responses but is NOT a writable field on create/update — clients cannot choose kind directly. Server-side derive at the handler boundary per the agent-form spec.
@@ -4587,7 +4605,7 @@ type AgentCreateRequestSubagent3p struct {
 
 	// Executor Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
 	// "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
-	// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude and codex receive the soul+instructions prompt via stdin (a trailing "-" argument tells each to read from stdin); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like sandbox_profile / shell_policy / tools_cfg / fallback_models / model_params / skills / delegation_policy are hidden for subagent_3p agents and rejected 400 on PUT if set.
+	// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude receives the soul+instructions prompt via stdin with NO positional prompt argument at all (a bare "-" is read by this CLI as a literal one-character prompt string, not a stdin sentinel, so none is appended — claude -p consumes all of stdin automatically when no positional prompt is given); codex also receives it via stdin, but signals that with a trailing "-" positional argument (a real stdin sentinel for this CLI); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like sandbox_profile / shell_policy / tools_cfg / fallback_models / model_params / skills / delegation_policy are hidden for subagent_3p agents and rejected 400 on PUT if set.
 	// "cli" (required for subagent_3p agents when kind="external-cli") is locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
 	// "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
 	// The "kind" field is derived server-side from the agent's type (Main -> native, Subagent -> native, subagent_3p -> external-cli). It is exposed in responses but is NOT a writable field on create/update — clients cannot choose kind directly. Server-side derive at the handler boundary per the agent-form spec.
@@ -4963,7 +4981,7 @@ type AgentUpdateRequest struct {
 
 	// Executor Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
 	// "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
-	// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude and codex receive the soul+instructions prompt via stdin (a trailing "-" argument tells each to read from stdin); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like sandbox_profile / shell_policy / tools_cfg / fallback_models / model_params / skills / delegation_policy are hidden for subagent_3p agents and rejected 400 on PUT if set.
+	// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude receives the soul+instructions prompt via stdin with NO positional prompt argument at all (a bare "-" is read by this CLI as a literal one-character prompt string, not a stdin sentinel, so none is appended — claude -p consumes all of stdin automatically when no positional prompt is given); codex also receives it via stdin, but signals that with a trailing "-" positional argument (a real stdin sentinel for this CLI); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like sandbox_profile / shell_policy / tools_cfg / fallback_models / model_params / skills / delegation_policy are hidden for subagent_3p agents and rejected 400 on PUT if set.
 	// "cli" (required for subagent_3p agents when kind="external-cli") is locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
 	// "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
 	// The "kind" field is derived server-side from the agent's type (Main -> native, Subagent -> native, subagent_3p -> external-cli). It is exposed in responses but is NOT a writable field on create/update — clients cannot choose kind directly. Server-side derive at the handler boundary per the agent-form spec.
@@ -5772,9 +5790,57 @@ type ExecProxyStatus struct {
 	Running bool `json:"running"`
 }
 
+// ExecutorCommandPreviewRequest Stateless request to preview the REAL command line Omnipus would spawn for a subagent_3p external-CLI worker with these settings — computed by calling the same buildArgs() logic each driver uses at real dispatch time (pkg/agent/runner/driver_{claude,codex,opencode}.go via the BuildClaudeArgs/BuildCodexArgs/BuildOpencodeArgs cross-package export), not a hand-maintained approximation. Body-driven and agent-agnostic (mirrors POST /system/cli-validate) so it works both from the create wizard, where no agent id exists yet, and from an existing agent's edit form.
+type ExecutorCommandPreviewRequest struct {
+	// Cli The three external CLI executors Omnipus can drive for a subagent_3p worker (kind="external-cli"): "claude-code" (pkg/agent/runner/driver_claude.go), "codex" (driver_codex.go), and "opencode" (driver_opencode.go). Shared by ExecutorConfig.cli (the agent's configured executor), ExecutorDefaults.cli (GET /api/v1/agents/executor-defaults' per-CLI reference row), and CliValidateRequest.cli (POST /api/v1/system/cli-validate) so the three stay a single generated type instead of three independently-declared enums that can drift apart (see the earlier oapi-codegen collision this schema resolves: before extraction, the symbol clash across the three inline enums forced generated constant names like "ExecutorConfigCliClaudeCode" instead of a clean shared "ExternalCliToolClaudeCode"). Titled "ExternalCliTool" rather than the shorter "ExternalCli" because ExecutorConfig.kind's "external-cli" enum VALUE (a completely different field, the execution- runtime selector) already generates an unprefixed Go constant literally named `ExternalCli` (of type ExecutorConfigKind) — reusing that identifier here would collide at compile time.
+	Cli ExternalCliTool `json:"cli"`
+
+	// CliArgs Free-form additional CLI arguments to preview, same shape and same tokenizer as ExecutorConfig.cli_args. Any token the safety filter would strip at real dispatch time is NOT included in the previewed command — it is reported instead in the response's dropped_args, so the operator sees before saving that an argument they typed will be silently ignored and why.
+	CliArgs *string `json:"cli_args,omitempty"`
+
+	// CliPath Optional executor.cli_path override to preview. Empty means "resolved via the OS $PATH at spawn time" and the response's binary field reflects that (the bare command name, not an absolute path).
+	CliPath *string `json:"cli_path,omitempty"`
+
+	// MaxToolIterations Optional turn cap to preview (mirrors AgentConfig.max_tool_iterations). Omitted or zero previews with the external-CLI dispatch default (50) — the same fallback runExternalCLISubTurn applies when an agent has no explicit cap.
+	MaxToolIterations *int `json:"max_tool_iterations,omitempty"`
+
+	// Model Model slug/shape to preview with. Omit or leave empty to preview the "no model configured" case (the --model/-m flag is simply absent from the resulting command for claude-code and codex; for opencode the flag is also absent when the value is not "provider/model"-shaped — see the response's model_dropped_reason for that case).
+	Model *string `json:"model,omitempty"`
+}
+
+// ExecutorCommandPreviewResponse The REAL, computed command Omnipus would run for the previewed executor settings — argv sourced from the same buildArgs() each driver uses at real dispatch time, not a hand-maintained description. Purely informational; nothing here is persisted. cli_args tokens the safety filter would strip at real dispatch time are surfaced in dropped_args rather than silently omitted, so the operator can see and fix a mistyped or disallowed argument before saving instead of discovering later (via a server log line they never see) that it was ignored.
+type ExecutorCommandPreviewResponse struct {
+	// Argv The exact, ordered argument list that would be passed to the binary, already reflecting the previewed model/cli_path/cli_args/ max_tool_iterations and with any denylisted cli_args tokens already removed (see dropped_args for what was removed and why). Does not include a token for the task prompt itself for claude-code or codex (delivered via stdin, not argv — see prompt_delivery); for opencode the literal placeholder "<prompt>" appears in the position the real task prompt would occupy.
+	Argv []string `json:"argv"`
+
+	// Binary The resolved binary name or path that would be spawned — the previewed cli_path verbatim when non-empty, otherwise the CLI's bare default command name (resolved via the OS $PATH at actual spawn time, which this preview cannot see into).
+	Binary string `json:"binary"`
+
+	// CommandLine argv joined into a single, shell-quoted display string (binary first), suitable for showing directly in the UI or copying into a terminal.
+	CommandLine string `json:"command_line"`
+
+	// DroppedArgs Every token from the previewed cli_args that the safety filter (argsafety.go) removed before it reached argv, with why. Empty when cli_args was empty or every token was kept.
+	DroppedArgs []struct {
+		// Flag The exact cli_args token (or flag=value pair) that was dropped.
+		Flag string `json:"flag"`
+
+		// Reason Why this token is not permitted for this CLI.
+		Reason string `json:"reason"`
+	} `json:"dropped_args"`
+
+	// ModelDroppedReason Present only when a non-empty model was previewed but --model/-m was omitted from argv because it does not fit the target CLI's required shape (opencode requires "provider/model"). Absent when the model was applied as given or no model was previewed.
+	ModelDroppedReason *string `json:"model_dropped_reason,omitempty"`
+
+	// PromptDelivery How the actual task prompt (soul + instructions, composed at real dispatch time) reaches this CLI — never a --prompt flag on any of the three supported CLIs. claude-code and codex read it from stdin; opencode receives it as the last positional argument after a literal "--" end-of-options separator.
+	PromptDelivery ExecutorCommandPreviewResponsePromptDelivery `json:"prompt_delivery"`
+}
+
+// ExecutorCommandPreviewResponsePromptDelivery How the actual task prompt (soul + instructions, composed at real dispatch time) reaches this CLI — never a --prompt flag on any of the three supported CLIs. claude-code and codex read it from stdin; opencode receives it as the last positional argument after a literal "--" end-of-options separator.
+type ExecutorCommandPreviewResponsePromptDelivery string
+
 // ExecutorConfig Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
 // "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
-// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude and codex receive the soul+instructions prompt via stdin (a trailing "-" argument tells each to read from stdin); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like sandbox_profile / shell_policy / tools_cfg / fallback_models / model_params / skills / delegation_policy are hidden for subagent_3p agents and rejected 400 on PUT if set.
+// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude receives the soul+instructions prompt via stdin with NO positional prompt argument at all (a bare "-" is read by this CLI as a literal one-character prompt string, not a stdin sentinel, so none is appended — claude -p consumes all of stdin automatically when no positional prompt is given); codex also receives it via stdin, but signals that with a trailing "-" positional argument (a real stdin sentinel for this CLI); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like sandbox_profile / shell_policy / tools_cfg / fallback_models / model_params / skills / delegation_policy are hidden for subagent_3p agents and rejected 400 on PUT if set.
 // "cli" (required for subagent_3p agents when kind="external-cli") is locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
 // "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
 // The "kind" field is derived server-side from the agent's type (Main -> native, Subagent -> native, subagent_3p -> external-cli). It is exposed in responses but is NOT a writable field on create/update — clients cannot choose kind directly. Server-side derive at the handler boundary per the agent-form spec.
@@ -5809,6 +5875,36 @@ type ExecutorDefaults struct {
 
 	// Notes Free-text clarification covering how the prompt itself is delivered to this CLI (stdin vs. a positional argument — NEVER a --prompt flag on any of the three supported CLIs) and any other non-obvious behavior not captured by the flag list above.
 	Notes string `json:"notes"`
+}
+
+// ExecutorSmokeTestRequest Stateless request to actually run a trivial, real prompt through an external-CLI worker's real dispatch path (the same driver.Run() a genuine subagent_3p delegation uses) and return the real response. Distinct from the zero-token POST /agents/{id}/runner/test (binary-present → version handshake → credential-file-presence only, never spends a token) — this spawns a real, authenticated subprocess and costs real model usage, so it is an explicit operator action, never automatic. Body-driven and agent-agnostic (mirrors POST /agents/executor-preview and POST /system/cli-validate) so it works from the create wizard, where no agent id exists yet, and from an existing agent's edit form alike.
+type ExecutorSmokeTestRequest struct {
+	// Cli The three external CLI executors Omnipus can drive for a subagent_3p worker (kind="external-cli"): "claude-code" (pkg/agent/runner/driver_claude.go), "codex" (driver_codex.go), and "opencode" (driver_opencode.go). Shared by ExecutorConfig.cli (the agent's configured executor), ExecutorDefaults.cli (GET /api/v1/agents/executor-defaults' per-CLI reference row), and CliValidateRequest.cli (POST /api/v1/system/cli-validate) so the three stay a single generated type instead of three independently-declared enums that can drift apart (see the earlier oapi-codegen collision this schema resolves: before extraction, the symbol clash across the three inline enums forced generated constant names like "ExecutorConfigCliClaudeCode" instead of a clean shared "ExternalCliToolClaudeCode"). Titled "ExternalCliTool" rather than the shorter "ExternalCli" because ExecutorConfig.kind's "external-cli" enum VALUE (a completely different field, the execution- runtime selector) already generates an unprefixed Go constant literally named `ExternalCli` (of type ExecutorConfigKind) — reusing that identifier here would collide at compile time.
+	Cli ExternalCliTool `json:"cli"`
+
+	// CliArgs Free-form additional CLI arguments, same tokenizer and safety filter as ExecutorConfig.cli_args.
+	CliArgs *string `json:"cli_args,omitempty"`
+
+	// CliPath Optional executor.cli_path override, same semantics as ExecutorCommandPreviewRequest.cli_path.
+	CliPath *string `json:"cli_path,omitempty"`
+
+	// Model Model slug/shape to run with, same semantics as ExecutorCommandPreviewRequest.model.
+	Model *string `json:"model,omitempty"`
+}
+
+// ExecutorSmokeTestResponse The result of actually running a trivial test prompt through an external-CLI worker's real dispatch path. Always 200 (even for a failed run) — the outcome is carried in `ok`/`error`, not the HTTP status, matching POST /system/cli-validate's convention of using the body for domain-level failure rather than 4xx/5xx.
+type ExecutorSmokeTestResponse struct {
+	// DurationMs Wall-clock time the run actually took, in milliseconds.
+	DurationMs int `json:"duration_ms"`
+
+	// Error A human-readable reason the run did not succeed (process failed to start, authentication failed, timed out, exceeded the bounded turn cap, or the CLI itself reported an error). Present when ok is false.
+	Error *string `json:"error,omitempty"`
+
+	// Ok Whether the CLI produced a real response before the bounded timeout/turn cap was reached.
+	Ok bool `json:"ok"`
+
+	// ResponseText The CLI's actual final response text. Present when ok is true; absent (or empty) otherwise.
+	ResponseText *string `json:"response_text,omitempty"`
 }
 
 // ExternalCliTool The three external CLI executors Omnipus can drive for a subagent_3p worker (kind="external-cli"): "claude-code" (pkg/agent/runner/driver_claude.go), "codex" (driver_codex.go), and "opencode" (driver_opencode.go). Shared by ExecutorConfig.cli (the agent's configured executor), ExecutorDefaults.cli (GET /api/v1/agents/executor-defaults' per-CLI reference row), and CliValidateRequest.cli (POST /api/v1/system/cli-validate) so the three stay a single generated type instead of three independently-declared enums that can drift apart (see the earlier oapi-codegen collision this schema resolves: before extraction, the symbol clash across the three inline enums forced generated constant names like "ExecutorConfigCliClaudeCode" instead of a clean shared "ExternalCliToolClaudeCode"). Titled "ExternalCliTool" rather than the shorter "ExternalCli" because ExecutorConfig.kind's "external-cli" enum VALUE (a completely different field, the execution- runtime selector) already generates an unprefixed Go constant literally named `ExternalCli` (of type ExecutorConfigKind) — reusing that identifier here would collide at compile time.
@@ -9050,6 +9146,12 @@ type ListWorkspacesParamsStatus string
 
 // CreateAgentJSONRequestBody defines body for CreateAgent for application/json ContentType.
 type CreateAgentJSONRequestBody = AgentCreateRequest
+
+// PostAgentsExecutorPreviewJSONRequestBody defines body for PostAgentsExecutorPreview for application/json ContentType.
+type PostAgentsExecutorPreviewJSONRequestBody = ExecutorCommandPreviewRequest
+
+// PostAgentsExecutorSmokeTestJSONRequestBody defines body for PostAgentsExecutorSmokeTest for application/json ContentType.
+type PostAgentsExecutorSmokeTestJSONRequestBody = ExecutorSmokeTestRequest
 
 // UpdateAgentJSONRequestBody defines body for UpdateAgent for application/json ContentType.
 type UpdateAgentJSONRequestBody = AgentUpdateRequest

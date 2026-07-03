@@ -267,11 +267,31 @@ func ScrubGatewayEnv() []string {
 //	                       live as files under it (default ~/.claude, reached
 //	                       via HOME, already allowlisted). Passed through so an
 //	                       operator-isolated config dir resolves in the child.
-//	OPENAI_API_KEY       — Codex + opencode: the OpenAI model key.
+//	OPENAI_API_KEY       — Codex + opencode: the OpenAI model key. NOTE: as of
+//	                       this writing, `codex exec`'s own auth-resolution
+//	                       path (codex-rs/login/src/auth/manager.rs::
+//	                       load_auth) never reads this var for the default
+//	                       provider — implicit OPENAI_API_KEY login was
+//	                       deliberately removed (an OpenAI engineer confirmed
+//	                       on github.com/openai/codex#5212 it will not come
+//	                       back). Left allowlisted regardless: opencode's
+//	                       Codex-compatible mode and other tooling may still
+//	                       consult it, and forwarding it is not itself unsafe.
 //	OPENAI_BASE_URL      — Codex + opencode: provider endpoint override.
 //	CODEX_HOME           — Codex: override for ~/.codex (holds auth.json).
 //	                       Default ~/.codex is reached via HOME; this honors a
 //	                       custom location. See providers.CodexHomeEnvVar.
+//	CODEX_API_KEY        — Codex: the env var `codex exec` actually checks
+//	                       first for non-interactive auth (load_auth, gated by
+//	                       `enable_codex_api_key_env: true`, which `codex exec`
+//	                       sets). Source-grounded against codex-rs/login/src/
+//	                       auth/manager.rs on the openai/codex main branch —
+//	                       NOT documented end-user-facing behavior, but the
+//	                       actual code path this runner's headless spawns hit.
+//	CODEX_ACCESS_TOKEN   — Codex: the env var load_auth checks next, before
+//	                       falling back to a persisted `auth.json`/keyring from
+//	                       a prior `codex login`. Same source grounding as
+//	                       CODEX_API_KEY above.
 //
 // DO NOT add a key here unless an external-CLI runner provably needs it to
 // authenticate. Anything added is a secret that reaches every external-CLI
@@ -286,6 +306,8 @@ var runnerCredentialEnvKeys = map[string]struct{}{
 	"OPENAI_API_KEY":       {},
 	"OPENAI_BASE_URL":      {},
 	"CODEX_HOME":           {},
+	"CODEX_API_KEY":        {},
+	"CODEX_ACCESS_TOKEN":   {},
 }
 
 // RunnerCredentialEnvKeys returns a sorted snapshot of the external-CLI runner
