@@ -15,25 +15,12 @@ vi.mock('@/lib/api', async (importOriginal) => {
   }
 })
 
-vi.mock('@/store/auth', () => ({
-  useAuthStore: vi.fn((selector: Parameters<typeof import('@/store/auth').useAuthStore>[0]) =>
-    selector({
-      token: 'test-token',
-      role: 'admin',
-      username: 'admin',
-      setToken: vi.fn(),
-      clearAuth: vi.fn(),
-    })
-  ),
-}))
-
 const mockAddToast = vi.fn()
 vi.mock('@/store/ui', () => ({
   useUiStore: vi.fn(() => ({ addToast: mockAddToast })),
 }))
 
 import { fetchSandboxStatus, fetchSandboxConfig, updateSandboxConfig, reAuth, ApiError } from '@/lib/api'
-import { useAuthStore } from '@/store/auth'
 import { SandboxSection } from './SandboxSection'
 import type { SandboxStatus, SandboxConfigResponse } from '@/lib/api'
 
@@ -81,23 +68,11 @@ const baseConfig: SandboxConfigResponse = {
   requires_restart: false,
 }
 
-function mockNonAdmin() {
-  vi.mocked(useAuthStore).mockImplementation(
-    (selector: Parameters<typeof useAuthStore>[0]) =>
-      selector({ token: 'test-token', role: 'user', username: 'alice', setToken: vi.fn(), clearAuth: vi.fn() }) as never
-  )
-}
-
 beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(fetchSandboxStatus).mockResolvedValue(baseStatus)
   vi.mocked(fetchSandboxConfig).mockResolvedValue(baseConfig)
   vi.mocked(updateSandboxConfig).mockResolvedValue({ ...baseConfig, requires_restart: true })
-  // Reset auth mock to admin after clearAllMocks
-  vi.mocked(useAuthStore).mockImplementation(
-    (selector: Parameters<typeof useAuthStore>[0]) =>
-      selector({ token: 'test-token', role: 'admin', username: 'admin', setToken: vi.fn(), clearAuth: vi.fn() }) as never
-  )
   // Reset localStorage/sessionStorage
   localStorage.clear()
   sessionStorage.clear()
@@ -197,29 +172,6 @@ describe('allowed_paths editor', () => {
       const errors = screen.getAllByText(/must be absolute/i)
       expect(errors.length).toBeGreaterThan(0)
     })
-  })
-
-  it('non-admin role: no Add button, no Delete buttons for paths', async () => {
-    mockNonAdmin()
-    vi.mocked(fetchSandboxConfig).mockResolvedValue({
-      ...baseConfig,
-      allowed_paths: ['/a'],
-    })
-
-    renderSection()
-
-    await waitFor(() => {
-      expect(screen.getByText('/a')).toBeInTheDocument()
-    })
-
-    // No Edit button for non-admin
-    expect(screen.queryByRole('button', { name: /^edit$/i })).not.toBeInTheDocument()
-    // No Add button
-    expect(screen.queryByRole('button', { name: /add path/i })).not.toBeInTheDocument()
-    // No Save button
-    expect(screen.queryByRole('button', { name: /^save$/i })).not.toBeInTheDocument()
-    // No delete buttons for paths
-    expect(screen.queryByRole('button', { name: /delete path/i })).not.toBeInTheDocument()
   })
 
   it('delete button fires updateSandboxConfig immediately without Save button', async () => {
@@ -610,19 +562,6 @@ describe('mode radio', () => {
 
     // No Edit button for mode section — autosave
     expect(screen.queryByRole('button', { name: /edit sandbox mode/i })).not.toBeInTheDocument()
-  })
-
-  it('non-admin: radio inputs are not shown (display-only badges instead)', async () => {
-    mockNonAdmin()
-
-    renderSection()
-
-    await waitFor(() => {
-      expect(screen.getByText(/process sandbox/i)).toBeInTheDocument()
-    })
-
-    // Radio inputs should not be rendered for non-admin
-    expect(screen.queryByRole('radio', { name: /sandbox mode: off/i })).not.toBeInTheDocument()
   })
 
   it('selecting enforce when abi_version >= 4 fires the enforce confirmation modal before PUT', async () => {

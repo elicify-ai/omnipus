@@ -25,7 +25,7 @@ function LoginScreen() {
     setError('')
     try {
       const resp = await login(username.trim(), password)
-      setToken(resp.token, resp.role, resp.username)
+      setToken(resp.token, resp.username)
       // #359: a fresh login issues a new bearer token — drop any cached validation
       // verdict so the /_app guard re-validates this session immediately.
       resetTokenValidationCache()
