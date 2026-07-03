@@ -24,7 +24,7 @@ import (
 // config.sandbox.prompt_injection_level via safeUpdateConfigJSON, triggers a
 // hot-reload via triggerReloadAndWait, and emits a security_setting_change audit entry.
 // Changes take effect immediately — requires_restart is false on successful reload.
-// PUT is admin-only; non-admin requests receive 403.
+// PUT is gated by adminWrap (withAuth → RequireNotBypass); dev_mode_bypass returns 503.
 func (a *restAPI) HandlePromptGuard(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:

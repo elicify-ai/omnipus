@@ -1,11 +1,11 @@
 // REST API client — all calls go through the backend gateway.
-// Auth: Authorization: Bearer <token> header. Token read from sessionStorage (preferred) or localStorage ('omnipus_auth_token'). Backend validates against per-user RBAC token hashes or legacy OMNIPUS_BEARER_TOKEN env var.
+// Auth: Authorization: Bearer <token> header. Token read from sessionStorage (preferred) or localStorage ('omnipus_auth_token'). Backend validates against the account's bearer-token hashes or legacy OMNIPUS_BEARER_TOKEN env var.
 // CSRF: X-CSRF-Token header echoes the __Host-csrf cookie value on every
 // state-changing request (double-submit cookie, issue #97). The cookie is
-// issued by the backend on /auth/login, /auth/register-admin, and
-// /onboarding/complete. State-changing calls made before the cookie exists
-// fail fast client-side so the UI surfaces an actionable error instead of
-// waiting for the server's 403.
+// issued by the backend on /auth/login and /onboarding/complete.
+// State-changing calls made before the cookie exists fail fast client-side
+// so the UI surfaces an actionable error instead of waiting for the
+// server's 403.
 //
 // Errors: request() throws ApiError on non-2xx responses and on transport
 // failures (network down, fetch threw). Callers should branch on err.status
@@ -2505,8 +2505,8 @@ export function fetchPendingRestart(): Promise<PendingRestartEntry[]> {
 // See contracts/components/schemas/GatewayRestartResponse.yaml.
 //
 // POST /api/v1/gateway/restart triggers a graceful self-restart. The server replies
-// with 202 Accepted (status:"restarting") immediately, before re-execing. Admin-only;
-// secured by RequireAdmin + RequireNotBypass (returns 503 when dev_mode_bypass is active).
+// with 202 Accepted (status:"restarting") immediately, before re-execing. It is
+// secured by RequireNotBypass (returns 503 when dev_mode_bypass is active).
 export function gatewayRestart(): Promise<GatewayRestartResponse> {
   return request<GatewayRestartResponse>('/gateway/restart', {
     method: 'POST',

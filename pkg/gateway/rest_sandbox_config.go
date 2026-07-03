@@ -54,7 +54,7 @@ var validSandboxModes = map[string]bool{
 // mode and allowed_paths are restart-gated (requires_restart=true).
 // ssrf.allow_internal is hot-reload (requires_restart=false).
 //
-// Admin-only: non-admin PUT returns 403.
+// Gated by adminWrap (withAuth → RequireNotBypass); dev_mode_bypass returns 503.
 func (a *restAPI) HandleSandboxConfig(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:

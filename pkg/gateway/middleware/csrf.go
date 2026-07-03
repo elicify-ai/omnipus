@@ -83,8 +83,6 @@ const csrfTokenBytes = 32
 //     can pass the gate.
 //   - /api/v1/auth/login — the SPA reaches this with no cookie on first load
 //     of an existing install (refresh, new tab). Issues the cookie on 200.
-//   - /api/v1/auth/register-admin — equivalent to login for the first-boot
-//     admin-account creation flow. Issues the cookie on 200.
 //
 // Operational endpoints (/health, /ready, /reload):
 //   - These are defense-in-depth for the case where a future refactor mounts
@@ -99,7 +97,6 @@ var defaultExemptPaths = []string{
 	"/api/v1/onboarding/complete",
 	"/api/v1/onboarding/probe-provider",
 	"/api/v1/auth/login",
-	"/api/v1/auth/register-admin",
 	"/health",
 	"/ready",
 	"/reload",
@@ -192,9 +189,9 @@ func WithExemptPaths(paths ...string) Option {
 }
 
 // WithDefaultExempts explicitly installs the built-in bootstrap exempt set
-// (/api/v1/onboarding/complete, /api/v1/auth/login, /api/v1/auth/register-admin,
-// /health, /ready, /reload). Use this when you want the defaults AND additional
-// custom paths — otherwise passing WithExemptPath alone would drop the defaults.
+// (/api/v1/onboarding/complete, /api/v1/auth/login, /health, /ready, /reload).
+// Use this when you want the defaults AND additional custom paths —
+// otherwise passing WithExemptPath alone would drop the defaults.
 //
 // Calling CSRFMiddleware with zero options is equivalent to calling it with
 // only WithDefaultExempts.
