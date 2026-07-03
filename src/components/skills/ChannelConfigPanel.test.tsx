@@ -629,7 +629,9 @@ describe('ChannelConfigPanel — Google Chat authGroup picker (#324 / US-C2)', (
       expect(screen.getByRole('radio', { name: /Service account/i })).toBeChecked()
     })
     expect(document.getElementById('field-service_account_json')).not.toBeNull()
-    expect(document.getElementById('field-service_account_file')).not.toBeNull()
+    // service_account_file was removed from the catalog: the backend silently
+    // strips filesystem-path fields on configure, so the field was a UI dead end.
+    expect(document.getElementById('field-service_account_file')).toBeNull()
     expect(document.getElementById('field-webhook_url')).toBeNull()
   })
 
@@ -714,9 +716,9 @@ describe('ChannelConfigPanel — Google Chat authGroup picker (#324 / US-C2)', (
     // This presence-with-empty-string is what triggers the backend's credential clear path.
     expect(Object.prototype.hasOwnProperty.call(payload, 'service_account_json')).toBe(true)
     expect(payload['service_account_json']).toBe('')
-    // service_account_file must also be cleared.
-    expect(Object.prototype.hasOwnProperty.call(payload, 'service_account_file')).toBe(true)
-    expect(payload['service_account_file']).toBe('')
+    // service_account_file is no longer in the catalog (backend strips path
+    // fields on configure anyway, so a '' "clear" for it never did anything).
+    expect(Object.prototype.hasOwnProperty.call(payload, 'service_account_file')).toBe(false)
   })
 
   it('REGRESSION: never echoes routing-owned keys (identity/workspace_id) back through configure', async () => {
@@ -755,6 +757,90 @@ describe('ChannelConfigPanel — Google Chat authGroup picker (#324 / US-C2)', (
     const [, payload] = vi.mocked(configureChannel).mock.calls[0] as [string, Record<string, unknown>]
     expect(Object.prototype.hasOwnProperty.call(payload, 'identity')).toBe(false)
     expect(Object.prototype.hasOwnProperty.call(payload, 'workspace_id')).toBe(false)
+  })
+})
+
+describe('ChannelConfigPanel — [configured] sentinel never round-trips (secret-overwrite fix)', () => {
+  // GET redacts every stored sensitive field to the literal "[configured]"
+  // (rest.go redactChannelConfig) and the form hydrates it verbatim — but
+  // configureChannel treats ANY non-empty value as a NEW secret. Echoing the
+  // sentinel back therefore overwrote the real credential with the literal
+  // string "[configured]" on every Save that didn't retype the secret,
+  // silently breaking the channel. The submit payload must OMIT untouched
+  // sentinel fields (absent = keep stored secret, per channel_secret_ref_test).
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockUiStore()
+    vi.mocked(getChannelRouting).mockResolvedValue({ default_agent_id: undefined })
+    vi.mocked(fetchAgents).mockResolvedValue([])
+    vi.mocked(fetchWorkspaces).mockResolvedValue([])
+    vi.mocked(fetchWorkspace).mockResolvedValue({} as Workspace)
+    vi.mocked(configureChannel).mockResolvedValue(undefined)
+  })
+
+  function renderWithConfig(config: Record<string, unknown>) {
+    vi.mocked(fetchChannelConfig).mockResolvedValue(config)
+    const client = makeQueryClient()
+    client.setQueryData(['channel-config', 'telegram'], config)
+    client.setQueryData(['channel-routing', 'telegram'], { default_agent_id: undefined })
+    client.setQueryData(['agents'], [])
+    render(
+      <QueryClientProvider client={client}>
+        <ChannelConfigPanel channelId="telegram" channelName="Telegram" open={true} onOpenChange={vi.fn()} />
+      </QueryClientProvider>,
+    )
+  }
+
+  it('Save on an unrelated edit OMITS the untouched "[configured]" secret', async () => {
+    renderWithConfig({ type: 'telegram', enabled: true, token: '[configured]' })
+    await waitFor(() => {
+      expect((document.getElementById('field-token') as HTMLInputElement).value).toBe('[configured]')
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }))
+    await waitFor(() => {
+      expect(vi.mocked(configureChannel)).toHaveBeenCalled()
+    })
+
+    const [, payload] = vi.mocked(configureChannel).mock.calls[0] as [string, Record<string, unknown>]
+    // token must be ABSENT — absent means "keep the stored secret".
+    expect(Object.prototype.hasOwnProperty.call(payload, 'token')).toBe(false)
+    // Non-sensitive fields still travel.
+    expect(payload['type']).toBe('telegram')
+  })
+
+  it('a newly-typed secret still submits normally', async () => {
+    renderWithConfig({ type: 'telegram', enabled: true, token: '[configured]' })
+    await waitFor(() => {
+      expect(document.getElementById('field-token')).not.toBeNull()
+    })
+
+    fireEvent.change(document.getElementById('field-token')!, { target: { value: 'new-bot-token-123' } })
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }))
+    await waitFor(() => {
+      expect(vi.mocked(configureChannel)).toHaveBeenCalled()
+    })
+
+    const [, payload] = vi.mocked(configureChannel).mock.calls[0] as [string, Record<string, unknown>]
+    expect(payload['token']).toBe('new-bot-token-123')
+  })
+
+  it('a deliberately cleared secret ("") still submits so the backend revokes it', async () => {
+    renderWithConfig({ type: 'telegram', enabled: true, token: '[configured]' })
+    await waitFor(() => {
+      expect(document.getElementById('field-token')).not.toBeNull()
+    })
+
+    fireEvent.change(document.getElementById('field-token')!, { target: { value: '' } })
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }))
+    await waitFor(() => {
+      expect(vi.mocked(configureChannel)).toHaveBeenCalled()
+    })
+
+    const [, payload] = vi.mocked(configureChannel).mock.calls[0] as [string, Record<string, unknown>]
+    // Presence-with-empty-string is the backend's credential-clear signal.
+    expect(Object.prototype.hasOwnProperty.call(payload, 'token')).toBe(true)
+    expect(payload['token']).toBe('')
   })
 })
 
