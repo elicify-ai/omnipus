@@ -37,6 +37,19 @@ var RestartGatedKeys = []config.ConfigKey{
 	config.SandboxModeKey,
 	config.SandboxAuditLog,
 	config.SandboxAllowedPaths,
+	// O14: sandbox.god_mode / god_mode_allowed are DELIBERATELY NOT listed
+	// here, even though a config-only enable needs a restart to take effect.
+	// They are the only restart-gated keys that can ALSO apply live (any boot
+	// where god mode was already available — legacy --allow-god-mode, or any
+	// boot after the first UI grant), and this endpoint diffs against a
+	// boot-frozen appliedConfig snapshot that is never refreshed for a live
+	// toggle. Listing them would make the generic "restart to apply" banner
+	// falsely claim the kernel sandbox is inactive right after a live enable
+	// (and the inverse after a live disable) — dangerous misinformation for
+	// the highest-blast-radius switch. The dedicated GodModeControl surface
+	// owns this signal accurately instead: the POST's restart_required flag
+	// opens GatewayRestartModal, and the toggle's own note is availability-
+	// driven. See rest_god_mode.go.
 	config.SessionDMScope,
 	// Changing the bind host re-binds the listener (like the port), which can
 	// only happen safely on restart — so it is restart-gated like gateway.port.

@@ -377,8 +377,36 @@ type OmnipusSandboxConfig struct {
 	//
 	// Toggled at runtime via POST /api/v1/gateway/god-mode (password step-up)
 	// or set at boot for headless runs. Has no effect when god mode is not
-	// available (nogodmode build, or --allow-god-mode not passed).
+	// available (nogodmode build, or neither --allow-god-mode nor
+	// GodModeAllowed grants availability — see GodModeAllowed below).
 	GodMode bool `json:"god_mode,omitempty"`
+
+	// GodModeAllowed is the PERSISTED operator authorization for god mode
+	// (Constraint #6: deny-by-default for security, opt-in for features). It is
+	// DISTINCT from both GodMode (the live on/off switch above) and the
+	// --allow-god-mode CLI flag:
+	//   - GodMode is the runtime state; it does nothing without availability.
+	//   - --allow-god-mode is a per-process boot flag (headless/CI opt-in),
+	//     never persisted.
+	//   - GodModeAllowed is a config-persisted grant, set by POST
+	//     /api/v1/gateway/god-mode enabled=true from the Settings UI. It
+	//     survives restarts so the UI-driven "flip switch -> restart to
+	//     activate" flow does not require re-passing a CLI flag.
+	//
+	// AVAILABILITY (whether god mode CAN be turned on at all) is resolved
+	// ONCE at boot as (--allow-god-mode OR GodModeAllowed) AND
+	// sandbox.GodModeAvailable (build support), then frozen for the life of
+	// the process (agent.SetAllowGodMode / the godModeAvailable atomic). This
+	// is why enabling god mode from a boot where it was not yet available
+	// only takes effect after a gateway restart: this flag can grant
+	// authorization in config, but the frozen boot decision does not
+	// re-evaluate until the next boot reads it.
+	//
+	// Disabling god mode (GodMode=false) does NOT clear this flag — once an
+	// operator has authorized god mode, availability persists so future
+	// enable/disable toggles apply live without another restart. Revoking
+	// authorization entirely requires editing config.json directly.
+	GodModeAllowed bool `json:"god_mode_allowed,omitempty"`
 
 	// ShellDenyPatterns is the global operator-controlled list of shell command
 	// deny patterns (regular expressions). Per-agent AgentShellPolicy.CustomDenyPatterns

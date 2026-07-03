@@ -203,6 +203,54 @@ func TestHandlePendingRestart_GenuineChangeStillShows(t *testing.T) {
 	assert.EqualValues(t, 5000, found.AppliedValue, "applied (boot) value is the original port")
 }
 
+// TestHandlePendingRestart_GodModeKeysExcluded verifies that god-mode's two
+// config keys are DELIBERATELY absent from the generic pending-restart diff,
+// even when persisted differs from the boot-applied snapshot. god_mode /
+// god_mode_allowed are the only restart-gated keys that can ALSO apply live
+// (any boot where god mode was already available), and this endpoint diffs a
+// boot-frozen appliedConfig that is never refreshed for a live toggle —
+// listing them would make the generic "restart to apply" banner falsely claim
+// the kernel sandbox is inactive right after a live enable. The dedicated
+// GodModeControl surface (POST restart_required → GatewayRestartModal, plus
+// the availability-driven toggle note) owns this signal accurately instead.
+func TestHandlePendingRestart_GodModeKeysExcluded(t *testing.T) {
+	applied := map[string]any{
+		"version": float64(config.CurrentVersion),
+		"gateway": map[string]any{
+			"host":         "127.0.0.1",
+			"port":         float64(5000),
+			"preview_port": float64(5001),
+		},
+		"sandbox": map[string]any{},
+	}
+	// Persisted (on-disk) has both god-mode keys set after a UI enable —
+	// the maximally-different case that WOULD show if the keys were gated.
+	persisted := map[string]any{
+		"version": float64(config.CurrentVersion),
+		"gateway": map[string]any{
+			"host":         "127.0.0.1",
+			"port":         float64(5000),
+			"preview_port": float64(5001),
+		},
+		"sandbox": map[string]any{
+			"god_mode":         true,
+			"god_mode_allowed": true,
+		},
+	}
+	api := newPendingRestartAPI(t, applied, persisted)
+
+	w := callPendingRestart(t, api)
+	require.Equal(t, http.StatusOK, w.Code)
+	diffs := decodeDiffs(t, w.Body.Bytes())
+
+	for i := range diffs {
+		assert.NotEqual(t, string(config.SandboxGodMode), diffs[i].Key,
+			"sandbox.god_mode must NOT appear in the generic pending-restart diff; got %+v", diffs)
+		assert.NotEqual(t, string(config.SandboxGodModeAllowed), diffs[i].Key,
+			"sandbox.god_mode_allowed must NOT appear in the generic pending-restart diff; got %+v", diffs)
+	}
+}
+
 // TestHandlePendingRestart_HostChangeStillShows verifies that a real post-boot
 // edit to gateway.host (the bind address; "Bind address" in the UI) surfaces in
 // the diff — gateway.host is restart-gated like gateway.port because changing it

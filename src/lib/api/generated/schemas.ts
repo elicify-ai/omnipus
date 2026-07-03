@@ -1832,8 +1832,13 @@ export const GatewayRestartResponse = z
 export const GodModeStatus = z.object({
   enabled: z.boolean(),
   available: z.boolean(),
+  supported: z.boolean(),
 });
 export const GodModeUpdateRequest = z.object({ enabled: z.boolean() });
+export const GodModeUpdateResponse = z.object({
+  enabled: z.boolean(),
+  restart_required: z.boolean(),
+});
 export const CredentialSetRequest = z.object({
   key: z.string(),
   value: z.string(),
@@ -3770,7 +3775,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "get",
     path: "/gateway/god-mode",
     alias: "getGodMode",
-    description: `Returns whether god mode (&quot;bypass-permissions&quot;) is currently enabled and whether it is available in this build/boot.
+    description: `Returns whether god mode (&quot;bypass-permissions&quot;) is currently active (&#x60;enabled&#x60;), whether it is available in this build/boot (&#x60;available&#x60;), and whether this build supports it at all (&#x60;supported&#x60;).
 `,
     requestFormat: "json",
     response: GodModeStatus,
@@ -3791,7 +3796,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "post",
     path: "/gateway/god-mode",
     alias: "setGodMode",
-    description: `Flips the global god-mode (&quot;bypass-permissions&quot;) switch and applies or reverts the override live (no restart). When enabled, every agent&#x27;s tool policy is floored at &quot;allow&quot;, the kernel sandbox is off, network egress is open, and the shell guard is off — regardless of per-agent profiles. Audit logging, the prompt-injection guard, and rate limiting stay on. High blast radius — secured by RequireNotBypass (dev_mode_bypass returns 503) AND a single-use password re-auth consent token (X-Reauth-Token header; call POST /api/v1/auth/reauth first, 403 otherwise). Returns 403 when enabling while god mode is unavailable (nogodmode build or --allow-god-mode not passed). Every toggle is audit-logged with the acting user.
+    description: `Flips the global god-mode (&quot;bypass-permissions&quot;) switch. When the build supports god mode AND this boot was already authorized (see GodModeStatus.available), the toggle applies or reverts the override live (no restart) — every agent&#x27;s tool policy is floored at &quot;allow&quot;, the kernel sandbox is off, network egress is open, and the shell guard is off, regardless of per-agent profiles. When enabling from a boot that was NOT yet authorized, this call persists authorization (sandbox.god_mode_allowed) and the runtime switch (sandbox.god_mode) to config and returns restart_required&#x3D;true — the override only takes effect after the gateway restarts. Disabling is always applied live. Audit logging, the prompt-injection guard, and rate limiting stay on. High blast radius — secured by RequireNotBypass (dev_mode_bypass returns 503) AND a single-use password re-auth consent token (X-Reauth-Token header; call POST /api/v1/auth/reauth first, 403 otherwise). Returns 403 when enabling and god mode is not SUPPORTED in this build (compiled with nogodmode). Every toggle is audit-logged with the acting user.
 `,
     requestFormat: "json",
     parameters: [
@@ -3801,7 +3806,7 @@ Includes session_start events from all agent stores and task lifecycle events.
         schema: z.object({ enabled: z.boolean() }),
       },
     ],
-    response: GodModeStatus,
+    response: GodModeUpdateResponse,
     errors: [
       {
         status: 400,

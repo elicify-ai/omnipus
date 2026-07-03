@@ -135,6 +135,7 @@ import {
   GatewayRestartResponse as GatewayRestartResponseSchema,
   // O14 god-mode switch (contract-first #8):
   GodModeStatus as GodModeStatusSchema,
+  GodModeUpdateResponse as GodModeUpdateResponseSchema,
   // Slash-command harmonization (contract-first #8):
   SlashCommand as SlashCommandSchema,
   // Memory/recap settings (workspace-heartbeat-memory-config-spec.md FR-019):
@@ -375,6 +376,7 @@ import type {
   // O14 god-mode switch (contract-first #8):
   GodModeStatus,
   GodModeUpdateRequest,
+  GodModeUpdateResponse,
   // Slash-command harmonization (contract-first #8):
   SlashCommand,
   // Memory/recap settings (workspace-heartbeat-memory-config-spec.md FR-019):
@@ -2526,27 +2528,35 @@ export function gatewayRestart(): Promise<GatewayRestartResponse> {
 // limiting STAY ON. The per-agent overrides are non-destructive: switching god
 // mode off restores prior behaviour exactly.
 //
-// GodModeStatus / GodModeUpdateRequest are the generated contract types (#8);
-// see contracts/components/schemas/GodMode*.yaml. fetchGodMode reads the live
-// runtime state ({ enabled, available }); setGodMode flips it.
+// GodModeStatus / GodModeUpdateRequest / GodModeUpdateResponse are the
+// generated contract types (#8); see contracts/components/schemas/GodMode*.yaml.
+// fetchGodMode reads the live runtime state ({ enabled, available, supported });
+// setGodMode flips it and returns { enabled, restart_required } — a distinct
+// shape because enabling from an unauthorized boot persists config but does
+// NOT take live effect until the gateway restarts (see restart_required).
+//
+// `supported` (build support, nogodmode tag) and `available` (this boot was
+// authorized, either via --allow-god-mode or a prior UI enable + restart) are
+// DIFFERENT gates. Enabling is permitted whenever `supported` is true, even
+// if `available` is currently false — that is exactly the UI-driven
+// enablement flow: flip switch -> persist authorization -> restart to
+// activate. Enabling when `supported` is false always returns 403.
 //
 // Step-up auth: the POST is re-auth-gated. Callers obtain a single-use consent
 // token via reAuth() and pass it here; it is replayed in the X-Reauth-Token
-// header (a missing/invalid token yields a 403). `available` is false on a
-// nogodmode build or when --allow-god-mode was not passed at boot; enabling
-// then returns 403.
+// header (a missing/invalid token yields a 403).
 
 export function fetchGodMode(): Promise<GodModeStatus> {
   return request<GodModeStatus>('/gateway/god-mode', undefined, GodModeStatusSchema)
 }
 
-export function setGodMode(enabled: boolean, reAuthToken?: string): Promise<GodModeStatus> {
+export function setGodMode(enabled: boolean, reAuthToken?: string): Promise<GodModeUpdateResponse> {
   const body: GodModeUpdateRequest = { enabled }
-  return request<GodModeStatus>('/gateway/god-mode', {
+  return request<GodModeUpdateResponse>('/gateway/god-mode', {
     method: 'POST',
     headers: reAuthToken ? { [REAUTH_HEADER]: reAuthToken } : undefined,
     body: JSON.stringify(body),
-  }, GodModeStatusSchema)
+  }, GodModeUpdateResponseSchema)
 }
 
 // Audit log toggle — distinct from GET /audit-log (which returns AuditEntry[]).
