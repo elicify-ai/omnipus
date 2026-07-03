@@ -118,6 +118,189 @@ func TestFilterDangerousCLIArgs_Opencode_DropsDuplicateSkipPermissions(t *testin
 	}
 }
 
+// --- unit tests: stream-format correctness guard ---------------------------
+//
+// These cover the second denylist category added alongside the original
+// permission/sandbox-bypass guard: each driver's NDJSON stream-parser output
+// format flag. Unlike the flags above, an override here does not escalate
+// privilege — it silently corrupts the streamed transcript by switching the
+// CLI to output the parser cannot read (correctness, not security).
+
+func TestFilterDangerousCLIArgs_Claude_OutputFormatOverrideDropped(t *testing.T) {
+	cases := []struct {
+		name    string
+		args    []string
+		wantDrp bool
+	}{
+		{"two-token text override dropped", []string{"--output-format", "text"}, true},
+		{"two-token json override dropped", []string{"--output-format", "json"}, true},
+		{"equals-form override dropped", []string{"--output-format=text"}, true},
+		{"redundant same value kept", []string{"--output-format", "stream-json"}, false},
+		{"redundant same value case-insensitive kept", []string{"--output-format", "Stream-JSON"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			kept, dropped := filterDangerousCLIArgs("claude", tc.args)
+			if tc.wantDrp {
+				if len(dropped) == 0 {
+					t.Fatalf("expected --output-format override to be dropped; kept=%v dropped=%v", kept, dropped)
+				}
+				if containsFlag(kept, "--output-format") {
+					t.Fatalf("dangerous --output-format value must not remain in kept args; kept=%v", kept)
+				}
+			} else {
+				if len(dropped) != 0 {
+					t.Fatalf("the driver's own stream-json value must not be dropped; dropped=%v", dropped)
+				}
+			}
+		})
+	}
+}
+
+func TestFilterDangerousCLIArgs_Codex_JsonDisableDropped(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{"bare redundant repeat dropped", []string{"--json"}},
+		{"equals-form false dropped", []string{"--json=false"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			kept, dropped := filterDangerousCLIArgs("codex", tc.args)
+			if len(dropped) != 1 {
+				t.Fatalf("expected --json to be dropped as one entry; kept=%v dropped=%v", kept, dropped)
+			}
+			if containsFlag(kept, "--json") {
+				t.Fatalf("operator --json token must not remain in kept args; kept=%v", kept)
+			}
+		})
+	}
+}
+
+func TestFilterDangerousCLIArgs_Opencode_FormatOverrideDropped(t *testing.T) {
+	cases := []struct {
+		name    string
+		args    []string
+		wantDrp bool
+	}{
+		{"two-token text override dropped", []string{"--format", "text"}, true},
+		{"equals-form override dropped", []string{"--format=text"}, true},
+		{"redundant same value kept", []string{"--format", "json"}, false},
+		{"redundant same value case-insensitive kept", []string{"--format", "JSON"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			kept, dropped := filterDangerousCLIArgs("opencode", tc.args)
+			if tc.wantDrp {
+				if len(dropped) == 0 {
+					t.Fatalf("expected --format override to be dropped; kept=%v dropped=%v", kept, dropped)
+				}
+				if containsFlag(kept, "--format") {
+					t.Fatalf("dangerous --format value must not remain in kept args; kept=%v", kept)
+				}
+			} else {
+				if len(dropped) != 0 {
+					t.Fatalf("the driver's own json value must not be dropped; dropped=%v", dropped)
+				}
+			}
+		})
+	}
+}
+
+// --- integration tests: stream-format guard wired into buildArgs -----------
+
+// TestClaudeDriver_BuildArgs_OutputFormatOverrideDropped proves an operator
+// cli_args attempt to change --output-format away from stream-json never
+// reaches the final argv, and the driver's own stream-json value survives
+// exactly once.
+func TestClaudeDriver_BuildArgs_OutputFormatOverrideDropped(t *testing.T) {
+	d := NewClaudeDriver(nil)
+	var args []string
+	out := captureSlogWarnings(func() {
+		args = d.buildArgs(RunOptions{
+			Input:   "task",
+			RunID:   "ext-argsafety-fmt-1",
+			CLIArgs: []string{"--output-format", "text"},
+		})
+	})
+	if !containsSeq(args, "--output-format", "stream-json") {
+		t.Fatalf("the driver's own --output-format stream-json must remain; args=%v", args)
+	}
+	occurrences := 0
+	for _, a := range args {
+		if a == "--output-format" {
+			occurrences++
+		}
+	}
+	if occurrences != 1 {
+		t.Fatalf("--output-format must appear exactly once (driver's own copy only); args=%v", args)
+	}
+	if !strings.Contains(out, "ext-argsafety-fmt-1") {
+		t.Fatalf("expected a WARN naming the run_id; log: %q", out)
+	}
+}
+
+// TestCodexDriver_BuildArgs_JsonDisableDropped proves an operator cli_args
+// attempt to disable --json never reaches the final argv, and the driver's
+// own --json flag survives exactly once.
+func TestCodexDriver_BuildArgs_JsonDisableDropped(t *testing.T) {
+	d := NewCodexDriver(nil)
+	var args []string
+	out := captureSlogWarnings(func() {
+		args = d.buildArgs(RunOptions{
+			Input:   "task",
+			RunID:   "ext-argsafety-fmt-2",
+			CLIArgs: []string{"--json=false"},
+		})
+	})
+	occurrences := 0
+	for _, a := range args {
+		if a == "--json" {
+			occurrences++
+		}
+	}
+	if occurrences != 1 {
+		t.Fatalf("--json must appear exactly once (driver's own copy only); args=%v", args)
+	}
+	if strings.Contains(strings.Join(args, " "), "--json=false") {
+		t.Fatalf("operator --json=false must not reach argv; args=%v", args)
+	}
+	if !strings.Contains(out, "ext-argsafety-fmt-2") {
+		t.Fatalf("expected a WARN naming the run_id; log: %q", out)
+	}
+}
+
+// TestOpencodeDriver_BuildArgs_FormatOverrideDropped proves an operator
+// cli_args attempt to change --format away from json never reaches the final
+// argv, and the driver's own json value survives exactly once.
+func TestOpencodeDriver_BuildArgs_FormatOverrideDropped(t *testing.T) {
+	d := NewOpencodeDriver(nil)
+	var args []string
+	out := captureSlogWarnings(func() {
+		args = d.buildArgs(RunOptions{
+			Input:   "task",
+			RunID:   "ext-argsafety-fmt-3",
+			CLIArgs: []string{"--format", "text"},
+		})
+	})
+	if !containsSeq(args, "--format", "json") {
+		t.Fatalf("the driver's own --format json must remain; args=%v", args)
+	}
+	occurrences := 0
+	for _, a := range args {
+		if a == "--format" {
+			occurrences++
+		}
+	}
+	if occurrences != 1 {
+		t.Fatalf("--format must appear exactly once (driver's own copy only); args=%v", args)
+	}
+	if !strings.Contains(out, "ext-argsafety-fmt-3") {
+		t.Fatalf("expected a WARN naming the run_id; log: %q", out)
+	}
+}
+
 func TestFilterDangerousCLIArgs_UnknownCLIPassesThrough(t *testing.T) {
 	args := []string{"--anything", "--dangerously-skip-permissions"}
 	kept, dropped := filterDangerousCLIArgs("some-future-cli", args)
