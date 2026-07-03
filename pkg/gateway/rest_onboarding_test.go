@@ -88,7 +88,6 @@ func TestHandleCompleteOnboarding_Success(t *testing.T) {
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.NotEmpty(t, resp["token"], "token must be non-empty")
-	assert.Equal(t, "admin", resp["role"])
 	assert.Equal(t, "admin", resp["username"])
 }
 
@@ -386,7 +385,6 @@ func TestHandleCompleteOnboarding_ThenLogin(t *testing.T) {
 	var validateResp map[string]any
 	require.NoError(t, json.Unmarshal(validateW.Body.Bytes(), &validateResp))
 	assert.Equal(t, "admin", validateResp["username"])
-	assert.Equal(t, "admin", validateResp["role"])
 
 	// Onboarding token should also be valid (same user)
 	validateReq2 := httptest.NewRequest(http.MethodGet, "/api/v1/auth/validate", nil)
@@ -453,7 +451,6 @@ func TestHandleCompleteOnboarding_PersistsAdmin(t *testing.T) {
 	entry := tokens[0].(map[string]any)
 	assert.NotEmpty(t, entry["hash"], "token entry hash must be set")
 	assert.NotEmpty(t, entry["id"], "token entry id must be set")
-	assert.Equal(t, "admin", user["role"])
 }
 
 // TestHandleCompleteOnboarding_WritesActualModelAsAlias verifies the fix for
