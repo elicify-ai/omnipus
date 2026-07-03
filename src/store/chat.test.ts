@@ -2254,7 +2254,7 @@ describe('chat store — whatsapp_pairing routing (#283)', () => {
   it('handleFrame(whatsapp_pairing) routes the QR to the pairing store', () => {
     const pairingFrame: WhatsAppPairingFrame = {
       type: 'whatsapp_pairing',
-      channel_id: 'whatsapp_native',
+      channel_id: 'whatsapp.sales', // pairing frames carry the INSTANCE id (post ADR-029)
       status: 'code',
       qr: 'QR-ROUTED',
     }
@@ -2262,7 +2262,7 @@ describe('chat store — whatsapp_pairing routing (#283)', () => {
       useWhatsAppPairingStore.setState({ byChannel: {} })
       useChatStore.getState().handleFrame(pairingFrame)
     })
-    expect(useWhatsAppPairingStore.getState().byChannel['whatsapp_native']).toEqual({
+    expect(useWhatsAppPairingStore.getState().byChannel['whatsapp.sales']).toEqual({
       status: 'code',
       qr: 'QR-ROUTED',
       message: '',

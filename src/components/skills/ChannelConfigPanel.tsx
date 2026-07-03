@@ -322,8 +322,13 @@ export function ChannelConfigPanel({
     enabled: open,
   })
 
-  const isWebchat = channelId === 'webchat'
-  const isGoogleChat = channelId === 'google-chat'
+  // Per-type flags compare the BASE TYPE (pre-dot segment) so ADR-029
+  // namespaced instances ("google-chat.sales") behave exactly like their bare
+  // counterparts — exact-id matches silently dropped type-specific UI/flows
+  // for every operator-created instance (live-UAT regression, 2026-07-03).
+  const baseType = channelId.split('.')[0]
+  const isWebchat = baseType === 'webchat'
+  const isGoogleChat = baseType === 'google-chat'
 
   const { data: agents = [], isError: agentsError } = useQuery({
     queryKey: ['agents'],
@@ -464,8 +469,10 @@ export function ChannelConfigPanel({
       // backend starts the channel — can render in WhatsAppNativeNotice. Closing here
       // unmounts the notice and drops its subscription before any QR frame arrives, which
       // is why "Enable & Save" never showed a code. Other channels have no pairing step.
-      // Uses the REST-facing id ('whatsapp') that channel.id carries from GET /channels.
-      const hasPairingFlow = channelId === WHATSAPP_CHANNEL_ID
+      // Base-type match: namespaced instances ("whatsapp.sales") have the same
+      // pairing flow as the bare instance — an exact-id match here closed the
+      // panel on enable and the QR could never render.
+      const hasPairingFlow = baseType === WHATSAPP_CHANNEL_ID
       addToast({
         message: hasPairingFlow
           ? 'Channel enabled — scan the QR code below to link your device'
@@ -577,8 +584,10 @@ export function ChannelConfigPanel({
   // build the backend reports native_available:false on the whatsapp ChannelEntry,
   // and we must NOT show a QR that can never pair. Only `false` gates;
   // `undefined`/`true` default to available.
-  // Uses the REST-facing id ('whatsapp') that channel.id carries from GET /channels.
-  const isWhatsApp = channelId === WHATSAPP_CHANNEL_ID
+  // Matches the BASE TYPE so ADR-029 namespaced instances ("whatsapp.sales")
+  // get the pairing UI too — an exact match on 'whatsapp' silently hid the QR
+  // for every operator-created instance.
+  const isWhatsApp = baseType === WHATSAPP_CHANNEL_ID
   const whatsAppNativeUnavailable = isWhatsApp && nativeAvailable === false
 
   const isBusy = saving || savingAndEnabling
@@ -709,7 +718,7 @@ export function ChannelConfigPanel({
                   doesn&apos;t include it, so linked-device pairing is unavailable.
                 </p>
               ) : (enabled || wasJustEnabled) ? (
-                <WhatsAppNativeNotice />
+                <WhatsAppNativeNotice channelId={channelId} />
               ) : (
                 <p
                   data-testid="whatsapp-enable-prompt"

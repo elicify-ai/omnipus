@@ -15,15 +15,22 @@ func (m *mockPairingChannel) SetPairingObserver(fn func(status PairingStatus, qr
 
 // TestManagerSetPairingObserver_TagsChannelID verifies the #283 wiring glue:
 // SetPairingObserver propagates to every already-initialized PairingObservable
-// channel and tags each update with that channel's own name. This guards the
+// channel and tags each update with that channel's own MAP KEY — which, since
+// the ADR-029 multi-instance change, is the INSTANCE id ("whatsapp",
+// "whatsapp.sales"), NOT the registry name "whatsapp_native". The SPA's
+// pairing store and whatsapp_pairing_subscribe interest are keyed by the same
+// instance id, so this tag IS the wire contract: changing it silently breaks
+// QR delivery (live-UAT regression, 2026-07-03). Also guards the
 // per-iteration loop-variable capture (a swap would report the last channel's
 // name for both).
 func TestManagerSetPairingObserver_TagsChannelID(t *testing.T) {
 	m := newTestManager()
 	wa := &mockPairingChannel{}
 	other := &mockPairingChannel{}
-	m.channels["whatsapp_native"] = wa
-	m.channels["other"] = other
+	// Realistic post-ADR-029 map keys: a bare legacy instance and a namespaced
+	// operator-created instance of the same type.
+	m.channels["whatsapp"] = wa
+	m.channels["whatsapp.sales"] = other
 
 	type got struct {
 		channelID   string
@@ -45,8 +52,8 @@ func TestManagerSetPairingObserver_TagsChannelID(t *testing.T) {
 	other.observer("error", "", "boom")
 
 	want := []got{
-		{"whatsapp_native", "code", "QR-A", ""},
-		{"other", "error", "", "boom"},
+		{"whatsapp", "code", "QR-A", ""},
+		{"whatsapp.sales", "error", "", "boom"},
 	}
 	if len(updates) != len(want) {
 		t.Fatalf("got %d updates, want %d: %+v", len(updates), len(want), updates)

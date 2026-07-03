@@ -4,7 +4,6 @@ import { useWhatsAppPairingStore } from '@/store/whatsappPairing'
 import type { WhatsAppPairingState } from '@/store/whatsappPairing'
 import { useConnectionStore } from '@/store/connection'
 import { WhatsAppPairingBody } from './WhatsAppPairingBody'
-import { WHATSAPP_NATIVE_CHANNEL_ID } from './whatsappChannelId'
 
 // RETRY_TIMEOUT_MS is the bounded window after a user presses Retry during which
 // we wait for a fresh `code` frame from the backend. The subscribe toggle only
@@ -28,11 +27,17 @@ const TIMEOUT_STATE: WhatsAppPairingState = {
 }
 
 // WhatsAppNativeNotice renders the live linked-device pairing QR + status in the
-// browser (#283 / US-C3), fed by the whatsapp_pairing WS frame. The native channel
-// emits under channel_id "whatsapp_native". Replaces the old "check the gateway
-// terminal" text — no terminal access required.
-export function WhatsAppNativeNotice() {
-  const pairing = useWhatsAppPairingStore((s) => s.byChannel[WHATSAPP_NATIVE_CHANNEL_ID])
+// browser (#283 / US-C3), fed by the whatsapp_pairing WS frame.
+//
+// channelId is the INSTANCE id the config panel is open for ("whatsapp" for the
+// bare/legacy instance, "whatsapp.<slug>" for ADR-029 namespaced instances).
+// Since the multi-instance change the channel manager keys channels — and
+// therefore stamps pairing frames — by instance id (manager.go: m.channels
+// keyed by instanceID), NOT by the old registry name "whatsapp_native". Each
+// instance has its own whatsmeow store and its own QR, so pairing state,
+// subscribe interest and cleanup are all scoped per instance id.
+export function WhatsAppNativeNotice({ channelId }: { channelId: string }) {
+  const pairing = useWhatsAppPairingStore((s) => s.byChannel[channelId])
   const clear = useWhatsAppPairingStore((s) => s.clear)
   const isConnected = useConnectionStore((s) => s.isConnected)
 
@@ -91,10 +96,10 @@ export function WhatsAppNativeNotice() {
     if (!isConnected) return
     useConnectionStore.getState().connection?.send({
       type: 'whatsapp_pairing_subscribe',
-      channel_id: WHATSAPP_NATIVE_CHANNEL_ID,
+      channel_id: channelId,
       active: true,
     })
-  }, [isConnected])
+  }, [isConnected, channelId])
 
   // On unmount (panel closed): cancel any pending timers, unsubscribe and
   // drop the QR/pairing secret from the store so it doesn't linger in memory
@@ -111,12 +116,12 @@ export function WhatsAppNativeNotice() {
       }
       useConnectionStore.getState().connection?.send({
         type: 'whatsapp_pairing_subscribe',
-        channel_id: WHATSAPP_NATIVE_CHANNEL_ID,
+        channel_id: channelId,
         active: false,
       })
-      clear(WHATSAPP_NATIVE_CHANNEL_ID)
+      clear(channelId)
     },
-    [clear],
+    [clear, channelId],
   )
 
   function handleRetry() {
@@ -130,7 +135,7 @@ export function WhatsAppNativeNotice() {
     }
 
     // Clear the stale pairing state so we show the spinner immediately.
-    clear(WHATSAPP_NATIVE_CHANNEL_ID)
+    clear(channelId)
 
     // Toggle subscribe interest: false then true re-registers this connection
     // with the backend's subscribePairingInterest handler, which immediately
@@ -141,12 +146,12 @@ export function WhatsAppNativeNotice() {
     // eventually reverts the UI.
     useConnectionStore.getState().connection?.send({
       type: 'whatsapp_pairing_subscribe',
-      channel_id: WHATSAPP_NATIVE_CHANNEL_ID,
+      channel_id: channelId,
       active: false,
     })
     useConnectionStore.getState().connection?.send({
       type: 'whatsapp_pairing_subscribe',
-      channel_id: WHATSAPP_NATIVE_CHANNEL_ID,
+      channel_id: channelId,
       active: true,
     })
 
@@ -167,7 +172,7 @@ export function WhatsAppNativeNotice() {
       // switches from undefined to the store value in the same synchronous batch).
       useWhatsAppPairingStore.getState().apply({
         type: 'whatsapp_pairing',
-        channel_id: WHATSAPP_NATIVE_CHANNEL_ID,
+        channel_id: channelId,
         status: fallback,
         message: fallback === 'timeout'
           ? 'the QR code expired before it was scanned'
