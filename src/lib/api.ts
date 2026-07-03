@@ -94,7 +94,6 @@ import {
   SessionScopeUpdateResponse as SessionScopeUpdateResponseSchema,
   RetentionUpdateResponse as RetentionUpdateResponseSchema,
   AgentToolsResponse as AgentToolsResponseSchema,
-  ChannelTestResponse as ChannelTestResponseSchema,
   OperationResult as OperationResultSchema,
   UploadFilesResponse as UploadFilesResponseSchema,
   BackupCreateResponse as BackupCreateResponseSchema,
@@ -307,7 +306,6 @@ import type {
   AgentToolsResponse,
   UploadFilesResponse,
   BackupCreateResponse,
-  ChannelTestResponse,
   OperationResult,
   // fix-AC: promoted from hand-written inline schemas:
   UserContextResponse,
@@ -454,7 +452,6 @@ export type {
   AgentToolsResponse,
   UploadFilesResponse,
   BackupCreateResponse,
-  ChannelTestResponse,
   OperationResult,
   // fix-AC: promoted from hand-written inline schemas:
   UserContextResponse,
@@ -1742,12 +1739,6 @@ export function configureChannel(id: string, config: Record<string, unknown>): P
     method: 'PUT',
     body: JSON.stringify(config),
   })
-}
-
-export function testChannel(id: string): Promise<ChannelTestResponse> {
-  return request<ChannelTestResponse>(`/channels/${encodeURIComponent(id)}/test`, {
-    method: 'POST',
-  }, ChannelTestResponseSchema as ZodType<ChannelTestResponse>)
 }
 
 // ChannelRouting — re-exported from generated openapi-types (contract-first #8).
