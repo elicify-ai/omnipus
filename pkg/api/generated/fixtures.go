@@ -609,7 +609,6 @@ func FixtureLoginResponse_Populated() LoginResponse {
 	warning := strPtr("API key stored in plaintext")
 	return LoginResponse{
 		Token:    "omnipus_" + repeatStr("a", 64),
-		Role:     "admin",
 		Username: "admin",
 		Warning:  warning,
 	}
@@ -622,7 +621,6 @@ func FixtureLoginResponse_ZeroValue() LoginResponse {
 func FixtureLoginResponse_Edge() LoginResponse {
 	return LoginResponse{
 		Token:    "omnipus_" + repeatStr("f", 64),
-		Role:     "user",
 		Username: "unicode-user-🔑",
 	}
 }
@@ -756,30 +754,6 @@ func FixtureAgent_Edge() Agent {
 		TimeoutSeconds:    0,
 		MaxToolIterations: 0,
 		SteeringMode:      "one-at-a-time",
-	}
-}
-
-// LoginResponse — User response
-
-func FixtureUser_Populated() User {
-	return User{
-		Username:       "alice",
-		Role:           "admin",
-		HasPassword:    true,
-		HasActiveToken: true,
-	}
-}
-
-func FixtureUser_ZeroValue() User {
-	return User{}
-}
-
-func FixtureUser_Edge() User {
-	return User{
-		Username:       "bob-" + repeatStr("z", 55), // long but valid
-		Role:           "user",
-		HasPassword:    false,
-		HasActiveToken: false,
 	}
 }
 
@@ -1235,21 +1209,19 @@ func FixtureAppState_Edge() AppState {
 func FixtureValidateTokenResponse_Populated() ValidateTokenResponse {
 	return ValidateTokenResponse{
 		Username: "admin",
-		Role:     ValidateTokenResponseRole("admin"),
 	}
 }
 
 // FixtureValidateTokenResponse_ZeroValue — Go zero values.
-// Expected: FAIL because username="", role="" (not in enum [admin, user]).
+// Expected: PASS — username has no minLength, so "" still satisfies the schema.
 func FixtureValidateTokenResponse_ZeroValue() ValidateTokenResponse {
 	return ValidateTokenResponse{}
 }
 
-// FixtureValidateTokenResponse_Edge — user role, unicode username.
+// FixtureValidateTokenResponse_Edge — unicode username.
 func FixtureValidateTokenResponse_Edge() ValidateTokenResponse {
 	return ValidateTokenResponse{
 		Username: "unicode-user-🔑-" + repeatStr("a", 20),
-		Role:     ValidateTokenResponseRole("user"),
 	}
 }
 
@@ -1556,28 +1528,6 @@ func FixtureStorageStats_NilWarningsAllowed() StorageStats {
 		MemoryEntryCount:   0,
 		OldestSessionDate:  &oldest,
 		Warnings:           nil, // optional — nil is valid
-	}
-}
-
-// ── MeInfo ────────────────────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/MeInfo.yaml
-
-func FixtureMeInfo_Populated() MeInfo {
-	return MeInfo{
-		Role: MeInfoRole("admin"),
-	}
-}
-
-// FixtureMeInfo_ZeroValue — Go zero value.
-// Expected: FAIL because role="" (not in enum [admin, user]).
-func FixtureMeInfo_ZeroValue() MeInfo {
-	return MeInfo{}
-}
-
-// FixtureMeInfo_Edge — user role (the other enum value).
-func FixtureMeInfo_Edge() MeInfo {
-	return MeInfo{
-		Role: MeInfoRole("user"),
 	}
 }
 
@@ -2115,29 +2065,6 @@ func FixtureUploadFilesResponse_Edge() UploadFilesResponse {
 			{Name: "a.png", Path: "uploads/s/a.png", ContentType: "image/png", Size: 0},
 			{Name: "b.txt", Path: "uploads/s/b.txt", ContentType: "text/plain", Size: 1},
 		},
-	}
-}
-
-// ── AgentOwnerUpdateResponse ──────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/AgentOwnerUpdateResponse.yaml
-
-func FixtureAgentOwnerUpdateResponse_Populated() AgentOwnerUpdateResponse {
-	return AgentOwnerUpdateResponse{
-		AgentId:       "custom-agent-abc123",
-		OwnerUsername: "alice",
-		Success:       true,
-	}
-}
-
-func FixtureAgentOwnerUpdateResponse_ZeroValue() AgentOwnerUpdateResponse {
-	return AgentOwnerUpdateResponse{}
-}
-
-func FixtureAgentOwnerUpdateResponse_Edge() AgentOwnerUpdateResponse {
-	return AgentOwnerUpdateResponse{
-		AgentId:       "custom-agent-" + repeatStr("x", 36),
-		OwnerUsername: "unicode-owner-🔑",
-		Success:       false,
 	}
 }
 

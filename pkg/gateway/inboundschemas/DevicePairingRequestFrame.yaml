@@ -1,8 +1,8 @@
 title: DevicePairingRequestFrame
 description: >
   Server → client. Emitted when a remote device initiates a pairing request and
-  needs admin approval. The SPA displays a pairing modal to the admin.
-  The admin responds with a device_pairing_response frame.
+  needs operator approval. The SPA displays a pairing modal.
+  The operator responds with a device_pairing_response frame.
   Fields map to the generated DevicePairingRequestFrame type in pkg/api/generated/.
 type: object
 required:
@@ -22,7 +22,7 @@ properties:
     description: Device fingerprint for identity verification.
   pairing_code:
     type: string
-    description: Human-readable pairing code to show in the admin UI for verbal confirmation.
+    description: Human-readable pairing code to show in the UI for verbal confirmation.
   device_name:
     type: string
     description: Display name of the device (e.g., hostname or user-provided label).

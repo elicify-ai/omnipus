@@ -3,7 +3,6 @@ import { z } from "zod";
 
 type LoginResponse = {
   token: BearerToken;
-  role: "admin" | "user";
   username: string;
   warning?: string | undefined;
 };
@@ -786,7 +785,6 @@ export const LoginResponse: z.ZodType<LoginResponse> = z.object({
   token: BearerToken.min(72)
     .max(81)
     .regex(/^omnipus_([a-f0-9]{8}_)?[a-f0-9]{64}$/),
-  role: z.enum(["admin", "user"]),
   username: z.string(),
   warning: z.string().optional(),
 });
@@ -798,16 +796,8 @@ export const ErrorResponse = z
   })
   .passthrough();
 export const ValidateTokenResponse = z
-  .object({ username: z.string(), role: z.enum(["admin", "user"]) })
+  .object({ username: z.string() })
   .passthrough();
-export const RegisterAdminRequest = z.object({
-  username: z
-    .string()
-    .min(2)
-    .max(63)
-    .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{1,62}$/),
-  password: z.string().min(8).max(72),
-});
 export const ChangePasswordRequest = z.object({
   current_password: z.string().min(1).max(72),
   new_password: z.string().min(8).max(72),
@@ -1061,61 +1051,6 @@ export const SessionDetail: z.ZodType<SessionDetail> = z.object({
 export const SessionRenameRequest = z.object({
   title: z.string().min(1).max(256),
 });
-export const User = z.object({
-  username: z
-    .string()
-    .min(2)
-    .max(63)
-    .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{1,62}$/),
-  role: z.enum(["admin", "user"]),
-  has_password: z.boolean(),
-  has_active_token: z.boolean(),
-});
-export const UserCreateRequest = z.object({
-  username: z
-    .string()
-    .min(2)
-    .max(63)
-    .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{1,62}$/),
-  role: z.enum(["admin", "user"]),
-  password: z.string().min(8).max(72),
-});
-export const UserCreateResponse = z
-  .object({
-    username: z.string(),
-    role: z.enum(["admin", "user"]),
-    requires_restart: z.boolean().optional(),
-    warning: z.string().optional(),
-  })
-  .passthrough();
-export const UserDeleteResponse = z
-  .object({
-    username: z.string(),
-    deleted: z.boolean(),
-    requires_restart: z.boolean().optional(),
-    warning: z.string().optional(),
-  })
-  .passthrough();
-export const UserRoleChangeRequest = z.object({
-  role: z.enum(["admin", "user"]),
-});
-export const UserRoleChangeResponse = z.object({
-  username: z.string(),
-  role: z.enum(["admin", "user"]),
-  requires_restart: z.boolean().optional(),
-  warning: z.string().optional(),
-});
-export const UserResetPasswordRequest = z.object({
-  password: z.string().min(8).max(72),
-});
-export const UserResetPasswordResponse = z
-  .object({
-    username: z.string(),
-    password_reset: z.boolean(),
-    requires_restart: z.boolean().optional(),
-    warning: z.string().optional(),
-  })
-  .passthrough();
 export const AgentToolsCfg: z.ZodType<AgentToolsCfg> = z
   .object({
     builtin: z
@@ -1342,14 +1277,6 @@ export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z
     executor: ExecutorConfig,
   })
   .partial();
-export const AgentOwnershipUpdateRequest = z
-  .object({ owner_username: z.string() })
-  .partial();
-export const AgentOwnerUpdateResponse = z.object({
-  success: z.boolean(),
-  agent_id: z.string(),
-  owner_username: z.string(),
-});
 export const AgentToolEntry: z.ZodType<AgentToolEntry> = z
   .object({
     name: z.string(),
@@ -1904,7 +1831,6 @@ export const AppStatePatchRequest = z
   .partial();
 export const UserContextResponse = z.object({ content: z.string() });
 export const UserContextRequest = z.object({ content: z.string().max(262144) });
-export const MeInfo = z.object({ role: z.enum(["admin", "user"]) });
 export const DoctorIssue: z.ZodType<DoctorIssue> = z.object({
   id: z.string(),
   severity: z.enum(["high", "medium", "low"]),
@@ -2657,54 +2583,6 @@ Includes session_start events from all agent stores and task lifecycle events.
     ],
   },
   {
-    method: "patch",
-    path: "/agents/:id",
-    alias: "patchAgentOwnership",
-    description: `Updates the owner_username field on a custom agent. Only admins may call this endpoint. System and core agents cannot have an owner assigned (400). Clearing the owner (empty string) requires the X-Confirm-Demote: 1 header.
-`,
-    requestFormat: "json",
-    parameters: [
-      {
-        name: "body",
-        type: "Body",
-        schema: z.object({ owner_username: z.string() }).partial(),
-      },
-      {
-        name: "id",
-        type: "Path",
-        schema: z.string(),
-      },
-    ],
-    response: AgentOwnerUpdateResponse,
-    errors: [
-      {
-        status: 400,
-        description: `Bad request — missing or invalid field.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 403,
-        description: `Insufficient permissions or CSRF validation failed.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 404,
-        description: `Resource not found.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 500,
-        description: `Internal server error.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
     method: "get",
     path: "/agents/:id/mailboxes/:workspaceId",
     alias: "getAgentMailbox",
@@ -3021,7 +2899,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "post",
     path: "/auth/change-password",
     alias: "changePassword",
-    description: `Self-service password change. Requires the current password for verification. Different from PUT /users/{username}/password which is the admin-reset path. Requires authentication.
+    description: `Self-service password change. Requires the current password for verification. Requires authentication.
 `,
     requestFormat: "json",
     parameters: [
@@ -3153,51 +3031,13 @@ Includes session_start events from all agent stores and task lifecycle events.
     ],
   },
   {
-    method: "post",
-    path: "/auth/register-admin",
-    alias: "registerAdmin",
-    description: `Creates the first admin user. Returns 409 if any admin already exists. The check-create sequence is atomic (TOCTOU-safe via safeUpdateConfigJSON). Issues bearer token, session cookie, and CSRF cookie on success. CSRF-exempt. Rate-limited: 3 requests per IP per minute.
-`,
-    requestFormat: "json",
-    parameters: [
-      {
-        name: "body",
-        type: "Body",
-        schema: RegisterAdminRequest,
-      },
-    ],
-    response: LoginResponse,
-    errors: [
-      {
-        status: 400,
-        description: `Bad request — missing or invalid field.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 409,
-        description: `Conflict — e.g. resource already exists, or last-admin guard triggered.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 429,
-        description: `Rate limit exceeded.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 500,
-        description: `Internal server error.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
     method: "get",
     path: "/auth/validate",
     alias: "validateToken",
     description: `Returns the authenticated user&#x27;s username and role when the token is valid. Rate-limited: 30 requests per IP per minute.
 `,
     requestFormat: "json",
-    response: ValidateTokenResponse,
+    response: z.object({ username: z.string() }).passthrough(),
     errors: [
       {
         status: 401,
@@ -3589,7 +3429,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "post",
     path: "/config/gateway/rotate-token",
     alias: "rotateGatewayToken",
-    description: `Generates a new cryptographically random 64-hex-character gateway bearer token, persists it to config.json, triggers a hot reload, and returns the new token. The previous token is immediately invalidated. Admin-only; secured by RequireAdmin + RequireNotBypass chain. Use after security incidents or on a regular rotation schedule.
+    description: `Generates a new cryptographically random 64-hex-character gateway bearer token, persists it to config.json, triggers a hot reload, and returns the new token. The previous token is immediately invalidated. Use after security incidents or on a regular rotation schedule.
 `,
     requestFormat: "json",
     response: RotateTokenResponse,
@@ -3620,7 +3460,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "get",
     path: "/config/pending-restart",
     alias: "getPendingRestart",
-    description: `Returns an array of config keys whose persisted (disk) value differs from the boot-time applied value. Only RestartGatedKeys are checked; hot-reload keys never appear here. An empty array means no restart is needed. Admin-only; non-admin returns 403.
+    description: `Returns an array of config keys whose persisted (disk) value differs from the boot-time applied value. Only RestartGatedKeys are checked; hot-reload keys never appear here. An empty array means no restart is needed.
 `,
     requestFormat: "json",
     response: z.array(PendingRestartEntry),
@@ -3752,7 +3592,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "get",
     path: "/devices",
     alias: "listDevices",
-    description: `Returns pending pairing requests and already-paired devices. Admin-only.
+    description: `Returns pending pairing requests and already-paired devices.
 `,
     requestFormat: "json",
     response: DevicesResponse,
@@ -3804,7 +3644,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "get",
     path: "/gateway/god-mode",
     alias: "getGodMode",
-    description: `Returns whether god mode (&quot;bypass-permissions&quot;) is currently enabled and whether it is available in this build/boot. Admin-only.
+    description: `Returns whether god mode (&quot;bypass-permissions&quot;) is currently enabled and whether it is available in this build/boot.
 `,
     requestFormat: "json",
     response: GodModeStatus,
@@ -3830,7 +3670,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "post",
     path: "/gateway/god-mode",
     alias: "setGodMode",
-    description: `Flips the global god-mode (&quot;bypass-permissions&quot;) switch and applies or reverts the override live (no restart). When enabled, every agent&#x27;s tool policy is floored at &quot;allow&quot;, the kernel sandbox is off, network egress is open, and the shell guard is off — regardless of per-agent profiles. Audit logging, the prompt-injection guard, and rate limiting stay on. High blast radius — admin-only, secured by RequireNotBypass (dev_mode_bypass returns 503) AND a single-use password re-auth consent token (X-Reauth-Token header; call POST /api/v1/auth/reauth first, 403 otherwise). Returns 403 when enabling while god mode is unavailable (nogodmode build or --allow-god-mode not passed). Every toggle is audit-logged with the acting user.
+    description: `Flips the global god-mode (&quot;bypass-permissions&quot;) switch and applies or reverts the override live (no restart). When enabled, every agent&#x27;s tool policy is floored at &quot;allow&quot;, the kernel sandbox is off, network egress is open, and the shell guard is off — regardless of per-agent profiles. Audit logging, the prompt-injection guard, and rate limiting stay on. High blast radius — secured by RequireNotBypass (dev_mode_bypass returns 503) AND a single-use password re-auth consent token (X-Reauth-Token header; call POST /api/v1/auth/reauth first, 403 otherwise). Returns 403 when enabling while god mode is unavailable (nogodmode build or --allow-god-mode not passed). Every toggle is audit-logged with the acting user.
 `,
     requestFormat: "json",
     parameters: [
@@ -3873,7 +3713,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "post",
     path: "/gateway/restart",
     alias: "restartGateway",
-    description: `Triggers a graceful self-restart: the gateway replies immediately, then drains in-flight work and re-execs the process (or exits cleanly for a supervisor). Used to apply restart-gated settings from the UI without a manual process bounce. The response gives the SPA a status + drain estimate so it can poll /health (and reconnect the WS) to detect the gateway going down and coming back up. High blast radius — admin-only, secured by RequireAdmin + RequireNotBypass; dev_mode_bypass returns 503.
+    description: `Triggers a graceful self-restart: the gateway replies immediately, then drains in-flight work and re-execs the process (or exits cleanly for a supervisor). Used to apply restart-gated settings from the UI without a manual process bounce. The response gives the SPA a status + drain estimate so it can poll /health (and reconnect the WS) to detect the gateway going down and coming back up. High blast radius, secured by RequireNotBypass; dev_mode_bypass returns 503.
 `,
     requestFormat: "json",
     response: GatewayRestartResponse,
@@ -4025,7 +3865,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "post",
     path: "/mcp-servers",
     alias: "addMcpServer",
-    description: `Adds a new MCP server to the gateway config. Admin-only.`,
+    description: `Adds a new MCP server to the gateway config.`,
     requestFormat: "json",
     parameters: [
       {
@@ -4052,7 +3892,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "delete",
     path: "/mcp-servers/:id",
     alias: "deleteMcpServer",
-    description: `Removes an MCP server from the gateway config. Admin-only.`,
+    description: `Removes an MCP server from the gateway config.`,
     requestFormat: "json",
     parameters: [
       {
@@ -4079,7 +3919,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "patch",
     path: "/mcp-servers/:id",
     alias: "patchMcpServer",
-    description: `Partially updates an MCP server config (enable/disable toggle, endpoint, env, headers, env_file). Omitted fields are preserved. Admin-only.
+    description: `Partially updates an MCP server config (enable/disable toggle, endpoint, env, headers, env_file). Omitted fields are preserved.
 `,
     requestFormat: "json",
     parameters: [
@@ -4117,7 +3957,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "post",
     path: "/mcp-servers/:id/test",
     alias: "testMcpServer",
-    description: `Attempts an on-demand connection to the configured MCP server and reports whether it succeeded and which tools it exposes. Does not change any state (the probe connection is closed immediately). Admin-only.
+    description: `Attempts an on-demand connection to the configured MCP server and reports whether it succeeded and which tools it exposes. Does not change any state (the probe connection is closed immediately).
 `,
     requestFormat: "json",
     parameters: [
@@ -4164,21 +4004,6 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 404,
         description: `Resource not found.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "get",
-    path: "/me",
-    alias: "getMe",
-    description: `Returns the authenticated user&#x27;s RBAC role. Used for SPA gating.`,
-    requestFormat: "json",
-    response: MeInfo,
-    errors: [
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
         schema: ErrorResponse,
       },
     ],
@@ -4360,7 +4185,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "get",
     path: "/performance",
     alias: "getPerformanceSettings",
-    description: `Returns the max-parallel-agents cap and the effective (clamped) value currently in use. Admin-only.
+    description: `Returns the max-parallel-agents cap and the effective (clamped) value currently in use.
 `,
     requestFormat: "json",
     response: PerformanceSettings,
@@ -4376,7 +4201,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "put",
     path: "/performance",
     alias: "updatePerformanceSettings",
-    description: `Updates max_parallel_agents. The effective value is clamped to [2, min(NumCPU-2, RAM_GB/1.5)] with a ceiling of 16. Requires a gateway restart to take effect (requires_restart: false — the semaphore is resized in-memory on PUT). Admin-only.
+    description: `Updates max_parallel_agents. The effective value is clamped to [2, min(NumCPU-2, RAM_GB/1.5)] with a ceiling of 16. Requires a gateway restart to take effect (requires_restart: false — the semaphore is resized in-memory on PUT).
 `,
     requestFormat: "json",
     parameters: [
@@ -4980,7 +4805,7 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
     method: "put",
     path: "/security/retention",
     alias: "updateRetention",
-    description: `Partial update — any subset of session_days and disabled. session_days must be a non-negative integer (floats and strings rejected). disabled must be a JSON boolean (string &quot;true&quot;/&quot;false&quot; rejected). Empty body is accepted as a no-op. Hot-reloaded (requires_restart: false). Admin-only (non-admin returns 403).
+    description: `Partial update — any subset of session_days and disabled. session_days must be a non-negative integer (floats and strings rejected). disabled must be a JSON boolean (string &quot;true&quot;/&quot;false&quot; rejected). Empty body is accepted as a no-op. Hot-reloaded (requires_restart: false).
 `,
     requestFormat: "json",
     parameters: [
@@ -5008,7 +4833,7 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
     method: "post",
     path: "/security/retention/sweep",
     alias: "triggerRetentionSweep",
-    description: `Immediately purges session directories older than the configured retention window. Returns 409 if a sweep is already in progress. Returns skipped_reason&#x3D;&quot;disabled&quot; when retention is disabled. Admin-only; emits audit with resource&#x3D;&quot;storage.retention.sweep&quot;.
+    description: `Immediately purges session directories older than the configured retention window. Returns 409 if a sweep is already in progress. Returns skipped_reason&#x3D;&quot;disabled&quot; when retention is disabled. Emits audit with resource&#x3D;&quot;storage.retention.sweep&quot;.
 `,
     requestFormat: "json",
     response: RetentionSweepResult,
@@ -5055,7 +4880,7 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
     method: "put",
     path: "/security/sandbox-config",
     alias: "updateSandboxConfig",
-    description: `Partial update — any subset of mode, allow_network_outbound, allowed_paths, ssrf_enabled, ssrf_allow_internal, ssrf.allow_internal, default_profile, shell_deny_patterns. At least one field required. mode, allowed_paths, and default_profile are restart-gated (requires_restart&#x3D;true). SSRF and shell_deny_patterns are hot-reloaded. Admin-only; non-admin returns 403. Protected by RequireNotBypass middleware (returns 503 when dev_mode_bypass is active).
+    description: `Partial update — any subset of mode, allow_network_outbound, allowed_paths, ssrf_enabled, ssrf_allow_internal, ssrf.allow_internal, default_profile, shell_deny_patterns. At least one field required. mode, allowed_paths, and default_profile are restart-gated (requires_restart&#x3D;true). SSRF and shell_deny_patterns are hot-reloaded. Protected by RequireNotBypass middleware (returns 503 when dev_mode_bypass is active).
 `,
     requestFormat: "json",
     parameters: [
@@ -5125,7 +4950,7 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
     method: "put",
     path: "/security/session-scope",
     alias: "updateSessionScope",
-    description: `Persists the new dm_scope to config.json. Session routing is cached at boot so all changes require a gateway restart. The response always includes requires_restart&#x3D;true. Admin-only. Emits a security audit log entry.
+    description: `Persists the new dm_scope to config.json. Session routing is cached at boot so all changes require a gateway restart. The response always includes requires_restart&#x3D;true. Emits a security audit log entry.
 `,
     requestFormat: "json",
     parameters: [
@@ -5223,7 +5048,7 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
     method: "put",
     path: "/security/tool-policies",
     alias: "updateGlobalToolPolicies",
-    description: `Persists new global tool policies to config.json under the sandbox key. Changes are audit-logged (SEC-15). Admin-only; non-admin returns 403.
+    description: `Persists new global tool policies to config.json under the sandbox key. Changes are audit-logged (SEC-15).
 `,
     requestFormat: "json",
     parameters: [
@@ -5875,7 +5700,7 @@ Polled by the SPA StatusBar every 15 seconds.
     method: "post",
     path: "/system/cli-validate",
     alias: "postSystemCliValidate",
-    description: `Stateless, create-time validation for an external-executor CLI: confirms the binary at cli_path actually runs and reports a version, before the operator saves the subagent_3p agent. Reuses runner.TestConnectionWithPath verbatim (the same handshake as POST /agents/{id}/runner/test) — the only requirement is that the binary runs and returns a valid version-shaped response; no per-CLI identity/name match is performed. Gated withAuth at create-parity (the same authorization as createAgent — not an admin-only route). Rejects a target that is not a regular, executable file before spawning it (classified &quot;missing-binary&quot;, no spawn attempt). Applies a dedicated rate limiter and a small per-caller in-flight concurrency cap, and emits one audit event {cli, resolved_path, reason} per call — validation spawns a caller-supplied path, unlike the unaudited cli-detect probe.
+    description: `Stateless, create-time validation for an external-executor CLI: confirms the binary at cli_path actually runs and reports a version, before the operator saves the subagent_3p agent. Reuses runner.TestConnectionWithPath verbatim (the same handshake as POST /agents/{id}/runner/test) — the only requirement is that the binary runs and returns a valid version-shaped response; no per-CLI identity/name match is performed. Gated withAuth at create-parity (the same authorization as createAgent). Rejects a target that is not a regular, executable file before spawning it (classified &quot;missing-binary&quot;, no spawn attempt). Applies a dedicated rate limiter and a small per-caller in-flight concurrency cap, and emits one audit event {cli, resolved_path, reason} per call — validation spawns a caller-supplied path, unlike the unaudited cli-detect probe.
 `,
     requestFormat: "json",
     parameters: [
@@ -5908,7 +5733,7 @@ Polled by the SPA StatusBar every 15 seconds.
     method: "get",
     path: "/tasks",
     alias: "listTasks",
-    description: `Returns tasks in a workspace, filterable by status, agent, milestone, and surface. This is the unified task surface (Sprint 2) — it subsumes the former GTD /board/tasks listing. By default only top-level tasks (parent_task_id absent) and &#x60;surface: user&#x60; tasks are returned; use the filters to widen. Workspace-scoped. Admin-only.
+    description: `Returns tasks in a workspace, filterable by status, agent, milestone, and surface. This is the unified task surface (Sprint 2) — it subsumes the former GTD /board/tasks listing. By default only top-level tasks (parent_task_id absent) and &#x60;surface: user&#x60; tasks are returned; use the filters to widen. Workspace-scoped.
 `,
     requestFormat: "json",
     parameters: [
@@ -5981,7 +5806,7 @@ Polled by the SPA StatusBar every 15 seconds.
     method: "post",
     path: "/tasks",
     alias: "createTask",
-    description: `Creates a new task. Lands in &#x60;inbox&#x60; regardless of input (Detail #8 landing rule). Workspace-scoped (workspace_id required in the body). Admin-only.
+    description: `Creates a new task. Lands in &#x60;inbox&#x60; regardless of input (Detail #8 landing rule). Workspace-scoped (workspace_id required in the body).
 `,
     requestFormat: "json",
     parameters: [
@@ -6009,7 +5834,7 @@ Polled by the SPA StatusBar every 15 seconds.
     method: "get",
     path: "/tasks/:id",
     alias: "getTask",
-    description: `Returns a single task by ID, including read-time rollup. Admin-only.`,
+    description: `Returns a single task by ID, including read-time rollup.`,
     requestFormat: "json",
     parameters: [
       {
@@ -6036,7 +5861,7 @@ Polled by the SPA StatusBar every 15 seconds.
     method: "patch",
     path: "/tasks/:id",
     alias: "updateTask",
-    description: `Partially updates task fields (PATCH semantics — only provided fields change). Dragging a card to &#x60;in_progress&#x60; / Run is a status PATCH; there is no separate /start endpoint. Admin-only.
+    description: `Partially updates task fields (PATCH semantics — only provided fields change). Dragging a card to &#x60;in_progress&#x60; / Run is a status PATCH; there is no separate /start endpoint.
 `,
     requestFormat: "json",
     parameters: [
@@ -6079,7 +5904,7 @@ Polled by the SPA StatusBar every 15 seconds.
     method: "delete",
     path: "/tasks/:id",
     alias: "deleteTask",
-    description: `Deletes a task by ID. Admin-only.`,
+    description: `Deletes a task by ID.`,
     requestFormat: "json",
     parameters: [
       {
@@ -6106,7 +5931,7 @@ Polled by the SPA StatusBar every 15 seconds.
     method: "put",
     path: "/tasks/:id/dependencies",
     alias: "setTaskDependencies",
-    description: `Replaces the task&#x27;s &#x60;blocked_by&#x60; set atomically. A write-time DAG cycle validator rejects self-edges and cycles (max depth 50). Returns the updated task. Admin-only.
+    description: `Replaces the task&#x27;s &#x60;blocked_by&#x60; set atomically. A write-time DAG cycle validator rejects self-edges and cycles (max depth 50). Returns the updated task.
 `,
     requestFormat: "json",
     parameters: [
@@ -6149,7 +5974,7 @@ Polled by the SPA StatusBar every 15 seconds.
     method: "get",
     path: "/tasks/:id/subtasks",
     alias: "listSubtasks",
-    description: `Returns all subtasks (children with this parent_task_id). Admin-only.`,
+    description: `Returns all subtasks (children with this parent_task_id).`,
     requestFormat: "json",
     parameters: [
       {
@@ -6176,7 +6001,7 @@ Polled by the SPA StatusBar every 15 seconds.
     method: "put",
     path: "/tasks/:id/todos",
     alias: "setTaskTodos",
-    description: `Replaces the task&#x27;s &#x60;todos&#x60; array atomically (Tier-1 checklist; Detail #3 of the three-tier model). Returns the updated task. Admin-only.
+    description: `Replaces the task&#x27;s &#x60;todos&#x60; array atomically (Tier-1 checklist; Detail #3 of the three-tier model). Returns the updated task.
 `,
     requestFormat: "json",
     parameters: [
@@ -6494,249 +6319,6 @@ Returns HTTP 201 on success.
       {
         status: 500,
         description: `Internal server error.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "get",
-    path: "/users",
-    alias: "listUsers",
-    description: `Returns all registered gateway users. Admin-only. Password and token hashes are never included — only boolean presence flags. dev_mode_bypass&#x3D;true disables this endpoint (503).
-`,
-    requestFormat: "json",
-    response: z.array(User),
-    errors: [
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 403,
-        description: `Insufficient permissions or CSRF validation failed.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 500,
-        description: `Internal server error.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 503,
-        description: `Service unavailable — e.g. credential store locked.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "post",
-    path: "/users",
-    alias: "createUser",
-    description: `Creates a new user with hashed password. No bearer token is issued at creation time — the user must log in via POST /auth/login to obtain one. Admin-only. dev_mode_bypass&#x3D;true disables this endpoint (503).
-`,
-    requestFormat: "json",
-    parameters: [
-      {
-        name: "body",
-        type: "Body",
-        schema: UserCreateRequest,
-      },
-    ],
-    response: UserCreateResponse,
-    errors: [
-      {
-        status: 400,
-        description: `Bad request — missing or invalid field.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 403,
-        description: `Insufficient permissions or CSRF validation failed.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 409,
-        description: `Conflict — e.g. resource already exists, or last-admin guard triggered.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 500,
-        description: `Internal server error.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 503,
-        description: `Service unavailable — e.g. credential store locked.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "delete",
-    path: "/users/:username",
-    alias: "deleteUser",
-    description: `Permanently removes the user from config.json. The last-admin guard prevents deleting the final admin account (409). Admin-only. dev_mode_bypass&#x3D;true disables this endpoint (503).
-`,
-    requestFormat: "json",
-    parameters: [
-      {
-        name: "username",
-        type: "Path",
-        schema: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{1,62}$/),
-      },
-    ],
-    response: UserDeleteResponse,
-    errors: [
-      {
-        status: 400,
-        description: `Bad request — missing or invalid field.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 403,
-        description: `Insufficient permissions or CSRF validation failed.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 404,
-        description: `Resource not found.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 409,
-        description: `Conflict — e.g. resource already exists, or last-admin guard triggered.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 500,
-        description: `Internal server error.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 503,
-        description: `Service unavailable — e.g. credential store locked.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "put",
-    path: "/users/:username/password",
-    alias: "resetUserPassword",
-    description: `Resets the target user&#x27;s password and invalidates their current bearer token. The user must log in again with the new password. This is the admin-reset path — the self-change path is POST /auth/change-password. Admin-only. dev_mode_bypass&#x3D;true disables this endpoint (503).
-`,
-    requestFormat: "json",
-    parameters: [
-      {
-        name: "body",
-        type: "Body",
-        schema: z.object({ password: z.string().min(8).max(72) }),
-      },
-      {
-        name: "username",
-        type: "Path",
-        schema: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{1,62}$/),
-      },
-    ],
-    response: UserResetPasswordResponse,
-    errors: [
-      {
-        status: 400,
-        description: `Bad request — missing or invalid field.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 403,
-        description: `Insufficient permissions or CSRF validation failed.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 404,
-        description: `Resource not found.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 500,
-        description: `Internal server error.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 503,
-        description: `Service unavailable — e.g. credential store locked.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "patch",
-    path: "/users/:username/role",
-    alias: "changeUserRole",
-    description: `Changes the role of the target user. The last-admin guard prevents demoting the final admin (409). Admin-only. dev_mode_bypass&#x3D;true disables this endpoint (503).
-`,
-    requestFormat: "json",
-    parameters: [
-      {
-        name: "body",
-        type: "Body",
-        schema: UserRoleChangeRequest,
-      },
-      {
-        name: "username",
-        type: "Path",
-        schema: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{1,62}$/),
-      },
-    ],
-    response: UserRoleChangeResponse,
-    errors: [
-      {
-        status: 400,
-        description: `Bad request — missing or invalid field.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 403,
-        description: `Insufficient permissions or CSRF validation failed.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 404,
-        description: `Resource not found.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 409,
-        description: `Conflict — e.g. resource already exists, or last-admin guard triggered.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 500,
-        description: `Internal server error.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 503,
-        description: `Service unavailable — e.g. credential store locked.`,
         schema: ErrorResponse,
       },
     ],

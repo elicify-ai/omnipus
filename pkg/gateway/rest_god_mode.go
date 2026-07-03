@@ -29,10 +29,10 @@ func (a *restAPI) godModeAvailable() bool {
 
 // HandleGodMode dispatches GET (read state) and POST (toggle) for
 // /api/v1/gateway/god-mode (O14). Registered with adminWrap (withAuth →
-// RequireAdmin → RequireNotBypass), so dev_mode_bypass returns 503 before any
-// handler logic runs. The POST additionally requires a single-use password
-// re-auth consent token (requireReAuth) — god mode is the highest-blast-radius
-// runtime switch in the product and must never be flippable without step-up.
+// RequireNotBypass), so dev_mode_bypass returns 503 before any handler logic
+// runs. The POST additionally requires a single-use password re-auth consent
+// token (requireReAuth) — god mode is the highest-blast-radius runtime switch
+// in the product and must never be flippable without step-up.
 func (a *restAPI) HandleGodMode(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:

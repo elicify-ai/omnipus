@@ -353,21 +353,13 @@ func TestHandleSystemCliValidate_InflightCapHandler(t *testing.T) {
 
 // --- Endpoint: create-parity auth ---
 
-// TestHandleSystemCliValidate_CreateParity_NonAdminAllowed proves the handler is
-// NOT admin-gated: a non-admin ("user") caller reaches it and gets a 200 — the
-// same parity as createAgent. Contrast: the exact same request hits 403 on a
-// RequireNotBypass-gated chain (buildInnerChainHandler), demonstrating the
-// difference.
-//
-// KNOWN ISSUE (flagged, not fixed here — out of this cluster's authorized
-// scope for this file): post-single-user-model, buildInnerChainHandler is
-// RequireNotBypass-only (the RequireAdmin layer it used to wrap was deleted
-// package-wide). makeNonAdminCtxRequest injects a non-bypass config
-// snapshot, so the "Contrast" assertion below now observes 200, not 403 —
-// the contrast this test was designed to prove no longer holds now that
-// there is no more admin-vs-non-admin distinction anywhere in the chain.
-// Needs a follow-up decision (drop the contrast half, or assert 200) in a
-// later integration/fix pass.
+// TestHandleSystemCliValidate_CreateParity_NonAdminAllowed proves the handler
+// reaches a non-"admin" caller ("bob") — the same parity as createAgent
+// (plain withAuth, no additional gate). Single-user model: there is no
+// admin-vs-non-admin distinction left to contrast against here — that
+// coverage now lives in TestHandleSystemCliValidate_RealMux_NotBypassGated,
+// which contrasts cli-validate (create-parity) against a genuinely
+// bypass-gated route (sandbox-config) under dev_mode_bypass=true.
 func TestHandleSystemCliValidate_CreateParity_NonAdminAllowed(t *testing.T) {
 	api, cleanup := newTestRestAPI(t)
 	defer cleanup()
@@ -378,17 +370,7 @@ func TestHandleSystemCliValidate_CreateParity_NonAdminAllowed(t *testing.T) {
 	w := httptest.NewRecorder()
 	api.HandleSystemCliValidate(w, req)
 	require.Equal(t, http.StatusOK, w.Code,
-		"non-admin must reach cli-validate (create-parity); body=%s", w.Body.String())
-
-	// Contrast: the SAME non-admin request is rejected by an admin-gated chain.
-	// See the KNOWN ISSUE note on this test's doc comment — this assertion is
-	// expected to be red until a follow-up pass reconciles it with the
-	// single-user model's removal of RequireAdmin.
-	adminReq := makeNonAdminCtxRequest(http.MethodPost, "/api/v1/system/cli-validate", body)
-	aw := httptest.NewRecorder()
-	buildInnerChainHandler().ServeHTTP(aw, adminReq)
-	assert.Equal(t, http.StatusForbidden, aw.Code,
-		"an admin-gated route would 403 this same caller — proving cli-validate is NOT admin-gated")
+		"a non-\"admin\" caller must reach cli-validate (create-parity); body=%s", w.Body.String())
 }
 
 // TestHandleSystemCliValidate_RealMux_NotBypassGated exercises the REAL

@@ -1366,24 +1366,6 @@ func (e IntegrationProviderUpdateRequestKind) Valid() bool {
 	}
 }
 
-// Defines values for LoginResponseRole.
-const (
-	LoginResponseRoleAdmin LoginResponseRole = "admin"
-	LoginResponseRoleUser  LoginResponseRole = "user"
-)
-
-// Valid indicates whether the value is a known member of the LoginResponseRole enum.
-func (e LoginResponseRole) Valid() bool {
-	switch e {
-	case LoginResponseRoleAdmin:
-		return true
-	case LoginResponseRoleUser:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for McpServerStatus.
 const (
 	McpServerStatusConnected    McpServerStatus = "connected"
@@ -1441,24 +1423,6 @@ func (e McpServerCreateTransport) Valid() bool {
 	case McpServerCreateTransportSse:
 		return true
 	case McpServerCreateTransportStdio:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for MeInfoRole.
-const (
-	MeInfoRoleAdmin MeInfoRole = "admin"
-	MeInfoRoleUser  MeInfoRole = "user"
-)
-
-// Valid indicates whether the value is a known member of the MeInfoRole enum.
-func (e MeInfoRole) Valid() bool {
-	switch e {
-	case MeInfoRoleAdmin:
-		return true
-	case MeInfoRoleUser:
 		return true
 	default:
 		return false
@@ -1672,24 +1636,6 @@ const (
 func (e NotificationListNotificationsType) Valid() bool {
 	switch e {
 	case NotificationListNotificationsTypeScheduleFailed:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for OnboardingCompleteResponseRole.
-const (
-	OnboardingCompleteResponseRoleAdmin OnboardingCompleteResponseRole = "admin"
-	OnboardingCompleteResponseRoleUser  OnboardingCompleteResponseRole = "user"
-)
-
-// Valid indicates whether the value is a known member of the OnboardingCompleteResponseRole enum.
-func (e OnboardingCompleteResponseRole) Valid() bool {
-	switch e {
-	case OnboardingCompleteResponseRoleAdmin:
-		return true
-	case OnboardingCompleteResponseRoleUser:
 		return true
 	default:
 		return false
@@ -3418,114 +3364,6 @@ func (e ToolRegistryEntrySource) Valid() bool {
 	}
 }
 
-// Defines values for UserRole.
-const (
-	UserRoleAdmin UserRole = "admin"
-	UserRoleUser  UserRole = "user"
-)
-
-// Valid indicates whether the value is a known member of the UserRole enum.
-func (e UserRole) Valid() bool {
-	switch e {
-	case UserRoleAdmin:
-		return true
-	case UserRoleUser:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for UserCreateRequestRole.
-const (
-	UserCreateRequestRoleAdmin UserCreateRequestRole = "admin"
-	UserCreateRequestRoleUser  UserCreateRequestRole = "user"
-)
-
-// Valid indicates whether the value is a known member of the UserCreateRequestRole enum.
-func (e UserCreateRequestRole) Valid() bool {
-	switch e {
-	case UserCreateRequestRoleAdmin:
-		return true
-	case UserCreateRequestRoleUser:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for UserCreateResponseRole.
-const (
-	UserCreateResponseRoleAdmin UserCreateResponseRole = "admin"
-	UserCreateResponseRoleUser  UserCreateResponseRole = "user"
-)
-
-// Valid indicates whether the value is a known member of the UserCreateResponseRole enum.
-func (e UserCreateResponseRole) Valid() bool {
-	switch e {
-	case UserCreateResponseRoleAdmin:
-		return true
-	case UserCreateResponseRoleUser:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for UserRoleChangeRequestRole.
-const (
-	UserRoleChangeRequestRoleAdmin UserRoleChangeRequestRole = "admin"
-	UserRoleChangeRequestRoleUser  UserRoleChangeRequestRole = "user"
-)
-
-// Valid indicates whether the value is a known member of the UserRoleChangeRequestRole enum.
-func (e UserRoleChangeRequestRole) Valid() bool {
-	switch e {
-	case UserRoleChangeRequestRoleAdmin:
-		return true
-	case UserRoleChangeRequestRoleUser:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for UserRoleChangeResponseRole.
-const (
-	UserRoleChangeResponseRoleAdmin UserRoleChangeResponseRole = "admin"
-	UserRoleChangeResponseRoleUser  UserRoleChangeResponseRole = "user"
-)
-
-// Valid indicates whether the value is a known member of the UserRoleChangeResponseRole enum.
-func (e UserRoleChangeResponseRole) Valid() bool {
-	switch e {
-	case UserRoleChangeResponseRoleAdmin:
-		return true
-	case UserRoleChangeResponseRoleUser:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for ValidateTokenResponseRole.
-const (
-	ValidateTokenResponseRoleAdmin ValidateTokenResponseRole = "admin"
-	ValidateTokenResponseRoleUser  ValidateTokenResponseRole = "user"
-)
-
-// Valid indicates whether the value is a known member of the ValidateTokenResponseRole enum.
-func (e ValidateTokenResponseRole) Valid() bool {
-	switch e {
-	case ValidateTokenResponseRoleAdmin:
-		return true
-	case ValidateTokenResponseRoleUser:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for WorkspaceStatus.
 const (
 	WorkspaceStatusActive   WorkspaceStatus = "active"
@@ -4367,24 +4205,6 @@ type AgentModelParams struct {
 	TopP *float64 `json:"top_p,omitempty"`
 }
 
-// AgentOwnerUpdateResponse Response from PATCH /api/v1/agents/{id}/ownership. Confirms the ownership change.
-type AgentOwnerUpdateResponse struct {
-	// AgentId The agent whose ownership was changed.
-	AgentId string `json:"agent_id"`
-
-	// OwnerUsername The username of the new owner.
-	OwnerUsername string `json:"owner_username"`
-
-	// Success True when ownership was successfully updated.
-	Success bool `json:"success"`
-}
-
-// AgentOwnershipUpdateRequest Request body for PATCH /api/v1/agents/{id}/ownership. Updates the owner_username field on a custom agent. Admin-only. System and core agents cannot have an owner assigned. Clearing the owner (empty string) requires the X-Confirm-Demote: 1 header.
-type AgentOwnershipUpdateRequest struct {
-	// OwnerUsername Username of the new owner. Empty string clears ownership (requires X-Confirm-Demote: 1 header to prevent accidents).
-	OwnerUsername *string `json:"owner_username,omitempty"`
-}
-
 // AgentRateLimits Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies and per-agent overrides are ignored.
 type AgentRateLimits struct {
 	// MaxCostPerDay Maximum USD cost per day for this agent. Absent = no per-agent cap.
@@ -4906,7 +4726,7 @@ type AuditEntry struct {
 	// Tool Tool name when the event is a tool call. May be absent.
 	Tool *string `json:"tool,omitempty"`
 
-	// User Authenticated gateway principal that initiated the turn this entry belongs to (FR-017). For a CLI run authenticated as the `cli` principal this is "cli"; for an admin browser session it is the admin username. This is the WS-authenticated identity (carried on a dedicated field set only by the gateway WS path), not the channel-platform sender — so channel-originated turns and unauthenticated env-token / dev-bypass paths leave it absent. May be absent.
+	// User Authenticated gateway principal that initiated the turn this entry belongs to (FR-017). For a CLI run authenticated via the dedicated CLI token this is "cli"; for a browser session it is the account's username. This is the WS-authenticated identity (carried on a dedicated field set only by the gateway WS path), not the channel-platform sender — so channel-originated turns and unauthenticated env-token / dev-bypass paths leave it absent. May be absent.
 	User *string `json:"user,omitempty"`
 }
 
@@ -4953,7 +4773,7 @@ type AuditLogResponse struct {
 		// Tool Tool name when the event is a tool call. May be absent.
 		Tool *string `json:"tool,omitempty"`
 
-		// User Authenticated gateway principal that initiated the turn this entry belongs to (FR-017). For a CLI run authenticated as the `cli` principal this is "cli"; for an admin browser session it is the admin username. This is the WS-authenticated identity (carried on a dedicated field set only by the gateway WS path), not the channel-platform sender — so channel-originated turns and unauthenticated env-token / dev-bypass paths leave it absent. May be absent.
+		// User Authenticated gateway principal that initiated the turn this entry belongs to (FR-017). For a CLI run authenticated via the dedicated CLI token this is "cli"; for a browser session it is the account's username. This is the WS-authenticated identity (carried on a dedicated field set only by the gateway WS path), not the channel-platform sender — so channel-originated turns and unauthenticated env-token / dev-bypass paths leave it absent. May be absent.
 		User *string `json:"user,omitempty"`
 	} `json:"entries"`
 }
@@ -5676,11 +5496,8 @@ type LoginRequest struct {
 	Username string `json:"username"`
 }
 
-// LoginResponse Returned on successful login, register-admin, or onboarding/complete. Contains the bearer token to use in subsequent Authorization headers, the role of the authenticated user, and the username.
+// LoginResponse Returned on successful login or onboarding/complete. Contains the bearer token to use in subsequent Authorization headers and the username.
 type LoginResponse struct {
-	// Role RBAC role of the authenticated user.
-	Role LoginResponseRole `json:"role"`
-
 	// Token Canonical opaque bearer token format used by Omnipus. Two forms are accepted: the current id-tagged form "omnipus_" + 8 hex (token id) + "_" + 64 hex (32 random bytes) = 81 characters, and the legacy form "omnipus_" + 64 hex = 72 characters (still honored for tokens minted before the multi-token model). The id segment routes verification to the right hash in the user's token set; only the 64-hex secret is bcrypt-hashed (kept under bcrypt's 72-byte limit). Used in Authorization headers, WS AuthFrame, and rotate-token responses.
 	Token string `json:"token"`
 
@@ -5690,9 +5507,6 @@ type LoginResponse struct {
 	// Warning Non-fatal advisory message. Present on onboarding/complete when the credential store is locked and the API key was stored in plaintext.
 	Warning *string `json:"warning,omitempty"`
 }
-
-// LoginResponseRole RBAC role of the authenticated user.
-type LoginResponseRole string
 
 // Mailbox One (agent, workspace) email mailbox account (M11). Email is a TOOL surface, not a conversational channel: a mailbox belongs to exactly one (agent, workspace) pair — an agent can hold a different mailbox in each workspace it belongs to (different roles, different inboxes), and several agents may each have mailboxes in the same workspace. The mailbox password is stored in the encrypted credential store and is NEVER returned by this endpoint — the `configured` flag reports whether a password is on file.
 type Mailbox struct {
@@ -5946,15 +5760,6 @@ type McpToolsListResponse_Item struct {
 	Name                 string                 `json:"name"`
 	AdditionalProperties map[string]interface{} `json:"-"`
 }
-
-// MeInfo Response from GET /api/v1/me. Returns the authenticated user's role, used for RBAC gating in the SPA.
-type MeInfo struct {
-	// Role RBAC role of the current authenticated user.
-	Role MeInfoRole `json:"role"`
-}
-
-// MeInfoRole RBAC role of the current authenticated user.
-type MeInfoRole string
 
 // MemorySettings Global memory and recap/retention settings. Backed by agents.defaults.* and storage.retention fields in config.json. Readable and writable by any authenticated user (operator decision, A2/G-02). Never exposes secrets — the endpoint reads/writes only the listed fields.
 type MemorySettings struct {
@@ -6278,11 +6083,8 @@ type OnboardingCompleteRequest struct {
 	} `json:"provider"`
 }
 
-// OnboardingCompleteResponse Returned on successful login, register-admin, or onboarding/complete. Contains the bearer token to use in subsequent Authorization headers, the role of the authenticated user, and the username.
+// OnboardingCompleteResponse Returned on successful login or onboarding/complete. Contains the bearer token to use in subsequent Authorization headers and the username.
 type OnboardingCompleteResponse struct {
-	// Role RBAC role of the authenticated user.
-	Role OnboardingCompleteResponseRole `json:"role"`
-
 	// Token Canonical opaque bearer token format used by Omnipus. Two forms are accepted: the current id-tagged form "omnipus_" + 8 hex (token id) + "_" + 64 hex (32 random bytes) = 81 characters, and the legacy form "omnipus_" + 64 hex = 72 characters (still honored for tokens minted before the multi-token model). The id segment routes verification to the right hash in the user's token set; only the 64-hex secret is bcrypt-hashed (kept under bcrypt's 72-byte limit). Used in Authorization headers, WS AuthFrame, and rotate-token responses.
 	Token string `json:"token"`
 
@@ -6293,16 +6095,13 @@ type OnboardingCompleteResponse struct {
 	Warning *string `json:"warning,omitempty"`
 }
 
-// OnboardingCompleteResponseRole RBAC role of the authenticated user.
-type OnboardingCompleteResponseRole string
-
 // OnboardingStatusResponse Response from PATCH /api/v1/state when marking onboarding complete. Confirms that onboarding has been completed.
 type OnboardingStatusResponse struct {
 	// OnboardingComplete True when onboarding has been successfully marked as complete.
 	OnboardingComplete bool `json:"onboarding_complete"`
 }
 
-// OperationResult Generic success/failure envelope for simple admin operations. Used by endpoints that perform an action and return only whether it succeeded.
+// OperationResult Generic success/failure envelope for simple operations. Used by endpoints that perform an action and return only whether it succeeded.
 type OperationResult struct {
 	// Error Human-readable error message. Present only when success=false.
 	Error *string `json:"error,omitempty"`
@@ -6634,15 +6433,6 @@ type ReAuthResponse struct {
 
 	// Verified Whether the re-typed password matched.
 	Verified bool `json:"verified"`
-}
-
-// RegisterAdminRequest Body for POST /auth/register-admin. Creates the first admin user (fails 409 if one already exists).
-type RegisterAdminRequest struct {
-	// Password Password for the new admin account. Minimum 8 characters, maximum 72 (bcrypt limit).
-	Password string `json:"password"`
-
-	// Username Must start with an alphanumeric character and contain only letters, digits, dots, dashes, and underscores. Length 2-63 characters.
-	Username string `json:"username"`
 }
 
 // RestoreBackupRequest Request body for POST /api/v1/restore. Extracts a backup tar.gz archive over ~/.omnipus/, skipping config.json to preserve current settings.
@@ -8414,24 +8204,6 @@ type UploadedFile struct {
 	Size int64 `json:"size"`
 }
 
-// User Represents a gateway user account as returned by GET /users and POST /users. Password hashes and token hashes are NEVER included in responses — only the boolean presence flags are exposed.
-type User struct {
-	// HasActiveToken True when the user's token_hash is non-empty (i.e. a bearer token is currently issued).
-	HasActiveToken bool `json:"has_active_token"`
-
-	// HasPassword True when the user's password_hash is non-empty (i.e. a password has been set).
-	HasPassword bool `json:"has_password"`
-
-	// Role RBAC role. Case-sensitive. "user" is accepted for backward-compatible wire validation, but under the current single-user model every account always persists and reports as "admin" server-side regardless of which value was requested (see rest_users.go's persistedRole).
-	Role UserRole `json:"role"`
-
-	// Username Login name. Immutable after creation.
-	Username string `json:"username"`
-}
-
-// UserRole RBAC role. Case-sensitive. "user" is accepted for backward-compatible wire validation, but under the current single-user model every account always persists and reports as "admin" server-side regardless of which value was requested (see rest_users.go's persistedRole).
-type UserRole string
-
 // UserContextRequest Request body for PUT /api/v1/user-context. Replaces the entire content of USER.md in the default workspace. Passing an empty string clears the file.
 type UserContextRequest struct {
 	// Content Full replacement content for USER.md. May be empty to clear the file. Maximum 262144 bytes (256 KB). The underlying filesystem write via fileutil.WriteFileAtomic provides the physical limit; this schema constraint enforces a reasonable upper bound at the API layer.
@@ -8444,113 +8216,11 @@ type UserContextResponse struct {
 	Content string `json:"content"`
 }
 
-// UserCreateRequest Body for POST /users. Creates a new user account. Admin-only.
-type UserCreateRequest struct {
-	// Password Initial password. Minimum 8 characters, maximum 72 (bcrypt limit).
-	Password string `json:"password"`
-
-	// Role RBAC role. Case-sensitive; exactly "admin" or "user" (both accepted for backward-compatible wire validation). Under the current single-user model the created account always persists and reports as "admin" server-side regardless of which value is requested here (see rest_users.go's persistedRole).
-	Role UserCreateRequestRole `json:"role"`
-
-	// Username Must start with an alphanumeric and contain only letters, digits, dots, dashes, and underscores. Length 2-63 characters.
-	Username string `json:"username"`
-}
-
-// UserCreateRequestRole RBAC role. Case-sensitive; exactly "admin" or "user" (both accepted for backward-compatible wire validation). Under the current single-user model the created account always persists and reports as "admin" server-side regardless of which value is requested here (see rest_users.go's persistedRole).
-type UserCreateRequestRole string
-
-// UserCreateResponse Returned with HTTP 201 on successful POST /users. Contains the new user's identity fields. No token is issued — the user must log in explicitly.
-type UserCreateResponse struct {
-	// RequiresRestart Present and true when config was saved to disk but the in-memory hot-reload failed. The gateway must be restarted for the user to be able to log in.
-	RequiresRestart *bool `json:"requires_restart,omitempty"`
-
-	// Role The created user's RBAC role. "user" is accepted for backward-compatible wire validation, but under the current single-user model this always reports "admin" regardless of what was requested on UserCreateRequest (see rest_users.go's persistedRole).
-	Role UserCreateResponseRole `json:"role"`
-
-	// Username The created user's login name.
-	Username string `json:"username"`
-
-	// Warning Human-readable explanation when requires_restart is true.
-	Warning *string `json:"warning,omitempty"`
-}
-
-// UserCreateResponseRole The created user's RBAC role. "user" is accepted for backward-compatible wire validation, but under the current single-user model this always reports "admin" regardless of what was requested on UserCreateRequest (see rest_users.go's persistedRole).
-type UserCreateResponseRole string
-
-// UserDeleteResponse Returned on successful DELETE /users/{username}.
-type UserDeleteResponse struct {
-	// Deleted Always true on success.
-	Deleted bool `json:"deleted"`
-
-	// RequiresRestart Present and true when hot-reload failed after the deletion.
-	RequiresRestart *bool `json:"requires_restart,omitempty"`
-
-	// Username The deleted user's login name.
-	Username string `json:"username"`
-
-	// Warning Human-readable explanation when requires_restart is true.
-	Warning *string `json:"warning,omitempty"`
-}
-
-// UserResetPasswordRequest Body for PUT /users/{username}/password. Admin resets another user's password. This is NOT the self-change-password endpoint — that is POST /auth/change-password. After a successful reset the target user's bearer token is also invalidated, requiring them to log in again with the new password.
-type UserResetPasswordRequest struct {
-	// Password New password for the target user. Minimum 8 characters, maximum 72 (bcrypt limit).
-	Password string `json:"password"`
-}
-
-// UserResetPasswordResponse Returned on successful PUT /users/{username}/password.
-type UserResetPasswordResponse struct {
-	// PasswordReset Always true on success.
-	PasswordReset bool `json:"password_reset"`
-
-	// RequiresRestart Present and true when hot-reload failed after the password reset.
-	RequiresRestart *bool `json:"requires_restart,omitempty"`
-
-	// Username The affected user's login name.
-	Username string `json:"username"`
-
-	// Warning Human-readable explanation when requires_restart is true.
-	Warning *string `json:"warning,omitempty"`
-}
-
-// UserRoleChangeRequest Body for PATCH /users/{username}/role. Changes a user's RBAC role. Admin-only.
-type UserRoleChangeRequest struct {
-	// Role New role. Case-sensitive; exactly "admin" or "user" (both accepted for backward-compatible wire validation). Under the current single-user model the affected account always persists and reports as "admin" server-side regardless of which value is requested here (see rest_users.go's persistedRole).
-	Role UserRoleChangeRequestRole `json:"role"`
-}
-
-// UserRoleChangeRequestRole New role. Case-sensitive; exactly "admin" or "user" (both accepted for backward-compatible wire validation). Under the current single-user model the affected account always persists and reports as "admin" server-side regardless of which value is requested here (see rest_users.go's persistedRole).
-type UserRoleChangeRequestRole string
-
-// UserRoleChangeResponse Returned on successful PATCH /users/{username}/role.
-type UserRoleChangeResponse struct {
-	// RequiresRestart Present and true when hot-reload failed after the role change.
-	RequiresRestart *bool `json:"requires_restart,omitempty"`
-
-	// Role The new role. "user" is accepted for backward-compatible wire validation, but under the current single-user model this always reports "admin" regardless of what was requested on UserRoleChangeRequest (see rest_users.go's persistedRole).
-	Role UserRoleChangeResponseRole `json:"role"`
-
-	// Username The affected user's login name.
-	Username string `json:"username"`
-
-	// Warning Human-readable explanation when requires_restart is true.
-	Warning *string `json:"warning,omitempty"`
-}
-
-// UserRoleChangeResponseRole The new role. "user" is accepted for backward-compatible wire validation, but under the current single-user model this always reports "admin" regardless of what was requested on UserRoleChangeRequest (see rest_users.go's persistedRole).
-type UserRoleChangeResponseRole string
-
-// ValidateTokenResponse Response from GET /api/v1/auth/validate. Confirms the current bearer token is valid and returns the associated user's role.
+// ValidateTokenResponse Response from GET /api/v1/auth/validate. Confirms the current bearer token is valid and returns the authenticated user's username.
 type ValidateTokenResponse struct {
-	// Role The RBAC role of the authenticated user.
-	Role ValidateTokenResponseRole `json:"role"`
-
 	// Username The authenticated user's login name.
 	Username string `json:"username"`
 }
-
-// ValidateTokenResponseRole The RBAC role of the authenticated user.
-type ValidateTokenResponseRole string
 
 // VersionResponse Response from GET /api/v1/version. Returns build identity information. Used by the frontend to detect version drift and show "New version available" prompts (issue #110). No authentication required.
 type VersionResponse struct {
@@ -8910,9 +8580,6 @@ type ListWorkspacesParamsStatus string
 // CreateAgentJSONRequestBody defines body for CreateAgent for application/json ContentType.
 type CreateAgentJSONRequestBody = AgentCreateRequest
 
-// PatchAgentOwnershipJSONRequestBody defines body for PatchAgentOwnership for application/json ContentType.
-type PatchAgentOwnershipJSONRequestBody = AgentOwnershipUpdateRequest
-
 // UpdateAgentJSONRequestBody defines body for UpdateAgent for application/json ContentType.
 type UpdateAgentJSONRequestBody = AgentUpdateRequest
 
@@ -8930,9 +8597,6 @@ type LoginJSONRequestBody = LoginRequest
 
 // ReAuthJSONRequestBody defines body for ReAuth for application/json ContentType.
 type ReAuthJSONRequestBody = ReAuthRequest
-
-// RegisterAdminJSONRequestBody defines body for RegisterAdmin for application/json ContentType.
-type RegisterAdminJSONRequestBody = RegisterAdminRequest
 
 // CreateChannelInstanceJSONRequestBody defines body for CreateChannelInstance for application/json ContentType.
 type CreateChannelInstanceJSONRequestBody = ChannelCreateRequest
@@ -9053,15 +8717,6 @@ type UploadFilesMultipartRequestBody UploadFilesMultipartBody
 
 // PutUserContextJSONRequestBody defines body for PutUserContext for application/json ContentType.
 type PutUserContextJSONRequestBody = UserContextRequest
-
-// CreateUserJSONRequestBody defines body for CreateUser for application/json ContentType.
-type CreateUserJSONRequestBody = UserCreateRequest
-
-// ResetUserPasswordJSONRequestBody defines body for ResetUserPassword for application/json ContentType.
-type ResetUserPasswordJSONRequestBody = UserResetPasswordRequest
-
-// ChangeUserRoleJSONRequestBody defines body for ChangeUserRole for application/json ContentType.
-type ChangeUserRoleJSONRequestBody = UserRoleChangeRequest
 
 // TranscribeAudioMultipartRequestBody defines body for TranscribeAudio for multipart/form-data ContentType.
 type TranscribeAudioMultipartRequestBody TranscribeAudioMultipartBody

@@ -336,7 +336,6 @@ func (a *restAPI) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	tokenID := config.TokenIDFromRaw(token)
 	createdAt := time.Now().UTC().Format(time.RFC3339)
 
-	var foundRole string
 	var evictedTokens int
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
 		gw, ok := m["gateway"].(map[string]any)
@@ -373,7 +372,6 @@ func (a *restAPI) HandleLogin(w http.ResponseWriter, r *http.Request) {
 			// Session-cookie token remains single-slot (one browser session
 			// cookie per login is the existing contract); overwrite as before.
 			userMap["session_token_hash"] = string(sessionHash)
-			foundRole, _ = userMap["role"].(string)
 			return nil
 		}
 		return ErrUserNotFound
@@ -384,13 +382,6 @@ func (a *restAPI) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		}
 		slog.Error("auth: login failed", "error", err)
 		jsonErr(w, http.StatusInternalServerError, "login failed")
-		return
-	}
-
-	// Validate role is present.
-	if foundRole == "" {
-		slog.Error("auth: login succeeded but user role is missing", "username", body.Username)
-		jsonErr(w, http.StatusInternalServerError, "login failed: user role corrupted")
 		return
 	}
 
@@ -426,7 +417,6 @@ func (a *restAPI) HandleLogin(w http.ResponseWriter, r *http.Request) {
 
 	jsonOK(w, gen.LoginResponse{
 		Token:    token,
-		Role:     gen.LoginResponseRole(foundRole),
 		Username: body.Username,
 	})
 }
@@ -444,12 +434,8 @@ func (a *restAPI) HandleValidateToken(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusUnauthorized, "invalid token")
 		return
 	}
-	// Role is being dropped from this wire type in the Phase 3 contract change
-	// (single-user model, no role concept left) — hardcoded here as a
-	// compile-fix bridge only, matching the sole account's pre-removal value.
 	jsonOK(w, gen.ValidateTokenResponse{
 		Username: user.Username,
-		Role:     gen.ValidateTokenResponseRoleAdmin,
 	})
 }
 
