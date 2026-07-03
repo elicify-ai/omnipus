@@ -14,17 +14,24 @@ export function isWorkerType(type: string | null | undefined): boolean {
   return type === 'Subagent' || type === 'subagent_3p' || type === 'worker'
 }
 
-/** Worker that runs on an external CLI (claude-code / codex / opencode). */
+/**
+ * Worker that runs on an external CLI (claude-code / codex / opencode).
+ *
+ * TYPE-STRING-ONLY check — it can only ever be true for `subagent_3p`. A
+ * legacy `worker` agent can ALSO be external (executor.kind ===
+ * 'external-cli'), but that is not observable from the type string alone,
+ * so this helper returns `false` for it. Any caller that holds a full
+ * agent object (not just a bare type string) MUST use `agentKindFlags`
+ * instead — its `isExternal` correctly consults `executor.kind` for the
+ * legacy `worker` case. The one legitimate consumer of this narrower
+ * check is `ToolsAndPermissions` (defense-in-depth on the *type* alone,
+ * independent of whatever executor state may or may not have hydrated).
+ */
 export function isExternalType(type: string | null | undefined): boolean {
   return type === 'subagent_3p'
 }
 
-/** Worker that runs on the Omnipus engine. */
-export function isNativeWorkerType(type: string | null | undefined): boolean {
-  return isWorkerType(type) && !isExternalType(type)
-}
-
-export interface AgentKindFlags {
+export interface AgentKindFlags { // not-wire-format: UI-only kind classification derived from an Agent client-side; never serialized or sent over the gateway boundary
   /** Built-in roster agent (Mia/Jim/Ava/Ray) — identity/prompt/skills locked. */
   isLocked: boolean
   /** Subagent, subagent_3p, or legacy worker — delegation-only, never a chat target. */

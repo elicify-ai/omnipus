@@ -1486,8 +1486,8 @@ describe('AgentProfile — subagent_3p payload restriction', () => {
     expect(payload).not.toHaveProperty('fallback_models')
     expect(payload).not.toHaveProperty('model_params')
     expect(payload).not.toHaveProperty('delegation_policy')
-    // Operator decision (agent-types-field-matrix.md "Open decisions" #1):
-    // max_tool_iterations is excluded for subagent_3p.
+    // agent-types-field-matrix.md, Decisions #1 (resolved 2026-07-03):
+    // excluded — max_tool_iterations is excluded for subagent_3p.
     expect(payload).not.toHaveProperty('max_tool_iterations')
 
     // Allowed fields SHOULD be present
@@ -1870,7 +1870,8 @@ describe('AgentProfile — Fallback models visibility by agent kind (field matri
 })
 
 // W2c — Max tool calls per turn visibility by agent kind (field matrix,
-// "Open decisions" #1: subagent_3p EXCLUDES max_tool_iterations).
+// agent-types-field-matrix.md, Decisions #1 (resolved 2026-07-03): excluded
+// — subagent_3p EXCLUDES max_tool_iterations).
 describe('AgentProfile — Max tool calls per turn visibility by agent kind (field matrix, W2c)', () => {
   it('hides the Max tool calls input for a subagent_3p agent', async () => {
     vi.mocked(fetchAgent).mockResolvedValue(mockSubagent3pAgent)
@@ -1981,5 +1982,119 @@ describe('AgentProfile — locked core agent Sampling/Execution: editable (W2c)'
     }, { timeout: 3000 })
     const last = vi.mocked(updateAgent).mock.calls.at(-1)!
     expect((last[1] as Record<string, unknown>).model_params).toMatchObject({ temperature: 1.5 })
+  })
+})
+
+// Live-bug fix (two independent reviewers): the Sampling parameters
+// disclosure rendered for subagent_3p with no gate, but the subagent_3p
+// formData branch never sends model_params — an operator could "edit" and
+// "save" temperature/max-tokens/top-P and watch it silently revert on the
+// next refetch. Mirrors the sibling hide/show pattern used for Max tool
+// calls per turn / Fallback models / Tools & Permissions / Skills above.
+describe('AgentProfile — Sampling parameters visibility by agent kind (field matrix, live-bug fix)', () => {
+  it('hides the Sampling parameters disclosure for a subagent_3p agent', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue(mockSubagent3pAgent)
+    renderProfile('external-researcher')
+    await screen.findByText('External Researcher')
+    await waitFor(() => {
+      expect(screen.queryAllByText(/Sampling parameters/i).length).toBe(0)
+    })
+  })
+
+  it('shows the Sampling parameters disclosure for a native Subagent', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue(mockWorkerAgent)
+    renderProfile('web-researcher')
+    await screen.findByText('Web Researcher')
+    expect((await screen.findAllByText(/Sampling parameters/i)).length).toBeGreaterThanOrEqual(1)
+  })
+})
+
+// Live-bug fix: the locked-agent strip-list in the useAutoSave save function
+// stripped shell_policy from the PUT payload, but the backend's locked
+// reject-set (pkg/gateway/rest.go ~2458) is only name/description/soul/
+// color/icon/skills — shell_policy was never rejected. The shell deny-
+// patterns editor rendered interactive for a locked core agent but every
+// edit was silently discarded before it reached the wire. Mirrors the
+// sibling "SENDS sandbox_profile in the PUT payload for a locked core
+// agent" test (O13 describe block above).
+describe('AgentProfile — locked core agent shell_policy persistence (live-bug fix)', () => {
+  it('SENDS shell_policy in the PUT payload for a locked core agent', async () => {
+    vi.mocked(fetchAgent).mockReset().mockResolvedValue(mockLockedCoreAgent)
+    vi.mocked(updateAgent).mockReset().mockResolvedValue(mockLockedCoreAgent)
+    renderProfile('mia')
+    await screen.findByText('Mia')
+
+    // Open the Shell deny patterns sub-disclosure (nested inside Sandbox,
+    // which is rendered for locked core agents — O13) and add a pattern.
+    const shellToggles = await screen.findAllByText(/Shell deny patterns/i)
+    fireEvent.click(shellToggles[0])
+    const textareas = await screen.findAllByTestId('shell-deny-patterns-textarea')
+    fireEvent.change(textareas[0], { target: { value: 'rm -rf /' } })
+
+    await waitFor(() => {
+      expect(vi.mocked(updateAgent)).toHaveBeenCalled()
+    }, { timeout: 5000 })
+
+    const payload = vi.mocked(updateAgent).mock.calls[0][1] as Record<string, unknown>
+    expect(payload).toHaveProperty('shell_policy')
+    expect(payload.shell_policy).toMatchObject({ custom_deny_patterns: ['rm -rf /'] })
+  })
+})
+
+// Test-coverage gap (test-analyzer): the Default-agent toggle row and the
+// delegation-policy summary are gated on `!isWorkerAgent` only — NOT
+// `!isLocked` (operator decision 2026-07-03: locked core agents keep these
+// editable/visible). No prior test asserted either fact for a locked core
+// agent, nor their absence for a worker.
+describe('AgentProfile — Default-agent toggle and delegation-policy summary visibility (field matrix, W2c)', () => {
+  it('shows the Default-agent toggle row for a locked core agent', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue(mockLockedCoreAgent)
+    renderProfile('mia')
+    await screen.findByText('Mia')
+    expect((await screen.findAllByTestId('default-toggle-row')).length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('shows the delegation-policy summary for a locked core agent', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue(mockLockedCoreAgent)
+    renderProfile('mia')
+    await screen.findByText('Mia')
+    expect((await screen.findAllByTestId('delegation-policy-summary')).length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('hides the Default-agent toggle row and delegation-policy summary for a worker (Subagent)', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue(mockWorkerAgent)
+    renderProfile('web-researcher')
+    await screen.findByText('Web Researcher')
+    await waitFor(() => {
+      expect(screen.queryAllByTestId('default-toggle-row').length).toBe(0)
+    })
+    expect(screen.queryAllByTestId('delegation-policy-summary').length).toBe(0)
+  })
+})
+
+// Test-coverage gap (test-analyzer): every existing isLocked test asserts
+// the LOCKED (read-only) side. Nothing asserted the unlocked side, so a
+// regression that made `isLocked` accidentally evaluate `true` for every
+// agent (not just locked core ones) would slip through undetected.
+describe('AgentProfile — unlocked Main agent: interactive identity fields render (isLocked regression guard, W2c)', () => {
+  it('renders the interactive avatar color and icon pickers (not the read-only swatch) for an editable Main agent', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue({ ...mockCoreAgent, type: 'Main', locked: false, color: '#D4AF37' })
+    renderProfile('general-assistant')
+    await screen.findByText('General Assistant')
+    expect((await screen.findAllByTestId('avatar-color-Forge Gold')).length).toBeGreaterThanOrEqual(1)
+    expect((await screen.findAllByTestId('avatar-icon-trigger')).length).toBeGreaterThanOrEqual(1)
+    expect(screen.queryAllByTestId('avatar-color-readonly').length).toBe(0)
+    expect(screen.queryAllByTestId('avatar-icon-readonly').length).toBe(0)
+  })
+
+  it('does NOT disable the description textarea for an editable Main agent', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue({ ...mockCoreAgent, type: 'Main', locked: false })
+    renderProfile('general-assistant')
+    await screen.findByText('General Assistant')
+    const descriptions = await screen.findAllByTestId('agent-description-input')
+    expect(descriptions.length).toBeGreaterThanOrEqual(1)
+    const description = descriptions[0] as HTMLTextAreaElement
+    expect(description.disabled).toBe(false)
+    expect(description.readOnly).toBe(false)
   })
 })

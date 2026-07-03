@@ -7,8 +7,7 @@
 // All fields are type-branched (per the field matrix in
 // docs/internal/architecture/agent-types-field-matrix.md):
 //   Main + Subagent: model_params, sandbox_profile, shell_policy,
-//                     rate_limits, delegation_policy (Main only),
-//                     timeout_seconds, max_tool_iterations,
+//                     rate_limits, timeout_seconds, max_tool_iterations,
 //                     steering_mode (Main only)
 //   subagent_3p:     timeout_seconds + rate_limits ONLY — the CLI manages
 //                     its own isolation/auth/retries, so model_params,
@@ -96,13 +95,7 @@ function ExternalAdvancedFields({ payload, setField }: ExternalAdvancedFieldsPro
     <>
       <div className="space-y-2">
         <p className="text-xs font-medium text-[var(--color-secondary)]">Runtime</p>
-        <NumberRow
-          label="Timeout (seconds)"
-          caption="Maximum seconds a single agent turn may run. Default 300."
-          value={payload.timeout_seconds}
-          min={1}
-          onChange={(v) => setField('timeout_seconds', v)}
-        />
+        <TimeoutField payload={payload} setField={setField} />
       </div>
       <RateLimitsFields payload={payload} setField={setField} />
     </>
@@ -230,13 +223,7 @@ function MainAdvancedFields({ payload, setField, isMain, isNativeSubagent }: Mai
       <div className="space-y-2">
         <p className="text-xs font-medium text-[var(--color-secondary)]">Runtime</p>
         <div className="space-y-1.5">
-          <NumberRow
-            label="Timeout (seconds)"
-            caption="Maximum seconds a single agent turn may run. Default 300."
-            value={payload.timeout_seconds}
-            min={1}
-            onChange={(v) => setField('timeout_seconds', v)}
-          />
+          <TimeoutField payload={payload} setField={setField} />
           <NumberRow
             label="Max tool calls per turn"
             caption="Per single turn (one message, task, or heartbeat run) — the turn pauses at the limit and can be continued. Default 200."
@@ -276,6 +263,31 @@ function MainAdvancedFields({ payload, setField, isMain, isNativeSubagent }: Mai
         </div>
       </div>
     </>
+  )
+}
+
+// ── Timeout (shared by the full and slim variants) ───────────────────────────
+// Every user-creatable type carries `timeout_seconds` on the wire (per the
+// field matrix — subagent_3p keeps it as a process-level kill for a hung
+// CLI), so the exact same NumberRow rendered identically in both
+// `ExternalAdvancedFields` and `MainAdvancedFields`'s Runtime block. Factored
+// out once so the two surfaces can't drift on markup (mirrors the
+// `RateLimitsFields` pattern below).
+
+interface TimeoutFieldProps {
+  payload: AdvancedProps['payload']
+  setField: AdvancedProps['setField']
+}
+
+function TimeoutField({ payload, setField }: TimeoutFieldProps) {
+  return (
+    <NumberRow
+      label="Timeout (seconds)"
+      caption="Maximum seconds a single agent turn may run. Default 300."
+      value={payload.timeout_seconds}
+      min={1}
+      onChange={(v) => setField('timeout_seconds', v)}
+    />
   )
 }
 
