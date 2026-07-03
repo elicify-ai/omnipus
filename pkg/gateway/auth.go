@@ -37,15 +37,32 @@ type configContextKey = ctxkey.ConfigContextKey
 // with existing code in this package that uses the gateway-local type name.
 type UserContextKey = ctxkey.UserContextKey
 
+// CLITokenContextKey is an alias for ctxkey.CLITokenContextKey kept for
+// compatibility with existing code in this package that uses the
+// gateway-local type name.
+type CLITokenContextKey = ctxkey.CLITokenContextKey
+
 // AuthResult holds the outcome of a bearer token check.
 type AuthResult struct {
 	Authenticated bool
 	User          *config.UserConfig
+	// ViaCLIToken is true only when User was authenticated against
+	// Gateway.CLIToken (the synthetic "cli" identity), never when it came
+	// from a real Gateway.Users row. Callers that inject User into the
+	// request context under UserContextKey must also inject this under
+	// CLITokenContextKey so downstream handlers (e.g. HandleLogout) can
+	// tell the two apart — see CLITokenContextKey's doc for why that
+	// distinction matters.
+	ViaCLIToken bool
 }
 
 // checkBearerAuth validates the Authorization header.
-// It checks the single human account (Gateway.Users[0], single-account model),
-// then the CLI's dedicated Gateway.CLIToken, then falls back to the legacy
+// It loops every account in Gateway.Users (the single-user model normally
+// holds exactly one, but a pre-single-user-model install may still carry
+// leftover extra accounts from before the Users CRUD API was deleted —
+// config.warnAboutExtraUsers flags that at load time as an advisory; every
+// configured account still authenticates here regardless), then the CLI's
+// dedicated Gateway.CLIToken, then falls back to the legacy
 // OMNIPUS_BEARER_TOKEN env var for backward compatibility.
 // Returns AuthResult so callers can distinguish authenticated from anonymous.
 func checkBearerAuth(ctx context.Context, w http.ResponseWriter, r *http.Request, cfg *config.Config) AuthResult {
@@ -98,12 +115,13 @@ func checkBearerAuth(ctx context.Context, w http.ResponseWriter, r *http.Request
 	}
 
 	// 2. The CLI's dedicated token — decoupled from the human account (see
-	// GatewayConfig.CLIToken doc). Verified via the same shared helper that
-	// UserConfig.VerifyToken uses internally, with no legacy hash to check.
-	if cfg.Gateway.CLIToken != nil {
-		if config.VerifyTokenAgainst([]config.TokenEntry{*cfg.Gateway.CLIToken}, "", rawToken) == nil {
-			return AuthResult{Authenticated: true, User: &config.UserConfig{Username: "cli"}}
-		}
+	// GatewayConfig.CLIToken doc). Verified via the nil-safe helper that
+	// wraps the same shared VerifyTokenAgainst logic UserConfig.VerifyToken
+	// uses internally, with no legacy hash to check. ViaCLIToken:true tells
+	// callers this identity is NOT backed by a Gateway.Users row (see
+	// CLITokenContextKey's doc).
+	if cfg.Gateway.VerifyCLIToken(rawToken) == nil {
+		return AuthResult{Authenticated: true, User: &config.UserConfig{Username: "cli"}, ViaCLIToken: true}
 	}
 
 	// Auth is configured (a human account and/or a CLI token exist) but the

@@ -295,6 +295,15 @@ type wsConn struct {
 	// if a buggy or malicious client floods pings.
 	lastPongSentUnixNano atomic.Int64
 
+	// isCLIToken is true when authenticateWS resolved this connection via
+	// the machine-only Gateway.CLIToken credential rather than a real
+	// Gateway.Users row (userID == "cli" in that case). This is the WS-side
+	// counterpart of gateway's CLITokenContextKey — a WebSocket connection
+	// has no per-request context to carry that key into, so the distinction
+	// is tracked here instead for any WS-side logic that needs to tell a
+	// CLI caller apart from a human account.
+	isCLIToken bool
+
 	// pairingSubs tracks which channels this connection wants whatsapp_pairing
 	// (QR/status) frames for, so the QR secret is delivered only to the operator
 	// viewing that channel's pairing UI rather than every connected tab (#283,
@@ -623,10 +632,14 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // authenticateWS reads the first frame and validates the token.
-// Checks the single human account (Gateway.Users[0]) first (bcrypt), then the
-// CLI's dedicated Gateway.CLIToken, then falls back to OMNIPUS_BEARER_TOKEN
-// env var for backward compatibility. Sets wc.userID to the resolved
-// identity on success.
+// Loops every account in Gateway.Users first (bcrypt; the single-user model
+// normally holds exactly one, but a pre-single-user-model install may still
+// carry leftover extra accounts — config.warnAboutExtraUsers flags that at
+// load time as an advisory; every configured account still authenticates
+// here, same as checkBearerAuth), then the CLI's dedicated Gateway.CLIToken,
+// then falls back to OMNIPUS_BEARER_TOKEN env var for backward
+// compatibility. Sets wc.userID to the resolved identity on success, and
+// wc.isCLIToken when that identity came from the CLIToken branch.
 func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn) bool {
 	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 	_, data, err := conn.ReadMessage()
@@ -667,14 +680,14 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn) bool {
 	}
 
 	// 2. The CLI's dedicated token — decoupled from the human account (see
-	// GatewayConfig.CLIToken doc). Verified via the same shared helper that
-	// UserConfig.VerifyToken uses internally, with no legacy hash to check.
-	if cfg.Gateway.CLIToken != nil {
-		if config.VerifyTokenAgainst([]config.TokenEntry{*cfg.Gateway.CLIToken}, "", rawToken) == nil {
-			wc.userID = "cli"
-			conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-			return true
-		}
+	// GatewayConfig.CLIToken doc). Verified via the nil-safe helper that
+	// wraps the same shared VerifyTokenAgainst logic UserConfig.VerifyToken
+	// uses internally, with no legacy hash to check.
+	if cfg.Gateway.VerifyCLIToken(rawToken) == nil {
+		wc.userID = "cli"
+		wc.isCLIToken = true
+		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		return true
 	}
 
 	// Auth is configured (a human account and/or a CLI token exist) but the

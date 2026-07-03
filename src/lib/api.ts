@@ -534,12 +534,10 @@ const STATE_CHANGING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
 //   - /api/v1/onboarding/complete — called on fresh install (no cookie exists).
 //   - /api/v1/auth/login — called on first load of an existing install
 //     (refresh, new tab); cookie may be absent until the login succeeds.
-//   - /api/v1/auth/register-admin — first-boot admin account creation.
 const CSRF_EXEMPT_PATHS = new Set<string>([
   '/api/v1/onboarding/complete',
   '/api/v1/onboarding/probe-provider',
   '/api/v1/auth/login',
-  '/api/v1/auth/register-admin',
 ])
 
 // readCSRFCookie parses document.cookie and returns the __Host-csrf value,

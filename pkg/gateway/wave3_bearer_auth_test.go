@@ -9,12 +9,15 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/bcrypt"
@@ -153,6 +156,11 @@ func TestCheckBearerAuth_CLIToken_ValidAndInvalid(t *testing.T) {
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{
 			CLIToken: &config.TokenEntry{Hash: config.BcryptHash(hash)},
+			// DevModeBypass: true is load-bearing for the "invalid CLI token"
+			// subtest below — see its comment. It has no effect on the "valid
+			// CLI token" subtest, which authenticates before reaching the
+			// fail-fast condition or the env-fallback branch at all.
+			DevModeBypass: true,
 		},
 	}
 
@@ -167,6 +175,22 @@ func TestCheckBearerAuth_CLIToken_ValidAndInvalid(t *testing.T) {
 	})
 
 	t.Run("invalid CLI token is rejected, does not fall through to env fallback", func(t *testing.T) {
+		// This subtest's fixture sets Gateway.DevModeBypass: true (see cfg
+		// above) so the correct `||` path and the hypothetical `&&`-bug path
+		// diverge OBSERVABLY:
+		//   - correct `||`: len(cfg.Gateway.Users) > 0 (false) || cfg.Gateway.CLIToken != nil (true)
+		//     = true → fail-fast rejects immediately with 401, regardless of
+		//     DevModeBypass (that branch returns before step 3 is ever reached).
+		//   - hypothetical `&&`-bug: len(cfg.Gateway.Users) > 0 (false) && cfg.Gateway.CLIToken != nil (true)
+		//     = false → falls through to step 3 (env fallback); OMNIPUS_BEARER_TOKEN
+		//     is unset, and because DevModeBypass is true, THAT branch allows the
+		//     request (Authenticated: true, 200) instead of rejecting it.
+		// Without DevModeBypass: true, both paths produced the same 401 (just via
+		// different internal branches — "invalid Bearer token" vs "no users
+		// configured, complete onboarding first") and this test could not tell
+		// them apart. Verified by a temporary || -> && edit in auth.go: this
+		// subtest goes RED (Authenticated flips to true, w.Code flips to 200)
+		// under the bug and GREEN again once reverted.
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest(http.MethodPost, "/api/v1/chat", nil)
 		r.Header.Set("Authorization", "Bearer omnipus_"+strings.Repeat("f", 64))
@@ -214,4 +238,220 @@ func TestWithOptionalAuth_CLIToken_Authenticates(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	require.NotNil(t, gotUser, "a valid CLI token must be recognized, not silently downgraded to anonymous")
 	assert.Equal(t, "cli", gotUser.Username)
+}
+
+// --- Second-account (Gateway.Users[1]) regression coverage ---
+//
+// Commit 9e7789ab restored a loop over ALL cfg.Gateway.Users entries in
+// checkBearerAuth (auth.go), authenticateWS (websocket.go), and
+// withOptionalAuth (rest_auth.go) — replacing an earlier design that only
+// checked Gateway.Users[0] and would silently, permanently lock out any
+// second configured account. Despite this being the stated purpose of that
+// fix, no test anywhere in the repo proved a second account actually
+// authenticates on any of the three call sites: every existing 2-user-config
+// test (TestHandleLogin_BothCookiesEmitted,
+// TestHandleLogin_DifferentInputProducesDifferentToken) only exercises
+// HandleLogin (the password/cookie login flow), never a subsequent bearer
+// check. Gap identified by pr-test-analyzer during the fix-wave review pass.
+//
+// Each test below builds a 2-account roster with genuine bcrypt-hashed
+// bearer tokens and authenticates as the SECOND entry specifically,
+// asserting the resolved identity is that second account (not the first).
+// This is the actual regression guard: if any one of the three call sites
+// were reverted to a Users[0]-only check, the second account's token would
+// no longer match anything, and (because Gateway.Users is non-empty) each
+// site's fail-fast/no-match branch would reject the request outright —
+// flipping Authenticated to false / closing the WS connection / leaving the
+// optional-auth context anonymous. These tests would go red on any one of
+// the three sites regressing independently, even if the other two still
+// pass.
+
+// TestCheckBearerAuth_SecondAccountAuthenticates proves that Gateway.Users[1]
+// (not just Users[0]) successfully authenticates through checkBearerAuth
+// (the REST path, pkg/gateway/auth.go).
+// BDD: Given Gateway.Users holds two accounts with distinct bearer tokens,
+// When a request presents the SECOND account's token,
+// Then checkBearerAuth returns AuthResult{Authenticated: true} with User
+// resolved to that second account specifically.
+// Traces to: fix-wave gap identified by pr-test-analyzer (guards the loop
+// restored by commit 9e7789ab in checkBearerAuth).
+func TestCheckBearerAuth_SecondAccountAuthenticates(t *testing.T) {
+	os.Unsetenv("OMNIPUS_BEARER_TOKEN")
+
+	token1 := "omnipus_" + strings.Repeat("1", 64)
+	hash1, err := bcrypt.GenerateFromPassword([]byte(token1), bcrypt.MinCost)
+	require.NoError(t, err)
+
+	token2 := "omnipus_" + strings.Repeat("2", 64)
+	hash2, err := bcrypt.GenerateFromPassword([]byte(token2), bcrypt.MinCost)
+	require.NoError(t, err)
+
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{
+			Users: []config.UserConfig{
+				{Username: "account-one", Tokens: []config.TokenEntry{{Hash: config.BcryptHash(hash1)}}},
+				{Username: "account-two", Tokens: []config.TokenEntry{{Hash: config.BcryptHash(hash2)}}},
+			},
+		},
+	}
+
+	t.Run("first account (Users[0]) authenticates", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/chat", nil)
+		r.Header.Set("Authorization", "Bearer "+token1)
+		got := checkBearerAuth(context.Background(), w, r, cfg)
+		require.True(t, got.Authenticated)
+		require.NotNil(t, got.User)
+		assert.Equal(t, "account-one", got.User.Username)
+	})
+
+	t.Run("second account (Users[1]) authenticates", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/chat", nil)
+		r.Header.Set("Authorization", "Bearer "+token2)
+		got := checkBearerAuth(context.Background(), w, r, cfg)
+		require.True(t, got.Authenticated,
+			"Users[1] must authenticate — a Users[0]-only regression would reject this token")
+		require.NotNil(t, got.User)
+		assert.Equal(t, "account-two", got.User.Username,
+			"resolved identity must be the SECOND account, not the first")
+	})
+}
+
+// TestAuthenticateWS_SecondAccountAuthenticates proves that Gateway.Users[1]
+// (not just Users[0]) successfully authenticates over the WebSocket auth
+// handshake (authenticateWS, pkg/gateway/websocket.go). The resolved
+// identity is carried as InboundMessage.GatewayUserID — the ONLY carrier of
+// the WS-authenticated principal (FR-017, websocket.go ~line 1271, set at
+// auth time via wc.userID) — so this test authenticates over a real
+// WebSocket connection, sends a message frame, and inspects the message
+// published to the bus.
+// BDD: Given Gateway.Users holds two accounts with distinct bearer tokens,
+// When a WebSocket client sends the auth frame with the SECOND account's
+// token and then a message frame,
+// Then the connection is accepted (message send succeeds) and the
+// published InboundMessage.GatewayUserID is that second account's username.
+// Traces to: fix-wave gap identified by pr-test-analyzer (guards the loop
+// restored by commit 9e7789ab in authenticateWS).
+func TestAuthenticateWS_SecondAccountAuthenticates(t *testing.T) {
+	os.Unsetenv("OMNIPUS_BEARER_TOKEN")
+
+	token1 := "omnipus_" + strings.Repeat("3", 64)
+	hash1, err := bcrypt.GenerateFromPassword([]byte(token1), bcrypt.MinCost)
+	require.NoError(t, err)
+
+	token2 := "omnipus_" + strings.Repeat("4", 64)
+	hash2, err := bcrypt.GenerateFromPassword([]byte(token2), bcrypt.MinCost)
+	require.NoError(t, err)
+
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{
+			Host: "127.0.0.1", Port: 8080,
+			Users: []config.UserConfig{
+				{Username: "ws-account-one", Tokens: []config.TokenEntry{{Hash: config.BcryptHash(hash1)}}},
+				{Username: "ws-account-two", Tokens: []config.TokenEntry{{Hash: config.BcryptHash(hash2)}}},
+			},
+		},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+		},
+	}
+	msgBus := bus.NewMessageBus()
+	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	handler := newWSHandler(msgBus, al, "")
+	t.Cleanup(handler.Wait)
+
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	conn := dialTestWS(t, srv)
+	t.Cleanup(func() { _ = conn.Close() })
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) //nolint:errcheck
+
+	// Authenticate as the SECOND account.
+	authFrame := wsClientFrameTestHelper{Type: "auth", Token: token2}
+	authData, err := json.Marshal(authFrame)
+	require.NoError(t, err)
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, authData))
+
+	// Listen on the bus before sending the message.
+	received := make(chan bus.InboundMessage, 1)
+	go func() {
+		select {
+		case msg := <-msgBus.InboundChan():
+			received <- msg
+		case <-time.After(3 * time.Second):
+		}
+	}()
+
+	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "hello from second account"}
+	msgData, err := json.Marshal(msgFrame)
+	require.NoError(t, err)
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, msgData),
+		"message send must succeed after valid second-account auth — a Users[0]-only "+
+			"regression would reject this token and close the connection")
+
+	select {
+	case msg := <-received:
+		assert.Equal(t, "ws-account-two", msg.GatewayUserID,
+			"authenticateWS must resolve the SECOND account, not the first")
+	case <-time.After(3 * time.Second):
+		t.Fatal("message was not published to bus within 3 seconds — authentication as Users[1] did not succeed")
+	}
+}
+
+// TestWithOptionalAuth_SecondAccountAuthenticates proves that Gateway.Users[1]
+// (not just Users[0]) successfully authenticates through withOptionalAuth
+// (pkg/gateway/rest_auth.go) and is injected into the request context as
+// the resolved identity — not silently downgraded to anonymous, and not
+// misattributed to the first account.
+// BDD: Given Gateway.Users holds two accounts with distinct bearer tokens,
+// When an optional-auth request presents the SECOND account's token,
+// Then the handler observes a non-nil *config.UserConfig in context whose
+// Username is that second account's, and the request succeeds (200).
+// Traces to: fix-wave gap identified by pr-test-analyzer (guards the loop
+// restored by commit 9e7789ab in withOptionalAuth).
+func TestWithOptionalAuth_SecondAccountAuthenticates(t *testing.T) {
+	token1 := "omnipus_" + strings.Repeat("5", 64)
+	hash1, err := bcrypt.GenerateFromPassword([]byte(token1), bcrypt.MinCost)
+	require.NoError(t, err)
+
+	token2 := "omnipus_" + strings.Repeat("6", 64)
+	hash2, err := bcrypt.GenerateFromPassword([]byte(token2), bcrypt.MinCost)
+	require.NoError(t, err)
+
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{
+			Users: []config.UserConfig{
+				{Username: "opt-account-one", Tokens: []config.TokenEntry{{Hash: config.BcryptHash(hash1)}}},
+				{Username: "opt-account-two", Tokens: []config.TokenEntry{{Hash: config.BcryptHash(hash2)}}},
+			},
+		},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+		},
+	}
+	api := &restAPI{
+		agentLoop:     mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{}),
+		allowedOrigin: "http://localhost:3000",
+	}
+
+	var gotUser *config.UserConfig
+	handler := api.withOptionalAuth(func(w http.ResponseWriter, r *http.Request) {
+		gotUser, _ = r.Context().Value(UserContextKey{}).(*config.UserConfig)
+		w.WriteHeader(http.StatusOK)
+	})
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/state", nil)
+	r.Header.Set("Authorization", "Bearer "+token2)
+	handler(w, r)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.NotNil(t, gotUser,
+		"a valid second-account token must be recognized, not silently downgraded to anonymous")
+	assert.Equal(t, "opt-account-two", gotUser.Username,
+		"resolved identity must be the SECOND account, not the first")
 }
