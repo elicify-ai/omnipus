@@ -4,9 +4,7 @@ import {
   Eye,
   EyeSlash,
   FloppyDisk,
-  Play,
   Lightning,
-  Warning,
 } from '@phosphor-icons/react'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet'
 import { Button } from '@/components/ui/button'
@@ -19,7 +17,6 @@ import {
   fetchChannelConfig,
   configureChannel,
   enableChannel,
-  testChannel,
   getChannelRouting,
   setChannelRouting,
   fetchAgents,
@@ -230,10 +227,12 @@ function ChannelFieldRow({
   field,
   getValue,
   setValue,
+  error,
 }: {
   field: ChannelField
   getValue: (key: string) => unknown
   setValue: (key: string, value: unknown) => void
+  error?: string
 }) {
   return (
     <div className="space-y-1.5">
@@ -290,9 +289,43 @@ function ChannelFieldRow({
         />
       )}
 
-      <HelperLink field={field} />
+      {error ? (
+        <p className="text-[10px] text-[var(--color-error)]">{error}</p>
+      ) : (
+        <HelperLink field={field} />
+      )}
     </div>
   )
+}
+
+// validateRequired mirrors EmailMailboxPanel's `validate` — required-field
+// pre-check now runs at save time (the removed Test button used to run an
+// equivalent check before hitting /test; that logic moved here, see FR
+// "Stage 1 of the channel-Test redesign").
+//
+// Google Chat's webhook_url/service_account_json are a mutually-exclusive
+// pick-one — neither carries `required: true` in the catalog (either one is
+// valid depending on the chosen auth method), but whichever group is
+// currently selected must be filled before Save. Treat the selected group's
+// field as required even without the flag.
+function validateRequired(
+  fields: ChannelField[],
+  getValue: (key: string) => unknown,
+  isGoogleChat: boolean,
+  gChatAuthMethod: GChatAuthMethod,
+): Record<string, string> {
+  const errors: Record<string, string> = {}
+  for (const f of fields) {
+    // Only check fields visible in the current context (authGroup filtering for GChat).
+    if (isGoogleChat && f.authGroup && f.authGroup !== gChatAuthMethod) continue
+    const isRequired = f.required || (isGoogleChat && f.authGroup === gChatAuthMethod)
+    if (!isRequired) continue
+    const val = getValue(f.key)
+    if (val === undefined || val === null || val === '') {
+      errors[f.key] = `${f.label} is required`
+    }
+  }
+  return errors
 }
 
 export function ChannelConfigPanel({
@@ -311,7 +344,7 @@ export function ChannelConfigPanel({
   const markDirty = () => { isDirtyRef.current = true }
 
   const [formValues, setFormValues] = useState<Record<string, unknown>>({})
-  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null)
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
   // Tracks whether Save & Enable was just clicked in this panel session. Needed because
   // the `enabled` prop comes from the parent's stale state after Save & Enable keeps the
   // dialog open — without this, the panel would keep showing the enable-prompt even after
@@ -412,6 +445,7 @@ export function ChannelConfigPanel({
       setWasJustEnabled(false)
       setSelectedWorkspaceId('')
       setSelectedAgentId('__none__')
+      setFieldErrors({})
     }
   }, [open])
 
@@ -453,15 +487,23 @@ export function ChannelConfigPanel({
   }, [currentConfig, isGoogleChat])
 
   const { mutate: doSave, isPending: saving } = useMutation({
-    mutationFn: () => configureChannel(channelId, buildSubmitPayload()),
+    mutationFn: () => {
+      const errors = validateRequired(fields, getValue, isGoogleChat, gChatAuthMethod)
+      if (Object.keys(errors).length > 0) {
+        setFieldErrors(errors)
+        throw new Error('Please fill in the required fields')
+      }
+      return configureChannel(channelId, buildSubmitPayload())
+    },
     onSuccess: () => {
       isDirtyRef.current = false
-      setTestResult(null)
+      setFieldErrors({})
       queryClient.invalidateQueries({ queryKey: ['channels'] })
       queryClient.invalidateQueries({ queryKey: ['channel-config', channelId] })
       addToast({ message: 'Configuration saved', variant: 'success' })
     },
     onError: (err: unknown) => {
+      if (err instanceof Error && err.message === 'Please fill in the required fields') return
       const rawMsg = isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Save failed'
       addToast({ message: mapErrorsToHumanLabels(fields, rawMsg), variant: 'error' })
     },
@@ -469,12 +511,17 @@ export function ChannelConfigPanel({
 
   const { mutate: doSaveAndEnable, isPending: savingAndEnabling } = useMutation({
     mutationFn: async () => {
+      const errors = validateRequired(fields, getValue, isGoogleChat, gChatAuthMethod)
+      if (Object.keys(errors).length > 0) {
+        setFieldErrors(errors)
+        throw new Error('Please fill in the required fields')
+      }
       await configureChannel(channelId, buildSubmitPayload())
       await enableChannel(channelId)
     },
     onSuccess: () => {
       isDirtyRef.current = false
-      setTestResult(null)
+      setFieldErrors({})
       queryClient.invalidateQueries({ queryKey: ['channels'] })
       queryClient.invalidateQueries({ queryKey: ['channel-config', channelId] })
       // #358: channels with a live pairing flow (WhatsApp native) must keep the panel
@@ -499,42 +546,9 @@ export function ChannelConfigPanel({
       }
     },
     onError: (err: unknown) => {
+      if (err instanceof Error && err.message === 'Please fill in the required fields') return
       const rawMsg = isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to enable channel'
       addToast({ message: mapErrorsToHumanLabels(fields, rawMsg), variant: 'error' })
-    },
-  })
-
-  const { mutate: doTest, isPending: testing } = useMutation({
-    mutationFn: () => {
-      // #326 — validate required fields client-side before hitting the API.
-      const missingRequired = fields.filter((f) => {
-        // Only check fields visible in the current context (authGroup filtering for GChat).
-        if (isGoogleChat && f.authGroup && f.authGroup !== gChatAuthMethod) return false
-        if (!f.required) return false
-        const val = getValue(f.key)
-        return val === undefined || val === null || val === ''
-      })
-      if (missingRequired.length > 0) {
-        const labels = missingRequired.map((f) => f.label).join(', ')
-        throw new Error(`Please fill in: ${labels}`)
-      }
-      return testChannel(channelId)
-    },
-    onSuccess: (result) => {
-      setTestResult(result)
-      if (result.success) {
-        addToast({ message: 'Connection test passed', variant: 'success' })
-      } else {
-        const humanMsg = mapErrorsToHumanLabels(fields, result.message || 'Test failed')
-        setTestResult({ success: false, message: humanMsg })
-        addToast({ message: humanMsg, variant: 'error' })
-      }
-    },
-    onError: (err: unknown) => {
-      const rawMsg = isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Test failed'
-      const humanMsg = mapErrorsToHumanLabels(fields, rawMsg)
-      setTestResult({ success: false, message: humanMsg })
-      addToast({ message: humanMsg, variant: 'error' })
     },
   })
 
@@ -542,6 +556,14 @@ export function ChannelConfigPanel({
     markDirty()
     // Support nested keys like "group_trigger.mention_only"
     setFormValues((prev) => setNested(prev, key, value))
+    // Clear this field's validation error as soon as the user edits it.
+    if (key in fieldErrors) {
+      setFieldErrors((prev) => {
+        const next = { ...prev }
+        delete next[key]
+        return next
+      })
+    }
   }
 
   function getValue(key: string): unknown {
@@ -711,6 +733,7 @@ export function ChannelConfigPanel({
                 field={field}
                 getValue={getValue}
                 setValue={setValue}
+                error={fieldErrors[field.key]}
               />
             ))}
 
@@ -724,6 +747,7 @@ export function ChannelConfigPanel({
                       field={field}
                       getValue={getValue}
                       setValue={setValue}
+                      error={fieldErrors[field.key]}
                     />
                   ))}
                 </div>
@@ -902,26 +926,6 @@ export function ChannelConfigPanel({
               </div>
             )}
 
-            {/* Test result — pass/fail line (#326) */}
-            {testResult && (
-              <div
-                role="status"
-                aria-live="polite"
-                className={`flex gap-2 p-3 rounded-md border text-xs ${
-                  testResult.success
-                    ? 'bg-[var(--color-success)]/10 border-[var(--color-success)]/30 text-[var(--color-success)]'
-                    : 'bg-[var(--color-error)]/10 border-[var(--color-error)]/30 text-[var(--color-error)]'
-                }`}
-              >
-                {testResult.success ? (
-                  <Lightning size={13} weight="fill" className="shrink-0 mt-0.5" />
-                ) : (
-                  <Warning size={13} weight="fill" className="shrink-0 mt-0.5" />
-                )}
-                {testResult.message}
-              </div>
-            )}
-
             {/* Actions */}
             <div className="flex flex-col gap-2 pt-2 border-t border-[var(--color-border)]">
               <Button
@@ -932,34 +936,15 @@ export function ChannelConfigPanel({
                 <Lightning size={13} weight="fill" />
                 Save &amp; Enable
               </Button>
-              <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  className="flex-1 gap-1.5"
-                  onClick={() => doSave()}
-                  disabled={isBusy}
-                >
-                  <FloppyDisk size={13} />
-                  Save
-                </Button>
-                <Button
-                  variant="outline"
-                  className="flex-1 gap-1.5"
-                  onClick={() => {
-                    setTestResult(null)
-                    doTest()
-                  }}
-                  disabled={testing || saving || savingAndEnabling}
-                  title="Check the connection without saving"
-                >
-                  <Play size={13} weight="fill" />
-                  {testing ? 'Testing…' : 'Test'}
-                </Button>
-              </div>
-              {/* #326 — Test clarity: explain Test = check without saving */}
-              <p className="text-[10px] text-[var(--color-muted)] text-center">
-                Test checks your connection without saving any changes.
-              </p>
+              <Button
+                variant="outline"
+                className="w-full gap-1.5"
+                onClick={() => doSave()}
+                disabled={isBusy}
+              >
+                <FloppyDisk size={13} />
+                Save
+              </Button>
             </div>
           </div>
         )}

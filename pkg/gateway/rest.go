@@ -7056,6 +7056,24 @@ func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, ena
 		jsonErr(w, http.StatusNotFound, fmt.Sprintf("channel %q not found", channelID))
 		return
 	}
+	if enabled {
+		// Stage 1 of the channel-Test redesign: enabling a channel with an
+		// incomplete config must be rejected, not silently persisted — an
+		// enabled-but-incomplete channel would fail to construct on the next
+		// reload/boot. Disabling never validates (turning a channel off is
+		// always safe). readChannelConfigRaw returns {} for a channel with no
+		// persisted section yet.
+		stored, err := a.readChannelConfigRaw(channelID)
+		if err != nil {
+			slog.Error("rest: read config for channel enable validation", "channel", channelID, "error", err)
+			jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read config: %v", err))
+			return
+		}
+		if msg := validateChannelConfigComplete(baseType, stored, nil, nil); msg != "" {
+			jsonErr(w, http.StatusBadRequest, msg)
+			return
+		}
+	}
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
 		channels, _ := m["channels"].(map[string]any)
 		if channels == nil {
@@ -7204,6 +7222,72 @@ func (a *restAPI) getChannelConfig(w http.ResponseWriter, channelID string) {
 	jsonOK(w, redactChannelConfig(channelID, chCfg))
 }
 
+// validateChannelConfigComplete reports whether the channel config that would
+// result from persisting updates — plus prospectiveRefs, the <field>_ref
+// values this request's sensitive fields WOULD resolve to once committed — on
+// top of existing (the channel's currently-persisted raw config) satisfies
+// channelRequiredFields[baseType]. Returns "" when complete, otherwise a
+// "missing required fields: ..." message in the same format testChannel uses
+// below (the SPA's mapErrorsToHumanLabels parses it).
+//
+// Stage 1 of the channel-Test redesign: the backend must prevent persisting
+// an incomplete channel config, so callers run this BEFORE any
+// credential-store write or config write — a rejection must be a true no-op.
+// It deliberately checks <field>_ref PRESENCE, not credentialRefResolves — a
+// save must not depend on an unlocked credential store; that liveness concern
+// belongs to Test/activation (testChannel), not to "did the operator fill in
+// the form".
+func validateChannelConfigComplete(baseType string, existing, updates map[string]any, prospectiveRefs map[string]string) string {
+	merged := make(map[string]any, len(existing)+len(updates)+len(prospectiveRefs))
+	for k, v := range existing {
+		merged[k] = v
+	}
+	for k, v := range updates {
+		merged[k] = v
+	}
+	for field, ref := range prospectiveRefs {
+		merged[field+"_ref"] = ref
+	}
+	nonEmpty := func(key string) bool {
+		s, _ := merged[key].(string)
+		return strings.TrimSpace(s) != ""
+	}
+
+	// Google Chat's required config is either/or (mirrors testChannel's
+	// special-case below): webhook mode needs webhook_url, bot mode needs
+	// service_account_json or service_account_file. channelRequiredFields is a
+	// flat AND-list and cannot express that.
+	if baseType == "google-chat" {
+		if nonEmpty("webhook_url_ref") || nonEmpty("service_account_json_ref") || nonEmpty("service_account_file") {
+			return ""
+		}
+		return "missing required fields: configure webhook_url (webhook mode) or service_account_json / service_account_file (bot mode)"
+	}
+
+	sensitive := make(map[string]bool, len(channelSensitiveFields[baseType]))
+	for _, f := range channelSensitiveFields[baseType] {
+		sensitive[f] = true
+	}
+	var missing []string
+	for _, field := range channelRequiredFields[baseType] {
+		if sensitive[field] {
+			// A secret required field is satisfied by its <field>_ref resolving
+			// to a non-empty value — the secret never lives in config.json.
+			if !nonEmpty(field + "_ref") {
+				missing = append(missing, field)
+			}
+			continue
+		}
+		if !nonEmpty(field) {
+			missing = append(missing, field)
+		}
+	}
+	if len(missing) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("missing required fields: %s", strings.Join(missing, ", "))
+}
+
 // configureChannel handles PUT /api/v1/channels/{id}/configure.
 // Merges the request body fields into the channel's config section (does not overwrite absent fields).
 // Returns the updated channel config with credential fields redacted.
@@ -7269,15 +7353,25 @@ func (a *restAPI) configureChannel(w http.ResponseWriter, r *http.Request, chann
 	// Sensitive-field lookup uses the base type (ADR-029 Gate 0): per-instance
 	// keys like "whatsapp.eu" use the same type-level field set as "whatsapp".
 	chBaseType, _ := config.ParseInstanceKey(channelID)
-	var clearedRefs []string // credentials to delete AFTER the config write commits
+
+	// Phase A — classify (zero I/O). Every present sensitive field is either a
+	// "clear" (empty/whitespace value) or a "store" (non-empty value), recorded
+	// as an action plus the prospective <field>_ref it would produce. Nothing
+	// is written to the credential store or config.json here, so a rejection in
+	// Phase B below leaves the save a true no-op.
+	type sensitiveAction struct {
+		field   string
+		refName string // channelCredKey(channelID, field)
+		secret  string // raw value to store; unused when clear
+		clear   bool
+	}
+	var actions []sensitiveAction
+	prospectiveRefs := make(map[string]string, len(channelSensitiveFields[chBaseType]))
 	for _, field := range channelSensitiveFields[chBaseType] {
 		raw, present := updates[field]
 		if !present {
 			continue
 		}
-		delete(updates, field) // never persist the inline plaintext
-		refField := field + "_ref"
-		refName := channelCredKey(channelID, field)
 		secret, isStr := raw.(string)
 		if !isStr && raw != nil {
 			// A non-string, non-null secret (e.g. {"token": 123}) would collapse to
@@ -7285,20 +7379,54 @@ func (a *restAPI) configureChannel(w http.ResponseWriter, r *http.Request, chann
 			jsonErr(w, http.StatusBadRequest, fmt.Sprintf("%s must be a string", field))
 			return
 		}
+		refName := channelCredKey(channelID, field)
 		if strings.TrimSpace(secret) == "" {
+			actions = append(actions, sensitiveAction{field: field, refName: refName, clear: true})
+			prospectiveRefs[field] = ""
+			continue
+		}
+		actions = append(actions, sensitiveAction{field: field, refName: refName, secret: secret})
+		prospectiveRefs[field] = refName
+	}
+
+	// Phase B — validate BEFORE any I/O. The backend must prevent persisting an
+	// incomplete channel config (Stage 1 of the channel-Test redesign): a save
+	// that would leave the channel unable to construct is rejected here, before
+	// any credential is stored or config.json is touched. existing is the
+	// channel's currently-persisted raw config ({} for a not-yet-configured
+	// instance); prospectiveRefs overlays what this request's sensitive fields
+	// would resolve to if committed.
+	existing, err := a.readChannelConfigRaw(channelID)
+	if err != nil {
+		slog.Error("rest: read config for channel configure validation", "channel", channelID, "error", err)
+		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read config: %v", err))
+		return
+	}
+	if msg := validateChannelConfigComplete(chBaseType, existing, updates, prospectiveRefs); msg != "" {
+		jsonErr(w, http.StatusBadRequest, msg)
+		return
+	}
+
+	// Phase C — execute. Validation passed: perform the credential-store writes
+	// and the config-file merge (unchanged from the pre-restructure behavior).
+	var clearedRefs []string // credentials to delete AFTER the config write commits
+	for _, act := range actions {
+		delete(updates, act.field) // never persist the inline plaintext
+		refField := act.field + "_ref"
+		if act.clear {
 			// Clearing: drop the ref now, but delete the stored credential only
 			// AFTER the config write commits (below). Deleting first would strand
 			// the channel pointing at a missing credential if the config write fails.
 			updates[refField] = ""
-			clearedRefs = append(clearedRefs, refName)
+			clearedRefs = append(clearedRefs, act.refName)
 			continue
 		}
-		if _, err := a.storeCredential(refName, secret); err != nil {
-			slog.Error("rest: store channel credential", "channel", channelID, "field", field, "error", err)
-			jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not store %s credential: %v", field, err))
+		if _, err := a.storeCredential(act.refName, act.secret); err != nil {
+			slog.Error("rest: store channel credential", "channel", channelID, "field", act.field, "error", err)
+			jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not store %s credential: %v", act.field, err))
 			return
 		}
-		updates[refField] = refName
+		updates[refField] = act.refName
 	}
 
 	var updatedCh map[string]any
