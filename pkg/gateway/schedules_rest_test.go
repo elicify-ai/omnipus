@@ -100,13 +100,21 @@ func TestSchedulesAPI_Create403WrongOwner(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
 }
 
-func TestSchedulesAPI_AdminCanOwnAnyAgent(t *testing.T) {
+// TestSchedulesAPI_RoleAloneDoesNotBypassOwnership_Create asserts a role of
+// "admin" does NOT let a non-owner schedule for someone else's agent. Under
+// the single-user model every authenticated user resolves to admin (see
+// config.UserRole/normalizeAdminOnlyRoles), so if role alone still granted a
+// bypass here, per-user agent privacy (config.AuthorizeAgentAccess) would be
+// silently defeated for anyone who creates a second account — the exact class
+// of gap closed alongside the RBAC-neutralization fix. "root" is not "bob"
+// (max's owner), so this must still 403 regardless of role.
+func TestSchedulesAPI_RoleAloneDoesNotBypassOwnership_Create(t *testing.T) {
 	api, _ := newSchedulesTestAPI(t)
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/schedules", createScheduleReq(t, "max"))
 	r = withUser(r, "root", config.UserRoleAdmin)
 	w := httptest.NewRecorder()
 	api.HandleSchedules(w, r)
-	assert.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+	assert.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
 }
 
 // TestSchedulesAPI_Create400WorkerOwner verifies the write-time guard that
@@ -464,25 +472,32 @@ func TestSchedulesAPI_Authz_PerOperation(t *testing.T) {
 	}
 }
 
-// TestSchedulesAPI_Authz_AdminAllOperations asserts admins pass every gate.
-func TestSchedulesAPI_Authz_AdminAllOperations(t *testing.T) {
+// TestSchedulesAPI_RoleAloneDoesNotBypassOwnership_Get mirrors the create-path
+// test above for the single-schedule GET gate (authorizeScheduleAccess) — a
+// role of "admin" must not bypass ownership; only the schedule's owner (or a
+// system/core agent's schedule) may access it. See the create-path test's
+// comment for why this matters under the single-user model.
+func TestSchedulesAPI_RoleAloneDoesNotBypassOwnership_Get(t *testing.T) {
 	api, cs := newSchedulesTestAPI(t)
-	job := seedJob(t, cs, "max", "bob") // owned by bob/max; root is admin
+	job := seedJob(t, cs, "max", "bob") // owned by bob/max; "root" owns neither
 
 	r := withUser(httptest.NewRequest(http.MethodGet, "/api/v1/schedules/"+job.ID, nil), "root", config.UserRoleAdmin)
 	w := httptest.NewRecorder()
 	api.HandleSchedules(w, r)
-	assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	assert.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
 }
 
 // TestSchedulesAPI_List_FilteredByOwner asserts the list is filtered to
-// schedules a non-admin may access; an admin sees all (B3).
+// schedules the caller may access via ownership — role alone (including
+// "admin", which every authenticated user resolves to under the single-user
+// model) grants no additional visibility. "root" owns neither "mia" nor "max"
+// here, so it sees zero schedules, same as any other non-owning account.
 func TestSchedulesAPI_List_FilteredByOwner(t *testing.T) {
 	api, cs := newSchedulesTestAPI(t)
 	_ = seedJob(t, cs, "mia", "alice") // alice's
 	_ = seedJob(t, cs, "max", "bob")   // bob's
 
-	// alice (non-admin) sees only mia's schedule.
+	// alice sees only mia's schedule (the one she owns).
 	ra := withUser(httptest.NewRequest(http.MethodGet, "/api/v1/schedules", nil), "alice", config.UserRoleUser)
 	wa := httptest.NewRecorder()
 	api.HandleSchedules(wa, ra)
@@ -492,14 +507,14 @@ func TestSchedulesAPI_List_FilteredByOwner(t *testing.T) {
 	require.Len(t, aliceList.Schedules, 1)
 	assert.Equal(t, "mia", aliceList.Schedules[0].OwnerAgentId)
 
-	// admin sees both.
+	// "root" owns neither seeded agent — sees none, role notwithstanding.
 	rad := withUser(httptest.NewRequest(http.MethodGet, "/api/v1/schedules", nil), "root", config.UserRoleAdmin)
 	wad := httptest.NewRecorder()
 	api.HandleSchedules(wad, rad)
 	require.Equal(t, http.StatusOK, wad.Code)
-	var adminList gen.ScheduleList
-	require.NoError(t, json.Unmarshal(wad.Body.Bytes(), &adminList))
-	assert.Len(t, adminList.Schedules, 2)
+	var rootList gen.ScheduleList
+	require.NoError(t, json.Unmarshal(wad.Body.Bytes(), &rootList))
+	assert.Empty(t, rootList.Schedules, "role alone must not grant visibility into another user's schedules")
 }
 
 // TestSchedulesAPI_Create_AtomicOwner asserts the create path persists the owner

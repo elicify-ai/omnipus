@@ -1181,16 +1181,17 @@ func (a *restAPI) authorizeScheduleOwner(user *config.UserConfig, ownerAgentID s
 }
 
 // authorizeScheduleAccess gates a single-schedule operation (get/update/delete/
-// run/pause) on the authenticated user (B3). Access is admin-OR-owner of the
-// schedule's OWNING agent: the user may act on a schedule only if they could
-// schedule for its owner agent in the first place. Returns (0,"") on success or
-// an (httpStatus, message) to reject with. An owner agent that no longer exists
-// in config maps to 403 (not 404) so a deleted-agent schedule is not enumerable
-// by a non-admin probing ids. Admins always pass.
+// run/pause) on the authenticated user (B3). Access is owner-of-the-schedule's-
+// OWNING-agent (or the agent's system/core carve-out, per AuthorizeAgentAccess):
+// the user may act on a schedule only if they could schedule for its owner
+// agent in the first place. Returns (0,"") on success or an (httpStatus,
+// message) to reject with. An owner agent that no longer exists in config maps
+// to 403 (not 404) so a deleted-agent schedule is not enumerable by probing
+// ids. No local admin-bypass here — AuthorizeAgentAccess is the single choke
+// point for per-user agent-data privacy (an admin-bypass here would silently
+// defeat it for anyone who creates a second account, same class of gap fixed
+// in config.AuthorizeAgentAccess itself).
 func (a *restAPI) authorizeScheduleAccess(user *config.UserConfig, job cron.CronJob) (int, string) {
-	if user != nil && user.Role == config.UserRoleAdmin {
-		return 0, ""
-	}
 	cfg := a.agentLoop.GetConfig()
 	owner := findAgentConfig(cfg, job.AgentID)
 	if owner == nil {
