@@ -275,9 +275,16 @@ func TestHandleAgentsCreate(t *testing.T) {
 	assert.NotEmpty(t, resp.Id)
 }
 
-// TestHandleAgentsCreateWithExplicitID verifies POST /api/v1/agents creates agent and ignores provided id.
+// TestHandleAgentsCreateWithExplicitID_Rejected verifies POST /api/v1/agents
+// rejects a body carrying a client-supplied "id" field. Superseded by the
+// unconditional strict-decode enforcement: "id" is not a property on
+// AgentCreateRequestMain (the id is always server-generated via
+// uuid.New()), so a caller-supplied "id" key is now a 400 rather than being
+// silently dropped by a plain json.Unmarshal. The agent identity contract
+// (server always mints its own UUID) is otherwise unaffected — see
+// TestHandleAgentsCreate for the happy path.
 // Traces to: wave5a-wire-ui-spec.md — A3+A4: agent creation via API
-func TestHandleAgentsCreateWithExplicitID(t *testing.T) {
+func TestHandleAgentsCreateWithExplicitID_Rejected(t *testing.T) {
 	// Use newTestRestAPIWithHome so safeUpdateConfigJSON writes to a temp dir,
 	// not the committed pkg/gateway/config.json test fixture.
 	api := newTestRestAPIWithHome(t)
@@ -288,12 +295,11 @@ func TestHandleAgentsCreateWithExplicitID(t *testing.T) {
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 
-	assert.Equal(t, http.StatusCreated, w.Code)
-
-	var resp gen.Agent
+	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	var resp map[string]string
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, "Scout", resp.Name)
-	assert.NotEmpty(t, resp.Id)
+	assert.Contains(t, resp["error"], "id")
+	assert.Contains(t, resp["error"], "AgentCreateRequestMain")
 }
 
 // --- HandleSessions tests ---

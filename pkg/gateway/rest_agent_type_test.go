@@ -132,7 +132,9 @@ func TestCreateAgent_TypeWorker_PersistsAndEchoes(t *testing.T) {
 		http.MethodPost,
 		"/api/v1/agents",
 		strings.NewReader(
-			`{"name":"My Worker","type":"Subagent","description":"create-worker regression","executor":{"kind":"native"},"soul":"my-worker-soul"}`,
+			// AgentCreateRequestSubagent has no executor property at all —
+			// native is always server-derived when the block is absent.
+			`{"name":"My Worker","type":"Subagent","description":"create-worker regression","soul":"my-worker-soul"}`,
 		),
 	)
 	r.Header.Set("Content-Type", "application/json")
@@ -196,14 +198,15 @@ func TestCreateAgent_TypeSubagent3p_ExternalExecutorPersists(t *testing.T) {
 	assert.Equal(t, "codex", exec["cli"])
 }
 
-// TestCreateAgent_NonWorker_ExecutorFieldIgnored is the regression guard for
-// the native-only-for-non-workers rule, updated for W1: AgentCreateRequestMain
-// has no `executor` property at all, so a custom (Main) create that supplies
-// one no longer needs coercion — the key is unknown-field-ignored. See
-// TestCreateAgent_Main_ExecutorFieldIgnored in rest_agent_executor_test.go
-// for the full "no warning any more" assertion; this test is the
-// type-dispatch-focused sibling.
-func TestCreateAgent_NonWorker_ExecutorFieldIgnored(t *testing.T) {
+// TestCreateAgent_NonWorker_ExecutorFieldRejected is the regression guard for
+// the native-only-for-non-workers rule, updated for the unconditional
+// strict-decode enforcement: AgentCreateRequestMain has no `executor`
+// property at all, so a custom (Main) create that supplies one is rejected
+// 400 by createAgent's strict decode — even with ValidateInbound OFF (the
+// default in this harness). See TestCreateAgent_Main_ExecutorFieldRejected
+// in rest_agent_executor_test.go for the full assertion; this test is the
+// type-dispatch-focused sibling, and also confirms nothing is persisted.
+func TestCreateAgent_NonWorker_ExecutorFieldRejected(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 
 	w := httptest.NewRecorder()
@@ -217,10 +220,12 @@ func TestCreateAgent_NonWorker_ExecutorFieldIgnored(t *testing.T) {
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 
-	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
-	created := decodeAgentResp(t, w.Body.Bytes())
-	assert.Equal(t, gen.AgentTypeMain, created.Type)
-	assert.Nil(t, created.Executor, "Main agents must not persist an external executor")
+	require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "executor")
+
+	raw := readTypeTestConfigMap(t, api.configPath())
+	entry := findTypeTestAgentInConfig(t, raw, "Bad Custom")
+	assert.Nil(t, entry, "a rejected create must not persist anything")
 }
 
 // TestCreateAgent_TypeCore_Rejected proves "core" is a seeded-only
@@ -315,7 +320,7 @@ func TestUpdateAgent_DoesNotChangeTypeOnWorker(t *testing.T) {
 		http.MethodPost,
 		"/api/v1/agents",
 		strings.NewReader(
-			`{"name":"Sticky Worker","type":"Subagent","description":"sticky worker regression","executor":{"kind":"native"},"soul":"sticky-worker-soul"}`,
+			`{"name":"Sticky Worker","type":"Subagent","description":"sticky worker regression","soul":"sticky-worker-soul"}`,
 		),
 	)
 	r.Header.Set("Content-Type", "application/json")
@@ -347,7 +352,7 @@ func TestUpdateAgent_DoesNotChangeTypeOnWorker(t *testing.T) {
 func TestCreateAgent_Worker_AllowsNonEmptyToList(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 
-	body := `{"name":"Worker With To","type":"Subagent","description":"non-empty to regression","executor":{"kind":"native"},"soul":"worker-with-to-soul","delegation_policy":{"to":[{"kind":"local","id":"test-agent"}],"modes":["task"],"depth":1}}`
+	body := `{"name":"Worker With To","type":"Subagent","description":"non-empty to regression","soul":"worker-with-to-soul","delegation_policy":{"to":[{"kind":"local","id":"test-agent"}],"modes":["task"],"depth":1}}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
@@ -373,7 +378,7 @@ func TestCreateAgent_Worker_AllowsNonEmptyToList(t *testing.T) {
 func TestCreateAgent_Worker_DepthExceededRejected(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 
-	body := `{"name":"Worker Deep","type":"Subagent","description":"depth regression","executor":{"kind":"native"},"soul":"worker-deep-soul","delegation_policy":{"to":[{"kind":"local","id":"test-agent"}],"depth":99}}`
+	body := `{"name":"Worker Deep","type":"Subagent","description":"depth regression","soul":"worker-deep-soul","delegation_policy":{"to":[{"kind":"local","id":"test-agent"}],"depth":99}}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
@@ -390,7 +395,7 @@ func TestCreateAgent_Worker_DepthExceededRejected(t *testing.T) {
 func TestCreateAgent_Worker_AllowsEmptyToList(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 
-	body := `{"name":"Worker No To","type":"Subagent","description":"empty to regression","executor":{"kind":"native"},"soul":"worker-no-to-soul","delegation_policy":{"to":[]}}`
+	body := `{"name":"Worker No To","type":"Subagent","description":"empty to regression","soul":"worker-no-to-soul","delegation_policy":{"to":[]}}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")

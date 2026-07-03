@@ -93,6 +93,7 @@ func TestChatMarkdownXSS(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			body := map[string]string{
 				"name":        "xss-test-agent-" + randSuffix(),
+				"type":        "Main",
 				"description": payload,
 				"model":       "scripted-model",
 				"soul":        "test-soul",
@@ -315,6 +316,7 @@ func TestXSSPayloadHTMLParsing(t *testing.T) {
 			// Create agent with XSS payload as description.
 			body := map[string]string{
 				"name":        "xss-html-parse-" + randSuffix(),
+				"type":        "Main",
 				"description": payload,
 				"model":       "scripted-model",
 				"soul":        "test-soul",

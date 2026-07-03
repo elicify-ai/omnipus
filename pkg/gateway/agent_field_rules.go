@@ -14,15 +14,21 @@ import (
 // AgentUpdateRequest fields a subagent_3p (External CLI) agent is forbidden
 // from setting on PUT.
 //
-// Create-time no longer needs an equivalent runtime check: the
-// discriminated-union wire contract (W1) split AgentCreateRequest into three
-// named variants — AgentCreateRequestMain / AgentCreateRequestSubagent /
-// AgentCreateRequestSubagent3p (contracts/components/schemas/AgentCreateRequest*.yaml,
-// each additionalProperties: false). AgentCreateRequestSubagent3p structurally
-// has no tools_cfg / skills / fallback_models / model_params / sandbox_profile /
-// shell_policy / max_tool_iterations property at all — a caller cannot even
-// construct a JSON body that would trip this check at create, schema
-// validation or not (docs/internal/architecture/agent-types-field-matrix.md).
+// Create-time enforcement lives in createAgent (rest.go), not here: the wire
+// contract is a discriminated union — AgentCreateRequestMain /
+// AgentCreateRequestSubagent / AgentCreateRequestSubagent3p
+// (contracts/components/schemas/AgentCreateRequest*.yaml, each
+// additionalProperties: false). AgentCreateRequestSubagent3p structurally has
+// no tools_cfg / skills / fallback_models / model_params / sandbox_profile /
+// shell_policy / max_tool_iterations property at all, and createAgent's
+// per-variant decode (decodeAgentCreateVariant) always runs a
+// json.Decoder with DisallowUnknownFields — so a caller who sends one of
+// these fields on a subagent_3p create gets a 400 naming the offending
+// field, unconditionally (independent of cfg.Gateway.ValidateInbound, which
+// defaults to false). ValidateInbound adds a second, richer validation layer
+// (the field's variant schema, compiled from the .yaml above) ahead of the
+// strict decode when enabled — the two layers agree on which fields are
+// forbidden; they differ only in error-message detail.
 //
 // PUT still needs the runtime guard below because AgentUpdateRequest remains
 // ONE flat type shared by every agent type (Main, Subagent, subagent_3p,
@@ -48,6 +54,40 @@ var subagent3pForbiddenUpdateFields = []string{
 	"sandbox_profile",
 	"shell_policy",
 	"max_tool_iterations",
+}
+
+// subagent3pCreateOnlyExemptFields documents wire fields that are present on
+// gen.AgentCreateRequestMain but structurally absent from
+// gen.AgentCreateRequestSubagent3p WITHOUT being covered by
+// subagent3pForbiddenUpdateFields above — i.e. fields excluded from
+// subagent_3p create by some mechanism OTHER than the PUT forbidden-field
+// list. TestSubagent3pCreateVsUpdateForbiddenFieldsDrift
+// (agent_field_rules_test.go) asserts every Main-but-not-3p field is
+// accounted for by exactly one of the two mechanisms (this map or
+// subagent3pForbiddenUpdateFields), so a newly-added field that falls
+// through both is caught by CI rather than silently unenforced. Each entry's
+// value names the mechanism that actually excludes it, so an addition here
+// is a deliberate, reviewable decision rather than a silent carve-out.
+var subagent3pCreateOnlyExemptFields = map[string]string{
+	// voice is Main-only on create (structurally absent from both
+	// AgentCreateRequestSubagent and AgentCreateRequestSubagent3p). On PUT it
+	// is rejected for ANY worker — not specifically subagent_3p — by the
+	// unconditional "a worker cannot have a per-agent voice" guard in
+	// updateAgent, so it never needed a place in subagent3pForbiddenUpdateFields.
+	"voice": "rejected for every worker (not subagent_3p-specific) by updateAgent's unconditional worker-voice guard",
+	// steering_mode is Main-only in intent (the server forces
+	// "one-at-a-time" for every worker). On PUT it is silently overridden,
+	// not 400-rejected, by updateAgent — so it is neither a PUT-forbidden
+	// field nor structurally worker-exclusive; it just never appears on the
+	// 3p create variant.
+	"steering_mode": "silently forced to one-at-a-time for every worker by updateAgent, never a PUT-forbidden field",
+	// executor is 3p-REQUIRED (present on AgentCreateRequestSubagent3p, not
+	// Main) — it does not actually appear in the Main-but-not-3p diff this
+	// test walks, but is documented here defensively: its per-field
+	// mutability (cli locked after create; cli_path/env_overrides/cli_args
+	// mutable) is guarded separately in updateAgent / rest_agent_executor.go,
+	// not by subagent3pForbiddenUpdateFields.
+	"executor": "3p-required; per-field mutability guarded separately in rest_agent_executor.go",
 }
 
 // firstForbiddenSubagent3pField returns the first forbidden field supplied on

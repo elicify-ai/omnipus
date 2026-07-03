@@ -218,7 +218,7 @@ func authzMatrix() []matrixCase {
 			name: "user_post_agents",
 			req: matrixRequest{
 				roleUser, http.MethodPost, "/api/v1/agents",
-				`{"name":"authz-user-a","model":"scripted-model","soul":"test-soul"}`,
+				`{"name":"authz-user-a","type":"Main","model":"scripted-model","soul":"test-soul"}`,
 			},
 			expect: matrixExpect{status: http.StatusCreated},
 			note:   "GAP: user can create agents (should be admin-only per Issue #98?)",
@@ -227,7 +227,7 @@ func authzMatrix() []matrixCase {
 			name: "admin_post_agents",
 			req: matrixRequest{
 				roleAdmin, http.MethodPost, "/api/v1/agents",
-				`{"name":"authz-admin-a","model":"scripted-model","soul":"test-soul"}`,
+				`{"name":"authz-admin-a","type":"Main","model":"scripted-model","soul":"test-soul"}`,
 			},
 			expect: matrixExpect{status: http.StatusCreated},
 		},

@@ -16,6 +16,7 @@
 package gateway
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -107,6 +108,69 @@ func TestCreateAgent_ExecutorPersistsAndEchoes(t *testing.T) {
 	require.NoError(t, json.Unmarshal(raw, &m))
 	exec := findExecutorInConfig(t, m, created.Id)
 	assert.Nil(t, exec, "Main agents must not persist an executor block")
+}
+
+// TestCreateAgent_SandboxProfileAndShellPolicy_PersistAndEcho is the Fix-3
+// regression test: createAgent previously computed the normalized
+// sandboxProfile local only to reject sandbox_profile="off" — the value was
+// never persisted onto the created agent config, and shell_policy was never
+// even read from the create request at all (unlike updateAgent, which
+// persists both). This proves the full round trip: create a Main agent with
+// sandbox_profile="host" and a shell_policy, then GET it back and confirm
+// both are echoed AND persisted to config.json.
+func TestCreateAgent_SandboxProfileAndShellPolicy_PersistAndEcho(t *testing.T) {
+	api := buildExecutorTestAPI(t)
+
+	body := `{"name":"Sandboxed","type":"Main","soul":"s","sandbox_profile":"host",` +
+		`"shell_policy":{"enable_deny_patterns":true,"custom_deny_patterns":["rm\\s+-rf"]}}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(w, r)
+	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
+
+	created := decodeAgentResp(t, w.Body.Bytes())
+	require.NotNil(t, created.SandboxProfile, "create response must echo sandbox_profile")
+	assert.Equal(t, gen.AgentSandboxProfile("host"), *created.SandboxProfile)
+	require.NotNil(t, created.ShellPolicy, "create response must echo shell_policy")
+	require.NotNil(t, created.ShellPolicy.EnableDenyPatterns)
+	assert.True(t, *created.ShellPolicy.EnableDenyPatterns)
+	require.NotNil(t, created.ShellPolicy.CustomDenyPatterns)
+	assert.Equal(t, []string{"rm\\s+-rf"}, *created.ShellPolicy.CustomDenyPatterns)
+
+	// Persisted to config.json.
+	raw, err := os.ReadFile(api.configPath())
+	require.NoError(t, err)
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(raw, &m))
+	agents, _ := m["agents"].(map[string]any)
+	list, _ := agents["list"].([]any)
+	var entry map[string]any
+	for _, item := range list {
+		e, _ := item.(map[string]any)
+		if e != nil && e["id"] == created.Id {
+			entry = e
+			break
+		}
+	}
+	require.NotNil(t, entry, "created agent must be persisted")
+	assert.Equal(t, "host", entry["sandbox_profile"], "sandbox_profile must be persisted to config.json")
+	sp, _ := entry["shell_policy"].(map[string]any)
+	require.NotNil(t, sp, "shell_policy must be persisted to config.json")
+	assert.Equal(t, true, sp["enable_deny_patterns"])
+
+	// GET /agents/{id} must independently reflect the persisted values (not
+	// just the create response, which could echo a value that never landed).
+	getW := httptest.NewRecorder()
+	getR := httptest.NewRequest(http.MethodGet, "/api/v1/agents/"+created.Id, nil)
+	api.HandleAgents(getW, getR)
+	require.Equal(t, http.StatusOK, getW.Code, "get body: %s", getW.Body.String())
+	got := decodeAgentResp(t, getW.Body.Bytes())
+	require.NotNil(t, got.SandboxProfile, "GET must echo sandbox_profile")
+	assert.Equal(t, gen.AgentSandboxProfile("host"), *got.SandboxProfile)
+	require.NotNil(t, got.ShellPolicy, "GET must echo shell_policy")
+	require.NotNil(t, got.ShellPolicy.EnableDenyPatterns)
+	assert.True(t, *got.ShellPolicy.EnableDenyPatterns)
 }
 
 // TestGetEditPut_ExecutorRoundTripPreserved is the core regression: a worker
@@ -437,6 +501,32 @@ func TestUpdateAgent_WorkerAllowsExternalCLIExecutor(t *testing.T) {
 	assert.Equal(t, "codex", exec["cli"])
 }
 
+// TestUpdateAgent_WorkerAllowsRemoteA2AExecutor is the positive control for
+// remote-a2a: a worker's executor.kind may be changed to remote-a2a
+// (reserved/future — accepted and persisted without roster resolution or
+// dispatch, per executorConfigFromRequest's "accepted but reserved" comment).
+// TestUpdateAgent_NonWorkerRejectsExternalCLIExecutor only covers the
+// negative (non-worker rejected with remote-a2a too); this is the missing
+// worker-allowed positive case.
+func TestUpdateAgent_WorkerAllowsRemoteA2AExecutor(t *testing.T) {
+	api := buildExecutorTestAPIWithWorker(t)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-worker",
+		strings.NewReader(`{"executor":{"kind":"remote-a2a"}}`))
+	r.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(w, r)
+	assert.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	raw, err := os.ReadFile(api.configPath())
+	require.NoError(t, err)
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(raw, &m))
+	exec := findExecutorInConfig(t, m, "test-worker")
+	require.NotNil(t, exec, "worker remote-a2a executor must be persisted: %s", string(raw))
+	assert.Equal(t, "remote-a2a", exec["kind"])
+}
+
 // TestCreateAgent_Subagent_Native_NoExecutor_201 verifies that a Subagent
 // created without an executor gets kind=native derived server-side.
 func TestCreateAgent_Subagent_Native_NoExecutor_201(t *testing.T) {
@@ -462,17 +552,18 @@ func TestCreateAgent_Subagent_Native_NoExecutor_201(t *testing.T) {
 	assert.Equal(t, "native", exec["kind"])
 }
 
-// TestCreateAgent_Main_ExecutorFieldIgnored supersedes the pre-W1
-// "coerced to native with a warning" test. AgentCreateRequestMain has no
-// `executor` property at all (W1 discriminated union) — an `executor` key in
-// the JSON body is now simply an unknown field that json.Unmarshal drops
-// when decoding into the named Main struct (ValidateInbound is off by
-// default in this test harness). There is nothing to coerce any more, so no
-// warning is produced — the create just succeeds as a plain Main agent.
-// (With ValidateInbound enabled, the same body would 400 at the schema gate
-// instead — see TestContract_AgentCreateRequestMain_ExecutorRejected in
+// TestCreateAgent_Main_ExecutorFieldRejected proves the unconditional
+// strict-decode rejection: AgentCreateRequestMain has no `executor` property
+// at all (W1 discriminated union) — an `executor` key in the JSON body is now
+// rejected 400 by createAgent's strict decode (json.Decoder with
+// DisallowUnknownFields), even with ValidateInbound OFF (the default in this
+// test harness). This supersedes the earlier "coerced to native with a
+// warning" and, later, "silently unknown-field-ignored" behaviors — a caller
+// can no longer smuggle the field past the create gate at all. (With
+// ValidateInbound enabled, the same body 400s at the schema gate instead —
+// see TestContract_AgentCreateRequestMain_ExecutorRejected in
 // pkg/api/generated/contract_test.go.)
-func TestCreateAgent_Main_ExecutorFieldIgnored(t *testing.T) {
+func TestCreateAgent_Main_ExecutorFieldRejected(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 
 	body := `{"name":"X","type":"Main","executor":{"kind":"external-cli","cli":"codex"},"soul":"s"}`
@@ -481,21 +572,13 @@ func TestCreateAgent_Main_ExecutorFieldIgnored(t *testing.T) {
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 
-	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
-	created := decodeAgentResp(t, w.Body.Bytes())
-	assert.Equal(t, gen.AgentTypeMain, created.Type)
-	assert.Nil(t, created.Executor, "Main agents must not persist an external executor")
-	// buildExecutorTestAPI's agent loop has no reload func configured, so a
-	// "config reload failed" warning is expected on every create regardless of
-	// this test's assertion — that is unrelated to executor coercion. The
-	// load-bearing check is that the OLD "executor.kind was coerced..."
-	// message (which required a live Executor field to coerce FROM) can no
-	// longer appear, because AgentCreateRequestMain has no executor property
-	// to read in the first place.
-	if created.Warning != nil {
-		assert.NotContains(t, *created.Warning, "coerced",
-			"there is nothing to coerce any more — Main has no executor property")
-	}
+	require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "executor")
+	assert.Contains(t, w.Body.String(), "AgentCreateRequestMain")
+
+	var resp map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Contains(t, resp["error"], `agent type "Main"`, "error must name the offending variant's wire type")
 }
 
 // Note: agent-level heartbeat write-time guards (RejectsHeartbeatOnWorker /
@@ -603,9 +686,12 @@ func TestUpdateAgent_Worker_AcceptsValidPatch(t *testing.T) {
 // rejection now lives in workspace.ValidateMemberConfigs.
 
 // TestUpdateAgent_Subagent3p_AcceptsDelegationPolicy proves the worker-PUT-400
-// loosening: a subagent_3p PUT carrying a delegation_policy is no longer rejected
-// at the forbidden-field gate (a non-empty to[] is bounded by the depth cap,
-// and a modes/depth-only policy is accepted).
+// loosening: a subagent_3p PUT carrying a delegation_policy is no longer
+// rejected at the forbidden-field gate (a non-empty to[] is bounded by the
+// depth cap, and a modes/depth-only policy is accepted). Full assertion: the
+// PUT must be 200, the response must echo the policy, AND a subsequent GET
+// must show the same persisted policy (not just an absent-error-string
+// smoke test).
 func TestUpdateAgent_Subagent3p_AcceptsDelegationPolicy(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 	id := createSubagent3p(t, api)
@@ -614,9 +700,30 @@ func TestUpdateAgent_Subagent3p_AcceptsDelegationPolicy(t *testing.T) {
 		strings.NewReader(`{"delegation_policy":{"modes":["await"],"depth":1}}`))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
-	// Must NOT be the forbidden-field rejection for delegation_policy.
-	assert.NotContains(t, w.Body.String(), "subagent_3p agents do not support delegation_policy",
+	require.Equal(t, http.StatusOK, w.Code,
 		"delegation_policy must no longer be a forbidden field on a subagent_3p PUT; body: %s", w.Body.String())
+
+	updated := decodeAgentResp(t, w.Body.Bytes())
+	require.NotNil(t, updated.DelegationPolicy, "PUT response must echo the delegation policy")
+	require.NotNil(t, updated.DelegationPolicy.Modes)
+	require.Len(t, *updated.DelegationPolicy.Modes, 1)
+	assert.Equal(t, gen.AgentDelegationPolicyModes("await"), (*updated.DelegationPolicy.Modes)[0])
+	require.NotNil(t, updated.DelegationPolicy.Depth)
+	assert.Equal(t, 1, *updated.DelegationPolicy.Depth)
+
+	// Persistence: a subsequent GET must echo the same policy, not just the
+	// PUT response (which could echo a value that never actually landed).
+	getW := httptest.NewRecorder()
+	getR := httptest.NewRequest(http.MethodGet, "/api/v1/agents/"+id, nil)
+	api.HandleAgents(getW, getR)
+	require.Equal(t, http.StatusOK, getW.Code, "get body: %s", getW.Body.String())
+	got := decodeAgentResp(t, getW.Body.Bytes())
+	require.NotNil(t, got.DelegationPolicy, "GET must reflect the persisted delegation policy")
+	require.NotNil(t, got.DelegationPolicy.Modes)
+	require.Len(t, *got.DelegationPolicy.Modes, 1)
+	assert.Equal(t, gen.AgentDelegationPolicyModes("await"), (*got.DelegationPolicy.Modes)[0])
+	require.NotNil(t, got.DelegationPolicy.Depth)
+	assert.Equal(t, 1, *got.DelegationPolicy.Depth)
 }
 
 // TestCreateAgent_Subagent3p_ForbiddenFields_ValidationEnabled proves the six
@@ -676,24 +783,65 @@ func TestCreateAgent_Subagent3p_ForbiddenFields_ValidationEnabled(t *testing.T) 
 	}
 }
 
-// TestCreateAgent_Subagent3p_ForbiddenFields_ValidationDisabled documents the
-// intentional defense-in-depth gap called out in the W2a brief: with
-// ValidateInbound OFF (the default), a caller-supplied field that
-// AgentCreateRequestSubagent3p has no matching Go struct field for is
-// silently unknown-field-ignored by json.Unmarshal, NOT rejected — the
-// create-side runtime forbidden-field check was removed because it is now
-// structurally impossible to populate these fields on the typed variant.
-func TestCreateAgent_Subagent3p_ForbiddenFields_ValidationDisabled(t *testing.T) {
+// TestCreateAgent_Subagent3p_ForbiddenFields_RejectedUnconditionally proves
+// that with ValidateInbound OFF (the default), a caller-supplied field that
+// AgentCreateRequestSubagent3p has no matching Go struct field for is now
+// REJECTED 400 by createAgent's strict decode (json.Decoder with
+// DisallowUnknownFields) — not silently unknown-field-ignored by a plain
+// json.Unmarshal. This closes the defense-in-depth gap the earlier version of
+// this test (ValidationDisabled) documented: enforcement no longer depends on
+// cfg.Gateway.ValidateInbound being turned on.
+func TestCreateAgent_Subagent3p_ForbiddenFields_RejectedUnconditionally(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 	body := `{"name":"DroppedFields","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"},"tools_cfg":{"builtin":{"default_policy":"deny"}},"skills":["summarize"]}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
-	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
-	created := decodeAgentResp(t, w.Body.Bytes())
-	assert.Equal(t, gen.AgentTypeSubagent3p, created.Type)
-	assert.Nil(t, created.Skills, "the dropped skills field must not have been persisted")
+	require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "tools_cfg")
+	assert.Contains(t, w.Body.String(), "AgentCreateRequestSubagent3p")
+}
+
+// TestCreateAgent_Subagent3p_ForbiddenFieldFixture_RejectedByDefault drives
+// the shared cross-package fixture
+// (gen.FixtureAgentCreateRequestSubagent3p_ForbiddenFieldJSON,
+// pkg/api/generated/fixtures.go — the same payload
+// TestContract_AgentCreateRequestSubagent3p_ForbiddenFieldRejected in
+// pkg/api/generated/contract_test.go validates at the schema level) through
+// the real HTTP handler with a DEFAULT config (ValidateInbound off, the
+// gateway's real-world default). Proves the two enforcement layers agree:
+// the schema rejects the payload when ValidateInbound is on, and
+// createAgent's unconditional strict decode rejects the same payload even
+// when ValidateInbound is off.
+func TestCreateAgent_Subagent3p_ForbiddenFieldFixture_RejectedByDefault(t *testing.T) {
+	api := buildExecutorTestAPI(t)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents",
+		bytes.NewReader(gen.FixtureAgentCreateRequestSubagent3p_ForbiddenFieldJSON()))
+	r.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(w, r)
+	require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "tools_cfg")
+	assert.Contains(t, w.Body.String(), "AgentCreateRequestSubagent3p")
+}
+
+// TestCreateAgent_Subagent_SteeringModeFieldRejected proves the unconditional
+// strict-decode rejection for steering_mode on a Subagent create:
+// steering_mode is Main-only — AgentCreateRequestSubagent has no
+// steering_mode property at all — so with a DEFAULT config (ValidateInbound
+// off), sending it is now a 400 (strict decode), not a silently-dropped
+// field.
+func TestCreateAgent_Subagent_SteeringModeFieldRejected(t *testing.T) {
+	api := buildExecutorTestAPI(t)
+	body := `{"name":"W","type":"Subagent","description":"d","soul":"s","steering_mode":"one-at-a-time"}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(w, r)
+	require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "steering_mode")
+	assert.Contains(t, w.Body.String(), "AgentCreateRequestSubagent")
 }
 
 // TestCreateAgent_Subagent3p_DelegationPolicyAccepted proves the behavior
