@@ -2482,7 +2482,7 @@ func FixtureAgentCreateRequestSubagent3p_Populated() AgentCreateRequestSubagent3
 	timeoutSeconds := 300
 	mode := AgentCreateRequestSubagent3pDelegationPolicyModesTask
 	toKind := AgentCreateRequestSubagent3pDelegationPolicyToKindLocal
-	cli := AgentCreateRequestSubagent3pExecutorCliClaudeCode
+	cli := ClaudeCode
 	cliPath := "/usr/local/bin/claude"
 
 	return AgentCreateRequestSubagent3p{
@@ -2530,7 +2530,7 @@ func FixtureAgentCreateRequestSubagent3p_Populated() AgentCreateRequestSubagent3
 			}{{Id: "ray", Kind: toKind}},
 		},
 		Executor: struct {
-			Cli          *AgentCreateRequestSubagent3pExecutorCli  `json:"cli,omitempty"`
+			Cli          *ExternalCliTool                          `json:"cli,omitempty"`
 			CliArgs      *string                                   `json:"cli_args,omitempty"`
 			CliPath      *string                                   `json:"cli_path,omitempty"`
 			EnvOverrides *map[string]string                        `json:"env_overrides,omitempty"`
@@ -2546,14 +2546,14 @@ func FixtureAgentCreateRequestSubagent3p_Populated() AgentCreateRequestSubagent3
 // request whose type value is not "subagent_3p". JSON Schema validation must
 // reject it.
 func FixtureAgentCreateRequestSubagent3p_InvalidType() AgentCreateRequestSubagent3p {
-	cli := AgentCreateRequestSubagent3pExecutorCliCodex
+	cli := Codex
 	cliPath := "/usr/local/bin/codex"
 	return AgentCreateRequestSubagent3p{
 		Name: "Bad Type",
 		Type: AgentCreateRequestSubagent3pType("not-a-valid-type"),
 		Soul: "Valid soul content.",
 		Executor: struct {
-			Cli          *AgentCreateRequestSubagent3pExecutorCli  `json:"cli,omitempty"`
+			Cli          *ExternalCliTool                          `json:"cli,omitempty"`
 			CliArgs      *string                                   `json:"cli_args,omitempty"`
 			CliPath      *string                                   `json:"cli_path,omitempty"`
 			EnvOverrides *map[string]string                        `json:"env_overrides,omitempty"`
