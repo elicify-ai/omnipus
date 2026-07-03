@@ -45,8 +45,8 @@ UI; inherits `agents.defaults`.
 | `tools_cfg` (per-tool allow/ask/deny) | O (editable; e.g. mailbox grant fills entries) | O | O or **inherit** (`inherit_tools`) | — (runner has its own tools; per-tool CLI flags govern instead) |
 | `sandbox_profile` + `shell_policy` | defaults-only in UI | O | O or **inherit** (`inherit_sandbox`) | — (runner manages its own isolation) |
 | `executor` (cli, cli_path, args, env) | — | — | — (native) | **R** (`cli` **R**, `cli_path` **R**, validated on blur; `args`/`env` O) |
-| `timeout_seconds` | defaults-only in UI | O | O | **O — pending operator decision** (recommended: keep; process-level kill for a hung CLI) |
-| `max_tool_iterations` (per-turn cap) | defaults-only in UI (Execution knobs hidden for locked) | O (default 200/turn) | O (default 200/turn) | **pending operator decision** (recommended: exclude; the external CLI runs its own loop) |
+| `timeout_seconds` | O (editable; Execution knobs exposed for locked, decided 2026-07-03) | O | O | O — kept (operator-decided 2026-07-03; process-level kill for a hung CLI) |
+| `max_tool_iterations` (per-turn cap) | O (editable; Execution knobs exposed for locked, decided 2026-07-03) | O (default 200/turn) | O (default 200/turn) | — excluded (operator-decided 2026-07-03; the external CLI runs its own loop; schema-rejected on create, 400 on update) |
 | `steering_mode` | O (Main-surface concept) | O (**Main-only** among user types; workers forced `one-at-a-time` server-side) | — | — |
 | `rate_limits` | O | O | O | O (calls still metered at the gateway) |
 | `delegation_policy` / `can_delegate_to` | O (e.g. Jim's orchestration edges) | O | O (as delegation *target*) | O (as delegation *target*) |
@@ -60,9 +60,10 @@ UI; inherits `agents.defaults`.
 - **Built-in ≠ untouchable.** Locked core agents reject only the identity/
   capability set — `name`, `description`, `soul`, `color`, `icon`, `skills`
   (403 `cannot modify locked agent identity or prompt`). Model, fallbacks,
-  timeout, max-tool-iterations, steering, rate limits ARE mutable via the API;
-  the UI currently hides the Execution knobs for locked agents (surfaced to
-  operator 2026-07-03, undecided).
+  timeout, max-tool-iterations, steering, rate limits ARE mutable via the API.
+  Decided 2026-07-03: the profile UI exposes the Execution knobs (sampling,
+  rate limits, execution) as EDITABLE for locked agents, and shows
+  description/color/icon as visible read-only (like `name`).
 - **The card for the built-in `worker` agent must open.** Its ID is literally
   `worker` — a route guard that treats `worker` as "not an agent ID" silently
   swallows the click (fixed `3bd7f355`).
@@ -76,7 +77,16 @@ UI; inherits `agents.defaults`.
   delegating caller at run time". Main has nothing to inherit from; an external
   runner resolves nothing from Omnipus.
 
-## Open decisions (blocking the discriminated-union cut)
+## Decisions (resolved 2026-07-03, operator-approved)
 
-1. `max_tool_iterations` on `subagent_3p`: **exclude** (recommended) or keep inert.
-2. `timeout_seconds` on `subagent_3p`: **keep** (recommended) or drop.
+1. `max_tool_iterations` on `subagent_3p`: **excluded** — schema-rejected on
+   create (discriminated-union variant), 400 on update, hidden in UI.
+2. `timeout_seconds` on `subagent_3p`: **kept** — process-level kill for a
+   hung CLI; settable at create (slim Advanced) and edit.
+3. `delegation_policy` on `subagent_3p` create: **allowed** (matrix +
+   update-path consistency; previously 400).
+4. The create contract is a discriminated union (`AgentCreateRequestMain` /
+   `AgentCreateRequestSubagent` / `AgentCreateRequestSubagent3p`, hosted
+   inline in `contracts/openapi.yaml`, `additionalProperties: false`,
+   `type` required). Update stays flat with server-side per-type rejection
+   (`pkg/gateway/agent_field_rules.go`).
