@@ -147,6 +147,22 @@ func ensureTestWorkspace(t *testing.T, api *restAPI) string {
 	return createWorkspaceViaAPI(t, api, "TestWorkspace_"+t.Name(), "")
 }
 
+// setWorkspaceCoreTeam overwrites the given workspace's core_team on disk
+// (direct file read/mutate/write, bypassing the PUT API) so a test can put a
+// specific agent ID on a workspace's TEAM roster — the set validateTaskAgentID
+// checks a task's agent_id against (workspace.TeamSet: core_team ∪ delegation
+// edge endpoints, see rest_tasks.go). Used by task-assignment tests that need
+// an agent outside defaultWorkspaceTeam's fixed base-roster candidate list
+// (mia/jim/ava/ray/planner/explorer/researcher) to be a legitimate assignee.
+func setWorkspaceCoreTeam(t *testing.T, api *restAPI, workspaceID string, team []string) {
+	t.Helper()
+	ws, err := readWorkspaceFile(api.homePath, workspaceID)
+	require.NoError(t, err, "setWorkspaceCoreTeam: read workspace %q", workspaceID)
+	ws.CoreTeam = team
+	require.NoError(t, writeWorkspaceFile(api.homePath, ws),
+		"setWorkspaceCoreTeam: write workspace %q", workspaceID)
+}
+
 // seedBlockedTask creates a task (via API) with the given blocked_by list and
 // seeds it directly to disk in `blocked` status. It is used by tests that need
 // a task in the derived `blocked` side-state, since PATCH status=blocked is

@@ -154,6 +154,11 @@ func TestHandleTaskPatch_InProgress_WithKnownAgent(t *testing.T) {
 	// Use aligned stores so the executor can find the task by ID.
 	api := newTestRestAPIAlignedStores(t)
 	wsID := ensureTestWorkspace(t, api)
+	// "main" is the always-registered default agent sentinel (agent/registry.go
+	// DefaultAgentID) but is NOT part of defaultWorkspaceTeam's fixed base-roster
+	// candidate list, so it must be put on this workspace's team explicitly for
+	// validateTaskAgentID's team-membership check to accept it below.
+	setWorkspaceCoreTeam(t, api, wsID, []string{"main"})
 
 	tsk := createTaskViaAPI(t, api, "AgentTask", wsID)
 	advanceTaskToNext(t, api, tsk.Id)
@@ -366,6 +371,9 @@ func TestHandleTaskPatch_RunTask_StartErrRevertsStatus(t *testing.T) {
 func TestHandleTaskPatch_RunTask_DispatchCapReturns409(t *testing.T) {
 	api := newTestRestAPIAlignedStores(t)
 	wsID := ensureTestWorkspace(t, api)
+	// See TestHandleTaskPatch_InProgress_WithKnownAgent: "main" must be put on
+	// the workspace team explicitly for the team-membership check to accept it.
+	setWorkspaceCoreTeam(t, api, wsID, []string{"main"})
 
 	tsk := createTaskViaAPI(t, api, "CapTest", wsID)
 	advanceTaskToNext(t, api, tsk.Id)
