@@ -6844,7 +6844,7 @@ export interface components {
         };
         /**
          * ScheduleCreate
-         * @description Request body to create a schedule (#264). The owner must be an agent the caller is permitted to use (AuthorizeAgentAccess). Omitted optional fields take their documented defaults.
+         * @description Request body to create a schedule (#264). owner_agent_id must reference an existing, non-worker-restricted agent (single-user model — no per-caller ownership check). Omitted optional fields take their documented defaults.
          */
         ScheduleCreate: {
             name: string;
@@ -8629,8 +8629,8 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Admin role required. */
-            403: {
+            /** @description dev_mode_bypass is active (RequireNotBypass guard). */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -8794,8 +8794,8 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Admin role required. */
-            403: {
+            /** @description dev_mode_bypass is active (RequireNotBypass guard). */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -8865,8 +8865,8 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Admin role required. */
-            403: {
+            /** @description dev_mode_bypass is active (RequireNotBypass guard). */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -8936,8 +8936,8 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Admin role required. */
-            403: {
+            /** @description dev_mode_bypass is active (RequireNotBypass guard). */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9009,15 +9009,6 @@ export interface operations {
             };
             /** @description Validation error (invalid mode, profile, or path). */
             400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Admin role required. */
-            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9163,8 +9154,8 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Admin role required. */
-            403: {
+            /** @description dev_mode_bypass is active (RequireNotBypass guard). */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9234,8 +9225,8 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Admin role required. */
-            403: {
+            /** @description dev_mode_bypass is active (RequireNotBypass guard). */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9263,15 +9254,6 @@ export interface operations {
                     "application/json": components["schemas"]["RetentionSweepResult"];
                 };
             };
-            /** @description Admin role required. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
             /** @description Method not allowed. */
             405: {
                 headers: {
@@ -9283,6 +9265,15 @@ export interface operations {
             };
             /** @description Sweep already in progress. */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description dev_mode_bypass is active (RequireNotBypass guard). */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9310,8 +9301,17 @@ export interface operations {
                     "application/json": components["schemas"]["PerformanceSettings"];
                 };
             };
-            /** @description Admin role required. */
-            403: {
+            /** @description Missing or invalid bearer token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description dev_mode_bypass is active (RequireNotBypass guard). */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9352,8 +9352,8 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Admin role required. */
-            403: {
+            /** @description dev_mode_bypass is active (RequireNotBypass guard). */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10003,7 +10003,6 @@ export interface operations {
                 };
             };
             401: components["responses"]["401Unauthorized"];
-            403: components["responses"]["403Forbidden"];
             /** @description Method not allowed. */
             405: {
                 headers: {
@@ -10034,8 +10033,8 @@ export interface operations {
                     "application/json": components["schemas"]["PendingRestartEntry"][];
                 };
             };
-            /** @description Admin role required. */
-            403: {
+            /** @description Method not allowed. */
+            405: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10043,8 +10042,8 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Method not allowed. */
-            405: {
+            /** @description dev_mode_bypass is active (RequireNotBypass guard). */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10073,7 +10072,6 @@ export interface operations {
                 };
             };
             401: components["responses"]["401Unauthorized"];
-            403: components["responses"]["403Forbidden"];
             /** @description Method not allowed. */
             405: {
                 headers: {
@@ -10114,7 +10112,6 @@ export interface operations {
                 };
             };
             401: components["responses"]["401Unauthorized"];
-            403: components["responses"]["403Forbidden"];
             /** @description Unavailable (dev_mode_bypass active). */
             503: {
                 headers: {

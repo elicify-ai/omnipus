@@ -3440,11 +3440,6 @@ Includes session_start events from all agent stores and task lifecycle events.
         schema: ErrorResponse,
       },
       {
-        status: 403,
-        description: `Insufficient permissions or CSRF validation failed.`,
-        schema: ErrorResponse,
-      },
-      {
         status: 405,
         description: `Method not allowed.`,
         schema: ErrorResponse,
@@ -3466,13 +3461,13 @@ Includes session_start events from all agent stores and task lifecycle events.
     response: z.array(PendingRestartEntry),
     errors: [
       {
-        status: 403,
-        description: `Admin role required.`,
+        status: 405,
+        description: `Method not allowed.`,
         schema: ErrorResponse,
       },
       {
-        status: 405,
-        description: `Method not allowed.`,
+        status: 503,
+        description: `dev_mode_bypass is active (RequireNotBypass guard).`,
         schema: ErrorResponse,
       },
     ],
@@ -3655,11 +3650,6 @@ Includes session_start events from all agent stores and task lifecycle events.
         schema: ErrorResponse,
       },
       {
-        status: 403,
-        description: `Insufficient permissions or CSRF validation failed.`,
-        schema: ErrorResponse,
-      },
-      {
         status: 503,
         description: `Unavailable (dev_mode_bypass active).`,
         schema: ErrorResponse,
@@ -3721,11 +3711,6 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 403,
-        description: `Insufficient permissions or CSRF validation failed.`,
         schema: ErrorResponse,
       },
       {
@@ -4191,8 +4176,13 @@ Includes session_start events from all agent stores and task lifecycle events.
     response: PerformanceSettings,
     errors: [
       {
-        status: 403,
-        description: `Admin role required.`,
+        status: 401,
+        description: `Missing or invalid bearer token.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `dev_mode_bypass is active (RequireNotBypass guard).`,
         schema: ErrorResponse,
       },
     ],
@@ -4219,8 +4209,8 @@ Includes session_start events from all agent stores and task lifecycle events.
         schema: ErrorResponse,
       },
       {
-        status: 403,
-        description: `Admin role required.`,
+        status: 503,
+        description: `dev_mode_bypass is active (RequireNotBypass guard).`,
         schema: ErrorResponse,
       },
     ],
@@ -4636,8 +4626,8 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
         schema: ErrorResponse,
       },
       {
-        status: 403,
-        description: `Admin role required.`,
+        status: 503,
+        description: `dev_mode_bypass is active (RequireNotBypass guard).`,
         schema: ErrorResponse,
       },
     ],
@@ -4735,8 +4725,8 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
         schema: ErrorResponse,
       },
       {
-        status: 403,
-        description: `Admin role required.`,
+        status: 503,
+        description: `dev_mode_bypass is active (RequireNotBypass guard).`,
         schema: ErrorResponse,
       },
     ],
@@ -4779,8 +4769,8 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
         schema: ErrorResponse,
       },
       {
-        status: 403,
-        description: `Admin role required.`,
+        status: 503,
+        description: `dev_mode_bypass is active (RequireNotBypass guard).`,
         schema: ErrorResponse,
       },
     ],
@@ -4823,8 +4813,8 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
         schema: ErrorResponse,
       },
       {
-        status: 403,
-        description: `Admin role required.`,
+        status: 503,
+        description: `dev_mode_bypass is active (RequireNotBypass guard).`,
         schema: ErrorResponse,
       },
     ],
@@ -4839,11 +4829,6 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
     response: RetentionSweepResult,
     errors: [
       {
-        status: 403,
-        description: `Admin role required.`,
-        schema: ErrorResponse,
-      },
-      {
         status: 405,
         description: `Method not allowed.`,
         schema: ErrorResponse,
@@ -4851,6 +4836,11 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
       {
         status: 409,
         description: `Sweep already in progress.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `dev_mode_bypass is active (RequireNotBypass guard).`,
         schema: ErrorResponse,
       },
     ],
@@ -4895,11 +4885,6 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
       {
         status: 400,
         description: `Validation error (invalid mode, profile, or path).`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 403,
-        description: `Admin role required.`,
         schema: ErrorResponse,
       },
       {
@@ -5022,8 +5007,8 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
         schema: ErrorResponse,
       },
       {
-        status: 403,
-        description: `Admin role required.`,
+        status: 503,
+        description: `dev_mode_bypass is active (RequireNotBypass guard).`,
         schema: ErrorResponse,
       },
     ],
@@ -5066,8 +5051,8 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
         schema: ErrorResponse,
       },
       {
-        status: 403,
-        description: `Admin role required.`,
+        status: 503,
+        description: `dev_mode_bypass is active (RequireNotBypass guard).`,
         schema: ErrorResponse,
       },
     ],
