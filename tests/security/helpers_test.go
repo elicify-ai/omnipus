@@ -46,6 +46,19 @@ const (
 // mintReAuthToken (POST /api/v1/auth/reauth re-verifies this password).
 const rbacAdminPassword = "securepass123"
 
+// rbacUserPassword is the plaintext password gatewayWithRBAC sets on the
+// non-admin account (secuser). Single-user model (operator directive,
+// 2026-07): config.LoadConfig's load-time self-heal
+// (config.normalizeAdminOnlyRoles) normalizes EVERY Gateway.Users entry to
+// admin, so secuser reaches every RequireAdmin gate exactly like the
+// onboarded admin — including the sensitive PUTs guarded by the separate
+// requireReAuth consent gate (Spec-6 FR-12.2). A real password lets
+// authz_matrix_test.go mint a genuine re-auth token for secuser via POST
+// /api/v1/auth/reauth, the same round trip rbacAdminPassword drives for the
+// admin account, so the matrix can prove secuser completes a re-auth-gated
+// PUT end-to-end rather than stalling at an orthogonal gate.
+const rbacUserPassword = "userpass456"
+
 // matrixRequest describes the HTTP request to issue (who sends it, what to send).
 // F22: split from the monolithic matrixCase struct to separate request from assertion.
 type matrixRequest struct {
@@ -100,6 +113,15 @@ type matrixCase struct {
 //
 // Tests that deliberately probe CSRF (e.g., csrf_test.go) set these manually;
 // the authz matrix test sets them for every authenticated POST/PUT/DELETE.
+//
+// Single-user model (operator directive, 2026-07): the second ("secuser")
+// account is still seeded with a REQUESTED role of "user", but
+// config.LoadConfig's load-time self-heal (config.normalizeAdminOnlyRoles)
+// normalizes it to admin on every reload — there is no longer a way for a
+// Gateway.Users entry to retain a non-admin role. secuser also gets a real
+// password (rbacUserPassword, not just the returned bearer token) so callers
+// can drive it through the same requireReAuth consent round trip
+// (POST /api/v1/auth/reauth) the admin account uses.
 func gatewayWithRBAC(t *testing.T) (gw *testutil.TestGateway, adminToken, userToken, csrfToken string) {
 	t.Helper()
 
@@ -111,6 +133,11 @@ func gatewayWithRBAC(t *testing.T) (gw *testutil.TestGateway, adminToken, userTo
 	adminHash, err := bcrypt.GenerateFromPassword([]byte(adminPlain), bcrypt.MinCost)
 	require.NoError(t, err)
 	userHash, err := bcrypt.GenerateFromPassword([]byte(userPlain), bcrypt.MinCost)
+	require.NoError(t, err)
+	// secuser also gets a real password hash (not just a bearer token) so the
+	// single-user-model matrix rows can mint a genuine re-auth consent token
+	// for it via POST /api/v1/auth/reauth, mirroring the admin round trip.
+	userPasswordHash, err := bcrypt.GenerateFromPassword([]byte(rbacUserPassword), bcrypt.MinCost)
 	require.NoError(t, err)
 
 	// We cannot inject users via a testutil Option, so seed them by writing
@@ -185,9 +212,10 @@ func gatewayWithRBAC(t *testing.T) (gw *testutil.TestGateway, adminToken, userTo
 	defer seedCancel()
 	require.NoError(t,
 		gw.SeedUser(seedCtx, config.UserConfig{
-			Username:  "secuser",
-			TokenHash: config.BcryptHash(userHash),
-			Role:      config.UserRoleUser,
+			Username:     "secuser",
+			PasswordHash: string(userPasswordHash),
+			TokenHash:    config.BcryptHash(userHash),
+			Role:         config.UserRoleUser,
 		}, func(m map[string]any) {
 			gwSec := m["gateway"].(map[string]any)
 			gwSec["dev_mode_bypass"] = false

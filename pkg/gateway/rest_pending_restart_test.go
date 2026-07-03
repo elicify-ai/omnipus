@@ -373,17 +373,30 @@ func TestHandlePendingRestart_SetThenRevertClearsDiff(t *testing.T) {
 	assert.Empty(t, diffs, "reverted change must not appear in diff")
 }
 
-// TestHandlePendingRestart_NonAdmin403 verifies that a non-admin caller
-// receives 403. The check is enforced by RequireAdmin middleware, which is
-// part of the production adminWrap chain.
+// TestHandlePendingRestart_NonAdmin403 used to verify that a non-admin
+// caller receives 403. Single-user model (operator directive, 2026-07): a
+// Gateway.Users entry that requests role="user" is normalized to admin by
+// config.LoadConfig's load-time self-heal (config.normalizeAdminOnlyRoles)
+// before it can ever reach request handling. RequireAdmin's code is
+// unchanged (still denies a literal non-admin role) but no authenticated
+// caller can carry one anymore. This test is deliberately flipped (not
+// deleted) to prove the new outcome: the SAME "user"-configured account
+// that used to be denied here now succeeds, via the real config-loading
+// choke point rather than a hand-asserted role literal.
 func TestHandlePendingRestart_NonAdmin403(t *testing.T) {
 	api := newPendingRestartAPI(t, nil, map[string]any{"version": float64(config.CurrentVersion)})
 
+	resolvedRole := normalizedRoleForUser(t, "bob", "user")
+	require.Equal(t, config.UserRoleAdmin, resolvedRole,
+		"single-user model: config.LoadConfig must normalize role=user to admin")
+
 	w := httptest.NewRecorder()
-	r := withUserCtx(httptest.NewRequest(http.MethodGet, "/api/v1/config/pending-restart", nil))
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/config/pending-restart", nil)
+	ctx := context.WithValue(r.Context(), ctxkey.RoleContextKey{}, resolvedRole)
+	r = r.WithContext(ctx)
 	middleware.RequireAdmin(http.HandlerFunc(api.HandlePendingRestart)).ServeHTTP(w, r)
 
-	assert.Equal(t, http.StatusForbidden, w.Code)
+	assert.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 }
 
 // TestHandlePendingRestart_HotReloadKeyNotInDiff verifies that hot-reload keys

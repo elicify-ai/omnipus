@@ -679,23 +679,36 @@ func TestListChannels_TwoSameTypeInstances_TwoDistinctEntries(t *testing.T) {
 
 // ── FINAL-REVIEW MEDIUM: create/delete are admin-gated ───────────────────────
 
-// TestCreateChannelInstance_NonAdmin_Forbidden verifies POST /channels is
-// admin-only: an authenticated non-admin user gets 403 and nothing is persisted.
+// TestCreateChannelInstance_NonAdmin_Forbidden used to verify POST /channels
+// is admin-only: an authenticated non-admin user gets 403 and nothing is
+// persisted. Single-user model (operator directive, 2026-07): a
+// Gateway.Users entry that requests role="user" is normalized to admin by
+// config.LoadConfig's load-time self-heal (config.normalizeAdminOnlyRoles)
+// before it can ever reach request handling. RequireAdmin's code is
+// unchanged (still denies a literal non-admin role) but no authenticated
+// caller can carry one anymore. This test is deliberately flipped (not
+// deleted) to prove the new outcome: the SAME "user"-configured account
+// that used to be denied here now succeeds, via the real config-loading
+// choke point rather than a hand-asserted role literal.
 func TestCreateChannelInstance_NonAdmin_Forbidden(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
+
+	resolvedRole := normalizedRoleForUser(t, "bob", "user")
+	require.Equal(t, config.UserRoleAdmin, resolvedRole,
+		"single-user model: config.LoadConfig must normalize role=user to admin")
 
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/channels",
 		strings.NewReader(`{"type":"whatsapp","slug":"eu"}`))
 	r.Header.Set("Content-Type", "application/json")
-	ctx := context.WithValue(r.Context(), RoleContextKey{}, config.UserRoleUser)
+	ctx := context.WithValue(r.Context(), RoleContextKey{}, resolvedRole)
 	ctx = context.WithValue(ctx, ctxkey.ConfigContextKey{}, api.agentLoop.GetConfig())
 	w := httptest.NewRecorder()
 	api.HandleChannels(w, r.WithContext(ctx))
 
-	assert.Equal(t, http.StatusForbidden, w.Code,
-		"non-admin POST /channels must be 403; body=%s", w.Body.String())
+	require.Equal(t, http.StatusCreated, w.Code,
+		"normalized-to-admin caller's POST /channels must succeed; body=%s", w.Body.String())
 	_, exists := api.agentLoop.GetConfig().Channels["whatsapp.eu"]
-	assert.False(t, exists, "a forbidden create must persist nothing")
+	assert.True(t, exists, "the create must persist the channel instance")
 }
 
 // TestCreateChannelInstance_NoRole_Unauthorized verifies POST /channels with no
@@ -716,22 +729,33 @@ func TestCreateChannelInstance_NoRole_Unauthorized(t *testing.T) {
 		"POST /channels with no role must be 401; body=%s", w.Body.String())
 }
 
-// TestDeleteChannelInstance_NonAdmin_Forbidden verifies DELETE /channels/{id} is
-// admin-only: an authenticated non-admin gets 403 and the instance survives.
+// TestDeleteChannelInstance_NonAdmin_Forbidden used to verify DELETE
+// /channels/{id} is admin-only: an authenticated non-admin gets 403 and the
+// instance survives. Single-user model (operator directive, 2026-07): same
+// normalization as TestCreateChannelInstance_NonAdmin_Forbidden — a
+// Gateway.Users entry that requests role="user" is normalized to admin by
+// config.LoadConfig's load-time self-heal before it ever reaches request
+// handling, so this test is deliberately flipped (not deleted) to prove the
+// new outcome: the normalized-to-admin caller's delete now succeeds and the
+// instance is removed.
 func TestDeleteChannelInstance_NonAdmin_Forbidden(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	seedChannelInstance(t, api, "whatsapp.eu")
 
+	resolvedRole := normalizedRoleForUser(t, "bob", "user")
+	require.Equal(t, config.UserRoleAdmin, resolvedRole,
+		"single-user model: config.LoadConfig must normalize role=user to admin")
+
 	r := httptest.NewRequest(http.MethodDelete, "/api/v1/channels/whatsapp.eu", nil)
-	ctx := context.WithValue(r.Context(), RoleContextKey{}, config.UserRoleUser)
+	ctx := context.WithValue(r.Context(), RoleContextKey{}, resolvedRole)
 	ctx = context.WithValue(ctx, ctxkey.ConfigContextKey{}, api.agentLoop.GetConfig())
 	w := httptest.NewRecorder()
 	api.HandleChannels(w, r.WithContext(ctx))
 
-	assert.Equal(t, http.StatusForbidden, w.Code,
-		"non-admin DELETE must be 403; body=%s", w.Body.String())
+	assert.Equal(t, http.StatusNoContent, w.Code,
+		"normalized-to-admin caller's DELETE must succeed; body=%s", w.Body.String())
 	_, exists := api.agentLoop.GetConfig().Channels["whatsapp.eu"]
-	assert.True(t, exists, "a forbidden delete must NOT remove the instance")
+	assert.False(t, exists, "the delete must remove the instance")
 }
 
 // ── FINAL-REVIEW MEDIUM: delete emits an audit event ─────────────────────────

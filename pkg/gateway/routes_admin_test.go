@@ -276,6 +276,21 @@ func TestAdminRoutes_AllHaveCSRF(t *testing.T) {
 // Uses the inner chain (RequireAdmin → RequireNotBypass → inner) with a non-admin
 // role injected into context, simulating what withAuth produces after a successful
 // token check for a user-role account.
+//
+// Middleware-unit-test, decoupled from the config-normalization guarantee
+// (single-user model, operator directive, 2026-07): this test hand-injects
+// config.UserRoleUser straight into ctxkey.RoleContextKey{} via
+// makeNonAdminCtxRequest — it never goes through config.LoadConfig, so it is
+// NOT exercising the real choke point that normalizedRoleForUser (above)
+// proves makes a non-admin role unreachable in practice. What this test DOES
+// still prove, and remains valuable for, is that middleware.RequireAdmin's
+// own logic correctly denies a literal non-admin role IF one ever reached
+// it — a defense-in-depth check on the primitive itself, independent of
+// whether today's config-loading pipeline can produce that role. It does not
+// claim anything about current runtime reachability across all 22 routes;
+// that claim is covered per-handler by the sibling *_NonAdmin403 tests (e.g.
+// rest_users_test.go, rest_rate_limits_test.go) using normalizedRoleForUser /
+// normalizedUserForRole.
 func TestAdminRoutes_AdminOnly(t *testing.T) {
 	h := buildInnerChainHandler()
 

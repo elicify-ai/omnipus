@@ -363,6 +363,50 @@ func TestHandleSandboxConfig_NonAdmin403(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 }
 
+// TestHandleSandboxConfig_PUT_NormalizedAdmin_EndToEnd proves a real
+// single-user-model account can complete the state-changing PUT — the
+// actual god-mode-toggle surface — end-to-end with a valid re-auth token.
+// TestHandleSandboxConfig_NonAdmin403 above deliberately narrows its
+// coverage to GET to isolate the RequireAdmin gate from the unrelated
+// FR-12.2 re-auth-consent gate that putSandboxConfig separately enforces;
+// this test fills that gap. It drives the full inner admin chain
+// (RequireAdmin → RequireNotBypass, mirroring adminWrap's production
+// ordering minus withAuth — the bearer-token half of withAuth is exercised
+// elsewhere, e.g. TestAdminRoutes_UnauthenticatedRequestsRejected) plus a
+// freshly minted re-auth consent token, for a Gateway.Users account that was
+// seeded with role="user" and normalized to admin by config.LoadConfig —
+// proving the single-user model reaches all the way through the PUT, not
+// just the GET.
+func TestHandleSandboxConfig_PUT_NormalizedAdmin_EndToEnd(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	resolvedUser := normalizedUserForRole(t, "bob", "user")
+	require.Equal(t, config.UserRoleAdmin, resolvedUser.Role,
+		"single-user model: config.LoadConfig must normalize role=user to admin")
+
+	token, err := api.reauthStoreOrInit().mint(resolvedUser.Username)
+	require.NoError(t, err, "minting a re-auth consent token must not fail")
+
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/sandbox-config",
+		strings.NewReader(`{"mode":"permissive"}`))
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set(reAuthHeader, token)
+	ctx := context.WithValue(r.Context(), UserContextKey{}, resolvedUser)
+	ctx = context.WithValue(ctx, RoleContextKey{}, resolvedUser.Role)
+	ctx = context.WithValue(ctx, ctxkey.ConfigContextKey{}, api.agentLoop.GetConfig())
+	r = r.WithContext(ctx)
+
+	w := httptest.NewRecorder()
+	api.requireAdminAuthz(api.HandleSandboxConfig)(w, r)
+
+	require.Equal(t, http.StatusOK, w.Code,
+		"normalized-to-admin caller with a valid re-auth token must complete the PUT end-to-end; body: %s",
+		w.Body.String())
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, true, resp["saved"])
+}
+
 func TestHandleSandboxConfig_MethodNotAllowed(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	w := httptest.NewRecorder()

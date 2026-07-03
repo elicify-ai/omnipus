@@ -180,23 +180,35 @@ func TestHandleRateLimits_HotReload(t *testing.T) {
 	assert.Equal(t, false, resp["requires_restart"], "rate limits must not require restart")
 }
 
-// TestHandleRateLimits_NonAdmin403 verifies that an authenticated user with
-// user role receives 403 (RequireAdmin returns 401 for unauthenticated, 403 for
-// authenticated non-admin).
+// TestHandleRateLimits_NonAdmin403 used to verify that an authenticated user
+// with user role receives 403. Single-user model (operator directive,
+// 2026-07): a Gateway.Users entry that requests role="user" is normalized to
+// admin by config.LoadConfig's load-time self-heal
+// (config.normalizeAdminOnlyRoles) before it can ever reach request
+// handling. RequireAdmin's code is unchanged (still denies a literal
+// non-admin role) but no authenticated caller can carry one anymore. This
+// test is deliberately flipped (not deleted) to prove the new outcome: the
+// SAME "user"-configured account that used to be denied here now succeeds,
+// via the real config-loading choke point rather than a hand-asserted role
+// literal.
 func TestHandleRateLimits_NonAdmin403(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
+
+	resolvedRole := normalizedRoleForUser(t, "bob", "user")
+	require.Equal(t, config.UserRoleAdmin, resolvedRole,
+		"single-user model: config.LoadConfig must normalize role=user to admin")
 
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/rate-limits",
 		strings.NewReader(`{"daily_cost_cap_usd":5}`))
 	r.Header.Set("Content-Type", "application/json")
-	// Inject user role (authenticated but not admin) → 403.
-	ctx := context.WithValue(r.Context(), RoleContextKey{}, config.UserRoleUser)
+	ctx := context.WithValue(r.Context(), RoleContextKey{}, resolvedRole)
 	r = r.WithContext(ctx)
 	w := httptest.NewRecorder()
 	// Route through RequireAdmin as adminWrap does at registration time — the
 	// inner handler no longer re-wraps it.
 	middleware.RequireAdmin(http.HandlerFunc(api.HandleRateLimits)).ServeHTTP(w, r)
-	assert.Equal(t, http.StatusForbidden, w.Code, "user-role caller must receive 403")
+	assert.Equal(t, http.StatusOK, w.Code,
+		"normalized-to-admin caller must succeed; body=%s", w.Body.String())
 }
 
 // TestHandleRateLimits_MethodNotAllowed verifies that DELETE returns 405.
