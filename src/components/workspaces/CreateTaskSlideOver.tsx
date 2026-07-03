@@ -27,7 +27,7 @@ import {
   createTask,
   updateTask,
   fetchAgents,
-  isWorker,
+  buildTaskAssigneeItems,
   fetchMilestones,
   fetchTasks,
   tasksQueryKeys,
@@ -420,22 +420,7 @@ export function CreateTaskSlideOver({
               triggerClassName="h-9 text-sm"
               items={[
                 { value: '__none__', label: 'Unassigned', className: 'text-xs' },
-                // Subagent workers are valid assignees when they belong to the
-                // workspace's team — the backend enforces team membership, not
-                // worker-vs-main kind (see validateTaskAgentID). subagent_3p
-                // (external-CLI) workers are still unconditionally rejected
-                // server-side: task execution isn't wired through the
-                // external-CLI dispatch path yet, so they are excluded here
-                // too (offering them would be a guaranteed-400 dead end). A
-                // " · Worker" suffix keeps the delegation-only kind visually
-                // distinguishable (mirrors AddAgentPicker's " · leaf" convention).
-                ...agents
-                  .filter((a) => a.type !== 'subagent_3p')
-                  .map((a) => ({
-                    value: a.id,
-                    label: isWorker(a) ? `${a.name} · Worker` : a.name,
-                    className: 'text-xs',
-                  })),
+                ...buildTaskAssigneeItems(agents),
               ]}
             />
           </div>
