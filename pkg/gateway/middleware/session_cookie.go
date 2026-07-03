@@ -94,9 +94,9 @@ var ErrSessionNotFound = errors.New("session not found")
 // either directly (r.TLS != nil) or via an ingress that forwards
 // X-Forwarded-Proto: https.
 //
-// Exported so HandleLogin / HandleRegisterAdmin in pkg/gateway can match the
-// CSRF cookie's Secure-flag posture exactly. Internally the same check
-// drives IssueCSRFCookie's pick of __Host-csrf vs csrf.
+// Exported so HandleLogin in pkg/gateway can match the CSRF cookie's
+// Secure-flag posture exactly. Internally the same check drives
+// IssueCSRFCookie's pick of __Host-csrf vs csrf.
 func RequestIsSecure(r *http.Request) bool {
 	return requestIsSecure(r)
 }

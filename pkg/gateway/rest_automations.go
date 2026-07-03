@@ -71,14 +71,12 @@ func (a *restAPI) HandleAutomations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Single-user product: every authenticated caller sees every schedule —
+	// ownership is no longer an access-control concept (same as
+	// handleListSchedules).
 	jobs := a.cronSvc().ListJobs(true)
 	items := make([]automationItem, 0, len(jobs))
 	for _, job := range jobs {
-		// B3: a non-admin only sees schedules whose owning agent they may
-		// access; admins see all (same filter as handleListSchedules).
-		if code, _ := a.authorizeScheduleAccess(user, job); code != 0 {
-			continue
-		}
 		items = append(items, a.buildAutomationItem(job))
 	}
 	jsonOK(w, automationsResponse{Automations: items})

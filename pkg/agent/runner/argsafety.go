@@ -19,6 +19,18 @@
 // buildArgs, immediately before appending the (filtered) result. It never
 // touches the driver's own built-in flags — those are added to argv before
 // this filter ever runs.
+//
+// A second, narrower category was added alongside the original permission/
+// sandbox-bypass guard: each driver's stream-JSON output-format flag
+// (claude's --output-format stream-json, codex's --json, opencode's --format
+// json). This is a CORRECTNESS guard, not a security one — an operator
+// cli_args override of these flags does not escalate privilege, it silently
+// breaks driver_{claude,codex,opencode}.go's NDJSON stream parser (parseLine)
+// by switching the CLI to human-readable or differently-shaped output, which
+// the parser cannot read, producing an empty/garbled transcript with no
+// error surfaced to the operator. filterDangerousCLIArgs is the right place
+// to guard it regardless: the same last-occurrence-wins argv semantics apply,
+// and the same warn-and-drop shape (logDroppedCLIArgs) already covers it.
 package runner
 
 import (
@@ -64,6 +76,16 @@ var dangerousCLIFlagsByCLI = map[string][]dangerousCLIFlag{
 		{name: "--permission-mode", valueCheck: func(v string) bool {
 			return strings.EqualFold(v, "bypassPermissions")
 		}},
+		// --output-format: driver_claude.go's parseLine expects EXACTLY the
+		// "claude --output-format stream-json" NDJSON event shapes (see the
+		// package doc there). Any other value ("json", "text", or an
+		// unrecognized format) silently corrupts the streamed transcript
+		// instead of erroring (correctness guard, not security — see the
+		// package doc above). Only the driver's own value is a safe match;
+		// every other value is dropped.
+		{name: "--output-format", valueCheck: func(v string) bool {
+			return !strings.EqualFold(v, "stream-json")
+		}},
 	},
 	// codex: the driver never passes
 	// --dangerously-bypass-approvals-and-sandbox (FR-5.3) and sets --sandbox
@@ -96,6 +118,17 @@ var dangerousCLIFlagsByCLI = map[string][]dangerousCLIFlag{
 			return strings.EqualFold(v, "danger-full-access")
 		}},
 		{name: "--ask-for-approval"},
+		// --json: driver_codex.go's parseLine expects codex exec's structured
+		// "--json" NDJSON event stream (item.completed / turn.completed /
+		// error / turn.failed — see the package doc there). Disabling it
+		// switches codex to human-readable text output the parser cannot
+		// read, silently corrupting the streamed transcript (correctness
+		// guard, not security — see the package doc above). Like
+		// --ask-for-approval, there is no safe "narrower" variant to
+		// preserve, so ANY operator-supplied --json token — a bare repeat or
+		// an "--json=false"-shaped disable — is dropped conservatively
+		// (boolean:true drops both forms; see filterDangerousCLIArgs).
+		{name: "--json", boolean: true},
 	},
 	// opencode: the driver's OWN --dangerously-skip-permissions is the
 	// deliberate ADR-032 fix D auto-approve posture (tracked separately as
@@ -106,6 +139,17 @@ var dangerousCLIFlagsByCLI = map[string][]dangerousCLIFlag{
 	// for the source of that decision.
 	"opencode": {
 		{name: "--dangerously-skip-permissions", boolean: true},
+		// --format: driver_opencode.go's parseLine expects "opencode run
+		// --format json" NDJSON event shapes (message.start / content.delta /
+		// tool.start / session.complete / error — see the package doc
+		// there). Any other value ("text", or an unrecognized format)
+		// silently corrupts the streamed transcript instead of erroring
+		// (correctness guard, not security — see the package doc above).
+		// Only the driver's own value is a safe match; every other value is
+		// dropped.
+		{name: "--format", valueCheck: func(v string) bool {
+			return !strings.EqualFold(v, "json")
+		}},
 	},
 }
 

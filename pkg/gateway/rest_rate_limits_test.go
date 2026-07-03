@@ -8,7 +8,6 @@ package gateway
 
 import (
 	"bufio"
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -19,9 +18,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/dapicom-ai/omnipus/pkg/config"
-	"github.com/dapicom-ai/omnipus/pkg/gateway/middleware"
 )
 
 // TestHandleRateLimits_* covers the PUT rate-limits semantics.
@@ -178,25 +174,6 @@ func TestHandleRateLimits_HotReload(t *testing.T) {
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, false, resp["requires_restart"], "rate limits must not require restart")
-}
-
-// TestHandleRateLimits_NonAdmin403 verifies that an authenticated user with
-// user role receives 403 (RequireAdmin returns 401 for unauthenticated, 403 for
-// authenticated non-admin).
-func TestHandleRateLimits_NonAdmin403(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/rate-limits",
-		strings.NewReader(`{"daily_cost_cap_usd":5}`))
-	r.Header.Set("Content-Type", "application/json")
-	// Inject user role (authenticated but not admin) → 403.
-	ctx := context.WithValue(r.Context(), RoleContextKey{}, config.UserRoleUser)
-	r = r.WithContext(ctx)
-	w := httptest.NewRecorder()
-	// Route through RequireAdmin as adminWrap does at registration time — the
-	// inner handler no longer re-wraps it.
-	middleware.RequireAdmin(http.HandlerFunc(api.HandleRateLimits)).ServeHTTP(w, r)
-	assert.Equal(t, http.StatusForbidden, w.Code, "user-role caller must receive 403")
 }
 
 // TestHandleRateLimits_MethodNotAllowed verifies that DELETE returns 405.

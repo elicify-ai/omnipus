@@ -1,9 +1,9 @@
 title: SessionStateFrame
 description: >
   Server → client (FR-052, FR-073, FR-081). One-shot frame emitted to each
-  WebSocket connection immediately after authentication. Contains all pending
-  tool approvals scoped to the authenticated user. The SPA reconciles its
-  approval store against this frame on every WS reconnect.
+  WebSocket connection immediately after authentication. Contains every
+  pending tool approval (single-user model — no per-account scoping). The
+  SPA reconciles its approval store against this frame on every WS reconnect.
 
   CRITICAL — nil-safety contract:
   pending_approvals MUST be an array (never null). The server coerces nil →
@@ -31,10 +31,9 @@ properties:
       $ref: SessionStatePendingApproval.yaml
     maxItems: 1000
     description: >
-      Snapshot of all pending tool approvals visible to this user. Always an
-      array — never null. The server emits [] when no approvals are pending or
-      the user has no visibility (non-admin with no session ownership).
-      Capped at 1000 entries to bound server emit volume and SPA render cost.
+      Snapshot of every pending tool approval. Always an array — never null.
+      The server emits [] when no approvals are pending. Capped at 1000
+      entries to bound server emit volume and SPA render cost.
   emitted_at:
     type: string
     format: date-time

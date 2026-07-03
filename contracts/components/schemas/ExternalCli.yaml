@@ -1,0 +1,24 @@
+title: ExternalCliTool
+description: >
+  The three external CLI executors Omnipus can drive for a subagent_3p worker
+  (kind="external-cli"): "claude-code" (pkg/agent/runner/driver_claude.go),
+  "codex" (driver_codex.go), and "opencode" (driver_opencode.go). Shared by
+  ExecutorConfig.cli (the agent's configured executor), ExecutorDefaults.cli
+  (GET /api/v1/agents/executor-defaults' per-CLI reference row), and
+  CliValidateRequest.cli (POST /api/v1/system/cli-validate) so the three stay
+  a single generated type instead of three independently-declared enums that
+  can drift apart (see the earlier oapi-codegen collision this schema
+  resolves: before extraction, the symbol clash across the three inline enums
+  forced generated constant names like "ExecutorConfigCliClaudeCode" instead
+  of a clean shared "ExternalCliToolClaudeCode"). Titled "ExternalCliTool"
+  rather than the shorter "ExternalCli" because ExecutorConfig.kind's
+  "external-cli" enum VALUE (a completely different field, the execution-
+  runtime selector) already generates an unprefixed Go constant literally
+  named `ExternalCli` (of type ExecutorConfigKind) — reusing that identifier
+  here would collide at compile time.
+type: string
+enum:
+  - claude-code
+  - codex
+  - opencode
+example: claude-code

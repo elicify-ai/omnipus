@@ -838,7 +838,6 @@ func mutateConfigFile(path string, in Input, credRef, passwordHash, tokenHash st
 		if um["username"] == in.Username {
 			um["password_hash"] = passwordHash
 			um["token_hash"] = tokenHash
-			um["role"] = "admin"
 			users[i] = um
 			updated = true
 			break
@@ -849,7 +848,6 @@ func mutateConfigFile(path string, in Input, credRef, passwordHash, tokenHash st
 			"username":      in.Username,
 			"password_hash": passwordHash,
 			"token_hash":    tokenHash,
-			"role":          "admin",
 		})
 	}
 	gatewayMap["users"] = users

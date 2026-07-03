@@ -6,16 +6,17 @@
 // lives here rather than being duplicated per component.
 
 import type { CliDetect, CliDetectEntry, CliValidateRequest } from './api'
-import { CliValidateRequest as CliValidateRequestSchema } from './api/generated/schemas'
+import { ExternalCliTool } from './api/generated/schemas'
 
 /** The three supported external-executor CLI identifiers (wire enum). */
 export type SupportedCli = CliValidateRequest['cli']
 
-/** Derived from the generated `CliValidateRequest` Zod schema's `cli` enum
- *  (single source of truth — see Constraint #8) so a future 4th CLI added to
- *  the wire contract can't silently drift out of sync with this hand-listed
- *  array ever again. */
-export const SUPPORTED_CLIS: readonly SupportedCli[] = CliValidateRequestSchema.shape.cli.options
+/** Derived from the generated `ExternalCliTool` Zod enum — the shared schema
+ *  `CliValidateRequest.cli`/`ExecutorConfig.cli`/`ExecutorDefaults.cli` all
+ *  `$ref` (single source of truth — see Constraint #8) — so a future 4th CLI
+ *  added to the wire contract can't silently drift out of sync with this
+ *  hand-listed array ever again. */
+export const SUPPORTED_CLIS: readonly SupportedCli[] = ExternalCliTool.options
 
 /** Maps the executor CLI identifier to its `CliDetect` object key. */
 export const CLI_TO_DETECT_KEY: Record<SupportedCli, keyof CliDetect> = {

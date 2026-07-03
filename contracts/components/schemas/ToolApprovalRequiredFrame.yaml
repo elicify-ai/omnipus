@@ -2,7 +2,7 @@ title: ToolApprovalRequiredFrame
 description: >
   Server → client (FR-011, FR-082). Emitted when a tool call is paused for
   ask-policy approval via the Central Tool Registry. The SPA enqueues this in
-  the tool approval store and shows an approval modal to the admin.
+  the tool approval store and shows an approval modal.
 
   CRITICAL — nil-safety contract (Ava-chat bug post-mortem):
   The `args` field MUST be an object (never null). The Go server enforces this

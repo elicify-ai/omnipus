@@ -222,7 +222,7 @@ type WSHandler struct {
 	// Injected at boot by the gateway after construction.  Nil until then.
 	approvalRegV2 *approvalRegistryV2
 
-	// devicePairingRegistry tracks in-flight device pairing requests awaiting admin approval.
+	// devicePairingRegistry tracks in-flight device pairing requests awaiting operator approval.
 	devicePairingRegistry *devicePairingRegistry
 
 	// pairingStore is the global device pairing state (pending + paired devices).
@@ -263,10 +263,9 @@ type wsConn struct {
 	doneCh         chan struct{}
 	closeOnce      sync.Once
 	droppedTokens  atomic.Int32
-	droppedFrames  atomic.Int32    // non-critical outbound frames dropped due to backpressure
-	inboundDropped atomic.Int32    // inbound items dropped: schema validation failures + invalid/oversized media refs
-	role           config.UserRole // RBAC role resolved at auth time
-	userID         string          // username resolved at auth time; used for session_state scoping (FR-073)
+	droppedFrames  atomic.Int32 // non-critical outbound frames dropped due to backpressure
+	inboundDropped atomic.Int32 // inbound items dropped: schema validation failures + invalid/oversized media refs
+	userID         string       // username resolved at auth time; used for session_state scoping (FR-073)
 
 	// Replay-mode divert (W1-1): during replay, live events arriving via
 	// sendConnGenFrame are redirected into replayDivertCh instead of sendCh so
@@ -296,9 +295,18 @@ type wsConn struct {
 	// if a buggy or malicious client floods pings.
 	lastPongSentUnixNano atomic.Int64
 
+	// isCLIToken is true when authenticateWS resolved this connection via
+	// the machine-only Gateway.CLIToken credential rather than a real
+	// Gateway.Users row (userID == "cli" in that case). This is the WS-side
+	// counterpart of gateway's CLITokenContextKey — a WebSocket connection
+	// has no per-request context to carry that key into, so the distinction
+	// is tracked here instead for any WS-side logic that needs to tell a
+	// CLI caller apart from a human account.
+	isCLIToken bool
+
 	// pairingSubs tracks which channels this connection wants whatsapp_pairing
 	// (QR/status) frames for, so the QR secret is delivered only to the operator
-	// viewing that channel's pairing UI rather than every admin tab (#283,
+	// viewing that channel's pairing UI rather than every connected tab (#283,
 	// Option B). Guarded by pairingSubsMu; written by the inbound read loop and
 	// read by the event forwarder. Nil until the first subscribe.
 	pairingSubsMu sync.Mutex
@@ -624,9 +632,14 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // authenticateWS reads the first frame and validates the token.
-// Supports RBAC: checks config.Gateway.Users first (bcrypt), then falls back to
-// OMNIPUS_BEARER_TOKEN env var for backward compatibility.
-// Sets wc.role to the resolved role on success.
+// Loops every account in Gateway.Users first (bcrypt; the single-user model
+// normally holds exactly one, but a pre-single-user-model install may still
+// carry leftover extra accounts — config.warnAboutExtraUsers flags that at
+// load time as an advisory; every configured account still authenticates
+// here, same as checkBearerAuth), then the CLI's dedicated Gateway.CLIToken,
+// then falls back to OMNIPUS_BEARER_TOKEN env var for backward
+// compatibility. Sets wc.userID to the resolved identity on success, and
+// wc.isCLIToken when that identity came from the CLIToken branch.
 func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn) bool {
 	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 	_, data, err := conn.ReadMessage()
@@ -650,18 +663,39 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn) bool {
 	cfg := h.agentLoop.GetConfig()
 	rawToken := authFrame.Token
 
-	// 1. Check per-user list (RBAC — bearer-token SET lookup, SEC-1).
-	if len(cfg.Gateway.Users) > 0 {
-		for i := range cfg.Gateway.Users {
-			user := cfg.Gateway.Users[i]
-			if user.VerifyToken(rawToken) == nil {
-				wc.role = user.Role
-				wc.userID = user.Username // FR-073: needed for session_state user scoping
-				conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-				return true
-			}
+	// 1. The human account(s) in Gateway.Users. Single-user model: normally
+	// holds exactly one entry, but a pre-single-user-model install could
+	// still carry a leftover second (or third...) account from before the
+	// Users CRUD API was deleted (config.warnAboutExtraUsers logs a WARN
+	// for this at load time — deliberately not self-healed/truncated here,
+	// since that would race a legitimate account's own in-flight login).
+	// Looping keeps every configured account able to authenticate rather
+	// than silently and permanently locking out everyone but index 0 (SEC-1).
+	for i := range cfg.Gateway.Users {
+		if cfg.Gateway.Users[i].VerifyToken(rawToken) == nil {
+			wc.userID = cfg.Gateway.Users[i].Username // FR-073: needed for session_state user scoping
+			conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+			return true
 		}
-		// Token not in user list — reject.
+	}
+
+	// 2. The CLI's dedicated token — decoupled from the human account (see
+	// GatewayConfig.CLIToken doc). Verified via the nil-safe helper that
+	// wraps the same shared VerifyTokenAgainst logic UserConfig.VerifyToken
+	// uses internally, with no legacy hash to check.
+	if cfg.Gateway.VerifyCLIToken(rawToken) == nil {
+		wc.userID = "cli"
+		wc.isCLIToken = true
+		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		return true
+	}
+
+	// Auth is configured (a human account and/or a CLI token exist) but the
+	// presented token matched neither — reject without falling through to the
+	// legacy env-token path below. This preserves prior behavior: once any
+	// account-based auth is configured, an unmatched token is rejected
+	// immediately rather than being checked against OMNIPUS_BEARER_TOKEN.
+	if len(cfg.Gateway.Users) > 0 || cfg.Gateway.CLIToken != nil {
 		sendGenWSFrame(conn, generated.ErrorFrame{
 			Type:    string(generated.WsFrameTypeError),
 			Message: "unauthorized: invalid token",
@@ -673,12 +707,11 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn) bool {
 		return false
 	}
 
-	// 2. Fallback: legacy OMNIPUS_BEARER_TOKEN env var (treated as admin role).
+	// 3. Fallback: legacy OMNIPUS_BEARER_TOKEN env var.
 	required := os.Getenv("OMNIPUS_BEARER_TOKEN")
 	if required == "" {
 		if cfg.Gateway.DevModeBypass {
-			// Dev mode: allow without auth, treated as admin.
-			wc.role = config.UserRoleAdmin
+			// Dev mode: allow without auth.
 			conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 			return true
 		}
@@ -704,7 +737,6 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn) bool {
 		)
 		return false
 	}
-	wc.role = config.UserRoleAdmin
 	conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 	return true
 }
@@ -940,14 +972,9 @@ func (h *WSHandler) readLoop(ctx context.Context, conn *websocket.Conn, wc *wsCo
 		case string(generated.WsFrameTypeWhatsappPairingSubscribe):
 			// #283 (Option B): scope whatsapp_pairing frames to the connection(s)
 			// viewing a channel's pairing UI so the QR secret isn't broadcast to
-			// every admin tab. active=true subscribes this conn; false clears it.
-			if wc.role != config.UserRoleAdmin {
-				sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-					Type:    string(generated.WsFrameTypeError),
-					Message: "whatsapp_pairing_subscribe requires admin role",
-				})
-				continue
-			}
+			// every tab. active=true subscribes this conn; false clears it. Any
+			// connection reaching this point in readLoop is already authenticated
+			// (single-account model), so no further role gate applies.
 			var f generated.WhatsAppPairingSubscribeFrame
 			if err := json.Unmarshal(data, &f); err != nil {
 				slog.Warn("ws: malformed whatsapp_pairing_subscribe frame", "error", err)
@@ -1247,8 +1274,8 @@ func (h *WSHandler) handleChatMessage(
 			CanonicalID: "webchat_user",
 		},
 		// FR-017: carry the WS-authenticated gateway principal (set at auth
-		// time, e.g. "cli" or an admin username) so the agent loop can stamp
-		// audit.Entry.User for turn attribution. This is the ONLY site that sets
+		// time, e.g. "cli" or the account's username) so the agent loop can
+		// stamp audit.Entry.User for turn attribution. This is the ONLY site that sets
 		// GatewayUserID — it is a dedicated carrier, NOT Sender.Username, so that
 		// platform channels (which fill Sender.Username with the platform handle)
 		// can never have their sender misattributed as a gateway principal.
@@ -2462,7 +2489,7 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 			// #283: WhatsApp linked-device pairing (QR + status). Not tied to a
 			// chatID. Delivered only to connections that subscribed to this
 			// channel's pairing UI (Option B), so the QR pairing secret isn't
-			// broadcast to every authenticated admin tab.
+			// broadcast to every connected tab.
 			p, ok := evt.Payload.(agent.WhatsAppPairingPayload)
 			if !ok {
 				continue
@@ -2508,18 +2535,16 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 		case agent.EventKindNotification:
 			// #264: a user-facing notification (e.g. a scheduled run failed).
 			// Delivered ONLY to the recipient user's connections (filtered by
-			// wc.userID) so it never leaks to other admins' tabs. The
-			// NotificationAdminBroadcast sentinel fans out to admin-role
-			// connections when no specific recipient could be resolved.
+			// wc.userID) so it never leaks to other tabs/sessions. The
+			// NotificationAdminBroadcast sentinel fans out to every connected
+			// client unconditionally when no specific recipient could be
+			// resolved — under the single-user model, "broadcast to admins" and
+			// "broadcast to the one account's connections" are the same thing.
 			p, ok := evt.Payload.(agent.NotificationPayload)
 			if !ok {
 				continue
 			}
-			if p.Recipient == agent.NotificationAdminBroadcast {
-				if wc.role != config.UserRoleAdmin {
-					continue
-				}
-			} else if wc.userID != p.Recipient {
+			if p.Recipient != agent.NotificationAdminBroadcast && wc.userID != p.Recipient {
 				continue
 			}
 			notifF := generated.NotificationFrame{
@@ -2551,7 +2576,7 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 		case agent.EventKindTaskStatusChanged:
 			// A workflow task's status changed (queued→running→completed/failed).
 			// Not tied to a specific chatID — broadcast to every connection so
-			// any admin viewing the tasks board sees live updates. The SPA
+			// anyone viewing the tasks board sees live updates. The SPA
 			// invalidates its tasks TanStack Query cache on receipt.
 			p, ok := evt.Payload.(agent.TaskStatusChangedPayload)
 			if !ok {

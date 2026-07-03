@@ -44,7 +44,6 @@ function makeAuthTestClient() {
 
     sessionStorage.removeItem('omnipus_auth_token')
     localStorage.removeItem('omnipus_auth_token')
-    localStorage.removeItem('omnipus_auth_role')
     localStorage.removeItem('omnipus_auth_username')
 
     void import('@/store/auth')
@@ -105,7 +104,6 @@ describe('queryClient 401 auth-error handler', () => {
     // Seed both storages with a token to verify they get cleared.
     sessionStorage.setItem('omnipus_auth_token', 'sess-tok-abc')
     localStorage.setItem('omnipus_auth_token', 'local-tok-abc')
-    localStorage.setItem('omnipus_auth_role', 'user')
     localStorage.setItem('omnipus_auth_username', 'alice')
   })
 
@@ -135,7 +133,6 @@ describe('queryClient 401 auth-error handler', () => {
 
     expect(sessionStorage.getItem('omnipus_auth_token')).toBeNull()
     expect(localStorage.getItem('omnipus_auth_token')).toBeNull()
-    expect(localStorage.getItem('omnipus_auth_role')).toBeNull()
     expect(localStorage.getItem('omnipus_auth_username')).toBeNull()
   })
 

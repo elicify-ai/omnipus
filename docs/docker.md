@@ -91,7 +91,7 @@ docker run -d \
 open http://localhost:5000
 ```
 
-The onboarding wizard (at `/onboarding`) walks through: provider selection, API key entry, model selection, and admin account creation. Complete it before using the chat UI.
+The onboarding wizard (at `/onboarding`) walks through: provider selection, API key entry, model selection, and account creation. Complete it before using the chat UI.
 
 > Port `5000` is widely used by other local dev servers (macOS AirPlay receiver, Flask defaults, etc.) and `3000` is the Next.js default. If the host port collides, pick a free port (e.g. `5050`) and use it consistently in `config.json`, the `-p` flag, and the URL you open.
 
@@ -229,7 +229,7 @@ The local-build image runs as a non-root user `omnipus` (UID 1000), so bind-moun
 
 ## Port exposure and security
 
-By default, both the compose file and the recommended `docker run` command bind to `127.0.0.1`, making the gateway reachable only from localhost. This is intentional: port 5000 (or whichever port you configure) serves the authenticated admin API and the onboarding wizard. Anyone who can reach the port before onboarding completes can register as the first admin user.
+By default, both the compose file and the recommended `docker run` command bind to `127.0.0.1`, making the gateway reachable only from localhost. This is intentional: port 5000 (or whichever port you configure) serves the authenticated API and the onboarding wizard. Anyone who can reach the port before onboarding completes can claim the account.
 
 To expose the gateway to a LAN or public IP, change the bind address:
 

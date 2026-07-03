@@ -51,6 +51,8 @@ import { ShellDenyPatternsEditor } from './ShellDenyPatternsEditor'
 import { ExecutorSelector } from './ExecutorSelector'
 import { BehaviorFields, AvatarColorPicker, IconPicker, AvatarHeader, UploadMdButton } from './AgentFormFields'
 import { CliPathValidationHint } from './CliPathValidationHint'
+import { AutoAppliedFlags } from './AutoAppliedFlags'
+import type { ExecutorDefaultsListState } from '@/hooks/useExecutorDefaults'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import {
   fetchAgent,
@@ -299,6 +301,12 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // wizard gates Create (FR-008/FR-018/FR-019).
   const cliDetect = useCliDetect(agent?.type === 'subagent_3p')
   const cliValidation = useCliPathValidation()
+
+  // Tracks `<AutoAppliedFlags>`'s live fetch status so the "Additional CLI
+  // arguments" field's helper copy below can stop saying "(flags shown
+  // above)" when the block isn't actually showing anything (silent-failure
+  // fix, 7-reviewer gate).
+  const [flagsStatus, setFlagsStatus] = useState<ExecutorDefaultsListState['status']>('idle')
 
   // FR-016 / US-5: Heartbeat tab state — per-(workspace, agent) config, NOT
   // part of the agent autosave. Only meaningful when editAgentWorkspaceId is set.
@@ -627,7 +635,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     // Locked agents can still save model and tool changes — do not disable auto-save
     {
       // I13: best-effort flush of pending edits on tab close / page hide /
-      // unload. The gateway validates every PUT against the per-user RBAC
+      // unload. The gateway validates every PUT against the account's
       // bearer token, so the flush must carry Authorization (sendBeacon
       // can't, which is why useAutoSave now uses fetch keepalive). The token
       // is read from the same store the REST client uses (sessionStorage
@@ -1616,18 +1624,34 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   disabled={isLocked}
                 />
               </div>
-              <div data-testid="profile-cli-args" className="flex items-center gap-3">
-                <label className="text-xs text-[var(--color-muted)] w-44 shrink-0">CLI arguments</label>
-                <Input
-                  value={executor?.cli_args ?? ''}
-                  onChange={(e) => {
-                    markDirty()
-                    setExecutor((prev) => ({ ...(prev ?? { kind: 'external-cli', cli: executor?.cli ?? 'claude-code' }), cli_args: e.target.value }))
-                  }}
-                  placeholder="--no-update-check"
-                  className="text-xs h-8 font-mono"
-                  disabled={isLocked}
-                />
+              <AutoAppliedFlags
+                cli={executor?.cli}
+                testId="profile-executor-defaults"
+                onStatusChange={setFlagsStatus}
+              />
+              <div data-testid="profile-cli-args" className="space-y-1.5">
+                <div className="flex items-center gap-3">
+                  <label className="text-xs text-[var(--color-muted)] w-44 shrink-0">Additional CLI arguments</label>
+                  <Input
+                    value={executor?.cli_args ?? ''}
+                    onChange={(e) => {
+                      markDirty()
+                      setExecutor((prev) => ({ ...(prev ?? { kind: 'external-cli', cli: executor?.cli ?? 'claude-code' }), cli_args: e.target.value }))
+                    }}
+                    placeholder={
+                      flagsStatus === 'success'
+                        ? "e.g. --add-dir /extra/path (flags shown above are applied automatically and can't be overridden here)"
+                        : 'e.g. --add-dir /extra/path'
+                    }
+                    className="text-xs h-8 font-mono"
+                    disabled={isLocked}
+                  />
+                </div>
+                <p className="text-[11px] text-[var(--color-muted)] leading-snug">
+                  {flagsStatus === 'success'
+                    ? 'In addition to the flags Omnipus applies automatically (shown above).'
+                    : 'In addition to the flags Omnipus applies automatically when this agent runs.'}
+                </p>
               </div>
             </section>
           

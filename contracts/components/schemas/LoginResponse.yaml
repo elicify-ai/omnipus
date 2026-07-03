@@ -1,23 +1,14 @@
 type: object
 description: >
-  Returned on successful login, register-admin, or onboarding/complete.
-  Contains the bearer token to use in subsequent Authorization headers,
-  the role of the authenticated user, and the username.
+  Returned on successful login or onboarding/complete. Contains the bearer
+  token to use in subsequent Authorization headers and the username.
 required:
   - token
-  - role
   - username
 additionalProperties: false
 properties:
   token:
     $ref: './BearerToken.yaml'
-  role:
-    type: string
-    enum:
-      - admin
-      - user
-    description: RBAC role of the authenticated user.
-    example: "admin"
   username:
     type: string
     description: The authenticated user's login name.

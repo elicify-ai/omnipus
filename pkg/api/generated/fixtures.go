@@ -609,7 +609,6 @@ func FixtureLoginResponse_Populated() LoginResponse {
 	warning := strPtr("API key stored in plaintext")
 	return LoginResponse{
 		Token:    "omnipus_" + repeatStr("a", 64),
-		Role:     "admin",
 		Username: "admin",
 		Warning:  warning,
 	}
@@ -622,7 +621,6 @@ func FixtureLoginResponse_ZeroValue() LoginResponse {
 func FixtureLoginResponse_Edge() LoginResponse {
 	return LoginResponse{
 		Token:    "omnipus_" + repeatStr("f", 64),
-		Role:     "user",
 		Username: "unicode-user-🔑",
 	}
 }
@@ -756,30 +754,6 @@ func FixtureAgent_Edge() Agent {
 		TimeoutSeconds:    0,
 		MaxToolIterations: 0,
 		SteeringMode:      "one-at-a-time",
-	}
-}
-
-// LoginResponse — User response
-
-func FixtureUser_Populated() User {
-	return User{
-		Username:       "alice",
-		Role:           "admin",
-		HasPassword:    true,
-		HasActiveToken: true,
-	}
-}
-
-func FixtureUser_ZeroValue() User {
-	return User{}
-}
-
-func FixtureUser_Edge() User {
-	return User{
-		Username:       "bob-" + repeatStr("z", 55), // long but valid
-		Role:           "user",
-		HasPassword:    false,
-		HasActiveToken: false,
 	}
 }
 
@@ -1235,21 +1209,19 @@ func FixtureAppState_Edge() AppState {
 func FixtureValidateTokenResponse_Populated() ValidateTokenResponse {
 	return ValidateTokenResponse{
 		Username: "admin",
-		Role:     ValidateTokenResponseRole("admin"),
 	}
 }
 
 // FixtureValidateTokenResponse_ZeroValue — Go zero values.
-// Expected: FAIL because username="", role="" (not in enum [admin, user]).
+// Expected: PASS — username has no minLength, so "" still satisfies the schema.
 func FixtureValidateTokenResponse_ZeroValue() ValidateTokenResponse {
 	return ValidateTokenResponse{}
 }
 
-// FixtureValidateTokenResponse_Edge — user role, unicode username.
+// FixtureValidateTokenResponse_Edge — unicode username.
 func FixtureValidateTokenResponse_Edge() ValidateTokenResponse {
 	return ValidateTokenResponse{
 		Username: "unicode-user-🔑-" + repeatStr("a", 20),
-		Role:     ValidateTokenResponseRole("user"),
 	}
 }
 
@@ -1556,28 +1528,6 @@ func FixtureStorageStats_NilWarningsAllowed() StorageStats {
 		MemoryEntryCount:   0,
 		OldestSessionDate:  &oldest,
 		Warnings:           nil, // optional — nil is valid
-	}
-}
-
-// ── MeInfo ────────────────────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/MeInfo.yaml
-
-func FixtureMeInfo_Populated() MeInfo {
-	return MeInfo{
-		Role: MeInfoRole("admin"),
-	}
-}
-
-// FixtureMeInfo_ZeroValue — Go zero value.
-// Expected: FAIL because role="" (not in enum [admin, user]).
-func FixtureMeInfo_ZeroValue() MeInfo {
-	return MeInfo{}
-}
-
-// FixtureMeInfo_Edge — user role (the other enum value).
-func FixtureMeInfo_Edge() MeInfo {
-	return MeInfo{
-		Role: MeInfoRole("user"),
 	}
 }
 
@@ -2118,29 +2068,6 @@ func FixtureUploadFilesResponse_Edge() UploadFilesResponse {
 	}
 }
 
-// ── AgentOwnerUpdateResponse ──────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/AgentOwnerUpdateResponse.yaml
-
-func FixtureAgentOwnerUpdateResponse_Populated() AgentOwnerUpdateResponse {
-	return AgentOwnerUpdateResponse{
-		AgentId:       "custom-agent-abc123",
-		OwnerUsername: "alice",
-		Success:       true,
-	}
-}
-
-func FixtureAgentOwnerUpdateResponse_ZeroValue() AgentOwnerUpdateResponse {
-	return AgentOwnerUpdateResponse{}
-}
-
-func FixtureAgentOwnerUpdateResponse_Edge() AgentOwnerUpdateResponse {
-	return AgentOwnerUpdateResponse{
-		AgentId:       "custom-agent-" + repeatStr("x", 36),
-		OwnerUsername: "unicode-owner-🔑",
-		Success:       false,
-	}
-}
-
 // ── Level-1 / Spec-3 / Spec-6 REST response fixtures ─────────────────────────
 // Marshal-validate roundtrip coverage for the REST response types served by the
 // gateway, so a Go struct producing schema-invalid JSON is caught by CI.
@@ -2555,7 +2482,7 @@ func FixtureAgentCreateRequestSubagent3p_Populated() AgentCreateRequestSubagent3
 	timeoutSeconds := 300
 	mode := AgentCreateRequestSubagent3pDelegationPolicyModesTask
 	toKind := AgentCreateRequestSubagent3pDelegationPolicyToKindLocal
-	cli := AgentCreateRequestSubagent3pExecutorCliClaudeCode
+	cli := ClaudeCode
 	cliPath := "/usr/local/bin/claude"
 
 	return AgentCreateRequestSubagent3p{
@@ -2603,7 +2530,7 @@ func FixtureAgentCreateRequestSubagent3p_Populated() AgentCreateRequestSubagent3
 			}{{Id: "ray", Kind: toKind}},
 		},
 		Executor: struct {
-			Cli          *AgentCreateRequestSubagent3pExecutorCli  `json:"cli,omitempty"`
+			Cli          *ExternalCliTool                          `json:"cli,omitempty"`
 			CliArgs      *string                                   `json:"cli_args,omitempty"`
 			CliPath      *string                                   `json:"cli_path,omitempty"`
 			EnvOverrides *map[string]string                        `json:"env_overrides,omitempty"`
@@ -2619,14 +2546,14 @@ func FixtureAgentCreateRequestSubagent3p_Populated() AgentCreateRequestSubagent3
 // request whose type value is not "subagent_3p". JSON Schema validation must
 // reject it.
 func FixtureAgentCreateRequestSubagent3p_InvalidType() AgentCreateRequestSubagent3p {
-	cli := AgentCreateRequestSubagent3pExecutorCliCodex
+	cli := Codex
 	cliPath := "/usr/local/bin/codex"
 	return AgentCreateRequestSubagent3p{
 		Name: "Bad Type",
 		Type: AgentCreateRequestSubagent3pType("not-a-valid-type"),
 		Soul: "Valid soul content.",
 		Executor: struct {
-			Cli          *AgentCreateRequestSubagent3pExecutorCli  `json:"cli,omitempty"`
+			Cli          *ExternalCliTool                          `json:"cli,omitempty"`
 			CliArgs      *string                                   `json:"cli_args,omitempty"`
 			CliPath      *string                                   `json:"cli_path,omitempty"`
 			EnvOverrides *map[string]string                        `json:"env_overrides,omitempty"`
@@ -2848,7 +2775,7 @@ func FixtureCliDetectEntry_NotInstalled() CliDetectEntry {
 
 func FixtureCliValidateRequest_Populated() CliValidateRequest {
 	return CliValidateRequest{
-		Cli:     CliValidateRequestCliClaudeCode,
+		Cli:     ClaudeCode,
 		CliPath: "/usr/local/bin/claude",
 	}
 }

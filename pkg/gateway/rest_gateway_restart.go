@@ -9,8 +9,8 @@
 // POST /api/v1/gateway/restart drains in-flight work then re-execs the process
 // (or exits cleanly for a supervisor) so the SPA can apply restart-gated
 // settings without a manual process bounce. The endpoint is high blast radius
-// and is wired with the admin chain (withAuth → RequireAdmin → RequireNotBypass)
-// at registration; dev_mode_bypass therefore returns 503.
+// and is wired with adminWrap (withAuth → RequireNotBypass) at registration;
+// dev_mode_bypass therefore returns 503.
 //
 // The actual re-exec is behind the restAPI.restarter indirection so the handler
 // is unit-testable without killing the test process. Production uses

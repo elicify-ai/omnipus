@@ -695,13 +695,14 @@ func TestContract_LoginResponse_Populated(t *testing.T) {
 }
 
 func TestContract_LoginResponse_ZeroValue(t *testing.T) {
-	// token="", role="", username="" — all required, role must be enum value
+	// token="", username="" — both required, token must match BearerToken's
+	// minLength/pattern constraints.
 	mustFailComponent(t, "LoginResponse", FixtureLoginResponse_ZeroValue(),
-		"zero value has empty required fields and role doesn't match enum")
+		"zero value has empty required fields and token doesn't match BearerToken pattern")
 }
 
 func TestContract_LoginResponse_Edge(t *testing.T) {
-	// role="user", no warning, unicode username
+	// no warning, unicode username
 	mustPassComponent(t, "LoginResponse", FixtureLoginResponse_Edge())
 }
 
@@ -798,24 +799,6 @@ func TestContract_Agent_ZeroValue(t *testing.T) {
 func TestContract_Agent_Edge(t *testing.T) {
 	// draft status, long ID, unicode name, empty soul (valid for draft)
 	mustPassComponent(t, "Agent", FixtureAgent_Edge())
-}
-
-// User — user record
-// Traces to: contracts/components/schemas/User.yaml
-
-func TestContract_User_Populated(t *testing.T) {
-	mustPassComponent(t, "User", FixtureUser_Populated())
-}
-
-func TestContract_User_ZeroValue(t *testing.T) {
-	// username="", role="" — both required; role must be enum value
-	mustFailComponent(t, "User", FixtureUser_ZeroValue(),
-		"zero value has empty required fields")
-}
-
-func TestContract_User_Edge(t *testing.T) {
-	// long username, role=user, no active token, no password
-	mustPassComponent(t, "User", FixtureUser_Edge())
 }
 
 // HealthResponse — gateway health check
@@ -1216,26 +1199,25 @@ func TestContract_AppState_Differentiation(t *testing.T) {
 // Traces to: contracts/components/schemas/ValidateTokenResponse.yaml
 
 func TestContract_ValidateTokenResponse_Populated(t *testing.T) {
-	// admin role.
-	// Traces to: ValidateTokenResponse.yaml — required: [username, role]
+	// Traces to: ValidateTokenResponse.yaml — required: [username]
 	mustPassComponent(t, "ValidateTokenResponse", FixtureValidateTokenResponse_Populated())
 }
 
 func TestContract_ValidateTokenResponse_ZeroValue(t *testing.T) {
-	// username="", role="" — both required; role not in enum [admin, user].
-	// Traces to: ValidateTokenResponse.yaml — role is enum-constrained
-	mustFailComponent(t, "ValidateTokenResponse", FixtureValidateTokenResponse_ZeroValue(),
-		"zero value has empty required fields; role is not a valid enum value")
+	// username="" — required, but has no minLength, so the empty string still
+	// satisfies the schema (required only checks key presence).
+	// Traces to: ValidateTokenResponse.yaml
+	mustPassComponent(t, "ValidateTokenResponse", FixtureValidateTokenResponse_ZeroValue())
 }
 
 func TestContract_ValidateTokenResponse_Edge(t *testing.T) {
-	// user role (the other enum value), unicode username.
+	// unicode username.
 	// Traces to: ValidateTokenResponse.yaml
 	mustPassComponent(t, "ValidateTokenResponse", FixtureValidateTokenResponse_Edge())
 }
 
 func TestContract_ValidateTokenResponse_Differentiation(t *testing.T) {
-	// admin vs user role — different role values produce different JSON.
+	// Different usernames produce different JSON.
 	f1 := FixtureValidateTokenResponse_Populated()
 	f2 := FixtureValidateTokenResponse_Edge()
 	raw1, err := json.Marshal(f1)
@@ -1243,7 +1225,7 @@ func TestContract_ValidateTokenResponse_Differentiation(t *testing.T) {
 	raw2, err := json.Marshal(f2)
 	require.NoError(t, err)
 	assert.NotEqual(t, string(raw1), string(raw2),
-		"admin-role and user-role ValidateTokenResponse fixtures must produce different JSON")
+		"two different ValidateTokenResponse fixtures must produce different JSON")
 	mustPassComponent(t, "ValidateTokenResponse", f1)
 	mustPassComponent(t, "ValidateTokenResponse", f2)
 }
@@ -1599,42 +1581,6 @@ func TestContract_StorageStats_Differentiation(t *testing.T) {
 		"StorageStats with data vs empty must produce different JSON")
 	mustPassComponent(t, "StorageStats", f1)
 	mustPassComponent(t, "StorageStats", f2)
-}
-
-// ── MeInfo ────────────────────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/MeInfo.yaml
-
-func TestContract_MeInfo_Populated(t *testing.T) {
-	// admin role.
-	// Traces to: MeInfo.yaml — required: [role]
-	mustPassComponent(t, "MeInfo", FixtureMeInfo_Populated())
-}
-
-func TestContract_MeInfo_ZeroValue(t *testing.T) {
-	// role="" — not in enum [admin, user].
-	// Traces to: MeInfo.yaml — role is enum-constrained
-	mustFailComponent(t, "MeInfo", FixtureMeInfo_ZeroValue(),
-		"zero value has empty role field; not a valid enum value")
-}
-
-func TestContract_MeInfo_Edge(t *testing.T) {
-	// user role (the other enum value).
-	// Traces to: MeInfo.yaml
-	mustPassComponent(t, "MeInfo", FixtureMeInfo_Edge())
-}
-
-func TestContract_MeInfo_Differentiation(t *testing.T) {
-	// admin vs user role must produce different JSON.
-	f1 := FixtureMeInfo_Populated()
-	f2 := FixtureMeInfo_Edge()
-	raw1, err := json.Marshal(f1)
-	require.NoError(t, err)
-	raw2, err := json.Marshal(f2)
-	require.NoError(t, err)
-	assert.NotEqual(t, string(raw1), string(raw2),
-		"admin-role and user-role MeInfo fixtures must produce different JSON")
-	mustPassComponent(t, "MeInfo", f1)
-	mustPassComponent(t, "MeInfo", f2)
 }
 
 // ── ExecApprovalExpiredFrame ──────────────────────────────────────────────────
@@ -2240,33 +2186,6 @@ func TestContract_TaskTrigger_Edge(t *testing.T) {
 	mustPassComponent(t, "TaskTrigger", FixtureTaskTrigger_Edge())
 }
 
-// ── AgentOwnerUpdateResponse ──────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/AgentOwnerUpdateResponse.yaml
-
-func TestContract_AgentOwnerUpdateResponse_Populated(t *testing.T) {
-	mustPassComponent(t, "AgentOwnerUpdateResponse", FixtureAgentOwnerUpdateResponse_Populated())
-}
-
-func TestContract_AgentOwnerUpdateResponse_ZeroValue(t *testing.T) {
-	// JSON Schema "required" checks key presence, not non-empty values.
-	// success=false, agent_id="", owner_username="" all satisfy presence — passes.
-	mustPassComponent(t, "AgentOwnerUpdateResponse", FixtureAgentOwnerUpdateResponse_ZeroValue())
-}
-
-func TestContract_AgentOwnerUpdateResponse_Edge(t *testing.T) {
-	mustPassComponent(t, "AgentOwnerUpdateResponse", FixtureAgentOwnerUpdateResponse_Edge())
-}
-
-func TestContract_AgentOwnerUpdateResponse_Differentiation(t *testing.T) {
-	f1 := FixtureAgentOwnerUpdateResponse_Populated()
-	f2 := FixtureAgentOwnerUpdateResponse_Edge()
-	raw1, _ := json.Marshal(f1)
-	raw2, _ := json.Marshal(f2)
-	assert.NotEqual(t, string(raw1), string(raw2),
-		"different owners must produce different JSON")
-	mustPassComponent(t, "AgentOwnerUpdateResponse", f1)
-}
-
 // ── ActivityEventsResponse ────────────────────────────────────────────────────
 // Traces to: contracts/components/schemas/ActivityEventsResponse.yaml
 // Note: ActivityEventsResponse is not a named Go type (it's inlined). We test
@@ -2754,26 +2673,10 @@ func TestContract_SessionStateFrame_TooManyPending(t *testing.T) {
 
 // ── Closed-shape rejection tests (additionalProperties: false) ────────────────
 
-func TestContract_User_RejectsExtraneousField(t *testing.T) {
-	// Traces to: User.yaml — additionalProperties: false
-	doc := map[string]any{
-		"username":         "alice",
-		"role":             "admin",
-		"has_password":     true,
-		"has_active_token": true,
-		"extra_field":      "should be rejected",
-	}
-	raw, err := json.Marshal(doc)
-	require.NoError(t, err)
-	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "User", raw),
-		"User with extraneous field must fail — additionalProperties: false")
-}
-
 func TestContract_LoginResponse_RejectsExtraneousField(t *testing.T) {
 	// Traces to: LoginResponse.yaml — additionalProperties: false
 	doc := map[string]any{
 		"token":          "omnipus_" + repeatStr("a", 64),
-		"role":           "admin",
 		"username":       "admin",
 		"injected_field": "should be rejected",
 	}
@@ -2781,19 +2684,6 @@ func TestContract_LoginResponse_RejectsExtraneousField(t *testing.T) {
 	require.NoError(t, err)
 	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "LoginResponse", raw),
 		"LoginResponse with extraneous field must fail — additionalProperties: false")
-}
-
-func TestContract_RegisterAdminRequest_RejectsExtraneousField(t *testing.T) {
-	// Traces to: RegisterAdminRequest.yaml — additionalProperties: false
-	doc := map[string]any{
-		"username":   "alice",
-		"password":   "securepassword",
-		"extra_priv": "admin",
-	}
-	raw, err := json.Marshal(doc)
-	require.NoError(t, err)
-	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "RegisterAdminRequest", raw),
-		"RegisterAdminRequest with extraneous field must fail — additionalProperties: false")
 }
 
 func TestContract_OnboardingCompleteRequest_RejectsExtraneousField(t *testing.T) {

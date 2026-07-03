@@ -309,26 +309,94 @@ func (a *restAPI) computeRollup(parentID string) *[]struct {
 }
 
 // validateTaskAgentID checks that a human-assigned agent_id exists in the
-// registry and is not a worker. A worker is a delegation-only tier and must
-// never be human-assigned via the REST surface (it is invoked via delegation).
-// Returns nil when the check is skipped (empty registry / empty agent_id).
-func (a *restAPI) validateTaskAgentID(agentID string) error {
+// registry, is a member of the task's workspace TEAM, and — if it is a
+// subagent_3p (external-CLI) worker — is rejected outright.
+//
+// This is the human/REST-surface assignment path (SPA task create/edit): a
+// human assigning a task via the SPA is the workspace owner directing work,
+// not one agent delegating to another. It is therefore deliberately NOT
+// routed through the agent-to-agent delegation-deny checker
+// (buildDelegationDenyChecker / NewSysagentDelegationDeny in
+// pkg/agent/loop.go) — that graph governs delegation ACTS between agents, not
+// a human's direct task assignment. The authority here is workspace TEAM
+// membership instead: the union of the workspace's core_team and the
+// endpoints of its stored delegation edges (workspace.TeamSet, via the
+// workspaceTeamSet adapter — the same set the Team tab and the delegation
+// graph PUT validate edge endpoints against; see
+// rest_workspace_delegation.go). An agent absent from that set — worker or
+// not — cannot be assigned a task in this workspace. A worker that IS a team
+// member CAN be assigned directly now (this is the fix: workers were
+// previously banned outright regardless of team membership).
+//
+// subagent_3p (external-CLI) workers are rejected unconditionally, regardless
+// of team membership, WHENEVER this function actually reaches the check: both
+// of its call sites (handleTaskCreate, handleTaskPatch) already dereference
+// a.agentLoop.GetConfig() before ever calling validateTaskAgentID, so
+// a.agentLoop is guaranteed non-nil by the time this function runs from either
+// of them, and the registry populated by agent.NewAgentRegistry always
+// contains at least the "main" sentinel — the two guards immediately below
+// exist purely as defense-in-depth for a hypothetical future caller that does
+// NOT share that precondition (e.g. narrow test scaffolding constructing a
+// restAPI/agentLoop by hand). Per the codebase's established convention for
+// an uninitialized dependency (see rest_god_mode.go, rest_sandbox_config.go,
+// rest_security_wave5.go: "agent loop not initialized" -> 503), these guards
+// FAIL CLOSED (deny) rather than silently allowing the assignment through —
+// they used to `return nil` here, which would have silently skipped BOTH the
+// subagent_3p rejection and the team-membership check for any caller that hit
+// them. TaskExecutor.runTask / runTaskFromInProgress both route through
+// AgentLoop.processTaskDirect -> runAgentLoop -> runTurn unconditionally —
+// there is no ResolveDispatch/executor-kind branch on the task-run path
+// (unlike the agent-to-agent sub-turn path in subturn.go, which DOES branch
+// via runner.ResolveDispatch before deciding native vs.
+// runExternalCLISubTurn). Assigning a task to a subagent_3p today would
+// silently run it on the NATIVE Omnipus engine instead of the configured
+// external CLI, defeating the whole point of the agent. Until TaskExecutor
+// is taught to dispatch external-CLI task runs through the same
+// runExternalCLISubTurn machinery, this must fail closed with a clear,
+// distinct error rather than silently mis-executing.
+//
+// Returns nil only when agent_id is empty (no assignment to validate — not a
+// fail-open case, there is simply nothing to check). A non-nil agentID with an
+// unavailable agent loop/registry now returns errTaskAgentLoopUnavailable
+// instead of silently allowing the assignment; both current call sites map any
+// non-nil error to 400 today. A dedicated 503 mapping specifically for
+// errTaskAgentLoopUnavailable would require touching those two call sites,
+// which is a straightforward follow-up but out of scope for this change —
+// the important property (fail CLOSED instead of silently allowing) already
+// holds either way.
+func (a *restAPI) validateTaskAgentID(agentID, workspaceID string) error {
 	if agentID == "" {
 		return nil
 	}
 	if a.agentLoop == nil {
-		return nil
+		return errTaskAgentLoopUnavailable
 	}
 	reg := a.agentLoop.GetRegistry()
 	if reg == nil || len(reg.ListAgentIDs()) == 0 {
-		return nil
+		return errTaskAgentLoopUnavailable
 	}
 	if _, ok := reg.GetAgent(agentID); !ok {
 		return fmt.Errorf("agent %q not found", agentID)
 	}
-	if reg.IsWorker(agentID) {
+	if cfg := a.agentLoop.GetConfig(); cfg.IsExternalCLIWorkerID(agentID) {
 		return fmt.Errorf(
-			"agent %q is a worker and cannot be directly assigned a task — workers are invoked via delegation",
+			"agent %q is a subagent_3p (external-CLI) worker — task execution for external-CLI workers is not yet supported; assign the task to a native agent instead",
+			agentID,
+		)
+	}
+	if workspaceID == "" {
+		return fmt.Errorf(
+			"cannot assign agent %q: task has no workspace_id to validate team membership against",
+			agentID,
+		)
+	}
+	ws, wsErr := readWorkspaceFile(a.homePath, workspaceID)
+	if wsErr != nil {
+		return fmt.Errorf("cannot assign agent %q: workspace %q could not be loaded: %w", agentID, workspaceID, wsErr)
+	}
+	if !workspaceTeamSet(ws)[agentID] {
+		return fmt.Errorf(
+			"agent %q is not a member of this workspace's team — add it to the workspace's core team or a delegation edge before assigning tasks to it",
 			agentID,
 		)
 	}
@@ -525,7 +593,7 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, http.StatusBadRequest, "invalid agent_id")
 			return
 		}
-		if err := a.validateTaskAgentID(agentID); err != nil {
+		if err := a.validateTaskAgentID(agentID, req.WorkspaceId); err != nil {
 			jsonErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -651,7 +719,22 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 	}
 	if req.AgentId != nil {
 		if *req.AgentId != "" {
-			if err := a.validateTaskAgentID(*req.AgentId); err != nil {
+			// Team-membership validation is workspace-scoped, and a task's
+			// workspace_id is immutable via PATCH (not a TaskUpdateRequest
+			// field) — read the existing task to learn it. A dedicated read
+			// here (rather than threading through the conditional "next"-status
+			// read above) keeps this block correct regardless of which other
+			// fields are present in the same PATCH.
+			existingForAgentCheck, gErr := a.taskStore.Get(id)
+			if gErr != nil {
+				if errors.Is(gErr, task.ErrNotFound) {
+					jsonErr(w, http.StatusNotFound, "task not found")
+					return
+				}
+				jsonErr(w, http.StatusInternalServerError, "could not read task")
+				return
+			}
+			if err := a.validateTaskAgentID(*req.AgentId, existingForAgentCheck.WorkspaceID); err != nil {
 				jsonErr(w, http.StatusBadRequest, err.Error())
 				return
 			}
@@ -962,6 +1045,16 @@ func (a *restAPI) auditTask(event, id string) {
 func isTaskValidationErr(err error) bool {
 	return errors.Is(err, task.ErrValidation)
 }
+
+// errTaskAgentLoopUnavailable is returned by validateTaskAgentID's early
+// guards when a.agentLoop or its registry is not yet available. It replaces
+// the guards' previous `return nil` (silent allow) — see the fail-closed
+// discussion in validateTaskAgentID's docstring. Both current call sites
+// (handleTaskCreate, handleTaskPatch) map it to 400 via the same
+// `jsonErr(w, http.StatusBadRequest, err.Error())` path every other
+// validateTaskAgentID error takes; a caller wanting a dedicated 503 for this
+// specific condition can branch on errors.Is(err, errTaskAgentLoopUnavailable).
+var errTaskAgentLoopUnavailable = errors.New("task: agent loop not initialized; cannot validate agent_id")
 
 // --- boot reconciliation (folded from board_reconcile.go) -------------------
 

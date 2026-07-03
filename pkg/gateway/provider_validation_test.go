@@ -37,6 +37,16 @@ import (
 // Distinct from testMasterKey in rest_onboarding_test.go to avoid cross-test dependency.
 const testMasterKeyValidation = "1112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f30"
 
+// asString is a shared test helper (also used by uat_fixes_test.go) that
+// type-asserts a decoded JSON value to string, returning "" for nil/non-string.
+func asString(v any) string {
+	if v == nil {
+		return ""
+	}
+	s, _ := v.(string)
+	return s
+}
+
 // newProviderValidationTestAPI creates a restAPI wired with a credential store,
 // a live reload function, and a seeded provider config entry so PUT /providers/{id}
 // can validate, store, and reload without hitting a 500.

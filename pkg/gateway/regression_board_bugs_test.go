@@ -171,7 +171,7 @@ func TestRegression_RESTPatch_PreservesAllFields(t *testing.T) {
 	rPost := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(createBody))
 	rPost.Header.Set("Content-Type", "application/json")
 	rPost.URL.Path = "/api/v1/tasks"
-	rPost = rPost.WithContext(contextWithUserRole(rPost.Context(), "alice", config.UserRoleUser))
+	rPost = rPost.WithContext(contextWithUser(rPost.Context(), "alice"))
 	api.HandleTasks(wPost, rPost)
 	require.Equal(t, http.StatusCreated, wPost.Code, "POST must return 201; body=%s", wPost.Body.String())
 	var created gen.Task
@@ -202,7 +202,7 @@ func TestRegression_RESTPatch_PreservesAllFields(t *testing.T) {
 	wGet := httptest.NewRecorder()
 	rGet := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/"+created.Id, nil)
 	rGet.URL.Path = "/api/v1/tasks/" + created.Id
-	rGet = rGet.WithContext(contextWithUserRole(rGet.Context(), "alice", config.UserRoleUser))
+	rGet = rGet.WithContext(contextWithUser(rGet.Context(), "alice"))
 	api.HandleTasks(wGet, rGet)
 	require.Equal(t, http.StatusOK, wGet.Code, "GET must return 200; body=%s", wGet.Body.String())
 	var got gen.Task
@@ -295,7 +295,7 @@ func TestRegression_RestartPersistence(t *testing.T) {
 	rPost := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(createBody))
 	rPost.Header.Set("Content-Type", "application/json")
 	rPost.URL.Path = "/api/v1/tasks"
-	rPost = rPost.WithContext(contextWithUserRole(rPost.Context(), "alice", config.UserRoleUser))
+	rPost = rPost.WithContext(contextWithUser(rPost.Context(), "alice"))
 	apiA.HandleTasks(wPost, rPost)
 	require.Equal(t, http.StatusCreated, wPost.Code, "create task must return 201; body=%s", wPost.Body.String())
 	var createdTask gen.Task
@@ -348,7 +348,7 @@ func TestRegression_RestartPersistence(t *testing.T) {
 	rPost2 := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(createBody2))
 	rPost2.Header.Set("Content-Type", "application/json")
 	rPost2.URL.Path = "/api/v1/tasks"
-	rPost2 = rPost2.WithContext(contextWithUserRole(rPost2.Context(), "bob", config.UserRoleUser))
+	rPost2 = rPost2.WithContext(contextWithUser(rPost2.Context(), "bob"))
 	apiA.HandleTasks(wPost2, rPost2)
 	require.Equal(t, http.StatusCreated, wPost2.Code, "bob's task POST must return 201; body=%s", wPost2.Body.String())
 	var createdTask2 gen.Task
@@ -458,7 +458,7 @@ func TestRegression_Task_OwnershipScoping_PATCHAndDELETE(t *testing.T) {
 	rPost := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(body))
 	rPost.Header.Set("Content-Type", "application/json")
 	rPost.URL.Path = "/api/v1/tasks"
-	rPost = rPost.WithContext(contextWithUserRole(rPost.Context(), "alice", config.UserRoleUser))
+	rPost = rPost.WithContext(contextWithUser(rPost.Context(), "alice"))
 	api.HandleTasks(wPost, rPost)
 	require.Equal(t, http.StatusCreated, wPost.Code, "alice's POST must return 201; body=%s", wPost.Body.String())
 	var tsk gen.Task
@@ -474,7 +474,7 @@ func TestRegression_Task_OwnershipScoping_PATCHAndDELETE(t *testing.T) {
 		strings.NewReader(`{"title":"BobOverwrite"}`))
 	rPatchBob.Header.Set("Content-Type", "application/json")
 	rPatchBob.URL.Path = "/api/v1/tasks/" + tsk.Id
-	rPatchBob = rPatchBob.WithContext(contextWithUserRole(rPatchBob.Context(), "bob", config.UserRoleUser))
+	rPatchBob = rPatchBob.WithContext(contextWithUser(rPatchBob.Context(), "bob"))
 	api.HandleTasks(wPatchBobRec, rPatchBob)
 	assert.Equal(t, http.StatusOK, wPatchBobRec.Code,
 		"bob must get 200 on PATCH of alice's task (FR-1.9: no ownership gate); body=%s", wPatchBobRec.Body.String())
@@ -489,7 +489,7 @@ func TestRegression_Task_OwnershipScoping_PATCHAndDELETE(t *testing.T) {
 		strings.NewReader(`{"title":"AdminRename"}`))
 	rPatchAdmin.Header.Set("Content-Type", "application/json")
 	rPatchAdmin.URL.Path = "/api/v1/tasks/" + tsk.Id
-	rPatchAdmin = rPatchAdmin.WithContext(contextWithUserRole(rPatchAdmin.Context(), "admin", config.UserRoleAdmin))
+	rPatchAdmin = rPatchAdmin.WithContext(contextWithUser(rPatchAdmin.Context(), "admin"))
 	api.HandleTasks(wPatchAdminRec, rPatchAdmin)
 	assert.Equal(t, http.StatusOK, wPatchAdminRec.Code,
 		"admin must be able to PATCH alice's task; body=%s", wPatchAdminRec.Body.String())
@@ -506,7 +506,7 @@ func TestRegression_Task_OwnershipScoping_PATCHAndDELETE(t *testing.T) {
 	wDelBobRec := httptest.NewRecorder()
 	rDelBob := httptest.NewRequest(http.MethodDelete, "/api/v1/tasks/"+tsk.Id, nil)
 	rDelBob.URL.Path = "/api/v1/tasks/" + tsk.Id
-	rDelBob = rDelBob.WithContext(contextWithUserRole(rDelBob.Context(), "bob", config.UserRoleUser))
+	rDelBob = rDelBob.WithContext(contextWithUser(rDelBob.Context(), "bob"))
 	api.HandleTasks(wDelBobRec, rDelBob)
 	assert.Equal(t, http.StatusNoContent, wDelBobRec.Code,
 		"bob must get 204 on DELETE of alice's task (FR-1.9: no ownership gate); body=%s", wDelBobRec.Body.String())
@@ -515,7 +515,7 @@ func TestRegression_Task_OwnershipScoping_PATCHAndDELETE(t *testing.T) {
 	wGone := httptest.NewRecorder()
 	rGone := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/"+tsk.Id, nil)
 	rGone.URL.Path = "/api/v1/tasks/" + tsk.Id
-	rGone = rGone.WithContext(contextWithUserRole(rGone.Context(), "alice", config.UserRoleUser))
+	rGone = rGone.WithContext(contextWithUser(rGone.Context(), "alice"))
 	api.HandleTasks(wGone, rGone)
 	assert.Equal(t, http.StatusNotFound, wGone.Code,
 		"task must be gone after bob's DELETE (204 was real, not a no-op); body=%s", wGone.Body.String())
@@ -553,7 +553,7 @@ func TestRegression_Task_EmptyOwner_AccessibleToAll(t *testing.T) {
 			wGet := httptest.NewRecorder()
 			rGet := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/"+legacyID, nil)
 			rGet.URL.Path = "/api/v1/tasks/" + legacyID
-			rGet = rGet.WithContext(contextWithUserRole(rGet.Context(), user, config.UserRoleUser))
+			rGet = rGet.WithContext(contextWithUser(rGet.Context(), user))
 			api.HandleTasks(wGet, rGet)
 			assert.Equal(t, http.StatusOK, wGet.Code,
 				"user %q must be able to access a legacy task with empty owner; body=%s",
@@ -565,7 +565,7 @@ func TestRegression_Task_EmptyOwner_AccessibleToAll(t *testing.T) {
 	wList := httptest.NewRecorder()
 	rList := httptest.NewRequest(http.MethodGet, "/api/v1/tasks", nil)
 	rList.URL.Path = "/api/v1/tasks"
-	rList = rList.WithContext(contextWithUserRole(rList.Context(), "random-user", config.UserRoleUser))
+	rList = rList.WithContext(contextWithUser(rList.Context(), "random-user"))
 	api.HandleTasks(wList, rList)
 	require.Equal(t, http.StatusOK, wList.Code, "GET /tasks list must return 200; body=%s", wList.Body.String())
 	var listItems []gen.Task

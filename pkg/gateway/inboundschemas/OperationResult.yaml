@@ -1,6 +1,6 @@
 title: OperationResult
 description: >
-  Generic success/failure envelope for simple admin operations.
+  Generic success/failure envelope for simple operations.
   Used by endpoints that perform an action and return only whether it succeeded.
 type: object
 required:

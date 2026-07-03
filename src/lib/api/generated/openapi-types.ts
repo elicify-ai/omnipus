@@ -53,31 +53,11 @@ export interface paths {
         };
         /**
          * Validate the current bearer token
-         * @description Returns the authenticated user's username and role when the token is valid. Rate-limited: 30 requests per IP per minute.
+         * @description Returns the authenticated user's username when the token is valid. Rate-limited: 30 requests per IP per minute.
          */
         get: operations["validateToken"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/auth/register-admin": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Create the first admin account
-         * @description Creates the first admin user. Returns 409 if any admin already exists. The check-create sequence is atomic (TOCTOU-safe via safeUpdateConfigJSON). Issues bearer token, session cookie, and CSRF cookie on success. CSRF-exempt. Rate-limited: 3 requests per IP per minute.
-         */
-        post: operations["registerAdmin"];
         delete?: never;
         options?: never;
         head?: never;
@@ -95,7 +75,7 @@ export interface paths {
         put?: never;
         /**
          * Change the authenticated user's own password
-         * @description Self-service password change. Requires the current password for verification. Different from PUT /users/{username}/password which is the admin-reset path. Requires authentication.
+         * @description Self-service password change. Requires the current password for verification. Requires authentication.
          */
         post: operations["changePassword"];
         delete?: never;
@@ -336,90 +316,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/users": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List all user accounts
-         * @description Returns all registered gateway users. Admin-only. Password and token hashes are never included — only boolean presence flags. dev_mode_bypass=true disables this endpoint (503).
-         */
-        get: operations["listUsers"];
-        put?: never;
-        /**
-         * Create a new user account
-         * @description Creates a new user with hashed password. No bearer token is issued at creation time — the user must log in via POST /auth/login to obtain one. Admin-only. dev_mode_bypass=true disables this endpoint (503).
-         */
-        post: operations["createUser"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/users/{username}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        /**
-         * Delete a user account
-         * @description Permanently removes the user from config.json. The last-admin guard prevents deleting the final admin account (409). Admin-only. dev_mode_bypass=true disables this endpoint (503).
-         */
-        delete: operations["deleteUser"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/users/{username}/role": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        /**
-         * Change a user's RBAC role
-         * @description Changes the role of the target user. The last-admin guard prevents demoting the final admin (409). Admin-only. dev_mode_bypass=true disables this endpoint (503).
-         */
-        patch: operations["changeUserRole"];
-        trace?: never;
-    };
-    "/users/{username}/password": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        /**
-         * Admin-reset a user's password
-         * @description Resets the target user's password and invalidates their current bearer token. The user must log in again with the new password. This is the admin-reset path — the self-change path is POST /auth/change-password. Admin-only. dev_mode_bypass=true disables this endpoint (503).
-         */
-        put: operations["resetUserPassword"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/agents": {
         parameters: {
             query?: never;
@@ -469,11 +365,7 @@ export interface paths {
         delete: operations["deleteAgent"];
         options?: never;
         head?: never;
-        /**
-         * Update agent ownership (admin only)
-         * @description Updates the owner_username field on a custom agent. Only admins may call this endpoint. System and core agents cannot have an owner assigned (400). Clearing the owner (empty string) requires the X-Confirm-Demote: 1 header.
-         */
-        patch: operations["patchAgentOwnership"];
+        patch?: never;
         trace?: never;
     };
     "/agents/{id}/sessions": {
@@ -540,6 +432,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/agents/executor-defaults": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the real auto-applied CLI flags for each external-CLI runner
+         * @description Static reference data: for each supported subagent_3p external CLI (claude-code, codex, opencode), the ordered list of arguments the driver automatically applies when spawning it (ADR-032), plus a note on how the prompt itself is delivered. Read-only and not agent-scoped — used by the Agent Profile UI so operators see the REAL, currently-in-effect flags instead of static placeholder ghost-text before adding their own executor.cli_args. Sourced directly from pkg/agent/runner/driver_{claude,codex,opencode}.go and kept byte-accurate to that code.
+         */
+        get: operations["listExecutorDefaults"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/security/session-scope": {
         parameters: {
             query?: never;
@@ -554,7 +466,7 @@ export interface paths {
         get: operations["getSessionScope"];
         /**
          * Update the DM session scoping strategy
-         * @description Persists the new dm_scope to config.json. Session routing is cached at boot so all changes require a gateway restart. The response always includes requires_restart=true. Admin-only. Emits a security audit log entry.
+         * @description Persists the new dm_scope to config.json. Session routing is cached at boot so all changes require a gateway restart. The response always includes requires_restart=true. Emits a security audit log entry.
          */
         put: operations["updateSessionScope"];
         post?: never;
@@ -697,8 +609,8 @@ export interface paths {
          */
         get: operations["getGlobalToolPolicies"];
         /**
-         * Update global tool policies (admin only)
-         * @description Persists new global tool policies to config.json under the sandbox key. Changes are audit-logged (SEC-15). Admin-only; non-admin returns 403.
+         * Update global tool policies
+         * @description Persists new global tool policies to config.json under the sandbox key. Changes are audit-logged (SEC-15).
          */
         put: operations["updateGlobalToolPolicies"];
         post?: never;
@@ -765,7 +677,7 @@ export interface paths {
          */
         get: operations["getSkillTrust"];
         /**
-         * Update skill trust level (admin only)
+         * Update skill trust level
          * @description Persists the new skill trust level to config.sandbox.skill_trust. Only the three canonical values are accepted (case-sensitive). Changes are audit-logged.
          */
         put: operations["updateSkillTrust"];
@@ -789,7 +701,7 @@ export interface paths {
          */
         get: operations["getPromptGuard"];
         /**
-         * Update prompt injection guard level (admin only)
+         * Update prompt injection guard level
          * @description Persists the new prompt injection level to config and hot-reloads. Changes take effect immediately — requires_restart is false on successful hot-reload.
          */
         put: operations["updatePromptGuard"];
@@ -813,7 +725,7 @@ export interface paths {
          */
         get: operations["getRateLimits"];
         /**
-         * Update rate limit configuration (admin only)
+         * Update rate limit configuration
          * @description Partial update — any subset of the three cap fields. Strict type validation rejects JSON strings in numeric fields, floats in integer fields, negative values, NaN/Inf, and overflow. Changes are hot-reloaded (requires_restart: false).
          */
         put: operations["updateRateLimits"];
@@ -837,8 +749,8 @@ export interface paths {
          */
         get: operations["getSandboxConfig"];
         /**
-         * Update sandbox configuration (admin only)
-         * @description Partial update — any subset of mode, allow_network_outbound, allowed_paths, ssrf_enabled, ssrf_allow_internal, ssrf.allow_internal, default_profile, shell_deny_patterns. At least one field required. mode, allowed_paths, and default_profile are restart-gated (requires_restart=true). SSRF and shell_deny_patterns are hot-reloaded. Admin-only; non-admin returns 403. Protected by RequireNotBypass middleware (returns 503 when dev_mode_bypass is active).
+         * Update sandbox configuration
+         * @description Partial update — any subset of mode, allow_network_outbound, allowed_paths, ssrf_enabled, ssrf_allow_internal, ssrf.allow_internal, default_profile, shell_deny_patterns. At least one field required. mode, allowed_paths, and default_profile are restart-gated (requires_restart=true). SSRF and shell_deny_patterns are hot-reloaded. Protected by RequireNotBypass middleware (returns 503 when dev_mode_bypass is active).
          */
         put: operations["updateSandboxConfig"];
         post?: never;
@@ -901,7 +813,7 @@ export interface paths {
          */
         get: operations["getAuditLogToggle"];
         /**
-         * Enable or disable audit logging (admin only)
+         * Enable or disable audit logging
          * @description Persists sandbox.audit_log to config.json. Requires restart — the response includes applied_enabled which reflects the value before this save (currently running state). Changes are audit-logged before disabling.
          */
         put: operations["updateAuditLogToggle"];
@@ -925,8 +837,8 @@ export interface paths {
          */
         get: operations["getRetention"];
         /**
-         * Update session retention configuration (admin only)
-         * @description Partial update — any subset of session_days and disabled. session_days must be a non-negative integer (floats and strings rejected). disabled must be a JSON boolean (string "true"/"false" rejected). Empty body is accepted as a no-op. Hot-reloaded (requires_restart: false). Admin-only (non-admin returns 403).
+         * Update session retention configuration
+         * @description Partial update — any subset of session_days and disabled. session_days must be a non-negative integer (floats and strings rejected). disabled must be a JSON boolean (string "true"/"false" rejected). Empty body is accepted as a no-op. Hot-reloaded (requires_restart: false).
          */
         put: operations["updateRetention"];
         post?: never;
@@ -946,8 +858,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Trigger on-demand retention sweep (admin only)
-         * @description Immediately purges session directories older than the configured retention window. Returns 409 if a sweep is already in progress. Returns skipped_reason="disabled" when retention is disabled. Admin-only; emits audit with resource="storage.retention.sweep".
+         * Trigger on-demand retention sweep
+         * @description Immediately purges session directories older than the configured retention window. Returns 409 if a sweep is already in progress. Returns skipped_reason="disabled" when retention is disabled. Emits audit with resource="storage.retention.sweep".
          */
         post: operations["triggerRetentionSweep"];
         delete?: never;
@@ -965,12 +877,12 @@ export interface paths {
         };
         /**
          * Get agent concurrency settings
-         * @description Returns the max-parallel-agents cap and the effective (clamped) value currently in use. Admin-only.
+         * @description Returns the max-parallel-agents cap and the effective (clamped) value currently in use.
          */
         get: operations["getPerformanceSettings"];
         /**
-         * Update agent concurrency settings (admin only)
-         * @description Updates max_parallel_agents. The effective value is clamped to [2, min(NumCPU-2, RAM_GB/1.5)] with a ceiling of 16. Requires a gateway restart to take effect (requires_restart: false — the semaphore is resized in-memory on PUT). Admin-only.
+         * Update agent concurrency settings
+         * @description Updates max_parallel_agents. The effective value is clamped to [2, min(NumCPU-2, RAM_GB/1.5)] with a ceiling of 16. Requires a gateway restart to take effect (requires_restart: false — the semaphore is resized in-memory on PUT).
          */
         put: operations["updatePerformanceSettings"];
         post?: never;
@@ -1214,8 +1126,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Rotate the gateway bearer token (admin only)
-         * @description Generates a new cryptographically random 64-hex-character gateway bearer token, persists it to config.json, triggers a hot reload, and returns the new token. The previous token is immediately invalidated. Admin-only; secured by RequireAdmin + RequireNotBypass chain. Use after security incidents or on a regular rotation schedule.
+         * Rotate the gateway bearer token
+         * @description Generates a new cryptographically random 64-hex-character gateway bearer token, persists it to config.json, triggers a hot reload, and returns the new token. The previous token is immediately invalidated. Use after security incidents or on a regular rotation schedule.
          */
         post: operations["rotateGatewayToken"];
         delete?: never;
@@ -1232,8 +1144,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get pending restart-gated config changes (admin only)
-         * @description Returns an array of config keys whose persisted (disk) value differs from the boot-time applied value. Only RestartGatedKeys are checked; hot-reload keys never appear here. An empty array means no restart is needed. Admin-only; non-admin returns 403.
+         * Get pending restart-gated config changes
+         * @description Returns an array of config keys whose persisted (disk) value differs from the boot-time applied value. Only RestartGatedKeys are checked; hot-reload keys never appear here. An empty array means no restart is needed.
          */
         get: operations["getPendingRestart"];
         put?: never;
@@ -1254,8 +1166,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Gracefully restart the gateway process (admin only)
-         * @description Triggers a graceful self-restart: the gateway replies immediately, then drains in-flight work and re-execs the process (or exits cleanly for a supervisor). Used to apply restart-gated settings from the UI without a manual process bounce. The response gives the SPA a status + drain estimate so it can poll /health (and reconnect the WS) to detect the gateway going down and coming back up. High blast radius — admin-only, secured by RequireAdmin + RequireNotBypass; dev_mode_bypass returns 503.
+         * Gracefully restart the gateway process
+         * @description Triggers a graceful self-restart: the gateway replies immediately, then drains in-flight work and re-execs the process (or exits cleanly for a supervisor). Used to apply restart-gated settings from the UI without a manual process bounce. The response gives the SPA a status + drain estimate so it can poll /health (and reconnect the WS) to detect the gateway going down and coming back up. High blast radius, secured by RequireNotBypass; dev_mode_bypass returns 503.
          */
         post: operations["restartGateway"];
         delete?: never;
@@ -1273,13 +1185,13 @@ export interface paths {
         };
         /**
          * Get the global god-mode runtime state (O14)
-         * @description Returns whether god mode ("bypass-permissions") is currently enabled and whether it is available in this build/boot. Admin-only.
+         * @description Returns whether god mode ("bypass-permissions") is currently enabled and whether it is available in this build/boot.
          */
         get: operations["getGodMode"];
         put?: never;
         /**
          * Toggle the global god-mode switch (O14, password step-up)
-         * @description Flips the global god-mode ("bypass-permissions") switch and applies or reverts the override live (no restart). When enabled, every agent's tool policy is floored at "allow", the kernel sandbox is off, network egress is open, and the shell guard is off — regardless of per-agent profiles. Audit logging, the prompt-injection guard, and rate limiting stay on. High blast radius — admin-only, secured by RequireNotBypass (dev_mode_bypass returns 503) AND a single-use password re-auth consent token (X-Reauth-Token header; call POST /api/v1/auth/reauth first, 403 otherwise). Returns 403 when enabling while god mode is unavailable (nogodmode build or --allow-god-mode not passed). Every toggle is audit-logged with the acting user.
+         * @description Flips the global god-mode ("bypass-permissions") switch and applies or reverts the override live (no restart). When enabled, every agent's tool policy is floored at "allow", the kernel sandbox is off, network egress is open, and the shell guard is off — regardless of per-agent profiles. Audit logging, the prompt-injection guard, and rate limiting stay on. High blast radius — secured by RequireNotBypass (dev_mode_bypass returns 503) AND a single-use password re-auth consent token (X-Reauth-Token header; call POST /api/v1/auth/reauth first, 403 otherwise). Returns 403 when enabling while god mode is unavailable (nogodmode build or --allow-god-mode not passed). Every toggle is audit-logged with the acting user.
          */
         post: operations["setGodMode"];
         delete?: never;
@@ -1806,26 +1718,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/me": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get current user info
-         * @description Returns the authenticated user's RBAC role. Used for SPA gating.
-         */
-        get: operations["getMe"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/doctor": {
         parameters: {
             query?: never;
@@ -1859,7 +1751,7 @@ export interface paths {
         };
         /**
          * List devices
-         * @description Returns pending pairing requests and already-paired devices. Admin-only.
+         * @description Returns pending pairing requests and already-paired devices.
          */
         get: operations["listDevices"];
         put?: never;
@@ -1879,13 +1771,13 @@ export interface paths {
         };
         /**
          * List tasks
-         * @description Returns tasks in a workspace, filterable by status, agent, milestone, and surface. This is the unified task surface (Sprint 2) — it subsumes the former GTD /board/tasks listing. By default only top-level tasks (parent_task_id absent) and `surface: user` tasks are returned; use the filters to widen. Workspace-scoped. Admin-only.
+         * @description Returns tasks in a workspace, filterable by status, agent, milestone, and surface. This is the unified task surface (Sprint 2) — it subsumes the former GTD /board/tasks listing. By default only top-level tasks (parent_task_id absent) and `surface: user` tasks are returned; use the filters to widen. Workspace-scoped.
          */
         get: operations["listTasks"];
         put?: never;
         /**
          * Create a task
-         * @description Creates a new task. Lands in `inbox` regardless of input (Detail #8 landing rule). Workspace-scoped (workspace_id required in the body). Admin-only.
+         * @description Creates a new task. Lands in `inbox` regardless of input (Detail #8 landing rule). Workspace-scoped (workspace_id required in the body).
          */
         post: operations["createTask"];
         delete?: never;
@@ -1903,21 +1795,21 @@ export interface paths {
         };
         /**
          * Get a task by ID
-         * @description Returns a single task by ID, including read-time rollup. Admin-only.
+         * @description Returns a single task by ID, including read-time rollup.
          */
         get: operations["getTask"];
         put?: never;
         post?: never;
         /**
          * Delete a task
-         * @description Deletes a task by ID. Admin-only.
+         * @description Deletes a task by ID.
          */
         delete: operations["deleteTask"];
         options?: never;
         head?: never;
         /**
          * Update a task
-         * @description Partially updates task fields (PATCH semantics — only provided fields change). Dragging a card to `in_progress` / Run is a status PATCH; there is no separate /start endpoint. Admin-only.
+         * @description Partially updates task fields (PATCH semantics — only provided fields change). Dragging a card to `in_progress` / Run is a status PATCH; there is no separate /start endpoint.
          */
         patch: operations["updateTask"];
         trace?: never;
@@ -1931,7 +1823,7 @@ export interface paths {
         };
         /**
          * List subtasks
-         * @description Returns all subtasks (children with this parent_task_id). Admin-only.
+         * @description Returns all subtasks (children with this parent_task_id).
          */
         get: operations["listSubtasks"];
         put?: never;
@@ -1952,7 +1844,7 @@ export interface paths {
         get?: never;
         /**
          * Replace a task's checklist
-         * @description Replaces the task's `todos` array atomically (Tier-1 checklist; Detail #3 of the three-tier model). Returns the updated task. Admin-only.
+         * @description Replaces the task's `todos` array atomically (Tier-1 checklist; Detail #3 of the three-tier model). Returns the updated task.
          */
         put: operations["setTaskTodos"];
         post?: never;
@@ -1972,7 +1864,7 @@ export interface paths {
         get?: never;
         /**
          * Replace a task's dependencies
-         * @description Replaces the task's `blocked_by` set atomically. A write-time DAG cycle validator rejects self-edges and cycles (max depth 50). Returns the updated task. Admin-only.
+         * @description Replaces the task's `blocked_by` set atomically. A write-time DAG cycle validator rejects self-edges and cycles (max depth 50). Returns the updated task.
          */
         put: operations["setTaskDependencies"];
         post?: never;
@@ -1997,7 +1889,7 @@ export interface paths {
         put?: never;
         /**
          * Add an MCP server
-         * @description Adds a new MCP server to the gateway config. Admin-only.
+         * @description Adds a new MCP server to the gateway config.
          */
         post: operations["addMcpServer"];
         delete?: never;
@@ -2018,14 +1910,14 @@ export interface paths {
         post?: never;
         /**
          * Delete an MCP server
-         * @description Removes an MCP server from the gateway config. Admin-only.
+         * @description Removes an MCP server from the gateway config.
          */
         delete: operations["deleteMcpServer"];
         options?: never;
         head?: never;
         /**
          * Update an MCP server
-         * @description Partially updates an MCP server config (enable/disable toggle, endpoint, env, headers, env_file). Omitted fields are preserved. Admin-only.
+         * @description Partially updates an MCP server config (enable/disable toggle, endpoint, env, headers, env_file). Omitted fields are preserved.
          */
         patch: operations["patchMcpServer"];
         trace?: never;
@@ -2041,7 +1933,7 @@ export interface paths {
         put?: never;
         /**
          * Test MCP server connectivity
-         * @description Attempts an on-demand connection to the configured MCP server and reports whether it succeeded and which tools it exposes. Does not change any state (the probe connection is closed immediately). Admin-only.
+         * @description Attempts an on-demand connection to the configured MCP server and reports whether it succeeded and which tools it exposes. Does not change any state (the probe connection is closed immediately).
          */
         post: operations["testMcpServer"];
         delete?: never;
@@ -2452,7 +2344,7 @@ export interface paths {
         put?: never;
         /**
          * Validate that an external-CLI binary runs at a given path
-         * @description Stateless, create-time validation for an external-executor CLI: confirms the binary at cli_path actually runs and reports a version, before the operator saves the subagent_3p agent. Reuses runner.TestConnectionWithPath verbatim (the same handshake as POST /agents/{id}/runner/test) — the only requirement is that the binary runs and returns a valid version-shaped response; no per-CLI identity/name match is performed. Gated withAuth at create-parity (the same authorization as createAgent — not an admin-only route). Rejects a target that is not a regular, executable file before spawning it (classified "missing-binary", no spawn attempt). Applies a dedicated rate limiter and a small per-caller in-flight concurrency cap, and emits one audit event {cli, resolved_path, reason} per call — validation spawns a caller-supplied path, unlike the unaudited cli-detect probe.
+         * @description Stateless, create-time validation for an external-executor CLI: confirms the binary at cli_path actually runs and reports a version, before the operator saves the subagent_3p agent. Reuses runner.TestConnectionWithPath verbatim (the same handshake as POST /agents/{id}/runner/test) — the only requirement is that the binary runs and returns a valid version-shaped response; no per-CLI identity/name match is performed. Gated withAuth at create-parity (the same authorization as createAgent). Rejects a target that is not a regular, executable file before spawning it (classified "missing-binary", no spawn attempt). Applies a dedicated rate limiter and a small per-caller in-flight concurrency cap, and emits one audit event {cli, resolved_path, reason} per call — validation spawns a caller-supplied path, unlike the unaudited cli-detect probe.
          */
         post: operations["postSystemCliValidate"];
         delete?: never;
@@ -2495,15 +2387,9 @@ export interface components {
              */
             password: string;
         };
-        /** @description Returned on successful login, register-admin, or onboarding/complete. Contains the bearer token to use in subsequent Authorization headers, the role of the authenticated user, and the username. */
+        /** @description Returned on successful login or onboarding/complete. Contains the bearer token to use in subsequent Authorization headers and the username. */
         LoginResponse: {
             token: components["schemas"]["BearerToken"];
-            /**
-             * @description RBAC role of the authenticated user.
-             * @example admin
-             * @enum {string}
-             */
-            role: "admin" | "user";
             /**
              * @description The authenticated user's login name.
              * @example admin
@@ -2514,19 +2400,6 @@ export interface components {
              * @example API key stored in plaintext — set OMNIPUS_MASTER_KEY for encrypted storage
              */
             warning?: string;
-        };
-        /** @description Body for POST /auth/register-admin. Creates the first admin user (fails 409 if one already exists). */
-        RegisterAdminRequest: {
-            /**
-             * @description Must start with an alphanumeric character and contain only letters, digits, dots, dashes, and underscores. Length 2-63 characters.
-             * @example admin
-             */
-            username: string;
-            /**
-             * @description Password for the new admin account. Minimum 8 characters, maximum 72 (bcrypt limit).
-             * @example s3cr3tpassword
-             */
-            password: string;
         };
         /** @description Body for POST /auth/change-password. Changes the authenticated user's own password. */
         ChangePasswordRequest: {
@@ -2621,151 +2494,6 @@ export interface components {
              */
             error?: string;
             validation?: components["schemas"]["ProviderValidation"];
-        };
-        /** @description Represents a gateway user account as returned by GET /users and POST /users. Password hashes and token hashes are NEVER included in responses — only the boolean presence flags are exposed. */
-        User: {
-            /**
-             * @description Login name. Immutable after creation.
-             * @example alice
-             */
-            username: string;
-            /**
-             * @description RBAC role. Case-sensitive.
-             * @example admin
-             * @enum {string}
-             */
-            role: "admin" | "user";
-            /**
-             * @description True when the user's password_hash is non-empty (i.e. a password has been set).
-             * @example true
-             */
-            has_password: boolean;
-            /**
-             * @description True when the user's token_hash is non-empty (i.e. a bearer token is currently issued).
-             * @example true
-             */
-            has_active_token: boolean;
-        };
-        /** @description Body for POST /users. Creates a new user account. Admin-only. */
-        UserCreateRequest: {
-            /**
-             * @description Must start with an alphanumeric and contain only letters, digits, dots, dashes, and underscores. Length 2-63 characters.
-             * @example alice
-             */
-            username: string;
-            /**
-             * @description RBAC role. Case-sensitive; exactly "admin" or "user".
-             * @example user
-             * @enum {string}
-             */
-            role: "admin" | "user";
-            /**
-             * @description Initial password. Minimum 8 characters, maximum 72 (bcrypt limit).
-             * @example s3cr3tpassword
-             */
-            password: string;
-        };
-        /** @description Returned with HTTP 201 on successful POST /users. Contains the new user's identity fields. No token is issued — the user must log in explicitly. */
-        UserCreateResponse: {
-            /**
-             * @description The created user's login name.
-             * @example alice
-             */
-            username: string;
-            /**
-             * @description The created user's RBAC role.
-             * @example user
-             * @enum {string}
-             */
-            role: "admin" | "user";
-            /**
-             * @description Present and true when config was saved to disk but the in-memory hot-reload failed. The gateway must be restarted for the user to be able to log in.
-             * @example false
-             */
-            requires_restart?: boolean;
-            /**
-             * @description Human-readable explanation when requires_restart is true.
-             * @example config saved to disk but hot-reload failed; restart the gateway to apply
-             */
-            warning?: string;
-        };
-        /** @description Returned on successful DELETE /users/{username}. */
-        UserDeleteResponse: {
-            /**
-             * @description The deleted user's login name.
-             * @example alice
-             */
-            username: string;
-            /**
-             * @description Always true on success.
-             * @example true
-             */
-            deleted: boolean;
-            /**
-             * @description Present and true when hot-reload failed after the deletion.
-             * @example false
-             */
-            requires_restart?: boolean;
-            /** @description Human-readable explanation when requires_restart is true. */
-            warning?: string;
-        };
-        /** @description Body for PATCH /users/{username}/role. Changes a user's RBAC role. Admin-only. */
-        UserRoleChangeRequest: {
-            /**
-             * @description New role. Case-sensitive; exactly "admin" or "user".
-             * @example user
-             * @enum {string}
-             */
-            role: "admin" | "user";
-        };
-        /** @description Returned on successful PATCH /users/{username}/role. */
-        UserRoleChangeResponse: {
-            /**
-             * @description The affected user's login name.
-             * @example alice
-             */
-            username: string;
-            /**
-             * @description The new role.
-             * @example user
-             * @enum {string}
-             */
-            role: "admin" | "user";
-            /**
-             * @description Present and true when hot-reload failed after the role change.
-             * @example false
-             */
-            requires_restart?: boolean;
-            /** @description Human-readable explanation when requires_restart is true. */
-            warning?: string;
-        };
-        /** @description Body for PUT /users/{username}/password. Admin resets another user's password. This is NOT the self-change-password endpoint — that is POST /auth/change-password. After a successful reset the target user's bearer token is also invalidated, requiring them to log in again with the new password. */
-        UserResetPasswordRequest: {
-            /**
-             * @description New password for the target user. Minimum 8 characters, maximum 72 (bcrypt limit).
-             * @example newpassword123
-             */
-            password: string;
-        };
-        /** @description Returned on successful PUT /users/{username}/password. */
-        UserResetPasswordResponse: {
-            /**
-             * @description The affected user's login name.
-             * @example alice
-             */
-            username: string;
-            /**
-             * @description Always true on success.
-             * @example true
-             */
-            password_reset: boolean;
-            /**
-             * @description Present and true when hot-reload failed after the password reset.
-             * @example false
-             */
-            requires_restart?: boolean;
-            /** @description Human-readable explanation when requires_restart is true. */
-            warning?: string;
         };
         /** @description Session metadata object (maps to session.UnifiedMeta + session.SessionMeta). Returned in list and detail endpoints. The SPA maps this through rawToSession() which reads stats.message_count, stats.tokens_total, and stats.cost. */
         Session: {
@@ -3957,10 +3685,12 @@ export interface components {
              */
             provider?: string;
         };
+        ExternalCliTool: components["schemas"]["ExternalCli"];
         /**
          * @description Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
          *     "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
-         *     "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. The CLI is spawned with `--prompt <soul+instructions>` and `--model <model>`. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like sandbox_profile / shell_policy / tools_cfg / fallback_models / model_params / skills / delegation_policy are hidden for subagent_3p agents and rejected 400 on PUT if set.
+         *     "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude and codex receive the soul+instructions prompt via stdin (a trailing "-" argument tells each to read from stdin); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like sandbox_profile / shell_policy / tools_cfg / fallback_models / model_params / skills / delegation_policy are hidden for subagent_3p agents and rejected 400 on PUT if set.
+         *     "cli" (required for subagent_3p agents when kind="external-cli") is locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
          *     "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
          *     The "kind" field is derived server-side from the agent's type (Main -> native, Subagent -> native, subagent_3p -> external-cli). It is exposed in responses but is NOT a writable field on create/update — clients cannot choose kind directly. Server-side derive at the handler boundary per the agent-form spec.
          *     When the agent has no executor block, the default is "native".
@@ -3972,12 +3702,7 @@ export interface components {
              * @enum {string}
              */
             kind?: "native" | "external-cli" | "remote-a2a";
-            /**
-             * @description The external CLI tool to use when kind="external-cli". Required for subagent_3p agents. Locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
-             * @example claude-code
-             * @enum {string}
-             */
-            cli?: "claude-code" | "codex" | "opencode";
+            cli?: components["schemas"]["ExternalCli"];
             /**
              * @description Filesystem path to the CLI binary. Required for subagent_3p agents. Mutable on PUT (allows upgrading the CLI binary without re-creating the agent). When empty, the OS $PATH is used (fragile when multiple CLI versions are installed — recommend an absolute path).
              * @example /usr/local/bin/claude
@@ -3998,6 +3723,28 @@ export interface components {
              * @example --max-turns 5
              */
             cli_args?: string;
+        };
+        /** @description Static reference data describing the CLI arguments Omnipus's external-CLI driver automatically applies when spawning a subagent_3p worker on this CLI (kind="external-cli"), as returned by GET /api/v1/agents/executor-defaults. This is READ-ONLY, computed reference information — it does not reflect any particular agent's configuration and there is nothing to write back. It exists so the Agent Profile UI can show operators the REAL, auto-applied flags (not merely HTML placeholder ghost-text) before they add their own executor.cli_args. The values are sourced directly from each driver's buildArgs() (pkg/agent/runner/driver_claude.go, driver_codex.go, driver_opencode.go) and must be kept byte-accurate to that code — this is reference documentation for a running system, not a design aspiration. */
+        ExecutorDefaults: {
+            cli: components["schemas"]["ExternalCli"];
+            /**
+             * @description Human-readable, ORDERED list of the CLI arguments the driver appends before any operator-supplied executor.cli_args. Entries that are only applied conditionally (a configured model, max-turns cap, or working directory) say so in parentheses; the bracketed placeholder (e.g. "<configured model>") is not literal argv text. Operator cli_args are appended AFTER this list, and a narrow denylist strips any override that would re-enable a permission/sandbox bypass or corrupt the driver's stream-JSON output parsing (see argsafety.go).
+             * @example [
+             *       "-p",
+             *       "--output-format stream-json",
+             *       "--verbose",
+             *       "--no-chrome",
+             *       "--model <configured model> (only when a model is configured)",
+             *       "--permission-mode acceptEdits",
+             *       "--max-turns <configured max turns> (only when a turn cap is configured)"
+             *     ]
+             */
+            auto_applied_flags: string[];
+            /**
+             * @description Free-text clarification covering how the prompt itself is delivered to this CLI (stdin vs. a positional argument — NEVER a --prompt flag on any of the three supported CLIs) and any other non-obvious behavior not captured by the flag list above.
+             * @example The prompt is delivered via stdin (a trailing "-" argument tells claude to read it from stdin) — never via a --prompt flag or positional argument. --resume/--session-id are never passed; every run starts a fresh claude session.
+             */
+            notes: string;
         };
         /** @description Response body for GET /api/v1/voice/provider. Describes the active voice provider configuration so the SPA can decide which widget variant (dropdown / free-text / disabled) to render in the agent edit slide-over. */
         VoiceProvider: {
@@ -4443,7 +4190,7 @@ export interface components {
              */
             session_id?: string;
             /**
-             * @description Authenticated gateway principal that initiated the turn this entry belongs to (FR-017). For a CLI run authenticated as the `cli` principal this is "cli"; for an admin browser session it is the admin username. This is the WS-authenticated identity (carried on a dedicated field set only by the gateway WS path), not the channel-platform sender — so channel-originated turns and unauthenticated env-token / dev-bypass paths leave it absent. May be absent.
+             * @description Authenticated gateway principal that initiated the turn this entry belongs to (FR-017). For a CLI run authenticated via the dedicated CLI token this is "cli"; for a browser session it is the account's username. This is the WS-authenticated identity (carried on a dedicated field set only by the gateway WS path), not the channel-platform sender — so channel-originated turns and unauthenticated env-token / dev-bypass paths leave it absent. May be absent.
              * @example cli
              */
             user?: string;
@@ -5699,7 +5446,7 @@ export interface components {
         };
         /**
          * ValidateTokenResponse
-         * @description Response from GET /api/v1/auth/validate. Confirms the current bearer token is valid and returns the associated user's role.
+         * @description Response from GET /api/v1/auth/validate. Confirms the current bearer token is valid and returns the authenticated user's username.
          */
         ValidateTokenResponse: {
             /**
@@ -5707,12 +5454,6 @@ export interface components {
              * @example admin
              */
             username: string;
-            /**
-             * @description The RBAC role of the authenticated user.
-             * @example admin
-             * @enum {string}
-             */
-            role: "admin" | "user";
         };
         /**
          * DoctorIssue
@@ -5919,18 +5660,6 @@ export interface components {
              *     ]
              */
             warnings?: string[];
-        };
-        /**
-         * MeInfo
-         * @description Response from GET /api/v1/me. Returns the authenticated user's role, used for RBAC gating in the SPA.
-         */
-        MeInfo: {
-            /**
-             * @description RBAC role of the current authenticated user.
-             * @example admin
-             * @enum {string}
-             */
-            role: "admin" | "user";
         };
         /**
          * AuditLogToggleRequest
@@ -6445,7 +6174,7 @@ export interface components {
         };
         /**
          * OperationResult
-         * @description Generic success/failure envelope for simple admin operations. Used by endpoints that perform an action and return only whether it succeeded.
+         * @description Generic success/failure envelope for simple operations. Used by endpoints that perform an action and return only whether it succeeded.
          */
         OperationResult: {
             /**
@@ -6490,27 +6219,6 @@ export interface components {
         UploadFilesResponse: {
             /** @description Uploaded file metadata entries. */
             files: components["schemas"]["UploadedFile"][];
-        };
-        /**
-         * AgentOwnerUpdateResponse
-         * @description Response from PATCH /api/v1/agents/{id}/ownership. Confirms the ownership change.
-         */
-        AgentOwnerUpdateResponse: {
-            /**
-             * @description True when ownership was successfully updated.
-             * @example true
-             */
-            success: boolean;
-            /**
-             * @description The agent whose ownership was changed.
-             * @example 550e8400-e29b-41d4-a716-446655440000
-             */
-            agent_id: string;
-            /**
-             * @description The username of the new owner.
-             * @example alice
-             */
-            owner_username: string;
         };
         /**
          * ActivityEventsResponse
@@ -7033,17 +6741,6 @@ export interface components {
             filename: string;
         };
         /**
-         * AgentOwnershipUpdateRequest
-         * @description Request body for PATCH /api/v1/agents/{id}/ownership. Updates the owner_username field on a custom agent. Admin-only. System and core agents cannot have an owner assigned. Clearing the owner (empty string) requires the X-Confirm-Demote: 1 header.
-         */
-        AgentOwnershipUpdateRequest: {
-            /**
-             * @description Username of the new owner. Empty string clears ownership (requires X-Confirm-Demote: 1 header to prevent accidents).
-             * @example alice
-             */
-            owner_username?: string;
-        };
-        /**
          * BearerToken
          * @description Canonical opaque bearer token format used by Omnipus. Two forms are accepted: the current id-tagged form "omnipus_" + 8 hex (token id) + "_" + 64 hex (32 random bytes) = 81 characters, and the legacy form "omnipus_" + 64 hex = 72 characters (still honored for tokens minted before the multi-token model). The id segment routes verification to the right hash in the user's token set; only the 64-hex secret is bcrypt-hashed (kept under bcrypt's 72-byte limit). Used in Authorization headers, WS AuthFrame, and rotate-token responses.
          * @example omnipus_0123abcd_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
@@ -7134,12 +6831,7 @@ export interface components {
          * @description Request body for POST /api/v1/system/cli-validate. Stateless, create-time validation of an external-executor CLI: confirms the binary at cli_path actually runs and reports a version, before the operator saves the subagent_3p agent. Reuses runner.TestConnectionWithPath verbatim — the same handshake used by the post-create /agents/{id}/runner/test endpoint.
          */
         CliValidateRequest: {
-            /**
-             * @description The external CLI tool being validated. Matches ExecutorConfig.cli.
-             * @example claude-code
-             * @enum {string}
-             */
-            cli: "claude-code" | "codex" | "opencode";
+            cli: components["schemas"]["ExternalCli"];
             /**
              * @description Filesystem path to the CLI binary to validate — either the detected prefill or an operator-entered override. An empty value is classified "missing-binary" without a spawn attempt; the target MUST be a regular, executable file before it is spawned.
              * @example /usr/local/bin/claude
@@ -7361,7 +7053,7 @@ export interface components {
         };
         /**
          * ScheduleCreate
-         * @description Request body to create a schedule (#264). The owner must be an agent the caller is permitted to use (AuthorizeAgentAccess). Omitted optional fields take their documented defaults.
+         * @description Request body to create a schedule (#264). owner_agent_id must reference an existing, non-worker-restricted agent (single-user model — no per-caller ownership check). Omitted optional fields take their documented defaults.
          */
         ScheduleCreate: {
             name: string;
@@ -7928,6 +7620,13 @@ export interface components {
                 max_tokens?: number;
             };
         };
+        /**
+         * ExternalCliTool
+         * @description The three external CLI executors Omnipus can drive for a subagent_3p worker (kind="external-cli"): "claude-code" (pkg/agent/runner/driver_claude.go), "codex" (driver_codex.go), and "opencode" (driver_opencode.go). Shared by ExecutorConfig.cli (the agent's configured executor), ExecutorDefaults.cli (GET /api/v1/agents/executor-defaults' per-CLI reference row), and CliValidateRequest.cli (POST /api/v1/system/cli-validate) so the three stay a single generated type instead of three independently-declared enums that can drift apart (see the earlier oapi-codegen collision this schema resolves: before extraction, the symbol clash across the three inline enums forced generated constant names like "ExecutorConfigCliClaudeCode" instead of a clean shared "ExternalCliToolClaudeCode"). Titled "ExternalCliTool" rather than the shorter "ExternalCli" because ExecutorConfig.kind's "external-cli" enum VALUE (a completely different field, the execution- runtime selector) already generates an unprefixed Go constant literally named `ExternalCli` (of type ExecutorConfigKind) — reusing that identifier here would collide at compile time.
+         * @example claude-code
+         * @enum {string}
+         */
+        ExternalCli: "claude-code" | "codex" | "opencode";
     };
     responses: {
         /** @description Bad request — missing or invalid field. */
@@ -7966,7 +7665,7 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
-        /** @description Conflict — e.g. resource already exists, or last-admin guard triggered. */
+        /** @description Conflict — e.g. resource already exists. */
         "409Conflict": {
             headers: {
                 [name: string]: unknown;
@@ -8015,6 +7714,15 @@ export interface components {
         };
         /** @description Service unavailable — e.g. credential store locked. */
         "503ServiceUnavailable": {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description dev_mode_bypass is active (RequireNotBypass guard). */
+        "503BypassActive": {
             headers: {
                 [name: string]: unknown;
             };
@@ -8098,34 +7806,6 @@ export interface operations {
             };
             401: components["responses"]["401Unauthorized"];
             429: components["responses"]["429TooManyRequests"];
-        };
-    };
-    registerAdmin: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RegisterAdminRequest"];
-            };
-        };
-        responses: {
-            /** @description Admin user created. Token ready to use. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LoginResponse"];
-                };
-            };
-            400: components["responses"]["400BadRequest"];
-            409: components["responses"]["409Conflict"];
-            429: components["responses"]["429TooManyRequests"];
-            500: components["responses"]["500InternalServerError"];
         };
     };
     changePassword: {
@@ -8559,166 +8239,6 @@ export interface operations {
             500: components["responses"]["500InternalServerError"];
         };
     };
-    listUsers: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Array of user accounts. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["User"][];
-                };
-            };
-            401: components["responses"]["401Unauthorized"];
-            403: components["responses"]["403Forbidden"];
-            500: components["responses"]["500InternalServerError"];
-            503: components["responses"]["503ServiceUnavailable"];
-        };
-    };
-    createUser: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["UserCreateRequest"];
-            };
-        };
-        responses: {
-            /** @description User created successfully. */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UserCreateResponse"];
-                };
-            };
-            400: components["responses"]["400BadRequest"];
-            401: components["responses"]["401Unauthorized"];
-            403: components["responses"]["403Forbidden"];
-            409: components["responses"]["409Conflict"];
-            500: components["responses"]["500InternalServerError"];
-            503: components["responses"]["503ServiceUnavailable"];
-        };
-    };
-    deleteUser: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /**
-                 * @description Username to delete.
-                 * @example alice
-                 */
-                username: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description User deleted. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UserDeleteResponse"];
-                };
-            };
-            400: components["responses"]["400BadRequest"];
-            401: components["responses"]["401Unauthorized"];
-            403: components["responses"]["403Forbidden"];
-            404: components["responses"]["404NotFound"];
-            409: components["responses"]["409Conflict"];
-            500: components["responses"]["500InternalServerError"];
-            503: components["responses"]["503ServiceUnavailable"];
-        };
-    };
-    changeUserRole: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /**
-                 * @description Username whose role will change.
-                 * @example alice
-                 */
-                username: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["UserRoleChangeRequest"];
-            };
-        };
-        responses: {
-            /** @description Role changed. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UserRoleChangeResponse"];
-                };
-            };
-            400: components["responses"]["400BadRequest"];
-            401: components["responses"]["401Unauthorized"];
-            403: components["responses"]["403Forbidden"];
-            404: components["responses"]["404NotFound"];
-            409: components["responses"]["409Conflict"];
-            500: components["responses"]["500InternalServerError"];
-            503: components["responses"]["503ServiceUnavailable"];
-        };
-    };
-    resetUserPassword: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /**
-                 * @description Username whose password will be reset.
-                 * @example alice
-                 */
-                username: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["UserResetPasswordRequest"];
-            };
-        };
-        responses: {
-            /** @description Password reset successfully. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UserResetPasswordResponse"];
-                };
-            };
-            400: components["responses"]["400BadRequest"];
-            401: components["responses"]["401Unauthorized"];
-            403: components["responses"]["403Forbidden"];
-            404: components["responses"]["404NotFound"];
-            500: components["responses"]["500InternalServerError"];
-            503: components["responses"]["503ServiceUnavailable"];
-        };
-    };
     listAgents: {
         parameters: {
             query?: never;
@@ -8862,41 +8382,6 @@ export interface operations {
             500: components["responses"]["500InternalServerError"];
         };
     };
-    patchAgentOwnership: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /**
-                 * @description Agent ID.
-                 * @example 550e8400-e29b-41d4-a716-446655440000
-                 */
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AgentOwnershipUpdateRequest"];
-            };
-        };
-        responses: {
-            /** @description Ownership updated. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AgentOwnerUpdateResponse"];
-                };
-            };
-            400: components["responses"]["400BadRequest"];
-            401: components["responses"]["401Unauthorized"];
-            403: components["responses"]["403Forbidden"];
-            404: components["responses"]["404NotFound"];
-            500: components["responses"]["500InternalServerError"];
-        };
-    };
     listAgentSessions: {
         parameters: {
             query?: never;
@@ -9019,6 +8504,27 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
             500: components["responses"]["500InternalServerError"];
+        };
+    };
+    listExecutorDefaults: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One entry per supported external CLI (claude-code, codex, opencode). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExecutorDefaults"][];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
         };
     };
     getSessionScope: {
@@ -9341,15 +8847,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Admin role required. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
+            503: components["responses"]["503BypassActive"];
         };
     };
     getExecAllowlist: {
@@ -9506,15 +9004,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Admin role required. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
+            503: components["responses"]["503BypassActive"];
         };
     };
     getPromptGuard: {
@@ -9577,15 +9067,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Admin role required. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
+            503: components["responses"]["503BypassActive"];
         };
     };
     getRateLimits: {
@@ -9648,15 +9130,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Admin role required. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
+            503: components["responses"]["503BypassActive"];
         };
     };
     getSandboxConfig: {
@@ -9728,24 +9202,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Admin role required. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description dev_mode_bypass is active (RequireNotBypass guard). */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
+            503: components["responses"]["503BypassActive"];
         };
     };
     getSandboxStatus: {
@@ -9875,15 +9332,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Admin role required. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
+            503: components["responses"]["503BypassActive"];
         };
     };
     getRetention: {
@@ -9946,15 +9395,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Admin role required. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
+            503: components["responses"]["503BypassActive"];
         };
     };
     triggerRetentionSweep: {
@@ -9975,15 +9416,6 @@ export interface operations {
                     "application/json": components["schemas"]["RetentionSweepResult"];
                 };
             };
-            /** @description Admin role required. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
             /** @description Method not allowed. */
             405: {
                 headers: {
@@ -10002,6 +9434,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            503: components["responses"]["503BypassActive"];
         };
     };
     getPerformanceSettings: {
@@ -10022,8 +9455,8 @@ export interface operations {
                     "application/json": components["schemas"]["PerformanceSettings"];
                 };
             };
-            /** @description Admin role required. */
-            403: {
+            /** @description Missing or invalid bearer token. */
+            401: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10031,6 +9464,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            503: components["responses"]["503BypassActive"];
         };
     };
     updatePerformanceSettings: {
@@ -10064,15 +9498,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Admin role required. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
+            503: components["responses"]["503BypassActive"];
         };
     };
     getMemorySettings: {
@@ -10715,7 +10141,6 @@ export interface operations {
                 };
             };
             401: components["responses"]["401Unauthorized"];
-            403: components["responses"]["403Forbidden"];
             /** @description Method not allowed. */
             405: {
                 headers: {
@@ -10746,15 +10171,6 @@ export interface operations {
                     "application/json": components["schemas"]["PendingRestartEntry"][];
                 };
             };
-            /** @description Admin role required. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
             /** @description Method not allowed. */
             405: {
                 headers: {
@@ -10764,6 +10180,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            503: components["responses"]["503BypassActive"];
         };
     };
     restartGateway: {
@@ -10785,7 +10202,6 @@ export interface operations {
                 };
             };
             401: components["responses"]["401Unauthorized"];
-            403: components["responses"]["403Forbidden"];
             /** @description Method not allowed. */
             405: {
                 headers: {
@@ -10826,7 +10242,6 @@ export interface operations {
                 };
             };
             401: components["responses"]["401Unauthorized"];
-            403: components["responses"]["403Forbidden"];
             /** @description Unavailable (dev_mode_bypass active). */
             503: {
                 headers: {
@@ -11930,27 +11345,6 @@ export interface operations {
                 };
             };
             500: components["responses"]["500InternalServerError"];
-        };
-    };
-    getMe: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Current user information. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MeInfo"];
-                };
-            };
-            401: components["responses"]["401Unauthorized"];
         };
     };
     getDoctorResults: {
@@ -13269,20 +12663,11 @@ export interface operations {
 export type ErrorResponse = components["schemas"]["ErrorResponse"];
 export type LoginRequest = components["schemas"]["LoginRequest"];
 export type LoginResponse = components["schemas"]["LoginResponse"];
-export type RegisterAdminRequest = components["schemas"]["RegisterAdminRequest"];
 export type ChangePasswordRequest = components["schemas"]["ChangePasswordRequest"];
 export type OnboardingCompleteRequest = components["schemas"]["OnboardingCompleteRequest"];
 export type OnboardingCompleteResponse = components["schemas"]["OnboardingCompleteResponse"];
 export type ProbeProviderRequest = components["schemas"]["ProbeProviderRequest"];
 export type ProbeProviderResponse = components["schemas"]["ProbeProviderResponse"];
-export type User = components["schemas"]["User"];
-export type UserCreateRequest = components["schemas"]["UserCreateRequest"];
-export type UserCreateResponse = components["schemas"]["UserCreateResponse"];
-export type UserDeleteResponse = components["schemas"]["UserDeleteResponse"];
-export type UserRoleChangeRequest = components["schemas"]["UserRoleChangeRequest"];
-export type UserRoleChangeResponse = components["schemas"]["UserRoleChangeResponse"];
-export type UserResetPasswordRequest = components["schemas"]["UserResetPasswordRequest"];
-export type UserResetPasswordResponse = components["schemas"]["UserResetPasswordResponse"];
 export type Session = components["schemas"]["Session"];
 export type SessionStats = components["schemas"]["SessionStats"];
 export type SessionDetail = components["schemas"]["SessionDetail"];
@@ -13304,7 +12689,9 @@ export type AgentCreateRequestSubagent = components["schemas"]["AgentCreateReque
 export type AgentCreateRequestSubagent3p = components["schemas"]["AgentCreateRequestSubagent3p"];
 export type AgentUpdateRequest = components["schemas"]["AgentUpdateRequest"];
 export type FallbackModel = components["schemas"]["FallbackModel"];
+export type ExternalCliTool = components["schemas"]["ExternalCliTool"];
 export type ExecutorConfig = components["schemas"]["ExecutorConfig"];
+export type ExecutorDefaults = components["schemas"]["ExecutorDefaults"];
 export type VoiceProvider = components["schemas"]["VoiceProvider"];
 export type AgentSession = components["schemas"]["AgentSession"];
 export type SessionScopeRequest = components["schemas"]["SessionScopeRequest"];
@@ -13365,7 +12752,6 @@ export type DevicePaired = components["schemas"]["DevicePaired"];
 export type DevicesResponse = components["schemas"]["DevicesResponse"];
 export type BackupEntry = components["schemas"]["BackupEntry"];
 export type StorageStats = components["schemas"]["StorageStats"];
-export type MeInfo = components["schemas"]["MeInfo"];
 export type AuditLogToggleRequest = components["schemas"]["AuditLogToggleRequest"];
 export type AuditLogUpdateResponse = components["schemas"]["AuditLogUpdateResponse"];
 export type SkillTrustUpdateRequest = components["schemas"]["SkillTrustUpdateRequest"];
@@ -13392,7 +12778,6 @@ export type OnboardingStatusResponse = components["schemas"]["OnboardingStatusRe
 export type OperationResult = components["schemas"]["OperationResult"];
 export type ToolApprovalResponse = components["schemas"]["ToolApprovalResponse"];
 export type UploadFilesResponse = components["schemas"]["UploadFilesResponse"];
-export type AgentOwnerUpdateResponse = components["schemas"]["AgentOwnerUpdateResponse"];
 export type ActivityEventsResponse = components["schemas"]["ActivityEventsResponse"];
 export type RotateTokenResponse = components["schemas"]["RotateTokenResponse"];
 export type VersionResponse = components["schemas"]["VersionResponse"];
@@ -13415,7 +12800,6 @@ export type ToolApprovalActionRequest = components["schemas"]["ToolApprovalActio
 export type CredentialSetRequest = components["schemas"]["CredentialSetRequest"];
 export type CredentialRotateRequest = components["schemas"]["CredentialRotateRequest"];
 export type RestoreBackupRequest = components["schemas"]["RestoreBackupRequest"];
-export type AgentOwnershipUpdateRequest = components["schemas"]["AgentOwnershipUpdateRequest"];
 export type BearerToken = components["schemas"]["BearerToken"];
 export type ChannelConfigureRequest = components["schemas"]["ChannelConfigureRequest"];
 export type CliDetect = components["schemas"]["CliDetect"];

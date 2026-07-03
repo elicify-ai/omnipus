@@ -33,34 +33,47 @@ func configFromContext(ctx context.Context) *config.Config {
 // use ctxkey.ConfigContextKey directly.
 type configContextKey = ctxkey.ConfigContextKey
 
-// RoleContextKey is an alias for ctxkey.RoleContextKey kept for compatibility
-// with existing code in this package that uses the gateway-local type name.
-type RoleContextKey = ctxkey.RoleContextKey
-
 // UserContextKey is an alias for ctxkey.UserContextKey kept for compatibility
 // with existing code in this package that uses the gateway-local type name.
 type UserContextKey = ctxkey.UserContextKey
 
+// CLITokenContextKey is an alias for ctxkey.CLITokenContextKey kept for
+// compatibility with existing code in this package that uses the
+// gateway-local type name.
+type CLITokenContextKey = ctxkey.CLITokenContextKey
+
 // AuthResult holds the outcome of a bearer token check.
 type AuthResult struct {
 	Authenticated bool
-	Role          config.UserRole
 	User          *config.UserConfig
+	// ViaCLIToken is true only when User was authenticated against
+	// Gateway.CLIToken (the synthetic "cli" identity), never when it came
+	// from a real Gateway.Users row. Callers that inject User into the
+	// request context under UserContextKey must also inject this under
+	// CLITokenContextKey so downstream handlers (e.g. HandleLogout) can
+	// tell the two apart — see CLITokenContextKey's doc for why that
+	// distinction matters.
+	ViaCLIToken bool
 }
 
 // checkBearerAuth validates the Authorization header.
-// It first checks config.Users (per-user RBAC), then falls back to the legacy
-// OMNIPUS_BEARER_TOKEN env var (treated as admin role) for backward compatibility.
-// Returns AuthResult so callers can distinguish no-auth from no-role.
+// It loops every account in Gateway.Users (the single-user model normally
+// holds exactly one, but a pre-single-user-model install may still carry
+// leftover extra accounts from before the Users CRUD API was deleted —
+// config.warnAboutExtraUsers flags that at load time as an advisory; every
+// configured account still authenticates here regardless), then the CLI's
+// dedicated Gateway.CLIToken, then falls back to the legacy
+// OMNIPUS_BEARER_TOKEN env var for backward compatibility.
+// Returns AuthResult so callers can distinguish authenticated from anonymous.
 func checkBearerAuth(ctx context.Context, w http.ResponseWriter, r *http.Request, cfg *config.Config) AuthResult {
 	auth := r.Header.Get("Authorization")
 	prefix := "Bearer "
 
 	// dev_mode_bypass short-circuit: when auth isn't configured AND bypass is
-	// enabled, allow the request as admin (even with no Authorization header
-	// at all). This makes the SPA reviewable on a fresh install without
-	// onboarding first. Per-user RBAC and OMNIPUS_BEARER_TOKEN paths below
-	// still run for the non-bypass case.
+	// enabled, allow the request (even with no Authorization header at all).
+	// This makes the SPA reviewable on a fresh install without onboarding
+	// first. The account and OMNIPUS_BEARER_TOKEN paths below still run for
+	// the non-bypass case.
 	if !strings.HasPrefix(auth, prefix) && cfg.Gateway.DevModeBypass {
 		slog.Warn(
 			"AUTH-BYPASS",
@@ -74,7 +87,7 @@ func checkBearerAuth(ctx context.Context, w http.ResponseWriter, r *http.Request
 		warnUnauthOnce.Do(func() {
 			slog.Warn("DEV MODE: API has no authentication. Set gateway.dev_mode_bypass=false for production.")
 		})
-		return AuthResult{Authenticated: true, Role: config.UserRoleAdmin, User: &devBypassUser}
+		return AuthResult{Authenticated: true, User: &devBypassUser}
 	}
 
 	if !strings.HasPrefix(auth, prefix) {
@@ -84,24 +97,44 @@ func checkBearerAuth(ctx context.Context, w http.ResponseWriter, r *http.Request
 	}
 	rawToken := strings.TrimPrefix(auth, prefix)
 
-	// 1. Check per-user list (RBAC — bearer-token SET lookup with bcrypt).
-	// SEC-1 / UAT #399: each user may hold several concurrent tokens; the
-	// presented token's embedded ID indexes directly to the right hash, with a
-	// scan fallback for legacy tokens (see UserConfig.VerifyToken).
-	if len(cfg.Gateway.Users) > 0 {
-		for i := range cfg.Gateway.Users {
-			user := cfg.Gateway.Users[i]
-			if user.VerifyToken(rawToken) == nil {
-				// Token matches this user.
-				return AuthResult{Authenticated: true, Role: user.Role, User: &user}
-			}
+	// 1. The human account(s) in Gateway.Users. Single-user model: normally
+	// holds exactly one entry, but a pre-single-user-model install could
+	// still carry a leftover second (or third...) account from before the
+	// Users CRUD API was deleted (config.warnAboutExtraUsers logs a WARN
+	// for this at load time — deliberately not self-healed/truncated here,
+	// since that would race a legitimate account's own in-flight login).
+	// Looping keeps every configured account able to authenticate rather
+	// than silently and permanently locking out everyone but index 0.
+	// SEC-1 / UAT #399: the presented token's embedded ID indexes directly
+	// to the right hash inside VerifyToken, with a scan fallback for legacy
+	// tokens.
+	for i := range cfg.Gateway.Users {
+		if cfg.Gateway.Users[i].VerifyToken(rawToken) == nil {
+			return AuthResult{Authenticated: true, User: &cfg.Gateway.Users[i]}
 		}
-		// Token not found in user list — reject.
+	}
+
+	// 2. The CLI's dedicated token — decoupled from the human account (see
+	// GatewayConfig.CLIToken doc). Verified via the nil-safe helper that
+	// wraps the same shared VerifyTokenAgainst logic UserConfig.VerifyToken
+	// uses internally, with no legacy hash to check. ViaCLIToken:true tells
+	// callers this identity is NOT backed by a Gateway.Users row (see
+	// CLITokenContextKey's doc).
+	if cfg.Gateway.VerifyCLIToken(rawToken) == nil {
+		return AuthResult{Authenticated: true, User: &config.UserConfig{Username: "cli"}, ViaCLIToken: true}
+	}
+
+	// Auth is configured (a human account and/or a CLI token exist) but the
+	// presented token matched neither — reject without falling through to the
+	// legacy env-token path below. This preserves prior behavior: once any
+	// account-based auth is configured, an unmatched token is rejected
+	// immediately rather than being checked against OMNIPUS_BEARER_TOKEN.
+	if len(cfg.Gateway.Users) > 0 || cfg.Gateway.CLIToken != nil {
 		http.Error(w, "unauthorized: invalid Bearer token", http.StatusUnauthorized)
 		return AuthResult{Authenticated: false}
 	}
 
-	// 2. Fallback: legacy OMNIPUS_BEARER_TOKEN env var (treated as admin role).
+	// 3. Fallback: legacy OMNIPUS_BEARER_TOKEN env var.
 	required := os.Getenv("OMNIPUS_BEARER_TOKEN")
 	if required == "" {
 		if cfg.Gateway.DevModeBypass {
@@ -109,10 +142,10 @@ func checkBearerAuth(ctx context.Context, w http.ResponseWriter, r *http.Request
 			warnUnauthOnce.Do(func() {
 				slog.Warn("DEV MODE: API has no authentication. Set gateway.dev_mode_bypass=false for production.")
 			})
-			// Allow all requests in dev mode, treated as admin. Provide a
-			// synthetic User so handlers that read *UserConfig from context
-			// (e.g. /auth/validate) see an admin identity instead of nil.
-			return AuthResult{Authenticated: true, Role: config.UserRoleAdmin, User: &devBypassUser}
+			// Allow all requests in dev mode. Provide a synthetic User so
+			// handlers that read *UserConfig from context (e.g.
+			// /auth/validate) see an identity instead of nil.
+			return AuthResult{Authenticated: true, User: &devBypassUser}
 		}
 		// No auth configured — deny by default (fail closed).
 		http.Error(w, "unauthorized: no users configured, complete onboarding first", http.StatusUnauthorized)
@@ -124,31 +157,17 @@ func checkBearerAuth(ctx context.Context, w http.ResponseWriter, r *http.Request
 	}
 	// Synthetic User for the env-token path: handlers reading *UserConfig
 	// from context need a non-nil identity even when no per-user entry exists.
-	return AuthResult{Authenticated: true, Role: config.UserRoleAdmin, User: &envTokenUser}
+	return AuthResult{Authenticated: true, User: &envTokenUser}
 }
 
-// devBypassUser is the synthetic admin identity returned when the request
-// passes via gateway.dev_mode_bypass. Handlers that read *UserConfig from
-// context (HandleValidateToken etc.) see "_dev_bypass" rather than nil.
-var devBypassUser = config.UserConfig{Username: "_dev_bypass", Role: config.UserRoleAdmin}
+// devBypassUser is the synthetic identity returned when the request passes
+// via gateway.dev_mode_bypass. Handlers that read *UserConfig from context
+// (HandleValidateToken etc.) see "_dev_bypass" rather than nil.
+var devBypassUser = config.UserConfig{Username: "_dev_bypass"}
 
-// envTokenUser is the synthetic admin identity returned when the request
-// passes via the legacy OMNIPUS_BEARER_TOKEN environment fallback.
-var envTokenUser = config.UserConfig{Username: "_env_token", Role: config.UserRoleAdmin}
-
-// MapUserRoleToPrincipal converts a config.UserRole (human user) to the equivalent
-// RBAC principal role string for agent operations. Fails closed: unknown roles
-// get minimal "user" permissions.
-func MapUserRoleToPrincipal(ur config.UserRole) string {
-	switch ur {
-	case config.UserRoleAdmin:
-		return "admin"
-	case config.UserRoleUser:
-		return "user"
-	default:
-		return "user"
-	}
-}
+// envTokenUser is the synthetic identity returned when the request passes
+// via the legacy OMNIPUS_BEARER_TOKEN environment fallback.
+var envTokenUser = config.UserConfig{Username: "_env_token"}
 
 // configSnapshotMiddleware snapshots the current config into the request context
 // so all handlers in the same request see a consistent config. This prevents a

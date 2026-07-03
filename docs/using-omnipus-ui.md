@@ -231,10 +231,10 @@ The **Settings** page is organized into tabs.
 | **Security** | Protections and safety controls for the app. |
 | **Gateway** | Settings for the server that runs the web app and API. |
 | **Data** | Your data, storage, and exports. |
+| **Devices** | Paired devices that can connect to your gateway. |
+| **Performance** | Resource and concurrency tuning. |
 | **Profile** | Your own account details, plus **"What should the agents know about you?"** (see below). |
 | **About** | Version and app info. |
-
-Two tabs, **Devices** and **Access** (users and roles), only appear if you're an **admin**.
 
 ![The Settings page](marketing/screenshots/10-settings.png)
 *Settings, grouped by what you're trying to change.*

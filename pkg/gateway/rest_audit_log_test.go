@@ -23,7 +23,6 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/gateway/ctxkey"
-	"github.com/dapicom-ai/omnipus/pkg/gateway/middleware"
 	"github.com/dapicom-ai/omnipus/pkg/onboarding"
 	"github.com/dapicom-ai/omnipus/pkg/task"
 )
@@ -68,10 +67,14 @@ func newTestRestAPIWithAuditLog(t *testing.T) (*restAPI, string) {
 	return api, tmpDir
 }
 
-// adminCtx returns a context with admin role and user set — used for PUT tests.
+// adminCtx returns a context with an authenticated user set — used for PUT
+// tests. Under the single-user model there is no separate role to inject;
+// the handlers under test here are gated purely by RequireNotBypass at
+// route-registration time (not exercised by these direct-handler-call
+// tests) and read the actor identity from ctxkey.UserContextKey for audit
+// attribution.
 func adminCtx() context.Context {
-	ctx := context.WithValue(context.Background(), ctxkey.RoleContextKey{}, config.UserRoleAdmin)
-	ctx = context.WithValue(ctx, ctxkey.UserContextKey{}, &config.UserConfig{Username: "admin"})
+	ctx := context.WithValue(context.Background(), ctxkey.UserContextKey{}, &config.UserConfig{Username: "admin"})
 	return ctx
 }
 
@@ -124,23 +127,6 @@ func TestHandleSandboxAuditLog_ResponseShape(t *testing.T) {
 
 	_, hasAE := resp["applied_enabled"]
 	assert.True(t, hasAE, "response must have 'applied_enabled' field")
-}
-
-// TestHandleSandboxAuditLog_NonAdmin403 verifies that a user-role request
-// receives 403 Forbidden. The check is enforced by RequireAdmin middleware,
-// which is part of the production adminWrap chain.
-func TestHandleSandboxAuditLog_NonAdmin403(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-
-	ctx := context.WithValue(context.Background(), ctxkey.RoleContextKey{}, config.UserRoleUser)
-	body := strings.NewReader(`{"enabled":true}`)
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/audit-log", body)
-	r = r.WithContext(ctx)
-	w := httptest.NewRecorder()
-
-	middleware.RequireAdmin(http.HandlerFunc(api.HandleSandboxAuditLog)).ServeHTTP(w, r)
-
-	assert.Equal(t, http.StatusForbidden, w.Code)
 }
 
 // TestHandleSandboxAuditLog_MethodNotAllowed verifies that POST and DELETE

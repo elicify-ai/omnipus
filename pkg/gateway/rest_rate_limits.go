@@ -15,7 +15,6 @@ import (
 
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/audit"
-	"github.com/dapicom-ai/omnipus/pkg/config"
 )
 
 // rest_rate_limits.go — rate-limits endpoint.
@@ -23,8 +22,9 @@ import (
 // GET  /api/v1/security/rate-limits — returns current config + live daily cost.
 // PUT  /api/v1/security/rate-limits — partial update to config.sandbox.rate_limits.
 //
-// PUT is admin-only. Strict type validation rejects JSON strings in numeric
-// fields, floats in integer fields, negative values, NaN/Inf, and overflow.
+// PUT requires authentication only (single-user model). Strict type
+// validation rejects JSON strings in numeric fields, floats in integer
+// fields, negative values, NaN/Inf, and overflow.
 // Changes are hot-reloaded (requires_restart: false) via the 2-second config
 // poll in the agent loop.
 
@@ -63,15 +63,10 @@ func (a *restAPI) getRateLimits(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// putRateLimits is the admin-only body of PUT /api/v1/security/rate-limits.
-// withAuth has already confirmed the bearer token is valid; we additionally
-// require the caller to hold the admin role.
+// putRateLimits is the body of PUT /api/v1/security/rate-limits.
+// withAuth has already confirmed the bearer token is valid — single-user
+// model, no additional role gate.
 func (a *restAPI) putRateLimits(w http.ResponseWriter, r *http.Request) {
-	role, _ := r.Context().Value(RoleContextKey{}).(config.UserRole)
-	if role != config.UserRoleAdmin {
-		jsonErr(w, http.StatusForbidden, "admin role required")
-		return
-	}
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 
 	// decodeAndValidate validates the body against the RateLimitsUpdateRequest

@@ -18,7 +18,6 @@ import { createServer } from 'net';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { fileURLToPath } from 'url';
 
 // Default binary used when OMNIPUS_BINARY is not set.
 export const DEFAULT_OMNIPUS_BINARY = '/tmp/omnipus-ci';
@@ -63,41 +62,6 @@ export interface StartGatewayOptions {
 }
 
 /**
- * Verify the embedded SPA contains user-management strings.
- * Fails with a descriptive error if the sync pipeline was skipped.
- * See CLAUDE.md "SPA Embed Pipeline" for the sync steps.
- */
-export function assertUserManagementEmbedPresent(): void {
-  const spaAssetsDir = path.join(
-    path.dirname(fileURLToPath(import.meta.url)),
-    '../../pkg/gateway/spa/assets',
-  );
-  let jsFiles: string[];
-  try {
-    jsFiles = fs.readdirSync(spaAssetsDir).filter((f) => f.endsWith('.js'));
-  } catch {
-    throw new Error(
-      `BLOCKED: pkg/gateway/spa/assets/ not found.\n` +
-        'Run the SPA sync pipeline:\n' +
-        '  npm run build\n' +
-        '  rm -rf pkg/gateway/spa/assets\n' +
-        '  cp -r dist/spa/* pkg/gateway/spa/\n' +
-        '  CGO_ENABLED=0 go build -o /tmp/omnipus-ci ./cmd/omnipus/',
-    );
-  }
-  // Note: the previous "Add user" presence check (assertUserManagementEmbedPresent
-  // semantics) was removed in the v0.1.0-foundation fix-up — UsersSection.tsx
-  // (859 lines) was deleted by commit d854b02 along with its test, so the
-  // literal "Add user" string is no longer in the SPA bundle. The user-crud
-  // e2e suite is now soft-skipped per https://github.com/elicify-ai/omnipus/issues/424.
-  // The previously-required "Add user" assertion was dead code that aborted
-  // every test calling startGateway() (including hot-reload, which never used
-  // the user-management UI) — see the v0.1.0-foundation post-merge run where
-  // every hot-reload prompt-guard test failed at 0ms with this same error.
-
-}
-
-/**
  * Start a gateway instance on the given port.
  * Returns a GatewayHandle with process info + onboarded admin credentials.
  *
@@ -119,9 +83,6 @@ export async function startGateway(opts: StartGatewayOptions): Promise<GatewayHa
         '  CGO_ENABLED=0 go build -o /tmp/omnipus-ci ./cmd/omnipus/',
     );
   }
-
-  // Verify the user-management SPA is embedded.
-  assertUserManagementEmbedPresent();
 
   // Create a throwaway OMNIPUS_HOME — unique per startGateway() call.
   const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), `omnipus-e2e-${opts.port}-`));

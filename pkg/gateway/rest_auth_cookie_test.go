@@ -6,9 +6,13 @@
 
 package gateway
 
-// Cookie-issuance and disk-state tests for HandleLogin and HandleRegisterAdmin.
-// BDD test IDs: #70a, #70b, #70c
+// Cookie-issuance and disk-state tests for HandleLogin.
+// BDD test IDs: #70b, #70c
 // Traces to: path-sandbox-and-capability-tiers-spec.md / (v4)
+//
+// (#70a, HandleRegisterAdmin cookie issuance, removed — single-user model,
+// the register-admin endpoint was deleted along with the rest of the
+// multi-account machinery.)
 
 import (
 	"encoding/json"
@@ -156,8 +160,8 @@ func TestHandleLogin_BothCookiesEmitted(t *testing.T) {
 		Gateway: config.GatewayConfig{
 			Host: "127.0.0.1", Port: 8080,
 			Users: []config.UserConfig{
-				{Username: "user1", Role: config.UserRoleAdmin},
-				{Username: "user2", Role: config.UserRoleAdmin},
+				{Username: "user1"},
+				{Username: "user2"},
 			},
 		},
 		Agents: config.AgentsConfig{
@@ -202,73 +206,6 @@ func TestHandleLogin_BothCookiesEmitted(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// #70a — HandleRegisterAdmin cookie issuance
-// BDD: Given a valid register-admin request (fresh install),
-// When HandleRegisterAdmin succeeds,
-// Then Set-Cookie includes omnipus-session + CSRF cookie;
-// disk state: SessionTokenHash is set and bcrypt-validates.
-// Traces to: path-sandbox-and-capability-tiers-spec.md
-// ---------------------------------------------------------------------------
-
-func TestHandleRegisterAdmin_IssuesSessionCookie(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	// Write an empty config (no gateway section — fresh install).
-	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "config.json"),
-		[]byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`), 0o600))
-
-	cfg := &config.Config{
-		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
-		},
-	}
-	msgBus := bus.NewMessageBus()
-	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
-	api := &restAPI{
-		agentLoop:     al,
-		homePath:      tmpDir,
-		allowedOrigin: "http://localhost:3000",
-		onboardingMgr: onboarding.NewManager(tmpDir),
-		taskStore:     task.New(tmpDir + "/tasks"),
-	}
-
-	body := `{"username":"admin","password":"AdminPass1"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register-admin", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-
-	api.HandleRegisterAdmin(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code, "register-admin must return 200")
-
-	cookies := parseCookiesFromRecorder(w)
-
-	// omnipus-session must be issued.
-	sessionCookie, ok := cookies[middleware.SessionCookieName]
-	require.True(t, ok, "Set-Cookie must include omnipus-session after register-admin")
-
-	assert.Equal(t, "/", sessionCookie.Path)
-	assert.True(t, sessionCookie.HttpOnly)
-	assert.Equal(t, http.SameSiteStrictMode, sessionCookie.SameSite)
-	assert.Equal(t, middleware.SessionCookieMaxAge, sessionCookie.MaxAge)
-
-	// CSRF cookie must also be present.
-	_, csrfTLS := cookies["__Host-csrf"]
-	_, csrfHTTP := cookies["csrf"]
-	assert.True(t, csrfTLS || csrfHTTP, "CSRF cookie must be present after register-admin")
-
-	// Disk state.
-	users := loadDiskUsers(t, tmpDir)
-	require.Len(t, users, 1, "one admin user must be on disk")
-	sessionHash, _ := users[0]["session_token_hash"].(string)
-	require.NotEmpty(t, sessionHash, "session_token_hash must be non-empty on disk")
-
-	err := bcrypt.CompareHashAndPassword([]byte(sessionHash), []byte(sessionCookie.Value))
-	assert.NoError(t, err, "disk session_token_hash must bcrypt-validate against the cookie value")
-}
-
-// ---------------------------------------------------------------------------
 // #70c — HandleLogout clears both cookies
 // BDD: Given an authenticated user,
 // When HandleLogout is called,
@@ -280,7 +217,7 @@ func TestHandleLogout_ClearsBothCookies(t *testing.T) {
 	api, _ := newTestRestAPIWithUser(t, "logoutcookie", "LogoutPass1")
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
-	req = injectUser(req, "logoutcookie", config.UserRoleAdmin)
+	req = injectUser(req, "logoutcookie")
 	w := httptest.NewRecorder()
 
 	api.HandleLogout(w, req)
@@ -313,7 +250,7 @@ func TestHandleLogout_ClearsSessionTokenHashOnDisk(t *testing.T) {
 	api, tmpDir := newTestRestAPIWithUser(t, "disklogout", "DiskLogoutPass1")
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
-	req = injectUser(req, "disklogout", config.UserRoleAdmin)
+	req = injectUser(req, "disklogout")
 	w := httptest.NewRecorder()
 
 	api.HandleLogout(w, req)

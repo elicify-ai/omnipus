@@ -49,7 +49,7 @@ takes a minute:
 1. **Welcome** — a quick hello. Click to begin.
 2. **Provider + API key** — pick your provider (e.g. OpenRouter), paste your API key,
    and hit **Test connection** to confirm it works.
-3. **Admin account** — choose a username and password (at least 8 characters). This is
+3. **Your account** — choose a username and password (at least 8 characters). This is
    your login.
 4. **Model** — pick which model your agents should use, from the provider you just tested.
 5. **Complete** — done! The wizard logs you straight in.

@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import {
   fetchAgents,
-  isWorker,
+  buildTaskAssigneeItems,
   fetchSubtasks,
   fetchMilestones,
   fetchWorkspaces,
@@ -626,9 +626,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
           triggerClassName="h-8 text-xs"
           items={[
             { value: '__none__', label: 'Unassigned', className: 'text-xs' },
-            ...agents
-              .filter((a) => !isWorker(a))
-              .map((a) => ({ value: a.id, label: a.name, className: 'text-xs' })),
+            ...buildTaskAssigneeItems(agents),
           ]}
         />
       </Field>

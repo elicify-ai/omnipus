@@ -1,7 +1,7 @@
 //go:build !cgo
 
 // /api/v1/schedules + /api/v1/notifications REST tests (#264, FR-015). Exercises
-// create 201 + owner authz 403, unknown 404, invalid trigger 400, run-now, pause
+// create 201, worker-owner 400, unknown 404, invalid trigger 400, run-now, pause
 // toggle, list projection, and notification list/read.
 
 package gateway
@@ -29,8 +29,8 @@ func newSchedulesTestAPI(t *testing.T) (*restAPI, *cron.CronService) {
 	t.Helper()
 	cfg := config.DefaultConfig()
 	cfg.Agents.List = []config.AgentConfig{
-		{ID: "mia", Type: config.AgentTypeCustom, OwnerUsername: "alice"},
-		{ID: "max", Type: config.AgentTypeCustom, OwnerUsername: "bob"},
+		{ID: "mia", Type: config.AgentTypeCustom},
+		{ID: "max", Type: config.AgentTypeCustom},
 	}
 	msgBus := bus.NewMessageBus()
 	loop := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
@@ -47,8 +47,8 @@ func newSchedulesTestAPI(t *testing.T) (*restAPI, *cron.CronService) {
 }
 
 // withUser attaches an authenticated user to the request context.
-func withUser(r *http.Request, username string, role config.UserRole) *http.Request {
-	u := &config.UserConfig{Username: username, Role: role}
+func withUser(r *http.Request, username string) *http.Request {
+	u := &config.UserConfig{Username: username}
 	return r.WithContext(context.WithValue(r.Context(), UserContextKey{}, u))
 }
 
@@ -70,7 +70,7 @@ func TestSchedulesAPI_Create201WithOwner(t *testing.T) {
 	api, cs := newSchedulesTestAPI(t)
 
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/schedules", createScheduleReq(t, "mia"))
-	r = withUser(r, "alice", config.UserRoleUser) // alice owns mia
+	r = withUser(r, "alice") // alice owns mia
 	w := httptest.NewRecorder()
 	api.HandleSchedules(w, r)
 
@@ -90,25 +90,6 @@ func TestSchedulesAPI_Create201WithOwner(t *testing.T) {
 	assert.Equal(t, "alice", job.CreatedBy)
 }
 
-func TestSchedulesAPI_Create403WrongOwner(t *testing.T) {
-	api, _ := newSchedulesTestAPI(t)
-	// alice (a non-admin user) tries to schedule for "max" which bob owns.
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/schedules", createScheduleReq(t, "max"))
-	r = withUser(r, "alice", config.UserRoleUser)
-	w := httptest.NewRecorder()
-	api.HandleSchedules(w, r)
-	assert.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
-}
-
-func TestSchedulesAPI_AdminCanOwnAnyAgent(t *testing.T) {
-	api, _ := newSchedulesTestAPI(t)
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/schedules", createScheduleReq(t, "max"))
-	r = withUser(r, "root", config.UserRoleAdmin)
-	w := httptest.NewRecorder()
-	api.HandleSchedules(w, r)
-	assert.Equal(t, http.StatusCreated, w.Code, w.Body.String())
-}
-
 // TestSchedulesAPI_Create400WorkerOwner verifies the write-time guard that
 // rejects creating a schedule whose owner is a worker. A worker is not a chat
 // target and never runs on a schedule cadence (workers run only via
@@ -120,14 +101,13 @@ func TestSchedulesAPI_Create400WorkerOwner(t *testing.T) {
 	loop := api.agentLoop
 	cf := loop.GetConfig()
 	cf.Agents.List = append(cf.Agents.List, config.AgentConfig{
-		ID:            "worker-test",
-		Name:          "Worker",
-		Type:          config.AgentTypeWorker,
-		OwnerUsername: "alice",
+		ID:   "worker-test",
+		Name: "Worker",
+		Type: config.AgentTypeWorker,
 	})
 
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/schedules", createScheduleReq(t, "worker-test"))
-	r = withUser(r, "alice", config.UserRoleUser)
+	r = withUser(r, "alice")
 	w := httptest.NewRecorder()
 	api.HandleSchedules(w, r)
 
@@ -146,8 +126,6 @@ func TestSchedulesAPI_Create400WorkerOwner(t *testing.T) {
 // TestSchedulesAPI_Update400WorkerOwner verifies the update-time guard that
 // rejects reassigning a schedule's owner to a worker. Same fire-before-persist
 // property as the create guard.
-//
-//nolint:dupl // parallel test scaffolding intentionally mirrors TestSchedulesAPI_Update400WorkerOwner_NonAdminNonOwner (same worker-owner update guard, different authz angle)
 func TestSchedulesAPI_Update400WorkerOwner(t *testing.T) {
 	api, cs := newSchedulesTestAPI(t)
 
@@ -168,10 +146,9 @@ func TestSchedulesAPI_Update400WorkerOwner(t *testing.T) {
 	// Inject a worker so the update-guard predicate fires.
 	cf := api.agentLoop.GetConfig()
 	cf.Agents.List = append(cf.Agents.List, config.AgentConfig{
-		ID:            "worker-test",
-		Name:          "Worker",
-		Type:          config.AgentTypeWorker,
-		OwnerUsername: "alice",
+		ID:   "worker-test",
+		Name: "Worker",
+		Type: config.AgentTypeWorker,
 	})
 
 	updateBody := gen.ScheduleUpdate{OwnerAgentId: ptr("worker-test")}
@@ -179,7 +156,7 @@ func TestSchedulesAPI_Update400WorkerOwner(t *testing.T) {
 
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/schedules/"+job.ID, bytes.NewBuffer(buf))
 	r.Header.Set("Content-Type", "application/json")
-	r = withUser(r, "alice", config.UserRoleUser)
+	r = withUser(r, "alice")
 	w := httptest.NewRecorder()
 	api.HandleSchedules(w, r)
 
@@ -204,7 +181,7 @@ func TestSchedulesAPI_InvalidTrigger400(t *testing.T) {
 	buf, _ := json.Marshal(body)
 
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/schedules", bytes.NewBuffer(buf))
-	r = withUser(r, "alice", config.UserRoleUser)
+	r = withUser(r, "alice")
 	w := httptest.NewRecorder()
 	api.HandleSchedules(w, r)
 	assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
@@ -213,7 +190,7 @@ func TestSchedulesAPI_InvalidTrigger400(t *testing.T) {
 func TestSchedulesAPI_NotFound404(t *testing.T) {
 	api, _ := newSchedulesTestAPI(t)
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/schedules/nope", nil)
-	r = withUser(r, "alice", config.UserRoleUser)
+	r = withUser(r, "alice")
 	w := httptest.NewRecorder()
 	api.HandleSchedules(w, r)
 	assert.Equal(t, http.StatusNotFound, w.Code)
@@ -244,7 +221,7 @@ func TestSchedulesAPI_ListMapsTriggerStateRuns(t *testing.T) {
 	require.NoError(t, cs.UpdateJob(job))
 
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/schedules", nil)
-	r = withUser(r, "alice", config.UserRoleUser)
+	r = withUser(r, "alice")
 	w := httptest.NewRecorder()
 	api.HandleSchedules(w, r)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
@@ -276,7 +253,7 @@ func TestSchedulesAPI_PauseToggles(t *testing.T) {
 	assert.True(t, job.Enabled)
 
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/schedules/"+job.ID+"/pause", nil)
-	r = withUser(r, "alice", config.UserRoleUser)
+	r = withUser(r, "alice")
 	w := httptest.NewRecorder()
 	api.HandleSchedules(w, r)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
@@ -307,7 +284,7 @@ func TestSchedulesAPI_RunNow(t *testing.T) {
 	require.NoError(t, cs.UpdateJob(job))
 
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/schedules/"+job.ID+"/run", nil)
-	r = withUser(r, "alice", config.UserRoleUser)
+	r = withUser(r, "alice")
 	w := httptest.NewRecorder()
 	api.HandleSchedules(w, r)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
@@ -329,14 +306,13 @@ func TestSchedulesAPI_DeleteAndGet(t *testing.T) {
 	rd := withUser(
 		httptest.NewRequest(http.MethodDelete, "/api/v1/schedules/"+job.ID, nil),
 		"alice",
-		config.UserRoleUser,
 	)
 	wd := httptest.NewRecorder()
 	api.HandleSchedules(wd, rd)
 	assert.Equal(t, http.StatusNoContent, wd.Code)
 
 	// GET now 404.
-	rg := withUser(httptest.NewRequest(http.MethodGet, "/api/v1/schedules/"+job.ID, nil), "alice", config.UserRoleUser)
+	rg := withUser(httptest.NewRequest(http.MethodGet, "/api/v1/schedules/"+job.ID, nil), "alice")
 	wg := httptest.NewRecorder()
 	api.HandleSchedules(wg, rg)
 	assert.Equal(t, http.StatusNotFound, wg.Code)
@@ -352,7 +328,7 @@ func TestNotificationsAPI_ListAndRead(t *testing.T) {
 	})
 
 	// List.
-	rl := withUser(httptest.NewRequest(http.MethodGet, "/api/v1/notifications", nil), "alice", config.UserRoleUser)
+	rl := withUser(httptest.NewRequest(http.MethodGet, "/api/v1/notifications", nil), "alice")
 	wl := httptest.NewRecorder()
 	api.HandleNotifications(wl, rl)
 	require.Equal(t, http.StatusOK, wl.Code, wl.Body.String())
@@ -367,7 +343,6 @@ func TestNotificationsAPI_ListAndRead(t *testing.T) {
 	rr := withUser(
 		httptest.NewRequest(http.MethodPost, "/api/v1/notifications/"+id+"/read", nil),
 		"alice",
-		config.UserRoleUser,
 	)
 	wr := httptest.NewRecorder()
 	api.HandleNotifications(wr, rr)
@@ -385,7 +360,6 @@ func TestNotificationsAPI_ReadAll(t *testing.T) {
 	rr := withUser(
 		httptest.NewRequest(http.MethodPost, "/api/v1/notifications/read-all", nil),
 		"alice",
-		config.UserRoleUser,
 	)
 	wr := httptest.NewRecorder()
 	api.HandleNotifications(wr, rr)
@@ -412,94 +386,21 @@ func seedJob(t *testing.T, cs *cron.CronService, ownerAgent, createdBy string) *
 	return job
 }
 
-// TestSchedulesAPI_Authz_PerOperation asserts B3: a non-owner non-admin gets 403
-// on get/update/delete/run/pause for a schedule they do not own; the owner and
-// admins are allowed. "mia" is owned by alice; "bob" is a non-owner non-admin.
-func TestSchedulesAPI_Authz_PerOperation(t *testing.T) {
-	for _, op := range []struct {
-		name   string
-		method string
-		path   string // relative to /api/v1/schedules/{id}
-		body   func(id string) *bytes.Buffer
-	}{
-		{"get", http.MethodGet, "", nil},
-		{"delete", http.MethodDelete, "", nil},
-		{"run", http.MethodPost, "/run", nil},
-		{"pause", http.MethodPost, "/pause", nil},
-		{"update", http.MethodPut, "", func(string) *bytes.Buffer {
-			b, _ := json.Marshal(gen.ScheduleUpdate{})
-			return bytes.NewBuffer(b)
-		}},
-	} {
-		t.Run(op.name, func(t *testing.T) {
-			api, cs := newSchedulesTestAPI(t)
-			job := seedJob(t, cs, "mia", "alice")
-
-			var body *bytes.Buffer = bytes.NewBuffer(nil)
-			if op.body != nil {
-				body = op.body(job.ID)
-			}
-			url := "/api/v1/schedules/" + job.ID + op.path
-
-			// bob (non-owner, non-admin) → 403.
-			r := withUser(httptest.NewRequest(op.method, url, body), "bob", config.UserRoleUser)
-			w := httptest.NewRecorder()
-			api.HandleSchedules(w, r)
-			assert.Equal(
-				t, http.StatusForbidden, w.Code,
-				"%s by non-owner must be 403; body=%s", op.name, w.Body.String(),
-			)
-
-			// alice (owner) → not 403/404.
-			var ab *bytes.Buffer = bytes.NewBuffer(nil)
-			if op.body != nil {
-				ab = op.body(job.ID)
-			}
-			ra := withUser(httptest.NewRequest(op.method, url, ab), "alice", config.UserRoleUser)
-			wa := httptest.NewRecorder()
-			api.HandleSchedules(wa, ra)
-			assert.NotEqual(t, http.StatusForbidden, wa.Code, "%s by owner must not be 403", op.name)
-			assert.NotEqual(t, http.StatusNotFound, wa.Code, "%s by owner must not be 404", op.name)
-		})
-	}
-}
-
-// TestSchedulesAPI_Authz_AdminAllOperations asserts admins pass every gate.
-func TestSchedulesAPI_Authz_AdminAllOperations(t *testing.T) {
+// TestSchedulesAPI_ListReturnsAllSchedules asserts the list endpoint returns
+// every schedule to any authenticated caller — single-user product, no
+// per-job ownership filter.
+func TestSchedulesAPI_ListReturnsAllSchedules(t *testing.T) {
 	api, cs := newSchedulesTestAPI(t)
-	job := seedJob(t, cs, "max", "bob") // owned by bob/max; root is admin
+	_ = seedJob(t, cs, "mia", "alice")
+	_ = seedJob(t, cs, "max", "bob")
 
-	r := withUser(httptest.NewRequest(http.MethodGet, "/api/v1/schedules/"+job.ID, nil), "root", config.UserRoleAdmin)
+	r := withUser(httptest.NewRequest(http.MethodGet, "/api/v1/schedules", nil), "alice")
 	w := httptest.NewRecorder()
 	api.HandleSchedules(w, r)
-	assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
-}
-
-// TestSchedulesAPI_List_FilteredByOwner asserts the list is filtered to
-// schedules a non-admin may access; an admin sees all (B3).
-func TestSchedulesAPI_List_FilteredByOwner(t *testing.T) {
-	api, cs := newSchedulesTestAPI(t)
-	_ = seedJob(t, cs, "mia", "alice") // alice's
-	_ = seedJob(t, cs, "max", "bob")   // bob's
-
-	// alice (non-admin) sees only mia's schedule.
-	ra := withUser(httptest.NewRequest(http.MethodGet, "/api/v1/schedules", nil), "alice", config.UserRoleUser)
-	wa := httptest.NewRecorder()
-	api.HandleSchedules(wa, ra)
-	require.Equal(t, http.StatusOK, wa.Code, wa.Body.String())
-	var aliceList gen.ScheduleList
-	require.NoError(t, json.Unmarshal(wa.Body.Bytes(), &aliceList))
-	require.Len(t, aliceList.Schedules, 1)
-	assert.Equal(t, "mia", aliceList.Schedules[0].OwnerAgentId)
-
-	// admin sees both.
-	rad := withUser(httptest.NewRequest(http.MethodGet, "/api/v1/schedules", nil), "root", config.UserRoleAdmin)
-	wad := httptest.NewRecorder()
-	api.HandleSchedules(wad, rad)
-	require.Equal(t, http.StatusOK, wad.Code)
-	var adminList gen.ScheduleList
-	require.NoError(t, json.Unmarshal(wad.Body.Bytes(), &adminList))
-	assert.Len(t, adminList.Schedules, 2)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var list gen.ScheduleList
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &list))
+	require.Len(t, list.Schedules, 2, "list must return every schedule regardless of who created it")
 }
 
 // TestSchedulesAPI_Create_AtomicOwner asserts the create path persists the owner
@@ -509,7 +410,7 @@ func TestSchedulesAPI_Create_AtomicOwner(t *testing.T) {
 	api, cs := newSchedulesTestAPI(t)
 	r := withUser(
 		httptest.NewRequest(http.MethodPost, "/api/v1/schedules", createScheduleReq(t, "mia")),
-		"alice", config.UserRoleUser,
+		"alice",
 	)
 	w := httptest.NewRecorder()
 	api.HandleSchedules(w, r)
@@ -537,7 +438,7 @@ func TestSchedulesAPI_Update_InvalidSessionMode400(t *testing.T) {
 	body, _ := json.Marshal(gen.ScheduleUpdate{SessionMode: &bad})
 	r := withUser(
 		httptest.NewRequest(http.MethodPut, "/api/v1/schedules/"+job.ID, bytes.NewBuffer(body)),
-		"alice", config.UserRoleUser,
+		"alice",
 	)
 	w := httptest.NewRecorder()
 	api.HandleSchedules(w, r)

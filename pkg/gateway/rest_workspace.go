@@ -9,8 +9,8 @@
 //
 // GET /api/v1/workspace/{agent_id}/{path...}
 //
-// Auth: RequireSessionCookieOrBearer + ownership check (AuthorizeAgentAccess).
-// On ErrAgentOrphan the handler returns 503 per FR-093a.
+// Auth: RequireSessionCookieOrBearer (authentication only — ownership-based
+// authorization was removed with the single-user model; see issue #470).
 //
 // Path guard: validatePathWithAllowPaths via tools.ValidateWorkspacePath.
 // Out-of-workspace → 403. Not-found → 404. Method other than GET → 405.
@@ -30,7 +30,6 @@
 package gateway
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -231,13 +230,12 @@ func (a *restAPI) HandleWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Ownership check — returns ErrAgentOrphan if the agent has no owner.
-	if err := config.AuthorizeAgentAccess(user, agentCfg); err != nil {
-		if errors.Is(err, config.ErrAgentOrphan) {
-			jsonErr(w, http.StatusServiceUnavailable, "agent has no owner; admin must reassign ownership")
-			return
-		}
-		jsonErr(w, http.StatusForbidden, "forbidden")
+	// Ownership machinery removed (single-user model, see issue #470 for this
+	// handler's own unregistered status). This block only exists to keep the
+	// package compiling — if this route is ever wired up for real, its
+	// authorization needs to be reconsidered from scratch at that time.
+	if user == nil {
+		jsonErr(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 

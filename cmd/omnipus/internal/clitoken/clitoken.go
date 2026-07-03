@@ -1,9 +1,12 @@
-// Package clitoken manages the dedicated `cli` principal and its token file.
+// Package clitoken manages the CLI's dedicated bearer-token credential.
 //
-// The `cli` user is a machine-only admin entry in Gateway.Users whose
-// plaintext bearer token lives at $OMNIPUS_HOME/cli.token (mode 0600).
-// The CLI reads the plaintext token from that file and sends it as a WS
-// auth frame; the gateway verifies it via bcrypt just like any other user.
+// The CLI's token lives in config.json's gateway.cli_token field —
+// a dedicated slot decoupled from the (now singular) human account in
+// Gateway.Users, not a role-less entry in that list. Its plaintext form
+// lives at $OMNIPUS_HOME/cli.token (mode 0600). The CLI reads the plaintext
+// token from that file and sends it as a WS auth frame; the gateway
+// verifies it via bcrypt just like the human account's tokens
+// (config.VerifyTokenAgainst).
 //
 // The three lifecycle operations are:
 //   - EnsureCLIToken — create-if-absent (called by start/onboard).
@@ -21,6 +24,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
@@ -37,16 +41,15 @@ func CLITokenPath(home string) string {
 	return filepath.Join(home, "cli.token")
 }
 
-// EnsureCLIToken creates the `cli` principal and its token file if they do
-// not already exist. It is idempotent: when both the file and the `cli`
-// Gateway.Users entry are present it returns (false, nil) without mutating
-// anything.
+// EnsureCLIToken creates the CLI's dedicated token if it does not already
+// exist. It is idempotent: when both the token file and config.json's
+// gateway.cli_token entry are present it returns (false, nil) without
+// mutating anything.
 //
 // On creation it:
 //  1. Generates a fresh bearer token ("omnipus_" + 64 hex chars).
-//  2. Upserts a `cli` user entry (role: "admin", token_hash: bcrypt(token))
-//     into the gateway.users array in config.json via an atomic map-mutate +
-//     WriteFileAtomic (0600).
+//  2. Writes it (as a bcrypt hash) to config.json's gateway.cli_token field
+//     via an atomic map-mutate + WriteFileAtomic (0600).
 //  3. Writes the plaintext token to $home/cli.token (mode 0600).
 //
 // The plaintext token is never written to stdout, stderr, or any log.
@@ -56,11 +59,11 @@ func EnsureCLIToken(home string) (created bool, err error) {
 
 	// Check if both the file and the config entry exist (fully provisioned).
 	if _, statErr := os.Stat(tokenPath); statErr == nil {
-		// File exists — check config has a cli user with a token_hash.
-		if hasCLIUser(configPath) {
+		// File exists — check config has a cli_token entry with a hash.
+		if hasCLIToken(configPath) {
 			return false, nil
 		}
-		// File exists but config missing the cli user — fall through to (re)create.
+		// File exists but config missing the cli_token entry — fall through to (re)create.
 	}
 
 	return true, mintAndPersist(configPath, tokenPath)
@@ -125,7 +128,7 @@ func mintAndPersist(configPath, tokenPath string) error {
 		return fmt.Errorf("hash cli token: %w", err)
 	}
 
-	if err := upsertCLIUser(configPath, string(tokenHash)); err != nil {
+	if err := upsertCLIToken(configPath, string(tokenHash)); err != nil {
 		return fmt.Errorf("update config.json: %w", err)
 	}
 
@@ -135,9 +138,9 @@ func mintAndPersist(configPath, tokenPath string) error {
 	return nil
 }
 
-// hasCLIUser reports whether config.json contains a gateway.users entry with
-// username=="cli" that has a non-empty token_hash.
-func hasCLIUser(configPath string) bool {
+// hasCLIToken reports whether config.json's gateway.cli_token entry has a
+// non-empty hash.
+func hasCLIToken(configPath string) bool {
 	raw, err := os.ReadFile(configPath)
 	if err != nil {
 		return false
@@ -150,24 +153,24 @@ func hasCLIUser(configPath string) bool {
 	if gatewayMap == nil {
 		return false
 	}
-	users, _ := gatewayMap["users"].([]any)
-	for _, u := range users {
-		um, ok := u.(map[string]any)
-		if !ok {
-			continue
-		}
-		if um["username"] == "cli" {
-			th, _ := um["token_hash"].(string)
-			return th != ""
-		}
+	tok, _ := gatewayMap["cli_token"].(map[string]any)
+	if tok == nil {
+		return false
 	}
-	return false
+	hash, _ := tok["hash"].(string)
+	return hash != ""
 }
 
-// upsertCLIUser reads config.json, upserts the `cli` user entry with the
-// given bcrypt tokenHash, and writes it back atomically (mode 0600).
-// It mirrors the map-mutate pattern used in onboard.mutateConfigFile.
-func upsertCLIUser(configPath, tokenHash string) error {
+// upsertCLIToken reads config.json, writes the gateway.cli_token entry with
+// the given bcrypt tokenHash, and writes it back atomically (mode 0600).
+// It mirrors the map-mutate pattern used in onboard.mutateConfigFile. The
+// written shape matches config.TokenEntry's JSON tags (id/hash/created_at)
+// so config.VerifyTokenAgainst can verify it directly once decoded into
+// Gateway.CLIToken. The id is left empty: the CLI token is always a single
+// standalone credential (Gateway.CLIToken is *TokenEntry, not a slice), so
+// there is no SEC-1 multi-token set requiring ID-indexed lookup — the
+// legacy no-ID verification path (whole-token bcrypt scan) applies.
+func upsertCLIToken(configPath, tokenHash string) error {
 	raw, err := os.ReadFile(configPath)
 	if err != nil {
 		return fmt.Errorf("read config.json: %w", err)
@@ -181,37 +184,12 @@ func upsertCLIUser(configPath, tokenHash string) error {
 	if gatewayMap == nil {
 		gatewayMap = map[string]any{}
 	}
-	users, _ := gatewayMap["users"].([]any)
-	if users == nil {
-		users = []any{}
-	}
 
-	updated := false
-	for i, u := range users {
-		um, ok := u.(map[string]any)
-		if !ok {
-			continue
-		}
-		if um["username"] == "cli" {
-			um["token_hash"] = tokenHash
-			um["role"] = "admin"
-			// Clear any legacy tokens set — the single token_hash is the
-			// canonical field for the cli principal.
-			delete(um, "tokens")
-			users[i] = um
-			updated = true
-			break
-		}
+	gatewayMap["cli_token"] = map[string]any{
+		"id":         "",
+		"hash":       tokenHash,
+		"created_at": time.Now().UTC().Format(time.RFC3339),
 	}
-	if !updated {
-		users = append(users, map[string]any{
-			"username":   "cli",
-			"token_hash": tokenHash,
-			"role":       "admin",
-		})
-	}
-
-	gatewayMap["users"] = users
 	m["gateway"] = gatewayMap
 
 	out, err := json.MarshalIndent(m, "", "  ")

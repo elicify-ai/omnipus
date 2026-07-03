@@ -404,9 +404,14 @@ describe('TaskDetailPanel — renders todos checklist', () => {
   })
 })
 
-// ── Worker exclusion tests ────────────────────────────────────────────────────
+// ── Worker inclusion tests ────────────────────────────────────────────────────
+// Bug fix: tasks CAN be assigned to Subagent/subagent_3p worker-type agents
+// (workspace-team membership is what the backend now enforces, not agent kind
+// — see pkg/gateway/rest_tasks.go::validateTaskAgentID). The picker must list
+// workers alongside base agents, distinguished by a " · Worker" suffix
+// (mirrors AddAgentPicker's " · leaf" convention).
 
-async function assertAgentPickerExcludesWorker(): Promise<void> {
+async function assertAgentPickerIncludesWorker(): Promise<void> {
   const agentLabel = await screen.findByText('Agent')
   const fieldRoot = agentLabel.parentElement as HTMLElement
   const agentTrigger = fieldRoot.querySelector('[role="combobox"]') as HTMLElement
@@ -419,27 +424,106 @@ async function assertAgentPickerExcludesWorker(): Promise<void> {
     )
     expect(options.some((t) => t.includes('Mia'))).toBe(true)
     expect(options.some((t) => t.includes('Jim'))).toBe(true)
-    expect(options.some((t) => t.includes('Builder Worker'))).toBe(false)
+    // Worker is offered, and tagged " · Worker" so it stays distinguishable.
+    expect(options.some((t) => t.includes('Builder Worker') && t.includes('Worker'))).toBe(true)
   })
 }
 
 const agentsWithWorker = [
   { id: 'mia', name: 'Mia', type: 'core', default: false },
   { id: 'jim', name: 'Jim', type: 'core', default: false },
-  { id: 'builder', name: 'Builder Worker', type: 'worker', default: false },
+  { id: 'builder', name: 'Builder Worker', type: 'Subagent', default: false },
 ]
 
-describe('TaskDetailPanel — workers excluded from the assignee picker', () => {
+describe('TaskDetailPanel — worker-type agents are offered as assignees', () => {
   beforeEach(() => {
     Element.prototype.scrollIntoView = vi.fn()
   })
 
-  it('does not offer a worker as an assignee; lists base agents', async () => {
+  it('offers a Subagent worker as an assignee, alongside base agents', async () => {
     const { fetchAgents } = await import('@/lib/api')
     vi.mocked(fetchAgents).mockResolvedValue(agentsWithWorker as never)
 
     renderPanel(taskWithPrompt)
-    await assertAgentPickerExcludesWorker()
+    await assertAgentPickerIncludesWorker()
+
+    delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
+  })
+
+  it('selecting a Subagent worker as assignee sends its id via updateTask', async () => {
+    const { fetchAgents, updateTask } = await import('@/lib/api')
+    vi.mocked(fetchAgents).mockResolvedValue(agentsWithWorker as never)
+    vi.mocked(updateTask).mockResolvedValue({} as never)
+
+    renderPanel(taskWithPrompt)
+
+    const agentLabel = await screen.findByText('Agent')
+    const fieldRoot = agentLabel.parentElement as HTMLElement
+    const agentTrigger = fieldRoot.querySelector('[role="combobox"]') as HTMLElement
+    fireEvent.click(agentTrigger)
+
+    const workerOption = await screen.findByRole('option', { name: /Builder Worker/i })
+    fireEvent.pointerDown(workerOption, { pointerId: 1, button: 0 })
+    fireEvent.click(workerOption)
+
+    await waitFor(() => expect(vi.mocked(updateTask)).toHaveBeenCalledWith(
+      taskWithPrompt.id,
+      expect.objectContaining({ agent_id: 'builder' }),
+    ))
+
+    delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
+  })
+
+  it('surfaces a backend rejection (e.g. non-team-member agent) via toast instead of failing silently', async () => {
+    const { fetchAgents, updateTask } = await import('@/lib/api')
+    vi.mocked(fetchAgents).mockResolvedValue(agentsWithWorker as never)
+    vi.mocked(updateTask).mockRejectedValueOnce(
+      new Error('agent "builder" is not a member of workspace "ws-test"'),
+    )
+
+    renderPanel(taskWithPrompt)
+
+    const agentLabel = await screen.findByText('Agent')
+    const fieldRoot = agentLabel.parentElement as HTMLElement
+    const agentTrigger = fieldRoot.querySelector('[role="combobox"]') as HTMLElement
+    fireEvent.click(agentTrigger)
+
+    const workerOption = await screen.findByRole('option', { name: /Builder Worker/i })
+    fireEvent.pointerDown(workerOption, { pointerId: 1, button: 0 })
+    fireEvent.click(workerOption)
+
+    await waitFor(() => expect(mockAddToast).toHaveBeenCalledWith(
+      expect.objectContaining({ variant: 'error' }),
+    ))
+
+    delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
+  })
+
+  it('still excludes subagent_3p (external-CLI) workers — task execution is not wired for them', async () => {
+    // Backend (validateTaskAgentID) unconditionally rejects subagent_3p task
+    // assignment regardless of team membership — offering it in the picker
+    // would be a guaranteed-400 dead end, unlike Subagent (native worker)
+    // which the backend now allows when it's a workspace-team member.
+    const { fetchAgents } = await import('@/lib/api')
+    vi.mocked(fetchAgents).mockResolvedValue([
+      { id: 'mia', name: 'Mia', type: 'core', default: false },
+      { id: 'ext', name: 'External Runner', type: 'subagent_3p', default: false },
+    ] as never)
+
+    renderPanel(taskWithPrompt)
+
+    const agentLabel = await screen.findByText('Agent')
+    const fieldRoot = agentLabel.parentElement as HTMLElement
+    const agentTrigger = fieldRoot.querySelector('[role="combobox"]') as HTMLElement
+    fireEvent.click(agentTrigger)
+
+    await waitFor(() => {
+      const options = Array.from(document.querySelectorAll('[role="option"]')).map(
+        (el) => el.textContent ?? '',
+      )
+      expect(options.some((t) => t.includes('Mia'))).toBe(true)
+      expect(options.some((t) => t.includes('External Runner'))).toBe(false)
+    })
 
     delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
   })

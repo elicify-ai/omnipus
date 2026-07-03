@@ -118,47 +118,6 @@ export const SKIP_ALLOWLIST: { test: string; issue: string; until: string; note?
       'CI runs against the embedded production binary where MODE=production. ' +
       'Run against a Vite dev server to exercise the full assertion.',
   },
-  // user-crud.spec.ts — UsersSection component removed in v0.1.0-foundation (commit d854b02)
-  // 1284 lines of user-management UI + its test were removed by the squash-merge.
-  // The e2e test still exists and references the removed UI. Soft-skip until the
-  // component is either restored or the test is rewritten for the new product shape.
-  // Tracked: https://github.com/dapicom-ai/omnipus/issues/424
-  {
-    test: '(a) SPA embed contains user-management UI',
-    issue: 'https://github.com/elicify-ai/omnipus/issues/424',
-    until: '2026-09-30',
-    note: 'UsersSection component removed by d854b02 (v0.1.0-foundation consolidation). The "Add user" string is no longer in the SPA bundle, so assertUserManagementEmbedPresent() throws. Decision pending: restore component OR rewrite test for the new product shape.',
-  },
-  {
-    test: '(b) admin creates second admin — no token or Copy button appears',
-    issue: 'https://github.com/elicify-ai/omnipus/issues/424',
-    until: '2026-09-30',
-    note: 'Depends on UsersSection (removed).',
-  },
-  {
-    test: '(c) second admin can log in and sees Access tab',
-    issue: 'https://github.com/elicify-ai/omnipus/issues/424',
-    until: '2026-09-30',
-    note: 'Depends on UsersSection (removed).',
-  },
-  {
-    test: '(d) second admin deletes first-admin and deployment remains with >=1 admin',
-    issue: 'https://github.com/elicify-ai/omnipus/issues/424',
-    until: '2026-09-30',
-    note: 'Depends on UsersSection (removed).',
-  },
-  {
-    test: '(e) last-admin guard: delete button disabled when second-admin is the only admin',
-    issue: 'https://github.com/elicify-ai/omnipus/issues/424',
-    until: '2026-09-30',
-    note: 'Depends on UsersSection (removed).',
-  },
-  {
-    test: '(f) backend last-admin guard: DELETE /api/v1/users/{last-admin} returns 409',
-    issue: 'https://github.com/elicify-ai/omnipus/issues/424',
-    until: '2026-09-30',
-    note: 'Depends on UsersSection UI for setup; can be rewritten as a pure-API test once the user-CRUD API endpoint shape is finalised.',
-  },
   // channels-routing.spec.ts — depends on ChannelConfigPanel SmartSelect wired to the
   // 4-base agent roster. The test setup uses agents.find(/mia/) and a mock
   // /api/v1/channels/telegram/routing interceptor; the UI flow likely changed

@@ -166,13 +166,15 @@ func TestUpdateAgent_ShellPolicy_InvalidRegex_Returns400(t *testing.T) {
 		"error message must include the bad pattern")
 }
 
-// TestUpdateAgent_PATCH_SandboxOff_Returns403 verifies that a PATCH request to
-// /api/v1/agents/{id} with sandbox_profile=off returns 403 when --allow-god-mode
-// is not set. PATCH dispatches to patchAgentOwnership which requires admin auth;
-// absent a user in context it returns 403 — matching the PUT god-mode 403 parity.
+// TestUpdateAgent_PATCH_Returns405 verifies that a PATCH request to
+// /api/v1/agents/{id} returns 405 Method Not Allowed. PATCH used to dispatch
+// to patchAgentOwnership (the agent-ownership admin endpoint); that handler
+// and its route registration were deleted with the rest of the multi-account
+// scaffolding (single-user model), so PATCH now falls through HandleAgents'
+// method switch (GET/PUT/DELETE only) to the default 405 case.
 //
 // Traces to: quizzical-marinating-frog.md pr-test-analyzer Test-4.
-func TestUpdateAgent_PATCH_SandboxOff_Returns403(t *testing.T) {
+func TestUpdateAgent_PATCH_Returns405(t *testing.T) {
 	api := buildGodModeTestAPI(t, false /* allowGodMode */)
 
 	body := `{"sandbox_profile":"off"}`
@@ -181,8 +183,8 @@ func TestUpdateAgent_PATCH_SandboxOff_Returns403(t *testing.T) {
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 
-	assert.Equal(t, http.StatusForbidden, w.Code,
-		"PATCH sandbox_profile=off without admin auth must return 403; body: %s", w.Body.String())
+	assert.Equal(t, http.StatusMethodNotAllowed, w.Code,
+		"PATCH /api/v1/agents/{id} must return 405 (no PATCH handler registered anymore); body: %s", w.Body.String())
 }
 
 // TestUpdateAgent_ShellPolicy_ValidRegexes_Returns200 verifies that valid

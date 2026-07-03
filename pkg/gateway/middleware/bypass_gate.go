@@ -7,6 +7,7 @@
 package middleware
 
 import (
+	"encoding/json"
 	"log/slog"
 	"net/http"
 
@@ -14,11 +15,22 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/gateway/ctxkey"
 )
 
-// RequireNotBypass gates admin-only user-management and security-setting
-// endpoints. When gateway.dev_mode_bypass is true every request is auth'd
-// as admin, so these endpoints would otherwise be anonymously reachable —
-// a catastrophic elevation. Returning 503 disables the surface entirely in
-// that mode.
+// writeJSONErr writes {"error": msg} with the given HTTP status. A post-header
+// encode failure is unactionable (the status is already on the wire) and is
+// logged at debug level; the caller still sees the correct status.
+func writeJSONErr(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(map[string]string{"error": msg}); err != nil {
+		slog.Debug("writeJSONErr: encode failed", "error", err)
+	}
+}
+
+// RequireNotBypass gates high-blast-radius config/security-setting
+// endpoints. When gateway.dev_mode_bypass is true every request is treated
+// as authenticated with no further check, so these endpoints would
+// otherwise be anonymously reachable — a catastrophic elevation. Returning
+// 503 disables the surface entirely in that mode.
 //
 // The config is read from the request context (written by
 // configSnapshotMiddleware). If the snapshot is missing we fail closed with
@@ -42,7 +54,7 @@ func RequireNotBypass(next http.HandlerFunc) http.HandlerFunc {
 				"path", r.URL.Path,
 				"remote_addr", r.RemoteAddr,
 				"reason", reasonForBypassBlock(cfgMissing, bypassOn))
-			writeJSONErr(w, http.StatusServiceUnavailable, "user management disabled in dev-mode-bypass")
+			writeJSONErr(w, http.StatusServiceUnavailable, "this action is disabled while dev_mode_bypass is active")
 			return
 		}
 		next(w, r)

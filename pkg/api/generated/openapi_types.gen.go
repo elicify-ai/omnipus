@@ -116,27 +116,6 @@ func (e AgentDelegationPolicyToKind) Valid() bool {
 	}
 }
 
-// Defines values for AgentExecutorCli.
-const (
-	AgentExecutorCliClaudeCode AgentExecutorCli = "claude-code"
-	AgentExecutorCliCodex      AgentExecutorCli = "codex"
-	AgentExecutorCliOpencode   AgentExecutorCli = "opencode"
-)
-
-// Valid indicates whether the value is a known member of the AgentExecutorCli enum.
-func (e AgentExecutorCli) Valid() bool {
-	switch e {
-	case AgentExecutorCliClaudeCode:
-		return true
-	case AgentExecutorCliCodex:
-		return true
-	case AgentExecutorCliOpencode:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for AgentExecutorKind.
 const (
 	AgentExecutorKindExternalCli AgentExecutorKind = "external-cli"
@@ -635,27 +614,6 @@ func (e AgentCreateRequestSubagent3pDelegationPolicyToKind) Valid() bool {
 	}
 }
 
-// Defines values for AgentCreateRequestSubagent3pExecutorCli.
-const (
-	AgentCreateRequestSubagent3pExecutorCliClaudeCode AgentCreateRequestSubagent3pExecutorCli = "claude-code"
-	AgentCreateRequestSubagent3pExecutorCliCodex      AgentCreateRequestSubagent3pExecutorCli = "codex"
-	AgentCreateRequestSubagent3pExecutorCliOpencode   AgentCreateRequestSubagent3pExecutorCli = "opencode"
-)
-
-// Valid indicates whether the value is a known member of the AgentCreateRequestSubagent3pExecutorCli enum.
-func (e AgentCreateRequestSubagent3pExecutorCli) Valid() bool {
-	switch e {
-	case AgentCreateRequestSubagent3pExecutorCliClaudeCode:
-		return true
-	case AgentCreateRequestSubagent3pExecutorCliCodex:
-		return true
-	case AgentCreateRequestSubagent3pExecutorCliOpencode:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for AgentCreateRequestSubagent3pExecutorKind.
 const (
 	AgentCreateRequestSubagent3pExecutorKindExternalCli AgentCreateRequestSubagent3pExecutorKind = "external-cli"
@@ -998,27 +956,6 @@ func (e AgentUpdateRequestDelegationPolicyToKind) Valid() bool {
 	case AgentUpdateRequestDelegationPolicyToKindLocal:
 		return true
 	case AgentUpdateRequestDelegationPolicyToKindRemoteA2a:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for AgentUpdateRequestExecutorCli.
-const (
-	AgentUpdateRequestExecutorCliClaudeCode AgentUpdateRequestExecutorCli = "claude-code"
-	AgentUpdateRequestExecutorCliCodex      AgentUpdateRequestExecutorCli = "codex"
-	AgentUpdateRequestExecutorCliOpencode   AgentUpdateRequestExecutorCli = "opencode"
-)
-
-// Valid indicates whether the value is a known member of the AgentUpdateRequestExecutorCli enum.
-func (e AgentUpdateRequestExecutorCli) Valid() bool {
-	switch e {
-	case AgentUpdateRequestExecutorCliClaudeCode:
-		return true
-	case AgentUpdateRequestExecutorCliCodex:
-		return true
-	case AgentUpdateRequestExecutorCliOpencode:
 		return true
 	default:
 		return false
@@ -1376,27 +1313,6 @@ func (e CliDetectEntrySource) Valid() bool {
 	}
 }
 
-// Defines values for CliValidateRequestCli.
-const (
-	CliValidateRequestCliClaudeCode CliValidateRequestCli = "claude-code"
-	CliValidateRequestCliCodex      CliValidateRequestCli = "codex"
-	CliValidateRequestCliOpencode   CliValidateRequestCli = "opencode"
-)
-
-// Valid indicates whether the value is a known member of the CliValidateRequestCli enum.
-func (e CliValidateRequestCli) Valid() bool {
-	switch e {
-	case CliValidateRequestCliClaudeCode:
-		return true
-	case CliValidateRequestCliCodex:
-		return true
-	case CliValidateRequestCliOpencode:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for CliValidateResponseReason.
 const (
 	CliValidateResponseReasonHandshakeFailed CliValidateResponseReason = "handshake-failed"
@@ -1502,27 +1418,6 @@ func (e DoctorResultIssuesSeverity) Valid() bool {
 	}
 }
 
-// Defines values for ExecutorConfigCli.
-const (
-	ClaudeCode ExecutorConfigCli = "claude-code"
-	Codex      ExecutorConfigCli = "codex"
-	Opencode   ExecutorConfigCli = "opencode"
-)
-
-// Valid indicates whether the value is a known member of the ExecutorConfigCli enum.
-func (e ExecutorConfigCli) Valid() bool {
-	switch e {
-	case ClaudeCode:
-		return true
-	case Codex:
-		return true
-	case Opencode:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for ExecutorConfigKind.
 const (
 	ExternalCli ExecutorConfigKind = "external-cli"
@@ -1538,6 +1433,27 @@ func (e ExecutorConfigKind) Valid() bool {
 	case Native:
 		return true
 	case RemoteA2a:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ExternalCliTool.
+const (
+	ClaudeCode ExternalCliTool = "claude-code"
+	Codex      ExternalCliTool = "codex"
+	Opencode   ExternalCliTool = "opencode"
+)
+
+// Valid indicates whether the value is a known member of the ExternalCliTool enum.
+func (e ExternalCliTool) Valid() bool {
+	switch e {
+	case ClaudeCode:
+		return true
+	case Codex:
+		return true
+	case Opencode:
 		return true
 	default:
 		return false
@@ -1652,24 +1568,6 @@ func (e IntegrationProviderUpdateRequestKind) Valid() bool {
 	}
 }
 
-// Defines values for LoginResponseRole.
-const (
-	LoginResponseRoleAdmin LoginResponseRole = "admin"
-	LoginResponseRoleUser  LoginResponseRole = "user"
-)
-
-// Valid indicates whether the value is a known member of the LoginResponseRole enum.
-func (e LoginResponseRole) Valid() bool {
-	switch e {
-	case LoginResponseRoleAdmin:
-		return true
-	case LoginResponseRoleUser:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for McpServerStatus.
 const (
 	McpServerStatusConnected    McpServerStatus = "connected"
@@ -1727,24 +1625,6 @@ func (e McpServerCreateTransport) Valid() bool {
 	case McpServerCreateTransportSse:
 		return true
 	case McpServerCreateTransportStdio:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for MeInfoRole.
-const (
-	MeInfoRoleAdmin MeInfoRole = "admin"
-	MeInfoRoleUser  MeInfoRole = "user"
-)
-
-// Valid indicates whether the value is a known member of the MeInfoRole enum.
-func (e MeInfoRole) Valid() bool {
-	switch e {
-	case MeInfoRoleAdmin:
-		return true
-	case MeInfoRoleUser:
 		return true
 	default:
 		return false
@@ -1958,24 +1838,6 @@ const (
 func (e NotificationListNotificationsType) Valid() bool {
 	switch e {
 	case NotificationListNotificationsTypeScheduleFailed:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for OnboardingCompleteResponseRole.
-const (
-	OnboardingCompleteResponseRoleAdmin OnboardingCompleteResponseRole = "admin"
-	OnboardingCompleteResponseRoleUser  OnboardingCompleteResponseRole = "user"
-)
-
-// Valid indicates whether the value is a known member of the OnboardingCompleteResponseRole enum.
-func (e OnboardingCompleteResponseRole) Valid() bool {
-	switch e {
-	case OnboardingCompleteResponseRoleAdmin:
-		return true
-	case OnboardingCompleteResponseRoleUser:
 		return true
 	default:
 		return false
@@ -3704,114 +3566,6 @@ func (e ToolRegistryEntrySource) Valid() bool {
 	}
 }
 
-// Defines values for UserRole.
-const (
-	UserRoleAdmin UserRole = "admin"
-	UserRoleUser  UserRole = "user"
-)
-
-// Valid indicates whether the value is a known member of the UserRole enum.
-func (e UserRole) Valid() bool {
-	switch e {
-	case UserRoleAdmin:
-		return true
-	case UserRoleUser:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for UserCreateRequestRole.
-const (
-	UserCreateRequestRoleAdmin UserCreateRequestRole = "admin"
-	UserCreateRequestRoleUser  UserCreateRequestRole = "user"
-)
-
-// Valid indicates whether the value is a known member of the UserCreateRequestRole enum.
-func (e UserCreateRequestRole) Valid() bool {
-	switch e {
-	case UserCreateRequestRoleAdmin:
-		return true
-	case UserCreateRequestRoleUser:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for UserCreateResponseRole.
-const (
-	UserCreateResponseRoleAdmin UserCreateResponseRole = "admin"
-	UserCreateResponseRoleUser  UserCreateResponseRole = "user"
-)
-
-// Valid indicates whether the value is a known member of the UserCreateResponseRole enum.
-func (e UserCreateResponseRole) Valid() bool {
-	switch e {
-	case UserCreateResponseRoleAdmin:
-		return true
-	case UserCreateResponseRoleUser:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for UserRoleChangeRequestRole.
-const (
-	UserRoleChangeRequestRoleAdmin UserRoleChangeRequestRole = "admin"
-	UserRoleChangeRequestRoleUser  UserRoleChangeRequestRole = "user"
-)
-
-// Valid indicates whether the value is a known member of the UserRoleChangeRequestRole enum.
-func (e UserRoleChangeRequestRole) Valid() bool {
-	switch e {
-	case UserRoleChangeRequestRoleAdmin:
-		return true
-	case UserRoleChangeRequestRoleUser:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for UserRoleChangeResponseRole.
-const (
-	UserRoleChangeResponseRoleAdmin UserRoleChangeResponseRole = "admin"
-	UserRoleChangeResponseRoleUser  UserRoleChangeResponseRole = "user"
-)
-
-// Valid indicates whether the value is a known member of the UserRoleChangeResponseRole enum.
-func (e UserRoleChangeResponseRole) Valid() bool {
-	switch e {
-	case UserRoleChangeResponseRoleAdmin:
-		return true
-	case UserRoleChangeResponseRoleUser:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for ValidateTokenResponseRole.
-const (
-	ValidateTokenResponseRoleAdmin ValidateTokenResponseRole = "admin"
-	ValidateTokenResponseRoleUser  ValidateTokenResponseRole = "user"
-)
-
-// Valid indicates whether the value is a known member of the ValidateTokenResponseRole enum.
-func (e ValidateTokenResponseRole) Valid() bool {
-	switch e {
-	case ValidateTokenResponseRoleAdmin:
-		return true
-	case ValidateTokenResponseRoleUser:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for WorkspaceStatus.
 const (
 	WorkspaceStatusActive   WorkspaceStatus = "active"
@@ -4258,13 +4012,14 @@ type Agent struct {
 
 	// Executor Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
 	// "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
-	// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. The CLI is spawned with `--prompt <soul+instructions>` and `--model <model>`. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like sandbox_profile / shell_policy / tools_cfg / fallback_models / model_params / skills / delegation_policy are hidden for subagent_3p agents and rejected 400 on PUT if set.
+	// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude and codex receive the soul+instructions prompt via stdin (a trailing "-" argument tells each to read from stdin); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like sandbox_profile / shell_policy / tools_cfg / fallback_models / model_params / skills / delegation_policy are hidden for subagent_3p agents and rejected 400 on PUT if set.
+	// "cli" (required for subagent_3p agents when kind="external-cli") is locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
 	// "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
 	// The "kind" field is derived server-side from the agent's type (Main -> native, Subagent -> native, subagent_3p -> external-cli). It is exposed in responses but is NOT a writable field on create/update — clients cannot choose kind directly. Server-side derive at the handler boundary per the agent-form spec.
 	// When the agent has no executor block, the default is "native".
 	Executor *struct {
-		// Cli The external CLI tool to use when kind="external-cli". Required for subagent_3p agents. Locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
-		Cli *AgentExecutorCli `json:"cli,omitempty"`
+		// Cli The three external CLI executors Omnipus can drive for a subagent_3p worker (kind="external-cli"): "claude-code" (pkg/agent/runner/driver_claude.go), "codex" (driver_codex.go), and "opencode" (driver_opencode.go). Shared by ExecutorConfig.cli (the agent's configured executor), ExecutorDefaults.cli (GET /api/v1/agents/executor-defaults' per-CLI reference row), and CliValidateRequest.cli (POST /api/v1/system/cli-validate) so the three stay a single generated type instead of three independently-declared enums that can drift apart (see the earlier oapi-codegen collision this schema resolves: before extraction, the symbol clash across the three inline enums forced generated constant names like "ExecutorConfigCliClaudeCode" instead of a clean shared "ExternalCliToolClaudeCode"). Titled "ExternalCliTool" rather than the shorter "ExternalCli" because ExecutorConfig.kind's "external-cli" enum VALUE (a completely different field, the execution- runtime selector) already generates an unprefixed Go constant literally named `ExternalCli` (of type ExecutorConfigKind) — reusing that identifier here would collide at compile time.
+		Cli *ExternalCliTool `json:"cli,omitempty"`
 
 		// CliArgs Free-form additional CLI arguments appended to the spawn invocation. The spawn layer uses execve (no shell interpolation), so values are passed safely; warn (but do not reject) on shell-injection chars in the value.
 		CliArgs *string `json:"cli_args,omitempty"`
@@ -4418,9 +4173,6 @@ type AgentDelegationPolicyModes string
 
 // AgentDelegationPolicyToKind The kind of agent reference. "local" = a locally-registered agent resolved by id. "remote-a2a" = reserved for future A2A protocol external agent resolution; not enforced in v0.1.0.
 type AgentDelegationPolicyToKind string
-
-// AgentExecutorCli The external CLI tool to use when kind="external-cli". Required for subagent_3p agents. Locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
-type AgentExecutorCli string
 
 // AgentExecutorKind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
 type AgentExecutorKind string
@@ -4835,13 +4587,14 @@ type AgentCreateRequestSubagent3p struct {
 
 	// Executor Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
 	// "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
-	// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. The CLI is spawned with `--prompt <soul+instructions>` and `--model <model>`. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like sandbox_profile / shell_policy / tools_cfg / fallback_models / model_params / skills / delegation_policy are hidden for subagent_3p agents and rejected 400 on PUT if set.
+	// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude and codex receive the soul+instructions prompt via stdin (a trailing "-" argument tells each to read from stdin); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like sandbox_profile / shell_policy / tools_cfg / fallback_models / model_params / skills / delegation_policy are hidden for subagent_3p agents and rejected 400 on PUT if set.
+	// "cli" (required for subagent_3p agents when kind="external-cli") is locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
 	// "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
 	// The "kind" field is derived server-side from the agent's type (Main -> native, Subagent -> native, subagent_3p -> external-cli). It is exposed in responses but is NOT a writable field on create/update — clients cannot choose kind directly. Server-side derive at the handler boundary per the agent-form spec.
 	// When the agent has no executor block, the default is "native".
 	Executor struct {
-		// Cli The external CLI tool to use when kind="external-cli". Required for subagent_3p agents. Locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
-		Cli *AgentCreateRequestSubagent3pExecutorCli `json:"cli,omitempty"`
+		// Cli The three external CLI executors Omnipus can drive for a subagent_3p worker (kind="external-cli"): "claude-code" (pkg/agent/runner/driver_claude.go), "codex" (driver_codex.go), and "opencode" (driver_opencode.go). Shared by ExecutorConfig.cli (the agent's configured executor), ExecutorDefaults.cli (GET /api/v1/agents/executor-defaults' per-CLI reference row), and CliValidateRequest.cli (POST /api/v1/system/cli-validate) so the three stay a single generated type instead of three independently-declared enums that can drift apart (see the earlier oapi-codegen collision this schema resolves: before extraction, the symbol clash across the three inline enums forced generated constant names like "ExecutorConfigCliClaudeCode" instead of a clean shared "ExternalCliToolClaudeCode"). Titled "ExternalCliTool" rather than the shorter "ExternalCli" because ExecutorConfig.kind's "external-cli" enum VALUE (a completely different field, the execution- runtime selector) already generates an unprefixed Go constant literally named `ExternalCli` (of type ExecutorConfigKind) — reusing that identifier here would collide at compile time.
+		Cli *ExternalCliTool `json:"cli,omitempty"`
 
 		// CliArgs Free-form additional CLI arguments appended to the spawn invocation. The spawn layer uses execve (no shell interpolation), so values are passed safely; warn (but do not reject) on shell-injection chars in the value.
 		CliArgs *string `json:"cli_args,omitempty"`
@@ -4902,9 +4655,6 @@ type AgentCreateRequestSubagent3pDelegationPolicyModes string
 // AgentCreateRequestSubagent3pDelegationPolicyToKind The kind of agent reference. "local" = a locally-registered agent resolved by id. "remote-a2a" = reserved for future A2A protocol external agent resolution; not enforced in v0.1.0.
 type AgentCreateRequestSubagent3pDelegationPolicyToKind string
 
-// AgentCreateRequestSubagent3pExecutorCli The external CLI tool to use when kind="external-cli". Required for subagent_3p agents. Locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
-type AgentCreateRequestSubagent3pExecutorCli string
-
 // AgentCreateRequestSubagent3pExecutorKind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
 type AgentCreateRequestSubagent3pExecutorKind string
 
@@ -4921,24 +4671,6 @@ type AgentModelParams struct {
 
 	// TopP Nucleus sampling probability mass. 1.0 disables nucleus sampling.
 	TopP *float64 `json:"top_p,omitempty"`
-}
-
-// AgentOwnerUpdateResponse Response from PATCH /api/v1/agents/{id}/ownership. Confirms the ownership change.
-type AgentOwnerUpdateResponse struct {
-	// AgentId The agent whose ownership was changed.
-	AgentId string `json:"agent_id"`
-
-	// OwnerUsername The username of the new owner.
-	OwnerUsername string `json:"owner_username"`
-
-	// Success True when ownership was successfully updated.
-	Success bool `json:"success"`
-}
-
-// AgentOwnershipUpdateRequest Request body for PATCH /api/v1/agents/{id}/ownership. Updates the owner_username field on a custom agent. Admin-only. System and core agents cannot have an owner assigned. Clearing the owner (empty string) requires the X-Confirm-Demote: 1 header.
-type AgentOwnershipUpdateRequest struct {
-	// OwnerUsername Username of the new owner. Empty string clears ownership (requires X-Confirm-Demote: 1 header to prevent accidents).
-	OwnerUsername *string `json:"owner_username,omitempty"`
 }
 
 // AgentRateLimits Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies and per-agent overrides are ignored.
@@ -5231,13 +4963,14 @@ type AgentUpdateRequest struct {
 
 	// Executor Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
 	// "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
-	// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. The CLI is spawned with `--prompt <soul+instructions>` and `--model <model>`. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like sandbox_profile / shell_policy / tools_cfg / fallback_models / model_params / skills / delegation_policy are hidden for subagent_3p agents and rejected 400 on PUT if set.
+	// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude and codex receive the soul+instructions prompt via stdin (a trailing "-" argument tells each to read from stdin); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like sandbox_profile / shell_policy / tools_cfg / fallback_models / model_params / skills / delegation_policy are hidden for subagent_3p agents and rejected 400 on PUT if set.
+	// "cli" (required for subagent_3p agents when kind="external-cli") is locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
 	// "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
 	// The "kind" field is derived server-side from the agent's type (Main -> native, Subagent -> native, subagent_3p -> external-cli). It is exposed in responses but is NOT a writable field on create/update — clients cannot choose kind directly. Server-side derive at the handler boundary per the agent-form spec.
 	// When the agent has no executor block, the default is "native".
 	Executor *struct {
-		// Cli The external CLI tool to use when kind="external-cli". Required for subagent_3p agents. Locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
-		Cli *AgentUpdateRequestExecutorCli `json:"cli,omitempty"`
+		// Cli The three external CLI executors Omnipus can drive for a subagent_3p worker (kind="external-cli"): "claude-code" (pkg/agent/runner/driver_claude.go), "codex" (driver_codex.go), and "opencode" (driver_opencode.go). Shared by ExecutorConfig.cli (the agent's configured executor), ExecutorDefaults.cli (GET /api/v1/agents/executor-defaults' per-CLI reference row), and CliValidateRequest.cli (POST /api/v1/system/cli-validate) so the three stay a single generated type instead of three independently-declared enums that can drift apart (see the earlier oapi-codegen collision this schema resolves: before extraction, the symbol clash across the three inline enums forced generated constant names like "ExecutorConfigCliClaudeCode" instead of a clean shared "ExternalCliToolClaudeCode"). Titled "ExternalCliTool" rather than the shorter "ExternalCli" because ExecutorConfig.kind's "external-cli" enum VALUE (a completely different field, the execution- runtime selector) already generates an unprefixed Go constant literally named `ExternalCli` (of type ExecutorConfigKind) — reusing that identifier here would collide at compile time.
+		Cli *ExternalCliTool `json:"cli,omitempty"`
 
 		// CliArgs Free-form additional CLI arguments appended to the spawn invocation. The spawn layer uses execve (no shell interpolation), so values are passed safely; warn (but do not reject) on shell-injection chars in the value.
 		CliArgs *string `json:"cli_args,omitempty"`
@@ -5369,9 +5102,6 @@ type AgentUpdateRequestDelegationPolicyModes string
 // AgentUpdateRequestDelegationPolicyToKind The kind of agent reference. "local" = a locally-registered agent resolved by id. "remote-a2a" = reserved for future A2A protocol external agent resolution; not enforced in v0.1.0.
 type AgentUpdateRequestDelegationPolicyToKind string
 
-// AgentUpdateRequestExecutorCli The external CLI tool to use when kind="external-cli". Required for subagent_3p agents. Locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
-type AgentUpdateRequestExecutorCli string
-
 // AgentUpdateRequestExecutorKind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
 type AgentUpdateRequestExecutorKind string
 
@@ -5464,7 +5194,7 @@ type AuditEntry struct {
 	// Tool Tool name when the event is a tool call. May be absent.
 	Tool *string `json:"tool,omitempty"`
 
-	// User Authenticated gateway principal that initiated the turn this entry belongs to (FR-017). For a CLI run authenticated as the `cli` principal this is "cli"; for an admin browser session it is the admin username. This is the WS-authenticated identity (carried on a dedicated field set only by the gateway WS path), not the channel-platform sender — so channel-originated turns and unauthenticated env-token / dev-bypass paths leave it absent. May be absent.
+	// User Authenticated gateway principal that initiated the turn this entry belongs to (FR-017). For a CLI run authenticated via the dedicated CLI token this is "cli"; for a browser session it is the account's username. This is the WS-authenticated identity (carried on a dedicated field set only by the gateway WS path), not the channel-platform sender — so channel-originated turns and unauthenticated env-token / dev-bypass paths leave it absent. May be absent.
 	User *string `json:"user,omitempty"`
 }
 
@@ -5511,7 +5241,7 @@ type AuditLogResponse struct {
 		// Tool Tool name when the event is a tool call. May be absent.
 		Tool *string `json:"tool,omitempty"`
 
-		// User Authenticated gateway principal that initiated the turn this entry belongs to (FR-017). For a CLI run authenticated as the `cli` principal this is "cli"; for an admin browser session it is the admin username. This is the WS-authenticated identity (carried on a dedicated field set only by the gateway WS path), not the channel-platform sender — so channel-originated turns and unauthenticated env-token / dev-bypass paths leave it absent. May be absent.
+		// User Authenticated gateway principal that initiated the turn this entry belongs to (FR-017). For a CLI run authenticated via the dedicated CLI token this is "cli"; for a browser session it is the account's username. This is the WS-authenticated identity (carried on a dedicated field set only by the gateway WS path), not the channel-platform sender — so channel-originated turns and unauthenticated env-token / dev-bypass paths leave it absent. May be absent.
 		User *string `json:"user,omitempty"`
 	} `json:"entries"`
 }
@@ -5807,15 +5537,12 @@ type CliDetectEntrySource string
 
 // CliValidateRequest Request body for POST /api/v1/system/cli-validate. Stateless, create-time validation of an external-executor CLI: confirms the binary at cli_path actually runs and reports a version, before the operator saves the subagent_3p agent. Reuses runner.TestConnectionWithPath verbatim — the same handshake used by the post-create /agents/{id}/runner/test endpoint.
 type CliValidateRequest struct {
-	// Cli The external CLI tool being validated. Matches ExecutorConfig.cli.
-	Cli CliValidateRequestCli `json:"cli"`
+	// Cli The three external CLI executors Omnipus can drive for a subagent_3p worker (kind="external-cli"): "claude-code" (pkg/agent/runner/driver_claude.go), "codex" (driver_codex.go), and "opencode" (driver_opencode.go). Shared by ExecutorConfig.cli (the agent's configured executor), ExecutorDefaults.cli (GET /api/v1/agents/executor-defaults' per-CLI reference row), and CliValidateRequest.cli (POST /api/v1/system/cli-validate) so the three stay a single generated type instead of three independently-declared enums that can drift apart (see the earlier oapi-codegen collision this schema resolves: before extraction, the symbol clash across the three inline enums forced generated constant names like "ExecutorConfigCliClaudeCode" instead of a clean shared "ExternalCliToolClaudeCode"). Titled "ExternalCliTool" rather than the shorter "ExternalCli" because ExecutorConfig.kind's "external-cli" enum VALUE (a completely different field, the execution- runtime selector) already generates an unprefixed Go constant literally named `ExternalCli` (of type ExecutorConfigKind) — reusing that identifier here would collide at compile time.
+	Cli ExternalCliTool `json:"cli"`
 
 	// CliPath Filesystem path to the CLI binary to validate — either the detected prefill or an operator-entered override. An empty value is classified "missing-binary" without a spawn attempt; the target MUST be a regular, executable file before it is spawned.
 	CliPath string `json:"cli_path"`
 }
-
-// CliValidateRequestCli The external CLI tool being validated. Matches ExecutorConfig.cli.
-type CliValidateRequestCli string
 
 // CliValidateResponse Result of POST /api/v1/system/cli-validate. Classifies whether the given cli_path is a runnable, version-reporting instance of the selected CLI. The handshake only requires that the binary runs and returns a valid version-shaped response — no per-CLI identity/name match is performed. Blocking is keyed off `reason` alone (never the raw `ok` boolean): the SPA blocks Create/Save on "missing-binary" or "handshake-failed", warns-but-allows on "unauthenticated", and allows on "ok". `detail` is always one of a fixed set of classified messages — never raw stderr from the spawned process.
 type CliValidateResponse struct {
@@ -6047,13 +5774,14 @@ type ExecProxyStatus struct {
 
 // ExecutorConfig Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
 // "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
-// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. The CLI is spawned with `--prompt <soul+instructions>` and `--model <model>`. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like sandbox_profile / shell_policy / tools_cfg / fallback_models / model_params / skills / delegation_policy are hidden for subagent_3p agents and rejected 400 on PUT if set.
+// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude and codex receive the soul+instructions prompt via stdin (a trailing "-" argument tells each to read from stdin); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like sandbox_profile / shell_policy / tools_cfg / fallback_models / model_params / skills / delegation_policy are hidden for subagent_3p agents and rejected 400 on PUT if set.
+// "cli" (required for subagent_3p agents when kind="external-cli") is locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
 // "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
 // The "kind" field is derived server-side from the agent's type (Main -> native, Subagent -> native, subagent_3p -> external-cli). It is exposed in responses but is NOT a writable field on create/update — clients cannot choose kind directly. Server-side derive at the handler boundary per the agent-form spec.
 // When the agent has no executor block, the default is "native".
 type ExecutorConfig struct {
-	// Cli The external CLI tool to use when kind="external-cli". Required for subagent_3p agents. Locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
-	Cli *ExecutorConfigCli `json:"cli,omitempty"`
+	// Cli The three external CLI executors Omnipus can drive for a subagent_3p worker (kind="external-cli"): "claude-code" (pkg/agent/runner/driver_claude.go), "codex" (driver_codex.go), and "opencode" (driver_opencode.go). Shared by ExecutorConfig.cli (the agent's configured executor), ExecutorDefaults.cli (GET /api/v1/agents/executor-defaults' per-CLI reference row), and CliValidateRequest.cli (POST /api/v1/system/cli-validate) so the three stay a single generated type instead of three independently-declared enums that can drift apart (see the earlier oapi-codegen collision this schema resolves: before extraction, the symbol clash across the three inline enums forced generated constant names like "ExecutorConfigCliClaudeCode" instead of a clean shared "ExternalCliToolClaudeCode"). Titled "ExternalCliTool" rather than the shorter "ExternalCli" because ExecutorConfig.kind's "external-cli" enum VALUE (a completely different field, the execution- runtime selector) already generates an unprefixed Go constant literally named `ExternalCli` (of type ExecutorConfigKind) — reusing that identifier here would collide at compile time.
+	Cli *ExternalCliTool `json:"cli,omitempty"`
 
 	// CliArgs Free-form additional CLI arguments appended to the spawn invocation. The spawn layer uses execve (no shell interpolation), so values are passed safely; warn (but do not reject) on shell-injection chars in the value.
 	CliArgs *string `json:"cli_args,omitempty"`
@@ -6068,11 +5796,23 @@ type ExecutorConfig struct {
 	Kind *ExecutorConfigKind `json:"kind,omitempty"`
 }
 
-// ExecutorConfigCli The external CLI tool to use when kind="external-cli". Required for subagent_3p agents. Locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
-type ExecutorConfigCli string
-
 // ExecutorConfigKind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
 type ExecutorConfigKind string
+
+// ExecutorDefaults Static reference data describing the CLI arguments Omnipus's external-CLI driver automatically applies when spawning a subagent_3p worker on this CLI (kind="external-cli"), as returned by GET /api/v1/agents/executor-defaults. This is READ-ONLY, computed reference information — it does not reflect any particular agent's configuration and there is nothing to write back. It exists so the Agent Profile UI can show operators the REAL, auto-applied flags (not merely HTML placeholder ghost-text) before they add their own executor.cli_args. The values are sourced directly from each driver's buildArgs() (pkg/agent/runner/driver_claude.go, driver_codex.go, driver_opencode.go) and must be kept byte-accurate to that code — this is reference documentation for a running system, not a design aspiration.
+type ExecutorDefaults struct {
+	// AutoAppliedFlags Human-readable, ORDERED list of the CLI arguments the driver appends before any operator-supplied executor.cli_args. Entries that are only applied conditionally (a configured model, max-turns cap, or working directory) say so in parentheses; the bracketed placeholder (e.g. "<configured model>") is not literal argv text. Operator cli_args are appended AFTER this list, and a narrow denylist strips any override that would re-enable a permission/sandbox bypass or corrupt the driver's stream-JSON output parsing (see argsafety.go).
+	AutoAppliedFlags []string `json:"auto_applied_flags"`
+
+	// Cli The three external CLI executors Omnipus can drive for a subagent_3p worker (kind="external-cli"): "claude-code" (pkg/agent/runner/driver_claude.go), "codex" (driver_codex.go), and "opencode" (driver_opencode.go). Shared by ExecutorConfig.cli (the agent's configured executor), ExecutorDefaults.cli (GET /api/v1/agents/executor-defaults' per-CLI reference row), and CliValidateRequest.cli (POST /api/v1/system/cli-validate) so the three stay a single generated type instead of three independently-declared enums that can drift apart (see the earlier oapi-codegen collision this schema resolves: before extraction, the symbol clash across the three inline enums forced generated constant names like "ExecutorConfigCliClaudeCode" instead of a clean shared "ExternalCliToolClaudeCode"). Titled "ExternalCliTool" rather than the shorter "ExternalCli" because ExecutorConfig.kind's "external-cli" enum VALUE (a completely different field, the execution- runtime selector) already generates an unprefixed Go constant literally named `ExternalCli` (of type ExecutorConfigKind) — reusing that identifier here would collide at compile time.
+	Cli ExternalCliTool `json:"cli"`
+
+	// Notes Free-text clarification covering how the prompt itself is delivered to this CLI (stdin vs. a positional argument — NEVER a --prompt flag on any of the three supported CLIs) and any other non-obvious behavior not captured by the flag list above.
+	Notes string `json:"notes"`
+}
+
+// ExternalCliTool The three external CLI executors Omnipus can drive for a subagent_3p worker (kind="external-cli"): "claude-code" (pkg/agent/runner/driver_claude.go), "codex" (driver_codex.go), and "opencode" (driver_opencode.go). Shared by ExecutorConfig.cli (the agent's configured executor), ExecutorDefaults.cli (GET /api/v1/agents/executor-defaults' per-CLI reference row), and CliValidateRequest.cli (POST /api/v1/system/cli-validate) so the three stay a single generated type instead of three independently-declared enums that can drift apart (see the earlier oapi-codegen collision this schema resolves: before extraction, the symbol clash across the three inline enums forced generated constant names like "ExecutorConfigCliClaudeCode" instead of a clean shared "ExternalCliToolClaudeCode"). Titled "ExternalCliTool" rather than the shorter "ExternalCli" because ExecutorConfig.kind's "external-cli" enum VALUE (a completely different field, the execution- runtime selector) already generates an unprefixed Go constant literally named `ExternalCli` (of type ExecutorConfigKind) — reusing that identifier here would collide at compile time.
+type ExternalCliTool string
 
 // FallbackModel One entry in an agent's fallback model chain. Carries its own provider so the fallback can route through a different provider than the primary (FR-007 / Phase 1B).
 // Wire format: `{ "model": "<model-slug>", "provider": "<provider-key>" }`.
@@ -6224,11 +5964,8 @@ type LoginRequest struct {
 	Username string `json:"username"`
 }
 
-// LoginResponse Returned on successful login, register-admin, or onboarding/complete. Contains the bearer token to use in subsequent Authorization headers, the role of the authenticated user, and the username.
+// LoginResponse Returned on successful login or onboarding/complete. Contains the bearer token to use in subsequent Authorization headers and the username.
 type LoginResponse struct {
-	// Role RBAC role of the authenticated user.
-	Role LoginResponseRole `json:"role"`
-
 	// Token Canonical opaque bearer token format used by Omnipus. Two forms are accepted: the current id-tagged form "omnipus_" + 8 hex (token id) + "_" + 64 hex (32 random bytes) = 81 characters, and the legacy form "omnipus_" + 64 hex = 72 characters (still honored for tokens minted before the multi-token model). The id segment routes verification to the right hash in the user's token set; only the 64-hex secret is bcrypt-hashed (kept under bcrypt's 72-byte limit). Used in Authorization headers, WS AuthFrame, and rotate-token responses.
 	Token string `json:"token"`
 
@@ -6238,9 +5975,6 @@ type LoginResponse struct {
 	// Warning Non-fatal advisory message. Present on onboarding/complete when the credential store is locked and the API key was stored in plaintext.
 	Warning *string `json:"warning,omitempty"`
 }
-
-// LoginResponseRole RBAC role of the authenticated user.
-type LoginResponseRole string
 
 // Mailbox One (agent, workspace) email mailbox account (M11). Email is a TOOL surface, not a conversational channel: a mailbox belongs to exactly one (agent, workspace) pair — an agent can hold a different mailbox in each workspace it belongs to (different roles, different inboxes), and several agents may each have mailboxes in the same workspace. The mailbox password is stored in the encrypted credential store and is NEVER returned by this endpoint — the `configured` flag reports whether a password is on file.
 type Mailbox struct {
@@ -6494,15 +6228,6 @@ type McpToolsListResponse_Item struct {
 	Name                 string                 `json:"name"`
 	AdditionalProperties map[string]interface{} `json:"-"`
 }
-
-// MeInfo Response from GET /api/v1/me. Returns the authenticated user's role, used for RBAC gating in the SPA.
-type MeInfo struct {
-	// Role RBAC role of the current authenticated user.
-	Role MeInfoRole `json:"role"`
-}
-
-// MeInfoRole RBAC role of the current authenticated user.
-type MeInfoRole string
 
 // MemorySettings Global memory and recap/retention settings. Backed by agents.defaults.* and storage.retention fields in config.json. Readable and writable by any authenticated user (operator decision, A2/G-02). Never exposes secrets — the endpoint reads/writes only the listed fields.
 type MemorySettings struct {
@@ -6826,11 +6551,8 @@ type OnboardingCompleteRequest struct {
 	} `json:"provider"`
 }
 
-// OnboardingCompleteResponse Returned on successful login, register-admin, or onboarding/complete. Contains the bearer token to use in subsequent Authorization headers, the role of the authenticated user, and the username.
+// OnboardingCompleteResponse Returned on successful login or onboarding/complete. Contains the bearer token to use in subsequent Authorization headers and the username.
 type OnboardingCompleteResponse struct {
-	// Role RBAC role of the authenticated user.
-	Role OnboardingCompleteResponseRole `json:"role"`
-
 	// Token Canonical opaque bearer token format used by Omnipus. Two forms are accepted: the current id-tagged form "omnipus_" + 8 hex (token id) + "_" + 64 hex (32 random bytes) = 81 characters, and the legacy form "omnipus_" + 64 hex = 72 characters (still honored for tokens minted before the multi-token model). The id segment routes verification to the right hash in the user's token set; only the 64-hex secret is bcrypt-hashed (kept under bcrypt's 72-byte limit). Used in Authorization headers, WS AuthFrame, and rotate-token responses.
 	Token string `json:"token"`
 
@@ -6841,16 +6563,13 @@ type OnboardingCompleteResponse struct {
 	Warning *string `json:"warning,omitempty"`
 }
 
-// OnboardingCompleteResponseRole RBAC role of the authenticated user.
-type OnboardingCompleteResponseRole string
-
 // OnboardingStatusResponse Response from PATCH /api/v1/state when marking onboarding complete. Confirms that onboarding has been completed.
 type OnboardingStatusResponse struct {
 	// OnboardingComplete True when onboarding has been successfully marked as complete.
 	OnboardingComplete bool `json:"onboarding_complete"`
 }
 
-// OperationResult Generic success/failure envelope for simple admin operations. Used by endpoints that perform an action and return only whether it succeeded.
+// OperationResult Generic success/failure envelope for simple operations. Used by endpoints that perform an action and return only whether it succeeded.
 type OperationResult struct {
 	// Error Human-readable error message. Present only when success=false.
 	Error *string `json:"error,omitempty"`
@@ -7184,15 +6903,6 @@ type ReAuthResponse struct {
 	Verified bool `json:"verified"`
 }
 
-// RegisterAdminRequest Body for POST /auth/register-admin. Creates the first admin user (fails 409 if one already exists).
-type RegisterAdminRequest struct {
-	// Password Password for the new admin account. Minimum 8 characters, maximum 72 (bcrypt limit).
-	Password string `json:"password"`
-
-	// Username Must start with an alphanumeric character and contain only letters, digits, dots, dashes, and underscores. Length 2-63 characters.
-	Username string `json:"username"`
-}
-
 // RestoreBackupRequest Request body for POST /api/v1/restore. Extracts a backup tar.gz archive over ~/.omnipus/, skipping config.json to preserve current settings.
 type RestoreBackupRequest struct {
 	// Filename Name of the backup file (without path). Must not contain path separators or traversal sequences. Must end with .tar.gz.
@@ -7506,7 +7216,7 @@ type ScheduleSessionMode string
 // ScheduleTriggerKind defines model for Schedule.Trigger.Kind.
 type ScheduleTriggerKind string
 
-// ScheduleCreate Request body to create a schedule (#264). The owner must be an agent the caller is permitted to use (AuthorizeAgentAccess). Omitted optional fields take their documented defaults.
+// ScheduleCreate Request body to create a schedule (#264). owner_agent_id must reference an existing, non-worker-restricted agent (single-user model — no per-caller ownership check). Omitted optional fields take their documented defaults.
 type ScheduleCreate struct {
 	Channel *string `json:"channel,omitempty"`
 	ChatId  *string `json:"chat_id,omitempty"`
@@ -8962,24 +8672,6 @@ type UploadedFile struct {
 	Size int64 `json:"size"`
 }
 
-// User Represents a gateway user account as returned by GET /users and POST /users. Password hashes and token hashes are NEVER included in responses — only the boolean presence flags are exposed.
-type User struct {
-	// HasActiveToken True when the user's token_hash is non-empty (i.e. a bearer token is currently issued).
-	HasActiveToken bool `json:"has_active_token"`
-
-	// HasPassword True when the user's password_hash is non-empty (i.e. a password has been set).
-	HasPassword bool `json:"has_password"`
-
-	// Role RBAC role. Case-sensitive.
-	Role UserRole `json:"role"`
-
-	// Username Login name. Immutable after creation.
-	Username string `json:"username"`
-}
-
-// UserRole RBAC role. Case-sensitive.
-type UserRole string
-
 // UserContextRequest Request body for PUT /api/v1/user-context. Replaces the entire content of USER.md in the default workspace. Passing an empty string clears the file.
 type UserContextRequest struct {
 	// Content Full replacement content for USER.md. May be empty to clear the file. Maximum 262144 bytes (256 KB). The underlying filesystem write via fileutil.WriteFileAtomic provides the physical limit; this schema constraint enforces a reasonable upper bound at the API layer.
@@ -8992,113 +8684,11 @@ type UserContextResponse struct {
 	Content string `json:"content"`
 }
 
-// UserCreateRequest Body for POST /users. Creates a new user account. Admin-only.
-type UserCreateRequest struct {
-	// Password Initial password. Minimum 8 characters, maximum 72 (bcrypt limit).
-	Password string `json:"password"`
-
-	// Role RBAC role. Case-sensitive; exactly "admin" or "user".
-	Role UserCreateRequestRole `json:"role"`
-
-	// Username Must start with an alphanumeric and contain only letters, digits, dots, dashes, and underscores. Length 2-63 characters.
-	Username string `json:"username"`
-}
-
-// UserCreateRequestRole RBAC role. Case-sensitive; exactly "admin" or "user".
-type UserCreateRequestRole string
-
-// UserCreateResponse Returned with HTTP 201 on successful POST /users. Contains the new user's identity fields. No token is issued — the user must log in explicitly.
-type UserCreateResponse struct {
-	// RequiresRestart Present and true when config was saved to disk but the in-memory hot-reload failed. The gateway must be restarted for the user to be able to log in.
-	RequiresRestart *bool `json:"requires_restart,omitempty"`
-
-	// Role The created user's RBAC role.
-	Role UserCreateResponseRole `json:"role"`
-
-	// Username The created user's login name.
-	Username string `json:"username"`
-
-	// Warning Human-readable explanation when requires_restart is true.
-	Warning *string `json:"warning,omitempty"`
-}
-
-// UserCreateResponseRole The created user's RBAC role.
-type UserCreateResponseRole string
-
-// UserDeleteResponse Returned on successful DELETE /users/{username}.
-type UserDeleteResponse struct {
-	// Deleted Always true on success.
-	Deleted bool `json:"deleted"`
-
-	// RequiresRestart Present and true when hot-reload failed after the deletion.
-	RequiresRestart *bool `json:"requires_restart,omitempty"`
-
-	// Username The deleted user's login name.
-	Username string `json:"username"`
-
-	// Warning Human-readable explanation when requires_restart is true.
-	Warning *string `json:"warning,omitempty"`
-}
-
-// UserResetPasswordRequest Body for PUT /users/{username}/password. Admin resets another user's password. This is NOT the self-change-password endpoint — that is POST /auth/change-password. After a successful reset the target user's bearer token is also invalidated, requiring them to log in again with the new password.
-type UserResetPasswordRequest struct {
-	// Password New password for the target user. Minimum 8 characters, maximum 72 (bcrypt limit).
-	Password string `json:"password"`
-}
-
-// UserResetPasswordResponse Returned on successful PUT /users/{username}/password.
-type UserResetPasswordResponse struct {
-	// PasswordReset Always true on success.
-	PasswordReset bool `json:"password_reset"`
-
-	// RequiresRestart Present and true when hot-reload failed after the password reset.
-	RequiresRestart *bool `json:"requires_restart,omitempty"`
-
-	// Username The affected user's login name.
-	Username string `json:"username"`
-
-	// Warning Human-readable explanation when requires_restart is true.
-	Warning *string `json:"warning,omitempty"`
-}
-
-// UserRoleChangeRequest Body for PATCH /users/{username}/role. Changes a user's RBAC role. Admin-only.
-type UserRoleChangeRequest struct {
-	// Role New role. Case-sensitive; exactly "admin" or "user".
-	Role UserRoleChangeRequestRole `json:"role"`
-}
-
-// UserRoleChangeRequestRole New role. Case-sensitive; exactly "admin" or "user".
-type UserRoleChangeRequestRole string
-
-// UserRoleChangeResponse Returned on successful PATCH /users/{username}/role.
-type UserRoleChangeResponse struct {
-	// RequiresRestart Present and true when hot-reload failed after the role change.
-	RequiresRestart *bool `json:"requires_restart,omitempty"`
-
-	// Role The new role.
-	Role UserRoleChangeResponseRole `json:"role"`
-
-	// Username The affected user's login name.
-	Username string `json:"username"`
-
-	// Warning Human-readable explanation when requires_restart is true.
-	Warning *string `json:"warning,omitempty"`
-}
-
-// UserRoleChangeResponseRole The new role.
-type UserRoleChangeResponseRole string
-
-// ValidateTokenResponse Response from GET /api/v1/auth/validate. Confirms the current bearer token is valid and returns the associated user's role.
+// ValidateTokenResponse Response from GET /api/v1/auth/validate. Confirms the current bearer token is valid and returns the authenticated user's username.
 type ValidateTokenResponse struct {
-	// Role The RBAC role of the authenticated user.
-	Role ValidateTokenResponseRole `json:"role"`
-
 	// Username The authenticated user's login name.
 	Username string `json:"username"`
 }
-
-// ValidateTokenResponseRole The RBAC role of the authenticated user.
-type ValidateTokenResponseRole string
 
 // VersionResponse Response from GET /api/v1/version. Returns build identity information. Used by the frontend to detect version drift and show "New version available" prompts (issue #110). No authentication required.
 type VersionResponse struct {
@@ -9305,6 +8895,9 @@ type N500InternalServerError = ErrorResponse
 // N502BadGateway Standard error envelope returned by all non-2xx responses.
 type N502BadGateway = ErrorResponse
 
+// N503BypassActive Standard error envelope returned by all non-2xx responses.
+type N503BypassActive = ErrorResponse
+
 // N503ServiceUnavailable Standard error envelope returned by all non-2xx responses.
 type N503ServiceUnavailable = ErrorResponse
 
@@ -9458,9 +9051,6 @@ type ListWorkspacesParamsStatus string
 // CreateAgentJSONRequestBody defines body for CreateAgent for application/json ContentType.
 type CreateAgentJSONRequestBody = AgentCreateRequest
 
-// PatchAgentOwnershipJSONRequestBody defines body for PatchAgentOwnership for application/json ContentType.
-type PatchAgentOwnershipJSONRequestBody = AgentOwnershipUpdateRequest
-
 // UpdateAgentJSONRequestBody defines body for UpdateAgent for application/json ContentType.
 type UpdateAgentJSONRequestBody = AgentUpdateRequest
 
@@ -9478,9 +9068,6 @@ type LoginJSONRequestBody = LoginRequest
 
 // ReAuthJSONRequestBody defines body for ReAuth for application/json ContentType.
 type ReAuthJSONRequestBody = ReAuthRequest
-
-// RegisterAdminJSONRequestBody defines body for RegisterAdmin for application/json ContentType.
-type RegisterAdminJSONRequestBody = RegisterAdminRequest
 
 // CreateChannelInstanceJSONRequestBody defines body for CreateChannelInstance for application/json ContentType.
 type CreateChannelInstanceJSONRequestBody = ChannelCreateRequest
@@ -9601,15 +9188,6 @@ type UploadFilesMultipartRequestBody UploadFilesMultipartBody
 
 // PutUserContextJSONRequestBody defines body for PutUserContext for application/json ContentType.
 type PutUserContextJSONRequestBody = UserContextRequest
-
-// CreateUserJSONRequestBody defines body for CreateUser for application/json ContentType.
-type CreateUserJSONRequestBody = UserCreateRequest
-
-// ResetUserPasswordJSONRequestBody defines body for ResetUserPassword for application/json ContentType.
-type ResetUserPasswordJSONRequestBody = UserResetPasswordRequest
-
-// ChangeUserRoleJSONRequestBody defines body for ChangeUserRole for application/json ContentType.
-type ChangeUserRoleJSONRequestBody = UserRoleChangeRequest
 
 // TranscribeAudioMultipartRequestBody defines body for TranscribeAudio for multipart/form-data ContentType.
 type TranscribeAudioMultipartRequestBody TranscribeAudioMultipartBody

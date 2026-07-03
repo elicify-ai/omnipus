@@ -4,7 +4,6 @@ import { Shield } from '@phosphor-icons/react'
 import { fetchPromptGuardLevel, updatePromptGuardLevel, isApiError } from '@/lib/api'
 import type { PromptInjectionLevel } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
-import { useAuthStore } from '@/store/auth'
 import { SaveStatus, useSaveStatus } from './SaveStatus'
 
 // ── Level metadata ────────────────────────────────────────────────────────────
@@ -47,8 +46,6 @@ function Skeleton() {
 export function PromptGuardSection(): React.ReactElement {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
-  const role = useAuthStore((s) => s.role)
-  const isAdmin = role === 'admin'
 
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['prompt-guard-k'],
@@ -126,7 +123,6 @@ export function PromptGuardSection(): React.ReactElement {
                 type="button"
                 role="radio"
                 aria-checked={isActive}
-                disabled={!isAdmin}
                 onClick={() => {
                   if (selected !== lvl.value) handleChange(lvl.value)
                 }}

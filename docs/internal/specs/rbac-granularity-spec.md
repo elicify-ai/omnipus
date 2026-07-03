@@ -1,5 +1,13 @@
 # Feature Specification: RBAC Granularity — Admin/User Role Separation (v1.0)
 
+> **Status: SUPERSEDED (2026-07).** Omnipus is a single-user product; the
+> per-role/per-account permission model this spec founded has been removed
+> from the codebase (`UserRole`, `RequireAdmin`, the Users management API,
+> agent/workspace/schedule ownership as an access gate). See ADR-019 (the
+> single-user product framing) and the PR that closed issue #424. Retained
+> here as historical record, per this repo's convention of not deleting
+> superseded specs/ADRs.
+
 **Created**: 2026-04-05
 **Status**: Draft
 **Input**: Omnipus v1.0 critical feature 4 — `admin` + `user` role separation with 403 gates and frontend menu hiding
