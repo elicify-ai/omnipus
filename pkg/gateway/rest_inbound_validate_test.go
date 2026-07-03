@@ -75,15 +75,16 @@ func TestDecodeAndValidate_ValidBody(t *testing.T) {
 	var dst struct {
 		Name string `json:"name"`
 	}
-	// AgentCreateRequest requires BOTH name and soul (soul was added to the
-	// required list in the 3-type wire-schema change). A schema-valid body must
-	// therefore carry soul too; dst only captures name, which is the field the
-	// assertion below checks.
-	body := `{"name":"My Agent","soul":"You are a focused assistant."}`
+	// AgentCreateRequestMain requires type, name, AND soul (W1 discriminated
+	// union — AgentCreateRequest.yaml no longer exists as a single flat
+	// schema; the create contract is now Main/Subagent/subagent_3p). A
+	// schema-valid body must carry all three; dst only captures name, which
+	// is the field the assertion below checks.
+	body := `{"type":"Main","name":"My Agent","soul":"You are a focused assistant."}`
 	r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
 	w := httptest.NewRecorder()
 
-	ok := decodeAndValidate(w, r, "AgentCreateRequest", &dst, true)
+	ok := decodeAndValidate(w, r, "AgentCreateRequestMain", &dst, true)
 
 	require.True(t, ok)
 	assert.Equal(t, "My Agent", dst.Name)
@@ -98,7 +99,7 @@ func TestDecodeAndValidate_EmptyBodyWithValidateEnabled(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(""))
 	w := httptest.NewRecorder()
 
-	ok := decodeAndValidate(w, r, "AgentCreateRequest", &dst, true)
+	ok := decodeAndValidate(w, r, "AgentCreateRequestMain", &dst, true)
 
 	assert.False(t, ok)
 	assert.Equal(t, http.StatusBadRequest, w.Code)
@@ -113,7 +114,7 @@ func TestDecodeAndValidate_EmptyBodyValidateDisabled(t *testing.T) {
 	w := httptest.NewRecorder()
 
 	// With validation disabled, an empty body still fails json decode (EOF).
-	ok := decodeAndValidate(w, r, "AgentCreateRequest", &dst, false)
+	ok := decodeAndValidate(w, r, "AgentCreateRequestMain", &dst, false)
 
 	assert.False(t, ok)
 	assert.Equal(t, http.StatusBadRequest, w.Code)
@@ -126,18 +127,18 @@ func TestDecodeAndValidate_WrongTypeForField(t *testing.T) {
 	var dst struct {
 		Name string `json:"name"`
 	}
-	// "name" must be a string per AgentCreateRequest schema; sending a number.
+	// "name" must be a string per AgentCreateRequestMain schema; sending a number.
 	body := `{"name": 42}`
 	r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
 	w := httptest.NewRecorder()
 
-	ok := decodeAndValidate(w, r, "AgentCreateRequest", &dst, true)
+	ok := decodeAndValidate(w, r, "AgentCreateRequestMain", &dst, true)
 
 	assert.False(t, ok)
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	var resp map[string]string
 	_ = json.Unmarshal(w.Body.Bytes(), &resp)
-	assert.Contains(t, resp["error"], "AgentCreateRequest")
+	assert.Contains(t, resp["error"], "AgentCreateRequestMain")
 }
 
 // TestDecodeAndValidate_WrongTypeValidateDisabled_GoUnmarshalRejects verifies that
@@ -151,7 +152,7 @@ func TestDecodeAndValidate_WrongTypeValidateDisabled_GoUnmarshalRejects(t *testi
 	r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
 	w := httptest.NewRecorder()
 
-	ok := decodeAndValidate(w, r, "AgentCreateRequest", &dst, false)
+	ok := decodeAndValidate(w, r, "AgentCreateRequestMain", &dst, false)
 
 	// json.Decoder returns an error for number→string type mismatch;
 	// decodeAndValidate returns false and 400 regardless of validate flag.
@@ -164,12 +165,12 @@ func TestDecodeAndValidate_MissingRequiredField(t *testing.T) {
 	var dst struct {
 		Name string `json:"name"`
 	}
-	// AgentCreateRequest requires "name" — sending empty object.
+	// AgentCreateRequestMain requires "type"/"name"/"soul" — sending empty object.
 	body := `{}`
 	r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
 	w := httptest.NewRecorder()
 
-	ok := decodeAndValidate(w, r, "AgentCreateRequest", &dst, true)
+	ok := decodeAndValidate(w, r, "AgentCreateRequestMain", &dst, true)
 
 	assert.False(t, ok)
 	assert.Equal(t, http.StatusBadRequest, w.Code)
@@ -185,7 +186,7 @@ func TestDecodeAndValidate_MissingRequiredFieldValidateDisabled(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
 	w := httptest.NewRecorder()
 
-	ok := decodeAndValidate(w, r, "AgentCreateRequest", &dst, false)
+	ok := decodeAndValidate(w, r, "AgentCreateRequestMain", &dst, false)
 
 	assert.True(t, ok)
 	assert.Equal(t, "", dst.Name) // zero value — upstream guard catches it
@@ -197,7 +198,7 @@ func TestDecodeAndValidate_MalformedJSON(t *testing.T) {
 		var dst struct{ Name string }
 		r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{bad json`))
 		w := httptest.NewRecorder()
-		ok := decodeAndValidate(w, r, "AgentCreateRequest", &dst, enabled)
+		ok := decodeAndValidate(w, r, "AgentCreateRequestMain", &dst, enabled)
 		assert.False(t, ok, "enabled=%v", enabled)
 		assert.Equal(t, http.StatusBadRequest, w.Code, "enabled=%v", enabled)
 	}
@@ -205,9 +206,13 @@ func TestDecodeAndValidate_MalformedJSON(t *testing.T) {
 
 // ── Handler integration tests — createAgent ───────────────────────────────────
 
-// TestCreateAgent_ValidateInbound_InvalidBody asserts POST /agents with
-// validate_inbound=true returns 400 for a body missing the required "name" field.
-func TestCreateAgent_ValidateInbound_InvalidBody(t *testing.T) {
+// TestCreateAgent_ValidateInbound_MissingType asserts POST /agents returns 400
+// for a body with no "type" field at all — type is now a required
+// discriminator (W1) and createAgent's peek-the-type dispatch rejects this
+// BEFORE it would even reach schema validation. Replaces the old
+// TestCreateAgent_ValidateInbound_InvalidBody (which asserted a
+// missing-"name" 400 against the retired flat "AgentCreateRequest" schema).
+func TestCreateAgent_ValidateInbound_MissingType(t *testing.T) {
 	api := newTestRestAPIWithValidation(t)
 
 	w := httptest.NewRecorder()
@@ -220,15 +225,35 @@ func TestCreateAgent_ValidateInbound_InvalidBody(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	var resp map[string]string
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Contains(t, resp["error"], "AgentCreateRequest")
+	assert.Contains(t, resp["error"], "type is required")
+}
+
+// TestCreateAgent_ValidateInbound_InvalidBody asserts POST /agents with
+// validate_inbound=true returns 400 for a body missing the required "name"
+// and "soul" fields, once type dispatch has already resolved to the Main
+// variant schema (contracts/components/schemas/AgentCreateRequestMain.yaml).
+func TestCreateAgent_ValidateInbound_InvalidBody(t *testing.T) {
+	api := newTestRestAPIWithValidation(t)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(`{"type":"Main"}`))
+	r.Header.Set("Content-Type", "application/json")
+	r = withAdminRole(r)
+
+	api.createAgent(w, r)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	var resp map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Contains(t, resp["error"], "AgentCreateRequestMain")
 }
 
 // TestCreateAgent_ValidateInbound_ValidBody asserts POST /agents with
-// validate_inbound=true accepts a body with required "name" field.
+// validate_inbound=true accepts a body with the required "type"/"name"/"soul" fields.
 func TestCreateAgent_ValidateInbound_ValidBody(t *testing.T) {
 	api := newTestRestAPIWithValidation(t)
 
-	body := `{"name":"Test Agent","description":"desc","soul":"s"}`
+	body := `{"type":"Main","name":"Test Agent","description":"desc","soul":"s"}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", bytes.NewBufferString(body))
 	r.Header.Set("Content-Type", "application/json")
@@ -239,6 +264,73 @@ func TestCreateAgent_ValidateInbound_ValidBody(t *testing.T) {
 	// 200 or 201 — agent created successfully
 	assert.True(t, w.Code == http.StatusOK || w.Code == http.StatusCreated,
 		"expected 200 or 201, got %d: %s", w.Code, w.Body.String())
+}
+
+// TestCreateAgent_ValidateInbound_MainWithExecutorRejected asserts that a
+// Main create carrying an `executor` property is rejected 400 at the schema
+// gate when ValidateInbound is enabled: AgentCreateRequestMain has no
+// executor property at all (additionalProperties: false) — Main agents
+// always run native and cannot express one.
+func TestCreateAgent_ValidateInbound_MainWithExecutorRejected(t *testing.T) {
+	api := newTestRestAPIWithValidation(t)
+
+	body := `{"type":"Main","name":"Bad Main","soul":"s","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"}}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", bytes.NewBufferString(body))
+	r.Header.Set("Content-Type", "application/json")
+	r = withAdminRole(r)
+
+	api.createAgent(w, r)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	var resp map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Contains(t, resp["error"], "AgentCreateRequestMain")
+}
+
+// TestCreateAgent_ValidateInbound_SubagentWithExecutorRejected asserts that a
+// Subagent (native worker) create carrying an `executor` property is
+// rejected 400 at the schema gate when ValidateInbound is enabled:
+// AgentCreateRequestSubagent has no executor property either — kind=native
+// is always server-derived for this variant.
+func TestCreateAgent_ValidateInbound_SubagentWithExecutorRejected(t *testing.T) {
+	api := newTestRestAPIWithValidation(t)
+
+	body := `{"type":"Subagent","name":"Bad Subagent","description":"d","soul":"s","executor":{"kind":"native"}}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", bytes.NewBufferString(body))
+	r.Header.Set("Content-Type", "application/json")
+	r = withAdminRole(r)
+
+	api.createAgent(w, r)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	var resp map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Contains(t, resp["error"], "AgentCreateRequestSubagent")
+}
+
+// TestCreateAgent_ValidateInbound_Subagent3pMaxToolIterationsRejected asserts
+// that a subagent_3p create carrying `max_tool_iterations` is rejected 400 at
+// the schema gate when ValidateInbound is enabled: AgentCreateRequestSubagent3p
+// has no max_tool_iterations property (the field matrix's "exclude" decision
+// for this variant — the external CLI runs its own turn loop, so Omnipus
+// cannot cap its per-turn tool-call budget).
+func TestCreateAgent_ValidateInbound_Subagent3pMaxToolIterationsRejected(t *testing.T) {
+	api := newTestRestAPIWithValidation(t)
+
+	body := `{"type":"subagent_3p","name":"Bad 3p","soul":"s","executor":{"cli":"codex","cli_path":"/usr/local/bin/codex"},"max_tool_iterations":50}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", bytes.NewBufferString(body))
+	r.Header.Set("Content-Type", "application/json")
+	r = withAdminRole(r)
+
+	api.createAgent(w, r)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	var resp map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Contains(t, resp["error"], "AgentCreateRequestSubagent3p")
 }
 
 // ── Handler integration tests — putSandboxConfig ─────────────────────────────
@@ -309,19 +401,27 @@ func TestExecAllowlist_ValidateInbound_ValidBody(t *testing.T) {
 // ── SchemaLoader unit test ────────────────────────────────────────────────────
 
 // TestInboundSchemaLoader_ReadsEmbeddedFile asserts the inboundSchemaLoader
-// can read AgentCreateRequest.yaml from the embedded FS.
+// can read AgentCreateRequestMain.yaml from the embedded FS. AgentCreateRequest
+// (the pre-W1 flat schema) no longer exists — the discriminated union split it
+// into AgentCreateRequestMain / AgentCreateRequestSubagent /
+// AgentCreateRequestSubagent3p.
 func TestInboundSchemaLoader_ReadsEmbeddedFile(t *testing.T) {
 	loader := inboundSchemaLoader{}
-	doc, err := loader.Load("file:///AgentCreateRequest.yaml")
-	require.NoError(t, err, "loader must read AgentCreateRequest.yaml from embedded FS")
+	doc, err := loader.Load("file:///AgentCreateRequestMain.yaml")
+	require.NoError(t, err, "loader must read AgentCreateRequestMain.yaml from embedded FS")
 	assert.NotNil(t, doc)
 }
 
-// TestCompileInboundSchema_AgentCreateRequest asserts the schema compiles cleanly.
-func TestCompileInboundSchema_AgentCreateRequest(t *testing.T) {
-	s, err := compileInboundSchema("AgentCreateRequest")
-	require.NoError(t, err)
-	assert.NotNil(t, s)
+// TestCompileInboundSchema_AgentCreateRequestVariants asserts all three
+// discriminated-union create-request schemas compile cleanly.
+func TestCompileInboundSchema_AgentCreateRequestVariants(t *testing.T) {
+	for _, name := range []string{"AgentCreateRequestMain", "AgentCreateRequestSubagent", "AgentCreateRequestSubagent3p"} {
+		t.Run(name, func(t *testing.T) {
+			s, err := compileInboundSchema(name)
+			require.NoError(t, err)
+			assert.NotNil(t, s)
+		})
+	}
 }
 
 // TestCompileInboundSchema_UnknownSchema asserts that an unknown schema name

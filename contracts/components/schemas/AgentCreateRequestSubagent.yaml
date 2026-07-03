@@ -1,0 +1,160 @@
+type: object
+title: AgentCreateRequestSubagent
+description: >
+  Create a Subagent — a user-defined delegation-only worker on the Omnipus
+  engine. Field set per the agent-types field matrix: no voice (no chat/TTS
+  surface), no steering_mode (workers are forced one-at-a-time server-side),
+  no executor (native is derived server-side — never sent by the client).
+  Description is enforced non-empty-after-trim by the handler (the
+  orchestrator delegates based on it).
+required:
+  - type
+  - name
+  - soul
+additionalProperties: false
+properties:
+  type:
+    type: string
+    enum:
+      - Subagent
+    description: >
+      Discriminator. Must be exactly "Subagent" for this variant.
+    example: "Subagent"
+  name:
+    type: string
+    minLength: 1
+    description: Display name for the new agent.
+    example: "My Custom Agent"
+  description:
+    type: string
+    description: >
+      Short description of the agent's purpose. Required (non-empty after trim) for
+      Subagent and subagent_3p — the orchestrator uses it as the basis on which it
+      decides which agent to delegate to. Optional for Main.
+    example: "Specialized data analysis assistant"
+  model:
+    type: string
+    description: >
+      Model slug for LLM calls. When omitted, the global agents.defaults.model_name
+      is used. With the O3 two-field model this is the bare slug; pair it with
+      `provider` for explicit routing.
+    example: "google/gemini-2.5-flash"
+  provider:
+    type: string
+    maxLength: 64
+    description: >
+      Explicit routing key for the primary model (O3 two-field model), mirroring
+      fallback_models[].provider. When set, resolution uses it directly and never
+      infers a provider. Optional; when omitted the model resolves via the default
+      provider.
+    example: "openrouter"
+  color:
+    type: string
+    pattern: '^#[0-9A-Fa-f]{6}$'
+    description: Hex color code for the agent avatar.
+    example: "#D4AF37"
+  icon:
+    type: string
+    maxLength: 50
+    description: Phosphor icon name for the agent avatar.
+    example: "ChartBar"
+  tools_cfg:
+    $ref: './AgentToolsCfg.yaml'
+  fallback_models:
+    type: array
+    maxItems: 2
+    items:
+      $ref: './FallbackModel.yaml'
+    description: >
+      Ordered list of fallback model entries tried when the primary model returns
+      an error. Each entry carries its own provider so the fallback can route through
+      a different provider than the primary (FR-007). Capped at 2 entries.
+
+      Wire format is always the object form `[{model, provider}]`. Legacy
+      `[string]` payloads are normalized at config-load time (FR-006).
+    example:
+      - model: "claude-sonnet-4.6"
+        provider: "anthropic"
+  model_params:
+    type: object
+    description: LLM sampling parameters applied to this agent's requests.
+    properties:
+      temperature:
+        type: number
+        format: double
+        description: Sampling temperature (0.0 – 2.0). Lower = more deterministic.
+        example: 1.0
+      max_tokens:
+        type: integer
+        description: Maximum tokens to generate per turn.
+        example: 4096
+      top_p:
+        type: number
+        format: double
+        description: Nucleus sampling probability mass. 1.0 disables nucleus sampling.
+        example: 1.0
+  rate_limits:
+    type: object
+    description: Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies.
+    properties:
+      use_global_defaults:
+        type: boolean
+        description: When true, global rate limits are used and per-agent overrides are ignored.
+        example: true
+      max_llm_calls_per_hour:
+        type: integer
+        description: Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
+        example: 100
+      max_tool_calls_per_minute:
+        type: integer
+        description: Maximum tool calls per minute for this agent. Absent = no per-agent cap.
+        example: 60
+      max_cost_per_day:
+        type: number
+        format: double
+        description: Maximum USD cost per day for this agent. Absent = no per-agent cap.
+        example: 5.0
+  skills:
+    type: array
+    uniqueItems: true
+    items:
+      type: string
+    description: >
+      Initial list of skill IDs granted to this agent. An empty list (or
+      absent field) means no skills are granted (opt-in, default none).
+    example:
+      - "web-research"
+  soul:
+    type: string
+    minLength: 1
+    description: >
+      Initial SOUL.md content. Required for every user-creatable type — including
+      Subagent (External), where it is passed as part of the CLI prompt at runtime.
+      The CLI never reads a file from disk. Backend trims before length-validation,
+      so whitespace-only is rejected as minLength violation.
+    example: "You are a focused research assistant..."
+  delegation_policy:
+    $ref: './DelegationPolicy.yaml'
+  sandbox_profile:
+    type: string
+    enum:
+      - workspace
+      - workspace+net
+      - host
+    description: >
+      Kernel sandbox profile applied to this agent's tool calls (O13). Per-agent
+      "off" is retired — "no sandbox" is reachable only via the global god-mode
+      switch. Hidden for Subagent (External) — the CLI manages its own isolation.
+    example: "workspace"
+  shell_policy:
+    $ref: './AgentShellPolicy.yaml'
+  timeout_seconds:
+    type: integer
+    minimum: 0
+    description: Maximum seconds a single agent turn may run before being interrupted.
+    example: 300
+  max_tool_iterations:
+    type: integer
+    minimum: 0
+    description: Maximum number of tool calls allowed per turn.
+    example: 50

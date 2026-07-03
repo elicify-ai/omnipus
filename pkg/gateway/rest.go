@@ -7,6 +7,7 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -1481,6 +1482,33 @@ func applyAgentOverrides(ag *gen.Agent, ac *config.AgentConfig) {
 	if ac.MaxToolIterations > 0 {
 		ag.MaxToolIterations = ac.MaxToolIterations
 	}
+	// sandbox_profile / shell_policy: echo the persisted per-agent overrides.
+	// Previously these were persisted (updateAgent) or should have been
+	// persisted (createAgent, fixed alongside this) but never surfaced on any
+	// response path (list/get/create/update all built gen.Agent without ever
+	// touching these two fields) — a GET could never confirm what was saved.
+	if ac.SandboxProfile != "" {
+		sp := gen.AgentSandboxProfile(ac.SandboxProfile)
+		ag.SandboxProfile = &sp
+	}
+	if ac.ShellPolicy != nil {
+		// The literal below mirrors the inlined anonymous-struct shape
+		// oapi-codegen generated for gen.Agent.ShellPolicy — field
+		// names/types/tags (and order) must match for the assignment to
+		// gen.Agent.ShellPolicy below to type-check.
+		sp := struct { // not-wire-format: generated gen.Agent.ShellPolicy inline shape, only populates the generated field
+			CustomDenyPatterns *[]string `json:"custom_deny_patterns,omitempty"`
+			EnableDenyPatterns *bool     `json:"enable_deny_patterns,omitempty"`
+		}{
+			EnableDenyPatterns: boolPtr(ac.ShellPolicy.EnableDenyPatterns),
+		}
+		if len(ac.ShellPolicy.CustomDenyPatterns) > 0 {
+			cdp := make([]string, len(ac.ShellPolicy.CustomDenyPatterns))
+			copy(cdp, ac.ShellPolicy.CustomDenyPatterns)
+			sp.CustomDenyPatterns = &cdp
+		}
+		ag.ShellPolicy = &sp
+	}
 }
 
 // buildAgentDefaults populates the execution-related fields from config defaults.
@@ -1645,23 +1673,315 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 	jsonErr(w, http.StatusNotFound, fmt.Sprintf("agent %q not found", id))
 }
 
+// agentCreateToolsCfgInput is a request-shape-agnostic normalization of the
+// wire ToolsCfg object. gen.AgentCreateRequestMain and gen.AgentCreateRequestSubagent
+// each carry an anonymous ToolsCfg struct (oapi-codegen inlines it per-variant,
+// distinct named enum types per variant) — createAgent normalizes whichever
+// variant was sent into this shape so the ac.Tools construction below is
+// written once. gen.AgentCreateRequestSubagent3p has no tools_cfg property at
+// all (the external runner manages its own tools), so this stays nil for that
+// variant.
+type agentCreateToolsCfgInput struct {
+	BuiltinDefaultPolicy string
+	BuiltinPolicies      map[string]string
+	MCPServers           []agentCreateMCPServerInput
+}
+
+// agentCreateMCPServerInput is one entry of agentCreateToolsCfgInput.MCPServers.
+type agentCreateMCPServerInput struct {
+	ID    string
+	Tools []string
+}
+
+// agentCreateShellPolicyInput is a request-shape-agnostic normalization of
+// the wire ShellPolicy object, mirroring agentCreateToolsCfgInput above.
+// gen.AgentCreateRequestMain and gen.AgentCreateRequestSubagent each carry an
+// anonymous ShellPolicy struct (oapi-codegen inlines it per-variant);
+// gen.AgentCreateRequestSubagent3p has no shell_policy property at all (the
+// external runner manages its own isolation), so this stays nil for that
+// variant.
+type agentCreateShellPolicyInput struct {
+	EnableDenyPatterns *bool
+	CustomDenyPatterns []string
+}
+
+// decodeAgentCreateVariant strictly decodes raw into out (a pointer to one of
+// the three generated AgentCreateRequest{Main,Subagent,Subagent3p} structs)
+// using a json.Decoder with DisallowUnknownFields, so a field that variant
+// does not carry — at any nesting depth (e.g. a "system.*" key inside a
+// tools_cfg.builtin.policies map is fine; an unrelated top-level or nested
+// property is not) — is rejected with 400 rather than silently dropped. This
+// runs UNCONDITIONALLY (independent of cfg.Gateway.ValidateInbound, which
+// defaults to false) — it is the mechanism that makes "a field sent on the
+// wrong variant is a schema violation, never silently persisted" actually
+// true regardless of config.
+//
+// On success it returns true and leaves w untouched. On failure it writes the
+// 400 response itself and returns false so the caller can `return` directly.
+func decodeAgentCreateVariant(w http.ResponseWriter, raw []byte, wireType, variantName string, out any) bool {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(out); err != nil {
+		if strings.Contains(err.Error(), "unknown field") {
+			jsonErr(w, http.StatusBadRequest, fmt.Sprintf(
+				"field not allowed on agent type %q: %v — see the %s schema", wireType, err, variantName))
+		} else {
+			jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+		}
+		return false
+	}
+	return true
+}
+
+// wireStringPtr converts an optional generated string-based enum pointer
+// (e.g. *gen.AgentCreateRequestMainSandboxProfile) into a *string, preserving
+// nil-vs-set: a nil input returns nil (field absent); a non-nil input returns
+// a pointer to its string value (field present, whatever the value).
+func wireStringPtr[T ~string](p *T) *string {
+	if p == nil {
+		return nil
+	}
+	s := string(*p)
+	return &s
+}
+
+// wireStringMap converts an optional generated map pointer whose values are a
+// string-based enum (e.g. *map[string]AgentCreateRequestMainToolsCfgBuiltinPolicies)
+// into a plain map[string]string, preserving nil-vs-empty: a nil input
+// returns nil (field absent); a non-nil (possibly empty) input returns a
+// newly allocated map with every value stringified.
+func wireStringMap[V ~string](in *map[string]V) map[string]string {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]string, len(*in))
+	for k, v := range *in {
+		out[k] = string(v)
+	}
+	return out
+}
+
+// createAgent handles POST /api/v1/agents.
+//
+// The wire contract is a discriminated union: AgentCreateRequestMain /
+// AgentCreateRequestSubagent / AgentCreateRequestSubagent3p, each a distinct
+// schema (contracts/components/schemas/AgentCreateRequest{Main,Subagent,Subagent3p}.yaml,
+// additionalProperties: false) selected by the request's `type` field. This
+// handler mirrors the WsFrame dispatch pattern (websocket.go's peek+switch on
+// frame.Type): buffer the body, peek `type` from the raw JSON, resolve the
+// matching variant schema name, optionally validate the FULL body against
+// that JSON Schema (when cfg.Gateway.ValidateInbound is enabled — richer
+// errors, off by default), then strictly decode into the NAMED variant
+// struct via decodeAgentCreateVariant (a field the chosen variant does not
+// carry is rejected 400 unconditionally, independent of ValidateInbound) —
+// never the generated union wrapper's As*() accessors — and normalize into a
+// small set of variant-agnostic locals so the remainder of the handler
+// (validation, persistence, response building) is written once.
+//
+// type is REQUIRED on every variant: a missing or unrecognised type value is
+// a 400.
 func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
-	var req gen.AgentCreateRequest
 	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
-	if !decodeAndValidate(w, r, "AgentCreateRequest", &req, validateEnabled) {
+
+	raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "could not read request body")
 		return
 	}
+	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		jsonErr(w, http.StatusBadRequest, "request body is required")
+		return
+	}
+
+	var typePeek struct {
+		Type *string `json:"type"`
+	}
+	if err := json.Unmarshal(raw, &typePeek); err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	const typeErrMsg = "type is required and must be one of Main, Subagent, subagent_3p"
+	if typePeek.Type == nil {
+		jsonErr(w, http.StatusBadRequest, typeErrMsg)
+		return
+	}
+	var variantName string
+	switch *typePeek.Type {
+	case "Main":
+		variantName = "AgentCreateRequestMain"
+	case "Subagent":
+		variantName = "AgentCreateRequestSubagent"
+	case "subagent_3p":
+		variantName = "AgentCreateRequestSubagent3p"
+	default:
+		// Covers "core" / "system" (seeded-only classifications — the only way
+		// to obtain one is via SeedConfig, never the REST create path) and any
+		// other unrecognised value.
+		jsonErr(w, http.StatusBadRequest, typeErrMsg)
+		return
+	}
+	// Boundary translation between wire (Main/Subagent/subagent_3p) and
+	// persisted config (custom/worker) — single source of truth in
+	// coreagent.ResolveType.
+	createType := coreagent.ResolveType(gen.AgentType(*typePeek.Type))
+
+	if validateEnabled {
+		if errMsg, serverErr := validateBodyAgainstSchema(variantName, raw); errMsg != "" {
+			if serverErr {
+				jsonErr(w, http.StatusInternalServerError, "inbound schema unavailable")
+			} else {
+				jsonErr(w, http.StatusBadRequest,
+					fmt.Sprintf("request body does not match schema %s: %s", variantName, errMsg))
+			}
+			return
+		}
+	}
+
+	// Normalize the chosen variant into variant-agnostic locals. Each branch
+	// strictly decodes raw into the NAMED generated struct via
+	// decodeAgentCreateVariant (unknown fields — including fields that ARE
+	// valid on a sibling variant, e.g. Subagent's tools_cfg on a
+	// subagent_3p body — are rejected 400, independent of ValidateInbound)
+	// and copies out only the fields that variant actually carries.
+	// AgentCreateRequestSubagent has no Executor field at all;
+	// AgentCreateRequestSubagent3p has no ToolsCfg/Skills/FallbackModels/
+	// SandboxProfile/ShellPolicy/Voice/SteeringMode/MaxToolIterations
+	// fields — a subagent_3p create supplying any of those is rejected at
+	// decode time, both because the Go type has no matching field and
+	// because the strict decoder refuses to silently drop it.
+	var (
+		name           string
+		description    *string
+		model          *string
+		provider       *string
+		color          *string
+		icon           *string
+		soul           string
+		skills         *[]string
+		fallbackModels *[]gen.FallbackModel
+		sandboxProfile *string
+		shellPolicyIn  *agentCreateShellPolicyInput
+		toolsCfgIn     *agentCreateToolsCfgInput
+		delegationIn   *delegationPolicyInput
+		executorIn     *executorRequestInput
+	)
+
+	switch *typePeek.Type {
+	case "Main":
+		var vreq gen.AgentCreateRequestMain
+		if !decodeAgentCreateVariant(w, raw, *typePeek.Type, variantName, &vreq) {
+			return
+		}
+		name = vreq.Name
+		description = vreq.Description
+		model = vreq.Model
+		provider = vreq.Provider
+		color = vreq.Color
+		icon = vreq.Icon
+		soul = vreq.Soul
+		skills = vreq.Skills
+		fallbackModels = vreq.FallbackModels
+		sandboxProfile = wireStringPtr(vreq.SandboxProfile)
+		if vreq.ShellPolicy != nil {
+			shellPolicyIn = &agentCreateShellPolicyInput{EnableDenyPatterns: vreq.ShellPolicy.EnableDenyPatterns}
+			if vreq.ShellPolicy.CustomDenyPatterns != nil {
+				shellPolicyIn.CustomDenyPatterns = *vreq.ShellPolicy.CustomDenyPatterns
+			}
+		}
+		if vreq.ToolsCfg != nil {
+			tc := &agentCreateToolsCfgInput{}
+			if vreq.ToolsCfg.Builtin != nil {
+				if vreq.ToolsCfg.Builtin.DefaultPolicy != nil {
+					tc.BuiltinDefaultPolicy = string(*vreq.ToolsCfg.Builtin.DefaultPolicy)
+				}
+				tc.BuiltinPolicies = wireStringMap(vreq.ToolsCfg.Builtin.Policies)
+			}
+			if vreq.ToolsCfg.Mcp != nil && vreq.ToolsCfg.Mcp.Servers != nil {
+				for _, s := range *vreq.ToolsCfg.Mcp.Servers {
+					var t []string
+					if s.Tools != nil {
+						t = *s.Tools
+					}
+					tc.MCPServers = append(tc.MCPServers, agentCreateMCPServerInput{ID: s.Id, Tools: t})
+				}
+			}
+			toolsCfgIn = tc
+		}
+		delegationIn = delegationInputFromCreateRequestMain(&vreq)
+	case "Subagent":
+		var vreq gen.AgentCreateRequestSubagent
+		if !decodeAgentCreateVariant(w, raw, *typePeek.Type, variantName, &vreq) {
+			return
+		}
+		name = vreq.Name
+		description = vreq.Description
+		model = vreq.Model
+		provider = vreq.Provider
+		color = vreq.Color
+		icon = vreq.Icon
+		soul = vreq.Soul
+		skills = vreq.Skills
+		fallbackModels = vreq.FallbackModels
+		sandboxProfile = wireStringPtr(vreq.SandboxProfile)
+		if vreq.ShellPolicy != nil {
+			shellPolicyIn = &agentCreateShellPolicyInput{EnableDenyPatterns: vreq.ShellPolicy.EnableDenyPatterns}
+			if vreq.ShellPolicy.CustomDenyPatterns != nil {
+				shellPolicyIn.CustomDenyPatterns = *vreq.ShellPolicy.CustomDenyPatterns
+			}
+		}
+		if vreq.ToolsCfg != nil {
+			tc := &agentCreateToolsCfgInput{}
+			if vreq.ToolsCfg.Builtin != nil {
+				if vreq.ToolsCfg.Builtin.DefaultPolicy != nil {
+					tc.BuiltinDefaultPolicy = string(*vreq.ToolsCfg.Builtin.DefaultPolicy)
+				}
+				tc.BuiltinPolicies = wireStringMap(vreq.ToolsCfg.Builtin.Policies)
+			}
+			if vreq.ToolsCfg.Mcp != nil && vreq.ToolsCfg.Mcp.Servers != nil {
+				for _, s := range *vreq.ToolsCfg.Mcp.Servers {
+					var t []string
+					if s.Tools != nil {
+						t = *s.Tools
+					}
+					tc.MCPServers = append(tc.MCPServers, agentCreateMCPServerInput{ID: s.Id, Tools: t})
+				}
+			}
+			toolsCfgIn = tc
+		}
+		delegationIn = delegationInputFromCreateRequestSubagent(&vreq)
+	case "subagent_3p":
+		var vreq gen.AgentCreateRequestSubagent3p
+		if !decodeAgentCreateVariant(w, raw, *typePeek.Type, variantName, &vreq) {
+			return
+		}
+		name = vreq.Name
+		description = vreq.Description
+		model = vreq.Model
+		provider = vreq.Provider
+		color = vreq.Color
+		icon = vreq.Icon
+		soul = vreq.Soul
+		delegationIn = delegationInputFromCreateRequestSubagent3p(&vreq)
+		executorIn = &executorRequestInput{
+			Cli:          executorCliStr(vreq.Executor.Cli),
+			CliPath:      vreq.Executor.CliPath,
+			EnvOverrides: vreq.Executor.EnvOverrides,
+			CliArgs:      vreq.Executor.CliArgs,
+		}
+	}
+
 	// Trim before the empty check so a whitespace-only name ("   ") is rejected
 	// rather than silently accepted (UAT fix). Persist the trimmed value.
-	req.Name = strings.TrimSpace(req.Name)
-	if req.Name == "" {
+	name = strings.TrimSpace(name)
+	if name == "" {
 		jsonErr(w, http.StatusUnprocessableEntity, "name is required")
 		return
 	}
 	// O13: per-agent sandbox_profile=off is retired. The generated validator
 	// already rejects "off" (removed from the enum); this is defense-in-depth
-	// for the non-validated path (ValidateInbound disabled).
-	if req.SandboxProfile != nil && config.SandboxProfile(*req.SandboxProfile) == config.SandboxProfileOff {
+	// for the non-validated path (ValidateInbound disabled). subagent_3p has no
+	// sandbox_profile property at all (sandboxProfile stays nil for that variant).
+	if sandboxProfile != nil && config.SandboxProfile(*sandboxProfile) == config.SandboxProfileOff {
 		jsonErr(
 			w,
 			http.StatusBadRequest,
@@ -1669,123 +1989,78 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		)
 		return
 	}
-	// Resolve the requested agent type. The wire enum (W1) is
-	// [Main, Subagent, subagent_3p]; legacy "custom"/"worker" still round-trip
-	// via the boundary translation in coreagent.ResolveType so existing payloads
-	// don't break. "core" and "system" are seeded-only classifications —
-	// sending them (or any other value) is a 400: the only way to obtain a
-	// core/system agent is via SeedConfig, never via the REST create path.
-	createType := config.AgentTypeCustom
-	if req.Type != nil {
-		switch *req.Type {
-		case gen.AgentCreateRequestTypeMain:
-			createType = config.AgentTypeCustom
-		case gen.AgentCreateRequestTypeSubagent:
-			createType = config.AgentTypeWorker
-		case gen.AgentCreateRequestTypeSubagent3p:
-			createType = config.AgentTypeWorker
-		default:
-			jsonErr(w, http.StatusBadRequest,
-				"type must be one of Main, Subagent, subagent_3p; \"core\" and \"system\" are seeded-only")
-			return
-		}
-	}
-	// W2 spec: subagent_3p agents run on an external CLI, so the create
-	// request MUST carry an executor with kind=external-cli. A subagent_3p
-	// without an external-cli executor has no runnable target — reject at the
-	// gate rather than silently defaulting to native (which would make it a
-	// mislabelled Subagent). This runs before the worker-without-executor
-	// native-defaulting below so that defaulting only applies to plain
-	// Subagent, never to subagent_3p.
-	if req.Type != nil && *req.Type == gen.AgentCreateRequestTypeSubagent3p {
-		if req.Executor == nil || req.Executor.Kind == nil ||
-			*req.Executor.Kind != gen.AgentCreateRequestExecutorKindExternalCli {
-			jsonErr(w, http.StatusBadRequest, "subagent_3p requires executor.kind=external-cli")
-			return
-		}
-		// Spec §9.2: cli_path is required for subagent_3p on create.
-		if req.Executor.CliPath == nil || strings.TrimSpace(*req.Executor.CliPath) == "" {
+	// subagent_3p executor.cli_path: required (spec §9.2), whitespace-only
+	// rejected. The schema requires the `executor` object itself to be
+	// present for this variant, but its nested cli/cli_path properties are
+	// optional strings — JSON Schema has no "non-whitespace" constraint, so
+	// this stays a runtime check even with ValidateInbound enabled.
+	// executor.kind is intentionally NOT checked here: it is always
+	// server-derived to external-cli for subagent_3p below, regardless of
+	// what (if anything) the client sent — kind "is exposed in responses but
+	// is NOT a writable field on create/update — clients cannot choose kind
+	// directly" (contracts/components/schemas/ExecutorConfig.yaml).
+	if createType == config.AgentTypeWorker && *typePeek.Type == string(gen.AgentTypeSubagent3p) {
+		if executorIn == nil || executorIn.CliPath == nil || strings.TrimSpace(*executorIn.CliPath) == "" {
 			jsonErr(w, http.StatusBadRequest, "executor.cli_path is required for subagent_3p agents")
 			return
 		}
 	}
-	// Derive / coerce executor for non-worker and worker-without-executor cases.
-	// Main (and legacy custom) agents always run native on the Omnipus engine; an
-	// external executor in the request is coerced to native with a warning.
-	// Workers without an executor derive kind=native so dispatch has a concrete
-	// runtime target.
-	effectiveExecutor := req.Executor
-	var createExecutorWarning string
-	if createType == config.AgentTypeWorker && req.Executor == nil {
-		// Subagent with no executor: default to native runtime. The actual
-		// config record is created further down; we record the intent and
-		// materialize the native executor there.
-	}
-	if createType != config.AgentTypeWorker && req.Executor != nil {
-		kind := executorKindStr(req.Executor.Kind)
-		if kind == string(config.ExecutorKindExternalCLI) || kind == string(config.ExecutorKindRemoteA2A) {
-			createExecutorWarning = "executor.kind was coerced to native because Main agents run on the Omnipus engine"
-			effectiveExecutor = nil
-		}
-	}
 	// Referential validation: reject unknown skill IDs before doing any work.
-	if req.Skills != nil && len(*req.Skills) > 0 {
-		if errMsg := a.validateSkillIDs(*req.Skills); errMsg != "" {
+	if skills != nil && len(*skills) > 0 {
+		if errMsg := a.validateSkillIDs(*skills); errMsg != "" {
 			jsonErr(w, http.StatusBadRequest, errMsg)
 			return
 		}
 	}
-	description := ""
-	if req.Description != nil {
-		description = strings.TrimSpace(*req.Description)
+	descTrimmed := ""
+	if description != nil {
+		descTrimmed = strings.TrimSpace(*description)
 	}
 	// W2 spec §4.3 / §9.2 F-02 (mirror of PUT path): Subagent and subagent_3p
 	// require a non-empty description after trim. A worker without a
 	// description cannot be routed to by the orchestrator.
-	if (createType == config.AgentTypeWorker) && description == "" {
+	if createType == config.AgentTypeWorker && descTrimmed == "" {
 		jsonErr(w, http.StatusBadRequest, "description is required for worker agents (Subagent, subagent_3p)")
 		return
 	}
-	// O12.1 — voice is Main-only (form matrix row 13): a Subagent / subagent_3p
-	// create that tries to set voice is rejected. Subagents are not chat personas.
-	// Heartbeat is workspace-scoped (ADR-027) and is no longer set at create time.
-	if createType == config.AgentTypeWorker {
-		if req.Voice != nil && strings.TrimSpace(*req.Voice) != "" {
-			jsonErr(w, http.StatusBadRequest, "a worker cannot have a per-agent voice (workers are not chat personas)")
-			return
-		}
-	}
+	// O12.1 — voice is Main-only (form matrix row 13): no runtime check is
+	// needed here any more. AgentCreateRequestSubagent / …Subagent3p
+	// structurally have no `voice` property (additionalProperties: false) —
+	// a worker create can no longer carry one at all. Heartbeat is
+	// workspace-scoped (ADR-027) and is no longer set at create time.
+	//
 	// W2 spec §3.1 row 16 / §9.2 F-13 (mirror of PUT path): fallback_models
 	// is capped at 2 entries. Server-enforced so direct REST callers (not the
-	// SPA) cannot smuggle more entries past the schema validator.
-	if req.FallbackModels != nil && len(*req.FallbackModels) > 2 {
+	// SPA) cannot smuggle more entries past the schema validator. subagent_3p
+	// has no fallback_models property (fallbackModels stays nil for that variant).
+	if fallbackModels != nil && len(*fallbackModels) > 2 {
 		jsonErr(w, http.StatusBadRequest, "fallback_models exceeds maxItems: 2")
 		return
 	}
 	// W2 spec §4.7 / §9.2 row 8: whitespace-only soul is rejected (the wire
 	// schema enforces minLength:1; whitespace-only is the natural
 	// soft-bypass). Backend trims before validation.
-	if req.Soul == "" || strings.TrimSpace(req.Soul) == "" {
+	if soul == "" || strings.TrimSpace(soul) == "" {
 		jsonErr(w, http.StatusBadRequest, "soul is required (whitespace-only is rejected as minLength violation)")
 		return
 	}
-	color := ""
-	if req.Color != nil {
-		color = *req.Color
+	colorVal := ""
+	if color != nil {
+		colorVal = *color
 	}
-	icon := ""
-	if req.Icon != nil {
-		icon = *req.Icon
+	iconVal := ""
+	if icon != nil {
+		iconVal = *icon
 	}
 	// color hex regex (spec §4.4).
-	if color != "" {
-		if matched, _ := regexp.MatchString(`^#[0-9A-Fa-f]{6}$`, color); !matched {
+	if colorVal != "" {
+		if matched, _ := regexp.MatchString(`^#[0-9A-Fa-f]{6}$`, colorVal); !matched {
 			jsonErr(w, http.StatusBadRequest, "color must be a valid hex code (e.g. #D4AF37)")
 			return
 		}
 	}
 	// icon maxLength:50 (spec §4.4).
-	if len(icon) > 50 {
+	if len(iconVal) > 50 {
 		jsonErr(w, http.StatusBadRequest, "icon exceeds maxLength: 50")
 		return
 	}
@@ -1796,80 +2071,90 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	// general-purpose worker, which is locked by coreagent.SeedConfig).
 	ac := config.AgentConfig{
 		ID:          uuid.New().String(),
-		Name:        req.Name,
-		Description: description,
-		Color:       color,
-		Icon:        icon,
+		Name:        name,
+		Description: descTrimmed,
+		Color:       colorVal,
+		Icon:        iconVal,
 		Type:        createType,
 	}
-	if req.Model != nil && *req.Model != "" {
-		ac.Model = &config.AgentModelConfig{Primary: *req.Model}
+	if model != nil && *model != "" {
+		ac.Model = &config.AgentModelConfig{Primary: *model}
 		// O3 two-field model: persist the explicit primary provider when supplied.
-		if req.Provider != nil && strings.TrimSpace(*req.Provider) != "" {
-			ac.Model.Provider = strings.TrimSpace(*req.Provider)
+		if provider != nil && strings.TrimSpace(*provider) != "" {
+			ac.Model.Provider = strings.TrimSpace(*provider)
 		}
+	}
+	// sandbox_profile / shell_policy: mapped onto AgentConfig so they are
+	// actually persisted (previously read only for the sandbox_profile=off
+	// rejection check above, then write-dropped — the created agent always
+	// fell back to the global default regardless of what the caller sent).
+	// subagent_3p has neither property on the wire (sandboxProfile and
+	// shellPolicyIn stay nil for that variant — the CLI manages its own
+	// isolation), so both stay unset there, matching updateAgent's rejection
+	// of these fields on a subagent_3p PUT.
+	if sandboxProfile != nil && *sandboxProfile != "" {
+		ac.SandboxProfile = config.SandboxProfile(*sandboxProfile)
+	}
+	if shellPolicyIn != nil {
+		sp := &config.AgentShellPolicy{}
+		if shellPolicyIn.EnableDenyPatterns != nil {
+			sp.EnableDenyPatterns = *shellPolicyIn.EnableDenyPatterns
+		}
+		if len(shellPolicyIn.CustomDenyPatterns) > 0 {
+			sp.CustomDenyPatterns = make([]string, len(shellPolicyIn.CustomDenyPatterns))
+			copy(sp.CustomDenyPatterns, shellPolicyIn.CustomDenyPatterns)
+		}
+		ac.ShellPolicy = sp
 	}
 	// Heartbeat is workspace-scoped (ADR-027); no per-agent heartbeat at create.
-	if req.Skills != nil && len(*req.Skills) > 0 {
-		ac.Skills = make([]string, len(*req.Skills))
-		copy(ac.Skills, *req.Skills)
+	if skills != nil && len(*skills) > 0 {
+		ac.Skills = make([]string, len(*skills))
+		copy(ac.Skills, *skills)
 	}
-	// Sub-agent executor (kind/cli). Mapped into AgentConfig.Subagents.Executor so
-	// it is actually persisted. Workers created without an executor get a native
-	// runtime derived here; Main agents have any external executor request
-	// coerced to native earlier with a warning.
-	if createType == config.AgentTypeWorker && req.Executor == nil {
-		ac.Subagents = &config.SubagentsConfig{
-			Executor: &config.ExecutorConfig{Kind: config.ExecutorKindNative},
-		}
-	}
-	if effectiveExecutor != nil {
-		execCfg, errMsg := executorConfigFromRequest(
-			executorKindStr(effectiveExecutor.Kind),
-			executorCliStr(effectiveExecutor.Cli),
-		)
-		if errMsg != "" {
-			jsonErr(w, http.StatusBadRequest, errMsg)
-			return
-		}
-		if execCfg != nil {
-			// executorConfigFromRequest only maps kind+cli. Copy the
-			// remaining executor fields (cli_path, env_overrides, cli_args)
-			// from the request so they persist on create. The PUT handler
-			// does this via executorConfigUpdate; create needs it here.
-			if effectiveExecutor.CliPath != nil {
-				execCfg.CLIPath = *effectiveExecutor.CliPath
+	// Sub-agent executor. Mapped into AgentConfig.Subagents.Executor so it is
+	// actually persisted. A native Subagent (no Executor property on the wire
+	// at all) always gets a native runtime here. A subagent_3p always gets
+	// kind=external-cli — the wire schema requires `executor` to be present
+	// for that variant and, per the field matrix, kind is server-derived
+	// (never client-writable) rather than read from the request.
+	if createType == config.AgentTypeWorker {
+		if *typePeek.Type == string(gen.AgentTypeSubagent3p) {
+			execCfg, errMsg := executorConfigFromRequest(string(config.ExecutorKindExternalCLI), executorIn.Cli)
+			if errMsg != "" {
+				jsonErr(w, http.StatusBadRequest, errMsg)
+				return
 			}
-			if effectiveExecutor.EnvOverrides != nil {
-				execCfg.EnvOverrides = *effectiveExecutor.EnvOverrides
+			if executorIn.CliPath != nil {
+				execCfg.CLIPath = *executorIn.CliPath
 			}
-			if effectiveExecutor.CliArgs != nil {
-				execCfg.CLIArgs = *effectiveExecutor.CliArgs
+			if executorIn.EnvOverrides != nil {
+				execCfg.EnvOverrides = *executorIn.EnvOverrides
+			}
+			if executorIn.CliArgs != nil {
+				execCfg.CLIArgs = *executorIn.CliArgs
 			}
 			ac.Subagents = &config.SubagentsConfig{Executor: execCfg}
-		}
-	}
-	// subagent_3p forbidden-field guard. Any worker created/pointed at an
-	// external-cli executor cannot receive the seven CLI-owned fields.
-	if createType == config.AgentTypeWorker && isExternalSubagent(ac) {
-		if field, forbidden := firstForbiddenSubagent3pField(&req); forbidden {
-			jsonErr(w, http.StatusBadRequest,
-				fmt.Sprintf("subagent_3p agents do not support %s; this is fixed at create time.", field))
-			return
+		} else {
+			ac.Subagents = &config.SubagentsConfig{
+				Executor: &config.ExecutorConfig{Kind: config.ExecutorKindNative},
+			}
 		}
 	}
 	// Delegation policy (to/modes/depth enforced; accept_from/budget inert). Mapped
-	// into AgentConfig.DelegationPolicy so it is actually persisted (previously the
-	// contract field was write-dropped). Validate targets/modes/depth before any work
-	// so a bad request 400s rather than persisting an invalid policy. There is no
-	// existing stored policy on create, so inert fields come solely from the request.
-	if dpIn := delegationInputFromCreateRequest(&req); dpIn != nil {
+	// into AgentConfig.DelegationPolicy so it is actually persisted. Validate
+	// targets/modes/depth before any work so a bad request 400s rather than
+	// persisting an invalid policy. There is no existing stored policy on
+	// create, so inert fields come solely from the request. delegation_policy
+	// is allowed on all three variants, including subagent_3p (a behavior
+	// change from the pre-W1 flat contract, where a 3p create with
+	// delegation_policy 400'd).
+	if delegationIn != nil {
 		cfg := a.agentLoop.GetConfig()
 		// selfID = the new agent's id (known at create time) so a self-ref A→A is
 		// rejected. A Subagent/worker created with a non-empty to[] is now allowed
 		// (bounded by depth, not the worker tier). No existing stored policy on
 		// create → grandfathering is a no-op.
-		dp, errMsg := buildDelegationPolicy(dpIn, nil, rosterIDSet(cfg), delegationDepthCeiling(cfg),
+		dp, errMsg := buildDelegationPolicy(delegationIn, nil, rosterIDSet(cfg), delegationDepthCeiling(cfg),
 			ac.ID, peerDelegationGraph(cfg, ac.ID))
 		if errMsg != "" {
 			jsonErr(w, http.StatusBadRequest, errMsg)
@@ -1878,9 +2163,12 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		ac.DelegationPolicy = dp
 	}
 	// Seed the privilege rail (FR-008/FR-022): custom agents always get
-	// system.*: deny unless the caller explicitly overrides it.
+	// system.*: deny unless the caller explicitly overrides it. subagent_3p
+	// has no tools_cfg property at all (toolsCfgIn stays nil), so it always
+	// falls through to the seeded baseCfg — matching "the runner has its own
+	// tools" (field matrix).
 	baseCfg := coreagent.NewCustomAgentToolsCfg()
-	if req.ToolsCfg != nil {
+	if toolsCfgIn != nil {
 		builtin := config.AgentBuiltinToolsCfg{
 			// Start with the base default_policy=allow.
 			DefaultPolicy: baseCfg.Builtin.DefaultPolicy,
@@ -1890,25 +2178,18 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		for k, v := range baseCfg.Builtin.Policies {
 			builtin.Policies[k] = v
 		}
-		if req.ToolsCfg.Builtin != nil && req.ToolsCfg.Builtin.DefaultPolicy != nil &&
-			*req.ToolsCfg.Builtin.DefaultPolicy != "" {
-			builtin.DefaultPolicy = config.ToolPolicy(*req.ToolsCfg.Builtin.DefaultPolicy)
+		if toolsCfgIn.BuiltinDefaultPolicy != "" {
+			builtin.DefaultPolicy = config.ToolPolicy(toolsCfgIn.BuiltinDefaultPolicy)
 		}
 		// Merge caller-supplied policies; caller's system.* entry overrides seed.
-		if req.ToolsCfg.Builtin != nil && req.ToolsCfg.Builtin.Policies != nil {
-			for k, v := range *req.ToolsCfg.Builtin.Policies {
-				builtin.Policies[k] = config.ToolPolicy(v)
-			}
+		for k, v := range toolsCfgIn.BuiltinPolicies {
+			builtin.Policies[k] = config.ToolPolicy(v)
 		}
 		ac.Tools = &config.AgentToolsCfg{Builtin: builtin}
-		if req.ToolsCfg.Mcp != nil && req.ToolsCfg.Mcp.Servers != nil && len(*req.ToolsCfg.Mcp.Servers) > 0 {
-			servers := make([]config.AgentMCPServerBinding, 0, len(*req.ToolsCfg.Mcp.Servers))
-			for _, s := range *req.ToolsCfg.Mcp.Servers {
-				var tools []string
-				if s.Tools != nil {
-					tools = *s.Tools
-				}
-				servers = append(servers, config.AgentMCPServerBinding{ID: s.Id, Tools: tools})
+		if len(toolsCfgIn.MCPServers) > 0 {
+			servers := make([]config.AgentMCPServerBinding, 0, len(toolsCfgIn.MCPServers))
+			for _, s := range toolsCfgIn.MCPServers {
+				servers = append(servers, config.AgentMCPServerBinding{ID: s.ID, Tools: s.Tools})
 			}
 			ac.Tools.MCP = config.AgentMCPToolsCfg{Servers: servers}
 		}
@@ -1984,6 +2265,19 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		if ac.DelegationPolicy != nil {
 			newAgent["delegation_policy"] = delegationPolicyToMap(ac.DelegationPolicy)
 		}
+		if ac.SandboxProfile != "" {
+			newAgent["sandbox_profile"] = string(ac.SandboxProfile)
+		}
+		if ac.ShellPolicy != nil {
+			shellPolicyMap := map[string]any{}
+			if ac.ShellPolicy.EnableDenyPatterns {
+				shellPolicyMap["enable_deny_patterns"] = true
+			}
+			if len(ac.ShellPolicy.CustomDenyPatterns) > 0 {
+				shellPolicyMap["custom_deny_patterns"] = ac.ShellPolicy.CustomDenyPatterns
+			}
+			newAgent["shell_policy"] = shellPolicyMap
+		}
 		agents["list"] = append(list, newAgent)
 		return nil
 	}); err != nil {
@@ -1996,15 +2290,14 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	// nothing ever landed on disk — and a "draft" agent created without a
 	// soul stayed in the draft state forever on the soul-empty path. Write
 	// it here, mirroring the workspace-resolution + WriteFileAtomic pattern
-	// used by updateAgent. An empty (but non-nil) req.Soul is a legitimate
-	// "soul optional" create (workers may be created with no soul and edited
-	// later), so the field-nonzero check is intentional and matches the
-	// locked concept. Trimming is fine; this overwrites any prior SOUL.md
-	// (create is the only write gate at this point, so a re-run is
-	// idempotent against itself).
+	// used by updateAgent. Trimming is fine; this overwrites any prior
+	// SOUL.md (create is the only write gate at this point, so a re-run is
+	// idempotent against itself). soul is required on every variant (schema
+	// minLength:1, enforced again above), so this is always non-empty in
+	// practice — the guard stays as defense-in-depth.
 	var createSoulContent string
-	if req.Soul != "" {
-		createSoulContent = strings.TrimSpace(req.Soul)
+	if soul != "" {
+		createSoulContent = strings.TrimSpace(soul)
 		workspace, wsErr := agentWorkspacePath(a.agentLoop.GetConfig(), ac.ID, ac.Workspace, a.homePath)
 		if wsErr != nil {
 			slog.Error("rest: agentWorkspacePath for create", "agent_id", ac.ID, "error", wsErr)
@@ -2030,9 +2323,9 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		createReloadWarning = fmt.Sprintf("config reload failed: %v", err)
 	}
 	// Build the response from local variables only (do NOT read from live config — race).
-	model := defaultModelName
+	respModel := defaultModelName
 	if ac.Model != nil && ac.Model.Primary != "" {
-		model = ac.Model.Primary
+		respModel = ac.Model.Primary
 	}
 	// Capture execution config AFTER reload (TriggerReload may have swapped the live config).
 	cfgAfterCreate := a.agentLoop.GetConfig()
@@ -2055,31 +2348,22 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	// agent kind the caller actually created (Main/Subagent/subagent_3p on the wire).
 	ag.Type = coreagent.ToWireType(ac)
 	ag.Locked = ac.Locked
-	ag.Model = &model
+	applyAgentOverrides(&ag, &ac)
+	ag.Model = &respModel
 	setAgentModelProvider(&ag, ac.Model)
-	// Echo the just-persisted soul so the FE round-trip works (req.Soul was
-	// write-dropped before this fix; a created agent would come back with
-	// soul="" regardless of what the caller sent). Status is derived from
-	// the soul too: a non-empty soul moves the agent out of "draft".
+	// Echo the just-persisted soul so the FE round-trip works. Status is
+	// derived from the soul too: a non-empty soul moves the agent out of "draft".
 	ag.Soul = createSoulContent
 	ag.Status = gen.AgentStatus(computeAgentStatus(ac.ID, nil, createSoulContent, ac.Locked))
 	if len(ac.Skills) > 0 {
-		skills := make([]string, len(ac.Skills))
-		copy(skills, ac.Skills)
-		ag.Skills = &skills
+		skillsResp := make([]string, len(ac.Skills))
+		copy(skillsResp, ac.Skills)
+		ag.Skills = &skillsResp
 	}
 	setAgentExecutorResponse(&ag, ac.Subagents)
 	setAgentDelegationPolicyResponse(&ag, ac.DelegationPolicy)
-	warnings := []string{}
-	if createExecutorWarning != "" {
-		warnings = append(warnings, createExecutorWarning)
-	}
 	if createReloadWarning != "" {
-		warnings = append(warnings, createReloadWarning)
-	}
-	if len(warnings) > 0 {
-		w := strings.Join(warnings, "; ")
-		ag.Warning = &w
+		ag.Warning = &createReloadWarning
 	}
 	jsonCreated(w, ag)
 }
@@ -2255,64 +2539,10 @@ func isExternalSubagent(ac config.AgentConfig) bool {
 	return ac.Subagents.Executor.EffectiveKind() == config.ExecutorKindExternalCLI
 }
 
-// firstForbiddenSubagent3pField returns the first forbidden field supplied on
-// a create/update request, or ("", false). Both gen.AgentCreateRequest and
-// gen.AgentUpdateRequest are handled by a type switch.
-func firstForbiddenSubagent3pField(req any) (string, bool) {
-	switch r := req.(type) {
-	case *gen.AgentCreateRequest:
-		if r.ToolsCfg != nil {
-			return "tools_cfg", true
-		}
-		if r.Skills != nil && len(*r.Skills) > 0 {
-			return "skills", true
-		}
-		if r.FallbackModels != nil && len(*r.FallbackModels) > 0 {
-			return "fallback_models", true
-		}
-		if r.ModelParams != nil {
-			return "model_params", true
-		}
-		if r.SandboxProfile != nil {
-			return "sandbox_profile", true
-		}
-		if r.ShellPolicy != nil {
-			return "shell_policy", true
-		}
-		if r.DelegationPolicy != nil {
-			return "delegation_policy", true
-		}
-	case *gen.AgentUpdateRequest:
-		// worker-PUT-400 fix: only the genuinely CLI-owned fields are rejected on
-		// a subagent_3p PUT. Fields that ARE valid for a worker — model,
-		// timeout_seconds, max_tool_iterations, color, icon, description, and
-		// delegation_policy — must be accepted (a delegation_policy with a
-		// non-empty to[] is now allowed for a Subagent and bounded by
-		// buildDelegationPolicy's depth cap). The external CLI manages its own
-		// isolation, tools,
-		// and skills, so tools_cfg / sandbox_profile / shell_policy /
-		// fallback_models / model_params / skills stay forbidden (O13).
-		if r.ToolsCfg != nil {
-			return "tools_cfg", true
-		}
-		if r.Skills != nil {
-			return "skills", true
-		}
-		if r.FallbackModels != nil {
-			return "fallback_models", true
-		}
-		if r.ModelParams != nil {
-			return "model_params", true
-		}
-		if r.SandboxProfile != nil {
-			return "sandbox_profile", true
-		}
-		if r.ShellPolicy != nil {
-			return "shell_policy", true
-		}
-	}
-	return "", false
-}
+// firstForbiddenSubagent3pField moved to agent_field_rules.go (W2a) — it now
+// only handles the AgentUpdateRequest shape (create-time forbidden fields are
+// enforced structurally by the discriminated-union AgentCreateRequestSubagent3p
+// type, which has no matching properties at all).
 
 func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string) {
 	cfg := a.agentLoop.GetConfig()
@@ -2674,7 +2904,13 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 					if req.ShellPolicy.EnableDenyPatterns != nil {
 						existing["enable_deny_patterns"] = *req.ShellPolicy.EnableDenyPatterns
 					}
-					if req.ShellPolicy.CustomDenyPatterns != nil && len(*req.ShellPolicy.CustomDenyPatterns) > 0 {
+					// An explicitly-sent array overwrites, INCLUDING the empty array —
+					// that is how the SPA clears all deny patterns. Only a nil (field
+					// absent from the request) leaves the persisted list untouched.
+					// The old `len(...) > 0` guard made pattern lists impossible to
+					// clear over the wire: the PUT succeeded but the delete was
+					// silently dropped (found live, 2026-07-03).
+					if req.ShellPolicy.CustomDenyPatterns != nil {
 						existing["custom_deny_patterns"] = *req.ShellPolicy.CustomDenyPatterns
 					}
 					agentMap["shell_policy"] = existing
@@ -5899,6 +6135,17 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 	// Use coreagent.IsCoreAgent or check the Locked flag.
 	if foundAgent.Locked {
 		jsonErr(w, http.StatusForbidden, fmt.Sprintf("agent %q is locked and cannot be modified", agentID))
+		return
+	}
+	// subagent_3p (External CLI) agents have no tools_cfg on the wire at all
+	// (W1 discriminated union — AgentCreateRequestSubagent3p has no tools_cfg
+	// property) — the runner manages its own tool loop. This endpoint is a
+	// separate write path from updateAgent's firstForbiddenSubagent3pField
+	// guard, so it needs its own check: closes the tools_cfg-for-3p leak
+	// endpoint (a caller could otherwise bypass the PUT /agents/{id} guard by
+	// hitting PUT /agents/{id}/tools directly).
+	if isExternalSubagent(foundAgent) {
+		jsonErr(w, http.StatusBadRequest, "external subagents run their own tools — tools_cfg is not configurable")
 		return
 	}
 

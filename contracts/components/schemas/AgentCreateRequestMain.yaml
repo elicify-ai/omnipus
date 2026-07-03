@@ -1,31 +1,27 @@
 type: object
+title: AgentCreateRequestMain
 description: >
-  Body for POST /agents. Creates a new agent. A UUID is assigned by the server.
-  The agent starts in "draft" status (no SOUL.md written yet).
+  Create a Main agent — a user-defined chat colleague on the Omnipus engine.
+  Field set per docs/internal/architecture/agent-types-field-matrix.md: voice
+  and steering_mode are Main-only; executor is absent (Main never has one).
 required:
+  - type
   - name
   - soul
 additionalProperties: false
 properties:
+  type:
+    type: string
+    enum:
+      - Main
+    description: >
+      Discriminator. Must be exactly "Main" for this variant.
+    example: "Main"
   name:
     type: string
     minLength: 1
     description: Display name for the new agent.
     example: "My Custom Agent"
-  type:
-    type: string
-    enum:
-      - Main
-      - Subagent
-      - subagent_3p
-    description: >
-      Agent lifecycle to create. "Main" = user-defined chat colleague (default).
-      "Subagent" = a delegation-only labour agent on the Omnipus engine. "subagent_3p" =
-      a delegation-only labour agent that runs on an external CLI (claude-code / codex /
-      opencode) and requires executor.kind=external-cli. "core", "system", and "worker"
-      are reserved/legacy values rejected by the gateway.
-    example: "Main"
-    default: "Main"
   description:
     type: string
     description: >
@@ -142,8 +138,6 @@ properties:
     description: >
       Per-agent persona voice identifier (Main only). Schema-pinned; not active until v0.2.0 TTS.
     example: "alloy"
-  executor:
-    $ref: './ExecutorConfig.yaml'
   sandbox_profile:
     type: string
     enum:

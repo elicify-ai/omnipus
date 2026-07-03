@@ -48,7 +48,10 @@ func readSoulMDForAgent(t *testing.T, api *restAPI, agentID string) string {
 func TestCreateAgent_Worker_PersistsSoul(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 
-	body := `{"name":"Soulful Worker","type":"Subagent","executor":{"kind":"native"},"description":"persists soul regression","soul":"worker-soul-X"}`
+	// AgentCreateRequestSubagent has no executor property at all (native is
+	// always server-derived for a Subagent with no executor block) — sending
+	// one is now rejected 400 by createAgent's strict decode.
+	body := `{"name":"Soulful Worker","type":"Subagent","description":"persists soul regression","soul":"worker-soul-X"}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
@@ -104,11 +107,18 @@ func TestCreateAgent_Worker_DerivesNativeExecutor(t *testing.T) {
 	assert.Equal(t, gen.AgentExecutorKindNative, *created.Executor.Kind)
 }
 
-// TestCreateAgent_Worker_AllowsAnyExecutorKind is the control: a worker can be
-// created with any executor kind (native, external-cli, remote-a2a). Kind
-// validation ensures the kind is known; remote-a2a is accepted at create but
-// rejected at dispatch (runner.ErrRemoteA2AReserved).
-func TestCreateAgent_Worker_AllowsAnyExecutorKind(t *testing.T) {
+// TestCreateAgent_Worker_ExecutorFieldRejected proves the unconditional
+// strict-decode enforcement: AgentCreateRequestSubagent has no `executor`
+// property at all — a Subagent create can no longer request remote-a2a (or
+// any other) executor kind directly at create time (the field matrix marks
+// Subagent's executor row "— (native)"). With a DEFAULT config
+// (ValidateInbound off — buildExecutorTestAPI does not opt in), an
+// `executor` key present in the JSON body is now rejected 400 by
+// createAgent's strict decode, not silently dropped. (remote-a2a is still
+// reachable via PUT — AgentUpdateRequest remains one flat type shared by
+// every agent type; see TestUpdateAgent_WorkerAllowsRemoteA2AExecutor in
+// rest_agent_executor_test.go.)
+func TestCreateAgent_Worker_ExecutorFieldRejected(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 
 	body := `{"name":"Worker Remote A2A","type":"Subagent","description":"remote-a2a regression","executor":{"kind":"remote-a2a"},"soul":"remote-a2a-soul"}`
@@ -117,10 +127,7 @@ func TestCreateAgent_Worker_AllowsAnyExecutorKind(t *testing.T) {
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 
-	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
-	created := decodeAgentResp(t, w.Body.Bytes())
-	assert.Equal(t, gen.AgentTypeSubagent, created.Type)
-	require.NotNil(t, created.Executor)
-	require.NotNil(t, created.Executor.Kind, "Executor.Kind must be non-nil pointer after W1 wire schema")
-	assert.Equal(t, gen.AgentExecutorKindRemoteA2a, *created.Executor.Kind)
+	require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "executor")
+	assert.Contains(t, w.Body.String(), "AgentCreateRequestSubagent")
 }

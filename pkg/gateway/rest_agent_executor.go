@@ -27,13 +27,35 @@ var validExecutorCLIs = map[string]bool{
 	"opencode":    true,
 }
 
+// executorRequestInput is a request-shape-agnostic subset of the wire
+// Executor object. gen.AgentCreateRequestSubagent3p is the only create
+// variant that carries an executor (W1 discriminated union — Main and
+// Subagent structurally have no Executor field at all), so createAgent
+// normalizes that variant's anonymous Executor struct into this shape before
+// building the persisted config.ExecutorConfig.
+//
+// Kind is intentionally NOT carried here: subagent_3p's executor.kind is
+// always server-derived to "external-cli" regardless of what the client
+// sent — the field "is exposed in responses but is NOT a writable field on
+// create/update — clients cannot choose kind directly"
+// (contracts/components/schemas/ExecutorConfig.yaml).
+type executorRequestInput struct {
+	Cli          string
+	CliPath      *string
+	EnvOverrides *map[string]string
+	CliArgs      *string
+}
+
 // executorCliStr dereferences an optional generated CLI enum pointer to its string
-// value. Returns "" when the pointer is nil. Agent.Executor.Cli,
-// AgentCreateRequest.Executor.Cli, and AgentUpdateRequest.Executor.Cli all
-// resolve to the SAME shared gen.ExternalCliTool type (contracts/components/
-// schemas/ExternalCli.yaml, $ref'd — see ExecutorConfig.yaml#/properties/cli),
-// so this generic only exists to also accept the locally-declared mirror
-// struct's *gen.ExternalCliTool field below without a second helper.
+// value. Returns "" when the pointer is nil. Agent.Executor.Cli and
+// AgentUpdateRequest.Executor.Cli resolve to the shared gen.ExternalCliTool
+// type (contracts/components/schemas/ExternalCli.yaml, $ref'd — see
+// ExecutorConfig.yaml#/properties/cli), but AgentCreateRequestSubagent3p's
+// Executor.Cli does NOT — the discriminated union's oneOf variant inlines its
+// $ref'd fields as an anonymous struct (see CLAUDE.md's "Discriminated unions
+// are the one exception" note), so that one gets its own distinct pointer
+// type. This generic exists precisely to paper over that: one helper for
+// every concrete Cli pointer type, named or anonymous.
 func executorCliStr[T ~string](cli *T) string {
 	if cli == nil {
 		return ""
@@ -134,9 +156,16 @@ func setAgentExecutorResponse(ag *gen.Agent, sub *config.SubagentsConfig) {
 	}
 	ec := sub.Executor
 	// The literal below mirrors the inlined anonymous-struct shape oapi-codegen
-	// generated for gen.Agent.Executor. Fields must be declared in the SAME
-	// ORDER they appear in the generated struct (Cli, CliArgs, CliPath,
-	// EnvOverrides, Kind) — Go struct literal positional initialisation.
+	// generated for gen.Agent.Executor. This is NOT Go struct literal
+	// positional initialisation — every field below is set by name via
+	// dot-assignment (exec.Cli = ..., never struct{...}{val1, val2, ...}).
+	// The real constraint is Go's struct type-identity rule: `exec`'s
+	// declared field names, types, and tags (in the SAME order — struct
+	// identity considers field sequence) must match the generated
+	// gen.Agent.Executor inline struct for `ag.Executor = &exec` below to
+	// type-check at all. If the generated shape ever changes, this
+	// assignment fails to COMPILE — a build-time signal, not a silent
+	// runtime field mismatch.
 	exec := struct { // not-wire-format: generated gen.Agent.Executor inline shape, only populates the generated field
 		Cli          *gen.ExternalCliTool   `json:"cli,omitempty"`
 		CliArgs      *string                `json:"cli_args,omitempty"`

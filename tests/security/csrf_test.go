@@ -66,7 +66,10 @@ func csrfTargets() []csrfTarget {
 			// is NOT in the CSRF exempt list, so it is the canonical probe.
 			method:         http.MethodPost,
 			path:           "/api/v1/agents",
-			body:           `{"name":"csrf-test-agent","model":"scripted-model","soul":"test-soul"}`,
+			// `type` is required since the ADR-034 discriminated-union create
+			// contract — without it the request 400s before the CSRF layer's
+			// success-path assertion can be exercised.
+			body:           `{"type":"Main","name":"csrf-test-agent","model":"scripted-model","soul":"test-soul"}`,
 			needsJSONBody:  true,
 			expectAuthedOK: []int{http.StatusOK, http.StatusCreated},
 		},
