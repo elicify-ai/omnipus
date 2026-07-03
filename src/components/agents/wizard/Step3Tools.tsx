@@ -112,7 +112,11 @@ export function Step3Tools({
           testId="wizard-inherit-skills"
         />
       )}
-      {!inheritSkills && (
+      {/* Skills — HIDDEN for subagent_3p (matrix row 14): an external CLI
+          runner (claude-code / codex / opencode) can never load Omnipus
+          skills, so the mapping was meaningless for 3p agents (P3 bug,
+          2026-07-03 — the gate below was missing !isExternal). */}
+      {!isExternal && !inheritSkills && (
       <div className="space-y-2" data-testid="wizard-skills">
         <label className="text-sm font-medium">Skills</label>
         <p className="text-xs text-[var(--color-muted)]">

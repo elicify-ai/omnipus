@@ -5,7 +5,6 @@ import {
   X,
   CaretDown,
   CaretUp,
-  UploadSimple,
   Info,
   Sparkle,
   Star,
@@ -50,7 +49,7 @@ import { ToolsAndPermissions } from './ToolsAndPermissions'
 import { SandboxProfileSelector } from './SandboxProfileSelector'
 import { ShellDenyPatternsEditor } from './ShellDenyPatternsEditor'
 import { ExecutorSelector } from './ExecutorSelector'
-import { BehaviorFields, AvatarColorPicker, IconPicker, AvatarHeader } from './AgentFormFields'
+import { BehaviorFields, AvatarColorPicker, IconPicker, AvatarHeader, UploadMdButton } from './AgentFormFields'
 import { CliPathValidationHint } from './CliPathValidationHint'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import {
@@ -691,40 +690,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     })
   }
 
-  function UploadButton({ onUpload }: { onUpload: (content: string) => void }) {
-    return (
-      <button
-        type="button"
-        onClick={() => {
-          const input = document.createElement('input')
-          input.type = 'file'
-          input.accept = '.md,.markdown,.txt'
-          input.onchange = (e) => {
-            const file = (e.target as HTMLInputElement).files?.[0]
-            if (!file) return
-            if (file.size > 1_000_000) {
-              addToast({ message: `File too large (${(file.size / 1_000_000).toFixed(1)}MB). Max 1MB for markdown files.`, variant: 'error' })
-              return
-            }
-            const reader = new FileReader()
-            reader.onload = () => {
-              onUpload(reader.result as string)
-              markDirty()
-            }
-            reader.onerror = () => {
-              addToast({ message: `Failed to read ${file.name}: ${reader.error?.message ?? 'unknown error'}`, variant: 'error' })
-            }
-            reader.readAsText(file)
-          }
-          input.click()
-        }}
-        className="h-7 px-2 text-xs rounded border border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors flex items-center gap-1"
-      >
-        <UploadSimple size={12} />
-        Upload .md
-      </button>
-    )
-  }
+  // UploadButton moved to the shared UploadMdButton in AgentFormFields.tsx
+  // (create/edit parity, P3 2026-07-03) — one implementation for both dialogs.
 
   // Wave 5 / spec §6.1 BDD #15: Delete agent confirmation. Mirrors the
   // pattern from SchedulesList (`doDelete`): the mutation invalidates
@@ -1225,7 +1192,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             setSoul={(v) => { markDirty(); setSoul(v) }}
             voice={voice}
             setVoice={(v) => { markDirty(); setVoice(v) }}
-            renderUploadButton={(_target, onUpload) => <UploadButton onUpload={onUpload} />}
+            renderUploadButton={(_target, onUpload) => <UploadMdButton onUpload={(v) => { onUpload(v); markDirty() }} />}
           />
 
           {/* Heartbeat — moved to per-workspace Heartbeat tab (spec A1/F-10).
@@ -1443,8 +1410,11 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             </section>
           )}
 
-          {/* Skills — hidden for native workers (M11). */}
-          {!isNativeWorkerAgent && (
+          {/* Skills — Main/core agents only. Native workers were excluded per
+              M11; external-cli (subagent_3p) and remote runners can never load
+              Omnipus skills, so offering the mapping was a lie (P3 bug,
+              2026-07-03). */}
+          {!isWorkerAgent && (
             <section className="space-y-3">
               <div className="flex items-center gap-2">
                 <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Skills</p>
@@ -1947,8 +1917,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 <span className="text-[var(--color-error)] ml-1" aria-label="required">*</span>
               )}
             </label>
-            <UploadButton
-              onUpload={(content) => { markHbDirty(); setHbBody(content) }}
+            <UploadMdButton
+              onUpload={(content: string) => { markHbDirty(); setHbBody(content) }}
             />
           </div>
           <Textarea

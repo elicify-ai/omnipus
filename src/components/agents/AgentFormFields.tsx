@@ -1,8 +1,9 @@
-import { Scroll, Microphone } from '@phosphor-icons/react'
+import { Scroll, Microphone, UploadSimple } from '@phosphor-icons/react'
 import { Textarea } from '@/components/ui/textarea'
 import { Separator } from '@/components/ui/separator'
 import { SmartSelect } from '@/components/ui/smart-select'
 import { VoiceProviderSub } from './voice-provider-sub'
+import { useUiStore } from '@/store/ui'
 import { AVATAR_COLORS, AVATAR_COLORS_BY_NAME } from '@/lib/constants'
 import { ICON_OPTIONS, getIconComponent, type IconName } from '@/lib/agentIcons'
 
@@ -41,10 +42,76 @@ export interface BehaviorFieldsProps {
   /** Voice setter alias — accepts the conventional `setVoice` name. */
   setVoice?: (next: string) => void
   /**
-   * Optional upload button — the profile renders one, the modal does not
-   * (the modal has no file upload affordance for soul).
+   * Optional upload button — rendered BELOW the textarea (create-dialog
+   * parity bug: the wizard used to place its own copy above the box).
    */
   renderUploadButton?: (target: 'soul', onUpload: (content: string) => void) => React.ReactNode
+  /**
+   * Marks the soul as required-to-submit and renders the minLength hint.
+   * Defaults to `isWorker` (the profile's historical behavior: base agents
+   * may be saved empty as drafts). The create wizard passes `true` for all
+   * types — AgentCreateRequest.soul is `minLength: 1` and the server rejects
+   * whitespace-only.
+   */
+  soulRequired?: boolean
+  /** Overrides the soul textarea's data-testid (wizard: "wizard-soul"). */
+  soulTestId?: string
+  /** Optional data-testid for the voice block wrapper (wizard: "wizard-voice"). */
+  voiceWrapperTestId?: string
+}
+
+/**
+ * UploadMdButton — the shared "Upload .md" affordance for SOUL.md content.
+ * One implementation for the profile AND the wizard (the wizard used to carry
+ * a drifted duplicate). Reads .md/.markdown/.txt up to 1MB and hands the text
+ * to `onUpload`.
+ */
+export function UploadMdButton({
+  onUpload,
+  testId,
+}: {
+  onUpload: (content: string) => void
+  testId?: string
+}) {
+  const addToast = useUiStore((s) => s.addToast)
+  return (
+    <button
+      type="button"
+      data-testid={testId}
+      onClick={() => {
+        const input = document.createElement('input')
+        input.type = 'file'
+        input.accept = '.md,.markdown,.txt'
+        input.onchange = (e) => {
+          const file = (e.target as HTMLInputElement).files?.[0]
+          if (!file) return
+          if (file.size > 1_000_000) {
+            addToast({
+              message: `File too large (${(file.size / 1_000_000).toFixed(1)}MB). Max 1MB for markdown files.`,
+              variant: 'error',
+            })
+            return
+          }
+          const reader = new FileReader()
+          reader.onload = () => {
+            onUpload(reader.result as string)
+          }
+          reader.onerror = () => {
+            addToast({
+              message: `Failed to read ${file.name}: ${reader.error?.message ?? 'unknown error'}`,
+              variant: 'error',
+            })
+          }
+          reader.readAsText(file)
+        }
+        input.click()
+      }}
+      className="h-7 px-2 text-xs rounded border border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors flex items-center gap-1"
+    >
+      <UploadSimple size={12} />
+      Upload .md
+    </button>
+  )
 }
 
 /**
@@ -63,9 +130,13 @@ export function BehaviorFields({
   onVoiceChange,
   setVoice,
   renderUploadButton,
+  soulRequired,
+  soulTestId,
+  voiceWrapperTestId,
 }: BehaviorFieldsProps) {
   const handleSoul = onSoulChange ?? setSoul
   const handleVoice = onVoiceChange ?? setVoice
+  const required = soulRequired ?? isWorker
   return (
     <div className="space-y-5">
       {/* SOUL.md / Task prompt — relabelled for workers.
@@ -76,6 +147,9 @@ export function BehaviorFields({
           <Scroll size={13} className="text-[var(--color-accent)]" />
           <p className="text-xs font-medium text-[var(--color-secondary)]">
             {isWorker ? 'Task prompt' : 'Personality & instructions'}
+            {required && (
+              <span className="text-[var(--color-error)] ml-0.5" aria-label="required">*</span>
+            )}
           </p>
         </div>
         <p className="text-xs text-[var(--color-muted)]">
@@ -93,8 +167,13 @@ export function BehaviorFields({
             </>
           )}
         </p>
+        {required && (
+          <p className="text-[11px] text-[var(--color-muted)]" data-testid="soul-minlength-hint">
+            Required — minimum 1 character; whitespace-only is rejected.
+          </p>
+        )}
         <Textarea
-          data-testid={isWorker ? 'worker-task-prompt' : 'agent-soul'}
+          data-testid={soulTestId ?? (isWorker ? 'worker-task-prompt' : 'agent-soul')}
           value={soul}
           onChange={(e) => handleSoul?.(e.target.value)}
           placeholder={
@@ -104,9 +183,11 @@ export function BehaviorFields({
           }
           rows={6}
           className="text-xs font-mono resize-none"
-          required={isWorker}
-          aria-required={isWorker ? 'true' : 'false'}
+          required={required}
+          aria-required={required ? 'true' : 'false'}
         />
+        {/* Upload sits BELOW the textarea — create/edit parity (the wizard
+            used to place its own duplicate above the box). */}
         {renderUploadButton?.('soul', (v) => handleSoul?.(v))}
       </div>
 
@@ -116,7 +197,7 @@ export function BehaviorFields({
       {!isWorker && (
         <>
           <Separator />
-          <div className="space-y-2">
+          <div className="space-y-2" data-testid={voiceWrapperTestId}>
             <div className="flex items-center gap-2">
               <Microphone size={13} className="text-[var(--color-accent)]" />
               <p className="text-xs font-medium text-[var(--color-secondary)]">
