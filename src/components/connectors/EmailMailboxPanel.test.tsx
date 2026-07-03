@@ -10,8 +10,8 @@
  * 2. The password field is write-only: it is never pre-filled from the
  *    server config (the backend never returns the password value; only
  *    password_ref is returned when a credential is stored).
- * 3. Save calls saveMailboxConfig (the email channel config endpoint seam)
- *    with the correct payload.
+ * 3. Save calls saveAgentMailbox (PUT /agents/{id}/mailbox — M11 per-agent
+ *    endpoints; the legacy /channels/email path is dead) with the correct payload.
  * 4. An empty password on Save does NOT include the password field in the
  *    payload (leave-existing-credential-intact semantics).
  * 5. Validation: required fields (username, imap_host, smtp_host) show errors
@@ -37,8 +37,9 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return {
     ...actual,
     fetchChannels: vi.fn(),
-    fetchMailboxConfig: vi.fn(),
-    saveMailboxConfig: vi.fn(),
+    findConfiguredMailbox: vi.fn(),
+    saveAgentMailbox: vi.fn(),
+    deleteAgentMailbox: vi.fn(),
     fetchAgents: vi.fn(),
     fetchWorkspaces: vi.fn(),
     // ADR-031 Track 2 — ConnectorsScreen resolves each configured row's
@@ -64,8 +65,8 @@ vi.mock('framer-motion', () => ({
 
 import { useUiStore } from '@/store/ui'
 import {
-  fetchMailboxConfig,
-  saveMailboxConfig,
+  findConfiguredMailbox,
+  saveAgentMailbox,
   fetchAgents,
   fetchWorkspaces,
   fetchChannels,
@@ -88,9 +89,11 @@ function mockUiStore() {
   return { addToast }
 }
 
-function renderPanel(configOverrides?: Record<string, unknown>) {
+// mailbox: the seeded per-agent Mailbox wire object (null = none configured).
+function renderPanel(mailbox?: Record<string, unknown> | null) {
   const client = makeQueryClient()
-  client.setQueryData(['mailbox-config'], configOverrides ?? {})
+  client.setQueryData(['agent-mailboxes'], mailbox ?? null)
+  vi.mocked(findConfiguredMailbox).mockResolvedValue((mailbox ?? null) as never)
   client.setQueryData(['agents'], [
     { id: 'mia', name: 'Mia', type: 'core', locked: true },
   ])
@@ -133,7 +136,7 @@ describe('ConnectorsScreen — email mailbox account section', () => {
       { id: 'telegram', instance_id: 'telegram', name: 'Telegram', transport: 'webhook', enabled: false, identity: { kind: 'agent', id: 'mia' } } as never,
       { id: 'email', name: 'Email', transport: 'email', enabled: false } as never,
     ])
-    vi.mocked(fetchMailboxConfig).mockResolvedValue({})
+    vi.mocked(findConfiguredMailbox).mockResolvedValue(null)
     vi.mocked(fetchAgents).mockResolvedValue([])
     vi.mocked(fetchWorkspaces).mockResolvedValue([])
     vi.mocked(getChannelRouting).mockResolvedValue({})
@@ -182,7 +185,7 @@ describe('EmailMailboxPanel — write-only password field', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockUiStore()
-    vi.mocked(fetchMailboxConfig).mockResolvedValue({})
+    vi.mocked(findConfiguredMailbox).mockResolvedValue(null)
     vi.mocked(fetchAgents).mockResolvedValue([])
     vi.mocked(fetchWorkspaces).mockResolvedValue([])
   })
@@ -196,15 +199,17 @@ describe('EmailMailboxPanel — write-only password field', () => {
     })
   })
 
-  it('password field is empty even when server config returns other fields', async () => {
-    // Backend never returns the actual password — simulate a config with all fields
-    // except password (only password_ref is returned when a credential is stored)
+  it('password field is empty even when the server returns other fields', async () => {
+    // Backend never returns the actual password — the Mailbox wire type only
+    // carries `configured` (whether a stored credential resolves).
     renderPanel({
+      agent_id: 'mia',
+      enabled: true,
+      workspace_id: 'ws-1',
       username: 'bot@example.com',
       imap_host: 'imap.gmail.com',
       smtp_host: 'smtp.gmail.com',
-      // no password field — only password_ref
-      password_ref: 'cred:email_password',
+      configured: true,
     })
     await waitFor(() => {
       const usernameField = screen.getByTestId('mailbox-username') as HTMLInputElement
@@ -215,8 +220,8 @@ describe('EmailMailboxPanel — write-only password field', () => {
     expect(pwField.value).toBe('')
   })
 
-  it('shows "(stored)" placeholder hint when password_ref is present', async () => {
-    renderPanel({ password_ref: 'cred:email_password' })
+  it('shows "(stored)" placeholder hint when a stored credential resolves (configured)', async () => {
+    renderPanel({ agent_id: 'mia', enabled: true, configured: true })
     await waitFor(() => {
       const pwField = screen.getByTestId('mailbox-password') as HTMLInputElement
       expect(pwField.placeholder).toMatch(/stored/)
@@ -224,7 +229,7 @@ describe('EmailMailboxPanel — write-only password field', () => {
   })
 
   it('shows generic placeholder when no credential is stored', async () => {
-    renderPanel({})
+    renderPanel(null)
     await waitFor(() => {
       const pwField = screen.getByTestId('mailbox-password') as HTMLInputElement
       expect(pwField.placeholder).not.toMatch(/stored/)
@@ -232,22 +237,24 @@ describe('EmailMailboxPanel — write-only password field', () => {
   })
 })
 
-describe('EmailMailboxPanel — Save calls the correct API seam', () => {
+describe('EmailMailboxPanel — Save calls the per-agent mailbox endpoint', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockUiStore()
-    vi.mocked(fetchMailboxConfig).mockResolvedValue({})
+    vi.mocked(findConfiguredMailbox).mockResolvedValue(null)
     vi.mocked(fetchAgents).mockResolvedValue([
       { id: 'mia', name: 'Mia', type: 'core', locked: true } as never,
     ])
     vi.mocked(fetchWorkspaces).mockResolvedValue([
       { id: 'ws-1', name: 'My Workspace', status: 'active', pinned: false, pin_order: 0 } as never,
     ])
-    vi.mocked(saveMailboxConfig).mockResolvedValue(undefined)
+    vi.mocked(saveAgentMailbox).mockResolvedValue({ agent_id: 'mia', enabled: true, configured: true } as never)
   })
 
-  it('Save calls saveMailboxConfig with the entered values', async () => {
-    renderPanel()
+  it('Save calls saveAgentMailbox(agentId, req) with the entered values', async () => {
+    // Agent + workspace are pre-bound (seeded mailbox) — the user edits the
+    // credential fields and saves.
+    renderPanel({ agent_id: 'mia', enabled: true, workspace_id: 'ws-1', configured: false })
     await waitFor(() => {
       expect(screen.getByTestId('mailbox-username')).toBeInTheDocument()
     })
@@ -262,20 +269,23 @@ describe('EmailMailboxPanel — Save calls the correct API seam', () => {
     })
 
     await waitFor(() => {
-      expect(vi.mocked(saveMailboxConfig)).toHaveBeenCalled()
+      expect(vi.mocked(saveAgentMailbox)).toHaveBeenCalled()
     })
 
-    const [payload] = vi.mocked(saveMailboxConfig).mock.calls[0] as [Record<string, unknown>]
+    const [agentId, payload] = vi.mocked(saveAgentMailbox).mock.calls[0] as [string, Record<string, unknown>]
+    expect(agentId).toBe('mia')
+    expect(payload['enabled']).toBe(true)
+    expect(payload['workspace_id']).toBe('ws-1')
     expect(payload['username']).toBe('agent@example.com')
     expect(payload['imap_host']).toBe('imap.example.com')
     expect(payload['smtp_host']).toBe('smtp.example.com')
     expect(payload['password']).toBe('supersecret')
   })
 
-  it('Save omits password from payload when the password field is empty', async () => {
+  it('Save omits password from the request when the password field is empty', async () => {
     // Simulates rotating: user opens the panel, leaves password blank, saves
     // (should leave the stored credential intact, not overwrite with empty)
-    renderPanel({ username: 'agent@example.com', imap_host: 'imap.example.com', smtp_host: 'smtp.example.com', password_ref: 'cred:x' })
+    renderPanel({ agent_id: 'mia', enabled: true, workspace_id: 'ws-1', username: 'agent@example.com', imap_host: 'imap.example.com', smtp_host: 'smtp.example.com', configured: true })
     await waitFor(() => {
       const usernameField = screen.getByTestId('mailbox-username') as HTMLInputElement
       expect(usernameField.value).toBe('agent@example.com')
@@ -290,11 +300,11 @@ describe('EmailMailboxPanel — Save calls the correct API seam', () => {
     })
 
     await waitFor(() => {
-      expect(vi.mocked(saveMailboxConfig)).toHaveBeenCalled()
+      expect(vi.mocked(saveAgentMailbox)).toHaveBeenCalled()
     })
 
-    const [payload] = vi.mocked(saveMailboxConfig).mock.calls[0] as [Record<string, unknown>]
-    // password must NOT be in the payload — leave the stored credential untouched
+    const [, payload] = vi.mocked(saveAgentMailbox).mock.calls[0] as [string, Record<string, unknown>]
+    // password must NOT be in the request — leave the stored credential untouched
     expect(Object.prototype.hasOwnProperty.call(payload, 'password')).toBe(false)
   })
 })
@@ -303,14 +313,14 @@ describe('EmailMailboxPanel — client-side validation', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockUiStore()
-    vi.mocked(fetchMailboxConfig).mockResolvedValue({})
+    vi.mocked(findConfiguredMailbox).mockResolvedValue(null)
     vi.mocked(fetchAgents).mockResolvedValue([])
     vi.mocked(fetchWorkspaces).mockResolvedValue([])
-    vi.mocked(saveMailboxConfig).mockResolvedValue(undefined)
+    vi.mocked(saveAgentMailbox).mockResolvedValue({ agent_id: 'mia', enabled: true, configured: true } as never)
   })
 
   it('shows an error when username is blank and Save is clicked', async () => {
-    renderPanel()
+    renderPanel({ agent_id: 'mia', enabled: true, workspace_id: 'ws-1', configured: false })
     await waitFor(() => {
       expect(screen.getByTestId('mailbox-imap-host')).toBeInTheDocument()
     })
@@ -326,12 +336,12 @@ describe('EmailMailboxPanel — client-side validation', () => {
     await waitFor(() => {
       expect(screen.getByText(/Email address is required/i)).toBeInTheDocument()
     })
-    // Must NOT call saveMailboxConfig when validation fails
-    expect(vi.mocked(saveMailboxConfig)).not.toHaveBeenCalled()
+    // Must NOT call saveAgentMailbox when validation fails
+    expect(vi.mocked(saveAgentMailbox)).not.toHaveBeenCalled()
   })
 
   it('shows an error when imap_host is blank and Save is clicked', async () => {
-    renderPanel()
+    renderPanel({ agent_id: 'mia', enabled: true, workspace_id: 'ws-1', configured: false })
     await waitFor(() => {
       expect(screen.getByTestId('mailbox-username')).toBeInTheDocument()
     })
@@ -347,6 +357,6 @@ describe('EmailMailboxPanel — client-side validation', () => {
     await waitFor(() => {
       expect(screen.getByText(/IMAP server hostname is required/i)).toBeInTheDocument()
     })
-    expect(vi.mocked(saveMailboxConfig)).not.toHaveBeenCalled()
+    expect(vi.mocked(saveAgentMailbox)).not.toHaveBeenCalled()
   })
 })

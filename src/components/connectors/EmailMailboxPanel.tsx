@@ -31,7 +31,16 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { SmartSelect } from '@/components/ui/smart-select'
-import { fetchMailboxConfig, saveMailboxConfig, fetchAgents, fetchWorkspaces, isWorker, isApiError } from '@/lib/api'
+import {
+  findConfiguredMailbox,
+  saveAgentMailbox,
+  deleteAgentMailbox,
+  fetchAgents,
+  fetchWorkspaces,
+  isWorker,
+  isApiError,
+} from '@/lib/api'
+import type { MailboxConfigureRequest } from '@/lib/api'
 import { AdvancedDisclosure } from '@/components/shared/AdvancedDisclosure'
 import { useUiStore } from '@/store/ui'
 
@@ -69,6 +78,8 @@ interface FieldErrors {
   password?: string
   imap_host?: string
   smtp_host?: string
+  agent_id?: string
+  workspace_id?: string
 }
 
 function PasswordField({
@@ -144,6 +155,8 @@ function FieldRow({
 
 function validate(form: MailboxFormState): FieldErrors {
   const errors: FieldErrors = {}
+  if (!form.agent_id) errors.agent_id = 'Owning agent is required'
+  if (!form.workspace_id) errors.workspace_id = 'Workspace is required'
   if (!form.username.trim()) errors.username = 'Email address is required'
   if (!form.imap_host.trim()) errors.imap_host = 'IMAP server hostname is required'
   if (!form.smtp_host.trim()) errors.smtp_host = 'SMTP server hostname is required'
@@ -157,16 +170,20 @@ export function EmailMailboxPanel({ open, onOpenChange }: EmailMailboxPanelProps
   const [form, setForm] = useState<MailboxFormState>(EMPTY_FORM)
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({})
 
-  const { data: rawConfig, isLoading: configLoading } = useQuery({
-    queryKey: ['mailbox-config'],
-    queryFn: fetchMailboxConfig,
-    enabled: open,
-  })
-
-  const { data: agents = [], isError: agentsError } = useQuery({
+  const { data: agents = [], isError: agentsError, isSuccess: agentsLoaded } = useQuery({
     queryKey: ['agents'],
     queryFn: fetchAgents,
     enabled: open,
+  })
+
+  // The mailbox is per-agent (cap-1 in 0.1.0): probe the non-worker agents'
+  // mailbox endpoints in parallel (404-tolerant) and use the first hit.
+  // (The legacy GET /channels/email path is dead — "email" is not a channel
+  // type, so the ADR-029 grammar gate rejects it.)
+  const { data: mailbox, isLoading: configLoading } = useQuery({
+    queryKey: ['agent-mailboxes'],
+    queryFn: () => findConfiguredMailbox(agents.filter((a) => !isWorker(a)).map((a) => a.id)),
+    enabled: open && agentsLoaded,
   })
 
   const { data: workspaces = [], isError: workspacesError } = useQuery({
@@ -175,23 +192,22 @@ export function EmailMailboxPanel({ open, onOpenChange }: EmailMailboxPanelProps
     enabled: open,
   })
 
-  // Populate form from server config; skip if user has unsaved edits.
+  // Populate form from the configured mailbox; skip if user has unsaved edits.
   useEffect(() => {
-    if (!rawConfig) return
+    if (!mailbox) return
     if (isDirtyRef.current) return
-    const cfg = rawConfig as Record<string, unknown>
     setForm({
-      username: String(cfg['username'] ?? ''),
+      username: mailbox.username ?? '',
       // password is NEVER returned by the backend — always start blank
       password: '',
-      imap_host: String(cfg['imap_host'] ?? ''),
-      imap_port: cfg['imap_port'] != null ? String(cfg['imap_port']) : '',
-      smtp_host: String(cfg['smtp_host'] ?? ''),
-      smtp_port: cfg['smtp_port'] != null ? String(cfg['smtp_port']) : '',
-      agent_id: String(cfg['agent_id'] ?? ''),
-      workspace_id: String(cfg['workspace_id'] ?? ''),
+      imap_host: mailbox.imap_host ?? '',
+      imap_port: mailbox.imap_port != null ? String(mailbox.imap_port) : '',
+      smtp_host: mailbox.smtp_host ?? '',
+      smtp_port: mailbox.smtp_port != null ? String(mailbox.smtp_port) : '',
+      agent_id: mailbox.agent_id,
+      workspace_id: mailbox.workspace_id ?? '',
     })
-  }, [rawConfig])
+  }, [mailbox])
 
   // Reset dirty flag when the panel closes so the next open repopulates from server.
   useEffect(() => {
@@ -215,31 +231,37 @@ export function EmailMailboxPanel({ open, onOpenChange }: EmailMailboxPanelProps
   }
 
   const { mutate: doSave, isPending: saving } = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       const errors = validate(form)
       if (Object.keys(errors).length > 0) {
         setFieldErrors(errors)
         throw new Error('Please fill in all required fields')
       }
 
-      // Build the payload — only include password when the user entered one.
-      // An empty password field is omitted so the backend leaves the stored
-      // credential untouched (write-only; never clear on empty submit).
-      const payload: Record<string, unknown> = {
+      // Build the request — only include password when the user entered one.
+      // An omitted password leaves the stored credential untouched (write-only;
+      // never clear on empty submit).
+      const req: MailboxConfigureRequest = {
+        enabled: true,
+        workspace_id: form.workspace_id,
         username: form.username.trim(),
         imap_host: form.imap_host.trim(),
         smtp_host: form.smtp_host.trim(),
       }
-      if (form.imap_port !== '') payload['imap_port'] = Number(form.imap_port)
-      if (form.smtp_port !== '') payload['smtp_port'] = Number(form.smtp_port)
-      if (form.password !== '') payload['password'] = form.password
-      if (form.agent_id !== '') payload['agent_id'] = form.agent_id
-      if (form.workspace_id !== '') payload['workspace_id'] = form.workspace_id
-      return saveMailboxConfig(payload)
+      if (form.imap_port !== '') req.imap_port = Number(form.imap_port)
+      if (form.smtp_port !== '') req.smtp_port = Number(form.smtp_port)
+      if (form.password !== '') req.password = form.password
+
+      // Cap-1: when the owning agent changes, delete the old agent's mailbox
+      // first — the backend rejects a second enabled mailbox in the workspace.
+      if (mailbox && mailbox.agent_id !== form.agent_id) {
+        await deleteAgentMailbox(mailbox.agent_id)
+      }
+      return saveAgentMailbox(form.agent_id, req)
     },
     onSuccess: () => {
       isDirtyRef.current = false
-      queryClient.invalidateQueries({ queryKey: ['mailbox-config'] })
+      queryClient.invalidateQueries({ queryKey: ['agent-mailboxes'] })
       queryClient.invalidateQueries({ queryKey: ['channels'] })
       addToast({ message: 'Mailbox account saved', variant: 'success' })
       onOpenChange(false)
@@ -253,8 +275,9 @@ export function EmailMailboxPanel({ open, onOpenChange }: EmailMailboxPanelProps
     },
   })
 
-  // Determine whether a stored credential already exists (backend returns password_ref when set).
-  const hasStoredCredential = Boolean((rawConfig as Record<string, unknown> | undefined)?.['password_ref'])
+  // Whether a stored credential already exists (wire `configured` flag: the
+  // password ref is set AND resolves in the credential store).
+  const hasStoredCredential = Boolean(mailbox?.configured)
 
   // Non-worker agents only — email mailbox owner must be a conversational agent.
   const mainAgents = agents.filter((a) => !isWorker(a))
@@ -269,7 +292,7 @@ export function EmailMailboxPanel({ open, onOpenChange }: EmailMailboxPanelProps
     ...workspaces.map((w) => ({ value: w.id, label: w.name })),
   ]
 
-  const isLoading = configLoading
+  const isLoading = configLoading && agentsLoaded
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -323,6 +346,7 @@ export function EmailMailboxPanel({ open, onOpenChange }: EmailMailboxPanelProps
                 id="mailbox-agent"
                 label="Owning agent"
                 required
+                error={fieldErrors.agent_id}
                 helpId="mailbox-agent-help"
                 helpText="The agent whose email identity this mailbox represents (one mailbox per agent for now)."
               >
@@ -342,6 +366,7 @@ export function EmailMailboxPanel({ open, onOpenChange }: EmailMailboxPanelProps
                 id="mailbox-workspace"
                 label="Workspace"
                 required
+                error={fieldErrors.workspace_id}
                 helpId="mailbox-workspace-help"
                 helpText="The workspace where this mailbox surfaces (Board tasks land here)."
               >
