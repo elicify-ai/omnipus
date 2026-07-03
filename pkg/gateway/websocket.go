@@ -650,12 +650,17 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn) bool {
 	cfg := h.agentLoop.GetConfig()
 	rawToken := authFrame.Token
 
-	// 1. The single human account (Gateway.Users[0], if configured).
-	// Single-user model: Gateway.Users holds at most one entry now, so this is
-	// a direct check rather than a loop (SEC-1).
-	if len(cfg.Gateway.Users) > 0 {
-		if cfg.Gateway.Users[0].VerifyToken(rawToken) == nil {
-			wc.userID = cfg.Gateway.Users[0].Username // FR-073: needed for session_state user scoping
+	// 1. The human account(s) in Gateway.Users. Single-user model: normally
+	// holds exactly one entry, but a pre-single-user-model install could
+	// still carry a leftover second (or third...) account from before the
+	// Users CRUD API was deleted (config.warnAboutExtraUsers logs a WARN
+	// for this at load time — deliberately not self-healed/truncated here,
+	// since that would race a legitimate account's own in-flight login).
+	// Looping keeps every configured account able to authenticate rather
+	// than silently and permanently locking out everyone but index 0 (SEC-1).
+	for i := range cfg.Gateway.Users {
+		if cfg.Gateway.Users[i].VerifyToken(rawToken) == nil {
+			wc.userID = cfg.Gateway.Users[i].Username // FR-073: needed for session_state user scoping
 			conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 			return true
 		}

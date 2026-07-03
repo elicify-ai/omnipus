@@ -2762,7 +2762,7 @@ type GatewayConfig struct {
 	HotReload     bool         `json:"hot_reload"                env:"OMNIPUS_GATEWAY_HOT_RELOAD"`
 	LogLevel      string       `json:"log_level,omitempty"       env:"OMNIPUS_LOG_LEVEL"`
 	Token         string       `json:"token,omitempty"           env:"-"` // Bearer token stored for reference; runtime auth uses OMNIPUS_BEARER_TOKEN env var
-	Users         []UserConfig `json:"users,omitempty"           env:"-"` // Per-user RBAC user list
+	Users         []UserConfig `json:"users,omitempty"           env:"-"` // Per-account bearer-token list (single-user model: holds at most one entry)
 	DevModeBypass bool         `json:"dev_mode_bypass,omitempty" env:"-"` // Opt-in flag to allow unauthenticated access in development. NEVER set to true in production.
 
 	// Preview listener fields (FR-001..FR-005, FR-027, FR-028).
@@ -3493,6 +3493,17 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	if versionInfo.Version == CurrentVersion {
 		migrateCLITokenOutOfUsers(cfg, path, onSelfHeal)
 	}
+
+	// Single-account diagnostic (single-user model follow-up): a legacy
+	// config may still carry more than one Gateway.Users entry from before
+	// the Users CRUD API was deleted. checkBearerAuth/authenticateWS
+	// (pkg/gateway) only ever check Users[0] — without this, every account
+	// past the first would silently and permanently fail to authenticate
+	// with no diagnostic anywhere. Deliberately WARN-only, never truncates
+	// — see single_account_migration.go's package doc for why a destructive
+	// self-heal here is unsafe (it would race a second account's own
+	// in-flight login). Runs on every load, all config versions.
+	warnAboutExtraUsers(cfg)
 
 	// Apply defaults and validate bounds for all security-relevant fields
 	// (FR-001, FR-002a, numeric sandbox fields, AuthMismatchLogLevel).

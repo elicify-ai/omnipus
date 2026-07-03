@@ -832,7 +832,7 @@ func (a *restAPI) HandleSchedules(w http.ResponseWriter, r *http.Request) {
 	case rest == "": // collection
 		switch r.Method {
 		case http.MethodGet:
-			a.handleListSchedules(w, user)
+			a.handleListSchedules(w)
 		case http.MethodPost:
 			a.handleCreateSchedule(w, r, user)
 		default:
@@ -844,11 +844,11 @@ func (a *restAPI) HandleSchedules(w http.ResponseWriter, r *http.Request) {
 		if len(parts) == 1 {
 			switch r.Method {
 			case http.MethodGet:
-				a.handleGetSchedule(w, user, id)
+				a.handleGetSchedule(w, id)
 			case http.MethodPut:
-				a.handleUpdateSchedule(w, r, user, id)
+				a.handleUpdateSchedule(w, r, id)
 			case http.MethodDelete:
-				a.handleDeleteSchedule(w, user, id)
+				a.handleDeleteSchedule(w, id)
 			default:
 				jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 			}
@@ -857,10 +857,10 @@ func (a *restAPI) HandleSchedules(w http.ResponseWriter, r *http.Request) {
 		if len(parts) == 2 && r.Method == http.MethodPost {
 			switch parts[1] {
 			case "run":
-				a.handleRunSchedule(w, user, id)
+				a.handleRunSchedule(w, id)
 				return
 			case "pause":
-				a.handlePauseSchedule(w, user, id)
+				a.handlePauseSchedule(w, id)
 				return
 			}
 		}
@@ -868,7 +868,7 @@ func (a *restAPI) HandleSchedules(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (a *restAPI) handleListSchedules(w http.ResponseWriter, _ *config.UserConfig) {
+func (a *restAPI) handleListSchedules(w http.ResponseWriter) {
 	jobs := a.cronSvc().ListJobs(true)
 	// Build a slice of the generated Schedule type, then round-trip the whole
 	// list into gen.ScheduleList. The ScheduleList element is structurally
@@ -894,7 +894,7 @@ func (a *restAPI) handleListSchedules(w http.ResponseWriter, _ *config.UserConfi
 	jsonOK(w, out)
 }
 
-func (a *restAPI) handleGetSchedule(w http.ResponseWriter, _ *config.UserConfig, id string) {
+func (a *restAPI) handleGetSchedule(w http.ResponseWriter, id string) {
 	job, ok := a.cronSvc().GetJob(id)
 	if !ok {
 		jsonErr(w, http.StatusNotFound, "schedule not found")
@@ -974,7 +974,7 @@ func (a *restAPI) handleCreateSchedule(w http.ResponseWriter, r *http.Request, u
 	jsonCreated(w, toSchedule(*job))
 }
 
-func (a *restAPI) handleUpdateSchedule(w http.ResponseWriter, r *http.Request, _ *config.UserConfig, id string) {
+func (a *restAPI) handleUpdateSchedule(w http.ResponseWriter, r *http.Request, id string) {
 	job, ok := a.cronSvc().GetJob(id)
 	if !ok {
 		jsonErr(w, http.StatusNotFound, "schedule not found")
@@ -1057,7 +1057,7 @@ func (a *restAPI) handleUpdateSchedule(w http.ResponseWriter, r *http.Request, _
 	jsonOK(w, toSchedule(job))
 }
 
-func (a *restAPI) handleDeleteSchedule(w http.ResponseWriter, _ *config.UserConfig, id string) {
+func (a *restAPI) handleDeleteSchedule(w http.ResponseWriter, id string) {
 	if _, ok := a.cronSvc().GetJob(id); !ok {
 		jsonErr(w, http.StatusNotFound, "schedule not found")
 		return
@@ -1069,7 +1069,7 @@ func (a *restAPI) handleDeleteSchedule(w http.ResponseWriter, _ *config.UserConf
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (a *restAPI) handleRunSchedule(w http.ResponseWriter, _ *config.UserConfig, id string) {
+func (a *restAPI) handleRunSchedule(w http.ResponseWriter, id string) {
 	if _, ok := a.cronSvc().GetJob(id); !ok {
 		jsonErr(w, http.StatusNotFound, "schedule not found")
 		return
@@ -1093,7 +1093,7 @@ func (a *restAPI) handleRunSchedule(w http.ResponseWriter, _ *config.UserConfig,
 	jsonOK(w, res)
 }
 
-func (a *restAPI) handlePauseSchedule(w http.ResponseWriter, _ *config.UserConfig, id string) {
+func (a *restAPI) handlePauseSchedule(w http.ResponseWriter, id string) {
 	job, ok := a.cronSvc().GetJob(id)
 	if !ok {
 		jsonErr(w, http.StatusNotFound, "schedule not found")
