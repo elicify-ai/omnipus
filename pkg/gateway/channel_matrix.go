@@ -10,7 +10,11 @@ import (
 	// so matrix silently vanished from every CGO_ENABLED=0 release binary (the
 	// canonical goolm,stdjson build) while the SPA kept offering it: enabling it
 	// hit "factory not registered". The gate is now `goolm || cgo`: goolm builds
-	// (the default) link matrix pure-Go; legacy cgo/libolm builds still work.
+	// (the default) link matrix pure-Go. A cgo-only build (no `goolm` tag) still
+	// imports this file, but there is no cgo/libolm crypto implementation to
+	// link against anymore — that path was removed in the goolm migration and
+	// no longer exists. Such a build degrades to init_stub.go's always-erroring
+	// factory (a non-fatal, unavailable-channel stub), not a working libolm path.
 	//
 	// We exclude it on:
 	// - linux/mipsle: mautrix crypto falls back to libolm when the `goolm` build

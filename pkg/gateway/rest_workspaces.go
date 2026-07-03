@@ -1004,7 +1004,8 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 	}
 
 	// Cascade: (1) heartbeat cron jobs → (2) heartbeat sessions → (3) milestones →
-	// (4) tasks → (5) workspace file → (6) workspace directory.
+	// (4) tasks → (5) mailboxes → (6) channel instances → (7) workspace file →
+	// (8) workspace directory.
 	// FR-023/US-9: release all heartbeat cron jobs owned by this workspace before
 	// removing the workspace file. Best-effort (logged on failure).
 	if cs := a.cronService.Load(); cs != nil {
@@ -1025,6 +1026,11 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 		jsonErr(w, http.StatusInternalServerError, "failed to scan tasks for cascade delete")
 		return
 	}
+
+	// M11: remove every mailbox (config.mailboxes entry + stored credential)
+	// bound to this workspace. Best-effort (logged on failure, never aborts
+	// the delete) — see removeMailboxesForWorkspace's doc comment.
+	removeMailboxesForWorkspace(a, id)
 
 	// ADR-029 FR-025/MAJ-005: disable and unbind all channel instances bound to
 	// this workspace BEFORE removing the workspace file. If this config write fails
@@ -1181,4 +1187,79 @@ func unbindChannelInstancesForWorkspace(a *restAPI, workspaceID string) error {
 			"workspace_id", workspaceID, "instance_ids", boundKeys)
 		return nil
 	})
+}
+
+// removeMailboxesForWorkspace removes every (agent, workspace) mailbox pair
+// bound to workspaceID from config.mailboxes and deletes each removed pair's
+// stored credential (M11 review-gate finding: the workspace-delete cascade
+// handled cron jobs, sessions, milestones, tasks, and channel bindings but
+// left mailboxes orphaned — bound to a workspace ID that no longer resolves).
+//
+// Structurally mirrors unbindChannelInstancesForWorkspace (identify bound
+// keys from the live config, then rewrite the raw JSON map under
+// safeUpdateConfigJSON), but — unlike that step, whose caller aborts the
+// delete with 500 on a config-write failure — this step is BEST-EFFORT, like
+// the milestone/heartbeat cascade steps earlier in handleWorkspaceDelete: a
+// mailbox is a downstream feature of the workspace, not a binding that must
+// stay consistent for the delete itself to be safe, so any failure here
+// (config write, malformed on-disk entry, credential removal) is logged and
+// the workspace delete proceeds regardless.
+func removeMailboxesForWorkspace(a *restAPI, workspaceID string) {
+	cfg := a.agentLoop.GetConfig()
+	// Identify bound (agent, workspace) pairs from the live config.
+	var boundAgentIDs []string
+	for agentID, byWorkspace := range cfg.Mailboxes {
+		if _, ok := byWorkspace[workspaceID]; ok {
+			boundAgentIDs = append(boundAgentIDs, agentID)
+		}
+	}
+	if len(boundAgentIDs) == 0 {
+		return // nothing to do
+	}
+	sort.Strings(boundAgentIDs) // deterministic order for logging
+
+	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
+		mailboxes, _ := m["mailboxes"].(map[string]any)
+		if mailboxes == nil {
+			// No mailboxes section in raw JSON — nothing to remove.
+			return nil
+		}
+		for _, agentID := range boundAgentIDs {
+			normalized, err := mailboxAgentEntryToNested(mailboxes[agentID])
+			if err != nil {
+				// Malformed on-disk entry: skip this agent rather than aborting
+				// the whole cascade (best-effort). setAgentMailbox/deleteAgentMailbox
+				// will surface the malformed shape as a 500 on their own next write.
+				slog.Warn("rest: workspace delete: cascade mailboxes: malformed entry, skipping",
+					"agent_id", agentID, "workspace_id", workspaceID, "error", err)
+				continue
+			}
+			delete(normalized, workspaceID)
+			if len(normalized) == 0 {
+				delete(mailboxes, agentID)
+			} else {
+				mailboxes[agentID] = normalized
+			}
+		}
+		m["mailboxes"] = mailboxes
+
+		slog.Info("rest: workspace delete: removed bound mailboxes",
+			"workspace_id", workspaceID, "agent_ids", boundAgentIDs)
+		return nil
+	}); err != nil {
+		slog.Warn("rest: workspace delete: cascade mailboxes: config write failed",
+			"workspace_id", workspaceID, "agent_ids", boundAgentIDs, "error", err)
+		return
+	}
+
+	// Config is durable now (or the write no-op'd because the section was
+	// absent) — delete each removed pair's stored credential. A missing entry
+	// is not an error (removeStoredCredential already tolerates that); log
+	// only on a real failure.
+	for _, agentID := range boundAgentIDs {
+		if err := a.removeStoredCredential(mailboxCredKey(agentID, workspaceID)); err != nil {
+			slog.Warn("rest: workspace delete: cascade mailboxes: credential removal failed",
+				"agent_id", agentID, "workspace_id", workspaceID, "error", err)
+		}
+	}
 }

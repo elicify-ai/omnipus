@@ -50,6 +50,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     saveAgentMailbox: vi.fn(),
     deleteAgentMailbox: vi.fn(),
     fetchAgents: vi.fn(),
+    fetchWorkspace: vi.fn(),
     fetchWorkspaces: vi.fn(),
     // ADR-031 Track 2 — ConnectorsScreen resolves each configured row's
     // workspace→agent binding via getChannelRouting; mock it so the real
@@ -78,6 +79,7 @@ import {
   saveAgentMailbox,
   deleteAgentMailbox,
   fetchAgents,
+  fetchWorkspace,
   fetchWorkspaces,
   fetchChannels,
   getChannelRouting,
@@ -107,7 +109,21 @@ function mockUiStore() {
 // that need to pick a *different* workspace in the select (the move
 // scenario) pass a multi-workspace list up front instead of waiting on a
 // background refetch to replace the single-workspace default.
-function renderPanel(mailbox?: Record<string, unknown> | null, workspaces?: Record<string, unknown>[]) {
+// mailboxes: optional roster passed straight through as the `mailboxes` prop
+// (ConnectorsScreen's ['agent-mailboxes'] query result) — used by the
+// duplicate-pair guard tests. Defaults to empty (no existing mailboxes).
+function mockWorkspaceDetail(team: string[] = ['mia', 'jim']) {
+  vi.mocked(fetchWorkspace).mockResolvedValue({
+    id: 'ws-1', name: 'My Workspace', status: 'active', core_team: team,
+  } as never)
+}
+
+function renderPanel(
+  mailbox?: Record<string, unknown> | null,
+  workspaces?: Record<string, unknown>[],
+  mailboxes?: Mailbox[],
+) {
+  mockWorkspaceDetail()
   const client = makeQueryClient()
   client.setQueryData(['agents'], [
     { id: 'mia', name: 'Mia', type: 'core', locked: true },
@@ -120,10 +136,15 @@ function renderPanel(mailbox?: Record<string, unknown> | null, workspaces?: Reco
   const onOpenChange = vi.fn()
   const result = render(
     <QueryClientProvider client={client}>
-      <EmailMailboxPanel open={true} onOpenChange={onOpenChange} mailbox={(mailbox ?? null) as Mailbox | null} />
+      <EmailMailboxPanel
+        open={true}
+        onOpenChange={onOpenChange}
+        mailbox={(mailbox ?? null) as Mailbox | null}
+        mailboxes={mailboxes ?? []}
+      />
     </QueryClientProvider>,
   )
-  return { ...result, onOpenChange }
+  return { ...result, onOpenChange, client }
 }
 
 function renderConnectorsScreen() {
@@ -415,9 +436,11 @@ describe('EmailMailboxPanel — write-only password field', () => {
 })
 
 describe('EmailMailboxPanel — Save calls the (agent, workspace) pair mailbox endpoint', () => {
+  let addToast: ReturnType<typeof vi.fn>
+
   beforeEach(() => {
     vi.clearAllMocks()
-    mockUiStore()
+    ;({ addToast } = mockUiStore())
     vi.mocked(fetchAgents).mockResolvedValue([
       { id: 'mia', name: 'Mia', type: 'core', locked: true } as never,
     ])
@@ -486,7 +509,7 @@ describe('EmailMailboxPanel — Save calls the (agent, workspace) pair mailbox e
     expect(Object.prototype.hasOwnProperty.call(payload, 'password')).toBe(false)
   })
 
-  it('changing the workspace on an existing mailbox is a MOVE — deletes the old pair, then saves the new one', async () => {
+  it('changing the workspace on an existing mailbox is a MOVE — saves the NEW pair first, then deletes the OLD one', async () => {
     vi.mocked(deleteAgentMailbox).mockResolvedValue({ success: true } as never)
     // jsdom lacks scrollIntoView; Radix Select calls it when opening the listbox.
     Element.prototype.scrollIntoView = vi.fn()
@@ -525,6 +548,10 @@ describe('EmailMailboxPanel — Save calls the (agent, workspace) pair mailbox e
     fireEvent.pointerDown(option, { pointerId: 1, button: 0 })
     fireEvent.click(option)
 
+    // A move requires re-entering the password — stored credentials never
+    // transfer across (agent, workspace) pairs.
+    fireEvent.change(screen.getByTestId('mailbox-password'), { target: { value: 'new-password' } })
+
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /Save Mailbox/i }))
     })
@@ -532,15 +559,263 @@ describe('EmailMailboxPanel — Save calls the (agent, workspace) pair mailbox e
     await waitFor(() => {
       expect(vi.mocked(saveAgentMailbox)).toHaveBeenCalled()
     })
+    await waitFor(() => {
+      expect(vi.mocked(deleteAgentMailbox)).toHaveBeenCalledWith('mia', 'ws-1')
+    })
 
-    // The OLD pair is deleted first...
-    expect(vi.mocked(deleteAgentMailbox)).toHaveBeenCalledWith('mia', 'ws-1')
-    // ...then the mailbox is saved under the NEW pair.
+    // The NEW pair is saved FIRST...
     const [agentId, workspaceId] = vi.mocked(saveAgentMailbox).mock.calls[0] as [string, string, Record<string, unknown>]
     expect(agentId).toBe('mia')
     expect(workspaceId).toBe('ws-2')
+    // ...and only THEN is the OLD pair deleted.
+    expect(vi.mocked(saveAgentMailbox).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(deleteAgentMailbox).mock.invocationCallOrder[0],
+    )
 
     delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
+  })
+
+  it('moving to a different workspace WITHOUT a password is blocked client-side; saveAgentMailbox is never called', async () => {
+    Element.prototype.scrollIntoView = vi.fn()
+
+    const twoWorkspaces = [
+      { id: 'ws-1', name: 'My Workspace', status: 'active', pinned: false, pin_order: 0 },
+      { id: 'ws-2', name: 'Other Workspace', status: 'active', pinned: false, pin_order: 0 },
+    ]
+    vi.mocked(fetchWorkspaces).mockResolvedValue(twoWorkspaces as never)
+
+    renderPanel(
+      {
+        agent_id: 'mia',
+        enabled: true,
+        workspace_id: 'ws-1',
+        username: 'mia@example.com',
+        imap_host: 'imap.example.com',
+        smtp_host: 'smtp.example.com',
+        configured: true,
+      },
+      twoWorkspaces,
+    )
+
+    await waitFor(() => {
+      expect((screen.getByTestId('mailbox-username') as HTMLInputElement).value).toBe('mia@example.com')
+    })
+
+    const workspaceTrigger = document.body.querySelectorAll('[role="combobox"]')[1] as HTMLElement
+    fireEvent.click(workspaceTrigger)
+    const option = await screen.findByRole('option', { name: 'Other Workspace' })
+    fireEvent.pointerDown(option, { pointerId: 1, button: 0 })
+    fireEvent.click(option)
+
+    // Password intentionally left blank.
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Save Mailbox/i }))
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText(/requires re-entering the password/i)).toBeInTheDocument()
+    })
+    expect(vi.mocked(saveAgentMailbox)).not.toHaveBeenCalled()
+    expect(vi.mocked(deleteAgentMailbox)).not.toHaveBeenCalled()
+
+    delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
+  })
+
+  it('when the new-pair save fails during a move, deleteAgentMailbox is NEVER called (the old mailbox stays intact) and the roster still refetches', async () => {
+    vi.mocked(saveAgentMailbox).mockRejectedValue(new Error('save failed'))
+    Element.prototype.scrollIntoView = vi.fn()
+
+    const twoWorkspaces = [
+      { id: 'ws-1', name: 'My Workspace', status: 'active', pinned: false, pin_order: 0 },
+      { id: 'ws-2', name: 'Other Workspace', status: 'active', pinned: false, pin_order: 0 },
+    ]
+    vi.mocked(fetchWorkspaces).mockResolvedValue(twoWorkspaces as never)
+
+    const { client } = renderPanel(
+      {
+        agent_id: 'mia',
+        enabled: true,
+        workspace_id: 'ws-1',
+        username: 'mia@example.com',
+        imap_host: 'imap.example.com',
+        smtp_host: 'smtp.example.com',
+        configured: true,
+      },
+      twoWorkspaces,
+    )
+    const invalidateSpy = vi.spyOn(client, 'invalidateQueries')
+
+    await waitFor(() => {
+      expect((screen.getByTestId('mailbox-username') as HTMLInputElement).value).toBe('mia@example.com')
+    })
+
+    const workspaceTrigger = document.body.querySelectorAll('[role="combobox"]')[1] as HTMLElement
+    fireEvent.click(workspaceTrigger)
+    const option = await screen.findByRole('option', { name: 'Other Workspace' })
+    fireEvent.pointerDown(option, { pointerId: 1, button: 0 })
+    fireEvent.click(option)
+    fireEvent.change(screen.getByTestId('mailbox-password'), { target: { value: 'new-password' } })
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Save Mailbox/i }))
+    })
+
+    await waitFor(() => {
+      expect(vi.mocked(saveAgentMailbox)).toHaveBeenCalled()
+    })
+    // The old (agent, workspace) pair was never touched.
+    expect(vi.mocked(deleteAgentMailbox)).not.toHaveBeenCalled()
+    // The roster refetches even though the mutation failed (onSettled), so
+    // ConnectorsScreen never shows stale state after a failed move.
+    await waitFor(() => {
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['agent-mailboxes'] })
+    })
+
+    delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
+  })
+
+  it('when the new pair saves but deleting the old pair fails, the save still succeeds with a distinct warning toast', async () => {
+    vi.mocked(saveAgentMailbox).mockResolvedValue({
+      agent_id: 'mia',
+      enabled: true,
+      configured: true,
+      workspace_id: 'ws-2',
+    } as never)
+    vi.mocked(deleteAgentMailbox).mockRejectedValue(new Error('delete failed'))
+    Element.prototype.scrollIntoView = vi.fn()
+
+    const twoWorkspaces = [
+      { id: 'ws-1', name: 'My Workspace', status: 'active', pinned: false, pin_order: 0 },
+      { id: 'ws-2', name: 'Other Workspace', status: 'active', pinned: false, pin_order: 0 },
+    ]
+    vi.mocked(fetchWorkspaces).mockResolvedValue(twoWorkspaces as never)
+
+    const { onOpenChange } = renderPanel(
+      {
+        agent_id: 'mia',
+        enabled: true,
+        workspace_id: 'ws-1',
+        username: 'mia@example.com',
+        imap_host: 'imap.example.com',
+        smtp_host: 'smtp.example.com',
+        configured: true,
+      },
+      twoWorkspaces,
+    )
+
+    await waitFor(() => {
+      expect((screen.getByTestId('mailbox-username') as HTMLInputElement).value).toBe('mia@example.com')
+    })
+
+    const workspaceTrigger = document.body.querySelectorAll('[role="combobox"]')[1] as HTMLElement
+    fireEvent.click(workspaceTrigger)
+    const option = await screen.findByRole('option', { name: 'Other Workspace' })
+    fireEvent.pointerDown(option, { pointerId: 1, button: 0 })
+    fireEvent.click(option)
+    fireEvent.change(screen.getByTestId('mailbox-password'), { target: { value: 'new-password' } })
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Save Mailbox/i }))
+    })
+
+    await waitFor(() => {
+      expect(vi.mocked(deleteAgentMailbox)).toHaveBeenCalledWith('mia', 'ws-1')
+    })
+    // Treated as an overall success (the primary action — saving the new
+    // mailbox — did succeed): the panel closes and a distinct warning toast
+    // (not an error) explains the orphaned old pair.
+    await waitFor(() => {
+      expect(onOpenChange).toHaveBeenCalledWith(false)
+    })
+    expect(addToast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        variant: 'warning',
+        message: expect.stringMatching(/could not be removed/i),
+      }),
+    )
+
+    delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
+  })
+})
+
+describe('EmailMailboxPanel — duplicate-pair guard', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockUiStore()
+    vi.mocked(fetchAgents).mockResolvedValue([
+      { id: 'mia', name: 'Mia', type: 'core', locked: true } as never,
+    ])
+    vi.mocked(fetchWorkspaces).mockResolvedValue([
+      { id: 'ws-1', name: 'My Workspace', status: 'active', pinned: false, pin_order: 0 } as never,
+    ])
+  })
+
+  it('create mode: selecting an (agent, workspace) pair that already has a mailbox blocks Save with an error on the agent field', async () => {
+    Element.prototype.scrollIntoView = vi.fn()
+    const existing: Mailbox[] = [
+      { agent_id: 'mia', enabled: true, configured: true, workspace_id: 'ws-1' } as Mailbox,
+    ]
+    renderPanel(null, undefined, existing)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('mailbox-username')).toBeInTheDocument()
+    })
+
+    // ADR-033 team scoping: agents are offered only after a workspace is
+    // selected — pick the workspace FIRST, then the member agent that already
+    // owns a mailbox there.
+    const workspaceTrigger = document.body.querySelectorAll('[role="combobox"]')[1] as HTMLElement
+    fireEvent.click(workspaceTrigger)
+    const wsOption = await screen.findByRole('option', { name: 'My Workspace' })
+    fireEvent.pointerDown(wsOption, { pointerId: 1, button: 0 })
+    fireEvent.click(wsOption)
+
+    const agentTrigger = document.body.querySelectorAll('[role="combobox"]')[0] as HTMLElement
+    fireEvent.click(agentTrigger)
+    const agentOption = await screen.findByRole('option', { name: 'Mia' })
+    fireEvent.pointerDown(agentOption, { pointerId: 1, button: 0 })
+    fireEvent.click(agentOption)
+
+    fireEvent.change(screen.getByTestId('mailbox-username'), { target: { value: 'new@example.com' } })
+    fireEvent.change(screen.getByTestId('mailbox-imap-host'), { target: { value: 'imap.example.com' } })
+    fireEvent.change(screen.getByTestId('mailbox-smtp-host'), { target: { value: 'smtp.example.com' } })
+    fireEvent.change(screen.getByTestId('mailbox-password'), { target: { value: 'secret' } })
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Save Mailbox/i }))
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText(/already has a mailbox in this workspace/i)).toBeInTheDocument()
+    })
+    expect(vi.mocked(saveAgentMailbox)).not.toHaveBeenCalled()
+
+    delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
+  })
+
+  it('edit mode (no move): the mailbox\'s own pair does not trip the duplicate-pair guard', async () => {
+    vi.mocked(saveAgentMailbox).mockResolvedValue({ agent_id: 'mia', enabled: true, configured: true } as never)
+    const existing: Mailbox[] = [
+      { agent_id: 'mia', enabled: true, configured: true, workspace_id: 'ws-1' } as Mailbox,
+    ]
+    renderPanel(
+      { agent_id: 'mia', enabled: true, workspace_id: 'ws-1', username: 'mia@example.com', imap_host: 'imap.example.com', smtp_host: 'smtp.example.com', configured: true },
+      undefined,
+      existing,
+    )
+
+    await waitFor(() => {
+      expect((screen.getByTestId('mailbox-username') as HTMLInputElement).value).toBe('mia@example.com')
+    })
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Save Mailbox/i }))
+    })
+
+    await waitFor(() => {
+      expect(vi.mocked(saveAgentMailbox)).toHaveBeenCalled()
+    })
+    expect(screen.queryByText(/already has a mailbox in this workspace/i)).not.toBeInTheDocument()
   })
 })
 
@@ -592,5 +867,111 @@ describe('EmailMailboxPanel — client-side validation', () => {
       expect(screen.getByText(/IMAP server hostname is required/i)).toBeInTheDocument()
     })
     expect(vi.mocked(saveAgentMailbox)).not.toHaveBeenCalled()
+  })
+})
+
+describe('EmailMailboxPanel — create-mode reopen starts blank (stale-form fix)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockUiStore()
+    vi.mocked(fetchAgents).mockResolvedValue([
+      { id: 'mia', name: 'Mia', type: 'core', locked: true } as never,
+    ])
+    vi.mocked(fetchWorkspaces).mockResolvedValue([
+      { id: 'ws-1', name: 'My Workspace', status: 'active', pinned: false, pin_order: 0 } as never,
+    ])
+  })
+
+  it('a dirty create session does not leak into the next create-mode open', async () => {
+    // Live-UAT find: with a [mailbox]-only populate effect, reopening in
+    // create mode (null → null) never re-fired it, so the previous session's
+    // typed values — INCLUDING the password — reappeared on screen.
+    const client = makeQueryClient()
+    client.setQueryData(['agents'], [{ id: 'mia', name: 'Mia', type: 'core', locked: true }])
+    client.setQueryData(['workspaces'], [{ id: 'ws-1', name: 'My Workspace', status: 'active', pinned: false, pin_order: 0 }])
+
+    const { rerender } = render(
+      <QueryClientProvider client={client}>
+        <EmailMailboxPanel open={true} onOpenChange={vi.fn()} mailbox={null} mailboxes={[]} />
+      </QueryClientProvider>,
+    )
+    await waitFor(() => {
+      expect(screen.getByTestId('mailbox-username')).toBeInTheDocument()
+    })
+    fireEvent.change(screen.getByTestId('mailbox-username'), { target: { value: 'leftover@example.com' } })
+    fireEvent.change(screen.getByTestId('mailbox-password'), { target: { value: 'leftover-secret' } })
+
+    // Close, then reopen in create mode (mailbox stays null — the exact case).
+    rerender(
+      <QueryClientProvider client={client}>
+        <EmailMailboxPanel open={false} onOpenChange={vi.fn()} mailbox={null} mailboxes={[]} />
+      </QueryClientProvider>,
+    )
+    rerender(
+      <QueryClientProvider client={client}>
+        <EmailMailboxPanel open={true} onOpenChange={vi.fn()} mailbox={null} mailboxes={[]} />
+      </QueryClientProvider>,
+    )
+
+    await waitFor(() => {
+      expect((screen.getByTestId('mailbox-username') as HTMLInputElement).value).toBe('')
+    })
+    expect((screen.getByTestId('mailbox-password') as HTMLInputElement).value).toBe('')
+  })
+})
+
+describe('EmailMailboxPanel — ADR-033 core_team scoping', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockUiStore()
+    vi.mocked(fetchAgents).mockResolvedValue([
+      { id: 'mia', name: 'Mia', type: 'core', locked: true } as never,
+      { id: 'ray', name: 'Ray', type: 'core', locked: true } as never,
+    ])
+    vi.mocked(fetchWorkspaces).mockResolvedValue([
+      { id: 'ws-1', name: 'My Workspace', status: 'active', pinned: false, pin_order: 0 } as never,
+    ])
+  })
+
+  it('offers only the selected workspace\'s core_team members as owning agents', async () => {
+    Element.prototype.scrollIntoView = vi.fn()
+    // ws-1's team contains mia but NOT ray.
+    const client = makeQueryClient()
+    client.setQueryData(['agents'], [
+      { id: 'mia', name: 'Mia', type: 'core', locked: true },
+      { id: 'ray', name: 'Ray', type: 'core', locked: true },
+    ])
+    client.setQueryData(['workspaces'], [
+      { id: 'ws-1', name: 'My Workspace', status: 'active', pinned: false, pin_order: 0 },
+    ])
+    vi.mocked(fetchWorkspace).mockResolvedValue({
+      id: 'ws-1', name: 'My Workspace', status: 'active', core_team: ['mia'],
+    } as never)
+
+    render(
+      <QueryClientProvider client={client}>
+        <EmailMailboxPanel open={true} onOpenChange={vi.fn()} mailbox={null} mailboxes={[]} />
+      </QueryClientProvider>,
+    )
+    await waitFor(() => {
+      expect(screen.getByTestId('mailbox-username')).toBeInTheDocument()
+    })
+
+    // Select the workspace, then open the agent select: Mia offered, Ray not.
+    const workspaceTrigger = document.body.querySelectorAll('[role="combobox"]')[1] as HTMLElement
+    fireEvent.click(workspaceTrigger)
+    const wsOption = await screen.findByRole('option', { name: 'My Workspace' })
+    fireEvent.pointerDown(wsOption, { pointerId: 1, button: 0 })
+    fireEvent.click(wsOption)
+
+    const agentTrigger = document.body.querySelectorAll('[role="combobox"]')[0] as HTMLElement
+    fireEvent.click(agentTrigger)
+    await screen.findByRole('option', { name: 'Mia' })
+    // The team filter applies once the workspace-detail query resolves (until
+    // then the unfiltered roster shows, mirroring CreateChannelSheet's
+    // loading fallback) — await the filtered state.
+    await waitFor(() => {
+      expect(screen.queryByRole('option', { name: 'Ray' })).not.toBeInTheDocument()
+    })
   })
 })

@@ -93,6 +93,12 @@ func legacyMailboxCredKey(agentID string) string {
 	return "mailbox_" + agentID + "_password"
 }
 
+// errMailboxEntryMalformed is returned by mailboxAgentEntryToNested when an
+// agent's raw mailboxes entry mixes legacy-flat and nested-shape values.
+// Callers add the offending agent ID when surfacing this to the caller (HTTP
+// 500) — see setAgentMailbox / deleteAgentMailbox / removeMailboxesForWorkspace.
+var errMailboxEntryMalformed = errors.New("mailboxes entry is malformed (mixed legacy/nested shape)")
+
 // mailboxAgentEntryToNested normalizes raw (m["mailboxes"][agentID], decoded
 // from config.json into map[string]any) into the nested workspace-keyed shape.
 // Raw-map read-modify-write cycles (setAgentMailbox, deleteAgentMailbox) bypass
@@ -101,37 +107,49 @@ func legacyMailboxCredKey(agentID string) string {
 // with it so a still-on-disk legacy entry is correctly folded into (or removed
 // from) the nested shape instead of silently surviving untouched.
 //
-// A legacy entry is detected by probing its values: the nested shape's values
-// are always mailbox objects, while a legacy flat entry's values are the
-// mailbox's own scalar fields (e.g. "enabled": true, "workspace_id": "ws1").
-// Returns a new, non-nil, mutable map; absent/malformed/empty input yields an
-// empty map.
-func mailboxAgentEntryToNested(raw any) map[string]any {
+// Shape detection is STRICT, mirroring config.MailboxesConfig.UnmarshalJSON:
+// an entry is legacy-flat iff ALL its inner values are non-objects (the
+// mailbox's own scalar fields, e.g. "enabled": true, "workspace_id": "ws1"),
+// nested iff ALL its inner values are mailbox objects. A MIX of both within
+// one entry is malformed and returns errMailboxEntryMalformed rather than
+// being silently misclassified — the previous any-one-non-object heuristic
+// could decode object-valued nested keys against MailboxConfig's scalar
+// fields, produce an empty WorkspaceID, and silently drop the entire roster.
+//
+// On success, returns a new, non-nil, mutable map; absent/empty input yields
+// an empty map with a nil error.
+func mailboxAgentEntryToNested(raw any) (map[string]any, error) {
 	asMap, ok := raw.(map[string]any)
 	if !ok || len(asMap) == 0 {
-		return map[string]any{}
+		return map[string]any{}, nil
 	}
-	legacy := false
+	allObjects := true
+	allScalars := true
 	for _, v := range asMap {
-		if _, isObj := v.(map[string]any); !isObj {
-			legacy = true
-			break
+		if _, isObj := v.(map[string]any); isObj {
+			allScalars = false
+		} else {
+			allObjects = false
 		}
 	}
-	if !legacy {
+	switch {
+	case allObjects:
 		out := make(map[string]any, len(asMap))
 		for k, v := range asMap {
 			out[k] = v
 		}
-		return out
+		return out, nil
+	case allScalars:
+		out := map[string]any{}
+		if wsID, _ := asMap["workspace_id"].(string); wsID != "" {
+			out[wsID] = asMap
+		} else {
+			slog.Warn("config: dropping legacy mailbox without workspace_id during merge (unreachable)")
+		}
+		return out, nil
+	default:
+		return nil, errMailboxEntryMalformed
 	}
-	out := map[string]any{}
-	if wsID, _ := asMap["workspace_id"].(string); wsID != "" {
-		out[wsID] = asMap
-	} else {
-		slog.Warn("config: dropping legacy mailbox without workspace_id during merge (unreachable)")
-	}
-	return out
 }
 
 // agentExists reports whether an agent with the given ID is registered.
@@ -184,7 +202,7 @@ func (a *restAPI) getAgentMailbox(w http.ResponseWriter, agentID, workspaceID st
 		configured = ok
 	}
 
-	jsonOK(w, mailboxToWire(agentID, mb, configured))
+	jsonOK(w, mailboxToWire(agentID, workspaceID, mb, configured))
 }
 
 // setAgentMailbox handles PUT /api/v1/agents/{id}/mailboxes/{workspaceId}.
@@ -193,6 +211,51 @@ func (a *restAPI) getAgentMailbox(w http.ResponseWriter, agentID, workspaceID st
 func (a *restAPI) setAgentMailbox(w http.ResponseWriter, r *http.Request, agentID, workspaceID string) {
 	if !a.agentExists(agentID) {
 		jsonErr(w, http.StatusNotFound, fmt.Sprintf("agent %q not found", agentID))
+		return
+	}
+
+	// Verify the workspace exists before saving — a mailbox addressed by a
+	// nonexistent workspace ID would be permanently unreachable (no
+	// workspace-scoped surface would ever list it) and would silently drift
+	// from the workspace-delete cascade (removeMailboxesForWorkspace), which
+	// only cleans up pairs whose workspace it can see got deleted.
+	ws, ok := a.loadWorkspace(w, workspaceID)
+	if !ok {
+		return
+	}
+
+	// ADR-033 (operator-decided 2026-07-03): the owning agent MUST be a
+	// core_team member of the target workspace, aligning mailbox ownership
+	// with ADR-029's channel-binding rule (FR-006) — the mailbox surfaces its
+	// unhandled mail as Board tasks in this workspace, so its owner must be a
+	// member there. Workers are likewise excluded (FR-008 parity): the panel
+	// never offers them, and a delegation-only worker has no inbox-working
+	// heartbeat persona. Both reject with 422, same messages as the channel
+	// routing gate.
+	cfg := a.agentLoop.GetConfig()
+	var owningAgent *config.AgentConfig
+	for i := range cfg.Agents.List {
+		if cfg.Agents.List[i].ID == agentID {
+			ac := cfg.Agents.List[i]
+			owningAgent = &ac
+			break
+		}
+	}
+	if owningAgent != nil && owningAgent.IsWorker() {
+		jsonErr(w, http.StatusUnprocessableEntity,
+			"workers cannot own a mailbox")
+		return
+	}
+	inTeam := false
+	for _, memberID := range ws.CoreTeam {
+		if memberID == agentID {
+			inTeam = true
+			break
+		}
+	}
+	if !inTeam {
+		jsonErr(w, http.StatusUnprocessableEntity,
+			fmt.Sprintf("agent %q is not a member of workspace %q", agentID, workspaceID))
 		return
 	}
 
@@ -244,7 +307,10 @@ func (a *restAPI) setAgentMailbox(w http.ResponseWriter, r *http.Request, agentI
 		// Normalize the agent's entry into the nested workspace-keyed shape,
 		// folding in (or discarding, if unaddressable) any still-on-disk
 		// legacy flat entry from a pre-pair-addressing install.
-		byWorkspace := mailboxAgentEntryToNested(mailboxes[agentID])
+		byWorkspace, err := mailboxAgentEntryToNested(mailboxes[agentID])
+		if err != nil {
+			return err
+		}
 
 		existing, _ := byWorkspace[workspaceID].(map[string]any)
 		if existing == nil {
@@ -292,6 +358,12 @@ func (a *restAPI) setAgentMailbox(w http.ResponseWriter, r *http.Request, agentI
 		}
 		return nil
 	}); err != nil {
+		if errors.Is(err, errMailboxEntryMalformed) {
+			msg := fmt.Sprintf("mailboxes entry for agent %q is malformed (mixed legacy/nested shape)", agentID)
+			slog.Error("rest: configure mailbox: malformed entry", "agent_id", agentID, "workspace_id", workspaceID, "error", err)
+			jsonErr(w, http.StatusInternalServerError, msg)
+			return
+		}
 		slog.Error("rest: configure mailbox", "agent_id", agentID, "workspace_id", workspaceID, "error", err)
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
 		return
@@ -331,7 +403,7 @@ func (a *restAPI) setAgentMailbox(w http.ResponseWriter, r *http.Request, agentI
 	if req.SmtpPort != nil {
 		out.SMTPPort = *req.SmtpPort
 	}
-	jsonOK(w, mailboxToWire(agentID, out, configured))
+	jsonOK(w, mailboxToWire(agentID, workspaceID, out, configured))
 }
 
 // deleteAgentMailbox handles DELETE /api/v1/agents/{id}/mailboxes/{workspaceId}.
@@ -360,7 +432,10 @@ func (a *restAPI) deleteAgentMailbox(w http.ResponseWriter, agentID, workspaceID
 		if mailboxes == nil {
 			return nil
 		}
-		normalized := mailboxAgentEntryToNested(mailboxes[agentID])
+		normalized, err := mailboxAgentEntryToNested(mailboxes[agentID])
+		if err != nil {
+			return err
+		}
 		delete(normalized, workspaceID)
 		if len(normalized) == 0 {
 			delete(mailboxes, agentID)
@@ -369,6 +444,12 @@ func (a *restAPI) deleteAgentMailbox(w http.ResponseWriter, agentID, workspaceID
 		}
 		return nil
 	}); err != nil {
+		if errors.Is(err, errMailboxEntryMalformed) {
+			msg := fmt.Sprintf("mailboxes entry for agent %q is malformed (mixed legacy/nested shape)", agentID)
+			slog.Error("rest: delete mailbox: malformed entry", "agent_id", agentID, "workspace_id", workspaceID, "error", err)
+			jsonErr(w, http.StatusInternalServerError, msg)
+			return
+		}
 		slog.Error("rest: delete mailbox", "agent_id", agentID, "workspace_id", workspaceID, "error", err)
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
 		return
@@ -439,7 +520,7 @@ func (a *restAPI) listMailboxes(w http.ResponseWriter, r *http.Request) {
 				}
 				configured = ok
 			}
-			items = append(items, mailboxToWire(agentID, mb, configured))
+			items = append(items, mailboxToWire(agentID, wsID, mb, configured))
 		}
 	}
 
@@ -478,13 +559,19 @@ func grantEmailToolAllows(m map[string]any, agentID string) {
 		}
 		toolsCfg, _ := ag["tools"].(map[string]any)
 		if toolsCfg == nil {
+			slog.Debug("mailbox: no per-agent tool config — defaults apply, nothing to grant",
+				"agent_id", agentID)
 			return // no per-agent tool config → defaults apply (allow)
 		}
 		builtin, _ := toolsCfg["builtin"].(map[string]any)
 		if builtin == nil {
+			slog.Debug("mailbox: no builtin tool policy block — defaults apply, nothing to grant",
+				"agent_id", agentID)
 			return
 		}
 		if dp, _ := builtin["default_policy"].(string); dp != "deny" {
+			slog.Debug("mailbox: builtin default_policy is not deny — missing entries already allow, nothing to grant",
+				"agent_id", agentID, "default_policy", dp)
 			return // default-allow: missing entries already permit the tools
 		}
 		policies, _ := builtin["policies"].(map[string]any)
@@ -505,19 +592,34 @@ func grantEmailToolAllows(m map[string]any, agentID string) {
 		}
 		return
 	}
+	// The agentExists gate (called earlier in setAgentMailbox) already proved
+	// this agent is registered — reaching here means agents.list in the raw
+	// config map diverged from that check (e.g. concurrent edit, or the
+	// registry/config-list fallback in agentExists found the agent somewhere
+	// this raw-map scan didn't). The mailbox will be saved Active but the
+	// email tools stay policy-hidden with no operator-visible signal, so this
+	// is an error, not a benign no-op.
+	slog.Error("mailbox: agent not found in agents.list — cannot grant email tool allows (mailbox will save Active but tools stay policy-hidden)",
+		"agent_id", agentID)
 }
 
 // mailboxToWire converts a stored MailboxConfig to the Mailbox wire type. The
 // password is never included — only the resolved `configured` flag.
-func mailboxToWire(agentID string, mb config.MailboxConfig, configured bool) gen.Mailbox {
+//
+// agentID and workspaceID are the AUTHORITATIVE (agent, workspace) pair key —
+// the caller's map keys, not fields read off mb. mb.WorkspaceID is a mutable
+// mirror written back into config.json for human readability and is NOT
+// guaranteed to match the key it is nested under (e.g. a hand-edited
+// config.json, or a caller that forgot to keep the mirror in sync); trusting
+// it here would let the wire response report a mailbox under the wrong
+// workspace. gen.Mailbox.WorkspaceId is a required (non-pointer) string, so
+// this also always serializes a value — never the omitted/null shape.
+func mailboxToWire(agentID, workspaceID string, mb config.MailboxConfig, configured bool) gen.Mailbox {
 	out := gen.Mailbox{
-		AgentId:    agentID,
-		Enabled:    mb.Enabled,
-		Configured: configured,
-	}
-	if mb.WorkspaceID != "" {
-		ws := mb.WorkspaceID
-		out.WorkspaceId = &ws
+		AgentId:     agentID,
+		WorkspaceId: workspaceID,
+		Enabled:     mb.Enabled,
+		Configured:  configured,
 	}
 	if mb.IMAPHost != "" {
 		v := mb.IMAPHost
