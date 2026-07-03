@@ -312,6 +312,9 @@ import type {
   McpServerToolsResponse,
   AgentUpdateRequest,
   AgentCreateRequest,
+  AgentCreateRequestMain,
+  AgentCreateRequestSubagent,
+  AgentCreateRequestSubagent3p,
   FallbackModel,
   ChannelRouting,
   // ADR-029 channel-instance CRUD (US-6/US-10/US-11):
@@ -458,6 +461,9 @@ export type {
   McpServerToolsResponse,
   AgentUpdateRequest,
   AgentCreateRequest,
+  AgentCreateRequestMain,
+  AgentCreateRequestSubagent,
+  AgentCreateRequestSubagent3p,
   FallbackModel,
   ChannelRouting,
   // ADR-029 channel-instance CRUD (US-6/US-10/US-11):

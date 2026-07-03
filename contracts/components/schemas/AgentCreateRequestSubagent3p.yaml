@@ -1,0 +1,102 @@
+type: object
+title: AgentCreateRequestSubagent3p
+description: >
+  Create a subagent_3p — a delegation-only worker that runs on an external
+  CLI (claude-code / codex / opencode). The runner manages its own isolation,
+  auth, retries, and tool loop, so tools_cfg, skills, fallback_models,
+  model_params, sandbox_profile, shell_policy, voice, steering_mode, and
+  max_tool_iterations do not exist on this variant (additionalProperties:
+  false rejects them). timeout_seconds stays (process-level kill for a hung
+  CLI). executor is REQUIRED (kind external-cli with cli + cli_path; the
+  handler additionally rejects whitespace-only cli_path).
+required:
+  - type
+  - name
+  - soul
+  - executor
+additionalProperties: false
+properties:
+  type:
+    type: string
+    enum:
+      - subagent_3p
+    description: >
+      Discriminator. Must be exactly "subagent_3p" for this variant.
+    example: "subagent_3p"
+  name:
+    type: string
+    minLength: 1
+    description: Display name for the new agent.
+    example: "My Custom Agent"
+  description:
+    type: string
+    description: >
+      Short description of the agent's purpose. Required (non-empty after trim) for
+      Subagent and subagent_3p — the orchestrator uses it as the basis on which it
+      decides which agent to delegate to. Optional for Main.
+    example: "Specialized data analysis assistant"
+  model:
+    type: string
+    description: >
+      Model slug for LLM calls. When omitted, the global agents.defaults.model_name
+      is used. With the O3 two-field model this is the bare slug; pair it with
+      `provider` for explicit routing.
+    example: "google/gemini-2.5-flash"
+  provider:
+    type: string
+    maxLength: 64
+    description: >
+      Explicit routing key for the primary model (O3 two-field model), mirroring
+      fallback_models[].provider. When set, resolution uses it directly and never
+      infers a provider. Optional; when omitted the model resolves via the default
+      provider.
+    example: "openrouter"
+  color:
+    type: string
+    pattern: '^#[0-9A-Fa-f]{6}$'
+    description: Hex color code for the agent avatar.
+    example: "#D4AF37"
+  icon:
+    type: string
+    maxLength: 50
+    description: Phosphor icon name for the agent avatar.
+    example: "ChartBar"
+  rate_limits:
+    type: object
+    description: Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies.
+    properties:
+      use_global_defaults:
+        type: boolean
+        description: When true, global rate limits are used and per-agent overrides are ignored.
+        example: true
+      max_llm_calls_per_hour:
+        type: integer
+        description: Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
+        example: 100
+      max_tool_calls_per_minute:
+        type: integer
+        description: Maximum tool calls per minute for this agent. Absent = no per-agent cap.
+        example: 60
+      max_cost_per_day:
+        type: number
+        format: double
+        description: Maximum USD cost per day for this agent. Absent = no per-agent cap.
+        example: 5.0
+  soul:
+    type: string
+    minLength: 1
+    description: >
+      Initial SOUL.md content. Required for every user-creatable type — including
+      Subagent (External), where it is passed as part of the CLI prompt at runtime.
+      The CLI never reads a file from disk. Backend trims before length-validation,
+      so whitespace-only is rejected as minLength violation.
+    example: "You are a focused research assistant..."
+  delegation_policy:
+    $ref: './DelegationPolicy.yaml'
+  executor:
+    $ref: './ExecutorConfig.yaml'
+  timeout_seconds:
+    type: integer
+    minimum: 0
+    description: Maximum seconds a single agent turn may run before being interrupted.
+    example: 300
