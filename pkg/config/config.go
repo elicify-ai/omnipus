@@ -2756,6 +2756,20 @@ func (u *UserConfig) HasActiveToken() bool {
 	return len(u.Tokens) > 0 || !u.TokenHash.IsZero()
 }
 
+// VerifyCLIToken checks raw against the machine-only CLI bearer credential
+// (g.CLIToken), the decoupled counterpart of UserConfig.VerifyToken.
+// Nil-safe: when no CLI token has been minted yet (g.CLIToken == nil) it
+// returns the same ErrNoHashSet that VerifyTokenAgainst returns for an empty
+// token set, so callers don't need their own nil check before calling this —
+// replacing the `if cfg.Gateway.CLIToken != nil { ... }` guard that was
+// previously duplicated at every call site.
+func (g *GatewayConfig) VerifyCLIToken(raw string) error {
+	if g.CLIToken == nil {
+		return ErrNoHashSet
+	}
+	return VerifyTokenAgainst([]TokenEntry{*g.CLIToken}, "", raw)
+}
+
 type GatewayConfig struct {
 	Host          string       `json:"host"                      env:"OMNIPUS_GATEWAY_HOST"`
 	Port          int          `json:"port"                      env:"OMNIPUS_GATEWAY_PORT"`
@@ -3494,16 +3508,20 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 		migrateCLITokenOutOfUsers(cfg, path, onSelfHeal)
 	}
 
-	// Single-account diagnostic (single-user model follow-up): a legacy
-	// config may still carry more than one Gateway.Users entry from before
-	// the Users CRUD API was deleted. checkBearerAuth/authenticateWS
-	// (pkg/gateway) only ever check Users[0] — without this, every account
-	// past the first would silently and permanently fail to authenticate
-	// with no diagnostic anywhere. Deliberately WARN-only, never truncates
-	// — see single_account_migration.go's package doc for why a destructive
-	// self-heal here is unsafe (it would race a second account's own
-	// in-flight login). Runs on every load, all config versions.
-	warnAboutExtraUsers(cfg)
+	// Single-account diagnostic (single-user model follow-up): advisory
+	// only — every configured Gateway.Users account authenticates fine
+	// today (checkBearerAuth/authenticateWS/withOptionalAuth in
+	// pkg/gateway all loop the whole slice). This just flags a legacy
+	// config that still carries more than one Gateway.Users entry from
+	// before the Users CRUD API was deleted, since a couple of non-auth
+	// code paths (default workspace-owner attribution, schedule-failure-
+	// notification fallback) only ever consider the first entry and the
+	// single-user model expects exactly one account. Deliberately
+	// WARN-only, never truncates — see single_account_migration.go's
+	// package doc for why a destructive self-heal here is unsafe (it would
+	// race a second account's own in-flight login). Runs on every load,
+	// all config versions.
+	warnAboutExtraUsers(cfg.Gateway.Users)
 
 	// Apply defaults and validate bounds for all security-relevant fields
 	// (FR-001, FR-002a, numeric sandbox fields, AuthMismatchLogLevel).

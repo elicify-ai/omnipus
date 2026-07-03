@@ -2,7 +2,7 @@ openapi: 3.0.3
 info:
   title: Omnipus REST API
   version: 0.1.0
-  description: 'REST API surface for the Omnipus agentic gateway. All endpoints are under /api/v1. Authentication uses Bearer tokens issued by /auth/login, /auth/register-admin, or /onboarding/complete. State-changing requests must include the X-CSRF-Token header echoing the __Host-csrf cookie value (double-submit cookie, issue #97). See src/lib/api.ts for the CSRF_EXEMPT_PATHS list (endpoints that issue the cookie and cannot require it to be present yet).
+  description: 'REST API surface for the Omnipus agentic gateway. All endpoints are under /api/v1. Authentication uses Bearer tokens issued by /auth/login or /onboarding/complete. State-changing requests must include the X-CSRF-Token header echoing the __Host-csrf cookie value (double-submit cookie, issue #97). See src/lib/api.ts for the CSRF_EXEMPT_PATHS list (endpoints that issue the cookie and cannot require it to be present yet).
 
     '
   contact:
@@ -67,7 +67,7 @@ components:
     BearerAuth:
       type: http
       scheme: bearer
-      description: 'Bearer token issued by /auth/login, /auth/register-admin, or /onboarding/complete. Store in sessionStorage under "omnipus_auth_token".
+      description: 'Bearer token issued by /auth/login or /onboarding/complete. Store in sessionStorage under "omnipus_auth_token".
 
         '
   schemas:
@@ -536,7 +536,7 @@ components:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
     409Conflict:
-      description: "Conflict \u2014 e.g. resource already exists, or last-admin guard triggered."
+      description: "Conflict \u2014 e.g. resource already exists."
       content:
         application/json:
           schema:
@@ -572,6 +572,12 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
     503ServiceUnavailable:
       description: "Service unavailable \u2014 e.g. credential store locked."
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    503BypassActive:
+      description: dev_mode_bypass is active (RequireNotBypass guard).
       content:
         application/json:
           schema:
@@ -628,7 +634,7 @@ paths:
     get:
       operationId: validateToken
       summary: Validate the current bearer token
-      description: 'Returns the authenticated user''s username and role when the token is valid. Rate-limited: 30 requests per IP per minute.
+      description: 'Returns the authenticated user''s username when the token is valid. Rate-limited: 30 requests per IP per minute.
 
         '
       tags:
@@ -1768,11 +1774,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '503':
-          description: dev_mode_bypass is active (RequireNotBypass guard).
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
+          $ref: '#/components/responses/503BypassActive'
   /security/exec-allowlist:
     get:
       operationId: getExecAllowlist
@@ -1902,11 +1904,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '503':
-          description: dev_mode_bypass is active (RequireNotBypass guard).
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
+          $ref: '#/components/responses/503BypassActive'
   /security/prompt-guard:
     get:
       operationId: getPromptGuard
@@ -1955,11 +1953,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '503':
-          description: dev_mode_bypass is active (RequireNotBypass guard).
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
+          $ref: '#/components/responses/503BypassActive'
   /security/rate-limits:
     get:
       operationId: getRateLimits
@@ -2006,11 +2000,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '503':
-          description: dev_mode_bypass is active (RequireNotBypass guard).
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
+          $ref: '#/components/responses/503BypassActive'
   /security/sandbox-config:
     get:
       operationId: getSandboxConfig
@@ -2065,11 +2055,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '503':
-          description: dev_mode_bypass is active (RequireNotBypass guard).
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
+          $ref: '#/components/responses/503BypassActive'
   /security/sandbox-status:
     get:
       operationId: getSandboxStatus
@@ -2166,11 +2152,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '503':
-          description: dev_mode_bypass is active (RequireNotBypass guard).
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
+          $ref: '#/components/responses/503BypassActive'
   /security/retention:
     get:
       operationId: getRetention
@@ -2219,11 +2201,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '503':
-          description: dev_mode_bypass is active (RequireNotBypass guard).
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
+          $ref: '#/components/responses/503BypassActive'
   /security/retention/sweep:
     post:
       operationId: triggerRetentionSweep
@@ -2253,11 +2231,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '503':
-          description: dev_mode_bypass is active (RequireNotBypass guard).
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
+          $ref: '#/components/responses/503BypassActive'
   /performance:
     get:
       operationId: getPerformanceSettings
@@ -2281,11 +2255,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '503':
-          description: dev_mode_bypass is active (RequireNotBypass guard).
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
+          $ref: '#/components/responses/503BypassActive'
     put:
       operationId: updatePerformanceSettings
       summary: Update agent concurrency settings
@@ -2316,11 +2286,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '503':
-          description: dev_mode_bypass is active (RequireNotBypass guard).
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
+          $ref: '#/components/responses/503BypassActive'
   /settings/memory:
     get:
       operationId: getMemorySettings
@@ -2964,11 +2930,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '503':
-          description: dev_mode_bypass is active (RequireNotBypass guard).
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
+          $ref: '#/components/responses/503BypassActive'
   /gateway/restart:
     post:
       operationId: restartGateway

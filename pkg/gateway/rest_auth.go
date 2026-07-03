@@ -267,13 +267,16 @@ func (a *restAPI) withOptionalAuth(handler http.HandlerFunc) http.HandlerFunc {
 				}
 			}
 			// The CLI's dedicated token — see checkBearerAuth for the same check.
-			if cfg.Gateway.CLIToken != nil {
-				if config.VerifyTokenAgainst([]config.TokenEntry{*cfg.Gateway.CLIToken}, "", rawToken) == nil {
-					ctx := context.WithValue(r.Context(), UserContextKey{}, &config.UserConfig{Username: "cli"})
-					a.setCORSHeaders(w, r)
-					handler(w, r.WithContext(ctx))
-					return
-				}
+			// CLITokenContextKey:true marks this identity as NOT backed by a
+			// Gateway.Users row (see that key's doc for why callers like
+			// HandleLogout must check it before treating Username as a
+			// Gateway.Users lookup key).
+			if cfg.Gateway.VerifyCLIToken(rawToken) == nil {
+				ctx := context.WithValue(r.Context(), UserContextKey{}, &config.UserConfig{Username: "cli"})
+				ctx = context.WithValue(ctx, CLITokenContextKey{}, true)
+				a.setCORSHeaders(w, r)
+				handler(w, r.WithContext(ctx))
+				return
 			}
 			// Token present but matched neither — treat as anonymous (optional auth).
 			// Legacy env var fallback
@@ -454,6 +457,8 @@ func (a *restAPI) HandleValidateToken(w http.ResponseWriter, r *http.Request) {
 // user's other tokens stay valid, so concurrent sessions on other tabs/devices
 // are unaffected. It also clears the single-slot session_token_hash in
 // config.json and revokes both browser-side cookies (session + CSRF).
+// A CLI-token-authenticated caller (CLITokenContextKey) short-circuits
+// before any of that — it has no Gateway.Users row to look up.
 func (a *restAPI) HandleLogout(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -464,6 +469,23 @@ func (a *restAPI) HandleLogout(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusUnauthorized, "not authenticated")
 		return
 	}
+
+	// A CLI-token-authenticated caller's synthetic "cli" identity is not
+	// backed by any Gateway.Users row (see CLITokenContextKey's doc) — the
+	// Gateway.Users JSON lookup below would either find nothing (500, the
+	// bug this branch fixes) or, worse, match a same-named human account.
+	// There is nothing to revoke in Gateway.Users for this caller: CLI-token
+	// revocation is a separate concern already handled by
+	// cmd/omnipus/internal/clitoken's ResetCLIToken. Still clear the
+	// browser-side cookies (a harmless no-op for a non-browser CLI caller)
+	// and report success like any other logout.
+	if viaCLI, _ := r.Context().Value(CLITokenContextKey{}).(bool); viaCLI {
+		middleware.ClearSessionCookie(w, r)
+		middleware.ClearCSRFCookie(w, r)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
 	// SEC-1 / UAT #399: revoke ONLY the caller's presented bearer token, not
 	// every token the user holds — concurrent sessions on other tabs/devices
 	// must remain valid. Recover the presented token from the Authorization

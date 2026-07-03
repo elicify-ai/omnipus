@@ -322,6 +322,9 @@ func (a *restAPI) withAuthAndBodyLimit(handler http.HandlerFunc, bodyLimit int64
 		if result.User != nil {
 			ctx = context.WithValue(ctx, UserContextKey{}, result.User)
 		}
+		if result.ViaCLIToken {
+			ctx = context.WithValue(ctx, CLITokenContextKey{}, true)
+		}
 		handler(w, r.WithContext(ctx))
 	}
 }

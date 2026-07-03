@@ -3034,7 +3034,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "get",
     path: "/auth/validate",
     alias: "validateToken",
-    description: `Returns the authenticated user&#x27;s username and role when the token is valid. Rate-limited: 30 requests per IP per minute.
+    description: `Returns the authenticated user&#x27;s username when the token is valid. Rate-limited: 30 requests per IP per minute.
 `,
     requestFormat: "json",
     response: z.object({ username: z.string() }).passthrough(),
@@ -4118,7 +4118,7 @@ Includes session_start events from all agent stores and task lifecycle events.
       },
       {
         status: 409,
-        description: `Conflict — e.g. resource already exists, or last-admin guard triggered.`,
+        description: `Conflict — e.g. resource already exists.`,
         schema: ErrorResponse,
       },
       {
@@ -4161,7 +4161,7 @@ Includes session_start events from all agent stores and task lifecycle events.
       },
       {
         status: 409,
-        description: `Conflict — e.g. resource already exists, or last-admin guard triggered.`,
+        description: `Conflict — e.g. resource already exists.`,
         schema: ErrorResponse,
       },
     ],
@@ -5445,7 +5445,7 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
       },
       {
         status: 409,
-        description: `Conflict — e.g. resource already exists, or last-admin guard triggered.`,
+        description: `Conflict — e.g. resource already exists.`,
         schema: ErrorResponse,
       },
     ],
@@ -5483,7 +5483,7 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
       },
       {
         status: 409,
-        description: `Conflict — e.g. resource already exists, or last-admin guard triggered.`,
+        description: `Conflict — e.g. resource already exists.`,
         schema: ErrorResponse,
       },
       {
@@ -5542,7 +5542,7 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
       },
       {
         status: 409,
-        description: `Conflict — e.g. resource already exists, or last-admin guard triggered.`,
+        description: `Conflict — e.g. resource already exists.`,
         schema: ErrorResponse,
       },
       {
@@ -5880,7 +5880,7 @@ Polled by the SPA StatusBar every 15 seconds.
       },
       {
         status: 409,
-        description: `Conflict — e.g. resource already exists, or last-admin guard triggered.`,
+        description: `Conflict — e.g. resource already exists.`,
         schema: ErrorResponse,
       },
     ],
@@ -5950,7 +5950,7 @@ Polled by the SPA StatusBar every 15 seconds.
       },
       {
         status: 409,
-        description: `Conflict — e.g. resource already exists, or last-admin guard triggered.`,
+        description: `Conflict — e.g. resource already exists.`,
         schema: ErrorResponse,
       },
     ],

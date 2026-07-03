@@ -26,7 +26,7 @@ import (
 //
 // FR-105/FR-106: gateway.users is intentionally excluded. Auth reads
 // GetConfig() live on every request (configSnapshotMiddleware, auth.go:133),
-// and register-admin/HandleCompleteOnboarding call refreshConfigAndRewireServices
+// and HandleCompleteOnboarding call refreshConfigAndRewireServices
 // immediately after writing config.json — so user additions are hot and never
 // require a restart. Including gateway.users caused a spurious restart banner
 // on every fresh install (US-3 / SC-104).

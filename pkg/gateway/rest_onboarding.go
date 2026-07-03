@@ -28,6 +28,26 @@ var usernameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{1,62}$`)
 
 const usernameInvalidMsg = `username must start with an alphanumeric and contain only letters, digits, dots, dashes, and underscores (length 2-63)`
 
+// reservedUsernames blocks registration of usernames that collide with a
+// synthetic auth principal the gateway constructs internally rather than
+// reading from a Gateway.Users row. "cli" is the identity checkBearerAuth /
+// authenticateWS / withOptionalAuth synthesize for a caller presenting the
+// machine-only Gateway.CLIToken (see GatewayConfig.CLIToken and
+// CLITokenContextKey doc comments). If a human were allowed to register as
+// "cli", their real Gateway.Users row would share a username with that
+// synthetic identity, and a username-keyed lookup elsewhere could silently
+// match the wrong account. "admin" and "system" are reserved too as
+// leftover principal names from the pre-single-user RBAC model.
+var reservedUsernames = map[string]struct{}{
+	"cli":    {},
+	"admin":  {},
+	"system": {},
+}
+
+// reservedUsernameMsg is returned when an otherwise-valid username collides
+// with a name reservedUsernames blocks.
+const reservedUsernameMsg = "this username is reserved and cannot be registered"
+
 // HandleCompleteOnboarding handles POST /api/v1/onboarding/complete.
 //
 // Two-phase commit invariant:
@@ -105,6 +125,10 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 	// Enforce username constraints regardless of ValidateInbound schema validation.
 	if !usernameRE.MatchString(body.Admin.Username) {
 		jsonErr(w, http.StatusBadRequest, usernameInvalidMsg)
+		return
+	}
+	if _, reserved := reservedUsernames[strings.ToLower(body.Admin.Username)]; reserved {
+		jsonErr(w, http.StatusBadRequest, reservedUsernameMsg)
 		return
 	}
 	if body.Admin.Password == "" {

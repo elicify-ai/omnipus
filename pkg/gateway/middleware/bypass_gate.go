@@ -54,7 +54,7 @@ func RequireNotBypass(next http.HandlerFunc) http.HandlerFunc {
 				"path", r.URL.Path,
 				"remote_addr", r.RemoteAddr,
 				"reason", reasonForBypassBlock(cfgMissing, bypassOn))
-			writeJSONErr(w, http.StatusServiceUnavailable, "user management disabled in dev-mode-bypass")
+			writeJSONErr(w, http.StatusServiceUnavailable, "this action is disabled while dev_mode_bypass is active")
 			return
 		}
 		next(w, r)

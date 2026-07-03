@@ -53,7 +53,7 @@ export interface paths {
         };
         /**
          * Validate the current bearer token
-         * @description Returns the authenticated user's username and role when the token is valid. Rate-limited: 30 requests per IP per minute.
+         * @description Returns the authenticated user's username when the token is valid. Rate-limited: 30 requests per IP per minute.
          */
         get: operations["validateToken"];
         put?: never;
@@ -7456,7 +7456,7 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
-        /** @description Conflict — e.g. resource already exists, or last-admin guard triggered. */
+        /** @description Conflict — e.g. resource already exists. */
         "409Conflict": {
             headers: {
                 [name: string]: unknown;
@@ -7505,6 +7505,15 @@ export interface components {
         };
         /** @description Service unavailable — e.g. credential store locked. */
         "503ServiceUnavailable": {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description dev_mode_bypass is active (RequireNotBypass guard). */
+        "503BypassActive": {
             headers: {
                 [name: string]: unknown;
             };
@@ -8629,15 +8638,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description dev_mode_bypass is active (RequireNotBypass guard). */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
+            503: components["responses"]["503BypassActive"];
         };
     };
     getExecAllowlist: {
@@ -8794,15 +8795,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description dev_mode_bypass is active (RequireNotBypass guard). */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
+            503: components["responses"]["503BypassActive"];
         };
     };
     getPromptGuard: {
@@ -8865,15 +8858,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description dev_mode_bypass is active (RequireNotBypass guard). */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
+            503: components["responses"]["503BypassActive"];
         };
     };
     getRateLimits: {
@@ -8936,15 +8921,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description dev_mode_bypass is active (RequireNotBypass guard). */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
+            503: components["responses"]["503BypassActive"];
         };
     };
     getSandboxConfig: {
@@ -9016,15 +8993,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description dev_mode_bypass is active (RequireNotBypass guard). */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
+            503: components["responses"]["503BypassActive"];
         };
     };
     getSandboxStatus: {
@@ -9154,15 +9123,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description dev_mode_bypass is active (RequireNotBypass guard). */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
+            503: components["responses"]["503BypassActive"];
         };
     };
     getRetention: {
@@ -9225,15 +9186,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description dev_mode_bypass is active (RequireNotBypass guard). */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
+            503: components["responses"]["503BypassActive"];
         };
     };
     triggerRetentionSweep: {
@@ -9272,15 +9225,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description dev_mode_bypass is active (RequireNotBypass guard). */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
+            503: components["responses"]["503BypassActive"];
         };
     };
     getPerformanceSettings: {
@@ -9310,15 +9255,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description dev_mode_bypass is active (RequireNotBypass guard). */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
+            503: components["responses"]["503BypassActive"];
         };
     };
     updatePerformanceSettings: {
@@ -9352,15 +9289,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description dev_mode_bypass is active (RequireNotBypass guard). */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
+            503: components["responses"]["503BypassActive"];
         };
     };
     getMemorySettings: {
@@ -10042,15 +9971,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description dev_mode_bypass is active (RequireNotBypass guard). */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
+            503: components["responses"]["503BypassActive"];
         };
     };
     restartGateway: {

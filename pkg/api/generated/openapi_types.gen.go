@@ -8427,6 +8427,9 @@ type N500InternalServerError = ErrorResponse
 // N502BadGateway Standard error envelope returned by all non-2xx responses.
 type N502BadGateway = ErrorResponse
 
+// N503BypassActive Standard error envelope returned by all non-2xx responses.
+type N503BypassActive = ErrorResponse
+
 // N503ServiceUnavailable Standard error envelope returned by all non-2xx responses.
 type N503ServiceUnavailable = ErrorResponse
 

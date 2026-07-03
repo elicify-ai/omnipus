@@ -848,6 +848,82 @@ func TestHandleLogout_MethodNotAllowed(t *testing.T) {
 	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
 }
 
+// TestHandleLogout_CLITokenAuth_ReturnsNoContent proves the CLI-token logout
+// regression fix. Commit 17bfff82 moved the CLI's machine bearer token out
+// of Gateway.Users (where it lived as a role-less "cli" row) into the
+// dedicated Gateway.CLIToken field, but HandleLogout still looked the
+// caller up by username in the Gateway.Users JSON array — a CLI-token
+// caller has no such row (a fresh CLI-only install can have ZERO
+// Gateway.Users entries), so the lookup fell through to
+// `fmt.Errorf("user not found in config")` and the handler responded 500.
+//
+// This drives the FULL real auth path — checkBearerAuth's Gateway.CLIToken
+// branch via api.withAuth, not a hand-injected context — so it exercises
+// exactly what a real CLI `omnipus ... logout` call does. Pre-fix (verified
+// by temporarily reverting HandleLogout's CLITokenContextKey short-circuit),
+// this test fails: safeUpdateConfigJSON runs against the on-disk config
+// (whose gateway.users array is empty, matching a realistic CLI-only
+// install) and returns the "user not found in config" error, producing a
+// 500 instead of the expected 204.
+func TestHandleLogout_CLITokenAuth_ReturnsNoContent(t *testing.T) {
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+	tmpDir := t.TempDir()
+
+	plainToken := "omnipus_" + strings.Repeat("d", 64)
+	hash, err := bcrypt.GenerateFromPassword([]byte(plainToken), bcrypt.MinCost)
+	require.NoError(t, err)
+
+	// On-disk config mirrors a realistic CLI-only install: a CLI token but
+	// ZERO Gateway.Users entries — there is no "cli" row to relocate
+	// because this install never had one (fresh install, not a migrated
+	// legacy config with a role-less "cli" user row).
+	onDisk := map[string]any{
+		"version":   1,
+		"agents":    map[string]any{"defaults": map[string]any{}, "list": []any{}},
+		"providers": []any{},
+		"gateway": map[string]any{
+			"users":     []any{},
+			"cli_token": map[string]any{"id": "", "hash": string(hash)},
+		},
+	}
+	data, err := json.Marshal(onDisk)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "config.json"), data, 0o600))
+
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{
+			Host:     "127.0.0.1",
+			Port:     8080,
+			CLIToken: &config.TokenEntry{Hash: config.BcryptHash(hash)},
+		},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: tmpDir,
+				ModelName: "test-model",
+				MaxTokens: 4096,
+			},
+		},
+	}
+	msgBus := bus.NewMessageBus()
+	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	api := &restAPI{
+		agentLoop:     al,
+		homePath:      tmpDir,
+		allowedOrigin: "http://localhost:3000",
+		onboardingMgr: onboarding.NewManager(tmpDir),
+		taskStore:     task.New(tmpDir + "/tasks"),
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
+	req.Header.Set("Authorization", "Bearer "+plainToken)
+	w := httptest.NewRecorder()
+
+	api.withAuth(api.HandleLogout)(w, req)
+
+	require.Equal(t, http.StatusNoContent, w.Code,
+		"a CLI-token-authenticated logout must return 204, not 500 (body: %s)", w.Body.String())
+}
+
 // --- HandleChangePassword tests ---
 
 // TestHandleChangePassword_Success verifies that POST /api/v1/auth/change-password
