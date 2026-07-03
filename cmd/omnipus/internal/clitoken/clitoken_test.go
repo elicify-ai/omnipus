@@ -9,10 +9,12 @@ import (
 	"testing"
 
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/dapicom-ai/omnipus/pkg/config"
 )
 
 // seedMinimalConfig writes a minimal config.json into home so that
-// upsertCLIUser has a valid file to read and update.
+// upsertCLIToken has a valid file to read and update.
 func seedMinimalConfig(t *testing.T, home string) {
 	t.Helper()
 	cfg := map[string]any{
@@ -45,27 +47,18 @@ func readConfig(t *testing.T, home string) map[string]any {
 	return m
 }
 
-// cliUserFromConfig extracts the `cli` user entry from a parsed config map.
-// Returns nil if not found.
-func cliUserFromConfig(m map[string]any) map[string]any {
+// cliTokenFromConfig extracts the gateway.cli_token entry from a parsed
+// config map. Returns nil if not present.
+func cliTokenFromConfig(m map[string]any) map[string]any {
 	gw, _ := m["gateway"].(map[string]any)
 	if gw == nil {
 		return nil
 	}
-	users, _ := gw["users"].([]any)
-	for _, u := range users {
-		um, ok := u.(map[string]any)
-		if !ok {
-			continue
-		}
-		if um["username"] == "cli" {
-			return um
-		}
-	}
-	return nil
+	tok, _ := gw["cli_token"].(map[string]any)
+	return tok
 }
 
-func TestEnsureCLIToken_FreshCreatesUserAndFile(t *testing.T) {
+func TestEnsureCLIToken_FreshCreatesTokenAndFile(t *testing.T) {
 	home := t.TempDir()
 	seedMinimalConfig(t, home)
 
@@ -94,24 +87,20 @@ func TestEnsureCLIToken_FreshCreatesUserAndFile(t *testing.T) {
 		t.Error("cli.token is empty")
 	}
 
-	// Config must contain a `cli` user with a non-empty token_hash and role "admin".
+	// Config must contain a gateway.cli_token entry with a non-empty hash.
 	m := readConfig(t, home)
-	user := cliUserFromConfig(m)
-	if user == nil {
-		t.Fatalf("no cli user found in config.json")
+	tok := cliTokenFromConfig(m)
+	if tok == nil {
+		t.Fatalf("no gateway.cli_token entry found in config.json")
 	}
-	th, _ := user["token_hash"].(string)
+	th, _ := tok["hash"].(string)
 	if th == "" {
-		t.Errorf("cli user has empty token_hash")
-	}
-	role, _ := user["role"].(string)
-	if role != "admin" {
-		t.Errorf("cli user role = %q, want admin", role)
+		t.Errorf("gateway.cli_token has empty hash")
 	}
 
 	// The bcrypt hash must verify against the plaintext token.
 	if err := bcrypt.CompareHashAndPassword([]byte(th), []byte(token)); err != nil {
-		t.Errorf("token_hash does not match plaintext token: %v", err)
+		t.Errorf("cli_token hash does not match plaintext token: %v", err)
 	}
 }
 
@@ -128,11 +117,11 @@ func TestEnsureCLIToken_Idempotent(t *testing.T) {
 		t.Fatalf("LoadCLIToken after first: %v", err)
 	}
 	m1 := readConfig(t, home)
-	u1 := cliUserFromConfig(m1)
+	u1 := cliTokenFromConfig(m1)
 	if u1 == nil {
-		t.Fatal("cli user missing after first call")
+		t.Fatal("gateway.cli_token missing after first call")
 	}
-	hash1, _ := u1["token_hash"].(string)
+	hash1, _ := u1["hash"].(string)
 
 	// Second call — must be a no-op.
 	created, err := EnsureCLIToken(home)
@@ -150,13 +139,13 @@ func TestEnsureCLIToken_Idempotent(t *testing.T) {
 		t.Errorf("token changed on idempotent call: %q → %q", token1, token2)
 	}
 	m2 := readConfig(t, home)
-	u2 := cliUserFromConfig(m2)
+	u2 := cliTokenFromConfig(m2)
 	if u2 == nil {
-		t.Fatal("cli user missing after second call")
+		t.Fatal("gateway.cli_token missing after second call")
 	}
-	hash2, _ := u2["token_hash"].(string)
+	hash2, _ := u2["hash"].(string)
 	if hash1 != hash2 {
-		t.Errorf("token_hash changed on idempotent call")
+		t.Errorf("cli_token hash changed on idempotent call")
 	}
 }
 
@@ -173,7 +162,7 @@ func TestResetCLIToken_ChangesTokenAndHash(t *testing.T) {
 		t.Fatalf("LoadCLIToken (before reset): %v", err)
 	}
 	m0 := readConfig(t, home)
-	oldHash, _ := cliUserFromConfig(m0)["token_hash"].(string)
+	oldHash, _ := cliTokenFromConfig(m0)["hash"].(string)
 
 	// Reset.
 	if resetErr := ResetCLIToken(home); resetErr != nil {
@@ -184,13 +173,13 @@ func TestResetCLIToken_ChangesTokenAndHash(t *testing.T) {
 		t.Fatalf("LoadCLIToken (after reset): %v", err)
 	}
 	m1 := readConfig(t, home)
-	newHash, _ := cliUserFromConfig(m1)["token_hash"].(string)
+	newHash, _ := cliTokenFromConfig(m1)["hash"].(string)
 
 	if newToken == oldToken {
 		t.Errorf("token did not change after reset")
 	}
 	if newHash == oldHash {
-		t.Errorf("token_hash did not change after reset")
+		t.Errorf("cli_token hash did not change after reset")
 	}
 
 	// Old token must NOT match the new hash.
@@ -332,5 +321,114 @@ func TestLoadCLIToken_TruncatedFile_ReturnsPartialToken(t *testing.T) {
 	}
 	if tok != "omnipus_abc" {
 		t.Errorf("expected %q, got %q", "omnipus_abc", tok)
+	}
+}
+
+// TestEnsureCLIToken_AfterLegacyMigration_TokenSurvivesAndAuthenticates is an
+// end-to-end test of the migration described in cli_token_migration.go: a
+// legacy config.json may carry a role-less "cli" entry in gateway.users[]
+// (the shape EnsureCLIToken produced before the dedicated Gateway.CLIToken
+// field existed). It writes such a config, loads it via config.LoadConfig
+// (which invokes migrateCLITokenOutOfUsers), and confirms:
+//  1. The legacy "cli" token material is relocated in-memory into
+//     Gateway.CLIToken and verifies against the original plaintext token.
+//  2. The legacy "cli" entry no longer appears in Gateway.Users (only the
+//     human account remains).
+//  3. The migration is also best-effort self-healed to disk (config.json's
+//     gateway.cli_token is now populated; gateway.users no longer carries
+//     the "cli" row).
+//  4. A subsequent EnsureCLIToken call is a true no-op (the plaintext
+//     cli.token file already exists and the new field is already
+//     populated), and LoadCLIToken keeps returning the SAME original
+//     plaintext token — the token "ends up in the new field and
+//     authenticates correctly" across the migration.
+func TestEnsureCLIToken_AfterLegacyMigration_TokenSurvivesAndAuthenticates(t *testing.T) {
+	home := t.TempDir()
+	configPath := filepath.Join(home, "config.json")
+
+	// Mint the plaintext CLI token exactly as the legacy (pre-migration)
+	// EnsureCLIToken would have: a bcrypt hash of the whole raw token, stored
+	// under a role-less gateway.users[] entry named "cli", with a matching
+	// plaintext file already on disk.
+	plainToken, err := GenerateBearerToken()
+	if err != nil {
+		t.Fatalf("GenerateBearerToken: %v", err)
+	}
+	tokenHash, err := bcrypt.GenerateFromPassword([]byte(plainToken), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatalf("bcrypt.GenerateFromPassword: %v", err)
+	}
+	if err := os.WriteFile(CLITokenPath(home), []byte(plainToken), 0o600); err != nil {
+		t.Fatalf("seed cli.token: %v", err)
+	}
+
+	cfg := config.DefaultConfig()
+	cfg.Gateway.Port = 5000
+	cfg.Gateway.Users = []config.UserConfig{
+		{Username: "daniel"}, // the (now singular) human account, at Users[0]
+		{Username: "cli", TokenHash: config.BcryptHash(tokenHash)}, // legacy machine entry
+	}
+	if err := config.SaveConfig(configPath, cfg); err != nil {
+		t.Fatalf("seed legacy config.json: %v", err)
+	}
+
+	// Loading the config triggers migrateCLITokenOutOfUsers.
+	loaded, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	// 1. In-memory: Gateway.CLIToken is populated and authenticates the
+	// original plaintext token via the shared verification helper — the
+	// same path checkBearerAuth/authenticateWS use in production.
+	if loaded.Gateway.CLIToken == nil {
+		t.Fatal("migration did not populate Gateway.CLIToken")
+	}
+	if verifyErr := config.VerifyTokenAgainst(
+		[]config.TokenEntry{*loaded.Gateway.CLIToken}, "", plainToken,
+	); verifyErr != nil {
+		t.Errorf("migrated CLIToken does not verify against the original plaintext token: %v", verifyErr)
+	}
+
+	// 2. The legacy "cli" row is gone; only the human account remains.
+	for _, u := range loaded.Gateway.Users {
+		if u.Username == "cli" {
+			t.Errorf("legacy \"cli\" entry still present in Gateway.Users after migration")
+		}
+	}
+	if len(loaded.Gateway.Users) != 1 || loaded.Gateway.Users[0].Username != "daniel" {
+		t.Errorf("expected only the human account to remain in Gateway.Users, got %+v", loaded.Gateway.Users)
+	}
+
+	// 3. Best-effort on-disk self-heal: config.json itself is patched too.
+	diskCfg := readConfig(t, home)
+	if cliTokenFromConfig(diskCfg) == nil {
+		t.Errorf("gateway.cli_token was not persisted to disk after migration")
+	}
+	if gw, ok := diskCfg["gateway"].(map[string]any); ok {
+		if users, ok := gw["users"].([]any); ok {
+			for _, u := range users {
+				if um, ok := u.(map[string]any); ok && um["username"] == "cli" {
+					t.Errorf("legacy \"cli\" entry still present on disk after migration")
+				}
+			}
+		}
+	}
+
+	// 4. EnsureCLIToken must now be a true no-op: the plaintext file already
+	// exists and config.json's gateway.cli_token is already populated.
+	created, err := EnsureCLIToken(home)
+	if err != nil {
+		t.Fatalf("EnsureCLIToken after migration: %v", err)
+	}
+	if created {
+		t.Errorf("expected EnsureCLIToken to be a no-op after migration, got created=true")
+	}
+	finalToken, err := LoadCLIToken(home)
+	if err != nil {
+		t.Fatalf("LoadCLIToken after migration: %v", err)
+	}
+	if finalToken != plainToken {
+		t.Errorf("CLI token changed across migration + EnsureCLIToken: got %q, want %q", finalToken, plainToken)
 	}
 }

@@ -4,7 +4,7 @@ description: >
   whatsapp_pairing (QR/status) frames. The SPA sends active:true when an operator
   opens a channel's pairing UI and active:false when they leave, so the QR pairing
   secret is delivered only to the connection that is watching rather than every
-  authenticated admin connection (#283).
+  authenticated connection (#283).
 type: object
 required:
   - type

@@ -118,6 +118,27 @@ func (r *configSelfWriteRegistry) consume(h [32]byte) bool {
 	return known
 }
 
+// selfHealWriteHook builds a config.SelfHealWriteHook that registers the
+// sha256 hash of any bytes config.loadConfigInternal's on-disk self-heal
+// (migrateCLITokenOutOfUsers, cli_token_migration.go) writes with reg, so
+// setupConfigWatcherPolling's next tick recognizes that write as
+// app-initiated rather than a genuine external edit (and does not trigger a
+// spurious full-service reload).
+//
+// Used at the two call sites that invoke config.LoadConfigWithStore directly
+// — the watcher's own external-edit path and the manual /reload trigger —
+// which, unlike safeUpdateConfigJSON, do not otherwise register anything
+// with reg. Safe to pass a nil reg (e.g. hot-reload disabled, no registry
+// constructed): the returned hook is a no-op in that case.
+func selfHealWriteHook(reg *configSelfWriteRegistry) config.SelfHealWriteHook {
+	return func(writtenBytes []byte) {
+		if reg == nil {
+			return
+		}
+		reg.register(sha256.Sum256(writtenBytes))
+	}
+}
+
 type services struct {
 	CronService *cron.CronService
 	TaskTrigger *agent.TaskTriggerScheduler // fires once/every/recurring task triggers via a dedicated CronService
@@ -1026,7 +1047,14 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 			}
 		case <-manualReloadChan:
 			logger.Info("Manual reload triggered via /reload endpoint")
-			newCfg, err := config.LoadConfigWithStore(configPath, credStore)
+			// LoadConfigWithStoreAndSelfHealHook (not LoadConfigWithStore): this
+			// path bypasses safeUpdateConfigJSON's configMu + selfWriteReg
+			// registration, so if the single-user-model role self-heal writes
+			// config.json here, the write must be registered manually or the
+			// watcher's next tick would misidentify it as an external edit.
+			newCfg, err := config.LoadConfigWithStoreAndSelfHealHook(
+				configPath, credStore, selfHealWriteHook(runningServices.selfWriteReg),
+			)
 			if err != nil {
 				logger.Errorf("Error loading config for manual reload: %v", err)
 				agentLoop.ClearReloadPending()
@@ -2182,7 +2210,15 @@ func setupConfigWatcherPolling(
 						continue
 					}
 
-					newCfg, err := config.LoadConfigWithStore(configPath, credStore)
+					// LoadConfigWithStoreAndSelfHealHook (not LoadConfigWithStore):
+					// this poller already reads config.json outside configMu, so if
+					// the single-user-model role self-heal performs a write as a
+					// side effect of THIS load, it must be registered with
+					// selfWriteReg too — otherwise the self-heal's own write would
+					// be misdetected as a second external edit on the next tick.
+					newCfg, err := config.LoadConfigWithStoreAndSelfHealHook(
+						configPath, credStore, selfHealWriteHook(selfWriteReg),
+					)
 					if err != nil {
 						logger.Errorf("⚠ Error loading new config: %v", err)
 						logger.Warn("  Using previous valid config")

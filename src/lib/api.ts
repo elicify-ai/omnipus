@@ -1,11 +1,11 @@
 // REST API client — all calls go through the backend gateway.
-// Auth: Authorization: Bearer <token> header. Token read from sessionStorage (preferred) or localStorage ('omnipus_auth_token'). Backend validates against per-user RBAC token hashes or legacy OMNIPUS_BEARER_TOKEN env var.
+// Auth: Authorization: Bearer <token> header. Token read from sessionStorage (preferred) or localStorage ('omnipus_auth_token'). Backend validates against the account's bearer-token hashes or legacy OMNIPUS_BEARER_TOKEN env var.
 // CSRF: X-CSRF-Token header echoes the __Host-csrf cookie value on every
 // state-changing request (double-submit cookie, issue #97). The cookie is
-// issued by the backend on /auth/login, /auth/register-admin, and
-// /onboarding/complete. State-changing calls made before the cookie exists
-// fail fast client-side so the UI surfaces an actionable error instead of
-// waiting for the server's 403.
+// issued by the backend on /auth/login and /onboarding/complete.
+// State-changing calls made before the cookie exists fail fast client-side
+// so the UI surfaces an actionable error instead of waiting for the
+// server's 403.
 //
 // Errors: request() throws ApiError on non-2xx responses and on transport
 // failures (network down, fetch threw). Callers should branch on err.status
@@ -64,12 +64,14 @@ import {
   DevicesResponse as DevicesResponseSchema,
   BackupEntry as BackupEntrySchema,
   StorageStats as StorageStatsSchema,
-  MeInfo as MeInfoSchema,
   // Newly wired schemas:
   Provider as ProviderSchema,
   CliDetect as CliDetectSchema,
   // external-executor-cli-path-detection spec (ADR-030): create-time validate.
   CliValidateResponse as CliValidateResponseSchema,
+  // Agent System P0 fix: real auto-applied CLI flags (replaces misleading
+  // placeholder ghost-text in the executor cli_args field).
+  ExecutorDefaults as ExecutorDefaultsSchema,
   GatewayStatus as GatewayStatusSchema,
   ToolRegistryEntry as ToolRegistryEntrySchema,
   ChannelEntry as ChannelEntrySchema,
@@ -266,6 +268,8 @@ import type {
   CliDetectEntry,
   CliValidateRequest,
   CliValidateResponse,
+  // Agent System P0 fix: real auto-applied CLI flags.
+  ExecutorDefaults,
   GatewayStatus,
   Skill,
   SkillSearchResult,
@@ -290,7 +294,6 @@ import type {
   DevicesResponse,
   BackupEntry,
   StorageStats,
-  MeInfo,
   // Newly promoted from inline openapi.yaml schemas:
   AuditLogUpdateResponse,
   SkillTrustUpdateRequest,
@@ -415,6 +418,8 @@ export type {
   CliDetectEntry,
   CliValidateRequest,
   CliValidateResponse,
+  // Agent System P0 fix: real auto-applied CLI flags.
+  ExecutorDefaults,
   GatewayStatus,
   Skill,
   SkillSearchResult,
@@ -439,7 +444,6 @@ export type {
   DevicesResponse,
   BackupEntry,
   StorageStats,
-  MeInfo,
   // Promoted from inline openapi.yaml schemas:
   AuditLogUpdateResponse,
   SkillTrustUpdateRequest,
@@ -536,12 +540,10 @@ const STATE_CHANGING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
 //   - /api/v1/onboarding/complete — called on fresh install (no cookie exists).
 //   - /api/v1/auth/login — called on first load of an existing install
 //     (refresh, new tab); cookie may be absent until the login succeeds.
-//   - /api/v1/auth/register-admin — first-boot admin account creation.
 const CSRF_EXEMPT_PATHS = new Set<string>([
   '/api/v1/onboarding/complete',
   '/api/v1/onboarding/probe-provider',
   '/api/v1/auth/login',
-  '/api/v1/auth/register-admin',
 ])
 
 // readCSRFCookie parses document.cookie and returns the __Host-csrf value,
@@ -753,6 +755,29 @@ export type AgentKind = NonNullable<Agent['type']>
 // stale payloads.
 export function isWorker(a: { type?: string | null }): boolean {
   return a.type === 'Subagent' || a.type === 'subagent_3p' || a.type === 'worker'
+}
+
+// buildTaskAssigneeItems — shared task-assignee `SmartSelect` item list,
+// deduped out of `TaskDetailPanel` and `CreateTaskSlideOver` (Simplify
+// finding, Agent System P0 fix-wave). Subagent workers are valid assignees
+// when they belong to the workspace's team — the backend enforces team
+// membership, not worker-vs-main kind (see validateTaskAgentID). subagent_3p
+// (external-CLI) workers are still unconditionally rejected server-side:
+// task execution isn't wired through the external-CLI dispatch path yet, so
+// they are excluded here too (offering them would be a guaranteed-400 dead
+// end). A " · Worker" suffix keeps the delegation-only kind visually
+// distinguishable (mirrors AddAgentPicker's " · leaf" convention). Callers
+// prepend their own "Unassigned" (`__none__`) item.
+export function buildTaskAssigneeItems(
+  agents: Agent[],
+): { value: string; label: string; className: string }[] {
+  return agents
+    .filter((a) => a.type !== 'subagent_3p')
+    .map((a) => ({
+      value: a.id,
+      label: isWorker(a) ? `${a.name} · Worker` : a.name,
+      className: 'text-xs',
+    }))
 }
 
 export function fetchAgents(): Promise<Agent[]> {
@@ -1550,6 +1575,27 @@ export function fetchCliValidate(
   )
 }
 
+// fetchExecutorDefaults returns the static reference list of CLI flags
+// Omnipus automatically applies to a subagent_3p executor invocation, one
+// entry per supported CLI (claude-code / codex / opencode) — e.g. the
+// non-interactive-posture flags each driver's `buildArgs` always sets itself
+// (`pkg/agent/runner/driver_*.go`) and that `argsafety.go`
+// (`filterDangerousCLIArgs`) prevents an operator's `executor_cli_args`
+// free-text field from silently overriding. Rendered read-only in both the
+// create wizard (Step1Identity → ExecutorInputs) and the edit form
+// (AgentProfile) so operators see the REAL applied config instead of
+// misleading placeholder ghost-text (Agent System P0 fix). Not agent-scoped
+// and not filterable server-side — the endpoint always returns all three
+// entries; callers select the one matching the currently-chosen CLI
+// (`useExecutorDefaults`).
+export function fetchExecutorDefaults(): Promise<ExecutorDefaults[]> {
+  return request<ExecutorDefaults[]>(
+    '/agents/executor-defaults',
+    undefined,
+    z.array(ExecutorDefaultsSchema) as ZodType<ExecutorDefaults[]>,
+  )
+}
+
 export function rotateGatewayToken(): Promise<{ token: string }> {
   return request('/config/gateway/rotate-token', { method: 'POST' }, RotateTokenResponseSchema as ZodType<{ token: string }>)
 }
@@ -2010,13 +2056,6 @@ export async function login(username: string, password: string): Promise<LoginRe
   }, LoginResponseSchema)
 }
 
-export async function registerAdmin(username: string, password: string): Promise<LoginResponse> {
-  return request<LoginResponse>('/auth/register-admin', {
-    method: 'POST',
-    body: JSON.stringify({ username, password }),
-  }, LoginResponseSchema)
-}
-
 export async function completeOnboardingTransaction(req: OnboardingCompleteRequest): Promise<LoginResponse> {
   return request<LoginResponse>('/onboarding/complete', {
     method: 'POST',
@@ -2277,17 +2316,6 @@ export function updateUserContext(content: string): Promise<void> {
   })
 }
 
-// ── RBAC / Me ─────────────────────────────────────────────────────────────────
-
-export type UserRole = 'admin' | 'user'
-
-// MeInfo — re-exported from generated openapi-types (contract-first #8).
-// See contracts/components/schemas/MeInfo.yaml.
-
-export async function fetchMe(): Promise<MeInfo> {
-  return request<MeInfo>('/me', undefined, MeInfoSchema)
-}
-
 // ── File Upload ───────────────────────────────────────────────────────────────
 
 // UploadedFile — re-exported from generated openapi-types (contract-first #8).
@@ -2481,8 +2509,8 @@ export function fetchPendingRestart(): Promise<PendingRestartEntry[]> {
 // See contracts/components/schemas/GatewayRestartResponse.yaml.
 //
 // POST /api/v1/gateway/restart triggers a graceful self-restart. The server replies
-// with 202 Accepted (status:"restarting") immediately, before re-execing. Admin-only;
-// secured by RequireAdmin + RequireNotBypass (returns 503 when dev_mode_bypass is active).
+// with 202 Accepted (status:"restarting") immediately, before re-execing. It is
+// secured by RequireNotBypass (returns 503 when dev_mode_bypass is active).
 export function gatewayRestart(): Promise<GatewayRestartResponse> {
   return request<GatewayRestartResponse>('/gateway/restart', {
     method: 'POST',

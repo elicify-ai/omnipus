@@ -5,8 +5,12 @@
 // Covers:
 //   - TestSubscribePairingInterest_LateSubscriber_ReceivesCachedFrame: late subscriber gets cached QR
 //   - TestLastPairingState_Eviction: cache eviction on terminal and non-terminal statuses
-//   - TestWSHandler_PairingSubscribe_RequiresAdmin: admin-role guard on subscribe frame
 //   - TestWireChannelManager_ObserverSurvivesChannelRecreation: observer wired on wireChannelManager call
+//
+// (TestWSHandler_PairingSubscribe_RequiresAdmin removed — the admin-role guard
+// on the whatsapp_pairing_subscribe frame was deleted along with the rest of
+// the multi-account machinery; every connection now receives the broadcast
+// unconditionally, single-user model.)
 
 package gateway
 
@@ -152,69 +156,6 @@ func TestLastPairingState_Eviction(t *testing.T) {
 		require.NoError(t, json.Unmarshal(frameBytes, &f))
 		assert.Equal(t, "FRESH-QR", f.QR)
 	})
-}
-
-// --- Test C: admin role check on subscribe frame ---
-
-// TestWSHandler_PairingSubscribe_RequiresAdmin verifies that a non-admin connection
-// receives an error frame and subscribePairingInterest is NOT called (no cached QR
-// delivered) when the connection's role is non-admin.
-func TestWSHandler_PairingSubscribe_RequiresAdmin(t *testing.T) {
-	h := makeMinimalHandler()
-
-	// Pre-seed the cache so we can confirm subscribePairingInterest was NOT called
-	// (if it were called, the cached frame would appear in sendCh).
-	h.lastPairingState.Store("whatsapp_native", []byte(
-		`{"type":"whatsapp_pairing","qr":"SHOULD-NOT-DELIVER","status":"code","channel_id":"whatsapp_native"}`,
-	))
-
-	// Create a non-admin wsConn.
-	wc, ch := makeForwarderTestConn(64)
-	wc.role = config.UserRoleUser
-
-	// The readLoop in production does this check before calling subscribePairingInterest.
-	// Replicate the exact guard from readLoop here:
-	if wc.role != config.UserRoleAdmin {
-		sendConnGenFrame(wc, "error", struct {
-			Type    string `json:"type"`
-			Message string `json:"message"`
-		}{
-			Type:    "error",
-			Message: "whatsapp_pairing_subscribe requires admin role",
-		})
-		// Do NOT call subscribePairingInterest — skip past it as in the production readLoop.
-		goto afterSubscribe
-	}
-	// This path must never execute for a non-admin conn.
-	h.subscribePairingInterest(wc, "whatsapp_native", true)
-
-afterSubscribe:
-	// Confirm an error frame was written.
-	select {
-	case data := <-ch:
-		var f replayFrameDecoder
-		require.NoError(t, json.Unmarshal(data, &f))
-		assert.Equal(t, "error", f.Type, "non-admin must receive an error frame")
-		assert.Contains(t, f.Message, "admin role", "error message must mention admin role requirement")
-	case <-time.After(2 * time.Second):
-		t.Fatal("timeout: expected error frame for non-admin subscribe attempt")
-	}
-
-	// Confirm subscribePairingInterest was NOT called (no cached QR in ch).
-	select {
-	case data := <-ch:
-		var f replayFrameDecoder
-		_ = json.Unmarshal(data, &f)
-		if f.QR == "SHOULD-NOT-DELIVER" {
-			t.Fatalf("non-admin must not receive cached QR: subscribePairingInterest was inadvertently called")
-		}
-	default:
-		// correct: no QR frame queued
-	}
-
-	// Confirm the connection was not subscribed.
-	assert.False(t, wc.wantsPairing("whatsapp_native"),
-		"non-admin connection must not be subscribed to pairingSubs after role rejection")
 }
 
 // --- Test D: wireChannelManager sets observer on the channel manager ---

@@ -2,7 +2,7 @@ openapi: 3.0.3
 info:
   title: Omnipus REST API
   version: 0.1.0
-  description: 'REST API surface for the Omnipus agentic gateway. All endpoints are under /api/v1. Authentication uses Bearer tokens issued by /auth/login, /auth/register-admin, or /onboarding/complete. State-changing requests must include the X-CSRF-Token header echoing the __Host-csrf cookie value (double-submit cookie, issue #97). See src/lib/api.ts for the CSRF_EXEMPT_PATHS list (endpoints that issue the cookie and cannot require it to be present yet).
+  description: 'REST API surface for the Omnipus agentic gateway. All endpoints are under /api/v1. Authentication uses Bearer tokens issued by /auth/login or /onboarding/complete. State-changing requests must include the X-CSRF-Token header echoing the __Host-csrf cookie value (double-submit cookie, issue #97). See src/lib/api.ts for the CSRF_EXEMPT_PATHS list (endpoints that issue the cookie and cannot require it to be present yet).
 
     '
   contact:
@@ -21,8 +21,6 @@ tags:
   description: "First-run onboarding wizard \u2014 provider probe and atomic setup."
 - name: sessions
   description: Chat/task/channel session CRUD and transcript access.
-- name: users
-  description: User account management (admin-only). Separate from self-service auth.
 - name: agents
   description: Agent configuration CRUD and per-agent session listing.
 - name: security
@@ -69,7 +67,7 @@ components:
     BearerAuth:
       type: http
       scheme: bearer
-      description: 'Bearer token issued by /auth/login, /auth/register-admin, or /onboarding/complete. Store in sessionStorage under "omnipus_auth_token".
+      description: 'Bearer token issued by /auth/login or /onboarding/complete. Store in sessionStorage under "omnipus_auth_token".
 
         '
   schemas:
@@ -79,8 +77,6 @@ components:
       $ref: ./components/schemas/LoginRequest.yaml
     LoginResponse:
       $ref: ./components/schemas/LoginResponse.yaml
-    RegisterAdminRequest:
-      $ref: ./components/schemas/RegisterAdminRequest.yaml
     ChangePasswordRequest:
       $ref: ./components/schemas/ChangePasswordRequest.yaml
     OnboardingCompleteRequest:
@@ -91,22 +87,6 @@ components:
       $ref: ./components/schemas/ProbeProviderRequest.yaml
     ProbeProviderResponse:
       $ref: ./components/schemas/ProbeProviderResponse.yaml
-    User:
-      $ref: ./components/schemas/User.yaml
-    UserCreateRequest:
-      $ref: ./components/schemas/UserCreateRequest.yaml
-    UserCreateResponse:
-      $ref: ./components/schemas/UserCreateResponse.yaml
-    UserDeleteResponse:
-      $ref: ./components/schemas/UserDeleteResponse.yaml
-    UserRoleChangeRequest:
-      $ref: ./components/schemas/UserRoleChangeRequest.yaml
-    UserRoleChangeResponse:
-      $ref: ./components/schemas/UserRoleChangeResponse.yaml
-    UserResetPasswordRequest:
-      $ref: ./components/schemas/UserResetPasswordRequest.yaml
-    UserResetPasswordResponse:
-      $ref: ./components/schemas/UserResetPasswordResponse.yaml
     Session:
       $ref: ./components/schemas/Session.yaml
     SessionStats:
@@ -173,8 +153,12 @@ components:
       $ref: ./components/schemas/AgentUpdateRequest.yaml
     FallbackModel:
       $ref: ./components/schemas/FallbackModel.yaml
+    ExternalCliTool:
+      $ref: ./components/schemas/ExternalCli.yaml
     ExecutorConfig:
       $ref: ./components/schemas/ExecutorConfig.yaml
+    ExecutorDefaults:
+      $ref: ./components/schemas/ExecutorDefaults.yaml
     VoiceProvider:
       $ref: ./components/schemas/VoiceProvider.yaml
     AgentSession:
@@ -364,8 +348,6 @@ components:
       $ref: ./components/schemas/BackupEntry.yaml
     StorageStats:
       $ref: ./components/schemas/StorageStats.yaml
-    MeInfo:
-      $ref: ./components/schemas/MeInfo.yaml
     AuditLogToggleRequest:
       $ref: ./components/schemas/AuditLogToggleRequest.yaml
     AuditLogUpdateResponse:
@@ -430,8 +412,6 @@ components:
           description: Uploaded file metadata entries.
           items:
             $ref: '#/components/schemas/UploadedFile'
-    AgentOwnerUpdateResponse:
-      $ref: ./components/schemas/AgentOwnerUpdateResponse.yaml
     ActivityEventsResponse:
       $ref: ./components/schemas/ActivityEventsResponse.yaml
     RotateTokenResponse:
@@ -476,8 +456,6 @@ components:
       $ref: ./components/schemas/CredentialRotateRequest.yaml
     RestoreBackupRequest:
       $ref: ./components/schemas/RestoreBackupRequest.yaml
-    AgentOwnershipUpdateRequest:
-      $ref: ./components/schemas/AgentOwnershipUpdateRequest.yaml
     BearerToken:
       $ref: ./components/schemas/BearerToken.yaml
     ChannelConfigureRequest:
@@ -588,7 +566,7 @@ components:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
     409Conflict:
-      description: "Conflict \u2014 e.g. resource already exists, or last-admin guard triggered."
+      description: "Conflict \u2014 e.g. resource already exists."
       content:
         application/json:
           schema:
@@ -624,6 +602,12 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
     503ServiceUnavailable:
       description: "Service unavailable \u2014 e.g. credential store locked."
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    503BypassActive:
+      description: dev_mode_bypass is active (RequireNotBypass guard).
       content:
         application/json:
           schema:
@@ -680,7 +664,7 @@ paths:
     get:
       operationId: validateToken
       summary: Validate the current bearer token
-      description: 'Returns the authenticated user''s username and role when the token is valid. Rate-limited: 30 requests per IP per minute.
+      description: 'Returns the authenticated user''s username when the token is valid. Rate-limited: 30 requests per IP per minute.
 
         '
       tags:
@@ -697,42 +681,11 @@ paths:
           $ref: '#/components/responses/401Unauthorized'
         '429':
           $ref: '#/components/responses/429TooManyRequests'
-  /auth/register-admin:
-    post:
-      operationId: registerAdmin
-      summary: Create the first admin account
-      description: 'Creates the first admin user. Returns 409 if any admin already exists. The check-create sequence is atomic (TOCTOU-safe via safeUpdateConfigJSON). Issues bearer token, session cookie, and CSRF cookie on success. CSRF-exempt. Rate-limited: 3 requests per IP per minute.
-
-        '
-      tags:
-      - auth
-      security: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/RegisterAdminRequest'
-      responses:
-        '200':
-          description: Admin user created. Token ready to use.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/LoginResponse'
-        '400':
-          $ref: '#/components/responses/400BadRequest'
-        '409':
-          $ref: '#/components/responses/409Conflict'
-        '429':
-          $ref: '#/components/responses/429TooManyRequests'
-        '500':
-          $ref: '#/components/responses/500InternalServerError'
   /auth/change-password:
     post:
       operationId: changePassword
       summary: Change the authenticated user's own password
-      description: 'Self-service password change. Requires the current password for verification. Different from PUT /users/{username}/password which is the admin-reset path. Requires authentication.
+      description: 'Self-service password change. Requires the current password for verification. Requires authentication.
 
         '
       tags:
@@ -1254,196 +1207,6 @@ paths:
           $ref: '#/components/responses/404NotFound'
         '500':
           $ref: '#/components/responses/500InternalServerError'
-  /users:
-    get:
-      operationId: listUsers
-      summary: List all user accounts
-      description: "Returns all registered gateway users. Admin-only. Password and token hashes are never included \u2014 only boolean presence flags. dev_mode_bypass=true disables this endpoint (503).\n"
-      tags:
-      - users
-      security:
-      - BearerAuth: []
-      responses:
-        '200':
-          description: Array of user accounts.
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/User'
-        '401':
-          $ref: '#/components/responses/401Unauthorized'
-        '403':
-          $ref: '#/components/responses/403Forbidden'
-        '500':
-          $ref: '#/components/responses/500InternalServerError'
-        '503':
-          $ref: '#/components/responses/503ServiceUnavailable'
-    post:
-      operationId: createUser
-      summary: Create a new user account
-      description: "Creates a new user with hashed password. No bearer token is issued at creation time \u2014 the user must log in via POST /auth/login to obtain one. Admin-only. dev_mode_bypass=true disables this endpoint (503).\n"
-      tags:
-      - users
-      security:
-      - BearerAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/UserCreateRequest'
-      responses:
-        '201':
-          description: User created successfully.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/UserCreateResponse'
-        '400':
-          $ref: '#/components/responses/400BadRequest'
-        '401':
-          $ref: '#/components/responses/401Unauthorized'
-        '403':
-          $ref: '#/components/responses/403Forbidden'
-        '409':
-          $ref: '#/components/responses/409Conflict'
-        '500':
-          $ref: '#/components/responses/500InternalServerError'
-        '503':
-          $ref: '#/components/responses/503ServiceUnavailable'
-  /users/{username}:
-    delete:
-      operationId: deleteUser
-      summary: Delete a user account
-      description: 'Permanently removes the user from config.json. The last-admin guard prevents deleting the final admin account (409). Admin-only. dev_mode_bypass=true disables this endpoint (503).
-
-        '
-      tags:
-      - users
-      security:
-      - BearerAuth: []
-      parameters:
-      - name: username
-        in: path
-        required: true
-        schema:
-          type: string
-          pattern: ^[A-Za-z0-9][A-Za-z0-9._-]{1,62}$
-        description: Username to delete.
-        example: alice
-      responses:
-        '200':
-          description: User deleted.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/UserDeleteResponse'
-        '400':
-          $ref: '#/components/responses/400BadRequest'
-        '401':
-          $ref: '#/components/responses/401Unauthorized'
-        '403':
-          $ref: '#/components/responses/403Forbidden'
-        '404':
-          $ref: '#/components/responses/404NotFound'
-        '409':
-          $ref: '#/components/responses/409Conflict'
-        '500':
-          $ref: '#/components/responses/500InternalServerError'
-        '503':
-          $ref: '#/components/responses/503ServiceUnavailable'
-  /users/{username}/role:
-    patch:
-      operationId: changeUserRole
-      summary: Change a user's RBAC role
-      description: 'Changes the role of the target user. The last-admin guard prevents demoting the final admin (409). Admin-only. dev_mode_bypass=true disables this endpoint (503).
-
-        '
-      tags:
-      - users
-      security:
-      - BearerAuth: []
-      parameters:
-      - name: username
-        in: path
-        required: true
-        schema:
-          type: string
-          pattern: ^[A-Za-z0-9][A-Za-z0-9._-]{1,62}$
-        description: Username whose role will change.
-        example: alice
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/UserRoleChangeRequest'
-      responses:
-        '200':
-          description: Role changed.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/UserRoleChangeResponse'
-        '400':
-          $ref: '#/components/responses/400BadRequest'
-        '401':
-          $ref: '#/components/responses/401Unauthorized'
-        '403':
-          $ref: '#/components/responses/403Forbidden'
-        '404':
-          $ref: '#/components/responses/404NotFound'
-        '409':
-          $ref: '#/components/responses/409Conflict'
-        '500':
-          $ref: '#/components/responses/500InternalServerError'
-        '503':
-          $ref: '#/components/responses/503ServiceUnavailable'
-  /users/{username}/password:
-    put:
-      operationId: resetUserPassword
-      summary: Admin-reset a user's password
-      description: "Resets the target user's password and invalidates their current bearer token. The user must log in again with the new password. This is the admin-reset path \u2014 the self-change path is POST /auth/change-password. Admin-only. dev_mode_bypass=true disables this endpoint (503).\n"
-      tags:
-      - users
-      security:
-      - BearerAuth: []
-      parameters:
-      - name: username
-        in: path
-        required: true
-        schema:
-          type: string
-          pattern: ^[A-Za-z0-9][A-Za-z0-9._-]{1,62}$
-        description: Username whose password will be reset.
-        example: alice
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/UserResetPasswordRequest'
-      responses:
-        '200':
-          description: Password reset successfully.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/UserResetPasswordResponse'
-        '400':
-          $ref: '#/components/responses/400BadRequest'
-        '401':
-          $ref: '#/components/responses/401Unauthorized'
-        '403':
-          $ref: '#/components/responses/403Forbidden'
-        '404':
-          $ref: '#/components/responses/404NotFound'
-        '500':
-          $ref: '#/components/responses/500InternalServerError'
-        '503':
-          $ref: '#/components/responses/503ServiceUnavailable'
   /agents:
     get:
       operationId: listAgents
@@ -1607,49 +1370,6 @@ paths:
           $ref: '#/components/responses/404NotFound'
         '500':
           $ref: '#/components/responses/500InternalServerError'
-    patch:
-      operationId: patchAgentOwnership
-      summary: Update agent ownership (admin only)
-      description: >
-        Updates the owner_username field on a custom agent.
-        Only admins may call this endpoint.
-        System and core agents cannot have an owner assigned (400).
-        Clearing the owner (empty string) requires the X-Confirm-Demote: 1 header.
-      tags:
-      - agents
-      security:
-      - BearerAuth: []
-      parameters:
-      - name: id
-        in: path
-        required: true
-        schema:
-          type: string
-        description: Agent ID.
-        example: 550e8400-e29b-41d4-a716-446655440000
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/AgentOwnershipUpdateRequest'
-      responses:
-        '200':
-          description: Ownership updated.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/AgentOwnerUpdateResponse'
-        '400':
-          $ref: '#/components/responses/400BadRequest'
-        '401':
-          $ref: '#/components/responses/401Unauthorized'
-        '403':
-          $ref: '#/components/responses/403Forbidden'
-        '404':
-          $ref: '#/components/responses/404NotFound'
-        '500':
-          $ref: '#/components/responses/500InternalServerError'
   /agents/{id}/sessions:
     get:
       operationId: listAgentSessions
@@ -1793,6 +1513,28 @@ paths:
           $ref: '#/components/responses/404NotFound'
         '500':
           $ref: '#/components/responses/500InternalServerError'
+  /agents/executor-defaults:
+    get:
+      operationId: listExecutorDefaults
+      summary: List the real auto-applied CLI flags for each external-CLI runner
+      description: 'Static reference data: for each supported subagent_3p external CLI (claude-code, codex, opencode), the ordered list of arguments the driver automatically applies when spawning it (ADR-032), plus a note on how the prompt itself is delivered. Read-only and not agent-scoped — used by the Agent Profile UI so operators see the REAL, currently-in-effect flags instead of static placeholder ghost-text before adding their own executor.cli_args. Sourced directly from pkg/agent/runner/driver_{claude,codex,opencode}.go and kept byte-accurate to that code.
+
+        '
+      tags:
+      - agents
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: One entry per supported external CLI (claude-code, codex, opencode).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ExecutorDefaults'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
   /security/session-scope:
     get:
       operationId: getSessionScope
@@ -1816,7 +1558,7 @@ paths:
     put:
       operationId: updateSessionScope
       summary: Update the DM session scoping strategy
-      description: 'Persists the new dm_scope to config.json. Session routing is cached at boot so all changes require a gateway restart. The response always includes requires_restart=true. Admin-only. Emits a security audit log entry.
+      description: 'Persists the new dm_scope to config.json. Session routing is cached at boot so all changes require a gateway restart. The response always includes requires_restart=true. Emits a security audit log entry.
 
         '
       tags:
@@ -2036,8 +1778,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
     put:
       operationId: updateGlobalToolPolicies
-      summary: Update global tool policies (admin only)
-      description: 'Persists new global tool policies to config.json under the sandbox key. Changes are audit-logged (SEC-15). Admin-only; non-admin returns 403.
+      summary: Update global tool policies
+      description: 'Persists new global tool policies to config.json under the sandbox key. Changes are audit-logged (SEC-15).
 
         '
       tags:
@@ -2061,12 +1803,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-        '403':
-          description: Admin role required.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/503BypassActive'
   /security/exec-allowlist:
     get:
       operationId: getExecAllowlist
@@ -2170,7 +1908,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
     put:
       operationId: updateSkillTrust
-      summary: Update skill trust level (admin only)
+      summary: Update skill trust level
       description: 'Persists the new skill trust level to config.sandbox.skill_trust. Only the three canonical values are accepted (case-sensitive). Changes are audit-logged.
 
         '
@@ -2195,12 +1933,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-        '403':
-          description: Admin role required.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/503BypassActive'
   /security/prompt-guard:
     get:
       operationId: getPromptGuard
@@ -2225,7 +1959,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
     put:
       operationId: updatePromptGuard
-      summary: Update prompt injection guard level (admin only)
+      summary: Update prompt injection guard level
       description: "Persists the new prompt injection level to config and hot-reloads. Changes take effect immediately \u2014 requires_restart is false on successful hot-reload.\n"
       tags:
       - Security
@@ -2248,12 +1982,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-        '403':
-          description: Admin role required.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/503BypassActive'
   /security/rate-limits:
     get:
       operationId: getRateLimits
@@ -2276,7 +2006,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
     put:
       operationId: updateRateLimits
-      summary: Update rate limit configuration (admin only)
+      summary: Update rate limit configuration
       description: "Partial update \u2014 any subset of the three cap fields. Strict type validation rejects JSON strings in numeric fields, floats in integer fields, negative values, NaN/Inf, and overflow. Changes are hot-reloaded (requires_restart: false).\n"
       tags:
       - Security
@@ -2299,12 +2029,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-        '403':
-          description: Admin role required.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/503BypassActive'
   /security/sandbox-config:
     get:
       operationId: getSandboxConfig
@@ -2335,8 +2061,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
     put:
       operationId: updateSandboxConfig
-      summary: Update sandbox configuration (admin only)
-      description: "Partial update \u2014 any subset of mode, allow_network_outbound, allowed_paths, ssrf_enabled, ssrf_allow_internal, ssrf.allow_internal, default_profile, shell_deny_patterns. At least one field required. mode, allowed_paths, and default_profile are restart-gated (requires_restart=true). SSRF and shell_deny_patterns are hot-reloaded. Admin-only; non-admin returns 403. Protected by RequireNotBypass middleware (returns 503 when dev_mode_bypass is active).\n"
+      summary: Update sandbox configuration
+      description: "Partial update \u2014 any subset of mode, allow_network_outbound, allowed_paths, ssrf_enabled, ssrf_allow_internal, ssrf.allow_internal, default_profile, shell_deny_patterns. At least one field required. mode, allowed_paths, and default_profile are restart-gated (requires_restart=true). SSRF and shell_deny_patterns are hot-reloaded. Protected by RequireNotBypass middleware (returns 503 when dev_mode_bypass is active).\n"
       tags:
       - Security
       requestBody:
@@ -2358,18 +2084,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-        '403':
-          description: Admin role required.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
         '503':
-          description: dev_mode_bypass is active (RequireNotBypass guard).
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
+          $ref: '#/components/responses/503BypassActive'
   /security/sandbox-status:
     get:
       operationId: getSandboxStatus
@@ -2442,7 +2158,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
     put:
       operationId: updateAuditLogToggle
-      summary: Enable or disable audit logging (admin only)
+      summary: Enable or disable audit logging
       description: "Persists sandbox.audit_log to config.json. Requires restart \u2014 the response includes applied_enabled which reflects the value before this save (currently running state). Changes are audit-logged before disabling.\n"
       tags:
       - Audit
@@ -2465,12 +2181,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-        '403':
-          description: Admin role required.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/503BypassActive'
   /security/retention:
     get:
       operationId: getRetention
@@ -2495,8 +2207,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
     put:
       operationId: updateRetention
-      summary: Update session retention configuration (admin only)
-      description: "Partial update \u2014 any subset of session_days and disabled. session_days must be a non-negative integer (floats and strings rejected). disabled must be a JSON boolean (string \"true\"/\"false\" rejected). Empty body is accepted as a no-op. Hot-reloaded (requires_restart: false). Admin-only (non-admin returns 403).\n"
+      summary: Update session retention configuration
+      description: "Partial update \u2014 any subset of session_days and disabled. session_days must be a non-negative integer (floats and strings rejected). disabled must be a JSON boolean (string \"true\"/\"false\" rejected). Empty body is accepted as a no-op. Hot-reloaded (requires_restart: false).\n"
       tags:
       - Security
       requestBody:
@@ -2518,17 +2230,13 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-        '403':
-          description: Admin role required.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/503BypassActive'
   /security/retention/sweep:
     post:
       operationId: triggerRetentionSweep
-      summary: Trigger on-demand retention sweep (admin only)
-      description: 'Immediately purges session directories older than the configured retention window. Returns 409 if a sweep is already in progress. Returns skipped_reason="disabled" when retention is disabled. Admin-only; emits audit with resource="storage.retention.sweep".
+      summary: Trigger on-demand retention sweep
+      description: 'Immediately purges session directories older than the configured retention window. Returns 409 if a sweep is already in progress. Returns skipped_reason="disabled" when retention is disabled. Emits audit with resource="storage.retention.sweep".
 
         '
       tags:
@@ -2540,12 +2248,6 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RetentionSweepResult'
-        '403':
-          description: Admin role required.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
         '405':
           description: Method not allowed.
           content:
@@ -2558,13 +2260,15 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/503BypassActive'
   /performance:
     get:
       operationId: getPerformanceSettings
       summary: Get agent concurrency settings
       description: >
         Returns the max-parallel-agents cap and the effective (clamped) value
-        currently in use. Admin-only.
+        currently in use.
       tags:
         - Settings
       responses:
@@ -2574,20 +2278,22 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PerformanceSettings'
-        '403':
-          description: Admin role required.
+        '401':
+          description: Missing or invalid bearer token.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/503BypassActive'
     put:
       operationId: updatePerformanceSettings
-      summary: Update agent concurrency settings (admin only)
+      summary: Update agent concurrency settings
       description: >
         Updates max_parallel_agents. The effective value is clamped to
         [2, min(NumCPU-2, RAM_GB/1.5)] with a ceiling of 16. Requires a
         gateway restart to take effect (requires_restart: false — the semaphore
-        is resized in-memory on PUT). Admin-only.
+        is resized in-memory on PUT).
       tags:
         - Settings
       requestBody:
@@ -2609,12 +2315,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-        '403':
-          description: Admin role required.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/503BypassActive'
   /settings/memory:
     get:
       operationId: getMemorySettings
@@ -3206,13 +2908,12 @@ paths:
   /config/gateway/rotate-token:
     post:
       operationId: rotateGatewayToken
-      summary: Rotate the gateway bearer token (admin only)
+      summary: Rotate the gateway bearer token
       description: >
         Generates a new cryptographically random 64-hex-character gateway bearer
         token, persists it to config.json, triggers a hot reload, and returns the
-        new token. The previous token is immediately invalidated. Admin-only;
-        secured by RequireAdmin + RequireNotBypass chain. Use after security
-        incidents or on a regular rotation schedule.
+        new token. The previous token is immediately invalidated. Use after
+        security incidents or on a regular rotation schedule.
       tags:
       - Config
       security:
@@ -3226,8 +2927,6 @@ paths:
                 $ref: '#/components/schemas/RotateTokenResponse'
         '401':
           $ref: '#/components/responses/401Unauthorized'
-        '403':
-          $ref: '#/components/responses/403Forbidden'
         '405':
           description: Method not allowed.
           content:
@@ -3239,8 +2938,8 @@ paths:
   /config/pending-restart:
     get:
       operationId: getPendingRestart
-      summary: Get pending restart-gated config changes (admin only)
-      description: 'Returns an array of config keys whose persisted (disk) value differs from the boot-time applied value. Only RestartGatedKeys are checked; hot-reload keys never appear here. An empty array means no restart is needed. Admin-only; non-admin returns 403.
+      summary: Get pending restart-gated config changes
+      description: 'Returns an array of config keys whose persisted (disk) value differs from the boot-time applied value. Only RestartGatedKeys are checked; hot-reload keys never appear here. An empty array means no restart is needed.
 
         '
       tags:
@@ -3254,30 +2953,26 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/PendingRestartEntry'
-        '403':
-          description: Admin role required.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
         '405':
           description: Method not allowed.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/503BypassActive'
   /gateway/restart:
     post:
       operationId: restartGateway
-      summary: Gracefully restart the gateway process (admin only)
+      summary: Gracefully restart the gateway process
       description: >
         Triggers a graceful self-restart: the gateway replies immediately, then
         drains in-flight work and re-execs the process (or exits cleanly for a
         supervisor). Used to apply restart-gated settings from the UI without a
         manual process bounce. The response gives the SPA a status + drain
         estimate so it can poll /health (and reconnect the WS) to detect the
-        gateway going down and coming back up. High blast radius — admin-only,
-        secured by RequireAdmin + RequireNotBypass; dev_mode_bypass returns 503.
+        gateway going down and coming back up. High blast radius,
+        secured by RequireNotBypass; dev_mode_bypass returns 503.
       tags:
       - Config
       security:
@@ -3291,8 +2986,6 @@ paths:
                 $ref: '#/components/schemas/GatewayRestartResponse'
         '401':
           $ref: '#/components/responses/401Unauthorized'
-        '403':
-          $ref: '#/components/responses/403Forbidden'
         '405':
           description: Method not allowed.
           content:
@@ -3313,7 +3006,7 @@ paths:
       summary: Get the global god-mode runtime state (O14)
       description: >
         Returns whether god mode ("bypass-permissions") is currently enabled and
-        whether it is available in this build/boot. Admin-only.
+        whether it is available in this build/boot.
       tags:
       - Config
       security:
@@ -3327,8 +3020,6 @@ paths:
                 $ref: '#/components/schemas/GodModeStatus'
         '401':
           $ref: '#/components/responses/401Unauthorized'
-        '403':
-          $ref: '#/components/responses/403Forbidden'
         '503':
           description: Unavailable (dev_mode_bypass active).
           content:
@@ -3344,7 +3035,7 @@ paths:
         policy is floored at "allow", the kernel sandbox is off, network egress
         is open, and the shell guard is off — regardless of per-agent profiles.
         Audit logging, the prompt-injection guard, and rate limiting stay on.
-        High blast radius — admin-only, secured by RequireNotBypass
+        High blast radius — secured by RequireNotBypass
         (dev_mode_bypass returns 503) AND a single-use password re-auth consent
         token (X-Reauth-Token header; call POST /api/v1/auth/reauth first, 403
         otherwise). Returns 403 when enabling while god mode is unavailable
@@ -4391,24 +4082,6 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '500':
           $ref: '#/components/responses/500InternalServerError'
-  /me:
-    get:
-      operationId: getMe
-      summary: Get current user info
-      description: Returns the authenticated user's RBAC role. Used for SPA gating.
-      tags:
-      - auth
-      security:
-      - BearerAuth: []
-      responses:
-        '200':
-          description: Current user information.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/MeInfo'
-        '401':
-          $ref: '#/components/responses/401Unauthorized'
   /doctor:
     get:
       operationId: getDoctorResults
@@ -4452,7 +4125,7 @@ paths:
       summary: List devices
       description: >
         Returns pending pairing requests and already-paired devices.
-        Admin-only.
+       
       tags:
       - Settings
       security:
@@ -4477,7 +4150,7 @@ paths:
         surface. This is the unified task surface (Sprint 2) — it subsumes the
         former GTD /board/tasks listing. By default only top-level tasks
         (parent_task_id absent) and `surface: user` tasks are returned; use the
-        filters to widen. Workspace-scoped. Admin-only.
+        filters to widen. Workspace-scoped.
       tags:
       - Tasks
       security:
@@ -4570,7 +4243,7 @@ paths:
       summary: Create a task
       description: >
         Creates a new task. Lands in `inbox` regardless of input (Detail #8 landing
-        rule). Workspace-scoped (workspace_id required in the body). Admin-only.
+        rule). Workspace-scoped (workspace_id required in the body).
       tags:
       - Tasks
       security:
@@ -4596,7 +4269,7 @@ paths:
     get:
       operationId: getTask
       summary: Get a task by ID
-      description: Returns a single task by ID, including read-time rollup. Admin-only.
+      description: Returns a single task by ID, including read-time rollup.
       tags:
       - Tasks
       security:
@@ -4625,7 +4298,7 @@ paths:
       description: >
         Partially updates task fields (PATCH semantics — only provided fields
         change). Dragging a card to `in_progress` / Run is a status PATCH; there
-        is no separate /start endpoint. Admin-only.
+        is no separate /start endpoint.
       tags:
       - Tasks
       security:
@@ -4661,7 +4334,7 @@ paths:
     delete:
       operationId: deleteTask
       summary: Delete a task
-      description: Deletes a task by ID. Admin-only.
+      description: Deletes a task by ID.
       tags:
       - Tasks
       security:
@@ -4684,7 +4357,7 @@ paths:
     get:
       operationId: listSubtasks
       summary: List subtasks
-      description: Returns all subtasks (children with this parent_task_id). Admin-only.
+      description: Returns all subtasks (children with this parent_task_id).
       tags:
       - Tasks
       security:
@@ -4715,7 +4388,7 @@ paths:
       summary: Replace a task's checklist
       description: >
         Replaces the task's `todos` array atomically (Tier-1 checklist; Detail #3
-        of the three-tier model). Returns the updated task. Admin-only.
+        of the three-tier model). Returns the updated task.
       tags:
       - Tasks
       security:
@@ -4755,7 +4428,7 @@ paths:
       description: >
         Replaces the task's `blocked_by` set atomically. A write-time DAG cycle
         validator rejects self-edges and cycles (max depth 50). Returns the
-        updated task. Admin-only.
+        updated task.
       tags:
       - Tasks
       security:
@@ -4814,7 +4487,7 @@ paths:
     post:
       operationId: addMcpServer
       summary: Add an MCP server
-      description: Adds a new MCP server to the gateway config. Admin-only.
+      description: Adds a new MCP server to the gateway config.
       tags:
       - Tools
       security:
@@ -4840,7 +4513,7 @@ paths:
     delete:
       operationId: deleteMcpServer
       summary: Delete an MCP server
-      description: Removes an MCP server from the gateway config. Admin-only.
+      description: Removes an MCP server from the gateway config.
       tags:
       - Tools
       security:
@@ -4864,7 +4537,7 @@ paths:
       summary: Update an MCP server
       description: >
         Partially updates an MCP server config (enable/disable toggle, endpoint,
-        env, headers, env_file). Omitted fields are preserved. Admin-only.
+        env, headers, env_file). Omitted fields are preserved.
       tags:
       - Tools
       security:
@@ -4902,7 +4575,7 @@ paths:
       description: >
         Attempts an on-demand connection to the configured MCP server and reports
         whether it succeeded and which tools it exposes. Does not change any state
-        (the probe connection is closed immediately). Admin-only.
+        (the probe connection is closed immediately).
       tags:
       - Tools
       security:
@@ -5858,7 +5531,7 @@ paths:
         POST /agents/{id}/runner/test) — the only requirement is that the
         binary runs and returns a valid version-shaped response; no per-CLI
         identity/name match is performed. Gated withAuth at create-parity
-        (the same authorization as createAgent — not an admin-only route).
+        (the same authorization as createAgent).
         Rejects a target that is not a regular, executable file before
         spawning it (classified "missing-binary", no spawn attempt). Applies
         a dedicated rate limiter and a small per-caller in-flight

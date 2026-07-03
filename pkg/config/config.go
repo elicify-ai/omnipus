@@ -799,10 +799,6 @@ type AgentConfig struct {
 	// Tools, when non-nil, overrides scope-based tool visibility for this agent.
 	// Nil means all tools allowed by the agent's type are available.
 	Tools *AgentToolsCfg `json:"tools,omitempty"`
-	// OwnerUsername is the username of the user who created this agent.
-	// Set at creation time; only the owner or an admin may access the agent's
-	// resources. Empty string for system/core agents.
-	OwnerUsername string `json:"owner_username,omitempty"`
 	// SandboxProfile selects the kernel sandbox profile for this agent.
 	// Empty means "use the global default" (OmnipusSandboxConfig.DefaultProfile,
 	// which itself falls back to SandboxProfileWorkspace when also empty).
@@ -2624,32 +2620,6 @@ func (c *ModelConfig) Validate() error {
 	return nil
 }
 
-// UserRole represents a human user's role in the system.
-type UserRole string
-
-const (
-	UserRoleAdmin UserRole = "admin"
-	UserRoleUser  UserRole = "user"
-)
-
-// MarshalJSON serializes a UserRole to JSON.
-func (r UserRole) MarshalJSON() ([]byte, error) {
-	return json.Marshal(string(r))
-}
-
-// UnmarshalJSON validates and deserializes a UserRole from JSON.
-func (r *UserRole) UnmarshalJSON(data []byte) error {
-	switch string(data) {
-	case `"admin"`:
-		*r = UserRoleAdmin
-	case `"user"`:
-		*r = UserRoleUser
-	default:
-		return fmt.Errorf("invalid role: %s", string(data))
-	}
-	return nil
-}
-
 // TokenEntry is a single bearer-token credential in a user's token set.
 //
 // SEC-1 / UAT #399: a user may hold several concurrent bearer tokens (one per
@@ -2677,7 +2647,6 @@ type UserConfig struct {
 	// removes a single entry; password reset clears all.
 	Tokens           []TokenEntry `json:"tokens,omitempty"`
 	SessionTokenHash BcryptHash   `json:"session_token_hash,omitempty"` // bcrypt hash of session cookie token
-	Role             UserRole     `json:"role"`
 	Name             string       `json:"name,omitempty"`
 }
 
@@ -2723,18 +2692,23 @@ func TokenSecret(raw string) string {
 	return raw
 }
 
-// VerifyToken reports whether raw matches any active bearer token for this user.
+// VerifyTokenAgainst checks raw against the given token set (and, for
+// backward compatibility, a single legacy hash). Returns nil on a match.
 //
-// SEC-1: it first parses the embedded ID prefix and, when present, verifies
-// against ONLY the matching entry's hash (constant-time bcrypt compare over the
-// secret body). When the ID is absent (legacy token) it scans every token entry
-// and the legacy single TokenHash. Returns nil on a match, ErrNoHashSet when the
-// user holds no tokens at all, or the bcrypt mismatch error otherwise.
-func (u *UserConfig) VerifyToken(raw string) error {
+// Extracted from the (*UserConfig) VerifyToken method so any token-bearing
+// config shape — the (now singular) human account's UserConfig.Tokens, or
+// the standalone Gateway.CLIToken slot — can be verified without needing a
+// full UserConfig. SEC-1: it first parses the embedded ID prefix and, when
+// present, verifies against ONLY the matching entry's hash (constant-time
+// bcrypt compare over the secret body). When the ID is absent (legacy token)
+// it scans every token entry and the legacy single hash. Returns nil on a
+// match, ErrNoHashSet when tokens is empty and legacyHash is zero, or the
+// bcrypt mismatch error otherwise.
+func VerifyTokenAgainst(tokens []TokenEntry, legacyHash BcryptHash, raw string) error {
 	if raw == "" {
 		return ErrNoHashSet
 	}
-	if len(u.Tokens) == 0 && u.TokenHash.IsZero() {
+	if len(tokens) == 0 && legacyHash.IsZero() {
 		return ErrNoHashSet
 	}
 
@@ -2742,9 +2716,9 @@ func (u *UserConfig) VerifyToken(raw string) error {
 
 	// Fast path: direct index by embedded ID prefix.
 	if id := TokenIDFromRaw(raw); id != "" {
-		for i := range u.Tokens {
-			if u.Tokens[i].ID == id {
-				return u.Tokens[i].Hash.Verify(secret)
+		for i := range tokens {
+			if tokens[i].ID == id {
+				return tokens[i].Hash.Verify(secret)
 			}
 		}
 		// ID present but no matching entry — fall through to a full scan so a
@@ -2753,16 +2727,27 @@ func (u *UserConfig) VerifyToken(raw string) error {
 	}
 
 	// Scan the full token set (legacy token, or ID lookup miss).
-	for i := range u.Tokens {
-		if u.Tokens[i].Hash.Verify(secret) == nil {
+	for i := range tokens {
+		if tokens[i].Hash.Verify(secret) == nil {
 			return nil
 		}
 	}
 	// Legacy single-token field — its hash was computed over the FULL raw token.
-	if !u.TokenHash.IsZero() && u.TokenHash.Verify(raw) == nil {
+	if !legacyHash.IsZero() && legacyHash.Verify(raw) == nil {
 		return nil
 	}
 	return bcrypt.ErrMismatchedHashAndPassword
+}
+
+// VerifyToken reports whether raw matches any active bearer token for this user.
+//
+// SEC-1: it first parses the embedded ID prefix and, when present, verifies
+// against ONLY the matching entry's hash (constant-time bcrypt compare over the
+// secret body). When the ID is absent (legacy token) it scans every token entry
+// and the legacy single TokenHash. Returns nil on a match, ErrNoHashSet when the
+// user holds no tokens at all, or the bcrypt mismatch error otherwise.
+func (u *UserConfig) VerifyToken(raw string) error {
+	return VerifyTokenAgainst(u.Tokens, u.TokenHash, raw)
 }
 
 // HasActiveToken reports whether the user holds at least one live bearer token
@@ -2771,13 +2756,27 @@ func (u *UserConfig) HasActiveToken() bool {
 	return len(u.Tokens) > 0 || !u.TokenHash.IsZero()
 }
 
+// VerifyCLIToken checks raw against the machine-only CLI bearer credential
+// (g.CLIToken), the decoupled counterpart of UserConfig.VerifyToken.
+// Nil-safe: when no CLI token has been minted yet (g.CLIToken == nil) it
+// returns the same ErrNoHashSet that VerifyTokenAgainst returns for an empty
+// token set, so callers don't need their own nil check before calling this —
+// replacing the `if cfg.Gateway.CLIToken != nil { ... }` guard that was
+// previously duplicated at every call site.
+func (g *GatewayConfig) VerifyCLIToken(raw string) error {
+	if g.CLIToken == nil {
+		return ErrNoHashSet
+	}
+	return VerifyTokenAgainst([]TokenEntry{*g.CLIToken}, "", raw)
+}
+
 type GatewayConfig struct {
 	Host          string       `json:"host"                      env:"OMNIPUS_GATEWAY_HOST"`
 	Port          int          `json:"port"                      env:"OMNIPUS_GATEWAY_PORT"`
 	HotReload     bool         `json:"hot_reload"                env:"OMNIPUS_GATEWAY_HOT_RELOAD"`
 	LogLevel      string       `json:"log_level,omitempty"       env:"OMNIPUS_LOG_LEVEL"`
 	Token         string       `json:"token,omitempty"           env:"-"` // Bearer token stored for reference; runtime auth uses OMNIPUS_BEARER_TOKEN env var
-	Users         []UserConfig `json:"users,omitempty"           env:"-"` // Per-user RBAC user list
+	Users         []UserConfig `json:"users,omitempty"           env:"-"` // Per-account bearer-token list (single-user model: holds at most one entry)
 	DevModeBypass bool         `json:"dev_mode_bypass,omitempty" env:"-"` // Opt-in flag to allow unauthenticated access in development. NEVER set to true in production.
 
 	// Preview listener fields (FR-001..FR-005, FR-027, FR-028).
@@ -2845,6 +2844,12 @@ type GatewayConfig struct {
 	// Set via: {"gateway": {"validate_inbound": true}} in config.json
 	// or OMNIPUS_GATEWAY_VALIDATE_INBOUND=true env var.
 	ValidateInbound bool `json:"validate_inbound,omitempty" env:"OMNIPUS_GATEWAY_VALIDATE_INBOUND"`
+
+	// CLIToken is the machine-only bearer credential the CLI uses to open a WS
+	// session, decoupled from the (now singular) human account — a dedicated
+	// slot, not a role-less entry in Users[]. Nil means no CLI token has been
+	// minted yet.
+	CLIToken *TokenEntry `json:"cli_token,omitempty" env:"-"`
 }
 
 type ToolDiscoveryConfig struct {
@@ -3250,14 +3255,48 @@ type MCPConfig struct {
 // plaintext secrets into the provided store. If store is nil and a v0 config
 // with plaintext secrets is found, an error is returned.
 func LoadConfigWithStore(path string, store CredentialStore) (*Config, error) {
-	return loadConfigInternal(path, store)
+	return loadConfigInternal(path, store, nil)
 }
 
 func LoadConfig(path string) (*Config, error) {
-	return loadConfigInternal(path, nil)
+	return loadConfigInternal(path, nil, nil)
 }
 
-func loadConfigInternal(path string, store CredentialStore) (*Config, error) {
+// SelfHealWriteHook is invoked with the exact bytes written to config.json
+// whenever loadConfigInternal performs an in-place self-heal/migration write
+// as a side effect of loading. Originally built for the (now-retired)
+// single-user-role self-heal (selfHealUserRolesOnDisk); the CLI-token
+// relocation (migrateCLITokenOutOfUsers, cli_token_migration.go) is the
+// current writer that reports through this hook — any future load-time
+// self-heal should do the same rather than writing to disk silently.
+//
+// Why this exists: pkg/gateway maintains a write-dedup registry
+// (configSelfWriteRegistry) so its config-file-watcher polling loop can tell
+// an app-initiated write apart from a genuine external edit (and skip a
+// spurious full-service reload for the former). pkg/config cannot reach that
+// registry directly — it cannot import pkg/gateway (see the import-cycle
+// note on AuditEmitter in validate.go) — so the capability is threaded the
+// other way: the self-heal reports what it wrote (if anything), and the
+// caller decides whether/how to register it. Callers that don't need this
+// (most callers of LoadConfig/LoadConfigWithStore) pass a nil hook via those
+// functions, which is always safe — onSelfHeal is only ever invoked when a
+// write actually happened.
+type SelfHealWriteHook func(writtenBytes []byte)
+
+// LoadConfigWithStoreAndSelfHealHook behaves exactly like LoadConfigWithStore,
+// except that onSelfHeal (if non-nil) is invoked with the raw bytes written to
+// config.json whenever a load-time self-heal/migration (currently: the
+// CLI-token relocation, migrateCLITokenOutOfUsers) performs a write. Used by
+// pkg/gateway's config-file-watcher polling loop and manual /reload trigger —
+// the two read paths that call into config loading directly, bypassing
+// safeUpdateConfigJSON's own configMu + selfWriteReg registration — so a
+// self-heal write triggered from either of those paths is still recognized
+// as app-initiated rather than a genuine external edit.
+func LoadConfigWithStoreAndSelfHealHook(path string, store CredentialStore, onSelfHeal SelfHealWriteHook) (*Config, error) {
+	return loadConfigInternal(path, store, onSelfHeal)
+}
+
+func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealWriteHook) (*Config, error) {
 	logger.Debugf("loading config from %s", path)
 
 	data, err := os.ReadFile(path)
@@ -3450,6 +3489,39 @@ func loadConfigInternal(path string, store CredentialStore) (*Config, error) {
 	// Apply schedules guardrail defaults (#264 FR-003/FR-007) so a loaded
 	// config without a schedules block still gets 8 / 300.
 	cfg.Schedules.ApplyDefaults()
+
+	// CLI-token relocation (single-user model follow-up): a legacy config may
+	// carry a role-less "cli" entry in Gateway.Users that exists only to hold
+	// the CLI's bearer token. Now that the human-account/role concept is
+	// gone, that token gets a dedicated Gateway.CLIToken slot instead of a
+	// synthetic Users[] row. One-shot, best-effort, idempotent — see
+	// migrateCLITokenOutOfUsers in cli_token_migration.go.
+	//
+	// Only for CurrentVersion configs, mirroring the retired
+	// selfHealUserRolesOnDisk's own gating: a v0 config already gets its
+	// fully migrated (CurrentVersion-shaped, "cli"-Users-free) state written
+	// by the existing v0-migration SaveConfig call further up in this
+	// function — a v0-format raw-JSON patch attempt here would be redundant
+	// and would be probing a raw JSON shape (the legacy configV0 layout) this
+	// migration was never designed against.
+	if versionInfo.Version == CurrentVersion {
+		migrateCLITokenOutOfUsers(cfg, path, onSelfHeal)
+	}
+
+	// Single-account diagnostic (single-user model follow-up): advisory
+	// only — every configured Gateway.Users account authenticates fine
+	// today (checkBearerAuth/authenticateWS/withOptionalAuth in
+	// pkg/gateway all loop the whole slice). This just flags a legacy
+	// config that still carries more than one Gateway.Users entry from
+	// before the Users CRUD API was deleted, since a couple of non-auth
+	// code paths (default workspace-owner attribution, schedule-failure-
+	// notification fallback) only ever consider the first entry and the
+	// single-user model expects exactly one account. Deliberately
+	// WARN-only, never truncates — see single_account_migration.go's
+	// package doc for why a destructive self-heal here is unsafe (it would
+	// race a second account's own in-flight login). Runs on every load,
+	// all config versions.
+	warnAboutExtraUsers(cfg.Gateway.Users)
 
 	// Apply defaults and validate bounds for all security-relevant fields
 	// (FR-001, FR-002a, numeric sandbox fields, AuthMismatchLogLevel).

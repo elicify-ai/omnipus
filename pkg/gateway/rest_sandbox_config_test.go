@@ -25,7 +25,6 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/audit"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/gateway/ctxkey"
-	"github.com/dapicom-ai/omnipus/pkg/gateway/middleware"
 )
 
 // sandboxConfigPUT issues PUT /api/v1/security/sandbox-config with the
@@ -265,7 +264,6 @@ func TestHandleSandboxConfig_SSRFAllowInternal_WildcardLogged(t *testing.T) {
 
 	ctx := context.WithValue(context.Background(), ctxkey.UserContextKey{},
 		&config.UserConfig{Username: "alice"})
-	ctx = context.WithValue(ctx, RoleContextKey{}, config.UserRoleAdmin)
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/sandbox-config",
@@ -333,17 +331,6 @@ func TestHandleSandboxConfig_PartialRestartFlag(t *testing.T) {
 	assert.Equal(t, true, resp["requires_restart"])
 }
 
-func TestHandleSandboxConfig_NonAdmin403(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/sandbox-config",
-		strings.NewReader(`{"allowed_paths":["/var/log"]}`))
-	r.Header.Set("Content-Type", "application/json")
-	r = withNonAdminRole(r)
-	middleware.RequireAdmin(http.HandlerFunc(api.HandleSandboxConfig)).ServeHTTP(w, r)
-	assert.Equal(t, http.StatusForbidden, w.Code, "non-admin must receive 403")
-}
-
 func TestHandleSandboxConfig_MethodNotAllowed(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	w := httptest.NewRecorder()
@@ -373,7 +360,6 @@ func TestHandleSandboxConfig_EmitsAuditEntry(t *testing.T) {
 	// of EmitSecuritySettingChange in pkg/audit.
 	ctx := context.WithValue(context.Background(), ctxkey.UserContextKey{},
 		&config.UserConfig{Username: "admin"})
-	ctx = context.WithValue(ctx, RoleContextKey{}, config.UserRoleAdmin)
 
 	require.NoError(t, audit.EmitSecuritySettingChange(
 		ctx, logger,

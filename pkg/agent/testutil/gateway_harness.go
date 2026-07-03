@@ -528,6 +528,101 @@ func (g *TestGateway) SeedUser(ctx context.Context, u config.UserConfig, beforeW
 	return nil
 }
 
+// SeedCLIToken writes tok to gateway.cli_token in config.json on disk, then
+// POSTs /reload and polls until the gateway recognizes the new token.
+//
+// Mirrors SeedUser's raw JSON read-modify-write cycle (preserves SecureString
+// values) but targets the dedicated Gateway.CLIToken slot instead of the
+// human-account Gateway.Users list — the CLI's machine-only bearer credential
+// is checked as a distinct principal from the human account (see
+// pkg/config/cli_token_migration.go).
+//
+// ctx controls the maximum wait for reload propagation; use a context with a
+// reasonable deadline (5–10 s is typical for CI).
+func (g *TestGateway) SeedCLIToken(ctx context.Context, tok config.TokenEntry) error {
+	cfgPath := g.configPath
+	raw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		return fmt.Errorf("SeedCLIToken: read config: %w", err)
+	}
+	var m map[string]any
+	if err = json.Unmarshal(raw, &m); err != nil {
+		return fmt.Errorf("SeedCLIToken: unmarshal config: %w", err)
+	}
+
+	gwSection, _ := m["gateway"].(map[string]any)
+	if gwSection == nil {
+		gwSection = map[string]any{}
+	}
+
+	tokBytes, err := json.Marshal(tok)
+	if err != nil {
+		return fmt.Errorf("SeedCLIToken: marshal token: %w", err)
+	}
+	var tokMap map[string]any
+	if err = json.Unmarshal(tokBytes, &tokMap); err != nil {
+		return fmt.Errorf("SeedCLIToken: re-unmarshal token: %w", err)
+	}
+	gwSection["cli_token"] = tokMap
+	m["gateway"] = gwSection
+
+	out, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return fmt.Errorf("SeedCLIToken: marshal config: %w", err)
+	}
+
+	tmpPath := cfgPath + ".seedclitoken.tmp"
+	if err = os.WriteFile(tmpPath, out, 0o600); err != nil {
+		return fmt.Errorf("SeedCLIToken: write tmp config: %w", err)
+	}
+	if err = os.Rename(tmpPath, cfgPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("SeedCLIToken: rename config: %w", err)
+	}
+
+	reloadDeadline := time.Now().Add(2 * time.Second)
+	var lastStatus int
+	for {
+		reloadReq, err := http.NewRequestWithContext(ctx, http.MethodPost, g.URL+"/reload", nil)
+		if err != nil {
+			return fmt.Errorf("SeedCLIToken: build reload request: %w", err)
+		}
+		reloadReq.Header.Set("Origin", g.URL)
+		reloadResp, err := g.HTTPClient.Do(reloadReq)
+		if err != nil {
+			return fmt.Errorf("SeedCLIToken: POST /reload: %w", err)
+		}
+		_ = reloadResp.Body.Close()
+		lastStatus = reloadResp.StatusCode
+		if reloadResp.StatusCode == http.StatusOK {
+			break
+		}
+		if reloadResp.StatusCode != http.StatusInternalServerError || time.Now().After(reloadDeadline) {
+			return fmt.Errorf("SeedCLIToken: POST /reload returned %d", reloadResp.StatusCode)
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf(
+				"SeedCLIToken: context canceled during reload retry (last status %d): %w",
+				lastStatus, ctx.Err(),
+			)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+
+	if tok.Hash.IsZero() {
+		return nil
+	}
+
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("SeedCLIToken: context canceled before reload propagated: %w", ctx.Err())
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	return nil
+}
+
 // buildConfig assembles a minimal config.Config from the harness options.
 //
 // The Providers list is seeded with a single OpenRouter+glm-5v-turbo entry that

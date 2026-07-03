@@ -23,7 +23,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
-	"github.com/dapicom-ai/omnipus/pkg/config"
 )
 
 // milestoneResponse mirrors the JSON shape returned by milestone GET/POST/PUT.
@@ -812,7 +811,7 @@ func TestHandleMilestones_OwnershipScoping(t *testing.T) {
 		strings.NewReader(`{"name":"AliceMilestoneWorkspace"}`))
 	rProj.Header.Set("Content-Type", "application/json")
 	rProj.URL.Path = "/api/v1/workspaces"
-	rProj = rProj.WithContext(contextWithUserRole(rProj.Context(), "alice", config.UserRoleUser))
+	rProj = rProj.WithContext(contextWithUser(rProj.Context(), "alice"))
 	api.HandleWorkspaces(wProj, rProj)
 	require.Equal(t, http.StatusCreated, wProj.Code,
 		"alice POST workspace must return 201; body=%s", wProj.Body.String())
@@ -825,7 +824,7 @@ func TestHandleMilestones_OwnershipScoping(t *testing.T) {
 		strings.NewReader(`{"name":"AliceMilestone"}`))
 	rMS.Header.Set("Content-Type", "application/json")
 	rMS.URL.Path = "/api/v1/workspaces/" + proj.Id + "/milestones"
-	rMS = rMS.WithContext(contextWithUserRole(rMS.Context(), "alice", config.UserRoleUser))
+	rMS = rMS.WithContext(contextWithUser(rMS.Context(), "alice"))
 	api.HandleWorkspaces(wMS, rMS)
 	require.Equal(t, http.StatusCreated, wMS.Code,
 		"alice POST milestone must return 201; body=%s", wMS.Body.String())
@@ -836,7 +835,7 @@ func TestHandleMilestones_OwnershipScoping(t *testing.T) {
 	wListBob := httptest.NewRecorder()
 	rListBob := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/"+proj.Id+"/milestones", nil)
 	rListBob.URL.Path = "/api/v1/workspaces/" + proj.Id + "/milestones"
-	rListBob = rListBob.WithContext(contextWithUserRole(rListBob.Context(), "bob", config.UserRoleUser))
+	rListBob = rListBob.WithContext(contextWithUser(rListBob.Context(), "bob"))
 	api.HandleWorkspaces(wListBob, rListBob)
 	assert.Equal(t, http.StatusOK, wListBob.Code,
 		"bob must get 200 on alice's workspace milestones (FR-1.9); body=%s", wListBob.Body.String())
@@ -845,7 +844,7 @@ func TestHandleMilestones_OwnershipScoping(t *testing.T) {
 	wGetBob := httptest.NewRecorder()
 	rGetBob := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/"+proj.Id+"/milestones/"+ms.ID, nil)
 	rGetBob.URL.Path = "/api/v1/workspaces/" + proj.Id + "/milestones/" + ms.ID
-	rGetBob = rGetBob.WithContext(contextWithUserRole(rGetBob.Context(), "bob", config.UserRoleUser))
+	rGetBob = rGetBob.WithContext(contextWithUser(rGetBob.Context(), "bob"))
 	api.HandleWorkspaces(wGetBob, rGetBob)
 	assert.Equal(t, http.StatusOK, wGetBob.Code,
 		"bob must get 200 on alice's milestone (FR-1.9); body=%s", wGetBob.Body.String())
@@ -854,7 +853,7 @@ func TestHandleMilestones_OwnershipScoping(t *testing.T) {
 	wListAdmin := httptest.NewRecorder()
 	rListAdmin := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/"+proj.Id+"/milestones", nil)
 	rListAdmin.URL.Path = "/api/v1/workspaces/" + proj.Id + "/milestones"
-	rListAdmin = rListAdmin.WithContext(contextWithUserRole(rListAdmin.Context(), "admin", config.UserRoleAdmin))
+	rListAdmin = rListAdmin.WithContext(contextWithUser(rListAdmin.Context(), "admin"))
 	api.HandleWorkspaces(wListAdmin, rListAdmin)
 	assert.Equal(t, http.StatusOK, wListAdmin.Code,
 		"admin must get 200 on alice's workspace milestones; body=%s", wListAdmin.Body.String())

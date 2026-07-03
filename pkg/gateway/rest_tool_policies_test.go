@@ -20,12 +20,16 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/config"
 )
 
-// withAdminRole injects config.UserRoleAdmin into the request context so that
-// RequireAdmin middleware allows the request through. Unit tests that call
-// handlers directly (bypassing withAuth) must use this helper for PUT/admin
-// endpoints.
+// withAdminRole injects an authenticated *config.UserConfig ("admin") into
+// the request context. Under the single-user model there is no admin role
+// to check anymore — the historical name is kept because this helper is
+// called from many test files across the package (rest_retention_test.go,
+// rest_rate_limits_test.go, rest_skill_trust_test.go, rest_session_scope_test.go,
+// and others outside this cluster's scope). Unit tests that call handlers
+// directly (bypassing withAuth) use this so the handler sees an
+// authenticated caller for audit attribution.
 func withAdminRole(r *http.Request) *http.Request {
-	ctx := context.WithValue(r.Context(), RoleContextKey{}, config.UserRoleAdmin)
+	ctx := context.WithValue(r.Context(), UserContextKey{}, &config.UserConfig{Username: "admin"})
 	return r.WithContext(ctx)
 }
 

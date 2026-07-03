@@ -17,9 +17,10 @@
 //
 // This test exercises the REAL production mux registration
 // (`registerAdditionalEndpoints`) — not a hand-rolled inner chain — and
-// asserts every admin route returns 503 when `dev_mode_bypass=true`. It
-// is the strict-mux complement to TestAdminRoutes_DevModeBypassReturn503,
-// which uses a parallel hand-rolled chain that could go out of sync.
+// asserts every high-blast-radius route returns 503 when
+// `dev_mode_bypass=true`. It is the strict-mux complement to
+// TestAdminRoutes_DevModeBypassReturn503, which uses a parallel hand-rolled
+// chain that could go out of sync.
 //
 // Today: passes — every admin route in `allAdminRoutes` is currently wired
 // with `RequireNotBypass`. Acts as a regression guard against future
@@ -49,11 +50,10 @@ import (
 // Why a separate red-team test even though TestAdminRoutes_DevModeBypassReturn503
 // already exists? Defense in depth: that test uses
 // `buildInnerChainHandler()` which hand-assembles
-// `RequireAdmin → RequireNotBypass → inner`. If a developer adds a new
-// admin route in `registerAdditionalEndpoints` and forgets the
-// `RequireNotBypass` wrapper, that test still passes (it tests the
-// hand-assembled chain, not the registered chain). Only a real-mux test
-// catches the regression.
+// `RequireNotBypass → inner`. If a developer adds a new route in
+// `registerAdditionalEndpoints` and forgets the `RequireNotBypass` wrapper,
+// that test still passes (it tests the hand-assembled chain, not the
+// registered chain). Only a real-mux test catches the regression.
 //
 // Documents threat C6 from the insider-pentest report.
 func TestRedteam_AdminRoutes_BypassCoverage_RealMux(t *testing.T) {

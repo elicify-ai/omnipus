@@ -19,21 +19,18 @@ import (
 
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/gateway/ctxkey"
-	"github.com/dapicom-ai/omnipus/pkg/gateway/middleware"
 	"github.com/dapicom-ai/omnipus/pkg/logger"
 )
 
-// withAdminCtx returns a request with the admin role injected into context.
-// Separate from the withAdminRole helper in rest_tool_policies_test.go to
-// avoid a duplicate declaration (both live in package gateway).
+// withAdminCtx returns a request with an authenticated *config.UserConfig
+// injected into context. Separate from the withAdminRole helper in
+// rest_tool_policies_test.go to avoid a duplicate declaration (both live in
+// package gateway). Under the single-user model there is no role to
+// inject — the handlers this feeds (e.g. HandlePendingRestart) are called
+// directly in these tests, bypassing the RequireNotBypass gate entirely, so
+// no config snapshot is needed either.
 func withAdminCtx(r *http.Request) *http.Request {
-	ctx := context.WithValue(r.Context(), ctxkey.RoleContextKey{}, config.UserRoleAdmin)
-	return r.WithContext(ctx)
-}
-
-// withUserCtx injects a non-admin role so tests can verify 403 responses.
-func withUserCtx(r *http.Request) *http.Request {
-	ctx := context.WithValue(r.Context(), ctxkey.RoleContextKey{}, config.UserRoleUser)
+	ctx := context.WithValue(r.Context(), ctxkey.UserContextKey{}, &config.UserConfig{Username: "admin"})
 	return r.WithContext(ctx)
 }
 
@@ -371,19 +368,6 @@ func TestHandlePendingRestart_SetThenRevertClearsDiff(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	diffs := decodeDiffs(t, w.Body.Bytes())
 	assert.Empty(t, diffs, "reverted change must not appear in diff")
-}
-
-// TestHandlePendingRestart_NonAdmin403 verifies that a non-admin caller
-// receives 403. The check is enforced by RequireAdmin middleware, which is
-// part of the production adminWrap chain.
-func TestHandlePendingRestart_NonAdmin403(t *testing.T) {
-	api := newPendingRestartAPI(t, nil, map[string]any{"version": float64(config.CurrentVersion)})
-
-	w := httptest.NewRecorder()
-	r := withUserCtx(httptest.NewRequest(http.MethodGet, "/api/v1/config/pending-restart", nil))
-	middleware.RequireAdmin(http.HandlerFunc(api.HandlePendingRestart)).ServeHTTP(w, r)
-
-	assert.Equal(t, http.StatusForbidden, w.Code)
 }
 
 // TestHandlePendingRestart_HotReloadKeyNotInDiff verifies that hot-reload keys

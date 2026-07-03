@@ -22,7 +22,6 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/audit"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/gateway/ctxkey"
-	"github.com/dapicom-ai/omnipus/pkg/gateway/middleware"
 	"github.com/dapicom-ai/omnipus/pkg/routing"
 )
 
@@ -127,23 +126,6 @@ func TestHandleSessionDMScope_PersistsCorrectJSONPath(t *testing.T) {
 	assert.Equal(t, string(routing.DMScopeMain), sessionDisk["dm_scope"])
 }
 
-// TestHandleSessionDMScope_NonAdmin403 verifies that a non-admin authenticated
-// user receives 403 when attempting PUT.
-func TestHandleSessionDMScope_NonAdmin403(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-
-	payload := `{"dm_scope":"main"}`
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/session-scope", strings.NewReader(payload))
-	r.Header.Set("Content-Type", "application/json")
-	r = withNonAdminRole(r)
-	// Route through RequireAdmin as adminWrap does at registration time — the
-	// inner handler no longer re-wraps it.
-	middleware.RequireAdmin(http.HandlerFunc(api.HandleSessionScope)).ServeHTTP(w, r)
-
-	assert.Equal(t, http.StatusForbidden, w.Code, "non-admin must receive 403")
-}
-
 // TestHandleSessionDMScope_MethodNotAllowed verifies DELETE returns 405.
 func TestHandleSessionDMScope_MethodNotAllowed(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
@@ -168,7 +150,6 @@ func TestHandleSessionDMScope_EmitsAuditEntry(t *testing.T) {
 
 	ctx := context.WithValue(context.Background(), ctxkey.UserContextKey{},
 		&config.UserConfig{Username: "admin"})
-	ctx = context.WithValue(ctx, RoleContextKey{}, config.UserRoleAdmin)
 
 	err = audit.EmitSecuritySettingChange(
 		ctx,

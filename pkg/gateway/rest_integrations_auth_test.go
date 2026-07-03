@@ -37,7 +37,6 @@ func newReAuthTestAPI(t *testing.T) (*restAPI, *config.UserConfig) {
 	user := &config.UserConfig{
 		Username:     reAuthTestUsername,
 		PasswordHash: string(hash),
-		Role:         config.UserRoleAdmin,
 	}
 	return api, user
 }

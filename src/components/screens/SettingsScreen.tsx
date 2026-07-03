@@ -5,7 +5,6 @@ import { SecuritySection } from '@/components/settings/SecuritySection'
 import { GatewaySection } from '@/components/settings/GatewaySection'
 import { DataSection } from '@/components/settings/DataSection'
 import { AboutSection } from '@/components/settings/AboutSection'
-import { useAuthStore } from '@/store/auth'
 import { DevicesSection } from '@/components/settings/DevicesSection'
 import { PerformanceSection } from '@/components/settings/PerformanceSection'
 import { MemorySection } from '@/components/settings/MemorySection'
@@ -15,9 +14,6 @@ import { ScreenHeader } from '@/components/layout/ScreenHeader'
 // Operators find the restart action under Settings → Gateway.
 
 export function SettingsScreen() {
-  const role = useAuthStore((s) => s.role)
-  const isAdmin = role === 'admin'
-
   return (
     <div className="absolute inset-0 flex flex-col">
       <ScreenHeader title="Settings" />
@@ -41,8 +37,8 @@ export function SettingsScreen() {
             <TabsTrigger value="gateway">Gateway</TabsTrigger>
             <TabsTrigger value="data">Data</TabsTrigger>
             <TabsTrigger value="memory">Memory</TabsTrigger>
-            {isAdmin && <TabsTrigger value="devices">Devices</TabsTrigger>}
-            {isAdmin && <TabsTrigger value="performance">Performance</TabsTrigger>}
+            <TabsTrigger value="devices">Devices</TabsTrigger>
+            <TabsTrigger value="performance">Performance</TabsTrigger>
             <TabsTrigger data-testid="settings-tab-about" value="about">About</TabsTrigger>
           </TabsList>
 
@@ -70,17 +66,13 @@ export function SettingsScreen() {
             <MemorySection />
           </TabsContent>
 
-          {isAdmin && (
-            <TabsContent value="devices">
-              <DevicesSection />
-            </TabsContent>
-          )}
+          <TabsContent value="devices">
+            <DevicesSection />
+          </TabsContent>
 
-          {isAdmin && (
-            <TabsContent value="performance">
-              <PerformanceSection />
-            </TabsContent>
-          )}
+          <TabsContent value="performance">
+            <PerformanceSection />
+          </TabsContent>
 
           <TabsContent value="about">
             <AboutSection />

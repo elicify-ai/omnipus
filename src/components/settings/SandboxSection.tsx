@@ -30,7 +30,6 @@ import {
   isApiError,
 } from '@/lib/api'
 import type { SandboxStatus, SandboxProfile } from '@/lib/api'
-import { useAuthStore } from '@/store/auth'
 import { useUiStore } from '@/store/ui'
 import { SaveStatus, useSaveStatus } from './SaveStatus'
 import { SandboxProfileSelector } from '@/components/agents/SandboxProfileSelector'
@@ -253,7 +252,6 @@ function Abi4Banner({
 
 interface AllowedPathsEditorProps {
   paths: string[]
-  isAdmin: boolean
   rowErrors: Record<number, string>
   restartedRows: Set<number>
   onDelete: (index: number) => void
@@ -265,7 +263,6 @@ interface AllowedPathsEditorProps {
 
 function AllowedPathsEditor({
   paths,
-  isAdmin,
   rowErrors,
   restartedRows,
   onDelete,
@@ -297,16 +294,14 @@ function AllowedPathsEditor({
                   restart required
                 </span>
               )}
-              {isAdmin && (
-                <button
-                  type="button"
-                  aria-label={`Delete path ${p}`}
-                  className="text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)] rounded"
-                  onClick={() => onDelete(i)}
-                >
-                  <Trash size={12} />
-                </button>
-              )}
+              <button
+                type="button"
+                aria-label={`Delete path ${p}`}
+                className="text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)] rounded"
+                onClick={() => onDelete(i)}
+              >
+                <Trash size={12} />
+              </button>
             </div>
             {rowErrors[i] && (
               <p className="text-[10px] text-[var(--color-error)] pl-2">{rowErrors[i]}</p>
@@ -315,36 +310,34 @@ function AllowedPathsEditor({
         ))}
       </div>
 
-      {isAdmin && (
-        <div className="space-y-1">
-          <div className="flex items-center gap-2">
-            <Input
-              value={newPath}
-              onChange={(e) => onNewPathChange(e.target.value)}
-              placeholder="/var/data/shared"
-              className="h-7 text-xs font-mono flex-1"
-              aria-label="New allowed path"
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') { e.preventDefault(); onAdd() }
-              }}
-            />
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              className="h-7 px-2 gap-1 text-xs shrink-0"
-              onClick={onAdd}
-              aria-label="Add path"
-            >
-              <Plus size={11} />
-              Add
-            </Button>
-          </div>
-          {addError && (
-            <p className="text-[10px] text-[var(--color-error)]">{addError}</p>
-          )}
+      <div className="space-y-1">
+        <div className="flex items-center gap-2">
+          <Input
+            value={newPath}
+            onChange={(e) => onNewPathChange(e.target.value)}
+            placeholder="/var/data/shared"
+            className="h-7 text-xs font-mono flex-1"
+            aria-label="New allowed path"
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') { e.preventDefault(); onAdd() }
+            }}
+          />
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-7 px-2 gap-1 text-xs shrink-0"
+            onClick={onAdd}
+            aria-label="Add path"
+          >
+            <Plus size={11} />
+            Add
+          </Button>
         </div>
-      )}
+        {addError && (
+          <p className="text-[10px] text-[var(--color-error)]">{addError}</p>
+        )}
+      </div>
     </div>
   )
 }
@@ -353,7 +346,6 @@ function AllowedPathsEditor({
 
 interface SsrfEditorProps {
   list: string[]
-  isAdmin: boolean
   activePreset: number | null
   advancedOpen: boolean
   onAdvancedToggle: () => void
@@ -368,7 +360,6 @@ interface SsrfEditorProps {
 
 function SsrfEditor({
   list,
-  isAdmin,
   activePreset,
   advancedOpen,
   onAdvancedToggle,
@@ -391,14 +382,12 @@ function SsrfEditor({
           <button
             key={preset.label}
             type="button"
-            disabled={!isAdmin}
             onClick={() => onPresetClick(idx)}
             className={[
-              'rounded border px-3 py-1 text-xs transition-colors focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]',
+              'rounded border px-3 py-1 text-xs transition-colors focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)] cursor-pointer',
               activePreset === idx
                 ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/10 text-[var(--color-accent)]'
                 : 'border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:border-[var(--color-accent)]/50',
-              !isAdmin ? 'opacity-60 cursor-default' : 'cursor-pointer',
             ].join(' ')}
             aria-pressed={activePreset === idx}
           >
@@ -428,16 +417,14 @@ function SsrfEditor({
                 <span className="flex-1 text-xs font-mono text-[var(--color-secondary)] break-all">
                   {entry}
                 </span>
-                {isAdmin && (
-                  <button
-                    type="button"
-                    aria-label={`Delete SSRF entry ${entry}`}
-                    className="text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)] rounded"
-                    onClick={() => onDeleteAdvanced(i)}
-                  >
-                    <Trash size={12} />
-                  </button>
-                )}
+                <button
+                  type="button"
+                  aria-label={`Delete SSRF entry ${entry}`}
+                  className="text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)] rounded"
+                  onClick={() => onDeleteAdvanced(i)}
+                >
+                  <Trash size={12} />
+                </button>
               </div>
               {advancedErrors[i] && (
                 <p className="text-[10px] text-[var(--color-error)] pl-2">{advancedErrors[i]}</p>
@@ -445,36 +432,34 @@ function SsrfEditor({
             </div>
           ))}
 
-          {isAdmin && (
-            <div className="space-y-1 pt-1">
-              <div className="flex items-center gap-2">
-                <Input
-                  value={newSsrfEntry}
-                  onChange={(e) => onNewSsrfEntryChange(e.target.value)}
-                  placeholder="10.0.0.0/8 or internal.corp"
-                  className="h-7 text-xs font-mono flex-1"
-                  aria-label="New SSRF allow entry"
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') { e.preventDefault(); onAddSsrfEntry() }
-                  }}
-                />
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  className="h-7 px-2 gap-1 text-xs shrink-0"
-                  onClick={onAddSsrfEntry}
-                  aria-label="Add SSRF entry"
-                >
-                  <Plus size={11} />
-                  Add
-                </Button>
-              </div>
-              {ssrfAddError && (
-                <p className="text-[10px] text-[var(--color-error)]">{ssrfAddError}</p>
-              )}
+          <div className="space-y-1 pt-1">
+            <div className="flex items-center gap-2">
+              <Input
+                value={newSsrfEntry}
+                onChange={(e) => onNewSsrfEntryChange(e.target.value)}
+                placeholder="10.0.0.0/8 or internal.corp"
+                className="h-7 text-xs font-mono flex-1"
+                aria-label="New SSRF allow entry"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') { e.preventDefault(); onAddSsrfEntry() }
+                }}
+              />
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-7 px-2 gap-1 text-xs shrink-0"
+                onClick={onAddSsrfEntry}
+                aria-label="Add SSRF entry"
+              >
+                <Plus size={11} />
+                Add
+              </Button>
             </div>
-          )}
+            {ssrfAddError && (
+              <p className="text-[10px] text-[var(--color-error)]">{ssrfAddError}</p>
+            )}
+          </div>
         </div>
       )}
     </div>
@@ -484,8 +469,6 @@ function SsrfEditor({
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function SandboxSection(): React.ReactElement {
-  const role = useAuthStore((s) => s.role)
-  const isAdmin = role === 'admin'
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
 
@@ -1048,7 +1031,7 @@ export function SandboxSection(): React.ReactElement {
                 <div className="h-3 w-3/4 rounded bg-[var(--color-border)]" />
                 <div className="h-3 w-1/2 rounded bg-[var(--color-border)]" />
               </div>
-            ) : isAdmin ? (
+            ) : (
               <fieldset className="space-y-2">
                 <legend className="sr-only">Sandbox mode</legend>
                 {SANDBOX_MODES.map((m) => (
@@ -1076,21 +1059,6 @@ export function SandboxSection(): React.ReactElement {
                   </label>
                 ))}
               </fieldset>
-            ) : (
-              <div className="flex flex-wrap gap-2">
-                {SANDBOX_MODES.map((m) => (
-                  <span
-                    key={m.value}
-                    className={`rounded border px-3 py-1 text-xs font-medium ${
-                      effectiveMode === m.value
-                        ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/10 text-[var(--color-accent)]'
-                        : 'border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)]'
-                    }`}
-                  >
-                    {m.label}
-                  </span>
-                ))}
-              </div>
             )}
           </div>
 
@@ -1107,7 +1075,6 @@ export function SandboxSection(): React.ReactElement {
               <>
                 <AllowedPathsEditor
                   paths={pathList}
-                  isAdmin={isAdmin}
                   rowErrors={pathRowErrors}
                   restartedRows={pathRestartedRows}
                   onDelete={handleDeletePath}
@@ -1119,7 +1086,6 @@ export function SandboxSection(): React.ReactElement {
 
                 <SsrfEditor
                   list={ssrfList}
-                  isAdmin={isAdmin}
                   activePreset={ssrfActivePreset}
                   advancedOpen={ssrfAdvancedOpen}
                   onAdvancedToggle={() => setSsrfAdvancedOpen((v) => !v)}

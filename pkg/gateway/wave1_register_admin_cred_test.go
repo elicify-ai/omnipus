@@ -1,15 +1,14 @@
 //go:build !cgo
 
-// Package gateway — Wave 1 tests for HandleRegisterAdmin and API key credential
-// store integration.
+// Package gateway — Wave 1 tests for API key credential store integration.
 //
-// These tests cover:
-//  1. HandleRegisterAdmin — success with field verification, 409 on second call,
-//     concurrent calls only create one admin.
-//  2. API key credential store — backward compat with plaintext api_key, new
-//     onboarding creates api_key_ref when credentials store available, provider
-//     PUT stores api_key_ref when credentials store available, provider GET
-//     resolves api_key_ref from credentials store.
+// These tests cover API key credential store — backward compat with plaintext
+// api_key, new onboarding creates api_key_ref when credentials store available,
+// provider PUT stores api_key_ref when credentials store available, provider GET
+// resolves api_key_ref from credentials store.
+//
+// (HandleRegisterAdmin tests removed — single-user model, the register-admin
+// endpoint was deleted along with the rest of the multi-account machinery.)
 
 package gateway
 
@@ -22,12 +21,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/crypto/bcrypt"
 
 	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/config"
@@ -185,220 +182,6 @@ func readConfigMap(t *testing.T, dir string) map[string]any {
 	var m map[string]any
 	require.NoError(t, json.Unmarshal(data, &m))
 	return m
-}
-
-// --- HandleRegisterAdmin — success with field verification ---
-
-// TestHandleRegisterAdmin_PersistsCorrectFields verifies that HandleRegisterAdmin
-// persists the correct fields to config.json: username, role="admin",
-// non-empty password_hash, and non-empty token_hash.
-//
-// BDD: Given no admin user exists in config.json,
-// When POST /api/v1/auth/register-admin {"username":"alpha","password":"alph4pass"} is called,
-// Then 200 with token, role="admin", username="alpha",
-// AND config.json contains gateway.users[0] with all required fields populated.
-//
-// Traces to: pkg/gateway/rest_auth.go — HandleRegisterAdmin (Wave 1 TOCTOU fix)
-func TestHandleRegisterAdmin_PersistsCorrectFields(t *testing.T) {
-	api, tmpDir := newTestAPIWithHome(t)
-
-	body := `{"username":"alpha","password":"alph4pass"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register-admin", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-
-	api.HandleRegisterAdmin(w, req)
-
-	// --- Response assertions ---
-	require.Equal(t, http.StatusOK, w.Code)
-	var resp map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-
-	token, ok := resp["token"].(string)
-	require.True(t, ok, "token must be a string")
-	assert.NotEmpty(t, token, "token must be non-empty")
-	assert.Regexp(t, `^omnipus_[0-9a-f]{8}_[0-9a-f]{64}$`, token,
-		"token must match SEC-1 id-tagged format omnipus_<id>_<body>")
-	assert.Equal(t, string(config.UserRoleAdmin), resp["role"], "role must be 'admin'")
-	assert.Equal(t, "alpha", resp["username"], "username must match the request")
-
-	// --- Persistence assertions (differentiation: content must match the request) ---
-	cfgMap := readConfigMap(t, tmpDir)
-	gw, ok := cfgMap["gateway"].(map[string]any)
-	require.True(t, ok, "config.json must have a 'gateway' key")
-	users, ok := gw["users"].([]any)
-	require.True(t, ok, "gateway must have a 'users' array")
-	require.Len(t, users, 1, "must have exactly one user after first registration")
-
-	userMap, ok := users[0].(map[string]any)
-	require.True(t, ok, "user must be a map")
-
-	// username must be exactly what was submitted (not hardcoded "admin").
-	assert.Equal(t, "alpha", userMap["username"], "persisted username must match the request")
-	// role must be admin.
-	assert.Equal(t, string(config.UserRoleAdmin), userMap["role"], "persisted role must be admin")
-	// password_hash must be a valid bcrypt hash of the submitted password.
-	passwordHash, ok := userMap["password_hash"].(string)
-	require.True(t, ok, "password_hash must be a string")
-	require.NotEmpty(t, passwordHash, "password_hash must be non-empty")
-	require.NoError(t, bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte("alph4pass")),
-		"persisted password_hash must match the submitted password")
-	// SEC-1 / UAT #399: the bearer token is persisted in the token SET; the
-	// entry hash is bcrypt of the token's secret BODY (config.TokenSecret),
-	// not the full token (which would exceed bcrypt's 72-byte ceiling).
-	tokens, ok := userMap["tokens"].([]any)
-	require.True(t, ok, "tokens set must be a JSON array")
-	require.Len(t, tokens, 1, "register-admin issues exactly one bearer token")
-	entry := tokens[0].(map[string]any)
-	tokenHash, ok := entry["hash"].(string)
-	require.True(t, ok, "token entry hash must be a string")
-	require.NotEmpty(t, tokenHash, "token entry hash must be non-empty")
-	require.NoError(t, bcrypt.CompareHashAndPassword([]byte(tokenHash), []byte(config.TokenSecret(token))),
-		"persisted token entry hash must match the returned token's secret body")
-	assert.Equal(t, config.TokenIDFromRaw(token), entry["id"],
-		"persisted token entry id must match the issued token's embedded id")
-}
-
-// TestHandleRegisterAdmin_DifferentUsersDifferentTokens verifies that two calls
-// to HandleRegisterAdmin (on different configs, so each succeeds) produce different
-// tokens — the token is not hardcoded.
-//
-// BDD: Given two fresh configs (one per call), each with no admin,
-// When each POST /api/v1/auth/register-admin with a different username is called,
-// Then each returns a different token.
-//
-// Traces to: pkg/gateway/rest_auth.go — HandleRegisterAdmin (Wave 1 TOCTOU fix)
-func TestHandleRegisterAdmin_DifferentUsersDifferentTokens(t *testing.T) {
-	api1, _ := newTestAPIWithHome(t)
-	api2, _ := newTestAPIWithHome(t)
-
-	call := func(api *restAPI, username string) string {
-		body := `{"username":"` + username + `","password":"password123"}`
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register-admin", strings.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		w := httptest.NewRecorder()
-		api.HandleRegisterAdmin(w, req)
-		require.Equal(t, http.StatusOK, w.Code, "registration must succeed for username %q", username)
-		var resp map[string]any
-		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-		tok, ok := resp["token"].(string)
-		require.True(t, ok)
-		return tok
-	}
-
-	token1 := call(api1, "adminfirst")
-	token2 := call(api2, "adminsecond")
-
-	assert.NotEqual(t, token1, token2,
-		"two different HandleRegisterAdmin calls must produce different tokens (not hardcoded)")
-}
-
-// TestHandleRegisterAdmin_SecondCallReturns409 verifies that a second call to
-// HandleRegisterAdmin on the SAME config returns 409 with "admin already registered".
-//
-// BDD: Given an admin "admin1" already registered in config.json,
-// When POST /api/v1/auth/register-admin {"username":"admin2","password":"password456"} is called,
-// Then 409 Conflict with {"error":"admin already registered"}.
-//
-// Traces to: pkg/gateway/rest_auth.go — HandleRegisterAdmin (Wave 1 TOCTOU fix)
-func TestHandleRegisterAdmin_SecondCallReturns409(t *testing.T) {
-	api, tmpDir := newTestAPIWithHome(t)
-
-	// First call — must succeed.
-	first := `{"username":"admin1","password":"password123"}`
-	req1 := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register-admin", strings.NewReader(first))
-	req1.Header.Set("Content-Type", "application/json")
-	w1 := httptest.NewRecorder()
-	api.HandleRegisterAdmin(w1, req1)
-	require.Equal(t, http.StatusOK, w1.Code, "first call must succeed")
-
-	// Confirm admin is in config.json.
-	cfgAfterFirst := readConfigMap(t, tmpDir)
-	gw := cfgAfterFirst["gateway"].(map[string]any)
-	users := gw["users"].([]any)
-	require.Len(t, users, 1, "must have exactly one user after first registration")
-
-	// Second call — must fail with 409.
-	second := `{"username":"admin2","password":"password456"}`
-	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register-admin", strings.NewReader(second))
-	req2.Header.Set("Content-Type", "application/json")
-	w2 := httptest.NewRecorder()
-	api.HandleRegisterAdmin(w2, req2)
-
-	require.Equal(t, http.StatusConflict, w2.Code, "second call must return 409 Conflict")
-	var resp map[string]any
-	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &resp))
-	assert.Equal(t, "admin already registered", resp["error"],
-		"error message must be 'admin already registered'")
-
-	// Config.json must still have only one user (second call must NOT add another user).
-	cfgAfterSecond := readConfigMap(t, tmpDir)
-	gw2 := cfgAfterSecond["gateway"].(map[string]any)
-	users2 := gw2["users"].([]any)
-	assert.Len(t, users2, 1,
-		"config.json must still have exactly 1 user after rejected second registration")
-	// The existing user must still be admin1, not admin2.
-	userMap := users2[0].(map[string]any)
-	assert.Equal(t, "admin1", userMap["username"],
-		"existing admin must remain admin1 after rejected second registration")
-}
-
-// TestHandleRegisterAdmin_ConcurrentOnlyOneSucceeds verifies that concurrent
-// POST /api/v1/auth/register-admin calls only create one admin user.
-//
-// BDD: Given N concurrent POST /api/v1/auth/register-admin requests,
-// When all are handled simultaneously via sync.WaitGroup,
-// Then exactly one returns 200, the rest return 409,
-// AND config.json has exactly one user (no duplication or corruption).
-//
-// Traces to: pkg/gateway/rest_auth.go — HandleRegisterAdmin (Wave 1 TOCTOU fix via safeUpdateConfigJSON)
-func TestHandleRegisterAdmin_ConcurrentOnlyOneSucceeds(t *testing.T) {
-	api, tmpDir := newTestAPIWithHome(t)
-
-	const n = 8
-	codes := make([]int, n)
-	var wg sync.WaitGroup
-	for i := 0; i < n; i++ {
-		wg.Add(1)
-		go func(idx int) {
-			defer wg.Done()
-			body := `{"username":"admin","password":"concurrent_pass"}`
-			req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register-admin", strings.NewReader(body))
-			req.Header.Set("Content-Type", "application/json")
-			w := httptest.NewRecorder()
-			api.HandleRegisterAdmin(w, req)
-			codes[idx] = w.Code
-		}(i)
-	}
-	wg.Wait()
-
-	// Count successes and conflicts.
-	successes := 0
-	conflicts := 0
-	for _, code := range codes {
-		switch code {
-		case http.StatusOK:
-			successes++
-		case http.StatusConflict:
-			conflicts++
-		default:
-			t.Errorf("unexpected HTTP status %d from concurrent HandleRegisterAdmin", code)
-		}
-	}
-
-	assert.Equal(t, 1, successes,
-		"exactly one concurrent call must succeed (got %d successes out of %d calls)", successes, n)
-	assert.Equal(t, n-1, conflicts,
-		"remaining %d calls must return 409 Conflict (got %d)", n-1, conflicts)
-
-	// Config.json must have exactly one user — no duplication, no corruption.
-	cfgMap := readConfigMap(t, tmpDir)
-	gw, ok := cfgMap["gateway"].(map[string]any)
-	require.True(t, ok, "config.json must have a 'gateway' key after concurrent registrations")
-	users, ok := gw["users"].([]any)
-	require.True(t, ok, "gateway must have a 'users' array after concurrent registrations")
-	assert.Len(t, users, 1,
-		"config.json must have exactly 1 user after concurrent registrations (no duplication)")
 }
 
 // --- API key credential store integration ---
@@ -660,7 +443,7 @@ func TestProviderPUT_StoresAPIKeyRef(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/providers/anthropic", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.URL.Path = "/api/v1/providers/anthropic"
-	req = injectUser(req, "admin", config.UserRoleAdmin)
+	req = injectUser(req, "admin")
 	// FR-12.2/FR-6.6: a post-onboarding provider-key PUT requires the re-auth
 	// consent token (mint one for the injected "admin" user).
 	provTok, provTokErr := api.reauthStoreOrInit().mint("admin")
@@ -741,7 +524,7 @@ func TestProviderPUT_RefusesWhenNoMasterKey(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/providers/openai", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.URL.Path = "/api/v1/providers/openai"
-	req = injectUser(req, "admin", config.UserRoleAdmin)
+	req = injectUser(req, "admin")
 	// FR-12.2/FR-6.6: a post-onboarding provider-key PUT requires the re-auth
 	// consent token (mint one for the injected "admin" user).
 	provTok, provTokErr := api.reauthStoreOrInit().mint("admin")

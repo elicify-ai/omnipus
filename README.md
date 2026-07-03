@@ -284,7 +284,7 @@ Requires Go 1.26+ and Node 24+. `make build` runs `spa-embed` first so `go:embed
 
 Two ports open: **5000** serves the SPA + API, and **5001** serves sandboxed agent preview iframes.
 
-The onboarding wizard runs on first visit: Welcome → Provider → API Key → Model → Admin Account → Done.
+The onboarding wizard runs on first visit: Welcome → Provider → API Key → Model → Account → Done.
 
 A 256-bit AES key auto-generates at `~/.omnipus/master.key` (mode `0600`).
 
@@ -310,7 +310,7 @@ omnipus start
 
 `omnipus onboard --help` lists every flag (`--provider`, `--api-key`, `--api-key-stdin`, `--model`, `--admin-username`, `--admin-password`, `--admin-password-stdin`, `--non-interactive`).
 
-It applies the same end-state mutations as the SPA wizard — config, credentials, admin user, state — so you can log in immediately with the credentials you just passed.
+It applies the same end-state mutations as the SPA wizard — config, credentials, your account, state — so you can log in immediately with the credentials you just passed.
 
 ---
 

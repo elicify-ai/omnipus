@@ -15,7 +15,6 @@ import (
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/audit"
 	"github.com/dapicom-ai/omnipus/pkg/config"
-	"github.com/dapicom-ai/omnipus/pkg/gateway/middleware"
 )
 
 // HandleToolPolicies handles GET/PUT /api/v1/security/tool-policies.
@@ -56,32 +55,28 @@ func (a *restAPI) HandleToolPolicies(w http.ResponseWriter, r *http.Request) {
 		})
 
 	case http.MethodPut:
-		// PUT mutates tool policies — admin-only (Issue #98). GET remains
-		// readable by all authenticated users. Wrapper is built once
-		// (sync.Once) so each PUT doesn't allocate a new middleware chain.
-		a.adminPutPoliciesOnce.Do(func() {
-			a.adminPutPoliciesHandler = middleware.RequireAdmin(
-				http.HandlerFunc(a.putToolPolicies),
-			)
-		})
-		a.adminPutPoliciesHandler.ServeHTTP(w, r)
+		// PUT mutates tool policies. GET and PUT are both readable/writable by
+		// the single authenticated account — withAuth (applied by the caller)
+		// is sufficient, matching how cli-validate is handled (ADR-030
+		// precedent).
+		a.putToolPolicies(w, r)
 
 	default:
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
 
-// putToolPolicies is the admin-only body of PUT /api/v1/security/tool-policies.
-// It is called only after RequireAdmin has confirmed the caller holds admin role.
+// putToolPolicies is the body of PUT /api/v1/security/tool-policies.
+// It is called only after withAuth has confirmed the caller holds a valid session.
 func (a *restAPI) putToolPolicies(w http.ResponseWriter, r *http.Request) {
 	// The step-up re-auth gate (requireReAuth) was INTENTIONALLY REMOVED here for
 	// the global tool-policy PUT per UAT feedback (operator found re-typing the
 	// password to change a tool permission to be unnecessary friction). This is a
 	// deliberate, scoped loosening — do NOT restore it. Authorization is still
-	// enforced: RequireAdmin (applied in HandleToolPolicies above) confirms the
-	// caller holds the admin role, and withAuth requires a valid session. The
-	// password re-prompt is the only control removed. The same gate remains in
-	// force on Integrations/Providers/Sandbox/Credentials/Performance PUTs.
+	// enforced: withAuth requires a valid session (single-account model — no
+	// further role gate applies). The password re-prompt is the only control
+	// removed. The same gate remains in force on
+	// Integrations/Providers/Sandbox/Credentials/Performance PUTs.
 	if user, ok := r.Context().Value(UserContextKey{}).(*config.UserConfig); !ok || user == nil {
 		jsonErr(w, http.StatusUnauthorized, "not authenticated")
 		return

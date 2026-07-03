@@ -26,12 +26,11 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/config"
 )
 
-// contextWithUserRole returns a new context that carries the given username (as a
-// *config.UserConfig) and role, matching what the gateway auth middleware injects.
-// Used in ownership-scoping tests to simulate authenticated requests.
-func contextWithUserRole(parent context.Context, username string, role config.UserRole) context.Context {
-	ctx := context.WithValue(parent, UserContextKey{}, &config.UserConfig{Username: username})
-	return context.WithValue(ctx, RoleContextKey{}, role)
+// contextWithUser returns a new context that carries the given username (as a
+// *config.UserConfig), matching what the gateway auth middleware injects.
+// Used in owner-attribution tests to simulate authenticated requests.
+func contextWithUser(parent context.Context, username string) context.Context {
+	return context.WithValue(parent, UserContextKey{}, &config.UserConfig{Username: username})
 }
 
 // writeTaskFile writes a minimal task JSON file for use in cascade-delete tests.
@@ -797,7 +796,7 @@ func TestHandleWorkspaces_OwnerAttribution(t *testing.T) {
 	rPost.Header.Set("Content-Type", "application/json")
 	rPost.URL.Path = "/api/v1/workspaces"
 	rPost = rPost.WithContext(
-		contextWithUserRole(rPost.Context(), "alice", config.UserRoleUser))
+		contextWithUser(rPost.Context(), "alice"))
 	api.HandleWorkspaces(wPost, rPost)
 	require.Equal(t, http.StatusCreated, wPost.Code, "alice POST must return 201; body=%s", wPost.Body.String())
 	var ws gen.Workspace
@@ -814,7 +813,7 @@ func TestHandleWorkspaces_OwnerAttribution(t *testing.T) {
 	rGetBob := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/"+wsID, nil)
 	rGetBob.URL.Path = "/api/v1/workspaces/" + wsID
 	rGetBob = rGetBob.WithContext(
-		contextWithUserRole(rGetBob.Context(), "bob", config.UserRoleUser))
+		contextWithUser(rGetBob.Context(), "bob"))
 	api.HandleWorkspaces(wGetBob, rGetBob)
 	assert.Equal(t, http.StatusOK, wGetBob.Code,
 		"FR-1.9: bob must get 200 on alice's workspace (owner is attribution-only); body=%s", wGetBob.Body.String())
@@ -824,7 +823,7 @@ func TestHandleWorkspaces_OwnerAttribution(t *testing.T) {
 	rListBob := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces", nil)
 	rListBob.URL.Path = "/api/v1/workspaces"
 	rListBob = rListBob.WithContext(
-		contextWithUserRole(rListBob.Context(), "bob", config.UserRoleUser))
+		contextWithUser(rListBob.Context(), "bob"))
 	api.HandleWorkspaces(wListBob, rListBob)
 	require.Equal(t, http.StatusOK, wListBob.Code)
 	var allWorkspaces []gen.Workspace
@@ -865,7 +864,7 @@ func TestHandleWorkspaces_LegacyUnownedAccessible(t *testing.T) {
 	rGet := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/"+projID, nil)
 	rGet.URL.Path = "/api/v1/workspaces/" + projID
 	rGet = rGet.WithContext(
-		contextWithUserRole(rGet.Context(), "bob", config.UserRoleUser))
+		contextWithUser(rGet.Context(), "bob"))
 	api.HandleWorkspaces(wGet, rGet)
 	assert.Equal(t, http.StatusOK, wGet.Code,
 		"unowned project must be visible to any user; body=%s", wGet.Body.String())
@@ -887,7 +886,7 @@ func TestHandleWorkspaces_OwnerImmutableOnPut(t *testing.T) {
 	rPost.Header.Set("Content-Type", "application/json")
 	rPost.URL.Path = "/api/v1/workspaces"
 	rPost = rPost.WithContext(
-		contextWithUserRole(rPost.Context(), "alice", config.UserRoleUser))
+		contextWithUser(rPost.Context(), "alice"))
 	api.HandleWorkspaces(wPost, rPost)
 	require.Equal(t, http.StatusCreated, wPost.Code)
 	var proj gen.Workspace
@@ -901,7 +900,7 @@ func TestHandleWorkspaces_OwnerImmutableOnPut(t *testing.T) {
 	rPut.Header.Set("Content-Type", "application/json")
 	rPut.URL.Path = "/api/v1/workspaces/" + proj.Id
 	rPut = rPut.WithContext(
-		contextWithUserRole(rPut.Context(), "alice", config.UserRoleUser))
+		contextWithUser(rPut.Context(), "alice"))
 	api.HandleWorkspaces(wPut, rPut)
 	require.Equal(t, http.StatusOK, wPut.Code, "alice PUT must return 200")
 	var updated gen.Workspace

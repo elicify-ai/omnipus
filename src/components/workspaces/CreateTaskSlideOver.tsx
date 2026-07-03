@@ -27,7 +27,7 @@ import {
   createTask,
   updateTask,
   fetchAgents,
-  isWorker,
+  buildTaskAssigneeItems,
   fetchMilestones,
   fetchTasks,
   tasksQueryKeys,
@@ -420,9 +420,7 @@ export function CreateTaskSlideOver({
               triggerClassName="h-9 text-sm"
               items={[
                 { value: '__none__', label: 'Unassigned', className: 'text-xs' },
-                ...agents
-                  .filter((a) => !isWorker(a))
-                  .map((a) => ({ value: a.id, label: a.name, className: 'text-xs' })),
+                ...buildTaskAssigneeItems(agents),
               ]}
             />
           </div>

@@ -353,10 +353,13 @@ func TestHandleSystemCliValidate_InflightCapHandler(t *testing.T) {
 
 // --- Endpoint: create-parity auth ---
 
-// TestHandleSystemCliValidate_CreateParity_NonAdminAllowed proves the handler is
-// NOT admin-gated: a non-admin ("user") caller reaches it and gets a 200 — the
-// same parity as createAgent. Contrast: the exact same request hits 403 on an
-// admin-gated chain (RequireAdmin), demonstrating the difference.
+// TestHandleSystemCliValidate_CreateParity_NonAdminAllowed proves the handler
+// reaches a non-"admin" caller ("bob") — the same parity as createAgent
+// (plain withAuth, no additional gate). Single-user model: there is no
+// admin-vs-non-admin distinction left to contrast against here — that
+// coverage now lives in TestHandleSystemCliValidate_RealMux_NotBypassGated,
+// which contrasts cli-validate (create-parity) against a genuinely
+// bypass-gated route (sandbox-config) under dev_mode_bypass=true.
 func TestHandleSystemCliValidate_CreateParity_NonAdminAllowed(t *testing.T) {
 	api, cleanup := newTestRestAPI(t)
 	defer cleanup()
@@ -367,21 +370,14 @@ func TestHandleSystemCliValidate_CreateParity_NonAdminAllowed(t *testing.T) {
 	w := httptest.NewRecorder()
 	api.HandleSystemCliValidate(w, req)
 	require.Equal(t, http.StatusOK, w.Code,
-		"non-admin must reach cli-validate (create-parity); body=%s", w.Body.String())
-
-	// Contrast: the SAME non-admin request is rejected by an admin-gated chain.
-	adminReq := makeNonAdminCtxRequest(http.MethodPost, "/api/v1/system/cli-validate", body)
-	aw := httptest.NewRecorder()
-	buildInnerChainHandler().ServeHTTP(aw, adminReq)
-	assert.Equal(t, http.StatusForbidden, aw.Code,
-		"an admin-gated route would 403 this same caller — proving cli-validate is NOT admin-gated")
+		"a non-\"admin\" caller must reach cli-validate (create-parity); body=%s", w.Body.String())
 }
 
 // TestHandleSystemCliValidate_RealMux_NotBypassGated exercises the REAL
-// registerAdditionalEndpoints chain: under dev_mode_bypass an admin route
-// (sandbox-config) returns 503 via RequireNotBypass, but cli-validate is
-// create-parity (plain withAuth) and returns 200 — proving no RequireNotBypass /
-// RequireAdmin wrapping at registration.
+// registerAdditionalEndpoints chain: under dev_mode_bypass a high-blast-radius
+// route (sandbox-config) returns 503 via RequireNotBypass, but cli-validate is
+// create-parity (plain withAuth) and returns 200 — proving no RequireNotBypass
+// wrapping at registration.
 func TestHandleSystemCliValidate_RealMux_NotBypassGated(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	mux := http.NewServeMux()
@@ -400,7 +396,7 @@ func TestHandleSystemCliValidate_RealMux_NotBypassGated(t *testing.T) {
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code,
-		"cli-validate must NOT be RequireNotBypass/RequireAdmin gated (create-parity); got body: %s", w.Body.String())
+		"cli-validate must NOT be RequireNotBypass gated (create-parity); got body: %s", w.Body.String())
 	assert.NotEqual(t, http.StatusServiceUnavailable, w.Code)
 	assert.NotEqual(t, http.StatusForbidden, w.Code)
 }

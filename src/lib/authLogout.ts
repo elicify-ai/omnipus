@@ -27,7 +27,6 @@ export function forceLogout(): void {
   // Clear auth state from both storages (matches the pattern in src/store/auth.ts).
   sessionStorage.removeItem('omnipus_auth_token')
   localStorage.removeItem('omnipus_auth_token')
-  localStorage.removeItem('omnipus_auth_role')
   localStorage.removeItem('omnipus_auth_username')
 
   // Sync the Zustand auth store if it is already loaded (avoids a circular

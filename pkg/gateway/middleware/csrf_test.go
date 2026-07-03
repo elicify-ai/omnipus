@@ -115,14 +115,13 @@ func TestCSRF_MatchPassesThrough(t *testing.T) {
 
 func TestCSRF_DefaultExempt(t *testing.T) {
 	// Default exempt list (no options passed) includes the cookie-issuer
-	// endpoints (onboarding, login, register-admin) and operational health
-	// endpoints (mounted on health-server mux; exempt here for
-	// defense-in-depth in case of future remount).
+	// endpoints (onboarding, login) and operational health endpoints
+	// (mounted on health-server mux; exempt here for defense-in-depth in
+	// case of future remount).
 	h := buildMW()
 	for _, path := range []string{
 		"/api/v1/onboarding/complete",
 		"/api/v1/auth/login",
-		"/api/v1/auth/register-admin",
 		"/health",
 		"/ready",
 		"/reload",

@@ -1,6 +1,6 @@
 title: ExecApprovalResponseFrame
 description: >
-  Client → server. The admin's decision on a pending exec_approval_request.
+  Client → server. The user's decision on a pending exec_approval_request.
   The server matches this to the outstanding approval by `id` and resolves
   the agent turn with the corresponding verdict.
 type: object

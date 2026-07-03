@@ -22,15 +22,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/audit"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/gateway/ctxkey"
-	"github.com/dapicom-ai/omnipus/pkg/gateway/middleware"
 )
-
-// withNonAdminRole injects config.UserRoleUser into the request context,
-// simulating an authenticated non-admin user.
-func withNonAdminRole(r *http.Request) *http.Request {
-	ctx := context.WithValue(r.Context(), RoleContextKey{}, config.UserRoleUser)
-	return r.WithContext(ctx)
-}
 
 // skillTrustPUT is a helper that issues a PUT /api/v1/security/skill-trust
 // with the given level as admin and returns the response recorder.
@@ -118,23 +110,6 @@ func TestHandleSkillTrust_HotReload(t *testing.T) {
 	assert.Equal(t, false, resp["requires_restart"], "skill_trust is a hot-reload setting")
 }
 
-// TestHandleSkillTrust_NonAdmin403 verifies that a non-admin authenticated user
-// receives 403 when attempting PUT.
-func TestHandleSkillTrust_NonAdmin403(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-
-	payload := `{"level":"warn_unverified"}`
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/skill-trust", strings.NewReader(payload))
-	r.Header.Set("Content-Type", "application/json")
-	r = withNonAdminRole(r)
-	// Route through RequireAdmin as adminWrap does at registration time — the
-	// inner handler no longer re-wraps it.
-	middleware.RequireAdmin(http.HandlerFunc(api.HandleSkillTrust)).ServeHTTP(w, r)
-
-	assert.Equal(t, http.StatusForbidden, w.Code, "non-admin must receive 403")
-}
-
 // TestHandleSkillTrust_MethodNotAllowed verifies that POST and DELETE return 405.
 func TestHandleSkillTrust_MethodNotAllowed(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
@@ -162,7 +137,6 @@ func TestHandleSkillTrust_EmitsAuditEntry(t *testing.T) {
 
 	ctx := context.WithValue(context.Background(), ctxkey.UserContextKey{},
 		&config.UserConfig{Username: "admin"})
-	ctx = context.WithValue(ctx, RoleContextKey{}, config.UserRoleAdmin)
 
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/skill-trust",
 		strings.NewReader(`{"level":"block_unverified"}`))

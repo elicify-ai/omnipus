@@ -1,0 +1,55 @@
+type: object
+description: >
+  Static reference data describing the CLI arguments Omnipus's external-CLI
+  driver automatically applies when spawning a subagent_3p worker on this CLI
+  (kind="external-cli"), as returned by GET /api/v1/agents/executor-defaults.
+  This is READ-ONLY, computed reference information — it does not reflect any
+  particular agent's configuration and there is nothing to write back. It
+  exists so the Agent Profile UI can show operators the REAL, auto-applied
+  flags (not merely HTML placeholder ghost-text) before they add their own
+  executor.cli_args. The values are sourced directly from each driver's
+  buildArgs() (pkg/agent/runner/driver_claude.go, driver_codex.go,
+  driver_opencode.go) and must be kept byte-accurate to that code — this is
+  reference documentation for a running system, not a design aspiration.
+required:
+  - cli
+  - auto_applied_flags
+  - notes
+additionalProperties: false
+properties:
+  cli:
+    $ref: './ExternalCli.yaml'
+    x-go-type: ExternalCliTool
+  auto_applied_flags:
+    type: array
+    description: >
+      Human-readable, ORDERED list of the CLI arguments the driver appends
+      before any operator-supplied executor.cli_args. Entries that are only
+      applied conditionally (a configured model, max-turns cap, or working
+      directory) say so in parentheses; the bracketed placeholder (e.g.
+      "<configured model>") is not literal argv text. Operator cli_args are
+      appended AFTER this list, and a narrow denylist strips any override
+      that would re-enable a permission/sandbox bypass or corrupt the
+      driver's stream-JSON output parsing (see argsafety.go).
+    items:
+      type: string
+    example:
+      - "-p"
+      - "--output-format stream-json"
+      - "--verbose"
+      - "--no-chrome"
+      - "--model <configured model> (only when a model is configured)"
+      - "--permission-mode acceptEdits"
+      - "--max-turns <configured max turns> (only when a turn cap is configured)"
+  notes:
+    type: string
+    description: >
+      Free-text clarification covering how the prompt itself is delivered to
+      this CLI (stdin vs. a positional argument — NEVER a --prompt flag on
+      any of the three supported CLIs) and any other non-obvious behavior not
+      captured by the flag list above.
+    example: >
+      The prompt is delivered via stdin (a trailing "-" argument tells claude
+      to read it from stdin) — never via a --prompt flag or positional
+      argument. --resume/--session-id are never passed; every run starts a
+      fresh claude session.

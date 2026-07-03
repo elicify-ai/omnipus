@@ -16,14 +16,13 @@
 //   - TestApprovalRegistry_SaturationDefault64
 //   - TestApprovalRegistry_BatchShortCircuit_MixedPolicy
 //   - TestWS_SessionStatePayloadSchema
-//   - TestWS_SessionState_PerUserScoping
+//   - TestWS_SessionState_SeesAllPendingApprovals
 //   - TestWS_ToolApprovalRequired_ExpiresInMs
 
 package gateway
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -33,18 +32,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/dapicom-ai/omnipus/pkg/config"
 )
 
 // --- helpers ---
-
-// withNonAdminRoleForApproval injects a non-admin (user) role into the request context.
-// Distinct from withNonAdminRole in rest_skill_trust_test.go to avoid duplicate symbol.
-func withNonAdminRoleForApproval(r *http.Request) *http.Request {
-	ctx := context.WithValue(r.Context(), RoleContextKey{}, config.UserRoleUser)
-	return r.WithContext(ctx)
-}
 
 // newTestRestAPIWithApprovalReg returns a restAPI with a live approvalRegistryV2 wired in.
 // Uses the same minimal setup as newTestRestAPIWithHome.
@@ -57,21 +47,18 @@ func newTestRestAPIWithApprovalReg(t *testing.T) (*restAPI, *approvalRegistryV2)
 }
 
 // postToolApproval sends a POST to HandleToolApprovals and returns the recorder.
+// Single-user model: HandleToolApprovals does not role-gate, so the caller is
+// always injected via withAdminRole (an authenticated user for audit attribution).
 func postToolApproval(
 	t *testing.T,
 	api *restAPI,
 	approvalID, action string,
-	adminRole bool,
 ) *httptest.ResponseRecorder {
 	t.Helper()
 	body := `{"action":"` + action + `"}`
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/tool-approvals/"+approvalID, strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
-	if adminRole {
-		r = withAdminRole(r)
-	} else {
-		r = withNonAdminRoleForApproval(r)
-	}
+	r = withAdminRole(r)
 	w := httptest.NewRecorder()
 	// Set the URL path explicitly so TrimPrefix extracts the right ID.
 	r.URL.Path = "/api/v1/tool-approvals/" + approvalID
@@ -337,7 +324,7 @@ func TestREST_ApproveDenyCancel_StateTransitions(t *testing.T) {
 				close(doneCh)
 			}()
 
-			w := postToolApproval(t, api, entry.ApprovalID, tc.action, true /* admin */)
+			w := postToolApproval(t, api, entry.ApprovalID, tc.action)
 			require.Equal(t, http.StatusOK, w.Code, "action %q must return 200: %s", tc.action, w.Body)
 
 			// Confirm the outcome was delivered.
@@ -380,11 +367,11 @@ func TestREST_LateApprove_Returns410(t *testing.T) {
 	go func() { <-entry.resultCh }()
 
 	// First action — must succeed.
-	w1 := postToolApproval(t, api, entry.ApprovalID, "approve", true)
+	w1 := postToolApproval(t, api, entry.ApprovalID, "approve")
 	require.Equal(t, http.StatusOK, w1.Code, "first approve must return 200: %s", w1.Body)
 
 	// Second action on the same (now terminal) approval — must return 410.
-	w2 := postToolApproval(t, api, entry.ApprovalID, "deny", true)
+	w2 := postToolApproval(t, api, entry.ApprovalID, "deny")
 	assert.Equal(t, http.StatusGone, w2.Code, "second action on resolved approval must return 410: %s", w2.Body)
 }
 
@@ -723,18 +710,16 @@ func TestWS_SessionStatePayloadSchema(t *testing.T) {
 	assert.NoError(t, parseErr, "emitted_at must be valid RFC3339: %q", emittedAt)
 }
 
-// --- WS: per-user scoping of session_state ---
+// --- WS: session_state sees every pending approval (single-user model) ---
 
-// TestWS_SessionState_PerUserScoping verifies that an admin connection receives
-// pending approvals in session_state, while a connection without admin role
-// receives an empty pending_approvals array (FR-073 admin scoping).
-// BDD: Given a pending approval in the registry and an admin WS connection,
-// When the admin connects,
+// TestWS_SessionState_SeesAllPendingApprovals verifies that any connection
+// receives every pending approval in session_state — FR-073's admin/non-admin
+// scoping was removed under the single-user model (see ws_tool_approval.go).
+// BDD: Given a pending approval in the registry and a WS connection,
+// When the connection is established,
 // Then session_state.pending_approvals contains the pending entry.
-// Given the same pending approval and a non-admin WS connection,
-// Then session_state.pending_approvals is empty.
 // Traces to: tool-registry-redesign-spec.md FR-073, FR-081
-func TestWS_SessionState_PerUserScoping(t *testing.T) {
+func TestWS_SessionState_SeesAllPendingApprovals(t *testing.T) {
 	reg := newApprovalRegistryV2(64, 300*time.Second)
 
 	// Register one pending approval.
@@ -748,56 +733,36 @@ func TestWS_SessionState_PerUserScoping(t *testing.T) {
 		go func() { reg.resolve(pendingEntry.ApprovalID, ApprovalActionCancel) }()
 	})
 
-	// Helper: connect a WS as admin or non-admin and collect the session_state frame.
-	collectSessionState := func(t *testing.T, role config.UserRole) map[string]any {
-		t.Helper()
-		handler, _, _ := newTestWSHandler(t)
-		t.Cleanup(handler.Wait)
-		handler.approvalRegV2 = reg
+	handler, _, _ := newTestWSHandler(t)
+	t.Cleanup(handler.Wait)
+	handler.approvalRegV2 = reg
 
-		srv := httptest.NewServer(handler)
-		t.Cleanup(srv.Close)
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
 
-		conn := dialTestWS(t, srv)
-		t.Cleanup(func() { _ = conn.Close() })
+	conn := dialTestWS(t, srv)
+	t.Cleanup(func() { _ = conn.Close() })
 
-		// Craft a wsConn-level role by injecting via handler.approvalRegV2.
-		// Since newTestWSHandler uses dev-mode-bypass and emitSessionState reads
-		// wc.role from the WS connection's authenticated session, we simulate
-		// an admin connection by directly creating the wsConn and calling emitSessionState.
-		wc := &wsConn{
-			sendCh: make(chan []byte, 16),
-			doneCh: make(chan struct{}),
-			role:   role,
-			userID: "testuser",
-		}
-
-		handler.emitSessionState(wc)
-
-		select {
-		case raw := <-wc.sendCh:
-			var f map[string]any
-			require.NoError(t, json.Unmarshal(raw, &f))
-			return f
-		case <-time.After(2 * time.Second):
-			t.Fatal("emitSessionState never sent a frame")
-			return nil
-		}
+	wc := &wsConn{
+		sendCh: make(chan []byte, 16),
+		doneCh: make(chan struct{}),
+		userID: "testuser",
 	}
 
-	// Admin must see the pending approval.
-	adminFrame := collectSessionState(t, config.UserRoleAdmin)
-	require.Equal(t, "session_state", adminFrame["type"])
-	adminApprovals, ok := adminFrame["pending_approvals"].([]any)
-	require.True(t, ok)
-	assert.NotEmpty(t, adminApprovals, "admin must see pending approvals")
+	handler.emitSessionState(wc)
 
-	// Non-admin must see an empty array.
-	userFrame := collectSessionState(t, config.UserRoleUser)
-	require.Equal(t, "session_state", userFrame["type"])
-	userApprovals, ok := userFrame["pending_approvals"].([]any)
+	var frame map[string]any
+	select {
+	case raw := <-wc.sendCh:
+		require.NoError(t, json.Unmarshal(raw, &frame))
+	case <-time.After(2 * time.Second):
+		t.Fatal("emitSessionState never sent a frame")
+	}
+
+	require.Equal(t, "session_state", frame["type"])
+	approvals, ok := frame["pending_approvals"].([]any)
 	require.True(t, ok)
-	assert.Empty(t, userApprovals, "non-admin must see empty pending_approvals")
+	assert.NotEmpty(t, approvals, "the connection must see the pending approval")
 }
 
 // --- WS: tool_approval_required with expires_in_ms ---
@@ -831,7 +796,6 @@ func TestWS_ToolApprovalRequired_ExpiresInMs(t *testing.T) {
 	wc := &wsConn{
 		sendCh: make(chan []byte, 16),
 		doneCh: make(chan struct{}),
-		role:   config.UserRoleAdmin,
 		userID: "broadcast-test",
 	}
 	handler.mu.Lock()
@@ -901,7 +865,6 @@ func TestWS_ToolApprovalRequired_NilArgsBecomesEmptyObject(t *testing.T) {
 	wc := &wsConn{
 		sendCh: make(chan []byte, 16),
 		doneCh: make(chan struct{}),
-		role:   config.UserRoleAdmin,
 		userID: "nil-args-test",
 	}
 	handler.mu.Lock()

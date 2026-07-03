@@ -127,7 +127,7 @@ func newRunnerOnly(t *testing.T, cfg *config.Config, registered map[string]bool)
 func baseConfig() *config.Config {
 	cfg := config.DefaultConfig()
 	cfg.Agents.List = []config.AgentConfig{
-		{ID: "mia", Type: config.AgentTypeCustom, OwnerUsername: "alice"},
+		{ID: "mia", Type: config.AgentTypeCustom},
 	}
 	return cfg
 }
@@ -341,9 +341,9 @@ func TestRunner_SessionMode_Main(t *testing.T) {
 	assert.Equal(t, "sched-main-mia", sid)
 }
 
-// TestRunner_Failure_NotifiesAndAlerts asserts a failed run creates a coalesced
-// notification for created_by + owner AND publishes a channel alert to the
-// owner's default channel (FR-013).
+// TestRunner_Failure_NotifiesAndAlerts asserts a failed run creates a
+// notification for the schedule's created_by user AND publishes a channel
+// alert to the owner's default channel (FR-013).
 func TestRunner_Failure_NotifiesAndAlerts(t *testing.T) {
 	cfg := baseConfig()
 	// Owner "mia" is bound to telegram → that is the default channel for the alert.
@@ -371,17 +371,16 @@ func TestRunner_Failure_NotifiesAndAlerts(t *testing.T) {
 	assert.Contains(t, alert.Content, "report")
 	assert.Contains(t, alert.Content, "provider exploded")
 
-	// Notification for the creator "bob".
+	// Notification for the creator "bob" — the sole recipient now that
+	// owner-user resolution via OwnerUsername has been removed (single-user
+	// product: CreatedBy is the only resolvable recipient).
 	bobList, _ := notifs.ListForUser("bob")
 	require.Len(t, bobList, 1)
 	assert.Equal(t, notifications.TypeScheduleFailed, bobList[0].Type)
 	assert.Equal(t, "j6", bobList[0].ScheduleID)
-	// Notification for the owner's owner-user "alice".
-	aliceList, _ := notifs.ListForUser("alice")
-	require.Len(t, aliceList, 1)
 
-	// Live WS push emitted for each recipient.
-	assert.GreaterOrEqual(t, len(exec.emitted), 2)
+	// Live WS push emitted for the recipient.
+	assert.GreaterOrEqual(t, len(exec.emitted), 1)
 }
 
 // TestRunner_Failure_Coalesces asserts a second failure for the same schedule
@@ -408,12 +407,14 @@ func TestRunner_Failure_Coalesces(t *testing.T) {
 	assert.Len(t, bobList, 1, "repeated failures must coalesce into one notification")
 }
 
-// TestRunner_Failure_NoRecipients_FallsBackToAdmin asserts that when neither
-// created_by nor the owner-user is resolvable, admins are notified.
-func TestRunner_Failure_NoRecipients_FallsBackToAdmin(t *testing.T) {
+// TestRunner_Failure_NoRecipients_FallsBackToSoleAccount asserts that when
+// created_by is not resolvable, the sole account is notified (single-user
+// product: ownership/role are no longer access-control concepts, so there is
+// exactly one account to fall back to).
+func TestRunner_Failure_NoRecipients_FallsBackToSoleAccount(t *testing.T) {
 	cfg := config.DefaultConfig()
-	cfg.Agents.List = []config.AgentConfig{{ID: "mia", Type: config.AgentTypeCustom}} // no owner-user
-	cfg.Gateway.Users = []config.UserConfig{{Username: "root", Role: config.UserRoleAdmin}}
+	cfg.Agents.List = []config.AgentConfig{{ID: "mia", Type: config.AgentTypeCustom}}
+	cfg.Gateway.Users = []config.UserConfig{{Username: "root"}}
 	r, exec, mb, notifs := newRunnerHarness(t, cfg, map[string]bool{"mia": true})
 	exec.err = fmt.Errorf("boom")
 	go func() {
@@ -425,45 +426,12 @@ func TestRunner_Failure_NoRecipients_FallsBackToAdmin(t *testing.T) {
 	_, _ = r.RunScheduled(context.Background(), job)
 
 	rootList, _ := notifs.ListForUser("root")
-	assert.Len(t, rootList, 1, "admin should be notified when no other recipient resolves")
-}
-
-// TestRunner_Failure_AdminBroadcast_PersistsPerAdmin asserts M4: with multiple
-// admins and no createdBy/owner-user, each admin gets their OWN persisted
-// notification (readable after restart), not a single _admin_.json sentinel row.
-func TestRunner_Failure_AdminBroadcast_PersistsPerAdmin(t *testing.T) {
-	cfg := config.DefaultConfig()
-	cfg.Agents.List = []config.AgentConfig{{ID: "mia", Type: config.AgentTypeCustom}} // no owner-user
-	cfg.Gateway.Users = []config.UserConfig{
-		{Username: "root", Role: config.UserRoleAdmin},
-		{Username: "ops", Role: config.UserRoleAdmin},
-		{Username: "viewer", Role: config.UserRoleUser}, // non-admin: must NOT be notified
-	}
-	r, exec, mb, notifs := newRunnerHarness(t, cfg, map[string]bool{"mia": true})
-	exec.err = fmt.Errorf("boom")
-	go func() {
-		for range mb.OutboundChan() {
-		}
-	}()
-
-	job := &cron.CronJob{ID: "j9", AgentID: "mia", Payload: cron.CronPayload{Message: "x"}} // no created_by
-	_, _ = r.RunScheduled(context.Background(), job)
-
-	rootList, _ := notifs.ListForUser("root")
-	assert.Len(t, rootList, 1, "admin root must have a persisted notification")
-	opsList, _ := notifs.ListForUser("ops")
-	assert.Len(t, opsList, 1, "admin ops must have a persisted notification")
-	viewerList, _ := notifs.ListForUser("viewer")
-	assert.Empty(t, viewerList, "non-admin must not be notified")
-
-	// No sentinel file persisted: ListForUser of the sentinel returns empty.
-	sentinelList, _ := notifs.ListForUser(agent.NotificationAdminBroadcast)
-	assert.Empty(t, sentinelList, "the admin-broadcast sentinel must not be persisted")
+	assert.Len(t, rootList, 1, "the sole account should be notified when no other recipient resolves")
 }
 
 // TestRunner_Failure_PushesEvenWhenCreateFails asserts H3: when notification
-// persistence fails, the live WS push still fires for each recipient (so
-// connected users see the alert) instead of being silently dropped.
+// persistence fails, the live WS push still fires for the recipient (so a
+// connected user sees the alert) instead of being silently dropped.
 func TestRunner_Failure_PushesEvenWhenCreateFails(t *testing.T) {
 	cfg := baseConfig()
 	store, err := session.NewUnifiedStore(t.TempDir())
@@ -490,15 +458,15 @@ func TestRunner_Failure_PushesEvenWhenCreateFails(t *testing.T) {
 	_, runErr := r.RunScheduled(context.Background(), job)
 	require.Error(t, runErr)
 
-	// Persistence failed (Create errored), but the live push fired for both
-	// recipients (creator "bob" + owner-user "alice").
-	require.GreaterOrEqual(t, len(exec.emitted), 2, "live push must fire even when persistence fails")
+	// Persistence failed (Create errored), but the live push still fired for
+	// the recipient (creator "bob" — the sole resolvable recipient now that
+	// owner-user resolution via OwnerUsername has been removed).
+	require.GreaterOrEqual(t, len(exec.emitted), 1, "live push must fire even when persistence fails")
 	recipients := map[string]bool{}
 	for _, p := range exec.emitted {
 		recipients[p.Recipient] = true
 	}
 	assert.True(t, recipients["bob"], "creator must get a live push")
-	assert.True(t, recipients["alice"], "owner-user must get a live push")
 }
 
 // fakeChannelChecker stands in for the channel registry in M2 tests.

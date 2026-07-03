@@ -33,32 +33,34 @@ import (
 // without round-tripping a password (mint is keyed purely by username string).
 const reauthGateAdminUser = "reauth-admin"
 
-// withReAuthAdmin attaches BOTH (a) an admin *config.UserConfig under
-// UserContextKey{} and the admin RoleContextKey{} role, and (b) a freshly
-// minted, valid single-use re-auth consent token under the X-Reauth-Token
-// header. Tests that exercise a re-auth-gated PUT handler directly (bypassing
-// withAuth/withReAuth middleware) use this so the handler's requireReAuth gate
-// passes. The token is minted straight from the API's in-memory reauth store —
-// no password verification is exercised here; that path is covered by the
-// dedicated re-auth handler tests.
+// withReAuthAdmin attaches BOTH (a) an authenticated *config.UserConfig
+// under UserContextKey{}, and (b) a freshly minted, valid single-use
+// re-auth consent token under the X-Reauth-Token header. Tests that
+// exercise a re-auth-gated PUT handler directly (bypassing
+// withAuth/withReAuth middleware) use this so the handler's requireReAuth
+// gate passes. The token is minted straight from the API's in-memory reauth
+// store — no password verification is exercised here; that path is covered
+// by the dedicated re-auth handler tests.
+//
+// Single-user model (operator directive, 2026-07): there is no admin role
+// left to inject — requireReAuth and every handler it gates only read the
+// caller's identity (UserContextKey / user.Username), never a role.
 func withReAuthAdmin(t *testing.T, api *restAPI, r *http.Request) *http.Request {
 	t.Helper()
 	token, err := api.reauthStoreOrInit().mint(reauthGateAdminUser)
 	require.NoError(t, err, "minting a re-auth consent token must not fail")
 	r.Header.Set(reAuthHeader, token)
-	user := &config.UserConfig{Username: reauthGateAdminUser, Role: config.UserRoleAdmin}
+	user := &config.UserConfig{Username: reauthGateAdminUser}
 	ctx := context.WithValue(r.Context(), UserContextKey{}, user)
-	ctx = context.WithValue(ctx, RoleContextKey{}, config.UserRoleAdmin)
 	return r.WithContext(ctx)
 }
 
-// withReAuthAdminNoToken attaches the admin user + role to the request context
-// but DELIBERATELY omits the re-auth consent token — used to prove the gate
-// rejects a sensitive mutation that lacks the token.
+// withReAuthAdminNoToken attaches the authenticated user to the request
+// context but DELIBERATELY omits the re-auth consent token — used to prove
+// the gate rejects a sensitive mutation that lacks the token.
 func withReAuthAdminNoToken(r *http.Request) *http.Request {
-	user := &config.UserConfig{Username: reauthGateAdminUser, Role: config.UserRoleAdmin}
+	user := &config.UserConfig{Username: reauthGateAdminUser}
 	ctx := context.WithValue(r.Context(), UserContextKey{}, user)
-	ctx = context.WithValue(ctx, RoleContextKey{}, config.UserRoleAdmin)
 	return r.WithContext(ctx)
 }
 
@@ -142,9 +144,9 @@ func TestSandboxConfigPUT_WithReAuth_Succeeds(t *testing.T) {
 // The step-up re-auth gate was intentionally removed from the global tool-policy
 // PUT per UAT feedback (operator found re-typing the password to change a tool
 // permission to be unnecessary friction). Authorization is unchanged: the PUT
-// still runs behind RequireAdmin + withAuth. These tests now PROVE the gate is
-// gone — a valid admin session with NO X-Reauth-Token succeeds — while the
-// re-auth gate on OTHER sensitive routes (sandbox/providers/credentials/...)
+// still requires an authenticated caller (withAuth). These tests now PROVE the
+// gate is gone — a valid authenticated session with NO X-Reauth-Token succeeds —
+// while the re-auth gate on OTHER sensitive routes (sandbox/providers/credentials/...)
 // keeps its dedicated tests above and below.
 
 // TestToolPoliciesPUT_NoReAuthToken_Succeeds proves the global tool-policy PUT now

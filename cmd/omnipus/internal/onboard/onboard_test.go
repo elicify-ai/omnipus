@@ -145,7 +145,8 @@ func TestRun_FreshInstall_WritesUsableConfig(t *testing.T) {
 
 	gateway, _ := cfg["gateway"].(map[string]any)
 	users, _ := gateway["users"].([]any)
-	// There must be at least the admin user (cli user also added by EnsureCLIToken).
+	// The single account created by the wizard. The CLI token is a separate,
+	// dedicated gateway.cli_token slot — checked further below.
 	if len(users) < 1 {
 		t.Fatalf("expected at least 1 user, got %d", len(users))
 	}
@@ -165,9 +166,6 @@ func TestRun_FreshInstall_WritesUsableConfig(t *testing.T) {
 	if aliceUser == nil {
 		t.Fatalf("alice user not found in gateway.users")
 	}
-	if aliceUser["role"] != "admin" {
-		t.Errorf("role = %v, want admin", aliceUser["role"])
-	}
 	pwHash, _ := aliceUser["password_hash"].(string)
 	if pwHash == "" {
 		t.Fatalf("password_hash missing or empty")
@@ -186,7 +184,9 @@ func TestRun_FreshInstall_WritesUsableConfig(t *testing.T) {
 		t.Errorf("state.json onboarding_complete is false; wizard did not commit")
 	}
 
-	// 5. cli.token exists with 0600 and a cli user is in config.json.
+	// 5. cli.token exists with 0600 and gateway.cli_token is in config.json.
+	// EnsureCLIToken writes after mutateConfigFile, so re-read the config
+	// rather than reusing the `gateway`/`users` map read earlier.
 	tokenPath := clitoken.CLITokenPath(home)
 	info, statErr := os.Stat(tokenPath)
 	if statErr != nil {
@@ -203,43 +203,18 @@ func TestRun_FreshInstall_WritesUsableConfig(t *testing.T) {
 		t.Error("cli.token is empty")
 	}
 
-	// Verify cli user is present in config.
-	var cliUser map[string]any
-	for _, u := range users {
-		um, ok := u.(map[string]any)
-		if !ok {
-			continue
-		}
-		if um["username"] == "cli" {
-			cliUser = um
-			break
-		}
+	raw2, readErr := os.ReadFile(filepath.Join(home, "config.json"))
+	if readErr != nil {
+		t.Fatalf("re-read config.json: %v", readErr)
 	}
-	if cliUser == nil {
-		// Re-read config since EnsureCLIToken writes after mutateConfigFile.
-		raw2, readErr := os.ReadFile(filepath.Join(home, "config.json"))
-		if readErr != nil {
-			t.Fatalf("re-read config.json: %v", readErr)
-		}
-		var cfg2 map[string]any
-		if jsonErr := json.Unmarshal(raw2, &cfg2); jsonErr != nil {
-			t.Fatalf("re-parse config.json: %v", jsonErr)
-		}
-		gw2, _ := cfg2["gateway"].(map[string]any)
-		users2, _ := gw2["users"].([]any)
-		for _, u := range users2 {
-			um, ok := u.(map[string]any)
-			if !ok {
-				continue
-			}
-			if um["username"] == "cli" {
-				cliUser = um
-				break
-			}
-		}
+	var cfg2 map[string]any
+	if jsonErr := json.Unmarshal(raw2, &cfg2); jsonErr != nil {
+		t.Fatalf("re-parse config.json: %v", jsonErr)
 	}
-	if cliUser == nil {
-		t.Errorf("cli user not found in config.json after onboard")
+	gw2, _ := cfg2["gateway"].(map[string]any)
+	cliToken, _ := gw2["cli_token"].(map[string]any)
+	if cliToken == nil {
+		t.Errorf("gateway.cli_token not found in config.json after onboard")
 	}
 }
 
@@ -463,7 +438,9 @@ func TestOnboard_MintsCLIToken(t *testing.T) {
 		t.Error("cli.token is empty")
 	}
 
-	// The cli user must be in config.json with a non-empty token_hash.
+	// The CLI token must be in config.json's dedicated gateway.cli_token slot
+	// (not a "cli"-named Gateway.Users entry — that model was retired in favor
+	// of a standalone Gateway.CLIToken field, decoupled from the human account).
 	raw, err := os.ReadFile(filepath.Join(home, "config.json"))
 	if err != nil {
 		t.Fatalf("read config.json: %v", err)
@@ -473,29 +450,17 @@ func TestOnboard_MintsCLIToken(t *testing.T) {
 		t.Fatalf("parse config.json: %v", err)
 	}
 	gw, _ := cfg["gateway"].(map[string]any)
-	users, _ := gw["users"].([]any)
-
-	var cliUser map[string]any
-	for _, u := range users {
-		um, ok := u.(map[string]any)
-		if !ok {
-			continue
-		}
-		if um["username"] == "cli" {
-			cliUser = um
-			break
-		}
+	cliToken, _ := gw["cli_token"].(map[string]any)
+	if cliToken == nil {
+		t.Fatalf("gateway.cli_token not found in config.json")
 	}
-	if cliUser == nil {
-		t.Fatalf("cli user not found in config.json")
-	}
-	th, _ := cliUser["token_hash"].(string)
+	th, _ := cliToken["hash"].(string)
 	if th == "" {
-		t.Errorf("cli user has empty token_hash")
+		t.Errorf("gateway.cli_token has empty hash")
 	}
 	// Verify the hash matches the plaintext token.
 	if err := bcrypt.CompareHashAndPassword([]byte(th), []byte(tok)); err != nil {
-		t.Errorf("cli token_hash does not match plaintext token: %v", err)
+		t.Errorf("cli_token hash does not match plaintext token: %v", err)
 	}
 
 	// Token must not appear in stdout.

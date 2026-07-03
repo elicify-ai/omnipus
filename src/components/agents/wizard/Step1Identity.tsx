@@ -12,7 +12,7 @@
 //   wizard-cli-chip (locked, only when initialCli is set),
 //   wizard-cli-path, wizard-env-overrides, wizard-cli-args
 
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import {
@@ -22,6 +22,8 @@ import {
 import { ModelSelector, type ModelGroup } from '@/components/ui/model-selector'
 import { InheritToggle } from './InheritToggle'
 import { CliPathValidationHint } from '../CliPathValidationHint'
+import { AutoAppliedFlags } from '../AutoAppliedFlags'
+import type { ExecutorDefaultsListState } from '@/hooks/useExecutorDefaults'
 import { useCliPathValidation } from '@/hooks/useCliPathValidation'
 import { useCliDetect } from '@/hooks/useCliDetect'
 import { detectEntryFor, resolveCliDetectHint, SUPPORTED_CLIS } from '@/lib/cliDetect'
@@ -212,6 +214,12 @@ export interface ExecutorInputsProps {
  */
 export function ExecutorInputs({ payload, setField, lockedCli }: ExecutorInputsProps) {
   const envOverrides = payload.executor_env_overrides ?? {}
+
+  // Tracks `<AutoAppliedFlags>`'s live fetch status so the "Additional CLI
+  // arguments" field's helper copy below can stop saying "(flags shown
+  // above)" when the block isn't actually showing anything (silent-failure
+  // fix, 7-reviewer gate).
+  const [flagsStatus, setFlagsStatus] = useState<ExecutorDefaultsListState['status']>('idle')
 
   // external-executor-cli-path-detection spec (ADR-030) — US-1/US-2: probe
   // the host once per mount (no query-client dependency, matching the
@@ -410,20 +418,32 @@ export function ExecutorInputs({ payload, setField, lockedCli }: ExecutorInputsP
         </div>
       </div>
 
+      <AutoAppliedFlags
+        cli={payload.cli}
+        testId="wizard-executor-defaults"
+        onStatusChange={setFlagsStatus}
+      />
+
       <div className="space-y-2">
         <label htmlFor="wizard-cli-args" className="text-sm font-medium">
-          CLI arguments
+          Additional CLI arguments
         </label>
         <Input
           id="wizard-cli-args"
           data-testid="wizard-cli-args"
           value={payload.executor_cli_args ?? ''}
           onChange={(e) => setField('executor_cli_args', e.target.value)}
-          placeholder="--verbose --output json"
+          placeholder={
+            flagsStatus === 'success'
+              ? "e.g. --add-dir /extra/path (flags shown above are applied automatically and can't be overridden here)"
+              : 'e.g. --add-dir /extra/path'
+          }
           className="font-mono text-xs"
         />
         <p className="text-[11px] text-[var(--color-muted)]">
-          Space-separated args passed before the user prompt.
+          {flagsStatus === 'success'
+            ? 'Space-separated args passed before the user prompt, in addition to the flags Omnipus applies automatically (shown above).'
+            : 'Space-separated args passed before the user prompt, in addition to the flags Omnipus applies automatically when this agent runs.'}
         </p>
       </div>
     </div>

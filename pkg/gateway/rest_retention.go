@@ -31,7 +31,8 @@ import (
 // Changes are hot-reload (requires_restart: false) — the nightly goroutine
 // re-reads cfg fresh every tick.
 //
-// Admin-only: non-admin PUT returns 403. Emits audit with resource="storage.retention".
+// Gated by adminWrap (withAuth → RequireNotBypass); dev_mode_bypass returns 503.
+// Emits audit with resource="storage.retention".
 func (a *restAPI) HandleRetention(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -163,7 +164,8 @@ func (a *restAPI) putRetention(w http.ResponseWriter, r *http.Request) {
 // TryLock; if the nightly sweep is already in progress, responds 409 immediately.
 // When retention is disabled (config.storage.retention.disabled = true) the
 // sweep is skipped and the response includes skipped_reason="disabled".
-// Admin-only; emits audit with resource="storage.retention.sweep".
+// Gated by adminWrap (withAuth → RequireNotBypass); dev_mode_bypass returns 503.
+// Emits audit with resource="storage.retention.sweep".
 func (a *restAPI) HandleRetentionSweep(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
