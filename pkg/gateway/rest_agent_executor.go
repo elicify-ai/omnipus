@@ -46,16 +46,19 @@ type executorRequestInput struct {
 	CliArgs      *string
 }
 
-// executorCliStr dereferences an optional generated CLI enum pointer to its string
-// value. Returns "" when the pointer is nil. Agent.Executor.Cli and
-// AgentUpdateRequest.Executor.Cli resolve to the shared gen.ExternalCliTool
-// type (contracts/components/schemas/ExternalCli.yaml, $ref'd — see
-// ExecutorConfig.yaml#/properties/cli), but AgentCreateRequestSubagent3p's
-// Executor.Cli does NOT — the discriminated union's oneOf variant inlines its
-// $ref'd fields as an anonymous struct (see CLAUDE.md's "Discriminated unions
-// are the one exception" note), so that one gets its own distinct pointer
-// type. This generic exists precisely to paper over that: one helper for
-// every concrete Cli pointer type, named or anonymous.
+// executorCliStr dereferences an optional generated CLI enum pointer to its
+// string value. Returns "" when the pointer is nil. Verified against the
+// generated output (not assumed): Agent.Executor.Cli, AgentUpdateRequest.
+// Executor.Cli, and AgentCreateRequestSubagent3p.Executor.Cli all resolve to
+// the SAME shared gen.ExternalCliTool type (contracts/components/schemas/
+// ExternalCli.yaml, $ref'd — see ExecutorConfig.yaml#/properties/cli) — the
+// discriminated union's oneOf variant inlines the surrounding Executor
+// *struct* as anonymous, but the $ref'd Cli *field* inside it still points
+// at the named shared type, not an anonymous one. Every current call site
+// already passes *ExternalCliTool; the generic exists so this helper (and
+// the locally-declared mirror struct in setAgentExecutorResponse below)
+// keeps working unchanged if a future variant's Cli field ever is inlined
+// as a genuinely distinct anonymous type.
 func executorCliStr[T ~string](cli *T) string {
 	if cli == nil {
 		return ""

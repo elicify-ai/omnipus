@@ -64,8 +64,8 @@ func csrfTargets() []csrfTarget {
 		{
 			// /api/v1/agents exercises the generic state-changing route — it
 			// is NOT in the CSRF exempt list, so it is the canonical probe.
-			method:         http.MethodPost,
-			path:           "/api/v1/agents",
+			method: http.MethodPost,
+			path:   "/api/v1/agents",
 			// `type` is required since the ADR-034 discriminated-union create
 			// contract — without it the request 400s before the CSRF layer's
 			// success-path assertion can be exercised.
