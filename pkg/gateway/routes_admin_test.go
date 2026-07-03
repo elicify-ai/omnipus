@@ -242,8 +242,8 @@ func TestAdminRoutes_DevModeBypassReturn503(t *testing.T) {
 
 			assert.Equal(t, http.StatusServiceUnavailable, w.Code,
 				"route %s %s: bypass mode must return 503", route.method, route.path)
-			assert.Contains(t, w.Body.String(), "dev-mode-bypass",
-				"route %s %s: error body must mention 'dev-mode-bypass'", route.method, route.path)
+			assert.Contains(t, w.Body.String(), "dev_mode_bypass",
+				"route %s %s: error body must mention 'dev_mode_bypass'", route.method, route.path)
 			passed++
 		})
 	}
@@ -402,6 +402,6 @@ func TestSandboxConfigPUT_RealMux_DevModeBypass503(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, w.Code,
 		"PUT /api/v1/security/sandbox-config must return 503 under dev_mode_bypass via real mux; got body: %s",
 		w.Body.String())
-	assert.Contains(t, w.Body.String(), "dev-mode-bypass",
-		"503 body must mention 'dev-mode-bypass'")
+	assert.Contains(t, w.Body.String(), "dev_mode_bypass",
+		"503 body must mention 'dev_mode_bypass'")
 }
