@@ -48,8 +48,8 @@ func TestRequireNotBypass_BypassOn_Returns503(t *testing.T) {
 
 	var body map[string]string
 	require.NoError(t, json.NewDecoder(w.Body).Decode(&body))
-	assert.True(t, strings.Contains(body["error"], "dev-mode-bypass"),
-		"error body must mention dev-mode-bypass, got %q", body["error"])
+	assert.True(t, strings.Contains(body["error"], "dev_mode_bypass"),
+		"error body must mention dev_mode_bypass, got %q", body["error"])
 }
 
 // TestRequireNotBypass_BypassOff_CallsNext verifies that when
