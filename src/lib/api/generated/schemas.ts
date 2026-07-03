@@ -1337,7 +1337,7 @@ export const AgentCreateRequestMain =
     timeout_seconds: z.number().int().gte(0).optional(),
     max_tool_iterations: z.number().int().gte(0).optional(),
     steering_mode: z.enum(["one-at-a-time", "queue-and-process"]).optional(),
-  }) satisfies z.ZodType<AgentCreateRequestMain>;
+  }).strict() satisfies z.ZodType<AgentCreateRequestMain>;
 export const AgentCreateRequestSubagent =
   z.object({
     type: z.literal("Subagent"),
@@ -1378,7 +1378,7 @@ export const AgentCreateRequestSubagent =
     shell_policy: AgentShellPolicy.optional(),
     timeout_seconds: z.number().int().gte(0).optional(),
     max_tool_iterations: z.number().int().gte(0).optional(),
-  }) satisfies z.ZodType<AgentCreateRequestSubagent>;
+  }).strict() satisfies z.ZodType<AgentCreateRequestSubagent>;
 export const AgentCreateRequestSubagent3p =
   z.object({
     type: z.literal("subagent_3p"),
@@ -1405,7 +1405,7 @@ export const AgentCreateRequestSubagent3p =
     delegation_policy: delegation_policy.optional(),
     executor: ExecutorConfig,
     timeout_seconds: z.number().int().gte(0).optional(),
-  }) satisfies z.ZodType<AgentCreateRequestSubagent3p>;
+  }).strict() satisfies z.ZodType<AgentCreateRequestSubagent3p>;
 export const AgentCreateRequest =
   z.discriminatedUnion("type", [
     AgentCreateRequestMain,

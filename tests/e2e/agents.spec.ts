@@ -234,14 +234,16 @@ test('(g) session with deleted agent shows read-only transcript and "Agent remov
   );
   const authHeaders = { Authorization: `Bearer ${bearerToken}` };
 
-  // Step 1: Create a temporary agent via API. `soul` is required since the
-  // v0.1.1 agent-form refactor; type='custom' is mapped to Main on the wire.
+  // Step 1: Create a temporary agent via API. `soul` and `type` are required
+  // since the v0.1.1 discriminated-union create contract (ADR-034); the wire
+  // enum is Main / Subagent / subagent_3p — 'custom' is the PERSISTED config
+  // constant and was never a legal wire value.
   const resp = await page.request.post('/api/v1/agents', {
     headers: authHeaders,
     data: {
       name: `TempAgent-${Date.now()}`,
       soul: 'Temporary agent test soul',
-      type: 'custom',
+      type: 'Main',
       model: 'openrouter/google/gemini-2.0-flash-001',
     },
   });

@@ -110,7 +110,7 @@ echo "▸ Generating schemas.ts (Zod) from contracts/openapi.yaml …"
 # list is a deliberate manual mapping (W2-9 fix). The runtime result is the
 # same as if the YAML were `additionalProperties: false` AND we chained
 # `.strict()`: unknown fields are rejected.
-STRICT_SCHEMAS=${STRICT_SCHEMAS:-"FallbackModel"}
+STRICT_SCHEMAS=${STRICT_SCHEMAS:-"FallbackModel AgentCreateRequestMain AgentCreateRequestSubagent AgentCreateRequestSubagent3p"}
 STRICT_RAW="$GEN/_schemas.generated.tmp.ts"
 for name in $STRICT_SCHEMAS; do
   if grep -q "^export const ${name}:" "$STRICT_RAW"; then

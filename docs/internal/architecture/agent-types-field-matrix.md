@@ -88,5 +88,8 @@ UI; inherits `agents.defaults`.
 4. The create contract is a discriminated union (`AgentCreateRequestMain` /
    `AgentCreateRequestSubagent` / `AgentCreateRequestSubagent3p`, hosted
    inline in `contracts/openapi.yaml`, `additionalProperties: false`,
-   `type` required). Update stays flat with server-side per-type rejection
-   (`pkg/gateway/agent_field_rules.go`).
+   `type` required, strict decode unconditional). Update stays flat with
+   server-side per-type rejection (`pkg/gateway/agent_field_rules.go`).
+   Ratified — including WHY the union wrapper is inline (oapi-codegen
+   file-ref-oneOf limitation) and the breaking-change notes — in
+   [ADR-034](ADR-034-agent-create-discriminated-union.md).
