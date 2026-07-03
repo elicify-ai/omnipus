@@ -180,3 +180,45 @@ func TestDeleteAgentMailbox(t *testing.T) {
 		assert.False(t, exists, "mailbox entry must be removed from config.json")
 	}
 }
+
+func TestListMailboxes_EmptyAndConfigured(t *testing.T) {
+	// Empty: no mailboxes configured → 200 with an empty (non-null) list —
+	// this endpoint must NEVER 404, so the SPA can render mailbox status
+	// without per-agent probe requests (each probe 404 lands in the browser
+	// console and trips the e2e zero-console-errors gate).
+	api := newMailboxTestAPI(t, nil)
+	w := httptest.NewRecorder()
+	api.listMailboxes(w, httptest.NewRequest(http.MethodGet, "/api/v1/mailboxes", nil))
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+	var empty gen.MailboxListResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &empty))
+	require.NotNil(t, empty.Mailboxes)
+	assert.Empty(t, empty.Mailboxes)
+	assert.Contains(t, w.Body.String(), `"mailboxes":[]`, "empty list must serialize as [], not null")
+
+	// Configured: one mailbox with a resolvable password → one entry,
+	// configured=true, and the secret never appears in the body.
+	api = newMailboxTestAPI(t, map[string]config.MailboxConfig{
+		"mia": {
+			Enabled: true, WorkspaceID: "ws_my", IMAPHost: "imap.x.com",
+			SMTPHost: "smtp.x.com", Username: "me@x.com", PasswordRef: "mailbox_mia_password",
+		},
+	})
+	require.NoError(t, api.credStore.Set("mailbox_mia_password", "secret"))
+
+	w = httptest.NewRecorder()
+	api.listMailboxes(w, httptest.NewRequest(http.MethodGet, "/api/v1/mailboxes", nil))
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+	var resp gen.MailboxListResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Mailboxes, 1)
+	assert.Equal(t, "mia", resp.Mailboxes[0].AgentId)
+	assert.True(t, resp.Mailboxes[0].Configured)
+	assert.NotContains(t, w.Body.String(), "secret", "password must never be returned")
+
+	// Non-GET → 405.
+	w = httptest.NewRecorder()
+	api.listMailboxes(w, httptest.NewRequest(http.MethodPost, "/api/v1/mailboxes", nil))
+	require.Equal(t, http.StatusMethodNotAllowed, w.Code)
+}

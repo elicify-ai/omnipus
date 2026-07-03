@@ -385,3 +385,106 @@ func mustJSONString(t *testing.T, s string) string {
 	require.NoError(t, err)
 	return string(b)
 }
+
+// TestTestChannel_SlackRequiresAppToken guards the channelRequiredFields fix:
+// the slack constructor (pkg/channels/slack/slack.go NewSlackChannel) hard
+// requires BOTH bot_token and app_token, so "Test" reporting success with only
+// bot_token configured was a lie — an operator would enable slack and it would
+// fail to construct at boot. Both refs must resolve for success.
+func TestTestChannel_SlackRequiresAppToken(t *testing.T) {
+	api := newChannelTestAPI(t, `{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],"channels":{}}`)
+
+	// Only bot_token configured — Test must fail and name app_token.
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/channels/slack/configure",
+		strings.NewReader(`{"bot_token":"xoxb-aaa"}`))
+	r.Header.Set("Content-Type", "application/json")
+	api.configureChannel(w, r, "slack")
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+	w2 := httptest.NewRecorder()
+	api.testChannel(w2, "slack")
+	require.Equal(t, http.StatusOK, w2.Code)
+	var resp gen.ChannelTestResponse
+	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &resp))
+	assert.False(t, resp.Success, "slack must fail Test with only bot_token configured")
+	assert.Contains(t, resp.Message, "app_token")
+
+	// Add app_token — Test must now succeed.
+	w3 := httptest.NewRecorder()
+	r3 := httptest.NewRequest(http.MethodPut, "/api/v1/channels/slack/configure",
+		strings.NewReader(`{"app_token":"xapp-bbb"}`))
+	r3.Header.Set("Content-Type", "application/json")
+	api.configureChannel(w3, r3, "slack")
+	require.Equal(t, http.StatusOK, w3.Code, "body=%s", w3.Body.String())
+
+	w4 := httptest.NewRecorder()
+	api.testChannel(w4, "slack")
+	var resp4 gen.ChannelTestResponse
+	require.NoError(t, json.Unmarshal(w4.Body.Bytes(), &resp4))
+	assert.True(t, resp4.Success, "slack must pass Test once both bot_token and app_token are configured: %s", resp4.Message)
+}
+
+// TestTestChannel_GoogleChatRequiresAuthPath guards the special-case fix in
+// testChannel: channelRequiredFields["google-chat"] is deliberately {} because
+// the real requirement is either/or (webhook_url OR service_account_json OR
+// service_account_file), which the flat AND-list can't express. Before this
+// fix "Test" reported success on a completely blank google-chat instance.
+func TestTestChannel_GoogleChatRequiresAuthPath(t *testing.T) {
+	// A blank instance (no auth path configured at all) must fail with a clear
+	// message, not silently report success.
+	blank := newChannelTestAPI(t, `{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],"channels":{"google-chat":{"enabled":false}}}`)
+	w := httptest.NewRecorder()
+	blank.testChannel(w, "google-chat")
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp gen.ChannelTestResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.False(t, resp.Success, "a blank google-chat instance must fail Test")
+	assert.Contains(t, resp.Message, "webhook_url")
+	assert.Contains(t, resp.Message, "service_account")
+
+	// webhook_url configured (via credential store, ref-routed) satisfies the
+	// requirement on its own.
+	webhookAPI := newChannelTestAPI(t, `{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],"channels":{}}`)
+	wc := httptest.NewRecorder()
+	rc := httptest.NewRequest(http.MethodPut, "/api/v1/channels/google-chat/configure",
+		strings.NewReader(`{"mode":"webhook","webhook_url":"https://chat.googleapis.com/v1/spaces/AAA/messages?key=K&token=T"}`))
+	rc.Header.Set("Content-Type", "application/json")
+	webhookAPI.configureChannel(wc, rc, "google-chat")
+	require.Equal(t, http.StatusOK, wc.Code, "body=%s", wc.Body.String())
+	w2 := httptest.NewRecorder()
+	webhookAPI.testChannel(w2, "google-chat")
+	var resp2 gen.ChannelTestResponse
+	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &resp2))
+	assert.True(t, resp2.Success, "webhook_url alone must satisfy the auth-path requirement: %s", resp2.Message)
+
+	// service_account_file (a non-secret, inline path field — not credential
+	// routed) also satisfies the requirement on its own.
+	saFileAPI := newChannelTestAPI(t,
+		`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],"channels":{"google-chat":{"enabled":false,"mode":"bot","service_account_file":"/etc/omnipus/gchat-sa.json"}}}`)
+	w3 := httptest.NewRecorder()
+	saFileAPI.testChannel(w3, "google-chat")
+	var resp3 gen.ChannelTestResponse
+	require.NoError(t, json.Unmarshal(w3.Body.Bytes(), &resp3))
+	assert.True(t, resp3.Success, "service_account_file alone must satisfy the auth-path requirement: %s", resp3.Message)
+}
+
+// TestChannels_EmailIsUnknown guards the M11 retirement of the legacy
+// /channels/email/* surface: email is NOT a channel (config.knownChannelTypes
+// deliberately excludes it; the SPA uses /agents/{id}/mailbox exclusively).
+// validChannelIDs, channelSensitiveFields, and channelRequiredFields must not
+// carry an "email" entry — the routing gate in HandleChannels must 404 it as
+// an unknown channel type, not treat it as a valid-but-misconfigured channel.
+func TestChannels_EmailIsUnknown(t *testing.T) {
+	assert.False(t, validChannelIDs["email"], "email must not be a valid channel ID")
+	_, hasSensitive := channelSensitiveFields["email"]
+	assert.False(t, hasSensitive, "channelSensitiveFields must not carry a legacy email entry")
+	_, hasRequired := channelRequiredFields["email"]
+	assert.False(t, hasRequired, "channelRequiredFields must not carry a legacy email entry")
+
+	api := newChannelTestAPI(t, `{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],"channels":{}}`)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/channels/email", nil)
+	api.HandleChannels(w, r)
+	assert.Equal(t, http.StatusNotFound, w.Code, "GET /channels/email must 404 as an unknown channel type")
+}

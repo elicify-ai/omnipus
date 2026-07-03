@@ -3994,6 +3994,9 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	cm.RegisterHTTPHandler("/api/v1/channels", a.withAuth(a.HandleChannels))
 	cm.RegisterHTTPHandler("/api/v1/channels/", a.withAuth(a.HandleChannels))
 	cm.RegisterHTTPHandler("/api/v1/agents/", a.withAuth(a.HandleAgents))
+	// M11: list all configured mailboxes (never 404s; empty list = none) so the
+	// SPA doesn't have to probe every agent's /agents/{id}/mailbox endpoint.
+	cm.RegisterHTTPHandler("/api/v1/mailboxes", a.withAuth(a.listMailboxes))
 	cm.RegisterHTTPHandler("/api/v1/config/gateway/rotate-token", a.withAuth(a.rotateGatewayToken))
 	cm.RegisterHTTPHandler("/api/v1/activity", a.withAuth(a.HandleActivity))
 
@@ -6399,7 +6402,9 @@ var validChannelIDs = map[string]bool{
 	"feishu": true, "dingtalk": true, "wecom": true, "weixin": true,
 	"line": true, "qq": true, "irc": true,
 	"matrix": true, "google-chat": true,
-	"email": true,
+	// "email" is deliberately absent — email is NOT a channel (M11:
+	// config.knownChannelTypes excludes it too). The SPA uses
+	// /agents/{id}/mailbox exclusively; /channels/email/* is unknown and 404s.
 }
 
 // channelWildcardIdx returns the index of the channel-wildcard AgentBinding
@@ -7101,8 +7106,7 @@ var channelSensitiveFields = map[string][]string{
 	"weixin":      {"token"},
 	"whatsapp":    {},
 	"google-chat": {"webhook_url", "service_account_json"},
-	// email: password is the only secret field (username is public config, not a secret).
-	"email": {"password"},
+	// "email" is deliberately absent — see validChannelIDs.
 }
 
 // channelFilesystemPathFields is the set of ChannelInstanceConfig JSON keys that
@@ -7128,7 +7132,7 @@ var channelFilesystemPathFields = []string{
 var channelRequiredFields = map[string][]string{
 	"telegram":    {"token"},
 	"discord":     {"token"},
-	"slack":       {"bot_token"},
+	"slack":       {"bot_token", "app_token"},
 	"feishu":      {"app_id", "app_secret"},
 	"matrix":      {"homeserver", "user_id", "access_token"},
 	"line":        {"channel_secret", "channel_access_token"},
@@ -7139,8 +7143,7 @@ var channelRequiredFields = map[string][]string{
 	"weixin":      {"token"},
 	"whatsapp":    {},
 	"google-chat": {},
-	// email: imap_host, smtp_host, username, and password (credential) are all required.
-	"email": {"imap_host", "smtp_host", "username", "password"},
+	// "email" is deliberately absent — see validChannelIDs.
 }
 
 // redactChannelConfig returns a copy of cfg with sensitive fields replaced by a
@@ -7337,6 +7340,51 @@ func (a *restAPI) testChannel(w http.ResponseWriter, channelID string) {
 
 	// Use the base channel type for type-level field lookups (ADR-029 Gate 0).
 	testBaseType, _ := config.ParseInstanceKey(channelID)
+
+	// Google Chat's required config is either/or (see NewGoogleChatChannel):
+	// webhook mode needs webhook_url, bot mode needs service_account_json or
+	// service_account_file. channelRequiredFields is a flat AND-list and
+	// cannot express that — leaving it {} let "Test" report success on a
+	// completely blank instance. Give it its own branch instead of the
+	// generic required-fields loop below.
+	if testBaseType == "google-chat" {
+		webhookRef, _ := chCfg["webhook_url_ref"].(string)
+		hasWebhook, err := a.credentialRefResolves(webhookRef)
+		if err != nil {
+			slog.Error("rest: channel test credential check", "channel", channelID, "field", "webhook_url", "error", err)
+			jsonOK(w, gen.ChannelTestResponse{
+				Success: false,
+				Message: "credential store unavailable — unlock it (set OMNIPUS_MASTER_KEY) and retry",
+			})
+			return
+		}
+		saJSONRef, _ := chCfg["service_account_json_ref"].(string)
+		hasSAJSON, err := a.credentialRefResolves(saJSONRef)
+		if err != nil {
+			slog.Error("rest: channel test credential check", "channel", channelID, "field", "service_account_json", "error", err)
+			jsonOK(w, gen.ChannelTestResponse{
+				Success: false,
+				Message: "credential store unavailable — unlock it (set OMNIPUS_MASTER_KEY) and retry",
+			})
+			return
+		}
+		saFile, _ := chCfg["service_account_file"].(string)
+		hasSAFile := strings.TrimSpace(saFile) != ""
+
+		if !hasWebhook && !hasSAJSON && !hasSAFile {
+			jsonOK(w, gen.ChannelTestResponse{
+				Success: false,
+				Message: "missing required fields: configure webhook_url (webhook mode) or service_account_json / service_account_file (bot mode)",
+			})
+			return
+		}
+		jsonOK(w, gen.ChannelTestResponse{
+			Success: true,
+			Message: fmt.Sprintf("channel %q is configured", channelID),
+		})
+		return
+	}
+
 	required := channelRequiredFields[testBaseType]
 	sensitive := make(map[string]bool, len(channelSensitiveFields[testBaseType]))
 	for _, f := range channelSensitiveFields[testBaseType] {

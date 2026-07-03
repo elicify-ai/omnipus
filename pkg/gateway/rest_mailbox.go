@@ -1,10 +1,12 @@
 package gateway
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/dapicom-ai/omnipus/pkg/agent"
@@ -309,6 +311,59 @@ func (a *restAPI) deleteAgentMailbox(w http.ResponseWriter, agentID string) {
 	}
 
 	jsonOK(w, gen.OperationResult{Success: true})
+}
+
+// listMailboxes handles GET /api/v1/mailboxes (M11). Returns every configured
+// mailbox (cap-1 per workspace in 0.1.0, so typically zero or one). An empty
+// list means "no mailbox configured" — unlike the per-agent GET, this endpoint
+// never 404s, so the SPA can render mailbox status without probing each
+// agent's mailbox endpoint (each probe 404 lands in the browser console and
+// trips the e2e zero-console-errors gate).
+func (a *restAPI) listMailboxes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	cfg := a.agentLoop.GetConfig()
+
+	// Deterministic order: Go map iteration is randomized.
+	agentIDs := make([]string, 0, len(cfg.Mailboxes))
+	for agentID := range cfg.Mailboxes {
+		agentIDs = append(agentIDs, agentID)
+	}
+	sort.Strings(agentIDs)
+
+	items := make([]gen.Mailbox, 0, len(agentIDs))
+	for _, agentID := range agentIDs {
+		mb := cfg.Mailboxes[agentID]
+		configured := false
+		if strings.TrimSpace(mb.PasswordRef) != "" {
+			ok, err := a.credentialRefResolves(mb.PasswordRef)
+			if err != nil {
+				slog.Error("rest: mailbox credential check", "agent_id", agentID, "error", err)
+				jsonErr(w, http.StatusInternalServerError,
+					"credential store unavailable — unlock it (set OMNIPUS_MASTER_KEY) and retry")
+				return
+			}
+			configured = ok
+		}
+		items = append(items, mailboxToWire(agentID, mb, configured))
+	}
+
+	// Round-trip []gen.Mailbox into the generated list type (whose element is an
+	// anonymous inline struct, structurally identical to gen.Mailbox) — same
+	// idiom as handleListSchedules; no hand-written wire struct (constraint #8).
+	buf, err := json.Marshal(map[string][]gen.Mailbox{"mailboxes": items})
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	var out gen.MailboxListResponse
+	if err := json.Unmarshal(buf, &out); err != nil {
+		jsonErr(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	jsonOK(w, out)
 }
 
 // mailboxToWire converts a stored MailboxConfig to the Mailbox wire type. The

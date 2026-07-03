@@ -798,16 +798,11 @@ export function ConnectorsScreen() {
   const webchatChannel = allChannels.find((c) => c.id === WEBCHAT_ID)
 
   // Email mailbox status (M11): the mailbox is per-agent, NOT a channel — the
-  // /channels list has no email entry. Probe the agents' mailbox endpoints
-  // (cap-1, 404-tolerant) to know whether a mailbox account is configured.
-  const { data: emailAgents = [], isSuccess: emailAgentsLoaded } = useQuery({
-    queryKey: ['agents'],
-    queryFn: fetchAgents,
-  })
+  // /channels list has no email entry. GET /mailboxes lists all configured
+  // mailboxes without 404s (empty list = none), so no per-agent probing.
   const { data: configuredMailbox } = useQuery({
     queryKey: ['agent-mailboxes'],
-    queryFn: () => findConfiguredMailbox(emailAgents.filter((a) => !isWorker(a)).map((a) => a.id)),
-    enabled: emailAgentsLoaded,
+    queryFn: findConfiguredMailbox,
   })
 
   // "Configured" (FR-008) = has a persisted instance — the backend only sets

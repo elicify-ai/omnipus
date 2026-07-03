@@ -170,20 +170,20 @@ export function EmailMailboxPanel({ open, onOpenChange }: EmailMailboxPanelProps
   const [form, setForm] = useState<MailboxFormState>(EMPTY_FORM)
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({})
 
-  const { data: agents = [], isError: agentsError, isSuccess: agentsLoaded } = useQuery({
+  const { data: agents = [], isError: agentsError } = useQuery({
     queryKey: ['agents'],
     queryFn: fetchAgents,
     enabled: open,
   })
 
-  // The mailbox is per-agent (cap-1 in 0.1.0): probe the non-worker agents'
-  // mailbox endpoints in parallel (404-tolerant) and use the first hit.
-  // (The legacy GET /channels/email path is dead — "email" is not a channel
-  // type, so the ADR-029 grammar gate rejects it.)
+  // The mailbox is per-agent (cap-1 in 0.1.0). GET /mailboxes lists all of
+  // them without 404s — an empty list simply means none configured. (The
+  // legacy GET /channels/email path is dead — "email" is not a channel type,
+  // so the ADR-029 grammar gate rejects it.)
   const { data: mailbox, isLoading: configLoading } = useQuery({
     queryKey: ['agent-mailboxes'],
-    queryFn: () => findConfiguredMailbox(agents.filter((a) => !isWorker(a)).map((a) => a.id)),
-    enabled: open && agentsLoaded,
+    queryFn: findConfiguredMailbox,
+    enabled: open,
   })
 
   const { data: workspaces = [], isError: workspacesError } = useQuery({
@@ -292,7 +292,7 @@ export function EmailMailboxPanel({ open, onOpenChange }: EmailMailboxPanelProps
     ...workspaces.map((w) => ({ value: w.id, label: w.name })),
   ]
 
-  const isLoading = configLoading && agentsLoaded
+  const isLoading = configLoading
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>

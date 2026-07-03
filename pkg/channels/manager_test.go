@@ -1324,6 +1324,49 @@ func TestBootFatalError_WhatsAppNativeIsNonFatal(t *testing.T) {
 	}
 }
 
+// TestBootFatalError_MatrixIsNonFatal asserts that a matrix construction
+// failure (e.g. the init_stub.go factory on a non-goolm build) does NOT abort
+// boot (bootFatalError returns nil), while a failure of any other channel IS
+// boot-fatal. Mirrors TestBootFatalError_WhatsAppNativeIsNonFatal.
+func TestBootFatalError_MatrixIsNonFatal(t *testing.T) {
+	// Only matrix failed → non-fatal → boot proceeds.
+	onlyMatrix := []ChannelInitError{
+		{
+			Name:    "matrix",
+			Channel: "matrix",
+			Err:     errors.New("matrix channel requires a goolm-tagged build"),
+		},
+	}
+	if err := bootFatalError(onlyMatrix); err != nil {
+		t.Fatalf("matrix failure must be non-fatal, got: %v", err)
+	}
+
+	// A namespaced matrix instance ("matrix.eu") is also non-fatal.
+	namespacedMatrix := []ChannelInitError{
+		{Name: "matrix.eu", Channel: "matrix", Err: errors.New("matrix channel requires a goolm-tagged build")},
+	}
+	if err := bootFatalError(namespacedMatrix); err != nil {
+		t.Fatalf("namespaced matrix failure must be non-fatal, got: %v", err)
+	}
+
+	// A non-matrix failure is still fatal, and the matrix failure must not be
+	// folded into the fatal error.
+	withTelegram := []ChannelInitError{
+		{Name: "matrix", Channel: "matrix", Err: errors.New("matrix channel requires a goolm-tagged build")},
+		{Name: "telegram", Channel: "Telegram", Err: errors.New("bad token")},
+	}
+	err := bootFatalError(withTelegram)
+	if err == nil {
+		t.Fatal("a non-matrix channel failure must abort boot")
+	}
+	if !strings.Contains(err.Error(), "Telegram") {
+		t.Fatalf("fatal error must mention the failing non-matrix channel, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "goolm") {
+		t.Fatalf("matrix must be excluded from the boot-fatal error, got: %v", err)
+	}
+}
+
 // TestRecordChannelFailure_SurfacedAsDegraded asserts that a recorded
 // whatsapp_native failure is surfaced via FailedChannels (degraded status) with
 // a message that tells the operator the native build is required — so even

@@ -1184,6 +1184,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/mailboxes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List all configured email mailbox accounts (M11)
+         * @description Returns every configured mailbox account (cap-1 per workspace in 0.1.0, so typically zero or one). The mailbox password is never returned; each entry's `configured` flag reports whether a password is on file in the credential store. An empty list means no mailbox is configured — this endpoint never 404s, so the SPA can show mailbox status without per-agent probe requests.
+         */
+        get: operations["listMailboxes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/config/gateway/rotate-token": {
         parameters: {
             query?: never;
@@ -6178,6 +6198,14 @@ export interface components {
             password?: string;
         };
         /**
+         * MailboxListResponse
+         * @description All configured email mailbox accounts (M11). Cap-1 per workspace in 0.1.0, so the list is typically empty or a single entry. Returning a list (rather than a 404-on-absent single resource) lets the SPA learn "no mailbox is configured" without probing every agent's mailbox endpoint and generating console-visible 404s.
+         */
+        MailboxListResponse: {
+            /** @description Every configured mailbox, one entry per owning agent. */
+            mailboxes: components["schemas"]["Mailbox"][];
+        };
+        /**
          * BackupCreateResponse
          * @description Response from POST /api/v1/backup. Returns the path, size, and creation time of the new backup archive.
          */
@@ -10428,6 +10456,28 @@ export interface operations {
             500: components["responses"]["500InternalServerError"];
         };
     };
+    listMailboxes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description All configured mailboxes (possibly empty). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailboxListResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
     rotateGatewayToken: {
         parameters: {
             query?: never;
@@ -13115,6 +13165,7 @@ export type ChannelCreateRequest = components["schemas"]["ChannelCreateRequest"]
 export type ChannelCreateResponse = components["schemas"]["ChannelCreateResponse"];
 export type Mailbox = components["schemas"]["Mailbox"];
 export type MailboxConfigureRequest = components["schemas"]["MailboxConfigureRequest"];
+export type MailboxListResponse = components["schemas"]["MailboxListResponse"];
 export type BackupCreateResponse = components["schemas"]["BackupCreateResponse"];
 export type OnboardingStatusResponse = components["schemas"]["OnboardingStatusResponse"];
 export type OperationResult = components["schemas"]["OperationResult"];
