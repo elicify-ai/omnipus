@@ -427,7 +427,14 @@ export function ChannelConfigPanel({
   useEffect(() => {
     if (!currentConfig) return
     if (isDirtyRef.current) return
-    setFormValues(currentConfig)
+    // Strip server-managed keys before hydrating the form. The ADR-029 binding
+    // fields live in the SAME config object for a bound instance, but configure
+    // REJECTS them with 400 (binding must go through PUT /channels/{id}/routing,
+    // which enforces CoreTeam membership) — echoing them back broke Save/Save &
+    // Enable for every instance bound at creation (live-UAT: WhatsApp QR never
+    // appeared because the enable never happened).
+    const { identity: _identity, workspace_id: _workspaceId, ...editable } = currentConfig as Record<string, unknown>
+    setFormValues(editable)
     // Detect pre-existing method on load: prefer service_account if any SA field is set.
     if (isGoogleChat) {
       const cfg = currentConfig as Record<string, unknown>

@@ -713,6 +713,44 @@ describe('ChannelConfigPanel — Google Chat authGroup picker (#324 / US-C2)', (
     expect(Object.prototype.hasOwnProperty.call(payload, 'service_account_file')).toBe(true)
     expect(payload['service_account_file']).toBe('')
   })
+
+  it('REGRESSION: never echoes routing-owned keys (identity/workspace_id) back through configure', async () => {
+    // A create-time-bound instance's config contains its ADR-029 binding. The
+    // configure endpoint REJECTS identity/workspace_id with 400 (binding must go
+    // through PUT routing, which enforces CoreTeam membership) — so hydrating
+    // them into formValues broke Save/Save & Enable for every bound instance
+    // (live-UAT: the WhatsApp QR never appeared because enable always 400'd).
+    vi.mocked(configureChannel).mockResolvedValue(undefined)
+
+    const client = makeQueryClient()
+    client.setQueryData(['channel-config', 'telegram.sales'], {
+      type: 'telegram',
+      enabled: false,
+      token: '',
+      identity: { kind: 'agent', id: 'mia' },
+      workspace_id: 'ws-1',
+    })
+    client.setQueryData(['channel-routing', 'telegram.sales'], { default_agent_id: 'mia', workspace_id: 'ws-1' })
+    client.setQueryData(['agents'], [])
+
+    render(
+      <QueryClientProvider client={client}>
+        <ChannelConfigPanel channelId="telegram.sales" channelName="Telegram" open={true} onOpenChange={vi.fn()} />
+      </QueryClientProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /^Save$/ })).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }))
+
+    await waitFor(() => {
+      expect(vi.mocked(configureChannel)).toHaveBeenCalled()
+    })
+    const [, payload] = vi.mocked(configureChannel).mock.calls[0] as [string, Record<string, unknown>]
+    expect(Object.prototype.hasOwnProperty.call(payload, 'identity')).toBe(false)
+    expect(Object.prototype.hasOwnProperty.call(payload, 'workspace_id')).toBe(false)
+  })
 })
 
 describe('ChannelConfigPanel — human-label errors + a11y (#326 / US-C4)', () => {
