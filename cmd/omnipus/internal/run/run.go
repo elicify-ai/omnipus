@@ -1,4 +1,10 @@
-//go:build goolm && stdjson
+// stdjson-only gate (NOT goolm): this file needs nothing from goolm — the tag
+// only matters for pkg/channels/matrix, which degrades gracefully when absent.
+// Gating on stdjson alone keeps the fail-fast against tag-less builds while
+// letting the mipsle targets (which must strip goolm: its transitive deps
+// don't build on mips softfloat) link. A goolm gate here broke build-lite's
+// mipsle line and build-linux-mipsle with "function main is undeclared".
+//go:build stdjson
 
 // Package run is the one-shot execute client for the minimized CLI. It connects
 // to a running local Omnipus gateway over WebSocket, sends a user message, streams

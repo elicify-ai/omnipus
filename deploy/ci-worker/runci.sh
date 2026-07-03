@@ -46,7 +46,19 @@ ensure_spa_stub() {
 run_spaembed() { npm run build && rm -rf pkg/gateway/spa && cp -r dist/spa pkg/gateway/spa; }
 
 run_gofmt()    { local n; n=$(gofmt -l . 2>/dev/null | grep -v '^$' | wc -l); echo "gofmt unformatted=$n"; [ "$n" = 0 ]; }
-run_gobuild()  { ensure_spa_stub; CGO_ENABLED=0 go build -tags "$TAGS" ./...; }
+run_gobuild()  {
+  ensure_spa_stub
+  CGO_ENABLED=0 go build -tags "$TAGS" ./... || return 1
+  # Lite/mipsle link checks (compile-only, ~seconds with a warm cache). The
+  # mipsle targets must strip goolm (its transitive deps don't build on mips
+  # softfloat), which is exactly the variant that silently broke when
+  # cmd/omnipus/main.go grew a `goolm && stdjson` gate (2026-06-28..07-03,
+  # "function main is undeclared") — nothing exercised these tag sets in CI.
+  echo "lite/mipsle link checks"
+  CGO_ENABLED=0 GOOS=linux GOARCH=mipsle GOMIPS=softfloat go build -tags stdjson,lite -o /dev/null ./cmd/omnipus/ || { echo "GATE FAILURE: mipsle lite build broken"; return 1; }
+  CGO_ENABLED=0 GOOS=linux GOARCH=mipsle GOMIPS=softfloat go build -tags stdjson -o /dev/null ./cmd/omnipus/ || { echo "GATE FAILURE: mipsle build broken"; return 1; }
+  CGO_ENABLED=0 go build -tags "$TAGS",lite -o /dev/null ./cmd/omnipus/ || { echo "GATE FAILURE: lite build broken"; return 1; }
+}
 run_govet()    { ensure_spa_stub; CGO_ENABLED=0 go vet -tags "$TAGS" ./...; }
 # golangci-lint with CGO_ENABLED=0 (so //go:build !cgo test helpers compile) and the
 # canonical build tags. Pinned to the version pr.yml uses. Installed once to the
