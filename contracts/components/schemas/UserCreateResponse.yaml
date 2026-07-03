@@ -15,7 +15,11 @@ properties:
     enum:
       - admin
       - user
-    description: The created user's RBAC role.
+    description: >
+      The created user's RBAC role. "user" is accepted for backward-compatible
+      wire validation, but under the current single-user model this always
+      reports "admin" regardless of what was requested on UserCreateRequest
+      (see rest_users.go's persistedRole).
     example: "user"
   requires_restart:
     type: boolean

@@ -22,7 +22,11 @@ properties:
     enum:
       - admin
       - user
-    description: RBAC role. Case-sensitive.
+    description: >
+      RBAC role. Case-sensitive. "user" is accepted for backward-compatible
+      wire validation, but under the current single-user model every account
+      always persists and reports as "admin" server-side regardless of which
+      value was requested (see rest_users.go's persistedRole).
     example: "admin"
   has_password:
     type: boolean

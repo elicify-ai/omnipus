@@ -12,13 +12,8 @@ required:
 additionalProperties: false
 properties:
   cli:
-    type: string
-    enum:
-      - claude-code
-      - codex
-      - opencode
-    description: The external CLI tool being validated. Matches ExecutorConfig.cli.
-    example: "claude-code"
+    $ref: './ExternalCli.yaml'
+    x-go-type: ExternalCliTool
   cli_path:
     type: string
     description: >

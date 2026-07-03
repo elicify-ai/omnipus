@@ -2235,7 +2235,7 @@ func FixtureDelegationPolicy_InvalidJSON() []byte {
 
 func FixtureExecutorConfig_Populated() ExecutorConfig {
 	kind := ExternalCli
-	cli := ExecutorConfigCliClaudeCode
+	cli := ClaudeCode
 	return ExecutorConfig{
 		Kind: &kind,
 		Cli:  &cli,
@@ -2634,7 +2634,7 @@ func FixtureCliDetectEntry_NotInstalled() CliDetectEntry {
 
 func FixtureCliValidateRequest_Populated() CliValidateRequest {
 	return CliValidateRequest{
-		Cli:     CliValidateRequestCliClaudeCode,
+		Cli:     ClaudeCode,
 		CliPath: "/usr/local/bin/claude",
 	}
 }

@@ -18,13 +18,8 @@ required:
 additionalProperties: false
 properties:
   cli:
-    type: string
-    enum:
-      - claude-code
-      - codex
-      - opencode
-    description: The external CLI this entry describes. Matches ExecutorConfig.cli.
-    example: claude-code
+    $ref: './ExternalCli.yaml'
+    x-go-type: ExternalCliTool
   auto_applied_flags:
     type: array
     description: >

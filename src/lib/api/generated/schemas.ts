@@ -188,11 +188,12 @@ type AgentStats = {
 };
 type ExecutorConfig = Partial<{
   kind: "native" | "external-cli" | "remote-a2a";
-  cli: "claude-code" | "codex" | "opencode";
+  cli: ExternalCliTool;
   cli_path: string;
   env_overrides: {};
   cli_args: string;
 }>;
+type ExternalCliTool = "claude-code" | "codex" | "opencode";
 type AgentCreateRequest = {
   name: string;
   type?: ("Main" | "Subagent" | "subagent_3p") | undefined;
@@ -284,6 +285,11 @@ type AgentUpdateRequest = Partial<{
   voice: string | null;
   executor: ExecutorConfig;
 }>;
+type ExecutorDefaults = {
+  cli: ExternalCliTool;
+  auto_applied_flags: Array<string>;
+  notes: string;
+};
 type ChannelEntry = {
   id: ChannelId;
   instance_id?: string | undefined;
@@ -587,6 +593,10 @@ type CliDetectEntry = {
   installed: boolean;
   path?: (string | null) | undefined;
   source?: ("path" | "well-known" | null) | undefined;
+};
+type CliValidateRequest = {
+  cli: ExternalCliTool;
+  cli_path: string;
 };
 type Schedule = {
   id: string;
@@ -1164,10 +1174,11 @@ export const AgentStats: z.ZodType<AgentStats> = z
     last_active: z.string().datetime({ offset: true }).optional(),
   })
   .passthrough();
+export const ExternalCliTool = z.enum(["claude-code", "codex", "opencode"]);
 export const ExecutorConfig: z.ZodType<ExecutorConfig> = z
   .object({
     kind: z.enum(["native", "external-cli", "remote-a2a"]),
-    cli: z.enum(["claude-code", "codex", "opencode"]),
+    cli: ExternalCliTool,
     cli_path: z.string(),
     env_overrides: z.record(z.string()),
     cli_args: z.string(),
@@ -1391,8 +1402,8 @@ export const RunnerTestResponse = z.object({
   cli: z.string().optional(),
   cli_version: z.string().optional(),
 });
-export const ExecutorDefaults = z.object({
-  cli: z.enum(["claude-code", "codex", "opencode"]),
+export const ExecutorDefaults: z.ZodType<ExecutorDefaults> = z.object({
+  cli: ExternalCliTool,
   auto_applied_flags: z.array(z.string()),
   notes: z.string(),
 });
@@ -2339,8 +2350,8 @@ export const CliDetect: z.ZodType<CliDetect> = z.object({
   codex: CliDetectEntry,
   opencode: CliDetectEntry,
 });
-export const CliValidateRequest = z.object({
-  cli: z.enum(["claude-code", "codex", "opencode"]),
+export const CliValidateRequest: z.ZodType<CliValidateRequest> = z.object({
+  cli: ExternalCliTool,
   cli_path: z.string(),
 });
 export const CliValidateResponse = z.object({

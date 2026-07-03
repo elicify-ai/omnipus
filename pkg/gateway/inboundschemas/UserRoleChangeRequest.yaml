@@ -9,5 +9,10 @@ properties:
     enum:
       - admin
       - user
-    description: New role. Case-sensitive; exactly "admin" or "user".
+    description: >
+      New role. Case-sensitive; exactly "admin" or "user" (both accepted for
+      backward-compatible wire validation). Under the current single-user
+      model the affected account always persists and reports as "admin"
+      server-side regardless of which value is requested here (see
+      rest_users.go's persistedRole).
     example: "user"
