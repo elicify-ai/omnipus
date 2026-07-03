@@ -22,17 +22,77 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/gateway/ctxkey"
 	"github.com/dapicom-ai/omnipus/pkg/gateway/middleware"
 )
+
+// normalizedRoleForUser writes a standalone, minimal config.json (in its own
+// throwaway temp dir) containing a single Gateway user named username with
+// the given requestedRole, loads it through the REAL config.LoadConfig
+// pipeline, and returns the role that pipeline actually resolved.
+//
+// Single-user model (operator directive, 2026-07): "Omnipus is now a
+// single-user, self-hosted instance — there are no admin and normal users
+// anymore." The RBAC scaffolding (UserRole type, RequireAdmin middleware,
+// the Users screen, the ownership model) stays intact in the code, but the
+// admin/user distinction has NO PRACTICAL EFFECT: config.LoadConfig
+// self-heals any non-admin Gateway.Users role to admin at load time
+// (config.normalizeAdminOnlyRoles) and rewrites config.json in the same
+// pass, so no authenticated user can ever reach request handling with a
+// non-admin role.
+//
+// Tests use this helper — instead of hand-injecting config.UserRoleAdmin as
+// a literal — to prove that claim against the REAL choke point rather than
+// asserting a hardcoded expectation.
+func normalizedRoleForUser(t *testing.T, username, requestedRole string) config.UserRole {
+	t.Helper()
+	return normalizedUserForRole(t, username, requestedRole).Role
+}
+
+// normalizedUserForRole is normalizedRoleForUser's counterpart for handlers
+// that also read *config.UserConfig from ctxkey.UserContextKey{} (e.g. for
+// audit attribution) rather than just the role. Returns the full resolved
+// user record so callers can inject both context values.
+func normalizedUserForRole(t *testing.T, username, requestedRole string) *config.UserConfig {
+	t.Helper()
+	dir := t.TempDir()
+	diskCfg := map[string]any{
+		"version":   1,
+		"agents":    map[string]any{"defaults": map[string]any{}, "list": []any{}},
+		"providers": []any{},
+		"gateway": map[string]any{
+			"users": []any{
+				map[string]any{
+					"username":      username,
+					"password_hash": "",
+					"token_hash":    "",
+					"role":          requestedRole,
+				},
+			},
+		},
+	}
+	data, err := json.Marshal(diskCfg)
+	require.NoError(t, err)
+	configPath := filepath.Join(dir, "config.json")
+	require.NoError(t, os.WriteFile(configPath, data, 0o600))
+
+	loaded, err := config.LoadConfig(configPath)
+	require.NoError(t, err)
+	require.Len(t, loaded.Gateway.Users, 1, "expected exactly one seeded user after LoadConfig")
+	return &loaded.Gateway.Users[0]
+}
 
 // adminRoute is the canonical table of admin security routes and a representative
 // state-changing body for POST/PUT/PATCH methods. GET-only routes use an empty

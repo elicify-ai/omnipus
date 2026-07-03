@@ -126,13 +126,26 @@ func TestHandleSandboxAuditLog_ResponseShape(t *testing.T) {
 	assert.True(t, hasAE, "response must have 'applied_enabled' field")
 }
 
-// TestHandleSandboxAuditLog_NonAdmin403 verifies that a user-role request
-// receives 403 Forbidden. The check is enforced by RequireAdmin middleware,
-// which is part of the production adminWrap chain.
+// TestHandleSandboxAuditLog_NonAdmin403 used to verify that a user-role
+// request receives 403 Forbidden. Under the single-user model (operator
+// directive: "we have now a one user instance ... remove the admin only
+// logic from the entire system"), a Gateway.Users entry that requests
+// role="user" is normalized to admin by config.LoadConfig's load-time
+// self-heal (config.normalizeAdminOnlyRoles) before it can ever reach
+// request handling — RequireAdmin's code is unchanged and still denies a
+// literal non-admin role, but no authenticated caller can carry one anymore.
+// This test is deliberately flipped (not deleted) to prove the new outcome:
+// the SAME "user"-configured account that used to be denied here now
+// succeeds, via the real config-loading choke point rather than a
+// hand-asserted role literal.
 func TestHandleSandboxAuditLog_NonAdmin403(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 
-	ctx := context.WithValue(context.Background(), ctxkey.RoleContextKey{}, config.UserRoleUser)
+	resolvedRole := normalizedRoleForUser(t, "bob", "user")
+	require.Equal(t, config.UserRoleAdmin, resolvedRole,
+		"single-user model: config.LoadConfig must normalize role=user to admin")
+
+	ctx := context.WithValue(context.Background(), ctxkey.RoleContextKey{}, resolvedRole)
 	body := strings.NewReader(`{"enabled":true}`)
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/audit-log", body)
 	r = r.WithContext(ctx)
@@ -140,7 +153,7 @@ func TestHandleSandboxAuditLog_NonAdmin403(t *testing.T) {
 
 	middleware.RequireAdmin(http.HandlerFunc(api.HandleSandboxAuditLog)).ServeHTTP(w, r)
 
-	assert.Equal(t, http.StatusForbidden, w.Code)
+	assert.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 }
 
 // TestHandleSandboxAuditLog_MethodNotAllowed verifies that POST and DELETE

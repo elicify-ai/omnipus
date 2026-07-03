@@ -193,6 +193,12 @@ func readDiskUsers(t *testing.T, api *restAPI) []map[string]any {
 // returns 201 with {username, role} — and crucially NO "token" field.
 // No bearer token may be issued at creation time; the new user must log in
 // with their password to obtain a token.
+//
+// Single-user model (operator directive, 2026-07): the wire contract still
+// accepts "role":"user" as a legal request shape (validated, not rejected),
+// but the value actually persisted — and returned — is always "admin"
+// (rest_users.go HandleUserCreate's persistedRole). This assertion is
+// deliberately flipped from "user" to "admin" to match that behavior.
 func TestHandleUserCreate_ReturnsUserAndRoleOnly(t *testing.T) {
 	api, _, _ := newUserMgmtAPIWithAdmin(t)
 	body := `{"username":"alice","role":"user","password":"alice-secret-123"}`
@@ -203,7 +209,8 @@ func TestHandleUserCreate_ReturnsUserAndRoleOnly(t *testing.T) {
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, "alice", resp["username"])
-	assert.Equal(t, "user", resp["role"])
+	assert.Equal(t, "admin", resp["role"],
+		"single-user model: requested role=user is always persisted/returned as admin")
 	_, hasToken := resp["token"]
 	assert.False(t, hasToken, "response MUST NOT include a token field")
 	_, hasTokenHash := resp["token_hash"]
@@ -308,14 +315,33 @@ func TestHandleUserCreate_Duplicate_Returns409(t *testing.T) {
 	assert.Equal(t, http.StatusConflict, w2.Code, "duplicate create: %s", w2.Body.String())
 }
 
-// TestHandleUserCreate_NonAdmin403 verifies a user-role caller gets 403.
+// TestHandleUserCreate_NonAdmin403 used to verify a user-role caller gets
+// 403. Single-user model (operator directive, 2026-07): a Gateway.Users
+// entry that requests role="user" is normalized to admin by
+// config.LoadConfig's load-time self-heal (config.normalizeAdminOnlyRoles)
+// before it can ever reach request handling. RequireAdmin's code is
+// unchanged (still denies a literal non-admin role) but no authenticated
+// caller can carry one anymore. This test is deliberately flipped (not
+// deleted) to prove the new outcome: the SAME "user"-configured account
+// that used to be denied here now succeeds, via the real config-loading
+// choke point rather than a hand-asserted role literal.
 func TestHandleUserCreate_NonAdmin403(t *testing.T) {
 	api, _, _ := newUserMgmtAPIWithAdmin(t)
+
+	resolvedUser := normalizedUserForRole(t, "bob", "user")
+	require.Equal(t, config.UserRoleAdmin, resolvedUser.Role,
+		"single-user model: config.LoadConfig must normalize role=user to admin")
+
 	body := `{"username":"alice","role":"user","password":"alice-pass-123"}`
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/users", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	ctx := context.WithValue(r.Context(), RoleContextKey{}, resolvedUser.Role)
+	ctx = context.WithValue(ctx, ctxkey.UserContextKey{}, resolvedUser)
+	r = r.WithContext(ctx)
+
 	w := httptest.NewRecorder()
-	middleware.RequireAdmin(http.HandlerFunc(api.HandleUserCreate)).
-		ServeHTTP(w, nonAdminRequest(http.MethodPost, "/api/v1/users", body))
-	assert.Equal(t, http.StatusForbidden, w.Code)
+	middleware.RequireAdmin(http.HandlerFunc(api.HandleUserCreate)).ServeHTTP(w, r)
+	assert.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
 }
 
 // --- HandleUsersList ---
@@ -510,8 +536,14 @@ func TestHandleUserDelete_AuditEntry_OmitsHashes(t *testing.T) {
 
 // --- HandleUserChangeRole ---
 
-// TestHandleUserChangeRole_AdminToUser verifies the happy path: an admin
-// is demoted to user when another admin remains.
+// TestHandleUserChangeRole_AdminToUser used to verify the happy path: an
+// admin is demoted to user when another admin remains. Single-user model
+// (operator directive, 2026-07): a role-change request to "user" is now a
+// no-op with respect to actual authority — rest_users.go
+// HandleUserChangeRole always persists "admin" regardless of body.Role. This
+// test is deliberately flipped (not deleted) to prove the new outcome: the
+// PATCH still succeeds (200), but admin2's on-disk role stays "admin"
+// instead of becoming "user".
 func TestHandleUserChangeRole_AdminToUser(t *testing.T) {
 	hash, err := bcrypt.GenerateFromPassword([]byte("pw"), bcrypt.MinCost)
 	require.NoError(t, err)
@@ -526,17 +558,27 @@ func TestHandleUserChangeRole_AdminToUser(t *testing.T) {
 	api.HandleUserChangeRole(w, adminRequest(http.MethodPatch, "/api/v1/users/admin2/role", body))
 
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "admin", resp["role"], "single-user model: demotion request is a no-op")
 	disk := readDiskUsers(t, api)
 	for _, u := range disk {
 		if u["username"] == "admin2" {
-			assert.Equal(t, "user", u["role"], "admin2 must be demoted on disk")
+			assert.Equal(t, "admin", u["role"],
+				"single-user model: admin2 must remain admin on disk — demotion is a no-op")
 		}
 	}
 }
 
-// TestHandleUserChangeRole_LastAdminDemotion409 verifies that the sole
+// TestHandleUserChangeRole_LastAdminDemotion409 used to verify that the sole
 // admin demoting themselves is blocked with 409 and the on-disk role is
-// unchanged.
+// unchanged. Single-user model (operator directive, 2026-07): since a
+// role-change request to "user" now always persists "admin" (no actual
+// demotion occurs), the ErrLastAdmin/countAdmins guard this test exercised
+// is unreachable dead code — countAdmins can never drop to zero as a result
+// of this handler. This test is deliberately flipped (not deleted) to prove
+// the new outcome: the PATCH now succeeds (200, not 409), and the admin's
+// on-disk role — which was never actually going to change — stays "admin".
 func TestHandleUserChangeRole_LastAdminDemotion409(t *testing.T) {
 	api, _, _ := newUserMgmtAPIWithAdmin(t)
 
@@ -544,10 +586,10 @@ func TestHandleUserChangeRole_LastAdminDemotion409(t *testing.T) {
 	w := httptest.NewRecorder()
 	api.HandleUserChangeRole(w, adminRequest(http.MethodPatch, "/api/v1/users/admin/role", body))
 
-	assert.Equal(t, http.StatusConflict, w.Code, "body: %s", w.Body.String())
+	assert.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	disk := readDiskUsers(t, api)
 	require.Len(t, disk, 1)
-	assert.Equal(t, "admin", disk[0]["role"], "admin must still be admin on disk after 409")
+	assert.Equal(t, "admin", disk[0]["role"], "sole admin must still be admin on disk")
 }
 
 // TestHandleUserChangeRole_NotFound_Returns404 verifies unknown user → 404.
@@ -588,23 +630,42 @@ func TestHandleUserDelete_NonAdmin403(t *testing.T) {
 		"user-role caller must receive 403 on DELETE /api/v1/users/{username}")
 }
 
-// TestHandleUserChangeRole_NonAdmin403 verifies that a user-role (non-admin)
-// caller receives 403 when attempting PATCH /api/v1/users/{username}/role.
-//
-// Mirrors TestHandleUserDelete_NonAdmin403 and TestHandleUserResetPassword_NonAdmin403;
-// per-handler tests surface the admin gate in the file where the handler lives.
+// TestHandleUserChangeRole_NonAdmin403 used to verify that a user-role
+// (non-admin) caller receives 403 when attempting PATCH
+// /api/v1/users/{username}/role. Single-user model (operator directive,
+// 2026-07): a Gateway.Users entry that requests role="user" is normalized to
+// admin by config.LoadConfig's load-time self-heal
+// (config.normalizeAdminOnlyRoles) before it can ever reach request
+// handling. RequireAdmin's code is unchanged (still denies a literal
+// non-admin role) but no authenticated caller can carry one anymore. This
+// test is deliberately flipped (not deleted) to prove the new outcome: the
+// SAME "user"-configured account that used to be denied 403 at the
+// RequireAdmin gate now passes through to the handler — which returns 404
+// because "sometarget" is not a seeded user, proving the request reached
+// real handler logic rather than being denied at the door.
 //
 // Traces to: temporal-puzzling-melody.md Wave 1C — per-handler NonAdmin403
 // coverage gap identified by test-analyzer #3.
 func TestHandleUserChangeRole_NonAdmin403(t *testing.T) {
 	api, _, _ := newUserMgmtAPIWithAdmin(t)
+
+	resolvedUser := normalizedUserForRole(t, "bob", "user")
+	require.Equal(t, config.UserRoleAdmin, resolvedUser.Role,
+		"single-user model: config.LoadConfig must normalize role=user to admin")
+
 	body := `{"role":"admin"}`
+	r := httptest.NewRequest(http.MethodPatch, "/api/v1/users/sometarget/role", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	ctx := context.WithValue(r.Context(), RoleContextKey{}, resolvedUser.Role)
+	ctx = context.WithValue(ctx, ctxkey.UserContextKey{}, resolvedUser)
+	r = r.WithContext(ctx)
+
 	w := httptest.NewRecorder()
 	middleware.RequireAdmin(
 		http.HandlerFunc(api.HandleUserChangeRole),
-	).ServeHTTP(w, nonAdminRequest(http.MethodPatch, "/api/v1/users/sometarget/role", body))
-	assert.Equal(t, http.StatusForbidden, w.Code,
-		"user-role caller must receive 403 on PATCH /api/v1/users/{username}/role")
+	).ServeHTTP(w, r)
+	assert.Equal(t, http.StatusNotFound, w.Code,
+		"user-role caller now passes RequireAdmin; handler 404s because sometarget doesn't exist")
 }
 
 // --- HandleUserResetPassword ---
@@ -851,7 +912,9 @@ func TestRoute_POST_Users_Reaches_HandleUserCreate(t *testing.T) {
 		var resp map[string]any
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		assert.Equal(t, "newuser", resp["username"])
-		assert.Equal(t, "user", resp["role"])
+		// Single-user model: requested role=user is always persisted/returned
+		// as admin (see TestHandleUserCreate_ReturnsUserAndRoleOnly).
+		assert.Equal(t, "admin", resp["role"])
 	})
 
 	t.Run("PUT at collection path returns 405", func(t *testing.T) {

@@ -333,15 +333,34 @@ func TestHandleSandboxConfig_PartialRestartFlag(t *testing.T) {
 	assert.Equal(t, true, resp["requires_restart"])
 }
 
+// TestHandleSandboxConfig_NonAdmin403 used to verify that a user-role GET
+// receives 403 Forbidden. Under the single-user model (operator directive:
+// "we have now a one user instance ... remove the admin only logic from the
+// entire system"), a Gateway.Users entry that requests role="user" is
+// normalized to admin by config.LoadConfig's load-time self-heal
+// (config.normalizeAdminOnlyRoles) before it can ever reach request
+// handling — the sandbox-config "god-mode toggle" is exactly the endpoint
+// the operator flagged as still gating on the retired admin/user
+// distinction. RequireAdmin's code is unchanged (still denies a literal
+// non-admin role) but no authenticated caller can carry one anymore. This
+// test is deliberately flipped (not deleted) to prove the new outcome: the
+// SAME "user"-configured account that used to be denied here now succeeds,
+// via the real config-loading choke point rather than a hand-asserted role
+// literal. Uses GET (not PUT) to isolate the admin gate from the unrelated
+// FR-12.2 re-auth-consent gate that putSandboxConfig separately enforces.
 func TestHandleSandboxConfig_NonAdmin403(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
+
+	resolvedRole := normalizedRoleForUser(t, "bob", "user")
+	require.Equal(t, config.UserRoleAdmin, resolvedRole,
+		"single-user model: config.LoadConfig must normalize role=user to admin")
+
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/sandbox-config",
-		strings.NewReader(`{"allowed_paths":["/var/log"]}`))
-	r.Header.Set("Content-Type", "application/json")
-	r = withNonAdminRole(r)
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/security/sandbox-config", nil)
+	ctx := context.WithValue(r.Context(), ctxkey.RoleContextKey{}, resolvedRole)
+	r = r.WithContext(ctx)
 	middleware.RequireAdmin(http.HandlerFunc(api.HandleSandboxConfig)).ServeHTTP(w, r)
-	assert.Equal(t, http.StatusForbidden, w.Code, "non-admin must receive 403")
+	assert.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 }
 
 func TestHandleSandboxConfig_MethodNotAllowed(t *testing.T) {

@@ -139,6 +139,40 @@ func TestHandleToolPolicies_PUT_BadJSON(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
+// TestHandleToolPolicies_PUT_FormerlyNonAdminNowAllowed proves the
+// single-user model's choke point for the PUT gate that HandleToolPolicies
+// applies internally (middleware.RequireAdmin wrapping putToolPolicies,
+// Issue #98) — there was previously no dedicated "_NonAdmin403" test for
+// this endpoint in this file (the admin check lives inside the handler
+// rather than at route-registration time), so this test is ADDED rather
+// than flipped in place, to give the family the same explicit coverage as
+// the others.
+//
+// Under the operator's single-user directive ("we have now a one user
+// instance ... remove the admin only logic from the entire system"), a
+// Gateway.Users entry that requests role="user" is normalized to admin by
+// config.LoadConfig's load-time self-heal (config.normalizeAdminOnlyRoles)
+// before it can ever reach request handling, so a "user"-configured account
+// now succeeds where it would previously have been denied 403.
+func TestHandleToolPolicies_PUT_FormerlyNonAdminNowAllowed(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	resolvedUser := normalizedUserForRole(t, "bob", "user")
+	require.Equal(t, config.UserRoleAdmin, resolvedUser.Role,
+		"single-user model: config.LoadConfig must normalize role=user to admin")
+
+	body := `{"default_policy":"ask","policies":{"exec":"deny"}}`
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/tool-policies", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	ctx := context.WithValue(r.Context(), RoleContextKey{}, resolvedUser.Role)
+	ctx = context.WithValue(ctx, UserContextKey{}, resolvedUser)
+	r = r.WithContext(ctx)
+	w := httptest.NewRecorder()
+	api.HandleToolPolicies(w, r)
+
+	assert.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+}
+
 // TestHandleToolPolicies_MethodNotAllowed verifies that unsupported HTTP methods return 405.
 func TestHandleToolPolicies_MethodNotAllowed(t *testing.T) {
 	api := newTestRestAPIWithHome(t)

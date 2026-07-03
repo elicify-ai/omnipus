@@ -93,6 +93,16 @@ func (a *restAPI) HandleUsersList(w http.ResponseWriter, r *http.Request) {
 // deliberately left empty at creation — the created user obtains a bearer
 // token only by logging in via POST /api/v1/auth/login. No token at
 // creation time, so no admin can silently issue tokens without proof of password.
+//
+// Single-user model: Omnipus is a single-user, self-hosted instance with no
+// practical admin-vs-normal-user distinction. The wire contract still
+// accepts and validates "admin"/"user" as the two legal input shapes (so
+// existing/future clients aren't broken), but the role actually PERSISTED to
+// config.json is always "admin" regardless of what was requested — this
+// closes the create path so a new divergence between config.json and
+// runtime behavior (which already treats every user as admin) can never be
+// introduced. See also config.normalizeAdminOnlyRoles, which self-heals any
+// pre-existing "role":"user" entries at load time.
 func (a *restAPI) HandleUserCreate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -129,6 +139,13 @@ func (a *restAPI) HandleUserCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Single-user model: the value actually persisted (and reported back) is
+	// always admin, regardless of what body.Role requested. body.Role was
+	// already validated above so the wire contract keeps accepting both
+	// "admin" and "user" as legal shapes — only the persisted/observed value
+	// is pinned.
+	persistedRole := config.UserRoleAdmin
+
 	if updErr := a.safeUpdateConfigJSON(func(m map[string]any) error {
 		gw, _ := m["gateway"].(map[string]any)
 		if gw == nil {
@@ -156,7 +173,7 @@ func (a *restAPI) HandleUserCreate(w http.ResponseWriter, r *http.Request) {
 			"username":      body.Username,
 			"password_hash": string(passwordHash),
 			"token_hash":    "", // no token at creation time — user must log in explicitly.
-			"role":          string(body.Role),
+			"role":          string(persistedRole),
 		})
 		gw["users"] = users
 		return nil
@@ -173,16 +190,16 @@ func (a *restAPI) HandleUserCreate(w http.ResponseWriter, r *http.Request) {
 	if err := a.triggerReloadAndWait(); err != nil {
 		emitUserAudit(r, a, "gateway.users."+body.Username, nil, map[string]any{
 			"username": body.Username,
-			"role":     string(body.Role),
+			"role":     string(persistedRole),
 			"password": body.Password,
 		})
-		slog.Info("rest: user created (restart required)", "username", body.Username, "role", string(body.Role))
+		slog.Info("rest: user created (restart required)", "username", body.Username, "role", string(persistedRole))
 		reqRestart := true
 		warningMsg := "config saved to disk but hot-reload failed; restart the gateway to apply"
 		w.WriteHeader(http.StatusCreated)
 		jsonBodyOnlyCreated(w, gen.UserCreateResponse{
 			Username:        body.Username,
-			Role:            gen.UserCreateResponseRole(body.Role),
+			Role:            gen.UserCreateResponseRole(persistedRole),
 			RequiresRestart: &reqRestart,
 			Warning:         &warningMsg,
 		})
@@ -190,15 +207,15 @@ func (a *restAPI) HandleUserCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	emitUserAudit(r, a, "gateway.users."+body.Username, nil, map[string]any{
 		"username": body.Username,
-		"role":     string(body.Role),
+		"role":     string(persistedRole),
 		"password": body.Password, // redactSensitive masks this as "***redacted***".
 	})
 
-	slog.Info("rest: user created", "username", body.Username, "role", string(body.Role))
+	slog.Info("rest: user created", "username", body.Username, "role", string(persistedRole))
 	w.WriteHeader(http.StatusCreated)
 	jsonBodyOnlyCreated(w, gen.UserCreateResponse{
 		Username: body.Username,
-		Role:     gen.UserCreateResponseRole(body.Role),
+		Role:     gen.UserCreateResponseRole(persistedRole),
 	})
 }
 
@@ -318,7 +335,20 @@ func (a *restAPI) HandleUserDelete(w http.ResponseWriter, r *http.Request) {
 // Admin-only; dev-mode-bypass disables the endpoint (503).
 //
 // The last-admin guard is evaluated inside the callback against the
-// post-mutation slice — same rationale as HandleUserDelete.
+// post-mutation slice — same rationale as HandleUserDelete. NOTE: with the
+// single-user model below, this guard is now unreachable dead code (the
+// mutation always sets the target to admin, so countAdmins can never drop to
+// zero as a result of this handler) — it is retained deliberately per the
+// "keep RBAC scaffolding" decision rather than removed.
+//
+// Single-user model: Omnipus is a single-user, self-hosted instance with no
+// practical admin-vs-normal-user distinction. The wire contract still
+// accepts and validates "admin"/"user" as the two legal input shapes, but a
+// role-change request — including an explicit request to demote to "user" —
+// is a no-op with respect to actual authority: the value persisted to
+// config.json (and reported back) is always "admin". See also
+// config.normalizeAdminOnlyRoles for the load-time self-heal of any
+// pre-existing "role":"user" entries.
 func (a *restAPI) HandleUserChangeRole(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPatch {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -347,19 +377,28 @@ func (a *restAPI) HandleUserChangeRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Single-user model: the value actually persisted (and reported back) is
+	// always admin, regardless of what body.Role requested — including an
+	// explicit "user" demotion request, which becomes a no-op with respect
+	// to actual authority.
+	persistedRole := config.UserRoleAdmin
+
 	var oldRole string
 	if updErr := a.safeUpdateConfigJSON(func(m map[string]any) error {
 		if err := a.findAndMutateUser(m, username, func(u map[string]any) error {
 			oldRole, _ = u["role"].(string)
-			u["role"] = string(body.Role)
+			u["role"] = string(persistedRole)
 			return nil
 		}); err != nil {
 			return err
 		}
-		// Last-admin guard evaluated against the POST-mutation slice. The guard
-		// MUST run here, inside the callback, after the role flip — two admins
-		// concurrently demoting each other race on configMu; the second writer
-		// sees the first's committed state and the guard blocks it.
+		// Last-admin guard evaluated against the POST-mutation slice. Now
+		// unreachable in practice (the mutation above always sets the target
+		// to admin, so countAdmins can never drop to zero as a result of this
+		// handler) — retained per the "keep RBAC scaffolding" decision. The
+		// guard MUST still run here, inside the callback, after the role
+		// flip — two admins concurrently demoting each other race on
+		// configMu; the second writer sees the first's committed state.
 		gw := m["gateway"].(map[string]any)
 		users := gw["users"].([]any)
 		if countAdmins(users) == 0 {
@@ -381,7 +420,7 @@ func (a *restAPI) HandleUserChangeRole(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if reloadErr := a.triggerReloadAndWait(); reloadErr != nil {
-		emitUserAudit(r, a, "gateway.users."+username+".role", oldRole, string(body.Role))
+		emitUserAudit(r, a, "gateway.users."+username+".role", oldRole, string(persistedRole))
 		slog.Info(
 			"rest: user role changed (restart required)",
 			"username",
@@ -389,24 +428,24 @@ func (a *restAPI) HandleUserChangeRole(w http.ResponseWriter, r *http.Request) {
 			"old",
 			oldRole,
 			"new",
-			string(body.Role),
+			string(persistedRole),
 		)
 		reqRestart := true
 		warningMsg := "config saved to disk but hot-reload failed; restart the gateway to apply"
 		jsonOK(w, gen.UserRoleChangeResponse{
 			Username:        username,
-			Role:            gen.UserRoleChangeResponseRole(body.Role),
+			Role:            gen.UserRoleChangeResponseRole(persistedRole),
 			RequiresRestart: &reqRestart,
 			Warning:         &warningMsg,
 		})
 		return
 	}
-	emitUserAudit(r, a, "gateway.users."+username+".role", oldRole, string(body.Role))
+	emitUserAudit(r, a, "gateway.users."+username+".role", oldRole, string(persistedRole))
 
-	slog.Info("rest: user role changed", "username", username, "old", oldRole, "new", string(body.Role))
+	slog.Info("rest: user role changed", "username", username, "old", oldRole, "new", string(persistedRole))
 	jsonOK(w, gen.UserRoleChangeResponse{
 		Username: username,
-		Role:     gen.UserRoleChangeResponseRole(body.Role),
+		Role:     gen.UserRoleChangeResponseRole(persistedRole),
 	})
 }
 
