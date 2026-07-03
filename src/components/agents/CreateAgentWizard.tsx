@@ -155,6 +155,10 @@ const CLI_CHIP_LABEL: Record<WizardCli, string> = {
 }
 
 const STEP_NAMES = ['Identity', 'Personality', 'Tools'] as const
+// subagent_3p (external CLI runner): tools/skills/fallback policy never apply
+// to an external runner, and its step ③ only duplicated step ①'s runner
+// config (P3 bug, 2026-07-03) — the wizard is TWO steps for that type.
+const STEP_NAMES_EXTERNAL = ['Identity', 'Personality'] as const
 
 // Action is a discriminated union of per-field setters. The mapped type
 // keeps the value type coupled to the field key so a bad assignment
@@ -262,6 +266,9 @@ export function CreateAgentWizard({
   // A native subagent that inherits its model from the caller does not need a
   // model selected (the field is omitted from the create request).
   const modelInherited = initialType === 'Subagent' && payload.inherit_model === true
+  const stepNames = isExternal ? STEP_NAMES_EXTERNAL : STEP_NAMES
+  const totalSteps = stepNames.length
+
   const step1Valid = payload.name.trim().length > 0 &&
     (modelInherited || payload.model.trim().length > 0) &&
     (!isWorker || payload.description.trim().length > 0) &&
@@ -409,10 +416,10 @@ export function CreateAgentWizard({
               emitting the same character, which stacked. */}
           <ol
             className="flex items-center gap-2 mt-4 text-sm"
-            aria-label={`Wizard progress: step ${step} of 3`}
+            aria-label={`Wizard progress: step ${step} of ${totalSteps}`}
             data-testid="wizard-stepper"
           >
-            {STEP_NAMES.map((name, idx) => {
+            {stepNames.map((name, idx) => {
               const n = (idx + 1) as 1 | 2 | 3
               const isActive = step === n
               return (
@@ -429,7 +436,7 @@ export function CreateAgentWizard({
                     </span>
                     <span className="sr-only">Step {n}: {name}</span>
                   </li>
-                  {idx < STEP_NAMES.length - 1 && (
+                  {idx < stepNames.length - 1 && (
                     <li className="text-[var(--color-muted)]" aria-hidden="true">—</li>
                   )}
                 </React.Fragment>
@@ -505,7 +512,7 @@ export function CreateAgentWizard({
               ← Back
             </Button>
           )}
-          {step < 3 ? (
+          {step < totalSteps ? (
             <Button
               type="button"
               onClick={() => goToStep((step + 1) as 1 | 2 | 3)}
