@@ -57,11 +57,20 @@ func newMailboxTestAPI(t *testing.T, mailboxes map[string]map[string]config.Mail
 // onboardingMgr, …) the mailbox test harness does not construct.
 func seedWorkspaceFile(t *testing.T, homePath, id string) {
 	t.Helper()
+	// ADR-033: the owning agent must be a core_team member — seed the harness
+	// agent ("mia") so existing save fixtures pass the membership gate.
+	seedWorkspaceFileWithTeam(t, homePath, id, []string{"mia"})
+}
+
+func seedWorkspaceFileWithTeam(t *testing.T, homePath, id string, coreTeam []string) {
+	t.Helper()
 	dir := filepath.Join(homePath, "workspaces")
 	require.NoError(t, os.MkdirAll(dir, 0o700))
+	team, err := json.Marshal(coreTeam)
+	require.NoError(t, err)
 	data := fmt.Sprintf(
-		`{"id":%q,"name":"Test Workspace","status":"active","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}`,
-		id,
+		`{"id":%q,"name":"Test Workspace","status":"active","core_team":%s,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}`,
+		id, team,
 	)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, id+".json"), []byte(data), 0o600))
 }
@@ -668,4 +677,38 @@ func TestHandleAgents_MailboxRoute_InvalidWorkspaceIDChars400(t *testing.T) {
 	r.URL.Path = "/api/v1/agents/mia/mailboxes/.."
 	api.HandleAgents(w, r)
 	require.Equal(t, http.StatusBadRequest, w.Code, "body=%s", w.Body.String())
+}
+
+func TestSetAgentMailbox_RejectsNonCoreTeamAgent(t *testing.T) {
+	// ADR-033 (operator-decided): mailbox ownership requires core_team
+	// membership in the target workspace, aligning with ADR-029 FR-006.
+	api := newMailboxTestAPI(t, nil)
+	seedWorkspaceFileWithTeam(t, api.homePath, "ws_team", []string{"someone-else"})
+
+	body := `{"enabled":true,"imap_host":"i","smtp_host":"s","username":"me@x.com","password":"p"}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/mia/mailboxes/ws_team", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	api.setAgentMailbox(w, r, "mia", "ws_team")
+	require.Equal(t, http.StatusUnprocessableEntity, w.Code, "body=%s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "not a member")
+
+	// Zero side effects: no config entry, no credential.
+	cfg := api.agentLoop.GetConfig()
+	_, exists := cfg.Mailboxes["mia"]["ws_team"]
+	assert.False(t, exists, "rejected save must not persist a mailbox")
+	_, err := api.credStore.Get("mailbox_mia_ws_team_password")
+	assert.Error(t, err, "rejected save must not store a credential")
+}
+
+func TestSetAgentMailbox_MemberAgentAccepted(t *testing.T) {
+	api := newMailboxTestAPI(t, nil)
+	seedWorkspaceFileWithTeam(t, api.homePath, "ws_team", []string{"other", "mia"})
+
+	body := `{"enabled":true,"imap_host":"i","smtp_host":"s","username":"me@x.com","password":"p"}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/mia/mailboxes/ws_team", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	api.setAgentMailbox(w, r, "mia", "ws_team")
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
 }

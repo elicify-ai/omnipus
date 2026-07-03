@@ -50,6 +50,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     saveAgentMailbox: vi.fn(),
     deleteAgentMailbox: vi.fn(),
     fetchAgents: vi.fn(),
+    fetchWorkspace: vi.fn(),
     fetchWorkspaces: vi.fn(),
     // ADR-031 Track 2 — ConnectorsScreen resolves each configured row's
     // workspace→agent binding via getChannelRouting; mock it so the real
@@ -78,6 +79,7 @@ import {
   saveAgentMailbox,
   deleteAgentMailbox,
   fetchAgents,
+  fetchWorkspace,
   fetchWorkspaces,
   fetchChannels,
   getChannelRouting,
@@ -110,11 +112,18 @@ function mockUiStore() {
 // mailboxes: optional roster passed straight through as the `mailboxes` prop
 // (ConnectorsScreen's ['agent-mailboxes'] query result) — used by the
 // duplicate-pair guard tests. Defaults to empty (no existing mailboxes).
+function mockWorkspaceDetail(team: string[] = ['mia', 'jim']) {
+  vi.mocked(fetchWorkspace).mockResolvedValue({
+    id: 'ws-1', name: 'My Workspace', status: 'active', core_team: team,
+  } as never)
+}
+
 function renderPanel(
   mailbox?: Record<string, unknown> | null,
   workspaces?: Record<string, unknown>[],
   mailboxes?: Mailbox[],
 ) {
+  mockWorkspaceDetail()
   const client = makeQueryClient()
   client.setQueryData(['agents'], [
     { id: 'mia', name: 'Mia', type: 'core', locked: true },
@@ -752,18 +761,20 @@ describe('EmailMailboxPanel — duplicate-pair guard', () => {
       expect(screen.getByTestId('mailbox-username')).toBeInTheDocument()
     })
 
-    // Pick the agent that already owns a mailbox in ws-1.
-    const agentTrigger = document.body.querySelectorAll('[role="combobox"]')[0] as HTMLElement
-    fireEvent.click(agentTrigger)
-    const agentOption = await screen.findByRole('option', { name: 'Mia' })
-    fireEvent.pointerDown(agentOption, { pointerId: 1, button: 0 })
-    fireEvent.click(agentOption)
-
+    // ADR-033 team scoping: agents are offered only after a workspace is
+    // selected — pick the workspace FIRST, then the member agent that already
+    // owns a mailbox there.
     const workspaceTrigger = document.body.querySelectorAll('[role="combobox"]')[1] as HTMLElement
     fireEvent.click(workspaceTrigger)
     const wsOption = await screen.findByRole('option', { name: 'My Workspace' })
     fireEvent.pointerDown(wsOption, { pointerId: 1, button: 0 })
     fireEvent.click(wsOption)
+
+    const agentTrigger = document.body.querySelectorAll('[role="combobox"]')[0] as HTMLElement
+    fireEvent.click(agentTrigger)
+    const agentOption = await screen.findByRole('option', { name: 'Mia' })
+    fireEvent.pointerDown(agentOption, { pointerId: 1, button: 0 })
+    fireEvent.click(agentOption)
 
     fireEvent.change(screen.getByTestId('mailbox-username'), { target: { value: 'new@example.com' } })
     fireEvent.change(screen.getByTestId('mailbox-imap-host'), { target: { value: 'imap.example.com' } })
@@ -906,5 +917,61 @@ describe('EmailMailboxPanel — create-mode reopen starts blank (stale-form fix)
       expect((screen.getByTestId('mailbox-username') as HTMLInputElement).value).toBe('')
     })
     expect((screen.getByTestId('mailbox-password') as HTMLInputElement).value).toBe('')
+  })
+})
+
+describe('EmailMailboxPanel — ADR-033 core_team scoping', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockUiStore()
+    vi.mocked(fetchAgents).mockResolvedValue([
+      { id: 'mia', name: 'Mia', type: 'core', locked: true } as never,
+      { id: 'ray', name: 'Ray', type: 'core', locked: true } as never,
+    ])
+    vi.mocked(fetchWorkspaces).mockResolvedValue([
+      { id: 'ws-1', name: 'My Workspace', status: 'active', pinned: false, pin_order: 0 } as never,
+    ])
+  })
+
+  it('offers only the selected workspace\'s core_team members as owning agents', async () => {
+    Element.prototype.scrollIntoView = vi.fn()
+    // ws-1's team contains mia but NOT ray.
+    const client = makeQueryClient()
+    client.setQueryData(['agents'], [
+      { id: 'mia', name: 'Mia', type: 'core', locked: true },
+      { id: 'ray', name: 'Ray', type: 'core', locked: true },
+    ])
+    client.setQueryData(['workspaces'], [
+      { id: 'ws-1', name: 'My Workspace', status: 'active', pinned: false, pin_order: 0 },
+    ])
+    vi.mocked(fetchWorkspace).mockResolvedValue({
+      id: 'ws-1', name: 'My Workspace', status: 'active', core_team: ['mia'],
+    } as never)
+
+    render(
+      <QueryClientProvider client={client}>
+        <EmailMailboxPanel open={true} onOpenChange={vi.fn()} mailbox={null} mailboxes={[]} />
+      </QueryClientProvider>,
+    )
+    await waitFor(() => {
+      expect(screen.getByTestId('mailbox-username')).toBeInTheDocument()
+    })
+
+    // Select the workspace, then open the agent select: Mia offered, Ray not.
+    const workspaceTrigger = document.body.querySelectorAll('[role="combobox"]')[1] as HTMLElement
+    fireEvent.click(workspaceTrigger)
+    const wsOption = await screen.findByRole('option', { name: 'My Workspace' })
+    fireEvent.pointerDown(wsOption, { pointerId: 1, button: 0 })
+    fireEvent.click(wsOption)
+
+    const agentTrigger = document.body.querySelectorAll('[role="combobox"]')[0] as HTMLElement
+    fireEvent.click(agentTrigger)
+    await screen.findByRole('option', { name: 'Mia' })
+    // The team filter applies once the workspace-detail query resolves (until
+    // then the unfiltered roster shows, mirroring CreateChannelSheet's
+    // loading fallback) — await the filtered state.
+    await waitFor(() => {
+      expect(screen.queryByRole('option', { name: 'Ray' })).not.toBeInTheDocument()
+    })
   })
 })

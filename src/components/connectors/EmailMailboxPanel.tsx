@@ -54,6 +54,7 @@ import {
   saveAgentMailbox,
   deleteAgentMailbox,
   fetchAgents,
+  fetchWorkspace,
   fetchWorkspaces,
   isWorker,
   isApiError,
@@ -416,7 +417,33 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox, mailboxes = [] 
   const hasStoredCredential = !isMoveTarget(form, mailbox) && Boolean(mailbox?.configured)
 
   // Non-worker agents only — email mailbox owner must be a conversational agent.
-  const mainAgents = agents.filter((a) => !isWorker(a))
+  // ADR-033 (operator-decided): the owning agent must be a core_team member
+  // of the selected workspace — mirror CreateChannelSheet's ADR-029 pattern:
+  // fetch the selected workspace's detail and filter the agent roster by its
+  // team. No workspace selected → no agents offered (workspace picks first).
+  const { data: workspaceDetail } = useQuery({
+    queryKey: ['workspace', form.workspace_id],
+    queryFn: () => fetchWorkspace(form.workspace_id),
+    enabled: open && form.workspace_id !== '',
+  })
+  const coreTeam = workspaceDetail?.core_team
+
+  const nonWorkerAgents = agents.filter((a) => !isWorker(a))
+  const mainAgents = (() => {
+    if (!form.workspace_id) return []
+    if (!coreTeam) return nonWorkerAgents // detail loading or roster absent — don't block on it
+    return nonWorkerAgents.filter((a) => coreTeam.includes(a.id))
+  })()
+
+  // A workspace change can invalidate the current agent selection (the agent
+  // may not be a member of the new workspace's team) — clear it so the
+  // membership rule can't be bypassed by selecting agent-then-workspace.
+  useEffect(() => {
+    if (!form.agent_id || !coreTeam) return
+    if (!coreTeam.includes(form.agent_id)) {
+      setForm((prev) => ({ ...prev, agent_id: '' }))
+    }
+  }, [coreTeam, form.agent_id])
 
   const agentItems = [
     { value: '__none__', label: '(select an agent)' },
@@ -475,7 +502,7 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox, mailboxes = [] 
               required
               error={fieldErrors.agent_id}
               helpId="mailbox-agent-help"
-              helpText="The agent whose email identity this mailbox represents. Every (agent, workspace) pair can have its own mailbox — the same agent may hold a different mailbox in each workspace."
+              helpText="The agent whose email identity this mailbox represents — only the selected workspace’s team members are listed (a mailbox’s unhandled mail becomes Board tasks in its workspace). Every (agent, workspace) pair can have its own mailbox."
             >
               {agentsError ? (
                 <p className="text-xs text-[var(--color-error)]">Could not load agents.</p>
@@ -483,7 +510,7 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox, mailboxes = [] 
                 <SmartSelect
                   value={form.agent_id || '__none__'}
                   onValueChange={(v) => setField('agent_id', v === '__none__' ? '' : v)}
-                  placeholder="(select an agent)"
+                  placeholder={form.workspace_id ? '(select an agent)' : '(select a workspace first)'}
                   items={agentItems}
                 />
               )}
