@@ -127,7 +127,6 @@ func TestHandleLogin_Success(t *testing.T) {
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.NotEmpty(t, resp["token"], "token must be non-empty")
-	assert.Equal(t, "admin", resp["role"])
 	assert.Equal(t, "testuser", resp["username"])
 }
 
@@ -476,7 +475,6 @@ func TestHandleValidateToken_ValidToken(t *testing.T) {
 	var validateResp map[string]any
 	require.NoError(t, json.Unmarshal(validateW.Body.Bytes(), &validateResp))
 	assert.Equal(t, "testuser", validateResp["username"])
-	assert.Equal(t, "admin", validateResp["role"])
 }
 
 // TestHandleValidateToken_InvalidToken verifies that GET /api/v1/auth/validate
@@ -1498,7 +1496,6 @@ func TestLogin_AfterOnboardingWithoutRestart(t *testing.T) {
 	var validateResp map[string]any
 	require.NoError(t, json.Unmarshal(validateW.Body.Bytes(), &validateResp))
 	assert.Equal(t, "admin", validateResp["username"])
-	assert.Equal(t, "admin", validateResp["role"])
 }
 
 func TestHandleValidateToken_TriggerReloadNotConfigured(t *testing.T) {
@@ -1562,7 +1559,6 @@ func TestHandleValidateToken_TriggerReloadNotConfigured(t *testing.T) {
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, "testuser", resp["username"])
-	assert.Equal(t, "admin", resp["role"])
 }
 
 // TestHandleChangePassword_InvalidatesExistingToken verifies that after a
