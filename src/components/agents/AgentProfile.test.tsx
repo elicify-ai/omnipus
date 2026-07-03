@@ -1714,3 +1714,70 @@ describe('AgentProfile — Heartbeat tab (FR-016 / US-5)', () => {
     expect((saveButton as HTMLButtonElement).disabled).toBe(true)
   })
 })
+
+describe('AgentProfile — max tool calls per turn (zero-clobber P0 fix)', () => {
+  // The input auto-saves; backing it directly with Number(e.target.value)
+  // meant clearing the field committed Number('') === 0 mid-keystroke and
+  // persisted it (live install ended up with five zeroed agents + a zeroed
+  // global default). The draft pattern must never autosave an empty/invalid
+  // value, and blur restores the last committed number.
+  it('clearing the field to type never persists 0; a valid value persists', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue({ ...mockCoreAgent, max_tool_iterations: 200 })
+    renderProfile(mockCoreAgent.id)
+    await screen.findByText(mockCoreAgent.name)
+    if (!screen.queryByTestId('agent-max-tool-calls-input')) {
+      switchTab('tab-advanced')
+    }
+    const input = (await screen.findByTestId('agent-max-tool-calls-input')) as HTMLInputElement
+    expect(input.value).toBe('200')
+
+    vi.mocked(updateAgent).mockClear()
+
+    // Clear the field (the first thing a user does before typing a new value).
+    fireEvent.change(input, { target: { value: '' } })
+    expect(input.value).toBe('')
+
+    // Type the new value.
+    fireEvent.change(input, { target: { value: '350' } })
+
+    await waitFor(
+      () => {
+        expect(updateAgent).toHaveBeenCalled()
+      },
+      { timeout: 3000 },
+    )
+    // NO call may ever carry 0 — and the final persisted value is 350.
+    for (const call of vi.mocked(updateAgent).mock.calls) {
+      expect(call[1].max_tool_iterations).not.toBe(0)
+    }
+    const last = vi.mocked(updateAgent).mock.calls.at(-1)!
+    expect(last[1].max_tool_iterations).toBe(350)
+  })
+
+  it('blur with an empty draft restores the last committed value', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue({ ...mockCoreAgent, max_tool_iterations: 200 })
+    renderProfile(mockCoreAgent.id)
+    await screen.findByText(mockCoreAgent.name)
+    if (!screen.queryByTestId('agent-max-tool-calls-input')) {
+      switchTab('tab-advanced')
+    }
+    const input = (await screen.findByTestId('agent-max-tool-calls-input')) as HTMLInputElement
+
+    fireEvent.change(input, { target: { value: '' } })
+    fireEvent.blur(input)
+    expect(input.value).toBe('200')
+  })
+
+  it('the help copy states the per-turn semantics and the 200 default', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue({ ...mockCoreAgent, max_tool_iterations: 200 })
+    renderProfile(mockCoreAgent.id)
+    await screen.findByText(mockCoreAgent.name)
+    if (!screen.queryByTestId('agent-max-tool-calls-input')) {
+      switchTab('tab-advanced')
+    }
+    await screen.findByTestId('agent-max-tool-calls-input')
+    expect(screen.getByText(/Max tool calls per turn/i)).toBeInTheDocument()
+    expect(screen.getByText(/Per single turn/i)).toBeInTheDocument()
+    expect(screen.getByText(/Default: 200/i)).toBeInTheDocument()
+  })
+})

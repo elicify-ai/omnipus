@@ -212,9 +212,19 @@ func NewAgentInstance(
 		toolsRegistry.Register(tools.NewRetrospectiveTool(memAdapter, nil))
 	}
 
-	maxIter := defaults.MaxToolIterations
-	if maxIter == 0 {
-		maxIter = 20
+	// Per-turn tool-round cap: per-agent override wins, then the global
+	// default, then 200. The per-agent field was persisted+displayed but never
+	// applied before 2026-07-03 (P0) — the runtime silently ran everything on
+	// the old emergency fallback of 20.
+	maxIter := 0
+	if agentCfg != nil {
+		maxIter = agentCfg.MaxToolIterations
+	}
+	if maxIter <= 0 {
+		maxIter = defaults.MaxToolIterations
+	}
+	if maxIter <= 0 {
+		maxIter = 200
 	}
 
 	maxTokens := defaults.MaxTokens

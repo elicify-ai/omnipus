@@ -188,7 +188,7 @@ function initialPayload(initialType: WizardType, initialCli?: WizardCli): Wizard
     heartbeat_enabled: false,
     heartbeat_interval: 1800,
     timeout_seconds: 300,
-    max_tool_iterations: 50,
+    max_tool_iterations: 200,
     steering_mode: 'one-at-a-time',
     // Inherit-from-caller toggles default OFF so the corresponding editors
     // (model picker, tools, skills, sandbox) render by default and the

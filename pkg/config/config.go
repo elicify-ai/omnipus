@@ -744,15 +744,23 @@ func resolveFallbackProvider(cfg *Config, slug string) string {
 }
 
 type AgentConfig struct {
-	ID            string            `json:"id"`
-	Default       bool              `json:"default,omitempty"`
-	Name          string            `json:"name,omitempty"`
-	Description   string            `json:"description,omitempty"`
-	Workspace     string            `json:"workspace,omitempty"`
-	Model         *AgentModelConfig `json:"model,omitempty"`
-	Skills        []string          `json:"skills,omitempty"`
-	Subagents     *SubagentsConfig  `json:"subagents,omitempty"`
-	CanDelegateTo []string          `json:"can_delegate_to,omitempty"`
+	ID          string            `json:"id"`
+	Default     bool              `json:"default,omitempty"`
+	Name        string            `json:"name,omitempty"`
+	Description string            `json:"description,omitempty"`
+	Workspace   string            `json:"workspace,omitempty"`
+	Model       *AgentModelConfig `json:"model,omitempty"`
+	// MaxToolIterations caps the LLM/tool rounds PER TURN for this agent
+	// (one chat message, board task, or heartbeat run = one turn; the turn
+	// pauses at the cap and can be continued). 0 = inherit
+	// agents.defaults.max_tool_iterations (which itself falls back to 200).
+	// This field previously existed only on the wire and in raw config.json —
+	// it was silently dropped on load and never applied by the runtime
+	// (P0 bug, fixed 2026-07-03).
+	MaxToolIterations int              `json:"max_tool_iterations,omitempty"`
+	Skills            []string         `json:"skills,omitempty"`
+	Subagents         *SubagentsConfig `json:"subagents,omitempty"`
+	CanDelegateTo     []string         `json:"can_delegate_to,omitempty"`
 	// FallbackModels is the ordered fallback chain tried when the primary
 	// model returns an error. Each entry carries its own provider so a
 	// fallback can route through a different provider than the primary (e.g.
