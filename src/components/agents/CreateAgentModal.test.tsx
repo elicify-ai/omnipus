@@ -601,3 +601,33 @@ describe('CreateAgentModal — Advanced step fields', () => {
     })
   })
 })
+
+describe('CreateAgentModal — create/edit parity fixes (P3, 2026-07-03)', () => {
+  it('step 2 shows the SOUL.md minLength hint and places the upload button BELOW the textarea', async () => {
+    renderModal({ open: true, onClose: vi.fn() })
+    fireEvent.change(screen.getByTestId('wizard-name'), { target: { value: 'A' } })
+    fireEvent.change(screen.getByTestId('wizard-model'), { target: { value: 'm' } })
+    fireEvent.click(screen.getByTestId('wizard-next-1'))
+
+    const soul = await screen.findByTestId('wizard-soul')
+    // minLength hint (AgentCreateRequest.soul is minLength: 1).
+    expect(screen.getByTestId('soul-minlength-hint')).toBeInTheDocument()
+    // The upload affordance sits BELOW the textarea (edit-dialog parity —
+    // the wizard used to place its own drifted copy above the box).
+    const upload = screen.getByTestId('wizard-soul-upload')
+    const position = soul.compareDocumentPosition(upload)
+    expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('subagent_3p step 3 does NOT offer the skills mapping (external runners cannot load Omnipus skills)', async () => {
+    renderModal({ open: true, onClose: vi.fn(), initialType: 'subagent_3p' })
+    await fillAndAdvanceToStep3({ initialType: 'subagent_3p' })
+    expect(screen.queryByTestId('wizard-skills')).toBeNull()
+  })
+
+  it('native Subagent step 3 still offers the skills mapping', async () => {
+    renderModal({ open: true, onClose: vi.fn(), initialType: 'Subagent' })
+    await fillAndAdvanceToStep3({ initialType: 'Subagent' })
+    expect(screen.queryByTestId('wizard-skills')).not.toBeNull()
+  })
+})

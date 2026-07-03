@@ -1781,3 +1781,22 @@ describe('AgentProfile — max tool calls per turn (zero-clobber P0 fix)', () =>
     expect(screen.getByText(/Default: 200/i)).toBeInTheDocument()
   })
 })
+
+describe('AgentProfile — skills hidden for external-cli workers (P3, 2026-07-03)', () => {
+  it('a subagent_3p (external-cli) worker gets NO Skills section', async () => {
+    // External CLI runners (claude-code / codex / opencode) can never load
+    // Omnipus skills — offering the mapping was a lie. The old gate
+    // (!isNativeWorkerAgent) let external workers through.
+    vi.mocked(fetchAgent).mockResolvedValue({
+      ...mockWorkerAgent,
+      executor: { kind: 'external-cli', cli: 'claude-code' },
+    })
+    renderProfile('web-researcher')
+    await screen.findByText('Web Researcher')
+    switchTab('tab-tools')
+    // The tab renders (fallback models etc.) but the Skills section must not.
+    await waitFor(() => {
+      expect(screen.queryByText(/^Skills$/i)).toBeNull()
+    })
+  })
+})

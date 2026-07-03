@@ -91,7 +91,11 @@ describe('Step2Personality — heartbeat removed (FR-017 / US-5.AC3)', () => {
   it('still renders the soul textarea (always required)', () => {
     renderStep({}, 'Main')
     expect(screen.getByTestId('wizard-soul')).toBeInTheDocument()
-    expect(screen.getByLabelText(/soul/i)).toBeInTheDocument()
+    // Parity refactor (P3, 2026-07-03): the step now renders the shared
+    // BehaviorFields, whose Main-agent title is "Personality & instructions"
+    // (the edit dialog's label) rather than the wizard's old bare "Soul".
+    expect(screen.getByText(/Personality & instructions/i)).toBeInTheDocument()
+    expect(screen.getByTestId('soul-minlength-hint')).toBeInTheDocument()
   })
 
   it('still renders voice field for Main agents', () => {
