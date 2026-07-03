@@ -216,7 +216,10 @@ func NewAgentInstance(
 	// default, then 200. The per-agent field was persisted+displayed but never
 	// applied before 2026-07-03 (P0) — the runtime silently ran everything on
 	// the old emergency fallback of 20.
-	maxIter := agentCfg.MaxToolIterations
+	maxIter := 0
+	if agentCfg != nil {
+		maxIter = agentCfg.MaxToolIterations
+	}
 	if maxIter <= 0 {
 		maxIter = defaults.MaxToolIterations
 	}
