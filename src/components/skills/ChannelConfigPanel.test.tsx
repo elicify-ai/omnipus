@@ -159,7 +159,9 @@ function mockPairingState(status: PairingStatus, qr = '') {
     ((selector: (s: { byChannel: Record<string, unknown>; apply: () => void; clear: () => void }) => unknown) =>
       selector({
         byChannel: {
-          whatsapp_native: { status, qr, message: status === 'error' ? 'Auth failed' : '' },
+          // Pairing frames are keyed by INSTANCE id (post multi-instance) — the
+          // panel under test renders channelId='whatsapp', so the store keys match.
+          whatsapp: { status, qr, message: status === 'error' ? 'Auth failed' : '' },
         },
         apply: vi.fn(),
         clear: vi.fn(),
@@ -202,6 +204,28 @@ describe('ChannelConfigPanel — WhatsApp QR 5-state machine (#325 / US-C3)', ()
       expect(screen.getByText(/Generating your QR code/i)).toBeInTheDocument()
     })
     expect(screen.queryByTestId('whatsapp-qr')).not.toBeInTheDocument()
+  })
+
+  it('NAMESPACED instance regression: the QR pairing UI renders for "whatsapp.sales" too', async () => {
+    // Live-UAT regression (2026-07-03): isWhatsApp/hasPairingFlow used exact
+    // `channelId === 'whatsapp'` matches, so every ADR-029 operator-created
+    // instance ("whatsapp.<slug>") silently lost the entire pairing flow.
+    // Pairing frames are keyed by the INSTANCE id, so the fixture keys match
+    // the rendered channelId.
+    vi.mocked(useWhatsAppPairingStore).mockImplementation(
+      ((selector: (s: { byChannel: Record<string, unknown>; apply: () => void; clear: () => void }) => unknown) =>
+        selector({
+          byChannel: {
+            'whatsapp.sales': { status: 'code', qr: 'https://example.com/ns-qr', message: '' },
+          },
+          apply: vi.fn(),
+          clear: vi.fn(),
+        })) as never,
+    )
+    renderPanel('whatsapp.sales', 'WhatsApp', undefined, true)
+    await waitFor(() => {
+      expect(screen.getByTestId('whatsapp-qr')).toBeInTheDocument()
+    })
   })
 
   it('AC2: state "code" → renders QR + Linked Devices steps + refresh note', async () => {
@@ -326,8 +350,8 @@ describe('ChannelConfigPanel — WhatsApp Retry bounded timeout (MAJOR fix)', ()
     // Use real timers for initial render + interaction, then fake for the timer advance.
     vi.useRealTimers()
 
-    // Seed timeout state. pairingByChannel uses the WS/store key 'whatsapp_native'.
-    pairingByChannel['whatsapp_native'] = { status: 'timeout', qr: '', message: 'expired' }
+    // Seed timeout state. Pairing frames are keyed by INSTANCE id ('whatsapp').
+    pairingByChannel['whatsapp'] = { status: 'timeout', qr: '', message: 'expired' }
     vi.mocked(useWhatsAppPairingStore).mockImplementation(
       ((selector: (s: unknown) => unknown) =>
         selector({ byChannel: pairingByChannel, clear: clearFn, apply: applyFn })) as never,
@@ -365,8 +389,8 @@ describe('ChannelConfigPanel — WhatsApp Retry bounded timeout (MAJOR fix)', ()
   it('Retry on error → spinner immediately; after 30s reverts to error + Retry', async () => {
     vi.useRealTimers()
 
-    // pairingByChannel uses the WS/store key 'whatsapp_native'.
-    pairingByChannel['whatsapp_native'] = { status: 'error', qr: '', message: 'auth failed' }
+    // Pairing frames are keyed by INSTANCE id ('whatsapp').
+    pairingByChannel['whatsapp'] = { status: 'error', qr: '', message: 'auth failed' }
     vi.mocked(useWhatsAppPairingStore).mockImplementation(
       ((selector: (s: unknown) => unknown) =>
         selector({ byChannel: pairingByChannel, clear: clearFn, apply: applyFn })) as never,
@@ -426,7 +450,7 @@ describe('WhatsAppNativeNotice — 15s initial timeout (#368)', () => {
 
     // Render under act() to flush mount effects synchronously.
     await act(async () => {
-      render(<WhatsAppNativeNotice />)
+      render(<WhatsAppNativeNotice channelId="whatsapp" />)
     })
 
     // Initial state: spinner shown, no retry button.
@@ -461,7 +485,7 @@ describe('WhatsAppNativeNotice — 15s initial timeout (#368)', () => {
 
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
 
-    const { unmount } = render(<WhatsAppNativeNotice />)
+    const { unmount } = render(<WhatsAppNativeNotice channelId="whatsapp" />)
 
     // Flush effects so the timer is registered.
     await act(async () => {})
