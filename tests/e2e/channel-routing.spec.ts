@@ -56,13 +56,32 @@ const STUB_CHANNELS = [
   },
 ]
 
+// The SPA's request() validates every response against the generated zod
+// schema and REJECTS the whole payload on any mismatch (ApiSchemaError) —
+// stubs must carry every schema-required field or the panel renders its
+// "Couldn't load agent list." error instead of routing-agent-select.
+const AGENT_REQUIRED = {
+  status: 'idle',
+  soul: 'stub soul',
+  timeout_seconds: 300,
+  max_tool_iterations: 200,
+  steering_mode: 'one-at-a-time',
+}
 const STUB_AGENTS = [
-  { id: 'mia', name: 'Mia', type: 'core', locked: true },
-  { id: 'ray', name: 'Ray', type: 'core', locked: true },
-  { id: 'jim', name: 'Jim', type: 'core', locked: true },
-  { id: 'ava', name: 'Ava', type: 'core', locked: true },
-  { id: 'worker-1', name: 'Worker One', type: 'Subagent', locked: false },
+  { id: 'mia', name: 'Mia', type: 'core', locked: true, ...AGENT_REQUIRED },
+  { id: 'ray', name: 'Ray', type: 'core', locked: true, ...AGENT_REQUIRED },
+  { id: 'jim', name: 'Jim', type: 'core', locked: true, ...AGENT_REQUIRED },
+  { id: 'ava', name: 'Ava', type: 'core', locked: true, ...AGENT_REQUIRED },
+  { id: 'worker-1', name: 'Worker One', type: 'Subagent', locked: false, ...AGENT_REQUIRED },
 ]
+
+// Workspace schema requires pinned/pin_order/created_at/updated_at too.
+const WS_REQUIRED = {
+  pinned: false,
+  pin_order: 0,
+  created_at: '2026-07-01T00:00:00Z',
+  updated_at: '2026-07-01T00:00:00Z',
+}
 
 const STUB_WORKSPACES = [
   {
@@ -71,6 +90,7 @@ const STUB_WORKSPACES = [
     status: 'active',
     core_team: ['mia', 'ray'],
     task_count: 0,
+    ...WS_REQUIRED,
   },
   {
     id: 'engineering',
@@ -78,6 +98,7 @@ const STUB_WORKSPACES = [
     status: 'active',
     core_team: ['jim', 'ava'],
     task_count: 0,
+    ...WS_REQUIRED,
   },
 ]
 
@@ -87,6 +108,7 @@ const STUB_WORKSPACE_SALES = {
   status: 'active',
   core_team: ['mia', 'ray'],
   task_count: 0,
+  ...WS_REQUIRED,
 }
 
 const STUB_WORKSPACE_EMPTY = {
@@ -95,6 +117,7 @@ const STUB_WORKSPACE_EMPTY = {
   status: 'active',
   core_team: [],
   task_count: 0,
+  ...WS_REQUIRED,
 }
 
 // ── Route registration helper ────────────────────────────────────────────────
@@ -321,7 +344,7 @@ test(
     await registerBaseRoutes(page, {
       workspacesOverride: [
         ...STUB_WORKSPACES,
-        { id: 'empty-ws', name: 'Empty Team', status: 'active', core_team: [], task_count: 0 },
+        { id: 'empty-ws', name: 'Empty Team', status: 'active', core_team: [], task_count: 0, ...WS_REQUIRED },
       ],
     })
     const sheet = await openTelegramPanel(page)
