@@ -140,7 +140,7 @@ import {
   SlashCommand as SlashCommandSchema,
   // Memory/recap settings (workspace-heartbeat-memory-config-spec.md FR-019):
   MemorySettings as MemorySettingsSchema,
-  // M11 per-agent email mailbox account (contract-first #8):
+  // M11 per-(agent, workspace) email mailbox account (contract-first #8):
   Mailbox as MailboxSchema,
   MailboxListResponse as MailboxListResponseSchema,
 } from '@/lib/api/generated/schemas'
@@ -378,7 +378,7 @@ import type {
   SlashCommand,
   // Memory/recap settings (workspace-heartbeat-memory-config-spec.md FR-019):
   MemorySettings,
-  // M11 per-agent email mailbox account (contract-first #8):
+  // M11 per-(agent, workspace) email mailbox account (contract-first #8):
   Mailbox,
   MailboxConfigureRequest,
 } from '@/lib/api/generated/openapi-types'
@@ -510,7 +510,7 @@ export type {
   SlashCommand,
   // Memory/recap settings (workspace-heartbeat-memory-config-spec.md FR-019):
   MemorySettings,
-  // M11 per-agent email mailbox account:
+  // M11 per-(agent, workspace) email mailbox account:
   Mailbox,
   MailboxConfigureRequest,
 }

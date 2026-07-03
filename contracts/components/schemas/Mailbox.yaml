@@ -10,6 +10,7 @@ description: >
 type: object
 required:
 - agent_id
+- workspace_id
 - enabled
 - configured
 additionalProperties: false
@@ -25,7 +26,10 @@ properties:
       send_email, reply) are registered for the owning agent.
   workspace_id:
     type: string
-    description: "ID of the workspace the mailbox surfaces in."
+    description: >
+      ID of the workspace the mailbox surfaces in. Always present: a mailbox
+      is addressed by its (agent, workspace) pair, so the server serializes
+      this from the authoritative pair key — never from mutable state.
     example: "ws_my_workspace"
   imap_host:
     type: string

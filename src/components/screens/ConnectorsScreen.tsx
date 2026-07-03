@@ -778,6 +778,16 @@ function DeleteConfirmDialog({ channel, onClose }: DeleteConfirmDialogProps) {
 // rows (a different role/inbox per workspace) — testids key off BOTH ids to
 // avoid collisions.
 
+/**
+ * Stable key for an (agent, workspace) mailbox pair — the row's identity (an
+ * agent can legitimately own a mailbox in more than one workspace, so
+ * agent_id alone is not unique). Shared between MailboxRow's testids and the
+ * roster's `.map` key so the two never drift apart.
+ */
+function mailboxPairKey(mailbox: Pick<Mailbox, 'agent_id' | 'workspace_id'>): string {
+  return `${mailbox.agent_id}-${mailbox.workspace_id}`
+}
+
 interface MailboxRowProps {
   mailbox: Mailbox
   agentNameById: Map<string, string>
@@ -789,17 +799,12 @@ function MailboxRow({ mailbox, agentNameById, workspaceNameById, onConfigure }: 
   // Fall back to the raw id when the name lookup misses (deleted agent,
   // archived workspace) — never hide the row just because a name is unresolved.
   const agentName = agentNameById.get(mailbox.agent_id) ?? mailbox.agent_id
-  // workspace_id is the other half of the pair's identity — always render it
-  // (name when resolvable, else the raw id) rather than hiding it only when
-  // the name lookup misses.
-  const workspaceName = mailbox.workspace_id
-    ? workspaceNameById.get(mailbox.workspace_id) ?? mailbox.workspace_id
-    : undefined
+  const workspaceName = workspaceNameById.get(mailbox.workspace_id) ?? mailbox.workspace_id
   const isActive = mailbox.enabled && mailbox.configured
   // The pair (agent_id, workspace_id) is the row's identity — an agent can
   // legitimately appear in two rows (a different mailbox per workspace), so
   // testids must key off both ids to avoid collisions.
-  const pairKey = `${mailbox.agent_id}-${mailbox.workspace_id ?? 'none'}`
+  const pairKey = mailboxPairKey(mailbox)
 
   return (
     <div
@@ -1122,7 +1127,7 @@ export function ConnectorsScreen() {
                 ) : (
                   mailboxes.map((mb) => (
                     <MailboxRow
-                      key={`${mb.agent_id}-${mb.workspace_id ?? 'none'}`}
+                      key={mailboxPairKey(mb)}
                       mailbox={mb}
                       agentNameById={agentNameById}
                       workspaceNameById={workspaceNameById}
@@ -1205,6 +1210,7 @@ export function ConnectorsScreen() {
           open={mailboxPanel.open}
           onOpenChange={(next) => setMailboxPanel((prev) => ({ ...prev, open: next }))}
           mailbox={mailboxPanel.target}
+          mailboxes={mailboxes}
         />
 
         {/* Create-channel Sheet (US-10) */}

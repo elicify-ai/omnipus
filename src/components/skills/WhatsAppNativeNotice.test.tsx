@@ -186,4 +186,67 @@ describe('WhatsAppNativeNotice — Retry restarts the channel (terminal QR loop)
     // No re-subscribe after a failed restart
     expect(enableSpy).not.toHaveBeenCalled()
   })
+
+  it('when disable fails outright, the message does not claim the channel was disabled', async () => {
+    pairing.byChannel['whatsapp'] = { status: 'timeout', qr: '', message: 'expired' }
+    disableSpy.mockImplementation(async () => { throw new Error('gateway down') })
+
+    render(<WhatsAppNativeNotice channelId="whatsapp" />)
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /retry/i }))
+    })
+
+    await waitFor(() => {
+      expect(applySpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'whatsapp_pairing',
+          channel_id: 'whatsapp',
+          status: 'error',
+          message: expect.not.stringMatching(/disabled/i),
+        }),
+      )
+    })
+  })
+
+  it('when disable succeeds but re-enable fails, the error message names the channel as now disabled', async () => {
+    pairing.byChannel['whatsapp'] = { status: 'timeout', qr: '', message: 'expired' }
+    // disableSpy resolves via the default beforeEach mock; enable fails.
+    enableSpy.mockImplementation(async () => { throw new Error('reload error') })
+
+    render(<WhatsAppNativeNotice channelId="whatsapp" />)
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /retry/i }))
+    })
+
+    await waitFor(() => {
+      expect(disableSpy).toHaveBeenCalledWith('whatsapp')
+      expect(applySpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'whatsapp_pairing',
+          channel_id: 'whatsapp',
+          status: 'error',
+          message: expect.stringMatching(/disabled/i),
+        }),
+      )
+    })
+  })
+
+  it('ignores a second click fired synchronously while a retry is already in flight (re-entrancy guard)', async () => {
+    pairing.byChannel['whatsapp'] = { status: 'timeout', qr: '', message: 'expired' }
+
+    render(<WhatsAppNativeNotice channelId="whatsapp" />)
+    const retryBtn = screen.getByRole('button', { name: /retry/i })
+
+    // Two synchronous clicks, no await in between — both invoke handleRetry
+    // before React has a chance to re-render and hide the Retry button.
+    await act(async () => {
+      fireEvent.click(retryBtn)
+      fireEvent.click(retryBtn)
+    })
+
+    expect(disableSpy).toHaveBeenCalledTimes(1)
+    expect(enableSpy).toHaveBeenCalledTimes(1)
+  })
 })

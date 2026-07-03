@@ -46,6 +46,11 @@ func registerEmailToolsForAgent(cfg *config.Config, agentID string, agent *Agent
 	sort.Strings(wsIDs)
 
 	for _, wsID := range wsIDs {
+		if strings.TrimSpace(wsID) == "" {
+			slog.Warn("email tools: dropping mailbox with empty workspace key",
+				"agent_id", agentID)
+			continue
+		}
 		mb := byWorkspace[wsID]
 		if !mb.Enabled {
 			continue

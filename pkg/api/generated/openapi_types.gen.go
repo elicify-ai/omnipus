@@ -5720,8 +5720,8 @@ type Mailbox struct {
 	// Username The email address / login used for IMAP and SMTP authentication.
 	Username *string `json:"username,omitempty"`
 
-	// WorkspaceId ID of the workspace the mailbox surfaces in.
-	WorkspaceId *string `json:"workspace_id,omitempty"`
+	// WorkspaceId ID of the workspace the mailbox surfaces in. Always present: a mailbox is addressed by its (agent, workspace) pair, so the server serializes this from the authoritative pair key — never from mutable state.
+	WorkspaceId string `json:"workspace_id"`
 }
 
 // MailboxConfigureRequest Request body to configure one (agent, workspace) mailbox account (M11). The target agent and workspace are both path parameters (PUT /agents/{id}/mailboxes/{workspaceId}) — an agent can hold a different mailbox in each workspace it belongs to. The password, when present, is routed into the encrypted credential store and persisted only as a credential reference — it is never written to config.json. Omitting the password leaves any existing stored password unchanged; sending an empty string clears it.
@@ -5776,8 +5776,8 @@ type MailboxListResponse struct {
 		// Username The email address / login used for IMAP and SMTP authentication.
 		Username *string `json:"username,omitempty"`
 
-		// WorkspaceId ID of the workspace the mailbox surfaces in.
-		WorkspaceId *string `json:"workspace_id,omitempty"`
+		// WorkspaceId ID of the workspace the mailbox surfaces in. Always present: a mailbox is addressed by its (agent, workspace) pair, so the server serializes this from the authoritative pair key — never from mutable state.
+		WorkspaceId string `json:"workspace_id"`
 	} `json:"mailboxes"`
 }
 
