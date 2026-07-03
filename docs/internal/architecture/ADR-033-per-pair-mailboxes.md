@@ -38,9 +38,9 @@ Repairing the dead seam re-opened the ownership question. The operator decided, 
 - **Mailbox as a channel instance (ADR-029 machinery)** — rejected earlier by M11 and reaffirmed: email is pull-on-heartbeat over tools, not a push conversational stream; wedging it into the channel manager would buy nothing but the singleton problems channels just escaped.
 - **Backend "rename pair" endpoint for moves** (re-points the credential instead of requiring re-entry) — deferred. Require-password-on-move is honest, simple, and shipped; a rename endpoint is additive if move friction proves real.
 
-## 4. Open decision points (explicitly unresolved)
+## 4. Decision points
 
-- **`core_team` alignment (pending operator decision):** ADR-029 requires a channel-bound agent to be a `core_team` member of the workspace; mailboxes currently have **no such check** — any agent may hold a mailbox in any existing workspace. The operator was asked and has not yet decided (session 2026-07-03; question stands). Until decided, the divergence is deliberate-by-default: mailboxes are a tool surface, not chat routing. If "require core_team" is chosen: backend 422 + the panel filters agents by the selected workspace's team (same UX as channel binding).
+- **`core_team` alignment — DECIDED 2026-07-03 (operator, verbatim: "require core_team membership, implement it is a must"):** mailbox ownership requires the owning agent to be a `core_team` member of the target workspace, aligning with ADR-029 FR-006. Implemented same-day: backend 422 (`agent %q is not a member of workspace %q`, identical message to the channel-routing gate) plus a worker exclusion (FR-008 parity — workers cannot own a mailbox); the panel offers agents only after a workspace is selected, filters the roster by the workspace's team (CreateChannelSheet's exact pattern including its loading fallback), and clears a selection invalidated by a workspace change. Existing mailboxes whose owner is no longer a member keep working (registration is not membership-gated); the rule is enforced at write time, matching ADR-029's bind-time enforcement.
 - **v0.3 reconciliation:** the Workspaces redesign should treat this ADR as the canonical mailbox model and update the concept docs accordingly (the preview-doc's Email sections now carry a supersession note rather than a rewrite).
 
 ## 5. Consequences

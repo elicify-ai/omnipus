@@ -219,7 +219,43 @@ func (a *restAPI) setAgentMailbox(w http.ResponseWriter, r *http.Request, agentI
 	// workspace-scoped surface would ever list it) and would silently drift
 	// from the workspace-delete cascade (removeMailboxesForWorkspace), which
 	// only cleans up pairs whose workspace it can see got deleted.
-	if _, ok := a.loadWorkspace(w, workspaceID); !ok {
+	ws, ok := a.loadWorkspace(w, workspaceID)
+	if !ok {
+		return
+	}
+
+	// ADR-033 (operator-decided 2026-07-03): the owning agent MUST be a
+	// core_team member of the target workspace, aligning mailbox ownership
+	// with ADR-029's channel-binding rule (FR-006) — the mailbox surfaces its
+	// unhandled mail as Board tasks in this workspace, so its owner must be a
+	// member there. Workers are likewise excluded (FR-008 parity): the panel
+	// never offers them, and a delegation-only worker has no inbox-working
+	// heartbeat persona. Both reject with 422, same messages as the channel
+	// routing gate.
+	cfg := a.agentLoop.GetConfig()
+	var owningAgent *config.AgentConfig
+	for i := range cfg.Agents.List {
+		if cfg.Agents.List[i].ID == agentID {
+			ac := cfg.Agents.List[i]
+			owningAgent = &ac
+			break
+		}
+	}
+	if owningAgent != nil && owningAgent.IsWorker() {
+		jsonErr(w, http.StatusUnprocessableEntity,
+			"workers cannot own a mailbox")
+		return
+	}
+	inTeam := false
+	for _, memberID := range ws.CoreTeam {
+		if memberID == agentID {
+			inTeam = true
+			break
+		}
+	}
+	if !inTeam {
+		jsonErr(w, http.StatusUnprocessableEntity,
+			fmt.Sprintf("agent %q is not a member of workspace %q", agentID, workspaceID))
 		return
 	}
 
