@@ -1,30 +1,49 @@
 type: object
 title: GodModeStatus
 description: >
-  O14 god-mode runtime state, returned by GET /api/v1/gateway/god-mode and as
-  the body of a successful POST /api/v1/gateway/god-mode toggle. God mode is the
-  single global "bypass-permissions" switch: when enabled every agent's tool
-  policy is floored at "allow" (no prompts), the kernel sandbox is off, network
-  egress is open, and the shell guard is off — regardless of per-agent profiles.
-  Audit logging, the prompt-injection guard, and rate limiting are never
-  disabled. The per-agent overrides are non-destructive: switching god mode off
-  restores prior behavior exactly.
+  O14 god-mode runtime state, returned by GET /api/v1/gateway/god-mode. God
+  mode is the single global "bypass-permissions" switch: when enabled every
+  agent's tool policy is floored at "allow" (no prompts), the kernel sandbox
+  is off, network egress is open, and the shell guard is off — regardless of
+  per-agent profiles. Audit logging, the prompt-injection guard, and rate
+  limiting are never disabled. The per-agent overrides are non-destructive:
+  switching god mode off restores prior behavior exactly.
 required:
   - enabled
   - available
+  - supported
 additionalProperties: false
 properties:
   enabled:
     type: boolean
     description: >
-      Current runtime god-mode state. Always false when `available` is false
-      (the switch is a no-op without availability).
+      Current runtime god-mode state — whether the override is ACTIVE in this
+      process right now. Always false when `available` is false (the switch
+      is a no-op without availability). Can differ from the last value POSTed
+      to this endpoint immediately after an enable that returned
+      restart_required=true in GodModeUpdateResponse: the config write
+      succeeded, but availability is boot-frozen, so the override does not
+      become active until the gateway restarts.
     example: false
   available:
     type: boolean
     description: >
-      Whether god mode CAN be enabled in this gateway: the build supports it
-      (not compiled with the nogodmode tag) AND --allow-god-mode was passed at
-      boot. When false, POST /api/v1/gateway/god-mode with enabled=true returns
-      403.
+      Whether god mode is ACTIVE-CAPABLE in this boot: the build supports it
+      (`supported` is true) AND authorization was granted before this process
+      started, either via the legacy --allow-god-mode boot flag or via
+      sandbox.god_mode_allowed persisted config (set by a prior UI enable +
+      restart). Authorization is evaluated once at boot, so granting it via
+      the UI (POST enabled=true while available=false) does not flip this to
+      true until the gateway restarts — see GodModeUpdateResponse.restart_required.
     example: false
+  supported:
+    type: boolean
+    description: >
+      Whether this build supports god mode AT ALL — false only when compiled
+      with the nogodmode build tag. Independent of runtime authorization:
+      POST .../god-mode with enabled=true is permitted whenever `supported` is
+      true, even if `available` is currently false (enabling then persists
+      authorization to config and requires a gateway restart to actually take
+      effect). When `supported` is false, enabling always returns 403
+      regardless of any authorization source.
+    example: true

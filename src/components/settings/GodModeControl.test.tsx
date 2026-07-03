@@ -1,12 +1,19 @@
 /**
- * GodModeControl.test.tsx — O14 god-mode switch.
+ * GodModeControl.test.tsx — O14 god-mode switch (UI-driven enablement).
  *
  * Covers:
- *  - the toggle reflects live state from GodModeStatus ({ enabled, available })
+ *  - the toggle reflects live state from GodModeStatus ({ enabled, available, supported })
  *  - flipping the toggle opens the step-up (re-auth) dialog and does NOT call
  *    the god-mode endpoint until the password is confirmed
  *  - confirming the password replays the minted consent token into setGodMode
- *  - the unavailable build disables the toggle with an explanatory note
+ *  - the toggle is clickable whenever `supported` is true, even when
+ *    `available` is false (the UI-driven enablement flow)
+ *  - a nogodmode build (supported=false) disables the toggle with an
+ *    explanatory "compiled out" note
+ *  - a supported-but-unauthorized boot (supported=true, available=false)
+ *    shows a "restart to activate" note instead of "compiled out"
+ *  - enabling with restart_required=true opens GatewayRestartModal
+ *  - disabling (restart_required=false) never opens GatewayRestartModal
  *  - the active-state banner renders only when god-mode is on
  */
 
@@ -18,6 +25,13 @@ const addToast = vi.fn()
 
 vi.mock('@/store/ui', () => ({
   useUiStore: vi.fn(() => ({ addToast })),
+}))
+
+// GatewayRestartModal (rendered by GodModeControl) reads the pending-restart
+// store; mock it so the nested modal doesn't fire a real network query.
+const mockRefetchPending = vi.fn().mockResolvedValue(undefined)
+vi.mock('@/store/restart', () => ({
+  usePendingRestart: () => ({ refetch: mockRefetchPending }),
 }))
 
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -54,10 +68,15 @@ function renderBanner() {
   )
 }
 
-// GodModeStatus = { enabled, available }
-const STATE_OFF = { enabled: false, available: true }
-const STATE_ON = { enabled: true, available: true }
-const STATE_UNAVAILABLE = { enabled: false, available: false }
+// GodModeStatus = { enabled, available, supported }
+const STATE_OFF = { enabled: false, available: true, supported: true }
+const STATE_ON = { enabled: true, available: true, supported: true }
+// Build supports god mode, but this boot was never authorized (no
+// --allow-god-mode, no prior UI-enable + restart). The toggle must still be
+// clickable — this is the state the UI-driven enablement flow starts from.
+const STATE_SUPPORTED_UNAVAILABLE = { enabled: false, available: false, supported: true }
+// nogodmode build — god mode does not exist in this binary at all.
+const STATE_COMPILED_OUT = { enabled: false, available: false, supported: false }
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -96,7 +115,7 @@ describe('GodModeControl', () => {
   it('replays the minted consent token into setGodMode after password confirm', async () => {
     vi.mocked(api.fetchGodMode).mockResolvedValue(STATE_OFF)
     vi.mocked(api.reAuth).mockResolvedValue({ verified: true, token: 'reauth_tok', expires_in: 300 } as never)
-    vi.mocked(api.setGodMode).mockResolvedValue({ enabled: true, available: true })
+    vi.mocked(api.setGodMode).mockResolvedValue({ enabled: true, restart_required: false })
 
     renderControl()
     await waitFor(() => expect(screen.getByTestId('god-mode-toggle')).toBeEnabled())
@@ -112,15 +131,27 @@ describe('GodModeControl', () => {
     })
   })
 
-  it('disables the toggle and shows a note when god-mode is unavailable in the build', async () => {
-    vi.mocked(api.fetchGodMode).mockResolvedValue(STATE_UNAVAILABLE)
+  it('is clickable when supported but not yet available (UI-driven enablement)', async () => {
+    vi.mocked(api.fetchGodMode).mockResolvedValue(STATE_SUPPORTED_UNAVAILABLE)
     renderControl()
-    // The note only renders once the query has settled (available=false &&
+    await waitFor(() => {
+      expect(screen.getByTestId('god-mode-restart-note')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('god-mode-toggle')).toBeEnabled()
+    expect(screen.queryByTestId('god-mode-unavailable-note')).not.toBeInTheDocument()
+  })
+
+  it('disables the toggle and shows the compiled-out note on a nogodmode build', async () => {
+    vi.mocked(api.fetchGodMode).mockResolvedValue(STATE_COMPILED_OUT)
+    renderControl()
+    // The note only renders once the query has settled (supported=false &&
     // !isLoading); wait for it, then assert the toggle is disabled.
     await waitFor(() => {
       expect(screen.getByTestId('god-mode-unavailable-note')).toBeInTheDocument()
     })
+    expect(screen.getByText(/compiled out/i)).toBeInTheDocument()
     expect(screen.getByTestId('god-mode-toggle')).toBeDisabled()
+    expect(screen.queryByTestId('god-mode-restart-note')).not.toBeInTheDocument()
   })
 
   it('does not call setGodMode if the step-up dialog is cancelled', async () => {
@@ -136,6 +167,46 @@ describe('GodModeControl', () => {
       expect(screen.queryByTestId('reauth-confirm')).not.toBeInTheDocument()
     })
     expect(api.setGodMode).not.toHaveBeenCalled()
+  })
+
+  it('opens GatewayRestartModal when enabling returns restart_required=true', async () => {
+    vi.mocked(api.fetchGodMode).mockResolvedValue(STATE_SUPPORTED_UNAVAILABLE)
+    vi.mocked(api.reAuth).mockResolvedValue({ verified: true, token: 'reauth_tok', expires_in: 300 } as never)
+    vi.mocked(api.setGodMode).mockResolvedValue({ enabled: true, restart_required: true })
+
+    renderControl()
+    await waitFor(() => expect(screen.getByTestId('god-mode-toggle')).toBeEnabled())
+
+    fireEvent.click(screen.getByTestId('god-mode-toggle'))
+    await waitFor(() => screen.getByTestId('reauth-password-input'))
+    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'mypassword' } })
+    fireEvent.click(screen.getByTestId('reauth-confirm'))
+
+    await waitFor(() => {
+      expect(api.setGodMode).toHaveBeenCalledWith(true, 'reauth_tok')
+    })
+    await waitFor(() => {
+      expect(screen.getByText(/gateway restart required/i)).toBeInTheDocument()
+    })
+  })
+
+  it('does NOT open GatewayRestartModal when disabling (restart_required=false)', async () => {
+    vi.mocked(api.fetchGodMode).mockResolvedValue(STATE_ON)
+    vi.mocked(api.reAuth).mockResolvedValue({ verified: true, token: 'reauth_tok', expires_in: 300 } as never)
+    vi.mocked(api.setGodMode).mockResolvedValue({ enabled: false, restart_required: false })
+
+    renderControl()
+    await waitFor(() => expect(screen.getByTestId('god-mode-toggle')).toBeEnabled())
+
+    fireEvent.click(screen.getByTestId('god-mode-toggle'))
+    await waitFor(() => screen.getByTestId('reauth-password-input'))
+    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'mypassword' } })
+    fireEvent.click(screen.getByTestId('reauth-confirm'))
+
+    await waitFor(() => {
+      expect(api.setGodMode).toHaveBeenCalledWith(false, 'reauth_tok')
+    })
+    expect(screen.queryByText(/gateway restart required/i)).not.toBeInTheDocument()
   })
 })
 

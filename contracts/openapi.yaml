@@ -213,6 +213,8 @@ components:
       $ref: ./components/schemas/GodModeStatus.yaml
     GodModeUpdateRequest:
       $ref: ./components/schemas/GodModeUpdateRequest.yaml
+    GodModeUpdateResponse:
+      $ref: ./components/schemas/GodModeUpdateResponse.yaml
     AboutResponse:
       $ref: ./components/schemas/AboutResponse.yaml
     HealthResponse:
@@ -3005,8 +3007,10 @@ paths:
       operationId: getGodMode
       summary: Get the global god-mode runtime state (O14)
       description: >
-        Returns whether god mode ("bypass-permissions") is currently enabled and
-        whether it is available in this build/boot.
+        Returns whether god mode ("bypass-permissions") is currently active
+        (`enabled`), whether it is available in this build/boot
+        (`available`), and whether this build supports it at all
+        (`supported`).
       tags:
       - Config
       security:
@@ -3030,17 +3034,23 @@ paths:
       operationId: setGodMode
       summary: Toggle the global god-mode switch (O14, password step-up)
       description: >
-        Flips the global god-mode ("bypass-permissions") switch and applies or
-        reverts the override live (no restart). When enabled, every agent's tool
-        policy is floored at "allow", the kernel sandbox is off, network egress
-        is open, and the shell guard is off — regardless of per-agent profiles.
+        Flips the global god-mode ("bypass-permissions") switch. When the build
+        supports god mode AND this boot was already authorized (see
+        GodModeStatus.available), the toggle applies or reverts the override
+        live (no restart) — every agent's tool policy is floored at "allow",
+        the kernel sandbox is off, network egress is open, and the shell guard
+        is off, regardless of per-agent profiles. When enabling from a boot
+        that was NOT yet authorized, this call persists authorization
+        (sandbox.god_mode_allowed) and the runtime switch (sandbox.god_mode) to
+        config and returns restart_required=true — the override only takes
+        effect after the gateway restarts. Disabling is always applied live.
         Audit logging, the prompt-injection guard, and rate limiting stay on.
         High blast radius — secured by RequireNotBypass
         (dev_mode_bypass returns 503) AND a single-use password re-auth consent
         token (X-Reauth-Token header; call POST /api/v1/auth/reauth first, 403
-        otherwise). Returns 403 when enabling while god mode is unavailable
-        (nogodmode build or --allow-god-mode not passed). Every toggle is
-        audit-logged with the acting user.
+        otherwise). Returns 403 when enabling and god mode is not SUPPORTED in
+        this build (compiled with nogodmode). Every toggle is audit-logged
+        with the acting user.
       tags:
       - Config
       security:
@@ -3053,11 +3063,11 @@ paths:
               $ref: '#/components/schemas/GodModeUpdateRequest'
       responses:
         '200':
-          description: Toggle applied. Returns the new state.
+          description: Toggle applied. Returns the persisted state and whether a restart is required to activate it.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/GodModeStatus'
+                $ref: '#/components/schemas/GodModeUpdateResponse'
         '400':
           description: Invalid request body.
           content:

@@ -367,7 +367,40 @@ type RunOptions struct {
 	// off is silently coerced to workspace at runtime and rejected with 403
 	// at the REST layer. Has no effect when sandbox.GodModeAvailable is false
 	// (nogodmode build tag).
+	//
+	// This is ONE of two ways to grant god-mode availability — the other is
+	// the config-persisted sandbox.god_mode_allowed flag (set by the
+	// Settings UI's god-mode toggle). See resolveAllowGodMode.
 	AllowGodMode bool
+}
+
+// resolveAllowGodMode is the single, boot-time computation of god-mode
+// AVAILABILITY authorization (O14): the legacy --allow-god-mode CLI flag OR
+// the config-persisted sandbox.god_mode_allowed grant (written by POST
+// /api/v1/gateway/god-mode enabled=true from the Settings UI). It does NOT
+// consult sandbox.GodModeAvailable (build support) — callers combine that
+// separately so the two failure modes ("not authorized" vs "not supported by
+// this build") stay distinguishable.
+//
+// Pure and deterministic so it is unit-testable without booting a gateway.
+// A nil cfg only consults the flag — defensive for callers that have not yet
+// loaded config (never happens on the real boot path, but keeps this safe to
+// call early).
+//
+// Called exactly once at boot; the result flows unchanged into
+// agent.AgentLoop.SetAllowGodMode (the process-wide availability atomic that
+// gates the live tool-policy/sandbox override) and restAPI.allowGodMode (the
+// REST predicate consulted by GET/POST /api/v1/gateway/god-mode). Because
+// this is computed once and frozen for the process lifetime, a config-only
+// grant (UI enable while allowGodMode was false at boot) does not change live
+// enforcement until the next restart re-reads sandbox.god_mode_allowed —
+// this is intentional and is exactly why setGodMode reports
+// restart_required=true for that case.
+func resolveAllowGodMode(cliFlag bool, cfg *config.Config) bool {
+	if cliFlag {
+		return true
+	}
+	return cfg != nil && cfg.Sandbox.GodModeAllowed
 }
 
 // SandboxBootError wraps a sandbox Apply/Install failure so the CLI entry
@@ -511,19 +544,43 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		fmt.Println("🔍 Debug mode enabled")
 	}
 
-	// Enforce god-mode latches: abort boot if --allow-god-mode was passed but
-	// the build does not support it (nogodmode tag compiles GodModeAvailable=false).
+	// O14: fold the config-persisted operator authorization
+	// (sandbox.god_mode_allowed, granted by a prior UI enable via POST
+	// /api/v1/gateway/god-mode) into the boot flag. This is the single point
+	// where the two authorization sources combine into one value; every
+	// downstream consumer of god-mode AVAILABILITY (agent.SetAllowGodMode's
+	// process-wide atomic AND restAPI.allowGodMode) reads this same
+	// allowGodMode variable, so there is exactly one boot-frozen source of
+	// truth for the rest of the process's lifetime. See
+	// resolveAllowGodMode's doc comment for why a config-only grant needs a
+	// restart to take effect.
+	godModeSource := "none"
+	switch {
+	case opts.AllowGodMode:
+		godModeSource = "--allow-god-mode"
+	case cfg.Sandbox.GodModeAllowed:
+		godModeSource = "sandbox.god_mode_allowed"
+	}
+	allowGodMode = resolveAllowGodMode(allowGodMode, cfg)
+
+	// Enforce god-mode latches: abort boot if either authorization source
+	// granted god mode but the build does not support it (nogodmode tag
+	// compiles GodModeAvailable=false). Fail closed: a contradictory grant
+	// (authorized but unsupported) must never be silently downgraded to
+	// "unavailable" — it is a misconfiguration and boot must stop.
 	if allowGodMode && !sandbox.GodModeAvailable {
 		return fmt.Errorf(
 			"gateway: god mode unavailable in this build (compiled with nogodmode); " +
-				"remove --allow-god-mode and restart",
+				"remove --allow-god-mode / sandbox.god_mode_allowed and restart",
 		)
 	}
 	// Emit a persistent WARN so operators cannot claim they were not warned.
 	if allowGodMode {
-		fmt.Fprintln(os.Stderr,
-			"WARN: gateway started with --allow-god-mode — agents may have sandbox disabled")
-		slog.Warn("gateway started with --allow-god-mode — agents may have sandbox disabled")
+		fmt.Fprintf(os.Stderr,
+			"WARN: gateway started with god mode available (source: %s) — agents may have sandbox disabled\n",
+			godModeSource)
+		slog.Warn("gateway started with god mode available — agents may have sandbox disabled",
+			"source", godModeSource)
 	}
 
 	// Build the real LLM provider. The test_harness override hook + scripted-
