@@ -70,6 +70,10 @@ const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
 /** Minimal WhatsApp channel entry, native_available=true (case A). */
 const WHATSAPP_CHANNEL_NATIVE_AVAILABLE = {
   id: 'whatsapp',
+  // ConnectorsScreen's configured-vs-roster split (0f5c2bfd) classifies a
+  // channel as a configured row (with the "Configure <instanceId>" button
+  // these tests click) only when instance_id is set.
+  instance_id: 'whatsapp',
   name: 'WhatsApp',
   transport: 'bridge',
   enabled: true,
@@ -216,7 +220,10 @@ async function mockWebSocket(page: import('@playwright/test').Page): Promise<voi
         ws.send(
           JSON.stringify({
             type: 'whatsapp_pairing',
-            channel_id: 'whatsapp_native',
+            // Pairing frames are keyed by the channel INSTANCE id
+            // (8d9a4be3), not the retired 'whatsapp_native' constant —
+            // the store files the QR under frame.channel_id verbatim.
+            channel_id: 'whatsapp',
             status: 'code',
             qr: TEST_QR_PAYLOAD,
             message: '',
