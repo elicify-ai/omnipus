@@ -285,4 +285,6 @@ Run codegen: `make gen-contracts` (lints both specs, regenerates all; idempotent
 4. Commit the generated diff alongside the spec change (one atomic commit)
 5. Write the handler/consumer using the generated type only — never a parallel struct/interface
 
+**Discriminated unions are the one exception to step 1:** the `oneOf` + `discriminator` wrapper must be hosted INLINE in `openapi.yaml` over internal `#/components/schemas/...` refs (variant schemas stay one-file-per-schema as usual). oapi-codegen inlines external file refs inside a `oneOf` as anonymous structs and emits non-compiling `As*` accessors. Precedent: `AgentCreateRequest` — see ADR-034.
+
 **verify-contracts CI failure** = committed generated files are stale: `make gen-contracts`, review `git diff`, commit `pkg/api/generated/ src/lib/api/generated/`, push. Never commit a spec change without regenerated artifacts; never edit generated files directly.
