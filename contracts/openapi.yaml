@@ -376,6 +376,8 @@ components:
       $ref: ./components/schemas/Mailbox.yaml
     MailboxConfigureRequest:
       $ref: ./components/schemas/MailboxConfigureRequest.yaml
+    MailboxListResponse:
+      $ref: ./components/schemas/MailboxListResponse.yaml
     BackupCreateResponse:
       $ref: ./components/schemas/BackupCreateResponse.yaml
     OnboardingStatusResponse:
@@ -3118,6 +3120,32 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+  /mailboxes:
+    get:
+      operationId: listMailboxes
+      summary: List all configured email mailbox accounts (M11)
+      description: >
+        Returns every configured mailbox account (cap-1 per workspace in 0.1.0,
+        so typically zero or one). The mailbox password is never returned; each
+        entry's `configured` flag reports whether a password is on file in the
+        credential store. An empty list means no mailbox is configured — this
+        endpoint never 404s, so the SPA can show mailbox status without
+        per-agent probe requests.
+      tags:
+      - Agents
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: All configured mailboxes (possibly empty).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MailboxListResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
         '500':
           $ref: '#/components/responses/500InternalServerError'
   /config/gateway/rotate-token:

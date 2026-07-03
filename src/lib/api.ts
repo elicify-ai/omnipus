@@ -140,6 +140,7 @@ import {
   MemorySettings as MemorySettingsSchema,
   // M11 per-agent email mailbox account (contract-first #8):
   Mailbox as MailboxSchema,
+  MailboxListResponse as MailboxListResponseSchema,
 } from '@/lib/api/generated/schemas'
 
 // ── Schema validation error ────────────────────────────────────────────────────
@@ -1822,14 +1823,26 @@ export async function fetchAgentMailbox(agentId: string): Promise<Mailbox | null
 }
 
 /**
- * Find the currently-configured mailbox across the given agents (cap-1 in
- * 0.1.0 — at most one mailbox exists). Probes each agent's mailbox endpoint
- * in parallel, tolerating 404s, and returns the first configured mailbox or
- * null when none exists.
+ * List every configured mailbox via GET /api/v1/mailboxes (cap-1 per workspace
+ * in 0.1.0, so typically zero or one). Never 404s — an empty list means none
+ * configured. Preferred over per-agent probing: each probe 404 lands in the
+ * browser console as an error and trips the e2e zero-console-errors gate.
  */
-export async function findConfiguredMailbox(agentIds: string[]): Promise<Mailbox | null> {
-  const results = await Promise.all(agentIds.map((id) => fetchAgentMailbox(id)))
-  return results.find((m): m is Mailbox => m !== null) ?? null
+export async function fetchMailboxes(): Promise<Mailbox[]> {
+  const res = await request<{ mailboxes: Mailbox[] }>(
+    '/mailboxes',
+    undefined,
+    MailboxListResponseSchema as ZodType<{ mailboxes: Mailbox[] }>,
+  )
+  return res.mailboxes
+}
+
+/**
+ * The single configured mailbox, or null (cap-1 convenience over fetchMailboxes).
+ */
+export async function findConfiguredMailbox(): Promise<Mailbox | null> {
+  const mailboxes = await fetchMailboxes()
+  return mailboxes[0] ?? null
 }
 
 /**

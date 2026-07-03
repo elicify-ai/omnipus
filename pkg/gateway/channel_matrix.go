@@ -1,9 +1,16 @@
-//go:build !mipsle && !netbsd && !(freebsd && arm) && cgo
+//go:build !mipsle && !netbsd && !(freebsd && arm) && (goolm || cgo)
 
 package gateway
 
 import (
 	// Matrix currently pulls in mautrix crypto and modernc sqlite transitively.
+	//
+	// GATE HISTORY: this file was `cgo`-gated from the pre-goolm (libolm) era.
+	// The goolm migration made matrix pure-Go, but this gate was never updated —
+	// so matrix silently vanished from every CGO_ENABLED=0 release binary (the
+	// canonical goolm,stdjson build) while the SPA kept offering it: enabling it
+	// hit "factory not registered". The gate is now `goolm || cgo`: goolm builds
+	// (the default) link matrix pure-Go; legacy cgo/libolm builds still work.
 	//
 	// We exclude it on:
 	// - linux/mipsle: mautrix crypto falls back to libolm when the `goolm` build

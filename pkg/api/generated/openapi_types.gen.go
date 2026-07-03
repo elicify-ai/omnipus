@@ -5831,6 +5831,39 @@ type MailboxConfigureRequest struct {
 	WorkspaceId string `json:"workspace_id"`
 }
 
+// MailboxListResponse All configured email mailbox accounts (M11). Cap-1 per workspace in 0.1.0, so the list is typically empty or a single entry. Returning a list (rather than a 404-on-absent single resource) lets the SPA learn "no mailbox is configured" without probing every agent's mailbox endpoint and generating console-visible 404s.
+type MailboxListResponse struct {
+	// Mailboxes Every configured mailbox, one entry per owning agent.
+	Mailboxes []struct {
+		// AgentId ID of the agent that owns this mailbox.
+		AgentId string `json:"agent_id"`
+
+		// Configured True when a mailbox password is present in the credential store (the mailbox can authenticate). The password value itself is never returned.
+		Configured bool `json:"configured"`
+
+		// Enabled Whether the email tools (read_inbox, search_email, read_message, send_email, reply) are registered for the owning agent.
+		Enabled bool `json:"enabled"`
+
+		// ImapHost IMAP server hostname (implicit TLS / IMAPS).
+		ImapHost *string `json:"imap_host,omitempty"`
+
+		// ImapPort IMAP server port. Defaults to 993 when omitted.
+		ImapPort *int `json:"imap_port,omitempty"`
+
+		// SmtpHost SMTP server hostname.
+		SmtpHost *string `json:"smtp_host,omitempty"`
+
+		// SmtpPort SMTP server port. Defaults to 587 (STARTTLS); 465 selects implicit TLS.
+		SmtpPort *int `json:"smtp_port,omitempty"`
+
+		// Username The email address / login used for IMAP and SMTP authentication.
+		Username *string `json:"username,omitempty"`
+
+		// WorkspaceId ID of the workspace the mailbox surfaces in (cap-1: unique per workspace).
+		WorkspaceId *string `json:"workspace_id,omitempty"`
+	} `json:"mailboxes"`
+}
+
 // McpServer An MCP server entry as returned by GET /mcp-servers and POST /mcp-servers.
 type McpServer struct {
 	// Args Command-line args (stdio). For edit pre-fill.

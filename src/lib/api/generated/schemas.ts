@@ -471,6 +471,20 @@ type ChannelEnabledResponse = {
   id: ChannelId;
   enabled: boolean;
 };
+type MailboxListResponse = {
+  mailboxes: Array<Mailbox>;
+};
+type Mailbox = {
+  agent_id: string;
+  enabled: boolean;
+  workspace_id?: string | undefined;
+  imap_host?: string | undefined;
+  imap_port?: number | undefined;
+  smtp_host?: string | undefined;
+  smtp_port?: number | undefined;
+  username?: string | undefined;
+  configured: boolean;
+};
 type OperationResult = {
   success: boolean;
   error?: string | undefined;
@@ -1698,7 +1712,7 @@ export const ChannelTestResponse = z
 export const ChannelRouting = z
   .object({ default_agent_id: z.string(), workspace_id: z.string() })
   .partial();
-export const Mailbox = z.object({
+export const Mailbox: z.ZodType<Mailbox> = z.object({
   agent_id: z.string(),
   enabled: z.boolean(),
   workspace_id: z.string().optional(),
@@ -1718,6 +1732,9 @@ export const MailboxConfigureRequest = z.object({
   smtp_port: z.number().int().optional(),
   username: z.string(),
   password: z.string().optional(),
+});
+export const MailboxListResponse: z.ZodType<MailboxListResponse> = z.object({
+  mailboxes: z.array(Mailbox),
 });
 export const RotateTokenResponse: z.ZodType<RotateTokenResponse> = z.object({
   token: BearerToken.min(72)
@@ -3918,6 +3935,27 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 403,
         description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/mailboxes",
+    alias: "listMailboxes",
+    description: `Returns every configured mailbox account (cap-1 per workspace in 0.1.0, so typically zero or one). The mailbox password is never returned; each entry&#x27;s &#x60;configured&#x60; flag reports whether a password is on file in the credential store. An empty list means no mailbox is configured — this endpoint never 404s, so the SPA can show mailbox status without per-agent probe requests.
+`,
+    requestFormat: "json",
+    response: MailboxListResponse,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
         schema: ErrorResponse,
       },
       {

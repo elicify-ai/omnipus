@@ -693,12 +693,23 @@ func (m *Manager) initChannels(channels map[string]config.ChannelInstanceConfig)
 // recorded and surfaced as degraded via FailedChannels, so status shows a clear
 // "requires the native build" message.
 //
-// Failures are now recorded under instanceID (e.g. "whatsapp", "whatsapp.eu"),
-// so we match on the "whatsapp" prefix or the legacy factory name.
+// Matrix (any instance: bare "matrix", namespaced "matrix.eu", etc.) is the
+// same story on a build without the goolm tag: matrix.go and its real init.go
+// are excluded (see pkg/channels/matrix), and pkg/channels/matrix/init_stub.go
+// registers a "matrix" factory that always errors with a clear "requires a
+// goolm-tagged build" message. That failure must degrade the gateway, not
+// abort boot, for an operator who left channels.matrix.enabled=true on a
+// non-goolm/lite build.
+//
+// Failures are now recorded under instanceID (e.g. "whatsapp", "whatsapp.eu",
+// "matrix", "matrix.eu"), so we match on the "whatsapp"/"matrix" prefix or the
+// legacy factory name.
 func isNonFatalChannelName(name string) bool {
 	return name == "whatsapp_native" ||
 		name == "whatsapp" ||
-		strings.HasPrefix(name, "whatsapp.")
+		strings.HasPrefix(name, "whatsapp.") ||
+		name == "matrix" ||
+		strings.HasPrefix(name, "matrix.")
 }
 
 // bootFatalError returns a joined error for the subset of failed channels whose
