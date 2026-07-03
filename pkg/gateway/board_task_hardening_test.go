@@ -291,6 +291,11 @@ func TestTask_Post_RejectsUnknownAgentID(t *testing.T) {
 	t.Run("populated registry accepts registered agent_id on POST", func(t *testing.T) {
 		api := newTestRestAPIWithAgent(t)
 		wsID := ensureTestWorkspace(t, api)
+		// registeredID is a custom agent, not one of defaultWorkspaceTeam's fixed
+		// base-roster candidates (mia/jim/ava/ray/planner/explorer/researcher), so
+		// it must be put on this workspace's team explicitly for the
+		// team-membership half of validateTaskAgentID to accept it.
+		setWorkspaceCoreTeam(t, api, wsID, []string{registeredID})
 
 		body := fmt.Sprintf(
 			`{"title":"AgentAcceptTest","action":"llm","workspace_id":%q,"prompt":"do it","agent_id":%q}`,

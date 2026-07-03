@@ -309,10 +309,42 @@ func (a *restAPI) computeRollup(parentID string) *[]struct {
 }
 
 // validateTaskAgentID checks that a human-assigned agent_id exists in the
-// registry and is not a worker. A worker is a delegation-only tier and must
-// never be human-assigned via the REST surface (it is invoked via delegation).
-// Returns nil when the check is skipped (empty registry / empty agent_id).
-func (a *restAPI) validateTaskAgentID(agentID string) error {
+// registry, is a member of the task's workspace TEAM, and — if it is a
+// subagent_3p (external-CLI) worker — is rejected outright.
+//
+// This is the human/REST-surface assignment path (SPA task create/edit): a
+// human assigning a task via the SPA is the workspace owner directing work,
+// not one agent delegating to another. It is therefore deliberately NOT
+// routed through the agent-to-agent delegation-deny checker
+// (buildDelegationDenyChecker / NewSysagentDelegationDeny in
+// pkg/agent/loop.go) — that graph governs delegation ACTS between agents, not
+// a human's direct task assignment. The authority here is workspace TEAM
+// membership instead: the union of the workspace's core_team and the
+// endpoints of its stored delegation edges (workspace.TeamSet, via the
+// workspaceTeamSet adapter — the same set the Team tab and the delegation
+// graph PUT validate edge endpoints against; see
+// rest_workspace_delegation.go). An agent absent from that set — worker or
+// not — cannot be assigned a task in this workspace. A worker that IS a team
+// member CAN be assigned directly now (this is the fix: workers were
+// previously banned outright regardless of team membership).
+//
+// subagent_3p (external-CLI) workers are rejected unconditionally, regardless
+// of team membership: TaskExecutor.runTask / runTaskFromInProgress both route
+// through AgentLoop.processTaskDirect -> runAgentLoop -> runTurn
+// unconditionally — there is no ResolveDispatch/executor-kind branch on the
+// task-run path (unlike the agent-to-agent sub-turn path in subturn.go,
+// which DOES branch via runner.ResolveDispatch before deciding native vs.
+// runExternalCLISubTurn). Assigning a task to a subagent_3p today would
+// silently run it on the NATIVE Omnipus engine instead of the configured
+// external CLI, defeating the whole point of the agent. Until TaskExecutor
+// is taught to dispatch external-CLI task runs through the same
+// runExternalCLISubTurn machinery, this must fail closed with a clear,
+// distinct error rather than silently mis-executing.
+//
+// Returns nil when the check is skipped (empty agent_id / no agentLoop / an
+// empty registry — the latter is only ever true before agent construction,
+// e.g. in narrow test scaffolding).
+func (a *restAPI) validateTaskAgentID(agentID, workspaceID string) error {
 	if agentID == "" {
 		return nil
 	}
@@ -326,9 +358,25 @@ func (a *restAPI) validateTaskAgentID(agentID string) error {
 	if _, ok := reg.GetAgent(agentID); !ok {
 		return fmt.Errorf("agent %q not found", agentID)
 	}
-	if reg.IsWorker(agentID) {
+	if cfg := a.agentLoop.GetConfig(); cfg.IsExternalCLIWorkerID(agentID) {
 		return fmt.Errorf(
-			"agent %q is a worker and cannot be directly assigned a task — workers are invoked via delegation",
+			"agent %q is a subagent_3p (external-CLI) worker — task execution for external-CLI workers is not yet supported; assign the task to a native agent instead",
+			agentID,
+		)
+	}
+	if workspaceID == "" {
+		return fmt.Errorf(
+			"cannot assign agent %q: task has no workspace_id to validate team membership against",
+			agentID,
+		)
+	}
+	ws, wsErr := readWorkspaceFile(a.homePath, workspaceID)
+	if wsErr != nil {
+		return fmt.Errorf("cannot assign agent %q: workspace %q could not be loaded: %w", agentID, workspaceID, wsErr)
+	}
+	if !workspaceTeamSet(ws)[agentID] {
+		return fmt.Errorf(
+			"agent %q is not a member of this workspace's team — add it to the workspace's core team or a delegation edge before assigning tasks to it",
 			agentID,
 		)
 	}
@@ -525,7 +573,7 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, http.StatusBadRequest, "invalid agent_id")
 			return
 		}
-		if err := a.validateTaskAgentID(agentID); err != nil {
+		if err := a.validateTaskAgentID(agentID, req.WorkspaceId); err != nil {
 			jsonErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -651,7 +699,22 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 	}
 	if req.AgentId != nil {
 		if *req.AgentId != "" {
-			if err := a.validateTaskAgentID(*req.AgentId); err != nil {
+			// Team-membership validation is workspace-scoped, and a task's
+			// workspace_id is immutable via PATCH (not a TaskUpdateRequest
+			// field) — read the existing task to learn it. A dedicated read
+			// here (rather than threading through the conditional "next"-status
+			// read above) keeps this block correct regardless of which other
+			// fields are present in the same PATCH.
+			existingForAgentCheck, gErr := a.taskStore.Get(id)
+			if gErr != nil {
+				if errors.Is(gErr, task.ErrNotFound) {
+					jsonErr(w, http.StatusNotFound, "task not found")
+					return
+				}
+				jsonErr(w, http.StatusInternalServerError, "could not read task")
+				return
+			}
+			if err := a.validateTaskAgentID(*req.AgentId, existingForAgentCheck.WorkspaceID); err != nil {
 				jsonErr(w, http.StatusBadRequest, err.Error())
 				return
 			}
