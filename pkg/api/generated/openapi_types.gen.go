@@ -5,6 +5,7 @@ package generated
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -289,201 +290,402 @@ func (e AgentType) Valid() bool {
 	}
 }
 
-// Defines values for AgentCreateRequestDelegationPolicyAcceptFromKind.
+// Defines values for AgentCreateRequestMainDelegationPolicyAcceptFromKind.
 const (
-	AgentCreateRequestDelegationPolicyAcceptFromKindLocal     AgentCreateRequestDelegationPolicyAcceptFromKind = "local"
-	AgentCreateRequestDelegationPolicyAcceptFromKindRemoteA2a AgentCreateRequestDelegationPolicyAcceptFromKind = "remote-a2a"
+	AgentCreateRequestMainDelegationPolicyAcceptFromKindLocal     AgentCreateRequestMainDelegationPolicyAcceptFromKind = "local"
+	AgentCreateRequestMainDelegationPolicyAcceptFromKindRemoteA2a AgentCreateRequestMainDelegationPolicyAcceptFromKind = "remote-a2a"
 )
 
-// Valid indicates whether the value is a known member of the AgentCreateRequestDelegationPolicyAcceptFromKind enum.
-func (e AgentCreateRequestDelegationPolicyAcceptFromKind) Valid() bool {
+// Valid indicates whether the value is a known member of the AgentCreateRequestMainDelegationPolicyAcceptFromKind enum.
+func (e AgentCreateRequestMainDelegationPolicyAcceptFromKind) Valid() bool {
 	switch e {
-	case AgentCreateRequestDelegationPolicyAcceptFromKindLocal:
+	case AgentCreateRequestMainDelegationPolicyAcceptFromKindLocal:
 		return true
-	case AgentCreateRequestDelegationPolicyAcceptFromKindRemoteA2a:
+	case AgentCreateRequestMainDelegationPolicyAcceptFromKindRemoteA2a:
 		return true
 	default:
 		return false
 	}
 }
 
-// Defines values for AgentCreateRequestDelegationPolicyModes.
+// Defines values for AgentCreateRequestMainDelegationPolicyModes.
 const (
-	AgentCreateRequestDelegationPolicyModesAwait      AgentCreateRequestDelegationPolicyModes = "await"
-	AgentCreateRequestDelegationPolicyModesBackground AgentCreateRequestDelegationPolicyModes = "background"
-	AgentCreateRequestDelegationPolicyModesTask       AgentCreateRequestDelegationPolicyModes = "task"
+	AgentCreateRequestMainDelegationPolicyModesAwait      AgentCreateRequestMainDelegationPolicyModes = "await"
+	AgentCreateRequestMainDelegationPolicyModesBackground AgentCreateRequestMainDelegationPolicyModes = "background"
+	AgentCreateRequestMainDelegationPolicyModesTask       AgentCreateRequestMainDelegationPolicyModes = "task"
 )
 
-// Valid indicates whether the value is a known member of the AgentCreateRequestDelegationPolicyModes enum.
-func (e AgentCreateRequestDelegationPolicyModes) Valid() bool {
+// Valid indicates whether the value is a known member of the AgentCreateRequestMainDelegationPolicyModes enum.
+func (e AgentCreateRequestMainDelegationPolicyModes) Valid() bool {
 	switch e {
-	case AgentCreateRequestDelegationPolicyModesAwait:
+	case AgentCreateRequestMainDelegationPolicyModesAwait:
 		return true
-	case AgentCreateRequestDelegationPolicyModesBackground:
+	case AgentCreateRequestMainDelegationPolicyModesBackground:
 		return true
-	case AgentCreateRequestDelegationPolicyModesTask:
+	case AgentCreateRequestMainDelegationPolicyModesTask:
 		return true
 	default:
 		return false
 	}
 }
 
-// Defines values for AgentCreateRequestDelegationPolicyToKind.
+// Defines values for AgentCreateRequestMainDelegationPolicyToKind.
 const (
-	AgentCreateRequestDelegationPolicyToKindLocal     AgentCreateRequestDelegationPolicyToKind = "local"
-	AgentCreateRequestDelegationPolicyToKindRemoteA2a AgentCreateRequestDelegationPolicyToKind = "remote-a2a"
+	AgentCreateRequestMainDelegationPolicyToKindLocal     AgentCreateRequestMainDelegationPolicyToKind = "local"
+	AgentCreateRequestMainDelegationPolicyToKindRemoteA2a AgentCreateRequestMainDelegationPolicyToKind = "remote-a2a"
 )
 
-// Valid indicates whether the value is a known member of the AgentCreateRequestDelegationPolicyToKind enum.
-func (e AgentCreateRequestDelegationPolicyToKind) Valid() bool {
+// Valid indicates whether the value is a known member of the AgentCreateRequestMainDelegationPolicyToKind enum.
+func (e AgentCreateRequestMainDelegationPolicyToKind) Valid() bool {
 	switch e {
-	case AgentCreateRequestDelegationPolicyToKindLocal:
+	case AgentCreateRequestMainDelegationPolicyToKindLocal:
 		return true
-	case AgentCreateRequestDelegationPolicyToKindRemoteA2a:
+	case AgentCreateRequestMainDelegationPolicyToKindRemoteA2a:
 		return true
 	default:
 		return false
 	}
 }
 
-// Defines values for AgentCreateRequestExecutorCli.
+// Defines values for AgentCreateRequestMainSandboxProfile.
 const (
-	AgentCreateRequestExecutorCliClaudeCode AgentCreateRequestExecutorCli = "claude-code"
-	AgentCreateRequestExecutorCliCodex      AgentCreateRequestExecutorCli = "codex"
-	AgentCreateRequestExecutorCliOpencode   AgentCreateRequestExecutorCli = "opencode"
+	AgentCreateRequestMainSandboxProfileHost         AgentCreateRequestMainSandboxProfile = "host"
+	AgentCreateRequestMainSandboxProfileWorkspace    AgentCreateRequestMainSandboxProfile = "workspace"
+	AgentCreateRequestMainSandboxProfileWorkspaceNet AgentCreateRequestMainSandboxProfile = "workspace+net"
 )
 
-// Valid indicates whether the value is a known member of the AgentCreateRequestExecutorCli enum.
-func (e AgentCreateRequestExecutorCli) Valid() bool {
+// Valid indicates whether the value is a known member of the AgentCreateRequestMainSandboxProfile enum.
+func (e AgentCreateRequestMainSandboxProfile) Valid() bool {
 	switch e {
-	case AgentCreateRequestExecutorCliClaudeCode:
+	case AgentCreateRequestMainSandboxProfileHost:
 		return true
-	case AgentCreateRequestExecutorCliCodex:
+	case AgentCreateRequestMainSandboxProfileWorkspace:
 		return true
-	case AgentCreateRequestExecutorCliOpencode:
+	case AgentCreateRequestMainSandboxProfileWorkspaceNet:
 		return true
 	default:
 		return false
 	}
 }
 
-// Defines values for AgentCreateRequestExecutorKind.
+// Defines values for AgentCreateRequestMainSteeringMode.
 const (
-	AgentCreateRequestExecutorKindExternalCli AgentCreateRequestExecutorKind = "external-cli"
-	AgentCreateRequestExecutorKindNative      AgentCreateRequestExecutorKind = "native"
-	AgentCreateRequestExecutorKindRemoteA2a   AgentCreateRequestExecutorKind = "remote-a2a"
+	AgentCreateRequestMainSteeringModeOneAtATime      AgentCreateRequestMainSteeringMode = "one-at-a-time"
+	AgentCreateRequestMainSteeringModeQueueAndProcess AgentCreateRequestMainSteeringMode = "queue-and-process"
 )
 
-// Valid indicates whether the value is a known member of the AgentCreateRequestExecutorKind enum.
-func (e AgentCreateRequestExecutorKind) Valid() bool {
+// Valid indicates whether the value is a known member of the AgentCreateRequestMainSteeringMode enum.
+func (e AgentCreateRequestMainSteeringMode) Valid() bool {
 	switch e {
-	case AgentCreateRequestExecutorKindExternalCli:
+	case AgentCreateRequestMainSteeringModeOneAtATime:
 		return true
-	case AgentCreateRequestExecutorKindNative:
-		return true
-	case AgentCreateRequestExecutorKindRemoteA2a:
+	case AgentCreateRequestMainSteeringModeQueueAndProcess:
 		return true
 	default:
 		return false
 	}
 }
 
-// Defines values for AgentCreateRequestSandboxProfile.
+// Defines values for AgentCreateRequestMainToolsCfgBuiltinDefaultPolicy.
 const (
-	AgentCreateRequestSandboxProfileHost         AgentCreateRequestSandboxProfile = "host"
-	AgentCreateRequestSandboxProfileWorkspace    AgentCreateRequestSandboxProfile = "workspace"
-	AgentCreateRequestSandboxProfileWorkspaceNet AgentCreateRequestSandboxProfile = "workspace+net"
+	AgentCreateRequestMainToolsCfgBuiltinDefaultPolicyAllow AgentCreateRequestMainToolsCfgBuiltinDefaultPolicy = "allow"
+	AgentCreateRequestMainToolsCfgBuiltinDefaultPolicyAsk   AgentCreateRequestMainToolsCfgBuiltinDefaultPolicy = "ask"
+	AgentCreateRequestMainToolsCfgBuiltinDefaultPolicyDeny  AgentCreateRequestMainToolsCfgBuiltinDefaultPolicy = "deny"
 )
 
-// Valid indicates whether the value is a known member of the AgentCreateRequestSandboxProfile enum.
-func (e AgentCreateRequestSandboxProfile) Valid() bool {
+// Valid indicates whether the value is a known member of the AgentCreateRequestMainToolsCfgBuiltinDefaultPolicy enum.
+func (e AgentCreateRequestMainToolsCfgBuiltinDefaultPolicy) Valid() bool {
 	switch e {
-	case AgentCreateRequestSandboxProfileHost:
+	case AgentCreateRequestMainToolsCfgBuiltinDefaultPolicyAllow:
 		return true
-	case AgentCreateRequestSandboxProfileWorkspace:
+	case AgentCreateRequestMainToolsCfgBuiltinDefaultPolicyAsk:
 		return true
-	case AgentCreateRequestSandboxProfileWorkspaceNet:
+	case AgentCreateRequestMainToolsCfgBuiltinDefaultPolicyDeny:
 		return true
 	default:
 		return false
 	}
 }
 
-// Defines values for AgentCreateRequestSteeringMode.
+// Defines values for AgentCreateRequestMainToolsCfgBuiltinPolicies.
 const (
-	AgentCreateRequestSteeringModeOneAtATime      AgentCreateRequestSteeringMode = "one-at-a-time"
-	AgentCreateRequestSteeringModeQueueAndProcess AgentCreateRequestSteeringMode = "queue-and-process"
+	AgentCreateRequestMainToolsCfgBuiltinPoliciesAllow AgentCreateRequestMainToolsCfgBuiltinPolicies = "allow"
+	AgentCreateRequestMainToolsCfgBuiltinPoliciesAsk   AgentCreateRequestMainToolsCfgBuiltinPolicies = "ask"
+	AgentCreateRequestMainToolsCfgBuiltinPoliciesDeny  AgentCreateRequestMainToolsCfgBuiltinPolicies = "deny"
 )
 
-// Valid indicates whether the value is a known member of the AgentCreateRequestSteeringMode enum.
-func (e AgentCreateRequestSteeringMode) Valid() bool {
+// Valid indicates whether the value is a known member of the AgentCreateRequestMainToolsCfgBuiltinPolicies enum.
+func (e AgentCreateRequestMainToolsCfgBuiltinPolicies) Valid() bool {
 	switch e {
-	case AgentCreateRequestSteeringModeOneAtATime:
+	case AgentCreateRequestMainToolsCfgBuiltinPoliciesAllow:
 		return true
-	case AgentCreateRequestSteeringModeQueueAndProcess:
+	case AgentCreateRequestMainToolsCfgBuiltinPoliciesAsk:
+		return true
+	case AgentCreateRequestMainToolsCfgBuiltinPoliciesDeny:
 		return true
 	default:
 		return false
 	}
 }
 
-// Defines values for AgentCreateRequestToolsCfgBuiltinDefaultPolicy.
+// Defines values for AgentCreateRequestMainType.
 const (
-	AgentCreateRequestToolsCfgBuiltinDefaultPolicyAllow AgentCreateRequestToolsCfgBuiltinDefaultPolicy = "allow"
-	AgentCreateRequestToolsCfgBuiltinDefaultPolicyAsk   AgentCreateRequestToolsCfgBuiltinDefaultPolicy = "ask"
-	AgentCreateRequestToolsCfgBuiltinDefaultPolicyDeny  AgentCreateRequestToolsCfgBuiltinDefaultPolicy = "deny"
+	AgentCreateRequestMainTypeMain AgentCreateRequestMainType = "Main"
 )
 
-// Valid indicates whether the value is a known member of the AgentCreateRequestToolsCfgBuiltinDefaultPolicy enum.
-func (e AgentCreateRequestToolsCfgBuiltinDefaultPolicy) Valid() bool {
+// Valid indicates whether the value is a known member of the AgentCreateRequestMainType enum.
+func (e AgentCreateRequestMainType) Valid() bool {
 	switch e {
-	case AgentCreateRequestToolsCfgBuiltinDefaultPolicyAllow:
-		return true
-	case AgentCreateRequestToolsCfgBuiltinDefaultPolicyAsk:
-		return true
-	case AgentCreateRequestToolsCfgBuiltinDefaultPolicyDeny:
+	case AgentCreateRequestMainTypeMain:
 		return true
 	default:
 		return false
 	}
 }
 
-// Defines values for AgentCreateRequestToolsCfgBuiltinPolicies.
+// Defines values for AgentCreateRequestSubagentDelegationPolicyAcceptFromKind.
 const (
-	AgentCreateRequestToolsCfgBuiltinPoliciesAllow AgentCreateRequestToolsCfgBuiltinPolicies = "allow"
-	AgentCreateRequestToolsCfgBuiltinPoliciesAsk   AgentCreateRequestToolsCfgBuiltinPolicies = "ask"
-	AgentCreateRequestToolsCfgBuiltinPoliciesDeny  AgentCreateRequestToolsCfgBuiltinPolicies = "deny"
+	AgentCreateRequestSubagentDelegationPolicyAcceptFromKindLocal     AgentCreateRequestSubagentDelegationPolicyAcceptFromKind = "local"
+	AgentCreateRequestSubagentDelegationPolicyAcceptFromKindRemoteA2a AgentCreateRequestSubagentDelegationPolicyAcceptFromKind = "remote-a2a"
 )
 
-// Valid indicates whether the value is a known member of the AgentCreateRequestToolsCfgBuiltinPolicies enum.
-func (e AgentCreateRequestToolsCfgBuiltinPolicies) Valid() bool {
+// Valid indicates whether the value is a known member of the AgentCreateRequestSubagentDelegationPolicyAcceptFromKind enum.
+func (e AgentCreateRequestSubagentDelegationPolicyAcceptFromKind) Valid() bool {
 	switch e {
-	case AgentCreateRequestToolsCfgBuiltinPoliciesAllow:
+	case AgentCreateRequestSubagentDelegationPolicyAcceptFromKindLocal:
 		return true
-	case AgentCreateRequestToolsCfgBuiltinPoliciesAsk:
-		return true
-	case AgentCreateRequestToolsCfgBuiltinPoliciesDeny:
+	case AgentCreateRequestSubagentDelegationPolicyAcceptFromKindRemoteA2a:
 		return true
 	default:
 		return false
 	}
 }
 
-// Defines values for AgentCreateRequestType.
+// Defines values for AgentCreateRequestSubagentDelegationPolicyModes.
 const (
-	AgentCreateRequestTypeMain       AgentCreateRequestType = "Main"
-	AgentCreateRequestTypeSubagent   AgentCreateRequestType = "Subagent"
-	AgentCreateRequestTypeSubagent3p AgentCreateRequestType = "subagent_3p"
+	AgentCreateRequestSubagentDelegationPolicyModesAwait      AgentCreateRequestSubagentDelegationPolicyModes = "await"
+	AgentCreateRequestSubagentDelegationPolicyModesBackground AgentCreateRequestSubagentDelegationPolicyModes = "background"
+	AgentCreateRequestSubagentDelegationPolicyModesTask       AgentCreateRequestSubagentDelegationPolicyModes = "task"
 )
 
-// Valid indicates whether the value is a known member of the AgentCreateRequestType enum.
-func (e AgentCreateRequestType) Valid() bool {
+// Valid indicates whether the value is a known member of the AgentCreateRequestSubagentDelegationPolicyModes enum.
+func (e AgentCreateRequestSubagentDelegationPolicyModes) Valid() bool {
 	switch e {
-	case AgentCreateRequestTypeMain:
+	case AgentCreateRequestSubagentDelegationPolicyModesAwait:
 		return true
-	case AgentCreateRequestTypeSubagent:
+	case AgentCreateRequestSubagentDelegationPolicyModesBackground:
 		return true
-	case AgentCreateRequestTypeSubagent3p:
+	case AgentCreateRequestSubagentDelegationPolicyModesTask:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentCreateRequestSubagentDelegationPolicyToKind.
+const (
+	AgentCreateRequestSubagentDelegationPolicyToKindLocal     AgentCreateRequestSubagentDelegationPolicyToKind = "local"
+	AgentCreateRequestSubagentDelegationPolicyToKindRemoteA2a AgentCreateRequestSubagentDelegationPolicyToKind = "remote-a2a"
+)
+
+// Valid indicates whether the value is a known member of the AgentCreateRequestSubagentDelegationPolicyToKind enum.
+func (e AgentCreateRequestSubagentDelegationPolicyToKind) Valid() bool {
+	switch e {
+	case AgentCreateRequestSubagentDelegationPolicyToKindLocal:
+		return true
+	case AgentCreateRequestSubagentDelegationPolicyToKindRemoteA2a:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentCreateRequestSubagentSandboxProfile.
+const (
+	AgentCreateRequestSubagentSandboxProfileHost         AgentCreateRequestSubagentSandboxProfile = "host"
+	AgentCreateRequestSubagentSandboxProfileWorkspace    AgentCreateRequestSubagentSandboxProfile = "workspace"
+	AgentCreateRequestSubagentSandboxProfileWorkspaceNet AgentCreateRequestSubagentSandboxProfile = "workspace+net"
+)
+
+// Valid indicates whether the value is a known member of the AgentCreateRequestSubagentSandboxProfile enum.
+func (e AgentCreateRequestSubagentSandboxProfile) Valid() bool {
+	switch e {
+	case AgentCreateRequestSubagentSandboxProfileHost:
+		return true
+	case AgentCreateRequestSubagentSandboxProfileWorkspace:
+		return true
+	case AgentCreateRequestSubagentSandboxProfileWorkspaceNet:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentCreateRequestSubagentToolsCfgBuiltinDefaultPolicy.
+const (
+	AgentCreateRequestSubagentToolsCfgBuiltinDefaultPolicyAllow AgentCreateRequestSubagentToolsCfgBuiltinDefaultPolicy = "allow"
+	AgentCreateRequestSubagentToolsCfgBuiltinDefaultPolicyAsk   AgentCreateRequestSubagentToolsCfgBuiltinDefaultPolicy = "ask"
+	AgentCreateRequestSubagentToolsCfgBuiltinDefaultPolicyDeny  AgentCreateRequestSubagentToolsCfgBuiltinDefaultPolicy = "deny"
+)
+
+// Valid indicates whether the value is a known member of the AgentCreateRequestSubagentToolsCfgBuiltinDefaultPolicy enum.
+func (e AgentCreateRequestSubagentToolsCfgBuiltinDefaultPolicy) Valid() bool {
+	switch e {
+	case AgentCreateRequestSubagentToolsCfgBuiltinDefaultPolicyAllow:
+		return true
+	case AgentCreateRequestSubagentToolsCfgBuiltinDefaultPolicyAsk:
+		return true
+	case AgentCreateRequestSubagentToolsCfgBuiltinDefaultPolicyDeny:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentCreateRequestSubagentToolsCfgBuiltinPolicies.
+const (
+	AgentCreateRequestSubagentToolsCfgBuiltinPoliciesAllow AgentCreateRequestSubagentToolsCfgBuiltinPolicies = "allow"
+	AgentCreateRequestSubagentToolsCfgBuiltinPoliciesAsk   AgentCreateRequestSubagentToolsCfgBuiltinPolicies = "ask"
+	AgentCreateRequestSubagentToolsCfgBuiltinPoliciesDeny  AgentCreateRequestSubagentToolsCfgBuiltinPolicies = "deny"
+)
+
+// Valid indicates whether the value is a known member of the AgentCreateRequestSubagentToolsCfgBuiltinPolicies enum.
+func (e AgentCreateRequestSubagentToolsCfgBuiltinPolicies) Valid() bool {
+	switch e {
+	case AgentCreateRequestSubagentToolsCfgBuiltinPoliciesAllow:
+		return true
+	case AgentCreateRequestSubagentToolsCfgBuiltinPoliciesAsk:
+		return true
+	case AgentCreateRequestSubagentToolsCfgBuiltinPoliciesDeny:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentCreateRequestSubagentType.
+const (
+	AgentCreateRequestSubagentTypeSubagent AgentCreateRequestSubagentType = "Subagent"
+)
+
+// Valid indicates whether the value is a known member of the AgentCreateRequestSubagentType enum.
+func (e AgentCreateRequestSubagentType) Valid() bool {
+	switch e {
+	case AgentCreateRequestSubagentTypeSubagent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentCreateRequestSubagent3pDelegationPolicyAcceptFromKind.
+const (
+	AgentCreateRequestSubagent3pDelegationPolicyAcceptFromKindLocal     AgentCreateRequestSubagent3pDelegationPolicyAcceptFromKind = "local"
+	AgentCreateRequestSubagent3pDelegationPolicyAcceptFromKindRemoteA2a AgentCreateRequestSubagent3pDelegationPolicyAcceptFromKind = "remote-a2a"
+)
+
+// Valid indicates whether the value is a known member of the AgentCreateRequestSubagent3pDelegationPolicyAcceptFromKind enum.
+func (e AgentCreateRequestSubagent3pDelegationPolicyAcceptFromKind) Valid() bool {
+	switch e {
+	case AgentCreateRequestSubagent3pDelegationPolicyAcceptFromKindLocal:
+		return true
+	case AgentCreateRequestSubagent3pDelegationPolicyAcceptFromKindRemoteA2a:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentCreateRequestSubagent3pDelegationPolicyModes.
+const (
+	AgentCreateRequestSubagent3pDelegationPolicyModesAwait      AgentCreateRequestSubagent3pDelegationPolicyModes = "await"
+	AgentCreateRequestSubagent3pDelegationPolicyModesBackground AgentCreateRequestSubagent3pDelegationPolicyModes = "background"
+	AgentCreateRequestSubagent3pDelegationPolicyModesTask       AgentCreateRequestSubagent3pDelegationPolicyModes = "task"
+)
+
+// Valid indicates whether the value is a known member of the AgentCreateRequestSubagent3pDelegationPolicyModes enum.
+func (e AgentCreateRequestSubagent3pDelegationPolicyModes) Valid() bool {
+	switch e {
+	case AgentCreateRequestSubagent3pDelegationPolicyModesAwait:
+		return true
+	case AgentCreateRequestSubagent3pDelegationPolicyModesBackground:
+		return true
+	case AgentCreateRequestSubagent3pDelegationPolicyModesTask:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentCreateRequestSubagent3pDelegationPolicyToKind.
+const (
+	AgentCreateRequestSubagent3pDelegationPolicyToKindLocal     AgentCreateRequestSubagent3pDelegationPolicyToKind = "local"
+	AgentCreateRequestSubagent3pDelegationPolicyToKindRemoteA2a AgentCreateRequestSubagent3pDelegationPolicyToKind = "remote-a2a"
+)
+
+// Valid indicates whether the value is a known member of the AgentCreateRequestSubagent3pDelegationPolicyToKind enum.
+func (e AgentCreateRequestSubagent3pDelegationPolicyToKind) Valid() bool {
+	switch e {
+	case AgentCreateRequestSubagent3pDelegationPolicyToKindLocal:
+		return true
+	case AgentCreateRequestSubagent3pDelegationPolicyToKindRemoteA2a:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentCreateRequestSubagent3pExecutorCli.
+const (
+	AgentCreateRequestSubagent3pExecutorCliClaudeCode AgentCreateRequestSubagent3pExecutorCli = "claude-code"
+	AgentCreateRequestSubagent3pExecutorCliCodex      AgentCreateRequestSubagent3pExecutorCli = "codex"
+	AgentCreateRequestSubagent3pExecutorCliOpencode   AgentCreateRequestSubagent3pExecutorCli = "opencode"
+)
+
+// Valid indicates whether the value is a known member of the AgentCreateRequestSubagent3pExecutorCli enum.
+func (e AgentCreateRequestSubagent3pExecutorCli) Valid() bool {
+	switch e {
+	case AgentCreateRequestSubagent3pExecutorCliClaudeCode:
+		return true
+	case AgentCreateRequestSubagent3pExecutorCliCodex:
+		return true
+	case AgentCreateRequestSubagent3pExecutorCliOpencode:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentCreateRequestSubagent3pExecutorKind.
+const (
+	AgentCreateRequestSubagent3pExecutorKindExternalCli AgentCreateRequestSubagent3pExecutorKind = "external-cli"
+	AgentCreateRequestSubagent3pExecutorKindNative      AgentCreateRequestSubagent3pExecutorKind = "native"
+	AgentCreateRequestSubagent3pExecutorKindRemoteA2a   AgentCreateRequestSubagent3pExecutorKind = "remote-a2a"
+)
+
+// Valid indicates whether the value is a known member of the AgentCreateRequestSubagent3pExecutorKind enum.
+func (e AgentCreateRequestSubagent3pExecutorKind) Valid() bool {
+	switch e {
+	case AgentCreateRequestSubagent3pExecutorKindExternalCli:
+		return true
+	case AgentCreateRequestSubagent3pExecutorKindNative:
+		return true
+	case AgentCreateRequestSubagent3pExecutorKindRemoteA2a:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentCreateRequestSubagent3pType.
+const (
+	Subagent3p AgentCreateRequestSubagent3pType = "subagent_3p"
+)
+
+// Valid indicates whether the value is a known member of the AgentCreateRequestSubagent3pType enum.
+func (e AgentCreateRequestSubagent3pType) Valid() bool {
+	switch e {
+	case Subagent3p:
 		return true
 	default:
 		return false
@@ -2304,19 +2506,19 @@ func (e SandboxConfigUpdateDefaultProfile) Valid() bool {
 
 // Defines values for SandboxConfigUpdateMode.
 const (
-	SandboxConfigUpdateModeEnforce    SandboxConfigUpdateMode = "enforce"
-	SandboxConfigUpdateModeOff        SandboxConfigUpdateMode = "off"
-	SandboxConfigUpdateModePermissive SandboxConfigUpdateMode = "permissive"
+	Enforce    SandboxConfigUpdateMode = "enforce"
+	Off        SandboxConfigUpdateMode = "off"
+	Permissive SandboxConfigUpdateMode = "permissive"
 )
 
 // Valid indicates whether the value is a known member of the SandboxConfigUpdateMode enum.
 func (e SandboxConfigUpdateMode) Valid() bool {
 	switch e {
-	case SandboxConfigUpdateModeEnforce:
+	case Enforce:
 		return true
-	case SandboxConfigUpdateModeOff:
+	case Off:
 		return true
-	case SandboxConfigUpdateModePermissive:
+	case Permissive:
 		return true
 	default:
 		return false
@@ -4241,8 +4443,13 @@ type AgentToolsCfgBuiltinPolicies string
 // AgentType Agent lifecycle classification. "core" = compiled-in identity-locked agent (built-in roster — Mia/Jim/Ava/Ray). "system" = reserved; legacy operator-supplied entry (config.AgentTypeSystem survives in the API contract for backwards compatibility but SeedConfig does NOT create these). "Main" = user-defined chat colleague (the typical Main agent). "Subagent" = user-defined delegation-only worker on the Omnipus engine. "subagent_3p" = user-defined delegation-only worker on an external CLI (claude-code / codex / opencode). Legacy persisted configs with type "worker" are normalized by ToWireType to Subagent or subagent_3p (based on executor) and never appear on the wire.
 type AgentType string
 
-// AgentCreateRequest Body for POST /agents. Creates a new agent. A UUID is assigned by the server. The agent starts in "draft" status (no SOUL.md written yet).
+// AgentCreateRequest Body for POST /agents. Creates a new agent; a UUID is assigned by the server and the agent starts in "draft" status (no SOUL.md written yet). Discriminated by `type` — each agent type carries EXACTLY the fields the agent-types field matrix allows it; a field sent on the wrong variant is a schema violation (400), never silently persisted. `type` is REQUIRED on every variant (the historical omit-type→Main default is retired).
 type AgentCreateRequest struct {
+	union json.RawMessage
+}
+
+// AgentCreateRequestMain Create a Main agent — a user-defined chat colleague on the Omnipus engine. Field set per docs/internal/architecture/agent-types-field-matrix.md: voice and steering_mode are Main-only; executor is absent (Main never has one).
+type AgentCreateRequestMain struct {
 	// Color Hex color code for the agent avatar.
 	Color *string `json:"color,omitempty"`
 
@@ -4257,8 +4464,8 @@ type AgentCreateRequest struct {
 	DelegationPolicy *struct {
 		// AcceptFrom PRESENT BUT NOT ENFORCED in v0.1.0. List of agent references from which this agent accepts delegated work. A startup WARN is emitted if non-empty. Do not rely on this field as an authorization boundary until enforcement is shipped.
 		AcceptFrom *[]struct {
-			Id   string                                           `json:"id"`
-			Kind AgentCreateRequestDelegationPolicyAcceptFromKind `json:"kind"`
+			Id   string                                               `json:"id"`
+			Kind AgentCreateRequestMainDelegationPolicyAcceptFromKind `json:"kind"`
 		} `json:"accept_from,omitempty"`
 
 		// Budget PRESENT BUT NOT ENFORCED in v0.1.0. Delegation spend budget. A startup WARN is emitted if non-empty. Do not rely on this as an authorization boundary.
@@ -4274,7 +4481,7 @@ type AgentCreateRequest struct {
 		Depth *int `json:"depth,omitempty"`
 
 		// Modes Allowed delegation modes. Enforced in v0.1.0. "await" = synchronous subagent (blocks caller until result). "background" = async spawn (caller continues; result posted when done). "task" = task_create delegation (creates a persistent task for another agent).
-		Modes *[]AgentCreateRequestDelegationPolicyModes `json:"modes,omitempty"`
+		Modes *[]AgentCreateRequestMainDelegationPolicyModes `json:"modes,omitempty"`
 
 		// To List of agent references this agent is allowed to delegate work to. An empty array means NO delegation is allowed (deny-by-default). Use [{"kind": "local", "id": "*"}] to allow delegation to any local agent.
 		To *[]struct {
@@ -4282,35 +4489,12 @@ type AgentCreateRequest struct {
 			Id string `json:"id"`
 
 			// Kind The kind of agent reference. "local" = a locally-registered agent resolved by id. "remote-a2a" = reserved for future A2A protocol external agent resolution; not enforced in v0.1.0.
-			Kind AgentCreateRequestDelegationPolicyToKind `json:"kind"`
+			Kind AgentCreateRequestMainDelegationPolicyToKind `json:"kind"`
 		} `json:"to,omitempty"`
 	} `json:"delegation_policy,omitempty"`
 
 	// Description Short description of the agent's purpose. Required (non-empty after trim) for Subagent and subagent_3p — the orchestrator uses it as the basis on which it decides which agent to delegate to. Optional for Main.
 	Description *string `json:"description,omitempty"`
-
-	// Executor Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
-	// "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
-	// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. The CLI is spawned with `--prompt <soul+instructions>` and `--model <model>`. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like sandbox_profile / shell_policy / tools_cfg / fallback_models / model_params / skills / delegation_policy are hidden for subagent_3p agents and rejected 400 on PUT if set.
-	// "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
-	// The "kind" field is derived server-side from the agent's type (Main -> native, Subagent -> native, subagent_3p -> external-cli). It is exposed in responses but is NOT a writable field on create/update — clients cannot choose kind directly. Server-side derive at the handler boundary per the agent-form spec.
-	// When the agent has no executor block, the default is "native".
-	Executor *struct {
-		// Cli The external CLI tool to use when kind="external-cli". Required for subagent_3p agents. Locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
-		Cli *AgentCreateRequestExecutorCli `json:"cli,omitempty"`
-
-		// CliArgs Free-form additional CLI arguments appended to the spawn invocation. The spawn layer uses execve (no shell interpolation), so values are passed safely; warn (but do not reject) on shell-injection chars in the value.
-		CliArgs *string `json:"cli_args,omitempty"`
-
-		// CliPath Filesystem path to the CLI binary. Required for subagent_3p agents. Mutable on PUT (allows upgrading the CLI binary without re-creating the agent). When empty, the OS $PATH is used (fragile when multiple CLI versions are installed — recommend an absolute path).
-		CliPath *string `json:"cli_path,omitempty"`
-
-		// EnvOverrides Additional environment variables merged into the spawned CLI process's environment alongside Omnipus's own (OMNIPUS_AGENT_NAME, OMNIPUS_AGENT_TYPE, and the master-key env var are NOT overridable — user-supplied keys take precedence only for non-Omnipus vars).
-		EnvOverrides *map[string]string `json:"env_overrides,omitempty"`
-
-		// Kind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
-		Kind *AgentCreateRequestExecutorKind `json:"kind,omitempty"`
-	} `json:"executor,omitempty"`
 
 	// FallbackModels Ordered list of fallback model entries tried when the primary model returns an error. Each entry carries its own provider so the fallback can route through a different provider than the primary (FR-007). Capped at 2 entries.
 	// Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
@@ -4359,7 +4543,7 @@ type AgentCreateRequest struct {
 	} `json:"rate_limits,omitempty"`
 
 	// SandboxProfile Kernel sandbox profile applied to this agent's tool calls (O13). Per-agent "off" is retired — "no sandbox" is reachable only via the global god-mode switch. Hidden for Subagent (External) — the CLI manages its own isolation.
-	SandboxProfile *AgentCreateRequestSandboxProfile `json:"sandbox_profile,omitempty"`
+	SandboxProfile *AgentCreateRequestMainSandboxProfile `json:"sandbox_profile,omitempty"`
 
 	// ShellPolicy Per-agent shell command deny-pattern configuration.
 	ShellPolicy *struct {
@@ -4377,7 +4561,7 @@ type AgentCreateRequest struct {
 	Soul string `json:"soul"`
 
 	// SteeringMode Tool execution steering strategy. Main only; the server forces "one-at-a-time" for workers.
-	SteeringMode *AgentCreateRequestSteeringMode `json:"steering_mode,omitempty"`
+	SteeringMode *AgentCreateRequestMainSteeringMode `json:"steering_mode,omitempty"`
 
 	// TimeoutSeconds Maximum seconds a single agent turn may run before being interrupted.
 	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
@@ -4387,10 +4571,10 @@ type AgentCreateRequest struct {
 		// Builtin Controls builtin tool visibility for this agent.
 		Builtin *struct {
 			// DefaultPolicy Fallback policy applied to any builtin tool not listed in policies. Custom agents are seeded with default_policy=allow and a system.*=deny entry to enforce the privilege rail.
-			DefaultPolicy *AgentCreateRequestToolsCfgBuiltinDefaultPolicy `json:"default_policy,omitempty"`
+			DefaultPolicy *AgentCreateRequestMainToolsCfgBuiltinDefaultPolicy `json:"default_policy,omitempty"`
 
 			// Policies Per-tool policy overrides. Keys are tool names or glob patterns (e.g. "system.*", "workspace.shell"). Values are one of "allow", "ask", "deny".
-			Policies *map[string]AgentCreateRequestToolsCfgBuiltinPolicies `json:"policies,omitempty"`
+			Policies *map[string]AgentCreateRequestMainToolsCfgBuiltinPolicies `json:"policies,omitempty"`
 		} `json:"builtin,omitempty"`
 
 		// Mcp MCP server bindings for this agent.
@@ -4406,42 +4590,326 @@ type AgentCreateRequest struct {
 		} `json:"mcp,omitempty"`
 	} `json:"tools_cfg,omitempty"`
 
-	// Type Agent lifecycle to create. "Main" = user-defined chat colleague (default). "Subagent" = a delegation-only labour agent on the Omnipus engine. "subagent_3p" = a delegation-only labour agent that runs on an external CLI (claude-code / codex / opencode) and requires executor.kind=external-cli. "core", "system", and "worker" are reserved/legacy values rejected by the gateway.
-	Type *AgentCreateRequestType `json:"type,omitempty"`
+	// Type Discriminator. Must be exactly "Main" for this variant.
+	Type AgentCreateRequestMainType `json:"type"`
 
 	// Voice Per-agent persona voice identifier (Main only). Schema-pinned; not active until v0.2.0 TTS.
 	Voice *string `json:"voice,omitempty"`
 }
 
-// AgentCreateRequestDelegationPolicyAcceptFromKind defines model for AgentCreateRequest.DelegationPolicy.AcceptFrom.Kind.
-type AgentCreateRequestDelegationPolicyAcceptFromKind string
+// AgentCreateRequestMainDelegationPolicyAcceptFromKind defines model for AgentCreateRequestMain.DelegationPolicy.AcceptFrom.Kind.
+type AgentCreateRequestMainDelegationPolicyAcceptFromKind string
 
-// AgentCreateRequestDelegationPolicyModes defines model for AgentCreateRequest.DelegationPolicy.Modes.
-type AgentCreateRequestDelegationPolicyModes string
+// AgentCreateRequestMainDelegationPolicyModes defines model for AgentCreateRequestMain.DelegationPolicy.Modes.
+type AgentCreateRequestMainDelegationPolicyModes string
 
-// AgentCreateRequestDelegationPolicyToKind The kind of agent reference. "local" = a locally-registered agent resolved by id. "remote-a2a" = reserved for future A2A protocol external agent resolution; not enforced in v0.1.0.
-type AgentCreateRequestDelegationPolicyToKind string
+// AgentCreateRequestMainDelegationPolicyToKind The kind of agent reference. "local" = a locally-registered agent resolved by id. "remote-a2a" = reserved for future A2A protocol external agent resolution; not enforced in v0.1.0.
+type AgentCreateRequestMainDelegationPolicyToKind string
 
-// AgentCreateRequestExecutorCli The external CLI tool to use when kind="external-cli". Required for subagent_3p agents. Locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
-type AgentCreateRequestExecutorCli string
+// AgentCreateRequestMainSandboxProfile Kernel sandbox profile applied to this agent's tool calls (O13). Per-agent "off" is retired — "no sandbox" is reachable only via the global god-mode switch. Hidden for Subagent (External) — the CLI manages its own isolation.
+type AgentCreateRequestMainSandboxProfile string
 
-// AgentCreateRequestExecutorKind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
-type AgentCreateRequestExecutorKind string
+// AgentCreateRequestMainSteeringMode Tool execution steering strategy. Main only; the server forces "one-at-a-time" for workers.
+type AgentCreateRequestMainSteeringMode string
 
-// AgentCreateRequestSandboxProfile Kernel sandbox profile applied to this agent's tool calls (O13). Per-agent "off" is retired — "no sandbox" is reachable only via the global god-mode switch. Hidden for Subagent (External) — the CLI manages its own isolation.
-type AgentCreateRequestSandboxProfile string
+// AgentCreateRequestMainToolsCfgBuiltinDefaultPolicy Fallback policy applied to any builtin tool not listed in policies. Custom agents are seeded with default_policy=allow and a system.*=deny entry to enforce the privilege rail.
+type AgentCreateRequestMainToolsCfgBuiltinDefaultPolicy string
 
-// AgentCreateRequestSteeringMode Tool execution steering strategy. Main only; the server forces "one-at-a-time" for workers.
-type AgentCreateRequestSteeringMode string
+// AgentCreateRequestMainToolsCfgBuiltinPolicies defines model for AgentCreateRequestMain.ToolsCfg.Builtin.Policies.
+type AgentCreateRequestMainToolsCfgBuiltinPolicies string
 
-// AgentCreateRequestToolsCfgBuiltinDefaultPolicy Fallback policy applied to any builtin tool not listed in policies. Custom agents are seeded with default_policy=allow and a system.*=deny entry to enforce the privilege rail.
-type AgentCreateRequestToolsCfgBuiltinDefaultPolicy string
+// AgentCreateRequestMainType Discriminator. Must be exactly "Main" for this variant.
+type AgentCreateRequestMainType string
 
-// AgentCreateRequestToolsCfgBuiltinPolicies defines model for AgentCreateRequest.ToolsCfg.Builtin.Policies.
-type AgentCreateRequestToolsCfgBuiltinPolicies string
+// AgentCreateRequestSubagent Create a Subagent — a user-defined delegation-only worker on the Omnipus engine. Field set per the agent-types field matrix: no voice (no chat/TTS surface), no steering_mode (workers are forced one-at-a-time server-side), no executor (native is derived server-side — never sent by the client). Description is enforced non-empty-after-trim by the handler (the orchestrator delegates based on it).
+type AgentCreateRequestSubagent struct {
+	// Color Hex color code for the agent avatar.
+	Color *string `json:"color,omitempty"`
 
-// AgentCreateRequestType Agent lifecycle to create. "Main" = user-defined chat colleague (default). "Subagent" = a delegation-only labour agent on the Omnipus engine. "subagent_3p" = a delegation-only labour agent that runs on an external CLI (claude-code / codex / opencode) and requires executor.kind=external-cli. "core", "system", and "worker" are reserved/legacy values rejected by the gateway.
-type AgentCreateRequestType string
+	// DelegationPolicy Delegation policy for an agent. Controls which other agents this agent may delegate work to, and how delegation modes are gated.
+	// The canonical "to" field unifies the three legacy allowlists:
+	//   - AgentConfig.CanDelegateTo (per-agent, task delegation)
+	//   - AgentDefaults.CanDelegateTo (global fallback, task delegation)
+	//   - SubagentsConfig.AllowAgents (spawn/subagent tool allowlist)
+	//
+	// Precedence: agent-level "to" > defaults-level "to"; subagent allowlist merges into agent-level "to" when both are set.
+	// "accept_from" and "budget" are present in the schema but NOT enforced in v0.1.0. A startup WARN is emitted if either field is non-empty, to avoid presenting them as an active authorization boundary.
+	DelegationPolicy *struct {
+		// AcceptFrom PRESENT BUT NOT ENFORCED in v0.1.0. List of agent references from which this agent accepts delegated work. A startup WARN is emitted if non-empty. Do not rely on this field as an authorization boundary until enforcement is shipped.
+		AcceptFrom *[]struct {
+			Id   string                                                   `json:"id"`
+			Kind AgentCreateRequestSubagentDelegationPolicyAcceptFromKind `json:"kind"`
+		} `json:"accept_from,omitempty"`
+
+		// Budget PRESENT BUT NOT ENFORCED in v0.1.0. Delegation spend budget. A startup WARN is emitted if non-empty. Do not rely on this as an authorization boundary.
+		Budget *struct {
+			// MaxCostUsd Maximum USD spend allowed for delegated work.
+			MaxCostUsd *float64 `json:"max_cost_usd,omitempty"`
+
+			// MaxTokens Maximum token count allowed for delegated work.
+			MaxTokens *int `json:"max_tokens,omitempty"`
+		} `json:"budget,omitempty"`
+
+		// Depth Maximum delegation chain depth (number of hops). 0 = no delegation allowed. Enforced in v0.1.0 as a safety cap. Default is uncapped when absent. Counts the number of nested delegation levels, not total agents involved.
+		Depth *int `json:"depth,omitempty"`
+
+		// Modes Allowed delegation modes. Enforced in v0.1.0. "await" = synchronous subagent (blocks caller until result). "background" = async spawn (caller continues; result posted when done). "task" = task_create delegation (creates a persistent task for another agent).
+		Modes *[]AgentCreateRequestSubagentDelegationPolicyModes `json:"modes,omitempty"`
+
+		// To List of agent references this agent is allowed to delegate work to. An empty array means NO delegation is allowed (deny-by-default). Use [{"kind": "local", "id": "*"}] to allow delegation to any local agent.
+		To *[]struct {
+			// Id Agent identifier. For kind=local, this is the agent's ID (UUID or well-known string). The value "*" is a wildcard allowing delegation to any agent of the given kind.
+			Id string `json:"id"`
+
+			// Kind The kind of agent reference. "local" = a locally-registered agent resolved by id. "remote-a2a" = reserved for future A2A protocol external agent resolution; not enforced in v0.1.0.
+			Kind AgentCreateRequestSubagentDelegationPolicyToKind `json:"kind"`
+		} `json:"to,omitempty"`
+	} `json:"delegation_policy,omitempty"`
+
+	// Description Short description of the agent's purpose. Required (non-empty after trim) for Subagent and subagent_3p — the orchestrator uses it as the basis on which it decides which agent to delegate to. Optional for Main.
+	Description *string `json:"description,omitempty"`
+
+	// FallbackModels Ordered list of fallback model entries tried when the primary model returns an error. Each entry carries its own provider so the fallback can route through a different provider than the primary (FR-007). Capped at 2 entries.
+	// Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
+	FallbackModels *[]FallbackModel `json:"fallback_models,omitempty"`
+
+	// Icon Phosphor icon name for the agent avatar.
+	Icon *string `json:"icon,omitempty"`
+
+	// MaxToolIterations Maximum number of tool calls allowed per turn.
+	MaxToolIterations *int `json:"max_tool_iterations,omitempty"`
+
+	// Model Model slug for LLM calls. When omitted, the global agents.defaults.model_name is used. With the O3 two-field model this is the bare slug; pair it with `provider` for explicit routing.
+	Model *string `json:"model,omitempty"`
+
+	// ModelParams LLM sampling parameters applied to this agent's requests.
+	ModelParams *struct {
+		// MaxTokens Maximum tokens to generate per turn.
+		MaxTokens *int `json:"max_tokens,omitempty"`
+
+		// Temperature Sampling temperature (0.0 – 2.0). Lower = more deterministic.
+		Temperature *float64 `json:"temperature,omitempty"`
+
+		// TopP Nucleus sampling probability mass. 1.0 disables nucleus sampling.
+		TopP *float64 `json:"top_p,omitempty"`
+	} `json:"model_params,omitempty"`
+
+	// Name Display name for the new agent.
+	Name string `json:"name"`
+
+	// Provider Explicit routing key for the primary model (O3 two-field model), mirroring fallback_models[].provider. When set, resolution uses it directly and never infers a provider. Optional; when omitted the model resolves via the default provider.
+	Provider *string `json:"provider,omitempty"`
+
+	// RateLimits Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies.
+	RateLimits *struct {
+		// MaxCostPerDay Maximum USD cost per day for this agent. Absent = no per-agent cap.
+		MaxCostPerDay *float64 `json:"max_cost_per_day,omitempty"`
+
+		// MaxLlmCallsPerHour Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
+		MaxLlmCallsPerHour *int `json:"max_llm_calls_per_hour,omitempty"`
+
+		// MaxToolCallsPerMinute Maximum tool calls per minute for this agent. Absent = no per-agent cap.
+		MaxToolCallsPerMinute *int `json:"max_tool_calls_per_minute,omitempty"`
+
+		// UseGlobalDefaults When true, global rate limits are used and per-agent overrides are ignored.
+		UseGlobalDefaults *bool `json:"use_global_defaults,omitempty"`
+	} `json:"rate_limits,omitempty"`
+
+	// SandboxProfile Kernel sandbox profile applied to this agent's tool calls (O13). Per-agent "off" is retired — "no sandbox" is reachable only via the global god-mode switch. Hidden for Subagent (External) — the CLI manages its own isolation.
+	SandboxProfile *AgentCreateRequestSubagentSandboxProfile `json:"sandbox_profile,omitempty"`
+
+	// ShellPolicy Per-agent shell command deny-pattern configuration.
+	ShellPolicy *struct {
+		// CustomDenyPatterns Additional Go regexp patterns to block in shell commands.
+		CustomDenyPatterns *[]string `json:"custom_deny_patterns,omitempty"`
+
+		// EnableDenyPatterns Enable pattern-based shell command blocking.
+		EnableDenyPatterns *bool `json:"enable_deny_patterns,omitempty"`
+	} `json:"shell_policy,omitempty"`
+
+	// Skills Initial list of skill IDs granted to this agent. An empty list (or absent field) means no skills are granted (opt-in, default none).
+	Skills *[]string `json:"skills,omitempty"`
+
+	// Soul Initial SOUL.md content. Required for every user-creatable type — including Subagent (External), where it is passed as part of the CLI prompt at runtime. The CLI never reads a file from disk. Backend trims before length-validation, so whitespace-only is rejected as minLength violation.
+	Soul string `json:"soul"`
+
+	// TimeoutSeconds Maximum seconds a single agent turn may run before being interrupted.
+	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
+
+	// ToolsCfg Per-agent tool configuration governing which builtin tools are accessible and which MCP servers are bound (config.AgentToolsCfg on the Go side, AgentToolsCfg interface in src/lib/api.ts).
+	ToolsCfg *struct {
+		// Builtin Controls builtin tool visibility for this agent.
+		Builtin *struct {
+			// DefaultPolicy Fallback policy applied to any builtin tool not listed in policies. Custom agents are seeded with default_policy=allow and a system.*=deny entry to enforce the privilege rail.
+			DefaultPolicy *AgentCreateRequestSubagentToolsCfgBuiltinDefaultPolicy `json:"default_policy,omitempty"`
+
+			// Policies Per-tool policy overrides. Keys are tool names or glob patterns (e.g. "system.*", "workspace.shell"). Values are one of "allow", "ask", "deny".
+			Policies *map[string]AgentCreateRequestSubagentToolsCfgBuiltinPolicies `json:"policies,omitempty"`
+		} `json:"builtin,omitempty"`
+
+		// Mcp MCP server bindings for this agent.
+		Mcp *struct {
+			// Servers List of MCP server bindings.
+			Servers *[]struct {
+				// Id MCP server identifier as registered in config.json.
+				Id string `json:"id"`
+
+				// Tools Specific tool names to expose from this server. When absent, all tools from the server are available.
+				Tools *[]string `json:"tools,omitempty"`
+			} `json:"servers,omitempty"`
+		} `json:"mcp,omitempty"`
+	} `json:"tools_cfg,omitempty"`
+
+	// Type Discriminator. Must be exactly "Subagent" for this variant.
+	Type AgentCreateRequestSubagentType `json:"type"`
+}
+
+// AgentCreateRequestSubagentDelegationPolicyAcceptFromKind defines model for AgentCreateRequestSubagent.DelegationPolicy.AcceptFrom.Kind.
+type AgentCreateRequestSubagentDelegationPolicyAcceptFromKind string
+
+// AgentCreateRequestSubagentDelegationPolicyModes defines model for AgentCreateRequestSubagent.DelegationPolicy.Modes.
+type AgentCreateRequestSubagentDelegationPolicyModes string
+
+// AgentCreateRequestSubagentDelegationPolicyToKind The kind of agent reference. "local" = a locally-registered agent resolved by id. "remote-a2a" = reserved for future A2A protocol external agent resolution; not enforced in v0.1.0.
+type AgentCreateRequestSubagentDelegationPolicyToKind string
+
+// AgentCreateRequestSubagentSandboxProfile Kernel sandbox profile applied to this agent's tool calls (O13). Per-agent "off" is retired — "no sandbox" is reachable only via the global god-mode switch. Hidden for Subagent (External) — the CLI manages its own isolation.
+type AgentCreateRequestSubagentSandboxProfile string
+
+// AgentCreateRequestSubagentToolsCfgBuiltinDefaultPolicy Fallback policy applied to any builtin tool not listed in policies. Custom agents are seeded with default_policy=allow and a system.*=deny entry to enforce the privilege rail.
+type AgentCreateRequestSubagentToolsCfgBuiltinDefaultPolicy string
+
+// AgentCreateRequestSubagentToolsCfgBuiltinPolicies defines model for AgentCreateRequestSubagent.ToolsCfg.Builtin.Policies.
+type AgentCreateRequestSubagentToolsCfgBuiltinPolicies string
+
+// AgentCreateRequestSubagentType Discriminator. Must be exactly "Subagent" for this variant.
+type AgentCreateRequestSubagentType string
+
+// AgentCreateRequestSubagent3p Create a subagent_3p — a delegation-only worker that runs on an external CLI (claude-code / codex / opencode). The runner manages its own isolation, auth, retries, and tool loop, so tools_cfg, skills, fallback_models, model_params, sandbox_profile, shell_policy, voice, steering_mode, and max_tool_iterations do not exist on this variant (additionalProperties: false rejects them). timeout_seconds stays (process-level kill for a hung CLI). executor is REQUIRED (kind external-cli with cli + cli_path; the handler additionally rejects whitespace-only cli_path).
+type AgentCreateRequestSubagent3p struct {
+	// Color Hex color code for the agent avatar.
+	Color *string `json:"color,omitempty"`
+
+	// DelegationPolicy Delegation policy for an agent. Controls which other agents this agent may delegate work to, and how delegation modes are gated.
+	// The canonical "to" field unifies the three legacy allowlists:
+	//   - AgentConfig.CanDelegateTo (per-agent, task delegation)
+	//   - AgentDefaults.CanDelegateTo (global fallback, task delegation)
+	//   - SubagentsConfig.AllowAgents (spawn/subagent tool allowlist)
+	//
+	// Precedence: agent-level "to" > defaults-level "to"; subagent allowlist merges into agent-level "to" when both are set.
+	// "accept_from" and "budget" are present in the schema but NOT enforced in v0.1.0. A startup WARN is emitted if either field is non-empty, to avoid presenting them as an active authorization boundary.
+	DelegationPolicy *struct {
+		// AcceptFrom PRESENT BUT NOT ENFORCED in v0.1.0. List of agent references from which this agent accepts delegated work. A startup WARN is emitted if non-empty. Do not rely on this field as an authorization boundary until enforcement is shipped.
+		AcceptFrom *[]struct {
+			Id   string                                                     `json:"id"`
+			Kind AgentCreateRequestSubagent3pDelegationPolicyAcceptFromKind `json:"kind"`
+		} `json:"accept_from,omitempty"`
+
+		// Budget PRESENT BUT NOT ENFORCED in v0.1.0. Delegation spend budget. A startup WARN is emitted if non-empty. Do not rely on this as an authorization boundary.
+		Budget *struct {
+			// MaxCostUsd Maximum USD spend allowed for delegated work.
+			MaxCostUsd *float64 `json:"max_cost_usd,omitempty"`
+
+			// MaxTokens Maximum token count allowed for delegated work.
+			MaxTokens *int `json:"max_tokens,omitempty"`
+		} `json:"budget,omitempty"`
+
+		// Depth Maximum delegation chain depth (number of hops). 0 = no delegation allowed. Enforced in v0.1.0 as a safety cap. Default is uncapped when absent. Counts the number of nested delegation levels, not total agents involved.
+		Depth *int `json:"depth,omitempty"`
+
+		// Modes Allowed delegation modes. Enforced in v0.1.0. "await" = synchronous subagent (blocks caller until result). "background" = async spawn (caller continues; result posted when done). "task" = task_create delegation (creates a persistent task for another agent).
+		Modes *[]AgentCreateRequestSubagent3pDelegationPolicyModes `json:"modes,omitempty"`
+
+		// To List of agent references this agent is allowed to delegate work to. An empty array means NO delegation is allowed (deny-by-default). Use [{"kind": "local", "id": "*"}] to allow delegation to any local agent.
+		To *[]struct {
+			// Id Agent identifier. For kind=local, this is the agent's ID (UUID or well-known string). The value "*" is a wildcard allowing delegation to any agent of the given kind.
+			Id string `json:"id"`
+
+			// Kind The kind of agent reference. "local" = a locally-registered agent resolved by id. "remote-a2a" = reserved for future A2A protocol external agent resolution; not enforced in v0.1.0.
+			Kind AgentCreateRequestSubagent3pDelegationPolicyToKind `json:"kind"`
+		} `json:"to,omitempty"`
+	} `json:"delegation_policy,omitempty"`
+
+	// Description Short description of the agent's purpose. Required (non-empty after trim) for Subagent and subagent_3p — the orchestrator uses it as the basis on which it decides which agent to delegate to. Optional for Main.
+	Description *string `json:"description,omitempty"`
+
+	// Executor Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
+	// "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
+	// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. The CLI is spawned with `--prompt <soul+instructions>` and `--model <model>`. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like sandbox_profile / shell_policy / tools_cfg / fallback_models / model_params / skills / delegation_policy are hidden for subagent_3p agents and rejected 400 on PUT if set.
+	// "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
+	// The "kind" field is derived server-side from the agent's type (Main -> native, Subagent -> native, subagent_3p -> external-cli). It is exposed in responses but is NOT a writable field on create/update — clients cannot choose kind directly. Server-side derive at the handler boundary per the agent-form spec.
+	// When the agent has no executor block, the default is "native".
+	Executor struct {
+		// Cli The external CLI tool to use when kind="external-cli". Required for subagent_3p agents. Locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
+		Cli *AgentCreateRequestSubagent3pExecutorCli `json:"cli,omitempty"`
+
+		// CliArgs Free-form additional CLI arguments appended to the spawn invocation. The spawn layer uses execve (no shell interpolation), so values are passed safely; warn (but do not reject) on shell-injection chars in the value.
+		CliArgs *string `json:"cli_args,omitempty"`
+
+		// CliPath Filesystem path to the CLI binary. Required for subagent_3p agents. Mutable on PUT (allows upgrading the CLI binary without re-creating the agent). When empty, the OS $PATH is used (fragile when multiple CLI versions are installed — recommend an absolute path).
+		CliPath *string `json:"cli_path,omitempty"`
+
+		// EnvOverrides Additional environment variables merged into the spawned CLI process's environment alongside Omnipus's own (OMNIPUS_AGENT_NAME, OMNIPUS_AGENT_TYPE, and the master-key env var are NOT overridable — user-supplied keys take precedence only for non-Omnipus vars).
+		EnvOverrides *map[string]string `json:"env_overrides,omitempty"`
+
+		// Kind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
+		Kind *AgentCreateRequestSubagent3pExecutorKind `json:"kind,omitempty"`
+	} `json:"executor"`
+
+	// Icon Phosphor icon name for the agent avatar.
+	Icon *string `json:"icon,omitempty"`
+
+	// Model Model slug for LLM calls. When omitted, the global agents.defaults.model_name is used. With the O3 two-field model this is the bare slug; pair it with `provider` for explicit routing.
+	Model *string `json:"model,omitempty"`
+
+	// Name Display name for the new agent.
+	Name string `json:"name"`
+
+	// Provider Explicit routing key for the primary model (O3 two-field model), mirroring fallback_models[].provider. When set, resolution uses it directly and never infers a provider. Optional; when omitted the model resolves via the default provider.
+	Provider *string `json:"provider,omitempty"`
+
+	// RateLimits Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies.
+	RateLimits *struct {
+		// MaxCostPerDay Maximum USD cost per day for this agent. Absent = no per-agent cap.
+		MaxCostPerDay *float64 `json:"max_cost_per_day,omitempty"`
+
+		// MaxLlmCallsPerHour Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
+		MaxLlmCallsPerHour *int `json:"max_llm_calls_per_hour,omitempty"`
+
+		// MaxToolCallsPerMinute Maximum tool calls per minute for this agent. Absent = no per-agent cap.
+		MaxToolCallsPerMinute *int `json:"max_tool_calls_per_minute,omitempty"`
+
+		// UseGlobalDefaults When true, global rate limits are used and per-agent overrides are ignored.
+		UseGlobalDefaults *bool `json:"use_global_defaults,omitempty"`
+	} `json:"rate_limits,omitempty"`
+
+	// Soul Initial SOUL.md content. Required for every user-creatable type — including Subagent (External), where it is passed as part of the CLI prompt at runtime. The CLI never reads a file from disk. Backend trims before length-validation, so whitespace-only is rejected as minLength violation.
+	Soul string `json:"soul"`
+
+	// TimeoutSeconds Maximum seconds a single agent turn may run before being interrupted.
+	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
+
+	// Type Discriminator. Must be exactly "subagent_3p" for this variant.
+	Type AgentCreateRequestSubagent3pType `json:"type"`
+}
+
+// AgentCreateRequestSubagent3pDelegationPolicyAcceptFromKind defines model for AgentCreateRequestSubagent3p.DelegationPolicy.AcceptFrom.Kind.
+type AgentCreateRequestSubagent3pDelegationPolicyAcceptFromKind string
+
+// AgentCreateRequestSubagent3pDelegationPolicyModes defines model for AgentCreateRequestSubagent3p.DelegationPolicy.Modes.
+type AgentCreateRequestSubagent3pDelegationPolicyModes string
+
+// AgentCreateRequestSubagent3pDelegationPolicyToKind The kind of agent reference. "local" = a locally-registered agent resolved by id. "remote-a2a" = reserved for future A2A protocol external agent resolution; not enforced in v0.1.0.
+type AgentCreateRequestSubagent3pDelegationPolicyToKind string
+
+// AgentCreateRequestSubagent3pExecutorCli The external CLI tool to use when kind="external-cli". Required for subagent_3p agents. Locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
+type AgentCreateRequestSubagent3pExecutorCli string
+
+// AgentCreateRequestSubagent3pExecutorKind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
+type AgentCreateRequestSubagent3pExecutorKind string
+
+// AgentCreateRequestSubagent3pType Discriminator. Must be exactly "subagent_3p" for this variant.
+type AgentCreateRequestSubagent3pType string
 
 // AgentModelParams LLM sampling parameters applied to an agent's requests. When absent, the provider defaults are used.
 type AgentModelParams struct {
@@ -9924,6 +10392,125 @@ func (a TaskUpdateRequest_Trigger_Config) MarshalJSON() ([]byte, error) {
 		}
 	}
 	return json.Marshal(object)
+}
+
+// AsAgentCreateRequestMain returns the union data inside the AgentCreateRequest as a AgentCreateRequestMain
+func (t AgentCreateRequest) AsAgentCreateRequestMain() (AgentCreateRequestMain, error) {
+	var body AgentCreateRequestMain
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromAgentCreateRequestMain overwrites any union data inside the AgentCreateRequest as the provided AgentCreateRequestMain
+func (t *AgentCreateRequest) FromAgentCreateRequestMain(v AgentCreateRequestMain) error {
+	v.Type = "Main"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeAgentCreateRequestMain performs a merge with any union data inside the AgentCreateRequest, using the provided AgentCreateRequestMain
+func (t *AgentCreateRequest) MergeAgentCreateRequestMain(v AgentCreateRequestMain) error {
+	v.Type = "Main"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsAgentCreateRequestSubagent returns the union data inside the AgentCreateRequest as a AgentCreateRequestSubagent
+func (t AgentCreateRequest) AsAgentCreateRequestSubagent() (AgentCreateRequestSubagent, error) {
+	var body AgentCreateRequestSubagent
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromAgentCreateRequestSubagent overwrites any union data inside the AgentCreateRequest as the provided AgentCreateRequestSubagent
+func (t *AgentCreateRequest) FromAgentCreateRequestSubagent(v AgentCreateRequestSubagent) error {
+	v.Type = "Subagent"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeAgentCreateRequestSubagent performs a merge with any union data inside the AgentCreateRequest, using the provided AgentCreateRequestSubagent
+func (t *AgentCreateRequest) MergeAgentCreateRequestSubagent(v AgentCreateRequestSubagent) error {
+	v.Type = "Subagent"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsAgentCreateRequestSubagent3p returns the union data inside the AgentCreateRequest as a AgentCreateRequestSubagent3p
+func (t AgentCreateRequest) AsAgentCreateRequestSubagent3p() (AgentCreateRequestSubagent3p, error) {
+	var body AgentCreateRequestSubagent3p
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromAgentCreateRequestSubagent3p overwrites any union data inside the AgentCreateRequest as the provided AgentCreateRequestSubagent3p
+func (t *AgentCreateRequest) FromAgentCreateRequestSubagent3p(v AgentCreateRequestSubagent3p) error {
+	v.Type = "subagent_3p"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeAgentCreateRequestSubagent3p performs a merge with any union data inside the AgentCreateRequest, using the provided AgentCreateRequestSubagent3p
+func (t *AgentCreateRequest) MergeAgentCreateRequestSubagent3p(v AgentCreateRequestSubagent3p) error {
+	v.Type = "subagent_3p"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t AgentCreateRequest) Discriminator() (string, error) {
+	var discriminator struct {
+		Discriminator string `json:"type"`
+	}
+	err := json.Unmarshal(t.union, &discriminator)
+	return discriminator.Discriminator, err
+}
+
+func (t AgentCreateRequest) ValueByDiscriminator() (interface{}, error) {
+	discriminator, err := t.Discriminator()
+	if err != nil {
+		return nil, err
+	}
+	switch discriminator {
+	case "Main":
+		return t.AsAgentCreateRequestMain()
+	case "Subagent":
+		return t.AsAgentCreateRequestSubagent()
+	case "subagent_3p":
+		return t.AsAgentCreateRequestSubagent3p()
+	default:
+		return nil, errors.New("unknown discriminator value: " + discriminator)
+	}
+}
+
+func (t AgentCreateRequest) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *AgentCreateRequest) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
 }
 
 // AsListSessions200JSONResponseBody0 returns the union data inside the ListSessions200JSONResponseBody as a ListSessions200JSONResponseBody0

@@ -29,7 +29,13 @@ import {
   fetchSkills,
   isApiError,
 } from '@/lib/api'
-import type { Agent, AgentCreateRequest } from '@/lib/api'
+import type {
+  Agent,
+  AgentCreateRequest,
+  AgentCreateRequestMain,
+  AgentCreateRequestSubagent,
+  AgentCreateRequestSubagent3p,
+} from '@/lib/api'
 
 import {
   CreateAgentWizard,
@@ -70,70 +76,103 @@ function normalizeWizardType(
 
 /** Convert the wizard's submit payload to a wire AgentCreateRequest.
  *
- *  - Description is omitted when empty (Main agents treat it as optional;
- *    the server schema accepts `undefined`).
- *  - Executor block is only emitted when at least one of cli / path /
- *    env_overrides / cli_args is set; the server defaults `kind` to
- *    `native` for non-External agents when the block is absent.
- *  - Tools_cfg / fallback_models are forwarded as-is (the wizard
- *    types them properly, so no `as` cast is required here).
+ *  AgentCreateRequest is a discriminated union (one variant per agent type,
+ *  `additionalProperties: false` — see contracts/components/schemas/
+ *  AgentCreateRequest*.yaml and the field matrix in docs/internal/
+ *  architecture/agent-types-field-matrix.md), so each branch builds exactly
+ *  the fields its variant carries; sending a field on the wrong variant is
+ *  a 400, not a silent drop.
+ *
+ *  - Description is omitted when empty (optional for Main; the server
+ *    enforces non-empty for workers).
+ *  - Main / Subagent never send `executor` — the server derives `native`.
+ *    subagent_3p always sends `kind: external-cli` (the variant requires it).
  *  - All string fields are `.trim()`-ed to match the wizard's step
  *    gating (which validates `.trim().length > 0`).
  */
 function payloadToCreateRequest(
   payload: WizardSubmitPayload,
 ): AgentCreateRequest {
-  // UAT 4a: native subagents that inherit a field from the caller omit it
-  // from the create request so the server keeps the inherited rail. These
-  // flags are UI-only and never cross the wire. They apply only to native
-  // Subagents (Main never inherits; external subagents run their own config).
-  const isNativeSubagent = payload.type === 'Subagent'
-  const inheritModel = isNativeSubagent && payload.inherit_model === true
-  const inheritTools = isNativeSubagent && payload.inherit_tools === true
-  const inheritSkills = isNativeSubagent && payload.inherit_skills === true
-  const inheritSandbox = isNativeSubagent && payload.inherit_sandbox === true
+  const name = payload.name.trim()
+  const soul = payload.soul.trim()
+  const description = payload.description.trim()
 
-  const req: AgentCreateRequest = {
-    type: payload.type,
-    name: payload.name.trim(),
-    color: payload.color,
-    icon: payload.icon,
-    soul: payload.soul.trim(),
-  }
-  // Model omitted when inherited (server falls back to the caller/global model).
-  if (!inheritModel && payload.model.trim()) req.model = payload.model.trim()
-  if (payload.description.trim()) req.description = payload.description.trim()
-  // O3 two-field: forward provider only when non-empty and not inheriting model.
-  if (!inheritModel && payload.provider && payload.provider.trim() !== '') req.provider = payload.provider.trim()
-  if (payload.voice !== undefined && payload.voice !== '') req.voice = payload.voice
-  // Tools / Skills / Sandbox omitted when inherited so the server keeps the
-  // caller's rail (UAT 4a). Fallback models ride with the primary model.
-  if (!inheritTools && payload.tools_cfg !== undefined) req.tools_cfg = payload.tools_cfg
-  if (!inheritSkills && payload.skills !== undefined) req.skills = payload.skills
-  if (!inheritModel && payload.fallback_models !== undefined) req.fallback_models = payload.fallback_models
-  if (payload.model_params !== undefined) req.model_params = payload.model_params
-  if (!inheritSandbox && payload.sandbox_profile !== undefined) req.sandbox_profile = payload.sandbox_profile
-  if (payload.shell_policy !== undefined) req.shell_policy = payload.shell_policy
-  if (payload.rate_limits !== undefined) req.rate_limits = payload.rate_limits
-  if (payload.timeout_seconds !== undefined) req.timeout_seconds = payload.timeout_seconds
-  if (payload.max_tool_iterations !== undefined) req.max_tool_iterations = payload.max_tool_iterations
-  if (payload.steering_mode !== undefined) req.steering_mode = payload.steering_mode
-
-  // Executor block. Subagents default to the in-process native runner when
-  // the user has not configured an external CLI. External agents must set
-  // kind='external-cli' and a CLI path.
-  const hasExecutorFields = payload.cli || payload.executor_cli_path || payload.executor_env_overrides || payload.executor_cli_args
-  if (payload.type === 'Subagent' && !hasExecutorFields) {
-    req.executor = { kind: 'native' }
-  } else if (hasExecutorFields) {
-    req.executor = {
-      kind: payload.type === 'subagent_3p' ? 'external-cli' : 'native',
+  if (payload.type === 'subagent_3p') {
+    const req: AgentCreateRequestSubagent3p = {
+      type: 'subagent_3p',
+      name,
+      color: payload.color,
+      icon: payload.icon,
+      soul,
+      // The external CLI is the runner; the variant requires the block.
+      executor: { kind: 'external-cli' },
     }
     if (payload.cli) req.executor.cli = payload.cli
     if (payload.executor_cli_path) req.executor.cli_path = payload.executor_cli_path
     if (payload.executor_env_overrides) req.executor.env_overrides = payload.executor_env_overrides
     if (payload.executor_cli_args) req.executor.cli_args = payload.executor_cli_args
+    if (description) req.description = description
+    if (payload.model.trim()) req.model = payload.model.trim()
+    if (payload.provider?.trim()) req.provider = payload.provider.trim()
+    if (payload.rate_limits !== undefined) req.rate_limits = payload.rate_limits
+    if (payload.timeout_seconds !== undefined) req.timeout_seconds = payload.timeout_seconds
+    return req
   }
+
+  if (payload.type === 'Subagent') {
+    // UAT 4a: native subagents that inherit a field from the caller omit it
+    // from the create request so the server keeps the inherited rail. These
+    // flags are UI-only and never cross the wire.
+    const inheritModel = payload.inherit_model === true
+    const inheritTools = payload.inherit_tools === true
+    const inheritSkills = payload.inherit_skills === true
+    const inheritSandbox = payload.inherit_sandbox === true
+
+    const req: AgentCreateRequestSubagent = {
+      type: 'Subagent',
+      name,
+      color: payload.color,
+      icon: payload.icon,
+      soul,
+    }
+    if (description) req.description = description
+    // Model omitted when inherited (server falls back to the caller/global
+    // model); provider and fallbacks ride with the primary model.
+    if (!inheritModel && payload.model.trim()) req.model = payload.model.trim()
+    if (!inheritModel && payload.provider?.trim()) req.provider = payload.provider.trim()
+    if (!inheritModel && payload.fallback_models !== undefined) req.fallback_models = payload.fallback_models
+    if (!inheritTools && payload.tools_cfg !== undefined) req.tools_cfg = payload.tools_cfg
+    if (!inheritSkills && payload.skills !== undefined) req.skills = payload.skills
+    if (!inheritSandbox && payload.sandbox_profile !== undefined) req.sandbox_profile = payload.sandbox_profile
+    if (payload.model_params !== undefined) req.model_params = payload.model_params
+    if (payload.shell_policy !== undefined) req.shell_policy = payload.shell_policy
+    if (payload.rate_limits !== undefined) req.rate_limits = payload.rate_limits
+    if (payload.timeout_seconds !== undefined) req.timeout_seconds = payload.timeout_seconds
+    if (payload.max_tool_iterations !== undefined) req.max_tool_iterations = payload.max_tool_iterations
+    return req
+  }
+
+  const req: AgentCreateRequestMain = {
+    type: 'Main',
+    name,
+    color: payload.color,
+    icon: payload.icon,
+    soul,
+  }
+  if (description) req.description = description
+  if (payload.model.trim()) req.model = payload.model.trim()
+  if (payload.provider?.trim()) req.provider = payload.provider.trim()
+  if (payload.voice !== undefined && payload.voice !== '') req.voice = payload.voice
+  if (payload.tools_cfg !== undefined) req.tools_cfg = payload.tools_cfg
+  if (payload.skills !== undefined) req.skills = payload.skills
+  if (payload.fallback_models !== undefined) req.fallback_models = payload.fallback_models
+  if (payload.model_params !== undefined) req.model_params = payload.model_params
+  if (payload.sandbox_profile !== undefined) req.sandbox_profile = payload.sandbox_profile
+  if (payload.shell_policy !== undefined) req.shell_policy = payload.shell_policy
+  if (payload.rate_limits !== undefined) req.rate_limits = payload.rate_limits
+  if (payload.timeout_seconds !== undefined) req.timeout_seconds = payload.timeout_seconds
+  if (payload.max_tool_iterations !== undefined) req.max_tool_iterations = payload.max_tool_iterations
+  if (payload.steering_mode !== undefined) req.steering_mode = payload.steering_mode
   return req
 }
 

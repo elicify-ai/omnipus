@@ -128,6 +128,39 @@ for name in $STRICT_SCHEMAS; do
   fi
 done
 
+# ── Discriminated-union fix-up (AgentCreateRequest oneOf, 2026-07-03).
+# The template pins every schema to its emitted TS type via
+# `export const Name: z.ZodType<Name> = …`. That annotation ERASES the
+# ZodObject-ness that z.discriminatedUnion() requires of its option schemas,
+# and the union const itself cannot be pre-annotated either (the annotated
+# options collapse its inference). Rewrite the union and its option schemas
+# to the `satisfies` form — the identical compile-time drift pin against the
+# emitted TS type, without widening the declared type.
+UNION_SATISFIES_SCHEMAS=${UNION_SATISFIES_SCHEMAS:-"AgentCreateRequestMain AgentCreateRequestSubagent AgentCreateRequestSubagent3p AgentCreateRequest"}
+node - "$STRICT_RAW" $UNION_SATISFIES_SCHEMAS <<'NODE_SCRIPT'
+const fs = require("fs");
+const [path, ...names] = process.argv.slice(2);
+let src = fs.readFileSync(path, "utf8");
+for (const name of names) {
+  const header = `export const ${name}: z.ZodType<${name}> =`;
+  const at = src.indexOf(header);
+  if (at === -1) {
+    console.error(`union satisfies fix-up: '${header}' not found — schema renamed or annotation dropped?`);
+    process.exit(1);
+  }
+  // The statement's first `;` terminates it (nested lines end in `,` / `)`).
+  const end = src.indexOf(";", at);
+  if (end === -1) { console.error(`union satisfies fix-up: unterminated ${name}`); process.exit(1); }
+  src = src.slice(0, at)
+      + `export const ${name} =`
+      + src.slice(at + header.length, end)
+      + ` satisfies z.ZodType<${name}>;`
+      + src.slice(end + 1);
+}
+fs.writeFileSync(path, src);
+console.log(`union satisfies fix-up applied: ${names.join(", ")}`);
+NODE_SCRIPT
+
 # Append the generated AsyncAPI Zod schemas and write the final file atomically.
 # Strip the `// @ts-nocheck` and "Fragment —" sentinel lines from the fragment
 # before concatenating — those are only meaningful when the fragment is checked
