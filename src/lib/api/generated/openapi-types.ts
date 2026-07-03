@@ -540,6 +540,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/agents/executor-defaults": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the real auto-applied CLI flags for each external-CLI runner
+         * @description Static reference data: for each supported subagent_3p external CLI (claude-code, codex, opencode), the ordered list of arguments the driver automatically applies when spawning it (ADR-032), plus a note on how the prompt itself is delivered. Read-only and not agent-scoped — used by the Agent Profile UI so operators see the REAL, currently-in-effect flags instead of static placeholder ghost-text before adding their own executor.cli_args. Sourced directly from pkg/agent/runner/driver_{claude,codex,opencode}.go and kept byte-accurate to that code.
+         */
+        get: operations["listExecutorDefaults"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/security/session-scope": {
         parameters: {
             query?: never;
@@ -3751,7 +3771,7 @@ export interface components {
         /**
          * @description Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
          *     "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
-         *     "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. The CLI is spawned with `--prompt <soul+instructions>` and `--model <model>`. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like sandbox_profile / shell_policy / tools_cfg / fallback_models / model_params / skills / delegation_policy are hidden for subagent_3p agents and rejected 400 on PUT if set.
+         *     "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude and codex receive the soul+instructions prompt via stdin (a trailing "-" argument tells each to read from stdin); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like sandbox_profile / shell_policy / tools_cfg / fallback_models / model_params / skills / delegation_policy are hidden for subagent_3p agents and rejected 400 on PUT if set.
          *     "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
          *     The "kind" field is derived server-side from the agent's type (Main -> native, Subagent -> native, subagent_3p -> external-cli). It is exposed in responses but is NOT a writable field on create/update — clients cannot choose kind directly. Server-side derive at the handler boundary per the agent-form spec.
          *     When the agent has no executor block, the default is "native".
@@ -3789,6 +3809,33 @@ export interface components {
              * @example --max-turns 5
              */
             cli_args?: string;
+        };
+        /** @description Static reference data describing the CLI arguments Omnipus's external-CLI driver automatically applies when spawning a subagent_3p worker on this CLI (kind="external-cli"), as returned by GET /api/v1/agents/executor-defaults. This is READ-ONLY, computed reference information — it does not reflect any particular agent's configuration and there is nothing to write back. It exists so the Agent Profile UI can show operators the REAL, auto-applied flags (not merely HTML placeholder ghost-text) before they add their own executor.cli_args. The values are sourced directly from each driver's buildArgs() (pkg/agent/runner/driver_claude.go, driver_codex.go, driver_opencode.go) and must be kept byte-accurate to that code — this is reference documentation for a running system, not a design aspiration. */
+        ExecutorDefaults: {
+            /**
+             * @description The external CLI this entry describes. Matches ExecutorConfig.cli.
+             * @example claude-code
+             * @enum {string}
+             */
+            cli: "claude-code" | "codex" | "opencode";
+            /**
+             * @description Human-readable, ORDERED list of the CLI arguments the driver appends before any operator-supplied executor.cli_args. Entries that are only applied conditionally (a configured model, max-turns cap, or working directory) say so in parentheses; the bracketed placeholder (e.g. "<configured model>") is not literal argv text. Operator cli_args are appended AFTER this list, and a narrow denylist strips any override that would re-enable a permission/sandbox bypass or corrupt the driver's stream-JSON output parsing (see argsafety.go).
+             * @example [
+             *       "-p",
+             *       "--output-format stream-json",
+             *       "--verbose",
+             *       "--no-chrome",
+             *       "--model <configured model> (only when a model is configured)",
+             *       "--permission-mode acceptEdits",
+             *       "--max-turns <configured max turns> (only when a turn cap is configured)"
+             *     ]
+             */
+            auto_applied_flags: string[];
+            /**
+             * @description Free-text clarification covering how the prompt itself is delivered to this CLI (stdin vs. a positional argument — NEVER a --prompt flag on any of the three supported CLIs) and any other non-obvious behavior not captured by the flag list above.
+             * @example The prompt is delivered via stdin (a trailing "-" argument tells claude to read it from stdin) — never via a --prompt flag or positional argument. --resume/--session-id are never passed; every run starts a fresh claude session.
+             */
+            notes: string;
         };
         /** @description Response body for GET /api/v1/voice/provider. Describes the active voice provider configuration so the SPA can decide which widget variant (dropdown / free-text / disabled) to render in the agent edit slide-over. */
         VoiceProvider: {
@@ -8812,6 +8859,27 @@ export interface operations {
             500: components["responses"]["500InternalServerError"];
         };
     };
+    listExecutorDefaults: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One entry per supported external CLI (claude-code, codex, opencode). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExecutorDefaults"][];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+        };
+    };
     getSessionScope: {
         parameters: {
             query?: never;
@@ -13093,6 +13161,7 @@ export type AgentCreateRequest = components["schemas"]["AgentCreateRequest"];
 export type AgentUpdateRequest = components["schemas"]["AgentUpdateRequest"];
 export type FallbackModel = components["schemas"]["FallbackModel"];
 export type ExecutorConfig = components["schemas"]["ExecutorConfig"];
+export type ExecutorDefaults = components["schemas"]["ExecutorDefaults"];
 export type VoiceProvider = components["schemas"]["VoiceProvider"];
 export type AgentSession = components["schemas"]["AgentSession"];
 export type SessionScopeRequest = components["schemas"]["SessionScopeRequest"];
