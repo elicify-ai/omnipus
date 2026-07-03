@@ -11,14 +11,24 @@ package config
 type ConfigKey string
 
 const (
-	SandboxModeKey       ConfigKey = "sandbox.mode"
-	SandboxAuditLog      ConfigKey = "sandbox.audit_log"
-	SandboxAllowedPaths  ConfigKey = "sandbox.allowed_paths"
-	SessionDMScope       ConfigKey = "session.dm_scope"
-	GatewayHost          ConfigKey = "gateway.host"
-	GatewayPort          ConfigKey = "gateway.port"
-	GatewayUsers         ConfigKey = "gateway.users"
-	GatewayDevModeBypass ConfigKey = "gateway.dev_mode_bypass"
+	SandboxModeKey      ConfigKey = "sandbox.mode"
+	SandboxAuditLog     ConfigKey = "sandbox.audit_log"
+	SandboxAllowedPaths ConfigKey = "sandbox.allowed_paths"
+	// SandboxGodMode and SandboxGodModeAllowed are god-mode (O14) keys. A
+	// config-only enable requires a restart to take live effect (availability
+	// is frozen at boot into agent.SetAllowGodMode's atomic), but these are
+	// deliberately NOT in RestartGatedKeys: they can also apply live once god
+	// mode is already available, and the generic pending-restart banner cannot
+	// tell the two cases apart. The dedicated GodModeControl surface owns the
+	// restart signal accurately instead — see rest_pending_restart.go and
+	// rest_god_mode.go.
+	SandboxGodMode        ConfigKey = "sandbox.god_mode"
+	SandboxGodModeAllowed ConfigKey = "sandbox.god_mode_allowed"
+	SessionDMScope        ConfigKey = "session.dm_scope"
+	GatewayHost           ConfigKey = "gateway.host"
+	GatewayPort           ConfigKey = "gateway.port"
+	GatewayUsers          ConfigKey = "gateway.users"
+	GatewayDevModeBypass  ConfigKey = "gateway.dev_mode_bypass"
 
 	// GatewayPreviewPort and related keys are preview-listener restart-gated keys (FR-027b).
 	GatewayPreviewPort            ConfigKey = "gateway.preview_port"

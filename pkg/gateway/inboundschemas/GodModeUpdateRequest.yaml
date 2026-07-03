@@ -5,8 +5,15 @@ description: >
   ("bypass-permissions") switch. This is a high-blast-radius security change and
   requires a valid single-use re-auth consent token (password step-up) replayed
   in the X-Reauth-Token header — call POST /api/v1/auth/reauth first. Returns
-  403 when god mode is unavailable (nogodmode build or --allow-god-mode not
-  passed at boot) and enabled=true.
+  403 when god mode is not SUPPORTED in this build (compiled with the
+  nogodmode tag) and enabled=true. Enabling is otherwise always permitted:
+  when the build supports it but this boot was not already authorized (see
+  GodModeStatus.available), enabling persists authorization
+  (sandbox.god_mode_allowed) and the runtime switch (sandbox.god_mode) to
+  config in the same write, and the response's restart_required flag signals
+  that the gateway must restart before the override actually takes effect.
+  Disabling is always permitted regardless of availability (fail-safe: an
+  operator can always reach the more-restrictive state).
 required:
   - enabled
 additionalProperties: false

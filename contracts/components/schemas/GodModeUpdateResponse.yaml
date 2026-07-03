@@ -1,0 +1,35 @@
+type: object
+title: GodModeUpdateResponse
+description: >
+  Response body for POST /api/v1/gateway/god-mode. Distinct from
+  GodModeStatus because a successful enable can be persisted-but-not-yet-
+  active: authorization (sandbox.god_mode_allowed) and the runtime switch
+  (sandbox.god_mode) are both written to config, but the process's god-mode
+  AVAILABILITY is decided once at boot — so enabling from a boot where god
+  mode was not yet available takes effect only after a gateway restart.
+  restart_required signals exactly that case. Disabling always applies live;
+  restart_required is always false for a disable request.
+required:
+  - enabled
+  - restart_required
+additionalProperties: false
+properties:
+  enabled:
+    type: boolean
+    description: >
+      The runtime god-mode state as just persisted by this call (echoes the
+      request's `enabled`). This can be true even though the override is NOT
+      yet active in this process when restart_required is also true — call
+      GET /api/v1/gateway/god-mode after the restart to confirm activation.
+    example: true
+  restart_required:
+    type: boolean
+    description: >
+      True when this call enabled god mode in a boot where it was not already
+      available (the toggle changed config authorization, not live
+      enforcement). The gateway must be restarted for the kernel-sandbox /
+      tool-policy override to actually take effect. Always false for a
+      disable request, and always false for an enable when god mode was
+      already available in this boot (the override then applies live,
+      matching the previous no-restart behavior).
+    example: true

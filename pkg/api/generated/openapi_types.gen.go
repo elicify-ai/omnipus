@@ -5973,19 +5973,31 @@ type GlobalToolPoliciesDefaultPolicy string
 // GlobalToolPoliciesPolicies defines model for GlobalToolPolicies.Policies.
 type GlobalToolPoliciesPolicies string
 
-// GodModeStatus O14 god-mode runtime state, returned by GET /api/v1/gateway/god-mode and as the body of a successful POST /api/v1/gateway/god-mode toggle. God mode is the single global "bypass-permissions" switch: when enabled every agent's tool policy is floored at "allow" (no prompts), the kernel sandbox is off, network egress is open, and the shell guard is off — regardless of per-agent profiles. Audit logging, the prompt-injection guard, and rate limiting are never disabled. The per-agent overrides are non-destructive: switching god mode off restores prior behavior exactly.
+// GodModeStatus O14 god-mode runtime state, returned by GET /api/v1/gateway/god-mode. God mode is the single global "bypass-permissions" switch: when enabled every agent's tool policy is floored at "allow" (no prompts), the kernel sandbox is off, network egress is open, and the shell guard is off — regardless of per-agent profiles. Audit logging, the prompt-injection guard, and rate limiting are never disabled. The per-agent overrides are non-destructive: switching god mode off restores prior behavior exactly.
 type GodModeStatus struct {
-	// Available Whether god mode CAN be enabled in this gateway: the build supports it (not compiled with the nogodmode tag) AND --allow-god-mode was passed at boot. When false, POST /api/v1/gateway/god-mode with enabled=true returns 403.
+	// Available Whether god mode is ACTIVE-CAPABLE in this boot: the build supports it (`supported` is true) AND authorization was granted before this process started, either via the legacy --allow-god-mode boot flag or via sandbox.god_mode_allowed persisted config (set by a prior UI enable + restart). Authorization is evaluated once at boot, so granting it via the UI (POST enabled=true while available=false) does not flip this to true until the gateway restarts — see GodModeUpdateResponse.restart_required.
 	Available bool `json:"available"`
 
-	// Enabled Current runtime god-mode state. Always false when `available` is false (the switch is a no-op without availability).
+	// Enabled Current runtime god-mode state — whether the override is ACTIVE in this process right now. Always false when `available` is false (the switch is a no-op without availability). Can differ from the last value POSTed to this endpoint immediately after an enable that returned restart_required=true in GodModeUpdateResponse: the config write succeeded, but availability is boot-frozen, so the override does not become active until the gateway restarts.
 	Enabled bool `json:"enabled"`
+
+	// Supported Whether this build supports god mode AT ALL — false only when compiled with the nogodmode build tag. Independent of runtime authorization: POST .../god-mode with enabled=true is permitted whenever `supported` is true, even if `available` is currently false (enabling then persists authorization to config and requires a gateway restart to actually take effect). When `supported` is false, enabling always returns 403 regardless of any authorization source.
+	Supported bool `json:"supported"`
 }
 
-// GodModeUpdateRequest Body for POST /api/v1/gateway/god-mode. Flips the global god-mode ("bypass-permissions") switch. This is a high-blast-radius security change and requires a valid single-use re-auth consent token (password step-up) replayed in the X-Reauth-Token header — call POST /api/v1/auth/reauth first. Returns 403 when god mode is unavailable (nogodmode build or --allow-god-mode not passed at boot) and enabled=true.
+// GodModeUpdateRequest Body for POST /api/v1/gateway/god-mode. Flips the global god-mode ("bypass-permissions") switch. This is a high-blast-radius security change and requires a valid single-use re-auth consent token (password step-up) replayed in the X-Reauth-Token header — call POST /api/v1/auth/reauth first. Returns 403 when god mode is not SUPPORTED in this build (compiled with the nogodmode tag) and enabled=true. Enabling is otherwise always permitted: when the build supports it but this boot was not already authorized (see GodModeStatus.available), enabling persists authorization (sandbox.god_mode_allowed) and the runtime switch (sandbox.god_mode) to config in the same write, and the response's restart_required flag signals that the gateway must restart before the override actually takes effect. Disabling is always permitted regardless of availability (fail-safe: an operator can always reach the more-restrictive state).
 type GodModeUpdateRequest struct {
 	// Enabled Desired god-mode state. true turns god mode on, false turns it off.
 	Enabled bool `json:"enabled"`
+}
+
+// GodModeUpdateResponse Response body for POST /api/v1/gateway/god-mode. Distinct from GodModeStatus because a successful enable can be persisted-but-not-yet- active: authorization (sandbox.god_mode_allowed) and the runtime switch (sandbox.god_mode) are both written to config, but the process's god-mode AVAILABILITY is decided once at boot — so enabling from a boot where god mode was not yet available takes effect only after a gateway restart. restart_required signals exactly that case. Disabling always applies live; restart_required is always false for a disable request.
+type GodModeUpdateResponse struct {
+	// Enabled The runtime god-mode state as just persisted by this call (echoes the request's `enabled`). This can be true even though the override is NOT yet active in this process when restart_required is also true — call GET /api/v1/gateway/god-mode after the restart to confirm activation.
+	Enabled bool `json:"enabled"`
+
+	// RestartRequired True when this call enabled god mode in a boot where it was not already available (the toggle changed config authorization, not live enforcement). The gateway must be restarted for the kernel-sandbox / tool-policy override to actually take effect. Always false for a disable request, and always false for an enable when god mode was already available in this boot (the override then applies live, matching the previous no-restart behavior).
+	RestartRequired bool `json:"restart_required"`
 }
 
 // HealthResponse Response from GET /health. Returns HTTP 200 when the gateway is up. No authentication required.

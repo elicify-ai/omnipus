@@ -640,12 +640,21 @@ func findModelConfigForProvider(cfg *config.Config, providerName string) (*confi
 // time. The full config is required to source those globals; a nil config
 // degrades to per-agent-only (test/legacy construction paths).
 // godModeAvailable is the process-level god-mode AVAILABILITY gate (O14). It is
-// set once at boot by SetAllowGodMode to (--allow-god-mode AND
-// sandbox.GodModeAvailable). The runtime ON/OFF state lives in
-// config.Sandbox.GodMode; god mode is only ACTIVE when both are true. Using a
-// package atomic keeps the free function agentToolsCfgToPolicy (which has no
-// loop receiver) able to consult availability without threading the boot flag
-// through every construction path.
+// set once at boot by SetAllowGodMode to ((--allow-god-mode OR
+// config.Sandbox.GodModeAllowed) AND sandbox.GodModeAvailable) — the gateway
+// boot path (pkg/gateway/gateway.go's resolveAllowGodMode) is the single place
+// that combines the CLI flag and the config-persisted authorization grant
+// before calling SetAllowGodMode, so this atomic always reflects one coherent
+// decision. The runtime ON/OFF state lives in config.Sandbox.GodMode; god mode
+// is only ACTIVE when both are true. Using a package atomic keeps the free
+// function agentToolsCfgToPolicy (which has no loop receiver) able to consult
+// availability without threading the boot flag through every construction
+// path.
+//
+// This is frozen for the process lifetime: a config.Sandbox.GodModeAllowed
+// grant written AFTER boot (e.g. via the Settings UI toggle) does not flip
+// this atomic until the process restarts and re-reads config — see
+// pkg/gateway/rest_god_mode.go's restart_required response field.
 var godModeAvailable atomic.Bool
 
 // setGodModeAvailable publishes the boot-time availability decision. Called by

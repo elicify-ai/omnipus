@@ -3931,6 +3931,11 @@ func (al *AgentLoop) SetToolApprover(a PolicyApprover) {
 // SetAllowGodMode sets the god-mode opt-in flag (latch 2). Must be called
 // before WireTier13Deps so the coercion logic picks up the correct value. If
 // called after WireTier13Deps, the change takes effect on the next hot-reload.
+//
+// allow is expected to already be the combined boot decision — the caller
+// (pkg/gateway/gateway.go's resolveAllowGodMode) ORs the --allow-god-mode CLI
+// flag with the config-persisted sandbox.god_mode_allowed grant before
+// calling this, so there is exactly one source of truth for availability.
 func (al *AgentLoop) SetAllowGodMode(allow bool) {
 	al.mu.Lock()
 	al.allowGodMode = allow

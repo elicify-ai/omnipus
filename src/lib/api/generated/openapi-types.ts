@@ -1225,13 +1225,13 @@ export interface paths {
         };
         /**
          * Get the global god-mode runtime state (O14)
-         * @description Returns whether god mode ("bypass-permissions") is currently enabled and whether it is available in this build/boot.
+         * @description Returns whether god mode ("bypass-permissions") is currently active (`enabled`), whether it is available in this build/boot (`available`), and whether this build supports it at all (`supported`).
          */
         get: operations["getGodMode"];
         put?: never;
         /**
          * Toggle the global god-mode switch (O14, password step-up)
-         * @description Flips the global god-mode ("bypass-permissions") switch and applies or reverts the override live (no restart). When enabled, every agent's tool policy is floored at "allow", the kernel sandbox is off, network egress is open, and the shell guard is off — regardless of per-agent profiles. Audit logging, the prompt-injection guard, and rate limiting stay on. High blast radius — secured by RequireNotBypass (dev_mode_bypass returns 503) AND a single-use password re-auth consent token (X-Reauth-Token header; call POST /api/v1/auth/reauth first, 403 otherwise). Returns 403 when enabling while god mode is unavailable (nogodmode build or --allow-god-mode not passed). Every toggle is audit-logged with the acting user.
+         * @description Flips the global god-mode ("bypass-permissions") switch. When the build supports god mode AND this boot was already authorized (see GodModeStatus.available), the toggle applies or reverts the override live (no restart) — every agent's tool policy is floored at "allow", the kernel sandbox is off, network egress is open, and the shell guard is off, regardless of per-agent profiles. When enabling from a boot that was NOT yet authorized, this call persists authorization (sandbox.god_mode_allowed) and the runtime switch (sandbox.god_mode) to config and returns restart_required=true — the override only takes effect after the gateway restarts. Disabling is always applied live. Audit logging, the prompt-injection guard, and rate limiting stay on. High blast radius — secured by RequireNotBypass (dev_mode_bypass returns 503) AND a single-use password re-auth consent token (X-Reauth-Token header; call POST /api/v1/auth/reauth first, 403 otherwise). Returns 403 when enabling and god mode is not SUPPORTED in this build (compiled with nogodmode). Every toggle is audit-logged with the acting user.
          */
         post: operations["setGodMode"];
         delete?: never;
@@ -4532,23 +4532,28 @@ export interface components {
         };
         /**
          * GodModeStatus
-         * @description O14 god-mode runtime state, returned by GET /api/v1/gateway/god-mode and as the body of a successful POST /api/v1/gateway/god-mode toggle. God mode is the single global "bypass-permissions" switch: when enabled every agent's tool policy is floored at "allow" (no prompts), the kernel sandbox is off, network egress is open, and the shell guard is off — regardless of per-agent profiles. Audit logging, the prompt-injection guard, and rate limiting are never disabled. The per-agent overrides are non-destructive: switching god mode off restores prior behavior exactly.
+         * @description O14 god-mode runtime state, returned by GET /api/v1/gateway/god-mode. God mode is the single global "bypass-permissions" switch: when enabled every agent's tool policy is floored at "allow" (no prompts), the kernel sandbox is off, network egress is open, and the shell guard is off — regardless of per-agent profiles. Audit logging, the prompt-injection guard, and rate limiting are never disabled. The per-agent overrides are non-destructive: switching god mode off restores prior behavior exactly.
          */
         GodModeStatus: {
             /**
-             * @description Current runtime god-mode state. Always false when `available` is false (the switch is a no-op without availability).
+             * @description Current runtime god-mode state — whether the override is ACTIVE in this process right now. Always false when `available` is false (the switch is a no-op without availability). Can differ from the last value POSTed to this endpoint immediately after an enable that returned restart_required=true in GodModeUpdateResponse: the config write succeeded, but availability is boot-frozen, so the override does not become active until the gateway restarts.
              * @example false
              */
             enabled: boolean;
             /**
-             * @description Whether god mode CAN be enabled in this gateway: the build supports it (not compiled with the nogodmode tag) AND --allow-god-mode was passed at boot. When false, POST /api/v1/gateway/god-mode with enabled=true returns 403.
+             * @description Whether god mode is ACTIVE-CAPABLE in this boot: the build supports it (`supported` is true) AND authorization was granted before this process started, either via the legacy --allow-god-mode boot flag or via sandbox.god_mode_allowed persisted config (set by a prior UI enable + restart). Authorization is evaluated once at boot, so granting it via the UI (POST enabled=true while available=false) does not flip this to true until the gateway restarts — see GodModeUpdateResponse.restart_required.
              * @example false
              */
             available: boolean;
+            /**
+             * @description Whether this build supports god mode AT ALL — false only when compiled with the nogodmode build tag. Independent of runtime authorization: POST .../god-mode with enabled=true is permitted whenever `supported` is true, even if `available` is currently false (enabling then persists authorization to config and requires a gateway restart to actually take effect). When `supported` is false, enabling always returns 403 regardless of any authorization source.
+             * @example true
+             */
+            supported: boolean;
         };
         /**
          * GodModeUpdateRequest
-         * @description Body for POST /api/v1/gateway/god-mode. Flips the global god-mode ("bypass-permissions") switch. This is a high-blast-radius security change and requires a valid single-use re-auth consent token (password step-up) replayed in the X-Reauth-Token header — call POST /api/v1/auth/reauth first. Returns 403 when god mode is unavailable (nogodmode build or --allow-god-mode not passed at boot) and enabled=true.
+         * @description Body for POST /api/v1/gateway/god-mode. Flips the global god-mode ("bypass-permissions") switch. This is a high-blast-radius security change and requires a valid single-use re-auth consent token (password step-up) replayed in the X-Reauth-Token header — call POST /api/v1/auth/reauth first. Returns 403 when god mode is not SUPPORTED in this build (compiled with the nogodmode tag) and enabled=true. Enabling is otherwise always permitted: when the build supports it but this boot was not already authorized (see GodModeStatus.available), enabling persists authorization (sandbox.god_mode_allowed) and the runtime switch (sandbox.god_mode) to config in the same write, and the response's restart_required flag signals that the gateway must restart before the override actually takes effect. Disabling is always permitted regardless of availability (fail-safe: an operator can always reach the more-restrictive state).
          */
         GodModeUpdateRequest: {
             /**
@@ -4556,6 +4561,22 @@ export interface components {
              * @example true
              */
             enabled: boolean;
+        };
+        /**
+         * GodModeUpdateResponse
+         * @description Response body for POST /api/v1/gateway/god-mode. Distinct from GodModeStatus because a successful enable can be persisted-but-not-yet- active: authorization (sandbox.god_mode_allowed) and the runtime switch (sandbox.god_mode) are both written to config, but the process's god-mode AVAILABILITY is decided once at boot — so enabling from a boot where god mode was not yet available takes effect only after a gateway restart. restart_required signals exactly that case. Disabling always applies live; restart_required is always false for a disable request.
+         */
+        GodModeUpdateResponse: {
+            /**
+             * @description The runtime god-mode state as just persisted by this call (echoes the request's `enabled`). This can be true even though the override is NOT yet active in this process when restart_required is also true — call GET /api/v1/gateway/god-mode after the restart to confirm activation.
+             * @example true
+             */
+            enabled: boolean;
+            /**
+             * @description True when this call enabled god mode in a boot where it was not already available (the toggle changed config authorization, not live enforcement). The gateway must be restarted for the kernel-sandbox / tool-policy override to actually take effect. Always false for a disable request, and always false for an enable when god mode was already available in this boot (the override then applies live, matching the previous no-restart behavior).
+             * @example true
+             */
+            restart_required: boolean;
         };
         /**
          * AboutResponse
@@ -10437,13 +10458,13 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Toggle applied. Returns the new state. */
+            /** @description Toggle applied. Returns the persisted state and whether a restart is required to activate it. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["GodModeStatus"];
+                    "application/json": components["schemas"]["GodModeUpdateResponse"];
                 };
             };
             /** @description Invalid request body. */
@@ -12894,6 +12915,7 @@ export type PendingRestartEntry = components["schemas"]["PendingRestartEntry"];
 export type GatewayRestartResponse = components["schemas"]["GatewayRestartResponse"];
 export type GodModeStatus = components["schemas"]["GodModeStatus"];
 export type GodModeUpdateRequest = components["schemas"]["GodModeUpdateRequest"];
+export type GodModeUpdateResponse = components["schemas"]["GodModeUpdateResponse"];
 export type AboutResponse = components["schemas"]["AboutResponse"];
 export type HealthResponse = components["schemas"]["HealthResponse"];
 export type GatewayStatus = components["schemas"]["GatewayStatus"];
