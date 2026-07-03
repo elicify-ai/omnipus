@@ -31,6 +31,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 )
@@ -587,4 +588,53 @@ func TestUpdateAgent_DepthAtCeilingAccepted(t *testing.T) {
 	dp := findDelegationPolicyInConfig(t, m, "test-agent")
 	require.NotNil(t, dp)
 	assert.EqualValues(t, 3, dp["depth"])
+}
+
+// TestDelegationInputExtractors_BehavioralIdentity pins the four
+// //nolint:dupl delegation-input extractors
+// (delegationInputFromCreateRequestMain / …Subagent / …Subagent3p /
+// delegationInputFromUpdateRequest, rest_agent_delegation.go) against drift.
+// The four are intentionally near-identical bodies — one per oapi-codegen
+// inline DelegationPolicy struct, since Main/Subagent/Subagent3p/Update each
+// get a distinct generated type even though the JSON shape is the same. This
+// test unmarshals the SAME DelegationPolicy JSON into each of the four
+// parent request types, runs each extractor, and asserts all four outputs
+// are deep-equal — a future edit to one extractor that silently diverges
+// from the other three fails here rather than shipping a variant-dependent
+// delegation policy semantics bug.
+func TestDelegationInputExtractors_BehavioralIdentity(t *testing.T) {
+	const dpJSON = `{
+		"to": [{"kind":"local","id":"ray"},{"kind":"remote-a2a","id":"peer-1"}],
+		"accept_from": [{"kind":"local","id":"ava"}],
+		"modes": ["await","task"],
+		"depth": 2,
+		"budget": {"max_cost_usd": 1.5, "max_tokens": 1000}
+	}`
+	body := []byte(`{"delegation_policy":` + dpJSON + `}`)
+
+	var mainReq gen.AgentCreateRequestMain
+	require.NoError(t, json.Unmarshal(body, &mainReq))
+	var subReq gen.AgentCreateRequestSubagent
+	require.NoError(t, json.Unmarshal(body, &subReq))
+	var sub3pReq gen.AgentCreateRequestSubagent3p
+	require.NoError(t, json.Unmarshal(body, &sub3pReq))
+	var updReq gen.AgentUpdateRequest
+	require.NoError(t, json.Unmarshal(body, &updReq))
+
+	outMain := delegationInputFromCreateRequestMain(&mainReq)
+	outSub := delegationInputFromCreateRequestSubagent(&subReq)
+	outSub3p := delegationInputFromCreateRequestSubagent3p(&sub3pReq)
+	outUpd := delegationInputFromUpdateRequest(&updReq)
+
+	require.NotNil(t, outMain)
+	require.NotNil(t, outSub)
+	require.NotNil(t, outSub3p)
+	require.NotNil(t, outUpd)
+
+	assert.Equal(t, outMain, outSub,
+		"delegationInputFromCreateRequestMain and …Subagent must produce identical output for identical input")
+	assert.Equal(t, outMain, outSub3p,
+		"delegationInputFromCreateRequestMain and …Subagent3p must produce identical output for identical input")
+	assert.Equal(t, outMain, outUpd,
+		"delegationInputFromCreateRequestMain and delegationInputFromUpdateRequest must produce identical output for identical input")
 }

@@ -155,26 +155,25 @@ func TestAgentPUT_HeartbeatFieldsIgnored(t *testing.T) {
 	}
 }
 
-// TestCreateAgent_WorkerVoiceFieldIgnored supersedes the pre-W1 runtime
-// voice-on-worker 400 check at create time. AgentCreateRequestSubagent (and
-// AgentCreateRequestSubagent3p) structurally have no `voice` property at all
-// (W1 discriminated union, additionalProperties: false — the field matrix
-// marks voice "Main-only among user types") — a Subagent create can no
-// longer even express a voice. With ValidateInbound disabled (the default in
-// this harness), the extra `voice` key is unknown-field-ignored and the
-// create simply succeeds without one. (With ValidateInbound enabled the same
-// body would 400 at the schema gate instead — the runtime check that used to
-// live in createAgent is gone because it is now structurally redundant.) The
-// PUT-time guard (a worker cannot be given a non-empty voice) is unaffected —
-// see TestUpdateAgent_RejectsVoiceOnWorker in rest_agent_executor_test.go.
-func TestCreateAgent_WorkerVoiceFieldIgnored(t *testing.T) {
+// TestCreateAgent_WorkerVoiceFieldRejected proves the unconditional
+// strict-decode enforcement for the Main-only voice field:
+// AgentCreateRequestSubagent (and AgentCreateRequestSubagent3p) structurally
+// have no `voice` property at all (additionalProperties: false — the field
+// matrix marks voice "Main-only among user types"). With a DEFAULT config
+// (ValidateInbound off, the default in this harness), a Subagent create
+// carrying a `voice` key is now rejected 400 by createAgent's strict decode,
+// not silently dropped. (With ValidateInbound enabled the same body 400s at
+// the schema gate instead.) The PUT-time guard (a worker cannot be given a
+// non-empty voice) is unaffected — see TestUpdateAgent_RejectsVoiceOnWorker
+// in rest_agent_executor_test.go.
+func TestCreateAgent_WorkerVoiceFieldRejected(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents",
 		strings.NewReader(`{"name":"W","type":"Subagent","description":"d","soul":"s","voice":"alloy"}`))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
-	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
-	created := decodeAgentResp(t, w.Body.Bytes())
-	assert.Equal(t, gen.AgentTypeSubagent, created.Type)
+	require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "voice")
+	assert.Contains(t, w.Body.String(), "AgentCreateRequestSubagent")
 }

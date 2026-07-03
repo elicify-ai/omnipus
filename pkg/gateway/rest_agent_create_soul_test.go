@@ -48,7 +48,10 @@ func readSoulMDForAgent(t *testing.T, api *restAPI, agentID string) string {
 func TestCreateAgent_Worker_PersistsSoul(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 
-	body := `{"name":"Soulful Worker","type":"Subagent","executor":{"kind":"native"},"description":"persists soul regression","soul":"worker-soul-X"}`
+	// AgentCreateRequestSubagent has no executor property at all (native is
+	// always server-derived for a Subagent with no executor block) — sending
+	// one is now rejected 400 by createAgent's strict decode.
+	body := `{"name":"Soulful Worker","type":"Subagent","description":"persists soul regression","soul":"worker-soul-X"}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
@@ -104,20 +107,18 @@ func TestCreateAgent_Worker_DerivesNativeExecutor(t *testing.T) {
 	assert.Equal(t, gen.AgentExecutorKindNative, *created.Executor.Kind)
 }
 
-// TestCreateAgent_Worker_ExecutorFieldIgnored proves the W1 discriminated-
-// union behavior change: AgentCreateRequestSubagent has no `executor`
+// TestCreateAgent_Worker_ExecutorFieldRejected proves the unconditional
+// strict-decode enforcement: AgentCreateRequestSubagent has no `executor`
 // property at all — a Subagent create can no longer request remote-a2a (or
 // any other) executor kind directly at create time (the field matrix marks
-// Subagent's executor row "— (native)"). With ValidateInbound disabled (the
-// default in this test harness — buildExecutorTestAPI does not opt in), an
-// `executor` key present in the JSON body is simply unknown-field-ignored by
-// json.Unmarshal into the named AgentCreateRequestSubagent struct, and the
-// agent is created with the server-derived native executor regardless of
-// what the caller sent. (remote-a2a is still reachable via PUT —
-// AgentUpdateRequest remains one flat type shared by every agent type; see
-// TestUpdateAgent_DelegationRemoteA2AAccepted-adjacent executor coverage in
+// Subagent's executor row "— (native)"). With a DEFAULT config
+// (ValidateInbound off — buildExecutorTestAPI does not opt in), an
+// `executor` key present in the JSON body is now rejected 400 by
+// createAgent's strict decode, not silently dropped. (remote-a2a is still
+// reachable via PUT — AgentUpdateRequest remains one flat type shared by
+// every agent type; see TestUpdateAgent_WorkerAllowsRemoteA2AExecutor in
 // rest_agent_executor_test.go.)
-func TestCreateAgent_Worker_ExecutorFieldIgnored(t *testing.T) {
+func TestCreateAgent_Worker_ExecutorFieldRejected(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 
 	body := `{"name":"Worker Remote A2A","type":"Subagent","description":"remote-a2a regression","executor":{"kind":"remote-a2a"},"soul":"remote-a2a-soul"}`
@@ -126,11 +127,7 @@ func TestCreateAgent_Worker_ExecutorFieldIgnored(t *testing.T) {
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 
-	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
-	created := decodeAgentResp(t, w.Body.Bytes())
-	assert.Equal(t, gen.AgentTypeSubagent, created.Type)
-	require.NotNil(t, created.Executor)
-	require.NotNil(t, created.Executor.Kind, "Executor.Kind must be non-nil pointer after W1 wire schema")
-	assert.Equal(t, gen.AgentExecutorKindNative, *created.Executor.Kind,
-		"AgentCreateRequestSubagent has no executor property — the extra key is ignored and the server derives native")
+	require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "executor")
+	assert.Contains(t, w.Body.String(), "AgentCreateRequestSubagent")
 }

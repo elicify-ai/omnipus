@@ -36,8 +36,9 @@ var validExecutorCLIs = map[string]bool{
 //
 // Kind is intentionally NOT carried here: subagent_3p's executor.kind is
 // always server-derived to "external-cli" regardless of what the client
-// sent — the field is documented as "NOT a writable field on create/update;
-// the server overrides any client-supplied value" (agent-types-field-matrix.md).
+// sent — the field "is exposed in responses but is NOT a writable field on
+// create/update — clients cannot choose kind directly"
+// (contracts/components/schemas/ExecutorConfig.yaml).
 type executorRequestInput struct {
 	Cli          string
 	CliPath      *string
@@ -149,9 +150,16 @@ func setAgentExecutorResponse(ag *gen.Agent, sub *config.SubagentsConfig) {
 	}
 	ec := sub.Executor
 	// The literal below mirrors the inlined anonymous-struct shape oapi-codegen
-	// generated for gen.Agent.Executor. Fields must be declared in the SAME
-	// ORDER they appear in the generated struct (Cli, CliArgs, CliPath,
-	// EnvOverrides, Kind) — Go struct literal positional initialisation.
+	// generated for gen.Agent.Executor. This is NOT Go struct literal
+	// positional initialisation — every field below is set by name via
+	// dot-assignment (exec.Cli = ..., never struct{...}{val1, val2, ...}).
+	// The real constraint is Go's struct type-identity rule: `exec`'s
+	// declared field names, types, and tags (in the SAME order — struct
+	// identity considers field sequence) must match the generated
+	// gen.Agent.Executor inline struct for `ag.Executor = &exec` below to
+	// type-check at all. If the generated shape ever changes, this
+	// assignment fails to COMPILE — a build-time signal, not a silent
+	// runtime field mismatch.
 	exec := struct { // not-wire-format: generated gen.Agent.Executor inline shape, only populates the generated field
 		Cli          *gen.AgentExecutorCli  `json:"cli,omitempty"`
 		CliArgs      *string                `json:"cli_args,omitempty"`

@@ -1418,6 +1418,33 @@ func applyAgentOverrides(ag *gen.Agent, ac *config.AgentConfig) {
 	if ac.MaxToolIterations > 0 {
 		ag.MaxToolIterations = ac.MaxToolIterations
 	}
+	// sandbox_profile / shell_policy: echo the persisted per-agent overrides.
+	// Previously these were persisted (updateAgent) or should have been
+	// persisted (createAgent, fixed alongside this) but never surfaced on any
+	// response path (list/get/create/update all built gen.Agent without ever
+	// touching these two fields) — a GET could never confirm what was saved.
+	if ac.SandboxProfile != "" {
+		sp := gen.AgentSandboxProfile(ac.SandboxProfile)
+		ag.SandboxProfile = &sp
+	}
+	if ac.ShellPolicy != nil {
+		// The literal below mirrors the inlined anonymous-struct shape
+		// oapi-codegen generated for gen.Agent.ShellPolicy — field
+		// names/types/tags (and order) must match for the assignment to
+		// gen.Agent.ShellPolicy below to type-check.
+		sp := struct { // not-wire-format: generated gen.Agent.ShellPolicy inline shape, only populates the generated field
+			CustomDenyPatterns *[]string `json:"custom_deny_patterns,omitempty"`
+			EnableDenyPatterns *bool     `json:"enable_deny_patterns,omitempty"`
+		}{
+			EnableDenyPatterns: boolPtr(ac.ShellPolicy.EnableDenyPatterns),
+		}
+		if len(ac.ShellPolicy.CustomDenyPatterns) > 0 {
+			cdp := make([]string, len(ac.ShellPolicy.CustomDenyPatterns))
+			copy(cdp, ac.ShellPolicy.CustomDenyPatterns)
+			sp.CustomDenyPatterns = &cdp
+		}
+		ag.ShellPolicy = &sp
+	}
 }
 
 // buildAgentDefaults populates the execution-related fields from config defaults.
@@ -1602,25 +1629,93 @@ type agentCreateMCPServerInput struct {
 	Tools []string
 }
 
+// agentCreateShellPolicyInput is a request-shape-agnostic normalization of
+// the wire ShellPolicy object, mirroring agentCreateToolsCfgInput above.
+// gen.AgentCreateRequestMain and gen.AgentCreateRequestSubagent each carry an
+// anonymous ShellPolicy struct (oapi-codegen inlines it per-variant);
+// gen.AgentCreateRequestSubagent3p has no shell_policy property at all (the
+// external runner manages its own isolation), so this stays nil for that
+// variant.
+type agentCreateShellPolicyInput struct {
+	EnableDenyPatterns *bool
+	CustomDenyPatterns []string
+}
+
+// decodeAgentCreateVariant strictly decodes raw into out (a pointer to one of
+// the three generated AgentCreateRequest{Main,Subagent,Subagent3p} structs)
+// using a json.Decoder with DisallowUnknownFields, so a field that variant
+// does not carry — at any nesting depth (e.g. a "system.*" key inside a
+// tools_cfg.builtin.policies map is fine; an unrelated top-level or nested
+// property is not) — is rejected with 400 rather than silently dropped. This
+// runs UNCONDITIONALLY (independent of cfg.Gateway.ValidateInbound, which
+// defaults to false) — it is the mechanism that makes "a field sent on the
+// wrong variant is a schema violation, never silently persisted" actually
+// true regardless of config.
+//
+// On success it returns true and leaves w untouched. On failure it writes the
+// 400 response itself and returns false so the caller can `return` directly.
+func decodeAgentCreateVariant(w http.ResponseWriter, raw []byte, wireType, variantName string, out any) bool {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(out); err != nil {
+		if strings.Contains(err.Error(), "unknown field") {
+			jsonErr(w, http.StatusBadRequest, fmt.Sprintf(
+				"field not allowed on agent type %q: %v — see the %s schema", wireType, err, variantName))
+		} else {
+			jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+		}
+		return false
+	}
+	return true
+}
+
+// wireStringPtr converts an optional generated string-based enum pointer
+// (e.g. *gen.AgentCreateRequestMainSandboxProfile) into a *string, preserving
+// nil-vs-set: a nil input returns nil (field absent); a non-nil input returns
+// a pointer to its string value (field present, whatever the value).
+func wireStringPtr[T ~string](p *T) *string {
+	if p == nil {
+		return nil
+	}
+	s := string(*p)
+	return &s
+}
+
+// wireStringMap converts an optional generated map pointer whose values are a
+// string-based enum (e.g. *map[string]AgentCreateRequestMainToolsCfgBuiltinPolicies)
+// into a plain map[string]string, preserving nil-vs-empty: a nil input
+// returns nil (field absent); a non-nil (possibly empty) input returns a
+// newly allocated map with every value stringified.
+func wireStringMap[V ~string](in *map[string]V) map[string]string {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]string, len(*in))
+	for k, v := range *in {
+		out[k] = string(v)
+	}
+	return out
+}
+
 // createAgent handles POST /api/v1/agents.
 //
-// W1 (agent-types-field-matrix.md) turned the wire contract into a
-// discriminated union: AgentCreateRequestMain / AgentCreateRequestSubagent /
-// AgentCreateRequestSubagent3p, each a distinct schema
-// (contracts/components/schemas/AgentCreateRequest{Main,Subagent,Subagent3p}.yaml,
-// additionalProperties: false) instead of one flat AgentCreateRequest. This
+// The wire contract is a discriminated union: AgentCreateRequestMain /
+// AgentCreateRequestSubagent / AgentCreateRequestSubagent3p, each a distinct
+// schema (contracts/components/schemas/AgentCreateRequest{Main,Subagent,Subagent3p}.yaml,
+// additionalProperties: false) selected by the request's `type` field. This
 // handler mirrors the WsFrame dispatch pattern (websocket.go's peek+switch on
 // frame.Type): buffer the body, peek `type` from the raw JSON, resolve the
-// matching variant schema name, validate against it (when
-// cfg.Gateway.ValidateInbound is enabled), then unmarshal into the NAMED
-// variant struct — never the generated union wrapper's As*() accessors — and
-// normalize into a small set of variant-agnostic locals so the remainder of
-// the handler (validation, persistence, response building) is written once.
+// matching variant schema name, optionally validate the FULL body against
+// that JSON Schema (when cfg.Gateway.ValidateInbound is enabled — richer
+// errors, off by default), then strictly decode into the NAMED variant
+// struct via decodeAgentCreateVariant (a field the chosen variant does not
+// carry is rejected 400 unconditionally, independent of ValidateInbound) —
+// never the generated union wrapper's As*() accessors — and normalize into a
+// small set of variant-agnostic locals so the remainder of the handler
+// (validation, persistence, response building) is written once.
 //
-// type is REQUIRED on every variant now: the historical omit-type→Main
-// default is retired. A missing or unrecognised type value is a 400 — this
-// single check replaces both the old default-to-Main path and the old
-// unknown-type-value 400 branch.
+// type is REQUIRED on every variant: a missing or unrecognised type value is
+// a 400.
 func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
 
@@ -1679,13 +1774,17 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Normalize the chosen variant into variant-agnostic locals. Each branch
-	// unmarshals raw into the NAMED generated struct and copies out only the
-	// fields that variant actually carries — e.g. AgentCreateRequestSubagent
-	// has no Executor field at all, AgentCreateRequestSubagent3p has no
-	// ToolsCfg/Skills/FallbackModels/SandboxProfile/ShellPolicy/Voice/
-	// SteeringMode/MaxToolIterations fields — so the seven-field
-	// subagent_3p forbidden-field guard that used to run at create time is
-	// now enforced structurally by the Go type itself and has been removed.
+	// strictly decodes raw into the NAMED generated struct via
+	// decodeAgentCreateVariant (unknown fields — including fields that ARE
+	// valid on a sibling variant, e.g. Subagent's tools_cfg on a
+	// subagent_3p body — are rejected 400, independent of ValidateInbound)
+	// and copies out only the fields that variant actually carries.
+	// AgentCreateRequestSubagent has no Executor field at all;
+	// AgentCreateRequestSubagent3p has no ToolsCfg/Skills/FallbackModels/
+	// SandboxProfile/ShellPolicy/Voice/SteeringMode/MaxToolIterations
+	// fields — a subagent_3p create supplying any of those is rejected at
+	// decode time, both because the Go type has no matching field and
+	// because the strict decoder refuses to silently drop it.
 	var (
 		name           string
 		description    *string
@@ -1697,6 +1796,7 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		skills         *[]string
 		fallbackModels *[]gen.FallbackModel
 		sandboxProfile *string
+		shellPolicyIn  *agentCreateShellPolicyInput
 		toolsCfgIn     *agentCreateToolsCfgInput
 		delegationIn   *delegationPolicyInput
 		executorIn     *executorRequestInput
@@ -1705,8 +1805,7 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	switch *typePeek.Type {
 	case "Main":
 		var vreq gen.AgentCreateRequestMain
-		if err := json.Unmarshal(raw, &vreq); err != nil {
-			jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+		if !decodeAgentCreateVariant(w, raw, *typePeek.Type, variantName, &vreq) {
 			return
 		}
 		name = vreq.Name
@@ -1718,9 +1817,12 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		soul = vreq.Soul
 		skills = vreq.Skills
 		fallbackModels = vreq.FallbackModels
-		if vreq.SandboxProfile != nil {
-			sp := string(*vreq.SandboxProfile)
-			sandboxProfile = &sp
+		sandboxProfile = wireStringPtr(vreq.SandboxProfile)
+		if vreq.ShellPolicy != nil {
+			shellPolicyIn = &agentCreateShellPolicyInput{EnableDenyPatterns: vreq.ShellPolicy.EnableDenyPatterns}
+			if vreq.ShellPolicy.CustomDenyPatterns != nil {
+				shellPolicyIn.CustomDenyPatterns = *vreq.ShellPolicy.CustomDenyPatterns
+			}
 		}
 		if vreq.ToolsCfg != nil {
 			tc := &agentCreateToolsCfgInput{}
@@ -1728,12 +1830,7 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 				if vreq.ToolsCfg.Builtin.DefaultPolicy != nil {
 					tc.BuiltinDefaultPolicy = string(*vreq.ToolsCfg.Builtin.DefaultPolicy)
 				}
-				if vreq.ToolsCfg.Builtin.Policies != nil {
-					tc.BuiltinPolicies = make(map[string]string, len(*vreq.ToolsCfg.Builtin.Policies))
-					for k, v := range *vreq.ToolsCfg.Builtin.Policies {
-						tc.BuiltinPolicies[k] = string(v)
-					}
-				}
+				tc.BuiltinPolicies = wireStringMap(vreq.ToolsCfg.Builtin.Policies)
 			}
 			if vreq.ToolsCfg.Mcp != nil && vreq.ToolsCfg.Mcp.Servers != nil {
 				for _, s := range *vreq.ToolsCfg.Mcp.Servers {
@@ -1749,8 +1846,7 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		delegationIn = delegationInputFromCreateRequestMain(&vreq)
 	case "Subagent":
 		var vreq gen.AgentCreateRequestSubagent
-		if err := json.Unmarshal(raw, &vreq); err != nil {
-			jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+		if !decodeAgentCreateVariant(w, raw, *typePeek.Type, variantName, &vreq) {
 			return
 		}
 		name = vreq.Name
@@ -1762,9 +1858,12 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		soul = vreq.Soul
 		skills = vreq.Skills
 		fallbackModels = vreq.FallbackModels
-		if vreq.SandboxProfile != nil {
-			sp := string(*vreq.SandboxProfile)
-			sandboxProfile = &sp
+		sandboxProfile = wireStringPtr(vreq.SandboxProfile)
+		if vreq.ShellPolicy != nil {
+			shellPolicyIn = &agentCreateShellPolicyInput{EnableDenyPatterns: vreq.ShellPolicy.EnableDenyPatterns}
+			if vreq.ShellPolicy.CustomDenyPatterns != nil {
+				shellPolicyIn.CustomDenyPatterns = *vreq.ShellPolicy.CustomDenyPatterns
+			}
 		}
 		if vreq.ToolsCfg != nil {
 			tc := &agentCreateToolsCfgInput{}
@@ -1772,12 +1871,7 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 				if vreq.ToolsCfg.Builtin.DefaultPolicy != nil {
 					tc.BuiltinDefaultPolicy = string(*vreq.ToolsCfg.Builtin.DefaultPolicy)
 				}
-				if vreq.ToolsCfg.Builtin.Policies != nil {
-					tc.BuiltinPolicies = make(map[string]string, len(*vreq.ToolsCfg.Builtin.Policies))
-					for k, v := range *vreq.ToolsCfg.Builtin.Policies {
-						tc.BuiltinPolicies[k] = string(v)
-					}
-				}
+				tc.BuiltinPolicies = wireStringMap(vreq.ToolsCfg.Builtin.Policies)
 			}
 			if vreq.ToolsCfg.Mcp != nil && vreq.ToolsCfg.Mcp.Servers != nil {
 				for _, s := range *vreq.ToolsCfg.Mcp.Servers {
@@ -1793,8 +1887,7 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		delegationIn = delegationInputFromCreateRequestSubagent(&vreq)
 	case "subagent_3p":
 		var vreq gen.AgentCreateRequestSubagent3p
-		if err := json.Unmarshal(raw, &vreq); err != nil {
-			jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+		if !decodeAgentCreateVariant(w, raw, *typePeek.Type, variantName, &vreq) {
 			return
 		}
 		name = vreq.Name
@@ -1839,9 +1932,10 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	// this stays a runtime check even with ValidateInbound enabled.
 	// executor.kind is intentionally NOT checked here: it is always
 	// server-derived to external-cli for subagent_3p below, regardless of
-	// what (if anything) the client sent — "kind... is NOT a writable field
-	// on create/update" (agent-types-field-matrix.md).
-	if createType == config.AgentTypeWorker && *typePeek.Type == "subagent_3p" {
+	// what (if anything) the client sent — kind "is exposed in responses but
+	// is NOT a writable field on create/update — clients cannot choose kind
+	// directly" (contracts/components/schemas/ExecutorConfig.yaml).
+	if createType == config.AgentTypeWorker && *typePeek.Type == string(gen.AgentTypeSubagent3p) {
 		if executorIn == nil || executorIn.CliPath == nil || strings.TrimSpace(*executorIn.CliPath) == "" {
 			jsonErr(w, http.StatusBadRequest, "executor.cli_path is required for subagent_3p agents")
 			return
@@ -1926,6 +2020,28 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 			ac.Model.Provider = strings.TrimSpace(*provider)
 		}
 	}
+	// sandbox_profile / shell_policy: mapped onto AgentConfig so they are
+	// actually persisted (previously read only for the sandbox_profile=off
+	// rejection check above, then write-dropped — the created agent always
+	// fell back to the global default regardless of what the caller sent).
+	// subagent_3p has neither property on the wire (sandboxProfile and
+	// shellPolicyIn stay nil for that variant — the CLI manages its own
+	// isolation), so both stay unset there, matching updateAgent's rejection
+	// of these fields on a subagent_3p PUT.
+	if sandboxProfile != nil && *sandboxProfile != "" {
+		ac.SandboxProfile = config.SandboxProfile(*sandboxProfile)
+	}
+	if shellPolicyIn != nil {
+		sp := &config.AgentShellPolicy{}
+		if shellPolicyIn.EnableDenyPatterns != nil {
+			sp.EnableDenyPatterns = *shellPolicyIn.EnableDenyPatterns
+		}
+		if len(shellPolicyIn.CustomDenyPatterns) > 0 {
+			sp.CustomDenyPatterns = make([]string, len(shellPolicyIn.CustomDenyPatterns))
+			copy(sp.CustomDenyPatterns, shellPolicyIn.CustomDenyPatterns)
+		}
+		ac.ShellPolicy = sp
+	}
 	// Heartbeat is workspace-scoped (ADR-027); no per-agent heartbeat at create.
 	if skills != nil && len(*skills) > 0 {
 		ac.Skills = make([]string, len(*skills))
@@ -1938,7 +2054,7 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	// for that variant and, per the field matrix, kind is server-derived
 	// (never client-writable) rather than read from the request.
 	if createType == config.AgentTypeWorker {
-		if *typePeek.Type == "subagent_3p" {
+		if *typePeek.Type == string(gen.AgentTypeSubagent3p) {
 			execCfg, errMsg := executorConfigFromRequest(string(config.ExecutorKindExternalCLI), executorIn.Cli)
 			if errMsg != "" {
 				jsonErr(w, http.StatusBadRequest, errMsg)
@@ -2085,6 +2201,19 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		if ac.DelegationPolicy != nil {
 			newAgent["delegation_policy"] = delegationPolicyToMap(ac.DelegationPolicy)
 		}
+		if ac.SandboxProfile != "" {
+			newAgent["sandbox_profile"] = string(ac.SandboxProfile)
+		}
+		if ac.ShellPolicy != nil {
+			shellPolicyMap := map[string]any{}
+			if ac.ShellPolicy.EnableDenyPatterns {
+				shellPolicyMap["enable_deny_patterns"] = true
+			}
+			if len(ac.ShellPolicy.CustomDenyPatterns) > 0 {
+				shellPolicyMap["custom_deny_patterns"] = ac.ShellPolicy.CustomDenyPatterns
+			}
+			newAgent["shell_policy"] = shellPolicyMap
+		}
 		agents["list"] = append(list, newAgent)
 		return nil
 	}); err != nil {
@@ -2155,6 +2284,7 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	// agent kind the caller actually created (Main/Subagent/subagent_3p on the wire).
 	ag.Type = coreagent.ToWireType(ac)
 	ag.Locked = ac.Locked
+	applyAgentOverrides(&ag, &ac)
 	ag.Model = &respModel
 	setAgentModelProvider(&ag, ac.Model)
 	// Echo the just-persisted soul so the FE round-trip works. Status is

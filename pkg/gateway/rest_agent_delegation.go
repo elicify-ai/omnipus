@@ -14,21 +14,19 @@ import (
 // delegation_policy wire field.
 //
 // delegation_policy is part of the AgentCreateRequestMain /
-// AgentCreateRequestSubagent / AgentCreateRequestSubagent3p / AgentUpdateRequest /
-// Agent generated contract types but was previously never mapped to
-// config.AgentConfig.DelegationPolicy — so the field was write-dropped on
-// create/update and never echoed on GET. These helpers do the mapping in one
-// place for createAgent, updateAgent, getAgent, and listAgents.
+// AgentCreateRequestSubagent / AgentCreateRequestSubagent3p /
+// AgentUpdateRequest / Agent generated contract types. These helpers map it
+// between the wire request/response shapes and config.AgentConfig.DelegationPolicy
+// in one place for createAgent, updateAgent, getAgent, and listAgents.
 //
-// W1 (agent-types-field-matrix.md discriminated union) split the single
-// create-time AgentCreateRequest into three named variants with distinct
-// generated Go types, each with its own anonymous DelegationPolicy struct
+// The create-time wire contract is a discriminated union: three named
+// variant types, each with its own anonymous DelegationPolicy struct
 // (oapi-codegen inlines it per-usage). delegation_policy is allowed on ALL
-// THREE variants (behavior change from the flat contract: a 3p create with
-// delegation_policy used to 400, now 201), so createAgent needs one
-// extractor per variant — delegationInputFromCreateRequestMain / …Subagent /
-// …Subagent3p below — all normalizing into the same variant-agnostic
-// delegationPolicyInput so buildDelegationPolicy is written once.
+// THREE variants, including subagent_3p (a subagent_3p worker is a valid
+// delegation target), so createAgent needs one extractor per variant —
+// delegationInputFromCreateRequestMain / …Subagent / …Subagent3p below —
+// all normalizing into the same variant-agnostic delegationPolicyInput so
+// buildDelegationPolicy is written once.
 //
 // v0.1.0 semantics (Spec-3):
 //   - to / modes / depth are ENFORCED.
@@ -169,11 +167,9 @@ func delegationInputFromCreateRequestSubagent(req *gen.AgentCreateRequestSubagen
 
 // delegationInputFromCreateRequestSubagent3p normalises the
 // AgentCreateRequestSubagent3p inline policy struct into delegationPolicyInput.
-// Returns nil when req carries no policy. delegation_policy is a behavior
-// change for this variant (W2a): a subagent_3p create with delegation_policy
-// used to 400 under the flat contract; the discriminated union now allows it
-// on every variant (subagent_3p is a valid delegation *target* — see the
-// field matrix "delegation_policy / can_delegate_to" row).
+// Returns nil when req carries no policy. delegation_policy is allowed on
+// this variant — a subagent_3p worker is a valid delegation *target* (see
+// the field matrix "delegation_policy / can_delegate_to" row).
 //
 //nolint:dupl // parallel to …Main / …Subagent / delegationInputFromUpdateRequest — distinct oapi-codegen inline types per variant, intentionally not merged.
 func delegationInputFromCreateRequestSubagent3p(req *gen.AgentCreateRequestSubagent3p) *delegationPolicyInput {
