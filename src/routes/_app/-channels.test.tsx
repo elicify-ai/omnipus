@@ -38,7 +38,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
     setChannelRouting: vi.fn(),
     fetchAgents: vi.fn(),
     configureChannel: vi.fn(),
-    testChannel: vi.fn(),
     // ADR-031 Track 2 — ConnectorsScreen resolves each configured instance's
     // workspace→agent binding via these (same helpers ChannelConfigPanel
     // uses); mock them explicitly so Section 3 (real ConnectorsScreen) never

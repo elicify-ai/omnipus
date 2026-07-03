@@ -30,14 +30,25 @@
  *
  *   Human-label errors + a11y (#326 / US-C4):
  *  17. aria-describedby target is rendered in the dialog
- *  18. Test button shows "Test = check without saving" hint
  *
  *   Helper + link render (#322 / US-C1):
- *  19. helpText renders under field
- *  18. helpLink renders as an anchor
+ *  18. helpText renders under field
+ *  19. helpLink renders as an anchor
  *
  *   Non-whatsapp channels:
- *  19. No pairing notice for non-whatsapp channel
+ *  20. No pairing notice for non-whatsapp channel
+ *
+ *   Client-side save validation (channel-Test redesign Stage 1 — the Test
+ *   button was removed; required-field validation now blocks Save):
+ *  21. Blank required field blocks Save; configureChannel not called
+ *  22. Blank required field blocks Save & Enable; configureChannel/enableChannel not called
+ *  23. Editing a field with an error clears that field's inline error
+ *  24. The "[configured]" sentinel counts as filled — Save proceeds
+ *  25. Google Chat: the selected auth-group's field is required even though
+ *      neither gchat field carries required:true in the catalog; switching
+ *      method switches which field is required
+ *  26. WhatsApp (no required fields in the catalog): Save and Save & Enable
+ *      are never blocked
  *
  * Traces: #283, #299, #322, #324, #325, #326
  */
@@ -79,7 +90,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchWorkspaces: vi.fn(),
     fetchWorkspace: vi.fn(),
     configureChannel: vi.fn(),
-    testChannel: vi.fn(),
     enableChannel: vi.fn(),
     disableChannel: vi.fn(),
     setChannelRouting: vi.fn(),
@@ -108,7 +118,6 @@ import {
   configureChannel,
   enableChannel,
   disableChannel,
-  testChannel,
   setChannelRouting,
 } from '@/lib/api'
 import type { Workspace } from '@/lib/api'
@@ -704,6 +713,13 @@ describe('ChannelConfigPanel — Google Chat authGroup picker (#324 / US-C2)', (
       expect(screen.getByRole('radio', { name: /Webhook URL/i })).toBeChecked()
     })
 
+    // Webhook mode requires webhook_url (Stage 1 client-side validation — the
+    // newly-selected auth group's field is required) — fill it so Save proceeds;
+    // this test is about the DESELECTED SA field's clear payload, not webhook_url.
+    fireEvent.change(document.getElementById('field-webhook_url')!, {
+      target: { value: 'https://chat.googleapis.com/v1/spaces/new' },
+    })
+
     // Click Save to trigger configureChannel.
     fireEvent.click(screen.getByRole('button', { name: /^Save$/ }))
 
@@ -733,7 +749,9 @@ describe('ChannelConfigPanel — Google Chat authGroup picker (#324 / US-C2)', (
     client.setQueryData(['channel-config', 'telegram.sales'], {
       type: 'telegram',
       enabled: false,
-      token: '',
+      // Non-blank: Bot Token is required (Stage 1 client-side validation) — this
+      // test is about identity/workspace_id stripping, not required-field checks.
+      token: 'existing-bound-token',
       identity: { kind: 'agent', id: 'mia' },
       workspace_id: 'ws-1',
     })
@@ -825,13 +843,45 @@ describe('ChannelConfigPanel — [configured] sentinel never round-trips (secret
     expect(payload['token']).toBe('new-bot-token-123')
   })
 
-  it('a deliberately cleared secret ("") still submits so the backend revokes it', async () => {
-    renderWithConfig({ type: 'telegram', enabled: true, token: '[configured]' })
+  it('a deliberately cleared NON-required secret ("") still submits so the backend revokes it', async () => {
+    // Telegram's Bot Token is a REQUIRED field — Stage 1 client-side validation
+    // (added alongside the Test-button removal) now blocks Save on any blank
+    // required field, so a required secret can no longer be cleared-to-revoke
+    // via Save; that is a deliberate consequence of "prevent saving incomplete
+    // configs" and is flagged separately (required-secret revocation may need
+    // a dedicated affordance in a later stage). Use Feishu's non-required
+    // encrypt_key (advanced, password type) to exercise the underlying
+    // buildSubmitPayload sentinel-clear behavior, which is unaffected by
+    // required-ness.
+    const config = {
+      type: 'feishu',
+      enabled: true,
+      app_id: 'cli_existing',
+      app_secret: '[configured]',
+      encrypt_key: '[configured]',
+    }
+    vi.mocked(fetchChannelConfig).mockResolvedValue(config)
+    const client = makeQueryClient()
+    client.setQueryData(['channel-config', 'feishu'], config)
+    client.setQueryData(['channel-routing', 'feishu'], { default_agent_id: undefined })
+    client.setQueryData(['agents'], [])
+    render(
+      <QueryClientProvider client={client}>
+        <ChannelConfigPanel channelId="feishu" channelName="Feishu" open={true} onOpenChange={vi.fn()} />
+      </QueryClientProvider>,
+    )
+
     await waitFor(() => {
-      expect(document.getElementById('field-token')).not.toBeNull()
+      expect(document.getElementById('field-app_id')).not.toBeNull()
     })
 
-    fireEvent.change(document.getElementById('field-token')!, { target: { value: '' } })
+    // encrypt_key is an advanced field — expand the disclosure to reach it.
+    fireEvent.click(screen.getByRole('button', { name: /Advanced/i }))
+    await waitFor(() => {
+      expect(document.getElementById('field-encrypt_key')).not.toBeNull()
+    })
+
+    fireEvent.change(document.getElementById('field-encrypt_key')!, { target: { value: '' } })
     fireEvent.click(screen.getByRole('button', { name: /^Save$/ }))
     await waitFor(() => {
       expect(vi.mocked(configureChannel)).toHaveBeenCalled()
@@ -839,8 +889,10 @@ describe('ChannelConfigPanel — [configured] sentinel never round-trips (secret
 
     const [, payload] = vi.mocked(configureChannel).mock.calls[0] as [string, Record<string, unknown>]
     // Presence-with-empty-string is the backend's credential-clear signal.
-    expect(Object.prototype.hasOwnProperty.call(payload, 'token')).toBe(true)
-    expect(payload['token']).toBe('')
+    expect(Object.prototype.hasOwnProperty.call(payload, 'encrypt_key')).toBe(true)
+    expect(payload['encrypt_key']).toBe('')
+    // The untouched app_secret sentinel is unrelated and must still be OMITTED.
+    expect(Object.prototype.hasOwnProperty.call(payload, 'app_secret')).toBe(false)
   })
 })
 
@@ -869,16 +921,6 @@ describe('ChannelConfigPanel — human-label errors + a11y (#326 / US-C4)', () =
     expect(descEl).not.toBeNull()
     // The description element must have non-empty text
     expect(descEl!.textContent?.trim()).not.toBe('')
-  })
-
-  it('Test button includes a "check without saving" hint', async () => {
-    renderPanel('telegram', 'Telegram')
-    await waitFor(() => {
-      expect(document.getElementById('field-token')).not.toBeNull()
-    })
-    expect(
-      screen.getByText(/Test checks your connection without saving/i),
-    ).toBeInTheDocument()
   })
 })
 
@@ -990,6 +1032,13 @@ describe('ChannelConfigPanel — Save & Enable panel close behavior (#358)', () 
   it('closes the panel after Save & Enable for a non-pairing channel (Telegram)', async () => {
     const { onOpenChange } = renderPanel('telegram', 'Telegram')
 
+    // Bot Token is required (Stage 1 client-side validation) — fill it so
+    // Save & Enable proceeds; this test is about the panel-close behavior.
+    await waitFor(() => {
+      expect(document.getElementById('field-token')).not.toBeNull()
+    })
+    fireEvent.change(document.getElementById('field-token')!, { target: { value: 'a-real-token' } })
+
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /Save & Enable/i }))
     })
@@ -1000,75 +1049,184 @@ describe('ChannelConfigPanel — Save & Enable panel close behavior (#358)', () 
   })
 })
 
-// F7: doSave.onSuccess and doSaveAndEnable.onSuccess clear the Connection-test badge
-describe('ChannelConfigPanel — test result badge cleared on save (F7)', () => {
+// Stage 1 of the channel-Test redesign: the Test button + connection-test
+// badge were removed entirely. Required-field validation now runs at save
+// time and blocks Save/Save & Enable client-side instead.
+describe('ChannelConfigPanel — client-side save validation', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockUiStore()
-    vi.mocked(fetchChannelConfig).mockResolvedValue({})
     vi.mocked(getChannelRouting).mockResolvedValue({ default_agent_id: undefined })
     vi.mocked(fetchAgents).mockResolvedValue([])
     vi.mocked(fetchWorkspaces).mockResolvedValue([])
     vi.mocked(fetchWorkspace).mockResolvedValue({} as Workspace)
     vi.mocked(configureChannel).mockResolvedValue(undefined as never)
     vi.mocked(enableChannel).mockResolvedValue(undefined as never)
-    vi.mocked(testChannel).mockResolvedValue({ success: true, message: 'OK' })
   })
 
-  it('doSave.onSuccess: clears the test result badge after a successful save', async () => {
+  it('blocks Save when a required field (Telegram token) is blank; configureChannel not called', async () => {
+    vi.mocked(fetchChannelConfig).mockResolvedValue({})
     renderPanel('telegram', 'Telegram')
 
-    // Wait for the form to be ready
     await waitFor(() => {
       expect(document.getElementById('field-token')).not.toBeNull()
     })
 
-    // Trigger a connection test so the badge appears
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /^Test$/i }))
-    })
-
-    // Badge must be visible
-    await waitFor(() => {
-      expect(screen.getByRole('status')).toBeInTheDocument()
-    })
-
-    // Trigger Save — onSuccess calls setTestResult(null)
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /^Save$/i }))
     })
 
-    // Badge must be gone
     await waitFor(() => {
-      expect(screen.queryByRole('status')).not.toBeInTheDocument()
+      expect(screen.getByText(/Bot Token is required/i)).toBeInTheDocument()
     })
+    expect(vi.mocked(configureChannel)).not.toHaveBeenCalled()
   })
 
-  it('doSaveAndEnable.onSuccess: clears the test result badge after Save & Enable', async () => {
+  it('blocks Save & Enable when a required field is blank; configureChannel/enableChannel not called', async () => {
+    vi.mocked(fetchChannelConfig).mockResolvedValue({})
     renderPanel('telegram', 'Telegram')
 
     await waitFor(() => {
       expect(document.getElementById('field-token')).not.toBeNull()
     })
 
-    // Trigger a connection test so the badge appears
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /^Test$/i }))
-    })
-
-    await waitFor(() => {
-      expect(screen.getByRole('status')).toBeInTheDocument()
-    })
-
-    // Trigger Save & Enable — onSuccess calls setTestResult(null)
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /Save & Enable/i }))
     })
 
-    // Badge must be gone
     await waitFor(() => {
-      expect(screen.queryByRole('status')).not.toBeInTheDocument()
+      expect(screen.getByText(/Bot Token is required/i)).toBeInTheDocument()
     })
+    expect(vi.mocked(configureChannel)).not.toHaveBeenCalled()
+    expect(vi.mocked(enableChannel)).not.toHaveBeenCalled()
+  })
+
+  it('editing the token field clears its inline error', async () => {
+    vi.mocked(fetchChannelConfig).mockResolvedValue({})
+    renderPanel('telegram', 'Telegram')
+
+    await waitFor(() => {
+      expect(document.getElementById('field-token')).not.toBeNull()
+    })
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /^Save$/i }))
+    })
+    await waitFor(() => {
+      expect(screen.getByText(/Bot Token is required/i)).toBeInTheDocument()
+    })
+
+    fireEvent.change(document.getElementById('field-token')!, { target: { value: 'a-real-token' } })
+
+    await waitFor(() => {
+      expect(screen.queryByText(/Bot Token is required/i)).not.toBeInTheDocument()
+    })
+  })
+
+  it('the "[configured]" sentinel counts as filled — Save proceeds without a validation error', async () => {
+    // renderPanel() unconditionally seeds ['channel-config', id] with {} — use an
+    // explicit client seed instead (matches the sentinel describe block's
+    // renderWithConfig pattern above) so the pre-filled token value is stable.
+    const config = { type: 'telegram', enabled: true, token: '[configured]' }
+    vi.mocked(fetchChannelConfig).mockResolvedValue(config)
+    const client = makeQueryClient()
+    client.setQueryData(['channel-config', 'telegram'], config)
+    client.setQueryData(['channel-routing', 'telegram'], { default_agent_id: undefined })
+    client.setQueryData(['agents'], [])
+
+    render(
+      <QueryClientProvider client={client}>
+        <ChannelConfigPanel channelId="telegram" channelName="Telegram" open={true} onOpenChange={vi.fn()} />
+      </QueryClientProvider>,
+    )
+
+    await waitFor(() => {
+      expect((document.getElementById('field-token') as HTMLInputElement).value).toBe('[configured]')
+    })
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /^Save$/i }))
+    })
+
+    await waitFor(() => {
+      expect(vi.mocked(configureChannel)).toHaveBeenCalled()
+    })
+    expect(screen.queryByText(/is required/i)).not.toBeInTheDocument()
+    // Sentinel-strip behavior is covered by the dedicated describe block above —
+    // only assert Save proceeded here, not the payload shape.
+  })
+
+  it('Google Chat webhook mode: blank webhook_url blocks Save; switching to service-account mode moves the requirement', async () => {
+    vi.mocked(fetchChannelConfig).mockResolvedValue({})
+    renderPanel('google-chat', 'Google Chat')
+
+    await waitFor(() => {
+      const webhookRadio = screen.getByRole('radio', { name: /Webhook URL/i })
+      expect(webhookRadio).toBeChecked()
+    })
+
+    // Webhook mode, blank webhook_url → Save is blocked with an inline error,
+    // even though webhook_url does not carry required:true in the catalog —
+    // the selected auth group's field is required by the pick-one rule.
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /^Save$/ }))
+    })
+    await waitFor(() => {
+      expect(screen.getByText(/Webhook URL is required/i)).toBeInTheDocument()
+    })
+    expect(vi.mocked(configureChannel)).not.toHaveBeenCalled()
+
+    // Switch to service-account mode — the requirement switches to
+    // service_account_json; the webhook_url error must no longer be present
+    // (the field itself unmounts when switching authGroup).
+    fireEvent.click(screen.getByRole('radio', { name: /Service account/i }))
+    await waitFor(() => {
+      expect(screen.getByRole('radio', { name: /Service account/i })).toBeChecked()
+    })
+    expect(screen.queryByText(/Webhook URL is required/i)).not.toBeInTheDocument()
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /^Save$/ }))
+    })
+    await waitFor(() => {
+      expect(screen.getByText(/Service Account JSON is required/i)).toBeInTheDocument()
+    })
+    expect(vi.mocked(configureChannel)).not.toHaveBeenCalled()
+  })
+
+  it('WhatsApp has no required fields in the catalog — Save is never blocked', async () => {
+    vi.mocked(fetchChannelConfig).mockResolvedValue({})
+    renderPanel('whatsapp', 'WhatsApp', undefined, false)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('whatsapp-enable-prompt')).toBeInTheDocument()
+    })
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /^Save$/i }))
+    })
+    await waitFor(() => {
+      expect(vi.mocked(configureChannel)).toHaveBeenCalled()
+    })
+    expect(screen.queryByText(/is required/i)).not.toBeInTheDocument()
+  })
+
+  it('WhatsApp has no required fields in the catalog — Save & Enable is never blocked', async () => {
+    vi.mocked(fetchChannelConfig).mockResolvedValue({})
+    renderPanel('whatsapp', 'WhatsApp', undefined, false)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('whatsapp-enable-prompt')).toBeInTheDocument()
+    })
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Save & Enable/i }))
+    })
+    await waitFor(() => {
+      expect(vi.mocked(configureChannel)).toHaveBeenCalled()
+      expect(vi.mocked(enableChannel)).toHaveBeenCalled()
+    })
+    expect(screen.queryByText(/is required/i)).not.toBeInTheDocument()
   })
 })
 
