@@ -4,6 +4,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -48,8 +49,26 @@ func newMailboxTestAPI(t *testing.T, mailboxes map[string]map[string]config.Mail
 	}
 }
 
+// seedWorkspaceFile writes a minimal workspace JSON file directly to
+// homePath/workspaces/{id}.json — the on-disk shape setAgentMailbox's
+// workspace-existence gate (a.loadWorkspace, backed by readWorkspaceFile)
+// reads. Mailbox tests seed workspaces this way rather than via the full
+// HandleWorkspaces POST path, which needs machinery (taskStore,
+// onboardingMgr, …) the mailbox test harness does not construct.
+func seedWorkspaceFile(t *testing.T, homePath, id string) {
+	t.Helper()
+	dir := filepath.Join(homePath, "workspaces")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	data := fmt.Sprintf(
+		`{"id":%q,"name":"Test Workspace","status":"active","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}`,
+		id,
+	)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, id+".json"), []byte(data), 0o600))
+}
+
 func TestSetAgentMailbox_RoutesPasswordToCredentialStore(t *testing.T) {
 	api := newMailboxTestAPI(t, nil)
+	seedWorkspaceFile(t, api.homePath, "ws_my")
 
 	body := `{"enabled":true,"imap_host":"imap.x.com","smtp_host":"smtp.x.com","username":"me@x.com","password":"app-pass-123"}`
 	w := httptest.NewRecorder()
@@ -64,8 +83,7 @@ func TestSetAgentMailbox_RoutesPasswordToCredentialStore(t *testing.T) {
 	assert.True(t, resp.Configured)
 	assert.True(t, resp.Enabled)
 	assert.Equal(t, "mia", resp.AgentId)
-	require.NotNil(t, resp.WorkspaceId)
-	assert.Equal(t, "ws_my", *resp.WorkspaceId)
+	assert.Equal(t, "ws_my", resp.WorkspaceId)
 	assert.NotContains(t, w.Body.String(), "app-pass-123", "password leaked into response")
 
 	// config.json: nested agent -> workspace -> entry, password_ref set, no inline plaintext.
@@ -97,6 +115,7 @@ func TestSetAgentMailbox_UnknownAgent404(t *testing.T) {
 
 func TestSetAgentMailbox_MissingRequiredField(t *testing.T) {
 	api := newMailboxTestAPI(t, nil)
+	seedWorkspaceFile(t, api.homePath, "ws")
 	// Missing imap_host.
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/mia/mailboxes/ws",
@@ -115,6 +134,7 @@ func TestSetAgentMailbox_SecondMailboxInSameWorkspaceAllowed(t *testing.T) {
 	api := newMailboxTestAPI(t, map[string]map[string]config.MailboxConfig{
 		"jim": {"ws_shared": {Enabled: true, WorkspaceID: "ws_shared", IMAPHost: "i", SMTPHost: "s", Username: "jim@x.com"}},
 	})
+	seedWorkspaceFile(t, api.homePath, "ws_shared")
 	body := `{"enabled":true,"imap_host":"i","smtp_host":"s","username":"mia@x.com","password":"p"}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/mia/mailboxes/ws_shared", strings.NewReader(body))
@@ -125,8 +145,7 @@ func TestSetAgentMailbox_SecondMailboxInSameWorkspaceAllowed(t *testing.T) {
 	var resp gen.Mailbox
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, "mia", resp.AgentId)
-	require.NotNil(t, resp.WorkspaceId)
-	assert.Equal(t, "ws_shared", *resp.WorkspaceId)
+	assert.Equal(t, "ws_shared", resp.WorkspaceId)
 }
 
 func TestSetAgentMailbox_SameAgentTwoWorkspacesBothRetrievable(t *testing.T) {
@@ -135,6 +154,8 @@ func TestSetAgentMailbox_SameAgentTwoWorkspacesBothRetrievable(t *testing.T) {
 	// workspaces and confirm both are independently retrievable with distinct
 	// usernames and distinct credential-store keys.
 	api := newMailboxTestAPI(t, nil)
+	seedWorkspaceFile(t, api.homePath, "ws_a")
+	seedWorkspaceFile(t, api.homePath, "ws_b")
 
 	bodyA := `{"enabled":true,"imap_host":"imap.a.com","smtp_host":"smtp.a.com","username":"mia-a@x.com","password":"pass-a"}`
 	w := httptest.NewRecorder()
@@ -158,8 +179,7 @@ func TestSetAgentMailbox_SameAgentTwoWorkspacesBothRetrievable(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &respA))
 	require.NotNil(t, respA.Username)
 	assert.Equal(t, "mia-a@x.com", *respA.Username)
-	require.NotNil(t, respA.WorkspaceId)
-	assert.Equal(t, "ws_a", *respA.WorkspaceId)
+	assert.Equal(t, "ws_a", respA.WorkspaceId)
 
 	w = httptest.NewRecorder()
 	api.getAgentMailbox(w, "mia", "ws_b")
@@ -168,8 +188,7 @@ func TestSetAgentMailbox_SameAgentTwoWorkspacesBothRetrievable(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &respB))
 	require.NotNil(t, respB.Username)
 	assert.Equal(t, "mia-b@x.com", *respB.Username)
-	require.NotNil(t, respB.WorkspaceId)
-	assert.Equal(t, "ws_b", *respB.WorkspaceId)
+	assert.Equal(t, "ws_b", respB.WorkspaceId)
 
 	// Distinct credential-store keys, both resolvable to their own password.
 	gotA, err := api.credStore.Get("mailbox_mia_ws_a_password")
@@ -375,12 +394,10 @@ func TestListMailboxes_EmptyAndConfigured(t *testing.T) {
 	require.Len(t, resp.Mailboxes, 2)
 	// Deterministic order: sorted by workspace ID within the agent.
 	assert.Equal(t, "mia", resp.Mailboxes[0].AgentId)
-	require.NotNil(t, resp.Mailboxes[0].WorkspaceId)
-	assert.Equal(t, "ws_a", *resp.Mailboxes[0].WorkspaceId)
+	assert.Equal(t, "ws_a", resp.Mailboxes[0].WorkspaceId)
 	assert.True(t, resp.Mailboxes[0].Configured)
 	assert.Equal(t, "mia", resp.Mailboxes[1].AgentId)
-	require.NotNil(t, resp.Mailboxes[1].WorkspaceId)
-	assert.Equal(t, "ws_b", *resp.Mailboxes[1].WorkspaceId)
+	assert.Equal(t, "ws_b", resp.Mailboxes[1].WorkspaceId)
 	assert.True(t, resp.Mailboxes[1].Configured)
 	assert.NotContains(t, w.Body.String(), "secret", "password must never be returned")
 
@@ -399,6 +416,7 @@ func TestSetAgentMailbox_GrantsEmailToolAllowsForDenyDefaultAgent(t *testing.T) 
 	// must fill in MISSING allow entries for deny-default agents. Explicit
 	// operator-set entries are intent and must never be overridden.
 	api := newMailboxTestAPI(t, nil)
+	seedWorkspaceFile(t, api.homePath, "ws_my")
 
 	// Seed the on-disk config with a deny-default agent whose allowlist
 	// predates the mailbox: no email entries except an explicit send_email=deny.
@@ -443,4 +461,211 @@ func TestSetAgentMailbox_GrantsEmailToolAllowsForDenyDefaultAgent(t *testing.T) 
 	assert.Equal(t, "deny", policies["send_email"], "explicit operator deny must never be overridden")
 	// …and unrelated entries are untouched.
 	assert.Equal(t, "allow", policies["create_task"])
+}
+
+func TestSetAgentMailbox_DisabledSaveDoesNotGrantToolAllows(t *testing.T) {
+	// grantEmailToolAllows is only called when req.Enabled is true (the wire
+	// contract's "enabled" means "register the email tools" — an opt-IN). A
+	// save with enabled:false must leave a deny-default agent's policies
+	// completely untouched: no email-tool allows fabricated for a mailbox
+	// that isn't even active.
+	api := newMailboxTestAPI(t, nil)
+	seedWorkspaceFile(t, api.homePath, "ws_my")
+
+	require.NoError(t, api.safeUpdateConfigJSON(func(m map[string]any) error {
+		m["agents"] = map[string]any{
+			"list": []any{
+				map[string]any{
+					"id": "mia",
+					"tools": map[string]any{
+						"builtin": map[string]any{
+							"default_policy": "deny",
+							"policies":       map[string]any{"create_task": "allow"},
+						},
+					},
+				},
+			},
+		}
+		return nil
+	}))
+
+	body := `{"enabled":false,"imap_host":"i","smtp_host":"s","username":"mia@x.com"}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/mia/mailboxes/ws_my", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	api.setAgentMailbox(w, r, "mia", "ws_my")
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+	raw, err := os.ReadFile(filepath.Join(api.homePath, "config.json"))
+	require.NoError(t, err)
+	var cfg map[string]any
+	require.NoError(t, json.Unmarshal(raw, &cfg))
+	policies := cfg["agents"].(map[string]any)["list"].([]any)[0].(map[string]any)["tools"].(map[string]any)["builtin"].(map[string]any)["policies"].(map[string]any)
+
+	for _, name := range emailToolNames {
+		_, exists := policies[name]
+		assert.False(t, exists, "tool %s must NOT be granted when the mailbox save disables the mailbox", name)
+	}
+	assert.Equal(t, "allow", policies["create_task"], "unrelated entries must be untouched")
+	assert.Len(t, policies, 1, "only the pre-existing entry should remain")
+}
+
+// --- Workspace-existence gate (fix 2) ---
+
+func TestSetAgentMailbox_NonexistentWorkspace404(t *testing.T) {
+	api := newMailboxTestAPI(t, nil)
+	// Deliberately do NOT seed a workspace file for "ws_ghost".
+	body := `{"enabled":true,"imap_host":"i","smtp_host":"s","username":"u"}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/mia/mailboxes/ws_ghost", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	api.setAgentMailbox(w, r, "mia", "ws_ghost")
+	require.Equal(t, http.StatusNotFound, w.Code, "body=%s", w.Body.String())
+
+	// Nothing persisted for the nonexistent workspace.
+	raw, err := os.ReadFile(filepath.Join(api.homePath, "config.json"))
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), "ws_ghost", "a mailbox must never be saved against a nonexistent workspace")
+}
+
+func TestSetAgentMailbox_ExistingWorkspace200(t *testing.T) {
+	api := newMailboxTestAPI(t, nil)
+	seedWorkspaceFile(t, api.homePath, "ws_real")
+
+	body := `{"enabled":true,"imap_host":"i","smtp_host":"s","username":"u"}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/mia/mailboxes/ws_real", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	api.setAgentMailbox(w, r, "mia", "ws_real")
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+	var resp gen.Mailbox
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "ws_real", resp.WorkspaceId)
+}
+
+// --- Malformed legacy/nested mailbox entry (fix 5) ---
+
+func TestSetAgentMailbox_MalformedMixedEntry500(t *testing.T) {
+	api := newMailboxTestAPI(t, nil)
+	seedWorkspaceFile(t, api.homePath, "ws_my")
+
+	// Seed a malformed agent entry directly on disk: one key holds an object
+	// (nested shape), another holds a scalar (legacy shape) — ambiguous,
+	// must be rejected rather than silently misclassified/dropped. Written
+	// directly with os.WriteFile rather than via safeUpdateConfigJSON:
+	// safeUpdateConfigJSON's OWN post-write refresh reloads config.json
+	// through config.LoadConfig, which applies the exact same strict shape
+	// rule (config.MailboxesConfig.UnmarshalJSON) and would itself fail on
+	// this seed step — a bare os.WriteFile reproduces the on-disk corruption
+	// (hand-edited config.json, or an older non-strict writer) without going
+	// through that typed round-trip.
+	before := `{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],"channels":{},` +
+		`"mailboxes":{"mia":{"ws_other":{"enabled":true,"workspace_id":"ws_other"},"enabled":true}}}`
+	require.NoError(t, os.WriteFile(filepath.Join(api.homePath, "config.json"), []byte(before), 0o600))
+
+	body := `{"enabled":true,"imap_host":"i","smtp_host":"s","username":"u"}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/mia/mailboxes/ws_my", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	api.setAgentMailbox(w, r, "mia", "ws_my")
+	require.Equal(t, http.StatusInternalServerError, w.Code, "body=%s", w.Body.String())
+	var errResp gen.ErrorResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &errResp))
+	assert.Contains(t, errResp.Error, `mailboxes entry for agent "mia" is malformed`,
+		"error must name the offending agent")
+
+	// Nothing persisted — config.json is byte-for-byte unchanged.
+	after, err := os.ReadFile(filepath.Join(api.homePath, "config.json"))
+	require.NoError(t, err)
+	assert.Equal(t, before, string(after), "malformed entry must abort the write with nothing persisted")
+}
+
+func TestDeleteAgentMailbox_MalformedMixedEntry500(t *testing.T) {
+	api := newMailboxTestAPI(t, map[string]map[string]config.MailboxConfig{
+		// Live cfg (used by the pre-flight existence check) has a normal pair…
+		"mia": {"ws_my": {Enabled: true, WorkspaceID: "ws_my"}},
+	})
+	// …but the raw on-disk config.json entry is malformed (mixed legacy/
+	// nested). See TestSetAgentMailbox_MalformedMixedEntry500 for why this is
+	// written directly rather than via safeUpdateConfigJSON.
+	before := `{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],"channels":{},` +
+		`"mailboxes":{"mia":{"ws_other":{"enabled":true,"workspace_id":"ws_other"},"enabled":true}}}`
+	require.NoError(t, os.WriteFile(filepath.Join(api.homePath, "config.json"), []byte(before), 0o600))
+
+	w := httptest.NewRecorder()
+	api.deleteAgentMailbox(w, "mia", "ws_my")
+	require.Equal(t, http.StatusInternalServerError, w.Code, "body=%s", w.Body.String())
+	var errResp gen.ErrorResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &errResp))
+	assert.Contains(t, errResp.Error, `mailboxes entry for agent "mia" is malformed`)
+
+	after, err := os.ReadFile(filepath.Join(api.homePath, "config.json"))
+	require.NoError(t, err)
+	assert.Equal(t, before, string(after), "malformed entry must abort the write with nothing persisted")
+}
+
+// --- Route-level dispatch through HandleAgents (fix 7: rest.go's
+// SplitN/validateEntityID mailbox routing had zero coverage) ---
+
+func TestHandleAgents_MailboxRoute_GetPutDelete(t *testing.T) {
+	api := newMailboxTestAPI(t, nil)
+	seedWorkspaceFile(t, api.homePath, "ws_my")
+
+	// PUT via the real dispatcher.
+	body := `{"enabled":true,"imap_host":"imap.x.com","smtp_host":"smtp.x.com","username":"me@x.com","password":"app-pass-123"}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/mia/mailboxes/ws_my", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(w, r)
+	require.Equal(t, http.StatusOK, w.Code, "PUT body=%s", w.Body.String())
+
+	// GET via the real dispatcher.
+	w = httptest.NewRecorder()
+	r = httptest.NewRequest(http.MethodGet, "/api/v1/agents/mia/mailboxes/ws_my", nil)
+	api.HandleAgents(w, r)
+	require.Equal(t, http.StatusOK, w.Code, "GET body=%s", w.Body.String())
+	var resp gen.Mailbox
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "mia", resp.AgentId)
+	assert.Equal(t, "ws_my", resp.WorkspaceId)
+
+	// DELETE via the real dispatcher.
+	w = httptest.NewRecorder()
+	r = httptest.NewRequest(http.MethodDelete, "/api/v1/agents/mia/mailboxes/ws_my", nil)
+	api.HandleAgents(w, r)
+	require.Equal(t, http.StatusOK, w.Code, "DELETE body=%s", w.Body.String())
+
+	// GET after DELETE → 404 (round-trip confirms the delete really persisted).
+	w = httptest.NewRecorder()
+	r = httptest.NewRequest(http.MethodGet, "/api/v1/agents/mia/mailboxes/ws_my", nil)
+	api.HandleAgents(w, r)
+	require.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestHandleAgents_MailboxRoute_BareMailboxesPath400(t *testing.T) {
+	api := newMailboxTestAPI(t, nil)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/agents/mia/mailboxes", nil)
+	api.HandleAgents(w, r)
+	require.Equal(t, http.StatusBadRequest, w.Code, "body=%s", w.Body.String())
+}
+
+func TestHandleAgents_MailboxRoute_ExtraSegment400(t *testing.T) {
+	api := newMailboxTestAPI(t, nil)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/agents/mia/mailboxes/ws_my/extra", nil)
+	api.HandleAgents(w, r)
+	require.Equal(t, http.StatusBadRequest, w.Code, "body=%s", w.Body.String())
+}
+
+func TestHandleAgents_MailboxRoute_InvalidWorkspaceIDChars400(t *testing.T) {
+	api := newMailboxTestAPI(t, nil)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/agents/mia/mailboxes/x", nil)
+	// Set the raw path directly so the ".." survives without any URL-parse
+	// normalization ambiguity — HandleAgents reads r.URL.Path verbatim.
+	r.URL.Path = "/api/v1/agents/mia/mailboxes/.."
+	api.HandleAgents(w, r)
+	require.Equal(t, http.StatusBadRequest, w.Code, "body=%s", w.Body.String())
 }

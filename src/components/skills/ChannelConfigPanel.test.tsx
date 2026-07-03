@@ -894,6 +894,46 @@ describe('ChannelConfigPanel — [configured] sentinel never round-trips (secret
     // The untouched app_secret sentinel is unrelated and must still be OMITTED.
     expect(Object.prototype.hasOwnProperty.call(payload, 'app_secret')).toBe(false)
   })
+
+  it('a "[configured]" value in a plain TEXT field is NOT stripped — only password/textarea fields are ever redacted server-side', async () => {
+    // redactChannelConfig (rest.go) only ever redacts password/textarea-typed
+    // fields to the sentinel. Telegram's `allow_from` is a plain text field —
+    // a user who legitimately types the literal string "[configured]" into it
+    // must have that value travel to the backend untouched, not silently
+    // dropped by the sentinel-strip logic.
+    const config = { type: 'telegram', enabled: true, token: 'realtoken123', allow_from: '[configured]' }
+    vi.mocked(fetchChannelConfig).mockResolvedValue(config)
+    const client = makeQueryClient()
+    client.setQueryData(['channel-config', 'telegram'], config)
+    client.setQueryData(['channel-routing', 'telegram'], { default_agent_id: undefined })
+    client.setQueryData(['agents'], [])
+    render(
+      <QueryClientProvider client={client}>
+        <ChannelConfigPanel channelId="telegram" channelName="Telegram" open={true} onOpenChange={vi.fn()} />
+      </QueryClientProvider>,
+    )
+
+    await waitFor(() => {
+      expect(document.getElementById('field-token')).not.toBeNull()
+    })
+
+    // allow_from is an advanced TEXT field — expand Advanced to reach it.
+    fireEvent.click(screen.getByRole('button', { name: /Advanced/i }))
+    await waitFor(() => {
+      expect((document.getElementById('field-allow_from') as HTMLInputElement).value).toBe('[configured]')
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }))
+    await waitFor(() => {
+      expect(vi.mocked(configureChannel)).toHaveBeenCalled()
+    })
+
+    const [, payload] = vi.mocked(configureChannel).mock.calls[0] as [string, Record<string, unknown>]
+    // A plain text field's literal "[configured]" must survive untouched.
+    expect(payload['allow_from']).toBe('[configured]')
+    // The password-typed token is unaffected by this test's assertion.
+    expect(payload['token']).toBe('realtoken123')
+  })
 })
 
 describe('ChannelConfigPanel — human-label errors + a11y (#326 / US-C4)', () => {

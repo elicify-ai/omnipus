@@ -477,7 +477,7 @@ type MailboxListResponse = {
 type Mailbox = {
   agent_id: string;
   enabled: boolean;
-  workspace_id?: string | undefined;
+  workspace_id: string;
   imap_host?: string | undefined;
   imap_port?: number | undefined;
   smtp_host?: string | undefined;
@@ -1715,7 +1715,7 @@ export const ChannelRouting = z
 export const Mailbox: z.ZodType<Mailbox> = z.object({
   agent_id: z.string(),
   enabled: z.boolean(),
-  workspace_id: z.string().optional(),
+  workspace_id: z.string(),
   imap_host: z.string().optional(),
   imap_port: z.number().int().optional(),
   smtp_host: z.string().optional(),

@@ -13,14 +13,20 @@
  *
  * In edit mode, both the agent select and the workspace select remain
  * changeable — changing either is a MOVE: the target identity is the pair,
- * so on save we delete the old (agent, workspace) mailbox first, then
- * create/update the new one.
+ * so on save we create/update the NEW (agent, workspace) mailbox FIRST, then
+ * delete the OLD one. A failed save leaves the old mailbox fully intact
+ * (never delete-then-save); a failed delete-after-save still counts as a
+ * successful move but surfaces a distinct warning toast — the new mailbox is
+ * saved, and the orphaned old pair must be removed manually from the list.
+ * Because credentials are keyed per (agent, workspace) pair server-side and
+ * never transfer, a move also requires the password to be re-entered.
  *
- * Secret field (password): write-only. If the backend returns no password value
- * (which it never does — it is credential-store-routed), the field shows an
- * empty placeholder so the user can set or rotate the credential. A "(stored)"
- * hint appears when the GET response includes password_ref, indicating that a
- * credential is already saved. The field never pre-fills with a real secret.
+ * Secret field (password): write-only. The backend never returns the password
+ * value — the Mailbox wire type carries only a `configured: boolean` flag
+ * (true when a stored credential resolves in the credential store). When
+ * `configured` is true and no move is pending, the password placeholder shows
+ * a "(stored — enter a new value to rotate)" hint; the field itself always
+ * starts empty and never pre-fills with a real secret.
  *
  * M11 (remediation-decisions.md §M11, superseded by the multi-mailbox
  * follow-up — every (agent, workspace) pair may own a mailbox, not just one
@@ -55,12 +61,28 @@ import {
 import type { Mailbox, MailboxConfigureRequest } from '@/lib/api'
 import { AdvancedDisclosure } from '@/components/shared/AdvancedDisclosure'
 import { useUiStore } from '@/store/ui'
+import { logError } from '@/lib/telemetry'
 
 interface EmailMailboxPanelProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   /** Edit target. `null`/undefined opens the panel in create mode. */
   mailbox?: Mailbox | null
+  /**
+   * The full mailbox roster (ConnectorsScreen's `['agent-mailboxes']` query) —
+   * used to block creating, or moving into, an (agent, workspace) pair that
+   * already owns a mailbox. PUT is an upsert server-side, so without this
+   * guard a duplicate pair would silently overwrite the existing mailbox.
+   */
+  mailboxes?: Mailbox[]
+}
+
+// not-wire-format: result of the save mutation — whether the (agent,
+// workspace) move's old-pair cleanup succeeded, distinguishing a full
+// success from a partial one (new mailbox saved, old pair orphaned).
+interface SaveMailboxResult {
+  saved: Mailbox
+  orphanedOldPair: boolean
 }
 
 // not-wire-format: form state for the email mailbox account panel
@@ -167,17 +189,57 @@ function FieldRow({
   )
 }
 
-function validate(form: MailboxFormState): FieldErrors {
+/**
+ * True when the form's currently-selected (agent, workspace) pair differs
+ * from the seeded `mailbox`'s pair — i.e. Save would MOVE the mailbox rather
+ * than update it in place. False in create mode (no `mailbox`) and false
+ * while either id is still unselected (the initial/empty form state is not
+ * a "move" — there is nothing yet to move away from).
+ */
+function isMoveTarget(form: MailboxFormState, mailbox: Mailbox | null | undefined): boolean {
+  if (!mailbox) return false
+  if (form.agent_id === '' || form.workspace_id === '') return false
+  return mailbox.agent_id !== form.agent_id || mailbox.workspace_id !== form.workspace_id
+}
+
+function validate(
+  form: MailboxFormState,
+  mailbox: Mailbox | null | undefined,
+  mailboxes: Mailbox[],
+): FieldErrors {
   const errors: FieldErrors = {}
   if (!form.agent_id) errors.agent_id = 'Owning agent is required'
   if (!form.workspace_id) errors.workspace_id = 'Workspace is required'
   if (!form.username.trim()) errors.username = 'Email address is required'
   if (!form.imap_host.trim()) errors.imap_host = 'IMAP server hostname is required'
   if (!form.smtp_host.trim()) errors.smtp_host = 'SMTP server hostname is required'
+
+  // Credentials are keyed per (agent, workspace) pair server-side — a move
+  // can never carry the old password over, so re-entering it is mandatory.
+  if (isMoveTarget(form, mailbox) && !form.password.trim()) {
+    errors.password =
+      'Moving a mailbox to a different agent or workspace requires re-entering the password — stored credentials do not transfer'
+  }
+
+  // PUT is an upsert server-side — without this guard, creating (or moving
+  // into) a pair that already owns a mailbox would silently overwrite it.
+  // Excludes the mailbox's OWN pair so a plain (non-move) edit of an
+  // existing mailbox never trips on itself.
+  if (form.agent_id && form.workspace_id) {
+    const targetIsOwnPair =
+      mailbox != null && mailbox.agent_id === form.agent_id && mailbox.workspace_id === form.workspace_id
+    const targetTaken =
+      !targetIsOwnPair &&
+      mailboxes.some((mb) => mb.agent_id === form.agent_id && mb.workspace_id === form.workspace_id)
+    if (targetTaken) {
+      errors.agent_id = 'That agent already has a mailbox in this workspace — edit it from the list instead'
+    }
+  }
+
   return errors
 }
 
-export function EmailMailboxPanel({ open, onOpenChange, mailbox }: EmailMailboxPanelProps) {
+export function EmailMailboxPanel({ open, onOpenChange, mailbox, mailboxes = [] }: EmailMailboxPanelProps) {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
   const isDirtyRef = useRef(false)
@@ -202,7 +264,13 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox }: EmailMailboxP
   // while the user has unsaved edits (e.g. a background refetch of the
   // parent's list mid-edit) — the panel is always fully closed and reopened
   // between editing two different mailboxes, which resets isDirtyRef below.
+  // `open` is a dependency ON PURPOSE: reopening in create mode keeps
+  // `mailbox` at null (null → null never re-fires a [mailbox]-only effect),
+  // which left the PREVIOUS session's form — including a typed password —
+  // on screen (live-UAT find, 2026-07-03). Keying on `open` re-populates on
+  // every open; the close effect below has already reset isDirtyRef.
   useEffect(() => {
+    if (!open) return
     if (isDirtyRef.current) return
     if (!mailbox) {
       setForm(EMPTY_FORM)
@@ -217,15 +285,18 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox }: EmailMailboxP
       smtp_host: mailbox.smtp_host ?? '',
       smtp_port: mailbox.smtp_port != null ? String(mailbox.smtp_port) : '',
       agent_id: mailbox.agent_id,
-      workspace_id: mailbox.workspace_id ?? '',
+      workspace_id: mailbox.workspace_id,
     })
-  }, [mailbox])
+  }, [open, mailbox])
 
-  // Reset dirty flag when the panel closes so the next open repopulates from server.
+  // Reset on close so the next open repopulates from scratch — including the
+  // form itself, so a typed (never-persisted) password does not linger in
+  // memory or reappear on the next create-mode open.
   useEffect(() => {
     if (!open) {
       isDirtyRef.current = false
       setFieldErrors({})
+      setForm(EMPTY_FORM)
     }
   }, [open])
 
@@ -243,8 +314,8 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox }: EmailMailboxP
   }
 
   const { mutate: doSave, isPending: saving } = useMutation({
-    mutationFn: async () => {
-      const errors = validate(form)
+    mutationFn: async (): Promise<SaveMailboxResult> => {
+      const errors = validate(form, mailbox, mailboxes)
       if (Object.keys(errors).length > 0) {
         setFieldErrors(errors)
         throw new Error('Please fill in all required fields')
@@ -266,18 +337,43 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox }: EmailMailboxP
 
       // The mailbox endpoint is keyed by the (agent, workspace) PAIR
       // (PUT /agents/{id}/mailboxes/{workspaceId}) — there is no rename.
-      // Changing either the owning agent or the workspace is a MOVE: delete
-      // the mailbox under the old pair first, then create it under the new one.
-      if (mailbox && (mailbox.agent_id !== form.agent_id || (mailbox.workspace_id ?? '') !== form.workspace_id)) {
-        await deleteAgentMailbox(mailbox.agent_id, mailbox.workspace_id ?? '')
+      // Changing either the owning agent or the workspace is a MOVE: save the
+      // mailbox under the NEW pair FIRST, then delete the OLD pair. A failed
+      // save must leave the old mailbox fully intact — never delete-then-save.
+      const moving = isMoveTarget(form, mailbox)
+      const saved = await saveAgentMailbox(form.agent_id, form.workspace_id, req)
+
+      if (moving && mailbox) {
+        try {
+          await deleteAgentMailbox(mailbox.agent_id, mailbox.workspace_id)
+        } catch (err) {
+          // The new mailbox is saved; only the old pair's cleanup failed —
+          // this is still a successful save. Surface a distinct warning
+          // instead of failing the whole operation; the operator can remove
+          // the orphaned old pair manually from the list.
+          logError({
+            event: 'mailboxMoveOldPairDeleteFailed',
+            agentId: mailbox.agent_id,
+            workspaceId: mailbox.workspace_id,
+            message: err instanceof Error ? err.message : String(err),
+          })
+          return { saved, orphanedOldPair: true }
+        }
       }
-      return saveAgentMailbox(form.agent_id, form.workspace_id, req)
+      return { saved, orphanedOldPair: false }
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
       isDirtyRef.current = false
-      queryClient.invalidateQueries({ queryKey: ['agent-mailboxes'] })
       queryClient.invalidateQueries({ queryKey: ['channels'] })
-      addToast({ message: 'Mailbox account saved', variant: 'success' })
+      if (result.orphanedOldPair) {
+        addToast({
+          message:
+            'Mailbox saved, but the old mailbox could not be removed — delete it manually from the list.',
+          variant: 'warning',
+        })
+      } else {
+        addToast({ message: 'Mailbox account saved', variant: 'success' })
+      }
       onOpenChange(false)
     },
     onError: (err: unknown) => {
@@ -287,12 +383,16 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox }: EmailMailboxP
         variant: 'error',
       })
     },
+    onSettled: () => {
+      // Refetch the roster on BOTH success and failure so a failed move/save
+      // never leaves ConnectorsScreen showing stale mailbox state.
+      queryClient.invalidateQueries({ queryKey: ['agent-mailboxes'] })
+    },
   })
 
   const { mutate: doDelete, isPending: deleting } = useMutation({
     mutationFn: () => {
       if (!mailbox) return Promise.reject(new Error('No mailbox to remove'))
-      if (!mailbox.workspace_id) return Promise.reject(new Error('Mailbox has no workspace to remove from'))
       return deleteAgentMailbox(mailbox.agent_id, mailbox.workspace_id)
     },
     onSuccess: () => {
@@ -310,8 +410,10 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox }: EmailMailboxP
   })
 
   // Whether a stored credential already exists (wire `configured` flag: the
-  // password ref is set AND resolves in the credential store).
-  const hasStoredCredential = Boolean(mailbox?.configured)
+  // password ref is set AND resolves in the credential store). False while a
+  // move is pending — the credential is keyed to the OLD pair and will not
+  // carry over, so the "(stored)" hint would be misleading.
+  const hasStoredCredential = !isMoveTarget(form, mailbox) && Boolean(mailbox?.configured)
 
   // Non-worker agents only — email mailbox owner must be a conversational agent.
   const mainAgents = agents.filter((a) => !isWorker(a))
@@ -545,7 +647,7 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox }: EmailMailboxP
                 variant="destructive"
                 className="w-full gap-1.5"
                 onClick={() => doDelete()}
-                disabled={deleting || saving || !mailbox.workspace_id}
+                disabled={deleting || saving}
                 data-testid="mailbox-delete-btn"
               >
                 <Trash size={13} />

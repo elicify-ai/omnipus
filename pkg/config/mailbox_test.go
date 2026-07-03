@@ -2,32 +2,69 @@ package config
 
 import "testing"
 
-// The 0.1.0 cap-1-per-workspace rule (ValidateMailboxesCap1) was removed
-// 2026-07-03 (operator-approved): every agent may own a mailbox, several per
-// workspace. What remains — and what this test pins — is the STRUCTURAL half
-// of the invariant: one mailbox per agent, guaranteed by the Config.Mailboxes
-// map being keyed by agent ID.
-func TestMailboxes_OneMailboxPerAgentByMapKey(t *testing.T) {
-	mbs := map[string]MailboxConfig{
-		"mia": {Enabled: true, WorkspaceID: "ws_my"},
+// MailboxesConfig.UnmarshalJSON accepts a SINGLE document that mixes one
+// legacy-flat agent entry with one nested-shape agent entry — the realistic
+// post-upgrade config, where an operator has configured a new (nested) agent
+// while an old (legacy-flat) entry is still on disk. Both must parse
+// correctly in the same pass.
+func TestMailboxesConfig_UnmarshalMixedDocument_LegacyAndNestedAgents(t *testing.T) {
+	var m MailboxesConfig
+	if err := m.UnmarshalJSON([]byte(`{
+		"mia": {"enabled": true, "workspace_id": "ws_legacy", "username": "legacy@x.com"},
+		"jim": {
+			"ws_a": {"enabled": true, "username": "jim-a@x.com"},
+			"ws_b": {"enabled": true, "username": "jim-b@x.com"}
+		}
+	}`)); err != nil {
+		t.Fatalf("mixed legacy+nested document must parse: %v", err)
 	}
-	mbs["mia"] = MailboxConfig{Enabled: true, WorkspaceID: "ws_my2"}
-	if len(mbs) != 1 {
-		t.Fatalf("agent key must hold exactly one mailbox, got %d", len(mbs))
+	mia, ok := m["mia"]["ws_legacy"]
+	if !ok || mia.Username != "legacy@x.com" {
+		t.Fatalf("legacy agent entry not lifted correctly: %+v", m["mia"])
+	}
+	if len(m["jim"]) != 2 || m["jim"]["ws_a"].Username != "jim-a@x.com" || m["jim"]["ws_b"].Username != "jim-b@x.com" {
+		t.Fatalf("nested agent entry not parsed correctly: %+v", m["jim"])
 	}
 }
 
-// Multiple enabled mailboxes in the SAME workspace are a legal configuration:
-// each mailbox's unhandled mail becomes Board tasks assigned to its own owning
-// agent, so several inboxes per workspace stay unambiguous.
-func TestMailboxes_SeveralPerWorkspaceAreLegal(t *testing.T) {
-	mbs := map[string]MailboxConfig{
-		"mia": {Enabled: true, WorkspaceID: "ws_my"},
-		"jim": {Enabled: true, WorkspaceID: "ws_my"},
-		"ava": {Enabled: true, WorkspaceID: "ws_other"},
+// A single agent entry that mixes legacy (scalar) and nested (object) inner
+// values is malformed and must hard-error rather than being silently
+// misclassified as legacy-flat (which would drop the nested keys' data).
+func TestMailboxesConfig_UnmarshalMixedShapeSingleEntry_Errors(t *testing.T) {
+	var m MailboxesConfig
+	err := m.UnmarshalJSON([]byte(`{
+		"mia": {
+			"enabled": true,
+			"ws_a": {"enabled": true, "username": "a@x.com"}
+		}
+	}`))
+	if err == nil {
+		t.Fatalf("mixed legacy/nested shape within one agent entry must error, got nil")
 	}
-	if len(mbs) != 3 {
-		t.Fatalf("expected 3 mailboxes, got %d", len(mbs))
+	wantSubstr := `mailboxes: agent "mia" entry is malformed (mixed legacy/nested shape)`
+	if err.Error() != wantSubstr {
+		t.Fatalf("error = %q, want %q", err.Error(), wantSubstr)
+	}
+}
+
+// A nested entry with an empty-string workspace key is dropped (with a WARN)
+// while its sibling entry survives intact — mirrors the legacy branch's
+// empty-workspace_id guard.
+func TestMailboxesConfig_UnmarshalNestedEmptyWorkspaceKey_DroppedSiblingSurvives(t *testing.T) {
+	var m MailboxesConfig
+	if err := m.UnmarshalJSON([]byte(`{
+		"mia": {
+			"": {"enabled": true, "username": "orphan@x.com"},
+			"ws_ok": {"enabled": true, "username": "ok@x.com"}
+		}
+	}`)); err != nil {
+		t.Fatalf("empty workspace key entry must not error: %v", err)
+	}
+	if _, exists := m["mia"][""]; exists {
+		t.Fatalf("empty-workspace-key entry must be dropped, got %+v", m["mia"])
+	}
+	if got, ok := m["mia"]["ws_ok"]; !ok || got.Username != "ok@x.com" {
+		t.Fatalf("sibling entry must survive intact, got %+v", m["mia"])
 	}
 }
 
