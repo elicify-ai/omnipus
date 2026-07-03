@@ -36,12 +36,12 @@ import {
   fetchWorkspaces,
   fetchWorkspace,
   fetchAgents,
-  findConfiguredMailbox,
+  fetchMailboxes,
   isApiError,
   isWorker,
   EMAIL_CHANNEL_ID,
 } from '@/lib/api'
-import type { ChannelEntry, ChannelCreateResponse } from '@/lib/api'
+import type { ChannelEntry, ChannelCreateResponse, Mailbox } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { ChannelConfigPanel } from '@/components/skills/ChannelConfigPanel'
 import { EmailMailboxPanel } from '@/components/connectors/EmailMailboxPanel'
@@ -768,6 +768,84 @@ function DeleteConfirmDialog({ channel, onClose }: DeleteConfirmDialogProps) {
   )
 }
 
+// ── Email mailbox row (multi-mailbox — one row per (agent, workspace) pair) ──
+//
+// Mirrors the visual style of the section's original single card (icon,
+// title, badges, Configure on the right) rather than ChannelInstanceRow's
+// binding-first layout — email rows lead with the owning agent's name, not a
+// workspace→agent binding string. A mailbox belongs to exactly one
+// (agent, workspace) pair, so the same agent can legitimately appear in two
+// rows (a different role/inbox per workspace) — testids key off BOTH ids to
+// avoid collisions.
+
+interface MailboxRowProps {
+  mailbox: Mailbox
+  agentNameById: Map<string, string>
+  workspaceNameById: Map<string, string>
+  onConfigure: () => void
+}
+
+function MailboxRow({ mailbox, agentNameById, workspaceNameById, onConfigure }: MailboxRowProps) {
+  // Fall back to the raw id when the name lookup misses (deleted agent,
+  // archived workspace) — never hide the row just because a name is unresolved.
+  const agentName = agentNameById.get(mailbox.agent_id) ?? mailbox.agent_id
+  // workspace_id is the other half of the pair's identity — always render it
+  // (name when resolvable, else the raw id) rather than hiding it only when
+  // the name lookup misses.
+  const workspaceName = mailbox.workspace_id
+    ? workspaceNameById.get(mailbox.workspace_id) ?? mailbox.workspace_id
+    : undefined
+  const isActive = mailbox.enabled && mailbox.configured
+  // The pair (agent_id, workspace_id) is the row's identity — an agent can
+  // legitimately appear in two rows (a different mailbox per workspace), so
+  // testids must key off both ids to avoid collisions.
+  const pairKey = `${mailbox.agent_id}-${mailbox.workspace_id ?? 'none'}`
+
+  return (
+    <div
+      data-testid={`mailbox-row-${pairKey}`}
+      className="flex items-center gap-3 p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)]"
+    >
+      <Envelope size={20} weight="duotone" className="text-[var(--color-accent)] shrink-0" />
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="font-medium text-sm text-[var(--color-secondary)]">
+            {agentName}
+          </span>
+          <Badge variant="outline" className="text-[10px] font-mono">
+            imap + smtp
+          </Badge>
+          {isActive ? (
+            <Badge variant="success" className="text-[10px]">
+              Active
+            </Badge>
+          ) : (
+            <Badge variant="muted" className="text-[10px]">
+              Not configured
+            </Badge>
+          )}
+        </div>
+        <p className="mt-0.5 text-[10px] text-[var(--color-muted)] truncate">
+          {mailbox.username || 'No address set'}
+          {workspaceName ? ` · ${workspaceName}` : ''}
+        </p>
+      </div>
+      <div className="flex items-center gap-2 shrink-0">
+        <button
+          type="button"
+          onClick={onConfigure}
+          className="flex items-center gap-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors font-medium"
+          aria-label={`Configure ${agentName} mailbox${workspaceName ? ` (${workspaceName})` : ''}`}
+          data-testid={`mailbox-configure-btn-${pairKey}`}
+        >
+          <Gear size={13} />
+          Configure
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // ── ConnectorsScreen ──────────────────────────────────────────────────────────
 
 export function ConnectorsScreen() {
@@ -775,7 +853,7 @@ export function ConnectorsScreen() {
   const queryClient = useQueryClient()
 
   const [configuringChannel, setConfiguringChannel] = useState<{ id: string; name: string; nativeAvailable?: boolean; enabled?: boolean } | null>(null)
-  const [mailboxPanelOpen, setMailboxPanelOpen] = useState(false)
+  const [mailboxPanel, setMailboxPanel] = useState<{ open: boolean; target: Mailbox | null }>({ open: false, target: null })
 
   // Create-channel Sheet state (US-10)
   const [createChannelOpen, setCreateChannelOpen] = useState(false)
@@ -797,12 +875,13 @@ export function ConnectorsScreen() {
   const channels = allChannels.filter((c) => c.id !== EMAIL_CHANNEL_ID && c.id !== WEBCHAT_ID)
   const webchatChannel = allChannels.find((c) => c.id === WEBCHAT_ID)
 
-  // Email mailbox status (M11): the mailbox is per-agent, NOT a channel — the
-  // /channels list has no email entry. GET /mailboxes lists all configured
-  // mailboxes without 404s (empty list = none), so no per-agent probing.
-  const { data: configuredMailbox } = useQuery({
+  // Email mailbox roster (M11, multi-mailbox follow-up — every (agent,
+  // workspace) pair may own one): a mailbox is per-pair, NOT a channel — the
+  // /channels list has no email entry. GET /mailboxes lists every configured
+  // mailbox without 404s (empty list = none), so no per-pair probing.
+  const { data: mailboxes = [], isLoading: mailboxesLoading, isError: mailboxesError } = useQuery({
     queryKey: ['agent-mailboxes'],
-    queryFn: findConfiguredMailbox,
+    queryFn: fetchMailboxes,
   })
 
   // "Configured" (FR-008) = has a persisted instance — the backend only sets
@@ -851,12 +930,12 @@ export function ConnectorsScreen() {
   const { data: workspaces = [], isError: workspacesError } = useQuery({
     queryKey: ['workspaces', { status: 'all' }],
     queryFn: () => fetchWorkspaces({ status: 'all' }),
-    enabled: configuredInstances.length > 0,
+    enabled: configuredInstances.length > 0 || mailboxes.length > 0,
   })
   const { data: agentsList = [], isError: agentsListError } = useQuery({
     queryKey: ['agents'],
     queryFn: fetchAgents,
-    enabled: configuredInstances.length > 0,
+    enabled: configuredInstances.length > 0 || mailboxes.length > 0,
   })
   const workspaceNameById = useMemo(() => new Map(workspaces.map((w) => [w.id, w.name])), [workspaces])
   const agentNameById = useMemo(() => new Map(agentsList.map((a) => [a.id, a.name])), [agentsList])
@@ -994,52 +1073,63 @@ export function ConnectorsScreen() {
           <ErrorState message="Could not load channels." />
         ) : (
           <>
-            {/* ── Email Mailbox Account (M11 — email is a tool, not a channel) ── */}
+            {/* ── Email Mailboxes (M11, multi-mailbox follow-up — email is a
+                tool, not a channel; every (agent, workspace) pair may own
+                its own mailbox) ── */}
             <div className="mb-8">
-              <div className="flex items-center gap-2 mb-3">
+              <div className="flex items-center justify-between gap-2 mb-3">
                 <h2 className="text-xs font-semibold text-[var(--color-secondary)] uppercase tracking-wider">
                   Email
                 </h2>
+                <button
+                  type="button"
+                  onClick={() => setMailboxPanel({ open: true, target: null })}
+                  data-testid="email-mailbox-add-btn"
+                  className="flex items-center gap-1 text-xs text-[var(--color-accent)] hover:text-[var(--color-accent)]/80 transition-colors font-medium"
+                >
+                  <Plus size={12} />
+                  Add mailbox
+                </button>
               </div>
-              <div
-                data-testid="email-mailbox-card"
-                className="flex items-center gap-3 p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)]"
-              >
-                <Envelope size={20} weight="duotone" className="text-[var(--color-accent)] shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-medium text-sm text-[var(--color-secondary)]">
-                      Email Mailbox
-                    </span>
-                    <Badge variant="outline" className="text-[10px] font-mono">
-                      imap + smtp
-                    </Badge>
-                    {configuredMailbox?.enabled ? (
-                      <Badge variant="success" className="text-[10px]">
-                        Active
-                      </Badge>
-                    ) : (
-                      <Badge variant="muted" className="text-[10px]">
-                        Not configured
-                      </Badge>
-                    )}
+              <div data-testid="email-mailbox-card" className="space-y-2">
+                {mailboxesLoading ? (
+                  <div className="h-16 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] animate-pulse" />
+                ) : mailboxesError ? (
+                  <div className="flex items-center gap-3 p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)]">
+                    <Envelope size={20} weight="duotone" className="text-[var(--color-muted)] shrink-0" />
+                    <span className="text-sm text-[var(--color-error)]">Could not load mailboxes.</span>
                   </div>
-                  <p className="mt-0.5 text-[10px] text-[var(--color-muted)]">
-                    The agent reads its inbox on heartbeat. Unhandled mail becomes Board tasks.
-                  </p>
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  <button
-                    type="button"
-                    onClick={() => setMailboxPanelOpen(true)}
-                    className="flex items-center gap-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors font-medium"
-                    aria-label="Configure email mailbox account"
-                    data-testid="email-mailbox-configure-btn"
-                  >
-                    <Gear size={13} />
-                    Configure
-                  </button>
-                </div>
+                ) : mailboxes.length === 0 ? (
+                  <div className="flex items-center gap-3 p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)]">
+                    <Envelope size={20} weight="duotone" className="text-[var(--color-accent)] shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-medium text-sm text-[var(--color-secondary)]">
+                          Email Mailbox
+                        </span>
+                        <Badge variant="outline" className="text-[10px] font-mono">
+                          imap + smtp
+                        </Badge>
+                        <Badge variant="muted" className="text-[10px]">
+                          Not configured
+                        </Badge>
+                      </div>
+                      <p className="mt-0.5 text-[10px] text-[var(--color-muted)]">
+                        Give an agent its own inbox. It reads mail on heartbeat; unhandled mail becomes Board tasks.
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  mailboxes.map((mb) => (
+                    <MailboxRow
+                      key={`${mb.agent_id}-${mb.workspace_id ?? 'none'}`}
+                      mailbox={mb}
+                      agentNameById={agentNameById}
+                      workspaceNameById={workspaceNameById}
+                      onConfigure={() => setMailboxPanel({ open: true, target: mb })}
+                    />
+                  ))
+                )}
               </div>
             </div>
 
@@ -1112,8 +1202,9 @@ export function ConnectorsScreen() {
 
         {/* Email mailbox account config slide-over */}
         <EmailMailboxPanel
-          open={mailboxPanelOpen}
-          onOpenChange={setMailboxPanelOpen}
+          open={mailboxPanel.open}
+          onOpenChange={(next) => setMailboxPanel((prev) => ({ ...prev, open: next }))}
+          mailbox={mailboxPanel.target}
         />
 
         {/* Create-channel Sheet (US-10) */}

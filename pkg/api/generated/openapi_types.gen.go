@@ -5774,7 +5774,7 @@ type LoginResponse struct {
 // LoginResponseRole RBAC role of the authenticated user.
 type LoginResponseRole string
 
-// Mailbox An agent's email mailbox account (M11). Email is a TOOL surface, not a conversational channel: a mailbox is owned by exactly one agent and surfaces in exactly one workspace (per-(agent, workspace), cap-1 in 0.1.0). The mailbox password is stored in the encrypted credential store and is NEVER returned by this endpoint — the `configured` flag reports whether a password is on file.
+// Mailbox One (agent, workspace) email mailbox account (M11). Email is a TOOL surface, not a conversational channel: a mailbox belongs to exactly one (agent, workspace) pair — an agent can hold a different mailbox in each workspace it belongs to (different roles, different inboxes), and several agents may each have mailboxes in the same workspace. The mailbox password is stored in the encrypted credential store and is NEVER returned by this endpoint — the `configured` flag reports whether a password is on file.
 type Mailbox struct {
 	// AgentId ID of the agent that owns this mailbox.
 	AgentId string `json:"agent_id"`
@@ -5800,11 +5800,11 @@ type Mailbox struct {
 	// Username The email address / login used for IMAP and SMTP authentication.
 	Username *string `json:"username,omitempty"`
 
-	// WorkspaceId ID of the workspace the mailbox surfaces in (cap-1: unique per workspace).
+	// WorkspaceId ID of the workspace the mailbox surfaces in.
 	WorkspaceId *string `json:"workspace_id,omitempty"`
 }
 
-// MailboxConfigureRequest Request body to configure an agent's email mailbox account (M11). The password, when present, is routed into the encrypted credential store and persisted only as a credential reference — it is never written to config.json. Omitting the password leaves any existing stored password unchanged; sending an empty string clears it.
+// MailboxConfigureRequest Request body to configure one (agent, workspace) mailbox account (M11). The target agent and workspace are both path parameters (PUT /agents/{id}/mailboxes/{workspaceId}) — an agent can hold a different mailbox in each workspace it belongs to. The password, when present, is routed into the encrypted credential store and persisted only as a credential reference — it is never written to config.json. Omitting the password leaves any existing stored password unchanged; sending an empty string clears it.
 type MailboxConfigureRequest struct {
 	// Enabled Whether to register the email tools for the owning agent.
 	Enabled bool `json:"enabled"`
@@ -5826,14 +5826,11 @@ type MailboxConfigureRequest struct {
 
 	// Username The email address / login used for IMAP and SMTP authentication.
 	Username string `json:"username"`
-
-	// WorkspaceId ID of the workspace the mailbox surfaces in (cap-1: unique per workspace).
-	WorkspaceId string `json:"workspace_id"`
 }
 
-// MailboxListResponse All configured email mailbox accounts (M11). Cap-1 per workspace in 0.1.0, so the list is typically empty or a single entry. Returning a list (rather than a 404-on-absent single resource) lets the SPA learn "no mailbox is configured" without probing every agent's mailbox endpoint and generating console-visible 404s.
+// MailboxListResponse All configured email mailbox accounts (M11) — one per (agent, workspace) pair. Returning a list (rather than a 404-on-absent single resource) lets the SPA learn "no mailbox is configured" without probing every pair's endpoint and generating console-visible 404s.
 type MailboxListResponse struct {
-	// Mailboxes Every configured mailbox, one entry per owning agent.
+	// Mailboxes Every configured mailbox, one entry per (agent, workspace) pair.
 	Mailboxes []struct {
 		// AgentId ID of the agent that owns this mailbox.
 		AgentId string `json:"agent_id"`
@@ -5859,7 +5856,7 @@ type MailboxListResponse struct {
 		// Username The email address / login used for IMAP and SMTP authentication.
 		Username *string `json:"username,omitempty"`
 
-		// WorkspaceId ID of the workspace the mailbox surfaces in (cap-1: unique per workspace).
+		// WorkspaceId ID of the workspace the mailbox surfaces in.
 		WorkspaceId *string `json:"workspace_id,omitempty"`
 	} `json:"mailboxes"`
 }

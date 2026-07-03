@@ -1156,7 +1156,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/agents/{id}/mailbox": {
+    "/agents/{id}/mailboxes/{workspaceId}": {
         parameters: {
             query?: never;
             header?: never;
@@ -1164,19 +1164,19 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get an agent's email mailbox account (M11)
-         * @description Returns the email mailbox account configured for the specified agent. Email is a TOOL surface (read_inbox, search_email, read_message, send_email, reply), not a conversational channel. The mailbox password is never returned; the `configured` flag reports whether a password is on file in the credential store.
+         * Get one (agent, workspace) email mailbox account (M11)
+         * @description Returns the mailbox the agent holds in the given workspace. An agent can hold a different mailbox in each workspace it belongs to (different roles, different inboxes). Email is a TOOL surface (read_inbox, search_email, read_message, send_email, reply), not a conversational channel. The mailbox password is never returned; the `configured` flag reports whether a password is on file in the credential store.
          */
         get: operations["getAgentMailbox"];
         /**
-         * Configure an agent's email mailbox account (M11)
-         * @description Configures the email mailbox account for the specified agent. The password, when present, is routed into the encrypted credential store and persisted only as a reference — it is never written to config.json. Per-(agent, workspace) cap-1 applies: an agent owns one mailbox, and at most one mailbox may be bound to a given workspace (returns 422 on violation).
+         * Configure one (agent, workspace) email mailbox account (M11)
+         * @description Configures the mailbox the agent holds in the given workspace. Every (agent, workspace) pair may have its own mailbox — an agent plays different roles in different workspaces and can have a distinct inbox in each. The password, when present, is routed into the encrypted credential store and persisted only as a reference — it is never written to config.json. Unhandled inbound mail becomes Board tasks in THIS workspace, assigned to the owning agent. The email tools resolve the active workspace from the turn context at execution time — never from a model-supplied parameter.
          */
         put: operations["setAgentMailbox"];
         post?: never;
         /**
-         * Remove an agent's email mailbox account (M11)
-         * @description Removes the agent's mailbox account from config and deletes the stored mailbox password from the credential store. The email tools are de-registered from the agent on the next reload.
+         * Remove one (agent, workspace) email mailbox account (M11)
+         * @description Removes the mailbox the agent holds in the given workspace from config and deletes its stored password from the credential store. The agent's email tools for this workspace are de-registered on the next reload; mailboxes the agent holds in OTHER workspaces are untouched.
          */
         delete: operations["deleteAgentMailbox"];
         options?: never;
@@ -1193,7 +1193,7 @@ export interface paths {
         };
         /**
          * List all configured email mailbox accounts (M11)
-         * @description Returns every configured mailbox account (cap-1 per workspace in 0.1.0, so typically zero or one). The mailbox password is never returned; each entry's `configured` flag reports whether a password is on file in the credential store. An empty list means no mailbox is configured — this endpoint never 404s, so the SPA can show mailbox status without per-agent probe requests.
+         * @description Returns every configured mailbox account (one per (agent, workspace) pair). The mailbox password is never returned; each entry's `configured` flag reports whether a password is on file in the credential store. An empty list means no mailbox is configured — this endpoint never 404s, so the SPA can show mailbox status without per-agent probe requests.
          */
         get: operations["listMailboxes"];
         put?: never;
@@ -6114,7 +6114,7 @@ export interface components {
         };
         /**
          * Mailbox
-         * @description An agent's email mailbox account (M11). Email is a TOOL surface, not a conversational channel: a mailbox is owned by exactly one agent and surfaces in exactly one workspace (per-(agent, workspace), cap-1 in 0.1.0). The mailbox password is stored in the encrypted credential store and is NEVER returned by this endpoint — the `configured` flag reports whether a password is on file.
+         * @description One (agent, workspace) email mailbox account (M11). Email is a TOOL surface, not a conversational channel: a mailbox belongs to exactly one (agent, workspace) pair — an agent can hold a different mailbox in each workspace it belongs to (different roles, different inboxes), and several agents may each have mailboxes in the same workspace. The mailbox password is stored in the encrypted credential store and is NEVER returned by this endpoint — the `configured` flag reports whether a password is on file.
          */
         Mailbox: {
             /**
@@ -6125,7 +6125,7 @@ export interface components {
             /** @description Whether the email tools (read_inbox, search_email, read_message, send_email, reply) are registered for the owning agent. */
             enabled: boolean;
             /**
-             * @description ID of the workspace the mailbox surfaces in (cap-1: unique per workspace).
+             * @description ID of the workspace the mailbox surfaces in.
              * @example ws_my_workspace
              */
             workspace_id?: string;
@@ -6159,16 +6159,11 @@ export interface components {
         };
         /**
          * MailboxConfigureRequest
-         * @description Request body to configure an agent's email mailbox account (M11). The password, when present, is routed into the encrypted credential store and persisted only as a credential reference — it is never written to config.json. Omitting the password leaves any existing stored password unchanged; sending an empty string clears it.
+         * @description Request body to configure one (agent, workspace) mailbox account (M11). The target agent and workspace are both path parameters (PUT /agents/{id}/mailboxes/{workspaceId}) — an agent can hold a different mailbox in each workspace it belongs to. The password, when present, is routed into the encrypted credential store and persisted only as a credential reference — it is never written to config.json. Omitting the password leaves any existing stored password unchanged; sending an empty string clears it.
          */
         MailboxConfigureRequest: {
             /** @description Whether to register the email tools for the owning agent. */
             enabled: boolean;
-            /**
-             * @description ID of the workspace the mailbox surfaces in (cap-1: unique per workspace).
-             * @example ws_my_workspace
-             */
-            workspace_id: string;
             /**
              * @description IMAP server hostname (implicit TLS / IMAPS).
              * @example imap.example.com
@@ -6199,10 +6194,10 @@ export interface components {
         };
         /**
          * MailboxListResponse
-         * @description All configured email mailbox accounts (M11). Cap-1 per workspace in 0.1.0, so the list is typically empty or a single entry. Returning a list (rather than a 404-on-absent single resource) lets the SPA learn "no mailbox is configured" without probing every agent's mailbox endpoint and generating console-visible 404s.
+         * @description All configured email mailbox accounts (M11) — one per (agent, workspace) pair. Returning a list (rather than a 404-on-absent single resource) lets the SPA learn "no mailbox is configured" without probing every pair's endpoint and generating console-visible 404s.
          */
         MailboxListResponse: {
-            /** @description Every configured mailbox, one entry per owning agent. */
+            /** @description Every configured mailbox, one entry per (agent, workspace) pair. */
             mailboxes: components["schemas"]["Mailbox"][];
         };
         /**
@@ -10341,12 +10336,17 @@ export interface operations {
                  * @example mia
                  */
                 id: string;
+                /**
+                 * @description Workspace ID the mailbox surfaces in.
+                 * @example ws_my_workspace
+                 */
+                workspaceId: string;
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description The agent's mailbox account. */
+            /** @description The (agent, workspace) mailbox account. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -10356,7 +10356,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["401Unauthorized"];
-            /** @description Agent not found, or no mailbox configured for the agent. */
+            /** @description Agent not found, or no mailbox configured for the agent in this workspace. */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -10378,6 +10378,11 @@ export interface operations {
                  * @example mia
                  */
                 id: string;
+                /**
+                 * @description Workspace ID the mailbox surfaces in.
+                 * @example ws_my_workspace
+                 */
+                workspaceId: string;
             };
             cookie?: never;
         };
@@ -10387,7 +10392,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The updated mailbox account. */
+            /** @description The saved (agent, workspace) mailbox account. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -10396,10 +10401,8 @@ export interface operations {
                     "application/json": components["schemas"]["Mailbox"];
                 };
             };
-            400: components["responses"]["400BadRequest"];
-            401: components["responses"]["401Unauthorized"];
-            /** @description Agent not found. */
-            404: {
+            /** @description Missing or invalid required field. */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10407,8 +10410,9 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Cap-1 violation (a mailbox already exists for the workspace). */
-            422: {
+            401: components["responses"]["401Unauthorized"];
+            /** @description Agent not found. */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10429,6 +10433,11 @@ export interface operations {
                  * @example mia
                  */
                 id: string;
+                /**
+                 * @description Workspace ID the mailbox surfaces in.
+                 * @example ws_my_workspace
+                 */
+                workspaceId: string;
             };
             cookie?: never;
         };
@@ -10444,7 +10453,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["401Unauthorized"];
-            /** @description Agent not found, or no mailbox configured. */
+            /** @description Agent not found, or no mailbox configured for the agent in this workspace. */
             404: {
                 headers: {
                     [name: string]: unknown;

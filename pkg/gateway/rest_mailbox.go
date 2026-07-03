@@ -22,55 +22,116 @@ import (
 // password does not resolve (locked store, missing secret) is skipped with a WARN
 // rather than failing the whole drain. The returned slice is empty when no
 // mailbox is configured.
+//
+// cfg.Mailboxes is agent ID → workspace ID → mailbox (pair-addressed 2026-07-03):
+// the same agent may own a different mailbox in each workspace it belongs to.
 func buildMailboxes(cfg *config.Config, store *credentials.Store) []email.Mailbox {
 	if cfg == nil || len(cfg.Mailboxes) == 0 || store == nil {
 		return nil
 	}
-	out := make([]email.Mailbox, 0, len(cfg.Mailboxes))
-	for agentID, mb := range cfg.Mailboxes {
-		if !mb.Enabled || strings.TrimSpace(mb.PasswordRef) == "" || mb.WorkspaceID == "" {
-			continue
+	var out []email.Mailbox
+	for agentID, byWorkspace := range cfg.Mailboxes {
+		for workspaceID, mb := range byWorkspace {
+			if !mb.Enabled || strings.TrimSpace(mb.PasswordRef) == "" || workspaceID == "" {
+				continue
+			}
+			password, err := store.Get(mb.PasswordRef)
+			if err != nil || password == "" {
+				slog.Warn("mailbox drain: password did not resolve — skipping mailbox",
+					"agent_id", agentID, "workspace_id", workspaceID, "password_ref", mb.PasswordRef, "error", err)
+				continue
+			}
+			client, err := email.NewClient(email.Account{
+				IMAPHost: mb.IMAPHost,
+				IMAPPort: mb.IMAPPort,
+				SMTPHost: mb.SMTPHost,
+				SMTPPort: mb.SMTPPort,
+				Username: mb.Username,
+				Password: password,
+			})
+			if err != nil {
+				slog.Warn("mailbox drain: transport construction failed — skipping mailbox",
+					"agent_id", agentID, "workspace_id", workspaceID, "error", err)
+				continue
+			}
+			out = append(out, email.Mailbox{
+				AgentID:     agentID,
+				WorkspaceID: workspaceID,
+				Transport:   client,
+			})
 		}
-		password, err := store.Get(mb.PasswordRef)
-		if err != nil || password == "" {
-			slog.Warn("mailbox drain: password did not resolve — skipping mailbox",
-				"agent_id", agentID, "password_ref", mb.PasswordRef, "error", err)
-			continue
-		}
-		client, err := email.NewClient(email.Account{
-			IMAPHost: mb.IMAPHost,
-			IMAPPort: mb.IMAPPort,
-			SMTPHost: mb.SMTPHost,
-			SMTPPort: mb.SMTPPort,
-			Username: mb.Username,
-			Password: password,
-		})
-		if err != nil {
-			slog.Warn("mailbox drain: transport construction failed — skipping mailbox",
-				"agent_id", agentID, "error", err)
-			continue
-		}
-		out = append(out, email.Mailbox{
-			AgentID:     agentID,
-			WorkspaceID: mb.WorkspaceID,
-			Transport:   client,
-		})
 	}
 	return out
 }
 
 // Mailbox account REST handlers (M11). Email is modeled as a TOOL surface, not a
-// conversational channel: a mailbox is owned by exactly one agent (the map key in
-// config.Mailboxes) and surfaces in exactly one workspace (per-(agent, workspace)
-// cap-1). The mailbox password is routed into the encrypted credential store and
-// persisted only as a reference — never inline in config.json (the SEC-23 pattern
-// reused from channel secrets).
+// conversational channel: a mailbox belongs to exactly one (agent, workspace)
+// pair — config.Mailboxes[agentID][workspaceID] — and several agents (or the
+// same agent in different workspaces) may each have their own mailbox (the
+// 0.1.0 cap-1 rule was lifted 2026-07-03, then pair-addressing landed the same
+// day so one agent can hold a distinct mailbox per workspace). The mailbox
+// password is routed into the encrypted credential store and persisted only as
+// a reference — never inline in config.json (the SEC-23 pattern reused from
+// channel secrets).
 
-// mailboxCredKey is the credential-store key for an agent's mailbox password.
-// The format is opaque to readers; the email tools resolve the secret via the
-// config password_ref, never by reconstructing this key.
-func mailboxCredKey(agentID string) string {
+// mailboxCredKey is the credential-store key for one (agent, workspace) pair's
+// mailbox password. The format is opaque to readers; the email tools resolve
+// the secret via the config password_ref, never by reconstructing this key.
+// Per-pair keying (2026-07-03) is required because pair-addressing lets one
+// agent hold a distinct mailbox in each workspace — a per-agent-only key would
+// let a second workspace's mailbox clobber the first's stored password.
+func mailboxCredKey(agentID, workspaceID string) string {
+	return "mailbox_" + agentID + "_" + workspaceID + "_password"
+}
+
+// legacyMailboxCredKey is the pre-pair-addressing (0.1.0) credential-store key
+// for an agent's single mailbox password. New writes never use it, but delete
+// still attempts to clean it up so installs migrated from the flat
+// one-mailbox-per-agent shape don't orphan the blob (a missing entry is not an
+// error).
+func legacyMailboxCredKey(agentID string) string {
 	return "mailbox_" + agentID + "_password"
+}
+
+// mailboxAgentEntryToNested normalizes raw (m["mailboxes"][agentID], decoded
+// from config.json into map[string]any) into the nested workspace-keyed shape.
+// Raw-map read-modify-write cycles (setAgentMailbox, deleteAgentMailbox) bypass
+// config.MailboxesConfig.UnmarshalJSON, which performs this same legacy-flat →
+// nested migration on read — this keeps direct config.json writers consistent
+// with it so a still-on-disk legacy entry is correctly folded into (or removed
+// from) the nested shape instead of silently surviving untouched.
+//
+// A legacy entry is detected by probing its values: the nested shape's values
+// are always mailbox objects, while a legacy flat entry's values are the
+// mailbox's own scalar fields (e.g. "enabled": true, "workspace_id": "ws1").
+// Returns a new, non-nil, mutable map; absent/malformed/empty input yields an
+// empty map.
+func mailboxAgentEntryToNested(raw any) map[string]any {
+	asMap, ok := raw.(map[string]any)
+	if !ok || len(asMap) == 0 {
+		return map[string]any{}
+	}
+	legacy := false
+	for _, v := range asMap {
+		if _, isObj := v.(map[string]any); !isObj {
+			legacy = true
+			break
+		}
+	}
+	if !legacy {
+		out := make(map[string]any, len(asMap))
+		for k, v := range asMap {
+			out[k] = v
+		}
+		return out
+	}
+	out := map[string]any{}
+	if wsID, _ := asMap["workspace_id"].(string); wsID != "" {
+		out[wsID] = asMap
+	} else {
+		slog.Warn("config: dropping legacy mailbox without workspace_id during merge (unreachable)")
+	}
+	return out
 }
 
 // agentExists reports whether an agent with the given ID is registered.
@@ -91,16 +152,23 @@ func (a *restAPI) agentExists(agentID string) bool {
 	return false
 }
 
-// getAgentMailbox handles GET /api/v1/agents/{id}/mailbox.
-func (a *restAPI) getAgentMailbox(w http.ResponseWriter, agentID string) {
+// getAgentMailbox handles GET /api/v1/agents/{id}/mailboxes/{workspaceId}.
+func (a *restAPI) getAgentMailbox(w http.ResponseWriter, agentID, workspaceID string) {
 	if !a.agentExists(agentID) {
 		jsonErr(w, http.StatusNotFound, fmt.Sprintf("agent %q not found", agentID))
 		return
 	}
 	cfg := a.agentLoop.GetConfig()
-	mb, ok := cfg.Mailboxes[agentID]
+	byWorkspace, ok := cfg.Mailboxes[agentID]
 	if !ok {
-		jsonErr(w, http.StatusNotFound, fmt.Sprintf("no mailbox configured for agent %q", agentID))
+		jsonErr(w, http.StatusNotFound,
+			fmt.Sprintf("no mailbox configured for agent %q in workspace %q", agentID, workspaceID))
+		return
+	}
+	mb, ok := byWorkspace[workspaceID]
+	if !ok {
+		jsonErr(w, http.StatusNotFound,
+			fmt.Sprintf("no mailbox configured for agent %q in workspace %q", agentID, workspaceID))
 		return
 	}
 
@@ -108,7 +176,7 @@ func (a *restAPI) getAgentMailbox(w http.ResponseWriter, agentID string) {
 	if strings.TrimSpace(mb.PasswordRef) != "" {
 		ok, err := a.credentialRefResolves(mb.PasswordRef)
 		if err != nil {
-			slog.Error("rest: mailbox credential check", "agent_id", agentID, "error", err)
+			slog.Error("rest: mailbox credential check", "agent_id", agentID, "workspace_id", workspaceID, "error", err)
 			jsonErr(w, http.StatusInternalServerError,
 				"credential store unavailable — unlock it (set OMNIPUS_MASTER_KEY) and retry")
 			return
@@ -119,8 +187,10 @@ func (a *restAPI) getAgentMailbox(w http.ResponseWriter, agentID string) {
 	jsonOK(w, mailboxToWire(agentID, mb, configured))
 }
 
-// setAgentMailbox handles PUT /api/v1/agents/{id}/mailbox.
-func (a *restAPI) setAgentMailbox(w http.ResponseWriter, r *http.Request, agentID string) {
+// setAgentMailbox handles PUT /api/v1/agents/{id}/mailboxes/{workspaceId}.
+// The workspace is addressed entirely by the path — the request body no
+// longer carries a workspace_id field (path is authoritative, 2026-07-03).
+func (a *restAPI) setAgentMailbox(w http.ResponseWriter, r *http.Request, agentID, workspaceID string) {
 	if !a.agentExists(agentID) {
 		jsonErr(w, http.StatusNotFound, fmt.Sprintf("agent %q not found", agentID))
 		return
@@ -129,10 +199,6 @@ func (a *restAPI) setAgentMailbox(w http.ResponseWriter, r *http.Request, agentI
 	var req gen.MailboxConfigureRequest
 	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
 	if !decodeAndValidate(w, r, "MailboxConfigureRequest", &req, validateEnabled) {
-		return
-	}
-	if strings.TrimSpace(req.WorkspaceId) == "" {
-		jsonErr(w, http.StatusBadRequest, "workspace_id is required")
 		return
 	}
 	if strings.TrimSpace(req.ImapHost) == "" {
@@ -148,25 +214,12 @@ func (a *restAPI) setAgentMailbox(w http.ResponseWriter, r *http.Request, agentI
 		return
 	}
 
-	// Cap-1 (per-(agent, workspace)): reject if another enabled agent already owns
-	// a mailbox in this workspace. Pre-check against the live config; the on-disk
-	// write below re-validates the merged map so a concurrent write cannot slip
-	// past this gate.
-	if req.Enabled {
-		cfg := a.agentLoop.GetConfig()
-		for otherID, other := range cfg.Mailboxes {
-			if otherID == agentID {
-				continue
-			}
-			if other.Enabled && other.WorkspaceID == req.WorkspaceId {
-				jsonErr(w, http.StatusUnprocessableEntity,
-					fmt.Sprintf("cap-1: workspace %q already has a mailbox (agent %q)", req.WorkspaceId, otherID))
-				return
-			}
-		}
-	}
+	// NOTE: the 0.1.0 cap-1-per-workspace rule was removed 2026-07-03
+	// (operator-approved): every agent may own a mailbox, several per workspace.
+	// Pair-addressing (same day) further lifted "one mailbox per agent" — an
+	// agent may hold a distinct mailbox in each workspace it belongs to.
 
-	refName := mailboxCredKey(agentID)
+	refName := mailboxCredKey(agentID, workspaceID)
 	passwordProvided := req.Password != nil
 	clearPassword := passwordProvided && strings.TrimSpace(*req.Password) == ""
 
@@ -174,7 +227,7 @@ func (a *restAPI) setAgentMailbox(w http.ResponseWriter, r *http.Request, agentI
 	// stored mailbox can authenticate the moment its ref is persisted.
 	if passwordProvided && !clearPassword {
 		if _, err := a.storeCredential(refName, *req.Password); err != nil {
-			slog.Error("rest: store mailbox credential", "agent_id", agentID, "error", err)
+			slog.Error("rest: store mailbox credential", "agent_id", agentID, "workspace_id", workspaceID, "error", err)
 			jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not store mailbox password: %v", err))
 			return
 		}
@@ -187,13 +240,19 @@ func (a *restAPI) setAgentMailbox(w http.ResponseWriter, r *http.Request, agentI
 			mailboxes = map[string]any{}
 			m["mailboxes"] = mailboxes
 		}
-		existing, _ := mailboxes[agentID].(map[string]any)
+
+		// Normalize the agent's entry into the nested workspace-keyed shape,
+		// folding in (or discarding, if unaddressable) any still-on-disk
+		// legacy flat entry from a pre-pair-addressing install.
+		byWorkspace := mailboxAgentEntryToNested(mailboxes[agentID])
+
+		existing, _ := byWorkspace[workspaceID].(map[string]any)
 		if existing == nil {
 			existing = map[string]any{}
 		}
 
 		existing["enabled"] = req.Enabled
-		existing["workspace_id"] = req.WorkspaceId
+		existing["workspace_id"] = workspaceID
 		existing["imap_host"] = req.ImapHost
 		existing["smtp_host"] = req.SmtpHost
 		existing["username"] = req.Username
@@ -217,20 +276,23 @@ func (a *restAPI) setAgentMailbox(w http.ResponseWriter, r *http.Request, agentI
 		// Never persist a plaintext password key.
 		delete(existing, "password")
 
-		mailboxes[agentID] = existing
+		byWorkspace[workspaceID] = existing
+		mailboxes[agentID] = byWorkspace
 
-		// Re-validate cap-1 over the merged on-disk map (concurrent-write guard).
-		if err := validateMailboxesMapCap1(mailboxes); err != nil {
-			return err
+		// Tool-policy grant: enabling a mailbox is the operator's explicit
+		// opt-in to the email tools for this agent (the wire contract's
+		// `enabled` literally means "register the email tools"). Agents with a
+		// deny-by-default builtin allowlist that predates the mailbox (only the
+		// Assistant seed carries the five email allows) would otherwise get the
+		// tools registered but policy-hidden — a silently dead mailbox. Fill in
+		// ONLY missing entries: an explicit operator-set allow/ask/deny is
+		// intent and stays untouched.
+		if req.Enabled {
+			grantEmailToolAllows(m, agentID)
 		}
 		return nil
 	}); err != nil {
-		if errors.Is(err, config.ErrMailboxesCap1Violated) {
-			slog.Warn("rest: configure mailbox rejected by cap-1", "agent_id", agentID, "error", err)
-			jsonErr(w, http.StatusUnprocessableEntity, err.Error())
-			return
-		}
-		slog.Error("rest: configure mailbox", "agent_id", agentID, "error", err)
+		slog.Error("rest: configure mailbox", "agent_id", agentID, "workspace_id", workspaceID, "error", err)
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
 		return
 	}
@@ -240,7 +302,7 @@ func (a *restAPI) setAgentMailbox(w http.ResponseWriter, r *http.Request, agentI
 	// the normal no-op path in unit tests without the full reload pipeline.
 	if err := a.agentLoop.TriggerReload(); err != nil {
 		if !errors.Is(err, agent.ErrReloadNotConfigured) {
-			slog.Error("rest: mailbox configure reload failed", "agent_id", agentID, "error", err)
+			slog.Error("rest: mailbox configure reload failed", "agent_id", agentID, "workspace_id", workspaceID, "error", err)
 			jsonErr(w, http.StatusServiceUnavailable,
 				"config saved but in-memory reload failed; restart the gateway or retry")
 			return
@@ -257,7 +319,7 @@ func (a *restAPI) setAgentMailbox(w http.ResponseWriter, r *http.Request, agentI
 
 	out := config.MailboxConfig{
 		Enabled:     req.Enabled,
-		WorkspaceID: req.WorkspaceId,
+		WorkspaceID: workspaceID,
 		IMAPHost:    req.ImapHost,
 		SMTPHost:    req.SmtpHost,
 		Username:    req.Username,
@@ -272,15 +334,24 @@ func (a *restAPI) setAgentMailbox(w http.ResponseWriter, r *http.Request, agentI
 	jsonOK(w, mailboxToWire(agentID, out, configured))
 }
 
-// deleteAgentMailbox handles DELETE /api/v1/agents/{id}/mailbox.
-func (a *restAPI) deleteAgentMailbox(w http.ResponseWriter, agentID string) {
+// deleteAgentMailbox handles DELETE /api/v1/agents/{id}/mailboxes/{workspaceId}.
+// Only the addressed (agent, workspace) pair is removed — mailboxes the agent
+// holds in OTHER workspaces are untouched.
+func (a *restAPI) deleteAgentMailbox(w http.ResponseWriter, agentID, workspaceID string) {
 	if !a.agentExists(agentID) {
 		jsonErr(w, http.StatusNotFound, fmt.Sprintf("agent %q not found", agentID))
 		return
 	}
 	cfg := a.agentLoop.GetConfig()
-	if _, ok := cfg.Mailboxes[agentID]; !ok {
-		jsonErr(w, http.StatusNotFound, fmt.Sprintf("no mailbox configured for agent %q", agentID))
+	byWorkspace, ok := cfg.Mailboxes[agentID]
+	if !ok {
+		jsonErr(w, http.StatusNotFound,
+			fmt.Sprintf("no mailbox configured for agent %q in workspace %q", agentID, workspaceID))
+		return
+	}
+	if _, ok := byWorkspace[workspaceID]; !ok {
+		jsonErr(w, http.StatusNotFound,
+			fmt.Sprintf("no mailbox configured for agent %q in workspace %q", agentID, workspaceID))
 		return
 	}
 
@@ -289,24 +360,35 @@ func (a *restAPI) deleteAgentMailbox(w http.ResponseWriter, agentID string) {
 		if mailboxes == nil {
 			return nil
 		}
-		delete(mailboxes, agentID)
+		normalized := mailboxAgentEntryToNested(mailboxes[agentID])
+		delete(normalized, workspaceID)
+		if len(normalized) == 0 {
+			delete(mailboxes, agentID)
+		} else {
+			mailboxes[agentID] = normalized
+		}
 		return nil
 	}); err != nil {
-		slog.Error("rest: delete mailbox", "agent_id", agentID, "error", err)
+		slog.Error("rest: delete mailbox", "agent_id", agentID, "workspace_id", workspaceID, "error", err)
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
 		return
 	}
 
 	// Config is durable now — delete the stored password (a missing entry is not
 	// an error). Log on failure: the ref is already gone, only an orphaned blob
-	// could remain.
-	if err := a.removeStoredCredential(mailboxCredKey(agentID)); err != nil {
-		slog.Error("rest: delete mailbox credential", "agent_id", agentID, "error", err)
+	// could remain. Delete BOTH the per-pair key (the only one new writes ever
+	// use) and the legacy per-agent key, so installs migrated from the
+	// pre-pair-addressing flat shape don't orphan their blob either.
+	if err := a.removeStoredCredential(mailboxCredKey(agentID, workspaceID)); err != nil {
+		slog.Error("rest: delete mailbox credential", "agent_id", agentID, "workspace_id", workspaceID, "error", err)
+	}
+	if err := a.removeStoredCredential(legacyMailboxCredKey(agentID)); err != nil {
+		slog.Error("rest: delete legacy mailbox credential", "agent_id", agentID, "error", err)
 	}
 
 	if err := a.agentLoop.TriggerReload(); err != nil {
 		if !errors.Is(err, agent.ErrReloadNotConfigured) {
-			slog.Error("rest: mailbox delete reload failed", "agent_id", agentID, "error", err)
+			slog.Error("rest: mailbox delete reload failed", "agent_id", agentID, "workspace_id", workspaceID, "error", err)
 		}
 	}
 
@@ -314,11 +396,12 @@ func (a *restAPI) deleteAgentMailbox(w http.ResponseWriter, agentID string) {
 }
 
 // listMailboxes handles GET /api/v1/mailboxes (M11). Returns every configured
-// mailbox (cap-1 per workspace in 0.1.0, so typically zero or one). An empty
-// list means "no mailbox configured" — unlike the per-agent GET, this endpoint
-// never 404s, so the SPA can render mailbox status without probing each
-// agent's mailbox endpoint (each probe 404 lands in the browser console and
-// trips the e2e zero-console-errors gate).
+// mailbox — one entry per (agent, workspace) pair; an agent may appear more
+// than once if it holds a mailbox in several workspaces. An empty list means
+// "no mailbox configured" — unlike the per-pair GET, this endpoint never
+// 404s, so the SPA can render mailbox status without probing each agent's
+// mailbox endpoint (each probe 404 lands in the browser console and trips the
+// e2e zero-console-errors gate).
 func (a *restAPI) listMailboxes(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -326,28 +409,38 @@ func (a *restAPI) listMailboxes(w http.ResponseWriter, r *http.Request) {
 	}
 	cfg := a.agentLoop.GetConfig()
 
-	// Deterministic order: Go map iteration is randomized.
+	// Deterministic order: Go map iteration is randomized. Sort the outer
+	// (agent) keys, then the inner (workspace) keys per agent.
 	agentIDs := make([]string, 0, len(cfg.Mailboxes))
 	for agentID := range cfg.Mailboxes {
 		agentIDs = append(agentIDs, agentID)
 	}
 	sort.Strings(agentIDs)
 
-	items := make([]gen.Mailbox, 0, len(agentIDs))
+	items := make([]gen.Mailbox, 0, len(cfg.Mailboxes))
 	for _, agentID := range agentIDs {
-		mb := cfg.Mailboxes[agentID]
-		configured := false
-		if strings.TrimSpace(mb.PasswordRef) != "" {
-			ok, err := a.credentialRefResolves(mb.PasswordRef)
-			if err != nil {
-				slog.Error("rest: mailbox credential check", "agent_id", agentID, "error", err)
-				jsonErr(w, http.StatusInternalServerError,
-					"credential store unavailable — unlock it (set OMNIPUS_MASTER_KEY) and retry")
-				return
-			}
-			configured = ok
+		byWorkspace := cfg.Mailboxes[agentID]
+		workspaceIDs := make([]string, 0, len(byWorkspace))
+		for wsID := range byWorkspace {
+			workspaceIDs = append(workspaceIDs, wsID)
 		}
-		items = append(items, mailboxToWire(agentID, mb, configured))
+		sort.Strings(workspaceIDs)
+
+		for _, wsID := range workspaceIDs {
+			mb := byWorkspace[wsID]
+			configured := false
+			if strings.TrimSpace(mb.PasswordRef) != "" {
+				ok, err := a.credentialRefResolves(mb.PasswordRef)
+				if err != nil {
+					slog.Error("rest: mailbox credential check", "agent_id", agentID, "workspace_id", wsID, "error", err)
+					jsonErr(w, http.StatusInternalServerError,
+						"credential store unavailable — unlock it (set OMNIPUS_MASTER_KEY) and retry")
+					return
+				}
+				configured = ok
+			}
+			items = append(items, mailboxToWire(agentID, mb, configured))
+		}
 	}
 
 	// Round-trip []gen.Mailbox into the generated list type (whose element is an
@@ -364,6 +457,54 @@ func (a *restAPI) listMailboxes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonOK(w, out)
+}
+
+// emailToolNames are the five M11 email tools gated by mailbox ownership.
+var emailToolNames = []string{"read_inbox", "search_email", "read_message", "send_email", "reply"}
+
+// grantEmailToolAllows fills in missing "allow" entries for the email tools in
+// the agent's builtin tool policy, but ONLY when that policy is
+// deny-by-default (under default-allow a missing entry already permits the
+// tool) and ONLY for names with no existing entry (an explicit operator
+// allow/ask/deny is intent and is never overridden). Operates on the raw
+// config map inside a safeUpdateConfigJSON write.
+func grantEmailToolAllows(m map[string]any, agentID string) {
+	agents, _ := m["agents"].(map[string]any)
+	list, _ := agents["list"].([]any)
+	for _, entry := range list {
+		ag, _ := entry.(map[string]any)
+		if ag == nil || ag["id"] != agentID {
+			continue
+		}
+		toolsCfg, _ := ag["tools"].(map[string]any)
+		if toolsCfg == nil {
+			return // no per-agent tool config → defaults apply (allow)
+		}
+		builtin, _ := toolsCfg["builtin"].(map[string]any)
+		if builtin == nil {
+			return
+		}
+		if dp, _ := builtin["default_policy"].(string); dp != "deny" {
+			return // default-allow: missing entries already permit the tools
+		}
+		policies, _ := builtin["policies"].(map[string]any)
+		if policies == nil {
+			policies = map[string]any{}
+			builtin["policies"] = policies
+		}
+		granted := make([]string, 0, len(emailToolNames))
+		for _, name := range emailToolNames {
+			if _, exists := policies[name]; !exists {
+				policies[name] = "allow"
+				granted = append(granted, name)
+			}
+		}
+		if len(granted) > 0 {
+			slog.Info("mailbox: granted email tool allows (deny-default agent, mailbox enabled)",
+				"agent_id", agentID, "tools", strings.Join(granted, ","))
+		}
+		return
+	}
 }
 
 // mailboxToWire converts a stored MailboxConfig to the Mailbox wire type. The
@@ -399,29 +540,4 @@ func mailboxToWire(agentID string, mb config.MailboxConfig, configured bool) gen
 		out.Username = &v
 	}
 	return out
-}
-
-// validateMailboxesMapCap1 enforces cap-1 over a raw config.json mailboxes map
-// (the shape inside safeUpdateConfigJSON). It mirrors config.ValidateMailboxesCap1
-// but operates on map[string]any so it can run inside the config mutation closure
-// before the write commits.
-func validateMailboxesMapCap1(mailboxes map[string]any) error {
-	seen := make(map[string]string, len(mailboxes))
-	for agentID, raw := range mailboxes {
-		mb, ok := raw.(map[string]any)
-		if !ok {
-			continue
-		}
-		enabled, _ := mb["enabled"].(bool)
-		ws, _ := mb["workspace_id"].(string)
-		if !enabled || ws == "" {
-			continue
-		}
-		if other, dup := seen[ws]; dup {
-			return fmt.Errorf("%w: workspace %q is already used by agent %q (rejecting agent %q)",
-				config.ErrMailboxesCap1Violated, ws, other, agentID)
-		}
-		seen[ws] = agentID
-	}
-	return nil
 }

@@ -1,10 +1,9 @@
 title: MailboxListResponse
 description: >
-  All configured email mailbox accounts (M11). Cap-1 per workspace in 0.1.0,
-  so the list is typically empty or a single entry. Returning a list (rather
-  than a 404-on-absent single resource) lets the SPA learn "no mailbox is
-  configured" without probing every agent's mailbox endpoint and generating
-  console-visible 404s.
+  All configured email mailbox accounts (M11) — one per (agent, workspace)
+  pair. Returning a list (rather than a 404-on-absent single resource) lets
+  the SPA learn "no mailbox is configured" without probing every pair's
+  endpoint and generating console-visible 404s.
 type: object
 required:
 - mailboxes
@@ -12,6 +11,6 @@ additionalProperties: false
 properties:
   mailboxes:
     type: array
-    description: Every configured mailbox, one entry per owning agent.
+    description: Every configured mailbox, one entry per (agent, workspace) pair.
     items:
       $ref: ./Mailbox.yaml

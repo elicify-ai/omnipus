@@ -126,12 +126,15 @@ type Config struct {
 	Schedules SchedulesConfig                  `json:"schedules,omitempty" yaml:"-"`
 	Devices   DevicesConfig                    `json:"devices"             yaml:"-"`
 	Voice     VoiceConfig                      `json:"voice"               yaml:"-"`
-	// Mailboxes holds per-agent email mailbox accounts (M11). Keyed by agent ID;
-	// email is a TOOL surface (not a conversational channel), so a mailbox is
-	// owned by exactly one agent and surfaces in exactly one workspace
-	// (per-(agent, workspace), cap-1 in 0.1.0). The mailbox password is stored in
-	// the encrypted credential store via PasswordRef — never inline here.
-	Mailboxes map[string]MailboxConfig `json:"mailboxes,omitempty" yaml:"-"`
+	// Mailboxes holds email mailbox accounts (M11), keyed agent ID → workspace
+	// ID → mailbox: every (agent, workspace) pair may hold its own mailbox — an
+	// agent plays different roles in different workspaces and can have a
+	// distinct inbox in each. Email is a TOOL surface (not a conversational
+	// channel); the tools resolve the active workspace from the turn context at
+	// execution time. The password is stored in the encrypted credential store
+	// via PasswordRef — never inline here. MailboxesConfig.UnmarshalJSON
+	// migrates the legacy flat agent-keyed shape on load.
+	Mailboxes MailboxesConfig `json:"mailboxes,omitempty" yaml:"-"`
 	// BuildInfo contains build-time version information
 	BuildInfo BuildInfo `json:"build_info,omitempty" yaml:"-"`
 
@@ -2359,21 +2362,21 @@ type EmailConfig struct {
 	PasswordRef string `json:"password_ref,omitempty"`
 }
 
-// MailboxConfig is the per-agent email mailbox account (M11). Email is modeled as
-// a TOOL surface, not a conversational channel: an agent owns exactly one mailbox
-// (the connection, with its IMAP/SMTP credentials) and that mailbox surfaces in
-// exactly one workspace (per-(agent, workspace), cap-1 in 0.1.0). The password is
+// MailboxConfig is one (agent, workspace) email mailbox account (M11). Email is
+// modeled as a TOOL surface, not a conversational channel: every (agent,
+// workspace) pair may hold its own mailbox — an agent plays different roles in
+// different workspaces and can have a distinct inbox in each. The password is
 // stored in the encrypted credential store and referenced here by PasswordRef
 // only — the secret is never written inline to config.json (SEC-23 pattern).
 //
-// The map key in Config.Mailboxes is the owning agent's ID, which structurally
-// enforces "one mailbox per agent". WorkspaceID binds the mailbox to its
-// surfacing workspace, and ValidateMailboxesCap1 enforces "one mailbox per
-// workspace" so an agent cannot accumulate a grid of mailboxes across workspaces.
+// Addressing lives in the Config.Mailboxes map keys (agent ID → workspace ID);
+// WorkspaceID mirrors the inner key for convenience and is normalized to match
+// it on load. Each mailbox's unhandled mail becomes Board tasks in ITS
+// workspace assigned to its owning agent, so multiple inboxes stay unambiguous.
 type MailboxConfig struct {
 	// Enabled gates whether the email tools are registered for the owning agent.
 	Enabled bool `json:"enabled"`
-	// WorkspaceID is the workspace the mailbox surfaces in (cap-1: unique).
+	// WorkspaceID is the workspace the mailbox surfaces in.
 	WorkspaceID string `json:"workspace_id"`
 	IMAPHost    string `json:"imap_host,omitempty"`
 	IMAPPort    int    `json:"imap_port,omitempty"`
@@ -2386,30 +2389,83 @@ type MailboxConfig struct {
 	PasswordRef string `json:"password_ref,omitempty"`
 }
 
-// ErrMailboxesCap1Violated is the sentinel wrapped by ValidateMailboxesCap1 when
-// more than one mailbox is bound to the same workspace (M11 per-(agent,workspace)
-// cap-1). The map key already guarantees one mailbox per agent; this guards the
-// orthogonal "one mailbox per workspace" half of the invariant.
-var ErrMailboxesCap1Violated = errors.New("mailboxes: at most one mailbox per workspace (cap-1) in 0.1.0")
+// MailboxesConfig maps agent ID → workspace ID → mailbox. Every (agent,
+// workspace) pair may hold its own mailbox (the 0.1.0 "one mailbox per agent,
+// cap-1 per workspace" model was lifted 2026-07-03, operator-approved).
+type MailboxesConfig map[string]map[string]MailboxConfig
 
-// ValidateMailboxesCap1 enforces the per-(agent, workspace) cap-1 rule (M11):
-// the Config.Mailboxes map key already pins one mailbox per agent, so this checks
-// that no two enabled mailboxes share a WorkspaceID. Disabled mailboxes are
-// ignored (they register no tools). Returns ErrMailboxesCap1Violated on a
-// collision so callers can surface a clean 422.
-func ValidateMailboxesCap1(mailboxes map[string]MailboxConfig) error {
-	seen := make(map[string]string, len(mailboxes)) // workspaceID → owning agentID
-	for agentID, mb := range mailboxes {
-		if !mb.Enabled || mb.WorkspaceID == "" {
+// UnmarshalJSON accepts BOTH the current nested shape
+// {"<agent>": {"<workspace>": {…}}} and the legacy 0.1.0 flat shape
+// {"<agent>": {"enabled": …, "workspace_id": "…", …}}, lifting legacy entries
+// under their embedded workspace_id. A legacy entry without a workspace_id is
+// dropped with a WARN — it was unreachable anyway (the drainer and tool
+// registration both require a workspace binding).
+func (m *MailboxesConfig) UnmarshalJSON(data []byte) error {
+	var nested map[string]map[string]json.RawMessage
+	if err := json.Unmarshal(data, &nested); err != nil {
+		return fmt.Errorf("mailboxes: %w", err)
+	}
+	out := make(MailboxesConfig, len(nested))
+	for agentID, inner := range nested {
+		// Legacy detection: the flat shape's inner keys are FIELDS of
+		// MailboxConfig ("enabled" is required-in-practice and always present in
+		// persisted legacy entries), whose values are scalars — a nested entry's
+		// inner values are objects. Probe the raw values: if any inner value is
+		// not a JSON object, this agent entry is legacy-flat.
+		legacy := false
+		for _, raw := range inner {
+			trimmed := bytesTrimLeftSpace(raw)
+			if len(trimmed) == 0 || trimmed[0] != '{' {
+				legacy = true
+				break
+			}
+		}
+		if legacy {
+			// Re-decode the whole inner object as ONE legacy MailboxConfig.
+			rawEntry, err := json.Marshal(inner)
+			if err != nil {
+				return fmt.Errorf("mailboxes: agent %q: %w", agentID, err)
+			}
+			var mb MailboxConfig
+			if err := json.Unmarshal(rawEntry, &mb); err != nil {
+				return fmt.Errorf("mailboxes: legacy entry for agent %q: %w", agentID, err)
+			}
+			if mb.WorkspaceID == "" {
+				slog.Warn("config: dropping legacy mailbox without workspace_id (unreachable)",
+					"agent_id", agentID)
+				continue
+			}
+			out[agentID] = map[string]MailboxConfig{mb.WorkspaceID: mb}
 			continue
 		}
-		if other, dup := seen[mb.WorkspaceID]; dup {
-			return fmt.Errorf("%w: workspace %q is already used by agent %q (rejecting agent %q)",
-				ErrMailboxesCap1Violated, mb.WorkspaceID, other, agentID)
+		byWorkspace := make(map[string]MailboxConfig, len(inner))
+		for wsID, raw := range inner {
+			var mb MailboxConfig
+			if err := json.Unmarshal(raw, &mb); err != nil {
+				return fmt.Errorf("mailboxes: agent %q workspace %q: %w", agentID, wsID, err)
+			}
+			// The inner map key is authoritative; keep the mirror field in sync.
+			mb.WorkspaceID = wsID
+			byWorkspace[wsID] = mb
 		}
-		seen[mb.WorkspaceID] = agentID
+		out[agentID] = byWorkspace
 	}
+	*m = out
 	return nil
+}
+
+// bytesTrimLeftSpace returns raw without leading JSON whitespace.
+func bytesTrimLeftSpace(raw []byte) []byte {
+	i := 0
+	for i < len(raw) {
+		switch raw[i] {
+		case ' ', '\t', '\n', '\r':
+			i++
+		default:
+			return raw[i:]
+		}
+	}
+	return raw[i:]
 }
 
 // SchedulesConfig holds global guardrail settings for scheduled agent runs

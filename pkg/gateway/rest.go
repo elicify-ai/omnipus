@@ -1104,15 +1104,32 @@ func (a *restAPI) HandleAgents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// GET/PUT/DELETE /api/v1/agents/{id}/mailbox — per-agent email mailbox account (M11)
-	if agentID != "" && subPath == "mailbox" {
+	// GET/PUT/DELETE /api/v1/agents/{id}/mailboxes/{workspaceId} — one
+	// (agent, workspace) email mailbox account (M11, pair-addressed
+	// 2026-07-03: the same agent may hold a different mailbox in each
+	// workspace it belongs to). Match both the bare "mailboxes" prefix (so a
+	// missing workspace segment gets a proper 400 instead of silently
+	// falling through to the generic agent-CRUD switch below) and
+	// "mailboxes/<workspaceId>".
+	if agentID != "" && (subPath == "mailboxes" || strings.HasPrefix(subPath, "mailboxes/")) {
+		mbParts := strings.SplitN(subPath, "/", 2)
+		if len(mbParts) != 2 || mbParts[1] == "" || strings.Contains(mbParts[1], "/") {
+			jsonErr(w, http.StatusBadRequest,
+				"mailboxes path requires exactly one workspace ID segment: /agents/{id}/mailboxes/{workspaceId}")
+			return
+		}
+		workspaceID := mbParts[1]
+		if err := validateEntityID(workspaceID); err != nil {
+			jsonErr(w, http.StatusBadRequest, "invalid workspace ID")
+			return
+		}
 		switch r.Method {
 		case http.MethodGet:
-			a.getAgentMailbox(w, agentID)
+			a.getAgentMailbox(w, agentID, workspaceID)
 		case http.MethodPut:
-			a.setAgentMailbox(w, r, agentID)
+			a.setAgentMailbox(w, r, agentID, workspaceID)
 		case http.MethodDelete:
-			a.deleteAgentMailbox(w, agentID)
+			a.deleteAgentMailbox(w, agentID, workspaceID)
 		default:
 			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		}
