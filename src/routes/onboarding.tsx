@@ -552,7 +552,7 @@ function OnboardingWizard() {
           password: adminPassword,
         },
       })
-      useAuthStore.getState().setToken(resp.token, resp.role, resp.username)
+      useAuthStore.getState().setToken(resp.token, resp.username)
       setCompleted(true)
     } catch (err) {
       // Surface the failure both inline (so the user stays on step 3 and can

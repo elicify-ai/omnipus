@@ -16,7 +16,6 @@ import { Package, Warning } from '@phosphor-icons/react'
 import { fetchSkillTrust, updateSkillTrust, isApiError } from '@/lib/api'
 import type { SkillTrustLevel } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
-import { useAuthStore } from '@/store/auth'
 import { SaveStatus, useSaveStatus } from './SaveStatus'
 import { PENDING_RESTART_QUERY_KEY } from '@/store/restart'
 
@@ -58,8 +57,6 @@ function Skeleton() {
 export function SkillTrustSection(): React.ReactElement {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
-  const role = useAuthStore((s) => s.role)
-  const isAdmin = role === 'admin'
 
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['skill-trust'],
@@ -135,7 +132,6 @@ export function SkillTrustSection(): React.ReactElement {
                 type="button"
                 role="radio"
                 aria-checked={isActive}
-                disabled={!isAdmin}
                 onClick={() => {
                   if (selected !== lvl.value) handleChange(lvl.value)
                 }}

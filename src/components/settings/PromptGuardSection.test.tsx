@@ -15,15 +15,8 @@ vi.mock('@/store/ui', () => ({
   useUiStore: vi.fn(() => ({ addToast: vi.fn() })),
 }))
 
-vi.mock('@/store/auth', () => ({
-  useAuthStore: vi.fn((selector: (s: { role?: string; user?: { username: string } }) => unknown) =>
-    selector({ role: 'admin', user: { username: 'testadmin' } }),
-  ),
-}))
-
 import { fetchPromptGuardLevel, updatePromptGuardLevel } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
-import { useAuthStore } from '@/store/auth'
 import { PromptGuardSection } from './PromptGuardSection'
 
 function makeClient() {
@@ -45,10 +38,6 @@ const mockAddToast = vi.fn()
 beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(useUiStore).mockReturnValue({ addToast: mockAddToast } as never)
-  vi.mocked(useAuthStore).mockImplementation(
-    ((selector: (s: { role?: string; user?: { username: string } }) => unknown) =>
-      selector({ role: 'admin', user: { username: 'testadmin' } })) as never,
-  )
 })
 
 // =====================================================================
@@ -183,24 +172,5 @@ describe('PromptGuardSection — autosave', () => {
         expect.objectContaining({ variant: 'error' })
       )
     })
-  })
-})
-
-// =====================================================================
-// Non-admin: no Save button
-// =====================================================================
-
-describe('PromptGuardSection — non-admin', () => {
-  it('does not render a Save button for non-admin', async () => {
-    vi.mocked(useAuthStore).mockImplementation(
-      ((selector: (s: { role?: string; user?: { username: string } }) => unknown) =>
-        selector({ role: 'user', user: { username: 'testuser' } })) as never,
-    )
-    vi.mocked(fetchPromptGuardLevel).mockResolvedValue({ level: 'medium', requires_restart: false })
-
-    renderSection()
-
-    await waitFor(() => screen.getAllByRole('radio'))
-    expect(screen.queryByRole('button', { name: /save/i })).not.toBeInTheDocument()
   })
 })

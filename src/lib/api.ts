@@ -64,7 +64,6 @@ import {
   DevicesResponse as DevicesResponseSchema,
   BackupEntry as BackupEntrySchema,
   StorageStats as StorageStatsSchema,
-  MeInfo as MeInfoSchema,
   // Newly wired schemas:
   Provider as ProviderSchema,
   CliDetect as CliDetectSchema,
@@ -295,7 +294,6 @@ import type {
   DevicesResponse,
   BackupEntry,
   StorageStats,
-  MeInfo,
   // Newly promoted from inline openapi.yaml schemas:
   AuditLogUpdateResponse,
   SkillTrustUpdateRequest,
@@ -443,7 +441,6 @@ export type {
   DevicesResponse,
   BackupEntry,
   StorageStats,
-  MeInfo,
   // Promoted from inline openapi.yaml schemas:
   AuditLogUpdateResponse,
   SkillTrustUpdateRequest,
@@ -2055,13 +2052,6 @@ export async function login(username: string, password: string): Promise<LoginRe
   }, LoginResponseSchema)
 }
 
-export async function registerAdmin(username: string, password: string): Promise<LoginResponse> {
-  return request<LoginResponse>('/auth/register-admin', {
-    method: 'POST',
-    body: JSON.stringify({ username, password }),
-  }, LoginResponseSchema)
-}
-
 export async function completeOnboardingTransaction(req: OnboardingCompleteRequest): Promise<LoginResponse> {
   return request<LoginResponse>('/onboarding/complete', {
     method: 'POST',
@@ -2320,17 +2310,6 @@ export function updateUserContext(content: string): Promise<void> {
     method: 'PUT',
     body: JSON.stringify({ content }),
   })
-}
-
-// ── RBAC / Me ─────────────────────────────────────────────────────────────────
-
-export type UserRole = 'admin' | 'user'
-
-// MeInfo — re-exported from generated openapi-types (contract-first #8).
-// See contracts/components/schemas/MeInfo.yaml.
-
-export async function fetchMe(): Promise<MeInfo> {
-  return request<MeInfo>('/me', undefined, MeInfoSchema)
 }
 
 // ── File Upload ───────────────────────────────────────────────────────────────
