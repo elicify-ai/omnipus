@@ -6748,7 +6748,7 @@ type ScheduleSessionMode string
 // ScheduleTriggerKind defines model for Schedule.Trigger.Kind.
 type ScheduleTriggerKind string
 
-// ScheduleCreate Request body to create a schedule (#264). The owner must be an agent the caller is permitted to use (AuthorizeAgentAccess). Omitted optional fields take their documented defaults.
+// ScheduleCreate Request body to create a schedule (#264). owner_agent_id must reference an existing, non-worker-restricted agent (single-user model — no per-caller ownership check). Omitted optional fields take their documented defaults.
 type ScheduleCreate struct {
 	Channel *string `json:"channel,omitempty"`
 	ChatId  *string `json:"chat_id,omitempty"`
