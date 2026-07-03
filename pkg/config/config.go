@@ -3434,6 +3434,52 @@ func loadConfigInternal(path string, store CredentialStore) (*Config, error) {
 	// config without a schedules block still gets 8 / 300.
 	cfg.Schedules.ApplyDefaults()
 
+	// Single-user model: Omnipus is now a single-user, self-hosted instance —
+	// there is no meaningful admin-vs-normal-user distinction. The RBAC
+	// scaffolding (UserRole, RequireAdmin, the Users screen, ownership model)
+	// is retained, but every authenticated user is always treated as having
+	// full admin authority. Normalize any non-admin role found in
+	// Gateway.Users HERE (load-time) — always, regardless of config version —
+	// so runtime behavior is correct even if the on-disk self-heal below
+	// can't run or fails.
+	rolesNormalized := normalizeAdminOnlyRoles(cfg)
+
+	// Self-heal config.json in the SAME load pass so the on-disk file can
+	// never durably disagree with runtime behavior — a load-only fix would
+	// let config.json silently keep saying "role":"user" forever while every
+	// request is actually treated as admin, which is a real config/audit-
+	// trail hazard on a network-exposed gateway.
+	//
+	// Only for CurrentVersion configs: a v0 config already gets its fully
+	// migrated (and by now already-normalized, since normalizeAdminOnlyRoles
+	// above mutated the same *cfg the v0 path's deferred SaveConfig captures)
+	// state written by the existing v0-migration SaveConfig call further up
+	// in this function — a second write here would be redundant.
+	//
+	// selfHealUserRolesOnDisk patches ONLY the gateway.users[].role fields in
+	// the raw JSON (mirroring migrateAgentOwnership's pattern) rather than
+	// re-marshaling the full *Config via SaveConfig — SaveConfig's typed-
+	// struct round-trip silently drops any field carrying an explicit zero
+	// value under an `omitempty` JSON tag (e.g. a literal `"token_hash":""`
+	// disappears from the file entirely), which corrupts on-disk byte-level
+	// fidelity even though the Go type system treats "missing key" and
+	// "explicit zero value" as equivalent on the next load.
+	//
+	// If the write-back fails (read-only filesystem, permissions, or missing
+	// gateway.users section), log a warning but do NOT fail the load — the
+	// in-memory normalization above already makes runtime behavior correct
+	// regardless.
+	if rolesNormalized && versionInfo.Version == CurrentVersion {
+		if healErr := selfHealUserRolesOnDisk(path); healErr != nil {
+			logger.WarnF("failed to persist normalized admin-only user roles to config.json; "+
+				"runtime behavior is still correct (in-memory roles are normalized), "+
+				"but the on-disk file could not be self-healed", map[string]any{
+				"path":  path,
+				"error": healErr.Error(),
+			})
+		}
+	}
+
 	// Apply defaults and validate bounds for all security-relevant fields
 	// (FR-001, FR-002a, numeric sandbox fields, AuthMismatchLogLevel).
 	if err := validateBootConfig(cfg); err != nil {
@@ -3441,6 +3487,75 @@ func loadConfigInternal(path string, store CredentialStore) (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// normalizeAdminOnlyRoles enforces the single-user "every authenticated user
+// is admin" model described at loadConfigInternal's call site: any
+// Gateway.Users entry whose Role is not already UserRoleAdmin is rewritten to
+// UserRoleAdmin in place. Idempotent — a no-op once every entry is already
+// admin. Returns true if any entry's role was changed, signaling the caller
+// to persist the self-healed config back to disk.
+func normalizeAdminOnlyRoles(cfg *Config) bool {
+	changed := false
+	for i := range cfg.Gateway.Users {
+		if cfg.Gateway.Users[i].Role != UserRoleAdmin {
+			logger.WarnF("normalizing user role to admin (single-user instance — "+
+				"admin/user distinction has no practical effect)", map[string]any{
+				"username":      cfg.Gateway.Users[i].Username,
+				"previous_role": string(cfg.Gateway.Users[i].Role),
+			})
+			cfg.Gateway.Users[i].Role = UserRoleAdmin
+			changed = true
+		}
+	}
+	return changed
+}
+
+// selfHealUserRolesOnDisk rewrites ONLY the gateway.users[].role fields in
+// the config.json at path to "admin", preserving every other field/byte of
+// structure untouched (raw-JSON-map read/patch/write, matching
+// migrateAgentOwnership's established pattern in this package and
+// pkg/gateway's safeUpdateConfigJSON). Returns nil (no-op) if the file has no
+// gateway.users section, or if every entry already reads "admin".
+func selfHealUserRolesOnDisk(path string) error {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read config for role self-heal: %w", err)
+	}
+	var m map[string]any
+	if unmarshalErr := json.Unmarshal(raw, &m); unmarshalErr != nil {
+		return fmt.Errorf("parse config for role self-heal: %w", unmarshalErr)
+	}
+	gw, ok := m["gateway"].(map[string]any)
+	if !ok {
+		return nil // no gateway section on disk — nothing to heal
+	}
+	usersRaw, ok := gw["users"].([]any)
+	if !ok {
+		return nil // no users on disk — nothing to heal
+	}
+	changed := false
+	for _, u := range usersRaw {
+		um, ok := u.(map[string]any)
+		if !ok {
+			continue
+		}
+		if role, _ := um["role"].(string); role != string(UserRoleAdmin) {
+			um["role"] = string(UserRoleAdmin)
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	out, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return fmt.Errorf("serialize config for role self-heal: %w", err)
+	}
+	if writeErr := fileutil.WriteFileAtomic(path, out, 0o600); writeErr != nil {
+		return fmt.Errorf("write config for role self-heal: %w", writeErr)
+	}
+	return nil
 }
 
 // knownProviderProtocols is the set of leading slug segments treated as an
