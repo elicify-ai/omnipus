@@ -159,6 +159,14 @@ components:
       $ref: ./components/schemas/ExecutorConfig.yaml
     ExecutorDefaults:
       $ref: ./components/schemas/ExecutorDefaults.yaml
+    ExecutorCommandPreviewRequest:
+      $ref: ./components/schemas/ExecutorCommandPreviewRequest.yaml
+    ExecutorCommandPreviewResponse:
+      $ref: ./components/schemas/ExecutorCommandPreviewResponse.yaml
+    ExecutorSmokeTestRequest:
+      $ref: ./components/schemas/ExecutorSmokeTestRequest.yaml
+    ExecutorSmokeTestResponse:
+      $ref: ./components/schemas/ExecutorSmokeTestResponse.yaml
     VoiceProvider:
       $ref: ./components/schemas/VoiceProvider.yaml
     AgentSession:
@@ -1517,7 +1525,7 @@ paths:
     get:
       operationId: listExecutorDefaults
       summary: List the real auto-applied CLI flags for each external-CLI runner
-      description: 'Static reference data: for each supported subagent_3p external CLI (claude-code, codex, opencode), the ordered list of arguments the driver automatically applies when spawning it (ADR-032), plus a note on how the prompt itself is delivered. Read-only and not agent-scoped — used by the Agent Profile UI so operators see the REAL, currently-in-effect flags instead of static placeholder ghost-text before adding their own executor.cli_args. Sourced directly from pkg/agent/runner/driver_{claude,codex,opencode}.go and kept byte-accurate to that code.
+      description: 'Static reference data: for each supported subagent_3p external CLI (claude-code, codex, opencode), the ordered list of arguments the driver automatically applies when spawning it (ADR-032), plus a note on how the prompt itself is delivered. Read-only and not agent-scoped — used by the Agent Profile UI so operators see the REAL, currently-in-effect flags instead of static placeholder ghost-text before adding their own executor.cli_args. Sourced directly from pkg/agent/runner/driver_{claude,codex,opencode}.go and kept byte-accurate to that code. Superseded by POST /agents/executor-preview, which computes real per-agent argv instead of this hand-maintained static description — do not extend this endpoint further; new callers should use executor-preview.
 
         '
       tags:
@@ -1535,6 +1543,90 @@ paths:
                   $ref: '#/components/schemas/ExecutorDefaults'
         '401':
           $ref: '#/components/responses/401Unauthorized'
+  /agents/executor-preview:
+    post:
+      operationId: postAgentsExecutorPreview
+      summary: Preview the real command Omnipus would run for these executor settings
+      description: >
+        Stateless, agent-agnostic: computes the REAL argv each driver would
+        build for the given cli/model/cli_path/cli_args/max_tool_iterations by
+        calling the same buildArgs() logic used at real dispatch time
+        (pkg/agent/runner/driver_{claude,codex,opencode}.go), not a
+        hand-maintained description like GET /agents/executor-defaults.
+        Any cli_args token the safety filter (argsafety.go) would strip is
+        excluded from the previewed argv and reported in dropped_args instead
+        of being silently dropped, so the operator sees it before saving.
+        Works from the create wizard (no agent id exists yet) and from an
+        existing agent's edit form alike — mirrors POST /system/cli-validate's
+        stateless, body-driven shape. No subprocess is spawned.
+      tags:
+      - agents
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExecutorCommandPreviewRequest'
+      responses:
+        '200':
+          description: The real command that would be run for these settings.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutorCommandPreviewResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+  /agents/executor-smoke-test:
+    post:
+      operationId: postAgentsExecutorSmokeTest
+      summary: Actually run a trivial test prompt through an external-CLI worker
+      description: >
+        Runs a real, bounded test turn (a trivial arithmetic prompt) through
+        the SAME driver.Run() dispatch path a genuine subagent_3p delegation
+        uses, in a dedicated ephemeral workspace — not the zero-token
+        POST /agents/{id}/runner/test (binary-present → version handshake →
+        credential-file-presence only). This spawns a real, authenticated
+        subprocess and costs real model usage, bounded by a short timeout and
+        a small turn cap. An explicit operator action only — never triggered
+        automatically. Applies its own dedicated, more conservative rate
+        limiter and per-caller in-flight cap, mirroring the pattern
+        POST /system/cli-validate uses but independently tuned since this
+        endpoint spends real tokens and holds a real subprocess (5/min and 1
+        concurrent run per caller, vs. cli-validate's 20/min and 2), and
+        emits one audit event {cli, resolved binary, ok} per call, since —
+        like cli-validate — it spawns a caller-influenced binary/path.
+        Body-driven and agent-agnostic; works from the create wizard and an
+        existing agent's edit form alike.
+      tags:
+      - agents
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExecutorSmokeTestRequest'
+      responses:
+        '200':
+          description: >
+            Always 200 once the run completes or is bounded out — the
+            outcome is carried in the response body's `ok`/`error`, not the
+            HTTP status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutorSmokeTestResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
   /security/session-scope:
     get:
       operationId: getSessionScope

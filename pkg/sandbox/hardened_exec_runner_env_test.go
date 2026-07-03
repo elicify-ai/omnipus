@@ -86,6 +86,8 @@ func TestRunnerCredentialEnvKeys_ExactSet(t *testing.T) {
 		"ANTHROPIC_AUTH_TOKEN",
 		"ANTHROPIC_BASE_URL",
 		"CLAUDE_CONFIG_DIR",
+		"CODEX_ACCESS_TOKEN",
+		"CODEX_API_KEY",
 		"CODEX_HOME",
 		"OPENAI_API_KEY",
 		"OPENAI_BASE_URL",

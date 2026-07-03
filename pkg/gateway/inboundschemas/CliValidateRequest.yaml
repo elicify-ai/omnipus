@@ -16,6 +16,7 @@ properties:
     x-go-type: ExternalCliTool
   cli_path:
     type: string
+    maxLength: 4096
     description: >
       Filesystem path to the CLI binary to validate — either the detected
       prefill or an operator-entered override. An empty value is classified

@@ -33,6 +33,7 @@ package gateway
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -208,6 +209,36 @@ func isSupportedCLI(cli string) bool {
 		}
 	}
 	return false
+}
+
+// requireSupportedCLI validates that cli is one of the recognized external
+// CLIs (isSupportedCLI). On failure it writes the shared 400 response and
+// returns false so the caller can `return` immediately; on success it writes
+// nothing and returns true. Shared by POST /agents/executor-preview
+// (rest_executor_preview.go) and POST /agents/executor-smoke-test
+// (rest_executor_smoketest.go), which previously each duplicated the
+// identical isSupportedCLI-then-jsonErr block.
+func requireSupportedCLI(w http.ResponseWriter, cli string) bool {
+	if isSupportedCLI(cli) {
+		return true
+	}
+	jsonErr(w, http.StatusBadRequest,
+		fmt.Sprintf("cli %q is not supported (valid: claude-code, codex, opencode)", cli))
+	return false
+}
+
+// derefTrimStr returns the whitespace-trimmed value of an optional string
+// field, or "" when the pointer is nil. Shared by
+// POST /agents/executor-preview and POST /agents/executor-smoke-test for
+// their identical model/cli_path optional-field extraction (both previously
+// duplicated the same nil-check-then-TrimSpace block). Mirrors derefStr
+// (schedules.go) but additionally trims, matching what both endpoints have
+// always done for these two fields.
+func derefTrimStr(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return strings.TrimSpace(*p)
 }
 
 // isRegularExecutableFile reports whether p is a regular file the OS would

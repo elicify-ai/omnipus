@@ -31,6 +31,7 @@
 // error surfaced to the operator. filterDangerousCLIArgs is the right place
 // to guard it regardless: the same last-occurrence-wins argv semantics apply,
 // and the same warn-and-drop shape (logDroppedCLIArgs) already covers it.
+
 package runner
 
 import (
@@ -52,6 +53,12 @@ type dangerousCLIFlag struct {
 	// this driver's posture (see the per-CLI comments below for why each
 	// flag chose targeted vs. blanket dropping).
 	valueCheck func(value string) bool
+	// reason is a short, human-readable explanation of why this flag is
+	// denylisted, summarizing the fuller rationale in the per-CLI comments
+	// below. Surfaced to operators via the executor-command-preview endpoint
+	// (POST /api/v1/agents/executor-preview) so a dropped cli_args token
+	// comes with a reason, not just a bare flag name.
+	reason string
 }
 
 // dangerousCLIFlagsByCLI is the per-CLI denylist applied to operator-supplied
@@ -72,10 +79,18 @@ var dangerousCLIFlagsByCLI = map[string][]dangerousCLIFlag{
 	// used: only "bypassPermissions" is dropped, an operator narrowing to
 	// "plan"/"default" is left alone.
 	"claude": {
-		{name: "--dangerously-skip-permissions", boolean: true},
-		{name: "--permission-mode", valueCheck: func(v string) bool {
-			return strings.EqualFold(v, "bypassPermissions")
-		}},
+		{
+			name:    "--dangerously-skip-permissions",
+			boolean: true,
+			reason:  "re-enables a full permission bypass the driver deliberately never passes (FR-5.3/US-5); --permission-mode acceptEdits is used instead",
+		},
+		{
+			name: "--permission-mode",
+			valueCheck: func(v string) bool {
+				return strings.EqualFold(v, "bypassPermissions")
+			},
+			reason: `escalates --permission-mode to "bypassPermissions", which Claude Code's own docs describe as skipping all safety checks — the direct equivalent of --dangerously-skip-permissions`,
+		},
 		// --output-format: driver_claude.go's parseLine expects EXACTLY the
 		// "claude --output-format stream-json" NDJSON event shapes (see the
 		// package doc there). Any other value ("json", "text", or an
@@ -83,9 +98,13 @@ var dangerousCLIFlagsByCLI = map[string][]dangerousCLIFlag{
 		// instead of erroring (correctness guard, not security — see the
 		// package doc above). Only the driver's own value is a safe match;
 		// every other value is dropped.
-		{name: "--output-format", valueCheck: func(v string) bool {
-			return !strings.EqualFold(v, "stream-json")
-		}},
+		{
+			name: "--output-format",
+			valueCheck: func(v string) bool {
+				return !strings.EqualFold(v, "stream-json")
+			},
+			reason: "the driver's NDJSON stream parser requires --output-format stream-json; any other value would silently corrupt the streamed transcript instead of erroring",
+		},
 	},
 	// codex: the driver never passes
 	// --dangerously-bypass-approvals-and-sandbox (FR-5.3) and sets --sandbox
@@ -113,11 +132,21 @@ var dangerousCLIFlagsByCLI = map[string][]dangerousCLIFlag{
 	// non-interactive guarantee, so the flag is dropped conservatively
 	// regardless of the specific value supplied.
 	"codex": {
-		{name: "--dangerously-bypass-approvals-and-sandbox", boolean: true},
-		{name: "--sandbox", valueCheck: func(v string) bool {
-			return strings.EqualFold(v, "danger-full-access")
-		}},
-		{name: "--ask-for-approval"},
+		{
+			name: "--dangerously-bypass-approvals-and-sandbox", boolean: true,
+			reason: "re-enables a full sandbox/approval bypass the driver deliberately never passes (FR-5.3)",
+		},
+		{
+			name: "--sandbox",
+			valueCheck: func(v string) bool {
+				return strings.EqualFold(v, "danger-full-access")
+			},
+			reason: `escalates --sandbox to "danger-full-access", which OpenAI's own docs describe as removing the filesystem and network boundaries — beyond the driver's own workspace-write posture`,
+		},
+		{
+			name:   "--ask-for-approval",
+			reason: `reintroduces an approval gate with no TTY to answer it in Omnipus's headless spawn; the driver's own "--ask-for-approval never" is the intended non-interactive posture and any override is dropped regardless of value`,
+		},
 		// --json: driver_codex.go's parseLine expects codex exec's structured
 		// "--json" NDJSON event stream (item.completed / turn.completed /
 		// error / turn.failed — see the package doc there). Disabling it
@@ -128,7 +157,11 @@ var dangerousCLIFlagsByCLI = map[string][]dangerousCLIFlag{
 		// preserve, so ANY operator-supplied --json token — a bare repeat or
 		// an "--json=false"-shaped disable — is dropped conservatively
 		// (boolean:true drops both forms; see filterDangerousCLIArgs).
-		{name: "--json", boolean: true},
+		{
+			name:    "--json",
+			boolean: true,
+			reason:  "the driver's NDJSON stream parser requires --json output; disabling it would silently corrupt the streamed transcript instead of erroring",
+		},
 	},
 	// opencode: the driver's OWN --dangerously-skip-permissions is the
 	// deliberate ADR-032 fix D auto-approve posture (tracked separately as
@@ -138,7 +171,11 @@ var dangerousCLIFlagsByCLI = map[string][]dangerousCLIFlag{
 	// argv never carries two copies of it and cli_args can never be mistaken
 	// for the source of that decision.
 	"opencode": {
-		{name: "--dangerously-skip-permissions", boolean: true},
+		{
+			name:    "--dangerously-skip-permissions",
+			boolean: true,
+			reason:  "redundant copy of the driver's own auto-approve flag, which is already applied unconditionally (ADR-032 fix D) — operator cli_args cannot be the source of this decision",
+		},
 		// --format: driver_opencode.go's parseLine expects "opencode run
 		// --format json" NDJSON event shapes (message.start / content.delta /
 		// tool.start / session.complete / error — see the package doc
@@ -147,10 +184,22 @@ var dangerousCLIFlagsByCLI = map[string][]dangerousCLIFlag{
 		// (correctness guard, not security — see the package doc above).
 		// Only the driver's own value is a safe match; every other value is
 		// dropped.
-		{name: "--format", valueCheck: func(v string) bool {
-			return !strings.EqualFold(v, "json")
-		}},
+		{
+			name: "--format",
+			valueCheck: func(v string) bool {
+				return !strings.EqualFold(v, "json")
+			},
+			reason: "the driver's NDJSON stream parser requires --format json; any other value would silently corrupt the streamed transcript instead of erroring",
+		},
 	},
+}
+
+// droppedCLIArg pairs a dropped cli_args flag descriptor (same "--flag" or
+// "--flag value" shape filterDangerousCLIArgs has always logged) with the
+// dangerousCLIFlag.reason that caused it to be dropped.
+type droppedCLIArg struct {
+	flag   string
+	reason string
 }
 
 // filterDangerousCLIArgs removes known-dangerous override flags from an
@@ -164,7 +213,30 @@ var dangerousCLIFlagsByCLI = map[string][]dangerousCLIFlag{
 //
 // This function ONLY ever inspects opts.CLIArgs — it must never be applied to
 // a driver's own built-in flags.
+//
+// This is a thin wrapper over filterDangerousCLIArgsDetailed, kept so the
+// three drivers' buildArgs (which only need the flag strings, for
+// logDroppedCLIArgs) and their existing tests are unaffected by the richer
+// (flag, reason) shape that filterDangerousCLIArgsDetailed also computes.
 func filterDangerousCLIArgs(cli string, args []string) (kept []string, dropped []string) {
+	kept, detailed := filterDangerousCLIArgsDetailed(cli, args)
+	if len(detailed) == 0 {
+		return kept, nil
+	}
+	dropped = make([]string, len(detailed))
+	for i, d := range detailed {
+		dropped[i] = d.flag
+	}
+	return kept, dropped
+}
+
+// filterDangerousCLIArgsDetailed is the shared implementation behind both
+// filterDangerousCLIArgs (flag-only, used by the drivers' own buildArgs at
+// real dispatch time) and FilterDangerousCLIArgsDetailed (flag+reason,
+// exported for pkg/gateway's executor-command-preview endpoint so an
+// operator sees WHY a cli_args token would be dropped before saving, not
+// just that it would be).
+func filterDangerousCLIArgsDetailed(cli string, args []string) (kept []string, dropped []droppedCLIArg) {
 	deny := dangerousCLIFlagsByCLI[cli]
 	if len(deny) == 0 || len(args) == 0 {
 		return args, nil
@@ -185,14 +257,14 @@ func filterDangerousCLIArgs(cli string, args []string) (kept []string, dropped [
 			// Bare boolean flag, or an explicit "--flag=true"/"--flag=false"
 			// override — either way it targets a flag the driver has
 			// deliberately chosen never to pass itself; drop the token.
-			dropped = append(dropped, arg)
+			dropped = append(dropped, droppedCLIArg{flag: arg, reason: flag.reason})
 			continue
 		}
 
 		if hasEq {
 			// "--flag=value" single-token form: evaluate the embedded value.
 			if flag.valueCheck == nil || flag.valueCheck(value) {
-				dropped = append(dropped, arg)
+				dropped = append(dropped, droppedCLIArg{flag: arg, reason: flag.reason})
 			} else {
 				kept = append(kept, arg)
 			}
@@ -213,7 +285,7 @@ func filterDangerousCLIArgs(cli string, args []string) (kept []string, dropped [
 				// so the caller logs a single WARN per offending flag, not one
 				// per argv token — mirrors mergeEnvOverrides' one-WARN-per-key
 				// contract.
-				dropped = append(dropped, arg+" "+nextVal)
+				dropped = append(dropped, droppedCLIArg{flag: arg + " " + nextVal, reason: flag.reason})
 			} else {
 				kept = append(kept, arg, nextVal)
 			}
@@ -221,7 +293,7 @@ func filterDangerousCLIArgs(cli string, args []string) (kept []string, dropped [
 			continue
 		}
 
-		dropped = append(dropped, arg)
+		dropped = append(dropped, droppedCLIArg{flag: arg, reason: flag.reason})
 	}
 	return kept, dropped
 }

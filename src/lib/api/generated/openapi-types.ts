@@ -441,11 +441,51 @@ export interface paths {
         };
         /**
          * List the real auto-applied CLI flags for each external-CLI runner
-         * @description Static reference data: for each supported subagent_3p external CLI (claude-code, codex, opencode), the ordered list of arguments the driver automatically applies when spawning it (ADR-032), plus a note on how the prompt itself is delivered. Read-only and not agent-scoped — used by the Agent Profile UI so operators see the REAL, currently-in-effect flags instead of static placeholder ghost-text before adding their own executor.cli_args. Sourced directly from pkg/agent/runner/driver_{claude,codex,opencode}.go and kept byte-accurate to that code.
+         * @description Static reference data: for each supported subagent_3p external CLI (claude-code, codex, opencode), the ordered list of arguments the driver automatically applies when spawning it (ADR-032), plus a note on how the prompt itself is delivered. Read-only and not agent-scoped — used by the Agent Profile UI so operators see the REAL, currently-in-effect flags instead of static placeholder ghost-text before adding their own executor.cli_args. Sourced directly from pkg/agent/runner/driver_{claude,codex,opencode}.go and kept byte-accurate to that code. Superseded by POST /agents/executor-preview, which computes real per-agent argv instead of this hand-maintained static description — do not extend this endpoint further; new callers should use executor-preview.
          */
         get: operations["listExecutorDefaults"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/agents/executor-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview the real command Omnipus would run for these executor settings
+         * @description Stateless, agent-agnostic: computes the REAL argv each driver would build for the given cli/model/cli_path/cli_args/max_tool_iterations by calling the same buildArgs() logic used at real dispatch time (pkg/agent/runner/driver_{claude,codex,opencode}.go), not a hand-maintained description like GET /agents/executor-defaults. Any cli_args token the safety filter (argsafety.go) would strip is excluded from the previewed argv and reported in dropped_args instead of being silently dropped, so the operator sees it before saving. Works from the create wizard (no agent id exists yet) and from an existing agent's edit form alike — mirrors POST /system/cli-validate's stateless, body-driven shape. No subprocess is spawned.
+         */
+        post: operations["postAgentsExecutorPreview"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/agents/executor-smoke-test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Actually run a trivial test prompt through an external-CLI worker
+         * @description Runs a real, bounded test turn (a trivial arithmetic prompt) through the SAME driver.Run() dispatch path a genuine subagent_3p delegation uses, in a dedicated ephemeral workspace — not the zero-token POST /agents/{id}/runner/test (binary-present → version handshake → credential-file-presence only). This spawns a real, authenticated subprocess and costs real model usage, bounded by a short timeout and a small turn cap. An explicit operator action only — never triggered automatically. Applies its own dedicated, more conservative rate limiter and per-caller in-flight cap, mirroring the pattern POST /system/cli-validate uses but independently tuned since this endpoint spends real tokens and holds a real subprocess (5/min and 1 concurrent run per caller, vs. cli-validate's 20/min and 2), and emits one audit event {cli, resolved binary, ok} per call, since — like cli-validate — it spawns a caller-influenced binary/path. Body-driven and agent-agnostic; works from the create wizard and an existing agent's edit form alike.
+         */
+        post: operations["postAgentsExecutorSmokeTest"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3689,7 +3729,7 @@ export interface components {
         /**
          * @description Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
          *     "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
-         *     "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude and codex receive the soul+instructions prompt via stdin (a trailing "-" argument tells each to read from stdin); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like sandbox_profile / shell_policy / tools_cfg / fallback_models / model_params / skills / delegation_policy are hidden for subagent_3p agents and rejected 400 on PUT if set.
+         *     "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude receives the soul+instructions prompt via stdin with NO positional prompt argument at all (a bare "-" is read by this CLI as a literal one-character prompt string, not a stdin sentinel, so none is appended — claude -p consumes all of stdin automatically when no positional prompt is given); codex also receives it via stdin, but signals that with a trailing "-" positional argument (a real stdin sentinel for this CLI); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like sandbox_profile / shell_policy / tools_cfg / fallback_models / model_params / skills / delegation_policy are hidden for subagent_3p agents and rejected 400 on PUT if set.
          *     "cli" (required for subagent_3p agents when kind="external-cli") is locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
          *     "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
          *     The "kind" field is derived server-side from the agent's type (Main -> native, Subagent -> native, subagent_3p -> external-cli). It is exposed in responses but is NOT a writable field on create/update — clients cannot choose kind directly. Server-side derive at the handler boundary per the agent-form spec.
@@ -3742,9 +3782,87 @@ export interface components {
             auto_applied_flags: string[];
             /**
              * @description Free-text clarification covering how the prompt itself is delivered to this CLI (stdin vs. a positional argument — NEVER a --prompt flag on any of the three supported CLIs) and any other non-obvious behavior not captured by the flag list above.
-             * @example The prompt is delivered via stdin (a trailing "-" argument tells claude to read it from stdin) — never via a --prompt flag or positional argument. --resume/--session-id are never passed; every run starts a fresh claude session.
+             * @example The prompt is delivered via stdin, with no positional prompt argument at all — never via a --prompt flag. --resume/--session-id are never passed; every run starts a fresh claude session.
              */
             notes: string;
+        };
+        /** @description Stateless request to preview the REAL command line Omnipus would spawn for a subagent_3p external-CLI worker with these settings — computed by calling the same buildArgs() logic each driver uses at real dispatch time (pkg/agent/runner/driver_{claude,codex,opencode}.go via the BuildClaudeArgs/BuildCodexArgs/BuildOpencodeArgs cross-package export), not a hand-maintained approximation. Body-driven and agent-agnostic (mirrors POST /system/cli-validate) so it works both from the create wizard, where no agent id exists yet, and from an existing agent's edit form. */
+        ExecutorCommandPreviewRequest: {
+            cli: components["schemas"]["ExternalCli"];
+            /** @description Model slug/shape to preview with. Omit or leave empty to preview the "no model configured" case (the --model/-m flag is simply absent from the resulting command for claude-code and codex; for opencode the flag is also absent when the value is not "provider/model"-shaped — see the response's model_dropped_reason for that case). */
+            model?: string;
+            /** @description Optional executor.cli_path override to preview. Empty means "resolved via the OS $PATH at spawn time" and the response's binary field reflects that (the bare command name, not an absolute path). */
+            cli_path?: string;
+            /** @description Free-form additional CLI arguments to preview, same shape and same tokenizer as ExecutorConfig.cli_args. Any token the safety filter would strip at real dispatch time is NOT included in the previewed command — it is reported instead in the response's dropped_args, so the operator sees before saving that an argument they typed will be silently ignored and why. */
+            cli_args?: string;
+            /** @description Optional turn cap to preview (mirrors AgentConfig.max_tool_iterations). Omitted or zero previews with the external-CLI dispatch default (50) — the same fallback runExternalCLISubTurn applies when an agent has no explicit cap. */
+            max_tool_iterations?: number;
+        };
+        /** @description The REAL, computed command Omnipus would run for the previewed executor settings — argv sourced from the same buildArgs() each driver uses at real dispatch time, not a hand-maintained description. Purely informational; nothing here is persisted. cli_args tokens the safety filter would strip at real dispatch time are surfaced in dropped_args rather than silently omitted, so the operator can see and fix a mistyped or disallowed argument before saving instead of discovering later (via a server log line they never see) that it was ignored. */
+        ExecutorCommandPreviewResponse: {
+            /**
+             * @description The resolved binary name or path that would be spawned — the previewed cli_path verbatim when non-empty, otherwise the CLI's bare default command name (resolved via the OS $PATH at actual spawn time, which this preview cannot see into).
+             * @example claude
+             */
+            binary: string;
+            /**
+             * @description The exact, ordered argument list that would be passed to the binary, already reflecting the previewed model/cli_path/cli_args/ max_tool_iterations and with any denylisted cli_args tokens already removed (see dropped_args for what was removed and why). Does not include a token for the task prompt itself for claude-code or codex (delivered via stdin, not argv — see prompt_delivery); for opencode the literal placeholder "<prompt>" appears in the position the real task prompt would occupy.
+             * @example [
+             *       "-p",
+             *       "--output-format",
+             *       "stream-json",
+             *       "--verbose",
+             *       "--no-chrome",
+             *       "--model",
+             *       "sonnet",
+             *       "--permission-mode",
+             *       "acceptEdits"
+             *     ]
+             */
+            argv: string[];
+            /**
+             * @description argv joined into a single, shell-quoted display string (binary first), suitable for showing directly in the UI or copying into a terminal.
+             * @example claude -p --output-format stream-json --verbose --no-chrome --model sonnet --permission-mode acceptEdits
+             */
+            command_line: string;
+            /**
+             * @description How the actual task prompt (soul + instructions, composed at real dispatch time) reaches this CLI — never a --prompt flag on any of the three supported CLIs. claude-code and codex read it from stdin; opencode receives it as the last positional argument after a literal "--" end-of-options separator.
+             * @enum {string}
+             */
+            prompt_delivery: "stdin" | "positional argument after --";
+            /** @description Present only when a non-empty model was previewed but --model/-m was omitted from argv because it does not fit the target CLI's required shape (opencode requires "provider/model"). Absent when the model was applied as given or no model was previewed. */
+            model_dropped_reason?: string;
+            /**
+             * @description Every token from the previewed cli_args that the safety filter (argsafety.go) removed before it reached argv, with why. Empty when cli_args was empty or every token was kept.
+             * @example []
+             */
+            dropped_args: {
+                /** @description The exact cli_args token (or flag=value pair) that was dropped. */
+                flag: string;
+                /** @description Why this token is not permitted for this CLI. */
+                reason: string;
+            }[];
+        };
+        /** @description Stateless request to actually run a trivial, real prompt through an external-CLI worker's real dispatch path (the same driver.Run() a genuine subagent_3p delegation uses) and return the real response. Distinct from the zero-token POST /agents/{id}/runner/test (binary-present → version handshake → credential-file-presence only, never spends a token) — this spawns a real, authenticated subprocess and costs real model usage, so it is an explicit operator action, never automatic. Body-driven and agent-agnostic (mirrors POST /agents/executor-preview and POST /system/cli-validate) so it works from the create wizard, where no agent id exists yet, and from an existing agent's edit form alike. */
+        ExecutorSmokeTestRequest: {
+            cli: components["schemas"]["ExternalCli"];
+            /** @description Model slug/shape to run with, same semantics as ExecutorCommandPreviewRequest.model. */
+            model?: string;
+            /** @description Optional executor.cli_path override, same semantics as ExecutorCommandPreviewRequest.cli_path. */
+            cli_path?: string;
+            /** @description Free-form additional CLI arguments, same tokenizer and safety filter as ExecutorConfig.cli_args. */
+            cli_args?: string;
+        };
+        /** @description The result of actually running a trivial test prompt through an external-CLI worker's real dispatch path. Always 200 (even for a failed run) — the outcome is carried in `ok`/`error`, not the HTTP status, matching POST /system/cli-validate's convention of using the body for domain-level failure rather than 4xx/5xx. */
+        ExecutorSmokeTestResponse: {
+            /** @description Whether the CLI produced a real response before the bounded timeout/turn cap was reached. */
+            ok: boolean;
+            /** @description The CLI's actual final response text. Present when ok is true; absent (or empty) otherwise. */
+            response_text?: string;
+            /** @description A human-readable reason the run did not succeed (process failed to start, authentication failed, timed out, exceeded the bounded turn cap, or the CLI itself reported an error). Present when ok is false. */
+            error?: string;
+            /** @description Wall-clock time the run actually took, in milliseconds. */
+            duration_ms: number;
         };
         /** @description Response body for GET /api/v1/voice/provider. Describes the active voice provider configuration so the SPA can decide which widget variant (dropdown / free-text / disabled) to render in the agent edit slide-over. */
         VoiceProvider: {
@@ -8527,6 +8645,59 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
         };
     };
+    postAgentsExecutorPreview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExecutorCommandPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description The real command that would be run for these settings. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExecutorCommandPreviewResponse"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+        };
+    };
+    postAgentsExecutorSmokeTest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExecutorSmokeTestRequest"];
+            };
+        };
+        responses: {
+            /** @description Always 200 once the run completes or is bounded out — the outcome is carried in the response body's `ok`/`error`, not the HTTP status. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExecutorSmokeTestResponse"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            429: components["responses"]["429TooManyRequests"];
+        };
+    };
     getSessionScope: {
         parameters: {
             query?: never;
@@ -12692,6 +12863,10 @@ export type FallbackModel = components["schemas"]["FallbackModel"];
 export type ExternalCliTool = components["schemas"]["ExternalCliTool"];
 export type ExecutorConfig = components["schemas"]["ExecutorConfig"];
 export type ExecutorDefaults = components["schemas"]["ExecutorDefaults"];
+export type ExecutorCommandPreviewRequest = components["schemas"]["ExecutorCommandPreviewRequest"];
+export type ExecutorCommandPreviewResponse = components["schemas"]["ExecutorCommandPreviewResponse"];
+export type ExecutorSmokeTestRequest = components["schemas"]["ExecutorSmokeTestRequest"];
+export type ExecutorSmokeTestResponse = components["schemas"]["ExecutorSmokeTestResponse"];
 export type VoiceProvider = components["schemas"]["VoiceProvider"];
 export type AgentSession = components["schemas"]["AgentSession"];
 export type SessionScopeRequest = components["schemas"]["SessionScopeRequest"];

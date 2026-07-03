@@ -12,7 +12,7 @@
 //   wizard-cli-chip (locked, only when initialCli is set),
 //   wizard-cli-path, wizard-env-overrides, wizard-cli-args
 
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import {
@@ -22,12 +22,13 @@ import {
 import { ModelSelector, type ModelGroup } from '@/components/ui/model-selector'
 import { InheritToggle } from './InheritToggle'
 import { CliPathValidationHint } from '../CliPathValidationHint'
-import { AutoAppliedFlags } from '../AutoAppliedFlags'
-import type { ExecutorDefaultsListState } from '@/hooks/useExecutorDefaults'
+import { CommandPreview } from '../CommandPreview'
 import { useCliPathValidation } from '@/hooks/useCliPathValidation'
 import { useCliDetect } from '@/hooks/useCliDetect'
+import { buildExecutorPreviewRequest } from '@/hooks/useCommandPreview'
 import { detectEntryFor, resolveCliDetectHint, SUPPORTED_CLIS } from '@/lib/cliDetect'
 import type { IconName } from '@/lib/agentIcons'
+import type { ExecutorCommandPreviewRequest } from '@/lib/api'
 import type { StepProps, WizardCli } from './types'
 
 const CLI_LABEL: Record<WizardCli, string> = {
@@ -215,11 +216,17 @@ export interface ExecutorInputsProps {
 export function ExecutorInputs({ payload, setField, lockedCli }: ExecutorInputsProps) {
   const envOverrides = payload.executor_env_overrides ?? {}
 
-  // Tracks `<AutoAppliedFlags>`'s live fetch status so the "Additional CLI
-  // arguments" field's helper copy below can stop saying "(flags shown
-  // above)" when the block isn't actually showing anything (silent-failure
-  // fix, 7-reviewer gate).
-  const [flagsStatus, setFlagsStatus] = useState<ExecutorDefaultsListState['status']>('idle')
+  // Live command-line preview (executor-command-preview) — built from the
+  // flat wizard payload (no persisted agent id exists yet, hence the
+  // stateless/body-driven endpoint). `max_tool_iterations` is deliberately
+  // omitted: `initialPayload` in `CreateAgentWizard.tsx` only seeds it for
+  // non-subagent_3p types (agent-types-field-matrix.md Decisions #1 — the
+  // external CLI runs its own tool loop), so `payload.max_tool_iterations`
+  // is always undefined here anyway; omitting it lets the preview fall back
+  // to the same server-side default (50) real dispatch uses for this tier.
+  const commandPreviewRequest: ExecutorCommandPreviewRequest | undefined = payload.cli
+    ? buildExecutorPreviewRequest(payload.cli, payload.model, payload.executor_cli_path, payload.executor_cli_args)
+    : undefined
 
   // external-executor-cli-path-detection spec (ADR-030) — US-1/US-2: probe
   // the host once per mount (no query-client dependency, matching the
@@ -418,12 +425,6 @@ export function ExecutorInputs({ payload, setField, lockedCli }: ExecutorInputsP
         </div>
       </div>
 
-      <AutoAppliedFlags
-        cli={payload.cli}
-        testId="wizard-executor-defaults"
-        onStatusChange={setFlagsStatus}
-      />
-
       <div className="space-y-2">
         <label htmlFor="wizard-cli-args" className="text-sm font-medium">
           Additional CLI arguments
@@ -433,19 +434,15 @@ export function ExecutorInputs({ payload, setField, lockedCli }: ExecutorInputsP
           data-testid="wizard-cli-args"
           value={payload.executor_cli_args ?? ''}
           onChange={(e) => setField('executor_cli_args', e.target.value)}
-          placeholder={
-            flagsStatus === 'success'
-              ? "e.g. --add-dir /extra/path (flags shown above are applied automatically and can't be overridden here)"
-              : 'e.g. --add-dir /extra/path'
-          }
+          placeholder="e.g. --add-dir /extra/path"
           className="font-mono text-xs"
         />
         <p className="text-[11px] text-[var(--color-muted)]">
-          {flagsStatus === 'success'
-            ? 'Space-separated args passed before the user prompt, in addition to the flags Omnipus applies automatically (shown above).'
-            : 'Space-separated args passed before the user prompt, in addition to the flags Omnipus applies automatically when this agent runs.'}
+          Space-separated args passed before the user prompt, in addition to the flags Omnipus applies automatically when this agent runs — see the live command preview below. Any argument that would be silently ignored is called out there before you create the agent.
         </p>
       </div>
+
+      <CommandPreview req={commandPreviewRequest} testId="wizard-command-preview" />
     </div>
   )
 }

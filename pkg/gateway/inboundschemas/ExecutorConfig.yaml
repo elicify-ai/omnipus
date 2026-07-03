@@ -8,10 +8,15 @@ description: >
 
   "external-cli" drives an external CLI tool (claude-code, codex, or opencode)
   as a subprocess. There is no `--prompt` flag on any of the three supported
-  CLIs: claude and codex receive the soul+instructions prompt via stdin
-  (a trailing "-" argument tells each to read from stdin); opencode receives
-  it as a POSITIONAL argument after a literal "--" end-of-options separator
-  (never via stdin). `--model <model>` IS passed as a real flag when a model
+  CLIs: claude receives the soul+instructions prompt via stdin with NO
+  positional prompt argument at all (a bare "-" is read by this CLI as a
+  literal one-character prompt string, not a stdin sentinel, so none is
+  appended — claude -p consumes all of stdin automatically when no
+  positional prompt is given); codex also receives it via stdin, but signals
+  that with a trailing "-" positional argument (a real stdin sentinel for
+  this CLI); opencode receives it as a POSITIONAL argument after a literal
+  "--" end-of-options separator (never via stdin). `--model <model>` IS
+  passed as a real flag when a model
   is configured (opencode additionally requires it to be shaped like
   "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults
   for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation,

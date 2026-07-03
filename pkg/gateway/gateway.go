@@ -618,6 +618,20 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		reapCancel()
 	}
 
+	// Backstop for the executor-smoke-test ephemeral workspace cleanup race
+	// (see drainUntilClosedOrGrace's doc in rest_executor_smoketest.go): that
+	// handler is normally solely responsible for removing its own scratch
+	// dir under $OMNIPUS_HOME/executor-smoke-test-runs, but a crash, SIGKILL,
+	// or a client disconnect racing a still-alive subprocess can leave one
+	// behind. Runs ONCE at boot, BEFORE any new smoke-test run can be
+	// dispatched, so every dir present is safely an orphan — mirrors
+	// ReapOrphans' reasoning above. Non-fatal: a sweep failure must not block
+	// boot.
+	if removed, sweepErrs := sweepSmokeTestOrphans(); removed > 0 || len(sweepErrs) > 0 {
+		slog.Info("gateway: executor-smoke-test orphan sweep completed",
+			"removed", removed, "errors", len(sweepErrs))
+	}
+
 	// Boot Order step 4 (FR-062 / M7): validate per-agent tool policies before
 	// the sandbox applies. Ava-equivalent core agents abort boot on violation;
 	// custom agents log and continue.

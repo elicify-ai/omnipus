@@ -51,8 +51,7 @@ import { ShellDenyPatternsEditor } from './ShellDenyPatternsEditor'
 import { ExecutorSelector } from './ExecutorSelector'
 import { BehaviorFields, AvatarColorPicker, IconPicker, AvatarHeader, UploadMdButton } from './AgentFormFields'
 import { CliPathValidationHint } from './CliPathValidationHint'
-import { AutoAppliedFlags } from './AutoAppliedFlags'
-import type { ExecutorDefaultsListState } from '@/hooks/useExecutorDefaults'
+import { CommandPreview } from './CommandPreview'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import {
   fetchAgent,
@@ -71,6 +70,7 @@ import {
   type SandboxProfile,
   type Skill,
   type ExecutorConfig,
+  type ExecutorCommandPreviewRequest,
   type WorkspaceMemberConfig,
 } from '@/lib/api'
 import { isApiError } from '@/lib/api-error'
@@ -82,6 +82,7 @@ import { avatarColorName } from '@/lib/constants'
 import { agentKindFlags } from '@/lib/agentKind'
 import { cliValidationBlocked, useCliPathValidation } from '@/hooks/useCliPathValidation'
 import { useCliDetect } from '@/hooks/useCliDetect'
+import { buildExecutorPreviewRequest } from '@/hooks/useCommandPreview'
 import { detectEntryFor, resolveCliDetectHint } from '@/lib/cliDetect'
 
 /** Editor's fallback entry — `FallbackModel` from the contract with `provider` narrowed to required (the editor always populates it at hydration). */
@@ -302,12 +303,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   const cliDetect = useCliDetect(agent?.type === 'subagent_3p')
   const cliValidation = useCliPathValidation()
 
-  // Tracks `<AutoAppliedFlags>`'s live fetch status so the "Additional CLI
-  // arguments" field's helper copy below can stop saying "(flags shown
-  // above)" when the block isn't actually showing anything (silent-failure
-  // fix, 7-reviewer gate).
-  const [flagsStatus, setFlagsStatus] = useState<ExecutorDefaultsListState['status']>('idle')
-
   // FR-016 / US-5: Heartbeat tab state — per-(workspace, agent) config, NOT
   // part of the agent autosave. Only meaningful when editAgentWorkspaceId is set.
   const [hbEnabled, setHbEnabled] = useState(false)
@@ -389,6 +384,21 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   const detectedCliEntry = agent?.type === 'subagent_3p' ? detectEntryFor(cliDetect, executor?.cli) : undefined
   const detectedCliPath = detectedCliEntry?.installed && detectedCliEntry.path ? detectedCliEntry.path : undefined
   const offeredCliPath = (executor?.cli_path ?? '').trim().length === 0 ? detectedCliPath : undefined
+
+  // Live command-line preview (executor-command-preview): built from the
+  // same executor state the Runtime tab edits, plus the agent's top-level
+  // `model` (ExecutorConfig carries no model field on the wire — the model
+  // an external CLI runs with is `AgentConfig.model`, the same field every
+  // agent type uses). `runtimePanel` (below) only ever renders for
+  // subagent_3p agents (`isExternalAgent`), and `formData` above shows that
+  // tier EXCLUDES `max_tool_iterations` from the wire payload entirely
+  // (agent-types-field-matrix.md Decisions #1 — the external CLI runs its
+  // own tool loop) — so it is deliberately omitted here too, letting the
+  // preview fall back to the same server-side default (50) real dispatch
+  // uses for this tier.
+  const commandPreviewRequest: ExecutorCommandPreviewRequest | undefined = executor?.cli
+    ? buildExecutorPreviewRequest(executor.cli, model, executor.cli_path, executor.cli_args)
+    : undefined
 
   const timeoutPayload = timeoutSeconds > 0 ? timeoutSeconds : undefined
   const formData = useMemo(() => {
@@ -1624,11 +1634,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   disabled={isLocked}
                 />
               </div>
-              <AutoAppliedFlags
-                cli={executor?.cli}
-                testId="profile-executor-defaults"
-                onStatusChange={setFlagsStatus}
-              />
               <div data-testid="profile-cli-args" className="space-y-1.5">
                 <div className="flex items-center gap-3">
                   <label className="text-xs text-[var(--color-muted)] w-44 shrink-0">Additional CLI arguments</label>
@@ -1638,23 +1643,18 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                       markDirty()
                       setExecutor((prev) => ({ ...(prev ?? { kind: 'external-cli', cli: executor?.cli ?? 'claude-code' }), cli_args: e.target.value }))
                     }}
-                    placeholder={
-                      flagsStatus === 'success'
-                        ? "e.g. --add-dir /extra/path (flags shown above are applied automatically and can't be overridden here)"
-                        : 'e.g. --add-dir /extra/path'
-                    }
+                    placeholder="e.g. --add-dir /extra/path"
                     className="text-xs h-8 font-mono"
                     disabled={isLocked}
                   />
                 </div>
                 <p className="text-[11px] text-[var(--color-muted)] leading-snug">
-                  {flagsStatus === 'success'
-                    ? 'In addition to the flags Omnipus applies automatically (shown above).'
-                    : 'In addition to the flags Omnipus applies automatically when this agent runs.'}
+                  In addition to the flags Omnipus applies automatically when this agent runs — see the live command preview below. Any argument that would be silently ignored is called out there before you save.
                 </p>
               </div>
+              <CommandPreview req={commandPreviewRequest} testId="profile-command-preview" />
             </section>
-          
+
     </div>
   )
 

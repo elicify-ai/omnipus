@@ -176,7 +176,7 @@ func runExternalCLISubTurn(
 	}
 	maxTurns := agent.MaxIterations
 	if maxTurns <= 0 {
-		maxTurns = defaultExternalMaxTurns
+		maxTurns = DefaultExternalMaxTurns
 	}
 
 	runCtx, cancel := context.WithCancel(ctx)
@@ -610,9 +610,14 @@ func recordExternalToolResultUpdateInPlace(
 	return found
 }
 
-// defaultExternalMaxTurns bounds an external run when the agent declares no
-// MaxIterations (FR-5.4 turn cap).
-const defaultExternalMaxTurns = 50
+// DefaultExternalMaxTurns bounds an external run when the agent declares no
+// MaxIterations (FR-5.4 turn cap). Exported (not just package-internal) so
+// pkg/gateway's POST /api/v1/agents/executor-preview endpoint
+// (rest_executor_preview.go) can default its own previewed --max-turns to
+// the IDENTICAL value real dispatch applies when max_tool_iterations is
+// omitted — referencing this constant directly rather than a second
+// hardcoded "50" means the two can never drift apart.
+const DefaultExternalMaxTurns = 50
 
 // transcriptModelFor returns the model string to stamp on transcript entries
 // produced by an external-CLI sub-turn. It mirrors the trim applied in

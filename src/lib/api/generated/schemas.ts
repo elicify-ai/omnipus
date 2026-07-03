@@ -346,6 +346,19 @@ type ExecutorDefaults = {
   auto_applied_flags: Array<string>;
   notes: string;
 };
+type ExecutorCommandPreviewRequest = {
+  cli: ExternalCliTool;
+  model?: string | undefined;
+  cli_path?: string | undefined;
+  cli_args?: string | undefined;
+  max_tool_iterations?: number | undefined;
+};
+type ExecutorSmokeTestRequest = {
+  cli: ExternalCliTool;
+  model?: string | undefined;
+  cli_path?: string | undefined;
+  cli_args?: string | undefined;
+};
 type ChannelEntry = {
   id: ChannelId;
   instance_id?: string | undefined;
@@ -1465,6 +1478,35 @@ export const ExecutorDefaults: z.ZodType<ExecutorDefaults> = z.object({
   auto_applied_flags: z.array(z.string()),
   notes: z.string(),
 });
+export const ExecutorCommandPreviewRequest: z.ZodType<ExecutorCommandPreviewRequest> =
+  z.object({
+    cli: ExternalCliTool,
+    model: z.string().max(256).optional(),
+    cli_path: z.string().max(4096).optional(),
+    cli_args: z.string().max(4096).optional(),
+    max_tool_iterations: z.number().int().gte(0).optional(),
+  });
+export const ExecutorCommandPreviewResponse = z.object({
+  binary: z.string(),
+  argv: z.array(z.string()),
+  command_line: z.string(),
+  prompt_delivery: z.enum(["stdin", "positional argument after --"]),
+  model_dropped_reason: z.string().optional(),
+  dropped_args: z.array(z.object({ flag: z.string(), reason: z.string() })),
+});
+export const ExecutorSmokeTestRequest: z.ZodType<ExecutorSmokeTestRequest> =
+  z.object({
+    cli: ExternalCliTool,
+    model: z.string().max(256).optional(),
+    cli_path: z.string().max(4096).optional(),
+    cli_args: z.string().max(4096).optional(),
+  });
+export const ExecutorSmokeTestResponse = z.object({
+  ok: z.boolean(),
+  response_text: z.string().optional(),
+  error: z.string().optional(),
+  duration_ms: z.number().int(),
+});
 export const SessionScopeResponse = z
   .object({
     dm_scope: z.enum([
@@ -2409,7 +2451,7 @@ export const CliDetect: z.ZodType<CliDetect> = z.object({
 });
 export const CliValidateRequest: z.ZodType<CliValidateRequest> = z.object({
   cli: ExternalCliTool,
-  cli_path: z.string(),
+  cli_path: z.string().max(4096),
 });
 export const CliValidateResponse = z.object({
   ok: z.boolean(),
@@ -2998,7 +3040,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "get",
     path: "/agents/executor-defaults",
     alias: "listExecutorDefaults",
-    description: `Static reference data: for each supported subagent_3p external CLI (claude-code, codex, opencode), the ordered list of arguments the driver automatically applies when spawning it (ADR-032), plus a note on how the prompt itself is delivered. Read-only and not agent-scoped — used by the Agent Profile UI so operators see the REAL, currently-in-effect flags instead of static placeholder ghost-text before adding their own executor.cli_args. Sourced directly from pkg/agent/runner/driver_{claude,codex,opencode}.go and kept byte-accurate to that code.
+    description: `Static reference data: for each supported subagent_3p external CLI (claude-code, codex, opencode), the ordered list of arguments the driver automatically applies when spawning it (ADR-032), plus a note on how the prompt itself is delivered. Read-only and not agent-scoped — used by the Agent Profile UI so operators see the REAL, currently-in-effect flags instead of static placeholder ghost-text before adding their own executor.cli_args. Sourced directly from pkg/agent/runner/driver_{claude,codex,opencode}.go and kept byte-accurate to that code. Superseded by POST /agents/executor-preview, which computes real per-agent argv instead of this hand-maintained static description — do not extend this endpoint further; new callers should use executor-preview.
 `,
     requestFormat: "json",
     response: z.array(ExecutorDefaults),
@@ -3006,6 +3048,67 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/agents/executor-preview",
+    alias: "postAgentsExecutorPreview",
+    description: `Stateless, agent-agnostic: computes the REAL argv each driver would build for the given cli/model/cli_path/cli_args/max_tool_iterations by calling the same buildArgs() logic used at real dispatch time (pkg/agent/runner/driver_{claude,codex,opencode}.go), not a hand-maintained description like GET /agents/executor-defaults. Any cli_args token the safety filter (argsafety.go) would strip is excluded from the previewed argv and reported in dropped_args instead of being silently dropped, so the operator sees it before saving. Works from the create wizard (no agent id exists yet) and from an existing agent&#x27;s edit form alike — mirrors POST /system/cli-validate&#x27;s stateless, body-driven shape. No subprocess is spawned.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: ExecutorCommandPreviewRequest,
+      },
+    ],
+    response: ExecutorCommandPreviewResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/agents/executor-smoke-test",
+    alias: "postAgentsExecutorSmokeTest",
+    description: `Runs a real, bounded test turn (a trivial arithmetic prompt) through the SAME driver.Run() dispatch path a genuine subagent_3p delegation uses, in a dedicated ephemeral workspace — not the zero-token POST /agents/{id}/runner/test (binary-present → version handshake → credential-file-presence only). This spawns a real, authenticated subprocess and costs real model usage, bounded by a short timeout and a small turn cap. An explicit operator action only — never triggered automatically. Applies its own dedicated, more conservative rate limiter and per-caller in-flight cap, mirroring the pattern POST /system/cli-validate uses but independently tuned since this endpoint spends real tokens and holds a real subprocess (5/min and 1 concurrent run per caller, vs. cli-validate&#x27;s 20/min and 2), and emits one audit event {cli, resolved binary, ok} per call, since — like cli-validate — it spawns a caller-influenced binary/path. Body-driven and agent-agnostic; works from the create wizard and an existing agent&#x27;s edit form alike.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: ExecutorSmokeTestRequest,
+      },
+    ],
+    response: ExecutorSmokeTestResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
         schema: ErrorResponse,
       },
     ],
