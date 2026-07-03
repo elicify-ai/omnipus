@@ -4,6 +4,7 @@ import { useWhatsAppPairingStore } from '@/store/whatsappPairing'
 import type { WhatsAppPairingState } from '@/store/whatsappPairing'
 import { useConnectionStore } from '@/store/connection'
 import { disableChannel, enableChannel } from '@/lib/api'
+import { logError } from '@/lib/telemetry'
 import { WhatsAppPairingBody } from './WhatsAppPairingBody'
 
 // RETRY_TIMEOUT_MS is the bounded window after a user presses Retry during which
@@ -46,6 +47,14 @@ export function WhatsAppNativeNotice({ channelId }: { channelId: string }) {
   // fires without a fresh `code` frame arriving. null = not in retry mode.
   const [retryFallbackState, setRetryFallbackState] = useState<'timeout' | 'error' | null>(null)
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // retryInFlightRef guards against a rapid double-click firing two
+  // overlapping restart round-trips (disable→enable twice). A ref updates
+  // synchronously the instant handleRetry starts running — unlike
+  // retryFallbackState, which is only visible to a SECOND invocation once
+  // React has actually re-rendered — so it also closes the window where both
+  // clicks land in the same synchronous batch before any render happens.
+  const retryInFlightRef = useRef(false)
 
   // timedOut: true when the 15s initial window expires with no QR frame arriving.
   const [timedOut, setTimedOut] = useState(false)
@@ -126,6 +135,15 @@ export function WhatsAppNativeNotice({ channelId }: { channelId: string }) {
   )
 
   async function handleRetry() {
+    // Re-entrancy guard: ignore a click while a retry is already in flight.
+    // retryInFlightRef is set BEFORE any await below (synchronously, at the
+    // very top), so it also blocks a second click that lands in the same
+    // synchronous batch as the first — before React has re-rendered and
+    // retryFallbackState (checked as a belated defense-in-depth) would
+    // reflect the first click yet.
+    if (retryInFlightRef.current || retryFallbackState !== null) return
+    retryInFlightRef.current = true
+
     const fallback = pairing?.status === 'error' ? 'error' : 'timeout'
 
     // Reset initial-timeout state and re-arm the window for the new attempt.
@@ -146,21 +164,37 @@ export function WhatsAppNativeNotice({ channelId }: { channelId: string }) {
     // The only way to mint a fresh QR is to restart the channel: disable →
     // enable walks the ChannelManager.Reload diff (stop, then start), and a
     // starting unpaired whatsapp channel re-arms the QR loop (#358).
+    let disableSucceeded = false
     try {
       await disableChannel(channelId)
+      disableSucceeded = true
       await enableChannel(channelId)
-    } catch {
+    } catch (err) {
       // Restart failed (gateway unreachable, reload error) — surface the error
-      // state immediately instead of spinning for the full retry window.
+      // state immediately instead of spinning for the full retry window. The
+      // two failure modes are NOT interchangeable: if disable itself failed,
+      // the channel's enabled state is unchanged; if disable succeeded but
+      // enable then failed, the channel is now sitting DISABLED and the
+      // operator needs to know to re-enable it themselves.
+      logError({
+        event: 'whatsappRetryRestartFailed',
+        channelId,
+        step: disableSucceeded ? 'enable' : 'disable',
+        message: err instanceof Error ? err.message : String(err),
+      })
       useWhatsAppPairingStore.getState().apply({
         type: 'whatsapp_pairing',
         channel_id: channelId,
         status: 'error',
-        message: 'the channel could not be restarted — check the gateway logs',
+        message: disableSucceeded
+          ? 'the channel was disabled but could not restart — re-enable it from the Channels list to retry pairing'
+          : 'could not restart the channel — check the gateway logs',
       })
       setRetryFallbackState(null)
+      retryInFlightRef.current = false
       return
     }
+    retryInFlightRef.current = false
 
     // Re-register pairing interest for this connection (toggle false → true);
     // the freshly-started channel emits its first QR over whatsapp_pairing and

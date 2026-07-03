@@ -6125,10 +6125,10 @@ export interface components {
             /** @description Whether the email tools (read_inbox, search_email, read_message, send_email, reply) are registered for the owning agent. */
             enabled: boolean;
             /**
-             * @description ID of the workspace the mailbox surfaces in.
+             * @description ID of the workspace the mailbox surfaces in. Always present: a mailbox is addressed by its (agent, workspace) pair, so the server serializes this from the authoritative pair key — never from mutable state.
              * @example ws_my_workspace
              */
-            workspace_id?: string;
+            workspace_id: string;
             /**
              * @description IMAP server hostname (implicit TLS / IMAPS).
              * @example imap.example.com

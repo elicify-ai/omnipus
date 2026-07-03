@@ -298,10 +298,13 @@ function ChannelFieldRow({
   )
 }
 
-// validateRequired mirrors EmailMailboxPanel's `validate` — required-field
-// pre-check now runs at save time (the removed Test button used to run an
-// equivalent check before hitting /test; that logic moved here, see FR
-// "Stage 1 of the channel-Test redesign").
+// validateRequired serves the same purpose as EmailMailboxPanel's `validate`
+// — required-field pre-check now runs at save time (the removed Test button
+// used to run an equivalent check before hitting /test; that logic moved
+// here, see FR "Stage 1 of the channel-Test redesign") — though the two are
+// mechanically different: this one derives required-ness from the channel
+// field descriptor (+ the selected GChat authGroup), while EmailMailboxPanel's
+// checks a fixed set of named fields.
 //
 // Google Chat's webhook_url/service_account_json are a mutually-exclusive
 // pick-one — neither carries `required: true` in the catalog (either one is
@@ -591,27 +594,35 @@ export function ChannelConfigPanel({
 
   // #324 — build the payload, explicitly clearing deselected authGroup fields.
   //
-  // SECURITY: must NOT omit/delete deselected fields — the backend configureChannel
-  // is a deep-merge (pkg/gateway/rest.go ~4549-4561). An absent field is left
-  // untouched, so a previously-stored service_account_json_ref would survive in
-  // config.json + the credential store after switching to Webhook. Instead, we
-  // send an explicit '' for each deselected field so the backend's clear path
-  // (rest.go ~4532-4537) fires: presence with empty string → clear the _ref and
-  // delete the stored credential.
+  // SECURITY: must NOT omit/delete deselected fields — configureChannel's
+  // deep-merge path (pkg/gateway/rest.go) leaves an absent field untouched,
+  // so a previously-stored service_account_json_ref would survive in
+  // config.json + the credential store after switching to Webhook. Instead,
+  // we send an explicit '' for each deselected field so configureChannel's
+  // clear path fires: presence with empty string → clear the _ref and delete
+  // the stored credential.
   function buildSubmitPayload(): Record<string, unknown> {
-    // SECURITY: strip untouched redacted secrets. GET redacts every stored
-    // sensitive field to the literal "[configured]" (rest.go redactChannelConfig)
-    // and the form hydrates that placeholder verbatim — but configureChannel
-    // treats ANY non-empty value as a NEW secret, so echoing it back would
-    // overwrite the real credential with the literal string "[configured]"
-    // (breaking the channel on next start). Omitting the field is the correct
-    // "keep the stored secret" signal: the backend merge leaves absent fields
-    // untouched (pinned by channel_secret_ref_test). A user-cleared field ('')
-    // still goes through and revokes the credential; a newly-typed secret is
-    // never equal to the sentinel and is stored normally.
+    // SECURITY: strip untouched redacted secrets — but ONLY for fields the
+    // catalog marks 'password' or 'textarea', the sole kinds redactChannelConfig
+    // (rest.go) ever replaces with the sentinel. GET redacts every stored
+    // sensitive field to the literal "[configured]" and the form hydrates that
+    // placeholder verbatim — but configureChannel treats ANY non-empty value as
+    // a NEW secret, so echoing an untouched sentinel back would overwrite the
+    // real credential with the literal string "[configured]" (breaking the
+    // channel on next start). Omitting the field is the correct "keep the
+    // stored secret" signal: the backend merge leaves absent fields untouched
+    // (pinned by channel_secret_ref_test). A plain text/number/toggle field is
+    // never redacted server-side, so a user typing the literal "[configured]"
+    // into one of THOSE must NOT be silently dropped from the payload. A
+    // user-cleared secret field ('') still goes through and revokes the
+    // credential; a newly-typed secret is never equal to the sentinel and is
+    // stored normally.
+    const redactableKeys = new Set(
+      fields.filter((f) => f.type === 'password' || f.type === 'textarea').map((f) => f.key),
+    )
     const payload: Record<string, unknown> = {}
     for (const [key, value] of Object.entries(formValues)) {
-      if (value === CONFIGURED_SENTINEL) continue
+      if (value === CONFIGURED_SENTINEL && redactableKeys.has(key)) continue
       payload[key] = value
     }
 

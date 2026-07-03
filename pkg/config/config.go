@@ -2400,6 +2400,16 @@ type MailboxesConfig map[string]map[string]MailboxConfig
 // under their embedded workspace_id. A legacy entry without a workspace_id is
 // dropped with a WARN — it was unreachable anyway (the drainer and tool
 // registration both require a workspace binding).
+//
+// Shape detection is per-agent-entry and STRICT: an entry is legacy-flat iff
+// ALL its inner values are non-objects, nested iff ALL its inner values are
+// objects. A MIX of both within one entry is malformed and returns a hard
+// error rather than being silently folded — the previous any-one-non-object
+// heuristic misclassified a mixed entry as legacy-flat, decoded the (object-
+// valued) nested keys against MailboxConfig's scalar fields, produced an
+// empty WorkspaceID, and silently dropped the entire roster under a
+// misleading "legacy...unreachable" WARN. A config-load failure that names
+// the offending agent is preferable to that silent data loss.
 func (m *MailboxesConfig) UnmarshalJSON(data []byte) error {
 	var nested map[string]map[string]json.RawMessage
 	if err := json.Unmarshal(data, &nested); err != nil {
@@ -2410,17 +2420,23 @@ func (m *MailboxesConfig) UnmarshalJSON(data []byte) error {
 		// Legacy detection: the flat shape's inner keys are FIELDS of
 		// MailboxConfig ("enabled" is required-in-practice and always present in
 		// persisted legacy entries), whose values are scalars — a nested entry's
-		// inner values are objects. Probe the raw values: if any inner value is
-		// not a JSON object, this agent entry is legacy-flat.
-		legacy := false
+		// inner values are objects. Probe every raw value so a mixed shape (some
+		// object, some scalar) is caught rather than misclassified.
+		allObjects := true
+		allScalars := true
 		for _, raw := range inner {
-			trimmed := bytesTrimLeftSpace(raw)
-			if len(trimmed) == 0 || trimmed[0] != '{' {
-				legacy = true
-				break
+			trimmed := bytes.TrimLeft(raw, " \t\n\r")
+			if len(trimmed) > 0 && trimmed[0] == '{' {
+				allScalars = false
+			} else {
+				allObjects = false
 			}
 		}
-		if legacy {
+		switch {
+		case len(inner) == 0:
+			// No inner keys — treat as an empty nested entry (nothing to fold).
+			out[agentID] = map[string]MailboxConfig{}
+		case allScalars:
 			// Re-decode the whole inner object as ONE legacy MailboxConfig.
 			rawEntry, err := json.Marshal(inner)
 			if err != nil {
@@ -2436,36 +2452,29 @@ func (m *MailboxesConfig) UnmarshalJSON(data []byte) error {
 				continue
 			}
 			out[agentID] = map[string]MailboxConfig{mb.WorkspaceID: mb}
-			continue
-		}
-		byWorkspace := make(map[string]MailboxConfig, len(inner))
-		for wsID, raw := range inner {
-			var mb MailboxConfig
-			if err := json.Unmarshal(raw, &mb); err != nil {
-				return fmt.Errorf("mailboxes: agent %q workspace %q: %w", agentID, wsID, err)
+		case allObjects:
+			byWorkspace := make(map[string]MailboxConfig, len(inner))
+			for wsID, raw := range inner {
+				if strings.TrimSpace(wsID) == "" {
+					slog.Warn("config: dropping mailbox with empty workspace key",
+						"agent_id", agentID)
+					continue
+				}
+				var mb MailboxConfig
+				if err := json.Unmarshal(raw, &mb); err != nil {
+					return fmt.Errorf("mailboxes: agent %q workspace %q: %w", agentID, wsID, err)
+				}
+				// The inner map key is authoritative; keep the mirror field in sync.
+				mb.WorkspaceID = wsID
+				byWorkspace[wsID] = mb
 			}
-			// The inner map key is authoritative; keep the mirror field in sync.
-			mb.WorkspaceID = wsID
-			byWorkspace[wsID] = mb
+			out[agentID] = byWorkspace
+		default:
+			return fmt.Errorf("mailboxes: agent %q entry is malformed (mixed legacy/nested shape)", agentID)
 		}
-		out[agentID] = byWorkspace
 	}
 	*m = out
 	return nil
-}
-
-// bytesTrimLeftSpace returns raw without leading JSON whitespace.
-func bytesTrimLeftSpace(raw []byte) []byte {
-	i := 0
-	for i < len(raw) {
-		switch raw[i] {
-		case ' ', '\t', '\n', '\r':
-			i++
-		default:
-			return raw[i:]
-		}
-	}
-	return raw[i:]
 }
 
 // SchedulesConfig holds global guardrail settings for scheduled agent runs

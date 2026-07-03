@@ -260,6 +260,82 @@ func TestHandleWorkspaces_CascadeDelete_RemovesTasks(t *testing.T) {
 	assert.True(t, os.IsNotExist(err), "task file must be removed by cascade delete; stat err: %v", err)
 }
 
+// TestHandleWorkspaces_CascadeDelete_RemovesMailboxes verifies DELETE cascades
+// to config.mailboxes + the credential store (M11 review-gate finding: the
+// cascade handled cron jobs, sessions, milestones, tasks, and channel
+// bindings, but left mailboxes orphaned — bound to a now-nonexistent
+// workspace ID).
+// BDD: Given a workspace with a mailbox bound to it, and a second unrelated
+// mailbox (different agent, different workspace),
+// When DELETE /api/v1/workspaces/{id} is called,
+// Then 204, the bound mailbox's config.mailboxes entry AND stored credential
+// are both gone, and the unrelated pair is completely untouched.
+// Traces to: FR-007, M11 mailbox cascade fix.
+func TestHandleWorkspaces_CascadeDelete_RemovesMailboxes(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+	// The mailbox cascade needs a credential store; newTestRestAPIWithHome
+	// does not wire one (most workspace tests never touch credentials).
+	api.credStore = newUnlockedStore(t, api.homePath)
+
+	id := createWorkspaceViaAPI(t, api, "WithMailbox", "")
+
+	// Seed two mailboxes directly in config.mailboxes: one bound to the
+	// workspace about to be deleted, one bound to an unrelated workspace ID
+	// (deliberately never created — the cascade must match by ID alone, not
+	// require the OTHER pair's workspace to exist).
+	require.NoError(t, api.safeUpdateConfigJSON(func(m map[string]any) error {
+		m["mailboxes"] = map[string]any{
+			"mia": map[string]any{
+				id: map[string]any{
+					"enabled": true, "workspace_id": id,
+					"password_ref": "mailbox_mia_" + id + "_password",
+				},
+			},
+			"jim": map[string]any{
+				"ws_other": map[string]any{
+					"enabled": true, "workspace_id": "ws_other",
+					"password_ref": "mailbox_jim_ws_other_password",
+				},
+			},
+		}
+		return nil
+	}))
+	require.NoError(t, api.credStore.Set("mailbox_mia_"+id+"_password", "secret-mia"))
+	require.NoError(t, api.credStore.Set("mailbox_jim_ws_other_password", "secret-jim"))
+
+	// DELETE the workspace → 204.
+	wDel := httptest.NewRecorder()
+	rDel := httptest.NewRequest(http.MethodDelete, "/api/v1/workspaces/"+id, nil)
+	rDel.URL.Path = "/api/v1/workspaces/" + id
+	api.HandleWorkspaces(wDel, rDel)
+	require.Equal(t, http.StatusNoContent, wDel.Code, "DELETE /workspaces/{id} must return 204")
+
+	raw, err := os.ReadFile(filepath.Join(api.homePath, "config.json"))
+	require.NoError(t, err)
+	var disk map[string]any
+	require.NoError(t, json.Unmarshal(raw, &disk))
+	mailboxes, _ := disk["mailboxes"].(map[string]any)
+
+	// mia's mailbox entry (its only pair, bound to the deleted workspace)
+	// must be removed entirely — the outer agent key drops once its inner
+	// map empties.
+	_, hasMia := mailboxes["mia"]
+	assert.False(t, hasMia, "mia's mailbox entry must be removed by the workspace-delete cascade")
+
+	// …and its credential is gone.
+	_, err = api.credStore.Get("mailbox_mia_" + id + "_password")
+	require.Error(t, err, "the deleted workspace's mailbox credential must be removed")
+
+	// The unrelated (jim, ws_other) pair survives completely untouched.
+	jimEntry, ok := mailboxes["jim"].(map[string]any)
+	require.True(t, ok, "jim's mailbox entry must survive")
+	_, hasOther := jimEntry["ws_other"].(map[string]any)
+	assert.True(t, hasOther, "jim's ws_other pair must survive")
+	gotJim, err := api.credStore.Get("mailbox_jim_ws_other_password")
+	require.NoError(t, err, "jim's credential must survive")
+	assert.Equal(t, "secret-jim", gotJim)
+}
+
 // TestHandleWorkspaces_List_SortOrder verifies pinned projects come first.
 // BDD: Given 3 projects where one is pinned with pin_order=1,
 // When GET /api/v1/workspaces is called,
