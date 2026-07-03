@@ -1487,12 +1487,29 @@ func computeAgentStatus(agentID string, activeIDs map[string]bool, soul string, 
 	return "idle"
 }
 
+// applyAgentOverrides copies per-agent execution overrides onto a
+// defaults-seeded wire Agent. MaxToolIterations: per-agent value wins when
+// set (>0); 0 means "inherit" and leaves the effective default in place.
+func applyAgentOverrides(ag *gen.Agent, ac *config.AgentConfig) {
+	if ac.MaxToolIterations > 0 {
+		ag.MaxToolIterations = ac.MaxToolIterations
+	}
+}
+
 // buildAgentDefaults populates the execution-related fields from config defaults.
 func buildAgentDefaults(cfg *config.Config) gen.Agent {
 	sm := gen.AgentSteeringMode(steeringModeOrDefault(cfg.Agents.Defaults.SteeringMode))
+	// Effective per-turn tool-round cap: mirror the runtime resolution
+	// (pkg/agent/instance.go) — defaults value when set, else 200 — so the
+	// wire never reports a meaningless 0 (a zeroed default was the visible
+	// half of the 2026-07-03 P0: the UI showed and re-persisted 0s).
+	maxIter := cfg.Agents.Defaults.MaxToolIterations
+	if maxIter <= 0 {
+		maxIter = 200
+	}
 	return gen.Agent{
 		TimeoutSeconds:    cfg.Agents.Defaults.TimeoutSeconds,
-		MaxToolIterations: cfg.Agents.Defaults.MaxToolIterations,
+		MaxToolIterations: maxIter,
 		SteeringMode:      sm,
 		// Required string fields — initialized to empty (overwritten per-agent).
 		Soul: "",
@@ -1561,6 +1578,7 @@ func (a *restAPI) listAgents(w http.ResponseWriter) {
 		}
 		ag.Type = coreagent.ToWireType(ac)
 		ag.Locked = ac.Locked
+		applyAgentOverrides(&ag, &ac)
 		ag.Model = &model
 		setAgentModelProvider(&ag, ac.Model)
 		ag.Status = gen.AgentStatus(computeAgentStatus(ac.ID, activeIDs, soul, ac.Locked))
@@ -1616,6 +1634,7 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 			}
 			ag.Type = coreagent.ToWireType(ac)
 			ag.Locked = ac.Locked
+			applyAgentOverrides(&ag, &ac)
 			ag.Model = &model
 			setAgentModelProvider(&ag, ac.Model)
 			ag.Status = gen.AgentStatus(computeAgentStatus(ac.ID, activeIDs, soul, ac.Locked))

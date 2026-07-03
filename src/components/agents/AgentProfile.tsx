@@ -266,7 +266,16 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // means "not configured" — the wire payload omits the field entirely.
   const [voice, setVoice] = useState('')
   const [timeoutSeconds, setTimeoutSeconds] = useState(0)
-  const [maxToolIterations, setMaxToolIterations] = useState(50)
+  const [maxToolIterations, setMaxToolIterations] = useState(200)
+  // Draft strings for the two number inputs. A controlled number input backed
+  // directly by the committed number turns "clear the field to type" into
+  // Number('') === 0 — and because this form AUTO-SAVES on state change, the 0
+  // was persisted mid-keystroke (P0, 2026-07-03: five agents + the global
+  // default were zero-clobbered on a live install). The draft absorbs
+  // in-progress typing; only a VALID value commits (and autosaves); blur with
+  // an invalid/empty draft restores the last committed value.
+  const [timeoutDraft, setTimeoutDraft] = useState('0')
+  const [maxToolIterationsDraft, setMaxToolIterationsDraft] = useState('200')
   const [steeringMode, setSteeringMode] = useState<'one-at-a-time' | 'queue-and-process'>('one-at-a-time')
   // Wave 5 / spec §6.1 BDD #15: Edit slide-over footer Delete agent.
   // Opens an AlertDialog; the confirm mutation invalidates the list and
@@ -350,7 +359,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     // silently reaching the server).
     setVoice((agent.voice ?? '').trim())
     setTimeoutSeconds(agent.timeout_seconds ?? 0)
-    setMaxToolIterations(agent.max_tool_iterations ?? 50)
+    setTimeoutDraft(String(agent.timeout_seconds ?? 0))
+    setMaxToolIterations(agent.max_tool_iterations ?? 200)
+    setMaxToolIterationsDraft(String(agent.max_tool_iterations ?? 200))
     setSteeringMode((agent.steering_mode ?? 'one-at-a-time') as 'one-at-a-time' | 'queue-and-process')
     setSandboxProfile(agent.sandbox_profile)
     setShellDenyPatterns(agent.shell_policy?.custom_deny_patterns ?? [])
@@ -1720,8 +1731,20 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   <Input
                     type="number"
                     min={0}
-                    value={timeoutSeconds}
-                    onChange={(e) => { markDirty(); setTimeoutSeconds(Number(e.target.value)) }}
+                    data-testid="agent-timeout-input"
+                    value={timeoutDraft}
+                    onChange={(e) => {
+                      const raw = e.target.value
+                      setTimeoutDraft(raw)
+                      const parsed = Number(raw)
+                      // Commit (and autosave) only a real value; in-progress
+                      // typing (empty/partial input) never persists.
+                      if (raw !== '' && Number.isInteger(parsed) && parsed >= 0) {
+                        markDirty()
+                        setTimeoutSeconds(parsed)
+                      }
+                    }}
+                    onBlur={() => setTimeoutDraft(String(timeoutSeconds))}
                     className="text-xs h-8"
                   />
                 </div>
@@ -1729,14 +1752,27 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   <label className="text-xs text-[var(--color-muted)] w-44 shrink-0">
                     Max tool calls per turn
                     <span className="block text-[10px] text-[var(--color-muted)]/70">
-                      Stops runaway loops. Default: 50.
+                      Per single turn (one message, task, or heartbeat run) — the
+                      turn pauses at the limit and can be continued. Default: 200.
                     </span>
                   </label>
                   <Input
                     type="number"
                     min={1}
-                    value={maxToolIterations}
-                    onChange={(e) => { markDirty(); setMaxToolIterations(Number(e.target.value)) }}
+                    data-testid="agent-max-tool-calls-input"
+                    value={maxToolIterationsDraft}
+                    onChange={(e) => {
+                      const raw = e.target.value
+                      setMaxToolIterationsDraft(raw)
+                      const parsed = Number(raw)
+                      // Commit (and autosave) only a real value >= 1; clearing
+                      // the field to type never persists a 0 again.
+                      if (raw !== '' && Number.isInteger(parsed) && parsed >= 1) {
+                        markDirty()
+                        setMaxToolIterations(parsed)
+                      }
+                    }}
+                    onBlur={() => setMaxToolIterationsDraft(String(maxToolIterations))}
                     className="text-xs h-8"
                   />
                 </div>

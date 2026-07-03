@@ -574,7 +574,7 @@ describe('CreateAgentModal — Advanced step fields', () => {
     await waitFor(() => expect(onCreate).toHaveBeenCalled())
     const call = onCreate.mock.calls.at(-1)![0]
     expect(call.timeout_seconds).toBe(300)
-    expect(call.max_tool_iterations).toBe(50)
+    expect(call.max_tool_iterations).toBe(200)
     expect(call.steering_mode).toBe('one-at-a-time')
   })
 

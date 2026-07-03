@@ -59,7 +59,7 @@ func DefaultConfig() *Config {
 				Provider:                  "",
 				MaxTokens:                 32768,
 				Temperature:               nil, // nil means use provider default
-				MaxToolIterations:         50,
+				MaxToolIterations:         200,
 				SummarizeMessageThreshold: 20,
 				SummarizeTokenPercent:     75,
 				SteeringMode:              "one-at-a-time",
