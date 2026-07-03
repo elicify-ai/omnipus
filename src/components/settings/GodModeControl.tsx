@@ -14,10 +14,21 @@
  * the write (with the minted consent token) once the password is confirmed.
  *
  * Live state is read from GET /api/v1/gateway/god-mode (GodModeStatus:
- * { enabled, available }). When the build does not support god-mode
- * (available=false) the toggle is disabled with an explanatory note.
+ * { enabled, available, supported }). `supported` is build support (false only
+ * on a nogodmode build) — the toggle is clickable whenever `supported` is true,
+ * even if `available` is currently false. `available` means this BOOT was
+ * already authorized (via --allow-god-mode or a prior UI enable + restart); it
+ * gates whether the override is live right now, not whether the switch can be
+ * flipped.
  *
- * The write goes through setGodMode() in api.ts (POST /api/v1/gateway/god-mode).
+ * The write goes through setGodMode() in api.ts (POST /api/v1/gateway/god-mode),
+ * which returns { enabled, restart_required }. When enabling from a boot that
+ * was not yet authorized, the config write succeeds but the override has no
+ * live effect until the gateway restarts — restart_required=true signals
+ * exactly that, and we open GatewayRestartModal so the operator can restart
+ * immediately (or defer via the existing pending-restart banner). Disabling
+ * always applies live (restart_required is always false for a disable), so
+ * the restart modal never opens on disable.
  */
 
 import { useState } from 'react'
@@ -26,6 +37,7 @@ import { Warning, ShieldCheck, SpinnerGap } from '@phosphor-icons/react'
 import { fetchGodMode, setGodMode, isApiError } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { ReAuthDialog } from './ReAuthDialog'
+import { GatewayRestartModal } from './GatewayRestartModal'
 
 export function GodModeControl() {
   const { addToast } = useUiStore()
@@ -40,23 +52,42 @@ export function GodModeControl() {
   // only fires from onReAuthConfirmed once the consent token is minted.
   const [pendingNext, setPendingNext] = useState<boolean | null>(null)
   const [reauthOpen, setReauthOpen] = useState(false)
+  // Opened when setGodMode reports restart_required=true (enabling from a
+  // boot that was not yet authorized). Never opens for a disable.
+  const [restartModalOpen, setRestartModalOpen] = useState(false)
 
   const enabled = godMode?.enabled === true
   const available = godMode?.available === true
+  // supported = build support (false only on a nogodmode build). Distinct
+  // from `available` (this boot was already authorized) — the toggle is
+  // clickable whenever the build supports god mode at all, since enabling is
+  // exactly how an unauthorized boot GETS authorized (persist + restart).
+  const supported = godMode?.supported === true
 
   const { mutate: applyChange, isPending: isSaving } = useMutation({
     mutationFn: ({ next, token }: { next: boolean; token: string }) => setGodMode(next, token),
-    onSuccess: (_data, { next }) => {
+    onSuccess: (data, { next }) => {
       // Refresh the read-side state so the banner + toggle reflect reality.
       queryClient.invalidateQueries({ queryKey: ['god-mode'] })
       // The toggle also changes per-agent effective sandbox/tool behaviour.
       queryClient.invalidateQueries({ queryKey: ['config'] })
       queryClient.invalidateQueries({ queryKey: ['agents'] })
+      // A pending-restart entry for sandbox.god_mode(_allowed) also appears in
+      // the generic banner; refresh it so it's in sync with our own modal.
+      queryClient.invalidateQueries({ queryKey: ['pending-restart'] })
       setPendingNext(null)
-      addToast({
-        message: next ? 'God-mode enabled' : 'God-mode disabled',
-        variant: next ? 'error' : 'success',
-      })
+      if (data.restart_required) {
+        // Enabled, but not yet active in this process — surface the restart
+        // modal so the operator can activate immediately (or defer via
+        // "Later", same as any other restart-gated setting).
+        addToast({ message: 'God-mode authorized — restart the gateway to activate it', variant: 'error' })
+        setRestartModalOpen(true)
+      } else {
+        addToast({
+          message: next ? 'God-mode enabled' : 'God-mode disabled',
+          variant: next ? 'error' : 'success',
+        })
+      }
     },
     onError: (err: unknown) => {
       setPendingNext(null)
@@ -72,9 +103,11 @@ export function GodModeControl() {
   })
 
   // requestToggle stages the desired state and opens the step-up dialog. The PUT
-  // fires from onReAuthConfirmed once the password is verified.
+  // fires from onReAuthConfirmed once the password is verified. Gated on
+  // `supported` (build support), NOT `available` — enabling from an
+  // unauthorized boot is exactly the UI-driven enablement flow.
   function requestToggle() {
-    if (!available || isSaving) return
+    if (!supported || isSaving) return
     setPendingNext(!enabled)
     setReauthOpen(true)
   }
@@ -120,12 +153,20 @@ export function GodModeControl() {
               <ShieldCheck size={12} weight="duotone" className="text-[var(--color-accent)] shrink-0" />
               Changing this requires re-typing your password.
             </p>
-            {!available && !isLoading && (
+            {!supported && !isLoading && (
               <p
                 data-testid="god-mode-unavailable-note"
                 className="text-[11px] text-[var(--color-muted)] italic"
               >
                 Not available in this build — god-mode support is compiled out.
+              </p>
+            )}
+            {supported && !available && !isLoading && (
+              <p
+                data-testid="god-mode-restart-note"
+                className="text-[11px] text-[var(--color-muted)] italic"
+              >
+                Authorized but not yet active — restart the gateway to activate god-mode.
               </p>
             )}
           </div>
@@ -137,7 +178,7 @@ export function GodModeControl() {
             aria-checked={enabled}
             aria-label="God-mode"
             data-testid="god-mode-toggle"
-            disabled={!available || busy || isLoading}
+            disabled={!supported || busy || isLoading}
             onClick={requestToggle}
             className={[
               'relative shrink-0 inline-flex h-6 w-11 items-center rounded-full transition-colors',
@@ -173,6 +214,15 @@ export function GodModeControl() {
             : 'Re-type your password to disable god-mode and restore the previous protections.'
         }
         onConfirmed={onReAuthConfirmed}
+      />
+
+      {/* O14: shown only when enabling persisted authorization but the
+          override has no live effect yet in this process (restart_required
+          from the POST response). Disabling never opens this — it always
+          applies live. */}
+      <GatewayRestartModal
+        open={restartModalOpen}
+        onClose={() => setRestartModalOpen(false)}
       />
     </div>
   )

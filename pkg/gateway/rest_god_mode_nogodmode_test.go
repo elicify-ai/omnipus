@@ -40,10 +40,14 @@ func TestGodMode_NoGodModeBuild_RejectsEnable(t *testing.T) {
 		"error must mention the build was compiled with nogodmode")
 	assert.False(t, api.agentLoop.GetConfig().Sandbox.GodMode,
 		"god mode must never be persisted on a nogodmode build")
+	assert.False(t, api.agentLoop.GetConfig().Sandbox.GodModeAllowed,
+		"god_mode_allowed authorization must never be persisted on a nogodmode build — the 403 must reject before any config write")
 }
 
 // TestGodMode_NoGodModeBuild_GETReportsUnavailable proves GET reports
-// available=false on a nogodmode build.
+// available=false AND supported=false on a nogodmode build — supported=false
+// is what the SPA uses to disable the toggle entirely (vs. leaving it
+// clickable-but-not-yet-authorized on a build that does support god mode).
 func TestGodMode_NoGodModeBuild_GETReportsUnavailable(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	api.allowGodMode = true
@@ -54,4 +58,6 @@ func TestGodMode_NoGodModeBuild_GETReportsUnavailable(t *testing.T) {
 	require.Equal(t, http.StatusOK, getW.Code)
 	assert.Contains(t, getW.Body.String(), `"available":false`,
 		"GET must report available=false on a nogodmode build")
+	assert.Contains(t, getW.Body.String(), `"supported":false`,
+		"GET must report supported=false on a nogodmode build")
 }

@@ -643,6 +643,20 @@ const toolPolicyDeny = "deny"
 // regardless of the Once guard — see the comment inside migrateDeprecatedToolEnableFlags.
 var deprecatedToolEnableMigrateOnce sync.Once
 
+// legacyToolEnableFlag pairs a legacy tools.<jsonKey>.enabled JSON key with the
+// policy-engine glob it maps to. Named (rather than anonymous) so it can also
+// serve as migrateDeprecatedToolEnableFlags' return type: the caller
+// (loadConfigInternal) uses the returned list to drive the one-time on-disk
+// self-heal write in stripDeprecatedToolEnableFlagsOnDisk
+// (tool_enable_migration.go), which removes the legacy key and persists the
+// derived policy so the migration cannot re-fire on a later reload.
+type legacyToolEnableFlag struct {
+	// jsonKey is the key directly under "tools" in the raw config JSON
+	jsonKey string
+	// policyGlob is the key written into cfg.Sandbox.ToolPolicies
+	policyGlob string
+}
+
 // toolEnableToPolicy maps each tools.<name> JSON key (the key immediately under
 // "tools" in config.json) to the policy-engine glob that covers all tools in
 // that subsystem. A nil cfg.Sandbox.ToolPolicies entry for the glob is created as
@@ -651,12 +665,7 @@ var deprecatedToolEnableMigrateOnce sync.Once
 // "Operator intent" means the "enabled" key is EXPLICITLY present in the raw JSON
 // and its value is the JSON literal false. A missing key (absent from JSON) means
 // the in-memory default applies — we never treat a missing key as operator intent.
-var toolEnableToPolicy = []struct {
-	// jsonKey is the key directly under "tools" in the raw config JSON
-	jsonKey string
-	// policyGlob is the key written into cfg.Sandbox.ToolPolicies
-	policyGlob string
-}{
+var toolEnableToPolicy = []legacyToolEnableFlag{
 	{"browser", "browser_*"},
 	{"mcp", "mcp_*"},
 	{"web", "search_web"},
@@ -691,9 +700,29 @@ var toolEnableToPolicy = []struct {
 // false due to Go's bool zero-value) are not misclassified as operator intent.
 // This prevents false positives for tools like mcp and spawn_status whose defaults.go
 // default is Enabled=false but which operators never explicitly disabled.
-func migrateDeprecatedToolEnableFlags(cfg *Config, raw []byte) {
+//
+// This function ONLY mutates cfg in memory — it never touches disk. On its own
+// that made the migration re-derive the same deny entry on every hot-reload
+// (the legacy flag was never removed), which meant an operator who used the
+// UI to set the tool back to "allow" would have the PUT handler correctly
+// delete the (now-redundant) tool_policies override, only for the very next
+// reload to re-inject "deny" from the still-present legacy flag — silently
+// bouncing the operator's choice back. The returned list lets the caller
+// (loadConfigInternal) drive a one-time on-disk self-heal
+// (stripDeprecatedToolEnableFlagsOnDisk, tool_enable_migration.go) that
+// removes the legacy key and persists the derived policy as a real entry, so
+// this function has nothing left to detect on the next load and the
+// migration naturally stops re-firing.
+//
+// Returns every {jsonKey, policyGlob} pair for which "enabled" was
+// EXPLICITLY present and false in the raw JSON — including pairs where an
+// existing stricter-or-equal policy meant no new deny entry was written
+// (cfg.Sandbox.ToolPolicies[policyGlob] is still guaranteed to hold a value
+// for every returned pair, either freshly set here or already present).
+// Returns nil when there is nothing to migrate.
+func migrateDeprecatedToolEnableFlags(cfg *Config, raw []byte) []legacyToolEnableFlag {
 	if cfg == nil || len(raw) == 0 {
-		return
+		return nil
 	}
 
 	// Extract the raw "tools" object from the JSON. If absent, nothing to migrate.
@@ -702,14 +731,15 @@ func migrateDeprecatedToolEnableFlags(cfg *Config, raw []byte) {
 	}
 	if err := json.Unmarshal(raw, &top); err != nil {
 		// Best-effort: parse errors are already handled upstream.
-		return
+		return nil
 	}
 	if len(top.Tools) == 0 {
-		return
+		return nil
 	}
 
 	// For each subsystem, check whether "enabled" is explicitly present AND false.
 	var migrated []string
+	var legacyFlags []legacyToolEnableFlag
 	for _, m := range toolEnableToPolicy {
 		subsysRaw, present := top.Tools[m.jsonKey]
 		if !present {
@@ -731,9 +761,15 @@ func migrateDeprecatedToolEnableFlags(cfg *Config, raw []byte) {
 			continue
 		}
 
-		// Operator explicitly set enabled=false. Translate to deny unless a
-		// stricter-or-equal policy already exists (never downgrade ask→deny or
-		// preserve an existing allow if the operator already set one explicitly).
+		// Operator explicitly set enabled=false. Record the legacy flag
+		// unconditionally — it is stale the moment it has been seen, whether
+		// or not a new deny entry ends up being written below — so the caller
+		// strips it from disk regardless.
+		legacyFlags = append(legacyFlags, m)
+
+		// Translate to deny unless a stricter-or-equal policy already exists
+		// (never downgrade ask→deny or clobber an existing allow the
+		// operator already set explicitly).
 		if cfg.Sandbox.ToolPolicies == nil {
 			cfg.Sandbox.ToolPolicies = make(map[string]string)
 		}
@@ -760,6 +796,8 @@ func migrateDeprecatedToolEnableFlags(cfg *Config, raw []byte) {
 				"migrated_tools", migrated)
 		})
 	}
+
+	return legacyFlags
 }
 
 // restoreSkillDiscoveryDefaults repairs configs that persisted the skill-

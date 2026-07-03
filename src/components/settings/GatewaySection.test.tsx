@@ -91,7 +91,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(useUiStore).mockReturnValue({ addToast: mockAddToast } as never)
   vi.mocked(fetchGatewayStatus).mockResolvedValue({ daily_cost: 0, uptime_seconds: 0 } as never)
-  vi.mocked(fetchGodMode).mockResolvedValue({ enabled: false, available: true })
+  vi.mocked(fetchGodMode).mockResolvedValue({ enabled: false, available: true, supported: true })
 })
 
 // ── FR-107: no auth_mode:none option ─────────────────────────────────────────
