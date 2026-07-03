@@ -22,6 +22,7 @@ import {
 import { ModelSelector, type ModelGroup } from '@/components/ui/model-selector'
 import { InheritToggle } from './InheritToggle'
 import { CliPathValidationHint } from '../CliPathValidationHint'
+import { AutoAppliedFlags } from '../AutoAppliedFlags'
 import { useCliPathValidation } from '@/hooks/useCliPathValidation'
 import { useCliDetect } from '@/hooks/useCliDetect'
 import { detectEntryFor, resolveCliDetectHint, SUPPORTED_CLIS } from '@/lib/cliDetect'
@@ -410,20 +411,22 @@ export function ExecutorInputs({ payload, setField, lockedCli }: ExecutorInputsP
         </div>
       </div>
 
+      <AutoAppliedFlags cli={payload.cli} testId="wizard-executor-defaults" />
+
       <div className="space-y-2">
         <label htmlFor="wizard-cli-args" className="text-sm font-medium">
-          CLI arguments
+          Additional CLI arguments
         </label>
         <Input
           id="wizard-cli-args"
           data-testid="wizard-cli-args"
           value={payload.executor_cli_args ?? ''}
           onChange={(e) => setField('executor_cli_args', e.target.value)}
-          placeholder="--verbose --output json"
+          placeholder="e.g. --add-dir /extra/path (flags shown above are applied automatically and can't be overridden here)"
           className="font-mono text-xs"
         />
         <p className="text-[11px] text-[var(--color-muted)]">
-          Space-separated args passed before the user prompt.
+          Space-separated args passed before the user prompt, in addition to the flags Omnipus applies automatically (shown above).
         </p>
       </div>
     </div>

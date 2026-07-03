@@ -1067,6 +1067,22 @@ func (a *restAPI) HandleAgents(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// GET /api/v1/agents/executor-defaults — static reference data (agent-system-
+	// fixes-2 ghost-text bug fix). "executor-defaults" is a RESERVED static path
+	// segment, not an agent ID, so this is matched before the generic agentID
+	// routing below (an agent literally named "executor-defaults" can never be
+	// looked up through this route — createAgent/updateAgent do not reserve the
+	// name, so this is purely a routing precedence choice, matching how
+	// "sessions"/"runner"/"tools"/"mailboxes" sub-paths are reserved below).
+	if agentID == "executor-defaults" && subPath == "" {
+		if r.Method != http.MethodGet {
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		a.listExecutorDefaults(w)
+		return
+	}
+
 	// Validate agentID before any filesystem operations (path traversal guard, C1).
 	if agentID != "" {
 		if err := validateEntityID(agentID); err != nil {
@@ -1230,6 +1246,58 @@ func (a *restAPI) testAgentRunner(w http.ResponseWriter, r *http.Request, agentI
 		resp.CliVersion = strPtr(res.CLIVersion)
 	}
 	jsonOK(w, resp)
+}
+
+// listExecutorDefaults handles GET /api/v1/agents/executor-defaults (Agent
+// System ghost-text bug fix). Returns static, byte-accurate reference data —
+// for each supported subagent_3p external CLI, the ORDERED list of arguments
+// pkg/agent/runner/driver_{claude,codex,opencode}.go's buildArgs() actually
+// applies BEFORE any operator-supplied executor.cli_args, plus a note on how
+// the prompt itself reaches the CLI. Not agent-scoped: this is pure reference
+// documentation sourced directly from the three drivers. There is no runtime
+// introspection of buildArgs — a change to any driver's own flags MUST be
+// mirrored here by hand, or this endpoint drifts from reality.
+func (a *restAPI) listExecutorDefaults(w http.ResponseWriter) {
+	jsonOK(w, []gen.ExecutorDefaults{
+		{
+			Cli: gen.ExecutorDefaultsCliClaudeCode,
+			AutoAppliedFlags: []string{
+				"-p",
+				"--output-format stream-json",
+				"--verbose",
+				"--no-chrome",
+				"--model <configured model> (only when a model is configured)",
+				"--permission-mode acceptEdits",
+				"--max-turns <configured max turns> (only when a turn cap is configured)",
+			},
+			Notes: "The prompt is delivered via stdin — a trailing \"-\" argument tells claude to read it from stdin — never via a --prompt flag or positional argument. --resume/--session-id are never passed; every run starts a fresh claude session. --dangerously-skip-permissions is never passed (--permission-mode acceptEdits is the non-interactive posture used instead). Operator cli_args are appended after this list; an attempt to re-add --dangerously-skip-permissions, escalate --permission-mode to bypassPermissions, or change --output-format away from stream-json is dropped with a WARN (see argsafety.go) — the last one because the driver's own NDJSON stream parser requires stream-json output.",
+		},
+		{
+			Cli: gen.ExecutorDefaultsCliCodex,
+			AutoAppliedFlags: []string{
+				"--ask-for-approval never",
+				"exec",
+				"--json",
+				"--sandbox workspace-write",
+				"--skip-git-repo-check",
+				"--color never",
+				"-m <configured model> (only when a model is configured)",
+				"-C <agent working directory> (only when a working directory is set — always populated for a real dispatched run)",
+			},
+			Notes: "--ask-for-approval is a GLOBAL codex flag and must precede the exec subcommand (codex errors if it follows exec); --sandbox is an exec-subcommand flag and is placed after exec instead. The prompt is delivered via stdin — a trailing \"-\" argument — never via a --prompt flag. Operator cli_args are appended after this list; --dangerously-bypass-approvals-and-sandbox, --sandbox danger-full-access, any --ask-for-approval override, and any --json override (bare or \"=false\"-shaped) are dropped with a WARN (see argsafety.go) — the last one because the driver's own NDJSON stream parser requires --json output.",
+		},
+		{
+			Cli: gen.ExecutorDefaultsCliOpencode,
+			AutoAppliedFlags: []string{
+				"run",
+				"--format json",
+				"--model <configured model> (only when the configured model is shaped like \"provider/model\", e.g. \"anthropic/claude-3-5-sonnet\"; a bare model name is omitted so the CLI falls back to its own default)",
+				"--dangerously-skip-permissions",
+				"--",
+			},
+			Notes: "opencode's `run` command has no --prompt flag; the prompt is delivered as the POSITIONAL argument placed LAST, after the literal \"--\" end-of-options separator, so opencode's yargs-based argument parser never mistakes prompt text beginning with \"--\" for a flag. It is never sent via stdin (stdin is always an empty reader for opencode runs). --dangerously-skip-permissions is opencode's only non-interactive auto-approve posture in this CLI version (no middle-ground \"auto-accept edits\" flag exists) — Omnipus's own consent routing for opencode remains best-effort/post-hoc regardless of this flag. Operator cli_args are appended before the trailing \"--\"; a redundant --dangerously-skip-permissions or an attempt to change --format away from json is dropped with a WARN (see argsafety.go) — the latter because the driver's own NDJSON stream parser requires --format json output.",
+		},
+	})
 }
 
 func (a *restAPI) listAgentSessions(w http.ResponseWriter, agentID string) {
