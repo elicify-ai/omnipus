@@ -1682,6 +1682,13 @@ func registerSharedTools(
 			// task run starts a fresh turn at depth 0 (see processTaskDirect depth
 			// seeding); this hard ceiling closes that gap.
 			taskCreate.SetMaxDelegationDepth(maxTaskDepth)
+			// subagent_3p task-assignment guard: TaskExecutor.processTaskDirect
+			// always runs a task on the native engine — there is no executor-kind
+			// branch to dispatch an external-CLI worker's own runner — so a task
+			// assigned to one would silently mis-execute with system-level tool
+			// access instead of the configured external CLI. Mirrors the same
+			// check on the REST path (rest_tasks.go's validateTaskAgentID).
+			taskCreate.SetExternalCLIWorkerChecker(cfg.IsExternalCLIWorkerID)
 			taskCreate.SetOnCreate(func(entity *task.Task) {
 				al.EmitTaskStatusChanged(TaskStatusChangedPayload{
 					TaskID:    entity.ID,
@@ -1710,6 +1717,8 @@ func registerSharedTools(
 				currentAgentID, agentCfg, cfg.Agents.Defaults,
 				config.DelegationModeTask, registry,
 			))
+			// Same subagent_3p reassignment guard as taskCreate above.
+			taskUpdate.SetExternalCLIWorkerChecker(cfg.IsExternalCLIWorkerID)
 			agent.Tools.Register(taskUpdate)
 
 			setTodos := tools.NewSetTodosTool(al.taskStore)

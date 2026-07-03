@@ -460,3 +460,40 @@ func TestTaskDelete_Blocker_AdvancesMultiDepDependent(t *testing.T) {
 	assert.Equal(t, gen.TaskStatus("next"), statusAfter,
 		"TC must advance from blocked→next after deleting TB (remaining blocker TDone is done)")
 }
+
+// ── validateTaskAgentID guard-clause hardening ───────────────────────────────
+//
+// validateTaskAgentID's two early guards (a.agentLoop == nil; an empty/nil
+// registry) used to `return nil` — silently ALLOWING the agent_id assignment,
+// which would skip BOTH the subagent_3p rejection and the team-membership
+// check for any caller that reached them. They now return
+// errTaskAgentLoopUnavailable (fail CLOSED) instead, matching the codebase's
+// established "dependency not initialized -> deny" convention (see
+// rest_god_mode.go / rest_sandbox_config.go / rest_security_wave5.go).
+//
+// These tests call validateTaskAgentID directly rather than through
+// handleTaskCreate/handleTaskPatch: both of those handlers already dereference
+// a.agentLoop.GetConfig() before ever calling validateTaskAgentID, so a nil
+// agentLoop would panic on that earlier line first — the guard is reachable
+// only by a caller that does not share that precondition, which these tests
+// construct directly.
+
+// TestValidateTaskAgentID_NilAgentLoop_FailsClosed proves a nil agentLoop now
+// denies rather than silently allowing the assignment.
+func TestValidateTaskAgentID_NilAgentLoop_FailsClosed(t *testing.T) {
+	api := &restAPI{}
+	err := api.validateTaskAgentID("some-agent", "some-workspace")
+	require.Error(t, err, "a nil agentLoop must fail CLOSED, not silently allow the assignment")
+	assert.ErrorIs(t, err, errTaskAgentLoopUnavailable)
+}
+
+// TestValidateTaskAgentID_EmptyAgentID_StillSkipsCheck proves the one
+// legitimate no-op path survives the guard-clause hardening: an empty
+// agent_id means there is no assignment to validate at all — this is not a
+// fail-open case, there is simply nothing to check, and must remain nil even
+// with agentLoop nil.
+func TestValidateTaskAgentID_EmptyAgentID_StillSkipsCheck(t *testing.T) {
+	api := &restAPI{}
+	err := api.validateTaskAgentID("", "some-workspace")
+	require.NoError(t, err, "an empty agent_id has nothing to validate and must remain a no-op")
+}

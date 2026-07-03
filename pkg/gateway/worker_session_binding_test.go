@@ -318,6 +318,99 @@ func TestTaskPatch_WorkerAssignment(t *testing.T) {
 	})
 }
 
+// TestTaskPost_AgentOnDifferentWorkspaceTeam_Rejected proves validateTaskAgentID's
+// workspace-team check is workspace-SCOPED — membership on ANY workspace's team
+// is not sufficient; the agent must be on THIS task's OWN workspace's team. Every
+// other test in this file exercises exactly one workspace at a time, so a bug
+// that checked "is this agent on some workspace's team anywhere" (instead of the
+// task's specific workspace) would still pass all of them. Two independent
+// reviewers flagged this as the one missing case.
+//
+// BDD:
+//
+//	Given workspace A's team does NOT include agent "hans" (default roster),
+//	  and workspace B's team DOES include agent "hans" (explicit core_team),
+//	When POST /api/v1/tasks in workspace A assigns agent_id="hans",
+//	Then 400 — hans's membership on workspace B does not authorize workspace A.
+//	Control: the identical assignment in workspace B (where hans IS a member)
+//	succeeds, proving the rejection above is about workspace scoping and not
+//	some unrelated failure (e.g. "hans" not existing in the registry).
+func TestTaskPost_AgentOnDifferentWorkspaceTeam_Rejected(t *testing.T) {
+	api, _ := newWorkerTestRestAPI(t)
+
+	// wsA keeps the default roster (mia/jim/ava/ray/planner/explorer/researcher
+	// intersected with what's actually configured) — "hans" is not in it.
+	wsA := ensureTestWorkspace(t, api)
+	wsB := createWorkspaceViaAPI(t, api, "TeamWorkspaceB_"+t.Name(), "")
+	setWorkspaceCoreTeam(t, api, wsB, []string{"mia", "hans"})
+
+	body := fmt.Sprintf(
+		`{"title":"CrossWorkspaceLeak","action":"llm","workspace_id":%q,"prompt":"do it","agent_id":"hans"}`,
+		wsA,
+	)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	r.URL.Path = "/api/v1/tasks"
+	api.HandleTasks(w, r)
+
+	require.Equal(t, http.StatusBadRequest, w.Code,
+		"hans is a member of workspace B's team, not workspace A's — the check must be "+
+			"scoped to the task's OWN workspace, not any/every workspace; body=%s", w.Body.String())
+	assert.Contains(t, strings.ToLower(w.Body.String()), "not a member",
+		"the 400 body must explain the team-membership rejection")
+
+	// Control: the SAME agent_id in workspace B (where it IS a team member) succeeds.
+	bodyB := fmt.Sprintf(
+		`{"title":"SameWorkspaceControl","action":"llm","workspace_id":%q,"prompt":"do it","agent_id":"hans"}`,
+		wsB,
+	)
+	wB := httptest.NewRecorder()
+	rB := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(bodyB))
+	rB.Header.Set("Content-Type", "application/json")
+	rB.URL.Path = "/api/v1/tasks"
+	api.HandleTasks(wB, rB)
+	require.Equal(t, http.StatusCreated, wB.Code,
+		"control: hans IS on workspace B's team, so the identical assignment there must succeed; body=%s",
+		wB.Body.String())
+}
+
+// TestTaskPatch_AgentOnDifferentWorkspaceTeam_Rejected mirrors
+// TestTaskPost_AgentOnDifferentWorkspaceTeam_Rejected on the PATCH
+// /api/v1/tasks/{id} path — the second call site of validateTaskAgentID.
+func TestTaskPatch_AgentOnDifferentWorkspaceTeam_Rejected(t *testing.T) {
+	api, _ := newWorkerTestRestAPI(t)
+
+	wsA := ensureTestWorkspace(t, api) // "hans" absent from the default team
+	wsB := createWorkspaceViaAPI(t, api, "TeamWorkspaceB_"+t.Name(), "")
+	setWorkspaceCoreTeam(t, api, wsB, []string{"mia", "hans"})
+
+	created := createTaskViaAPI(t, api, "PatchCrossWorkspaceLeak", wsA)
+
+	w := patchTask(t, api, created.Id, `{"agent_id":"hans"}`)
+	require.Equal(t, http.StatusBadRequest, w.Code,
+		"hans is a member of workspace B's team, not the task's OWN workspace A — "+
+			"PATCH must reject it; body=%s", w.Body.String())
+
+	// Content check: the task must not have gained the rejected agent_id.
+	wGet := httptest.NewRecorder()
+	rGet := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/"+created.Id, nil)
+	rGet.URL.Path = "/api/v1/tasks/" + created.Id
+	api.HandleTasks(wGet, rGet)
+	require.Equal(t, http.StatusOK, wGet.Code)
+	var got gen.Task
+	require.NoError(t, json.Unmarshal(wGet.Body.Bytes(), &got))
+	assert.Nil(t, got.AgentId, "task must not have an agent_id after a rejected PATCH")
+
+	// Control: PATCH assigning hans to a task IN workspace B (where it IS a
+	// team member) succeeds — proves the rejection above is workspace-scoping,
+	// not some unrelated failure.
+	createdB := createTaskViaAPI(t, api, "PatchSameWorkspaceControl", wsB)
+	wB := patchTask(t, api, createdB.Id, `{"agent_id":"hans"}`)
+	require.Equal(t, http.StatusOK, wB.Code,
+		"control: hans IS on workspace B's team; body=%s", wB.Body.String())
+}
+
 // TestDelegationWorkerTaskStillSucceeds is the CONTROL that proves the worker
 // guard on the REST API does NOT block Jim→worker delegation. Delegation
 // creates worker-targeted tasks through task_create → taskStore.Create
