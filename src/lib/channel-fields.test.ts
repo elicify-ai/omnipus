@@ -75,6 +75,11 @@ describe('helpLinkScheme.test — M-4: every helpLink.url must be https://', () 
     }
     // signal is confirmed absent from the descriptor (spec §5 US-C1)
     expect(CHANNEL_FIELDS).not.toHaveProperty('signal')
+    // email is configured exclusively via the dedicated EmailMailboxPanel
+    // (/agents/{id}/mailbox) — ConnectorsScreen filters email out before
+    // ChannelConfigPanel could ever open for it, so a second field-catalog
+    // entry here would be dead code that can only drift
+    expect(CHANNEL_FIELDS).not.toHaveProperty('email')
   })
 
   it('google-chat authGroup fields belong to known groups', () => {
@@ -85,6 +90,26 @@ describe('helpLinkScheme.test — M-4: every helpLink.url must be https://', () 
         expect(knownGroups.has(field.authGroup)).toBe(true)
       }
     }
+  })
+})
+
+describe('dead-field regression pins — fields the backend silently drops or never reads', () => {
+  it('google-chat has no service_account_file descriptor (backend strips filesystem-path fields on configure — pkg/gateway/rest.go channelFilesystemPathFields — the UI form would be a dead end)', () => {
+    const fields = CHANNEL_FIELDS['google-chat'] ?? []
+    expect(fields.find((f) => f.key === 'service_account_file')).toBeUndefined()
+  })
+
+  it('line has no webhook_host/webhook_port descriptors (the webhook handler is mounted on the shared gateway mux — pkg/channels/line/line.go only reads webhook_path — the backend never consults these)', () => {
+    const fields = CHANNEL_FIELDS['line'] ?? []
+    expect(fields.find((f) => f.key === 'webhook_host')).toBeUndefined()
+    expect(fields.find((f) => f.key === 'webhook_port')).toBeUndefined()
+  })
+
+  it('irc includes a nickserv_password field of type password (distinct secret from the server-level password field — pkg/channels/irc/handler.go sends NickServ IDENTIFY when set and SASL is not in use)', () => {
+    const fields = CHANNEL_FIELDS['irc'] ?? []
+    const field = fields.find((f) => f.key === 'nickserv_password')
+    expect(field).toBeDefined()
+    expect(field?.type).toBe('password')
   })
 })
 

@@ -34,6 +34,12 @@ import { useUiStore } from '@/store/ui'
 import { WHATSAPP_CHANNEL_ID } from './whatsappChannelId'
 import { WhatsAppNativeNotice } from './WhatsAppNativeNotice'
 
+// CONFIGURED_SENTINEL is the backend's redaction placeholder for stored secrets
+// (pkg/gateway/rest.go redactChannelConfig). GET responses carry it instead of
+// the real value; it must NEVER be submitted back — buildSubmitPayload strips
+// it so the stored credential is left untouched.
+const CONFIGURED_SENTINEL = '[configured]'
+
 interface ChannelConfigPanelProps {
   channelId: string
   channelName: string
@@ -571,18 +577,34 @@ export function ChannelConfigPanel({
   // (rest.go ~4532-4537) fires: presence with empty string → clear the _ref and
   // delete the stored credential.
   function buildSubmitPayload(): Record<string, unknown> {
-    if (!isGoogleChat) return formValues
+    // SECURITY: strip untouched redacted secrets. GET redacts every stored
+    // sensitive field to the literal "[configured]" (rest.go redactChannelConfig)
+    // and the form hydrates that placeholder verbatim — but configureChannel
+    // treats ANY non-empty value as a NEW secret, so echoing it back would
+    // overwrite the real credential with the literal string "[configured]"
+    // (breaking the channel on next start). Omitting the field is the correct
+    // "keep the stored secret" signal: the backend merge leaves absent fields
+    // untouched (pinned by channel_secret_ref_test). A user-cleared field ('')
+    // still goes through and revokes the credential; a newly-typed secret is
+    // never equal to the sentinel and is stored normally.
+    const payload: Record<string, unknown> = {}
+    for (const [key, value] of Object.entries(formValues)) {
+      if (value === CONFIGURED_SENTINEL) continue
+      payload[key] = value
+    }
 
-    let payload = { ...formValues }
+    if (!isGoogleChat) return payload
+
+    let gchatPayload = { ...payload }
     const deselectedGroup = gChatAuthMethod === 'webhook' ? 'service_account' : 'webhook'
     const fieldsToClear = fields.filter((f) => f.authGroup === deselectedGroup)
     // Send '' (not delete) so the backend detects the clear and revokes any
     // stored credential for this field. Dotted keys do not appear in GChat
     // descriptors but handle them defensively for future-proofing.
     for (const f of fieldsToClear) {
-      payload = setNested(payload, f.key, '')
+      gchatPayload = setNested(gchatPayload, f.key, '')
     }
-    return payload
+    return gchatPayload
   }
 
   // WhatsApp is always native (whatsmeow) — the legacy bridge + the `use_native`
