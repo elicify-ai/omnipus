@@ -703,14 +703,22 @@ function ProviderPickerSheet({
 }: ProviderPickerSheetProps) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" widthClass="w-[90vw] sm:max-w-lg" data-testid="provider-picker-sheet">
-        <SheetHeader className="mb-4">
+      <SheetContent
+        side="right"
+        widthClass="w-[90vw] sm:max-w-lg"
+        className="flex h-full flex-col"
+        data-testid="provider-picker-sheet"
+      >
+        <SheetHeader className="mb-4 shrink-0">
           <SheetTitle>Connect a provider</SheetTitle>
           <SheetDescription>Choose a provider to connect an API key.</SheetDescription>
         </SheetHeader>
 
-        <div className="space-y-4 overflow-y-auto pr-1">
-          <div className="relative">
+        {/* Header + search stay fixed; only the provider list below scrolls.
+            (`overflow-y-auto` needs a bounded height — the previous wrapper had
+            none, so long lists just clipped instead of scrolling.) */}
+        <div className="flex min-h-0 flex-1 flex-col gap-4">
+          <div className="relative shrink-0">
             <MagnifyingGlass
               size={13}
               className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-[var(--color-muted)]"
@@ -726,6 +734,7 @@ function ProviderPickerSheet({
             />
           </div>
 
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1" data-testid="picker-scroll-region">
           {groups.length === 0 ? (
             <p className="text-sm text-[var(--color-muted)] text-center py-6">
               {allConfigured
@@ -767,6 +776,7 @@ function ProviderPickerSheet({
           )}
 
           <BrandDisclaimer className="mt-2" />
+          </div>
         </div>
       </SheetContent>
     </Sheet>
