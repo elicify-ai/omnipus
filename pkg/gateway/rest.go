@@ -2840,7 +2840,13 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 					if req.ShellPolicy.EnableDenyPatterns != nil {
 						existing["enable_deny_patterns"] = *req.ShellPolicy.EnableDenyPatterns
 					}
-					if req.ShellPolicy.CustomDenyPatterns != nil && len(*req.ShellPolicy.CustomDenyPatterns) > 0 {
+					// An explicitly-sent array overwrites, INCLUDING the empty array —
+					// that is how the SPA clears all deny patterns. Only a nil (field
+					// absent from the request) leaves the persisted list untouched.
+					// The old `len(...) > 0` guard made pattern lists impossible to
+					// clear over the wire: the PUT succeeded but the delete was
+					// silently dropped (found live, 2026-07-03).
+					if req.ShellPolicy.CustomDenyPatterns != nil {
 						existing["custom_deny_patterns"] = *req.ShellPolicy.CustomDenyPatterns
 					}
 					agentMap["shell_policy"] = existing
