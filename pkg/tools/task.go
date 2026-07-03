@@ -99,6 +99,41 @@ type TaskCreateTool struct {
 	// A→B→A task→task chain cannot recurse unboundedly. Set via
 	// SetMaxDelegationDepth; 0 disables the bound (no caller should leave it 0).
 	maxDelegationDepth int
+	// externalCLIWorkerCheck, when non-nil, reports whether agentID is a
+	// subagent_3p (external-CLI) worker. TaskExecutor.processTaskDirect routes
+	// every task run through the native runAgentLoop path unconditionally
+	// (pkg/agent/loop.go) — there is no executor-kind branch analogous to the
+	// agent-to-agent sub-turn path's runner.ResolveDispatch /
+	// runExternalCLISubTurn — so a task assigned to a subagent_3p would
+	// silently execute on the NATIVE engine with full system-level tool access
+	// instead of the configured external CLI. This mirrors the REST-side
+	// rejection in pkg/gateway/rest_tasks.go's validateTaskAgentID for the
+	// human/SPA assignment path; the delegationDeny gate above does NOT cover
+	// this — it only proves the CALLER may delegate to the target, not that
+	// the target is safe to task-assign given this engine limitation. Checked
+	// BEFORE the delegation gate (a categorical fact about the target agent's
+	// type, independent of whether the caller may delegate to it), mirroring
+	// validateTaskAgentID's own check ordering.
+	//
+	// Nil (tests/standalone) fails OPEN, matching delegateCheck/delegationDeny's
+	// established fail-open-when-unwired convention on this struct; the
+	// production agent loop MUST wire this via SetExternalCLIWorkerChecker
+	// (typically to (*config.Config).IsExternalCLIWorkerID via a closure that
+	// re-reads the live config, the same function rest_tasks.go's
+	// validateTaskAgentID calls).
+	externalCLIWorkerCheck func(agentID string) bool
+}
+
+// externalCLIWorkerDenialMessage is the rejection text for a task assignment
+// targeting a subagent_3p (external-CLI) worker. Mirrors
+// pkg/gateway/rest_tasks.go's validateTaskAgentID rejection message/reasoning
+// so the human/SPA path and the agent-tool-call path present the same
+// explanation for the same engine limitation.
+func externalCLIWorkerDenialMessage(agentID string) string {
+	return fmt.Sprintf(
+		"agent %q is a subagent_3p (external-CLI) worker — task execution for external-CLI workers is not yet supported; assign the task to a native agent instead",
+		agentID,
+	)
 }
 
 func NewTaskCreateTool(store *task.Store) *TaskCreateTool {
@@ -135,6 +170,15 @@ func (t *TaskCreateTool) SetDelegationDenyChecker(
 // SetOnCreate sets the callback invoked after a task is successfully created.
 func (t *TaskCreateTool) SetOnCreate(fn func(*task.Task)) {
 	t.onCreate = fn
+}
+
+// SetExternalCLIWorkerChecker installs the subagent_3p (external-CLI) worker
+// predicate (SEC). See the externalCLIWorkerCheck field doc for the full
+// rationale — without this wired, a task_create targeting a subagent_3p would
+// pass the delegation gate (a real, allowed edge) and then run natively on
+// the wrong engine with full system-level tool access.
+func (t *TaskCreateTool) SetExternalCLIWorkerChecker(fn func(agentID string) bool) {
+	t.externalCLIWorkerCheck = fn
 }
 
 func (t *TaskCreateTool) Name() string           { return "create_task" }
@@ -277,6 +321,16 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		return ErrorResult("agent_id is required")
 	}
 
+	// subagent_3p (external-CLI) worker guard (SEC): checked BEFORE the
+	// delegation gate — it is a categorical fact about the target agent's
+	// type ("can this agent even be task-assigned given the engine's current
+	// limitations"), independent of whether the caller is authorized to
+	// delegate to it. See externalCLIWorkerCheck's doc comment for the full
+	// exploit this closes.
+	if t.externalCLIWorkerCheck != nil && t.externalCLIWorkerCheck(agentID) {
+		return ErrorResult(externalCLIWorkerDenialMessage(agentID))
+	}
+
 	// Delegation policy gate (FR-6.2): trust set + modes ("task") + depth.
 	if t.delegationDeny != nil {
 		if denial := t.delegationDeny(ctx, agentID); denial != nil {
@@ -387,6 +441,12 @@ type TaskUpdateTool struct {
 	// SAME gate task_create uses.
 	delegationDeny func(ctx context.Context, targetAgentID string) *DelegationDenial
 	onComplete     func(*task.Task)
+	// externalCLIWorkerCheck, when non-nil, reports whether agentID is a
+	// subagent_3p (external-CLI) worker. Same rationale and fail-open-when-nil
+	// convention as TaskCreateTool.externalCLIWorkerCheck — reassignment via
+	// update_task is re-delegation and must be gated the same way create_task
+	// is. Set via SetExternalCLIWorkerChecker.
+	externalCLIWorkerCheck func(agentID string) bool
 }
 
 func NewTaskUpdateTool(store *task.Store) *TaskUpdateTool {
@@ -411,6 +471,13 @@ func (t *TaskUpdateTool) SetDelegationDenyChecker(
 	fn func(ctx context.Context, targetAgentID string) *DelegationDenial,
 ) {
 	t.delegationDeny = fn
+}
+
+// SetExternalCLIWorkerChecker installs the subagent_3p (external-CLI) worker
+// predicate (SEC). See TaskCreateTool.SetExternalCLIWorkerChecker — reassignment
+// via update_task is re-delegation and must be gated the same way.
+func (t *TaskUpdateTool) SetExternalCLIWorkerChecker(fn func(agentID string) bool) {
+	t.externalCLIWorkerCheck = fn
 }
 
 func (t *TaskUpdateTool) Name() string           { return "update_task" }
@@ -556,6 +623,11 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 	// policy gate task_create uses (FR-6.2). A no-op reassign (same agent) needs
 	// no gate. Mirrors TaskCreateTool.Execute's denial shape.
 	if agentID, ok := args["agent_id"].(string); ok && agentID != "" && agentID != existing.AgentID {
+		// subagent_3p (external-CLI) worker guard (SEC): checked BEFORE the
+		// delegation gate, same ordering/rationale as TaskCreateTool.Execute.
+		if t.externalCLIWorkerCheck != nil && t.externalCLIWorkerCheck(agentID) {
+			return ErrorResult(externalCLIWorkerDenialMessage(agentID))
+		}
 		if t.delegationDeny != nil {
 			if denial := t.delegationDeny(ctx, agentID); denial != nil {
 				return DelegationDeniedResult("update_task", denial)
