@@ -104,11 +104,20 @@ func TestCreateAgent_Worker_DerivesNativeExecutor(t *testing.T) {
 	assert.Equal(t, gen.AgentExecutorKindNative, *created.Executor.Kind)
 }
 
-// TestCreateAgent_Worker_AllowsAnyExecutorKind is the control: a worker can be
-// created with any executor kind (native, external-cli, remote-a2a). Kind
-// validation ensures the kind is known; remote-a2a is accepted at create but
-// rejected at dispatch (runner.ErrRemoteA2AReserved).
-func TestCreateAgent_Worker_AllowsAnyExecutorKind(t *testing.T) {
+// TestCreateAgent_Worker_ExecutorFieldIgnored proves the W1 discriminated-
+// union behavior change: AgentCreateRequestSubagent has no `executor`
+// property at all — a Subagent create can no longer request remote-a2a (or
+// any other) executor kind directly at create time (the field matrix marks
+// Subagent's executor row "— (native)"). With ValidateInbound disabled (the
+// default in this test harness — buildExecutorTestAPI does not opt in), an
+// `executor` key present in the JSON body is simply unknown-field-ignored by
+// json.Unmarshal into the named AgentCreateRequestSubagent struct, and the
+// agent is created with the server-derived native executor regardless of
+// what the caller sent. (remote-a2a is still reachable via PUT —
+// AgentUpdateRequest remains one flat type shared by every agent type; see
+// TestUpdateAgent_DelegationRemoteA2AAccepted-adjacent executor coverage in
+// rest_agent_executor_test.go.)
+func TestCreateAgent_Worker_ExecutorFieldIgnored(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 
 	body := `{"name":"Worker Remote A2A","type":"Subagent","description":"remote-a2a regression","executor":{"kind":"remote-a2a"},"soul":"remote-a2a-soul"}`
@@ -122,5 +131,6 @@ func TestCreateAgent_Worker_AllowsAnyExecutorKind(t *testing.T) {
 	assert.Equal(t, gen.AgentTypeSubagent, created.Type)
 	require.NotNil(t, created.Executor)
 	require.NotNil(t, created.Executor.Kind, "Executor.Kind must be non-nil pointer after W1 wire schema")
-	assert.Equal(t, gen.AgentExecutorKindRemoteA2a, *created.Executor.Kind)
+	assert.Equal(t, gen.AgentExecutorKindNative, *created.Executor.Kind,
+		"AgentCreateRequestSubagent has no executor property — the extra key is ignored and the server derives native")
 }

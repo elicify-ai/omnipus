@@ -1,20 +1,27 @@
 //go:build !cgo
 
-// REST create-by-type tests for the AgentCreateRequest.type enum
-// (custom | worker). Proves:
-//   1. Omitted type / type="custom" → persisted as "custom" (regression guard
-//      for the pre-existing behavior).
-//   2. type="worker" → persisted as "worker" (no default, not a chat target),
-//      and is unlocked so the operator can edit it. Response echoes "worker".
-//   3. type="core" / "system" / anything else → 400.
-//   4. updateAgent does NOT change Type (a custom stays custom).
-//   5. Worker create with a non-native executor (external-cli) → 200, and
-//      the wire response type is subagent_3p.
-//   6. Non-worker create with a non-native executor → coerced to native with
-//      a warning rather than a 400.
-//   7. Worker create with a delegation_policy that has a non-empty to[] within
-//      depth → 201 (bounded subagent delegation, M5); depth above the ceiling
-//      → 400 (depth is the safety boundary, owned by buildDelegationPolicy).
+// REST create-by-type tests for the discriminated-union AgentCreateRequest
+// (W1: AgentCreateRequestMain / AgentCreateRequestSubagent /
+// AgentCreateRequestSubagent3p). Proves:
+//  1. Omitted type → 400 (the historical omit-type→Main default is retired;
+//     type is now a required, single-value discriminator on every variant).
+//  2. type="Subagent" → persisted as "worker" (no default, not a chat
+//     target), and is unlocked so the operator can edit it. Response echoes
+//     "Subagent".
+//  3. type="core" / "system" / anything else → 400.
+//  4. updateAgent does NOT change Type (a custom stays custom).
+//  5. type="subagent_3p" with executor.kind=external-cli persists directly
+//     (Subagent has no executor property at all any more — there is no
+//     "reclassify a Subagent create into subagent_3p" path; the caller must
+//     choose the variant up front).
+//  6. Main create with an `executor` key: the field does not exist on
+//     AgentCreateRequestMain — it is unknown-field-ignored (ValidateInbound
+//     off) rather than coerced-with-a-warning (the old runtime coercion
+//     check is gone; see TestCreateAgent_ValidateInbound_MainWithExecutorRejected
+//     in rest_inbound_validate_test.go for the ValidateInbound-on 400 case).
+//  7. Worker create with a delegation_policy that has a non-empty to[] within
+//     depth → 201 (bounded subagent delegation, M5); depth above the ceiling
+//     → 400 (depth is the safety boundary, owned by buildDelegationPolicy).
 //
 // The test scaffolding is the same as rest_agent_executor_test.go:
 // buildExecutorTestAPI() gives a fresh temp config.json + restAPI handle so
@@ -70,10 +77,12 @@ func findTypeTestAgentInConfig(t *testing.T, m map[string]any, name string) map[
 	return nil
 }
 
-// TestCreateAgent_TypeOmitted_DefaultsToCustom is the regression guard:
-// omitting the `type` field must preserve the pre-existing behavior (the
-// new field is purely additive). The on-disk type is "custom".
-func TestCreateAgent_TypeOmitted_DefaultsToCustom(t *testing.T) {
+// TestCreateAgent_TypeOmitted_Rejected is the W1 behavior-change guard: the
+// historical omit-type→Main default is RETIRED. type is now a required,
+// single-value discriminator on every create variant — a body without it
+// must 400 rather than silently defaulting to Main. Supersedes the old
+// TestCreateAgent_TypeOmitted_DefaultsToCustom.
+func TestCreateAgent_TypeOmitted_Rejected(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 
 	w := httptest.NewRecorder()
@@ -82,15 +91,12 @@ func TestCreateAgent_TypeOmitted_DefaultsToCustom(t *testing.T) {
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 
-	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
-
-	created := decodeAgentResp(t, w.Body.Bytes())
-	assert.Equal(t, gen.AgentTypeMain, created.Type)
+	require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "type is required")
 
 	raw := readTypeTestConfigMap(t, api.configPath())
 	entry := findTypeTestAgentInConfig(t, raw, "Typed Omit")
-	require.NotNil(t, entry, "new agent must be persisted")
-	assert.Equal(t, "custom", entry["type"])
+	assert.Nil(t, entry, "a rejected create must not persist anything")
 }
 
 // TestCreateAgent_TypeCustom_Explicit verifies an explicit "custom" type
@@ -149,11 +155,14 @@ func TestCreateAgent_TypeWorker_PersistsAndEchoes(t *testing.T) {
 	assert.Equal(t, "worker", entry["type"])
 }
 
-// TestCreateAgent_TypeWorker_AllowsNonNativeExecutor proves the worker
-// property-model correction: workers may carry an external executor. The
-// pre-existing 400 guard against external-cli on a non-worker still fires
-// (covered separately below).
-func TestCreateAgent_TypeWorker_AllowsNonNativeExecutor(t *testing.T) {
+// TestCreateAgent_TypeSubagent3p_ExternalExecutorPersists proves the
+// discriminated-union create path for an External CLI worker: type must be
+// "subagent_3p" directly (W1 retired the old "Subagent + executor.kind=
+// external-cli reclassifies as subagent_3p" behavior — AgentCreateRequestSubagent
+// has no executor property at all any more, so there is nothing to
+// reclassify from). Supersedes the old
+// TestCreateAgent_TypeWorker_AllowsNonNativeExecutor.
+func TestCreateAgent_TypeSubagent3p_ExternalExecutorPersists(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 
 	w := httptest.NewRecorder()
@@ -161,7 +170,7 @@ func TestCreateAgent_TypeWorker_AllowsNonNativeExecutor(t *testing.T) {
 		http.MethodPost,
 		"/api/v1/agents",
 		strings.NewReader(
-			`{"name":"Worker External","type":"Subagent","description":"external-cli worker","executor":{"kind":"external-cli","cli":"codex"},"soul":"external-cli-soul"}`,
+			`{"name":"Worker External","type":"subagent_3p","description":"external-cli worker","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"},"soul":"external-cli-soul"}`,
 		),
 	)
 	r.Header.Set("Content-Type", "application/json")
@@ -187,11 +196,14 @@ func TestCreateAgent_TypeWorker_AllowsNonNativeExecutor(t *testing.T) {
 	assert.Equal(t, "codex", exec["cli"])
 }
 
-// TestCreateAgent_NonWorker_RejectsNonNativeExecutor is the regression guard
-// for the native-only-for-non-workers rule: a custom (non-worker) create
-// that supplies external-cli or remote-a2a is coerced to native with a
-// warning in the response.
-func TestCreateAgent_NonWorker_CoercesExternalExecutorWithWarning(t *testing.T) {
+// TestCreateAgent_NonWorker_ExecutorFieldIgnored is the regression guard for
+// the native-only-for-non-workers rule, updated for W1: AgentCreateRequestMain
+// has no `executor` property at all, so a custom (Main) create that supplies
+// one no longer needs coercion — the key is unknown-field-ignored. See
+// TestCreateAgent_Main_ExecutorFieldIgnored in rest_agent_executor_test.go
+// for the full "no warning any more" assertion; this test is the
+// type-dispatch-focused sibling.
+func TestCreateAgent_NonWorker_ExecutorFieldIgnored(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 
 	w := httptest.NewRecorder()
@@ -209,8 +221,6 @@ func TestCreateAgent_NonWorker_CoercesExternalExecutorWithWarning(t *testing.T) 
 	created := decodeAgentResp(t, w.Body.Bytes())
 	assert.Equal(t, gen.AgentTypeMain, created.Type)
 	assert.Nil(t, created.Executor, "Main agents must not persist an external executor")
-	require.NotNil(t, created.Warning, "expected a coercion warning")
-	assert.Contains(t, *created.Warning, "coerced")
 }
 
 // TestCreateAgent_TypeCore_Rejected proves "core" is a seeded-only
@@ -225,7 +235,7 @@ func TestCreateAgent_TypeCore_Rejected(t *testing.T) {
 	api.HandleAgents(w, r)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
-	assert.Contains(t, w.Body.String(), "type must be",
+	assert.Contains(t, w.Body.String(), "must be one of Main, Subagent, subagent_3p",
 		"the rejection must name the type-validity rule")
 }
 
@@ -243,7 +253,7 @@ func TestCreateAgent_TypeSystem_Rejected(t *testing.T) {
 	api.HandleAgents(w, r)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
-	assert.Contains(t, w.Body.String(), "type must be",
+	assert.Contains(t, w.Body.String(), "must be one of Main, Subagent, subagent_3p",
 		"the rejection must name the type-validity rule")
 }
 

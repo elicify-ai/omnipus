@@ -440,7 +440,7 @@ func TestHandleAgentsCreateConcurrent(t *testing.T) {
 			defer wg.Done()
 			w := httptest.NewRecorder()
 			r := httptest.NewRequest(http.MethodPost, "/api/v1/agents",
-				strings.NewReader(fmt.Sprintf(`{"name":"Agent X","soul":"Agent %d soul"}`, idx)))
+				strings.NewReader(fmt.Sprintf(`{"name":"Agent X","type":"Main","soul":"Agent %d soul"}`, idx)))
 			r.Header.Set("Content-Type", "application/json")
 			api.HandleAgents(w, r)
 			codes[idx] = w.Code

@@ -2983,7 +2983,7 @@ func TestCompileInboundSchema_ConcurrentDifferentSchemas(t *testing.T) {
 
 	// 10 different schema names to compile concurrently.
 	schemas := []string{
-		"AgentCreateRequest", "AgentUpdateRequest", "SessionCreateRequest",
+		"AgentCreateRequestMain", "AgentUpdateRequest", "SessionCreateRequest",
 		"ProbeProviderRequest", "SandboxConfigUpdate", "ExecAllowlist",
 		"SessionScopeRequest", "AuditLogToggleRequest", "SkillTrustUpdateRequest",
 		"PromptGuardUpdateRequest",
@@ -3370,17 +3370,92 @@ func TestContract_PerformanceSettings_OutOfRange(t *testing.T) {
 		"max_parallel_agents=99 must FAIL PerformanceSettings.yaml validation (maximum: 16)")
 }
 
-// ── AgentCreateRequest ──────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/AgentCreateRequest.yaml
+// ── AgentCreateRequestMain / AgentCreateRequestSubagent / AgentCreateRequestSubagent3p ──
+// Traces to: contracts/components/schemas/AgentCreateRequest{Main,Subagent,Subagent3p}.yaml
+//
+// W1 replaced the single flat AgentCreateRequest schema with a discriminated
+// union (openapi.yaml oneOf + discriminator over these three component
+// schemas) — there is no longer an "AgentCreateRequest.yaml" component file to
+// validate against directly.
 
-func TestContract_AgentCreateRequest_Populated(t *testing.T) {
-	mustPassComponent(t, "AgentCreateRequest", FixtureAgentCreateRequest_Populated())
+func TestContract_AgentCreateRequestMain_Populated(t *testing.T) {
+	mustPassComponent(t, "AgentCreateRequestMain", FixtureAgentCreateRequestMain_Populated())
 }
 
-func TestContract_AgentCreateRequest_InvalidType(t *testing.T) {
-	// type="not-a-valid-type" is NOT in the enum [Main, Subagent, subagent_3p, core, system, worker].
-	mustFailComponent(t, "AgentCreateRequest", FixtureAgentCreateRequest_InvalidType(),
-		"type must be one of the declared enum values")
+func TestContract_AgentCreateRequestMain_InvalidType(t *testing.T) {
+	// type="not-a-valid-type" is NOT in the enum [Main].
+	mustFailComponent(t, "AgentCreateRequestMain", FixtureAgentCreateRequestMain_InvalidType(),
+		"type must be exactly \"Main\"")
+}
+
+func TestContract_AgentCreateRequestMain_ExecutorRejected(t *testing.T) {
+	// Main has no `executor` property at all — additionalProperties: false
+	// rejects it. This is the schema-level enforcement that replaced the old
+	// runtime "coerce external executor to native with a warning" behavior.
+	raw := []byte(`{"type":"Main","name":"Bad Main","soul":"s","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"}}`)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "AgentCreateRequestMain", raw),
+		"Main must reject an executor property (additionalProperties: false, no executor in the schema)")
+}
+
+func TestContract_AgentCreateRequestSubagent_Populated(t *testing.T) {
+	mustPassComponent(t, "AgentCreateRequestSubagent", FixtureAgentCreateRequestSubagent_Populated())
+}
+
+func TestContract_AgentCreateRequestSubagent_InvalidType(t *testing.T) {
+	// type="not-a-valid-type" is NOT in the enum [Subagent].
+	mustFailComponent(t, "AgentCreateRequestSubagent", FixtureAgentCreateRequestSubagent_InvalidType(),
+		"type must be exactly \"Subagent\"")
+}
+
+func TestContract_AgentCreateRequestSubagent_ExecutorRejected(t *testing.T) {
+	// Subagent (native worker) has no `executor` property either — the server
+	// always derives kind=native for this variant; a client cannot set it.
+	raw := []byte(`{"type":"Subagent","name":"Bad Subagent","soul":"s","description":"d","executor":{"kind":"native"}}`)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "AgentCreateRequestSubagent", raw),
+		"Subagent must reject an executor property (additionalProperties: false, no executor in the schema)")
+}
+
+func TestContract_AgentCreateRequestSubagent3p_Populated(t *testing.T) {
+	mustPassComponent(t, "AgentCreateRequestSubagent3p", FixtureAgentCreateRequestSubagent3p_Populated())
+}
+
+func TestContract_AgentCreateRequestSubagent3p_InvalidType(t *testing.T) {
+	// type="not-a-valid-type" is NOT in the enum [subagent_3p].
+	mustFailComponent(t, "AgentCreateRequestSubagent3p", FixtureAgentCreateRequestSubagent3p_InvalidType(),
+		"type must be exactly \"subagent_3p\"")
+}
+
+func TestContract_AgentCreateRequestSubagent3p_ExecutorRequired(t *testing.T) {
+	// executor is REQUIRED on subagent_3p (spec §9.2) — a body omitting it
+	// entirely must fail (required: [type, name, soul, executor]).
+	raw := []byte(`{"type":"subagent_3p","name":"No Executor","soul":"s"}`)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "AgentCreateRequestSubagent3p", raw),
+		"subagent_3p without an executor must fail — executor is a required property")
+}
+
+func TestContract_AgentCreateRequestSubagent3p_ForbiddenFieldRejected(t *testing.T) {
+	// tools_cfg does not exist on subagent_3p — additionalProperties: false
+	// rejects it. This is the schema-level enforcement that replaced the old
+	// runtime firstForbiddenSubagent3pField check on create.
+	assert.Error(t,
+		validateAgainstComponentSchemaRawJSON(t, "AgentCreateRequestSubagent3p", FixtureAgentCreateRequestSubagent3p_ForbiddenFieldJSON()),
+		"subagent_3p must reject tools_cfg (additionalProperties: false, no tools_cfg in the schema)")
+}
+
+func TestContract_AgentCreateRequestSubagent3p_DelegationPolicyAccepted(t *testing.T) {
+	// Behavior change (W2a): delegation_policy is now allowed on ALL variants
+	// including subagent_3p (a 3p create with delegation_policy used to 400
+	// under the flat contract; the discriminated union now permits it — 3p is
+	// a valid delegation *target*, per the field matrix).
+	raw := []byte(`{
+		"type": "subagent_3p",
+		"name": "Delegatable 3p",
+		"soul": "s",
+		"executor": {"cli": "codex", "cli_path": "/usr/local/bin/codex"},
+		"delegation_policy": {"to": [{"kind": "local", "id": "ray"}], "modes": ["task"], "depth": 1}
+	}`)
+	assert.NoError(t, validateAgainstComponentSchemaRawJSON(t, "AgentCreateRequestSubagent3p", raw),
+		"subagent_3p with delegation_policy must be schema-valid (201, not 400)")
 }
 
 // ── AgentUpdateRequest ───────────────────────────────────────────────────────

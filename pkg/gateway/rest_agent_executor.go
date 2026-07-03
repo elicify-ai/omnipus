@@ -27,9 +27,27 @@ var validExecutorCLIs = map[string]bool{
 	"opencode":    true,
 }
 
+// executorRequestInput is a request-shape-agnostic subset of the wire
+// Executor object. gen.AgentCreateRequestSubagent3p is the only create
+// variant that carries an executor (W1 discriminated union — Main and
+// Subagent structurally have no Executor field at all), so createAgent
+// normalizes that variant's anonymous Executor struct into this shape before
+// building the persisted config.ExecutorConfig.
+//
+// Kind is intentionally NOT carried here: subagent_3p's executor.kind is
+// always server-derived to "external-cli" regardless of what the client
+// sent — the field is documented as "NOT a writable field on create/update;
+// the server overrides any client-supplied value" (agent-types-field-matrix.md).
+type executorRequestInput struct {
+	Cli          string
+	CliPath      *string
+	EnvOverrides *map[string]string
+	CliArgs      *string
+}
+
 // executorCliStr dereferences an optional generated CLI enum pointer to its string
 // value. Returns "" when the pointer is nil. The concrete pointer type differs per
-// request (AgentCreateRequestExecutorCli / AgentUpdateRequestExecutorCli /
+// request (AgentCreateRequestSubagent3pExecutorCli / AgentUpdateRequestExecutorCli /
 // AgentExecutorCli) so callers pass the already-stringified value.
 func executorCliStr[T ~string](cli *T) string {
 	if cli == nil {
