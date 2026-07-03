@@ -24,15 +24,6 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/gateway/ctxkey"
 )
 
-// withNonAdminRole injects a distinct authenticated identity ("bob") into
-// the request context. Under the single-user model there is no role left to
-// differentiate; this just supplies a caller identity distinct from
-// withAdminRole's "admin" for tests that need one.
-func withNonAdminRole(r *http.Request) *http.Request {
-	ctx := context.WithValue(r.Context(), UserContextKey{}, &config.UserConfig{Username: "bob"})
-	return r.WithContext(ctx)
-}
-
 // skillTrustPUT is a helper that issues a PUT /api/v1/security/skill-trust
 // with the given level as admin and returns the response recorder.
 func skillTrustPUT(t *testing.T, api *restAPI, level string) *httptest.ResponseRecorder {

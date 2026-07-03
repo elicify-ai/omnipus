@@ -1,7 +1,7 @@
 title: SessionStatePendingApproval
 description: >
   One entry in the pending_approvals list of a SessionStateFrame.
-  Describes a tool approval that is currently awaiting admin decision.
+  Describes a tool approval that is currently awaiting a decision.
 type: object
 required:
   - approval_id

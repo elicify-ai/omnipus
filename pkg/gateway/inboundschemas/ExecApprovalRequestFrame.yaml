@@ -1,8 +1,8 @@
 title: ExecApprovalRequestFrame
 description: >
-  Server → client. Sent when a tool call requires explicit admin approval before
-  execution (exec-level sandbox policy). The SPA displays an approval modal and
-  waits for an exec_approval_response from the user.
+  Server → client. Sent when a tool call requires explicit operator approval
+  before execution (exec-level sandbox policy). The SPA displays an approval
+  modal and waits for an exec_approval_response from the user.
   The `command` field carries the tool name (e.g. "workspace.shell") and is the
   primary display string for the approval modal. The optional `tool` and `params`
   fields carry the structured tool call information for richer display.
@@ -48,7 +48,7 @@ properties:
       May be absent or empty for parameter-less tool calls.
   message:
     type: string
-    description: Human-readable message shown to the admin describing the approval request.
+    description: Human-readable message shown to the user describing the approval request.
   working_dir:
     type: string
     description: Working directory in which the command will be executed.

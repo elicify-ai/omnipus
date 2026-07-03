@@ -62,8 +62,9 @@ func (a *restAPI) HandleSkillTrust(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// putSkillTrust is the admin-only body of PUT /api/v1/security/skill-trust.
-// Called only after RequireAdmin has confirmed the caller holds the admin role.
+// putSkillTrust is the body of PUT /api/v1/security/skill-trust.
+// Called only after adminWrap (withAuth → RequireNotBypass) has confirmed
+// the caller is authenticated and dev-mode bypass is not active.
 func (a *restAPI) putSkillTrust(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 
