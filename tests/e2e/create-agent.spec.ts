@@ -206,15 +206,22 @@ test.describe('create agent wizard', () => {
     await expect(page.getByTestId('wizard-cli-chip')).toBeVisible()
     await expect(page.getByTestId('wizard-cli-path')).toBeVisible()
 
+    // The external flow is 2 steps: Identity + Runner (incl. CLI args)
+    // together on step 1, then Personality + slim Advanced (timeout /
+    // rate limits) with the Create button on step 2. The old third step
+    // was retired (it duplicated the runner form).
+    await expect(page.getByTestId('wizard-cli-args')).toBeVisible()
     await fillIdentityStep(page, { type: 'subagent_3p' })
     await page.getByTestId('wizard-cli-path').fill('/usr/local/bin/claude')
     await modal.getByTestId('wizard-next-1').click()
 
     await expect(page.getByTestId('wizard-soul')).toBeVisible()
     await page.getByTestId('wizard-soul').fill('You are a helpful external CLI subagent.')
-    await modal.getByTestId('wizard-next-2').click()
 
-    await expect(page.getByTestId('wizard-cli-args')).toBeVisible()
+    // Step 2 carries the slim Advanced disclosure and the terminal
+    // Create button — there is no wizard-next-2 / step 3 anymore.
+    await expect(page.getByTestId('advanced-disclosure-trigger')).toBeVisible()
     await expect(modal.getByTestId('wizard-create')).toBeVisible()
+    await expect(modal.getByTestId('wizard-create')).toBeEnabled()
   })
 })
