@@ -452,8 +452,9 @@ describe('CreateAgentWizard — initialPayload gating (field-matrix)', () => {
     await waitFor(() => expect(onSubmit).toHaveBeenCalled())
     const payload = onSubmit.mock.calls.at(-1)![0]
     // The external CLI runs its own loop — max_tool_iterations is excluded
-    // (field-matrix "pending operator decision" resolved to exclude), and
-    // steering_mode never applied to a worker in the first place.
+    // (agent-types-field-matrix.md, Decisions #1 (resolved 2026-07-03):
+    // excluded), and steering_mode never applied to a worker in the first
+    // place.
     expect('steering_mode' in payload).toBe(false)
     expect('max_tool_iterations' in payload).toBe(false)
     expect(payload.timeout_seconds).toBe(300)

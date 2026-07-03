@@ -194,7 +194,8 @@ function initialPayload(initialType: WizardType, initialCli?: WizardCli): Wizard
     // Per the field matrix (docs/internal/architecture/agent-types-field-matrix.md)
     // timeout_seconds is O for every user-creatable type, so it always seeds.
     // max_tool_iterations is excluded for subagent_3p (the external CLI runs
-    // its own loop — the "pending operator decision" resolved to exclude).
+    // its own loop — agent-types-field-matrix.md, Decisions #1 (resolved
+    // 2026-07-03): excluded).
     // steering_mode is a Main-surface concept only (workers are forced
     // one-at-a-time server-side) — seeding it for a worker payload would
     // carry a field its variant can't have even though payloadToCreateRequest

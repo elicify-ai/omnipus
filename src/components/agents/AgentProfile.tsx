@@ -398,10 +398,11 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       max_cost_per_day: maxCostPerDay !== '' ? maxCostPerDay : undefined,
     }
     if (isSubagent3p) {
-      // Operator decision (agent-types-field-matrix.md, "Open decisions" #1):
-      // subagent_3p EXCLUDES max_tool_iterations — the external CLI runs its
-      // own tool loop, and the backend now rejects the field for this type.
-      // timeout_seconds STAYS (process-level kill for a hung CLI).
+      // agent-types-field-matrix.md, Decisions #1 (resolved 2026-07-03):
+      // excluded — subagent_3p EXCLUDES max_tool_iterations — the external
+      // CLI runs its own tool loop, and the backend now rejects the field
+      // for this type. timeout_seconds STAYS (process-level kill for a
+      // hung CLI).
       return {
         ...identity,
         model,
@@ -551,25 +552,30 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           testedExecutorSig.current = sig
         }
       }
-      // Locked agents: strip every field the backend treats as immutable for
-      // the locked roster (see `.preview-doc/agents.html` for the current
-      // 4-base roster). Identity fields plus the sandbox profile, shell
-      // policy, and skills are all built-in for these agents —
-      // sending them yields a 403 from the locked-field validator, and the
-      // autosave indicator would surface a spurious error. Skills are
-      // stripped here (B-2 defense-in-depth on the frontend side): the
-      // Skills picker is rendered disabled for locked agents, so this strip
-      // is the belt-and-suspenders path for any state that may survive hydration.
+      // Locked agents: strip every field the backend actually treats as
+      // immutable for the locked roster (`pkg/gateway/rest.go`'s locked
+      // reject-set, ~2458: Name / Description / Soul / Color / Icon /
+      // Skills only — "cannot modify locked agent identity or prompt").
+      // Sending one of THOSE yields a 403, and the autosave indicator would
+      // surface a spurious error. Skills are stripped here (B-2
+      // defense-in-depth on the frontend side): the Skills picker is
+      // rendered disabled for locked agents, so this strip is the
+      // belt-and-suspenders path for any state that may survive hydration.
       // O13: sandbox_profile is intentionally NOT stripped for locked agents —
       // a core agent's "locked" status does not extend to its sandbox profile,
       // which is user-editable. The backend accepts sandbox_profile changes on
       // locked agents (the locked-field validator no longer guards it).
+      // shell_policy is likewise NOT stripped (live bug fix, 2026-07-03):
+      // it was never in the backend's reject-set either, so stripping it
+      // here silently discarded every locked-agent shell-deny-pattern edit
+      // before it reached the wire — the editor rendered interactive but
+      // nothing ever persisted.
       // Note: tools_cfg is no longer in formData (it has its own re-auth-gated
       // endpoint via ToolsAndPermissions) so it does not need stripping here.
       const stripped = agent?.locked
         ? (({
             name: _n, description: _d, soul: _s, color: _c, icon: _i,
-            shell_policy: _shp, skills: _sk, executor: _ex, ...rest
+            skills: _sk, executor: _ex, ...rest
           }) => rest)(data as Record<string, unknown>)
         : data
       // W6-contracts: include updated_at from the last GET response so the
@@ -1093,7 +1099,13 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 2026-07-03: editable for locked core agents too (model,
                 sampling, rate limits, and execution knobs ARE mutable on the
                 backend for locked agents — only identity/soul/skills are
-                403'd). */}
+                403'd). Hidden for subagent_3p: model_params is a
+                runner-side concern for that type (field matrix) and the
+                formData branch for subagent_3p never sends it — rendering
+                this disclosure without the gate let an operator "edit" and
+                "save" sampling params that silently reverted on refetch
+                (live bug, 2026-07-03). */}
+            {!isExternalAgent && (
             <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden">
               <button
                 type="button"
@@ -1138,6 +1150,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 </div>
               )}
             </div>
+            )}
           </section>
 
           {/* Sandbox — editable for ALL agents including locked core agents
@@ -1695,10 +1708,11 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                     className="text-xs h-8"
                   />
                 </div>
-                {/* Max tool calls per turn — excluded for subagent_3p (operator
-                    decision, agent-types-field-matrix.md "Open decisions" #1):
-                    the external CLI runs its own tool loop, and the backend
-                    now rejects the field for this type. */}
+                {/* Max tool calls per turn — excluded for subagent_3p
+                    (agent-types-field-matrix.md, Decisions #1 (resolved
+                    2026-07-03): excluded): the external CLI runs its own
+                    tool loop, and the backend now rejects the field for
+                    this type. */}
                 {!isExternalAgent && (
                   <div className="flex items-center gap-3">
                     <label className="text-xs text-[var(--color-muted)] w-44 shrink-0">
@@ -1761,7 +1775,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               native-worker-delegation-callout at the top of the body
               already explains why the editable Tools / Skills / Sandbox
               accordions are collapsed to a summary. */}
-          {isWorkerAgent && agent.type !== 'subagent_3p' && (
+          {isNativeWorkerAgent && (
             <section className="space-y-3">
               <div className="flex items-center gap-2">
                 <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Executor</p>
@@ -2039,10 +2053,11 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           delegation-only labour agents — they are not chat targets. Their
           Tools, Skills, and Sandbox settings may be set explicitly below OR
           left to inherit from the delegating caller at run time (matrix: O
-          or inherit) — unlike the old copy, editing them here DOES take
-          effect on a native (in-process) runtime. Surface this prominently
-          at the top of the profile so the operator understands the
-          delegation-only framing before touching the rest of the form. */}
+          or inherit). Tools, Skills and Sandbox are live-editable for
+          native Subagents and take effect at the next delegated run.
+          Surface this prominently at the top of the profile so the
+          operator understands the delegation-only framing before touching
+          the rest of the form. */}
       {isNativeWorkerAgent && (
         <div
           data-testid="native-worker-delegation-callout"
@@ -2077,7 +2092,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           <TabsTrigger value="basics" data-testid="tab-basics" className="font-headline">Basics</TabsTrigger>
           <TabsTrigger value="personality" data-testid="tab-personality" className="font-headline">Personality</TabsTrigger>
           <TabsTrigger value="tools" data-testid="tab-tools" className="font-headline">Tools</TabsTrigger>
-          {agent.type === 'subagent_3p' && (
+          {isExternalAgent && (
             <TabsTrigger value="runtime" data-testid="tab-runtime" className="font-headline">Runtime</TabsTrigger>
           )}
           <TabsTrigger value="advanced" data-testid="tab-advanced" className="font-headline">{advancedTabLabel}</TabsTrigger>
@@ -2118,7 +2133,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             runtime kind is a property of the agent, not editable in
             v0.1.0), while cli_path / env_overrides / cli_args are the
             operator-tunable inputs (F-14). */}
-        {agent.type === 'subagent_3p' && (
+        {isExternalAgent && (
           <TabsContent value="runtime" className="space-y-5">{runtimePanel}</TabsContent>
         )}
 
@@ -2159,7 +2174,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           <AccordionTrigger data-testid="accordion-tools" className="font-headline">Tools</AccordionTrigger>
           <AccordionContent>{toolsPanel}</AccordionContent>
         </AccordionItem>
-      {agent.type === 'subagent_3p' && (
+      {isExternalAgent && (
         <AccordionItem value="runtime">
           <AccordionTrigger data-testid="accordion-runtime" className="font-headline">Runtime</AccordionTrigger>
           <AccordionContent>{runtimePanel}</AccordionContent>
