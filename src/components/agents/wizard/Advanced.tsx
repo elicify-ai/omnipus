@@ -251,8 +251,8 @@ function MainAdvancedFields({ payload, setField, isMain, isNativeSubagent }: Mai
             onChange={(v) => setField('timeout_seconds', v)}
           />
           <NumberRow
-            label="Max tool iterations"
-            caption="Maximum number of tool calls allowed per turn. Default 50."
+            label="Max tool calls per turn"
+            caption="Per single turn (one message, task, or heartbeat run) — the turn pauses at the limit and can be continued. Default 200."
             value={payload.max_tool_iterations}
             min={1}
             onChange={(v) => setField('max_tool_iterations', v)}
