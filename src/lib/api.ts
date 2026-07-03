@@ -756,6 +756,29 @@ export function isWorker(a: { type?: string | null }): boolean {
   return a.type === 'Subagent' || a.type === 'subagent_3p' || a.type === 'worker'
 }
 
+// buildTaskAssigneeItems — shared task-assignee `SmartSelect` item list,
+// deduped out of `TaskDetailPanel` and `CreateTaskSlideOver` (Simplify
+// finding, Agent System P0 fix-wave). Subagent workers are valid assignees
+// when they belong to the workspace's team — the backend enforces team
+// membership, not worker-vs-main kind (see validateTaskAgentID). subagent_3p
+// (external-CLI) workers are still unconditionally rejected server-side:
+// task execution isn't wired through the external-CLI dispatch path yet, so
+// they are excluded here too (offering them would be a guaranteed-400 dead
+// end). A " · Worker" suffix keeps the delegation-only kind visually
+// distinguishable (mirrors AddAgentPicker's " · leaf" convention). Callers
+// prepend their own "Unassigned" (`__none__`) item.
+export function buildTaskAssigneeItems(
+  agents: Agent[],
+): { value: string; label: string; className: string }[] {
+  return agents
+    .filter((a) => a.type !== 'subagent_3p')
+    .map((a) => ({
+      value: a.id,
+      label: isWorker(a) ? `${a.name} · Worker` : a.name,
+      className: 'text-xs',
+    }))
+}
+
 export function fetchAgents(): Promise<Agent[]> {
   return request<Agent[]>('/agents', undefined, z.array(AgentSchema) as ZodType<Agent[]>)
 }

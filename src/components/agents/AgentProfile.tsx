@@ -53,6 +53,7 @@ import { ExecutorSelector } from './ExecutorSelector'
 import { BehaviorFields, AvatarColorPicker, IconPicker, AvatarHeader } from './AgentFormFields'
 import { CliPathValidationHint } from './CliPathValidationHint'
 import { AutoAppliedFlags } from './AutoAppliedFlags'
+import type { ExecutorDefaultsListState } from '@/hooks/useExecutorDefaults'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import {
   fetchAgent,
@@ -291,6 +292,12 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // wizard gates Create (FR-008/FR-018/FR-019).
   const cliDetect = useCliDetect(agent?.type === 'subagent_3p')
   const cliValidation = useCliPathValidation()
+
+  // Tracks `<AutoAppliedFlags>`'s live fetch status so the "Additional CLI
+  // arguments" field's helper copy below can stop saying "(flags shown
+  // above)" when the block isn't actually showing anything (silent-failure
+  // fix, 7-reviewer gate).
+  const [flagsStatus, setFlagsStatus] = useState<ExecutorDefaultsListState['status']>('idle')
 
   // FR-016 / US-5: Heartbeat tab state — per-(workspace, agent) config, NOT
   // part of the agent autosave. Only meaningful when editAgentWorkspaceId is set.
@@ -1598,7 +1605,11 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   disabled={isLocked}
                 />
               </div>
-              <AutoAppliedFlags cli={executor?.cli} testId="profile-executor-defaults" />
+              <AutoAppliedFlags
+                cli={executor?.cli}
+                testId="profile-executor-defaults"
+                onStatusChange={setFlagsStatus}
+              />
               <div data-testid="profile-cli-args" className="space-y-1.5">
                 <div className="flex items-center gap-3">
                   <label className="text-xs text-[var(--color-muted)] w-44 shrink-0">Additional CLI arguments</label>
@@ -1608,13 +1619,19 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                       markDirty()
                       setExecutor((prev) => ({ ...(prev ?? { kind: 'external-cli', cli: executor?.cli ?? 'claude-code' }), cli_args: e.target.value }))
                     }}
-                    placeholder="e.g. --add-dir /extra/path (flags shown above are applied automatically and can't be overridden here)"
+                    placeholder={
+                      flagsStatus === 'success'
+                        ? "e.g. --add-dir /extra/path (flags shown above are applied automatically and can't be overridden here)"
+                        : 'e.g. --add-dir /extra/path'
+                    }
                     className="text-xs h-8 font-mono"
                     disabled={isLocked}
                   />
                 </div>
                 <p className="text-[11px] text-[var(--color-muted)] leading-snug">
-                  In addition to the flags Omnipus applies automatically (shown above).
+                  {flagsStatus === 'success'
+                    ? 'In addition to the flags Omnipus applies automatically (shown above).'
+                    : 'In addition to the flags Omnipus applies automatically when this agent runs.'}
                 </p>
               </div>
             </section>

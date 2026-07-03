@@ -224,7 +224,7 @@ describe('AgentProfile — Runtime tab auto-applied flags block (Agent System P0
     expect(screen.getByText('Additional CLI arguments')).toBeInTheDocument()
   })
 
-  it('fails soft (omits the block, does not block the form) when fetchExecutorDefaults rejects', async () => {
+  it('fails soft with a visible, retryable degraded state (never silently omits the block) when fetchExecutorDefaults rejects', async () => {
     vi.mocked(fetchExecutorDefaults).mockReset().mockRejectedValue(new Error('network down'))
     renderProfile('external-worker')
     await screen.findByText('External Worker')
@@ -232,11 +232,25 @@ describe('AgentProfile — Runtime tab auto-applied flags block (Agent System P0
 
     await waitFor(() => expect(fetchExecutorDefaults).toHaveBeenCalled())
     await waitFor(() => {
-      expect(screen.queryByTestId('profile-executor-defaults')).not.toBeInTheDocument()
+      const block = screen.getByTestId('profile-executor-defaults')
+      expect(block).toHaveAttribute('data-defaults-status', 'error')
+      expect(block).toHaveTextContent(/couldn't load the auto-applied flags/i)
     })
+    // The nearby "flags shown above" copy must not reference a block that
+    // isn't actually showing anything.
+    expect(screen.queryByText(/flags shown above/i)).not.toBeInTheDocument()
     const argsInput = screen.getByTestId('profile-cli-args').querySelector('input') as HTMLInputElement
     expect(argsInput).toBeInTheDocument()
     fireEvent.change(argsInput, { target: { value: '--foo' } })
     expect(argsInput.value).toBe('--foo')
+
+    // Retry affordance re-triggers the fetch.
+    vi.mocked(fetchExecutorDefaults).mockReset().mockResolvedValue(defaultsList())
+    fireEvent.click(screen.getByTestId('profile-executor-defaults-retry'))
+    await waitFor(() => {
+      const block = screen.getByTestId('profile-executor-defaults')
+      expect(block).toHaveAttribute('data-defaults-status', 'ready')
+      expect(block).toHaveTextContent('--output-format stream-json')
+    })
   })
 })

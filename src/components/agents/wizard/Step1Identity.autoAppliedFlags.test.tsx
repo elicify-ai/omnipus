@@ -172,17 +172,31 @@ describe('Step1Identity / ExecutorInputs — auto-applied flags block (Agent Sys
     expect(screen.queryByText('CLI arguments', { exact: true })).not.toBeInTheDocument()
   })
 
-  it('fails soft (omits the block, does not crash the form) when fetchExecutorDefaults rejects', async () => {
+  it('fails soft with a visible, retryable degraded state (never silently omits the block) when fetchExecutorDefaults rejects', async () => {
     vi.mocked(fetchExecutorDefaults).mockReset().mockRejectedValue(new Error('network down'))
     renderWizard({ initialCli: 'claude-code' })
 
     await waitFor(() => expect(fetchExecutorDefaults).toHaveBeenCalled())
     await waitFor(() => {
-      expect(screen.queryByTestId('wizard-executor-defaults')).not.toBeInTheDocument()
+      const block = screen.getByTestId('wizard-executor-defaults')
+      expect(block).toHaveAttribute('data-defaults-status', 'error')
+      expect(block).toHaveTextContent(/couldn't load the auto-applied flags/i)
     })
+    // The nearby "flags shown above" copy must not reference a block that
+    // isn't actually showing anything.
+    expect(screen.queryByText(/flags shown above/i)).not.toBeInTheDocument()
     // The rest of the form remains usable.
     expect(screen.getByTestId('wizard-cli-args')).toBeInTheDocument()
     fireEvent.change(screen.getByTestId('wizard-cli-args'), { target: { value: '--foo' } })
     expect(screen.getByTestId('wizard-cli-args')).toHaveValue('--foo')
+
+    // Retry affordance re-triggers the fetch.
+    vi.mocked(fetchExecutorDefaults).mockReset().mockResolvedValue(defaultsList())
+    fireEvent.click(screen.getByTestId('wizard-executor-defaults-retry'))
+    await waitFor(() => {
+      const block = screen.getByTestId('wizard-executor-defaults')
+      expect(block).toHaveAttribute('data-defaults-status', 'ready')
+      expect(block).toHaveTextContent('--output-format stream-json')
+    })
   })
 })

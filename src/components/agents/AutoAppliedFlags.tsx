@@ -12,8 +12,19 @@
 // (`pkg/agent/runner/argsafety.go::filterDangerousCLIArgs` silently strips a
 // conflicting operator override), so presenting them as editable here would
 // be actively misleading.
+//
+// Silent-failure fix (7-reviewer gate, Agent System P0 fix-wave): a fetch
+// error used to `return null` — no DOM node at all, not even a testid. The
+// adjacent "Additional CLI arguments" helper text says "flags shown above
+// are applied automatically", so a fetch failure left that copy pointing at
+// nothing. On error this now renders a minimal degraded state (same testid,
+// `data-defaults-status="error"`) with a retry affordance, and reports its
+// live status via `onStatusChange` so callers can make the nearby "shown
+// above" copy conditional instead of always-on.
 
+import { useEffect } from 'react'
 import { useExecutorDefaults, selectExecutorDefaults } from '@/hooks/useExecutorDefaults'
+import type { ExecutorDefaultsListState } from '@/hooks/useExecutorDefaults'
 import type { CliValidateRequest } from '@/lib/api'
 
 export interface AutoAppliedFlagsProps {
@@ -21,10 +32,20 @@ export interface AutoAppliedFlagsProps {
    *  CLI chosen yet). */
   cli: CliValidateRequest['cli'] | undefined
   testId?: string
+  /** Fired whenever the block's fetch status changes (including on mount),
+   *  so callers whose nearby copy references "the flags shown above" (the
+   *  CLI-args field's helper text / placeholder in `AgentProfile.tsx` and
+   *  `Step1Identity.tsx`) can suppress that reference unless the block is
+   *  actually in its `'success'` (rendered) state. */
+  onStatusChange?: (status: ExecutorDefaultsListState['status']) => void
 }
 
-export function AutoAppliedFlags({ cli, testId }: AutoAppliedFlagsProps) {
-  const { status, data } = useExecutorDefaults(cli !== undefined)
+export function AutoAppliedFlags({ cli, testId, onStatusChange }: AutoAppliedFlagsProps) {
+  const { status, data, retry } = useExecutorDefaults(cli !== undefined)
+
+  useEffect(() => {
+    onStatusChange?.(status)
+  }, [status, onStatusChange])
 
   if (!cli) return null
 
@@ -41,11 +62,31 @@ export function AutoAppliedFlags({ cli, testId }: AutoAppliedFlagsProps) {
     )
   }
 
-  // Fail-soft (per useExecutorDefaults' contract): a fetch error omits the
-  // block entirely rather than blocking the rest of the form. The hook
-  // already console.warn'd the underlying error.
+  // Degraded state (per useExecutorDefaults' contract): a fetch error never
+  // blocks the rest of the form, but it also must not disappear silently —
+  // operators are never told "see above" while pointing at nothing. Same
+  // testid + visual weight as the loading skeleton, plus a retry affordance.
+  // The hook already console.warn'd the underlying error.
   if (status === 'error' || !data) {
-    return null
+    return (
+      <div
+        data-testid={testId}
+        data-defaults-status="error"
+        className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2"
+      >
+        <p className="text-[11px] text-[var(--color-muted)] leading-snug">
+          Couldn't load the auto-applied flags — they still apply when this agent runs.{' '}
+          <button
+            type="button"
+            onClick={retry}
+            data-testid={testId ? `${testId}-retry` : undefined}
+            className="font-medium text-[var(--color-accent)] underline underline-offset-2 hover:no-underline"
+          >
+            Retry
+          </button>
+        </p>
+      </div>
+    )
   }
 
   const entry = selectExecutorDefaults(data, cli)
