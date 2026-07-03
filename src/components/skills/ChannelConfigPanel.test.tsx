@@ -11,8 +11,8 @@
  *   6. timeout vs error copy are distinct from each other
  *
  *   WhatsApp Retry bounded timeout (MAJOR fix):
- *   7. Retry on timeout → spinner shown while waiting; if no code frame arrives
- *      within 30s the timer fires and the UI reverts to timeout + Retry
+ *   7. Retry on timeout → restarts the channel, spinner shown while waiting; if
+ *      no code frame arrives within 90s the UI reverts to timeout + Retry
  *
  *   WhatsApp always-native (#283):
  *   8. WhatsAppNativeNotice mounts for whatsapp when native is available
@@ -81,6 +81,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     configureChannel: vi.fn(),
     testChannel: vi.fn(),
     enableChannel: vi.fn(),
+    disableChannel: vi.fn(),
     setChannelRouting: vi.fn(),
     isApiError: vi.fn(() => false),
   }
@@ -106,6 +107,7 @@ import {
   fetchWorkspace,
   configureChannel,
   enableChannel,
+  disableChannel,
   testChannel,
   setChannelRouting,
 } from '@/lib/api'
@@ -294,11 +296,11 @@ describe('ChannelConfigPanel — WhatsApp QR 5-state machine (#325 / US-C3)', ()
 })
 
 describe('ChannelConfigPanel — WhatsApp Retry bounded timeout (MAJOR fix)', () => {
-  // The whatsapp_pairing_subscribe toggle only controls forwarding interest — it
-  // does NOT make whatsmeow mint a new QR. For `error` state the QR loop is
-  // terminal; for `timeout` a new QR may arrive automatically. If no `code` frame
-  // arrives within 30s (RETRY_TIMEOUT_MS), the UI must revert to the fallback
-  // state with the Retry affordance rather than spinning forever.
+  // Retry restarts the channel (disable → enable) to re-arm whatsmeow's QR
+  // loop, then waits for a fresh `code` frame. If none arrives within 90s
+  // (RETRY_TIMEOUT_MS — first QR can take ~60s after connect), the UI must
+  // revert to the fallback state with the Retry affordance rather than
+  // spinning forever.
   //
   // Implementation: handleRetry clears the store and sets retryFallbackState.
   // After RETRY_TIMEOUT_MS it calls useWhatsAppPairingStore.getState().apply(frame).
@@ -333,6 +335,9 @@ describe('ChannelConfigPanel — WhatsApp Retry bounded timeout (MAJOR fix)', ()
     vi.mocked(fetchAgents).mockResolvedValue([])
     vi.mocked(fetchWorkspaces).mockResolvedValue([])
     vi.mocked(fetchWorkspace).mockResolvedValue({} as Workspace)
+    // Retry bounces the channel before waiting on a fresh code frame.
+    vi.mocked(disableChannel).mockResolvedValue({} as never)
+    vi.mocked(enableChannel).mockResolvedValue({} as never)
     // Wire getState so the timer callback's apply() call works.
     const mockStore = vi.mocked(useWhatsAppPairingStore)
     ;(mockStore as unknown as { getState: () => unknown }).getState = () => ({
@@ -346,7 +351,7 @@ describe('ChannelConfigPanel — WhatsApp Retry bounded timeout (MAJOR fix)', ()
     vi.useRealTimers()
   })
 
-  it('Retry on timeout → spinner immediately; after 30s without code frame reverts to timeout + Retry', async () => {
+  it('Retry on timeout → spinner immediately; after 90s without code frame reverts to timeout + Retry', async () => {
     // Use real timers for initial render + interaction, then fake for the timer advance.
     vi.useRealTimers()
 
@@ -377,7 +382,7 @@ describe('ChannelConfigPanel — WhatsApp Retry bounded timeout (MAJOR fix)', ()
     // Advance past RETRY_TIMEOUT_MS. The timer fires: apply() injects timeout frame,
     // setRetryFallbackState(null) triggers re-render.
     await act(async () => {
-      vi.advanceTimersByTime(31_000)
+      vi.advanceTimersByTime(91_000)
     })
 
     // The UI must revert to timeout + Retry — not an endless spinner.
@@ -386,7 +391,7 @@ describe('ChannelConfigPanel — WhatsApp Retry bounded timeout (MAJOR fix)', ()
     expect(screen.queryByText(/Generating your QR code/i)).not.toBeInTheDocument()
   })
 
-  it('Retry on error → spinner immediately; after 30s reverts to error + Retry', async () => {
+  it('Retry on error → spinner immediately; after 90s reverts to error + Retry', async () => {
     vi.useRealTimers()
 
     // Pairing frames are keyed by INSTANCE id ('whatsapp').
@@ -411,7 +416,7 @@ describe('ChannelConfigPanel — WhatsApp Retry bounded timeout (MAJOR fix)', ()
     expect(screen.getByText(/Generating your QR code/i)).toBeInTheDocument()
 
     await act(async () => {
-      vi.advanceTimersByTime(31_000)
+      vi.advanceTimersByTime(91_000)
     })
 
     expect(screen.getByText(/Pairing failed/i)).toBeInTheDocument()

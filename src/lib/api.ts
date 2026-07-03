@@ -12,7 +12,7 @@
 // (or err.isAuthError() / err.isNotFound() / err.isRateLimited() / etc)
 // rather than regex-matching err.message — see src/lib/api-error.ts.
 
-import { ApiError } from './api-error'
+import { ApiError, isApiError as isApiErrorFn } from './api-error'
 export { ApiError, isApiError } from './api-error'
 import { maybeDevToast } from './dev-toast'
 import { logError } from './telemetry'
@@ -138,6 +138,8 @@ import {
   SlashCommand as SlashCommandSchema,
   // Memory/recap settings (workspace-heartbeat-memory-config-spec.md FR-019):
   MemorySettings as MemorySettingsSchema,
+  // M11 per-agent email mailbox account (contract-first #8):
+  Mailbox as MailboxSchema,
 } from '@/lib/api/generated/schemas'
 
 // ── Schema validation error ────────────────────────────────────────────────────
@@ -372,6 +374,9 @@ import type {
   SlashCommand,
   // Memory/recap settings (workspace-heartbeat-memory-config-spec.md FR-019):
   MemorySettings,
+  // M11 per-agent email mailbox account (contract-first #8):
+  Mailbox,
+  MailboxConfigureRequest,
 } from '@/lib/api/generated/openapi-types'
 
 export type {
@@ -500,6 +505,9 @@ export type {
   SlashCommand,
   // Memory/recap settings (workspace-heartbeat-memory-config-spec.md FR-019):
   MemorySettings,
+  // M11 per-agent email mailbox account:
+  Mailbox,
+  MailboxConfigureRequest,
 }
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? ''
@@ -1788,58 +1796,62 @@ export function deleteChannelInstance(id: string): Promise<void> {
 // ── Email Mailbox Account ─────────────────────────────────────────────────────
 //
 // Email is a TOOL (not a channel) with a per-(agent, workspace) mailbox account,
-// cap-1 in 0.1.0. The config is stored via the existing email channel config
-// endpoint — the backend agent (parallel) will add dedicated mailbox endpoints
-// when the contract is extended. Until then this seam routes through the channel
-// config path; swap the implementation here when the new endpoints land.
-//
-// Wire fields sent / received:
-//   imap_host, imap_port, smtp_host, smtp_port, username — plain text
-//   password — write-only; the backend credential-routes it and never returns it
-//   agent_id  — binds the mailbox to a specific agent (0.1.0: cap-1)
-//   workspace_id — the workspace the mailbox surfaces in (0.1.0: "my-workspace")
-
-// not-wire-format: SPA-internal shape for the email mailbox account config form
-export interface MailboxAccountConfig { // not-wire-format: SPA-internal form-data type for the email mailbox account config panel. Never sent as a standalone wire type; fields are spread into a Record<string,unknown> payload passed to saveMailboxConfig.
-  imap_host: string
-  imap_port: number | ''
-  smtp_host: string
-  smtp_port: number | ''
-  username: string
-  /** Write-only: present only when the user provides a new password; never returned by GET. */
-  password: string
-  /** Agent this mailbox belongs to (cap-1 in 0.1.0). */
-  agent_id: string
-  /** Workspace the mailbox surfaces in (cap-1 in 0.1.0). */
-  workspace_id: string
-  /** Free-form display fields returned by GET (may not be present). */
-  [key: string]: unknown
-}
+// cap-1 in 0.1.0. Configured via the dedicated per-agent endpoints
+// (GET/PUT/DELETE /api/v1/agents/{id}/mailbox); wire types Mailbox +
+// MailboxConfigureRequest are generated from contracts/openapi.yaml (#8).
 
 export const EMAIL_CHANNEL_ID = 'email'
 
 /**
- * Fetch the current email mailbox account config.
- * Routes through GET /api/v1/channels/email — the backend never returns the
- * password field (it is credential-store-routed, stored as password_ref).
+ * Fetch one agent's email mailbox account (M11 — email is a TOOL surface, not
+ * a conversational channel). Routes through GET /api/v1/agents/{id}/mailbox.
+ * Returns null when the agent has no mailbox configured (404) — every other
+ * error is rethrown. The password is never returned; `configured` reports
+ * whether a stored credential resolves.
  *
- * INTEGRATOR NOTE: when the backend agent adds dedicated mailbox endpoints
- * (GET /api/v1/mailboxes/:agentId), replace the body of this function only.
+ * (The legacy GET /channels/email path is dead: the ADR-029 instance-key
+ * grammar gate rejects "email" because it is deliberately not a channel type.)
  */
-export function fetchMailboxConfig(): Promise<Record<string, unknown>> {
-  return fetchChannelConfig(EMAIL_CHANNEL_ID)
+export async function fetchAgentMailbox(agentId: string): Promise<Mailbox | null> {
+  try {
+    return await request<Mailbox>(`/agents/${encodeURIComponent(agentId)}/mailbox`, undefined, MailboxSchema)
+  } catch (err) {
+    if (isApiErrorFn(err) && err.status === 404) return null
+    throw err
+  }
 }
 
 /**
- * Save the email mailbox account config.
- * Routes through PUT /api/v1/channels/email/configure — the backend
- * credential-routes the password field so it is never persisted in plaintext.
- *
- * INTEGRATOR NOTE: when the backend agent adds dedicated mailbox endpoints
- * (PUT /api/v1/mailboxes/:agentId), replace the body of this function only.
+ * Find the currently-configured mailbox across the given agents (cap-1 in
+ * 0.1.0 — at most one mailbox exists). Probes each agent's mailbox endpoint
+ * in parallel, tolerating 404s, and returns the first configured mailbox or
+ * null when none exists.
  */
-export function saveMailboxConfig(config: Record<string, unknown>): Promise<void> {
-  return configureChannel(EMAIL_CHANNEL_ID, config)
+export async function findConfiguredMailbox(agentIds: string[]): Promise<Mailbox | null> {
+  const results = await Promise.all(agentIds.map((id) => fetchAgentMailbox(id)))
+  return results.find((m): m is Mailbox => m !== null) ?? null
+}
+
+/**
+ * Configure an agent's email mailbox account via PUT /api/v1/agents/{id}/mailbox.
+ * The backend credential-routes the password (never persisted in plaintext);
+ * omit `password` to keep the stored credential.
+ */
+export function saveAgentMailbox(agentId: string, req: MailboxConfigureRequest): Promise<Mailbox> {
+  return request<Mailbox>(
+    `/agents/${encodeURIComponent(agentId)}/mailbox`,
+    { method: 'PUT', body: JSON.stringify(req) },
+    MailboxSchema,
+  )
+}
+
+/** Delete an agent's email mailbox account (DELETE /api/v1/agents/{id}/mailbox). */
+export function deleteAgentMailbox(agentId: string): Promise<OperationResult> {
+  return request<OperationResult>(
+    `/agents/${encodeURIComponent(agentId)}/mailbox`,
+    { method: 'DELETE' },
+    OperationResultSchema,
+  )
 }
 
 // ── Skills ────────────────────────────────────────────────────────────────────

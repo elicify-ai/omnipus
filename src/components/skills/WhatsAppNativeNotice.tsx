@@ -3,16 +3,17 @@ import { Warning } from '@phosphor-icons/react'
 import { useWhatsAppPairingStore } from '@/store/whatsappPairing'
 import type { WhatsAppPairingState } from '@/store/whatsappPairing'
 import { useConnectionStore } from '@/store/connection'
+import { disableChannel, enableChannel } from '@/lib/api'
 import { WhatsAppPairingBody } from './WhatsAppPairingBody'
 
 // RETRY_TIMEOUT_MS is the bounded window after a user presses Retry during which
-// we wait for a fresh `code` frame from the backend. The subscribe toggle only
-// controls forwarding interest — it does NOT make whatsmeow mint a new QR.
-// For a `timeout` state whatsmeow may emit a new code automatically; for `error`
-// the QR loop is terminal and no new code will arrive. If no `code` frame arrives
-// within this window, we revert to the original fallback state with the Retry
-// affordance so the user is never stranded in an endless spinner.
-const RETRY_TIMEOUT_MS = 30_000
+// we wait for a fresh `code` frame from the backend. Retry restarts the channel
+// (disable → enable), which re-arms whatsmeow's QR loop; the first code can take
+// up to ~60 s after connect, plus channel stop/start time, so the window must
+// comfortably exceed that. If no `code` frame arrives within this window, we
+// revert to the original fallback state with the Retry affordance so the user
+// is never stranded in an endless spinner.
+const RETRY_TIMEOUT_MS = 90_000
 
 // QR_INITIAL_TIMEOUT_MS: if no QR frame arrives within this window from mount,
 // surface a "timed out — click Retry" message. Prevents infinite spinner (#368).
@@ -124,26 +125,46 @@ export function WhatsAppNativeNotice({ channelId }: { channelId: string }) {
     [clear, channelId],
   )
 
-  function handleRetry() {
+  async function handleRetry() {
     const fallback = pairing?.status === 'error' ? 'error' : 'timeout'
 
-    // Reset initial-timeout state and re-arm the 15s window for the new attempt.
+    // Reset initial-timeout state and re-arm the window for the new attempt.
     setTimedOut(false)
     if (initialTimerRef.current !== null) {
       clearTimeout(initialTimerRef.current)
       initialTimerRef.current = null
     }
 
-    // Clear the stale pairing state so we show the spinner immediately.
+    // Clear the stale pairing state so we show the spinner immediately, and
+    // enter retry mode BEFORE the restart round-trip (retryFallbackState != null
+    // → the body renders the spinner while the channel bounces).
     clear(channelId)
+    setRetryFallbackState(fallback)
 
-    // Toggle subscribe interest: false then true re-registers this connection
-    // with the backend's subscribePairingInterest handler, which immediately
-    // re-emits the cached last-seen QR frame if one exists — so the retry often
-    // delivers a fresh frame without waiting for the next whatsmeow rotation
-    // cycle. If no cached frame exists (e.g. after an `error` state where the
-    // QR loop is terminal), no frame is re-emitted and the 30s fallback timer
-    // eventually reverts the UI.
+    // whatsmeow's QR loop is NOT request-driven and is terminal once its codes
+    // expire (or on error) — no amount of re-subscribing produces a new code.
+    // The only way to mint a fresh QR is to restart the channel: disable →
+    // enable walks the ChannelManager.Reload diff (stop, then start), and a
+    // starting unpaired whatsapp channel re-arms the QR loop (#358).
+    try {
+      await disableChannel(channelId)
+      await enableChannel(channelId)
+    } catch {
+      // Restart failed (gateway unreachable, reload error) — surface the error
+      // state immediately instead of spinning for the full retry window.
+      useWhatsAppPairingStore.getState().apply({
+        type: 'whatsapp_pairing',
+        channel_id: channelId,
+        status: 'error',
+        message: 'the channel could not be restarted — check the gateway logs',
+      })
+      setRetryFallbackState(null)
+      return
+    }
+
+    // Re-register pairing interest for this connection (toggle false → true);
+    // the freshly-started channel emits its first QR over whatsapp_pairing and
+    // the store picks it up under this instance id.
     useConnectionStore.getState().connection?.send({
       type: 'whatsapp_pairing_subscribe',
       channel_id: channelId,
@@ -154,11 +175,6 @@ export function WhatsAppNativeNotice({ channelId }: { channelId: string }) {
       channel_id: channelId,
       active: true,
     })
-
-    // Enter retry mode: record the fallback state so WhatsAppPairingBody still
-    // renders the spinner (retryFallbackState != null → pairing is undefined in
-    // the store after clear()).
-    setRetryFallbackState(fallback)
 
     // Bounded timeout: if no `code` frame arrives within RETRY_TIMEOUT_MS, revert
     // to the original state with the Retry affordance (no endless spinner).

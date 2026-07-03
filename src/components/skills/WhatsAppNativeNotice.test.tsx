@@ -14,19 +14,27 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 
 // Connection store: expose a spyable `send` + getState (the notice calls
 // useConnectionStore.getState() directly in unmount cleanup). vi.hoisted —
 // vi.mock factories are hoisted above const initializers.
-const { sendSpy, clearSpy, pairing } = vi.hoisted(() => {
+const { sendSpy, clearSpy, applySpy, disableSpy, enableSpy, pairing } = vi.hoisted(() => {
   const pairing: { byChannel: Record<string, { status: string; qr: string; message: string }> } = { byChannel: {} }
   return {
     sendSpy: vi.fn(),
     clearSpy: vi.fn((id: string) => { delete pairing.byChannel[id] }),
+    applySpy: vi.fn(),
+    disableSpy: vi.fn(async () => ({})),
+    enableSpy: vi.fn(async () => ({})),
     pairing,
   }
 })
+// Retry restarts the channel via the REST enable/disable endpoints.
+vi.mock('@/lib/api', () => ({
+  disableChannel: disableSpy,
+  enableChannel: enableSpy,
+}))
 vi.mock('@/store/connection', () => {
   const state = { isConnected: true, connection: { send: sendSpy } }
   const hook = vi.fn((selector: (s: typeof state) => unknown) => selector(state))
@@ -35,11 +43,13 @@ vi.mock('@/store/connection', () => {
 })
 
 // Pairing store: real keying semantics (byChannel keyed by frame channel_id).
+// getState() is used by handleRetry's error path (apply) and unmount cleanup.
 vi.mock('@/store/whatsappPairing', () => {
+  const state = () => ({ byChannel: pairing.byChannel, clear: clearSpy, apply: applySpy })
   const hook = vi.fn(
-    (selector: (s: { byChannel: typeof pairing.byChannel; clear: typeof clearSpy }) => unknown) =>
-      selector({ byChannel: pairing.byChannel, clear: clearSpy }),
+    (selector: (s: ReturnType<typeof state>) => unknown) => selector(state()),
   )
+  ;(hook as unknown as { getState: typeof state }).getState = state
   return { useWhatsAppPairingStore: hook }
 })
 
@@ -49,6 +59,10 @@ beforeEach(() => {
   pairing.byChannel = {}
   sendSpy.mockClear()
   clearSpy.mockClear()
+  applySpy.mockClear()
+  disableSpy.mockClear()
+  enableSpy.mockClear()
+  disableSpy.mockImplementation(async () => ({}))
 })
 
 describe('WhatsAppNativeNotice — QR renders from the instance-keyed pairing frame', () => {
@@ -110,4 +124,66 @@ describe('WhatsAppNativeNotice — subscribe interest is instance-scoped', () =>
       expect(clearSpy).toHaveBeenCalledWith(channelId)
     },
   )
+})
+
+describe('WhatsAppNativeNotice — Retry restarts the channel (terminal QR loop)', () => {
+  // whatsmeow's QR loop is terminal once its codes expire: re-subscribing can
+  // only re-emit a CACHED code, never mint a new one. Retry must therefore
+  // bounce the channel (disable → enable), which re-arms the QR loop.
+  it.each(['whatsapp', 'whatsapp.sales'])(
+    'clicking Retry disables then re-enables the instance and re-subscribes (%s)',
+    async (channelId) => {
+      pairing.byChannel[channelId] = { status: 'timeout', qr: '', message: 'expired' }
+
+      render(<WhatsAppNativeNotice channelId={channelId} />)
+      sendSpy.mockClear() // drop the mount-time subscribe
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /retry/i }))
+      })
+
+      await waitFor(() => {
+        expect(disableSpy).toHaveBeenCalledWith(channelId)
+        expect(enableSpy).toHaveBeenCalledWith(channelId)
+      })
+      // disable strictly before enable
+      expect(disableSpy.mock.invocationCallOrder[0]).toBeLessThan(
+        enableSpy.mock.invocationCallOrder[0],
+      )
+      // interest re-registered for THIS instance after the restart
+      expect(sendSpy).toHaveBeenCalledWith({
+        type: 'whatsapp_pairing_subscribe',
+        channel_id: channelId,
+        active: false,
+      })
+      expect(sendSpy).toHaveBeenCalledWith({
+        type: 'whatsapp_pairing_subscribe',
+        channel_id: channelId,
+        active: true,
+      })
+    },
+  )
+
+  it('surfaces an error state when the restart round-trip fails', async () => {
+    pairing.byChannel['whatsapp'] = { status: 'timeout', qr: '', message: 'expired' }
+    disableSpy.mockImplementation(async () => { throw new Error('gateway down') })
+
+    render(<WhatsAppNativeNotice channelId="whatsapp" />)
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /retry/i }))
+    })
+
+    await waitFor(() => {
+      expect(applySpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'whatsapp_pairing',
+          channel_id: 'whatsapp',
+          status: 'error',
+        }),
+      )
+    })
+    // No re-subscribe after a failed restart
+    expect(enableSpy).not.toHaveBeenCalled()
+  })
 })

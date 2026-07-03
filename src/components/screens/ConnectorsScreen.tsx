@@ -36,6 +36,7 @@ import {
   fetchWorkspaces,
   fetchWorkspace,
   fetchAgents,
+  findConfiguredMailbox,
   isApiError,
   isWorker,
   EMAIL_CHANNEL_ID,
@@ -794,8 +795,20 @@ export function ConnectorsScreen() {
   // from the type-grouped instance list so they don't appear twice or confuse
   // the "N instances per type" model.
   const channels = allChannels.filter((c) => c.id !== EMAIL_CHANNEL_ID && c.id !== WEBCHAT_ID)
-  const emailChannel = allChannels.find((c) => c.id === EMAIL_CHANNEL_ID)
   const webchatChannel = allChannels.find((c) => c.id === WEBCHAT_ID)
+
+  // Email mailbox status (M11): the mailbox is per-agent, NOT a channel — the
+  // /channels list has no email entry. Probe the agents' mailbox endpoints
+  // (cap-1, 404-tolerant) to know whether a mailbox account is configured.
+  const { data: emailAgents = [], isSuccess: emailAgentsLoaded } = useQuery({
+    queryKey: ['agents'],
+    queryFn: fetchAgents,
+  })
+  const { data: configuredMailbox } = useQuery({
+    queryKey: ['agent-mailboxes'],
+    queryFn: () => findConfiguredMailbox(emailAgents.filter((a) => !isWorker(a)).map((a) => a.id)),
+    enabled: emailAgentsLoaded,
+  })
 
   // "Configured" (FR-008) = has a persisted instance — the backend only sets
   // instance_id on entries backed by a real config.Channels[] map key; the
@@ -1006,7 +1019,7 @@ export function ConnectorsScreen() {
                     <Badge variant="outline" className="text-[10px] font-mono">
                       imap + smtp
                     </Badge>
-                    {emailChannel?.enabled ? (
+                    {configuredMailbox?.enabled ? (
                       <Badge variant="success" className="text-[10px]">
                         Active
                       </Badge>
