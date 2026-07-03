@@ -1225,8 +1225,11 @@ describe('AgentProfile — Wave 5 tab structure (spec §6.2-§6.4)', () => {
     expect(screen.queryByTestId('tab-runtime')).toBeNull()
   })
 
-  it('renders 5 tabs including Runtime for a subagent_3p agent', async () => {
-    // Traces to: agent-form-requirements.md §9.3 — "Edit slide-over (Subagent External) shows 5 tabs"
+  it('renders 4 tabs including Runtime (and NO Tools tab) for a subagent_3p agent', async () => {
+    // Traces to: agent-form-requirements.md §9.3, amended by the field
+    // matrix: the Tools tab is omitted for external CLI workers (every
+    // toolsPanel section is out of scope for them), so the external edit
+    // slide-over shows Basics / Personality / Runtime / Advanced.
     vi.mocked(fetchAgent).mockResolvedValue({
       ...mockCoreAgent,
       id: 'external-worker',
@@ -1238,7 +1241,7 @@ describe('AgentProfile — Wave 5 tab structure (spec §6.2-§6.4)', () => {
     await screen.findByText('External Worker')
     expect(screen.getByTestId('tab-basics')).toBeInTheDocument()
     expect(screen.getByTestId('tab-personality')).toBeInTheDocument()
-    expect(screen.getByTestId('tab-tools')).toBeInTheDocument()
+    expect(screen.queryByTestId('tab-tools')).toBeNull()
     expect(screen.getByTestId('tab-runtime')).toBeInTheDocument()
     expect(screen.getByTestId('tab-advanced')).toBeInTheDocument()
   })
@@ -1799,10 +1802,10 @@ describe('AgentProfile — skills visibility by agent kind (field matrix, W2c)',
     vi.mocked(fetchAgent).mockResolvedValue(mockSubagent3pAgent)
     renderProfile('external-researcher')
     await screen.findByText('External Researcher')
-    switchTab('tab-tools')
-    // The tab renders (fallback models etc. hidden too) but the Skills
-    // section must not.
+    // The whole Tools tab is omitted for subagent_3p, so the Skills section
+    // has no surface to render on at all.
     await waitFor(() => {
+      expect(screen.queryByTestId('tab-tools')).toBeNull()
       expect(screen.queryByText(/^Skills$/i)).toBeNull()
     })
   })
@@ -1829,8 +1832,9 @@ describe('AgentProfile — Tools & Permissions visibility by agent kind (field m
     vi.mocked(fetchAgent).mockResolvedValue(mockSubagent3pAgent)
     renderProfile('external-researcher')
     await screen.findByText('External Researcher')
-    switchTab('tab-tools')
+    // Stronger than a hidden section: the Tools tab itself is omitted.
     await waitFor(() => {
+      expect(screen.queryByTestId('tab-tools')).toBeNull()
       expect(screen.queryByText(/Tools.*Permissions/i)).toBeNull()
     })
   })
@@ -1854,8 +1858,9 @@ describe('AgentProfile — Fallback models visibility by agent kind (field matri
     vi.mocked(fetchAgent).mockResolvedValue(mockSubagent3pAgent)
     renderProfile('external-researcher')
     await screen.findByText('External Researcher')
-    switchTab('tab-tools')
+    // The Tools tab (the fallback editor's home) is omitted for 3p.
     await waitFor(() => {
+      expect(screen.queryByTestId('tab-tools')).toBeNull()
       expect(screen.queryByText(/^Fallback models$/i)).toBeNull()
     })
   })
@@ -2006,6 +2011,55 @@ describe('AgentProfile — Sampling parameters visibility by agent kind (field m
     renderProfile('web-researcher')
     await screen.findByText('Web Researcher')
     expect((await screen.findAllByText(/Sampling parameters/i)).length).toBeGreaterThanOrEqual(1)
+  })
+})
+
+// Every section inside toolsPanel is out of scope for external CLI workers,
+// so the Tools TAB itself (and its mobile accordion item) must not render
+// for subagent_3p — an unconditional trigger left an empty tab (live UAT
+// finding, 2026-07-03).
+describe('AgentProfile — Tools tab visibility by agent kind (field matrix)', () => {
+  it('omits the Tools tab entirely for a subagent_3p agent', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue(mockSubagent3pAgent)
+    renderProfile('external-researcher')
+    await screen.findByText('External Researcher')
+    await waitFor(() => {
+      expect(screen.queryByTestId('tab-tools')).toBeNull()
+      expect(screen.queryByTestId('accordion-tools')).toBeNull()
+    })
+  })
+
+  it('shows the Tools tab for a native Subagent', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue(mockWorkerAgent)
+    renderProfile('web-researcher')
+    await screen.findByText('Web Researcher')
+    expect(await screen.findByTestId('tab-tools')).toBeTruthy()
+  })
+})
+
+// External CLI workers resolve their model through the RUNNER's own provider
+// and auth (--model, ADR-032) — the connected-provider catalogue is the wrong
+// universe for them, so the edit profile renders a free-text input instead of
+// the constrained ModelSelector (operator finding, 2026-07-03).
+describe('AgentProfile — Model input kind by agent kind (external = free text)', () => {
+  it('renders a free-text model input (no catalogue selector) for a subagent_3p agent', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue(mockSubagent3pAgent)
+    renderProfile('external-researcher')
+    await screen.findByText('External Researcher')
+    const inputs = await screen.findAllByTestId('external-model-input')
+    expect(inputs.length).toBeGreaterThanOrEqual(1)
+    // The constrained catalogue selector must not render for this type.
+    expect(screen.queryAllByLabelText(/Model selector/i).length).toBe(0)
+  })
+
+  it('renders the constrained ModelSelector (not free text) for a native Subagent', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue(mockWorkerAgent)
+    renderProfile('web-researcher')
+    await screen.findByText('Web Researcher')
+    await waitFor(() => {
+      expect(screen.queryAllByTestId('external-model-input').length).toBe(0)
+    })
+    expect(screen.getAllByLabelText(/Model selector/i).length).toBeGreaterThanOrEqual(1)
   })
 })
 
