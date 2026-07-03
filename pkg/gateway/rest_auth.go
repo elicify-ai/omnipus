@@ -253,19 +253,29 @@ func (a *restAPI) withOptionalAuth(handler http.HandlerFunc) http.HandlerFunc {
 		prefix := "Bearer "
 		if strings.HasPrefix(authHeader, prefix) {
 			rawToken := strings.TrimPrefix(authHeader, prefix)
-			// Check per-user list (bearer-token SET via bcrypt — SEC-1).
-			if len(cfg.Gateway.Users) > 0 {
-				for i := range cfg.Gateway.Users {
-					user := cfg.Gateway.Users[i]
-					if user.VerifyToken(rawToken) == nil {
-						ctx := context.WithValue(r.Context(), UserContextKey{}, &user)
-						a.setCORSHeaders(w, r)
-						handler(w, r.WithContext(ctx))
-						return
-					}
+			// The human account(s) in Gateway.Users — looped, matching
+			// checkBearerAuth (pkg/gateway/auth.go): normally exactly one
+			// entry, but a pre-single-user-model install could still carry a
+			// leftover second account (config.warnAboutExtraUsers logs a
+			// WARN for this at load time).
+			for i := range cfg.Gateway.Users {
+				if cfg.Gateway.Users[i].VerifyToken(rawToken) == nil {
+					ctx := context.WithValue(r.Context(), UserContextKey{}, &cfg.Gateway.Users[i])
+					a.setCORSHeaders(w, r)
+					handler(w, r.WithContext(ctx))
+					return
 				}
-				// Token present but not found in user list — treat as anonymous (optional auth)
 			}
+			// The CLI's dedicated token — see checkBearerAuth for the same check.
+			if cfg.Gateway.CLIToken != nil {
+				if config.VerifyTokenAgainst([]config.TokenEntry{*cfg.Gateway.CLIToken}, "", rawToken) == nil {
+					ctx := context.WithValue(r.Context(), UserContextKey{}, &config.UserConfig{Username: "cli"})
+					a.setCORSHeaders(w, r)
+					handler(w, r.WithContext(ctx))
+					return
+				}
+			}
+			// Token present but matched neither — treat as anonymous (optional auth).
 			// Legacy env var fallback
 			required := os.Getenv("OMNIPUS_BEARER_TOKEN")
 			if required != "" && subtle.ConstantTimeCompare([]byte(rawToken), []byte(required)) == 1 {

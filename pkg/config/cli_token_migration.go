@@ -69,7 +69,7 @@ func migrateCLITokenOutOfUsers(cfg *Config, cfgPath string, onSelfHeal SelfHealW
 
 	var entry *TokenEntry
 	switch {
-	case len(legacy.Tokens) > 0:
+	case len(legacy.Tokens) > 0 && !legacy.Tokens[len(legacy.Tokens)-1].Hash.IsZero():
 		// Preserve the most recently issued token entry (ID/Hash/CreatedAt) as-is.
 		last := legacy.Tokens[len(legacy.Tokens)-1]
 		entry = &last
@@ -153,7 +153,9 @@ func migrateCLITokenOnDisk(path string) ([]byte, error) {
 	var tokenEntry map[string]any
 	if tokens, ok := cliUser["tokens"].([]any); ok && len(tokens) > 0 {
 		if last, ok := tokens[len(tokens)-1].(map[string]any); ok {
-			tokenEntry = last
+			if hash, _ := last["hash"].(string); hash != "" {
+				tokenEntry = last
+			}
 		}
 	}
 	if tokenEntry == nil {

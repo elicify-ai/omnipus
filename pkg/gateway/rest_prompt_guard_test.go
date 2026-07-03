@@ -92,6 +92,63 @@ func TestHandlePromptGuard_HotReload(t *testing.T) {
 	assert.Equal(t, false, resp["requires_restart"], "requires_restart must be false for hot-reload endpoint")
 }
 
+// TestHandlePromptGuard_AuthenticatedCallerSucceeds verifies that an
+// authenticated caller can complete PUT /api/v1/security/prompt-guard
+// end-to-end: the response reflects the requested change (not a hardcoded
+// value) and the change is durably persisted (not a no-op). This endpoint's
+// sibling files (rest_rate_limits_test.go, rest_retention_test.go,
+// rest_skill_trust_test.go) each carried an equivalent "authenticated caller
+// succeeds" proof after their RBAC-era *_NonAdmin403 tests were reconciled
+// for the single-user model; this file's counterpart was dropped outright
+// with no replacement. This test closes that gap: two different levels are
+// PUT in sequence on the same api instance, and each is confirmed via GET,
+// so a stub/hardcoded handler (always returns the same applied_level) or a
+// no-op handler (never persists) would fail here.
+func TestHandlePromptGuard_AuthenticatedCallerSucceeds(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	// First change: low.
+	w1 := promptGuardPUT(t, api, "low")
+	require.Equal(t, http.StatusOK, w1.Code, "PUT must succeed: %s", w1.Body.String())
+
+	var resp1 map[string]any
+	require.NoError(t, json.Unmarshal(w1.Body.Bytes(), &resp1))
+	assert.Equal(t, true, resp1["saved"])
+	assert.Equal(t, "low", resp1["applied_level"])
+
+	getReq1 := httptest.NewRequest(http.MethodGet, "/api/v1/security/prompt-guard", nil)
+	getW1 := httptest.NewRecorder()
+	api.HandlePromptGuard(getW1, getReq1)
+	require.Equal(t, http.StatusOK, getW1.Code)
+
+	var getResp1 map[string]any
+	require.NoError(t, json.Unmarshal(getW1.Body.Bytes(), &getResp1))
+	assert.Equal(t, "low", getResp1["level"], "GET must reflect the persisted low level")
+
+	// Second change: high — a DIFFERENT value from the first PUT. If the
+	// handler were hardcoded or a no-op, this response/GET would still read
+	// "low".
+	w2 := promptGuardPUT(t, api, "high")
+	require.Equal(t, http.StatusOK, w2.Code, "PUT must succeed: %s", w2.Body.String())
+
+	var resp2 map[string]any
+	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &resp2))
+	assert.Equal(t, true, resp2["saved"])
+	assert.Equal(t, "high", resp2["applied_level"])
+	assert.NotEqual(t, resp1["applied_level"], resp2["applied_level"],
+		"applied_level must differ between two different PUT bodies — proves the response isn't hardcoded")
+
+	getReq2 := httptest.NewRequest(http.MethodGet, "/api/v1/security/prompt-guard", nil)
+	getW2 := httptest.NewRecorder()
+	api.HandlePromptGuard(getW2, getReq2)
+	require.Equal(t, http.StatusOK, getW2.Code)
+
+	var getResp2 map[string]any
+	require.NoError(t, json.Unmarshal(getW2.Body.Bytes(), &getResp2))
+	assert.Equal(t, "high", getResp2["level"],
+		"GET must reflect the updated persisted level, proving the second PUT wasn't a no-op")
+}
+
 // TestHandlePromptGuard_MethodNotAllowed verifies that POST and DELETE return 405.
 func TestHandlePromptGuard_MethodNotAllowed(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
