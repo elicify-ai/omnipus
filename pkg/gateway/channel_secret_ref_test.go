@@ -140,11 +140,19 @@ func TestTestChannel_FailsWhenSecretMissing(t *testing.T) {
 // guard: a config left with an inline plaintext secret by the pre-#289 bug must
 // be scrubbed on the next save — even when the user edits an UNRELATED field and
 // does not re-supply the secret (the realistic "[configured]" UI flow).
+//
+// The fixture also carries a legitimate token_ref (with its credential
+// pre-stored) alongside the stale inline plaintext: since Stage 1 of the
+// channel-Test redesign rejects an incomplete save, the config here must be
+// genuinely complete (required "token" satisfied via token_ref) for the save
+// to succeed — the scrub assertions below are otherwise unchanged.
 func TestConfigureChannel_ScrubsStaleInlinePlaintext(t *testing.T) {
 	api := newChannelTestAPI(
 		t,
-		`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],"channels":{"telegram":{"enabled":false,"token":"LEAKED-OLD-PLAINTEXT","parse_mode":"Markdown"}}}`,
+		`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],"channels":{"telegram":{"enabled":false,"token":"LEAKED-OLD-PLAINTEXT","token_ref":"channel_telegram_token","parse_mode":"Markdown"}}}`,
 	)
+	_, err := api.storeCredential("channel_telegram_token", "legit-secret")
+	require.NoError(t, err)
 
 	// Edit only a non-secret field; do NOT re-send the token.
 	w := httptest.NewRecorder()
@@ -168,16 +176,26 @@ func TestConfigureChannel_ScrubsStaleInlinePlaintext(t *testing.T) {
 
 // TestConfigureChannel_ClearSecretDeletesCredential covers the clear/rotate path:
 // re-configuring with an empty value clears the ref AND deletes the stored
-// credential so a "removed" token does not linger encrypted at rest.
+// credential so a "removed" secret does not linger encrypted at rest.
+//
+// Clears a NON-required sensitive field — matrix's crypto_passphrase
+// (channelSensitiveFields["matrix"] includes it, channelRequiredFields does
+// not) — because Stage 1 of the channel-Test redesign now rejects a save that
+// would clear a REQUIRED secret (see
+// TestConfigureChannel_RejectsClearingRequiredSecret for that path).
 func TestConfigureChannel_ClearSecretDeletesCredential(t *testing.T) {
 	api := newChannelTestAPI(t, `{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],"channels":{}}`)
 
-	// Set a token, then clear it.
-	for _, body := range []string{`{"token":"secret-1"}`, `{"token":"   "}`} {
+	// Configure matrix fully (all three required fields) plus the optional
+	// crypto_passphrase, then clear only crypto_passphrase.
+	for _, body := range []string{
+		`{"homeserver":"https://m.org","user_id":"@a:m.org","access_token":"syt-token","crypto_passphrase":"pp-1"}`,
+		`{"crypto_passphrase":"   "}`,
+	} {
 		w := httptest.NewRecorder()
-		r := httptest.NewRequest(http.MethodPut, "/api/v1/channels/telegram/configure", strings.NewReader(body))
+		r := httptest.NewRequest(http.MethodPut, "/api/v1/channels/matrix/configure", strings.NewReader(body))
 		r.Header.Set("Content-Type", "application/json")
-		api.configureChannel(w, r, "telegram")
+		api.configureChannel(w, r, "matrix")
 		require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
 	}
 
@@ -186,17 +204,47 @@ func TestConfigureChannel_ClearSecretDeletesCredential(t *testing.T) {
 	require.NoError(t, err)
 	var diskCfg map[string]any
 	require.NoError(t, json.Unmarshal(raw, &diskCfg))
-	tg := diskCfg["channels"].(map[string]any)["telegram"].(map[string]any)
-	assert.Equal(t, "", tg["token_ref"], "token_ref must be cleared")
-	_, err = api.credStore.Get("channel_telegram_token")
+	mx := diskCfg["channels"].(map[string]any)["matrix"].(map[string]any)
+	assert.Equal(t, "", mx["crypto_passphrase_ref"], "crypto_passphrase_ref must be cleared")
+	_, err = api.credStore.Get("channel_matrix_crypto_passphrase")
 	assert.Error(t, err, "the stored credential must be deleted on clear")
 
-	// Test now reports failure (the channel is unconfigured again).
+	// Test still reports success: crypto_passphrase is not required, and
+	// homeserver/user_id/access_token remain configured.
 	w := httptest.NewRecorder()
-	api.testChannel(w, "telegram")
+	api.testChannel(w, "matrix")
 	var resp gen.ChannelTestResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.False(t, resp.Success)
+	assert.True(t, resp.Success, "matrix must still pass Test after clearing the non-required crypto_passphrase: %s", resp.Message)
+}
+
+// TestConfigureChannel_RejectsClearingRequiredSecret guards Stage 1 of the
+// channel-Test redesign: clearing a REQUIRED secret field must be rejected —
+// it would leave the persisted config unable to construct the channel — and
+// the rejection must be a true no-op: the existing credential is left
+// resolvable, unchanged, in the store.
+func TestConfigureChannel_RejectsClearingRequiredSecret(t *testing.T) {
+	api := newChannelTestAPI(t, `{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],"channels":{}}`)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/channels/telegram/configure",
+		strings.NewReader(`{"token":"secret-1"}`))
+	r.Header.Set("Content-Type", "application/json")
+	api.configureChannel(w, r, "telegram")
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+	w2 := httptest.NewRecorder()
+	r2 := httptest.NewRequest(http.MethodPut, "/api/v1/channels/telegram/configure",
+		strings.NewReader(`{"token":"   "}`))
+	r2.Header.Set("Content-Type", "application/json")
+	api.configureChannel(w2, r2, "telegram")
+	assert.Equal(t, http.StatusBadRequest, w2.Code, "clearing a required secret must be rejected, body=%s", w2.Body.String())
+	assert.Contains(t, w2.Body.String(), "token")
+
+	// Zero-side-effect proof: the existing credential still resolves unchanged.
+	got, err := api.credStore.Get("channel_telegram_token")
+	require.NoError(t, err)
+	assert.Equal(t, "secret-1", got, "a rejected clear must not touch the existing credential")
 }
 
 // TestTestChannel_MatrixMixedRequiredFields locks in the inline-vs-ref
@@ -391,13 +439,17 @@ func mustJSONString(t *testing.T, s string) string {
 // requires BOTH bot_token and app_token, so "Test" reporting success with only
 // bot_token configured was a lie — an operator would enable slack and it would
 // fail to construct at boot. Both refs must resolve for success.
+//
+// Both fields are supplied in a single configure call because Stage 1 of the
+// channel-Test redesign now rejects a save that would leave a
+// multi-field-required channel partially configured — see
+// TestConfigureChannel_RejectsPartialMultiFieldRequired for that rejection.
 func TestTestChannel_SlackRequiresAppToken(t *testing.T) {
 	api := newChannelTestAPI(t, `{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],"channels":{}}`)
 
-	// Only bot_token configured — Test must fail and name app_token.
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/channels/slack/configure",
-		strings.NewReader(`{"bot_token":"xoxb-aaa"}`))
+		strings.NewReader(`{"bot_token":"xoxb-aaa","app_token":"xapp-bbb"}`))
 	r.Header.Set("Content-Type", "application/json")
 	api.configureChannel(w, r, "slack")
 	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
@@ -407,22 +459,60 @@ func TestTestChannel_SlackRequiresAppToken(t *testing.T) {
 	require.Equal(t, http.StatusOK, w2.Code)
 	var resp gen.ChannelTestResponse
 	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &resp))
-	assert.False(t, resp.Success, "slack must fail Test with only bot_token configured")
-	assert.Contains(t, resp.Message, "app_token")
+	assert.True(t, resp.Success, "slack must pass Test once both bot_token and app_token are configured: %s", resp.Message)
+}
 
-	// Add app_token — Test must now succeed.
-	w3 := httptest.NewRecorder()
-	r3 := httptest.NewRequest(http.MethodPut, "/api/v1/channels/slack/configure",
-		strings.NewReader(`{"app_token":"xapp-bbb"}`))
-	r3.Header.Set("Content-Type", "application/json")
-	api.configureChannel(w3, r3, "slack")
-	require.Equal(t, http.StatusOK, w3.Code, "body=%s", w3.Body.String())
+// TestConfigureChannel_RejectsPartialMultiFieldRequired guards Stage 1 of the
+// channel-Test redesign: slack requires BOTH bot_token and app_token
+// (channelRequiredFields["slack"]); configuring only one must be rejected
+// before either the config entry or the credential reaches disk.
+func TestConfigureChannel_RejectsPartialMultiFieldRequired(t *testing.T) {
+	api := newChannelTestAPI(t, `{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],"channels":{}}`)
 
-	w4 := httptest.NewRecorder()
-	api.testChannel(w4, "slack")
-	var resp4 gen.ChannelTestResponse
-	require.NoError(t, json.Unmarshal(w4.Body.Bytes(), &resp4))
-	assert.True(t, resp4.Success, "slack must pass Test once both bot_token and app_token are configured: %s", resp4.Message)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/channels/slack/configure",
+		strings.NewReader(`{"bot_token":"xoxb-aaa"}`))
+	r.Header.Set("Content-Type", "application/json")
+	api.configureChannel(w, r, "slack")
+	assert.Equal(t, http.StatusBadRequest, w.Code, "a partial multi-field-required save must be rejected, body=%s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "app_token")
+
+	// Nothing persisted: no slack config entry, no bot_token credential.
+	raw, err := os.ReadFile(api.homePath + "/config.json")
+	require.NoError(t, err)
+	var diskCfg map[string]any
+	require.NoError(t, json.Unmarshal(raw, &diskCfg))
+	channels, _ := diskCfg["channels"].(map[string]any)
+	_, hasSlack := channels["slack"]
+	assert.False(t, hasSlack, "a rejected partial save must persist nothing")
+
+	_, err = api.credStore.Get("channel_slack_bot_token")
+	assert.Error(t, err, "a rejected partial save must not store the bot_token credential")
+}
+
+// TestConfigureChannel_GoogleChatEitherOr guards Stage 1 of the channel-Test
+// redesign applied to Google Chat's either/or auth-path requirement (mirrors
+// testChannel's special case below): a save naming neither webhook_url nor a
+// service-account field must be rejected, naming both alternatives in the
+// message; adding webhook_url then satisfies the requirement.
+func TestConfigureChannel_GoogleChatEitherOr(t *testing.T) {
+	api := newChannelTestAPI(t, `{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],"channels":{}}`)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/channels/google-chat/configure",
+		strings.NewReader(`{"space":"spaces/AAA"}`))
+	r.Header.Set("Content-Type", "application/json")
+	api.configureChannel(w, r, "google-chat")
+	assert.Equal(t, http.StatusBadRequest, w.Code, "gchat save with neither auth path must be rejected, body=%s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "webhook_url")
+	assert.Contains(t, w.Body.String(), "service_account")
+
+	w2 := httptest.NewRecorder()
+	r2 := httptest.NewRequest(http.MethodPut, "/api/v1/channels/google-chat/configure",
+		strings.NewReader(`{"space":"spaces/AAA","webhook_url":"https://chat.googleapis.com/v1/spaces/AAA/messages?key=K&token=T"}`))
+	r2.Header.Set("Content-Type", "application/json")
+	api.configureChannel(w2, r2, "google-chat")
+	assert.Equal(t, http.StatusOK, w2.Code, "adding webhook_url must satisfy the auth-path requirement, body=%s", w2.Body.String())
 }
 
 // TestTestChannel_GoogleChatRequiresAuthPath guards the special-case fix in
@@ -487,4 +577,32 @@ func TestChannels_EmailIsUnknown(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/channels/email", nil)
 	api.HandleChannels(w, r)
 	assert.Equal(t, http.StatusNotFound, w.Code, "GET /channels/email must 404 as an unknown channel type")
+}
+
+// TestSetChannelEnabled_RejectsIncompleteConfig guards Stage 1 of the
+// channel-Test redesign: enabling a channel whose persisted config is
+// incomplete must be rejected — an enabled-but-incomplete channel would fail
+// to construct on the next reload/boot. Completing the config then allows
+// enable to succeed. Disabling never validates (s1_whatsapp_enable_reload_test.go
+// exercises that path; whatsapp's empty required-fields list also always
+// passes here regardless).
+func TestSetChannelEnabled_RejectsIncompleteConfig(t *testing.T) {
+	api := newChannelTestAPI(t, `{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],"channels":{"telegram":{"enabled":false}}}`)
+
+	w := httptest.NewRecorder()
+	api.setChannelEnabled(w, "telegram", true)
+	assert.Equal(t, http.StatusBadRequest, w.Code, "enabling an incomplete telegram config must be rejected, body=%s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "token")
+
+	// Complete the config, then enable must succeed.
+	wc := httptest.NewRecorder()
+	rc := httptest.NewRequest(http.MethodPut, "/api/v1/channels/telegram/configure",
+		strings.NewReader(`{"token":"secret-1"}`))
+	rc.Header.Set("Content-Type", "application/json")
+	api.configureChannel(wc, rc, "telegram")
+	require.Equal(t, http.StatusOK, wc.Code, "body=%s", wc.Body.String())
+
+	w2 := httptest.NewRecorder()
+	api.setChannelEnabled(w2, "telegram", true)
+	assert.Equal(t, http.StatusOK, w2.Code, "enabling a complete config must succeed, body=%s", w2.Body.String())
 }
