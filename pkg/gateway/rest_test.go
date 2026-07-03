@@ -240,7 +240,7 @@ func TestHandleAgentsCreateValidation(t *testing.T) {
 	api, cleanup := newTestRestAPI(t)
 	defer cleanup()
 
-	body := `{"name": ""}`
+	body := `{"type": "Main", "name": "", "soul": "s"}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
@@ -260,7 +260,7 @@ func TestHandleAgentsCreate(t *testing.T) {
 	// not the committed pkg/gateway/config.json test fixture.
 	api := newTestRestAPIWithHome(t)
 
-	body := `{"name": "Scout", "model": "claude-sonnet-4-6", "soul": "Scout soul"}`
+	body := `{"type": "Main", "name": "Scout", "model": "claude-sonnet-4-6", "soul": "Scout soul"}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
@@ -275,25 +275,31 @@ func TestHandleAgentsCreate(t *testing.T) {
 	assert.NotEmpty(t, resp.Id)
 }
 
-// TestHandleAgentsCreateWithExplicitID verifies POST /api/v1/agents creates agent and ignores provided id.
+// TestHandleAgentsCreateWithExplicitID_Rejected verifies POST /api/v1/agents
+// rejects a body carrying a client-supplied "id" field. Superseded by the
+// unconditional strict-decode enforcement: "id" is not a property on
+// AgentCreateRequestMain (the id is always server-generated via
+// uuid.New()), so a caller-supplied "id" key is now a 400 rather than being
+// silently dropped by a plain json.Unmarshal. The agent identity contract
+// (server always mints its own UUID) is otherwise unaffected — see
+// TestHandleAgentsCreate for the happy path.
 // Traces to: wave5a-wire-ui-spec.md — A3+A4: agent creation via API
-func TestHandleAgentsCreateWithExplicitID(t *testing.T) {
+func TestHandleAgentsCreateWithExplicitID_Rejected(t *testing.T) {
 	// Use newTestRestAPIWithHome so safeUpdateConfigJSON writes to a temp dir,
 	// not the committed pkg/gateway/config.json test fixture.
 	api := newTestRestAPIWithHome(t)
 
-	body := `{"id": "my-scout", "name": "Scout", "soul": "Scout soul"}`
+	body := `{"id": "my-scout", "type": "Main", "name": "Scout", "soul": "Scout soul"}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 
-	assert.Equal(t, http.StatusCreated, w.Code)
-
-	var resp gen.Agent
+	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	var resp map[string]string
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, "Scout", resp.Name)
-	assert.NotEmpty(t, resp.Id)
+	assert.Contains(t, resp["error"], "id")
+	assert.Contains(t, resp["error"], "AgentCreateRequestMain")
 }
 
 // --- HandleSessions tests ---
@@ -751,6 +757,29 @@ func TestUpdateAgentTools_LockedAgentForbidden(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, w.Code)
 }
 
+// TestUpdateAgentTools_Subagent3pRejected verifies PUT /api/v1/agents/{id}/tools
+// on a subagent_3p (External CLI) agent returns 400 — the external runner
+// manages its own tool loop, so tools_cfg is not a configurable surface for
+// that agent type. This is a SEPARATE write path from updateAgent's
+// firstForbiddenSubagent3pField guard (which only rejects tools_cfg embedded
+// in a PUT /agents/{id} body) — it closes the leak where a caller could
+// otherwise bypass that guard by hitting the dedicated tools endpoint
+// directly. The locked-agent 403 regression (TestUpdateAgentTools_LockedAgentForbidden
+// above) is unaffected — the Locked check still runs first.
+func TestUpdateAgentTools_Subagent3pRejected(t *testing.T) {
+	api := buildExecutorTestAPI(t)
+	id := createSubagent3p(t, api)
+
+	body := `{"builtin":{"default_policy":"deny"}}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+id+"/tools", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(w, r)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "external subagents run their own tools")
+}
+
 // TestUpdateAgent_LockedRejectsIdentityChange verifies that locked (core) agents
 // reject name/description/soul changes with 403, but allow model changes.
 // BDD: Given a locked core agent "jim",
@@ -881,6 +910,7 @@ func TestCreateAgent_WithToolsCfg(t *testing.T) {
 
 	body := `{
 		"name": "Research Bot",
+		"type": "Main",
 		"description": "A researcher",
 		"soul": "Research Bot soul",
 		"color": "#22C55E",
@@ -979,7 +1009,7 @@ func TestCreateAgent_WithSkills(t *testing.T) {
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 	api := &restAPI{agentLoop: al, homePath: tmpDir}
 
-	body := `{"name":"Skill Agent","soul":"s","skills":["daily-briefing","summarize"]}`
+	body := `{"name":"Skill Agent","type":"Main","soul":"s","skills":["daily-briefing","summarize"]}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
 	api.HandleAgents(w, r)
@@ -1040,7 +1070,7 @@ func TestCreateAgent_NoSkills(t *testing.T) {
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 	api := &restAPI{agentLoop: al, homePath: tmpDir}
 
-	body := `{"name":"Skillless Agent","soul":"s"}`
+	body := `{"name":"Skillless Agent","type":"Main","soul":"s"}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
 	api.HandleAgents(w, r)
@@ -1241,7 +1271,7 @@ func TestCreateAgent_UnknownSkillIDRejected(t *testing.T) {
 	api := &restAPI{agentLoop: al, homePath: tmpDir}
 
 	// "unknown-skill" is not installed — must be rejected 400.
-	body := `{"name":"Test Agent","soul":"s","skills":["unknown-skill"]}`
+	body := `{"name":"Test Agent","type":"Main","soul":"s","skills":["unknown-skill"]}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
 	api.HandleAgents(w, r)
@@ -1258,7 +1288,7 @@ func TestCreateAgent_UnknownSkillIDRejected(t *testing.T) {
 	assert.Contains(t, resp["error"], "unknown skill id", "error must name the unknown skill")
 
 	// Known skill "web-research" must be accepted.
-	body = `{"name":"Test Agent 2","soul":"s","skills":["web-research"]}`
+	body = `{"name":"Test Agent 2","type":"Main","soul":"s","skills":["web-research"]}`
 	w = httptest.NewRecorder()
 	r = httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
 	api.HandleAgents(w, r)

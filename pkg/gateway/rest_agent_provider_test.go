@@ -47,7 +47,7 @@ func TestAgentProvider_CreateGetUpdateRoundTrip(t *testing.T) {
 
 	// 1. Create with model + provider.
 	created := postAgentProvider(t, api,
-		`{"name":"ProvAgent","soul":"s","model":"google/gemini-2.5-flash","provider":"openrouter"}`)
+		`{"name":"ProvAgent","type":"Main","soul":"s","model":"google/gemini-2.5-flash","provider":"openrouter"}`)
 	require.NotNil(t, created.Model)
 	assert.Equal(t, "google/gemini-2.5-flash", *created.Model)
 	require.NotNil(t, created.Provider, "create response must echo provider")
@@ -134,7 +134,7 @@ func TestAgentPUT_HeartbeatFieldsIgnored(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 
 	// Create a Main agent.
-	created := postAgentProvider(t, api, `{"name":"HBAgent","soul":"s"}`)
+	created := postAgentProvider(t, api, `{"name":"HBAgent","type":"Main","soul":"s"}`)
 
 	// PUT with legacy heartbeat fields → must succeed (200), not 400.
 	w := httptest.NewRecorder()
@@ -155,16 +155,25 @@ func TestAgentPUT_HeartbeatFieldsIgnored(t *testing.T) {
 	}
 }
 
-// TestCreateAgent_WorkerRejectsVoice proves the O12.1 form-matrix gate at
-// create time: a Subagent (worker) create that sets voice is rejected.
-// (Heartbeat is workspace-scoped per ADR-027 and is no longer in AgentCreateRequest.)
-func TestCreateAgent_WorkerRejectsVoice(t *testing.T) {
+// TestCreateAgent_WorkerVoiceFieldRejected proves the unconditional
+// strict-decode enforcement for the Main-only voice field:
+// AgentCreateRequestSubagent (and AgentCreateRequestSubagent3p) structurally
+// have no `voice` property at all (additionalProperties: false — the field
+// matrix marks voice "Main-only among user types"). With a DEFAULT config
+// (ValidateInbound off, the default in this harness), a Subagent create
+// carrying a `voice` key is now rejected 400 by createAgent's strict decode,
+// not silently dropped. (With ValidateInbound enabled the same body 400s at
+// the schema gate instead.) The PUT-time guard (a worker cannot be given a
+// non-empty voice) is unaffected — see TestUpdateAgent_RejectsVoiceOnWorker
+// in rest_agent_executor_test.go.
+func TestCreateAgent_WorkerVoiceFieldRejected(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents",
-		strings.NewReader(`{"name":"W","type":"Subagent","description":"d","soul":"s","executor":{"kind":"native"},"voice":"alloy"}`))
+		strings.NewReader(`{"name":"W","type":"Subagent","description":"d","soul":"s","voice":"alloy"}`))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 	require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
 	assert.Contains(t, w.Body.String(), "voice")
+	assert.Contains(t, w.Body.String(), "AgentCreateRequestSubagent")
 }

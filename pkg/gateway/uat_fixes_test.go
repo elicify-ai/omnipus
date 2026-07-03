@@ -141,7 +141,7 @@ func TestAgentCreate_WhitespaceName_Rejected(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents",
-		strings.NewReader(`{"name":"   ","soul":"x"}`))
+		strings.NewReader(`{"name":"   ","type":"Main","soul":"x"}`))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 
@@ -157,7 +157,7 @@ func TestAgentUpdate_WhitespaceName_Rejected(t *testing.T) {
 	// Create a valid agent first.
 	cw := httptest.NewRecorder()
 	cr := httptest.NewRequest(http.MethodPost, "/api/v1/agents",
-		strings.NewReader(`{"name":"Valid Agent","soul":"x"}`))
+		strings.NewReader(`{"name":"Valid Agent","type":"Main","soul":"x"}`))
 	cr.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(cw, cr)
 	require.Equal(t, http.StatusCreated, cw.Code, "create body=%s", cw.Body.String())

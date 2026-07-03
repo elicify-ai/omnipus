@@ -170,7 +170,7 @@ func TestHandleAgentsDelete_OK(t *testing.T) {
 	// MANDATORY EVERYWHERE per agent-form-requirements.md §4.7).
 	createW := httptest.NewRecorder()
 	createR := httptest.NewRequest(http.MethodPost, "/api/v1/agents",
-		strings.NewReader(`{"name": "Deletable", "model": "claude-sonnet-4-6", "soul": "I am deletable."}`))
+		strings.NewReader(`{"name": "Deletable", "type": "Main", "model": "claude-sonnet-4-6", "soul": "I am deletable."}`))
 	createR.Header.Set("Content-Type", "application/json")
 	createR.URL.Path = "/api/v1/agents"
 	api.HandleAgents(createW, createR)

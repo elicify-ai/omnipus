@@ -127,6 +127,15 @@ async function fillAndAdvanceToStep3(opts?: { initialType?: 'Main' | 'Subagent' 
   fireEvent.change(screen.getByTestId('wizard-soul'), {
     target: { value: 'You are a focused research assistant.' },
   })
+
+  // subagent_3p is a TWO-step wizard (2026-07-03): tools/skills/fallback
+  // never apply to an external runner and its old step ③ only duplicated
+  // step ①'s runner config — Create lives on step ② for that type.
+  if (type === 'subagent_3p') {
+    expect(await screen.findByTestId('wizard-create')).toBeInTheDocument()
+    return
+  }
+
   await waitFor(() => {
     expect(screen.getByTestId('wizard-next-2')).not.toBeDisabled()
   })
@@ -138,8 +147,7 @@ async function fillAndAdvanceToStep3(opts?: { initialType?: 'Main' | 'Subagent' 
     const t = screen.getByTestId('wizard-inherit-tools') as HTMLInputElement
     if (t.checked) fireEvent.click(t)
   }
-  // All fields are wire-optional for Main / Subagent, hidden entirely for
-  // subagent_3p. Just confirm the step renders.
+  // All fields are wire-optional for Main / Subagent. Just confirm the step renders.
   expect(await screen.findByTestId('wizard-create')).toBeInTheDocument()
 }
 
@@ -433,7 +441,7 @@ describe('CreateAgentModal — submit success path', () => {
     fireEvent.change(screen.getByTestId('wizard-cli-path'), { target: { value: '/usr/local/bin/claude-code' } })
     fireEvent.click(screen.getByTestId('wizard-next-1'))
     fireEvent.change(screen.getByTestId('wizard-soul'), { target: { value: 'hi' } })
-    fireEvent.click(screen.getByTestId('wizard-next-2'))
+    // Two-step wizard for external runners (2026-07-03): Create is on step 2.
     fireEvent.click(await screen.findByTestId('wizard-create'))
     await waitFor(() => expect(onCreate).toHaveBeenCalled())
     const call = onCreate.mock.calls.at(-1)![0]
@@ -599,5 +607,201 @@ describe('CreateAgentModal — Advanced step fields', () => {
       enable_deny_patterns: true,
       custom_deny_patterns: ['rm -rf /', 'curl.*169\\.254'],
     })
+  })
+
+  // W2b field-matrix gating (docs/internal/architecture/agent-types-field-matrix.md):
+  // steering_mode is a Main-surface concept — workers are forced
+  // one-at-a-time server-side — and `executor` never applies to a native
+  // (in-process) Subagent (the server derives `native`).
+  it('Subagent create has NO steering_mode and NO executor key at all', async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined)
+    renderModal({ open: true, onClose: vi.fn(), onCreate, initialType: 'Subagent' })
+    await fillAndAdvanceToStep3({ initialType: 'Subagent' })
+    fireEvent.click(screen.getByTestId('wizard-create'))
+    await waitFor(() => expect(onCreate).toHaveBeenCalled())
+    const call = onCreate.mock.calls.at(-1)![0]
+    expect(call.steering_mode).toBeUndefined()
+    expect('executor' in call).toBe(false)
+    // A native Subagent legitimately carries max_tool_iterations (O, default
+    // 200/turn per the field matrix) — only steering_mode/executor are gated.
+    expect(call.max_tool_iterations).toBe(200)
+  })
+
+  // subagent_3p never carries max_tool_iterations (the external CLI runs its
+  // own loop — agent-types-field-matrix.md, Decisions #1 (resolved
+  // 2026-07-03): excluded) but DOES carry timeout_seconds (process-level
+  // kill for a hung CLI) and always sends the external-cli executor block.
+  it('subagent_3p create has NO max_tool_iterations, HAS timeout_seconds, and executor.kind=external-cli', async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined)
+    renderModal({
+      open: true,
+      onClose: vi.fn(),
+      onCreate,
+      initialType: 'subagent_3p',
+      initialCli: 'claude-code',
+    })
+    await fillAndAdvanceToStep3({ initialType: 'subagent_3p', cliPath: '/usr/local/bin/claude-code' })
+    fireEvent.click(screen.getByTestId('wizard-create'))
+    await waitFor(() => expect(onCreate).toHaveBeenCalled())
+    const call = onCreate.mock.calls.at(-1)![0]
+    expect(call.max_tool_iterations).toBeUndefined()
+    expect(call.timeout_seconds).toBe(300)
+    expect(call.executor).toMatchObject({ kind: 'external-cli' })
+    expect(call.steering_mode).toBeUndefined()
+    expect(call.model_params).toBeUndefined()
+  })
+})
+
+describe('CreateAgentModal — create/edit parity fixes (P3, 2026-07-03)', () => {
+  it('step 2 shows the SOUL.md minLength hint and places the upload button BELOW the textarea', async () => {
+    renderModal({ open: true, onClose: vi.fn() })
+    fireEvent.change(screen.getByTestId('wizard-name'), { target: { value: 'A' } })
+    fireEvent.change(screen.getByTestId('wizard-model'), { target: { value: 'm' } })
+    fireEvent.click(screen.getByTestId('wizard-next-1'))
+
+    const soul = await screen.findByTestId('wizard-soul')
+    // minLength hint (AgentCreateRequest.soul is minLength: 1).
+    expect(screen.getByTestId('soul-minlength-hint')).toBeInTheDocument()
+    // The upload affordance sits BELOW the textarea (edit-dialog parity —
+    // the wizard used to place its own drifted copy above the box).
+    const upload = screen.getByTestId('wizard-soul-upload')
+    const position = soul.compareDocumentPosition(upload)
+    expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('subagent_3p wizard is TWO steps — no Tools step, no skills mapping, Create on step 2', async () => {
+    renderModal({ open: true, onClose: vi.fn(), initialType: 'subagent_3p' })
+    await fillAndAdvanceToStep3({ initialType: 'subagent_3p' })
+    // Create is reachable on step 2; the Tools step (and its skills/tools
+    // blocks) does not exist for external runners.
+    expect(screen.getByTestId('wizard-create')).toBeInTheDocument()
+    expect(screen.queryByTestId('wizard-next-2')).toBeNull()
+    expect(screen.queryByTestId('wizard-skills')).toBeNull()
+    expect(screen.queryByTestId('wizard-tools-cfg')).toBeNull()
+    // The stepper shows exactly two steps.
+    const stepper = screen.getByTestId('wizard-stepper')
+    expect(stepper.textContent).toContain('Identity')
+    expect(stepper.textContent).toContain('Personality')
+    expect(stepper.textContent).not.toContain('Tools')
+  })
+
+  it('native Subagent step 3 still offers the skills mapping', async () => {
+    renderModal({ open: true, onClose: vi.fn(), initialType: 'Subagent' })
+    await fillAndAdvanceToStep3({ initialType: 'Subagent' })
+    expect(screen.queryByTestId('wizard-skills')).not.toBeNull()
+  })
+})
+
+// ── Subagent inherit-flag wire-omission contract (UAT 4a) ───────────────────
+//
+// A native Subagent's Model / Tools / Skills / Sandbox may each be inherited
+// from the delegating caller instead of set explicitly (InheritToggle,
+// `wizard-inherit-model` / `-tools` / `-skills` / `-sandbox`). When a toggle
+// is ON, `payloadToCreateRequest` (CreateAgentModal.tsx) MUST omit the
+// corresponding field(s) from the wire request so the server keeps the
+// inherited rail — and the UI-only `inherit_*` flags themselves must NEVER
+// appear in the request (they aren't in the AgentCreateRequestSubagent
+// schema; sending one would be a 400).
+describe('CreateAgentModal — Subagent inherit-flag wire-omission contract (UAT 4a)', () => {
+  it('inherit_model=true omits model/provider/fallback_models and the flag itself never rides the wire', async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined)
+    renderModal({ open: true, onClose: vi.fn(), onCreate, initialType: 'Subagent' })
+    fireEvent.change(screen.getByTestId('wizard-name'), { target: { value: 'Inherits Model' } })
+    fireEvent.change(screen.getByTestId('wizard-description'), { target: { value: 'inherits its model from the caller' } })
+    // Toggle ON (default OFF) — the model picker hides and step 1 no longer
+    // gates on a model value.
+    fireEvent.click(screen.getByTestId('wizard-inherit-model'))
+    await waitFor(() => expect(screen.getByTestId('wizard-next-1')).not.toBeDisabled())
+    fireEvent.click(screen.getByTestId('wizard-next-1'))
+    fireEvent.change(await screen.findByTestId('wizard-soul'), { target: { value: 'soul' } })
+    fireEvent.click(screen.getByTestId('wizard-next-2'))
+    fireEvent.click(await screen.findByTestId('wizard-create'))
+    await waitFor(() => expect(onCreate).toHaveBeenCalled())
+    const call = onCreate.mock.calls.at(-1)![0]
+    expect(call).not.toHaveProperty('model')
+    expect(call).not.toHaveProperty('provider')
+    expect(call).not.toHaveProperty('fallback_models')
+    expect(call).not.toHaveProperty('inherit_model')
+  })
+
+  it('inherit_tools=true omits tools_cfg even after the per-tool editor was touched, and the flag itself never rides the wire', async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined)
+    renderModal({ open: true, onClose: vi.fn(), onCreate, initialType: 'Subagent' })
+    await fillAndAdvanceToStep3({ initialType: 'Subagent' })
+    // Set an explicit override BEFORE flipping inherit back ON — proves the
+    // gate (not merely an untouched default) is what omits the field.
+    fireEvent.click(screen.getByTestId('preset-cautious'))
+    fireEvent.click(screen.getByTestId('wizard-inherit-tools'))
+    fireEvent.click(screen.getByTestId('wizard-create'))
+    await waitFor(() => expect(onCreate).toHaveBeenCalled())
+    const call = onCreate.mock.calls.at(-1)![0]
+    expect(call).not.toHaveProperty('tools_cfg')
+    expect(call).not.toHaveProperty('inherit_tools')
+  })
+
+  it('inherit_skills=true omits skills even after a skill was granted, and the flag itself never rides the wire', async () => {
+    vi.mocked(fetchSkills).mockResolvedValue([
+      { id: 'web-research', name: 'Web Research', version: '1.0.0', verified: false, status: 'active' } as Skill,
+    ])
+    const onCreate = vi.fn().mockResolvedValue(undefined)
+    renderModal({ open: true, onClose: vi.fn(), onCreate, initialType: 'Subagent' })
+    await fillAndAdvanceToStep3({ initialType: 'Subagent' })
+    // Grant a skill BEFORE flipping inherit back ON — proves the gate omits
+    // an explicitly-set value, not just an empty default.
+    fireEvent.click(screen.getByTestId('skill-checkbox-web-research'))
+    fireEvent.click(screen.getByTestId('wizard-inherit-skills'))
+    fireEvent.click(screen.getByTestId('wizard-create'))
+    await waitFor(() => expect(onCreate).toHaveBeenCalled())
+    const call = onCreate.mock.calls.at(-1)![0]
+    expect(call).not.toHaveProperty('skills')
+    expect(call).not.toHaveProperty('inherit_skills')
+  })
+
+  it('inherit_sandbox=true omits sandbox_profile even after a profile was picked, and the flag itself never rides the wire', async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined)
+    renderModal({ open: true, onClose: vi.fn(), onCreate, initialType: 'Subagent' })
+    await fillAndAdvanceToStep3({ initialType: 'Subagent' })
+    fireEvent.click(screen.getByTestId('advanced-disclosure-trigger'))
+    // Pick an explicit profile BEFORE flipping inherit back ON — proves the
+    // gate omits an explicitly-set value, not just an empty default.
+    fireEvent.click(screen.getByTestId('sandbox-profile-radio-host'))
+    fireEvent.click(screen.getByTestId('wizard-inherit-sandbox'))
+    fireEvent.click(screen.getByTestId('wizard-create'))
+    await waitFor(() => expect(onCreate).toHaveBeenCalled())
+    const call = onCreate.mock.calls.at(-1)![0]
+    expect(call).not.toHaveProperty('sandbox_profile')
+    expect(call).not.toHaveProperty('inherit_sandbox')
+  })
+
+  it('with all four inherit toggles ON, none of the four gated fields nor the four inherit_* flags reach the wire', async () => {
+    vi.mocked(fetchSkills).mockResolvedValue([
+      { id: 'web-research', name: 'Web Research', version: '1.0.0', verified: false, status: 'active' } as Skill,
+    ])
+    const onCreate = vi.fn().mockResolvedValue(undefined)
+    renderModal({ open: true, onClose: vi.fn(), onCreate, initialType: 'Subagent' })
+    fireEvent.change(screen.getByTestId('wizard-name'), { target: { value: 'All Inherited' } })
+    fireEvent.change(screen.getByTestId('wizard-description'), { target: { value: 'inherits everything' } })
+    fireEvent.click(screen.getByTestId('wizard-inherit-model'))
+    await waitFor(() => expect(screen.getByTestId('wizard-next-1')).not.toBeDisabled())
+    fireEvent.click(screen.getByTestId('wizard-next-1'))
+    fireEvent.change(await screen.findByTestId('wizard-soul'), { target: { value: 'soul' } })
+    fireEvent.click(screen.getByTestId('wizard-next-2'))
+    await screen.findByTestId('wizard-create')
+    fireEvent.click(screen.getByTestId('wizard-inherit-tools'))
+    fireEvent.click(screen.getByTestId('wizard-inherit-skills'))
+    fireEvent.click(screen.getByTestId('advanced-disclosure-trigger'))
+    fireEvent.click(screen.getByTestId('wizard-inherit-sandbox'))
+    fireEvent.click(screen.getByTestId('wizard-create'))
+    await waitFor(() => expect(onCreate).toHaveBeenCalled())
+    const call = onCreate.mock.calls.at(-1)![0]
+    for (const key of [
+      'model', 'provider', 'fallback_models', 'tools_cfg', 'skills', 'sandbox_profile',
+      'inherit_model', 'inherit_tools', 'inherit_skills', 'inherit_sandbox',
+    ]) {
+      expect(call).not.toHaveProperty(key)
+    }
+    // The create still went through with the fields that DO apply.
+    expect(call.type).toBe('Subagent')
+    expect(call.name).toBe('All Inherited')
   })
 })

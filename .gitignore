@@ -100,3 +100,6 @@ pkg/**/system/cost.json
 
 # Contract codegen temp files
 *.generated.tmp.*
+
+# graphify knowledge graph (regenerable, goes stale across branches)
+graphify-out/

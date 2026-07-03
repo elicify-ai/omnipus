@@ -226,6 +226,7 @@ func TestCreateAgent_WithSkillID_NoInstalledSkills(t *testing.T) {
 	skills := []string{skillID}
 	body := map[string]any{
 		"name":   "skill-test-agent",
+		"type":   "Main",
 		"soul":   "s",
 		"skills": skills,
 	}

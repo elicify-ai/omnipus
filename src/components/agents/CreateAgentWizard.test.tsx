@@ -415,3 +415,77 @@ describe('CreateAgentWizard — missing-field hint (B3 fix)', () => {
     expect(await screen.findByTestId('wizard-advance-hint')).toHaveTextContent(/Soul/)
   })
 })
+
+// ── W2b: field-matrix gating (docs/internal/architecture/agent-types-field-matrix.md) ──
+
+describe('CreateAgentWizard — initialPayload gating (field-matrix)', () => {
+  it('Subagent payload omits steering_mode but keeps max_tool_iterations + timeout_seconds', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined)
+    renderWizard({ initialType: 'Subagent', onSubmit })
+    fireEvent.change(screen.getByTestId('wizard-name'), { target: { value: 'Worker' } })
+    fireEvent.change(screen.getByTestId('wizard-model'), { target: { value: 'm' } })
+    fireEvent.change(screen.getByTestId('wizard-description'), { target: { value: 'handles X' } })
+    fireEvent.click(screen.getByTestId('wizard-next-1'))
+    fireEvent.change(await screen.findByTestId('wizard-soul'), { target: { value: 'soul' } })
+    fireEvent.click(screen.getByTestId('wizard-next-2'))
+    fireEvent.click(await screen.findByTestId('wizard-create'))
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled())
+    const payload = onSubmit.mock.calls.at(-1)![0]
+    // steering_mode is a Main-surface concept — a Subagent payload must not
+    // carry the key at all (not even as undefined via a seeded default).
+    expect('steering_mode' in payload).toBe(false)
+    expect(payload.max_tool_iterations).toBe(200)
+    expect(payload.timeout_seconds).toBe(300)
+  })
+
+  it('subagent_3p payload omits steering_mode AND max_tool_iterations but keeps timeout_seconds', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined)
+    renderWizard({ initialType: 'subagent_3p', initialCli: 'claude-code', onSubmit })
+    fireEvent.change(screen.getByTestId('wizard-name'), { target: { value: 'External' } })
+    fireEvent.change(screen.getByTestId('wizard-description'), { target: { value: 'runs claude-code' } })
+    fireEvent.change(screen.getByTestId('wizard-model'), { target: { value: 'm' } })
+    fireEvent.change(screen.getByTestId('wizard-cli-path'), { target: { value: '/usr/local/bin/claude-code' } })
+    await waitFor(() => expect(screen.getByTestId('wizard-next-1')).not.toBeDisabled())
+    fireEvent.click(screen.getByTestId('wizard-next-1'))
+    fireEvent.change(await screen.findByTestId('wizard-soul'), { target: { value: 'soul' } })
+    fireEvent.click(await screen.findByTestId('wizard-create'))
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled())
+    const payload = onSubmit.mock.calls.at(-1)![0]
+    // The external CLI runs its own loop — max_tool_iterations is excluded
+    // (agent-types-field-matrix.md, Decisions #1 (resolved 2026-07-03):
+    // excluded), and steering_mode never applied to a worker in the first
+    // place.
+    expect('steering_mode' in payload).toBe(false)
+    expect('max_tool_iterations' in payload).toBe(false)
+    expect(payload.timeout_seconds).toBe(300)
+  })
+})
+
+describe('CreateAgentWizard — Advanced disclosure (slim variant for subagent_3p, W2b)', () => {
+  it('shows Timeout + Rate limits but NOT sampling/steering/max-tool-calls for an external wizard', async () => {
+    renderWizard({ initialType: 'subagent_3p', initialCli: 'claude-code' })
+    fireEvent.change(screen.getByTestId('wizard-name'), { target: { value: 'External' } })
+    fireEvent.change(screen.getByTestId('wizard-description'), { target: { value: 'runs claude-code' } })
+    fireEvent.change(screen.getByTestId('wizard-model'), { target: { value: 'claude-sonnet-4-6' } })
+    fireEvent.change(screen.getByTestId('wizard-cli-path'), { target: { value: '/usr/local/bin/claude-code' } })
+    await waitFor(() => expect(screen.getByTestId('wizard-next-1')).not.toBeDisabled())
+    fireEvent.click(screen.getByTestId('wizard-next-1'))
+    fireEvent.change(await screen.findByTestId('wizard-soul'), { target: { value: 'soul text' } })
+    // Advanced mounts at the END of step 2 for the 2-step external flow —
+    // there is no step 3 to host it.
+    fireEvent.click(await screen.findByTestId('advanced-disclosure-trigger'))
+    expect(screen.getByText('Timeout (seconds)')).toBeInTheDocument()
+    expect(screen.getByText('Rate limits')).toBeInTheDocument()
+    expect(screen.queryByText('Temperature')).toBeNull()
+    expect(screen.queryByText('Max tokens')).toBeNull()
+    expect(screen.queryByText('Steering mode')).toBeNull()
+    expect(screen.queryByText('Max tool calls per turn')).toBeNull()
+    expect(screen.queryByText('Sandbox profile')).toBeNull()
+    expect(screen.queryByText('Shell deny patterns')).toBeNull()
+  })
+
+  it('does NOT render an Advanced disclosure on step 1 for the external wizard', () => {
+    renderWizard({ initialType: 'subagent_3p', initialCli: 'claude-code' })
+    expect(screen.queryByTestId('advanced-disclosure-trigger')).toBeNull()
+  })
+})

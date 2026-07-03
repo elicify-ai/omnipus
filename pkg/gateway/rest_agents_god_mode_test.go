@@ -250,3 +250,54 @@ func TestUpdateAgent_ShellPolicy_PartialPatch_EnableDenyPatternsPreserved(t *tes
 	}
 	assert.True(t, found, "test-agent must appear in the persisted agent list")
 }
+
+// TestUpdateAgent_ShellPolicy_EmptyArrayClearsPatterns is a regression test
+// for the clear-path silent drop: an explicitly-sent EMPTY
+// custom_deny_patterns array must overwrite (clear) the persisted list.
+// The bug: a `len(...) > 0` guard skipped empty arrays, so deleting the last
+// pattern in the SPA produced a 200 PUT whose delete was silently ignored —
+// the stale pattern list resurfaced on the next read (found live 2026-07-03).
+// Field-absent (nil) still preserves, per the partial-PATCH test above.
+func TestUpdateAgent_ShellPolicy_EmptyArrayClearsPatterns(t *testing.T) {
+	api := buildGodModeTestAPI(t, false /* allowGodMode */)
+
+	// Seed a pattern.
+	body1 := `{"shell_policy":{"enable_deny_patterns":true,"custom_deny_patterns":["rm\\s+-rf"]}}`
+	w1 := httptest.NewRecorder()
+	r1 := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent", strings.NewReader(body1))
+	r1.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(w1, r1)
+	require.Equal(t, http.StatusOK, w1.Code, "seed PATCH must succeed; body: %s", w1.Body.String())
+
+	// Clear with an explicit empty array.
+	body2 := `{"shell_policy":{"custom_deny_patterns":[]}}`
+	w2 := httptest.NewRecorder()
+	r2 := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent", strings.NewReader(body2))
+	r2.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(w2, r2)
+	require.Equal(t, http.StatusOK, w2.Code, "clear PATCH must succeed; body: %s", w2.Body.String())
+
+	raw, err := os.ReadFile(api.homePath + "/config.json")
+	require.NoError(t, err)
+	var persisted map[string]any
+	require.NoError(t, json.Unmarshal(raw, &persisted))
+	agents, _ := persisted["agents"].(map[string]any)
+	list, _ := agents["list"].([]any)
+	var found bool
+	for _, item := range list {
+		m, ok := item.(map[string]any)
+		if !ok || m["id"] != "test-agent" {
+			continue
+		}
+		sp, _ := m["shell_policy"].(map[string]any)
+		require.NotNil(t, sp, "shell_policy must exist in persisted config")
+		got, _ := sp["custom_deny_patterns"].([]any)
+		assert.Empty(t, got,
+			"custom_deny_patterns must be cleared by an explicit empty array")
+		assert.Equal(t, true, sp["enable_deny_patterns"],
+			"enable_deny_patterns must be untouched by the patterns-only clear")
+		found = true
+		break
+	}
+	assert.True(t, found, "test-agent must appear in the persisted agent list")
+}

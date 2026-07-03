@@ -4,18 +4,22 @@
 // shell_policy, rate_limits, delegation_policy, timeout_seconds,
 // max_tool_iterations, steering_mode, and the subagent_3p executor block.
 //
-// All fields are type-branched:
+// All fields are type-branched (per the field matrix in
+// docs/internal/architecture/agent-types-field-matrix.md):
 //   Main + Subagent: model_params, sandbox_profile, shell_policy,
-//                     rate_limits, delegation_policy (Main only),
-//                     timeout_seconds, max_tool_iterations,
+//                     rate_limits, timeout_seconds, max_tool_iterations,
 //                     steering_mode (Main only)
-//   subagent_3p:     executor block (cli_path, env_overrides, cli_args)
-//                     — External agents are CLI-driven, so model_params,
-//                     sandbox_profile, shell_policy, rate_limits,
-//                     timeout_seconds, max_tool_iterations are all
-//                     rejected 400 on the wire (per
-//                     `ExecutorConfig` schema note: the CLI manages its
-//                     own isolation, auth, retries).
+//   subagent_3p:     timeout_seconds + rate_limits ONLY — the CLI manages
+//                     its own isolation/auth/retries, so model_params,
+//                     sandbox_profile, shell_policy, max_tool_iterations,
+//                     and steering_mode are all rejected 400 on the wire
+//                     (`AgentCreateRequestSubagent3p` never carries them —
+//                     see payloadToCreateRequest in CreateAgentModal.tsx).
+//                     Without this slim disclosure an external create had
+//                     NO way to set timeout or rate limits at all — the
+//                     executor block (cli_path / env / args) stays on
+//                     Step 1 / Step 3 (Step3Tools), NOT here, so there is
+//                     no duplicate `wizard-cli-args`.
 //
 // Implementation lifts from `AgentProfile.tsx` where possible (rate-limit
 // inputs, sandbox profile radio) and reuses the executor inputs from
@@ -44,13 +48,18 @@ export function Advanced({
   const isExternal = initialType === 'subagent_3p'
   const isMain = initialType === 'Main'
 
-  // subagent_3p has no Advanced knobs: model_params / sandbox / rate limits /
-  // runtime are all rejected on the wire for external agents (the CLI manages
-  // its own isolation, auth, retries). The executor block (cli_path / env /
-  // args) is rendered inline on Step 1 and Step 3 (Step3Tools), NOT here — so
-  // there is no duplicate `wizard-cli-args` on the final step. The disclosure
-  // simply doesn't render for external agents.
-  if (isExternal) return null
+  if (isExternal) {
+    return (
+      <AdvancedDisclosure
+        title="Advanced"
+        summary="Timeout and rate limits"
+      >
+        <div className="space-y-5">
+          <ExternalAdvancedFields payload={payload} setField={setField} />
+        </div>
+      </AdvancedDisclosure>
+    )
+  }
 
   return (
     <AdvancedDisclosure
@@ -69,6 +78,30 @@ export function Advanced({
   )
 }
 
+// ── subagent_3p fields ───────────────────────────────────────────────────────
+// Slim variant: the external CLI runner manages its own isolation, sampling,
+// and tool loop, so ONLY timeout_seconds and rate_limits apply on the wire
+// (`AgentCreateRequestSubagent3p` — see the field matrix). No sampling
+// (temperature/max_tokens/top_p), steering, max_tool_iterations, sandbox, or
+// shell policy — those all 400 on this variant.
+
+interface ExternalAdvancedFieldsProps {
+  payload: AdvancedProps['payload']
+  setField: AdvancedProps['setField']
+}
+
+function ExternalAdvancedFields({ payload, setField }: ExternalAdvancedFieldsProps) {
+  return (
+    <>
+      <div className="space-y-2">
+        <p className="text-xs font-medium text-[var(--color-secondary)]">Runtime</p>
+        <TimeoutField payload={payload} setField={setField} />
+      </div>
+      <RateLimitsFields payload={payload} setField={setField} />
+    </>
+  )
+}
+
 // ── Main + Subagent fields ───────────────────────────────────────────────────
 
 interface MainAdvancedFieldsProps {
@@ -80,7 +113,6 @@ interface MainAdvancedFieldsProps {
 
 function MainAdvancedFields({ payload, setField, isMain, isNativeSubagent }: MainAdvancedFieldsProps) {
   const modelParams = payload.model_params ?? {}
-  const rateLimits = payload.rate_limits ?? {}
   const shellPolicy = payload.shell_policy ?? {
     enable_deny_patterns: false,
     custom_deny_patterns: [],
@@ -97,19 +129,6 @@ function MainAdvancedFields({ payload, setField, isMain, isNativeSubagent }: Mai
       next[key] = value
     }
     setField('model_params', next)
-  }
-
-  function setRateLimit<K extends keyof NonNullable<AdvancedProps['payload']['rate_limits']>>(
-    key: K,
-    value: NonNullable<AdvancedProps['payload']['rate_limits']>[K] | undefined,
-  ) {
-    const next = { ...rateLimits }
-    if (value === undefined) {
-      delete (next as Record<string, unknown>)[key]
-    } else {
-      (next as Record<string, unknown>)[key] = value
-    }
-    setField('rate_limits', next)
   }
 
   return (
@@ -129,7 +148,7 @@ function MainAdvancedFields({ payload, setField, isMain, isNativeSubagent }: Mai
           />
           <NumberRow
             label="Max tokens"
-            caption="Maximum tokens to generate per turn. Default 2048."
+            caption="Maximum tokens to generate per turn. Default 32768."
             value={modelParams.max_tokens}
             min={1}
             step={1}
@@ -198,58 +217,13 @@ function MainAdvancedFields({ payload, setField, isMain, isNativeSubagent }: Mai
       </div>
 
       {/* Rate limits */}
-      <div className="space-y-2">
-        <p className="text-xs font-medium text-[var(--color-secondary)]">Rate limits</p>
-        <label className="flex items-center gap-2 text-xs text-[var(--color-secondary)]">
-          <input
-            type="checkbox"
-            checked={rateLimits.use_global_defaults ?? true}
-            onChange={(e) =>
-              setRateLimit('use_global_defaults', e.target.checked ? true : undefined)
-            }
-            className="accent-[var(--color-accent)]"
-          />
-          <span>Use global defaults</span>
-        </label>
-        {!rateLimits.use_global_defaults && (
-          <div className="space-y-1.5">
-            <NumberRow
-              label="LLM calls / hour"
-              caption="Maximum LLM API calls per hour for this agent. Empty = no cap."
-              value={rateLimits.max_llm_calls_per_hour}
-              min={0}
-              onChange={(v) => setRateLimit('max_llm_calls_per_hour', v)}
-            />
-            <NumberRow
-              label="Tool calls / minute"
-              caption="Maximum tool calls per minute for this agent. Empty = no cap."
-              value={rateLimits.max_tool_calls_per_minute}
-              min={0}
-              onChange={(v) => setRateLimit('max_tool_calls_per_minute', v)}
-            />
-            <NumberRow
-              label="Max cost / day ($)"
-              caption="Maximum USD cost per day. Empty = no cap."
-              value={rateLimits.max_cost_per_day}
-              min={0}
-              step={0.01}
-              onChange={(v) => setRateLimit('max_cost_per_day', v)}
-            />
-          </div>
-        )}
-      </div>
+      <RateLimitsFields payload={payload} setField={setField} />
 
       {/* Runtime knobs */}
       <div className="space-y-2">
         <p className="text-xs font-medium text-[var(--color-secondary)]">Runtime</p>
         <div className="space-y-1.5">
-          <NumberRow
-            label="Timeout (seconds)"
-            caption="Maximum seconds a single agent turn may run. Default 300."
-            value={payload.timeout_seconds}
-            min={1}
-            onChange={(v) => setField('timeout_seconds', v)}
-          />
+          <TimeoutField payload={payload} setField={setField} />
           <NumberRow
             label="Max tool calls per turn"
             caption="Per single turn (one message, task, or heartbeat run) — the turn pauses at the limit and can be continued. Default 200."
@@ -289,6 +263,102 @@ function MainAdvancedFields({ payload, setField, isMain, isNativeSubagent }: Mai
         </div>
       </div>
     </>
+  )
+}
+
+// ── Timeout (shared by the full and slim variants) ───────────────────────────
+// Every user-creatable type carries `timeout_seconds` on the wire (per the
+// field matrix — subagent_3p keeps it as a process-level kill for a hung
+// CLI), so the exact same NumberRow rendered identically in both
+// `ExternalAdvancedFields` and `MainAdvancedFields`'s Runtime block. Factored
+// out once so the two surfaces can't drift on markup (mirrors the
+// `RateLimitsFields` pattern below).
+
+interface TimeoutFieldProps {
+  payload: AdvancedProps['payload']
+  setField: AdvancedProps['setField']
+}
+
+function TimeoutField({ payload, setField }: TimeoutFieldProps) {
+  return (
+    <NumberRow
+      label="Timeout (seconds)"
+      caption="Maximum seconds a single agent turn may run. Default 300."
+      value={payload.timeout_seconds}
+      min={1}
+      onChange={(v) => setField('timeout_seconds', v)}
+    />
+  )
+}
+
+// ── Rate limits (shared by the full and slim variants) ──────────────────────
+// Every user-creatable type carries `rate_limits` on the wire (per the field
+// matrix), so this block renders identically for Main/Subagent (inside
+// `MainAdvancedFields`) and subagent_3p (inside `ExternalAdvancedFields`) —
+// factored out once so the two surfaces can't drift on markup.
+
+interface RateLimitsFieldsProps {
+  payload: AdvancedProps['payload']
+  setField: AdvancedProps['setField']
+}
+
+function RateLimitsFields({ payload, setField }: RateLimitsFieldsProps) {
+  const rateLimits = payload.rate_limits ?? {}
+
+  function setRateLimit<K extends keyof NonNullable<AdvancedProps['payload']['rate_limits']>>(
+    key: K,
+    value: NonNullable<AdvancedProps['payload']['rate_limits']>[K] | undefined,
+  ) {
+    const next = { ...rateLimits }
+    if (value === undefined) {
+      delete (next as Record<string, unknown>)[key]
+    } else {
+      (next as Record<string, unknown>)[key] = value
+    }
+    setField('rate_limits', next)
+  }
+
+  return (
+    <div className="space-y-2">
+      <p className="text-xs font-medium text-[var(--color-secondary)]">Rate limits</p>
+      <label className="flex items-center gap-2 text-xs text-[var(--color-secondary)]">
+        <input
+          type="checkbox"
+          checked={rateLimits.use_global_defaults ?? true}
+          onChange={(e) =>
+            setRateLimit('use_global_defaults', e.target.checked ? true : undefined)
+          }
+          className="accent-[var(--color-accent)]"
+        />
+        <span>Use global defaults</span>
+      </label>
+      {!rateLimits.use_global_defaults && (
+        <div className="space-y-1.5">
+          <NumberRow
+            label="LLM calls / hour"
+            caption="Maximum LLM API calls per hour for this agent. Empty = no cap."
+            value={rateLimits.max_llm_calls_per_hour}
+            min={0}
+            onChange={(v) => setRateLimit('max_llm_calls_per_hour', v)}
+          />
+          <NumberRow
+            label="Tool calls / minute"
+            caption="Maximum tool calls per minute for this agent. Empty = no cap."
+            value={rateLimits.max_tool_calls_per_minute}
+            min={0}
+            onChange={(v) => setRateLimit('max_tool_calls_per_minute', v)}
+          />
+          <NumberRow
+            label="Max cost / day ($)"
+            caption="Maximum USD cost per day. Empty = no cap."
+            value={rateLimits.max_cost_per_day}
+            min={0}
+            step={0.01}
+            onChange={(v) => setRateLimit('max_cost_per_day', v)}
+          />
+        </div>
+      )}
+    </div>
   )
 }
 

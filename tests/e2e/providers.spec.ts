@@ -62,7 +62,9 @@ test(
     //   <Badge data-testid="connected-badge" variant="success">Connected</Badge>
     // only when provider.status === 'connected'. This fires only when the backend
     // resolved a non-empty API key for the provider.
-    const connectedBadge = page.getByTestId('connected-badge').first()
+    // ADR-031 (91825d2f): badges are per-provider — connected-badge-<id>.
+    // Prefix locator keeps the assertion robust to the seeded provider id.
+    const connectedBadge = page.locator('[data-testid^="connected-badge-"]').first()
     await expect(connectedBadge).toBeVisible({ timeout: 15_000 })
 
     // ── Core assertion A: the connected badge is present.
@@ -121,7 +123,7 @@ test(
 
     // ── Count assertion: at least one provider row is in the DOM.
     // [data-testid="connected-badge"] or the "Edit" button both imply a real entry.
-    const connectedBadgeCount = await page.getByTestId('connected-badge').count()
+    const connectedBadgeCount = await page.locator('[data-testid^="connected-badge-"]').count()
     expect(connectedBadgeCount).toBeGreaterThanOrEqual(1)
   },
 )

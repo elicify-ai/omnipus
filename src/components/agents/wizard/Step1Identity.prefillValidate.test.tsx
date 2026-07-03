@@ -57,8 +57,9 @@ function renderWizard(props: Partial<Parameters<typeof CreateAgentWizard>[0]> = 
 
 /** Drives the wizard from step 1 through to the Create button, filling the
  *  minimum required fields for a subagent_3p agent. Does NOT touch the CLI
- *  path field beyond what the caller already set — used to reach step 3
- *  for the Create-button gating assertions. */
+ *  path field beyond what the caller already set. subagent_3p is a TWO-step
+ *  wizard (2026-07-03): Create lives on step 2 (Personality) — there is no
+ *  Tools step for external runners. */
 async function advanceToStep3() {
   fireEvent.change(screen.getByTestId('wizard-name'), { target: { value: 'External Worker' } })
   fireEvent.change(screen.getByTestId('wizard-description'), { target: { value: 'delegates to an external CLI' } })
@@ -66,8 +67,6 @@ async function advanceToStep3() {
   await waitFor(() => expect(screen.getByTestId('wizard-next-1')).not.toBeDisabled())
   fireEvent.click(screen.getByTestId('wizard-next-1'))
   fireEvent.change(await screen.findByTestId('wizard-soul'), { target: { value: 'You are focused.' } })
-  await waitFor(() => expect(screen.getByTestId('wizard-next-2')).not.toBeDisabled())
-  fireEvent.click(screen.getByTestId('wizard-next-2'))
   await screen.findByTestId('wizard-create')
 }
 

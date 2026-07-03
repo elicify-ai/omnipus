@@ -117,8 +117,38 @@ components:
       $ref: ./components/schemas/AgentToolsCfg.yaml
     AgentToolsUpdateRequest:
       $ref: ./components/schemas/AgentToolsUpdateRequest.yaml
+    # AgentCreateRequest is a discriminated union hosted INLINE here (not in a
+    # schema file): oapi-codegen only generates named variant types + As/From
+    # accessors when the oneOf members are internal component refs — external
+    # file refs inside a oneOf are inlined as anonymous structs and the
+    # generated code does not compile. The three variants below remain the
+    # single source of truth for the per-type field sets
+    # (docs/internal/architecture/agent-types-field-matrix.md).
     AgentCreateRequest:
-      $ref: ./components/schemas/AgentCreateRequest.yaml
+      description: >
+        Body for POST /agents. Creates a new agent; a UUID is assigned by the
+        server and the agent starts in "draft" status (no SOUL.md written
+        yet). Discriminated by `type` — each agent type carries EXACTLY the
+        fields the agent-types field matrix allows it; a field sent on the
+        wrong variant is a schema violation (400), never silently persisted.
+        `type` is REQUIRED on every variant (the historical omit-type→Main
+        default is retired).
+      oneOf:
+        - $ref: '#/components/schemas/AgentCreateRequestMain'
+        - $ref: '#/components/schemas/AgentCreateRequestSubagent'
+        - $ref: '#/components/schemas/AgentCreateRequestSubagent3p'
+      discriminator:
+        propertyName: type
+        mapping:
+          Main: '#/components/schemas/AgentCreateRequestMain'
+          Subagent: '#/components/schemas/AgentCreateRequestSubagent'
+          subagent_3p: '#/components/schemas/AgentCreateRequestSubagent3p'
+    AgentCreateRequestMain:
+      $ref: ./components/schemas/AgentCreateRequestMain.yaml
+    AgentCreateRequestSubagent:
+      $ref: ./components/schemas/AgentCreateRequestSubagent.yaml
+    AgentCreateRequestSubagent3p:
+      $ref: ./components/schemas/AgentCreateRequestSubagent3p.yaml
     AgentUpdateRequest:
       $ref: ./components/schemas/AgentUpdateRequest.yaml
     FallbackModel:

@@ -3152,20 +3152,24 @@ export interface components {
                 }[];
             };
         };
-        /** @description Body for POST /agents. Creates a new agent. A UUID is assigned by the server. The agent starts in "draft" status (no SOUL.md written yet). */
-        AgentCreateRequest: {
+        /** @description Body for POST /agents. Creates a new agent; a UUID is assigned by the server and the agent starts in "draft" status (no SOUL.md written yet). Discriminated by `type` — each agent type carries EXACTLY the fields the agent-types field matrix allows it; a field sent on the wrong variant is a schema violation (400), never silently persisted. `type` is REQUIRED on every variant (the historical omit-type→Main default is retired). */
+        AgentCreateRequest: components["schemas"]["AgentCreateRequestMain"] | components["schemas"]["AgentCreateRequestSubagent"] | components["schemas"]["AgentCreateRequestSubagent3p"];
+        /**
+         * AgentCreateRequestMain
+         * @description Create a Main agent — a user-defined chat colleague on the Omnipus engine. Field set per docs/internal/architecture/agent-types-field-matrix.md: voice and steering_mode are Main-only; executor is absent (Main never has one).
+         */
+        AgentCreateRequestMain: {
+            /**
+             * @description Discriminator. Must be exactly "Main" for this variant.
+             *      (enum property replaced by openapi-typescript)
+             * @enum {string}
+             */
+            type: "Main";
             /**
              * @description Display name for the new agent.
              * @example My Custom Agent
              */
             name: string;
-            /**
-             * @description Agent lifecycle to create. "Main" = user-defined chat colleague (default). "Subagent" = a delegation-only labour agent on the Omnipus engine. "subagent_3p" = a delegation-only labour agent that runs on an external CLI (claude-code / codex / opencode) and requires executor.kind=external-cli. "core", "system", and "worker" are reserved/legacy values rejected by the gateway.
-             * @default Main
-             * @example Main
-             * @enum {string}
-             */
-            type: "Main" | "Subagent" | "subagent_3p";
             /**
              * @description Short description of the agent's purpose. Required (non-empty after trim) for Subagent and subagent_3p — the orchestrator uses it as the basis on which it decides which agent to delegate to. Optional for Main.
              * @example Specialized data analysis assistant
@@ -3265,7 +3269,6 @@ export interface components {
              * @example alloy
              */
             voice?: string | null;
-            executor?: components["schemas"]["ExecutorConfig"];
             /**
              * @description Kernel sandbox profile applied to this agent's tool calls (O13). Per-agent "off" is retired — "no sandbox" is reachable only via the global god-mode switch. Hidden for Subagent (External) — the CLI manages its own isolation.
              * @example workspace
@@ -3289,6 +3292,212 @@ export interface components {
              * @enum {string}
              */
             steering_mode?: "one-at-a-time" | "queue-and-process";
+        };
+        /**
+         * AgentCreateRequestSubagent
+         * @description Create a Subagent — a user-defined delegation-only worker on the Omnipus engine. Field set per the agent-types field matrix: no voice (no chat/TTS surface), no steering_mode (workers are forced one-at-a-time server-side), no executor (native is derived server-side — never sent by the client). Description is enforced non-empty-after-trim by the handler (the orchestrator delegates based on it).
+         */
+        AgentCreateRequestSubagent: {
+            /**
+             * @description Discriminator. Must be exactly "Subagent" for this variant.
+             *      (enum property replaced by openapi-typescript)
+             * @enum {string}
+             */
+            type: "Subagent";
+            /**
+             * @description Display name for the new agent.
+             * @example My Custom Agent
+             */
+            name: string;
+            /**
+             * @description Short description of the agent's purpose. Required (non-empty after trim) for Subagent and subagent_3p — the orchestrator uses it as the basis on which it decides which agent to delegate to. Optional for Main.
+             * @example Specialized data analysis assistant
+             */
+            description?: string;
+            /**
+             * @description Model slug for LLM calls. When omitted, the global agents.defaults.model_name is used. With the O3 two-field model this is the bare slug; pair it with `provider` for explicit routing.
+             * @example google/gemini-2.5-flash
+             */
+            model?: string;
+            /**
+             * @description Explicit routing key for the primary model (O3 two-field model), mirroring fallback_models[].provider. When set, resolution uses it directly and never infers a provider. Optional; when omitted the model resolves via the default provider.
+             * @example openrouter
+             */
+            provider?: string;
+            /**
+             * @description Hex color code for the agent avatar.
+             * @example #D4AF37
+             */
+            color?: string;
+            /**
+             * @description Phosphor icon name for the agent avatar.
+             * @example ChartBar
+             */
+            icon?: string;
+            tools_cfg?: components["schemas"]["AgentToolsCfg"];
+            /**
+             * @description Ordered list of fallback model entries tried when the primary model returns an error. Each entry carries its own provider so the fallback can route through a different provider than the primary (FR-007). Capped at 2 entries.
+             *     Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
+             * @example [
+             *       {
+             *         "model": "claude-sonnet-4.6",
+             *         "provider": "anthropic"
+             *       }
+             *     ]
+             */
+            fallback_models?: components["schemas"]["FallbackModel"][];
+            /** @description LLM sampling parameters applied to this agent's requests. */
+            model_params?: {
+                /**
+                 * Format: double
+                 * @description Sampling temperature (0.0 – 2.0). Lower = more deterministic.
+                 * @example 1
+                 */
+                temperature?: number;
+                /**
+                 * @description Maximum tokens to generate per turn.
+                 * @example 4096
+                 */
+                max_tokens?: number;
+                /**
+                 * Format: double
+                 * @description Nucleus sampling probability mass. 1.0 disables nucleus sampling.
+                 * @example 1
+                 */
+                top_p?: number;
+            };
+            /** @description Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies. */
+            rate_limits?: {
+                /**
+                 * @description When true, global rate limits are used and per-agent overrides are ignored.
+                 * @example true
+                 */
+                use_global_defaults?: boolean;
+                /**
+                 * @description Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
+                 * @example 100
+                 */
+                max_llm_calls_per_hour?: number;
+                /**
+                 * @description Maximum tool calls per minute for this agent. Absent = no per-agent cap.
+                 * @example 60
+                 */
+                max_tool_calls_per_minute?: number;
+                /**
+                 * Format: double
+                 * @description Maximum USD cost per day for this agent. Absent = no per-agent cap.
+                 * @example 5
+                 */
+                max_cost_per_day?: number;
+            };
+            /**
+             * @description Initial list of skill IDs granted to this agent. An empty list (or absent field) means no skills are granted (opt-in, default none).
+             * @example [
+             *       "web-research"
+             *     ]
+             */
+            skills?: string[];
+            /**
+             * @description Initial SOUL.md content. Required for every user-creatable type — including Subagent (External), where it is passed as part of the CLI prompt at runtime. The CLI never reads a file from disk. Backend trims before length-validation, so whitespace-only is rejected as minLength violation.
+             * @example You are a focused research assistant...
+             */
+            soul: string;
+            delegation_policy?: components["schemas"]["DelegationPolicy"];
+            /**
+             * @description Kernel sandbox profile applied to this agent's tool calls (O13). Per-agent "off" is retired — "no sandbox" is reachable only via the global god-mode switch. Hidden for Subagent (External) — the CLI manages its own isolation.
+             * @example workspace
+             * @enum {string}
+             */
+            sandbox_profile?: "workspace" | "workspace+net" | "host";
+            shell_policy?: components["schemas"]["AgentShellPolicy"];
+            /**
+             * @description Maximum seconds a single agent turn may run before being interrupted.
+             * @example 300
+             */
+            timeout_seconds?: number;
+            /**
+             * @description Maximum number of tool calls allowed per turn.
+             * @example 50
+             */
+            max_tool_iterations?: number;
+        };
+        /**
+         * AgentCreateRequestSubagent3p
+         * @description Create a subagent_3p — a delegation-only worker that runs on an external CLI (claude-code / codex / opencode). The runner manages its own isolation, auth, retries, and tool loop, so tools_cfg, skills, fallback_models, model_params, sandbox_profile, shell_policy, voice, steering_mode, and max_tool_iterations do not exist on this variant (additionalProperties: false rejects them). timeout_seconds stays (process-level kill for a hung CLI). executor is REQUIRED (kind external-cli with cli + cli_path; the handler additionally rejects whitespace-only cli_path).
+         */
+        AgentCreateRequestSubagent3p: {
+            /**
+             * @description Discriminator. Must be exactly "subagent_3p" for this variant.
+             *      (enum property replaced by openapi-typescript)
+             * @enum {string}
+             */
+            type: "subagent_3p";
+            /**
+             * @description Display name for the new agent.
+             * @example My Custom Agent
+             */
+            name: string;
+            /**
+             * @description Short description of the agent's purpose. Required (non-empty after trim) for Subagent and subagent_3p — the orchestrator uses it as the basis on which it decides which agent to delegate to. Optional for Main.
+             * @example Specialized data analysis assistant
+             */
+            description?: string;
+            /**
+             * @description Model slug for LLM calls. When omitted, the global agents.defaults.model_name is used. With the O3 two-field model this is the bare slug; pair it with `provider` for explicit routing.
+             * @example google/gemini-2.5-flash
+             */
+            model?: string;
+            /**
+             * @description Explicit routing key for the primary model (O3 two-field model), mirroring fallback_models[].provider. When set, resolution uses it directly and never infers a provider. Optional; when omitted the model resolves via the default provider.
+             * @example openrouter
+             */
+            provider?: string;
+            /**
+             * @description Hex color code for the agent avatar.
+             * @example #D4AF37
+             */
+            color?: string;
+            /**
+             * @description Phosphor icon name for the agent avatar.
+             * @example ChartBar
+             */
+            icon?: string;
+            /** @description Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies. */
+            rate_limits?: {
+                /**
+                 * @description When true, global rate limits are used and per-agent overrides are ignored.
+                 * @example true
+                 */
+                use_global_defaults?: boolean;
+                /**
+                 * @description Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
+                 * @example 100
+                 */
+                max_llm_calls_per_hour?: number;
+                /**
+                 * @description Maximum tool calls per minute for this agent. Absent = no per-agent cap.
+                 * @example 60
+                 */
+                max_tool_calls_per_minute?: number;
+                /**
+                 * Format: double
+                 * @description Maximum USD cost per day for this agent. Absent = no per-agent cap.
+                 * @example 5
+                 */
+                max_cost_per_day?: number;
+            };
+            /**
+             * @description Initial SOUL.md content. Required for every user-creatable type — including Subagent (External), where it is passed as part of the CLI prompt at runtime. The CLI never reads a file from disk. Backend trims before length-validation, so whitespace-only is rejected as minLength violation.
+             * @example You are a focused research assistant...
+             */
+            soul: string;
+            delegation_policy?: components["schemas"]["DelegationPolicy"];
+            executor: components["schemas"]["ExecutorConfig"];
+            /**
+             * @description Maximum seconds a single agent turn may run before being interrupted.
+             * @example 300
+             */
+            timeout_seconds?: number;
         };
         /** @description Body for PUT /agents/{id}. All fields are optional — only provided fields are updated. Locked (core) agents reject mutations to name, description, and soul. model, timeout_seconds, max_tool_iterations, and steering_mode may be updated on locked agents. heartbeat, heartbeat_enabled, and heartbeat_interval are accepted but ignored on all agents (heartbeat is workspace-scoped, ADR-027). At least one field must be present (minProperties: 1) — empty patches are rejected 400. Fields not applicable to the agent's type (e.g. tools_cfg on subagent_3p) are rejected 400 with code field_not_applicable_to_type. */
         AgentUpdateRequest: {
@@ -12475,6 +12684,9 @@ export type AgentShellPolicy = components["schemas"]["AgentShellPolicy"];
 export type AgentToolsCfg = components["schemas"]["AgentToolsCfg"];
 export type AgentToolsUpdateRequest = components["schemas"]["AgentToolsUpdateRequest"];
 export type AgentCreateRequest = components["schemas"]["AgentCreateRequest"];
+export type AgentCreateRequestMain = components["schemas"]["AgentCreateRequestMain"];
+export type AgentCreateRequestSubagent = components["schemas"]["AgentCreateRequestSubagent"];
+export type AgentCreateRequestSubagent3p = components["schemas"]["AgentCreateRequestSubagent3p"];
 export type AgentUpdateRequest = components["schemas"]["AgentUpdateRequest"];
 export type FallbackModel = components["schemas"]["FallbackModel"];
 export type ExternalCliTool = components["schemas"]["ExternalCliTool"];
