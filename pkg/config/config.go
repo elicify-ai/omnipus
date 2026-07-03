@@ -3455,8 +3455,14 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	// Post-refactor: tools.<name>.enabled is deprecated. If the loaded config
 	// carries explicit false values, translate them idempotently into
 	// security.tool_policies deny entries so operator intent is enforced
-	// by the policy engine rather than silently ignored (issue #237).
-	migrateDeprecatedToolEnableFlags(cfg, data)
+	// by the policy engine rather than silently ignored (issue #237). The
+	// returned legacy flags drive a one-time on-disk self-heal further down
+	// (gated the same way as the CLI-token relocation, CurrentVersion only)
+	// that removes the legacy keys and persists the derived policy — see
+	// stripDeprecatedToolEnableFlagsOnDisk (tool_enable_migration.go) for why:
+	// without it this migration re-derives the same deny entry on every
+	// hot-reload and an operator's "allow" choice never sticks.
+	legacyToolEnableFlags := migrateDeprecatedToolEnableFlags(cfg, data)
 
 	// Migrate the pre-FR-10.1 skills config shape (typed ClawHub singleton +
 	// separate Github block) into the unified Marketplaces list. Idempotent:
@@ -3506,6 +3512,28 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	// migration was never designed against.
 	if versionInfo.Version == CurrentVersion {
 		migrateCLITokenOutOfUsers(cfg, path, onSelfHeal)
+
+		// Persist the tools.<name>.enabled=false → security.tool_policies deny
+		// migration to disk (issue: an operator's "allow" set via the Security
+		// UI bounced back to "deny" on the next reload). Same CurrentVersion-
+		// only gating as the CLI-token relocation above, and for the same
+		// reason: a v0 config's fully migrated state is already written by the
+		// v0-migration SaveConfig call further up in this function, so a raw-
+		// JSON patch here would be redundant. Best-effort — see
+		// stripDeprecatedToolEnableFlagsOnDisk (tool_enable_migration.go).
+		if len(legacyToolEnableFlags) > 0 {
+			written, healErr := stripDeprecatedToolEnableFlagsOnDisk(cfg, path, legacyToolEnableFlags)
+			if healErr != nil {
+				logger.WarnF("failed to persist tools.<name>.enabled removal to config.json; "+
+					"runtime behavior is still correct (in-memory state already reflects the "+
+					"derived tool policy), but the on-disk file could not be self-healed", map[string]any{
+					"path":  path,
+					"error": healErr.Error(),
+				})
+			} else if written != nil && onSelfHeal != nil {
+				onSelfHeal(written)
+			}
+		}
 	}
 
 	// Single-account diagnostic (single-user model follow-up): advisory
