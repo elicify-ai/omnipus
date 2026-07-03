@@ -36,12 +36,20 @@ const usernameInvalidMsg = `username must start with an alphanumeric and contain
 // CLITokenContextKey doc comments). If a human were allowed to register as
 // "cli", their real Gateway.Users row would share a username with that
 // synthetic identity, and a username-keyed lookup elsewhere could silently
-// match the wrong account. "admin" and "system" are reserved too as
-// leftover principal names from the pre-single-user RBAC model.
+// match the wrong account.
+//
+// "admin" and "system" are deliberately NOT reserved here despite being
+// leftover principal names from the pre-single-user RBAC model: unlike
+// "cli", nothing in this codebase synthesizes a UserConfig{Username:"admin"}
+// or "system" identity, so there is no collision hazard to guard against —
+// and "admin" is in practice the single most common username a solo
+// operator picks for their own account (it's also what onboarding's own
+// test fixtures use throughout). An earlier version of this map reserved
+// both, which 400'd real onboarding for anyone naming their account
+// "admin" — a regression caught by CI (TestHandleCompleteOnboarding_*
+// failing with 400 instead of 200), not by review.
 var reservedUsernames = map[string]struct{}{
-	"cli":    {},
-	"admin":  {},
-	"system": {},
+	"cli": {},
 }
 
 // reservedUsernameMsg is returned when an otherwise-valid username collides
