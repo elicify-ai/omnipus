@@ -75,7 +75,9 @@ test(
     // The backend returns Name:"openrouter" for the onboarded provider.
     // ProvidersSection.tsx:81 renders: displayName = provider.display_name ?? provider.name ?? provider.id
     // Since the contract returns Name:"openrouter" and no display_name, the SPA renders "openrouter".
-    const openrouterRow = page.getByText('openrouter', { exact: true }).first()
+    // ADR-031 rows render the catalog label / display_name ("OpenRouter"),
+    // not the raw provider id — match case-insensitively.
+    const openrouterRow = page.getByText(/openrouter/i).first()
     await expect(openrouterRow).toBeVisible({ timeout: 10_000 })
 
     // ── Core assertion C: at least one "Edit" button (not "Configure").
@@ -108,7 +110,9 @@ test(
 
     // Wait for real providers to load. The "openrouter" entry is the anchor
     // because it is deterministically seeded by global-setup.ts onboardViaAPI().
-    const openrouterRow = page.getByText('openrouter', { exact: true }).first()
+    // ADR-031 rows render the catalog label / display_name ("OpenRouter"),
+    // not the raw provider id — match case-insensitively.
+    const openrouterRow = page.getByText(/openrouter/i).first()
     await expect(openrouterRow).toBeVisible({ timeout: 15_000 })
 
     // ── Differentiation assertion: "Default" fallback is absent.

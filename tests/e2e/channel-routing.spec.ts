@@ -281,7 +281,10 @@ test(
     if (wsHasNative) {
       await wsNativeSelect.selectOption({ label: /Sales/i })
     } else {
-      const wsTrigger = wsContainer.locator('button[aria-haspopup="listbox"]')
+      // SmartSelect renders a plain Radix SelectTrigger (role=combobox,
+      // no aria-haspopup) for <=5 items and the searchable popover button
+      // above that threshold — the container's single button covers both.
+      const wsTrigger = wsContainer.locator('button').first()
       await expect(wsTrigger).toBeVisible({ timeout: 5_000 })
       await wsTrigger.click()
       await page.getByRole('option', { name: /Sales/i }).first().click()
@@ -318,7 +321,7 @@ test(
       expect(optionValues.some((t) => /Jim/i.test(t))).toBe(false)
     } else {
       // Radix combobox — open it to expose options
-      const agentTrigger = agentContainer.locator('button[aria-haspopup="listbox"]')
+      const agentTrigger = agentContainer.locator('button').first()
       const isDisabled = await agentTrigger.isDisabled()
       if (!isDisabled) {
         await agentTrigger.click()
@@ -361,7 +364,7 @@ test(
     if (wsHasNative) {
       await wsNativeSelect.selectOption({ label: /Empty Team/i })
     } else {
-      const wsTrigger = wsContainer.locator('button[aria-haspopup="listbox"]')
+      const wsTrigger = wsContainer.locator('button').first()
       await expect(wsTrigger).toBeVisible({ timeout: 5_000 })
       await wsTrigger.click()
       await page.getByRole('option', { name: /Empty Team/i }).first().click()
@@ -380,7 +383,7 @@ test(
     if (agentHasNative) {
       await expect(agentNativeSelect).toBeDisabled()
     } else {
-      const agentTrigger = agentContainer.locator('button[aria-haspopup="listbox"]')
+      const agentTrigger = agentContainer.locator('button').first()
       await expect(agentTrigger).toBeDisabled()
     }
   },
@@ -426,7 +429,7 @@ test(
     if (wsHasNative) {
       await wsNativeSelect.selectOption({ label: /Sales/i })
     } else {
-      const wsTrigger = wsContainer.locator('button[aria-haspopup="listbox"]')
+      const wsTrigger = wsContainer.locator('button').first()
       await expect(wsTrigger).toBeVisible({ timeout: 5_000 })
       await wsTrigger.click()
       await page.getByRole('option', { name: /Sales/i }).first().click()
@@ -464,7 +467,7 @@ test(
     if (wsHasNative) {
       await wsNativeSelect.selectOption({ label: /Sales/i })
     } else {
-      const wsTrigger = wsContainer.locator('button[aria-haspopup="listbox"]')
+      const wsTrigger = wsContainer.locator('button').first()
       await expect(wsTrigger).toBeVisible({ timeout: 5_000 })
       await wsTrigger.click()
       await page.getByRole('option', { name: /Sales/i }).first().click()
@@ -481,7 +484,7 @@ test(
       )
       expect(optionLabels.some((t) => /global default/i.test(t))).toBe(false)
     } else {
-      const agentTrigger = agentContainer.locator('button[aria-haspopup="listbox"]')
+      const agentTrigger = agentContainer.locator('button').first()
       const isDisabled = await agentTrigger.isDisabled()
       if (!isDisabled) {
         await agentTrigger.click()
@@ -535,7 +538,7 @@ test(
     if (wsHasNative) {
       await wsNativeSelect.selectOption({ label: /Sales/i })
     } else {
-      const wsTrigger = wsContainer.locator('button[aria-haspopup="listbox"]')
+      const wsTrigger = wsContainer.locator('button').first()
       await expect(wsTrigger).toBeVisible({ timeout: 5_000 })
       await wsTrigger.click()
       await page.getByRole('option', { name: /Sales/i }).first().click()
@@ -554,7 +557,7 @@ test(
       await expect(agentNativeSelect).not.toBeDisabled({ timeout: 8_000 })
       await agentNativeSelect.selectOption({ label: /Mia/i })
     } else {
-      const agentTrigger = agentContainer.locator('button[aria-haspopup="listbox"]')
+      const agentTrigger = agentContainer.locator('button').first()
       await expect(agentTrigger).not.toBeDisabled({ timeout: 8_000 })
       await agentTrigger.click()
       await page.getByRole('option', { name: /Mia/i }).first().click()
@@ -669,7 +672,7 @@ test(
     if (wsHasNative) {
       await wsNativeSelect.selectOption({ value: '__none__' })
     } else {
-      const wsTrigger = wsContainer.locator('button[aria-haspopup="listbox"]')
+      const wsTrigger = wsContainer.locator('button').first()
       await expect(wsTrigger).toBeVisible({ timeout: 5_000 })
       await wsTrigger.click()
       await page.getByRole('option', { name: /No workspace/i }).first().click()
@@ -699,7 +702,7 @@ test(
     if (agentHasNative) {
       await expect(agentNativeSelect).toBeDisabled()
     } else {
-      const agentTrigger = agentContainer.locator('button[aria-haspopup="listbox"]')
+      const agentTrigger = agentContainer.locator('button').first()
       await expect(agentTrigger).toBeDisabled()
     }
   },
