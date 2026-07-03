@@ -137,7 +137,13 @@ func TestAutomations_OwnerFilter_NonAdminSeesOnlyOwnAgents(t *testing.T) {
 	assert.Equal(t, "mia", resp.Automations[0].AgentName)
 }
 
-func TestAutomations_AdminSeesAll(t *testing.T) {
+// TestAutomations_RoleAloneDoesNotBypassOwnership asserts a role of "admin"
+// grants no extra visibility here either — same reasoning as
+// TestSchedulesAPI_List_FilteredByOwner (this is the same authorization gate,
+// applied to the /automations view of the schedule list). "admin" owns
+// neither "mia" nor "max" in this fixture, so it sees zero, same as any other
+// non-owning account.
+func TestAutomations_RoleAloneDoesNotBypassOwnership(t *testing.T) {
 	api, cs := newSchedulesTestAPI(t)
 	j1, err := cs.AddJob("a", cron.CronSchedule{Kind: "every", EveryMS: i64p(60000)}, "x", false, "", "")
 	require.NoError(t, err)
@@ -157,7 +163,7 @@ func TestAutomations_AdminSeesAll(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	var resp automationsResp
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Len(t, resp.Automations, 2, "admin sees all schedules")
+	assert.Empty(t, resp.Automations, "role alone must not grant visibility into another user's schedules")
 }
 
 func TestAutomations_MethodNotAllowed(t *testing.T) {

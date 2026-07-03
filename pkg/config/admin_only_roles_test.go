@@ -169,15 +169,18 @@ func TestNormalizeAdminOnlyRoles_NoUsers_NoOp(t *testing.T) {
 }
 
 // TestSelfHealUserRolesOnDisk_MissingGatewaySection_NoOp proves the on-disk
-// self-heal degrades gracefully (returns nil, does not error or panic) when
-// config.json has no "gateway" section at all — e.g. a minimal/fresh config.
+// self-heal degrades gracefully (returns nil bytes, nil error, does not
+// panic) when config.json has no "gateway" section at all — e.g. a
+// minimal/fresh config. The nil bytes signal "no write happened" to callers
+// deciding whether to register a self-write hash (see SelfHealWriteHook).
 func TestSelfHealUserRolesOnDisk_MissingGatewaySection_NoOp(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.json")
 	require.NoError(t, os.WriteFile(configPath, []byte(`{"version":1}`), 0o600))
 
-	err := selfHealUserRolesOnDisk(configPath)
+	written, err := selfHealUserRolesOnDisk(configPath)
 	assert.NoError(t, err)
+	assert.Nil(t, written, "no write occurred — written bytes must be nil")
 }
 
 // TestSelfHealUserRolesOnDisk_MissingFile_ReturnsError proves the self-heal
@@ -187,6 +190,116 @@ func TestSelfHealUserRolesOnDisk_MissingGatewaySection_NoOp(t *testing.T) {
 // behavior correct), but the function itself must report the failure.
 func TestSelfHealUserRolesOnDisk_MissingFile_ReturnsError(t *testing.T) {
 	dir := t.TempDir()
-	err := selfHealUserRolesOnDisk(filepath.Join(dir, "does-not-exist.json"))
+	written, err := selfHealUserRolesOnDisk(filepath.Join(dir, "does-not-exist.json"))
 	assert.Error(t, err)
+	assert.Nil(t, written)
+}
+
+// TestSelfHealUserRolesOnDisk_ReturnsWrittenBytes proves that when a write
+// DOES happen, the function returns the exact bytes it wrote (not just nil
+// error) — this is the contract LoadConfigWithStoreAndSelfHealHook relies on
+// to report the write to its caller's onSelfHeal hook.
+func TestSelfHealUserRolesOnDisk_ReturnsWrittenBytes(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	raw := `{"version":1,"gateway":{"users":[{"username":"bob","role":"user"}]}}`
+	require.NoError(t, os.WriteFile(configPath, []byte(raw), 0o600))
+
+	written, err := selfHealUserRolesOnDisk(configPath)
+	require.NoError(t, err)
+	require.NotNil(t, written, "a write occurred — written bytes must be non-nil")
+
+	// The returned bytes must match what is actually on disk (byte-for-byte),
+	// since the caller hashes `written` to register the app-initiated write.
+	onDisk, readErr := os.ReadFile(configPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, string(onDisk), string(written))
+}
+
+// TestLoadConfigWithStoreAndSelfHealHook_InvokesHookOnWrite proves the hook
+// threading mechanism (FIX1): loading a CurrentVersion config whose on-disk
+// gateway.users[].role is "user" invokes onSelfHeal exactly once with the
+// written bytes — this is what pkg/gateway's config-watcher polling loop and
+// manual /reload trigger use to register the self-heal's write with their
+// own selfWriteReg so it is not misidentified as a genuine external edit.
+func TestLoadConfigWithStoreAndSelfHealHook_InvokesHookOnWrite(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	raw := `{
+		"version": 1,
+		"agents": {"defaults": {"workspace": "./workspace"}, "list": []},
+		"providers": [],
+		"gateway": {"users": [{"username": "bob", "role": "user"}]}
+	}`
+	require.NoError(t, os.WriteFile(configPath, []byte(raw), 0o600))
+
+	var hookCalls int
+	var hookBytes []byte
+	_, err := LoadConfigWithStoreAndSelfHealHook(configPath, nil, func(writtenBytes []byte) {
+		hookCalls++
+		hookBytes = writtenBytes
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, hookCalls, "onSelfHeal must fire exactly once when a self-heal write occurs")
+	require.NotNil(t, hookBytes)
+	onDisk, readErr := os.ReadFile(configPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, string(onDisk), string(hookBytes),
+		"the hook must receive the exact bytes written to disk, so the caller's hash registration matches")
+}
+
+// TestLoadConfigWithStoreAndSelfHealHook_NoWrite_HookNotInvoked proves the
+// hook is never called when no self-heal write is needed (all roles already
+// admin) — a nil/absent hook, or one that would panic on unexpected input,
+// must be safe for the common case.
+func TestLoadConfigWithStoreAndSelfHealHook_NoWrite_HookNotInvoked(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	raw := `{
+		"version": 1,
+		"agents": {"defaults": {"workspace": "./workspace"}, "list": []},
+		"providers": [],
+		"gateway": {"users": [{"username": "alice", "role": "admin"}]}
+	}`
+	require.NoError(t, os.WriteFile(configPath, []byte(raw), 0o600))
+
+	hookCalled := false
+	_, err := LoadConfigWithStoreAndSelfHealHook(configPath, nil, func([]byte) {
+		hookCalled = true
+	})
+	require.NoError(t, err)
+	assert.False(t, hookCalled, "onSelfHeal must not fire when nothing needed healing")
+}
+
+// TestLoadConfigWithStore_NilHook_StillSelfHeals proves that the ordinary
+// LoadConfig/LoadConfigWithStore entry points (nil hook, used by every
+// caller that doesn't need write-dedup registration) still perform the
+// on-disk self-heal correctly — passing a nil onSelfHeal must never skip or
+// break the self-heal itself, only the notification of it.
+func TestLoadConfigWithStore_NilHook_StillSelfHeals(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	raw := `{
+		"version": 1,
+		"agents": {"defaults": {"workspace": "./workspace"}, "list": []},
+		"providers": [],
+		"gateway": {"users": [{"username": "bob", "role": "user"}]}
+	}`
+	require.NoError(t, os.WriteFile(configPath, []byte(raw), 0o600))
+
+	cfg, err := LoadConfigWithStore(configPath, nil)
+	require.NoError(t, err)
+	require.Len(t, cfg.Gateway.Users, 1)
+	assert.Equal(t, UserRoleAdmin, cfg.Gateway.Users[0].Role)
+
+	onDisk, readErr := os.ReadFile(configPath)
+	require.NoError(t, readErr)
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(onDisk, &m))
+	gw := m["gateway"].(map[string]any)
+	users := gw["users"].([]any)
+	require.Len(t, users, 1)
+	assert.Equal(t, "admin", users[0].(map[string]any)["role"],
+		"on-disk role must still be self-healed even with a nil onSelfHeal hook")
 }

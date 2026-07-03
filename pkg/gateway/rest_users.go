@@ -191,7 +191,13 @@ func (a *restAPI) HandleUserCreate(w http.ResponseWriter, r *http.Request) {
 		emitUserAudit(r, a, "gateway.users."+body.Username, nil, map[string]any{
 			"username": body.Username,
 			"role":     string(persistedRole),
-			"password": body.Password,
+			// requested_role: the role actually named in the request body,
+			// distinct from "role" (what was persisted, always admin). Without
+			// this the audit trail cannot distinguish "requested admin" from
+			// "requested user, silently pinned to admin" — forensically
+			// indistinguishable no-ops from real intent otherwise.
+			"requested_role": string(body.Role),
+			"password":       body.Password,
 		})
 		slog.Info("rest: user created (restart required)", "username", body.Username, "role", string(persistedRole))
 		reqRestart := true
@@ -206,9 +212,10 @@ func (a *restAPI) HandleUserCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	emitUserAudit(r, a, "gateway.users."+body.Username, nil, map[string]any{
-		"username": body.Username,
-		"role":     string(persistedRole),
-		"password": body.Password, // redactSensitive masks this as "***redacted***".
+		"username":       body.Username,
+		"role":           string(persistedRole),
+		"requested_role": string(body.Role), // see comment in the reload-failure branch above.
+		"password":       body.Password,     // redactSensitive masks this as "***redacted***".
 	})
 
 	slog.Info("rest: user created", "username", body.Username, "role", string(persistedRole))
@@ -419,8 +426,16 @@ func (a *restAPI) HandleUserChangeRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// newValue carries both the persisted role (always admin) and the
+	// originally-REQUESTED role (body.Role) so an attempted demotion is
+	// audit-distinguishable from a no-op request that already asked for
+	// admin — see the parallel comment in HandleUserCreate.
+	auditNewValue := map[string]any{
+		"role":           string(persistedRole),
+		"requested_role": string(body.Role),
+	}
 	if reloadErr := a.triggerReloadAndWait(); reloadErr != nil {
-		emitUserAudit(r, a, "gateway.users."+username+".role", oldRole, string(persistedRole))
+		emitUserAudit(r, a, "gateway.users."+username+".role", oldRole, auditNewValue)
 		slog.Info(
 			"rest: user role changed (restart required)",
 			"username",
@@ -440,7 +455,7 @@ func (a *restAPI) HandleUserChangeRole(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	emitUserAudit(r, a, "gateway.users."+username+".role", oldRole, string(persistedRole))
+	emitUserAudit(r, a, "gateway.users."+username+".role", oldRole, auditNewValue)
 
 	slog.Info("rest: user role changed", "username", username, "old", oldRole, "new", string(persistedRole))
 	jsonOK(w, gen.UserRoleChangeResponse{
