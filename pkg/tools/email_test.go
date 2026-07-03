@@ -96,7 +96,7 @@ func TestReadInboxTool_ReturnsEnvelopes(t *testing.T) {
 		email.Message{UID: 2, From: "a@x.com", Subject: "Hello", Seen: false},
 		email.Message{UID: 1, From: "b@x.com", Subject: "Old", Seen: true},
 	)
-	tool := NewReadInboxTool(ft)
+	tool := NewReadInboxTool(EmailTransports{"ws_test": ft})
 	res := tool.Execute(context.Background(), map[string]any{"unseen_only": true})
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.ForLLM)
@@ -111,7 +111,7 @@ func TestReadInboxTool_ReturnsEnvelopes(t *testing.T) {
 }
 
 func TestReadInboxTool_NoTransport(t *testing.T) {
-	tool := NewReadInboxTool(nil)
+	tool := NewReadInboxTool(nil /* no mailboxes */)
 	res := tool.Execute(context.Background(), map[string]any{})
 	if !res.IsError || !strings.Contains(res.ForLLM, "no mailbox") {
 		t.Fatalf("expected no-mailbox error, got %+v", res)
@@ -121,7 +121,7 @@ func TestReadInboxTool_NoTransport(t *testing.T) {
 func TestReadInboxTool_TransportError(t *testing.T) {
 	ft := newFakeTransport()
 	ft.failRead = true
-	res := NewReadInboxTool(ft).Execute(context.Background(), map[string]any{})
+	res := NewReadInboxTool(EmailTransports{"ws_test": ft}).Execute(context.Background(), map[string]any{})
 	if !res.IsError || !strings.Contains(res.ForLLM, "read_inbox failed") {
 		t.Fatalf("expected read_inbox failure, got %+v", res)
 	}
@@ -132,7 +132,7 @@ func TestSearchEmailTool(t *testing.T) {
 		email.Message{UID: 1, From: "boss@x.com", Subject: "Invoice March", Body: "please pay"},
 		email.Message{UID: 2, From: "spam@x.com", Subject: "Win money", Body: "click"},
 	)
-	res := NewSearchEmailTool(ft).Execute(context.Background(), map[string]any{"query": "invoice"})
+	res := NewSearchEmailTool(EmailTransports{"ws_test": ft}).Execute(context.Background(), map[string]any{"query": "invoice"})
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.ForLLM)
 	}
@@ -146,7 +146,7 @@ func TestSearchEmailTool(t *testing.T) {
 }
 
 func TestSearchEmailTool_MissingQuery(t *testing.T) {
-	res := NewSearchEmailTool(newFakeTransport()).Execute(context.Background(), map[string]any{})
+	res := NewSearchEmailTool(EmailTransports{"ws_test": newFakeTransport()}).Execute(context.Background(), map[string]any{})
 	if !res.IsError || !strings.Contains(res.ForLLM, "query is required") {
 		t.Fatalf("expected query-required error, got %+v", res)
 	}
@@ -154,7 +154,7 @@ func TestSearchEmailTool_MissingQuery(t *testing.T) {
 
 func TestReadMessageTool(t *testing.T) {
 	ft := newFakeTransport(email.Message{UID: 7, From: "x@y.com", Subject: "S", Body: "full body here"})
-	res := NewReadMessageTool(ft).Execute(context.Background(), map[string]any{"uid": float64(7)})
+	res := NewReadMessageTool(EmailTransports{"ws_test": ft}).Execute(context.Background(), map[string]any{"uid": float64(7)})
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.ForLLM)
 	}
@@ -168,7 +168,7 @@ func TestReadMessageTool(t *testing.T) {
 }
 
 func TestReadMessageTool_BadUID(t *testing.T) {
-	res := NewReadMessageTool(newFakeTransport()).Execute(context.Background(), map[string]any{"uid": float64(0)})
+	res := NewReadMessageTool(EmailTransports{"ws_test": newFakeTransport()}).Execute(context.Background(), map[string]any{"uid": float64(0)})
 	if !res.IsError || !strings.Contains(res.ForLLM, "uid is required") {
 		t.Fatalf("expected uid error, got %+v", res)
 	}
@@ -176,7 +176,7 @@ func TestReadMessageTool_BadUID(t *testing.T) {
 
 func TestSendEmailTool(t *testing.T) {
 	ft := newFakeTransport()
-	res := NewSendEmailTool(ft).Execute(context.Background(), map[string]any{
+	res := NewSendEmailTool(EmailTransports{"ws_test": ft}).Execute(context.Background(), map[string]any{
 		"to": "dest@x.com", "subject": "Hi", "body": "Hello there",
 	})
 	if res.IsError {
@@ -188,7 +188,7 @@ func TestSendEmailTool(t *testing.T) {
 }
 
 func TestSendEmailTool_MissingTo(t *testing.T) {
-	res := NewSendEmailTool(newFakeTransport()).Execute(context.Background(), map[string]any{
+	res := NewSendEmailTool(EmailTransports{"ws_test": newFakeTransport()}).Execute(context.Background(), map[string]any{
 		"subject": "Hi", "body": "x",
 	})
 	if !res.IsError || !strings.Contains(res.ForLLM, "to is required") {
@@ -199,7 +199,7 @@ func TestSendEmailTool_MissingTo(t *testing.T) {
 func TestSendEmailTool_TransportError(t *testing.T) {
 	ft := newFakeTransport()
 	ft.failSend = true
-	res := NewSendEmailTool(ft).Execute(context.Background(), map[string]any{
+	res := NewSendEmailTool(EmailTransports{"ws_test": ft}).Execute(context.Background(), map[string]any{
 		"to": "d@x.com", "subject": "s", "body": "b",
 	})
 	if !res.IsError || !strings.Contains(res.ForLLM, "send_email failed") {
@@ -211,7 +211,7 @@ func TestReplyTool_ThreadsToOriginalSender(t *testing.T) {
 	ft := newFakeTransport(email.Message{
 		UID: 5, From: "alice@x.com", Subject: "Question", MessageID: "<abc@x.com>", Body: "?",
 	})
-	res := NewReplyTool(ft).Execute(context.Background(), map[string]any{
+	res := NewReplyTool(EmailTransports{"ws_test": ft}).Execute(context.Background(), map[string]any{
 		"uid": float64(5), "body": "Here is your answer",
 	})
 	if res.IsError {
@@ -234,7 +234,7 @@ func TestReplyTool_ThreadsToOriginalSender(t *testing.T) {
 
 func TestReplyTool_AlreadyRePrefixed(t *testing.T) {
 	ft := newFakeTransport(email.Message{UID: 9, From: "a@x.com", Subject: "Re: Hi"})
-	res := NewReplyTool(ft).Execute(context.Background(), map[string]any{"uid": float64(9), "body": "ok"})
+	res := NewReplyTool(EmailTransports{"ws_test": ft}).Execute(context.Background(), map[string]any{"uid": float64(9), "body": "ok"})
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.ForLLM)
 	}
@@ -245,14 +245,14 @@ func TestReplyTool_AlreadyRePrefixed(t *testing.T) {
 
 func TestReplyTool_MissingBody(t *testing.T) {
 	ft := newFakeTransport(email.Message{UID: 1, From: "a@x.com"})
-	res := NewReplyTool(ft).Execute(context.Background(), map[string]any{"uid": float64(1)})
+	res := NewReplyTool(EmailTransports{"ws_test": ft}).Execute(context.Background(), map[string]any{"uid": float64(1)})
 	if !res.IsError || !strings.Contains(res.ForLLM, "body is required") {
 		t.Fatalf("expected body-required error, got %+v", res)
 	}
 }
 
 func TestEmailToolset_NamesAndScope(t *testing.T) {
-	set := EmailToolset(newFakeTransport())
+	set := EmailToolset(EmailTransports{"ws_test": newFakeTransport()})
 	want := map[string]bool{
 		"read_inbox": false, "search_email": false, "read_message": false,
 		"send_email": false, "reply": false,
@@ -284,7 +284,7 @@ func TestReadInboxTool_LimitArg(t *testing.T) {
 		email.Message{UID: 2, From: "b@x.com", Subject: "B"},
 		email.Message{UID: 3, From: "c@x.com", Subject: "C"},
 	)
-	tool := NewReadInboxTool(ft)
+	tool := NewReadInboxTool(EmailTransports{"ws_test": ft})
 	res := tool.Execute(context.Background(), map[string]any{"limit": float64(2)})
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.ForLLM)
@@ -306,7 +306,7 @@ func TestReadInboxTool_DefaultLimitAllMessages(t *testing.T) {
 		email.Message{UID: 1, From: "a@x.com", Subject: "A"},
 		email.Message{UID: 2, From: "b@x.com", Subject: "B"},
 	)
-	tool := NewReadInboxTool(ft)
+	tool := NewReadInboxTool(EmailTransports{"ws_test": ft})
 	res := tool.Execute(context.Background(), map[string]any{})
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.ForLLM)
@@ -326,8 +326,8 @@ func TestReadInboxTool_DefaultLimitAllMessages(t *testing.T) {
 func TestReadInboxTool_Differentiation(t *testing.T) {
 	ft1 := newFakeTransport(email.Message{UID: 1, From: "a@x.com", Subject: "Alpha"})
 	ft2 := newFakeTransport(email.Message{UID: 2, From: "b@x.com", Subject: "Beta"})
-	res1 := NewReadInboxTool(ft1).Execute(context.Background(), map[string]any{})
-	res2 := NewReadInboxTool(ft2).Execute(context.Background(), map[string]any{})
+	res1 := NewReadInboxTool(EmailTransports{"ws_test": ft1}).Execute(context.Background(), map[string]any{})
+	res2 := NewReadInboxTool(EmailTransports{"ws_test": ft2}).Execute(context.Background(), map[string]any{})
 	if res1.ForLLM == res2.ForLLM {
 		t.Fatal("read_inbox returned identical results for different transports")
 	}
@@ -336,7 +336,7 @@ func TestReadInboxTool_Differentiation(t *testing.T) {
 // TestSearchEmailTool_NoTransport verifies the nil-transport guard.
 // Traces to: pkg/tools/email.go SearchEmailTool.Execute
 func TestSearchEmailTool_NoTransport(t *testing.T) {
-	res := NewSearchEmailTool(nil).Execute(context.Background(), map[string]any{"query": "hello"})
+	res := NewSearchEmailTool(nil /* no mailboxes */).Execute(context.Background(), map[string]any{"query": "hello"})
 	if !res.IsError || !strings.Contains(res.ForLLM, "no mailbox") {
 		t.Fatalf("expected no-mailbox error, got %+v", res)
 	}
@@ -347,7 +347,7 @@ func TestSearchEmailTool_NoTransport(t *testing.T) {
 func TestSearchEmailTool_TransportError(t *testing.T) {
 	ft := newFakeTransport()
 	ft.failRead = true
-	res := NewSearchEmailTool(ft).Execute(context.Background(), map[string]any{"query": "q"})
+	res := NewSearchEmailTool(EmailTransports{"ws_test": ft}).Execute(context.Background(), map[string]any{"query": "q"})
 	if !res.IsError || !strings.Contains(res.ForLLM, "search_email failed") {
 		t.Fatalf("expected search_email failure, got %+v", res)
 	}
@@ -360,8 +360,8 @@ func TestSearchEmailTool_Differentiation(t *testing.T) {
 		email.Message{UID: 1, From: "boss@x.com", Subject: "Invoice"},
 		email.Message{UID: 2, From: "spam@x.com", Subject: "Win money"},
 	)
-	res1 := NewSearchEmailTool(ft).Execute(context.Background(), map[string]any{"query": "invoice"})
-	res2 := NewSearchEmailTool(ft).Execute(context.Background(), map[string]any{"query": "win money"})
+	res1 := NewSearchEmailTool(EmailTransports{"ws_test": ft}).Execute(context.Background(), map[string]any{"query": "invoice"})
+	res2 := NewSearchEmailTool(EmailTransports{"ws_test": ft}).Execute(context.Background(), map[string]any{"query": "win money"})
 	if res1.ForLLM == res2.ForLLM {
 		t.Fatal("search_email returned same output for different queries")
 	}
@@ -370,7 +370,7 @@ func TestSearchEmailTool_Differentiation(t *testing.T) {
 // TestReadMessageTool_NoTransport verifies the nil-transport guard.
 // Traces to: pkg/tools/email.go ReadMessageTool.Execute
 func TestReadMessageTool_NoTransport(t *testing.T) {
-	res := NewReadMessageTool(nil).Execute(context.Background(), map[string]any{"uid": float64(1)})
+	res := NewReadMessageTool(nil /* no mailboxes */).Execute(context.Background(), map[string]any{"uid": float64(1)})
 	if !res.IsError || !strings.Contains(res.ForLLM, "no mailbox") {
 		t.Fatalf("expected no-mailbox error, got %+v", res)
 	}
@@ -381,7 +381,7 @@ func TestReadMessageTool_NoTransport(t *testing.T) {
 // Traces to: pkg/tools/email.go ReadMessageTool.Execute
 func TestReadMessageTool_TransportError(t *testing.T) {
 	ft := newFakeTransport() // empty — UID 99 won't be found
-	res := NewReadMessageTool(ft).Execute(context.Background(), map[string]any{"uid": float64(99)})
+	res := NewReadMessageTool(EmailTransports{"ws_test": ft}).Execute(context.Background(), map[string]any{"uid": float64(99)})
 	if !res.IsError || !strings.Contains(res.ForLLM, "read_message failed") {
 		t.Fatalf("expected read_message failure for missing uid, got %+v", res)
 	}
@@ -394,8 +394,8 @@ func TestReadMessageTool_Differentiation(t *testing.T) {
 		email.Message{UID: 1, From: "a@x.com", Subject: "First", Body: "body1"},
 		email.Message{UID: 2, From: "b@x.com", Subject: "Second", Body: "body2"},
 	)
-	res1 := NewReadMessageTool(ft).Execute(context.Background(), map[string]any{"uid": float64(1)})
-	res2 := NewReadMessageTool(ft).Execute(context.Background(), map[string]any{"uid": float64(2)})
+	res1 := NewReadMessageTool(EmailTransports{"ws_test": ft}).Execute(context.Background(), map[string]any{"uid": float64(1)})
+	res2 := NewReadMessageTool(EmailTransports{"ws_test": ft}).Execute(context.Background(), map[string]any{"uid": float64(2)})
 	if res1.ForLLM == res2.ForLLM {
 		t.Fatal("read_message returned same output for different UIDs")
 	}
@@ -404,7 +404,7 @@ func TestReadMessageTool_Differentiation(t *testing.T) {
 // TestSendEmailTool_MissingBody verifies that a missing body returns an error.
 // Traces to: pkg/tools/email.go SendEmailTool.Execute
 func TestSendEmailTool_MissingBody(t *testing.T) {
-	res := NewSendEmailTool(newFakeTransport()).Execute(context.Background(), map[string]any{
+	res := NewSendEmailTool(EmailTransports{"ws_test": newFakeTransport()}).Execute(context.Background(), map[string]any{
 		"to": "d@x.com", "subject": "s",
 	})
 	if !res.IsError || !strings.Contains(res.ForLLM, "body is required") {
@@ -415,7 +415,7 @@ func TestSendEmailTool_MissingBody(t *testing.T) {
 // TestSendEmailTool_NoTransport verifies the nil-transport guard.
 // Traces to: pkg/tools/email.go SendEmailTool.Execute
 func TestSendEmailTool_NoTransport(t *testing.T) {
-	res := NewSendEmailTool(nil).Execute(context.Background(), map[string]any{
+	res := NewSendEmailTool(nil /* no mailboxes */).Execute(context.Background(), map[string]any{
 		"to": "d@x.com", "subject": "s", "body": "b",
 	})
 	if !res.IsError || !strings.Contains(res.ForLLM, "no mailbox") {
@@ -427,10 +427,10 @@ func TestSendEmailTool_NoTransport(t *testing.T) {
 // two different response payloads (rules out hardcoded sent response).
 func TestSendEmailTool_Differentiation(t *testing.T) {
 	ft := newFakeTransport()
-	res1 := NewSendEmailTool(ft).Execute(context.Background(), map[string]any{
+	res1 := NewSendEmailTool(EmailTransports{"ws_test": ft}).Execute(context.Background(), map[string]any{
 		"to": "alice@x.com", "subject": "Hi", "body": "Hello",
 	})
-	res2 := NewSendEmailTool(ft).Execute(context.Background(), map[string]any{
+	res2 := NewSendEmailTool(EmailTransports{"ws_test": ft}).Execute(context.Background(), map[string]any{
 		"to": "bob@x.com", "subject": "Hi", "body": "Hello",
 	})
 	if res1.ForLLM == res2.ForLLM {
@@ -446,7 +446,7 @@ func TestSendEmailTool_Persistence(t *testing.T) {
 	if len(ft.sent) != 0 {
 		t.Fatalf("precondition: transport must start empty")
 	}
-	NewSendEmailTool(ft).Execute(context.Background(), map[string]any{
+	NewSendEmailTool(EmailTransports{"ws_test": ft}).Execute(context.Background(), map[string]any{
 		"to": "dest@x.com", "subject": "Test", "body": "Verify me",
 	})
 	if len(ft.sent) != 1 {
@@ -460,7 +460,7 @@ func TestSendEmailTool_Persistence(t *testing.T) {
 // TestReplyTool_NoTransport verifies the nil-transport guard.
 // Traces to: pkg/tools/email.go ReplyTool.Execute
 func TestReplyTool_NoTransport(t *testing.T) {
-	res := NewReplyTool(nil).Execute(context.Background(), map[string]any{
+	res := NewReplyTool(nil /* no mailboxes */).Execute(context.Background(), map[string]any{
 		"uid": float64(1), "body": "reply",
 	})
 	if !res.IsError || !strings.Contains(res.ForLLM, "no mailbox") {
@@ -471,7 +471,7 @@ func TestReplyTool_NoTransport(t *testing.T) {
 // TestReplyTool_MissingUID verifies the missing UID guard.
 // Traces to: pkg/tools/email.go ReplyTool.Execute
 func TestReplyTool_MissingUID(t *testing.T) {
-	res := NewReplyTool(newFakeTransport()).Execute(context.Background(), map[string]any{
+	res := NewReplyTool(EmailTransports{"ws_test": newFakeTransport()}).Execute(context.Background(), map[string]any{
 		"body": "hello",
 	})
 	if !res.IsError || !strings.Contains(res.ForLLM, "uid is required") {
@@ -483,7 +483,7 @@ func TestReplyTool_MissingUID(t *testing.T) {
 // Traces to: pkg/tools/email.go ReplyTool.Execute (ReadMessage error)
 func TestReplyTool_OriginalMessageNotFound(t *testing.T) {
 	ft := newFakeTransport() // uid 99 not in transport
-	res := NewReplyTool(ft).Execute(context.Background(), map[string]any{
+	res := NewReplyTool(EmailTransports{"ws_test": ft}).Execute(context.Background(), map[string]any{
 		"uid": float64(99), "body": "reply",
 	})
 	if !res.IsError || !strings.Contains(res.ForLLM, "could not load original message") {
@@ -495,7 +495,7 @@ func TestReplyTool_OriginalMessageNotFound(t *testing.T) {
 // Traces to: pkg/tools/email.go ReplyTool.Execute (empty From guard)
 func TestReplyTool_NoSenderOnOriginal(t *testing.T) {
 	ft := newFakeTransport(email.Message{UID: 3, From: "", Subject: "Weird"})
-	res := NewReplyTool(ft).Execute(context.Background(), map[string]any{
+	res := NewReplyTool(EmailTransports{"ws_test": ft}).Execute(context.Background(), map[string]any{
 		"uid": float64(3), "body": "reply",
 	})
 	if !res.IsError || !strings.Contains(res.ForLLM, "no sender") {
@@ -508,7 +508,7 @@ func TestReplyTool_NoSenderOnOriginal(t *testing.T) {
 func TestReplyTool_SendError(t *testing.T) {
 	ft := newFakeTransport(email.Message{UID: 4, From: "a@x.com", Subject: "Help"})
 	ft.failSend = true
-	res := NewReplyTool(ft).Execute(context.Background(), map[string]any{
+	res := NewReplyTool(EmailTransports{"ws_test": ft}).Execute(context.Background(), map[string]any{
 		"uid": float64(4), "body": "I can help",
 	})
 	if !res.IsError || !strings.Contains(res.ForLLM, "reply failed") {
@@ -523,10 +523,10 @@ func TestReplyTool_Differentiation(t *testing.T) {
 		email.Message{UID: 1, From: "alice@x.com", Subject: "Alpha", MessageID: "<a@x.com>"},
 		email.Message{UID: 2, From: "bob@x.com", Subject: "Beta", MessageID: "<b@x.com>"},
 	)
-	res1 := NewReplyTool(ft).Execute(context.Background(), map[string]any{
+	res1 := NewReplyTool(EmailTransports{"ws_test": ft}).Execute(context.Background(), map[string]any{
 		"uid": float64(1), "body": "ok",
 	})
-	res2 := NewReplyTool(ft).Execute(context.Background(), map[string]any{
+	res2 := NewReplyTool(EmailTransports{"ws_test": ft}).Execute(context.Background(), map[string]any{
 		"uid": float64(2), "body": "ok",
 	})
 	if res1.ForLLM == res2.ForLLM {
@@ -578,8 +578,82 @@ func TestParseUID_Differentiation(t *testing.T) {
 // TestReadMessageTool_MissingUID verifies the guard for absent uid key.
 // Traces to: pkg/tools/email.go ReadMessageTool.Execute
 func TestReadMessageTool_MissingUID(t *testing.T) {
-	res := NewReadMessageTool(newFakeTransport()).Execute(context.Background(), map[string]any{})
+	res := NewReadMessageTool(EmailTransports{"ws_test": newFakeTransport()}).Execute(context.Background(), map[string]any{})
 	if !res.IsError || !strings.Contains(res.ForLLM, "uid is required") {
 		t.Fatalf("expected uid-required error, got %+v", res)
+	}
+}
+
+// ── Workspace resolution (per-(agent, workspace) mailboxes) ──────────────────
+//
+// The tools hold the agent's full workspace→transport map and pick the
+// transport for the CURRENT turn via tools.ToolWorkspaceID(ctx) — never from a
+// model-supplied parameter. These tests pin that contract.
+
+func TestEmailTransports_ResolveBoundWorkspace(t *testing.T) {
+	ftA := newFakeTransport(email.Message{UID: 1, From: "a@x.com", Subject: "in-A", Seen: false})
+	ftB := newFakeTransport(email.Message{UID: 9, From: "b@x.com", Subject: "in-B", Seen: false})
+	tool := NewReadInboxTool(EmailTransports{"ws_a": ftA, "ws_b": ftB})
+
+	// Turn bound to ws_b → reads ws_b's inbox, never ws_a's.
+	ctx := WithWorkspaceID(context.Background(), "ws_b")
+	res := tool.Execute(ctx, map[string]any{})
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.ForLLM)
+	}
+	if !strings.Contains(res.ForLLM, "in-B") || strings.Contains(res.ForLLM, "in-A") {
+		t.Fatalf("must read ONLY the bound workspace's inbox, got %s", res.ForLLM)
+	}
+}
+
+func TestEmailTransports_BoundWorkspaceWithoutMailboxErrors(t *testing.T) {
+	tool := NewReadInboxTool(EmailTransports{"ws_a": newFakeTransport()})
+	ctx := WithWorkspaceID(context.Background(), "ws_other")
+	res := tool.Execute(ctx, map[string]any{})
+	if !res.IsError {
+		t.Fatalf("expected error for a workspace without a mailbox, got %+v", res)
+	}
+	// The error names the current workspace and the ones that DO have a mailbox.
+	if !strings.Contains(res.ForLLM, "ws_other") || !strings.Contains(res.ForLLM, "ws_a") {
+		t.Fatalf("error must name the workspaces, got %s", res.ForLLM)
+	}
+}
+
+func TestEmailTransports_UnboundTurnSingleMailboxFallsBack(t *testing.T) {
+	ft := newFakeTransport(email.Message{UID: 1, From: "a@x.com", Subject: "solo", Seen: false})
+	tool := NewReadInboxTool(EmailTransports{"ws_only": ft})
+	// No workspace bound to the turn + exactly one mailbox → graceful fallback.
+	res := tool.Execute(context.Background(), map[string]any{})
+	if res.IsError {
+		t.Fatalf("single-mailbox fallback must work, got %s", res.ForLLM)
+	}
+}
+
+func TestEmailTransports_UnboundTurnMultipleMailboxesAmbiguous(t *testing.T) {
+	tool := NewReadInboxTool(EmailTransports{
+		"ws_a": newFakeTransport(),
+		"ws_b": newFakeTransport(),
+	})
+	// No workspace bound + several mailboxes → refuse to guess between roles.
+	res := tool.Execute(context.Background(), map[string]any{})
+	if !res.IsError {
+		t.Fatalf("ambiguous resolution must error, got %+v", res)
+	}
+	if !strings.Contains(res.ForLLM, "ws_a") || !strings.Contains(res.ForLLM, "ws_b") {
+		t.Fatalf("error must list the candidate workspaces, got %s", res.ForLLM)
+	}
+}
+
+func TestEmailTransports_SendGoesToBoundWorkspaceMailbox(t *testing.T) {
+	ftA := newFakeTransport()
+	ftB := newFakeTransport()
+	tool := NewSendEmailTool(EmailTransports{"ws_a": ftA, "ws_b": ftB})
+	ctx := WithWorkspaceID(context.Background(), "ws_a")
+	res := tool.Execute(ctx, map[string]any{"to": "x@y.com", "subject": "s", "body": "b"})
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.ForLLM)
+	}
+	if len(ftA.sent) != 1 || len(ftB.sent) != 0 {
+		t.Fatalf("send must use ONLY the bound workspace's transport (A=%d B=%d)", len(ftA.sent), len(ftB.sent))
 	}
 }

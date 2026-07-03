@@ -1,10 +1,12 @@
 title: Mailbox
 description: >
-  An agent's email mailbox account (M11). Email is a TOOL surface, not a
-  conversational channel: a mailbox is owned by exactly one agent and surfaces
-  in exactly one workspace (per-(agent, workspace), cap-1 in 0.1.0). The mailbox
-  password is stored in the encrypted credential store and is NEVER returned by
-  this endpoint — the `configured` flag reports whether a password is on file.
+  One (agent, workspace) email mailbox account (M11). Email is a TOOL surface,
+  not a conversational channel: a mailbox belongs to exactly one (agent,
+  workspace) pair — an agent can hold a different mailbox in each workspace it
+  belongs to (different roles, different inboxes), and several agents may each
+  have mailboxes in the same workspace. The mailbox password is stored in the
+  encrypted credential store and is NEVER returned by this endpoint — the
+  `configured` flag reports whether a password is on file.
 type: object
 required:
 - agent_id
@@ -23,7 +25,7 @@ properties:
       send_email, reply) are registered for the owning agent.
   workspace_id:
     type: string
-    description: "ID of the workspace the mailbox surfaces in (cap-1: unique per workspace)."
+    description: "ID of the workspace the mailbox surfaces in."
     example: "ws_my_workspace"
   imap_host:
     type: string

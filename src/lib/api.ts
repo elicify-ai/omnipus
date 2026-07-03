@@ -1796,26 +1796,35 @@ export function deleteChannelInstance(id: string): Promise<void> {
 
 // ── Email Mailbox Account ─────────────────────────────────────────────────────
 //
-// Email is a TOOL (not a channel) with a per-(agent, workspace) mailbox account,
-// cap-1 in 0.1.0. Configured via the dedicated per-agent endpoints
-// (GET/PUT/DELETE /api/v1/agents/{id}/mailbox); wire types Mailbox +
-// MailboxConfigureRequest are generated from contracts/openapi.yaml (#8).
+// Email is a TOOL (not a channel) with a per-(agent, workspace) mailbox
+// account: a mailbox belongs to exactly one (agent, workspace) pair — the
+// same agent can hold a different mailbox in each workspace it belongs to
+// (different roles, different inboxes). Configured via the pair endpoints
+// (GET/PUT/DELETE /api/v1/agents/{id}/mailboxes/{workspaceId}); wire types
+// Mailbox + MailboxConfigureRequest are generated from contracts/openapi.yaml
+// (#8). Both ids ride in the path — MailboxConfigureRequest carries no
+// workspace_id member.
 
 export const EMAIL_CHANNEL_ID = 'email'
 
 /**
- * Fetch one agent's email mailbox account (M11 — email is a TOOL surface, not
- * a conversational channel). Routes through GET /api/v1/agents/{id}/mailbox.
- * Returns null when the agent has no mailbox configured (404) — every other
- * error is rethrown. The password is never returned; `configured` reports
- * whether a stored credential resolves.
+ * Fetch the mailbox an agent holds in a given workspace (M11 — email is a
+ * TOOL surface, not a conversational channel). Routes through
+ * GET /api/v1/agents/{id}/mailboxes/{workspaceId}. Returns null when that
+ * pair has no mailbox configured (404) — every other error is rethrown. The
+ * password is never returned; `configured` reports whether a stored
+ * credential resolves.
  *
  * (The legacy GET /channels/email path is dead: the ADR-029 instance-key
  * grammar gate rejects "email" because it is deliberately not a channel type.)
  */
-export async function fetchAgentMailbox(agentId: string): Promise<Mailbox | null> {
+export async function fetchAgentMailbox(agentId: string, workspaceId: string): Promise<Mailbox | null> {
   try {
-    return await request<Mailbox>(`/agents/${encodeURIComponent(agentId)}/mailbox`, undefined, MailboxSchema)
+    return await request<Mailbox>(
+      `/agents/${encodeURIComponent(agentId)}/mailboxes/${encodeURIComponent(workspaceId)}`,
+      undefined,
+      MailboxSchema,
+    )
   } catch (err) {
     if (isApiErrorFn(err) && err.status === 404) return null
     throw err
@@ -1823,10 +1832,10 @@ export async function fetchAgentMailbox(agentId: string): Promise<Mailbox | null
 }
 
 /**
- * List every configured mailbox via GET /api/v1/mailboxes (cap-1 per workspace
- * in 0.1.0, so typically zero or one). Never 404s — an empty list means none
- * configured. Preferred over per-agent probing: each probe 404 lands in the
- * browser console as an error and trips the e2e zero-console-errors gate.
+ * List every configured mailbox via GET /api/v1/mailboxes (one per configured
+ * (agent, workspace) pair). Never 404s — an empty list means none configured.
+ * Preferred over per-pair probing: each probe 404 lands in the browser
+ * console as an error and trips the e2e zero-console-errors gate.
  */
 export async function fetchMailboxes(): Promise<Mailbox[]> {
   const res = await request<{ mailboxes: Mailbox[] }>(
@@ -1838,7 +1847,9 @@ export async function fetchMailboxes(): Promise<Mailbox[]> {
 }
 
 /**
- * The single configured mailbox, or null (cap-1 convenience over fetchMailboxes).
+ * The first configured mailbox, or null. Convenience for callers that only
+ * need "is any mailbox configured" — with multiple mailboxes, use
+ * fetchMailboxes and address them individually.
  */
 export async function findConfiguredMailbox(): Promise<Mailbox | null> {
   const mailboxes = await fetchMailboxes()
@@ -1846,22 +1857,32 @@ export async function findConfiguredMailbox(): Promise<Mailbox | null> {
 }
 
 /**
- * Configure an agent's email mailbox account via PUT /api/v1/agents/{id}/mailbox.
- * The backend credential-routes the password (never persisted in plaintext);
- * omit `password` to keep the stored credential.
+ * Configure the mailbox an agent holds in a given workspace via
+ * PUT /api/v1/agents/{id}/mailboxes/{workspaceId}. The backend
+ * credential-routes the password (never persisted in plaintext); omit
+ * `password` to keep the stored credential. `req` carries no workspace_id —
+ * both ids ride in the path.
  */
-export function saveAgentMailbox(agentId: string, req: MailboxConfigureRequest): Promise<Mailbox> {
+export function saveAgentMailbox(
+  agentId: string,
+  workspaceId: string,
+  req: MailboxConfigureRequest,
+): Promise<Mailbox> {
   return request<Mailbox>(
-    `/agents/${encodeURIComponent(agentId)}/mailbox`,
+    `/agents/${encodeURIComponent(agentId)}/mailboxes/${encodeURIComponent(workspaceId)}`,
     { method: 'PUT', body: JSON.stringify(req) },
     MailboxSchema,
   )
 }
 
-/** Delete an agent's email mailbox account (DELETE /api/v1/agents/{id}/mailbox). */
-export function deleteAgentMailbox(agentId: string): Promise<OperationResult> {
+/**
+ * Delete the mailbox an agent holds in a given workspace
+ * (DELETE /api/v1/agents/{id}/mailboxes/{workspaceId}). Mailboxes the agent
+ * holds in other workspaces are untouched.
+ */
+export function deleteAgentMailbox(agentId: string, workspaceId: string): Promise<OperationResult> {
   return request<OperationResult>(
-    `/agents/${encodeURIComponent(agentId)}/mailbox`,
+    `/agents/${encodeURIComponent(agentId)}/mailboxes/${encodeURIComponent(workspaceId)}`,
     { method: 'DELETE' },
     OperationResultSchema,
   )

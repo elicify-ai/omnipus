@@ -1,9 +1,20 @@
 /**
- * EmailMailboxPanel — slide-over for configuring the email mailbox account.
+ * EmailMailboxPanel — slide-over for configuring an agent's email mailbox
+ * account.
  *
- * Email is a TOOL (not a channel). The mailbox is per-(agent, workspace), cap-1
- * in 0.1.0. The panel lets the user pick the owning agent + workspace, enter
- * IMAP/SMTP credentials, and see the "heartbeat + Board tasks" explainer.
+ * Email is a TOOL (not a channel). A mailbox belongs to exactly one
+ * (agent, workspace) PAIR — the same agent can hold a different mailbox in
+ * each workspace it belongs to (different roles, different inboxes). The
+ * parent (ConnectorsScreen) owns the mailbox roster and passes the edit
+ * target as the `mailbox` prop: a `Mailbox` object to edit, or `null`/undefined
+ * to create a new one. The panel lets the user pick the owning agent +
+ * workspace, enter IMAP/SMTP credentials, remove the mailbox, and see the
+ * "heartbeat + Board tasks" explainer.
+ *
+ * In edit mode, both the agent select and the workspace select remain
+ * changeable — changing either is a MOVE: the target identity is the pair,
+ * so on save we delete the old (agent, workspace) mailbox first, then
+ * create/update the new one.
  *
  * Secret field (password): write-only. If the backend returns no password value
  * (which it never does — it is credential-store-routed), the field shows an
@@ -11,20 +22,22 @@
  * hint appears when the GET response includes password_ref, indicating that a
  * credential is already saved. The field never pre-fills with a real secret.
  *
- * M11 (remediation-decisions.md §M11, 0.1.0 scope):
- *   - One mailbox, belonging to the Assistant agent in My Workspace
+ * M11 (remediation-decisions.md §M11, superseded by the multi-mailbox
+ * follow-up — every (agent, workspace) pair may own a mailbox, not just one
+ * system-wide):
  *   - IMAP/SMTP host+port, username, password (secret)
- *   - No inbox UI (v0.2); unhandled mail surfaces as Board tasks
+ *   - No inbox UI (v0.2); unhandled mail surfaces as Board tasks in that workspace
  */
 
 import { useState, useEffect, useRef } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Eye,
   EyeSlash,
   FloppyDisk,
   Info,
   Envelope,
+  Trash,
 } from '@phosphor-icons/react'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet'
 import { Button } from '@/components/ui/button'
@@ -32,7 +45,6 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { SmartSelect } from '@/components/ui/smart-select'
 import {
-  findConfiguredMailbox,
   saveAgentMailbox,
   deleteAgentMailbox,
   fetchAgents,
@@ -40,13 +52,15 @@ import {
   isWorker,
   isApiError,
 } from '@/lib/api'
-import type { MailboxConfigureRequest } from '@/lib/api'
+import type { Mailbox, MailboxConfigureRequest } from '@/lib/api'
 import { AdvancedDisclosure } from '@/components/shared/AdvancedDisclosure'
 import { useUiStore } from '@/store/ui'
 
 interface EmailMailboxPanelProps {
   open: boolean
   onOpenChange: (open: boolean) => void
+  /** Edit target. `null`/undefined opens the panel in create mode. */
+  mailbox?: Mailbox | null
 }
 
 // not-wire-format: form state for the email mailbox account panel
@@ -163,7 +177,7 @@ function validate(form: MailboxFormState): FieldErrors {
   return errors
 }
 
-export function EmailMailboxPanel({ open, onOpenChange }: EmailMailboxPanelProps) {
+export function EmailMailboxPanel({ open, onOpenChange, mailbox }: EmailMailboxPanelProps) {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
   const isDirtyRef = useRef(false)
@@ -176,26 +190,24 @@ export function EmailMailboxPanel({ open, onOpenChange }: EmailMailboxPanelProps
     enabled: open,
   })
 
-  // The mailbox is per-agent (cap-1 in 0.1.0). GET /mailboxes lists all of
-  // them without 404s — an empty list simply means none configured. (The
-  // legacy GET /channels/email path is dead — "email" is not a channel type,
-  // so the ADR-029 grammar gate rejects it.)
-  const { data: mailbox, isLoading: configLoading } = useQuery({
-    queryKey: ['agent-mailboxes'],
-    queryFn: findConfiguredMailbox,
-    enabled: open,
-  })
-
   const { data: workspaces = [], isError: workspacesError } = useQuery({
     queryKey: ['workspaces'],
     queryFn: () => fetchWorkspaces(),
     enabled: open,
   })
 
-  // Populate form from the configured mailbox; skip if user has unsaved edits.
+  // Populate the form from the edit target (the parent owns the mailbox
+  // roster and fetches it — this panel no longer queries ['agent-mailboxes']
+  // itself). `mailbox` is null/undefined in create mode. Skip repopulating
+  // while the user has unsaved edits (e.g. a background refetch of the
+  // parent's list mid-edit) — the panel is always fully closed and reopened
+  // between editing two different mailboxes, which resets isDirtyRef below.
   useEffect(() => {
-    if (!mailbox) return
     if (isDirtyRef.current) return
+    if (!mailbox) {
+      setForm(EMPTY_FORM)
+      return
+    }
     setForm({
       username: mailbox.username ?? '',
       // password is NEVER returned by the backend — always start blank
@@ -240,10 +252,10 @@ export function EmailMailboxPanel({ open, onOpenChange }: EmailMailboxPanelProps
 
       // Build the request — only include password when the user entered one.
       // An omitted password leaves the stored credential untouched (write-only;
-      // never clear on empty submit).
+      // never clear on empty submit). Both ids ride in the PUT path — the
+      // request body carries no workspace_id member.
       const req: MailboxConfigureRequest = {
         enabled: true,
-        workspace_id: form.workspace_id,
         username: form.username.trim(),
         imap_host: form.imap_host.trim(),
         smtp_host: form.smtp_host.trim(),
@@ -252,12 +264,14 @@ export function EmailMailboxPanel({ open, onOpenChange }: EmailMailboxPanelProps
       if (form.smtp_port !== '') req.smtp_port = Number(form.smtp_port)
       if (form.password !== '') req.password = form.password
 
-      // Cap-1: when the owning agent changes, delete the old agent's mailbox
-      // first — the backend rejects a second enabled mailbox in the workspace.
-      if (mailbox && mailbox.agent_id !== form.agent_id) {
-        await deleteAgentMailbox(mailbox.agent_id)
+      // The mailbox endpoint is keyed by the (agent, workspace) PAIR
+      // (PUT /agents/{id}/mailboxes/{workspaceId}) — there is no rename.
+      // Changing either the owning agent or the workspace is a MOVE: delete
+      // the mailbox under the old pair first, then create it under the new one.
+      if (mailbox && (mailbox.agent_id !== form.agent_id || (mailbox.workspace_id ?? '') !== form.workspace_id)) {
+        await deleteAgentMailbox(mailbox.agent_id, mailbox.workspace_id ?? '')
       }
-      return saveAgentMailbox(form.agent_id, req)
+      return saveAgentMailbox(form.agent_id, form.workspace_id, req)
     },
     onSuccess: () => {
       isDirtyRef.current = false
@@ -270,6 +284,26 @@ export function EmailMailboxPanel({ open, onOpenChange }: EmailMailboxPanelProps
       if (err instanceof Error && err.message === 'Please fill in all required fields') return
       addToast({
         message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Save failed',
+        variant: 'error',
+      })
+    },
+  })
+
+  const { mutate: doDelete, isPending: deleting } = useMutation({
+    mutationFn: () => {
+      if (!mailbox) return Promise.reject(new Error('No mailbox to remove'))
+      if (!mailbox.workspace_id) return Promise.reject(new Error('Mailbox has no workspace to remove from'))
+      return deleteAgentMailbox(mailbox.agent_id, mailbox.workspace_id)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['agent-mailboxes'] })
+      queryClient.invalidateQueries({ queryKey: ['channels'] })
+      addToast({ message: 'Mailbox removed', variant: 'success' })
+      onOpenChange(false)
+    },
+    onError: (err: unknown) => {
+      addToast({
+        message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to remove mailbox',
         variant: 'error',
       })
     },
@@ -292,8 +326,6 @@ export function EmailMailboxPanel({ open, onOpenChange }: EmailMailboxPanelProps
     ...workspaces.map((w) => ({ value: w.id, label: w.name })),
   ]
 
-  const isLoading = configLoading
-
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
@@ -315,208 +347,213 @@ export function EmailMailboxPanel({ open, onOpenChange }: EmailMailboxPanelProps
           </SheetDescription>
         </SheetHeader>
 
-        {isLoading ? (
-          <div className="space-y-4 pt-6">
-            {[1, 2, 3, 4].map((i) => (
-              <div key={i} className="h-10 rounded-md bg-[var(--color-surface-2)] animate-pulse" />
-            ))}
+        <div className="pt-5 space-y-5">
+          {/* Explainer callout */}
+          <div
+            className="flex gap-2 p-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)]"
+            role="note"
+            aria-label="How the email mailbox works"
+          >
+            <Info size={13} className="text-[var(--color-accent)] shrink-0 mt-0.5" />
+            <p className="text-[11px] text-[var(--color-muted)] leading-relaxed">
+              The agent works this inbox on heartbeat. Mail it cannot fully handle
+              becomes a Board task. A dedicated Email tab (inbox view) arrives in v0.2.
+            </p>
           </div>
-        ) : (
-          <div className="pt-5 space-y-5">
-            {/* Explainer callout */}
-            <div
-              className="flex gap-2 p-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)]"
-              role="note"
-              aria-label="How the email mailbox works"
+
+          {/* Ownership */}
+          <div className="space-y-4 pb-3 border-b border-[var(--color-border)]">
+            <h3 className="text-xs font-semibold text-[var(--color-secondary)] uppercase tracking-wider">
+              Ownership
+            </h3>
+
+            <FieldRow
+              id="mailbox-agent"
+              label="Owning agent"
+              required
+              error={fieldErrors.agent_id}
+              helpId="mailbox-agent-help"
+              helpText="The agent whose email identity this mailbox represents. Every (agent, workspace) pair can have its own mailbox — the same agent may hold a different mailbox in each workspace."
             >
-              <Info size={13} className="text-[var(--color-accent)] shrink-0 mt-0.5" />
-              <p className="text-[11px] text-[var(--color-muted)] leading-relaxed">
-                The agent works this inbox on heartbeat. Mail it cannot fully handle
-                becomes a Board task. A dedicated Email tab (inbox view) arrives in v0.2.
-              </p>
-            </div>
-
-            {/* Ownership */}
-            <div className="space-y-4 pb-3 border-b border-[var(--color-border)]">
-              <h3 className="text-xs font-semibold text-[var(--color-secondary)] uppercase tracking-wider">
-                Ownership
-              </h3>
-
-              <FieldRow
-                id="mailbox-agent"
-                label="Owning agent"
-                required
-                error={fieldErrors.agent_id}
-                helpId="mailbox-agent-help"
-                helpText="The agent whose email identity this mailbox represents (one mailbox per agent for now)."
-              >
-                {agentsError ? (
-                  <p className="text-xs text-[var(--color-error)]">Could not load agents.</p>
-                ) : (
-                  <SmartSelect
-                    value={form.agent_id || '__none__'}
-                    onValueChange={(v) => setField('agent_id', v === '__none__' ? '' : v)}
-                    placeholder="(select an agent)"
-                    items={agentItems}
-                  />
-                )}
-              </FieldRow>
-
-              <FieldRow
-                id="mailbox-workspace"
-                label="Workspace"
-                required
-                error={fieldErrors.workspace_id}
-                helpId="mailbox-workspace-help"
-                helpText="The workspace where this mailbox surfaces (Board tasks land here)."
-              >
-                {workspacesError ? (
-                  <p className="text-xs text-[var(--color-error)]">Could not load workspaces.</p>
-                ) : (
-                  <SmartSelect
-                    value={form.workspace_id || '__none__'}
-                    onValueChange={(v) => setField('workspace_id', v === '__none__' ? '' : v)}
-                    placeholder="(select a workspace)"
-                    items={workspaceItems}
-                  />
-                )}
-              </FieldRow>
-            </div>
-
-            {/* Credentials */}
-            <div className="space-y-4">
-              <h3 className="text-xs font-semibold text-[var(--color-secondary)] uppercase tracking-wider">
-                Credentials
-              </h3>
-
-              <FieldRow
-                id="mailbox-username"
-                label="Email Address"
-                required
-                error={fieldErrors.username}
-                helpId="mailbox-username-help"
-                helpText="The email address the agent sends and receives from."
-              >
-                <Input
-                  id="mailbox-username"
-                  data-testid="mailbox-username"
-                  type="email"
-                  value={form.username}
-                  onChange={(e) => setField('username', e.target.value)}
-                  placeholder="bot@example.com"
-                  className="text-xs"
-                  autoComplete="email"
-                  aria-describedby="mailbox-username-help"
+              {agentsError ? (
+                <p className="text-xs text-[var(--color-error)]">Could not load agents.</p>
+              ) : (
+                <SmartSelect
+                  value={form.agent_id || '__none__'}
+                  onValueChange={(v) => setField('agent_id', v === '__none__' ? '' : v)}
+                  placeholder="(select an agent)"
+                  items={agentItems}
                 />
-              </FieldRow>
+              )}
+            </FieldRow>
 
-              <FieldRow
-                id="mailbox-password"
-                label="Password"
-                error={fieldErrors.password}
-                helpId="mailbox-password-help"
-                helpText="IMAP/SMTP app password — stored encrypted, never shown. Leave blank to keep the current credential."
-              >
-                <PasswordField
-                  value={form.password}
-                  onChange={(v) => setField('password', v)}
-                  hasStoredCredential={hasStoredCredential}
+            <FieldRow
+              id="mailbox-workspace"
+              label="Workspace"
+              required
+              error={fieldErrors.workspace_id}
+              helpId="mailbox-workspace-help"
+              helpText="The workspace this mailbox belongs to. Unhandled mail becomes Board tasks in that workspace."
+            >
+              {workspacesError ? (
+                <p className="text-xs text-[var(--color-error)]">Could not load workspaces.</p>
+              ) : (
+                <SmartSelect
+                  value={form.workspace_id || '__none__'}
+                  onValueChange={(v) => setField('workspace_id', v === '__none__' ? '' : v)}
+                  placeholder="(select a workspace)"
+                  items={workspaceItems}
                 />
-              </FieldRow>
-
-              <FieldRow
-                id="mailbox-imap-host"
-                label="IMAP Host"
-                required
-                error={fieldErrors.imap_host}
-                helpId="mailbox-imap-host-help"
-                helpText="IMAP server hostname — TLS required (port 993)."
-              >
-                <Input
-                  id="mailbox-imap-host"
-                  data-testid="mailbox-imap-host"
-                  type="text"
-                  value={form.imap_host}
-                  onChange={(e) => setField('imap_host', e.target.value)}
-                  placeholder="imap.gmail.com"
-                  className="text-xs"
-                  aria-describedby="mailbox-imap-host-help"
-                />
-              </FieldRow>
-
-              <FieldRow
-                id="mailbox-smtp-host"
-                label="SMTP Host"
-                required
-                error={fieldErrors.smtp_host}
-                helpId="mailbox-smtp-host-help"
-                helpText="SMTP server hostname for outbound mail (STARTTLS port 587 or SMTPS port 465)."
-              >
-                <Input
-                  id="mailbox-smtp-host"
-                  data-testid="mailbox-smtp-host"
-                  type="text"
-                  value={form.smtp_host}
-                  onChange={(e) => setField('smtp_host', e.target.value)}
-                  placeholder="smtp.gmail.com"
-                  className="text-xs"
-                  aria-describedby="mailbox-smtp-host-help"
-                />
-              </FieldRow>
-            </div>
-
-            {/* Advanced: ports */}
-            <AdvancedDisclosure>
-              <div className="space-y-4">
-                <FieldRow
-                  id="mailbox-imap-port"
-                  label="IMAP Port"
-                  helpId="mailbox-imap-port-help"
-                  helpText="Default 993 (IMAPS). Override only if your server uses a non-standard port."
-                >
-                  <Input
-                    id="mailbox-imap-port"
-                    type="number"
-                    value={form.imap_port}
-                    onChange={(e) => setField('imap_port', e.target.value)}
-                    placeholder="993"
-                    className="text-xs"
-                    aria-describedby="mailbox-imap-port-help"
-                  />
-                </FieldRow>
-
-                <FieldRow
-                  id="mailbox-smtp-port"
-                  label="SMTP Port"
-                  helpId="mailbox-smtp-port-help"
-                  helpText="Default 587 (STARTTLS) or 465 (SMTPS). Override only if your server uses a non-standard port."
-                >
-                  <Input
-                    id="mailbox-smtp-port"
-                    type="number"
-                    value={form.smtp_port}
-                    onChange={(e) => setField('smtp_port', e.target.value)}
-                    placeholder="587"
-                    className="text-xs"
-                    aria-describedby="mailbox-smtp-port-help"
-                  />
-                </FieldRow>
-              </div>
-            </AdvancedDisclosure>
-
-            {/* Actions */}
-            <div className="flex flex-col gap-2 pt-2 border-t border-[var(--color-border)]">
-              <Button
-                className="w-full gap-1.5"
-                onClick={() => doSave()}
-                disabled={saving}
-              >
-                <FloppyDisk size={13} />
-                {saving ? 'Saving…' : 'Save Mailbox'}
-              </Button>
-            </div>
+              )}
+            </FieldRow>
           </div>
-        )}
+
+          {/* Credentials */}
+          <div className="space-y-4">
+            <h3 className="text-xs font-semibold text-[var(--color-secondary)] uppercase tracking-wider">
+              Credentials
+            </h3>
+
+            <FieldRow
+              id="mailbox-username"
+              label="Email Address"
+              required
+              error={fieldErrors.username}
+              helpId="mailbox-username-help"
+              helpText="The email address the agent sends and receives from."
+            >
+              <Input
+                id="mailbox-username"
+                data-testid="mailbox-username"
+                type="email"
+                value={form.username}
+                onChange={(e) => setField('username', e.target.value)}
+                placeholder="bot@example.com"
+                className="text-xs"
+                autoComplete="email"
+                aria-describedby="mailbox-username-help"
+              />
+            </FieldRow>
+
+            <FieldRow
+              id="mailbox-password"
+              label="Password"
+              error={fieldErrors.password}
+              helpId="mailbox-password-help"
+              helpText="IMAP/SMTP app password — stored encrypted, never shown. Leave blank to keep the current credential."
+            >
+              <PasswordField
+                value={form.password}
+                onChange={(v) => setField('password', v)}
+                hasStoredCredential={hasStoredCredential}
+              />
+            </FieldRow>
+
+            <FieldRow
+              id="mailbox-imap-host"
+              label="IMAP Host"
+              required
+              error={fieldErrors.imap_host}
+              helpId="mailbox-imap-host-help"
+              helpText="IMAP server hostname — TLS required (port 993)."
+            >
+              <Input
+                id="mailbox-imap-host"
+                data-testid="mailbox-imap-host"
+                type="text"
+                value={form.imap_host}
+                onChange={(e) => setField('imap_host', e.target.value)}
+                placeholder="imap.gmail.com"
+                className="text-xs"
+                aria-describedby="mailbox-imap-host-help"
+              />
+            </FieldRow>
+
+            <FieldRow
+              id="mailbox-smtp-host"
+              label="SMTP Host"
+              required
+              error={fieldErrors.smtp_host}
+              helpId="mailbox-smtp-host-help"
+              helpText="SMTP server hostname for outbound mail (STARTTLS port 587 or SMTPS port 465)."
+            >
+              <Input
+                id="mailbox-smtp-host"
+                data-testid="mailbox-smtp-host"
+                type="text"
+                value={form.smtp_host}
+                onChange={(e) => setField('smtp_host', e.target.value)}
+                placeholder="smtp.gmail.com"
+                className="text-xs"
+                aria-describedby="mailbox-smtp-host-help"
+              />
+            </FieldRow>
+          </div>
+
+          {/* Advanced: ports */}
+          <AdvancedDisclosure>
+            <div className="space-y-4">
+              <FieldRow
+                id="mailbox-imap-port"
+                label="IMAP Port"
+                helpId="mailbox-imap-port-help"
+                helpText="Default 993 (IMAPS). Override only if your server uses a non-standard port."
+              >
+                <Input
+                  id="mailbox-imap-port"
+                  type="number"
+                  value={form.imap_port}
+                  onChange={(e) => setField('imap_port', e.target.value)}
+                  placeholder="993"
+                  className="text-xs"
+                  aria-describedby="mailbox-imap-port-help"
+                />
+              </FieldRow>
+
+              <FieldRow
+                id="mailbox-smtp-port"
+                label="SMTP Port"
+                helpId="mailbox-smtp-port-help"
+                helpText="Default 587 (STARTTLS) or 465 (SMTPS). Override only if your server uses a non-standard port."
+              >
+                <Input
+                  id="mailbox-smtp-port"
+                  type="number"
+                  value={form.smtp_port}
+                  onChange={(e) => setField('smtp_port', e.target.value)}
+                  placeholder="587"
+                  className="text-xs"
+                  aria-describedby="mailbox-smtp-port-help"
+                />
+              </FieldRow>
+            </div>
+          </AdvancedDisclosure>
+
+          {/* Actions */}
+          <div className="flex flex-col gap-2 pt-2 border-t border-[var(--color-border)]">
+            <Button
+              className="w-full gap-1.5"
+              onClick={() => doSave()}
+              disabled={saving || deleting}
+            >
+              <FloppyDisk size={13} />
+              {saving ? 'Saving…' : 'Save Mailbox'}
+            </Button>
+            {mailbox && (
+              <Button
+                type="button"
+                variant="destructive"
+                className="w-full gap-1.5"
+                onClick={() => doDelete()}
+                disabled={deleting || saving || !mailbox.workspace_id}
+                data-testid="mailbox-delete-btn"
+              >
+                <Trash size={13} />
+                {deleting ? 'Removing…' : 'Remove Mailbox'}
+              </Button>
+            )}
+          </div>
+        </div>
       </SheetContent>
     </Sheet>
   )

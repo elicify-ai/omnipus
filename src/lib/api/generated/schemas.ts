@@ -1725,7 +1725,6 @@ export const Mailbox: z.ZodType<Mailbox> = z.object({
 });
 export const MailboxConfigureRequest = z.object({
   enabled: z.boolean(),
-  workspace_id: z.string(),
   imap_host: z.string(),
   imap_port: z.number().int().optional(),
   smtp_host: z.string(),
@@ -2691,14 +2690,19 @@ Includes session_start events from all agent stores and task lifecycle events.
   },
   {
     method: "get",
-    path: "/agents/:id/mailbox",
+    path: "/agents/:id/mailboxes/:workspaceId",
     alias: "getAgentMailbox",
-    description: `Returns the email mailbox account configured for the specified agent. Email is a TOOL surface (read_inbox, search_email, read_message, send_email, reply), not a conversational channel. The mailbox password is never returned; the &#x60;configured&#x60; flag reports whether a password is on file in the credential store.
+    description: `Returns the mailbox the agent holds in the given workspace. An agent can hold a different mailbox in each workspace it belongs to (different roles, different inboxes). Email is a TOOL surface (read_inbox, search_email, read_message, send_email, reply), not a conversational channel. The mailbox password is never returned; the &#x60;configured&#x60; flag reports whether a password is on file in the credential store.
 `,
     requestFormat: "json",
     parameters: [
       {
         name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "workspaceId",
         type: "Path",
         schema: z.string(),
       },
@@ -2712,7 +2716,7 @@ Includes session_start events from all agent stores and task lifecycle events.
       },
       {
         status: 404,
-        description: `Agent not found, or no mailbox configured for the agent.`,
+        description: `Agent not found, or no mailbox configured for the agent in this workspace.`,
         schema: ErrorResponse,
       },
       {
@@ -2724,9 +2728,9 @@ Includes session_start events from all agent stores and task lifecycle events.
   },
   {
     method: "put",
-    path: "/agents/:id/mailbox",
+    path: "/agents/:id/mailboxes/:workspaceId",
     alias: "setAgentMailbox",
-    description: `Configures the email mailbox account for the specified agent. The password, when present, is routed into the encrypted credential store and persisted only as a reference — it is never written to config.json. Per-(agent, workspace) cap-1 applies: an agent owns one mailbox, and at most one mailbox may be bound to a given workspace (returns 422 on violation).
+    description: `Configures the mailbox the agent holds in the given workspace. Every (agent, workspace) pair may have its own mailbox — an agent plays different roles in different workspaces and can have a distinct inbox in each. The password, when present, is routed into the encrypted credential store and persisted only as a reference — it is never written to config.json. Unhandled inbound mail becomes Board tasks in THIS workspace, assigned to the owning agent. The email tools resolve the active workspace from the turn context at execution time — never from a model-supplied parameter.
 `,
     requestFormat: "json",
     parameters: [
@@ -2740,12 +2744,17 @@ Includes session_start events from all agent stores and task lifecycle events.
         type: "Path",
         schema: z.string(),
       },
+      {
+        name: "workspaceId",
+        type: "Path",
+        schema: z.string(),
+      },
     ],
     response: Mailbox,
     errors: [
       {
         status: 400,
-        description: `Bad request — missing or invalid field.`,
+        description: `Missing or invalid required field.`,
         schema: ErrorResponse,
       },
       {
@@ -2759,11 +2768,6 @@ Includes session_start events from all agent stores and task lifecycle events.
         schema: ErrorResponse,
       },
       {
-        status: 422,
-        description: `Cap-1 violation (a mailbox already exists for the workspace).`,
-        schema: ErrorResponse,
-      },
-      {
         status: 500,
         description: `Internal server error.`,
         schema: ErrorResponse,
@@ -2772,14 +2776,19 @@ Includes session_start events from all agent stores and task lifecycle events.
   },
   {
     method: "delete",
-    path: "/agents/:id/mailbox",
+    path: "/agents/:id/mailboxes/:workspaceId",
     alias: "deleteAgentMailbox",
-    description: `Removes the agent&#x27;s mailbox account from config and deletes the stored mailbox password from the credential store. The email tools are de-registered from the agent on the next reload.
+    description: `Removes the mailbox the agent holds in the given workspace from config and deletes its stored password from the credential store. The agent&#x27;s email tools for this workspace are de-registered on the next reload; mailboxes the agent holds in OTHER workspaces are untouched.
 `,
     requestFormat: "json",
     parameters: [
       {
         name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "workspaceId",
         type: "Path",
         schema: z.string(),
       },
@@ -2793,7 +2802,7 @@ Includes session_start events from all agent stores and task lifecycle events.
       },
       {
         status: 404,
-        description: `Agent not found, or no mailbox configured.`,
+        description: `Agent not found, or no mailbox configured for the agent in this workspace.`,
         schema: ErrorResponse,
       },
       {
@@ -3948,7 +3957,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "get",
     path: "/mailboxes",
     alias: "listMailboxes",
-    description: `Returns every configured mailbox account (cap-1 per workspace in 0.1.0, so typically zero or one). The mailbox password is never returned; each entry&#x27;s &#x60;configured&#x60; flag reports whether a password is on file in the credential store. An empty list means no mailbox is configured — this endpoint never 404s, so the SPA can show mailbox status without per-agent probe requests.
+    description: `Returns every configured mailbox account (one per (agent, workspace) pair). The mailbox password is never returned; each entry&#x27;s &#x60;configured&#x60; flag reports whether a password is on file in the credential store. An empty list means no mailbox is configured — this endpoint never 404s, so the SPA can show mailbox status without per-agent probe requests.
 `,
     requestFormat: "json",
     response: MailboxListResponse,
