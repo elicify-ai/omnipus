@@ -120,9 +120,10 @@ func (r *configSelfWriteRegistry) consume(h [32]byte) bool {
 
 // selfHealWriteHook builds a config.SelfHealWriteHook that registers the
 // sha256 hash of any bytes config.loadConfigInternal's on-disk self-heal
-// (selfHealUserRolesOnDisk) writes with reg, so setupConfigWatcherPolling's
-// next tick recognizes that write as app-initiated rather than a genuine
-// external edit (and does not trigger a spurious full-service reload).
+// (migrateCLITokenOutOfUsers, cli_token_migration.go) writes with reg, so
+// setupConfigWatcherPolling's next tick recognizes that write as
+// app-initiated rather than a genuine external edit (and does not trigger a
+// spurious full-service reload).
 //
 // Used at the two call sites that invoke config.LoadConfigWithStore directly
 // — the watcher's own external-edit path and the manual /reload trigger —

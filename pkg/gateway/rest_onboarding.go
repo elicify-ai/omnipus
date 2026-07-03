@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -22,6 +23,10 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/onboarding"
 	"github.com/dapicom-ai/omnipus/pkg/providers"
 )
+
+var usernameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{1,62}$`)
+
+const usernameInvalidMsg = `username must start with an alphanumeric and contain only letters, digits, dots, dashes, and underscores (length 2-63)`
 
 // HandleCompleteOnboarding handles POST /api/v1/onboarding/complete.
 //
@@ -268,7 +273,6 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 			"username":      body.Admin.Username,
 			"password_hash": string(passwordHash),
 			"tokens":        tokenEntry,
-			"role":          "admin",
 		}
 
 		// Ensure gateway object exists in m.
@@ -351,7 +355,6 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 	slog.Info("onboarding: completed", "username", body.Admin.Username)
 	resp := gen.OnboardingCompleteResponse{
 		Token:    token,
-		Role:     gen.OnboardingCompleteResponseRole(config.UserRoleAdmin),
 		Username: body.Admin.Username,
 	}
 	if credRefName == "" {

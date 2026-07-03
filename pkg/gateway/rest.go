@@ -104,12 +104,6 @@ type restAPI struct {
 	// changes — keys that differ between persisted and applied represent changes
 	// that will only take effect after a restart.
 	appliedConfig *config.Config
-	// Lazy-initialized admin-only handler wrappers. Built once on first use so
-	// each incoming PUT request doesn't allocate a fresh middleware chain.
-	adminUpdateConfigOnce    sync.Once
-	adminUpdateConfigHandler http.Handler
-	adminPutPoliciesOnce     sync.Once
-	adminPutPoliciesHandler  http.Handler
 
 	// devServers is the gateway-wide Tier 3 dev-server registry. Shared with
 	// the web_serve tool (dev mode) and workspace.shell_bg tool via the agent
@@ -328,9 +322,6 @@ func (a *restAPI) withAuthAndBodyLimit(handler http.HandlerFunc, bodyLimit int64
 		if result.User != nil {
 			ctx = context.WithValue(ctx, UserContextKey{}, result.User)
 		}
-		if result.Role != "" {
-			ctx = context.WithValue(ctx, RoleContextKey{}, result.Role)
-		}
 		handler(w, r.WithContext(ctx))
 	}
 }
@@ -341,35 +332,34 @@ func (a *restAPI) withAuth(handler http.HandlerFunc) http.HandlerFunc {
 	return a.withAuthAndBodyLimit(handler, 1<<20) // 1 MB
 }
 
-// adminWrap composes the canonical admin middleware chain around h:
+// adminWrap composes the canonical high-blast-radius middleware chain around h:
 //
-//	withAuth → RequireAdmin → RequireNotBypass → h
+//	withAuth → RequireNotBypass → h
 //
-// Exposed as a method so Sprint K admin-endpoint registrations outside
+// Named "admin" for historical continuity with the pre-single-user RBAC model;
+// under the single-account model it gates high-blast-radius endpoints (config,
+// security settings, credentials, etc.) behind authentication plus the
+// dev-mode-bypass guard, rather than an admin-vs-user role check. Exposed as a
+// method so Sprint K admin-endpoint registrations outside
 // registerAdditionalEndpoints can reuse the same chain verbatim, and so
-// future refactors (e.g. adding a new admin middleware) update one site.
+// future refactors (e.g. adding a new gating middleware) update one site.
 func (a *restAPI) adminWrap(h http.HandlerFunc) http.HandlerFunc {
 	return a.withAuth(
-		middleware.RequireAdmin(
-			middleware.RequireNotBypass(h),
-		).ServeHTTP,
+		middleware.RequireNotBypass(h),
 	)
 }
 
-// requireAdminAuthz composes ONLY the admin authorization layers
-// (RequireAdmin → RequireNotBypass → h), WITHOUT re-running withAuth. Use this
-// to gate a specific verb inside a handler that is ALREADY registered under
-// withAuth (e.g. the shared /api/v1/channels dispatcher): withAuth has already
-// verified the Bearer token and written the role + config snapshot into the
-// request context, so wrapping the whole adminWrap chain again would
-// double-authenticate (and, on a context-only test call, spuriously 401 on the
-// re-auth). RequireAdmin reads the role from context; RequireNotBypass reads the
-// config snapshot from context — both are present post-withAuth. It mirrors the
-// authorization half of adminWrap so the two stay in lockstep.
+// requireAdminAuthz composes ONLY the authorization layer (RequireNotBypass →
+// h), WITHOUT re-running withAuth. Use this to gate a specific verb inside a
+// handler that is ALREADY registered under withAuth (e.g. the shared
+// /api/v1/channels dispatcher): withAuth has already verified the Bearer token
+// and written the config snapshot into the request context, so wrapping the
+// whole adminWrap chain again would double-authenticate (and, on a
+// context-only test call, spuriously 401 on the re-auth). RequireNotBypass
+// reads the config snapshot from context, which is present post-withAuth. It
+// mirrors the authorization half of adminWrap so the two stay in lockstep.
 func (a *restAPI) requireAdminAuthz(h http.HandlerFunc) http.HandlerFunc {
-	return middleware.RequireAdmin(
-		middleware.RequireNotBypass(h),
-	).ServeHTTP
+	return middleware.RequireNotBypass(h)
 }
 
 // writeJSON marshals body and writes it with the given status code. The
@@ -1177,12 +1167,6 @@ func (a *restAPI) HandleAgents(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPut:
 		if agentID != "" {
 			a.updateAgent(w, r, agentID)
-		} else {
-			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
-		}
-	case http.MethodPatch:
-		if agentID != "" {
-			a.patchAgentOwnership(w, r, agentID)
 		} else {
 			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		}
@@ -3009,24 +2993,16 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 // --- Config ---
 
 // HandleConfig handles GET /api/v1/config and PUT /api/v1/config.
-// PUT is restricted to admin-role users (Issue #98): mutating gateway config
-// can change ports, dev_mode_bypass, and provider settings — a critical
-// privilege that must not be available to user-role accounts.
+// Both verbs require only authentication (registered under withAuth in
+// gateway.go): mutating gateway config can change ports, dev_mode_bypass, and
+// provider settings, but under the single-account model the authenticated
+// caller IS the sole account, so no further role gate applies.
 func (a *restAPI) HandleConfig(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		a.getConfig(w)
 	case http.MethodPut:
-		// Enforce admin-only for config mutations. withAuth has already run and
-		// written the role into the context; RequireAdmin reads it from there.
-		// The wrapper is built once (sync.Once) so each PUT doesn't allocate a
-		// new middleware chain.
-		a.adminUpdateConfigOnce.Do(func() {
-			a.adminUpdateConfigHandler = middleware.RequireAdmin(
-				http.HandlerFunc(a.updateConfig),
-			)
-		})
-		a.adminUpdateConfigHandler.ServeHTTP(w, r)
+		a.updateConfig(w, r)
 	default:
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
@@ -4126,70 +4102,56 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	cm.RegisterHTTPHandler("/api/v1/settings/memory", a.withAuth(a.HandleMemorySettings))
 
 	// Settings endpoints (Wave 4).
-	// GET /api/v1/audit-log — admin-only: audit log contains every admin
-	// action, tool-use trace, and LLM request. A user-role leak here exposes
-	// the full activity history to non-privileged accounts (Issue #98).
-	// Chain: withAuth (verifies token, writes role into ctx) → RequireAdmin (checks role).
-	cm.RegisterHTTPHandler("/api/v1/audit-log",
-		a.withAuth(middleware.RequireAdmin(http.HandlerFunc(a.HandleAuditLog)).ServeHTTP))
+	// GET /api/v1/audit-log — the audit log contains every privileged action,
+	// tool-use trace, and LLM request; gated behind authentication only under
+	// the single-account model.
+	// Chain: withAuth (verifies token) → handler.
+	cm.RegisterHTTPHandler("/api/v1/audit-log", a.withAuth(a.HandleAuditLog))
 	cm.RegisterHTTPHandler("/api/v1/security/exec-allowlist", a.withAuth(a.HandleExecAllowlist))
 	// Wave 3 security endpoints (SEC-25, SEC-28).
 	cm.RegisterHTTPHandler("/api/v1/security/exec-proxy-status", a.withAuth(a.HandleExecProxyStatus))
-	// Admin-only security endpoints.
-	// Chain: withAuth → RequireAdmin → RequireNotBypass → handler.
+	// High-blast-radius security endpoints.
+	// Chain: withAuth → RequireNotBypass → handler.
 	// CSRF is enforced by the global WrapHTTPHandler layer (no per-handler wiring needed).
 	cm.RegisterHTTPHandler("/api/v1/config/pending-restart", a.adminWrap(a.HandlePendingRestart))
 	// O4-backend: UI-triggerable graceful self-restart. High blast radius —
-	// admin-only + RequireNotBypass (dev_mode_bypass → 503) via adminWrap.
+	// RequireNotBypass (dev_mode_bypass → 503) via adminWrap.
 	cm.RegisterHTTPHandler("/api/v1/gateway/restart", a.adminWrap(a.HandleGatewayRestart))
-	// O14 god-mode toggle. High blast radius — admin-only + RequireNotBypass via
-	// adminWrap, and the POST additionally requires a password re-auth consent
-	// token (enforced inside the handler via requireReAuth).
+	// O14 god-mode toggle. High blast radius — RequireNotBypass via adminWrap,
+	// and the POST additionally requires a password re-auth consent token
+	// (enforced inside the handler via requireReAuth).
 	cm.RegisterHTTPHandler("/api/v1/gateway/god-mode", a.adminWrap(a.HandleGodMode))
 	cm.RegisterHTTPHandler("/api/v1/security/audit-log", a.adminWrap(a.HandleSandboxAuditLog))
 	cm.RegisterHTTPHandler("/api/v1/security/skill-trust", a.adminWrap(a.HandleSkillTrust))
 	cm.RegisterHTTPHandler("/api/v1/security/prompt-guard", a.adminWrap(a.HandlePromptGuard))
-	// /api/v1/security/rate-limits handles GET (read state, admin-only because
-	// the response carries the live daily-cost meter and current cap config —
-	// admin-sensitive observability) and PUT (write — must be admin and gated
-	// by RequireNotBypass, since dev_mode_bypass would otherwise let an
-	// anonymous caller change global rate-limit caps). Wrapped with adminWrap
-	// to bring it in line with the other admin security endpoints below and
-	// to satisfy item 7 of v0.2-#155 (admin-route bypass coverage). The inner
-	// handler keeps its own role check as a defense-in-depth belt-and-braces.
+	// /api/v1/security/rate-limits handles GET (read state — the response carries
+	// the live daily-cost meter and current cap config, sensitive observability)
+	// and PUT (write — gated by RequireNotBypass, since dev_mode_bypass would
+	// otherwise let an anonymous caller change global rate-limit caps). Wrapped
+	// with adminWrap to bring it in line with the other high-blast-radius
+	// security endpoints below and to satisfy item 7 of v0.2-#155 (admin-route
+	// bypass coverage).
 	cm.RegisterHTTPHandler("/api/v1/security/rate-limits", a.adminWrap(a.HandleRateLimits))
 	cm.RegisterHTTPHandler("/api/v1/security/sandbox-config", a.adminWrap(a.HandleSandboxConfig))
 	cm.RegisterHTTPHandler("/api/v1/security/session-scope", a.adminWrap(a.HandleSessionScope))
 	cm.RegisterHTTPHandler("/api/v1/security/retention", a.adminWrap(a.HandleRetention))
 	cm.RegisterHTTPHandler("/api/v1/security/retention/sweep", a.adminWrap(a.HandleRetentionSweep))
 	cm.RegisterHTTPHandler("/api/v1/performance", a.adminWrap(a.HandlePerformance))
-	cm.RegisterHTTPHandler("/api/v1/users", a.adminWrap(func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet:
-			a.HandleUsersList(w, r)
-		case http.MethodPost:
-			a.HandleUserCreate(w, r)
-		default:
-			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
-		}
-	}))
-	cm.RegisterHTTPHandler("/api/v1/users/", a.adminWrap(a.handleUsersWithParam))
 	// Wave 5 security endpoints (SEC-01/02/03).
 	cm.RegisterHTTPHandler("/api/v1/security/sandbox-status", a.withAuth(a.HandleSandboxStatus))
 	// /api/v1/security/sandbox-config is registered above with adminWrap — do NOT
 	// re-register here; Go ServeMux takes the last registration, and a lighter
 	// wrapper here would silently drop the dev_mode_bypass gate.
-	// GET /api/v1/security/tool-policies — read available to all authenticated
-	// users; PUT is admin-only (enforced inside HandleToolPolicies, Issue #98).
+	// GET/PUT /api/v1/security/tool-policies — readable and writable by the
+	// single authenticated account (PUT authorization enforced inside
+	// HandleToolPolicies).
 	cm.RegisterHTTPHandler("/api/v1/security/tool-policies", a.withAuth(a.HandleToolPolicies))
-	// GET /api/v1/credentials — admin-only: even though plaintext is not
-	// returned, the credential ref names reveal what integrations exist
-	// (Issue #98).
-	// Chain: withAuth (verifies token, writes role into ctx) → RequireAdmin (checks role).
-	cm.RegisterHTTPHandler("/api/v1/credentials",
-		a.withAuth(middleware.RequireAdmin(http.HandlerFunc(a.HandleCredentials)).ServeHTTP))
-	cm.RegisterHTTPHandler("/api/v1/credentials/",
-		a.withAuth(middleware.RequireAdmin(http.HandlerFunc(a.HandleCredentials)).ServeHTTP))
+	// GET /api/v1/credentials — even though plaintext is not returned, the
+	// credential ref names reveal what integrations exist, so this is gated
+	// behind authentication.
+	// Chain: withAuth (verifies token) → handler.
+	cm.RegisterHTTPHandler("/api/v1/credentials", a.withAuth(a.HandleCredentials))
+	cm.RegisterHTTPHandler("/api/v1/credentials/", a.withAuth(a.HandleCredentials))
 	cm.RegisterHTTPHandler("/api/v1/media/", a.withOptionalAuth(a.HandleMedia))
 	cm.RegisterHTTPHandler("/api/v1/backup", a.withAuth(a.HandleCreateBackup))
 	cm.RegisterHTTPHandler("/api/v1/backups", a.withAuth(a.HandleListBackups))
@@ -4207,10 +4169,6 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 		a.withOptionalAuth(withRateLimit(onboardingCompleteLimiter, a.HandleOnboardingProbeProvider)),
 	)
 	cm.RegisterHTTPHandler("/api/v1/auth/login", a.withOptionalAuth(a.HandleLogin))
-	cm.RegisterHTTPHandler(
-		"/api/v1/auth/register-admin",
-		a.withOptionalAuth(withRateLimit(registerAdminLimiter, a.HandleRegisterAdmin)),
-	)
 	cm.RegisterHTTPHandler("/api/v1/auth/validate", a.withAuth(withRateLimit(validateLimiter, a.HandleValidateToken)))
 	cm.RegisterHTTPHandler("/api/v1/auth/logout", a.withAuth(a.HandleLogout))
 	cm.RegisterHTTPHandler("/api/v1/auth/change-password", a.withAuth(a.HandleChangePassword))
@@ -4242,11 +4200,6 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 
 	// Version endpoint — unauthenticated; returns build SHA for frontend version-drift detection (#110).
 	cm.RegisterHTTPHandler("/api/v1/version", http.HandlerFunc(a.HandleVersion))
-
-	// GET /api/v1/me — returns the authenticated user's RBAC role (MeInfo).
-	// Used by the SPA for feature gating (fetchMe in src/lib/api.ts:1250).
-	// Traces to: contracts/components/schemas/MeInfo.yaml.
-	cm.RegisterHTTPHandler("/api/v1/me", a.withAuth(a.HandleMe))
 
 	// GET /api/v1/devices — returns pending pairing requests and paired devices.
 	// Admin-only. Device pairing infrastructure is not yet implemented; the handler
@@ -4281,32 +4234,6 @@ func (a *restAPI) registerPreviewEndpoints(cm previewHandlerRegistrar) {
 	cm.RegisterPreviewHandler("/preview/", http.HandlerFunc(a.HandlePreview))
 	cm.RegisterPreviewHandler("/serve/", http.HandlerFunc(a.HandleServeWorkspace))
 	cm.RegisterPreviewHandler("/dev/", http.HandlerFunc(a.HandleDevProxy))
-}
-
-// handleUsersWithParam dispatches /api/v1/users/{username}[/subpath] requests
-// to the appropriate user-management handler based on HTTP method and path suffix.
-//
-// Routing table:
-//
-//	DELETE /api/v1/users/{username}          → HandleUserDelete
-//	PUT    /api/v1/users/{username}/password → HandleUserResetPassword
-//	PATCH  /api/v1/users/{username}/role     → HandleUserChangeRole
-//
-// Unrecognized method+path combinations return 405 or 404 respectively.
-// Auth and bypass guards are applied by the enclosing adminWrap wrapper;
-// this function only handles dispatch.
-func (a *restAPI) handleUsersWithParam(w http.ResponseWriter, r *http.Request) {
-	path := r.URL.Path
-	switch {
-	case strings.HasSuffix(path, "/password") && r.Method == http.MethodPut:
-		a.HandleUserResetPassword(w, r)
-	case strings.HasSuffix(path, "/role") && r.Method == http.MethodPatch:
-		a.HandleUserChangeRole(w, r)
-	case r.Method == http.MethodDelete:
-		a.HandleUserDelete(w, r)
-	default:
-		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
-	}
 }
 
 // rotateGatewayToken generates a new random bearer token, persists it to config, and returns it.
@@ -4456,27 +4383,6 @@ func (a *restAPI) HandleVersion(w http.ResponseWriter, r *http.Request) {
 		Version:  Version,
 		BuildSha: buildSha,
 	})
-}
-
-// --- Me ---
-
-// HandleMe handles GET /api/v1/me. Returns the authenticated user's RBAC role.
-// The role is written into the request context by withAuth; this handler reads
-// it and returns a MeInfo-shaped response (contracts/components/schemas/MeInfo.yaml).
-// Traces to: contracts/openapi.yaml#/paths/~1me/get (operationId: getMe).
-func (a *restAPI) HandleMe(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	role := config.UserRoleAdmin // default: dev-mode bypass treats callers as admin
-	if ctxRole, ok := r.Context().Value(RoleContextKey{}).(config.UserRole); ok && ctxRole != "" {
-		role = ctxRole
-	}
-	resp := gen.MeInfo{
-		Role: gen.MeInfoRole(role),
-	}
-	jsonOK(w, resp)
 }
 
 // --- Devices ---
@@ -6207,10 +6113,9 @@ func (a *restAPI) HandleChannels(w http.ResponseWriter, r *http.Request) {
 			case http.MethodDelete:
 				// FINAL-REVIEW MEDIUM: DELETE is a high-blast-radius destructive verb
 				// (os.RemoveAll on the instance state dir + credential deletion), so it
-				// must be admin-only. The /channels route is already registered under
-				// withAuth, so apply only the admin authorization layers
-				// (RequireAdmin → RequireNotBypass) here — re-running withAuth would
-				// double-authenticate.
+				// is gated by the dev-mode-bypass guard. The /channels route is already
+				// registered under withAuth, so apply only the authorization layer
+				// (RequireNotBypass) here — re-running withAuth would double-authenticate.
 				a.requireAdminAuthz(func(w http.ResponseWriter, r *http.Request) {
 					a.deleteChannelInstance(w, channelID)
 				})(w, r)
@@ -6266,10 +6171,9 @@ func (a *restAPI) HandleChannels(w http.ResponseWriter, r *http.Request) {
 		// fall through to list logic below
 	case http.MethodPost:
 		// FINAL-REVIEW MEDIUM: POST creates a channel instance (a destructive,
-		// config-mutating admin action). The /channels route is already registered
-		// under withAuth, so apply only the admin authorization layers
-		// (RequireAdmin → RequireNotBypass), mirroring the other high-blast-radius
-		// admin routes without re-running withAuth.
+		// config-mutating action). The /channels route is already registered
+		// under withAuth, so apply only the authorization layer (RequireNotBypass),
+		// mirroring the other high-blast-radius routes without re-running withAuth.
 		a.requireAdminAuthz(a.createChannelInstance)(w, r)
 		return
 	default:

@@ -14,7 +14,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/cron"
 )
 
@@ -44,7 +43,7 @@ func TestAutomations_CronTrigger_HumanizedAndActionShown(t *testing.T) {
 	require.NoError(t, cs.UpdateJob(job))
 
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/automations", nil)
-	r = withUser(r, "alice", config.UserRoleUser)
+	r = withUser(r, "alice")
 	w := httptest.NewRecorder()
 	api.HandleAutomations(w, r)
 
@@ -73,7 +72,7 @@ func TestAutomations_EveryTrigger_DeliverAction(t *testing.T) {
 	require.NoError(t, cs.UpdateJob(job))
 
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/automations", nil)
-	r = withUser(r, "alice", config.UserRoleUser)
+	r = withUser(r, "alice")
 	w := httptest.NewRecorder()
 	api.HandleAutomations(w, r)
 
@@ -102,7 +101,7 @@ func TestAutomations_AtTrigger_OneShot(t *testing.T) {
 	require.NoError(t, cs.UpdateJob(job))
 
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/automations", nil)
-	r = withUser(r, "alice", config.UserRoleUser)
+	r = withUser(r, "alice")
 	w := httptest.NewRecorder()
 	api.HandleAutomations(w, r)
 
@@ -113,37 +112,12 @@ func TestAutomations_AtTrigger_OneShot(t *testing.T) {
 	assert.Contains(t, resp.Automations[0].TriggerDisplay, "Once at")
 }
 
-func TestAutomations_OwnerFilter_NonAdminSeesOnlyOwnAgents(t *testing.T) {
-	api, cs := newSchedulesTestAPI(t)
-	j1, err := cs.AddJob("a", cron.CronSchedule{Kind: "every", EveryMS: i64p(60000)}, "x", false, "", "")
-	require.NoError(t, err)
-	j1.AgentID = "mia" // alice owns mia
-	require.NoError(t, cs.UpdateJob(j1))
-
-	j2, err := cs.AddJob("b", cron.CronSchedule{Kind: "every", EveryMS: i64p(60000)}, "y", false, "", "")
-	require.NoError(t, err)
-	j2.AgentID = "max" // bob owns max
-	require.NoError(t, cs.UpdateJob(j2))
-
-	r := httptest.NewRequest(http.MethodGet, "/api/v1/automations", nil)
-	r = withUser(r, "alice", config.UserRoleUser) // alice, non-admin
-	w := httptest.NewRecorder()
-	api.HandleAutomations(w, r)
-
-	require.Equal(t, http.StatusOK, w.Code)
-	var resp automationsResp
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	require.Len(t, resp.Automations, 1, "alice must only see her own agent's schedule")
-	assert.Equal(t, "mia", resp.Automations[0].AgentName)
-}
-
-// TestAutomations_RoleAloneDoesNotBypassOwnership asserts a role of "admin"
-// grants no extra visibility here either — same reasoning as
-// TestSchedulesAPI_List_FilteredByOwner (this is the same authorization gate,
-// applied to the /automations view of the schedule list). "admin" owns
-// neither "mia" nor "max" in this fixture, so it sees zero, same as any other
-// non-owning account.
-func TestAutomations_RoleAloneDoesNotBypassOwnership(t *testing.T) {
+// TestAutomations_ReturnsAllSchedulesRegardlessOfAgentOwner verifies the
+// single-user model: any authenticated caller sees every schedule's
+// automation projection, regardless of which agent the underlying job
+// targets. Ownership is not an access-control concept here (matches
+// HandleAutomations / handleListSchedules).
+func TestAutomations_ReturnsAllSchedulesRegardlessOfAgentOwner(t *testing.T) {
 	api, cs := newSchedulesTestAPI(t)
 	j1, err := cs.AddJob("a", cron.CronSchedule{Kind: "every", EveryMS: i64p(60000)}, "x", false, "", "")
 	require.NoError(t, err)
@@ -156,20 +130,22 @@ func TestAutomations_RoleAloneDoesNotBypassOwnership(t *testing.T) {
 	require.NoError(t, cs.UpdateJob(j2))
 
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/automations", nil)
-	r = withUser(r, "admin", config.UserRoleAdmin)
+	r = withUser(r, "alice")
 	w := httptest.NewRecorder()
 	api.HandleAutomations(w, r)
 
 	require.Equal(t, http.StatusOK, w.Code)
 	var resp automationsResp
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Empty(t, resp.Automations, "role alone must not grant visibility into another user's schedules")
+	require.Len(t, resp.Automations, 2, "any caller must see both schedules, regardless of agent")
+	agentNames := []string{resp.Automations[0].AgentName, resp.Automations[1].AgentName}
+	assert.ElementsMatch(t, []string{"mia", "max"}, agentNames)
 }
 
 func TestAutomations_MethodNotAllowed(t *testing.T) {
 	api, _ := newSchedulesTestAPI(t)
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/automations", nil)
-	r = withUser(r, "admin", config.UserRoleAdmin)
+	r = withUser(r, "admin")
 	w := httptest.NewRecorder()
 	api.HandleAutomations(w, r)
 	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)

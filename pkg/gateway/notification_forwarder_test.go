@@ -3,7 +3,8 @@
 // Notification WS-forwarder tests (#264): EventKindNotification → notification
 // frame, delivered ONLY to the connection whose userID matches the payload
 // Recipient (per-user filtering), with the admin-broadcast sentinel fanning out
-// to admin-role connections.
+// to every connection (unconditional broadcast — single-user product, no
+// role/ownership gate).
 
 package gateway
 
@@ -16,7 +17,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/dapicom-ai/omnipus/pkg/agent"
-	"github.com/dapicom-ai/omnipus/pkg/config"
 )
 
 // notificationFrameDecoder decodes the fields the test asserts on.
@@ -97,37 +97,28 @@ func TestNotification_NotDeliveredToOtherUser(t *testing.T) {
 	}
 }
 
-// TestNotification_AdminBroadcastReachesAdminOnly asserts the admin-broadcast
-// sentinel is delivered to admin-role connections and not to non-admins.
-func TestNotification_AdminBroadcastReachesAdminOnly(t *testing.T) {
+// TestNotification_AdminBroadcastReachesAllConnections asserts the
+// admin-broadcast sentinel is delivered to any connected WS connection.
+// Broadcast delivery is unconditional now (single-user product — the
+// role/ownership gate that used to restrict it to admin-role connections has
+// been removed).
+func TestNotification_AdminBroadcastReachesAllConnections(t *testing.T) {
 	b := agent.NewEventBus()
 	defer b.Close()
 	h := makeMinimalHandler()
 
-	adminConn, adminCh := makeForwarderTestConn(64)
-	adminConn.userID = "root"
-	adminConn.role = config.UserRoleAdmin
-	adminDone := runForwarder(h, adminConn, "chat", b)
-
-	userConn, userCh := makeForwarderTestConn(64)
-	userConn.userID = "joe"
-	userConn.role = config.UserRoleUser
-	userDone := runForwarder(h, userConn, "chat", b)
+	conn, ch := makeForwarderTestConn(64)
+	conn.userID = "root"
+	done := runForwarder(h, conn, "chat", b)
 
 	emitNotification(b, samplePayload(agent.NotificationAdminBroadcast))
 	b.Close()
-	<-adminDone
-	<-userDone
+	<-done
 
 	select {
-	case <-adminCh:
+	case <-ch:
 		// expected
 	case <-time.After(2 * time.Second):
-		t.Fatal("admin connection did not receive broadcast notification")
-	}
-	select {
-	case data := <-userCh:
-		t.Fatalf("non-admin received admin-broadcast notification: %s", data)
-	default:
+		t.Fatal("connection did not receive broadcast notification")
 	}
 }

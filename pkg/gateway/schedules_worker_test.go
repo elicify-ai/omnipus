@@ -17,7 +17,7 @@ import (
 func TestRunner_WorkerOwner_NoHeartbeatRun(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Agents.List = []config.AgentConfig{
-		{ID: "worker", Type: config.AgentTypeWorker, OwnerUsername: "alice"},
+		{ID: "worker", Type: config.AgentTypeWorker},
 	}
 	// The worker is registered+enabled — the rejection must come from the worker
 	// guard, not the registration check.
@@ -37,7 +37,7 @@ func TestRunner_WorkerOwner_NoHeartbeatRun(t *testing.T) {
 func TestRunner_BaseOwner_StillRuns(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Agents.List = []config.AgentConfig{
-		{ID: "mia", Type: config.AgentTypeCore, OwnerUsername: "alice"},
+		{ID: "mia", Type: config.AgentTypeCore},
 	}
 	r, exec, _, _ := newRunnerHarness(t, cfg, map[string]bool{"mia": true})
 

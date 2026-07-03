@@ -102,7 +102,7 @@ func TestPublicBindGuard_Cases(t *testing.T) {
 				Host:          "0.0.0.0",
 				DevModeBypass: false,
 				Users: []config.UserConfig{
-					{Username: "admin", Role: config.UserRoleAdmin},
+					{Username: "admin"},
 				},
 			},
 			expectFatal: false,

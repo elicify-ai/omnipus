@@ -23,7 +23,6 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/gateway/ctxkey"
-	"github.com/dapicom-ai/omnipus/pkg/gateway/middleware"
 	"github.com/dapicom-ai/omnipus/pkg/onboarding"
 	"github.com/dapicom-ai/omnipus/pkg/task"
 )
@@ -68,10 +67,14 @@ func newTestRestAPIWithAuditLog(t *testing.T) (*restAPI, string) {
 	return api, tmpDir
 }
 
-// adminCtx returns a context with admin role and user set — used for PUT tests.
+// adminCtx returns a context with an authenticated user set — used for PUT
+// tests. Under the single-user model there is no separate role to inject;
+// the handlers under test here are gated purely by RequireNotBypass at
+// route-registration time (not exercised by these direct-handler-call
+// tests) and read the actor identity from ctxkey.UserContextKey for audit
+// attribution.
 func adminCtx() context.Context {
-	ctx := context.WithValue(context.Background(), ctxkey.RoleContextKey{}, config.UserRoleAdmin)
-	ctx = context.WithValue(ctx, ctxkey.UserContextKey{}, &config.UserConfig{Username: "admin"})
+	ctx := context.WithValue(context.Background(), ctxkey.UserContextKey{}, &config.UserConfig{Username: "admin"})
 	return ctx
 }
 
@@ -124,36 +127,6 @@ func TestHandleSandboxAuditLog_ResponseShape(t *testing.T) {
 
 	_, hasAE := resp["applied_enabled"]
 	assert.True(t, hasAE, "response must have 'applied_enabled' field")
-}
-
-// TestHandleSandboxAuditLog_NonAdmin403 used to verify that a user-role
-// request receives 403 Forbidden. Under the single-user model (operator
-// directive: "we have now a one user instance ... remove the admin only
-// logic from the entire system"), a Gateway.Users entry that requests
-// role="user" is normalized to admin by config.LoadConfig's load-time
-// self-heal (config.normalizeAdminOnlyRoles) before it can ever reach
-// request handling — RequireAdmin's code is unchanged and still denies a
-// literal non-admin role, but no authenticated caller can carry one anymore.
-// This test is deliberately flipped (not deleted) to prove the new outcome:
-// the SAME "user"-configured account that used to be denied here now
-// succeeds, via the real config-loading choke point rather than a
-// hand-asserted role literal.
-func TestHandleSandboxAuditLog_NonAdmin403(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-
-	resolvedRole := normalizedRoleForUser(t, "bob", "user")
-	require.Equal(t, config.UserRoleAdmin, resolvedRole,
-		"single-user model: config.LoadConfig must normalize role=user to admin")
-
-	ctx := context.WithValue(context.Background(), ctxkey.RoleContextKey{}, resolvedRole)
-	body := strings.NewReader(`{"enabled":true}`)
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/audit-log", body)
-	r = r.WithContext(ctx)
-	w := httptest.NewRecorder()
-
-	middleware.RequireAdmin(http.HandlerFunc(api.HandleSandboxAuditLog)).ServeHTTP(w, r)
-
-	assert.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 }
 
 // TestHandleSandboxAuditLog_MethodNotAllowed verifies that POST and DELETE

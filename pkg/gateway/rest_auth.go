@@ -32,7 +32,6 @@ import (
 var (
 	ErrInvalidCredentials = errors.New("invalid credentials")
 	ErrUserNotFound       = errors.New("user not found")
-	ErrAdminAlreadyExists = errors.New("admin already registered")
 )
 
 // loginRateLimiter tracks failed login attempts per IP+username to prevent brute force attacks.
@@ -183,8 +182,6 @@ var (
 	onboardingCompleteLimiter = newAPIRateLimiter(3, 1*time.Minute)
 	// /api/v1/config — 30 requests/minute per IP.
 	configLimiter = newAPIRateLimiter(30, 1*time.Minute)
-	// /api/v1/auth/register-admin — 3 requests/minute per IP (highly sensitive).
-	registerAdminLimiter = newAPIRateLimiter(3, 1*time.Minute)
 	// /api/v1/auth/reauth — 10 requests/minute per IP. A password re-verification
 	// (sensitive), but a legitimate user may mistype a few times; tighter than
 	// login, not punitive (Spec-6 FR-12.2).
@@ -229,15 +226,15 @@ func withRateLimit(limiter *apiRateLimiter, handler http.HandlerFunc) http.Handl
 }
 
 // withOptionalAuth is like withAuth but allows unauthenticated requests to pass through.
-// Authenticated requests get role injected into context; anonymous requests get a context
-// without any role so downstream handlers can distinguish.
+// Authenticated requests get the *config.UserConfig injected into context; anonymous
+// requests get a context without a user so downstream handlers can distinguish.
 //
 // B1.1 backend half: every route wrapped here gets a 1 MiB body cap so an
 // anonymous client cannot pin the gateway with an unbounded POST body. All
 // routes registered with withOptionalAuth are JSON or GET-only (state,
-// providers, media-serve, uploads-serve, onboarding, login, register-admin)
-// — none legitimately exceed 1 MiB. Routes that need a larger body (binary
-// uploads) use withUploadAuth instead.
+// providers, media-serve, uploads-serve, onboarding, login) — none legitimately
+// exceed 1 MiB. Routes that need a larger body (binary uploads) use
+// withUploadAuth instead.
 func (a *restAPI) withOptionalAuth(handler http.HandlerFunc) http.HandlerFunc {
 	const optionalAuthBodyLimit int64 = 1 << 20 // 1 MiB
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -261,8 +258,7 @@ func (a *restAPI) withOptionalAuth(handler http.HandlerFunc) http.HandlerFunc {
 				for i := range cfg.Gateway.Users {
 					user := cfg.Gateway.Users[i]
 					if user.VerifyToken(rawToken) == nil {
-						ctx := context.WithValue(r.Context(), RoleContextKey{}, user.Role)
-						ctx = context.WithValue(ctx, UserContextKey{}, &user)
+						ctx := context.WithValue(r.Context(), UserContextKey{}, &user)
 						a.setCORSHeaders(w, r)
 						handler(w, r.WithContext(ctx))
 						return
@@ -273,9 +269,8 @@ func (a *restAPI) withOptionalAuth(handler http.HandlerFunc) http.HandlerFunc {
 			// Legacy env var fallback
 			required := os.Getenv("OMNIPUS_BEARER_TOKEN")
 			if required != "" && subtle.ConstantTimeCompare([]byte(rawToken), []byte(required)) == 1 {
-				ctx := context.WithValue(r.Context(), RoleContextKey{}, config.UserRoleAdmin)
 				a.setCORSHeaders(w, r)
-				handler(w, r.WithContext(ctx))
+				handler(w, r)
 				return
 			}
 		}
@@ -449,146 +444,12 @@ func (a *restAPI) HandleValidateToken(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusUnauthorized, "invalid token")
 		return
 	}
+	// Role is being dropped from this wire type in the Phase 3 contract change
+	// (single-user model, no role concept left) — hardcoded here as a
+	// compile-fix bridge only, matching the sole account's pre-removal value.
 	jsonOK(w, gen.ValidateTokenResponse{
 		Username: user.Username,
-		Role:     gen.ValidateTokenResponseRole(user.Role),
-	})
-}
-
-// HandleRegisterAdmin handles POST /api/v1/auth/register-admin.
-// Creates the first admin user — fails with 409 if an admin already exists.
-//
-// The entire check-create-token sequence runs inside safeUpdateConfigJSON so
-// concurrent requests cannot both pass the "no admin yet" check (TOCTOU fix).
-func (a *restAPI) HandleRegisterAdmin(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	var body gen.RegisterAdminRequest
-	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
-	if !decodeAndValidate(w, r, "RegisterAdminRequest", &body, validateEnabled) {
-		return
-	}
-	if body.Username == "" || body.Password == "" {
-		jsonErr(w, http.StatusBadRequest, "username and password are required")
-		return
-	}
-	if len(body.Password) < 8 {
-		jsonErr(w, http.StatusBadRequest, "password must be at least 8 characters")
-		return
-	}
-
-	// Generate all bcrypt hashes outside the config lock — bcrypt is
-	// intentionally slow and must not hold configMu for its duration.
-	passwordHash, err := bcrypt.GenerateFromPassword([]byte(body.Password), bcrypt.DefaultCost)
-	if err != nil {
-		slog.Error("auth: hash password failed", "error", err)
-		jsonErr(w, http.StatusInternalServerError, "could not register admin")
-		return
-	}
-	token, err := generateUserToken(body.Username)
-	if err != nil {
-		slog.Error("auth: generate token failed", "error", err)
-		jsonErr(w, http.StatusInternalServerError, "could not register admin")
-		return
-	}
-	// SEC-1: bcrypt only the secret body so the 81-byte ID-tagged token stays
-	// under bcrypt's 72-byte input ceiling.
-	tokenHash, err := bcrypt.GenerateFromPassword([]byte(config.TokenSecret(token)), bcrypt.DefaultCost)
-	if err != nil {
-		slog.Error("auth: hash token failed", "error", err)
-		jsonErr(w, http.StatusInternalServerError, "could not register admin")
-		return
-	}
-	// Mint a session token so the newly-registered admin is immediately logged
-	// in via the session-cookie auth path (no second round-trip required).
-	sessionToken, sessionHash, err := middleware.MintSessionToken()
-	if err != nil {
-		slog.Error("auth: mint session token failed", "error", err)
-		jsonErr(w, http.StatusInternalServerError, "could not register admin")
-		return
-	}
-
-	// Atomically: check for existing admin, append new user entry.
-	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
-		gw, ok := m["gateway"].(map[string]any)
-		if !ok {
-			// gateway key absent — initialize it so we can add the user.
-			gw = map[string]any{}
-			m["gateway"] = gw
-		}
-
-		// Normalise users array: may be nil/absent on a fresh config.
-		users := make([]any, 0, 1)
-		if raw, exists := gw["users"]; exists && raw != nil {
-			users, ok = raw.([]any)
-			if !ok {
-				return fmt.Errorf("gateway.users is not an array")
-			}
-		}
-
-		// Check for any existing admin — this is now race-free because we hold configMu.
-		for _, u := range users {
-			um, ok := u.(map[string]any)
-			if !ok {
-				continue
-			}
-			if role, _ := um["role"].(string); role == string(config.UserRoleAdmin) {
-				return ErrAdminAlreadyExists
-			}
-		}
-
-		// Append the new admin entry (all hashes already computed above).
-		// SEC-1: store the bearer token in the token SET, not the legacy
-		// single token_hash, so subsequent logins append rather than evict.
-		newUser := map[string]any{
-			"username":      body.Username,
-			"password_hash": string(passwordHash),
-			"tokens": []any{map[string]any{
-				"id":         config.TokenIDFromRaw(token),
-				"hash":       string(tokenHash),
-				"created_at": time.Now().UTC().Format(time.RFC3339),
-			}},
-			"session_token_hash": string(sessionHash),
-			"role":               string(config.UserRoleAdmin),
-		}
-		gw["users"] = append(users, newUser)
-		return nil
-	}); err != nil {
-		if errors.Is(err, ErrAdminAlreadyExists) {
-			jsonErr(w, http.StatusConflict, "admin already registered")
-			return
-		}
-		slog.Error("auth: register admin failed", "error", err)
-		jsonErr(w, http.StatusInternalServerError, "could not register admin")
-		return
-	}
-
-	// Reload in-memory config so withAuth middleware picks up the new token hash immediately.
-	// Reload failure is non-fatal — token is on disk and active after next config poll.
-	if err := a.triggerReloadAndWait(); err != nil {
-		slog.Warn("auth: hot-reload after register-admin failed; token active after next restart", "error", err)
-	}
-
-	// Issue the omnipus-session HttpOnly cookie (session-cookie auth path).
-	middleware.WriteSessionCookie(w, r, sessionToken)
-
-	// Issue a __Host-csrf cookie so the newly-registered admin can
-	// immediately make state-changing requests without being blocked by the
-	// CSRF middleware (issue #97). Cookie mint failure means the OS RNG is
-	// broken — refuse to return the bearer token to prevent an unusable session.
-	if err := middleware.IssueCSRFCookie(w, r); err != nil {
-		slog.Error("auth: issue CSRF cookie failed", "error", err)
-		jsonErr(w, http.StatusInternalServerError, "session init failed")
-		return
-	}
-
-	slog.Info("auth: admin user registered", "username", body.Username)
-	jsonOK(w, gen.LoginResponse{
-		Token:    token,
-		Role:     gen.LoginResponseRole(config.UserRoleAdmin),
-		Username: body.Username,
+		Role:     gen.ValidateTokenResponseRoleAdmin,
 	})
 }
 

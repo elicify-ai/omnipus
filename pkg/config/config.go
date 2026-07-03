@@ -799,13 +799,6 @@ type AgentConfig struct {
 	// Tools, when non-nil, overrides scope-based tool visibility for this agent.
 	// Nil means all tools allowed by the agent's type are available.
 	Tools *AgentToolsCfg `json:"tools,omitempty"`
-	// OwnerUsername is the username of the user who created this agent.
-	// Set at creation time; only the owner may access the agent's resources
-	// (see AuthorizeAgentAccess in agent_ownership.go — ownership is NOT
-	// bypassed by admin role, so a second account cannot read another
-	// account's private agents just by also holding UserRoleAdmin under the
-	// single-user model). Empty string for system/core agents.
-	OwnerUsername string `json:"owner_username,omitempty"`
 	// SandboxProfile selects the kernel sandbox profile for this agent.
 	// Empty means "use the global default" (OmnipusSandboxConfig.DefaultProfile,
 	// which itself falls back to SandboxProfileWorkspace when also empty).
@@ -2627,47 +2620,6 @@ func (c *ModelConfig) Validate() error {
 	return nil
 }
 
-// UserRole represents a human user's role in the system.
-type UserRole string
-
-const (
-	UserRoleAdmin UserRole = "admin"
-	UserRoleUser  UserRole = "user"
-)
-
-// MarshalJSON serializes a UserRole to JSON.
-func (r UserRole) MarshalJSON() ([]byte, error) {
-	return json.Marshal(string(r))
-}
-
-// UnmarshalJSON validates and deserializes a UserRole from JSON.
-//
-// Single-user model (operator directive, 2026-07): Omnipus is a single-user,
-// self-hosted instance with no practical admin-vs-normal-user distinction —
-// every authenticated user is always treated as having full admin authority.
-// "user" is coerced to UserRoleAdmin HERE, at the type's own deserialization
-// boundary, so the invariant is structurally guaranteed for ANY current or
-// future JSON read path that decodes into a UserRole-typed field (config
-// load, a REST request body typed as UserRole, etc.) — not just the specific
-// call sites that remember to invoke normalizeAdminOnlyRoles. UserRoleUser
-// remains an exported constant: wire-validation code that checks a
-// REQUESTED role string against both "admin" and "user" (e.g. rest_users.go's
-// create/role-change handlers, which validate body.Role — a gen.* wire type,
-// not config.UserRole — before deciding what to persist) compares against
-// the raw wire string and is unaffected by this coercion, which only applies
-// to bytes decoded directly INTO a UserRole field.
-func (r *UserRole) UnmarshalJSON(data []byte) error {
-	switch string(data) {
-	case `"admin"`:
-		*r = UserRoleAdmin
-	case `"user"`:
-		*r = UserRoleAdmin
-	default:
-		return fmt.Errorf("invalid role: %s", string(data))
-	}
-	return nil
-}
-
 // TokenEntry is a single bearer-token credential in a user's token set.
 //
 // SEC-1 / UAT #399: a user may hold several concurrent bearer tokens (one per
@@ -2695,7 +2647,6 @@ type UserConfig struct {
 	// removes a single entry; password reset clears all.
 	Tokens           []TokenEntry `json:"tokens,omitempty"`
 	SessionTokenHash BcryptHash   `json:"session_token_hash,omitempty"` // bcrypt hash of session cookie token
-	Role             UserRole     `json:"role"`
 	Name             string       `json:"name,omitempty"`
 }
 
@@ -2741,18 +2692,23 @@ func TokenSecret(raw string) string {
 	return raw
 }
 
-// VerifyToken reports whether raw matches any active bearer token for this user.
+// VerifyTokenAgainst checks raw against the given token set (and, for
+// backward compatibility, a single legacy hash). Returns nil on a match.
 //
-// SEC-1: it first parses the embedded ID prefix and, when present, verifies
-// against ONLY the matching entry's hash (constant-time bcrypt compare over the
-// secret body). When the ID is absent (legacy token) it scans every token entry
-// and the legacy single TokenHash. Returns nil on a match, ErrNoHashSet when the
-// user holds no tokens at all, or the bcrypt mismatch error otherwise.
-func (u *UserConfig) VerifyToken(raw string) error {
+// Extracted from the (*UserConfig) VerifyToken method so any token-bearing
+// config shape — the (now singular) human account's UserConfig.Tokens, or
+// the standalone Gateway.CLIToken slot — can be verified without needing a
+// full UserConfig. SEC-1: it first parses the embedded ID prefix and, when
+// present, verifies against ONLY the matching entry's hash (constant-time
+// bcrypt compare over the secret body). When the ID is absent (legacy token)
+// it scans every token entry and the legacy single hash. Returns nil on a
+// match, ErrNoHashSet when tokens is empty and legacyHash is zero, or the
+// bcrypt mismatch error otherwise.
+func VerifyTokenAgainst(tokens []TokenEntry, legacyHash BcryptHash, raw string) error {
 	if raw == "" {
 		return ErrNoHashSet
 	}
-	if len(u.Tokens) == 0 && u.TokenHash.IsZero() {
+	if len(tokens) == 0 && legacyHash.IsZero() {
 		return ErrNoHashSet
 	}
 
@@ -2760,9 +2716,9 @@ func (u *UserConfig) VerifyToken(raw string) error {
 
 	// Fast path: direct index by embedded ID prefix.
 	if id := TokenIDFromRaw(raw); id != "" {
-		for i := range u.Tokens {
-			if u.Tokens[i].ID == id {
-				return u.Tokens[i].Hash.Verify(secret)
+		for i := range tokens {
+			if tokens[i].ID == id {
+				return tokens[i].Hash.Verify(secret)
 			}
 		}
 		// ID present but no matching entry — fall through to a full scan so a
@@ -2771,16 +2727,27 @@ func (u *UserConfig) VerifyToken(raw string) error {
 	}
 
 	// Scan the full token set (legacy token, or ID lookup miss).
-	for i := range u.Tokens {
-		if u.Tokens[i].Hash.Verify(secret) == nil {
+	for i := range tokens {
+		if tokens[i].Hash.Verify(secret) == nil {
 			return nil
 		}
 	}
 	// Legacy single-token field — its hash was computed over the FULL raw token.
-	if !u.TokenHash.IsZero() && u.TokenHash.Verify(raw) == nil {
+	if !legacyHash.IsZero() && legacyHash.Verify(raw) == nil {
 		return nil
 	}
 	return bcrypt.ErrMismatchedHashAndPassword
+}
+
+// VerifyToken reports whether raw matches any active bearer token for this user.
+//
+// SEC-1: it first parses the embedded ID prefix and, when present, verifies
+// against ONLY the matching entry's hash (constant-time bcrypt compare over the
+// secret body). When the ID is absent (legacy token) it scans every token entry
+// and the legacy single TokenHash. Returns nil on a match, ErrNoHashSet when the
+// user holds no tokens at all, or the bcrypt mismatch error otherwise.
+func (u *UserConfig) VerifyToken(raw string) error {
+	return VerifyTokenAgainst(u.Tokens, u.TokenHash, raw)
 }
 
 // HasActiveToken reports whether the user holds at least one live bearer token
@@ -2863,6 +2830,12 @@ type GatewayConfig struct {
 	// Set via: {"gateway": {"validate_inbound": true}} in config.json
 	// or OMNIPUS_GATEWAY_VALIDATE_INBOUND=true env var.
 	ValidateInbound bool `json:"validate_inbound,omitempty" env:"OMNIPUS_GATEWAY_VALIDATE_INBOUND"`
+
+	// CLIToken is the machine-only bearer credential the CLI uses to open a WS
+	// session, decoupled from the (now singular) human account — a dedicated
+	// slot, not a role-less entry in Users[]. Nil means no CLI token has been
+	// minted yet.
+	CLIToken *TokenEntry `json:"cli_token,omitempty" env:"-"`
 }
 
 type ToolDiscoveryConfig struct {
@@ -3276,8 +3249,12 @@ func LoadConfig(path string) (*Config, error) {
 }
 
 // SelfHealWriteHook is invoked with the exact bytes written to config.json
-// whenever loadConfigInternal's on-disk single-user-role self-heal
-// (selfHealUserRolesOnDisk) performs a write.
+// whenever loadConfigInternal performs an in-place self-heal/migration write
+// as a side effect of loading. Originally built for the (now-retired)
+// single-user-role self-heal (selfHealUserRolesOnDisk); the CLI-token
+// relocation (migrateCLITokenOutOfUsers, cli_token_migration.go) is the
+// current writer that reports through this hook — any future load-time
+// self-heal should do the same rather than writing to disk silently.
 //
 // Why this exists: pkg/gateway maintains a write-dedup registry
 // (configSelfWriteRegistry) so its config-file-watcher polling loop can tell
@@ -3294,12 +3271,13 @@ type SelfHealWriteHook func(writtenBytes []byte)
 
 // LoadConfigWithStoreAndSelfHealHook behaves exactly like LoadConfigWithStore,
 // except that onSelfHeal (if non-nil) is invoked with the raw bytes written to
-// config.json whenever the single-user-model role self-heal performs a write.
-// Used by pkg/gateway's config-file-watcher polling loop and manual /reload
-// trigger — the two read paths that call into config loading directly,
-// bypassing safeUpdateConfigJSON's own configMu + selfWriteReg registration —
-// so a self-heal write triggered from either of those paths is still
-// recognized as app-initiated rather than a genuine external edit.
+// config.json whenever a load-time self-heal/migration (currently: the
+// CLI-token relocation, migrateCLITokenOutOfUsers) performs a write. Used by
+// pkg/gateway's config-file-watcher polling loop and manual /reload trigger —
+// the two read paths that call into config loading directly, bypassing
+// safeUpdateConfigJSON's own configMu + selfWriteReg registration — so a
+// self-heal write triggered from either of those paths is still recognized
+// as app-initiated rather than a genuine external edit.
 func LoadConfigWithStoreAndSelfHealHook(path string, store CredentialStore, onSelfHeal SelfHealWriteHook) (*Config, error) {
 	return loadConfigInternal(path, store, onSelfHeal)
 }
@@ -3498,71 +3476,22 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	// config without a schedules block still gets 8 / 300.
 	cfg.Schedules.ApplyDefaults()
 
-	// Single-user model: Omnipus is now a single-user, self-hosted instance —
-	// there is no meaningful admin-vs-normal-user distinction. The RBAC
-	// scaffolding (UserRole, RequireAdmin, the Users screen, ownership model)
-	// is retained, but every authenticated user is always treated as having
-	// full admin authority. normalizeAdminOnlyRoles is kept as defense-in-
-	// depth: UserRole.UnmarshalJSON (this file) now coerces "user" -> admin
-	// at the type's own deserialization boundary, so for any cfg that was
-	// just decoded from the JSON `data` read above, every Gateway.Users[i]
-	// entry ALREADY reads UserRoleAdmin by the time we get here — this call
-	// is expected to be a no-op in that (common) case. It still matters for
-	// *Config values assembled directly in Go (tests, or any future
-	// non-JSON construction path) that never pass through UnmarshalJSON.
-	_ = normalizeAdminOnlyRoles(cfg)
-
-	// Self-heal config.json in the SAME load pass so the on-disk file can
-	// never durably disagree with runtime behavior — a load-only fix would
-	// let config.json silently keep saying "role":"user" forever while every
-	// request is actually treated as admin, which is a real config/audit-
-	// trail hazard on a network-exposed gateway.
+	// CLI-token relocation (single-user model follow-up): a legacy config may
+	// carry a role-less "cli" entry in Gateway.Users that exists only to hold
+	// the CLI's bearer token. Now that the human-account/role concept is
+	// gone, that token gets a dedicated Gateway.CLIToken slot instead of a
+	// synthetic Users[] row. One-shot, best-effort, idempotent — see
+	// migrateCLITokenOutOfUsers in cli_token_migration.go.
 	//
-	// Only for CurrentVersion configs: a v0 config already gets its fully
-	// migrated (and by now already-normalized) state written by the existing
-	// v0-migration SaveConfig call further up in this function — a second
-	// write here would be redundant.
-	//
-	// This is called UNCONDITIONALLY for CurrentVersion loads rather than
-	// gated on normalizeAdminOnlyRoles's return value: since UnmarshalJSON
-	// now normalizes "user" -> "admin" at JSON-decode time, normalizeAdminOnlyRoles
-	// above can no longer observe a change for a config that came from JSON —
-	// the in-memory role already reads "admin" even when the ON-DISK bytes
-	// still literally say "user" (e.g. a config.json written before this
-	// coercion existed, or written by an older binary). selfHealUserRolesOnDisk
-	// re-reads path itself and diffs against the raw JSON, so it self-gates on
-	// whether a write is actually needed (see TestLoadConfig_AllAdminRoles_NoOpNoRewrite) —
-	// calling it unconditionally here is cheap and correct, and is the only way
-	// to keep the on-disk file's own byte content self-healing now that the
-	// signal that used to gate this call is structurally always "no change" for
-	// JSON-sourced configs.
-	//
-	// selfHealUserRolesOnDisk patches ONLY the gateway.users[].role fields in
-	// the raw JSON (mirroring safeUpdateConfigJSON's raw-JSON-map pattern in
-	// pkg/gateway/rest.go) rather than re-marshaling the full *Config via
-	// SaveConfig — SaveConfig's typed-struct round-trip silently drops any
-	// field carrying an explicit zero value under an `omitempty` JSON tag
-	// (e.g. a literal `"token_hash":""` disappears from the file entirely),
-	// which corrupts on-disk byte-level fidelity even though the Go type
-	// system treats "missing key" and "explicit zero value" as equivalent on
-	// the next load.
-	//
-	// If the write-back fails (read-only filesystem, permissions, or missing
-	// gateway.users section), log a warning but do NOT fail the load — the
-	// in-memory normalization above already makes runtime behavior correct
-	// regardless.
+	// Only for CurrentVersion configs, mirroring the retired
+	// selfHealUserRolesOnDisk's own gating: a v0 config already gets its
+	// fully migrated (CurrentVersion-shaped, "cli"-Users-free) state written
+	// by the existing v0-migration SaveConfig call further up in this
+	// function — a v0-format raw-JSON patch attempt here would be redundant
+	// and would be probing a raw JSON shape (the legacy configV0 layout) this
+	// migration was never designed against.
 	if versionInfo.Version == CurrentVersion {
-		written, healErr := selfHealUserRolesOnDisk(path)
-		if healErr != nil {
-			logger.WarnF("failed to persist normalized admin-only user roles to config.json; "+
-				"runtime behavior is still correct (in-memory roles are normalized), "+
-				"but the on-disk file could not be self-healed", map[string]any{
-				"path":  path,
-				"error": healErr.Error(),
-			})
-		} else if written != nil && onSelfHeal != nil {
-			onSelfHeal(written)
-		}
+		migrateCLITokenOutOfUsers(cfg, path, onSelfHeal)
 	}
 
 	// Apply defaults and validate bounds for all security-relevant fields
@@ -3572,94 +3501,6 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	}
 
 	return cfg, nil
-}
-
-// normalizeAdminOnlyRoles enforces the single-user "every authenticated user
-// is admin" model described at loadConfigInternal's call site: any
-// Gateway.Users entry whose Role is not already UserRoleAdmin is rewritten to
-// UserRoleAdmin in place. Idempotent — a no-op once every entry is already
-// admin. Returns true if any entry's role was changed.
-//
-// Defense-in-depth: UserRole.UnmarshalJSON already performs this same
-// coercion at JSON-decode time, so for a *Config produced by decoding JSON
-// this function is structurally guaranteed to be a no-op (every role already
-// reads admin by the time cfg exists). It still matters for *Config values
-// assembled directly in Go — tests, or any future non-JSON construction path
-// — that never pass through UnmarshalJSON. Its return value is NOT used to
-// gate the on-disk self-heal (selfHealUserRolesOnDisk) at the call site — see
-// the comment there for why.
-func normalizeAdminOnlyRoles(cfg *Config) bool {
-	changed := false
-	for i := range cfg.Gateway.Users {
-		if cfg.Gateway.Users[i].Role != UserRoleAdmin {
-			logger.WarnF("normalizing user role to admin (single-user instance — "+
-				"admin/user distinction has no practical effect)", map[string]any{
-				"username":      cfg.Gateway.Users[i].Username,
-				"previous_role": string(cfg.Gateway.Users[i].Role),
-			})
-			cfg.Gateway.Users[i].Role = UserRoleAdmin
-			changed = true
-		}
-	}
-	return changed
-}
-
-// selfHealUserRolesOnDisk rewrites ONLY the gateway.users[].role fields in
-// the config.json at path to "admin", preserving every other field/byte of
-// structure untouched (raw-JSON-map read/patch/write, matching
-// pkg/gateway's safeUpdateConfigJSON: read the raw JSON as a map, mutate only
-// the fields that need to change, write back atomically — rather than
-// round-tripping the full *Config struct through SaveConfig, which drops
-// omitempty-zero fields; see the byte-fidelity note at this function's call
-// site). (migrateAgentOwnership, in agent_ownership_migration.go, uses a
-// similar raw-JSON approach but is unrelated dead code with zero production
-// callers — it is not the precedent being followed here.)
-//
-// Returns (nil, nil) if the file has no gateway.users section, or if every
-// entry already reads "admin" — a true no-op, no write performed. On a
-// successful write, returns the exact bytes written (never nil) so the
-// caller can register their hash with whatever write-dedup mechanism it
-// maintains (see SelfHealWriteHook) — pkg/config has no such mechanism of
-// its own to consult.
-func selfHealUserRolesOnDisk(path string) ([]byte, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read config for role self-heal: %w", err)
-	}
-	var m map[string]any
-	if unmarshalErr := json.Unmarshal(raw, &m); unmarshalErr != nil {
-		return nil, fmt.Errorf("parse config for role self-heal: %w", unmarshalErr)
-	}
-	gw, ok := m["gateway"].(map[string]any)
-	if !ok {
-		return nil, nil // no gateway section on disk — nothing to heal
-	}
-	usersRaw, ok := gw["users"].([]any)
-	if !ok {
-		return nil, nil // no users on disk — nothing to heal
-	}
-	changed := false
-	for _, u := range usersRaw {
-		um, ok := u.(map[string]any)
-		if !ok {
-			continue
-		}
-		if role, _ := um["role"].(string); role != string(UserRoleAdmin) {
-			um["role"] = string(UserRoleAdmin)
-			changed = true
-		}
-	}
-	if !changed {
-		return nil, nil
-	}
-	out, err := json.MarshalIndent(m, "", "  ")
-	if err != nil {
-		return nil, fmt.Errorf("serialize config for role self-heal: %w", err)
-	}
-	if writeErr := fileutil.WriteFileAtomic(path, out, 0o600); writeErr != nil {
-		return nil, fmt.Errorf("write config for role self-heal: %w", writeErr)
-	}
-	return out, nil
 }
 
 // knownProviderProtocols is the set of leading slug segments treated as an

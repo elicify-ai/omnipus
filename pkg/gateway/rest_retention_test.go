@@ -8,7 +8,6 @@ package gateway
 
 import (
 	"bufio"
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -20,10 +19,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/dapicom-ai/omnipus/pkg/config"
-	"github.com/dapicom-ai/omnipus/pkg/gateway/ctxkey"
-	"github.com/dapicom-ai/omnipus/pkg/gateway/middleware"
 )
 
 // retentionPUT is a helper that issues a PUT /api/v1/security/retention as admin.
@@ -166,33 +161,6 @@ func TestHandleRetention_PUT_HotReload(t *testing.T) {
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, false, resp["requires_restart"])
-}
-
-// TestHandleRetention_PUT_NonAdmin403 used to verify that a non-admin
-// request receives 403 Forbidden. Single-user model (operator directive,
-// 2026-07): a Gateway.Users entry that requests role="user" is normalized to
-// admin by config.LoadConfig's load-time self-heal
-// (config.normalizeAdminOnlyRoles) before it can ever reach request
-// handling. RequireAdmin's code is unchanged (still denies a literal
-// non-admin role) but no authenticated caller can carry one anymore. This
-// test is deliberately flipped (not deleted) to prove the new outcome: the
-// SAME "user"-configured account that used to be denied here now succeeds,
-// via the real config-loading choke point rather than a hand-asserted role
-// literal.
-func TestHandleRetention_PUT_NonAdmin403(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-
-	resolvedRole := normalizedRoleForUser(t, "bob", "user")
-	require.Equal(t, config.UserRoleAdmin, resolvedRole,
-		"single-user model: config.LoadConfig must normalize role=user to admin")
-
-	ctx := context.WithValue(context.Background(), ctxkey.RoleContextKey{}, resolvedRole)
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/retention", strings.NewReader(`{"session_days": 7}`))
-	r = r.WithContext(ctx)
-	w := httptest.NewRecorder()
-	middleware.RequireAdmin(http.HandlerFunc(api.HandleRetention)).ServeHTTP(w, r)
-
-	assert.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 }
 
 // TestHandleRetention_PUT_MethodNotAllowed verifies that DELETE returns 405.
@@ -361,33 +329,6 @@ func TestHandleRetentionSweep_DisabledReturnsSkipped(t *testing.T) {
 	// File must still exist.
 	_, err := os.Stat(oldFile)
 	assert.NoError(t, err, "file must not be deleted when retention is disabled")
-}
-
-// TestHandleRetentionSweep_NonAdmin403 used to verify that a non-admin
-// request to POST /retention/sweep receives 403 Forbidden. Single-user model
-// (operator directive, 2026-07): a Gateway.Users entry that requests
-// role="user" is normalized to admin by config.LoadConfig's load-time
-// self-heal (config.normalizeAdminOnlyRoles) before it can ever reach
-// request handling. RequireAdmin's code is unchanged (still denies a
-// literal non-admin role) but no authenticated caller can carry one
-// anymore. This test is deliberately flipped (not deleted) to prove the new
-// outcome: the SAME "user"-configured account that used to be denied here
-// now succeeds, via the real config-loading choke point rather than a
-// hand-asserted role literal.
-func TestHandleRetentionSweep_NonAdmin403(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-
-	resolvedRole := normalizedRoleForUser(t, "bob", "user")
-	require.Equal(t, config.UserRoleAdmin, resolvedRole,
-		"single-user model: config.LoadConfig must normalize role=user to admin")
-
-	ctx := context.WithValue(context.Background(), ctxkey.RoleContextKey{}, resolvedRole)
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/security/retention/sweep", nil)
-	r = r.WithContext(ctx)
-	w := httptest.NewRecorder()
-	middleware.RequireAdmin(http.HandlerFunc(api.HandleRetentionSweep)).ServeHTTP(w, r)
-
-	assert.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 }
 
 // TestHandleRetentionSweep_MethodNotAllowed verifies that GET returns 405.

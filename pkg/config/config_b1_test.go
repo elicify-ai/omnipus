@@ -394,11 +394,10 @@ func TestBootConfigRoundTrip_NewFields(t *testing.T) {
 	cfg.Tools.ServeWorkspace.MinDurationSeconds = 120
 	cfg.Gateway.AuthMismatchLogLevel = "info"
 	cfg.Gateway.Users = []UserConfig{
-		{Username: "alice", Role: UserRoleAdmin, SessionTokenHash: "bcrypthash"},
+		{Username: "alice", SessionTokenHash: "bcrypthash"},
 	}
-	// Add an agent with OwnerUsername.
 	cfg.Agents.List = []AgentConfig{
-		{ID: "agent-1", Name: "My Agent", OwnerUsername: "alice"},
+		{ID: "agent-1", Name: "My Agent"},
 	}
 
 	if err := SaveConfig(cfgPath, cfg); err != nil {
@@ -449,9 +448,6 @@ func TestBootConfigRoundTrip_NewFields(t *testing.T) {
 	}
 	if len(loaded.Gateway.Users) < 1 || loaded.Gateway.Users[0].SessionTokenHash != "bcrypthash" {
 		t.Errorf("SessionTokenHash did not survive round-trip: %v", loaded.Gateway.Users)
-	}
-	if len(loaded.Agents.List) < 1 || loaded.Agents.List[0].OwnerUsername != "alice" {
-		t.Errorf("OwnerUsername did not survive round-trip: %v", loaded.Agents.List)
 	}
 }
 

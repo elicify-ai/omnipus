@@ -312,15 +312,19 @@ func writeMockToolCallStream(w http.ResponseWriter, toolName, argsJSON string) {
 	}
 }
 
-// provisionCLIToken mints a fresh CLI token and injects the cli user entry into
-// the gateway's config.json via gw.SeedUser, then waits for the reload to
-// propagate. Returns the plaintext token for use in run.Options.Token.
+// provisionCLIToken mints a fresh CLI token and injects it into the gateway's
+// config.json via gw.SeedCLIToken, then waits for the reload to propagate.
+// Returns the plaintext token for use in run.Options.Token.
 //
 // Strategy: clitoken.EnsureCLIToken writes to $OMNIPUS_HOME/config.json. But the
 // gateway was already started with a separate temp config. Instead of relying on
 // EnsureCLIToken's file-mutate path (which writes to whatever $OMNIPUS_HOME
 // points to, potentially the harness's real home), we generate the token manually
-// and use gw.SeedUser so the gateway's reload path picks it up.
+// and use gw.SeedCLIToken so the gateway's reload path picks it up.
+//
+// The CLI token lives in the dedicated Gateway.CLIToken slot, not
+// Gateway.Users — it is a machine-only credential, checked as a distinct
+// principal from the human account (pkg/config/cli_token_migration.go).
 func provisionCLIToken(t *testing.T, gw *testutil.TestGateway) string {
 	t.Helper()
 
@@ -335,18 +339,18 @@ func provisionCLIToken(t *testing.T, gw *testutil.TestGateway) string {
 	)
 	require.NoError(t, err, "bcrypt hash must succeed")
 
-	// Inject the cli user via gw.SeedUser so the gateway's in-memory config
-	// picks it up after reload. SeedUser posts /reload and polls for propagation.
-	cliUser := config.UserConfig{
-		Username:  "cli",
-		TokenHash: config.BcryptHash(hash),
-		Role:      config.UserRoleAdmin,
+	// Inject via gw.SeedCLIToken so the gateway's in-memory config picks it up
+	// after reload. The id is left empty, matching upsertCLIToken's convention
+	// (Gateway.CLIToken is a single standalone credential, not an ID-indexed set).
+	tok := config.TokenEntry{
+		Hash:      config.BcryptHash(hash),
+		CreatedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	err = gw.SeedUser(ctx, cliUser, nil)
-	require.NoError(t, err, "SeedUser(cli) must succeed")
+	err = gw.SeedCLIToken(ctx, tok)
+	require.NoError(t, err, "SeedCLIToken must succeed")
 
 	return plainToken
 }

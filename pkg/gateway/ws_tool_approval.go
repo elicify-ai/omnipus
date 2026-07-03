@@ -14,7 +14,7 @@
 //
 //  2. session_state (FR-052, FR-073, FR-081)
 //     One-shot per WS connection on every reconnect.
-//     Scoped to the authenticated user: admins see all sessions; non-admins see own only.
+//     Single-user model: every connection sees every pending approval.
 
 package gateway
 
@@ -24,23 +24,16 @@ import (
 	"time"
 
 	"github.com/dapicom-ai/omnipus/pkg/api/generated"
-	"github.com/dapicom-ai/omnipus/pkg/config"
 )
 
 // broadcastToolApprovalRequired sends a tool_approval_required WS frame to
-// connected WebSocket clients scoped to the session's owner (FR-073).
+// every connected WebSocket client (FR-073; single-user model, no per-account
+// scoping).
 //
 // Wire format: generated.ToolApprovalRequiredFrame (contract-first, pkg/api/generated).
 // Nil-safety: args MUST be an object (never null). The SPA's ToolApprovalModal calls
 // Object.keys(args) directly — null crashes with "null is not an object" (Ava-chat bug).
 // When entry.Args is nil, we coerce to map[string]any{} at this site.
-//
-// Scoping rules:
-//   - Admin role: receives the frame (can act on any approval).
-//   - Non-admin: receives the frame only if wc.userID matches the session owner.
-//     Since session→user ownership is not yet persisted, non-admin clients whose
-//     userID was set at WS auth time see approvals for sessions they initiated
-//     in the same connection. Admins see all.
 //
 // The frame is best-effort: clients that are disconnected or have a full send buffer
 // will miss the frame and must rely on the next session_state reset on reconnect.
@@ -82,15 +75,9 @@ func (h *WSHandler) broadcastToolApprovalRequired(entry *approvalEntry) {
 	h.mu.Unlock()
 
 	for _, wc := range conns {
-		// FR-073: scope approval broadcasts so non-owners do not see args.
-		// Admin role always receives. Non-admin receives only when their
-		// userID matches the session owner (session ownership via userID field).
-		if wc.role != config.UserRoleAdmin && wc.userID != entry.AgentID {
-			// entry.AgentID is the best proxy for session ownership until a
-			// proper session→userID ownership index is maintained. Non-admin
-			// clients for a different agent/user are excluded.
-			continue
-		}
+		// FR-073 scoping is moot under the single-user model — every connected
+		// client is the one account, so every connection receives every
+		// approval broadcast unconditionally (role-based scoping removed).
 		select {
 		case wc.sendCh <- raw:
 		default:
@@ -108,12 +95,8 @@ func (h *WSHandler) broadcastToolApprovalRequired(entry *approvalEntry) {
 // Nil-safety: pending_approvals MUST be an array (never null). The SPA calls
 // pending_approvals.map() — null would crash at render time. Coerced to [] when empty.
 //
-// Scoping rules (FR-073):
-//   - Admin role: sees pending approvals for ALL sessions.
-//   - Non-admin: sees only approvals for their own sessions (matched by session.AgentID
-//     is unreliable without per-session user tracking; until the session-ownership model
-//     is wired by A1, non-admins see their own connection's associated session ID, which
-//     may be "" on first connect).
+// FR-073 scoping is moot under the single-user model: every connection sees
+// every pending approval, for all sessions.
 //
 // Note: When approvalRegV2 is nil (pre-registry harness), the payload has an empty
 // pending_approvals array — the SPA receives a valid frame and clears any stale UI.
@@ -127,19 +110,11 @@ func (h *WSHandler) emitSessionState(wc *wsConn) {
 
 	if h.approvalRegV2 != nil {
 		allPending := h.approvalRegV2.pendingApprovals()
-		isAdmin := wc.role == config.UserRoleAdmin
 
+		// FR-073 scoping is moot under the single-user model — every connected
+		// client is the one account, so every connection sees every pending
+		// approval (role-based scoping removed).
 		for _, e := range allPending {
-			// Admin sees all; non-admin sees only approvals matching their own sessions.
-			// Until session ownership is tracked at the WS layer, non-admins see nothing
-			// (safe default; they will see their own once session ownership is wired).
-			if !isAdmin {
-				// FR-073: non-admin scoping. Non-admin clients receive an empty set
-				// rather than leaking other users' approval data. A full session→
-				// userID ownership index would enable per-user filtering here;
-				// until then, non-admin users see nothing (safe default).
-				continue
-			}
 			pendingApprovals = append(pendingApprovals, generated.SessionStatePendingApproval{
 				ApprovalId:  e.ApprovalID,
 				SessionId:   e.SessionID,
