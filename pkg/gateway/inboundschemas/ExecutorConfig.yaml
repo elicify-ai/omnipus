@@ -20,6 +20,11 @@ description: >
   / skills / delegation_policy are hidden for subagent_3p agents and rejected
   400 on PUT if set.
 
+  "cli" (required for subagent_3p agents when kind="external-cli") is locked
+  after create — to switch CLIs, the user must create a new agent. Mutating
+  attempts on PUT return 400 with "executor.cli is locked after create;
+  create a new agent to switch CLIs."
+
   "remote-a2a" is RESERVED for future A2A protocol resolution. The schema
   accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with
   an error ("not available in v0.1.0").
@@ -45,17 +50,8 @@ properties:
       "remote-a2a" is reserved for future A2A protocol resolution.
     example: "native"
   cli:
-    type: string
-    enum:
-      - claude-code
-      - codex
-      - opencode
-    description: >
-      The external CLI tool to use when kind="external-cli".
-      Required for subagent_3p agents. Locked after create — to switch CLIs,
-      the user must create a new agent. Mutating attempts on PUT return 400
-      with "executor.cli is locked after create; create a new agent to switch CLIs."
-    example: "claude-code"
+    $ref: './ExternalCli.yaml'
+    x-go-type: ExternalCliTool
   cli_path:
     type: string
     description: >

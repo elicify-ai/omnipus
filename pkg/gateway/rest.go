@@ -1068,12 +1068,21 @@ func (a *restAPI) HandleAgents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// GET /api/v1/agents/executor-defaults — static reference data (agent-system-
-	// fixes-2 ghost-text bug fix). "executor-defaults" is a RESERVED static path
-	// segment, not an agent ID, so this is matched before the generic agentID
-	// routing below (an agent literally named "executor-defaults" can never be
-	// looked up through this route — createAgent/updateAgent do not reserve the
-	// name, so this is purely a routing precedence choice, matching how
-	// "sessions"/"runner"/"tools"/"mailboxes" sub-paths are reserved below).
+	// fixes-2 ghost-text bug fix). This reservation is structurally different
+	// from the "sessions"/"runner"/"tools"/"mailboxes" sub-path guards below:
+	// those reserve a VERB-SUFFIX position that is only checked AFTER agentID
+	// has already been split off and validated (so they can never collide with
+	// a real agent ID, only with a same-named sub-resource segment). This guard
+	// instead claims the agentID SLOT ITSELF — "executor-defaults" is matched
+	// as if it were the {id} value before any agent lookup happens, so it is a
+	// static path segment carved out of the agent-ID namespace, not a
+	// sub-resource reservation. createAgent/updateAgent do not reject this
+	// literal ID, so if an agent were ever created with it, that agent would
+	// become permanently unreachable via GET /api/v1/agents/{id} (shadowed by
+	// this branch). Practical risk is low — agent IDs are always
+	// uuid.New().String(), never operator-chosen — but this is a narrower,
+	// more fragile precedent than the sub-path guards below and should not be
+	// copied casually for a future static route under /agents/.
 	if agentID == "executor-defaults" && subPath == "" {
 		if r.Method != http.MethodGet {
 			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -1260,7 +1269,7 @@ func (a *restAPI) testAgentRunner(w http.ResponseWriter, r *http.Request, agentI
 func (a *restAPI) listExecutorDefaults(w http.ResponseWriter) {
 	jsonOK(w, []gen.ExecutorDefaults{
 		{
-			Cli: gen.ExecutorDefaultsCliClaudeCode,
+			Cli: gen.ClaudeCode,
 			AutoAppliedFlags: []string{
 				"-p",
 				"--output-format stream-json",
@@ -1273,7 +1282,7 @@ func (a *restAPI) listExecutorDefaults(w http.ResponseWriter) {
 			Notes: "The prompt is delivered via stdin — a trailing \"-\" argument tells claude to read it from stdin — never via a --prompt flag or positional argument. --resume/--session-id are never passed; every run starts a fresh claude session. --dangerously-skip-permissions is never passed (--permission-mode acceptEdits is the non-interactive posture used instead). Operator cli_args are appended after this list; an attempt to re-add --dangerously-skip-permissions, escalate --permission-mode to bypassPermissions, or change --output-format away from stream-json is dropped with a WARN (see argsafety.go) — the last one because the driver's own NDJSON stream parser requires stream-json output.",
 		},
 		{
-			Cli: gen.ExecutorDefaultsCliCodex,
+			Cli: gen.Codex,
 			AutoAppliedFlags: []string{
 				"--ask-for-approval never",
 				"exec",
@@ -1287,7 +1296,7 @@ func (a *restAPI) listExecutorDefaults(w http.ResponseWriter) {
 			Notes: "--ask-for-approval is a GLOBAL codex flag and must precede the exec subcommand (codex errors if it follows exec); --sandbox is an exec-subcommand flag and is placed after exec instead. The prompt is delivered via stdin — a trailing \"-\" argument — never via a --prompt flag. Operator cli_args are appended after this list; --dangerously-bypass-approvals-and-sandbox, --sandbox danger-full-access, any --ask-for-approval override, and any --json override (bare or \"=false\"-shaped) are dropped with a WARN (see argsafety.go) — the last one because the driver's own NDJSON stream parser requires --json output.",
 		},
 		{
-			Cli: gen.ExecutorDefaultsCliOpencode,
+			Cli: gen.Opencode,
 			AutoAppliedFlags: []string{
 				"run",
 				"--format json",

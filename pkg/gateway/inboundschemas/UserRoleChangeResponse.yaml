@@ -14,7 +14,11 @@ properties:
     enum:
       - admin
       - user
-    description: The new role.
+    description: >
+      The new role. "user" is accepted for backward-compatible wire
+      validation, but under the current single-user model this always reports
+      "admin" regardless of what was requested on UserRoleChangeRequest (see
+      rest_users.go's persistedRole).
     example: "user"
   requires_restart:
     type: boolean

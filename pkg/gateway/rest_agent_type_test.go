@@ -174,7 +174,7 @@ func TestCreateAgent_TypeWorker_AllowsNonNativeExecutor(t *testing.T) {
 	require.NotNil(t, created.Executor.Kind, "executor.kind must be present")
 	assert.Equal(t, gen.AgentExecutorKindExternalCli, *created.Executor.Kind)
 	require.NotNil(t, created.Executor.Cli, "executor.cli must be present")
-	assert.Equal(t, gen.AgentExecutorCliCodex, *created.Executor.Cli)
+	assert.Equal(t, gen.Codex, *created.Executor.Cli)
 
 	raw := readTypeTestConfigMap(t, api.configPath())
 	entry := findTypeTestAgentInConfig(t, raw, "Worker External")
