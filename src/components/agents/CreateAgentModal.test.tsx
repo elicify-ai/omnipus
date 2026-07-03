@@ -608,6 +608,48 @@ describe('CreateAgentModal — Advanced step fields', () => {
       custom_deny_patterns: ['rm -rf /', 'curl.*169\\.254'],
     })
   })
+
+  // W2b field-matrix gating (docs/internal/architecture/agent-types-field-matrix.md):
+  // steering_mode is a Main-surface concept — workers are forced
+  // one-at-a-time server-side — and `executor` never applies to a native
+  // (in-process) Subagent (the server derives `native`).
+  it('Subagent create has NO steering_mode and NO executor key at all', async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined)
+    renderModal({ open: true, onClose: vi.fn(), onCreate, initialType: 'Subagent' })
+    await fillAndAdvanceToStep3({ initialType: 'Subagent' })
+    fireEvent.click(screen.getByTestId('wizard-create'))
+    await waitFor(() => expect(onCreate).toHaveBeenCalled())
+    const call = onCreate.mock.calls.at(-1)![0]
+    expect(call.steering_mode).toBeUndefined()
+    expect('executor' in call).toBe(false)
+    // A native Subagent legitimately carries max_tool_iterations (O, default
+    // 200/turn per the field matrix) — only steering_mode/executor are gated.
+    expect(call.max_tool_iterations).toBe(200)
+  })
+
+  // subagent_3p never carries max_tool_iterations (the external CLI runs its
+  // own loop — the field-matrix "pending operator decision" resolved to
+  // exclude) but DOES carry timeout_seconds (process-level kill for a hung
+  // CLI) and always sends the external-cli executor block.
+  it('subagent_3p create has NO max_tool_iterations, HAS timeout_seconds, and executor.kind=external-cli', async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined)
+    renderModal({
+      open: true,
+      onClose: vi.fn(),
+      onCreate,
+      initialType: 'subagent_3p',
+      initialCli: 'claude-code',
+    })
+    await fillAndAdvanceToStep3({ initialType: 'subagent_3p', cliPath: '/usr/local/bin/claude-code' })
+    fireEvent.click(screen.getByTestId('wizard-create'))
+    await waitFor(() => expect(onCreate).toHaveBeenCalled())
+    const call = onCreate.mock.calls.at(-1)![0]
+    expect(call.max_tool_iterations).toBeUndefined()
+    expect(call.timeout_seconds).toBe(300)
+    expect(call.executor).toMatchObject({ kind: 'external-cli' })
+    expect(call.steering_mode).toBeUndefined()
+    expect(call.model_params).toBeUndefined()
+  })
 })
 
 describe('CreateAgentModal — create/edit parity fixes (P3, 2026-07-03)', () => {
