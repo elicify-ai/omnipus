@@ -53,10 +53,10 @@ func checkBearerAuth(ctx context.Context, w http.ResponseWriter, r *http.Request
 	prefix := "Bearer "
 
 	// dev_mode_bypass short-circuit: when auth isn't configured AND bypass is
-	// enabled, allow the request as admin (even with no Authorization header
-	// at all). This makes the SPA reviewable on a fresh install without
-	// onboarding first. Per-user RBAC and OMNIPUS_BEARER_TOKEN paths below
-	// still run for the non-bypass case.
+	// enabled, allow the request (even with no Authorization header at all).
+	// This makes the SPA reviewable on a fresh install without onboarding
+	// first. The account and OMNIPUS_BEARER_TOKEN paths below still run for
+	// the non-bypass case.
 	if !strings.HasPrefix(auth, prefix) && cfg.Gateway.DevModeBypass {
 		slog.Warn(
 			"AUTH-BYPASS",
@@ -110,7 +110,7 @@ func checkBearerAuth(ctx context.Context, w http.ResponseWriter, r *http.Request
 		return AuthResult{Authenticated: false}
 	}
 
-	// 3. Fallback: legacy OMNIPUS_BEARER_TOKEN env var (treated as admin role).
+	// 3. Fallback: legacy OMNIPUS_BEARER_TOKEN env var.
 	required := os.Getenv("OMNIPUS_BEARER_TOKEN")
 	if required == "" {
 		if cfg.Gateway.DevModeBypass {
@@ -118,9 +118,9 @@ func checkBearerAuth(ctx context.Context, w http.ResponseWriter, r *http.Request
 			warnUnauthOnce.Do(func() {
 				slog.Warn("DEV MODE: API has no authentication. Set gateway.dev_mode_bypass=false for production.")
 			})
-			// Allow all requests in dev mode, treated as admin. Provide a
-			// synthetic User so handlers that read *UserConfig from context
-			// (e.g. /auth/validate) see an admin identity instead of nil.
+			// Allow all requests in dev mode. Provide a synthetic User so
+			// handlers that read *UserConfig from context (e.g.
+			// /auth/validate) see an identity instead of nil.
 			return AuthResult{Authenticated: true, User: &devBypassUser}
 		}
 		// No auth configured — deny by default (fail closed).
@@ -136,13 +136,13 @@ func checkBearerAuth(ctx context.Context, w http.ResponseWriter, r *http.Request
 	return AuthResult{Authenticated: true, User: &envTokenUser}
 }
 
-// devBypassUser is the synthetic admin identity returned when the request
-// passes via gateway.dev_mode_bypass. Handlers that read *UserConfig from
-// context (HandleValidateToken etc.) see "_dev_bypass" rather than nil.
+// devBypassUser is the synthetic identity returned when the request passes
+// via gateway.dev_mode_bypass. Handlers that read *UserConfig from context
+// (HandleValidateToken etc.) see "_dev_bypass" rather than nil.
 var devBypassUser = config.UserConfig{Username: "_dev_bypass"}
 
-// envTokenUser is the synthetic admin identity returned when the request
-// passes via the legacy OMNIPUS_BEARER_TOKEN environment fallback.
+// envTokenUser is the synthetic identity returned when the request passes
+// via the legacy OMNIPUS_BEARER_TOKEN environment fallback.
 var envTokenUser = config.UserConfig{Username: "_env_token"}
 
 // configSnapshotMiddleware snapshots the current config into the request context

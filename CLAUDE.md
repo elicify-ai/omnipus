@@ -4,7 +4,7 @@ Guidance for Claude Code when working in this repository.
 
 ## Project
 
-Omnipus is an agentic core: a single Go binary with the SPA embedded via `go:embed`, kernel-level sandboxing (Landlock + seccomp on Linux 5.13+), RBAC, audit logging, encrypted credential management, and compiled-in Go channels. Community-facing, MIT-licensed, no telemetry. **Domain:** omnipus.ai
+Omnipus is an agentic core: a single Go binary with the SPA embedded via `go:embed`, kernel-level sandboxing (Landlock + seccomp on Linux 5.13+), audit logging, encrypted credential management, and compiled-in Go channels. Community-facing, MIT-licensed, no telemetry. **Domain:** omnipus.ai
 
 ## Status
 

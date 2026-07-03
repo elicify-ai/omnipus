@@ -16,7 +16,7 @@ Start Omnipus and visit `http://localhost:5000`:
 omnipus start
 ```
 
-On a fresh install the gateway boots into limited mode automatically (no flag needed). The wizard at `/onboarding` walks Welcome → Provider → API Key → Model → Admin Account → Done, then the gateway is fully provisioned.
+On a fresh install the gateway boots into limited mode automatically (no flag needed). The wizard at `/onboarding` walks Welcome → Provider → API Key → Model → Account → Done, then the gateway is fully provisioned.
 
 #### Use the Interactive CLI Wizard
 
@@ -26,7 +26,7 @@ Same end result, no browser:
 omnipus onboard
 ```
 
-This prompts for provider, API key (hidden input), model, and admin username/password. It writes the encrypted API key into `credentials.json`, the provider entry and admin user into `config.json`, and marks onboarding complete in `system/state.json`.
+This prompts for provider, API key (hidden input), model, and username/password. It writes the encrypted API key into `credentials.json`, the provider entry and your account into `config.json`, and marks onboarding complete in `system/state.json`.
 
 ### Gateway Exits Silently — Nothing on stdout
 
@@ -73,11 +73,11 @@ The auth decision tree in `pkg/gateway/auth.go::checkBearerAuth` is:
 1. No `Authorization: Bearer …` header on a protected route → **401**.
 2. `cfg.gateway.users` populated → token must match a registered user.
 3. `OMNIPUS_BEARER_TOKEN` env set → token must constant-time-equal the env value.
-4. No users **and** no env token → `gateway.dev_mode_bypass: true` lets the caller through as admin; `false` returns 401 *"no users configured, complete onboarding first"*.
+4. No users **and** no env token → `gateway.dev_mode_bypass: true` lets the caller through; `false` returns 401 *"no users configured, complete onboarding first"*.
 
-The most common failure is **(4)** with `dev_mode_bypass: false` on a fresh install before you've completed onboarding. The web onboarding wizard works with bypass off (those endpoints use `withOptionalAuth`, not `withAuth`), but if you're hitting `/api/v1/agents` or `/api/v1/sessions` directly, you need either an admin user (run onboarding) or a temporary `OMNIPUS_BEARER_TOKEN=<your-token>` env variable.
+The most common failure is **(4)** with `dev_mode_bypass: false` on a fresh install before you've completed onboarding. The web onboarding wizard works with bypass off (those endpoints use `withOptionalAuth`, not `withAuth`), but if you're hitting `/api/v1/agents` or `/api/v1/sessions` directly, you need either a configured account (run onboarding) or a temporary `OMNIPUS_BEARER_TOKEN=<your-token>` env variable.
 
-For local dev, set `dev_mode_bypass: true` in `config.json` — but **never in production**. The flag triggers a one-time stderr `WARN` at boot and a `503` on a hand-picked allow-list of admin-only routes (e.g. `PUT /api/v1/security/sandbox-config`) as defence in depth.
+For local dev, set `dev_mode_bypass: true` in `config.json` — but **never in production**. The flag triggers a one-time stderr `WARN` at boot and a `503` on a hand-picked allow-list of high-blast-radius routes (e.g. `PUT /api/v1/security/sandbox-config`) as defence in depth.
 
 ## LLM Call Returns 404 "No Endpoints Found That Support Tool Use"
 
