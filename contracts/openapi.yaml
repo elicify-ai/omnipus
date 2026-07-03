@@ -145,6 +145,8 @@ components:
       $ref: ./components/schemas/FallbackModel.yaml
     ExecutorConfig:
       $ref: ./components/schemas/ExecutorConfig.yaml
+    ExecutorDefaults:
+      $ref: ./components/schemas/ExecutorDefaults.yaml
     VoiceProvider:
       $ref: ./components/schemas/VoiceProvider.yaml
     AgentSession:
@@ -1763,6 +1765,28 @@ paths:
           $ref: '#/components/responses/404NotFound'
         '500':
           $ref: '#/components/responses/500InternalServerError'
+  /agents/executor-defaults:
+    get:
+      operationId: listExecutorDefaults
+      summary: List the real auto-applied CLI flags for each external-CLI runner
+      description: 'Static reference data: for each supported subagent_3p external CLI (claude-code, codex, opencode), the ordered list of arguments the driver automatically applies when spawning it (ADR-032), plus a note on how the prompt itself is delivered. Read-only and not agent-scoped — used by the Agent Profile UI so operators see the REAL, currently-in-effect flags instead of static placeholder ghost-text before adding their own executor.cli_args. Sourced directly from pkg/agent/runner/driver_{claude,codex,opencode}.go and kept byte-accurate to that code.
+
+        '
+      tags:
+      - agents
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: One entry per supported external CLI (claude-code, codex, opencode).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ExecutorDefaults'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
   /security/session-scope:
     get:
       operationId: getSessionScope

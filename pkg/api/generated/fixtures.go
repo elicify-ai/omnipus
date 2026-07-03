@@ -2235,7 +2235,7 @@ func FixtureDelegationPolicy_InvalidJSON() []byte {
 
 func FixtureExecutorConfig_Populated() ExecutorConfig {
 	kind := ExternalCli
-	cli := ClaudeCode
+	cli := ExecutorConfigCliClaudeCode
 	return ExecutorConfig{
 		Kind: &kind,
 		Cli:  &cli,

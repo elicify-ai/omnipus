@@ -1391,6 +1391,11 @@ export const RunnerTestResponse = z.object({
   cli: z.string().optional(),
   cli_version: z.string().optional(),
 });
+export const ExecutorDefaults = z.object({
+  cli: z.enum(["claude-code", "codex", "opencode"]),
+  auto_applied_flags: z.array(z.string()),
+  notes: z.string(),
+});
 export const SessionScopeResponse = z
   .object({
     dm_scope: z.enum([
@@ -2965,6 +2970,22 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 500,
         description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/agents/executor-defaults",
+    alias: "listExecutorDefaults",
+    description: `Static reference data: for each supported subagent_3p external CLI (claude-code, codex, opencode), the ordered list of arguments the driver automatically applies when spawning it (ADR-032), plus a note on how the prompt itself is delivered. Read-only and not agent-scoped — used by the Agent Profile UI so operators see the REAL, currently-in-effect flags instead of static placeholder ghost-text before adding their own executor.cli_args. Sourced directly from pkg/agent/runner/driver_{claude,codex,opencode}.go and kept byte-accurate to that code.
+`,
+    requestFormat: "json",
+    response: z.array(ExecutorDefaults),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
         schema: ErrorResponse,
       },
     ],

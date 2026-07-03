@@ -70,6 +70,9 @@ import {
   CliDetect as CliDetectSchema,
   // external-executor-cli-path-detection spec (ADR-030): create-time validate.
   CliValidateResponse as CliValidateResponseSchema,
+  // Agent System P0 fix: real auto-applied CLI flags (replaces misleading
+  // placeholder ghost-text in the executor cli_args field).
+  ExecutorDefaults as ExecutorDefaultsSchema,
   GatewayStatus as GatewayStatusSchema,
   ToolRegistryEntry as ToolRegistryEntrySchema,
   ChannelEntry as ChannelEntrySchema,
@@ -266,6 +269,8 @@ import type {
   CliDetectEntry,
   CliValidateRequest,
   CliValidateResponse,
+  // Agent System P0 fix: real auto-applied CLI flags.
+  ExecutorDefaults,
   GatewayStatus,
   Skill,
   SkillSearchResult,
@@ -412,6 +417,8 @@ export type {
   CliDetectEntry,
   CliValidateRequest,
   CliValidateResponse,
+  // Agent System P0 fix: real auto-applied CLI flags.
+  ExecutorDefaults,
   GatewayStatus,
   Skill,
   SkillSearchResult,
@@ -1541,6 +1548,27 @@ export function fetchCliValidate(
     '/system/cli-validate',
     { method: 'POST', body: JSON.stringify(body), signal: opts?.signal },
     CliValidateResponseSchema as ZodType<CliValidateResponse>,
+  )
+}
+
+// fetchExecutorDefaults returns the static reference list of CLI flags
+// Omnipus automatically applies to a subagent_3p executor invocation, one
+// entry per supported CLI (claude-code / codex / opencode) — e.g. the
+// non-interactive-posture flags each driver's `buildArgs` always sets itself
+// (`pkg/agent/runner/driver_*.go`) and that `argsafety.go`
+// (`filterDangerousCLIArgs`) prevents an operator's `executor_cli_args`
+// free-text field from silently overriding. Rendered read-only in both the
+// create wizard (Step1Identity → ExecutorInputs) and the edit form
+// (AgentProfile) so operators see the REAL applied config instead of
+// misleading placeholder ghost-text (Agent System P0 fix). Not agent-scoped
+// and not filterable server-side — the endpoint always returns all three
+// entries; callers select the one matching the currently-chosen CLI
+// (`useExecutorDefaults`).
+export function fetchExecutorDefaults(): Promise<ExecutorDefaults[]> {
+  return request<ExecutorDefaults[]>(
+    '/agents/executor-defaults',
+    undefined,
+    z.array(ExecutorDefaultsSchema) as ZodType<ExecutorDefaults[]>,
   )
 }
 

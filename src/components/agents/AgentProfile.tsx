@@ -52,6 +52,7 @@ import { ShellDenyPatternsEditor } from './ShellDenyPatternsEditor'
 import { ExecutorSelector } from './ExecutorSelector'
 import { BehaviorFields, AvatarColorPicker, IconPicker, AvatarHeader } from './AgentFormFields'
 import { CliPathValidationHint } from './CliPathValidationHint'
+import { AutoAppliedFlags } from './AutoAppliedFlags'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import {
   fetchAgent,
@@ -1597,18 +1598,24 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   disabled={isLocked}
                 />
               </div>
-              <div data-testid="profile-cli-args" className="flex items-center gap-3">
-                <label className="text-xs text-[var(--color-muted)] w-44 shrink-0">CLI arguments</label>
-                <Input
-                  value={executor?.cli_args ?? ''}
-                  onChange={(e) => {
-                    markDirty()
-                    setExecutor((prev) => ({ ...(prev ?? { kind: 'external-cli', cli: executor?.cli ?? 'claude-code' }), cli_args: e.target.value }))
-                  }}
-                  placeholder="--no-update-check"
-                  className="text-xs h-8 font-mono"
-                  disabled={isLocked}
-                />
+              <AutoAppliedFlags cli={executor?.cli} testId="profile-executor-defaults" />
+              <div data-testid="profile-cli-args" className="space-y-1.5">
+                <div className="flex items-center gap-3">
+                  <label className="text-xs text-[var(--color-muted)] w-44 shrink-0">Additional CLI arguments</label>
+                  <Input
+                    value={executor?.cli_args ?? ''}
+                    onChange={(e) => {
+                      markDirty()
+                      setExecutor((prev) => ({ ...(prev ?? { kind: 'external-cli', cli: executor?.cli ?? 'claude-code' }), cli_args: e.target.value }))
+                    }}
+                    placeholder="e.g. --add-dir /extra/path (flags shown above are applied automatically and can't be overridden here)"
+                    className="text-xs h-8 font-mono"
+                    disabled={isLocked}
+                  />
+                </div>
+                <p className="text-[11px] text-[var(--color-muted)] leading-snug">
+                  In addition to the flags Omnipus applies automatically (shown above).
+                </p>
               </div>
             </section>
           
