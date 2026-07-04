@@ -360,12 +360,18 @@ function formatSmokeTestDuration(ms: number): string {
 // about WHERE the test ran, independent of whether it succeeded. Shown on
 // both the success and domain-level-failure branches below, since the
 // field is present (and meaningful) on both.
+//
+// Copy deliberately says "own folder/directory," not "own workspace" —
+// Omnipus has a separate, multi-agent "Workspace" feature (shared team,
+// delegation, project instructions) that this per-agent directory has
+// nothing to do with; using "workspace" here would wrongly imply a
+// connection to that feature.
 function WorkspaceProvenanceNote({ usedAgentWorkspace, testId }: { usedAgentWorkspace: boolean; testId?: string }) {
   return (
     <p data-testid={testId} className="text-[10px] text-[var(--color-muted)] leading-snug">
       {usedAgentWorkspace
-        ? "Ran in this agent's own saved workspace — the same place a real delegation to it would run."
-        : "Ran in a temporary workspace, not this agent's own — save the agent first to test with its real project context."}
+        ? "Ran in this agent's own folder — the same place a real delegation to it would run."
+        : "Ran in a temporary folder, not this agent's own — save the agent first to test with its real project context."}
     </p>
   )
 }

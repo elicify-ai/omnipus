@@ -10,14 +10,16 @@ description: >
   /agents/executor-preview and POST /system/cli-validate's body-driven
   shape so it works from the create wizard too, but is NOT fully
   agent-agnostic like those two: when agent_id names a real, saved agent,
-  the run happens in THAT agent's own bound workspace
-  ($OMNIPUS_HOME/agents/{id}/) — matching exactly where a genuine
-  delegation to this agent would run, so the test is representative of
-  real behavior (project files, AGENTS.md/CLAUDE.md/opencode.json context
-  the CLI would actually see). Omitting agent_id (the create-wizard case,
-  before the agent has been saved) or naming an agent that doesn't resolve
-  falls back to a disposable, ephemeral scratch directory instead — the
-  response's used_agent_workspace field says which one happened.
+  the run happens in THAT agent's own dedicated directory
+  ($OMNIPUS_HOME/agents/{id}/, AgentConfig.Workspace — NOT the separate,
+  multi-agent pkg/workspace.Workspace feature; see agent.ResolveAgentWorkspace's
+  own doc comment) — matching exactly where a genuine delegation to this
+  agent would run, so the test is representative of real behavior (project
+  files, AGENTS.md/CLAUDE.md/opencode.json context the CLI would actually
+  see). Omitting agent_id (the create-wizard case, before the agent has
+  been saved) or naming an agent that doesn't resolve falls back to a
+  disposable, ephemeral scratch directory instead — the response's
+  used_agent_workspace field says which one happened.
 required:
   - cli
 additionalProperties: false
@@ -29,12 +31,14 @@ properties:
     type: string
     maxLength: 128
     description: >
-      Optional id of an existing, saved agent whose own bound workspace
-      this test should run in. When it resolves to a real agent, the run
-      uses that agent's persistent workspace directory (never deleted
-      afterward — only the ephemeral scratch-directory fallback is
-      cleaned up). When omitted, empty, or naming an agent that no longer
-      exists, falls back to a disposable ephemeral workspace.
+      Optional id of an existing, saved agent whose own dedicated
+      directory ($OMNIPUS_HOME/agents/{id}/ — a per-agent folder, not the
+      separate pkg/workspace.Workspace feature) this test should run in.
+      When it resolves to a real agent, the run uses that directory
+      (never deleted afterward — only the ephemeral scratch-directory
+      fallback is cleaned up). When omitted, empty, or naming an agent
+      that no longer exists, falls back to a disposable ephemeral scratch
+      directory instead.
   model:
     type: string
     maxLength: 256

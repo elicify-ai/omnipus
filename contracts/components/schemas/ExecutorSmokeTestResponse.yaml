@@ -32,9 +32,12 @@ properties:
     type: boolean
     description: >
       True when the request's agent_id resolved to a real, saved agent and
-      the run happened in that agent's own persistent workspace directory
-      — the same place a genuine delegation to it would run. False means
-      the run happened in a disposable ephemeral scratch directory instead
+      the run happened in that agent's own dedicated directory
+      ($OMNIPUS_HOME/agents/{id}/, AgentConfig.Workspace — a per-agent
+      folder, NOT the separate, multi-agent pkg/workspace.Workspace
+      feature — this field name refers only to the former) — the same
+      place a genuine delegation to it would run. False means the run
+      happened in a disposable ephemeral scratch directory instead
       (agent_id was omitted, blank, or didn't resolve to an existing
       agent — e.g. testing from the create wizard before the agent has
       been saved).

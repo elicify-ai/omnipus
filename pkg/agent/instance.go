@@ -730,7 +730,7 @@ func (a *AgentInstance) IsWorker() bool {
 // use" pattern already established in pkg/agent/runner/buildargs_crosspkg.go
 // for that package's own unexported internals. Added so pkg/gateway's
 // executor-smoke-test endpoint (POST /api/v1/agents/executor-smoke-test) can
-// resolve EXACTLY the same workspace path a real subagent_3p delegation would
+// resolve EXACTLY the same directory a real subagent_3p delegation would
 // run in (see external_dispatch.go, which calls resolveAgentWorkspace
 // in-package via NewAgentInstance) when the smoke test names a real, saved
 // agent_id — instead of always running in a disposable ephemeral scratch
@@ -739,6 +739,14 @@ func (a *AgentInstance) IsWorker() bool {
 // NewAgentInstance's own call site, this does NOT create the directory —
 // callers that need the directory to exist must os.MkdirAll it themselves,
 // same as every other resolveAgentWorkspace caller does.
+//
+// Naming note: "workspace" here means AgentConfig.Workspace, a plain
+// per-agent directory-path field — NOT pkg/workspace.Workspace, Omnipus's
+// separate multi-agent Workspace feature (CoreTeam, REST-CRUD, delegation
+// graph, $OMNIPUS_HOME/workspaces/{id}/). No AgentConfig field binds an
+// agent to one of those, and real subagent_3p dispatch (ADR-032) never
+// consults that package at all. The two concepts share an English word by
+// historical accident, not by design — do not conflate them.
 func ResolveAgentWorkspace(agentCfg *config.AgentConfig, defaults *config.AgentDefaults) string {
 	return resolveAgentWorkspace(agentCfg, defaults)
 }

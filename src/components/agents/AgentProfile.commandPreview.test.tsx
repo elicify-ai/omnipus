@@ -324,7 +324,7 @@ describe('AgentProfile — smoke test runs in this real, saved agent\'s own work
 
     await waitFor(() => {
       expect(screen.getByTestId('profile-command-preview-smoke-test-success-workspace-note')).toHaveTextContent(
-        /this agent's own saved workspace/i,
+        /this agent's own folder/i,
       )
     }, { timeout: 2000 })
   })
