@@ -17,6 +17,24 @@ import (
 	"testing"
 )
 
+// evalTempDir returns a fresh t.TempDir(), symlink-resolved. On macOS,
+// t.TempDir() lives under /var/folders/... but /var is itself a symlink to
+// /private/var; detect()'s resolve() step (clidetect.go) runs every hit
+// through EvalSymlinks, so a path built from the raw (unresolved) temp dir
+// would never equal got.Path on macOS even though the file is identical.
+// Resolving the base here up front keeps both sides of the comparison on the
+// same (canonical) path. EvalSymlinks is a no-op when nothing in the path is
+// a symlink (e.g. Linux CI), so this is safe everywhere.
+func evalTempDir(t *testing.T) string {
+	t.Helper()
+	d := t.TempDir()
+	resolved, err := filepath.EvalSymlinks(d)
+	if err != nil {
+		return d
+	}
+	return resolved
+}
+
 // writeExec writes a regular file with the executable bit set and returns its
 // path. Used to stand in for a real installed binary under a temp well-known dir.
 func writeExec(t *testing.T, dir, name string) string {
@@ -52,7 +70,7 @@ func alwaysMiss(string) (string, error) {
 
 // TestDetect_FoundOnPath: a $PATH hit yields {installed, abs path, source=path}.
 func TestDetect_FoundOnPath(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := evalTempDir(t)
 	bin := writeExec(t, filepath.Join(tmp, "pathbin"), "claude")
 	d := baseDetector("linux", tmp, func(name string) (string, error) {
 		if name == "claude" {
@@ -76,7 +94,7 @@ func TestDetect_FoundOnPath(t *testing.T) {
 // and reports source=well-known. Uses a REAL binary under ~/.local/bin removed
 // from $PATH (spec SC-001 / F-07).
 func TestDetect_WellKnownFallback(t *testing.T) {
-	home := t.TempDir()
+	home := evalTempDir(t)
 	want := writeExec(t, filepath.Join(home, ".local", "bin"), "codex")
 	d := baseDetector("linux", home, alwaysMiss)
 	got := d.detect("codex")
@@ -98,7 +116,7 @@ func TestDetect_PathWinsOverWellKnown(t *testing.T) {
 	// A well-known copy exists...
 	writeExec(t, filepath.Join(home, ".local", "bin"), "opencode")
 	// ...but $PATH resolves first.
-	pathBin := writeExec(t, filepath.Join(t.TempDir(), "pbin"), "opencode")
+	pathBin := writeExec(t, filepath.Join(evalTempDir(t), "pbin"), "opencode")
 	d := baseDetector("linux", home, func(name string) (string, error) {
 		if name == "opencode" {
 			return pathBin, nil
@@ -119,7 +137,7 @@ func TestDetect_SymlinkResolved(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink semantics differ on Windows")
 	}
-	realDir := t.TempDir()
+	realDir := evalTempDir(t)
 	realBin := writeExec(t, realDir, "claude-real")
 	home := t.TempDir()
 	linkDir := filepath.Join(home, ".local", "bin")
@@ -176,7 +194,7 @@ func TestDetect_UnknownCLI(t *testing.T) {
 // TestDetect_HomeUnset: os.UserHomeDir failure falls back to the passwd home so
 // a binary in a passwd-home well-known dir is still found (FR-016 / SC-011).
 func TestDetect_HomeUnset(t *testing.T) {
-	passwdHome := t.TempDir()
+	passwdHome := evalTempDir(t)
 	want := writeExec(t, filepath.Join(passwdHome, ".local", "bin"), "opencode")
 	d := &detector{
 		lookPath:     alwaysMiss,
@@ -219,7 +237,7 @@ func TestDetect_HomeUnset_NoFallbackDoesNotError(t *testing.T) {
 // found via PATHEXT. Runs on Linux CI by forcing goos="windows" and pointing
 // APPDATA at a temp dir (spec is table-driven so Windows cases run cross-OS).
 func TestDetect_WindowsPathext(t *testing.T) {
-	appData := t.TempDir()
+	appData := evalTempDir(t)
 	npmDir := filepath.Join(appData, "npm")
 	want := writeExec(t, npmDir, "claude.cmd")
 	getenv := func(k string) string {
