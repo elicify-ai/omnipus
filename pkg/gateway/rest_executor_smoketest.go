@@ -55,11 +55,17 @@
 //     allowlist real dispatch uses (pkg/agent/external_dispatch.go) — so the
 //     spawned CLI never inherits gateway secrets (OMNIPUS_MASTER_KEY, bearer
 //     tokens, ...).
-//   - Workspace: when the request's agent_id names a real, saved agent, the
-//     run happens in THAT agent's own persistent workspace directory (the
-//     same one agent.ResolveAgentWorkspace / a real subagent_3p delegation
-//     would use) so the test is representative of real behavior (project
-//     files, AGENTS.md/CLAUDE.md/opencode.json context) — that directory is
+//   - Working directory: when the request's agent_id names a real, saved
+//     agent, the run happens in THAT agent's own dedicated directory
+//     ($OMNIPUS_HOME/agents/{id}/, AgentConfig.Workspace — the same one
+//     agent.ResolveAgentWorkspace / a real subagent_3p delegation would
+//     use). NOTE: this is NOT the separate, multi-agent
+//     pkg/workspace.Workspace feature (CoreTeam, REST-CRUD, delegation
+//     graph, $OMNIPUS_HOME/workspaces/{id}/) — no AgentConfig field binds
+//     an agent to one of those, and runExternalCLISubTurn never consults
+//     that package at all (see ADR-032). Using the agent's own directory
+//     makes the test representative of real behavior (project files,
+//     AGENTS.md/CLAUDE.md/opencode.json context) — that directory is
 //     NEVER removed by this handler. Otherwise (agent_id omitted, blank, or
 //     naming an agent that doesn't resolve — e.g. the create wizard before
 //     the agent has been saved) falls back to a fresh, dedicated ephemeral
@@ -315,14 +321,18 @@ func (a *restAPI) runExecutorSmokeTest(
 	}
 	resolvedBinary := absResolvePath(target)
 
-	// Workspace resolution: when agentID names a real, saved agent, run in
-	// THAT agent's own persistent workspace directory — the same place a
-	// genuine subagent_3p delegation to it would run (agent.ResolveAgentWorkspace,
-	// the same helper NewAgentInstance uses in-package). Otherwise (agentID
-	// empty, or naming an agent that no longer resolves — e.g. the create
-	// wizard before the agent has been saved, or a stale/deleted id) fall back
-	// to a disposable ephemeral scratch directory, exactly as before this
-	// feature existed.
+	// Working-directory resolution: when agentID names a real, saved agent,
+	// run in THAT agent's own dedicated directory — the same place a genuine
+	// subagent_3p delegation to it would run (agent.ResolveAgentWorkspace,
+	// the same helper NewAgentInstance uses in-package). This is
+	// AgentConfig.Workspace, NOT the separate, multi-agent
+	// pkg/workspace.Workspace feature (CoreTeam/REST-CRUD/delegation graph)
+	// — no AgentConfig field binds an agent to one of those, and real
+	// subagent_3p dispatch (ADR-032) never consults that package either.
+	// Otherwise (agentID empty, or naming an agent that no longer resolves —
+	// e.g. the create wizard before the agent has been saved, or a
+	// stale/deleted id) fall back to a disposable ephemeral scratch
+	// directory, exactly as before this feature existed.
 	//
 	// isEphemeralWorkspace is set EXACTLY ONCE, right here, at the point
 	// workDir itself is decided — every later use (the cleanup defer just
@@ -331,7 +341,7 @@ func (a *restAPI) runExecutorSmokeTest(
 	// this same bool rather than re-deriving "was an agent used" from some
 	// other proxy (e.g. re-checking agentID != ""), so the cleanup-vs-no-
 	// cleanup decision cannot drift out of sync with which directory is
-	// actually in workDir. A real agent's persistent workspace must NEVER be
+	// actually in workDir. A real agent's own directory must NEVER be
 	// deleted by this handler, under any circumstance (success, error,
 	// timeout, or the context-cancellation race smokeTestCancelGrace exists
 	// to wait out below).
@@ -355,7 +365,7 @@ func (a *restAPI) runExecutorSmokeTest(
 		// a new convention.
 		if mkErr := os.MkdirAll(resolved, 0o755); mkErr != nil {
 			return smokeTestFail(
-				fmt.Sprintf("could not prepare agent workspace: %v", mkErr),
+				fmt.Sprintf("could not prepare agent directory: %v", mkErr),
 				durationMs(), false,
 			), resolvedBinary
 		}

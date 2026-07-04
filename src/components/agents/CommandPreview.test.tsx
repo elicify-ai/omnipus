@@ -481,7 +481,7 @@ describe('CommandPreview — used_agent_workspace transparency copy', () => {
     })
 
     expect(screen.getByTestId('cp-smoke-test-success-workspace-note')).toHaveTextContent(
-      /this agent's own saved workspace/i,
+      /this agent's own folder/i,
     )
   })
 
@@ -496,7 +496,7 @@ describe('CommandPreview — used_agent_workspace transparency copy', () => {
     })
 
     expect(screen.getByTestId('cp-smoke-test-success-workspace-note')).toHaveTextContent(
-      /temporary workspace.*save the agent first/i,
+      /temporary folder.*save the agent first/i,
     )
   })
 
@@ -516,7 +516,7 @@ describe('CommandPreview — used_agent_workspace transparency copy', () => {
     })
 
     expect(screen.getByTestId('cp-smoke-test-failure-workspace-note')).toHaveTextContent(
-      /this agent's own saved workspace/i,
+      /this agent's own folder/i,
     )
   })
 
@@ -536,7 +536,7 @@ describe('CommandPreview — used_agent_workspace transparency copy', () => {
     })
 
     expect(screen.getByTestId('cp-smoke-test-failure-workspace-note')).toHaveTextContent(
-      /temporary workspace.*save the agent first/i,
+      /temporary folder.*save the agent first/i,
     )
   })
 })
