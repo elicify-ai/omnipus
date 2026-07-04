@@ -17,6 +17,7 @@ import (
 
 	"github.com/dapicom-ai/omnipus/pkg/agent"
 	generated "github.com/dapicom-ai/omnipus/pkg/api/generated"
+	"github.com/dapicom-ai/omnipus/pkg/security"
 )
 
 // wsApprovalEntry holds the in-flight decision channel and the session that made the request.
@@ -119,10 +120,16 @@ type wsApprovalHook struct {
 	// on a specific agent. If nil, falls back to autoApproveSafeTool.
 	policyResolver func(toolName string, agentID string) string
 
-	// alwaysAllowed tracks tool names the user has approved with "Always Allow".
-	// Protected by mu. Persists for the lifetime of the WebSocket connection.
-	mu            sync.Mutex
-	alwaysAllowed map[string]bool
+	// approvalGrants is the session-scoped "Always Allow" grant store, shared
+	// across ALL WebSocket connections via the parent AgentLoop
+	// (al.ApprovalGrants()). This replaces the old per-connection
+	// alwaysAllowed map, which was wiped out on every reconnect (network
+	// blip, idle, gateway restart, refresh — the SPA auto-reconnects on any
+	// drop) because a fresh wsApprovalHook was mounted with an empty map each
+	// time. Nil-safe: every ApprovalGrantStore method fails closed (IsAllowed
+	// => false, i.e. "ask") on a nil store, so a hook built without this
+	// field set (e.g. in tests) never silently auto-approves.
+	approvalGrants *security.ApprovalGrantStore
 }
 
 const wsApprovalTimeout = 90 * time.Second
@@ -167,12 +174,18 @@ func (h *wsApprovalHook) ApproveTool(
 	}
 	// policy == "ask" — fall through to interactive approval
 
-	// Check if this tool was previously "Always Allowed" by the user.
-	h.mu.Lock()
-	allowed := h.alwaysAllowed[req.Tool]
-	h.mu.Unlock()
-	if allowed {
-		slog.Debug("ws: tool auto-approved (always allowed)", "tool", req.Tool)
+	// Check if this (session_id, agent_id, tool) triple was previously
+	// granted "Always Allow" by the user. Scoped by session AND agent (not
+	// just tool name) so a DIFFERENT agent in the same session — or the same
+	// agent in a DIFFERENT session — still has to ask. Backed by
+	// AgentLoop.ApprovalGrants(), which SURVIVES WebSocket reconnects (the
+	// consent-boundary bug this replaces: the grant used to live on this
+	// per-connection hook and was discarded on every reconnect). Fail-safe:
+	// IsAllowed returns false for a nil store or an empty session_id/
+	// agent_id/tool — it never silently auto-approves on ambiguous input.
+	if h.approvalGrants.IsAllowed(req.SessionID, req.Meta.AgentID, req.Tool) {
+		slog.Debug("ws: tool auto-approved (always allowed)",
+			"tool", req.Tool, "session_id", req.SessionID, "agent_id", req.Meta.AgentID)
 		return agent.ApprovalDecision{Verdict: agent.VerdictAlways}, nil
 	}
 
@@ -214,13 +227,9 @@ func (h *wsApprovalHook) ApproveTool(
 	case decision := <-ch:
 		slog.Info("ws: exec_approval_response received", "id", id, "verdict", decision.Verdict)
 		if decision.Verdict == agent.VerdictAlways {
-			h.mu.Lock()
-			if h.alwaysAllowed == nil {
-				h.alwaysAllowed = make(map[string]bool)
-			}
-			h.alwaysAllowed[req.Tool] = true
-			h.mu.Unlock()
-			slog.Info("ws: tool added to always-allowed list", "tool", req.Tool)
+			h.approvalGrants.Record(req.SessionID, req.Meta.AgentID, req.Tool)
+			slog.Info("ws: tool added to always-allowed list",
+				"tool", req.Tool, "session_id", req.SessionID, "agent_id", req.Meta.AgentID)
 		}
 		return decision, nil
 	case <-timer.C:

@@ -217,6 +217,19 @@ type AgentLoop struct {
 	rateLimiter *security.RateLimiterRegistry
 	costTracker *security.CostTracker
 
+	// approvalGrants tracks per-session "Always Allow" tool-approval grants,
+	// scoped by (session_id, agent_id, tool_name). Always non-nil after
+	// NewAgentLoop. Fixes the tool-consent-boundary bug: the grant used to
+	// live on the per-WebSocket-CONNECTION wsApprovalHook.alwaysAllowed map
+	// and was silently discarded on every reconnect (network blip, idle,
+	// gateway restart, refresh — the SPA auto-reconnects on any drop). This
+	// store instead lives for the AgentLoop's lifetime and is cleared
+	// per-SESSION (via CloseSession), not per-connection, so the grant
+	// survives reconnects while still expiring with the session it belongs
+	// to. Shared by the gateway's WS approval hook (IsAllowed/Record) and the
+	// spawn/run_subagent delegation path (Inherit — pkg/agent/subturn.go).
+	approvalGrants *security.ApprovalGrantStore
+
 	// sharedSessionStore is the single UnifiedStore at $OMNIPUS_HOME/sessions/
 	// used for all new sessions (joined session model). Legacy per-agent stores
 	// remain accessible via GetAgentStore for read-only access to old sessions.
@@ -740,6 +753,11 @@ func NewAgentLoop(
 			"max_agent_tool_calls_per_minute": cfg.Sandbox.RateLimits.MaxAgentToolCallsPerMinute,
 		})
 
+	// Session-scoped tool-approval grant store (consent boundary fix): shared
+	// by the gateway's WS approval hook and the spawn/run_subagent delegation
+	// path. Always non-nil.
+	al.approvalGrants = security.NewApprovalGrantStore()
+
 	// v0.2 #155 item 6: build the shared memory-write rate limiter and
 	// propagate it to every agent's tool registry. One limiter is shared
 	// across all agents so the per-caller bucket is genuinely global —
@@ -904,6 +922,18 @@ func (al *AgentLoop) RateLimiter() *security.RateLimiterRegistry {
 		return nil
 	}
 	return al.rateLimiter
+}
+
+// ApprovalGrants returns the session-scoped "Always Allow" tool-approval
+// grant store. Always non-nil after NewAgentLoop (a nil AgentLoop returns
+// nil). Every ApprovalGrantStore method is itself nil-receiver-safe and
+// fails closed (IsAllowed => false, i.e. "ask"), so callers never need an
+// extra nil check before chaining a call onto this accessor's result.
+func (al *AgentLoop) ApprovalGrants() *security.ApprovalGrantStore {
+	if al == nil {
+		return nil
+	}
+	return al.approvalGrants
 }
 
 // SandboxBackend returns the active sandbox backend, or nil if sandboxing is

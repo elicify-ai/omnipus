@@ -608,6 +608,26 @@ func spawnSubTurn(
 		agent.MaxIterations = targetAgent.MaxIterations
 		agent.Subagents = targetAgent.Subagents
 	}
+
+	// Tool-approval grant inheritance (consent boundary — delegation): the
+	// child sub-turn inherits every "Always Allow" grant the PARENT has
+	// accumulated in this session, so a tool the parent already
+	// always-allowed does not re-prompt when the delegate (spawn /
+	// run_subagent — both funnel through this one spawnSubTurn) calls it.
+	// Copy-at-spawn semantics (ApprovalGrantStore.Inherit): a snapshot of the
+	// parent's grants at this moment, not a live link.
+	//
+	// parentTS.agentID is the identity under which the PARENT's own tool
+	// calls are scoped (turnState.eventMeta/snapshot -> ToolApprovalRequest.
+	// Meta.AgentID); agent.ID (finalized above) is the identity THIS child
+	// turn will use for its own tool-approval requests (see
+	// newTurnState(&agent, ...) below, which sets childTS.agentID = agent.
+	// ID). Keying the inherit call on the same variable the child will
+	// actually be looked up under keeps this correct for both native
+	// dispatch (agent.ID == baseAgent.ID — a harmless same-key union) and
+	// external-CLI dispatch (agent.ID == targetAgent.ID, the real delegate).
+	al.ApprovalGrants().Inherit(parentTS.transcriptSessionID, parentTS.agentID, agent.ID)
+
 	// FR-H-006: exclude delegation tools from the child's registry so it cannot
 	// recursively spawn grandchildren or hand off. Registry-level filter — the
 	// tools are absent, not refused at execute time. One level only (owner

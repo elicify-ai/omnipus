@@ -34,6 +34,14 @@ func (al *AgentLoop) CloseSession(sessionID, trigger string) {
 	// — the same key that manifestSessionID returns when transcriptID != "".
 	al.forgetSession(sessionID)
 
+	// Clear every "Always Allow" tool-approval grant recorded for this
+	// session (all agents), unconditionally — same reasoning as
+	// forgetSession above: this is bounded per-session cleanup, not gated on
+	// the recap feature. al.approvalGrants is always non-nil after
+	// NewAgentLoop, but ClearSession is nil-receiver-safe regardless (e.g.
+	// AgentLoop literals built directly in tests without NewAgentLoop).
+	al.approvalGrants.ClearSession(sessionID)
+
 	// Use GetConfig() (holds al.mu.RLock) so that a PUT /settings/memory that
 	// hot-swaps the config via SwapConfig is immediately visible here — a direct
 	// al.cfg read races with SwapConfig's write and may see the pre-PUT value.
