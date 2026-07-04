@@ -29,7 +29,8 @@ jobs:
           cp -r dist/spa pkg/gateway/spa
 
       - name: Build omnipus
-        run: CGO_ENABLED=0 go build -o omnipus ./cmd/omnipus/
+        # -tags goolm,stdjson required — main.go is //go:build stdjson gated.
+        run: CGO_ENABLED=0 go build -tags goolm,stdjson -o omnipus ./cmd/omnipus/
 
       - name: Run evals
         env:
