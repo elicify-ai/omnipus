@@ -40,7 +40,7 @@ test(
 
     const countBefore = await assistantMessages(page).count();
     // Explicit, single-tool instruction — mirrors the reliable phrasing used by
-    // the spawn-based specs so glm-5.2 takes the screenshot itself instead of
+    // the delegate-based specs so glm-5.2 takes the screenshot itself instead of
     // narrating or delegating.
     await input.fill(
       'Use the browser tools to take a screenshot of https://example.com and show it to me. ' +

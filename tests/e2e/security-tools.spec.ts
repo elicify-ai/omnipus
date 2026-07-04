@@ -6,7 +6,7 @@
  * Boots the REAL gateway (embedded SPA + real Go binary) and asserts:
  *   1. GET /api/v1/tools returns > 41 entries (SC-101 / AC2).
  *   2. The Tool Access category grid is NON-EMPTY (SC-102 / AC1).
- *   3. The grid contains a tool row for "exec" (SC-101 / AC1).
+ *   3. The grid contains a tool row for "bash" (SC-101 / AC1).
  *   4. The grid contains a tool row for "search_web" (SC-101 / AC1).
  *   5. No tool is listed twice — no duplicate data-testid="tool-row-*" (AC1).
  *   6. No user-facing category label equals the raw key "core" or "system" (AC4).
@@ -22,7 +22,7 @@
  *
  * Individual tool rows are also collapsed (per CategorySection); we must expand
  * each category to see its tool-row-* testids. For the non-duplicate check we
- * expand all categories sequentially. For the exec/search_web presence check
+ * expand all categories sequentially. For the bash/search_web presence check
  * we use the API directly (SC-101 mandates API returns > 41 entries including
  * those two tools) and also verify the tool rows appear after expansion.
  *
@@ -78,14 +78,14 @@ function readStorageStateToken(): string {
 
 // ── AC2: API-level assertion (SC-101) ─────────────────────────────────────────
 // Independent test against the real /api/v1/tools — not a mock.
-// Verifies: count > 41, exec present, search_web present.
+// Verifies: count > 41, bash present, search_web present.
 //
 // BDD:
 //   Given a default install
 //   When GET /api/v1/tools is called
-//   Then it returns > 41 entries including exec and search_web
+//   Then it returns > 41 entries including bash and search_web
 
-test('(AC2/SC-101) GET /api/v1/tools returns > 41 entries including exec and search_web', async ({
+test('(AC2/SC-101) GET /api/v1/tools returns > 41 entries including bash and search_web', async ({
   request,
 }) => {
   // Read the bearer token from the storageState file written by global-setup.
@@ -104,9 +104,9 @@ test('(AC2/SC-101) GET /api/v1/tools returns > 41 entries including exec and sea
   // SC-101: count must be > 41.
   expect(tools.length, `Expected > 41 tools from /api/v1/tools, got ${tools.length}`).toBeGreaterThan(41)
 
-  // SC-101: exec must be present.
+  // SC-101: bash must be present.
   const toolNames = tools.map((t) => t.name)
-  expect(toolNames, 'exec must be in /api/v1/tools response').toContain('exec')
+  expect(toolNames, 'bash must be in /api/v1/tools response').toContain('bash')
 
   // SC-101: search_web must be present (renamed from web_search in §7).
   expect(toolNames, 'search_web must be in /api/v1/tools response').toContain('search_web')
@@ -120,13 +120,13 @@ test('(AC2/SC-101) GET /api/v1/tools returns > 41 entries including exec and sea
 //   Given a default install
 //   When the Tool Access editor renders
 //   Then the category grid is non-empty
-//   And it contains a tool row for exec (after expanding its category)
+//   And it contains a tool row for bash (after expanding its category)
 //   And it contains a tool row for search_web (after expanding its category)
 //   And no tool is listed twice
 //   And no user-facing category label equals the raw key "core" or "system"
 
 test(
-  '(AC1/AC4/SC-102) Tool Access grid is non-empty, exec+search_web present, no duplicates, no raw category labels',
+  '(AC1/AC4/SC-102) Tool Access grid is non-empty, bash+search_web present, no duplicates, no raw category labels',
   async ({ page }) => {
     // Navigate to Settings. HashRouter: route is /#/settings.
     await page.goto(`${BASE_URL}/#/settings`)
@@ -219,11 +219,11 @@ test(
       }
     }
 
-    // ── AC1: exec tool row must be present ─────────────────────────────────────
-    const execRow = page.getByTestId('tool-row-exec')
+    // ── AC1: bash tool row must be present ─────────────────────────────────────
+    const bashRow = page.getByTestId('tool-row-bash')
     await expect(
-      execRow,
-      'exec tool row must exist in the category grid after expansion',
+      bashRow,
+      'bash tool row must exist in the category grid after expansion',
     ).toBeVisible({ timeout: 10_000 })
 
     // ── AC1: search_web tool row must be present (renamed from web_search in §7) ─

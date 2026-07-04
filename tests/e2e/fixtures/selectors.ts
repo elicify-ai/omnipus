@@ -76,10 +76,10 @@ export const newChatButton = (page: Page) =>
 /**
  * Switch the active chat agent via the header agent picker.
  *
- * Spawn-dependent E2E specs must run against a general-purpose task agent
+ * Delegate-dependent E2E specs must run against a general-purpose task agent
  * (default: Jim) rather than the default agent Mia: Mia's "guide" persona makes
- * the model REFUSE to emit `spawn` ("My role is to explain… not to spawn
- * subagents"), so spawn-expecting assertions never see a SubagentBlock.
+ * the model REFUSE to emit `delegate` ("My role is to explain… not to delegate
+ * to subagents"), so delegate-expecting assertions never see a SubagentBlock.
  *
  * Reuses the established picker pattern from chat.spec.ts (open menu →
  * click menuitem → assert the picker label updated).

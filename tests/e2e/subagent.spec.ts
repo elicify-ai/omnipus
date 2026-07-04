@@ -48,19 +48,19 @@ async function waitForSubagentBlock(
   }
 }
 
-// Helper: start a fresh chat session and route to a spawn-capable task agent.
+// Helper: start a fresh chat session and route to a delegate-capable task agent.
 //
-// AGENT ROUTING: every test in this file expects the active agent to emit `spawn`.
-// The default agent Mia's "guide" persona makes the model REFUSE to spawn ("My role
-// is to explain… not to spawn subagents"), captured in CI artifacts. Switch to Jim
-// (the general-purpose task agent) so the spawn-dependent assertions are exercised.
+// AGENT ROUTING: every test in this file expects the active agent to emit `delegate`.
+// The default agent Mia's "guide" persona makes the model REFUSE to delegate ("My role
+// is to explain… not to delegate to subagents"), captured in CI artifacts. Switch to Jim
+// (the general-purpose task agent) so the delegate-dependent assertions are exercised.
 async function startFreshChat(page: import('@playwright/test').Page): Promise<void> {
   const newChat = page.getByRole('banner').getByRole('button', { name: 'New Chat' });
   if (await newChat.isVisible({ timeout: 5_000 })) {
     await newChat.click();
     await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 });
   }
-  // Route to Jim — Mia declines to spawn (see note above).
+  // Route to Jim — Mia declines to delegate (see note above).
   await selectAgent(page, /Jim/i);
 }
 
@@ -71,19 +71,19 @@ test.beforeEach(async ({ page }) => {
 // ────────────────────────────────────────────────────────────────────────────────
 // (a) grandchild refused — Scenario 10, US-3
 // BDD: Given a subagent sub-turn is running
-//      When the sub-turn's LLM attempts a tool call with name="spawn"
+//      When the sub-turn's LLM attempts a tool call with name="delegate"
 //      Then the tool dispatcher returns an unknown-tool error to the LLM
 //      And no subagent_start frame with a grandchild parent_call_id is emitted
-//      And the parent's transcript ToolCalls contains exactly one spawn entry
+//      And the parent's transcript ToolCalls contains exactly one delegate entry
 //
 // Traces to: sprint-h-subagent-block-spec.md TDD row 21, BDD Scenario 10, lines 304-313
 // ────────────────────────────────────────────────────────────────────────────────
 test(
-  '(a) grandchild refused: subagent attempting spawn gets unknown-tool error, no nested block',
+  '(a) grandchild refused: subagent attempting delegate gets unknown-tool error, no nested block',
   async ({ page }) => {
     requireApiKey(test);
-    // 420s total: this test triggers TWO LLM round-trips (parent spawn +
-    // subagent's failed grandchild-spawn attempt) before the collapsed block
+    // 420s total: this test triggers TWO LLM round-trips (parent delegate +
+    // subagent's failed grandchild-delegate attempt) before the collapsed block
     // settles, so the budget is wider than the sibling subagent tests.
     // test.slow()'s 270s was insufficient in CI under suite load — observed
     // 4×156s failures consistently exceeding the 150s collapsed budget.
@@ -98,18 +98,18 @@ test(
     // Commanding, specific: exact tool name, task, and behavior with no optional phrasing.
     await input.fill(
       [
-        'Call the `spawn` tool exactly once, right now, with these arguments:',
+        'Call the `delegate` tool exactly once, right now, with these arguments:',
         '  label: "grandchild test"',
-        '  task: "You are the subagent. Your one and only job is to call the `spawn` tool yourself to attempt to spawn a grandchild subagent with task \\"hello\\". If spawn is not in your available tools, report the exact error you receive. Do not do anything else."',
-        'Do not reply in prose. Do not call any other tool. Call spawn now.',
+        '  task: "You are the subagent. Your one and only job is to call the `delegate` tool yourself to attempt to delegate to a grandchild subagent with task \\"hello\\". If delegate is not in your available tools, report the exact error you receive. Do not do anything else."',
+        'Do not reply in prose. Do not call any other tool. Call delegate now.',
       ].join('\n'),
     );
     await input.press('Enter');
 
-    // Structural assertion: wait for at least one subagent-collapsed to appear (the parent spawn).
+    // Structural assertion: wait for at least one subagent-collapsed to appear (the parent delegate).
     // With temperature=0+seed=42 the LLM must comply — if it doesn't, the test fails honestly.
-    // 300s budget: this test needs the parent spawn AND the subagent's failed
-    // grandchild-spawn round-trip to both complete; under CI load GLM-5v-turbo
+    // 300s budget: this test needs the parent delegate AND the subagent's failed
+    // grandchild-delegate round-trip to both complete; under CI load GLM-5v-turbo
     // can take 150-280s for that pair. 150s gave 4×156s timeouts in CI even
     // though local-isolated runs land in 20-40s.
     const collapsedBlocks = page.locator('[data-testid="subagent-collapsed"]');
@@ -138,8 +138,8 @@ test(
 );
 
 // ────────────────────────────────────────────────────────────────────────────────
-// (b) sibling spawns — Scenario 13
-// BDD: Given the assistant emits two spawn frames with call_ids c1 then c2
+// (b) sibling delegate calls — Scenario 13
+// BDD: Given the assistant emits two delegate frames with call_ids c1 then c2
 //      When the chat renders the message
 //      Then two distinct SubagentBlock elements appear, in the order (c1, c2)
 //      And each expands independently without affecting the other
@@ -147,11 +147,11 @@ test(
 // Traces to: sprint-h-subagent-block-spec.md TDD row 22, BDD Scenario 13, lines 334-342
 // ────────────────────────────────────────────────────────────────────────────────
 test(
-  '(b) sibling spawns: two back-to-back spawns render as two independent SubagentBlocks',
+  '(b) sibling delegate calls: two back-to-back delegate calls render as two independent SubagentBlocks',
   async ({ page }) => {
     requireApiKey(test);
     // test.slow() triples the global 90s test timeout to 270s. Subagent
-    // spawn + execution can take 30-90s end-to-end under suite load even
+    // delegation + execution can take 30-90s end-to-end under suite load even
     // though the same test passes in 5-15s alone.
     test.slow();
 
@@ -199,7 +199,7 @@ test(
 
     // Differentiation test: two different blocks expanded/collapsed independently.
     const finalCount = await collapsedBlocks.count();
-    expect(finalCount).toBe(2, 'exactly 2 sibling SubagentBlocks must be rendered for two spawn calls');
+    expect(finalCount).toBe(2, 'exactly 2 sibling SubagentBlocks must be rendered for two delegate calls');
   },
 );
 
@@ -224,7 +224,7 @@ test(
     );
     requireApiKey(test);
     // test.slow() triples the global 90s test timeout to 270s. Subagent
-    // spawn + execution can take 30-90s end-to-end under suite load even
+    // delegation + execution can take 30-90s end-to-end under suite load even
     // though the same test passes in 5-15s alone.
     test.slow();
 
@@ -233,14 +233,14 @@ test(
     const input = chatInput(page);
     await expect(input).toBeVisible({ timeout: 15_000 });
 
-    // Deterministic prompt: force a single spawn with a subagent task that mandates ≥3 tool calls.
+    // Deterministic prompt: force a single delegate call with a subagent task that mandates ≥3 tool calls.
     // read_file is always registered and does not require special permissions.
     await input.fill(
       [
-        'Call the `spawn` tool exactly once, now, with these arguments:',
+        'Call the `delegate` tool exactly once, now, with these arguments:',
         '  label: "multi step counter test"',
         '  task: "You are a subagent. You MUST call the read_file tool exactly THREE times in this exact order. Do not skip any call. Do not reply in prose between them. (1) read_file with path=\\"/etc/hostname\\"; (2) read_file with path=\\"/etc/os-release\\"; (3) read_file with path=\\"/proc/version\\". After all three read_file calls have completed, reply with the single word \\"finished\\"."',
-        'Do not call any other tool. Do not reply in prose. Call spawn now.',
+        'Do not call any other tool. Do not reply in prose. Call delegate now.',
       ].join('\n'),
     );
     await input.press('Enter');
@@ -316,20 +316,20 @@ test(
 
 // ────────────────────────────────────────────────────────────────────────────────
 // (d) real-LLM smoke — US-1 (best-effort, does NOT gate merge)
-// BDD: Uses OpenRouter CI (OPENROUTER_API_KEY_CI env). Triggers a spawn via natural language.
+// BDD: Uses OpenRouter CI (OPENROUTER_API_KEY_CI env). Triggers a delegate via natural language.
 //      Best-effort: asserts only that no JS console errors fire, and that IF a SubagentBlock
-//      appears, it behaves correctly. MUST pass or skip gracefully if LLM doesn't call spawn.
+//      appears, it behaves correctly. MUST pass or skip gracefully if LLM doesn't call delegate.
 //
 // Traces to: sprint-h-subagent-block-spec.md TDD row 24, SC-H-003, US-1
 // ────────────────────────────────────────────────────────────────────────────────
 test(
-  '(d) real-LLM smoke: spawn triggered by natural language; no console errors; SubagentBlock if spawned',
+  '(d) real-LLM smoke: delegate triggered by natural language; no console errors; SubagentBlock if delegated',
   async ({ page, consoleErrors }) => {
     // T0.1: OPENROUTER_API_KEY_CI soft-skip removed. The key is required in CI.
     // This test is best-effort (does not gate merge) but must not skip silently.
     requireApiKey(test);
     // test.slow() triples the global 90s test timeout to 270s; same rationale
-    // as the sibling subagent tests (real-LLM spawn under suite load).
+    // as the sibling subagent tests (real-LLM delegate under suite load).
     test.slow();
 
     await startFreshChat(page);
@@ -337,30 +337,30 @@ test(
     const input = chatInput(page);
     await expect(input).toBeVisible({ timeout: 15_000 });
 
-    // Natural language prompt — no explicit instruction to use spawn.
-    // Let the agent decide whether to spawn based on its own judgment.
+    // Natural language prompt — no explicit instruction to use delegate.
+    // Let the agent decide whether to delegate based on its own judgment.
     await input.fill(
       'Please have one of your subagents check what files are in the /tmp directory.',
     );
     await input.press('Enter');
 
-    // Wait for assistant to respond (with or without spawn).
+    // Wait for assistant to respond (with or without delegate).
     // 90s budget: natural-language prompt (no temperature pinning) is non-deterministic;
     // the assistant may take 30-75s to land its first message under suite load.
     await expect(assistantMessages(page)).toHaveCount(1, { timeout: 90_000 });
 
     // Best-effort: IF a SubagentBlock appeared, verify basic UI behavior.
     // Use .first(): a natural-language prompt is non-deterministic and gemini-2.5-flash
-    // sometimes spawns more than one subagent, which would make a bare locator
+    // sometimes delegates to more than one subagent, which would make a bare locator
     // strict-mode-fail on isVisible(). We only care whether >=1 block appeared.
     const collapsedBlock = page.locator('[data-testid="subagent-collapsed"]').first();
     // Scoped catch — only swallow stale-locator errors, rethrow others.
-    const spawnOccurred = await collapsedBlock.isVisible({ timeout: 5_000 }).catch((err: unknown) => {
+    const delegateOccurred = await collapsedBlock.isVisible({ timeout: 5_000 }).catch((err: unknown) => {
       if (err instanceof Error && (err.message.includes('Element is not attached') || err.message.includes('locator handle is stale'))) return false;
       throw err;
     });
 
-    if (spawnOccurred) {
+    if (delegateOccurred) {
       // Click to expand — basic expansion must work.
       await collapsedBlock.first().click();
       const expandedBlock = page.locator('[data-testid="subagent-expanded"]');
@@ -372,9 +372,9 @@ test(
         include: ['[data-testid^="subagent-"]'],
       });
     } else {
-      // LLM chose not to spawn — that is acceptable for this smoke test.
+      // LLM chose not to delegate — that is acceptable for this smoke test.
       // The primary assertion (no console errors) is captured by the consoleErrors fixture.
-      console.info('(d) smoke: LLM did not call spawn — no SubagentBlock rendered. ' +
+      console.info('(d) smoke: LLM did not call delegate — no SubagentBlock rendered. ' +
         'Test passes because no console errors occurred and the response completed.');
     }
 
@@ -395,7 +395,7 @@ test(
   async ({ page }) => {
     requireApiKey(test);
     // test.slow() triples the global 90s test timeout to 270s. Subagent
-    // spawn + execution can take 30-90s end-to-end under suite load even
+    // delegation + execution can take 30-90s end-to-end under suite load even
     // though the same test passes in 5-15s alone.
     test.slow();
 
@@ -407,13 +407,13 @@ test(
     // The prompt gives the subagent a real reason to exist (running a shell
     // command in isolation) so the LLM doesn't shortcut and answer directly.
     // The previous prompt asked the subagent to "reply ok with no tools" —
-    // a smarter LLM correctly skipped spawn because the task was trivial.
+    // a smarter LLM correctly skipped delegate because the task was trivial.
     await input.fill(
       [
-        'Use the `spawn` tool right now to delegate work to a subagent.',
+        'Use the `delegate` tool right now to hand off work to a subagent.',
         'Set label to "axe test subagent".',
-        'Set task to: "Use the exec tool to run `echo hello-from-subagent` and return the exact stdout."',
-        'Do not run exec yourself — delegate by calling spawn now.',
+        'Set task to: "Use the bash tool to run `echo hello-from-subagent` and return the exact stdout."',
+        'Do not run bash yourself — hand this off by calling delegate now.',
       ].join('\n'),
     );
     await input.press('Enter');

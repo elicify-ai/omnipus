@@ -62,15 +62,15 @@ test('(b) approval-queue: policy=ask tool call triggers approval modal and Appro
     }, { method, path, body });
   };
 
-  // Create a temporary custom agent with exec=ask policy.
+  // Create a temporary custom agent with bash=ask policy.
   // Custom agents are not locked, so their tools can be modified via the API.
   const createResp = await apiFetch('POST', '/api/v1/agents', { name: 'ApprovalTest-e2e', type: 'custom' });
   expect(createResp.ok).toBeTruthy();
   const agentId = (createResp.body as { id: string }).id;
 
-  // Set exec policy to 'ask' for the new agent (exec tool is available by default_policy=allow)
+  // Set bash policy to 'ask' for the new agent (bash tool is available by default_policy=allow)
   const putResp = await apiFetch('PUT', `/api/v1/agents/${agentId}/tools`, {
-    builtin: { default_policy: 'allow', policies: { 'system.*': 'deny', exec: 'ask' } },
+    builtin: { default_policy: 'allow', policies: { 'system.*': 'deny', bash: 'ask' } },
   });
   expect(putResp.ok).toBeTruthy();
 
@@ -81,24 +81,24 @@ test('(b) approval-queue: policy=ask tool call triggers approval modal and Appro
 
   // Navigate DIRECTLY to the new session's URL so the SPA activates the
   // ApprovalTest agent in sessionStore (sessions.$sessionId.tsx route hook).
-  // Without this, sendMessage routes to the default Mia session whose exec
+  // Without this, sendMessage routes to the default Mia session whose bash
   // policy is "allow" — the approval modal never fires and the test times
   // out at the toBeVisible() assertion.
   await page.goto(`/#/sessions/${sessionId}`);
   await expect(page.getByRole('banner')).toBeVisible({ timeout: 15_000 });
 
-  // Find the chat input and send a message that triggers exec with policy=ask.
+  // Find the chat input and send a message that triggers bash with policy=ask.
   // NOTE: This test requires a real LLM call. With a dummy API key the LLM call
   // will fail and the approval modal will not appear. The test fails honestly.
   const input = page.locator('[data-testid="chat-input"], textarea, [contenteditable="true"]').first();
   await expect(input).toBeVisible({ timeout: 15_000 });
-  await input.fill('Use the exec tool RIGHT NOW with command="echo approval-test". Do not do anything else.');
+  await input.fill('Use the bash tool RIGHT NOW with command="echo approval-test". Do not do anything else.');
   await input.press('Enter');
 
   // Wait for the approval modal (data-testid="approval-modal" from ExecApprovalBlock).
   // 120s timeout: under real-LLM determinism and prolonged suite load
   // (~10 min wall-clock by the time this test runs), google/gemini-2.5-flash
-  // can take 60-90s before calling exec. test.slow() gives 270s total; 120s
+  // can take 60-90s before calling bash. test.slow() gives 270s total; 120s
   // here leaves ample time for approval.
   const approvalModal = page.getByTestId('approval-modal');
   await expect(approvalModal).toBeVisible({ timeout: 120_000 });
