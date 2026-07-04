@@ -159,7 +159,10 @@ func TestResolveMessageRoute_ChannelHandoffOverride_RoutesByChatScope(t *testing
 		t.Fatalf("resolveMessageRoute: %v", err)
 	}
 	if route.AgentID != "ray" {
-		t.Fatalf("channel handoff override should route the whatsapp message to ray, got %q ('agent stays' regression)", route.AgentID)
+		t.Fatalf(
+			"channel handoff override should route the whatsapp message to ray, got %q ('agent stays' regression)",
+			route.AgentID,
+		)
 	}
 	if agent == nil || agent.ID != "ray" {
 		t.Fatalf("returned agent should be ray, got %+v", agent)

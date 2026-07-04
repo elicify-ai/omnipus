@@ -246,6 +246,7 @@ func TestContextBuilder_Cache_InvalidatesOnLastSessionWrite(t *testing.T) {
 
 	// Write last-session.md — this should mark the cache stale.
 	ms := NewMemoryStore(dir, t.TempDir())
+	t.Cleanup(ms.Close)
 	if err := ms.WriteLastSession("## Last session\nWe did useful things."); err != nil {
 		t.Fatalf("WriteLastSession: %v", err)
 	}
@@ -395,6 +396,7 @@ func TestContextBuilder_Rule4_PreservesOtherRules(t *testing.T) {
 func TestContextBuilder_GetMemoryContext_BothSections(t *testing.T) {
 	dir := t.TempDir()
 	ms := NewMemoryStore(dir, t.TempDir())
+	t.Cleanup(ms.Close)
 
 	if err := ms.WriteLastSession("## Last session\nSomething useful happened."); err != nil {
 		t.Fatalf("WriteLastSession: %v", err)

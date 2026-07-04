@@ -60,7 +60,15 @@ func TestStoreInlineDataURL_WithSession_UsesUploadsDir(t *testing.T) {
 	const sessionID = "session_test_abc123"
 	ctx := WithTranscriptSessionID(context.Background(), sessionID)
 
-	ref, note := storeInlineDataURL(ctx, "browser.screenshot", store, "webchat", "chat-1", pngDataURL(), make(map[string]struct{}))
+	ref, note := storeInlineDataURL(
+		ctx,
+		"browser.screenshot",
+		store,
+		"webchat",
+		"chat-1",
+		pngDataURL(),
+		make(map[string]struct{}),
+	)
 
 	if ref == "" {
 		t.Fatalf("expected a ref, got empty; note=%q", note)
@@ -95,7 +103,7 @@ func TestStoreInlineDataURL_WithSession_UsesUploadsDir(t *testing.T) {
 
 // TestStoreInlineDataURL_NoSession_UsesEphemeralDir verifies that without a
 // session ID the file lands in the media TempDir with delete_on_cleanup policy,
-// preserving the pre-fix behaviour for truly ephemeral media.
+// preserving the pre-fix behavior for truly ephemeral media.
 func TestStoreInlineDataURL_NoSession_UsesEphemeralDir(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", home)
@@ -105,7 +113,15 @@ func TestStoreInlineDataURL_NoSession_UsesEphemeralDir(t *testing.T) {
 	// No session ID in context.
 	ctx := context.Background()
 
-	ref, note := storeInlineDataURL(ctx, "browser.screenshot", store, "telegram", "chat-99", pngDataURL(), make(map[string]struct{}))
+	ref, note := storeInlineDataURL(
+		ctx,
+		"browser.screenshot",
+		store,
+		"telegram",
+		"chat-99",
+		pngDataURL(),
+		make(map[string]struct{}),
+	)
 
 	if ref == "" {
 		t.Fatalf("expected a ref, got empty; note=%q", note)
@@ -122,7 +138,7 @@ func TestStoreInlineDataURL_NoSession_UsesEphemeralDir(t *testing.T) {
 		t.Errorf("file %q is not under expected media dir %q", localPath, wantDir)
 	}
 
-	// Cleanup policy must be delete_on_cleanup (original behaviour).
+	// Cleanup policy must be delete_on_cleanup (original behavior).
 	if meta.CleanupPolicy != media.CleanupPolicyDeleteOnCleanup {
 		t.Errorf("expected CleanupPolicyDeleteOnCleanup, got %q", meta.CleanupPolicy)
 	}
@@ -186,17 +202,17 @@ func TestCleanExpired_DoesNotDeleteForgetOnly(t *testing.T) {
 	}
 
 	// Ephemeral ref must be gone from the store index.
-	if _, err := store.Resolve(ephRef); err == nil {
+	if _, resolveErr := store.Resolve(ephRef); resolveErr == nil {
 		t.Error("ephemeral ref should be unknown after CleanExpired")
 	}
 	// Ephemeral file must also be deleted from disk (delete_on_cleanup).
-	if _, err := os.Stat(ephemeralPath); err == nil {
+	if _, statErr := os.Stat(ephemeralPath); statErr == nil {
 		t.Error("ephemeral file should be deleted from disk by CleanExpired")
 	}
 
 	// Session-bound ref must STILL be resolvable — this is the core assertion.
-	if _, err := store.Resolve(sessRef); err != nil {
-		t.Errorf("session ref must remain resolvable after CleanExpired: %v", err)
+	if _, resolveErr2 := store.Resolve(sessRef); resolveErr2 != nil {
+		t.Errorf("session ref must remain resolvable after CleanExpired: %v", resolveErr2)
 	}
 	// Verify metadata round-trip too.
 	resolvedPath, meta, err := store.ResolveWithMeta(sessRef)
@@ -228,7 +244,15 @@ func TestReleaseAll_FreesSessionInlineMedia(t *testing.T) {
 	const sessionID = "session_release_test"
 	ctx := WithTranscriptSessionID(context.Background(), sessionID)
 
-	ref, note := storeInlineDataURL(ctx, "browser.screenshot", store, "webchat", "chat-1", pngDataURL(), make(map[string]struct{}))
+	ref, note := storeInlineDataURL(
+		ctx,
+		"browser.screenshot",
+		store,
+		"webchat",
+		"chat-1",
+		pngDataURL(),
+		make(map[string]struct{}),
+	)
 	if ref == "" {
 		t.Fatalf("expected a ref, got empty; note=%q", note)
 	}

@@ -188,7 +188,7 @@ func TestSeedConfig_ExistingConfig_KeepsExplicitFalse(t *testing.T) {
 // TestRunRecap_ModelResolution_DefaultModelFallback verifies IMP-2a:
 // When RecapModel is empty and Defaults.ModelName is set, the recap uses
 // the global default model (not the agent's own model).
-func TestRunRecap_ModelResolution_DefaultModelFallback(t *testing.T) {
+func TestRunRecap_ModelResolution_DefaultModelFallback(t *testing.T) { //nolint:dupl // parallel recap-model test
 	home := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", home)
 
@@ -253,7 +253,7 @@ func TestRunRecap_ModelResolution_DefaultModelFallback(t *testing.T) {
 // TestRunRecap_ModelResolution_AgentModelFallback verifies IMP-2b:
 // When both RecapModel and Defaults.ModelName are empty, the recap uses
 // the session agent's own model.
-func TestRunRecap_ModelResolution_AgentModelFallback(t *testing.T) {
+func TestRunRecap_ModelResolution_AgentModelFallback(t *testing.T) { //nolint:dupl // parallel recap-model test
 	home := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", home)
 
@@ -389,11 +389,10 @@ func TestRunRecap_FallbackDistinctProvider_RoutesCorrectly(t *testing.T) {
 		name:        "primary",
 		responseErr: fmt.Errorf("provider: primary model unavailable"),
 	}
-	// altProv: succeeds (simulates the alt-provider working).
-	altProv := &namedProvider{
-		name:         "alt",
-		responseBody: `{"recap":"alt fallback ok","went_well":[],"needs_improvement":[],"worth_remembering":[]}`,
-	}
+	// altProv: never actually wired into a real provider call path in this test
+	// (see the routing-ambiguity note above) — only its call-count bookkeeping
+	// is read below, so no Chat/GetDefaultModel-facing fields are set here.
+	altProv := &namedProvider{}
 
 	cfg := &config.Config{}
 	cfg.Agents.Defaults.AutoRecapEnabled = true

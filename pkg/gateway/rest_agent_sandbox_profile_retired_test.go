@@ -38,7 +38,7 @@ const wantSandboxProfileRetiredMsg = "sandbox_profile is retired — use the glo
 // message pointing callers at the global god-mode switch, and that the
 // agent's persisted config is genuinely unchanged (not just that the response
 // was 400 — this asserts no side effect occurred either way).
-func TestUpdateAgent_SandboxProfileOff_Rejected400(t *testing.T) {
+func TestUpdateAgent_SandboxProfileOff_Rejected400(t *testing.T) { //nolint:dupl // parallel retired-profile test
 	api := buildGodModeTestAPI(t, false /* allowGodMode — not relevant for this check */)
 
 	before, err := os.ReadFile(api.homePath + "/config.json")
@@ -73,7 +73,7 @@ func TestUpdateAgent_SandboxProfileOff_Rejected400(t *testing.T) {
 // TestUpdateAgent_SandboxProfileWorkspace_Rejected400 verifies the same
 // rejection for a different (also-retired) sandbox_profile value, confirming
 // the guard is not accidentally scoped to just "off".
-func TestUpdateAgent_SandboxProfileWorkspace_Rejected400(t *testing.T) {
+func TestUpdateAgent_SandboxProfileWorkspace_Rejected400(t *testing.T) { //nolint:dupl // parallel retired-profile test
 	api := buildGodModeTestAPI(t, false /* allowGodMode */)
 
 	before, err := os.ReadFile(api.homePath + "/config.json")

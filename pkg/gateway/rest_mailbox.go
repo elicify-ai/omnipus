@@ -360,7 +360,15 @@ func (a *restAPI) setAgentMailbox(w http.ResponseWriter, r *http.Request, agentI
 	}); err != nil {
 		if errors.Is(err, errMailboxEntryMalformed) {
 			msg := fmt.Sprintf("mailboxes entry for agent %q is malformed (mixed legacy/nested shape)", agentID)
-			slog.Error("rest: configure mailbox: malformed entry", "agent_id", agentID, "workspace_id", workspaceID, "error", err)
+			slog.Error(
+				"rest: configure mailbox: malformed entry",
+				"agent_id",
+				agentID,
+				"workspace_id",
+				workspaceID,
+				"error",
+				err,
+			)
 			jsonErr(w, http.StatusInternalServerError, msg)
 			return
 		}
@@ -374,7 +382,15 @@ func (a *restAPI) setAgentMailbox(w http.ResponseWriter, r *http.Request, agentI
 	// the normal no-op path in unit tests without the full reload pipeline.
 	if err := a.agentLoop.TriggerReload(); err != nil {
 		if !errors.Is(err, agent.ErrReloadNotConfigured) {
-			slog.Error("rest: mailbox configure reload failed", "agent_id", agentID, "workspace_id", workspaceID, "error", err)
+			slog.Error(
+				"rest: mailbox configure reload failed",
+				"agent_id",
+				agentID,
+				"workspace_id",
+				workspaceID,
+				"error",
+				err,
+			)
 			jsonErr(w, http.StatusServiceUnavailable,
 				"config saved but in-memory reload failed; restart the gateway or retry")
 			return
@@ -446,7 +462,15 @@ func (a *restAPI) deleteAgentMailbox(w http.ResponseWriter, agentID, workspaceID
 	}); err != nil {
 		if errors.Is(err, errMailboxEntryMalformed) {
 			msg := fmt.Sprintf("mailboxes entry for agent %q is malformed (mixed legacy/nested shape)", agentID)
-			slog.Error("rest: delete mailbox: malformed entry", "agent_id", agentID, "workspace_id", workspaceID, "error", err)
+			slog.Error(
+				"rest: delete mailbox: malformed entry",
+				"agent_id",
+				agentID,
+				"workspace_id",
+				workspaceID,
+				"error",
+				err,
+			)
 			jsonErr(w, http.StatusInternalServerError, msg)
 			return
 		}
@@ -469,7 +493,15 @@ func (a *restAPI) deleteAgentMailbox(w http.ResponseWriter, agentID, workspaceID
 
 	if err := a.agentLoop.TriggerReload(); err != nil {
 		if !errors.Is(err, agent.ErrReloadNotConfigured) {
-			slog.Error("rest: mailbox delete reload failed", "agent_id", agentID, "workspace_id", workspaceID, "error", err)
+			slog.Error(
+				"rest: mailbox delete reload failed",
+				"agent_id",
+				agentID,
+				"workspace_id",
+				workspaceID,
+				"error",
+				err,
+			)
 		}
 	}
 
@@ -513,7 +545,15 @@ func (a *restAPI) listMailboxes(w http.ResponseWriter, r *http.Request) {
 			if strings.TrimSpace(mb.PasswordRef) != "" {
 				ok, err := a.credentialRefResolves(mb.PasswordRef)
 				if err != nil {
-					slog.Error("rest: mailbox credential check", "agent_id", agentID, "workspace_id", wsID, "error", err)
+					slog.Error(
+						"rest: mailbox credential check",
+						"agent_id",
+						agentID,
+						"workspace_id",
+						wsID,
+						"error",
+						err,
+					)
 					jsonErr(w, http.StatusInternalServerError,
 						"credential store unavailable — unlock it (set OMNIPUS_MASTER_KEY) and retry")
 					return
@@ -599,8 +639,11 @@ func grantEmailToolAllows(m map[string]any, agentID string) {
 	// this raw-map scan didn't). The mailbox will be saved Active but the
 	// email tools stay policy-hidden with no operator-visible signal, so this
 	// is an error, not a benign no-op.
-	slog.Error("mailbox: agent not found in agents.list — cannot grant email tool allows (mailbox will save Active but tools stay policy-hidden)",
-		"agent_id", agentID)
+	slog.Error(
+		"mailbox: agent not found in agents.list — cannot grant email tool allows (mailbox will save Active but tools stay policy-hidden)",
+		"agent_id",
+		agentID,
+	)
 }
 
 // mailboxToWire converts a stored MailboxConfig to the Mailbox wire type. The

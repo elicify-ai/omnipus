@@ -27,6 +27,7 @@ func TestRememberTool_RealAdapter_PersistsViaMemoryStore(t *testing.T) {
 	workspace := t.TempDir()
 	home := t.TempDir()
 	store := NewMemoryStore(workspace, home)
+	t.Cleanup(store.Close)
 	adapter := NewMemoryStoreAdapter(store)
 
 	tool := tools.NewRememberTool(adapter, nil)
@@ -96,6 +97,7 @@ func TestRememberTool_RealAdapter_RejectsInjection(t *testing.T) {
 	workspace := t.TempDir()
 	home := t.TempDir()
 	store := NewMemoryStore(workspace, home)
+	t.Cleanup(store.Close)
 	adapter := NewMemoryStoreAdapter(store)
 	tool := tools.NewRememberTool(adapter, nil)
 
@@ -123,6 +125,7 @@ func TestRetrospectiveTool_RealAdapter_WritesRetroOnDisk(t *testing.T) {
 	workspace := t.TempDir()
 	home := t.TempDir()
 	store := NewMemoryStore(workspace, home)
+	t.Cleanup(store.Close)
 	adapter := NewMemoryStoreAdapter(store)
 	tool := tools.NewRetrospectiveTool(adapter, nil)
 
@@ -174,6 +177,7 @@ func TestRetrospectiveTool_RealAdapter_RejectsPathTraversal(t *testing.T) {
 	workspace := t.TempDir()
 	home := t.TempDir()
 	store := NewMemoryStore(workspace, home)
+	t.Cleanup(store.Close)
 	adapter := NewMemoryStoreAdapter(store)
 	tool := tools.NewRetrospectiveTool(adapter, nil)
 
@@ -208,6 +212,7 @@ func TestRecallMemoryTool_RealAdapter_SearchesRealStore(t *testing.T) {
 	workspace := t.TempDir()
 	home := t.TempDir()
 	store := NewMemoryStore(workspace, home)
+	t.Cleanup(store.Close)
 	adapter := NewMemoryStoreAdapter(store)
 
 	remember := tools.NewRememberTool(adapter, nil)
@@ -263,6 +268,7 @@ func TestMemory_PrivateVsSharedRoom_ByWorkspace(t *testing.T) {
 	workspace := t.TempDir()
 	home := t.TempDir()
 	store := NewMemoryStore(workspace, home)
+	t.Cleanup(store.Close)
 	adapter := NewMemoryStoreAdapter(store)
 
 	remember := tools.NewRememberTool(adapter, nil)
@@ -324,6 +330,7 @@ func TestMemory_FileFormat_FullFrontmatter(t *testing.T) {
 	workspace := t.TempDir()
 	home := t.TempDir()
 	store := NewMemoryStore(workspace, home)
+	t.Cleanup(store.Close)
 	adapter := NewMemoryStoreAdapter(store)
 
 	remember := tools.NewRememberTool(adapter, nil)

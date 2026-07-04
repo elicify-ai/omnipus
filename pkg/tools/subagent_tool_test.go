@@ -367,7 +367,7 @@ func TestSubagentTool_Execute_WithAgentID(t *testing.T) {
 
 	ctx := context.Background()
 	args := map[string]any{
-		"task":     "Summarise the logs",
+		"task":     "Summarize the logs",
 		"label":    "log-summary",
 		"agent_id": "worker-agent-abc",
 	}

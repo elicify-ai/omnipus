@@ -671,7 +671,11 @@ func (al *AgentLoop) HardAbort(sessionKey string) error {
 							"target":      targetLen,
 							"after":       len(postArchive),
 						})
-					return fmt.Errorf("HardAbort: RollbackAppended did not take effect (archive len %d > target %d)", len(postArchive), targetLen)
+					return fmt.Errorf(
+						"HardAbort: RollbackAppended did not take effect (archive len %d > target %d)",
+						len(postArchive),
+						targetLen,
+					)
 				}
 			}
 			// If ReadArchive itself fails, we can't verify — fall through.

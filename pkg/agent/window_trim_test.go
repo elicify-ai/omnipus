@@ -63,7 +63,11 @@ func makeTurnWithTool(userContent, toolCallID, toolResult string) []providers.Me
 		{
 			Role: "assistant",
 			ToolCalls: []providers.ToolCall{
-				{ID: toolCallID, Name: "some_tool", Function: &providers.FunctionCall{Name: "some_tool", Arguments: "{}"}},
+				{
+					ID:       toolCallID,
+					Name:     "some_tool",
+					Function: &providers.FunctionCall{Name: "some_tool", Arguments: "{}"},
+				},
 			},
 		},
 		{

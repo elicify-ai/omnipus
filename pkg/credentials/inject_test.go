@@ -204,6 +204,11 @@ func TestResolveAll_MailboxesMissingCredential_CollectedErrorDoesNotBlockOthers(
 		t.Fatalf("error must name the missing ref, got %q", errs[0].Error())
 	}
 	if bundle[okRef] != "resolve-ok-secret" {
-		t.Fatalf("sibling pair's ref must still resolve: bundle[%s] = %q, want %q", okRef, bundle[okRef], "resolve-ok-secret")
+		t.Fatalf(
+			"sibling pair's ref must still resolve: bundle[%s] = %q, want %q",
+			okRef,
+			bundle[okRef],
+			"resolve-ok-secret",
+		)
 	}
 }

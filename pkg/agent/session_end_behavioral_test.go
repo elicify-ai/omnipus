@@ -377,7 +377,7 @@ Then I'll produce the JSON:
 
 // TestRunRecap_ReasoningFallback_ExtractsJSONFromReasoning exercises the path
 // where the LLM returns content="" but reasoning contains the drafted JSON.
-// This is the glm-5.2 on OpenRouter/Fireworks behaviour when reasoning tokens
+// This is the glm-5.2 on OpenRouter/Fireworks behavior when reasoning tokens
 // exhaust the budget — the model stops mid-reasoning with content=null.
 // The fix: extractJSONFromText scans resp.Reasoning and recovers the JSON.
 func TestRunRecap_ReasoningFallback_ExtractsJSONFromReasoning(t *testing.T) {

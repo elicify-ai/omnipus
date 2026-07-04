@@ -140,7 +140,7 @@ func syncMapLen(m *sync.Map) int {
 // TestCloseSession_HonorsSwappedConfig verifies that CloseSession reads the
 // config via GetConfig() (not a stale al.cfg pointer), so that a hot-swap via
 // SwapConfig (the path taken by PUT /settings/memory → safeUpdateConfigJSON →
-// refreshConfigAndRewireServices → SwapConfig) is immediately honoured.
+// refreshConfigAndRewireServices → SwapConfig) is immediately honored.
 //
 // Regression guard: before the fix, CloseSession read al.cfg directly without
 // al.mu.RLock(), so it could race with SwapConfig and see the pre-PUT value of

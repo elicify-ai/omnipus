@@ -141,7 +141,7 @@ func TestIntegration_RetroSweep180Split(t *testing.T) {
 
 	// Differentiation check: a second, DIFFERENT input (retentionDays=200)
 	// should leave BOTH files alive on a freshly-created store.
-	// This catches any hardcoded-deletion behaviour.
+	// This catches any hardcoded-deletion behavior.
 	agentWorkspace2 := t.TempDir()
 	ms2 := retroIT_newMemoryStore(t, agentWorkspace2, now)
 	retroIT_createRetroDir(t, agentWorkspace2, date190, "sess-stale2")
@@ -181,7 +181,7 @@ func TestIntegration_RetroSweep180Split(t *testing.T) {
 	//  2. Patching retentionRetroSweepFn to call executeRetroSweep with our loop.
 	//  3. Asserting executeRetroSweep returns 0 (the "main" agent workspace has
 	//     no retros; this verifies the iteration path runs without panic and
-	//     honours a retentionDays boundary for each registered agent).
+	//     honors a retentionDays boundary for each registered agent).
 
 	tmpHome := t.TempDir()
 	loopCfg := &config.Config{
@@ -205,7 +205,9 @@ func TestIntegration_RetroSweep180Split(t *testing.T) {
 	require.NoError(t, os.MkdirAll(staleDir, 0o700))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(staleDir, "sess-integration_retro.md"),
-		[]byte("<!-- ts=2025-12-08T00:00:00.000Z trigger=manual fallback=false -->\n## Session recap\ntest\n<!-- next -->\n"),
+		[]byte(
+			"<!-- ts=2025-12-08T00:00:00.000Z trigger=manual fallback=false -->\n## Session recap\ntest\n<!-- next -->\n",
+		),
 		0o600,
 	))
 

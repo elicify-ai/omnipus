@@ -20,7 +20,7 @@ import (
 
 // ArchivedMessage is a single line in context.jsonl.
 //
-// It embeds providers.Message so that JSON serialisation is flat:
+// It embeds providers.Message so that JSON serialization is flat:
 //
 //	{"role":"user","content":"hello","ts":1751234567}
 //
@@ -242,7 +242,7 @@ func (s *JSONLStore) addMsg(sessionKey string, msg providers.Message) error {
 	l.Lock()
 	defer l.Unlock()
 
-	// Wrap the message with a write timestamp before marshalling (FR-017).
+	// Wrap the message with a write timestamp before marshaling (FR-017).
 	archived := ArchivedMessage{
 		Message: msg,
 		TS:      time.Now().Unix(),
@@ -602,7 +602,7 @@ func (s *JSONLStore) Compact(
 
 // rewriteJSONL atomically replaces the JSONL file with the given ArchivedMessages
 // using the project's standard WriteFileAtomic (temp + fsync + rename).
-// Each ArchivedMessage serialises as a flat JSON object containing all
+// Each ArchivedMessage serializes as a flat JSON object containing all
 // providers.Message fields plus the "ts" timestamp (omitted when zero).
 func (s *JSONLStore) rewriteJSONL(
 	sessionKey string, msgs []ArchivedMessage,

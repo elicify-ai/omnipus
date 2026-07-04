@@ -86,7 +86,7 @@ type RoomMemorySearcher interface {
 
 // RetroSearcher is an optional read-side extension: a store that can search
 // retrospectives so recall_memory spans past reflections, not just long-term
-// memories (matching the documented behaviour). pkg/agent.MemoryStoreAdapter
+// memories (matching the documented behavior). pkg/agent.MemoryStoreAdapter
 // satisfies it via SearchRetros. Stores that don't implement it (test doubles)
 // simply return long-term hits only.
 type RetroSearcher interface {

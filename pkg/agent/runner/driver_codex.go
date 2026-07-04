@@ -260,8 +260,10 @@ func (d *CodexDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEvent
 // flag and is placed after `exec` alongside the other exec flags.
 func (d *CodexDriver) buildArgs(opts RunOptions) []string {
 	// --ask-for-approval must come before the "exec" subcommand (see doc above).
-	args := []string{"--ask-for-approval", "never", "exec", "--json", "--sandbox", "workspace-write",
-		"--skip-git-repo-check", "--color", "never"}
+	args := []string{
+		"--ask-for-approval", "never", "exec", "--json", "--sandbox", "workspace-write",
+		"--skip-git-repo-check", "--color", "never",
+	}
 	if model := strings.TrimSpace(opts.Model); model != "" {
 		args = append(args, "-m", model)
 	}

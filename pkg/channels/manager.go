@@ -526,7 +526,7 @@ func (m *Manager) initChannel(name, instanceID, displayName string) error {
 	// Key m.channels by instanceID (FR-015 / WS-B): supports N-per-type
 	// because "whatsapp.eu" and "whatsapp.us" occupy distinct slots. For
 	// legacy single-instance the instanceID equals the type name, so the
-	// behaviour is unchanged (e.g. "telegram" → m.channels["telegram"]).
+	// behavior is unchanged (e.g. "telegram" → m.channels["telegram"]).
 	m.channels[instanceID] = ch
 	logger.InfoCF("channels", "Channel enabled successfully", map[string]any{
 		"channel":    displayName,

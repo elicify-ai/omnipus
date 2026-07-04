@@ -132,8 +132,13 @@ func TestGodMode_POST_EnableWhenUnavailable_PersistsAndRequiresRestart(t *testin
 	w := httptest.NewRecorder()
 	api.HandleGodMode(w, req)
 
-	require.Equal(t, http.StatusOK, w.Code,
-		"enabling is permitted whenever the build supports god mode, regardless of prior availability; body: %s", w.Body.String())
+	require.Equal(
+		t,
+		http.StatusOK,
+		w.Code,
+		"enabling is permitted whenever the build supports god mode, regardless of prior availability; body: %s",
+		w.Body.String(),
+	)
 
 	var resp struct {
 		Enabled         bool `json:"enabled"`

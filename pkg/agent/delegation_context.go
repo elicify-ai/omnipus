@@ -59,7 +59,9 @@ func buildDelegationContext(targets []delegationTarget, globalDepthCap int) stri
 
 	var sb strings.Builder
 	sb.WriteString("## Delegation")
-	sb.WriteString("\n\nThis is your COMPLETE, authoritative delegation roster for THIS workspace. Answer any \"who can I delegate to\" question directly from this list — do NOT call list_agents or search memory to determine your delegation targets.")
+	sb.WriteString(
+		"\n\nThis is your COMPLETE, authoritative delegation roster for THIS workspace. Answer any \"who can I delegate to\" question directly from this list — do NOT call list_agents or search memory to determine your delegation targets.",
+	)
 
 	// renderedCount tracks how many target sections were actually emitted.
 	// If every target has an empty label (unresolvable), fall through to the
@@ -98,15 +100,28 @@ func buildDelegationContext(targets []delegationTarget, globalDepthCap int) stri
 		if activeBackground {
 			// spawn: agent_id is optional but we supply the concrete id so the
 			// agent can copy-paste the call. Background mode — async.
-			fmt.Fprintf(&sb, "\n- `spawn(agent_id=%q, task=\"…\")` — runs async; poll `check_spawn_status` for the result.", tgt.ID)
+			fmt.Fprintf(
+				&sb,
+				"\n- `spawn(agent_id=%q, task=\"…\")` — runs async; poll `check_spawn_status` for the result.",
+				tgt.ID,
+			)
 		}
 		if activeTask {
 			// create_task: all three params are required. NOT task_create (retired).
-			fmt.Fprintf(&sb, "\n- `create_task(agent_id=%q, title=\"…\", prompt=\"…\")` — files a durable, tracked task in the task DAG.", tgt.ID)
+			fmt.Fprintf(
+				&sb,
+				"\n- `create_task(agent_id=%q, title=\"…\", prompt=\"…\")` — files a durable, tracked task in the task DAG.",
+				tgt.ID,
+			)
 		}
 		if activeAwait {
 			// run_subagent(agent_id=…) runs the named agent synchronously (await mode).
-			fmt.Fprintf(&sb, "\n- `run_subagent(agent_id=%q, task=\"…\")` — blocks this turn; runs %s synchronously and returns the result inline.", tgt.ID, tgt.Label)
+			fmt.Fprintf(
+				&sb,
+				"\n- `run_subagent(agent_id=%q, task=\"…\")` — blocks this turn; runs %s synchronously and returns the result inline.",
+				tgt.ID,
+				tgt.Label,
+			)
 		}
 
 		// Per-target note when the edge forbids onward delegation (Depth <= 0,
@@ -126,9 +141,11 @@ func buildDelegationContext(targets []delegationTarget, globalDepthCap int) stri
 	// Exclusivity footer: makes clear that attempting to delegate to any agent
 	// not listed above will be denied — all three delegation tools are gated by
 	// the same workspace trust set. This directly addresses the observed
-	// misbehaviour where an agent called list_agents and then attempted to
+	// misbehavior where an agent called list_agents and then attempted to
 	// delegate to unlisted agents via create_task.
-	sb.WriteString("\n\nThese are your ONLY permitted delegation targets. spawn / create_task / run_subagent to any other agent WILL be denied — do not attempt it.")
+	sb.WriteString(
+		"\n\nThese are your ONLY permitted delegation targets. spawn / create_task / run_subagent to any other agent WILL be denied — do not attempt it.",
+	)
 
 	// Footer: global depth ceiling.
 	if globalDepthCap <= 0 {

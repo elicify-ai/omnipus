@@ -1799,7 +1799,7 @@ func wireStringMap[V ~string](in *map[string]V) map[string]string {
 // small set of variant-agnostic locals so the remainder of the handler
 // (validation, persistence, response building) is written once.
 //
-// type is REQUIRED on every variant: a missing or unrecognised type value is
+// type is REQUIRED on every variant: a missing or unrecognized type value is
 // a 400.
 func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
@@ -1837,7 +1837,7 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	default:
 		// Covers "core" / "system" (seeded-only classifications — the only way
 		// to obtain one is via SeedConfig, never the REST create path) and any
-		// other unrecognised value.
+		// other unrecognized value.
 		jsonErr(w, http.StatusBadRequest, typeErrMsg)
 		return
 	}
@@ -1887,7 +1887,7 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	)
 
 	switch *typePeek.Type {
-	case "Main":
+	case "Main": //nolint:dupl // per-variant oapi-codegen block, intentionally not merged
 		var vreq gen.AgentCreateRequestMain
 		if !decodeAgentCreateVariant(w, raw, *typePeek.Type, variantName, &vreq) {
 			return
@@ -1927,7 +1927,7 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 			toolsCfgIn = tc
 		}
 		delegationIn = delegationInputFromCreateRequestMain(&vreq)
-	case "Subagent":
+	case "Subagent": //nolint:dupl // per-variant oapi-codegen block, intentionally not merged
 		var vreq gen.AgentCreateRequestSubagent
 		if !decodeAgentCreateVariant(w, raw, *typePeek.Type, variantName, &vreq) {
 			return
@@ -6528,7 +6528,7 @@ func (a *restAPI) HandleChannels(w http.ResponseWriter, r *http.Request) {
 		if len(failed) > 0 {
 			entryBaseTypes := make(map[string]struct{}, len(channels))
 			for _, e := range channels {
-				bt, _ := config.ParseInstanceKey(string(e.Id))
+				bt, _ := config.ParseInstanceKey(e.Id)
 				entryBaseTypes[bt] = struct{}{}
 			}
 			for _, f := range failed {
@@ -6578,7 +6578,7 @@ func applyDegradedOverlay(channelList []gen.ChannelEntry, failed []channels.Chan
 		degradedMap[id] = f.Err.Error()
 	}
 	for i := range channelList {
-		baseType, _ := config.ParseInstanceKey(string(channelList[i].Id))
+		baseType, _ := config.ParseInstanceKey(channelList[i].Id)
 		if reason, ok := degradedMap[baseType]; ok {
 			r := reason
 			channelList[i].Degraded = boolPtr(true)
@@ -6847,7 +6847,11 @@ func (a *restAPI) setChannelRouting(w http.ResponseWriter, r *http.Request, chan
 			return
 		}
 		if foundAgent.IsWorker() {
-			jsonErr(w, http.StatusUnprocessableEntity, "workers are not chat targets and cannot be a channel's default agent")
+			jsonErr(
+				w,
+				http.StatusUnprocessableEntity,
+				"workers are not chat targets and cannot be a channel's default agent",
+			)
 			return
 		}
 
@@ -6964,7 +6968,11 @@ func (a *restAPI) setChannelRouting(w http.ResponseWriter, r *http.Request, chan
 		}
 		// MIN-002: standardize to 422 (was 400).
 		if found.IsWorker() {
-			jsonErr(w, http.StatusUnprocessableEntity, "workers are not chat targets and cannot be a channel's default agent")
+			jsonErr(
+				w,
+				http.StatusUnprocessableEntity,
+				"workers are not chat targets and cannot be a channel's default agent",
+			)
 			return
 		}
 	}
@@ -7489,7 +7497,11 @@ func (a *restAPI) getChannelConfig(w http.ResponseWriter, channelID string) {
 // save must not depend on an unlocked credential store; that liveness concern
 // belongs to Test/activation (testChannel), not to "did the operator fill in
 // the form".
-func validateChannelConfigComplete(baseType string, existing, updates map[string]any, prospectiveRefs map[string]string) string {
+func validateChannelConfigComplete(
+	baseType string,
+	existing, updates map[string]any,
+	prospectiveRefs map[string]string,
+) string {
 	merged := make(map[string]any, len(existing)+len(updates)+len(prospectiveRefs))
 	for k, v := range existing {
 		merged[k] = v
@@ -7748,7 +7760,15 @@ func (a *restAPI) testChannel(w http.ResponseWriter, channelID string) {
 		webhookRef, _ := chCfg["webhook_url_ref"].(string)
 		hasWebhook, err := a.credentialRefResolves(webhookRef)
 		if err != nil {
-			slog.Error("rest: channel test credential check", "channel", channelID, "field", "webhook_url", "error", err)
+			slog.Error(
+				"rest: channel test credential check",
+				"channel",
+				channelID,
+				"field",
+				"webhook_url",
+				"error",
+				err,
+			)
 			jsonOK(w, gen.ChannelTestResponse{
 				Success: false,
 				Message: "credential store unavailable — unlock it (set OMNIPUS_MASTER_KEY) and retry",
@@ -7758,7 +7778,15 @@ func (a *restAPI) testChannel(w http.ResponseWriter, channelID string) {
 		saJSONRef, _ := chCfg["service_account_json_ref"].(string)
 		hasSAJSON, err := a.credentialRefResolves(saJSONRef)
 		if err != nil {
-			slog.Error("rest: channel test credential check", "channel", channelID, "field", "service_account_json", "error", err)
+			slog.Error(
+				"rest: channel test credential check",
+				"channel",
+				channelID,
+				"field",
+				"service_account_json",
+				"error",
+				err,
+			)
 			jsonOK(w, gen.ChannelTestResponse{
 				Success: false,
 				Message: "credential store unavailable — unlock it (set OMNIPUS_MASTER_KEY) and retry",

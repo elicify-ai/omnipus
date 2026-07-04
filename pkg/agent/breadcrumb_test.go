@@ -54,7 +54,11 @@ func TestBreadcrumb_HeuristicPointerContents(t *testing.T) {
 	// Window is empty → all 3 are evicted.
 	// First user line: has quoted text, a file path, and a Capitalized run.
 	archive := []memory.ArchivedMessage{
-		makeMsgAM("user", `Please read the file /home/dev/omnipus/pkg/agent/context.go and fix the John Doe issue`, twoHoursAgo),
+		makeMsgAM(
+			"user",
+			`Please read the file /home/dev/omnipus/pkg/agent/context.go and fix the John Doe issue`,
+			twoHoursAgo,
+		),
 		makeMsgAM("assistant", "Reading file...", twoHoursAgo),
 		makeMsgAM("tool", "file contents here", twoHoursAgo),
 	}
