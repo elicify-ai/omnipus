@@ -60,6 +60,20 @@ export interface CommandPreviewProps {
    *  `executor`/`model` or the wizard's flat `WizardSubmitPayload`); the
    *  hook itself only re-fetches when the field VALUES actually change. */
   req: ExecutorCommandPreviewRequest | undefined
+  /** The real, saved agent id this preview/test belongs to — passed ONLY by
+   *  `AgentProfile.tsx` (the edit form, where the agent already exists and
+   *  has its own bound workspace on disk). `undefined` in the create wizard
+   *  (`Step1Identity.tsx`), where the agent hasn't been saved yet and there
+   *  is no workspace to run the smoke test in.
+   *
+   *  Irrelevant to the free, stateless command-line preview above (that
+   *  endpoint is agent-agnostic — it only computes argv from cli/model/
+   *  cli_path/cli_args) — used exclusively by `SmokeTestSection`'s real
+   *  `POST /agents/executor-smoke-test` call, where it decides whether the
+   *  test spawns a subprocess in the agent's real, persistent workspace
+   *  (`used_agent_workspace: true`) or a disposable ephemeral scratch
+   *  directory (`used_agent_workspace: false`). */
+  agentId?: string
   testId?: string
 }
 
@@ -74,7 +88,7 @@ function promptDeliveryLabel(delivery: ExecutorCommandPreviewResponse['prompt_de
   }
 }
 
-export function CommandPreview({ req, testId }: CommandPreviewProps) {
+export function CommandPreview({ req, agentId, testId }: CommandPreviewProps) {
   const { status, retry } = useCommandPreview(req)
   const { addToast } = useUiStore()
 
@@ -221,7 +235,14 @@ export function CommandPreview({ req, testId }: CommandPreviewProps) {
   return (
     <>
       {previewBlock}
-      <SmokeTestSection cli={req.cli} model={req.model} cliPath={req.cli_path} cliArgs={req.cli_args} testId={testId} />
+      <SmokeTestSection
+        cli={req.cli}
+        model={req.model}
+        cliPath={req.cli_path}
+        cliArgs={req.cli_args}
+        agentId={agentId}
+        testId={testId}
+      />
     </>
   )
 }
@@ -241,10 +262,15 @@ interface SmokeTestSectionProps {
   model: ExecutorCommandPreviewRequest['model']
   cliPath: ExecutorCommandPreviewRequest['cli_path']
   cliArgs: ExecutorCommandPreviewRequest['cli_args']
+  /** The real, saved agent whose own bound workspace the test should run
+   *  in — see `CommandPreviewProps.agentId`'s doc comment. `undefined` from
+   *  the create wizard, which falls back to the ephemeral-scratch-dir path
+   *  server-side exactly as before this field existed. */
+  agentId?: string
   testId?: string
 }
 
-function SmokeTestSection({ cli, model, cliPath, cliArgs, testId }: SmokeTestSectionProps) {
+function SmokeTestSection({ cli, model, cliPath, cliArgs, agentId, testId }: SmokeTestSectionProps) {
   const { status, run, cancel } = useExecutorSmokeTest()
   const smokeTestId = testId ? `${testId}-smoke-test` : undefined
   const isPending = status.kind === 'pending'
@@ -271,10 +297,10 @@ function SmokeTestSection({ cli, model, cliPath, cliArgs, testId }: SmokeTestSec
       return
     }
     cancel()
-  }, [cli, model, cliPath, cliArgs, cancel])
+  }, [cli, model, cliPath, cliArgs, agentId, cancel])
 
   const handleClick = () => {
-    run({ cli, model, cli_path: cliPath, cli_args: cliArgs })
+    run({ cli, model, cli_path: cliPath, cli_args: cliArgs, agent_id: agentId })
   }
 
   return (
@@ -329,16 +355,37 @@ function formatSmokeTestDuration(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`
 }
 
+// Surfaces `used_agent_workspace` distinctly from the pass/fail outcome
+// itself — the whole point of threading `agent_id` through is transparency
+// about WHERE the test ran, independent of whether it succeeded. Shown on
+// both the success and domain-level-failure branches below, since the
+// field is present (and meaningful) on both.
+function WorkspaceProvenanceNote({ usedAgentWorkspace, testId }: { usedAgentWorkspace: boolean; testId?: string }) {
+  return (
+    <p data-testid={testId} className="text-[10px] text-[var(--color-muted)] leading-snug">
+      {usedAgentWorkspace
+        ? "Ran in this agent's own saved workspace — the same place a real delegation to it would run."
+        : "Ran in a temporary workspace, not this agent's own — save the agent first to test with its real project context."}
+    </p>
+  )
+}
+
 function SmokeTestResult({ result, testId }: { result: ExecutorSmokeTestResponse; testId?: string }) {
   if (!result.ok) {
     return (
-      <p
-        data-testid={testId ? `${testId}-error` : undefined}
-        className="flex items-start gap-1 text-[11px] text-[var(--color-error)] leading-snug"
-      >
-        <XCircle size={11} weight="fill" className="mt-0.5 shrink-0" />
-        <span>{result.error || 'The test run did not succeed.'}</span>
-      </p>
+      <div data-testid={testId ? `${testId}-failure` : undefined} className="space-y-1.5">
+        <p
+          data-testid={testId ? `${testId}-error` : undefined}
+          className="flex items-start gap-1 text-[11px] text-[var(--color-error)] leading-snug"
+        >
+          <XCircle size={11} weight="fill" className="mt-0.5 shrink-0" />
+          <span>{result.error || 'The test run did not succeed.'}</span>
+        </p>
+        <WorkspaceProvenanceNote
+          usedAgentWorkspace={result.used_agent_workspace}
+          testId={testId ? `${testId}-failure-workspace-note` : undefined}
+        />
+      </div>
     )
   }
 
@@ -354,6 +401,10 @@ function SmokeTestResult({ result, testId }: { result: ExecutorSmokeTestResponse
       >
         {result.response_text}
       </p>
+      <WorkspaceProvenanceNote
+        usedAgentWorkspace={result.used_agent_workspace}
+        testId={testId ? `${testId}-success-workspace-note` : undefined}
+      />
     </div>
   )
 }

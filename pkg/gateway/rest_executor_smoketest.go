@@ -55,10 +55,18 @@
 //     allowlist real dispatch uses (pkg/agent/external_dispatch.go) — so the
 //     spawned CLI never inherits gateway secrets (OMNIPUS_MASTER_KEY, bearer
 //     tokens, ...).
-//   - Ephemeral workspace: a fresh, dedicated scratch directory under
-//     $OMNIPUS_HOME/executor-smoke-test-runs — NEVER a real agent's
-//     persistent workspace — removed (defer os.RemoveAll) once the run ends,
-//     success or failure.
+//   - Workspace: when the request's agent_id names a real, saved agent, the
+//     run happens in THAT agent's own persistent workspace directory (the
+//     same one agent.ResolveAgentWorkspace / a real subagent_3p delegation
+//     would use) so the test is representative of real behavior (project
+//     files, AGENTS.md/CLAUDE.md/opencode.json context) — that directory is
+//     NEVER removed by this handler. Otherwise (agent_id omitted, blank, or
+//     naming an agent that doesn't resolve — e.g. the create wizard before
+//     the agent has been saved) falls back to a fresh, dedicated ephemeral
+//     scratch directory under $OMNIPUS_HOME/executor-smoke-test-runs,
+//     removed (defer os.RemoveAll) once the run ends, success or failure. See
+//     runExecutorSmokeTest's isEphemeralWorkspace local for how the two paths
+//     stay mutually exclusive.
 //   - Audit: exactly one audit event {cli, binary, ok} per call
 //     (audit.EventExecutorSmokeTest) — deliberately NEVER response_text (the
 //     model's actual answer) or cli_args, either of which could plausibly
@@ -87,6 +95,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dapicom-ai/omnipus/pkg/agent"
 	"github.com/dapicom-ai/omnipus/pkg/agent/runner"
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/audit"
@@ -237,8 +246,9 @@ func (a *restAPI) postAgentsExecutorSmokeTest(w http.ResponseWriter, r *http.Req
 	model := derefTrimStr(req.Model)
 	cliPath := derefTrimStr(req.CliPath)
 	cliArgsRaw := derefStr(req.CliArgs)
+	agentID := derefTrimStr(req.AgentId)
 
-	resp, resolvedBinary := a.runExecutorSmokeTest(r.Context(), cli, model, cliPath, cliArgsRaw)
+	resp, resolvedBinary := a.runExecutorSmokeTest(r.Context(), cli, model, cliPath, cliArgsRaw, agentID)
 	a.auditExecutorSmokeTest(r, cli, resolvedBinary, resp)
 	jsonOK(w, resp)
 }
@@ -248,22 +258,27 @@ func (a *restAPI) postAgentsExecutorSmokeTest(w http.ResponseWriter, r *http.Req
 // invariant "exactly one of response_text/error is populated, gated by ok"
 // — which nothing in the generated type itself enforces — is maintained at
 // ONE pair of construction sites instead of six independent struct literals
-// that each had to get it right by hand.
-func smokeTestOK(responseText string, durationMs int) gen.ExecutorSmokeTestResponse {
+// that each had to get it right by hand. usedAgentWorkspace threads through
+// to the response's required used_agent_workspace field so every call site
+// (both helpers, all callers) carries it — see runExecutorSmokeTest's
+// isEphemeralWorkspace local for how the value is derived.
+func smokeTestOK(responseText string, durationMs int, usedAgentWorkspace bool) gen.ExecutorSmokeTestResponse {
 	return gen.ExecutorSmokeTestResponse{
-		Ok:           true,
-		ResponseText: strPtr(responseText),
-		DurationMs:   durationMs,
+		Ok:                 true,
+		ResponseText:       strPtr(responseText),
+		DurationMs:         durationMs,
+		UsedAgentWorkspace: usedAgentWorkspace,
 	}
 }
 
 // smokeTestFail builds a failed ExecutorSmokeTestResponse: ok=false, error
 // populated, response_text left nil. See smokeTestOK's doc.
-func smokeTestFail(errMsg string, durationMs int) gen.ExecutorSmokeTestResponse {
+func smokeTestFail(errMsg string, durationMs int, usedAgentWorkspace bool) gen.ExecutorSmokeTestResponse {
 	return gen.ExecutorSmokeTestResponse{
-		Ok:         false,
-		Error:      strPtr(errMsg),
-		DurationMs: durationMs,
+		Ok:                 false,
+		Error:              strPtr(errMsg),
+		DurationMs:         durationMs,
+		UsedAgentWorkspace: usedAgentWorkspace,
 	}
 }
 
@@ -273,7 +288,7 @@ func smokeTestFail(errMsg string, durationMs int) gen.ExecutorSmokeTestResponse 
 // wire response schema deliberately does not carry this).
 func (a *restAPI) runExecutorSmokeTest(
 	ctx context.Context,
-	cli, model, cliPath, cliArgsRaw string,
+	cli, model, cliPath, cliArgsRaw, agentID string,
 ) (gen.ExecutorSmokeTestResponse, string) {
 	start := time.Now()
 	durationMs := func() int { return int(time.Since(start).Milliseconds()) }
@@ -295,26 +310,81 @@ func (a *restAPI) runExecutorSmokeTest(
 	if lpErr != nil || !isRegularExecutableFile(resolvedTarget) {
 		return smokeTestFail(
 			fmt.Sprintf("%q CLI binary not found or not executable (%s)", cli, target),
-			durationMs(),
+			durationMs(), false,
 		), target
 	}
 	resolvedBinary := absResolvePath(target)
 
+	// Workspace resolution: when agentID names a real, saved agent, run in
+	// THAT agent's own persistent workspace directory — the same place a
+	// genuine subagent_3p delegation to it would run (agent.ResolveAgentWorkspace,
+	// the same helper NewAgentInstance uses in-package). Otherwise (agentID
+	// empty, or naming an agent that no longer resolves — e.g. the create
+	// wizard before the agent has been saved, or a stale/deleted id) fall back
+	// to a disposable ephemeral scratch directory, exactly as before this
+	// feature existed.
+	//
+	// isEphemeralWorkspace is set EXACTLY ONCE, right here, at the point
+	// workDir itself is decided — every later use (the cleanup defer just
+	// below, and the usedAgentWorkspace value threaded into every
+	// smokeTestOK/smokeTestFail call for the rest of this function) reads
+	// this same bool rather than re-deriving "was an agent used" from some
+	// other proxy (e.g. re-checking agentID != ""), so the cleanup-vs-no-
+	// cleanup decision cannot drift out of sync with which directory is
+	// actually in workDir. A real agent's persistent workspace must NEVER be
+	// deleted by this handler, under any circumstance (success, error,
+	// timeout, or the context-cancellation race smokeTestCancelGrace exists
+	// to wait out below).
+	var (
+		workDir              string
+		isEphemeralWorkspace bool
+	)
+	cfg := a.agentLoop.GetConfig()
+	if agentCfg := findAgentConfig(cfg, agentID); agentCfg != nil {
+		resolved := agent.ResolveAgentWorkspace(agentCfg, &cfg.Agents.Defaults)
+		// Defensive MkdirAll: agent.ResolveAgentWorkspace is pure path
+		// computation (see its doc) — the directory is normally already
+		// created, either at agent-creation time (rest.go's
+		// agentWorkspacePath, called from createAgent/getAgent/listAgents) or
+		// at first AgentInstance construction (pkg/agent.NewAgentInstance),
+		// both of which os.MkdirAll(…, 0o755) the SAME path this resolves to.
+		// Neither is guaranteed to have run yet for every config-present
+		// agent (e.g. an agent added via a raw config edit, or tested
+		// immediately after a fresh boot before its AgentInstance has been
+		// constructed), so this mirrors that exact mode rather than inventing
+		// a new convention.
+		if mkErr := os.MkdirAll(resolved, 0o755); mkErr != nil {
+			return smokeTestFail(
+				fmt.Sprintf("could not prepare agent workspace: %v", mkErr),
+				durationMs(), false,
+			), resolvedBinary
+		}
+		workDir = resolved
+		isEphemeralWorkspace = false
+	} else {
+		root := filepath.Join(config.OmnipusHomeDir(), smokeTestRunsSubdir)
+		if mkRootErr := os.MkdirAll(root, 0o700); mkRootErr != nil {
+			return smokeTestFail(
+				fmt.Sprintf("could not prepare scratch workspace: %v", mkRootErr),
+				durationMs(), false,
+			), resolvedBinary
+		}
+		dir, mkErr := os.MkdirTemp(root, "run-")
+		if mkErr != nil {
+			return smokeTestFail(fmt.Sprintf("could not create scratch workspace: %v", mkErr), durationMs(), false), resolvedBinary
+		}
+		workDir = dir
+		isEphemeralWorkspace = true
+	}
+	usedAgentWorkspace := !isEphemeralWorkspace
 	// Ephemeral scratch workspace — NEVER a real agent's persistent
-	// workspace. Removed unconditionally once the run ends, success or
-	// failure.
-	root := filepath.Join(config.OmnipusHomeDir(), smokeTestRunsSubdir)
-	if mkRootErr := os.MkdirAll(root, 0o700); mkRootErr != nil {
-		return smokeTestFail(
-			fmt.Sprintf("could not prepare scratch workspace: %v", mkRootErr),
-			durationMs(),
-		), resolvedBinary
-	}
-	workDir, mkErr := os.MkdirTemp(root, "run-")
-	if mkErr != nil {
-		return smokeTestFail(fmt.Sprintf("could not create scratch workspace: %v", mkErr), durationMs()), resolvedBinary
-	}
+	// workspace — removed unconditionally once the run ends, success or
+	// failure. Gated strictly on isEphemeralWorkspace: when a real agent's
+	// workspace is in use, this is a deliberate no-op.
 	defer func() {
+		if !isEphemeralWorkspace {
+			return
+		}
 		if rmErr := os.RemoveAll(workDir); rmErr != nil {
 			slog.Warn("executor-smoke-test: failed to remove ephemeral workspace",
 				"dir", workDir, "err", rmErr)
@@ -361,7 +431,7 @@ func (a *restAPI) runExecutorSmokeTest(
 	// too keeps the driver's own stored field consistent with that posture.
 	driver, err := smokeTestNewDriver(cli, nil)
 	if err != nil {
-		return smokeTestFail(fmt.Sprintf("could not construct driver: %v", err), durationMs()), resolvedBinary
+		return smokeTestFail(fmt.Sprintf("could not construct driver: %v", err), durationMs(), usedAgentWorkspace), resolvedBinary
 	}
 
 	evCh, runErr := driver.Run(runCtx, runner.RunOptions{
@@ -376,7 +446,7 @@ func (a *restAPI) runExecutorSmokeTest(
 		Model:          model,
 	})
 	if runErr != nil {
-		return smokeTestFail(fmt.Sprintf("failed to start %s: %v", cli, runErr), durationMs()), resolvedBinary
+		return smokeTestFail(fmt.Sprintf("failed to start %s: %v", cli, runErr), durationMs(), usedAgentWorkspace), resolvedBinary
 	}
 
 	slog.Info("executor-smoke-test: run started",
@@ -422,9 +492,9 @@ func (a *restAPI) runExecutorSmokeTest(
 
 	var resp gen.ExecutorSmokeTestResponse
 	if ok {
-		resp = smokeTestOK(responseText, durationMs())
+		resp = smokeTestOK(responseText, durationMs(), usedAgentWorkspace)
 	} else {
-		resp = smokeTestFail(errMsg, durationMs())
+		resp = smokeTestFail(errMsg, durationMs(), usedAgentWorkspace)
 	}
 
 	slog.Info("executor-smoke-test: run finished",

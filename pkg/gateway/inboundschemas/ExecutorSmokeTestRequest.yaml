@@ -1,15 +1,23 @@
 type: object
 description: >
-  Stateless request to actually run a trivial, real prompt through an
-  external-CLI worker's real dispatch path (the same driver.Run() a genuine
-  subagent_3p delegation uses) and return the real response. Distinct from
-  the zero-token POST /agents/{id}/runner/test (binary-present → version
-  handshake → credential-file-presence only, never spends a token) — this
-  spawns a real, authenticated subprocess and costs real model usage, so it
-  is an explicit operator action, never automatic. Body-driven and
-  agent-agnostic (mirrors POST /agents/executor-preview and
-  POST /system/cli-validate) so it works from the create wizard, where no
-  agent id exists yet, and from an existing agent's edit form alike.
+  Runs a trivial, real prompt through an external-CLI worker's real
+  dispatch path (the same driver.Run() a genuine subagent_3p delegation
+  uses) and returns the real response. Distinct from the zero-token
+  POST /agents/{id}/runner/test (binary-present → version handshake →
+  credential-file-presence only, never spends a token) — this spawns a
+  real, authenticated subprocess and costs real model usage, so it is an
+  explicit operator action, never automatic. Mirrors POST
+  /agents/executor-preview and POST /system/cli-validate's body-driven
+  shape so it works from the create wizard too, but is NOT fully
+  agent-agnostic like those two: when agent_id names a real, saved agent,
+  the run happens in THAT agent's own bound workspace
+  ($OMNIPUS_HOME/agents/{id}/) — matching exactly where a genuine
+  delegation to this agent would run, so the test is representative of
+  real behavior (project files, AGENTS.md/CLAUDE.md/opencode.json context
+  the CLI would actually see). Omitting agent_id (the create-wizard case,
+  before the agent has been saved) or naming an agent that doesn't resolve
+  falls back to a disposable, ephemeral scratch directory instead — the
+  response's used_agent_workspace field says which one happened.
 required:
   - cli
 additionalProperties: false
@@ -17,6 +25,16 @@ properties:
   cli:
     $ref: './ExternalCli.yaml'
     x-go-type: ExternalCliTool
+  agent_id:
+    type: string
+    maxLength: 128
+    description: >
+      Optional id of an existing, saved agent whose own bound workspace
+      this test should run in. When it resolves to a real agent, the run
+      uses that agent's persistent workspace directory (never deleted
+      afterward — only the ephemeral scratch-directory fallback is
+      cleaned up). When omitted, empty, or naming an agent that no longer
+      exists, falls back to a disposable ephemeral workspace.
   model:
     type: string
     maxLength: 256

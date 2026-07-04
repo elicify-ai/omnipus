@@ -1652,7 +1652,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   In addition to the flags Omnipus applies automatically when this agent runs — see the live command preview below. Any argument that would be silently ignored is called out there before you save.
                 </p>
               </div>
-              <CommandPreview req={commandPreviewRequest} testId="profile-command-preview" />
+              <CommandPreview req={commandPreviewRequest} agentId={resolvedAgentId} testId="profile-command-preview" />
             </section>
 
     </div>

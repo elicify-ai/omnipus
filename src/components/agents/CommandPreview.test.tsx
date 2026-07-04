@@ -41,7 +41,7 @@ function req(overrides: Partial<ExecutorCommandPreviewRequest> = {}): ExecutorCo
 }
 
 function okSmokeTestResult(overrides: Partial<ExecutorSmokeTestResponse> = {}): ExecutorSmokeTestResponse {
-  return { ok: true, response_text: '2', duration_ms: 2300, ...overrides }
+  return { ok: true, response_text: '2', duration_ms: 2300, used_agent_workspace: false, ...overrides }
 }
 
 async function advanceAndFlush(ms: number) {
@@ -283,7 +283,12 @@ describe('CommandPreview — smoke test button', () => {
   })
 
   it('shows the plain error text for a domain-level ok:false result, with the button re-enabled to retry', async () => {
-    vi.mocked(fetchExecutorSmokeTest).mockResolvedValue({ ok: false, error: 'Authentication failed.', duration_ms: 900 })
+    vi.mocked(fetchExecutorSmokeTest).mockResolvedValue({
+      ok: false,
+      error: 'Authentication failed.',
+      duration_ms: 900,
+      used_agent_workspace: false,
+    })
     render(<CommandPreview req={req()} testId="cp" />)
 
     await act(async () => {
@@ -367,7 +372,12 @@ describe('CommandPreview — smoke test button', () => {
   })
 
   it('resets a stale error result to idle when the underlying settings change', async () => {
-    vi.mocked(fetchExecutorSmokeTest).mockResolvedValue({ ok: false, error: 'Authentication failed.', duration_ms: 900 })
+    vi.mocked(fetchExecutorSmokeTest).mockResolvedValue({
+      ok: false,
+      error: 'Authentication failed.',
+      duration_ms: 900,
+      used_agent_workspace: false,
+    })
     const { rerender } = render(<CommandPreview req={req({ cli_args: '--foo' })} testId="cp" />)
 
     await act(async () => {
@@ -422,5 +432,111 @@ describe('CommandPreview — smoke test button', () => {
     rerender(<CommandPreview req={req({ model: 'claude-sonnet-4-6' })} testId="cp" />)
 
     expect(screen.getByTestId('cp-smoke-test-success')).toBeInTheDocument()
+  })
+})
+
+// ── agent_id threading (AgentProfile edit view vs. create wizard) ──────────
+
+describe('CommandPreview — agentId prop threading into the smoke-test request', () => {
+  it('includes agent_id in the smoke-test request when the agentId prop is provided (AgentProfile edit view)', async () => {
+    vi.mocked(fetchExecutorSmokeTest).mockResolvedValue(okSmokeTestResult())
+    render(<CommandPreview req={req()} agentId="agent-123" testId="cp" />)
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('cp-smoke-test-button'))
+      await Promise.resolve()
+    })
+
+    expect(fetchExecutorSmokeTest).toHaveBeenCalledWith(
+      { cli: 'claude-code', model: undefined, cli_path: undefined, cli_args: undefined, agent_id: 'agent-123' },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    )
+  })
+
+  it('omits agent_id from the smoke-test request when no agentId prop is provided (create wizard)', async () => {
+    vi.mocked(fetchExecutorSmokeTest).mockResolvedValue(okSmokeTestResult())
+    render(<CommandPreview req={req()} testId="cp" />)
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('cp-smoke-test-button'))
+      await Promise.resolve()
+    })
+
+    const call = vi.mocked(fetchExecutorSmokeTest).mock.calls[0][0]
+    expect(call.agent_id).toBeUndefined()
+  })
+})
+
+// ── used_agent_workspace transparency copy ──────────────────────────────
+
+describe('CommandPreview — used_agent_workspace transparency copy', () => {
+  it('says the test ran in the agent\'s own workspace on success when used_agent_workspace is true', async () => {
+    vi.mocked(fetchExecutorSmokeTest).mockResolvedValue(okSmokeTestResult({ used_agent_workspace: true }))
+    render(<CommandPreview req={req()} agentId="agent-123" testId="cp" />)
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('cp-smoke-test-button'))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(screen.getByTestId('cp-smoke-test-success-workspace-note')).toHaveTextContent(
+      /this agent's own saved workspace/i,
+    )
+  })
+
+  it('says the test ran in a temporary workspace on success when used_agent_workspace is false', async () => {
+    vi.mocked(fetchExecutorSmokeTest).mockResolvedValue(okSmokeTestResult({ used_agent_workspace: false }))
+    render(<CommandPreview req={req()} testId="cp" />)
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('cp-smoke-test-button'))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(screen.getByTestId('cp-smoke-test-success-workspace-note')).toHaveTextContent(
+      /temporary workspace.*save the agent first/i,
+    )
+  })
+
+  it('says the test ran in the agent\'s own workspace on a domain-level FAILURE when used_agent_workspace is true', async () => {
+    vi.mocked(fetchExecutorSmokeTest).mockResolvedValue({
+      ok: false,
+      error: 'Authentication failed.',
+      duration_ms: 900,
+      used_agent_workspace: true,
+    })
+    render(<CommandPreview req={req()} agentId="agent-123" testId="cp" />)
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('cp-smoke-test-button'))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(screen.getByTestId('cp-smoke-test-failure-workspace-note')).toHaveTextContent(
+      /this agent's own saved workspace/i,
+    )
+  })
+
+  it('says the test ran in a temporary workspace on a domain-level FAILURE when used_agent_workspace is false', async () => {
+    vi.mocked(fetchExecutorSmokeTest).mockResolvedValue({
+      ok: false,
+      error: 'Authentication failed.',
+      duration_ms: 900,
+      used_agent_workspace: false,
+    })
+    render(<CommandPreview req={req()} testId="cp" />)
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('cp-smoke-test-button'))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(screen.getByTestId('cp-smoke-test-failure-workspace-note')).toHaveTextContent(
+      /temporary workspace.*save the agent first/i,
+    )
   })
 })

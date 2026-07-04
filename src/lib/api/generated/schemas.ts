@@ -355,6 +355,7 @@ type ExecutorCommandPreviewRequest = {
 };
 type ExecutorSmokeTestRequest = {
   cli: ExternalCliTool;
+  agent_id?: string | undefined;
   model?: string | undefined;
   cli_path?: string | undefined;
   cli_args?: string | undefined;
@@ -1497,6 +1498,7 @@ export const ExecutorCommandPreviewResponse = z.object({
 export const ExecutorSmokeTestRequest: z.ZodType<ExecutorSmokeTestRequest> =
   z.object({
     cli: ExternalCliTool,
+    agent_id: z.string().max(128).optional(),
     model: z.string().max(256).optional(),
     cli_path: z.string().max(4096).optional(),
     cli_args: z.string().max(4096).optional(),
@@ -1506,6 +1508,7 @@ export const ExecutorSmokeTestResponse = z.object({
   response_text: z.string().optional(),
   error: z.string().optional(),
   duration_ms: z.number().int(),
+  used_agent_workspace: z.boolean(),
 });
 export const SessionScopeResponse = z
   .object({

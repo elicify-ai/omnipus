@@ -725,6 +725,24 @@ func (a *AgentInstance) IsWorker() bool {
 	return a.AgentType == string(config.AgentTypeWorker)
 }
 
+// ResolveAgentWorkspace exports resolveAgentWorkspace (below) for cross-
+// package use, mirroring the "exported wrapper for cross-package test/tooling
+// use" pattern already established in pkg/agent/runner/buildargs_crosspkg.go
+// for that package's own unexported internals. Added so pkg/gateway's
+// executor-smoke-test endpoint (POST /api/v1/agents/executor-smoke-test) can
+// resolve EXACTLY the same workspace path a real subagent_3p delegation would
+// run in (see external_dispatch.go, which calls resolveAgentWorkspace
+// in-package via NewAgentInstance) when the smoke test names a real, saved
+// agent_id — instead of always running in a disposable ephemeral scratch
+// directory that carries none of the agent's real project files or
+// AGENTS.md/CLAUDE.md/opencode.json context. Pure path computation: unlike
+// NewAgentInstance's own call site, this does NOT create the directory —
+// callers that need the directory to exist must os.MkdirAll it themselves,
+// same as every other resolveAgentWorkspace caller does.
+func ResolveAgentWorkspace(agentCfg *config.AgentConfig, defaults *config.AgentDefaults) string {
+	return resolveAgentWorkspace(agentCfg, defaults)
+}
+
 // resolveAgentWorkspace determines the workspace directory for an agent.
 func resolveAgentWorkspace(agentCfg *config.AgentConfig, defaults *config.AgentDefaults) string {
 	if agentCfg != nil && strings.TrimSpace(agentCfg.Workspace) != "" {

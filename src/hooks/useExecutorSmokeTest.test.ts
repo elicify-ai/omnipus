@@ -25,7 +25,7 @@ function req(overrides: Partial<ExecutorSmokeTestRequest> = {}): ExecutorSmokeTe
 }
 
 function okResult(overrides: Partial<ExecutorSmokeTestResponse> = {}): ExecutorSmokeTestResponse {
-  return { ok: true, response_text: '2', duration_ms: 1234, ...overrides }
+  return { ok: true, response_text: '2', duration_ms: 1234, used_agent_workspace: false, ...overrides }
 }
 
 beforeEach(() => {
@@ -66,7 +66,12 @@ describe('useExecutorSmokeTest — run() success', () => {
   })
 
   it('a domain-level ok:false response lands in "result", not "error"', async () => {
-    vi.mocked(fetchExecutorSmokeTest).mockResolvedValue({ ok: false, error: 'Authentication failed.', duration_ms: 500 })
+    vi.mocked(fetchExecutorSmokeTest).mockResolvedValue({
+      ok: false,
+      error: 'Authentication failed.',
+      duration_ms: 500,
+      used_agent_workspace: false,
+    })
     const { result } = renderHook(() => useExecutorSmokeTest())
 
     await act(async () => {
@@ -76,8 +81,60 @@ describe('useExecutorSmokeTest — run() success', () => {
 
     expect(result.current.status).toEqual({
       kind: 'result',
-      result: { ok: false, error: 'Authentication failed.', duration_ms: 500 },
+      result: { ok: false, error: 'Authentication failed.', duration_ms: 500, used_agent_workspace: false },
     })
+  })
+})
+
+describe('useExecutorSmokeTest — agent_id pass-through', () => {
+  it('forwards agent_id in the request when the caller provides one', () => {
+    vi.mocked(fetchExecutorSmokeTest).mockReturnValue(new Promise(() => {}))
+    const { result } = renderHook(() => useExecutorSmokeTest())
+
+    act(() => {
+      result.current.run(req({ agent_id: 'agent-123' }))
+    })
+
+    expect(fetchExecutorSmokeTest).toHaveBeenCalledWith(
+      req({ agent_id: 'agent-123' }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    )
+  })
+
+  it('omits agent_id from the request when the caller does not provide one (create-wizard case)', () => {
+    vi.mocked(fetchExecutorSmokeTest).mockReturnValue(new Promise(() => {}))
+    const { result } = renderHook(() => useExecutorSmokeTest())
+
+    act(() => {
+      result.current.run(req())
+    })
+
+    const call = vi.mocked(fetchExecutorSmokeTest).mock.calls[0][0]
+    expect(call.agent_id).toBeUndefined()
+  })
+
+  it('carries used_agent_workspace: true through to the result state when the run used the agent\'s own workspace', async () => {
+    vi.mocked(fetchExecutorSmokeTest).mockResolvedValue(okResult({ used_agent_workspace: true }))
+    const { result } = renderHook(() => useExecutorSmokeTest())
+
+    await act(async () => {
+      result.current.run(req({ agent_id: 'agent-123' }))
+      await Promise.resolve()
+    })
+
+    expect(result.current.status).toEqual({ kind: 'result', result: okResult({ used_agent_workspace: true }) })
+  })
+
+  it('carries used_agent_workspace: false through to the result state for the ephemeral scratch-dir fallback', async () => {
+    vi.mocked(fetchExecutorSmokeTest).mockResolvedValue(okResult({ used_agent_workspace: false }))
+    const { result } = renderHook(() => useExecutorSmokeTest())
+
+    await act(async () => {
+      result.current.run(req())
+      await Promise.resolve()
+    })
+
+    expect(result.current.status).toEqual({ kind: 'result', result: okResult({ used_agent_workspace: false }) })
   })
 })
 

@@ -52,6 +52,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchCliDetect: vi.fn(),
     fetchCliValidate: vi.fn(),
     fetchExecutorPreview: vi.fn(),
+    fetchExecutorSmokeTest: vi.fn(),
   }
 })
 
@@ -64,6 +65,7 @@ import {
   fetchCliDetect,
   fetchCliValidate,
   fetchExecutorPreview,
+  fetchExecutorSmokeTest,
 } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import type { CliDetect, CliValidateResponse, ExecutorCommandPreviewResponse } from '@/lib/api'
@@ -137,6 +139,7 @@ beforeEach(() => {
   vi.mocked(fetchCliDetect).mockReset().mockResolvedValue(detect())
   vi.mocked(fetchCliValidate).mockReset().mockResolvedValue(validateResult())
   vi.mocked(fetchExecutorPreview).mockReset().mockResolvedValue(previewResponse())
+  vi.mocked(fetchExecutorSmokeTest).mockReset()
   useUiStore.setState({ toasts: [] })
 })
 
@@ -290,6 +293,39 @@ describe('AgentProfile — Runtime tab live command preview (executor-command-pr
     await waitFor(() => {
       const block = screen.getByTestId('profile-command-preview')
       expect(block).toHaveAttribute('data-preview-status', 'ready')
+    }, { timeout: 2000 })
+  })
+})
+
+describe('AgentProfile — smoke test runs in this real, saved agent\'s own workspace', () => {
+  it('sends the real, saved agent_id in the smoke-test request (not the ephemeral-scratch-dir path)', async () => {
+    vi.mocked(fetchExecutorSmokeTest).mockResolvedValue({
+      ok: true,
+      response_text: '2',
+      duration_ms: 1800,
+      used_agent_workspace: true,
+    })
+    renderProfile('external-worker')
+    await screen.findByText('External Worker')
+    switchTab('tab-runtime')
+
+    await waitFor(() => {
+      expect(screen.getByTestId('profile-command-preview')).toHaveAttribute('data-preview-status', 'ready')
+    }, { timeout: 2000 })
+
+    fireEvent.click(screen.getByTestId('profile-command-preview-smoke-test-button'))
+
+    await waitFor(() => expect(fetchExecutorSmokeTest).toHaveBeenCalled(), { timeout: 2000 })
+    const call = vi.mocked(fetchExecutorSmokeTest).mock.calls[0][0]
+    // 'external-worker' is mockExternalAgent's real id (renderProfile's arg) —
+    // proves AgentProfile threads its OWN saved agentId through, not a
+    // hand-typed or missing value.
+    expect(call.agent_id).toBe('external-worker')
+
+    await waitFor(() => {
+      expect(screen.getByTestId('profile-command-preview-smoke-test-success-workspace-note')).toHaveTextContent(
+        /this agent's own saved workspace/i,
+      )
     }, { timeout: 2000 })
   })
 })
