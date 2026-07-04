@@ -21,6 +21,7 @@ import (
 
 	"github.com/dapicom-ai/omnipus/pkg/audit"
 	"github.com/dapicom-ai/omnipus/pkg/session"
+	"github.com/dapicom-ai/omnipus/pkg/tools"
 )
 
 // CancelScope identifies what to cancel.
@@ -63,6 +64,14 @@ type CancelHooks struct {
 	// SetSessionInterrupted updates the session meta.json Status to interrupted.
 	// Called once at graceful stage.
 	SetSessionInterrupted func(sessionID string)
+
+	// KillBackgroundSessions cascades the cancel to every detached background
+	// bash/exec session owned by sessionID (FR-B10/FR-B11, User Story 5:
+	// "Canceling a session also stops any background bash work it started").
+	// Called once at graceful stage, alongside CancelPendingApprovals. A
+	// session with no background work sees no behavior change — this hook is
+	// a no-op in that case, not an error.
+	KillBackgroundSessions func(sessionID string)
 }
 
 // RequestCancel is the canonical cancel entry point. All four cancel surfaces
@@ -75,6 +84,7 @@ type CancelHooks struct {
 //   - turn_cancel_attempt audit emission (always, even for no-op cancels)
 //   - graceful cascade via InterruptSession / providerCancel
 //   - approval auto-deny (via hooks.CancelPendingApprovals)
+//   - background bash/exec session kill cascade (via hooks.KillBackgroundSessions)
 //   - cancel_stage frame emission (via hooks.SendStageFrame)
 //   - session status → interrupted (via hooks.SetSessionInterrupted)
 //   - transcript MarkLastEntryTruncated + turn_canceled entry on Finish
@@ -214,7 +224,7 @@ func (al *AgentLoop) RequestCancel(
 		})
 	})
 
-	// --- PHASE A: graceful cascade + approval auto-deny ---
+	// --- PHASE A: graceful cascade + approval auto-deny + background-session kill ---
 	//
 	// Now that the callback is registered, fire InterruptSession. The ordering
 	// guarantee: SetOnCancelFinish (above) stores the callback under ts.mu before
@@ -235,6 +245,9 @@ func (al *AgentLoop) RequestCancel(
 
 	if hooks.CancelPendingApprovals != nil {
 		hooks.CancelPendingApprovals(sessionID, "session canceled")
+	}
+	if hooks.KillBackgroundSessions != nil {
+		hooks.KillBackgroundSessions(sessionID)
 	}
 	if hooks.SendStageFrame != nil {
 		hooks.SendStageFrame(sessionID, "graceful")
@@ -324,12 +337,28 @@ func (al *AgentLoop) RequestCancelForSession(ctx context.Context, sessionID, use
 	outcome, err := al.RequestCancel(ctx,
 		CancelScope{SessionID: sessionID},
 		CancelCanceller{UserID: userID, Channel: channel},
-		CancelHooks{}, // no transport-specific side-effects for Tier A /cancel command
+		CancelHooks{
+			// Tier A /cancel command carries no other transport-specific side
+			// effects, but must still cascade to any background bash/exec
+			// sessions this chat session started (FR-B10/FR-B11).
+			KillBackgroundSessions: killBackgroundSessionsForCancelSurface,
+		},
 	)
 	if err != nil {
 		return false, err
 	}
 	return outcome.Fired, nil
+}
+
+// killBackgroundSessionsForCancelSurface is the CancelHooks.KillBackgroundSessions
+// implementation shared by the primitive-argument adapters below (Tier A
+// /cancel command and Tier B text-parsing channels), neither of which carries
+// any other transport-specific cancel side effect. It reaches the single
+// process-wide pkg/tools SessionManager via the exported GetSharedSessionManager
+// accessor (getSessionManager itself is unexported/package-private to
+// pkg/tools) and kills every background session owned by sessionID.
+func killBackgroundSessionsForCancelSurface(sessionID string) {
+	tools.GetSharedSessionManager().KillAllForSession(sessionID)
 }
 
 // RequestCancelByChannelChat is a primitive-argument adapter for RequestCancel
@@ -346,7 +375,12 @@ func (al *AgentLoop) RequestCancelByChannelChat(ctx context.Context, channelName
 	_, err := al.RequestCancel(ctx,
 		CancelScope{Channel: channelName, ChatID: chatID},
 		CancelCanceller{UserID: userID, Channel: channelName},
-		CancelHooks{}, // no transport-specific side-effects for Tier B channels
+		CancelHooks{
+			// Tier B channels carry no other transport-specific side effects,
+			// but must still cascade to any background bash/exec sessions
+			// this chat session started (FR-B10/FR-B11).
+			KillBackgroundSessions: killBackgroundSessionsForCancelSurface,
+		},
 	)
 	return err
 }

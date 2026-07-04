@@ -275,7 +275,8 @@ describe('ToolPolicyEditor — preset application', () => {
     expect(onChange).toHaveBeenCalledWith({
       default_policy: 'allow',
       policies: {
-        exec: 'ask',
+        // ADR-036: `bash` replaces exec / workspace_shell / workspace_shell_bg.
+        bash: 'ask',
         'browser.navigate': 'ask',
         'browser.click': 'ask',
         'browser.type': 'ask',

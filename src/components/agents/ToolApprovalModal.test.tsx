@@ -115,6 +115,71 @@ describe('ToolApprovalModal — rendering', () => {
   })
 })
 
+// ADR-036 §3.4: the dedicated exec-only approval flow (ExecApprovalBlock) was
+// retired in favor of this generic modal. Its readable command preview
+// (binary highlighted, env-prefix separated, working-dir line) was ported
+// here for `bash` calls — verify it renders, in addition to the generic
+// Arguments JSON dump, and does NOT render for other tools.
+describe('ToolApprovalModal — bash command preview (ADR-036 §3.4 port)', () => {
+  const BASH_APPROVAL = {
+    approvalId: 'appr-bash-001',
+    toolCallId: 'call-bash-001',
+    toolName: 'bash',
+    args: { command: 'FOO=bar npm run build', cwd: 'apps/web', run_in_background: false },
+    agentId: 'agent-main',
+    sessionId: 'sess-001',
+    turnId: 'turn-001',
+    expiresAt: Date.now() + 300_000,
+  }
+
+  it('renders a Command preview with the binary highlighted and env prefix separated', () => {
+    act(() => {
+      useToolApprovalStore.setState({ queue: [BASH_APPROVAL] })
+    })
+    render(<ToolApprovalModal />)
+    expect(screen.getByText('Command')).toBeInTheDocument()
+    expect(screen.getByText('FOO=bar')).toBeInTheDocument()
+    expect(screen.getByText('npm')).toBeInTheDocument()
+  })
+
+  it('renders the working directory from args.cwd', () => {
+    act(() => {
+      useToolApprovalStore.setState({ queue: [BASH_APPROVAL] })
+    })
+    render(<ToolApprovalModal />)
+    expect(screen.getByText('apps/web')).toBeInTheDocument()
+  })
+
+  it('still renders the generic Arguments JSON dump alongside the preview', () => {
+    act(() => {
+      useToolApprovalStore.setState({ queue: [BASH_APPROVAL] })
+    })
+    render(<ToolApprovalModal />)
+    expect(screen.getByText('Arguments')).toBeInTheDocument()
+    expect(screen.getByText(/run_in_background/)).toBeInTheDocument()
+  })
+
+  it('does NOT render a Command preview for a non-bash tool', () => {
+    act(() => {
+      useToolApprovalStore.setState({
+        queue: [{ ...SAMPLE_APPROVAL, args: { command: 'not actually bash' } }],
+      })
+    })
+    render(<ToolApprovalModal />)
+    expect(screen.queryByText('Command')).not.toBeInTheDocument()
+  })
+
+  it('does NOT render a Command preview when bash args have no command string', () => {
+    act(() => {
+      useToolApprovalStore.setState({
+        queue: [{ ...BASH_APPROVAL, args: { run_in_background: true } }],
+      })
+    })
+    render(<ToolApprovalModal />)
+    expect(screen.queryByText('Command')).not.toBeInTheDocument()
+  })
+})
+
 describe('ToolApprovalModal — button dispatch', () => {
   it('Approve button calls postToolApproval with action:"approve"', async () => {
     act(() => {

@@ -6,8 +6,8 @@ import { useConnectionStore } from '@/store/connection'
 import { useSessionStore, registerChatSetReplaying, registerChatResetForReplay } from '@/store/session'
 import { queryClient } from '@/lib/queryClient'
 import type { Message, ToolCall } from '@/lib/api'
-import type { WsReceiveFrame, WsExecApprovalRequestFrame, WsReplayMessageFrame, WsRateLimitFrame, WsSubagentStartFrame, WsSubagentEndFrame } from '@/lib/ws'
-import type { ToolResultRef, TruncatedResult, WhatsAppPairingFrame, NotificationFrame, ExecApprovalExpiredFrame } from '@/lib/api/generated/asyncapi-types'
+import type { WsReceiveFrame, WsReplayMessageFrame, WsRateLimitFrame, WsSubagentStartFrame, WsSubagentEndFrame } from '@/lib/ws'
+import type { ToolResultRef, TruncatedResult, WhatsAppPairingFrame, NotificationFrame } from '@/lib/api/generated/asyncapi-types'
 import { MessageFrame as MessageFrameSchema } from '@/lib/api/generated/schemas'
 import { useWhatsAppPairingStore } from '@/store/whatsappPairing'
 import { useWorkspacesStore } from '@/store/workspacesStore'
@@ -154,14 +154,6 @@ export interface RateLimitEventData {
   tool?: string
 }
 
-export interface ExecApprovalRequest {
-  id: string
-  command: string
-  working_dir?: string
-  matched_policy?: string
-  status: 'pending' | 'allowed' | 'denied' | 'always_allowed'
-}
-
 /** All per-session chat state for one concurrent session. */
 export interface SessionChatState {
   // Map-indexed ring buffer. Use getMessages(bucket) to get the ordered array.
@@ -173,7 +165,6 @@ export interface SessionChatState {
   toolCalls: Record<string, ToolCall & { call_id: string }>
   toolCallOrder: string[]
   textAtToolCallStart: Record<string, string>
-  pendingApprovals: ExecApprovalRequest[]
   isStreaming: boolean
   /** True from attach_session until first done frame — disables send input during replay. */
   isReplaying: boolean
@@ -218,7 +209,6 @@ function emptySessionState(): SessionChatState {
     toolCalls: {},
     toolCallOrder: [],
     textAtToolCallStart: {},
-    pendingApprovals: [],
     isStreaming: false,
     isReplaying: false,
     replayCompletedForSession: null,
@@ -379,7 +369,6 @@ interface ChatStore {
   toolCalls: Record<string, ToolCall & { call_id: string }>
   toolCallOrder: string[]
   textAtToolCallStart: Record<string, string>
-  pendingApprovals: ExecApprovalRequest[]
   sessionTokens: number
   sessionCost: number
   rateLimitEvent: RateLimitEventData | null
@@ -411,9 +400,6 @@ interface ChatStore {
   startToolCall: (callId: string, tool: string, params: Record<string, unknown>) => void
   resolveToolCall: (callId: string, result: unknown, status: 'success' | 'error', durationMs?: number, error?: string) => void
   cancelToolCall: (callId: string) => void
-
-  addApprovalRequest: (req: WsExecApprovalRequestFrame) => void
-  resolveApproval: (id: string, status: 'allowed' | 'denied' | 'always_allowed') => void
 
   updateSessionStats: (tokens: number, cost: number) => void
   /**
@@ -461,7 +447,6 @@ interface ChatStore {
   /** Validate an outbound MessageFrame against the generated Zod schema. Logs and dev-toasts on failure but never blocks the send. */
   _validateOutboundFrame: (payload: unknown) => void
   cancelStream: () => void
-  respondToApproval: (id: string, decision: 'allow' | 'deny' | 'always') => void
   respondToPairing: (deviceId: string, decision: 'approve' | 'reject') => void
 
   // C8: defensively clear in-flight/streaming state for every session bucket.
@@ -534,7 +519,7 @@ const EMPTY_BUCKET = emptySessionState()
 const SESSION_SCOPED_FRAME_TYPES = new Set([
   'token', 'done', 'tool_call_start', 'tool_call_result',
   'subagent_start', 'subagent_end', 'replay_message', 'replay_done',
-  'agent_switched', 'task_status_changed', 'exec_approval_request', 'exec_approval_expired',
+  'agent_switched', 'task_status_changed',
   'tool_approval_required', 'rate_limit', 'media', 'session_started',
   'system_overload', 'session_close_ack', 'cancel_stage',
 ])
@@ -606,7 +591,6 @@ export const useChatStore = create<ChatStore>((set, get) => {
     toolCalls: {},
     toolCallOrder: [],
     textAtToolCallStart: {},
-    pendingApprovals: [],
     sessionTokens: 0,
     sessionCost: 0,
     rateLimitEvent: null,
@@ -1031,22 +1015,6 @@ export const useChatStore = create<ChatStore>((set, get) => {
         }
         return {}
       })
-    },
-
-    addApprovalRequest: (req) => {
-      const sid = getActiveSid()
-      if (!sid) return
-      withBucket(sid, (b) => ({
-        pendingApprovals: [...b.pendingApprovals, { ...req, status: 'pending' }],
-      }))
-    },
-
-    resolveApproval: (id, status) => {
-      const sid = getActiveSid()
-      if (!sid) return
-      withBucket(sid, (b) => ({
-        pendingApprovals: b.pendingApprovals.map((a) => a.id === id ? { ...a, status } : a),
-      }))
     },
 
     updateSessionStats: (tokens, cost) => {
@@ -1599,22 +1567,6 @@ export const useChatStore = create<ChatStore>((set, get) => {
         const fg = (activeSid ? sessionsById[activeSid] : null) ?? EMPTY_BUCKET
         return { sessionsById, ...bucketToForeground(fg) }
       })
-    },
-
-    respondToApproval: (id, decision) => {
-      const { connection } = useConnectionStore.getState()
-      if (!connection) {
-        useConnectionStore.getState().setConnectionError('Cannot respond to approval — not connected. Reconnect and try again.')
-        return
-      }
-
-      const sent = connection.send({ type: 'exec_approval_response', id, decision })
-      if (!sent) {
-        useConnectionStore.getState().setConnectionError('Failed to send approval response — connection dropped. Reconnect and try again.')
-        return
-      }
-      const statusMap = { allow: 'allowed', deny: 'denied', always: 'always_allowed' } as const
-      get().resolveApproval(id, statusMap[decision])
     },
 
     respondToPairing: (deviceId, decision) => {
@@ -2275,37 +2227,6 @@ export const useChatStore = create<ChatStore>((set, get) => {
           break
         }
 
-        case 'exec_approval_request':
-          if (targetSid) {
-            withBucket(targetSid, (b) => ({
-              pendingApprovals: [...b.pendingApprovals, { ...frame, status: 'pending' as const }],
-            }))
-          }
-          break
-
-        // Server-side approval timeout: remove from pendingApprovals and notify the user
-        case 'exec_approval_expired': {
-          const expiredFrame = frame as ExecApprovalExpiredFrame
-          let removed = false
-          if (targetSid) {
-            withBucket(targetSid, (b) => {
-              const prevLength = b.pendingApprovals.length
-              const nextApprovals = b.pendingApprovals.filter((a) => a.id !== expiredFrame.id)
-              if (nextApprovals.length < prevLength) {
-                removed = true
-              }
-              return { pendingApprovals: nextApprovals }
-            })
-          }
-          if (removed) {
-            useUiStore.getState().addToast({
-              message: 'Approval timed out — the tool call was denied automatically.',
-              variant: 'error',
-            })
-          }
-          break
-        }
-
         case 'task_status_changed':
           queryClient.invalidateQueries({ queryKey: ['tasks'] })
           break
@@ -2630,14 +2551,6 @@ export const useChatStore = create<ChatStore>((set, get) => {
           // the stop-button label in real time. The done handler (above) clears
           // it back to null once the turn is definitively over.
           withBucket(targetSid, () => ({ cancelStage: frame.stage }))
-          break
-
-        case 'exec_approval_response_ack':
-          // I2: the gateway acknowledges receipt of the user's exec-approval
-          // response (respondToApproval already updated the pending entry
-          // optimistically). This is a transport-level ack with no UI effect —
-          // explicitly no-op so it does NOT fall through to the unknown-frame
-          // toast. The unknownFrameCount reset above already happened.
           break
 
         case 'device_pairing_request':

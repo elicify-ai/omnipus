@@ -104,9 +104,9 @@ export function ExecAllowlistSection(): React.ReactElement {
             )}
           </h3>
           <p className="text-xs text-[var(--color-muted)] mt-0.5">
-            Glob patterns for binaries that exec may run.
+            Glob patterns for binaries that bash may run.
             E.g. <span className="font-mono">git *</span>,{' '}
-            <span className="font-mono">npm run *</span>. When non-empty, exec
+            <span className="font-mono">npm run *</span>. When non-empty, bash
             denies any command that does not match a pattern.
           </p>
         </div>
@@ -116,7 +116,7 @@ export function ExecAllowlistSection(): React.ReactElement {
       <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-3">
         {patterns.length === 0 ? (
           <p className="text-xs text-[var(--color-muted)] italic">
-            No patterns configured. Exec runs without the binary allowlist restriction
+            No patterns configured. Bash runs without the binary allowlist restriction
             (existing deny-pattern safety checks still apply).
           </p>
         ) : (

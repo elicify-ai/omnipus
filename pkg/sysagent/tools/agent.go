@@ -289,6 +289,17 @@ func (t *AgentCreateTool) Execute(_ context.Context, args map[string]any) *tools
 		if _, hasSystemWildcard := newAgent.Tools.Builtin.Policies["system.*"]; !hasSystemWildcard {
 			newAgent.Tools.Builtin.Policies["system.*"] = config.ToolPolicyDeny
 		}
+		// Seed exec: deny (CRIT-001, bash-tool-spec.md FR-B12): passesScopeGate does
+		// NOT hard-deny ScopeCore tools on custom agents (pkg/tools/compositor.go) —
+		// it defers to the merged policy, which falls through to DefaultPolicy
+		// (allow, set above). Without this explicit seed, a fresh custom agent can
+		// call exec with zero configuration. Only seed if the caller did not provide
+		// an explicit entry, mirroring the system.* guard exactly.
+		// NOTE: this key will be renamed to "bash" when the tool-consolidation work
+		// (ADR-036) lands — do not let this seed silently drop in that rename.
+		if _, hasExec := newAgent.Tools.Builtin.Policies["exec"]; !hasExec {
+			newAgent.Tools.Builtin.Policies["exec"] = config.ToolPolicyDeny
+		}
 		cfg.Agents.List = append(cfg.Agents.List, newAgent)
 		finalID = id
 		return nil

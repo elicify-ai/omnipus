@@ -126,7 +126,16 @@ func wireDelegationInjectors(al *AgentLoop, registry *AgentRegistry) {
 
 			// Filter to outgoing edges from this agent.
 			liveCfg := al.GetConfig()
-			globalDepthCap := liveCfg.Agents.Defaults.SubTurn.MaxDepth
+			// #477 / FR-D9: advertise the EFFECTIVE cap (resolved via the SAME
+			// shared function enforceEdgeModeAndDepth and spawnSubTurn's own
+			// depth check use), not the raw config value — so this footer never
+			// again says "uncapped" when the spawn-time backstop will actually
+			// reject a hop at the resolved default. edgeDepth is nil here: this is
+			// the GLOBAL-only footer number; a stricter per-edge override (when
+			// one exists for a specific target) is enforced separately at
+			// spawn-time via SubTurnConfig.ResolvedMaxDepth and does not change
+			// this general-roster footer.
+			globalDepthCap := resolveEffectiveDelegationDepth(nil, liveCfg.Agents.Defaults.SubTurn.MaxDepth)
 
 			var targets []delegationTarget
 			for _, e := range edges {

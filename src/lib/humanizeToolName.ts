@@ -19,14 +19,21 @@ const EXPLICIT_LABELS: Record<string, string> = {
   // New canonical names
   run_retrospective: 'Retrospective',
   hand_off: 'Hand off',
-  run_subagent: 'Run subagent',
-  check_spawn_status: 'Check spawn status',
+  // ADR-036: `delegate` replaces spawn / run_subagent / check_spawn_status
+  // (one unified delegation tool — see §3.2).
+  delegate: 'Delegate task',
   // Legacy names (backward compat with old session transcripts)
   retrospective: 'Retrospective',
   handoff: 'Hand off',
+  run_subagent: 'Run subagent',
+  check_spawn_status: 'Check spawn status',
   spawn_status: 'Check spawn status',
   subagent: 'Run subagent',
   spawn: 'Spawn subagent',
+  // ADR-036: `bash` replaces exec / workspace_shell / workspace_shell_bg
+  // (one unified shell tool — see §3.1).
+  bash: 'Run command',
+  // Legacy names (backward compat with old session transcripts)
   exec: 'Run command',
   // New canonical browser tool names
   browser_navigate: 'Navigate browser',
@@ -60,10 +67,11 @@ const EXPLICIT_LABELS: Record<string, string> = {
   list_directory: 'List directory',
   // Legacy filesystem names (backward compat)
   list_dir: 'List directory',
-  // Shell
+  // Shell — ADR-036 retires these three as distinct tools in favor of `bash`
+  // (see the `bash` entry above); kept here only so old session transcripts
+  // that still literally contain these tool_names render a readable label.
   workspace_shell: 'Run shell command',
   workspace_shell_bg: 'Run shell (background)',
-  // Legacy shell names (backward compat)
   'workspace.shell': 'Run shell command',
   'workspace.shell_bg': 'Run shell (background)',
   // Communication

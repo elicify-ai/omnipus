@@ -14,6 +14,27 @@ describe('humanizeToolName — explicit map', () => {
   })
 })
 
+describe('humanizeToolName — ADR-036 bash/delegate consolidation', () => {
+  it.each([
+    // New canonical names
+    ['bash', 'Run command'],
+    ['delegate', 'Delegate task'],
+    // Legacy names retired by the consolidation — kept mapped so old,
+    // already-persisted session transcripts (never migrated) still render a
+    // readable label instead of falling through to the raw id.
+    ['exec', 'Run command'],
+    ['workspace_shell', 'Run shell command'],
+    ['workspace_shell_bg', 'Run shell (background)'],
+    ['workspace.shell', 'Run shell command'],
+    ['workspace.shell_bg', 'Run shell (background)'],
+    ['spawn', 'Spawn subagent'],
+    ['run_subagent', 'Run subagent'],
+    ['check_spawn_status', 'Check spawn status'],
+  ])('maps %s → %s', (id, expected) => {
+    expect(humanizeToolName(id)).toBe(expected)
+  })
+})
+
 describe('humanizeToolName — generic fallback', () => {
   it('strips a leading namespace and title-cases the remainder', () => {
     // system.task.update → "Task update"

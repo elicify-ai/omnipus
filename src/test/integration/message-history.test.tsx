@@ -36,7 +36,7 @@ function wrapper({ children }: { children: React.ReactNode }) {
 
 beforeEach(() => {
   act(() => {
-    useChatStore.setState({ messages: [], toolCalls: {}, pendingApprovals: [] })
+    useChatStore.setState({ messages: [], toolCalls: {} })
   })
   vi.mocked(fetchSessionMessages).mockResolvedValue(mockMessages)
 })

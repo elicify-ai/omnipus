@@ -3443,6 +3443,24 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	// uses the explicit provider. Idempotent; runs after migrateProviderFields so
 	// the provider protocol set is consistent across model_list and agents.
 	migrateAgentPrimaryProvider(cfg)
+
+	// ADR-036 FR-M1/FR-M3 (bash-tool-spec.md User Story 4): consolidate
+	// exec/workspace_shell/workspace_shell_bg tool-policy keys — per-agent
+	// (AgentBuiltinToolsCfg.Policies) and global (OmnipusSandboxConfig.
+	// ToolPolicies) — into a single "bash" key, taking the strictest present
+	// value, and delete the legacy keys in memory. MUST run before
+	// migrateDeprecatedToolEnableFlags immediately below: FR-M2 retargets that
+	// migration's legacy tools.exec.enabled=false boolean flag at the "bash"
+	// policy glob (not "exec"), and its no-clobber guard only checks for a
+	// pre-existing entry under that glob — running this pass first ensures a
+	// real operator-set exec/workspace_shell/workspace_shell_bg policy value
+	// (e.g. "ask") is already sitting under "bash" by the time the
+	// boolean-flag migration runs, so it is never downgraded to "deny". The
+	// on-disk half (backup + strip) runs further down, gated the same way as
+	// the CLI-token relocation (CurrentVersion only) — see
+	// writeShellToolPolicyMigrationOnDisk (shell_tool_policy_migration.go).
+	shellPolicyKeysMigrated := migrateShellToolPolicyKeys(cfg)
+
 	// Post-refactor: tools.<name>.enabled is deprecated. If the loaded config
 	// carries explicit false values, translate them idempotently into
 	// security.tool_policies deny entries so operator intent is enforced
@@ -3503,6 +3521,39 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	// migration was never designed against.
 	if versionInfo.Version == CurrentVersion {
 		migrateCLITokenOutOfUsers(cfg, path, onSelfHeal)
+
+		// Persist the ADR-036 exec/workspace_shell/workspace_shell_bg -> bash
+		// tool-policy conversion to disk (FR-M3/FR-M4). Same CurrentVersion-
+		// only gating as the CLI-token relocation above and for the same
+		// reason (a v0 config's fully migrated state is already written by
+		// the v0-migration SaveConfig call further up). Runs BEFORE the
+		// tools.<name>.enabled strip below so that migration's own disk read
+		// sees the ORIGINAL, wholly pre-migration bytes for its backup
+		// (FR-M4) — the most conservative snapshot, even though the two
+		// migrations patch disjoint JSON paths (sandbox.tool_policies vs
+		// tools.<name>.enabled) and would not conflict either way. Best
+		// effort — see writeShellToolPolicyMigrationOnDisk
+		// (shell_tool_policy_migration.go).
+		if shellPolicyKeysMigrated {
+			shellWritten, backupPath, healErr := writeShellToolPolicyMigrationOnDisk(cfg, path)
+			if healErr != nil {
+				logger.WarnF("failed to persist bash tool-policy migration to config.json; "+
+					"runtime behavior is still correct (in-memory state already reflects the "+
+					"derived \"bash\" policy), but the on-disk file could not be self-healed", map[string]any{
+					"path":  path,
+					"error": healErr.Error(),
+				})
+			} else if shellWritten != nil {
+				logger.InfoF("exec/workspace_shell/workspace_shell_bg tool-policy keys migrated to \"bash\"; "+
+					"pre-migration backup written", map[string]any{
+					"path":        path,
+					"backup_path": backupPath,
+				})
+				if onSelfHeal != nil {
+					onSelfHeal(shellWritten)
+				}
+			}
+		}
 
 		// Persist the tools.<name>.enabled=false → security.tool_policies deny
 		// migration to disk (issue: an operator's "allow" set via the Security

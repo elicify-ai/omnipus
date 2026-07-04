@@ -1385,6 +1385,11 @@ func (h *WSHandler) handleCancel(wc *wsConn, sessionID string) {
 				h.approvalRegV2.cancelAllPendingForSession(sid, reason)
 			}
 		},
+		KillBackgroundSessions: func(sid string) {
+			// Cascade the web SPA cancel to any detached background bash/exec
+			// sessions this chat session started (FR-B10/FR-B11, User Story 5).
+			tools.GetSharedSessionManager().KillAllForSession(sid)
+		},
 		SetSessionInterrupted: func(sid string) {
 			store := h.resolveSessionStore(sid)
 			if store != nil {

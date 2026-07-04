@@ -291,7 +291,14 @@ func (r *scheduledRunner) watchDeadline(ctx2 context.Context, runDone <-chan str
 		outcome, cancelErr := r.canceller.RequestCancel(cancelCtx,
 			agent.CancelScope{SessionID: sessionID},
 			agent.CancelCanceller{UserID: "scheduler", Channel: "cron"},
-			agent.CancelHooks{})
+			agent.CancelHooks{
+				// Cascade the scheduled-run force-abort to any detached
+				// background bash/exec sessions this run's session started
+				// (FR-B10/FR-B11).
+				KillBackgroundSessions: func(sid string) {
+					tools.GetSharedSessionManager().KillAllForSession(sid)
+				},
+			})
 		if cancelErr == nil && !outcome.Fired {
 			// A force-abort that targeted no active turn is worth observing: the
 			// run may have already completed between the deadline check and the

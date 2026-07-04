@@ -35,7 +35,6 @@ import { IconRenderer } from '@/components/shared/IconRenderer'
 import { SessionPanel } from './SessionPanel'
 import { GenericToolCall } from './tools/GenericToolCall'
 import { WebServeBlock } from './tools/WebServeUI'
-import { ExecApprovalBlock } from './ExecApprovalBlock'
 import { RateLimitIndicator } from './RateLimitIndicator'
 import { MarkdownText } from './markdown-text'
 import { SubagentBlock } from './SubagentBlock'
@@ -1965,7 +1964,6 @@ function WelcomeState({ hasAgent }: { hasAgent: boolean }) {
 export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean }) {
   const activeSessionId = useSessionStore((s) => s.activeSessionId)
   const activeAgentId = useSessionStore((s) => s.activeAgentId)
-  const pendingApprovals = useChatStore((s) => s.pendingApprovals)
   const rateLimitEvent = useChatStore((s) => s.rateLimitEvent)
   const clearRateLimitEvent = useChatStore((s) => s.clearRateLimitEvent)
   const setMessages = useChatStore((s) => s.setMessages)
@@ -2035,7 +2033,6 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
     setMessages(validMessages)
   }, [historyData, isReplaying, storeMessageCount, replayCompletedForSession, activeSessionId, setMessages])
 
-  const activePendingApprovals = pendingApprovals.filter((a) => a.status === 'pending')
   const liteMode = useConnectionStore((s) => s.liteMode)
 
   return (
@@ -2096,22 +2093,19 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
               Playwright locates these elements via text=(interrupted). */}
           <InterruptedMessageMarkers />
 
-          {/* Pending exec approval blocks — shown above composer */}
-          {(activePendingApprovals.length > 0 || rateLimitEvent) && (
+          {/* Rate-limit indicator — shown above composer. Tool-approval requests
+              (including `bash`) are handled by the global ToolApprovalModal
+              (ADR-036 §3.4 retired the dedicated exec-only approval flow). */}
+          {rateLimitEvent && (
             <div className="px-4 space-y-2 pb-2">
-              {rateLimitEvent && (
-                <RateLimitIndicator
-                  scope={rateLimitEvent.scope}
-                  resource={rateLimitEvent.resource}
-                  policyRule={rateLimitEvent.policyRule}
-                  retryAfterSeconds={rateLimitEvent.retryAfterSeconds}
-                  tool={rateLimitEvent.tool}
-                  onDismiss={clearRateLimitEvent}
-                />
-              )}
-              {activePendingApprovals.map((approval) => (
-                <ExecApprovalBlock key={approval.id} approval={approval} />
-              ))}
+              <RateLimitIndicator
+                scope={rateLimitEvent.scope}
+                resource={rateLimitEvent.resource}
+                policyRule={rateLimitEvent.policyRule}
+                retryAfterSeconds={rateLimitEvent.retryAfterSeconds}
+                tool={rateLimitEvent.tool}
+                onDismiss={clearRateLimitEvent}
+              />
             </div>
           )}
 

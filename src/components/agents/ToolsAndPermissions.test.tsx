@@ -294,7 +294,7 @@ describe('ToolsAndPermissions — system.* in flat category grid (US-1 / AC5 / F
 
 describe('ToolsAndPermissions — shell/fs conflict banner', () => {
   const SHELL_TOOL: RegistryTool = {
-    name: 'workspace_shell',
+    name: 'bash',
     scope: 'general',
     category: 'shell',
     description: 'Run a shell command in the workspace',
@@ -312,7 +312,7 @@ describe('ToolsAndPermissions — shell/fs conflict banner', () => {
     vi.mocked(api.fetchGlobalToolPolicies).mockResolvedValue({ default_policy: 'allow', policies: {} })
   })
 
-  it('banner renders when workspace_shell is allow and a filesystem tool is deny', async () => {
+  it('banner renders when bash is allow and a filesystem tool is deny', async () => {
     const conflictTools: AgentToolsCfg = {
       builtin: {
         default_policy: 'allow',
@@ -332,11 +332,11 @@ describe('ToolsAndPermissions — shell/fs conflict banner', () => {
     })
   })
 
-  it('banner hidden when workspace_shell is deny', async () => {
+  it('banner hidden when bash is deny', async () => {
     const noConflictTools: AgentToolsCfg = {
       builtin: {
         default_policy: 'allow',
-        policies: { workspace_shell: 'deny', write_file: 'deny' },
+        policies: { bash: 'deny', write_file: 'deny' },
       },
     }
     renderWithQuery(
@@ -383,7 +383,7 @@ describe('ToolsAndPermissions — shell/fs conflict banner', () => {
     )
     await waitFor(() => {
       const banner = screen.getByTestId('shell-fs-conflict-banner')
-      expect(banner.textContent).toMatch(/workspace_shell/i)
+      expect(banner.textContent).toMatch(/bash/i)
       expect(banner.textContent).toMatch(/won.t stop the shell/i)
     })
   })

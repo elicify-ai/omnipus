@@ -213,6 +213,17 @@ func TestLoadConfig_ToolEnableFlags_Idempotent_NoOpNoRewrite(t *testing.T) {
 // to "deny" by the migration, while the now-redundant legacy flag is still
 // removed from disk (it no longer carries any operator intent that isn't
 // already captured by the explicit policy entry).
+//
+// Retargeted for ADR-036 (bash-tool-spec.md FR-M2): toolEnableToPolicy's
+// {"exec", ...} row now maps to the "bash" glob, not "exec" — and
+// migrateShellToolPolicyKeys (shell_tool_policy_migration.go, FR-M1) converts
+// the pre-existing sandbox.tool_policies["exec"]="ask" entry itself into
+// "bash" (running before the tools.exec.enabled=false migration, per the
+// ordering comment in loadConfigInternal) so that migration's no-clobber
+// guard sees "bash" already set to "ask" and never downgrades it to "deny".
+// The net effect an operator observes is identical to before this ADR
+// (their explicit "ask" survives, the legacy flag is gone) — only the key
+// name the policy now lives under has changed.
 func TestLoadConfig_ToolEnableFlags_DoesNotDowngradeExistingPolicy(t *testing.T) {
 	deprecatedToolEnableMigrateOnce = sync.Once{}
 
@@ -234,8 +245,10 @@ func TestLoadConfig_ToolEnableFlags_DoesNotDowngradeExistingPolicy(t *testing.T)
 	cfg, err := LoadConfigWithStoreAndSelfHealHook(configPath, nil, nil)
 	require.NoError(t, err)
 
-	// In-memory: "ask" must survive, not be downgraded to "deny".
-	assert.Equal(t, "ask", cfg.Sandbox.ToolPolicies["exec"])
+	// In-memory: "ask" must survive under "bash", not be downgraded to "deny".
+	assert.Equal(t, "ask", cfg.Sandbox.ToolPolicies["bash"])
+	_, stillHasExec := cfg.Sandbox.ToolPolicies["exec"]
+	assert.False(t, stillHasExec, "the legacy \"exec\" tool-policy key must be gone in memory after migration")
 
 	onDisk, readErr := os.ReadFile(configPath)
 	require.NoError(t, readErr)
@@ -253,5 +266,7 @@ func TestLoadConfig_ToolEnableFlags_DoesNotDowngradeExistingPolicy(t *testing.T)
 	require.True(t, ok)
 	policies, ok := sandboxRaw["tool_policies"].(map[string]any)
 	require.True(t, ok)
-	assert.Equal(t, "ask", policies["exec"], "the pre-existing \"ask\" policy must not be overwritten to \"deny\" on disk")
+	assert.Equal(t, "ask", policies["bash"], "the pre-existing \"ask\" policy must survive as \"bash\", not be overwritten to \"deny\", on disk")
+	_, hasLegacyExec := policies["exec"]
+	assert.False(t, hasLegacyExec, "the legacy \"exec\" sandbox.tool_policies key must be deleted on disk, not left dangling")
 }

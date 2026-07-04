@@ -147,7 +147,6 @@ vi.mock('@/lib/api', () => ({
 
 vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: 'omnipus-avatar.svg' }))
 vi.mock('./SessionPanel', () => ({ SessionPanel: () => null }))
-vi.mock('./ExecApprovalBlock', () => ({ ExecApprovalBlock: () => null }))
 vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
 vi.mock('./SubagentBlock', () => ({ SubagentBlock: () => null }))
 vi.mock('./markdown-text', () => ({ MarkdownText: () => null }))
@@ -161,7 +160,6 @@ function resetStores() {
       isStreaming: false,
       isReplaying: false,
       toolCalls: {},
-      pendingApprovals: [],
       sessionTokens: 0,
       sessionCost: 0,
     })

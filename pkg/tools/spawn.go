@@ -24,6 +24,14 @@ type SpawnTool struct {
 	// non-nil *DelegationDenial to DENY (carrying the structured reason + policy
 	// axis) or nil to ALLOW.
 	delegationDeny func(ctx context.Context, targetAgentID string) *DelegationDenial
+	// delegationDepthResolver, when non-nil, resolves the effective onward-
+	// delegation depth cap for a specific target — the SAME cap delegationDeny
+	// already authorized this call against. Returns nil for "no override" (fall
+	// back to the spawner's own default depth resolution) or a pointer to the
+	// resolved cap. Threaded into SubTurnConfig.ResolvedMaxDepth so the
+	// spawn-time depth check never independently re-derives a different number
+	// than the one this gate already authorized (#477).
+	delegationDepthResolver func(ctx context.Context, targetAgentID string) *int
 }
 
 // Compile-time check: SpawnTool implements AsyncExecutor.
@@ -90,6 +98,12 @@ func (t *SpawnTool) SetDelegationDenyChecker(check func(ctx context.Context, tar
 	t.delegationDeny = check
 }
 
+// SetDelegationDepthResolver installs the effective-depth-cap resolver (#477).
+// See the delegationDepthResolver field doc.
+func (t *SpawnTool) SetDelegationDepthResolver(resolve func(ctx context.Context, targetAgentID string) *int) {
+	t.delegationDepthResolver = resolve
+}
+
 func (t *SpawnTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
 	return t.execute(ctx, args, nil)
 }
@@ -132,6 +146,14 @@ func (t *SpawnTool) execute(
 		}
 	}
 
+	// #477: resolve the effective depth cap the gate above just authorized
+	// this call against, so the spawner's own depth check does not
+	// independently re-derive a different (possibly stricter) default.
+	var resolvedMaxDepth *int
+	if t.delegationDepthResolver != nil {
+		resolvedMaxDepth = t.delegationDepthResolver(ctx, agentID)
+	}
+
 	// Use spawner if available (direct SpawnSubTurn call)
 	//
 	// The task is the first USER message; the delegate's soul (worker / configured
@@ -145,14 +167,15 @@ func (t *SpawnTool) execute(
 		// Launch async sub-turn in goroutine
 		go func() {
 			result, err := t.spawner.SpawnSubTurn(ctx, SubTurnConfig{
-				Model:         t.defaultModel,
-				Tools:         nil, // Will inherit from parent via context
-				SystemPrompt:  task,
-				TargetAgentID: agentID,
-				MaxTokens:     t.maxTokens,
-				Temperature:   t.temperature,
-				Async:         true,  // Async execution
-				TaskLabel:     label, // FR-H-004: propagate to SubTurnSpawnPayload for WS frame
+				Model:            t.defaultModel,
+				Tools:            nil, // Will inherit from parent via context
+				SystemPrompt:     task,
+				TargetAgentID:    agentID,
+				MaxTokens:        t.maxTokens,
+				Temperature:      t.temperature,
+				Async:            true,  // Async execution
+				TaskLabel:        label, // FR-H-004: propagate to SubTurnSpawnPayload for WS frame
+				ResolvedMaxDepth: resolvedMaxDepth,
 			})
 			if err != nil {
 				result = ErrorResult(fmt.Sprintf("Spawn failed: %v", err)).WithError(err)

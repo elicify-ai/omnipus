@@ -230,6 +230,13 @@ type AgentLoop struct {
 	// spawn/run_subagent delegation path (Inherit — pkg/agent/subturn.go).
 	approvalGrants *security.ApprovalGrantStore
 
+	// asyncNotifier is the single process-wide AsyncNotifier instance
+	// (async-notifier-spec.md), extracted from the formerly-inline
+	// asyncCallback closure below. Scoped to the loop's lifetime the same
+	// way approvalGrants is, per the spec's Clarifications. Always non-nil
+	// after NewAgentLoop.
+	asyncNotifier *asyncNotifierImpl
+
 	// sharedSessionStore is the single UnifiedStore at $OMNIPUS_HOME/sessions/
 	// used for all new sessions (joined session model). Legacy per-agent stores
 	// remain accessible via GetAgentStore for read-only access to old sessions.
@@ -757,6 +764,11 @@ func NewAgentLoop(
 	// by the gateway's WS approval hook and the spawn/run_subagent delegation
 	// path. Always non-nil.
 	al.approvalGrants = security.NewApprovalGrantStore()
+
+	// Process-wide AsyncNotifier (async-notifier-spec.md): the reusable
+	// "wake the conversation when background work finishes" primitive,
+	// extracted from the asyncCallback closure below. Always non-nil.
+	al.asyncNotifier = newAsyncNotifier(al)
 
 	// v0.2 #155 item 6: build the shared memory-write rate limiter and
 	// propagate it to every agent's tool registry. One limiter is shared
@@ -1606,6 +1618,13 @@ func registerSharedTools(
 				currentAgentID, spawnAgentCfg, cfg.Agents.Defaults,
 				config.DelegationModeBackground, registry,
 			))
+			// #477 / FR-D9-FR-D10: thread the SAME effective depth cap this gate
+			// just authorized against into spawnSubTurn's own depth check, so the
+			// spawn-time backstop does not independently re-derive (and silently
+			// override) an explicit per-edge Depth.
+			spawnTool.SetDelegationDepthResolver(buildDelegationDepthResolver(
+				currentAgentID, cfg.Agents.Defaults,
+			))
 
 			agent.Tools.Register(spawnTool)
 
@@ -1638,6 +1657,11 @@ func registerSharedTools(
 			subagentTool.SetDelegationDenyChecker(buildDelegationDenyChecker(
 				currentAgentID, subagentAgentCfg, cfg.Agents.Defaults,
 				config.DelegationModeAwait, registry,
+			))
+			// #477 / FR-D9-FR-D10: same effective-depth-cap threading as spawnTool
+			// above, for the synchronous "await" mode.
+			subagentTool.SetDelegationDepthResolver(buildDelegationDepthResolver(
+				currentAgentID, cfg.Agents.Defaults,
 			))
 			agent.Tools.Register(subagentTool)
 
@@ -2162,30 +2186,28 @@ func enforceEdgeModeAndDepth(
 		}
 	}
 
-	// Otherwise enforce the TIGHTER of the per-edge cap (edge.Depth, nil =
-	// inherit) and the global SubTurn.MaxDepth ceiling. A value of 0 means
-	// "uncapped from that source".
-	depthCap := 0
-	if edge.Depth != nil && *edge.Depth > 0 {
-		depthCap = *edge.Depth
-	}
-	if globalDepthCap > 0 && (depthCap == 0 || globalDepthCap < depthCap) {
-		depthCap = globalDepthCap
-	}
-	if depthCap > 0 {
-		if d := currentDelegationDepth(ctx); d >= depthCap {
-			logger.WarnCF("agent", "delegation denied: max delegation depth exceeded", map[string]any{
-				"agent_id": callerAgentID, "target": targetAgentID, "mode": string(mode),
-				"current_depth": d, "max_depth": depthCap,
-			})
-			return &tools.DelegationDenial{
-				Reason: fmt.Sprintf(
-					"maximum delegation depth (%d) reached — cannot delegate further",
-					depthCap,
-				),
-				Policy:        tools.DenyDepth,
-				TargetAgentID: targetAgentID,
-			}
+	// Otherwise enforce the effective depth cap: the tighter of the per-edge
+	// cap (edge.Depth, nil = inherit) and the global SubTurn.MaxDepth ceiling,
+	// falling back to the safety-backstop default when NEITHER source
+	// expresses an explicit value. Resolved via resolveEffectiveDelegationDepth
+	// — the SAME shared function spawnSubTurn's own depth check
+	// (SubTurnConfig.ResolvedMaxDepth, threaded via buildDelegationDepthResolver)
+	// and the delegation system-prompt builder (wireDelegationInjectors) use, so
+	// this gate's decision and the eventual spawn-time enforcement are never
+	// computed independently (#477, FR-D9/FR-D10).
+	depthCap := resolveEffectiveDelegationDepth(edge.Depth, globalDepthCap)
+	if d := currentDelegationDepth(ctx); d >= depthCap {
+		logger.WarnCF("agent", "delegation denied: max delegation depth exceeded", map[string]any{
+			"agent_id": callerAgentID, "target": targetAgentID, "mode": string(mode),
+			"current_depth": d, "max_depth": depthCap,
+		})
+		return &tools.DelegationDenial{
+			Reason: fmt.Sprintf(
+				"maximum delegation depth (%d) reached — cannot delegate further",
+				depthCap,
+			),
+			Policy:        tools.DenyDepth,
+			TargetAgentID: targetAgentID,
 		}
 	}
 	return nil
@@ -6806,7 +6828,10 @@ turnLoop:
 			asyncToolName := toolName
 			asyncCallback := func(_ context.Context, result *tools.ToolResult) {
 				// Send ForUser content directly to the user (immediate feedback),
-				// mirroring the synchronous tool execution path.
+				// mirroring the synchronous tool execution path. This stays a
+				// separate concern from AsyncNotifier (FR-N2, async-notifier-spec.md)
+				// — it happens regardless of whether ContentForLLM() also triggers
+				// a new turn below.
 				if !result.Silent && result.ForUser != "" {
 					outCtx, outCancel := context.WithTimeout(context.Background(), 5*time.Second)
 					defer outCancel()
@@ -6825,44 +6850,35 @@ turnLoop:
 					}
 				}
 
-				// Determine content for the agent loop (ForLLM or error).
+				// Determine content for the agent loop (ForLLM or error). Nothing to
+				// relay back into the conversation — skip AsyncNotifier entirely
+				// rather than publish an empty follow-up (Notify's own contract
+				// permits empty Content, e.g. a silent kill, but this call site
+				// chooses not to invoke it at all here, preserving today's
+				// skip-when-empty behavior exactly).
 				content := result.ContentForLLM()
 				if content == "" {
 					return
 				}
 
-				// Filter sensitive data before publishing
-				content = cfg.FilterSensitiveData(content)
-
-				logger.InfoCF("agent", "Async tool completed, publishing result",
-					map[string]any{
-						"tool":        asyncToolName,
-						"content_len": len(content),
-						"channel":     ts.channel,
-					})
-				al.emitEvent(
-					EventKindFollowUpQueued,
+				// AsyncNotifier.Notify (async-notifier-spec.md) now owns
+				// sensitive-data filtering, truncation, EventKindFollowUpQueued
+				// emission, and the inbound bus publish that used to be inlined
+				// here. The EventMeta carried via context preserves today's
+				// TurnID/SessionKey/Iteration on the emitted event byte-for-byte.
+				notifyCtx := withAsyncNotifyEventMeta(
+					context.Background(),
 					ts.scope.meta(toolIteration, "runTurn", "turn.follow_up.queued"),
-					FollowUpQueuedPayload{
-						SourceTool: asyncToolName,
-						Channel:    ts.channel,
-						ChatID:     ts.chatID,
-						ContentLen: len(content),
-					},
 				)
-
-				pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer pubCancel()
-				if pubErr := al.bus.PublishInbound(pubCtx, bus.InboundMessage{
-					Channel: "system",
-					Sender: bus.SenderInfo{
-						CanonicalID: fmt.Sprintf("async:%s", asyncToolName),
-					},
-					ChatID:  fmt.Sprintf("%s:%s", ts.channel, ts.chatID),
-					Content: content,
-				}); pubErr != nil {
+				if notifyErr := al.asyncNotifier.Notify(notifyCtx, AsyncNotifyEvent{
+					Channel:    ts.channel,
+					ChatID:     ts.chatID,
+					AgentID:    ts.agent.ID,
+					SourceKind: asyncToolName,
+					Content:    content,
+				}); notifyErr != nil {
 					logger.ErrorCF("agent", "Failed to publish async tool result; result permanently lost",
-						map[string]any{"tool": asyncToolName, "channel": ts.channel, "error": pubErr.Error()})
+						map[string]any{"tool": asyncToolName, "channel": ts.channel, "error": notifyErr.Error()})
 				}
 			}
 

@@ -47,10 +47,13 @@ var (
 func (al *AgentLoop) getSubTurnConfig() subTurnRuntimeConfig {
 	cfg := al.cfg.Agents.Defaults.SubTurn
 
-	maxDepth := cfg.MaxDepth
-	if maxDepth <= 0 {
-		maxDepth = defaultMaxSubTurnDepth
-	}
+	// #477 / FR-D9: resolve via the SAME shared function enforceEdgeModeAndDepth
+	// and wireDelegationInjectors use, so this backstop's "nothing configured"
+	// default and the delegation graph's own gate are never computed
+	// independently. edgeDepth is nil here — this is the GLOBAL-only fallback;
+	// a specific delegation call's own per-edge override (when one applies)
+	// arrives separately via SubTurnConfig.ResolvedMaxDepth (see spawnSubTurn).
+	maxDepth := resolveEffectiveDelegationDepth(nil, cfg.MaxDepth)
 
 	maxConcurrent := cfg.MaxConcurrent
 	if maxConcurrent <= 0 {
@@ -200,6 +203,20 @@ type SubTurnConfig struct {
 	// Used in SubTurnSpawnPayload.TaskLabel for the WS subagent_start frame.
 	TaskLabel string
 
+	// ResolvedMaxDepth, when non-nil, is the effective onward-delegation depth
+	// cap the delegation-graph gate (enforceEdgeModeAndDepth, via
+	// buildDelegationDepthResolver) already authorized THIS specific delegation
+	// call against — resolved from the matched edge's own Depth and the global
+	// SubTurn.MaxDepth ceiling via the shared resolveEffectiveDelegationDepth
+	// function. When set, spawnSubTurn's own depth check uses this value
+	// INSTEAD of independently re-deriving one from getSubTurnConfig's
+	// global-only default, so an explicit per-edge Depth is never silently
+	// overridden by the backstop's own default (#477, FR-D9/FR-D10). nil means
+	// "no override" — e.g. self-delegation or an untargeted call, where no
+	// single edge's Depth uniquely applies — and spawnSubTurn falls back to
+	// getSubTurnConfig's own (shared-function) resolution.
+	ResolvedMaxDepth *int
+
 	// Can be extended with temperature, topP, etc.
 }
 
@@ -341,6 +358,7 @@ func (s *AgentLoopSpawner) SpawnSubTurn(
 		Timeout:            cfg.Timeout,
 		MaxContextRunes:    cfg.MaxContextRunes,
 		TaskLabel:          cfg.TaskLabel,
+		ResolvedMaxDepth:   cfg.ResolvedMaxDepth,
 	}
 
 	return spawnSubTurn(ctx, s.al, parentTS, agentCfg)
@@ -413,12 +431,20 @@ func spawnSubTurn(
 		}
 	}
 
-	// 1. Depth limit check
-	if parentTS.depth >= rtCfg.maxDepth {
+	// 1. Depth limit check. cfg.ResolvedMaxDepth, when set, is the effective
+	// cap the delegation-graph gate (enforceEdgeModeAndDepth) already
+	// authorized THIS specific call against — it takes precedence over
+	// rtCfg.maxDepth's own global-only default so an explicit per-edge Depth
+	// is never silently overridden by this backstop (#477, FR-D9/FR-D10).
+	effectiveMaxDepth := rtCfg.maxDepth
+	if cfg.ResolvedMaxDepth != nil {
+		effectiveMaxDepth = *cfg.ResolvedMaxDepth
+	}
+	if parentTS.depth >= effectiveMaxDepth {
 		logger.WarnCF("subturn", "Depth limit exceeded", map[string]any{
 			"parent_id": parentTS.turnID,
 			"depth":     parentTS.depth,
-			"max_depth": rtCfg.maxDepth,
+			"max_depth": effectiveMaxDepth,
 		})
 		return nil, ErrDepthLimitExceeded
 	}

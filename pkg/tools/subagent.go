@@ -41,6 +41,15 @@ type SubTurnConfig struct {
 	// TaskLabel is the optional human-readable label for the sub-turn task (FR-H-004).
 	// Populated from the spawn tool's "label" argument. Used in the subagent_start WS frame.
 	TaskLabel string
+	// ResolvedMaxDepth, when non-nil, is the effective onward-delegation depth
+	// cap the delegation-policy gate already authorized this specific call
+	// against (the tighter of a matched delegation-graph edge's own Depth and
+	// the global SubTurn.MaxDepth ceiling). When set, the spawn-time depth
+	// check uses this value instead of independently re-deriving a possibly
+	// different default, so an explicit per-edge Depth is never silently
+	// overridden (#477). nil means "no override — use the spawner's own
+	// default depth resolution."
+	ResolvedMaxDepth *int
 }
 
 type SubagentTask struct {
@@ -333,6 +342,14 @@ type SubagentTool struct {
 	// delegateChecker so the LLM (and the SPA) see *why* the delegation was
 	// rejected. Mirrors spawn's delegationDeny signature exactly.
 	delegationDeny func(ctx context.Context, targetAgentID string) *DelegationDenial
+	// delegationDepthResolver, when non-nil, resolves the effective onward-
+	// delegation depth cap for a specific target — the SAME cap delegationDeny
+	// already authorized this call against. Returns nil for "no override" (fall
+	// back to the spawner's own default depth resolution) or a pointer to the
+	// resolved cap. Threaded into SubTurnConfig.ResolvedMaxDepth so the
+	// spawn-time depth check never independently re-derives a different number
+	// than the one this gate already authorized (#477).
+	delegationDepthResolver func(ctx context.Context, targetAgentID string) *int
 }
 
 func NewSubagentTool(manager *SubagentManager) *SubagentTool {
@@ -367,6 +384,12 @@ func (t *SubagentTool) SetDelegateChecker(check func() bool) {
 // reason to the LLM. Matches spawn's SetDelegationDenyChecker signature exactly.
 func (t *SubagentTool) SetDelegationDenyChecker(check func(ctx context.Context, targetAgentID string) *DelegationDenial) {
 	t.delegationDeny = check
+}
+
+// SetDelegationDepthResolver installs the effective-depth-cap resolver (#477).
+// See the delegationDepthResolver field doc.
+func (t *SubagentTool) SetDelegationDepthResolver(resolve func(ctx context.Context, targetAgentID string) *int) {
+	t.delegationDepthResolver = resolve
 }
 
 func (t *SubagentTool) Name() string {
@@ -419,6 +442,14 @@ func (t *SubagentTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 			WithError(fmt.Errorf("delegation policy denied: agent has no delegation targets in its 'to' allowlist"))
 	}
 
+	// #477: resolve the effective depth cap the gate above just authorized
+	// this call against, so the spawner's own depth check does not
+	// independently re-derive a different (possibly stricter) default.
+	var resolvedMaxDepth *int
+	if t.delegationDepthResolver != nil {
+		resolvedMaxDepth = t.delegationDepthResolver(ctx, agentID)
+	}
+
 	task, ok := args["task"].(string)
 	if !ok {
 		return ErrorResult("task is required").WithError(fmt.Errorf("task parameter is required"))
@@ -437,14 +468,15 @@ func (t *SubagentTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	// the task label for the WS subTurn_start frame.
 	if t.spawner != nil {
 		result, err := t.spawner.SpawnSubTurn(ctx, SubTurnConfig{
-			Model:         t.defaultModel,
-			Tools:         nil, // Will inherit from parent via context
-			SystemPrompt:  task,
-			TargetAgentID: agentID, // "" → parent's own soul; non-empty → named agent's soul
-			TaskLabel:     label,
-			MaxTokens:     t.maxTokens,
-			Temperature:   t.temperature,
-			Async:         false, // Synchronous execution (await)
+			Model:            t.defaultModel,
+			Tools:            nil, // Will inherit from parent via context
+			SystemPrompt:     task,
+			TargetAgentID:    agentID, // "" → parent's own soul; non-empty → named agent's soul
+			TaskLabel:        label,
+			MaxTokens:        t.maxTokens,
+			Temperature:      t.temperature,
+			Async:            false, // Synchronous execution (await)
+			ResolvedMaxDepth: resolvedMaxDepth,
 		})
 		if err != nil {
 			return ErrorResult(fmt.Sprintf("Subagent execution failed: %v", err)).WithError(err)

@@ -269,7 +269,11 @@ func TestToolEnableToPolicyGlobs_CoverageCheck(t *testing.T) {
 		"browser_evaluate",
 		"search_web",
 		"fetch_url",
-		"exec",
+		// ADR-036: exec/workspace_shell/workspace_shell_bg consolidate into
+		// "bash" — toolEnableToPolicy's {"exec","bash"} row (FR-M2) now maps
+		// the legacy jsonKey to that new glob, so "bash" (not "exec") is what
+		// must resolve here.
+		"bash",
 		"cron",
 		"spawn",
 		"check_spawn_status",

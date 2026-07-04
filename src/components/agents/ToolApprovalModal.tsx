@@ -31,6 +31,35 @@
 //   401 → re-auth toast (user must log in again)
 //   403 → "you must be an admin to approve this tool" toast
 //   410 → "this approval has already been resolved" → dismiss modal entry
+//
+// ADR-036 §3.4 note: this is now the ONLY tool-approval UI — the dedicated
+// exec-only flow (ExecApprovalBlock/ExecApprovalTool, WS
+// exec_approval_request/response/expired frames) was retired in favor of
+// this generic modal for every tool, `bash` included. Before deleting that
+// flow, its rendering was compared against this one:
+//   - PORTED: the readable "binary highlighted, env-prefix separated"
+//     command preview + working-dir line ExecApprovalBlock showed for shell
+//     commands. See formatBashCommand() below and its use in ToolApprovalCard
+//     — rendered whenever toolName is "bash" and args.command is a string,
+//     in addition to (not instead of) the generic Arguments JSON dump.
+//   - NOT PORTED, FLAGGED AS A FOLLOW-UP: ExecApprovalBlock's 3-way decision
+//     (Allow / Deny / "Always Allow") vs. this modal's 2-way
+//     (Approve / Deny / Cancel). "Always Allow" isn't just missing UI here —
+//     ApprovalGrantStore.Record (pkg/security/approvalgrants.go), the ONLY
+//     thing that ever populates a session "Always Allow" grant, is called
+//     from exactly one place today: ws_approval.go's handling of the
+//     exec_approval_response frame with decision:"always". The generic
+//     POST /api/v1/tool-approvals/{id} endpoint's ToolApprovalActionRequest
+//     only supports approve/deny/cancel — no equivalent action exists.
+//     Retiring the exec-only flow with nothing replacing that call site means
+//     "Always Allow" becomes permanently unreachable for EVERY tool (not
+//     just bash), which would silently break the grant-inheritance behavior
+//     agent-delegation-spec.md's FR-D8 depends on. Fixing this needs a wire
+//     contract change (a new "always" value on ToolApprovalActionRequest.action
+//     per Constraint #8's 5-step process) plus backend wiring to
+//     ApprovalGrantStore.Record — both out of frontend scope. This must be
+//     resolved (by the ADR-036 backend wave or a fast-follow) before/alongside
+//     shipping the retirement, not silently dropped.
 
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { CheckCircle, XCircle, ProhibitInset, Shield } from '@phosphor-icons/react'
@@ -76,6 +105,28 @@ function formatCountdown(ms: number): string {
   const mins = Math.floor(secs / 60)
   const remainSecs = secs % 60
   return `${mins}m ${remainSecs}s`
+}
+
+// Formats a `bash` command string for display: separates any leading
+// `KEY=value` env-var assignments from the binary name and highlights the
+// binary. Ported verbatim (in spirit) from the retired ExecApprovalBlock so
+// approving a `bash` call still shows a readable command preview, not just
+// the raw Arguments JSON — see the ADR-036 note atop this file.
+function formatBashCommand(command: string): { envPrefix: string; binary: string; args: string } {
+  const parts = command.split(' ')
+  let binaryIndex = 0
+  for (let i = 0; i < parts.length; i++) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*=/.test(parts[i])) {
+      binaryIndex = i
+      break
+    }
+  }
+  const envPrefix = parts.slice(0, binaryIndex).join(' ')
+  const afterEnv = envPrefix ? command.slice(envPrefix.length + 1) : command
+  const firstSpace = afterEnv.indexOf(' ')
+  const binary = firstSpace === -1 ? afterEnv : afterEnv.slice(0, firstSpace)
+  const args = firstSpace === -1 ? '' : afterEnv.slice(firstSpace)
+  return { envPrefix, binary, args }
 }
 
 interface ToolApprovalCardProps {
@@ -166,6 +217,16 @@ function ToolApprovalCard({
   const titleId = `tool-approval-title-${approvalId}`
   const descId = `tool-approval-desc-${approvalId}`
 
+  // Ported from the retired ExecApprovalBlock (see the ADR-036 note atop this
+  // file) — a readable command preview for `bash` calls, additive to (not a
+  // replacement for) the generic Arguments JSON below.
+  const bashCommand =
+    toolName === 'bash' && typeof args.command === 'string' && args.command.length > 0
+      ? args.command
+      : null
+  const bashPreview = bashCommand ? formatBashCommand(bashCommand) : null
+  const bashCwd = typeof args.cwd === 'string' && args.cwd.length > 0 ? args.cwd : undefined
+
   return (
     <Dialog
       open
@@ -225,6 +286,25 @@ function ToolApprovalCard({
               {toolName}
             </p>
           </div>
+
+          {bashPreview && (
+            <div>
+              <p className="text-xs text-[var(--color-muted)] mb-1">Command</p>
+              <pre className="font-mono text-xs bg-[var(--color-surface-2)] rounded-lg px-3 py-2 whitespace-pre-wrap break-all text-[var(--color-secondary)]">
+                {bashPreview.envPrefix && (
+                  <span className="text-[var(--color-muted)]">{bashPreview.envPrefix} </span>
+                )}
+                <span className="text-[var(--color-accent)] font-semibold">{bashPreview.binary}</span>
+                <span>{bashPreview.args}</span>
+              </pre>
+              {bashCwd && (
+                <p className="mt-1 text-[10px] text-[var(--color-muted)]">
+                  <span className="text-[var(--color-border)]">dir: </span>
+                  <span className="font-mono">{bashCwd}</span>
+                </p>
+              )}
+            </div>
+          )}
 
           {args && Object.keys(args).length > 0 && (
             <div>

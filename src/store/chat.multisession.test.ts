@@ -32,7 +32,6 @@ function resetStores() {
       toolCalls: {},
       toolCallOrder: [],
       textAtToolCallStart: {},
-      pendingApprovals: [],
       sessionTokens: 0,
       sessionCost: 0,
       isReplaying: false,
