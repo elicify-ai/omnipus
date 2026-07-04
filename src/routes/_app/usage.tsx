@@ -1,20 +1,8 @@
-import { lazy, Suspense } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
-import { RouteFallback } from '@/components/shared/RouteFallback'
+import { UsageScreen } from '@/components/screens/UsageScreen'
 
-// Code-split: the Usage analytics screen is heavy and only needed on this route.
-const UsageScreen = lazy(() =>
-  import('@/components/screens/UsageScreen').then((m) => ({ default: m.UsageScreen })),
-)
-
-function UsageRoute() {
-  return (
-    <Suspense fallback={<RouteFallback />}>
-      <UsageScreen />
-    </Suspense>
-  )
-}
-
+// autoCodeSplitting extracts this component into its own lazy chunk; the
+// router-level defaultPendingComponent (src/main.tsx) supplies the fallback.
 export const Route = createFileRoute('/_app/usage')({
-  component: UsageRoute,
+  component: UsageScreen,
 })

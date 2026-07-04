@@ -1,20 +1,14 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { lazy, Suspense } from 'react'
-import { RouteFallback } from '@/components/shared/RouteFallback'
+import { CalendarScreen } from '@/components/screens/CalendarScreen'
 
-// Calendar tab — scheduled/recurring tasks by fire time. Renders the existing
-// CalendarScreen under the workspace tab. Code-split (it's a heavy surface).
-const CalendarScreen = lazy(() =>
-  import('@/components/screens/CalendarScreen').then((m) => ({ default: m.CalendarScreen })),
-)
-
+// Calendar tab — scheduled/recurring tasks by fire time, under the workspace
+// tab. autoCodeSplitting extracts this component (and CalendarScreen) into a
+// lazy chunk; the router-level defaultPendingComponent supplies the fallback.
+// A named wrapper is kept because the screen needs the workspaceId route param
+// passed as a prop.
 function WorkspaceCalendarRoute() {
   const { workspaceId } = Route.useParams()
-  return (
-    <Suspense fallback={<RouteFallback />}>
-      <CalendarScreen workspaceId={workspaceId} />
-    </Suspense>
-  )
+  return <CalendarScreen workspaceId={workspaceId} />
 }
 
 export const Route = createFileRoute('/_app/workspaces/$workspaceId/calendar')({
