@@ -1,6 +1,8 @@
 # Sandbox configuration
 
-The Omnipus process sandbox is configured from the SPA at **Settings → Security → Process Sandbox** (the panel shows the active backend, mode toggle, allowed-paths editor, SSRF policy preset, and the default per-agent profile in one place). For headless deployments and reverse-proxy hosts where the SPA is not the primary surface, the same fields are editable directly in `~/.omnipus/config.json` under the `sandbox` key. The CLI flag `--sandbox` is a runtime-only override that does not persist.
+The Omnipus process sandbox is configured from the SPA at **Settings → Security → Process Sandbox** (the panel shows the active backend, mode toggle, allowed-paths editor, and SSRF policy preset in one place). For headless deployments and reverse-proxy hosts where the SPA is not the primary surface, the same fields are editable directly in `~/.omnipus/config.json` under the `sandbox` key. The CLI flag `--sandbox` is a runtime-only override that does not persist.
+
+Note: prior to [ADR-035](../internal/architecture/ADR-035-remove-per-agent-sandbox-profile.md), this section also documented a `default_profile` field (a global fallback for a per-agent `sandbox_profile` setting). Both the per-agent field and its global fallback were removed — new agents no longer have a configurable sandbox profile, so there is nothing left for a default to apply to.
 
 The gateway applies sandbox config exactly once, at boot. There is no hot-reload — changes to `sandbox.mode`, `sandbox.allowed_paths`, `sandbox.ssrf.*`, or any other field in this section take effect only after a gateway restart. This is documented invariant FR-J-015 (`pkg/gateway/sandbox_apply.go:32`); the SPA surfaces a "Restart required" banner whenever the saved-on-disk value diverges from the running process (`src/components/settings/SandboxSection.tsx:1015-1034`).
 
@@ -30,7 +32,6 @@ The gateway applies sandbox config exactly once, at boot. There is no hot-reload
     "max_concurrent_dev_servers": 4,
     "max_concurrent_builds": 2,
     "dev_server_port_range": [18000, 18999],
-    "default_profile": "workspace",
     "browser_evaluate_enabled": false,
     "skill_trust": "warn_unverified",
     "prompt_injection_level": "medium",
@@ -55,7 +56,6 @@ Field reference (defaults applied by the boot validator when the field is omitte
 | `max_concurrent_dev_servers` | `4` | Tier 3 `web_serve` dev-mode cap across all agents (`pkg/config/sandbox.go:233`). |
 | `max_concurrent_builds` | `2` | Tier 2 `build_static` cap (`pkg/config/sandbox.go:237`). |
 | `dev_server_port_range` | `[18000, 18999]` | Inclusive port range for Tier 3 dev servers and `workspace.shell_bg`. Also feeds the Landlock bind/connect allow-list on ABI v4+. |
-| `default_profile` | `workspace` | Per-agent fallback profile (`workspace`, `workspace+net`, `host`, `off`). |
 | `browser_evaluate_enabled` | `false` | Gates `browser.evaluate` (arbitrary JS execution). |
 | `experimental.workspace_shell_enabled` | `false` | Gates the `workspace.shell` and `workspace.shell_bg` builtins. Jim's seed forces this to `true`. |
 

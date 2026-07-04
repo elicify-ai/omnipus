@@ -5,7 +5,7 @@
 //   ./wizard/Step1Identity.tsx   — color, icon, name, description, model
 //   ./wizard/Step2Personality.tsx — soul, heartbeat, voice
 //   ./wizard/Step3Tools.tsx      — tools_cfg, skills, fallback_models
-//   ./wizard/Advanced.tsx       — model_params, sandbox, shell, etc. (deferred)
+//   ./wizard/Advanced.tsx       — model_params, shell, etc. (deferred)
 // This file owns the Sheet shell, the type/CLI chips, the stepper, and the
 // footer with submit handling. Each step is given the current payload + a
 // `setField` callback so the wizard is a controlled form.
@@ -82,9 +82,6 @@ export interface WizardSubmitPayload {
     max_tokens?: number
     top_p?: number
   }
-  // O13: 'off' removed from the per-agent picker — "no sandbox" is the global
-  // god-mode switch only.
-  sandbox_profile?: 'workspace' | 'workspace+net' | 'host'
   shell_policy?: {
     enable_deny_patterns?: boolean
     custom_deny_patterns?: string[]
@@ -101,7 +98,7 @@ export interface WizardSubmitPayload {
   steering_mode?: 'one-at-a-time' | 'queue-and-process'
   // ── Inherit-from-caller toggles (UAT agent-form fix 4a) ──────────────
   // UI-only flags (NOT wire fields). A native (in-process) subagent is a
-  // delegation-only worker: by default its Model / Tools / Skills / Sandbox
+  // delegation-only worker: by default its Model / Tools / Skills
   // are inherited from the caller (the agent that delegates to it). These
   // toggles make that inheritance EXPLICIT and editable in the creation
   // wizard. When a toggle is ON (inherit), the corresponding editor is
@@ -113,7 +110,6 @@ export interface WizardSubmitPayload {
   inherit_model?: boolean
   inherit_tools?: boolean
   inherit_skills?: boolean
-  inherit_sandbox?: boolean
 }
 
 interface WizardProps {
@@ -204,14 +200,13 @@ function initialPayload(initialType: WizardType, initialCli?: WizardCli): Wizard
     ...(initialType !== 'subagent_3p' ? { max_tool_iterations: 200 } : {}),
     ...(initialType === 'Main' ? { steering_mode: 'one-at-a-time' as const } : {}),
     // Inherit-from-caller toggles default OFF so the corresponding editors
-    // (model picker, tools, skills, sandbox) render by default and the
+    // (model picker, tools, skills) render by default and the
     // operator makes an explicit choice. Inheritance stays an opt-in via the
     // toggles (available only for native Subagents). Main / external types
     // ignore these flags entirely.
     inherit_model: false,
     inherit_tools: false,
     inherit_skills: false,
-    inherit_sandbox: false,
   }
 }
 

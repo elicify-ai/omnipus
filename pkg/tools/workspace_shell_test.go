@@ -20,14 +20,14 @@ import (
 func newTestWorkspaceShellTool(
 	t *testing.T,
 	workspaceDir string,
-	profile config.SandboxProfile,
+	godMode bool,
 	shellPolicy *config.AgentShellPolicy,
 	auditLogger *audit.Logger,
 ) *tools.WorkspaceShellTool {
 	t.Helper()
 	return tools.NewWorkspaceShellTool(tools.WorkspaceShellDeps{
 		WorkspaceDir:            workspaceDir,
-		Profile:                 profile,
+		GodMode:                 godMode,
 		Proxy:                   nil, // no egress proxy in unit tests
 		AuditLogger:             auditLogger,
 		GlobalShellDenyPatterns: nil,
@@ -53,7 +53,7 @@ func TestWorkspaceShellTool_DenyPatterns(t *testing.T) {
 		}
 		tool := tools.NewWorkspaceShellTool(tools.WorkspaceShellDeps{
 			WorkspaceDir:            dir,
-			Profile:                 config.SandboxProfileWorkspace,
+			GodMode:                 false,
 			GlobalShellDenyPatterns: []string{`\bsudo\b`},
 			AgentShellPolicy:        policy,
 		})
@@ -77,7 +77,7 @@ func TestWorkspaceShellTool_DenyPatterns(t *testing.T) {
 		}
 		tool := tools.NewWorkspaceShellTool(tools.WorkspaceShellDeps{
 			WorkspaceDir:            dir,
-			Profile:                 config.SandboxProfileWorkspace,
+			GodMode:                 false,
 			GlobalShellDenyPatterns: []string{`\bsudo\b`},
 			AgentShellPolicy:        policy,
 		})
@@ -102,7 +102,7 @@ func TestWorkspaceShellTool_DenyPatterns(t *testing.T) {
 		}
 		tool := tools.NewWorkspaceShellTool(tools.WorkspaceShellDeps{
 			WorkspaceDir:     dir,
-			Profile:          config.SandboxProfileWorkspace,
+			GodMode:          false,
 			AgentShellPolicy: policy,
 		})
 
@@ -131,7 +131,7 @@ func TestWorkspaceShellTool_CWDResolution(t *testing.T) {
 			t.Fatalf("mkdir subproject: %v", err)
 		}
 
-		tool := newTestWorkspaceShellTool(t, dir, config.SandboxProfileOff, nil, nil)
+		tool := newTestWorkspaceShellTool(t, dir, true, nil, nil)
 		ctx := context.Background()
 
 		// pwd should print a path under the workspace.
@@ -159,7 +159,7 @@ func TestWorkspaceShellTool_CWDResolution(t *testing.T) {
 
 	t.Run("cwd with dotdot escapes returns error", func(t *testing.T) {
 		t.Parallel()
-		tool := newTestWorkspaceShellTool(t, dir, config.SandboxProfileOff, nil, nil)
+		tool := newTestWorkspaceShellTool(t, dir, true, nil, nil)
 		ctx := context.Background()
 
 		result := tool.Execute(ctx, map[string]any{
@@ -178,7 +178,7 @@ func TestWorkspaceShellTool_CWDResolution(t *testing.T) {
 
 	t.Run("absolute cwd is rejected", func(t *testing.T) {
 		t.Parallel()
-		tool := newTestWorkspaceShellTool(t, dir, config.SandboxProfileOff, nil, nil)
+		tool := newTestWorkspaceShellTool(t, dir, true, nil, nil)
 		ctx := context.Background()
 
 		result := tool.Execute(ctx, map[string]any{
@@ -212,7 +212,7 @@ func TestWorkspaceShellTool_CWDResolution(t *testing.T) {
 			t.Fatalf("os.Symlink: %v", err)
 		}
 
-		tool := newTestWorkspaceShellTool(t, wsDir, config.SandboxProfileOff, nil, nil)
+		tool := newTestWorkspaceShellTool(t, wsDir, true, nil, nil)
 		ctx := context.Background()
 
 		result := tool.Execute(ctx, map[string]any{
@@ -237,7 +237,7 @@ func TestWorkspaceShellTool_ResultShape(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	tool := newTestWorkspaceShellTool(t, dir, config.SandboxProfileOff, nil, nil)
+	tool := newTestWorkspaceShellTool(t, dir, true, nil, nil)
 	ctx := context.Background()
 
 	result := tool.Execute(ctx, map[string]any{"command": "echo hello"})
@@ -278,7 +278,7 @@ func TestWorkspaceShellTool_NonZeroExit(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	tool := newTestWorkspaceShellTool(t, dir, config.SandboxProfileOff, nil, nil)
+	tool := newTestWorkspaceShellTool(t, dir, true, nil, nil)
 	ctx := context.Background()
 
 	result := tool.Execute(ctx, map[string]any{"command": "exit 42"})
@@ -314,7 +314,7 @@ func TestWorkspaceShellTool_AuditEntries(t *testing.T) {
 	}
 
 	t.Run("allow path emits audit entry", func(t *testing.T) {
-		tool := newTestWorkspaceShellTool(t, dir, config.SandboxProfileOff, nil, auditLogger)
+		tool := newTestWorkspaceShellTool(t, dir, true, nil, auditLogger)
 		ctx := context.Background()
 
 		_ = tool.Execute(ctx, map[string]any{"command": "echo audit-allow"})
@@ -342,7 +342,7 @@ func TestWorkspaceShellTool_AuditEntries(t *testing.T) {
 		}
 		tool := tools.NewWorkspaceShellTool(tools.WorkspaceShellDeps{
 			WorkspaceDir:     dir,
-			Profile:          config.SandboxProfileOff,
+			GodMode:          true,
 			AuditLogger:      auditLogger,
 			AgentShellPolicy: policy,
 		})
@@ -367,47 +367,71 @@ func TestWorkspaceShellTool_AuditEntries(t *testing.T) {
 	})
 }
 
-// TestWorkspaceShellTool_ProfileOff verifies that profile=off skips
-// ApplyChildHardening (runs without error on all platforms).
-func TestWorkspaceShellTool_ProfileOff(t *testing.T) {
+// TestWorkspaceShellTool_GodModeSkipsHardening verifies that godMode=true
+// skips ApplyChildHardening entirely (runs without error on all platforms —
+// see ADR-035-remove-per-agent-sandbox-profile.md) AND, per Fix 3 of the
+// 7-reviewer SandboxProfile-removal gate (pr-test-analyzer), actually
+// distinguishes the god-mode code path from the normal-mode one: godMode=true
+// runs via runUnconstrained, which never calls mergeEnv, so npm_config_cache
+// (injected by mergeEnv whenever Limits.WorkspaceDir is set — see
+// hardened_exec.go's mergeEnv) must be ABSENT from the child's environment.
+// Asserting only "the command didn't error" (the prior version of this test)
+// would not catch the god-mode branch being accidentally inverted, since
+// neither ApplyChildHardening nor a zero MemoryLimitBytes ever causes a plain
+// echo to fail.
+func TestWorkspaceShellTool_GodModeSkipsHardening(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Unix-only test")
 	}
 	t.Parallel()
 
 	dir := t.TempDir()
-	tool := newTestWorkspaceShellTool(t, dir, config.SandboxProfileOff, nil, nil)
+	tool := newTestWorkspaceShellTool(t, dir, true, nil, nil)
 	ctx := context.Background()
 
-	result := tool.Execute(ctx, map[string]any{"command": "echo from-god-mode"})
+	result := tool.Execute(ctx, map[string]any{"command": "echo from-god-mode cache=[$npm_config_cache]"})
 
 	if result.IsError {
-		t.Errorf("profile=off should succeed, got error: %s", result.ForLLM)
+		t.Errorf("godMode=true should succeed, got error: %s", result.ForLLM)
 	}
 	if !strings.Contains(result.ForLLM, "from-god-mode") {
 		t.Errorf("expected echo output in result, got: %s", result.ForLLM)
 	}
+	if strings.Contains(result.ForLLM, ".npm-cache") {
+		t.Errorf(
+			"expected npm_config_cache to be UNSET under god mode (runUnconstrained never calls mergeEnv), got: %s",
+			result.ForLLM,
+		)
+	}
 }
 
-// TestWorkspaceShellTool_ProfileWorkspace verifies that profile=workspace calls
-// ApplyChildHardening and runs successfully (on Linux).
-func TestWorkspaceShellTool_ProfileWorkspace(t *testing.T) {
+// TestWorkspaceShellTool_NormalModeAppliesHardening verifies that godMode=false
+// calls ApplyChildHardening (via the fixed sandbox.BuildLimits) and runs
+// successfully (on Linux). Per Fix 3, it also asserts the real distinguishing
+// side effect from mergeEnv — a workspace-scoped npm_config_cache — is present,
+// so this test would fail if the god-mode/normal-mode branch were inverted.
+func TestWorkspaceShellTool_NormalModeAppliesHardening(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("hardened exec is Linux-only")
 	}
 	t.Parallel()
 
 	dir := t.TempDir()
-	tool := newTestWorkspaceShellTool(t, dir, config.SandboxProfileWorkspace, nil, nil)
+	tool := newTestWorkspaceShellTool(t, dir, false, nil, nil)
 	ctx := context.Background()
 
-	result := tool.Execute(ctx, map[string]any{"command": "echo from-workspace-profile"})
+	result := tool.Execute(ctx, map[string]any{"command": "echo from-normal-mode cache=[$npm_config_cache]"})
 
 	if result.IsError {
-		t.Errorf("profile=workspace should succeed for simple echo, got error: %s", result.ForLLM)
+		t.Errorf("godMode=false should succeed for simple echo, got error: %s", result.ForLLM)
 	}
-	if !strings.Contains(result.ForLLM, "from-workspace-profile") {
+	if !strings.Contains(result.ForLLM, "from-normal-mode") {
 		t.Errorf("expected echo output in result, got: %s", result.ForLLM)
+	}
+	wantCacheSuffix := dir + "/.npm-cache"
+	if !strings.Contains(result.ForLLM, wantCacheSuffix) {
+		t.Errorf("expected npm_config_cache=%s (from mergeEnv) in normal-mode output, got: %s",
+			wantCacheSuffix, result.ForLLM)
 	}
 }
 
@@ -445,7 +469,7 @@ func TestWorkspaceShellTool_AuditFailClosed_DeniesExecution(t *testing.T) {
 
 	tool := tools.NewWorkspaceShellTool(tools.WorkspaceShellDeps{
 		WorkspaceDir:    workspaceDir,
-		Profile:         config.SandboxProfileOff,
+		GodMode:         true,
 		AuditLogger:     logger,
 		AuditFailClosed: true,
 	})
@@ -504,7 +528,7 @@ func TestWorkspaceShellTool_AuditBestEffort(t *testing.T) {
 	workspaceDir := t.TempDir()
 	tool := tools.NewWorkspaceShellTool(tools.WorkspaceShellDeps{
 		WorkspaceDir:    workspaceDir,
-		Profile:         config.SandboxProfileOff,
+		GodMode:         true,
 		AuditLogger:     logger,
 		AuditFailClosed: false, // best-effort: warn and continue
 	})
@@ -527,7 +551,7 @@ func TestWorkspaceShellTool_AuditBestEffort(t *testing.T) {
 func TestWorkspaceShellTool_NameAndScope(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	tool := newTestWorkspaceShellTool(t, dir, config.SandboxProfileWorkspace, nil, nil)
+	tool := newTestWorkspaceShellTool(t, dir, false, nil, nil)
 
 	if tool.Name() != "workspace_shell" {
 		t.Errorf("expected name 'workspace_shell', got %q", tool.Name())

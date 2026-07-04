@@ -136,21 +136,6 @@ properties:
     example: "one-at-a-time"
   tools_cfg:
     $ref: './AgentToolsCfg.yaml'
-  sandbox_profile:
-    type: string
-    enum:
-      - workspace
-      - workspace+net
-      - host
-    description: >
-      Kernel sandbox profile applied to this agent's tool calls.
-      "workspace" = Landlock to workspace dir only.
-      "workspace+net" = Landlock + network access.
-      "host" = read-only host filesystem access.
-      Per-agent "off" is retired (O13) — "no sandbox" is reachable only via the
-      global god-mode switch. Editable on ALL agents, including locked core agents.
-      Hidden for subagent_3p — CLI manages its own isolation.
-    example: "workspace"
   shell_policy:
     $ref: './AgentShellPolicy.yaml'
   fallback_models:

@@ -1,26 +1,34 @@
 // Package tools — workspace_shell foreground tool (dark-launched).
 //
 // workspace_shell is a free-form foreground shell that runs inside the agent's
-// workspace directory under the kernel sandbox profile configured for the agent.
-// It replaces the brittle Tier-3 command allowlist pattern with a principled
+// workspace directory under a fixed kernel sandbox boundary (see
+// docs/internal/architecture/ADR-035-remove-per-agent-sandbox-profile.md). It
+// replaces the brittle Tier-3 command allowlist pattern with a principled
 // sandbox-at-the-kernel-layer approach.
 //
 // SECURITY CONTRACT:
 //   - The tool is registered only when experimental.workspace_shell_enabled=true.
 //   - Per-agent ToolPolicyCfg (allow/ask/deny) governs which agents can call it.
-//   - The executing child process runs under sandbox.Limits derived from the
-//     agent's SandboxProfile via LimitsForProfile.
-//   - SandboxProfile="off" (god mode) skips ApplyChildHardening; all other
-//     profiles apply hardening. God-mode gating is fully enforced in PR 4.
+//   - The executing child process runs under sandbox.Limits built by
+//     sandbox.BuildLimits: cwd confined to the resolved workspace directory,
+//     resource limits from the caller-supplied timeout, and the SSRF-protected
+//     egress proxy injected whenever the process-wide proxy is available (nil
+//     only if sandbox.NewEgressProxy failed at boot — see
+//     pkg/gateway/gateway.go, which degrades gracefully rather than failing
+//     boot in that case).
+//   - godMode=true (the global god-mode override, see agent.GodModeActive)
+//     skips ApplyChildHardening entirely; godMode=false always applies
+//     hardening — there is no other bypass.
 //   - The deny-pattern mechanism (global + per-agent) is wired but inert by
 //     default (EnableDenyPatterns defaults to false).
 //   - Every invocation — allow and deny — is recorded in the audit log.
 //   - The cwd argument is resolved under the agent workspace; any value
 //     that escapes the workspace returns "path escapes workspace".
 //
-// THREAT ACKNOWLEDGEMENT: even with SandboxProfile="workspace", a process can
-// read anything inside the workspace including credentials symlinked there.
-// Operators must not store sensitive files in agent workspaces.
+// THREAT ACKNOWLEDGEMENT: even under normal (non-god-mode) operation, a
+// process can read anything inside the workspace including credentials
+// symlinked there. Operators must not store sensitive files in agent
+// workspaces.
 
 package tools
 
@@ -52,8 +60,9 @@ type WorkspaceShellTool struct {
 	// arguments are resolved against this path.
 	workspaceDir string
 
-	// profile is the agent's SandboxProfile. Drives LimitsForProfile.
-	profile config.SandboxProfile
+	// godMode reflects the global god-mode override (agent.GodModeActive) at
+	// tool-wiring time. When true, ApplyChildHardening is skipped entirely.
+	godMode bool
 
 	// proxy is the process-wide EgressProxy. May be nil (no egress filtering).
 	proxy *sandbox.EgressProxy
@@ -85,8 +94,9 @@ type WorkspaceShellDeps struct {
 	// WorkspaceDir is the resolved absolute path to the agent's workspace.
 	WorkspaceDir string
 
-	// Profile is the agent's SandboxProfile.
-	Profile config.SandboxProfile
+	// GodMode reflects the global god-mode override (agent.GodModeActive) at
+	// tool-wiring time. When true, ApplyChildHardening is skipped entirely.
+	GodMode bool
 
 	// Proxy is the process-wide egress proxy. May be nil.
 	Proxy *sandbox.EgressProxy
@@ -110,7 +120,7 @@ type WorkspaceShellDeps struct {
 func NewWorkspaceShellTool(deps WorkspaceShellDeps) *WorkspaceShellTool {
 	t := &WorkspaceShellTool{
 		workspaceDir:       deps.WorkspaceDir,
-		profile:            deps.Profile,
+		godMode:            deps.GodMode,
 		proxy:              deps.Proxy,
 		auditLogger:        deps.AuditLogger,
 		auditFailClosed:    deps.AuditFailClosed,
@@ -125,9 +135,9 @@ func NewWorkspaceShellTool(deps WorkspaceShellDeps) *WorkspaceShellTool {
 	return t
 }
 
-// ProfileForTest exposes the resolved sandbox profile for white-box testing.
+// GodModeForTest exposes the resolved god-mode flag for white-box testing.
 // Kept as a production method because pkg/agent tests require cross-package access.
-func (t *WorkspaceShellTool) ProfileForTest() config.SandboxProfile { return t.profile }
+func (t *WorkspaceShellTool) GodModeForTest() bool { return t.godMode }
 
 // SetAuditLogger satisfies the auditLoggerAware contract used by the ToolRegistry.
 func (t *WorkspaceShellTool) SetAuditLogger(l *audit.Logger) {
@@ -144,7 +154,7 @@ func (t *WorkspaceShellTool) Scope() ToolScope { return ScopeCore }
 func (t *WorkspaceShellTool) Category() ToolCategory { return CategoryShell }
 
 func (t *WorkspaceShellTool) Description() string {
-	return `Run a shell command inside the agent's workspace directory under the configured sandbox profile. Unlike 'exec', this tool is not restricted to internal channels — the sandbox profile enforces the security boundary at the kernel level. Returns exit_code, stdout, stderr, and duration_ms.`
+	return `Run a shell command inside the agent's workspace directory under the sandbox boundary. Unlike 'exec', this tool is not restricted to internal channels — the sandbox enforces the security boundary at the kernel level. Returns exit_code, stdout, stderr, and duration_ms.`
 }
 
 func (t *WorkspaceShellTool) Parameters() map[string]any {
@@ -166,7 +176,7 @@ func (t *WorkspaceShellTool) Parameters() map[string]any {
 			},
 			"timeout_sec": map[string]any{
 				"type":        "integer",
-				"description": "Wall-clock timeout in seconds. 0 or omitted = use the sandbox profile default (300 s). Maximum 3600.",
+				"description": "Wall-clock timeout in seconds. 0 or omitted = use the default (300 s). Maximum 3600.",
 			},
 		},
 		"required": []string{"command"},
@@ -243,10 +253,12 @@ func (t *WorkspaceShellTool) Execute(ctx context.Context, args map[string]any) *
 		return auditResult
 	}
 
-	// Build sandbox limits.
-	lim, limErr := sandbox.LimitsForProfile(t.profile, t.workspaceDir, t.proxy, timeoutSec)
+	// Build sandbox limits. ResolveLimits returns the zero value when
+	// t.godMode is true, skipping BuildLimits' side effects (workspace
+	// mkdir, proxy resolution) entirely — see sandbox.ResolveLimits.
+	lim, limErr := sandbox.ResolveLimits(t.godMode, t.workspaceDir, t.proxy, timeoutSec)
 	if limErr != nil {
-		return ErrorResult(fmt.Sprintf("sandbox profile error: %v", limErr))
+		return ErrorResult(fmt.Sprintf("sandbox limits error: %v", limErr))
 	}
 	// Override WorkspaceDir with the resolved cwd for the child process.
 	lim.WorkspaceDir = cwd
@@ -325,10 +337,7 @@ func (t *WorkspaceShellTool) run(
 	env := extraEnv // nil or populated
 
 	// God mode: skip ApplyChildHardening entirely.
-	// Pass the original timeoutSec rather than lim.TimeoutSeconds because
-	// LimitsForProfile returns zero-value Limits for profile=off, so
-	// lim.TimeoutSeconds is always 0 on the god-mode path.
-	if sandbox.IsGodMode(t.profile) {
+	if t.godMode {
 		return t.runUnconstrained(ctx, argv, env, lim.WorkspaceDir, timeoutSec)
 	}
 
@@ -438,7 +447,7 @@ func (t *WorkspaceShellTool) emitAuditOrDeny(agentID, command, cwd, decision str
 	}
 	details := map[string]any{
 		"workspace": t.workspaceDir,
-		"profile":   string(t.profile),
+		"god_mode":  t.godMode,
 	}
 	if cwd != "" {
 		details["cwd"] = cwd
@@ -476,7 +485,7 @@ func (t *WorkspaceShellTool) emitAudit(agentID, command, cwd, decision string) {
 	}
 	details := map[string]any{
 		"workspace": t.workspaceDir,
-		"profile":   string(t.profile),
+		"god_mode":  t.godMode,
 	}
 	if cwd != "" {
 		details["cwd"] = cwd

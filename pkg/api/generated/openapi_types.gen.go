@@ -137,27 +137,6 @@ func (e AgentExecutorKind) Valid() bool {
 	}
 }
 
-// Defines values for AgentSandboxProfile.
-const (
-	AgentSandboxProfileHost         AgentSandboxProfile = "host"
-	AgentSandboxProfileWorkspace    AgentSandboxProfile = "workspace"
-	AgentSandboxProfileWorkspaceNet AgentSandboxProfile = "workspace+net"
-)
-
-// Valid indicates whether the value is a known member of the AgentSandboxProfile enum.
-func (e AgentSandboxProfile) Valid() bool {
-	switch e {
-	case AgentSandboxProfileHost:
-		return true
-	case AgentSandboxProfileWorkspace:
-		return true
-	case AgentSandboxProfileWorkspaceNet:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for AgentStatus.
 const (
 	AgentStatusActive AgentStatus = "active"
@@ -326,27 +305,6 @@ func (e AgentCreateRequestMainDelegationPolicyToKind) Valid() bool {
 	}
 }
 
-// Defines values for AgentCreateRequestMainSandboxProfile.
-const (
-	AgentCreateRequestMainSandboxProfileHost         AgentCreateRequestMainSandboxProfile = "host"
-	AgentCreateRequestMainSandboxProfileWorkspace    AgentCreateRequestMainSandboxProfile = "workspace"
-	AgentCreateRequestMainSandboxProfileWorkspaceNet AgentCreateRequestMainSandboxProfile = "workspace+net"
-)
-
-// Valid indicates whether the value is a known member of the AgentCreateRequestMainSandboxProfile enum.
-func (e AgentCreateRequestMainSandboxProfile) Valid() bool {
-	switch e {
-	case AgentCreateRequestMainSandboxProfileHost:
-		return true
-	case AgentCreateRequestMainSandboxProfileWorkspace:
-		return true
-	case AgentCreateRequestMainSandboxProfileWorkspaceNet:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for AgentCreateRequestMainSteeringMode.
 const (
 	AgentCreateRequestMainSteeringModeOneAtATime      AgentCreateRequestMainSteeringMode = "one-at-a-time"
@@ -473,27 +431,6 @@ func (e AgentCreateRequestSubagentDelegationPolicyToKind) Valid() bool {
 	case AgentCreateRequestSubagentDelegationPolicyToKindLocal:
 		return true
 	case AgentCreateRequestSubagentDelegationPolicyToKindRemoteA2a:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for AgentCreateRequestSubagentSandboxProfile.
-const (
-	AgentCreateRequestSubagentSandboxProfileHost         AgentCreateRequestSubagentSandboxProfile = "host"
-	AgentCreateRequestSubagentSandboxProfileWorkspace    AgentCreateRequestSubagentSandboxProfile = "workspace"
-	AgentCreateRequestSubagentSandboxProfileWorkspaceNet AgentCreateRequestSubagentSandboxProfile = "workspace+net"
-)
-
-// Valid indicates whether the value is a known member of the AgentCreateRequestSubagentSandboxProfile enum.
-func (e AgentCreateRequestSubagentSandboxProfile) Valid() bool {
-	switch e {
-	case AgentCreateRequestSubagentSandboxProfileHost:
-		return true
-	case AgentCreateRequestSubagentSandboxProfileWorkspace:
-		return true
-	case AgentCreateRequestSubagentSandboxProfileWorkspaceNet:
 		return true
 	default:
 		return false
@@ -977,27 +914,6 @@ func (e AgentUpdateRequestExecutorKind) Valid() bool {
 	case AgentUpdateRequestExecutorKindNative:
 		return true
 	case AgentUpdateRequestExecutorKindRemoteA2a:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for AgentUpdateRequestSandboxProfile.
-const (
-	AgentUpdateRequestSandboxProfileHost         AgentUpdateRequestSandboxProfile = "host"
-	AgentUpdateRequestSandboxProfileWorkspace    AgentUpdateRequestSandboxProfile = "workspace"
-	AgentUpdateRequestSandboxProfileWorkspaceNet AgentUpdateRequestSandboxProfile = "workspace+net"
-)
-
-// Valid indicates whether the value is a known member of the AgentUpdateRequestSandboxProfile enum.
-func (e AgentUpdateRequestSandboxProfile) Valid() bool {
-	switch e {
-	case AgentUpdateRequestSandboxProfileHost:
-		return true
-	case AgentUpdateRequestSandboxProfileWorkspace:
-		return true
-	case AgentUpdateRequestSandboxProfileWorkspaceNet:
 		return true
 	default:
 		return false
@@ -2278,55 +2194,28 @@ func (e ProviderCatalogEntryWire) Valid() bool {
 
 // Defines values for RunnerTestResponseReason.
 const (
-	RunnerTestResponseReasonEmpty           RunnerTestResponseReason = ""
-	RunnerTestResponseReasonHandshakeFailed RunnerTestResponseReason = "handshake-failed"
-	RunnerTestResponseReasonMissingBinary   RunnerTestResponseReason = "missing-binary"
-	RunnerTestResponseReasonNotExternalCli  RunnerTestResponseReason = "not-external-cli"
-	RunnerTestResponseReasonUnauthenticated RunnerTestResponseReason = "unauthenticated"
-	RunnerTestResponseReasonUnknownCli      RunnerTestResponseReason = "unknown-cli"
+	Empty           RunnerTestResponseReason = ""
+	HandshakeFailed RunnerTestResponseReason = "handshake-failed"
+	MissingBinary   RunnerTestResponseReason = "missing-binary"
+	NotExternalCli  RunnerTestResponseReason = "not-external-cli"
+	Unauthenticated RunnerTestResponseReason = "unauthenticated"
+	UnknownCli      RunnerTestResponseReason = "unknown-cli"
 )
 
 // Valid indicates whether the value is a known member of the RunnerTestResponseReason enum.
 func (e RunnerTestResponseReason) Valid() bool {
 	switch e {
-	case RunnerTestResponseReasonEmpty:
+	case Empty:
 		return true
-	case RunnerTestResponseReasonHandshakeFailed:
+	case HandshakeFailed:
 		return true
-	case RunnerTestResponseReasonMissingBinary:
+	case MissingBinary:
 		return true
-	case RunnerTestResponseReasonNotExternalCli:
+	case NotExternalCli:
 		return true
-	case RunnerTestResponseReasonUnauthenticated:
+	case Unauthenticated:
 		return true
-	case RunnerTestResponseReasonUnknownCli:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SandboxConfigDefaultProfile.
-const (
-	SandboxConfigDefaultProfileEmpty        SandboxConfigDefaultProfile = ""
-	SandboxConfigDefaultProfileHost         SandboxConfigDefaultProfile = "host"
-	SandboxConfigDefaultProfileNone         SandboxConfigDefaultProfile = "none"
-	SandboxConfigDefaultProfileWorkspace    SandboxConfigDefaultProfile = "workspace"
-	SandboxConfigDefaultProfileWorkspaceNet SandboxConfigDefaultProfile = "workspace+net"
-)
-
-// Valid indicates whether the value is a known member of the SandboxConfigDefaultProfile enum.
-func (e SandboxConfigDefaultProfile) Valid() bool {
-	switch e {
-	case SandboxConfigDefaultProfileEmpty:
-		return true
-	case SandboxConfigDefaultProfileHost:
-		return true
-	case SandboxConfigDefaultProfileNone:
-		return true
-	case SandboxConfigDefaultProfileWorkspace:
-		return true
-	case SandboxConfigDefaultProfileWorkspaceNet:
+	case UnknownCli:
 		return true
 	default:
 		return false
@@ -2354,51 +2243,21 @@ func (e SandboxConfigMode) Valid() bool {
 	}
 }
 
-// Defines values for SandboxConfigUpdateDefaultProfile.
-const (
-	SandboxConfigUpdateDefaultProfileEmpty        SandboxConfigUpdateDefaultProfile = ""
-	SandboxConfigUpdateDefaultProfileHost         SandboxConfigUpdateDefaultProfile = "host"
-	SandboxConfigUpdateDefaultProfileNone         SandboxConfigUpdateDefaultProfile = "none"
-	SandboxConfigUpdateDefaultProfileOff          SandboxConfigUpdateDefaultProfile = "off"
-	SandboxConfigUpdateDefaultProfileWorkspace    SandboxConfigUpdateDefaultProfile = "workspace"
-	SandboxConfigUpdateDefaultProfileWorkspaceNet SandboxConfigUpdateDefaultProfile = "workspace+net"
-)
-
-// Valid indicates whether the value is a known member of the SandboxConfigUpdateDefaultProfile enum.
-func (e SandboxConfigUpdateDefaultProfile) Valid() bool {
-	switch e {
-	case SandboxConfigUpdateDefaultProfileEmpty:
-		return true
-	case SandboxConfigUpdateDefaultProfileHost:
-		return true
-	case SandboxConfigUpdateDefaultProfileNone:
-		return true
-	case SandboxConfigUpdateDefaultProfileOff:
-		return true
-	case SandboxConfigUpdateDefaultProfileWorkspace:
-		return true
-	case SandboxConfigUpdateDefaultProfileWorkspaceNet:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for SandboxConfigUpdateMode.
 const (
-	Enforce    SandboxConfigUpdateMode = "enforce"
-	Off        SandboxConfigUpdateMode = "off"
-	Permissive SandboxConfigUpdateMode = "permissive"
+	SandboxConfigUpdateModeEnforce    SandboxConfigUpdateMode = "enforce"
+	SandboxConfigUpdateModeOff        SandboxConfigUpdateMode = "off"
+	SandboxConfigUpdateModePermissive SandboxConfigUpdateMode = "permissive"
 )
 
 // Valid indicates whether the value is a known member of the SandboxConfigUpdateMode enum.
 func (e SandboxConfigUpdateMode) Valid() bool {
 	switch e {
-	case Enforce:
+	case SandboxConfigUpdateModeEnforce:
 		return true
-	case Off:
+	case SandboxConfigUpdateModeOff:
 		return true
-	case Permissive:
+	case SandboxConfigUpdateModePermissive:
 		return true
 	default:
 		return false
@@ -4030,7 +3889,7 @@ type Agent struct {
 
 	// Executor Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
 	// "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
-	// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude receives the soul+instructions prompt via stdin with NO positional prompt argument at all (a bare "-" is read by this CLI as a literal one-character prompt string, not a stdin sentinel, so none is appended — claude -p consumes all of stdin automatically when no positional prompt is given); codex also receives it via stdin, but signals that with a trailing "-" positional argument (a real stdin sentinel for this CLI); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like sandbox_profile / shell_policy / tools_cfg / fallback_models / model_params / skills / delegation_policy are hidden for subagent_3p agents and rejected 400 on PUT if set.
+	// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude receives the soul+instructions prompt via stdin with NO positional prompt argument at all (a bare "-" is read by this CLI as a literal one-character prompt string, not a stdin sentinel, so none is appended — claude -p consumes all of stdin automatically when no positional prompt is given); codex also receives it via stdin, but signals that with a trailing "-" positional argument (a real stdin sentinel for this CLI); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like shell_policy / tools_cfg / fallback_models / model_params / skills / delegation_policy are hidden for subagent_3p agents and rejected 400 on PUT if set.
 	// "cli" (required for subagent_3p agents when kind="external-cli") is locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
 	// "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
 	// The "kind" field is derived server-side from the agent's type (Main -> native, Subagent -> native, subagent_3p -> external-cli). It is exposed in responses but is NOT a writable field on create/update — clients cannot choose kind directly. Server-side derive at the handler boundary per the agent-form spec.
@@ -4103,9 +3962,6 @@ type Agent struct {
 		// UseGlobalDefaults When true, global rate limits are used and per-agent overrides are ignored.
 		UseGlobalDefaults *bool `json:"use_global_defaults,omitempty"`
 	} `json:"rate_limits,omitempty"`
-
-	// SandboxProfile Kernel sandbox profile applied to this agent's tool calls. "workspace" = Landlock to workspace dir only. "workspace+net" = Landlock + network access. "host" = read-only host filesystem access. Per-agent "off" is retired (O13) — "no sandbox" is reachable only via the global god-mode switch. Editable on ALL agents, including locked core agents. Hidden for subagent_3p — CLI manages its own isolation.
-	SandboxProfile *AgentSandboxProfile `json:"sandbox_profile,omitempty"`
 
 	// ShellPolicy Per-agent shell command deny-pattern configuration.
 	ShellPolicy *struct {
@@ -4194,9 +4050,6 @@ type AgentDelegationPolicyToKind string
 
 // AgentExecutorKind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
 type AgentExecutorKind string
-
-// AgentSandboxProfile Kernel sandbox profile applied to this agent's tool calls. "workspace" = Landlock to workspace dir only. "workspace+net" = Landlock + network access. "host" = read-only host filesystem access. Per-agent "off" is retired (O13) — "no sandbox" is reachable only via the global god-mode switch. Editable on ALL agents, including locked core agents. Hidden for subagent_3p — CLI manages its own isolation.
-type AgentSandboxProfile string
 
 // AgentStatus Current runtime status. "active" = agent is processing a turn. "idle" = ready and waiting. "draft" = SOUL.md is empty (no prompt written yet). "error" is a frontend-added possibility not emitted by the backend today.
 type AgentStatus string
@@ -4312,9 +4165,6 @@ type AgentCreateRequestMain struct {
 		UseGlobalDefaults *bool `json:"use_global_defaults,omitempty"`
 	} `json:"rate_limits,omitempty"`
 
-	// SandboxProfile Kernel sandbox profile applied to this agent's tool calls (O13). Per-agent "off" is retired — "no sandbox" is reachable only via the global god-mode switch. Hidden for Subagent (External) — the CLI manages its own isolation.
-	SandboxProfile *AgentCreateRequestMainSandboxProfile `json:"sandbox_profile,omitempty"`
-
 	// ShellPolicy Per-agent shell command deny-pattern configuration.
 	ShellPolicy *struct {
 		// CustomDenyPatterns Additional Go regexp patterns to block in shell commands.
@@ -4375,9 +4225,6 @@ type AgentCreateRequestMainDelegationPolicyModes string
 
 // AgentCreateRequestMainDelegationPolicyToKind The kind of agent reference. "local" = a locally-registered agent resolved by id. "remote-a2a" = reserved for future A2A protocol external agent resolution; not enforced in v0.1.0.
 type AgentCreateRequestMainDelegationPolicyToKind string
-
-// AgentCreateRequestMainSandboxProfile Kernel sandbox profile applied to this agent's tool calls (O13). Per-agent "off" is retired — "no sandbox" is reachable only via the global god-mode switch. Hidden for Subagent (External) — the CLI manages its own isolation.
-type AgentCreateRequestMainSandboxProfile string
 
 // AgentCreateRequestMainSteeringMode Tool execution steering strategy. Main only; the server forces "one-at-a-time" for workers.
 type AgentCreateRequestMainSteeringMode string
@@ -4485,9 +4332,6 @@ type AgentCreateRequestSubagent struct {
 		UseGlobalDefaults *bool `json:"use_global_defaults,omitempty"`
 	} `json:"rate_limits,omitempty"`
 
-	// SandboxProfile Kernel sandbox profile applied to this agent's tool calls (O13). Per-agent "off" is retired — "no sandbox" is reachable only via the global god-mode switch. Hidden for Subagent (External) — the CLI manages its own isolation.
-	SandboxProfile *AgentCreateRequestSubagentSandboxProfile `json:"sandbox_profile,omitempty"`
-
 	// ShellPolicy Per-agent shell command deny-pattern configuration.
 	ShellPolicy *struct {
 		// CustomDenyPatterns Additional Go regexp patterns to block in shell commands.
@@ -4543,9 +4387,6 @@ type AgentCreateRequestSubagentDelegationPolicyModes string
 // AgentCreateRequestSubagentDelegationPolicyToKind The kind of agent reference. "local" = a locally-registered agent resolved by id. "remote-a2a" = reserved for future A2A protocol external agent resolution; not enforced in v0.1.0.
 type AgentCreateRequestSubagentDelegationPolicyToKind string
 
-// AgentCreateRequestSubagentSandboxProfile Kernel sandbox profile applied to this agent's tool calls (O13). Per-agent "off" is retired — "no sandbox" is reachable only via the global god-mode switch. Hidden for Subagent (External) — the CLI manages its own isolation.
-type AgentCreateRequestSubagentSandboxProfile string
-
 // AgentCreateRequestSubagentToolsCfgBuiltinDefaultPolicy Fallback policy applied to any builtin tool not listed in policies. Custom agents are seeded with default_policy=allow and a system.*=deny entry to enforce the privilege rail.
 type AgentCreateRequestSubagentToolsCfgBuiltinDefaultPolicy string
 
@@ -4555,7 +4396,7 @@ type AgentCreateRequestSubagentToolsCfgBuiltinPolicies string
 // AgentCreateRequestSubagentType Discriminator. Must be exactly "Subagent" for this variant.
 type AgentCreateRequestSubagentType string
 
-// AgentCreateRequestSubagent3p Create a subagent_3p — a delegation-only worker that runs on an external CLI (claude-code / codex / opencode). The runner manages its own isolation, auth, retries, and tool loop, so tools_cfg, skills, fallback_models, model_params, sandbox_profile, shell_policy, voice, steering_mode, and max_tool_iterations do not exist on this variant (additionalProperties: false rejects them). timeout_seconds stays (process-level kill for a hung CLI). executor is REQUIRED (kind external-cli with cli + cli_path; the handler additionally rejects whitespace-only cli_path).
+// AgentCreateRequestSubagent3p Create a subagent_3p — a delegation-only worker that runs on an external CLI (claude-code / codex / opencode). The runner manages its own isolation, auth, retries, and tool loop, so tools_cfg, skills, fallback_models, model_params, shell_policy, voice, steering_mode, and max_tool_iterations do not exist on this variant (additionalProperties: false rejects them). timeout_seconds stays (process-level kill for a hung CLI). executor is REQUIRED (kind external-cli with cli + cli_path; the handler additionally rejects whitespace-only cli_path).
 type AgentCreateRequestSubagent3p struct {
 	// Color Hex color code for the agent avatar.
 	Color *string `json:"color,omitempty"`
@@ -4605,7 +4446,7 @@ type AgentCreateRequestSubagent3p struct {
 
 	// Executor Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
 	// "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
-	// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude receives the soul+instructions prompt via stdin with NO positional prompt argument at all (a bare "-" is read by this CLI as a literal one-character prompt string, not a stdin sentinel, so none is appended — claude -p consumes all of stdin automatically when no positional prompt is given); codex also receives it via stdin, but signals that with a trailing "-" positional argument (a real stdin sentinel for this CLI); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like sandbox_profile / shell_policy / tools_cfg / fallback_models / model_params / skills / delegation_policy are hidden for subagent_3p agents and rejected 400 on PUT if set.
+	// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude receives the soul+instructions prompt via stdin with NO positional prompt argument at all (a bare "-" is read by this CLI as a literal one-character prompt string, not a stdin sentinel, so none is appended — claude -p consumes all of stdin automatically when no positional prompt is given); codex also receives it via stdin, but signals that with a trailing "-" positional argument (a real stdin sentinel for this CLI); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like shell_policy / tools_cfg / fallback_models / model_params / skills / delegation_policy are hidden for subagent_3p agents and rejected 400 on PUT if set.
 	// "cli" (required for subagent_3p agents when kind="external-cli") is locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
 	// "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
 	// The "kind" field is derived server-side from the agent's type (Main -> native, Subagent -> native, subagent_3p -> external-cli). It is exposed in responses but is NOT a writable field on create/update — clients cannot choose kind directly. Server-side derive at the handler boundary per the agent-form spec.
@@ -4981,7 +4822,7 @@ type AgentUpdateRequest struct {
 
 	// Executor Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
 	// "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
-	// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude receives the soul+instructions prompt via stdin with NO positional prompt argument at all (a bare "-" is read by this CLI as a literal one-character prompt string, not a stdin sentinel, so none is appended — claude -p consumes all of stdin automatically when no positional prompt is given); codex also receives it via stdin, but signals that with a trailing "-" positional argument (a real stdin sentinel for this CLI); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like sandbox_profile / shell_policy / tools_cfg / fallback_models / model_params / skills / delegation_policy are hidden for subagent_3p agents and rejected 400 on PUT if set.
+	// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude receives the soul+instructions prompt via stdin with NO positional prompt argument at all (a bare "-" is read by this CLI as a literal one-character prompt string, not a stdin sentinel, so none is appended — claude -p consumes all of stdin automatically when no positional prompt is given); codex also receives it via stdin, but signals that with a trailing "-" positional argument (a real stdin sentinel for this CLI); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like shell_policy / tools_cfg / fallback_models / model_params / skills / delegation_policy are hidden for subagent_3p agents and rejected 400 on PUT if set.
 	// "cli" (required for subagent_3p agents when kind="external-cli") is locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
 	// "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
 	// The "kind" field is derived server-side from the agent's type (Main -> native, Subagent -> native, subagent_3p -> external-cli). It is exposed in responses but is NOT a writable field on create/update — clients cannot choose kind directly. Server-side derive at the handler boundary per the agent-form spec.
@@ -5058,9 +4899,6 @@ type AgentUpdateRequest struct {
 		UseGlobalDefaults *bool `json:"use_global_defaults,omitempty"`
 	} `json:"rate_limits,omitempty"`
 
-	// SandboxProfile New sandbox profile. Editable on ALL agents, including locked core agents (O13). Per-agent "off" is retired — "no sandbox" is reachable only via the global god-mode switch (POST /api/v1/gateway/god-mode). Rejected 400 on subagent_3p agents (CLI manages its own isolation).
-	SandboxProfile *AgentUpdateRequestSandboxProfile `json:"sandbox_profile,omitempty"`
-
 	// ShellPolicy Per-agent shell command deny-pattern configuration. Rejected 400 on subagent_3p agents.
 	ShellPolicy *struct {
 		// CustomDenyPatterns Must each be valid Go regexp patterns (400 on invalid regexp).
@@ -5122,9 +4960,6 @@ type AgentUpdateRequestDelegationPolicyToKind string
 
 // AgentUpdateRequestExecutorKind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
 type AgentUpdateRequestExecutorKind string
-
-// AgentUpdateRequestSandboxProfile New sandbox profile. Editable on ALL agents, including locked core agents (O13). Per-agent "off" is retired — "no sandbox" is reachable only via the global god-mode switch (POST /api/v1/gateway/god-mode). Rejected 400 on subagent_3p agents (CLI manages its own isolation).
-type AgentUpdateRequestSandboxProfile string
 
 // AgentUpdateRequestSteeringMode New steering mode. Allowed on all agents (Main only — server forces "one-at-a-time" for workers).
 type AgentUpdateRequestSteeringMode string
@@ -5840,7 +5675,7 @@ type ExecutorCommandPreviewResponsePromptDelivery string
 
 // ExecutorConfig Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
 // "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
-// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude receives the soul+instructions prompt via stdin with NO positional prompt argument at all (a bare "-" is read by this CLI as a literal one-character prompt string, not a stdin sentinel, so none is appended — claude -p consumes all of stdin automatically when no positional prompt is given); codex also receives it via stdin, but signals that with a trailing "-" positional argument (a real stdin sentinel for this CLI); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like sandbox_profile / shell_policy / tools_cfg / fallback_models / model_params / skills / delegation_policy are hidden for subagent_3p agents and rejected 400 on PUT if set.
+// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude receives the soul+instructions prompt via stdin with NO positional prompt argument at all (a bare "-" is read by this CLI as a literal one-character prompt string, not a stdin sentinel, so none is appended — claude -p consumes all of stdin automatically when no positional prompt is given); codex also receives it via stdin, but signals that with a trailing "-" positional argument (a real stdin sentinel for this CLI); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like shell_policy / tools_cfg / fallback_models / model_params / skills / delegation_policy are hidden for subagent_3p agents and rejected 400 on PUT if set.
 // "cli" (required for subagent_3p agents when kind="external-cli") is locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
 // "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
 // The "kind" field is derived server-side from the agent's type (Main -> native, Subagent -> native, subagent_3p -> external-cli). It is exposed in responses but is NOT a writable field on create/update — clients cannot choose kind directly. Server-side derive at the handler boundary per the agent-form spec.
@@ -7103,9 +6938,6 @@ type SandboxConfig struct {
 	// AppliedMode The mode the gateway is currently enforcing. Differs from `mode` when the operator saved a change but has not restarted yet.
 	AppliedMode *string `json:"applied_mode,omitempty"`
 
-	// DefaultProfile Global fallback sandbox profile applied to new custom agents that do not pick their own profile. Empty string means use hardcoded default.
-	DefaultProfile *SandboxConfigDefaultProfile `json:"default_profile,omitempty"`
-
 	// GodMode O14 global god-mode ("bypass-permissions") runtime state. When true, every agent's tool policy is floored at "allow", the kernel sandbox is off, network egress is open, and the shell guard is off — regardless of per-agent profiles. Audit logging, the prompt-injection guard, and rate limiting stay on. Toggled via POST /api/v1/gateway/god-mode (password step-up). Always false when god mode is unavailable.
 	GodMode *bool `json:"god_mode,omitempty"`
 
@@ -7115,7 +6947,7 @@ type SandboxConfig struct {
 	// Mode Configured sandbox enforcement mode.
 	Mode *SandboxConfigMode `json:"mode,omitempty"`
 
-	// RequiresRestart Present in PUT responses. True when the change requires a gateway restart to take effect (mode, allowed_paths, default_profile).
+	// RequiresRestart Present in PUT responses. True when the change requires a gateway restart to take effect (mode, allowed_paths).
 	RequiresRestart *bool `json:"requires_restart,omitempty"`
 
 	// Saved Present in PUT responses. Always true on success.
@@ -7137,22 +6969,16 @@ type SandboxConfig struct {
 	SsrfEnabled *bool `json:"ssrf_enabled,omitempty"`
 }
 
-// SandboxConfigDefaultProfile Global fallback sandbox profile applied to new custom agents that do not pick their own profile. Empty string means use hardcoded default.
-type SandboxConfigDefaultProfile string
-
 // SandboxConfigMode Configured sandbox enforcement mode.
 type SandboxConfigMode string
 
-// SandboxConfigUpdate Partial-update body for PUT /security/sandbox-config. All fields are optional — only fields present in the request are updated. At least one field must be supplied (the server returns 400 otherwise). Flat fields take precedence over nested equivalents when both are present in the same request body. mode, allowed_paths, and default_profile are restart-gated (the response includes requires_restart=true when any of these change). ssrf.allow_internal and shell_deny_patterns are hot-reloaded.
+// SandboxConfigUpdate Partial-update body for PUT /security/sandbox-config. All fields are optional — only fields present in the request are updated. At least one field must be supplied (the server returns 400 otherwise). Flat fields take precedence over nested equivalents when both are present in the same request body. mode and allowed_paths are restart-gated (the response includes requires_restart=true when either changes). ssrf.allow_internal and shell_deny_patterns are hot-reloaded.
 type SandboxConfigUpdate struct {
 	// AllowNetworkOutbound Allow agent tool calls to make outbound network connections.
 	AllowNetworkOutbound *bool `json:"allow_network_outbound,omitempty"`
 
 	// AllowedPaths List of host filesystem paths the agent is allowed to read/write. Restart-gated. Must be absolute paths; empty list clears all exceptions.
 	AllowedPaths *[]string `json:"allowed_paths,omitempty"`
-
-	// DefaultProfile Default sandbox profile applied to new custom agents that do not pick their own profile. Restart-gated. Empty string means "inherit global default".
-	DefaultProfile *SandboxConfigUpdateDefaultProfile `json:"default_profile,omitempty"`
 
 	// Mode Kernel sandbox enforcement mode. "off" = no kernel enforcement (god-mode). "permissive" = log violations but allow. "enforce" = block violations. Restart-gated.
 	Mode *SandboxConfigUpdateMode `json:"mode,omitempty"`
@@ -7172,9 +6998,6 @@ type SandboxConfigUpdate struct {
 	// SsrfEnabled Enable SSRF (server-side request forgery) protection for HTTP tool calls.
 	SsrfEnabled *bool `json:"ssrf_enabled,omitempty"`
 }
-
-// SandboxConfigUpdateDefaultProfile Default sandbox profile applied to new custom agents that do not pick their own profile. Restart-gated. Empty string means "inherit global default".
-type SandboxConfigUpdateDefaultProfile string
 
 // SandboxConfigUpdateMode Kernel sandbox enforcement mode. "off" = no kernel enforcement (god-mode). "permissive" = log violations but allow. "enforce" = block violations. Restart-gated.
 type SandboxConfigUpdateMode string

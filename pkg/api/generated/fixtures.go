@@ -719,7 +719,6 @@ func FixtureAgent_Populated() Agent {
 	color := "#D4AF37"
 	icon := "Robot"
 	model := "claude-sonnet-4-6"
-	sandboxProfile := AgentSandboxProfile("workspace")
 	warning := strPtr("Config reload failed after update")
 	return Agent{
 		Id:                "jim",
@@ -734,7 +733,6 @@ func FixtureAgent_Populated() Agent {
 		Color:             &color,
 		Icon:              &icon,
 		Model:             &model,
-		SandboxProfile:    &sandboxProfile,
 		Warning:           warning,
 	}
 }
@@ -2245,7 +2243,7 @@ func FixturePerformanceSettings_ZeroValue() PerformanceSettings {
 //   - Subagent3p: ONLY type/name/description/model/provider/color/icon/
 //     rate_limits/soul/delegation_policy/executor/timeout_seconds — executor
 //     is REQUIRED. All Main/Subagent-only fields (tools_cfg, skills,
-//     fallback_models, model_params, sandbox_profile, shell_policy, voice,
+//     fallback_models, model_params, shell_policy, voice,
 //     steering_mode, max_tool_iterations) do not exist as properties on this
 //     variant at all.
 
@@ -2256,7 +2254,6 @@ func FixtureAgentCreateRequestMain_Populated() AgentCreateRequestMain {
 	enabled := true
 	defaultPolicy := AgentCreateRequestMainToolsCfgBuiltinDefaultPolicyAllow
 	deny := AgentCreateRequestMainToolsCfgBuiltinPoliciesDeny
-	sandbox := AgentCreateRequestMainSandboxProfileWorkspace
 	steering := AgentCreateRequestMainSteeringModeOneAtATime
 	mode := AgentCreateRequestMainDelegationPolicyModesAwait
 	toKind := AgentCreateRequestMainDelegationPolicyToKindLocal
@@ -2304,7 +2301,6 @@ func FixtureAgentCreateRequestMain_Populated() AgentCreateRequestMain {
 			MaxLlmCallsPerHour:    &maxCalls,
 			MaxToolCallsPerMinute: &maxTools,
 		},
-		SandboxProfile: &sandbox,
 		ShellPolicy: &struct {
 			CustomDenyPatterns *[]string `json:"custom_deny_patterns,omitempty"`
 			EnableDenyPatterns *bool     `json:"enable_deny_patterns,omitempty"`
@@ -2389,7 +2385,6 @@ func FixtureAgentCreateRequestSubagent_Populated() AgentCreateRequestSubagent {
 	description := "Native delegation-only research worker"
 	defaultPolicy := AgentCreateRequestSubagentToolsCfgBuiltinDefaultPolicyAllow
 	deny := AgentCreateRequestSubagentToolsCfgBuiltinPoliciesDeny
-	sandbox := AgentCreateRequestSubagentSandboxProfileWorkspace
 	mode := AgentCreateRequestSubagentDelegationPolicyModesTask
 	toKind := AgentCreateRequestSubagentDelegationPolicyToKindLocal
 	maxToolIterations := 40
@@ -2407,7 +2402,6 @@ func FixtureAgentCreateRequestSubagent_Populated() AgentCreateRequestSubagent {
 		FallbackModels: &[]FallbackModel{
 			{Model: "claude-sonnet-4-6", Provider: strPtr("anthropic")},
 		},
-		SandboxProfile: &sandbox,
 		DelegationPolicy: &struct {
 			AcceptFrom *[]struct {
 				Id   string                                                   `json:"id"`
@@ -2595,7 +2589,6 @@ func FixtureAgentUpdateRequest_Populated() AgentUpdateRequest {
 	topP := 0.9
 	defaultPolicy := AgentUpdateRequestToolsCfgBuiltinDefaultPolicyAsk
 	allow := AgentUpdateRequestToolsCfgBuiltinPoliciesAllow
-	sandbox := AgentUpdateRequestSandboxProfileHost
 	steering := QueueAndProcess
 	mode := AgentUpdateRequestDelegationPolicyModesBackground
 	toKind := AgentUpdateRequestDelegationPolicyToKindLocal
@@ -2606,17 +2599,16 @@ func FixtureAgentUpdateRequest_Populated() AgentUpdateRequest {
 
 	vDefault := true
 	return AgentUpdateRequest{
-		Name:           &name,
-		Description:    &description,
-		Model:          &model,
-		Color:          &color,
-		Icon:           &icon,
-		Default:        &vDefault,
-		Soul:           &soul,
-		Heartbeat:      &heartbeat,
-		Voice:          &voice,
-		SandboxProfile: &sandbox,
-		SteeringMode:   &steering,
+		Name:         &name,
+		Description:  &description,
+		Model:        &model,
+		Color:        &color,
+		Icon:         &icon,
+		Default:      &vDefault,
+		Soul:         &soul,
+		Heartbeat:    &heartbeat,
+		Voice:        &voice,
+		SteeringMode: &steering,
 		ModelParams: &struct {
 			MaxTokens   *int     `json:"max_tokens,omitempty"`
 			Temperature *float64 `json:"temperature,omitempty"`

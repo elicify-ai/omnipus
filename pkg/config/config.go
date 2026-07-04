@@ -799,10 +799,6 @@ type AgentConfig struct {
 	// Tools, when non-nil, overrides scope-based tool visibility for this agent.
 	// Nil means all tools allowed by the agent's type are available.
 	Tools *AgentToolsCfg `json:"tools,omitempty"`
-	// SandboxProfile selects the kernel sandbox profile for this agent.
-	// Empty means "use the global default" (OmnipusSandboxConfig.DefaultProfile,
-	// which itself falls back to SandboxProfileWorkspace when also empty).
-	SandboxProfile SandboxProfile `json:"sandbox_profile,omitempty"`
 	// ShellPolicy configures per-agent shell command deny patterns.
 	// When non-nil, its settings are merged with the global ShellDenyPatterns
 	// at enforcement time.
@@ -3447,11 +3443,6 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	// uses the explicit provider. Idempotent; runs after migrateProviderFields so
 	// the provider protocol set is consistent across model_list and agents.
 	migrateAgentPrimaryProvider(cfg)
-	// O13: per-agent sandbox_profile=off is retired. Migrate any persisted
-	// "off" to "host" so legacy configs load cleanly — "no sandbox" is now
-	// reachable only via the global god-mode switch (sandbox.god_mode).
-	// Idempotent; runs before any per-agent profile is consumed.
-	migrateAgentSandboxOff(cfg)
 	// Post-refactor: tools.<name>.enabled is deprecated. If the loaded config
 	// carries explicit false values, translate them idempotently into
 	// security.tool_policies deny entries so operator intent is enforced
@@ -3623,26 +3614,6 @@ func migrateAgentPrimaryProvider(cfg *Config) {
 		if found && rest != "" && knownProviderProtocols[protocol] {
 			mc.Provider = protocol
 			mc.Primary = rest
-		}
-	}
-}
-
-// migrateAgentSandboxOff migrates any per-agent SandboxProfile set to the
-// retired "off" value to "host" (O13). Per-agent "off" is dropped from the
-// wire contract — "no sandbox" is reachable ONLY via the global god-mode
-// switch (sandbox.god_mode). "host" is the most-permissive per-agent profile
-// that remains (full host filesystem + network), so it is the closest
-// non-breaking replacement for a config that previously requested "off".
-//
-// Idempotent: a no-op once no agent carries "off". Conservative: only the
-// exact "off" value is rewritten; every other profile is left untouched.
-func migrateAgentSandboxOff(cfg *Config) {
-	for i := range cfg.Agents.List {
-		if cfg.Agents.List[i].SandboxProfile == SandboxProfileOff {
-			logger.WarnF("agent sandbox_profile=off is retired; migrating to host", map[string]any{
-				"agent_id": cfg.Agents.List[i].ID,
-			})
-			cfg.Agents.List[i].SandboxProfile = SandboxProfileHost
 		}
 	}
 }

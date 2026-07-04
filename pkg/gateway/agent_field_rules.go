@@ -19,7 +19,7 @@ import (
 // AgentCreateRequestSubagent / AgentCreateRequestSubagent3p
 // (contracts/components/schemas/AgentCreateRequest*.yaml, each
 // additionalProperties: false). AgentCreateRequestSubagent3p structurally has
-// no tools_cfg / skills / fallback_models / model_params / sandbox_profile /
+// no tools_cfg / skills / fallback_models / model_params /
 // shell_policy / max_tool_iterations property at all, and createAgent's
 // per-variant decode (decodeAgentCreateVariant) always runs a
 // json.Decoder with DisallowUnknownFields — so a caller who sends one of
@@ -51,7 +51,6 @@ var subagent3pForbiddenUpdateFields = []string{
 	"skills",
 	"fallback_models",
 	"model_params",
-	"sandbox_profile",
 	"shell_policy",
 	"max_tool_iterations",
 }
@@ -118,9 +117,6 @@ func firstForbiddenSubagent3pField(req *gen.AgentUpdateRequest) (string, bool) {
 	}
 	if req.ModelParams != nil {
 		return "model_params", true
-	}
-	if req.SandboxProfile != nil {
-		return "sandbox_profile", true
 	}
 	if req.ShellPolicy != nil {
 		return "shell_policy", true

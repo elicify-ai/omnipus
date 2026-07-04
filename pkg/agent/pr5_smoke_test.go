@@ -144,7 +144,7 @@ func TestPR5_JimSeedPolicyAppliedInLoop(t *testing.T) {
 		},
 	}
 
-	// Apply core agent seeds (adds Jim with workspace+net profile and correct policies).
+	// Apply core agent seeds (adds Jim with the correct tool policies).
 	coreagent.SeedConfig(cfg)
 
 	msgBus := bus.NewMessageBus()
@@ -170,10 +170,11 @@ func TestPR5_JimSeedPolicyAppliedInLoop(t *testing.T) {
 		t.Fatalf("workspace_shell tool for Jim is not *WorkspaceShellTool; got %T", rawTool)
 	}
 
-	// Verify Jim's sandbox profile was applied to the shell tool.
+	// Verify Jim's workspace_shell tool was constructed with god mode off — this
+	// config has no god-mode switch set, so GodModeActive(cfg) resolves false and
+	// the tool must run through normal hardening (ADR-035-remove-per-agent-sandbox-profile).
 	shellTool := rawTool.(*tools.WorkspaceShellTool)
-	if shellTool.ProfileForTest() != config.SandboxProfileWorkspaceNet {
-		t.Errorf("Jim's workspace_shell profile must be workspace+net, got %q",
-			shellTool.ProfileForTest())
+	if shellTool.GodModeForTest() {
+		t.Errorf("Jim's workspace_shell must not be in god mode when sandbox.god_mode is unset, got GodMode=true")
 	}
 }

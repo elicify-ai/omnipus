@@ -143,10 +143,11 @@ type restAPI struct {
 	// the SPA can surface "registry unavailable" rather than a hard 500.
 	skillRegistry skills.SkillRegistry
 
-	// allowGodMode is set when the gateway was started with --allow-god-mode.
-	// When false, the agent update handler rejects sandbox_profile=off with 403.
-	// Mirrors the same field on AgentLoop for runtime tool coercion.
-	// Latch (2) — REST enforcement.
+	// allowGodMode is set when the gateway was started with --allow-god-mode
+	// (or the config-persisted sandbox.god_mode_allowed grant). Combined with
+	// sandbox.GodModeAvailable to compute god-mode AVAILABILITY for the
+	// Settings UI (see (*restAPI).godModeAvailable in rest_god_mode.go).
+	// Mirrors the same field on AgentLoop. Latch (2) — REST enforcement.
 	allowGodMode bool
 
 	// cronService backs the /api/v1/schedules CRUD + run-now + pause endpoints
@@ -1249,7 +1250,7 @@ func (a *restAPI) testAgentRunner(w http.ResponseWriter, r *http.Request, agentI
 	if executor == nil || executor.EffectiveKind() != config.ExecutorKindExternalCLI {
 		jsonOK(w, gen.RunnerTestResponse{
 			Ok:      false,
-			Reason:  gen.RunnerTestResponseReasonNotExternalCli,
+			Reason:  gen.NotExternalCli,
 			Message: "agent executor is not external-cli; no external runner to test",
 		})
 		return
@@ -1258,7 +1259,7 @@ func (a *restAPI) testAgentRunner(w http.ResponseWriter, r *http.Request, agentI
 	if cli == "" {
 		jsonOK(w, gen.RunnerTestResponse{
 			Ok:      false,
-			Reason:  gen.RunnerTestResponseReasonUnknownCli,
+			Reason:  gen.UnknownCli,
 			Message: "agent executor.cli is empty; set claude-code, codex, or opencode",
 			Cli:     strPtr(""),
 		})
@@ -1518,15 +1519,11 @@ func applyAgentOverrides(ag *gen.Agent, ac *config.AgentConfig) {
 	if ac.MaxToolIterations > 0 {
 		ag.MaxToolIterations = ac.MaxToolIterations
 	}
-	// sandbox_profile / shell_policy: echo the persisted per-agent overrides.
-	// Previously these were persisted (updateAgent) or should have been
-	// persisted (createAgent, fixed alongside this) but never surfaced on any
-	// response path (list/get/create/update all built gen.Agent without ever
-	// touching these two fields) — a GET could never confirm what was saved.
-	if ac.SandboxProfile != "" {
-		sp := gen.AgentSandboxProfile(ac.SandboxProfile)
-		ag.SandboxProfile = &sp
-	}
+	// shell_policy: echo the persisted per-agent override. Previously this was
+	// persisted (updateAgent) or should have been persisted (createAgent, fixed
+	// alongside this) but never surfaced on any response path (list/get/create/
+	// update all built gen.Agent without ever touching this field) — a GET
+	// could never confirm what was saved.
 	if ac.ShellPolicy != nil {
 		// The literal below mirrors the inlined anonymous-struct shape
 		// oapi-codegen generated for gen.Agent.ShellPolicy — field
@@ -1769,18 +1766,6 @@ func decodeAgentCreateVariant(w http.ResponseWriter, raw []byte, wireType, varia
 	return true
 }
 
-// wireStringPtr converts an optional generated string-based enum pointer
-// (e.g. *gen.AgentCreateRequestMainSandboxProfile) into a *string, preserving
-// nil-vs-set: a nil input returns nil (field absent); a non-nil input returns
-// a pointer to its string value (field present, whatever the value).
-func wireStringPtr[T ~string](p *T) *string {
-	if p == nil {
-		return nil
-	}
-	s := string(*p)
-	return &s
-}
-
 // wireStringMap converts an optional generated map pointer whose values are a
 // string-based enum (e.g. *map[string]AgentCreateRequestMainToolsCfgBuiltinPolicies)
 // into a plain map[string]string, preserving nil-vs-empty: a nil input
@@ -1881,7 +1866,7 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	// and copies out only the fields that variant actually carries.
 	// AgentCreateRequestSubagent has no Executor field at all;
 	// AgentCreateRequestSubagent3p has no ToolsCfg/Skills/FallbackModels/
-	// SandboxProfile/ShellPolicy/Voice/SteeringMode/MaxToolIterations
+	// ShellPolicy/Voice/SteeringMode/MaxToolIterations
 	// fields — a subagent_3p create supplying any of those is rejected at
 	// decode time, both because the Go type has no matching field and
 	// because the strict decoder refuses to silently drop it.
@@ -1895,7 +1880,6 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		soul           string
 		skills         *[]string
 		fallbackModels *[]gen.FallbackModel
-		sandboxProfile *string
 		shellPolicyIn  *agentCreateShellPolicyInput
 		toolsCfgIn     *agentCreateToolsCfgInput
 		delegationIn   *delegationPolicyInput
@@ -1917,7 +1901,6 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		soul = vreq.Soul
 		skills = vreq.Skills
 		fallbackModels = vreq.FallbackModels
-		sandboxProfile = wireStringPtr(vreq.SandboxProfile)
 		if vreq.ShellPolicy != nil {
 			shellPolicyIn = &agentCreateShellPolicyInput{EnableDenyPatterns: vreq.ShellPolicy.EnableDenyPatterns}
 			if vreq.ShellPolicy.CustomDenyPatterns != nil {
@@ -1958,7 +1941,6 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		soul = vreq.Soul
 		skills = vreq.Skills
 		fallbackModels = vreq.FallbackModels
-		sandboxProfile = wireStringPtr(vreq.SandboxProfile)
 		if vreq.ShellPolicy != nil {
 			shellPolicyIn = &agentCreateShellPolicyInput{EnableDenyPatterns: vreq.ShellPolicy.EnableDenyPatterns}
 			if vreq.ShellPolicy.CustomDenyPatterns != nil {
@@ -2011,18 +1993,6 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		jsonErr(w, http.StatusUnprocessableEntity, "name is required")
-		return
-	}
-	// O13: per-agent sandbox_profile=off is retired. The generated validator
-	// already rejects "off" (removed from the enum); this is defense-in-depth
-	// for the non-validated path (ValidateInbound disabled). subagent_3p has no
-	// sandbox_profile property at all (sandboxProfile stays nil for that variant).
-	if sandboxProfile != nil && config.SandboxProfile(*sandboxProfile) == config.SandboxProfileOff {
-		jsonErr(
-			w,
-			http.StatusBadRequest,
-			`sandbox_profile=off is retired — use the global god-mode switch (POST /api/v1/gateway/god-mode); per-agent profiles are "workspace", "workspace+net", or "host"`,
-		)
 		return
 	}
 	// subagent_3p executor.cli_path: required (spec §9.2), whitespace-only
@@ -2120,17 +2090,11 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 			ac.Model.Provider = strings.TrimSpace(*provider)
 		}
 	}
-	// sandbox_profile / shell_policy: mapped onto AgentConfig so they are
-	// actually persisted (previously read only for the sandbox_profile=off
-	// rejection check above, then write-dropped — the created agent always
-	// fell back to the global default regardless of what the caller sent).
-	// subagent_3p has neither property on the wire (sandboxProfile and
-	// shellPolicyIn stay nil for that variant — the CLI manages its own
-	// isolation), so both stay unset there, matching updateAgent's rejection
-	// of these fields on a subagent_3p PUT.
-	if sandboxProfile != nil && *sandboxProfile != "" {
-		ac.SandboxProfile = config.SandboxProfile(*sandboxProfile)
-	}
+	// shell_policy: mapped onto AgentConfig so it is actually persisted.
+	// subagent_3p has no shell_policy property on the wire (shellPolicyIn
+	// stays nil for that variant — the CLI manages its own isolation), so it
+	// stays unset there, matching updateAgent's rejection of this field on a
+	// subagent_3p PUT.
 	if shellPolicyIn != nil {
 		sp := &config.AgentShellPolicy{}
 		if shellPolicyIn.EnableDenyPatterns != nil {
@@ -2300,9 +2264,6 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		}
 		if ac.DelegationPolicy != nil {
 			newAgent["delegation_policy"] = delegationPolicyToMap(ac.DelegationPolicy)
-		}
-		if ac.SandboxProfile != "" {
-			newAgent["sandbox_profile"] = string(ac.SandboxProfile)
 		}
 		if ac.ShellPolicy != nil {
 			shellPolicyMap := map[string]any{}
@@ -2593,6 +2554,30 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 		jsonErr(w, http.StatusNotFound, fmt.Sprintf("agent %q not found", id))
 		return
 	}
+
+	// ADR-035: sandbox_profile is retired from the wire entirely.
+	// decodeAgentCreateVariant already rejects it on the create path via
+	// unconditional DisallowUnknownFields, but decodeAndValidate's fast path
+	// below is non-strict by default (validate_inbound defaults false) and
+	// gen.AgentUpdateRequest no longer has a SandboxProfile field at all —
+	// without this explicit raw-body sniff a client still sending
+	// {"sandbox_profile":...} would have the field silently dropped by Go's
+	// default JSON decode, and the PUT would report 200 with no change
+	// applied instead of the loud 400 this codebase's own create-path
+	// convention expects. Read+restore r.Body so the normal decode below is
+	// unaffected.
+	rawBody, readErr := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if readErr != nil {
+		jsonErr(w, http.StatusBadRequest, "could not read request body")
+		return
+	}
+	r.Body = io.NopCloser(bytes.NewReader(rawBody))
+	if bytes.Contains(rawBody, []byte(`"sandbox_profile"`)) {
+		jsonErr(w, http.StatusBadRequest,
+			`sandbox_profile is retired — use the global god-mode switch (POST /api/v1/gateway/god-mode)`)
+		return
+	}
+
 	var req gen.AgentUpdateRequest
 	validateEnabled := cfg.Gateway.ValidateInbound
 	if !decodeAndValidate(w, r, "AgentUpdateRequest", &req, validateEnabled) {
@@ -2600,18 +2585,6 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	}
 	// Timestamp applied to the persisted agent on every successful save.
 	now := time.Now().UTC()
-	// O13: per-agent sandbox_profile=off is retired. "No sandbox" is reachable
-	// only via the global god-mode switch (POST /api/v1/gateway/god-mode). The
-	// generated validator already rejects "off" (removed from the enum); this is
-	// defense-in-depth for any non-validated path (ValidateInbound disabled).
-	if req.SandboxProfile != nil && config.SandboxProfile(*req.SandboxProfile) == config.SandboxProfileOff {
-		jsonErr(
-			w,
-			http.StatusBadRequest,
-			`sandbox_profile=off is retired — use the global god-mode switch (POST /api/v1/gateway/god-mode); per-agent profiles are "workspace", "workspace+net", or "host"`,
-		)
-		return
-	}
 	// Validate any custom deny patterns in shell_policy — each must be a valid Go regexp.
 	if req.ShellPolicy != nil && req.ShellPolicy.CustomDenyPatterns != nil {
 		for _, pat := range *req.ShellPolicy.CustomDenyPatterns {
@@ -2919,13 +2892,6 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 				// tool_feedback was removed from the wire in W1 (it's now per-channel
 				// runtime behavior driven by pkg/agent/loop.go: webchat skips). The
 				// global config-level agents.defaults.tool_feedback stays.
-				if req.SandboxProfile != nil {
-					if *req.SandboxProfile == "" {
-						delete(agentMap, "sandbox_profile")
-					} else {
-						agentMap["sandbox_profile"] = string(*req.SandboxProfile)
-					}
-				}
 				if req.ShellPolicy != nil {
 					// Load existing shell_policy from the persisted map (if any) so
 					// that a partial PATCH (e.g. only custom_deny_patterns) does not

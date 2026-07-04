@@ -1,14 +1,34 @@
+// Omnipus - Ultra-lightweight personal AI agent
+// License: MIT
+// Copyright (c) 2026 Omnipus contributors
+
 package agent
 
-// White-box tests for sandbox_profile=off coercion inside wireTier13DepsLocked.
+// White-box tests for the O14 global god-mode wiring inside
+// wireTier13DepsLocked (pkg/agent/loop.go). Per
+// docs/internal/architecture/ADR-035-remove-per-agent-sandbox-profile.md, the
+// per-agent kernel-profile indirection that used to sit in front of this
+// (workspace / workspace+net / host / off, with a runtime "off coerced to
+// workspace when god mode is unavailable" fallback) has been removed
+// entirely. workspace_shell and workspace_shell_bg now run under a single
+// fixed sandbox boundary (see sandbox.BuildLimits) for every agent, with
+// exactly one escape hatch: the global god-mode runtime switch
+// (agent.GodModeActive(cfg)), which is threaded straight into each tool's
+// GodMode field.
 //
-// Verifies that when GodModeAvailable=false OR allowGodMode=false, an agent
-// configured with sandbox_profile=off has its profile silently coerced to
-// workspace before the workspace_shell / workspace_shell_bg tools are registered.
+// This file is the safety-critical coverage for that wiring — it must keep
+// proving both invariants regardless of how the test names/shapes evolve:
+//  1. When GodModeActive(cfg) is true, workspace_shell / workspace_shell_bg
+//     are constructed with GodMode=true (Execute skips ApplyChildHardening
+//     entirely — see the dedicated behavioral tests in
+//     pkg/tools/workspace_shell_test.go / workspace_shell_bg_test.go).
+//  2. When it is false, they are constructed with GodMode=false (Execute
+//     always applies the fixed Limits + hardening).
 //
-// Uses ProfileForTest() test accessors on WorkspaceShellTool / WorkspaceShellBgTool.
+// Uses GodModeForTest() test accessors on WorkspaceShellTool / WorkspaceShellBgTool.
 //
-// Traces to: quizzical-marinating-frog.md PR 4 acceptance criteria — coercion.
+// Traces to: quizzical-marinating-frog.md PR 4 acceptance criteria — coercion
+// (superseded by ADR-035's direct god-mode wiring).
 
 import (
 	"runtime"
@@ -20,10 +40,11 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/tools"
 )
 
-// buildLoopWithOffProfile constructs a minimal AgentLoop whose config contains
-// a single agent ("shell-agent") with sandbox_profile=off and workspace_shell_enabled=true.
-// The caller sets allowGodMode before calling WireTier13Deps.
-func buildLoopWithOffProfile(t *testing.T) (*AgentLoop, string) {
+// buildLoopWithShellAgent constructs a minimal AgentLoop whose config contains
+// a single agent ("shell-agent") with workspace_shell_enabled=true. The
+// caller sets al.SetAllowGodMode and cfg.Sandbox.GodMode before calling
+// WireTier13Deps to control GodModeActive's resolution.
+func buildLoopWithShellAgent(t *testing.T) (*AgentLoop, *config.Config) {
 	t.Helper()
 	tmpDir := t.TempDir()
 
@@ -35,11 +56,7 @@ func buildLoopWithOffProfile(t *testing.T) (*AgentLoop, string) {
 				MaxTokens: 4096,
 			},
 			List: []config.AgentConfig{
-				{
-					ID:             "shell-agent",
-					Name:           "Shell Agent",
-					SandboxProfile: config.SandboxProfileOff,
-				},
+				{ID: "shell-agent", Name: "Shell Agent"},
 			},
 		},
 		Sandbox: config.OmnipusSandboxConfig{
@@ -49,235 +66,13 @@ func buildLoopWithOffProfile(t *testing.T) (*AgentLoop, string) {
 
 	msgBus := bus.NewMessageBus()
 	al := mustNewAgentLoop(t, cfg, msgBus, &mockProvider{})
-	return al, tmpDir
+	return al, cfg
 }
 
-// TestGodModeCoercion_AllowGodModeFalse_CoercesToWorkspace verifies that
-// when allowGodMode=false and sandbox.GodModeAvailable=true (default build),
-// a sandbox_profile=off agent has its profile coerced to workspace before
-// the workspace_shell tool is registered.
-func TestGodModeCoercion_AllowGodModeFalse_CoercesToWorkspace(t *testing.T) {
-	if !sandbox.GodModeAvailable {
-		t.Skip("skipping: test targets the GodModeAvailable=true (default) build path")
-	}
-
-	al, _ := buildLoopWithOffProfile(t)
-	al.SetAllowGodMode(false)
-
-	al.WireTier13Deps(Tier13Deps{}) // no registry/proxy needed for this test path
-
-	reg := al.GetRegistry()
-	if reg == nil {
-		t.Fatal("GetRegistry returned nil")
-	}
-	agent, ok := reg.GetAgent("shell-agent")
-	if !ok || agent == nil {
-		t.Fatal("shell-agent not found in registry")
-	}
-
-	rawTool, found := agent.Tools.Get("workspace_shell")
-	if !found {
-		t.Fatal("workspace_shell tool not registered")
-	}
-	shellTool, ok := rawTool.(*tools.WorkspaceShellTool)
-	if !ok {
-		t.Fatalf("workspace_shell is not *WorkspaceShellTool; got %T", rawTool)
-	}
-
-	if shellTool.ProfileForTest() == config.SandboxProfileOff {
-		t.Errorf("expected sandbox_profile=off to be coerced to workspace, but got off")
-	}
-	if shellTool.ProfileForTest() != config.SandboxProfileWorkspace {
-		t.Errorf("expected coerced profile=workspace, got %q", shellTool.ProfileForTest())
-	}
-}
-
-// TestGodModeCoercion_AllowGodModeTrue_PreservesOff verifies that when both
-// sandbox.GodModeAvailable=true AND allowGodMode=true, a sandbox_profile=off
-// agent's profile is preserved as off.
-func TestGodModeCoercion_AllowGodModeTrue_PreservesOff(t *testing.T) {
-	if !sandbox.GodModeAvailable {
-		t.Skip("skipping: test requires GodModeAvailable=true (default build)")
-	}
-
-	al, _ := buildLoopWithOffProfile(t)
-	al.SetAllowGodMode(true)
-
-	al.WireTier13Deps(Tier13Deps{})
-
-	reg := al.GetRegistry()
-	if reg == nil {
-		t.Fatal("GetRegistry returned nil")
-	}
-	agent, ok := reg.GetAgent("shell-agent")
-	if !ok || agent == nil {
-		t.Fatal("shell-agent not found in registry")
-	}
-
-	rawTool, found := agent.Tools.Get("workspace_shell")
-	if !found {
-		t.Fatal("workspace_shell tool not registered")
-	}
-	shellTool, ok := rawTool.(*tools.WorkspaceShellTool)
-	if !ok {
-		t.Fatalf("workspace_shell is not *WorkspaceShellTool; got %T", rawTool)
-	}
-
-	if shellTool.ProfileForTest() != config.SandboxProfileOff {
-		t.Errorf("expected profile=off to be preserved, got %q", shellTool.ProfileForTest())
-	}
-}
-
-// TestGodModeCoercion_ShellBg_AllowGodModeFalse_CoercesToWorkspace verifies
-// that workspace_shell_bg has the same profile coercion as workspace_shell when
-// allowGodMode=false and sandbox_profile=off.
-//
-// BDD: Given allowGodMode=false and sandbox_profile=off,
-//
-//	When WireTier13Deps is called with a DevServerRegistry,
-//	Then workspace_shell_bg.ProfileForTest() == workspace (coerced, not off).
-//
-// Traces to: quizzical-marinating-frog.md pr-test-analyzer Test-7.
-func TestGodModeCoercion_ShellBg_AllowGodModeFalse_CoercesToWorkspace(t *testing.T) {
-	if !sandbox.GodModeAvailable {
-		t.Skip("skipping: test targets the GodModeAvailable=true (default) build path")
-	}
-	if runtime.GOOS != "linux" {
-		t.Skip("workspace_shell_bg only registered on Linux")
-	}
-
-	al, _ := buildLoopWithOffProfile(t)
-	al.SetAllowGodMode(false)
-
-	devReg := sandbox.NewDevServerRegistry()
-	defer devReg.Close()
-
-	al.WireTier13Deps(Tier13Deps{DevServerRegistry: devReg})
-
-	reg := al.GetRegistry()
-	if reg == nil {
-		t.Fatal("GetRegistry returned nil")
-	}
-	agent, ok := reg.GetAgent("shell-agent")
-	if !ok || agent == nil {
-		t.Fatal("shell-agent not found in registry")
-	}
-
-	rawTool, found := agent.Tools.Get("workspace_shell_bg")
-	if !found {
-		t.Fatal("workspace_shell_bg tool not registered")
-	}
-	bgTool, ok := rawTool.(*tools.WorkspaceShellBgTool)
-	if !ok {
-		t.Fatalf("workspace_shell_bg is not *WorkspaceShellBgTool; got %T", rawTool)
-	}
-
-	if bgTool.ProfileForTest() == config.SandboxProfileOff {
-		t.Errorf("expected sandbox_profile=off to be coerced to workspace for shell_bg, but got off")
-	}
-	if bgTool.ProfileForTest() != config.SandboxProfileWorkspace {
-		t.Errorf("expected coerced profile=workspace for shell_bg, got %q", bgTool.ProfileForTest())
-	}
-}
-
-// TestGodModeCoercion_ShellBg_AllowGodModeTrue_PreservesOff verifies that
-// workspace_shell_bg's profile is preserved as off when both
-// GodModeAvailable=true AND allowGodMode=true.
-//
-// Traces to: quizzical-marinating-frog.md pr-test-analyzer Test-7.
-func TestGodModeCoercion_ShellBg_AllowGodModeTrue_PreservesOff(t *testing.T) {
-	if !sandbox.GodModeAvailable {
-		t.Skip("skipping: test requires GodModeAvailable=true (default build)")
-	}
-	if runtime.GOOS != "linux" {
-		t.Skip("workspace_shell_bg only registered on Linux")
-	}
-
-	al, _ := buildLoopWithOffProfile(t)
-	al.SetAllowGodMode(true)
-
-	devReg := sandbox.NewDevServerRegistry()
-	defer devReg.Close()
-
-	al.WireTier13Deps(Tier13Deps{DevServerRegistry: devReg})
-
-	reg := al.GetRegistry()
-	if reg == nil {
-		t.Fatal("GetRegistry returned nil")
-	}
-	agent, ok := reg.GetAgent("shell-agent")
-	if !ok || agent == nil {
-		t.Fatal("shell-agent not found in registry")
-	}
-
-	rawTool, found := agent.Tools.Get("workspace_shell_bg")
-	if !found {
-		t.Fatal("workspace_shell_bg tool not registered")
-	}
-	bgTool, ok := rawTool.(*tools.WorkspaceShellBgTool)
-	if !ok {
-		t.Fatalf("workspace_shell_bg is not *WorkspaceShellBgTool; got %T", rawTool)
-	}
-
-	if bgTool.ProfileForTest() != config.SandboxProfileOff {
-		t.Errorf("expected profile=off to be preserved for shell_bg, got %q", bgTool.ProfileForTest())
-	}
-}
-
-// TestGodModeCoercion_ProfileWorkspace_NeverCoerced verifies that a
-// sandbox_profile=workspace agent is never affected by the coercion logic.
-func TestGodModeCoercion_ProfileWorkspace_NeverCoerced(t *testing.T) {
-	tmpDir := t.TempDir()
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Workspace: tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
-			},
-			List: []config.AgentConfig{
-				{
-					ID:             "ws-agent",
-					Name:           "WS Agent",
-					SandboxProfile: config.SandboxProfileWorkspace,
-				},
-			},
-		},
-		Sandbox: config.OmnipusSandboxConfig{
-			Experimental: config.ExperimentalConfig{WorkspaceShellEnabled: boolPtr(true)},
-		},
-	}
-
-	msgBus := bus.NewMessageBus()
-	al := mustNewAgentLoop(t, cfg, msgBus, &mockProvider{})
-	al.SetAllowGodMode(false) // irrelevant for non-off profile
-
-	al.WireTier13Deps(Tier13Deps{})
-
-	reg := al.GetRegistry()
-	agent, ok := reg.GetAgent("ws-agent")
-	if !ok || agent == nil {
-		t.Fatal("ws-agent not found in registry")
-	}
-
-	rawTool, found := agent.Tools.Get("workspace_shell")
-	if !found {
-		t.Fatal("workspace_shell tool not registered")
-	}
-	shellTool, ok := rawTool.(*tools.WorkspaceShellTool)
-	if !ok {
-		t.Fatalf("workspace_shell is not *WorkspaceShellTool; got %T", rawTool)
-	}
-
-	if shellTool.ProfileForTest() != config.SandboxProfileWorkspace {
-		t.Errorf("expected profile=workspace to be preserved, got %q", shellTool.ProfileForTest())
-	}
-}
-
-// shellProfileForAgent rewires Tier13 deps and returns the resolved
-// workspace_shell profile for the given agent — the live sandbox profile after
-// the god-mode override is applied at tool-wiring time.
-func shellProfileForAgent(t *testing.T, al *AgentLoop, agentID string) config.SandboxProfile {
+// shellGodModeForAgent rewires Tier13 deps and returns the resolved GodMode
+// flag for the given agent's workspace_shell tool — the live wiring result
+// after agent.GodModeActive is resolved at tool-construction time.
+func shellGodModeForAgent(t *testing.T, al *AgentLoop, agentID string) bool {
 	t.Helper()
 	al.WireTier13Deps(Tier13Deps{})
 	reg := al.GetRegistry()
@@ -296,71 +91,141 @@ func shellProfileForAgent(t *testing.T, al *AgentLoop, agentID string) config.Sa
 	if !ok {
 		t.Fatalf("workspace_shell is not *WorkspaceShellTool; got %T", rawTool)
 	}
-	return shellTool.ProfileForTest()
+	return shellTool.GodModeForTest()
 }
 
-// TestGodMode_GlobalSwitch_ForcesSandboxOff_AndReverts proves the O14 sandbox
-// override: when the global god-mode switch (sandbox.god_mode) is active AND
-// available, an agent whose per-agent profile is "workspace" has its sandbox
-// forced OFF at tool-wiring time, regardless of the per-agent setting. The
-// override is non-destructive: clearing sandbox.god_mode restores "workspace".
-func TestGodMode_GlobalSwitch_ForcesSandboxOff_AndReverts(t *testing.T) {
+// TestGodMode_Inactive_ShellToolGodModeFalse verifies invariant (2): with no
+// god-mode switch configured (the default), GodModeActive(cfg) is false and
+// workspace_shell is wired with GodMode=false.
+func TestGodMode_Inactive_ShellToolGodModeFalse(t *testing.T) {
+	al, _ := buildLoopWithShellAgent(t)
+	al.SetAllowGodMode(false)
+
+	if got := shellGodModeForAgent(t, al, "shell-agent"); got {
+		t.Errorf("expected GodMode=false when sandbox.god_mode is unset, got true")
+	}
+}
+
+// TestGodMode_Active_ShellToolGodModeTrue verifies invariant (1): when the
+// global god-mode switch is on AND available (allowGodMode=true,
+// sandbox.GodModeAvailable=true at build time), GodModeActive(cfg) is true and
+// workspace_shell is wired with GodMode=true.
+func TestGodMode_Active_ShellToolGodModeTrue(t *testing.T) {
+	if !sandbox.GodModeAvailable {
+		t.Skip("skipping: test requires GodModeAvailable=true (default build)")
+	}
+	al, cfg := buildLoopWithShellAgent(t)
+	cfg.Sandbox.GodMode = true
+	al.SetAllowGodMode(true)
+
+	if got := shellGodModeForAgent(t, al, "shell-agent"); !got {
+		t.Errorf("expected GodMode=true when sandbox.god_mode is active and available, got false")
+	}
+}
+
+// TestGodMode_ShellBg_Inactive_GodModeFalse mirrors
+// TestGodMode_Inactive_ShellToolGodModeFalse for workspace_shell_bg.
+func TestGodMode_ShellBg_Inactive_GodModeFalse(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("workspace_shell_bg only registered on Linux")
+	}
+	al, _ := buildLoopWithShellAgent(t)
+	al.SetAllowGodMode(false)
+
+	devReg := sandbox.NewDevServerRegistry()
+	defer devReg.Close()
+	al.WireTier13Deps(Tier13Deps{DevServerRegistry: devReg})
+
+	reg := al.GetRegistry()
+	ag, ok := reg.GetAgent("shell-agent")
+	if !ok || ag == nil {
+		t.Fatal("shell-agent not found in registry")
+	}
+	rawTool, found := ag.Tools.Get("workspace_shell_bg")
+	if !found {
+		t.Fatal("workspace_shell_bg tool not registered")
+	}
+	bgTool, ok := rawTool.(*tools.WorkspaceShellBgTool)
+	if !ok {
+		t.Fatalf("workspace_shell_bg is not *WorkspaceShellBgTool; got %T", rawTool)
+	}
+	if bgTool.GodModeForTest() {
+		t.Errorf("expected GodMode=false for shell_bg when sandbox.god_mode is unset, got true")
+	}
+}
+
+// TestGodMode_ShellBg_Active_GodModeTrue mirrors
+// TestGodMode_Active_ShellToolGodModeTrue for workspace_shell_bg.
+func TestGodMode_ShellBg_Active_GodModeTrue(t *testing.T) {
+	if !sandbox.GodModeAvailable {
+		t.Skip("skipping: test requires GodModeAvailable=true (default build)")
+	}
+	if runtime.GOOS != "linux" {
+		t.Skip("workspace_shell_bg only registered on Linux")
+	}
+	al, cfg := buildLoopWithShellAgent(t)
+	cfg.Sandbox.GodMode = true
+	al.SetAllowGodMode(true)
+
+	devReg := sandbox.NewDevServerRegistry()
+	defer devReg.Close()
+	al.WireTier13Deps(Tier13Deps{DevServerRegistry: devReg})
+
+	reg := al.GetRegistry()
+	ag, ok := reg.GetAgent("shell-agent")
+	if !ok || ag == nil {
+		t.Fatal("shell-agent not found in registry")
+	}
+	rawTool, found := ag.Tools.Get("workspace_shell_bg")
+	if !found {
+		t.Fatal("workspace_shell_bg tool not registered")
+	}
+	bgTool, ok := rawTool.(*tools.WorkspaceShellBgTool)
+	if !ok {
+		t.Fatalf("workspace_shell_bg is not *WorkspaceShellBgTool; got %T", rawTool)
+	}
+	if !bgTool.GodModeForTest() {
+		t.Errorf("expected GodMode=true for shell_bg when sandbox.god_mode is active and available, got false")
+	}
+}
+
+// TestGodMode_GlobalSwitch_ForcesGodModeTrue_AndReverts proves the O14
+// override end-to-end: when the global god-mode switch (sandbox.god_mode) is
+// active AND available, every agent's workspace_shell tool is wired with
+// GodMode=true regardless of anything else in its config. The override is
+// non-destructive: clearing sandbox.god_mode and re-wiring restores
+// GodMode=false — nothing is mutated on disk.
+func TestGodMode_GlobalSwitch_ForcesGodModeTrue_AndReverts(t *testing.T) {
 	if !sandbox.GodModeAvailable {
 		t.Skip("skipping: requires GodModeAvailable=true (default build)")
 	}
-	tmpDir := t.TempDir()
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
-			List: []config.AgentConfig{
-				{ID: "ws-agent", Name: "WS Agent", SandboxProfile: config.SandboxProfileWorkspace},
-			},
-		},
-		Sandbox: config.OmnipusSandboxConfig{
-			GodMode:      true, // global switch ON
-			Experimental: config.ExperimentalConfig{WorkspaceShellEnabled: boolPtr(true)},
-		},
-	}
-	msgBus := bus.NewMessageBus()
-	al := mustNewAgentLoop(t, cfg, msgBus, &mockProvider{})
-	al.SetAllowGodMode(true) // availability granted
+	al, cfg := buildLoopWithShellAgent(t)
+	cfg.Sandbox.GodMode = true // global switch ON
+	al.SetAllowGodMode(true)   // availability granted
 
-	// God mode active → workspace agent forced to off.
-	if got := shellProfileForAgent(t, al, "ws-agent"); got != config.SandboxProfileOff {
-		t.Fatalf("god mode active: expected sandbox forced to off, got %q", got)
+	// God mode active → GodMode=true regardless of the agent's own config.
+	if got := shellGodModeForAgent(t, al, "shell-agent"); !got {
+		t.Fatalf("god mode active: expected GodMode=true, got false")
 	}
 
-	// Switch the global god-mode OFF and re-wire — profile must revert to the
-	// per-agent "workspace" (the override is non-destructive).
+	// Switch the global god-mode OFF and re-wire — GodMode must revert to
+	// false (the override is non-destructive; nothing was mutated on disk).
 	cfg.Sandbox.GodMode = false
-	if got := shellProfileForAgent(t, al, "ws-agent"); got != config.SandboxProfileWorkspace {
-		t.Fatalf("god mode off: expected per-agent workspace restored, got %q", got)
+	if got := shellGodModeForAgent(t, al, "shell-agent"); got {
+		t.Fatalf("god mode off: expected GodMode=false restored, got true")
 	}
 }
 
-// TestGodMode_GlobalSwitch_Unavailable_NoForce proves the override is inert when
-// availability is not granted (allowGodMode=false): a workspace agent stays
-// workspace even with sandbox.god_mode=true (fail-closed — the switch is a no-op
-// without the boot flag).
+// TestGodMode_GlobalSwitch_Unavailable_NoForce proves the override is inert
+// when availability is not granted (allowGodMode=false): GodMode stays false
+// even with sandbox.god_mode=true (fail-closed — the switch is a no-op
+// without the boot-time authorization).
 func TestGodMode_GlobalSwitch_Unavailable_NoForce(t *testing.T) {
-	tmpDir := t.TempDir()
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
-			List: []config.AgentConfig{
-				{ID: "ws-agent", Name: "WS Agent", SandboxProfile: config.SandboxProfileWorkspace},
-			},
-		},
-		Sandbox: config.OmnipusSandboxConfig{
-			GodMode:      true, // switch on, but...
-			Experimental: config.ExperimentalConfig{WorkspaceShellEnabled: boolPtr(true)},
-		},
-	}
-	msgBus := bus.NewMessageBus()
-	al := mustNewAgentLoop(t, cfg, msgBus, &mockProvider{})
-	al.SetAllowGodMode(false) // ...availability NOT granted
+	al, cfg := buildLoopWithShellAgent(t)
+	cfg.Sandbox.GodMode = true // switch on, but...
+	al.SetAllowGodMode(false)  // ...availability NOT granted
 
-	if got := shellProfileForAgent(t, al, "ws-agent"); got != config.SandboxProfileWorkspace {
-		t.Fatalf("unavailable: expected workspace preserved (switch inert), got %q", got)
+	if got := shellGodModeForAgent(t, al, "shell-agent"); got {
+		t.Fatalf("unavailable: expected GodMode=false (switch inert), got true")
 	}
 }

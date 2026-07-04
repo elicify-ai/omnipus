@@ -8,23 +8,25 @@
 // mode emits /preview/ URLs instead.
 //
 // Design differences from web_serve dev mode:
-//   - No Tier-3 command prefix-allowlist (commandAllowed). The sandbox
-//     profile is the security boundary; the agent invokes any command.
+//   - No Tier-3 command prefix-allowlist (commandAllowed). The fixed kernel
+//     sandbox boundary is the security boundary; the agent invokes any command.
 //   - No ensureNodeModules shim. The agent runs `npm install` itself via
 //     workspace_shell before calling workspace_shell_bg.
 //   - No GHSA channel block. Per-agent ToolPolicyCfg governs access.
 //   - cwd arg (relative to workspace) is supported — fixes the subdir bug
 //     where `next dev` must run from inside `hello-world/` not the workspace
 //     root.
-//   - Uses sandbox.LimitsForProfile to derive Limits from the agent's profile.
+//   - Uses sandbox.BuildLimits to derive fixed Limits (see
+//     docs/internal/architecture/ADR-035-remove-per-agent-sandbox-profile.md).
 //   - Returns the same JSON shape as web_serve dev mode so RunInWorkspaceUI.tsx
 //     and IframePreview.tsx render the preview without modification.
 //
 // SECURITY CONTRACT:
 //   - The tool is registered only when experimental.workspace_shell_enabled=true.
 //   - Per-agent ToolPolicyCfg (allow/ask/deny) governs which agents can call it.
-//   - The executing child runs under sandbox.Limits from LimitsForProfile.
-//   - SandboxProfile="off" (god mode) skips ApplyChildHardening.
+//   - The executing child runs under sandbox.Limits from sandbox.BuildLimits.
+//   - godMode=true (the global god-mode override, see agent.GodModeActive)
+//     skips ApplyChildHardening entirely.
 //   - Deny-pattern mechanism (global + per-agent) is wired but inert by default.
 //   - Every invocation — allow and deny — is recorded in the audit log.
 //   - AuditFailClosed=true (default): if audit write fails, the server is NOT
@@ -61,8 +63,9 @@ type WorkspaceShellBgTool struct {
 	// workspaceDir is the agent's resolved workspace root.
 	workspaceDir string
 
-	// profile is the agent's SandboxProfile. Drives LimitsForProfile.
-	profile config.SandboxProfile
+	// godMode reflects the global god-mode override (agent.GodModeActive) at
+	// tool-wiring time. When true, ApplyChildHardening is skipped entirely.
+	godMode bool
 
 	// proxy is the process-wide EgressProxy. May be nil.
 	proxy *sandbox.EgressProxy
@@ -105,8 +108,9 @@ type WorkspaceShellBgDeps struct {
 	// WorkspaceDir is the resolved absolute path to the agent's workspace.
 	WorkspaceDir string
 
-	// Profile is the agent's SandboxProfile.
-	Profile config.SandboxProfile
+	// GodMode reflects the global god-mode override (agent.GodModeActive) at
+	// tool-wiring time. When true, ApplyChildHardening is skipped entirely.
+	GodMode bool
 
 	// Proxy is the process-wide egress proxy. May be nil.
 	Proxy *sandbox.EgressProxy
@@ -149,7 +153,7 @@ func NewWorkspaceShellBgTool(deps WorkspaceShellBgDeps) *WorkspaceShellBgTool {
 
 	t := &WorkspaceShellBgTool{
 		workspaceDir:       deps.WorkspaceDir,
-		profile:            deps.Profile,
+		godMode:            deps.GodMode,
 		proxy:              deps.Proxy,
 		auditLogger:        deps.AuditLogger,
 		auditFailClosed:    deps.AuditFailClosed,
@@ -168,9 +172,9 @@ func NewWorkspaceShellBgTool(deps WorkspaceShellBgDeps) *WorkspaceShellBgTool {
 	return t
 }
 
-// ProfileForTest exposes the resolved sandbox profile for white-box testing.
+// GodModeForTest exposes the resolved god-mode flag for white-box testing.
 // Kept as a production method because pkg/agent tests require cross-package access.
-func (t *WorkspaceShellBgTool) ProfileForTest() config.SandboxProfile { return t.profile }
+func (t *WorkspaceShellBgTool) GodModeForTest() bool { return t.godMode }
 
 // SetAuditLogger satisfies the auditLoggerAware contract used by the ToolRegistry.
 func (t *WorkspaceShellBgTool) SetAuditLogger(l *audit.Logger) {
@@ -187,7 +191,7 @@ func (t *WorkspaceShellBgTool) Scope() ToolScope { return ScopeCore }
 func (t *WorkspaceShellBgTool) Category() ToolCategory { return CategoryShell }
 
 func (t *WorkspaceShellBgTool) Description() string {
-	return `Start a long-running background process (dev server, proxy, etc.) in the agent's workspace directory under the configured sandbox profile. Unlike 'serve_web' dev mode, there is no command allow-list — any command may be run. The agent is responsible for running 'npm install' or equivalent setup before calling this tool. Returns a dev_url JSON payload with a clickable iframe preview URL.`
+	return `Start a long-running background process (dev server, proxy, etc.) in the agent's workspace directory under the sandbox boundary. Unlike 'serve_web' dev mode, there is no command allow-list — any command may be run. The agent is responsible for running 'npm install' or equivalent setup before calling this tool. Returns a dev_url JSON payload with a clickable iframe preview URL.`
 }
 
 func (t *WorkspaceShellBgTool) Parameters() map[string]any {
@@ -326,17 +330,19 @@ func (t *WorkspaceShellBgTool) Execute(ctx context.Context, args map[string]any)
 		return auditErr
 	}
 
-	// Derive sandbox Limits from the agent's profile.
-	// For god mode (profile=off) LimitsForProfile returns zero Limits and
-	// SpawnBackgroundChild detects zero-value Limits and skips hardening.
-	lim, limErr := sandbox.LimitsForProfile(t.profile, t.workspaceDir, t.proxy, 0)
+	// Derive the fixed sandbox Limits. ResolveLimits returns the zero value
+	// under god mode — SpawnBackgroundChild is expected to skip hardening
+	// entirely, so there is nothing to accidentally half-apply — and skips
+	// BuildLimits' side effects (workspace mkdir, proxy resolution) entirely
+	// in that case. See sandbox.ResolveLimits.
+	lim, limErr := sandbox.ResolveLimits(t.godMode, t.workspaceDir, t.proxy, 0)
 	if limErr != nil {
-		return ErrorResult(fmt.Sprintf("workspace_shell_bg: sandbox profile error: %v", limErr))
+		return ErrorResult(fmt.Sprintf("workspace_shell_bg: sandbox limits error: %v", limErr))
 	}
 	// Override WorkspaceDir in the Limits to the resolved cwd so the child
 	// starts in the right subdirectory and npm_config_cache is rooted there.
-	// Note: we still pass workspaceDir to LimitsForProfile (to ensure it
-	// exists) but override it before spawn.
+	// Under god mode lim stays the zero value except for WorkspaceDir, which
+	// SpawnBackgroundChild uses purely for cwd.
 	lim.WorkspaceDir = cwd
 
 	// Spawn the background child.
@@ -483,7 +489,7 @@ func (t *WorkspaceShellBgTool) auditStart(ctx context.Context, agentID, command 
 		Details: map[string]any{
 			"expose_port": port,
 			"workspace":   t.workspaceDir,
-			"profile":     string(t.profile),
+			"god_mode":    t.godMode,
 		},
 	})
 	if logErr == nil {
@@ -510,7 +516,7 @@ func (t *WorkspaceShellBgTool) emitAudit(agentID, command, cwd, decision string)
 	}
 	details := map[string]any{
 		"workspace": t.workspaceDir,
-		"profile":   string(t.profile),
+		"god_mode":  t.godMode,
 	}
 	if cwd != "" {
 		details["cwd"] = cwd

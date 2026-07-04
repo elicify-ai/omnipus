@@ -2,7 +2,7 @@
 // fields (UAT agent-form fix 4a).
 //
 // A native (in-process) subagent is a delegation-only worker whose Model /
-// Tools / Skills / Sandbox default to being inherited from the caller. This
+// Tools / Skills default to being inherited from the caller. This
 // toggle exposes that choice in the creation wizard: ON = inherit (editor
 // hidden, field omitted from the create request); OFF = override (editor
 // revealed, explicit value sent).

@@ -29,10 +29,9 @@ import {
   updateSandboxConfig,
   isApiError,
 } from '@/lib/api'
-import type { SandboxStatus, SandboxProfile } from '@/lib/api'
+import type { SandboxStatus } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { SaveStatus, useSaveStatus } from './SaveStatus'
-import { SandboxProfileSelector } from '@/components/agents/SandboxProfileSelector'
 import { ShellDenyPatternsEditor } from '@/components/agents/ShellDenyPatternsEditor'
 import { useReAuthGate } from './useReAuthGate'
 
@@ -502,68 +501,57 @@ export function SandboxSection(): React.ReactElement {
     queryFn: fetchSandboxConfig,
   })
 
-  // ── Agents query (for default profile selector — we pick the first/system agent) ─
-  // The "default for new agents" profile is a global concept; we store it via
-  // a special placeholder. Since the backend does not yet expose a dedicated
-  // endpoint for this, we use the config.agents.defaults pathway. For now the
-  // UI controls are rendered and the save wires through updateConfig.
-  const [defaultProfile, setDefaultProfile] = useState<SandboxProfile | undefined>(undefined)
+  // ── Global shell deny patterns (independent autosave) ──────────────────────
   const [globalDenyPatterns, setGlobalDenyPatterns] = useState<string[]>([])
-  const [agentDefaultsSaving, setAgentDefaultsSaving] = useState(false)
+  const [denyPatternsSaving, setDenyPatternsSaving] = useState(false)
 
-  const { mutate: saveAgentDefaults } = useMutation({
-    mutationFn: async (data: { sandbox_profile?: SandboxProfile; shell_deny_patterns?: string[] }) => {
+  const { mutate: saveDenyPatterns } = useMutation({
+    mutationFn: async (data: { shell_deny_patterns: string[] }) => {
       // Persist via PUT /api/v1/security/sandbox-config under the canonical
-      // backend keys (default_profile, shell_deny_patterns) defined in
+      // backend key (shell_deny_patterns) defined in
       // pkg/gateway/rest_sandbox_config.go::sandboxConfigPutBody.
       await runGatedSandbox((token) =>
         updateSandboxConfig({
-          default_profile: data.sandbox_profile,
           shell_deny_patterns: data.shell_deny_patterns,
         }, token),
       )
     },
-    onMutate: () => setAgentDefaultsSaving(true),
+    onMutate: () => setDenyPatternsSaving(true),
     onSuccess: () => {
-      setAgentDefaultsSaving(false)
+      setDenyPatternsSaving(false)
       void queryClient.invalidateQueries({ queryKey: ['sandbox-config'] })
     },
     onError: (err: Error) => {
-      setAgentDefaultsSaving(false)
+      setDenyPatternsSaving(false)
       addToast({ message: isApiError(err) ? err.userMessage : err.message, variant: 'error' })
     },
   })
 
-  // Sync defaultProfile + globalDenyPatterns from configData. Reads the
-  // canonical backend keys (default_profile, shell_deny_patterns) — see
-  // pkg/gateway/rest_sandbox_config.go GET response.
+  // Sync globalDenyPatterns from configData. Reads the canonical backend key
+  // (shell_deny_patterns) — see pkg/gateway/rest_sandbox_config.go GET response.
   useEffect(() => {
     if (!configData) return
     const raw = configData as Record<string, unknown>
-    if (typeof raw.default_profile === 'string' && raw.default_profile !== '') {
-      setDefaultProfile(raw.default_profile as SandboxProfile)
-    }
     if (Array.isArray(raw.shell_deny_patterns)) {
       setGlobalDenyPatterns(raw.shell_deny_patterns as string[])
     }
   }, [configData])
 
-  // Debounced autosave for default profile + global deny patterns. The flag
-  // distinguishes hydration writes (where the effect should NOT fire a PUT)
-  // from user edits. Without the debounce, ShellDenyPatternsEditor's per-
-  // keystroke onChange would issue one PUT per character.
-  const agentDefaultsTouched = useRef(false)
-  const markAgentDefaultsTouched = () => { agentDefaultsTouched.current = true }
+  // Debounced autosave for the global deny patterns. The flag distinguishes
+  // hydration writes (where the effect should NOT fire a PUT) from user
+  // edits. Without the debounce, ShellDenyPatternsEditor's per-keystroke
+  // onChange would issue one PUT per character.
+  const denyPatternsTouched = useRef(false)
+  const markDenyPatternsTouched = () => { denyPatternsTouched.current = true }
   useEffect(() => {
-    if (!agentDefaultsTouched.current) return
+    if (!denyPatternsTouched.current) return
     const handle = setTimeout(() => {
-      saveAgentDefaults({
-        sandbox_profile: defaultProfile,
+      saveDenyPatterns({
         shell_deny_patterns: globalDenyPatterns.filter((x) => x.trim() !== ''),
       })
     }, 400)
     return () => clearTimeout(handle)
-  }, [defaultProfile, globalDenyPatterns, saveAgentDefaults])
+  }, [globalDenyPatterns, saveDenyPatterns])
 
   // ── Mode state ─────────────────────────────────────────────────────────────
   const [currentMode, setCurrentMode] = useState<'enforce' | 'permissive' | 'off' | undefined>()
@@ -1111,37 +1099,14 @@ export function SandboxSection(): React.ReactElement {
             )}
           </div>
 
-          {/* ── Default profile for new agents ── */}
+          {/* ── Global shell deny patterns ── */}
           <div className="space-y-3 border-t border-[var(--color-border)] pt-4">
             <div className="flex items-center justify-between">
-              <p className="text-xs font-semibold text-[var(--color-secondary)]">Default profile for new agents</p>
-              {agentDefaultsSaving && (
+              <p className="text-xs font-semibold text-[var(--color-secondary)]">Global shell deny patterns</p>
+              {denyPatternsSaving && (
                 <span className="text-[10px] text-[var(--color-muted)]">Saving...</span>
               )}
             </div>
-            <p className="text-[10px] text-[var(--color-muted)]">
-              Applied to newly created custom agents that do not pick their own sandbox profile.
-              Existing agents keep whatever profile they were configured with; the locked
-              core agents (Mia, Jim, Ava, Ray, Max) always use their built-in profiles.
-              Restart required to take effect.
-            </p>
-            {configLoading ? (
-              <div className="h-3 w-2/3 rounded bg-[var(--color-border)] animate-pulse" />
-            ) : (
-              <SandboxProfileSelector
-                value={defaultProfile}
-                agentName="new agents"
-                onChange={(p) => {
-                  markAgentDefaultsTouched()
-                  setDefaultProfile(p)
-                }}
-              />
-            )}
-          </div>
-
-          {/* ── Global shell deny patterns ── */}
-          <div className="space-y-3 border-t border-[var(--color-border)] pt-4">
-            <p className="text-xs font-semibold text-[var(--color-secondary)]">Global shell deny patterns</p>
             <p className="text-[10px] text-[var(--color-muted)]">
               Fallback patterns applied to all agents that do not override them. One regex per line.
             </p>
@@ -1151,7 +1116,7 @@ export function SandboxSection(): React.ReactElement {
               <ShellDenyPatternsEditor
                 value={globalDenyPatterns}
                 onChange={(patterns) => {
-                  markAgentDefaultsTouched()
+                  markDenyPatternsTouched()
                   setGlobalDenyPatterns(patterns)
                 }}
               />

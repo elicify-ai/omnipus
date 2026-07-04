@@ -1,18 +1,18 @@
 // Advanced — collapsible disclosure rendered ABOVE the footer (NOT a 4th
 // step in the stepper). Houses the wire-format fields that the operator
-// rarely touches on first-create: model_params, sandbox_profile,
-// shell_policy, rate_limits, delegation_policy, timeout_seconds,
-// max_tool_iterations, steering_mode, and the subagent_3p executor block.
+// rarely touches on first-create: model_params, shell_policy, rate_limits,
+// delegation_policy, timeout_seconds, max_tool_iterations, steering_mode,
+// and the subagent_3p executor block.
 //
 // All fields are type-branched (per the field matrix in
 // docs/internal/architecture/agent-types-field-matrix.md):
-//   Main + Subagent: model_params, sandbox_profile, shell_policy,
-//                     rate_limits, timeout_seconds, max_tool_iterations,
+//   Main + Subagent: model_params, shell_policy, rate_limits,
+//                     timeout_seconds, max_tool_iterations,
 //                     steering_mode (Main only)
 //   subagent_3p:     timeout_seconds + rate_limits ONLY — the CLI manages
 //                     its own isolation/auth/retries, so model_params,
-//                     sandbox_profile, shell_policy, max_tool_iterations,
-//                     and steering_mode are all rejected 400 on the wire
+//                     shell_policy, max_tool_iterations, and steering_mode
+//                     are all rejected 400 on the wire
 //                     (`AgentCreateRequestSubagent3p` never carries them —
 //                     see payloadToCreateRequest in CreateAgentModal.tsx).
 //                     Without this slim disclosure an external create had
@@ -22,23 +22,15 @@
 //                     no duplicate `wizard-cli-args`.
 //
 // Implementation lifts from `AgentProfile.tsx` where possible (rate-limit
-// inputs, sandbox profile radio) and reuses the executor inputs from
-// `<Step1Identity>` so the disclosure stays in sync with the Step 1 editor.
+// inputs) and reuses the executor inputs from `<Step1Identity>` so the
+// disclosure stays in sync with the Step 1 editor.
 
 import { Link } from '@tanstack/react-router'
 import { SmartSelect } from '@/components/ui/smart-select'
 import { Input } from '@/components/ui/input'
 import { AdvancedDisclosure } from '@/components/shared/AdvancedDisclosure'
-import { SandboxProfileSelector } from '../SandboxProfileSelector'
 import { ShellDenyPatternsEditor } from '../ShellDenyPatternsEditor'
-import { InheritToggle } from './InheritToggle'
-import type { SandboxProfile } from '@/lib/api'
-import type { AdvancedProps, AdvancedFields } from './types'
-
-function toWireSandbox(p: AdvancedFields['sandbox_profile']): SandboxProfile | undefined {
-  if (p === 'none' || p === undefined) return undefined
-  return p as SandboxProfile
-}
+import type { AdvancedProps } from './types'
 
 export function Advanced({
   payload,
@@ -64,14 +56,13 @@ export function Advanced({
   return (
     <AdvancedDisclosure
       title="Advanced"
-      summary="Model parameters, sandbox, rate limits, and runtime knobs"
+      summary="Model parameters, rate limits, and runtime knobs"
     >
       <div className="space-y-5">
         <MainAdvancedFields
           payload={payload}
           setField={setField}
           isMain={isMain}
-          isNativeSubagent={initialType === 'Subagent'}
         />
       </div>
     </AdvancedDisclosure>
@@ -82,8 +73,8 @@ export function Advanced({
 // Slim variant: the external CLI runner manages its own isolation, sampling,
 // and tool loop, so ONLY timeout_seconds and rate_limits apply on the wire
 // (`AgentCreateRequestSubagent3p` — see the field matrix). No sampling
-// (temperature/max_tokens/top_p), steering, max_tool_iterations, sandbox, or
-// shell policy — those all 400 on this variant.
+// (temperature/max_tokens/top_p), steering, max_tool_iterations, or shell
+// policy — those all 400 on this variant.
 
 interface ExternalAdvancedFieldsProps {
   payload: AdvancedProps['payload']
@@ -108,10 +99,9 @@ interface MainAdvancedFieldsProps {
   payload: AdvancedProps['payload']
   setField: AdvancedProps['setField']
   isMain: boolean
-  isNativeSubagent: boolean
 }
 
-function MainAdvancedFields({ payload, setField, isMain, isNativeSubagent }: MainAdvancedFieldsProps) {
+function MainAdvancedFields({ payload, setField, isMain }: MainAdvancedFieldsProps) {
   const modelParams = payload.model_params ?? {}
   const shellPolicy = payload.shell_policy ?? {
     enable_deny_patterns: false,
@@ -165,40 +155,6 @@ function MainAdvancedFields({ payload, setField, isMain, isNativeSubagent }: Mai
           />
         </div>
       </div>
-
-      {/* Native-subagent sandbox inherit toggle (UAT 4a). ON = inherit the
-          caller's sandbox; the per-agent selector is hidden and no sandbox
-          profile is sent. */}
-      {isNativeSubagent && (
-        <InheritToggle
-          label="Sandbox"
-          inherit={payload.inherit_sandbox === true}
-          onChange={(v) => setField('inherit_sandbox', v)}
-          testId="wizard-inherit-sandbox"
-        />
-      )}
-
-      {/* Sandbox profile */}
-      {!(isNativeSubagent && payload.inherit_sandbox === true) && (
-      <div className="space-y-2">
-        <p className="text-xs font-medium text-[var(--color-secondary)]">Sandbox profile</p>
-        <p className="text-[11px] text-[var(--color-muted)]">
-          Kernel-enforced file + network boundary. &quot;Use global default&quot; inherits the global Security config.
-        </p>
-        <SandboxProfileSelector
-          value={toWireSandbox(payload.sandbox_profile)}
-          agentName={payload.name || 'this agent'}
-          onChange={(profile) =>
-            // 'none' is the UI-only inherit marker — strip it before writing
-            // back to the wire-shaped payload (which excludes 'none').
-            setField(
-              'sandbox_profile',
-              profile === 'none' ? undefined : profile,
-            )
-          }
-        />
-      </div>
-      )}
 
       {/* Shell deny patterns */}
       <div className="space-y-2">

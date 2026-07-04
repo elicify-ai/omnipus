@@ -126,7 +126,6 @@ function payloadToCreateRequest(
     const inheritModel = payload.inherit_model === true
     const inheritTools = payload.inherit_tools === true
     const inheritSkills = payload.inherit_skills === true
-    const inheritSandbox = payload.inherit_sandbox === true
 
     const req: AgentCreateRequestSubagent = {
       type: 'Subagent',
@@ -143,7 +142,6 @@ function payloadToCreateRequest(
     if (!inheritModel && payload.fallback_models !== undefined) req.fallback_models = payload.fallback_models
     if (!inheritTools && payload.tools_cfg !== undefined) req.tools_cfg = payload.tools_cfg
     if (!inheritSkills && payload.skills !== undefined) req.skills = payload.skills
-    if (!inheritSandbox && payload.sandbox_profile !== undefined) req.sandbox_profile = payload.sandbox_profile
     if (payload.model_params !== undefined) req.model_params = payload.model_params
     if (payload.shell_policy !== undefined) req.shell_policy = payload.shell_policy
     if (payload.rate_limits !== undefined) req.rate_limits = payload.rate_limits
@@ -167,7 +165,6 @@ function payloadToCreateRequest(
   if (payload.skills !== undefined) req.skills = payload.skills
   if (payload.fallback_models !== undefined) req.fallback_models = payload.fallback_models
   if (payload.model_params !== undefined) req.model_params = payload.model_params
-  if (payload.sandbox_profile !== undefined) req.sandbox_profile = payload.sandbox_profile
   if (payload.shell_policy !== undefined) req.shell_policy = payload.shell_policy
   if (payload.rate_limits !== undefined) req.rate_limits = payload.rate_limits
   if (payload.timeout_seconds !== undefined) req.timeout_seconds = payload.timeout_seconds

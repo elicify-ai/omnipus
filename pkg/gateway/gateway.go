@@ -363,10 +363,10 @@ type RunOptions struct {
 	// FR-J-006 for CLI > config > default precedence.
 	SandboxMode string
 	// AllowGodMode is set by the --allow-god-mode CLI flag. When true,
-	// agents may set sandbox_profile=off (god mode). Without this flag,
-	// off is silently coerced to workspace at runtime and rejected with 403
-	// at the REST layer. Has no effect when sandbox.GodModeAvailable is false
-	// (nogodmode build tag).
+	// the global god-mode runtime toggle (sandbox.god_mode) is authorized to
+	// take effect: switching it on disables the kernel sandbox for every
+	// agent. Without this flag, the toggle has no effect even if enabled. Has
+	// no effect when sandbox.GodModeAvailable is false (nogodmode build tag).
 	//
 	// This is ONE of two ways to grant god-mode availability — the other is
 	// the config-persisted sandbox.god_mode_allowed flag (set by the
@@ -1519,7 +1519,7 @@ func setupAndStartServices(
 
 	// Fix-6: warn when any agent with remote channels has a non-deny exec policy.
 	// The GHSA-pv8c-p6jf-3fpp channel block was removed; operators must now
-	// configure per-agent ToolPolicyCfg or sandbox_profile to restrict exec.
+	// configure per-agent ToolPolicyCfg to restrict exec.
 	emitGHSARemovalWarn(cfg)
 
 	// Construct the web_serve static-mode (Tier 1) and dev-mode (Tier 3)
@@ -2466,7 +2466,7 @@ func emitGHSARemovalWarn(cfg *config.Config) {
 	slog.Warn(
 		"exec tool no longer blocked at the channel layer (was GHSA-pv8c-p6jf-3fpp). "+
 			"Agents with remote channels and non-deny exec policy: ["+strings.Join(flagged, ", ")+
-			"]. Review per-agent ToolPolicyCfg or set sandbox_profile.",
+			"]. Review per-agent ToolPolicyCfg.",
 		"remote_channels", channels,
 		"flagged_agents", flagged,
 	)

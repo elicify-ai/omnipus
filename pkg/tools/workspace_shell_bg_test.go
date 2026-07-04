@@ -33,7 +33,7 @@ type shellBgResult struct {
 func newTestShellBgTool(
 	t *testing.T,
 	workspaceDir string,
-	profile config.SandboxProfile,
+	godMode bool,
 	registry *sandbox.DevServerRegistry,
 	auditLogger *audit.Logger,
 	gatewayHost string,
@@ -41,7 +41,7 @@ func newTestShellBgTool(
 	t.Helper()
 	return tools.NewWorkspaceShellBgTool(tools.WorkspaceShellBgDeps{
 		WorkspaceDir:    workspaceDir,
-		Profile:         profile,
+		GodMode:         godMode,
 		Proxy:           nil,
 		AuditLogger:     auditLogger,
 		AuditFailClosed: false, // don't fail closed in unit tests
@@ -62,7 +62,7 @@ func TestWorkspaceShellBgTool_NonLinuxReturnsError(t *testing.T) {
 	reg := sandbox.NewDevServerRegistry()
 	defer reg.Close()
 
-	tool := newTestShellBgTool(t, t.TempDir(), config.SandboxProfileOff, reg, nil, "")
+	tool := newTestShellBgTool(t, t.TempDir(), true, reg, nil, "")
 	ctx := tools.WithAgentID(context.Background(), "test-agent")
 
 	result := tool.Execute(ctx, map[string]any{
@@ -83,7 +83,7 @@ func TestWorkspaceShellBgTool_NilRegistryReturnsError(t *testing.T) {
 	}
 	t.Parallel()
 
-	tool := newTestShellBgTool(t, t.TempDir(), config.SandboxProfileOff, nil /* nil registry */, nil, "")
+	tool := newTestShellBgTool(t, t.TempDir(), true, nil /* nil registry */, nil, "")
 	ctx := tools.WithAgentID(context.Background(), "test-agent")
 
 	result := tool.Execute(ctx, map[string]any{
@@ -109,7 +109,7 @@ func TestWorkspaceShellBgTool_PortOutOfRange(t *testing.T) {
 	reg := sandbox.NewDevServerRegistry()
 	defer reg.Close()
 
-	tool := newTestShellBgTool(t, t.TempDir(), config.SandboxProfileOff, reg, nil, "")
+	tool := newTestShellBgTool(t, t.TempDir(), true, reg, nil, "")
 	ctx := tools.WithAgentID(context.Background(), "test-agent")
 
 	result := tool.Execute(ctx, map[string]any{
@@ -136,7 +136,7 @@ func TestWorkspaceShellBgTool_CWDEscapeRejected(t *testing.T) {
 	reg := sandbox.NewDevServerRegistry()
 	defer reg.Close()
 
-	tool := newTestShellBgTool(t, t.TempDir(), config.SandboxProfileOff, reg, nil, "")
+	tool := newTestShellBgTool(t, t.TempDir(), true, reg, nil, "")
 	ctx := tools.WithAgentID(context.Background(), "test-agent")
 
 	result := tool.Execute(ctx, map[string]any{
@@ -161,7 +161,7 @@ func TestWorkspaceShellBgTool_AbsoluteCWDRejected(t *testing.T) {
 	reg := sandbox.NewDevServerRegistry()
 	defer reg.Close()
 
-	tool := newTestShellBgTool(t, t.TempDir(), config.SandboxProfileOff, reg, nil, "")
+	tool := newTestShellBgTool(t, t.TempDir(), true, reg, nil, "")
 	ctx := tools.WithAgentID(context.Background(), "test-agent")
 
 	result := tool.Execute(ctx, map[string]any{
@@ -188,7 +188,7 @@ func TestWorkspaceShellBgTool_DenyPatternBlocks(t *testing.T) {
 
 	tool := tools.NewWorkspaceShellBgTool(tools.WorkspaceShellBgDeps{
 		WorkspaceDir:            t.TempDir(),
-		Profile:                 config.SandboxProfileOff,
+		GodMode:                 true,
 		Registry:                reg,
 		MaxConcurrent:           2,
 		PortRange:               [2]int32{18000, 18999},
@@ -227,7 +227,7 @@ func TestWorkspaceShellBgTool_DenyPatternInertWhenDisabled(t *testing.T) {
 	dir := t.TempDir()
 	tool := tools.NewWorkspaceShellBgTool(tools.WorkspaceShellBgDeps{
 		WorkspaceDir:            dir,
-		Profile:                 config.SandboxProfileOff,
+		GodMode:                 true,
 		Registry:                reg,
 		MaxConcurrent:           2,
 		PortRange:               [2]int32{18000, 18999},
@@ -277,7 +277,7 @@ func TestWorkspaceShellBgTool_DevURLShape(t *testing.T) {
 
 	dir := t.TempDir()
 	gatewayHost := "https://preview.example.com"
-	tool := newTestShellBgTool(t, dir, config.SandboxProfileOff, reg, nil, gatewayHost)
+	tool := newTestShellBgTool(t, dir, true, reg, nil, gatewayHost)
 
 	ctx := tools.WithAgentID(context.Background(), "shape-agent")
 	result := tool.Execute(ctx, map[string]any{
@@ -344,7 +344,7 @@ func TestWorkspaceShellBgTool_TokenRegisteredInRegistry(t *testing.T) {
 	defer reg.Close()
 
 	dir := t.TempDir()
-	tool := newTestShellBgTool(t, dir, config.SandboxProfileOff, reg, nil, "")
+	tool := newTestShellBgTool(t, dir, true, reg, nil, "")
 
 	ctx := tools.WithAgentID(context.Background(), "reg-agent")
 	result := tool.Execute(ctx, map[string]any{
@@ -390,7 +390,7 @@ func TestWorkspaceShellBgTool_URLEmptyGatewayHost(t *testing.T) {
 	defer reg.Close()
 
 	dir := t.TempDir()
-	tool := newTestShellBgTool(t, dir, config.SandboxProfileOff, reg, nil, "" /* empty */)
+	tool := newTestShellBgTool(t, dir, true, reg, nil, "" /* empty */)
 
 	ctx := tools.WithAgentID(context.Background(), "nohost-agent")
 	result := tool.Execute(ctx, map[string]any{
@@ -432,7 +432,7 @@ func TestWorkspaceShellBgTool_SubdirCWD(t *testing.T) {
 	reg := sandbox.NewDevServerRegistry()
 	defer reg.Close()
 
-	tool := newTestShellBgTool(t, dir, config.SandboxProfileOff, reg, nil, "")
+	tool := newTestShellBgTool(t, dir, true, reg, nil, "")
 	ctx := tools.WithAgentID(context.Background(), "subdir-agent")
 
 	result := tool.Execute(ctx, map[string]any{
@@ -467,7 +467,7 @@ func TestWorkspaceShellBgTool_AuditEmittedOnSuccess(t *testing.T) {
 	reg := sandbox.NewDevServerRegistry()
 	defer reg.Close()
 
-	tool := newTestShellBgTool(t, t.TempDir(), config.SandboxProfileOff, reg, logger, "")
+	tool := newTestShellBgTool(t, t.TempDir(), true, reg, logger, "")
 	ctx := tools.WithAgentID(context.Background(), "audit-success-agent")
 
 	result := tool.Execute(ctx, map[string]any{
@@ -527,7 +527,7 @@ func TestWorkspaceShellBgTool_AuditEmittedOnDeny(t *testing.T) {
 
 	tool := tools.NewWorkspaceShellBgTool(tools.WorkspaceShellBgDeps{
 		WorkspaceDir:            t.TempDir(),
-		Profile:                 config.SandboxProfileOff,
+		GodMode:                 true,
 		Registry:                reg,
 		MaxConcurrent:           2,
 		PortRange:               [2]int32{18000, 18999},
@@ -570,28 +570,67 @@ func TestWorkspaceShellBgTool_AuditEmittedOnDeny(t *testing.T) {
 	}
 }
 
-// TestWorkspaceShellBgTool_ProfileOffSkipsHardening verifies that profile=off
-// (god mode) spawns successfully — SpawnBackgroundChild detects zero Limits
-// and skips ApplyChildHardening.
-func TestWorkspaceShellBgTool_ProfileOffSkipsHardening(t *testing.T) {
+// TestWorkspaceShellBgTool_GodModeSkipsHardening verifies that godMode=true
+// spawns successfully AND, per Fix 3 of the 7-reviewer SandboxProfile-removal
+// gate (pr-test-analyzer), actually distinguishes the god-mode code path from
+// the normal-mode one. SpawnBackgroundChild's isZero check only gates
+// ApplyChildHardening/ApplyChildPostStartHardening; the observable,
+// currently-untested side effect is that sandbox.ResolveLimits (Fix 1)
+// returns the zero Limits under god mode, so BuildLimits' egress-proxy lookup
+// never runs and the proxy address must be ABSENT from the child's
+// environment even when a real proxy is configured. Asserting only "the
+// process spawned without error" (the prior version of this test) would not
+// catch the god-mode branch being accidentally inverted.
+func TestWorkspaceShellBgTool_GodModeSkipsHardening(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("Linux only")
 	}
 	t.Parallel()
 
+	proxy, err := sandbox.NewEgressProxy([]string{"registry.npmjs.org"}, nil)
+	if err != nil {
+		t.Fatalf("NewEgressProxy: %v", err)
+	}
+	defer proxy.Close()
+
 	reg := sandbox.NewDevServerRegistry()
 	defer reg.Close()
 
-	tool := newTestShellBgTool(t, t.TempDir(), config.SandboxProfileOff, reg, nil, "")
+	dir := t.TempDir()
+	tool := tools.NewWorkspaceShellBgTool(tools.WorkspaceShellBgDeps{
+		WorkspaceDir:  dir,
+		GodMode:       true,
+		Proxy:         proxy,
+		Registry:      reg,
+		MaxConcurrent: 2,
+		PortRange:     [2]int32{18000, 18999},
+	})
 	ctx := tools.WithAgentID(context.Background(), "godmode-agent")
 
+	// "sh -c env" dumps the child's full environment to the redirected
+	// .dev-server.log (SpawnBackgroundChild's stdout/stderr sink when the
+	// caller leaves cmd.Stdout/Stderr nil). The tool splits "command" on
+	// whitespace (no shell wrapping) — this must stay a plain argv, not a
+	// quoted shell string.
 	result := tool.Execute(ctx, map[string]any{
-		"command":     "sleep 60",
+		"command":     "sh -c env",
 		"expose_port": float64(18000),
 	})
 
 	if result.IsError {
-		t.Fatalf("expected success for profile=off (god mode), got error: %s", result.ForLLM)
+		t.Fatalf("expected success for godMode=true, got error: %s", result.ForLLM)
+	}
+
+	logData, readErr := os.ReadFile(filepath.Join(dir, ".dev-server.log"))
+	if readErr != nil {
+		t.Fatalf("read .dev-server.log: %v", readErr)
+	}
+	if strings.Contains(string(logData), proxy.Addr()) {
+		t.Errorf(
+			"expected the egress proxy address to be ABSENT from the child env under god mode "+
+				"(ResolveLimits bypasses BuildLimits' proxy injection), got log:\n%s",
+			logData,
+		)
 	}
 
 	reg.UnregisterByAgent("godmode-agent")
@@ -629,7 +668,7 @@ func TestWorkspaceShellBgTool_AuditFailClosedReturnsDeny(t *testing.T) {
 
 	tool := tools.NewWorkspaceShellBgTool(tools.WorkspaceShellBgDeps{
 		WorkspaceDir:    t.TempDir(),
-		Profile:         config.SandboxProfileOff,
+		GodMode:         true,
 		Registry:        reg,
 		MaxConcurrent:   2,
 		PortRange:       [2]int32{18000, 18999},
@@ -659,32 +698,57 @@ func TestWorkspaceShellBgTool_AuditFailClosedReturnsDeny(t *testing.T) {
 	}
 }
 
-// TestWorkspaceShellBgTool_ProfileWorkspaceCallsHardening verifies that
-// profile=workspace (non-god-mode) succeeds without error when spawning
-// a simple process. The hardening is applied via sandbox.Limits; we don't
-// introspect SysProcAttr directly, but a successful spawn is evidence the
-// hardening path was entered and did not error.
-func TestWorkspaceShellBgTool_ProfileWorkspaceCallsHardening(t *testing.T) {
+// TestWorkspaceShellBgTool_NormalModeAppliesHardening verifies that
+// godMode=false succeeds without error when spawning a simple process, and
+// per Fix 3, that the real distinguishing side effect from BuildLimits — the
+// SSRF-protected egress proxy injected as HTTP_PROXY — is actually present in
+// the child's environment. We don't introspect SysProcAttr directly, but this
+// env-var check would fail if the god-mode/normal-mode branch were inverted,
+// unlike a bare "spawn didn't error" assertion.
+func TestWorkspaceShellBgTool_NormalModeAppliesHardening(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("Linux only — ApplyChildHardening uses Linux-specific syscalls")
 	}
 	t.Parallel()
 
+	proxy, err := sandbox.NewEgressProxy([]string{"registry.npmjs.org"}, nil)
+	if err != nil {
+		t.Fatalf("NewEgressProxy: %v", err)
+	}
+	defer proxy.Close()
+
 	reg := sandbox.NewDevServerRegistry()
 	defer reg.Close()
 
 	dir := t.TempDir()
-	tool := newTestShellBgTool(t, dir, config.SandboxProfileWorkspace, reg, nil, "")
-	ctx := tools.WithAgentID(context.Background(), "ws-profile-agent")
+	tool := tools.NewWorkspaceShellBgTool(tools.WorkspaceShellBgDeps{
+		WorkspaceDir:  dir,
+		GodMode:       false,
+		Proxy:         proxy,
+		Registry:      reg,
+		MaxConcurrent: 2,
+		PortRange:     [2]int32{18000, 18999},
+	})
+	ctx := tools.WithAgentID(context.Background(), "normal-mode-agent")
 
 	result := tool.Execute(ctx, map[string]any{
-		"command":     "sleep 60",
+		"command":     "sh -c env",
 		"expose_port": float64(18000),
 	})
 
 	if result.IsError {
-		t.Fatalf("expected success for profile=workspace, got error: %s", result.ForLLM)
+		t.Fatalf("expected success for godMode=false, got error: %s", result.ForLLM)
 	}
 
-	reg.UnregisterByAgent("ws-profile-agent")
+	logData, readErr := os.ReadFile(filepath.Join(dir, ".dev-server.log"))
+	if readErr != nil {
+		t.Fatalf("read .dev-server.log: %v", readErr)
+	}
+	wantProxyLine := "HTTP_PROXY=http://" + proxy.Addr()
+	if !strings.Contains(string(logData), wantProxyLine) {
+		t.Errorf("expected %q (from BuildLimits' proxy injection) in normal-mode child env, got log:\n%s",
+			wantProxyLine, logData)
+	}
+
+	reg.UnregisterByAgent("normal-mode-agent")
 }

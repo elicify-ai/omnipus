@@ -561,38 +561,6 @@ describe('AgentProfile — Executor section is worker-only (Spec-4)', () => {
   })
 })
 
-// W2c (rewrite of former Wave 6 / G10) — per the field matrix
-// (docs/internal/architecture/agent-types-field-matrix.md), sandbox_profile
-// + shell_policy apply to Main AND native Subagent, and are hidden ONLY for
-// subagent_3p (the external runner manages its own isolation). The old
-// "sandbox ignored" callout (gated on executor.kind, not agent.type) is
-// retired — the section simply does not render for subagent_3p, and DOES
-// render (editable) for a native Subagent, even one whose `executor` field
-// happens to carry an external-cli value (type is authoritative, not the
-// locally-editable executor state).
-describe('AgentProfile — Sandbox section visibility by agent kind (field matrix)', () => {
-  it('does NOT render the Sandbox section for a subagent_3p agent', async () => {
-    vi.mocked(fetchAgent).mockResolvedValue(mockSubagent3pAgent)
-    renderProfile('external-researcher')
-    await screen.findByText('External Researcher')
-    expect(screen.queryByText(/^Sandbox$/)).toBeNull()
-    expect(screen.queryByTestId('sandbox-profile-radio-workspace')).toBeNull()
-  })
-
-  it('renders an EDITABLE Sandbox section for a native Subagent', async () => {
-    vi.mocked(fetchAgent).mockResolvedValue({
-      ...mockWorkerAgent,
-      sandbox_profile: 'workspace',
-    })
-    renderProfile('web-researcher')
-    await screen.findByText('Web Researcher')
-    expect(await screen.findAllByText(/^Sandbox$/)).not.toHaveLength(0)
-    const radios = await screen.findAllByTestId('sandbox-profile-radio-workspace')
-    expect(radios.length).toBeGreaterThanOrEqual(1)
-    expect((radios[0] as HTMLInputElement).disabled).toBe(false)
-  })
-})
-
 // Tier-branched form (locked concept: `.preview-doc/agents.html`).
 // A worker is a delegation-only labour agent — never a chat target, no
 // heartbeat, never the default. The form reflects that by HIDE-ing the
@@ -1280,56 +1248,6 @@ describe('AgentProfile — locked banner (spec §6 BDD #13)', () => {
   })
 })
 
-// O13 (LOCKED 2026-06-20): the sandbox profile is editable for ALL agents —
-// including locked core agents (locked status does NOT extend to the sandbox),
-// shows the ACTUAL profile (not a vague "Built-in"), and the per-agent picker
-// has NO 'off' option ("no sandbox" is the global god-mode switch only).
-describe('AgentProfile — O13 sandbox profile editability', () => {
-  it('renders an EDITABLE sandbox picker for a locked core agent (not read-only)', async () => {
-    vi.mocked(fetchAgent).mockResolvedValue({ ...mockLockedCoreAgent, sandbox_profile: 'workspace' })
-    renderProfile('mia')
-    await screen.findByText('Mia')
-    // The radio control (editable) is present — not a read-only summary.
-    // (The form may render in more than one responsive layout, so use *All*.)
-    expect(screen.getAllByTestId('sandbox-profile-radio-workspace').length).toBeGreaterThanOrEqual(1)
-    expect(screen.getAllByTestId('sandbox-profile-radio-host').length).toBeGreaterThanOrEqual(1)
-    // The actual profile is reflected as the checked radio (in whichever
-    // responsive layout is mounted).
-    await waitFor(() => {
-      expect(
-        screen.getAllByTestId('sandbox-profile-radio-workspace').some((r) => (r as HTMLInputElement).checked),
-      ).toBe(true)
-    })
-    // The note clarifies a locked core agent's sandbox is still editable.
-    expect(screen.getAllByTestId('sandbox-locked-editable-note').length).toBeGreaterThanOrEqual(1)
-  })
-
-  it('the per-agent sandbox picker has NO off option', async () => {
-    vi.mocked(fetchAgent).mockResolvedValue({ ...mockLockedCoreAgent, sandbox_profile: 'host' })
-    renderProfile('mia')
-    await screen.findByText('Mia')
-    expect(screen.queryByTestId('sandbox-profile-radio-off')).toBeNull()
-  })
-
-  it('SENDS sandbox_profile in the PUT payload for a locked core agent', async () => {
-    vi.mocked(fetchAgent).mockResolvedValue({ ...mockLockedCoreAgent, sandbox_profile: 'workspace' })
-    vi.mocked(updateAgent).mockResolvedValue({ ...mockLockedCoreAgent, sandbox_profile: 'host' })
-    renderProfile('mia')
-    await screen.findByText('Mia')
-
-    // Change the sandbox profile on the locked agent.
-    fireEvent.click(screen.getAllByTestId('sandbox-profile-radio-host')[0])
-
-    await waitFor(() => {
-      expect(vi.mocked(updateAgent)).toHaveBeenCalled()
-    }, { timeout: 5000 })
-
-    const payload = vi.mocked(updateAgent).mock.calls[0][1] as Record<string, unknown>
-    // O13: sandbox_profile is NOT stripped for locked agents — it must be sent.
-    expect(payload).toHaveProperty('sandbox_profile', 'host')
-  })
-})
-
 // Wave 5 / spec §6.1 — Footer: last-saved-indicator (left) + delete-agent-button
 // (right) + AlertDialog confirm. Locked agents hide the delete button.
 describe('AgentProfile — Wave 5 footer (spec §6.1)', () => {
@@ -1484,7 +1402,6 @@ describe('AgentProfile — subagent_3p payload restriction', () => {
     // Forbidden fields must NOT be present
     expect(payload).not.toHaveProperty('tools_cfg')
     expect(payload).not.toHaveProperty('skills')
-    expect(payload).not.toHaveProperty('sandbox_profile')
     expect(payload).not.toHaveProperty('shell_policy')
     expect(payload).not.toHaveProperty('fallback_models')
     expect(payload).not.toHaveProperty('model_params')
@@ -1922,7 +1839,8 @@ describe('AgentProfile — locked core agent identity fields: visible read-only 
   it('shows the description as a disabled, read-only textarea', async () => {
     // Desktop Tabs AND mobile Accordion both default to "basics" and are
     // simultaneously mounted (established pattern in this file — see the
-    // O13 sandbox tests' use of getAllBy*), so use the *All* query variant.
+    // locked core agent shell_policy persistence test's use of getAllBy*),
+    // so use the *All* query variant.
     vi.mocked(fetchAgent).mockResolvedValue(mockLockedCoreAgent)
     renderProfile('mia')
     await screen.findByText('Mia')
@@ -2068,9 +1986,7 @@ describe('AgentProfile — Model input kind by agent kind (external = free text)
 // reject-set (pkg/gateway/rest.go ~2458) is only name/description/soul/
 // color/icon/skills — shell_policy was never rejected. The shell deny-
 // patterns editor rendered interactive for a locked core agent but every
-// edit was silently discarded before it reached the wire. Mirrors the
-// sibling "SENDS sandbox_profile in the PUT payload for a locked core
-// agent" test (O13 describe block above).
+// edit was silently discarded before it reached the wire.
 describe('AgentProfile — locked core agent shell_policy persistence (live-bug fix)', () => {
   it('SENDS shell_policy in the PUT payload for a locked core agent', async () => {
     vi.mocked(fetchAgent).mockReset().mockResolvedValue(mockLockedCoreAgent)
@@ -2078,8 +1994,8 @@ describe('AgentProfile — locked core agent shell_policy persistence (live-bug 
     renderProfile('mia')
     await screen.findByText('Mia')
 
-    // Open the Shell deny patterns sub-disclosure (nested inside Sandbox,
-    // which is rendered for locked core agents — O13) and add a pattern.
+    // Open the Shell deny patterns section (editable for locked core
+    // agents too) and add a pattern.
     const shellToggles = await screen.findAllByText(/Shell deny patterns/i)
     fireEvent.click(shellToggles[0])
     const textareas = await screen.findAllByTestId('shell-deny-patterns-textarea')

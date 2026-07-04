@@ -628,7 +628,7 @@ func TestWorkspaceShellBgTool_StartReachableReap(t *testing.T) {
 	workspace := t.TempDir()
 	tool := NewWorkspaceShellBgTool(WorkspaceShellBgDeps{
 		WorkspaceDir:    workspace,
-		Profile:         "off", // god mode for simplicity in this test
+		GodMode:         true, // god mode for simplicity in this test
 		Proxy:           nil,
 		AuditLogger:     nil,
 		AuditFailClosed: false,

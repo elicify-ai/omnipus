@@ -7,6 +7,14 @@
 **Companion spec:** [`agent-config-matrix-spec.md`](./agent-config-matrix-spec.md) — the source-of-truth property matrix this doc implements
 **Replaces:** the 2-type wizard (`custom` / `worker`) and the 12-accordion edit slide-over
 
+> **2026-07-04 — `sandbox_profile` removed entirely** (ADR-035): it never
+> differentiated the actual kernel-enforced boundary per agent — that
+> boundary is a single global Landlock/seccomp policy applied at gateway
+> boot, identical for every agent. `shell_policy` is unaffected. References
+> to `sandbox_profile` and `inherit_sandbox` throughout this document
+> (including row 17, §4.14, and the Advanced-disclosure field lists) are
+> historical.
+
 This document specifies the user-facing create and edit flows for Omnipus
 agents, including the 3-type taxonomy, the property matrix, the
 wireframe-by-wireframe UI mapping, the wire schema diff, and the

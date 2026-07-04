@@ -55,18 +55,6 @@ properties:
         type: array
         items:
           type: string
-  default_profile:
-    type: string
-    description: >
-      Global fallback sandbox profile applied to new custom agents that do not
-      pick their own profile. Empty string means use hardcoded default.
-    enum:
-      - ""
-      - none
-      - workspace
-      - workspace+net
-      - host
-    example: workspace
   god_mode:
     type: boolean
     description: >
@@ -98,7 +86,7 @@ properties:
     type: boolean
     description: >
       Present in PUT responses. True when the change requires a gateway
-      restart to take effect (mode, allowed_paths, default_profile).
+      restart to take effect (mode, allowed_paths).
   saved:
     type: boolean
     description: Present in PUT responses. Always true on success.

@@ -1,5 +1,10 @@
 # Agent Types — Field Matrix
 
+> **2026-07-04**: `sandbox_profile` removed entirely (ADR-035) — it never
+> differentiated the actual kernel-enforced boundary per agent. The row below
+> reflects `shell_policy` only; the old combined row and `inherit_sandbox` are
+> gone.
+
 Reference for which fields belong to which agent type, side by side. Grounded in
 the code as of `hotfix/v0.1.1` (2026-07-03): the wire contract
 (`contracts/components/schemas/Agent*.yaml`), the gateway handlers
@@ -43,7 +48,7 @@ UI; inherits `agents.defaults`.
 | `voice` | O (Main-surface concept) | O (**Main-only** among user types) | — (no chat/TTS surface) | — |
 | `skills` | RO — 403 on change (compiled capability set, B-2) | O | O or **inherit** (`inherit_skills`) | — (external runner can't load Omnipus skills; UI hidden 2026-07-03) |
 | `tools_cfg` (per-tool allow/ask/deny) | O (editable; e.g. mailbox grant fills entries) | O | O or **inherit** (`inherit_tools`) | — (runner has its own tools; per-tool CLI flags govern instead) |
-| `sandbox_profile` + `shell_policy` | defaults-only in UI | O | O or **inherit** (`inherit_sandbox`) | — (runner manages its own isolation) |
+| `shell_policy` | defaults-only in UI | O | O | — (runner manages its own isolation) |
 | `executor` (cli, cli_path, args, env) | — | — | — (native) | **R** (`cli` **R**, `cli_path` **R**, validated on blur; `args`/`env` O) |
 | `timeout_seconds` | O (editable; Execution knobs exposed for locked, decided 2026-07-03) | O | O | O — kept (operator-decided 2026-07-03; process-level kill for a hung CLI) |
 | `max_tool_iterations` (per-turn cap) | O (editable; Execution knobs exposed for locked, decided 2026-07-03) | O (default 200/turn) | O (default 200/turn) | — excluded (operator-decided 2026-07-03; the external CLI runs its own loop; schema-rejected on create, 400 on update) |

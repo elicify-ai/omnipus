@@ -1484,16 +1484,15 @@ func TestOmnipusRetentionConfig_Mode_DisabledTakesPrecedence(t *testing.T) {
 	}
 }
 
-// TestAgentConfig_SandboxProfile_RoundTrip verifies that AgentConfig with
-// sandbox_profile and shell_policy fields marshals and unmarshals without data
-// loss. This is a change-guard: if the fields are accidentally removed or
-// renamed, this test will fail.
-func TestAgentConfig_SandboxProfile_RoundTrip(t *testing.T) {
+// TestAgentConfig_ShellPolicy_RoundTrip verifies that AgentConfig with a
+// shell_policy field marshals and unmarshals without data loss. This is a
+// change-guard: if the field is accidentally removed or renamed, this test
+// will fail.
+func TestAgentConfig_ShellPolicy_RoundTrip(t *testing.T) {
 	trueBool := true
 	original := AgentConfig{
-		ID:             "test-agent",
-		Name:           "Test Agent",
-		SandboxProfile: SandboxProfileWorkspaceNet,
+		ID:   "test-agent",
+		Name: "Test Agent",
 		ShellPolicy: &AgentShellPolicy{
 			EnableDenyPatterns: trueBool,
 			CustomDenyPatterns: []string{`^\s*rm\s+-rf`, `curl.*\|.*sh`},
@@ -1510,9 +1509,6 @@ func TestAgentConfig_SandboxProfile_RoundTrip(t *testing.T) {
 		t.Fatalf("json.Unmarshal(AgentConfig) error: %v", err)
 	}
 
-	if decoded.SandboxProfile != original.SandboxProfile {
-		t.Errorf("SandboxProfile: got %q, want %q", decoded.SandboxProfile, original.SandboxProfile)
-	}
 	if decoded.ShellPolicy == nil {
 		t.Fatal("ShellPolicy: got nil, want non-nil")
 	}
@@ -1532,19 +1528,16 @@ func TestAgentConfig_SandboxProfile_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestAgentConfig_SandboxProfile_OmittedWhenEmpty confirms that omitempty
-// suppresses sandbox_profile and shell_policy when they hold zero values,
-// so existing configs without these fields are unaffected.
-func TestAgentConfig_SandboxProfile_OmittedWhenEmpty(t *testing.T) {
+// TestAgentConfig_ShellPolicy_OmittedWhenEmpty confirms that omitempty
+// suppresses shell_policy when it holds its zero value, so existing configs
+// without this field are unaffected.
+func TestAgentConfig_ShellPolicy_OmittedWhenEmpty(t *testing.T) {
 	cfg := AgentConfig{ID: "minimal"}
 	data, err := json.Marshal(cfg)
 	if err != nil {
 		t.Fatalf("json.Marshal error: %v", err)
 	}
 	s := string(data)
-	if strings.Contains(s, "sandbox_profile") {
-		t.Errorf("sandbox_profile must be omitted when empty; got: %s", s)
-	}
 	if strings.Contains(s, "shell_policy") {
 		t.Errorf("shell_policy must be omitted when nil; got: %s", s)
 	}
@@ -1601,5 +1594,77 @@ func TestConfigMigration_LegacyMaixCamGracefullyIgnored(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(output), "warn") && !strings.Contains(output, `"level":"WARN"`) {
 		t.Errorf("expected log level WARN in output; got: %s", output)
+	}
+}
+
+// TestLoadConfig_LegacySandboxProfileFields_Ignored is a pinning test for
+// Fix 4 of the 7-reviewer SandboxProfile-removal gate (silent-failure-hunter
+// + pr-test-analyzer): ADR-035 explicitly chose "no backward compatibility"
+// for the retired per-agent sandbox_profile and global sandbox.default_profile
+// fields, rather than a migration. LoadConfig has no DisallowUnknownFields
+// anywhere on the config-load path, so a persisted config.json from before
+// this change — carrying a per-agent "sandbox_profile":"off" and a global
+// "sandbox":{"default_profile":"host"} — must still load without error today
+// (unknown keys silently ignored), with every other field on both the agent
+// and the sandbox section intact. This pins that behavior so a future change
+// to the config-load path (e.g. adding strict decoding somewhere, which this
+// codebase does elsewhere — see decodeAgentCreateVariant's
+// DisallowUnknownFields) doesn't silently break upgrades by turning a
+// harmless legacy key into a boot-time hard failure.
+func TestLoadConfig_LegacySandboxProfileFields_Ignored(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfgPath := filepath.Join(tmpDir, "config.json")
+	rawCfg := `{
+		"version": 1,
+		"agents": {
+			"defaults": {"workspace": "` + tmpDir + `", "model_name": "test-model", "max_tokens": 4096},
+			"list": [
+				{
+					"id": "legacy-agent",
+					"name": "Legacy Agent",
+					"description": "carries a retired per-agent sandbox_profile key",
+					"sandbox_profile": "off"
+				}
+			]
+		},
+		"sandbox": {
+			"mode": "enforce",
+			"audit_log": true,
+			"default_profile": "host"
+		}
+	}`
+	if err := os.WriteFile(cfgPath, []byte(rawCfg), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig must not error on legacy sandbox_profile fields, got: %v", err)
+	}
+
+	// The agent carrying the retired per-agent field must still load, with
+	// its other real fields intact.
+	if len(cfg.Agents.List) != 1 {
+		t.Fatalf("expected exactly one agent, got %d", len(cfg.Agents.List))
+	}
+	agent := cfg.Agents.List[0]
+	if agent.ID != "legacy-agent" {
+		t.Errorf("agent.ID = %q, want %q", agent.ID, "legacy-agent")
+	}
+	if agent.Name != "Legacy Agent" {
+		t.Errorf("agent.Name = %q, want %q — the unknown sandbox_profile key must not corrupt sibling fields",
+			agent.Name, "Legacy Agent")
+	}
+	if agent.Description != "carries a retired per-agent sandbox_profile key" {
+		t.Errorf("agent.Description = %q, unexpected", agent.Description)
+	}
+
+	// The global sandbox section's retired default_profile key must not
+	// prevent its real sibling fields from loading.
+	if cfg.Sandbox.Mode != SandboxModeEnforce {
+		t.Errorf("cfg.Sandbox.Mode = %q, want %q", cfg.Sandbox.Mode, SandboxModeEnforce)
+	}
+	if !cfg.Sandbox.AuditLog {
+		t.Error("cfg.Sandbox.AuditLog should be true — must survive alongside the retired default_profile key")
 	}
 }

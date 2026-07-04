@@ -227,15 +227,12 @@ type AgentLoop struct {
 	// ask-policy tools are treated as allow (open gate, no WS event).
 	toolApprover PolicyApprover
 
-	// allowGodMode is set when the gateway was started with --allow-god-mode.
-	// When false, sandbox_profile=off is coerced to workspace at tool-wiring time.
-	// Latch (2) — runtime coercion.
+	// allowGodMode is set when the gateway was started with --allow-god-mode
+	// (or the config-persisted sandbox.god_mode_allowed grant — see
+	// resolveAllowGodMode). Combined with sandbox.GodModeAvailable (build
+	// support) via SetAllowGodMode to publish the process-wide god-mode
+	// AVAILABILITY latch consulted by GodModeActive. Latch (2).
 	allowGodMode bool
-
-	// coercionLogged tracks which agent IDs have already emitted a coercion WARN
-	// so the log fires at most once per process lifetime per agent (not on every
-	// hot reload).
-	coercionLogged sync.Map
 
 	// Lane S: session-end recap pipeline (FR-023..FR-030).
 
@@ -1216,79 +1213,39 @@ func (al *AgentLoop) wireTier13DepsLocked(registry *AgentRegistry, deps Tier13De
 
 		// workspace.shell (experimental foreground shell).
 		// Only registered when experimental.workspace_shell_enabled=true.
-		// The tool is per-agent because it needs the agent's workspace path,
-		// sandbox profile, and shell policy — the same reason web_serve dev
-		// mode is wired here rather than in the process-level BuiltinRegistry.
+		// The tool is per-agent because it needs the agent's workspace path
+		// and shell policy — the same reason web_serve dev mode is wired here
+		// rather than in the process-level BuiltinRegistry.
 		if resolveBoolWithDefault(cfg.Sandbox.Experimental.WorkspaceShellEnabled, false) {
-			// Resolve SandboxProfile for this agent from the global config.
-			// We scan cfg.Agents.List for a matching entry; if not found we
-			// use the global DefaultProfile (which itself defaults to workspace).
-			agentProfile := cfg.Sandbox.DefaultProfile
 			var agentShellPolicy *config.AgentShellPolicy
 			for i := range cfg.Agents.List {
 				entry := &cfg.Agents.List[i]
 				if entry.ID == ag.ID {
-					if entry.SandboxProfile != "" {
-						agentProfile = entry.SandboxProfile
-					}
 					agentShellPolicy = entry.ShellPolicy
 					break
 				}
 			}
-			// O14 god-mode override: when the global switch is active, force the
-			// sandbox OFF for EVERY agent regardless of its per-agent profile —
-			// full host fs + syscalls, network egress open, shell guard /
-			// deny-patterns off. Non-destructive: agentProfile is a local copy;
-			// cfg.Agents.List[].SandboxProfile is never mutated, so the moment
-			// god mode is switched off the next rebuild restores the per-agent
-			// profile (and shell policy) verbatim.
-			if GodModeActive(cfg) {
-				agentProfile = config.SandboxProfileOff
+			// O14 god-mode: the single source of truth for the sandbox escape
+			// hatch (see ADR-035-remove-per-agent-sandbox-profile.md — the old
+			// per-agent kernel-profile indirection in front of this has been
+			// removed; workspace_shell/workspace_shell_bg now run under a
+			// fixed sandbox boundary except when god mode is globally active).
+			// When active: full host fs + syscalls, network egress open, shell
+			// guard / deny-patterns off, regardless of per-agent shell policy.
+			godMode := GodModeActive(cfg)
+			if godMode {
 				agentShellPolicy = nil // drop per-agent deny patterns under god mode
-			}
-			// Coerce off → workspace when god mode is unavailable or not opted in.
-			// This is the runtime-side enforcement of latches (1) and (2). The REST
-			// handler enforces the same at write time so persisted config never has
-			// off without the latches; this is defense-in-depth. Skipped when god
-			// mode is active (the block above already forced off with availability
-			// verified via GodModeActive).
-			if agentProfile == config.SandboxProfileOff && !GodModeActive(cfg) {
-				al.mu.RLock()
-				godModeOptedIn := al.allowGodMode
-				al.mu.RUnlock()
-				if !sandbox.GodModeAvailable || !godModeOptedIn {
-					// Log at most once per process lifetime per agent to prevent
-					// the WARN from flooding on hot reloads.
-					if _, alreadyLogged := al.coercionLogged.LoadOrStore(ag.ID, true); !alreadyLogged {
-						logger.WarnCF("agent", "sandbox_profile=off coerced to workspace; --allow-god-mode not set",
-							map[string]any{"agent_id": ag.ID})
-						// CRIT-6: route through audit.EmitEntry so a Log failure
-						// bumps the audit-skipped counter (/health audit_degraded).
-						audit.EmitEntry(al.auditLogger, &audit.Entry{
-							Event:    audit.EventPolicyEval,
-							Decision: audit.DecisionDeny,
-							AgentID:  ag.ID,
-							Tool:     "sandbox_profile",
-							Details: map[string]any{
-								"reason":       "god_mode_unavailable",
-								"coerced_from": "off",
-								"coerced_to":   "workspace",
-							},
-						})
-					}
-					agentProfile = config.SandboxProfileWorkspace
-				}
 			}
 			// O14 god-mode: shell guard / deny-patterns are off under the global
 			// switch. agentShellPolicy was already nilled above; also drop the
 			// operator-global deny list so no command is blocked at the guard.
 			globalShellDenyPatterns := cfg.Sandbox.ShellDenyPatterns
-			if GodModeActive(cfg) {
+			if godMode {
 				globalShellDenyPatterns = nil
 			}
 			shellTool := tools.NewWorkspaceShellTool(tools.WorkspaceShellDeps{
 				WorkspaceDir: ag.Workspace,
-				Profile:      agentProfile,
+				GodMode:      godMode,
 				Proxy:        deps.EgressProxy,
 				AuditLogger:  al.auditLogger,
 				AuditFailClosed: resolveBoolWithDefault(
@@ -1307,7 +1264,7 @@ func (al *AgentLoop) wireTier13DepsLocked(registry *AgentRegistry, deps Tier13De
 				portRange := cfg.Sandbox.DevServerPortRange
 				shellBgTool := tools.NewWorkspaceShellBgTool(tools.WorkspaceShellBgDeps{
 					WorkspaceDir: ag.Workspace,
-					Profile:      agentProfile,
+					GodMode:      godMode,
 					Proxy:        deps.EgressProxy,
 					AuditLogger:  al.auditLogger,
 					AuditFailClosed: resolveBoolWithDefault(

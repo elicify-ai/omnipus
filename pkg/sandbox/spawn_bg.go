@@ -14,11 +14,12 @@
 //     child must be stopped (e.g., on token expiry, agent deletion).
 //
 // Security contract:
-//   - When limits is the zero value (profile=off / god mode), sandbox
+//   - When limits is the zero value (the god-mode bypass path), sandbox
 //     hardening is skipped and the child runs without Setpgid / Pdeathsig /
-//     prlimit. Callers must check IsGodMode before calling SpawnBackgroundChild
-//     if they wish to audit the bypass path — this function does not emit
-//     audit entries; that is the caller's responsibility.
+//     prlimit. Callers must check for zero-value Limits before calling
+//     SpawnBackgroundChild if they wish to audit the bypass path — this
+//     function does not emit audit entries; that is the caller's
+//     responsibility.
 //   - When limits is non-zero, ApplyChildHardening + ApplyChildPostStartHardening
 //     are applied in order. If post-start hardening fails, the child is killed
 //     and an error is returned.
@@ -144,7 +145,7 @@ func SpawnBackgroundChild(
 		}
 	}
 
-	// IsGodMode (profile=off): skip ApplyChildHardening entirely.
+	// Zero-value Limits (the god-mode bypass path): skip ApplyChildHardening entirely.
 	isZero := (limits == Limits{})
 	if !isZero {
 		if err := ApplyChildHardening(cmd, limits); err != nil {
