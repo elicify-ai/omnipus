@@ -16,7 +16,7 @@ type Store interface {
 	AddFullMessage(ctx context.Context, sessionKey string, msg providers.Message) error
 
 	// GetHistory returns the live window messages for a session in insertion order,
-	// honouring meta.Skip (evicted lines are excluded). Returns an empty slice
+	// honoring meta.Skip (evicted lines are excluded). Returns an empty slice
 	// (not nil) if the session does not exist.
 	GetHistory(ctx context.Context, sessionKey string) ([]providers.Message, error)
 

@@ -155,7 +155,11 @@ func (a *restAPI) reconcileHeartbeatSchedules() {
 //
 // Returns the first error encountered; reconciliation continues past per-job
 // errors so one bad entry does not block the rest.
-func ReconcileHeartbeatSchedules(cs *cron.CronService, workspaces []workspace.Workspace, isWorker func(agentID string) bool) error {
+func ReconcileHeartbeatSchedules(
+	cs *cron.CronService,
+	workspaces []workspace.Workspace,
+	isWorker func(agentID string) bool,
+) error {
 	if cs == nil {
 		return fmt.Errorf("heartbeat reconcile: cron service is nil")
 	}

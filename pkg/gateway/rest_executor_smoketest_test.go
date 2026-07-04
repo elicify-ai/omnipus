@@ -993,8 +993,11 @@ func TestPostAgentsExecutorSmokeTest_AgentIDIsCoreTeamMember_UsesWorkspaceShared
 	code, resp := postExecutorSmokeTest(t, api, body)
 	require.Equal(t, http.StatusOK, code)
 	assert.True(t, resp.Ok, "error=%v", resp.Error)
-	assert.True(t, resp.UsedAgentWorkspace,
-		"agent_id resolved to a real, saved agent — used_agent_workspace must be true even when overridden to the Workspace's shared dir")
+	assert.True(
+		t,
+		resp.UsedAgentWorkspace,
+		"agent_id resolved to a real, saved agent — used_agent_workspace must be true even when overridden to the Workspace's shared dir",
+	)
 
 	fake.mu.Lock()
 	gotWorkDir := fake.gotOpts.WorkDir

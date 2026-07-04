@@ -515,8 +515,13 @@ func spawnSubTurn(
 			targetAgentFallbackWarning = fmt.Sprintf(
 				"[delegation warning: target agent %q was not found; ran with the parent's own configuration instead] ",
 				cfg.TargetAgentID)
-			slog.Warn("subturn: target agent not found in registry; dispatch falls back to parent's own executor config",
-				"target_agent_id", cfg.TargetAgentID, "parent_id", parentTS.turnID)
+			slog.Warn(
+				"subturn: target agent not found in registry; dispatch falls back to parent's own executor config",
+				"target_agent_id",
+				cfg.TargetAgentID,
+				"parent_id",
+				parentTS.turnID,
+			)
 		}
 	}
 	execSource := baseAgent

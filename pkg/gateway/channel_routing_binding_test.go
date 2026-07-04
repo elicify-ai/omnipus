@@ -261,7 +261,7 @@ func TestSetChannelRouting_ValidBinding_SetsIdentity(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code, "valid bound routing must return 200")
 
 	// Verify response body.
-	var resp map[string]interface{}
+	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, "sales", resp["workspace_id"], "response must include workspace_id")
 	assert.Equal(t, "ray", resp["default_agent_id"], "response must include default_agent_id")
@@ -306,7 +306,7 @@ func TestGetChannelRouting_BoundReadsIdentity(t *testing.T) {
 	getW := getChannelRoutingReq(t, api, "whatsapp.eu")
 	require.Equal(t, http.StatusOK, getW.Code)
 
-	var resp map[string]interface{}
+	var resp map[string]any
 	require.NoError(t, json.Unmarshal(getW.Body.Bytes(), &resp))
 	assert.Equal(t, "sales", resp["workspace_id"], "GET must return workspace_id from Identity")
 	assert.Equal(t, "ray", resp["default_agent_id"], "GET must return agent_id from Identity")
@@ -337,7 +337,7 @@ func TestGetChannelRouting_UnboundReadsWildcard(t *testing.T) {
 	getW := getChannelRoutingReq(t, api, "telegram")
 	require.Equal(t, http.StatusOK, getW.Code)
 
-	var resp map[string]interface{}
+	var resp map[string]any
 	require.NoError(t, json.Unmarshal(getW.Body.Bytes(), &resp))
 	assert.Equal(t, "mia", resp["default_agent_id"],
 		"unbound GET must read the wildcard binding agent_id")
@@ -512,7 +512,7 @@ func TestSetChannelRouting_UnbindClears_WorkspaceID_And_Identity(t *testing.T) {
 	// Assert GET returns the unbound (wildcard) representation, not the old bound one.
 	getW := getChannelRoutingReq(t, api, "whatsapp.eu")
 	require.Equal(t, http.StatusOK, getW.Code)
-	var resp map[string]interface{}
+	var resp map[string]any
 	require.NoError(t, json.Unmarshal(getW.Body.Bytes(), &resp))
 	wsVal, hasWS := resp["workspace_id"]
 	if hasWS && wsVal != nil && wsVal != "" {

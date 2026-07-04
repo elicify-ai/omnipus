@@ -763,7 +763,11 @@ func (ts *turnState) restoreSession(agent *AgentInstance) error {
 						"target":      targetLen,
 						"after":       len(postArchive),
 					})
-				return fmt.Errorf("restoreSession: RollbackAppended did not take effect (archive len %d > target %d)", len(postArchive), targetLen)
+				return fmt.Errorf(
+					"restoreSession: RollbackAppended did not take effect (archive len %d > target %d)",
+					len(postArchive),
+					targetLen,
+				)
 			}
 		}
 		// If ReadArchive itself fails here, we can't verify — fall through and

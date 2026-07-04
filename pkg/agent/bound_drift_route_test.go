@@ -76,7 +76,11 @@ func TestResolveMessageRoute_BoundDrop_SkipsGetDefaultAgent(t *testing.T) {
 	// resolveMessageRoute is side-effect-free: it must NOT increment the counter.
 	// The counter is emitted by processMessage (the actual rejection site).
 	if postDrift != preDrift {
-		t.Errorf("driftDropped counter changed inside resolveMessageRoute: pre=%d post=%d; must stay unchanged (counter is emitted by processMessage)", preDrift, postDrift)
+		t.Errorf(
+			"driftDropped counter changed inside resolveMessageRoute: pre=%d post=%d; must stay unchanged (counter is emitted by processMessage)",
+			preDrift,
+			postDrift,
+		)
 	}
 }
 
@@ -181,7 +185,11 @@ func TestResolveMessageRoute_BoundDrift_WorkerAgent_LoopLevel(t *testing.T) {
 	}
 	// Side-effect-free: counter must NOT increment here; processMessage is the emission point.
 	if postDrift != preDrift {
-		t.Errorf("driftDropped changed inside resolveMessageRoute: pre=%d post=%d; must stay unchanged", preDrift, postDrift)
+		t.Errorf(
+			"driftDropped changed inside resolveMessageRoute: pre=%d post=%d; must stay unchanged",
+			preDrift,
+			postDrift,
+		)
 	}
 }
 
@@ -260,7 +268,11 @@ func TestDriftDrop_SingleEmission_ViaProcessMessage(t *testing.T) {
 		t.Errorf("resolveSteeringTarget returned ok=true for drift drop (scope=%q); expected false", scope)
 	}
 	if postSteering != preSteering {
-		t.Errorf("resolveSteeringTarget incremented driftDropped: pre=%d post=%d; must not emit (side-effect-free resolver)", preSteering, postSteering)
+		t.Errorf(
+			"resolveSteeringTarget incremented driftDropped: pre=%d post=%d; must not emit (side-effect-free resolver)",
+			preSteering,
+			postSteering,
+		)
 	}
 
 	// Step 2: processMessage is the single emission point.  The !ok dispatch
@@ -273,7 +285,11 @@ func TestDriftDrop_SingleEmission_ViaProcessMessage(t *testing.T) {
 		t.Fatal("processMessage must return an error for a drift drop")
 	}
 	if postProcess != preProcess+1 {
-		t.Errorf("driftDropped after processMessage: pre=%d post=%d; want exactly +1 (single emission)", preProcess, postProcess)
+		t.Errorf(
+			"driftDropped after processMessage: pre=%d post=%d; want exactly +1 (single emission)",
+			preProcess,
+			postProcess,
+		)
 	}
 
 	// Step 3: combined — simulate the full dispatch for a second message to
@@ -288,6 +304,10 @@ func TestDriftDrop_SingleEmission_ViaProcessMessage(t *testing.T) {
 	postCombined := al.GetDriftDropped()
 
 	if postCombined != preCombined+1 {
-		t.Errorf("second dispatch: driftDropped pre=%d post=%d; want exactly +1 per message (no double-count)", preCombined, postCombined)
+		t.Errorf(
+			"second dispatch: driftDropped pre=%d post=%d; want exactly +1 per message (no double-count)",
+			preCombined,
+			postCombined,
+		)
 	}
 }

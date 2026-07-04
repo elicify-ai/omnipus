@@ -279,8 +279,13 @@ func TestChannelsRouter_AcceptsInstanceID(t *testing.T) {
 	// AC-3: malformed id (uppercase slug) → 400 "malformed channel id" (Fix-B boundary).
 	t.Run("malformed_id_400", func(t *testing.T) {
 		w := getChannelRoutingHandleReq(t, api, "whatsapp.BAD")
-		assert.Equal(t, http.StatusBadRequest, w.Code,
-			"GET /channels/whatsapp.BAD/routing must return 400 for malformed id (distinct from 404); body=%s", w.Body.String())
+		assert.Equal(
+			t,
+			http.StatusBadRequest,
+			w.Code,
+			"GET /channels/whatsapp.BAD/routing must return 400 for malformed id (distinct from 404); body=%s",
+			w.Body.String(),
+		)
 	})
 }
 

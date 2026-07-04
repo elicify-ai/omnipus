@@ -298,7 +298,12 @@ func TestCreateAgent_DelegationUnknownTarget_400(t *testing.T) {
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 	assert.Equal(t, http.StatusBadRequest, w.Code, "want 400; body: %s", w.Body.String())
-	assert.Contains(t, w.Body.String(), "does not exist", "the 400 must be the delegation-target check, not an unrelated 400")
+	assert.Contains(
+		t,
+		w.Body.String(),
+		"does not exist",
+		"the 400 must be the delegation-target check, not an unrelated 400",
+	)
 }
 
 // TestUpdateAgent_DelegationRemoteA2AAccepted proves a remote-a2a target is
@@ -635,6 +640,10 @@ func TestDelegationInputExtractors_BehavioralIdentity(t *testing.T) {
 		"delegationInputFromCreateRequestMain and …Subagent must produce identical output for identical input")
 	assert.Equal(t, outMain, outSub3p,
 		"delegationInputFromCreateRequestMain and …Subagent3p must produce identical output for identical input")
-	assert.Equal(t, outMain, outUpd,
-		"delegationInputFromCreateRequestMain and delegationInputFromUpdateRequest must produce identical output for identical input")
+	assert.Equal(
+		t,
+		outMain,
+		outUpd,
+		"delegationInputFromCreateRequestMain and delegationInputFromUpdateRequest must produce identical output for identical input",
+	)
 }

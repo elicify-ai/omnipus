@@ -289,7 +289,11 @@ func TestAdminRoutes_ValidAdminHappyPath(t *testing.T) {
 			passed++
 		})
 	}
-	t.Logf("TestAdminRoutes_ValidAdminHappyPath: %d/%d routes passed for a valid authenticated caller", passed, len(allAdminRoutes))
+	t.Logf(
+		"TestAdminRoutes_ValidAdminHappyPath: %d/%d routes passed for a valid authenticated caller",
+		passed,
+		len(allAdminRoutes),
+	)
 }
 
 // TestAdminRoutes_UnauthenticatedRequestsRejected verifies that requests with NO

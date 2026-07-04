@@ -3598,7 +3598,9 @@ func (al *AgentLoop) rebuildChannelSessionIndex() {
 // workspace_id). Already-existing sessions are NOT patched — the index hit
 // returns the existing ID unchanged (workspace_id was set at creation time).
 // Returns "" if the shared store is unavailable or inputs are empty.
-func (al *AgentLoop) resolveOrCreateChannelSession(channel, instanceID, chatID, agentID, displayName, workspaceID string) string {
+func (al *AgentLoop) resolveOrCreateChannelSession(
+	channel, instanceID, chatID, agentID, displayName, workspaceID string,
+) string {
 	if al.sharedSessionStore == nil || channel == "" || chatID == "" {
 		return ""
 	}
@@ -3627,7 +3629,10 @@ func (al *AgentLoop) resolveOrCreateChannelSession(channel, instanceID, chatID, 
 	}
 	// FR-022: stamp workspace_id on newly-created sessions for bound instances.
 	if workspaceID != "" {
-		if patchErr := al.sharedSessionStore.SetMeta(meta.ID, session.MetaPatch{WorkspaceID: &workspaceID}); patchErr != nil {
+		if patchErr := al.sharedSessionStore.SetMeta(
+			meta.ID,
+			session.MetaPatch{WorkspaceID: &workspaceID},
+		); patchErr != nil {
 			logger.WarnCF("agent", "Failed to stamp workspace_id on channel session",
 				map[string]any{"session_id": meta.ID, "workspace_id": workspaceID, "error": patchErr.Error()})
 		}
@@ -4694,13 +4699,16 @@ func (al *AgentLoop) resolveMessageRoute(msg bus.InboundMessage) (routing.Resolv
 		if identity != nil {
 			intendedAgent = strings.TrimSpace(identity.ID)
 		}
-		logger.WarnCF("agent", "Bound-instance drift drop: configured agent unresolvable; message rejected (ADR-029 FR-012)",
+		logger.WarnCF(
+			"agent",
+			"Bound-instance drift drop: configured agent unresolvable; message rejected (ADR-029 FR-012)",
 			map[string]any{
 				"instance_id": instanceID,
 				"channel":     msg.Channel,
 				"chat_id":     msg.ChatID,
 				"matched_by":  route.MatchedBy,
-			})
+			},
+		)
 		return route, nil, fmt.Errorf("no agent available for route (agent_id=%s)", intendedAgent)
 	}
 
@@ -5125,11 +5133,17 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 		// agent's own directory).
 		wsDir, idErr := workspace.SafeWorkDir(omnipusHome(), wsID)
 		if idErr != nil {
-			logger.WarnCF("agent", "workspace-rooted filesystem: invalid workspace id; falling back to agent's own directory",
-				map[string]any{"agent_id": ts.agent.ID, "workspace_id": wsID, "error": idErr.Error()})
+			logger.WarnCF(
+				"agent",
+				"workspace-rooted filesystem: invalid workspace id; falling back to agent's own directory",
+				map[string]any{"agent_id": ts.agent.ID, "workspace_id": wsID, "error": idErr.Error()},
+			)
 		} else if mkErr := os.MkdirAll(wsDir, 0o700); mkErr != nil {
-			logger.WarnCF("agent", "workspace-rooted filesystem: MkdirAll failed; falling back to agent's own directory",
-				map[string]any{"agent_id": ts.agent.ID, "workspace_id": wsID, "dir": wsDir, "error": mkErr.Error()})
+			logger.WarnCF(
+				"agent",
+				"workspace-rooted filesystem: MkdirAll failed; falling back to agent's own directory",
+				map[string]any{"agent_id": ts.agent.ID, "workspace_id": wsID, "dir": wsDir, "error": mkErr.Error()},
+			)
 		} else {
 			turnCtx = tools.WithTurnWorkspaceDir(turnCtx, wsDir)
 		}
@@ -5229,7 +5243,15 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	ts.captureRestorePoint(history, summary)
 
 	// Site-1: initial assembly (CRITICAL 2 — error handled inside assembleMessages).
-	messages := al.assembleMessages(turnCtx, ts, history, summary, ts.userMessage, ts.media, activeSkillNames(ts.agent, ts.opts))
+	messages := al.assembleMessages(
+		turnCtx,
+		ts,
+		history,
+		summary,
+		ts.userMessage,
+		ts.media,
+		activeSkillNames(ts.agent, ts.opts),
+	)
 
 	cfg := al.GetConfig()
 	maxMediaSize := cfg.Agents.Defaults.GetMaxMediaSize()
@@ -5255,7 +5277,15 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 			// Site-2: post-proactive-trim assembly.
 			newHistory := ts.agent.Sessions.GetHistory(ts.sessionKey)
 			newSummary := ts.agent.Sessions.GetSummary(ts.sessionKey)
-			messages = al.assembleMessages(turnCtx, ts, newHistory, newSummary, ts.userMessage, ts.media, activeSkillNames(ts.agent, ts.opts))
+			messages = al.assembleMessages(
+				turnCtx,
+				ts,
+				newHistory,
+				newSummary,
+				ts.userMessage,
+				ts.media,
+				activeSkillNames(ts.agent, ts.opts),
+			)
 			messages = resolveMediaRefs(messages, turnMediaStore, maxMediaSize, ts.agent.Model)
 		}
 	}

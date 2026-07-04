@@ -523,7 +523,7 @@ func TestDelegationWiring_Parity_AdvertisedMatchesEnforced(t *testing.T) {
 // TestResolveDelegationLabel_CoreAgent
 //
 // resolveDelegationLabel must return a label that includes the agent name for
-// recognised core-agent IDs, without duplicating the Subtitle when the Name
+// recognized core-agent IDs, without duplicating the Subtitle when the Name
 // already contains it (e.g. "Ava — Builder" must not become "Ava — Builder (Builder)").
 // ---------------------------------------------------------------------------
 
@@ -557,7 +557,12 @@ func TestResolveDelegationLabel_CoreAgent(t *testing.T) {
 				return
 			}
 			if !strings.Contains(label, tc.wantSubstring) {
-				t.Errorf("resolveDelegationLabel(%q): label=%q does not contain %q", tc.agentID, label, tc.wantSubstring)
+				t.Errorf(
+					"resolveDelegationLabel(%q): label=%q does not contain %q",
+					tc.agentID,
+					label,
+					tc.wantSubstring,
+				)
 			}
 			if tc.wantNotDuplicate != "" && strings.Contains(label, tc.wantNotDuplicate) {
 				t.Errorf("resolveDelegationLabel(%q): label=%q contains duplicate Subtitle pattern %q",

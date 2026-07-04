@@ -85,7 +85,12 @@ func unauthCases() []unauthCase {
 			path:   "/api/v1/security/rate-limits",
 			want:   []int{http.StatusUnauthorized},
 		},
-		{name: "get_audit_log", method: http.MethodGet, path: "/api/v1/audit-log", want: []int{http.StatusUnauthorized}},
+		{
+			name:   "get_audit_log",
+			method: http.MethodGet,
+			path:   "/api/v1/audit-log",
+			want:   []int{http.StatusUnauthorized},
+		},
 		{
 			name:   "get_credentials",
 			method: http.MethodGet,

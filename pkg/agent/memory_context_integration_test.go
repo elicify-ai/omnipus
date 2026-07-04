@@ -172,11 +172,11 @@ func TestIntegration_RecallSpansThreeScopes(t *testing.T) {
 
 	// recall_memory now ALSO spans retrospectives (finding #1 fix): the seeded
 	// retro's content matches the query, so recall surfaces it alongside the
-	// long-term hit, labelled as a retrospective.
+	// long-term hit, labeled as a retrospective.
 	assert.Contains(t, recallResult.ForLLM, "Went well",
 		"recall_memory must surface matching retrospective content (recall spans retros)")
 	assert.Contains(t, recallResult.ForLLM, "retrospective",
-		"recall_memory retro hits are labelled retrospective")
+		"recall_memory retro hits are labeled retrospective")
 
 	// Differentiation: a different query must NOT find it.
 	recallResultOther := recallTool.Execute(context.Background(), map[string]any{
@@ -217,8 +217,11 @@ func TestIntegration_RecallSpansThreeScopes(t *testing.T) {
 			}
 		}
 	}
-	assert.True(t, retroFound,
-		"ReadRetros must surface the retrospective content — it was written correctly but is not exposed via recall_memory or GetMemoryContext")
+	assert.True(
+		t,
+		retroFound,
+		"ReadRetros must surface the retrospective content — it was written correctly but is not exposed via recall_memory or GetMemoryContext",
+	)
 }
 
 // ---------------------------------------------------------------------------

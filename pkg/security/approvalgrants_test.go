@@ -43,7 +43,9 @@ func TestApprovalGrantStore_SurvivesReconnect(t *testing.T) {
 	hook1.Record("session-1", "agent-a", "exec")
 
 	if !hook2.IsAllowed("session-1", "agent-a", "exec") {
-		t.Error("a grant recorded via one connection's hook must be visible via a reconnected hook sharing the same store")
+		t.Error(
+			"a grant recorded via one connection's hook must be visible via a reconnected hook sharing the same store",
+		)
 	}
 }
 

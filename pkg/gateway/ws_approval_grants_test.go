@@ -215,7 +215,10 @@ func TestApproveTool_AlwaysGrantScopedByAgentAndSession(t *testing.T) {
 			}
 			if frame.Type == "exec_approval_request" {
 				thirdCh <- struct{}{}
-				hook.registry.resolve(frame.ID, agent.ApprovalDecision{Verdict: agent.VerdictDeny, Reason: "denied for test"})
+				hook.registry.resolve(
+					frame.ID,
+					agent.ApprovalDecision{Verdict: agent.VerdictDeny, Reason: "denied for test"},
+				)
 			}
 		case <-time.After(2 * time.Second):
 		}

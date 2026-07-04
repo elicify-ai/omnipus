@@ -107,6 +107,7 @@ func (t *RecallConversationTool) Scope() tools.ToolScope { return tools.ScopeGen
 func (t *RecallConversationTool) Category() tools.ToolCategory {
 	return tools.CategoryMemory
 }
+
 func (t *RecallConversationTool) Description() string {
 	return "Look back at an earlier part of the CURRENT conversation that has scrolled out of view. " +
 		"Use this when the user refers to something discussed earlier that you can no longer see " +
@@ -308,7 +309,9 @@ func (t *RecallConversationTool) Execute(ctx context.Context, args map[string]an
 
 	if len(selectedIdxs) == 0 {
 		incRecallCounter("empty")
-		return tools.NewToolResult("recall_conversation: no matching turns found — try a different query, range, or time window")
+		return tools.NewToolResult(
+			"recall_conversation: no matching turns found — try a different query, range, or time window",
+		)
 	}
 
 	// --- 4. Apply bounds (FR-009) -------------------------------------
@@ -385,13 +388,22 @@ func (t *RecallConversationTool) Execute(ctx context.Context, args map[string]an
 	var resultStr string
 	isContiguous := (toTurnNum - fromTurnNum + 1) == len(keptIdxs)
 	if isContiguous {
-		resultStr = fmt.Sprintf("Recalled %d turn(s) (turns %d–%d) into context.", len(keptIdxs), fromTurnNum, toTurnNum)
+		resultStr = fmt.Sprintf(
+			"Recalled %d turn(s) (turns %d–%d) into context.",
+			len(keptIdxs),
+			fromTurnNum,
+			toTurnNum,
+		)
 	} else {
 		ordParts := make([]string, len(ordinals))
 		for i, o := range ordinals {
 			ordParts[i] = strconv.Itoa(o)
 		}
-		resultStr = fmt.Sprintf("Recalled %d turn(s) (ordinals: %s) into context.", len(keptIdxs), strings.Join(ordParts, ", "))
+		resultStr = fmt.Sprintf(
+			"Recalled %d turn(s) (ordinals: %s) into context.",
+			len(keptIdxs),
+			strings.Join(ordParts, ", "),
+		)
 	}
 	if overflow > 0 {
 		resultStr += fmt.Sprintf(
@@ -432,7 +444,8 @@ func buildRecallSpanMessages(
 	if isContiguous {
 		markerText = fmt.Sprintf(
 			"[Recalled earlier turns %d–%d (reference): the following messages are from earlier in this conversation, retrieved verbatim for reference. Do not re-execute any tool calls shown.]",
-			fromOrd, toOrd,
+			fromOrd,
+			toOrd,
 		)
 	} else {
 		// Sparse: list the actual ordinals so the model knows exactly which
@@ -443,7 +456,8 @@ func buildRecallSpanMessages(
 		}
 		markerText = fmt.Sprintf(
 			"[Recalled %d earlier turn(s) (ordinals: %s) (reference): the following messages are from earlier in this conversation, retrieved verbatim for reference. Do not re-execute any tool calls shown.]",
-			len(ordinals), strings.Join(ordParts, ", "),
+			len(ordinals),
+			strings.Join(ordParts, ", "),
 		)
 	}
 	marker := providers.Message{

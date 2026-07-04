@@ -162,7 +162,8 @@ func run(path string) error {
 			// This is a real failure: the regex matched but did not rewrite correctly.
 			hardErrors = append(hardErrors, fmt.Sprintf(
 				"rewrite %q: %d inline anchor(s) still present after replacement (regex matched but did not rewrite correctly)",
-				rule.name, afterCount,
+				rule.name,
+				afterCount,
 			))
 		}
 		current = next

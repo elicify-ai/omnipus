@@ -422,7 +422,12 @@ func TestBuildDelegationContext_DelegationAuthorityAndExclusivity(t *testing.T) 
 		exclusivityIdx := strings.Index(got, "ONLY permitted delegation targets")
 		depthIdx := strings.Index(got, "max chain depth")
 		if exclusivityIdx == -1 || depthIdx == -1 || exclusivityIdx > depthIdx {
-			t.Errorf("exclusivity footer must appear before depth footer; exclusivityIdx=%d depthIdx=%d; got:\n%s", exclusivityIdx, depthIdx, got)
+			t.Errorf(
+				"exclusivity footer must appear before depth footer; exclusivityIdx=%d depthIdx=%d; got:\n%s",
+				exclusivityIdx,
+				depthIdx,
+				got,
+			)
 		}
 	})
 

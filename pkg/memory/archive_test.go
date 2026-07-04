@@ -235,7 +235,7 @@ func TestReadArchive_ReachesEvictedTurn(t *testing.T) {
 //	Then the on-disk .jsonl has 8 lines (unchanged),
 //	And ReadArchive returns 8 ArchivedMessages.
 //
-// Note: JSONLStore has no Save method of its own — this behaviour is guaranteed
+// Note: JSONLStore has no Save method of its own — this behavior is guaranteed
 // because the only callers of Compact (which would drop lines) are tests.
 // The Save path in JSONLBackend and UnifiedStore is a no-op (FR-005).
 func TestSave_DoesNotCompactSkipped(t *testing.T) {
@@ -293,13 +293,13 @@ func TestSave_DoesNotCompactSkipped(t *testing.T) {
 
 // TestArchivedMessage_RoundTrip guards against a future providers.Message.TS
 // field addition silently colliding with ArchivedMessage's own TS via JSON
-// embedding. If providers.Message ever gains a "ts" field, JSON serialisation
+// embedding. If providers.Message ever gains a "ts" field, JSON serialization
 // would be ambiguous — this test would fail at build time, catching the
 // collision before it reaches production.
 //
 // BDD: Given an ArchivedMessage with a distinct TS value,
 //
-//	When it is JSON-marshalled and then unmarshalled back,
+//	When it is JSON-marshaled and then unmarshalled back,
 //	Then Role, Content, and TS survive round-trip exactly.
 func TestArchivedMessage_RoundTrip(t *testing.T) {
 	const wantRole = "assistant"

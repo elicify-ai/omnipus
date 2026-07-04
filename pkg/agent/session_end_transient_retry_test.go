@@ -180,7 +180,10 @@ func TestRunRecap_TransientRetry_SucceedsAfterRetries(t *testing.T) {
 
 	// The real recap must appear, not the stub fallback.
 	if strings.Contains(content, "Fallback reason:") {
-		t.Errorf("last-session.md contains fallback stub — transient retry must have produced real recap; content:\n%s", content)
+		t.Errorf(
+			"last-session.md contains fallback stub — transient retry must have produced real recap; content:\n%s",
+			content,
+		)
 	}
 	if !strings.Contains(content, "shipped the feature") {
 		t.Errorf("last-session.md missing real recap content; content:\n%s", content)
@@ -321,7 +324,9 @@ func TestRunRecap_NonTransientError_NoRetry(t *testing.T) {
 // When runRecap is invoked,
 // Then last-session.md contains real recap content (not the stub).
 func TestRunRecap_GOAWAYTransient_SucceedsAfterRetry(t *testing.T) {
-	goawayErr := errors.New(`http2: server sent GOAWAY and closed the connection; LastStreamID=5, ErrCode=INTERNAL_ERROR, debug=""`)
+	goawayErr := errors.New(
+		`http2: server sent GOAWAY and closed the connection; LastStreamID=5, ErrCode=INTERNAL_ERROR, debug=""`,
+	)
 	successBody := `{"recap":"goaway retry worked","went_well":[],"needs_improvement":[],"worth_remembering":[]}`
 
 	provider := &recapTransientProvider{

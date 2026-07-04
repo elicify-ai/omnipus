@@ -64,13 +64,22 @@ func ValidateMemberConfigs(coreTeam []string, mc map[string]MemberConfig, isWork
 		}
 		// M-1: always enforce the 16KB body cap, even when disabled.
 		if len(hb.Body) > MaxHeartbeatBodyBytes {
-			return fmt.Errorf("member_configs: agent %q heartbeat body exceeds cap (%d > %d bytes)", agentID, len(hb.Body), MaxHeartbeatBodyBytes)
+			return fmt.Errorf(
+				"member_configs: agent %q heartbeat body exceeds cap (%d > %d bytes)",
+				agentID,
+				len(hb.Body),
+				MaxHeartbeatBodyBytes,
+			)
 		}
 		// M-1: only enforce interval ≥ 5 and non-empty body when the heartbeat
 		// is enabled. A disabled heartbeat with interval=0 and empty body is valid.
 		if hb.Enabled {
 			if hb.IntervalMinutes < 5 {
-				return fmt.Errorf("member_configs: agent %q heartbeat interval_minutes must be ≥ 5 (got %d)", agentID, hb.IntervalMinutes)
+				return fmt.Errorf(
+					"member_configs: agent %q heartbeat interval_minutes must be ≥ 5 (got %d)",
+					agentID,
+					hb.IntervalMinutes,
+				)
 			}
 			if hb.Body == "" {
 				return fmt.Errorf("member_configs: agent %q heartbeat body is required when enabled", agentID)
