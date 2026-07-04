@@ -82,10 +82,10 @@ func TestRunTurn_CoreTeamMember_WritesToWorkspaceSharedDir(t *testing.T) {
 	require.NoError(t, err, "ProcessDirect must succeed")
 	assert.Equal(t, "done", finalContent)
 
-	sharedFile := filepath.Join(workspacesDir, "team-ws", "proof.txt")
+	sharedFile := filepath.Join(workspacesDir, "team-ws", "work", "proof.txt")
 	got, readErr := os.ReadFile(sharedFile)
 	require.NoError(t, readErr,
-		"write_file must have landed in the workspace's SHARED directory (%s) — CoreTeam membership must re-root the turn's filesystem", sharedFile)
+		"write_file must have landed in the workspace's dedicated work/ directory (%s) — CoreTeam membership must re-root the turn's filesystem there", sharedFile)
 	assert.Equal(t, "hello-from-team-workspace", string(got))
 
 	// The agent's own private directory must NOT have received the file.
@@ -93,6 +93,15 @@ func TestRunTurn_CoreTeamMember_WritesToWorkspaceSharedDir(t *testing.T) {
 	_, statErr := os.Stat(privateFile)
 	assert.True(t, os.IsNotExist(statErr),
 		"write_file must NOT land in the agent's own private directory (%s) when it is a CoreTeam member", privateFile)
+
+	// The workspace root itself (one level up from work/) must NOT have
+	// received the file either — proving the re-root target is the
+	// dedicated work/ subdirectory, not the workspace's own directory (which
+	// also holds AGENT.md and the shared memory room).
+	workspaceRootFile := filepath.Join(workspacesDir, "team-ws", "proof.txt")
+	_, rootStatErr := os.Stat(workspaceRootFile)
+	assert.True(t, os.IsNotExist(rootStatErr),
+		"write_file must NOT land directly in the workspace's own directory (%s) — only in its work/ subdirectory", workspaceRootFile)
 }
 
 // TestRunTurn_NotCoreTeamMember_WritesToOwnDir confirms the negative case:
@@ -141,4 +150,64 @@ func TestRunTurn_NotCoreTeamMember_WritesToOwnDir(t *testing.T) {
 	got, readErr := os.ReadFile(privateFile)
 	require.NoError(t, readErr, "write_file must land in the agent's own directory when it is not a CoreTeam member")
 	assert.Equal(t, "solo-agent-write", string(got))
+}
+
+// TestRunTurn_CoreTeamMember_CannotEscapeWorkToWorkspaceRoot proves the
+// security property motivating the work/ subdirectory design: re-rooting a
+// CoreTeam member's file tools to workspaces/<id>/work/ (not
+// workspaces/<id>/ itself) means AGENT.md and the shared memory room, one
+// level up, are structurally unreachable — a relative "../" escape attempt is
+// rejected by the os.Root confinement itself, not by a guard that has to
+// separately recognize the workspaces/<id>/ layout (pkg/tools/metadata_guard.go's
+// app-level guard only recognizes agents/<id>/AGENT.md and does NOT match
+// workspaces/<id>/AGENT.md — this test does not rely on that guard at all).
+func TestRunTurn_CoreTeamMember_CannotEscapeWorkToWorkspaceRoot(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("OMNIPUS_HOME", tmpHome)
+
+	agentWorkspaceDir := filepath.Join(tmpHome, "agents", "main")
+	require.NoError(t, os.MkdirAll(agentWorkspaceDir, 0o755))
+
+	workspacesDir := filepath.Join(tmpHome, "workspaces")
+	wsDir := filepath.Join(workspacesDir, "team-ws")
+	require.NoError(t, os.MkdirAll(wsDir, 0o755))
+	wsJSON := `{"id":"team-ws","core_team":["main"]}`
+	require.NoError(t, os.WriteFile(filepath.Join(workspacesDir, "team-ws.json"), []byte(wsJSON), 0o644))
+
+	// A real AGENT.md at the workspace root, with known content, that the
+	// re-rooted turn must never be able to touch.
+	agentMdPath := filepath.Join(wsDir, "AGENT.md")
+	require.NoError(t, os.WriteFile(agentMdPath, []byte("original project instructions"), 0o600))
+
+	provider := testutil.NewScenario().
+		WithToolCall("write_file", `{"path":"../AGENT.md","content":"pwned","overwrite":true}`).
+		WithText("done")
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:           agentWorkspaceDir,
+				ModelName:           "scripted-model",
+				MaxTokens:           4096,
+				MaxToolIterations:   10,
+				RestrictToWorkspace: true,
+			},
+		},
+	}
+
+	msgBus := bus.NewMessageBus()
+	al := mustNewAgentLoop(t, cfg, msgBus, provider)
+	defer al.Close()
+
+	const sessionKey = "test-session-coreteam-escape-attempt"
+	ctx := context.Background()
+	finalContent, err := al.ProcessDirect(ctx, "please write ../AGENT.md for me", sessionKey)
+	require.NoError(t, err, "ProcessDirect must succeed (the tool call itself is expected to be rejected, not the turn)")
+	assert.Equal(t, "done", finalContent)
+
+	// AGENT.md must be completely untouched.
+	got, readErr := os.ReadFile(agentMdPath)
+	require.NoError(t, readErr, "AGENT.md must still exist")
+	assert.Equal(t, "original project instructions", string(got),
+		"a CoreTeam member's write_file must NOT be able to reach workspaces/<id>/AGENT.md via a relative escape from work/")
 }

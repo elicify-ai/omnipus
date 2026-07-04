@@ -5095,9 +5095,10 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 
 	// Filesystem re-rooting: every agent that belongs to a Workspace's CoreTeam
 	// — native (Main/Subagent) or subagent_3p (external-CLI), no exceptions by
-	// kind — works in that Workspace's own shared directory instead of its
-	// private per-agent one. Unconditional (no feature flag) and driven by
-	// AGENT IDENTITY (workspace.FindForAgent's CoreTeam-membership lookup),
+	// kind — works in that Workspace's dedicated project-work subdirectory
+	// (workspaces/<id>/work/, workspace.SafeWorkDir) instead of its private
+	// per-agent one. Unconditional (no feature flag) and driven by AGENT
+	// IDENTITY (workspace.FindForAgent's CoreTeam-membership lookup),
 	// deliberately NOT by ts.opts.WorkspaceID above: those are genuinely
 	// different signals that can diverge in both directions — a CoreTeam
 	// member responding via an unbound channel still has ts.opts.WorkspaceID
@@ -5115,19 +5116,27 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// Landlock policy already grants RWX — this changes only the working
 	// directory and app-level path-validation root, never the kernel sandbox.
 	// Sessions and private agent memory stay under agents/<id>/, never
-	// re-rooted. A re-rooted agent's generic write_file/edit_file can write
-	// workspaces/<id>/AGENT.md — the workspace's own Project Instructions
-	// injected into every agent's prompt. That is an accepted surface; do not
-	// enable untrusted multi-agent setups without reviewing it.
+	// re-rooted. The re-root target is deliberately workspaces/<id>/work/, NOT
+	// workspaces/<id>/ itself: that directory also holds AGENT.md (the
+	// workspace's Project Instructions, injected into every agent's prompt)
+	// and the shared memory room (.omnipus/) — a generic write_file/edit_file
+	// confined (via os.Root) to work/ cannot reach either, structurally, since
+	// os.Root cannot open a path outside its own root. (An earlier version of
+	// this re-rooted directly to workspaces/<id>/, leaving AGENT.md reachable —
+	// pkg/tools/metadata_guard.go's app-level guard only recognizes the
+	// agents/<id>/ layout and does not match workspaces/<id>/AGENT.md, so
+	// nothing else was catching it.)
 	if wsID, found := workspace.FindForAgent(omnipusHome(), ts.agent.ID); found {
 		// Derive the re-root dir from the SAME canonical home ($OMNIPUS_HOME)
 		// the rest of the feature uses — buildWorkspaceInstructionsNote, the
 		// REST handlers, and ResolveDefaultID/FindForAgent — so the agent's
-		// files, its injected instructions, and the shared memory room all
-		// live under one workspaces/<id>/ tree. SafeWorkspaceDir validates the
-		// id against traversal before it becomes a filesystem root (fail-closed:
-		// an unsafe id falls back to the agent's own directory).
-		wsDir, idErr := workspace.SafeWorkspaceDir(omnipusHome(), wsID)
+		// work files, its injected instructions, and the shared memory room
+		// all live under one workspaces/<id>/ tree (work/ as a dedicated
+		// sibling of AGENT.md and .omnipus/, not their container).
+		// SafeWorkDir validates the id against traversal before it becomes a
+		// filesystem root (fail-closed: an unsafe id falls back to the
+		// agent's own directory).
+		wsDir, idErr := workspace.SafeWorkDir(omnipusHome(), wsID)
 		if idErr != nil {
 			logger.WarnCF("agent", "workspace-rooted filesystem: invalid workspace id; falling back to agent's own directory",
 				map[string]any{"agent_id": ts.agent.ID, "workspace_id": wsID, "error": idErr.Error()})

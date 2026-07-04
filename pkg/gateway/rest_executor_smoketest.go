@@ -61,8 +61,10 @@
 //     agent.ResolveAgentWorkspace / a real subagent_3p delegation would
 //     use) — UNLESS that agent is a member of a real pkg/workspace.Workspace's
 //     CoreTeam (workspace.FindForAgent), in which case the smoke-test runs in
-//     that Workspace's own SHARED directory instead, mirroring exactly what a
-//     genuine dispatch to that agent does today (both pkg/agent/loop.go's
+//     that Workspace's dedicated project-work subdirectory
+//     (workspaces/{id}/work/, workspace.SafeWorkDir) instead, mirroring
+//     exactly what a genuine dispatch to that agent does today (both
+//     pkg/agent/loop.go's
 //     runTurn and pkg/agent/external_dispatch.go's runExternalCLISubTurn
 //     apply the same CoreTeam-membership override — see either's doc comment
 //     for the design). Using the agent's real resolved directory makes the
@@ -359,13 +361,17 @@ func (a *restAPI) runExecutorSmokeTest(
 	if agentCfg := findAgentConfig(cfg, agentID); agentCfg != nil {
 		resolved := agent.ResolveAgentWorkspace(agentCfg, &cfg.Agents.Defaults)
 		// CoreTeam override: an agent that belongs to a Workspace's team runs
-		// in the Workspace's own shared directory instead of its private one
-		// — same rule real dispatch applies (see the file-level doc above).
-		// Not found, or an unsafe workspace id, is not an error: it just means
-		// the agent's own directory (already resolved above) is used, same as
-		// before this override existed.
+		// in the Workspace's dedicated project-work subdirectory
+		// (workspaces/<id>/work/, workspace.SafeWorkDir) instead of its
+		// private one — same rule real dispatch applies (see the file-level
+		// doc above). Deliberately not the workspace's own root directory:
+		// that also holds AGENT.md and the shared memory room, which a
+		// generic write_file/edit_file confined here must not be able to
+		// reach. Not found, or an unsafe workspace id, is not an error: it
+		// just means the agent's own directory (already resolved above) is
+		// used, same as before this override existed.
 		if wsID, found := workspace.FindForAgent(config.OmnipusHomeDir(), agentID); found {
-			if wsDir, wsErr := workspace.SafeWorkspaceDir(config.OmnipusHomeDir(), wsID); wsErr == nil {
+			if wsDir, wsErr := workspace.SafeWorkDir(config.OmnipusHomeDir(), wsID); wsErr == nil {
 				resolved = wsDir
 			} else {
 				slog.Warn("executor-smoke-test: workspace-team dir resolution failed; using agent's own directory",

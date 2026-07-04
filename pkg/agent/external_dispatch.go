@@ -139,26 +139,33 @@ func runExternalCLISubTurn(
 	//    persistent workspace, not a scratch directory.
 	//
 	//    OVERRIDE (Workspace-team execution): when this agent is a member of a
-	//    Workspace's CoreTeam, it runs in that Workspace's own SHARED directory
-	//    instead — every agent belonging to a Workspace's team, native or
-	//    external-cli, must actually work in the team's shared directory, not
-	//    its private per-agent one (no exceptions by kind). workspace.FindForAgent
-	//    keys off agent IDENTITY (CoreTeam membership), which is a different,
-	//    independent signal from the channel-bound turn workspace_id that
-	//    tools.WithWorkspaceID routes memory to — see pkg/agent/loop.go's
-	//    runTurn for the mirrored resolution and the divergence discussion.
-	//    An agent not on any workspace's CoreTeam (or an id that fails the
-	//    traversal guard) is NOT an error: it falls back to the agent's own
-	//    workspace directory exactly as before this override existed.
+	//    Workspace's CoreTeam, it runs in that Workspace's dedicated project-work
+	//    subdirectory (workspaces/<id>/work/, workspace.SafeWorkDir) instead —
+	//    every agent belonging to a Workspace's team, native or external-cli,
+	//    must actually work in the team's shared directory, not its private
+	//    per-agent one (no exceptions by kind). This is deliberately NOT
+	//    workspaces/<id>/ itself: that directory also holds AGENT.md (Project
+	//    Instructions) and the shared memory room (.omnipus/), and a generic
+	//    write_file/edit_file confined there could reach either. The work/
+	//    subdirectory keeps them structurally unreachable — os.Root-confined
+	//    tools cannot open a path outside their root, not merely guarded
+	//    against. workspace.FindForAgent keys off agent IDENTITY (CoreTeam
+	//    membership), which is a different, independent signal from the
+	//    channel-bound turn workspace_id that tools.WithWorkspaceID routes
+	//    memory to — see pkg/agent/loop.go's runTurn for the mirrored
+	//    resolution and the divergence discussion. An agent not on any
+	//    workspace's CoreTeam (or an id that fails the traversal guard) is NOT
+	//    an error: it falls back to the agent's own workspace directory exactly
+	//    as before this override existed.
 	workDir := strings.TrimSpace(agent.Workspace)
 	if wsID, found := workspace.FindForAgent(omnipusHome(), agent.ID); found {
-		if wsDir, wsErr := workspace.SafeWorkspaceDir(omnipusHome(), wsID); wsErr != nil {
+		if wsDir, wsErr := workspace.SafeWorkDir(omnipusHome(), wsID); wsErr != nil {
 			slog.Warn(
 				"external-cli dispatch: workspace-team dir resolution failed; falling back to agent's own workspace",
 				"agent_id", agent.ID, "workspace_id", wsID, "error", wsErr)
 		} else {
 			slog.Info(
-				"external-cli dispatch: agent is a workspace CoreTeam member; running in the workspace's shared directory instead of its own",
+				"external-cli dispatch: agent is a workspace CoreTeam member; running in the workspace's project-work directory instead of its own",
 				"agent_id", agent.ID, "workspace_id", wsID, "work_dir", wsDir)
 			workDir = strings.TrimSpace(wsDir)
 		}

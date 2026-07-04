@@ -450,10 +450,12 @@ func TestExternalDispatch_GitRepoWorkspace_RunsInRepoDirDirectly(t *testing.T) {
 // TestExternalDispatch_CoreTeamMember_RunsInWorkspaceSharedDir proves the
 // operator-mandated requirement that every agent belonging to a Workspace's
 // CoreTeam — native or subagent_3p, no exceptions by kind — actually runs in
-// that Workspace's own SHARED directory, not its private per-agent one. When
-// the dispatching agent's ID is a member of a real, on-disk workspace's
-// core_team, RunOptions.WorkDir must be that workspace's directory
-// ($OMNIPUS_HOME/workspaces/<id>/) instead of agent.Workspace.
+// that Workspace's dedicated project-work subdirectory, not its private
+// per-agent one. When the dispatching agent's ID is a member of a real,
+// on-disk workspace's core_team, RunOptions.WorkDir must be that workspace's
+// work/ directory ($OMNIPUS_HOME/workspaces/<id>/work/) instead of
+// agent.Workspace — deliberately not the workspace's own root directory,
+// which also holds AGENT.md and the shared memory room.
 func TestExternalDispatch_CoreTeamMember_RunsInWorkspaceSharedDir(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv(config.EnvHome, home)
@@ -493,14 +495,18 @@ func TestExternalDispatch_CoreTeamMember_RunsInWorkspaceSharedDir(t *testing.T) 
 	if len(opts) != 1 {
 		t.Fatalf("driver Run called %d times, want 1", len(opts))
 	}
-	wantDir := filepath.Join(home, "workspaces", "ws-shared")
+	wantDir := filepath.Join(home, "workspaces", "ws-shared", "work")
 	if opts[0].WorkDir != wantDir {
-		t.Errorf("driver WorkDir = %q, want the workspace's shared directory %q (CoreTeam membership)",
+		t.Errorf("driver WorkDir = %q, want the workspace's dedicated work/ directory %q (CoreTeam membership)",
 			opts[0].WorkDir, wantDir)
 	}
 	if opts[0].WorkDir == agentWorkspace {
 		t.Errorf("driver WorkDir must NOT be the agent's private workspace %q when the agent is a CoreTeam member",
 			agentWorkspace)
+	}
+	if opts[0].WorkDir == filepath.Join(home, "workspaces", "ws-shared") {
+		t.Errorf("driver WorkDir must NOT be the workspace's own root directory %q — only its work/ subdirectory",
+			opts[0].WorkDir)
 	}
 
 	// The shared workspace dir must actually exist (MkdirAll is still applied
