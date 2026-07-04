@@ -477,12 +477,13 @@ func TestDelegationWiring_Parity_AdvertisedMatchesEnforced(t *testing.T) {
 	if !strings.Contains(got, "ray") {
 		t.Fatalf("parity: expected 'ray' in delegation block.\ngot: %s", got)
 	}
-	// await and background tools for ray.
-	if !strings.Contains(got, `run_subagent(agent_id="ray"`) {
-		t.Errorf("parity: run_subagent for ray must appear (await); got:\n%s", got)
+	// await and background tools for ray (post-ADR-036: both modes render via
+	// the single delegate tool, differentiated by async=false vs the default).
+	if !strings.Contains(got, `delegate(agent_id="ray", task="…", async=false)`) {
+		t.Errorf("parity: delegate for ray must appear (await/sync); got:\n%s", got)
 	}
-	if !strings.Contains(got, `spawn(agent_id="ray"`) {
-		t.Errorf("parity: spawn for ray must appear (background); got:\n%s", got)
+	if !strings.Contains(got, `delegate(agent_id="ray", task="…")`) {
+		t.Errorf("parity: delegate for ray must appear (background/async default); got:\n%s", got)
 	}
 	// task must NOT appear for ray.
 	if strings.Contains(got, `create_task(agent_id="ray"`) {

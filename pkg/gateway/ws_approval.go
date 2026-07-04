@@ -271,13 +271,13 @@ func (h *wsApprovalHook) ApproveTool(
 
 // autoApproveSafeTool returns true for tools that are pre-approved without interactive confirmation.
 // These are low-risk tools: read-only operations, workspace-scoped writes, web research,
-// and agent orchestration (spawn/subagent).
-// Only exec (shell commands) requires explicit user approval.
+// and agent orchestration (delegate).
+// Only bash (shell commands) requires explicit user approval.
 func autoApproveSafeTool(tool string) bool {
 	switch tool {
 	case "read_file", "list_directory", "write_file", "edit_file", "append_file",
 		"search_web", "fetch_url", "send_file", "send_message",
-		"find_skills", "spawn", "run_subagent", "check_spawn_status",
+		"find_skills", "delegate",
 		"list_tasks", "create_task", "update_task", "delete_task", "list_agents":
 		return true
 	default:

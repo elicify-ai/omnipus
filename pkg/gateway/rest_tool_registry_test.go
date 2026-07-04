@@ -223,9 +223,10 @@ func TestREST_GetAgentTools_ManifestTierValues(t *testing.T) {
 		assert.Equal(t, "infra", tier, "search_tools_bm25 must have manifest_tier=infra")
 	}
 
-	// spawn is a delegation tool — lazy/compressed.
-	if tier, found := tierByName["spawn"]; found {
-		assert.Equal(t, "compressed", tier, "spawn must have manifest_tier=compressed")
+	// delegate (ADR-036 merge of spawn/run_subagent/check_spawn_status) is a
+	// delegation tool — lazy/compressed.
+	if tier, found := tierByName["delegate"]; found {
+		assert.Equal(t, "compressed", tier, "delegate must have manifest_tier=compressed")
 	}
 
 	// Every entry must have a valid tier value.

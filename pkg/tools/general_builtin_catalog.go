@@ -47,10 +47,12 @@ import (
 func GeneralBuiltinMetadata() []Tool {
 	out := make([]Tool, 0, 38)
 
-	// --- exec (CategoryShell, ScopeCore) ---
+	// --- bash (CategoryShell, ScopeCore) — ADR-036 merge of
+	// exec/workspace_shell/workspace_shell_bg into one universally-registered
+	// tool. Name() returns "bash". ---
 	execTool, err := NewExecToolWithConfig("", false, nil)
 	if err != nil {
-		slog.Warn("general-builtin-catalog: exec constructor failed; skipping", "error", err)
+		slog.Warn("general-builtin-catalog: bash constructor failed; skipping", "error", err)
 	} else {
 		out = append(out, execTool)
 	}
@@ -93,10 +95,9 @@ func GeneralBuiltinMetadata() []Tool {
 	out = append(out, NewFindSkillsTool(nil, nil))
 	out = append(out, NewInstallSkillTool(nil, ""))
 
-	// --- Spawn / subagent tools (CategoryDelegation) ---
-	out = append(out, NewSpawnTool(nil))
-	out = append(out, NewSubagentTool(nil))
-	out = append(out, NewSpawnStatusTool(nil))
+	// --- delegate tool (CategoryDelegation) — ADR-036 merge of the former
+	// spawn / run_subagent / check_spawn_status trio into one tool. ---
+	out = append(out, NewDelegateTool("", 0, 0))
 
 	// --- Task tools (CategoryTasks) ---
 	out = append(out, NewTaskListTool(nil))

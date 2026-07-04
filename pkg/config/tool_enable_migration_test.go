@@ -36,7 +36,7 @@ import (
 // TestLoadConfig_ToolEnableFlags_PersistedAndStripped is the PRIMARY
 // regression test. Given tools.spawn_status.enabled=false and
 // tools.mcp.enabled=false, after a single LoadConfigWithStoreAndSelfHealHook:
-//   - cfg.Sandbox.ToolPolicies["check_spawn_status"] == "deny" (in memory)
+//   - cfg.Sandbox.ToolPolicies["delegate"] == "deny" (in memory)
 //   - cfg.Sandbox.ToolPolicies["mcp_*"] == "deny" (in memory)
 //   - the on-disk config.json no longer carries tools.spawn_status.enabled or
 //     tools.mcp.enabled
@@ -70,7 +70,7 @@ func TestLoadConfig_ToolEnableFlags_PersistedAndStripped(t *testing.T) {
 
 	// In-memory: both legacy flags translated to deny.
 	require.NotNil(t, cfg.Sandbox.ToolPolicies)
-	assert.Equal(t, "deny", cfg.Sandbox.ToolPolicies["check_spawn_status"])
+	assert.Equal(t, "deny", cfg.Sandbox.ToolPolicies["delegate"])
 	assert.Equal(t, "deny", cfg.Sandbox.ToolPolicies["mcp_*"])
 
 	// Self-heal fired exactly once for this load (a single write covers both flags).
@@ -102,8 +102,8 @@ func TestLoadConfig_ToolEnableFlags_PersistedAndStripped(t *testing.T) {
 	require.True(t, ok, "sandbox section must exist on disk after the self-heal write")
 	policies, ok := sandboxRaw["tool_policies"].(map[string]any)
 	require.True(t, ok, "sandbox.tool_policies must exist on disk after the self-heal write")
-	assert.Equal(t, "deny", policies["check_spawn_status"],
-		"check_spawn_status must be a REAL persisted deny entry, not just an in-memory derivation")
+	assert.Equal(t, "deny", policies["delegate"],
+		"delegate must be a REAL persisted deny entry, not just an in-memory derivation")
 	assert.Equal(t, "deny", policies["mcp_*"],
 		"mcp_* must be a REAL persisted deny entry, not just an in-memory derivation")
 }
@@ -133,7 +133,7 @@ func TestLoadConfig_ToolEnableFlags_AllowSticksAcrossReload(t *testing.T) {
 	// First load: migrates + persists the deny entry and strips the legacy flag.
 	cfg1, err := LoadConfigWithStoreAndSelfHealHook(configPath, nil, nil)
 	require.NoError(t, err)
-	require.Equal(t, "deny", cfg1.Sandbox.ToolPolicies["check_spawn_status"])
+	require.Equal(t, "deny", cfg1.Sandbox.ToolPolicies["delegate"])
 
 	// Simulate the frontend/PUT handler behavior: operator sets the tool to
 	// "allow" in Settings -> Security. Since allow is the policy engine's
@@ -149,8 +149,8 @@ func TestLoadConfig_ToolEnableFlags_AllowSticksAcrossReload(t *testing.T) {
 	require.True(t, ok)
 	policies, ok := sandboxRaw["tool_policies"].(map[string]any)
 	require.True(t, ok)
-	require.Contains(t, policies, "check_spawn_status")
-	delete(policies, "check_spawn_status")
+	require.Contains(t, policies, "delegate")
+	delete(policies, "delegate")
 	patched, marshalErr := json.MarshalIndent(m, "", "  ")
 	require.NoError(t, marshalErr)
 	require.NoError(t, os.WriteFile(configPath, patched, 0o600))
@@ -160,12 +160,12 @@ func TestLoadConfig_ToolEnableFlags_AllowSticksAcrossReload(t *testing.T) {
 	cfg2, err := LoadConfigWithStoreAndSelfHealHook(configPath, nil, nil)
 	require.NoError(t, err)
 
-	// REGRESSION ASSERTION: check_spawn_status must NOT be re-injected as
+	// REGRESSION ASSERTION: delegate must NOT be re-injected as
 	// deny — the legacy flag that used to resurrect it was stripped by the
 	// first load, so the migration has nothing left to detect.
-	_, stillDenied := cfg2.Sandbox.ToolPolicies["check_spawn_status"]
+	_, stillDenied := cfg2.Sandbox.ToolPolicies["delegate"]
 	assert.False(t, stillDenied,
-		"check_spawn_status must resolve to the policy-engine default (allow) after the operator "+
+		"delegate must resolve to the policy-engine default (allow) after the operator "+
 			"cleared the override — it must not bounce back to deny on reload")
 }
 

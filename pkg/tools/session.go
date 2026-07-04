@@ -64,10 +64,16 @@ type ProcessSession struct {
 	OwnerSessionID string
 }
 
+// IsDone reports whether the session has reached any terminal state. "killed"
+// and "timeout" are ADR-036 additions (bash-tool-spec.md FR-B1/MIN-002): the
+// bash tool relabels a successful Kill() outcome from the generic "done" to
+// one of these two more specific terminal values so callers (action=poll/kill)
+// can distinguish an explicit kill / timeout from a natural exit. Both are
+// terminal exactly like "done"/"exited" for every existing caller of IsDone.
 func (s *ProcessSession) IsDone() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.Status == "done" || s.Status == "exited"
+	return s.Status == "done" || s.Status == "exited" || s.Status == "killed" || s.Status == "timeout"
 }
 
 func (s *ProcessSession) GetPtyKeyMode() PtyKeyMode {

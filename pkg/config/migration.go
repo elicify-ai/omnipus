@@ -684,9 +684,16 @@ var toolEnableToPolicy = []legacyToolEnableFlag{
 	// migration's perspective alone, would otherwise look untouched.
 	{"exec", "bash"},
 	{"cron", "cron"},
-	{"spawn", "spawn"},
-	{"spawn_status", "check_spawn_status"},
-	{"subagent", "run_subagent"},
+	// ADR-036 (2026-07-04): spawn/run_subagent/check_spawn_status were
+	// consolidated into a single "delegate" tool (docs/internal/specs/
+	// agent-delegation-spec.md). Same pattern as the exec→bash row above: all
+	// three legacy jsonKeys now translate to the ONE new policy glob
+	// ("delegate"), so an operator's prior enabled=false intent on any of the
+	// three legacy tools still lands as a real deny once migrated, instead of
+	// silently re-enabling delegation under a glob no legacy flag maps to.
+	{"spawn", "delegate"},
+	{"spawn_status", "delegate"},
+	{"subagent", "delegate"},
 	{"write_file", "write_file"},
 	{"edit_file", "edit_file"},
 	{"append_file", "append_file"},

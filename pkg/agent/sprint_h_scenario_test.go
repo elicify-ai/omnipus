@@ -2,11 +2,16 @@
 
 // W2-5: Integration test — sub-turn calling forbidden tools returns unknown-tool errors.
 //
-// Scripts a sub-turn where the LLM attempts to call spawn, then run_subagent, then hand_off.
+// Scripts a sub-turn where the LLM attempts to call delegate, then hand_off.
 // For each:
 //   - Assert the tool result returns an "unknown tool" / "not found" error.
 //   - Assert zero EventKindSubTurnSpawn emitted as a grandchild.
 //   - Assert the parent's transcript has exactly one spawn entry (the original delegation).
+//
+// ADR-036 (2026-07-04) merged spawn + run_subagent + check_spawn_status into one
+// `delegate` tool. The "one level only" invariant this file protects (Sprint H,
+// 2026-04-20 owner reversal) is UNCHANGED by that merge — it is simply re-expressed
+// against the single merged tool name instead of the former two names.
 //
 // SCENARIO-PROVIDER GAP NOTE:
 // The ideal implementation would use a scenario-provider mock LLM that emits tool calls
@@ -18,7 +23,7 @@
 // HTTP injection into the gateway.
 //
 // What this file DOES test:
-// 1. Registry-level enforcement: executing "spawn", "run_subagent", "hand_off" on a child
+// 1. Registry-level enforcement: executing "delegate", "hand_off" on a child
 //    registry returns unknown-tool errors (not depth errors, not panics).
 // 2. Event bus invariant: calling ExecuteWithContext on excluded tools does NOT emit
 //    EventKindSubTurnSpawn (no grandchild).
@@ -44,28 +49,27 @@ import (
 
 // TestSubTurn_ForbiddenToolCalls_ReturnUnknownToolError verifies that a child
 // sub-turn's registry returns an "unknown tool" error when the LLM attempts to
-// call spawn, run_subagent, or hand_off. This is the enforcement mechanism per FR-H-006.
+// call delegate or hand_off. This is the enforcement mechanism per FR-H-006.
 //
 // BDD Scenario 9 (sprint-h-subagent-block-spec.md):
 //
-//	Given a sub-turn child registry constructed via CloneExcept("spawn","run_subagent","hand_off")
-//	When ExecuteWithContext is called for "spawn", "run_subagent", or "hand_off"
+//	Given a sub-turn child registry constructed via CloneExcept("delegate","hand_off")
+//	When ExecuteWithContext is called for "delegate" or "hand_off"
 //	Then each returns a non-nil error result with "not found" in the error text
 //	And zero EventKindSubTurnSpawn are emitted as a result
 //
 // Traces to: temporal-puzzling-melody.md W2-5
 func TestSubTurn_ForbiddenToolCalls_ReturnUnknownToolError(t *testing.T) {
-	// Build a parent registry with all three delegation tools.
+	// Build a parent registry with both delegation-adjacent tools.
 	parentRegistry := tools.NewToolRegistry()
-	parentRegistry.Register(&tools.SpawnTool{})
-	parentRegistry.Register(&tools.SubagentTool{})
+	parentRegistry.Register(&tools.DelegateTool{})
 	parentRegistry.Register(&tools.HandoffTool{})
 	parentRegistry.Register(&tools.ReadFileTool{})
 
 	// Construct child registry as spawnSubTurn does.
-	childRegistry := parentRegistry.CloneExcept("spawn", "run_subagent", "hand_off")
+	childRegistry := parentRegistry.CloneExcept("delegate", "hand_off")
 
-	forbiddenTools := []string{"spawn", "run_subagent", "hand_off"}
+	forbiddenTools := []string{"delegate", "hand_off"}
 
 	for _, toolName := range forbiddenTools {
 		t.Run("forbidden_tool="+toolName, func(t *testing.T) {
@@ -111,17 +115,16 @@ func TestSubTurn_ForbiddenToolCalls_EmitZeroGrandchildSpawnEvents(t *testing.T) 
 	collector, collectCleanup := newEventCollector(t, al)
 	defer collectCleanup()
 
-	// Build parent registry with delegation tools + neutral tool.
+	// Build parent registry with delegation-adjacent tools + neutral tool.
 	parentRegistry := tools.NewToolRegistry()
-	parentRegistry.Register(&tools.SpawnTool{})
-	parentRegistry.Register(&tools.SubagentTool{})
+	parentRegistry.Register(&tools.DelegateTool{})
 	parentRegistry.Register(&tools.HandoffTool{})
 	parentRegistry.Register(&tools.ReadFileTool{})
 
-	childRegistry := parentRegistry.CloneExcept("spawn", "run_subagent", "hand_off")
+	childRegistry := parentRegistry.CloneExcept("delegate", "hand_off")
 
-	// Attempt to call all three forbidden tools on the child registry.
-	for _, toolName := range []string{"spawn", "run_subagent", "hand_off"} {
+	// Attempt to call both forbidden tools on the child registry.
+	for _, toolName := range []string{"delegate", "hand_off"} {
 		result := childRegistry.ExecuteWithContext(
 			context.Background(),
 			toolName,
@@ -180,7 +183,7 @@ func TestSubTurn_OriginalDelegation_EmitsExactlyOneSpawnEvent(t *testing.T) {
 
 	// W1-12: the span lifecycle (EventKindSubTurnSpawn) is only emitted when
 	// the context carries a parentSpawnCallID — i.e., when invoked via the
-	// SpawnTool. In tests we simulate that by injecting the call ID directly.
+	// delegate tool. In tests we simulate that by injecting the call ID directly.
 	ctx := withSpawnToolCallID(context.Background(), "parent-scenario-spawn-call")
 	_, err := spawnSubTurn(ctx, al, parent, cfg)
 	require.NoError(t, err, "spawnSubTurn must not error for valid config")
@@ -206,24 +209,23 @@ func TestSubTurn_OriginalDelegation_EmitsExactlyOneSpawnEvent(t *testing.T) {
 }
 
 // TestSubTurn_NeutralTools_RemainAccessible verifies that non-delegation tools
-// are unaffected by CloneExcept("spawn","run_subagent","hand_off").
+// are unaffected by CloneExcept("delegate","hand_off").
 //
 // Traces to: temporal-puzzling-melody.md W2-5
 func TestSubTurn_NeutralTools_RemainAccessible(t *testing.T) {
 	parentRegistry := tools.NewToolRegistry()
-	parentRegistry.Register(&tools.SpawnTool{})
-	parentRegistry.Register(&tools.SubagentTool{})
+	parentRegistry.Register(&tools.DelegateTool{})
 	parentRegistry.Register(&tools.HandoffTool{})
 	parentRegistry.Register(&tools.ReadFileTool{})
 
-	childRegistry := parentRegistry.CloneExcept("spawn", "run_subagent", "hand_off")
+	childRegistry := parentRegistry.CloneExcept("delegate", "hand_off")
 
 	// ReadFileTool must still be present in the child registry.
 	tool, ok := childRegistry.Get("read_file")
 	assert.True(t, ok, "read_file must remain accessible in child registry")
 	assert.NotNil(t, tool)
 
-	// Child registry count must be parent count minus 3 (the three excluded tools).
-	assert.Equal(t, parentRegistry.Count()-3, childRegistry.Count(),
-		"child must have exactly parent_count-3 tools after excluding spawn+run_subagent+hand_off")
+	// Child registry count must be parent count minus 2 (the two excluded tools).
+	assert.Equal(t, parentRegistry.Count()-2, childRegistry.Count(),
+		"child must have exactly parent_count-2 tools after excluding delegate+hand_off")
 }

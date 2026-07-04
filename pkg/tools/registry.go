@@ -607,12 +607,14 @@ func (r *ToolRegistry) Clone() *ToolRegistry {
 type ExcludedTool string
 
 const (
-	// ExcludedSpawn is the async delegation tool (SpawnTool). Excluded from child
-	// sub-turn registries so grandchild spawning is impossible (FR-H-006).
-	ExcludedSpawn ExcludedTool = "spawn"
-	// ExcludedSubagent is the sync delegation tool (SubagentTool). Also excluded
-	// from child registries — a subagent calling subagent would create a grandchild.
-	ExcludedSubagent ExcludedTool = "run_subagent"
+	// ExcludedDelegate is the unified delegation tool (DelegateTool — ADR-036
+	// merge of the former spawn/run_subagent/check_spawn_status trio). Excluded
+	// from child sub-turn registries so grandchild delegation is impossible
+	// (FR-H-006, owner reversal 2026-04-20: "one level only for general
+	// subagents"). Prior to the merge this was two separate names, ExcludedSpawn
+	// ("spawn") and ExcludedSubagent ("run_subagent") — both collapsed into this
+	// one entry since both tools are now the same "delegate" registration.
+	ExcludedDelegate ExcludedTool = "delegate"
 	// ExcludedHandoff is the agent-switch tool. Excluded from child registries to
 	// prevent sub-turns from hijacking the active agent session (FR-H-006).
 	ExcludedHandoff ExcludedTool = "hand_off"
@@ -621,10 +623,9 @@ const (
 // CloneExcept creates an independent copy of the registry omitting the named tools.
 // It is used to construct child sub-turn registries that must not have access to
 // certain tools (FR-H-006). The canonical call site is
-// CloneExcept(ExcludedSpawn, ExcludedSubagent, ExcludedHandoff): a child sub-turn
-// must never be able to spawn grandchildren, create nested subagents, or hand off
-// to another agent. The version counter is reset to 0 in the clone as it is a new
-// independent registry.
+// CloneExcept(ExcludedDelegate, ExcludedHandoff): a child sub-turn must never be
+// able to delegate to a grandchild or hand off to another agent. The version
+// counter is reset to 0 in the clone as it is a new independent registry.
 //
 // Existence check: each ExcludedTool name is validated against the base registry.
 // If a named tool is absent, slog.Warn is emitted and processing continues — this

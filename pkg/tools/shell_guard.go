@@ -1,16 +1,11 @@
 // Package tools — shared shell command guard helpers.
 //
-// This file holds the package-level defaultDenyPatterns slice and the
-// applyDenyPatterns helper that both ExecTool (shell.go) and
-// WorkspaceShellTool (workspace_shell.go) use for deny-pattern enforcement.
-// It was factored out so the two tools share the same regex set without
-// duplication.
-//
-// NOTE: the ExecTool.guardCommand method on shell.go also performs a workspace
-// path-traversal check on command arguments; that check is NOT replicated here
-// because WorkspaceShellTool validates its cwd parameter separately via
-// validatePathWithAllowPaths and does not restrict the shell command text to
-// workspace-only paths (it is a free-form shell).
+// This file holds applyDenyPatterns/compileDenyPatterns, the deny-pattern
+// matching helpers used by the bash tool (shell.go) for BOTH the hardcoded
+// baseline (defaultDenyPatterns, defined in shell.go) and the opt-in
+// operator-extensible layer (global + per-agent custom patterns). Prior to
+// ADR-036 these were shared between the separate ExecTool and
+// WorkspaceShellTool; the merge folded both call sites into shell.go alone.
 
 package tools
 

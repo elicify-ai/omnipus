@@ -163,15 +163,15 @@ test(
     // Deterministic prompt: explicit, numbered, no prose.
     await input.fill(
       [
-        'Call the `spawn` tool exactly TWO times, in sequence. No other tools. No prose answer until both spawns have been issued.',
+        'Call the `delegate` tool exactly TWO times, in sequence. No other tools. No prose answer until both delegations have been issued.',
         '',
         'First call (do this first):',
-        '  spawn(label="task one", task="Reply with the word done-one. Use no tools.")',
+        '  delegate(label="task one", task="Reply with the word done-one. Use no tools.")',
         '',
         'Second call (do this immediately after the first returns):',
-        '  spawn(label="task two", task="Reply with the word done-two. Use no tools.")',
+        '  delegate(label="task two", task="Reply with the word done-two. Use no tools.")',
         '',
-        'Issue both spawn tool calls now.',
+        'Issue both delegate tool calls now.',
       ].join('\n'),
     );
     await input.press('Enter');

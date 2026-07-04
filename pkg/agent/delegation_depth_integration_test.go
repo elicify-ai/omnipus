@@ -24,9 +24,9 @@ import (
 // path: the edge is seeded on disk (the same on-disk shape the delegation
 // gate reads), the depth cap is resolved via the real, un-mocked
 // buildDelegationDepthResolver, and spawnSubTurn is invoked directly (the
-// same function real spawn/run_subagent tool calls funnel through) with
-// that resolved cap threaded via SubTurnConfig.ResolvedMaxDepth — exactly as
-// SpawnTool.execute / SubagentTool.Execute now do.
+// same function the real delegate tool call funnels through, for both its
+// background and await modes) with that resolved cap threaded via
+// SubTurnConfig.ResolvedMaxDepth — exactly as DelegateTool.executeRun does.
 func TestSpawnSubTurn_HonorsExplicitPerEdgeDepthOverDefaultBackstop(t *testing.T) {
 	// Seed a real delegation-graph edge: mia -> ray, Depth: 10, background mode.
 	// Global SubTurn.MaxDepth is left unset (0) — the exact configuration that

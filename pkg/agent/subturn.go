@@ -654,24 +654,23 @@ func spawnSubTurn(
 	// external-CLI dispatch (agent.ID == targetAgent.ID, the real delegate).
 	al.ApprovalGrants().Inherit(parentTS.transcriptSessionID, parentTS.agentID, agent.ID)
 
-	// FR-H-006: exclude delegation tools from the child's registry so it cannot
-	// recursively spawn grandchildren or hand off. Registry-level filter — the
-	// tools are absent, not refused at execute time. One level only (owner
-	// decision 2026-04-20).
+	// FR-H-006: exclude delegation-adjacent tools from the child's registry so
+	// it cannot recursively delegate to a grandchild or hand off. Registry-
+	// level filter — the tools are absent, not refused at execute time. One
+	// level only (owner decision 2026-04-20).
 	//
-	// Three names are excluded (not just two as the spec originally listed):
-	//   - spawn:     async delegation (SpawnTool)
-	//   - subagent:  sync delegation (SubagentTool) — missed in the initial
-	//                Sprint H pass. Without this, a child could call `subagent`
-	//                to create a grandchild sub-turn, which would then fail
-	//                with a runtime depth-limit error instead of an unknown-tool
-	//                error (the intended contract).
-	//   - handoff:   agent switch
+	// ADR-036 (2026-07-04) merged the former spawn (async delegation) and
+	// run_subagent (sync delegation) tools into one `delegate` tool, so what
+	// used to be two excluded names (ExcludedSpawn, ExcludedSubagent) is now
+	// one (ExcludedDelegate) — the "one level only" invariant itself is
+	// UNCHANGED by that merge, just re-expressed against the single tool name:
+	//   - delegate: the unified delegation tool (async AND sync modes)
+	//   - handoff:  agent switch
 	if baseAgent.Tools != nil {
-		agent.Tools = baseAgent.Tools.CloneExcept(tools.ExcludedSpawn, tools.ExcludedSubagent, tools.ExcludedHandoff)
+		agent.Tools = baseAgent.Tools.CloneExcept(tools.ExcludedDelegate, tools.ExcludedHandoff)
 		// Log the constructed registry so operators can debug "my subagent has no tools" issues.
 		slog.Info("subturn: child registry constructed",
-			"excluded", []string{"spawn", "run_subagent", "hand_off"},
+			"excluded", []string{"delegate", "hand_off"},
 			"remaining_count", agent.Tools.Count(),
 			"child_id", childID,
 		)

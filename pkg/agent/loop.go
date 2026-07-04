@@ -1034,13 +1034,16 @@ func (al *AgentLoop) recordRateLimitDenial(
 	ts.appendErrorTranscript(EventKindRateLimit.String(), "runTurn", rlMsg)
 }
 
-// wireExecToolDeps replaces each agent's exec tool with one constructed via
-// NewExecToolWithDeps, injecting the policy auditor (SEC-05) and the sandbox
-// backend (SEC-01/02/03). This runs after NewAgentInstance has created the
-// default exec tool so that all other tool setup (deny patterns, allow paths,
-// timeouts) is preserved — we only add the security deps on top.
+// wireExecToolDeps replaces each agent's bash tool with one constructed via
+// NewExecToolWithDeps, injecting the policy auditor (SEC-05), the ADR-035
+// god-mode/egress-proxy hardening deps, and the deny-pattern configuration
+// (ADR-036 — this is now the ONE registration path for `bash`, folding in what
+// used to be the separate workspace_shell/workspace_shell_bg wiring in
+// WireTier13Deps). This runs after NewAgentInstance has created the default
+// bash tool so that all other tool setup (allow paths) is preserved — we only
+// add the security deps on top.
 //
-// No-op when the agent has exec disabled or when the registry lookup fails.
+// No-op when the agent has bash disabled or when the registry lookup fails.
 func (al *AgentLoop) wireExecToolDeps() {
 	al.wireExecToolDepsOn(al.registry)
 }
@@ -1057,111 +1060,63 @@ func (al *AgentLoop) wireExecToolDepsOn(registry *AgentRegistry) {
 	}
 	allowReadPaths := buildAllowReadPatterns(cfg)
 
+	// O14 god-mode: the single source of truth for the sandbox escape hatch
+	// (ADR-035). When active: full host fs + syscalls, network egress open,
+	// shell guard / deny-patterns off, regardless of per-agent shell policy.
+	godMode := GodModeActive(cfg)
+
+	globalShellDenyPatterns := cfg.Sandbox.ShellDenyPatterns
+	if godMode {
+		globalShellDenyPatterns = nil
+	}
+
 	for _, agentID := range registry.ListAgentIDs() {
 		agent, ok := registry.GetAgent(agentID)
 		if !ok || agent == nil || agent.Tools == nil {
 			continue
 		}
 
-		// Workspace-scoped sandbox policy: allow read/write/execute under
-		// the agent's workspace. Landlock inherits to children natively on
-		// Linux 5.13+, so no per-child application is actually required
-		// there — the fallback backend still uses this to emit
-		// OMNIPUS_SANDBOX_PATHS for cooperative scripts.
-		//
-		// Bind-port rules: kernel-level enforcement is installed once at
-		// gateway boot (see pkg/gateway/sandbox_apply.go) and inherited by
-		// all child processes via Landlock's restrict_self ratchet — there
-		// is no need to re-add the rules on each exec child. We still
-		// populate BindPortRules here so cooperative children that read
-		// OMNIPUS_SANDBOX_* env vars get the full picture of what they may
-		// bind, and the rules are visible in tooling that introspects
-		// ExecToolDeps.
-		//
-		// ConnectPortRules were re-introduced in v0.2 (#155 item 4) and
-		// are installed process-wide once at gateway boot via DefaultPolicy
-		// + sandbox_apply.go. Children inherit the connect-port allow-list
-		// through Landlock's restrict_self ratchet — no per-child re-add
-		// is required. The tool-side ExecToolDeps.SandboxPolicy struct
-		// carries an empty ConnectPortRules slice here intentionally; it
-		// exists to keep the type symmetric and to feed cooperative
-		// FallbackBackend env-var injection without duplicating the
-		// kernel-level allow-list across every spawned child.
-		var bindPorts []sandbox.NetPortRule
-		if al.sandboxBackend != nil {
-			abi := 0
-			if rep, ok := al.sandboxBackend.(interface{ ABIVersion() int }); ok {
-				abi = rep.ABIVersion()
-			}
-			if abi >= 4 {
-				pr := cfg.Sandbox.DevServerPortRange
-				if !pr.IsZero() {
-					for p := pr.Min(); p <= pr.Max(); p++ {
-						if p < 1 || p > 65535 {
-							continue
-						}
-						bindPorts = append(bindPorts, sandbox.NetPortRule{Port: uint16(p)})
-					}
-				}
+		var agentShellPolicy *config.AgentShellPolicy
+		for i := range cfg.Agents.List {
+			entry := &cfg.Agents.List[i]
+			if entry.ID == agentID {
+				agentShellPolicy = entry.ShellPolicy
+				break
 			}
 		}
-		policy := sandbox.SandboxPolicy{
-			FilesystemRules: []sandbox.PathRule{
-				{
-					Path:   agent.Workspace,
-					Access: sandbox.AccessRead | sandbox.AccessWrite | sandbox.AccessExecute,
-				},
-			},
-			BindPortRules:     bindPorts,
-			InheritToChildren: true,
+		if godMode {
+			agentShellPolicy = nil // drop per-agent deny patterns under god mode
 		}
 
-		// Use the mode that the kernel sandbox actually applied at boot
-		// (SetAppliedSandboxMode sets this from SandboxApplyResult.Mode).
-		// Zero value maps to ModeOff in ExecTool.sandboxOn(), which is the
-		// correct default when the gateway did not wire the applied mode
-		// (headless tests, legacy callers).
 		deps := tools.ExecToolDeps{
-			SandboxPolicy:      policy,
-			SandboxMode:        string(al.appliedSandboxMode),
-			ExecTimeoutSeconds: int32(cfg.Tools.Exec.TimeoutSeconds),
+			GodMode:                 godMode,
+			AuditFailClosed:         resolveBoolWithDefault(cfg.Sandbox.PathGuardAuditFailClosed, cfg.Sandbox.AuditLog),
+			GlobalShellDenyPatterns: globalShellDenyPatterns,
+			AgentShellPolicy:        agentShellPolicy,
 		}
-		// Plumb the kernel-sandbox egress proxy into the exec tool so the
-		// hardened-exec path (sandbox=enforce / permissive) injects
-		// HTTP_PROXY pointing at the allow-listed proxy. Nil-guarded to
-		// avoid the typed-nil-in-interface trap and so the exec tool
-		// gracefully degrades to no-proxy when the boot-time
-		// NewEgressProxy call failed.
+		// Plumb the kernel-sandbox egress proxy into the bash tool so the
+		// hardened path (non-god-mode) injects HTTP_PROXY pointing at the
+		// allow-listed proxy. Nil-guarded so bash gracefully degrades to
+		// no-proxy when the boot-time NewEgressProxy call failed.
 		if al.sandboxEgressProxy != nil {
-			deps.EgressProxy = al.sandboxEgressProxy
+			deps.Proxy = al.sandboxEgressProxy
 		}
-		// Both dependency fields use interfaces, so we must nil-guard at
-		// assignment time to avoid typed-nil traps: storing a nil
-		// *policy.PolicyAuditor or nil sandbox.SandboxBackend in an interface
-		// field would create a non-nil interface holding a nil pointer,
-		// defeating downstream `!= nil` checks and causing nil-pointer panics.
+		// Nil-guarded to avoid the typed-nil-in-interface trap: storing a nil
+		// *policy.PolicyAuditor in an interface field would create a non-nil
+		// interface holding a nil pointer, defeating downstream `!= nil` checks.
 		if al.policyAuditor != nil {
 			deps.PolicyAuditor = al.policyAuditor
-		}
-		if al.sandboxBackend != nil {
-			deps.SandboxBackend = al.sandboxBackend
-		}
-		// SEC-28: Hand the exec proxy to the tool so it can inject
-		// HTTP_PROXY env vars on every child. nil-guarded at assignment
-		// time to avoid the typed-nil-in-interface trap.
-		if al.execProxy != nil {
-			deps.ExecProxy = al.execProxy
 		}
 
 		restrict := cfg.Agents.Defaults.RestrictToWorkspace
 		execTool, err := tools.NewExecToolWithDeps(agent.Workspace, restrict, cfg, deps, allowReadPaths)
 		if err != nil {
-			// Fail closed: if security wiring fails, remove the exec tool from the
-			// registry entirely. The agent will lose exec capability but
+			// Fail closed: if security wiring fails, remove the bash tool from the
+			// registry entirely. The agent will lose bash capability but
 			// cannot run commands without the security layer.
-			logger.ErrorCF("agent", "Failed to wire exec tool deps; removing exec tool (fail closed)",
+			logger.ErrorCF("agent", "Failed to wire bash tool deps; removing bash tool (fail closed)",
 				map[string]any{"agent_id": agentID, "error": err.Error()})
-			agent.Tools.Unregister("exec")
+			agent.Tools.Unregister("bash")
 			continue
 		}
 		agent.Tools.Register(execTool)
@@ -1253,84 +1208,20 @@ func (al *AgentLoop) wireTier13DepsLocked(registry *AgentRegistry, deps Tier13De
 			ag.Tools.Register(webServeTool)
 		}
 
-		// workspace.shell (experimental foreground shell).
-		// Only registered when experimental.workspace_shell_enabled=true.
-		// The tool is per-agent because it needs the agent's workspace path
-		// and shell policy — the same reason web_serve dev mode is wired here
-		// rather than in the process-level BuiltinRegistry.
-		if resolveBoolWithDefault(cfg.Sandbox.Experimental.WorkspaceShellEnabled, false) {
-			var agentShellPolicy *config.AgentShellPolicy
-			for i := range cfg.Agents.List {
-				entry := &cfg.Agents.List[i]
-				if entry.ID == ag.ID {
-					agentShellPolicy = entry.ShellPolicy
-					break
-				}
-			}
-			// O14 god-mode: the single source of truth for the sandbox escape
-			// hatch (see ADR-035-remove-per-agent-sandbox-profile.md — the old
-			// per-agent kernel-profile indirection in front of this has been
-			// removed; workspace_shell/workspace_shell_bg now run under a
-			// fixed sandbox boundary except when god mode is globally active).
-			// When active: full host fs + syscalls, network egress open, shell
-			// guard / deny-patterns off, regardless of per-agent shell policy.
-			godMode := GodModeActive(cfg)
-			if godMode {
-				agentShellPolicy = nil // drop per-agent deny patterns under god mode
-			}
-			// O14 god-mode: shell guard / deny-patterns are off under the global
-			// switch. agentShellPolicy was already nilled above; also drop the
-			// operator-global deny list so no command is blocked at the guard.
-			globalShellDenyPatterns := cfg.Sandbox.ShellDenyPatterns
-			if godMode {
-				globalShellDenyPatterns = nil
-			}
-			shellTool := tools.NewWorkspaceShellTool(tools.WorkspaceShellDeps{
-				WorkspaceDir: ag.Workspace,
-				GodMode:      godMode,
-				Proxy:        deps.EgressProxy,
-				AuditLogger:  al.auditLogger,
-				AuditFailClosed: resolveBoolWithDefault(
-					cfg.Sandbox.PathGuardAuditFailClosed,
-					cfg.Sandbox.AuditLog,
-				),
-				GlobalShellDenyPatterns: globalShellDenyPatterns,
-				AgentShellPolicy:        agentShellPolicy,
-			})
-			ag.Tools.Register(shellTool)
-
-			// workspace.shell_bg (experimental background tool).
-			// Registered under the same workspace_shell_enabled flag as
-			// workspace.shell — same trust level, same governance.
-			if deps.DevServerRegistry != nil {
-				portRange := cfg.Sandbox.DevServerPortRange
-				shellBgTool := tools.NewWorkspaceShellBgTool(tools.WorkspaceShellBgDeps{
-					WorkspaceDir: ag.Workspace,
-					GodMode:      godMode,
-					Proxy:        deps.EgressProxy,
-					AuditLogger:  al.auditLogger,
-					AuditFailClosed: resolveBoolWithDefault(
-						cfg.Sandbox.PathGuardAuditFailClosed,
-						cfg.Sandbox.AuditLog,
-					),
-					Registry:                deps.DevServerRegistry,
-					MaxConcurrent:           cfg.Sandbox.MaxConcurrentDevServers,
-					PortRange:               [2]int32{portRange[0], portRange[1]},
-					GatewayHost:             deps.GatewayPreviewBaseURL,
-					GlobalShellDenyPatterns: globalShellDenyPatterns,
-					AgentShellPolicy:        agentShellPolicy,
-				})
-				ag.Tools.Register(shellBgTool)
-			}
-		}
+		// bash (ADR-036): the unified shell tool used to be wired here as
+		// three separate tools (exec via wireExecToolDeps, workspace.shell /
+		// workspace.shell_bg gated behind experimental.workspace_shell_enabled
+		// right here). All three are now ONE tool, registered universally via
+		// wireExecToolDeps alone (called again below, after this function
+		// returns, and by WireTier13Deps once the egress proxy is available)
+		// — governed exclusively by ToolPolicyCfg, no experimental flag.
 	}
 
-	logger.InfoCF("agent", "Tier 1/2/3 tools wired into agent registry", map[string]any{
+	logger.InfoCF("agent", "Tier 1/3 tools wired into agent registry", map[string]any{
 		"preview_base_url":          deps.GatewayPreviewBaseURL,
 		"served_subdirs_ready":      deps.ServedSubdirs != nil,
 		"dev_server_registry_ready": deps.DevServerRegistry != nil,
 		"egress_proxy_ready":        deps.EgressProxy != nil,
-		"workspace_shell_enabled":   resolveBoolWithDefault(cfg.Sandbox.Experimental.WorkspaceShellEnabled, false),
 	})
 }
 
@@ -1512,98 +1403,26 @@ func registerSharedTools(
 		// through the normal per-agent tool policy, so god-mode / O7 policy applies.
 		registerEmailToolsForAgent(cfg, agentID, agent)
 
-		// Spawn, spawn_status, and subagent share a SubagentManager. All three
-		// are registered unconditionally — the subagent→spawn coupling is a
-		// semantic invariant, not a user-visible toggle.
+		// `delegate` (ADR-036 merge of the former spawn / run_subagent /
+		// check_spawn_status trio into one tool — docs/internal/specs/
+		// agent-delegation-spec.md) is registered unconditionally — never
+		// gated by a user-visible toggle. The legacy SubagentManager (and its
+		// entirely-dead runTask/Spawn/SpawnSubTurnFunc closure path — nothing
+		// in production ever called SubagentManager.Spawn, which is why
+		// check_spawn_status always reported "no subagents have been spawned
+		// yet" for anything spawn created) is retired: DelegateTool now owns
+		// its own task-state store, written by its own async path and read by
+		// action:"status" — a single, connected piece of state (FR-D2).
 		{
-			subagentManager := tools.NewSubagentManager(provider, agent.Model, agent.Workspace)
-			subagentManager.SetLLMOptions(agent.MaxTokens, agent.Temperature)
-
-			// Set the spawner that links into AgentLoop's turnState
-			subagentManager.SetSpawner(func(
-				ctx context.Context,
-				task, label, targetAgentID string,
-				tls *tools.ToolRegistry,
-				maxTokens int,
-				temperature float64,
-				hasMaxTokens, hasTemperature bool,
-			) (*tools.ToolResult, error) {
-				// 1. Recover parent Turn State from Context
-				parentTS := turnStateFromContext(ctx)
-				if parentTS == nil {
-					// Fallback: If no turnState exists in context, create an isolated ad-hoc root turn state
-					// so that the tool can still function outside of an agent loop (e.g. tests, raw invocations).
-					// M2: log a warning when no real turnState is in context — this usually
-					// means spawn was called outside of an agent loop (e.g. tests or raw
-					// invocations). The ad-hoc state is functional but has no session.
-					logger.WarnCF("agent", "Spawn callback using ad-hoc turnState: no parent turnState in context", nil)
-					// Drive the ad-hoc semaphore capacity from the resolved MaxParallelAgents
-					// value (FR-6.6) so that even out-of-loop spawn calls respect the
-					// configured fan-out ceiling instead of the former hardcoded 5.
-					adHocSemCap := al.getSubTurnConfig().maxConcurrent
-					parentTS = &turnState{
-						ctx:            ctx,
-						turnID:         "adhoc-root",
-						depth:          0,
-						session:        nil, // Ephemeral session not needed for adhoc spawn
-						pendingResults: make(chan *tools.ToolResult, 16),
-						concurrencySem: make(chan struct{}, adHocSemCap),
-					}
-				}
-
-				// 2. Build Tools slice from registry
-				var tlSlice []tools.Tool
-				for _, name := range tls.List() {
-					if t, ok := tls.Get(name); ok {
-						tlSlice = append(tlSlice, t)
-					}
-				}
-
-				// 3. Resolve Model
-				modelToUse := agent.Model
-				if targetAgentID != "" {
-					if targetAgent, ok := al.GetRegistry().GetAgent(targetAgentID); ok {
-						modelToUse = targetAgent.Model
-					}
-				}
-
-				// 4. Build SubTurnConfig. The task is the first USER message; the
-				//    delegate's soul (worker / configured agent) is resolved inside
-				//    spawnSubTurn and used as the system role. The legacy
-				//    "You are a subagent" wrapper is REMOVED — workers and
-				//    configured agents now expose their own persona, and a worker
-				//    with an empty soul runs with an empty system role (soul is
-				//    OPTIONAL). The label, when set, is preserved as the task label
-				//    for the WS subTurn_start frame.
-				cfg := SubTurnConfig{
-					Model:         modelToUse,
-					Tools:         tlSlice,
-					SystemPrompt:  task,
-					TargetAgentID: targetAgentID,
-					TaskLabel:     label,
-				}
-				if hasMaxTokens {
-					cfg.MaxTokens = maxTokens
-				}
-
-				// 5. Spawn SubTurn
-				return spawnSubTurn(ctx, al, parentTS, cfg)
-			})
-
-			// Clone the parent's tool registry so subagents can use all
-			// tools registered so far (file, web, etc.) but NOT spawn/
-			// spawn_status which are added below — preventing recursive
-			// subagent spawning.
-			subagentManager.SetTools(agent.Tools.Clone())
-			spawnTool := tools.NewSpawnTool(subagentManager)
-			spawnTool.SetSpawner(NewSubTurnSpawner(al))
+			delegateTool := tools.NewDelegateTool(agent.Model, agent.MaxTokens, agent.Temperature)
+			delegateTool.SetSpawner(NewSubTurnSpawner(al))
 			currentAgentID := agentID
-			// spawnTool: repointed to unified DelegationPolicy.To (FR-6.3).
+			// delegate: repointed to unified DelegationPolicy.To (FR-6.3).
 			// Falls back to SubagentsConfig.AllowAgents via CanSpawnSubagent
 			// when DelegationPolicy is nil (backward compat, no silent widening).
-			spawnAgentCfg := findAgentConfig(cfg, currentAgentID)
-			spawnTool.SetAllowlistChecker(func(targetAgentID string) bool {
-				toList := config.ResolveDelegationTo(spawnAgentCfg, cfg.Agents.Defaults)
+			delegateAgentCfg := findAgentConfig(cfg, currentAgentID)
+			delegateTool.SetAllowlistChecker(func(targetAgentID string) bool {
+				toList := config.ResolveDelegationTo(delegateAgentCfg, cfg.Agents.Defaults)
 				if toList != nil {
 					// Canonical unified policy is set — use it.
 					return config.IsDelegationAllowed(toList, targetAgentID)
@@ -1612,31 +1431,18 @@ func registerSharedTools(
 				// SubagentsConfig.AllowAgents (legacy path, deny-by-default preserved).
 				return registry.CanSpawnSubagent(currentAgentID, targetAgentID)
 			})
-			// FR-6.2: full-policy gate — trust set + mode("background") + depth.
-			// Takes precedence over the allowlist checker and surfaces a reason.
-			spawnTool.SetDelegationDenyChecker(buildDelegationDenyChecker(
-				currentAgentID, spawnAgentCfg, cfg.Agents.Defaults,
+			// FR-6.2: full-policy gate for the background (async=true, the
+			// default) mode — trust set + mode("background") + depth. Takes
+			// precedence over the allowlist checker and surfaces a reason.
+			delegateTool.SetDelegationDenyCheckerBackground(buildDelegationDenyChecker(
+				currentAgentID, delegateAgentCfg, cfg.Agents.Defaults,
 				config.DelegationModeBackground, registry,
 			))
-			// #477 / FR-D9-FR-D10: thread the SAME effective depth cap this gate
-			// just authorized against into spawnSubTurn's own depth check, so the
-			// spawn-time backstop does not independently re-derive (and silently
-			// override) an explicit per-edge Depth.
-			spawnTool.SetDelegationDepthResolver(buildDelegationDepthResolver(
-				currentAgentID, cfg.Agents.Defaults,
-			))
-
-			agent.Tools.Register(spawnTool)
-
-			// Also register the synchronous subagent tool.
-			// Gate: uses the unified DelegationPolicy.To via IsDelegationAllowedAny
-			// (sync subagent has no explicit target; the check is "can delegate at all").
-			subagentTool := tools.NewSubagentTool(subagentManager)
-			subagentTool.SetSpawner(NewSubTurnSpawner(al))
-			// FR-6.3: gate the previously-ungated sync subagent tool.
-			subagentAgentCfg := spawnAgentCfg // same agent, captured once
-			subagentTool.SetDelegateChecker(func() bool {
-				toList := config.ResolveDelegationTo(subagentAgentCfg, cfg.Agents.Defaults)
+			// FR-6.3: gate the await (async=false) mode too. Uses the unified
+			// DelegationPolicy.To via IsDelegationAllowedAny (no explicit
+			// target for the untargeted case; the check is "can delegate at all").
+			delegateTool.SetDelegateChecker(func() bool {
+				toList := config.ResolveDelegationTo(delegateAgentCfg, cfg.Agents.Defaults)
 				if toList != nil {
 					// Canonical policy present — allowed only if at least one target is permitted.
 					return config.IsDelegationAllowedAny(toList)
@@ -1644,28 +1450,33 @@ func registerSharedTools(
 				// No canonical policy — fall back to SubagentsConfig.AllowAgents existence.
 				// If AllowAgents is non-nil (even empty), the operator set a spawn policy;
 				// treat non-nil as opt-in allowed (AllowAgents nil → deny, per legacy semantics).
-				if subagentAgentCfg != nil && subagentAgentCfg.Subagents != nil {
-					return subagentAgentCfg.Subagents.AllowAgents != nil
+				if delegateAgentCfg != nil && delegateAgentCfg.Subagents != nil {
+					return delegateAgentCfg.Subagents.AllowAgents != nil
 				}
 				return false
 			})
-			// FR-6.2: full-policy gate for the synchronous "await" mode. Uses the
-			// same buildDelegationDenyChecker as spawn (DelegationModeBackground)
-			// but with DelegationModeAwait, so targeted run_subagent(agent_id="X")
-			// is checked against the caller→X edge for the "await" mode, and
-			// untargeted run_subagent falls back to evalUntargetedDelegation.
-			subagentTool.SetDelegationDenyChecker(buildDelegationDenyChecker(
-				currentAgentID, subagentAgentCfg, cfg.Agents.Defaults,
+			// FR-6.2: full-policy gate for the await (async=false) mode. Uses
+			// the same buildDelegationDenyChecker as the background gate
+			// above but with DelegationModeAwait, so a targeted
+			// delegate(agent_id="X", async=false) is checked against the
+			// caller→X edge for the "await" mode, and an untargeted call
+			// falls back to evalUntargetedDelegation.
+			delegateTool.SetDelegationDenyCheckerAwait(buildDelegationDenyChecker(
+				currentAgentID, delegateAgentCfg, cfg.Agents.Defaults,
 				config.DelegationModeAwait, registry,
 			))
-			// #477 / FR-D9-FR-D10: same effective-depth-cap threading as spawnTool
-			// above, for the synchronous "await" mode.
-			subagentTool.SetDelegationDepthResolver(buildDelegationDepthResolver(
+			// #477 / FR-D9-FR-D10: thread the SAME effective depth cap the
+			// gates above just authorized against into spawnSubTurn's own
+			// depth check — the resolver is mode-agnostic (sourced only from
+			// the matched edge's own Depth, shared by both the background and
+			// await gates) — so the spawn-time backstop does not
+			// independently re-derive (and silently override) an explicit
+			// per-edge Depth.
+			delegateTool.SetDelegationDepthResolver(buildDelegationDepthResolver(
 				currentAgentID, cfg.Agents.Defaults,
 			))
-			agent.Tools.Register(subagentTool)
 
-			agent.Tools.Register(tools.NewSpawnStatusTool(subagentManager))
+			agent.Tools.Register(delegateTool)
 		}
 
 		// Task tools — require a task store (available after first NewAgentLoop call).

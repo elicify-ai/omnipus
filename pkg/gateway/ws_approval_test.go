@@ -490,9 +490,7 @@ func TestAutoApproveSafeTool_AllSafeTools(t *testing.T) {
 		"send_file",
 		"send_message",
 		"find_skills",
-		"spawn",
-		"run_subagent",
-		"check_spawn_status",
+		"delegate",
 	}
 
 	for _, tool := range safeTools {
@@ -505,15 +503,15 @@ func TestAutoApproveSafeTool_AllSafeTools(t *testing.T) {
 	}
 }
 
-// TestAutoApproveSafeTool_ExecRequiresApproval verifies that "exec" (shell commands)
-// requires explicit user approval and is not auto-approved.
-// BDD: Given tool name "exec",
+// TestAutoApproveSafeTool_BashRequiresApproval verifies that "bash" (shell commands,
+// renamed from "exec" by ADR-036) requires explicit user approval and is not auto-approved.
+// BDD: Given tool name "bash",
 // When autoApproveSafeTool is called,
 // Then it returns false.
 // Traces to: ws_approval.go — autoApproveSafeTool default case
-func TestAutoApproveSafeTool_ExecRequiresApproval(t *testing.T) {
-	if autoApproveSafeTool("exec") {
-		t.Error("autoApproveSafeTool(\"exec\") = true, want false — exec requires user approval")
+func TestAutoApproveSafeTool_BashRequiresApproval(t *testing.T) {
+	if autoApproveSafeTool("bash") {
+		t.Error("autoApproveSafeTool(\"bash\") = true, want false — bash requires user approval")
 	}
 }
 

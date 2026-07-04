@@ -474,20 +474,19 @@ func TestNewAgentInstance_AllowsMediaTempDirForReadListAndExec(t *testing.T) {
 		t.Fatalf("list_directory output missing media file: %s", listResult.ForLLM)
 	}
 
-	execTool, ok := agent.Tools.Get("exec")
+	execTool, ok := agent.Tools.Get("bash")
 	if !ok {
-		t.Fatal("exec tool not registered")
+		t.Fatal("bash tool not registered")
 	}
 	execResult := execTool.Execute(context.Background(), map[string]any{
-		"action":  "run",
 		"command": "cat " + filepath.Base(mediaPath),
 		"cwd":     mediaDir,
 	})
 	if execResult.IsError {
-		t.Fatalf("exec should allow media temp dir, got: %s", execResult.ForLLM)
+		t.Fatalf("bash should allow media temp dir, got: %s", execResult.ForLLM)
 	}
 	if !strings.Contains(execResult.ForLLM, "attachment content") {
-		t.Fatalf("exec output missing media content: %s", execResult.ForLLM)
+		t.Fatalf("bash output missing media content: %s", execResult.ForLLM)
 	}
 }
 

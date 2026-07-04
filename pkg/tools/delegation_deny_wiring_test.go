@@ -33,19 +33,21 @@ func targetAgentID(f generated.DelegationFailure) string {
 	return *f.TargetAgentId
 }
 
-// These tests prove the delegation-deny WIRING inside SpawnTool.Execute and
+// These tests prove the delegation-deny WIRING inside DelegateTool.Execute and
 // TaskCreateTool.Execute — i.e. that a deny-checker installed via
-// SetDelegationDenyChecker actually ABORTS a disallowed delegation (the tool
-// returns an error and never reaches the spawn/create side effect), and that the
-// nil-checker path falls back to the legacy boolean allowlist. The standalone
-// checker is exercised elsewhere; here we assert the tool consults it.
+// SetDelegationDenyCheckerBackground/Await actually ABORTS a disallowed
+// delegation (the tool returns an error and never reaches the spawn/create
+// side effect), and that the nil-checker path falls back to the legacy
+// boolean allowlist. The standalone checker is exercised elsewhere; here we
+// assert the tool consults it.
 
-// TestSpawnTool_DelegationDenyChecker_Aborts proves that a deny-checker returning
-// a non-empty reason aborts the spawn before the spawner is ever invoked.
-func TestSpawnTool_DelegationDenyChecker_Aborts(t *testing.T) {
-	tool := NewSpawnTool(NewSubagentManager(&MockLLMProvider{}, "test-model", "/tmp/test"))
+// TestDelegateTool_DelegationDenyChecker_Aborts proves that a deny-checker
+// returning a non-empty reason aborts the (default async/background) delegate
+// call before the spawner is ever invoked.
+func TestDelegateTool_DelegationDenyChecker_Aborts(t *testing.T) {
+	tool := NewDelegateTool("test-model", 0, 0)
 
-	// A spawner that records whether it ran — it MUST NOT run on a denied spawn.
+	// A spawner that records whether it ran — it MUST NOT run on a denied delegate.
 	spawned := false
 	tool.SetSpawner(spawnerFunc(func(context.Context, SubTurnConfig) (*ToolResult, error) {
 		spawned = true
@@ -53,7 +55,7 @@ func TestSpawnTool_DelegationDenyChecker_Aborts(t *testing.T) {
 	}))
 
 	var gotTarget string
-	tool.SetDelegationDenyChecker(func(_ context.Context, targetAgentID string) *DelegationDenial {
+	tool.SetDelegationDenyCheckerBackground(func(_ context.Context, targetAgentID string) *DelegationDenial {
 		gotTarget = targetAgentID
 		return &DelegationDenial{
 			Reason:        "target untrusted (mode forbidden)",
@@ -68,11 +70,11 @@ func TestSpawnTool_DelegationDenyChecker_Aborts(t *testing.T) {
 	})
 
 	if result == nil || !result.IsError {
-		t.Fatalf("expected denied spawn to return an error result, got %+v", result)
+		t.Fatalf("expected denied delegate call to return an error result, got %+v", result)
 	}
 	failure := decodeDelegationFailure(t, result)
-	if failure.Tool != "spawn" {
-		t.Errorf("expected structured failure tool 'spawn', got %q", failure.Tool)
+	if failure.Tool != "delegate" {
+		t.Errorf("expected structured failure tool 'delegate', got %q", failure.Tool)
 	}
 	if failure.Policy != string(DenyTrustSet) {
 		t.Errorf("expected policy %q, got %q", DenyTrustSet, failure.Policy)
@@ -91,44 +93,46 @@ func TestSpawnTool_DelegationDenyChecker_Aborts(t *testing.T) {
 	}
 }
 
-// TestSpawnTool_DelegationDenyChecker_Allows proves the allow path (empty reason)
-// lets the spawn through to the spawner.
-func TestSpawnTool_DelegationDenyChecker_Allows(t *testing.T) {
-	tool := NewSpawnTool(NewSubagentManager(&MockLLMProvider{}, "test-model", "/tmp/test"))
+// TestDelegateTool_DelegationDenyChecker_Allows proves the allow path (empty
+// reason) lets the (default async/background) delegate call through to the
+// spawner.
+func TestDelegateTool_DelegationDenyChecker_Allows(t *testing.T) {
+	tool := NewDelegateTool("test-model", 0, 0)
 	spawned := false
 	tool.SetSpawner(spawnerFunc(func(context.Context, SubTurnConfig) (*ToolResult, error) {
 		spawned = true
 		return NewToolResult("ran"), nil
 	}))
-	tool.SetDelegationDenyChecker(func(context.Context, string) *DelegationDenial { return nil })
+	tool.SetDelegationDenyCheckerBackground(func(context.Context, string) *DelegationDenial { return nil })
 
 	result := tool.Execute(context.Background(), map[string]any{
 		"task":     "do the thing",
 		"agent_id": "trusted-agent",
 	})
 	if result == nil || result.IsError {
-		t.Fatalf("expected allowed spawn to succeed, got %+v", result)
+		t.Fatalf("expected allowed delegate call to succeed, got %+v", result)
 	}
-	// SpawnTool launches the spawner in a goroutine; we only assert the call was
-	// accepted (Async) here — the goroutine race on `spawned` is not asserted.
+	// DelegateTool launches the spawner in a goroutine for async=true (default);
+	// we only assert the call was accepted (Async) here — the goroutine race on
+	// `spawned` is not asserted.
 	if !result.Async {
-		t.Error("expected an async result for an allowed spawn")
+		t.Error("expected an async result for an allowed background delegate call")
 	}
 	_ = spawned
 }
 
-// TestSpawnTool_NilDenyChecker_FallsBackToAllowlist proves that with NO deny
-// checker installed, the legacy boolean allowlist is consulted and a disallowed
-// target is rejected.
-func TestSpawnTool_NilDenyChecker_FallsBackToAllowlist(t *testing.T) {
-	tool := NewSpawnTool(NewSubagentManager(&MockLLMProvider{}, "test-model", "/tmp/test"))
+// TestDelegateTool_NilDenyChecker_FallsBackToAllowlist proves that with NO
+// background deny checker installed, the legacy boolean allowlist is
+// consulted and a disallowed target is rejected.
+func TestDelegateTool_NilDenyChecker_FallsBackToAllowlist(t *testing.T) {
+	tool := NewDelegateTool("test-model", 0, 0)
 	spawned := false
 	tool.SetSpawner(spawnerFunc(func(context.Context, SubTurnConfig) (*ToolResult, error) {
 		spawned = true
 		return NewToolResult("ran"), nil
 	}))
 
-	// No SetDelegationDenyChecker — legacy path only.
+	// No SetDelegationDenyCheckerBackground — legacy path only.
 	var checkedTarget string
 	tool.SetAllowlistChecker(func(targetAgentID string) bool {
 		checkedTarget = targetAgentID
@@ -249,11 +253,11 @@ func TestTaskCreateTool_NilDenyChecker_FallsBackToAllowlist(t *testing.T) {
 	}
 }
 
-// TestSubagentTool_DelegationDenyChecker_Aborts proves the deny-checker aborts a
-// subagent (await-mode) delegation: the structured failure carries Tool=="run_subagent"
-// and the spawner never runs (no sub-turn).
-func TestSubagentTool_DelegationDenyChecker_Aborts(t *testing.T) {
-	tool := NewSubagentTool(NewSubagentManager(&MockLLMProvider{}, "test-model", "/tmp/test"))
+// TestDelegateTool_AwaitDelegationDenyChecker_Aborts proves the await-mode
+// (async=false) deny-checker aborts a delegate call: the structured failure
+// carries Tool=="delegate" and the spawner never runs (no sub-turn).
+func TestDelegateTool_AwaitDelegationDenyChecker_Aborts(t *testing.T) {
+	tool := NewDelegateTool("test-model", 0, 0)
 
 	spawned := false
 	tool.SetSpawner(spawnerFunc(func(context.Context, SubTurnConfig) (*ToolResult, error) {
@@ -261,7 +265,7 @@ func TestSubagentTool_DelegationDenyChecker_Aborts(t *testing.T) {
 		return NewToolResult("ran"), nil
 	}))
 
-	tool.SetDelegationDenyChecker(func(_ context.Context, _ string) *DelegationDenial {
+	tool.SetDelegationDenyCheckerAwait(func(_ context.Context, _ string) *DelegationDenial {
 		return &DelegationDenial{
 			Reason:        "delegation depth cap reached",
 			Policy:        DenyDepth,
@@ -272,14 +276,15 @@ func TestSubagentTool_DelegationDenyChecker_Aborts(t *testing.T) {
 	result := tool.Execute(context.Background(), map[string]any{
 		"task":  "do the thing",
 		"label": "deep work",
+		"async": false,
 	})
 
 	if result == nil || !result.IsError {
-		t.Fatalf("expected denied subagent delegation to return an error result, got %+v", result)
+		t.Fatalf("expected denied delegate (await) call to return an error result, got %+v", result)
 	}
 	failure := decodeDelegationFailure(t, result)
-	if failure.Tool != "run_subagent" {
-		t.Errorf("expected structured failure tool 'run_subagent', got %q", failure.Tool)
+	if failure.Tool != "delegate" {
+		t.Errorf("expected structured failure tool 'delegate', got %q", failure.Tool)
 	}
 	if failure.Policy != string(DenyDepth) {
 		t.Errorf("expected policy %q, got %q", DenyDepth, failure.Policy)
@@ -295,12 +300,41 @@ func TestSubagentTool_DelegationDenyChecker_Aborts(t *testing.T) {
 	}
 }
 
+// TestDelegateTool_AwaitNilDenyChecker_FallsBackToDelegateChecker proves that
+// with NO await-mode deny checker installed, the legacy boolean delegate
+// checker is consulted and a denial rejects the call.
+func TestDelegateTool_AwaitNilDenyChecker_FallsBackToDelegateChecker(t *testing.T) {
+	tool := NewDelegateTool("test-model", 0, 0)
+	spawned := false
+	tool.SetSpawner(spawnerFunc(func(context.Context, SubTurnConfig) (*ToolResult, error) {
+		spawned = true
+		return NewToolResult("ran"), nil
+	}))
+
+	// No SetDelegationDenyCheckerAwait — legacy path only.
+	tool.SetDelegateChecker(func() bool { return false }) // deny
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"task":  "do the thing",
+		"async": false,
+	})
+	if result == nil || !result.IsError {
+		t.Fatalf("expected legacy delegateChecker denial to return an error, got %+v", result)
+	}
+	if !strings.Contains(result.ForLLM, "delegation not allowed") {
+		t.Errorf("expected legacy delegateChecker denial message, got: %s", result.ForLLM)
+	}
+	if spawned {
+		t.Error("spawner must NOT run when the legacy delegateChecker denies")
+	}
+}
+
 // TestDelegationDeniedResult_DefaultsInvariant proves the contract invariant
 // defense: a denial with an empty reason / invalid policy still serializes a
 // schema-valid DelegationFailure (non-empty reason, enum policy) the SPA can
 // render, rather than a silently-dropped payload.
 func TestDelegationDeniedResult_DefaultsInvariant(t *testing.T) {
-	result := DelegationDeniedResult("spawn", &DelegationDenial{}) // empty reason + invalid policy
+	result := DelegationDeniedResult("delegate", &DelegationDenial{}) // empty reason + invalid policy
 	if result == nil || !result.IsError {
 		t.Fatalf("expected an error result, got %+v", result)
 	}
@@ -314,8 +348,8 @@ func TestDelegationDeniedResult_DefaultsInvariant(t *testing.T) {
 	default:
 		t.Errorf("policy must be defaulted to a valid enum value, got %q", failure.Policy)
 	}
-	if failure.Tool != "spawn" {
-		t.Errorf("expected tool 'spawn', got %q", failure.Tool)
+	if failure.Tool != "delegate" {
+		t.Errorf("expected tool 'delegate', got %q", failure.Tool)
 	}
 }
 
