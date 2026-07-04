@@ -565,6 +565,10 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		chatID:   chatID,
 		registry: h.approvalRegistry,
 		timeout:  wsApprovalTimeout,
+		// Session-scoped grant store lives on the AgentLoop, not this
+		// per-connection hook, so "Always Allow" survives reconnects — see
+		// wsApprovalHook.approvalGrants and AgentLoop.approvalGrants.
+		approvalGrants: h.agentLoop.ApprovalGrants(),
 		policyResolver: func(toolName string, agentID string) string {
 			// Unification (#438): resolve through the agent loop, which prefers the
 			// agent's LIVE policy snapshot + real tool scope from the registry and
