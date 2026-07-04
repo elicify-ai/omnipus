@@ -3843,9 +3843,11 @@ export interface components {
                 reason: string;
             }[];
         };
-        /** @description Stateless request to actually run a trivial, real prompt through an external-CLI worker's real dispatch path (the same driver.Run() a genuine subagent_3p delegation uses) and return the real response. Distinct from the zero-token POST /agents/{id}/runner/test (binary-present → version handshake → credential-file-presence only, never spends a token) — this spawns a real, authenticated subprocess and costs real model usage, so it is an explicit operator action, never automatic. Body-driven and agent-agnostic (mirrors POST /agents/executor-preview and POST /system/cli-validate) so it works from the create wizard, where no agent id exists yet, and from an existing agent's edit form alike. */
+        /** @description Runs a trivial, real prompt through an external-CLI worker's real dispatch path (the same driver.Run() a genuine subagent_3p delegation uses) and returns the real response. Distinct from the zero-token POST /agents/{id}/runner/test (binary-present → version handshake → credential-file-presence only, never spends a token) — this spawns a real, authenticated subprocess and costs real model usage, so it is an explicit operator action, never automatic. Mirrors POST /agents/executor-preview and POST /system/cli-validate's body-driven shape so it works from the create wizard too, but is NOT fully agent-agnostic like those two: when agent_id names a real, saved agent, the run happens in THAT agent's own bound workspace ($OMNIPUS_HOME/agents/{id}/) — matching exactly where a genuine delegation to this agent would run, so the test is representative of real behavior (project files, AGENTS.md/CLAUDE.md/opencode.json context the CLI would actually see). Omitting agent_id (the create-wizard case, before the agent has been saved) or naming an agent that doesn't resolve falls back to a disposable, ephemeral scratch directory instead — the response's used_agent_workspace field says which one happened. */
         ExecutorSmokeTestRequest: {
             cli: components["schemas"]["ExternalCli"];
+            /** @description Optional id of an existing, saved agent whose own bound workspace this test should run in. When it resolves to a real agent, the run uses that agent's persistent workspace directory (never deleted afterward — only the ephemeral scratch-directory fallback is cleaned up). When omitted, empty, or naming an agent that no longer exists, falls back to a disposable ephemeral workspace. */
+            agent_id?: string;
             /** @description Model slug/shape to run with, same semantics as ExecutorCommandPreviewRequest.model. */
             model?: string;
             /** @description Optional executor.cli_path override, same semantics as ExecutorCommandPreviewRequest.cli_path. */
@@ -3863,6 +3865,8 @@ export interface components {
             error?: string;
             /** @description Wall-clock time the run actually took, in milliseconds. */
             duration_ms: number;
+            /** @description True when the request's agent_id resolved to a real, saved agent and the run happened in that agent's own persistent workspace directory — the same place a genuine delegation to it would run. False means the run happened in a disposable ephemeral scratch directory instead (agent_id was omitted, blank, or didn't resolve to an existing agent — e.g. testing from the create wizard before the agent has been saved). */
+            used_agent_workspace: boolean;
         };
         /** @description Response body for GET /api/v1/voice/provider. Describes the active voice provider configuration so the SPA can decide which widget variant (dropdown / free-text / disabled) to render in the agent edit slide-over. */
         VoiceProvider: {

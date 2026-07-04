@@ -594,3 +594,45 @@ func TestResolveAgentWorkspace_OMNIPUSHome(t *testing.T) {
 		}
 	})
 }
+
+// TestResolveAgentWorkspace_ExportedWrapper proves ResolveAgentWorkspace (the
+// exported wrapper added for pkg/gateway's executor-smoke-test agent_id
+// feature — see its doc) delegates to the exact same resolveAgentWorkspace
+// this file already covers above, for both the explicit-Workspace and the
+// per-agent-derived-path cases, so a future edit to one cannot silently
+// diverge from the other.
+func TestResolveAgentWorkspace_ExportedWrapper(t *testing.T) {
+	defaults := &config.AgentDefaults{
+		Workspace: filepath.Join(t.TempDir(), ".omnipus", "workspace"),
+	}
+
+	t.Run("explicit_workspace_passthrough", func(t *testing.T) {
+		explicit := filepath.Join(t.TempDir(), "agents", "custom-explicit")
+		agentCfg := &config.AgentConfig{ID: "custom-explicit", Workspace: explicit}
+
+		got := ResolveAgentWorkspace(agentCfg, defaults)
+		want := resolveAgentWorkspace(agentCfg, defaults)
+		if got != want {
+			t.Errorf("ResolveAgentWorkspace diverged from resolveAgentWorkspace: got %q, want %q", got, want)
+		}
+		if got != explicit {
+			t.Errorf("ResolveAgentWorkspace with explicit Workspace: got %q, want %q", got, explicit)
+		}
+	})
+
+	t.Run("derived_per_agent_path", func(t *testing.T) {
+		tmpHome := t.TempDir()
+		t.Setenv("OMNIPUS_HOME", tmpHome)
+
+		agentCfg := &config.AgentConfig{ID: "ray"}
+		got := ResolveAgentWorkspace(agentCfg, defaults)
+		want := resolveAgentWorkspace(agentCfg, defaults)
+		if got != want {
+			t.Errorf("ResolveAgentWorkspace diverged from resolveAgentWorkspace: got %q, want %q", got, want)
+		}
+		wantPath := filepath.Join(tmpHome, "agents", "ray")
+		if got != wantPath {
+			t.Errorf("ResolveAgentWorkspace derived path: got %q, want %q", got, wantPath)
+		}
+	})
+}
