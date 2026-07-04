@@ -292,6 +292,21 @@ func ScrubGatewayEnv() []string {
 //	                       falling back to a persisted `auth.json`/keyring from
 //	                       a prior `codex login`. Same source grounding as
 //	                       CODEX_API_KEY above.
+//	CLAUDE_CODE_OAUTH_TOKEN — Claude Code: subscription/OAuth headless-auth
+//	                       token, minted once via `claude setup-token` and
+//	                       exported for unattended use — documented, standard
+//	                       Claude Code behavior (distinct from ANTHROPIC_API_KEY,
+//	                       a raw model API key; this is a subscription-backed
+//	                       OAuth bearer). Empirically confirmed: with only this
+//	                       var set (ANTHROPIC_* absent), `claude auth status`
+//	                       reports {"loggedIn":true,"authMethod":"oauth_token"}.
+//	                       Without it in this allowlist, an operator whose
+//	                       Claude Code auth is subscription/OAuth-token-based
+//	                       (rather than a raw API key) would have every
+//	                       external-CLI runner child silently fail with
+//	                       "Not logged in" even though the operator's own
+//	                       interactive `claude` sessions work fine — the exact
+//	                       gap this entry closes.
 //
 // DO NOT add a key here unless an external-CLI runner provably needs it to
 // authenticate. Anything added is a secret that reaches every external-CLI
@@ -299,15 +314,16 @@ func ScrubGatewayEnv() []string {
 // prefix family — so a future audit can enumerate every leak path by reading
 // this map.
 var runnerCredentialEnvKeys = map[string]struct{}{
-	"ANTHROPIC_API_KEY":    {},
-	"ANTHROPIC_AUTH_TOKEN": {},
-	"ANTHROPIC_BASE_URL":   {},
-	"CLAUDE_CONFIG_DIR":    {},
-	"OPENAI_API_KEY":       {},
-	"OPENAI_BASE_URL":      {},
-	"CODEX_HOME":           {},
-	"CODEX_API_KEY":        {},
-	"CODEX_ACCESS_TOKEN":   {},
+	"ANTHROPIC_API_KEY":       {},
+	"ANTHROPIC_AUTH_TOKEN":    {},
+	"ANTHROPIC_BASE_URL":      {},
+	"CLAUDE_CONFIG_DIR":       {},
+	"CLAUDE_CODE_OAUTH_TOKEN": {},
+	"OPENAI_API_KEY":          {},
+	"OPENAI_BASE_URL":         {},
+	"CODEX_HOME":              {},
+	"CODEX_API_KEY":           {},
+	"CODEX_ACCESS_TOKEN":      {},
 }
 
 // RunnerCredentialEnvKeys returns a sorted snapshot of the external-CLI runner
