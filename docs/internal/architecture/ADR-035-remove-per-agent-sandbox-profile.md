@@ -1,0 +1,64 @@
+# ADR-035 — Remove the Per-Agent Sandbox Profile
+
+**Status:** Accepted
+**Date:** 2026-07-04
+**Deciders:** Daniel Piatkowski (product owner)
+**Supersedes:** [ADR-009 — Per-Agent Sandbox Profile is the Security Boundary](./ADR-009-per-agent-sandbox-as-security-boundary.md)
+
+---
+
+## 1. Context
+
+ADR-009 (Accepted 2026-04-29) introduced a per-agent `SandboxProfile` field (`workspace` / `workspace+net` / `host` / `off`) and its UI (`SandboxProfileSelector.tsx`), whose copy claims: *"Kernel-enforced (Landlock) file access limited to the agent workspace directory"* for `workspace`, and equivalent claims for the other profiles. The stated goal was a genuinely per-agent kernel boundary — "Jim can run `workspace+net`; Ava can stay at `workspace`," each with a different Landlock ruleset.
+
+A full, independent code trace (two agents, cross-checked) established this was never actually true:
+
+- The real Landlock/seccomp ruleset is built exactly once, at gateway boot, from a single global `sandbox.DefaultPolicy($OMNIPUS_HOME, ...)` (`pkg/gateway/sandbox_apply.go`) — the same ruleset for every agent, every child process, for the life of the running gateway.
+- `pkg/sandbox/profile.go`'s `LimitsForProfile` (what `SandboxProfile` actually drove) only varied: the child's cwd, an npm-cache env var, `RLIMIT_AS`/timeout, and whether an `HTTP_PROXY`/`HTTPS_PROXY` env var was injected (a soft hint — HTTP/HTTPS only, does not cover raw TCP, and easily ignored by a program that dials sockets directly). Its own doc comment already admitted: *"profile-scoped seccomp filters are intentionally not implemented here... all profiles currently reuse the existing strict 15-syscall filter as applied at gateway boot."*
+- ADR-009 itself half-admits this in its own Negative-consequences section ("Seccomp filter is process-wide, not per-profile") without drawing the conclusion that its headline "per-agent security boundary" framing was therefore misleading.
+- The "three latches for `off`" design in ADR-009 (build tag, boot flag, **UI typed confirmation in the agent edit dialog**) was also never fully built — the UI's `off` option was removed from the picker entirely during a later O13 hardening pass, and god-mode was redesigned (O13/O14, commit `a91104f2`) into a fully **global** three-latch mechanism (`sandbox.GodModeAvailable` build-time const, `--allow-god-mode` boot flag, `cfg.Sandbox.GodMode` live runtime toggle — all combined in `agent.GodModeActive(cfg)`), with no per-agent confirmation step anywhere in the current REST handlers. By the time this ADR was written, per-agent `SandboxProfile == "off"` was already unreachable via any live product surface — `rest.go` unconditionally 400-rejected it, the wire schemas had already dropped `off` from their enums, and a boot-time migration (`migrateAgentSandboxOff`) silently rewrote any legacy persisted `"off"` to `"host"` before it was ever consumed.
+
+## 2. Market context
+
+A grounded review of current agent-sandboxing practice (E2B, Modal, Daytona, Blaxel, OpenHands, Devin/Cognition, Anthropic's own Claude Code `/sandbox`, OpenAI Codex CLI's default sandbox — see the session's research for full citations) found no comparable product implementing fine-grained, per-agent-identity kernel policy differentiation *inside a single shared process*. The pattern splits cleanly in two:
+
+- **Genuine multi-tenant isolation** (E2B, Modal, Daytona, OpenHands' Docker-per-instance mode, Manus) is always a full separate container or microVM per agent/task — a coarse, battle-tested boundary, not a shared process carved into N kernel rulesets.
+- **Personal, single-operator agentic CLIs** (Claude Code, Codex) — the closest real analog to Omnipus — use exactly the pattern Omnipus already has: **one** process-wide OS-level boundary (bubblewrap/Seatbelt/Landlock+seccomp) protecting the *host* from the *tool*, with network egress soft-enforced via a local proxy, and no differentiation between internal "agent identities."
+
+Omnipus's hard constraints (single Go binary, no CGo, no external runtime deps — CLAUDE.md Hard Constraints #1–#2) rule out the container/VM-per-agent approach the market uses for genuine multi-tenant isolation. Given that, and given Omnipus's actual threat model (a single operator's own trusted agent fleet, not adversarial multi-tenant customers), pursuing true per-agent Landlock narrowing (the `docs/internal/design/sandbox-redesign-2026-05.md` "Tier B" proposal, `RC-1`) would mean building something genuinely novel that no comparable product does, for a threat model lower-stakes than the host-vs-agent boundary the market actually optimizes for.
+
+## 3. Decision
+
+Remove the per-agent `SandboxProfile` concept entirely — no deprecation shim, no backward compatibility:
+
+- **Go**: delete `config.SandboxProfile` (type, 4 constants, `IsValid`/`MarshalJSON`/`UnmarshalJSON`), `AgentConfig.SandboxProfile`, `OmnipusSandboxConfig.DefaultProfile` (the global fallback — orphaned once nothing has a per-agent value to fall back for), `migrateAgentSandboxOff`, and every REST/coreagent-seeding/god-mode-coercion consumer.
+- **Wire contract**: remove `sandbox_profile` from `Agent`/`AgentCreateRequestMain`/`AgentCreateRequestSubagent`/`AgentUpdateRequest`, and `default_profile` from `SandboxConfig`/`SandboxConfigUpdate`.
+- **Frontend**: delete `SandboxProfileSelector.tsx` and its "Default profile for new agents" usage in Settings → Security; remove the sandbox block from the agent create wizard's Advanced step and the agent edit profile's Sandbox section (preserving the unrelated Shell-deny-patterns sub-feature, relocated/renamed since it no longer needs a "Sandbox" container).
+- **`workspace_shell`/`workspace_shell_bg`** (the tools `SandboxProfile` actually drove): kept, not deleted — their real value (cwd confinement, resource limits, audit logging, deny-pattern support) is independent of the fictitious 3-way profile choice. Collapsed to ONE fixed, hardened default: cwd confinement + resource limits + the SAME SSRF-protected egress-allow-list proxy every other network-capable tool already routes through, injected whenever the process-wide egress proxy is available (nil only if `sandbox.NewEgressProxy` failed at boot — the gateway degrades gracefully and continues without egress enforcement in that case, rather than failing boot; see `pkg/gateway/gateway.go`) (this is a *safer* simplification than the old `workspace` profile's behavior, which set no proxy address at all — meaning its HTTP traffic wasn't checked against the SSRF allow-list). The only remaining bypass is the existing, fully global god-mode switch (`agent.GodModeActive(cfg)`) — matching exactly the "one hardened default + an explicit, loud, operator-controlled bypass" pattern found in Claude Code's own `/sandbox` design.
+- ADR-009 marked Superseded (this document), not deleted — retained as the historical record of the original, never-fully-realized intent.
+
+## 4. Consequences
+
+### Positive
+- The UI no longer makes a security claim ("kernel-enforced, differentiated per agent") that shipped code never actually delivered — closes a real trust gap between documentation and behavior.
+- `workspace_shell`/`workspace_shell_bg`'s network-egress behavior becomes *more* protective by default (SSRF-proxied whenever the process-wide egress proxy came up successfully at boot) rather than silently varying by a profile choice that never affected the kernel layer anyway.
+- Removes a meaningful amount of plumbing (Go type + wire schema + 4 UI surfaces + ~15 test files) that existed to service a distinction with no real kernel-level effect.
+- Frees future effort: if genuine per-agent isolation is ever needed (e.g., running untrusted third-party marketplace plugin agents post-v0.3), the market-validated answer is a real container/VM boundary per agent, not a revival of in-process Landlock splitting — this ADR's reasoning is the reference point for that future decision, should it arise.
+- Incidentally closes a minor pre-existing fail-open gap: the old `LimitsForProfile`'s `host`-profile case silently tolerated a `filepath.Abs` failure by falling back to `wsDir = ""` with no error at all. The new unified `BuildLimits`/`resolveWorkspaceDir` path is stricter for every caller — an empty or unresolvable `workspaceDir` now returns an explicit error (fails closed) instead of silently proceeding with no workspace confinement.
+
+### Negative / accepted
+- Omnipus's only enforced isolation between agents remains the single global process-wide Landlock/seccomp ruleset — an agent using `workspace_shell` can, in principle, still reach another agent's directory or another workspace's files within that single grant. This was ALREADY true before this removal (the per-agent profile never changed it) — this ADR does not regress anything; it retires a UI/config surface that implied a protection that was never real.
+- The higher-leverage security investment this ADR does NOT make, but flags for a future pass if desired: carving real secrets (`master.key`, `credentials.json`) out of the Landlock grant entirely, and tightening the child-process env-var allowlist (Tier A of `docs/internal/design/sandbox-redesign-2026-05.md`) — these hold regardless of per-agent profiles and protect the actually-severe finding (agent → host secrets) more directly than per-agent kernel differentiation would.
+
+## 5. Affected components
+
+- Backend: `pkg/config/sandbox.go`, `pkg/config/config.go`, `pkg/sandbox/profile.go`, `pkg/tools/workspace_shell.go`, `pkg/tools/workspace_shell_bg.go`, `pkg/agent/loop.go` (`wireTier13DepsLocked`), `pkg/coreagent/core.go`, `pkg/gateway/rest.go`, `pkg/gateway/agent_field_rules.go`, `pkg/gateway/rest_sandbox_config.go`, `cmd/omnipus/internal/gateway/command.go`.
+- Contracts: `contracts/components/schemas/{Agent,AgentCreateRequestMain,AgentCreateRequestSubagent,AgentUpdateRequest,AgentCreateRequestSubagent3p,ExecutorConfig,SandboxConfig,SandboxConfigUpdate}.yaml`, `contracts/openapi.yaml`.
+- Frontend: `src/components/agents/SandboxProfileSelector.tsx` (deleted), `src/components/agents/wizard/Advanced.tsx`, `src/components/agents/AgentProfile.tsx`, `src/components/settings/SandboxSection.tsx`, `src/components/agents/CreateAgentWizard.tsx`, `src/components/agents/CreateAgentModal.tsx`, `src/components/agents/wizard/types.ts`, `src/lib/api.ts`.
+
+## 6. References
+
+- ADR-009 (superseded by this document).
+- `docs/internal/design/sandbox-redesign-2026-05.md` — RC-1 ("the kernel sandbox is process-global, not per-agent"), independently reaching the same root-cause finding five weeks earlier, from Jim's own pentest.
+- CLAUDE.md Hard Constraints #1 (single Go binary), #2 (pure Go, no CGo).
+- Market research (session-internal, 2026-07-04): Modal/E2B/Daytona/Blaxel sandbox-comparison articles; OpenHands V1 architecture (arXiv:2511.03690); Anthropic's "Making Claude Code more secure and autonomous with sandboxing" (anthropic.com/engineering); Claude Code Camp's `/sandbox` deep-dive; Cognition/Devin's stance against heavy multi-agent architectures.

@@ -5,7 +5,6 @@ import {
   X,
   CaretDown,
   CaretUp,
-  Info,
   Sparkle,
   Star,
   Lightning,
@@ -46,7 +45,6 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { ToolsAndPermissions } from './ToolsAndPermissions'
-import { SandboxProfileSelector } from './SandboxProfileSelector'
 import { ShellDenyPatternsEditor } from './ShellDenyPatternsEditor'
 import { ExecutorSelector } from './ExecutorSelector'
 import { BehaviorFields, AvatarColorPicker, IconPicker, AvatarHeader, UploadMdButton } from './AgentFormFields'
@@ -67,7 +65,6 @@ import {
   type Agent,
   type ActivityEvent,
   type AgentToolsCfg,
-  type SandboxProfile,
   type Skill,
   type ExecutorConfig,
   type ExecutorCommandPreviewRequest,
@@ -287,7 +284,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   })
   // US-E6: per-agent skill assignment (opt-in, default none).
   const [agentSkills, setAgentSkills] = useState<string[]>([])
-  const [sandboxProfile, setSandboxProfile] = useState<SandboxProfile | undefined>(undefined)
   const [shellDenyPatterns, setShellDenyPatterns] = useState<string[]>([])
   const [shellAdvancedOpen, setShellAdvancedOpen] = useState(false)
   // Spec-4 FR-4.1: sub-agent executor (native default / external-cli / remote-a2a).
@@ -358,7 +354,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     setMaxToolIterations(agent.max_tool_iterations ?? 200)
     setMaxToolIterationsDraft(String(agent.max_tool_iterations ?? 200))
     setSteeringMode((agent.steering_mode ?? 'one-at-a-time') as 'one-at-a-time' | 'queue-and-process')
-    setSandboxProfile(agent.sandbox_profile)
     setShellDenyPatterns(agent.shell_policy?.custom_deny_patterns ?? [])
     // Spec-4: hydrate executor (absent → native default, modelled as undefined).
     setExecutor(agent.executor)
@@ -456,10 +451,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       timeout_seconds: timeoutPayload,
       max_tool_iterations: maxToolIterations,
       steering_mode: steeringMode,
-      // 'none' is a UI-only marker meaning "inherit global default". Strip it before
-      // submitting so the backend receives undefined (omitted) rather than a value
-      // that fails the sandbox_profile enum validation (contract does not include 'none').
-      sandbox_profile: sandboxProfile === 'none' ? undefined : sandboxProfile,
       shell_policy: {
         custom_deny_patterns: shellDenyPatterns.filter((p) => p.trim() !== ''),
       },
@@ -485,7 +476,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     temperature, maxTokens, topP, useGlobalRateLimits, maxLlmCallsPerHour,
     maxToolCallsPerMinute, maxCostPerDay, soul, voice,
     timeoutPayload, timeoutSeconds, maxToolIterations, steeringMode,
-    sandboxProfile, shellDenyPatterns,
+    shellDenyPatterns,
     agentSkills, executor,
   ])
 
@@ -579,11 +570,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       // defense-in-depth on the frontend side): the Skills picker is
       // rendered disabled for locked agents, so this strip is the
       // belt-and-suspenders path for any state that may survive hydration.
-      // O13: sandbox_profile is intentionally NOT stripped for locked agents —
-      // a core agent's "locked" status does not extend to its sandbox profile,
-      // which is user-editable. The backend accepts sandbox_profile changes on
-      // locked agents (the locked-field validator no longer guards it).
-      // shell_policy is likewise NOT stripped (live bug fix, 2026-07-03):
+      // shell_policy is NOT stripped (live bug fix, 2026-07-03):
       // it was never in the backend's reject-set either, so stripping it
       // here silently discarded every locked-agent shell-deny-pattern edit
       // before it reached the wire — the editor rendered interactive but
@@ -871,7 +858,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // the agent itself, so we branch once here and let the JSX ask `isWorkerAgent`
   // to decide which accordions render. See the contract schema for the
   // `worker` type value: contracts/components/schemas/Agent.yaml.
-  // Field matrix: native Subagents may set Tools / Skills / Sandbox
+  // Field matrix: native Subagents may set Tools / Skills
   // explicitly OR inherit them from the delegating caller — only
   // subagent_3p (isExternalAgent) hides them, since the external runner
   // manages its own tools/skills/isolation.
@@ -1193,61 +1180,33 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             )}
           </section>
 
-          {/* Sandbox — editable for ALL agents including locked core agents
-              (O13: locked status does NOT extend to the sandbox profile) and
-              for native Subagents (matrix: O or inherit); hidden ONLY for
-              subagent_3p (external-cli) — the external runner manages its
-              own isolation. */}
+          {/* Shell deny patterns — a shell-hardening hint, independent of the
+              (removed) per-agent sandbox-profile concept. Editable for ALL
+              agents including locked core agents, and for native Subagents
+              (matrix: O or inherit); hidden ONLY for subagent_3p
+              (external-cli) — the external runner manages its own
+              isolation. */}
           {!isExternalAgent && (
             <section className="space-y-3">
-              <div className="flex items-center gap-2">
-                <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Sandbox</p>
-                {sandboxProfile === 'workspace+net' && (
-                  <span
-                    data-testid="sandbox-accordion-widening-badge"
-                    className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-amber-500/20 text-amber-400 border border-amber-500/40"
-                  >
-                    Widened
-                  </span>
-                )}
-                <SandboxInfoTooltip />
-              </div>
-              <div className="space-y-4">
-                  {/* O13: even locked core agents may have their sandbox edited —
-                      surface a note so it's clear this is intentional. */}
-                  {isLocked && (
-                    <p
-                      data-testid="sandbox-locked-editable-note"
-                      className="text-[11px] text-[var(--color-muted)] leading-snug"
-                    >
-                      This is a built-in core agent, but its sandbox profile is still editable.
-                    </p>
-                  )}
-                  <SandboxProfileSelector
-                    value={sandboxProfile}
-                    agentName={name || agent.name}
-                    onChange={(p) => { markDirty(); setSandboxProfile(p) }}
-                  />
-                  <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden">
-                    <button
-                      type="button"
-                      onClick={() => setShellAdvancedOpen((o) => !o)}
-                      className="flex items-center justify-between w-full px-3 py-2.5 text-sm font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
-                      aria-expanded={shellAdvancedOpen}
-                    >
-                      <span className="text-xs">Shell deny patterns</span>
-                      {shellAdvancedOpen ? <CaretUp size={13} /> : <CaretDown size={13} />}
-                    </button>
-                    {shellAdvancedOpen && (
-                      <div className="px-3 pb-3 border-t border-[var(--color-border)]">
-                        <ShellDenyPatternsEditor
-                          value={shellDenyPatterns}
-                          onChange={(patterns) => { markDirty(); setShellDenyPatterns(patterns) }}
-                        />
-                      </div>
-                    )}
+              <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setShellAdvancedOpen((o) => !o)}
+                  className="flex items-center justify-between w-full px-3 py-2.5 text-sm font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
+                  aria-expanded={shellAdvancedOpen}
+                >
+                  <span className="font-headline font-semibold text-[14px]">Shell deny patterns</span>
+                  {shellAdvancedOpen ? <CaretUp size={13} /> : <CaretDown size={13} />}
+                </button>
+                {shellAdvancedOpen && (
+                  <div className="px-3 pb-3 border-t border-[var(--color-border)]">
+                    <ShellDenyPatternsEditor
+                      value={shellDenyPatterns}
+                      onChange={(patterns) => { markDirty(); setShellDenyPatterns(patterns) }}
+                    />
                   </div>
-                </div>
+                )}
+              </div>
             </section>
           )}
 
@@ -1819,7 +1778,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               handled by their locked-banner and field-level disable. The
               selector itself shows "native" for native workers; the
               native-worker-delegation-callout at the top of the body
-              already explains why the editable Tools / Skills / Sandbox
+              already explains why the editable Tools / Skills
               accordions are collapsed to a summary. */}
           {isNativeWorkerAgent && (
             <section className="space-y-3">
@@ -2087,19 +2046,20 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-2xl mx-auto px-8 py-6 space-y-4">
       {/* W6-B1 / I1: cap the visible-on-open section count at Miller's 7±2.
-          Base agents open Identity + Sandbox + Model Configuration + Behavior
-          (4 accordions — the Identity strip header is also visible above, so
-          the user sees 5 top-level chunks). Workers replace Behavior with
-          Executor + Tools & Permissions (Tools is priority for a worker since
-          it's their run-time surface; Behavior's persona/heartbeat sub-blocks
-          don't apply). Schedules, Sessions, Activity stay collapsed — they're
-          reference material, not editing surfaces. */}
+          Base agents open Identity + Shell deny patterns + Model Configuration
+          + Behavior (4 accordions — the Identity strip header is also
+          visible above, so the user sees 5 top-level chunks). Workers
+          replace Behavior with Executor + Tools & Permissions (Tools is
+          priority for a worker since it's their run-time surface;
+          Behavior's persona/heartbeat sub-blocks don't apply). Schedules,
+          Sessions, Activity stay collapsed — they're reference material,
+          not editing surfaces. */}
       {/* W6-C1 / M11 (copy updated 2026-07-03 per agent-types-field-matrix.md):
           native-worker delegation-only callout. Native Subagents are
           delegation-only labour agents — they are not chat targets. Their
-          Tools, Skills, and Sandbox settings may be set explicitly below OR
+          Tools and Skills settings may be set explicitly below OR
           left to inherit from the delegating caller at run time (matrix: O
-          or inherit). Tools, Skills and Sandbox are live-editable for
+          or inherit). Tools and Skills are live-editable for
           native Subagents and take effect at the next delegated run.
           Surface this prominently at the top of the profile so the
           operator understands the delegation-only framing before touching
@@ -2123,7 +2083,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             </p>
             <p className="text-[12px] text-[var(--color-muted)] leading-snug mt-0.5">
               Never a chat target — this agent only runs when another agent
-              delegates a task to it. Tools, Skills, and Sandbox below may be
+              delegates a task to it. Tools and Skills below may be
               set explicitly or left to inherit from the delegating caller at
               run time.
             </p>
@@ -2149,9 +2109,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         {/* ── BASICS TAB ─────────────────────────────────────────────────
             Identity (name/description/default toggle/delegation policy
             summary/avatar color/icon) + Model Configuration (model selector,
-            fallback editor, sampling parameters) + Sandbox (per agent
-            type: editable for custom, read-only for locked, hidden for
-            native workers). The Executor (Spec-4) is a worker-only
+            fallback editor, sampling parameters) + Shell deny patterns
+            (hidden for subagent_3p — the external runner manages its own
+            isolation). The Executor (Spec-4) is a worker-only
             concern — for subagent_3p it is the headline of the Runtime
             tab below; for native workers (no external-cli selected) the
             whole thing is inherited from the caller so it is shown as a
@@ -2345,44 +2305,6 @@ function ProfileSheet({
         {children}
       </SheetContent>
     </Sheet>
-  )
-}
-
-function SandboxInfoTooltip() {
-  const [visible, setVisible] = useState(false)
-  return (
-    <span className="relative inline-block">
-      {/* W6-A1 / I6: 44x44 px tap target (WCAG 2.5.8 AA, token
-          --spacing-tap-target-min). The Info icon is rendered at 13 px
-          but centered inside a 44 px button so the touch surface meets
-          the AA minimum without growing the visual glyph. */}
-      <button
-        type="button"
-        className="min-h-tap-target-min min-w-tap-target-min flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface-1)]"
-        onMouseEnter={() => setVisible(true)}
-        onMouseLeave={() => setVisible(false)}
-        onFocus={() => setVisible(true)}
-        onBlur={() => setVisible(false)}
-        tabIndex={0}
-        aria-label="Sandbox profile information"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <Info size={13} />
-      </button>
-      {visible && (
-        <span
-          role="tooltip"
-          className="absolute left-0 top-full mt-1 z-50 w-80 rounded border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2 text-[10px] text-[var(--color-muted)] shadow-lg pointer-events-none whitespace-normal font-normal"
-        >
-          <strong className="text-[var(--color-secondary)] block mb-1">Sandbox profiles</strong>
-          Profiles set the kernel-level security boundary for this agent.{' '}
-          <strong>none</strong> inherits the global default.{' '}
-          <strong>workspace</strong> and <strong>workspace+net</strong> restrict file access to the agent&apos;s working directory.{' '}
-          <strong>host</strong> applies full Landlock enforcement on the host filesystem.{' '}
-          <strong>off</strong> removes all kernel isolation — only available when the gateway is started with --allow-god-mode.
-        </span>
-      )}
-    </span>
   )
 }
 

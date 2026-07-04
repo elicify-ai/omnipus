@@ -694,9 +694,9 @@ describe('CreateAgentModal — create/edit parity fixes (P3, 2026-07-03)', () =>
 
 // ── Subagent inherit-flag wire-omission contract (UAT 4a) ───────────────────
 //
-// A native Subagent's Model / Tools / Skills / Sandbox may each be inherited
+// A native Subagent's Model / Tools / Skills may each be inherited
 // from the delegating caller instead of set explicitly (InheritToggle,
-// `wizard-inherit-model` / `-tools` / `-skills` / `-sandbox`). When a toggle
+// `wizard-inherit-model` / `-tools` / `-skills`). When a toggle
 // is ON, `payloadToCreateRequest` (CreateAgentModal.tsx) MUST omit the
 // corresponding field(s) from the wire request so the server keeps the
 // inherited rail — and the UI-only `inherit_*` flags themselves must NEVER
@@ -757,23 +757,7 @@ describe('CreateAgentModal — Subagent inherit-flag wire-omission contract (UAT
     expect(call).not.toHaveProperty('inherit_skills')
   })
 
-  it('inherit_sandbox=true omits sandbox_profile even after a profile was picked, and the flag itself never rides the wire', async () => {
-    const onCreate = vi.fn().mockResolvedValue(undefined)
-    renderModal({ open: true, onClose: vi.fn(), onCreate, initialType: 'Subagent' })
-    await fillAndAdvanceToStep3({ initialType: 'Subagent' })
-    fireEvent.click(screen.getByTestId('advanced-disclosure-trigger'))
-    // Pick an explicit profile BEFORE flipping inherit back ON — proves the
-    // gate omits an explicitly-set value, not just an empty default.
-    fireEvent.click(screen.getByTestId('sandbox-profile-radio-host'))
-    fireEvent.click(screen.getByTestId('wizard-inherit-sandbox'))
-    fireEvent.click(screen.getByTestId('wizard-create'))
-    await waitFor(() => expect(onCreate).toHaveBeenCalled())
-    const call = onCreate.mock.calls.at(-1)![0]
-    expect(call).not.toHaveProperty('sandbox_profile')
-    expect(call).not.toHaveProperty('inherit_sandbox')
-  })
-
-  it('with all four inherit toggles ON, none of the four gated fields nor the four inherit_* flags reach the wire', async () => {
+  it('with all three inherit toggles ON, none of the three gated fields nor the three inherit_* flags reach the wire', async () => {
     vi.mocked(fetchSkills).mockResolvedValue([
       { id: 'web-research', name: 'Web Research', version: '1.0.0', verified: false, status: 'active' } as Skill,
     ])
@@ -789,14 +773,12 @@ describe('CreateAgentModal — Subagent inherit-flag wire-omission contract (UAT
     await screen.findByTestId('wizard-create')
     fireEvent.click(screen.getByTestId('wizard-inherit-tools'))
     fireEvent.click(screen.getByTestId('wizard-inherit-skills'))
-    fireEvent.click(screen.getByTestId('advanced-disclosure-trigger'))
-    fireEvent.click(screen.getByTestId('wizard-inherit-sandbox'))
     fireEvent.click(screen.getByTestId('wizard-create'))
     await waitFor(() => expect(onCreate).toHaveBeenCalled())
     const call = onCreate.mock.calls.at(-1)![0]
     for (const key of [
-      'model', 'provider', 'fallback_models', 'tools_cfg', 'skills', 'sandbox_profile',
-      'inherit_model', 'inherit_tools', 'inherit_skills', 'inherit_sandbox',
+      'model', 'provider', 'fallback_models', 'tools_cfg', 'skills',
+      'inherit_model', 'inherit_tools', 'inherit_skills',
     ]) {
       expect(call).not.toHaveProperty(key)
     }

@@ -156,9 +156,10 @@ func NewGatewayCommand() *cobra.Command {
 			"Overrides the gateway.sandbox.mode config value.",
 	)
 	cmd.Flags().BoolVar(&allowGodMode, "allow-god-mode", false,
-		"Allow agents to set sandbox_profile=off (disables the kernel sandbox). "+
-			"Without this flag, off is silently coerced to workspace with a stderr WARN. "+
-			"Disabled in builds with the nogodmode tag.")
+		"Authorize the global god-mode runtime toggle (sandbox.god_mode), which "+
+			"disables the kernel sandbox for every agent when switched on via "+
+			"POST /api/v1/gateway/god-mode. Without this flag the toggle has no "+
+			"effect even if enabled. Disabled in builds with the nogodmode tag.")
 	// FR-018: --new-cli-token always regenerates the cli bearer token.
 	// Without this flag, the token is created-if-absent (idempotent).
 	cmd.Flags().BoolVar(&newCLIToken, "new-cli-token", false,

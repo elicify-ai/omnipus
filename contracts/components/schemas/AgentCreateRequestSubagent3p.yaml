@@ -4,7 +4,7 @@ description: >
   Create a subagent_3p — a delegation-only worker that runs on an external
   CLI (claude-code / codex / opencode). The runner manages its own isolation,
   auth, retries, and tool loop, so tools_cfg, skills, fallback_models,
-  model_params, sandbox_profile, shell_policy, voice, steering_mode, and
+  model_params, shell_policy, voice, steering_mode, and
   max_tool_iterations do not exist on this variant (additionalProperties:
   false rejects them). timeout_seconds stays (process-level kill for a hung
   CLI). executor is REQUIRED (kind external-cli with cli + cli_path; the

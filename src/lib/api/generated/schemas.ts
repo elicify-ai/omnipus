@@ -118,7 +118,6 @@ type Agent = {
   max_tool_iterations: number;
   steering_mode: "one-at-a-time" | "queue-and-process";
   tools_cfg?: AgentToolsCfg | undefined;
-  sandbox_profile?: ("workspace" | "workspace+net" | "host") | undefined;
   shell_policy?: AgentShellPolicy | undefined;
   fallback_models?: Array<FallbackModel> | undefined;
   model_params?: AgentModelParams | undefined;
@@ -226,7 +225,6 @@ type AgentCreateRequestMain = {
   soul: string;
   delegation_policy?: delegation_policy | undefined;
   voice?: (string | null) | undefined;
-  sandbox_profile?: ("workspace" | "workspace+net" | "host") | undefined;
   shell_policy?: AgentShellPolicy | undefined;
   timeout_seconds?: number | undefined;
   max_tool_iterations?: number | undefined;
@@ -276,7 +274,6 @@ type AgentCreateRequestSubagent = {
   skills?: Array<string> | undefined;
   soul: string;
   delegation_policy?: delegation_policy | undefined;
-  sandbox_profile?: ("workspace" | "workspace+net" | "host") | undefined;
   shell_policy?: AgentShellPolicy | undefined;
   timeout_seconds?: number | undefined;
   max_tool_iterations?: number | undefined;
@@ -315,7 +312,6 @@ type AgentUpdateRequest = Partial<{
   steering_mode: "one-at-a-time" | "queue-and-process";
   heartbeat_enabled: boolean;
   heartbeat_interval: number;
-  sandbox_profile: "workspace" | "workspace+net" | "host";
   shell_policy: Partial<{
     enable_deny_patterns: boolean;
     custom_deny_patterns: Array<string>;
@@ -1211,7 +1207,6 @@ export const Agent: z.ZodType<Agent> = z
     max_tool_iterations: z.number().int().gte(0),
     steering_mode: z.enum(["one-at-a-time", "queue-and-process"]),
     tools_cfg: AgentToolsCfg.optional(),
-    sandbox_profile: z.enum(["workspace", "workspace+net", "host"]).optional(),
     shell_policy: AgentShellPolicy.optional(),
     fallback_models: z.array(FallbackModel).max(2).optional(),
     model_params: AgentModelParams.optional(),
@@ -1292,7 +1287,6 @@ export const AgentCreateRequestMain =
     soul: z.string().min(1),
     delegation_policy: delegation_policy.optional(),
     voice: z.string().nullish(),
-    sandbox_profile: z.enum(["workspace", "workspace+net", "host"]).optional(),
     shell_policy: AgentShellPolicy.optional(),
     timeout_seconds: z.number().int().gte(0).optional(),
     max_tool_iterations: z.number().int().gte(0).optional(),
@@ -1334,7 +1328,6 @@ export const AgentCreateRequestSubagent =
     skills: z.array(z.string()).optional(),
     soul: z.string().min(1),
     delegation_policy: delegation_policy.optional(),
-    sandbox_profile: z.enum(["workspace", "workspace+net", "host"]).optional(),
     shell_policy: AgentShellPolicy.optional(),
     timeout_seconds: z.number().int().gte(0).optional(),
     max_tool_iterations: z.number().int().gte(0).optional(),
@@ -1386,7 +1379,6 @@ export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z
     steering_mode: z.enum(["one-at-a-time", "queue-and-process"]),
     heartbeat_enabled: z.boolean(),
     heartbeat_interval: z.number().int(),
-    sandbox_profile: z.enum(["workspace", "workspace+net", "host"]),
     shell_policy: z
       .object({
         enable_deny_patterns: z.boolean(),
@@ -1663,7 +1655,6 @@ export const SandboxConfig = z
       .object({ enabled: z.boolean(), allow_internal: z.array(z.string()) })
       .partial()
       .passthrough(),
-    default_profile: z.enum(["", "none", "workspace", "workspace+net", "host"]),
     god_mode: z.boolean(),
     god_mode_available: z.boolean(),
     shell_deny_patterns: z.array(z.string()),
@@ -1683,14 +1674,6 @@ export const SandboxConfigUpdate = z
       .object({ allow_internal: z.array(z.string()) })
       .partial()
       .passthrough(),
-    default_profile: z.enum([
-      "",
-      "none",
-      "workspace",
-      "workspace+net",
-      "host",
-      "off",
-    ]),
     shell_deny_patterns: z.array(z.string()),
   })
   .partial()
@@ -5112,7 +5095,7 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
     method: "put",
     path: "/security/sandbox-config",
     alias: "updateSandboxConfig",
-    description: `Partial update — any subset of mode, allow_network_outbound, allowed_paths, ssrf_enabled, ssrf_allow_internal, ssrf.allow_internal, default_profile, shell_deny_patterns. At least one field required. mode, allowed_paths, and default_profile are restart-gated (requires_restart&#x3D;true). SSRF and shell_deny_patterns are hot-reloaded. Protected by RequireNotBypass middleware (returns 503 when dev_mode_bypass is active).
+    description: `Partial update — any subset of mode, allow_network_outbound, allowed_paths, ssrf_enabled, ssrf_allow_internal, ssrf.allow_internal, shell_deny_patterns. At least one field required. mode and allowed_paths are restart-gated (requires_restart&#x3D;true). SSRF and shell_deny_patterns are hot-reloaded. Protected by RequireNotBypass middleware (returns 503 when dev_mode_bypass is active).
 `,
     requestFormat: "json",
     parameters: [

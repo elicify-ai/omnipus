@@ -790,7 +790,7 @@ export interface paths {
         get: operations["getSandboxConfig"];
         /**
          * Update sandbox configuration
-         * @description Partial update — any subset of mode, allow_network_outbound, allowed_paths, ssrf_enabled, ssrf_allow_internal, ssrf.allow_internal, default_profile, shell_deny_patterns. At least one field required. mode, allowed_paths, and default_profile are restart-gated (requires_restart=true). SSRF and shell_deny_patterns are hot-reloaded. Protected by RequireNotBypass middleware (returns 503 when dev_mode_bypass is active).
+         * @description Partial update — any subset of mode, allow_network_outbound, allowed_paths, ssrf_enabled, ssrf_allow_internal, ssrf.allow_internal, shell_deny_patterns. At least one field required. mode and allowed_paths are restart-gated (requires_restart=true). SSRF and shell_deny_patterns are hot-reloaded. Protected by RequireNotBypass middleware (returns 503 when dev_mode_bypass is active).
          */
         put: operations["updateSandboxConfig"];
         post?: never;
@@ -2972,12 +2972,6 @@ export interface components {
              */
             steering_mode: "one-at-a-time" | "queue-and-process";
             tools_cfg?: components["schemas"]["AgentToolsCfg"];
-            /**
-             * @description Kernel sandbox profile applied to this agent's tool calls. "workspace" = Landlock to workspace dir only. "workspace+net" = Landlock + network access. "host" = read-only host filesystem access. Per-agent "off" is retired (O13) — "no sandbox" is reachable only via the global god-mode switch. Editable on ALL agents, including locked core agents. Hidden for subagent_3p — CLI manages its own isolation.
-             * @example workspace
-             * @enum {string}
-             */
-            sandbox_profile?: "workspace" | "workspace+net" | "host";
             shell_policy?: components["schemas"]["AgentShellPolicy"];
             /**
              * @description Ordered list of fallback model entries tried when the primary model returns an error (Phase 1B / FR-005). Each entry carries its own provider so the fallback can route through a different provider than the primary — useful when the primary's provider is rate-limited (FR-007). Capped at 2 entries. Hidden for subagent_3p.
@@ -3309,12 +3303,6 @@ export interface components {
              * @example alloy
              */
             voice?: string | null;
-            /**
-             * @description Kernel sandbox profile applied to this agent's tool calls (O13). Per-agent "off" is retired — "no sandbox" is reachable only via the global god-mode switch. Hidden for Subagent (External) — the CLI manages its own isolation.
-             * @example workspace
-             * @enum {string}
-             */
-            sandbox_profile?: "workspace" | "workspace+net" | "host";
             shell_policy?: components["schemas"]["AgentShellPolicy"];
             /**
              * @description Maximum seconds a single agent turn may run before being interrupted.
@@ -3443,12 +3431,6 @@ export interface components {
              */
             soul: string;
             delegation_policy?: components["schemas"]["DelegationPolicy"];
-            /**
-             * @description Kernel sandbox profile applied to this agent's tool calls (O13). Per-agent "off" is retired — "no sandbox" is reachable only via the global god-mode switch. Hidden for Subagent (External) — the CLI manages its own isolation.
-             * @example workspace
-             * @enum {string}
-             */
-            sandbox_profile?: "workspace" | "workspace+net" | "host";
             shell_policy?: components["schemas"]["AgentShellPolicy"];
             /**
              * @description Maximum seconds a single agent turn may run before being interrupted.
@@ -3463,7 +3445,7 @@ export interface components {
         };
         /**
          * AgentCreateRequestSubagent3p
-         * @description Create a subagent_3p — a delegation-only worker that runs on an external CLI (claude-code / codex / opencode). The runner manages its own isolation, auth, retries, and tool loop, so tools_cfg, skills, fallback_models, model_params, sandbox_profile, shell_policy, voice, steering_mode, and max_tool_iterations do not exist on this variant (additionalProperties: false rejects them). timeout_seconds stays (process-level kill for a hung CLI). executor is REQUIRED (kind external-cli with cli + cli_path; the handler additionally rejects whitespace-only cli_path).
+         * @description Create a subagent_3p — a delegation-only worker that runs on an external CLI (claude-code / codex / opencode). The runner manages its own isolation, auth, retries, and tool loop, so tools_cfg, skills, fallback_models, model_params, shell_policy, voice, steering_mode, and max_tool_iterations do not exist on this variant (additionalProperties: false rejects them). timeout_seconds stays (process-level kill for a hung CLI). executor is REQUIRED (kind external-cli with cli + cli_path; the handler additionally rejects whitespace-only cli_path).
          */
         AgentCreateRequestSubagent3p: {
             /**
@@ -3603,12 +3585,6 @@ export interface components {
              * @example 1800
              */
             heartbeat_interval?: number;
-            /**
-             * @description New sandbox profile. Editable on ALL agents, including locked core agents (O13). Per-agent "off" is retired — "no sandbox" is reachable only via the global god-mode switch (POST /api/v1/gateway/god-mode). Rejected 400 on subagent_3p agents (CLI manages its own isolation).
-             * @example workspace
-             * @enum {string}
-             */
-            sandbox_profile?: "workspace" | "workspace+net" | "host";
             /** @description Per-agent shell command deny-pattern configuration. Rejected 400 on subagent_3p agents. */
             shell_policy?: {
                 /** @example true */
@@ -3729,7 +3705,7 @@ export interface components {
         /**
          * @description Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
          *     "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
-         *     "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude receives the soul+instructions prompt via stdin with NO positional prompt argument at all (a bare "-" is read by this CLI as a literal one-character prompt string, not a stdin sentinel, so none is appended — claude -p consumes all of stdin automatically when no positional prompt is given); codex also receives it via stdin, but signals that with a trailing "-" positional argument (a real stdin sentinel for this CLI); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like sandbox_profile / shell_policy / tools_cfg / fallback_models / model_params / skills / delegation_policy are hidden for subagent_3p agents and rejected 400 on PUT if set.
+         *     "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude receives the soul+instructions prompt via stdin with NO positional prompt argument at all (a bare "-" is read by this CLI as a literal one-character prompt string, not a stdin sentinel, so none is appended — claude -p consumes all of stdin automatically when no positional prompt is given); codex also receives it via stdin, but signals that with a trailing "-" positional argument (a real stdin sentinel for this CLI); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like shell_policy / tools_cfg / fallback_models / model_params / skills / delegation_policy are hidden for subagent_3p agents and rejected 400 on PUT if set.
          *     "cli" (required for subagent_3p agents when kind="external-cli") is locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
          *     "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
          *     The "kind" field is derived server-side from the agent's type (Main -> native, Subagent -> native, subagent_3p -> external-cli). It is exposed in responses but is NOT a writable field on create/update — clients cannot choose kind directly. Server-side derive at the handler boundary per the agent-form spec.
@@ -4186,12 +4162,6 @@ export interface components {
                 allow_internal?: string[];
             };
             /**
-             * @description Global fallback sandbox profile applied to new custom agents that do not pick their own profile. Empty string means use hardcoded default.
-             * @example workspace
-             * @enum {string}
-             */
-            default_profile?: "" | "none" | "workspace" | "workspace+net" | "host";
-            /**
              * @description O14 global god-mode ("bypass-permissions") runtime state. When true, every agent's tool policy is floored at "allow", the kernel sandbox is off, network egress is open, and the shell guard is off — regardless of per-agent profiles. Audit logging, the prompt-injection guard, and rate limiting stay on. Toggled via POST /api/v1/gateway/god-mode (password step-up). Always false when god mode is unavailable.
              * @example false
              */
@@ -4209,7 +4179,7 @@ export interface components {
              *     ]
              */
             shell_deny_patterns?: string[];
-            /** @description Present in PUT responses. True when the change requires a gateway restart to take effect (mode, allowed_paths, default_profile). */
+            /** @description Present in PUT responses. True when the change requires a gateway restart to take effect (mode, allowed_paths). */
             requires_restart?: boolean;
             /** @description Present in PUT responses. Always true on success. */
             saved?: boolean;
@@ -5112,7 +5082,7 @@ export interface components {
              */
             ref?: string;
         };
-        /** @description Partial-update body for PUT /security/sandbox-config. All fields are optional — only fields present in the request are updated. At least one field must be supplied (the server returns 400 otherwise). Flat fields take precedence over nested equivalents when both are present in the same request body. mode, allowed_paths, and default_profile are restart-gated (the response includes requires_restart=true when any of these change). ssrf.allow_internal and shell_deny_patterns are hot-reloaded. */
+        /** @description Partial-update body for PUT /security/sandbox-config. All fields are optional — only fields present in the request are updated. At least one field must be supplied (the server returns 400 otherwise). Flat fields take precedence over nested equivalents when both are present in the same request body. mode and allowed_paths are restart-gated (the response includes requires_restart=true when either changes). ssrf.allow_internal and shell_deny_patterns are hot-reloaded. */
         SandboxConfigUpdate: {
             /**
              * @description Kernel sandbox enforcement mode. "off" = no kernel enforcement (god-mode). "permissive" = log violations but allow. "enforce" = block violations. Restart-gated.
@@ -5154,12 +5124,6 @@ export interface components {
                  */
                 allow_internal?: string[];
             };
-            /**
-             * @description Default sandbox profile applied to new custom agents that do not pick their own profile. Restart-gated. Empty string means "inherit global default".
-             * @example workspace
-             * @enum {string}
-             */
-            default_profile?: "" | "none" | "workspace" | "workspace+net" | "host" | "off";
             /**
              * @description Global fallback list of Go regexp patterns to block in shell commands. Per-agent custom_deny_patterns extend this list. Hot-reloaded.
              * @example [

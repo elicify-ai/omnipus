@@ -77,68 +77,6 @@ func (m *SandboxMode) UnmarshalJSON(data []byte) error {
 	}
 }
 
-// SandboxProfile is the per-agent kernel sandbox profile.
-// It controls which sandbox limits are applied when an agent spawns child
-// processes. Empty means "use the global default (DefaultProfile)".
-type SandboxProfile string
-
-const (
-	// SandboxProfileWorkspace confines the agent to its workspace directory
-	// (Landlock) with outbound network blocked (seccomp/egress-proxy deny-all).
-	SandboxProfileWorkspace SandboxProfile = "workspace"
-	// SandboxProfileWorkspaceNet confines the agent to its workspace directory
-	// but permits outbound HTTP/HTTPS through the egress allow-list proxy.
-	SandboxProfileWorkspaceNet SandboxProfile = "workspace+net"
-	// SandboxProfileHost allows access to the full host filesystem and network
-	// with only the most dangerous syscalls (mount, kexec, ptrace, …) blocked.
-	SandboxProfileHost SandboxProfile = "host"
-	// SandboxProfileOff disables all kernel-level sandboxing for this agent.
-	// This is the "god mode" profile gated by three independent latches.
-	SandboxProfileOff SandboxProfile = "off"
-)
-
-// IsValid reports whether p is one of the defined SandboxProfile constants.
-// An empty string is considered valid (means "use global default").
-func (p *SandboxProfile) IsValid() bool {
-	switch *p {
-	case SandboxProfileWorkspace, SandboxProfileWorkspaceNet,
-		SandboxProfileHost, SandboxProfileOff, "":
-		return true
-	default:
-		return false
-	}
-}
-
-// String implements fmt.Stringer.
-func (p *SandboxProfile) String() string { return string(*p) }
-
-// MarshalJSON serializes the profile as a JSON string.
-func (p *SandboxProfile) MarshalJSON() ([]byte, error) {
-	return json.Marshal(string(*p))
-}
-
-// UnmarshalJSON validates and deserialises a SandboxProfile from JSON.
-// Empty string is accepted (field omitted in config.json; callers default-fill).
-// Unknown non-empty values are rejected so typos fail at load time rather than
-// silently behaving as the zero value.
-func (p *SandboxProfile) UnmarshalJSON(data []byte) error {
-	var s string
-	if err := json.Unmarshal(data, &s); err != nil {
-		return err
-	}
-	switch SandboxProfile(s) {
-	case SandboxProfileWorkspace, SandboxProfileWorkspaceNet,
-		SandboxProfileHost, SandboxProfileOff:
-		*p = SandboxProfile(s)
-		return nil
-	case "":
-		*p = ""
-		return nil
-	default:
-		return fmt.Errorf("invalid sandbox_profile: %q (must be one of: workspace, workspace+net, host, off)", s)
-	}
-}
-
 // PromptInjectionLevel controls prompt guard aggressiveness (SEC-25).
 type PromptInjectionLevel string
 
@@ -354,26 +292,21 @@ type OmnipusSandboxConfig struct {
 	// service while still blocking all other private ranges).
 	SSRF OmnipusSSRFConfig `json:"ssrf,omitempty"`
 
-	// DefaultProfile is the global fallback sandbox profile applied to agents
-	// that do not specify their own SandboxProfile. When empty, defaults to
-	// SandboxProfileWorkspace at enforcement time.
-	DefaultProfile SandboxProfile `json:"default_profile,omitempty"`
-
 	// GodMode is the runtime global "bypass-permissions" switch (O14). It is
 	// DISTINCT from the --allow-god-mode boot flag: the boot flag (and the
 	// nogodmode build tag) gate AVAILABILITY; this field is the live ON/OFF
 	// state. When true (and god mode is available), the override engine:
 	//   - floors every agent's effective tool policy at "allow" (no prompts);
 	//   - forces the kernel sandbox off (full host fs + syscalls), network
-	//     egress open, and shell guard / deny-patterns off, regardless of any
-	//     per-agent SandboxProfile.
+	//     egress open, and shell guard / deny-patterns off, regardless of the
+	//     fixed workspace_shell/workspace_shell_bg limits.
 	// Audit logging, the prompt-injection guard, and rate limiting are NOT
 	// disabled — those defend against external threats, not agent freedom.
 	//
-	// The override is non-destructive: per-agent profiles and tool policies are
-	// NOT mutated on disk. The override is applied purely at resolution time
-	// (agentToolsCfgToPolicy / the loop's sandbox-profile resolution), so
-	// switching GodMode off restores the prior per-agent behavior exactly.
+	// The override is non-destructive: tool policies are NOT mutated on disk.
+	// The override is applied purely at resolution time (agentToolsCfgToPolicy
+	// / the loop's god-mode wiring), so switching GodMode off restores the
+	// prior behavior exactly.
 	//
 	// Toggled at runtime via POST /api/v1/gateway/god-mode (password step-up)
 	// or set at boot for headless runs. Has no effect when god mode is not

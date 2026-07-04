@@ -1,15 +1,31 @@
-// Package sandbox — LimitsForProfile maps per-agent SandboxProfile values
-// to the Limits struct consumed by Run / ApplyChildHardening.
+// Package sandbox — BuildLimits constructs the fixed Limits struct consumed by
+// Run / ApplyChildHardening for the workspace_shell and workspace_shell_bg
+// tools.
 //
-// Design note: profile-scoped seccomp filters are intentionally not implemented
-// here. The seccomp filter (see seccomp_linux.go) is installed process-wide via
-// prctl(PR_SET_SECCOMP) + TSYNC, meaning all threads and child processes inherit
-// the same filter. Narrowing the filter per-child would require either a
-// separate-process-per-child architecture or per-exec seccomp filter updates,
-// both of which are significant refactors. All profiles currently reuse the
-// existing strict 15-syscall filter as applied at gateway boot. If `npm install`
-// hits EPERM under workspace+net, the filter will be revisited in a future
-// migration. Tracked here so it is not forgotten.
+// Design note (ADR-035-remove-per-agent-sandbox-profile): Omnipus previously
+// offered a per-agent "sandbox profile" (workspace / workspace+net / host /
+// off) that purported to select different kernel-enforcement strength per
+// agent. In reality the Landlock/seccomp policy is installed ONCE, process-wide,
+// at gateway boot (see seccomp_linux.go) and is inherited by every child
+// regardless of the calling agent's selected profile — narrowing the filter
+// per-child would require either a separate-process-per-child architecture or
+// per-exec seccomp filter updates, both significant refactors this project's
+// hard constraints (single Go binary, no CGo) rule out. The only field that
+// genuinely varied by profile was whether the SSRF-protected egress proxy was
+// injected into the child's environment; since that proxy is the SAME
+// allow-list every other network-capable tool in the system already routes
+// through, BuildLimits now injects it whenever the process-wide egress proxy
+// is available (nil only if sandbox.NewEgressProxy failed at boot — see
+// pkg/gateway/gateway.go, which degrades gracefully rather than failing boot
+// in that case). This is the safer simplification, not a wider one: the old
+// "workspace" profile's "no proxy" behavior meant raw HTTP from that child
+// was never checked against the SSRF allow-list at all.
+//
+// The kernel sandbox (cwd confinement via Landlock, resource limits via
+// ApplyChildHardening, audit logging) still applies to every invocation. The
+// sole escape hatch is god mode (agent.GodModeActive), which the caller
+// resolves once and threads through as an explicit bool — see
+// workspace_shell.go / workspace_shell_bg.go.
 
 package sandbox
 
@@ -17,116 +33,45 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-
-	"github.com/dapicom-ai/omnipus/pkg/config"
 )
 
-// LimitsForProfile returns the sandbox.Limits that should be applied when
-// running a child process under the given per-agent SandboxProfile.
-//
-// Profile semantics:
-//   - "":            treated as "workspace" (safe default).
-//   - "workspace":       WorkspaceDir set; EgressProxyAddr empty (network
-//     isolated); RLIMIT_AS/CPU governed by timeoutSec.
-//   - "workspace+net":   WorkspaceDir set; EgressProxyAddr set to the
-//     running proxy's address (operator allow-list applies).
-//   - "host":            WorkspaceDir set for npm cache; EgressProxyAddr set
-//     (broader network access via proxy allow-list).
-//     Filesystem access is wider (host paths) — controlled
-//     by Landlock at the gateway process level.
-//   - "off":             Returns zero-value Limits AND IsGodMode returns true.
-//     Callers MUST check IsGodMode before calling
-//     ApplyChildHardening — passing zero Limits to
-//     ApplyChildHardening is a no-op on most platforms but
-//     the intent check is important for auditability.
-//
-// Note on seccomp: the strict 15-syscall filter is installed at gateway-process
-// level and inherited by all children via TSYNC. Profile-scoped seccomp
-// narrowing is deferred to a future PR; all profiles currently share the same
-// inherited filter.
-func LimitsForProfile(
-	profile config.SandboxProfile,
-	workspaceDir string,
-	proxy *EgressProxy,
-	timeoutSec int32,
-) (Limits, error) {
-	// Normalise empty string to workspace (safe default).
-	if profile == "" {
-		profile = config.SandboxProfileWorkspace
+// BuildLimits returns the sandbox.Limits every workspace_shell /
+// workspace_shell_bg invocation runs under: cwd confinement to workspaceDir,
+// resource limits derived from timeoutSec, and the SSRF-protected egress
+// proxy address (when proxy is non-nil). Kept as a named function (rather
+// than inlined at call sites) so there is one place to change resource-limit
+// defaults later.
+func BuildLimits(workspaceDir string, proxy *EgressProxy, timeoutSec int32) (Limits, error) {
+	wsDir, err := resolveWorkspaceDir(workspaceDir)
+	if err != nil {
+		return Limits{}, fmt.Errorf("sandbox.BuildLimits: %w", err)
 	}
-
-	switch profile {
-	case config.SandboxProfileOff:
-		// God mode: return zero-value Limits. Caller must call IsGodMode
-		// and skip ApplyChildHardening.
-		return Limits{}, nil
-
-	case config.SandboxProfileWorkspace:
-		// Strict: workspace-only filesystem, no outbound network via proxy.
-		wsDir, err := resolveWorkspaceDir(workspaceDir)
-		if err != nil {
-			return Limits{}, fmt.Errorf("LimitsForProfile workspace: %w", err)
-		}
-		return Limits{
-			TimeoutSeconds:   timeoutSec,
-			MemoryLimitBytes: 0,
-			WorkspaceDir:     wsDir,
-			EgressProxyAddr:  "", // no network
-		}, nil
-
-	case config.SandboxProfileWorkspaceNet:
-		// Workspace filesystem + outbound HTTP/HTTPS via egress proxy allow-list.
-		wsDir, err := resolveWorkspaceDir(workspaceDir)
-		if err != nil {
-			return Limits{}, fmt.Errorf("LimitsForProfile workspace+net: %w", err)
-		}
-		proxyAddr := ""
-		if proxy != nil {
-			proxyAddr = proxy.Addr()
-		}
-		return Limits{
-			TimeoutSeconds:   timeoutSec,
-			MemoryLimitBytes: 0,
-			WorkspaceDir:     wsDir,
-			EgressProxyAddr:  proxyAddr,
-		}, nil
-
-	case config.SandboxProfileHost:
-		// Host-level access: workspace dir still used for npm cache injection;
-		// broader filesystem reach is governed by the Landlock rules applied
-		// to the gateway process (inherited by children). Egress via proxy so
-		// operator allow-list still applies.
-		proxyAddr := ""
-		if proxy != nil {
-			proxyAddr = proxy.Addr()
-		}
-		// For host profile the workspace dir is still useful for npm cache
-		// even if the filesystem restriction is wider. We set WorkspaceDir
-		// only when the directory actually exists (avoid injecting a bad path).
-		wsDir := ""
-		if workspaceDir != "" {
-			if abs, err := filepath.Abs(workspaceDir); err == nil {
-				wsDir = abs
-			}
-		}
-		return Limits{
-			TimeoutSeconds:   timeoutSec,
-			MemoryLimitBytes: 0,
-			WorkspaceDir:     wsDir,
-			EgressProxyAddr:  proxyAddr,
-		}, nil
-
-	default:
-		return Limits{}, fmt.Errorf("LimitsForProfile: unknown profile %q", profile)
+	proxyAddr := ""
+	if proxy != nil {
+		proxyAddr = proxy.Addr()
 	}
+	return Limits{
+		TimeoutSeconds:   timeoutSec,
+		MemoryLimitBytes: 0,
+		WorkspaceDir:     wsDir,
+		EgressProxyAddr:  proxyAddr,
+	}, nil
 }
 
-// IsGodMode reports whether profile is SandboxProfileOff. When true the
-// caller MUST skip ApplyChildHardening entirely — passing zero Limits to
-// ApplyChildHardening is formally a no-op, but the explicit check ensures
-// the audit path records the intentional sandbox bypass.
-func IsGodMode(profile config.SandboxProfile) bool {
-	return profile == config.SandboxProfileOff
+// ResolveLimits returns the fixed Limits for a workspace_shell{,_bg}
+// invocation, or the zero value when godMode is true. God mode bypasses
+// hardening entirely, so BuildLimits' side effects (workspace mkdir, proxy
+// resolution) are also skipped rather than computed and discarded — this
+// matches the pre-ADR-035 behavior where the "off" profile short-circuited
+// before any filesystem touch, and closes the asymmetry where the foreground
+// workspace_shell tool called BuildLimits unconditionally (a real MkdirAll
+// that could fail on an empty/invalid workspaceDir even though its result was
+// immediately overwritten) while workspace_shell_bg skipped it under god mode.
+func ResolveLimits(godMode bool, workspaceDir string, proxy *EgressProxy, timeoutSec int32) (Limits, error) {
+	if godMode {
+		return Limits{}, nil
+	}
+	return BuildLimits(workspaceDir, proxy, timeoutSec)
 }
 
 // resolveWorkspaceDir returns an absolute, clean workspace path, creating the

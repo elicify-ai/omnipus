@@ -79,18 +79,6 @@ properties:
     description: >
       Accepted for backward compatibility but IGNORED — heartbeat is workspace-scoped (ADR-027).
     example: 1800
-  sandbox_profile:
-    type: string
-    enum:
-      - workspace
-      - workspace+net
-      - host
-    description: >
-      New sandbox profile. Editable on ALL agents, including locked core agents (O13).
-      Per-agent "off" is retired — "no sandbox" is reachable only via the global
-      god-mode switch (POST /api/v1/gateway/god-mode). Rejected 400 on subagent_3p
-      agents (CLI manages its own isolation).
-    example: "workspace"
   shell_policy:
     type: object
     description: >

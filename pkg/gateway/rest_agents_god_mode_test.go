@@ -1,14 +1,12 @@
 //go:build !cgo
 
-// REST sandbox-profile gate tests for PUT /api/v1/agents/{id} (O13).
+// REST shell-policy gate tests for PUT /api/v1/agents/{id}.
 //
 // Verifies:
-//  1. sandbox_profile=off always rejected 400 (per-agent "off" is retired —
-//     "no sandbox" is reachable only via the global god-mode switch).
-//  2. sandbox_profile=workspace always                  → 200
-//  3. invalid shell_policy.custom_deny_patterns regex   → 400
+//  1. invalid shell_policy.custom_deny_patterns regex   → 400
+//  2. valid shell_policy.custom_deny_patterns regexes   → 200
 //
-// Traces to: docs/internal/uat/remediation-decisions.md O13 / O14.
+// Traces to: docs/internal/uat/remediation-decisions.md O14.
 
 package gateway
 
@@ -62,89 +60,6 @@ func buildGodModeTestAPI(t *testing.T, allowGodMode bool) *restAPI {
 	}
 }
 
-// TestUpdateAgent_SandboxOff_Retired_Returns400 verifies the O13 behavior:
-// per-agent sandbox_profile=off is retired and now ALWAYS rejected with 400,
-// regardless of god-mode availability or the --allow-god-mode flag. "No sandbox"
-// is reachable only via the global god-mode switch (POST /api/v1/gateway/god-mode).
-func TestUpdateAgent_SandboxOff_Retired_Returns400(t *testing.T) {
-	// allowGodMode=true to prove off is rejected even when god mode is available —
-	// the per-agent route is gone entirely.
-	api := buildGodModeTestAPI(t, true /* allowGodMode */)
-
-	body := `{"sandbox_profile":"off"}`
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent", strings.NewReader(body))
-	r.Header.Set("Content-Type", "application/json")
-	api.HandleAgents(w, r)
-
-	assert.Equal(
-		t,
-		http.StatusBadRequest,
-		w.Code,
-		"per-agent sandbox_profile=off is retired and must return 400; body: %s",
-		w.Body.String(),
-	)
-
-	var resp map[string]string
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
-	assert.Contains(t, resp["error"], "god-mode",
-		"error must point the operator at the global god-mode switch")
-
-	// Confirm nothing was persisted (the off write must not have happened).
-	raw, err := os.ReadFile(api.homePath + "/config.json")
-	require.NoError(t, err)
-	var persisted map[string]any
-	require.NoError(t, json.Unmarshal(raw, &persisted))
-	agents, _ := persisted["agents"].(map[string]any)
-	list, _ := agents["list"].([]any)
-	for _, item := range list {
-		m, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
-		if m["id"] == "test-agent" {
-			assert.NotEqual(t, "off", m["sandbox_profile"],
-				"sandbox_profile=off must never be persisted")
-		}
-	}
-}
-
-// TestUpdateAgent_SandboxOff_AllowGodModeFalse_Returns400 verifies that with
-// allowGodMode=false, per-agent sandbox_profile=off is rejected with 400 (O13):
-// the per-agent route no longer differentiates on the boot flag — off is gone.
-func TestUpdateAgent_SandboxOff_AllowGodModeFalse_Returns400(t *testing.T) {
-	api := buildGodModeTestAPI(t, false /* allowGodMode */)
-
-	body := `{"sandbox_profile":"off"}`
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent", strings.NewReader(body))
-	r.Header.Set("Content-Type", "application/json")
-	api.HandleAgents(w, r)
-
-	assert.Equal(t, http.StatusBadRequest, w.Code,
-		"per-agent sandbox_profile=off must return 400 (retired); body: %s", w.Body.String())
-
-	var resp map[string]string
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
-	assert.Contains(t, resp["error"], "god-mode",
-		"error message must point at the global god-mode switch")
-}
-
-// TestUpdateAgent_SandboxWorkspace_AlwaysAllowed verifies that sandbox_profile=workspace
-// is always accepted regardless of god-mode flags.
-func TestUpdateAgent_SandboxWorkspace_AlwaysAllowed(t *testing.T) {
-	api := buildGodModeTestAPI(t, false /* allowGodMode */)
-
-	body := `{"sandbox_profile":"workspace"}`
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent", strings.NewReader(body))
-	r.Header.Set("Content-Type", "application/json")
-	api.HandleAgents(w, r)
-
-	assert.Equal(t, http.StatusOK, w.Code,
-		"sandbox_profile=workspace must always return 200; body: %s", w.Body.String())
-}
-
 // TestUpdateAgent_ShellPolicy_InvalidRegex_Returns400 verifies that a
 // shell_policy.custom_deny_patterns entry with an invalid regexp is rejected
 // with 400 and the error message includes the bad pattern.
@@ -177,7 +92,7 @@ func TestUpdateAgent_ShellPolicy_InvalidRegex_Returns400(t *testing.T) {
 func TestUpdateAgent_PATCH_Returns405(t *testing.T) {
 	api := buildGodModeTestAPI(t, false /* allowGodMode */)
 
-	body := `{"sandbox_profile":"off"}`
+	body := `{"name":"irrelevant — method rejected before body is parsed"}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPatch, "/api/v1/agents/test-agent", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")

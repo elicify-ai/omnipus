@@ -6,6 +6,13 @@
 **Branch target:** `hotfix/v0.1.1` (Wave 6 follow-up)
 **Replaces:** the prior 2-type taxonomy (`custom` / `worker`)
 
+> **2026-07-04 — `sandbox_profile` (row 17) removed entirely** (ADR-035): it
+> never differentiated the actual kernel-enforced boundary per agent — that
+> boundary is a single global Landlock/seccomp policy applied at gateway
+> boot, identical for every agent. Row 18 (`shell_policy`) is unaffected and
+> stays exactly as described below. References to `sandbox_profile` and
+> `inherit_sandbox` throughout this document are historical.
+
 This is the **canonical reference** for what fields exist on each agent type,
 which are required vs optional vs hidden vs read-only, and why. Read this
 before touching `AgentCreateRequest.yaml`, `AgentUpdateRequest.yaml`, or

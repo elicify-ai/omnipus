@@ -480,7 +480,6 @@ describe('CreateAgentWizard — Advanced disclosure (slim variant for subagent_3
     expect(screen.queryByText('Max tokens')).toBeNull()
     expect(screen.queryByText('Steering mode')).toBeNull()
     expect(screen.queryByText('Max tool calls per turn')).toBeNull()
-    expect(screen.queryByText('Sandbox profile')).toBeNull()
     expect(screen.queryByText('Shell deny patterns')).toBeNull()
   })
 

@@ -1,8 +1,31 @@
 # ADR-009 — Per-Agent Sandbox Profile is the Security Boundary
 
-**Status:** Accepted
+**Status:** Superseded by [ADR-035](./ADR-035-remove-per-agent-sandbox-profile.md) (2026-07-04)
 **Date:** 2026-04-29
 **Deciders:** architect, security-lead, backend-lead
+
+> **2026-07-04 — Superseded.** This ADR's core claim — "the per-agent sandbox
+> profile is the authoritative security boundary" — never actually held in
+> shipped code. The per-profile Landlock/seccomp differentiation described
+> below (§Decision) was the *intended* design; what was actually built (and
+> confirmed by full code tracing in 2026-07) is a single, global,
+> process-wide Landlock+seccomp ruleset, identical for every agent regardless
+> of its selected profile — `LimitsForProfile` only ever varied cwd, resource
+> limits, and a soft (non-kernel-enforced) egress-proxy env-var hint. That
+> per-profile kernel differentiation is confirmed fictitious — it never
+> existed. The three-latch `off` / god-mode gating mechanism described below
+> (§Three latches for `off`) is a different story: it DID get built, just not
+> as originally scoped here — see ADR-035 §1 for the full accounting. It was
+> restructured from per-agent to fully global (`sandbox.GodModeAvailable`,
+> `--allow-god-mode`, `cfg.Sandbox.GodMode`, combined in
+> `agent.GodModeActive(cfg)`), with the third latch changing from a typed UI
+> confirmation to a live config toggle — not abandoned. The per-agent
+> `SandboxProfile` field, its UI picker, and the per-agent plumbing this ADR
+> describes have been removed entirely — see ADR-035 for the replacement
+> design and the reasoning (including current market practice for agent
+> sandboxing) behind not pursuing genuine per-agent kernel isolation as a
+> v0.1/v0.2 investment. Retained here, unedited below, as a historical record
+> of the original (unrealized) intent.
 
 ---
 

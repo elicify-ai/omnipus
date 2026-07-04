@@ -63,7 +63,7 @@ func TestRunnerTestEndpoint_NotExternalCLI(t *testing.T) {
 	code, resp := postRunnerTest(t, api, "native-agent")
 	require.Equal(t, http.StatusOK, code)
 	assert.False(t, resp.Ok)
-	assert.Equal(t, gen.RunnerTestResponseReasonNotExternalCli, resp.Reason)
+	assert.Equal(t, gen.NotExternalCli, resp.Reason)
 }
 
 // TestRunnerTestEndpoint_UnknownCLI: external-cli with an empty cli value.
@@ -72,7 +72,7 @@ func TestRunnerTestEndpoint_EmptyCLI(t *testing.T) {
 	code, resp := postRunnerTest(t, api, "ext-no-cli")
 	require.Equal(t, http.StatusOK, code)
 	assert.False(t, resp.Ok)
-	assert.Equal(t, gen.RunnerTestResponseReasonUnknownCli, resp.Reason)
+	assert.Equal(t, gen.UnknownCli, resp.Reason)
 }
 
 // TestRunnerTestEndpoint_MissingBinary: claude-code configured but the binary is
@@ -86,7 +86,7 @@ func TestRunnerTestEndpoint_ExternalCLI_RunsCheck(t *testing.T) {
 	assert.Equal(t, "claude-code", deref(resp.Cli))
 	// In CI the claude binary is absent → missing-binary. If a developer has it
 	// installed, the result is handshake/unauthenticated/ok — never not-external-cli.
-	assert.NotEqual(t, gen.RunnerTestResponseReasonNotExternalCli, resp.Reason)
+	assert.NotEqual(t, gen.NotExternalCli, resp.Reason)
 }
 
 // TestRunnerTestEndpoint_NotFound: unknown agent → 404.

@@ -20,18 +20,6 @@ import (
 // contracts/components/schemas/SandboxConfigUpdate.yaml and generated into
 // pkg/api/generated/. Use gen.SandboxConfigUpdate directly in putSandboxConfig.
 
-// validSandboxProfiles is the canonical set accepted for default_profile.
-// Mirrors config.SandboxProfile* constants.
-var validSandboxProfiles = map[string]bool{
-	"":              true, // empty = inherit, not-set
-	"none":          true, // explicit "use global default"
-	"workspace":     true,
-	"workspace+net": true,
-	"host":          true,
-	// O13: "off" is retired as a per-agent / default profile. "No sandbox" is
-	// reachable only via the global god-mode switch (sandbox.god_mode).
-}
-
 // SandboxConfigUpdate.Ssrf (nested) is inlined in the generated type;
 // see contracts/components/schemas/SandboxConfigUpdate.yaml.
 
@@ -98,7 +86,6 @@ func (a *restAPI) getSandboxConfig(w http.ResponseWriter, r *http.Request) {
 	resolvedMode := gen.SandboxConfigMode(cfg.Sandbox.ResolvedMode())
 	allowNetOut := cfg.Sandbox.AllowNetworkOutbound
 	ssrfEnabled := cfg.Sandbox.SSRF.Enabled
-	defaultProfile := gen.SandboxConfigDefaultProfile(cfg.Sandbox.DefaultProfile)
 
 	// O14 god-mode state for the UI. enabled is reported false when god mode is
 	// unavailable (the switch is inert), so the UI never shows "on" for a setting
@@ -117,7 +104,6 @@ func (a *restAPI) getSandboxConfig(w http.ResponseWriter, r *http.Request) {
 		SsrfEnabled:          &ssrfEnabled,
 		SsrfAllowInternal:    &allowInternal,
 		AppliedMode:          &applied,
-		DefaultProfile:       &defaultProfile,
 		ShellDenyPatterns:    &shellDenyPatterns,
 		GodMode:              &godModeOn,
 		GodModeAvailable:     &godModeAvail,
@@ -170,16 +156,14 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 		resolvedAllowInternal = body.Ssrf.AllowInternal
 	}
 	changedAllowInternal := resolvedAllowInternal != nil
-	changedDefaultProfile := body.DefaultProfile != nil
 	changedShellDenyPatterns := body.ShellDenyPatterns != nil
 
 	if !changedMode && !changedAllowNetworkOutbound && !changedAllowedPaths &&
-		!changedSSRFEnabled && !changedAllowInternal &&
-		!changedDefaultProfile && !changedShellDenyPatterns {
+		!changedSSRFEnabled && !changedAllowInternal && !changedShellDenyPatterns {
 		jsonErr(
 			w,
 			http.StatusBadRequest,
-			"at least one field required — expected mode, allowed_paths, ssrf.allow_internal, default_profile, or shell_deny_patterns",
+			"at least one field required — expected mode, allowed_paths, ssrf.allow_internal, or shell_deny_patterns",
 		)
 		return
 	}
@@ -188,18 +172,6 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 	if changedMode {
 		if !validSandboxModes[string(*body.Mode)] {
 			jsonErr(w, http.StatusBadRequest, `invalid sandbox mode — must be one of "off", "permissive", "enforce"`)
-			return
-		}
-	}
-
-	// Validate default profile value before any disk writes.
-	if changedDefaultProfile {
-		if !validSandboxProfiles[string(*body.DefaultProfile)] {
-			jsonErr(
-				w,
-				http.StatusBadRequest,
-				`invalid default_profile — must be one of "", "none", "workspace", "workspace+net", "host"`,
-			)
 			return
 		}
 	}
@@ -228,7 +200,6 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 		oldMode              string
 		oldAllowedPaths      []string
 		oldAllowInternal     []string
-		oldDefaultProfile    string
 		oldShellDenyPatterns []string
 	)
 
@@ -273,16 +244,6 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 				ssrf["allow_internal"] = toAnySlice(*resolvedAllowInternal)
-			}
-		}
-		if changedDefaultProfile {
-			if s, ok := sandbox["default_profile"].(string); ok {
-				oldDefaultProfile = s
-			}
-			if string(*body.DefaultProfile) == "" {
-				delete(sandbox, "default_profile")
-			} else {
-				sandbox["default_profile"] = string(*body.DefaultProfile)
 			}
 		}
 		if changedShellDenyPatterns {
@@ -334,15 +295,6 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 					slog.Error("rest: audit emit ssrf.allow_internal change", "error", err)
 				}
 			}
-			if changedDefaultProfile {
-				if err := audit.EmitSecuritySettingChange(
-					r.Context(), auditLogger,
-					"sandbox.default_profile",
-					oldDefaultProfile, string(*body.DefaultProfile),
-				); err != nil {
-					slog.Error("rest: audit emit default_profile change", "error", err)
-				}
-			}
 			if changedShellDenyPatterns {
 				if err := audit.EmitSecuritySettingChange(
 					r.Context(), auditLogger,
@@ -368,10 +320,10 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// mode, allowed_paths, and default_profile are restart-gated (each is
-	// consumed at boot or agent-wiring time). ssrf.allow_internal and
-	// shell_deny_patterns are hot-reload via the config-poll loop.
-	partialRestartRequired := changedMode || changedAllowedPaths || changedDefaultProfile
+	// mode and allowed_paths are restart-gated (each is consumed at boot or
+	// agent-wiring time). ssrf.allow_internal and shell_deny_patterns are
+	// hot-reload via the config-poll loop.
+	partialRestartRequired := changedMode || changedAllowedPaths
 
 	// Return the updated config so the UI can cache-update without a follow-up GET.
 	// Include both flat fields and nested ssrf object for backward-compatible clients.
@@ -397,7 +349,6 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 		updatedMode := gen.SandboxConfigMode(updatedCfg.Sandbox.ResolvedMode())
 		updatedAllowNetOut := updatedCfg.Sandbox.AllowNetworkOutbound
 		updatedSsrfEnabled := updatedCfg.Sandbox.SSRF.Enabled
-		updatedDefaultProfile := gen.SandboxConfigDefaultProfile(updatedCfg.Sandbox.DefaultProfile)
 		jsonOK(w, gen.SandboxConfig{
 			Saved:                &saved,
 			Mode:                 &updatedMode,
@@ -406,7 +357,6 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 			SsrfEnabled:          &updatedSsrfEnabled,
 			SsrfAllowInternal:    &updatedAllowInternal,
 			AppliedMode:          &updatedApplied,
-			DefaultProfile:       &updatedDefaultProfile,
 			ShellDenyPatterns:    &updatedShellDenyPatterns,
 			RequiresRestart:      &partialRestartRequired,
 			Ssrf: &struct {

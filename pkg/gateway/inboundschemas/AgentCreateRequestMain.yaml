@@ -138,17 +138,6 @@ properties:
     description: >
       Per-agent persona voice identifier (Main only). Schema-pinned; not active until v0.2.0 TTS.
     example: "alloy"
-  sandbox_profile:
-    type: string
-    enum:
-      - workspace
-      - workspace+net
-      - host
-    description: >
-      Kernel sandbox profile applied to this agent's tool calls (O13). Per-agent
-      "off" is retired — "no sandbox" is reachable only via the global god-mode
-      switch. Hidden for Subagent (External) — the CLI manages its own isolation.
-    example: "workspace"
   shell_policy:
     $ref: './AgentShellPolicy.yaml'
   timeout_seconds:

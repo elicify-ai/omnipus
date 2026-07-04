@@ -110,18 +110,15 @@ func TestCreateAgent_ExecutorPersistsAndEchoes(t *testing.T) {
 	assert.Nil(t, exec, "Main agents must not persist an executor block")
 }
 
-// TestCreateAgent_SandboxProfileAndShellPolicy_PersistAndEcho is the Fix-3
-// regression test: createAgent previously computed the normalized
-// sandboxProfile local only to reject sandbox_profile="off" — the value was
-// never persisted onto the created agent config, and shell_policy was never
-// even read from the create request at all (unlike updateAgent, which
-// persists both). This proves the full round trip: create a Main agent with
-// sandbox_profile="host" and a shell_policy, then GET it back and confirm
-// both are echoed AND persisted to config.json.
-func TestCreateAgent_SandboxProfileAndShellPolicy_PersistAndEcho(t *testing.T) {
+// TestCreateAgent_ShellPolicy_PersistAndEcho is the Fix-3 regression test:
+// createAgent previously never even read shell_policy from the create
+// request at all (unlike updateAgent, which persists it). This proves the
+// full round trip: create a Main agent with a shell_policy, then GET it back
+// and confirm it is echoed AND persisted to config.json.
+func TestCreateAgent_ShellPolicy_PersistAndEcho(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 
-	body := `{"name":"Sandboxed","type":"Main","soul":"s","sandbox_profile":"host",` +
+	body := `{"name":"Sandboxed","type":"Main","soul":"s",` +
 		`"shell_policy":{"enable_deny_patterns":true,"custom_deny_patterns":["rm\\s+-rf"]}}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
@@ -130,8 +127,6 @@ func TestCreateAgent_SandboxProfileAndShellPolicy_PersistAndEcho(t *testing.T) {
 	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
 
 	created := decodeAgentResp(t, w.Body.Bytes())
-	require.NotNil(t, created.SandboxProfile, "create response must echo sandbox_profile")
-	assert.Equal(t, gen.AgentSandboxProfile("host"), *created.SandboxProfile)
 	require.NotNil(t, created.ShellPolicy, "create response must echo shell_policy")
 	require.NotNil(t, created.ShellPolicy.EnableDenyPatterns)
 	assert.True(t, *created.ShellPolicy.EnableDenyPatterns)
@@ -154,7 +149,6 @@ func TestCreateAgent_SandboxProfileAndShellPolicy_PersistAndEcho(t *testing.T) {
 		}
 	}
 	require.NotNil(t, entry, "created agent must be persisted")
-	assert.Equal(t, "host", entry["sandbox_profile"], "sandbox_profile must be persisted to config.json")
 	sp, _ := entry["shell_policy"].(map[string]any)
 	require.NotNil(t, sp, "shell_policy must be persisted to config.json")
 	assert.Equal(t, true, sp["enable_deny_patterns"])
@@ -166,8 +160,6 @@ func TestCreateAgent_SandboxProfileAndShellPolicy_PersistAndEcho(t *testing.T) {
 	api.HandleAgents(getW, getR)
 	require.Equal(t, http.StatusOK, getW.Code, "get body: %s", getW.Body.String())
 	got := decodeAgentResp(t, getW.Body.Bytes())
-	require.NotNil(t, got.SandboxProfile, "GET must echo sandbox_profile")
-	assert.Equal(t, gen.AgentSandboxProfile("host"), *got.SandboxProfile)
 	require.NotNil(t, got.ShellPolicy, "GET must echo shell_policy")
 	require.NotNil(t, got.ShellPolicy.EnableDenyPatterns)
 	assert.True(t, *got.ShellPolicy.EnableDenyPatterns)
@@ -761,10 +753,6 @@ func TestCreateAgent_Subagent3p_ForbiddenFields_ValidationEnabled(t *testing.T) 
 			`{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"},"model_params":{"temperature":0.5}}`,
 		},
 		{
-			"sandbox_profile",
-			`{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"},"sandbox_profile":"workspace"}`,
-		},
-		{
 			"shell_policy",
 			`{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"},"shell_policy":{"enable_deny_patterns":true}}`,
 		},
@@ -866,7 +854,7 @@ func TestCreateAgent_Subagent3p_DelegationPolicyAccepted(t *testing.T) {
 // TestUpdateAgent_Subagent3p_ForbiddenFields rejects the CLI-owned fields on PUT.
 // worker-PUT-400: delegation_policy is NO LONGER in this set — it is a valid
 // worker field on PUT (a non-empty to[] is independently bounded by the depth
-// cap in buildDelegationPolicy). The remaining 6 stay forbidden because the
+// cap in buildDelegationPolicy). The remaining 5 stay forbidden because the
 // external CLI manages its own isolation/tools/skills (O13).
 func TestUpdateAgent_Subagent3p_ForbiddenFields(t *testing.T) {
 	api := buildExecutorTestAPI(t)
@@ -880,7 +868,6 @@ func TestUpdateAgent_Subagent3p_ForbiddenFields(t *testing.T) {
 		{"skills", `{"skills":["web-research"]}`},
 		{"fallback_models", `{"fallback_models":[{"model":"m","provider":"p"}]}`},
 		{"model_params", `{"model_params":{"temperature":0.5}}`},
-		{"sandbox_profile", `{"sandbox_profile":"workspace"}`},
 		{"shell_policy", `{"shell_policy":{"enable_deny_patterns":true}}`},
 		// W2a: max_tool_iterations joins the forbidden set on subagent_3p PUT
 		// (the external CLI runs its own turn loop — Omnipus cannot cap its

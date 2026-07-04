@@ -213,11 +213,9 @@ func GetPrompt(id string) string {
 	return prompts[id]
 }
 
-// coreAgentSeed returns the constructor-seeded policy map and sandbox profile
-// for the named core agent (FR-010, FR-022). The map is keyed by tool name
-// (or trailing-wildcard prefix like "system.*") with values "allow", "ask",
-// or "deny". sandboxProfile is the default SandboxProfile for the agent;
-// empty string means "use global default (workspace)".
+// coreAgentSeed returns the constructor-seeded policy map for the named core
+// agent (FR-010, FR-022). The map is keyed by tool name (or trailing-wildcard
+// prefix like "system.*") with values "allow", "ask", or "deny".
 //
 // All four base agents (Mia, Jim, Ava, Ray) are LEAST-PRIVILEGE: deny-by-default
 // with an explicit allow-list for exactly the tools their role needs. The legacy
@@ -225,10 +223,10 @@ func GetPrompt(id string) string {
 // still applies to the worker tier (IDWorker, IDPlanner, IDExplorer, IDResearcher)
 // which have narrower, well-understood surfaces.
 //
-// The returned maps are independent allocations — callers may mutate them safely.
+// The returned map is an independent allocation — callers may mutate it safely.
 func coreAgentSeed(
 	id CoreAgentID,
-) (defaultPolicy config.ToolPolicy, policies map[string]config.ToolPolicy, sandboxProfile config.SandboxProfile) {
+) (defaultPolicy config.ToolPolicy, policies map[string]config.ToolPolicy) {
 	// Every core agent starts with the same rail: allow-by-default + deny system.*.
 	// Memory tools are explicitly seeded as allow (FR-016/FR-017) so they survive
 	// any future default_policy change and appear prominently in the tool picker UI.
@@ -271,7 +269,7 @@ func coreAgentSeed(
 		base["recall_memory"] = config.ToolPolicyDeny
 		base["run_retrospective"] = config.ToolPolicyDeny
 		delete(base, "serve_web")
-		return config.ToolPolicyAllow, base, ""
+		return config.ToolPolicyAllow, base
 	}
 	// Specialist subagents (Planner/Explorer/Researcher) are delegation-only like
 	// the worker, but they DO get persistent memory (Explorer reads/writes memory;
@@ -279,7 +277,7 @@ func coreAgentSeed(
 	// is dropped: a delegation-only specialist never serves an iframe preview.
 	if IsSpecialistID(id) {
 		delete(base, "serve_web")
-		return config.ToolPolicyAllow, base, ""
+		return config.ToolPolicyAllow, base
 	}
 	switch id {
 	case IDAva:
@@ -322,7 +320,7 @@ func coreAgentSeed(
 			"update_workspace": allow,
 			"list_workspaces":  allow,
 			"get_workspace":    allow,
-		}, ""
+		}
 	case IDMia:
 		// Mia — the Assistant (default agent). LEAST-PRIVILEGE: deny-by-default,
 		// allow only the everyday-assistant surface (chat, memory, your tasks,
@@ -359,7 +357,7 @@ func coreAgentSeed(
 			"search_web":  allow,
 			"fetch_url":   allow,
 			"find_skills": allow,
-		}, ""
+		}
 	case IDRay:
 		// Ray — the Scout / research analyst. LEAST-PRIVILEGE: deny-by-default,
 		// allow only the research surface (search + read the web and local docs,
@@ -401,7 +399,7 @@ func coreAgentSeed(
 			// Working aids (his summarize skill; a research checklist).
 			"find_skills": allow,
 			"set_todos":   allow,
-		}, ""
+		}
 	case IDJim:
 		// Jim — the Planner & Orchestrator. LEAST-PRIVILEGE: deny-by-default,
 		// allow only the tools his role needs (plan, delegate, manage tasks +
@@ -480,9 +478,9 @@ func coreAgentSeed(
 			"delete_task_in_workspace": ask,
 			"delete_workspace":         ask,
 			"remove_mcp_server":        ask,
-		}, config.SandboxProfileWorkspaceNet
+		}
 	}
-	return config.ToolPolicyAllow, base, ""
+	return config.ToolPolicyAllow, base
 }
 
 // coreAgentSkills returns the seeded per-agent skill allowlist (FR-9.4). The
@@ -659,11 +657,6 @@ func SeedConfig(cfg *config.Config) bool {
 	}
 
 	// Re-enforce identity fields on existing core agents (tamper protection + rename).
-	// Also apply idempotent profile migrations: if an existing core agent's
-	// SandboxProfile is empty, fill it with the seed value. This covers the case
-	// where a user upgrades from an older release — their Jim entry already
-	// exists so the "new agent" branch below won't fire, but the profile is blank.
-	// Operator-set profiles (non-empty) are left unchanged — operator's choice wins.
 	for i := range cfg.Agents.List {
 		ca := ByID(CoreAgentID(cfg.Agents.List[i].ID))
 		if ca == nil {
@@ -690,14 +683,6 @@ func SeedConfig(cfg *config.Config) bool {
 			a.Icon = ca.Icon
 			modified = true
 		}
-		// Idempotent sandbox_profile migration.
-		// Apply the seeded profile only when the existing entry has no profile set.
-		_, _, seedProfile := coreAgentSeed(ca.ID)
-		if seedProfile != "" && a.SandboxProfile == "" {
-			a.SandboxProfile = seedProfile
-			modified = true
-		}
-
 		// Idempotent skill-allowlist migration (FR-9.4). Apply the seeded
 		// allowlist only when the existing entry declares none — an operator who
 		// has customized the agent's skills keeps their choice. Upgrades from a
@@ -777,7 +762,7 @@ func SeedConfig(cfg *config.Config) bool {
 		if existing[string(ca.ID)] {
 			continue
 		}
-		dp, policies, seedProfile := coreAgentSeed(ca.ID)
+		dp, policies := coreAgentSeed(ca.ID)
 		isSubagentTier := IsSubagentTierID(ca.ID)
 		// Mia is the default agent on fresh installs: she appears first in the
 		// All() list and is the friendliest entry-point for new users. A subagent
@@ -793,15 +778,14 @@ func SeedConfig(cfg *config.Config) bool {
 			agentType = config.AgentTypeWorker
 		}
 		newAgent := config.AgentConfig{
-			ID:             string(ca.ID),
-			Name:           ca.Name,
-			Description:    ca.Description,
-			Color:          ca.Color,
-			Icon:           ca.Icon,
-			Type:           agentType,
-			Locked:         true,
-			Default:        isDefault,
-			SandboxProfile: seedProfile,
+			ID:          string(ca.ID),
+			Name:        ca.Name,
+			Description: ca.Description,
+			Color:       ca.Color,
+			Icon:        ca.Icon,
+			Type:        agentType,
+			Locked:      true,
+			Default:     isDefault,
 			// Per-agent skill allowlist (FR-9.4): default-DENY enforced at skill
 			// resolution. Nil for agents with no seeded skills (unrestricted).
 			Skills: coreAgentSkills(ca.ID),

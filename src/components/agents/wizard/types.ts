@@ -58,10 +58,7 @@ export interface AdvancedFields {
     max_tokens?: number
     top_p?: number
   }
-  // Sandbox + shell hardening (Main + Subagent only).
-  // O13: 'off' removed from the per-agent picker — "no sandbox" is the global
-  // god-mode switch only. 'none' is the UI-only "inherit global default" marker.
-  sandbox_profile?: 'none' | 'workspace' | 'workspace+net' | 'host'
+  // Shell hardening (Main + Subagent only).
   shell_policy?: {
     enable_deny_patterns?: boolean
     custom_deny_patterns?: string[]
