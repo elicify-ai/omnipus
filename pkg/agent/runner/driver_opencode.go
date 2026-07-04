@@ -249,8 +249,13 @@ func (d *OpencodeDriver) buildArgs(opts RunOptions) []string {
 			// which could be a materially different (and differently
 			// priced/capable) model than the operator configured. Warn so
 			// this is visible in the run log.
-			slog.Warn("runner/opencode: configured model not in provider/model shape — omitting --model; CLI will use its own default",
-				"run_id", opts.RunID, "configured_model", model)
+			slog.Warn(
+				"runner/opencode: configured model not in provider/model shape — omitting --model; CLI will use its own default",
+				"run_id",
+				opts.RunID,
+				"configured_model",
+				model,
+			)
 		}
 	}
 	// ADR-032 fix D: this opencode CLI version exposes no middle-ground

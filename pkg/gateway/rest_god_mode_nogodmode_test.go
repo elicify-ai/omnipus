@@ -40,8 +40,11 @@ func TestGodMode_NoGodModeBuild_RejectsEnable(t *testing.T) {
 		"error must mention the build was compiled with nogodmode")
 	assert.False(t, api.agentLoop.GetConfig().Sandbox.GodMode,
 		"god mode must never be persisted on a nogodmode build")
-	assert.False(t, api.agentLoop.GetConfig().Sandbox.GodModeAllowed,
-		"god_mode_allowed authorization must never be persisted on a nogodmode build — the 403 must reject before any config write")
+	assert.False(
+		t,
+		api.agentLoop.GetConfig().Sandbox.GodModeAllowed,
+		"god_mode_allowed authorization must never be persisted on a nogodmode build — the 403 must reject before any config write",
+	)
 }
 
 // TestGodMode_NoGodModeBuild_GETReportsUnavailable proves GET reports

@@ -34,5 +34,7 @@ func NewWhatsAppNativeChannel(
 	bus *bus.MessageBus,
 	storePath string,
 ) (channels.Channel, error) {
-	return nil, fmt.Errorf("whatsapp native is not compiled into this build (lite variant, or an architecture where modernc.org/sqlite is unavailable such as mipsle/netbsd); WhatsApp requires the native build (the legacy bridge has been removed) — use the default build on a supported target")
+	return nil, fmt.Errorf(
+		"whatsapp native is not compiled into this build (lite variant, or an architecture where modernc.org/sqlite is unavailable such as mipsle/netbsd); WhatsApp requires the native build (the legacy bridge has been removed) — use the default build on a supported target",
+	)
 }

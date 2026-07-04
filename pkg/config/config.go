@@ -1390,7 +1390,7 @@ type AgentDefaults struct {
 
 	// RecapFallbackModels is the ordered fallback chain for the recap model,
 	// tried in order when the primary recap model fails — same shape and
-	// behaviour as an agent's FallbackModels field. Each entry carries its
+	// behavior as an agent's FallbackModels field. Each entry carries its
 	// own Provider so the fallback can route through a different provider than
 	// the primary.
 	RecapFallbackModels FallbackModelSlice `json:"recap_fallback_models,omitempty"`
@@ -1634,7 +1634,9 @@ type ChannelInstanceConfig struct {
 // would appear to be workspace-bound but routing would silently fall back to
 // unbound behavior (ADR-029 FR-029). Fail-loud at load matches the existing
 // type-vs-key mismatch error contract.
-var ErrHalfBoundChannelInstance = errors.New("channels: half-bound workspace instance (workspace_id set but agent identity missing or invalid)")
+var ErrHalfBoundChannelInstance = errors.New(
+	"channels: half-bound workspace instance (workspace_id set but agent identity missing or invalid)",
+)
 
 // IsWorkspaceBound reports whether this instance is fully workspace-bound per
 // ADR-029 FR-029: WorkspaceID is non-empty AND Identity is non-nil AND
@@ -1825,7 +1827,9 @@ func ValidateChannels(channels map[string]ChannelInstanceConfig) error {
 		if strings.TrimSpace(inst.WorkspaceID) != "" && !inst.IsWorkspaceBound() {
 			return fmt.Errorf(
 				"%w: instance %q has workspace_id=%q but is missing a valid agent identity (identity.kind==\"agent\" and non-empty identity.id are required)",
-				ErrHalfBoundChannelInstance, key, inst.WorkspaceID,
+				ErrHalfBoundChannelInstance,
+				key,
+				inst.WorkspaceID,
 			)
 		}
 	}
@@ -3288,7 +3292,11 @@ type SelfHealWriteHook func(writtenBytes []byte)
 // safeUpdateConfigJSON's own configMu + selfWriteReg registration — so a
 // self-heal write triggered from either of those paths is still recognized
 // as app-initiated rather than a genuine external edit.
-func LoadConfigWithStoreAndSelfHealHook(path string, store CredentialStore, onSelfHeal SelfHealWriteHook) (*Config, error) {
+func LoadConfigWithStoreAndSelfHealHook(
+	path string,
+	store CredentialStore,
+	onSelfHeal SelfHealWriteHook,
+) (*Config, error) {
 	return loadConfigInternal(path, store, onSelfHeal)
 }
 

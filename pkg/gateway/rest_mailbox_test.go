@@ -70,7 +70,8 @@ func seedWorkspaceFileWithTeam(t *testing.T, homePath, id string, coreTeam []str
 	require.NoError(t, err)
 	data := fmt.Sprintf(
 		`{"id":%q,"name":"Test Workspace","status":"active","core_team":%s,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}`,
-		id, team,
+		id,
+		team,
 	)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, id+".json"), []byte(data), 0o600))
 }
@@ -141,7 +142,9 @@ func TestSetAgentMailbox_SecondMailboxInSameWorkspaceAllowed(t *testing.T) {
 	// to its own owning agent, so multiple inboxes per workspace stay
 	// unambiguous. Pre-existing mailbox for "jim" in ws_shared (in live cfg).
 	api := newMailboxTestAPI(t, map[string]map[string]config.MailboxConfig{
-		"jim": {"ws_shared": {Enabled: true, WorkspaceID: "ws_shared", IMAPHost: "i", SMTPHost: "s", Username: "jim@x.com"}},
+		"jim": {
+			"ws_shared": {Enabled: true, WorkspaceID: "ws_shared", IMAPHost: "i", SMTPHost: "s", Username: "jim@x.com"},
+		},
 	})
 	seedWorkspaceFile(t, api.homePath, "ws_shared")
 	body := `{"enabled":true,"imap_host":"i","smtp_host":"s","username":"mia@x.com","password":"p"}`
@@ -293,8 +296,22 @@ func TestDeleteAgentMailbox_OnePairLeavesOtherIntact(t *testing.T) {
 	// the SAME agent in a different workspace.
 	api := newMailboxTestAPI(t, map[string]map[string]config.MailboxConfig{
 		"mia": {
-			"ws_a": {Enabled: true, WorkspaceID: "ws_a", IMAPHost: "i", SMTPHost: "s", Username: "a@x.com", PasswordRef: "mailbox_mia_ws_a_password"},
-			"ws_b": {Enabled: true, WorkspaceID: "ws_b", IMAPHost: "i", SMTPHost: "s", Username: "b@x.com", PasswordRef: "mailbox_mia_ws_b_password"},
+			"ws_a": {
+				Enabled:     true,
+				WorkspaceID: "ws_a",
+				IMAPHost:    "i",
+				SMTPHost:    "s",
+				Username:    "a@x.com",
+				PasswordRef: "mailbox_mia_ws_a_password",
+			},
+			"ws_b": {
+				Enabled:     true,
+				WorkspaceID: "ws_b",
+				IMAPHost:    "i",
+				SMTPHost:    "s",
+				Username:    "b@x.com",
+				PasswordRef: "mailbox_mia_ws_b_password",
+			},
 		},
 	})
 	require.NoError(t, api.credStore.Set("mailbox_mia_ws_a_password", "secret-a"))
@@ -302,8 +319,16 @@ func TestDeleteAgentMailbox_OnePairLeavesOtherIntact(t *testing.T) {
 	require.NoError(t, api.safeUpdateConfigJSON(func(m map[string]any) error {
 		m["mailboxes"] = map[string]any{
 			"mia": map[string]any{
-				"ws_a": map[string]any{"enabled": true, "workspace_id": "ws_a", "password_ref": "mailbox_mia_ws_a_password"},
-				"ws_b": map[string]any{"enabled": true, "workspace_id": "ws_b", "password_ref": "mailbox_mia_ws_b_password"},
+				"ws_a": map[string]any{
+					"enabled":      true,
+					"workspace_id": "ws_a",
+					"password_ref": "mailbox_mia_ws_a_password",
+				},
+				"ws_b": map[string]any{
+					"enabled":      true,
+					"workspace_id": "ws_b",
+					"password_ref": "mailbox_mia_ws_b_password",
+				},
 			},
 		}
 		return nil
@@ -355,7 +380,13 @@ func TestDeleteAgentMailbox_AlsoRemovesLegacyCredential(t *testing.T) {
 	require.NoError(t, api.credStore.Set("mailbox_mia_password", "legacy-secret"))
 	require.NoError(t, api.safeUpdateConfigJSON(func(m map[string]any) error {
 		m["mailboxes"] = map[string]any{
-			"mia": map[string]any{"ws_my": map[string]any{"enabled": true, "workspace_id": "ws_my", "password_ref": "mailbox_mia_password"}},
+			"mia": map[string]any{
+				"ws_my": map[string]any{
+					"enabled":      true,
+					"workspace_id": "ws_my",
+					"password_ref": "mailbox_mia_password",
+				},
+			},
 		}
 		return nil
 	}))
@@ -387,8 +418,22 @@ func TestListMailboxes_EmptyAndConfigured(t *testing.T) {
 	// both configured=true, and the secret never appears in the body.
 	api = newMailboxTestAPI(t, map[string]map[string]config.MailboxConfig{
 		"mia": {
-			"ws_a": {Enabled: true, WorkspaceID: "ws_a", IMAPHost: "imap.a.com", SMTPHost: "smtp.a.com", Username: "a@x.com", PasswordRef: "mailbox_mia_ws_a_password"},
-			"ws_b": {Enabled: true, WorkspaceID: "ws_b", IMAPHost: "imap.b.com", SMTPHost: "smtp.b.com", Username: "b@x.com", PasswordRef: "mailbox_mia_ws_b_password"},
+			"ws_a": {
+				Enabled:     true,
+				WorkspaceID: "ws_a",
+				IMAPHost:    "imap.a.com",
+				SMTPHost:    "smtp.a.com",
+				Username:    "a@x.com",
+				PasswordRef: "mailbox_mia_ws_a_password",
+			},
+			"ws_b": {
+				Enabled:     true,
+				WorkspaceID: "ws_b",
+				IMAPHost:    "imap.b.com",
+				SMTPHost:    "smtp.b.com",
+				Username:    "b@x.com",
+				PasswordRef: "mailbox_mia_ws_b_password",
+			},
 		},
 	})
 	require.NoError(t, api.credStore.Set("mailbox_mia_ws_a_password", "secret-a"))

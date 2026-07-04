@@ -250,7 +250,12 @@ func TestRecallMemoryTool_SpansRetrospectives(t *testing.T) {
 			{Timestamp: time.Now().UTC(), Category: "lesson_learned", Content: "flock is the concurrency primitive"},
 		},
 		retros: []tools.MemoryEntry{
-			{Timestamp: time.Now().UTC(), Category: "retrospective", Title: "Retrospective", Content: "Went well: shipped flock. Needs improvement: document the rationale."},
+			{
+				Timestamp: time.Now().UTC(),
+				Category:  "retrospective",
+				Title:     "Retrospective",
+				Content:   "Went well: shipped flock. Needs improvement: document the rationale.",
+			},
 		},
 	}
 	res := tools.NewRecallMemoryTool(store).Execute(context.Background(), map[string]any{"query": "flock"})
@@ -264,7 +269,7 @@ func TestRecallMemoryTool_SpansRetrospectives(t *testing.T) {
 		t.Errorf("recall must surface matching retrospective content (recall spans retros); got: %q", res.ForLLM)
 	}
 	if !strings.Contains(res.ForLLM, "retrospective") {
-		t.Errorf("recall retro hits must be labelled retrospective; got: %q", res.ForLLM)
+		t.Errorf("recall retro hits must be labeled retrospective; got: %q", res.ForLLM)
 	}
 }
 

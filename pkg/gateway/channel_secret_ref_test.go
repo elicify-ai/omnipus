@@ -215,7 +215,12 @@ func TestConfigureChannel_ClearSecretDeletesCredential(t *testing.T) {
 	api.testChannel(w, "matrix")
 	var resp gen.ChannelTestResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.True(t, resp.Success, "matrix must still pass Test after clearing the non-required crypto_passphrase: %s", resp.Message)
+	assert.True(
+		t,
+		resp.Success,
+		"matrix must still pass Test after clearing the non-required crypto_passphrase: %s",
+		resp.Message,
+	)
 }
 
 // TestConfigureChannel_RejectsClearingRequiredSecret guards Stage 1 of the
@@ -238,7 +243,13 @@ func TestConfigureChannel_RejectsClearingRequiredSecret(t *testing.T) {
 		strings.NewReader(`{"token":"   "}`))
 	r2.Header.Set("Content-Type", "application/json")
 	api.configureChannel(w2, r2, "telegram")
-	assert.Equal(t, http.StatusBadRequest, w2.Code, "clearing a required secret must be rejected, body=%s", w2.Body.String())
+	assert.Equal(
+		t,
+		http.StatusBadRequest,
+		w2.Code,
+		"clearing a required secret must be rejected, body=%s",
+		w2.Body.String(),
+	)
 	assert.Contains(t, w2.Body.String(), "token")
 
 	// Zero-side-effect proof: the existing credential still resolves unchanged.
@@ -459,7 +470,12 @@ func TestTestChannel_SlackRequiresAppToken(t *testing.T) {
 	require.Equal(t, http.StatusOK, w2.Code)
 	var resp gen.ChannelTestResponse
 	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &resp))
-	assert.True(t, resp.Success, "slack must pass Test once both bot_token and app_token are configured: %s", resp.Message)
+	assert.True(
+		t,
+		resp.Success,
+		"slack must pass Test once both bot_token and app_token are configured: %s",
+		resp.Message,
+	)
 }
 
 // TestConfigureChannel_RejectsPartialMultiFieldRequired guards Stage 1 of the
@@ -474,7 +490,13 @@ func TestConfigureChannel_RejectsPartialMultiFieldRequired(t *testing.T) {
 		strings.NewReader(`{"bot_token":"xoxb-aaa"}`))
 	r.Header.Set("Content-Type", "application/json")
 	api.configureChannel(w, r, "slack")
-	assert.Equal(t, http.StatusBadRequest, w.Code, "a partial multi-field-required save must be rejected, body=%s", w.Body.String())
+	assert.Equal(
+		t,
+		http.StatusBadRequest,
+		w.Code,
+		"a partial multi-field-required save must be rejected, body=%s",
+		w.Body.String(),
+	)
 	assert.Contains(t, w.Body.String(), "app_token")
 
 	// Nothing persisted: no slack config entry, no bot_token credential.
@@ -503,16 +525,33 @@ func TestConfigureChannel_GoogleChatEitherOr(t *testing.T) {
 		strings.NewReader(`{"space":"spaces/AAA"}`))
 	r.Header.Set("Content-Type", "application/json")
 	api.configureChannel(w, r, "google-chat")
-	assert.Equal(t, http.StatusBadRequest, w.Code, "gchat save with neither auth path must be rejected, body=%s", w.Body.String())
+	assert.Equal(
+		t,
+		http.StatusBadRequest,
+		w.Code,
+		"gchat save with neither auth path must be rejected, body=%s",
+		w.Body.String(),
+	)
 	assert.Contains(t, w.Body.String(), "webhook_url")
 	assert.Contains(t, w.Body.String(), "service_account")
 
 	w2 := httptest.NewRecorder()
-	r2 := httptest.NewRequest(http.MethodPut, "/api/v1/channels/google-chat/configure",
-		strings.NewReader(`{"space":"spaces/AAA","webhook_url":"https://chat.googleapis.com/v1/spaces/AAA/messages?key=K&token=T"}`))
+	r2 := httptest.NewRequest(
+		http.MethodPut,
+		"/api/v1/channels/google-chat/configure",
+		strings.NewReader(
+			`{"space":"spaces/AAA","webhook_url":"https://chat.googleapis.com/v1/spaces/AAA/messages?key=K&token=T"}`,
+		),
+	)
 	r2.Header.Set("Content-Type", "application/json")
 	api.configureChannel(w2, r2, "google-chat")
-	assert.Equal(t, http.StatusOK, w2.Code, "adding webhook_url must satisfy the auth-path requirement, body=%s", w2.Body.String())
+	assert.Equal(
+		t,
+		http.StatusOK,
+		w2.Code,
+		"adding webhook_url must satisfy the auth-path requirement, body=%s",
+		w2.Body.String(),
+	)
 }
 
 // TestTestChannel_GoogleChatRequiresAuthPath guards the special-case fix in
@@ -523,7 +562,10 @@ func TestConfigureChannel_GoogleChatEitherOr(t *testing.T) {
 func TestTestChannel_GoogleChatRequiresAuthPath(t *testing.T) {
 	// A blank instance (no auth path configured at all) must fail with a clear
 	// message, not silently report success.
-	blank := newChannelTestAPI(t, `{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],"channels":{"google-chat":{"enabled":false}}}`)
+	blank := newChannelTestAPI(
+		t,
+		`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],"channels":{"google-chat":{"enabled":false}}}`,
+	)
 	w := httptest.NewRecorder()
 	blank.testChannel(w, "google-chat")
 	require.Equal(t, http.StatusOK, w.Code)
@@ -537,8 +579,13 @@ func TestTestChannel_GoogleChatRequiresAuthPath(t *testing.T) {
 	// requirement on its own.
 	webhookAPI := newChannelTestAPI(t, `{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],"channels":{}}`)
 	wc := httptest.NewRecorder()
-	rc := httptest.NewRequest(http.MethodPut, "/api/v1/channels/google-chat/configure",
-		strings.NewReader(`{"mode":"webhook","webhook_url":"https://chat.googleapis.com/v1/spaces/AAA/messages?key=K&token=T"}`))
+	rc := httptest.NewRequest(
+		http.MethodPut,
+		"/api/v1/channels/google-chat/configure",
+		strings.NewReader(
+			`{"mode":"webhook","webhook_url":"https://chat.googleapis.com/v1/spaces/AAA/messages?key=K&token=T"}`,
+		),
+	)
 	rc.Header.Set("Content-Type", "application/json")
 	webhookAPI.configureChannel(wc, rc, "google-chat")
 	require.Equal(t, http.StatusOK, wc.Code, "body=%s", wc.Body.String())
@@ -550,13 +597,20 @@ func TestTestChannel_GoogleChatRequiresAuthPath(t *testing.T) {
 
 	// service_account_file (a non-secret, inline path field — not credential
 	// routed) also satisfies the requirement on its own.
-	saFileAPI := newChannelTestAPI(t,
-		`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],"channels":{"google-chat":{"enabled":false,"mode":"bot","service_account_file":"/etc/omnipus/gchat-sa.json"}}}`)
+	saFileAPI := newChannelTestAPI(
+		t,
+		`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],"channels":{"google-chat":{"enabled":false,"mode":"bot","service_account_file":"/etc/omnipus/gchat-sa.json"}}}`,
+	)
 	w3 := httptest.NewRecorder()
 	saFileAPI.testChannel(w3, "google-chat")
 	var resp3 gen.ChannelTestResponse
 	require.NoError(t, json.Unmarshal(w3.Body.Bytes(), &resp3))
-	assert.True(t, resp3.Success, "service_account_file alone must satisfy the auth-path requirement: %s", resp3.Message)
+	assert.True(
+		t,
+		resp3.Success,
+		"service_account_file alone must satisfy the auth-path requirement: %s",
+		resp3.Message,
+	)
 }
 
 // TestChannels_EmailIsUnknown guards the M11 retirement of the legacy
@@ -587,11 +641,20 @@ func TestChannels_EmailIsUnknown(t *testing.T) {
 // exercises that path; whatsapp's empty required-fields list also always
 // passes here regardless).
 func TestSetChannelEnabled_RejectsIncompleteConfig(t *testing.T) {
-	api := newChannelTestAPI(t, `{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],"channels":{"telegram":{"enabled":false}}}`)
+	api := newChannelTestAPI(
+		t,
+		`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],"channels":{"telegram":{"enabled":false}}}`,
+	)
 
 	w := httptest.NewRecorder()
 	api.setChannelEnabled(w, "telegram", true)
-	assert.Equal(t, http.StatusBadRequest, w.Code, "enabling an incomplete telegram config must be rejected, body=%s", w.Body.String())
+	assert.Equal(
+		t,
+		http.StatusBadRequest,
+		w.Code,
+		"enabling an incomplete telegram config must be rejected, body=%s",
+		w.Body.String(),
+	)
 	assert.Contains(t, w.Body.String(), "token")
 
 	// Complete the config, then enable must succeed.

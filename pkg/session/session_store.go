@@ -15,7 +15,7 @@ import (
 // Write methods (Add*, Set*, Truncate*) are fire-and-forget: they do not
 // return errors. Implementations should log failures internally. This
 // matches the original SessionManager contract that the agent loop relies on.
-type SessionStore interface {
+type SessionStore interface { //nolint:interfacebloat // cohesive session contract the agent loop relies on
 	// AddMessage appends a simple role/content message to the session.
 	AddMessage(sessionKey, role, content string)
 	// AddFullMessage appends a complete message including tool calls.

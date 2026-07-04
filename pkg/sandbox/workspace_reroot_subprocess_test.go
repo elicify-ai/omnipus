@@ -57,9 +57,28 @@ func TestLandlock_WorkspaceReroot_StaysInsideBootGrant(t *testing.T) {
 	if err := os.MkdirAll(wsDir, 0o755); err != nil {
 		t.Fatalf("mkdir wsDir: %v", err)
 	}
-	// An "outside" dir that is NOT under $OMNIPUS_HOME, to prove the kernel
-	// still denies it.
-	outside := t.TempDir()
+	// An "outside" dir that must be OUTSIDE *every* DefaultPolicy grant so the
+	// kernel denies a write there. It CANNOT come from t.TempDir(): that lands
+	// under /tmp, which DefaultPolicy grants RWX as scratch space (see
+	// sandbox.go's "/tmp" rule) — a write there would (correctly) succeed and
+	// wrongly read as a sandbox escape. The user's home dir is not granted by
+	// DefaultPolicy, so a write there is genuinely denied by Landlock.
+	// If we cannot establish a dir that is both writable AND outside every grant
+	// (HOME unset, or HOME itself under the granted /tmp), SKIP rather than fail:
+	// the invariant simply cannot be probed there, and a hard failure would be a
+	// false negative about enforcement.
+	outsideBase, homeErr := os.UserHomeDir()
+	if homeErr != nil || outsideBase == "" {
+		t.Skip("no home dir to place an out-of-sandbox probe dir — cannot probe enforcement")
+	}
+	if base := filepath.Clean(outsideBase); base == "/tmp" || strings.HasPrefix(base+"/", "/tmp/") {
+		t.Skipf("home dir %q is under the granted /tmp scratch space — cannot probe an out-of-grant write", outsideBase)
+	}
+	outside, mkErr := os.MkdirTemp(outsideBase, "omnipus-landlock-outside-")
+	if mkErr != nil {
+		t.Skipf("cannot create an out-of-sandbox probe dir under %q: %v", outsideBase, mkErr)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(outside) })
 
 	//nolint:gosec // intentional test-binary self-exec
 	cmd := exec.Command(os.Args[0],

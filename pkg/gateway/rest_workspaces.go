@@ -640,7 +640,9 @@ func (a *restAPI) handleWorkspaceGet(w http.ResponseWriter, r *http.Request, id 
 // wire field is absent (nil) so callers preserve merge semantics (absent →
 // unchanged). The server-managed session_id (FR-010, readOnly in the contract)
 // is intentionally NOT read from client input.
-func workspaceMemberConfigsFromWire(wire *map[string]gen.WorkspaceMemberConfig) (map[string]workspace.MemberConfig, bool) {
+func workspaceMemberConfigsFromWire(
+	wire *map[string]gen.WorkspaceMemberConfig,
+) (map[string]workspace.MemberConfig, bool) {
 	if wire == nil {
 		return nil, false
 	}
@@ -757,7 +759,11 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 	// touching the workspace on disk.
 	if mcPresent && len(incomingMC) > 0 {
 		cfg := a.agentLoop.GetConfig()
-		if vErr := workspace.ValidateMemberConfigs(effectiveCoreTeam, incomingMC, configOnlyIsWorker(cfg)); vErr != nil {
+		if vErr := workspace.ValidateMemberConfigs(
+			effectiveCoreTeam,
+			incomingMC,
+			configOnlyIsWorker(cfg),
+		); vErr != nil {
 			jsonErr(w, http.StatusUnprocessableEntity, vErr.Error())
 			return
 		}

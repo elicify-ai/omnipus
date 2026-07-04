@@ -26,6 +26,7 @@ func TestMemorySmoke(t *testing.T) {
 	dir := t.TempDir()
 	home := t.TempDir()
 	ms := NewMemoryStore(dir, home)
+	t.Cleanup(ms.Close)
 
 	// First entry.
 	if err := ms.AppendLongTerm("prefer tabs over spaces", "key_decision"); err != nil {
@@ -77,6 +78,7 @@ func TestMemoryValidation(t *testing.T) {
 	dir := t.TempDir()
 	home := t.TempDir()
 	ms := NewMemoryStore(dir, home)
+	t.Cleanup(ms.Close)
 
 	// Invalid category.
 	if err := ms.AppendLongTerm("some fact", "invalid_cat"); err == nil {
@@ -110,6 +112,7 @@ func TestMemoryRetroRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	home := t.TempDir()
 	ms := NewMemoryStore(dir, home)
+	t.Cleanup(ms.Close)
 
 	sessionID := "testsession-smoke"
 	r := Retro{
@@ -149,6 +152,7 @@ func TestMemoryLastSession(t *testing.T) {
 	dir := t.TempDir()
 	home := t.TempDir()
 	ms := NewMemoryStore(dir, home)
+	t.Cleanup(ms.Close)
 
 	// ReadLastSession on a fresh workspace returns empty string, no error.
 	content, err := ms.ReadLastSession()
@@ -178,6 +182,7 @@ func TestGetMemoryContextIncludes(t *testing.T) {
 	dir := t.TempDir()
 	home := t.TempDir()
 	ms := NewMemoryStore(dir, home)
+	t.Cleanup(ms.Close)
 
 	// Write LAST_SESSION.md.
 	if err := ms.WriteLastSession("Last session was productive."); err != nil {

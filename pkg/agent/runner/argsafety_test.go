@@ -97,7 +97,12 @@ func TestFilterDangerousCLIArgs_Codex_AskForApprovalAlwaysDropped(t *testing.T) 
 	for _, v := range []string{"untrusted", "on-request", "never", "on-failure"} {
 		kept, dropped := filterDangerousCLIArgs("codex", []string{"--ask-for-approval", v})
 		if len(dropped) != 1 {
-			t.Fatalf("--ask-for-approval %q must be dropped as one flag+value entry; kept=%v dropped=%v", v, kept, dropped)
+			t.Fatalf(
+				"--ask-for-approval %q must be dropped as one flag+value entry; kept=%v dropped=%v",
+				v,
+				kept,
+				dropped,
+			)
 		}
 		if containsFlag(kept, "--ask-for-approval") {
 			t.Fatalf("--ask-for-approval %q must not remain in kept args; kept=%v", v, kept)
@@ -397,7 +402,10 @@ func TestCodexDriver_BuildArgs_DangerousCLIArgsDropped(t *testing.T) {
 		})
 	})
 	if !containsSeq(args, "--sandbox", "workspace-write") {
-		t.Fatalf("the driver's own --sandbox workspace-write must remain (first occurrence, before exec); args=%v", args)
+		t.Fatalf(
+			"the driver's own --sandbox workspace-write must remain (first occurrence, before exec); args=%v",
+			args,
+		)
 	}
 	if !containsSeq(args, "--ask-for-approval", "never") {
 		t.Fatalf("the driver's own --ask-for-approval never must remain; args=%v", args)

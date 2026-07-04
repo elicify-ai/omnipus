@@ -65,7 +65,11 @@ func getExecutorDefaults(t *testing.T, api *restAPI) (int, []gen.ExecutorDefault
 
 // findExecutorDefaultsEntry returns the entry for the given CLI, failing the
 // test if absent.
-func findExecutorDefaultsEntry(t *testing.T, entries []gen.ExecutorDefaults, cli gen.ExternalCliTool) gen.ExecutorDefaults {
+func findExecutorDefaultsEntry(
+	t *testing.T,
+	entries []gen.ExecutorDefaults,
+	cli gen.ExternalCliTool,
+) gen.ExecutorDefaults {
 	t.Helper()
 	for _, e := range entries {
 		if e.Cli == cli {
@@ -126,7 +130,7 @@ func indexSeqAtOrAfter(haystack []string, from int, seq []string) int {
 // two flags (e.g. moving codex's --sandbox before --ask-for-approval, or
 // moving it after `exec`) fails here even though every individual flag is
 // still present.
-func assertRealArgsMatchEndpoint(t *testing.T, cli string, real []string, wantEntries []string) {
+func assertRealArgsMatchEndpoint(t *testing.T, cli string, realExecutor []string, wantEntries []string) {
 	t.Helper()
 	cursor := 0
 	for _, entry := range wantEntries {
@@ -134,17 +138,35 @@ func assertRealArgsMatchEndpoint(t *testing.T, cli string, real []string, wantEn
 		require.NotEmptyf(t, fields, "cli %s: empty AutoAppliedFlags entry", cli)
 		conditional := strings.Contains(entry, "<")
 		if conditional {
-			idx := indexAtOrAfter(real, cursor, fields[0])
-			require.GreaterOrEqualf(t, idx, 0,
+			idx := indexAtOrAfter(realExecutor, cursor, fields[0])
+			require.GreaterOrEqualf(
+				t,
+				idx,
+				0,
 				"cli %s: conditional flag %q (from advertised entry %q) not found in real buildArgs() output %v at/after position %d — driver_%s.go's buildArgs may have drifted from listExecutorDefaults",
-				cli, fields[0], entry, real, cursor, cli)
+				cli,
+				fields[0],
+				entry,
+				realExecutor,
+				cursor,
+				cli,
+			)
 			cursor = idx + 1
 			continue
 		}
-		idx := indexSeqAtOrAfter(real, cursor, fields)
-		require.GreaterOrEqualf(t, idx, 0,
+		idx := indexSeqAtOrAfter(realExecutor, cursor, fields)
+		require.GreaterOrEqualf(
+			t,
+			idx,
+			0,
 			"cli %s: literal flag sequence %v (from advertised entry %q) not found in real buildArgs() output %v at/after position %d — driver_%s.go's buildArgs may have drifted from listExecutorDefaults",
-			cli, fields, entry, real, cursor, cli)
+			cli,
+			fields,
+			entry,
+			realExecutor,
+			cursor,
+			cli,
+		)
 		cursor = idx + len(fields)
 	}
 }

@@ -253,5 +253,10 @@ func TestLoadConfig_ToolEnableFlags_DoesNotDowngradeExistingPolicy(t *testing.T)
 	require.True(t, ok)
 	policies, ok := sandboxRaw["tool_policies"].(map[string]any)
 	require.True(t, ok)
-	assert.Equal(t, "ask", policies["exec"], "the pre-existing \"ask\" policy must not be overwritten to \"deny\" on disk")
+	assert.Equal(
+		t,
+		"ask",
+		policies["exec"],
+		"the pre-existing \"ask\" policy must not be overwritten to \"deny\" on disk",
+	)
 }

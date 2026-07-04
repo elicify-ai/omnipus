@@ -365,7 +365,9 @@ func (t *SubagentTool) SetDelegateChecker(check func() bool) {
 // *DelegationDenial to DENY or nil to ALLOW. When set, it takes precedence over
 // the boolean delegateChecker so a rejected sync delegation surfaces a clear
 // reason to the LLM. Matches spawn's SetDelegationDenyChecker signature exactly.
-func (t *SubagentTool) SetDelegationDenyChecker(check func(ctx context.Context, targetAgentID string) *DelegationDenial) {
+func (t *SubagentTool) SetDelegationDenyChecker(
+	check func(ctx context.Context, targetAgentID string) *DelegationDenial,
+) {
 	t.delegationDeny = check
 }
 

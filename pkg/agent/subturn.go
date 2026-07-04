@@ -515,8 +515,13 @@ func spawnSubTurn(
 			targetAgentFallbackWarning = fmt.Sprintf(
 				"[delegation warning: target agent %q was not found; ran with the parent's own configuration instead] ",
 				cfg.TargetAgentID)
-			slog.Warn("subturn: target agent not found in registry; dispatch falls back to parent's own executor config",
-				"target_agent_id", cfg.TargetAgentID, "parent_id", parentTS.turnID)
+			slog.Warn(
+				"subturn: target agent not found in registry; dispatch falls back to parent's own executor config",
+				"target_agent_id",
+				cfg.TargetAgentID,
+				"parent_id",
+				parentTS.turnID,
+			)
 		}
 	}
 	execSource := baseAgent
@@ -1030,7 +1035,7 @@ func newEphemeralSession(initial []providers.Message) ephemeralSessionStoreIface
 
 // ephemeralSessionStoreIface is satisfied by *ephemeralSessionStore.
 // Declared so newEphemeralSession can return a typed interface.
-type ephemeralSessionStoreIface interface {
+type ephemeralSessionStoreIface interface { //nolint:interfacebloat // mirrors the SessionStore contract; one cohesive session responsibility
 	AddMessage(sessionKey, role, content string)
 	AddFullMessage(sessionKey string, msg providers.Message)
 	GetHistory(key string) []providers.Message

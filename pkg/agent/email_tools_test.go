@@ -97,8 +97,22 @@ func TestRegisterEmailTools_OnlyUnresolvablePairSkipped(t *testing.T) {
 	ag := newEmailTestAgent()
 	cfg := &config.Config{Mailboxes: config.MailboxesConfig{
 		"mia": {
-			"ws_ok":  {Enabled: true, PasswordRef: "MIA_OK_PW", WorkspaceID: "ws_ok", IMAPHost: "i", SMTPHost: "s", Username: "u"},
-			"ws_bad": {Enabled: true, PasswordRef: "MISSING_PW_REF", WorkspaceID: "ws_bad", IMAPHost: "i", SMTPHost: "s", Username: "u"},
+			"ws_ok": {
+				Enabled:     true,
+				PasswordRef: "MIA_OK_PW",
+				WorkspaceID: "ws_ok",
+				IMAPHost:    "i",
+				SMTPHost:    "s",
+				Username:    "u",
+			},
+			"ws_bad": {
+				Enabled:     true,
+				PasswordRef: "MISSING_PW_REF",
+				WorkspaceID: "ws_bad",
+				IMAPHost:    "i",
+				SMTPHost:    "s",
+				Username:    "u",
+			},
 		},
 	}}
 	t.Setenv("MIA_OK_PW", "pass")

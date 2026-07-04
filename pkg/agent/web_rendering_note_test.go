@@ -27,7 +27,10 @@ func TestBuildWebRenderingNote_SurfaceGating(t *testing.T) {
 			t.Errorf("buildWebRenderingNote(%q) = \"\"; want a note", tc.channel)
 		}
 		if !tc.wantNote && got != "" {
-			t.Errorf("buildWebRenderingNote(%q) returned a note; want \"\" (Mermaid does not render on this surface)", tc.channel)
+			t.Errorf(
+				"buildWebRenderingNote(%q) returned a note; want \"\" (Mermaid does not render on this surface)",
+				tc.channel,
+			)
 		}
 	}
 }

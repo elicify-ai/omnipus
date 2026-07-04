@@ -10,7 +10,7 @@
 //   - T-I1: workspace DELETE cascades heartbeat sessions (HIGH-1)
 //   - T-I3: memory settings PUT does not clobber sibling fields
 //   - T-I2: boot reconcile removes legacy heartbeat jobs (no workspace segment)
-//   - T-Finding2: PUT with forged session_id is not honoured
+//   - T-Finding2: PUT with forged session_id is not honored
 //   - FIX-3: disable-path releases the standing session
 //   - FIX-4a: core_team shrink releases heartbeat sessions and removes cron jobs
 //   - FIX-4b: computeDesiredHeartbeats skips off-team agents
@@ -159,7 +159,8 @@ func seedWorkspaceWithHeartbeat(t *testing.T, homePath, agentID, sessionID strin
 // and returns the session metadata.
 func createHeartbeatSessionForAgent(t *testing.T, al interface {
 	GetAgentStore(agentID string) *session.UnifiedStore
-}, agentID, wsID string) *session.UnifiedMeta {
+}, agentID, wsID string,
+) *session.UnifiedMeta {
 	t.Helper()
 	store := al.GetAgentStore(agentID)
 	require.NotNil(t, store, "agent store for %q must exist", agentID)
@@ -369,9 +370,12 @@ func TestWorkspacePUT_MemberConfigBounds(t *testing.T) {
 			wantCode:   http.StatusUnprocessableEntity,
 		},
 		{
-			name:       "body over 16KB",
-			memberJSON: fmt.Sprintf(`{"mia":{"heartbeat":{"enabled":true,"interval_minutes":10,"body":%q}}}`, strings.Repeat("x", 16385)),
-			wantCode:   http.StatusUnprocessableEntity,
+			name: "body over 16KB",
+			memberJSON: fmt.Sprintf(
+				`{"mia":{"heartbeat":{"enabled":true,"interval_minutes":10,"body":%q}}}`,
+				strings.Repeat("x", 16385),
+			),
+			wantCode: http.StatusUnprocessableEntity,
 		},
 		{
 			name:       "enabled with empty body",
@@ -516,7 +520,7 @@ func TestWorkspacePUT_EagerSession(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestWorkspaceDelete_Cascade verifies that deleting a workspace removes both
-// the heartbeat cron job (existing behaviour) AND the standing heartbeat session
+// the heartbeat cron job (existing behavior) AND the standing heartbeat session
 // (HIGH-1 fix: sessions live in per-agent stores, not the workspace dir).
 func TestWorkspaceDelete_Cascade(t *testing.T) {
 	api, cs := buildHeartbeatTestAPI(t)

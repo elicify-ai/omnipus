@@ -363,7 +363,7 @@ func parseStreamResponse(
 	}
 
 	if err := scanner.Err(); err != nil {
-		// If the caller's context was cancelled or timed out, our own ctx.Done()
+		// If the caller's context was canceled or timed out, our own ctx.Done()
 		// watchdog goroutine (ChatStream) closed resp.Body to unblock this scanner
 		// — the resulting "http2: response body closed" is NOT a server-side
 		// connection drop but a cancellation/timeout. Surface the context error so

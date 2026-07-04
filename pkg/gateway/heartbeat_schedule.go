@@ -43,10 +43,6 @@ func isHeartbeatJob(j cron.CronJob) bool {
 	return j.Payload.Kind == heartbeatJobKind || strings.HasPrefix(j.Name, heartbeatJobNamePrefix)
 }
 
-// workspaceListFunc returns all workspace records. Injected so the reconciler
-// stays testable without a real filesystem.
-type workspaceListFunc func() ([]workspace.Workspace, error)
-
 // desiredHeartbeat is the reconciler's target spec for one (workspace, agent) pair.
 type desiredHeartbeat struct {
 	workspaceID string
@@ -155,7 +151,11 @@ func (a *restAPI) reconcileHeartbeatSchedules() {
 //
 // Returns the first error encountered; reconciliation continues past per-job
 // errors so one bad entry does not block the rest.
-func ReconcileHeartbeatSchedules(cs *cron.CronService, workspaces []workspace.Workspace, isWorker func(agentID string) bool) error {
+func ReconcileHeartbeatSchedules(
+	cs *cron.CronService,
+	workspaces []workspace.Workspace,
+	isWorker func(agentID string) bool,
+) error {
 	if cs == nil {
 		return fmt.Errorf("heartbeat reconcile: cron service is nil")
 	}

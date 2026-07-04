@@ -421,8 +421,10 @@ func RepairStaleChannelWildcardBindings(cfg *Config) {
 		return
 	}
 	sort.Strings(dropped)
-	slog.Warn("config: channel instances have both bound Identity and wildcard binding; removing stale wildcard binding(s) (ADR-029 FR-029)",
-		"instance_ids", dropped,
+	slog.Warn(
+		"config: channel instances have both bound Identity and wildcard binding; removing stale wildcard binding(s) (ADR-029 FR-029)",
+		"instance_ids",
+		dropped,
 	)
 	cfg.Bindings = kept
 }

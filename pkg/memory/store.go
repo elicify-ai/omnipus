@@ -8,7 +8,7 @@ import (
 
 // Store defines an interface for persistent session storage.
 // Each method is an atomic operation — there is no separate Save() call.
-type Store interface {
+type Store interface { //nolint:interfacebloat // cohesive persistent-store contract; each method is one atomic op
 	// AddMessage appends a simple text message to a session.
 	AddMessage(ctx context.Context, sessionKey, role, content string) error
 
@@ -16,7 +16,7 @@ type Store interface {
 	AddFullMessage(ctx context.Context, sessionKey string, msg providers.Message) error
 
 	// GetHistory returns the live window messages for a session in insertion order,
-	// honouring meta.Skip (evicted lines are excluded). Returns an empty slice
+	// honoring meta.Skip (evicted lines are excluded). Returns an empty slice
 	// (not nil) if the session does not exist.
 	GetHistory(ctx context.Context, sessionKey string) ([]providers.Message, error)
 

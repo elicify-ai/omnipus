@@ -162,7 +162,12 @@ func TestLoadConfig_CLITokenRelocation_ExtraHumanAccountsUntouched(t *testing.T)
 	require.NotNil(t, cfg.Gateway.CLIToken, "the legacy \"cli\" entry must still be relocated")
 	assert.Equal(t, BcryptHash("$2a$10$legacyclihash"), cfg.Gateway.CLIToken.Hash)
 
-	require.Len(t, cfg.Gateway.Users, 2, "both human accounts must survive — only \"cli\" is relocated, nothing is truncated")
+	require.Len(
+		t,
+		cfg.Gateway.Users,
+		2,
+		"both human accounts must survive — only \"cli\" is relocated, nothing is truncated",
+	)
 	assert.Equal(t, "alice", cfg.Gateway.Users[0].Username)
 	assert.Equal(t, "bob", cfg.Gateway.Users[1].Username)
 }

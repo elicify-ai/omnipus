@@ -28,6 +28,7 @@ func TestMemoryStore_AppendLongTerm_WritesMemoryFile(t *testing.T) {
 	dir := t.TempDir()
 	home := t.TempDir()
 	ms := NewMemoryStore(dir, home)
+	t.Cleanup(ms.Close)
 
 	if err := ms.AppendLongTerm("always use flock for concurrent writes", "lesson_learned"); err != nil {
 		t.Fatalf("AppendLongTerm: %v", err)
@@ -77,6 +78,7 @@ func TestMemoryStore_AppendLongTerm_StripsNull_RejectsCommentInjection(t *testin
 	dir := t.TempDir()
 	home := t.TempDir()
 	ms := NewMemoryStore(dir, home)
+	t.Cleanup(ms.Close)
 
 	tests := []struct {
 		name      string
@@ -157,6 +159,7 @@ func TestMemoryStore_SearchEntries_LiteralSubstring(t *testing.T) {
 	dir := t.TempDir()
 	home := t.TempDir()
 	ms := NewMemoryStore(dir, home)
+	t.Cleanup(ms.Close)
 
 	if err := ms.AppendLongTerm("alpha entry one", "reference"); err != nil {
 		t.Fatalf("AppendLongTerm 1: %v", err)
@@ -194,6 +197,7 @@ func TestMemoryStore_WriteLastSession_OverwritesAtomically(t *testing.T) {
 	dir := t.TempDir()
 	home := t.TempDir()
 	ms := NewMemoryStore(dir, home)
+	t.Cleanup(ms.Close)
 
 	if err := ms.WriteLastSession("initial content"); err != nil {
 		t.Fatalf("WriteLastSession initial: %v", err)
@@ -234,6 +238,7 @@ func TestMemoryStore_AppendRetro_ValidatesSessionID(t *testing.T) {
 	dir := t.TempDir()
 	home := t.TempDir()
 	ms := NewMemoryStore(dir, home)
+	t.Cleanup(ms.Close)
 
 	r := Retro{
 		Timestamp:        time.Now().UTC(),
@@ -276,6 +281,7 @@ func TestMemoryStore_AppendRetro_NoUserConfirmedField(t *testing.T) {
 	dir := t.TempDir()
 	home := t.TempDir()
 	ms := NewMemoryStore(dir, home)
+	t.Cleanup(ms.Close)
 
 	sessionID := "session-no-confirm"
 	r := Retro{
@@ -311,6 +317,7 @@ func TestMemoryStore_SweepRetros_Deletes30DayOld(t *testing.T) {
 	dir := t.TempDir()
 	home := t.TempDir()
 	ms := NewMemoryStore(dir, home)
+	t.Cleanup(ms.Close)
 
 	// Create an "old" retro directory.
 	oldDate := time.Now().UTC().AddDate(0, 0, -35)
@@ -367,6 +374,7 @@ func TestMemoryStore_GetMemoryContext_ContainsBothSections(t *testing.T) {
 	dir := t.TempDir()
 	home := t.TempDir()
 	ms := NewMemoryStore(dir, home)
+	t.Cleanup(ms.Close)
 
 	if err := ms.WriteLastSession("## Last session\nWe shipped the rooms."); err != nil {
 		t.Fatalf("WriteLastSession: %v", err)
@@ -397,6 +405,7 @@ func TestMemoryStore_AppendLongTerm_MaxRune4096(t *testing.T) {
 	dir := t.TempDir()
 	home := t.TempDir()
 	ms := NewMemoryStore(dir, home)
+	t.Cleanup(ms.Close)
 
 	content4096 := strings.Repeat("a", 4096)
 	if utf8.RuneCountInString(content4096) != 4096 {

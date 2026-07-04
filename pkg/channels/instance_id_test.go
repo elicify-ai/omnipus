@@ -344,8 +344,26 @@ func TestInboundMessage_InstanceIDUsedForSessionKey(t *testing.T) {
 	go func() { gotA <- <-mbA.InboundChan() }()
 	go func() { gotB <- <-mbB.InboundChan() }()
 
-	bcA.HandleMessage(context.Background(), bus.Peer{Kind: bus.PeerDirect, ID: "user"}, "m1", "user", chatID, "hello", nil, nil)
-	bcB.HandleMessage(context.Background(), bus.Peer{Kind: bus.PeerDirect, ID: "user"}, "m2", "user", chatID, "hello", nil, nil)
+	bcA.HandleMessage(
+		context.Background(),
+		bus.Peer{Kind: bus.PeerDirect, ID: "user"},
+		"m1",
+		"user",
+		chatID,
+		"hello",
+		nil,
+		nil,
+	)
+	bcB.HandleMessage(
+		context.Background(),
+		bus.Peer{Kind: bus.PeerDirect, ID: "user"},
+		"m2",
+		"user",
+		chatID,
+		"hello",
+		nil,
+		nil,
+	)
 
 	msgA := <-gotA
 	msgB := <-gotB

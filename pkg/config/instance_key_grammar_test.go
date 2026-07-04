@@ -133,7 +133,12 @@ func TestInstanceKeyGrammar_DS2_Table(t *testing.T) {
 					t.Errorf("ValidateInstanceKey(%q) error does not wrap ErrInvalidInstanceKey: %v", tc.key, err)
 				}
 				if tc.errContains != "" && !strings.Contains(err.Error(), tc.errContains) {
-					t.Errorf("ValidateInstanceKey(%q) error = %q; want it to contain %q", tc.key, err.Error(), tc.errContains)
+					t.Errorf(
+						"ValidateInstanceKey(%q) error = %q; want it to contain %q",
+						tc.key,
+						err.Error(),
+						tc.errContains,
+					)
 				}
 			} else {
 				if err != nil {
@@ -168,7 +173,9 @@ func TestNormalizeChannelMap_KeepsNamespacedKeys(t *testing.T) {
 	// The key must be preserved under its original namespaced form.
 	inst, ok := out["whatsapp.eu"]
 	if !ok {
-		t.Fatal("normalizeChannelMap dropped 'whatsapp.eu' — this is the MAJ-002 regression; namespaced keys must be kept (FR-016)")
+		t.Fatal(
+			"normalizeChannelMap dropped 'whatsapp.eu' — this is the MAJ-002 regression; namespaced keys must be kept (FR-016)",
+		)
 	}
 	if inst.Type != "whatsapp" {
 		t.Errorf("Type = %q, want 'whatsapp' (effective type from pre-dot segment)", inst.Type)
@@ -176,7 +183,9 @@ func TestNormalizeChannelMap_KeepsNamespacedKeys(t *testing.T) {
 
 	// The key must NOT have been remapped to the bare type.
 	if _, bare := out["whatsapp"]; bare {
-		t.Error("normalizeChannelMap added a bare 'whatsapp' key — the namespaced key must be stored under its original key")
+		t.Error(
+			"normalizeChannelMap added a bare 'whatsapp' key — the namespaced key must be stored under its original key",
+		)
 	}
 }
 
