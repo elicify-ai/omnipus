@@ -447,6 +447,119 @@ func TestExternalDispatch_GitRepoWorkspace_RunsInRepoDirDirectly(t *testing.T) {
 	}
 }
 
+// TestExternalDispatch_CoreTeamMember_RunsInWorkspaceSharedDir proves the
+// operator-mandated requirement that every agent belonging to a Workspace's
+// CoreTeam — native or subagent_3p, no exceptions by kind — actually runs in
+// that Workspace's own SHARED directory, not its private per-agent one. When
+// the dispatching agent's ID is a member of a real, on-disk workspace's
+// core_team, RunOptions.WorkDir must be that workspace's directory
+// ($OMNIPUS_HOME/workspaces/<id>/) instead of agent.Workspace.
+func TestExternalDispatch_CoreTeamMember_RunsInWorkspaceSharedDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv(config.EnvHome, home)
+
+	agentWorkspace := t.TempDir()
+	al, ts := newExternalTestLoop(t, "claude-code", agentWorkspace)
+	// newExternalTestLoop hardcodes agent.ID = "ext-agent" — the workspace
+	// record below lists exactly that id in its core_team.
+
+	wsDir := filepath.Join(home, "workspaces")
+	if err := os.MkdirAll(wsDir, 0o755); err != nil {
+		t.Fatalf("mkdir workspaces dir: %v", err)
+	}
+	wsJSON := `{"id":"ws-shared","core_team":["ext-agent"]}`
+	if err := os.WriteFile(filepath.Join(wsDir, "ws-shared.json"), []byte(wsJSON), 0o644); err != nil {
+		t.Fatalf("write workspace record: %v", err)
+	}
+
+	fr, restore := withFakeDriver(t)
+	defer restore()
+
+	go func() {
+		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "done"}})
+		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
+		fr.Cancel()
+	}()
+
+	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task", 30*time.Second)
+	if err != nil {
+		t.Fatalf("runExternalCLISubTurn error: %v", err)
+	}
+	if res.ForLLM != "done" {
+		t.Errorf("output = %q, want %q", res.ForLLM, "done")
+	}
+
+	opts := fr.RecordedRunOpts()
+	if len(opts) != 1 {
+		t.Fatalf("driver Run called %d times, want 1", len(opts))
+	}
+	wantDir := filepath.Join(home, "workspaces", "ws-shared")
+	if opts[0].WorkDir != wantDir {
+		t.Errorf("driver WorkDir = %q, want the workspace's shared directory %q (CoreTeam membership)",
+			opts[0].WorkDir, wantDir)
+	}
+	if opts[0].WorkDir == agentWorkspace {
+		t.Errorf("driver WorkDir must NOT be the agent's private workspace %q when the agent is a CoreTeam member",
+			agentWorkspace)
+	}
+
+	// The shared workspace dir must actually exist (MkdirAll is still applied
+	// against whichever dir was chosen).
+	if _, statErr := os.Stat(wantDir); statErr != nil {
+		t.Errorf("expected shared workspace dir to exist: %v", statErr)
+	}
+}
+
+// TestExternalDispatch_NotCoreTeamMember_FallsBackToAgentWorkspace confirms the
+// fallback path: when the dispatching agent's ID is NOT a member of any
+// on-disk workspace's core_team, RunOptions.WorkDir remains agent.Workspace —
+// unchanged from the pre-CoreTeam-override behavior that
+// TestExternalDispatch_StreamsOutput_RunsInWorkspaceDir and
+// TestExternalDispatch_GitRepoWorkspace_RunsInRepoDirDirectly already pin
+// (those tests run with no workspaces/ directory at all). This test makes the
+// "no membership -> fallback" contract explicit by persisting a real, on-disk
+// workspace whose core_team does NOT list this agent.
+func TestExternalDispatch_NotCoreTeamMember_FallsBackToAgentWorkspace(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv(config.EnvHome, home)
+
+	agentWorkspace := t.TempDir()
+	al, ts := newExternalTestLoop(t, "claude-code", agentWorkspace)
+
+	wsDir := filepath.Join(home, "workspaces")
+	if err := os.MkdirAll(wsDir, 0o755); err != nil {
+		t.Fatalf("mkdir workspaces dir: %v", err)
+	}
+	// A real workspace exists, but its core_team lists a DIFFERENT agent.
+	wsJSON := `{"id":"ws-other","core_team":["someone-else"]}`
+	if err := os.WriteFile(filepath.Join(wsDir, "ws-other.json"), []byte(wsJSON), 0o644); err != nil {
+		t.Fatalf("write workspace record: %v", err)
+	}
+
+	fr, restore := withFakeDriver(t)
+	defer restore()
+
+	go func() {
+		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "done"}})
+		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
+		fr.Cancel()
+	}()
+
+	_, err := runExternalCLISubTurn(context.Background(), al, ts, "task", 30*time.Second)
+	if err != nil {
+		t.Fatalf("runExternalCLISubTurn error: %v", err)
+	}
+
+	opts := fr.RecordedRunOpts()
+	if len(opts) != 1 {
+		t.Fatalf("driver Run called %d times, want 1", len(opts))
+	}
+	if opts[0].WorkDir != agentWorkspace {
+		t.Errorf("driver WorkDir = %q, want the agent's own workspace %q (no CoreTeam membership)",
+			opts[0].WorkDir, agentWorkspace)
+	}
+}
+
 func mustGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", args...)

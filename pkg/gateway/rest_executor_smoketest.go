@@ -59,12 +59,14 @@
 //     agent, the run happens in THAT agent's own dedicated directory
 //     ($OMNIPUS_HOME/agents/{id}/, AgentConfig.Workspace — the same one
 //     agent.ResolveAgentWorkspace / a real subagent_3p delegation would
-//     use). NOTE: this is NOT the separate, multi-agent
-//     pkg/workspace.Workspace feature (CoreTeam, REST-CRUD, delegation
-//     graph, $OMNIPUS_HOME/workspaces/{id}/) — no AgentConfig field binds
-//     an agent to one of those, and runExternalCLISubTurn never consults
-//     that package at all (see ADR-032). Using the agent's own directory
-//     makes the test representative of real behavior (project files,
+//     use) — UNLESS that agent is a member of a real pkg/workspace.Workspace's
+//     CoreTeam (workspace.FindForAgent), in which case the smoke-test runs in
+//     that Workspace's own SHARED directory instead, mirroring exactly what a
+//     genuine dispatch to that agent does today (both pkg/agent/loop.go's
+//     runTurn and pkg/agent/external_dispatch.go's runExternalCLISubTurn
+//     apply the same CoreTeam-membership override — see either's doc comment
+//     for the design). Using the agent's real resolved directory makes the
+//     test representative of real behavior (project files,
 //     AGENTS.md/CLAUDE.md/opencode.json context) — that directory is
 //     NEVER removed by this handler. Otherwise (agent_id omitted, blank, or
 //     naming an agent that doesn't resolve — e.g. the create wizard before
@@ -107,6 +109,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/audit"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/sandbox"
+	"github.com/dapicom-ai/omnipus/pkg/workspace"
 )
 
 // smokeTestPrompt is the fixed, hardcoded trivial test prompt run through the
@@ -325,10 +328,13 @@ func (a *restAPI) runExecutorSmokeTest(
 	// run in THAT agent's own dedicated directory — the same place a genuine
 	// subagent_3p delegation to it would run (agent.ResolveAgentWorkspace,
 	// the same helper NewAgentInstance uses in-package). This is
-	// AgentConfig.Workspace, NOT the separate, multi-agent
-	// pkg/workspace.Workspace feature (CoreTeam/REST-CRUD/delegation graph)
-	// — no AgentConfig field binds an agent to one of those, and real
-	// subagent_3p dispatch (ADR-032) never consults that package either.
+	// AgentConfig.Workspace, the separate, multi-agent pkg/workspace.Workspace
+	// feature (CoreTeam/REST-CRUD/delegation graph). If agentID is ALSO a
+	// member of a real Workspace's CoreTeam, that Workspace's own shared
+	// directory overrides the agent's private one below — mirroring the exact
+	// override real dispatch applies (pkg/agent/loop.go's runTurn,
+	// pkg/agent/external_dispatch.go's runExternalCLISubTurn), so the smoke
+	// test stays representative of where a genuine turn would actually run.
 	// Otherwise (agentID empty, or naming an agent that no longer resolves —
 	// e.g. the create wizard before the agent has been saved, or a
 	// stale/deleted id) fall back to a disposable ephemeral scratch
@@ -352,6 +358,20 @@ func (a *restAPI) runExecutorSmokeTest(
 	cfg := a.agentLoop.GetConfig()
 	if agentCfg := findAgentConfig(cfg, agentID); agentCfg != nil {
 		resolved := agent.ResolveAgentWorkspace(agentCfg, &cfg.Agents.Defaults)
+		// CoreTeam override: an agent that belongs to a Workspace's team runs
+		// in the Workspace's own shared directory instead of its private one
+		// — same rule real dispatch applies (see the file-level doc above).
+		// Not found, or an unsafe workspace id, is not an error: it just means
+		// the agent's own directory (already resolved above) is used, same as
+		// before this override existed.
+		if wsID, found := workspace.FindForAgent(config.OmnipusHomeDir(), agentID); found {
+			if wsDir, wsErr := workspace.SafeWorkspaceDir(config.OmnipusHomeDir(), wsID); wsErr == nil {
+				resolved = wsDir
+			} else {
+				slog.Warn("executor-smoke-test: workspace-team dir resolution failed; using agent's own directory",
+					"agent_id", agentID, "workspace_id", wsID, "error", wsErr)
+			}
+		}
 		// Defensive MkdirAll: agent.ResolveAgentWorkspace is pure path
 		// computation (see its doc) — the directory is normally already
 		// created, either at agent-creation time (rest.go's

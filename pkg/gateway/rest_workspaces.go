@@ -1049,8 +1049,16 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	// Best-effort: remove the per-workspace directory (AGENT.md / memory room).
-	// The JSON removal above is the authoritative delete; a stale directory is not fatal.
+	// Best-effort: remove the per-workspace directory. This now holds more than
+	// AGENT.md and the shared memory room: it is also the SHARED working
+	// directory every CoreTeam member (native or subagent_3p) actually runs
+	// in (pkg/workspace.FindForAgent-driven filesystem re-rooting, agent
+	// loop's runTurn / external_dispatch.go's runExternalCLISubTurn) — so this
+	// delete also destroys any working files those agents wrote here. That is
+	// the correct, expected semantic (a deleted workspace deletes its own
+	// shared working tree) — this comment update only makes the blast radius
+	// explicit; the JSON removal above remains the authoritative delete, and a
+	// stale directory left behind on a RemoveAll failure is not fatal.
 	wsDir := workspace.WorkspaceDir(a.homePath, id)
 	if err := os.RemoveAll(wsDir); err != nil {
 		slog.Warn("rest: delete workspace: cascade dir", "id", id, "dir", wsDir, "error", err)

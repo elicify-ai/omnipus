@@ -1,8 +1,8 @@
 //go:build linux
 
 // Package sandbox_test — subprocess-level proof that the per-turn
-// workspace-rooted filesystem (experimental.workspace_rooted_filesystem) does
-// NOT require widening the kernel sandbox.
+// workspace-rooted filesystem (agent-CoreTeam-membership-driven — see
+// workspace.FindForAgent) does NOT require widening the kernel sandbox.
 //
 // STEP-0 invariant under test: the boot Landlock policy grants RWX on the whole
 // $OMNIPUS_HOME (DefaultPolicy), and re-routing an exec child's cwd to

@@ -871,6 +871,12 @@ func newTestRestAPIWithWorkspaceAgent(t *testing.T) (api *restAPI, agentID, work
 	t.Helper()
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 	tmpDir := t.TempDir()
+	// Isolates workspace.FindForAgent's $OMNIPUS_HOME/workspaces scan (the
+	// CoreTeam-membership override) to this test's own tmpDir, so it can never
+	// read a real, unmocked ~/.omnipus/workspaces on the machine running the
+	// test — see TestPostAgentsExecutorSmokeTest_AgentIDIsCoreTeamMember below
+	// for the positive case this same isolation makes exercisable.
+	t.Setenv("OMNIPUS_HOME", tmpDir)
 	agentID = "smoke-test-agent-01"
 	workspace = filepath.Join(tmpDir, "agents", agentID)
 	require.NoError(t, os.MkdirAll(workspace, 0o755))
@@ -948,6 +954,70 @@ func TestPostAgentsExecutorSmokeTest_AgentIDResolvesToRealWorkspace(t *testing.T
 	assert.True(t, info.IsDir())
 	markerData, readErr := os.ReadFile(filepath.Join(workspace, "marker.txt"))
 	require.NoError(t, readErr, "the agent's pre-existing marker file must survive the request")
+	assert.Equal(t, "pre-existing project file", string(markerData))
+}
+
+// TestPostAgentsExecutorSmokeTest_AgentIDIsCoreTeamMember_UsesWorkspaceSharedDir
+// proves the CoreTeam-membership override added alongside the
+// pkg/agent/loop.go / external_dispatch.go fix: when agent_id names a real,
+// saved agent that ALSO belongs to a real Workspace's core_team, the smoke
+// test must run in that Workspace's own SHARED directory
+// ($OMNIPUS_HOME/workspaces/{id}/), not the agent's private
+// $OMNIPUS_HOME/agents/{id}/ — mirroring exactly what a genuine dispatch to
+// this agent would do, so the smoke test's "test the real thing" contract
+// holds even for CoreTeam members.
+func TestPostAgentsExecutorSmokeTest_AgentIDIsCoreTeamMember_UsesWorkspaceSharedDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("stub uses a POSIX shell script")
+	}
+	api, agentID, agentWorkspace := newTestRestAPIWithWorkspaceAgent(t)
+
+	// Persist a real workspace record whose core_team includes this agent.
+	home := os.Getenv("OMNIPUS_HOME")
+	require.NotEmpty(t, home, "fixture must have set OMNIPUS_HOME")
+	wsDir := filepath.Join(home, "workspaces")
+	require.NoError(t, os.MkdirAll(wsDir, 0o755))
+	wsJSON := fmt.Sprintf(`{"id":"smoke-test-team-ws","core_team":[%q]}`, agentID)
+	require.NoError(t, os.WriteFile(filepath.Join(wsDir, "smoke-test-team-ws.json"), []byte(wsJSON), 0o644))
+
+	realBin := writeScript(t, "#!/bin/sh\nexit 0\n")
+	fake := &capturingFakeDriver{}
+	orig := smokeTestNewDriver
+	smokeTestNewDriver = func(_ string, _ runner.ConsentHandler) (runner.ExternalAgentRunner, error) {
+		return fake, nil
+	}
+	defer func() { smokeTestNewDriver = orig }()
+
+	body := fmt.Sprintf(`{"cli":"claude-code","cli_path":%q,"agent_id":%q}`, realBin, agentID)
+	code, resp := postExecutorSmokeTest(t, api, body)
+	require.Equal(t, http.StatusOK, code)
+	assert.True(t, resp.Ok, "error=%v", resp.Error)
+	assert.True(t, resp.UsedAgentWorkspace,
+		"agent_id resolved to a real, saved agent — used_agent_workspace must be true even when overridden to the Workspace's shared dir")
+
+	fake.mu.Lock()
+	gotWorkDir := fake.gotOpts.WorkDir
+	captured := fake.captured
+	fake.mu.Unlock()
+	require.True(t, captured, "driver.Run must have been called")
+
+	wantDir := filepath.Join(home, "workspaces", "smoke-test-team-ws")
+	assert.Equal(t, wantDir, gotWorkDir,
+		"CoreTeam membership must route the run to the Workspace's own shared directory")
+	assert.NotEqual(t, agentWorkspace, gotWorkDir,
+		"the run must NOT use the agent's private per-agent directory when it is a CoreTeam member")
+
+	// The Workspace's shared dir must actually exist (MkdirAll applies to
+	// whichever directory was ultimately chosen).
+	info, statErr := os.Stat(wantDir)
+	require.NoError(t, statErr, "the workspace's shared directory must exist after the request")
+	assert.True(t, info.IsDir())
+
+	// The agent's own private directory (and its marker file) must still be
+	// completely untouched — CoreTeam override changes where the RUN happens,
+	// not the agent's own directory's independent existence/contents.
+	markerData, readErr := os.ReadFile(filepath.Join(agentWorkspace, "marker.txt"))
+	require.NoError(t, readErr, "the agent's own pre-existing marker file must survive the request")
 	assert.Equal(t, "pre-existing project file", string(markerData))
 }
 

@@ -377,18 +377,17 @@ func guardMetadataPath(workspace, path, op string) *ToolResult {
 }
 
 // rerootable holds the construction parameters a file tool needs to rebuild its
-// confined fileSystem against a per-turn workspace root
-// (experimental.workspace_rooted_filesystem). It is embedded by every generic
-// file tool so the re-root logic lives in one place.
+// confined fileSystem against a per-turn workspace root. It is embedded by
+// every generic file tool so the re-root logic lives in one place.
 //
-// When a turn carries no workspace dir (the flag is off, or the turn is not
-// bound to a Workspace), effectiveFs returns the pre-built fixed-root fs and
-// effectiveWorkspace returns the fixed agent workspace — i.e. byte-for-byte the
-// pre-flag behavior. When a turn DOES carry a workspace dir, both helpers
-// rebuild against that dir using the SAME restrict + allow-path-pattern config
-// the fixed root was built with, so every existing guard (os.Root confinement,
-// metadata guard, cross-agent guard, allow-paths) applies relative to the
-// re-rooted dir.
+// When a turn carries no workspace dir (the turn's agent is not a member of
+// any Workspace's CoreTeam — see workspace.FindForAgent and the agent loop's
+// runTurn), effectiveFs returns the pre-built fixed-root fs and
+// effectiveWorkspace returns the fixed agent workspace unchanged. When a turn
+// DOES carry a workspace dir, both helpers rebuild against that dir using the
+// SAME restrict + allow-path-pattern config the fixed root was built with, so
+// every existing guard (os.Root confinement, metadata guard, cross-agent
+// guard, allow-paths) applies relative to the re-rooted dir.
 type rerootable struct {
 	restrict bool
 	patterns []*regexp.Regexp
@@ -510,9 +509,9 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	}
 
 	// Resolve the effective root for this call. When the turn re-roots to a
-	// workspace dir (experimental.workspace_rooted_filesystem), effFs is a
-	// fresh fs confined to that dir and effWorkspace is that dir; otherwise
-	// they are the fixed agent fs/workspace — byte-for-byte the old behavior.
+	// workspace dir (the agent is a member of that Workspace's CoreTeam),
+	// effFs is a fresh fs confined to that dir and effWorkspace is that dir;
+	// otherwise they are the fixed agent fs/workspace, unchanged.
 	effFs := t.effectiveFs(ctx, t.fs)
 	effWorkspace := t.effectiveWorkspace(ctx, t.workspace)
 
@@ -694,9 +693,10 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 //
 // Sandbox safety: the bytes are read via effFs.Open — the same confined handle
 // the calling read_file resolved for this turn (re-rooted to the workspace dir
-// when the flag is on, else the fixed agent fs) — then extraction runs purely
-// in memory via docextract.ExtractBytes, which opens no paths of its own, so it
-// cannot read outside the workspace even for archive formats that re-open by path.
+// when the agent is a CoreTeam member, else the fixed agent fs) — then
+// extraction runs purely in memory via docextract.ExtractBytes, which opens no
+// paths of its own, so it cannot read outside the workspace even for archive
+// formats that re-open by path.
 //
 // offset and length are interpreted as character (rune) positions into the
 // extracted text, not byte positions into the binary file (byte positions are

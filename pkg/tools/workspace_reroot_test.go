@@ -8,12 +8,12 @@ import (
 	"testing"
 )
 
-// These tests cover experimental.workspace_rooted_filesystem at the tool layer:
-// when a per-turn workspace dir is carried on the context (via
-// WithTurnWorkspaceDir, which the agent loop sets only when the flag is ON and a
-// workspace_id is bound), the file/exec tools resolve paths against that dir
-// instead of their fixed agent root. When no turn workspace dir is present, the
-// tools behave byte-for-byte as before.
+// These tests cover per-turn workspace re-rooting at the tool layer: when a
+// per-turn workspace dir is carried on the context (via WithTurnWorkspaceDir,
+// which the agent loop sets when the turn's agent belongs to a Workspace's
+// CoreTeam — see workspace.FindForAgent), the file/exec tools resolve paths
+// against that dir instead of their fixed agent root. When no turn workspace
+// dir is present, the tools behave byte-for-byte as before.
 
 // agentRoot + workspaceRoot model the two sibling subtrees under $OMNIPUS_HOME.
 func rerootDirs(t *testing.T) (home, agentDir, wsDir string) {
