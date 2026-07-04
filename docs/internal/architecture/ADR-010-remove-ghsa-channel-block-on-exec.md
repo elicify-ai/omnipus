@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-04-29
 **Deciders:** architect, security-lead, backend-lead
+**Note (2026-07-04):** `exec` (along with `workspace_shell`/`workspace_shell_bg`) was later merged into one `bash` tool by [ADR-036](./ADR-036-consolidate-shell-and-subagent-tools.md). This ADR's actual decision — remove the channel-layer block, govern access exclusively through `ToolPolicyCfg` — is unaffected and still holds for `bash`; only the tool name changes. Not superseded, just renamed in place.
 
 ---
 
