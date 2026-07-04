@@ -1558,12 +1558,12 @@ export const ToolRegistryEntry = z
   })
   .passthrough();
 export const ToolApprovalActionRequest = z.object({
-  action: z.enum(["approve", "deny", "cancel"]),
+  action: z.enum(["approve", "deny", "cancel", "always"]),
 });
 export const ToolApprovalResponse = z
   .object({
     approval_id: z.string(),
-    action: z.enum(["approve", "deny", "cancel"]),
+    action: z.enum(["approve", "deny", "cancel", "always"]),
     status: z.literal("ok"),
   })
   .passthrough();

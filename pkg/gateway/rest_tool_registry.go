@@ -350,7 +350,17 @@ func resolveConfiguredPolicy(toolName string, cfg *config.AgentToolsCfg) string 
 
 // HandleToolApprovals handles POST /api/v1/tool-approvals/{approval_id}.
 //
-// Body: {"action": "approve"|"deny"|"cancel"}
+// Body: {"action": "approve"|"deny"|"cancel"|"always"}
+//
+//   - approve/deny/cancel — resolve this single pending call (FR-017, FR-018).
+//   - always — resolve this call as approved AND record a session-scoped
+//     "Always Allow" grant for the approval's (session, agent, tool) so future
+//     matching calls in the same session auto-approve without re-prompting.
+//     This is the generic REST replacement for the retired
+//     exec_approval_response{decision:"always"} WS-frame path (ADR-036 §3.4):
+//     it is the writer of ApprovalGrantStore.Record on the generic approval
+//     path, restoring the "Always Allow" grant that agent-delegation-spec.md's
+//     FR-D8 grant-inheritance depends on.
 //
 // Auth:
 //   - Requires valid bearer token (withAuth, FR-014). Unauthenticated → 401.
@@ -381,10 +391,20 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 	if !decodeAndValidate(w, r, "ToolApprovalActionRequest", &body, validateEnabled) {
 		return
 	}
+	// recordGrant is set only for the "always" action. "always" resolves THIS
+	// call exactly like "approve" (identical terminal transition, so the pending
+	// tool call proceeds) and, once that resolve succeeds, records a
+	// session-scoped "Always Allow" grant so future matching calls auto-approve.
+	// The grant's scoping identity is read from the immutable approval entry
+	// below — never from client-supplied fields.
 	var action ApprovalAction
+	var recordGrant bool
 	switch body.Action {
 	case gen.ToolApprovalActionRequestActionApprove:
 		action = ApprovalActionApprove
+	case gen.ToolApprovalActionRequestActionAlways:
+		action = ApprovalActionApprove
+		recordGrant = true
 	case gen.ToolApprovalActionRequestActionDeny:
 		action = ApprovalActionDeny
 	case gen.ToolApprovalActionRequestActionCancel:
@@ -393,7 +413,7 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 		jsonErr(
 			w,
 			http.StatusBadRequest,
-			fmt.Sprintf("unknown action %q: must be approve, deny, or cancel", string(body.Action)),
+			fmt.Sprintf("unknown action %q: must be approve, deny, cancel, or always", string(body.Action)),
 		)
 		return
 	}
@@ -423,6 +443,23 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 	if !resolved {
 		jsonErr(w, http.StatusNotFound, fmt.Sprintf("approval %q not found", approvalID))
 		return
+	}
+
+	// "always": the pending call is now approved — record the session-scoped
+	// grant. Identity (session_id, agent_id, tool) comes from the immutable
+	// approval entry set at creation, never from client-supplied data, so a
+	// caller cannot install a grant for an arbitrary (session, agent, tool).
+	// ApprovalGrantStore.Record is nil-receiver-safe and no-ops on any empty key
+	// component (fail-safe: never records under an empty session/agent/tool key).
+	// This mirrors the outcome of ws_approval.go's legacy decision:"always"
+	// handling, issued from the generic REST site instead (ADR-036 §3.4).
+	if recordGrant {
+		a.agentLoop.ApprovalGrants().Record(entry.SessionID, entry.AgentID, entry.ToolName)
+		slog.Info("tool-approval: recorded session Always-Allow grant",
+			"approval_id", approvalID,
+			"session_id", entry.SessionID,
+			"agent_id", entry.AgentID,
+			"tool", entry.ToolName)
 	}
 
 	jsonOK(w, gen.ToolApprovalResponse{

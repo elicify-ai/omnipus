@@ -14,11 +14,14 @@ properties:
     example: appr_abc123
   action:
     type: string
-    description: The action that was applied.
+    description: >
+      The action that was applied. Echoes the request action, including
+      "always" (approve-and-remember).
     enum:
       - approve
       - deny
       - cancel
+      - always
     example: approve
   status:
     type: string

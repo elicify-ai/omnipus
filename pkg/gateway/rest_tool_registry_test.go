@@ -1022,6 +1022,81 @@ func TestWS_BroadcastToolApprovalRequired_NilEntry(t *testing.T) {
 	handler.broadcastToolApprovalRequired(nil)
 }
 
+// --- REST: POST /api/v1/tool-approvals/{id} with action:"always" (ADR-036 §3.4) ---
+
+// TestApproveTool_ActionAlways_RecordsGrantAndApproves proves the generic REST
+// approval path fully supports the "always" action: a POST with
+// {"action":"always"} BOTH (a) approves the pending tool call — an identical
+// terminal transition to "approve", so the blocked loop goroutine proceeds —
+// AND (b) records a session-scoped "Always Allow" grant for the approval's
+// (session, agent, tool), queryable via ApprovalGrantStore.IsAllowed afterward.
+//
+// This restores, on the generic path, the grant that was previously reachable
+// only via the retired exec_approval_response{decision:"always"} WS frame
+// (ws_approval.go) — the mechanism agent-delegation-spec.md's FR-D8
+// grant-inheritance depends on.
+func TestApproveTool_ActionAlways_RecordsGrantAndApproves(t *testing.T) {
+	api, reg := newTestRestAPIWithApprovalReg(t)
+
+	const (
+		sessionID = "session-always-1"
+		agentID   = "agent-a"
+		toolName  = "bash"
+	)
+	grants := api.agentLoop.ApprovalGrants()
+	require.NotNil(t, grants, "test harness must wire a real ApprovalGrantStore")
+
+	// Precondition: no grant exists for this (session, agent, tool) yet.
+	require.False(t, grants.IsAllowed(sessionID, agentID, toolName),
+		"precondition: no Always-Allow grant may exist before the request")
+
+	entry, accepted := reg.requestApproval(
+		"tc-always", toolName, map[string]any{"command": "ls"}, agentID, sessionID, "turn-1",
+	)
+	require.True(t, accepted)
+
+	// Act: resolve via the generic REST endpoint with action:"always".
+	w := postToolApproval(t, api, entry.ApprovalID, "always")
+
+	// (a1) HTTP 200 with the echoed action and ok status.
+	require.Equal(t, http.StatusOK, w.Code, "always must be accepted with 200")
+	var resp struct {
+		ApprovalID string `json:"approval_id"`
+		Action     string `json:"action"`
+		Status     string `json:"status"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, entry.ApprovalID, resp.ApprovalID)
+	assert.Equal(t, "always", resp.Action, "response must echo the always action")
+	assert.Equal(t, "ok", resp.Status)
+
+	// (a2) The pending tool call proceeds: entry transitioned to approved and the
+	// blocked loop goroutine receives an Approved outcome on its result channel.
+	require.NotNil(t, reg.get(entry.ApprovalID))
+	assert.Equal(t, ApprovalStateApproved, reg.get(entry.ApprovalID).state,
+		"always must resolve the pending call as approved (same as approve)")
+	select {
+	case outcome := <-entry.resultCh:
+		assert.True(t, outcome.Approved, "the pending call must be approved")
+		assert.Equal(t, "approved", outcome.Reason)
+	default:
+		t.Fatal("expected an approved outcome buffered on the entry's resultCh")
+	}
+
+	// (b) A session-scoped grant was recorded and is queryable via IsAllowed.
+	assert.True(t, grants.IsAllowed(sessionID, agentID, toolName),
+		"always must record a grant queryable via ApprovalGrantStore.IsAllowed")
+
+	// Scoping proof (consent boundary): the grant must NOT leak to a different
+	// agent, session, or tool.
+	assert.False(t, grants.IsAllowed(sessionID, "agent-b", toolName),
+		"grant must not apply to a different agent")
+	assert.False(t, grants.IsAllowed("session-other", agentID, toolName),
+		"grant must not apply to a different session")
+	assert.False(t, grants.IsAllowed(sessionID, agentID, "read_file"),
+		"grant must not apply to a different tool")
+}
+
 // Compile-time check that wsConn has the userID field used by emitSessionState.
 var _ = wsConn{userID: ""}
 
