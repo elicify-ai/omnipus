@@ -639,6 +639,32 @@ test(
     const sessionId = await createSession(page)
     await page.goto(`/#/sessions/${sessionId}`)
 
+    // Let the route settle before inspecting the DOM. This test visits '/' first
+    // (above), which now redirects into the default workspace's Chat tab
+    // (DefaultWorkspaceRedirect), mounting WorkspaceTabContainer/ChatControls — the
+    // ONLY render site of the agent-picker-trigger banner. /#/sessions/<id> resolves
+    // via TanStack Router's async route loader (fetchSessionDetail); src/main.tsx sets
+    // no pendingMs/pendingComponent override, so the router's default behaviour keeps
+    // the PREVIOUS route mounted until that loader's fetch resolves. That leaves a
+    // short window, right after this goto, where the old workspace route (WITH the
+    // picker, roster incl. Jim) is still fully mounted and clickable.
+    //
+    // Live repro (trace timeline, ms from test start): goto() to /#/sessions/<id>
+    // completes at t=3598; the loader's GET /api/v1/sessions/<id> starts at t=3671
+    // and doesn't resolve until t=3741. An isVisible() snapshot taken in that gap
+    // (as this code used to do immediately after goto) reads "true" for a picker
+    // that's mid-teardown: picker.click() lands (t=3688-3809, spanning the loader's
+    // resolution), transiently opening a portaled dropdown that unmounts with its
+    // parent route a moment later — so the "Jim" menuitem search a few lines below
+    // then hangs for the full 270s test timeout, having nothing left to find. This
+    // reproduced deterministically (3/3 local runs) before this wait was added.
+    //
+    // waitForLoadState('networkidle') gives the loader's fetch (and the effect it
+    // drives) time to resolve, so every check below reflects the FINAL settled
+    // route rather than a transient one. An open WebSocket does not block networkidle
+    // (see tests/e2e/idle-no-reconnect.spec.ts, which asserts exactly that).
+    await page.waitForLoadState('networkidle')
+
     const input = chatInput(page)
     await expect(input).toBeEnabled({ timeout: 20_000 })
 
@@ -648,11 +674,11 @@ test(
     // inline WITHOUT the workspace ChatControls top-bar (which lives in
     // WorkspaceTabContainer, mounted only on the / workspace view). The
     // agent-picker trigger (data-testid="agent-picker-trigger") is part of
-    // ChatControls, so it is genuinely absent on this route. Additionally,
-    // createSession() above already defaults to agentID:'jim', so Jim is
-    // already the active agent — the switch is redundant. Attempt it only if
-    // the picker happens to be visible (e.g. the route is later migrated to
-    // use WorkspaceTabContainer), otherwise proceed with the already-active Jim.
+    // ChatControls, so it is genuinely absent on this route once settled (see the
+    // networkidle wait above). Additionally, createSession() above already defaults
+    // to agentID:'jim', so Jim is already the active agent — the switch is redundant.
+    // Attempt it only if the picker happens to be visible (e.g. the route is later
+    // migrated to use WorkspaceTabContainer), otherwise proceed with the already-active Jim.
     const picker = agentPicker(page)
     const pickerVisible = await picker.isVisible().catch(() => false)
     if (pickerVisible) {
