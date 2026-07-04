@@ -961,11 +961,12 @@ func TestPostAgentsExecutorSmokeTest_AgentIDResolvesToRealWorkspace(t *testing.T
 // proves the CoreTeam-membership override added alongside the
 // pkg/agent/loop.go / external_dispatch.go fix: when agent_id names a real,
 // saved agent that ALSO belongs to a real Workspace's core_team, the smoke
-// test must run in that Workspace's own SHARED directory
-// ($OMNIPUS_HOME/workspaces/{id}/), not the agent's private
-// $OMNIPUS_HOME/agents/{id}/ — mirroring exactly what a genuine dispatch to
-// this agent would do, so the smoke test's "test the real thing" contract
-// holds even for CoreTeam members.
+// test must run in that Workspace's dedicated project-work subdirectory
+// ($OMNIPUS_HOME/workspaces/{id}/work/), not the agent's private
+// $OMNIPUS_HOME/agents/{id}/ and not the workspace's own root directory
+// (which also holds AGENT.md and the shared memory room) — mirroring exactly
+// what a genuine dispatch to this agent would do, so the smoke test's "test
+// the real thing" contract holds even for CoreTeam members.
 func TestPostAgentsExecutorSmokeTest_AgentIDIsCoreTeamMember_UsesWorkspaceSharedDir(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("stub uses a POSIX shell script")
@@ -1001,16 +1002,19 @@ func TestPostAgentsExecutorSmokeTest_AgentIDIsCoreTeamMember_UsesWorkspaceShared
 	fake.mu.Unlock()
 	require.True(t, captured, "driver.Run must have been called")
 
-	wantDir := filepath.Join(home, "workspaces", "smoke-test-team-ws")
+	wsRoot := filepath.Join(home, "workspaces", "smoke-test-team-ws")
+	wantDir := filepath.Join(wsRoot, "work")
 	assert.Equal(t, wantDir, gotWorkDir,
-		"CoreTeam membership must route the run to the Workspace's own shared directory")
+		"CoreTeam membership must route the run to the Workspace's dedicated work/ directory")
 	assert.NotEqual(t, agentWorkspace, gotWorkDir,
 		"the run must NOT use the agent's private per-agent directory when it is a CoreTeam member")
+	assert.NotEqual(t, wsRoot, gotWorkDir,
+		"the run must NOT use the workspace's own root directory — only its work/ subdirectory")
 
-	// The Workspace's shared dir must actually exist (MkdirAll applies to
-	// whichever directory was ultimately chosen).
+	// The Workspace's dedicated work/ dir must actually exist (MkdirAll
+	// applies to whichever directory was ultimately chosen).
 	info, statErr := os.Stat(wantDir)
-	require.NoError(t, statErr, "the workspace's shared directory must exist after the request")
+	require.NoError(t, statErr, "the workspace's work/ directory must exist after the request")
 	assert.True(t, info.IsDir())
 
 	// The agent's own private directory (and its marker file) must still be

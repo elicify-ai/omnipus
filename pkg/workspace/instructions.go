@@ -29,8 +29,22 @@ var ErrInstructionsTooLarge = errors.New("workspace: instructions too large")
 // Project Instructions — a single instruction block injected as a per-turn
 // context layer for every agent acting in the workspace. It lives in the
 // workspace's own directory (workspaces/<id>/AGENT.md), alongside the shared
-// memory room (workspaces/<id>/.omnipus/).
+// memory room (workspaces/<id>/.omnipus/) and the work/ subdirectory (below).
 const instructionsFileName = "AGENT.md"
+
+// workDirName is the dedicated subdirectory, under a workspace's own directory,
+// where CoreTeam members actually do their file/exec work
+// (workspaces/<id>/work/) — see WorkDir/SafeWorkDir. Kept separate from
+// instructionsFileName (AGENT.md) and the shared memory room (.omnipus/), both
+// of which live directly under WorkspaceDir, one level up: a generic
+// write_file/edit_file/exec confined (via os.Root) to WorkDir cannot reach
+// either, by construction — not merely guarded against, but outside the
+// confined root entirely. See ADR-032's amendment for the history: an earlier
+// version of this feature bound tools directly to WorkspaceDir, which left
+// AGENT.md reachable by a plain write_file("AGENT.md", ...) — the app-level
+// metadata guard (pkg/tools/metadata_guard.go) only recognizes the
+// agents/<id>/ layout and does not match workspaces/<id>/AGENT.md at all.
+const workDirName = "work"
 
 // maxInstructionsBytes is the upper bound enforced at the storage layer. It is
 // a BYTE count (matching len(content)); the WorkspaceInstructionsRequest
@@ -63,6 +77,28 @@ func SafeWorkspaceDir(home, id string) (string, error) {
 		return "", fmt.Errorf("%w: %q", ErrInvalidWorkspaceID, id)
 	}
 	return WorkspaceDir(home, id), nil
+}
+
+// WorkDir returns the dedicated project-work directory (workspaces/<id>/work/)
+// under home — where CoreTeam members' file/exec tools are actually rooted, as
+// opposed to WorkspaceDir (workspaces/<id>/) itself, which also holds AGENT.md
+// and the shared memory room. Does NOT validate id — use SafeWorkDir when the
+// id is externally influenced and will be used to build a filesystem root.
+func WorkDir(home, id string) string {
+	return filepath.Join(WorkspaceDir(home, id), workDirName)
+}
+
+// SafeWorkDir returns the dedicated project-work directory after validating
+// that id cannot escape the workspaces/ root. It is the sanctioned way to turn
+// an externally-influenced workspace id into the filesystem root that agents'
+// file/exec tools are confined to (e.g. the CoreTeam-based re-rooting in the
+// agent loop and external-cli dispatch). Returns ErrInvalidWorkspaceID for an
+// unsafe id.
+func SafeWorkDir(home, id string) (string, error) {
+	if !safeID(id) {
+		return "", fmt.Errorf("%w: %q", ErrInvalidWorkspaceID, id)
+	}
+	return WorkDir(home, id), nil
 }
 
 // instructionsPath returns the absolute path of a workspace's AGENT.md.
