@@ -379,6 +379,7 @@ func TestIntegration_RememberRecallRoundTrip(t *testing.T) {
 	workspace := t.TempDir()
 	home := t.TempDir()
 	store := NewMemoryStore(workspace, home)
+	t.Cleanup(store.Close)
 	adapter := NewMemoryStoreAdapter(store)
 
 	remember := tools.NewRememberTool(adapter, nil)
