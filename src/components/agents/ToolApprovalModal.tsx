@@ -9,9 +9,10 @@
 // is independent of gateway clock skew.
 //
 // Buttons:
-//   Approve → POST /api/v1/tool-approvals/{id} {action:"approve"}
-//   Deny    → POST /api/v1/tool-approvals/{id} {action:"deny"}
-//   Cancel  → POST /api/v1/tool-approvals/{id} {action:"cancel"}
+//   Approve      → POST /api/v1/tool-approvals/{id} {action:"approve"}
+//   Always Allow → POST /api/v1/tool-approvals/{id} {action:"always"}
+//   Deny         → POST /api/v1/tool-approvals/{id} {action:"deny"}
+//   Cancel       → POST /api/v1/tool-approvals/{id} {action:"cancel"}
 //
 // Accessibility (C2 — this is a SECURITY-CRITICAL control):
 //   - Built on the shadcn/Radix Dialog primitive, which provides a focus trap,
@@ -42,27 +43,18 @@
 //     commands. See formatBashCommand() below and its use in ToolApprovalCard
 //     — rendered whenever toolName is "bash" and args.command is a string,
 //     in addition to (not instead of) the generic Arguments JSON dump.
-//   - NOT PORTED, FLAGGED AS A FOLLOW-UP: ExecApprovalBlock's 3-way decision
-//     (Allow / Deny / "Always Allow") vs. this modal's 2-way
-//     (Approve / Deny / Cancel). "Always Allow" isn't just missing UI here —
-//     ApprovalGrantStore.Record (pkg/security/approvalgrants.go), the ONLY
-//     thing that ever populates a session "Always Allow" grant, is called
-//     from exactly one place today: ws_approval.go's handling of the
-//     exec_approval_response frame with decision:"always". The generic
-//     POST /api/v1/tool-approvals/{id} endpoint's ToolApprovalActionRequest
-//     only supports approve/deny/cancel — no equivalent action exists.
-//     Retiring the exec-only flow with nothing replacing that call site means
-//     "Always Allow" becomes permanently unreachable for EVERY tool (not
-//     just bash), which would silently break the grant-inheritance behavior
-//     agent-delegation-spec.md's FR-D8 depends on. Fixing this needs a wire
-//     contract change (a new "always" value on ToolApprovalActionRequest.action
-//     per Constraint #8's 5-step process) plus backend wiring to
-//     ApprovalGrantStore.Record — both out of frontend scope. This must be
-//     resolved (by the ADR-036 backend wave or a fast-follow) before/alongside
-//     shipping the retirement, not silently dropped.
+//   - PORTED: ExecApprovalBlock's 3-way decision (Allow / Deny / "Always
+//     Allow") is now fully available here too — the Always Allow button
+//     posts {action:"always"}, which the gateway resolves by approving the
+//     call AND recording a session-scoped grant via ApprovalGrantStore.Record
+//     (pkg/gateway/rest_tool_registry.go, commit 35447760). The wire contract
+//     (ToolApprovalActionRequest.action) carries "always" for every tool, not
+//     just bash — closing the gap that used to make grant-inheritance
+//     (agent-delegation-spec.md FR-D8) reachable only via the retired
+//     exec-only flow.
 
 import { useEffect, useState, useCallback, useRef } from 'react'
-import { CheckCircle, XCircle, ProhibitInset, Shield } from '@phosphor-icons/react'
+import { CheckCircle, XCircle, ProhibitInset, Shield, Lock } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import {
@@ -157,7 +149,10 @@ function ToolApprovalCard({
   const hasExpired = remainingMs <= 0
 
   const handleAction = useCallback(
-    async (action: 'approve' | 'deny' | 'cancel') => {
+    // Action union sourced from postToolApproval's own signature (which in
+    // turn is the generated ToolApprovalActionRequest['action']) rather than
+    // a hand-rolled literal, per Constraint #8.
+    async (action: Parameters<typeof postToolApproval>[1]) => {
       if (submitting) return
       setSubmitting(true)
       try {
@@ -339,9 +334,17 @@ function ToolApprovalCard({
           )}
         </div>
 
-        {/* Action buttons */}
+        {/* Action buttons.
+            Approve/Deny carry equal visual weight as the primary decision.
+            Always Allow is a de-emphasized (ghost) secondary action — it
+            approves this call AND records a session-scoped grant, mirroring
+            the retired ExecApprovalBlock's "Always Allow" ghost button (same
+            Lock icon + muted styling) — see the ADR-036 note atop this file.
+            Cancel stays last and right-aligned (ml-auto) as the least common
+            action. flex-wrap keeps all four usable at phone widths (<768px)
+            without any button clipping. */}
         {!hasExpired && (
-          <div className="flex gap-2 px-5 py-4 border-t border-[var(--color-border)] bg-[var(--color-surface-2)]">
+          <div className="flex flex-wrap gap-2 px-5 py-4 border-t border-[var(--color-border)] bg-[var(--color-surface-2)]">
             <Button
               size="sm"
               variant="default"
@@ -362,6 +365,17 @@ function ToolApprovalCard({
             >
               <XCircle size={14} weight="bold" aria-hidden="true" />
               Deny
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              data-testid="always-allow-toggle"
+              onClick={() => handleAction('always')}
+              disabled={submitting}
+              className="h-8 text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] flex-1 sm:flex-none"
+            >
+              <Lock size={14} aria-hidden="true" />
+              Always Allow
             </Button>
             <Button
               size="sm"

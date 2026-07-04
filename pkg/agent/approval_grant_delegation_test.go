@@ -30,26 +30,34 @@
 // production dispatch-and-identity-resolution logic — not a hand-constructed
 // mismatch that could never occur from a real turnState.
 //
-// Scope note (read before extending): the "child's own deny policy overrides
-// an inherited grant" ordering property is implemented in
-// wsApprovalHook.ApproveTool (pkg/gateway/ws_approval.go) — policy is
-// resolved FIRST and short-circuits before the grant store is ever consulted.
-// That property is already independently verified by
-// pkg/gateway/ws_approval_grants_test.go (TestApproveTool_PolicyDenyOverridesGrant,
-// TestApproveTool_PolicyAllowNeverPrompts, TestApproveTool_AskWithGrantAutoApproves)
-// and is UNCHANGED by this spec (task instructions explicitly forbid modifying
-// ws_approval.go as part of this merge). pkg/gateway imports pkg/agent — so a
-// pkg/agent test file importing pkg/gateway back would pull the entire gateway
-// package (and its goolm/matrix build weight the project explicitly guards
-// against linking gratuitously, see CLAUDE.md's CI guidance) into every
-// `go test ./pkg/agent/...` run. These two tests therefore prove the NEW part
-// specific to this merge — that Inherit fires correctly via the real
-// spawnSubTurn call path, including transitively across three real hops — and
-// rely on the pre-existing pkg/gateway tests for the policy-ordering half.
+// UPDATE (ADR-036 §3.4, gate consolidation, 2026-07-04): the legacy WS-frame
+// tool-approval gate (wsApprovalHook, pkg/gateway/ws_approval.go) has been
+// DELETED — it ran before runTurn's TOCTOU "ask" branch and had become
+// permanently unreachable once its answering frontend UI was removed. Grant
+// consultation now lives SOLELY in AgentLoop.CheckGrantOrRequestApproval
+// (pkg/agent/loop.go), which is exported specifically so it is directly
+// callable from a test in THIS package — no cross-package pkg/gateway import
+// needed anymore. The two tests below therefore no longer stop at proving
+// Inherit populated the grant store; they go one step further and drive the
+// actual approval DECISION through CheckGrantOrRequestApproval using the
+// child's (or grandchild's) real post-inheritance identity, proving:
+//   - a granted tool auto-approves without ever reaching the interactive
+//     approver (agent-delegation-spec.md User Story 2: "the child's first
+//     call to that tool does not prompt again"), and
+//   - an UN-granted tool still reaches the interactive approver, so the
+//     grant does not blanket-approve every tool the child might call.
+//
+// The "policy deny overrides an existing grant" / "policy allow never
+// prompts" properties (independent of any grant) are covered by
+// TestToolApproval_PolicyDenyOverridesGrant / _PolicyAllowNeverPrompts in
+// pkg/gateway/ws_approval_grants_test.go, which exercise
+// AgentLoop.ResolveApprovalToolPolicy — a plain-string-in/string-out method
+// pkg/gateway can call without needing a *turnState.
 package agent
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -58,6 +66,45 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/tools"
 )
+
+// neverCallApprover is a PolicyApprover whose RequestApproval fails the test
+// immediately if invoked. Used to prove a tool call was auto-approved via the
+// grant store (AgentLoop.CheckGrantOrRequestApproval) without ever reaching
+// the interactive approval path — the "no re-prompt" half of the grant
+// contract.
+type neverCallApprover struct{ t *testing.T }
+
+func (n *neverCallApprover) RequestApproval(_ context.Context, req PolicyApprovalReq) (bool, string) {
+	n.t.Helper()
+	n.t.Fatalf(
+		"RequestApproval must not be called for a granted tool (tool=%q, session=%q, agent=%q) — the grant should have auto-approved it",
+		req.ToolName, req.SessionID, req.AgentID,
+	)
+	return false, "unreachable"
+}
+
+// scriptedApprover is a PolicyApprover that records every call it receives
+// and returns a fixed outcome. Used to prove the interactive approval path IS
+// reached for a tool that has no matching grant on file.
+type scriptedApprover struct {
+	mu     sync.Mutex
+	calls  int
+	result bool
+	reason string
+}
+
+func (s *scriptedApprover) RequestApproval(_ context.Context, _ PolicyApprovalReq) (bool, string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls++
+	return s.result, s.reason
+}
+
+func (s *scriptedApprover) callCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls
+}
 
 // newGrantChainAgentLoop builds an AgentLoop with a default (native) agent
 // plus two subagent_3p-style external-cli worker agents ("child-agent",
@@ -184,13 +231,37 @@ func TestApprovalGrant_FullChainSpawnInheritDeny(t *testing.T) {
 		t.Fatal("expected child-agent to inherit the parent's 'bash' grant via the real spawnSubTurn -> Inherit call")
 	}
 
-	// 4. The child's own `deny` policy for "bash" would still deny the call
-	// despite this inherited grant — that ordering (policy resolved FIRST,
-	// short-circuiting before IsAllowed is ever consulted) lives in
-	// wsApprovalHook.ApproveTool (pkg/gateway/ws_approval.go), is unchanged by
-	// this spec, and is independently verified by
-	// TestApproveTool_PolicyDenyOverridesGrant (pkg/gateway/ws_approval_grants_test.go).
-	// See the file-level scope note for why it is not re-verified here.
+	// 4. THE END-TO-END PROOF (ADR-036 §3.4, FR-D5): drive the actual approval
+	// DECISION through AgentLoop.CheckGrantOrRequestApproval — the SOLE
+	// consultation point now that the legacy WS-frame gate is gone — using the
+	// child's REAL post-inheritance identity (sessionID, "child-agent"). A
+	// neverCallApprover that fails the test if invoked proves the inherited
+	// grant auto-approves "bash" without ever re-prompting.
+	al.SetToolApprover(&neverCallApprover{t: t})
+	approved, denialReason := al.CheckGrantOrRequestApproval(
+		context.Background(), sessionID, "child-agent", "bash", "grant-chain-verify-1", "verify-turn-1", nil,
+	)
+	if !approved {
+		t.Fatalf("expected the child's inherited grant to auto-approve 'bash' without prompting, got denied: %s", denialReason)
+	}
+
+	// 5. Conversely, a tool the child was NEVER granted must still reach the
+	// interactive approver — the inherited grant does not blanket-approve
+	// every tool, only the exact (session, agent, tool) it was recorded for.
+	scripted := &scriptedApprover{result: false, reason: "denied for test"}
+	al.SetToolApprover(scripted)
+	approved, denialReason = al.CheckGrantOrRequestApproval(
+		context.Background(), sessionID, "child-agent", "read_file", "grant-chain-verify-2", "verify-turn-1", nil,
+	)
+	if approved {
+		t.Fatal("expected an ungranted tool to require interactive approval, not auto-approve")
+	}
+	if denialReason != "denied for test" {
+		t.Fatalf("expected the scripted approver's denial reason to surface, got %q", denialReason)
+	}
+	if got := scripted.callCount(); got != 1 {
+		t.Fatalf("expected the approver to be consulted exactly once for an ungranted tool, got %d calls", got)
+	}
 }
 
 // TestApprovalGrant_TransitiveAcrossThreeLevels is the FR-D8 regression test:
@@ -300,5 +371,19 @@ func TestApprovalGrant_TransitiveAcrossThreeLevels(t *testing.T) {
 	// this point already includes what it inherited from the grandparent in hop 1).
 	if !al.ApprovalGrants().IsAllowed(sessionID, "grandchild-agent", "bash") {
 		t.Fatal("expected grandchild-agent to inherit the grandparent's 'bash' grant transitively across two real spawnSubTurn hops")
+	}
+
+	// 5. THE END-TO-END PROOF (ADR-036 §3.4): drive the actual approval
+	// DECISION for grandchild-agent through AgentLoop.CheckGrantOrRequestApproval
+	// — the SOLE consultation point now that the legacy WS-frame gate is gone
+	// — proving the transitively-inherited grant auto-approves "bash" two
+	// delegation hops away from the original grantor, without ever reaching
+	// the interactive approver.
+	al.SetToolApprover(&neverCallApprover{t: t})
+	approved, denialReason := al.CheckGrantOrRequestApproval(
+		context.Background(), sessionID, "grandchild-agent", "bash", "grant-chain-verify-transitive", "verify-turn-1", nil,
+	)
+	if !approved {
+		t.Fatalf("expected grandchild-agent's transitively-inherited grant to auto-approve 'bash' without prompting, got denied: %s", denialReason)
 	}
 }

@@ -109,45 +109,6 @@ type ErrorFrame struct {
 	Type      string  `json:"type"`
 }
 
-// ExecApprovalExpiredFrame — Server → client exec approval request timed out.
-type ExecApprovalExpiredFrame struct {
-	Id        string  `json:"id"`
-	Message   *string `json:"message,omitempty"`
-	SessionId string  `json:"session_id"`
-	Type      string  `json:"type"`
-}
-
-// ExecApprovalRequestFrame — Server → client exec approval needed. The `command` field carries the tool name for display. Optional `tool` and `params` carry structured tool call information.
-type ExecApprovalRequestFrame struct {
-	// Tool name used as primary display string in the approval modal.
-	Command       string  `json:"command"`
-	Id            string  `json:"id"`
-	MatchedPolicy *string `json:"matched_policy,omitempty"`
-	// Human-readable approval request message.
-	Message *string `json:"message,omitempty"`
-	// Tool invocation arguments. May be absent for parameter-less tools.
-	Params    map[string]any `json:"params,omitempty"`
-	SessionId string         `json:"session_id"`
-	// Structured tool name (same value as command).
-	Tool       *string `json:"tool,omitempty"`
-	Type       string  `json:"type"`
-	WorkingDir *string `json:"working_dir,omitempty"`
-}
-
-// ExecApprovalResponseAckFrame — Server → client exec approval response acknowledged.
-type ExecApprovalResponseAckFrame struct {
-	Id        *string `json:"id,omitempty"`
-	SessionId *string `json:"session_id,omitempty"`
-	Type      string  `json:"type"`
-}
-
-// ExecApprovalResponseFrame — Client → server exec approval decision.
-type ExecApprovalResponseFrame struct {
-	Decision string `json:"decision"`
-	Id       string `json:"id"`
-	Type     string `json:"type"`
-}
-
 // MarshalErrorResult — Sentinel for tool results that failed json.Marshal.
 type MarshalErrorResult struct {
 	MarshalError string `json:"_marshal_error"`
@@ -428,7 +389,6 @@ const (
 	WsFrameTypeAuth                     WsFrameType = "auth"
 	WsFrameTypeMessage                  WsFrameType = "message"
 	WsFrameTypeCancel                   WsFrameType = "cancel"
-	WsFrameTypeExecApprovalResponse     WsFrameType = "exec_approval_response"
 	WsFrameTypePing                     WsFrameType = "ping"
 	WsFrameTypeAttachSession            WsFrameType = "attach_session"
 	WsFrameTypeDevicePairingResponse    WsFrameType = "device_pairing_response"
@@ -441,8 +401,6 @@ const (
 	WsFrameTypeToolCallResult           WsFrameType = "tool_call_result"
 	WsFrameTypeSubagentStart            WsFrameType = "subagent_start"
 	WsFrameTypeSubagentEnd              WsFrameType = "subagent_end"
-	WsFrameTypeExecApprovalRequest      WsFrameType = "exec_approval_request"
-	WsFrameTypeExecApprovalExpired      WsFrameType = "exec_approval_expired"
 	WsFrameTypeTaskStatusChanged        WsFrameType = "task_status_changed"
 	WsFrameTypeReplayMessage            WsFrameType = "replay_message"
 	WsFrameTypeReplayError              WsFrameType = "replay_error"
@@ -456,7 +414,6 @@ const (
 	WsFrameTypeCancelStage              WsFrameType = "cancel_stage"
 	WsFrameTypePong                     WsFrameType = "pong"
 	WsFrameTypeSessionCloseAck          WsFrameType = "session_close_ack"
-	WsFrameTypeExecApprovalResponseAck  WsFrameType = "exec_approval_response_ack"
 	WsFrameTypeDevicePairingRequest     WsFrameType = "device_pairing_request"
 	WsFrameTypeWhatsappPairing          WsFrameType = "whatsapp_pairing"
 	WsFrameTypeWhatsappPairingSubscribe WsFrameType = "whatsapp_pairing_subscribe"

@@ -409,25 +409,6 @@ func FixtureSubagentEndFrame_ZeroValue() SubagentEndFrame {
 	return SubagentEndFrame{}
 }
 
-// ExecApprovalRequestFrame
-
-func FixtureExecApprovalRequestFrame_Populated() ExecApprovalRequestFrame {
-	matchedPolicy := "allow_list"
-	workingDir := "/workspace"
-	return ExecApprovalRequestFrame{
-		Type:          "exec_approval_request",
-		SessionId:     "sess-1",
-		Id:            "exec-req-1",
-		Command:       "rm -rf /tmp/build",
-		MatchedPolicy: &matchedPolicy,
-		WorkingDir:    &workingDir,
-	}
-}
-
-func FixtureExecApprovalRequestFrame_ZeroValue() ExecApprovalRequestFrame {
-	return ExecApprovalRequestFrame{}
-}
-
 // ReplayMessageFrame
 
 func FixtureReplayMessageFrame_Populated() ReplayMessageFrame {
@@ -583,22 +564,6 @@ func FixtureDevicePairingRequestFrame_Populated() DevicePairingRequestFrame {
 
 func FixtureDevicePairingRequestFrame_ZeroValue() DevicePairingRequestFrame {
 	return DevicePairingRequestFrame{}
-}
-
-// ExecApprovalResponseAckFrame
-
-func FixtureExecApprovalResponseAckFrame_Populated() ExecApprovalResponseAckFrame {
-	id := "exec-req-1"
-	sessId := "sess-1"
-	return ExecApprovalResponseAckFrame{
-		Type:      "exec_approval_response_ack",
-		Id:        &id,
-		SessionId: &sessId,
-	}
-}
-
-func FixtureExecApprovalResponseAckFrame_ZeroValue() ExecApprovalResponseAckFrame {
-	return ExecApprovalResponseAckFrame{}
 }
 
 // ── REST response type fixtures (OpenAPI) ────────────────────────────────────
@@ -869,32 +834,6 @@ func FixtureDevicePairingResponseFrame_Edge() DevicePairingResponseFrame {
 	}
 }
 
-// ExecApprovalResponseFrame — client → server exec approval decision.
-// Traces to: contracts/asyncapi.yaml ExecApprovalResponseFrame schema.
-
-func FixtureExecApprovalResponseFrame_Populated() ExecApprovalResponseFrame {
-	return ExecApprovalResponseFrame{
-		Type:     "exec_approval_response",
-		Id:       "exec-req-550e8400-e29b-41d4-a716-446655440003",
-		Decision: "allow",
-	}
-}
-
-// FixtureExecApprovalResponseFrame_ZeroValue — Go zero values.
-// Expected: FAIL because type="", id="" (minLength:1), decision="" (not in enum).
-func FixtureExecApprovalResponseFrame_ZeroValue() ExecApprovalResponseFrame {
-	return ExecApprovalResponseFrame{}
-}
-
-// FixtureExecApprovalResponseFrame_Edge — deny decision (other valid enum value).
-func FixtureExecApprovalResponseFrame_Edge() ExecApprovalResponseFrame {
-	return ExecApprovalResponseFrame{
-		Type:     "exec_approval_response",
-		Id:       "exec-req-" + repeatStr("e", 36),
-		Decision: "deny",
-	}
-}
-
 // MessageFrame — client → server user chat message.
 // Traces to: contracts/asyncapi.yaml MessageFrame schema.
 
@@ -949,7 +888,7 @@ func FixturePingFrame_Edge() PingFrame {
 
 // ── REST response type fixtures ─────────────────────────────────────────────
 //
-// Covers Task, ExecApprovalExpiredFrame, SessionCloseFrame, and related types.
+// Covers Task, SessionCloseFrame, and related types.
 
 // ── Task ─────────────────────────────────────────────────────────────────────
 // Traces to: contracts/components/schemas/Task.yaml
@@ -1526,35 +1465,6 @@ func FixtureStorageStats_NilWarningsAllowed() StorageStats {
 		MemoryEntryCount:   0,
 		OldestSessionDate:  &oldest,
 		Warnings:           nil, // optional — nil is valid
-	}
-}
-
-// ── ExecApprovalExpiredFrame ──────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/ExecApprovalExpiredFrame.yaml
-
-func FixtureExecApprovalExpiredFrame_Populated() ExecApprovalExpiredFrame {
-	msg := "Exec approval for 'rm -rf /tmp/build' expired after 30s — no admin response"
-	return ExecApprovalExpiredFrame{
-		Type:      "exec_approval_expired",
-		Id:        "exec-req-550e8400-e29b-41d4-a716-446655440001",
-		SessionId: "sess-550e8400-e29b-41d4-a716-446655440002",
-		Message:   &msg,
-	}
-}
-
-// FixtureExecApprovalExpiredFrame_ZeroValue — Go zero values.
-// Expected: FAIL because type="" (const: exec_approval_expired), id="", session_id="".
-func FixtureExecApprovalExpiredFrame_ZeroValue() ExecApprovalExpiredFrame {
-	return ExecApprovalExpiredFrame{}
-}
-
-// FixtureExecApprovalExpiredFrame_Edge — no message (optional), short IDs.
-func FixtureExecApprovalExpiredFrame_Edge() ExecApprovalExpiredFrame {
-	return ExecApprovalExpiredFrame{
-		Type:      "exec_approval_expired",
-		Id:        "exec-req-" + repeatStr("e", 36),
-		SessionId: "sess-" + repeatStr("s", 36),
-		// Message omitted — optional per schema
 	}
 }
 

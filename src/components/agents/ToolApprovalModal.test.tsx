@@ -6,6 +6,7 @@
 //  3. Approve button calls POST /api/v1/tool-approvals/{id} with action:"approve"
 //  4. Deny button calls POST with action:"deny"
 //  5. Cancel button calls POST with action:"cancel"
+//  5b. Always Allow button calls POST with action:"always" (ADR-036 §3.4 gap closure)
 //  6. On 410 response, modal entry is dismissed without a toast
 //  7. On 403 response, shows admin-required toast
 //  8. On 401 response, shows re-auth toast
@@ -90,6 +91,7 @@ describe('ToolApprovalModal — rendering', () => {
     expect(screen.getByText('Tool Approval Required')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Approve/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Deny/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Always Allow/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Cancel/i })).toBeInTheDocument()
   })
 
@@ -220,6 +222,22 @@ describe('ToolApprovalModal — button dispatch', () => {
     })
   })
 
+  // ADR-036 §3.4 gap closure: the retired ExecApprovalBlock's 3-way decision
+  // (Allow / Deny / "Always Allow") is now fully reachable from the generic
+  // modal for every tool, not just bash.
+  it('Always Allow button calls postToolApproval with action:"always"', async () => {
+    act(() => {
+      useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
+    })
+    render(<ToolApprovalModal />)
+
+    fireEvent.click(screen.getByRole('button', { name: /Always Allow/i }))
+
+    await waitFor(() => {
+      expect(api.postToolApproval).toHaveBeenCalledWith('appr-001', 'always')
+    })
+  })
+
   it('removes approval from queue after successful Approve', async () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
@@ -227,6 +245,19 @@ describe('ToolApprovalModal — button dispatch', () => {
     render(<ToolApprovalModal />)
 
     fireEvent.click(screen.getByRole('button', { name: /Approve/i }))
+
+    await waitFor(() => {
+      expect(useToolApprovalStore.getState().queue).toHaveLength(0)
+    })
+  })
+
+  it('removes approval from queue after successful Always Allow', async () => {
+    act(() => {
+      useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
+    })
+    render(<ToolApprovalModal />)
+
+    fireEvent.click(screen.getByRole('button', { name: /Always Allow/i }))
 
     await waitFor(() => {
       expect(useToolApprovalStore.getState().queue).toHaveLength(0)

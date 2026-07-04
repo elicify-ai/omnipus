@@ -109,8 +109,10 @@ type ApprovalOutcome struct {
 // approvalRegistryV2 is the central in-process approval registry (FR-016, FR-070).
 // It enforces the saturation cap (default 64) and the full Approval State Table.
 //
-// The V2 suffix distinguishes it from the legacy wsApprovalRegistry (kept for the
-// existing exec_approval_request/response WS protocol) which remains untouched.
+// The V2 suffix is historical: it originally distinguished this registry from
+// the legacy wsApprovalRegistry / exec_approval_request/response WS protocol
+// (wsApprovalHook, pkg/gateway/ws_approval.go), which ADR-036 §3.4 retired —
+// this registry is now the SOLE tool-approval mechanism.
 type approvalRegistryV2 struct {
 	mu      sync.Mutex
 	entries map[string]*approvalEntry // approval_id → entry

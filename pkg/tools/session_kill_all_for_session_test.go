@@ -1,9 +1,15 @@
 package tools
 
 import (
+	"bufio"
+	"bytes"
+	"encoding/json"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -125,4 +131,91 @@ func TestSessionManager_KillAllForSession_DoesNotAffectOtherOwners(t *testing.T)
 	gotB, err := sm.Get("b1")
 	require.NoError(t, err)
 	require.Equal(t, "running", gotB.GetStatus(), "session B's background work must be left untouched")
+}
+
+// captureSlogInfo redirects slog's default logger to a buffer at INFO level
+// for the duration of the test, restoring the previous default on cleanup.
+// Mirrors the established log-capture pattern in
+// pkg/config/shell_tool_policy_migration_test.go's captureSlog (which
+// captures WARN-level output for the malformed-legacy-value test) — same
+// mechanism, lower level threshold, since FR-B14's kill-cascade line is
+// logged at INFO, not WARN.
+func captureSlogInfo(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	handler := slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})
+	oldDefault := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	t.Cleanup(func() { slog.SetDefault(oldDefault) })
+	return &buf
+}
+
+// findLogEntry scans buf as JSONL (one JSON object per line, the shape
+// slog.NewJSONHandler produces) and returns the first entry whose "msg"
+// field contains substr, or nil if none matched.
+func findLogEntry(t *testing.T, buf *bytes.Buffer, substr string) map[string]any {
+	t.Helper()
+	scanner := bufio.NewScanner(strings.NewReader(buf.String()))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		var entry map[string]any
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			continue
+		}
+		if msg, ok := entry["msg"].(string); ok && strings.Contains(msg, substr) {
+			return entry
+		}
+	}
+	return nil
+}
+
+// TestSessionManager_KillAllForSession_LogsSessionDetails covers FR-B14's
+// observability requirement directly: the BDD Scenario "Canceling a session
+// kills its background bash sessions" (bash-tool-spec.md line 472) requires
+// KillAllForSession to log ONE INFO line naming the session ID, PID, and
+// elapsed runtime — not just increment the kill counter, which
+// TestSessionManager_KillAllForSession above already covers but never
+// inspects the log content itself. A regression that incremented the counter
+// correctly but dropped or garbled the log line (e.g. omitted the PID, or
+// logged the OTHER session's ID) would pass every existing assertion in this
+// file today.
+func TestSessionManager_KillAllForSession_LogsSessionDetails(t *testing.T) {
+	buf := captureSlogInfo(t)
+
+	sm := NewSessionManager()
+	const wantElapsedMin = 42
+	startTime := time.Now().Unix() - wantElapsedMin
+	pid := fakeUnusedPIDBase + 777
+	sess := &ProcessSession{
+		ID:             "sess-log-details",
+		OwnerSessionID: "owner-log-details",
+		Status:         "running",
+		PID:            pid,
+		StartTime:      startTime,
+	}
+	sm.Add(sess)
+
+	killed := sm.KillAllForSession("owner-log-details")
+	require.Equal(t, 1, killed)
+
+	entry := findLogEntry(t, buf, "killed background session on cancel cascade")
+	require.NotNil(t, entry, "expected an INFO log line for the killed session; got log output: %s", buf.String())
+
+	assert.Equal(t, "sess-log-details", entry["session_id"], "log line must name the session ID that was killed")
+	assert.Equal(t, "owner-log-details", entry["owner_session_id"], "log line must name the owning session")
+
+	// JSON numbers decode as float64 via encoding/json's default map[string]any.
+	gotPID, ok := entry["pid"].(float64)
+	require.True(t, ok, "log line must carry a numeric pid field, got %#v", entry["pid"])
+	assert.Equal(t, float64(pid), gotPID, "log line must name the REAL PID of the killed session")
+
+	gotElapsed, ok := entry["elapsed_seconds"].(float64)
+	require.True(t, ok, "log line must carry a numeric elapsed_seconds field, got %#v", entry["elapsed_seconds"])
+	assert.GreaterOrEqual(t, gotElapsed, float64(wantElapsedMin),
+		"elapsed_seconds must reflect the REAL runtime (session started %ds ago)", wantElapsedMin)
+	assert.Less(t, gotElapsed, float64(wantElapsedMin+10),
+		"elapsed_seconds must not be wildly larger than the real elapsed time")
 }

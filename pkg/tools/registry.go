@@ -583,8 +583,8 @@ func cloneEntry(e *ToolEntry) *ToolEntry {
 // Clone creates an independent copy of the registry containing the same tool
 // entries (shallow copy of each ToolEntry). This is used to give subagents a
 // snapshot of the parent agent's tools without sharing the same registry —
-// tools registered on the parent after cloning (e.g. spawn, check_spawn_status)
-// will NOT be visible to the clone, preventing recursive subagent spawning.
+// tools registered on the parent after cloning (e.g. delegate) will NOT be
+// visible to the clone, preventing recursive subagent spawning.
 // The version counter is reset to 0 in the clone as it's a new independent registry.
 func (r *ToolRegistry) Clone() *ToolRegistry {
 	r.mu.RLock()

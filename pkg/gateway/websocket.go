@@ -212,12 +212,6 @@ type WSHandler struct {
 	taskChatIDs map[string]string  // browser chatID → task chatID for live event forwarding
 	webchatCh   *webchatChannel    // reference to mark streaming complete
 
-	// approvalRegistry tracks in-flight exec approval requests sent to the browser.
-	// Shared across all connections on this handler; keyed by request UUID.
-	// Although the registry is shared, each approval request is associated with the
-	// connection that sent it — only that connection's browser tab can respond.
-	approvalRegistry *wsApprovalRegistry
-
 	// approvalRegV2 is the Central Tool Registry approval registry (FR-016, FR-070).
 	// Injected at boot by the gateway after construction.  Nil until then.
 	approvalRegV2 *approvalRegistryV2
@@ -387,7 +381,6 @@ func newWSHandler(
 		sessions:              make(map[string]*wsConn),
 		sessionIDs:            make(map[string]string),
 		taskChatIDs:           make(map[string]string),
-		approvalRegistry:      newWSApprovalRegistry(),
 		devicePairingRegistry: newDevicePairingRegistry(),
 		pairingStore:          pairing.NewPairingStore(),
 		upgrader: websocket.Upgrader{
@@ -555,38 +548,16 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.sessions[chatID] = wc
 	h.mu.Unlock()
 
-	// Mount a per-connection approval hook so the agent loop can request interactive
-	// approval from this browser tab when a tool call requires user consent. The hook
-	// sends an exec_approval_request frame and blocks until the browser responds or
-	// the request times out.
-	hookName := "ws-approval-" + chatID
-	approvalHook := &wsApprovalHook{
-		conn:     wc,
-		chatID:   chatID,
-		registry: h.approvalRegistry,
-		timeout:  wsApprovalTimeout,
-		// Session-scoped grant store lives on the AgentLoop, not this
-		// per-connection hook, so "Always Allow" survives reconnects — see
-		// wsApprovalHook.approvalGrants and AgentLoop.approvalGrants.
-		approvalGrants: h.agentLoop.ApprovalGrants(),
-		policyResolver: func(toolName string, agentID string) string {
-			// Unification (#438): resolve through the agent loop, which prefers the
-			// agent's LIVE policy snapshot + real tool scope from the registry and
-			// funnels through the SAME tools.EffectiveToolPolicy primitive the loop's
-			// FilterToolsByPolicy uses — so the gateway exec gate and the loop's
-			// sent-defs view cannot drift. Falls back to config-derived inputs inside
-			// the method when the agent is not in the registry.
-			return h.agentLoop.ResolveApprovalToolPolicy(agentID, toolName)
-		},
-	}
-	if err := h.agentLoop.MountHook(agent.NamedHook(hookName, approvalHook)); err != nil {
-		slog.Error("ws: could not mount approval hook — closing connection", "chat_id", chatID, "error", err)
-		sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-			Type:    string(generated.WsFrameTypeError),
-			Message: "failed to initialize tool approval — please reconnect",
-		})
-		return
-	}
+	// NOTE (ADR-036 §3.4): this connection no longer mounts a per-connection
+	// wsApprovalHook. Interactive "ask"-policy tool approval is handled
+	// entirely by the gateway's central approvalRegistryV2 + REST
+	// POST /api/v1/tool-approvals/{id} path (policyApproverAdapter,
+	// AgentLoop.CheckGrantOrRequestApproval) — the wsApprovalHook /
+	// exec_approval_request WS-frame gate was retired because it ran BEFORE
+	// that path and unconditionally denied every ask-policy call after a 90s
+	// timeout once its answering frontend UI (ExecApprovalBlock/
+	// ExecApprovalTool) was removed, making the REST path unreachable. See
+	// pkg/agent/loop.go's CheckGrantOrRequestApproval doc comment.
 
 	// Subscribe to agent-loop events so we can forward tool_call_start/result
 	// frames to the browser in real time.
@@ -595,7 +566,6 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	go h.eventForwarder(wc, chatID, eventSub, eventDone)
 
 	defer func() {
-		h.agentLoop.UnmountHook(hookName)
 		h.agentLoop.UnsubscribeEvents(eventSub.ID)
 		<-eventDone // wait for forwarder goroutine to exit
 		h.mu.Lock()
@@ -880,32 +850,6 @@ func (h *WSHandler) readLoop(ctx context.Context, conn *websocket.Conn, wc *wsCo
 				continue
 			}
 			h.handleCancel(wc, f.SessionId)
-		case string(generated.WsFrameTypeExecApprovalResponse):
-			var f generated.ExecApprovalResponseFrame
-			if err := json.Unmarshal(data, &f); err != nil {
-				slog.Warn("ws: malformed exec_approval_response frame", "error", err)
-				wc.inboundDropped.Add(1)
-				sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-					Type:    string(generated.WsFrameTypeError),
-					Message: "malformed exec_approval_response frame",
-				})
-				continue
-			}
-			// Schema validation: decision must be one of the allowed values.
-			switch f.Decision {
-			case "allow", "deny", "always":
-				// valid
-			default:
-				wc.inboundDropped.Add(1)
-				slog.Warn("ws: exec_approval_response unknown decision — dropping",
-					"decision", f.Decision, "id", f.Id, "chat_id", chatID)
-				sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-					Type:    string(generated.WsFrameTypeError),
-					Message: "exec_approval_response: unknown decision value",
-				})
-				continue
-			}
-			h.handleApprovalResponse(f.Id, f.Decision, "", wc)
 		case string(generated.WsFrameTypeAttachSession):
 			var f generated.AttachSessionFrame
 			if err := json.Unmarshal(data, &f); err != nil {
@@ -1009,8 +953,6 @@ func wsFrameSchemaName(frameType string) string {
 		return "MessageFrame"
 	case string(generated.WsFrameTypeCancel):
 		return "CancelFrame"
-	case string(generated.WsFrameTypeExecApprovalResponse):
-		return "ExecApprovalResponseFrame"
 	case string(generated.WsFrameTypeAttachSession):
 		return "AttachSessionFrame"
 	case string(generated.WsFrameTypeDevicePairingResponse):
@@ -1385,10 +1327,12 @@ func (h *WSHandler) handleCancel(wc *wsConn, sessionID string) {
 				h.approvalRegV2.cancelAllPendingForSession(sid, reason)
 			}
 		},
-		KillBackgroundSessions: func(sid string) {
+		KillBackgroundSessions: func(sid string) int {
 			// Cascade the web SPA cancel to any detached background bash/exec
 			// sessions this chat session started (FR-B10/FR-B11, User Story 5).
-			tools.GetSharedSessionManager().KillAllForSession(sid)
+			// The returned count flows back through RequestCancel into the
+			// turn_canceled audit event's background_sessions_killed field.
+			return tools.GetSharedSessionManager().KillAllForSession(sid)
 		},
 		SetSessionInterrupted: func(sid string) {
 			store := h.resolveSessionStore(sid)
@@ -1752,63 +1696,6 @@ drainDone:
 	}
 
 	slog.Debug("ws: attached to session", "chat_id", chatID, "session_id", attachID)
-}
-
-// handleApprovalResponse resolves a pending exec approval request.
-// Called from readLoop when the browser sends an "exec_approval_response" frame.
-// "allow" maps to VerdictAllow, "always" maps to VerdictAlways, everything else maps to VerdictDeny.
-// If the frame carries a session_id that doesn't match the registry entry, the response is rejected.
-func (h *WSHandler) handleApprovalResponse(id, decision, sessionID string, wc *wsConn) {
-	if id == "" {
-		slog.Warn("ws: exec_approval_response missing id")
-		return
-	}
-	// Validate that the frame's session_id matches the request's recorded session_id.
-	// This prevents a tab from approving a request that belongs to a different session.
-	if registeredSID, ok := h.approvalRegistry.getSessionID(id); ok && sessionID != "" && registeredSID != "" {
-		if sessionID != registeredSID {
-			slog.Warn("ws: exec_approval_response session_id mismatch — rejecting",
-				"id", id, "frame_session", sessionID, "registered_session", registeredSID)
-			sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-				Type:    string(generated.WsFrameTypeError),
-				Message: "approval session_id mismatch",
-			})
-			return
-		}
-	}
-	var verdict agent.ApprovalVerdict
-	switch decision {
-	case "allow":
-		verdict = agent.VerdictAllow
-	case "always":
-		verdict = agent.VerdictAlways
-	default:
-		verdict = agent.VerdictDeny
-	}
-	d := agent.ApprovalDecision{Verdict: verdict}
-	if verdict == agent.VerdictDeny {
-		d.Reason = "user denied via WebSocket"
-	}
-	if !h.approvalRegistry.resolve(id, d) {
-		// The request may have already timed out — this is informational, not an error.
-		slog.Debug("ws: exec_approval_response for unknown or expired request", "id", id, "decision", decision)
-	} else {
-		slog.Info("ws: exec_approval resolved", "id", id, "decision", decision, "verdict", verdict)
-		var sidPtr *string
-		if sessionID != "" {
-			sidCopy := sessionID
-			sidPtr = &sidCopy
-		}
-		sendConnGenFrame(
-			wc,
-			string(generated.WsFrameTypeExecApprovalResponseAck),
-			generated.ExecApprovalResponseAckFrame{
-				Type:      string(generated.WsFrameTypeExecApprovalResponseAck),
-				Id:        &id,
-				SessionId: sidPtr,
-			},
-		)
-	}
 }
 
 // wsPingMsg is a nil sentinel enqueued by pingPump to signal writePump to send a WebSocket ping.

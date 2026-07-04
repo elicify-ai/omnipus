@@ -294,9 +294,11 @@ func (r *scheduledRunner) watchDeadline(ctx2 context.Context, runDone <-chan str
 			agent.CancelHooks{
 				// Cascade the scheduled-run force-abort to any detached
 				// background bash/exec sessions this run's session started
-				// (FR-B10/FR-B11).
-				KillBackgroundSessions: func(sid string) {
-					tools.GetSharedSessionManager().KillAllForSession(sid)
+				// (FR-B10/FR-B11). The returned count flows back through
+				// RequestCancel into the turn_canceled audit event's
+				// background_sessions_killed field.
+				KillBackgroundSessions: func(sid string) int {
+					return tools.GetSharedSessionManager().KillAllForSession(sid)
 				},
 			})
 		if cancelErr == nil && !outcome.Fired {

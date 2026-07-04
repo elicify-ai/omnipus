@@ -552,18 +552,6 @@ func TestContract_SubagentEndFrame_ZeroValue(t *testing.T) {
 		"zero value has empty required type, session_id, span_id, status fields")
 }
 
-// ── ExecApprovalRequestFrame ──────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/ExecApprovalRequestFrame.yaml
-
-func TestContract_ExecApprovalRequestFrame_Populated(t *testing.T) {
-	mustPassComponent(t, "ExecApprovalRequestFrame", FixtureExecApprovalRequestFrame_Populated())
-}
-
-func TestContract_ExecApprovalRequestFrame_ZeroValue(t *testing.T) {
-	mustFailComponent(t, "ExecApprovalRequestFrame", FixtureExecApprovalRequestFrame_ZeroValue(),
-		"zero value has empty required fields")
-}
-
 // ── ReplayMessageFrame ────────────────────────────────────────────────────────
 // Traces to: contracts/asyncapi.yaml components.schemas.ReplayMessageFrame
 
@@ -670,19 +658,6 @@ func TestContract_DevicePairingRequestFrame_Populated(t *testing.T) {
 func TestContract_DevicePairingRequestFrame_ZeroValue(t *testing.T) {
 	mustFailAsyncAPI(t, "DevicePairingRequestFrame", FixtureDevicePairingRequestFrame_ZeroValue(),
 		"zero value has empty required type and device_id fields")
-}
-
-// ── ExecApprovalResponseAckFrame ──────────────────────────────────────────────
-// Traces to: contracts/asyncapi.yaml components.schemas.ExecApprovalResponseAckFrame
-
-func TestContract_ExecApprovalResponseAckFrame_Populated(t *testing.T) {
-	mustPassAsyncAPI(t, "ExecApprovalResponseAckFrame", FixtureExecApprovalResponseAckFrame_Populated())
-}
-
-func TestContract_ExecApprovalResponseAckFrame_ZeroValue(t *testing.T) {
-	// Only "type" is required; zero value with type="" should fail.
-	mustFailAsyncAPI(t, "ExecApprovalResponseAckFrame", FixtureExecApprovalResponseAckFrame_ZeroValue(),
-		"zero value has empty required type field")
 }
 
 // ── REST response types (OpenAPI) ─────────────────────────────────────────────
@@ -837,7 +812,6 @@ func TestContract_AllFrames_TypeFieldPresent(t *testing.T) {
 		{"SessionStartedFrame", FixtureSessionStartedFrame_Populated()},
 		{"SubagentStartFrame", FixtureSubagentStartFrame_Populated()},
 		{"SubagentEndFrame", FixtureSubagentEndFrame_Populated()},
-		{"ExecApprovalRequestFrame", FixtureExecApprovalRequestFrame_Populated()},
 		{"ReplayMessageFrame", FixtureReplayMessageFrame_Populated()},
 		{"RateLimitFrame", FixtureRateLimitFrame_Populated()},
 		{"AgentSwitchedFrame", FixtureAgentSwitchedFrame_Populated()},
@@ -847,7 +821,6 @@ func TestContract_AllFrames_TypeFieldPresent(t *testing.T) {
 		{"ReplayWarningFrame", FixtureReplayWarningFrame_Populated()},
 		{"SessionCloseAckFrame", FixtureSessionCloseAckFrame_Populated()},
 		{"DevicePairingRequestFrame", FixtureDevicePairingRequestFrame_Populated()},
-		{"ExecApprovalResponseAckFrame", FixtureExecApprovalResponseAckFrame_Populated()},
 	}
 
 	for _, f := range frames {
@@ -997,24 +970,6 @@ func TestContract_DevicePairingResponseFrame_ZeroValue(t *testing.T) {
 func TestContract_DevicePairingResponseFrame_Edge(t *testing.T) {
 	// reject is the other valid enum value
 	mustPassAsyncAPI(t, "DevicePairingResponseFrame", FixtureDevicePairingResponseFrame_Edge())
-}
-
-// ── ExecApprovalResponseFrame ─────────────────────────────────────────────────
-// Traces to: contracts/asyncapi.yaml components.schemas.ExecApprovalResponseFrame
-
-func TestContract_ExecApprovalResponseFrame_Populated(t *testing.T) {
-	mustPassAsyncAPI(t, "ExecApprovalResponseFrame", FixtureExecApprovalResponseFrame_Populated())
-}
-
-func TestContract_ExecApprovalResponseFrame_ZeroValue(t *testing.T) {
-	// type="", id="", decision="" — all required; id has minLength:1; decision not in enum
-	mustFailAsyncAPI(t, "ExecApprovalResponseFrame", FixtureExecApprovalResponseFrame_ZeroValue(),
-		"zero value has empty required fields and decision is not a valid enum value")
-}
-
-func TestContract_ExecApprovalResponseFrame_Edge(t *testing.T) {
-	// deny is a valid enum value; always is also valid but tested implicitly
-	mustPassAsyncAPI(t, "ExecApprovalResponseFrame", FixtureExecApprovalResponseFrame_Edge())
 }
 
 // ── MessageFrame ──────────────────────────────────────────────────────────────
@@ -1581,42 +1536,6 @@ func TestContract_StorageStats_Differentiation(t *testing.T) {
 		"StorageStats with data vs empty must produce different JSON")
 	mustPassComponent(t, "StorageStats", f1)
 	mustPassComponent(t, "StorageStats", f2)
-}
-
-// ── ExecApprovalExpiredFrame ──────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/ExecApprovalExpiredFrame.yaml
-
-func TestContract_ExecApprovalExpiredFrame_Populated(t *testing.T) {
-	// All required fields + optional message.
-	// Traces to: ExecApprovalExpiredFrame.yaml — required: [type, id, session_id]
-	mustPassAsyncAPI(t, "ExecApprovalExpiredFrame", FixtureExecApprovalExpiredFrame_Populated())
-}
-
-func TestContract_ExecApprovalExpiredFrame_ZeroValue(t *testing.T) {
-	// type="" (const: exec_approval_expired), id="", session_id="" — all required.
-	// Traces to: ExecApprovalExpiredFrame.yaml — type has const constraint
-	mustFailAsyncAPI(t, "ExecApprovalExpiredFrame", FixtureExecApprovalExpiredFrame_ZeroValue(),
-		"zero value has empty type (const), id, and session_id fields")
-}
-
-func TestContract_ExecApprovalExpiredFrame_Edge(t *testing.T) {
-	// No message (optional), long IDs.
-	// Traces to: ExecApprovalExpiredFrame.yaml
-	mustPassAsyncAPI(t, "ExecApprovalExpiredFrame", FixtureExecApprovalExpiredFrame_Edge())
-}
-
-func TestContract_ExecApprovalExpiredFrame_Differentiation(t *testing.T) {
-	// Two ExecApprovalExpiredFrame fixtures must produce different JSON.
-	f1 := FixtureExecApprovalExpiredFrame_Populated()
-	f2 := FixtureExecApprovalExpiredFrame_Edge()
-	raw1, err := json.Marshal(f1)
-	require.NoError(t, err)
-	raw2, err := json.Marshal(f2)
-	require.NoError(t, err)
-	assert.NotEqual(t, string(raw1), string(raw2),
-		"Populated and Edge ExecApprovalExpiredFrame fixtures must produce different JSON")
-	mustPassAsyncAPI(t, "ExecApprovalExpiredFrame", f1)
-	mustPassAsyncAPI(t, "ExecApprovalExpiredFrame", f2)
 }
 
 // ── SessionCloseFrame ─────────────────────────────────────────────────────────
@@ -2456,14 +2375,6 @@ func TestContract_ToolApprovalRequiredFrame_ExpiresInvalid(t *testing.T) {
 		})
 	}
 }
-
-// ── ExecApprovalRequestFrame — timeout_seconds field ─────────────────────────
-// NOTE: Per task description, verify whether timeout_seconds exists in ExecApprovalRequestFrame.
-// Investigation: ExecApprovalRequestFrame.yaml does NOT have timeout_seconds.
-// The field exists on ExecApprovalRequestFrame in the BRD spec but was not promoted to the schema.
-// SPEC CLAIMED BUT MISSING: timeout_seconds is not in the ExecApprovalRequestFrame component schema.
-// No boundary test can be written for a field that does not exist in the schema.
-// TODO: BDD scenario gap — if timeout_seconds should exist, add it to the schema first.
 
 // ── DoneStats minimum:0 ───────────────────────────────────────────────────────
 // Traces to: contracts/components/schemas/DoneStats.yaml (tokens, cost, duration_ms: minimum:0)

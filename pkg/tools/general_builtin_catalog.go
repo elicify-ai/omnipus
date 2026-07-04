@@ -15,8 +15,6 @@
 //     are ever called on these instances.
 //   - Constructor errors are logged and skipped (never fatal). A tool whose
 //     constructor fails is simply absent from the metadata catalog.
-//   - The workspace_shell and workspace.shell_bg tools are omitted: they exist
-//     only when experimental.workspace_shell_enabled=true (config-gated, experimental).
 //
 // Conditional tools (set_todos, email.*, tool_search_tool_*): these are
 // included as metadata even though they only register per-agent under certain

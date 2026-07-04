@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"testing"
 	"time"
@@ -29,6 +30,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/dapicom-ai/omnipus/pkg/audit"
+	"github.com/dapicom-ai/omnipus/pkg/media"
 	"github.com/dapicom-ai/omnipus/pkg/policy"
 )
 
@@ -144,6 +146,78 @@ func TestBash_CwdRejectsDeepNestedNetOutside(t *testing.T) {
 	})
 	require.True(t, result.IsError, "net-outside traversal must be rejected, got ForLLM=%q", result.ForLLM)
 	assert.Contains(t, result.ForLLM, "escapes workspace")
+}
+
+// TestBash_CwdRejectsAbsolutePathEvenWhenAllowlisted is the regression test
+// for a CRITICAL fail-open bypass: buildAllowReadPatterns
+// (pkg/agent/instance.go:870-885) unconditionally injects a pattern matching
+// the shared media/attachments temp dir (media.TempDir(), pkg/media/
+// tempdir.go) into the SAME allowedPathPatterns slice that production wiring
+// hands to every ExecTool instance (pkg/agent/instance.go:153,
+// pkg/agent/loop.go:1061/1112). That directory is shared across ALL agents
+// and ALL sessions — not scoped per-agent.
+//
+// Before the fix, resolveCWD called validatePathWithAllowPaths with that real
+// allowlist. validatePathWithAllowPaths checks isAllowedPath() BEFORE the
+// workspace-containment check and BEFORE the cross-agent guard
+// (isCrossAgentPath) ever runs, so cwd=<media temp dir> — an absolute path —
+// was accepted outright, letting any agent `bash` its way into another
+// agent's/session's uploads. Every other cwd test in this file constructs the
+// tool via newBashTool, which never passes allowPaths, so
+// t.allowedPathPatterns is nil there and this class of bug stays hidden. This
+// test constructs the tool WITH a real, non-nil allowedPathPatterns slice
+// built the same way production wiring builds it (mirroring
+// mediaTempDirPattern's exact construction) and asserts the absolute path is
+// STILL rejected — no allowlist-based exception for bash's cwd.
+func TestBash_CwdRejectsAbsolutePathEvenWhenAllowlisted(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test uses POSIX paths")
+	}
+
+	home := t.TempDir()
+	t.Setenv("OMNIPUS_HOME", home)
+
+	mediaDir := media.TempDir() // resolves to $OMNIPUS_HOME/media
+	require.NoError(t, os.MkdirAll(mediaDir, 0o755))
+
+	// Mirrors mediaTempDirPattern() in pkg/agent/instance.go:886-889 exactly:
+	// an anchored pattern matching the media dir itself or anything beneath
+	// it — this IS the pattern buildAllowReadPatterns wires into every agent's
+	// bash instance in production.
+	sep := regexp.QuoteMeta(string(os.PathSeparator))
+	mediaPattern := regexp.MustCompile(
+		"^" + regexp.QuoteMeta(filepath.Clean(mediaDir)) + "(?:" + sep + "|$)",
+	)
+
+	workspace := filepath.Join(home, "agents", "agent-under-test")
+	require.NoError(t, os.MkdirAll(workspace, 0o755))
+
+	tool, err := NewExecTool(workspace, true, []*regexp.Regexp{mediaPattern})
+	require.NoError(t, err)
+
+	result := tool.Execute(bashCtx(t), map[string]any{
+		"command": "pwd",
+		"cwd":     mediaDir,
+	})
+	require.True(t, result.IsError,
+		"absolute cwd matching the operator/media allowlist must STILL be rejected — "+
+			"bash's cwd must never inherit that cross-agent-shared allowlist, got ForLLM=%q",
+		result.ForLLM)
+	assert.Contains(t, result.ForLLM, "escapes workspace")
+
+	// Defense-in-depth: also confirm the relative-traversal path into the
+	// same shared directory is rejected (validatePathWithAllowPaths must be
+	// called with nil patterns for bash's cwd, not t.allowedPathPatterns).
+	rel, err := filepath.Rel(workspace, mediaDir)
+	require.NoError(t, err)
+	result2 := tool.Execute(bashCtx(t), map[string]any{
+		"command": "pwd",
+		"cwd":     rel,
+	})
+	require.True(t, result2.IsError,
+		"relative-traversal cwd landing inside the shared allowlisted media dir must STILL be rejected, got ForLLM=%q",
+		result2.ForLLM)
+	assert.Contains(t, result2.ForLLM, "escapes workspace")
 }
 
 // ---------------------------------------------------------------------------
@@ -346,6 +420,22 @@ func TestBash_Poll_RunningSession(t *testing.T) {
 	assert.Equal(t, "running", resp.Status)
 }
 
+// TestBash_Read_ReturnsOnlyNewOutput proves the actual property this test is
+// named for (bash-tool-spec.md User Story 2 Acceptance Scenario 3 / BDD
+// Scenario "Reading a background session returns only new output since the
+// last read", line 300; Test Implementation Order #12, line 571): a SECOND
+// `read` call returns ONLY the output produced since the first `read`, not
+// the full accumulated buffer. The previous version of this test captured a
+// first `read` response but never asserted on its content, and checked the
+// second read only for "Output != \"\"" again — a regression that made
+// `read` always return the full accumulated buffer (the exact opposite of
+// this contract) would have passed it. Fixed by producing two
+// distinguishable phases of output with a real delay between them, capturing
+// each successful read's content INLINE within its own polling closure
+// (session.Read() drains the buffer on every call — a later, separate read
+// call after the polling loop already succeeded would see nothing, which is
+// why the original version's follow-up `firstRead` call was dead code), and
+// asserting each read contains only its own phase's marker.
 func TestBash_Read_ReturnsOnlyNewOutput(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("test uses POSIX shell")
@@ -354,36 +444,50 @@ func TestBash_Read_ReturnsOnlyNewOutput(t *testing.T) {
 	tool.godMode = true
 
 	runResult := tool.Execute(bashCtx(t), map[string]any{
-		"command":           "echo first; sleep 1; echo second",
+		"command":           "echo first-chunk; sleep 2; echo second-chunk",
 		"run_in_background": true,
 	})
 	require.False(t, runResult.IsError)
 	sessionID := mustSessionID(t, runResult)
 	defer tool.Execute(bashCtx(t), map[string]any{"action": "kill", "session_id": sessionID})
 
-	// First read: only "first" should have appeared yet.
+	// First read: poll until "first-chunk" has been written, capturing the
+	// exact output THAT successful call drained (not a later, separate call,
+	// which would see an already-emptied buffer).
+	var firstOutput string
 	require.Eventually(t, func() bool {
 		read := tool.Execute(bashCtx(t), map[string]any{"action": "read", "session_id": sessionID})
 		var resp ExecResponse
-		if err := json.Unmarshal([]byte(read.ForLLM), &resp); err != nil {
+		if err := json.Unmarshal([]byte(read.ForLLM), &resp); err != nil || resp.Output == "" {
 			return false
 		}
-		return resp.Output != ""
-	}, 3*time.Second, 50*time.Millisecond)
+		firstOutput = resp.Output
+		return true
+	}, 5*time.Second, 20*time.Millisecond, "first read must eventually return the first phase's output")
 
-	firstRead := tool.Execute(bashCtx(t), map[string]any{"action": "read", "session_id": sessionID})
-	var firstResp ExecResponse
-	require.NoError(t, json.Unmarshal([]byte(firstRead.ForLLM), &firstResp))
+	assert.Contains(t, firstOutput, "first-chunk", "first read must contain the first phase's output")
+	assert.NotContains(t, firstOutput, "second-chunk",
+		"first read must NOT contain the second phase's output yet — it hasn't been written")
 
-	// Wait for the second write, then read again — must NOT repeat "first".
+	// Second read: wait for "second-chunk" (written ~2s after the process
+	// started, well after the first read already drained "first-chunk") and
+	// read again — the core assertion: this must contain ONLY the new
+	// output, never a repeat of "first-chunk".
+	var secondOutput string
 	require.Eventually(t, func() bool {
 		read := tool.Execute(bashCtx(t), map[string]any{"action": "read", "session_id": sessionID})
 		var resp ExecResponse
-		if err := json.Unmarshal([]byte(read.ForLLM), &resp); err != nil {
+		if err := json.Unmarshal([]byte(read.ForLLM), &resp); err != nil || resp.Output == "" {
 			return false
 		}
-		return resp.Output != ""
-	}, 3*time.Second, 50*time.Millisecond)
+		secondOutput = resp.Output
+		return true
+	}, 8*time.Second, 50*time.Millisecond, "second read must eventually return the second phase's output")
+
+	assert.Contains(t, secondOutput, "second-chunk", "second read must contain the second phase's output")
+	assert.NotContains(t, secondOutput, "first-chunk",
+		"CRITICAL: second read repeated the first phase's output — read must return only output "+
+			"produced since the previous read, not the full accumulated buffer")
 }
 
 func TestBash_Kill_TerminatesAndUpdatesStatus(t *testing.T) {

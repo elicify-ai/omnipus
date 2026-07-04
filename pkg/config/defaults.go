@@ -349,8 +349,25 @@ func DefaultConfig() *Config {
 			},
 			Exec: ExecConfig{
 				ToolConfig: ToolConfig{
+					// Enabled is still live: migrateDeprecatedToolEnableFlags
+					// (migration.go) translates an operator's
+					// tools.exec.enabled=false into a "bash" policy deny.
 					Enabled: true,
 				},
+				// EnableDenyPatterns/TimeoutSeconds/MaxBackgroundSeconds below
+				// are vestigial — see the Deprecated doc comments on
+				// ExecConfig (config.go): the ADR-036 `bash` tool never reads
+				// config.Tools.Exec at all. Left at their historical values
+				// (rather than zeroed) deliberately: these fields lack
+				// `omitempty` and are already persisted into every existing
+				// operator's config.json at these values, so changing the
+				// in-memory default would only change what a *fresh* install
+				// serializes (from true/60/300 to false/0/0) with zero
+				// functional difference either way (nothing reads them) —
+				// not worth the on-disk-diff confusion for operators
+				// comparing configs. warnDeprecatedExecConfigFields
+				// (exec_config_deprecation.go) flags real customization of
+				// these fields at boot.
 				EnableDenyPatterns:   true,
 				TimeoutSeconds:       60,
 				MaxBackgroundSeconds: 300, // 5 minutes; 0 = disabled

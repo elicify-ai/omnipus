@@ -352,7 +352,7 @@ func (t *ExecTool) Scope() ToolScope       { return ScopeCore }
 func (t *ExecTool) Category() ToolCategory { return CategoryShell }
 
 func (t *ExecTool) Description() string {
-	return `Execute a shell command (sh -c on Linux/macOS, powershell on Windows). Set run_in_background=true for long-running commands (returns a session_id immediately); use action=poll/read/kill with that session_id to check on it, read incremental output, or terminate it. cwd is relative to the workspace only (no absolute paths, no '..' escapes). timeout_seconds defaults to 300 and must be between 1 and 3600; enforced identically in the foreground and in the background. A background session survives the current turn and is only stopped by an explicit kill action or an explicit session cancel.`
+	return `Execute a shell command (sh -c on Linux/macOS, powershell on Windows). Set run_in_background=true for long-running commands (returns a session_id immediately); use action=poll/read/kill with that session_id to check on it, read incremental output, or terminate it. cwd is relative to the workspace only (no absolute paths, no '..' escapes). timeout_seconds defaults to 300 and must be between 1 and 3600; enforced identically in the foreground and in the background — a background session times out on its own after timeout_seconds elapses, and is otherwise stopped only by an explicit kill action or an explicit session cancel.`
 }
 
 func (t *ExecTool) Parameters() map[string]any {
@@ -560,6 +560,28 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 // symlinks (filepath.EvalSymlinks) before the containment check — a
 // workspace-internal symlink pointing outside the workspace is rejected the
 // same way an absolute path is (FR-B13). Empty cwd defaults to baseDir.
+//
+// SEC-05/FR-B2 threat model: t.allowedPathPatterns is the operator-configured
+// cross-tool allowlist that read_file/write_file/list_directory legitimately
+// honor (e.g. the shared media/attachments temp dir — see
+// buildAllowReadPatterns/mediaTempDirPattern in pkg/agent/instance.go). That
+// directory is shared across ALL agents and ALL sessions, so it is NOT a safe
+// place for bash to chdir into: validatePathWithAllowPaths checks
+// isAllowedPath() BEFORE the workspace-containment check and before the
+// cross-agent guard (isCrossAgentPath) ever runs, so an absolute (or
+// traversed-relative) cwd landing inside that shared directory would let one
+// agent read another agent's uploads via bash — exactly what isCrossAgentPath
+// exists to block. bash's cwd must never consult that allowlist at all
+// (mirrors the pre-consolidation workspace_shell.go, which rejected
+// filepath.IsAbs(rawCWD) outright and passed nil — not the real
+// patterns — into validatePathWithAllowPaths). Concretely:
+//  1. Any absolute path is rejected unconditionally, with no allowlist-based
+//     exception, before validatePathWithAllowPaths is even called.
+//  2. The relative-path resolution below passes nil for patterns, so a
+//     relative cwd that traverses (e.g. "../../media") out to the shared
+//     media dir cannot short-circuit past the containment/cross-agent checks
+//     either — it is judged purely on workspace containment, same as any
+//     other outside-workspace target.
 func (t *ExecTool) resolveCWD(args map[string]any, baseDir string) (string, error) {
 	rawCWD, _ := args["cwd"].(string)
 	rawCWD = strings.TrimSpace(rawCWD)
@@ -572,15 +594,11 @@ func (t *ExecTool) resolveCWD(args map[string]any, baseDir string) (string, erro
 		return abs, nil
 	}
 
-	// No blanket "reject absolute paths" pre-check here: validatePathWithAllowPaths
-	// already resolves an absolute path against t.allowedPathPatterns FIRST (the
-	// same operator-configured cross-tool allowlist read_file/write_file/
-	// list_directory honor, e.g. the media/attachments temp dir) before falling
-	// back to workspace containment — an absolute path with no matching allowlist
-	// entry (e.g. "/etc") still gets rejected by that containment check, so
-	// dataset row 2 (bare "/etc") is unaffected; only a genuinely allowlisted
-	// absolute path is accepted, matching every other filesystem tool's behavior.
-	resolved, err := validatePathWithAllowPaths(rawCWD, baseDir, true, t.allowedPathPatterns)
+	if filepath.IsAbs(rawCWD) {
+		return "", fmt.Errorf("path escapes workspace: absolute path not allowed (use a relative path)")
+	}
+
+	resolved, err := validatePathWithAllowPaths(rawCWD, baseDir, true, nil)
 	if err != nil {
 		return "", fmt.Errorf("path escapes workspace: %w", err)
 	}

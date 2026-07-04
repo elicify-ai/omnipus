@@ -449,17 +449,32 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 	// grant. Identity (session_id, agent_id, tool) comes from the immutable
 	// approval entry set at creation, never from client-supplied data, so a
 	// caller cannot install a grant for an arbitrary (session, agent, tool).
-	// ApprovalGrantStore.Record is nil-receiver-safe and no-ops on any empty key
-	// component (fail-safe: never records under an empty session/agent/tool key).
-	// This mirrors the outcome of ws_approval.go's legacy decision:"always"
-	// handling, issued from the generic REST site instead (ADR-036 §3.4).
+	// ApprovalGrantStore.Record is nil-receiver-safe and no-ops (returns false)
+	// on any empty key component (fail-safe: never records under an empty
+	// session/agent/tool key). This is now the ONLY writer of "always" grants
+	// (ADR-036 §3.4 retired the legacy WS-frame gate, wsApprovalHook, which
+	// used to also record grants from its own decision:"always" handling).
+	//
+	// The underlying tool call is still approved either way (the state
+	// transition above already succeeded) — a no-op grant only means the NEXT
+	// matching call will prompt again, not that this call fails. We log at Warn
+	// instead of Info in that case so an operator can see the grant did not
+	// actually take effect, rather than silently believing it did.
 	if recordGrant {
-		a.agentLoop.ApprovalGrants().Record(entry.SessionID, entry.AgentID, entry.ToolName)
-		slog.Info("tool-approval: recorded session Always-Allow grant",
-			"approval_id", approvalID,
-			"session_id", entry.SessionID,
-			"agent_id", entry.AgentID,
-			"tool", entry.ToolName)
+		if a.agentLoop.ApprovalGrants().Record(entry.SessionID, entry.AgentID, entry.ToolName) {
+			slog.Info("tool-approval: recorded session Always-Allow grant",
+				"approval_id", approvalID,
+				"session_id", entry.SessionID,
+				"agent_id", entry.AgentID,
+				"tool", entry.ToolName)
+		} else {
+			slog.Warn("tool-approval: 'always' action approved this call but the grant was NOT recorded "+
+				"(missing session_id/agent_id/tool identity on the approval entry) — the next matching call will prompt again",
+				"approval_id", approvalID,
+				"session_id", entry.SessionID,
+				"agent_id", entry.AgentID,
+				"tool", entry.ToolName)
+		}
 	}
 
 	jsonOK(w, gen.ToolApprovalResponse{

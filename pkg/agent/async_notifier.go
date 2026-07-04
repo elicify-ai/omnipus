@@ -226,21 +226,11 @@ func (n *asyncNotifierImpl) Notify(ctx context.Context, event AsyncNotifyEvent) 
 
 	// FR-N5/FR-N6: observers see every event, independent of publish outcome,
 	// with panic isolation. When no observers are registered this is a
-	// single RLock/RUnlock with a zero-length loop — no other cost.
+	// single RLock/RUnlock with a zero-length loop — no other cost. This is
+	// intentionally NOT gated on publish success — the observer channel is
+	// documented (FR-N5/FR-N6) to receive a copy regardless of outcome,
+	// unlike the event-bus EventKindFollowUpQueued emission below.
 	n.notifyObservers(event)
-
-	if n.loop != nil {
-		n.loop.emitEvent(
-			EventKindFollowUpQueued,
-			asyncNotifyEventMetaFromContext(ctx, event.AgentID),
-			FollowUpQueuedPayload{
-				SourceTool: event.SourceKind,
-				Channel:    event.Channel,
-				ChatID:     event.ChatID,
-				ContentLen: len(event.Content),
-			},
-		)
-	}
 
 	logger.InfoCF("agent", "Async notification publishing result",
 		map[string]any{
@@ -275,6 +265,25 @@ func (n *asyncNotifierImpl) Notify(ctx context.Context, event AsyncNotifyEvent) 
 				"error":   publishErr.Error(),
 			})
 		return fmt.Errorf("async notifier: publish failed for source %q: %w", event.SourceKind, publishErr)
+	}
+
+	// EventKindFollowUpQueued is emitted only now, after PublishInbound has
+	// actually succeeded. Previously this fired unconditionally before the
+	// publish attempt, so a failed publish still left the event bus showing
+	// "queued" with no compensating correction — misleading to any future
+	// event-bus consumer (e.g. a Goals feature) even though the failure was
+	// correctly logged and returned to the caller above.
+	if n.loop != nil {
+		n.loop.emitEvent(
+			EventKindFollowUpQueued,
+			asyncNotifyEventMetaFromContext(ctx, event.AgentID),
+			FollowUpQueuedPayload{
+				SourceTool: event.SourceKind,
+				Channel:    event.Channel,
+				ChatID:     event.ChatID,
+				ContentLen: len(event.Content),
+			},
+		)
 	}
 
 	return nil

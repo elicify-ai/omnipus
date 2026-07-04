@@ -38,7 +38,10 @@ type delegationTarget struct {
 //
 // It takes a slice of targets sourced from the workspace delegation graph
 // (each already filtered to FromAgent==callerID) and the global depth ceiling
-// from defaults.SubTurn.MaxDepth (0 = uncapped).
+// from defaults.SubTurn.MaxDepth (0 = uncapped when called directly; the
+// production caller (wireDelegationInjectors) always pre-resolves this via
+// resolveEffectiveDelegationDepth, so a live turn's prompt never actually
+// renders "uncapped").
 //
 // Advertisement == enforcement by construction: both read the graph, so the
 // modes and targets shown to the agent are exactly what the gate allows.
@@ -134,7 +137,10 @@ func buildDelegationContext(targets []delegationTarget, globalDepthCap int) stri
 	// delegate to unlisted agents via create_task.
 	sb.WriteString("\n\nThese are your ONLY permitted delegation targets. delegate / create_task to any other agent WILL be denied — do not attempt it.")
 
-	// Footer: global depth ceiling.
+	// Footer: global depth ceiling. globalDepthCap <= 0 only occurs when this
+	// function is called directly with 0 (e.g. from a test) — the production
+	// caller pre-resolves through resolveEffectiveDelegationDepth, which never
+	// returns 0, so this "uncapped" branch is unreachable on a live turn.
 	if globalDepthCap <= 0 {
 		sb.WriteString("\n\nmax chain depth: uncapped")
 	} else {

@@ -128,3 +128,30 @@ func validateSSRFAllowInternal(entries []string) (warnings []string, err error) 
 	}
 	return warnings, nil
 }
+
+// validateShellDenyPatterns enforces that every entry in the global
+// security.shell_deny_patterns list compiles as a valid Go regexp. Mirrors
+// the per-agent shell_policy.custom_deny_patterns validation in rest.go's
+// updateAgent handler (gen.AgentUpdateRequest.ShellPolicy.CustomDenyPatterns)
+// — see the same regexp.Compile check there — so both the global and
+// per-agent surfaces reject malformed patterns identically, matching the
+// documented contract ("Must each be valid Go regexp patterns (400 on
+// invalid regexp)", gen.SandboxConfig's ShellDenyPatterns doc comment).
+//
+// Without this, a malformed pattern would persist with 200 OK and be
+// silently dropped at enforcement time — compileDenyPatterns
+// (pkg/tools/shell_guard.go) logs a Warn and skips any pattern that fails to
+// compile, so the operator would only discover the mistake by grepping
+// gateway.log.
+//
+// One bad entry fails the whole list (atomic semantics, matching
+// validateAllowedPaths/validateSSRFAllowInternal above); the caller must
+// persist nothing when this returns a non-nil error.
+func validateShellDenyPatterns(entries []string) error {
+	for _, pattern := range entries {
+		if _, err := regexp.Compile(pattern); err != nil {
+			return fmt.Errorf("shell_deny_patterns: invalid regexp %q: %w", pattern, err)
+		}
+	}
+	return nil
+}

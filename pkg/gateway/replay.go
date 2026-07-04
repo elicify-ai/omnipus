@@ -81,10 +81,11 @@ func streamReplay(
 	seenPaths := make(map[string]struct{})
 	// ── Pass 1: build ancillary indexes ─────────────────────────────────────
 
-	// spawnIDsPresent: set of ToolCall.IDs where tool == "spawn" AND at least
-	// one other tool call in the transcript has ParentToolCallID == that ID.
-	// This is the signal that the parent span has live children to bracket.
-	// Reuse the map from the pre-computed stats rather than recomputing.
+	// spawnIDsPresent: set of ToolCall.IDs where tool == "spawn" or "delegate"
+	// AND at least one other tool call in the transcript has ParentToolCallID
+	// == that ID. This is the signal that the parent span has live children
+	// to bracket. See buildSpawnIDsWithChildren's own doc comment below for
+	// why both tool names are checked (ADR-036 spawn→delegate rename).
 	spawnIDsWithChildren := buildSpawnIDsWithChildren(entries)
 
 	// deduped: for each ToolCall.ID keep only the index of the last occurrence

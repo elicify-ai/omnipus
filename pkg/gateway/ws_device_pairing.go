@@ -18,7 +18,9 @@ import (
 )
 
 // devicePairingRegistry tracks in-flight pairing requests awaiting admin approval.
-// Mirrors the wsApprovalRegistry pattern for tool approvals.
+// Same register/resolve-by-request-ID pattern the retired wsApprovalRegistry
+// used for tool approvals (ADR-036 §3.4 retired that registry; device pairing
+// is unaffected and keeps its own independent registry here).
 type devicePairingRegistry struct {
 	mu      sync.Mutex
 	pending map[string]chan pairing.PairingDecision

@@ -15,6 +15,7 @@ import (
 	"unicode"
 
 	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/dapicom-ai/omnipus/pkg/coreagent"
 	"github.com/dapicom-ai/omnipus/pkg/datamodel"
 	"github.com/dapicom-ai/omnipus/pkg/tools"
 )
@@ -271,36 +272,16 @@ func (t *AgentCreateTool) Execute(_ context.Context, args map[string]any) *tools
 				}
 			}
 		}
-		// Seed the privilege rail (FR-008/FR-022): custom agents default to
-		// system.*: deny so no system tool is reachable without an explicit
-		// per-agent allow. The caller's tools config (if any) overrides only
-		// the entries it explicitly names — the system.* seed is preserved
-		// unless the caller explicitly sets system.* to something else.
-		if newAgent.Tools == nil {
-			newAgent.Tools = &config.AgentToolsCfg{}
-		}
-		if newAgent.Tools.Builtin.DefaultPolicy == "" {
-			newAgent.Tools.Builtin.DefaultPolicy = config.ToolPolicyAllow
-		}
-		if newAgent.Tools.Builtin.Policies == nil {
-			newAgent.Tools.Builtin.Policies = make(map[string]config.ToolPolicy)
-		}
-		// Only seed system.*: deny if the caller did not provide an explicit entry.
-		if _, hasSystemWildcard := newAgent.Tools.Builtin.Policies["system.*"]; !hasSystemWildcard {
-			newAgent.Tools.Builtin.Policies["system.*"] = config.ToolPolicyDeny
-		}
-		// Seed bash: deny (CRIT-001, bash-tool-spec.md FR-B12): passesScopeGate does
-		// NOT hard-deny ScopeCore tools on custom agents (pkg/tools/compositor.go) —
-		// it defers to the merged policy, which falls through to DefaultPolicy
-		// (allow, set above). Without this explicit seed, a fresh custom agent can
-		// call bash with zero configuration. Only seed if the caller did not provide
-		// an explicit entry, mirroring the system.* guard exactly. Renamed from
-		// "exec" to "bash" by ADR-036 (the tool-consolidation work this seed
-		// anticipated — see the migration in pkg/config/shell_tool_policy_migration.go
-		// for existing persisted "exec" policy entries).
-		if _, hasBash := newAgent.Tools.Builtin.Policies["bash"]; !hasBash {
-			newAgent.Tools.Builtin.Policies["bash"] = config.ToolPolicyDeny
-		}
+		// Seed the privilege rail (FR-008/FR-022, plus bash:deny per CRIT-001 /
+		// bash-tool-spec.md FR-B12): system.agent.create has no tools_cfg
+		// parameter (see Parameters() above — there is no caller-supplied
+		// override for Tools), so newAgent.Tools is always nil here and the
+		// default seed IS the agent's entire tools config. Delegate to the
+		// single shared constructor — also used by the REST create path
+		// (pkg/gateway/rest.go's createAgent, via
+		// coreagent.NewCustomAgentToolsCfg()) — so the two agent-creation
+		// paths cannot drift out of sync on this seed again.
+		newAgent.Tools = coreagent.NewCustomAgentToolsCfg()
 		cfg.Agents.List = append(cfg.Agents.List, newAgent)
 		finalID = id
 		return nil

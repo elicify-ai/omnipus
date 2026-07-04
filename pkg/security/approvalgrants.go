@@ -72,13 +72,18 @@ func (s *ApprovalGrantStore) IsAllowed(sessionID, agentID, tool string) bool {
 
 // Record grants "Always Allow" for tool, scoped to (sessionID, agentID).
 //
-// No-op on a nil store or an empty sessionID / agentID / tool — there is no
+// Returns true when the grant was actually recorded, false when this call was
+// a no-op — a nil store or an empty sessionID / agentID / tool provides no
 // safe key to record the grant under, and recording it under an empty-string
 // key would risk exactly the cross-caller collision IsAllowed's fail-safe
-// check exists to prevent.
-func (s *ApprovalGrantStore) Record(sessionID, agentID, tool string) {
+// check exists to prevent. Callers that report success back to a human (e.g.
+// the "always" tool-approval action) MUST check this return value rather than
+// assuming the grant took effect — see rest_tool_registry.go's
+// HandleToolApprovals, which logs a Warn instead of Info when Record no-ops so
+// the operator knows the tool will keep prompting on the next matching call.
+func (s *ApprovalGrantStore) Record(sessionID, agentID, tool string) bool {
 	if s == nil || sessionID == "" || agentID == "" || tool == "" {
-		return
+		return false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -89,6 +94,7 @@ func (s *ApprovalGrantStore) Record(sessionID, agentID, tool string) {
 		s.grants[key] = set
 	}
 	set[tool] = struct{}{}
+	return true
 }
 
 // Inherit copies the parent agent's CURRENT grant set (for sessionID) into

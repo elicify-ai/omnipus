@@ -140,7 +140,7 @@ type AgentLoop struct {
 	// Prompt injection defense (SEC-25). Sanitizes untrusted tool results —
 	// web_search, web_fetch, browser_*, read_file — before they enter the
 	// LLM's context. Nil when the guard is misconfigured; callers must
-	// nil-check. Trusted tool results (exec, spawn, message, etc.) are NEVER
+	// nil-check. Trusted tool results (bash, delegate, message, etc.) are NEVER
 	// sanitized so the LLM sees verbatim user and internal output.
 	promptGuard *security.PromptGuard
 
@@ -226,8 +226,9 @@ type AgentLoop struct {
 	// store instead lives for the AgentLoop's lifetime and is cleared
 	// per-SESSION (via CloseSession), not per-connection, so the grant
 	// survives reconnects while still expiring with the session it belongs
-	// to. Shared by the gateway's WS approval hook (IsAllowed/Record) and the
-	// spawn/run_subagent delegation path (Inherit — pkg/agent/subturn.go).
+	// to. Shared by the gateway's tool-approval REST path (IsAllowed/Record —
+	// see AgentLoop.CheckGrantOrRequestApproval) and the delegate tool's
+	// async/await paths (Inherit — pkg/agent/subturn.go).
 	approvalGrants *security.ApprovalGrantStore
 
 	// asyncNotifier is the single process-wide AsyncNotifier instance
@@ -761,8 +762,8 @@ func NewAgentLoop(
 		})
 
 	// Session-scoped tool-approval grant store (consent boundary fix): shared
-	// by the gateway's WS approval hook and the spawn/run_subagent delegation
-	// path. Always non-nil.
+	// by the gateway's tool-approval REST path and the delegate tool's
+	// async/await paths. Always non-nil.
 	al.approvalGrants = security.NewApprovalGrantStore()
 
 	// Process-wide AsyncNotifier (async-notifier-spec.md): the reusable
@@ -2034,9 +2035,9 @@ func errString(err error) string {
 }
 
 // buildDelegationDenyChecker returns the per-workspace, graph-authoritative
-// delegation gate for a targeted delegation tool (spawn = "background",
-// task_create / update_task = "task"). The per-workspace delegation graph
-// (workspaces/<id>.json → Delegation[] edges) is the SOLE runtime authority:
+// delegation gate for a targeted delegation tool (delegate with async=true =
+// "background", create_task / update_task = "task"). The per-workspace
+// delegation graph (workspaces/<id>.json → Delegation[] edges) is the SOLE runtime authority:
 // the per-agent config.DelegationPolicy is seed-only and is NOT read here.
 //
 // It enforces, in order, returning the first violation (nil = allowed):
@@ -4880,7 +4881,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// after each intermediate LLM call that may be followed by tool execution.
 	defer ts.finalizeStreamer(ctx)
 
-	// Inject turnState and AgentLoop into context so tools (e.g. spawn) can retrieve them.
+	// Inject turnState and AgentLoop into context so tools (e.g. delegate) can retrieve them.
 	turnCtx = withTurnState(turnCtx, ts)
 	turnCtx = WithAgentLoop(turnCtx, al)
 	// SEC-15: Inject agent ID so audit entries carry the agent identity.
@@ -6543,16 +6544,14 @@ turnLoop:
 					}
 					continue
 				}
-				// ask-policy: pause and request human approval (FR-011).
-				approver := al.loadToolApprover()
-				approved, denialReason := approver.RequestApproval(turnCtx, PolicyApprovalReq{
-					ToolCallID: tc.ID,
-					ToolName:   toolName,
-					Args:       cloneStringAnyMap(toolArgs),
-					AgentID:    ts.agentID,
-					SessionID:  ts.sessionKey,
-					TurnID:     ts.turnID,
-				})
+				// ask-policy: consult the session-scoped "Always Allow" grant
+				// store first (ADR-036 §3.4 — the sole grant-consultation point
+				// now that the legacy WS-frame gate, wsApprovalHook, has been
+				// retired), then fall through to interactive human approval
+				// (FR-011) only when no grant is on file.
+				approved, denialReason := al.CheckGrantOrRequestApproval(
+					turnCtx, ts.transcriptSessionID, ts.agentID, toolName, tc.ID, ts.turnID, toolArgs,
+				)
 				if !approved {
 					denyMsg := fmt.Sprintf(`{"error":"permission_denied","message":"User denied tool execution.","tool":%q,"reason":%q}`, toolName, denialReason)
 					al.emitPolicyDenyAudit(ts, toolName, "ask", denialReason)
@@ -8784,6 +8783,61 @@ func (al *AgentLoop) loadToolApprover() PolicyApprover {
 		return nopPolicyApprover{auditLogger: logger}
 	}
 	return a
+}
+
+// CheckGrantOrRequestApproval is the SOLE consultation point for tool-approval
+// grants on the "ask" policy path (ADR-036 §3.4). It first checks the
+// session-scoped "Always Allow" grant store (al.ApprovalGrants()); only when
+// no grant is on file does it fall through to the interactive human-approval
+// flow via the wired PolicyApprover (loadToolApprover -> RequestApproval).
+//
+// Before ADR-036 this consultation lived in the gateway's wsApprovalHook
+// (pkg/gateway/ws_approval.go, deleted by this change) — a WebSocket-frame
+// approval gate that ran BEFORE runTurn's TOCTOU "ask" branch below and
+// unconditionally denied after a 90s timeout once its answering frontend UI
+// (ExecApprovalBlock/ExecApprovalTool) was removed in the same ADR-036
+// change — making the "ask" branch, and therefore this grant store,
+// permanently unreachable for any WebSocket-connected chat session. Retiring
+// that gate and relocating grant consultation HERE (the only path that was
+// ever reachable in practice) is the fix.
+//
+// Only called when the effective tool policy has already resolved to "ask" —
+// callers MUST resolve policy (allow/deny/ask) themselves before calling this;
+// it does not re-check policy itself. In runTurn, "deny" short-circuits with
+// `continue` and "allow" falls straight through to execution, so neither ever
+// reaches this function — a grant can never widen a "deny" verdict, and an
+// "allow" verdict never touches the grant store at all.
+//
+// Exported (rather than folded inline against the unexported *turnState) so it
+// is directly unit-testable — including from pkg/gateway, which imports
+// pkg/agent but cannot construct a *turnState — without spinning up a
+// WebSocket connection. See pkg/gateway/ws_approval_grants_test.go.
+//
+// Identity: sessionID MUST be the transcript-store session ID
+// (turnState.transcriptSessionID), NOT the session-store scope key
+// (turnState.sessionKey). transcriptSessionID is the identity
+// ApprovalGrantStore.Inherit and ClearSession already use, and the ONE
+// identity shared across a delegation chain: subturn.go's spawnSubTurn gives
+// every child turn its own distinct, per-child SessionKey but always threads
+// the PARENT's TranscriptSessionID through unchanged, so a grant recorded
+// under sessionKey would never be visible to a delegated child turn.
+func (al *AgentLoop) CheckGrantOrRequestApproval(
+	ctx context.Context,
+	sessionID, agentID, toolName, toolCallID, turnID string,
+	args map[string]any,
+) (approved bool, denialReason string) {
+	if al.ApprovalGrants().IsAllowed(sessionID, agentID, toolName) {
+		return true, ""
+	}
+	approver := al.loadToolApprover()
+	return approver.RequestApproval(ctx, PolicyApprovalReq{
+		ToolCallID: toolCallID,
+		ToolName:   toolName,
+		Args:       cloneStringAnyMap(args),
+		AgentID:    agentID,
+		SessionID:  sessionID,
+		TurnID:     turnID,
+	})
 }
 
 // emitPolicyDenyAudit writes a tool.policy.deny.attempted audit entry.

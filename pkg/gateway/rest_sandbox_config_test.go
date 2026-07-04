@@ -315,6 +315,95 @@ func TestHandleSandboxConfig_SSRFAllowInternal_HotReload(t *testing.T) {
 		"ssrf.allow_internal hot-reloads via 2s config poll")
 }
 
+// --- shell_deny_patterns field tests ---
+//
+// Parity with the per-agent shell_policy.custom_deny_patterns validation
+// (TestUpdateAgent_ShellPolicy_InvalidRegex_Returns400,
+// rest_agents_god_mode_test.go) and the documented contract ("Must each be
+// valid Go regexp patterns (400 on invalid regexp)",
+// gen.SandboxConfig.ShellDenyPatterns doc comment).
+
+// TestHandleSandboxConfig_ShellDenyPatterns_ValidAccepted verifies that a
+// well-formed regexp list is accepted and persisted.
+func TestHandleSandboxConfig_ShellDenyPatterns_ValidAccepted(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+	w := sandboxConfigPUT(t, api, `{"shell_deny_patterns":["^\\s*rm\\s+-rf","curl.*\\|.*sh"]}`)
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	raw, err := os.ReadFile(api.configPath())
+	require.NoError(t, err)
+	var onDisk map[string]any
+	require.NoError(t, json.Unmarshal(raw, &onDisk))
+	sandboxDisk, _ := onDisk["sandbox"].(map[string]any)
+	require.NotNil(t, sandboxDisk)
+	patterns, _ := sandboxDisk["shell_deny_patterns"].([]any)
+	assert.Equal(t, []any{`^\s*rm\s+-rf`, `curl.*\|.*sh`}, patterns,
+		"valid shell_deny_patterns must be persisted on disk")
+}
+
+// TestHandleSandboxConfig_ShellDenyPatterns_InvalidRegexRejected verifies
+// that a malformed regexp is rejected with 400 BEFORE any disk write —
+// the bug this test guards against: compileDenyPatterns
+// (pkg/tools/shell_guard.go) silently drops any pattern that fails to
+// compile (logs Warn, continues), so a naive PUT that skipped this
+// validation would return 200 OK, persist the bad pattern, and have it
+// silently never enforce anything.
+func TestHandleSandboxConfig_ShellDenyPatterns_InvalidRegexRejected(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	// Seed a known-good value so we can assert it survives the failed PUT.
+	seedW := sandboxConfigPUT(t, api, `{"shell_deny_patterns":["curl.*\\|.*sh"]}`)
+	require.Equal(t, http.StatusOK, seedW.Code, "body: %s", seedW.Body.String())
+
+	w := sandboxConfigPUT(t, api, `{"shell_deny_patterns":["[invalid-regexp"]}`)
+	assert.Equal(t, http.StatusBadRequest, w.Code,
+		"invalid regexp in shell_deny_patterns must return 400; body: %s", w.Body.String())
+
+	var resp map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Contains(t, resp["error"], "[invalid-regexp",
+		"error message must name the offending pattern")
+
+	// Confirm the failed PUT did not clobber the previously-seeded value.
+	raw, err := os.ReadFile(api.configPath())
+	require.NoError(t, err)
+	var onDisk map[string]any
+	require.NoError(t, json.Unmarshal(raw, &onDisk))
+	sandboxDisk, _ := onDisk["sandbox"].(map[string]any)
+	require.NotNil(t, sandboxDisk)
+	patterns, _ := sandboxDisk["shell_deny_patterns"].([]any)
+	assert.Equal(t, []any{`curl.*\|.*sh`}, patterns,
+		"failed PUT must not mutate the previously-persisted shell_deny_patterns")
+}
+
+// TestHandleSandboxConfig_ShellDenyPatterns_AtomicWithOtherFields verifies
+// that a PUT mixing a valid field with an invalid shell_deny_patterns entry
+// rolls back atomically — matching TestHandleSandboxConfig_AtomicValidation
+// for allowed_paths.
+func TestHandleSandboxConfig_ShellDenyPatterns_AtomicWithOtherFields(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	// Seed a known-good allowed_paths value so we can assert it survives.
+	seedW := sandboxConfigPUT(t, api, `{"allowed_paths":["/var/log"]}`)
+	require.Equal(t, http.StatusOK, seedW.Code, "body: %s", seedW.Body.String())
+
+	// PUT a *different* valid allowed_paths value alongside an invalid
+	// shell_deny_patterns entry — the whole transaction must roll back.
+	w := sandboxConfigPUT(t, api,
+		`{"allowed_paths":["/etc"],"shell_deny_patterns":["(unterminated"]}`)
+	require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+
+	raw, err := os.ReadFile(api.configPath())
+	require.NoError(t, err)
+	var onDisk map[string]any
+	require.NoError(t, json.Unmarshal(raw, &onDisk))
+	sandboxDisk, _ := onDisk["sandbox"].(map[string]any)
+	require.NotNil(t, sandboxDisk)
+	paths, _ := sandboxDisk["allowed_paths"].([]any)
+	assert.Equal(t, []any{"/var/log"}, paths,
+		"the whole PUT must roll back atomically when shell_deny_patterns fails validation")
+}
+
 // --- shared handler tests ---
 
 // TestHandleSandboxConfig_PartialRestartFlag verifies that a PUT carrying

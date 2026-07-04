@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime/debug"
+	"sync/atomic"
 	"time"
 
 	"github.com/dapicom-ai/omnipus/pkg/audit"
@@ -71,7 +72,14 @@ type CancelHooks struct {
 	// Called once at graceful stage, alongside CancelPendingApprovals. A
 	// session with no background work sees no behavior change — this hook is
 	// a no-op in that case, not an error.
-	KillBackgroundSessions func(sessionID string)
+	//
+	// Returns the count of background sessions actually killed so
+	// RequestCancel can thread it into the turn_canceled audit event's
+	// fields map (background_sessions_killed). Before this, the cascade had
+	// no audit trail of its own — a kill failure surfaced only as a
+	// slog.Warn deep in pkg/tools/session.go, uncorrelated with the
+	// turn_canceled event a security reviewer would actually go looking at.
+	KillBackgroundSessions func(sessionID string) int
 }
 
 // RequestCancel is the canonical cancel entry point. All four cancel surfaces
@@ -190,6 +198,21 @@ func (al *AgentLoop) RequestCancel(
 	turnID := activeTurn.TurnID()
 	descendants := al.collectDescendantTurnIDs(sessionID)
 
+	// backgroundSessionsKilled carries the count returned by
+	// hooks.KillBackgroundSessions (set further below, in PHASE A) into the
+	// turn_canceled audit event emitted by the onCancelFinish callback
+	// registered immediately below. Unlike descendants above, this value
+	// cannot be precomputed before InterruptSession — KillBackgroundSessions
+	// must run after the graceful cascade per this function's documented
+	// step order — so the write (in PHASE A) and the read (inside the
+	// callback) can occur on different goroutines. It is therefore accessed
+	// only via atomic to avoid a data race; in the narrow window where the
+	// callback fires before PHASE A reaches the hook call, the audit field
+	// reads 0 even though a kill may complete moments later — the same class
+	// of already-tolerated race as the "descendants list mismatch" WARN
+	// below, not a regression this fix introduces.
+	var backgroundSessionsKilled int64
+
 	activeTurn.SetOnCancelFinish(func(cancelMethod string) {
 		// Mark the last transcript entry as truncated.
 		if store != nil {
@@ -215,12 +238,13 @@ func (al *AgentLoop) RequestCancel(
 		}
 		// Audit: turn_canceled (fired once when the turn exits).
 		audit.Emit(ctx, auditLogger, audit.EventTurnCancelled, audit.SeverityInfo, map[string]any{
-			"session_id":           sessionID,
-			"turn_id":              turnID,
-			"canceller_user":       canceller.UserID,
-			"canceller_channel":    canceller.Channel,
-			"cancel_method":        cancelMethod,
-			"descendants_canceled": descendants,
+			"session_id":                 sessionID,
+			"turn_id":                    turnID,
+			"canceller_user":             canceller.UserID,
+			"canceller_channel":          canceller.Channel,
+			"cancel_method":              cancelMethod,
+			"descendants_canceled":       descendants,
+			"background_sessions_killed": atomic.LoadInt64(&backgroundSessionsKilled),
 		})
 	})
 
@@ -247,7 +271,8 @@ func (al *AgentLoop) RequestCancel(
 		hooks.CancelPendingApprovals(sessionID, "session canceled")
 	}
 	if hooks.KillBackgroundSessions != nil {
-		hooks.KillBackgroundSessions(sessionID)
+		killed := hooks.KillBackgroundSessions(sessionID)
+		atomic.StoreInt64(&backgroundSessionsKilled, int64(killed))
 	}
 	if hooks.SendStageFrame != nil {
 		hooks.SendStageFrame(sessionID, "graceful")
@@ -356,9 +381,11 @@ func (al *AgentLoop) RequestCancelForSession(ctx context.Context, sessionID, use
 // any other transport-specific cancel side effect. It reaches the single
 // process-wide pkg/tools SessionManager via the exported GetSharedSessionManager
 // accessor (getSessionManager itself is unexported/package-private to
-// pkg/tools) and kills every background session owned by sessionID.
-func killBackgroundSessionsForCancelSurface(sessionID string) {
-	tools.GetSharedSessionManager().KillAllForSession(sessionID)
+// pkg/tools), kills every background session owned by sessionID, and returns
+// the count killed so RequestCancel can thread it into the turn_canceled
+// audit event.
+func killBackgroundSessionsForCancelSurface(sessionID string) int {
+	return tools.GetSharedSessionManager().KillAllForSession(sessionID)
 }
 
 // RequestCancelByChannelChat is a primitive-argument adapter for RequestCancel

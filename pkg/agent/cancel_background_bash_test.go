@@ -18,14 +18,50 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/dapicom-ai/omnipus/pkg/audit"
 	"github.com/dapicom-ai/omnipus/pkg/tools"
 )
+
+// auditRecordRow decodes one audit.jsonl line far enough to inspect both the
+// event name and its fields map — readCancelAuditEvents (cancel_test.go, same
+// package) only decodes the event name, which is not enough to assert on
+// background_sessions_killed below.
+type auditRecordRow struct {
+	Event  string         `json:"event"`
+	Fields map[string]any `json:"fields"`
+}
+
+// readCancelAuditRecords parses audit.jsonl the same way readCancelAuditEvents
+// does (reusing its splitCancelTestLines helper) but keeps the fields map for
+// each row.
+func readCancelAuditRecords(t *testing.T, dir string) []auditRecordRow {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(dir, "audit.jsonl"))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	require.NoError(t, err)
+	var rows []auditRecordRow
+	for _, line := range splitCancelTestLines(data) {
+		if len(line) == 0 {
+			continue
+		}
+		var r auditRecordRow
+		if json.Unmarshal(line, &r) == nil && r.Event != "" {
+			rows = append(rows, r)
+		}
+	}
+	return rows
+}
 
 // newRunningBackgroundSession is a small helper building a ProcessSession that
 // looks like a real detached background bash/exec session: Status "running",
@@ -45,8 +81,12 @@ func newRunningBackgroundSession(id, ownerSessionID string, pid int) *tools.Proc
 
 // registerActiveTurn injects a minimal turnState for sessionID so RequestCancel
 // finds an active turn to claim (mirrors the pattern used throughout
-// cancel_test.go, e.g. TestRequestCancel_ActiveTurn_FiredTrue).
-func registerActiveTurn(t *testing.T, al *AgentLoop, sessionID, turnID string) {
+// cancel_test.go, e.g. TestRequestCancel_ActiveTurn_FiredTrue). It returns the
+// registered *turnState so callers can manually fire onCancelFinish (set by
+// RequestCancel's SetOnCancelFinish call) the same way
+// TestRequestCancel_ActiveTurn_FiredTrue does, to produce the turn_canceled
+// audit event without a real turn-processing goroutine.
+func registerActiveTurn(t *testing.T, al *AgentLoop, sessionID, turnID string) *turnState {
 	t.Helper()
 	ts := &turnState{
 		turnID:              turnID,
@@ -56,6 +96,7 @@ func registerActiveTurn(t *testing.T, al *AgentLoop, sessionID, turnID string) {
 	}
 	al.activeTurnStates.Store(sessionID, ts)
 	t.Cleanup(func() { al.activeTurnStates.Delete(sessionID) })
+	return ts
 }
 
 // TestBash_CancelCascade_KillsOwnedBackgroundSessions covers BDD Scenario
@@ -68,7 +109,11 @@ func TestBash_CancelCascade_KillsOwnedBackgroundSessions(t *testing.T) {
 	t.Parallel()
 
 	al := newCancelTestAgentLoop(t)
-	registerActiveTurn(t, al, "sess-bg-cascade", "turn-bg-cascade")
+	// Wire a real audit logger so we can assert the killed-count reaches the
+	// turn_canceled audit event's fields map (background_sessions_killed).
+	auditDir := t.TempDir()
+	al.auditLogger = newAuditLoggerForCancelTest(t, auditDir)
+	ts := registerActiveTurn(t, al, "sess-bg-cascade", "turn-bg-cascade")
 
 	sm := tools.NewSessionManager()
 	bgSession := newRunningBackgroundSession("bg-1", "sess-bg-cascade", 999991001)
@@ -81,8 +126,8 @@ func TestBash_CancelCascade_KillsOwnedBackgroundSessions(t *testing.T) {
 		CancelScope{SessionID: "sess-bg-cascade"},
 		CancelCanceller{UserID: "alice", Channel: "web"},
 		CancelHooks{
-			KillBackgroundSessions: func(sessionID string) {
-				sm.KillAllForSession(sessionID)
+			KillBackgroundSessions: func(sessionID string) int {
+				return sm.KillAllForSession(sessionID)
 			},
 		},
 	)
@@ -96,6 +141,26 @@ func TestBash_CancelCascade_KillsOwnedBackgroundSessions(t *testing.T) {
 
 	assert.Equal(t, countBefore+1, sm.KilledBackgroundSessionsCount(),
 		"FR-B14: the kill counter must increment so the cascade is observable without a subsequent poll")
+
+	// Trigger the finish callback (mirrors TestRequestCancel_ActiveTurn_FiredTrue)
+	// to produce the turn_canceled audit event, then assert the killed count
+	// rode along in its fields map.
+	require.NotNil(t, ts.onCancelFinish, "RequestCancel must have registered onCancelFinish")
+	ts.onCancelFinish("graceful")
+
+	records := readCancelAuditRecords(t, auditDir)
+	var found bool
+	for _, r := range records {
+		if r.Event != audit.EventTurnCancelled {
+			continue
+		}
+		found = true
+		killed, ok := r.Fields["background_sessions_killed"]
+		require.True(t, ok, "turn_canceled audit event must carry background_sessions_killed")
+		assert.InDelta(t, float64(1), killed, 0,
+			"one background session was killed, so the audited count must be 1")
+	}
+	assert.True(t, found, "expected a turn_canceled audit event")
 }
 
 // TestBash_CancelCascade_NoOpWhenNothingToKill covers BDD Scenario "Canceling
@@ -107,7 +172,9 @@ func TestBash_CancelCascade_NoOpWhenNothingToKill(t *testing.T) {
 	t.Parallel()
 
 	al := newCancelTestAgentLoop(t)
-	registerActiveTurn(t, al, "sess-bg-noop", "turn-bg-noop")
+	auditDir := t.TempDir()
+	al.auditLogger = newAuditLoggerForCancelTest(t, auditDir)
+	ts := registerActiveTurn(t, al, "sess-bg-noop", "turn-bg-noop")
 
 	sm := tools.NewSessionManager() // deliberately empty — no background sessions at all
 
@@ -116,8 +183,8 @@ func TestBash_CancelCascade_NoOpWhenNothingToKill(t *testing.T) {
 		CancelScope{SessionID: "sess-bg-noop"},
 		CancelCanceller{UserID: "alice", Channel: "web"},
 		CancelHooks{
-			KillBackgroundSessions: func(sessionID string) {
-				sm.KillAllForSession(sessionID)
+			KillBackgroundSessions: func(sessionID string) int {
+				return sm.KillAllForSession(sessionID)
 			},
 		},
 	)
@@ -125,6 +192,23 @@ func TestBash_CancelCascade_NoOpWhenNothingToKill(t *testing.T) {
 	assert.True(t, outcome.Fired, "cancel must fire normally even with no background work")
 	assert.Equal(t, int64(0), sm.KilledBackgroundSessionsCount(),
 		"no background sessions exist, so the counter must stay at zero")
+
+	require.NotNil(t, ts.onCancelFinish, "RequestCancel must have registered onCancelFinish")
+	ts.onCancelFinish("graceful")
+
+	records := readCancelAuditRecords(t, auditDir)
+	var found bool
+	for _, r := range records {
+		if r.Event != audit.EventTurnCancelled {
+			continue
+		}
+		found = true
+		killed, ok := r.Fields["background_sessions_killed"]
+		require.True(t, ok, "turn_canceled audit event must carry background_sessions_killed even when zero")
+		assert.InDelta(t, float64(0), killed, 0,
+			"no background sessions were killed, so the audited count must be 0, not simply absent")
+	}
+	assert.True(t, found, "expected a turn_canceled audit event")
 }
 
 // TestBash_CancelCascade_DoesNotAffectOtherSessions covers BDD Scenario
@@ -151,8 +235,8 @@ func TestBash_CancelCascade_DoesNotAffectOtherSessions(t *testing.T) {
 		CancelScope{SessionID: "sess-A"},
 		CancelCanceller{UserID: "alice", Channel: "web"},
 		CancelHooks{
-			KillBackgroundSessions: func(sessionID string) {
-				sm.KillAllForSession(sessionID)
+			KillBackgroundSessions: func(sessionID string) int {
+				return sm.KillAllForSession(sessionID)
 			},
 		},
 	)
@@ -186,8 +270,9 @@ func TestBash_CancelCascade_HookNotCalledWhenNoActiveTurn(t *testing.T) {
 		CancelScope{SessionID: "sess-never-active"},
 		CancelCanceller{UserID: "alice", Channel: "web"},
 		CancelHooks{
-			KillBackgroundSessions: func(sessionID string) {
+			KillBackgroundSessions: func(sessionID string) int {
 				called = true
+				return 0
 			},
 		},
 	)

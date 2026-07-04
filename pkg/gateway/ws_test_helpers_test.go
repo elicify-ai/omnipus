@@ -10,6 +10,8 @@
 
 package gateway
 
+import "encoding/json"
+
 // wsClientFrameTestHelper is a test-only convenience struct for marshaling
 // client→server WebSocket frames. Production code uses generated types.
 // This struct carries the superset of all client frame fields so that tests
@@ -23,8 +25,8 @@ type wsClientFrameTestHelper struct {
 	SessionID string   `json:"session_id,omitempty"` // message/cancel/attach_session/session_close
 	AgentID   string   `json:"agent_id,omitempty"`   // message frame (route to specific agent)
 	Media     []string `json:"media,omitempty"`      // message frame (media:// attachment refs)
-	ID        string   `json:"id,omitempty"`         // exec_approval_response
-	Decision  string   `json:"decision,omitempty"`   // exec_approval_response / device_pairing_response
+	ID        string   `json:"id,omitempty"`         // device_pairing_response
+	Decision  string   `json:"decision,omitempty"`   // device_pairing_response
 	DeviceID  string   `json:"device_id,omitempty"`  // device_pairing_response
 }
 
@@ -53,4 +55,25 @@ func wsConnChatIDsForTest(h *WSHandler) []string {
 		ids = append(ids, id)
 	}
 	return ids
+}
+
+// makeTestConn creates a minimal wsConn with a buffered sendCh and an open doneCh.
+// The sendCh must be buffered so sendConnGenFrame does not block in tests.
+//
+// Formerly defined in ws_approval_test.go (deleted with the retired
+// wsApprovalHook gate, ADR-036 §3.4); relocated here because it is a
+// general-purpose helper used broadly across the package's WebSocket tests,
+// independent of that retired mechanism.
+func makeTestConn() *wsConn {
+	return &wsConn{
+		sendCh: make(chan []byte, 16),
+		doneCh: make(chan struct{}),
+	}
+}
+
+// unmarshalWSServerFrame decodes raw websocket message bytes into a replayFrameDecoder.
+//
+// Formerly defined in ws_approval_test.go — see makeTestConn's note above.
+func unmarshalWSServerFrame(b []byte, f *replayFrameDecoder) error {
+	return json.Unmarshal(b, f)
 }

@@ -82,6 +82,88 @@ func TestMigrateShellToolPolicyKeys_ExecDenySurvives(t *testing.T) {
 	})
 }
 
+// TestMigrateShellToolPolicyKeys_SingleKeyAskAndAllow covers dataset rows 2
+// and 3 in ISOLATION: {"exec": "ask"} -> bash: ask, and {"exec": "allow"} ->
+// bash: allow. These two boundary rows previously had no standalone test —
+// only TestMigrateShellToolPolicyKeys_StricterWins exercised "ask"/"allow"
+// values, and only ever in combination with a conflicting stricter key, which
+// cannot distinguish "the strictest-wins comparison happens to produce ask/
+// allow as a side effect" from "a lone ask/allow value is itself preserved
+// correctly". A regression that, say, always resolved a single legacy key to
+// "deny" (or dropped a lone non-deny value entirely) would still pass
+// StricterWins (since deny always wins there) but would be caught here.
+func TestMigrateShellToolPolicyKeys_SingleKeyAskAndAllow(t *testing.T) {
+	t.Run("SingleKey_Ask", func(t *testing.T) {
+		cfg := &Config{Sandbox: OmnipusSandboxConfig{
+			ToolPolicies: map[string]string{"exec": "ask"},
+		}}
+
+		touched := migrateShellToolPolicyKeys(cfg)
+
+		require.True(t, touched)
+		assert.Equal(t, "ask", cfg.Sandbox.ToolPolicies["bash"])
+		_, hasExec := cfg.Sandbox.ToolPolicies["exec"]
+		assert.False(t, hasExec, "legacy \"exec\" key must be gone after migration")
+	})
+
+	t.Run("SingleKey_Allow", func(t *testing.T) {
+		cfg := &Config{Sandbox: OmnipusSandboxConfig{
+			ToolPolicies: map[string]string{"exec": "allow"},
+		}}
+
+		touched := migrateShellToolPolicyKeys(cfg)
+
+		require.True(t, touched)
+		assert.Equal(t, "allow", cfg.Sandbox.ToolPolicies["bash"])
+		_, hasExec := cfg.Sandbox.ToolPolicies["exec"]
+		assert.False(t, hasExec, "legacy \"exec\" key must be gone after migration")
+	})
+
+	// Same two rows at the per-agent scope, mirroring
+	// TestMigrateShellToolPolicyKeys_ExecDenySurvives's dual-scope coverage.
+	t.Run("SingleKey_Ask_PerAgent", func(t *testing.T) {
+		cfg := &Config{
+			Agents: AgentsConfig{List: []AgentConfig{
+				{
+					ID: "ask-bot",
+					Tools: &AgentToolsCfg{Builtin: AgentBuiltinToolsCfg{
+						Policies: map[string]ToolPolicy{"exec": ToolPolicyAsk},
+					}},
+				},
+			}},
+		}
+
+		touched := migrateShellToolPolicyKeys(cfg)
+
+		require.True(t, touched)
+		policies := cfg.Agents.List[0].Tools.Builtin.Policies
+		assert.Equal(t, ToolPolicyAsk, policies["bash"])
+		_, hasExec := policies["exec"]
+		assert.False(t, hasExec, "legacy \"exec\" key must be gone after migration")
+	})
+
+	t.Run("SingleKey_Allow_PerAgent", func(t *testing.T) {
+		cfg := &Config{
+			Agents: AgentsConfig{List: []AgentConfig{
+				{
+					ID: "allow-bot",
+					Tools: &AgentToolsCfg{Builtin: AgentBuiltinToolsCfg{
+						Policies: map[string]ToolPolicy{"exec": ToolPolicyAllow},
+					}},
+				},
+			}},
+		}
+
+		touched := migrateShellToolPolicyKeys(cfg)
+
+		require.True(t, touched)
+		policies := cfg.Agents.List[0].Tools.Builtin.Policies
+		assert.Equal(t, ToolPolicyAllow, policies["bash"])
+		_, hasExec := policies["exec"]
+		assert.False(t, hasExec, "legacy \"exec\" key must be gone after migration")
+	})
+}
+
 // TestMigrateShellToolPolicyKeys_StricterWins covers dataset rows 5 and 6:
 // contradictory legacy keys resolve to the strictest present value
 // (deny > ask > allow), for both the 2-key and 3-key combinations.

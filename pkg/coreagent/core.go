@@ -809,15 +809,32 @@ func SeedConfig(cfg *config.Config) bool {
 //
 //   - default_policy: allow  (per FR-008: explicit allow-by-default)
 //   - policies: {"system.*": "deny"}  (privilege rail — no system.* by default)
+//   - policies: {"bash": "deny"}  (CRIT-001, bash-tool-spec.md FR-B12 — see below)
 //
 // Callers should embed this into config.AgentConfig.Tools when constructing a
 // new custom agent via the REST API or create_agent tool.
+//
+// bash:deny seed rationale (CRIT-001/FR-B12): pkg/tools/compositor.go's
+// passesScopeGate does NOT hard-deny ScopeCore tools (which "bash" is) for
+// custom agents — it defers to the merged policy, which falls through to
+// DefaultPolicy (allow, set above). Without this explicit seed, a fresh
+// custom agent could call bash with zero configuration. This is the SINGLE
+// shared seed location for both agent-creation paths (the REST
+// POST /api/v1/agents handler in pkg/gateway/rest.go's createAgent, and the
+// LLM-driven system.agent.create tool in
+// pkg/sysagent/tools/agent.go's AgentCreateTool.Execute) — both call this
+// constructor rather than seeding independently, so the two paths cannot
+// drift out of sync again. Renamed from "exec" to "bash" by ADR-036 (the
+// tool-consolidation work this seed anticipated — see the migration in
+// pkg/config/shell_tool_policy_migration.go for existing persisted "exec"
+// policy entries).
 func NewCustomAgentToolsCfg() *config.AgentToolsCfg {
 	return &config.AgentToolsCfg{
 		Builtin: config.AgentBuiltinToolsCfg{
 			DefaultPolicy: config.ToolPolicyAllow,
 			Policies: map[string]config.ToolPolicy{
 				"system.*": config.ToolPolicyDeny,
+				"bash":     config.ToolPolicyDeny,
 			},
 		},
 	}

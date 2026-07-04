@@ -403,6 +403,8 @@ import type {
   // M11 per-(agent, workspace) email mailbox account (contract-first #8):
   Mailbox,
   MailboxConfigureRequest,
+  // Tool-approval "always" grant action (commit 35447760, contract-first #8):
+  ToolApprovalActionRequest,
 } from '@/lib/api/generated/openapi-types'
 
 export type {
@@ -2882,8 +2884,15 @@ export function updateAgentTools(
 /**
  * POST /api/v1/tool-approvals/{approvalId} — resolve a pending tool approval.
  * FR-011, FR-082. Throws with status code prefix on non-2xx (e.g. "403: ...").
+ *
+ * action is the generated ToolApprovalActionRequest['action'] union — includes
+ * "always" (approve this call AND record a session-scoped Always-Allow grant
+ * via ApprovalGrantStore.Record; see pkg/gateway/rest_tool_registry.go).
  */
-export function postToolApproval(approvalId: string, action: 'approve' | 'deny' | 'cancel'): Promise<void> {
+export function postToolApproval(
+  approvalId: string,
+  action: ToolApprovalActionRequest['action'],
+): Promise<void> {
   // no-schema: void response; POST returns 204 No Content.
   return request<void>(`/tool-approvals/${encodeURIComponent(approvalId)}`, {
     method: 'POST',

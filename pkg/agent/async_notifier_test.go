@@ -112,11 +112,14 @@ func TestAsyncNotifier_Notify_RejectsEmptyChannel(t *testing.T) {
 }
 
 // TestAsyncNotifier_Notify_TruncatesLargeContent covers Order #3 / FR-N8,
-// using the exact Test Dataset "Content truncation" boundary values: 500
-// bytes untouched, exactly the 1,048,576-byte cap untouched, cap+1 truncated,
-// and 10x cap truncated — matching pkg/tools/session.go's
-// maxOutputBufferSize/outputTruncateMarker convention exactly (NOT the
-// unrelated 50,000-byte pkg/tools/web.go defaultMaxChars).
+// using the exact Test Dataset "Content truncation" (async-notifier-spec.md
+// lines 319-327) boundary values: rows 1-2 (0 bytes, 1 byte — added as part
+// of the ADR-036 fix-wave test-coverage review; the smallest case previously
+// tested was an arbitrary 500 bytes, leaving the dataset's own boundary rows
+// 1/2 untested), row 3 (exactly the 1,048,576-byte cap, untouched), row 4
+// (cap+1, truncated), and row 5 (10x cap, truncated) — matching
+// pkg/tools/session.go's maxOutputBufferSize/outputTruncateMarker convention
+// exactly (NOT the unrelated 50,000-byte pkg/tools/web.go defaultMaxChars).
 func TestAsyncNotifier_Notify_TruncatesLargeContent(t *testing.T) {
 	al, msgBus := newAsyncNotifierTestLoop(t)
 
@@ -125,6 +128,8 @@ func TestAsyncNotifier_Notify_TruncatesLargeContent(t *testing.T) {
 		size          int
 		wantTruncated bool
 	}{
+		{"0 bytes (empty, dataset row 1)", 0, false},
+		{"1 byte (min, dataset row 2)", 1, false},
 		{"500 bytes untouched", 500, false},
 		{"exactly cap untouched", asyncNotifyMaxContentBytes, false},
 		{"cap+1 truncated", asyncNotifyMaxContentBytes + 1, true},
@@ -370,6 +375,54 @@ func TestAsyncNotifier_NotificationGrantsNoCapability(t *testing.T) {
 	assert.False(t, stub.wasCalled.Load(),
 		"CRITICAL: a Notify-triggered turn executed a policy-denied tool — "+
 			"AsyncNotifier must never grant tool capability by virtue of how the turn was triggered")
+}
+
+// TestAsyncNotifier_Notify_PublishFailureDoesNotEmitFollowUpQueued covers the
+// event-ordering fix: EventKindFollowUpQueued must be emitted only after
+// PublishInbound actually succeeds. Before the fix, Notify emitted the event
+// unconditionally BEFORE attempting the publish, so a failed publish still
+// left the event bus showing "queued" with no compensating correction — a
+// false positive any future event-bus consumer (e.g. a Goals feature) would
+// see, even though the failure was already correctly logged and returned to
+// the caller.
+//
+// The publish is forced to fail deterministically by closing the message bus
+// before calling Notify: MessageBus.Close is guarded by sync.Once (safe to
+// call independent of AgentLoop.Close, which never touches an externally
+// owned bus — see newAsyncNotifierTestLoop), and publish() checks
+// mb.closed.Load() before touching the channel, so PublishInbound returns
+// bus.ErrBusClosed immediately with no timing race to manage.
+func TestAsyncNotifier_Notify_PublishFailureDoesNotEmitFollowUpQueued(t *testing.T) {
+	al, msgBus := newAsyncNotifierTestLoop(t)
+
+	sub := al.SubscribeEvents(8)
+	defer al.UnsubscribeEvents(sub.ID)
+
+	msgBus.Close()
+
+	err := al.asyncNotifier.Notify(context.Background(), AsyncNotifyEvent{
+		Channel:    "slack",
+		ChatID:     "C-fail",
+		SourceKind: "bash",
+		Content:    "this must never show as queued",
+	})
+	require.Error(t, err, "Notify must still surface the publish failure to the caller")
+
+	// Drain the event stream for a bounded window and confirm
+	// EventKindFollowUpQueued never arrives for this failed call. A fixed
+	// wait (rather than waitForEvent, which asserts presence) is correct
+	// here because we are asserting an ABSENCE.
+	deadline := time.After(300 * time.Millisecond)
+	for {
+		select {
+		case evt := <-sub.C:
+			if evt.Kind == EventKindFollowUpQueued {
+				t.Fatalf("EventKindFollowUpQueued must not be emitted when the publish failed; got payload %+v", evt.Payload)
+			}
+		case <-deadline:
+			return
+		}
+	}
 }
 
 // TestAsyncNotifier_ConcurrentNotifyAndRegisterObserver_RaceFree covers Order
