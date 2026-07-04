@@ -148,7 +148,6 @@ linters:
         path: _test\.go$
       - linters:
           - golines
-          - gosmopolitan
         path: ^pkg/api/generated/
 issues:
   max-issues-per-linter: 0

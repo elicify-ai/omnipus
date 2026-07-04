@@ -1081,7 +1081,7 @@ func FixtureTodo_ZeroValue() Todo {
 // FixtureTodo_Edge — a completed checklist item with unicode text.
 func FixtureTodo_Edge() Todo {
 	return Todo{
-		Text:   "完了-done-✓",
+		Text:   "完了-done-✓", //nolint:gosmopolitan // intentional CJK text in a unicode edge-case fixture
 		Status: TodoStatusCompleted,
 	}
 }
