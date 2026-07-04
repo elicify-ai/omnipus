@@ -43,10 +43,6 @@ func isHeartbeatJob(j cron.CronJob) bool {
 	return j.Payload.Kind == heartbeatJobKind || strings.HasPrefix(j.Name, heartbeatJobNamePrefix)
 }
 
-// workspaceListFunc returns all workspace records. Injected so the reconciler
-// stays testable without a real filesystem.
-type workspaceListFunc func() ([]workspace.Workspace, error)
-
 // desiredHeartbeat is the reconciler's target spec for one (workspace, agent) pair.
 type desiredHeartbeat struct {
 	workspaceID string

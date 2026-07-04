@@ -202,17 +202,17 @@ func TestCleanExpired_DoesNotDeleteForgetOnly(t *testing.T) {
 	}
 
 	// Ephemeral ref must be gone from the store index.
-	if _, err := store.Resolve(ephRef); err == nil {
+	if _, resolveErr := store.Resolve(ephRef); resolveErr == nil {
 		t.Error("ephemeral ref should be unknown after CleanExpired")
 	}
 	// Ephemeral file must also be deleted from disk (delete_on_cleanup).
-	if _, err := os.Stat(ephemeralPath); err == nil {
+	if _, statErr := os.Stat(ephemeralPath); statErr == nil {
 		t.Error("ephemeral file should be deleted from disk by CleanExpired")
 	}
 
 	// Session-bound ref must STILL be resolvable — this is the core assertion.
-	if _, err := store.Resolve(sessRef); err != nil {
-		t.Errorf("session ref must remain resolvable after CleanExpired: %v", err)
+	if _, resolveErr2 := store.Resolve(sessRef); resolveErr2 != nil {
+		t.Errorf("session ref must remain resolvable after CleanExpired: %v", resolveErr2)
 	}
 	// Verify metadata round-trip too.
 	resolvedPath, meta, err := store.ResolveWithMeta(sessRef)

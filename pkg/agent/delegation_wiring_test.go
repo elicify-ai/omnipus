@@ -46,26 +46,6 @@ func wireTestLoopWithGraph(t *testing.T, agentID string) (*AgentLoop, *ContextBu
 	return al, inst.ContextBuilder
 }
 
-// reloadLoop rebuilds the loop's config (no per-agent policy changes since the
-// injector is graph-authoritative), then calls ReloadProviderAndConfig. Returns
-// the (new) ContextBuilder for agentID after the reload.
-func reloadLoop(t *testing.T, al *AgentLoop, agentID string) *ContextBuilder {
-	t.Helper()
-	liveCfg := al.GetConfig()
-	newCfg := &config.Config{}
-	newCfg.Agents.Defaults = liveCfg.Agents.Defaults
-	newCfg.Agents.List = make([]config.AgentConfig, len(liveCfg.Agents.List))
-	copy(newCfg.Agents.List, liveCfg.Agents.List)
-	if err := al.ReloadProviderAndConfig(context.Background(), &mockProvider{}, newCfg); err != nil {
-		t.Fatalf("ReloadProviderAndConfig: %v", err)
-	}
-	inst, ok := al.GetRegistry().GetAgent(agentID)
-	if !ok || inst == nil || inst.ContextBuilder == nil {
-		t.Fatalf("agent %q not in registry after reload", agentID)
-	}
-	return inst.ContextBuilder
-}
-
 // ---------------------------------------------------------------------------
 // TestDelegationWiring_GraphSource
 //
@@ -548,6 +528,7 @@ func TestResolveDelegationLabel_CoreAgent(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.agentID, func(t *testing.T) {
+			t.Parallel()
 			label, ok := resolveDelegationLabel(reg, tc.agentID)
 			if ok != tc.wantOk {
 				t.Errorf("resolveDelegationLabel(%q): ok=%v, want %v", tc.agentID, ok, tc.wantOk)

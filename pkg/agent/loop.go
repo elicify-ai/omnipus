@@ -7750,7 +7750,7 @@ func (al *AgentLoop) windowTrim(agent *AgentInstance, sessionKey string) (compre
 	// overwrite the entire JSONL and reset Skip=0, permanently destroying evicted
 	// turns (SC-001). The floor keeps window[lastUserIdx:] — the user message and
 	// any following assistant/tool messages — not just the bare user message.
-	droppedCount := 0
+	var droppedCount int
 	if cutIdx >= 0 {
 		// Normal path: tail-of-window keeps are handled by TruncateHistory.
 		// TruncateHistory advances meta.Skip (archive-preserving; zero bytes

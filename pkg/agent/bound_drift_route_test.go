@@ -300,7 +300,7 @@ func TestDriftDrop_SingleEmission_ViaProcessMessage(t *testing.T) {
 	if ok2 {
 		t.Errorf("resolveSteeringTarget second call returned ok=true (scope=%q); expected false", scope2)
 	}
-	_, _, _ = al.processMessage(context.Background(), msg)
+	_, _, _ = al.processMessage(context.Background(), msg) //nolint:dogsled // side-effect only
 	postCombined := al.GetDriftDropped()
 
 	if postCombined != preCombined+1 {

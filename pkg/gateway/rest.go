@@ -1887,7 +1887,7 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	)
 
 	switch *typePeek.Type {
-	case "Main":
+	case "Main": //nolint:dupl // per-variant oapi-codegen block, intentionally not merged
 		var vreq gen.AgentCreateRequestMain
 		if !decodeAgentCreateVariant(w, raw, *typePeek.Type, variantName, &vreq) {
 			return
@@ -1927,7 +1927,7 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 			toolsCfgIn = tc
 		}
 		delegationIn = delegationInputFromCreateRequestMain(&vreq)
-	case "Subagent":
+	case "Subagent": //nolint:dupl // per-variant oapi-codegen block, intentionally not merged
 		var vreq gen.AgentCreateRequestSubagent
 		if !decodeAgentCreateVariant(w, raw, *typePeek.Type, variantName, &vreq) {
 			return
@@ -6528,7 +6528,7 @@ func (a *restAPI) HandleChannels(w http.ResponseWriter, r *http.Request) {
 		if len(failed) > 0 {
 			entryBaseTypes := make(map[string]struct{}, len(channels))
 			for _, e := range channels {
-				bt, _ := config.ParseInstanceKey(string(e.Id))
+				bt, _ := config.ParseInstanceKey(e.Id)
 				entryBaseTypes[bt] = struct{}{}
 			}
 			for _, f := range failed {
@@ -6578,7 +6578,7 @@ func applyDegradedOverlay(channelList []gen.ChannelEntry, failed []channels.Chan
 		degradedMap[id] = f.Err.Error()
 	}
 	for i := range channelList {
-		baseType, _ := config.ParseInstanceKey(string(channelList[i].Id))
+		baseType, _ := config.ParseInstanceKey(channelList[i].Id)
 		if reason, ok := degradedMap[baseType]; ok {
 			r := reason
 			channelList[i].Degraded = boolPtr(true)

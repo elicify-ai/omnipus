@@ -596,7 +596,7 @@ func TestUpdateAgent_DepthAtCeilingAccepted(t *testing.T) {
 }
 
 // TestDelegationInputExtractors_BehavioralIdentity pins the four
-// //nolint:dupl delegation-input extractors
+// dupl-suppressed delegation-input extractors
 // (delegationInputFromCreateRequestMain / …Subagent / …Subagent3p /
 // delegationInputFromUpdateRequest, rest_agent_delegation.go) against drift.
 // The four are intentionally near-identical bodies — one per oapi-codegen

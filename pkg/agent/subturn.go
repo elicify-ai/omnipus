@@ -1035,7 +1035,7 @@ func newEphemeralSession(initial []providers.Message) ephemeralSessionStoreIface
 
 // ephemeralSessionStoreIface is satisfied by *ephemeralSessionStore.
 // Declared so newEphemeralSession can return a typed interface.
-type ephemeralSessionStoreIface interface {
+type ephemeralSessionStoreIface interface { //nolint:interfacebloat // mirrors the SessionStore contract; one cohesive session responsibility
 	AddMessage(sessionKey, role, content string)
 	AddFullMessage(sessionKey string, msg providers.Message)
 	GetHistory(key string) []providers.Message

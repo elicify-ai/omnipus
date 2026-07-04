@@ -8,7 +8,7 @@ import (
 
 // Store defines an interface for persistent session storage.
 // Each method is an atomic operation — there is no separate Save() call.
-type Store interface {
+type Store interface { //nolint:interfacebloat // cohesive persistent-store contract; each method is one atomic op
 	// AddMessage appends a simple text message to a session.
 	AddMessage(ctx context.Context, sessionKey, role, content string) error
 

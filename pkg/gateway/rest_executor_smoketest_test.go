@@ -1033,7 +1033,7 @@ func TestPostAgentsExecutorSmokeTest_AgentIDIsCoreTeamMember_UsesWorkspaceShared
 // saved) preserves EXACTLY the pre-existing behavior: a disposable ephemeral
 // scratch directory under $OMNIPUS_HOME/executor-smoke-test-runs, removed
 // after the request, with used_agent_workspace=false in the response.
-func TestPostAgentsExecutorSmokeTest_AgentIDOmitted_UsesEphemeralScratch(t *testing.T) {
+func TestPostAgentsExecutorSmokeTest_AgentIDOmitted_UsesEphemeralScratch(t *testing.T) { //nolint:dupl // parallel test
 	if runtime.GOOS == "windows" {
 		t.Skip("stub uses a POSIX shell script")
 	}
@@ -1072,7 +1072,7 @@ func TestPostAgentsExecutorSmokeTest_AgentIDOmitted_UsesEphemeralScratch(t *test
 // that an agent_id naming an agent that does not exist (stale/deleted id)
 // falls back to the SAME disposable ephemeral scratch directory behavior —
 // not an error — with used_agent_workspace=false in the response.
-func TestPostAgentsExecutorSmokeTest_AgentIDNotFound_FallsBackToEphemeral(t *testing.T) {
+func TestPostAgentsExecutorSmokeTest_AgentIDNotFound_FallsBackToEphemeral(t *testing.T) { //nolint:dupl // parallel test
 	if runtime.GOOS == "windows" {
 		t.Skip("stub uses a POSIX shell script")
 	}

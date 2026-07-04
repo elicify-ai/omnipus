@@ -210,7 +210,7 @@ func TestApproveTool_AlwaysGrantScopedByAgentAndSession(t *testing.T) {
 		select {
 		case frameBytes := <-conn.sendCh:
 			var frame replayFrameDecoder
-			if err := unmarshalWSServerFrame(frameBytes, &frame); err != nil {
+			if decodeErr := unmarshalWSServerFrame(frameBytes, &frame); decodeErr != nil {
 				return
 			}
 			if frame.Type == "exec_approval_request" {

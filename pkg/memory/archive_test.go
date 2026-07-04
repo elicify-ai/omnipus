@@ -375,8 +375,8 @@ func TestRollbackAppended(t *testing.T) {
 
 	// Append extra messages (simulating a turn's writes).
 	for i := 0; i < extra; i++ {
-		if err := store.AddMessage(ctx, key, "assistant", fmt.Sprintf("extra%d", i)); err != nil {
-			t.Fatalf("AddMessage extra %d: %v", i, err)
+		if addErr := store.AddMessage(ctx, key, "assistant", fmt.Sprintf("extra%d", i)); addErr != nil {
+			t.Fatalf("AddMessage extra %d: %v", i, addErr)
 		}
 	}
 
@@ -389,8 +389,8 @@ func TestRollbackAppended(t *testing.T) {
 
 	// Roll back to initial line count, restoring Skip to the turn-start value
 	// (targetSkip = initialArchiveLen - initialHistoryLength = 10 - 7 = 3).
-	if err := store.RollbackAppended(ctx, key, initial, skipCount); err != nil {
-		t.Fatalf("RollbackAppended: %v", err)
+	if rollbackErr := store.RollbackAppended(ctx, key, initial, skipCount); rollbackErr != nil {
+		t.Fatalf("RollbackAppended: %v", rollbackErr)
 	}
 
 	// After rollback: archive must have exactly initial lines.

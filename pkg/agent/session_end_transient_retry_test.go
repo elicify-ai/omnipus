@@ -31,7 +31,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -346,27 +345,3 @@ func TestRunRecap_GOAWAYTransient_SucceedsAfterRetry(t *testing.T) {
 		t.Errorf("expected real recap after GOAWAY retry; got:\n%s", data)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Atomic call counter helper for concurrent access verification
-// ---------------------------------------------------------------------------
-
-// atomicCallProvider wraps a provider and tracks call count atomically.
-// Used for race-condition-safe call counting in parallel tests.
-type atomicCallProvider struct {
-	inner     providers.LLMProvider
-	callCount atomic.Int64
-}
-
-func (p *atomicCallProvider) Chat(
-	ctx context.Context,
-	msgs []providers.Message,
-	tools []providers.ToolDefinition,
-	model string,
-	opts map[string]any,
-) (*providers.LLMResponse, error) {
-	p.callCount.Add(1)
-	return p.inner.Chat(ctx, msgs, tools, model, opts)
-}
-
-func (p *atomicCallProvider) GetDefaultModel() string { return p.inner.GetDefaultModel() }

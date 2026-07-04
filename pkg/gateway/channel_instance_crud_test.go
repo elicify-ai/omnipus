@@ -406,7 +406,7 @@ func TestSetChannelRouting_EmitsAuditEvent(t *testing.T) {
 	assert.True(t, found,
 		"a channel.routing.changed audit event must be emitted by setChannelRouting (FR-030); got events: %v",
 		func() []string {
-			var evts []string
+			evts := make([]string, 0, len(entries))
 			for _, e := range entries {
 				evts = append(evts, fmt.Sprintf("%v", e["event"]))
 			}
@@ -645,7 +645,7 @@ func TestListChannels_TwoSameTypeInstances_TwoDistinctEntries(t *testing.T) {
 	byInstanceID := map[string]gen.ChannelEntry{}
 	var bareWhatsapp int
 	for _, e := range entries {
-		baseType, _ := config.ParseInstanceKey(string(e.Id))
+		baseType, _ := config.ParseInstanceKey(e.Id)
 		if baseType != "whatsapp" {
 			continue
 		}
@@ -661,8 +661,8 @@ func TestListChannels_TwoSameTypeInstances_TwoDistinctEntries(t *testing.T) {
 	us, hasUS := byInstanceID["whatsapp.us"]
 	require.True(t, hasEU, "whatsapp.eu must be a distinct entry; got entries=%+v", entries)
 	require.True(t, hasUS, "whatsapp.us must be a distinct entry; got entries=%+v", entries)
-	assert.Equal(t, "whatsapp.eu", string(eu.Id), "eu entry id must be the instance key")
-	assert.Equal(t, "whatsapp.us", string(us.Id), "us entry id must be the instance key")
+	assert.Equal(t, "whatsapp.eu", eu.Id, "eu entry id must be the instance key")
+	assert.Equal(t, "whatsapp.us", us.Id, "us entry id must be the instance key")
 	assert.True(t, eu.Enabled, "whatsapp.eu was configured enabled")
 	assert.False(t, us.Enabled, "whatsapp.us was configured disabled")
 	// Because a whatsapp instance IS configured, there must be NO static
@@ -672,7 +672,7 @@ func TestListChannels_TwoSameTypeInstances_TwoDistinctEntries(t *testing.T) {
 	// A base type with no configured instance still appears once (unconfigured).
 	var telegramCount int
 	for _, e := range entries {
-		if string(e.Id) == "telegram" {
+		if e.Id == "telegram" {
 			telegramCount++
 			assert.Nil(t, e.InstanceId, "unconfigured telegram row has no instance_id")
 			assert.False(t, e.Enabled, "unconfigured telegram row is disabled")
@@ -715,7 +715,7 @@ func TestDeleteChannelInstance_EmitsAuditEvent(t *testing.T) {
 	assert.True(t, found,
 		"a channel.instance.deleted audit event must be emitted (ADR-029 FR-025); got events: %v",
 		func() []string {
-			var evts []string
+			evts := make([]string, 0, len(entries))
 			for _, e := range entries {
 				evts = append(evts, fmt.Sprintf("%v", e["event"]))
 			}

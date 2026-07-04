@@ -130,7 +130,7 @@ func indexSeqAtOrAfter(haystack []string, from int, seq []string) int {
 // two flags (e.g. moving codex's --sandbox before --ask-for-approval, or
 // moving it after `exec`) fails here even though every individual flag is
 // still present.
-func assertRealArgsMatchEndpoint(t *testing.T, cli string, real []string, wantEntries []string) {
+func assertRealArgsMatchEndpoint(t *testing.T, cli string, realExecutor []string, wantEntries []string) {
 	t.Helper()
 	cursor := 0
 	for _, entry := range wantEntries {
@@ -138,7 +138,7 @@ func assertRealArgsMatchEndpoint(t *testing.T, cli string, real []string, wantEn
 		require.NotEmptyf(t, fields, "cli %s: empty AutoAppliedFlags entry", cli)
 		conditional := strings.Contains(entry, "<")
 		if conditional {
-			idx := indexAtOrAfter(real, cursor, fields[0])
+			idx := indexAtOrAfter(realExecutor, cursor, fields[0])
 			require.GreaterOrEqualf(
 				t,
 				idx,
@@ -147,14 +147,14 @@ func assertRealArgsMatchEndpoint(t *testing.T, cli string, real []string, wantEn
 				cli,
 				fields[0],
 				entry,
-				real,
+				realExecutor,
 				cursor,
 				cli,
 			)
 			cursor = idx + 1
 			continue
 		}
-		idx := indexSeqAtOrAfter(real, cursor, fields)
+		idx := indexSeqAtOrAfter(realExecutor, cursor, fields)
 		require.GreaterOrEqualf(
 			t,
 			idx,
@@ -163,7 +163,7 @@ func assertRealArgsMatchEndpoint(t *testing.T, cli string, real []string, wantEn
 			cli,
 			fields,
 			entry,
-			real,
+			realExecutor,
 			cursor,
 			cli,
 		)
