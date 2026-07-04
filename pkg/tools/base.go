@@ -230,11 +230,10 @@ func ToolWorkspaceID(ctx context.Context) string {
 }
 
 // WithTurnWorkspaceDir returns a child context carrying the absolute filesystem
-// directory that the current turn's file/exec tools should be rooted in
-// (experimental.workspace_rooted_filesystem). The agent loop sets this only
-// when the flag is ON and the turn is bound to a Workspace; otherwise it leaves
-// the context untouched so file/exec tools fall back to their fixed agent root,
-// preserving byte-for-byte the pre-flag behavior.
+// directory that the current turn's file/exec tools should be rooted in. The
+// agent loop sets this only when the turn's agent belongs to a Workspace's
+// CoreTeam (workspace.FindForAgent); otherwise it leaves the context untouched
+// so file/exec tools fall back to their fixed agent root.
 //
 // An empty dir is treated as "unset" (the loop never sets it to ""), so passing
 // "" is a no-op rather than re-rooting to the process cwd.

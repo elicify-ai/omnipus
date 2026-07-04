@@ -554,11 +554,11 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolRes
 	}
 
 	// Resolve the base working directory for this call. When the turn re-roots
-	// to a workspace dir (experimental.workspace_rooted_filesystem), the base
-	// becomes workspaces/<id>/ for this turn only; otherwise it is the fixed
-	// agent dir — byte-for-byte the old behavior. All workspace-escape guards
-	// below are evaluated relative to baseDir, so cross-workspace traversal is
-	// still blocked, just relative to the re-rooted root.
+	// to a workspace dir (the agent is a member of that Workspace's CoreTeam),
+	// the base becomes workspaces/<id>/ for this turn only; otherwise it is the
+	// fixed agent dir, unchanged. All workspace-escape guards below are
+	// evaluated relative to baseDir, so cross-workspace traversal is still
+	// blocked, just relative to the re-rooted root.
 	//
 	// Security (STEP 0): this only changes cmd.Dir. Both agents/<id>/ and
 	// workspaces/<id>/ are under $OMNIPUS_HOME, which the boot Landlock policy

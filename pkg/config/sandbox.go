@@ -430,30 +430,6 @@ type ExperimentalConfig struct {
 	// The validator fills a nil pointer with false. Jim (the general-purpose
 	// core agent) has this flag flipped to true during SeedConfig.
 	WorkspaceShellEnabled *bool `json:"workspace_shell_enabled,omitempty"`
-
-	// WorkspaceRootedFilesystem re-roots an agent's per-turn file (read_file,
-	// write_file, edit_file, append_file, list_directory) and exec working
-	// directory to the WORKSPACE the turn acts in (workspaces/<id>/) instead of
-	// the agent's own directory (agents/<id>/). Defaults to false
-	// (deny-by-default); behavior is byte-for-byte identical to pre-flag when
-	// off OR when the turn carries no workspace_id.
-	//
-	// Security note: re-rooting only changes the working directory and the
-	// app-level path-validation root. It does NOT widen the kernel sandbox:
-	// both agents/<id>/ and workspaces/<id>/ live under $OMNIPUS_HOME, which
-	// the boot Landlock policy already grants RWX. Sessions and private agent
-	// memory always remain under agents/<id>/ — they are never re-rooted.
-	//
-	// Under sandbox=enforce, cross-workspace isolation for the spawned shell is
-	// app-layer only (cwd + path guards), because exec children inherit the
-	// home-wide boot grant — this flag does NOT add kernel-enforced per-workspace
-	// isolation. Also: when on, a re-rooted agent's generic write_file/edit_file
-	// can write workspaces/<id>/AGENT.md — the workspace's own Project
-	// Instructions injected into every agent's prompt. That is an accepted,
-	// flag-gated surface; do not enable in untrusted multi-agent setups without
-	// reviewing it. (Plain bool, not *bool like WorkspaceShellEnabled above: a
-	// new deny-by-default flag needs no tri-state — zero value = off.)
-	WorkspaceRootedFilesystem bool `json:"workspace_rooted_filesystem,omitempty"`
 }
 
 // OmnipusSSRFConfig holds SSRF protection settings for outbound HTTP clients (SEC-24).
