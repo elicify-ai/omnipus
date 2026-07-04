@@ -51,11 +51,45 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist/spa',
+    // Vite's 500 kB default is too conservative for this feature-rich SPA
+    // (chat + AssistantUI + katex + mermaid + cytoscape + Shiki syntax
+    // highlighting). Two categories legitimately exceed 500 kB and cannot be
+    // fixed by build config alone:
+    //   1. Lazily-loaded Shiki language grammars (emacs-lisp ~760 kB, cpp,
+    //      wasm) — single vendor modules, loaded only when highlighting that
+    //      language, so their size doesn't hit the initial load.
+    //   2. The eager entry chunk (~1.9 MB) — dominated by APP code, because
+    //      top-level routes/screens are statically imported into the entry
+    //      rather than lazy-loaded. Genuinely reducing this needs route-based
+    //      code-splitting (TanStack Router lazy routes) — a larger refactor
+    //      tracked separately, not a build-config change.
+    // The threshold is set above today's legitimate sizes so the warning still
+    // fires on a genuinely new oversized chunk (regression signal), rather
+    // than on the known, understood large chunks above.
+    chunkSizeWarningLimit: 2000,
     rollupOptions: {
+      // Suppress INEFFECTIVE_DYNAMIC_IMPORT: store/ui, store/auth and
+      // store/chat are dynamically imported in a few low-level files
+      // (lib/queryClient, lib/authLogout, chat/mermaid-renderer) specifically
+      // to avoid CIRCULAR IMPORTS / module-graph coupling — not for
+      // code-splitting. Rollup can't split them (they're statically imported
+      // elsewhere too) and flags the dynamic import as "ineffective", but the
+      // intent is correct; converting them to static would reintroduce the
+      // circular deps those files document. This is a false positive for our
+      // usage, so drop it — every other warning still surfaces.
+      onwarn(warning, warn) {
+        if (warning.code === 'INEFFECTIVE_DYNAMIC_IMPORT') return
+        warn(warning)
+      },
       output: {
         // Vite 8 dropped the object form of manualChunks. The function form
         // takes a module-id string and returns a chunk name. Keep the same
-        // 4 vendor splits as before (react / router / motion / icons).
+        // 4 vendor splits as before (react / router / motion / icons) — these
+        // are the app-wide-eager libs worth caching separately. Broader vendor
+        // splits (radix, react-query) were measured to NOT shrink the entry
+        // (the entry is app-code-bound, not vendor-bound) and were dropped;
+        // heavy, rarely-needed libs (cytoscape, katex, Shiki grammars, the
+        // WS-parser worker) stay on Vite's automatic dynamic-import splitting.
         manualChunks(id) {
           if (id.includes('node_modules/react/') || id.includes('node_modules/react-dom/')) {
             return 'react'
