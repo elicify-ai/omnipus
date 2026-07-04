@@ -407,7 +407,11 @@ func (a *restAPI) runExecutorSmokeTest(
 		}
 		dir, mkErr := os.MkdirTemp(root, "run-")
 		if mkErr != nil {
-			return smokeTestFail(fmt.Sprintf("could not create scratch workspace: %v", mkErr), durationMs(), false), resolvedBinary
+			return smokeTestFail(
+				fmt.Sprintf("could not create scratch workspace: %v", mkErr),
+				durationMs(),
+				false,
+			), resolvedBinary
 		}
 		workDir = dir
 		isEphemeralWorkspace = true
@@ -467,7 +471,11 @@ func (a *restAPI) runExecutorSmokeTest(
 	// too keeps the driver's own stored field consistent with that posture.
 	driver, err := smokeTestNewDriver(cli, nil)
 	if err != nil {
-		return smokeTestFail(fmt.Sprintf("could not construct driver: %v", err), durationMs(), usedAgentWorkspace), resolvedBinary
+		return smokeTestFail(
+			fmt.Sprintf("could not construct driver: %v", err),
+			durationMs(),
+			usedAgentWorkspace,
+		), resolvedBinary
 	}
 
 	evCh, runErr := driver.Run(runCtx, runner.RunOptions{
@@ -482,7 +490,11 @@ func (a *restAPI) runExecutorSmokeTest(
 		Model:          model,
 	})
 	if runErr != nil {
-		return smokeTestFail(fmt.Sprintf("failed to start %s: %v", cli, runErr), durationMs(), usedAgentWorkspace), resolvedBinary
+		return smokeTestFail(
+			fmt.Sprintf("failed to start %s: %v", cli, runErr),
+			durationMs(),
+			usedAgentWorkspace,
+		), resolvedBinary
 	}
 
 	slog.Info("executor-smoke-test: run started",

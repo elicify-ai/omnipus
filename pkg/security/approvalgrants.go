@@ -15,6 +15,7 @@
 // the lifetime of the SESSION, and correctly requires a fresh prompt when a
 // DIFFERENT agent (in the same session) or a DIFFERENT session calls the same
 // tool.
+
 package security
 
 import "sync"

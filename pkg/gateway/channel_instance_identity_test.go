@@ -88,8 +88,13 @@ func TestConfigureChannel_StripsFilesystemPathFields(t *testing.T) {
 	api := newChannelTestAPI(t, `{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],"channels":{}}`)
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/channels/whatsapp/configure",
-		strings.NewReader(`{"session_store_path":"/etc","crypto_database_path":"/root/.ssh","service_account_file":"/home/victim/secrets.json"}`))
+	r := httptest.NewRequest(
+		http.MethodPut,
+		"/api/v1/channels/whatsapp/configure",
+		strings.NewReader(
+			`{"session_store_path":"/etc","crypto_database_path":"/root/.ssh","service_account_file":"/home/victim/secrets.json"}`,
+		),
+	)
 	r.Header.Set("Content-Type", "application/json")
 	api.configureChannel(w, r, "whatsapp")
 	require.Equal(t, http.StatusOK, w.Code,

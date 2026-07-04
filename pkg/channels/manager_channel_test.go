@@ -72,7 +72,7 @@ func TestToChannelHashes(t *testing.T) {
 // Pre-ADR-029 the hash was keyed by "whatsapp_native" (the factory name) so
 // that initChannels used m.channels["whatsapp_native"]. That invariant is gone:
 // initChannel now keys m.channels by instanceID, so hashes must also key by
-// instanceID. This test asserts the new correct behaviour.
+// instanceID. This test asserts the new correct behavior.
 //
 // Asserting purely at the function level (toChannelHashes / compareChannels /
 // toChannelConfig) so it needs no real whatsmeow connection or network.

@@ -2356,9 +2356,13 @@ func TestReload_AddedChannelMissingFromMap_NoPanic(t *testing.T) {
 // the invariant: m.channels["whatsapp"] is the correct post-reload entry.
 func TestReload_EnableWhatsApp_StartsNativeChannel(t *testing.T) {
 	started := make(chan struct{}, 1)
-	withFactory(t, "whatsapp_native", func(*config.Config, string, credentials.SecretBundle, *bus.MessageBus) (Channel, error) {
-		return &mockChannelStartSignal{started: started}, nil
-	})
+	withFactory(
+		t,
+		"whatsapp_native",
+		func(*config.Config, string, credentials.SecretBundle, *bus.MessageBus) (Channel, error) {
+			return &mockChannelStartSignal{started: started}, nil
+		},
+	)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

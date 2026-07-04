@@ -39,7 +39,10 @@ func TestValidateChannels_MultipleInstancesPerTypeAllowed(t *testing.T) {
 		"telegram.eu": {Type: "telegram", Enabled: true},
 	}
 	if err := ValidateChannels(channels); err != nil {
-		t.Fatalf("ValidateChannels rejected two telegram instances with valid namespaced keys (cap-1 was lifted): %v", err)
+		t.Fatalf(
+			"ValidateChannels rejected two telegram instances with valid namespaced keys (cap-1 was lifted): %v",
+			err,
+		)
 	}
 }
 
@@ -204,7 +207,9 @@ func TestValidateChannels_HalfBound_RejectsWorkspaceIDWithNilIdentity(t *testing
 	}
 	err := ValidateChannels(channels)
 	if err == nil {
-		t.Fatal("ValidateChannels accepted a half-bound instance (WorkspaceID set, Identity nil); want ErrHalfBoundChannelInstance")
+		t.Fatal(
+			"ValidateChannels accepted a half-bound instance (WorkspaceID set, Identity nil); want ErrHalfBoundChannelInstance",
+		)
 	}
 	if !errors.Is(err, ErrHalfBoundChannelInstance) {
 		t.Fatalf("error does not wrap ErrHalfBoundChannelInstance: %v", err)
@@ -225,7 +230,9 @@ func TestValidateChannels_HalfBound_RejectsWorkspaceIDWithUserKind(t *testing.T)
 	}
 	err := ValidateChannels(channels)
 	if err == nil {
-		t.Fatal("ValidateChannels accepted a half-bound instance (Identity.Kind=user); want ErrHalfBoundChannelInstance")
+		t.Fatal(
+			"ValidateChannels accepted a half-bound instance (Identity.Kind=user); want ErrHalfBoundChannelInstance",
+		)
 	}
 	if !errors.Is(err, ErrHalfBoundChannelInstance) {
 		t.Fatalf("error does not wrap ErrHalfBoundChannelInstance: %v", err)

@@ -23,13 +23,19 @@ type jsonSession struct {
 }
 
 // MigrateFromJSON reads legacy sessions/*.json files from sessionsDir,
-// writes them into the Store, and renames each migrated file to
+// writes them into the store, and renames each migrated file to
 // .json.migrated as a backup. Returns the number of sessions migrated.
 //
 // Files that fail to parse are logged and skipped. Already-migrated
 // files (.json.migrated) are ignored, making the function idempotent.
+//
+// Only StoreWriter (SetHistory/SetSummary) is required — migration never
+// reads back through the interface, so the narrower type is sufficient
+// (interface segregation: this is the one clear, safe narrowing call site
+// for the Store split, since every other production caller round-trips
+// reads and writes and is left on the composed Store type).
 func MigrateFromJSON(
-	ctx context.Context, sessionsDir string, store Store,
+	ctx context.Context, sessionsDir string, store StoreWriter,
 ) (int, error) {
 	entries, err := os.ReadDir(sessionsDir)
 	if os.IsNotExist(err) {

@@ -84,8 +84,12 @@ func TestRunTurn_CoreTeamMember_WritesToWorkspaceSharedDir(t *testing.T) {
 
 	sharedFile := filepath.Join(workspacesDir, "team-ws", "work", "proof.txt")
 	got, readErr := os.ReadFile(sharedFile)
-	require.NoError(t, readErr,
-		"write_file must have landed in the workspace's dedicated work/ directory (%s) — CoreTeam membership must re-root the turn's filesystem there", sharedFile)
+	require.NoError(
+		t,
+		readErr,
+		"write_file must have landed in the workspace's dedicated work/ directory (%s) — CoreTeam membership must re-root the turn's filesystem there",
+		sharedFile,
+	)
 	assert.Equal(t, "hello-from-team-workspace", string(got))
 
 	// The agent's own private directory must NOT have received the file.
@@ -100,8 +104,12 @@ func TestRunTurn_CoreTeamMember_WritesToWorkspaceSharedDir(t *testing.T) {
 	// also holds AGENT.md and the shared memory room).
 	workspaceRootFile := filepath.Join(workspacesDir, "team-ws", "proof.txt")
 	_, rootStatErr := os.Stat(workspaceRootFile)
-	assert.True(t, os.IsNotExist(rootStatErr),
-		"write_file must NOT land directly in the workspace's own directory (%s) — only in its work/ subdirectory", workspaceRootFile)
+	assert.True(
+		t,
+		os.IsNotExist(rootStatErr),
+		"write_file must NOT land directly in the workspace's own directory (%s) — only in its work/ subdirectory",
+		workspaceRootFile,
+	)
 }
 
 // TestRunTurn_NotCoreTeamMember_WritesToOwnDir confirms the negative case:
@@ -202,12 +210,20 @@ func TestRunTurn_CoreTeamMember_CannotEscapeWorkToWorkspaceRoot(t *testing.T) {
 	const sessionKey = "test-session-coreteam-escape-attempt"
 	ctx := context.Background()
 	finalContent, err := al.ProcessDirect(ctx, "please write ../AGENT.md for me", sessionKey)
-	require.NoError(t, err, "ProcessDirect must succeed (the tool call itself is expected to be rejected, not the turn)")
+	require.NoError(
+		t,
+		err,
+		"ProcessDirect must succeed (the tool call itself is expected to be rejected, not the turn)",
+	)
 	assert.Equal(t, "done", finalContent)
 
 	// AGENT.md must be completely untouched.
 	got, readErr := os.ReadFile(agentMdPath)
 	require.NoError(t, readErr, "AGENT.md must still exist")
-	assert.Equal(t, "original project instructions", string(got),
-		"a CoreTeam member's write_file must NOT be able to reach workspaces/<id>/AGENT.md via a relative escape from work/")
+	assert.Equal(
+		t,
+		"original project instructions",
+		string(got),
+		"a CoreTeam member's write_file must NOT be able to reach workspaces/<id>/AGENT.md via a relative escape from work/",
+	)
 }

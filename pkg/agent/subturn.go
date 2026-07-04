@@ -541,8 +541,13 @@ func spawnSubTurn(
 			targetAgentFallbackWarning = fmt.Sprintf(
 				"[delegation warning: target agent %q was not found; ran with the parent's own configuration instead] ",
 				cfg.TargetAgentID)
-			slog.Warn("subturn: target agent not found in registry; dispatch falls back to parent's own executor config",
-				"target_agent_id", cfg.TargetAgentID, "parent_id", parentTS.turnID)
+			slog.Warn(
+				"subturn: target agent not found in registry; dispatch falls back to parent's own executor config",
+				"target_agent_id",
+				cfg.TargetAgentID,
+				"parent_id",
+				parentTS.turnID,
+			)
 		}
 	}
 	execSource := baseAgent
@@ -1045,28 +1050,22 @@ type ephemeralSessionStore struct {
 	summary string
 }
 
-func newEphemeralSession(initial []providers.Message) ephemeralSessionStoreIface {
+// newEphemeralSession returns a session.SessionStore backed by an in-memory
+// ephemeralSessionStore. It is typed as session.SessionStore directly
+// (rather than a separate locally-declared interface) because
+// *ephemeralSessionStore's method set already matches session.SessionStore
+// exactly (see the "Satisfies session.SessionStore" notes on ReadArchive and
+// RollbackAppended below) — a second, parallel interface declaration here
+// would just be an unreviewed duplicate of pkg/session's own contract (and
+// one that independently tripped the interfacebloat lint at the same 11
+// methods; see pkg/session/session_store.go for the SessionReader/
+// SessionWriter split of the interface this duplicated).
+func newEphemeralSession(initial []providers.Message) session.SessionStore {
 	s := &ephemeralSessionStore{}
 	if len(initial) > 0 {
 		s.history = append(s.history, initial...)
 	}
 	return s
-}
-
-// ephemeralSessionStoreIface is satisfied by *ephemeralSessionStore.
-// Declared so newEphemeralSession can return a typed interface.
-type ephemeralSessionStoreIface interface {
-	AddMessage(sessionKey, role, content string)
-	AddFullMessage(sessionKey string, msg providers.Message)
-	GetHistory(key string) []providers.Message
-	GetSummary(key string) string
-	SetSummary(key, summary string)
-	SetHistory(key string, history []providers.Message)
-	TruncateHistory(key string, keepLast int)
-	ReadArchive(ctx context.Context, key string) ([]memory.ArchivedMessage, error)
-	RollbackAppended(key string, targetArchiveLen, targetSkip int)
-	Save(key string) error
-	Close() error
 }
 
 func (e *ephemeralSessionStore) AddMessage(_, role, content string) {

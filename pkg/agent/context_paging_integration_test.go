@@ -130,8 +130,11 @@ func TestRecallSpan_DroppedFirstUnderPressure(t *testing.T) {
 			// NOT sufficient. But we sized the window to be tiny, so this would be a bug.
 			afterWindow := al.GetRegistry().GetDefaultAgent().Sessions.GetHistory(sk)
 			if len(afterWindow) < len(smallWindow) {
-				t.Errorf("SC-016: real Turns were evicted even though span-drop alone should suffice: before=%d after=%d",
-					len(smallWindow), len(afterWindow))
+				t.Errorf(
+					"SC-016: real Turns were evicted even though span-drop alone should suffice: before=%d after=%d",
+					len(smallWindow),
+					len(afterWindow),
+				)
 			}
 		}
 	})
@@ -260,8 +263,14 @@ func TestFitInvariantHolds_WindowPlusRecall(t *testing.T) {
 	// FR-009 / MAJ-05: the invariant.
 	totalBudget := totalMsgTokens + toolDefsTokens + maxTokens
 	if totalBudget > contextWindow {
-		t.Errorf("MAJ-05 fit invariant violated: totalMsgTokens(%d) + toolDefsTokens(%d) + maxTokens(%d) = %d > contextWindow(%d)",
-			totalMsgTokens, toolDefsTokens, maxTokens, totalBudget, contextWindow)
+		t.Errorf(
+			"MAJ-05 fit invariant violated: totalMsgTokens(%d) + toolDefsTokens(%d) + maxTokens(%d) = %d > contextWindow(%d)",
+			totalMsgTokens,
+			toolDefsTokens,
+			maxTokens,
+			totalBudget,
+			contextWindow,
+		)
 	}
 
 	// Assert span token cap: span.Tokens must equal Σ estimateMessageTokens(spanMsgs).
@@ -545,7 +554,10 @@ func TestBM25Core_RetroBytewiseRegression(t *testing.T) {
 	// Fixed corpus — do NOT change these values; changing breaks the regression.
 	retros := []Retro{
 		{Recap: "flock alpha", Timestamp: now}, // 2 tokens — dense
-		{Recap: "flock beta discussion covering many agenda items at this meeting", Timestamp: now.Add(-time.Hour)}, // 10 tokens — sparse
+		{
+			Recap:     "flock beta discussion covering many agenda items at this meeting",
+			Timestamp: now.Add(-time.Hour),
+		}, // 10 tokens — sparse
 	}
 
 	// Step 1: Run rankRetrosBM25 (uses bm25Rank core internally).
@@ -845,11 +857,5 @@ func TestBuildMessages_SpanPlacedViaRealContextBuilder(t *testing.T) {
 // ============================================================================
 // Helpers
 // ============================================================================
-
-// min returns the smaller of a and b (int). Avoids importing math for this usage.
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
+//
+// Note: int min is provided by the Go 1.21+ builtin; no local helper needed.

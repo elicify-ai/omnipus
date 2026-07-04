@@ -2469,12 +2469,12 @@ func FixtureAgentCreateRequestSubagent3p_InvalidType() AgentCreateRequestSubagen
 	}
 }
 
-// FixtureAgentCreateRequestSubagent3p_ForbiddenField proves the discriminated
-// union's additionalProperties:false rejects a field this variant structurally
-// does not carry. Built from raw JSON (not the Go struct — the field does not
-// exist on AgentCreateRequestSubagent3p, so there is no way to set it via the
-// typed struct at all) to exercise the schema's additionalProperties gate
-// directly.
+// FixtureAgentCreateRequestSubagent3p_ForbiddenFieldJSON proves the
+// discriminated union's additionalProperties:false rejects a field this
+// variant structurally does not carry. Built from raw JSON (not the Go
+// struct — the field does not exist on AgentCreateRequestSubagent3p, so
+// there is no way to set it via the typed struct at all) to exercise the
+// schema's additionalProperties gate directly.
 func FixtureAgentCreateRequestSubagent3p_ForbiddenFieldJSON() []byte {
 	return []byte(`{
 		"type": "subagent_3p",

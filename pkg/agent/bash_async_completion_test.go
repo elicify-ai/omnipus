@@ -28,6 +28,7 @@
 // Traces to: docs/internal/specs/async-notifier-spec.md Test Implementation
 // Order #8/#9 (lines 302-303), BDD Scenarios at lines 143 and 157,
 // FR-N9 (line 350); docs/internal/specs/bash-tool-spec.md FR-B9 (line 667).
+
 package agent
 
 import (
@@ -167,7 +168,13 @@ func TestBashRunInBackground_CompletionTriggersNewTurn(t *testing.T) {
 	// AND because "cli" is an internal channel that processSystemMessage
 	// silently skips (pkg/constants/channels.go) — using it here would make
 	// the follow-up-turn assertion below vacuously true.
-	firstTurnResp, err := al.ProcessDirectWithChannel(ctx, "please run a background command", sessionKey, "telegram", "12345")
+	firstTurnResp, err := al.ProcessDirectWithChannel(
+		ctx,
+		"please run a background command",
+		sessionKey,
+		"telegram",
+		"12345",
+	)
 	require.NoError(t, err)
 	assert.Contains(t, firstTurnResp, "Started")
 	require.Equal(t, 2, provider.CallCount(), "turn 1 must consume exactly the tool-call + text steps")
@@ -236,7 +243,13 @@ func TestBashRunInBackground_KillReportsTermination(t *testing.T) {
 
 	const sessionKey = "test-session-bash-async-kill"
 	ctx := context.Background()
-	firstTurnResp, err := al.ProcessDirectWithChannel(ctx, "please start a long background job", sessionKey, "telegram", "12345")
+	firstTurnResp, err := al.ProcessDirectWithChannel(
+		ctx,
+		"please start a long background job",
+		sessionKey,
+		"telegram",
+		"12345",
+	)
 	require.NoError(t, err)
 	assert.Contains(t, firstTurnResp, "Started")
 

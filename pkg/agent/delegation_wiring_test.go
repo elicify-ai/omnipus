@@ -46,26 +46,6 @@ func wireTestLoopWithGraph(t *testing.T, agentID string) (*AgentLoop, *ContextBu
 	return al, inst.ContextBuilder
 }
 
-// reloadLoop rebuilds the loop's config (no per-agent policy changes since the
-// injector is graph-authoritative), then calls ReloadProviderAndConfig. Returns
-// the (new) ContextBuilder for agentID after the reload.
-func reloadLoop(t *testing.T, al *AgentLoop, agentID string) *ContextBuilder {
-	t.Helper()
-	liveCfg := al.GetConfig()
-	newCfg := &config.Config{}
-	newCfg.Agents.Defaults = liveCfg.Agents.Defaults
-	newCfg.Agents.List = make([]config.AgentConfig, len(liveCfg.Agents.List))
-	copy(newCfg.Agents.List, liveCfg.Agents.List)
-	if err := al.ReloadProviderAndConfig(context.Background(), &mockProvider{}, newCfg); err != nil {
-		t.Fatalf("ReloadProviderAndConfig: %v", err)
-	}
-	inst, ok := al.GetRegistry().GetAgent(agentID)
-	if !ok || inst == nil || inst.ContextBuilder == nil {
-		t.Fatalf("agent %q not in registry after reload", agentID)
-	}
-	return inst.ContextBuilder
-}
-
 // ---------------------------------------------------------------------------
 // TestDelegationWiring_GraphSource
 //
@@ -524,7 +504,7 @@ func TestDelegationWiring_Parity_AdvertisedMatchesEnforced(t *testing.T) {
 // TestResolveDelegationLabel_CoreAgent
 //
 // resolveDelegationLabel must return a label that includes the agent name for
-// recognised core-agent IDs, without duplicating the Subtitle when the Name
+// recognized core-agent IDs, without duplicating the Subtitle when the Name
 // already contains it (e.g. "Ava — Builder" must not become "Ava — Builder (Builder)").
 // ---------------------------------------------------------------------------
 
@@ -549,6 +529,7 @@ func TestResolveDelegationLabel_CoreAgent(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.agentID, func(t *testing.T) {
+			t.Parallel()
 			label, ok := resolveDelegationLabel(reg, tc.agentID)
 			if ok != tc.wantOk {
 				t.Errorf("resolveDelegationLabel(%q): ok=%v, want %v", tc.agentID, ok, tc.wantOk)
@@ -558,7 +539,12 @@ func TestResolveDelegationLabel_CoreAgent(t *testing.T) {
 				return
 			}
 			if !strings.Contains(label, tc.wantSubstring) {
-				t.Errorf("resolveDelegationLabel(%q): label=%q does not contain %q", tc.agentID, label, tc.wantSubstring)
+				t.Errorf(
+					"resolveDelegationLabel(%q): label=%q does not contain %q",
+					tc.agentID,
+					label,
+					tc.wantSubstring,
+				)
 			}
 			if tc.wantNotDuplicate != "" && strings.Contains(label, tc.wantNotDuplicate) {
 				t.Errorf("resolveDelegationLabel(%q): label=%q contains duplicate Subtitle pattern %q",

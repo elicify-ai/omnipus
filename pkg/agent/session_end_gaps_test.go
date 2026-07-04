@@ -185,17 +185,24 @@ func TestSeedConfig_ExistingConfig_KeepsExplicitFalse(t *testing.T) {
 // IMP-2: model-resolution tiers
 // ─────────────────────────────────────────────────────────────────────────────
 
-// TestRunRecap_ModelResolution_DefaultModelFallback verifies IMP-2a:
-// When RecapModel is empty and Defaults.ModelName is set, the recap uses
-// the global default model (not the agent's own model).
-func TestRunRecap_ModelResolution_DefaultModelFallback(t *testing.T) {
+// runRecapModelResolutionScenario is the shared setup for IMP-2's
+// model-resolution tiers (recap_model → default_model → agent model): a fresh
+// agent loop with RecapModel always empty, Defaults.ModelName set to
+// defaultModelName (possibly "" to fall through further), and the session
+// agent's own Model always "agent-own-model" — then asserts the recap
+// actually used wantModel. Shared by
+// TestRunRecap_ModelResolution_DefaultModelFallback (IMP-2a) and
+// TestRunRecap_ModelResolution_AgentModelFallback (IMP-2b), which differ only
+// in defaultModelName / wantModel.
+func runRecapModelResolutionScenario(t *testing.T, agentID, agentName, defaultModelName, wantModel string) {
+	t.Helper()
 	home := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", home)
 
 	cfg := &config.Config{}
 	cfg.Agents.Defaults.AutoRecapEnabled = true
-	cfg.Agents.Defaults.RecapModel = "" // empty → should fall through to ModelName
-	cfg.Agents.Defaults.ModelName = "default-model"
+	cfg.Agents.Defaults.RecapModel = "" // empty → should fall through the tiers
+	cfg.Agents.Defaults.ModelName = defaultModelName
 
 	script := &scriptedProvider{
 		responseBody: `{"recap":"ok","went_well":[],"needs_improvement":[],"worth_remembering":[]}`,
@@ -211,23 +218,23 @@ func TestRunRecap_ModelResolution_DefaultModelFallback(t *testing.T) {
 	}
 	al.sharedSessionStore = store
 
-	agentCfg := &config.AgentConfig{ID: "imp2a-agent", Name: "Imp2a"}
+	agentCfg := &config.AgentConfig{ID: agentID, Name: agentName}
 	ag := NewAgentInstance(agentCfg, &cfg.Agents.Defaults, cfg, script)
-	ag.Model = "agent-own-model" // must NOT be used when ModelName resolves first
-	ag.Workspace = filepath.Join(home, "agents", "imp2a-agent")
-	ag.ContextBuilder = NewContextBuilder(ag.Workspace).WithAgentInfo("imp2a-agent", "Imp2a")
+	ag.Model = "agent-own-model" // must NOT be used when a stricter tier resolves first
+	ag.Workspace = filepath.Join(home, "agents", agentID)
+	ag.ContextBuilder = NewContextBuilder(ag.Workspace).WithAgentInfo(agentID, agentName)
 	al.registry.mu.Lock()
 	al.registry.agents[agentCfg.ID] = ag
 	al.registry.mu.Unlock()
 
-	meta, err := store.NewSession(session.SessionTypeChat, "web", "imp2a-agent")
+	meta, err := store.NewSession(session.SessionTypeChat, "web", agentID)
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
 	_ = store.AppendTranscript(meta.ID, session.TranscriptEntry{
 		Role:      "user",
 		Content:   "tier resolution test",
-		AgentID:   "imp2a-agent",
+		AgentID:   agentID,
 		Timestamp: time.Now().UTC(),
 	})
 
@@ -245,74 +252,23 @@ func TestRunRecap_ModelResolution_DefaultModelFallback(t *testing.T) {
 	usedModel := script.lastModel
 	script.mu.Unlock()
 
-	if usedModel != "default-model" {
-		t.Errorf("IMP-2a: recap used model %q, want %q (defaults.model_name)", usedModel, "default-model")
+	if usedModel != wantModel {
+		t.Errorf("recap used model %q, want %q", usedModel, wantModel)
 	}
+}
+
+// TestRunRecap_ModelResolution_DefaultModelFallback verifies IMP-2a:
+// When RecapModel is empty and Defaults.ModelName is set, the recap uses
+// the global default model (not the agent's own model).
+func TestRunRecap_ModelResolution_DefaultModelFallback(t *testing.T) {
+	runRecapModelResolutionScenario(t, "imp2a-agent", "Imp2a", "default-model", "default-model")
 }
 
 // TestRunRecap_ModelResolution_AgentModelFallback verifies IMP-2b:
 // When both RecapModel and Defaults.ModelName are empty, the recap uses
 // the session agent's own model.
 func TestRunRecap_ModelResolution_AgentModelFallback(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("OMNIPUS_HOME", home)
-
-	cfg := &config.Config{}
-	cfg.Agents.Defaults.AutoRecapEnabled = true
-	cfg.Agents.Defaults.RecapModel = "" // empty
-	cfg.Agents.Defaults.ModelName = ""  // empty → fall through to agent model
-
-	script := &scriptedProvider{
-		responseBody: `{"recap":"ok","went_well":[],"needs_improvement":[],"worth_remembering":[]}`,
-	}
-
-	msgBus := bus.NewMessageBus()
-	al := mustNewAgentLoop(t, cfg, msgBus, script)
-	t.Cleanup(func() { al.Close() })
-
-	store, err := session.NewUnifiedStore(filepath.Join(home, "sessions"))
-	if err != nil {
-		t.Fatalf("NewUnifiedStore: %v", err)
-	}
-	al.sharedSessionStore = store
-
-	agentCfg := &config.AgentConfig{ID: "imp2b-agent", Name: "Imp2b"}
-	ag := NewAgentInstance(agentCfg, &cfg.Agents.Defaults, cfg, script)
-	ag.Model = "agent-own-model"
-	ag.Workspace = filepath.Join(home, "agents", "imp2b-agent")
-	ag.ContextBuilder = NewContextBuilder(ag.Workspace).WithAgentInfo("imp2b-agent", "Imp2b")
-	al.registry.mu.Lock()
-	al.registry.agents[agentCfg.ID] = ag
-	al.registry.mu.Unlock()
-
-	meta, err := store.NewSession(session.SessionTypeChat, "web", "imp2b-agent")
-	if err != nil {
-		t.Fatalf("NewSession: %v", err)
-	}
-	_ = store.AppendTranscript(meta.ID, session.TranscriptEntry{
-		Role:      "user",
-		Content:   "agent model fallback test",
-		AgentID:   "imp2b-agent",
-		Timestamp: time.Now().UTC(),
-	})
-
-	al.CloseSession(meta.ID, "explicit")
-
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if countRetrosFor(t, ag.Workspace, meta.ID) > 0 {
-			break
-		}
-		time.Sleep(30 * time.Millisecond)
-	}
-
-	script.mu.Lock()
-	usedModel := script.lastModel
-	script.mu.Unlock()
-
-	if usedModel != "agent-own-model" {
-		t.Errorf("IMP-2b: recap used model %q, want %q (agent model)", usedModel, "agent-own-model")
-	}
+	runRecapModelResolutionScenario(t, "imp2b-agent", "Imp2b", "", "agent-own-model")
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -390,8 +346,22 @@ func TestRunRecap_FallbackDistinctProvider_RoutesCorrectly(t *testing.T) {
 		responseErr: fmt.Errorf("provider: primary model unavailable"),
 	}
 	// altProv: succeeds (simulates the alt-provider working).
+	//
+	// KNOWN COVERAGE GAP (flagged by govet's unusedwrite, not silenced blindly):
+	// altProv is never actually wired into cfg's provider pool — buildProviderPool
+	// resolves providers from the config.ModelConfig via CreateProviderFromConfig,
+	// not from this in-memory struct, so altProv.Chat (and therefore its `name`
+	// and `responseBody` fields) is structurally never invoked/read in this test.
+	// altCalls below will always be 0. The test's stated IMP-3 assertion ("a
+	// fallback with a distinct Provider routes through that provider") is
+	// consequently NOT verified end-to-end by this test; it only verifies that
+	// SOME retro gets written and that the primary candidate was attempted. A
+	// real fix needs a factory-injection seam in buildProviderPool so tests can
+	// substitute an in-memory provider for a named config.ModelConfig entry —
+	// out of scope for a lint sweep; tracked here for follow-up.
 	altProv := &namedProvider{
-		name:         "alt",
+		name: "alt", //nolint:govet // see coverage-gap note above; unread until the pool gains a test seam
+		//nolint:govet // ditto — unread until the pool gains a test seam
 		responseBody: `{"recap":"alt fallback ok","went_well":[],"needs_improvement":[],"worth_remembering":[]}`,
 	}
 

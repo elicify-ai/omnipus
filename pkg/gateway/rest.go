@@ -1757,7 +1757,8 @@ func decodeAgentCreateVariant(w http.ResponseWriter, raw []byte, wireType, varia
 	if err := dec.Decode(out); err != nil {
 		if strings.Contains(err.Error(), "unknown field") {
 			jsonErr(w, http.StatusBadRequest, fmt.Sprintf(
-				"field not allowed on agent type %q: %v — see the %s schema", wireType, err, variantName))
+				"field not allowed on agent type %q: %v — see the %s schema", wireType, err, variantName,
+			))
 		} else {
 			jsonErr(w, http.StatusBadRequest, "invalid JSON body")
 		}
@@ -1782,6 +1783,74 @@ func wireStringMap[V ~string](in *map[string]V) map[string]string {
 	return out
 }
 
+// agentCreateShellPolicyFromWire converts either variant's shell_policy wire
+// object into the common agentCreateShellPolicyInput. gen.AgentCreateRequestMain
+// and gen.AgentCreateRequestSubagent each generate their own anonymous
+// ShellPolicy struct, but — unlike ToolsCfg below — neither carries a
+// per-variant enum type, so the two anonymous types are structurally
+// identical and one non-generic helper handles both call sites.
+func agentCreateShellPolicyFromWire(wp *struct {
+	CustomDenyPatterns *[]string `json:"custom_deny_patterns,omitempty"`
+	EnableDenyPatterns *bool     `json:"enable_deny_patterns,omitempty"`
+},
+) *agentCreateShellPolicyInput {
+	if wp == nil {
+		return nil
+	}
+	out := &agentCreateShellPolicyInput{EnableDenyPatterns: wp.EnableDenyPatterns}
+	if wp.CustomDenyPatterns != nil {
+		out.CustomDenyPatterns = *wp.CustomDenyPatterns
+	}
+	return out
+}
+
+// agentCreateToolsCfgFromWire converts either variant's tools_cfg wire object
+// into the common agentCreateToolsCfgInput, or nil when tc is nil. Generic
+// over DP/P — the two per-variant enum types oapi-codegen emits for
+// Builtin.DefaultPolicy and Builtin.Policies' map values
+// (AgentCreateRequestMainToolsCfgBuiltin* vs
+// AgentCreateRequestSubagentToolsCfgBuiltin*, both underlying type string) —
+// since that's the only reason ToolsCfg isn't structurally identical across
+// variants the way ShellPolicy is; every other field (including the
+// Mcp.Servers element shape, which carries no enum) is identical, so the
+// whole tools_cfg object is accepted directly (Go's generic type inference
+// resolves DP/P from tc's concrete argument type) rather than pre-extracting
+// each sub-field per call site.
+func agentCreateToolsCfgFromWire[DP ~string, P ~string](tc *struct {
+	Builtin *struct {
+		DefaultPolicy *DP           `json:"default_policy,omitempty"`
+		Policies      *map[string]P `json:"policies,omitempty"`
+	} `json:"builtin,omitempty"`
+	Mcp *struct {
+		Servers *[]struct {
+			Id    string    `json:"id"`
+			Tools *[]string `json:"tools,omitempty"`
+		} `json:"servers,omitempty"`
+	} `json:"mcp,omitempty"`
+},
+) *agentCreateToolsCfgInput {
+	if tc == nil {
+		return nil
+	}
+	out := &agentCreateToolsCfgInput{}
+	if tc.Builtin != nil {
+		if tc.Builtin.DefaultPolicy != nil {
+			out.BuiltinDefaultPolicy = string(*tc.Builtin.DefaultPolicy)
+		}
+		out.BuiltinPolicies = wireStringMap(tc.Builtin.Policies)
+	}
+	if tc.Mcp != nil && tc.Mcp.Servers != nil {
+		for _, s := range *tc.Mcp.Servers {
+			var t []string
+			if s.Tools != nil {
+				t = *s.Tools
+			}
+			out.MCPServers = append(out.MCPServers, agentCreateMCPServerInput{ID: s.Id, Tools: t})
+		}
+	}
+	return out
+}
+
 // createAgent handles POST /api/v1/agents.
 //
 // The wire contract is a discriminated union: AgentCreateRequestMain /
@@ -1799,7 +1868,7 @@ func wireStringMap[V ~string](in *map[string]V) map[string]string {
 // small set of variant-agnostic locals so the remainder of the handler
 // (validation, persistence, response building) is written once.
 //
-// type is REQUIRED on every variant: a missing or unrecognised type value is
+// type is REQUIRED on every variant: a missing or unrecognized type value is
 // a 400.
 func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
@@ -1837,7 +1906,7 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	default:
 		// Covers "core" / "system" (seeded-only classifications — the only way
 		// to obtain one is via SeedConfig, never the REST create path) and any
-		// other unrecognised value.
+		// other unrecognized value.
 		jsonErr(w, http.StatusBadRequest, typeErrMsg)
 		return
 	}
@@ -1901,31 +1970,8 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		soul = vreq.Soul
 		skills = vreq.Skills
 		fallbackModels = vreq.FallbackModels
-		if vreq.ShellPolicy != nil {
-			shellPolicyIn = &agentCreateShellPolicyInput{EnableDenyPatterns: vreq.ShellPolicy.EnableDenyPatterns}
-			if vreq.ShellPolicy.CustomDenyPatterns != nil {
-				shellPolicyIn.CustomDenyPatterns = *vreq.ShellPolicy.CustomDenyPatterns
-			}
-		}
-		if vreq.ToolsCfg != nil {
-			tc := &agentCreateToolsCfgInput{}
-			if vreq.ToolsCfg.Builtin != nil {
-				if vreq.ToolsCfg.Builtin.DefaultPolicy != nil {
-					tc.BuiltinDefaultPolicy = string(*vreq.ToolsCfg.Builtin.DefaultPolicy)
-				}
-				tc.BuiltinPolicies = wireStringMap(vreq.ToolsCfg.Builtin.Policies)
-			}
-			if vreq.ToolsCfg.Mcp != nil && vreq.ToolsCfg.Mcp.Servers != nil {
-				for _, s := range *vreq.ToolsCfg.Mcp.Servers {
-					var t []string
-					if s.Tools != nil {
-						t = *s.Tools
-					}
-					tc.MCPServers = append(tc.MCPServers, agentCreateMCPServerInput{ID: s.Id, Tools: t})
-				}
-			}
-			toolsCfgIn = tc
-		}
+		shellPolicyIn = agentCreateShellPolicyFromWire(vreq.ShellPolicy)
+		toolsCfgIn = agentCreateToolsCfgFromWire(vreq.ToolsCfg)
 		delegationIn = delegationInputFromCreateRequestMain(&vreq)
 	case "Subagent":
 		var vreq gen.AgentCreateRequestSubagent
@@ -1941,31 +1987,8 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		soul = vreq.Soul
 		skills = vreq.Skills
 		fallbackModels = vreq.FallbackModels
-		if vreq.ShellPolicy != nil {
-			shellPolicyIn = &agentCreateShellPolicyInput{EnableDenyPatterns: vreq.ShellPolicy.EnableDenyPatterns}
-			if vreq.ShellPolicy.CustomDenyPatterns != nil {
-				shellPolicyIn.CustomDenyPatterns = *vreq.ShellPolicy.CustomDenyPatterns
-			}
-		}
-		if vreq.ToolsCfg != nil {
-			tc := &agentCreateToolsCfgInput{}
-			if vreq.ToolsCfg.Builtin != nil {
-				if vreq.ToolsCfg.Builtin.DefaultPolicy != nil {
-					tc.BuiltinDefaultPolicy = string(*vreq.ToolsCfg.Builtin.DefaultPolicy)
-				}
-				tc.BuiltinPolicies = wireStringMap(vreq.ToolsCfg.Builtin.Policies)
-			}
-			if vreq.ToolsCfg.Mcp != nil && vreq.ToolsCfg.Mcp.Servers != nil {
-				for _, s := range *vreq.ToolsCfg.Mcp.Servers {
-					var t []string
-					if s.Tools != nil {
-						t = *s.Tools
-					}
-					tc.MCPServers = append(tc.MCPServers, agentCreateMCPServerInput{ID: s.Id, Tools: t})
-				}
-			}
-			toolsCfgIn = tc
-		}
+		shellPolicyIn = agentCreateShellPolicyFromWire(vreq.ShellPolicy)
+		toolsCfgIn = agentCreateToolsCfgFromWire(vreq.ToolsCfg)
 		delegationIn = delegationInputFromCreateRequestSubagent(&vreq)
 	case "subagent_3p":
 		var vreq gen.AgentCreateRequestSubagent3p
@@ -6528,7 +6551,7 @@ func (a *restAPI) HandleChannels(w http.ResponseWriter, r *http.Request) {
 		if len(failed) > 0 {
 			entryBaseTypes := make(map[string]struct{}, len(channels))
 			for _, e := range channels {
-				bt, _ := config.ParseInstanceKey(string(e.Id))
+				bt, _ := config.ParseInstanceKey(e.Id)
 				entryBaseTypes[bt] = struct{}{}
 			}
 			for _, f := range failed {
@@ -6578,7 +6601,7 @@ func applyDegradedOverlay(channelList []gen.ChannelEntry, failed []channels.Chan
 		degradedMap[id] = f.Err.Error()
 	}
 	for i := range channelList {
-		baseType, _ := config.ParseInstanceKey(string(channelList[i].Id))
+		baseType, _ := config.ParseInstanceKey(channelList[i].Id)
 		if reason, ok := degradedMap[baseType]; ok {
 			r := reason
 			channelList[i].Degraded = boolPtr(true)
@@ -6847,7 +6870,11 @@ func (a *restAPI) setChannelRouting(w http.ResponseWriter, r *http.Request, chan
 			return
 		}
 		if foundAgent.IsWorker() {
-			jsonErr(w, http.StatusUnprocessableEntity, "workers are not chat targets and cannot be a channel's default agent")
+			jsonErr(
+				w,
+				http.StatusUnprocessableEntity,
+				"workers are not chat targets and cannot be a channel's default agent",
+			)
 			return
 		}
 
@@ -6964,7 +6991,11 @@ func (a *restAPI) setChannelRouting(w http.ResponseWriter, r *http.Request, chan
 		}
 		// MIN-002: standardize to 422 (was 400).
 		if found.IsWorker() {
-			jsonErr(w, http.StatusUnprocessableEntity, "workers are not chat targets and cannot be a channel's default agent")
+			jsonErr(
+				w,
+				http.StatusUnprocessableEntity,
+				"workers are not chat targets and cannot be a channel's default agent",
+			)
 			return
 		}
 	}
@@ -7489,7 +7520,11 @@ func (a *restAPI) getChannelConfig(w http.ResponseWriter, channelID string) {
 // save must not depend on an unlocked credential store; that liveness concern
 // belongs to Test/activation (testChannel), not to "did the operator fill in
 // the form".
-func validateChannelConfigComplete(baseType string, existing, updates map[string]any, prospectiveRefs map[string]string) string {
+func validateChannelConfigComplete(
+	baseType string,
+	existing, updates map[string]any,
+	prospectiveRefs map[string]string,
+) string {
 	merged := make(map[string]any, len(existing)+len(updates)+len(prospectiveRefs))
 	for k, v := range existing {
 		merged[k] = v
@@ -7748,7 +7783,15 @@ func (a *restAPI) testChannel(w http.ResponseWriter, channelID string) {
 		webhookRef, _ := chCfg["webhook_url_ref"].(string)
 		hasWebhook, err := a.credentialRefResolves(webhookRef)
 		if err != nil {
-			slog.Error("rest: channel test credential check", "channel", channelID, "field", "webhook_url", "error", err)
+			slog.Error(
+				"rest: channel test credential check",
+				"channel",
+				channelID,
+				"field",
+				"webhook_url",
+				"error",
+				err,
+			)
 			jsonOK(w, gen.ChannelTestResponse{
 				Success: false,
 				Message: "credential store unavailable — unlock it (set OMNIPUS_MASTER_KEY) and retry",
@@ -7758,7 +7801,15 @@ func (a *restAPI) testChannel(w http.ResponseWriter, channelID string) {
 		saJSONRef, _ := chCfg["service_account_json_ref"].(string)
 		hasSAJSON, err := a.credentialRefResolves(saJSONRef)
 		if err != nil {
-			slog.Error("rest: channel test credential check", "channel", channelID, "field", "service_account_json", "error", err)
+			slog.Error(
+				"rest: channel test credential check",
+				"channel",
+				channelID,
+				"field",
+				"service_account_json",
+				"error",
+				err,
+			)
 			jsonOK(w, gen.ChannelTestResponse{
 				Success: false,
 				Message: "credential store unavailable — unlock it (set OMNIPUS_MASTER_KEY) and retry",

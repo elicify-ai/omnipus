@@ -266,7 +266,16 @@ func TestLoadConfig_ToolEnableFlags_DoesNotDowngradeExistingPolicy(t *testing.T)
 	require.True(t, ok)
 	policies, ok := sandboxRaw["tool_policies"].(map[string]any)
 	require.True(t, ok)
-	assert.Equal(t, "ask", policies["bash"], "the pre-existing \"ask\" policy must survive as \"bash\", not be overwritten to \"deny\", on disk")
+	assert.Equal(
+		t,
+		"ask",
+		policies["bash"],
+		"the pre-existing \"ask\" policy must survive as \"bash\", not be overwritten to \"deny\", on disk",
+	)
 	_, hasLegacyExec := policies["exec"]
-	assert.False(t, hasLegacyExec, "the legacy \"exec\" sandbox.tool_policies key must be deleted on disk, not left dangling")
+	assert.False(
+		t,
+		hasLegacyExec,
+		"the legacy \"exec\" sandbox.tool_policies key must be deleted on disk, not left dangling",
+	)
 }

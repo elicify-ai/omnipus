@@ -993,8 +993,11 @@ func TestPostAgentsExecutorSmokeTest_AgentIDIsCoreTeamMember_UsesWorkspaceShared
 	code, resp := postExecutorSmokeTest(t, api, body)
 	require.Equal(t, http.StatusOK, code)
 	assert.True(t, resp.Ok, "error=%v", resp.Error)
-	assert.True(t, resp.UsedAgentWorkspace,
-		"agent_id resolved to a real, saved agent — used_agent_workspace must be true even when overridden to the Workspace's shared dir")
+	assert.True(
+		t,
+		resp.UsedAgentWorkspace,
+		"agent_id resolved to a real, saved agent — used_agent_workspace must be true even when overridden to the Workspace's shared dir",
+	)
 
 	fake.mu.Lock()
 	gotWorkDir := fake.gotOpts.WorkDir
@@ -1025,12 +1028,19 @@ func TestPostAgentsExecutorSmokeTest_AgentIDIsCoreTeamMember_UsesWorkspaceShared
 	assert.Equal(t, "pre-existing project file", string(markerData))
 }
 
-// TestPostAgentsExecutorSmokeTest_AgentIDOmitted_UsesEphemeralScratch proves
-// that omitting agent_id (the create-wizard case, before an agent has been
-// saved) preserves EXACTLY the pre-existing behavior: a disposable ephemeral
+// runExecutorSmokeTestEphemeralScratchScenario is the shared assertion for
+// both "no usable agent_id" paths (omitted entirely, or naming an agent that
+// does not exist): the run must fall back to the SAME disposable ephemeral
 // scratch directory under $OMNIPUS_HOME/executor-smoke-test-runs, removed
 // after the request, with used_agent_workspace=false in the response.
-func TestPostAgentsExecutorSmokeTest_AgentIDOmitted_UsesEphemeralScratch(t *testing.T) {
+// bodyFn builds the request body from the resolved cli_path; okMsg/usedMsg
+// are the scenario-specific assertion messages.
+func runExecutorSmokeTestEphemeralScratchScenario(
+	t *testing.T,
+	bodyFn func(cliPath string) string,
+	okMsg, usedMsg string,
+) {
+	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("stub uses a POSIX shell script")
 	}
@@ -1047,12 +1057,11 @@ func TestPostAgentsExecutorSmokeTest_AgentIDOmitted_UsesEphemeralScratch(t *test
 	}
 	defer func() { smokeTestNewDriver = orig }()
 
-	// No agent_id at all in the body.
-	body := fmt.Sprintf(`{"cli":"claude-code","cli_path":%q}`, realBin)
+	body := bodyFn(realBin)
 	code, resp := postExecutorSmokeTest(t, api, body)
 	require.Equal(t, http.StatusOK, code)
-	assert.True(t, resp.Ok, "error=%v", resp.Error)
-	assert.False(t, resp.UsedAgentWorkspace, "agent_id omitted — used_agent_workspace must be false")
+	assert.True(t, resp.Ok, okMsg, resp.Error)
+	assert.False(t, resp.UsedAgentWorkspace, usedMsg)
 
 	fake.mu.Lock()
 	gotWorkDir := fake.gotOpts.WorkDir
@@ -1065,40 +1074,30 @@ func TestPostAgentsExecutorSmokeTest_AgentIDOmitted_UsesEphemeralScratch(t *test
 	assertNoSmokeTestRunsLeftover(t, home)
 }
 
+// TestPostAgentsExecutorSmokeTest_AgentIDOmitted_UsesEphemeralScratch proves
+// that omitting agent_id (the create-wizard case, before an agent has been
+// saved) preserves EXACTLY the pre-existing behavior.
+func TestPostAgentsExecutorSmokeTest_AgentIDOmitted_UsesEphemeralScratch(t *testing.T) {
+	runExecutorSmokeTestEphemeralScratchScenario(t,
+		func(cliPath string) string {
+			// No agent_id at all in the body.
+			return fmt.Sprintf(`{"cli":"claude-code","cli_path":%q}`, cliPath)
+		},
+		"error=%v",
+		"agent_id omitted — used_agent_workspace must be false",
+	)
+}
+
 // TestPostAgentsExecutorSmokeTest_AgentIDNotFound_FallsBackToEphemeral proves
 // that an agent_id naming an agent that does not exist (stale/deleted id)
 // falls back to the SAME disposable ephemeral scratch directory behavior —
-// not an error — with used_agent_workspace=false in the response.
+// not an error.
 func TestPostAgentsExecutorSmokeTest_AgentIDNotFound_FallsBackToEphemeral(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("stub uses a POSIX shell script")
-	}
-	api, cleanup := newTestRestAPI(t)
-	defer cleanup()
-	home := t.TempDir()
-	t.Setenv("OMNIPUS_HOME", home)
-
-	realBin := writeScript(t, "#!/bin/sh\nexit 0\n")
-	fake := &capturingFakeDriver{}
-	orig := smokeTestNewDriver
-	smokeTestNewDriver = func(_ string, _ runner.ConsentHandler) (runner.ExternalAgentRunner, error) {
-		return fake, nil
-	}
-	defer func() { smokeTestNewDriver = orig }()
-
-	body := fmt.Sprintf(`{"cli":"claude-code","cli_path":%q,"agent_id":"does-not-exist-agent-id"}`, realBin)
-	code, resp := postExecutorSmokeTest(t, api, body)
-	require.Equal(t, http.StatusOK, code)
-	assert.True(t, resp.Ok, "a not-found agent_id must fall back to the ephemeral run, not fail; error=%v", resp.Error)
-	assert.False(t, resp.UsedAgentWorkspace, "agent_id did not resolve — used_agent_workspace must be false")
-
-	fake.mu.Lock()
-	gotWorkDir := fake.gotOpts.WorkDir
-	captured := fake.captured
-	fake.mu.Unlock()
-	require.True(t, captured, "driver.Run must have been called")
-	assert.True(t, strings.HasPrefix(gotWorkDir, filepath.Join(home, smokeTestRunsSubdir)),
-		"expected an ephemeral scratch dir under %q, got %q", smokeTestRunsSubdir, gotWorkDir)
-
-	assertNoSmokeTestRunsLeftover(t, home)
+	runExecutorSmokeTestEphemeralScratchScenario(t,
+		func(cliPath string) string {
+			return fmt.Sprintf(`{"cli":"claude-code","cli_path":%q,"agent_id":"does-not-exist-agent-id"}`, cliPath)
+		},
+		"a not-found agent_id must fall back to the ephemeral run, not fail; error=%v",
+		"agent_id did not resolve — used_agent_workspace must be false",
+	)
 }

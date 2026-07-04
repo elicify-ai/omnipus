@@ -205,7 +205,7 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 	// content = 1000 tokens total, still well within the 2048 cap. The extra
 	// tokens are cheap (one call per session close, paid only when the LLM
 	// actually generates tokens, not just allocated). extended_thinking:false is
-	// kept for Anthropic-style providers that honour it and skip the reasoning
+	// kept for Anthropic-style providers that honor it and skip the reasoning
 	// phase entirely when set. reasoning:{enabled:false} is left in the
 	// extra_body because it DOES work on some OpenRouter routes and upstream
 	// providers, and is harmlessly ignored elsewhere.

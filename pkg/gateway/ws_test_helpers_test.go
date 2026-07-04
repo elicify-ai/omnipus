@@ -10,8 +10,6 @@
 
 package gateway
 
-import "encoding/json"
-
 // wsClientFrameTestHelper is a test-only convenience struct for marshaling
 // client→server WebSocket frames. Production code uses generated types.
 // This struct carries the superset of all client frame fields so that tests
@@ -69,11 +67,4 @@ func makeTestConn() *wsConn {
 		sendCh: make(chan []byte, 16),
 		doneCh: make(chan struct{}),
 	}
-}
-
-// unmarshalWSServerFrame decodes raw websocket message bytes into a replayFrameDecoder.
-//
-// Formerly defined in ws_approval_test.go — see makeTestConn's note above.
-func unmarshalWSServerFrame(b []byte, f *replayFrameDecoder) error {
-	return json.Unmarshal(b, f)
 }

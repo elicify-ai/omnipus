@@ -21,7 +21,7 @@ type errReader struct{ err error }
 func (r *errReader) Read(_ []byte) (int, error) { return 0, r.err }
 
 // TestParseStreamResponse_CtxCancel_ReturnsContextError proves the hidden-bug
-// fix: when the caller's context is cancelled/timed out, our own watchdog closes
+// fix: when the caller's context is canceled/timed out, our own watchdog closes
 // the body and the scanner errors with a connection-drop string ("http2:
 // response body closed"). parseStreamResponse MUST surface the context error, not
 // misreport it as a "streaming read error" (a transient stream reset), so callers

@@ -1,4 +1,4 @@
-// Package tools — the unified `bash` tool (ADR-036, bash-tool-spec.md).
+// The unified `bash` tool (ADR-036, bash-tool-spec.md).
 //
 // `bash` replaces the three previously-separate shell tools (`exec`,
 // `workspace_shell`, `workspace_shell_bg`) with ONE tool, ONE policy surface,
@@ -32,6 +32,7 @@
 //     port-exposure (the old workspace_shell_bg capability) are DROPPED
 //     entirely — accepted capability reductions per ADR-036 §3.1. The
 //     `web_serve` tool covers the legitimate dev-server use case.
+
 package tools
 
 import (
@@ -761,7 +762,12 @@ func buildShellArgv(command string) []string {
 // lim.TimeoutSeconds) because sandbox.ResolveLimits returns the ZERO VALUE
 // under god mode (lim.TimeoutSeconds would be 0) — workspace_shell's run()
 // used the same explicit-parameter pattern for exactly this reason.
-func (t *ExecTool) runForeground(ctx context.Context, command string, lim sandbox.Limits, timeoutSeconds int32) *ToolResult {
+func (t *ExecTool) runForeground(
+	ctx context.Context,
+	command string,
+	lim sandbox.Limits,
+	timeoutSeconds int32,
+) *ToolResult {
 	argv := buildShellArgv(command)
 
 	if t.godMode {
@@ -919,7 +925,10 @@ func truncateOutput(output string) string {
 	}
 	if len(output) > maxForegroundOutputLen {
 		totalLen := len(output)
-		return output[:maxForegroundOutputLen] + fmt.Sprintf("\n... (truncated, %d more chars)", totalLen-maxForegroundOutputLen)
+		return output[:maxForegroundOutputLen] + fmt.Sprintf(
+			"\n... (truncated, %d more chars)",
+			totalLen-maxForegroundOutputLen,
+		)
 	}
 	return output
 }

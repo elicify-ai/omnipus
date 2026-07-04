@@ -115,9 +115,13 @@ func warnDeprecatedExecConfigFields(raw []byte) {
 	// Always emit an Info-level log on every load (including hot-reloads) so
 	// operators see this in the log even after the Once has fired — mirrors
 	// migrateDeprecatedToolEnableFlags' two-tier Info/Warn-once convention.
-	slog.Info("tools.exec.* legacy fields are set but no longer read by the bash tool (ADR-036 exec/workspace_shell consolidation)",
-		"component", "config",
-		"deprecated_fields", found)
+	slog.Info(
+		"tools.exec.* legacy fields are set but no longer read by the bash tool (ADR-036 exec/workspace_shell consolidation)",
+		"component",
+		"config",
+		"deprecated_fields",
+		found,
+	)
 
 	deprecatedExecConfigWarnOnce.Do(func() {
 		slog.Warn("tools.exec.* config fields are deprecated and permanently ignored; "+

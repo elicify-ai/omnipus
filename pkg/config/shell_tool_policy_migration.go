@@ -3,7 +3,7 @@
 //
 // Copyright (c) 2026 Omnipus contributors
 
-// Package config — ADR-036 exec/workspace_shell/workspace_shell_bg -> bash
+// ADR-036 exec/workspace_shell/workspace_shell_bg -> bash
 // tool-policy key migration (bash-tool-spec.md User Story 4, FR-M1..FR-M4).
 //
 // ADR-036 consolidates three separate tools (exec, workspace_shell,
@@ -33,6 +33,7 @@
 // exec/workspace_shell/workspace_shell_bg policy value is already sitting
 // under "bash" by the time the boolean-flag migration looks, so it is never
 // downgraded to "deny".
+
 package config
 
 // shellLegacyPolicyKeys lists the exec/workspace_shell/workspace_shell_bg

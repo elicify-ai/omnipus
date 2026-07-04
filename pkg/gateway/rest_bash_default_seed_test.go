@@ -15,6 +15,7 @@
 // the actual product UI. This mirrors TestBash_NewCustomAgentDeniedByDefault
 // (pkg/sysagent/tools/agent_test.go), which proves the same invariant on the
 // LLM-driven system.agent.create tool path.
+
 package gateway
 
 import (

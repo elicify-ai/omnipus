@@ -3,7 +3,7 @@
 //
 // Copyright (c) 2026 Omnipus contributors
 
-// Package config — shared, name-agnostic core for ADR-036's "N legacy tool
+// Shared, name-agnostic core for ADR-036's "N legacy tool
 // names collapse into one consolidated tool" migrations.
 //
 // ADR-036 performed this exact shape of consolidation twice:
@@ -35,6 +35,7 @@
 //     untouched pre-migration bytes (the operator's only recovery path once
 //     the legacy keys are gone), then patches and persists the same
 //     conversion phase 1 already decided, atomically.
+
 package config
 
 import (

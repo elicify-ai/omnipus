@@ -14,6 +14,7 @@
 //     package-level unit/integration suite.
 //
 // Build tags: goolm,stdjson (CGO_ENABLED=0).
+
 package tools
 
 import (

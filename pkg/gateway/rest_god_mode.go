@@ -197,10 +197,16 @@ func (a *restAPI) setGodMode(w http.ResponseWriter, r *http.Request) {
 	if auditLogger := a.agentLoop.AuditLogger(); auditLogger != nil {
 		newGodModeAllowed := oldGodModeAllowed || body.Enabled
 		if err := audit.EmitSecuritySettingChange(
-			r.Context(), auditLogger,
+			r.Context(),
+			auditLogger,
 			"gateway.god_mode",
 			map[string]any{"enabled": oldGodMode, "god_mode_allowed": oldGodModeAllowed, "username": user.Username},
-			map[string]any{"enabled": body.Enabled, "god_mode_allowed": newGodModeAllowed, "username": user.Username, "restart_required": restartRequired},
+			map[string]any{
+				"enabled":          body.Enabled,
+				"god_mode_allowed": newGodModeAllowed,
+				"username":         user.Username,
+				"restart_required": restartRequired,
+			},
 		); err != nil {
 			slog.Error("rest: audit emit god_mode change", "error", err)
 		}

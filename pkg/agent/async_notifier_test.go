@@ -282,6 +282,7 @@ func (d *dangerousStubToolForNotifier) Name() string { return "dangerous_tool_no
 func (d *dangerousStubToolForNotifier) Description() string {
 	return "Dangerous test stub — must never execute (AsyncNotifier capability test)"
 }
+
 func (d *dangerousStubToolForNotifier) Parameters() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{}}
 }
@@ -417,7 +418,10 @@ func TestAsyncNotifier_Notify_PublishFailureDoesNotEmitFollowUpQueued(t *testing
 		select {
 		case evt := <-sub.C:
 			if evt.Kind == EventKindFollowUpQueued {
-				t.Fatalf("EventKindFollowUpQueued must not be emitted when the publish failed; got payload %+v", evt.Payload)
+				t.Fatalf(
+					"EventKindFollowUpQueued must not be emitted when the publish failed; got payload %+v",
+					evt.Payload,
+				)
 			}
 		case <-deadline:
 			return

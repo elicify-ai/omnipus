@@ -62,7 +62,9 @@ func (m EmailTransports) resolve(ctx context.Context, toolName string) (email.Tr
 	}
 	return nil, fmt.Errorf(
 		"%s: this turn is not bound to a workspace and the agent has mailboxes in several (%s) — run this from a workspace conversation",
-		toolName, strings.Join(m.workspaceIDs(), ", "))
+		toolName,
+		strings.Join(m.workspaceIDs(), ", "),
+	)
 }
 
 // workspaceIDs returns the sorted workspace keys (deterministic error text).

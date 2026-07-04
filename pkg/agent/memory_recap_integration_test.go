@@ -157,7 +157,9 @@ func TestIntegration_RecapThenInject(t *testing.T) {
 	ag.ContextBuilder.InvalidateCache()
 	promptAfterErase := ag.ContextBuilder.BuildSystemPrompt()
 	if strings.Contains(promptAfterErase, recapText) {
-		t.Errorf("recapIT: after erasing last-session.md the sentinel must be gone from the system prompt; still present")
+		t.Errorf(
+			"recapIT: after erasing last-session.md the sentinel must be gone from the system prompt; still present",
+		)
 	}
 }
 
@@ -297,7 +299,10 @@ func TestIntegration_IdleTimerFiresRecap(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	if lastSessionBytes == nil {
-		t.Fatalf("idleIT: LAST_SESSION.md not produced within 5s after goroutine fired CloseSession; provider calls=%d", script.callCount)
+		t.Fatalf(
+			"idleIT: LAST_SESSION.md not produced within 5s after goroutine fired CloseSession; provider calls=%d",
+			script.callCount,
+		)
 	}
 	if !strings.Contains(string(lastSessionBytes), recapText) {
 		t.Errorf("idleIT: LAST_SESSION.md missing recap sentinel %q; got:\n%s", recapText, lastSessionBytes)

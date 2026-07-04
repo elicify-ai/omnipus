@@ -144,8 +144,13 @@ func TestDriftDrop_EmitsAuditEntry_WithRequiredFields(t *testing.T) {
 
 	allEntries := readAllAuditEntries(t, auditDir)
 	driftEntries := findDriftDropEntries(allEntries)
-	require.Len(t, driftEntries, 1,
-		"exactly 1 'channel.routing.drift_drop' audit entry must be emitted per dropped message (no double-emit); total entries: %d", len(allEntries))
+	require.Len(
+		t,
+		driftEntries,
+		1,
+		"exactly 1 'channel.routing.drift_drop' audit entry must be emitted per dropped message (no double-emit); total entries: %d",
+		len(allEntries),
+	)
 
 	entry := driftEntries[0]
 

@@ -40,7 +40,7 @@ func TestDelegateTool_Parameters(t *testing.T) {
 		t.Fatal("Properties should be a map")
 	}
 	for _, name := range []string{"task", "label", "agent_id", "async", "action", "task_id"} {
-		if _, ok := props[name]; !ok {
+		if _, ok = props[name]; !ok {
 			t.Errorf("Expected %q parameter in properties", name)
 		}
 	}
@@ -211,7 +211,10 @@ func TestDelegate_AsyncFalseBlocks(t *testing.T) {
 		t.Errorf("expected the delegated result inline, got: %s", result.ForLLM)
 	}
 	if elapsed < 15*time.Millisecond {
-		t.Errorf("async=false must have blocked for the sub-turn's duration; elapsed=%v (too fast, likely didn't block)", elapsed)
+		t.Errorf(
+			"async=false must have blocked for the sub-turn's duration; elapsed=%v (too fast, likely didn't block)",
+			elapsed,
+		)
 	}
 }
 
@@ -359,9 +362,27 @@ func TestDelegateStatus_ListAll(t *testing.T) {
 	tool := NewDelegateTool("test-model", 0, 0)
 	now := time.Now().UnixMilli()
 	tool.mu.Lock()
-	tool.tasks["delegate-1"] = &DelegateTaskState{ID: "delegate-1", Task: "Do task A", Label: "task-a", Status: "running", Created: now}
-	tool.tasks["delegate-2"] = &DelegateTaskState{ID: "delegate-2", Task: "Do task B", Label: "task-b", Status: "completed", Result: "Done successfully", Created: now}
-	tool.tasks["delegate-3"] = &DelegateTaskState{ID: "delegate-3", Task: "Do task C", Status: "failed", Result: "Error: something went wrong"}
+	tool.tasks["delegate-1"] = &DelegateTaskState{
+		ID:      "delegate-1",
+		Task:    "Do task A",
+		Label:   "task-a",
+		Status:  "running",
+		Created: now,
+	}
+	tool.tasks["delegate-2"] = &DelegateTaskState{
+		ID:      "delegate-2",
+		Task:    "Do task B",
+		Label:   "task-b",
+		Status:  "completed",
+		Result:  "Done successfully",
+		Created: now,
+	}
+	tool.tasks["delegate-3"] = &DelegateTaskState{
+		ID:     "delegate-3",
+		Task:   "Do task C",
+		Status: "failed",
+		Result: "Error: something went wrong",
+	}
 	tool.mu.Unlock()
 
 	result := tool.Execute(context.Background(), map[string]any{"action": "status"})
@@ -384,7 +405,14 @@ func TestDelegateStatus_ListAll(t *testing.T) {
 func TestDelegateStatus_GetByID(t *testing.T) {
 	tool := NewDelegateTool("test-model", 0, 0)
 	tool.mu.Lock()
-	tool.tasks["delegate-42"] = &DelegateTaskState{ID: "delegate-42", Task: "Specific task", Label: "my-task", Status: "failed", Result: "Something went wrong", Created: time.Now().UnixMilli()}
+	tool.tasks["delegate-42"] = &DelegateTaskState{
+		ID:      "delegate-42",
+		Task:    "Specific task",
+		Label:   "my-task",
+		Status:  "failed",
+		Result:  "Something went wrong",
+		Created: time.Now().UnixMilli(),
+	}
 	tool.mu.Unlock()
 
 	result := tool.Execute(context.Background(), map[string]any{"action": "status", "task_id": "delegate-42"})
@@ -426,7 +454,12 @@ func TestDelegateStatus_ResultTruncation(t *testing.T) {
 	tool := NewDelegateTool("test-model", 0, 0)
 	longResult := strings.Repeat("X", 500)
 	tool.mu.Lock()
-	tool.tasks["delegate-1"] = &DelegateTaskState{ID: "delegate-1", Task: "Long task", Status: "completed", Result: longResult}
+	tool.tasks["delegate-1"] = &DelegateTaskState{
+		ID:     "delegate-1",
+		Task:   "Long task",
+		Status: "completed",
+		Result: longResult,
+	}
 	tool.mu.Unlock()
 
 	result := tool.Execute(context.Background(), map[string]any{"action": "status", "task_id": "delegate-1"})
@@ -444,8 +477,20 @@ func TestDelegateStatus_ResultTruncation(t *testing.T) {
 func TestDelegateStatus_ChannelFiltering_ListAll(t *testing.T) {
 	tool := NewDelegateTool("test-model", 0, 0)
 	tool.mu.Lock()
-	tool.tasks["delegate-1"] = &DelegateTaskState{ID: "delegate-1", Task: "mine", Status: "running", OriginChannel: "telegram", OriginChatID: "chat-A"}
-	tool.tasks["delegate-2"] = &DelegateTaskState{ID: "delegate-2", Task: "other user", Status: "running", OriginChannel: "telegram", OriginChatID: "chat-B"}
+	tool.tasks["delegate-1"] = &DelegateTaskState{
+		ID:            "delegate-1",
+		Task:          "mine",
+		Status:        "running",
+		OriginChannel: "telegram",
+		OriginChatID:  "chat-A",
+	}
+	tool.tasks["delegate-2"] = &DelegateTaskState{
+		ID:            "delegate-2",
+		Task:          "other user",
+		Status:        "running",
+		OriginChannel: "telegram",
+		OriginChatID:  "chat-B",
+	}
 	tool.mu.Unlock()
 
 	ctx := WithToolContext(context.Background(), "telegram", "chat-A")
@@ -464,7 +509,14 @@ func TestDelegateStatus_ChannelFiltering_ListAll(t *testing.T) {
 func TestDelegateStatus_ChannelFiltering_GetByID(t *testing.T) {
 	tool := NewDelegateTool("test-model", 0, 0)
 	tool.mu.Lock()
-	tool.tasks["delegate-99"] = &DelegateTaskState{ID: "delegate-99", Task: "secret", Status: "completed", Result: "private data", OriginChannel: "slack", OriginChatID: "room-Z"}
+	tool.tasks["delegate-99"] = &DelegateTaskState{
+		ID:            "delegate-99",
+		Task:          "secret",
+		Status:        "completed",
+		Result:        "private data",
+		OriginChannel: "slack",
+		OriginChatID:  "room-Z",
+	}
 	tool.mu.Unlock()
 
 	ctx := WithToolContext(context.Background(), "slack", "room-OTHER")
@@ -477,7 +529,13 @@ func TestDelegateStatus_ChannelFiltering_GetByID(t *testing.T) {
 func TestDelegateStatus_ChannelFiltering_NoContext(t *testing.T) {
 	tool := NewDelegateTool("test-model", 0, 0)
 	tool.mu.Lock()
-	tool.tasks["delegate-1"] = &DelegateTaskState{ID: "delegate-1", Task: "t", Status: "completed", OriginChannel: "telegram", OriginChatID: "chat-A"}
+	tool.tasks["delegate-1"] = &DelegateTaskState{
+		ID:            "delegate-1",
+		Task:          "t",
+		Status:        "completed",
+		OriginChannel: "telegram",
+		OriginChatID:  "chat-A",
+	}
 	tool.mu.Unlock()
 
 	// No ToolContext injected — callerChannel and callerChatID are both "".

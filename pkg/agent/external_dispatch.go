@@ -166,7 +166,13 @@ func runExternalCLISubTurn(
 		} else {
 			slog.Info(
 				"external-cli dispatch: agent is a workspace CoreTeam member; running in the workspace's project-work directory instead of its own",
-				"agent_id", agent.ID, "workspace_id", wsID, "work_dir", wsDir)
+				"agent_id",
+				agent.ID,
+				"workspace_id",
+				wsID,
+				"work_dir",
+				wsDir,
+			)
 			workDir = strings.TrimSpace(wsDir)
 		}
 	}

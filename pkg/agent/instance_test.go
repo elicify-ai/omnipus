@@ -409,7 +409,7 @@ func TestNewAgentInstance_ResolveCandidatesFromModelListAlias(t *testing.T) {
 	}
 }
 
-func TestNewAgentInstance_AllowsMediaTempDirForReadListAndExec(t *testing.T) {
+func TestNewAgentInstance_AllowsMediaTempDirForReadAndList_RejectsForBash(t *testing.T) {
 	workspace := t.TempDir()
 	mediaDir := media.TempDir()
 	if err := os.MkdirAll(mediaDir, 0o700); err != nil {
@@ -474,6 +474,16 @@ func TestNewAgentInstance_AllowsMediaTempDirForReadListAndExec(t *testing.T) {
 		t.Fatalf("list_directory output missing media file: %s", listResult.ForLLM)
 	}
 
+	// Corrected 2026-07-04 (7-reviewer gate CRITICAL finding): bash's cwd guard
+	// must NOT inherit the read_file/list_directory media-temp-dir allowlist --
+	// that allowlist is a deliberate, narrower feature for those two tools only.
+	// Prior to the fix, this test asserted the OPPOSITE (bash succeeding here),
+	// which was the actual security bug: any agent could `bash cwd=<media dir>`
+	// to read another agent's/conversation's uploaded attachments, bypassing the
+	// cross-agent guard entirely. This is the real, end-to-end production-wiring
+	// proof (via NewAgentInstance's actual buildAllowReadPatterns wiring) that
+	// complements the narrower unit test in pkg/tools/bash_test.go
+	// (TestBash_CwdRejectsAbsolutePathEvenWhenAllowlisted).
 	execTool, ok := agent.Tools.Get("bash")
 	if !ok {
 		t.Fatal("bash tool not registered")
@@ -482,11 +492,12 @@ func TestNewAgentInstance_AllowsMediaTempDirForReadListAndExec(t *testing.T) {
 		"command": "cat " + filepath.Base(mediaPath),
 		"cwd":     mediaDir,
 	})
-	if execResult.IsError {
-		t.Fatalf("bash should allow media temp dir, got: %s", execResult.ForLLM)
+	if !execResult.IsError {
+		t.Fatalf("bash must reject an absolute cwd even when it matches the media-temp-dir allowlist, got success: %s",
+			execResult.ForLLM)
 	}
-	if !strings.Contains(execResult.ForLLM, "attachment content") {
-		t.Fatalf("bash output missing media content: %s", execResult.ForLLM)
+	if !strings.Contains(execResult.ForLLM, "path escapes workspace") {
+		t.Fatalf("bash rejection should cite the workspace-escape guard, got: %s", execResult.ForLLM)
 	}
 }
 

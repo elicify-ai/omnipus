@@ -3,7 +3,7 @@
 //
 // Copyright (c) 2026 Omnipus contributors
 
-// Package config — ADR-036 spawn/run_subagent/check_spawn_status -> delegate
+// ADR-036 spawn/run_subagent/check_spawn_status -> delegate
 // tool-policy key migration (docs/internal/specs/agent-delegation-spec.md).
 //
 // ADR-036 consolidated three separate tools (spawn, run_subagent,
@@ -42,6 +42,7 @@
 // operator-set spawn/run_subagent/check_spawn_status policy value is already
 // sitting under "delegate" by the time the boolean-flag migration looks, so
 // it is never downgraded to "deny".
+
 package config
 
 // delegateLegacyPolicyKeys lists the spawn/run_subagent/check_spawn_status

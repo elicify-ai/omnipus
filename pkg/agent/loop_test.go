@@ -277,7 +277,6 @@ func TestProcessMessage_WebRenderingNoteWiring(t *testing.T) {
 
 	t.Run("non-web turn does not inject web-rendering note", func(t *testing.T) {
 		for _, channel := range []string{"telegram", "cli", "discord"} {
-			channel := channel
 			t.Run(channel, func(t *testing.T) {
 				al, provider := setup(t)
 

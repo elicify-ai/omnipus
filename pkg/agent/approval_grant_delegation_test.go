@@ -53,6 +53,7 @@
 // pkg/gateway/ws_approval_grants_test.go, which exercise
 // AgentLoop.ResolveApprovalToolPolicy — a plain-string-in/string-out method
 // pkg/gateway can call without needing a *turnState.
+
 package agent
 
 import (
@@ -78,7 +79,9 @@ func (n *neverCallApprover) RequestApproval(_ context.Context, req PolicyApprova
 	n.t.Helper()
 	n.t.Fatalf(
 		"RequestApproval must not be called for a granted tool (tool=%q, session=%q, agent=%q) — the grant should have auto-approved it",
-		req.ToolName, req.SessionID, req.AgentID,
+		req.ToolName,
+		req.SessionID,
+		req.AgentID,
 	)
 	return false, "unreachable"
 }
@@ -242,7 +245,10 @@ func TestApprovalGrant_FullChainSpawnInheritDeny(t *testing.T) {
 		context.Background(), sessionID, "child-agent", "bash", "grant-chain-verify-1", "verify-turn-1", nil,
 	)
 	if !approved {
-		t.Fatalf("expected the child's inherited grant to auto-approve 'bash' without prompting, got denied: %s", denialReason)
+		t.Fatalf(
+			"expected the child's inherited grant to auto-approve 'bash' without prompting, got denied: %s",
+			denialReason,
+		)
 	}
 
 	// 5. Conversely, a tool the child was NEVER granted must still reach the
@@ -370,7 +376,9 @@ func TestApprovalGrant_TransitiveAcrossThreeLevels(t *testing.T) {
 	// 2's Inherit call copies child-agent's ENTIRE current bucket, which by
 	// this point already includes what it inherited from the grandparent in hop 1).
 	if !al.ApprovalGrants().IsAllowed(sessionID, "grandchild-agent", "bash") {
-		t.Fatal("expected grandchild-agent to inherit the grandparent's 'bash' grant transitively across two real spawnSubTurn hops")
+		t.Fatal(
+			"expected grandchild-agent to inherit the grandparent's 'bash' grant transitively across two real spawnSubTurn hops",
+		)
 	}
 
 	// 5. THE END-TO-END PROOF (ADR-036 §3.4): drive the actual approval
@@ -381,9 +389,18 @@ func TestApprovalGrant_TransitiveAcrossThreeLevels(t *testing.T) {
 	// the interactive approver.
 	al.SetToolApprover(&neverCallApprover{t: t})
 	approved, denialReason := al.CheckGrantOrRequestApproval(
-		context.Background(), sessionID, "grandchild-agent", "bash", "grant-chain-verify-transitive", "verify-turn-1", nil,
+		context.Background(),
+		sessionID,
+		"grandchild-agent",
+		"bash",
+		"grant-chain-verify-transitive",
+		"verify-turn-1",
+		nil,
 	)
 	if !approved {
-		t.Fatalf("expected grandchild-agent's transitively-inherited grant to auto-approve 'bash' without prompting, got denied: %s", denialReason)
+		t.Fatalf(
+			"expected grandchild-agent's transitively-inherited grant to auto-approve 'bash' without prompting, got denied: %s",
+			denialReason,
+		)
 	}
 }

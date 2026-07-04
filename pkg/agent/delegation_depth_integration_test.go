@@ -67,7 +67,10 @@ func TestSpawnSubTurn_HonorsExplicitPerEdgeDepthOverDefaultBackstop(t *testing.T
 	// ErrDepthLimitExceeded despite the edge's explicit Depth: 10. It must now
 	// succeed because the edge's resolved cap (10) is honored.
 	if _, err := spawnAt(4); err != nil {
-		t.Fatalf("depth 4 (past the old default-3 backstop) must succeed under an edge Depth=10 cap, got error: %v", err)
+		t.Fatalf(
+			"depth 4 (past the old default-3 backstop) must succeed under an edge Depth=10 cap, got error: %v",
+			err,
+		)
 	}
 
 	// Depth 9 is still under the edge's cap of 10 — must succeed.
@@ -143,6 +146,9 @@ func TestSpawnSubTurn_NilResolvedMaxDepthFallsBackToSharedDefault(t *testing.T) 
 	cfg := SubTurnConfig{Model: "gpt-4o-mini", Tools: []tools.Tool{}} // ResolvedMaxDepth left nil
 
 	if _, err := spawnSubTurn(context.Background(), al, parent, cfg); !errors.Is(err, ErrDepthLimitExceeded) {
-		t.Fatalf("depth 3 with no ResolvedMaxDepth override must fall back to the shared default (3) and reject, got: %v", err)
+		t.Fatalf(
+			"depth 3 with no ResolvedMaxDepth override must fall back to the shared default (3) and reject, got: %v",
+			err,
+		)
 	}
 }

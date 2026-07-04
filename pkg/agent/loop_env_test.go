@@ -60,7 +60,10 @@ func TestWireDelegationInjectors_AdvertisesEffectiveDepthNotRawUncapped(t *testi
 		t.Fatalf("expected the effective backstop default (3) to be advertised, got:\n%s", got)
 	}
 	if strings.Contains(got, "max chain depth: uncapped") {
-		t.Fatalf("must NOT advertise 'uncapped' when a 4th hop will actually be rejected at the effective cap; got:\n%s", got)
+		t.Fatalf(
+			"must NOT advertise 'uncapped' when a 4th hop will actually be rejected at the effective cap; got:\n%s",
+			got,
+		)
 	}
 }
 

@@ -20,12 +20,23 @@ func TestRankRetrosBM25_RanksAndFilters(t *testing.T) {
 	now := time.Now().UTC()
 	retros := []Retro{
 		{Recap: "flock alpha_marker", Timestamp: now}, // short, strong match
-		{Recap: "we covered scheduling, tooling, flock, and beta_marker at great length in the retro meeting today", Timestamp: now.Add(-time.Hour)}, // long, weak match
-		{Recap: "unrelated scheduling notes only", Timestamp: now.Add(-2 * time.Hour)},                                                               // no match
+		{
+			Recap:     "we covered scheduling, tooling, flock, and beta_marker at great length in the retro meeting today",
+			Timestamp: now.Add(-time.Hour),
+		}, // long, weak match
+		{
+			Recap:     "unrelated scheduling notes only",
+			Timestamp: now.Add(-2 * time.Hour),
+		}, // no match
 	}
 	got := rankRetrosBM25(retros, "flock", 10)
 	require.Len(t, got, 2, "only the two flock-matching retros are returned; the non-matching one is excluded")
-	assert.Contains(t, got[0].Recap, "alpha_marker", "the shorter, denser match ranks first (BM25 length normalization)")
+	assert.Contains(
+		t,
+		got[0].Recap,
+		"alpha_marker",
+		"the shorter, denser match ranks first (BM25 length normalization)",
+	)
 	assert.Contains(t, got[1].Recap, "beta_marker", "the longer, weaker match ranks second")
 }
 

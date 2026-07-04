@@ -358,7 +358,7 @@ func TestEnsureCLIToken_AfterLegacyMigration_TokenSurvivesAndAuthenticates(t *te
 	if err != nil {
 		t.Fatalf("bcrypt.GenerateFromPassword: %v", err)
 	}
-	if err := os.WriteFile(CLITokenPath(home), []byte(plainToken), 0o600); err != nil {
+	if err = os.WriteFile(CLITokenPath(home), []byte(plainToken), 0o600); err != nil {
 		t.Fatalf("seed cli.token: %v", err)
 	}
 
@@ -368,7 +368,7 @@ func TestEnsureCLIToken_AfterLegacyMigration_TokenSurvivesAndAuthenticates(t *te
 		{Username: "daniel"}, // the (now singular) human account, at Users[0]
 		{Username: "cli", TokenHash: config.BcryptHash(tokenHash)}, // legacy machine entry
 	}
-	if err := config.SaveConfig(configPath, cfg); err != nil {
+	if err = config.SaveConfig(configPath, cfg); err != nil {
 		t.Fatalf("seed legacy config.json: %v", err)
 	}
 

@@ -351,8 +351,11 @@ func TestSpawnSubTurn_TargetIdentity_NativeDispatchKeepsParentConfig(t *testing.
 		t.Fatal("test setup: target agent not registered")
 	}
 	if target.Workspace == parent.Workspace || target.Model == parent.Model {
-		t.Fatalf("test setup invariant broken: target and parent must have distinct Workspace/Model, got target=%+v parent=%+v",
-			target, parent)
+		t.Fatalf(
+			"test setup invariant broken: target and parent must have distinct Workspace/Model, got target=%+v parent=%+v",
+			target,
+			parent,
+		)
 	}
 
 	parentTS := &turnState{
@@ -391,7 +394,8 @@ func TestSpawnSubTurn_TargetIdentity_NativeDispatchKeepsParentConfig(t *testing.
 	if sawWorkspace != parent.Workspace {
 		t.Errorf(
 			"childTS.agent.Workspace = %q, want the PARENT's workspace %q (native dispatch must not adopt the target's Workspace)",
-			sawWorkspace, parent.Workspace,
+			sawWorkspace,
+			parent.Workspace,
 		)
 	}
 }
@@ -646,8 +650,10 @@ func TestSpawnSubTurn_TargetIdentity_SelfDelegationNoFallbackWarning(t *testing.
 		t.Fatal("expected a non-nil result")
 	}
 	if strings.Contains(result.ForLLM, "delegation warning") {
-		t.Errorf("result.ForLLM = %q, must NOT carry a delegation warning for benign self-delegation (TargetAgentID empty)",
-			result.ForLLM)
+		t.Errorf(
+			"result.ForLLM = %q, must NOT carry a delegation warning for benign self-delegation (TargetAgentID empty)",
+			result.ForLLM,
+		)
 	}
 	for _, e := range collector.events {
 		if e.Kind != EventKindError {

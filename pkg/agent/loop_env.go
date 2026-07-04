@@ -106,9 +106,11 @@ func wireDelegationInjectors(al *AgentLoop, registry *AgentRegistry) {
 			if wsID == "" {
 				def, err := workspace.ResolveDefaultID(omnipusHome())
 				if err != nil || def == "" {
-					logger.WarnCF("agent.env",
+					logger.WarnCF(
+						"agent.env",
 						"wireDelegationInjectors: cannot resolve default workspace — rendering fail-closed delegation block",
-						map[string]any{"agent_id": id, "error": errString(err)})
+						map[string]any{"agent_id": id, "error": errString(err)},
+					)
 					return "## Delegation\nYou cannot delegate to other agents — complete the task yourself."
 				}
 				wsID = def
@@ -118,9 +120,11 @@ func wireDelegationInjectors(al *AgentLoop, registry *AgentRegistry) {
 			// Fail-closed on any error: an unreadable graph DENIES (matching the gate).
 			edges, err := workspace.ReadDelegation(omnipusHome(), wsID)
 			if err != nil {
-				logger.WarnCF("agent.env",
+				logger.WarnCF(
+					"agent.env",
 					"wireDelegationInjectors: workspace delegation graph unreadable — rendering fail-closed delegation block",
-					map[string]any{"agent_id": id, "workspace_id": wsID, "error": err.Error()})
+					map[string]any{"agent_id": id, "workspace_id": wsID, "error": err.Error()},
+				)
 				return "## Delegation\nYou cannot delegate to other agents — complete the task yourself."
 			}
 
@@ -150,9 +154,11 @@ func wireDelegationInjectors(al *AgentLoop, registry *AgentRegistry) {
 					// but WARN so the operator can reconcile the graph. The gate would
 					// independently deny this target too, so under-advertising here is
 					// fail-safe (advertise ⊆ enforce).
-					logger.WarnCF("agent.env",
+					logger.WarnCF(
+						"agent.env",
 						"wireDelegationInjectors: graph delegation edge target not in live registry — skipping from advertised block",
-						map[string]any{"agent_id": id, "target": e.ToAgent, "workspace_id": wsID})
+						map[string]any{"agent_id": id, "target": e.ToAgent, "workspace_id": wsID},
+					)
 					continue
 				}
 				// Convert workspace.DelegationMode to config.DelegationMode (same string

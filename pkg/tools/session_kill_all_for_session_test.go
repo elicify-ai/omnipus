@@ -38,9 +38,27 @@ func TestSessionManager_KillAllForSession(t *testing.T) {
 		{
 			name: "kills only running sessions owned by the target session",
 			sessions: []*ProcessSession{
-				{ID: "s1", OwnerSessionID: "owner-A", Status: "running", PID: fakeUnusedPIDBase + 1, StartTime: time.Now().Unix() - 30},
-				{ID: "s2", OwnerSessionID: "owner-A", Status: "running", PID: fakeUnusedPIDBase + 2, StartTime: time.Now().Unix() - 5},
-				{ID: "s3", OwnerSessionID: "owner-B", Status: "running", PID: fakeUnusedPIDBase + 3, StartTime: time.Now().Unix()},
+				{
+					ID:             "s1",
+					OwnerSessionID: "owner-A",
+					Status:         "running",
+					PID:            fakeUnusedPIDBase + 1,
+					StartTime:      time.Now().Unix() - 30,
+				},
+				{
+					ID:             "s2",
+					OwnerSessionID: "owner-A",
+					Status:         "running",
+					PID:            fakeUnusedPIDBase + 2,
+					StartTime:      time.Now().Unix() - 5,
+				},
+				{
+					ID:             "s3",
+					OwnerSessionID: "owner-B",
+					Status:         "running",
+					PID:            fakeUnusedPIDBase + 3,
+					StartTime:      time.Now().Unix(),
+				},
 			},
 			killSessionID: "owner-A",
 			wantKilled:    2,
@@ -53,8 +71,20 @@ func TestSessionManager_KillAllForSession(t *testing.T) {
 		{
 			name: "skips already-done sessions for the same owner",
 			sessions: []*ProcessSession{
-				{ID: "s4", OwnerSessionID: "owner-C", Status: "running", PID: fakeUnusedPIDBase + 4, StartTime: time.Now().Unix()},
-				{ID: "s5", OwnerSessionID: "owner-C", Status: "done", PID: fakeUnusedPIDBase + 5, StartTime: time.Now().Unix()},
+				{
+					ID:             "s4",
+					OwnerSessionID: "owner-C",
+					Status:         "running",
+					PID:            fakeUnusedPIDBase + 4,
+					StartTime:      time.Now().Unix(),
+				},
+				{
+					ID:             "s5",
+					OwnerSessionID: "owner-C",
+					Status:         "done",
+					PID:            fakeUnusedPIDBase + 5,
+					StartTime:      time.Now().Unix(),
+				},
 			},
 			killSessionID: "owner-C",
 			wantKilled:    1,
@@ -66,7 +96,13 @@ func TestSessionManager_KillAllForSession(t *testing.T) {
 		{
 			name: "no sessions for the given owner is a no-op",
 			sessions: []*ProcessSession{
-				{ID: "s6", OwnerSessionID: "owner-D", Status: "running", PID: fakeUnusedPIDBase + 6, StartTime: time.Now().Unix()},
+				{
+					ID:             "s6",
+					OwnerSessionID: "owner-D",
+					Status:         "running",
+					PID:            fakeUnusedPIDBase + 6,
+					StartTime:      time.Now().Unix(),
+				},
 			},
 			killSessionID: "owner-does-not-exist",
 			wantKilled:    0,
@@ -75,8 +111,16 @@ func TestSessionManager_KillAllForSession(t *testing.T) {
 			},
 		},
 		{
-			name:          "empty sessionID is a no-op, never a panic",
-			sessions:      []*ProcessSession{{ID: "s7", OwnerSessionID: "", Status: "running", PID: fakeUnusedPIDBase + 7, StartTime: time.Now().Unix()}},
+			name: "empty sessionID is a no-op, never a panic",
+			sessions: []*ProcessSession{
+				{
+					ID:             "s7",
+					OwnerSessionID: "",
+					Status:         "running",
+					PID:            fakeUnusedPIDBase + 7,
+					StartTime:      time.Now().Unix(),
+				},
+			},
 			killSessionID: "",
 			wantKilled:    0,
 			wantStatus:    map[string]string{"s7": "running"},
@@ -85,6 +129,7 @@ func TestSessionManager_KillAllForSession(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			sm := NewSessionManager()
 			for _, s := range tt.sessions {
 				sm.Add(s)
@@ -96,8 +141,12 @@ func TestSessionManager_KillAllForSession(t *testing.T) {
 			require.Equal(t, tt.wantKilled, killed, "unexpected killed count")
 
 			after := sm.KilledBackgroundSessionsCount()
-			require.Equal(t, before+int64(tt.wantKilled), after,
-				"KilledBackgroundSessionsCount must increment by exactly the number of sessions actually killed (FR-B14)")
+			require.Equal(
+				t,
+				before+int64(tt.wantKilled),
+				after,
+				"KilledBackgroundSessionsCount must increment by exactly the number of sessions actually killed (FR-B14)",
+			)
 
 			for id, wantStatus := range tt.wantStatus {
 				got, err := sm.Get(id)
@@ -116,8 +165,20 @@ func TestSessionManager_KillAllForSession_DoesNotAffectOtherOwners(t *testing.T)
 	t.Parallel()
 
 	sm := NewSessionManager()
-	sessA := &ProcessSession{ID: "a1", OwnerSessionID: "session-A", Status: "running", PID: fakeUnusedPIDBase + 100, StartTime: time.Now().Unix()}
-	sessB := &ProcessSession{ID: "b1", OwnerSessionID: "session-B", Status: "running", PID: fakeUnusedPIDBase + 101, StartTime: time.Now().Unix()}
+	sessA := &ProcessSession{
+		ID:             "a1",
+		OwnerSessionID: "session-A",
+		Status:         "running",
+		PID:            fakeUnusedPIDBase + 100,
+		StartTime:      time.Now().Unix(),
+	}
+	sessB := &ProcessSession{
+		ID:             "b1",
+		OwnerSessionID: "session-B",
+		Status:         "running",
+		PID:            fakeUnusedPIDBase + 101,
+		StartTime:      time.Now().Unix(),
+	}
 	sm.Add(sessA)
 	sm.Add(sessB)
 

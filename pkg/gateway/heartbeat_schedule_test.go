@@ -46,7 +46,12 @@ func neverWorker(_ string) bool { return false }
 func alwaysWorker(_ string) bool { return true }
 
 // buildMemberConfigs is a convenience constructor for workspace.MemberConfigs.
-func buildMemberConfigs(agentID string, enabled bool, intervalMins int, body, sessionID string) map[string]workspace.MemberConfig {
+func buildMemberConfigs(
+	agentID string,
+	enabled bool,
+	intervalMins int,
+	body, sessionID string,
+) map[string]workspace.MemberConfig {
 	return map[string]workspace.MemberConfig{
 		agentID: {
 			Heartbeat: &workspace.MemberHeartbeat{

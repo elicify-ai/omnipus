@@ -6,6 +6,7 @@
 // and hand_off. The canonical call is:
 //
 //	CloneExcept(ExcludedDelegate, ExcludedHandoff)
+
 package tools
 
 import (

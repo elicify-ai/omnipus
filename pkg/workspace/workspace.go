@@ -54,7 +54,7 @@ type Workspace struct { // not-wire-format: internal disk-cache struct, mapped t
 	// MemberConfigs holds per-(workspace, agent) configuration keyed by agent
 	// ID. Currently carries heartbeat settings (FR-001). Only agents present
 	// in CoreTeam are valid keys; the gateway handler GCs stale entries when
-	// CoreTeam shrinks (FR-022). omitempty so fresh workspaces serialise
+	// CoreTeam shrinks (FR-022). omitempty so fresh workspaces serialize
 	// without the field.
 	MemberConfigs map[string]MemberConfig `json:"member_configs,omitempty"`
 

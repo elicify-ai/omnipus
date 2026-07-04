@@ -4,6 +4,14 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
+// Package gateway implements the Omnipus HTTP/WS API gateway: REST handlers
+// (rest*.go), WebSocket streaming (websocket*.go), the embedded SPA
+// (go:embed), auth (auth.go/rest_auth.go), and the credential/service boot
+// sequence (this file's Run/RunWithOptions/RunContext) that wires config,
+// credentials, the agent loop, and the channel manager together and starts
+// the gateway.port/preview_port listeners. REST handlers that persist
+// config always go through safeUpdateConfigJSON (never config.SaveConfig)
+// so encrypted credential references in config.json are never clobbered.
 package gateway
 
 import (

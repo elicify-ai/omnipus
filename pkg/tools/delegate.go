@@ -169,14 +169,18 @@ func (t *DelegateTool) SetDelegateChecker(check func() bool) {
 // SetDelegationDenyCheckerBackground installs the full delegation-policy gate
 // (FR-6.2: trust set + mode("background") + depth) applied when async=true.
 // Mirrors the pre-merge SpawnTool.SetDelegationDenyChecker exactly.
-func (t *DelegateTool) SetDelegationDenyCheckerBackground(check func(ctx context.Context, targetAgentID string) *DelegationDenial) {
+func (t *DelegateTool) SetDelegationDenyCheckerBackground(
+	check func(ctx context.Context, targetAgentID string) *DelegationDenial,
+) {
 	t.delegationDenyBackground = check
 }
 
 // SetDelegationDenyCheckerAwait installs the full delegation-policy gate
 // (FR-6.2: trust set + mode("await") + depth) applied when async=false.
 // Mirrors the pre-merge SubagentTool.SetDelegationDenyChecker exactly.
-func (t *DelegateTool) SetDelegationDenyCheckerAwait(check func(ctx context.Context, targetAgentID string) *DelegationDenial) {
+func (t *DelegateTool) SetDelegationDenyCheckerAwait(
+	check func(ctx context.Context, targetAgentID string) *DelegationDenial,
+) {
 	t.delegationDenyAwait = check
 }
 
@@ -321,7 +325,9 @@ func (t *DelegateTool) executeRun(ctx context.Context, args map[string]any, cb A
 			}
 		} else if t.delegateChecker != nil && !t.delegateChecker() {
 			// Backward-compat: legacy boolean trust-only gate.
-			return ErrorResult("delegation not allowed: no target agent is permitted by this agent's delegation policy").
+			return ErrorResult(
+				"delegation not allowed: no target agent is permitted by this agent's delegation policy",
+			).
 				WithError(fmt.Errorf("delegation policy denied: agent has no delegation targets in its 'to' allowlist"))
 		}
 	}

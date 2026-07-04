@@ -231,13 +231,9 @@ func (a *restAPI) HandleWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Ownership machinery removed (single-user model, see issue #470 for this
-	// handler's own unregistered status). This block only exists to keep the
-	// package compiling — if this route is ever wired up for real, its
-	// authorization needs to be reconsidered from scratch at that time.
-	if user == nil {
-		jsonErr(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
+	// handler's own unregistered status) — the sole remaining auth check is
+	// the "user == nil" guard above; if this route is ever wired up for real,
+	// its authorization needs to be reconsidered from scratch at that time.
 
 	// Resolve workspace path for this agent.
 	agentWorkspace, err := agentWorkspacePath(cfg, agentCfg.ID, agentCfg.Workspace, a.homePath)

@@ -1,3 +1,11 @@
+// Package tools implements the Tool interface, the central ToolRegistry, and
+// the full catalog of builtin tools available to Omnipus agents — the
+// unified bash tool (ADR-036), delegate/hand_off (agent-to-agent delegation),
+// filesystem, session, web, memory, messaging, skills, and MCP-backed tools.
+// ToolRegistry (this file) is the single registration/dispatch point every
+// agent's tool loop calls through; Tool (base.go) is the interface every
+// tool implements; the compositor (compositor.go) applies per-agent
+// scope/policy filtering on top of the registry's raw tool set.
 package tools
 
 import (

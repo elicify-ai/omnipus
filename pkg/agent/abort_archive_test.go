@@ -168,7 +168,7 @@ func TestAbortPath_HardAbort_PreservesEvictedArchive(t *testing.T) {
 		initialHistoryLength: len(windowAfterEvict),
 		cancelFunc:           cancel,
 	}
-	// Initialise the finished channel lazily (Finish calls Finished() which does
+	// Initialize the finished channel lazily (Finish calls Finished() which does
 	// a lazy init under mu, so leaving finishedChan nil is safe — Finished() will
 	// create it). But we must initialize ctx for the turnState to avoid a nil
 	// ctx panic if Finish tries to cancel children.
@@ -493,14 +493,19 @@ func TestAssembleMessages_ReadArchiveError_FallsBackToBreadcrumb(t *testing.T) {
 			break
 		}
 	}
-	assert.True(t, breadcrumbFound,
-		"CRITICAL-2 differentiation: explicit breadcrumb must appear in output — proving empty fallback is not hardcoded")
+	assert.True(
+		t,
+		breadcrumbFound,
+		"CRITICAL-2 differentiation: explicit breadcrumb must appear in output — proving empty fallback is not hardcoded",
+	)
 
 	// The breadcrumb sentinel must NOT appear in the empty-fallback-assembled output.
 	for _, m := range assembled {
 		if strings.Contains(m.Content, "DIFFERENTIATION_BREADCRUMB_SENTINEL") {
-			t.Errorf("CRITICAL-2 differentiation: breadcrumb sentinel leaked into empty-fallback assembled output: role=%s",
-				m.Role)
+			t.Errorf(
+				"CRITICAL-2 differentiation: breadcrumb sentinel leaked into empty-fallback assembled output: role=%s",
+				m.Role,
+			)
 		}
 	}
 }
@@ -692,13 +697,21 @@ func TestRollbackAppended_MidTurnEviction_RestoreSession(t *testing.T) {
 
 	// GetHistory must return the 8 pre-turn messages.
 	liveWindow := agent.Sessions.GetHistory(sk)
-	assert.Equal(t, initialHistoryLength, len(liveWindow),
-		"SC-010/round-2 fix: restoreSession must restore the pre-turn live window (8 messages), not leave Skip advanced to 8")
+	assert.Equal(
+		t,
+		initialHistoryLength,
+		len(liveWindow),
+		"SC-010/round-2 fix: restoreSession must restore the pre-turn live window (8 messages), not leave Skip advanced to 8",
+	)
 
 	// No sentinels in the live window or archive.
 	for _, m := range liveWindow {
 		if strings.Contains(m.Content, "RS_SENTINEL") {
-			t.Errorf("in-turn sentinel found in live window after restoreSession: role=%s content=%q", m.Role, m.Content)
+			t.Errorf(
+				"in-turn sentinel found in live window after restoreSession: role=%s content=%q",
+				m.Role,
+				m.Content,
+			)
 		}
 	}
 	for _, line := range archiveLinesFromAgent(t, al, sk) {

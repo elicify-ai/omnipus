@@ -119,7 +119,9 @@ func TestInstanceID_DrivesPriority0_EndToEnd_StampedVsTypeKey(t *testing.T) {
 	}
 	// The bare-type fallback has no bound config → must NOT route to "ray".
 	if agentB.ID == "ray" {
-		t.Errorf("Case B (type fallback): routed to 'ray' — this would be a false-green regression; the bare 'whatsapp' key has no binding so the default (mia) should be used")
+		t.Errorf(
+			"Case B (type fallback): routed to 'ray' — this would be a false-green regression; the bare 'whatsapp' key has no binding so the default (mia) should be used",
+		)
 	}
 	if agentB.ID != "mia" {
 		t.Errorf("Case B (type fallback): agent = %q, want %q (default cascade)", agentB.ID, "mia")
