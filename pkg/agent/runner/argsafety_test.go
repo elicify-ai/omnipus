@@ -10,10 +10,23 @@ import (
 
 // --- unit tests: filterDangerousCLIArgs -----------------------------------
 
-func TestFilterDangerousCLIArgs_Claude_DropsSkipPermissions(t *testing.T) {
+// TestFilterDangerousCLIArgs_Claude_DropsRedundantSkipPermissions locks in
+// the post-2026-07-05 behavior (issue #488): the driver's own baseline is
+// now an unconditional --dangerously-skip-permissions (reversing FR-5.3/
+// US-5's original claude-specific acceptEdits stance), matching opencode's
+// pre-existing posture. An operator cli_args copy is still dropped here —
+// not because it's dangerous anymore (the driver's own flag already IS the
+// full bypass), but to keep the decision singular/driver-controlled and
+// argv free of a duplicate flag, mirroring
+// TestOpencodeDriver_BuildArgs_DangerousCLIArgsDropped's identical rationale
+// for the same flag on that CLI.
+func TestFilterDangerousCLIArgs_Claude_DropsRedundantSkipPermissions(t *testing.T) {
 	kept, dropped := filterDangerousCLIArgs("claude", []string{"--verbose", "--dangerously-skip-permissions", "--foo"})
 	if containsFlag(kept, "--dangerously-skip-permissions") {
-		t.Fatalf("--dangerously-skip-permissions must be dropped for claude; kept=%v", kept)
+		t.Fatalf(
+			"--dangerously-skip-permissions must be dropped from cli_args (redundant with the driver's own copy); kept=%v",
+			kept,
+		)
 	}
 	if !containsFlag(kept, "--verbose") || !containsFlag(kept, "--foo") {
 		t.Fatalf("benign flags must be preserved; kept=%v", kept)
@@ -23,35 +36,56 @@ func TestFilterDangerousCLIArgs_Claude_DropsSkipPermissions(t *testing.T) {
 	}
 }
 
-func TestFilterDangerousCLIArgs_Claude_PermissionModeEscalation(t *testing.T) {
+// TestFilterDangerousCLIArgs_Claude_PermissionModeAlwaysDroppedAsInert locks
+// in the current rationale for --permission-mode: it is dropped for EVERY
+// value, not because any value is dangerous, but because the driver's own
+// unconditional --dangerously-skip-permissions is appended first and, per
+// Claude Code CLI's documented behavior, silently overrides/ignores any
+// --permission-mode value entirely. Without this guard, an operator setting
+// cli_args: ["--permission-mode", "plan"] believing it narrows the posture
+// would see zero effect with no WARN, no log, no UI indication — dropping it
+// makes that inertness visible via the same dropped_args/WARN mechanism.
+func TestFilterDangerousCLIArgs_Claude_PermissionModeAlwaysDroppedAsInert(t *testing.T) {
 	cases := []struct {
-		name    string
-		args    []string
-		wantDrp bool
+		name string
+		args []string
 	}{
-		{"two-token bypassPermissions dropped", []string{"--permission-mode", "bypassPermissions"}, true},
-		{"equals-form bypassPermissions dropped", []string{"--permission-mode=bypassPermissions"}, true},
-		{"case-insensitive value dropped", []string{"--permission-mode", "BypassPermissions"}, true},
-		{"narrowing to plan kept", []string{"--permission-mode", "plan"}, false},
-		{"narrowing to default kept", []string{"--permission-mode", "default"}, false},
-		{"redundant acceptEdits kept", []string{"--permission-mode", "acceptEdits"}, false},
+		{"two-token bypassPermissions dropped", []string{"--permission-mode", "bypassPermissions"}},
+		{"equals-form bypassPermissions dropped", []string{"--permission-mode=bypassPermissions"}},
+		{"case-insensitive value dropped", []string{"--permission-mode", "BypassPermissions"}},
+		{"narrowing to plan dropped", []string{"--permission-mode", "plan"}},
+		{"narrowing to default dropped", []string{"--permission-mode", "default"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			kept, dropped := filterDangerousCLIArgs("claude", tc.args)
-			if tc.wantDrp {
-				if len(dropped) == 0 {
-					t.Fatalf("expected the flag+value pair to be dropped; kept=%v dropped=%v", kept, dropped)
-				}
-				if containsFlag(kept, "--permission-mode") {
-					t.Fatalf("dangerous --permission-mode value must not remain in kept args; kept=%v", kept)
-				}
-			} else {
-				if len(dropped) != 0 {
-					t.Fatalf("benign --permission-mode value must not be dropped; dropped=%v", dropped)
-				}
-				if !containsSeq(kept, "--permission-mode", tc.args[1]) {
-					t.Fatalf("benign --permission-mode value must be preserved intact; kept=%v", kept)
+			if len(dropped) == 0 {
+				t.Fatalf(
+					"--permission-mode must be dropped for claude regardless of value (the driver's own --dangerously-skip-permissions silently overrides it — inert, not an escalation); args=%v",
+					tc.args,
+				)
+			}
+			if dropped[0] == "" {
+				t.Fatalf("expected a non-empty dropped entry; dropped=%v", dropped)
+			}
+			if len(kept) != 0 {
+				t.Fatalf("--permission-mode (and its value) must be fully dropped, nothing kept; kept=%v", kept)
+			}
+			if containsFlag(kept, "--permission-mode") {
+				t.Fatalf("kept must not contain --permission-mode in any form; kept=%v", kept)
+			}
+
+			// filterDangerousCLIArgsDetailed must agree, and every dropped
+			// entry must carry a non-empty Reason so the executor-preview
+			// endpoint can explain WHY --permission-mode was dropped (inert,
+			// not dangerous), not just that it was.
+			_, detailed := filterDangerousCLIArgsDetailed("claude", tc.args)
+			if len(detailed) == 0 {
+				t.Fatalf("expected at least one detailed dropped entry; args=%v", tc.args)
+			}
+			for _, d := range detailed {
+				if d.reason == "" {
+					t.Fatalf("dropped --permission-mode entry %q has an empty reason", d.flag)
 				}
 			}
 		})
@@ -354,10 +388,11 @@ func TestFilterDangerousCLIArgs_ValueTakingFlagFollowedByAnotherFlag(t *testing.
 
 // --- integration tests: driver buildArgs wiring ----------------------------
 
-// TestClaudeDriver_BuildArgs_DangerousCLIArgsDropped proves the filter is
-// actually wired into ClaudeDriver.buildArgs and that the driver's OWN
-// --permission-mode acceptEdits flag is never stripped by the filter (the
-// filter only ever inspects opts.CLIArgs).
+// TestClaudeDriver_BuildArgs_DangerousCLIArgsDropped proves an operator
+// cli_args copy of --dangerously-skip-permissions is deduplicated against the
+// driver's own unconditional copy (issue #488) — it must appear exactly
+// once, mirroring TestOpencodeDriver_BuildArgs_DangerousCLIArgsDropped's
+// identical check for that CLI's own unconditional bypass flag.
 func TestClaudeDriver_BuildArgs_DangerousCLIArgsDropped(t *testing.T) {
 	d := NewClaudeDriver(nil)
 	var args []string
@@ -368,11 +403,14 @@ func TestClaudeDriver_BuildArgs_DangerousCLIArgsDropped(t *testing.T) {
 			CLIArgs: []string{"--dangerously-skip-permissions", "--custom-flag", "value-x"},
 		})
 	})
-	if containsFlag(args, "--dangerously-skip-permissions") {
-		t.Fatalf("operator cli_args must not re-enable --dangerously-skip-permissions; args=%v", args)
+	occurrences := 0
+	for _, a := range args {
+		if a == "--dangerously-skip-permissions" {
+			occurrences++
+		}
 	}
-	if !containsSeq(args, "--permission-mode", "acceptEdits") {
-		t.Fatalf("the driver's own --permission-mode acceptEdits must remain; args=%v", args)
+	if occurrences != 1 {
+		t.Fatalf("--dangerously-skip-permissions must appear exactly once (driver's own copy only); args=%v", args)
 	}
 	if !containsSeq(args, "--custom-flag", "value-x") {
 		t.Fatalf("a benign operator cli_args flag must be preserved; args=%v", args)
@@ -478,13 +516,19 @@ func TestOpencodeDriver_BuildArgs_DangerousCLIArgsDropped(t *testing.T) {
 // it. This is enforced by construction (each driver calls the filter ONLY on
 // opts.CLIArgs, never on the accumulated args slice) — see the buildArgs call
 // sites in driver_claude.go / driver_codex.go / driver_opencode.go.
+//
+// The example flag used here, --model, is genuinely absent from every CLI's
+// denylist (dangerousCLIFlagsByCLI) — unlike --permission-mode, which is now
+// itself a denylisted (always-dropped) entry for claude (see
+// TestFilterDangerousCLIArgs_Claude_PermissionModeAlwaysDroppedAsInert) and
+// so would no longer demonstrate "untouched pass-through" if used here.
 func TestFilterDangerousCLIArgs_NeverTouchesDriverOwnFlags(t *testing.T) {
-	driverOwnFlags := []string{"--permission-mode", "acceptEdits"}
-	kept, dropped := filterDangerousCLIArgs("claude", driverOwnFlags)
+	benignArgs := []string{"--model", "claude-sonnet-5"}
+	kept, dropped := filterDangerousCLIArgs("claude", benignArgs)
 	if len(dropped) != 0 {
-		t.Fatalf("acceptEdits is not a dangerous value and must never be dropped; dropped=%v", dropped)
+		t.Fatalf("--model is not a denylisted flag and must never be dropped; dropped=%v", dropped)
 	}
-	if !containsSeq(kept, "--permission-mode", "acceptEdits") {
+	if !containsSeq(kept, "--model", "claude-sonnet-5") {
 		t.Fatalf("expected the flag+value preserved verbatim; kept=%v", kept)
 	}
 }

@@ -39,7 +39,7 @@ properties:
       - "--verbose"
       - "--no-chrome"
       - "--model <configured model> (only when a model is configured)"
-      - "--permission-mode acceptEdits"
+      - "--dangerously-skip-permissions"
       - "--max-turns <configured max turns> (only when a turn cap is configured)"
   notes:
     type: string

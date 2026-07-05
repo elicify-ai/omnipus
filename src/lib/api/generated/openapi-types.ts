@@ -3751,7 +3751,7 @@ export interface components {
              *       "--verbose",
              *       "--no-chrome",
              *       "--model <configured model> (only when a model is configured)",
-             *       "--permission-mode acceptEdits",
+             *       "--dangerously-skip-permissions",
              *       "--max-turns <configured max turns> (only when a turn cap is configured)"
              *     ]
              */
@@ -3791,14 +3791,13 @@ export interface components {
              *       "--no-chrome",
              *       "--model",
              *       "sonnet",
-             *       "--permission-mode",
-             *       "acceptEdits"
+             *       "--dangerously-skip-permissions"
              *     ]
              */
             argv: string[];
             /**
              * @description argv joined into a single, shell-quoted display string (binary first), suitable for showing directly in the UI or copying into a terminal.
-             * @example claude -p --output-format stream-json --verbose --no-chrome --model sonnet --permission-mode acceptEdits
+             * @example claude -p --output-format stream-json --verbose --no-chrome --model sonnet --dangerously-skip-permissions
              */
             command_line: string;
             /**

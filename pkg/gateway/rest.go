@@ -1301,10 +1301,10 @@ func (a *restAPI) listExecutorDefaults(w http.ResponseWriter) {
 				"--verbose",
 				"--no-chrome",
 				"--model <configured model> (only when a model is configured)",
-				"--permission-mode acceptEdits",
+				"--dangerously-skip-permissions",
 				"--max-turns <configured max turns> (only when a turn cap is configured)",
 			},
-			Notes: "The prompt is delivered via stdin, with no positional prompt argument at all — never via a --prompt flag. --resume/--session-id are never passed; every run starts a fresh claude session. --dangerously-skip-permissions is never passed (--permission-mode acceptEdits is the non-interactive posture used instead). Operator cli_args are appended after this list; an attempt to re-add --dangerously-skip-permissions, escalate --permission-mode to bypassPermissions, or change --output-format away from stream-json is dropped with a WARN (see argsafety.go) — the last one because the driver's own NDJSON stream parser requires stream-json output.",
+			Notes: "The prompt is delivered via stdin, with no positional prompt argument at all — never via a --prompt flag. --resume/--session-id are never passed; every run starts a fresh claude session. --dangerously-skip-permissions is passed unconditionally (operator decision, issue #488, reversing the original FR-5.3/US-5 stance of using --permission-mode acceptEdits instead) — this matches codex/opencode, which already ran permission-bypassed; see the tracked issue for the sandbox-boundary follow-up this reversal implies for claude specifically. Operator cli_args are appended after this list; a redundant --dangerously-skip-permissions or an attempt to change --output-format away from stream-json is dropped with a WARN (see argsafety.go) — the latter because the driver's own NDJSON stream parser requires stream-json output.",
 		},
 		{
 			Cli: gen.Codex,
