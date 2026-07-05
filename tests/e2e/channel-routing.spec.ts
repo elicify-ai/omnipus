@@ -339,10 +339,10 @@ test(
   },
 )
 
-// ── (c) US-2 / FR-009: Empty core_team shows hint + disables agent picker ──
+// ── (c) US-2 / FR-009: Empty core_team shows hint; agent picker hidden ──
 
 test(
-  '(c) workspace with empty core_team shows empty-team hint and disables agent picker',
+  '(c) workspace with empty core_team shows empty-team hint and hides the agent picker',
   async ({ page }) => {
     await registerBaseRoutes(page, {
       workspacesOverride: [
@@ -375,17 +375,15 @@ test(
       sheet.locator('[data-testid="routing-empty-core-team-hint"]'),
     ).toBeVisible({ timeout: 8_000 })
 
-    // Agent picker trigger must be disabled
-    const agentContainer = sheet.locator('[data-testid="routing-agent-select"]')
-    const agentNativeSelect = agentContainer.locator('select')
-    const agentHasNative = (await agentNativeSelect.count()) > 0
-
-    if (agentHasNative) {
-      await expect(agentNativeSelect).toBeDisabled()
-    } else {
-      const agentTrigger = agentContainer.locator('button').first()
-      await expect(agentTrigger).toBeDisabled()
-    }
+    // FR-009 (spec §583) requires the "add a member first" state — nothing is
+    // selectable when core_team is empty. ChannelConfigPanel renders that hint
+    // INSTEAD of the agent picker (mutually-exclusive ternary branch, see
+    // ChannelConfigPanel.tsx:874 vs :883), so the picker control is ABSENT, not
+    // merely disabled. Assert its absence (the earlier over-assertion of a
+    // disabled routing-agent-select never matched FR-009 or the component).
+    await expect(
+      sheet.locator('[data-testid="routing-agent-select"]'),
+    ).toHaveCount(0)
   },
 )
 
