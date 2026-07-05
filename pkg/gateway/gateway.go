@@ -1289,7 +1289,7 @@ func setupAndStartServices(
 	builtinReg *tools.BuiltinRegistry, // M16: central builtin registry (FR-001)
 	mcpReg *tools.MCPRegistry, // M16: central MCP registry (FR-001)
 	allowGodMode bool,
-) (*services, error) {
+) (rs *services, retErr error) {
 	runningServices := &services{credStore: credStore, bundle: bundle, sandboxResult: sandboxResult, homePath: homePath}
 
 	// Per-user notification store (#264). Backs schedule-failure notifications and
@@ -1866,6 +1866,20 @@ func setupAndStartServices(
 	if err = runningServices.ChannelManager.StartAll(context.Background()); err != nil {
 		return nil, fmt.Errorf("error starting channels: %w", err)
 	}
+
+	// The HTTP listener is now accepting connections. If any later boot step
+	// fails and this function returns an error, tear the started services down
+	// first — otherwise the caller aborts boot on the error and the accepting
+	// listener goroutine (plus device service / drains) leaks. Registered only
+	// after StartAll so it never fires when the listener was not started, and
+	// gated on retErr so the success path leaves the services running.
+	// stopAndCleanupServices nil-checks each subsystem, so it is safe on a
+	// partially-started state.
+	defer func() {
+		if retErr != nil {
+			stopAndCleanupServices(runningServices, 5*time.Second, false)
+		}
+	}()
 
 	// Boot logging (FR-020): main listener first, then preview (or disabled message).
 	mainAddr := fmt.Sprintf("%s:%d", cfg.Gateway.Host, cfg.Gateway.Port)
