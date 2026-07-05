@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -118,6 +119,15 @@ func TestLandlock_WorkspaceReroot_StaysInsideBootGrant(t *testing.T) {
 }
 
 func runWorkspaceRerootChild() {
+	// runtime.LockOSThread is required: Landlock's landlock_restrict_self only
+	// restricts the calling thread. Without locking, Go can migrate this
+	// goroutine to a different OS thread between Apply and the two writes
+	// below, and a write would then happen on an unrestricted thread — most
+	// dangerously the "outside" write, which would wrongly appear to succeed
+	// even with Landlock applied. See the identical rationale on
+	// runLandlockBindBlockedChild in backend_linux_subprocess_test.go.
+	runtime.LockOSThread()
+
 	home := os.Getenv("OMNIPUS_REROOT_HOME")
 	wsDir := os.Getenv("OMNIPUS_REROOT_WS")
 	outside := os.Getenv("OMNIPUS_REROOT_OUTSIDE")

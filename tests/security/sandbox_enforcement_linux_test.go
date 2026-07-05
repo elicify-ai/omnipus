@@ -34,6 +34,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -172,6 +173,23 @@ func TestSandboxEnforcement(t *testing.T) {
 // Every path ends in os.Exit — never t.Fatal — because exit codes are the
 // parent's unambiguous signal (42 = enforced, 77 = skip, anything else = fail).
 func runSandboxChild(caseName string) {
+	// runtime.LockOSThread is required: Landlock's landlock_restrict_self (and
+	// the seccomp filter installed just below) only restrict the CALLING OS
+	// thread. Without this, Go's scheduler is free to migrate this goroutine
+	// to a different, never-restricted OS thread at any subsequent syscall
+	// boundary (slog's writes, the seccomp install itself, os.Getenv, etc. —
+	// all of which sit between backend.Apply() and the forbidden action
+	// below), and the forbidden action would then run unrestricted even
+	// though Apply()/Install() genuinely succeeded. Landlock has no
+	// process-wide equivalent of seccomp's SECCOMP_FILTER_FLAG_TSYNC: per
+	// docs.kernel.org/userspace-api/landlock.html, LANDLOCK_RESTRICT_SELF_TSYNC
+	// was only added in ABI v8, so on any kernel negotiating ABI ≤ 7 (as
+	// observed on the ARM64 CI runner that first exposed this), restrict_self
+	// is unconditionally per-thread. This exact requirement is already
+	// documented and applied in the sibling subprocess tests — see
+	// runLandlockBindBlockedChild in backend_linux_subprocess_test.go.
+	runtime.LockOSThread()
+
 	workspace := os.Getenv(sandboxChildWorkspaceEnv)
 	if workspace == "" {
 		fmt.Fprintln(os.Stderr, "child: no workspace env var")

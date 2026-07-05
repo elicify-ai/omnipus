@@ -91,6 +91,15 @@ func TestLandlock_ApplySubprocess(t *testing.T) {
 // never t.Fatal — because we communicate the result via exit code so the parent
 // can unambiguously distinguish enforcement (42) from skip (77) from failure.
 func runLandlockChild() {
+	// runtime.LockOSThread is required: Landlock's landlock_restrict_self only
+	// restricts the calling thread. Without locking, Go can migrate this
+	// goroutine to a different OS thread between Apply and the /etc/passwd
+	// read below, and the read happens on an unrestricted thread. See the
+	// identical rationale on runLandlockBindBlockedChild further down in this
+	// file, and the ARM64-CI-observed failure this exact gap caused in
+	// tests/security/sandbox_enforcement_linux_test.go.
+	runtime.LockOSThread()
+
 	workspace := os.Getenv("OMNIPUS_LANDLOCK_SANDBOX_DIR")
 	if workspace == "" {
 		// No workspace provided — cannot set up a meaningful policy.
