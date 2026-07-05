@@ -33,6 +33,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -50,6 +51,14 @@ const sandboxChildEnv = "OMNIPUS_SANDBOX_ENFORCEMENT_CHILD"
 // sandboxChildWorkspaceEnv is the per-case workspace env var the child
 // reads to know which subdir Landlock should allow.
 const sandboxChildWorkspaceEnv = "OMNIPUS_SANDBOX_ENFORCEMENT_WORKSPACE"
+
+// sandboxChildOutsideFileEnv points the child at a world-readable regular
+// file the parent created OUTSIDE the granted workspace. The
+// read_proc_exe_outside case opens it to prove Landlock blocks reads of a
+// file the user could otherwise read (DAC-permitted) but that lies under no
+// allowed prefix. See runReadProcExeChild for why a self-created canary
+// replaced the old fixed /etc/hostname target.
+const sandboxChildOutsideFileEnv = "OMNIPUS_SANDBOX_ENFORCEMENT_OUTSIDE_FILE"
 
 // sandboxCases enumerates every forbidden action this test proves is blocked.
 // Each entry's name is passed to the child via sandboxChildEnv; the child's
@@ -99,6 +108,20 @@ func TestSandboxEnforcement(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			workspace := t.TempDir()
 
+			// Create a world-readable regular canary file OUTSIDE the granted
+			// workspace. t.TempDir() returns a fresh, uniquely-named directory
+			// on each call, so outsideDir is a SIBLING of workspace (e.g.
+			// .../002 vs .../001) — never a descendant, and never itself
+			// granted by the child's Landlock policy (which allows only
+			// `workspace` plus /lib,/lib64,/usr). The read_proc_exe_outside
+			// case reads this file to prove Landlock blocks an out-of-workspace
+			// read that DAC would otherwise permit. See runReadProcExeChild.
+			outsideDir := t.TempDir()
+			outsideFile := filepath.Join(outsideDir, "landlock-canary.txt")
+			if err := os.WriteFile(outsideFile, []byte("omnipus-sandbox-canary\n"), 0o644); err != nil {
+				t.Fatalf("failed to create out-of-workspace canary file: %v", err)
+			}
+
 			//nolint:gosec // intentional test-binary self-exec; no user input
 			cmd := exec.Command(os.Args[0],
 				"-test.run=^TestSandboxEnforcement$",
@@ -108,6 +131,7 @@ func TestSandboxEnforcement(t *testing.T) {
 			cmd.Env = append(os.Environ(),
 				sandboxChildEnv+"="+tc.name,
 				sandboxChildWorkspaceEnv+"="+workspace,
+				sandboxChildOutsideFileEnv+"="+outsideFile,
 			)
 			out, runErr := cmd.CombinedOutput()
 
@@ -251,21 +275,42 @@ func runWriteEtcPasswdChild(_ string) {
 }
 
 func runReadProcExeChild() {
-	// Security intent: prove Landlock blocks opening an out-of-workspace file.
+	// Security intent (UNCHANGED): prove Landlock blocks opening an
+	// out-of-workspace file.
 	//
-	// Historically this case opened the readlink target of /proc/self/exe (the
-	// test binary). That path is NON-DETERMINISTIC: `go test ./...` drops the
-	// per-package test binary in a go-managed temp dir whose location varies per
-	// runner/TMPDIR. On some runners that path lands UNDER an allowed prefix
-	// (e.g. /usr, or a TMPDIR resolving there), so os.Open SUCCEEDS and the case
-	// false-fails ("NOT ENFORCED") even though Landlock is working correctly.
+	// Verdict-target history:
+	//   1. Originally opened the readlink target of /proc/self/exe (the test
+	//      binary). That path is NON-DETERMINISTIC: `go test ./...` drops the
+	//      per-package binary in a go-managed temp dir whose location varies per
+	//      runner/TMPDIR; on some runners it lands under an allowed prefix
+	//      (e.g. /usr) so os.Open SUCCEEDS and the case false-failed.
+	//   2. Then switched to the FIXED path /etc/hostname, assumed to be "outside
+	//      every allowed prefix." That assumption does NOT hold across
+	//      architectures/runners: /etc/hostname is world-readable (unlike
+	//      /etc/shadow, which the read_etc_shadow case only blocks via DAC as
+	//      non-root — NOT via Landlock), and on some images it is a symlink or
+	//      bind-mount whose resolved object Landlock reaches through a different
+	//      hierarchy. This produced a real ARM64-only false-fail: Landlock
+	//      reported mode=enforce yet os.Open("/etc/hostname") succeeded, because
+	//      the target was reachable in a way the minimal test policy permitted.
 	//
-	// Fix: the pass/fail decision now hinges on opening a FIXED path that is
-	// guaranteed outside every allowed prefix (workspace, /lib, /lib64, /usr)
-	// and outside /tmp: /etc/hostname. The /etc tree is already proven
-	// out-of-workspace by the read_etc_shadow case. This keeps the security
-	// intent identical ("Landlock blocks reading an out-of-workspace file")
-	// while removing the dependency on where the toolchain dropped the binary.
+	// Current approach: the parent creates a world-readable REGULAR canary file
+	// in a temp dir that is a proven sibling of `workspace` (see the parent
+	// loop) — i.e. under NO allowed prefix (workspace, /lib, /lib64, /usr) — and
+	// passes its path via sandboxChildOutsideFileEnv. This makes the verdict:
+	//   - Deterministic: we create the file; it always exists and is a plain
+	//     regular file (never a symlink/bind-mount).
+	//   - DAC-immune: 0644 and owned by our uid, so the SAME user CAN read it
+	//     absent Landlock. The read therefore fails ONLY if Landlock enforces —
+	//     it cannot false-pass via filesystem permissions the way /etc/shadow
+	//     does.
+	//   - Arch/FS-independent: no dependency on /etc layout, /proc symlinks, or
+	//     where the toolchain dropped the binary.
+	//
+	// If Landlock's read-restriction were ever genuinely broken (e.g. a real
+	// kernel/enforcement gap on some arch), this canary read would SUCCEED and
+	// correctly fail the test — the target is not chosen to always fail-shut, it
+	// is chosen to fail-shut ONLY when enforcement is real.
 	//
 	// The /proc/self/exe readlink is retained for logging only — it documents
 	// the binary location in CI output but does NOT influence the verdict.
@@ -273,10 +318,29 @@ func runReadProcExeChild() {
 		fmt.Fprintf(os.Stderr, "child: /proc/self/exe target=%q (informational only)\n", target)
 	}
 
-	// Verdict hinges on this fixed, known-outside-workspace target.
-	const outsidePath = "/etc/hostname"
-	_, openErr := os.Open(outsidePath)
-	exitEnforcedIf("open out-of-workspace "+outsidePath, openErr)
+	outsideFile := os.Getenv(sandboxChildOutsideFileEnv)
+	if outsideFile == "" {
+		fmt.Fprintln(os.Stderr, "child: no out-of-workspace canary env var set")
+		os.Exit(77)
+	}
+
+	// Defense-in-depth: a false-pass would occur if the canary were somehow
+	// under the granted workspace. Assert it is not before trusting the verdict.
+	if workspace := os.Getenv(sandboxChildWorkspaceEnv); workspace != "" {
+		if rel, err := filepath.Rel(workspace, outsideFile); err == nil &&
+			rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			fmt.Fprintf(os.Stderr,
+				"child: canary %q resolves under workspace %q — test scaffolding bug, skipping\n",
+				outsideFile, workspace)
+			os.Exit(77)
+		}
+	}
+
+	// Verdict hinges on this deterministic, world-readable, out-of-workspace
+	// regular file. Landlock must deny the read (EACCES) even though DAC allows
+	// it.
+	_, openErr := os.Open(outsideFile)
+	exitEnforcedIf("open out-of-workspace canary "+outsideFile, openErr)
 }
 
 func runPtraceChild() {
