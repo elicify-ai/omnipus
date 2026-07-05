@@ -120,3 +120,75 @@ func TestToolRegistry_AuditLogging(t *testing.T) {
 		assert.NotNil(t, clone.auditLogger, "cloned registry should retain audit logger")
 	})
 }
+
+// mockMemoryRateLimiterAwareTool is a minimal tool implementing
+// memoryRateLimiterAware, used to prove that Clone/CloneExcept propagate the
+// registry's memoryRateLimiter field to tools registered AFTER cloning (the
+// path a delegate sub-turn registry exercises when it registers a fresh
+// RememberTool/RetrospectiveTool for the child turn).
+type mockMemoryRateLimiterAwareTool struct {
+	mockRegistryTool
+	limiter *MemoryRateLimiter
+}
+
+func (m *mockMemoryRateLimiterAwareTool) SetMemoryRateLimiter(limiter *MemoryRateLimiter) {
+	m.limiter = limiter
+}
+
+// TestToolRegistry_CloneAndCloneExcept_PropagateMemoryRateLimiter is the
+// regression test for the Clone()/CloneExcept() memoryRateLimiter gap: both
+// methods copied mediaStore and auditLogger onto the cloned registry but
+// omitted memoryRateLimiter, so any subagent-delegated remember/
+// run_retrospective call (via the delegate tool's sub-turn tool registry)
+// silently bypassed the v0.2 #155 item 6 memory-write rate limiter.
+func TestToolRegistry_CloneAndCloneExcept_PropagateMemoryRateLimiter(t *testing.T) {
+	limiter := NewMemoryRateLimiter(MemoryRateLimitConfig{})
+
+	t.Run("Clone propagates memoryRateLimiter", func(t *testing.T) {
+		reg := NewToolRegistry()
+		reg.SetMemoryRateLimiter(limiter)
+		reg.Register(&mockRegistryTool{
+			name:   "pre_clone_tool",
+			desc:   "registered before cloning",
+			params: map[string]any{"type": "object", "properties": map[string]any{}},
+			result: &ToolResult{ForLLM: "ok", ForUser: "ok"},
+		})
+
+		clone := reg.Clone()
+		require.Same(t, limiter, clone.memoryRateLimiter,
+			"cloned registry must retain the SAME memoryRateLimiter instance")
+
+		// Functional proof: a tool registered on the CLONE after cloning must
+		// pick up the limiter via registerToolLocked's memoryRateLimiterAware
+		// propagation — this is the exact path a delegate sub-turn registry
+		// exercises when it registers a fresh RememberTool for the child turn.
+		post := &mockMemoryRateLimiterAwareTool{
+			mockRegistryTool: mockRegistryTool{name: "post_clone_tool", desc: "registered after cloning"},
+		}
+		clone.Register(post)
+		assert.Same(t, limiter, post.limiter,
+			"a tool registered on the clone after cloning must receive the propagated limiter")
+	})
+
+	t.Run("CloneExcept propagates memoryRateLimiter", func(t *testing.T) {
+		reg := NewToolRegistry()
+		reg.SetMemoryRateLimiter(limiter)
+		reg.Register(&mockRegistryTool{
+			name:   "spawn",
+			desc:   "excluded from the clone",
+			params: map[string]any{"type": "object", "properties": map[string]any{}},
+			result: &ToolResult{ForLLM: "ok", ForUser: "ok"},
+		})
+
+		clone := reg.CloneExcept(ExcludedSpawn)
+		require.Same(t, limiter, clone.memoryRateLimiter,
+			"CloneExcept must retain the SAME memoryRateLimiter instance for the same reason as Clone")
+
+		post := &mockMemoryRateLimiterAwareTool{
+			mockRegistryTool: mockRegistryTool{name: "post_cloneexcept_tool", desc: "registered after cloning"},
+		}
+		clone.Register(post)
+		assert.Same(t, limiter, post.limiter,
+			"a tool registered on the CloneExcept clone after cloning must receive the propagated limiter")
+	})
+}
