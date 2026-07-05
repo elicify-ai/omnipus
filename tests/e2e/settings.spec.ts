@@ -97,15 +97,18 @@ test('(d) all tabs reachable via keyboard navigation (ArrowKeys)', async ({ page
     // The tab that is now focused is the same one that is now active —
     // this is the contract of automatic activation mode.
     const focusedTab = tabList.locator('[role="tab"]:focus').first();
-    const activeTab = tabList.locator('[role="tab"][data-state="active"]').first();
-
     await expect(focusedTab).toBeVisible({ timeout: 5_000 });
-    await expect(activeTab).toBeVisible({ timeout: 5_000 });
 
-    // The focused tab and the active tab must reference the same element.
-    const focusedAriaControls = await focusedTab.getAttribute('aria-controls');
-    const activeAriaControls = await activeTab.getAttribute('aria-controls');
-    expect(focusedAriaControls).toBe(activeAriaControls);
+    // Automatic activation: the focused tab MUST also become the active tab.
+    // Use a retrying web-first assertion instead of a point-in-time
+    // getAttribute compare of two separately-resolved locators (focused vs
+    // [data-state=active]). Radix flips data-state on a microtask after focus
+    // moves, so an immediate read can observe focus already on the new tab
+    // while activation has not yet propagated — a race that flakes under CI
+    // load (and that route code-splitting's heavier settings-screen load
+    // exposed). toHaveAttribute retries until activation catches up, but still
+    // fails on a genuine break (focus that never activates).
+    await expect(focusedTab).toHaveAttribute('data-state', 'active', { timeout: 5_000 });
 
     // The corresponding panel is visible.
     await expect(page.locator('[role="tabpanel"][data-state="active"]').first()).toBeVisible({
