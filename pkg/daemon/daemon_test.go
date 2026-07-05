@@ -390,6 +390,15 @@ func TestStatus_CurrentProcess_NotOmnipusBinary(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("wmic-based name check behaves differently in test binary; skipping")
 	}
+	if runtime.GOOS == "darwin" {
+		// macOS has no /proc, so checkProcess's resolveExeName can't read the
+		// PID's name and conservatively assumes "ours" (daemon_unix.go — a
+		// deliberate fail-safe so we never fail to stop our own gateway on a
+		// name-read error). That makes the "non-omnipus PID is cleaned up"
+		// behavior asserted here Linux-specific; on macOS Status reports the
+		// live-but-unidentifiable PID as running by design.
+		t.Skip("checkProcess name-resolution is /proc-based (Linux only); macOS conservatively assumes 'ours'")
+	}
 
 	home := newHome(t)
 	writePIDFile(t, home, os.Getpid())
