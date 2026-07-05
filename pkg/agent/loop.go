@@ -3129,6 +3129,10 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	// on every agent's next turn without a static-prompt cache bust.
 	wireDelegationInjectors(al, registry)
 
+	// Re-wire per-turn working-directory injectors on the new registry, same
+	// reasoning: a workspace's core_team can change via hot-reload too.
+	wireWorkingDirInjectors(al, registry)
+
 	// Atomically swap the config and registry under write lock
 	// This ensures readers see a consistent pair
 	al.mu.Lock()
@@ -5000,13 +5004,13 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// — native (Main/Subagent) or subagent_3p (external-CLI), no exceptions by
 	// kind — works in that Workspace's dedicated project-work subdirectory
 	// (workspaces/<id>/work/, workspace.SafeWorkDir) instead of its private
-	// per-agent one. Unconditional (no feature flag) and driven by AGENT
-	// IDENTITY (workspace.FindForAgent's CoreTeam-membership lookup),
-	// deliberately NOT by ts.opts.WorkspaceID above: those are genuinely
-	// different signals that can diverge in both directions — a CoreTeam
-	// member responding via an unbound channel still has ts.opts.WorkspaceID
-	// == ""; a channel bound to a workspace can route to an agent stale-removed
-	// from that workspace's CoreTeam. Keying off agent identity instead of the
+	// per-agent one. Unconditional (no feature flag) and PRIMARILY driven by
+	// AGENT IDENTITY (workspace.FindForAgent's CoreTeam-membership lookup),
+	// NOT by ts.opts.WorkspaceID above: those are genuinely different signals
+	// that can diverge in both directions — a CoreTeam member responding via
+	// an unbound channel still has ts.opts.WorkspaceID == ""; a channel bound
+	// to a workspace can route to an agent stale-removed from that
+	// workspace's CoreTeam. Keying off agent identity instead of the
 	// turn-carried value is also what makes this correctly cover DELEGATED
 	// sub-agent turns: spawnSubTurn (pkg/agent/subturn.go) never threads
 	// WorkspaceID into a child's processOptions, so the old ts.opts.WorkspaceID
@@ -5014,6 +5018,17 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// of any flag — this identity-keyed lookup applies uniformly to top-level
 	// turns and delegated children alike, since both resolve ts.agent.ID the
 	// same way.
+	//
+	// FindForAgentPreferring (not FindForAgent) is used here so that when the
+	// SAME agent belongs to MORE than one workspace's CoreTeam — a real,
+	// reachable state FindForAgent's own doc comment describes — the CURRENT
+	// turn's own ts.opts.WorkspaceID (when it is itself one of the agent's
+	// memberships) breaks the tie, instead of FindForAgent's arbitrary
+	// sorted-first pick. This narrows an already-ambiguous choice using a
+	// signal that is trustworthy exactly when it is present; it never widens
+	// or overrides the identity-based membership check, so the
+	// unbound-channel and delegated-child cases above are unaffected (an
+	// empty ts.opts.WorkspaceID falls straight through to FindForAgent).
 	//
 	// Security: workspaces/<id>/ lives under $OMNIPUS_HOME, which the boot
 	// Landlock policy already grants RWX — this changes only the working
@@ -5029,7 +5044,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// pkg/tools/metadata_guard.go's app-level guard only recognizes the
 	// agents/<id>/ layout and does not match workspaces/<id>/AGENT.md, so
 	// nothing else was catching it.)
-	if wsID, found := workspace.FindForAgent(omnipusHome(), ts.agent.ID); found {
+	if wsID, found := workspace.FindForAgentPreferring(omnipusHome(), ts.agent.ID, ts.opts.WorkspaceID); found {
 		// Derive the re-root dir from the SAME canonical home ($OMNIPUS_HOME)
 		// the rest of the feature uses — buildWorkspaceInstructionsNote, the
 		// REST handlers, and ResolveDefaultID/FindForAgent — so the agent's

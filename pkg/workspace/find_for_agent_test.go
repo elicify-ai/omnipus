@@ -156,3 +156,114 @@ func TestFindForAgent_FallsBackToFilenameWhenIDFieldEmpty(t *testing.T) {
 		t.Fatalf("FindForAgent id = %q, want filename-derived %q", id, "ws-from-filename")
 	}
 }
+
+// TestFindForAgentPreferring_DisambiguatesMultiMembership proves the core
+// contract: when an agent belongs to more than one workspace's core_team,
+// passing the CURRENT turn's own workspace id as preferredWsID wins over
+// FindForAgent's arbitrary sorted-first pick.
+func TestFindForAgentPreferring_DisambiguatesMultiMembership(t *testing.T) {
+	home := t.TempDir()
+	// "ws-a" sorts before "ws-z", so a plain FindForAgent would pick "ws-a".
+	writeWS(t, home, "ws-a", `{"id":"ws-a","core_team":["multi-agent"]}`)
+	writeWS(t, home, "ws-z", `{"id":"ws-z","core_team":["multi-agent"]}`)
+
+	id, found := FindForAgentPreferring(home, "multi-agent", "ws-z")
+	if !found {
+		t.Fatal("expected a match")
+	}
+	if id != "ws-z" {
+		t.Fatalf("FindForAgentPreferring id = %q, want the preferred %q", id, "ws-z")
+	}
+}
+
+// TestFindForAgentPreferring_FallsBackWhenPreferredNotAMember proves that a
+// preferredWsID the agent does NOT actually belong to is ignored — it must
+// not override or spoof membership, only disambiguate a real one.
+func TestFindForAgentPreferring_FallsBackWhenPreferredNotAMember(t *testing.T) {
+	home := t.TempDir()
+	writeWS(t, home, "ws-real", `{"id":"ws-real","core_team":["solo-agent"]}`)
+	writeWS(t, home, "ws-unrelated", `{"id":"ws-unrelated","core_team":["someone-else"]}`)
+
+	id, found := FindForAgentPreferring(home, "solo-agent", "ws-unrelated")
+	if !found {
+		t.Fatal("expected a match via fallback to FindForAgent")
+	}
+	if id != "ws-real" {
+		t.Fatalf("FindForAgentPreferring id = %q, want fallback to the agent's real workspace %q", id, "ws-real")
+	}
+}
+
+// TestFindForAgentPreferring_EmptyPreferredMatchesFindForAgent proves that an
+// empty preferredWsID (e.g. a delegated sub-turn, which has no turn-bound
+// workspace_id) behaves identically to plain FindForAgent — no behavior
+// change for callers with nothing to prefer.
+func TestFindForAgentPreferring_EmptyPreferredMatchesFindForAgent(t *testing.T) {
+	home := t.TempDir()
+	writeWS(t, home, "ws-solo", `{"id":"ws-solo","core_team":["jim"]}`)
+
+	want, wantFound := FindForAgent(home, "jim")
+	got, gotFound := FindForAgentPreferring(home, "jim", "")
+	if got != want || gotFound != wantFound {
+		t.Fatalf(
+			"FindForAgentPreferring(empty preferred) = (%q, %v), want FindForAgent's (%q, %v)",
+			got, gotFound, want, wantFound,
+		)
+	}
+}
+
+// TestFindForAgentPreferring_InvalidPreferredIDFallsBack proves a
+// traversal-unsafe preferredWsID (e.g. "../etc") is rejected by safeID and
+// falls back to FindForAgent rather than being used to build a file path.
+func TestFindForAgentPreferring_InvalidPreferredIDFallsBack(t *testing.T) {
+	home := t.TempDir()
+	writeWS(t, home, "ws-solo", `{"id":"ws-solo","core_team":["jim"]}`)
+
+	id, found := FindForAgentPreferring(home, "jim", "../../etc")
+	if !found || id != "ws-solo" {
+		t.Fatalf(
+			"FindForAgentPreferring with unsafe preferred id = (%q, %v), want fallback (%q, true)",
+			id,
+			found,
+			"ws-solo",
+		)
+	}
+}
+
+// TestLoadTitle_ReturnsNameAndDescription verifies the happy path.
+func TestLoadTitle_ReturnsNameAndDescription(t *testing.T) {
+	home := t.TempDir()
+	writeWS(t, home, "ws-titled", `{"id":"ws-titled","name":"My Workspace","description":"For the important stuff"}`)
+
+	name, desc, ok := LoadTitle(home, "ws-titled")
+	if !ok {
+		t.Fatal("expected LoadTitle to succeed")
+	}
+	if name != "My Workspace" {
+		t.Errorf("name = %q, want %q", name, "My Workspace")
+	}
+	if desc != "For the important stuff" {
+		t.Errorf("description = %q, want %q", desc, "For the important stuff")
+	}
+}
+
+// TestLoadTitle_MissingFileReturnsNotOK verifies a nonexistent workspace id
+// fails cleanly rather than panicking.
+func TestLoadTitle_MissingFileReturnsNotOK(t *testing.T) {
+	home := t.TempDir()
+
+	name, desc, ok := LoadTitle(home, "ws-does-not-exist")
+	if ok || name != "" || desc != "" {
+		t.Fatalf("expected (\"\", \"\", false) for a missing workspace, got (%q, %q, %v)", name, desc, ok)
+	}
+}
+
+// TestLoadTitle_UnsafeIDRejected verifies a traversal-unsafe id is rejected
+// before it can be used to build a file path.
+func TestLoadTitle_UnsafeIDRejected(t *testing.T) {
+	home := t.TempDir()
+
+	name, desc, ok := LoadTitle(home, "../../etc/passwd")
+	if ok || name != "" || desc != "" {
+		t.Fatalf("expected (\"\", \"\", false) for an unsafe id, got (%q, %q, %v)", name, desc, ok)
+	}
+}

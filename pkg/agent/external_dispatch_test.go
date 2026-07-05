@@ -19,8 +19,9 @@ import (
 )
 
 // denyApprover is a PolicyApprover stub that always denies, recording whether it
-// was consulted. Used to prove a permission-request from an external runner is
-// routed to the consent layer and that a DENY cancels the run.
+// was consulted. Used to prove external-CLI permission requests bypass the
+// wired PolicyApprover entirely (issue #488) — even one that would deny
+// everything is never consulted.
 type denyApprover struct {
 	consulted chan runner.ConsentRequest
 }
@@ -218,10 +219,12 @@ func TestExternalDispatch_ModelAutoSet(t *testing.T) {
 	}
 }
 
-// TestExternalDispatch_RoutesPermissionToConsent_DenyCancels proves a mid-run
-// permission-request is routed to the wired PolicyApprover and that a DENY reaches
-// the driver as a non-Allow decision (best-effort post-hoc cancellation).
-func TestExternalDispatch_RoutesPermissionToConsent_DenyCancels(t *testing.T) {
+// TestExternalDispatch_PermissionRequestAutoApproved proves external-CLI
+// permission requests are auto-approved unconditionally (operator decision,
+// 2026-07-05, issue #488): even a wired PolicyApprover that denies every
+// request is NEVER consulted, the driver receives an unconditional Allow, and
+// the run completes successfully instead of being canceled.
+func TestExternalDispatch_PermissionRequestAutoApproved(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv(config.EnvHome, home)
 
@@ -232,11 +235,6 @@ func TestExternalDispatch_RoutesPermissionToConsent_DenyCancels(t *testing.T) {
 	fr, restore := withFakeDriver(t)
 	defer restore()
 
-	// Inject ONLY the permission request. The deny decision itself must cancel the
-	// run (FakeRunner.Decide calls Cancel() on !Allow, matching the real-driver
-	// contract). We deliberately do NOT inject EventKindEnd or call fr.Cancel()
-	// here: if the deny did not cancel, the drain would block until the test ctx
-	// times out — making the deny-cancel assertions load-bearing.
 	go func() {
 		fr.InjectEvent(runner.RunEvent{
 			Kind: runner.EventKindPermissionRequest,
@@ -247,71 +245,67 @@ func TestExternalDispatch_RoutesPermissionToConsent_DenyCancels(t *testing.T) {
 				RawInput:    []byte(`{"cmd":"rm -rf /"}`),
 			},
 		})
+		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "ok"}})
+		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
+		fr.Cancel()
 	}()
 
-	// Bound the run with a context so a regression (deny no longer cancels) fails
-	// fast instead of hanging the suite.
 	runCtx, cancelRun := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelRun()
 	res, err := runExternalCLISubTurn(runCtx, al, ts, "task", 30*time.Second)
-	if err == nil {
-		t.Fatalf("expected denial error from a denied permission request, got nil (res=%+v)", res)
+	if err != nil {
+		t.Fatalf("expected the run to complete despite the permission request, got error: %v (res=%+v)", err, res)
 	}
 
-	// The approver must have been consulted for the permission request.
+	// The wired approver (which would deny everything) must NEVER be consulted.
 	select {
 	case got := <-approver.consulted:
-		if got.ToolName != "shell" {
-			t.Errorf("consent tool = %q, want %q", got.ToolName, "shell")
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("approver was not consulted — permission request was not routed to consent")
+		t.Fatalf(
+			"approver was consulted (tool=%q) — external-CLI permission requests must auto-approve without consulting any PolicyApprover",
+			got.ToolName,
+		)
+	case <-time.After(200 * time.Millisecond):
+		// expected: no consultation.
 	}
 
-	// The deny decision must have reached the driver (Decide), and a deny cancels.
+	// Note: the test's own injection goroutine calls fr.Cancel() to close the
+	// event channel and let the drain loop terminate (the same pattern every
+	// other FakeRunner-based test in this file uses) — so IsCancelled() is
+	// always true here and is not a useful signal either way. The decision
+	// itself is what proves auto-approval: FakeRunner.Decide only triggers an
+	// internal Cancel on !Allow (mirroring the real deny-cancels-the-run
+	// contract), so an Allow=true decision below proves this run was never
+	// canceled BY the consent path.
 	decisions := fr.ReceivedDecisions()
 	if len(decisions) == 0 {
 		t.Fatal("no decision routed back to the driver")
 	}
-	if decisions[0].Allow {
-		t.Errorf("decision Allow = true, want false (deny)")
-	}
-	if !fr.IsCancelled() {
-		t.Error("driver was not canceled after a deny decision")
+	if !decisions[0].Allow {
+		t.Error("decision Allow = false, want true (external-CLI auto-approves unconditionally)")
 	}
 
-	// [MAJOR] The returned ToolResult MUST reflect the denial — not a success — so
-	// the delegating agent is told the sub-run was aborted, not completed.
 	if res == nil {
-		t.Fatal("expected a non-nil ToolResult on denial")
+		t.Fatal("expected a non-nil ToolResult")
 	}
-	if res.Err == nil {
-		t.Error("ToolResult.Err is nil on denial; the run must surface an error")
-	}
-	if !strings.Contains(strings.ToLower(res.ForLLM), "denied") {
-		t.Errorf("ToolResult.ForLLM = %q, want it to state the run was denied/aborted", res.ForLLM)
-	}
-	if reason := "denied for test"; res.Err != nil && !strings.Contains(res.Err.Error(), reason) {
-		t.Errorf("ToolResult.Err = %v, want it to carry the deny reason %q", res.Err, reason)
+	if res.Err != nil {
+		t.Errorf("ToolResult.Err = %v, want nil (auto-approved run must succeed)", res.Err)
 	}
 }
 
-// TestExternalDispatch_NoConsentHandler_DeniesByDefault proves that when no
-// PolicyApprover is wired, the fail-closed nop approver denies the request.
-func TestExternalDispatch_NoConsentHandler_DeniesByDefault(t *testing.T) {
+// TestExternalDispatch_NoApproverWired_StillAutoApproves proves external-CLI
+// permission requests auto-approve even when no PolicyApprover has ever been
+// wired (SetToolApprover never called) — unlike native ask-policy tools,
+// external-CLI consent never falls through to the fail-closed nopPolicyApprover
+// (issue #488: this path no longer consults loadToolApprover at all).
+func TestExternalDispatch_NoApproverWired_StillAutoApproves(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv(config.EnvHome, home)
 
 	al, ts := newExternalTestLoop(t, "opencode", "")
-	// Deliberately do NOT call SetToolApprover — loadToolApprover returns the
-	// fail-closed nopPolicyApprover (deny-by-default, FR-5.1).
+	// Deliberately do NOT call SetToolApprover.
 	fr, restore := withFakeDriver(t)
 	defer restore()
 
-	// Inject only the permission request. With no approver wired the request is
-	// denied by default, and the deny (via FakeRunner.Decide) cancels the run — so
-	// we must NOT inject EventKindEnd / Cancel ourselves (that would send on the
-	// channel the deny already closed).
 	go func() {
 		fr.InjectEvent(runner.RunEvent{
 			Kind: runner.EventKindPermissionRequest,
@@ -320,25 +314,27 @@ func TestExternalDispatch_NoConsentHandler_DeniesByDefault(t *testing.T) {
 				ToolName:  "write",
 			},
 		})
+		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "ok"}})
+		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
+		fr.Cancel()
 	}()
 
 	runCtx, cancelRun := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelRun()
 	res, err := runExternalCLISubTurn(runCtx, al, ts, "task", 30*time.Second)
-	// Deny-by-default aborts the run: it must surface as an error, not a success.
-	if err == nil {
-		t.Fatalf("expected deny-by-default to abort the run, got nil error (res=%+v)", res)
+	if err != nil {
+		t.Fatalf("expected the run to complete with no approver wired, got error: %v (res=%+v)", err, res)
 	}
 
 	decisions := fr.ReceivedDecisions()
 	if len(decisions) == 0 {
-		t.Fatal("no decision routed back to the driver (deny-by-default expected)")
+		t.Fatal("no decision routed back to the driver")
 	}
-	if decisions[0].Allow {
-		t.Error("decision Allow = true, want false (deny-by-default with no approver wired)")
+	if !decisions[0].Allow {
+		t.Error("decision Allow = false, want true (auto-approve requires no PolicyApprover at all)")
 	}
-	if res == nil || res.Err == nil {
-		t.Fatal("expected ToolResult.Err set on deny-by-default")
+	if res == nil || res.Err != nil {
+		t.Fatalf("expected a successful ToolResult with no approver wired; res=%+v", res)
 	}
 }
 
