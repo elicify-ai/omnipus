@@ -4,12 +4,27 @@ import tailwindcss from '@tailwindcss/vite'
 import { TanStackRouterVite } from '@tanstack/router-vite-plugin'
 import { fileURLToPath, URL } from 'url'
 
+// autoCodeSplitting is enabled for the production build only, NOT under vitest.
+// It rewrites route files at transform time — extracting `component` out of the
+// createFileRoute() options into a lazy virtual module — which breaks the route
+// unit tests that read `Route.component` via a passthrough createFileRoute mock
+// (src/routes/**/-*.test.tsx). Those tests validate component BEHAVIOUR, which
+// splitting doesn't change; the split build itself is validated end-to-end by
+// the Playwright e2e suite (which runs `npm run build`). So we split at build
+// time (the ~1.8 MB → ~0.27 MB entry win, issue #476) and keep components
+// inline under test. VITEST=true is set by the vitest runner.
+const isVitest = process.env.VITEST === 'true'
+
 // SPA build — embedded into Go binary via go:embed (hash routing required)
 export default defineConfig({
   plugins: [
     tailwindcss(),
+    // MUST precede @vitejs/plugin-react when autoCodeSplitting is on: the
+    // router's code-split transform has to run before the React JSX transform
+    // (plugin-order requirement). Route loading shifts to the router — see the
+    // defaultPendingComponent wired in src/main.tsx.
+    TanStackRouterVite({ autoCodeSplitting: !isVitest }),
     react(),
-    TanStackRouterVite(),
   ],
   resolve: {
     alias: {
