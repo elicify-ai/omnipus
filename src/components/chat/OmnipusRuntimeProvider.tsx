@@ -11,7 +11,14 @@ import { useSessionStore, resetChatBucketForReplay } from "@/store/session";
 import { WsConnection } from "@/lib/ws";
 import { queryClient } from "@/lib/queryClient";
 import type { Session, SessionDetail } from "@/lib/api";
-import { TerminalOutputUI } from "./tools/TerminalOutput";
+import {
+  BashOutputUI,
+  ExecLegacyUI,
+  WorkspaceShellLegacyUI,
+  WorkspaceShellDotLegacyUI,
+  WorkspaceShellBgLegacyUI,
+  WorkspaceShellBgDotLegacyUI,
+} from "./tools/BashOutput";
 import { FileReadPreviewUI, FileReadAliasDotUI } from "./tools/FileReadPreview";
 import { FileWriteConfirmUI, FileWriteAliasDotUI, EditFileConfirmUI, AppendFileConfirmUI } from "./tools/FileWriteConfirm";
 import { FileTreeViewUI, FileListAliasDotUI } from "./tools/FileTreeView";
@@ -21,7 +28,6 @@ import { BrowserNavigateUI, BrowserNavigateUnderscoreUI } from "./tools/BrowserN
 import { WebServeUI } from "./tools/WebServeUI";
 import { ServeWorkspaceUI } from "./tools/ServeWorkspaceUI";
 import { RunInWorkspaceUI } from "./tools/RunInWorkspaceUI";
-import { WorkspaceShellUI, WorkspaceShellBgUI, WorkspaceShellLegacyUI, WorkspaceShellBgLegacyUI } from "./tools/WorkspaceShellUI";
 import {
   BrowserClickUI, BrowserClickUnderscoreUI,
   BrowserTypeUI, BrowserTypeUnderscoreUI,
@@ -216,7 +222,12 @@ export function OmnipusRuntimeProvider({ children }: { children: React.ReactNode
        * Tool name → UI component mapping. Underscore names match pkg/sysagent/tools/ exports
        * (Omnipus convention); dot-notation names match BRD C.6.1.4 spec. Both registered
        * to handle either naming convention from the agent.
-       *   exec              → TerminalOutputUI          (shell command execution)
+       *   bash              → BashOutputUI              (canonical, unified shell tool — ADR-036)
+       *   exec              → ExecLegacyUI              (legacy alias, old transcripts only)
+       *   workspace_shell   → WorkspaceShellLegacyUI    (legacy alias, old transcripts only)
+       *   workspace.shell   → WorkspaceShellDotLegacyUI (legacy alias, old transcripts only)
+       *   workspace_shell_bg → WorkspaceShellBgLegacyUI (legacy alias, old transcripts only)
+       *   workspace.shell_bg → WorkspaceShellBgDotLegacyUI (legacy alias, old transcripts only)
        *   read_file         → FileReadPreviewUI         (read file content)
        *   file.read         → FileReadAliasDotUI        (BRD alias)
        *   write_file        → FileWriteConfirmUI        (create/overwrite file)
@@ -234,10 +245,6 @@ export function OmnipusRuntimeProvider({ children }: { children: React.ReactNode
        *   web_serve         → WebServeUI                (legacy alias)
        *   serve_workspace   → ServeWorkspaceUI          (back-compat alias → WebServeUI)
        *   run_in_workspace  → RunInWorkspaceUI          (back-compat alias → WebServeUI)
-       *   workspace_shell   → WorkspaceShellUI          (canonical, foreground shell)
-       *   workspace.shell   → WorkspaceShellLegacyUI   (legacy alias)
-       *   workspace_shell_bg → WorkspaceShellBgUI      (canonical, background shell)
-       *   workspace.shell_bg → WorkspaceShellBgLegacyUI (legacy alias)
        *   browser_navigate  → BrowserNavigateUI         (canonical, browser navigation)
        *   browser.navigate  → BrowserNavigateUnderscoreUI (legacy dot alias)
        *   browser_click     → BrowserClickUI            (canonical)
@@ -253,7 +260,12 @@ export function OmnipusRuntimeProvider({ children }: { children: React.ReactNode
        *   browser_evaluate  → BrowserEvaluateUI         (canonical)
        *   browser.evaluate  → BrowserEvaluateUnderscoreUI (legacy dot alias)
        */}
-      <TerminalOutputUI />
+      <BashOutputUI />
+      <ExecLegacyUI />
+      <WorkspaceShellLegacyUI />
+      <WorkspaceShellDotLegacyUI />
+      <WorkspaceShellBgLegacyUI />
+      <WorkspaceShellBgDotLegacyUI />
       <FileReadPreviewUI />
       <FileReadAliasDotUI />
       <FileWriteConfirmUI />
@@ -268,10 +280,6 @@ export function OmnipusRuntimeProvider({ children }: { children: React.ReactNode
       <WebServeUI />
       <ServeWorkspaceUI />
       <RunInWorkspaceUI />
-      <WorkspaceShellUI />
-      <WorkspaceShellBgUI />
-      <WorkspaceShellLegacyUI />
-      <WorkspaceShellBgLegacyUI />
       <BrowserNavigateUI />
       <BrowserNavigateUnderscoreUI />
       <BrowserClickUI />

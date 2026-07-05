@@ -3,7 +3,7 @@
 //
 // Copyright (c) 2026 Omnipus contributors
 
-// Package config — CLI-token relocation migration.
+// CLI-token relocation migration.
 //
 // migrateCLITokenOutOfUsers is a one-shot, best-effort relocation: legacy
 // config.json files minted a role-less "cli" entry in Gateway.Users purely
@@ -17,6 +17,7 @@
 // is patched byte-for-byte rather than round-tripped through SaveConfig,
 // which silently drops any field carrying an explicit zero value under an
 // `omitempty` JSON tag.
+
 package config
 
 import (

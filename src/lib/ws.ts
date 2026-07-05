@@ -30,7 +30,6 @@ import type {
   MarshalErrorResult,
   SubagentStartFrame,
   SubagentEndFrame,
-  ExecApprovalRequestFrame,
   TaskStatusChangedFrame,
   ReplayMessageFrame,
   RateLimitFrame,
@@ -45,13 +44,11 @@ import type {
   ReplayWarningStats,
   CancelStageFrame,
   SessionCloseAckFrame,
-  ExecApprovalResponseAckFrame,
   DevicePairingRequestFrame,
   // Client → server frames
   AuthFrame,
   MessageFrame,
   CancelFrame,
-  ExecApprovalResponseFrame,
   PingFrame,
   AttachSessionFrame,
   DevicePairingResponseFrame,
@@ -77,7 +74,6 @@ export type {
   MarshalErrorResult,
   SubagentStartFrame,
   SubagentEndFrame,
-  ExecApprovalRequestFrame,
   TaskStatusChangedFrame,
   ReplayMessageFrame,
   RateLimitFrame,
@@ -92,12 +88,10 @@ export type {
   ReplayWarningStats,
   CancelStageFrame,
   SessionCloseAckFrame,
-  ExecApprovalResponseAckFrame,
   DevicePairingRequestFrame,
   AuthFrame,
   MessageFrame,
   CancelFrame,
-  ExecApprovalResponseFrame,
   PingFrame,
   AttachSessionFrame,
   DevicePairingResponseFrame,
@@ -107,13 +101,16 @@ export type {
 // ── WsXxx legacy aliases (active callers only) ───────────────────────────────
 //
 // Aliases retained for active callers in src/store/chat.ts,
-// src/store/toolApproval.ts, src/components/chat/SubagentBlock.tsx,
-// src/components/agents/ToolApprovalModal.test.tsx, and src/lib/wsParser.test.ts.
+// src/store/toolApproval.ts, and src/components/chat/SubagentBlock.tsx.
 // New code should import canonical names from @/lib/api/generated/asyncapi-types.
+//
+// WsExecApprovalRequestFrame was removed with the retired exec-only approval
+// flow (ADR-036 §3.4) — ExecApprovalRequestFrame no longer exists as a wire
+// type; it had no remaining callers (SubagentBlock.tsx / ToolApprovalModal /
+// wsParser.test.ts never actually imported it despite the stale comment here).
 
 export type WsSubagentStartFrame = SubagentStartFrame
 export type WsSubagentEndFrame = SubagentEndFrame
-export type WsExecApprovalRequestFrame = ExecApprovalRequestFrame
 export type WsReplayMessageFrame = ReplayMessageFrame
 export type WsRateLimitFrame = RateLimitFrame
 export type WsToolApprovalRequiredFrame = ToolApprovalRequiredFrame

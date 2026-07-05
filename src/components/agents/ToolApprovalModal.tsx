@@ -9,9 +9,10 @@
 // is independent of gateway clock skew.
 //
 // Buttons:
-//   Approve → POST /api/v1/tool-approvals/{id} {action:"approve"}
-//   Deny    → POST /api/v1/tool-approvals/{id} {action:"deny"}
-//   Cancel  → POST /api/v1/tool-approvals/{id} {action:"cancel"}
+//   Approve      → POST /api/v1/tool-approvals/{id} {action:"approve"}
+//   Always Allow → POST /api/v1/tool-approvals/{id} {action:"always"}
+//   Deny         → POST /api/v1/tool-approvals/{id} {action:"deny"}
+//   Cancel       → POST /api/v1/tool-approvals/{id} {action:"cancel"}
 //
 // Accessibility (C2 — this is a SECURITY-CRITICAL control):
 //   - Built on the shadcn/Radix Dialog primitive, which provides a focus trap,
@@ -31,9 +32,29 @@
 //   401 → re-auth toast (user must log in again)
 //   403 → "you must be an admin to approve this tool" toast
 //   410 → "this approval has already been resolved" → dismiss modal entry
+//
+// ADR-036 §3.4 note: this is now the ONLY tool-approval UI — the dedicated
+// exec-only flow (ExecApprovalBlock/ExecApprovalTool, WS
+// exec_approval_request/response/expired frames) was retired in favor of
+// this generic modal for every tool, `bash` included. Before deleting that
+// flow, its rendering was compared against this one:
+//   - PORTED: the readable "binary highlighted, env-prefix separated"
+//     command preview + working-dir line ExecApprovalBlock showed for shell
+//     commands. See formatBashCommand() below and its use in ToolApprovalCard
+//     — rendered whenever toolName is "bash" and args.command is a string,
+//     in addition to (not instead of) the generic Arguments JSON dump.
+//   - PORTED: ExecApprovalBlock's 3-way decision (Allow / Deny / "Always
+//     Allow") is now fully available here too — the Always Allow button
+//     posts {action:"always"}, which the gateway resolves by approving the
+//     call AND recording a session-scoped grant via ApprovalGrantStore.Record
+//     (pkg/gateway/rest_tool_registry.go, commit 35447760). The wire contract
+//     (ToolApprovalActionRequest.action) carries "always" for every tool, not
+//     just bash — closing the gap that used to make grant-inheritance
+//     (agent-delegation-spec.md FR-D8) reachable only via the retired
+//     exec-only flow.
 
 import { useEffect, useState, useCallback, useRef } from 'react'
-import { CheckCircle, XCircle, ProhibitInset, Shield } from '@phosphor-icons/react'
+import { CheckCircle, XCircle, ProhibitInset, Shield, Lock } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import {
@@ -78,6 +99,28 @@ function formatCountdown(ms: number): string {
   return `${mins}m ${remainSecs}s`
 }
 
+// Formats a `bash` command string for display: separates any leading
+// `KEY=value` env-var assignments from the binary name and highlights the
+// binary. Ported verbatim (in spirit) from the retired ExecApprovalBlock so
+// approving a `bash` call still shows a readable command preview, not just
+// the raw Arguments JSON — see the ADR-036 note atop this file.
+function formatBashCommand(command: string): { envPrefix: string; binary: string; args: string } {
+  const parts = command.split(' ')
+  let binaryIndex = 0
+  for (let i = 0; i < parts.length; i++) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*=/.test(parts[i])) {
+      binaryIndex = i
+      break
+    }
+  }
+  const envPrefix = parts.slice(0, binaryIndex).join(' ')
+  const afterEnv = envPrefix ? command.slice(envPrefix.length + 1) : command
+  const firstSpace = afterEnv.indexOf(' ')
+  const binary = firstSpace === -1 ? afterEnv : afterEnv.slice(0, firstSpace)
+  const args = firstSpace === -1 ? '' : afterEnv.slice(firstSpace)
+  return { envPrefix, binary, args }
+}
+
 interface ToolApprovalCardProps {
   approvalId: string
   toolName: string
@@ -106,7 +149,10 @@ function ToolApprovalCard({
   const hasExpired = remainingMs <= 0
 
   const handleAction = useCallback(
-    async (action: 'approve' | 'deny' | 'cancel') => {
+    // Action union sourced from postToolApproval's own signature (which in
+    // turn is the generated ToolApprovalActionRequest['action']) rather than
+    // a hand-rolled literal, per Constraint #8.
+    async (action: Parameters<typeof postToolApproval>[1]) => {
       if (submitting) return
       setSubmitting(true)
       try {
@@ -165,6 +211,16 @@ function ToolApprovalCard({
   const argsJson = JSON.stringify(args, null, 2)
   const titleId = `tool-approval-title-${approvalId}`
   const descId = `tool-approval-desc-${approvalId}`
+
+  // Ported from the retired ExecApprovalBlock (see the ADR-036 note atop this
+  // file) — a readable command preview for `bash` calls, additive to (not a
+  // replacement for) the generic Arguments JSON below.
+  const bashCommand =
+    toolName === 'bash' && typeof args.command === 'string' && args.command.length > 0
+      ? args.command
+      : null
+  const bashPreview = bashCommand ? formatBashCommand(bashCommand) : null
+  const bashCwd = typeof args.cwd === 'string' && args.cwd.length > 0 ? args.cwd : undefined
 
   return (
     <Dialog
@@ -226,6 +282,25 @@ function ToolApprovalCard({
             </p>
           </div>
 
+          {bashPreview && (
+            <div>
+              <p className="text-xs text-[var(--color-muted)] mb-1">Command</p>
+              <pre className="font-mono text-xs bg-[var(--color-surface-2)] rounded-lg px-3 py-2 whitespace-pre-wrap break-all text-[var(--color-secondary)]">
+                {bashPreview.envPrefix && (
+                  <span className="text-[var(--color-muted)]">{bashPreview.envPrefix} </span>
+                )}
+                <span className="text-[var(--color-accent)] font-semibold">{bashPreview.binary}</span>
+                <span>{bashPreview.args}</span>
+              </pre>
+              {bashCwd && (
+                <p className="mt-1 text-[10px] text-[var(--color-muted)]">
+                  <span className="text-[var(--color-border)]">dir: </span>
+                  <span className="font-mono">{bashCwd}</span>
+                </p>
+              )}
+            </div>
+          )}
+
           {args && Object.keys(args).length > 0 && (
             <div>
               <p className="text-xs text-[var(--color-muted)] mb-1">Arguments</p>
@@ -259,9 +334,17 @@ function ToolApprovalCard({
           )}
         </div>
 
-        {/* Action buttons */}
+        {/* Action buttons.
+            Approve/Deny carry equal visual weight as the primary decision.
+            Always Allow is a de-emphasized (ghost) secondary action — it
+            approves this call AND records a session-scoped grant, mirroring
+            the retired ExecApprovalBlock's "Always Allow" ghost button (same
+            Lock icon + muted styling) — see the ADR-036 note atop this file.
+            Cancel stays last and right-aligned (ml-auto) as the least common
+            action. flex-wrap keeps all four usable at phone widths (<768px)
+            without any button clipping. */}
         {!hasExpired && (
-          <div className="flex gap-2 px-5 py-4 border-t border-[var(--color-border)] bg-[var(--color-surface-2)]">
+          <div className="flex flex-wrap gap-2 px-5 py-4 border-t border-[var(--color-border)] bg-[var(--color-surface-2)]">
             <Button
               size="sm"
               variant="default"
@@ -282,6 +365,17 @@ function ToolApprovalCard({
             >
               <XCircle size={14} weight="bold" aria-hidden="true" />
               Deny
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              data-testid="always-allow-toggle"
+              onClick={() => handleAction('always')}
+              disabled={submitting}
+              className="h-8 text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] flex-1 sm:flex-none"
+            >
+              <Lock size={14} aria-hidden="true" />
+              Always Allow
             </Button>
             <Button
               size="sm"

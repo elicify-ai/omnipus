@@ -3301,6 +3301,7 @@ func (e TodoStatus) Valid() bool {
 
 // Defines values for ToolApprovalActionRequestAction.
 const (
+	ToolApprovalActionRequestActionAlways  ToolApprovalActionRequestAction = "always"
 	ToolApprovalActionRequestActionApprove ToolApprovalActionRequestAction = "approve"
 	ToolApprovalActionRequestActionCancel  ToolApprovalActionRequestAction = "cancel"
 	ToolApprovalActionRequestActionDeny    ToolApprovalActionRequestAction = "deny"
@@ -3309,6 +3310,8 @@ const (
 // Valid indicates whether the value is a known member of the ToolApprovalActionRequestAction enum.
 func (e ToolApprovalActionRequestAction) Valid() bool {
 	switch e {
+	case ToolApprovalActionRequestActionAlways:
+		return true
 	case ToolApprovalActionRequestActionApprove:
 		return true
 	case ToolApprovalActionRequestActionCancel:
@@ -3322,6 +3325,7 @@ func (e ToolApprovalActionRequestAction) Valid() bool {
 
 // Defines values for ToolApprovalResponseAction.
 const (
+	ToolApprovalResponseActionAlways  ToolApprovalResponseAction = "always"
 	ToolApprovalResponseActionApprove ToolApprovalResponseAction = "approve"
 	ToolApprovalResponseActionCancel  ToolApprovalResponseAction = "cancel"
 	ToolApprovalResponseActionDeny    ToolApprovalResponseAction = "deny"
@@ -3330,6 +3334,8 @@ const (
 // Valid indicates whether the value is a known member of the ToolApprovalResponseAction enum.
 func (e ToolApprovalResponseAction) Valid() bool {
 	switch e {
+	case ToolApprovalResponseActionAlways:
+		return true
 	case ToolApprovalResponseActionApprove:
 		return true
 	case ToolApprovalResponseActionCancel:
@@ -8489,18 +8495,18 @@ type TokenUsageSummary struct {
 	TokensCacheWrite *int `json:"tokens_cache_write,omitempty"`
 }
 
-// ToolApprovalActionRequest Request body for POST /api/v1/tool-approvals/{approval_id}. Resolves a pending tool call approval by approving, denying, or cancelling it.
+// ToolApprovalActionRequest Request body for POST /api/v1/tool-approvals/{approval_id}. Resolves a pending tool call approval by approving, denying, cancelling, or approving-and-remembering ("always") it.
 type ToolApprovalActionRequest struct {
-	// Action Action to take on this approval.
+	// Action Action to take on this approval. approve — allow this single invocation. deny    — reject this single invocation. cancel  — cancel this invocation (e.g. modal dismissed / turn aborted). always  — allow this invocation AND record a session-scoped "Always Allow" grant for (session, agent, tool) so future matching calls in the same session auto-approve without re-prompting.
 	Action ToolApprovalActionRequestAction `json:"action"`
 }
 
-// ToolApprovalActionRequestAction Action to take on this approval.
+// ToolApprovalActionRequestAction Action to take on this approval. approve — allow this single invocation. deny    — reject this single invocation. cancel  — cancel this invocation (e.g. modal dismissed / turn aborted). always  — allow this invocation AND record a session-scoped "Always Allow" grant for (session, agent, tool) so future matching calls in the same session auto-approve without re-prompting.
 type ToolApprovalActionRequestAction string
 
 // ToolApprovalResponse Response from POST /api/v1/tool-approvals/{approval_id}. Confirms that the approval action was processed.
 type ToolApprovalResponse struct {
-	// Action The action that was applied.
+	// Action The action that was applied. Echoes the request action, including "always" (approve-and-remember).
 	Action ToolApprovalResponseAction `json:"action"`
 
 	// ApprovalId The approval ID that was resolved.
@@ -8510,7 +8516,7 @@ type ToolApprovalResponse struct {
 	Status ToolApprovalResponseStatus `json:"status"`
 }
 
-// ToolApprovalResponseAction The action that was applied.
+// ToolApprovalResponseAction The action that was applied. Echoes the request action, including "always" (approve-and-remember).
 type ToolApprovalResponseAction string
 
 // ToolApprovalResponseStatus Result status. Always "ok" when the action was accepted.

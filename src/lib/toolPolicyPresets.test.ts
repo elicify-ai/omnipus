@@ -40,8 +40,8 @@ describe('POLICY_PRESETS', () => {
       expect(Object.keys(preset.overrides)).toHaveLength(6)
     })
 
-    it('sets exec = ask', () => {
-      expect(preset.overrides['exec']).toBe('ask')
+    it('sets bash = ask', () => {
+      expect(preset.overrides['bash']).toBe('ask')
     })
 
     it('sets browser.navigate = ask', () => {
@@ -70,7 +70,7 @@ describe('POLICY_PRESETS', () => {
 
     it('matches the §2.1 table exactly (full snapshot)', () => {
       expect(preset.overrides).toStrictEqual({
-        exec: 'ask',
+        bash: 'ask',
         'browser.navigate': 'ask',
         'browser.click': 'ask',
         'browser.type': 'ask',
@@ -109,7 +109,7 @@ describe('applyRolePreset', () => {
     expect(applyRolePreset('balanced')).toStrictEqual({
       default_policy: 'allow',
       policies: {
-        exec: 'ask',
+        bash: 'ask',
         'browser.navigate': 'ask',
         'browser.click': 'ask',
         'browser.type': 'ask',
@@ -142,7 +142,7 @@ describe('applyRolePreset', () => {
       {
         default_policy: 'allow',
         policies: {
-          exec: 'ask',
+          bash: 'ask',
           'browser.navigate': 'ask',
           'browser.click': 'ask',
           'browser.type': 'ask',

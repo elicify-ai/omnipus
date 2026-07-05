@@ -17,6 +17,7 @@ import (
 
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	systools "github.com/dapicom-ai/omnipus/pkg/sysagent/tools"
+	"github.com/dapicom-ai/omnipus/pkg/tools"
 )
 
 // testMutateConfig is a simple mutex-serialized MutateConfig for use in tests
@@ -816,4 +817,94 @@ func TestAgentMetadataTools_RoundTrip(t *testing.T) {
 			t.Errorf("expected INVALID_INPUT, got %v", errObj["code"])
 		}
 	})
+}
+
+// TestBash_NewCustomAgentDeniedByDefault proves FR-B12 (bash-tool-spec.md,
+// 7-reviewer gate CRIT-001 / BDD "New custom agent is denied bash by default"):
+// a freshly created custom agent — created via the REAL system.agent.create
+// tool path (AgentCreateTool.Execute), with no explicit bash policy entry
+// supplied by the caller — resolves the tool to "deny" by default.
+func TestBash_NewCustomAgentDeniedByDefault(t *testing.T) {
+	deps, cfg := newTestDeps()
+
+	result := systools.NewAgentCreateTool(deps).Execute(context.Background(), map[string]any{
+		"name":        "Research Bot",
+		"description": "A research assistant",
+		"soul":        "You are a research bot.",
+		"model":       "test/model",
+		"color":       "#22C55E",
+		"icon":        "robot",
+		// Deliberately no bash policy override — proving the DEFAULT seed,
+		// not a caller-supplied one.
+	})
+	if result.IsError {
+		t.Fatalf("expected success, got error: %s", result.ForLLM)
+	}
+	if len(cfg.Agents.List) != 1 {
+		t.Fatalf("expected 1 agent in list, got %d", len(cfg.Agents.List))
+	}
+	newAgent := cfg.Agents.List[0]
+
+	// Sanity: the seed actually landed in the persisted policy map.
+	if got := newAgent.Tools.Builtin.Policies["bash"]; got != config.ToolPolicyDeny {
+		t.Fatalf(`expected seeded Tools.Builtin.Policies["bash"] = %q, got %q`, config.ToolPolicyDeny, got)
+	}
+
+	// Resolve through the single authoritative primitive
+	// (pkg/tools/compositor.go's EffectiveToolPolicy), built the same way
+	// pkg/agent/instance.go's agentToolsCfgToPolicy converts AgentBuiltinToolsCfg
+	// for a non-god-mode agent — matching the calling convention in
+	// pkg/tools/effective_tool_policy_test.go.
+	policies := make(map[string]string, len(newAgent.Tools.Builtin.Policies))
+	for k, v := range newAgent.Tools.Builtin.Policies {
+		policies[k] = string(v)
+	}
+	polCfg := &tools.ToolPolicyCfg{
+		DefaultPolicy:       string(newAgent.Tools.Builtin.DefaultPolicy),
+		Policies:            policies,
+		GlobalDefaultPolicy: "allow",
+	}
+
+	// A fresh agent created via a display name ("Research Bot" -> "research-bot")
+	// never matches a core-agent ID, so ResolveType(nil) correctly resolves to
+	// AgentTypeCustom without needing the coreagent package's isCoreAgent (which
+	// would create an import cycle from here).
+	agentType := string(newAgent.ResolveType(nil))
+	if agentType != string(config.AgentTypeCustom) {
+		t.Fatalf("test setup invariant broken: expected agentType %q, got %q", config.AgentTypeCustom, agentType)
+	}
+
+	got := tools.EffectiveToolPolicy(polCfg, tools.ScopeCore, agentType, "bash")
+	if got != "deny" {
+		t.Fatalf("EffectiveToolPolicy(bash, ScopeCore, %q) = %q, want %q", agentType, got, "deny")
+	}
+}
+
+// TestBashScopeCore_UnlistedResolvesToAllow_WithoutExplicitSeed_RegressionBaseline
+// is the regression guard for FR-B12 (CRIT-001): it proves the fix above is
+// load-bearing, not redundant with some other pre-existing deny-by-default
+// mechanism. It hand-builds the EXACT ToolPolicyCfg shape AgentCreateTool.Execute
+// produces for a fresh custom agent MINUS the new `Policies["bash"] = deny` seed
+// line (i.e., DefaultPolicy: allow + the pre-existing system.*: deny entry only)
+// and asserts an unlisted ScopeCore tool ("bash") resolves to "allow" — the exact
+// fail-open gap this whole task closes. If this baseline ever stopped resolving
+// to "allow" (e.g. because passesScopeGate started hard-denying ScopeCore on
+// custom agents), TestBash_NewCustomAgentDeniedByDefault would no longer be
+// proof that the FR-B12 seed specifically is doing the work.
+func TestBashScopeCore_UnlistedResolvesToAllow_WithoutExplicitSeed_RegressionBaseline(t *testing.T) {
+	polCfg := &tools.ToolPolicyCfg{
+		DefaultPolicy: string(config.ToolPolicyAllow),
+		Policies: map[string]string{
+			"system.*": string(config.ToolPolicyDeny),
+			// Deliberately NO "bash" entry — this is the seed under test in
+			// agent.go, intentionally omitted here to establish the baseline it fixes.
+		},
+		GlobalDefaultPolicy: "allow",
+	}
+
+	got := tools.EffectiveToolPolicy(polCfg, tools.ScopeCore, string(config.AgentTypeCustom), "bash")
+	if got != "allow" {
+		t.Fatalf("regression baseline broken: expected an unlisted ScopeCore tool with no explicit "+
+			"seed to resolve to %q (proving the fix is load-bearing), got %q", "allow", got)
+	}
 }

@@ -551,13 +551,13 @@ func (s *JSONLStore) SetHistory(
 	return s.rewriteJSONL(sessionKey, archived)
 }
 
-// context-paging: MUST NOT be called from any Save path — it destroys the
-// recall archive (FR-005). This function is retained for direct unit tests
-// only. The retention sweep is the sole legitimate deleter of context.jsonl.
-//
 // Compact physically rewrites the JSONL file, dropping all logically
 // skipped lines. This reclaims disk space that accumulates after
 // repeated TruncateHistory calls.
+//
+// context-paging: MUST NOT be called from any Save path — it destroys the
+// recall archive (FR-005). This function is retained for direct unit tests
+// only. The retention sweep is the sole legitimate deleter of context.jsonl.
 //
 // It is safe to call at any time; if there is nothing to compact
 // (skip == 0) the method returns immediately.

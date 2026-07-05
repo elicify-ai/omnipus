@@ -496,7 +496,7 @@ func TestLegacySummaryMarker_Inert(t *testing.T) {
 	// (it is rendered as part of the CONTEXT_SUMMARY block — inertly).
 	if !strings.Contains(systemMsg.Content, "dropped 15 turns") {
 		t.Errorf("T22: legacy summary marker must appear inertly in system message; got: %q",
-			systemMsg.Content[:minKeep(200, len(systemMsg.Content))])
+			systemMsg.Content[:min(200, len(systemMsg.Content))])
 	}
 
 	// FR-014: the marker must NOT cause re-parsing. Verify the live window is
@@ -823,7 +823,7 @@ func TestBuildMessages_SpanPlacedViaRealContextBuilder(t *testing.T) {
 	if t.Failed() {
 		// Print the full assembly for debugging.
 		for i, m := range assembled {
-			t.Logf("assembled[%d] role=%s content=%q", i, m.Role, m.Content[:minKeep(80, len(m.Content))])
+			t.Logf("assembled[%d] role=%s content=%q", i, m.Role, m.Content[:min(80, len(m.Content))])
 		}
 		return
 	}
@@ -852,16 +852,4 @@ func TestBuildMessages_SpanPlacedViaRealContextBuilder(t *testing.T) {
 		t.Errorf("T31-real: current user message must be last (idx=%d), got assembled len=%d",
 			currentIdx, len(assembled))
 	}
-}
-
-// ============================================================================
-// Helpers
-// ============================================================================
-
-// minKeep returns the smaller of a and b (int). Avoids importing math for this usage.
-func minKeep(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

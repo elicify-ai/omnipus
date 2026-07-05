@@ -108,7 +108,7 @@ export function ExecProxyStatusCard(): React.ReactElement {
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-medium text-[var(--color-secondary)] flex items-center gap-1.5">
           <Globe size={14} className="text-[var(--color-muted)]" />
-          Exec HTTP Proxy
+          Bash HTTP Proxy
         </h3>
         <Button
           size="sm"
@@ -182,7 +182,7 @@ export function ExecProxyStatusCard(): React.ReactElement {
                   style={{ color: 'var(--color-warning)' }}
                 />
                 <p className="text-xs leading-relaxed" style={{ color: 'var(--color-warning)' }}>
-                  Proxy failed to start — exec commands are not SSRF-protected.
+                  Proxy failed to start — bash commands are not SSRF-protected.
                 </p>
               </div>
             )}
@@ -191,7 +191,7 @@ export function ExecProxyStatusCard(): React.ReactElement {
 
         {/* Description */}
         <p className="text-[10px] text-[var(--color-muted)] leading-relaxed border-t border-[var(--color-border)] pt-2">
-          Routes exec tool child process HTTP/HTTPS traffic through an SSRF-protected loopback proxy (SEC-28).
+          Routes bash tool child process HTTP/HTTPS traffic through an SSRF-protected loopback proxy (SEC-28).
         </p>
       </div>
 

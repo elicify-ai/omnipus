@@ -6307,11 +6307,11 @@ export interface components {
              */
             approval_id: string;
             /**
-             * @description The action that was applied.
+             * @description The action that was applied. Echoes the request action, including "always" (approve-and-remember).
              * @example approve
              * @enum {string}
              */
-            action: "approve" | "deny" | "cancel";
+            action: "approve" | "deny" | "cancel" | "always";
             /**
              * @description Result status. Always "ok" when the action was accepted.
              * @example ok
@@ -6799,15 +6799,15 @@ export interface components {
         };
         /**
          * ToolApprovalActionRequest
-         * @description Request body for POST /api/v1/tool-approvals/{approval_id}. Resolves a pending tool call approval by approving, denying, or cancelling it.
+         * @description Request body for POST /api/v1/tool-approvals/{approval_id}. Resolves a pending tool call approval by approving, denying, cancelling, or approving-and-remembering ("always") it.
          */
         ToolApprovalActionRequest: {
             /**
-             * @description Action to take on this approval.
+             * @description Action to take on this approval. approve — allow this single invocation. deny    — reject this single invocation. cancel  — cancel this invocation (e.g. modal dismissed / turn aborted). always  — allow this invocation AND record a session-scoped "Always Allow" grant for (session, agent, tool) so future matching calls in the same session auto-approve without re-prompting.
              * @example approve
              * @enum {string}
              */
-            action: "approve" | "deny" | "cancel";
+            action: "approve" | "deny" | "cancel" | "always";
         };
         /**
          * CredentialSetRequest

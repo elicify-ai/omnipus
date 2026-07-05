@@ -12,9 +12,11 @@
  *   for ANY frame carrying a timestamp, not only replay_message, so reconnect does
  *   not re-replay already-seen frames.
  *
- * I2 — ack frames: exec_approval_response_ack and device_pairing_request are real
- *   ServerFrame types; their reducer cases must NOT fall through to the
- *   unknown-frame dev toast.
+ * I2 — ack frames: device_pairing_request is a real ServerFrame type; its
+ *   reducer case must NOT fall through to the unknown-frame dev toast.
+ *   (exec_approval_response_ack's no-op case was removed with the rest of the
+ *   exec-only approval flow — ADR-036 §3.4 retires it in favor of the generic
+ *   tool_approval_required/ToolApprovalModal flow, which has no ack frame.)
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
@@ -35,7 +37,6 @@ function resetStores() {
       toolCalls: {},
       toolCallOrder: [],
       textAtToolCallStart: {},
-      pendingApprovals: [],
       sessionTokens: 0,
       sessionCost: 0,
       isReplaying: false,
@@ -70,7 +71,6 @@ function seedStreamingBucket(sid: string, overrides: Partial<SessionChatState> =
     toolCalls: { 'tc1': { id: 'tc1', call_id: 'tc1', tool: 'exec', params: {}, status: 'running' } },
     toolCallOrder: ['tc1'],
     textAtToolCallStart: {},
-    pendingApprovals: [],
     isStreaming: true,
     isReplaying: false,
     replayCompletedForSession: null,
@@ -180,21 +180,6 @@ describe('I1 — reconnect cursor advances for any timestamped frame', () => {
 })
 
 describe('I2 — ack frames do not trip the unknown-frame toast', () => {
-  it('exec_approval_response_ack is a no-op (no toast)', () => {
-    const addToast = vi.fn()
-    vi.spyOn(useUiStore, 'getState').mockReturnValue({
-      addToast,
-    } as unknown as ReturnType<typeof useUiStore.getState>)
-    // Fire 6 acks — above the unknown-frame threshold (5). A frame with no
-    // reducer case would toast after 5; a handled no-op never does.
-    act(() => {
-      for (let i = 0; i < 6; i++) {
-        useChatStore.getState().handleFrame({ type: 'exec_approval_response_ack', id: `ack-${i}`, session_id: SID })
-      }
-    })
-    expect(addToast).not.toHaveBeenCalled()
-  })
-
   it('device_pairing_request invalidates the devices query and does not toast', () => {
     const addToast = vi.fn()
     vi.spyOn(useUiStore, 'getState').mockReturnValue({

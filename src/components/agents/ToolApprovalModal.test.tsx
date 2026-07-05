@@ -6,6 +6,7 @@
 //  3. Approve button calls POST /api/v1/tool-approvals/{id} with action:"approve"
 //  4. Deny button calls POST with action:"deny"
 //  5. Cancel button calls POST with action:"cancel"
+//  5b. Always Allow button calls POST with action:"always" (ADR-036 §3.4 gap closure)
 //  6. On 410 response, modal entry is dismissed without a toast
 //  7. On 403 response, shows admin-required toast
 //  8. On 401 response, shows re-auth toast
@@ -90,6 +91,7 @@ describe('ToolApprovalModal — rendering', () => {
     expect(screen.getByText('Tool Approval Required')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Approve/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Deny/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Always Allow/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Cancel/i })).toBeInTheDocument()
   })
 
@@ -112,6 +114,71 @@ describe('ToolApprovalModal — rendering', () => {
     })
     render(<ToolApprovalModal />)
     expect(screen.getByText('+1 more')).toBeInTheDocument()
+  })
+})
+
+// ADR-036 §3.4: the dedicated exec-only approval flow (ExecApprovalBlock) was
+// retired in favor of this generic modal. Its readable command preview
+// (binary highlighted, env-prefix separated, working-dir line) was ported
+// here for `bash` calls — verify it renders, in addition to the generic
+// Arguments JSON dump, and does NOT render for other tools.
+describe('ToolApprovalModal — bash command preview (ADR-036 §3.4 port)', () => {
+  const BASH_APPROVAL = {
+    approvalId: 'appr-bash-001',
+    toolCallId: 'call-bash-001',
+    toolName: 'bash',
+    args: { command: 'FOO=bar npm run build', cwd: 'apps/web', run_in_background: false },
+    agentId: 'agent-main',
+    sessionId: 'sess-001',
+    turnId: 'turn-001',
+    expiresAt: Date.now() + 300_000,
+  }
+
+  it('renders a Command preview with the binary highlighted and env prefix separated', () => {
+    act(() => {
+      useToolApprovalStore.setState({ queue: [BASH_APPROVAL] })
+    })
+    render(<ToolApprovalModal />)
+    expect(screen.getByText('Command')).toBeInTheDocument()
+    expect(screen.getByText('FOO=bar')).toBeInTheDocument()
+    expect(screen.getByText('npm')).toBeInTheDocument()
+  })
+
+  it('renders the working directory from args.cwd', () => {
+    act(() => {
+      useToolApprovalStore.setState({ queue: [BASH_APPROVAL] })
+    })
+    render(<ToolApprovalModal />)
+    expect(screen.getByText('apps/web')).toBeInTheDocument()
+  })
+
+  it('still renders the generic Arguments JSON dump alongside the preview', () => {
+    act(() => {
+      useToolApprovalStore.setState({ queue: [BASH_APPROVAL] })
+    })
+    render(<ToolApprovalModal />)
+    expect(screen.getByText('Arguments')).toBeInTheDocument()
+    expect(screen.getByText(/run_in_background/)).toBeInTheDocument()
+  })
+
+  it('does NOT render a Command preview for a non-bash tool', () => {
+    act(() => {
+      useToolApprovalStore.setState({
+        queue: [{ ...SAMPLE_APPROVAL, args: { command: 'not actually bash' } }],
+      })
+    })
+    render(<ToolApprovalModal />)
+    expect(screen.queryByText('Command')).not.toBeInTheDocument()
+  })
+
+  it('does NOT render a Command preview when bash args have no command string', () => {
+    act(() => {
+      useToolApprovalStore.setState({
+        queue: [{ ...BASH_APPROVAL, args: { run_in_background: true } }],
+      })
+    })
+    render(<ToolApprovalModal />)
+    expect(screen.queryByText('Command')).not.toBeInTheDocument()
   })
 })
 
@@ -155,6 +222,22 @@ describe('ToolApprovalModal — button dispatch', () => {
     })
   })
 
+  // ADR-036 §3.4 gap closure: the retired ExecApprovalBlock's 3-way decision
+  // (Allow / Deny / "Always Allow") is now fully reachable from the generic
+  // modal for every tool, not just bash.
+  it('Always Allow button calls postToolApproval with action:"always"', async () => {
+    act(() => {
+      useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
+    })
+    render(<ToolApprovalModal />)
+
+    fireEvent.click(screen.getByRole('button', { name: /Always Allow/i }))
+
+    await waitFor(() => {
+      expect(api.postToolApproval).toHaveBeenCalledWith('appr-001', 'always')
+    })
+  })
+
   it('removes approval from queue after successful Approve', async () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
@@ -162,6 +245,19 @@ describe('ToolApprovalModal — button dispatch', () => {
     render(<ToolApprovalModal />)
 
     fireEvent.click(screen.getByRole('button', { name: /Approve/i }))
+
+    await waitFor(() => {
+      expect(useToolApprovalStore.getState().queue).toHaveLength(0)
+    })
+  })
+
+  it('removes approval from queue after successful Always Allow', async () => {
+    act(() => {
+      useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
+    })
+    render(<ToolApprovalModal />)
+
+    fireEvent.click(screen.getByRole('button', { name: /Always Allow/i }))
 
     await waitFor(() => {
       expect(useToolApprovalStore.getState().queue).toHaveLength(0)

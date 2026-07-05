@@ -75,7 +75,7 @@ func TestBoot_ConstructorSeedDispositionMap(t *testing.T) {
 				"browser_navigate", "browser_click", "browser_type",
 				"browser_get_text", "browser_wait", "browser_screenshot",
 				"read_file", "list_directory", "write_file", "append_file", "edit_file",
-				"spawn", "run_subagent", "check_spawn_status",
+				"delegate",
 				"remember", "recall_memory", "run_retrospective",
 				"send_message", "hand_off", "return_to_default", "send_file",
 				"find_skills", "set_todos",
@@ -91,14 +91,14 @@ func TestBoot_ConstructorSeedDispositionMap(t *testing.T) {
 				"read_file", "write_file", "edit_file", "append_file", "list_directory",
 				// Lookups.
 				"search_web", "fetch_url",
-				// Execution.
-				"exec", "workspace_shell", "workspace_shell_bg", "serve_web",
+				// Execution (ADR-036: exec/workspace_shell/workspace_shell_bg merged into "bash").
+				"bash", "serve_web",
 				// Communication / routing.
 				"send_message", "send_file", "hand_off", "return_to_default",
 				// Memory.
 				"remember", "recall_memory", "run_retrospective", "set_todos",
 				// Delegation.
-				"spawn", "run_subagent", "check_spawn_status", "list_agents",
+				"delegate", "list_agents",
 				// Task management (current + cross-workspace).
 				"create_task", "list_tasks", "update_task",
 				"create_task_in_workspace", "list_tasks_in_workspace", "update_task_in_workspace",
@@ -258,7 +258,8 @@ func TestAgentConstructor_CoreAgent_SeedsRailPlusAllowances(t *testing.T) {
 //
 //	When the returned defaultPolicy and policies map are inspected,
 //	Then defaultPolicy is "deny" (least-privilege redesign);
-//	And workspace_shell, workspace_shell_bg, and serve_web are "allow";
+//	And bash (ADR-036: exec/workspace_shell/workspace_shell_bg merged) and
+//	serve_web are "allow";
 //	And the dead "system.*" rail is absent;
 //	And run_in_workspace is not present.
 //
@@ -269,7 +270,7 @@ func TestJimSeed_DenyDefaultWithExplicitAllows(t *testing.T) {
 	assert.Equal(t, config.ToolPolicyDeny, dp,
 		"Jim must be deny-by-default (least-privilege redesign)")
 
-	for _, toolName := range []string{"workspace_shell", "workspace_shell_bg", "serve_web"} {
+	for _, toolName := range []string{"bash", "serve_web"} {
 		p, ok := policies[toolName]
 		require.True(t, ok, "Jim must have explicit policy for %q", toolName)
 		assert.Equal(t, config.ToolPolicyAllow, p,

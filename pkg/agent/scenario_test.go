@@ -374,7 +374,8 @@ func TestScenario9CoreAgentLockedIdentityRejectsRename(t *testing.T) {
 // ==================================================================================
 func TestScenario10SpawnSubagentReturnsResult(t *testing.T) {
 	// Traces to: temporal-puzzling-melody.md §Layer 2, scenario 10
-	// Verify that the spawn tool and subagent tools are registered unconditionally
+	// Verify that the unified delegate tool (ADR-036 merge of the former
+	// spawn/run_subagent/check_spawn_status trio) is registered unconditionally
 	// (part of the Plan 2 contract: no pre-registration gate).
 	cfg, _ := newScenarioCfg(t)
 	msgBus := bus.NewMessageBus()
@@ -392,23 +393,20 @@ func TestScenario10SpawnSubagentReturnsResult(t *testing.T) {
 		if !ok {
 			continue
 		}
-		// spawn and run_subagent must both be registered — they are semantically coupled.
-		_, hasSpawn := agent.Tools.Get("spawn")
-		_, hasSubagent := agent.Tools.Get("run_subagent")
-		assert.True(t, hasSpawn,
-			"agent %q must have 'spawn' tool registered (no pre-registration gate)", agentID)
-		assert.True(t, hasSubagent,
-			"agent %q must have 'run_subagent' tool registered (spawn requires run_subagent)", agentID)
+		// delegate must be registered — it carries both async and sync delegation modes.
+		_, hasDelegate := agent.Tools.Get("delegate")
+		assert.True(t, hasDelegate,
+			"agent %q must have 'delegate' tool registered (no pre-registration gate)", agentID)
 	}
 
-	// Differentiation: two different agents both have spawn — proving it's not per-agent hardcoded.
+	// Differentiation: two different agents both have delegate — proving it's not per-agent hardcoded.
 	if len(ids) >= 2 {
 		a1, ok1 := reg.GetAgent(ids[0])
 		a2, ok2 := reg.GetAgent(ids[1])
 		if ok1 && ok2 {
-			_, s1 := a1.Tools.Get("spawn")
-			_, s2 := a2.Tools.Get("spawn")
-			assert.True(t, s1 && s2, "spawn must be registered across all agents, not just one")
+			_, s1 := a1.Tools.Get("delegate")
+			_, s2 := a2.Tools.Get("delegate")
+			assert.True(t, s1 && s2, "delegate must be registered across all agents, not just one")
 		}
 	}
 

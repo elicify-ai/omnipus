@@ -334,7 +334,6 @@ const clientFrames = [
   "AuthFrame",
   "MessageFrame",
   "CancelFrame",
-  "ExecApprovalResponseFrame",
   "PingFrame",
   "AttachSessionFrame",
   "DevicePairingResponseFrame",

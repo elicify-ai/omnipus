@@ -47,10 +47,13 @@ var (
 func (al *AgentLoop) getSubTurnConfig() subTurnRuntimeConfig {
 	cfg := al.cfg.Agents.Defaults.SubTurn
 
-	maxDepth := cfg.MaxDepth
-	if maxDepth <= 0 {
-		maxDepth = defaultMaxSubTurnDepth
-	}
+	// #477 / FR-D9: resolve via the SAME shared function enforceEdgeModeAndDepth
+	// and wireDelegationInjectors use, so this backstop's "nothing configured"
+	// default and the delegation graph's own gate are never computed
+	// independently. edgeDepth is nil here — this is the GLOBAL-only fallback;
+	// a specific delegation call's own per-edge override (when one applies)
+	// arrives separately via SubTurnConfig.ResolvedMaxDepth (see spawnSubTurn).
+	maxDepth := resolveEffectiveDelegationDepth(nil, cfg.MaxDepth)
 
 	maxConcurrent := cfg.MaxConcurrent
 	if maxConcurrent <= 0 {
@@ -200,6 +203,20 @@ type SubTurnConfig struct {
 	// Used in SubTurnSpawnPayload.TaskLabel for the WS subagent_start frame.
 	TaskLabel string
 
+	// ResolvedMaxDepth, when non-nil, is the effective onward-delegation depth
+	// cap the delegation-graph gate (enforceEdgeModeAndDepth, via
+	// buildDelegationDepthResolver) already authorized THIS specific delegation
+	// call against — resolved from the matched edge's own Depth and the global
+	// SubTurn.MaxDepth ceiling via the shared resolveEffectiveDelegationDepth
+	// function. When set, spawnSubTurn's own depth check uses this value
+	// INSTEAD of independently re-deriving one from getSubTurnConfig's
+	// global-only default, so an explicit per-edge Depth is never silently
+	// overridden by the backstop's own default (#477, FR-D9/FR-D10). nil means
+	// "no override" — e.g. self-delegation or an untargeted call, where no
+	// single edge's Depth uniquely applies — and spawnSubTurn falls back to
+	// getSubTurnConfig's own (shared-function) resolution.
+	ResolvedMaxDepth *int
+
 	// Can be extended with temperature, topP, etc.
 }
 
@@ -341,6 +358,7 @@ func (s *AgentLoopSpawner) SpawnSubTurn(
 		Timeout:            cfg.Timeout,
 		MaxContextRunes:    cfg.MaxContextRunes,
 		TaskLabel:          cfg.TaskLabel,
+		ResolvedMaxDepth:   cfg.ResolvedMaxDepth,
 	}
 
 	return spawnSubTurn(ctx, s.al, parentTS, agentCfg)
@@ -413,12 +431,20 @@ func spawnSubTurn(
 		}
 	}
 
-	// 1. Depth limit check
-	if parentTS.depth >= rtCfg.maxDepth {
+	// 1. Depth limit check. cfg.ResolvedMaxDepth, when set, is the effective
+	// cap the delegation-graph gate (enforceEdgeModeAndDepth) already
+	// authorized THIS specific call against — it takes precedence over
+	// rtCfg.maxDepth's own global-only default so an explicit per-edge Depth
+	// is never silently overridden by this backstop (#477, FR-D9/FR-D10).
+	effectiveMaxDepth := rtCfg.maxDepth
+	if cfg.ResolvedMaxDepth != nil {
+		effectiveMaxDepth = *cfg.ResolvedMaxDepth
+	}
+	if parentTS.depth >= effectiveMaxDepth {
 		logger.WarnCF("subturn", "Depth limit exceeded", map[string]any{
 			"parent_id": parentTS.turnID,
 			"depth":     parentTS.depth,
-			"max_depth": rtCfg.maxDepth,
+			"max_depth": effectiveMaxDepth,
 		})
 		return nil, ErrDepthLimitExceeded
 	}
@@ -633,24 +659,23 @@ func spawnSubTurn(
 	// external-CLI dispatch (agent.ID == targetAgent.ID, the real delegate).
 	al.ApprovalGrants().Inherit(parentTS.transcriptSessionID, parentTS.agentID, agent.ID)
 
-	// FR-H-006: exclude delegation tools from the child's registry so it cannot
-	// recursively spawn grandchildren or hand off. Registry-level filter — the
-	// tools are absent, not refused at execute time. One level only (owner
-	// decision 2026-04-20).
+	// FR-H-006: exclude delegation-adjacent tools from the child's registry so
+	// it cannot recursively delegate to a grandchild or hand off. Registry-
+	// level filter — the tools are absent, not refused at execute time. One
+	// level only (owner decision 2026-04-20).
 	//
-	// Three names are excluded (not just two as the spec originally listed):
-	//   - spawn:     async delegation (SpawnTool)
-	//   - subagent:  sync delegation (SubagentTool) — missed in the initial
-	//                Sprint H pass. Without this, a child could call `subagent`
-	//                to create a grandchild sub-turn, which would then fail
-	//                with a runtime depth-limit error instead of an unknown-tool
-	//                error (the intended contract).
-	//   - handoff:   agent switch
+	// ADR-036 (2026-07-04) merged the former spawn (async delegation) and
+	// run_subagent (sync delegation) tools into one `delegate` tool, so what
+	// used to be two excluded names (ExcludedSpawn, ExcludedSubagent) is now
+	// one (ExcludedDelegate) — the "one level only" invariant itself is
+	// UNCHANGED by that merge, just re-expressed against the single tool name:
+	//   - delegate: the unified delegation tool (async AND sync modes)
+	//   - handoff:  agent switch
 	if baseAgent.Tools != nil {
-		agent.Tools = baseAgent.Tools.CloneExcept(tools.ExcludedSpawn, tools.ExcludedSubagent, tools.ExcludedHandoff)
+		agent.Tools = baseAgent.Tools.CloneExcept(tools.ExcludedDelegate, tools.ExcludedHandoff)
 		// Log the constructed registry so operators can debug "my subagent has no tools" issues.
 		slog.Info("subturn: child registry constructed",
-			"excluded", []string{"spawn", "run_subagent", "hand_off"},
+			"excluded", []string{"delegate", "hand_off"},
 			"remaining_count", agent.Tools.Count(),
 			"child_id", childID,
 		)
@@ -1025,28 +1050,22 @@ type ephemeralSessionStore struct {
 	summary string
 }
 
-func newEphemeralSession(initial []providers.Message) ephemeralSessionStoreIface {
+// newEphemeralSession returns a session.SessionStore backed by an in-memory
+// ephemeralSessionStore. It is typed as session.SessionStore directly
+// (rather than a separate locally-declared interface) because
+// *ephemeralSessionStore's method set already matches session.SessionStore
+// exactly (see the "Satisfies session.SessionStore" notes on ReadArchive and
+// RollbackAppended below) — a second, parallel interface declaration here
+// would just be an unreviewed duplicate of pkg/session's own contract (and
+// one that independently tripped the interfacebloat lint at the same 11
+// methods; see pkg/session/session_store.go for the SessionReader/
+// SessionWriter split of the interface this duplicated).
+func newEphemeralSession(initial []providers.Message) session.SessionStore {
 	s := &ephemeralSessionStore{}
 	if len(initial) > 0 {
 		s.history = append(s.history, initial...)
 	}
 	return s
-}
-
-// ephemeralSessionStoreIface is satisfied by *ephemeralSessionStore.
-// Declared so newEphemeralSession can return a typed interface.
-type ephemeralSessionStoreIface interface { //nolint:interfacebloat // mirrors the SessionStore contract; one cohesive session responsibility
-	AddMessage(sessionKey, role, content string)
-	AddFullMessage(sessionKey string, msg providers.Message)
-	GetHistory(key string) []providers.Message
-	GetSummary(key string) string
-	SetSummary(key, summary string)
-	SetHistory(key string, history []providers.Message)
-	TruncateHistory(key string, keepLast int)
-	ReadArchive(ctx context.Context, key string) ([]memory.ArchivedMessage, error)
-	RollbackAppended(key string, targetArchiveLen, targetSkip int)
-	Save(key string) error
-	Close() error
 }
 
 func (e *ephemeralSessionStore) AddMessage(_, role, content string) {

@@ -1,3 +1,14 @@
+// Package config defines the Omnipus on-disk configuration schema — the
+// Config struct persisted as ~/.omnipus/config.json — and the load/save
+// path that reads, self-heals, and atomically writes it. Config covers
+// agents, channel instances/bindings (Channels map[string]
+// ChannelInstanceConfig), model providers, gateway/session/tooling/schedule
+// settings, sandbox policy, and more. LoadConfig/LoadConfigWithStore load
+// and self-heal a config on read (see the *_migration.go files in this
+// package for the individual one-shot migrations); SaveConfig and
+// safeUpdateConfigJSON (pkg/gateway) are the only sanctioned write paths —
+// several sections (notably Providers/model_list) carry credential
+// references that a naive re-serialization can corrupt.
 package config
 
 import (
@@ -2996,11 +3007,39 @@ type CronToolsConfig struct {
 }
 
 type ExecConfig struct {
-	ToolConfig          `         envPrefix:"OMNIPUS_TOOLS_EXEC_"`
-	EnableDenyPatterns  bool     `                                json:"enable_deny_patterns"  env:"OMNIPUS_TOOLS_EXEC_ENABLE_DENY_PATTERNS"`
-	CustomDenyPatterns  []string `                                json:"custom_deny_patterns"  env:"OMNIPUS_TOOLS_EXEC_CUSTOM_DENY_PATTERNS"`
-	CustomAllowPatterns []string `                                json:"custom_allow_patterns" env:"OMNIPUS_TOOLS_EXEC_CUSTOM_ALLOW_PATTERNS"`
-	TimeoutSeconds      int      `                                json:"timeout_seconds"       env:"OMNIPUS_TOOLS_EXEC_TIMEOUT_SECONDS"` // 0 means use default (60s)
+	ToolConfig `envPrefix:"OMNIPUS_TOOLS_EXEC_"`
+
+	// Deprecated: EnableDenyPatterns is no longer read by anything. ADR-036
+	// merged the standalone `exec` tool into the universally-registered
+	// `bash` tool (pkg/tools/shell.go); NewExecToolWithConfig discards its
+	// *config.Config parameter entirely. The equivalent opt-in switch now
+	// lives per-agent: AgentConfig.ShellPolicy.EnableDenyPatterns (merged
+	// with the global Sandbox.ShellDenyPatterns list at enforcement time —
+	// see pkg/tools/shell.go's ExecToolDeps.GlobalShellDenyPatterns). Kept
+	// only for JSON/env backward compatibility with existing config.json
+	// files; setting it has no effect and triggers a boot-time WARN
+	// (warnDeprecatedExecConfigFields, exec_config_deprecation.go).
+	EnableDenyPatterns bool `json:"enable_deny_patterns" env:"OMNIPUS_TOOLS_EXEC_ENABLE_DENY_PATTERNS"`
+	// Deprecated: CustomDenyPatterns is no longer read. Use the global
+	// Sandbox.ShellDenyPatterns list (security.shell_deny_patterns in
+	// config.json) plus per-agent AgentConfig.ShellPolicy.CustomDenyPatterns
+	// instead — see the EnableDenyPatterns comment above. The OpenClaw
+	// importer (pkg/migrate/sources/openclaw) migrates into the new location
+	// automatically rather than writing here.
+	CustomDenyPatterns []string `json:"custom_deny_patterns" env:"OMNIPUS_TOOLS_EXEC_CUSTOM_DENY_PATTERNS"`
+	// Deprecated: CustomAllowPatterns is no longer read and has NO successor
+	// in the ADR-036 `bash` tool — this is a deliberate, flagged capability
+	// gap, not a silent drop: the merged tool has no allow-pattern override
+	// mechanism at all. Porting this capability is a separate design
+	// decision, out of scope for the ADR-036 consolidation.
+	CustomAllowPatterns []string `json:"custom_allow_patterns" env:"OMNIPUS_TOOLS_EXEC_CUSTOM_ALLOW_PATTERNS"`
+	// Deprecated: TimeoutSeconds is no longer read. The bash tool's timeout
+	// is caller-controlled per invocation via the tool call's
+	// timeout_seconds argument (default 300s, 1-3600s range — see
+	// pkg/tools/shell.go's defaultTimeoutSeconds/resolveTimeoutSeconds), not
+	// a config-level default. There is no config-level successor; the
+	// previous effective default here (60s) no longer applies anywhere.
+	TimeoutSeconds int `json:"timeout_seconds" env:"OMNIPUS_TOOLS_EXEC_TIMEOUT_SECONDS"` // 0 means use default (60s) — DEAD, see doc comment
 
 	// US-7: Interactive approval before exec commands.
 	// "ask" (default) prompts the user; "off" skips the prompt.
@@ -3014,9 +3053,10 @@ type ExecConfig struct {
 	// When true (default), HTTP_PROXY and HTTPS_PROXY are set on child processes.
 	EnableProxy bool `json:"enable_proxy,omitempty" env:"OMNIPUS_TOOLS_EXEC_ENABLE_PROXY"`
 
-	// MaxBackgroundSeconds is the hard-kill timeout for background sessions.
-	// After this duration, the process receives SIGTERM, then SIGKILL 5s later.
-	// 0 = disabled (no timeout enforced).
+	// Deprecated: MaxBackgroundSeconds is no longer read. Background
+	// sessions share the same per-call timeout_seconds argument as
+	// foreground calls (see the TimeoutSeconds comment above) — there is no
+	// separate config-level background timeout anymore.
 	MaxBackgroundSeconds int `json:"max_background_seconds" env:"OMNIPUS_TOOLS_EXEC_MAX_BACKGROUND_SECONDS"`
 }
 
@@ -3451,6 +3491,43 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	// uses the explicit provider. Idempotent; runs after migrateProviderFields so
 	// the provider protocol set is consistent across model_list and agents.
 	migrateAgentPrimaryProvider(cfg)
+
+	// ADR-036 FR-M1/FR-M3 (bash-tool-spec.md User Story 4): consolidate
+	// exec/workspace_shell/workspace_shell_bg tool-policy keys — per-agent
+	// (AgentBuiltinToolsCfg.Policies) and global (OmnipusSandboxConfig.
+	// ToolPolicies) — into a single "bash" key, taking the strictest present
+	// value, and delete the legacy keys in memory. MUST run before
+	// migrateDeprecatedToolEnableFlags immediately below: FR-M2 retargets that
+	// migration's legacy tools.exec.enabled=false boolean flag at the "bash"
+	// policy glob (not "exec"), and its no-clobber guard only checks for a
+	// pre-existing entry under that glob — running this pass first ensures a
+	// real operator-set exec/workspace_shell/workspace_shell_bg policy value
+	// (e.g. "ask") is already sitting under "bash" by the time the
+	// boolean-flag migration runs, so it is never downgraded to "deny". The
+	// on-disk half (backup + strip) runs further down, gated the same way as
+	// the CLI-token relocation (CurrentVersion only) — see
+	// writeShellToolPolicyMigrationOnDisk (shell_tool_policy_migration.go).
+	shellPolicyKeysMigrated := migrateShellToolPolicyKeys(cfg)
+
+	// ADR-036 (agent-delegation-spec.md): consolidate
+	// spawn/run_subagent/check_spawn_status tool-policy keys — per-agent
+	// (AgentBuiltinToolsCfg.Policies) and global (OmnipusSandboxConfig.
+	// ToolPolicies) — into a single "delegate" key, taking the strictest
+	// present value, and delete the legacy keys in memory. Same
+	// call-ordering requirement as the bash migration immediately above and
+	// for the same reason: migration.go's toolEnableToPolicy table's
+	// {"spawn","delegate"}/{"spawn_status","delegate"}/{"subagent","delegate"}
+	// rows retarget the legacy BOOLEAN tools.<name>.enabled=false flag at the
+	// "delegate" policy glob, and its no-clobber guard only checks for a
+	// pre-existing entry under that glob — running this pass first ensures a
+	// real operator-set spawn/run_subagent/check_spawn_status ToolPolicyCfg
+	// value is already sitting under "delegate" by the time the boolean-flag
+	// migration runs, so it is never downgraded to "deny". The on-disk half
+	// (backup + strip) runs further down, gated the same way as the
+	// CLI-token relocation (CurrentVersion only) — see
+	// writeDelegateToolPolicyMigrationOnDisk (delegate_tool_policy_migration.go).
+	delegatePolicyKeysMigrated := migrateDelegateToolPolicyKeys(cfg)
+
 	// Post-refactor: tools.<name>.enabled is deprecated. If the loaded config
 	// carries explicit false values, translate them idempotently into
 	// security.tool_policies deny entries so operator intent is enforced
@@ -3462,6 +3539,17 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	// without it this migration re-derives the same deny entry on every
 	// hot-reload and an operator's "allow" choice never sticks.
 	legacyToolEnableFlags := migrateDeprecatedToolEnableFlags(cfg, data)
+
+	// tools.exec.* (EnableDenyPatterns/CustomDenyPatterns/CustomAllowPatterns/
+	// TimeoutSeconds/MaxBackgroundSeconds) is dead — ADR-036's merged `bash`
+	// tool never reads *config.Config's Tools.Exec at all (see the
+	// deprecation comments on ExecConfig above). Unlike the migrations above,
+	// there is nothing to translate in memory (the successor fields —
+	// Sandbox.ShellDenyPatterns / AgentConfig.ShellPolicy — are independent
+	// config surfaces an operator sets directly), so this is advisory-only:
+	// warn when a loaded config carries operator-customized values so they
+	// are not silently ignored.
+	warnDeprecatedExecConfigFields(data)
 
 	// Migrate the pre-FR-10.1 skills config shape (typed ClawHub singleton +
 	// separate Github block) into the unified Marketplaces list. Idempotent:
@@ -3511,6 +3599,67 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	// migration was never designed against.
 	if versionInfo.Version == CurrentVersion {
 		migrateCLITokenOutOfUsers(cfg, path, onSelfHeal)
+
+		// Persist the ADR-036 exec/workspace_shell/workspace_shell_bg -> bash
+		// tool-policy conversion to disk (FR-M3/FR-M4). Same CurrentVersion-
+		// only gating as the CLI-token relocation above and for the same
+		// reason (a v0 config's fully migrated state is already written by
+		// the v0-migration SaveConfig call further up). Runs BEFORE the
+		// tools.<name>.enabled strip below so that migration's own disk read
+		// sees the ORIGINAL, wholly pre-migration bytes for its backup
+		// (FR-M4) — the most conservative snapshot, even though the two
+		// migrations patch disjoint JSON paths (sandbox.tool_policies vs
+		// tools.<name>.enabled) and would not conflict either way. Best
+		// effort — see writeShellToolPolicyMigrationOnDisk
+		// (shell_tool_policy_migration.go).
+		if shellPolicyKeysMigrated {
+			shellWritten, backupPath, healErr := writeShellToolPolicyMigrationOnDisk(cfg, path)
+			if healErr != nil {
+				logger.WarnF("failed to persist bash tool-policy migration to config.json; "+
+					"runtime behavior is still correct (in-memory state already reflects the "+
+					"derived \"bash\" policy), but the on-disk file could not be self-healed", map[string]any{
+					"path":  path,
+					"error": healErr.Error(),
+				})
+			} else if shellWritten != nil {
+				logger.InfoF("exec/workspace_shell/workspace_shell_bg tool-policy keys migrated to \"bash\"; "+
+					"pre-migration backup written", map[string]any{
+					"path":        path,
+					"backup_path": backupPath,
+				})
+				if onSelfHeal != nil {
+					onSelfHeal(shellWritten)
+				}
+			}
+		}
+
+		// Persist the ADR-036 spawn/run_subagent/check_spawn_status ->
+		// delegate tool-policy conversion to disk. Same CurrentVersion-only
+		// gating as the CLI-token relocation above and for the same reason (a
+		// v0 config's fully migrated state is already written by the
+		// v0-migration SaveConfig call further up). Best effort — see
+		// writeDelegateToolPolicyMigrationOnDisk
+		// (delegate_tool_policy_migration.go).
+		if delegatePolicyKeysMigrated {
+			delegateWritten, delegateBackupPath, healErr := writeDelegateToolPolicyMigrationOnDisk(cfg, path)
+			if healErr != nil {
+				logger.WarnF("failed to persist delegate tool-policy migration to config.json; "+
+					"runtime behavior is still correct (in-memory state already reflects the "+
+					"derived \"delegate\" policy), but the on-disk file could not be self-healed", map[string]any{
+					"path":  path,
+					"error": healErr.Error(),
+				})
+			} else if delegateWritten != nil {
+				logger.InfoF("spawn/run_subagent/check_spawn_status tool-policy keys migrated to \"delegate\"; "+
+					"pre-migration backup written", map[string]any{
+					"path":        path,
+					"backup_path": delegateBackupPath,
+				})
+				if onSelfHeal != nil {
+					onSelfHeal(delegateWritten)
+				}
+			}
+		}
 
 		// Persist the tools.<name>.enabled=false → security.tool_policies deny
 		// migration to disk (issue: an operator's "allow" set via the Security

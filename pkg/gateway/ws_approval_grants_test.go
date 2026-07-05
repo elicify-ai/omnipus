@@ -4,237 +4,239 @@
 // When CGO is enabled, pkg/gateway imports pkg/channels/matrix which requires
 // the libolm system library (olm/olm.h). If that library is installed,
 // remove this build constraint and run tests normally.
+//
+// ADR-036 §3.4 retired the legacy WS-frame tool-approval gate
+// (wsApprovalHook, pkg/gateway/ws_approval.go): it ran BEFORE runTurn's TOCTOU
+// "ask" branch and unconditionally denied every ask-policy tool call after a
+// 90s timeout once its answering frontend UI (ExecApprovalBlock/
+// ExecApprovalTool) was removed in the same change — making the tool-approval
+// REST path (POST /api/v1/tool-approvals/{id}, the only path that was ever
+// actually reachable) unreachable in practice. The fix relocated grant
+// consultation into AgentLoop.CheckGrantOrRequestApproval, the SOLE point
+// where the session-scoped "Always Allow" grant store is now consulted.
+//
+// This file used to unit-test wsApprovalHook.ApproveTool directly. It has
+// been rewritten to test the NEW consultation point instead, preserving every
+// original scenario's intent:
+//   - policy deny overrides grant       -> TestToolApproval_PolicyDenyOverridesGrant
+//   - policy allow never prompts        -> TestToolApproval_PolicyAllowNeverPrompts
+//   - ask + grant auto-approves         -> TestCheckGrantOrRequestApproval_AskWithGrantAutoApproves
+//   - ask + no grant prompts            -> TestCheckGrantOrRequestApproval_AskWithoutGrantPrompts
+//   - grant scoped by (session, agent)  -> TestCheckGrantOrRequestApproval_GrantScopedByAgentAndSession
+//
+// The first two properties are no longer internal to one function the way
+// wsApprovalHook.ApproveTool was: policy resolution (AgentLoop.
+// ResolveApprovalToolPolicy / runTurn's resolveToolPolicyAtExec) and grant
+// consultation (AgentLoop.CheckGrantOrRequestApproval) are now two separate,
+// non-interacting subsystems. runTurn's TOCTOU dispatch calls
+// CheckGrantOrRequestApproval ONLY from the "ask" branch — "deny" denies via
+// `continue` before ever reaching it, and "allow" falls straight through to
+// execution without touching it — so a grant can never widen a deny verdict,
+// and an allow verdict never depends on one. The tests below prove that
+// independence directly at the policy-resolution layer, and
+// TestCheckGrantOrRequestApproval_* prove the grant-consultation layer in
+// isolation. The full history — grant recorded, a real spawnSubTurn
+// delegation, and the child inheriting it — is covered end-to-end by
+// pkg/agent/approval_grant_delegation_test.go.
 
 package gateway
 
 import (
 	"context"
+	"sync"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/dapicom-ai/omnipus/pkg/agent"
-	"github.com/dapicom-ai/omnipus/pkg/security"
+	"github.com/dapicom-ai/omnipus/pkg/bus"
+	"github.com/dapicom-ai/omnipus/pkg/config"
 )
 
-// TestApproveTool_PolicyDenyOverridesGrant proves ordering is preserved: a
-// policy verdict of "deny" must deny the tool call even when a matching
-// "Always Allow" grant already exists for this exact (session, agent, tool).
-// The policy resolver runs FIRST and its "deny" is authoritative — a granted
-// tool is never re-checked against the grant store once policy says deny.
-func TestApproveTool_PolicyDenyOverridesGrant(t *testing.T) {
-	conn := makeTestConn()
-	grants := security.NewApprovalGrantStore()
-	grants.Record("session-1", "agent-a", "exec")
-
-	hook := &wsApprovalHook{
-		conn:           conn,
-		registry:       newWSApprovalRegistry(),
-		timeout:        5 * time.Second,
-		approvalGrants: grants,
-		policyResolver: func(toolName, agentID string) string { return "deny" },
-	}
-
-	req := &agent.ToolApprovalRequest{
-		Tool:      "exec",
-		SessionID: "session-1",
-		Meta:      agent.EventMeta{AgentID: "agent-a"},
-	}
-
-	decision, err := hook.ApproveTool(context.Background(), req)
-	require.NoError(t, err)
-	assert.False(t, decision.IsApproved(), "policy deny must win even when a grant exists")
+// fakePolicyApprover is a test double for agent.PolicyApprover. It records
+// every RequestApproval call it receives (for assertions on whether the
+// interactive approval path was actually reached, and with what identity) and
+// returns a single scripted outcome.
+type fakePolicyApprover struct {
+	mu       sync.Mutex
+	calls    []agent.PolicyApprovalReq
+	approved bool
+	reason   string
 }
 
-// TestApproveTool_PolicyAllowNeverPrompts proves a policy verdict of "allow"
-// short-circuits before the grant-store check or any interactive prompt —
-// it never blocks waiting on the browser.
-func TestApproveTool_PolicyAllowNeverPrompts(t *testing.T) {
-	conn := makeTestConn()
-	hook := &wsApprovalHook{
-		conn:           conn,
-		registry:       newWSApprovalRegistry(),
-		timeout:        5 * time.Second,
-		approvalGrants: nil, // deliberately nil — allow must not even touch it
-		policyResolver: func(toolName, agentID string) string { return "allow" },
-	}
+func (f *fakePolicyApprover) RequestApproval(
+	_ context.Context,
+	req agent.PolicyApprovalReq,
+) (bool, string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, req)
+	return f.approved, f.reason
+}
 
-	req := &agent.ToolApprovalRequest{
-		Tool:      "exec",
-		SessionID: "session-1",
-		Meta:      agent.EventMeta{AgentID: "agent-a"},
-	}
+func (f *fakePolicyApprover) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.calls)
+}
 
-	decision, err := hook.ApproveTool(context.Background(), req)
-	require.NoError(t, err)
-	assert.True(t, decision.IsApproved(), "policy allow must approve without prompting")
-
-	select {
-	case <-conn.sendCh:
-		t.Error("policy allow must never send an exec_approval_request frame")
-	default:
-		// expected: nothing sent
+// minimalAgentLoopCfg returns the smallest config.Config that
+// agent.NewAgentLoop accepts, mirroring newTestWSHandler's setup.
+func minimalAgentLoopCfg(t *testing.T, extra ...config.AgentConfig) *config.Config {
+	t.Helper()
+	return &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080, DevModeBypass: true},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: t.TempDir(),
+				ModelName: "test-model",
+				MaxTokens: 4096,
+			},
+			List: extra,
+		},
 	}
 }
 
-// TestApproveTool_AskWithGrantAutoApproves is the direct fix regression test
-// at the ws_approval.go layer: policy "ask" + an existing grant for this
-// exact (session, agent, tool) must auto-approve as VerdictAlways WITHOUT
-// sending an exec_approval_request frame (no re-prompt).
-func TestApproveTool_AskWithGrantAutoApproves(t *testing.T) {
-	conn := makeTestConn()
-	grants := security.NewApprovalGrantStore()
-	grants.Record("session-1", "agent-a", "exec")
+// --- Policy resolution is independent of the grant store ---
 
-	hook := &wsApprovalHook{
-		conn:           conn,
-		registry:       newWSApprovalRegistry(),
-		timeout:        5 * time.Second,
-		approvalGrants: grants,
-		policyResolver: func(toolName, agentID string) string { return "ask" },
-	}
+// TestToolApproval_PolicyDenyOverridesGrant proves that policy resolution
+// (AgentLoop.ResolveApprovalToolPolicy — the same primitive runTurn's TOCTOU
+// dispatch uses to decide allow/ask/deny) never consults the grant store: a
+// "deny" verdict holds even when a matching "Always Allow" grant already
+// exists for the exact (session, agent, tool). Combined with runTurn's
+// structure (deny short-circuits with `continue` before
+// CheckGrantOrRequestApproval — the only grant consultation point — is ever
+// reached), this is what makes "policy deny overrides an existing grant" hold
+// for the system as a whole.
+func TestToolApproval_PolicyDenyOverridesGrant(t *testing.T) {
+	cfg := minimalAgentLoopCfg(t, config.AgentConfig{
+		ID: "agent-a",
+		Tools: &config.AgentToolsCfg{
+			Builtin: config.AgentBuiltinToolsCfg{
+				DefaultPolicy: config.ToolPolicyAllow,
+				Policies: map[string]config.ToolPolicy{
+					"exec": config.ToolPolicyDeny,
+				},
+			},
+		},
+	})
+	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
 
-	req := &agent.ToolApprovalRequest{
-		Tool:      "exec",
-		SessionID: "session-1",
-		Meta:      agent.EventMeta{AgentID: "agent-a"},
-	}
+	al.ApprovalGrants().Record("session-1", "agent-a", "exec")
+	require.True(t, al.ApprovalGrants().IsAllowed("session-1", "agent-a", "exec"),
+		"setup: the grant must be recorded before asserting policy ignores it")
 
-	decision, err := hook.ApproveTool(context.Background(), req)
-	require.NoError(t, err)
-	assert.True(t, decision.IsApproved(), "an existing grant must auto-approve")
-	assert.Equal(t, agent.VerdictAlways, decision.Verdict)
-
-	select {
-	case <-conn.sendCh:
-		t.Error("an auto-approved (granted) tool must never send an exec_approval_request frame")
-	default:
-		// expected: nothing sent
-	}
+	assert.Equal(t, "deny", al.ResolveApprovalToolPolicy("agent-a", "exec"),
+		"policy deny must hold regardless of an existing grant — policy resolution never consults the grant store")
 }
 
-// TestApproveTool_AskWithoutGrantPrompts proves the other half: policy "ask"
-// with NO existing grant must still send the interactive approval request
-// and block on the browser's decision — the fix must not widen approval
-// beyond what was explicitly granted.
-func TestApproveTool_AskWithoutGrantPrompts(t *testing.T) {
-	conn := makeTestConn()
-	reg := newWSApprovalRegistry()
-	hook := &wsApprovalHook{
-		conn:           conn,
-		registry:       reg,
-		timeout:        5 * time.Second,
-		approvalGrants: security.NewApprovalGrantStore(), // empty — no grant recorded
-		policyResolver: func(toolName, agentID string) string { return "ask" },
-	}
+// TestToolApproval_PolicyAllowNeverPrompts proves that a policy verdict of
+// "allow" resolves without any grant on file — it does not depend on, and
+// never touches, the grant store. Combined with runTurn's structure (an
+// "allow" verdict falls straight through to tool execution and never enters
+// the "ask" branch where CheckGrantOrRequestApproval lives), this is what
+// makes "policy allow never prompts" hold for the system as a whole.
+func TestToolApproval_PolicyAllowNeverPrompts(t *testing.T) {
+	cfg := minimalAgentLoopCfg(t, config.AgentConfig{
+		ID: "agent-a",
+		Tools: &config.AgentToolsCfg{
+			Builtin: config.AgentBuiltinToolsCfg{
+				DefaultPolicy: config.ToolPolicyAllow,
+			},
+		},
+	})
+	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
 
-	req := &agent.ToolApprovalRequest{
-		Tool:      "exec",
-		SessionID: "session-1",
-		Meta:      agent.EventMeta{AgentID: "agent-a"},
-	}
+	require.False(t, al.ApprovalGrants().IsAllowed("session-1", "agent-a", "exec"),
+		"sanity: no grant exists for this (session, agent, tool)")
 
-	go func() {
-		select {
-		case frameBytes := <-conn.sendCh:
-			var frame replayFrameDecoder
-			if err := unmarshalWSServerFrame(frameBytes, &frame); err != nil {
-				return
-			}
-			if frame.Type == "exec_approval_request" {
-				reg.resolve(frame.ID, agent.ApprovalDecision{Verdict: agent.VerdictAllow})
-			}
-		case <-time.After(2 * time.Second):
-		}
-	}()
-
-	decision, err := hook.ApproveTool(context.Background(), req)
-	require.NoError(t, err)
-	assert.True(t, decision.IsApproved(), "the browser's explicit allow must still be honored")
+	assert.Equal(t, "allow", al.ResolveApprovalToolPolicy("agent-a", "exec"),
+		"policy allow must resolve without ever consulting (or requiring) a grant")
 }
 
-// TestApproveTool_AlwaysGrantScopedByAgentAndSession is an end-to-end proof,
-// at the ws_approval.go layer, that recording a grant for one (session,
-// agent) does not leak to a different agent or a different session — the
-// core scoping fix (SEC consent boundary).
-func TestApproveTool_AlwaysGrantScopedByAgentAndSession(t *testing.T) {
-	conn := makeTestConn()
-	grants := security.NewApprovalGrantStore()
-	hook := &wsApprovalHook{
-		conn:           conn,
-		registry:       newWSApprovalRegistry(),
-		timeout:        5 * time.Second,
-		approvalGrants: grants,
-		policyResolver: func(toolName, agentID string) string { return "ask" },
-	}
+// --- AgentLoop.CheckGrantOrRequestApproval — the new consultation point ---
 
-	// First call: "always allow" from the browser for (session-1, agent-a, exec).
-	go func() {
-		select {
-		case frameBytes := <-conn.sendCh:
-			var frame replayFrameDecoder
-			if err := unmarshalWSServerFrame(frameBytes, &frame); err != nil {
-				return
-			}
-			if frame.Type == "exec_approval_request" {
-				hook.registry.resolve(frame.ID, agent.ApprovalDecision{Verdict: agent.VerdictAlways})
-			}
-		case <-time.After(2 * time.Second):
-		}
-	}()
-	firstReq := &agent.ToolApprovalRequest{
-		Tool:      "exec",
-		SessionID: "session-1",
-		Meta:      agent.EventMeta{AgentID: "agent-a"},
-	}
-	decision, err := hook.ApproveTool(context.Background(), firstReq)
-	require.NoError(t, err)
-	assert.True(t, decision.IsApproved())
+// TestCheckGrantOrRequestApproval_AskWithGrantAutoApproves is the direct fix
+// regression test: an existing grant for the exact (session, agent, tool)
+// must auto-approve WITHOUT ever reaching the interactive approver (no
+// re-prompt).
+func TestCheckGrantOrRequestApproval_AskWithGrantAutoApproves(t *testing.T) {
+	al := mustAgentLoop(t, minimalAgentLoopCfg(t), bus.NewMessageBus(), &restMockProvider{})
 
-	// Second call: SAME session, SAME agent, SAME tool -> auto-approved, no prompt.
-	secondReq := &agent.ToolApprovalRequest{
-		Tool:      "exec",
-		SessionID: "session-1",
-		Meta:      agent.EventMeta{AgentID: "agent-a"},
-	}
-	decision2, err := hook.ApproveTool(context.Background(), secondReq)
-	require.NoError(t, err)
-	assert.True(t, decision2.IsApproved())
-	assert.Equal(t, agent.VerdictAlways, decision2.Verdict)
+	fake := &fakePolicyApprover{approved: false, reason: "must not be called"}
+	al.SetToolApprover(fake)
 
-	// Third call: DIFFERENT agent, same session/tool -> must still prompt.
-	thirdCh := make(chan struct{}, 1)
-	go func() {
-		select {
-		case frameBytes := <-conn.sendCh:
-			var frame replayFrameDecoder
-			if decodeErr := unmarshalWSServerFrame(frameBytes, &frame); decodeErr != nil {
-				return
-			}
-			if frame.Type == "exec_approval_request" {
-				thirdCh <- struct{}{}
-				hook.registry.resolve(
-					frame.ID,
-					agent.ApprovalDecision{Verdict: agent.VerdictDeny, Reason: "denied for test"},
-				)
-			}
-		case <-time.After(2 * time.Second):
-		}
-	}()
-	thirdReq := &agent.ToolApprovalRequest{
-		Tool:      "exec",
-		SessionID: "session-1",
-		Meta:      agent.EventMeta{AgentID: "agent-b"},
-	}
-	decision3, err := hook.ApproveTool(context.Background(), thirdReq)
-	require.NoError(t, err)
-	assert.False(t, decision3.IsApproved(), "a different agent must not reuse agent-a's grant")
-	select {
-	case <-thirdCh:
-		// expected: a fresh prompt was sent for the different agent
-	default:
-		t.Error("a different agent must trigger a fresh exec_approval_request")
-	}
+	al.ApprovalGrants().Record("session-1", "agent-a", "exec")
+
+	approved, reason := al.CheckGrantOrRequestApproval(
+		context.Background(), "session-1", "agent-a", "exec", "call-1", "turn-1", nil,
+	)
+	assert.True(t, approved, "an existing grant must auto-approve")
+	assert.Empty(t, reason)
+	assert.Equal(t, 0, fake.callCount(),
+		"an auto-approved (granted) tool must never reach the interactive approver")
+}
+
+// TestCheckGrantOrRequestApproval_AskWithoutGrantPrompts proves the other
+// half: with NO existing grant, the interactive approver MUST be consulted —
+// the fix must not widen approval beyond what was explicitly granted. It also
+// verifies the request forwarded to the approver carries the correct
+// (session, agent, tool, tool_call_id, turn_id, args) identity.
+func TestCheckGrantOrRequestApproval_AskWithoutGrantPrompts(t *testing.T) {
+	al := mustAgentLoop(t, minimalAgentLoopCfg(t), bus.NewMessageBus(), &restMockProvider{})
+
+	fake := &fakePolicyApprover{approved: true, reason: ""}
+	al.SetToolApprover(fake)
+
+	approved, reason := al.CheckGrantOrRequestApproval(
+		context.Background(), "session-1", "agent-a", "exec", "call-1", "turn-1",
+		map[string]any{"command": "ls"},
+	)
+	assert.True(t, approved, "the approver's explicit allow must be honored")
+	assert.Empty(t, reason)
+
+	require.Equal(t, 1, fake.callCount(), "no grant on file — the interactive approver must be consulted")
+	got := fake.calls[0]
+	assert.Equal(t, "exec", got.ToolName)
+	assert.Equal(t, "agent-a", got.AgentID)
+	assert.Equal(t, "session-1", got.SessionID)
+	assert.Equal(t, "call-1", got.ToolCallID)
+	assert.Equal(t, "turn-1", got.TurnID)
+	assert.Equal(t, "ls", got.Args["command"])
+}
+
+// TestCheckGrantOrRequestApproval_GrantScopedByAgentAndSession is an
+// end-to-end proof that recording a grant for one (session, agent) does not
+// leak to a different agent or a different session — the core scoping fix
+// (SEC consent boundary).
+func TestCheckGrantOrRequestApproval_GrantScopedByAgentAndSession(t *testing.T) {
+	al := mustAgentLoop(t, minimalAgentLoopCfg(t), bus.NewMessageBus(), &restMockProvider{})
+
+	fake := &fakePolicyApprover{approved: false, reason: "denied for test"}
+	al.SetToolApprover(fake)
+
+	al.ApprovalGrants().Record("session-1", "agent-a", "exec")
+
+	// Same session, same agent, same tool -> auto-approved, no prompt.
+	approved, _ := al.CheckGrantOrRequestApproval(
+		context.Background(), "session-1", "agent-a", "exec", "c1", "t1", nil,
+	)
+	assert.True(t, approved)
+	assert.Equal(t, 0, fake.callCount())
+
+	// Different agent, same session/tool -> must still prompt.
+	approved, reason := al.CheckGrantOrRequestApproval(
+		context.Background(), "session-1", "agent-b", "exec", "c2", "t1", nil,
+	)
+	assert.False(t, approved, "a different agent must not reuse agent-a's grant")
+	assert.Equal(t, "denied for test", reason)
+	assert.Equal(t, 1, fake.callCount(), "a different agent must trigger a fresh approval request")
+
+	// Different session, same agent/tool -> must still prompt.
+	approved, _ = al.CheckGrantOrRequestApproval(
+		context.Background(), "session-2", "agent-a", "exec", "c3", "t1", nil,
+	)
+	assert.False(t, approved, "a different session must not reuse the grant")
+	assert.Equal(t, 2, fake.callCount(), "a different session must trigger a fresh approval request")
 }

@@ -243,7 +243,7 @@ func TestIntegration_RecallSpansThreeScopes(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestIntegration_ContextCompactionOverflow(t *testing.T) {
-	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled // only al+cleanup used
+	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled // only al and cleanup are needed for this test
 	defer cleanup()
 
 	agent := al.GetRegistry().GetDefaultAgent()

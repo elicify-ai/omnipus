@@ -387,10 +387,9 @@ func coreAgentSeed(
 			"recall_memory":     allow,
 			"run_retrospective": allow,
 			// Deep-research delegation: fan out parallel research subagents
-			// (spawn → many workers/Researcher) and poll them, then synthesize.
-			"spawn":              allow,
-			"run_subagent":       allow,
-			"check_spawn_status": allow,
+			// (delegate → many workers/Researcher) and poll them, then synthesize.
+			// ADR-036 merged spawn/run_subagent/check_spawn_status into "delegate".
+			"delegate": allow,
 			// Present / route / share an artifact.
 			"send_message":      allow,
 			"hand_off":          allow,
@@ -424,10 +423,10 @@ func coreAgentSeed(
 			"fetch_url":  allow,
 			// Web serving — scaffolds and serves web apps in the sandbox.
 			"serve_web": allow,
-			// Shell execution — sandboxed workspace shell (foreground + background).
-			"exec":               allow,
-			"workspace_shell":    allow,
-			"workspace_shell_bg": allow,
+			// Shell execution — sandboxed shell, foreground + background
+			// (ADR-036: exec/workspace_shell/workspace_shell_bg merged into
+			// one universally-registered tool, governed by this policy alone).
+			"bash": allow,
 			// Communication / routing.
 			"send_message":      allow,
 			"send_file":         allow,
@@ -438,11 +437,10 @@ func coreAgentSeed(
 			"recall_memory":     allow,
 			"run_retrospective": allow,
 			"set_todos":         allow,
-			// Delegation — spawn subagents, poll them, list who's available.
-			"spawn":              allow,
-			"run_subagent":       allow,
-			"check_spawn_status": allow,
-			"list_agents":        allow,
+			// Delegation — delegate to subagents, poll them, list who's available.
+			// ADR-036 merged spawn/run_subagent/check_spawn_status into "delegate".
+			"delegate":    allow,
+			"list_agents": allow,
 			// Task management (current workspace).
 			"create_task": allow,
 			"list_tasks":  allow,
@@ -737,20 +735,12 @@ func SeedConfig(cfg *config.Config) bool {
 			}
 		}
 
-		// Jim is the operator-blessed agent for workspace_shell / workspace_shell_bg.
-		// Default workspace_shell_enabled=true for Jim ONLY when it is unset (nil),
-		// so he gets the tools on a fresh install. An operator's EXPLICIT false MUST
-		// survive — SeedConfig runs on every boot, so re-enabling an explicit false
-		// here would silently re-enable shell exec for ALL agents on the next restart
-		// (Hard-Constraint #6: explicit security opt-outs are never overridden).
-		// validator.go no longer materializes nil→&false, so a nil-only check is
-		// sufficient and correct.
-		wse := cfg.Sandbox.Experimental.WorkspaceShellEnabled
-		if ca.ID == IDJim && wse == nil {
-			t := true
-			cfg.Sandbox.Experimental.WorkspaceShellEnabled = &t
-			modified = true
-		}
+		// ADR-036: bash is now universally registered (like the old `exec`),
+		// governed exclusively by ToolPolicyCfg — there is no more
+		// experimental.workspace_shell_enabled gate to default here. Jim's
+		// "bash": allow entry (coreAgentSeed above / the re-enforcement loop's
+		// existing policy repair) is the only thing needed for him to get
+		// shell access on a fresh install.
 
 		// Heartbeat is now workspace-scoped (ADR-027): per-agent heartbeat fields
 		// are decommissioned. No migration needed — the workspace handler seeds
@@ -809,16 +799,6 @@ func SeedConfig(cfg *config.Config) bool {
 			}
 		}
 		cfg.Agents.List = append(cfg.Agents.List, newAgent)
-		// Jim is the operator-blessed agent for workspace_shell / workspace_shell_bg.
-		// Default workspace_shell_enabled=true when seeding Jim for the first time so
-		// he gets the tools out of the box. Fires ONLY when unset (nil): an operator's
-		// explicit false must survive (Hard-Constraint #6 — see the re-enforcement
-		// loop above for the full rationale).
-		wse2 := cfg.Sandbox.Experimental.WorkspaceShellEnabled
-		if ca.ID == IDJim && wse2 == nil {
-			t := true
-			cfg.Sandbox.Experimental.WorkspaceShellEnabled = &t
-		}
 		modified = true
 	}
 	return modified
@@ -829,15 +809,32 @@ func SeedConfig(cfg *config.Config) bool {
 //
 //   - default_policy: allow  (per FR-008: explicit allow-by-default)
 //   - policies: {"system.*": "deny"}  (privilege rail — no system.* by default)
+//   - policies: {"bash": "deny"}  (CRIT-001, bash-tool-spec.md FR-B12 — see below)
 //
 // Callers should embed this into config.AgentConfig.Tools when constructing a
 // new custom agent via the REST API or create_agent tool.
+//
+// bash:deny seed rationale (CRIT-001/FR-B12): pkg/tools/compositor.go's
+// passesScopeGate does NOT hard-deny ScopeCore tools (which "bash" is) for
+// custom agents — it defers to the merged policy, which falls through to
+// DefaultPolicy (allow, set above). Without this explicit seed, a fresh
+// custom agent could call bash with zero configuration. This is the SINGLE
+// shared seed location for both agent-creation paths (the REST
+// POST /api/v1/agents handler in pkg/gateway/rest.go's createAgent, and the
+// LLM-driven system.agent.create tool in
+// pkg/sysagent/tools/agent.go's AgentCreateTool.Execute) — both call this
+// constructor rather than seeding independently, so the two paths cannot
+// drift out of sync again. Renamed from "exec" to "bash" by ADR-036 (the
+// tool-consolidation work this seed anticipated — see the migration in
+// pkg/config/shell_tool_policy_migration.go for existing persisted "exec"
+// policy entries).
 func NewCustomAgentToolsCfg() *config.AgentToolsCfg {
 	return &config.AgentToolsCfg{
 		Builtin: config.AgentBuiltinToolsCfg{
 			DefaultPolicy: config.ToolPolicyAllow,
 			Policies: map[string]config.ToolPolicy{
 				"system.*": config.ToolPolicyDeny,
+				"bash":     config.ToolPolicyDeny,
 			},
 		},
 	}
@@ -860,7 +857,7 @@ func Jim() *CoreAgent {
 			"search_web", "fetch_url",
 			"send_message", "send_file",
 			"create_task", "update_task", "list_tasks",
-			"cron", "spawn", "run_subagent",
+			"cron", "delegate",
 			"hand_off", "return_to_default",
 		},
 	}
@@ -965,7 +962,7 @@ func Planner() *CoreAgent {
 		DefaultTools: []string{
 			"read_file", "list_directory",
 			"create_task", "update_task", "list_tasks",
-			"run_subagent", "spawn",
+			"delegate",
 			"remember", "recall_memory",
 			"send_message",
 		},

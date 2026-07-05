@@ -773,7 +773,6 @@ describe('ClientFrameTypes — contract test', () => {
       'auth',
       'message',
       'cancel',
-      'exec_approval_response',
       'ping',
       'attach_session',
       'device_pairing_response',
@@ -853,7 +852,7 @@ describe('WsConnection.send — OPEN-socket throw treated as failed send (#253)'
   })
 })
 
-// ── Parametrized direction-filter: all 8 client frame types ───────────────────
+// ── Parametrized direction-filter: all 7 client frame types ───────────────────
 //
 // Traces to: fix-Y — pr-test-analyzer gap: parametrized direction-filter coverage
 // for all client→server frame types.
@@ -869,17 +868,13 @@ describe('WsConnection direction-filter — all client frame types rejected when
     resetUnknownFrameTypeCount()
   })
 
-  // The 8 client frame types with minimal valid payloads that would otherwise
+  // The 7 client frame types with minimal valid payloads that would otherwise
   // satisfy their Zod schemas (ensuring rejection is from direction filter, not
   // schema validation).
   const clientFramePayloads: Array<{ type: string; payload: Record<string, unknown> }> = [
     { type: 'auth', payload: { type: 'auth', token: 'spoofed_token_value_here_x' } },
     { type: 'message', payload: { type: 'message', content: 'hello', session_id: 's1' } },
     { type: 'cancel', payload: { type: 'cancel', session_id: 's1' } },
-    {
-      type: 'exec_approval_response',
-      payload: { type: 'exec_approval_response', id: 'appr_1', decision: 'allow' },
-    },
     { type: 'ping', payload: { type: 'ping' } },
     { type: 'attach_session', payload: { type: 'attach_session', session_id: 's1' } },
     {
@@ -897,7 +892,7 @@ describe('WsConnection direction-filter — all client frame types rejected when
   it.each(clientFramePayloads)(
     '$type — spoofed server→client direction is rejected, dropped counter increments',
     ({ type: frameType, payload }) => {
-      // Traces to: fix-Y — direction filter must reject all 8 client frame types
+      // Traces to: fix-Y — direction filter must reject all 7 client frame types
       // when spoofed as server-originated frames.
       const cbs = makeCallbacks()
       const conn = new WsConnection(cbs)

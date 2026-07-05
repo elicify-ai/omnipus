@@ -3,7 +3,7 @@
 //
 // Copyright (c) 2026 Omnipus contributors
 
-// Package config — single-account invariant diagnostic.
+// Single-account invariant diagnostic.
 //
 // pkg/gateway/auth.go's checkBearerAuth, pkg/gateway/websocket.go's
 // authenticateWS, and pkg/gateway/rest_auth.go's withOptionalAuth all LOOP
@@ -33,6 +33,7 @@
 // B's still-real Gateway.Users row out from under them, before B ever gets
 // a chance to log in. Logging only, with zero side effects, cannot race
 // anything.
+
 package config
 
 import "github.com/dapicom-ai/omnipus/pkg/logger"

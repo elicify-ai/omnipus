@@ -4,6 +4,14 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
+// Package gateway implements the Omnipus HTTP/WS API gateway: REST handlers
+// (rest*.go), WebSocket streaming (websocket*.go), the embedded SPA
+// (go:embed), auth (auth.go/rest_auth.go), and the credential/service boot
+// sequence (this file's Run/RunWithOptions/RunContext) that wires config,
+// credentials, the agent loop, and the channel manager together and starts
+// the gateway.port/preview_port listeners. REST handlers that persist
+// config always go through safeUpdateConfigJSON (never config.SaveConfig)
+// so encrypted credential references in config.json are never clobbered.
 package gateway
 
 import (
@@ -1488,29 +1496,26 @@ func setupAndStartServices(
 			)
 		}
 	}
-	// Fix-5: warn when workspace.shell is enabled on a non-Linux host where the
-	// kernel sandbox (Landlock + seccomp) is unavailable. Single-shot at boot.
+	// Fix-5: warn when bash's hardened path is running on a non-Linux host
+	// where the kernel sandbox (Landlock + seccomp) is unavailable. Single-shot
+	// at boot. Pre-ADR-036 this only fired when the (now-retired)
+	// experimental.workspace_shell_enabled gate was on, because only
+	// workspace_shell/workspace_shell_bg routed through sandbox.ResolveLimits;
+	// `bash` now routes EVERY agent's shell access through that same
+	// mechanism universally (matching the old `exec` tool's universal
+	// registration), so the warning now fires unconditionally on non-Linux
+	// boot rather than being gated on a flag that no longer exists.
 	if runtime.GOOS != "linux" {
-		wsEnabled := cfg.Sandbox.Experimental.WorkspaceShellEnabled != nil &&
-			*cfg.Sandbox.Experimental.WorkspaceShellEnabled
-		if !wsEnabled {
-			// Also check per-agent overrides — future-proofing when per-agent flags land.
-			for _, ag := range cfg.Agents.List {
-				_ = ag // per-agent workspace_shell_enabled not yet per-config; global only
-			}
-		}
-		if wsEnabled {
-			fmt.Fprintf(
-				os.Stderr,
-				"WARN: kernel sandbox unavailable on %s; workspace.shell runs with application-level path checks only — do not enable on multi-tenant systems\n",
-				runtime.GOOS,
-			)
-		}
+		fmt.Fprintf(
+			os.Stderr,
+			"WARN: kernel sandbox unavailable on %s; bash runs with application-level path checks only — do not enable on multi-tenant systems\n",
+			runtime.GOOS,
+		)
 	}
 
-	// Fix-6: warn when any agent with remote channels has a non-deny exec policy.
+	// Fix-6: warn when any agent with remote channels has a non-deny bash policy.
 	// The GHSA-pv8c-p6jf-3fpp channel block was removed; operators must now
-	// configure per-agent ToolPolicyCfg to restrict exec.
+	// configure per-agent ToolPolicyCfg to restrict bash.
 	emitGHSARemovalWarn(cfg)
 
 	// Construct the web_serve static-mode (Tier 1) and dev-mode (Tier 3)
@@ -2446,10 +2451,13 @@ func shouldWarnPreviewOrigin(previewHost, previewOrigin string) bool {
 }
 
 // emitGHSARemovalWarn logs a WARN when any agent that has a remote channel
-// mapping does NOT explicitly deny the exec tool. The GHSA-pv8c-p6jf-3fpp
-// per-channel exec block was removed; exec access is now governed entirely by
+// mapping does NOT explicitly deny the bash tool. The GHSA-pv8c-p6jf-3fpp
+// per-channel exec block was removed; bash access is now governed entirely by
 // per-agent ToolPolicyCfg. This single-shot boot warning prompts operators to
-// review agent policies.
+// review agent policies. ADR-036 renamed the checked tool from "exec" to
+// "bash" — this incidentally now also covers what used to be the separate
+// workspace_shell/workspace_shell_bg tools, which this warning never covered
+// before (they are the same tool now).
 func emitGHSARemovalWarn(cfg *config.Config) {
 	// Gather enabled remote channel types from the instance map.
 	remoteChannelTypes := map[string]bool{
@@ -2471,7 +2479,7 @@ func emitGHSARemovalWarn(cfg *config.Config) {
 		return
 	}
 
-	// Scan agents: flag any that do not explicitly deny exec.
+	// Scan agents: flag any that do not explicitly deny bash.
 	var flagged []string
 	for _, ag := range cfg.Agents.List {
 		if ag.Tools == nil {
@@ -2479,7 +2487,7 @@ func emitGHSARemovalWarn(cfg *config.Config) {
 			flagged = append(flagged, ag.ID)
 			continue
 		}
-		policy := ag.Tools.Builtin.ResolvePolicy("exec")
+		policy := ag.Tools.Builtin.ResolvePolicy("bash")
 		if policy != config.ToolPolicyDeny {
 			flagged = append(flagged, ag.ID)
 		}
@@ -2494,8 +2502,8 @@ func emitGHSARemovalWarn(cfg *config.Config) {
 		channels = append(channels, ch)
 	}
 	slog.Warn(
-		"exec tool no longer blocked at the channel layer (was GHSA-pv8c-p6jf-3fpp). "+
-			"Agents with remote channels and non-deny exec policy: ["+strings.Join(flagged, ", ")+
+		"bash tool no longer blocked at the channel layer (was GHSA-pv8c-p6jf-3fpp). "+
+			"Agents with remote channels and non-deny bash policy: ["+strings.Join(flagged, ", ")+
 			"]. Review per-agent ToolPolicyCfg.",
 		"remote_channels", channels,
 		"flagged_agents", flagged,

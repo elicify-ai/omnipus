@@ -8,7 +8,6 @@ enum:
   - auth
   - message
   - cancel
-  - exec_approval_response
   - ping
   - attach_session
   - device_pairing_response
@@ -22,7 +21,6 @@ enum:
   - tool_call_result
   - subagent_start
   - subagent_end
-  - exec_approval_request
   - task_status_changed
   - replay_message
   - rate_limit
@@ -33,9 +31,7 @@ enum:
   - system_overload
   - replay_warning
   - cancel_stage
-  - exec_approval_expired
   - pong
   # ── Server → client (internal / ack) ────────────────────────────────────────
   - session_close_ack
-  - exec_approval_response_ack
   - device_pairing_request

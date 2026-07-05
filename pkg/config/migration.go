@@ -670,11 +670,30 @@ var toolEnableToPolicy = []legacyToolEnableFlag{
 	{"mcp", "mcp_*"},
 	{"web", "search_web"},
 	{"web_fetch", "fetch_url"},
-	{"exec", "exec"},
+	// ADR-036 FR-M2: exec/workspace_shell/workspace_shell_bg were consolidated
+	// into a single "bash" tool. The legacy tools.exec.enabled=false boolean
+	// flag must still translate into a deny — but at the NEW policy glob
+	// ("bash"), not the retired "exec" name, so it lines up with
+	// migrateShellToolPolicyKeys (shell_tool_policy_migration.go), which
+	// converts any already-present exec/workspace_shell/workspace_shell_bg
+	// ToolPolicyCfg-shape entries into "bash" BEFORE this migration runs (see
+	// the call-site ordering comment in loadConfigInternal). That ordering is
+	// what lets this migration's own no-clobber guard (only write "deny" when
+	// the glob has no existing entry) see a real operator-set "bash" value
+	// instead of blindly writing "deny" under a key ("bash") that, from this
+	// migration's perspective alone, would otherwise look untouched.
+	{"exec", "bash"},
 	{"cron", "cron"},
-	{"spawn", "spawn"},
-	{"spawn_status", "check_spawn_status"},
-	{"subagent", "run_subagent"},
+	// ADR-036 (2026-07-04): spawn/run_subagent/check_spawn_status were
+	// consolidated into a single "delegate" tool (docs/internal/specs/
+	// agent-delegation-spec.md). Same pattern as the exec→bash row above: all
+	// three legacy jsonKeys now translate to the ONE new policy glob
+	// ("delegate"), so an operator's prior enabled=false intent on any of the
+	// three legacy tools still lands as a real deny once migrated, instead of
+	// silently re-enabling delegation under a glob no legacy flag maps to.
+	{"spawn", "delegate"},
+	{"spawn_status", "delegate"},
+	{"subagent", "delegate"},
 	{"write_file", "write_file"},
 	{"edit_file", "edit_file"},
 	{"append_file", "append_file"},

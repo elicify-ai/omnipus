@@ -166,10 +166,12 @@ func TestExecCommandInjection(t *testing.T) {
 	// tool isn't rejecting everything vacuously. If a plain `echo hi` fails,
 	// the deny guard is over-broad or the tool is broken.
 	t.Run("control_plain_echo_allowed", func(t *testing.T) {
+		// No cwd: bash's cwd guard now rejects any absolute path unconditionally
+		// (7-reviewer gate CRITICAL fix) -- omitting cwd defaults to the
+		// workspace root, which is what "workspace" already is.
 		result := tool.Execute(baseCtx, map[string]any{
 			"action":  "run",
 			"command": "echo hi",
-			"cwd":     workspace,
 		})
 		require.NotNil(t, result)
 		require.False(t, result.IsError,
@@ -179,10 +181,14 @@ func TestExecCommandInjection(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			// No cwd here either -- same reasoning as control_plain_echo_allowed
+			// above: an absolute cwd would now be rejected by the workspace-escape
+			// guard itself, which would incidentally satisfy this test's permissive
+			// "any IsError=true is healthy" assertion for the wrong reason (cwd
+			// rejection, not deny-pattern detection).
 			result := tool.Execute(baseCtx, map[string]any{
 				"action":  "run",
 				"command": tc.command,
-				"cwd":     workspace,
 			})
 			require.NotNil(t, result, "tool returned nil result for %q", tc.command)
 
@@ -264,10 +270,13 @@ func TestExecCommandInjection_WorkspaceRestriction(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			// No cwd: this test targets the command-text out-of-workspace-path
+			// guard specifically, not the cwd guard (which now rejects absolute
+			// paths unconditionally regardless of destination -- see
+			// command_injection_test.go's other cases for that fix's rationale).
 			result := tool.Execute(ctx, map[string]any{
 				"action":  "run",
 				"command": tc.command,
-				"cwd":     workspace,
 			})
 			require.NotNil(t, result)
 			require.True(t, result.IsError,

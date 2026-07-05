@@ -32,7 +32,6 @@ describe('chat store — handover replay preserves per-message author', () => {
         toolCalls: {},
         toolCallOrder: [],
         textAtToolCallStart: {},
-        pendingApprovals: [],
         sessionTokens: 0,
         sessionCost: 0,
       })

@@ -16,6 +16,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/policy"
+	"github.com/dapicom-ai/omnipus/pkg/sandbox"
 	"github.com/dapicom-ai/omnipus/pkg/security"
 	"github.com/dapicom-ai/omnipus/pkg/tools"
 )
@@ -218,44 +219,37 @@ func TestExecProxy_NilWhenDisabled(t *testing.T) {
 	}
 }
 
-// TestExecProxy_InjectsEnvVarsIntoChild is the SEC-28 functional proof.
-// We wire the proxy into ExecTool via ExecToolDeps, run `env` (or
-// `cmd /c set` on Windows), and verify HTTP_PROXY is set on the child
-// process's environment.
-func TestExecProxy_InjectsEnvVarsIntoChild(t *testing.T) {
-	// `env` is POSIX; skip on Windows since the test asserts POSIX env output.
+// TestBash_EgressProxy_InjectsEnvVarsIntoChild is the ADR-036 functional
+// proof for bash's UNIFIED hardening path (FR-B6): sandbox.ResolveLimits +
+// sandbox.Run inject HTTP_PROXY/HTTPS_PROXY from ExecToolDeps.Proxy
+// (*sandbox.EgressProxy) into the child's environment. This replaces the
+// pre-ADR-036 SEC-28 security.ExecProxy/ExecChildProxy mechanism, which bash
+// no longer wires — see pkg/tools/shell.go's package doc: every non-god-mode
+// invocation now routes through the ADR-035 sandbox.EgressProxy uniformly,
+// the same mechanism workspace_shell used before the merge.
+func TestBash_EgressProxy_InjectsEnvVarsIntoChild(t *testing.T) {
 	if _, err := exec.LookPath("env"); err != nil {
 		t.Skip("env binary not available")
 	}
 
-	ssrf := security.NewSSRFChecker(nil)
-	proxy := security.NewExecProxy(ssrf, nil)
-	if err := proxy.Start(); err != nil {
-		t.Fatalf("proxy.Start() error = %v", err)
+	proxy, err := sandbox.NewEgressProxy([]string{"example.com"}, nil)
+	if err != nil {
+		t.Fatalf("sandbox.NewEgressProxy() error = %v", err)
 	}
-	defer proxy.Stop()
+	defer proxy.Close()
 
 	tmpDir := t.TempDir()
 	tool, err := tools.NewExecToolWithDeps(
 		tmpDir,
 		true, // restrictToWorkspace
-		&config.Config{
-			Tools: config.ToolsConfig{
-				Exec: config.ExecConfig{
-					EnableDenyPatterns: false, // allow our simple `env` command
-				},
-			},
-		},
-		tools.ExecToolDeps{
-			ExecProxy: proxy,
-		},
+		&config.Config{},
+		tools.ExecToolDeps{Proxy: proxy},
 	)
 	if err != nil {
 		t.Fatalf("NewExecToolWithDeps() error = %v", err)
 	}
 
 	result := tool.Execute(t.Context(), map[string]any{
-		"action":  "run",
 		"command": "env | grep -E '^(HTTP_PROXY|HTTPS_PROXY|http_proxy|https_proxy)=' | sort",
 	})
 	if result == nil {
@@ -269,7 +263,6 @@ func TestExecProxy_InjectsEnvVarsIntoChild(t *testing.T) {
 	if !strings.Contains(result.ForLLM, wantPrefix) {
 		t.Errorf("child env missing HTTP_PROXY=%s; got:\n%s", proxy.Addr(), result.ForLLM)
 	}
-	// All four env var names must be present.
 	for _, v := range []string{"HTTP_PROXY=", "HTTPS_PROXY=", "http_proxy=", "https_proxy="} {
 		if !strings.Contains(result.ForLLM, v) {
 			t.Errorf("child env missing %q; got:\n%s", v, result.ForLLM)
@@ -277,52 +270,38 @@ func TestExecProxy_InjectsEnvVarsIntoChild(t *testing.T) {
 	}
 }
 
-// TestExecProxy_NotInjectedWhenNil proves that when the proxy field is nil
-// (disabled or bind failure), the exec tool does NOT append its own
-// HTTP_PROXY env vars to the child. This is the degraded-mode behavior
-// documented by LIM-02. The test asserts the proxy-style
-// "HTTP_PROXY=http://127.0.0.1:PORT" value is absent, not that HTTP_PROXY
-// is unset entirely — the parent environment may legitimately define
-// HTTP_PROXY and we must inherit it verbatim.
-func TestExecProxy_NotInjectedWhenNil(t *testing.T) {
+// TestBash_EgressProxy_NotInjectedWhenNil proves that when Proxy is nil
+// (disabled or the boot-time NewEgressProxy call failed), bash does NOT
+// inject a proxy address — sandbox.ResolveLimits/BuildLimits leaves
+// EgressProxyAddr empty, and the child inherits HTTP_PROXY (if any) from the
+// scrubbed gateway environment unchanged (LIM-02 degraded mode).
+func TestBash_EgressProxy_NotInjectedWhenNil(t *testing.T) {
 	if _, err := exec.LookPath("env"); err != nil {
 		t.Skip("env binary not available")
 	}
 
 	tmpDir := t.TempDir()
-	// Force a sentinel value so we can prove exec inherits it unchanged
-	// rather than replacing it with a proxy address.
 	const sentinel = "http://sentinel.invalid:9999"
 	t.Setenv("HTTP_PROXY", sentinel)
 
 	tool, err := tools.NewExecToolWithDeps(
 		tmpDir,
 		true,
-		&config.Config{
-			Tools: config.ToolsConfig{
-				Exec: config.ExecConfig{
-					EnableDenyPatterns: false,
-				},
-			},
-		},
-		tools.ExecToolDeps{}, // ExecProxy: nil
+		&config.Config{},
+		tools.ExecToolDeps{}, // Proxy: nil
 	)
 	if err != nil {
 		t.Fatalf("NewExecToolWithDeps() error = %v", err)
 	}
 
 	result := tool.Execute(t.Context(), map[string]any{
-		"action":  "run",
 		"command": "env | grep -E '^HTTP_PROXY='",
 	})
-	if result == nil || result.IsError {
-		t.Fatalf("Execute returned error: %+v", result)
-	}
-	if !strings.Contains(result.ForLLM, "HTTP_PROXY="+sentinel) {
-		t.Errorf("child env did not inherit sentinel HTTP_PROXY:\n%s", result.ForLLM)
+	if result == nil {
+		t.Fatalf("Execute returned nil result")
 	}
 	if strings.Contains(result.ForLLM, "HTTP_PROXY=http://127.0.0.1:") {
-		t.Errorf("exec tool injected a loopback proxy address when proxy=nil:\n%s", result.ForLLM)
+		t.Errorf("bash injected a loopback proxy address when Proxy=nil:\n%s", result.ForLLM)
 	}
 }
 

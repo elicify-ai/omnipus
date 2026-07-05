@@ -81,10 +81,11 @@ func streamReplay(
 	seenPaths := make(map[string]struct{})
 	// ── Pass 1: build ancillary indexes ─────────────────────────────────────
 
-	// spawnIDsPresent: set of ToolCall.IDs where tool == "spawn" AND at least
-	// one other tool call in the transcript has ParentToolCallID == that ID.
-	// This is the signal that the parent span has live children to bracket.
-	// Reuse the map from the pre-computed stats rather than recomputing.
+	// spawnIDsPresent: set of ToolCall.IDs where tool == "spawn" or "delegate"
+	// AND at least one other tool call in the transcript has ParentToolCallID
+	// == that ID. This is the signal that the parent span has live children
+	// to bracket. See buildSpawnIDsWithChildren's own doc comment below for
+	// why both tool names are checked (ADR-036 spawn→delegate rename).
 	spawnIDsWithChildren := buildSpawnIDsWithChildren(entries)
 
 	// deduped: for each ToolCall.ID keep only the index of the last occurrence
@@ -492,12 +493,18 @@ func buildMediaFrame(
 // Two-pass approach: pass 1 collects isSpawn (spawn IDs seen in the transcript),
 // pass 2 collects withChildren (spawn IDs that have at least one child).
 // Returning withChildren directly eliminates the three-map + false-sentinel pattern.
+//
+// ADR-036 (2026-07-04) renamed the async delegation tool from "spawn" to the
+// unified "delegate" (merged with run_subagent/check_spawn_status). Historical
+// transcripts recorded before the merge still carry tool=="spawn" — this must
+// keep matching for those sessions to replay correctly. New transcripts carry
+// tool=="delegate" instead, so both names are checked here.
 func buildSpawnIDsWithChildren(entries []session.TranscriptEntry) map[string]bool {
-	// Pass 1: collect all spawn tool call IDs.
+	// Pass 1: collect all spawn/delegate tool call IDs.
 	isSpawn := make(map[string]struct{})
 	for _, entry := range entries {
 		for _, tc := range entry.ToolCalls {
-			if tc.Tool == "spawn" && tc.ID != "" {
+			if (tc.Tool == "spawn" || tc.Tool == "delegate") && tc.ID != "" {
 				isSpawn[string(tc.ID)] = struct{}{}
 			}
 		}

@@ -151,7 +151,6 @@ vi.mock('./historical-markdown', () => ({
 
 vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: 'omnipus-avatar.svg' }))
 vi.mock('./SessionPanel', () => ({ SessionPanel: () => null }))
-vi.mock('./ExecApprovalBlock', () => ({ ExecApprovalBlock: () => null }))
 vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
 vi.mock('./SubagentBlock', () => ({ SubagentBlock: () => null }))
 vi.mock('./tools/GenericToolCall', () => ({
@@ -209,7 +208,6 @@ function seedStore(messages: ChatMessage[]): void {
         toolCalls: {},
         toolCallOrder: [],
         textAtToolCallStart: {},
-        pendingApprovals: [],
         sessionTokens: 0,
         sessionCost: 0,
         rateLimitEvent: null,
@@ -405,7 +403,6 @@ describe('VirtualizedMessageList', () => {
           toolCalls: {},
           toolCallOrder: [],
           textAtToolCallStart: {},
-          pendingApprovals: [],
           sessionTokens: 0,
           sessionCost: 0,
           rateLimitEvent: null,

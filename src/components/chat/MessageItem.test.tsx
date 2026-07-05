@@ -27,7 +27,7 @@ function renderWithQuery(ui: ReactElement) {
 
 beforeEach(() => {
   act(() => {
-    useChatStore.setState({ toolCalls: {}, pendingApprovals: [] })
+    useChatStore.setState({ toolCalls: {} })
   })
 })
 

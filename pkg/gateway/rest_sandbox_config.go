@@ -192,6 +192,12 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		ssrfWarnings = warnings
 	}
+	if changedShellDenyPatterns {
+		if err := validateShellDenyPatterns(*body.ShellDenyPatterns); err != nil {
+			jsonErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
 
 	// Capture old values for auditing inside the safeUpdateConfigJSON callback
 	// so the snapshot is taken atomically with the write. Reading before the

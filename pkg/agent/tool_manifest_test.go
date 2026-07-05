@@ -169,7 +169,7 @@ func TestCompressedToolDefs_FullTierAlwaysPresent(t *testing.T) {
 	}
 
 	// Full-tier tools that Jim is allowed must be present.
-	for _, name := range []string{"read_file", "send_message", "exec"} {
+	for _, name := range []string{"read_file", "send_message", "bash"} {
 		assert.True(t, defNames[name], "full-tier tool %q must be in compressed defs", name)
 	}
 }

@@ -10,7 +10,6 @@ export type WsFrameType =
   | "auth"
   | "message"
   | "cancel"
-  | "exec_approval_response"
   | "ping"
   | "attach_session"
   | "device_pairing_response"
@@ -23,8 +22,6 @@ export type WsFrameType =
   | "tool_call_result"
   | "subagent_start"
   | "subagent_end"
-  | "exec_approval_request"
-  | "exec_approval_expired"
   | "task_status_changed"
   | "replay_message"
   | "replay_error"
@@ -38,7 +35,6 @@ export type WsFrameType =
   | "cancel_stage"
   | "pong"
   | "session_close_ack"
-  | "exec_approval_response_ack"
   | "device_pairing_request"
   | "whatsapp_pairing"
   | "whatsapp_pairing_subscribe"
@@ -66,12 +62,6 @@ export interface MessageFrame {
 export interface CancelFrame {
   type: "cancel";
   session_id: string;
-}
-
-export interface ExecApprovalResponseFrame {
-  type: "exec_approval_response";
-  id: string;
-  decision: "allow" | "deny" | "always";
 }
 
 export interface PingFrame {
@@ -204,20 +194,6 @@ export interface SubagentEndFrame {
   message?: string;
 }
 
-export interface ExecApprovalRequestFrame {
-  type: "exec_approval_request";
-  session_id: string;
-  id: string;
-  command: string;
-  tool?: string;
-  params?: {
-    [key: string]: unknown;
-  };
-  message?: string;
-  working_dir?: string;
-  matched_policy?: string;
-}
-
 export interface TaskStatusChangedFrame {
   type: "task_status_changed";
   session_id: string;
@@ -346,12 +322,6 @@ export interface SessionCloseAckFrame {
   id?: string;
 }
 
-export interface ExecApprovalResponseAckFrame {
-  type: "exec_approval_response_ack";
-  id?: string;
-  session_id?: string;
-}
-
 export interface DevicePairingRequestFrame {
   type: "device_pairing_request";
   device_id: string;
@@ -380,13 +350,6 @@ export interface WhatsAppPairingSubscribeFrame {
   active: boolean;
 }
 
-export interface ExecApprovalExpiredFrame {
-  type: "exec_approval_expired";
-  id: string;
-  session_id: string;
-  message?: string;
-}
-
 export interface NotificationFrame {
   type: "notification";
   id: string;
@@ -407,7 +370,6 @@ export type WsFrame =
   | AuthFrame
   | MessageFrame
   | CancelFrame
-  | ExecApprovalResponseFrame
   | PingFrame
   | PongFrame
   | AttachSessionFrame
@@ -420,7 +382,6 @@ export type WsFrame =
   | ToolCallResultFrame
   | SubagentStartFrame
   | SubagentEndFrame
-  | ExecApprovalRequestFrame
   | TaskStatusChangedFrame
   | ReplayMessageFrame
   | ReplayErrorFrame
@@ -433,12 +394,10 @@ export type WsFrame =
   | ReplayWarningFrame
   | CancelStageFrame
   | SessionCloseAckFrame
-  | ExecApprovalResponseAckFrame
   | DevicePairingRequestFrame
   | WhatsAppPairingFrame
   | SessionCloseFrame
   | WhatsAppPairingSubscribeFrame
-  | ExecApprovalExpiredFrame
   | NotificationFrame;
 
 // ── Client → server frames ──────────────────────────────────────────────────
@@ -447,7 +406,6 @@ export type ClientFrame =
   | AuthFrame
   | MessageFrame
   | CancelFrame
-  | ExecApprovalResponseFrame
   | PingFrame
   | AttachSessionFrame
   | DevicePairingResponseFrame
@@ -457,7 +415,7 @@ export type ClientFrame =
 // ── ClientFrameTypes constant — generated from spec, not hand-written ─────────
 // Import this in ws.ts to build CLIENT_FRAME_TYPES set. Never edit directly.
 
-export const ClientFrameTypes = ["auth", "message", "cancel", "exec_approval_response", "ping", "attach_session", "device_pairing_response", "session_close", "whatsapp_pairing_subscribe"] as const
+export const ClientFrameTypes = ["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "whatsapp_pairing_subscribe"] as const
 
 // ── Server → client frames ──────────────────────────────────────────────────
 
@@ -471,7 +429,6 @@ export type ServerFrame =
   | ToolCallResultFrame
   | SubagentStartFrame
   | SubagentEndFrame
-  | ExecApprovalRequestFrame
   | TaskStatusChangedFrame
   | ReplayMessageFrame
   | ReplayErrorFrame
@@ -484,8 +441,6 @@ export type ServerFrame =
   | ReplayWarningFrame
   | CancelStageFrame
   | SessionCloseAckFrame
-  | ExecApprovalResponseAckFrame
   | DevicePairingRequestFrame
   | WhatsAppPairingFrame
-  | ExecApprovalExpiredFrame
   | NotificationFrame;

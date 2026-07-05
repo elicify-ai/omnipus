@@ -68,16 +68,13 @@ export default defineConfig({
     outDir: 'dist/spa',
     // Vite's 500 kB default is too conservative for this feature-rich SPA
     // (chat + AssistantUI + katex + mermaid + cytoscape + Shiki syntax
-    // highlighting). Two categories legitimately exceed 500 kB and cannot be
-    // fixed by build config alone:
-    //   1. Lazily-loaded Shiki language grammars (emacs-lisp ~760 kB, cpp,
-    //      wasm) — single vendor modules, loaded only when highlighting that
-    //      language, so their size doesn't hit the initial load.
-    //   2. The eager entry chunk (~1.9 MB) — dominated by APP code, because
-    //      top-level routes/screens are statically imported into the entry
-    //      rather than lazy-loaded. Genuinely reducing this needs route-based
-    //      code-splitting (TanStack Router lazy routes) — a larger refactor
-    //      tracked separately, not a build-config change.
+    // highlighting). One category legitimately exceeds 500 kB and cannot be
+    // fixed by build config alone: lazily-loaded Shiki language grammars
+    // (emacs-lisp ~760 kB, cpp, wasm) — single vendor modules, loaded only
+    // when highlighting that language, so their size doesn't hit the initial
+    // load. Route-based code-splitting (TanStack Router autoCodeSplitting,
+    // see main.tsx's defaultPendingComponent/defaultErrorComponent) has since
+    // landed, shrinking the eager entry chunk from ~1.9 MB down to ~0.27 MB.
     // The threshold is set above today's legitimate sizes so the warning still
     // fires on a genuinely new oversized chunk (regression signal), rather
     // than on the known, understood large chunks above.

@@ -43,7 +43,7 @@ var fullManifestToolNames = map[string]struct{}{
 	"write_file":        {},
 	"edit_file":         {},
 	"list_directory":    {},
-	"exec":              {},
+	"bash":              {}, // ADR-036: exec/workspace_shell/workspace_shell_bg merged into "bash".
 	"search_web":        {},
 	"fetch_url":         {},
 	"send_message":      {},
