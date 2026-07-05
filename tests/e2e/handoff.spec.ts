@@ -209,7 +209,7 @@ test(
 
 // BDD Scenario 1 (sprint-h-subagent-block-spec.md line 207):
 //   Given the chat view is mounted on a live session
-//   And the assistant issues a spawn tool call with label="audit go files"
+//   And the assistant issues a delegate tool call with label="audit go files"
 //   When the backend fires EventKindSubTurnSpawn
 //   Then [data-testid="subagent-collapsed"] appears
 //   And clicking it reveals [data-testid="subagent-expanded"]
@@ -223,7 +223,7 @@ test(
 //
 // Traces to: sprint-h-subagent-block-spec.md TDD row 20, SC-H-001
 test(
-  '(b) collapsed subagent display: spawn output renders as collapsed block, expandable',
+  '(b) collapsed subagent display: delegate output renders as collapsed block, expandable',
   async ({ page }) => {
     // T0.1: OPENROUTER_API_KEY_CI soft-skip removed. The key is required in CI;
     // its absence is a CI configuration failure, not a per-test skip condition.
@@ -231,7 +231,7 @@ test(
     // test will fail honestly — which is the correct behavior.
 
     // test.slow() triples the global 90s test timeout to 270s. Real-LLM
-    // spawn under suite load occasionally takes 40-60s; the test passes
+    // delegate under suite load occasionally takes 40-60s; the test passes
     // in 5-15s alone.
     test.slow();
 
@@ -239,35 +239,35 @@ test(
     await expect(input).toBeVisible({ timeout: 15_000 });
 
     // Route to Jim: the default agent Mia is a guide whose policy excludes the
-    // `spawn` tool (verified in CI: `load_tool(load): ... Rejected: spawn — denied
-    // by this agent's policy`) and whose persona declines to spawn — she answers
+    // `delegate` tool (verified in CI: `load_tool(load): ... Rejected: delegate — denied
+    // by this agent's policy`) and whose persona declines to delegate — she answers
     // in prose offering create_task/hand_off instead, so no SubagentBlock ever
-    // renders. Every spawn-dependent spec switches to Jim (see subagent.spec.ts
-    // startFreshChat); Jim is the general-purpose task agent and can spawn.
+    // renders. Every delegate-dependent spec switches to Jim (see subagent.spec.ts
+    // startFreshChat); Jim is the general-purpose task agent and can delegate.
     await selectAgent(page, /Jim/i);
 
     // Deterministic prompt: explicit tool name, exact arguments, no prose allowed.
     // temperature=0 + seed=42 are plumbed into OpenRouter requests for determinism.
-    // The spawned subagent inherits Jim's toolset (which includes `exec`); it calls
-    // `exec` once, producing the tool_call_badge the expanded block asserts.
+    // The delegated subagent inherits Jim's toolset (which includes `bash`); it calls
+    // `bash` once, producing the tool_call_badge the expanded block asserts.
     await input.fill(
       [
-        'Call the `spawn` tool exactly once, right now, with these arguments:',
+        'Call the `delegate` tool exactly once, right now, with these arguments:',
         '  label: "handoff-b test"',
-        '  task: "You are the subagent. Call the `exec` tool ONCE with action=\\"run\\" and command=\\"echo hello\\". Then reply with the single word \\"done\\". Do not use any other tool."',
-        'Do not reply in prose. Do not call any other tool. Call spawn now.',
+        '  task: "You are the subagent. Call the `bash` tool ONCE with action=\\"run\\" and command=\\"echo hello\\". Then reply with the single word \\"done\\". Do not use any other tool."',
+        'Do not reply in prose. Do not call any other tool. Call delegate now.',
       ].join('\n'),
     );
     await input.press('Enter');
 
     // Wait up to 150s for a subagent-collapsed block to appear under
-    // real-LLM determinism — spawn requires two LLM round-trips (parent
+    // real-LLM determinism — delegate requires two LLM round-trips (parent
     // tool call + subagent execution). google/gemini-2.5-flash's combined
     // round-trip latency can still exceed 90s under OpenRouter load (the
     // generous budget below stays safe; gemini is generally faster than the
     // prior model). test.slow() gives 270s total; 150s here leaves
     // 120s for the click + expand assertions below.
-    // Structural assertion: if no spawn occurred the test fails honestly.
+    // Structural assertion: if no delegate occurred the test fails honestly.
     const collapsedBlock = page.locator('[data-testid="subagent-collapsed"]');
     await expect(collapsedBlock).toBeVisible({ timeout: 150_000 });
 

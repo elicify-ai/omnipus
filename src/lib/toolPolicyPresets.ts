@@ -60,7 +60,8 @@ export const POLICY_PRESETS: Record<RolePreset, PresetDefinition> = {
       'Note: scheduled runs auto-deny any "Ask" tool — use Full access if you schedule tasks that need these.',
     defaultPolicy: 'allow',
     overrides: {
-      exec: 'ask',
+      // ADR-036: `bash` replaces exec / workspace_shell / workspace_shell_bg.
+      bash: 'ask',
       'browser.navigate': 'ask',
       'browser.click': 'ask',
       'browser.type': 'ask',

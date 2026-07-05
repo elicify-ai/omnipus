@@ -5,6 +5,7 @@
 **Deciders:** Daniel Piatkowski (product owner)
 **Supersedes:** [ADR-009 — Per-Agent Sandbox Profile is the Security Boundary](./ADR-009-per-agent-sandbox-as-security-boundary.md)
 **Amended:** 2026-07-04 — a 7-reviewer gate (architect + 6 pr-review-toolkit agents) on the implementation diff found two real, cross-validated regressions before merge; both fixed. See §7.
+**Extended by:** [ADR-036 — Consolidate Shell and Subagent Tools; Generalize the Async Wake Mechanism](./ADR-036-consolidate-shell-and-subagent-tools.md) — the same reasoning (one hardened default + a global god-mode bypass, no fictitious per-tool tiering) applied to `workspace_shell`/`workspace_shell_bg`, which this ADR kept and restructured (§3, §7) and ADR-036 now merges into a single `bash` tool alongside `exec`. `sandbox.ResolveLimits`, introduced in this ADR's §7, is reused directly by ADR-036, not superseded.
 
 ---
 

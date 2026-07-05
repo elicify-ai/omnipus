@@ -360,6 +360,13 @@ test(
     await renameSession(page, sessionId, sessionTitle)
 
     // Dataset D2: spawn call + nested tool with ParentToolCallID.
+    // NOTE (ADR-036, 2026-07-04): tool: 'spawn' is deliberately kept as the
+    // legacy pre-merge delegation tool name, NOT updated to 'delegate'. This
+    // dataset exercises the replay backend's historical-transcript compat path
+    // (pkg/gateway/replay.go's buildSpawnIDsWithChildren explicitly checks
+    // tc.Tool == "spawn" || tc.Tool == "delegate" so sessions recorded before
+    // the rename still reconstruct a subagent span correctly). Changing this
+    // to 'delegate' would silently drop e2e coverage of that back-compat branch.
     // Traces to: BDD Scenario 5.
     seedTranscript(sessionId, [
       {
@@ -681,8 +688,10 @@ test(
     const sessionTitle = `replay-fidelity-test-f-${Date.now()}`
     await renameSession(page, sessionId, sessionTitle)
 
-    // Seed transcript: one assistant turn with a completed exec tool call.
-    // This mirrors the JSONL that the gateway writes during a real tool turn.
+    // Seed transcript: one assistant turn with a completed bash tool call.
+    // This mirrors the JSONL that the gateway writes during a real tool turn
+    // (ADR-036 renamed exec/workspace_shell/workspace_shell_bg to the unified
+    // "bash" tool; a fresh session's transcript now records tool: "bash").
     seedTranscript(sessionId, [
       {
         id: 'entry-user-f1',
@@ -700,7 +709,7 @@ test(
         tool_calls: [
           {
             id: 'tc-f1',
-            tool: 'exec',
+            tool: 'bash',
             status: 'success',
             duration_ms: 31,
             parameters: { action: 'run', command: 'echo replay-badge-test' },
@@ -722,7 +731,7 @@ test(
     const toolNames = await badgeLocator.evaluateAll((els) =>
       els.map((el) => el.getAttribute('data-tool') ?? ''),
     )
-    expect(toolNames).toEqual(['exec'])
+    expect(toolNames).toEqual(['bash'])
 
     // ── Step 3: Navigate away ──
     await page.goto('/')

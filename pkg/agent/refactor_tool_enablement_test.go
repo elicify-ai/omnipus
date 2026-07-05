@@ -55,8 +55,8 @@ func TestAllImplementedToolsRegistered_DefaultConfig(t *testing.T) {
 	expected := []string{
 		// File-system tools
 		"read_file", "write_file", "edit_file", "append_file", "list_directory",
-		// Execution
-		"exec",
+		// Execution (ADR-036: exec/workspace_shell/workspace_shell_bg merged into "bash")
+		"bash",
 		// Web
 		"fetch_url",
 		// Communication
@@ -64,7 +64,7 @@ func TestAllImplementedToolsRegistered_DefaultConfig(t *testing.T) {
 		// Skills
 		"find_skills", "install_skill",
 		// Agent orchestration
-		"spawn", "check_spawn_status", "run_subagent", "hand_off", "return_to_default",
+		"delegate", "hand_off", "return_to_default",
 		// Browser automation — the headline bug being fixed
 		"browser_navigate", "browser_click", "browser_type",
 		"browser_screenshot", "browser_get_text", "browser_wait",

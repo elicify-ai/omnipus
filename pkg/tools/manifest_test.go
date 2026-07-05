@@ -29,7 +29,7 @@ func TestToolManifestTier_FullSetExact(t *testing.T) {
 	// Every name from the spec must be ManifestFull.
 	specFull := []string{
 		"read_file", "write_file", "edit_file", "list_directory",
-		"exec", "search_web", "fetch_url", "send_message",
+		"bash", "search_web", "fetch_url", "send_message",
 		"hand_off", "return_to_default", "remember", "recall_memory", "set_todos",
 		"navigate", "create_task", "list_tasks", "update_task",
 	}
@@ -89,7 +89,7 @@ func TestToolManifestTier_LazySet(t *testing.T) {
 		"browser_screenshot",
 		"install_skill",
 		"workspace_shell",
-		"spawn",
+		"delegate",
 	}
 	for _, n := range lazySample {
 		got := ToolManifestTier(n)

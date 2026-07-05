@@ -3,7 +3,7 @@
 //
 // Copyright (c) 2026 Omnipus contributors
 
-// Package config — deprecated tools.<name>.enabled=false self-heal.
+// Deprecated tools.<name>.enabled=false self-heal.
 //
 // migrateDeprecatedToolEnableFlags (migration.go) translates a legacy
 // tools.<name>.enabled=false flag into an in-memory sandbox.tool_policies
@@ -26,10 +26,11 @@
 // left to re-derive "deny" from, so the allow sticks.
 //
 // This mirrors migrateCLITokenOnDisk's raw-JSON-map read/patch/write
-// technique (cli_token_migration.go's package doc comment) so the on-disk
+// technique (cli_token_migration.go's header comment) so the on-disk
 // file is patched byte-for-byte rather than round-tripped through
 // SaveConfig, which silently drops any field carrying an explicit zero value
 // under an `omitempty` JSON tag.
+
 package config
 
 import (

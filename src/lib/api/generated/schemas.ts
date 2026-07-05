@@ -1558,12 +1558,12 @@ export const ToolRegistryEntry = z
   })
   .passthrough();
 export const ToolApprovalActionRequest = z.object({
-  action: z.enum(["approve", "deny", "cancel"]),
+  action: z.enum(["approve", "deny", "cancel", "always"]),
 });
 export const ToolApprovalResponse = z
   .object({
     approval_id: z.string(),
-    action: z.enum(["approve", "deny", "cancel"]),
+    action: z.enum(["approve", "deny", "cancel", "always"]),
     status: z.literal("ok"),
   })
   .passthrough();
@@ -7148,7 +7148,7 @@ export function createApiClient(baseUrl: string, options?: ZodiosOptions) {
 // Do not edit directly — re-run: node scripts/_gen-asyncapi-types.mjs
 // These extend the REST schemas above with all WS frame types.
 
-export const WsFrameType = z.enum(["auth", "message", "cancel", "exec_approval_response", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "subagent_start", "subagent_end", "exec_approval_request", "exec_approval_expired", "task_status_changed", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "exec_approval_response_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification"]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "subagent_start", "subagent_end", "task_status_changed", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification"]);
 
 export const AuthFrame = z
   .object({
@@ -7189,14 +7189,6 @@ export const CancelFrame = z
   .object({
     type: z.literal("cancel"),
     session_id: z.string().min(1).max(128),
-  })
-  .strict();
-
-export const ExecApprovalResponseFrame = z
-  .object({
-    type: z.literal("exec_approval_response"),
-    id: z.string().min(1),
-    decision: z.enum(["allow", "deny", "always"]),
   })
   .strict();
 
@@ -7361,20 +7353,6 @@ export const SubagentEndFrame = z
   })
   .strict();
 
-export const ExecApprovalRequestFrame = z
-  .object({
-    type: z.literal("exec_approval_request"),
-    session_id: z.string().min(1).max(128),
-    id: z.string().min(1),
-    command: z.string().min(1).max(8192),
-    tool: z.string().max(128).optional(),
-    params: z.record(z.unknown()).optional(),
-    message: z.string().optional(),
-    working_dir: z.string().optional(),
-    matched_policy: z.string().optional(),
-  })
-  .strict();
-
 export const TaskStatusChangedFrame = z
   .object({
     type: z.literal("task_status_changed"),
@@ -7532,14 +7510,6 @@ export const SessionCloseAckFrame = z
   })
   .strict();
 
-export const ExecApprovalResponseAckFrame = z
-  .object({
-    type: z.literal("exec_approval_response_ack"),
-    id: z.string().optional(),
-    session_id: z.string().optional(),
-  })
-  .strict();
-
 export const DevicePairingRequestFrame = z
   .object({
     type: z.literal("device_pairing_request"),
@@ -7576,15 +7546,6 @@ export const WhatsAppPairingSubscribeFrame = z
   })
   .strict();
 
-export const ExecApprovalExpiredFrame = z
-  .object({
-    type: z.literal("exec_approval_expired"),
-    id: z.string().min(1),
-    session_id: z.string().min(1),
-    message: z.string().optional(),
-  })
-  .strict();
-
 export const NotificationFrame = z
   .object({
     type: z.literal("notification"),
@@ -7607,7 +7568,6 @@ export const WsFrame = z.discriminatedUnion("type", [
   AuthFrame,
   MessageFrame,
   CancelFrame,
-  ExecApprovalResponseFrame,
   PingFrame,
   PongFrame,
   AttachSessionFrame,
@@ -7620,7 +7580,6 @@ export const WsFrame = z.discriminatedUnion("type", [
   ToolCallResultFrame,
   SubagentStartFrame,
   SubagentEndFrame,
-  ExecApprovalRequestFrame,
   TaskStatusChangedFrame,
   ReplayMessageFrame,
   ReplayErrorFrame,
@@ -7633,12 +7592,10 @@ export const WsFrame = z.discriminatedUnion("type", [
   ReplayWarningFrame,
   CancelStageFrame,
   SessionCloseAckFrame,
-  ExecApprovalResponseAckFrame,
   DevicePairingRequestFrame,
   WhatsAppPairingFrame,
   SessionCloseFrame,
   WhatsAppPairingSubscribeFrame,
-  ExecApprovalExpiredFrame,
   NotificationFrame,
 ]);
 

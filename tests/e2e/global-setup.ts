@@ -40,18 +40,18 @@ function preflightCheck(): void {
  *    ~/.omnipus/system/audit.jsonl only when cfg.Sandbox.AuditLog=true at startup
  *    (pkg/agent/loop.go:346). Toggling via REST mid-run has no effect.
  *
- * 2. tools.spawn.enabled:false — migrateDeprecatedToolEnableFlags (pkg/config/migration.go)
- *    converts this into a GLOBAL sandbox.tool_policies["spawn"]="deny" at config-load
- *    time, denying spawn for ALL agents. This breaks T24 (cancel cascade) and the
- *    handoff/subagent E2E tests. The fix is to have sandbox.tool_policies.spawn="allow"
+ * 2. tools.delegate.enabled:false — migrateDeprecatedToolEnableFlags (pkg/config/migration.go)
+ *    converts this into a GLOBAL sandbox.tool_policies["delegate"]="deny" at config-load
+ *    time, denying delegate for ALL agents. This breaks T24 (cancel cascade) and the
+ *    handoff/subagent E2E tests. The fix is to have sandbox.tool_policies.delegate="allow"
  *    explicitly, which is never downgraded by the migrator, and to ensure the legacy
- *    tools.spawn.enabled=false key is absent.
+ *    tools.delegate.enabled=false key is absent.
  *
  * Strategy:
  *   - If config.json is absent from OMNIPUS_HOME, write a minimal correct config.
  *     This is the fast path for local dev: developer sets OMNIPUS_HOME, runs playwright,
  *     and the config is seeded correctly the first time.
- *   - If config.json exists but has tools.spawn.enabled:false or lacks sandbox.audit_log,
+ *   - If config.json exists but has tools.delegate.enabled:false or lacks sandbox.audit_log,
  *     fail loudly with an actionable error instead of silently producing confusing T24/T26
  *     failures 10 minutes into the test run.
  *
@@ -75,7 +75,7 @@ function validateOrSeedGatewayConfig(): void {
       '  {\n' +
       '    "version": 1,\n' +
       '    "gateway": { "port": 6060, "dev_mode_bypass": true },\n' +
-      '    "sandbox": { "audit_log": true, "tool_policies": { "spawn": "allow" } }\n' +
+      '    "sandbox": { "audit_log": true, "tool_policies": { "delegate": "allow" } }\n' +
       '  }\n' +
       '  EOF\n\n' +
       'Then start the gateway:\n' +
@@ -94,13 +94,13 @@ function validateOrSeedGatewayConfig(): void {
       gateway: { port: 6060, dev_mode_bypass: true },
       sandbox: {
         audit_log: true,
-        tool_policies: { spawn: 'allow' },
+        tool_policies: { delegate: 'allow' },
       },
     };
     fs.writeFileSync(configPath, JSON.stringify(minimalConfig, null, 2), { mode: 0o600 });
     console.warn(
       `[E2E global-setup] config.json was absent — wrote minimal config to ${configPath}.\n` +
-      'IMPORTANT: sandbox.audit_log and tool_policies.spawn are restart-gated. If the gateway\n' +
+      'IMPORTANT: sandbox.audit_log and tool_policies.delegate are restart-gated. If the gateway\n' +
       'is already running without these settings, T24 and T26 will fail. Restart the gateway\n' +
       'and re-run the suite.',
     );
@@ -118,18 +118,18 @@ function validateOrSeedGatewayConfig(): void {
 
   const errors: string[] = [];
 
-  // Check 1: tools.spawn.enabled:false — the legacy deprecation trap.
+  // Check 1: tools.delegate.enabled:false — the legacy deprecation trap.
   // migrateDeprecatedToolEnableFlags reads raw JSON to detect EXPLICIT false values,
   // so we check the parsed object here to give a user-friendly error.
   const tools = cfg.tools as Record<string, { enabled?: boolean }> | undefined;
-  if (tools?.spawn?.enabled === false) {
+  if (tools?.delegate?.enabled === false) {
     errors.push(
-      'config.json has "tools": {"spawn": {"enabled": false}}.\n' +
+      'config.json has "tools": {"delegate": {"enabled": false}}.\n' +
       'migrateDeprecatedToolEnableFlags (pkg/config/migration.go) converts this into\n' +
-      'sandbox.tool_policies["spawn"]="deny" at config-load time, breaking T24 (cancel\n' +
+      'sandbox.tool_policies["delegate"]="deny" at config-load time, breaking T24 (cancel\n' +
       'cascade) and handoff/subagent E2E tests.\n' +
-      'FIX: remove the tools.spawn key entirely and add:\n' +
-      '  "sandbox": { "tool_policies": { "spawn": "allow" } }',
+      'FIX: remove the tools.delegate key entirely and add:\n' +
+      '  "sandbox": { "tool_policies": { "delegate": "allow" } }',
     );
   }
 
@@ -191,7 +191,7 @@ async function globalSetup(): Promise<void> {
   // T0.4: Run preflight checks before any browser/gateway interaction.
   preflightCheck();
 
-  // Validate or seed the gateway config.json for T24 (spawn allow) and T26 (audit_log).
+  // Validate or seed the gateway config.json for T24 (delegate allow) and T26 (audit_log).
   // This must run before onboardViaAPI so a misconfigured gateway is caught early.
   validateOrSeedGatewayConfig();
 

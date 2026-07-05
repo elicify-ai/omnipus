@@ -1,3 +1,38 @@
+// The unified `bash` tool (ADR-036, bash-tool-spec.md).
+//
+// `bash` replaces the three previously-separate shell tools (`exec`,
+// `workspace_shell`, `workspace_shell_bg`) with ONE tool, ONE policy surface,
+// and ONE hardening path. See docs/internal/architecture/ADR-036-consolidate-
+// shell-and-subagent-tools.md and docs/internal/specs/bash-tool-spec.md for
+// the full rationale and FR/BDD traceability. Highlights:
+//
+//   - Registration is universal (every agent), governed exclusively by
+//     ToolPolicyCfg — the old experimental.workspace_shell_enabled gate is
+//     retired (FR-B8).
+//   - `cwd` is relative-to-workspace ONLY; there is no absolute-path escape
+//     hatch (FR-B2/FR-B13). The guard resolves symlinks before the
+//     containment check, so a workspace-internal symlink pointing outside the
+//     workspace cannot be used to escape it.
+//   - The hardcoded deny-pattern baseline (rm -rf /, master.key/
+//     credentials.json literal guards, curl-pipe-to-shell, fork bomb, ...)
+//     applies unconditionally — no policy verdict or operator configuration
+//     can disable it (FR-B4). It is layered with an operator-extensible
+//     custom-pattern mechanism (global + per-agent), which IS opt-in/off by
+//     default.
+//   - `pkg/policy.Evaluator.EvaluateExec` (the binary allowlist, SEC-05)
+//     applies identically to foreground and background calls (FR-B5).
+//   - Every non-god-mode invocation routes through `sandbox.ResolveLimits` +
+//     `sandbox.ApplyChildHardening`/`sandbox.Run` (ADR-035 §7) — there is no
+//     longer a separate "sandbox off but not god mode" state; the fixed
+//     kernel-sandbox boundary is universal except when the global god-mode
+//     override (agent.GodModeActive) is active (FR-B6).
+//   - Audit-log write failures fail CLOSED — the call is refused rather than
+//     silently proceeding unaudited (FR-B7).
+//   - PTY / interactive sessions (send-keys, write) and free-form background
+//     port-exposure (the old workspace_shell_bg capability) are DROPPED
+//     entirely — accepted capability reductions per ADR-036 §3.1. The
+//     `web_serve` tool covers the legitimate dev-server use case.
+
 package tools
 
 import (
@@ -15,10 +50,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
-
-	"github.com/creack/pty"
 
 	"github.com/dapicom-ai/omnipus/pkg/audit"
 	"github.com/dapicom-ai/omnipus/pkg/config"
@@ -27,7 +59,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/sandbox"
 )
 
-// ExecPolicyAuditor evaluates an exec command against the policy engine and
+// ExecPolicyAuditor evaluates a bash command against the policy engine and
 // audit-logs the decision. Implemented by *policy.PolicyAuditor. Defined as an
 // interface so tests can supply lightweight mocks and so this package does not
 // need to directly import the audit package through this dependency edge.
@@ -40,78 +72,46 @@ type ExecPolicyAuditor interface {
 	EvaluateExec(agentID, command string) policy.Decision
 }
 
-// ExecSandboxBackend applies kernel or application-level sandbox restrictions
-// to a child process before it starts. Implemented by sandbox.SandboxBackend.
-// Defined as a narrow interface so the tool only depends on the single method
-// it actually calls.
-type ExecSandboxBackend interface {
-	ApplyToCmd(cmd *exec.Cmd, policy sandbox.SandboxPolicy) error
-}
-
-// ExecChildProxy optionally routes a child process's HTTP(S) traffic through a
-// loopback SSRF proxy (SEC-28). Implemented by security.ExecProxy. The
-// interface is intentionally narrow so shell.go depends only on the two
-// methods it actually calls.
-//
-// PrepareCmd must be called before cmd.Start() and must be paired with exactly
-// one CmdDone() call once the process has exited so the proxy's active-cmd
-// counter stays balanced and its idle-shutdown logic can fire.
-type ExecChildProxy interface {
-	PrepareCmd(cmd *exec.Cmd)
-	CmdDone()
-}
-
-// ExecToolDeps bundles optional Wave 2 security dependencies for ExecTool.
+// ExecToolDeps bundles the ADR-035/ADR-036 dependencies for the bash tool.
 // All fields are optional — a nil PolicyAuditor disables binary allowlist
-// enforcement (useful when the policy layer is not configured), and a nil
-// SandboxBackend disables per-process sandbox application (useful in headless
-// tests and on unsupported platforms).
+// enforcement (useful when the policy layer is not configured).
 //
-// Note: the interactive approval layer (SEC-08, "ask" prompts) is handled at
-// the agent loop level by HookManager.ApproveTool and routed to the WebSocket
-// approval hook — do NOT also prompt here from shell.go, which would block on
-// stdin in headless deployments. The two layers run in this runtime order:
-//   - Pre-dispatch: interactive approval (SEC-08) via HookManager.ApproveTool
-//     → gateway/ws_approval.go, before the tool ever sees the command
-//   - In-tool: automated binary allowlist (SEC-05) via this file, inside
-//     executeRun after guardCommand() but before the command runs
-//
-// Both layers must allow for the command to run; either can deny.
+// Note: the interactive approval layer (SEC-08, "ask" prompts) and the
+// allow/ask/deny TOOL POLICY gate are handled upstream of this tool entirely
+// (HookManager.ApproveTool / the compositor's EffectiveToolPolicy resolution)
+// — a "deny" verdict means Execute is never called at all, so bash does not
+// re-implement that check. What DOES live here is the narrower, automated
+// binary allowlist (SEC-05) and the deny-pattern/sandbox layers that apply
+// regardless of the policy verdict.
 type ExecToolDeps struct {
-	PolicyAuditor  ExecPolicyAuditor
-	SandboxBackend ExecSandboxBackend
-	SandboxPolicy  sandbox.SandboxPolicy
-	// ExecProxy optionally routes child-process HTTP(S) traffic through a
-	// loopback SSRF proxy (SEC-28). Nil disables proxy injection — the child
-	// receives no HTTP_PROXY env vars and traffic flows directly to the network.
-	ExecProxy ExecChildProxy
+	// PolicyAuditor enforces the binary allowlist (SEC-05) and audit-logs the
+	// decision. Nil disables the check (default-permissive).
+	PolicyAuditor ExecPolicyAuditor
 
-	// SandboxMode is the applied sandbox mode from al.appliedSandboxMode
-	// (set via AgentLoop.SetAppliedSandboxMode after boot). The value flows
-	// from SandboxApplyResult.Mode — the post-Apply truth — rather than from
-	// cfg.Sandbox.ResolvedMode(), which only reports what the config file says
-	// and would disagree when the CLI --sandbox flag overrides config.
-	//
-	// "enforce" and "permissive" route the child process through sandbox.Run
-	// (foreground) or ApplyChildHardening (background) so it inherits the
-	// gateway's Landlock + seccomp + egress-proxy policy.
-	// "off" and the empty string both map to sandbox disabled: a plain
-	// `sh -c <cmd>` with no proxy and full user latitude. See sandboxOn().
-	SandboxMode string
+	// GodMode reflects agent.GodModeActive(cfg), resolved ONCE at wiring time.
+	// When true, ApplyChildHardening/sandbox.Run are skipped entirely and the
+	// command runs with full host latitude (see runUnconstrained).
+	GodMode bool
 
-	// EgressProxy is the kernel-sandbox HTTP/HTTPS egress proxy. When non-nil
-	// AND SandboxMode != "off", the child's HTTP_PROXY/HTTPS_PROXY env vars
-	// are pointed at it via sandbox.Limits.EgressProxyAddr. Nil disables the
-	// proxy injection on the sandboxed path; the SEC-28 ExecProxy above is a
-	// separate, complementary mechanism kept for the sandbox-off / fallback
-	// platform paths.
-	EgressProxy *sandbox.EgressProxy
+	// Proxy is the process-wide kernel-sandbox egress proxy (SSRF
+	// protection). May be nil (no HTTP_PROXY injection on the sandbox-on
+	// path); ignored entirely under GodMode.
+	Proxy *sandbox.EgressProxy
 
-	// ExecTimeoutSeconds is the wall-clock timeout passed to sandbox.Run when
-	// the sandbox-on path is taken. 0 disables the per-call timeout (the
-	// caller's context governs cancellation). Sourced from
-	// cfg.Tools.Exec.TimeoutSeconds.
-	ExecTimeoutSeconds int32
+	// AuditFailClosed: when true, an audit-log write failure aborts execution
+	// (FR-B7) rather than proceeding unaudited.
+	AuditFailClosed bool
+
+	// GlobalShellDenyPatterns is the operator-global, OPT-IN deny-pattern
+	// extension list (config.Sandbox.ShellDenyPatterns). Layered ON TOP of
+	// (never a substitute for) the hardcoded baseline, and only consulted
+	// when AgentShellPolicy.EnableDenyPatterns is true.
+	GlobalShellDenyPatterns []string
+
+	// AgentShellPolicy is the per-agent shell policy (AgentConfig.ShellPolicy).
+	// Nil means no per-agent custom patterns and EnableDenyPatterns=false
+	// (operator-extensible layer off; the hardcoded baseline still applies).
+	AgentShellPolicy *config.AgentShellPolicy
 }
 
 var (
@@ -125,91 +125,86 @@ func getSessionManager() *SessionManager {
 	return globalSessionManager
 }
 
+// ExecTool implements the `bash` builtin tool (registered name: "bash";
+// the Go type retains its historical "Exec" name to minimize unrelated churn
+// across ~20 call sites — see bash-tool-spec.md Assumptions: "the exact final
+// home of the merged implementation ... is an implementer's naming choice").
 type ExecTool struct {
 	BaseTool
-	workingDir           string
-	timeout              time.Duration
-	maxBackgroundSeconds int // hard-kill timeout for background sessions; 0 = disabled
-	denyPatterns         []*regexp.Regexp
-	allowPatterns        []*regexp.Regexp
-	customAllowPatterns  []*regexp.Regexp
-	allowedPathPatterns  []*regexp.Regexp
-	restrictToWorkspace  bool
-	sessionManager       *SessionManager
 
-	// Wave 2: Security wiring (SEC-01/02/03/05).
-	// policyAuditor enforces the binary allowlist (SEC-05) and audit-logs the
-	// decision — the allowlist itself lives on the PolicyAuditor's Evaluator,
-	// not on this struct, so it stays in sync with the live policy config.
-	// sandboxBackend applies kernel (Landlock/seccomp) or application-level
-	// restrictions to every child process. Both are optional: nil means the
-	// corresponding feature is disabled.
-	policyAuditor  ExecPolicyAuditor
-	sandboxBackend ExecSandboxBackend
-	sandboxPolicy  sandbox.SandboxPolicy
-	// execProxy is the SEC-28 SSRF proxy for child processes. Nil = disabled.
-	// When non-nil, PrepareCmd injects HTTP_PROXY/HTTPS_PROXY env vars before
-	// Start() and CmdDone() is called exactly once after cmd.Wait() returns.
-	execProxy ExecChildProxy
-	// auditLogger receives path.access_denied events for workspace-guard
-	// rejections. Nil means audit logging is disabled (best-effort).
-	auditLogger *audit.Logger
+	workingDir          string
+	restrictToWorkspace bool
+	allowedPathPatterns []*regexp.Regexp
 
-	// sandboxMode is the resolved sandbox mode; "off" → legacy `sh -c` path;
-	// any other value (including "" which defaults to enforce in the policy
-	// engine) → hardened-exec path via sandbox.Run / ApplyChildHardening.
-	sandboxMode string
-	// sandboxEgressProxy is the *sandbox.EgressProxy plumbed into the
-	// hardened-exec Limits. Nil disables proxy injection on the sandbox-on
-	// path (children make HTTP requests directly).
-	sandboxEgressProxy *sandbox.EgressProxy
-	// execTimeoutSeconds is the timeout passed to sandbox.Run (sandbox-on
-	// foreground path). 0 = no timeout.
-	execTimeoutSeconds int32
+	// denyPatterns is the hardcoded baseline (defaultDenyPatterns).
+	// Unconditional: FR-B4 forbids disabling this via policy or config.
+	denyPatterns []*regexp.Regexp
 
-	// killAuditFn is a pre-built audit callback for process-kill failures.
-	// H5-BK: constructed once at SetAuditLogger time so all kill sites
-	// (runSync's terminateProcessTree, runSync's fallback kill, background
-	// session hard-kill, and kill_session tool path) share one closure rather
-	// than each rebuilding it inline. Nil when auditLogger is nil.
+	// operatorDenyPatterns is the OPT-IN, operator-extensible layer (global +
+	// per-agent custom patterns), only consulted when
+	// enableOperatorDenyPatterns is true. Layered on top of denyPatterns,
+	// never a substitute for it.
+	operatorDenyPatterns       []*regexp.Regexp
+	enableOperatorDenyPatterns bool
+
+	sessionManager *SessionManager
+
+	// policyAuditor enforces the binary allowlist (SEC-05) uniformly for
+	// foreground and background calls (FR-B5).
+	policyAuditor ExecPolicyAuditor
+
+	// godMode / proxy: see ExecToolDeps. Resolved once at wiring time.
+	godMode bool
+	proxy   *sandbox.EgressProxy
+
+	// auditLogger + auditFailClosed implement FR-B7 (fail-closed on audit
+	// write failure).
+	auditLogger     *audit.Logger
+	auditFailClosed bool
+
+	// killAuditFn is a pre-built audit callback for process-kill failures,
+	// constructed once at SetAuditLogger time so every kill site (foreground
+	// timeout, background timeout, explicit kill action) shares one closure.
+	// Nil when auditLogger is nil.
 	killAuditFn func(pid int, killErr error, caller string)
 }
 
-// SetAuditLogger injects an audit.Logger into the ExecTool so that
-// path.access_denied events are emitted on workspace-guard rejections.
-// Satisfies the auditLoggerAware contract used by the ToolRegistry.
-// Calling this on a nil ExecTool is a no-op.
-//
-// H5-BK: also pre-builds killAuditFn once so all kill sites (runSync's
-// terminateProcessTree, runSync's fallback kill, background session hard-kill,
-// and kill_session tool path) share one closure rather than each rebuilding it.
+// GodModeForTest exposes the resolved god-mode flag for white-box testing.
+// Kept as a production method because pkg/agent tests require cross-package
+// access (mirrors the pre-consolidation WorkspaceShellTool.GodModeForTest).
+func (t *ExecTool) GodModeForTest() bool { return t.godMode }
+
+// SetAuditLogger injects an audit.Logger into the ExecTool so exec/deny
+// decisions and kill failures are recorded. Satisfies the auditLoggerAware
+// contract used by the ToolRegistry. Calling this on a nil ExecTool is a no-op.
 func (t *ExecTool) SetAuditLogger(l *audit.Logger) {
 	if t == nil {
 		return
 	}
 	t.auditLogger = l
-	if l != nil {
-		al := l
-		t.killAuditFn = func(pid int, killErr error, caller string) {
-			// CRIT-6 + typed-Event migration: route through audit.EmitEntry so
-			// Log failure bumps the audit-skipped counter; use the typed
-			// EventProcessKillFailed constant in place of the raw literal.
-			audit.EmitEntry(al, &audit.Entry{
-				Event:    audit.EventProcessKillFailed,
-				Decision: audit.DecisionError,
-				Details: map[string]any{
-					"pid":    pid,
-					"error":  killErr.Error(),
-					"caller": caller,
-				},
-			})
-		}
-	} else {
+	if l == nil {
 		t.killAuditFn = nil
+		return
+	}
+	al := l
+	t.killAuditFn = func(pid int, killErr error, caller string) {
+		audit.EmitEntry(al, &audit.Entry{
+			Event:    audit.EventProcessKillFailed,
+			Decision: audit.DecisionError,
+			Details: map[string]any{
+				"pid":    pid,
+				"error":  killErr.Error(),
+				"caller": caller,
+			},
+		})
 	}
 }
 
 var (
+	// defaultDenyPatterns is the hardcoded deny-pattern baseline, ported
+	// verbatim from the pre-consolidation `exec` tool (FR-B4). Applies
+	// UNCONDITIONALLY — no policy verdict or operator configuration disables
+	// this list.
 	defaultDenyPatterns = []*regexp.Regexp{
 		regexp.MustCompile(`\brm\s+-[rf]{1,2}\b`),
 		regexp.MustCompile(`\bdel\s+/[fq]\b`),
@@ -229,17 +224,6 @@ var (
 		//   `: ( ) { :|:& };:`        (whitespace anywhere)
 		//   `b(){b|b};b`              (disguised with arbitrary identifier)
 		//   `:(){ :|:& \n };:`        (newline inside braces)
-		// Three changes from the original `:\(\)\s*\{.*\};\s*:`:
-		//   1. `(?s)` lets `.` cross `\n` so the body can span lines
-		//   2. The function name accepts any shell identifier
-		//      (`[A-Za-z_]\w*`) OR the literal `:`. Without backreferences
-		//      in RE2 we cannot enforce that the head-name and tail-name
-		//      match, so we accept any identifier in both positions. False
-		//      positives are acceptable since they just deny commands that
-		//      LOOK like fork bombs.
-		//   3. `[|&]` constraint inside the body keeps the false-positive
-		//      surface tight: the recursive call must contain a pipe or
-		//      ampersand, which is what makes a bomb a bomb.
 		// RLIMIT_NPROC in hardened_exec_linux.go is the kernel-layer
 		// backstop for any shape that still slips through.
 		regexp.MustCompile(`(?s)([A-Za-z_]\w*|:)\s*\(\s*\)\s*\{[^{}]*[|&][^{}]*\}\s*;\s*([A-Za-z_]\w*|:)`),
@@ -300,13 +284,15 @@ var (
 	}
 )
 
+// NewExecTool constructs a minimal bash tool with no deps injected (test /
+// metadata-only use).
 func NewExecTool(workingDir string, restrict bool, allowPaths ...[]*regexp.Regexp) (*ExecTool, error) {
 	return NewExecToolWithConfig(workingDir, restrict, nil, allowPaths...)
 }
 
-// NewExecToolWithDeps constructs an ExecTool with optional Wave 2 security
-// dependencies. Callers that do not need the policy auditor or sandbox backend
-// should use NewExecToolWithConfig, which passes a zero-valued ExecToolDeps.
+// NewExecToolWithDeps constructs an ExecTool with the full ADR-036 dependency
+// set (policy auditor, god-mode, egress proxy, audit-fail-closed, deny
+// patterns). Callers that do not need these should use NewExecToolWithConfig.
 func NewExecToolWithDeps(
 	workingDir string,
 	restrict bool,
@@ -319,547 +305,483 @@ func NewExecToolWithDeps(
 		return nil, err
 	}
 	tool.policyAuditor = deps.PolicyAuditor
-	tool.sandboxBackend = deps.SandboxBackend
-	tool.sandboxPolicy = deps.SandboxPolicy
-	tool.execProxy = deps.ExecProxy
-	tool.sandboxMode = deps.SandboxMode
-	tool.sandboxEgressProxy = deps.EgressProxy
-	tool.execTimeoutSeconds = deps.ExecTimeoutSeconds
+	tool.godMode = deps.GodMode
+	tool.proxy = deps.Proxy
+	tool.auditFailClosed = deps.AuditFailClosed
+
+	tool.operatorDenyPatterns = compileDenyPatterns(deps.GlobalShellDenyPatterns, "global")
+	if deps.AgentShellPolicy != nil {
+		tool.enableOperatorDenyPatterns = deps.AgentShellPolicy.EnableDenyPatterns
+		tool.operatorDenyPatterns = append(
+			tool.operatorDenyPatterns,
+			compileDenyPatterns(deps.AgentShellPolicy.CustomDenyPatterns, "agent")...,
+		)
+	}
 	return tool, nil
 }
 
-// sandboxOn reports whether the exec tool should route children through the
-// hardened-exec path (sandbox.Run / ApplyChildHardening). The decision is
-// explicit-opt-in: only "enforce" and "permissive" turn it on. Any other
-// value — including "off" and the empty string — preserves today's behavior
-// (`sh -c <cmd>`, no proxy, no workspace cwd unless the caller passes one).
-//
-// Empty string explicitly maps to OFF so the many test paths that construct
-// an ExecTool via NewExecTool / NewExecToolWithConfig (no deps) continue to
-// behave exactly as before. Production boot routes through
-// NewExecToolWithDeps which sets SandboxMode from cfg.Sandbox.ResolvedMode(),
-// so production is unaffected by this default.
-func (t *ExecTool) sandboxOn() bool {
-	if t == nil {
-		return false
-	}
-	switch t.sandboxMode {
-	case string(sandbox.ModeEnforce), string(sandbox.ModePermissive):
-		return true
-	default:
-		return false
-	}
-}
-
-// applySandboxToCmd applies the configured sandbox policy to a child process
-// before Start(). When no backend is configured this is a no-op.
-//
-// On Linux 5.13+ the kernel backend is effectively a no-op because
-// Landlock+seccomp are already in effect on the Omnipus process and inherit
-// to children. On unsupported kernels and other platforms, the
-// FallbackBackend injects OMNIPUS_SANDBOX_PATHS so cooperative helper scripts
-// can self-enforce.
-//
-// The returned error is already prefixed with "sandbox setup failed: " so
-// callers can pass it directly to ErrorResult.
-func (t *ExecTool) applySandboxToCmd(cmd *exec.Cmd) error {
-	if t.sandboxBackend == nil {
-		return nil
-	}
-	if err := t.sandboxBackend.ApplyToCmd(cmd, t.sandboxPolicy); err != nil {
-		return fmt.Errorf("sandbox setup failed: %v", err)
-	}
-	return nil
-}
-
+// NewExecToolWithConfig constructs a bash tool without the ADR-036 deps
+// (policy auditor / god-mode / proxy / operator deny patterns default to
+// off/nil). Used for early registration (before the AgentLoop's dependencies
+// are ready — see pkg/agent/instance.go) and for metadata-only catalog
+// instances (pkg/tools/general_builtin_catalog.go). cfg is accepted for
+// signature stability with existing call sites; the ADR-036 config-derived
+// deps are supplied later via NewExecToolWithDeps.
 func NewExecToolWithConfig(
 	workingDir string,
 	restrict bool,
-	config *config.Config,
+	_ *config.Config,
 	allowPaths ...[]*regexp.Regexp,
 ) (*ExecTool, error) {
-	denyPatterns := make([]*regexp.Regexp, 0)
-	customAllowPatterns := make([]*regexp.Regexp, 0)
 	var allowedPathPatterns []*regexp.Regexp
 	if len(allowPaths) > 0 {
 		allowedPathPatterns = allowPaths[0]
 	}
 
-	if config != nil {
-		execConfig := config.Tools.Exec
-		enableDenyPatterns := execConfig.EnableDenyPatterns
-		if enableDenyPatterns {
-			denyPatterns = append(denyPatterns, defaultDenyPatterns...)
-			if len(execConfig.CustomDenyPatterns) > 0 {
-				logger.InfoCF(
-					"shell",
-					"Using custom deny patterns",
-					map[string]any{"patterns": execConfig.CustomDenyPatterns},
-				)
-				for _, pattern := range execConfig.CustomDenyPatterns {
-					re, err := regexp.Compile(pattern)
-					if err != nil {
-						return nil, fmt.Errorf("invalid custom deny pattern %q: %w", pattern, err)
-					}
-					denyPatterns = append(denyPatterns, re)
-				}
-			}
-		} else {
-			// If deny patterns are disabled, we won't add any patterns, allowing all commands.
-			logger.WarnCF("shell", "deny patterns are disabled — all commands will be allowed", nil)
-		}
-		for _, pattern := range execConfig.CustomAllowPatterns {
-			re, err := regexp.Compile(pattern)
-			if err != nil {
-				return nil, fmt.Errorf("invalid custom allow pattern %q: %w", pattern, err)
-			}
-			customAllowPatterns = append(customAllowPatterns, re)
-		}
-	} else {
-		denyPatterns = append(denyPatterns, defaultDenyPatterns...)
-	}
-
-	var timeout time.Duration
-	if config != nil && config.Tools.Exec.TimeoutSeconds > 0 {
-		timeout = time.Duration(config.Tools.Exec.TimeoutSeconds) * time.Second
-	}
-
-	var maxBgSecs int
-	if config != nil {
-		maxBgSecs = config.Tools.Exec.MaxBackgroundSeconds
-	}
-
 	return &ExecTool{
-		workingDir:           workingDir,
-		timeout:              timeout,
-		maxBackgroundSeconds: maxBgSecs,
-		denyPatterns:         denyPatterns,
-		allowPatterns:        nil,
-		customAllowPatterns:  customAllowPatterns,
-		allowedPathPatterns:  allowedPathPatterns,
-		restrictToWorkspace:  restrict,
-		sessionManager:       getSessionManager(),
+		workingDir:          workingDir,
+		restrictToWorkspace: restrict,
+		allowedPathPatterns: allowedPathPatterns,
+		denyPatterns:        defaultDenyPatterns,
+		sessionManager:      getSessionManager(),
 	}, nil
 }
 
-func (t *ExecTool) Name() string {
-	return "exec"
-}
+func (t *ExecTool) Name() string { return "bash" }
 
 func (t *ExecTool) Scope() ToolScope       { return ScopeCore }
 func (t *ExecTool) Category() ToolCategory { return CategoryShell }
 
 func (t *ExecTool) Description() string {
-	return `Execute shell commands. Use background=true for long-running commands (returns sessionId). Use pty=true for interactive commands (can combine with background=true). Use poll/read/write/send-keys/kill with sessionId to manage background sessions. Sessions auto-cleanup 30 minutes after process exits; use kill to terminate early. Output buffer limit: 1MB.`
+	return `Execute a shell command (sh -c on Linux/macOS, powershell on Windows). Set run_in_background=true for long-running commands (returns a session_id immediately); use action=poll/read/kill with that session_id to check on it, read incremental output, or terminate it. cwd is relative to the workspace only (no absolute paths, no '..' escapes). timeout_seconds defaults to 300 and must be between 1 and 3600; enforced identically in the foreground and in the background — a background session times out on its own after timeout_seconds elapses, and is otherwise stopped only by an explicit kill action or an explicit session cancel.`
 }
 
 func (t *ExecTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"action": map[string]any{
-				"type":        "string",
-				"enum":        []string{"run", "list", "poll", "read", "write", "kill", "send-keys"},
-				"description": "Action: run (execute command), list (show sessions), poll (check status), read (get output), write (send input), kill (terminate), send-keys (send keys to PTY)",
-			},
 			"command": map[string]any{
 				"type":        "string",
-				"description": "Shell command to execute (required for run)",
+				"description": "Shell command to execute (required for action=run)",
 			},
-			"sessionId": map[string]any{
+			"description": map[string]any{
 				"type":        "string",
-				"description": "Session ID (required for poll/read/write/kill/send-keys)",
-			},
-			"keys": map[string]any{
-				"type":        "string",
-				"description": "Key names for send-keys: up, down, left, right, enter, tab, escape, backspace, ctrl-c, ctrl-d, home, end, pageup, pagedown, f1-f12",
-			},
-			"data": map[string]any{
-				"type":        "string",
-				"description": "Data to write to stdin (required for write)",
-			},
-			"background": map[string]any{
-				"type":        "boolean",
-				"description": "Run in background immediately",
-			},
-			"pty": map[string]any{
-				"type":        "boolean",
-				"description": "Run in a pseudo-terminal (PTY) when available",
+				"description": "Optional human-readable description of what this command does (documentation only)",
 			},
 			"cwd": map[string]any{
 				"type":        "string",
-				"description": "Working directory for the command",
+				"description": "Working directory relative to the workspace (e.g. 'my-project'). Absolute paths and '..' escapes are rejected. Defaults to the workspace root.",
 			},
-			"timeout": map[string]any{
+			"timeout_seconds": map[string]any{
 				"type":        "integer",
-				"description": "Timeout in seconds (0 = no timeout)",
+				"description": "Wall-clock timeout in seconds, applied identically in the foreground and background. Default 300. Must be between 1 and 3600.",
+			},
+			"run_in_background": map[string]any{
+				"type":        "boolean",
+				"description": "Run the command in the background and return immediately with a session_id (default false).",
+			},
+			"persistent": map[string]any{
+				"type":        "boolean",
+				"description": "Reserved for a future long-lived session mode. Only meaningful together with run_in_background=true (default false).",
+			},
+			"action": map[string]any{
+				"type":        "string",
+				"enum":        []string{"run", "poll", "read", "kill"},
+				"description": "run (default): execute command. poll/read/kill: manage a background session_id.",
+			},
+			"session_id": map[string]any{
+				"type":        "string",
+				"description": "Background session id (required for action=poll/read/kill)",
 			},
 		},
-		"required": []string{"action"},
 	}
 }
 
+// --- Execute / AsyncExecutor ------------------------------------------------
+
+var _ AsyncExecutor = (*ExecTool)(nil)
+
 func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	return t.execute(ctx, args, nil)
+}
+
+// ExecuteAsync implements AsyncExecutor. cb is only ever invoked for a
+// run_in_background=true call: it is captured by the background-completion
+// goroutine and fired exactly once — on natural completion, failure, timeout,
+// or kill (FR-B9) — regardless of how long after this call returns that
+// happens. Every other action (foreground run, poll, read, kill) never
+// invokes cb; it is simply unused for those calls.
+func (t *ExecTool) ExecuteAsync(ctx context.Context, args map[string]any, cb AsyncCallback) *ToolResult {
+	return t.execute(ctx, args, cb)
+}
+
+func (t *ExecTool) execute(ctx context.Context, args map[string]any, cb AsyncCallback) *ToolResult {
 	action, _ := args["action"].(string)
 	if action == "" {
-		return ErrorResult("action is required")
+		action = "run"
 	}
 
 	switch action {
 	case "run":
-		return t.executeRun(ctx, args)
-	case "list":
-		return t.executeList()
+		return t.executeRun(ctx, args, cb)
 	case "poll":
 		return t.executePoll(args)
 	case "read":
 		return t.executeRead(args)
-	case "write":
-		return t.executeWrite(args)
 	case "kill":
 		return t.executeKill(args)
-	case "send-keys":
-		return t.executeSendKeys(args)
 	default:
 		return ErrorResult(fmt.Sprintf("unknown action: %s", action))
 	}
 }
 
-func (t *ExecTool) executeRun(ctx context.Context, args map[string]any) *ToolResult {
+func getBoolArg(args map[string]any, key string) bool {
+	switch v := args[key].(type) {
+	case bool:
+		return v
+	case string:
+		return v == "true"
+	}
+	return false
+}
+
+const (
+	defaultTimeoutSeconds = int32(300)
+	minTimeoutSeconds     = int32(1)
+	maxTimeoutSeconds     = int32(3600)
+)
+
+// resolveTimeoutSeconds implements FR-B15: a timeout_seconds value outside
+// [1, 3600] is REJECTED as invalid input, never clamped or silently ignored.
+// Absent/nil defaults to 300 (the documented default).
+func resolveTimeoutSeconds(args map[string]any) (int32, error) {
+	raw, ok := args["timeout_seconds"]
+	if !ok || raw == nil {
+		return defaultTimeoutSeconds, nil
+	}
+	var v int64
+	switch n := raw.(type) {
+	case float64:
+		v = int64(n)
+	case int:
+		v = int64(n)
+	case int32:
+		v = int64(n)
+	case int64:
+		v = n
+	default:
+		return 0, fmt.Errorf("timeout_seconds must be a number")
+	}
+	if v < int64(minTimeoutSeconds) || v > int64(maxTimeoutSeconds) {
+		return 0, fmt.Errorf(
+			"timeout_seconds must be between %d and %d (got %d)",
+			minTimeoutSeconds, maxTimeoutSeconds, v,
+		)
+	}
+	return int32(v), nil
+}
+
+func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb AsyncCallback) *ToolResult {
 	command, ok := args["command"].(string)
-	if !ok {
-		return ErrorResult("command is required")
+	if !ok || strings.TrimSpace(command) == "" {
+		return ErrorResult("command is required and must be a non-empty string")
+	}
+	command = strings.TrimSpace(command)
+
+	runInBackground := getBoolArg(args, "run_in_background")
+	persistent := getBoolArg(args, "persistent")
+	if persistent && !runInBackground {
+		return ErrorResult("persistent requires run_in_background to also be true")
 	}
 
-	// GHSA-pv8c-p6jf-3fpp channel block removed. exec is now governed
-	// purely by per-agent ToolPolicyCfg. Agents that should not use exec on
-	// remote channels must have exec: deny in their tool policy.
-
-	getBoolArg := func(key string) bool {
-		switch v := args[key].(type) {
-		case bool:
-			return v
-		case string:
-			return v == "true"
-		}
-		return false
-	}
-	isPty := getBoolArg("pty")
-	isBackground := getBoolArg("background")
-
-	if isPty {
-		if runtime.GOOS == "windows" {
-			return ErrorResult("PTY is not supported on Windows. Use background=true without pty.")
-		}
+	timeoutSeconds, err := resolveTimeoutSeconds(args)
+	if err != nil {
+		return ErrorResult(err.Error())
 	}
 
-	// Resolve the base working directory for this call. When the turn re-roots
-	// to a workspace dir (the agent is a member of that Workspace's CoreTeam),
-	// the base becomes workspaces/<id>/ for this turn only; otherwise it is the
-	// fixed agent dir, unchanged. All workspace-escape guards below are
-	// evaluated relative to baseDir, so cross-workspace traversal is still
-	// blocked, just relative to the re-rooted root.
-	//
-	// Security (STEP 0): this only changes cmd.Dir. Both agents/<id>/ and
-	// workspaces/<id>/ are under $OMNIPUS_HOME, which the boot Landlock policy
-	// already grants RWX; the kernel sandbox is NOT widened — anything outside
-	// $OMNIPUS_HOME remains denied at the kernel layer.
+	// Resolve the base working directory for this call. When the turn
+	// re-roots to a workspace dir (the agent is a member of that Workspace's
+	// CoreTeam), the base becomes workspaces/<id>/ for this turn only;
+	// otherwise it is the fixed agent dir. All cwd guards below are evaluated
+	// relative to baseDir.
 	baseDir := t.workingDir
 	if d := TurnWorkspaceDir(ctx); d != "" {
 		baseDir = d
 	}
 
-	cwd := baseDir
-	if wd, ok := args["cwd"].(string); ok && wd != "" {
-		if t.restrictToWorkspace && baseDir != "" {
-			resolvedWD, err := validatePathWithAllowPaths(wd, baseDir, true, t.allowedPathPatterns)
-			if err != nil {
-				return ErrorResult("Command blocked by safety guard (" + err.Error() + ")")
-			}
-			cwd = resolvedWD
-		} else {
-			cwd = wd
-		}
+	cwd, cwdErr := t.resolveCWD(args, baseDir)
+	if cwdErr != nil {
+		t.emitAudit(ctx, command, "", audit.DecisionDeny)
+		return ErrorResult(cwdErr.Error())
 	}
 
-	if cwd == "" {
-		wd, err := os.Getwd()
-		if err != nil {
-			return ErrorResult(fmt.Sprintf("cannot determine working directory: %v", err))
-		}
-		cwd = wd
+	// FR-B4: hardcoded deny-pattern baseline (unconditional) + the opt-in
+	// operator-extensible layer + the legacy command-text absolute-path scan.
+	if guardErr := t.guardCommand(command, cwd); guardErr != "" {
+		t.emitAudit(ctx, command, cwd, audit.DecisionDeny)
+		return ErrorResult(guardErr)
 	}
 
-	if guardError := t.guardCommand(command, cwd); guardError != "" {
-		return ErrorResult(guardError)
-	}
-
-	// SEC-05: Binary allowlist enforcement (Wave 2).
-	//
-	// Delegates unconditionally to the policy auditor, which auto-logs every
-	// decision to the audit log (ADR-002 §W-3). The evaluator decides whether
-	// to enforce based on its own default_policy + allowed_binaries state:
-	//   - empty allowlist + default_policy="allow" → always allows
-	//   - empty allowlist + default_policy="deny" → always denies
-	//   - non-empty allowlist → matches against patterns, honors default_policy on miss
-	// This is the automated enforcement layer — the interactive approval
-	// prompt is handled separately by the agent loop's HookManager.ApproveTool
-	// which routes through the WebSocket approval channel, so we deliberately
-	// do not call ExecApprovalManager.CheckApproval() here (that would block
-	// on stdin in headless deployments).
+	// FR-B5: binary allowlist (SEC-05), applied uniformly to foreground and
+	// background — this check runs BEFORE the foreground/background branch
+	// below, so both paths are covered by the same call site.
 	if t.policyAuditor != nil {
 		agentID := ToolAgentID(ctx)
 		decision := t.policyAuditor.EvaluateExec(agentID, command)
 		if !decision.Allowed {
+			t.emitAudit(ctx, command, cwd, audit.DecisionDeny)
 			return ErrorResult(fmt.Sprintf("Command blocked by exec allowlist: %s", decision.PolicyRule))
 		}
 	}
 
-	// Re-resolve symlinks immediately before execution to shrink the TOCTOU window
-	// between validation and cmd.Dir assignment.
-	if t.restrictToWorkspace && baseDir != "" && cwd != baseDir {
-		resolved, err := filepath.EvalSymlinks(cwd)
-		if err != nil {
-			return ErrorResult(fmt.Sprintf("Command blocked by safety guard (path resolution failed: %v)", err))
-		}
-		if isAllowedPath(resolved, t.allowedPathPatterns) {
-			cwd = resolved
-		} else {
-			absWorkspace, absErr := filepath.Abs(baseDir)
-			if absErr != nil {
-				return ErrorResult(
-					fmt.Sprintf("Command blocked by safety guard (workspace path resolution failed: %v)", absErr),
-				)
-			}
-			wsResolved, symlinkErr := filepath.EvalSymlinks(absWorkspace)
-			if symlinkErr != nil {
-				return ErrorResult(
-					fmt.Sprintf(
-						"Command blocked by safety guard (workspace symlink resolution failed: %v)",
-						symlinkErr,
-					),
-				)
-			}
-			if wsResolved == "" {
-				wsResolved = absWorkspace
-			}
-			rel, err := filepath.Rel(wsResolved, resolved)
-			if err != nil || !filepath.IsLocal(rel) {
-				return ErrorResult("Command blocked by safety guard (working directory escaped workspace)")
-			}
-			cwd = resolved
-		}
+	// FR-B7: audit-log write failure fails CLOSED.
+	if auditResult := t.emitAuditOrDeny(ctx, command, cwd); auditResult != nil {
+		return auditResult
 	}
 
-	if isBackground {
-		return t.runBackground(ctx, command, cwd, isPty)
+	// FR-B6: route every non-god-mode invocation through sandbox.ResolveLimits.
+	lim, limErr := sandbox.ResolveLimits(t.godMode, baseDir, t.proxy, timeoutSeconds)
+	if limErr != nil {
+		return ErrorResult(fmt.Sprintf("sandbox limits error: %v", limErr))
 	}
+	lim.WorkspaceDir = cwd
 
-	return t.runSync(ctx, command, cwd)
+	if runInBackground {
+		ownerSessionID := ToolTranscriptSessionID(ctx)
+		return t.runBackground(ctx, command, cwd, timeoutSeconds, lim, ownerSessionID, cb)
+	}
+	return t.runForeground(ctx, command, lim, timeoutSeconds)
 }
 
-func (t *ExecTool) runSync(ctx context.Context, command, cwd string) *ToolResult {
-	// Sandbox-on path: route the child through sandbox.Run so it picks up
-	// workspace cwd, the egress proxy, RLIMITs, npm cache, scrubbed env, and
-	// inherits the gateway's kernel Landlock + seccomp policy (FS rules + the
-	// new bind port allow-list). The kernel layer is the load-bearing
-	// piece — without it, the agent could still bind 5173 and serve the
-	// internet directly, defeating the purpose of web_serve.
-	if t.sandboxOn() {
-		return t.runSyncHardened(ctx, command, cwd)
-	}
+// --- cwd resolution (FR-B2/FR-B13) -----------------------------------------
 
-	// Legacy path (sandbox=off): trust mode. Operator opted out of the
-	// sandbox; exec runs as the user with full host latitude (sudo if the
-	// user has it, any port, any path the user can reach). This is the
-	// documented contract for ModeOff.
-	//
-	// Security: even on the legacy path, scrub gateway secrets from the
-	// inherited environment unconditionally. This prevents a prompt-injected
-	// LLM from reading OMNIPUS_MASTER_KEY, OMNIPUS_KEY_FILE, or
-	// OMNIPUS_BEARER_TOKEN via `exec env`. The master-key leak is a total
-	// credential-store compromise regardless of sandbox mode.
+// resolveCWD resolves the optional cwd argument to an absolute path under
+// baseDir. Absolute paths are rejected outright (no escape hatch); relative
+// paths are resolved via validatePathWithAllowPaths, which also follows
+// symlinks (filepath.EvalSymlinks) before the containment check — a
+// workspace-internal symlink pointing outside the workspace is rejected the
+// same way an absolute path is (FR-B13). Empty cwd defaults to baseDir.
+//
+// SEC-05/FR-B2 threat model: t.allowedPathPatterns is the operator-configured
+// cross-tool allowlist that read_file/write_file/list_directory legitimately
+// honor (e.g. the shared media/attachments temp dir — see
+// buildAllowReadPatterns/mediaTempDirPattern in pkg/agent/instance.go). That
+// directory is shared across ALL agents and ALL sessions, so it is NOT a safe
+// place for bash to chdir into: validatePathWithAllowPaths checks
+// isAllowedPath() BEFORE the workspace-containment check and before the
+// cross-agent guard (isCrossAgentPath) ever runs, so an absolute (or
+// traversed-relative) cwd landing inside that shared directory would let one
+// agent read another agent's uploads via bash — exactly what isCrossAgentPath
+// exists to block. bash's cwd must never consult that allowlist at all
+// (mirrors the pre-consolidation workspace_shell.go, which rejected
+// filepath.IsAbs(rawCWD) outright and passed nil — not the real
+// patterns — into validatePathWithAllowPaths). Concretely:
+//  1. Any absolute path is rejected unconditionally, with no allowlist-based
+//     exception, before validatePathWithAllowPaths is even called.
+//  2. The relative-path resolution below passes nil for patterns, so a
+//     relative cwd that traverses (e.g. "../../media") out to the shared
+//     media dir cannot short-circuit past the containment/cross-agent checks
+//     either — it is judged purely on workspace containment, same as any
+//     other outside-workspace target.
+func (t *ExecTool) resolveCWD(args map[string]any, baseDir string) (string, error) {
+	rawCWD, _ := args["cwd"].(string)
+	rawCWD = strings.TrimSpace(rawCWD)
 
-	// timeout == 0 means no timeout
-	var cmdCtx context.Context
-	var cancel context.CancelFunc
-	if t.timeout > 0 {
-		cmdCtx, cancel = context.WithTimeout(ctx, t.timeout)
-	} else {
-		cmdCtx, cancel = context.WithCancel(ctx)
-	}
-	defer cancel()
-
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		cmd = exec.CommandContext(cmdCtx, "powershell", "-NoProfile", "-NonInteractive", "-Command", command)
-	} else {
-		cmd = exec.CommandContext(cmdCtx, "sh", "-c", command)
-	}
-	if cwd != "" {
-		cmd.Dir = cwd
-	}
-	// Unconditionally scrub sensitive gateway env vars so children never see
-	// OMNIPUS_MASTER_KEY/OMNIPUS_KEY_FILE/OMNIPUS_BEARER_TOKEN regardless of
-	// sandbox mode. This replaces the nil Env (which would inherit the full
-	// process environment including secrets) with a scrubbed copy.
-	cmd.Env = sandbox.ScrubGatewayEnv()
-
-	prepareCommandForTermination(cmd)
-
-	// SEC-01/02/03: Apply sandbox restrictions to the child process before Start().
-	// See applySandboxToCmd for the threat-model rationale.
-	if err := t.applySandboxToCmd(cmd); err != nil {
-		return ErrorResult(err.Error())
-	}
-
-	// SEC-28: Route child-process HTTP(S) traffic through the loopback SSRF
-	// proxy. PrepareCmd must run AFTER applySandboxToCmd so the sandbox env
-	// setup does not clobber the proxy vars, and BEFORE Start() so the child
-	// inherits them. CmdDone() balances the proxy's active-cmd counter once
-	// cmd.Wait() returns, regardless of exit path (success, error, timeout).
-	if t.execProxy != nil {
-		t.execProxy.PrepareCmd(cmd)
-		defer t.execProxy.CmdDone()
-	}
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Start(); err != nil {
-		return ErrorResult(fmt.Sprintf("failed to start command: %v", err))
-	}
-
-	// FR-011: report the spawned child to the scheduled-run process tracker (if
-	// the caller installed one) so it can be force-terminated on run completion.
-	// No-op for interactive runs (no tracker on the context).
-	if cmd.Process != nil {
-		TrackProcess(ctx, cmd.Process.Pid)
-	}
-
-	done := make(chan error, 1)
-	go func() {
-		done <- cmd.Wait()
-	}()
-
-	var err error
-	select {
-	case err = <-done:
-	case <-cmdCtx.Done():
-		// H5-BK: use the pre-built killAuditFn stored on the ExecTool so all
-		// kill sites share one closure. Nil-safe: terminateProcessTree and the
-		// fallback both guard on killAuditFn != nil before calling.
-		if termErr := terminateProcessTree(cmd, t.killAuditFn); termErr != nil {
-			logger.WarnCF("shell", "terminateProcessTree error", map[string]any{"error": termErr.Error()})
+	if rawCWD == "" {
+		abs, err := filepath.Abs(baseDir)
+		if err != nil {
+			return "", fmt.Errorf("workspace dir not resolvable: %w", err)
 		}
-		select {
-		case err = <-done:
-		case <-time.After(2 * time.Second):
-			// H2-BK: the 2-second graceful-exit window elapsed. This is the
-			// absolute last-resort kill. Failure here means the shell child is
-			// permanently loose — surface it through the same audit hook used by
-			// terminateProcessTree so operators see the event in the audit log.
-			if cmd.Process != nil {
-				if killErr := cmd.Process.Kill(); killErr != nil {
-					// Use errors.Is instead of string comparison (quick sweep 1).
-					if !errors.Is(killErr, os.ErrProcessDone) && !errors.Is(killErr, syscall.ESRCH) {
-						slog.Error("shell: runSync fallback Kill failed; child PID may be loose",
-							"pid", cmd.Process.Pid, "error", killErr)
-						if t.killAuditFn != nil {
-							t.killAuditFn(cmd.Process.Pid, killErr, "runSync_fallback_kill")
-						}
-					}
+		return abs, nil
+	}
+
+	if filepath.IsAbs(rawCWD) {
+		return "", fmt.Errorf("path escapes workspace: absolute path not allowed (use a relative path)")
+	}
+
+	resolved, err := validatePathWithAllowPaths(rawCWD, baseDir, true, nil)
+	if err != nil {
+		return "", fmt.Errorf("path escapes workspace: %w", err)
+	}
+	return resolved, nil
+}
+
+// --- deny-pattern guard ------------------------------------------------------
+
+// guardCommand applies, in order: (1) the hardcoded baseline (FR-B4,
+// unconditional), (2) the opt-in operator-extensible layer, and (3) a legacy
+// defense-in-depth scan for absolute paths referenced in the command TEXT
+// (independent of the cwd parameter guard above), gated on restrictToWorkspace
+// exactly as the pre-consolidation exec tool did.
+func (t *ExecTool) guardCommand(command, cwd string) string {
+	if msg := applyDenyPatterns(command, t.denyPatterns, nil); msg != "" {
+		return msg
+	}
+	if t.enableOperatorDenyPatterns {
+		if msg := applyDenyPatterns(command, t.operatorDenyPatterns, nil); msg != "" {
+			return msg
+		}
+	}
+
+	if !t.restrictToWorkspace {
+		return ""
+	}
+
+	cmd := strings.TrimSpace(command)
+	if strings.Contains(cmd, "..\\") || strings.Contains(cmd, "../") {
+		return "Command blocked by safety guard (path traversal detected)"
+	}
+
+	cwdPath, err := filepath.Abs(cwd)
+	if err != nil {
+		return "cannot resolve working directory"
+	}
+
+	// Web URL schemes whose path components (starting with //) should be
+	// exempt from workspace sandbox checks. file: is intentionally excluded
+	// so file:// URIs are still validated against the workspace boundary.
+	webSchemes := []string{"http:", "https:", "ftp:", "ftps:", "sftp:", "ssh:", "git:"}
+
+	matchIndices := absolutePathPattern.FindAllStringIndex(cmd, -1)
+	for _, loc := range matchIndices {
+		raw := cmd[loc[0]:loc[1]]
+
+		if strings.HasPrefix(raw, "//") && loc[0] > 0 {
+			before := cmd[:loc[0]]
+			isWebURL := false
+			for _, scheme := range webSchemes {
+				if strings.HasSuffix(before, scheme) {
+					isWebURL = true
+					break
 				}
 			}
-			err = <-done
-		}
-	}
-
-	output := stdout.String()
-	if stderr.Len() > 0 {
-		output += "\nSTDERR:\n" + stderr.String()
-	}
-
-	if err != nil {
-		if errors.Is(cmdCtx.Err(), context.DeadlineExceeded) {
-			msg := fmt.Sprintf("Command timed out after %v", t.timeout)
-			if output != "" {
-				msg += "\n\nPartial output before timeout:\n" + output
-			}
-			return &ToolResult{
-				ForLLM:  msg,
-				ForUser: msg,
-				IsError: true,
-				Err:     fmt.Errorf("command timeout: %w", err),
+			if isWebURL {
+				continue
 			}
 		}
 
-		// Extract detailed exit information
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			exitCode := exitErr.ExitCode()
-			output += fmt.Sprintf("\n\n[Command exited with code %d]", exitCode)
+		p, err := filepath.Abs(raw)
+		if err != nil {
+			return "Command blocked by safety guard (cannot resolve path)"
+		}
+		if safePaths[p] {
+			continue
+		}
+		if isAllowedPath(p, t.allowedPathPatterns) {
+			continue
+		}
 
-			// Add signal information if killed by signal (Unix)
-			if exitCode == -1 {
-				output += " (killed by signal)"
-			}
-		} else {
-			output += fmt.Sprintf("\n\n[Command failed: %v]", err)
+		rel, err := filepath.Rel(cwdPath, p)
+		if err != nil {
+			return "Command blocked by safety guard (cannot resolve relative path)"
+		}
+		if strings.HasPrefix(rel, "..") {
+			return "Command blocked by safety guard (path outside working dir)"
 		}
 	}
 
-	if output == "" {
-		output = "(no output)"
-	}
+	return ""
+}
 
-	maxLen := 10000
-	if len(output) > maxLen {
-		totalLen := len(output)
-		output = output[:maxLen] + fmt.Sprintf("\n... (truncated, %d more chars)", totalLen-maxLen)
-	}
+// --- audit helpers -----------------------------------------------------------
 
-	if err != nil {
+// emitAuditOrDeny writes an allow-decision audit.Entry before spawning. When
+// the write fails and auditFailClosed is true, it returns a ToolResult that
+// aborts execution (FR-B7). Returns nil to mean "continue".
+func (t *ExecTool) emitAuditOrDeny(ctx context.Context, command, cwd string) *ToolResult {
+	if t.auditLogger == nil {
+		return nil
+	}
+	agentID := ToolAgentID(ctx)
+	logErr := t.auditLogger.Log(&audit.Entry{
+		Event:    audit.EventExec,
+		Decision: audit.DecisionAllow,
+		AgentID:  agentID,
+		Tool:     t.Name(),
+		Command:  command,
+		Details: map[string]any{
+			"cwd":      cwd,
+			"god_mode": t.godMode,
+		},
+	})
+	if logErr == nil {
+		return nil
+	}
+	if t.auditFailClosed {
+		slog.Error("bash: audit logger degraded; refusing to execute (audit_fail_closed=true)",
+			"agent_id", agentID, "command", command, "error", logErr)
 		return &ToolResult{
-			ForLLM:  output,
-			ForUser: output,
 			IsError: true,
+			ForLLM:  "audit log write failed; refusing to execute (audit_fail_closed=true)",
+			ForUser: "bash requires audit logging; aborting",
 		}
 	}
+	slog.Warn("bash: audit write failed", "agent_id", agentID, "error", logErr)
+	return nil
+}
 
-	return &ToolResult{
-		ForLLM:  output,
-		ForUser: output,
-		IsError: false,
+// emitAudit writes a deny-decision audit.Entry. Used on paths that are
+// already rejected — fail-closed semantics do not apply here (the command was
+// never going to run). Nil logger is a no-op.
+func (t *ExecTool) emitAudit(ctx context.Context, command, cwd, decision string) {
+	if t.auditLogger == nil {
+		return
+	}
+	agentID := ToolAgentID(ctx)
+	if err := t.auditLogger.Log(&audit.Entry{
+		Event:    audit.EventExec,
+		Decision: decision,
+		AgentID:  agentID,
+		Tool:     t.Name(),
+		Command:  command,
+		Details: map[string]any{
+			"cwd":      cwd,
+			"god_mode": t.godMode,
+		},
+	}); err != nil {
+		slog.Warn("bash: audit write failed", "agent_id", agentID, "error", err)
 	}
 }
 
-// runSyncHardened runs the command via sandbox.Run so it inherits the
-// gateway's Landlock + seccomp policy and gets workspace cwd, scrubbed env,
-// and the egress proxy injected. Output shape mirrors the legacy runSync
-// path so the agent UX does not change.
-func (t *ExecTool) runSyncHardened(ctx context.Context, command, cwd string) *ToolResult {
+// --- foreground execution ----------------------------------------------------
+
+// buildShellArgv returns the platform-appropriate shell argv for a free-form
+// command.
+func buildShellArgv(command string) []string {
+	if runtime.GOOS == "windows" {
+		return []string{"powershell", "-NoProfile", "-NonInteractive", "-Command", command}
+	}
+	return []string{"sh", "-c", command}
+}
+
+// runForeground executes command synchronously and returns its output. Under
+// god mode, hardening is skipped entirely (runUnconstrained); otherwise the
+// command is routed through sandbox.Run, which applies Landlock/seccomp
+// inheritance, resource limits, the egress proxy, and the wall-clock timeout
+// uniformly (FR-B6). timeoutSeconds is passed explicitly (not read from
+// lim.TimeoutSeconds) because sandbox.ResolveLimits returns the ZERO VALUE
+// under god mode (lim.TimeoutSeconds would be 0) — workspace_shell's run()
+// used the same explicit-parameter pattern for exactly this reason.
+func (t *ExecTool) runForeground(
+	ctx context.Context,
+	command string,
+	lim sandbox.Limits,
+	timeoutSeconds int32,
+) *ToolResult {
 	argv := buildShellArgv(command)
 
-	wsDir := cwd
-	if wsDir == "" {
-		wsDir = t.workingDir
-	}
-
-	lim := sandbox.Limits{
-		TimeoutSeconds: t.execTimeoutSeconds,
-		WorkspaceDir:   wsDir,
-	}
-	if t.sandboxEgressProxy != nil {
-		lim.EgressProxyAddr = t.sandboxEgressProxy.Addr()
+	if t.godMode {
+		return t.runUnconstrained(ctx, argv, lim.WorkspaceDir, timeoutSeconds)
 	}
 
 	res, err := sandbox.Run(ctx, argv, nil, lim)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("sandbox.Run failed: %v", err))
 	}
+	return foregroundResultFromSandbox(res, timeoutSeconds)
+}
 
+func foregroundResultFromSandbox(res sandbox.Result, timeoutSeconds int32) *ToolResult {
 	output := string(res.Stdout)
 	if len(res.Stderr) > 0 {
 		if output != "" {
@@ -869,7 +791,7 @@ func (t *ExecTool) runSyncHardened(ctx context.Context, command, cwd string) *To
 	}
 
 	if res.TimedOut {
-		msg := fmt.Sprintf("Command timed out after %d seconds", t.execTimeoutSeconds)
+		msg := fmt.Sprintf("Command timed out after %d seconds", timeoutSeconds)
 		if output != "" {
 			msg += "\n\nPartial output before timeout:\n" + output
 		}
@@ -888,16 +810,7 @@ func (t *ExecTool) runSyncHardened(ctx context.Context, command, cwd string) *To
 		}
 	}
 
-	if output == "" {
-		output = "(no output)"
-	}
-
-	const maxLen = 10000
-	if len(output) > maxLen {
-		totalLen := len(output)
-		output = output[:maxLen] + fmt.Sprintf("\n... (truncated, %d more chars)", totalLen-maxLen)
-	}
-
+	output = truncateOutput(output)
 	return &ToolResult{
 		ForLLM:  output,
 		ForUser: output,
@@ -905,12 +818,126 @@ func (t *ExecTool) runSyncHardened(ctx context.Context, command, cwd string) *To
 	}
 }
 
-// sandboxLimitsEnv builds the environment for background sessions on the
-// sandbox-on path. It starts from sandbox.ScrubGatewayEnv() (which under
-// v0.2 #155 item 3 enforces a closed allowlist of PATH/HOME/LANG/LC_*/XDG_*/
-// OMNIPUS_CHILD_*) and then layers the Limits-derived injections
-// (HTTP_PROXY, npm_config_cache) on top so they take precedence on duplicate
-// keys (POSIX exec(3) semantics).
+// scrubbedEnv returns a copy of base with sensitive Omnipus env vars removed.
+// Used only on the god-mode path (runUnconstrained / background godMode
+// spawn), where sandbox.ScrubGatewayEnv's stricter allowlist is intentionally
+// NOT applied (god mode preserves the operator's full environment) but the
+// gateway's own credential material must still never leak to a child.
+func scrubbedEnv(base []string) []string {
+	blocked := map[string]bool{
+		"OMNIPUS_MASTER_KEY":   true,
+		"OMNIPUS_KEY_FILE":     true,
+		"OMNIPUS_BEARER_TOKEN": true,
+	}
+	out := make([]string, 0, len(base))
+	for _, kv := range base {
+		key := kv
+		if idx := strings.IndexByte(kv, '='); idx >= 0 {
+			key = kv[:idx]
+		}
+		if !blocked[key] {
+			out = append(out, kv)
+		}
+	}
+	return out
+}
+
+// runUnconstrained runs the command without ApplyChildHardening/sandbox.Run.
+// Used only under the global god-mode override. The command still runs in
+// the resolved cwd and honors the caller-supplied timeout via context
+// cancellation (exec.CommandContext); the parent environment is inherited
+// with sensitive Omnipus credentials stripped.
+func (t *ExecTool) runUnconstrained(
+	ctx context.Context,
+	argv []string,
+	cwdPath string,
+	timeoutSeconds int32,
+) *ToolResult {
+	runCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(runCtx, argv[0], argv[1:]...)
+	if cwdPath != "" {
+		cmd.Dir = cwdPath
+	}
+	cmd.Env = scrubbedEnv(os.Environ())
+
+	var stdoutBuf, stderrBuf bytes.Buffer
+	cmd.Stdout = &stdoutBuf
+	cmd.Stderr = &stderrBuf
+
+	start := time.Now()
+	runErr := cmd.Run()
+	dur := time.Since(start)
+
+	timedOut := errors.Is(runCtx.Err(), context.DeadlineExceeded)
+
+	exitCode := 0
+	if runErr != nil {
+		var ee *exec.ExitError
+		if errors.As(runErr, &ee) {
+			exitCode = ee.ExitCode()
+		} else if !timedOut {
+			return ErrorResult(fmt.Sprintf("command failed: %v", runErr))
+		} else {
+			exitCode = -1
+		}
+	}
+
+	output := stdoutBuf.String()
+	if stderrBuf.Len() > 0 {
+		if output != "" {
+			output += "\n"
+		}
+		output += "STDERR:\n" + stderrBuf.String()
+	}
+
+	if timedOut {
+		msg := fmt.Sprintf("Command timed out after %d seconds", timeoutSeconds)
+		if output != "" {
+			msg += fmt.Sprintf("\n\nPartial output before timeout (ran %s):\n%s", dur.Round(time.Millisecond), output)
+		}
+		return &ToolResult{
+			ForLLM:  msg,
+			ForUser: msg,
+			IsError: true,
+			Err:     errors.New("command timeout"),
+		}
+	}
+
+	if exitCode != 0 {
+		output += fmt.Sprintf("\n\n[Command exited with code %d]", exitCode)
+	}
+
+	output = truncateOutput(output)
+	return &ToolResult{
+		ForLLM:  output,
+		ForUser: output,
+		IsError: exitCode != 0,
+	}
+}
+
+const maxForegroundOutputLen = 10000
+
+func truncateOutput(output string) string {
+	if output == "" {
+		return "(no output)"
+	}
+	if len(output) > maxForegroundOutputLen {
+		totalLen := len(output)
+		return output[:maxForegroundOutputLen] + fmt.Sprintf(
+			"\n... (truncated, %d more chars)",
+			totalLen-maxForegroundOutputLen,
+		)
+	}
+	return output
+}
+
+// --- background execution ----------------------------------------------------
+
+// sandboxLimitsEnv builds the environment for a background session on the
+// non-god-mode path. Starts from sandbox.ScrubGatewayEnv() and layers the
+// Limits-derived injections (HTTP_PROXY, npm_config_cache) on top.
 func sandboxLimitsEnv(lim sandbox.Limits) []string {
 	scrubbed := sandbox.ScrubGatewayEnv()
 	if lim.EgressProxyAddr != "" {
@@ -930,363 +957,167 @@ func sandboxLimitsEnv(lim sandbox.Limits) []string {
 	return scrubbed
 }
 
-// buildShellArgv returns the platform-appropriate shell argv to execute a
-// free-form command. Mirrors the legacy runSync / runBackground branches so
-// shell features (pipes, &&, redirects) keep working on the sandbox-on path.
-func buildShellArgv(command string) []string {
-	if runtime.GOOS == "windows" {
-		return []string{"powershell", "-NoProfile", "-NonInteractive", "-Command", command}
-	}
-	return []string{"sh", "-c", command}
-}
-
-func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEnabled bool) *ToolResult {
+// runBackground starts command detached, tracks it as a ProcessSession
+// (stamped with OwnerSessionID per FR-B10 so a session-level cancel can find
+// it — see pkg/agent/cancel.go's CancelHooks.KillBackgroundSessions /
+// SessionManager.KillAllForSession), and returns immediately with a
+// session_id. The completion goroutine below fires cb exactly once — on
+// natural completion, failure, timeout, or explicit kill (FR-B9) — via
+// whichever ToolResult best describes the final state.
+func (t *ExecTool) runBackground(
+	ctx context.Context,
+	command, cwd string,
+	timeoutSeconds int32,
+	lim sandbox.Limits,
+	ownerSessionID string,
+	cb AsyncCallback,
+) *ToolResult {
 	sessionID := generateSessionID()
 	session := &ProcessSession{
-		ID:         sessionID,
-		Command:    command,
-		PTY:        ptyEnabled,
-		Background: true,
-		StartTime:  time.Now().Unix(),
-		Status:     "running",
-		ptyKeyMode: PtyKeyModeCSI,
+		ID:             sessionID,
+		Command:        command,
+		Background:     true,
+		StartTime:      time.Now().Unix(),
+		Status:         "running",
+		OwnerSessionID: ownerSessionID,
 	}
 
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		cmd = exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", command)
-	} else {
-		cmd = exec.Command("sh", "-c", command)
-	}
+	argv := buildShellArgv(command)
+	cmd := exec.Command(argv[0], argv[1:]...) //nolint:gosec // command is agent-supplied by design; guarded above
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
 
-	// Unconditionally scrub sensitive gateway env vars so background children
-	// never see OMNIPUS_MASTER_KEY/OMNIPUS_KEY_FILE/OMNIPUS_BEARER_TOKEN
-	// regardless of sandbox mode. The sandbox-on path below will override
-	// cmd.Env with sandboxLimitsEnv (which also scrubs), but we set the
-	// scrubbed base here so the sandbox-off legacy path is covered too.
-	cmd.Env = sandbox.ScrubGatewayEnv()
-
+	// Setpgid baseline (Setpgid:true; no-op on Windows). sandbox.ApplyChildHardening
+	// (below) safely EXTENDS this SysProcAttr (adds Pdeathsig) rather than
+	// clobbering it — see hardened_exec_linux.go's applyPlatformHardening,
+	// which only sets fields on an already-non-nil SysProcAttr.
 	prepareCommandForTermination(cmd)
 
-	var stdoutReader io.ReadCloser
-	var stderrReader io.ReadCloser
-	var stdinWriter io.WriteCloser
-	var ptySlaveToClose io.Closer
-
-	if ptyEnabled {
-		ptmx, tty, err := pty.Open()
-		if err != nil {
-			return ErrorResult(fmt.Sprintf("failed to create PTY: %v", err))
-		}
-
-		cmd.Stdin = tty
-		cmd.Stdout = tty
-		cmd.Stderr = tty
-		ptySlaveToClose = tty
-
-		// For PTY, we need Setsid to create a new session.
-		// Note: Setsid and Setpgid conflict, so we must replace SysProcAttr entirely.
-		setSysProcAttrForPty(cmd)
-
-		session.ptyMaster = ptmx
+	if t.godMode {
+		cmd.Env = scrubbedEnv(os.Environ())
 	} else {
-		var err error
-		stdoutReader, err = cmd.StdoutPipe()
-		if err != nil {
-			return ErrorResult(fmt.Sprintf("failed to create stdout pipe: %v", err))
-		}
-		stderrReader, err = cmd.StderrPipe()
-		if err != nil {
-			return ErrorResult(fmt.Sprintf("failed to create stderr pipe: %v", err))
-		}
-		stdinWriter, err = cmd.StdinPipe()
-		if err != nil {
-			return ErrorResult(fmt.Sprintf("failed to create stdin pipe: %v", err))
-		}
-		session.stdinWriter = stdinWriter
-	}
-
-	// SEC-01/02/03: Apply sandbox restrictions to the background child process
-	// before Start(). Must happen after the PTY / pipe setup above (which may
-	// replace SysProcAttr) but before Start().
-	if err := t.applySandboxToCmd(cmd); err != nil {
-		if session.ptyMaster != nil {
-			session.ptyMaster.Close()
-		}
-		if ptySlaveToClose != nil {
-			ptySlaveToClose.Close()
-		}
-		return ErrorResult(err.Error())
-	}
-
-	// Sandbox-on path for background sessions: inject the same Limits-derived
-	// env (HTTP_PROXY/HTTPS_PROXY, NO_PROXY, npm_config_cache) that
-	// sandbox.Run applies on the foreground path, and apply Setpgid + Pdeathsig
-	// process-group hardening via ApplyChildHardening when not in PTY mode.
-	// PTY sessions require Setsid (set by setSysProcAttrForPty above), which
-	// conflicts with Setpgid; skip the SysProcAttr step for PTY. Kernel
-	// Landlock + seccomp + the bind/connect port allow-list are process-wide
-	// and inherit to the child regardless, so the security-critical pieces
-	// are still in force on the PTY path.
-	var hardenedLim sandbox.Limits
-	if t.sandboxOn() {
-		hardenedLim = sandbox.Limits{
-			TimeoutSeconds: 0, // background sessions are governed by maxBackgroundSeconds
-			WorkspaceDir:   cwd,
-		}
-		if t.sandboxEgressProxy != nil {
-			hardenedLim.EgressProxyAddr = t.sandboxEgressProxy.Addr()
-		}
-		// Build env: scrub gateway secrets, then layer the Limits injections.
-		// We let mergeEnv do the work by handing its output back via cmd.Env.
-		cmd.Env = sandboxLimitsEnv(hardenedLim)
-
-		if !ptyEnabled {
-			if err := sandbox.ApplyChildHardening(cmd, hardenedLim); err != nil {
-				if session.ptyMaster != nil {
-					session.ptyMaster.Close()
-				}
-				if ptySlaveToClose != nil {
-					ptySlaveToClose.Close()
-				}
-				return ErrorResult(fmt.Sprintf("sandbox hardening failed: %v", err))
-			}
+		cmd.Env = sandboxLimitsEnv(lim)
+		if err := sandbox.ApplyChildHardening(cmd, lim); err != nil {
+			return ErrorResult(fmt.Sprintf("sandbox hardening failed: %v", err))
 		}
 	}
 
-	// SEC-28: Route child-process HTTP(S) traffic through the loopback SSRF
-	// proxy. Unlike runSync we cannot defer CmdDone() here because the command
-	// runs asynchronously; the paired CmdDone() call is made from the wait
-	// goroutine below (one for PTY mode, one for non-PTY mode). We use
-	// proxyActive to make the counter increment conditional on PrepareCmd
-	// actually having been called, and to avoid a double-decrement if Start()
-	// fails after PrepareCmd.
-	proxyActive := false
-	if t.execProxy != nil {
-		t.execProxy.PrepareCmd(cmd)
-		proxyActive = true
+	stdoutReader, err := cmd.StdoutPipe()
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("failed to create stdout pipe: %v", err))
 	}
-
-	// When the sandbox is on, the spawn must happen on a thread that has
-	// Landlock re-applied so the child inherits the kernel domain. Without
-	// this hop, Go's M:N scheduler routes the fork through whichever worker
-	// thread is currently running this goroutine, and that thread is almost
-	// never the boot thread that received restrict_self at gateway start —
-	// so the child silently escapes the sandbox. PTY mode skips Setpgid but
-	// still needs the per-thread re-apply for the Landlock inheritance to
-	// kick in.
-	startErr := func() error {
-		if t.sandboxOn() {
-			return sandbox.StartLocked(cmd)
-		}
-		return cmd.Start()
-	}()
-	if startErr != nil {
-		// Start failed after PrepareCmd: balance the counter immediately so
-		// the proxy's idle watcher can still shut it down.
-		if proxyActive {
-			t.execProxy.CmdDone()
-			proxyActive = false
-		}
-		if session.ptyMaster != nil {
-			session.ptyMaster.Close()
-		}
-		if ptySlaveToClose != nil {
-			ptySlaveToClose.Close()
-		}
-		return ErrorResult(fmt.Sprintf("failed to start command: %v", startErr))
+	stderrReader, err := cmd.StderrPipe()
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("failed to create stderr pipe: %v", err))
 	}
-	if ptySlaveToClose != nil {
-		ptySlaveToClose.Close()
-	}
-
-	session.PID = cmd.Process.Pid
-	// FR-011: report the spawned background child to the scheduled-run process
-	// tracker (if installed) so it is force-terminated on run completion. No-op
-	// for interactive runs.
-	TrackProcess(ctx, session.PID)
-	t.sessionManager.Add(session)
 
 	session.outputBuffer = &bytes.Buffer{}
 
-	// PTY mode: read from ptyMaster and wait for process
-	// Note: On Linux, closing ptyMaster doesn't interrupt blocking Read() calls,
-	// so we need cmd.Wait() in a separate goroutine to detect process exit.
-	if session.PTY && session.ptyMaster != nil {
-		go func() {
-			waitErr := cmd.Wait() // Wait for process to exit
-			// SEC-28: Balance the proxy's active-cmd counter. CmdDone()
-			// must run after cmd.Wait() (not before Start) so the child's
-			// network lifetime is fully covered by the proxy.
-			if proxyActive {
-				t.execProxy.CmdDone()
-			}
-			session.mu.Lock()
-			if cmd.ProcessState != nil {
-				session.ExitCode = cmd.ProcessState.ExitCode()
-			} else {
-				// ProcessState is nil: process did not exit normally.
-				if waitErr != nil {
-					logger.WarnCF("shell", "PTY cmd.Wait returned error with nil ProcessState",
-						map[string]any{"session_id": sessionID, "error": waitErr.Error()})
-				}
-				session.ExitCode = -1
-			}
-			session.Status = "done"
-			session.mu.Unlock()
-		}()
-
-		go func() {
-			buf := make([]byte, 4096)
-			for {
-				n, err := session.ptyMaster.Read(buf)
-				if n > 0 {
-					raw := string(buf[:n])
-					if mode := detectPtyKeyMode(raw); mode != PtyKeyModeNotFound && mode != session.GetPtyKeyMode() {
-						session.SetPtyKeyMode(mode)
-					}
-
-					session.mu.Lock()
-					if session.outputBuffer.Len() >= maxOutputBufferSize {
-						if !session.outputTruncated {
-							session.outputBuffer.WriteString(outputTruncateMarker)
-							session.outputTruncated = true
-						}
-					} else {
-						session.outputBuffer.Write(buf[:n])
-					}
-					session.mu.Unlock()
-				}
-				if err != nil {
-					break
-				}
-			}
-		}()
+	var startErr error
+	if t.godMode {
+		startErr = cmd.Start()
 	} else {
-		// Non-PTY mode: read stdout and stderr concurrently to avoid pipe-buffer deadlocks.
-		// Each goroutine drains one pipe until EOF. A third goroutine waits for both to
-		// finish before calling cmd.Wait() and marking the session done.
-		pipeReadFn := func(r io.Reader) {
-			buf := make([]byte, 4096)
-			for {
-				n, err := r.Read(buf)
-				if n > 0 {
-					session.mu.Lock()
-					if session.outputBuffer.Len() >= maxOutputBufferSize {
-						if !session.outputTruncated {
-							session.outputBuffer.WriteString(outputTruncateMarker)
-							session.outputTruncated = true
-						}
-					} else {
-						session.outputBuffer.Write(buf[:n])
-					}
-					session.mu.Unlock()
-				}
-				if err != nil {
-					break
-				}
-			}
-		}
-
-		var pipeWG sync.WaitGroup
-		pipeWG.Add(2)
-		go func() { defer pipeWG.Done(); pipeReadFn(stdoutReader) }()
-		go func() { defer pipeWG.Done(); pipeReadFn(stderrReader) }()
-
-		go func() {
-			pipeWG.Wait()
-			if stdinWriter != nil {
-				stdinWriter.Close()
-			}
-			waitErr := cmd.Wait()
-			// SEC-28: Balance the proxy's active-cmd counter after the
-			// process has fully exited and its pipes have drained.
-			if proxyActive {
-				t.execProxy.CmdDone()
-			}
-			session.mu.Lock()
-			if cmd.ProcessState != nil {
-				session.ExitCode = cmd.ProcessState.ExitCode()
-			} else {
-				// ProcessState is nil: process did not exit normally.
-				if waitErr != nil {
-					logger.WarnCF("shell", "non-PTY cmd.Wait returned error with nil ProcessState",
-						map[string]any{"session_id": sessionID, "error": waitErr.Error()})
-				}
-				session.ExitCode = -1
-			}
-			session.Status = "done"
-			session.mu.Unlock()
-		}()
+		startErr = sandbox.StartLocked(cmd)
+	}
+	if startErr != nil {
+		return ErrorResult(fmt.Sprintf("failed to start command: %v", startErr))
 	}
 
-	// Background process hard-kill timeout (FR-007).
-	// If maxBackgroundSeconds > 0, send SIGTERM after the timeout, then SIGKILL after 5s.
-	if t.maxBackgroundSeconds > 0 {
-		sid := sessionID
-		maxBgDuration := time.Duration(t.maxBackgroundSeconds) * time.Second
-		// Capture cmd.Process so we use the OS handle rather than the PID integer,
-		// eliminating the PID-reuse race (SC1/SH2): the handle stays valid until
-		// cmd.Wait() returns, even if the PID is recycled by the OS.
-		proc := cmd.Process
-		go func() {
-			timer := time.NewTimer(maxBgDuration)
-			defer timer.Stop()
-			<-timer.C
+	session.PID = cmd.Process.Pid
+	// FR-011: report the spawned background child to the scheduled-run
+	// process tracker (if the caller installed one) so it can be
+	// force-terminated on run completion. No-op when no tracker is on ctx.
+	TrackProcess(ctx, session.PID)
+	t.sessionManager.Add(session)
 
-			// Atomically: check status, kill via OS handle, update status.
-			// Using the OS process handle (cmd.Process) instead of the raw PID prevents
-			// the PID-reuse race where a newly spawned unrelated process inherits the PID.
-			session.mu.Lock()
-			if session.Status != "running" {
+	pipeReadFn := func(r io.Reader) {
+		buf := make([]byte, 4096)
+		for {
+			n, readErr := r.Read(buf)
+			if n > 0 {
+				session.mu.Lock()
+				if session.outputBuffer.Len() >= maxOutputBufferSize {
+					if !session.outputTruncated {
+						session.outputBuffer.WriteString(outputTruncateMarker)
+						session.outputTruncated = true
+					}
+				} else {
+					session.outputBuffer.Write(buf[:n])
+				}
 				session.mu.Unlock()
+			}
+			if readErr != nil {
 				return
 			}
-			pid := session.PID
-			session.mu.Unlock()
+		}
+	}
 
-			logger.WarnCF("shell", "Background session exceeded max_background_seconds; sending SIGTERM",
-				map[string]any{
-					"session_id":             sid,
-					"pid":                    pid,
-					"max_background_seconds": t.maxBackgroundSeconds,
-				})
+	var pipeWG sync.WaitGroup
+	pipeWG.Add(2)
+	go func() { defer pipeWG.Done(); pipeReadFn(stdoutReader) }()
+	go func() { defer pipeWG.Done(); pipeReadFn(stderrReader) }()
 
-			// Use gracefulKillProcessGroup with the captured process handle for SIGTERM,
-			// then fall back to SIGKILL via the OS handle.
-			gracefulKillProcessGroup(pid, 5*time.Second)
-			// Ensure the process is gone via the safe OS handle (no PID reuse risk).
-			// H5-BK: surface kill failures through the stored audit callback so
-			// operators see a process_kill_failed event in the audit log, not just
-			// a silent discard.
-			if proc != nil {
-				if killErr := proc.Kill(); killErr != nil {
-					// Use errors.Is instead of string comparison (quick sweep 1).
-					if !errors.Is(killErr, os.ErrProcessDone) && !errors.Is(killErr, syscall.ESRCH) {
-						slog.Error("shell: background session hard-kill failed; child PID may be loose",
-							"session_id", sid, "pid", pid, "error", killErr)
-						if t.killAuditFn != nil {
-							t.killAuditFn(pid, killErr, "bg_session_hard_kill")
-						}
+	// FR-B3: enforce timeout_seconds identically for background as for
+	// foreground. Fires session.Kill() (the same primitive
+	// SessionManager.KillAllForSession uses) and relabels the outcome
+	// "timeout" so pollers/AsyncNotifier can distinguish it from an explicit
+	// kill or a natural exit.
+	if timeoutSeconds > 0 {
+		go func() {
+			timer := time.NewTimer(time.Duration(timeoutSeconds) * time.Second)
+			defer timer.Stop()
+			<-timer.C
+			if killErr := session.Kill(); killErr != nil {
+				if !errors.Is(killErr, ErrSessionDone) {
+					slog.Warn("bash: background timeout kill failed",
+						"session_id", sessionID, "pid", session.PID, "error", killErr)
+					if t.killAuditFn != nil {
+						t.killAuditFn(session.PID, killErr, "bash_background_timeout")
 					}
 				}
+				return
 			}
-
-			// Mark session done under lock only if still running (the wait goroutine
-			// may have already transitioned it).
-			session.mu.Lock()
-			if session.Status == "running" {
-				session.Status = "done"
-				session.ExitCode = -1
-			}
-			session.mu.Unlock()
-			logger.WarnCF("shell", "Background session hard-killed",
-				map[string]any{"session_id": sid, "pid": pid})
+			session.SetStatus("timeout")
 		}()
 	}
+
+	// Completion goroutine: the single place that knows the process has
+	// actually exited and pipes are drained. It claims "done" only if no
+	// other path (explicit kill, timeout) already claimed a terminal status
+	// — see session.Kill()'s own atomic running-check for why this is race
+	// free (MIN-002). This is also FR-B9's sole notification point: it fires
+	// cb exactly once, regardless of which of the four outcomes occurred.
+	go func() {
+		pipeWG.Wait()
+		waitErr := cmd.Wait()
+
+		session.mu.Lock()
+		if session.Status == "running" {
+			if cmd.ProcessState != nil {
+				session.ExitCode = cmd.ProcessState.ExitCode()
+			} else {
+				if waitErr != nil {
+					logger.WarnCF("bash", "background cmd.Wait returned error with nil ProcessState",
+						map[string]any{"session_id": sessionID, "error": waitErr.Error()})
+				}
+				session.ExitCode = -1
+			}
+			session.Status = "done"
+		}
+		finalStatus := session.Status
+		finalExitCode := session.ExitCode
+		// Peek (non-destructive) at whatever output has accumulated so the
+		// async notification has content to show — do NOT Reset() here: an
+		// explicit action=read call after completion must still be able to
+		// drain this same buffered output (Reset is session.Read()'s job).
+		outputSoFar := session.outputBuffer.String()
+		session.mu.Unlock()
+
+		if cb != nil {
+			cb(context.Background(), backgroundCompletionResult(sessionID, finalStatus, finalExitCode, outputSoFar))
+		}
+	}()
 
 	resp := ExecResponse{
 		SessionID: sessionID,
@@ -1294,7 +1125,7 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 	}
 	data, marshalErr := json.Marshal(resp)
 	if marshalErr != nil {
-		logger.WarnCF("shell", "failed to marshal exec start response", map[string]any{"error": marshalErr.Error()})
+		logger.WarnCF("bash", "failed to marshal bash start response", map[string]any{"error": marshalErr.Error()})
 		data = []byte(fmt.Sprintf(`{"error":"failed to serialize response: %s"}`, marshalErr.Error()))
 	}
 	return &ToolResult{
@@ -1304,35 +1135,49 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 	}
 }
 
-func (t *ExecTool) executeList() *ToolResult {
-	sessions := t.sessionManager.List()
-	resp := ExecResponse{
-		Sessions: sessions,
+// backgroundCompletionResult builds the ToolResult passed to cb when a
+// background session reaches a terminal state (FR-B9).
+func backgroundCompletionResult(sessionID, status string, exitCode int, output string) *ToolResult {
+	if output == "" {
+		output = "(no output)"
 	}
-	data, marshalErr := json.Marshal(resp)
-	if marshalErr != nil {
-		logger.WarnCF("shell", "failed to marshal exec list response", map[string]any{"error": marshalErr.Error()})
-		data = []byte(fmt.Sprintf(`{"error":"failed to serialize response: %s"}`, marshalErr.Error()))
+	var summary string
+	switch status {
+	case "timeout":
+		summary = fmt.Sprintf("Background session %s timed out.\n\n%s", sessionID, output)
+	case "killed":
+		summary = fmt.Sprintf("Background session %s was killed.\n\n%s", sessionID, output)
+	default:
+		summary = fmt.Sprintf("Background session %s finished (exit code %d).\n\n%s", sessionID, exitCode, output)
 	}
 	return &ToolResult{
-		ForLLM:  string(data),
-		ForUser: fmt.Sprintf("%d active sessions", len(sessions)),
-		IsError: marshalErr != nil,
+		ForLLM:  summary,
+		ForUser: summary,
+		IsError: status != "done",
 	}
 }
 
-func (t *ExecTool) executePoll(args map[string]any) *ToolResult {
-	sessionID, ok := args["sessionId"].(string)
-	if !ok {
-		return ErrorResult("sessionId is required")
-	}
+// --- session actions (poll / read / kill) ------------------------------------
 
+func (t *ExecTool) getSessionArg(args map[string]any) (*ProcessSession, string, *ToolResult) {
+	sessionID, ok := args["session_id"].(string)
+	if !ok || sessionID == "" {
+		return nil, "", ErrorResult("session_id is required")
+	}
 	session, err := t.sessionManager.Get(sessionID)
 	if err != nil {
 		if errors.Is(err, ErrSessionNotFound) {
-			return ErrorResult(fmt.Sprintf("session not found: %s", sessionID))
+			return nil, "", ErrorResult(fmt.Sprintf("session not found: %s", sessionID))
 		}
-		return ErrorResult(err.Error())
+		return nil, "", ErrorResult(err.Error())
+	}
+	return session, sessionID, nil
+}
+
+func (t *ExecTool) executePoll(args map[string]any) *ToolResult {
+	session, sessionID, errResult := t.getSessionArg(args)
+	if errResult != nil {
+		return errResult
 	}
 
 	resp := ExecResponse{
@@ -1342,7 +1187,7 @@ func (t *ExecTool) executePoll(args map[string]any) *ToolResult {
 	}
 	data, marshalErr := json.Marshal(resp)
 	if marshalErr != nil {
-		logger.WarnCF("shell", "failed to marshal exec poll response", map[string]any{"error": marshalErr.Error()})
+		logger.WarnCF("bash", "failed to marshal bash poll response", map[string]any{"error": marshalErr.Error()})
 		data = []byte(fmt.Sprintf(`{"error":"failed to serialize response: %s"}`, marshalErr.Error()))
 	}
 	return &ToolResult{
@@ -1352,17 +1197,9 @@ func (t *ExecTool) executePoll(args map[string]any) *ToolResult {
 }
 
 func (t *ExecTool) executeRead(args map[string]any) *ToolResult {
-	sessionID, ok := args["sessionId"].(string)
-	if !ok {
-		return ErrorResult("sessionId is required")
-	}
-
-	session, err := t.sessionManager.Get(sessionID)
-	if err != nil {
-		if errors.Is(err, ErrSessionNotFound) {
-			return ErrorResult(fmt.Sprintf("session not found: %s", sessionID))
-		}
-		return ErrorResult(err.Error())
+	session, sessionID, errResult := t.getSessionArg(args)
+	if errResult != nil {
+		return errResult
 	}
 
 	output := session.Read()
@@ -1374,7 +1211,7 @@ func (t *ExecTool) executeRead(args map[string]any) *ToolResult {
 	}
 	data, marshalErr := json.Marshal(resp)
 	if marshalErr != nil {
-		logger.WarnCF("shell", "failed to marshal exec read response", map[string]any{"error": marshalErr.Error()})
+		logger.WarnCF("bash", "failed to marshal bash read response", map[string]any{"error": marshalErr.Error()})
 		data = []byte(fmt.Sprintf(`{"error":"failed to serialize response: %s"}`, marshalErr.Error()))
 	}
 	return &ToolResult{
@@ -1383,444 +1220,54 @@ func (t *ExecTool) executeRead(args map[string]any) *ToolResult {
 	}
 }
 
-func (t *ExecTool) executeWrite(args map[string]any) *ToolResult {
-	sessionID, ok := args["sessionId"].(string)
-	if !ok {
-		return ErrorResult("sessionId is required")
-	}
-
-	data, ok := args["data"].(string)
-	if !ok {
-		return ErrorResult("data is required")
-	}
-
-	session, err := t.sessionManager.Get(sessionID)
-	if err != nil {
-		if errors.Is(err, ErrSessionNotFound) {
-			return ErrorResult(fmt.Sprintf("session not found: %s", sessionID))
-		}
-		return ErrorResult(err.Error())
-	}
-
-	if session.IsDone() {
-		return ErrorResult(fmt.Sprintf("process already exited with code %d", session.GetExitCode()))
-	}
-
-	if err := session.Write(data); err != nil {
-		if errors.Is(err, ErrSessionDone) {
-			return ErrorResult(fmt.Sprintf("process already exited with code %d", session.GetExitCode()))
-		}
-		return ErrorResult(fmt.Sprintf("failed to write to session: %v", err))
-	}
-
-	resp := ExecResponse{
-		SessionID: sessionID,
-		Status:    session.GetStatus(),
-	}
-	respData, marshalErr := json.Marshal(resp)
-	if marshalErr != nil {
-		logger.WarnCF("shell", "failed to marshal exec write response", map[string]any{"error": marshalErr.Error()})
-		respData = []byte(fmt.Sprintf(`{"error":"failed to serialize response: %s"}`, marshalErr.Error()))
-	}
-	return &ToolResult{
-		ForLLM:  string(respData),
-		IsError: marshalErr != nil,
-	}
-}
-
+// executeKill terminates a running background session. MIN-002: if the
+// process already exited naturally (a race between an earlier poll and this
+// kill call), it reports the REAL final status instead of a false "killed" —
+// session.IsDone() is checked BEFORE any kill attempt, and session.Kill()
+// itself atomically no-ops (ErrSessionDone) if it lost that race.
 func (t *ExecTool) executeKill(args map[string]any) *ToolResult {
-	sessionID, ok := args["sessionId"].(string)
-	if !ok {
-		return ErrorResult("sessionId is required")
-	}
-
-	session, err := t.sessionManager.Get(sessionID)
-	if err != nil {
-		if errors.Is(err, ErrSessionNotFound) {
-			return ErrorResult(fmt.Sprintf("session not found: %s", sessionID))
-		}
-		return ErrorResult(err.Error())
+	session, sessionID, errResult := t.getSessionArg(args)
+	if errResult != nil {
+		return errResult
 	}
 
 	if session.IsDone() {
-		return ErrorResult(fmt.Sprintf("process already exited with code %d", session.GetExitCode()))
+		return t.sessionActionResult(sessionID, session)
 	}
 
 	if err := session.Kill(); err != nil {
-		// H5-BK: emit an audit entry when kill_session fails so operators
-		// can detect loose processes via the audit log, not just the tool
-		// error response. Use the stored killAuditFn built at SetAuditLogger
-		// time — nil when auditLogger is not wired (god-mode / tests).
+		if errors.Is(err, ErrSessionDone) {
+			// Raced: the process exited naturally between our IsDone() check
+			// and this Kill() call. Report the real final status, not an error.
+			return t.sessionActionResult(sessionID, session)
+		}
 		if t.killAuditFn != nil {
-			t.killAuditFn(session.PID, err, "kill_session_tool")
+			t.killAuditFn(session.PID, err, "bash_kill_action")
 		}
 		return ErrorResult(fmt.Sprintf("failed to kill session: %v", err))
 	}
+	// session.Kill() succeeded and set Status="done" atomically; relabel to
+	// "killed" so pollers can distinguish an explicit kill from a natural exit.
+	session.SetStatus("killed")
 
-	t.sessionManager.Remove(sessionID)
+	return t.sessionActionResult(sessionID, session)
+}
 
+func (t *ExecTool) sessionActionResult(sessionID string, session *ProcessSession) *ToolResult {
+	status := session.GetStatus()
 	resp := ExecResponse{
 		SessionID: sessionID,
-		Status:    "done",
+		Status:    status,
+		ExitCode:  session.GetExitCode(),
 	}
 	data, marshalErr := json.Marshal(resp)
 	if marshalErr != nil {
-		logger.WarnCF("shell", "failed to marshal exec kill response", map[string]any{"error": marshalErr.Error()})
+		logger.WarnCF("bash", "failed to marshal bash kill response", map[string]any{"error": marshalErr.Error()})
 		data = []byte(fmt.Sprintf(`{"error":"failed to serialize response: %s"}`, marshalErr.Error()))
 	}
 	return &ToolResult{
 		ForLLM:  string(data),
-		ForUser: fmt.Sprintf("Session %s killed", sessionID),
+		ForUser: fmt.Sprintf("Session %s %s", sessionID, status),
 		IsError: marshalErr != nil,
 	}
-}
-
-// keyMap maps key names to their escape sequences.
-var keyMap = map[string]string{
-	"enter":     "\r",
-	"return":    "\r",
-	"tab":       "\t",
-	"escape":    "\x1b",
-	"esc":       "\x1b",
-	"space":     " ",
-	"backspace": "\x7f",
-	"bspace":    "\x7f",
-	"up":        "\x1b[A",
-	"down":      "\x1b[B",
-	"right":     "\x1b[C",
-	"left":      "\x1b[D",
-	"home":      "\x1b[1~",
-	"end":       "\x1b[4~",
-	"pageup":    "\x1b[5~",
-	"pagedown":  "\x1b[6~",
-	"pgup":      "\x1b[5~",
-	"pgdn":      "\x1b[6~",
-	"insert":    "\x1b[2~",
-	"ic":        "\x1b[2~",
-	"delete":    "\x1b[3~",
-	"del":       "\x1b[3~",
-	"dc":        "\x1b[3~",
-	"btab":      "\x1b[Z",
-	"f1":        "\x1bOP",
-	"f2":        "\x1bOQ",
-	"f3":        "\x1bOR",
-	"f4":        "\x1bOS",
-	"f5":        "\x1b[15~",
-	"f6":        "\x1b[17~",
-	"f7":        "\x1b[18~",
-	"f8":        "\x1b[19~",
-	"f9":        "\x1b[20~",
-	"f10":       "\x1b[21~",
-	"f11":       "\x1b[23~",
-	"f12":       "\x1b[24~",
-}
-
-// ss3KeysMap maps key names to SS3 escape sequences
-var ss3KeysMap = map[string]string{
-	"up":    "\x1bOA",
-	"down":  "\x1bOB",
-	"right": "\x1bOC",
-	"left":  "\x1bOD",
-	"home":  "\x1bOH",
-	"end":   "\x1bOF",
-}
-
-func detectPtyKeyMode(raw string) PtyKeyMode {
-	const SMKX = "\x1b[?1h"
-	const RMKX = "\x1b[?1l"
-
-	lastSmkx := strings.LastIndex(raw, SMKX)
-	lastRmkx := strings.LastIndex(raw, RMKX)
-
-	if lastSmkx == -1 && lastRmkx == -1 {
-		return PtyKeyModeNotFound
-	}
-
-	if lastSmkx > lastRmkx {
-		return PtyKeyModeSS3
-	}
-	return PtyKeyModeCSI
-}
-
-// encodeKeyToken encodes a single key token into its escape sequence.
-// Supports:
-//   - Named keys: "enter", "tab", "up", "ctrl-c", "alt-x", etc.
-//   - Ctrl modifier: "ctrl-c" or "c-c" (sends Ctrl+char)
-//   - Alt modifier: "alt-x" or "m-x" (sends ESC+char)
-func encodeKeyToken(token string, ptyKeyMode PtyKeyMode) (string, error) {
-	token = strings.ToLower(strings.TrimSpace(token))
-	if token == "" {
-		return "", nil
-	}
-
-	// Handle ctrl-X format (c-x)
-	if strings.HasPrefix(token, "c-") {
-		char := token[2]
-		if char >= 'a' && char <= 'z' {
-			return string(rune(char) & 0x1f), nil // ctrl-a through ctrl-z
-		}
-		return "", fmt.Errorf("invalid ctrl key: %s", token)
-	}
-
-	// Handle ctrl-X format (ctrl-x)
-	if strings.HasPrefix(token, "ctrl-") {
-		char := token[5]
-		if char >= 'a' && char <= 'z' {
-			return string(rune(char) & 0x1f), nil
-		}
-		return "", fmt.Errorf("invalid ctrl key: %s", token)
-	}
-
-	// Handle alt-X format (m-x or alt-x)
-	if strings.HasPrefix(token, "m-") || strings.HasPrefix(token, "alt-") {
-		var char string
-		if strings.HasPrefix(token, "m-") {
-			char = token[2:]
-		} else {
-			char = token[4:]
-		}
-		if len(char) == 1 {
-			return "\x1b" + char, nil
-		}
-		return "", fmt.Errorf("invalid alt key: %s", token)
-	}
-
-	// Handle shift modifier for special keys (shift-up, shift-down, etc.)
-	if strings.HasPrefix(token, "s-") || strings.HasPrefix(token, "shift-") {
-		var key string
-		if strings.HasPrefix(token, "s-") {
-			key = token[2:]
-		} else {
-			key = token[6:]
-		}
-		// Apply shift modifier: for single-char keys, return uppercase
-		if seq, ok := keyMap[key]; ok {
-			// For escape sequences, we can't easily add shift
-			// For single-char keys (letters), return uppercase
-			if len(seq) == 1 {
-				return strings.ToUpper(seq), nil
-			}
-			return seq, nil
-		}
-		return "", fmt.Errorf("unknown key with shift: %s", key)
-	}
-
-	if ptyKeyMode == PtyKeyModeSS3 {
-		if seq, ok := ss3KeysMap[token]; ok {
-			return seq, nil
-		}
-	}
-
-	if seq, ok := keyMap[token]; ok {
-		return seq, nil
-	}
-
-	return "", fmt.Errorf("unknown key: %s (use write action for text input)", token)
-}
-
-// encodeKeySequence encodes a slice of key tokens into a single string.
-func encodeKeySequence(tokens []string, ptyKeyMode PtyKeyMode) (string, error) {
-	var result string
-	for _, token := range tokens {
-		seq, err := encodeKeyToken(token, ptyKeyMode)
-		if err != nil {
-			return "", err
-		}
-		result += seq
-	}
-	return result, nil
-}
-
-func (t *ExecTool) executeSendKeys(args map[string]any) *ToolResult {
-	sessionID, ok := args["sessionId"].(string)
-	if !ok {
-		return ErrorResult("sessionId is required")
-	}
-
-	keysStr, ok := args["keys"].(string)
-	if !ok {
-		return ErrorResult("keys must be a string")
-	}
-
-	if keysStr == "" {
-		return ErrorResult("keys cannot be empty")
-	}
-
-	// Parse comma-separated key names
-	keyNames := strings.Split(keysStr, ",")
-	var keys []string
-	for _, k := range keyNames {
-		k = strings.TrimSpace(k)
-		if k != "" {
-			keys = append(keys, k)
-		}
-	}
-
-	if len(keys) == 0 {
-		return ErrorResult("keys cannot be empty")
-	}
-
-	session, err := t.sessionManager.Get(sessionID)
-	if err != nil {
-		if errors.Is(err, ErrSessionNotFound) {
-			return ErrorResult(fmt.Sprintf("session not found: %s", sessionID))
-		}
-		return ErrorResult(err.Error())
-	}
-
-	ptyKeyMode := session.GetPtyKeyMode()
-
-	data, err := encodeKeySequence(keys, ptyKeyMode)
-	if err != nil {
-		return ErrorResult(fmt.Sprintf("invalid key: %v", err))
-	}
-
-	if session.IsDone() {
-		return ErrorResult(fmt.Sprintf("process already exited with code %d", session.GetExitCode()))
-	}
-
-	if err := session.Write(data); err != nil {
-		if errors.Is(err, ErrSessionDone) {
-			return ErrorResult(fmt.Sprintf("process already exited with code %d", session.GetExitCode()))
-		}
-		return ErrorResult(fmt.Sprintf("failed to send keys: %v", err))
-	}
-
-	resp := ExecResponse{
-		SessionID: sessionID,
-		Status:    "running",
-		Output:    fmt.Sprintf("Sent keys: %v", keys),
-	}
-	respData, marshalErr := json.Marshal(resp)
-	if marshalErr != nil {
-		logger.WarnCF("shell", "failed to marshal exec sendkeys response", map[string]any{"error": marshalErr.Error()})
-		respData = []byte(fmt.Sprintf(`{"error":"failed to serialize response: %s"}`, marshalErr.Error()))
-	}
-	return &ToolResult{
-		ForLLM:  string(respData),
-		IsError: marshalErr != nil,
-	}
-}
-
-func (t *ExecTool) guardCommand(command, cwd string) string {
-	cmd := strings.TrimSpace(command)
-	lower := strings.ToLower(cmd)
-
-	// Custom allow patterns exempt a command from deny checks.
-	explicitlyAllowed := false
-	for _, pattern := range t.customAllowPatterns {
-		if pattern.MatchString(lower) {
-			explicitlyAllowed = true
-			break
-		}
-	}
-
-	if !explicitlyAllowed {
-		for _, pattern := range t.denyPatterns {
-			if pattern.MatchString(lower) {
-				return "Command blocked by safety guard (dangerous pattern detected)"
-			}
-		}
-	}
-
-	if len(t.allowPatterns) > 0 {
-		allowed := false
-		for _, pattern := range t.allowPatterns {
-			if pattern.MatchString(lower) {
-				allowed = true
-				break
-			}
-		}
-		if !allowed {
-			return "Command blocked by safety guard (not in allowlist)"
-		}
-	}
-
-	if t.restrictToWorkspace {
-		// Shallow supplementary guard: catches obvious literal traversal sequences.
-		// The real enforcement is the absolute-path regex validator below.
-		if strings.Contains(cmd, "..\\") || strings.Contains(cmd, "../") {
-			return "Command blocked by safety guard (path traversal detected)"
-		}
-
-		cwdPath, err := filepath.Abs(cwd)
-		if err != nil {
-			return "cannot resolve working directory"
-		}
-
-		// Web URL schemes whose path components (starting with //) should be exempt
-		// from workspace sandbox checks. file: is intentionally excluded so that
-		// file:// URIs are still validated against the workspace boundary.
-		webSchemes := []string{"http:", "https:", "ftp:", "ftps:", "sftp:", "ssh:", "git:"}
-
-		matchIndices := absolutePathPattern.FindAllStringIndex(cmd, -1)
-
-		for _, loc := range matchIndices {
-			raw := cmd[loc[0]:loc[1]]
-
-			// Skip URL path components that look like they're from web URLs.
-			// When a URL like "https://github.com" is parsed, the regex captures
-			// "//github.com" as a match (the path portion after "https:").
-			// Use the exact match position (loc[0]) so that duplicate //path substrings
-			// in the same command are each evaluated at their own position.
-			if strings.HasPrefix(raw, "//") && loc[0] > 0 {
-				before := cmd[:loc[0]]
-				isWebURL := false
-
-				for _, scheme := range webSchemes {
-					if strings.HasSuffix(before, scheme) {
-						isWebURL = true
-						break
-					}
-				}
-
-				if isWebURL {
-					continue
-				}
-			}
-
-			p, err := filepath.Abs(raw)
-			if err != nil {
-				return "Command blocked by safety guard (cannot resolve path)"
-			}
-
-			if safePaths[p] {
-				continue
-			}
-			if isAllowedPath(p, t.allowedPathPatterns) {
-				continue
-			}
-
-			rel, err := filepath.Rel(cwdPath, p)
-			if err != nil {
-				return "Command blocked by safety guard (cannot resolve relative path)"
-			}
-
-			if strings.HasPrefix(rel, "..") {
-				return "Command blocked by safety guard (path outside working dir)"
-			}
-		}
-	}
-
-	return ""
-}
-
-func (t *ExecTool) SetTimeout(timeout time.Duration) {
-	t.timeout = timeout
-}
-
-func (t *ExecTool) SetRestrictToWorkspace(restrict bool) {
-	t.restrictToWorkspace = restrict
-}
-
-func (t *ExecTool) SetAllowPatterns(patterns []string) error {
-	t.allowPatterns = make([]*regexp.Regexp, 0, len(patterns))
-	for _, p := range patterns {
-		re, err := regexp.Compile(p)
-		if err != nil {
-			return fmt.Errorf("invalid allow pattern %q: %w", p, err)
-		}
-		t.allowPatterns = append(t.allowPatterns, re)
-	}
-	return nil
 }

@@ -33,7 +33,6 @@ beforeEach(() => {
       messages: [],
       isStreaming: false,
       toolCalls: {},
-      pendingApprovals: [],
     })
     useConnectionStore.setState({ connection: null, isConnected: false, connectionError: null })
     useSessionStore.setState({ activeSessionId: null, activeAgentId: null })
@@ -175,7 +174,6 @@ describe('cancel integration (test #40)', () => {
             toolCalls: {},
             toolCallOrder: [],
             textAtToolCallStart: {},
-            pendingApprovals: [],
             isStreaming: true,
             isReplaying: false,
             replayCompletedForSession: null,

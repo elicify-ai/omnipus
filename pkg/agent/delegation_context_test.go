@@ -73,38 +73,37 @@ func TestBuildDelegationContext_SingleTargetAllModes(t *testing.T) {
 	if !strings.Contains(got, "### → Ava (Builder: implementation & code)") {
 		t.Errorf("missing target header; got:\n%s", got)
 	}
-	// All three tools must appear with correct names.
-	if !strings.Contains(got, "run_subagent") {
-		t.Error("missing run_subagent tool")
+	// Both delegate forms (background default, await async=false) must appear,
+	// plus create_task.
+	if !strings.Contains(got, `delegate(agent_id="ava", task="…")`) {
+		t.Errorf("missing background delegate(agent_id= tool call; got:\n%s", got)
 	}
-	if !strings.Contains(got, `spawn(agent_id=`) {
-		t.Errorf("missing spawn(agent_id= tool call; got:\n%s", got)
+	if !strings.Contains(got, `delegate(agent_id="ava", task="…", async=false)`) {
+		t.Errorf("missing await delegate(agent_id=..., async=false) tool call; got:\n%s", got)
 	}
-	if !strings.Contains(got, `create_task(agent_id=`) {
+	if !strings.Contains(got, `create_task(agent_id="ava"`) {
 		t.Errorf("missing create_task(agent_id= tool call; got:\n%s", got)
-	}
-	// Correct agent ID in spawn and create_task tool calls.
-	if !strings.Contains(got, `"ava"`) {
-		t.Errorf("missing concrete agent id 'ava' in tool calls; got:\n%s", got)
-	}
-	// run_subagent targets a named agent by id (await mode).
-	if !strings.Contains(got, `run_subagent(agent_id="ava"`) {
-		t.Errorf("run_subagent must target the named agent via agent_id; got:\n%s", got)
 	}
 	// Exclusivity footer must appear.
 	if !strings.Contains(got, "ONLY permitted delegation targets") {
 		t.Errorf("missing exclusivity footer; got:\n%s", got)
 	}
-	if !strings.Contains(got, "spawn / create_task / run_subagent to any other agent WILL be denied") {
+	if !strings.Contains(got, "delegate / create_task to any other agent WILL be denied") {
 		t.Errorf("missing denial warning in exclusivity footer; got:\n%s", got)
 	}
 	// Depth.
 	if !strings.Contains(got, "max chain depth: 3") {
 		t.Errorf("missing depth; got:\n%s", got)
 	}
-	// Retired name must not appear.
+	// Retired names must not appear.
 	if strings.Contains(got, "task_create") {
 		t.Errorf("retired tool name 'task_create' must not appear; got:\n%s", got)
+	}
+	if strings.Contains(got, "run_subagent") {
+		t.Errorf("retired tool name 'run_subagent' must not appear; got:\n%s", got)
+	}
+	if strings.Contains(got, "check_spawn_status") {
+		t.Errorf("retired tool name 'check_spawn_status' must not appear; got:\n%s", got)
 	}
 }
 
@@ -114,22 +113,19 @@ func TestBuildDelegationContext_ModesAwaitOnly(t *testing.T) {
 	}
 	got := buildDelegationContext(targets, 0)
 
-	// Only run_subagent must appear; spawn and create_task must NOT as tool calls.
-	// Note: "create_task" and "run_subagent" appear in the exclusivity footer text,
-	// so we check for the tool-call form (agent_id=) to verify absence as actual calls.
-	if !strings.Contains(got, "run_subagent") {
-		t.Error("missing run_subagent for await mode")
+	// Only the await (async=false) form must appear; the background form and
+	// create_task must NOT appear as tool calls.
+	if !strings.Contains(got, `delegate(agent_id="ava", task="…", async=false)`) {
+		t.Errorf("missing await delegate call for await mode; got:\n%s", got)
 	}
-	// "spawn(" as a distinctive prefix — avoids substring-match with check_spawn_status.
-	if strings.Contains(got, "spawn(") {
-		t.Errorf("spawn must NOT appear when Modes=[await]; got:\n%s", got)
+	// The background form's exact closing (`task="…")`, immediate paren) must
+	// be absent — it is NOT a substring of the await form (which continues
+	// with ", async=false)" instead of closing immediately).
+	if strings.Contains(got, `delegate(agent_id="ava", task="…")`) {
+		t.Errorf("background delegate call must NOT appear when Modes=[await]; got:\n%s", got)
 	}
 	if strings.Contains(got, `create_task(agent_id=`) {
 		t.Errorf("create_task tool call must NOT appear when Modes=[await]; got:\n%s", got)
-	}
-	// run_subagent targets the named agent by id (await mode).
-	if !strings.Contains(got, `run_subagent(agent_id="ava"`) {
-		t.Errorf("run_subagent must target the named agent via agent_id; got:\n%s", got)
 	}
 	// No mode footer — the new implementation renders the global depth footer only.
 	if !strings.Contains(got, "max chain depth: uncapped") {
@@ -151,12 +147,12 @@ func TestBuildDelegationContext_TwoTargets(t *testing.T) {
 	if !strings.Contains(got, "### → Ray (Scout: research & browsing)") {
 		t.Errorf("missing ray section; got:\n%s", got)
 	}
-	// Each target's ID must appear in spawn and create_task calls.
-	if !strings.Contains(got, `spawn(agent_id="ava"`) {
-		t.Errorf("missing spawn(agent_id=\"ava\" in tool calls; got:\n%s", got)
+	// Each target's ID must appear in delegate and create_task calls.
+	if !strings.Contains(got, `delegate(agent_id="ava", task="…")`) {
+		t.Errorf("missing delegate(agent_id=\"ava\" in tool calls; got:\n%s", got)
 	}
-	if !strings.Contains(got, `spawn(agent_id="ray"`) {
-		t.Errorf("missing spawn(agent_id=\"ray\" in tool calls; got:\n%s", got)
+	if !strings.Contains(got, `delegate(agent_id="ray", task="…")`) {
+		t.Errorf("missing delegate(agent_id=\"ray\" in tool calls; got:\n%s", got)
 	}
 	if !strings.Contains(got, `create_task(agent_id="ava"`) {
 		t.Errorf("missing create_task(agent_id=\"ava\" in tool calls; got:\n%s", got)
@@ -189,9 +185,7 @@ func TestBuildDelegationContext_UnknownTargetSkipped(t *testing.T) {
 		t.Errorf("unknown target must be skipped but a section header appeared; got:\n%s", got)
 	}
 	// The cannot-delegate path returns a single-line string with no tool calls.
-	// Check for the tool-call form (agent_id=) rather than the bare tool name,
-	// since the bare names do not appear in the cannot-delegate message.
-	if strings.Contains(got, `run_subagent(agent_id=`) {
+	if strings.Contains(got, `delegate(agent_id=`) {
 		t.Errorf("no tool call lines expected when all targets skipped; got:\n%s", got)
 	}
 	// The authority and exclusivity lines must NOT appear in the cannot-delegate path.
@@ -225,13 +219,12 @@ func TestBuildDelegationContext_BackgroundModeOnly(t *testing.T) {
 	}
 	got := buildDelegationContext(targets, 0)
 
-	// "run_subagent" and "create_task" appear in the exclusivity footer text, so
-	// check for the tool-call form (agent_id=) to verify absence as actual calls.
-	if strings.Contains(got, `run_subagent(agent_id=`) {
-		t.Errorf("run_subagent tool call must NOT appear when Modes=[background]; got:\n%s", got)
+	// The await (async=false) form and create_task must NOT appear as calls.
+	if strings.Contains(got, `delegate(agent_id="ava", task="…", async=false)`) {
+		t.Errorf("await delegate call must NOT appear when Modes=[background]; got:\n%s", got)
 	}
-	if !strings.Contains(got, "spawn(agent_id=") {
-		t.Errorf("spawn(agent_id= must appear for background mode; got:\n%s", got)
+	if !strings.Contains(got, `delegate(agent_id="ava", task="…")`) {
+		t.Errorf("background delegate(agent_id= must appear for background mode; got:\n%s", got)
 	}
 	if strings.Contains(got, `create_task(agent_id=`) {
 		t.Errorf("create_task tool call must NOT appear when Modes=[background]; got:\n%s", got)
@@ -244,13 +237,12 @@ func TestBuildDelegationContext_TaskModeOnly(t *testing.T) {
 	}
 	got := buildDelegationContext(targets, 0)
 
-	// "run_subagent" appears in the exclusivity footer text, so check for the
-	// tool-call form (agent_id=) to verify absence as an actual call.
-	if strings.Contains(got, `run_subagent(agent_id=`) {
-		t.Errorf("run_subagent tool call must NOT appear when Modes=[task]; got:\n%s", got)
+	// Neither delegate form must appear as an actual call.
+	if strings.Contains(got, `delegate(agent_id="ava", task="…", async=false)`) {
+		t.Errorf("await delegate call must NOT appear when Modes=[task]; got:\n%s", got)
 	}
-	if strings.Contains(got, "spawn(") {
-		t.Errorf("spawn must NOT appear when Modes=[task]; got:\n%s", got)
+	if strings.Contains(got, `delegate(agent_id="ava", task="…")`) {
+		t.Errorf("background delegate call must NOT appear when Modes=[task]; got:\n%s", got)
 	}
 	if !strings.Contains(got, "create_task(agent_id=") {
 		t.Errorf("create_task(agent_id= must appear for task mode; got:\n%s", got)
@@ -267,14 +259,13 @@ func TestBuildDelegationContext_TwoModeSubset(t *testing.T) {
 	}
 	got := buildDelegationContext(targets, 0)
 
-	// await must be absent. "run_subagent" appears in the exclusivity footer text,
-	// so check for the tool-call form (agent_id=) to verify no actual await call.
-	if strings.Contains(got, `run_subagent(agent_id=`) {
-		t.Errorf("run_subagent tool call must NOT appear for [background,task] modes; got:\n%s", got)
+	// await must be absent.
+	if strings.Contains(got, `delegate(agent_id="ava", task="…", async=false)`) {
+		t.Errorf("await delegate call must NOT appear for [background,task] modes; got:\n%s", got)
 	}
 	// Both background and task must be present.
-	if !strings.Contains(got, "spawn(agent_id=") {
-		t.Errorf("spawn(agent_id= must appear for background mode; got:\n%s", got)
+	if !strings.Contains(got, `delegate(agent_id="ava", task="…")`) {
+		t.Errorf("background delegate(agent_id= must appear for background mode; got:\n%s", got)
 	}
 	if !strings.Contains(got, "create_task(agent_id=") {
 		t.Errorf("create_task(agent_id= must appear for task mode; got:\n%s", got)
@@ -300,11 +291,11 @@ func TestBuildDelegationContext_MixedTargets(t *testing.T) {
 	if strings.Contains(got, "nonexistent") {
 		t.Errorf("nonexistent target must be skipped; got:\n%s", got)
 	}
-	if !strings.Contains(got, `spawn(agent_id="ava"`) {
-		t.Errorf("missing spawn(agent_id=\"ava\"; got:\n%s", got)
+	if !strings.Contains(got, `delegate(agent_id="ava", task="…")`) {
+		t.Errorf("missing delegate(agent_id=\"ava\"; got:\n%s", got)
 	}
-	if !strings.Contains(got, `spawn(agent_id="ray"`) {
-		t.Errorf("missing spawn(agent_id=\"ray\"; got:\n%s", got)
+	if !strings.Contains(got, `delegate(agent_id="ray", task="…")`) {
+		t.Errorf("missing delegate(agent_id=\"ray\"; got:\n%s", got)
 	}
 }
 
@@ -369,28 +360,27 @@ func TestBuildDelegationContext_PerTargetModeSubset(t *testing.T) {
 	}
 	got := buildDelegationContext(targets, 0)
 
-	// ava section: only run_subagent; spawn and create_task must NOT appear for ava.
-	// (ray also has run_subagent so we can't check absence globally — just check
-	// the ava section specifically by looking for spawn with ava's id.)
-	if strings.Contains(got, `spawn(agent_id="ava"`) {
-		t.Errorf("spawn for ava must NOT appear when ava edge is await-only; got:\n%s", got)
+	// ava section: only the await form; background delegate and create_task
+	// must NOT appear for ava.
+	if strings.Contains(got, `delegate(agent_id="ava", task="…")`) {
+		t.Errorf("background delegate for ava must NOT appear when ava edge is await-only; got:\n%s", got)
 	}
 	if strings.Contains(got, `create_task(agent_id="ava"`) {
 		t.Errorf("create_task for ava must NOT appear when ava edge is await-only; got:\n%s", got)
 	}
-	if !strings.Contains(got, `run_subagent(agent_id="ava"`) {
-		t.Errorf("run_subagent for ava must appear; got:\n%s", got)
+	if !strings.Contains(got, `delegate(agent_id="ava", task="…", async=false)`) {
+		t.Errorf("await delegate for ava must appear; got:\n%s", got)
 	}
 
 	// ray section: all three tools.
-	if !strings.Contains(got, `spawn(agent_id="ray"`) {
-		t.Errorf("spawn for ray must appear (all modes); got:\n%s", got)
+	if !strings.Contains(got, `delegate(agent_id="ray", task="…")`) {
+		t.Errorf("background delegate for ray must appear (all modes); got:\n%s", got)
 	}
 	if !strings.Contains(got, `create_task(agent_id="ray"`) {
 		t.Errorf("create_task for ray must appear (all modes); got:\n%s", got)
 	}
-	if !strings.Contains(got, `run_subagent(agent_id="ray"`) {
-		t.Errorf("run_subagent for ray must appear (all modes); got:\n%s", got)
+	if !strings.Contains(got, `delegate(agent_id="ray", task="…", async=false)`) {
+		t.Errorf("await delegate for ray must appear (all modes); got:\n%s", got)
 	}
 }
 
@@ -415,7 +405,7 @@ func TestBuildDelegationContext_DelegationAuthorityAndExclusivity(t *testing.T) 
 		if !strings.Contains(got, "These are your ONLY permitted delegation targets") {
 			t.Errorf("exclusivity footer missing; got:\n%s", got)
 		}
-		if !strings.Contains(got, "spawn / create_task / run_subagent to any other agent WILL be denied") {
+		if !strings.Contains(got, "delegate / create_task to any other agent WILL be denied") {
 			t.Errorf("denial warning missing from exclusivity footer; got:\n%s", got)
 		}
 		// Exclusivity footer must appear BEFORE the depth footer.

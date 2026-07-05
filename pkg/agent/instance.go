@@ -201,8 +201,8 @@ func NewAgentInstance(
 	// Memory tools (FR-016, FR-017): register remember, recall_memory, and
 	// run_retrospective for all agents except the main gateway agent.
 	// recall_conversation is registered separately (loop.go) as it is session-scoped.
-	// Subagents DO receive these tools — they are not in the ExcludedSpawn/
-	// ExcludedSubagent/ExcludedHandoff lists so CloneExcept leaves them intact.
+	// Subagents DO receive these tools — they are not in the ExcludedDelegate/
+	// ExcludedHandoff lists so CloneExcept leaves them intact.
 	// Note: there is no "omnipus-system" runtime agent (CLAUDE.md). The check
 	// below is intentionally main-only.
 	if agentID != "main" {

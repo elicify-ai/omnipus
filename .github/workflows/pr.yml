@@ -467,7 +467,7 @@ jobs:
           - group: llm-chat
             specs: >-
               tests/e2e/chat.spec.ts
-          # LLM Group B: medium-weight agent-to-agent flows (spawn, handoff, cancel, hot-reload).
+          # LLM Group B: medium-weight agent-to-agent flows (delegate, handoff, cancel, hot-reload).
           - group: llm-agents
             specs: >-
               tests/e2e/subagent.spec.ts
@@ -588,15 +588,15 @@ jobs:
         # dev_mode_bypass unblocks onboarding endpoints that require bearer auth
         # before an admin account exists (CLAUDE.md "Build & E2E Testing").
         #
-        # IMPORTANT — do NOT add any "tools": {"spawn": {"enabled": false}} or any
+        # IMPORTANT — do NOT add any "tools": {"delegate": {"enabled": false}} or any
         # other tools.<name>.enabled=false entry here. migrateDeprecatedToolEnableFlags
         # (pkg/config/migration.go) converts those into sandbox.tool_policies deny
-        # entries at config-load time, which would deny spawn for ALL agents and break
+        # entries at config-load time, which would deny delegate for ALL agents and break
         # T24 (cancel cascade) and the handoff/subagent E2E tests.
         # Instead, tool policies are set explicitly under sandbox.tool_policies below.
         #
         # sandbox.audit_log must be true at BOOT (it is restart-gated) for T26.
-        # sandbox.tool_policies.spawn = "allow" is explicit so no migration run can
+        # sandbox.tool_policies.delegate = "allow" is explicit so no migration run can
         # override it (an existing "allow" policy is never downgraded by the migrator).
         run: |
           set -euo pipefail
@@ -610,7 +610,7 @@ jobs:
             "sandbox": {
               "audit_log": true,
               "tool_policies": {
-                "spawn": "allow"
+                "delegate": "allow"
               }
             },
             "agents": {

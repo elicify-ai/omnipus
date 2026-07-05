@@ -355,14 +355,14 @@ func TestListDir_FlagOn_CannotEscapeWorkspace(t *testing.T) {
 // GAP 3: exec cwd-argument escape guard under re-root
 // ---------------------------------------------------------------------------
 
-// TestExecCwd_FlagOn_EscapeViaExplicitCwdBlocked verifies that exec's
-// app-level cwd safety guard (validatePathWithAllowPaths + symlink
-// re-resolution + filepath.Rel/IsLocal in shell.go) blocks an explicit `cwd`
+// TestExecCwd_FlagOn_EscapeViaExplicitCwdBlocked verifies that bash's
+// app-level cwd safety guard (resolveCWD -> validatePathWithAllowPaths +
+// symlink re-resolution, ADR-036/FR-B2/FR-B13) blocks an explicit `cwd`
 // argument that escapes the re-rooted workspace, even when sandbox=off
 // (no kernel Landlock). The guard is app-level and runs regardless of sandbox
 // mode. Mirrors TestExecCwd_ReflectsEffectiveRoot for sandbox mode setup.
 //
-// Traces to: shell.go lines 556–651 (cwd validation under re-root);
+// Traces to: shell.go's resolveCWD (cwd validation under re-root);
 // workspace_reroot_test.go — gap 3 (exec escape via explicit cwd, no BDD
 // scenario yet).
 func TestExecCwd_FlagOn_EscapeViaExplicitCwdBlocked(t *testing.T) {
@@ -388,8 +388,9 @@ func TestExecCwd_FlagOn_EscapeViaExplicitCwdBlocked(t *testing.T) {
 	if !res.IsError {
 		t.Fatalf("expected exec cwd-escape to be blocked by safety guard, got success: %s", res.ForLLM)
 	}
-	// Error message must mention the safety guard so callers know why it failed.
-	if !strings.Contains(res.ForLLM, "safety guard") {
-		t.Fatalf("expected 'safety guard' in error, got: %s", res.ForLLM)
+	// Error message must mention the escape so callers know why it failed
+	// (ADR-036 standardized this wording — see resolveCWD in shell.go).
+	if !strings.Contains(res.ForLLM, "escapes workspace") {
+		t.Fatalf("expected 'escapes workspace' in error, got: %s", res.ForLLM)
 	}
 }

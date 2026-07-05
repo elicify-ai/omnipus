@@ -16,6 +16,7 @@
 // A future driver edit that adds/removes/reorders/renames a flag — or changes
 // a literal value listExecutorDefaults claims is fixed — fails these
 // assertions instead of silently drifting from reality.
+
 package gateway
 
 import (
@@ -130,7 +131,7 @@ func indexSeqAtOrAfter(haystack []string, from int, seq []string) int {
 // two flags (e.g. moving codex's --sandbox before --ask-for-approval, or
 // moving it after `exec`) fails here even though every individual flag is
 // still present.
-func assertRealArgsMatchEndpoint(t *testing.T, cli string, realExecutor []string, wantEntries []string) {
+func assertRealArgsMatchEndpoint(t *testing.T, cli string, realArgs []string, wantEntries []string) {
 	t.Helper()
 	cursor := 0
 	for _, entry := range wantEntries {
@@ -138,7 +139,7 @@ func assertRealArgsMatchEndpoint(t *testing.T, cli string, realExecutor []string
 		require.NotEmptyf(t, fields, "cli %s: empty AutoAppliedFlags entry", cli)
 		conditional := strings.Contains(entry, "<")
 		if conditional {
-			idx := indexAtOrAfter(realExecutor, cursor, fields[0])
+			idx := indexAtOrAfter(realArgs, cursor, fields[0])
 			require.GreaterOrEqualf(
 				t,
 				idx,
@@ -147,14 +148,14 @@ func assertRealArgsMatchEndpoint(t *testing.T, cli string, realExecutor []string
 				cli,
 				fields[0],
 				entry,
-				realExecutor,
+				realArgs,
 				cursor,
 				cli,
 			)
 			cursor = idx + 1
 			continue
 		}
-		idx := indexSeqAtOrAfter(realExecutor, cursor, fields)
+		idx := indexSeqAtOrAfter(realArgs, cursor, fields)
 		require.GreaterOrEqualf(
 			t,
 			idx,
@@ -163,7 +164,7 @@ func assertRealArgsMatchEndpoint(t *testing.T, cli string, realExecutor []string
 			cli,
 			fields,
 			entry,
-			realExecutor,
+			realArgs,
 			cursor,
 			cli,
 		)

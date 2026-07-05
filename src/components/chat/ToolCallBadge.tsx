@@ -20,7 +20,9 @@ interface ToolCallBadgeProps {
 }
 
 function getToolIcon(tool: string) {
-  if (tool === 'exec' || tool.startsWith('exec.')) return Terminal
+  // ADR-036: `bash` is the canonical unified shell tool; `exec` (and its
+  // `exec.` sub-actions) is kept only for historical session transcripts.
+  if (tool === 'bash' || tool === 'exec' || tool.startsWith('exec.')) return Terminal
   if (tool === 'web_search' || tool === 'browser.search') return Globe
   if (tool.startsWith('file.') || tool.startsWith('fs.')) return FileText
   return Wrench

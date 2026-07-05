@@ -355,13 +355,12 @@ type OmnipusSandboxConfig struct {
 // ExperimentalConfig holds feature flags for dark-launched tools and capabilities.
 // All flags default to false (deny-by-default per SEC hard constraint #6).
 type ExperimentalConfig struct {
-	// WorkspaceShellEnabled gates the workspace_shell and workspace_shell_bg
-	// builtin tools. Defaults to false (deny-by-default). Operators must
-	// explicitly opt in by writing:
-	//   {"experimental": {"workspace_shell_enabled": true}}
-	//
-	// The validator fills a nil pointer with false. Jim (the general-purpose
-	// core agent) has this flag flipped to true during SeedConfig.
+	// WorkspaceShellEnabled is RETIRED (ADR-036): workspace_shell and
+	// workspace_shell_bg were merged into the universally-registered `bash`
+	// tool, governed exclusively by ToolPolicyCfg — there is no longer a
+	// gate to flip. The field is kept (not deleted) purely so an operator's
+	// existing config.json with this key does not fail to parse; nothing in
+	// the codebase reads it anymore.
 	WorkspaceShellEnabled *bool `json:"workspace_shell_enabled,omitempty"`
 }
 

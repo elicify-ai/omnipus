@@ -700,6 +700,104 @@ func TestToStandardConfig(t *testing.T) {
 	}
 }
 
+// TestToStandardConfig_ExecDenyPatterns_MigrateToShellDenyPatterns verifies
+// that ToStandardConfig routes a legacy OpenClaw exec deny-pattern config
+// into the fields the ADR-036 `bash` tool actually reads
+// (Sandbox.ShellDenyPatterns + per-agent AgentConfig.ShellPolicy) instead of
+// the dead config.ExecConfig. Also verifies that every migrated agent's
+// ShellPolicy.EnableDenyPatterns is set to true so the global patterns are
+// not left inert under the new tool's per-agent opt-in default (mirroring
+// OpenClaw's old single global on/off switch).
+func TestToStandardConfig_ExecDenyPatterns_MigrateToShellDenyPatterns(t *testing.T) {
+	omnipusCfg := &OmnipusConfig{
+		Agents: AgentsConfig{
+			List: []AgentConfig{
+				{ID: "main", Name: "Main Agent", Default: true},
+				{ID: "helper", Name: "Helper Agent"},
+			},
+		},
+		Tools: ToolsConfig{
+			Exec: ExecConfig{
+				EnableDenyPatterns: true,
+				CustomDenyPatterns: []string{`^\s*rm\s+-rf\s+/`, `curl.*\|.*sh`},
+			},
+		},
+	}
+
+	stdCfg := omnipusCfg.ToStandardConfig()
+
+	// The dead struct must not carry the migrated patterns.
+	if len(stdCfg.Tools.Exec.CustomDenyPatterns) != 0 {
+		t.Errorf(
+			"stdCfg.Tools.Exec.CustomDenyPatterns must stay empty (dead field), got %v",
+			stdCfg.Tools.Exec.CustomDenyPatterns,
+		)
+	}
+
+	// The live global field must carry the migrated patterns.
+	if len(stdCfg.Sandbox.ShellDenyPatterns) != 2 {
+		t.Fatalf(
+			"expected 2 patterns in Sandbox.ShellDenyPatterns, got %d: %v",
+			len(stdCfg.Sandbox.ShellDenyPatterns), stdCfg.Sandbox.ShellDenyPatterns,
+		)
+	}
+	wantPatterns := map[string]bool{`^\s*rm\s+-rf\s+/`: true, `curl.*\|.*sh`: true}
+	for _, p := range stdCfg.Sandbox.ShellDenyPatterns {
+		if !wantPatterns[p] {
+			t.Errorf("unexpected pattern in Sandbox.ShellDenyPatterns: %q", p)
+		}
+	}
+
+	// Every migrated agent must be opted into the per-agent enable flag —
+	// otherwise the global patterns above sit inert (new tool default: off).
+	if len(stdCfg.Agents.List) != 2 {
+		t.Fatalf("expected 2 migrated agents, got %d", len(stdCfg.Agents.List))
+	}
+	for _, a := range stdCfg.Agents.List {
+		if a.ShellPolicy == nil {
+			t.Errorf("agent %q: ShellPolicy must be non-nil after exec deny-pattern migration", a.ID)
+			continue
+		}
+		if !a.ShellPolicy.EnableDenyPatterns {
+			t.Errorf("agent %q: ShellPolicy.EnableDenyPatterns must be true", a.ID)
+		}
+	}
+}
+
+// TestToStandardConfig_ExecDenyPatterns_DisabledNotMigrated verifies that
+// when the legacy OpenClaw config had deny patterns disabled
+// (EnableDenyPatterns=false, matching OpenClaw's old semantics of "patterns
+// configured but the feature switched off"), nothing is migrated — no
+// inert global patterns, no per-agent opt-in.
+func TestToStandardConfig_ExecDenyPatterns_DisabledNotMigrated(t *testing.T) {
+	omnipusCfg := &OmnipusConfig{
+		Agents: AgentsConfig{
+			List: []AgentConfig{{ID: "main", Name: "Main Agent"}},
+		},
+		Tools: ToolsConfig{
+			Exec: ExecConfig{
+				EnableDenyPatterns: false,
+				CustomDenyPatterns: []string{`curl.*\|.*sh`},
+			},
+		},
+	}
+
+	stdCfg := omnipusCfg.ToStandardConfig()
+
+	if len(stdCfg.Sandbox.ShellDenyPatterns) != 0 {
+		t.Errorf(
+			"expected no migrated patterns when EnableDenyPatterns=false, got %v",
+			stdCfg.Sandbox.ShellDenyPatterns,
+		)
+	}
+	if stdCfg.Agents.List[0].ShellPolicy != nil {
+		t.Errorf(
+			"expected no ShellPolicy set when EnableDenyPatterns=false, got %+v",
+			stdCfg.Agents.List[0].ShellPolicy,
+		)
+	}
+}
+
 func TestLoadProviderConfigFromAgentsDir(t *testing.T) {
 	tmpDir := t.TempDir()
 

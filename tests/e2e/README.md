@@ -12,7 +12,7 @@ fail the run immediately — they are not soft-skipped.
 **`OPENROUTER_API_KEY_CI`** (environment variable, required, no soft-skip)
 
 A valid OpenRouter API key. Used by tests that drive real LLM calls (chat, subagent
-spawn, handoff, media screenshot). Its absence is a CI configuration failure, not a
+delegate, handoff, media screenshot). Its absence is a CI configuration failure, not a
 per-test skip condition.
 
 - In CI: add as a repository secret under Settings > Secrets > Actions.

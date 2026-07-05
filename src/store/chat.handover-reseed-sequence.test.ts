@@ -37,7 +37,6 @@ describe('chat store — cold-load attach sequence keeps header on last-active a
         toolCalls: {},
         toolCallOrder: [],
         textAtToolCallStart: {},
-        pendingApprovals: [],
         sessionTokens: 0,
         sessionCost: 0,
       })

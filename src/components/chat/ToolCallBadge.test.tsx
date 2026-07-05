@@ -133,6 +133,7 @@ describe('ToolCallBadge — collapse/expand toggle (test #7)', () => {
 describe('ToolCallBadge — tool icon registry (test #8)', () => {
   it.each([
     // [rawTool, humanizedCollapsedLabel]
+    ['bash', 'Run command'],
     ['exec', 'Run command'],
     ['web_search', 'Search the web'],
     ['file.read', 'Read'],

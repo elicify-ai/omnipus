@@ -357,11 +357,13 @@ test(
 //      And transcript.jsonl contains a {type: "turn_canceled"} entry
 //      And that entry has a non-empty descendants_canceled array.
 //
-// Both delegation modes are covered:
-//   T24a — `spawn`    (background): the descendant streams in the background
-//                                   while the parent turn stays live.
-//   T24b — `subagent` (await):      the parent turn BLOCKS on the descendant's
-//                                   run until it returns (or is cancelled).
+// Both delegation modes are covered — both go through the single, unified
+// `delegate` tool (ADR-036), differentiated only by its `async` argument:
+//   T24a — `delegate` async=true  (background): the descendant streams in the
+//                                   background while the parent turn stays live.
+//   T24b — `delegate` async=false (await):      the parent turn BLOCKS on the
+//                                   descendant's run until it returns (or is
+//                                   cancelled).
 // Both route through spawnSubTurn (pkg/agent/subturn.go:618), which registers the
 // child in activeTurnStates — so RequestCancel → InterruptSession cascades to the
 // descendant in BOTH cases (the Go-level proof is TestCancel_SubAgentCascade).
@@ -371,13 +373,14 @@ test(
  * Drive the cancel-cascade scenario for one delegation mode and assert the
  * transcript records turn_canceled with a non-empty descendants_canceled.
  *
- * `mode.tool` selects the delegation tool (`spawn` background / `subagent`
- * await); `mode.closer` is the final instruction line that nudges glm-5.2 to
- * emit exactly that tool call and nothing else.
+ * `mode.asyncArg` selects the delegation mode via the `delegate` tool's
+ * `async` argument (`"true"` background / `"false"` await); `mode.closer` is
+ * the final instruction line that nudges glm-5.2 to emit exactly that tool
+ * call and nothing else.
  */
 async function assertCancelCascadesToSubagent(
   page: Page,
-  mode: { tool: 'spawn' | 'run_subagent'; closer: string },
+  mode: { asyncArg: 'true' | 'false'; closer: string },
 ) {
   await page.goto('/')
 
@@ -391,7 +394,7 @@ async function assertCancelCascadesToSubagent(
   //
   // Route to Jim (Planner & Orchestrator), NOT the default agent Mia. CI
   // investigation (run 27296266639) found Mia's "guide" persona makes the model
-  // REFUSE to delegate ("My role is to explain… not to spawn subagents"), so the
+  // REFUSE to delegate ("My role is to explain… not to delegate to subagents"), so the
   // parent never emits a delegation frame and the subagent-collapsed block never
   // appears. Jim delegates on the explicit prompt below. The cancel window comes
   // from the SUBAGENT running long enough (it streams a multi-hundred-word inline
@@ -421,9 +424,10 @@ async function assertCancelCascadesToSubagent(
   // prose" guardrail so glm-5.2 reliably emits the delegation call.
   await input.fill(
     [
-      `Call the \`${mode.tool}\` tool exactly once, now, with these arguments:`,
+      'Call the `delegate` tool exactly once, now, with these arguments:',
       '  label: "cancel cascade test"',
       '  task: "You are a subagent. Do not use any tools. Write a detailed 800-word essay about renewable energy as continuous inline prose, writing without stopping until you reach 800 words."',
+      `  async: ${mode.asyncArg}`,
       mode.closer,
     ].join('\n'),
   )
@@ -499,7 +503,7 @@ async function assertCancelCascadesToSubagent(
   if (!cancelledEntry) {
     throw new Error(
       'BLOCKED or INCOMPLETE: no session transcript contains a {type:"turn_canceled"} entry ' +
-        `after cancel (mode=${mode.tool}). Scanned sessions: ${JSON.stringify(scanList)} ` +
+        `after cancel (mode=delegate async=${mode.asyncArg}). Scanned sessions: ${JSON.stringify(scanList)} ` +
         `(new: ${JSON.stringify(newSessions)}). Chosen: ${chosenSession || '(none)'}. ` +
         `Entries found in chosen: ${JSON.stringify(entries.map((e) => ({ type: e.type, role: e.role })))}. ` +
         'Traces to: cancel-cross-channel-spec.md T24, US-4.1, FR-15.',
@@ -510,33 +514,33 @@ async function assertCancelCascadesToSubagent(
   expect(
     Array.isArray(cancelledEntry.descendants_canceled) &&
       (cancelledEntry.descendants_canceled as string[]).length > 0,
-    `turn_canceled entry must have a non-empty descendants_canceled array (cascade wired per FR-6a, mode=${mode.tool})`,
+    `turn_canceled entry must have a non-empty descendants_canceled array (cascade wired per FR-6a, mode=delegate async=${mode.asyncArg})`,
   ).toBe(true)
 }
 
 test(
-  'T24a — cancel cascades to background subagent (spawn): transcript records turn_canceled with descendants',
+  'T24a — cancel cascades to background subagent (delegate async=true): transcript records turn_canceled with descendants',
   async ({ page }) => {
     // glm-5.2 (the standard e2e model) is reliable but slower than the old gemini
     // pick — the delegation turn + the subagent's inline essay + cancel can exceed
     // the 270s test.slow() ceiling under suite load. Use an explicit higher budget.
     test.setTimeout(360_000)
     await assertCancelCascadesToSubagent(page, {
-      tool: 'spawn',
-      closer: 'Do not reply in prose. Call the spawn tool immediately.',
+      asyncArg: 'true',
+      closer: 'Do not reply in prose. Call the delegate tool immediately.',
     })
   },
 )
 
 test(
-  'T24b — cancel cascades to awaited subagent (subagent): transcript records turn_canceled with descendants',
+  'T24b — cancel cascades to awaited subagent (delegate async=false): transcript records turn_canceled with descendants',
   async ({ page }) => {
     // Await mode blocks the parent turn on the descendant's full run, so under
-    // glm-5.2's slower streaming this needs more headroom than the spawn variant.
+    // glm-5.2's slower streaming this needs more headroom than the background variant.
     test.setTimeout(420_000)
     await assertCancelCascadesToSubagent(page, {
-      tool: 'run_subagent',
-      closer: 'Do not reply in prose. Do not call any other tool. Call run_subagent now.',
+      asyncArg: 'false',
+      closer: 'Do not reply in prose. Do not call any other tool. Call delegate now with async set to false.',
     })
   },
 )
@@ -635,6 +639,33 @@ test(
     const sessionId = await createSession(page)
     await page.goto(`/#/sessions/${sessionId}`)
 
+    // Let the route settle before inspecting the DOM. This test visits '/' first
+    // (above), which now redirects into the default workspace's Chat tab
+    // (DefaultWorkspaceRedirect), mounting WorkspaceTabContainer/ChatControls — the
+    // ONLY render site of the agent-picker-trigger banner. /#/sessions/<id> resolves
+    // via TanStack Router's async route loader (fetchSessionDetail); src/main.tsx's
+    // defaultPendingMs (150ms) only swaps in the pending skeleton after that delay,
+    // so the router keeps the PREVIOUS route mounted for any loader fetch faster than
+    // that threshold (this repro's ~70ms gap included). That leaves a short window,
+    // right after this goto, where the old workspace route (WITH the picker, roster
+    // incl. Jim) is still fully mounted and clickable.
+    //
+    // Live repro (trace timeline, ms from test start): goto() to /#/sessions/<id>
+    // completes at t=3598; the loader's GET /api/v1/sessions/<id> starts at t=3671
+    // and doesn't resolve until t=3741. An isVisible() snapshot taken in that gap
+    // (as this code used to do immediately after goto) reads "true" for a picker
+    // that's mid-teardown: picker.click() lands (t=3688-3809, spanning the loader's
+    // resolution), transiently opening a portaled dropdown that unmounts with its
+    // parent route a moment later — so the "Jim" menuitem search a few lines below
+    // then hangs for the full 270s test timeout, having nothing left to find. This
+    // reproduced deterministically (3/3 local runs) before this wait was added.
+    //
+    // waitForLoadState('networkidle') gives the loader's fetch (and the effect it
+    // drives) time to resolve, so every check below reflects the FINAL settled
+    // route rather than a transient one. An open WebSocket does not block networkidle
+    // (see tests/e2e/idle-no-reconnect.spec.ts, which asserts exactly that).
+    await page.waitForLoadState('networkidle')
+
     const input = chatInput(page)
     await expect(input).toBeEnabled({ timeout: 20_000 })
 
@@ -644,11 +675,11 @@ test(
     // inline WITHOUT the workspace ChatControls top-bar (which lives in
     // WorkspaceTabContainer, mounted only on the / workspace view). The
     // agent-picker trigger (data-testid="agent-picker-trigger") is part of
-    // ChatControls, so it is genuinely absent on this route. Additionally,
-    // createSession() above already defaults to agentID:'jim', so Jim is
-    // already the active agent — the switch is redundant. Attempt it only if
-    // the picker happens to be visible (e.g. the route is later migrated to
-    // use WorkspaceTabContainer), otherwise proceed with the already-active Jim.
+    // ChatControls, so it is genuinely absent on this route once settled (see the
+    // networkidle wait above). Additionally, createSession() above already defaults
+    // to agentID:'jim', so Jim is already the active agent — the switch is redundant.
+    // Attempt it only if the picker happens to be visible (e.g. the route is later
+    // migrated to use WorkspaceTabContainer), otherwise proceed with the already-active Jim.
     const picker = agentPicker(page)
     const pickerVisible = await picker.isVisible().catch(() => false)
     if (pickerVisible) {

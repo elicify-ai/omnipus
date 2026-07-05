@@ -37,7 +37,7 @@ func TestGeneralBuiltinMetadata_ContainsMandatoryTools(t *testing.T) {
 		byName[name] = tool
 	}
 
-	mandatory := []string{"exec", "read_file", "write_file", "search_web", "fetch_url"}
+	mandatory := []string{"bash", "read_file", "write_file", "search_web", "fetch_url"}
 	for _, name := range mandatory {
 		assert.Contains(t, byName, name,
 			"GeneralBuiltinMetadata must contain mandatory tool %q (Spec-1 SC-101)", name)
@@ -49,7 +49,7 @@ func TestGeneralBuiltinMetadata_ContainsMandatoryTools(t *testing.T) {
 //
 // BDD: Given the general builtin catalog,
 //
-//	When Category() is called on exec, read_file, search_web, and fetch_url,
+//	When Category() is called on bash, read_file, search_web, and fetch_url,
 //	Then they return CategoryShell, CategoryFilesystem, CategoryWeb, CategoryWeb
 //	respectively.
 //
@@ -65,7 +65,7 @@ func TestGeneralBuiltinMetadata_CategoryOverrides(t *testing.T) {
 		name    string
 		wantCat ToolCategory
 	}{
-		{"exec", CategoryShell},
+		{"bash", CategoryShell},
 		{"read_file", CategoryFilesystem},
 		{"write_file", CategoryFilesystem},
 		{"list_directory", CategoryFilesystem},
@@ -92,7 +92,7 @@ func TestGeneralBuiltinMetadata_CategoryOverrides(t *testing.T) {
 //
 // BDD: Given agent A (workspace /a) and agent B (workspace /b),
 //
-//	When each constructs its own exec tool via the per-agent path,
+//	When each constructs its own bash tool via the per-agent path,
 //	Then the per-agent instances are not the same pointer as the metadata instance,
 //	And the two per-agent instances are not the same pointer as each other.
 //
@@ -102,36 +102,36 @@ func TestPerAgentExecutionIsolation_MetadataInstanceNeverShared(t *testing.T) {
 	catalog := GeneralBuiltinMetadata()
 	var metadataExec Tool
 	for _, tool := range catalog {
-		if tool.Name() == "exec" {
+		if tool.Name() == "bash" {
 			metadataExec = tool
 			break
 		}
 	}
-	require.NotNil(t, metadataExec, "exec must be present in GeneralBuiltinMetadata")
+	require.NotNil(t, metadataExec, "bash must be present in GeneralBuiltinMetadata")
 
-	// Construct two per-agent exec instances with distinct workspaces, as the
+	// Construct two per-agent bash instances with distinct workspaces, as the
 	// per-agent path (registerSharedTools / wireExecToolDeps) would do at runtime.
 	agentAExec, err := NewExecToolWithConfig("/a", false, nil)
-	require.NoError(t, err, "per-agent A exec construction must succeed")
+	require.NoError(t, err, "per-agent A bash construction must succeed")
 
 	agentBExec, err := NewExecToolWithConfig("/b", false, nil)
-	require.NoError(t, err, "per-agent B exec construction must succeed")
+	require.NoError(t, err, "per-agent B bash construction must succeed")
 
 	// The metadata instance and per-agent instances must be distinct pointers.
 	// We compare via interface identity — if they were the same object the pointers
 	// would be equal. Comparing the interface value directly checks both type and
 	// pointer equality.
 	assert.NotEqual(t, metadataExec, agentAExec,
-		"metadata exec instance must not be the same object as agent A's exec instance (isolation invariant)")
+		"metadata bash instance must not be the same object as agent A's bash instance (isolation invariant)")
 	assert.NotEqual(t, metadataExec, agentBExec,
-		"metadata exec instance must not be the same object as agent B's exec instance (isolation invariant)")
+		"metadata bash instance must not be the same object as agent B's bash instance (isolation invariant)")
 	assert.NotEqual(t, agentAExec, agentBExec,
-		"agent A and agent B must each get a distinct exec instance (workspace isolation)")
+		"agent A and agent B must each get a distinct bash instance (workspace isolation)")
 
 	// Also verify the Names match (we're talking about the right tools).
-	assert.Equal(t, "exec", metadataExec.Name())
-	assert.Equal(t, "exec", agentAExec.Name())
-	assert.Equal(t, "exec", agentBExec.Name())
+	assert.Equal(t, "bash", metadataExec.Name())
+	assert.Equal(t, "bash", agentAExec.Name())
+	assert.Equal(t, "bash", agentBExec.Name())
 }
 
 // TestGeneralBuiltinMetadata_NoPanic asserts that GeneralBuiltinMetadata()

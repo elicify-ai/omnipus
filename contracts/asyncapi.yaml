@@ -8,7 +8,7 @@ info:
 
     The SPA (browser client) connects to /api/v1/chat/ws, authenticates
     with an auth frame, then exchanges structured JSON frames for chat
-    streaming, tool call tracking, session replay, exec/tool approvals,
+    streaming, tool call tracking, session replay, tool approvals,
     rate limiting, and cancel progress.
 
     All frames are JSON objects with a "type" discriminator field.
@@ -68,8 +68,6 @@ channels:
         $ref: '#/components/messages/MessageFrame'
       CancelFrame:
         $ref: '#/components/messages/CancelFrame'
-      ExecApprovalResponseFrame:
-        $ref: '#/components/messages/ExecApprovalResponseFrame'
       PingFrame:
         $ref: '#/components/messages/PingFrame'
       AttachSessionFrame:
@@ -97,8 +95,6 @@ channels:
         $ref: '#/components/messages/SubagentStartFrame'
       SubagentEndFrame:
         $ref: '#/components/messages/SubagentEndFrame'
-      ExecApprovalRequestFrame:
-        $ref: '#/components/messages/ExecApprovalRequestFrame'
       TaskStatusChangedFrame:
         $ref: '#/components/messages/TaskStatusChangedFrame'
       ReplayMessageFrame:
@@ -125,14 +121,10 @@ channels:
         $ref: '#/components/messages/PongFrame'
       SessionCloseAckFrame:
         $ref: '#/components/messages/SessionCloseAckFrame'
-      ExecApprovalResponseAckFrame:
-        $ref: '#/components/messages/ExecApprovalResponseAckFrame'
       DevicePairingRequestFrame:
         $ref: '#/components/messages/DevicePairingRequestFrame'
       WhatsAppPairingFrame:
         $ref: '#/components/messages/WhatsAppPairingFrame'
-      ExecApprovalExpiredFrame:
-        $ref: '#/components/messages/ExecApprovalExpiredFrame'
       NotificationFrame:
         $ref: '#/components/messages/NotificationFrame'
 
@@ -171,16 +163,6 @@ operations:
       and eventually a done frame.
     messages:
       - $ref: '#/channels/chat/messages/CancelFrame'
-
-  sendExecApprovalResponse:
-    action: send
-    channel:
-      $ref: '#/channels/chat'
-    summary: >
-      Respond to a pending exec_approval_request. The server resolves the
-      blocked tool call with the specified verdict (allow/deny/always).
-    messages:
-      - $ref: '#/channels/chat/messages/ExecApprovalResponseFrame'
 
   sendPing:
     action: send
@@ -321,16 +303,6 @@ operations:
     messages:
       - $ref: '#/channels/chat/messages/SubagentEndFrame'
 
-  receiveExecApprovalRequest:
-    action: receive
-    channel:
-      $ref: '#/channels/chat'
-    summary: >
-      An agent tool call requires explicit exec approval before execution.
-      The SPA displays an approval modal and waits for user decision.
-    messages:
-      - $ref: '#/channels/chat/messages/ExecApprovalRequestFrame'
-
   receiveTaskStatusChanged:
     action: receive
     channel:
@@ -456,16 +428,6 @@ operations:
     messages:
       - $ref: '#/channels/chat/messages/SessionCloseAckFrame'
 
-  receiveExecApprovalResponseAck:
-    action: receive
-    channel:
-      $ref: '#/channels/chat'
-    summary: >
-      Acknowledgement that the server successfully resolved an
-      exec_approval_response frame.
-    messages:
-      - $ref: '#/channels/chat/messages/ExecApprovalResponseAckFrame'
-
   receiveDevicePairingRequest:
     action: receive
     channel:
@@ -486,17 +448,6 @@ operations:
       (#283).
     messages:
       - $ref: '#/channels/chat/messages/WhatsAppPairingFrame'
-
-  receiveExecApprovalExpired:
-    action: receive
-    channel:
-      $ref: '#/channels/chat'
-    summary: >
-      An exec_approval_request timed out before the admin responded (90 s
-      default). The SPA should transition the approval modal to an expired
-      state so the user is not left with active Allow/Deny buttons.
-    messages:
-      - $ref: '#/channels/chat/messages/ExecApprovalExpiredFrame'
 
   receiveNotification:
     action: receive
@@ -536,14 +487,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/CancelFrame'
-
-    ExecApprovalResponseFrame:
-      name: ExecApprovalResponseFrame
-      title: exec_approval_response
-      summary: Admin decision on exec approval request (client → server).
-      contentType: application/json
-      payload:
-        $ref: '#/components/schemas/ExecApprovalResponseFrame'
 
     PingFrame:
       name: PingFrame
@@ -650,14 +593,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/SubagentEndFrame'
-
-    ExecApprovalRequestFrame:
-      name: ExecApprovalRequestFrame
-      title: exec_approval_request
-      summary: Exec approval needed (server → client).
-      contentType: application/json
-      payload:
-        $ref: '#/components/schemas/ExecApprovalRequestFrame'
 
     TaskStatusChangedFrame:
       name: TaskStatusChangedFrame
@@ -769,14 +704,6 @@ components:
       payload:
         $ref: '#/components/schemas/SessionCloseAckFrame'
 
-    ExecApprovalResponseAckFrame:
-      name: ExecApprovalResponseAckFrame
-      title: exec_approval_response_ack
-      summary: Exec approval response acknowledged (server → client).
-      contentType: application/json
-      payload:
-        $ref: '#/components/schemas/ExecApprovalResponseAckFrame'
-
     DevicePairingRequestFrame:
       name: DevicePairingRequestFrame
       title: device_pairing_request
@@ -792,14 +719,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/WhatsAppPairingFrame'
-
-    ExecApprovalExpiredFrame:
-      name: ExecApprovalExpiredFrame
-      title: exec_approval_expired
-      summary: Exec approval request expired (server → client).
-      contentType: application/json
-      payload:
-        $ref: '#/components/schemas/ExecApprovalExpiredFrame'
 
     NotificationFrame:
       name: NotificationFrame
@@ -818,7 +737,6 @@ components:
         - auth
         - message
         - cancel
-        - exec_approval_response
         - ping
         - attach_session
         - device_pairing_response
@@ -831,8 +749,6 @@ components:
         - tool_call_result
         - subagent_start
         - subagent_end
-        - exec_approval_request
-        - exec_approval_expired
         - task_status_changed
         - replay_message
         - replay_error
@@ -846,7 +762,6 @@ components:
         - cancel_stage
         - pong
         - session_close_ack
-        - exec_approval_response_ack
         - device_pairing_request
         - whatsapp_pairing
         - whatsapp_pairing_subscribe
@@ -951,29 +866,6 @@ components:
           type: string
           minLength: 1
           maxLength: 128
-
-    ExecApprovalResponseFrame:
-      title: ExecApprovalResponseFrame
-      description: Client → server exec approval decision.
-      type: object
-      required:
-        - type
-        - id
-        - decision
-      additionalProperties: false
-      properties:
-        type:
-          type: string
-          const: exec_approval_response
-        id:
-          type: string
-          minLength: 1
-        decision:
-          type: string
-          enum:
-            - allow
-            - deny
-            - always
 
     PingFrame:
       title: PingFrame
@@ -1435,51 +1327,6 @@ components:
         message:
           type: string
 
-    ExecApprovalRequestFrame:
-      title: ExecApprovalRequestFrame
-      description: >
-        Server → client exec approval needed. The `command` field carries the
-        tool name for display. Optional `tool` and `params` carry structured
-        tool call information.
-      type: object
-      required:
-        - type
-        - session_id
-        - id
-        - command
-      additionalProperties: false
-      properties:
-        type:
-          type: string
-          const: exec_approval_request
-        session_id:
-          type: string
-          minLength: 1
-          maxLength: 128
-        id:
-          type: string
-          minLength: 1
-        command:
-          type: string
-          minLength: 1
-          maxLength: 8192
-          description: Tool name used as primary display string in the approval modal.
-        tool:
-          type: string
-          maxLength: 128
-          description: Structured tool name (same value as command).
-        params:
-          type: object
-          additionalProperties: true
-          description: Tool invocation arguments. May be absent for parameter-less tools.
-        message:
-          type: string
-          description: Human-readable approval request message.
-        working_dir:
-          type: string
-        matched_policy:
-          type: string
-
     TaskStatusChangedFrame:
       title: TaskStatusChangedFrame
       description: Server → client task status updated.
@@ -1925,22 +1772,6 @@ components:
         id:
           type: string
 
-    ExecApprovalResponseAckFrame:
-      title: ExecApprovalResponseAckFrame
-      description: Server → client exec approval response acknowledged.
-      type: object
-      required:
-        - type
-      additionalProperties: false
-      properties:
-        type:
-          type: string
-          const: exec_approval_response_ack
-        id:
-          type: string
-        session_id:
-          type: string
-
     DevicePairingRequestFrame:
       title: DevicePairingRequestFrame
       description: Server → client device pairing request needs admin approval.
@@ -2033,28 +1864,6 @@ components:
           minLength: 1
         active:
           type: boolean
-
-    ExecApprovalExpiredFrame:
-      title: ExecApprovalExpiredFrame
-      description: Server → client exec approval request timed out.
-      type: object
-      required:
-        - type
-        - id
-        - session_id
-      additionalProperties: false
-      properties:
-        type:
-          type: string
-          const: exec_approval_expired
-        id:
-          type: string
-          minLength: 1
-        session_id:
-          type: string
-          minLength: 1
-        message:
-          type: string
 
     NotificationFrame:
       title: NotificationFrame

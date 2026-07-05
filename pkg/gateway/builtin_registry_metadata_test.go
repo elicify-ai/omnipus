@@ -80,7 +80,7 @@ func TestCentralBuiltinRegistry_ContainsGeneralAndSystemTools(t *testing.T) {
 		"Count must equal systemCount + generalRegistered (no silent duplicates)")
 
 	// Assert the five mandatory general builtin names are present.
-	for _, name := range []string{"exec", "read_file", "write_file", "search_web", "fetch_url"} {
+	for _, name := range []string{"bash", "read_file", "write_file", "search_web", "fetch_url"} {
 		_, ok := reg.Get(name)
 		assert.True(t, ok,
 			"central registry must contain general builtin %q after population (SC-101)", name)
@@ -172,7 +172,7 @@ func TestHandleToolsRegistry_WithCombinedRegistry(t *testing.T) {
 			nameSet[name] = struct{}{}
 		}
 	}
-	for _, expected := range []string{"exec", "read_file", "search_web", "list_agents"} {
+	for _, expected := range []string{"bash", "read_file", "search_web", "list_agents"} {
 		assert.Contains(t, nameSet, expected,
 			"response must include tool %q (system + general combined registry check)", expected)
 	}

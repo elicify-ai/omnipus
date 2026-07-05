@@ -153,9 +153,9 @@ func TestMigrateDeprecatedToolEnableFlags_FalsePositiveGuard(t *testing.T) {
 		_, hasMCP := cfg.Sandbox.ToolPolicies["mcp_*"]
 		assert.False(t, hasMCP,
 			"mcp_* must NOT be denied: mcp.enabled=false is a default, not operator intent")
-		_, hasSpawnStatus := cfg.Sandbox.ToolPolicies["check_spawn_status"]
+		_, hasSpawnStatus := cfg.Sandbox.ToolPolicies["delegate"]
 		assert.False(t, hasSpawnStatus,
-			"check_spawn_status must NOT be denied: spawn_status.enabled=false is a default, not operator intent")
+			"delegate must NOT be denied: spawn_status.enabled=false is a default, not operator intent")
 	}
 }
 
@@ -269,11 +269,17 @@ func TestToolEnableToPolicyGlobs_CoverageCheck(t *testing.T) {
 		"browser_evaluate",
 		"search_web",
 		"fetch_url",
-		"exec",
+		// ADR-036: exec/workspace_shell/workspace_shell_bg consolidate into
+		// "bash" — toolEnableToPolicy's {"exec","bash"} row (FR-M2) now maps
+		// the legacy jsonKey to that new glob, so "bash" (not "exec") is what
+		// must resolve here.
+		"bash",
 		"cron",
-		"spawn",
-		"check_spawn_status",
-		"run_subagent",
+		// ADR-036: spawn/run_subagent/check_spawn_status consolidate into
+		// "delegate" — toolEnableToPolicy's three {"…","delegate"} rows now
+		// map all three legacy jsonKeys to that one new glob, so "delegate"
+		// (not the three retired names) is what must resolve here.
+		"delegate",
 		"write_file",
 		"edit_file",
 		"append_file",

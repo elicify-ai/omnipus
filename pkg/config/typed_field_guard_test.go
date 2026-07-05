@@ -18,6 +18,7 @@
 //
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
+
 package config
 
 import (

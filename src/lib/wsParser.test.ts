@@ -138,18 +138,6 @@ describe('WsConnection — frame parsing (happy path)', () => {
     )
   })
 
-  it('parses an exec_approval_request frame', () => {
-    // Dataset row 9 — includes required session_id and id
-    const onFrame = vi.fn()
-    createConnectedWs(onFrame)
-    sendAndFlush('{"type":"exec_approval_request","session_id":"s1","command":"rm -rf /tmp","id":"appr_1"}')
-    expect(onFrame).toHaveBeenCalledWith({
-      type: 'exec_approval_request',
-      session_id: 's1',
-      command: 'rm -rf /tmp',
-      id: 'appr_1',
-    })
-  })
 })
 
 // ── Edge cases ─────────────────────────────────────────────────────────────────

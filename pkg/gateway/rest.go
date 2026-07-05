@@ -1757,7 +1757,8 @@ func decodeAgentCreateVariant(w http.ResponseWriter, raw []byte, wireType, varia
 	if err := dec.Decode(out); err != nil {
 		if strings.Contains(err.Error(), "unknown field") {
 			jsonErr(w, http.StatusBadRequest, fmt.Sprintf(
-				"field not allowed on agent type %q: %v — see the %s schema", wireType, err, variantName))
+				"field not allowed on agent type %q: %v — see the %s schema", wireType, err, variantName,
+			))
 		} else {
 			jsonErr(w, http.StatusBadRequest, "invalid JSON body")
 		}
@@ -1778,6 +1779,74 @@ func wireStringMap[V ~string](in *map[string]V) map[string]string {
 	out := make(map[string]string, len(*in))
 	for k, v := range *in {
 		out[k] = string(v)
+	}
+	return out
+}
+
+// agentCreateShellPolicyFromWire converts either variant's shell_policy wire
+// object into the common agentCreateShellPolicyInput. gen.AgentCreateRequestMain
+// and gen.AgentCreateRequestSubagent each generate their own anonymous
+// ShellPolicy struct, but — unlike ToolsCfg below — neither carries a
+// per-variant enum type, so the two anonymous types are structurally
+// identical and one non-generic helper handles both call sites.
+func agentCreateShellPolicyFromWire(wp *struct {
+	CustomDenyPatterns *[]string `json:"custom_deny_patterns,omitempty"`
+	EnableDenyPatterns *bool     `json:"enable_deny_patterns,omitempty"`
+},
+) *agentCreateShellPolicyInput {
+	if wp == nil {
+		return nil
+	}
+	out := &agentCreateShellPolicyInput{EnableDenyPatterns: wp.EnableDenyPatterns}
+	if wp.CustomDenyPatterns != nil {
+		out.CustomDenyPatterns = *wp.CustomDenyPatterns
+	}
+	return out
+}
+
+// agentCreateToolsCfgFromWire converts either variant's tools_cfg wire object
+// into the common agentCreateToolsCfgInput, or nil when tc is nil. Generic
+// over DP/P — the two per-variant enum types oapi-codegen emits for
+// Builtin.DefaultPolicy and Builtin.Policies' map values
+// (AgentCreateRequestMainToolsCfgBuiltin* vs
+// AgentCreateRequestSubagentToolsCfgBuiltin*, both underlying type string) —
+// since that's the only reason ToolsCfg isn't structurally identical across
+// variants the way ShellPolicy is; every other field (including the
+// Mcp.Servers element shape, which carries no enum) is identical, so the
+// whole tools_cfg object is accepted directly (Go's generic type inference
+// resolves DP/P from tc's concrete argument type) rather than pre-extracting
+// each sub-field per call site.
+func agentCreateToolsCfgFromWire[DP ~string, P ~string](tc *struct {
+	Builtin *struct {
+		DefaultPolicy *DP           `json:"default_policy,omitempty"`
+		Policies      *map[string]P `json:"policies,omitempty"`
+	} `json:"builtin,omitempty"`
+	Mcp *struct {
+		Servers *[]struct {
+			Id    string    `json:"id"`
+			Tools *[]string `json:"tools,omitempty"`
+		} `json:"servers,omitempty"`
+	} `json:"mcp,omitempty"`
+},
+) *agentCreateToolsCfgInput {
+	if tc == nil {
+		return nil
+	}
+	out := &agentCreateToolsCfgInput{}
+	if tc.Builtin != nil {
+		if tc.Builtin.DefaultPolicy != nil {
+			out.BuiltinDefaultPolicy = string(*tc.Builtin.DefaultPolicy)
+		}
+		out.BuiltinPolicies = wireStringMap(tc.Builtin.Policies)
+	}
+	if tc.Mcp != nil && tc.Mcp.Servers != nil {
+		for _, s := range *tc.Mcp.Servers {
+			var t []string
+			if s.Tools != nil {
+				t = *s.Tools
+			}
+			out.MCPServers = append(out.MCPServers, agentCreateMCPServerInput{ID: s.Id, Tools: t})
+		}
 	}
 	return out
 }
@@ -1887,7 +1956,7 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	)
 
 	switch *typePeek.Type {
-	case "Main": //nolint:dupl // per-variant oapi-codegen block, intentionally not merged
+	case "Main":
 		var vreq gen.AgentCreateRequestMain
 		if !decodeAgentCreateVariant(w, raw, *typePeek.Type, variantName, &vreq) {
 			return
@@ -1901,33 +1970,10 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		soul = vreq.Soul
 		skills = vreq.Skills
 		fallbackModels = vreq.FallbackModels
-		if vreq.ShellPolicy != nil {
-			shellPolicyIn = &agentCreateShellPolicyInput{EnableDenyPatterns: vreq.ShellPolicy.EnableDenyPatterns}
-			if vreq.ShellPolicy.CustomDenyPatterns != nil {
-				shellPolicyIn.CustomDenyPatterns = *vreq.ShellPolicy.CustomDenyPatterns
-			}
-		}
-		if vreq.ToolsCfg != nil {
-			tc := &agentCreateToolsCfgInput{}
-			if vreq.ToolsCfg.Builtin != nil {
-				if vreq.ToolsCfg.Builtin.DefaultPolicy != nil {
-					tc.BuiltinDefaultPolicy = string(*vreq.ToolsCfg.Builtin.DefaultPolicy)
-				}
-				tc.BuiltinPolicies = wireStringMap(vreq.ToolsCfg.Builtin.Policies)
-			}
-			if vreq.ToolsCfg.Mcp != nil && vreq.ToolsCfg.Mcp.Servers != nil {
-				for _, s := range *vreq.ToolsCfg.Mcp.Servers {
-					var t []string
-					if s.Tools != nil {
-						t = *s.Tools
-					}
-					tc.MCPServers = append(tc.MCPServers, agentCreateMCPServerInput{ID: s.Id, Tools: t})
-				}
-			}
-			toolsCfgIn = tc
-		}
+		shellPolicyIn = agentCreateShellPolicyFromWire(vreq.ShellPolicy)
+		toolsCfgIn = agentCreateToolsCfgFromWire(vreq.ToolsCfg)
 		delegationIn = delegationInputFromCreateRequestMain(&vreq)
-	case "Subagent": //nolint:dupl // per-variant oapi-codegen block, intentionally not merged
+	case "Subagent":
 		var vreq gen.AgentCreateRequestSubagent
 		if !decodeAgentCreateVariant(w, raw, *typePeek.Type, variantName, &vreq) {
 			return
@@ -1941,31 +1987,8 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		soul = vreq.Soul
 		skills = vreq.Skills
 		fallbackModels = vreq.FallbackModels
-		if vreq.ShellPolicy != nil {
-			shellPolicyIn = &agentCreateShellPolicyInput{EnableDenyPatterns: vreq.ShellPolicy.EnableDenyPatterns}
-			if vreq.ShellPolicy.CustomDenyPatterns != nil {
-				shellPolicyIn.CustomDenyPatterns = *vreq.ShellPolicy.CustomDenyPatterns
-			}
-		}
-		if vreq.ToolsCfg != nil {
-			tc := &agentCreateToolsCfgInput{}
-			if vreq.ToolsCfg.Builtin != nil {
-				if vreq.ToolsCfg.Builtin.DefaultPolicy != nil {
-					tc.BuiltinDefaultPolicy = string(*vreq.ToolsCfg.Builtin.DefaultPolicy)
-				}
-				tc.BuiltinPolicies = wireStringMap(vreq.ToolsCfg.Builtin.Policies)
-			}
-			if vreq.ToolsCfg.Mcp != nil && vreq.ToolsCfg.Mcp.Servers != nil {
-				for _, s := range *vreq.ToolsCfg.Mcp.Servers {
-					var t []string
-					if s.Tools != nil {
-						t = *s.Tools
-					}
-					tc.MCPServers = append(tc.MCPServers, agentCreateMCPServerInput{ID: s.Id, Tools: t})
-				}
-			}
-			toolsCfgIn = tc
-		}
+		shellPolicyIn = agentCreateShellPolicyFromWire(vreq.ShellPolicy)
+		toolsCfgIn = agentCreateToolsCfgFromWire(vreq.ToolsCfg)
 		delegationIn = delegationInputFromCreateRequestSubagent(&vreq)
 	case "subagent_3p":
 		var vreq gen.AgentCreateRequestSubagent3p

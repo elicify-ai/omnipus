@@ -1,8 +1,22 @@
 # ADR-011 — `experimental.workspace_shell_enabled` Defaults to `false`
 
-**Status:** Accepted
+**Status:** Superseded by [ADR-036](./ADR-036-consolidate-shell-and-subagent-tools.md) (2026-07-04)
 **Date:** 2026-04-29
 **Deciders:** architect, backend-lead
+
+> **2026-07-04 — Superseded.** `workspace_shell`/`workspace_shell_bg` (the tool
+> family this gate protects) are merged into one `bash` tool, alongside
+> `exec`, by ADR-036. That ADR retires this gate entirely (§3.5): once `bash`
+> is universally registered exactly like `exec` already is today, there is no
+> second "experimental" tool needing separate rollout control — access is
+> governed exclusively by each agent's own `ToolPolicyCfg`, the same as `exec`
+> access always has been. The "two opt-ins, two config surfaces" friction this
+> ADR accepted as intentional (§Custom agents are double-denied) goes away;
+> ADR-036 replaces it with a security-relevant *migration* instead (rewriting
+> persisted policy-map keys so an operator's existing intent isn't silently
+> lost), which is a different and more targeted answer to the same
+> upgrade-safety concern this ADR was written to address. Retained here,
+> unedited below, as the historical record of the gate's original rationale.
 
 ---
 

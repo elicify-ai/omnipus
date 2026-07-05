@@ -121,55 +121,20 @@ func TestWS_InboundCancel_RejectsEmptySessionID(t *testing.T) {
 // ---------------------------------------------------------------------------
 // T6: Inbound exec_approval_response with unknown decision
 // ---------------------------------------------------------------------------
-
-// TestWS_InboundApproval_RejectsUnknownDecision verifies that a
-// exec_approval_response frame carrying an unrecognized decision value (e.g.
-// "banana") is rejected: the server sends an error frame and the connection
-// stays open.
 //
-// BDD:
-//
-//	Given an authenticated WebSocket connection,
-//	When the client sends {"type":"exec_approval_response","decision":"banana","id":"x"},
-//	Then the server responds with {"type":"error"} and the connection stays open.
-//
-// Implements: T6 — exec_approval_response unknown-decision guard.
-// Traces to: pkg/gateway/websocket.go readLoop case "exec_approval_response"
-//
-//	decision-validation switch.
-func TestWS_InboundApproval_RejectsUnknownDecision(t *testing.T) {
-	handler, _, _ := newTestWSHandler(t)
-	t.Cleanup(handler.Wait)
-	srv := httptest.NewServer(handler)
-	t.Cleanup(srv.Close)
-
-	conn := dialTestWS(t, srv)
-	t.Cleanup(func() { _ = conn.Close() })
-
-	sendWSAuthFrameDevMode(t, conn)
-
-	// Send approval response with an unrecognized decision.
-	approvalFrame := wsClientFrameTestHelper{
-		Type:     "exec_approval_response",
-		ID:       "approval-id-001",
-		Decision: "banana", // not one of: allow / deny / always
-	}
-	data, err := json.Marshal(approvalFrame)
-	require.NoError(t, err)
-	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
-
-	// Server must respond with an error frame.
-	resp := readFrameOfType(t, conn, "error", 3*time.Second)
-	assert.NotEmpty(t, resp.Message,
-		"error frame must carry a message for unknown approval decision")
-
-	// Connection must remain open.
-	conn.SetWriteDeadline(time.Now().Add(1 * time.Second)) //nolint:errcheck
-	ping := wsClientFrameTestHelper{Type: "ping"}
-	pingData, _ := json.Marshal(ping)
-	require.NoError(t, conn.WriteMessage(websocket.TextMessage, pingData),
-		"connection must remain open after approval rejection")
-}
+// RETIRED 2026-07-04 (ADR-036 §3.4): the exec_approval_response WS frame and
+// its entire dedicated approval protocol (wsApprovalHook, wsApprovalRegistry)
+// were fully retired -- every tool's "ask" verdict now goes through the
+// generic REST tool-approval endpoint (POST /api/v1/tool-approvals/{id}) and
+// its ToolApprovalRequiredFrame/ToolApprovalResponse WS frames instead. This
+// test (T6) asserted the old protocol's unknown-decision guard; since the
+// server no longer has any case for "exec_approval_response" at all, it now
+// times out waiting for an error frame that will never arrive. There is no
+// direct replacement here because the new REST endpoint validates its
+// request body via the generated OpenAPI schema (decodeAndValidate), which
+// is already covered by pkg/gateway/rest_tool_registry_test.go and
+// contract-level validation -- an "unknown decision over WS" scenario does
+// not exist in the new protocol shape.
 
 // ---------------------------------------------------------------------------
 // T7: WS JSON Schema validation (validate_inbound=true)

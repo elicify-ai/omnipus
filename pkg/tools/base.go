@@ -321,7 +321,7 @@ type AsyncCallback func(ctx context.Context, result *ToolResult)
 //
 // Example:
 //
-//	func (t *SpawnTool) ExecuteAsync(ctx context.Context, args map[string]any, cb AsyncCallback) *ToolResult {
+//	func (t *DelegateTool) ExecuteAsync(ctx context.Context, args map[string]any, cb AsyncCallback) *ToolResult {
 //	    go func() {
 //	        result := t.runSubagent(ctx, args)
 //	        if cb != nil { cb(ctx, result) }

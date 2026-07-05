@@ -2,8 +2,8 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// Package tools provides the unified tool discovery and loading infrastructure.
-// ToolsTool is the single infra tool that replaces the former search_tools_bm25
+// ToolsTool provides the unified tool discovery and loading infrastructure.
+// It is the single infra tool that replaces the former search_tools_bm25
 // and search_tools_regex tools. Intent is inferred from which parameter is present:
 //
 //   - load_tool{ names: [string] } — LOAD those tools: fetch schemas + make callable.
@@ -11,6 +11,7 @@
 //     auto-load the top hit, return schemas + full match list.
 //
 // See docs/internal/design/unified-tools-tool-2026-06.md for the full spec.
+
 package tools
 
 import (
