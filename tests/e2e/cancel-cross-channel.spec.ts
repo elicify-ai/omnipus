@@ -643,11 +643,12 @@ test(
     // (above), which now redirects into the default workspace's Chat tab
     // (DefaultWorkspaceRedirect), mounting WorkspaceTabContainer/ChatControls — the
     // ONLY render site of the agent-picker-trigger banner. /#/sessions/<id> resolves
-    // via TanStack Router's async route loader (fetchSessionDetail); src/main.tsx sets
-    // no pendingMs/pendingComponent override, so the router's default behaviour keeps
-    // the PREVIOUS route mounted until that loader's fetch resolves. That leaves a
-    // short window, right after this goto, where the old workspace route (WITH the
-    // picker, roster incl. Jim) is still fully mounted and clickable.
+    // via TanStack Router's async route loader (fetchSessionDetail); src/main.tsx's
+    // defaultPendingMs (150ms) only swaps in the pending skeleton after that delay,
+    // so the router keeps the PREVIOUS route mounted for any loader fetch faster than
+    // that threshold (this repro's ~70ms gap included). That leaves a short window,
+    // right after this goto, where the old workspace route (WITH the picker, roster
+    // incl. Jim) is still fully mounted and clickable.
     //
     // Live repro (trace timeline, ms from test start): goto() to /#/sessions/<id>
     // completes at t=3598; the loader's GET /api/v1/sessions/<id> starts at t=3671

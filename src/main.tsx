@@ -5,6 +5,7 @@ import { QueryClientProvider } from '@tanstack/react-query'
 import { queryClient } from './lib/queryClient'
 import { routeTree } from './routeTree.gen'
 import { RouteFallback } from './components/shared/RouteFallback'
+import { RouteErrorFallback } from './components/shared/RouteErrorFallback'
 import './styles/globals.css'
 
 // Hash routing — required for go:embed static file serving.
@@ -26,6 +27,15 @@ const router = createRouter({
   // routes used to carry.
   defaultPendingComponent: RouteFallback,
   defaultPendingMs: 150,
+  // Symmetric with defaultPendingComponent above: a route chunk fetch can
+  // fail (e.g. a stale tab referencing a chunk hash an old deployment no
+  // longer serves), not just take time. Without this, TanStack Router's
+  // built-in ErrorComponent renders a bare "Something went wrong!" with no
+  // reload affordance and no diagnostic signal.
+  defaultErrorComponent: RouteErrorFallback,
+  defaultOnCatch: (error) => {
+    console.error('[router] route load/render failed:', error)
+  },
 })
 
 declare module '@tanstack/react-router' {
