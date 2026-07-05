@@ -345,25 +345,24 @@ func TestRunRecap_FallbackDistinctProvider_RoutesCorrectly(t *testing.T) {
 		name:        "primary",
 		responseErr: fmt.Errorf("provider: primary model unavailable"),
 	}
-	// altProv: succeeds (simulates the alt-provider working).
+	// altProv: never actually wired into a real provider call path in this test.
 	//
 	// KNOWN COVERAGE GAP (flagged by govet's unusedwrite, not silenced blindly):
 	// altProv is never actually wired into cfg's provider pool — buildProviderPool
 	// resolves providers from the config.ModelConfig via CreateProviderFromConfig,
-	// not from this in-memory struct, so altProv.Chat (and therefore its `name`
-	// and `responseBody` fields) is structurally never invoked/read in this test.
-	// altCalls below will always be 0. The test's stated IMP-3 assertion ("a
-	// fallback with a distinct Provider routes through that provider") is
-	// consequently NOT verified end-to-end by this test; it only verifies that
-	// SOME retro gets written and that the primary candidate was attempted. A
-	// real fix needs a factory-injection seam in buildProviderPool so tests can
-	// substitute an in-memory provider for a named config.ModelConfig entry —
-	// out of scope for a lint sweep; tracked here for follow-up.
-	altProv := &namedProvider{
-		name: "alt", //nolint:govet // see coverage-gap note above; unread until the pool gains a test seam
-		//nolint:govet // ditto — unread until the pool gains a test seam
-		responseBody: `{"recap":"alt fallback ok","went_well":[],"needs_improvement":[],"worth_remembering":[]}`,
-	}
+	// not from this in-memory struct, so altProv.Chat (and therefore any `name`
+	// or `responseBody` we might set) is structurally never invoked/read in this
+	// test. Only its call-count bookkeeping (altProv.mu / altProv.callCount) is
+	// read below, so no Chat/GetDefaultModel-facing fields are set here — an
+	// empty literal, not a nolint suppression, since the fields would be
+	// genuinely dead. The test's stated IMP-3 assertion ("a fallback with a
+	// distinct Provider routes through that provider") is consequently NOT
+	// verified end-to-end by this test; it only verifies that SOME retro gets
+	// written and that the primary candidate was attempted. A real fix needs a
+	// factory-injection seam in buildProviderPool so tests can substitute an
+	// in-memory provider for a named config.ModelConfig entry — out of scope
+	// for a lint sweep; tracked here for follow-up.
+	altProv := &namedProvider{}
 
 	cfg := &config.Config{}
 	cfg.Agents.Defaults.AutoRecapEnabled = true

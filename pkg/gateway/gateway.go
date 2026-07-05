@@ -174,6 +174,7 @@ type services struct {
 	HealthServer     *health.Server
 	manualReloadChan chan struct{}
 	reloading        atomic.Bool
+	reloadTrigger    func() error
 	credStore        *credentials.Store
 	// toolStore owns the on-disk tool-result offload directory. Exposed here
 	// so RunContext can wire its retentionSweep into the nightly sweep loop.
@@ -854,23 +855,13 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		registerSandboxHealthCheck(runningServices.HealthServer, sandboxResult)
 	}
 
-	// Setup manual reload channel for /reload endpoint
-	manualReloadChan := make(chan struct{}, 1)
-	runningServices.manualReloadChan = manualReloadChan
-	reloadTrigger := func() error {
-		if !runningServices.reloading.CompareAndSwap(false, true) {
-			return fmt.Errorf("reload already in progress")
-		}
-		select {
-		case manualReloadChan <- struct{}{}:
-			return nil
-		default:
-			// Should not happen, but reset flag if channel is full
-			runningServices.reloading.Store(false)
-			return fmt.Errorf("reload already queued")
-		}
-	}
-	runningServices.HealthServer.SetReloadFunc(reloadTrigger)
+	// The /reload trigger + manualReloadChan were wired inside
+	// setupAndStartServices BEFORE the listener went live (avoids the
+	// boot-ordering race where /reload could 503 "reload not configured").
+	// Reuse them here for the reload consumer loop, the agent loop, and the
+	// sysagent ReloadFunc — do NOT re-create them.
+	manualReloadChan := runningServices.manualReloadChan
+	reloadTrigger := runningServices.reloadTrigger
 	agentLoop.SetReloadFunc(reloadTrigger)
 
 	// Wire management tool dependencies into the agent loop (FR-001, FR-002).
@@ -1306,7 +1297,7 @@ func setupAndStartServices(
 	builtinReg *tools.BuiltinRegistry, // M16: central builtin registry (FR-001)
 	mcpReg *tools.MCPRegistry, // M16: central MCP registry (FR-001)
 	allowGodMode bool,
-) (*services, error) {
+) (rs *services, retErr error) {
 	runningServices := &services{credStore: credStore, bundle: bundle, sandboxResult: sandboxResult, homePath: homePath}
 
 	// Per-user notification store (#264). Backs schedule-failure notifications and
@@ -1852,9 +1843,48 @@ func setupAndStartServices(
 		return nil, fmt.Errorf("wrapping HTTP handler with CSRF: %w", err)
 	}
 
+	// Wire the /reload trigger BEFORE StartAll launches the HTTP listener.
+	// Otherwise there is a boot-ordering window where /health already answers
+	// 200 (listener live) but HealthServer.reloadFunc is still nil, so a
+	// concurrent POST /reload returns 503 "reload not configured". The
+	// manualReloadChan is buffered (cap 1) and its consumer loop is started
+	// later by the caller — signaling before the consumer exists is safe. The
+	// caller reuses runningServices.reloadTrigger / .manualReloadChan (it does
+	// NOT re-create them). restartServices reuses this same HealthServer, so
+	// reloadFunc is never reset to nil after this point.
+	runningServices.manualReloadChan = make(chan struct{}, 1)
+	runningServices.reloadTrigger = func() error {
+		if !runningServices.reloading.CompareAndSwap(false, true) {
+			return fmt.Errorf("reload already in progress")
+		}
+		select {
+		case runningServices.manualReloadChan <- struct{}{}:
+			return nil
+		default:
+			// Should not happen, but reset flag if channel is full.
+			runningServices.reloading.Store(false)
+			return fmt.Errorf("reload already queued")
+		}
+	}
+	runningServices.HealthServer.SetReloadFunc(runningServices.reloadTrigger)
+
 	if err = runningServices.ChannelManager.StartAll(context.Background()); err != nil {
 		return nil, fmt.Errorf("error starting channels: %w", err)
 	}
+
+	// The HTTP listener is now accepting connections. If any later boot step
+	// fails and this function returns an error, tear the started services down
+	// first — otherwise the caller aborts boot on the error and the accepting
+	// listener goroutine (plus device service / drains) leaks. Registered only
+	// after StartAll so it never fires when the listener was not started, and
+	// gated on retErr so the success path leaves the services running.
+	// stopAndCleanupServices nil-checks each subsystem, so it is safe on a
+	// partially-started state.
+	defer func() {
+		if retErr != nil {
+			stopAndCleanupServices(runningServices, 5*time.Second, false)
+		}
+	}()
 
 	// Boot logging (FR-020): main listener first, then preview (or disabled message).
 	mainAddr := fmt.Sprintf("%s:%d", cfg.Gateway.Host, cfg.Gateway.Port)

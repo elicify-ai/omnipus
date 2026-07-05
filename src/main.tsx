@@ -4,6 +4,7 @@ import { createRouter, RouterProvider, createHashHistory } from '@tanstack/react
 import { QueryClientProvider } from '@tanstack/react-query'
 import { queryClient } from './lib/queryClient'
 import { routeTree } from './routeTree.gen'
+import { RouteFallback } from './components/shared/RouteFallback'
 import './styles/globals.css'
 
 // Hash routing — required for go:embed static file serving.
@@ -15,6 +16,16 @@ const router = createRouter({
   history: hashHistory,
   defaultPreload: 'intent',
   scrollRestoration: true,
+  // With autoCodeSplitting (vite.config.ts) every route component is a lazy
+  // chunk, so route loading now happens at the ROUTER level. Show the shared
+  // skeleton during a cold navigation instead of a blank frame. defaultPreload
+  // 'intent' preloads on hover so most clicks are instant (no pending shown);
+  // the 150 ms delay avoids flashing the skeleton on those fast/preloaded loads
+  // while still covering genuinely on-demand fetches. Replaces the per-route
+  // <Suspense fallback={RouteFallback}> that the (now-converted) hand-lazy
+  // routes used to carry.
+  defaultPendingComponent: RouteFallback,
+  defaultPendingMs: 150,
 })
 
 declare module '@tanstack/react-router' {

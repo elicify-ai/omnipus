@@ -568,7 +568,11 @@ jobs:
         # user-crud) that use setup.ts DEFAULT_OMNIPUS_BINARY find it. Also
         # keep a copy as ./omnipus for the global-setup gateway.
         run: |
-          CGO_ENABLED=0 go build -o /tmp/omnipus-ci ./cmd/omnipus/
+          # -tags goolm,stdjson is required: cmd/omnipus/main.go is gated
+          # //go:build stdjson as a deliberate fail-fast against tag-less builds
+          # ("function main is undeclared" otherwise). Matches the canonical
+          # build tags (cross-platform.yml, Makefile).
+          CGO_ENABLED=0 go build -tags goolm,stdjson -o /tmp/omnipus-ci ./cmd/omnipus/
           cp /tmp/omnipus-ci ./omnipus
 
       - name: Prepare gateway home directory

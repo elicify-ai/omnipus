@@ -3193,7 +3193,9 @@ func TestContract_AgentCreateRequestMain_ExecutorRejected(t *testing.T) {
 	// Main has no `executor` property at all — additionalProperties: false
 	// rejects it. This is the schema-level enforcement that replaced the old
 	// runtime "coerce external executor to native with a warning" behavior.
-	raw := []byte(`{"type":"Main","name":"Bad Main","soul":"s","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"}}`)
+	raw := []byte(
+		`{"type":"Main","name":"Bad Main","soul":"s","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"}}`,
+	)
 	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "AgentCreateRequestMain", raw),
 		"Main must reject an executor property (additionalProperties: false, no executor in the schema)")
 }
@@ -3238,9 +3240,15 @@ func TestContract_AgentCreateRequestSubagent3p_ForbiddenFieldRejected(t *testing
 	// tools_cfg does not exist on subagent_3p — additionalProperties: false
 	// rejects it. This is the schema-level enforcement that replaced the old
 	// runtime firstForbiddenSubagent3pField check on create.
-	assert.Error(t,
-		validateAgainstComponentSchemaRawJSON(t, "AgentCreateRequestSubagent3p", FixtureAgentCreateRequestSubagent3p_ForbiddenFieldJSON()),
-		"subagent_3p must reject tools_cfg (additionalProperties: false, no tools_cfg in the schema)")
+	assert.Error(
+		t,
+		validateAgainstComponentSchemaRawJSON(
+			t,
+			"AgentCreateRequestSubagent3p",
+			FixtureAgentCreateRequestSubagent3p_ForbiddenFieldJSON(),
+		),
+		"subagent_3p must reject tools_cfg (additionalProperties: false, no tools_cfg in the schema)",
+	)
 }
 
 func TestContract_AgentCreateRequestSubagent3p_DelegationPolicyAccepted(t *testing.T) {
