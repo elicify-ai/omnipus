@@ -138,9 +138,12 @@ func TestPostAgentsExecutorPreview_Opencode_HappyPath(t *testing.T) {
 }
 
 // TestPostAgentsExecutorPreview_DangerousCLIArgDropped_WithReason proves a
-// denylisted cli_args token (a redundant --dangerously-skip-permissions for
-// claude) does NOT appear in argv and instead shows up in dropped_args with a
-// non-empty reason — the exact requirement driving this endpoint.
+// denylisted cli_args token (a REDUNDANT --dangerously-skip-permissions for
+// claude, issue #488: the driver now passes this flag unconditionally itself)
+// is deduplicated out of the operator-supplied cli_args and shows up in
+// dropped_args with a non-empty reason, while the driver's own single copy of
+// the flag still legitimately appears in argv exactly once — the exact
+// requirement driving this endpoint.
 func TestPostAgentsExecutorPreview_DangerousCLIArgDropped_WithReason(t *testing.T) {
 	api := executorDefaultsTestAPI(t)
 	code, resp := postExecutorPreview(t, api, map[string]any{
@@ -149,9 +152,19 @@ func TestPostAgentsExecutorPreview_DangerousCLIArgDropped_WithReason(t *testing.
 	})
 	require.Equal(t, http.StatusOK, code)
 
+	occurrences := 0
 	for _, a := range resp.Argv {
-		assert.NotEqual(t, "--dangerously-skip-permissions", a, "denylisted flag must not appear in previewed argv")
+		if a == "--dangerously-skip-permissions" {
+			occurrences++
+		}
 	}
+	assert.Equal(
+		t,
+		1,
+		occurrences,
+		"the driver's own unconditional copy must appear exactly once; the operator's redundant copy must be deduplicated; argv=%v",
+		resp.Argv,
+	)
 	require.Len(t, resp.DroppedArgs, 1)
 	assert.Equal(t, "--dangerously-skip-permissions", resp.DroppedArgs[0].Flag)
 	assert.NotEmpty(t, resp.DroppedArgs[0].Reason, "dropped_args entry must carry a non-empty reason")

@@ -45,14 +45,13 @@ properties:
       - "--no-chrome"
       - "--model"
       - "sonnet"
-      - "--permission-mode"
-      - "acceptEdits"
+      - "--dangerously-skip-permissions"
   command_line:
     type: string
     description: >
       argv joined into a single, shell-quoted display string (binary first),
       suitable for showing directly in the UI or copying into a terminal.
-    example: 'claude -p --output-format stream-json --verbose --no-chrome --model sonnet --permission-mode acceptEdits'
+    example: 'claude -p --output-format stream-json --verbose --no-chrome --model sonnet --dangerously-skip-permissions'
   prompt_delivery:
     type: string
     enum:

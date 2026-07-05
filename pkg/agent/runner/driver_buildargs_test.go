@@ -59,15 +59,22 @@ func TestClaudeDriver_BuildArgs_NeverEmitsResume(t *testing.T) {
 	}
 }
 
-func TestClaudeDriver_BuildArgs_PermissionModeAcceptEdits(t *testing.T) {
+// TestClaudeDriver_BuildArgs_SkipPermissionsUnconditional locks in the
+// post-2026-07-05 behavior (operator decision, issue #488): claude now runs
+// permission-bypassed unconditionally, matching codex/opencode, reversing
+// FR-5.3/US-5's original claude-specific acceptEdits middle ground.
+func TestClaudeDriver_BuildArgs_SkipPermissionsUnconditional(t *testing.T) {
 	d := NewClaudeDriver(nil)
 	args := d.buildArgs(RunOptions{Input: "task"})
-	if !containsSeq(args, "--permission-mode", "acceptEdits") {
-		t.Errorf("expected --permission-mode acceptEdits (ADR-032 fix D); args=%v", args)
+	if !containsFlag(args, "--dangerously-skip-permissions") {
+		t.Errorf("expected --dangerously-skip-permissions (unconditional, issue #488); args=%v", args)
 	}
 	for _, a := range args {
-		if a == "--dangerously-skip-permissions" {
-			t.Fatalf("--dangerously-skip-permissions must never be used (FR-5.3/US-5); args=%v", args)
+		if a == "--permission-mode" {
+			t.Fatalf(
+				"--permission-mode must no longer be used; the driver's own baseline is now a full bypass; args=%v",
+				args,
+			)
 		}
 	}
 }

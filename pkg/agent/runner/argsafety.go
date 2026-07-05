@@ -1,18 +1,29 @@
 // argsafety.go — ADR-032 fix M-1: guard operator-supplied
-// ExecutorConfig.cli_args against re-enabling a permission/sandbox bypass the
-// driver deliberately avoided (FR-5.2 / FR-5.3 / US-5).
+// ExecutorConfig.cli_args against two categories of flag: (a) an escalation
+// of the permission/sandbox posture the driver deliberately chose
+// (FR-5.2 / FR-5.3 / US-5), and (b) a flag that is merely redundant with, or
+// rendered INERT by, a flag the driver itself already appends
+// unconditionally — dropped for operator visibility, not because the value
+// is itself dangerous.
 //
 // All three drivers (claude, codex, opencode) append opts.CLIArgs AFTER their
 // own safety flags. claude, codex, and opencode's underlying CLI arg parsers
 // are all last-occurrence-wins for a repeated flag, so an operator cli_args
 // value can silently replace the driver's own explicit, deliberately-chosen
-// flag — e.g. re-adding "--dangerously-skip-permissions" (claude),
-// escalating "--permission-mode" to "bypassPermissions" (claude),
-// "--sandbox danger-full-access" (codex), or reintroducing an
-// "--ask-for-approval" gate that cannot be answered in a headless spawn
-// (codex). There was previously NO guard for cli_args (unlike EnvOverrides,
-// which already drops OMNIPUS_* keys with a WARN — see
-// mergeEnvOverrides/isProtectedEnvKey in executor_opts.go, whose
+// flag. Category (a), true escalation: e.g. "--sandbox danger-full-access"
+// or "--dangerously-bypass-approvals-and-sandbox" (codex), or reintroducing
+// an "--ask-for-approval" gate that cannot be answered in a headless spawn
+// (codex). Category (b), redundant-or-inert rather than escalating: e.g.
+// re-adding "--dangerously-skip-permissions" as a duplicate of the driver's
+// own unconditional copy of that same flag (claude, opencode), or setting
+// "--permission-mode" to any value (claude) — the driver's own unconditional
+// --dangerously-skip-permissions is appended first and, per Claude Code
+// CLI's documented behavior, silently overrides/ignores --permission-mode
+// entirely, so an operator value there is inert either way; it is dropped
+// so that inertness is at least visible via the same warn-and-drop
+// mechanism, rather than a silent no-op. There was previously NO guard for
+// cli_args (unlike EnvOverrides, which already drops OMNIPUS_* keys with a
+// WARN — see mergeEnvOverrides/isProtectedEnvKey in executor_opts.go, whose
 // warn-and-drop shape this file mirrors).
 //
 // filterDangerousCLIArgs is applied to opts.CLIArgs ONLY, in each driver's
@@ -68,28 +79,36 @@ type dangerousCLIFlag struct {
 // Ordinary cli_args (model overrides, logging flags, etc.) pass through
 // untouched.
 var dangerousCLIFlagsByCLI = map[string][]dangerousCLIFlag{
-	// claude: the driver never passes --dangerously-skip-permissions
-	// (FR-5.3/US-5) and sets --permission-mode acceptEdits itself (ADR-032
-	// fix D). Per Claude Code's own docs, "bypassPermissions" mode "skips
-	// all safety checks" and is explicitly the "never use in production"
-	// mode — the direct equivalent of --dangerously-skip-permissions
-	// expressed via --permission-mode. Other values ("default", "plan", or a
-	// redundant "acceptEdits") are the SAME or MORE restrictive than the
-	// driver's own choice, so a targeted valueCheck (not a blanket drop) is
-	// used: only "bypassPermissions" is dropped, an operator narrowing to
-	// "plan"/"default" is left alone.
+	// claude: the driver itself now passes --dangerously-skip-permissions
+	// unconditionally (operator decision, 2026-07-05, reversing FR-5.3/US-5's
+	// original claude-specific stance — see driver_claude.go's package doc
+	// and issue #488), matching opencode's existing entry below. An operator
+	// cli_args copy is dropped not because it's dangerous (the driver's own
+	// baseline already IS the full bypass) but to keep the decision
+	// singular/driver-controlled and argv free of a duplicate flag —
+	// mirroring opencode's identical rationale.
+	//
+	// --permission-mode DOES have an entry, but for a different reason than
+	// the original escalation-guard rationale this file started from: the
+	// driver's own unconditional --dangerously-skip-permissions is appended
+	// first and, per Claude Code CLI's documented behavior, silently
+	// overrides/ignores any --permission-mode value entirely. Left
+	// unguarded, an operator setting cli_args: ["--permission-mode", "plan"]
+	// believing it narrows the posture would see ZERO effect with no WARN,
+	// no log, no UI indication. The entry below drops it unconditionally
+	// (nil valueCheck — every value is equally inert) purely for
+	// operator-visibility via the existing dropped_args/WARN mechanism; it
+	// is not a security guard, since the value was never dangerous to begin
+	// with.
 	"claude": {
 		{
 			name:    "--dangerously-skip-permissions",
 			boolean: true,
-			reason:  "re-enables a full permission bypass the driver deliberately never passes (FR-5.3/US-5); --permission-mode acceptEdits is used instead",
+			reason:  "redundant copy of the driver's own unconditional bypass flag (issue #488) — operator cli_args cannot be the source of this decision",
 		},
 		{
-			name: "--permission-mode",
-			valueCheck: func(v string) bool {
-				return strings.EqualFold(v, "bypassPermissions")
-			},
-			reason: `escalates --permission-mode to "bypassPermissions", which Claude Code's own docs describe as skipping all safety checks — the direct equivalent of --dangerously-skip-permissions`,
+			name:   "--permission-mode",
+			reason: "the driver's own unconditional --dangerously-skip-permissions is appended first and silently overrides/ignores any --permission-mode value (a documented Claude Code CLI behavior) — dropped so an operator setting that would otherwise be a silent no-op is at least visible via the dropped_args/WARN mechanism",
 		},
 		// --output-format: driver_claude.go's parseLine expects EXACTLY the
 		// "claude --output-format stream-json" NDJSON event shapes (see the

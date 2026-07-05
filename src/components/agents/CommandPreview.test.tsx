@@ -86,14 +86,14 @@ describe('CommandPreview — loading', () => {
 describe('CommandPreview — success', () => {
   it('renders the REAL command_line string, not a generic description', async () => {
     vi.mocked(fetchExecutorPreview).mockResolvedValue(
-      okResponse({ command_line: 'claude -p --output-format stream-json --model sonnet --permission-mode acceptEdits' }),
+      okResponse({ command_line: 'claude -p --output-format stream-json --model sonnet --dangerously-skip-permissions' }),
     )
     render(<CommandPreview req={req({ model: 'sonnet' })} testId="cp" />)
     await advanceAndFlush(400)
 
     expect(screen.getByTestId('cp')).toHaveAttribute('data-preview-status', 'ready')
     expect(screen.getByTestId('cp-command-line')).toHaveTextContent(
-      'claude -p --output-format stream-json --model sonnet --permission-mode acceptEdits',
+      'claude -p --output-format stream-json --model sonnet --dangerously-skip-permissions',
     )
   })
 

@@ -1,9 +1,25 @@
 // driver_claude.go — Claude Code streaming driver (FR-5.2, FR-5.6, US-4)
 //
-// Drives `claude -p --output-format stream-json` without the
-// `--dangerously-skip-permissions` flag (FR-5.3 / US-5 requirement).
-// Permission-request events are routed to the consent layer via the
-// ConsentHandler attached to the runner (FR-5.1 / M-2).
+// Drives `claude -p --output-format stream-json --dangerously-skip-permissions`
+// — full permission bypass, unconditional (operator decision, 2026-07-05,
+// reversing FR-5.3/US-5's original claude-specific stance of using
+// `--permission-mode acceptEdits` instead). Without this, every tool call the
+// delegated CLI makes blocks on a permission fence with no reachable approval
+// UI in practice, making subagent_3p delegation to claude-code effectively
+// unusable. This now matches codex (`--ask-for-approval never`) and opencode
+// (`--dangerously-skip-permissions`, ADR-032 §2.4), which already ran
+// permission-bypassed unconditionally — claude-code was the one outlier.
+//
+// SECURITY NOTE: unlike codex (which keeps `--sandbox workspace-write`, a
+// real kernel-level boundary, active in this mode) and unlike claude-code's
+// OWN prior acceptEdits posture, `--dangerously-skip-permissions` disables
+// Claude Code's internal sandbox too — the flag bundles "don't ask" and
+// "don't confine" together, not separably. Omnipus builds no separate
+// confiner for external-CLI workers (ADR-032/FR-5.3's original decision:
+// rely on each CLI's own sandboxing). This means claude-code-backed
+// subagent_3p workers now run with NO enforced sandbox boundary at all,
+// matching opencode's pre-existing situation. See issue #488 for the tracked
+// follow-up evaluating whether Omnipus needs its own confiner here.
 //
 // Claude Code stream-json event shapes (version 1.x / 2.x):
 //
@@ -14,16 +30,14 @@
 //	{"type":"result","subtype":"success","result":"...","session_id":"<id>","usage":{...},...}
 //	{"type":"result","subtype":"error_during_execution","error":"...","session_id":"<id>",...}
 //
-// Permission prompts (when --dangerously-skip-permissions is NOT set) appear as:
-//
-//	{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"<tool>","id":"<id>","input":{...}},...]},...}
-//
-// followed by a pause waiting for permission (the permission-prompt-tool protocol
-// — Claude Code blocks on a permission fence when the tool is not auto-approved).
-// Omnipus cannot inject a decision mid-process in the `claude -p` non-interactive
-// mode; instead the driver detects tool_use events for non-whitelisted tools and
-// emits PermissionRequestEvents so the caller can decide. After a decision the
-// driver resumes or cancels accordingly.
+// With permissions fully bypassed, Claude Code no longer pauses on a
+// permission fence at all — every tool_use event is followed immediately by
+// its tool_result with no intervening approval wait. The driver still detects
+// tool_use events and emits PermissionRequestEvents (routed through the same
+// ConsentHandler codex/opencode use — see consent.go's POST-HOC CONSENT
+// LIMITATION note), but this is now purely observability + a kill switch, the
+// same as it already was for codex/opencode: Omnipus cannot veto an
+// individual call, only cancel the whole run.
 
 package runner
 
@@ -246,9 +260,11 @@ func (d *ClaudeDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEven
 }
 
 // buildArgs constructs the claude CLI argument list (FR-5.2, ADR-032 fix C).
-// NOTE: --dangerously-skip-permissions is deliberately omitted (FR-5.3 / US-5);
-// --permission-mode acceptEdits is used instead (ADR-032 fix D — workspace-write,
-// non-interactive posture without a full bypass).
+// NOTE: --dangerously-skip-permissions IS passed unconditionally (operator
+// decision, 2026-07-05, reversing FR-5.3/US-5's original claude-specific
+// stance — see the package doc's SECURITY NOTE and issue #488). This
+// disables Claude Code's own internal sandbox as well as its permission
+// prompts; there is no separate Omnipus confiner for external-CLI workers.
 //
 // --resume is deliberately NOT passed: opts.RunID is a freshly generated
 // dispatch identifier ("subturn-N" / "ext-<nanos>"), never a real prior claude
@@ -273,22 +289,27 @@ func (d *ClaudeDriver) buildArgs(opts RunOptions) []string {
 	if model := strings.TrimSpace(opts.Model); model != "" {
 		args = append(args, "--model", model)
 	}
-	// Non-interactive workspace-write posture (ADR-032 fix D): acceptEdits
-	// auto-approves file edits without the full --dangerously-skip-permissions
-	// bypass, so a headless run does not stall waiting on a TTY prompt that
-	// will never come.
-	args = append(args, "--permission-mode", "acceptEdits")
+	// Full permission bypass, unconditional (operator decision, 2026-07-05 —
+	// see the package doc's SECURITY NOTE and issue #488). Without this, a
+	// headless run stalls forever on a TTY permission prompt that will never
+	// come; the previous acceptEdits middle ground still blocked on non-edit
+	// tool calls with no reachable approval UI in practice.
+	args = append(args, "--dangerously-skip-permissions")
 	if opts.MaxTurns > 0 {
 		args = append(args, "--max-turns", fmt.Sprintf("%d", opts.MaxTurns))
 	}
 	// Append operator-supplied extra args (ExecutorConfig.cli_args, MAJ-5) last —
 	// there is no trailing positional/stdin-sentinel token to keep after them
 	// (see the buildArgs doc comment above: no "-" is appended; opts.Input
-	// reaches the child exclusively via cmd.Stdin in Run()). ADR-032 fix M-1: a
-	// flag that could re-enable a full permission bypass (or escalate
-	// --permission-mode to "bypassPermissions") is stripped first — see
-	// argsafety.go. This filter applies to opts.CLIArgs ONLY; the driver's
-	// own --permission-mode acceptEdits flag above is never touched.
+	// reaches the child exclusively via cmd.Stdin in Run()). filterDangerousCLIArgs
+	// still runs here (see argsafety.go) for the correctness-only --output-format
+	// guard, plus two now-repurposed (not removed) entries for claude: an
+	// operator cli_args copy of --dangerously-skip-permissions is dropped as
+	// redundant (the driver's own baseline above already IS the full bypass),
+	// and any --permission-mode value is dropped as inert (that same
+	// unconditional bypass silently overrides/ignores it) — neither is an
+	// escalation guard anymore, both exist purely so a no-op operator setting
+	// is still visible via dropped_args/WARN instead of silently doing nothing.
 	kept, dropped := filterDangerousCLIArgs("claude", opts.CLIArgs)
 	logDroppedCLIArgs("runner/claude", "claude", opts.RunID, dropped)
 	args = append(args, kept...)
