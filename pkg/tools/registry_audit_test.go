@@ -174,13 +174,13 @@ func TestToolRegistry_CloneAndCloneExcept_PropagateMemoryRateLimiter(t *testing.
 		reg := NewToolRegistry()
 		reg.SetMemoryRateLimiter(limiter)
 		reg.Register(&mockRegistryTool{
-			name:   "spawn",
+			name:   "delegate",
 			desc:   "excluded from the clone",
 			params: map[string]any{"type": "object", "properties": map[string]any{}},
 			result: &ToolResult{ForLLM: "ok", ForUser: "ok"},
 		})
 
-		clone := reg.CloneExcept(ExcludedSpawn)
+		clone := reg.CloneExcept(ExcludedDelegate)
 		require.Same(t, limiter, clone.memoryRateLimiter,
 			"CloneExcept must retain the SAME memoryRateLimiter instance for the same reason as Clone")
 
