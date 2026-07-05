@@ -198,13 +198,13 @@ func TestListExecutorDefaults_ReturnsAllThreeCLIs(t *testing.T) {
 }
 
 // TestListExecutorDefaults_ClaudeMatchesRealBuildArgs cross-checks the claude
-// entry against the REAL ClaudeDriver.buildArgs() output (ADR-032 fix C/D):
-// -p, --output-format stream-json, --verbose, --no-chrome, a conditional
-// --model, --permission-mode acceptEdits, and a conditional --max-turns — in
-// that order, verified against a live call with both conditional fields set.
-// A second call with neither field set confirms both stay ABSENT, matching
-// the endpoint's "(only when ...)" documentation.
-// --dangerously-skip-permissions must never appear (FR-5.3).
+// entry against the REAL ClaudeDriver.buildArgs() output (ADR-032 fix C/D,
+// issue #488): -p, --output-format stream-json, --verbose, --no-chrome, a
+// conditional --model, --dangerously-skip-permissions (unconditional as of
+// 2026-07-05, reversing the original FR-5.3/US-5 acceptEdits stance), and a
+// conditional --max-turns — in that order, verified against a live call with
+// both conditional fields set. A second call with neither field set confirms
+// both stay ABSENT, matching the endpoint's "(only when ...)" documentation.
 func TestListExecutorDefaults_ClaudeMatchesRealBuildArgs(t *testing.T) {
 	api := executorDefaultsTestAPI(t)
 	_, entries := getExecutorDefaults(t, api)
@@ -216,10 +216,13 @@ func TestListExecutorDefaults_ClaudeMatchesRealBuildArgs(t *testing.T) {
 	})
 	assertRealArgsMatchEndpoint(t, "claude", configured, claude.AutoAppliedFlags)
 
+	found := false
 	for _, a := range configured {
-		assert.NotEqual(t, "--dangerously-skip-permissions", a,
-			"FR-5.3/US-5: claude driver never passes --dangerously-skip-permissions")
+		if a == "--dangerously-skip-permissions" {
+			found = true
+		}
 	}
+	assert.True(t, found, "issue #488: claude driver now passes --dangerously-skip-permissions unconditionally")
 
 	bare := runner.BuildClaudeArgs(runner.RunOptions{Input: "task"})
 	for _, a := range bare {

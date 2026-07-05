@@ -28,6 +28,21 @@
 // │ CLI's own sandbox + the worktree are the authoritative confinement.      │
 // └─────────────────────────────────────────────────────────────────────────┘
 //
+// AMENDED 2026-07-05 (issue #488): two claims in the box above are now stale.
+// (1) The "isolated git worktree" reference predates ADR-032 (2026-07-02..04),
+// which removed worktree isolation for external-CLI runs — they now execute
+// directly in the delegate's real workspace directory (RunOptions.WorkDir),
+// not a disposable copy; this staleness was pre-existing, independent of (2).
+// (2) claude no longer has "its own sandbox" as a boundary either: its driver
+// (driver_claude.go) now passes --dangerously-skip-permissions unconditionally,
+// the same as opencode. Of the three CLIs, only codex still enforces a real
+// OS-level boundary of its own (--sandbox workspace-write, Landlock/seccomp);
+// claude and opencode both now run fully permission-bypassed with zero
+// enforced tool-level gate of their own. This does NOT change the box's core
+// point above: Omnipus's own consent layer remains post-hoc/best-effort
+// observability + a kill switch for all three drivers, never a pre-emptive
+// call-level gate. See ADR-032 and issue #488 for the full history/rationale.
+//
 // Spec-4 FR-5.1 contract:
 //   - Permission requests from external runners MUST be routed to the consent layer.
 //   - Deny-by-default when no consent handler is registered.
