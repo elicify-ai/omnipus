@@ -590,9 +590,10 @@ func (r *ToolRegistry) Clone() *ToolRegistry {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	clone := &ToolRegistry{
-		tools:       make(map[string]*ToolEntry, len(r.tools)),
-		mediaStore:  r.mediaStore,
-		auditLogger: r.auditLogger,
+		tools:             make(map[string]*ToolEntry, len(r.tools)),
+		mediaStore:        r.mediaStore,
+		auditLogger:       r.auditLogger,
+		memoryRateLimiter: r.memoryRateLimiter,
 	}
 	for name, entry := range r.tools {
 		clone.tools[name] = cloneEntry(entry)
@@ -652,9 +653,10 @@ func (r *ToolRegistry) CloneExcept(tools ...ExcludedTool) *ToolRegistry {
 		}
 	}
 	clone := &ToolRegistry{
-		tools:       make(map[string]*ToolEntry, len(r.tools)),
-		mediaStore:  r.mediaStore,
-		auditLogger: r.auditLogger,
+		tools:             make(map[string]*ToolEntry, len(r.tools)),
+		mediaStore:        r.mediaStore,
+		auditLogger:       r.auditLogger,
+		memoryRateLimiter: r.memoryRateLimiter,
 	}
 	for name, entry := range r.tools {
 		if _, skip := excluded[name]; skip {
