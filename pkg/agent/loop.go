@@ -202,6 +202,18 @@ type AgentLoop struct {
 	// system tools are not registered (graceful degradation in tests without a store).
 	sysagentDeps *systools.Deps
 
+	// memoryRateLimiter is the shared MemoryRateLimiter (v0.2 #155 item 6),
+	// built once in NewAgentLoop and applied to every agent's remember/
+	// run_retrospective tools via wireMemoryRateLimiterOn. Stored here (rather
+	// than left a bare local, as it originally was) so ReloadProviderAndConfig
+	// can re-wire the SAME limiter instance onto the freshly-built registry on
+	// hot reload — constructing a new limiter on every reload would reset
+	// every agent's sliding-window rate-limit buckets on any unrelated config
+	// change. Like tier13Deps/sysagentDeps, this field is only ever written
+	// during NewAgentLoop (single-threaded) or ReloadProviderAndConfig, which
+	// the gateway serializes via its own reloadMu — no dedicated lock needed.
+	memoryRateLimiter *tools.MemoryRateLimiter
+
 	// contextBuilderRegistry is a broadcast channel for config-change
 	// invalidation (FR-061). REST config-write handlers call
 	// InvalidateAllContextBuilders so every agent's next turn rebuilds the
@@ -581,42 +593,13 @@ func NewAgentLoop(
 				},
 			})
 
-			// Wire audit logger into all agent tool registries.
-			for _, agentID := range registry.ListAgentIDs() {
-				if agent, ok := registry.GetAgent(agentID); ok {
-					agent.Tools.SetAuditLogger(auditLogger)
-					// Memory tools carry their own audit-logger reference for
-					// structured per-entry events (content_sha256 etc.).
-					// SetAuditLogger on the registry propagates via auditLoggerAware,
-					// but the explicit cast below documents the dependency clearly.
-					if t, ok := agent.Tools.Get("remember"); ok {
-						if rt, ok := t.(*tools.RememberTool); ok {
-							rt.SetAuditLogger(auditLogger)
-						} else {
-							// SF4: wrong type registered for "remember" — surface the
-							// registration-order bug so it doesn't silently skip audit wiring.
-							logger.WarnCF("agent",
-								"'remember' tool is not a *tools.RememberTool; audit wiring skipped",
-								map[string]any{
-									"agent_id":  agentID,
-									"tool_type": fmt.Sprintf("%T", t),
-								})
-						}
-					}
-					if t, ok := agent.Tools.Get("run_retrospective"); ok {
-						if rt, ok := t.(*tools.RetrospectiveTool); ok {
-							rt.SetAuditLogger(auditLogger)
-						} else {
-							logger.WarnCF("agent",
-								"'run_retrospective' tool is not a *tools.RetrospectiveTool; audit wiring skipped",
-								map[string]any{
-									"agent_id":  agentID,
-									"tool_type": fmt.Sprintf("%T", t),
-								})
-						}
-					}
-				}
-			}
+			// Wire audit logger into all agent tool registries. Factored out into
+			// wireMemoryAuditLoggerOn so ReloadProviderAndConfig can re-apply the
+			// same wiring against a freshly-built registry on hot reload (see that
+			// method's doc comment) — without this, every agent's remember/
+			// run_retrospective tools would silently lose audit logging (SEC-15)
+			// the first time config reloads.
+			al.wireMemoryAuditLoggerOn(registry, auditLogger)
 		}
 	}
 
@@ -770,16 +753,18 @@ func NewAgentLoop(
 	// to tune them and exposing knobs invites footguns. The constructor accepts
 	// a MemoryRateLimitConfig so a future config-backed override can be wired
 	// in without a structural change.
-	memRL := tools.NewMemoryRateLimiter(tools.MemoryRateLimitConfig{})
-	for _, agentID := range registry.ListAgentIDs() {
-		if agentInst, ok := registry.GetAgent(agentID); ok {
-			agentInst.Tools.SetMemoryRateLimiter(memRL)
-		}
-	}
+	//
+	// Stashed on al.memoryRateLimiter (not a bare local) so hot-reload
+	// (ReloadProviderAndConfig) can re-apply the SAME limiter instance onto
+	// the freshly-built registry via wireMemoryRateLimiterOn — constructing a
+	// new limiter on every reload would reset every agent's sliding-window
+	// buckets on any unrelated config change.
+	al.memoryRateLimiter = tools.NewMemoryRateLimiter(tools.MemoryRateLimitConfig{})
+	al.wireMemoryRateLimiterOn(registry, al.memoryRateLimiter)
 	logger.InfoCF("agent", "Memory write rate limiter initialized",
 		map[string]any{
-			"per_agent_per_minute":  memRL.PerAgentLimit(),
-			"per_caller_per_minute": memRL.PerCallerLimit(),
+			"per_agent_per_minute":  al.memoryRateLimiter.PerAgentLimit(),
+			"per_caller_per_minute": al.memoryRateLimiter.PerCallerLimit(),
 		})
 
 	// Register shared tools to all agents (now that al is created)
@@ -1320,6 +1305,74 @@ func (al *AgentLoop) wireTier13DepsLocked(registry *AgentRegistry, deps Tier13De
 		"egress_proxy_ready":        deps.EgressProxy != nil,
 		"workspace_shell_enabled":   resolveBoolWithDefault(cfg.Sandbox.Experimental.WorkspaceShellEnabled, false),
 	})
+}
+
+// wireMemoryAuditLoggerOn wires auditLogger into every agent's tool registry
+// in registry (SEC-15), including the direct RememberTool/RetrospectiveTool
+// cast so memory tools can emit their own structured per-entry audit events
+// (content_sha256 etc.). Factored out of NewAgentLoop's boot-time wiring so
+// ReloadProviderAndConfig can re-apply the identical wiring against a
+// freshly-built registry on hot reload — without this, NewAgentRegistry's
+// brand-new RememberTool/RetrospectiveTool instances would silently lose
+// audit logging the first time config reloads (e.g. onboarding completion,
+// any agent PUT, token rotation — every TriggerReload call site).
+func (al *AgentLoop) wireMemoryAuditLoggerOn(registry *AgentRegistry, auditLogger *audit.Logger) {
+	if registry == nil || auditLogger == nil {
+		return
+	}
+	for _, agentID := range registry.ListAgentIDs() {
+		if agent, ok := registry.GetAgent(agentID); ok {
+			agent.Tools.SetAuditLogger(auditLogger)
+			// Memory tools carry their own audit-logger reference for
+			// structured per-entry events (content_sha256 etc.).
+			// SetAuditLogger on the registry propagates via auditLoggerAware,
+			// but the explicit cast below documents the dependency clearly.
+			if t, ok := agent.Tools.Get("remember"); ok {
+				if rt, ok := t.(*tools.RememberTool); ok {
+					rt.SetAuditLogger(auditLogger)
+				} else {
+					// SF4: wrong type registered for "remember" — surface the
+					// registration-order bug so it doesn't silently skip audit wiring.
+					logger.WarnCF("agent",
+						"'remember' tool is not a *tools.RememberTool; audit wiring skipped",
+						map[string]any{
+							"agent_id":  agentID,
+							"tool_type": fmt.Sprintf("%T", t),
+						})
+				}
+			}
+			if t, ok := agent.Tools.Get("run_retrospective"); ok {
+				if rt, ok := t.(*tools.RetrospectiveTool); ok {
+					rt.SetAuditLogger(auditLogger)
+				} else {
+					logger.WarnCF("agent",
+						"'run_retrospective' tool is not a *tools.RetrospectiveTool; audit wiring skipped",
+						map[string]any{
+							"agent_id":  agentID,
+							"tool_type": fmt.Sprintf("%T", t),
+						})
+				}
+			}
+		}
+	}
+}
+
+// wireMemoryRateLimiterOn propagates the shared MemoryRateLimiter (v0.2 #155
+// item 6) onto every agent's tool registry in registry. Factored out of
+// NewAgentLoop's boot-time wiring so ReloadProviderAndConfig can re-apply the
+// SAME limiter instance against a freshly-built registry on hot reload —
+// see the al.memoryRateLimiter field comment for why the limiter itself must
+// never be reconstructed here (that would reset every agent's sliding-window
+// rate-limit buckets on any unrelated config change).
+func (al *AgentLoop) wireMemoryRateLimiterOn(registry *AgentRegistry, limiter *tools.MemoryRateLimiter) {
+	if registry == nil || limiter == nil {
+		return
+	}
+	for _, agentID := range registry.ListAgentIDs() {
+		if agentInst, ok := registry.GetAgent(agentID); ok {
+			agentInst.Tools.SetMemoryRateLimiter(limiter)
+		}
+	}
 }
 
 // resolveBoolWithDefault returns the bool value from a *bool, falling back to
@@ -3214,6 +3267,27 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	// Re-wire system.* tools on the new registry (FR-001, FR-002).
 	if al.sysagentDeps != nil {
 		al.wireSysagentDepsLocked(registry, al.sysagentDeps)
+	}
+
+	// Re-wire the audit logger onto remember/run_retrospective tools on the
+	// new registry (SEC-15). Without this, hot reload would silently drop
+	// memory-tool audit logging: NewAgentRegistry above built brand-new
+	// RememberTool/RetrospectiveTool instances that never learned about
+	// al.auditLogger. Mirrors the boot-time guard (cfg.Sandbox.AuditLog) —
+	// al.auditLogger is only non-nil when audit logging was actually enabled.
+	if al.auditLogger != nil {
+		al.wireMemoryAuditLoggerOn(registry, al.auditLogger)
+	}
+
+	// Re-wire the shared memory-write rate limiter (v0.2 #155 item 6) onto
+	// the new registry, re-applying the SAME instance built once in
+	// NewAgentLoop — never a freshly constructed one, so per-agent/per-caller
+	// sliding-window buckets survive config reloads. al.memoryRateLimiter is
+	// unconditionally constructed in NewAgentLoop today, so this is always
+	// non-nil in practice; the guard is defensive symmetry with the other
+	// re-wiring steps above in case that ever becomes conditional.
+	if al.memoryRateLimiter != nil {
+		al.wireMemoryRateLimiterOn(registry, al.memoryRateLimiter)
 	}
 
 	// Re-wire per-turn delegation injectors on the new registry so that the
