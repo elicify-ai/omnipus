@@ -134,52 +134,14 @@ func TestConfigLoader_MalformedSecurity(t *testing.T) {
 	})
 }
 
-// TestPolicyEngine_FullToolInvocation is an integration test combining policy evaluation
-// with explainable decisions in a complete invocation flow.
-// Traces to: wave2-security-layer-spec.md line 809 (TestPolicyEngine_FullToolInvocation)
-// BDD: Scenario: Denial includes matching rule (spec line 623) — end-to-end
-func TestPolicyEngine_FullToolInvocation(t *testing.T) {
-	// Traces to: wave2-security-layer-spec.md line 809 (TestPolicyEngine_FullToolInvocation)
-	cfg := &policy.SecurityConfig{
-		DefaultPolicy: policy.PolicyDeny,
-		Agents: map[string]policy.AgentPolicy{
-			"researcher": {
-				Tools: policy.AgentToolsPolicy{
-					Allow: []string{"search_web"},
-				},
-			},
-		},
-	}
-	evaluator := policy.NewEvaluator(cfg)
-
-	t.Run("allowed tool produces allow decision with policy_rule", func(t *testing.T) {
-		result := evaluator.EvaluateTool("researcher", "search_web")
-		assert.True(t, result.Allowed)
-		assert.NotEmpty(t, result.PolicyRule)
-		assert.Contains(t, result.PolicyRule, "search_web")
-	})
-
-	t.Run("denied tool produces deny decision with policy_rule", func(t *testing.T) {
-		result := evaluator.EvaluateTool("researcher", "exec")
-		assert.False(t, result.Allowed)
-		assert.Contains(t, result.PolicyRule, "exec")
-		assert.Contains(t, result.PolicyRule, "researcher")
-	})
-
-	t.Run("unknown tool not in allow list is denied with explanation", func(t *testing.T) {
-		result := evaluator.EvaluateTool("researcher", "unknown_tool")
-		assert.False(t, result.Allowed)
-		assert.Contains(t, result.PolicyRule, "not in tools.allow")
-	})
-
-	t.Run("privileged agent type detection works", func(t *testing.T) {
-		// Traces to: wave2-security-layer-spec.md line 183 (IsSystemAgent exemption)
-		// FR-045: privileges flow from agent type, not from a hardcoded ID.
-		assert.True(t, policy.IsSystemAgent("core"))
-		assert.True(t, policy.IsSystemAgent("system"))
-		assert.False(t, policy.IsSystemAgent("custom"))
-		assert.False(t, policy.IsSystemAgent(""))
-	})
+// TestIsSystemAgent_PrivilegedAgentTypeDetection verifies privileges flow from
+// agent type, not from a hardcoded ID (FR-045).
+// Traces to: wave2-security-layer-spec.md line 183 (IsSystemAgent exemption)
+func TestIsSystemAgent_PrivilegedAgentTypeDetection(t *testing.T) {
+	assert.True(t, policy.IsSystemAgent("core"))
+	assert.True(t, policy.IsSystemAgent("system"))
+	assert.False(t, policy.IsSystemAgent("custom"))
+	assert.False(t, policy.IsSystemAgent(""))
 }
 
 // TestDMSafetyChecker_OpenChannel validates detection of open DM channel configurations.

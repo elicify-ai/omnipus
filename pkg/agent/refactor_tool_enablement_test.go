@@ -18,7 +18,6 @@ import (
 
 	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/config"
-	"github.com/dapicom-ai/omnipus/pkg/policy"
 )
 
 // TestAllImplementedToolsRegistered_DefaultConfig proves the headline contract:
@@ -78,39 +77,6 @@ func TestAllImplementedToolsRegistered_DefaultConfig(t *testing.T) {
 			"tool %q must be registered on a default-config agent (enablement is policy-gated, not registration-gated)",
 			name)
 	}
-}
-
-// TestBrowserEvaluateDeniedByDefaultPolicy locks in the safety contract that
-// replaced the old Browser.EvaluateEnabled flag. browser_evaluate executes
-// arbitrary JavaScript and must stay denied without explicit operator opt-in.
-//
-// The contract lives in pkg/policy.builtinToolPolicies; this test catches
-// regressions that accidentally remove the entry or flip the default.
-func TestBrowserEvaluateDeniedByDefaultPolicy(t *testing.T) {
-	// Nil SecurityConfig should still deny browser_evaluate.
-	var sc *policy.SecurityConfig
-	assert.Equal(t, policy.ToolPolicyDeny, sc.ResolveToolPolicy("browser_evaluate"),
-		"browser_evaluate must be denied when no security config is loaded at all")
-
-	// Empty SecurityConfig (no user-supplied overrides) must also deny.
-	sc2 := &policy.SecurityConfig{}
-	assert.Equal(t, policy.ToolPolicyDeny, sc2.ResolveToolPolicy("browser_evaluate"),
-		"browser_evaluate must be denied under default security config")
-
-	// User opt-in must be respected (a sensible operator may want "ask").
-	sc3 := &policy.SecurityConfig{
-		ToolPolicies: map[string]policy.ToolPolicy{
-			"browser_evaluate": policy.ToolPolicyAsk,
-		},
-	}
-	assert.Equal(t, policy.ToolPolicyAsk, sc3.ResolveToolPolicy("browser_evaluate"),
-		"explicit user override must win over the builtin default")
-
-	// A sibling tool without a builtin default falls through to allow (the
-	// system's default_policy). This proves the builtin map is not applied
-	// broadly — it only targets the specific dangerous tools we name.
-	assert.Equal(t, policy.ToolPolicyAllow, sc2.ResolveToolPolicy("browser_navigate"),
-		"browser_navigate has no builtin deny default")
 }
 
 // TestDeprecatedEnableFlagScanDoesNotPanic exercises the warn-once path on a

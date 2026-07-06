@@ -41,15 +41,13 @@ type infraToolGetter interface {
 // already in policyFiltered with policyMap[name]=="allow" in the common path.
 // This function therefore degrades to a safe idempotent backstop: it re-adds an
 // infra tool only if the resolver somehow omitted it (e.g. a test that builds a
-// policy map by hand and passes a registry whose Get returns the tool). The
-// `compressed` parameter is retained for call-site/signature compatibility but
-// is no longer a gate on the force-allow itself — infra reachability does not
-// depend on the manifest being compressed (when compressed is off, load_tool is
-// stripped from the SENT defs on the non-compressed path in runTurn, so its
-// allow verdict is moot and surfacing nothing to the model). agentTools==nil
-// is still a no-op (nothing to look the tool up from).
+// policy map by hand and passes a registry whose Get returns the tool).
+// Reachability does not depend on the manifest being compressed (when
+// compressed is off, load_tool is stripped from the SENT defs on the
+// non-compressed path in runTurn, so its allow verdict is moot and surfacing
+// nothing to the model). agentTools==nil is still a no-op (nothing to look the
+// tool up from).
 func ensureInfraToolsExecutable(
-	compressed bool,
 	agentTools infraToolGetter,
 	policyFiltered []tools.Tool,
 	policyMap map[string]string,

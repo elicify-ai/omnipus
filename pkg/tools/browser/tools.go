@@ -389,11 +389,10 @@ func (t *WaitTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 // cfg.Sandbox.BrowserEvaluateEnabled): Execute returns a deny error unless the
 // operator explicitly opted in. This single gate enforces SEC-04 / SEC-06.
 //
-// NOTE (#438): pkg/policy.builtinToolPolicies["browser_evaluate"] = deny expresses
-// the same deny-by-default intent declaratively, but it is read only by the
-// pkg/policy Evaluator.EvaluateTool path, which has no live tool-dispatch caller
-// (test-only). It is therefore advisory, not a live gate — the executeEnabled
-// check below is what actually stops execution at runtime.
+// (#438, #70): a pkg/policy declarative mirror of this deny-by-default intent
+// used to exist but was dead code (no live tool-dispatch caller) and was
+// removed — the executeEnabled check below is what actually stops execution
+// at runtime, and always was.
 type EvaluateTool struct {
 	tools.BaseTool
 	mgr            *BrowserManager
@@ -419,8 +418,7 @@ func (t *EvaluateTool) Parameters() map[string]any {
 
 func (t *EvaluateTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	// Execution gate: operator must opt in via cfg.Sandbox.BrowserEvaluateEnabled.
-	// This is the SOLE live gate (the pkg/policy deny entry is test-only; see the
-	// type doc above and #438).
+	// This is the SOLE live gate (see the type doc above and #438).
 	if !t.executeEnabled {
 		return tools.ErrorResult(
 			"browser_evaluate: disabled — set sandbox.browser_evaluate_enabled=true in config to enable",

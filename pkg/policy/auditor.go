@@ -41,13 +41,6 @@ func NewPolicyAuditor(eval *Evaluator, logger AuditLogger, sessionID string) *Po
 	return &PolicyAuditor{eval: eval, logger: logger, sessionID: sessionID}
 }
 
-// EvaluateTool checks a tool invocation and logs the decision.
-func (pa *PolicyAuditor) EvaluateTool(agentID, toolName string, agentPolicy ...*AgentPolicy) Decision {
-	d := pa.eval.EvaluateTool(agentID, toolName, agentPolicy...)
-	pa.logDecision("tool_call", agentID, toolName, "", d)
-	return d
-}
-
 // EvaluateExec checks an exec command and logs the decision.
 func (pa *PolicyAuditor) EvaluateExec(agentID, command string) Decision {
 	d := pa.eval.EvaluateExec(agentID, command)

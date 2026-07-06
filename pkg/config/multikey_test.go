@@ -4,39 +4,32 @@ import (
 	"testing"
 )
 
-// expandMultiKeyModels is a pass-through since multi-key expansion was removed
-// in favor of credential-store-backed APIKeyRef. These tests verify the
-// pass-through behavior and that APIKey() resolves correctly from env.
+// Multi-key failover via APIKeys was removed in favor of credential-store-backed
+// APIKeyRef. These tests verify ModelConfig.APIKey() resolves correctly from env
+// and that IsVirtual() is false for an ordinary, non-expanded model.
 
-func TestExpandMultiKeyModels_SingleKey(t *testing.T) {
+func TestModelConfig_APIKey_ResolvesFromRef(t *testing.T) {
 	const keyRef = "MULTIKEY_TEST_SINGLE_KEY"
 	t.Setenv(keyRef, "single-key")
 
-	models := []*ModelConfig{
-		{
-			ModelName: "gpt-4",
-			Model:     "openai/gpt-4o",
-			APIKeyRef: keyRef,
-		},
+	model := &ModelConfig{
+		ModelName: "gpt-4",
+		Model:     "openai/gpt-4o",
+		APIKeyRef: keyRef,
 	}
 
-	result := expandMultiKeyModels(models)
-
-	if len(result) != 1 {
-		t.Fatalf("expected 1 model, got %d", len(result))
+	if model.ModelName != "gpt-4" {
+		t.Errorf("expected model_name 'gpt-4', got %q", model.ModelName)
 	}
-	if result[0].ModelName != "gpt-4" {
-		t.Errorf("expected model_name 'gpt-4', got %q", result[0].ModelName)
+	if model.APIKey() != "single-key" {
+		t.Errorf("expected api_key 'single-key', got %q", model.APIKey())
 	}
-	if result[0].APIKey() != "single-key" {
-		t.Errorf("expected api_key 'single-key', got %q", result[0].APIKey())
-	}
-	if len(result[0].Fallbacks) != 0 {
-		t.Errorf("expected no fallbacks, got %v", result[0].Fallbacks)
+	if len(model.Fallbacks) != 0 {
+		t.Errorf("expected no fallbacks, got %v", model.Fallbacks)
 	}
 }
 
-func TestExpandMultiKeyModels_MultipleModels(t *testing.T) {
+func TestModelConfig_APIKey_MultipleModels(t *testing.T) {
 	const key1Ref = "MULTIKEY_TEST_KEY_1"
 	const key2Ref = "MULTIKEY_TEST_KEY_2"
 	const key3Ref = "MULTIKEY_TEST_KEY_3"
@@ -50,27 +43,22 @@ func TestExpandMultiKeyModels_MultipleModels(t *testing.T) {
 		{ModelName: "glm-4.7-c", Model: "zhipu/glm-4.7", APIBase: "https://api.example.com", APIKeyRef: key3Ref},
 	}
 
-	result := expandMultiKeyModels(models)
-
-	if len(result) != 3 {
-		t.Fatalf("expected 3 models (pass-through), got %d", len(result))
+	if models[0].APIKey() != "key1" {
+		t.Errorf("models[0].APIKey() = %q, want %q", models[0].APIKey(), "key1")
 	}
-	if result[0].APIKey() != "key1" {
-		t.Errorf("result[0].APIKey() = %q, want %q", result[0].APIKey(), "key1")
+	if models[1].APIKey() != "key2" {
+		t.Errorf("models[1].APIKey() = %q, want %q", models[1].APIKey(), "key2")
 	}
-	if result[1].APIKey() != "key2" {
-		t.Errorf("result[1].APIKey() = %q, want %q", result[1].APIKey(), "key2")
-	}
-	if result[2].APIKey() != "key3" {
-		t.Errorf("result[2].APIKey() = %q, want %q", result[2].APIKey(), "key3")
+	if models[2].APIKey() != "key3" {
+		t.Errorf("models[2].APIKey() = %q, want %q", models[2].APIKey(), "key3")
 	}
 }
 
-func TestExpandMultiKeyModels_PreservesOtherFields(t *testing.T) {
+func TestModelConfig_FieldsSurvivedConstruction(t *testing.T) {
 	const keyRef = "MULTIKEY_TEST_PRESERVE_KEY"
 	t.Setenv(keyRef, "key0")
 
-	modelCfg := &ModelConfig{
+	model := &ModelConfig{
 		ModelName:      "gpt-4",
 		Model:          "openai/gpt-4o",
 		APIBase:        "https://api.example.com",
@@ -81,56 +69,41 @@ func TestExpandMultiKeyModels_PreservesOtherFields(t *testing.T) {
 		ThinkingLevel:  "high",
 		APIKeyRef:      keyRef,
 	}
-	models := []*ModelConfig{modelCfg}
 
-	result := expandMultiKeyModels(models)
-
-	if len(result) != 1 {
-		t.Fatalf("expected 1 model, got %d", len(result))
+	if model.APIBase != "https://api.example.com" {
+		t.Errorf("expected api_base preserved, got %q", model.APIBase)
 	}
-	primary := result[0]
-	if primary.APIBase != "https://api.example.com" {
-		t.Errorf("expected api_base preserved, got %q", primary.APIBase)
+	if model.Proxy != "http://proxy:8080" {
+		t.Errorf("expected proxy preserved, got %q", model.Proxy)
 	}
-	if primary.Proxy != "http://proxy:8080" {
-		t.Errorf("expected proxy preserved, got %q", primary.Proxy)
+	if model.RPM != 60 {
+		t.Errorf("expected rpm preserved, got %d", model.RPM)
 	}
-	if primary.RPM != 60 {
-		t.Errorf("expected rpm preserved, got %d", primary.RPM)
+	if model.MaxTokensField != "max_completion_tokens" {
+		t.Errorf("expected max_tokens_field preserved, got %q", model.MaxTokensField)
 	}
-	if primary.MaxTokensField != "max_completion_tokens" {
-		t.Errorf("expected max_tokens_field preserved, got %q", primary.MaxTokensField)
+	if model.RequestTimeout != 30 {
+		t.Errorf("expected request_timeout preserved, got %d", model.RequestTimeout)
 	}
-	if primary.RequestTimeout != 30 {
-		t.Errorf("expected request_timeout preserved, got %d", primary.RequestTimeout)
-	}
-	if primary.ThinkingLevel != "high" {
-		t.Errorf("expected thinking_level preserved, got %q", primary.ThinkingLevel)
+	if model.ThinkingLevel != "high" {
+		t.Errorf("expected thinking_level preserved, got %q", model.ThinkingLevel)
 	}
 }
 
-func TestExpandMultiKeyModels_IsVirtualFlag(t *testing.T) {
+func TestModelConfig_IsVirtualFlag(t *testing.T) {
 	const keyRef = "MULTIKEY_TEST_VIRTUAL_KEY"
 	t.Setenv(keyRef, "key1")
 
-	models := []*ModelConfig{
-		{
-			ModelName: "gpt-4",
-			Model:     "openai/gpt-4o",
-			APIKeyRef: keyRef,
-		},
+	model := &ModelConfig{
+		ModelName: "gpt-4",
+		Model:     "openai/gpt-4o",
+		APIKeyRef: keyRef,
 	}
 
-	result := expandMultiKeyModels(models)
-
-	if len(result) != 1 {
-		t.Fatalf("expected 1 model, got %d", len(result))
+	if model.isVirtual {
+		t.Errorf("ordinary model should not be virtual")
 	}
-	// Non-expanded model should NOT be virtual
-	if result[0].isVirtual {
-		t.Errorf("model should not be virtual after pass-through expansion")
-	}
-	if result[0].IsVirtual() {
+	if model.IsVirtual() {
 		t.Errorf("IsVirtual() should return false for non-virtual model")
 	}
 }

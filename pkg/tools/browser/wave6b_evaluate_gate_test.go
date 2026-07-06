@@ -1,6 +1,6 @@
 package browser
 
-// Tests for BrowserEvaluateEnabled execution gate + ToolPolicies interaction.
+// Tests for the BrowserEvaluateEnabled execution gate.
 //
 // Spec: path-sandbox-and-capability-tiers-spec.md /
 // BDD test ID: #88 (TestBrowserEvaluate_HardGateAndPolicy)
@@ -14,16 +14,13 @@ package browser
 //   redundant registration gate (the pattern the refactor eliminated).
 //
 //   The BrowserEvaluateEnabled flag gates EXECUTION inside EvaluateTool.Execute,
-//   not registration. Operators must opt in at two independent levels:
-//     (a) Set cfg.Sandbox.BrowserEvaluateEnabled=true (execution gate).
-//     (b) Override the policy floor to "ask"/"allow" (policy gate).
+//   not registration — this is the SOLE live gate (pkg/policy's advisory
+//   builtin deny entry was removed, #70; it had no live tool-dispatch caller).
 //
-// BDD Scenario Outline: execution gate + policy precedence
+// BDD Scenario: execution gate
 // Given cfg.Sandbox.BrowserEvaluateEnabled = <flag>  (→ evaluateEnabled param)
-// And cfg.Tools.ToolPolicies["browser_evaluate"] = <policy>
 // When RegisterTools is called
 // Then browser_evaluate IS in the registry (always)
-// And ResolveToolPolicy("browser_evaluate") returns <expected>
 
 import (
 	"testing"
@@ -31,7 +28,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/dapicom-ai/omnipus/pkg/policy"
 	"github.com/dapicom-ai/omnipus/pkg/security"
 	"github.com/dapicom-ai/omnipus/pkg/tools"
 )
@@ -83,16 +79,11 @@ func TestBrowserEvaluate_FlagFalse_StillRegistered(t *testing.T) {
 // Traces to: path-sandbox-and-capability-tiers-spec.md line 955
 // ---------------------------------------------------------------------------
 
-// TestBrowserEvaluate_FlagTrue_PolicyDeny_RegisteredButDenied verifies that when
-// BrowserEvaluateEnabled=true but the builtin (or explicit) policy is "deny",
-// the tool IS in the registry (registration gate passed) but the policy engine
-// returns a deny decision (runtime gate).
-//
-// BDD: Given BrowserEvaluateEnabled=true
-// And ToolPolicies["browser_evaluate"] = "deny" (the builtin default)
-// When RegisterTools is called with evaluateEnabled=true
-// Then browser_evaluate IS in the tool registry
-// And ResolveToolPolicy("browser_evaluate") returns ToolPolicyDeny
+// TestBrowserEvaluate_FlagTrue_PolicyDeny_RegisteredButDenied verifies that
+// browser_evaluate registers even when BrowserEvaluateEnabled=true (the
+// registration gate is unconditional; the deny-by-default runtime gate is the
+// tool's own executeEnabled flag inside Execute(), covered separately by
+// TestBrowserEvaluate_FlagFalse_StillRegistered).
 func TestBrowserEvaluate_FlagTrue_PolicyDeny_RegisteredButDenied(t *testing.T) {
 	registry := tools.NewToolRegistry()
 	cfg, err := DefaultConfig()
@@ -107,24 +98,6 @@ func TestBrowserEvaluate_FlagTrue_PolicyDeny_RegisteredButDenied(t *testing.T) {
 	_, found := registry.Get("browser_evaluate")
 	assert.True(t, found,
 		"FR-011: browser_evaluate MUST be in the registry when evaluateEnabled=true")
-
-	// Policy assertion: the builtin default for browser_evaluate is "deny".
-	sc := &policy.SecurityConfig{}
-	resolved := sc.ResolveToolPolicy("browser_evaluate")
-	assert.Equal(t, policy.ToolPolicyDeny, resolved,
-		"FR-011: browser_evaluate must be denied by the builtin policy when no user override exists")
-
-	// Verify the builtin deny cannot be bypassed by a nil SecurityConfig either.
-	var nilSC *policy.SecurityConfig
-	resolvedNil := nilSC.ResolveToolPolicy("browser_evaluate")
-	assert.Equal(t, policy.ToolPolicyDeny, resolvedNil,
-		"FR-011: nil SecurityConfig must also deny browser_evaluate (builtin applies globally)")
-
-	// Differentiation: a tool without a builtin deny policy must resolve to "allow"
-	// under an empty SecurityConfig, proving the deny is specific to browser_evaluate.
-	navigatePolicy := sc.ResolveToolPolicy("browser_navigate")
-	assert.Equal(t, policy.ToolPolicyAllow, navigatePolicy,
-		"browser_navigate has no builtin deny — must resolve to allow; proves deny is specific to evaluate")
 }
 
 // ---------------------------------------------------------------------------
@@ -133,9 +106,8 @@ func TestBrowserEvaluate_FlagTrue_PolicyDeny_RegisteredButDenied(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestBrowserEvaluate_FlagTrue_PolicyAllow_Succeeds verifies that when
-// BrowserEvaluateEnabled=true AND the operator explicitly sets policy to "allow",
-// the tool is registered AND the policy engine returns "allow" — the invocation
-// is permitted.
+// BrowserEvaluateEnabled=true, the tool is registered with a real name and
+// description (not a stub).
 func TestBrowserEvaluate_FlagTrue_PolicyAllow_Succeeds(t *testing.T) {
 	registry := tools.NewToolRegistry()
 	cfg, err := DefaultConfig()
@@ -151,99 +123,9 @@ func TestBrowserEvaluate_FlagTrue_PolicyAllow_Succeeds(t *testing.T) {
 	require.True(t, found,
 		"FR-011: browser_evaluate must be registered when evaluateEnabled=true")
 
-	// Policy assertion: explicit operator opt-in wins over builtin deny.
-	sc := &policy.SecurityConfig{
-		ToolPolicies: map[string]policy.ToolPolicy{
-			"browser_evaluate": policy.ToolPolicyAllow,
-		},
-	}
-	resolved := sc.ResolveToolPolicy("browser_evaluate")
-	assert.Equal(t, policy.ToolPolicyAllow, resolved,
-		"FR-011: explicit operator allow must override the builtin deny")
-
 	// Verify name + description are non-empty (not a stub).
 	evaluateTool, ok := registry.Get("browser_evaluate")
 	require.True(t, ok)
 	assert.Equal(t, "browser_evaluate", evaluateTool.Name())
 	assert.NotEmpty(t, evaluateTool.Description())
-}
-
-// ---------------------------------------------------------------------------
-// Scenario Outline table-driven: covers the post-refactor Examples
-// Traces to: path-sandbox-and-capability-tiers-spec.md line 702–709
-// ---------------------------------------------------------------------------
-
-// TestBrowserEvaluate_HardGateAndPolicy_TableDriven implements the BDD
-// Scenario Outline. browser_evaluate is always registered; the wantRegistered
-// column is always true. The table retains the evaluateEnabled column so the
-// execution-gate contract is visible for documentation purposes.
-func TestBrowserEvaluate_HardGateAndPolicy_TableDriven(t *testing.T) {
-	tests := []struct {
-		name               string
-		evaluateEnabled    bool
-		policyOverride     policy.ToolPolicy
-		wantRegistered     bool
-		wantPolicyDecision policy.ToolPolicy
-	}{
-		{
-			name:               "flag=false: tool always registered; execution gate inside Execute()",
-			evaluateEnabled:    false,
-			policyOverride:     "",
-			wantRegistered:     true, // always registered (post-refactor)
-			wantPolicyDecision: policy.ToolPolicyDeny,
-		},
-		{
-			name:               "flag=true, policy=deny: registered; denied at policy layer",
-			evaluateEnabled:    true,
-			policyOverride:     "",
-			wantRegistered:     true,
-			wantPolicyDecision: policy.ToolPolicyDeny,
-		},
-		{
-			name:               "flag=true, policy=ask: registered; awaits decision",
-			evaluateEnabled:    true,
-			policyOverride:     policy.ToolPolicyAsk,
-			wantRegistered:     true,
-			wantPolicyDecision: policy.ToolPolicyAsk,
-		},
-		{
-			name:               "flag=true, policy=allow: registered; invocation permitted",
-			evaluateEnabled:    true,
-			policyOverride:     policy.ToolPolicyAllow,
-			wantRegistered:     true,
-			wantPolicyDecision: policy.ToolPolicyAllow,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			registry := tools.NewToolRegistry()
-			cfg, err := DefaultConfig()
-			require.NoError(t, err)
-			ssrf := security.NewSSRFChecker(nil)
-
-			_, regErr := RegisterTools(registry, cfg, ssrf, tc.evaluateEnabled)
-			require.NoError(t, regErr)
-
-			_, found := registry.Get("browser_evaluate")
-			assert.Equal(t, tc.wantRegistered, found,
-				"evaluateEnabled=%v: registration must match wantRegistered=%v",
-				tc.evaluateEnabled, tc.wantRegistered)
-
-			var sc *policy.SecurityConfig
-			if tc.policyOverride != "" {
-				sc = &policy.SecurityConfig{
-					ToolPolicies: map[string]policy.ToolPolicy{
-						"browser_evaluate": tc.policyOverride,
-					},
-				}
-			} else {
-				sc = &policy.SecurityConfig{}
-			}
-			resolved := sc.ResolveToolPolicy("browser_evaluate")
-			assert.Equal(t, tc.wantPolicyDecision, resolved,
-				"policy=%q: ResolveToolPolicy must return wantPolicyDecision=%q",
-				tc.policyOverride, tc.wantPolicyDecision)
-		})
-	}
 }

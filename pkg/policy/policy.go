@@ -30,42 +30,6 @@ type Decision struct {
 	PolicyRule string // Human-readable explanation of which rule matched (SEC-17)
 }
 
-// AgentToolsPolicy defines the allow/deny tool lists for an agent.
-type AgentToolsPolicy struct {
-	Allow []string `json:"allow,omitempty"`
-	Deny  []string `json:"deny,omitempty"`
-}
-
-// AgentPolicy defines per-agent tool permissions.
-type AgentPolicy struct {
-	Tools AgentToolsPolicy `json:"tools,omitempty"`
-
-	// Legacy fields for backward compatibility.
-	ToolsAllow []string `json:"tools_allow,omitempty"`
-	ToolsDeny  []string `json:"tools_deny,omitempty"`
-}
-
-// effectiveAllow returns the effective allow list.
-func (ap *AgentPolicy) effectiveAllow() []string {
-	if len(ap.Tools.Allow) > 0 {
-		return ap.Tools.Allow
-	}
-	return ap.ToolsAllow
-}
-
-// effectiveDeny returns the effective deny list.
-func (ap *AgentPolicy) effectiveDeny() []string {
-	if len(ap.Tools.Deny) > 0 {
-		return ap.Tools.Deny
-	}
-	return ap.ToolsDeny
-}
-
-// hasAllowList returns true if an allow list is explicitly set (even if empty).
-func (ap *AgentPolicy) hasAllowList() bool {
-	return ap.Tools.Allow != nil || ap.ToolsAllow != nil
-}
-
 // SSRFPolicy holds SSRF protection settings.
 type SSRFPolicy struct {
 	Enabled       bool     `json:"enabled,omitempty"`
@@ -129,67 +93,15 @@ const (
 	SkillTrustAllowAll SkillTrustPolicy = "allow_all"
 )
 
-// ToolPolicy controls access to a specific tool globally.
-type ToolPolicy string
-
-const (
-	ToolPolicyAllow ToolPolicy = "allow"
-	ToolPolicyAsk   ToolPolicy = "ask"
-	ToolPolicyDeny  ToolPolicy = "deny"
-)
-
 // SecurityConfig is the primary security configuration type.
 type SecurityConfig struct {
-	DefaultPolicy     DefaultPolicy          `json:"default_policy,omitempty"`
-	Agents            map[string]AgentPolicy `json:"agents,omitempty"`
-	SSRF              SSRFPolicy             `json:"ssrf,omitempty"`
-	Audit             AuditPolicy            `json:"audit,omitempty"`
-	Policy            PolicySection          `json:"policy,omitempty"`
-	RateLimits        RateLimitsPolicy       `json:"rate_limits,omitempty"`
-	SkillTrust        SkillTrustPolicy       `json:"skill_trust,omitempty"`
-	PromptGuard       PromptGuardConfig      `json:"prompt_guard,omitempty"`
-	ToolPolicies      map[string]ToolPolicy  `json:"tool_policies,omitempty"`
-	DefaultToolPolicy ToolPolicy             `json:"default_tool_policy,omitempty"`
-}
-
-// builtinToolPolicies bakes in safety defaults that survive missing/empty
-// security config. Operators override by adding an entry under
-// security.tool_policies in config.json.
-//
-// browser_evaluate executes arbitrary JavaScript in a real browser context —
-// a capability too dangerous to default to "allow" (SEC-04/SEC-06). An
-// operator who needs it can explicitly set security.tool_policies["browser_evaluate"]
-// to "ask" or "allow".
-var builtinToolPolicies = map[string]ToolPolicy{
-	"browser_evaluate": ToolPolicyDeny,
-}
-
-// ResolveToolPolicy returns the effective global policy for a tool name.
-// Resolution order:
-//  1. explicit user override in sc.ToolPolicies (glob patterns supported; strictest wins)
-//  2. baked-in safety default in builtinToolPolicies (glob patterns supported; strictest wins)
-//  3. sc.DefaultToolPolicy
-//  4. ToolPolicyAllow
-func (sc *SecurityConfig) ResolveToolPolicy(toolName string) ToolPolicy {
-	if sc == nil {
-		// No config loaded (tests, early boot): still honor builtin safety defaults.
-		if resolved := resolveStrictestPolicy(builtinToolPolicies, toolName); resolved != "" {
-			return resolved
-		}
-		return ToolPolicyAllow
-	}
-	if len(sc.ToolPolicies) > 0 {
-		if resolved := resolveStrictestPolicy(sc.ToolPolicies, toolName); resolved != "" {
-			return resolved
-		}
-	}
-	if resolved := resolveStrictestPolicy(builtinToolPolicies, toolName); resolved != "" {
-		return resolved
-	}
-	if sc.DefaultToolPolicy != "" {
-		return sc.DefaultToolPolicy
-	}
-	return ToolPolicyAllow
+	DefaultPolicy DefaultPolicy     `json:"default_policy,omitempty"`
+	SSRF          SSRFPolicy        `json:"ssrf,omitempty"`
+	Audit         AuditPolicy       `json:"audit,omitempty"`
+	Policy        PolicySection     `json:"policy,omitempty"`
+	RateLimits    RateLimitsPolicy  `json:"rate_limits,omitempty"`
+	SkillTrust    SkillTrustPolicy  `json:"skill_trust,omitempty"`
+	PromptGuard   PromptGuardConfig `json:"prompt_guard,omitempty"`
 }
 
 // EffectiveSkillTrust returns the configured trust policy, defaulting to warn_unverified.
@@ -235,27 +147,6 @@ func validateConfig(cfg *SecurityConfig) error {
 			"security.default_policy: invalid value %q (must be \"allow\" or \"deny\")",
 			cfg.DefaultPolicy,
 		)
-	}
-
-	switch cfg.DefaultToolPolicy {
-	case "", ToolPolicyAllow, ToolPolicyAsk, ToolPolicyDeny:
-		// valid
-	default:
-		return fmt.Errorf(
-			"security.default_tool_policy: invalid value %q (must be \"allow\", \"ask\", or \"deny\")",
-			cfg.DefaultToolPolicy,
-		)
-	}
-	for toolName, tp := range cfg.ToolPolicies {
-		switch tp {
-		case ToolPolicyAllow, ToolPolicyAsk, ToolPolicyDeny:
-			// valid
-		default:
-			return fmt.Errorf(
-				"security.tool_policies[%q]: invalid value %q (must be \"allow\", \"ask\", or \"deny\")",
-				toolName, tp,
-			)
-		}
 	}
 
 	switch cfg.Audit.Output {

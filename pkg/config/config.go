@@ -3383,9 +3383,6 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 		return nil, err
 	}
 
-	// Expand multi-key configs into separate entries for key-level failover
-	cfg.Providers = expandMultiKeyModels(cfg.Providers)
-
 	// Phase 1B FR-006: normalize legacy `fallback_models: [string]` entries
 	// into the new `[{model, provider}]` form. Provider resolution mirrors
 	// the chat-side passthrough lookup (openrouter / vivgrid).
@@ -3887,12 +3884,6 @@ func MergeAPIKeys(apiKey string, apiKeys []string) []string {
 	}
 
 	return all
-}
-
-// expandMultiKeyModels is retained for call-site compatibility.
-// Multi-key failover via APIKeys was removed; APIKeyRef is the credential pattern.
-func expandMultiKeyModels(models []*ModelConfig) []*ModelConfig {
-	return models
 }
 
 // Tool enablement is no longer gated by per-subsystem config flags.

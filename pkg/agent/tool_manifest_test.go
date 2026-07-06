@@ -1116,7 +1116,7 @@ func TestInfraToolsExecutable_DenyDefaultAgent(t *testing.T) {
 
 			// ensureInfraToolsExecutable is now an idempotent backstop; calling it
 			// must leave the (already-allow) verdict and slice unchanged.
-			policyFiltered = ensureInfraToolsExecutable(true, agentInst.Tools, policyFiltered, policyMap)
+			policyFiltered = ensureInfraToolsExecutable(agentInst.Tools, policyFiltered, policyMap)
 
 			// `load_tool` is authorized as "allow" in the exec snapshot.
 			require.Equal(
@@ -1155,8 +1155,8 @@ func TestInfraToolsExecutable_DenyDefaultAgent(t *testing.T) {
 // (tools.EffectiveToolPolicy via FilterToolsByPolicy) now force-allows infra
 // tools UNCONDITIONALLY, so `load_tool` is already present in policyMap as
 // "allow" after the filter — even for a deny-default agent (Ava). Therefore
-// ensureInfraToolsExecutable is an idempotent no-op (it must not double-add the
-// tool nor change the "allow" verdict), regardless of the compressed flag.
+// ensureInfraToolsExecutable is an idempotent no-op: it must not double-add the
+// tool nor change the "allow" verdict.
 //
 // The OBSERVABLE behavior on the non-compressed path (load_tool never surfaced to
 // the model) is preserved by stripInfraToolDefs, asserted in
@@ -1175,14 +1175,11 @@ func TestEnsureInfraToolsExecutable_IdempotentAfterUnifiedResolver(t *testing.T)
 		"unified resolver must force-allow load_tool for a deny-default agent")
 	before := len(policyFiltered)
 
-	// Idempotent for both compressed values: nothing added, verdict unchanged.
-	for _, compressed := range []bool{false, true} {
-		out := ensureInfraToolsExecutable(compressed, ava.Tools, policyFiltered, policyMap)
-		require.Len(t, out, before,
-			"ensureInfraToolsExecutable must not double-add infra (compressed=%v)", compressed)
-		require.Equal(t, "allow", policyMap["load_tool"],
-			"load_tool must remain allow (compressed=%v)", compressed)
-	}
+	out := ensureInfraToolsExecutable(ava.Tools, policyFiltered, policyMap)
+	require.Len(t, out, before,
+		"ensureInfraToolsExecutable must not double-add infra")
+	require.Equal(t, "allow", policyMap["load_tool"],
+		"load_tool must remain allow")
 }
 
 // TestStripInfraToolDefs_RemovesLoadTool proves the observable behavior on the
@@ -1939,7 +1936,7 @@ func TestLoadTool_LiveToggle_CompressedDefsWork(t *testing.T) {
 	policyFiltered, policyMap := tools.FilterToolsByPolicy(allTools, avaAgent.AgentType, avaAgent.LoadToolPolicy())
 
 	// Force infra into execution snapshot (mirrors the runTurn path).
-	policyFiltered = ensureInfraToolsExecutable(true, avaAgent.Tools, policyFiltered, policyMap)
+	policyFiltered = ensureInfraToolsExecutable(avaAgent.Tools, policyFiltered, policyMap)
 
 	// ASSERTION 2: load_tool is now in the execution policy snapshot as "allow".
 	require.Equal(t, "allow", policyMap["load_tool"],
