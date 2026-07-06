@@ -336,21 +336,6 @@ func v0ConvertProvidersToModelList(cfg *configV0) []modelConfigV0 {
 			},
 		},
 		{
-			providerNames: []string{"github_copilot", "copilot"},
-			protocol:      "github-copilot",
-			buildConfig: func(p providersConfigV0) (modelConfigV0, bool) {
-				if p.GitHubCopilot.APIKey == "" && p.GitHubCopilot.APIBase == "" && p.GitHubCopilot.ConnectMode == "" {
-					return modelConfigV0{}, false
-				}
-				return modelConfigV0{
-					ModelName:   "github-copilot",
-					Model:       "github-copilot/gpt-5.4",
-					APIBase:     p.GitHubCopilot.APIBase,
-					ConnectMode: p.GitHubCopilot.ConnectMode,
-				}, true
-			},
-		},
-		{
 			providerNames: []string{"antigravity"},
 			protocol:      "antigravity",
 			buildConfig: func(p providersConfigV0) (modelConfigV0, bool) {
@@ -500,7 +485,6 @@ func loadConfigV0(data []byte) (migratable, error) {
 				Proxy:          m.Proxy,
 				Fallbacks:      m.Fallbacks,
 				AuthMethod:     m.AuthMethod,
-				ConnectMode:    m.ConnectMode,
 				Workspace:      m.Workspace,
 				RPM:            m.RPM,
 				MaxTokensField: m.MaxTokensField,

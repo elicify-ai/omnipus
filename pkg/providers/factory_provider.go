@@ -398,21 +398,6 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 		}
 		return NewCodexCliProvider(workspace), modelID, nil
 
-	case "github-copilot", "copilot":
-		apiBase := cfg.APIBase
-		if apiBase == "" {
-			apiBase = "localhost:4321"
-		}
-		connectMode := cfg.ConnectMode
-		if connectMode == "" {
-			connectMode = "grpc"
-		}
-		provider, err := NewGitHubCopilotProvider(apiBase, connectMode, modelID)
-		if err != nil {
-			return nil, "", err
-		}
-		return provider, modelID, nil
-
 	default:
 		return nil, "", fmt.Errorf("unknown protocol %q in model %q", protocol, cfg.Model)
 	}
@@ -482,8 +467,6 @@ var knownProtocols = map[string]bool{
 	"claudecli":                true,
 	"codex-cli":                true,
 	"codexcli":                 true,
-	"github-copilot":           true,
-	"copilot":                  true,
 }
 
 // IsKnownProtocol reports whether the given protocol name is recognized by

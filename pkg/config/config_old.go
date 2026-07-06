@@ -572,31 +572,30 @@ func (v *ircConfigV0) ToIRCConfig() IRCConfig {
 }
 
 type providersConfigV0 struct {
-	Anthropic     providerConfigV0       `json:"anthropic"`
-	OpenAI        openAIProviderConfigV0 `json:"openai"`
-	LiteLLM       providerConfigV0       `json:"litellm"`
-	OpenRouter    providerConfigV0       `json:"openrouter"`
-	Groq          providerConfigV0       `json:"groq"`
-	Zhipu         providerConfigV0       `json:"zhipu"`
-	VLLM          providerConfigV0       `json:"vllm"`
-	Gemini        providerConfigV0       `json:"gemini"`
-	Nvidia        providerConfigV0       `json:"nvidia"`
-	Ollama        providerConfigV0       `json:"ollama"`
-	Moonshot      providerConfigV0       `json:"moonshot"`
-	ShengSuanYun  providerConfigV0       `json:"shengsuanyun"`
-	DeepSeek      providerConfigV0       `json:"deepseek"`
-	Cerebras      providerConfigV0       `json:"cerebras"`
-	Vivgrid       providerConfigV0       `json:"vivgrid"`
-	VolcEngine    providerConfigV0       `json:"volcengine"`
-	GitHubCopilot providerConfigV0       `json:"github_copilot"`
-	Antigravity   providerConfigV0       `json:"antigravity"`
-	Qwen          providerConfigV0       `json:"qwen"`
-	Mistral       providerConfigV0       `json:"mistral"`
-	Avian         providerConfigV0       `json:"avian"`
-	Minimax       providerConfigV0       `json:"minimax"`
-	LongCat       providerConfigV0       `json:"longcat"`
-	ModelScope    providerConfigV0       `json:"modelscope"`
-	Novita        providerConfigV0       `json:"novita"`
+	Anthropic    providerConfigV0       `json:"anthropic"`
+	OpenAI       openAIProviderConfigV0 `json:"openai"`
+	LiteLLM      providerConfigV0       `json:"litellm"`
+	OpenRouter   providerConfigV0       `json:"openrouter"`
+	Groq         providerConfigV0       `json:"groq"`
+	Zhipu        providerConfigV0       `json:"zhipu"`
+	VLLM         providerConfigV0       `json:"vllm"`
+	Gemini       providerConfigV0       `json:"gemini"`
+	Nvidia       providerConfigV0       `json:"nvidia"`
+	Ollama       providerConfigV0       `json:"ollama"`
+	Moonshot     providerConfigV0       `json:"moonshot"`
+	ShengSuanYun providerConfigV0       `json:"shengsuanyun"`
+	DeepSeek     providerConfigV0       `json:"deepseek"`
+	Cerebras     providerConfigV0       `json:"cerebras"`
+	Vivgrid      providerConfigV0       `json:"vivgrid"`
+	VolcEngine   providerConfigV0       `json:"volcengine"`
+	Antigravity  providerConfigV0       `json:"antigravity"`
+	Qwen         providerConfigV0       `json:"qwen"`
+	Mistral      providerConfigV0       `json:"mistral"`
+	Avian        providerConfigV0       `json:"avian"`
+	Minimax      providerConfigV0       `json:"minimax"`
+	LongCat      providerConfigV0       `json:"longcat"`
+	ModelScope   providerConfigV0       `json:"modelscope"`
+	Novita       providerConfigV0       `json:"novita"`
 }
 
 // IsEmpty checks if all provider configs are empty (no API keys or API bases set)
@@ -618,7 +617,6 @@ func (p providersConfigV0) IsEmpty() bool {
 		p.Cerebras.APIKey == "" && p.Cerebras.APIBase == "" &&
 		p.Vivgrid.APIKey == "" && p.Vivgrid.APIBase == "" &&
 		p.VolcEngine.APIKey == "" && p.VolcEngine.APIBase == "" &&
-		p.GitHubCopilot.APIKey == "" && p.GitHubCopilot.APIBase == "" &&
 		p.Antigravity.APIKey == "" && p.Antigravity.APIBase == "" &&
 		p.Qwen.APIKey == "" && p.Qwen.APIBase == "" &&
 		p.Mistral.APIKey == "" && p.Mistral.APIBase == "" &&
@@ -635,7 +633,6 @@ type providerConfigV0 struct {
 	Proxy          string `json:"proxy,omitempty"           env:"OMNIPUS_PROVIDERS_{{.Name}}_PROXY"`
 	RequestTimeout int    `json:"request_timeout,omitempty" env:"OMNIPUS_PROVIDERS_{{.Name}}_REQUEST_TIMEOUT"`
 	AuthMethod     string `json:"auth_method,omitempty"     env:"OMNIPUS_PROVIDERS_{{.Name}}_AUTH_METHOD"`
-	ConnectMode    string `json:"connect_mode,omitempty"    env:"OMNIPUS_PROVIDERS_{{.Name}}_CONNECT_MODE"` // only for Github Copilot, `stdio` or `grpc`
 }
 
 // MarshalJSON implements custom JSON marshaling for providersConfig
@@ -666,9 +663,8 @@ type modelConfigV0 struct {
 	Fallbacks []string `json:"fallbacks,omitempty"` // Fallback model names for failover
 
 	// Special providers (CLI-based, OAuth, etc.)
-	AuthMethod  string `json:"auth_method,omitempty"`  // Authentication method: oauth, token
-	ConnectMode string `json:"connect_mode,omitempty"` // Connection mode: stdio, grpc
-	Workspace   string `json:"workspace,omitempty"`    // Workspace path for CLI-based providers
+	AuthMethod string `json:"auth_method,omitempty"` // Authentication method: oauth, token
+	Workspace  string `json:"workspace,omitempty"`   // Workspace path for CLI-based providers
 
 	// Optional optimizations
 	RPM            int    `json:"rpm,omitempty"`              // Requests per minute limit
@@ -1077,7 +1073,6 @@ func (c *configV0) Migrate() (*Config, error) {
 				Proxy:          m.Proxy,
 				Fallbacks:      m.Fallbacks,
 				AuthMethod:     m.AuthMethod,
-				ConnectMode:    m.ConnectMode,
 				Workspace:      m.Workspace,
 				RPM:            m.RPM,
 				MaxTokensField: m.MaxTokensField,

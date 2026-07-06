@@ -1002,8 +1002,6 @@ export const ProbeProviderRequest = z.object({
     "claudecli",
     "codex-cli",
     "codexcli",
-    "github-copilot",
-    "copilot",
   ]),
   api_key: z.string().min(1),
   endpoint: z.string().optional(),

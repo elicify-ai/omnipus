@@ -1823,13 +1823,11 @@ const (
 	ProbeProviderRequestIdCodexcli               ProbeProviderRequestId = "codexcli"
 	ProbeProviderRequestIdCodingPlan             ProbeProviderRequestId = "coding-plan"
 	ProbeProviderRequestIdCodingPlanAnthropic    ProbeProviderRequestId = "coding-plan-anthropic"
-	ProbeProviderRequestIdCopilot                ProbeProviderRequestId = "copilot"
 	ProbeProviderRequestIdDashscopeIntl          ProbeProviderRequestId = "dashscope-intl"
 	ProbeProviderRequestIdDashscopeUs            ProbeProviderRequestId = "dashscope-us"
 	ProbeProviderRequestIdDeepseek               ProbeProviderRequestId = "deepseek"
 	ProbeProviderRequestIdDeepseekAnthropic      ProbeProviderRequestId = "deepseek-anthropic"
 	ProbeProviderRequestIdGemini                 ProbeProviderRequestId = "gemini"
-	ProbeProviderRequestIdGithubCopilot          ProbeProviderRequestId = "github-copilot"
 	ProbeProviderRequestIdGlmCoding              ProbeProviderRequestId = "glm-coding"
 	ProbeProviderRequestIdGoogle                 ProbeProviderRequestId = "google"
 	ProbeProviderRequestIdGroq                   ProbeProviderRequestId = "groq"
@@ -1904,8 +1902,6 @@ func (e ProbeProviderRequestId) Valid() bool {
 		return true
 	case ProbeProviderRequestIdCodingPlanAnthropic:
 		return true
-	case ProbeProviderRequestIdCopilot:
-		return true
 	case ProbeProviderRequestIdDashscopeIntl:
 		return true
 	case ProbeProviderRequestIdDashscopeUs:
@@ -1915,8 +1911,6 @@ func (e ProbeProviderRequestId) Valid() bool {
 	case ProbeProviderRequestIdDeepseekAnthropic:
 		return true
 	case ProbeProviderRequestIdGemini:
-		return true
-	case ProbeProviderRequestIdGithubCopilot:
 		return true
 	case ProbeProviderRequestIdGlmCoding:
 		return true

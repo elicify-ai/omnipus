@@ -2558,8 +2558,8 @@ type VoiceConfig struct {
 // It allows adding new providers (especially OpenAI-compatible ones) via configuration only.
 // The model field uses protocol prefix format: [protocol/]model-identifier
 // Supported protocols include openai, anthropic, antigravity, claude-cli,
-// codex-cli, github-copilot, and named OpenAI-compatible protocols such as
-// groq, deepseek, modelscope, and novita.
+// codex-cli, and named OpenAI-compatible protocols such as groq, deepseek,
+// modelscope, and novita.
 // Default protocol is "openai" if no prefix is specified.
 type ModelConfig struct {
 	// Required fields
@@ -2573,9 +2573,8 @@ type ModelConfig struct {
 	Fallbacks []string `json:"fallbacks,omitempty"` // Fallback model names for failover
 
 	// Special providers (CLI-based, OAuth, etc.)
-	AuthMethod  string `json:"auth_method,omitempty"`  // Authentication method: oauth, token
-	ConnectMode string `json:"connect_mode,omitempty"` // Connection mode: stdio, grpc
-	Workspace   string `json:"workspace,omitempty"`    // Workspace path for CLI-based providers
+	AuthMethod string `json:"auth_method,omitempty"` // Authentication method: oauth, token
+	Workspace  string `json:"workspace,omitempty"`   // Workspace path for CLI-based providers
 
 	// Optional optimizations
 	RPM            int            `json:"rpm,omitempty"`              // Requests per minute limit

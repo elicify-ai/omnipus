@@ -206,14 +206,6 @@ func DefaultConfig() *Config {
 				AuthMethod: "oauth",
 			},
 
-			// GitHub Copilot - https://github.com/settings/tokens
-			{
-				ModelName:  "copilot-gpt-5.4",
-				Model:      "github-copilot/gpt-5.4",
-				APIBase:    "http://localhost:4321",
-				AuthMethod: "oauth",
-			},
-
 			// Ollama (local) - https://ollama.com
 			{
 				ModelName: "llama3",

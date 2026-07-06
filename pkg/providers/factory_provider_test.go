@@ -956,13 +956,11 @@ func TestProbeEnumProvidersResolveBase(t *testing.T) {
 	// Ids that don't route through GetDefaultAPIBase at all (CLI/local tools, no HTTP probe base needed)
 	// and are not in the onboarding probe's base-resolution path.
 	noBaseExpected := map[string]bool{
-		"antigravity":    true, // in-process mock provider — no real upstream
-		"claude-cli":     true, // local CLI subprocess, no HTTP base
-		"claudecli":      true, // alias for claude-cli
-		"codex-cli":      true, // local CLI subprocess, no HTTP base
-		"codexcli":       true, // alias for codex-cli
-		"github-copilot": true, // local gRPC, not HTTP-base-routed
-		"copilot":        true, // alias for github-copilot
+		"antigravity": true, // in-process mock provider — no real upstream
+		"claude-cli":  true, // local CLI subprocess, no HTTP base
+		"claudecli":   true, // alias for claude-cli
+		"codex-cli":   true, // local CLI subprocess, no HTTP base
+		"codexcli":    true, // alias for codex-cli
 	}
 
 	ids := probeEnumIDsFromYAML(t)
@@ -1159,14 +1157,12 @@ func TestEveryProbeProviderBuilds(t *testing.T) {
 	// subprocess providers (need an external binary) and the AWS-SDK bedrock path.
 	// Still guarded by knownProtocols + their own dedicated tests.
 	skipBuild := map[string]bool{
-		"bedrock":        true, // AWS SDK credential flow, no api_key HTTP path
-		"antigravity":    true, // in-process mock harness
-		"claude-cli":     true, // local CLI subprocess
-		"claudecli":      true,
-		"codex-cli":      true, // local CLI subprocess
-		"codexcli":       true,
-		"github-copilot": true, // local gRPC bridge
-		"copilot":        true,
+		"bedrock":     true, // AWS SDK credential flow, no api_key HTTP path
+		"antigravity": true, // in-process mock harness
+		"claude-cli":  true, // local CLI subprocess
+		"claudecli":   true,
+		"codex-cli":   true, // local CLI subprocess
+		"codexcli":    true,
 	}
 	// Providers with no fixed base require an explicit endpoint to build.
 	needsEndpoint := map[string]bool{"azure": true, "azure-openai": true}
