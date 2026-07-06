@@ -17,10 +17,11 @@
 //  2. NewDriver — instantiate the claude-code / codex / opencode driver.
 //  3. Run — drive the CLI with the delegated input + a per-run timeout and turn
 //     cap derived from sub-turn config, with the delegate's own model auto-set.
-//  4. Stream events through ConsentDispatcher: permission-requests route to the
-//     Omnipus consent layer (best-effort post-hoc — a DENY cancels the run); all
-//     events (output/tool-call/diff/error) are written to the sub-agent session
-//     transcript so the SPA renders the run inline.
+//  4. Stream events through ConsentDispatcher: permission-requests are
+//     auto-approved unconditionally (operator decision, 2026-07-05, issue
+//     #488 — see policyApproverConsent's own doc for why); all events
+//     (output/tool-call/diff/error/permission-request) are written to the
+//     sub-agent session transcript so the SPA renders the run inline.
 //
 // No teardown step: the workspace directory is the agent's persistent working
 // tree, not a scratch dir — it is left in place after the run.
@@ -149,16 +150,25 @@ func runExternalCLISubTurn(
 	//    write_file/edit_file confined there could reach either. The work/
 	//    subdirectory keeps them structurally unreachable — os.Root-confined
 	//    tools cannot open a path outside their root, not merely guarded
-	//    against. workspace.FindForAgent keys off agent IDENTITY (CoreTeam
-	//    membership), which is a different, independent signal from the
-	//    channel-bound turn workspace_id that tools.WithWorkspaceID routes
-	//    memory to — see pkg/agent/loop.go's runTurn for the mirrored
-	//    resolution and the divergence discussion. An agent not on any
-	//    workspace's CoreTeam (or an id that fails the traversal guard) is NOT
-	//    an error: it falls back to the agent's own workspace directory exactly
-	//    as before this override existed.
+	//    against. workspace.FindForAgentPreferring keys PRIMARILY off agent
+	//    IDENTITY (CoreTeam membership), which is a different, independent
+	//    signal from the channel-bound turn workspace_id that
+	//    tools.WithWorkspaceID routes memory to — see pkg/agent/loop.go's
+	//    runTurn for the mirrored resolution and the divergence discussion.
+	//    An agent not on any workspace's CoreTeam (or an id that fails the
+	//    traversal guard) is NOT an error: it falls back to the agent's own
+	//    workspace directory exactly as before this override existed.
+	//    FindForAgentPreferring additionally breaks a multi-membership tie in
+	//    favor of childTS.opts.WorkspaceID (the current turn's own
+	//    channel-bound workspace) when the agent is actually a member of that
+	//    specific workspace — in practice this is almost always empty here,
+	//    since subagent_3p is delegation-only and spawnSubTurn never threads
+	//    a workspace_id into a child's processOptions, so this falls straight
+	//    through to FindForAgent's existing behavior; kept for symmetry with
+	//    the native path (pkg/agent/loop.go's runTurn) and in case that
+	//    assumption changes.
 	workDir := strings.TrimSpace(agent.Workspace)
-	if wsID, found := workspace.FindForAgent(omnipusHome(), agent.ID); found {
+	if wsID, found := workspace.FindForAgentPreferring(omnipusHome(), agent.ID, childTS.opts.WorkspaceID); found {
 		if wsDir, wsErr := workspace.SafeWorkDir(omnipusHome(), wsID); wsErr != nil {
 			slog.Warn(
 				"external-cli dispatch: workspace-team dir resolution failed; falling back to agent's own workspace",
@@ -192,13 +202,13 @@ func runExternalCLISubTurn(
 	releaseWorkspaceLock := acquireWorkspaceRunLock(workDir)
 	defer releaseWorkspaceLock()
 
-	// 2. Build the consent handler (wraps the gateway PolicyApprover; deny-by-default
-	//    when no approver is wired — loadToolApprover returns the fail-closed nop).
+	// 2. Build the consent handler. External-CLI permission requests are
+	//    auto-approved unconditionally (issue #488) — see policyApproverConsent's
+	//    type doc for why this is a deliberately different posture from native
+	//    ask-policy tools.
 	consent := &policyApproverConsent{
-		al:        al,
-		agentID:   childTS.agentID,
-		sessionID: childTS.transcriptSessionID,
-		turnID:    childTS.turnID,
+		agentID: childTS.agentID,
+		runID:   runID,
 	}
 
 	// 3. Instantiate the driver for the configured CLI. The factory is a package
@@ -295,7 +305,7 @@ func runExternalCLISubTurn(
 		runner.ConsentDispatcher(runCtx, evCh, driver, runID, childTS.transcriptSessionID, consent, out)
 	}()
 
-	result := drainExternalRun(runCtx, childTS, runID, cli, out, consent)
+	result := drainExternalRun(runCtx, childTS, runID, cli, out)
 	return result, result.Err
 }
 
@@ -303,18 +313,15 @@ func runExternalCLISubTurn(
 // sub-agent session transcript, and aggregates the run's textual output into a
 // tools.ToolResult. It returns when the stream closes (run end/error) or ctx ends.
 //
-// consent carries the post-hoc consent state. A DENY decision cancels the run
-// (the driver kills the process and suppresses its own ctx-cancel error), so the
-// stream can close with runErr==nil and ended==false. Without consulting the
-// consent state we would mis-report that path as success. We therefore treat a
-// recorded denial as a terminal failure: the delegating agent MUST be told the
-// sub-run was aborted, not that it completed (review finding [MAJOR]).
+// External-CLI permission requests are auto-approved unconditionally (issue
+// #488, see policyApproverConsent), so there is no longer a per-run deny path
+// to consult here — a run only ends in failure via a fatal EventKindError or
+// the run context ending.
 func drainExternalRun(
 	ctx context.Context,
 	childTS *turnState,
 	runID, cli string,
 	out <-chan runner.RunEvent,
-	consent *policyApproverConsent,
 ) *tools.ToolResult {
 	var sb strings.Builder
 	var runErr error
@@ -403,43 +410,14 @@ done:
 		childTS.appendAssistantTranscript(output, transcriptModelFor(childTS.agent))
 	}
 
-	// A recorded consent DENY is terminal: the driver cancels the run (and
-	// suppresses its own runCtx-cancel error), so we would otherwise see
-	// runErr==nil, ended==false and wrongly report success. Surface the denial
-	// as the run's outcome so the delegating agent learns the sub-run was aborted.
-	denied, denyReason := consent.lastDeny()
-
 	slog.Info("external-cli dispatch: run finished",
-		"run_id", runID, "cli", cli, "ended", ended, "denied", denied,
+		"run_id", runID, "cli", cli, "ended", ended,
 		"err", runErr, "output_len", len(output))
 
 	if runErr != nil {
 		return &tools.ToolResult{
 			Err:    runErr,
 			ForLLM: fmt.Sprintf("External CLI run (%s) failed: %v", cli, runErr),
-		}
-	}
-
-	if denied {
-		// The run did not complete on its own (a successful EventKindEnd was never
-		// followed by a denial in practice — the deny cancels before/at the kill),
-		// so treat any recorded denial as an aborted run regardless of `ended`.
-		reason := strings.TrimSpace(denyReason)
-		if reason == "" {
-			reason = "permission denied"
-		}
-		denyErr := fmt.Errorf("external-cli run denied: %s", reason)
-		msg := fmt.Sprintf(
-			"External CLI run (%s) was DENIED and aborted (a permission request was rejected: %s). "+
-				"The delegated task did NOT complete.", cli, reason)
-		childTS.appendIntermediateAssistantTranscript(
-			"[external-cli denied] "+reason,
-			transcriptModelFor(childTS.agent),
-		)
-		return &tools.ToolResult{
-			Err:     denyErr,
-			ForLLM:  msg,
-			ForUser: msg,
 		}
 	}
 
@@ -678,58 +656,36 @@ var newExternalDriver = func(cli string, consent runner.ConsentHandler) (runner.
 	return runner.NewDriver(cli, consent)
 }
 
-// policyApproverConsent adapts the gateway-wired PolicyApprover (al.loadToolApprover)
-// to the runner.ConsentHandler interface so external-CLI permission requests flow
-// through the same human-in-the-loop approval path as native ask-policy tools.
+// policyApproverConsent implements runner.ConsentHandler for external-CLI
+// (subagent_3p) permission requests.
 //
-// Deny-by-default: loadToolApprover never returns nil — when no approver is wired it
-// returns the fail-closed nopPolicyApprover, which denies every request. So a request
-// reaching here without a gateway approver is denied, satisfying FR-5.1.
+// AUTO-APPROVE, unconditional (operator decision, 2026-07-05, issue #488):
+// this deliberately does NOT route through the gateway-wired PolicyApprover /
+// human-in-the-loop WS approval modal that native ask-policy tools use
+// (pkg/agent/loop.go's CheckGrantOrRequestApproval) — that path is untouched
+// and still gates native agents exactly as before. External-CLI requests are
+// different in kind, not just posture: consent.go's own package doc
+// establishes that by the time a PermissionRequestEvent reaches Omnipus, the
+// CLI has already started (or finished) the tool call — an ALLOW is a no-op
+// and a DENY can only kill the whole run after the fact, never veto the call.
+// Blocking on a human "Approve" click therefore added pure friction with zero
+// preventive value, which is exactly the complaint that led to this change
+// ("the agent must just run without any popup modal"). The run can still be
+// stopped via the ordinary turn-cancellation control; there is no longer a
+// per-tool-call deny path for external-CLI runs specifically.
 type policyApproverConsent struct {
-	al        *AgentLoop
-	agentID   string
-	sessionID string
-	turnID    string
-
-	// mu guards the deny-tracking fields. RequestConsent runs on the consent
-	// dispatcher goroutine while drainExternalRun reads via lastDeny() on the
-	// dispatch goroutine, so the access must be synchronized.
-	mu         sync.Mutex
-	denied     bool
-	denyReason string
+	agentID string
+	runID   string
 }
 
-// RequestConsent routes an external-runner permission request to the policy approver
-// and returns its verdict. Implements runner.ConsentHandler.
-//
-// A DENY is recorded so the dispatch path can surface the run as aborted: a denial
-// cancels the run (the driver kills the process and suppresses its ctx-cancel
-// error), which would otherwise look like a clean, no-output success.
-func (c *policyApproverConsent) RequestConsent(ctx context.Context, req runner.ConsentRequest) (bool, string) {
-	approver := c.al.loadToolApprover()
-	approved, reason := approver.RequestApproval(ctx, PolicyApprovalReq{
-		ToolCallID: req.RequestID,
-		ToolName:   req.ToolName,
-		Args:       req.Arguments,
-		AgentID:    c.agentID,
-		SessionID:  c.sessionID,
-		TurnID:     c.turnID,
-	})
-	if !approved {
-		c.mu.Lock()
-		c.denied = true
-		c.denyReason = reason
-		c.mu.Unlock()
-	}
-	return approved, reason
-}
-
-// lastDeny reports whether any permission request in this run was denied, and the
-// reason of the most recent denial. Safe for concurrent use.
-func (c *policyApproverConsent) lastDeny() (bool, string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.denied, c.denyReason
+// RequestConsent implements runner.ConsentHandler: auto-approves every
+// external-CLI permission request unconditionally (see the type doc above),
+// logging for observability only — no approver is consulted and no WS
+// approval frame is ever broadcast for this path.
+func (c *policyApproverConsent) RequestConsent(_ context.Context, req runner.ConsentRequest) (bool, string) {
+	slog.Info("runner/consent: auto-approved (external-cli, post-hoc observability only, issue #488)",
+		"tool", req.ToolName, "agent_id", c.agentID, "run_id", c.runID)
+	return true, ""
 }
 
 // compile-time interface assertion

@@ -107,3 +107,73 @@ func FindForAgent(home, agentID string) (string, bool) {
 	}
 	return matches[0], true
 }
+
+// FindForAgentPreferring resolves the same question as FindForAgent — which
+// workspace's CoreTeam does agentID belong to — but first checks
+// preferredWsID directly when it is non-empty, disambiguating FindForAgent's
+// documented ambiguous-membership case (an agent on more than one workspace's
+// core team) in favor of the CALLER'S OWN notion of "the current one" (e.g.
+// the current turn's channel-bound workspace_id) instead of FindForAgent's
+// arbitrary sorted-first pick.
+//
+// Falls back to FindForAgent unchanged when preferredWsID is empty, invalid,
+// or the agent is not actually a member of THAT SPECIFIC workspace's
+// CoreTeam — so a caller with no turn-bound workspace (e.g. a delegated
+// sub-turn, which spawnSubTurn never threads a workspace_id into) sees no
+// behavior change from FindForAgent.
+//
+// Note: a successful preferredWsID match returns directly, WITHOUT running
+// FindForAgent's full scan — so FindForAgent's own ambiguous-membership WARN
+// (logged when an agent is found in more than one workspace) does NOT fire on
+// this fast path, even though the ambiguity the WARN exists to surface is
+// still real. This trades that operator-visible signal for avoiding a full
+// directory scan on every turn for every CoreTeam member; the scan (and its
+// WARN) still runs normally whenever preferredWsID is absent or doesn't
+// resolve.
+func FindForAgentPreferring(home, agentID, preferredWsID string) (string, bool) {
+	if agentID == "" {
+		return "", false
+	}
+	if safeID(preferredWsID) {
+		data, err := os.ReadFile(filepath.Join(dirFor(home), preferredWsID+".json"))
+		if err == nil {
+			var w teamRecord
+			if json.Unmarshal(data, &w) == nil {
+				for _, id := range w.CoreTeam {
+					if id == agentID {
+						return preferredWsID, true
+					}
+				}
+			}
+		}
+	}
+	return FindForAgent(home, agentID)
+}
+
+// titleRecord is the minimal subset of the on-disk workspace JSON LoadTitle
+// reads — mirrors teamRecord's convention of a per-reader minimal struct.
+type titleRecord struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+// LoadTitle reads a workspace's human-readable Name and Description for an
+// already-resolved id (e.g. the id FindForAgent/FindForAgentPreferring
+// returned) — the short identity to show an agent alongside its raw
+// workspace id, since a ULID alone means nothing to it. Returns ok=false when
+// id is unsafe or the workspace file is missing/unreadable/malformed; does
+// NOT itself re-verify CoreTeam membership (that is the caller's job).
+func LoadTitle(home, id string) (name, description string, ok bool) {
+	if !safeID(id) {
+		return "", "", false
+	}
+	data, err := os.ReadFile(filepath.Join(dirFor(home), id+".json"))
+	if err != nil {
+		return "", "", false
+	}
+	var w titleRecord
+	if json.Unmarshal(data, &w) != nil {
+		return "", "", false
+	}
+	return w.Name, w.Description, true
+}
