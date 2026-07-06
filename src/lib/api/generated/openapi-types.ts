@@ -4616,6 +4616,11 @@ export interface components {
              * @example false
              */
             frame_ancestors_fallback: boolean;
+            /**
+             * @description Whether the device-pairing feature (sandbox.experimental.device_pairing_enabled) is enabled. The pairing/approval scaffolding exists but is dark-launched behind this flag until the device-side request entry point is implemented. The SPA hides the Settings → Devices tab when false.
+             * @example false
+             */
+            device_pairing_enabled: boolean;
         };
         /**
          * HealthResponse

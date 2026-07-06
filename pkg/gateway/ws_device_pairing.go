@@ -50,7 +50,13 @@ func (r *devicePairingRegistry) resolve(id string, decision pairing.PairingDecis
 
 // handleDevicePairingResponse processes an admin's decision on a pending pairing request.
 // Called from the readLoop when a "device_pairing_response" frame is received.
+// Dark-launched behind Sandbox.Experimental.DevicePairingEnabled — a no-op
+// (with a warn log) when disabled (default).
 func (h *WSHandler) handleDevicePairingResponse(deviceID, decision string) {
+	if !h.agentLoop.GetConfig().Sandbox.Experimental.DevicePairingEnabled {
+		slog.Warn("ws: device_pairing_response received but device pairing is not enabled", "device_id", deviceID)
+		return
+	}
 	if deviceID == "" {
 		slog.Warn("ws: device_pairing_response missing device_id")
 		return

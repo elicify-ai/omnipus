@@ -2312,6 +2312,12 @@ export interface AboutInfo { // not-wire-format: SPA-internal backward-compatibl
   // cfg.Tools.RunInWorkspace.WarmupTimeoutSeconds (default 60). Used by
   // RunInWorkspaceUI to cap the warmup polling loop.
   warmup_timeout_seconds?: number
+  // device_pairing_enabled reflects Sandbox.Experimental.DevicePairingEnabled —
+  // a dark-launched flag (default false). Absent on old gateway versions that
+  // predate the field (treat as false — opposite default from
+  // preview_listener_enabled, since this is a new opt-in feature, not a
+  // long-standing one being made optional).
+  device_pairing_enabled?: boolean
 }
 
 export function fetchAboutInfo(): Promise<AboutInfo> {
@@ -2362,6 +2368,16 @@ export function fetchVoiceProvider(): Promise<VoiceProvider> {
  */
 export function isPreviewListenerEnabled(info: AboutInfo | undefined): boolean {
   return info?.preview_listener_enabled !== false
+}
+
+/**
+ * Returns whether the (dark-launched) device-pairing feature is enabled.
+ * Unlike `isPreviewListenerEnabled`, `undefined` means "false" here — this is
+ * a new opt-in feature (default off), not a long-standing one being made
+ * backward-compatibly optional.
+ */
+export function isDevicePairingEnabled(info: AboutInfo | undefined): boolean {
+  return info?.device_pairing_enabled === true
 }
 
 // ── Audit Log ─────────────────────────────────────────────────────────────────

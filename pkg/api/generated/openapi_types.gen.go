@@ -3748,6 +3748,9 @@ type AboutResponse struct {
 	// Arch CPU architecture (GOARCH).
 	Arch string `json:"arch"`
 
+	// DevicePairingEnabled Whether the device-pairing feature (sandbox.experimental.device_pairing_enabled) is enabled. The pairing/approval scaffolding exists but is dark-launched behind this flag until the device-side request entry point is implemented. The SPA hides the Settings → Devices tab when false.
+	DevicePairingEnabled bool `json:"device_pairing_enabled"`
+
 	// FrameAncestorsFallback True when frame-ancestors is in fallback ('*') mode — the host is bound to 0.0.0.0/[::] and public_url is not set, degrading T-04 defence. The SPA can show a warning banner when this is true.
 	FrameAncestorsFallback bool `json:"frame_ancestors_fallback"`
 

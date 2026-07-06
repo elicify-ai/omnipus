@@ -355,6 +355,13 @@ type OmnipusSandboxConfig struct {
 // ExperimentalConfig holds feature flags for dark-launched tools and capabilities.
 // All flags default to false (deny-by-default per SEC hard constraint #6).
 type ExperimentalConfig struct {
+	// DevicePairingEnabled gates the device-pairing feature (admin approval of
+	// companion devices — pkg/pairing, GET /api/v1/devices, the
+	// device_pairing_response WS frame, and the Settings → Devices tab). The
+	// pairing/approval scaffolding exists but the device-side request entry
+	// point and persistence are not yet implemented — kept behind this flag,
+	// default false, until that lands.
+	DevicePairingEnabled bool `json:"device_pairing_enabled,omitempty"`
 }
 
 // OmnipusSSRFConfig holds SSRF protection settings for outbound HTTP clients (SEC-24).

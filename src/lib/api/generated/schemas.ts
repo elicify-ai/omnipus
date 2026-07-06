@@ -1540,6 +1540,7 @@ export const AboutResponse = z.object({
   preview_origin: z.string().optional(),
   warmup_timeout_seconds: z.number().int().gte(0),
   frame_ancestors_fallback: z.boolean(),
+  device_pairing_enabled: z.boolean(),
 });
 export const VersionResponse = z.object({
   version: z.string().regex(/^\d+\.\d+\.\d+(?:[-+].*)?$/),
