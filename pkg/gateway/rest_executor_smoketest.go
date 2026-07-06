@@ -43,14 +43,17 @@
 //     reaching RunOptions — defense in depth on top of each driver's own
 //     internal filtering in buildArgs().
 //   - Consent: every event is routed through the REAL runner.ConsentDispatcher
-//     / runner.RouteConsent (the identical wiring pkg/agent/external_dispatch.go
-//     uses for production dispatch), with a nil ConsentHandler. A nil handler
-//     makes RouteConsent deny AND audit-log every permission request by
-//     default (FR-5.1), and ConsentDispatcher calls driver.Decide(decision) so
-//     the driver actually cancels the run on a denial (see runner/consent.go's
-//     POST-HOC CONSENT LIMITATION doc) instead of the denial being silently
-//     dropped until the outer timeout fires — see drainSmokeTestRun's
-//     EventKindPermissionRequest case below.
+//     / runner.RouteConsent, with a nil ConsentHandler — deliberately DIFFERENT
+//     from production dispatch (pkg/agent/external_dispatch.go's
+//     policyApproverConsent, which auto-approves every request unconditionally,
+//     issue #488). A smoke test's whole purpose is validating a binary+auth+
+//     handshake without letting a real tool call run, so it intentionally keeps
+//     the nil-handler deny-by-default path: RouteConsent denies AND audit-logs
+//     every permission request by default (FR-5.1), and ConsentDispatcher calls
+//     driver.Decide(decision) so the driver actually cancels the run on a
+//     denial (see runner/consent.go's POST-HOC CONSENT LIMITATION doc) instead
+//     of the denial being silently dropped until the outer timeout fires — see
+//     drainSmokeTestRun's EventKindPermissionRequest case below.
 //   - Scrubbed child env: sandbox.ScrubGatewayEnvForRunner() — the same
 //     allowlist real dispatch uses (pkg/agent/external_dispatch.go) — so the
 //     spawned CLI never inherits gateway secrets (OMNIPUS_MASTER_KEY, bearer

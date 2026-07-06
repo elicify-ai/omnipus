@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"fmt"
+	"os"
 	"strings"
 
 	"github.com/dapicom-ai/omnipus/pkg/agent/envcontext"
@@ -47,6 +49,9 @@ func (al *AgentLoop) wireEnvProviders(cfg *config.Config, registry *AgentRegistr
 
 	// Wire the per-turn delegation injector for every agent in this registry.
 	wireDelegationInjectors(al, registry)
+
+	// Wire the per-turn working-directory injector for every agent in this registry.
+	wireWorkingDirInjectors(al, registry)
 }
 
 // wireDelegationInjectors installs a delegation-context callback on every
@@ -176,6 +181,117 @@ func wireDelegationInjectors(al *AgentLoop, registry *AgentRegistry) {
 			}
 
 			return buildDelegationContext(targets, globalDepthCap)
+		})
+	}
+}
+
+// wireWorkingDirInjectors installs a per-turn working-directory context
+// callback on every agent's ContextBuilder in registry, so an agent whose
+// file tools are silently re-rooted to a Workspace's shared directory
+// (pkg/agent/loop.go's CoreTeam filesystem re-rooting block) is actually told
+// so — the same problem wireDelegationInjectors solves for delegation rules.
+//
+// Without this, a CoreTeam member has no way to know its file tools no
+// longer point at its own private agents/<id>/ directory: it can guess a
+// wrong absolute path for a write, waste turns hunting for a file it just
+// wrote, and report a false location to the user (the file is actually,
+// correctly, under the workspace's shared directory the whole time).
+//
+// The lookup (workspace.FindForAgentPreferring + workspace.SafeWorkDir +
+// os.MkdirAll) is re-run on every call — not cached — mirroring
+// wireDelegationInjectors' per-turn freshness guarantee: CoreTeam membership
+// can change at runtime and must be reflected on the very next turn. Every
+// step here — including the MkdirAll call, whose failure pkg/agent/loop.go's
+// re-rooting block also treats as "fall back to the agent's own directory" —
+// is deliberately kept in lockstep with that block so what this injector
+// advertises matches what actually gets applied. The two remain independent
+// call sites, not one shared function, so this is a maintained invariant, not
+// a structural guarantee: keep them in sync if either changes.
+func wireWorkingDirInjectors(al *AgentLoop, registry *AgentRegistry) {
+	for _, agentID := range registry.ListAgentIDs() {
+		agentInst, ok := registry.GetAgent(agentID)
+		if !ok || agentInst == nil || agentInst.ContextBuilder == nil {
+			continue
+		}
+
+		id := agentID
+		agentInst.ContextBuilder.WithWorkingDirInjector(func(workspaceID string) string {
+			home := omnipusHome()
+			// FindForAgentPreferring — NOT FindForAgent — so that an agent
+			// belonging to more than one workspace's CoreTeam is told about
+			// the CURRENT turn's own workspace (workspaceID) rather than an
+			// arbitrary sorted-first one. This mirrors the resolution
+			// pkg/agent/loop.go's re-rooting block performs, so what this
+			// block advertises matches the directory actually
+			// applied.
+			wsID, found := workspace.FindForAgentPreferring(home, id, workspaceID)
+			if !found {
+				// Not a CoreTeam member: file tools use this agent's own private
+				// directory, exactly as an operator would expect by default — no
+				// block needed.
+				return ""
+			}
+			wsDir, err := workspace.SafeWorkDir(home, wsID)
+			if err != nil {
+				logger.WarnCF(
+					"agent.env",
+					"wireWorkingDirInjectors: invalid workspace id — omitting working-directory block",
+					map[string]any{"agent_id": id, "workspace_id": wsID, "error": err.Error()},
+				)
+				return ""
+			}
+			// pkg/agent/loop.go's actual re-rooting block only applies
+			// tools.WithTurnWorkspaceDir when BOTH SafeWorkDir AND this
+			// MkdirAll succeed — on an MkdirAll failure (disk full, a
+			// non-directory file already at wsDir, permissions) it silently
+			// falls back to the agent's own private directory. Without this
+			// same check here, this injector could advertise the shared
+			// directory in a turn where the real tools stayed rooted at
+			// agents/<id>/ — reintroducing the exact false-location-report
+			// bug this feature exists to prevent. Mirrored exactly (same
+			// mode bits) so the two call sites can't silently diverge.
+			if mkErr := os.MkdirAll(wsDir, 0o700); mkErr != nil {
+				logger.WarnCF(
+					"agent.env",
+					"wireWorkingDirInjectors: MkdirAll failed — omitting working-directory block",
+					map[string]any{"agent_id": id, "workspace_id": wsID, "dir": wsDir, "error": mkErr.Error()},
+				)
+				return ""
+			}
+			// Name/Description give the agent a meaningful identity for the
+			// workspace instead of just an opaque ULID — best-effort: a
+			// missing/unreadable title falls back to the raw id alone rather
+			// than omitting the whole block over a cosmetic field. Logged at
+			// DEBUG (not WARN) since FindForAgentPreferring just confirmed
+			// this same file readable moments ago — a failure here is either
+			// a rare TOCTOU race (file edited/removed between the two reads)
+			// or a malformed name/description field, neither worth an
+			// operator-facing WARN on a per-turn hot path.
+			title := wsID
+			descLine := ""
+			name, desc, ok := workspace.LoadTitle(home, wsID)
+			if !ok {
+				logger.DebugCF(
+					"agent.env",
+					"wireWorkingDirInjectors: LoadTitle failed — falling back to the raw workspace id",
+					map[string]any{"agent_id": id, "workspace_id": wsID},
+				)
+			}
+			if ok && name != "" {
+				title = name
+				if desc != "" {
+					descLine = fmt.Sprintf("\nDescription: %s", desc)
+				}
+			}
+			return fmt.Sprintf(
+				"## Working Directory\nYou are a member of the Workspace \"%s\" (id: %s)'s shared team.%s\n\n"+
+					"Your file tools (read_file, write_file, edit_file, list_directory, bash, etc.) operate "+
+					"relative to THIS workspace's SHARED directory, NOT your own private agent directory:\n\n%s\n\n"+
+					"Always use RELATIVE paths for file operations (e.g. \"report.html\") — the tools are "+
+					"already rooted here. Do not construct or report an absolute path under agents/%s/; "+
+					"that is not where your files are.",
+				title, wsID, descLine, wsDir, id,
+			)
 		})
 	}
 }

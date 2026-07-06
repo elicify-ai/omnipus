@@ -76,6 +76,32 @@ type ContextBuilder struct {
 	// wireDelegationInjectors in loop_env.go.
 	delegationInjector func(workspaceID string) string
 
+	// workingDirInjector is an optional per-turn callback that renders a
+	// "## Working Directory" block telling the agent where its file tools
+	// actually operate. Like delegationInjector it runs in buildDynamicContext
+	// (the UN-CACHED path) because CoreTeam membership — and therefore the
+	// agent's re-rooted working directory (pkg/agent/loop.go's filesystem
+	// re-rooting block) — can change at runtime.
+	//
+	// Without this, an agent whose file tools are silently re-rooted to a
+	// Workspace's shared workspaces/<id>/work/ directory has no way to know
+	// it: it will assume its traditional private agents/<id>/ directory,
+	// guess wrong absolute paths, and can report a false file location to the
+	// user (observed: an agent told the user its report was saved under
+	// agents/<id>/ when the file was actually — correctly — written to the
+	// workspace's shared directory). Set via WithWorkingDirInjector; wired by
+	// wireWorkingDirInjectors in loop_env.go.
+	//
+	// The workspaceID argument mirrors delegationInjector's: the turn's
+	// effective workspace (ts.opts.WorkspaceID), threaded through so an agent
+	// that belongs to more than one workspace's CoreTeam is told about the
+	// CURRENT session's workspace, not an arbitrary one — see
+	// workspace.FindForAgentPreferring, which this injector must use (the
+	// SAME resolution steps pkg/agent/loop.go's re-rooting block uses,
+	// including the MkdirAll fallback) so the advertised directory matches
+	// the one actually applied.
+	workingDirInjector func(workspaceID string) string
+
 	// env carries the environment provider + any per-builder env state. Split
 	// into a nested struct so context_env.go owns the mutation surface without
 	// touching the core ContextBuilder definition.
@@ -97,6 +123,16 @@ func (cb *ContextBuilder) WithResourcesInjector(fn func() string) *ContextBuilde
 // block (no delegation section is appended).
 func (cb *ContextBuilder) WithDelegationInjector(fn func(workspaceID string) string) *ContextBuilder {
 	cb.delegationInjector = fn
+	return cb
+}
+
+// WithWorkingDirInjector installs the per-turn working-directory context
+// callback. fn receives the turn's effective workspaceID (ts.opts.WorkspaceID,
+// may be "") and is called on every turn from buildDynamicContext (the
+// UN-CACHED path), returning the "## Working Directory" block text (or "" to
+// omit it). Passing nil disables the block.
+func (cb *ContextBuilder) WithWorkingDirInjector(fn func(workspaceID string) string) *ContextBuilder {
+	cb.workingDirInjector = fn
 	return cb
 }
 
@@ -740,6 +776,15 @@ func (cb *ContextBuilder) buildDynamicContext(workspaceID, channel, chatID, send
 	// enforcement gate resolves, so advertisement == enforcement by construction.
 	if cb.delegationInjector != nil {
 		if block := cb.delegationInjector(workspaceID); block != "" {
+			fmt.Fprintf(&sb, "\n\n%s", block)
+		}
+	}
+
+	// Working-directory block: injected per-turn for the same freshness reason
+	// as the delegation block above — CoreTeam membership (and therefore the
+	// re-rooted working directory) can change at runtime.
+	if cb.workingDirInjector != nil {
+		if block := cb.workingDirInjector(workspaceID); block != "" {
 			fmt.Fprintf(&sb, "\n\n%s", block)
 		}
 	}
