@@ -120,7 +120,6 @@ determines which HTTP client, auth flow, or CLI shim is used.
 | `bedrock/` | AWS Bedrock; credentials from AWS SDK env/profile/IAM |
 | `claude-cli/` or `claudecli/` | Claude via local CLI binary |
 | `codex-cli/` or `codexcli/` | Codex via local CLI binary |
-| `github-copilot/` or `copilot/` | GitHub Copilot (gRPC or stdio; `connect_mode` configures transport) |
 
 ### OpenAI-compatible protocols
 
@@ -179,7 +178,6 @@ All fields map directly to JSON tags in `pkg/config/config.go:ModelConfig`.
 | Proxy | `proxy` | string | No | HTTP proxy URL for this entry |
 | Fallbacks | `fallbacks` | []string | No | Ordered list of `model_name` aliases to try on failure |
 | Auth method | `auth_method` | string | No | `oauth` or `token` for OAuth-based protocols |
-| Connect mode | `connect_mode` | string | No | `stdio` or `grpc` for CLI-based protocols (GitHub Copilot) |
 | Workspace | `workspace` | string | No | Working directory for CLI-based providers (`claude-cli`, `codex-cli`) |
 | RPM | `rpm` | int | No | Requests-per-minute cap for this entry; 0 = unlimited |
 | Max tokens field | `max_tokens_field` | string | No | Override the field name sent for token limits (e.g. `max_completion_tokens`) |

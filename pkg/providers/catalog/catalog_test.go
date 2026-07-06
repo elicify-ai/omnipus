@@ -114,13 +114,11 @@ var catalogExcluded = map[string]bool{
 	"alibaba-coding-anthropic": true,
 
 	// CLI executor / non-API-key ids
-	"claude-cli":     true,
-	"claudecli":      true,
-	"codex-cli":      true,
-	"codexcli":       true,
-	"github-copilot": true,
-	"copilot":        true,
-	"antigravity":    true,
+	"claude-cli":  true,
+	"claudecli":   true,
+	"codex-cli":   true,
+	"codexcli":    true,
+	"antigravity": true,
 
 	// Self-hosted infra (no user-selectable account; excluded from roster
 	// but may appear in the "Self-hosted / Custom" group when configured).

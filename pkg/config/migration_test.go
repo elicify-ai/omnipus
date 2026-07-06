@@ -138,41 +138,40 @@ func TestConvertProvidersToModelList_Nil(t *testing.T) {
 
 func TestConvertProvidersToModelList_AllProviders(t *testing.T) {
 	// This test verifies that when providers have at least one configured field,
-	// they are converted. GitHubCopilot has ConnectMode set, Antigravity has AuthMethod.
+	// they are converted. Antigravity has AuthMethod set.
 	// Other providers have no configuration, so they won't be converted.
 	cfg := &configV0{
 		Providers: providersConfigV0{
-			OpenAI:        openAIProviderConfigV0{providerConfigV0: providerConfigV0{APIKey: "key1"}},
-			LiteLLM:       providerConfigV0{APIKey: "key-litellm", APIBase: "http://localhost:4000/v1"},
-			Anthropic:     providerConfigV0{APIKey: "key2"},
-			OpenRouter:    providerConfigV0{APIKey: "key3"},
-			Groq:          providerConfigV0{APIKey: "key4"},
-			Zhipu:         providerConfigV0{APIKey: "key5"},
-			VLLM:          providerConfigV0{APIKey: "key6"},
-			Gemini:        providerConfigV0{APIKey: "key7"},
-			Nvidia:        providerConfigV0{APIKey: "key8"},
-			Ollama:        providerConfigV0{APIKey: "key9"},
-			Moonshot:      providerConfigV0{APIKey: "key10"},
-			ShengSuanYun:  providerConfigV0{APIKey: "key11"},
-			DeepSeek:      providerConfigV0{APIKey: "key12"},
-			Cerebras:      providerConfigV0{APIKey: "key13"},
-			Vivgrid:       providerConfigV0{APIKey: "key14"},
-			VolcEngine:    providerConfigV0{APIKey: "key15"},
-			GitHubCopilot: providerConfigV0{ConnectMode: "grpc"},
-			Antigravity:   providerConfigV0{AuthMethod: "oauth"},
-			Qwen:          providerConfigV0{APIKey: "key17"},
-			Mistral:       providerConfigV0{APIKey: "key18"},
-			Avian:         providerConfigV0{APIKey: "key19"},
-			LongCat:       providerConfigV0{APIKey: "key-longcat"},
-			ModelScope:    providerConfigV0{APIKey: "key-modelscope"},
+			OpenAI:       openAIProviderConfigV0{providerConfigV0: providerConfigV0{APIKey: "key1"}},
+			LiteLLM:      providerConfigV0{APIKey: "key-litellm", APIBase: "http://localhost:4000/v1"},
+			Anthropic:    providerConfigV0{APIKey: "key2"},
+			OpenRouter:   providerConfigV0{APIKey: "key3"},
+			Groq:         providerConfigV0{APIKey: "key4"},
+			Zhipu:        providerConfigV0{APIKey: "key5"},
+			VLLM:         providerConfigV0{APIKey: "key6"},
+			Gemini:       providerConfigV0{APIKey: "key7"},
+			Nvidia:       providerConfigV0{APIKey: "key8"},
+			Ollama:       providerConfigV0{APIKey: "key9"},
+			Moonshot:     providerConfigV0{APIKey: "key10"},
+			ShengSuanYun: providerConfigV0{APIKey: "key11"},
+			DeepSeek:     providerConfigV0{APIKey: "key12"},
+			Cerebras:     providerConfigV0{APIKey: "key13"},
+			Vivgrid:      providerConfigV0{APIKey: "key14"},
+			VolcEngine:   providerConfigV0{APIKey: "key15"},
+			Antigravity:  providerConfigV0{AuthMethod: "oauth"},
+			Qwen:         providerConfigV0{APIKey: "key17"},
+			Mistral:      providerConfigV0{APIKey: "key18"},
+			Avian:        providerConfigV0{APIKey: "key19"},
+			LongCat:      providerConfigV0{APIKey: "key-longcat"},
+			ModelScope:   providerConfigV0{APIKey: "key-modelscope"},
 		},
 	}
 
 	result := v0ConvertProvidersToModelList(cfg)
 
-	// All 23 providers should be converted
-	if len(result) != 23 {
-		t.Errorf("len(result) = %d, want 23", len(result))
+	// All 22 providers should be converted
+	if len(result) != 22 {
+		t.Errorf("len(result) = %d, want 22", len(result))
 	}
 }
 

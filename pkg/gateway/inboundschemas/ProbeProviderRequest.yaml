@@ -70,8 +70,6 @@ properties:
       - claudecli
       - codex-cli
       - codexcli
-      - github-copilot
-      - copilot
     description: >
       Provider protocol identifier. Must be one of the recognized protocol names
       that Omnipus can connect to. Validated server-side against the known protocol
