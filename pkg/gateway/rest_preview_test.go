@@ -12,7 +12,6 @@
 //   - GET with expired registration → 404.
 //   - Cross-agent token reuse → 403 or 404.
 //   - Malformed URL → 400.
-//   - Back-compat HandleServeWorkspace and HandleDevProxy still work.
 
 package gateway
 
@@ -164,24 +163,6 @@ func TestHandlePreview_MalformedURL(t *testing.T) {
 	api.HandlePreview(rec, req)
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code, "bare /preview/ must return 400")
-}
-
-// TestHandleServeWorkspace_BackCompat verifies that the /serve/ back-compat
-// handler still serves registered static content.
-func TestHandleServeWorkspace_BackCompat(t *testing.T) {
-	api, ss := newPreviewRouteTestAPI(t)
-	workDir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(workDir, "index.html"), []byte("<h1>serve</h1>"), 0o644))
-
-	token, _, err := ss.Register("agent5", workDir, time.Hour)
-	require.NoError(t, err)
-
-	req := httptest.NewRequest(http.MethodGet, "/serve/agent5/"+token+"/", nil)
-	rec := httptest.NewRecorder()
-	api.HandleServeWorkspace(rec, req)
-
-	assert.Equal(t, http.StatusOK, rec.Code, "back-compat /serve/ must return 200")
-	assert.Contains(t, rec.Body.String(), "serve")
 }
 
 // TestHandlePreview_OptionsPreflightReturns204 verifies CORS preflight handling.

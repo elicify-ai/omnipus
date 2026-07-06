@@ -1,6 +1,6 @@
 //go:build !cgo
 
-// T2.3 + T2.4: Preview proxy security and back-compat audit tests.
+// T2.3 + T2.4: Preview proxy security and first-serve audit tests.
 //
 // T2.3: When the dev-server registry has an active registration, hitting
 //
@@ -9,9 +9,9 @@
 //	(b) Strip upstream Content-Security-Policy and X-Frame-Options headers.
 //	(c) Inject gateway-controlled Content-Security-Policy in the response.
 //
-// T2.4: The legacy /serve/<agent>/<token>/ path serves registered static content
+// T2.4: /preview/<agent>/<token>/ serves registered static content and emits
 //
-//	and emits a serve.served audit entry on first serve (back-compat contract).
+//	a serve.served audit entry on first serve.
 
 package gateway
 
@@ -172,16 +172,16 @@ func TestHandlePreview_DevProxy_StripsUpstreamCSP(t *testing.T) {
 		"T2.3b: gateway CSP must include frame-ancestors directive")
 }
 
-// TestHandleServeWorkspace_BackCompat_EmitsAuditOnFirstServe (T2.4) verifies that
-// the legacy /serve/<agent>/<token>/ back-compat handler:
+// TestHandlePreview_StaticServe_EmitsAuditOnFirstServe (T2.4) verifies that
+// /preview/<agent>/<token>/:
 // (a) Serves the registered static content with HTTP 200.
 // (b) The first serve emits a serve.served audit-style marker via markFirstServed.
-func TestHandleServeWorkspace_BackCompat_EmitsAuditOnFirstServe(t *testing.T) {
+func TestHandlePreview_StaticServe_EmitsAuditOnFirstServe(t *testing.T) {
 	api, ss, _ := newDevProxyTestAPIWithServe(t)
 	workDir := t.TempDir()
 
 	indexPath := filepath.Join(workDir, "index.html")
-	require.NoError(t, os.WriteFile(indexPath, []byte("<h1>back-compat serve</h1>"), 0o644))
+	require.NoError(t, os.WriteFile(indexPath, []byte("<h1>preview serve</h1>"), 0o644))
 
 	token, _, err := ss.Register("serve-compat-agent", workDir, time.Hour)
 	require.NoError(t, err)
@@ -196,25 +196,12 @@ func TestHandleServeWorkspace_BackCompat_EmitsAuditOnFirstServe(t *testing.T) {
 	assert.False(t, secondMark,
 		"T2.4: second markFirstServed call must return false (no duplicate audit)")
 
-	// Verify the /serve/ path itself serves the content correctly.
-	req := httptest.NewRequest(http.MethodGet, "/serve/serve-compat-agent/"+token+"/", nil)
+	// Verify the /preview/ path itself serves the content correctly.
+	req := httptest.NewRequest(http.MethodGet, "/preview/serve-compat-agent/"+token+"/", nil)
 	rec := httptest.NewRecorder()
-	api.HandleServeWorkspace(rec, req)
+	api.HandlePreview(rec, req)
 
-	assert.Equal(t, http.StatusOK, rec.Code, "T2.4: /serve/ back-compat must return 200")
-	assert.Contains(t, rec.Body.String(), "back-compat serve",
-		"T2.4: /serve/ response must contain the file content")
-}
-
-// TestHandleServeWorkspace_UnknownToken_Returns401 verifies that the /serve/
-// back-compat path returns 401 for an unknown token.
-func TestHandleServeWorkspace_UnknownToken_Returns401(t *testing.T) {
-	api, _, _ := newDevProxyTestAPIWithServe(t)
-
-	req := httptest.NewRequest(http.MethodGet, "/serve/someagent/unknowntoken999/", nil)
-	rec := httptest.NewRecorder()
-	api.HandleServeWorkspace(rec, req)
-
-	assert.Equal(t, http.StatusUnauthorized, rec.Code,
-		"T2.4: /serve/ with unknown token must return 401")
+	assert.Equal(t, http.StatusOK, rec.Code, "T2.4: /preview/ must return 200")
+	assert.Contains(t, rec.Body.String(), "preview serve",
+		"T2.4: /preview/ response must contain the file content")
 }

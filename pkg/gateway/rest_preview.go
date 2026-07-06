@@ -12,17 +12,11 @@
 // prefix.  The handler looks up the token in DevServerRegistry first; on a
 // miss it falls back to ServedSubdirs. Unknown or expired tokens → 404.
 //
-// Also provides back-compat HandleServeWorkspace (/serve/) and HandleDevProxy
-// (/dev/) handlers for old registrations still in client transcripts.
-//
 // Auth model (FR-023): TOKEN-ONLY. The path token IS the credential. This
 // route is registered on the PREVIEW listener without RequireSessionCookieOrBearer.
 //
 // Static mode: path-traversal guard → MIME → buffered/streaming response.
 // Dev mode: reverse proxy to loopback dev-server port with CSP injection.
-//
-// Audit: same emitPreviewAuditEntry infrastructure as the former /serve/ and
-// /dev/ handlers.
 
 package gateway
 
@@ -35,19 +29,13 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
-	"path"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
-	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/elicify-ai/omnipus/pkg/validation"
 )
-
-// devProxyPathPrefix is the URL prefix served by HandleDevProxy.
-const devProxyPathPrefix = "/dev/"
 
 // HandlePreview serves GET /preview/{agent_id}/{token}/{file_path...} on the
 // PREVIEW listener.  It routes to the dev proxy or static file handler by
@@ -139,134 +127,7 @@ func (a *restAPI) HandlePreview(w http.ResponseWriter, r *http.Request) {
 	jsonErr(w, http.StatusNotFound, "preview registration not found or expired")
 }
 
-// HandleServeWorkspace serves GET /serve/{agent_id}/{token}/{file_path...}.
-// Kept for back-compat with registrations produced before the /preview/ route
-// landed.
-// TODO(v0.2 cleanup, target 2026-08-01): delete /serve/ and /dev/ shims
-func (a *restAPI) HandleServeWorkspace(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodOptions {
-		a.handleServePreviewPreflight(w, r)
-		return
-	}
-	// B1.3b: emit CORS headers on actual GET/HEAD responses.
-	a.addPreviewCORSHeaders(w, r)
-	startedAt := time.Now()
-
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-
-	remainder := strings.TrimPrefix(r.URL.Path, "/serve/")
-	if strings.HasPrefix(remainder, "/") {
-		a.auditServeFailure(r, "serve.malformed_url", "error", "", "", http.StatusBadRequest, startedAt)
-		jsonErr(w, http.StatusBadRequest, "malformed serve URL")
-		return
-	}
-	parts := strings.SplitN(remainder, "/", 3)
-	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
-		a.auditServeFailure(r, "serve.malformed_url", "error", "", "", http.StatusBadRequest, startedAt)
-		jsonErr(w, http.StatusBadRequest, "malformed URL: expected /serve/{agent}/{token}/...")
-		return
-	}
-	agentID := parts[0]
-	token := parts[1]
-	var relPath string
-	if len(parts) == 3 {
-		relPath = parts[2]
-	}
-
-	if err := validation.EntityID(agentID); err != nil {
-		a.auditServeFailure(r, "serve.malformed_url", "error", agentID, token, http.StatusBadRequest, startedAt)
-		jsonErr(w, http.StatusBadRequest, "invalid agent ID")
-		return
-	}
-	if a.servedSubdirs == nil {
-		jsonErr(w, http.StatusInternalServerError, "serve registry not initialized")
-		return
-	}
-	entry := a.servedSubdirs.Lookup(token)
-	if entry == nil {
-		a.auditServeFailure(r, "serve.token_invalid", "deny", agentID, token, http.StatusUnauthorized, startedAt)
-		jsonErr(w, http.StatusUnauthorized, "token unknown or expired")
-		return
-	}
-	if entry.AgentID != agentID {
-		a.auditServeFailure(r, "serve.token_agent_mismatch", "deny", agentID, token, http.StatusForbidden, startedAt)
-		jsonErr(w, http.StatusForbidden, "token does not belong to this agent")
-		return
-	}
-
-	a.serveStaticFile(w, r, entry.AbsDir, relPath, agentID, token, startedAt)
-}
-
-// HandleDevProxy serves /dev/{agent_id}/{token}/... requests.
-// Kept for back-compat with registrations produced before the /preview/ route.
-// TODO(v0.2 cleanup, target 2026-08-01): delete /serve/ and /dev/ shims
-func (a *restAPI) HandleDevProxy(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodOptions {
-		a.handleServePreviewPreflight(w, r)
-		return
-	}
-	// B1.3b: emit CORS headers on actual GET/HEAD responses.
-	a.addPreviewCORSHeaders(w, r)
-	startedAt := time.Now()
-
-	if runtime.GOOS != "linux" {
-		writeDevProxyError(w, http.StatusServiceUnavailable, tools.Tier3UnsupportedMessage)
-		return
-	}
-	if a.devServers == nil {
-		writeDevProxyError(w, http.StatusServiceUnavailable, "dev-server registry not configured")
-		return
-	}
-
-	rest := strings.TrimPrefix(r.URL.Path, devProxyPathPrefix)
-	parts := strings.SplitN(rest, "/", 3)
-	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
-		a.auditDevFailure(r, "dev.malformed_url", "error", "", "", http.StatusBadRequest, startedAt)
-		writeDevProxyError(w, http.StatusBadRequest, "invalid /dev path; expected /dev/<agent>/<token>/...")
-		return
-	}
-	agentID := parts[0]
-	token := parts[1]
-	remaining := ""
-	if len(parts) == 3 {
-		remaining = parts[2]
-	}
-
-	if err := validation.EntityID(agentID); err != nil {
-		a.auditDevFailure(r, "dev.path_invalid", "error", agentID, "", http.StatusBadRequest, startedAt)
-		writeDevProxyError(w, http.StatusBadRequest, "invalid agent identifier")
-		return
-	}
-	if remaining != "" {
-		cleaned := path.Clean("/" + remaining)
-		if strings.HasPrefix(cleaned, "/..") {
-			a.auditDevFailure(r, "dev.path_traversal", "deny", agentID, token, http.StatusBadRequest, startedAt)
-			writeDevProxyError(w, http.StatusBadRequest, "path traversal not allowed")
-			return
-		}
-		remaining = strings.TrimPrefix(cleaned, "/")
-	}
-
-	reg := a.devServers.Lookup(token)
-	if reg == nil {
-		a.auditDevFailure(r, "dev.token_invalid", "deny", agentID, token, http.StatusServiceUnavailable, startedAt)
-		writeDevProxyError(w, http.StatusServiceUnavailable, "dev-server registration not found or expired")
-		return
-	}
-	if reg.AgentID != agentID {
-		a.auditDevFailure(r, "dev.token_agent_mismatch", "deny", agentID, token, http.StatusForbidden, startedAt)
-		writeDevProxyError(w, http.StatusForbidden, "token does not match agent")
-		return
-	}
-
-	a.proxyDevRequest(w, r, reg, remaining, agentID, token, startedAt)
-}
-
-// handleServePreviewPreflight handles CORS OPTIONS for /preview/, /serve/ and
-// /dev/ (FR-007a).
+// handleServePreviewPreflight handles CORS OPTIONS for /preview/ (FR-007a).
 func (a *restAPI) handleServePreviewPreflight(w http.ResponseWriter, r *http.Request) {
 	cfg := configFromContext(r.Context())
 	if cfg == nil {
@@ -309,7 +170,7 @@ func (a *restAPI) addPreviewCORSHeaders(w http.ResponseWriter, r *http.Request) 
 
 // serveStaticFile serves the file at absDir/relPath with path-traversal guards,
 // symlink resolution, MIME detection, and buffered/streaming delivery.
-// Shared between HandlePreview (static mode) and HandleServeWorkspace.
+// Used by HandlePreview's static-mode branch.
 func (a *restAPI) serveStaticFile(
 	w http.ResponseWriter,
 	r *http.Request,
