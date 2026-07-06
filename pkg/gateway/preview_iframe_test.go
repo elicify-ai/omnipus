@@ -8,8 +8,7 @@
 // feature (chat-served-iframe-preview-spec.md).
 //
 // Coverage targets (SC-006 per spec):
-//   - pkg/gateway/rest_preview.go (HandleServeWorkspace, HandleDevProxy — unified
-//     after the web_serve consolidation; previously rest_serve.go + rest_dev.go)
+//   - pkg/gateway/rest_preview.go (HandlePreview — the unified /preview/ route)
 //   - pkg/gateway/rest_workspace.go (CSP / headers)
 //   - pkg/config/config.go (ValidateAndApplyPreviewDefaults)
 //
@@ -56,7 +55,7 @@ func parseTestURL(rawURL string) (*url.URL, error) {
 
 // ---------------------------------------------------------------------------
 // Helper: newPreviewTestAPI builds a restAPI with a real ServedSubdirs
-// registry wired, and a temporary workspace. Suitable for /serve/ handler tests.
+// registry wired, and a temporary workspace. Suitable for /preview/ handler tests.
 // ---------------------------------------------------------------------------
 
 func newPreviewTestAPI(t *testing.T) *restAPI {
@@ -73,7 +72,7 @@ func newPreviewTestAPI(t *testing.T) *restAPI {
 // Handler security-header tests
 // ---------------------------------------------------------------------------
 
-// TestServePreview_FrameAncestorsHeader verifies that HandleServeWorkspace
+// TestServePreview_FrameAncestorsHeader verifies that HandlePreview
 // sets a CSP header with frame-ancestors pointing at the main origin.
 // Traces to: chat-served-iframe-preview-spec.md FR-007c
 func TestServePreview_FrameAncestorsHeader(t *testing.T) {
@@ -95,12 +94,12 @@ func TestServePreview_FrameAncestorsHeader(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet,
-		"/serve/agent-1/"+token+"/index.html", nil)
-	api.HandleServeWorkspace(w, r)
+		"/preview/agent-1/"+token+"/index.html", nil)
+	api.HandlePreview(w, r)
 
 	require.Equal(t, http.StatusOK, w.Code)
 	csp := w.Header().Get("Content-Security-Policy")
-	assert.NotEmpty(t, csp, "CSP header must be present on /serve/ response")
+	assert.NotEmpty(t, csp, "CSP header must be present on /preview/ response")
 	assert.Contains(t, csp, "frame-ancestors",
 		"CSP must contain frame-ancestors directive (FR-007c)")
 	assert.NotContains(t, csp, "frame-ancestors 'none'",
@@ -112,7 +111,7 @@ func TestServePreview_FrameAncestorsHeader(t *testing.T) {
 // Traces to: chat-served-iframe-preview-spec.md FR-007d
 func TestDevPreview_FrameAncestorsHeader(t *testing.T) {
 	// We exercise the security header injection via the responseHeaderWriter path
-	// which is the same code path as HandleDevProxy's rp.ModifyResponse.
+	// which is the same code path as HandlePreview's proxyDevRequest rp.ModifyResponse.
 	testMainOrigin := "http://127.0.0.1:5000"
 	upstreamHeaders := http.Header{}
 	upstreamHeaders.Set("Content-Security-Policy", "default-src 'unsafe-eval'")
@@ -132,7 +131,7 @@ func TestDevPreview_FrameAncestorsHeader(t *testing.T) {
 		"frame-ancestors must reference the main origin (FR-007c)")
 }
 
-// TestServePreview_ReferrerPolicyHeader verifies that the /serve/ handler
+// TestServePreview_ReferrerPolicyHeader verifies that the /preview/ handler
 // sets Referrer-Policy: no-referrer on 200 responses.
 // Traces to: chat-served-iframe-preview-spec.md FR-007b / T-03
 func TestServePreview_ReferrerPolicyHeader(t *testing.T) {
@@ -145,8 +144,8 @@ func TestServePreview_ReferrerPolicyHeader(t *testing.T) {
 	require.NoError(t, err)
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodGet, "/serve/agent-2/"+token+"/index.html", nil)
-	api.HandleServeWorkspace(w, r)
+	r := httptest.NewRequest(http.MethodGet, "/preview/agent-2/"+token+"/index.html", nil)
+	api.HandlePreview(w, r)
 
 	require.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "no-referrer",
@@ -163,10 +162,10 @@ func TestServePreview_CORSPreflight_AllowsMainOrigin(t *testing.T) {
 	api.agentLoop.GetConfig().Gateway.Port = 5000
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodOptions, "/serve/any/token/", nil)
+	r := httptest.NewRequest(http.MethodOptions, "/preview/any/token/", nil)
 	r.Header.Set("Origin", "http://127.0.0.1:5000")
 
-	api.HandleServeWorkspace(w, r)
+	api.HandlePreview(w, r)
 
 	assert.Equal(t, http.StatusNoContent, w.Code,
 		"OPTIONS must return 204 (FR-007a)")
@@ -192,10 +191,10 @@ func TestServePreview_CORSPreflight_RejectsForeignOrigin(t *testing.T) {
 	api.agentLoop.GetConfig().Gateway.Port = 5000
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodOptions, "/serve/any/token/", nil)
+	r := httptest.NewRequest(http.MethodOptions, "/preview/any/token/", nil)
 	r.Header.Set("Origin", "https://evil.example.com")
 
-	api.HandleServeWorkspace(w, r)
+	api.HandlePreview(w, r)
 
 	assert.Equal(t, http.StatusNoContent, w.Code,
 		"Foreign-origin OPTIONS must return 204 (not 403) — stealth rejection")
@@ -240,7 +239,7 @@ func TestServePreview_NoAuth_RequiresValidToken(t *testing.T) {
 			name:       "unknown/expired token",
 			agentInURL: "agent-tok",
 			tok:        "completely-unknown-token-xyz",
-			wantStatus: http.StatusUnauthorized,
+			wantStatus: http.StatusNotFound,
 		},
 		{
 			name:       "token from different agent (mismatch)",
@@ -254,8 +253,8 @@ func TestServePreview_NoAuth_RequiresValidToken(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
 			r := httptest.NewRequest(http.MethodGet,
-				"/serve/"+tc.agentInURL+"/"+tc.tok+"/index.html", nil)
-			api.HandleServeWorkspace(w, r)
+				"/preview/"+tc.agentInURL+"/"+tc.tok+"/index.html", nil)
+			api.HandlePreview(w, r)
 			assert.Equal(t, tc.wantStatus, w.Code,
 				"FR-023: %s must return %d", tc.name, tc.wantStatus)
 		})
@@ -266,7 +265,7 @@ func TestServePreview_NoAuth_RequiresValidToken(t *testing.T) {
 // 404 boundary tests — 9 paths from the spec BDD scenario outline
 // ---------------------------------------------------------------------------
 
-// TestPreviewMux_404ForUnregisteredPaths verifies that the /serve/ handler
+// TestPreviewMux_404ForUnregisteredPaths verifies that the /preview/ handler
 // returns errors for paths that do not match or don't have valid tokens.
 // Traces to: chat-served-iframe-preview-spec.md BDD 404 scenario
 func TestPreviewMux_404ForUnregisteredPaths(t *testing.T) {
@@ -279,31 +278,31 @@ func TestPreviewMux_404ForUnregisteredPaths(t *testing.T) {
 	}{
 		{
 			name:       "malformed — no agent segment",
-			path:       "/serve/",
+			path:       "/preview/",
 			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name:       "malformed — agent only no token",
-			path:       "/serve/agent1/",
+			path:       "/preview/agent1/",
 			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name:       "unknown token",
-			path:       "/serve/agent1/unknown-token-1234567890/index.html",
-			wantStatus: http.StatusUnauthorized,
+			path:       "/preview/agent1/unknown-token-1234567890/index.html",
+			wantStatus: http.StatusNotFound,
 		},
 		{
 			name:       "another unknown token with path",
-			path:       "/serve/agent2/bad-token-abc/sub/page.html",
-			wantStatus: http.StatusUnauthorized,
+			path:       "/preview/agent2/bad-token-abc/sub/page.html",
+			wantStatus: http.StatusNotFound,
 		},
 		// Note: the double-slash (zero-length agent segment) case was extracted
 		// to TestServePreview_DoubleSlash_Returns400 below (F-47 fix: returns 400
-		// + serve.malformed_url instead of the former 401 mis-classification).
+		// + serve.malformed_url instead of a 404 mis-classification).
 		{
 			name:       "HEAD with unknown token",
-			path:       "/serve/agent-x/head-unknown-tok/",
-			wantStatus: http.StatusUnauthorized,
+			path:       "/preview/agent-x/head-unknown-tok/",
+			wantStatus: http.StatusNotFound,
 		},
 	}
 
@@ -311,7 +310,7 @@ func TestPreviewMux_404ForUnregisteredPaths(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
 			r := httptest.NewRequest(http.MethodGet, tc.path, nil)
-			api.HandleServeWorkspace(w, r)
+			api.HandlePreview(w, r)
 			assert.Equal(t, tc.wantStatus, w.Code,
 				"path %q must return %d (spec 404 boundary)", tc.path, tc.wantStatus)
 		})
@@ -341,8 +340,8 @@ func TestServePreview_TwoDifferentFiles_ReturnsDistinctContent(t *testing.T) {
 	for i, file := range []string{"a.txt", "b.txt"} {
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest(http.MethodGet,
-			"/serve/agent-diff/"+token+"/"+file, nil)
-		api.HandleServeWorkspace(w, r)
+			"/preview/agent-diff/"+token+"/"+file, nil)
+		api.HandlePreview(w, r)
 		require.Equal(t, http.StatusOK, w.Code)
 		bodies[i] = w.Body.String()
 	}
@@ -357,17 +356,23 @@ func TestServePreview_TwoDifferentFiles_ReturnsDistinctContent(t *testing.T) {
 // Method gate
 // ---------------------------------------------------------------------------
 
-// TestServePreview_MethodGate verifies POST returns 405.
+// TestServePreview_MethodGate verifies POST returns 405 for a registered
+// static token (the method check fires only after a successful token lookup).
 // Traces to: chat-served-iframe-preview-spec.md FR-005
 func TestServePreview_MethodGate(t *testing.T) {
 	api := newPreviewTestAPI(t)
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "index.html"), []byte("hi"), 0o600))
+	ss := api.servedSubdirs
+	token, _, err := ss.Register("agent-method", dir, time.Hour)
+	require.NoError(t, err)
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/serve/agent/tok/file.html", nil)
-	api.HandleServeWorkspace(w, r)
+	r := httptest.NewRequest(http.MethodPost, "/preview/agent-method/"+token+"/file.html", nil)
+	api.HandlePreview(w, r)
 
 	assert.Equal(t, http.StatusMethodNotAllowed, w.Code,
-		"POST to /serve/ must return 405 — only GET/HEAD allowed")
+		"POST to /preview/ must return 405 — only GET/HEAD allowed")
 }
 
 // ---------------------------------------------------------------------------
@@ -405,17 +410,17 @@ func TestServePreview_AuditEvents_FirstRequestOnly(t *testing.T) {
 }
 
 // TestServePreview_AuditEvents_Failure verifies that invalid-token requests
-// return 401 — the audit path for failure events.
+// return 404 — the audit path for failure events.
 // Traces to: chat-served-iframe-preview-spec.md FR-024a
 func TestServePreview_AuditEvents_Failure(t *testing.T) {
 	api := newPreviewTestAPI(t)
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodGet, "/serve/agent-fail/bad-token/index.html", nil)
-	api.HandleServeWorkspace(w, r)
+	r := httptest.NewRequest(http.MethodGet, "/preview/agent-fail/bad-token/index.html", nil)
+	api.HandlePreview(w, r)
 
-	assert.Equal(t, http.StatusUnauthorized, w.Code,
-		"Invalid token must produce 401 (FR-024a audit failure path)")
+	assert.Equal(t, http.StatusNotFound, w.Code,
+		"Invalid token must produce 404 (FR-024a audit failure path)")
 	var body map[string]string
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
 	assert.NotEmpty(t, body["error"], "401 response must carry error message")
@@ -651,25 +656,26 @@ func TestProxyDevRequest_StripsUpstreamCSP(t *testing.T) {
 		"Referrer-Policy must be no-referrer (FR-007b)")
 }
 
-// TestHandleDevProxy_NoOriginMiddleware verifies that HandleDevProxy does NOT
+// TestHandlePreview_NoOriginMiddleware verifies that HandlePreview does NOT
 // enforce Origin header matching on state-changing methods (FR-023a / CR-02).
-// A POST without an Origin header must receive a non-403 response (503 on
-// non-Linux since the OS gate fires first, which is not 403).
+// A POST without an Origin header must receive a non-403 response (404 since
+// the token is unregistered — devServers is nil so it falls through to the
+// static-registry miss path).
 // Traces to: chat-served-iframe-preview-spec.md FR-023a
-func TestHandleDevProxy_NoOriginMiddleware(t *testing.T) {
+func TestHandlePreview_NoOriginMiddleware(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
-	// devServers is nil — HandleDevProxy will return 503 "dev-server registry not configured"
-	// rather than 403 "origin mismatch". This proves no Origin check exists.
+	// devServers is nil — HandlePreview falls through to the servedSubdirs miss
+	// path (404 "preview registration not found") rather than 403 "origin
+	// mismatch". This proves no Origin check exists.
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/dev/agent1/sometoken/api/login", nil)
+	r := httptest.NewRequest(http.MethodPost, "/preview/agent1/sometoken/api/login", nil)
 	// Deliberately no Origin header — if an origin-check middleware were wired it
-	// would return 403; without it we get the OS gate (503 on non-Linux) or
-	// "registry not configured" (503) — but never 403.
-	api.HandleDevProxy(w, r)
+	// would return 403; without it we get 404 (unregistered token) — but never 403.
+	api.HandlePreview(w, r)
 
 	assert.NotEqual(t, http.StatusForbidden, w.Code,
-		"HandleDevProxy must NOT return 403 for missing Origin (FR-023a: no origin check)")
+		"HandlePreview must NOT return 403 for missing Origin (FR-023a: no origin check)")
 }
 
 // ---------------------------------------------------------------------------
@@ -765,10 +771,10 @@ func TestWorkspace_SecurityHeaders(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// F-19: Server-side path-traversal blocking for /serve/
+// F-19: Server-side path-traversal blocking for /preview/
 // ---------------------------------------------------------------------------
 
-// TestServePreview_PathTraversal_Returns403 verifies that HandleServeWorkspace
+// TestServePreview_PathTraversal_Returns403 verifies that HandlePreview
 // blocks path traversal attempts (e.g. /../../../etc/passwd) and returns
 // 403 with a serve.path_invalid audit event (F-19).
 // Traces to: chat-served-iframe-preview-spec.md FR-005 (path safety)
@@ -787,15 +793,15 @@ func TestServePreview_PathTraversal_Returns403(t *testing.T) {
 	}{
 		{
 			name: "classic dotdot",
-			path: "/serve/traversal-agent/" + token + "/../../etc/passwd",
+			path: "/preview/traversal-agent/" + token + "/../../etc/passwd",
 		},
 		{
 			name: "triple traversal",
-			path: "/serve/traversal-agent/" + token + "/../../../etc/shadow",
+			path: "/preview/traversal-agent/" + token + "/../../../etc/shadow",
 		},
 		{
 			name: "encoded traversal stays blocked after clean",
-			path: "/serve/traversal-agent/" + token + "/../secret",
+			path: "/preview/traversal-agent/" + token + "/../secret",
 		},
 	}
 
@@ -803,7 +809,7 @@ func TestServePreview_PathTraversal_Returns403(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
 			r := httptest.NewRequest(http.MethodGet, tc.path, nil)
-			api.HandleServeWorkspace(w, r)
+			api.HandlePreview(w, r)
 			assert.True(t,
 				w.Code == http.StatusForbidden || w.Code == http.StatusNotFound,
 				"path traversal %q must return 403 or 404, got %d", tc.path, w.Code)
@@ -813,45 +819,25 @@ func TestServePreview_PathTraversal_Returns403(t *testing.T) {
 	}
 }
 
-// TestDevProxy_PathTraversal_Returns400 verifies that HandleDevProxy blocks
-// path traversal in the remaining path and returns 400 (F-15).
+// TestDevProxy_PathTraversal_Returns400 verifies that HandlePreview never
+// forwards a dev-proxy-shaped traversal path to an upstream as a successful
+// proxy response.
 // Traces to: chat-served-iframe-preview-spec.md FR-006 (path safety)
 func TestDevProxy_PathTraversal_Returns400(t *testing.T) {
 	api := newPreviewTestAPI(t)
-	// devServers is nil — HandleDevProxy returns 503 on nil registry.
-	// We need to detect whether the 400 from the traversal check fires BEFORE
-	// the registry nil-check. Looking at the handler flow:
-	//   1. OS gate (503 on non-Linux)
-	//   2. nil registry check (503)
-	//   3. path parse
-	//   4. F-15 traversal check (400) ← we want to hit this
-	//
-	// To reach the traversal check we must wire a devServers that has a
-	// registration — but we only need the traversal check to fire. On Linux
-	// the registry nil check fires first (503). On Linux with a real registry
-	// we'd need a real registration to pass the token validation (503).
-	//
-	// The cleanest approach: test the path-normalisation logic directly via
-	// the exported handler, where a traversal path that passes token auth
-	// would be rejected at the traversal gate. Since we can't easily set up
-	// a full dev server registration in a unit test, we verify the 400 path
-	// by inspecting that requests with "../" in the remaining path never
-	// reach the upstream (we observe a 400 OR a 503/ServiceUnavailable from
-	// earlier gates, but never a 200). The important invariant: the response
-	// is NOT a successful proxy.
+	// devServers is nil, so the token is looked up against servedSubdirs only,
+	// which also has no matching registration — the request falls through to
+	// the 404 "preview registration not found" path. The important invariant:
+	// the response is NOT a successful proxy (200).
 	if testing.Short() {
 		t.Skip("dev proxy traversal test skipped in -short mode")
 	}
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet,
-		"/dev/some-agent/some-token/../../etc/passwd", nil)
-	api.HandleDevProxy(w, r)
+		"/preview/some-agent/some-token/../../etc/passwd", nil)
+	api.HandlePreview(w, r)
 
-	// Any non-2xx is acceptable — the handler either rejects at OS gate (503),
-	// registry-nil (503), token-invalid (503), or traversal (400). The
-	// important invariant is that the response is NOT 200 (the traversal was
-	// not forwarded to an upstream).
 	assert.NotEqual(t, http.StatusOK, w.Code,
 		"traversal path must not produce a 200 OK")
 }
@@ -861,7 +847,7 @@ func TestDevProxy_PathTraversal_Returns400(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestServePreview_LoadStress_ConcurrentProbes runs 30 concurrent goroutines
-// hitting /serve/ through a real httptest.Server for 5 s (fast CI run) and
+// hitting /preview/ through a real httptest.Server for 5 s (fast CI run) and
 // asserts HeapAlloc growth stays under 50 MB. The 60 s duration from the
 // previous implementation made this test impractical for CI; 5 s achieves
 // the same memory-bound goal at a fraction of the wall-clock cost.
@@ -883,14 +869,14 @@ func TestServePreview_LoadStress_ConcurrentProbes(t *testing.T) {
 	token, _, err := ss.Register("stress-agent", dir, time.Hour)
 	require.NoError(t, err)
 
-	// Spin up a real HTTP server wrapping HandleServeWorkspace so the test
-	// exercises the full net/http connection path rather than direct handler
-	// invocation.  httptest.NewRecorder doesn't exercise connection management
-	// or response buffering; a real server does.
-	srv := httptest.NewServer(http.HandlerFunc(api.HandleServeWorkspace))
+	// Spin up a real HTTP server wrapping HandlePreview so the test exercises
+	// the full net/http connection path rather than direct handler invocation.
+	// httptest.NewRecorder doesn't exercise connection management or response
+	// buffering; a real server does.
+	srv := httptest.NewServer(http.HandlerFunc(api.HandlePreview))
 	defer srv.Close()
 
-	probeURL := srv.URL + "/serve/stress-agent/" + token + "/probe.html"
+	probeURL := srv.URL + "/preview/stress-agent/" + token + "/probe.html"
 	client := srv.Client()
 
 	const (
@@ -951,20 +937,21 @@ func TestServePreview_LoadStress_ConcurrentProbes(t *testing.T) {
 // F-47-test — Double-slash returns 400 + serve.malformed_url
 // ---------------------------------------------------------------------------
 
-// TestServePreview_DoubleSlash_Returns400 verifies that /serve//some-token/file.html
-// returns 400 (not 401) and a serve.malformed_url audit event. The F-47 production
-// fix changed the parse step to reject empty agent segments explicitly before the
-// registry lookup, producing 400 + serve.malformed_url instead of a confusing 401.
-// Traces to: chat-served-iframe-preview-spec.md F-47 / serve.malformed_url
+// TestServePreview_DoubleSlash_Returns400 verifies that /preview//some-token/file.html
+// returns 400 and a preview.malformed_url audit event. The F-47 production fix
+// changed the parse step to reject empty agent segments explicitly before the
+// registry lookup, producing 400 + preview.malformed_url instead of a confusing
+// misclassification.
+// Traces to: chat-served-iframe-preview-spec.md F-47 / preview.malformed_url
 func TestServePreview_DoubleSlash_Returns400(t *testing.T) {
 	api := newPreviewTestAPI(t)
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodGet, "/serve//some-token/file.html", nil)
-	api.HandleServeWorkspace(w, r)
+	r := httptest.NewRequest(http.MethodGet, "/preview//some-token/file.html", nil)
+	api.HandlePreview(w, r)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code,
-		"F-47: double-slash (zero-length agent segment) must return 400, not 401 (serve.malformed_url)")
+		"F-47: double-slash (zero-length agent segment) must return 400 (preview.malformed_url)")
 
 	var body map[string]string
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
@@ -976,10 +963,10 @@ func TestServePreview_DoubleSlash_Returns400(t *testing.T) {
 // F-39 — Audit logger nil-path: no panic when AuditLogger() returns nil
 // ---------------------------------------------------------------------------
 
-// TestServePreview_NilAuditLogger_NoPanic verifies that HandleServeWorkspace and
-// HandleDevProxy do not panic when the audit logger is nil (as is the case in the
-// default newTestRestAPIWithHome harness where audit logging is not configured).
-// The slog mirror in emitPreviewAuditEntry fires regardless of whether the bus-level
+// TestServePreview_NilAuditLogger_NoPanic verifies that HandlePreview does not
+// panic when the audit logger is nil (as is the case in the default
+// newTestRestAPIWithHome harness where audit logging is not configured). The
+// slog mirror in emitPreviewAuditEntry fires regardless of whether the bus-level
 // logger is wired, so the test also verifies the handler returns the expected status.
 // Traces to: chat-served-iframe-preview-spec.md FR-024 (best-effort audit)
 func TestServePreview_NilAuditLogger_NoPanic(t *testing.T) {
@@ -992,7 +979,7 @@ func TestServePreview_NilAuditLogger_NoPanic(t *testing.T) {
 		t.Skip("skipping: test harness has an audit logger wired (unexpected)")
 	}
 
-	// /serve/ path — valid file, nil audit logger must not panic.
+	// Success path — valid file, nil audit logger must not panic.
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "index.html"), []byte("ok"), 0o600))
 	token, _, err := api.servedSubdirs.Register("nil-audit-agent", dir, time.Hour)
@@ -1001,34 +988,22 @@ func TestServePreview_NilAuditLogger_NoPanic(t *testing.T) {
 	// emitPreviewAuditEntry checks logger == nil and returns early — must not panic.
 	require.NotPanics(t, func() {
 		w := httptest.NewRecorder()
-		r := httptest.NewRequest(http.MethodGet, "/serve/nil-audit-agent/"+token+"/index.html", nil)
-		api.HandleServeWorkspace(w, r)
+		r := httptest.NewRequest(http.MethodGet, "/preview/nil-audit-agent/"+token+"/index.html", nil)
+		api.HandlePreview(w, r)
 		assert.Equal(t, http.StatusOK, w.Code,
-			"F-39: /serve/ must return 200 even when audit logger is nil")
-	}, "F-39: HandleServeWorkspace must not panic when audit logger is nil")
+			"F-39: /preview/ must return 200 even when audit logger is nil")
+	}, "F-39: HandlePreview must not panic when audit logger is nil")
 
-	// /dev/ failure path — unknown token, no registry; must not panic.
-	// HandleDevProxy returns 503 (Linux gate or nil-registry gate) before the audit path
-	// for missing tokens, but the important invariant is no panic.
+	// Differentiation: the slog mirror fires on the failure path too (different
+	// event). A 404 for an unknown token triggers the failure audit path — must
+	// not panic.
 	require.NotPanics(t, func() {
 		w := httptest.NewRecorder()
-		r := httptest.NewRequest(http.MethodGet, "/dev/nil-audit-agent/unknown-token/", nil)
-		api.HandleDevProxy(w, r)
-		// Any non-panic response is acceptable — OS gate (503 non-Linux) or
-		// nil-registry (503) both fire before the audit path for tokens.
-		assert.NotEqual(t, http.StatusInternalServerError, w.Code,
-			"F-39: HandleDevProxy must not 500 on nil audit logger")
-	}, "F-39: HandleDevProxy must not panic when audit logger is nil")
-
-	// Differentiation: the slog mirror fires on /serve/ failure path too (different event).
-	// A 401 for an unknown token triggers the failure audit path — must not panic.
-	require.NotPanics(t, func() {
-		w := httptest.NewRecorder()
-		r := httptest.NewRequest(http.MethodGet, "/serve/nil-audit-agent/unknown-token/file.html", nil)
-		api.HandleServeWorkspace(w, r)
-		assert.Equal(t, http.StatusUnauthorized, w.Code,
-			"F-39: unknown token must return 401 on nil audit logger path")
-	}, "F-39: /serve/ failure audit path must not panic with nil audit logger")
+		r := httptest.NewRequest(http.MethodGet, "/preview/nil-audit-agent/unknown-token/file.html", nil)
+		api.HandlePreview(w, r)
+		assert.Equal(t, http.StatusNotFound, w.Code,
+			"F-39: unknown token must return 404 on nil audit logger path")
+	}, "F-39: failure audit path must not panic with nil audit logger")
 }
 
 // (No slog capture helpers needed — tests verify HTTP status codes directly.
@@ -1045,7 +1020,7 @@ func TestServePreview_NilAuditLogger_NoPanic(t *testing.T) {
 //
 // Two sub-tests:
 //  1. Confirm a degraded audit.Logger.Log() returns an error (proves the test harness).
-//  2. Confirm HandleServeWorkspace returns 200 with a nil logger (the nil-logger path
+//  2. Confirm HandlePreview returns 200 with a nil logger (the nil-logger path
 //     is the observable proxy for "Log() fails silently" since we cannot inject the
 //     unexported field; the nil-check and error-return path share the same not-fail-closed
 //     contract in emitPreviewAuditEntry).
@@ -1094,41 +1069,32 @@ func TestServePreview_AuditLogError_NotFailClosed(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet,
-		"/serve/err-audit-agent/"+token+"/index.html", nil)
-	api.HandleServeWorkspace(w, r)
+		"/preview/err-audit-agent/"+token+"/index.html", nil)
+	api.HandlePreview(w, r)
 
 	// Handler must return 200 — audit failure must NOT fail-close the response.
 	assert.Equal(t, http.StatusOK, w.Code,
 		"F-39: audit logger error/nil must NOT cause the HTTP handler to return non-200 (best-effort)")
 
-	// Differentiation: a 401 failure path also must not fail-close.
+	// Differentiation: a 404 failure path also must not fail-close.
 	w2 := httptest.NewRecorder()
 	r2 := httptest.NewRequest(http.MethodGet,
-		"/serve/err-audit-agent/bad-token/index.html", nil)
-	api.HandleServeWorkspace(w2, r2)
-	assert.Equal(t, http.StatusUnauthorized, w2.Code,
-		"F-39: failure audit path with nil logger must return 401 (not 500)")
+		"/preview/err-audit-agent/bad-token/index.html", nil)
+	api.HandlePreview(w2, r2)
+	assert.Equal(t, http.StatusNotFound, w2.Code,
+		"F-39: failure audit path with nil logger must return 404 (not 500)")
 }
 
 // ---------------------------------------------------------------------------
-// F-42 — Dev frame-ancestors via real HandleDevProxy
+// F-42 — Dev frame-ancestors via real HandlePreview
 // ---------------------------------------------------------------------------
 
-// TestDevPreview_FrameAncestorsHeader_ViaRealHandler verifies that HandleDevProxy's
-// ModifyResponse hook correctly strips upstream CSP/XFO and injects the
+// TestDevPreview_FrameAncestorsHeader_ViaRealHandler verifies that HandlePreview's
+// dev-proxy ModifyResponse hook correctly strips upstream CSP/XFO and injects the
 // gateway-authoritative frame-ancestors directive. This test drives a real
-// httputil.NewSingleHostReverseProxy through HandleDevProxy (Linux-only: the
-// handler has an early OS gate for non-Linux platforms).
-//
-// This test is Linux-only because HandleDevProxy's early gate returns 503
-// on non-Linux with "Tier 3 is unsupported on this platform", preventing
-// ModifyResponse from firing.
+// httputil.NewSingleHostReverseProxy through HandlePreview's dev-proxy branch.
 // Traces to: chat-served-iframe-preview-spec.md FR-007d
 func TestDevPreview_FrameAncestorsHeader_ViaRealHandler(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("F-42: HandleDevProxy Tier 3 is Linux-only (OS gate fires on non-Linux)")
-	}
-
 	// Spin up an upstream dev server that emits its own CSP/XFO headers.
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Security-Policy", "default-src 'self' 'unsafe-eval'")
@@ -1164,15 +1130,15 @@ func TestDevPreview_FrameAncestorsHeader_ViaRealHandler(t *testing.T) {
 	require.NoError(t, regErr)
 	token := registration.Token
 
-	// Fire a GET through HandleDevProxy.
+	// Fire a GET through HandlePreview.
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet,
-		"/dev/f42-agent/"+token+"/index.html", nil)
-	api.HandleDevProxy(w, r)
+		"/preview/f42-agent/"+token+"/index.html", nil)
+	api.HandlePreview(w, r)
 
 	// Handler must proxy successfully (200 from upstream).
 	require.Equal(t, http.StatusOK, w.Code,
-		"F-42: HandleDevProxy must proxy 200 from upstream dev server")
+		"F-42: HandlePreview must proxy 200 from upstream dev server")
 
 	// Upstream CSP must be STRIPPED; gateway CSP must be INJECTED.
 	csp := w.Header().Get("Content-Security-Policy")
@@ -1192,7 +1158,7 @@ func TestDevPreview_FrameAncestorsHeader_ViaRealHandler(t *testing.T) {
 // F-28 follow-on — Symlink escape returns 403
 // ---------------------------------------------------------------------------
 
-// TestServePreview_SymlinkEscape_Returns403 verifies that HandleServeWorkspace
+// TestServePreview_SymlinkEscape_Returns403 verifies that HandlePreview
 // returns 403 when a symlink inside the served directory points to a path
 // outside the registered directory. This tests the F-28 symlink-escape defense
 // added to rest_preview.go.
@@ -1224,11 +1190,11 @@ func TestServePreview_SymlinkEscape_Returns403(t *testing.T) {
 	token, _, err := api.servedSubdirs.Register("symlink-agent", serveDir, time.Hour)
 	require.NoError(t, err)
 
-	// Request the symlink path through /serve/.
+	// Request the symlink path through /preview/.
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet,
-		"/serve/symlink-agent/"+token+"/escape.txt", nil)
-	api.HandleServeWorkspace(w, r)
+		"/preview/symlink-agent/"+token+"/escape.txt", nil)
+	api.HandlePreview(w, r)
 
 	assert.Equal(t, http.StatusForbidden, w.Code,
 		"F-28: symlink escaping the serve directory must return 403 (serve.path_invalid)")
@@ -1242,8 +1208,8 @@ func TestServePreview_SymlinkEscape_Returns403(t *testing.T) {
 	// Differentiation: the real file inside the directory must still be accessible.
 	w2 := httptest.NewRecorder()
 	r2 := httptest.NewRequest(http.MethodGet,
-		"/serve/symlink-agent/"+token+"/real.txt", nil)
-	api.HandleServeWorkspace(w2, r2)
+		"/preview/symlink-agent/"+token+"/real.txt", nil)
+	api.HandlePreview(w2, r2)
 	assert.Equal(t, http.StatusOK, w2.Code,
 		"F-28: real files (non-symlink) inside serve dir must still be served (differentiation)")
 	assert.Equal(t, "safe content", w2.Body.String(),
@@ -1254,18 +1220,14 @@ func TestServePreview_SymlinkEscape_Returns403(t *testing.T) {
 // F-32 follow-on — dev.path_invalid for invalid agentID
 // ---------------------------------------------------------------------------
 
-// TestDevPreview_InvalidEntityID_Returns400 verifies that HandleDevProxy returns
-// 400 when the agentID contains characters that fail validateEntityID (e.g. "$").
-// This is the F-32 path: the same validateEntityID check applied to /serve/ is
-// now also applied to /dev/ (rest_preview.go).
+// TestDevPreview_InvalidEntityID_Returns400 verifies that HandlePreview returns
+// 400 when the agentID contains characters that fail validateEntityID. This is
+// the F-32 path: validation.EntityID is checked once, ahead of both the
+// dev-server and static registries, in HandlePreview (rest_preview.go).
 // Traces to: chat-served-iframe-preview-spec.md F-32 / dev.path_invalid
 func TestDevPreview_InvalidEntityID_Returns400(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("F-32: HandleDevProxy has an early Linux-only gate; OS gate fires before ID check on non-Linux")
-	}
-
 	api := newPreviewTestAPI(t)
-	// Wire a real DevServerRegistry so we get past the nil-registry gate.
+	// Wire a real DevServerRegistry so this exercises the dev-registry path too.
 	reg := sandbox.NewDevServerRegistry()
 	t.Cleanup(reg.Close)
 	api.devServers = reg
@@ -1290,16 +1252,13 @@ func TestDevPreview_InvalidEntityID_Returns400(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
 			// The URL path contains the invalid agentID in the second segment.
-			// The ID check fires before the registry lookup.
+			// The ID check fires before either registry lookup.
 			r := httptest.NewRequest(http.MethodGet,
-				"/dev/"+tc.agentID+"/fake-token/path", nil)
-			api.HandleDevProxy(w, r)
+				"/preview/"+tc.agentID+"/fake-token/path", nil)
+			api.HandlePreview(w, r)
 
-			// validateEntityID fires at position F-32 (before token lookup) and
-			// returns 400. On non-linux, the OS gate would fire first with 503 —
-			// we skip on non-linux above so we always reach 400 here.
 			assert.Equal(t, http.StatusBadRequest, w.Code,
-				"F-32: agentID %q must return 400 (dev.path_invalid)", tc.agentID)
+				"F-32: agentID %q must return 400 (preview.malformed_url)", tc.agentID)
 
 			var body map[string]string
 			_ = json.Unmarshal(w.Body.Bytes(), &body)
@@ -1308,13 +1267,13 @@ func TestDevPreview_InvalidEntityID_Returns400(t *testing.T) {
 		})
 	}
 
-	// Differentiation: a valid agentID with unknown token produces 503 (not 400),
+	// Differentiation: a valid agentID with unknown token produces 404 (not 400),
 	// proving the 400 is specifically from the ID check, not a generic error.
 	t.Run("valid agentID unknown token produces non-400", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		r := httptest.NewRequest(http.MethodGet, "/dev/valid-agent-id/unknown-token/", nil)
-		api.HandleDevProxy(w, r)
-		// Valid agentID + unknown token → 503 (token not found in registry).
+		r := httptest.NewRequest(http.MethodGet, "/preview/valid-agent-id/unknown-token/", nil)
+		api.HandlePreview(w, r)
+		// Valid agentID + unknown token → 404 (token not found in either registry).
 		assert.NotEqual(t, http.StatusBadRequest, w.Code,
 			"F-32: valid agentID must not return 400 (ID validation passes, fails at token lookup)")
 	})

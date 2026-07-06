@@ -108,15 +108,15 @@ type restAPI struct {
 
 	// devServers is the gateway-wide Tier 3 dev-server registry. Shared with
 	// the web_serve tool (dev mode) and workspace.shell_bg tool via the agent
-	// instance. HandlePreview / HandleDevProxy read this to validate tokens
-	// and resolve the upstream loopback port. Nil when Tier 3 is not
-	// supported on the current platform (non-Linux).
+	// instance. HandlePreview reads this to validate tokens and resolve the
+	// upstream loopback port. Nil when Tier 3 is not supported on the current
+	// platform (non-Linux).
 	devServers *sandbox.DevServerRegistry
 
 	// servedSubdirs is the gateway-wide static-preview registration map.
 	// Shared with the web_serve tool (static mode) via the agent instance.
-	// HandlePreview / HandleServeWorkspace read this to validate tokens and
-	// resolve the served directory. Nil when web_serve is not configured.
+	// HandlePreview reads this to validate tokens and resolve the served
+	// directory. Nil when web_serve is not configured.
 	servedSubdirs *agent.ServedSubdirs
 
 	// approvalReg is the in-process tool-approval registry (FR-016, FR-070).
@@ -4481,23 +4481,19 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	cm.RegisterHTTPHandler("/api/v1/stats/tokens", a.withAuth(withRateLimit(configLimiter, a.HandleTokenStats)))
 }
 
-// registerPreviewEndpoints registers /preview/, /serve/, and /dev/ on the
-// preview mux ONLY (FR-005, FR-006). These paths are not registered on the
-// main mux.
+// registerPreviewEndpoints registers /preview/ on the preview mux ONLY
+// (FR-005, FR-006). Not registered on the main mux.
 //
 // Auth model: token-only (FR-023). No RequireSessionCookieOrBearer, no
 // RequireMatchingOriginOnStateChanging (FR-023a).
 //
-// /preview/ is the unified route for the web_serve tool.
-// /serve/ and /dev/ are kept ONLY for replay of historical session transcripts
-// that still link to the old URL shapes. The legacy serve_workspace (static
-// mode) and run_in_workspace (dev mode) tools that produced those registrations
-// are removed; no new registration can reach these back-compat handlers.
-// Scheduled for deletion in v0.2 cleanup (target 2026-08-01).
+// /preview/ is the unified route for the web_serve tool. The legacy /serve/
+// and /dev/ back-compat handlers (for registrations produced before /preview/
+// landed, 2026-05-04) were removed once the safety window for any such
+// registration closed — registrations are short-lived (max 24h), so nothing
+// minted before the migration could still be valid.
 func (a *restAPI) registerPreviewEndpoints(cm previewHandlerRegistrar) {
 	cm.RegisterPreviewHandler("/preview/", http.HandlerFunc(a.HandlePreview))
-	cm.RegisterPreviewHandler("/serve/", http.HandlerFunc(a.HandleServeWorkspace))
-	cm.RegisterPreviewHandler("/dev/", http.HandlerFunc(a.HandleDevProxy))
 }
 
 // rotateGatewayToken generates a new random bearer token, persists it to config, and returns it.

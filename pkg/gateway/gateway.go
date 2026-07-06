@@ -1787,9 +1787,9 @@ func setupAndStartServices(
 		return nil, fmt.Errorf("wrapping HTTP handler: %w", err)
 	}
 	// F-13: wrap the preview server with the same middleware. Without this,
-	// handlers on the preview mux (HandleServeWorkspace, HandleDevProxy) call
-	// configFromContext(r.Context()) which returns nil and falls back to a
-	// live read of the config pointer — a torn read during hot-reload.
+	// HandlePreview's configFromContext(r.Context()) call returns nil and
+	// falls back to a live read of the config pointer — a torn read during
+	// hot-reload.
 	// WrapPreviewHandler is a no-op when the preview listener is disabled.
 	if previewListenerEnabled {
 		if err = runningServices.ChannelManager.WrapPreviewHandler(api.configSnapshotMiddleware); err != nil {
