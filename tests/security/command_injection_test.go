@@ -50,10 +50,7 @@ func newExecTool(t *testing.T, workspace string) *tools.ExecTool {
 	t.Helper()
 	cfg := &config.Config{
 		Tools: config.ToolsConfig{
-			Exec: config.ExecConfig{
-				EnableDenyPatterns: true,
-				TimeoutSeconds:     10,
-			},
+			Exec: config.ExecConfig{},
 		},
 	}
 	tool, err := tools.NewExecToolWithConfig(workspace, false, cfg)
@@ -248,10 +245,7 @@ func TestExecCommandInjection_WorkspaceRestriction(t *testing.T) {
 	workspace := t.TempDir()
 	cfg := &config.Config{
 		Tools: config.ToolsConfig{
-			Exec: config.ExecConfig{
-				EnableDenyPatterns: true,
-				TimeoutSeconds:     5,
-			},
+			Exec: config.ExecConfig{},
 		},
 	}
 	tool, err := tools.NewExecToolWithConfig(workspace, true /*restrict*/, cfg)

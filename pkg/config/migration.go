@@ -13,7 +13,6 @@ import (
 	"reflect"
 	"slices"
 	"strings"
-	"sync"
 )
 
 type migratable interface {
@@ -625,200 +624,6 @@ func jsonRenameKey(data []byte, oldKey, newKey string) []byte {
 	return bytes.ReplaceAll(data, []byte(oldKeyJSON), []byte(newKeyJSON))
 }
 
-// toolPolicyDeny is the deny policy value written into cfg.Sandbox.ToolPolicies
-// for migrated tools.<name>.enabled=false entries. Defined as a package-level
-// constant to avoid importing pkg/policy (which already imports pkg/config,
-// creating a cycle) while still avoiding bare string literals at call sites.
-const toolPolicyDeny = "deny"
-
-// deprecatedToolEnableMigrateOnce is keyed on the content hash of the migrated
-// tools section so that successive hot-reloads that introduce new disabled tools
-// each emit their own warning, while repeated reloads of an identical config
-// remain silent. The Once guard protects the FIRST migration call; subsequent
-// calls bypass the Once and re-check the content hash.
-//
-// Implementation note: we use a global sync.Once to match the test contract
-// (deprecatedToolEnableMigrateOnce = sync.Once{} resets the guard in tests).
-// At runtime the function self-documents the migration via slog.Info per reload
-// regardless of the Once guard — see the comment inside migrateDeprecatedToolEnableFlags.
-var deprecatedToolEnableMigrateOnce sync.Once
-
-// legacyToolEnableFlag pairs a legacy tools.<jsonKey>.enabled JSON key with the
-// policy-engine glob it maps to. Named (rather than anonymous) so it can also
-// serve as migrateDeprecatedToolEnableFlags' return type: the caller
-// (loadConfigInternal) uses the returned list to drive the one-time on-disk
-// self-heal write in stripDeprecatedToolEnableFlagsOnDisk
-// (tool_enable_migration.go), which removes the legacy key and persists the
-// derived policy so the migration cannot re-fire on a later reload.
-type legacyToolEnableFlag struct {
-	// jsonKey is the key directly under "tools" in the raw config JSON
-	jsonKey string
-	// policyGlob is the key written into cfg.Sandbox.ToolPolicies
-	policyGlob string
-}
-
-// toolEnableToPolicy maps each tools.<name> JSON key (the key immediately under
-// "tools" in config.json) to the policy-engine glob that covers all tools in
-// that subsystem. A nil cfg.Sandbox.ToolPolicies entry for the glob is created as
-// "deny" when operator intent is detected from raw JSON.
-//
-// "Operator intent" means the "enabled" key is EXPLICITLY present in the raw JSON
-// and its value is the JSON literal false. A missing key (absent from JSON) means
-// the in-memory default applies — we never treat a missing key as operator intent.
-var toolEnableToPolicy = []legacyToolEnableFlag{
-	{"browser", "browser_*"},
-	{"mcp", "mcp_*"},
-	{"web", "search_web"},
-	{"web_fetch", "fetch_url"},
-	// ADR-036 FR-M2: exec/workspace_shell/workspace_shell_bg were consolidated
-	// into a single "bash" tool. The legacy tools.exec.enabled=false boolean
-	// flag must still translate into a deny — but at the NEW policy glob
-	// ("bash"), not the retired "exec" name, so it lines up with
-	// migrateShellToolPolicyKeys (shell_tool_policy_migration.go), which
-	// converts any already-present exec/workspace_shell/workspace_shell_bg
-	// ToolPolicyCfg-shape entries into "bash" BEFORE this migration runs (see
-	// the call-site ordering comment in loadConfigInternal). That ordering is
-	// what lets this migration's own no-clobber guard (only write "deny" when
-	// the glob has no existing entry) see a real operator-set "bash" value
-	// instead of blindly writing "deny" under a key ("bash") that, from this
-	// migration's perspective alone, would otherwise look untouched.
-	{"exec", "bash"},
-	{"cron", "cron"},
-	// ADR-036 (2026-07-04): spawn/run_subagent/check_spawn_status were
-	// consolidated into a single "delegate" tool (docs/internal/specs/
-	// agent-delegation-spec.md). Same pattern as the exec→bash row above: all
-	// three legacy jsonKeys now translate to the ONE new policy glob
-	// ("delegate"), so an operator's prior enabled=false intent on any of the
-	// three legacy tools still lands as a real deny once migrated, instead of
-	// silently re-enabling delegation under a glob no legacy flag maps to.
-	{"spawn", "delegate"},
-	{"spawn_status", "delegate"},
-	{"subagent", "delegate"},
-	{"write_file", "write_file"},
-	{"edit_file", "edit_file"},
-	{"append_file", "append_file"},
-	{"send_file", "send_file"},
-	{"task_list", "list_tasks"},
-	{"task_create", "create_task"},
-	{"task_update", "update_task"},
-}
-
-// migrateDeprecatedToolEnableFlags translates legacy tools.<name>.enabled=false
-// operator intent into cfg.Sandbox.ToolPolicies deny entries.
-//
-// The plan (issue #237): The tool-registry redesign removed infrastructure-level
-// enable gating; the policy engine (pkg/policy, sandbox.ToolPolicies) is the only
-// enforcement path. Configs that still carry an explicit tools.<name>.enabled=false
-// were silently fail-open (the flag had no effect). This function closes that gap
-// by converting operator-disabled tools into deny policy entries at config-load time.
-//
-// Idempotent: if a policy entry already exists (allow/ask) it is NOT downgraded.
-// Only absent keys are written as "deny".
-//
-// Intent detection: raw JSON is inspected so that absent keys (which marshal as
-// false due to Go's bool zero-value) are not misclassified as operator intent.
-// This prevents false positives for tools like mcp and spawn_status whose defaults.go
-// default is Enabled=false but which operators never explicitly disabled.
-//
-// This function ONLY mutates cfg in memory — it never touches disk. On its own
-// that made the migration re-derive the same deny entry on every hot-reload
-// (the legacy flag was never removed), which meant an operator who used the
-// UI to set the tool back to "allow" would have the PUT handler correctly
-// delete the (now-redundant) tool_policies override, only for the very next
-// reload to re-inject "deny" from the still-present legacy flag — silently
-// bouncing the operator's choice back. The returned list lets the caller
-// (loadConfigInternal) drive a one-time on-disk self-heal
-// (stripDeprecatedToolEnableFlagsOnDisk, tool_enable_migration.go) that
-// removes the legacy key and persists the derived policy as a real entry, so
-// this function has nothing left to detect on the next load and the
-// migration naturally stops re-firing.
-//
-// Returns every {jsonKey, policyGlob} pair for which "enabled" was
-// EXPLICITLY present and false in the raw JSON — including pairs where an
-// existing stricter-or-equal policy meant no new deny entry was written
-// (cfg.Sandbox.ToolPolicies[policyGlob] is still guaranteed to hold a value
-// for every returned pair, either freshly set here or already present).
-// Returns nil when there is nothing to migrate.
-func migrateDeprecatedToolEnableFlags(cfg *Config, raw []byte) []legacyToolEnableFlag {
-	if cfg == nil || len(raw) == 0 {
-		return nil
-	}
-
-	// Extract the raw "tools" object from the JSON. If absent, nothing to migrate.
-	var top struct {
-		Tools map[string]json.RawMessage `json:"tools"`
-	}
-	if err := json.Unmarshal(raw, &top); err != nil {
-		// Best-effort: parse errors are already handled upstream.
-		return nil
-	}
-	if len(top.Tools) == 0 {
-		return nil
-	}
-
-	// For each subsystem, check whether "enabled" is explicitly present AND false.
-	var migrated []string
-	var legacyFlags []legacyToolEnableFlag
-	for _, m := range toolEnableToPolicy {
-		subsysRaw, present := top.Tools[m.jsonKey]
-		if !present {
-			// Key absent from JSON: no operator intent.
-			continue
-		}
-		// Parse the subsystem object to check whether "enabled" key is explicitly set.
-		var subsys map[string]json.RawMessage
-		if err := json.Unmarshal(subsysRaw, &subsys); err != nil {
-			continue
-		}
-		enabledRaw, hasEnabled := subsys["enabled"]
-		if !hasEnabled {
-			// "enabled" absent from this subsystem object: no operator intent.
-			continue
-		}
-		// Check for the literal JSON false (not "false" string or 0).
-		if string(enabledRaw) != "false" {
-			continue
-		}
-
-		// Operator explicitly set enabled=false. Record the legacy flag
-		// unconditionally — it is stale the moment it has been seen, whether
-		// or not a new deny entry ends up being written below — so the caller
-		// strips it from disk regardless.
-		legacyFlags = append(legacyFlags, m)
-
-		// Translate to deny unless a stricter-or-equal policy already exists
-		// (never downgrade ask→deny or clobber an existing allow the
-		// operator already set explicitly).
-		if cfg.Sandbox.ToolPolicies == nil {
-			cfg.Sandbox.ToolPolicies = make(map[string]string)
-		}
-		if _, exists := cfg.Sandbox.ToolPolicies[m.policyGlob]; !exists {
-			cfg.Sandbox.ToolPolicies[m.policyGlob] = toolPolicyDeny
-			migrated = append(migrated, m.jsonKey)
-		}
-	}
-
-	if len(migrated) > 0 {
-		// Always emit an Info-level log so operators see the migration on every
-		// config load (including hot-reloads). The one-time Warn below is kept for
-		// backwards-compat with alert rules that key on the Warn level, but it does
-		// NOT suppress the per-reload Info — a later hot-reload that introduces a
-		// newly disabled tool will be visible in the log even after the Once has fired.
-		slog.Info("tools.<name>.enabled=false migrated to security policy deny entries on this load",
-			"component", "config",
-			"migrated_tools", migrated)
-
-		deprecatedToolEnableMigrateOnce.Do(func() {
-			slog.Warn("tools.<name>.enabled=false migrated to security policy deny entries; "+
-				"remove tools.<name>.enabled from config.json and use security.tool_policies instead",
-				"component", "config",
-				"migrated_tools", migrated)
-		})
-	}
-
-	return legacyFlags
-}
-
 // restoreSkillDiscoveryDefaults repairs configs that persisted the skill-
 // discovery tool defaults as disabled/empty.
 //
@@ -835,9 +640,8 @@ func migrateDeprecatedToolEnableFlags(cfg *Config, raw []byte) []legacyToolEnabl
 // the URL and ignoring the enabled flag.
 //
 // This restores the DefaultConfig() values ONLY when the corresponding key is
-// ABSENT from the raw JSON (no operator intent). It mirrors the intent-detection
-// in migrateDeprecatedToolEnableFlags: a missing key means "apply the default",
-// an explicitly-present key (e.g. `"enabled": false`) is honored as operator
+// ABSENT from the raw JSON (no operator intent): a missing key means "apply
+// the default", an explicitly-present key (e.g. `"enabled": false`) is honored as operator
 // intent and left untouched. This way an operator who deliberately disabled
 // ClawHub or the skill tools keeps that setting, while every legacy/onboarded
 // config that merely never wrote these fields (or wrote zero values for them

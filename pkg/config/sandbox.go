@@ -355,13 +355,6 @@ type OmnipusSandboxConfig struct {
 // ExperimentalConfig holds feature flags for dark-launched tools and capabilities.
 // All flags default to false (deny-by-default per SEC hard constraint #6).
 type ExperimentalConfig struct {
-	// WorkspaceShellEnabled is RETIRED (ADR-036): workspace_shell and
-	// workspace_shell_bg were merged into the universally-registered `bash`
-	// tool, governed exclusively by ToolPolicyCfg — there is no longer a
-	// gate to flip. The field is kept (not deleted) purely so an operator's
-	// existing config.json with this key does not fail to parse; nothing in
-	// the codebase reads it anymore.
-	WorkspaceShellEnabled *bool `json:"workspace_shell_enabled,omitempty"`
 }
 
 // OmnipusSSRFConfig holds SSRF protection settings for outbound HTTP clients (SEC-24).
