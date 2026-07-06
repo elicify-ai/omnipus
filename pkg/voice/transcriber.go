@@ -45,8 +45,8 @@ func ModelSupportsAudioTranscription(model string) bool {
 		// providers.CreateProviderFromConfig, so they are the only ones that can supply
 		// the audio media payload shape expected by NewAudioModelTranscriber.
 
-		// TODO: Further restrict this by modelID, since not every model under these
-		// protocols supports audio transcription.
+		// TODO(#497): Further restrict this by modelID, since not every model
+		// under these protocols supports audio transcription.
 		return true
 	default:
 		return false
