@@ -4648,11 +4648,18 @@ func (a *restAPI) HandleVersion(w http.ResponseWriter, r *http.Request) {
 // --- Devices ---
 
 // HandleDevices handles GET /api/v1/devices. Returns pending pairing requests
-// and already-paired devices. Device pairing infrastructure is not yet implemented;
-// this handler returns valid empty arrays so the SPA renders its empty state.
+// and already-paired devices. Device pairing infrastructure is not yet fully
+// implemented (the device-side request entry point and persistence are
+// missing); this handler returns valid empty arrays so the SPA renders its
+// empty state. Dark-launched behind Sandbox.Experimental.DevicePairingEnabled
+// — returns 404 when disabled (default).
 // Traces to: contracts/openapi.yaml#/paths/~1devices/get (operationId: listDevices).
 // Traces to: contracts/components/schemas/DevicesResponse.yaml.
 func (a *restAPI) HandleDevices(w http.ResponseWriter, r *http.Request) {
+	if !a.agentLoop.GetConfig().Sandbox.Experimental.DevicePairingEnabled {
+		jsonErr(w, http.StatusNotFound, "not found")
+		return
+	}
 	if r.Method != http.MethodGet {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		return

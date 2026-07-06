@@ -586,6 +586,7 @@ func (a *restAPI) HandleClearSessions(w http.ResponseWriter, r *http.Request) {
 //   - preview_listener_enabled: whether the preview listener is running (bool)
 //   - warmup_timeout_seconds: dev-server warmup timeout from config (int)
 //   - preview_origin: omitted when not set in config (string, omitempty)
+//   - device_pairing_enabled: dark-launched device-pairing feature flag (bool)
 func (a *restAPI) HandleAbout(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -612,6 +613,8 @@ func (a *restAPI) HandleAbout(w http.ResponseWriter, r *http.Request) {
 		WarmupTimeoutSeconds:   int(cfg.Tools.RunInWorkspace.WarmupTimeoutSeconds),
 		// F-8: signals to the SPA that frame-ancestors is '*' (degraded T-04 defense).
 		FrameAncestorsFallback: frameAncestorsFallback,
+		// Dark-launched device-pairing feature — see Sandbox.Experimental.DevicePairingEnabled.
+		DevicePairingEnabled: cfg.Sandbox.Experimental.DevicePairingEnabled,
 	}
 	// preview_origin is optional — only include when the operator set it.
 	if cfg.Gateway.PreviewOrigin != "" {
