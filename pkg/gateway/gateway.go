@@ -520,8 +520,8 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	}
 	defer logger.DisableFileLogging()
 
-	// Construct and unlock the credential store BEFORE loading config so that
-	// v0→v1 migration (MigrateWithStore) can persist legacy plaintext secrets.
+	// Construct and unlock the credential store BEFORE loading config, per the
+	// documented credential boot contract (ADR-004).
 	// Implements BRD SEC-22/SEC-23 deny-by-default behavior.
 	cfg, bundle, credStore, err := bootCredentials(homePath, configPath)
 	if err != nil {

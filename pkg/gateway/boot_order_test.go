@@ -39,81 +39,32 @@ func writeBootTestFile(t *testing.T, path, content string) {
 	}
 }
 
-// TestGatewayBoot_V0ConfigWithPlaintextSecretMigrates verifies end-to-end that:
-//  1. A v0 config.json with a plaintext Telegram token is loaded via
-//     bootCredentials (which calls LoadConfigWithStore after Unlock), triggering MigrateWithStore.
-//  2. credentials.json is written to disk with the migrated token.
-//  3. The migrated config.json no longer contains the plaintext token.
-//  4. The rewritten config.json contains token_ref instead.
-//  5. The credential can be retrieved via the returned bundle.
-//
-// Boot order pinned: Unlock MUST precede LoadConfigWithStore. If Unlock is
-// skipped, the store is locked and MigrateWithStore returns an error.
-// This test exercises bootCredentials (shared with gateway.Run) so any refactor
-// that breaks the sequence will also break this test.
-func TestGatewayBoot_V0ConfigWithPlaintextSecretMigrates(t *testing.T) {
+// TestGatewayBoot_UnsupportedConfigVersionFailsFast verifies that a config.json
+// predating the current schema (no v0 migration path exists any more) fails
+// boot with a clear "unsupported config version" error rather than silently
+// migrating or falling back to defaults.
+func TestGatewayBoot_UnsupportedConfigVersionFailsFast(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("OMNIPUS_MASTER_KEY", fixedHexKey)
 
 	configPath := filepath.Join(tmpDir, "config.json")
-	const legacyToken = "12345:legacy-plaintext"
-
 	writeBootTestFile(t, configPath, `{
 		"version": 0,
 		"channels": {
 			"telegram": {
 				"enabled": true,
-				"token": "`+legacyToken+`"
+				"token": "12345:legacy-plaintext"
 			}
 		},
 		"gateway": { "host": "127.0.0.1", "port": 19999 }
 	}`)
 
-	// Call bootCredentials — the canonical boot sequence shared with gateway.Run.
-	cfg, bundle, credStore, err := bootCredentials(tmpDir, configPath)
-	if err != nil {
-		t.Fatalf("bootCredentials: %v", err)
+	_, _, _, err := bootCredentials(tmpDir, configPath) //nolint:dogsled
+	if err == nil {
+		t.Fatal("bootCredentials must fail for a version:0 config.json (no v0 migration path)")
 	}
-
-	// Assert 1: credentials.json now exists.
-	credPath := filepath.Join(tmpDir, "credentials.json")
-	if _, statErr := os.Stat(credPath); statErr != nil {
-		t.Fatalf("credentials.json must exist after migration, got stat error: %v", statErr)
-	}
-
-	// Assert 2: store.Get("TELEGRAM_TOKEN") returns the original plaintext.
-	gotToken, err := credStore.Get("TELEGRAM_TOKEN")
-	if err != nil {
-		t.Fatalf("store.Get(TELEGRAM_TOKEN): %v", err)
-	}
-	if gotToken != legacyToken {
-		t.Errorf("store.Get(TELEGRAM_TOKEN) = %q, want %q", gotToken, legacyToken)
-	}
-
-	// Assert 3: config struct has TokenRef set.
-	if cfg.Channels["telegram"].TokenRef != "TELEGRAM_TOKEN" {
-		t.Errorf("cfg.Channels[telegram].TokenRef = %q, want %q",
-			cfg.Channels["telegram"].TokenRef, "TELEGRAM_TOKEN")
-	}
-
-	// Assert 4: rewritten config.json does NOT contain the plaintext token.
-	migratedData, readErr := os.ReadFile(configPath)
-	if readErr != nil {
-		t.Fatalf("re-read config.json: %v", readErr)
-	}
-	if strings.Contains(string(migratedData), legacyToken) {
-		t.Error("config.json must NOT contain the plaintext token after migration")
-	}
-
-	// Assert 5: rewritten config.json contains "token_ref" marker.
-	if !strings.Contains(string(migratedData), "token_ref") {
-		t.Error("config.json must contain token_ref after migration")
-	}
-
-	// Assert 6: the resolved bundle carries the token (ResolveBundle ran in bootCredentials).
-	resolved := bundle.GetString("TELEGRAM_TOKEN")
-	if resolved != legacyToken {
-		t.Errorf("bundle.GetString(TELEGRAM_TOKEN) = %q, want %q", resolved, legacyToken)
+	if !strings.Contains(err.Error(), "unsupported config version") {
+		t.Errorf("bootCredentials error = %q, want it to mention \"unsupported config version\"", err.Error())
 	}
 }
 
@@ -264,25 +215,5 @@ func TestGatewayBoot_LockedStoreFailsBeforeConfig(t *testing.T) {
 	errMsg := strings.ToLower(bootErr.Error())
 	if !strings.Contains(errMsg, "master key") && !strings.Contains(errMsg, "omnipus_master_key") {
 		t.Errorf("bootCredentials error must mention master key; got: %q", bootErr.Error())
-	}
-
-	// V0 config with plaintext secrets: bootCredentials also fails because
-	// MigrateWithStore calls store.Set on a locked store.
-	v0ConfigPath := filepath.Join(tmpDir, "config_v0.json")
-	writeBootTestFile(t, v0ConfigPath, `{
-		"version": 0,
-		"channels": {
-			"telegram": { "enabled": true, "token": "secret-token" }
-		}
-	}`)
-
-	_, _, _, v0Err := bootCredentials(tmpDir, v0ConfigPath) //nolint:dogsled
-	if v0Err == nil {
-		t.Fatal("bootCredentials with locked store must fail for v0 config with plaintext secrets")
-	}
-	lowerV0Err := strings.ToLower(v0Err.Error())
-	if !strings.Contains(lowerV0Err, "lock") && !strings.Contains(lowerV0Err, "master") &&
-		!strings.Contains(lowerV0Err, "credential") {
-		t.Errorf("bootCredentials error must mention lock/master/credential; got: %q", v0Err.Error())
 	}
 }

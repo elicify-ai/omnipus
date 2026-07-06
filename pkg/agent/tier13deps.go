@@ -36,15 +36,6 @@ type Tier13Deps struct {
 	// Non-nil when the gateway has initialized it at boot.
 	DevServerRegistry *sandbox.DevServerRegistry
 
-	// GatewayBaseURL is the base URL (scheme + host + port) of the running
-	// gateway's MAIN listener, e.g. "http://localhost:5000".
-	//
-	// Deprecated: kept for one release for replay safety on transcripts that
-	// embedded URLs minted before the two-port topology landed (FR-021). Use
-	// GatewayPreviewBaseURL for new tool URL emission. Will be removed after
-	// 2026-Q3.
-	GatewayBaseURL string
-
 	// GatewayPreviewBaseURL is the base URL of the gateway's PREVIEW
 	// listener, e.g. "http://localhost:3001" or "https://preview.acme.com".
 	// Sourced from cfg.Gateway.PreviewOrigin when set, otherwise computed

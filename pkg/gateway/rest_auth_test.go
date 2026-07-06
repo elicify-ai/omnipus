@@ -1500,9 +1500,8 @@ func TestConfigFromContext_ReturnsDifferentConfigThanLive(t *testing.T) {
 func TestLogin_AfterOnboardingWithoutRestart(t *testing.T) {
 	tmpDir := t.TempDir()
 	// Fresh gateway — no users in-memory config.
-	// Use version:1 so LoadConfigWithStore (called by refreshConfigAndRewireServices) does
-	// not attempt V0 migration, which would fail because the minimal config has
-	// `providers` as an array incompatible with providersConfigV0.
+	// version:1 is required — any other version now fails to load outright
+	// (there is no legacy migration path).
 	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`)
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "config.json"), minimalCfg, 0o600))
 

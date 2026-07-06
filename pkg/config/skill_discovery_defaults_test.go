@@ -25,52 +25,6 @@ func writeTempConfig(t *testing.T, raw string) string {
 	return p
 }
 
-// TestRestoreSkillDiscoveryDefaults_OnboardedConfigWithZeroValues reproduces the
-// bug: an onboarded config.json that persisted the skill-discovery tool fields
-// as disabled/empty zero values. Before the fix the unmarshal overwrites the
-// DefaultConfig() defaults; after the fix they are restored because the keys
-// are absent from the raw JSON (no operator intent).
-func TestRestoreSkillDiscoveryDefaults_OnboardedConfigWithZeroValues(t *testing.T) {
-	// This mirrors a real onboarded config: providers + agents + gateway set,
-	// and a tools section that carries explicit zero values for the skill
-	// fields (as a config written from a partially-populated struct would).
-	// Critically there is NO "enabled" key under clawhub/find_skills/install_skill
-	// — only sibling keys — so intent detection treats them as absent.
-	raw := `{
-  "version": 1,
-  "agents": {"defaults": {}, "list": []},
-  "providers": [],
-  "channels": {},
-  "gateway": {"host": "localhost", "port": 5000},
-  "tools": {
-    "skills": {
-      "registries": {
-        "clawhub": {"base_url": "", "search_path": "/api/v1/search"}
-      }
-    }
-  }
-}`
-	p := writeTempConfig(t, raw)
-	cfg, err := LoadConfig(p)
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
-
-	ch := clawHubMarketplace(cfg)
-	if !ch.Enabled {
-		t.Errorf("clawhub.Enabled = false; want true (default restored)")
-	}
-	if ch.BaseURL != clawHubDefaultURL {
-		t.Errorf("clawhub.BaseURL = %q; want %q", ch.BaseURL, clawHubDefaultURL)
-	}
-	if !cfg.Tools.FindSkills.Enabled {
-		t.Errorf("find_skills.Enabled = false; want true (default restored)")
-	}
-	if !cfg.Tools.InstallSkill.Enabled {
-		t.Errorf("install_skill.Enabled = false; want true (default restored)")
-	}
-}
-
 // TestRestoreSkillDiscoveryDefaults_DefaultRoundTrip proves a default config
 // survives a full save+reload with the skill-discovery defaults intact. This is
 // the round-trip the task requires.
@@ -97,10 +51,11 @@ func TestRestoreSkillDiscoveryDefaults_DefaultRoundTrip(t *testing.T) {
 	}
 }
 
-// TestRestoreSkillDiscoveryDefaults_RespectsExplicitDisable confirms an operator
-// who explicitly disabled ClawHub / the skill tools keeps that choice — the
-// healing logic must NOT override an explicit `"enabled": false`.
-func TestRestoreSkillDiscoveryDefaults_RespectsExplicitDisable(t *testing.T) {
+// TestSkillDiscovery_RespectsExplicitDisable confirms an operator who
+// explicitly disabled ClawHub / the skill tools via the current config shape
+// keeps that choice — no self-heal exists to override it, so a plain
+// unmarshal onto DefaultConfig()'s seed must preserve the explicit values.
+func TestSkillDiscovery_RespectsExplicitDisable(t *testing.T) {
 	raw := `{
   "version": 1,
   "agents": {"defaults": {}, "list": []},
@@ -111,9 +66,9 @@ func TestRestoreSkillDiscoveryDefaults_RespectsExplicitDisable(t *testing.T) {
     "find_skills": {"enabled": false},
     "install_skill": {"enabled": false},
     "skills": {
-      "registries": {
-        "clawhub": {"enabled": false, "base_url": "https://example.test"}
-      }
+      "marketplaces": [
+        {"name": "clawhub", "type": "clawhub", "enabled": false, "base_url": "https://example.test"}
+      ]
     }
   }
 }`
@@ -135,38 +90,6 @@ func TestRestoreSkillDiscoveryDefaults_RespectsExplicitDisable(t *testing.T) {
 	}
 	if cfg.Tools.InstallSkill.Enabled {
 		t.Errorf("install_skill.Enabled = true; want false (explicit disable preserved)")
-	}
-}
-
-// TestRestoreSkillDiscoveryDefaults_EmptyBaseURLHealedEvenWhenPresent confirms
-// an explicitly-present but empty base_url is healed to the default URL (UI
-// parity: empty-as-default), while keeping an explicit enabled choice.
-func TestRestoreSkillDiscoveryDefaults_EmptyBaseURLHealedEvenWhenPresent(t *testing.T) {
-	raw := `{
-  "version": 1,
-  "agents": {"defaults": {}, "list": []},
-  "providers": [],
-  "channels": {},
-  "gateway": {"host": "localhost", "port": 5000},
-  "tools": {
-    "skills": {
-      "registries": {
-        "clawhub": {"enabled": true, "base_url": ""}
-      }
-    }
-  }
-}`
-	p := writeTempConfig(t, raw)
-	cfg, err := LoadConfig(p)
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
-	ch := clawHubMarketplace(cfg)
-	if ch.BaseURL != clawHubDefaultURL {
-		t.Errorf("clawhub.BaseURL = %q; want %q (empty URL healed)", ch.BaseURL, clawHubDefaultURL)
-	}
-	if !ch.Enabled {
-		t.Errorf("clawhub.Enabled = false; want true (explicit enable preserved)")
 	}
 }
 
