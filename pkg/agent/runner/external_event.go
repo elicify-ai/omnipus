@@ -28,10 +28,13 @@
 //	error                 -> EventKindError
 //	done                  -> EventKindEnd
 //
-// TODO(Spec-4 FR-5.1, #TBD): permission_request is routed post-hoc. The three CLI
-// drivers run in non-interactive streaming mode, so a DENY cancels the whole
-// run via driver.Cancel(). A future bidirectional stdin control channel could
-// allow mid-call allow/deny responses without killing the process.
+// TODO(#488): permission_request is routed post-hoc — a DENY only cancels the
+// whole run via driver.Cancel(), never a per-call veto (see consent.go's
+// POST-HOC CONSENT LIMITATION box). A bidirectional stdin control channel for
+// mid-call allow/deny wouldn't fix the real gap: claude-code and opencode
+// workers currently run with no enforced sandbox of their own (only codex
+// still has one). The actual fix is giving Omnipus its own confiner for
+// external-CLI children — see issue #488 for that evaluation.
 
 package runner
 

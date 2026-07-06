@@ -16,73 +16,15 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/dapicom-ai/omnipus/pkg/audit"
-	"github.com/dapicom-ai/omnipus/pkg/policy"
 	"github.com/dapicom-ai/omnipus/pkg/security"
 )
 
-// TestE2E_AgentToolDenied is an end-to-end test: agent invokes denied tool →
-// receives deny decision with policy_rule → audit entry written with decision: "deny".
+// TestE2E_AgentToolDenied: REMOVED (#70). Exercised policy.Evaluator.EvaluateTool,
+// which was never the live tool-policy authority — see pkg/policy/evaluator.go's
+// prior SCOPE (#438) note. The real deny+audit path is exercised by
+// pkg/policy/auditor_test.go's EvaluateExec tests and the agent loop's own audit
+// wiring.
 // Traces to: wave2-security-layer-spec.md line 813 (TestE2E_AgentToolDenied)
-// BDD: Full tool invocation denied (spec line 813)
-func TestE2E_AgentToolDenied(t *testing.T) {
-	dir := t.TempDir()
-	auditLogger, err := audit.NewLogger(audit.LoggerConfig{
-		Dir:           dir,
-		RetentionDays: 90,
-		RedactEnabled: true,
-	})
-	require.NoError(t, err)
-	defer auditLogger.Close()
-
-	cfg := &policy.SecurityConfig{
-		DefaultPolicy: policy.PolicyDeny,
-		Agents: map[string]policy.AgentPolicy{
-			"researcher": {
-				Tools: policy.AgentToolsPolicy{
-					Allow: []string{"web_search"},
-				},
-			},
-		},
-	}
-	evaluator := policy.NewEvaluator(cfg)
-
-	// Agent "researcher" invokes "exec" — not in allow list
-	decision := evaluator.EvaluateTool("researcher", "exec")
-	require.False(t, decision.Allowed, "exec must be denied for researcher agent")
-	require.NotEmpty(t, decision.PolicyRule)
-
-	// Log the denial to audit
-	entry := audit.Entry{
-		Timestamp:  time.Now().UTC(),
-		Event:      audit.EventToolCall,
-		Decision:   "deny",
-		AgentID:    "researcher",
-		SessionID:  "sess-e2e-001",
-		Tool:       "exec",
-		Parameters: map[string]any{},
-		PolicyRule: decision.PolicyRule,
-	}
-	require.NoError(t, auditLogger.Log(&entry))
-
-	// Validate audit log entry
-	logPath := filepath.Join(dir, "audit.jsonl")
-	data, err := os.ReadFile(logPath)
-	require.NoError(t, err)
-
-	var parsed map[string]any
-	err = json.Unmarshal(data, &parsed)
-	require.NoError(t, err, "audit entry must be valid JSON")
-
-	assert.Equal(t, "deny", parsed["decision"])
-	assert.Equal(t, "exec", parsed["tool"])
-	assert.Equal(t, "researcher", parsed["agent_id"])
-
-	policyRule, _ := parsed["policy_rule"].(string)
-	assert.NotEmpty(t, policyRule,
-		"audit entry must include policy_rule explaining the denial")
-	assert.Contains(t, policyRule, "exec",
-		"policy_rule must reference the denied tool")
-}
 
 // TestE2E_RateLimitTriggered is an end-to-end test: agent hits rate limit →
 // receives retry_after → audit entry written with decision: "deny".

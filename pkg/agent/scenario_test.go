@@ -24,7 +24,6 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/coreagent"
-	"github.com/dapicom-ai/omnipus/pkg/policy"
 	"github.com/dapicom-ai/omnipus/pkg/providers"
 	"github.com/dapicom-ai/omnipus/pkg/security"
 )
@@ -126,73 +125,14 @@ func TestScenario2AvaCreatesAgentPenny(t *testing.T) {
 }
 
 // ==================================================================================
-// Scenario 3: ToolPolicyDenyBlocks
-// BDD: Given a policy that denies exec for agent "ray", When exec is invoked,
-//
-//	Then the result is a policy-denied error, and the audit log records the denial.
-//
-// Traces to: temporal-puzzling-melody.md §Layer 2, scenario 3
+// Scenario 3 (ToolPolicyDenyBlocks) and Scenario 4 (ToolPolicyAskRequiresApproval):
+// REMOVED (#70). These exercised policy.Evaluator.EvaluateTool/SecurityConfig.ToolPolicies,
+// which was never the live tool-policy authority (see pkg/policy/evaluator.go's prior
+// SCOPE (#438) note) — the real global-deny/global-ask enforcement path is
+// pkg/tools.FilterToolsByPolicy (compositor.go), already covered by
+// pkg/tools/compositor_test.go and compositor_wildcard_test.go.
+// Traces to: temporal-puzzling-melody.md §Layer 2, scenarios 3-4
 // ==================================================================================
-func TestScenario3ToolPolicyDenyBlocks(t *testing.T) {
-	// Traces to: temporal-puzzling-melody.md §Layer 2, scenario 3
-	// Test via the policy evaluator directly — the unit contract is the same as
-	// what the agent loop enforces in runTurn.
-	secCfg := &policy.SecurityConfig{
-		DefaultPolicy: policy.PolicyAllow,
-		ToolPolicies: map[string]policy.ToolPolicy{
-			"exec": policy.ToolPolicyDeny,
-		},
-	}
-	eval := policy.NewEvaluator(secCfg)
-
-	// Differentiation: exec is denied, read_file is not.
-	execDecision := eval.EvaluateTool("ray", "exec")
-	assert.False(t, execDecision.Allowed, "exec must be denied by global tool policy")
-	assert.Contains(t, execDecision.PolicyRule, "exec", "policy rule must name the tool")
-
-	readDecision := eval.EvaluateTool("ray", "read_file")
-	assert.True(t, readDecision.Allowed, "read_file must be allowed (not in deny list)")
-
-	// Different tools → different decisions: this proves it's not a hardcoded stub.
-	assert.NotEqual(t, execDecision.Allowed, readDecision.Allowed,
-		"differentiation test: exec and read_file must have opposite decisions")
-}
-
-// ==================================================================================
-// Scenario 4: ToolPolicyAskRequiresApproval
-// BDD: Given a policy of "ask" for exec, When exec is invoked,
-//
-//	Then the decision has Policy=="ask", indicating approval is required.
-//
-// Traces to: temporal-puzzling-melody.md §Layer 2, scenario 4
-// ==================================================================================
-func TestScenario4ToolPolicyAskRequiresApproval(t *testing.T) {
-	// Traces to: temporal-puzzling-melody.md §Layer 2, scenario 4
-	secCfg := &policy.SecurityConfig{
-		DefaultPolicy: policy.PolicyAllow,
-		ToolPolicies: map[string]policy.ToolPolicy{
-			"exec": policy.ToolPolicyAsk,
-		},
-	}
-	eval := policy.NewEvaluator(secCfg)
-
-	decision := eval.EvaluateTool("ray", "exec")
-	// With ToolPolicyAsk, the tool is allowed BUT requires approval — Policy=="ask".
-	assert.True(t, decision.Allowed, "ask policy allows invocation (approval is a runtime gate)")
-	assert.Equal(t, "ask", decision.Policy, "decision.Policy must be 'ask' for approval-required tools")
-
-	// Differentiation: deny yields Allowed=false, ask yields Allowed=true with Policy=="ask".
-	denyCfg := &policy.SecurityConfig{
-		DefaultPolicy: policy.PolicyAllow,
-		ToolPolicies: map[string]policy.ToolPolicy{
-			"exec": policy.ToolPolicyDeny,
-		},
-	}
-	denyEval := policy.NewEvaluator(denyCfg)
-	denyDecision := denyEval.EvaluateTool("ray", "exec")
-	assert.False(t, denyDecision.Allowed, "deny yields Allowed=false")
-	assert.NotEqual(t, decision.Allowed, denyDecision.Allowed, "ask != deny in Allowed field")
-}
 
 // ==================================================================================
 // Scenario 5: RateLimitFiresOnThirdCall

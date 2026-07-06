@@ -15,12 +15,10 @@ import (
 // unless cfg.Sandbox.BrowserEvaluateEnabled=true), SEC-04/SEC-06. Operators who
 // want the tool to actually execute must set BrowserEvaluateEnabled=true.
 //
-// NOTE (#438): pkg/policy.builtinToolPolicies["browser_evaluate"] = deny is the
-// SAME intent expressed declaratively, but that map is consulted only by the
-// pkg/policy Evaluator.EvaluateTool path, which has no live tool-dispatch caller
-// (test-only). The executeEnabled gate below is therefore the one and only thing
-// stopping browser_evaluate at runtime — do not remove it on the assumption the
-// policy map covers it.
+// The executeEnabled gate below is the one and only thing stopping
+// browser_evaluate at runtime (#438; the pkg/policy declarative mirror of this
+// intent was removed as dead code, #70 — do not reintroduce it as a substitute
+// for this gate).
 //
 // All tools registered:
 //   - browser_navigate  — navigate to a URL (SSRF-checked)
@@ -49,9 +47,7 @@ func RegisterTools(
 	registry.Register(&WaitTool{mgr: mgr})
 	// browser_evaluate is always registered so the LLM sees it; the evaluateEnabled
 	// flag is forwarded to the tool's Execute method, which is the SOLE live gate
-	// (deny-by-default unless the operator opts in). The pkg/policy.builtinToolPolicies
-	// deny entry mirrors this intent declaratively but is test-only (no live
-	// tool-dispatch caller) — see the doc comment above and #438.
+	// (deny-by-default unless the operator opts in) — see the doc comment above.
 	registry.Register(&EvaluateTool{mgr: mgr, executeEnabled: evaluateEnabled})
 
 	return mgr, nil

@@ -261,9 +261,7 @@ func TestBrowserToolsAlwaysRegisterRegardlessOfLegacyFlag(t *testing.T) {
 	assert.NotNil(t, tool)
 
 	// browser_evaluate is always registered (so the LLM sees it); invocation is
-	// gated solely by the tool's executeEnabled check (deny-by-default). The
-	// pkg/policy.builtinToolPolicies deny entry is a test-only declarative mirror,
-	// not a live dispatch gate (#438).
+	// gated solely by the tool's executeEnabled check (deny-by-default, #438, #70).
 	evalTool, ok := registry.Get("browser_evaluate")
 	assert.True(t, ok, "browser_evaluate stays registered when evaluateEnabled=true; executeEnabled gates invocation")
 	assert.NotNil(t, evalTool)
