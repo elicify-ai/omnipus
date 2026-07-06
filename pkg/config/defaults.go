@@ -286,6 +286,25 @@ func DefaultConfig() *Config {
 			HotReload: true,
 			LogLevel:  "warn",
 		},
+		Sandbox: OmnipusSandboxConfig{
+			// Seeded, per-tool baseline for a fresh install (v0.2 pentest hardening):
+			// the general tool-policy default is allow (DefaultToolPolicy left empty,
+			// which resolves to "allow" in pkg/tools/compositor.go), but a handful of
+			// irreversible/destructive actions ask for confirmation instead. This is
+			// a genuine configuration value, not resolution-code logic — visible in
+			// config.json's sandbox.tool_policies and editable at any time via
+			// Settings -> Security -> Tool Policies or PUT /api/v1/security/tool-policies,
+			// exactly like any operator-set entry. Deliberately narrow: irreversible
+			// deletions only. delete_task_in_workspace stays allow (tasks are not
+			// considered destructive enough to warrant a prompt); disable_channel is
+			// reversible and also stays allow.
+			ToolPolicies: map[string]string{
+				"delete_agent":      "ask",
+				"delete_workspace":  "ask",
+				"remove_mcp_server": "ask",
+				"remove_skill":      "ask",
+			},
+		},
 		Tools: ToolsConfig{
 			FilterSensitiveData: true,
 			FilterMinLength:     8,
