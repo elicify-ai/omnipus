@@ -4,6 +4,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
+import * as React from 'react'
 import { act } from 'react'
 import { useChatStore } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
@@ -19,7 +20,6 @@ import { OmnipusComposer } from './ChatScreen'
 // Mock AssistantUI primitives — ChatScreen uses ThreadPrimitive, ComposerPrimitive, etc.
 // We only care about ComposerPrimitive.Send's disabled state, so render it as a real button.
 vi.mock('@assistant-ui/react', () => {
-  const React = require('react')
   return {
     useThreadViewportStore: () => ({ getState: () => ({ isAtBottom: true }) }),
     ThreadPrimitive: {

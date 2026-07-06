@@ -102,7 +102,7 @@ Manual key file: `openssl rand -hex 32 > master.key && chmod 600 master.key && e
 
 **Brand:** "The Sovereign Deep" — dark-first. Deep Space Black (`#0A0A0B`), Liquid Silver (`#E2E8F0`), Forge Gold (`#D4AF37`). Fonts: Outfit (headlines), Inter (body), JetBrains Mono (code). Octopus mascot. See `docs/internal/brand/brand-guidelines.md`.
 
-**UI rules:** Chat-first, dark-first. Sidebar is an overlay drawer (pinnable). No separate canvas (rich content inline, expands fullscreen). No emoji in stored data or UI chrome (emoji→Phosphor translator in chat output only). Tool calls visible by default, collapsible.
+**UI rules:** Chat-first, dark-first. Sidebar is an overlay drawer (pinnable). No separate canvas (rich content inline, expands fullscreen). No emoji in stored data or UI chrome (emoji→Phosphor translator in chat output only). Tool calls visible by default, collapsible. **Exception (`src/lib/toolVisibility.ts`, ADR-036-adjacent):** a closed, narrow set of infra-only calls with no standalone meaning to a reader — `load_tool`, and `delegate`/`bash` specifically in their default background-dispatch/status-poll/read sub-cases — are hidden by default (never for an error/denied outcome), with a user-facing "Verbose chat" override (Settings → Chat). Persistence is unaffected — hidden calls still exist in the session transcript, this is render-only.
 
 ## Spec-Driven Workflow
 

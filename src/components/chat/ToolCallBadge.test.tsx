@@ -1,6 +1,8 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
+import { act } from 'react'
 import { ToolCallBadge } from './ToolCallBadge'
+import { useChatPreferencesStore } from '@/store/chatPreferences'
 import type { ToolCall } from '@/lib/api'
 
 // test_tool_call_badge_states (test #6)
@@ -171,5 +173,111 @@ describe('ToolCallBadge — cannot click when running', () => {
     fireEvent.click(btn)
     // Still no expanded content
     expect(screen.queryByText(/Parameters/i)).toBeNull()
+  })
+})
+
+// ── activity-bar tool visibility: verbose-chat gate ─────────────────────────
+// Traces to: src/lib/toolVisibility.ts shouldRenderToolCall — ToolCallBadge is
+// the single shared renderer used by both MessageItem (historical list) and
+// SubagentBlock (nested steps), so gating here covers both call sites.
+
+describe('ToolCallBadge — verbose chat gate', () => {
+  beforeEach(() => {
+    act(() => {
+      useChatPreferencesStore.setState({ verboseChatEnabled: false })
+    })
+  })
+
+  it('hides a load_tool call by default (verboseChatEnabled false)', () => {
+    render(<ToolCallBadge toolCall={makeToolCall({ tool: 'load_tool', status: 'success' })} />)
+    expect(screen.queryByTestId('tool-call-badge')).toBeNull()
+  })
+
+  it('shows a load_tool call when verboseChatEnabled is true', () => {
+    act(() => {
+      useChatPreferencesStore.setState({ verboseChatEnabled: true })
+    })
+    render(<ToolCallBadge toolCall={makeToolCall({ tool: 'load_tool', status: 'success' })} />)
+    expect(screen.getByTestId('tool-call-badge')).toBeInTheDocument()
+  })
+
+  it('hides a background delegate dispatch by default (action=run, async=true)', () => {
+    render(
+      <ToolCallBadge
+        toolCall={makeToolCall({ tool: 'delegate', params: {}, status: 'success' })}
+      />
+    )
+    expect(screen.queryByTestId('tool-call-badge')).toBeNull()
+  })
+
+  it('an always-visible tool (remember) still renders regardless of verbose setting', () => {
+    render(<ToolCallBadge toolCall={makeToolCall({ tool: 'remember', status: 'success' })} />)
+    expect(screen.getByTestId('tool-call-badge')).toBeInTheDocument()
+  })
+
+  // REGRESSION: a hidden-by-default tool call (background delegate dispatch,
+  // default/empty params) must still render when its outcome is an error —
+  // an error/denial must never vanish just because its params match the
+  // "noisy background infra" shape.
+  it('REGRESSION: a background delegate dispatch with an error status is NOT hidden', () => {
+    render(
+      <ToolCallBadge
+        toolCall={makeToolCall({
+          tool: 'delegate',
+          params: {},
+          status: 'error',
+          error: 'delegation_denied',
+        })}
+      />
+    )
+    expect(screen.getByTestId('tool-call-badge')).toBeInTheDocument()
+  })
+
+  it('REGRESSION: a background bash dispatch with an error status is NOT hidden', () => {
+    render(
+      <ToolCallBadge
+        toolCall={makeToolCall({
+          tool: 'bash',
+          params: { run_in_background: true },
+          status: 'error',
+          error: 'exit code 127',
+        })}
+      />
+    )
+    expect(screen.getByTestId('tool-call-badge')).toBeInTheDocument()
+  })
+
+  // REGRESSION: a hidden-by-default background tool call whose result is the
+  // `_marshal_error` sentinel must still render, even when `status` itself is
+  // non-error — the backend can emit this sentinel when JSON-marshaling a
+  // tool result fails during replay-frame construction, independent of
+  // whether the call itself succeeded. `bash`/`delegate` are used here (not
+  // `exec`) so the hidden-by-default gate actually gets exercised.
+  it('REGRESSION: a background delegate dispatch with a _marshal_error result and success status is NOT hidden', () => {
+    render(
+      <ToolCallBadge
+        toolCall={makeToolCall({
+          tool: 'delegate',
+          params: {},
+          status: 'success',
+          result: { _marshal_error: 'json: unsupported type: chan int' },
+        })}
+      />
+    )
+    expect(screen.getByTestId('tool-call-badge')).toBeInTheDocument()
+  })
+
+  it('REGRESSION: a background bash dispatch with a _marshal_error result and success status is NOT hidden', () => {
+    render(
+      <ToolCallBadge
+        toolCall={makeToolCall({
+          tool: 'bash',
+          params: { run_in_background: true },
+          status: 'success',
+          result: { _marshal_error: 'json: unsupported type: chan int' },
+        })}
+      />
+    )
+    expect(screen.getByTestId('tool-call-badge')).toBeInTheDocument()
   })
 })

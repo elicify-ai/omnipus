@@ -6,6 +6,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
+import * as React from 'react'
 import { act } from 'react'
 import { useChatStore } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
@@ -17,8 +18,12 @@ import { OmnipusComposer } from './ChatScreen'
 // a promise because commitFiles chains `.catch()` on the result.
 const addAttachment = vi.fn(() => Promise.resolve())
 
+// Reference the module-level `React` import (not an in-factory `require('react')`)
+// — the latter was corrupting the shared React module binding across test files
+// sharing a reused worker process (`pool: 'forks'` in vite.config.ts), causing an
+// intermittent `ReferenceError: useRef is not defined` in unrelated sibling test
+// files run in the same batch.
 vi.mock('@assistant-ui/react', () => {
-  const React = require('react')
   return {
     useThreadViewportStore: () => ({ getState: () => ({ isAtBottom: true }) }),
     ThreadPrimitive: {

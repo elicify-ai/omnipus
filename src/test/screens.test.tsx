@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import * as React from 'react'
 import type { JSX } from 'react'
 
 // jsdom doesn't implement scrollTo — mock it globally so ChatScreen useEffect doesn't throw
@@ -45,7 +46,6 @@ vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: '/mock-avatar.
 // react-shiki ships a ./style.css side-effect import that Node ESM cannot load.
 // Mock the whole module so the Chat screen test can import the route without error.
 vi.mock('react-shiki', () => {
-  const React = require('react')
   return {
     ShikiHighlighter: ({ children }: { children?: React.ReactNode }) =>
       React.createElement('pre', {}, children ?? null),

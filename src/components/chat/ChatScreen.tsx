@@ -36,6 +36,7 @@ import { SessionPanel } from './SessionPanel'
 import { GenericToolCall } from './tools/GenericToolCall'
 import { WebServeBlock } from './tools/WebServeUI'
 import { RateLimitIndicator } from './RateLimitIndicator'
+import { ActivityBar } from './ActivityBar'
 import { MarkdownText } from './markdown-text'
 import { SubagentBlock } from './SubagentBlock'
 import { ModelFooter } from './ModelFooter'
@@ -2108,6 +2109,13 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
               />
             </div>
           )}
+
+          {/* Activity Bar — persistent strip showing live background agent/shell
+              activity (delegate spans + background bash runs). Opens a slide-out
+              detail panel on click. See src/components/chat/ActivityBar.tsx. */}
+          <div className="px-4 pb-2">
+            <ActivityBar />
+          </div>
 
           {/* Composer — centered, ChatGPT-style floating layout */}
           <div className="relative w-full">

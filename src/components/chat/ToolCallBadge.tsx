@@ -12,11 +12,29 @@ import {
   Prohibit,
 } from '@phosphor-icons/react'
 import type { ToolCall } from '@/lib/api'
+import type { MarshalErrorResult } from '@/lib/ws'
 import { cn } from '@/lib/utils'
 import { humanizeToolName } from '@/lib/humanizeToolName'
+import { useChatPreferencesStore } from '@/store/chatPreferences'
+import { shouldRenderToolCall } from '@/lib/toolVisibility'
 
 interface ToolCallBadgeProps {
   toolCall: ToolCall & { call_id: string }
+}
+
+/**
+ * Returns true when the result is the marshal-error sentinel from replay.go.
+ * Mirrors GenericToolCall.tsx's detector of the same name — the backend emits
+ * `{_marshal_error: "..."}` when JSON-marshaling a tool result fails during
+ * replay-frame construction, which can happen even when the call itself
+ * succeeded (i.e. `toolCall.status` doesn't reflect it).
+ */
+function isMarshalErrorResult(value: unknown): value is MarshalErrorResult {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as Record<string, unknown>)['_marshal_error'] === 'string'
+  )
 }
 
 function getToolIcon(tool: string) {
@@ -36,6 +54,30 @@ function formatDuration(ms?: number): string {
 
 export function ToolCallBadge({ toolCall }: ToolCallBadgeProps) {
   const [expanded, setExpanded] = useState(false)
+
+  // Client-side render gate (verbose-chat off by default): hides noisy
+  // background infra calls (load_tool, background delegate/bash dispatch,
+  // status polls) unless the user has opted into verbose chat. Covers all
+  // call sites of this shared badge (MessageItem's historical list,
+  // SubagentBlock's nested steps, and ActivityPanel's expanded native-agent
+  // step rows). An error/marshal-failure outcome always overrides the hide
+  // decision — a failed/denied call, or one whose result silently failed to
+  // marshal, must never disappear just because its params look like ordinary
+  // background dispatch. Must sit after every hook above and before the JSX
+  // return (Rules of Hooks).
+  const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
+  const marshalErr = isMarshalErrorResult(toolCall.result)
+  if (
+    !shouldRenderToolCall(
+      toolCall.tool,
+      toolCall.params,
+      verboseChatEnabled,
+      toolCall.status === 'error' || marshalErr,
+    )
+  ) {
+    return null
+  }
+
   const Icon = getToolIcon(toolCall.tool)
 
   const statusConfig = {

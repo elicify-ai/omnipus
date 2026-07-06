@@ -600,6 +600,8 @@ describe('ChatStore_GroupsFramesBySpan', () => {
     expect(span?.taskLabel).toBe('audit go files')
     expect(span?.status).toBe('running')
     expect(span?.steps).toHaveLength(0)
+    // subagent_start's own agent_id must be carried onto the running span.
+    expect(span?.agentId).toBe('max')
 
     // tool_call_start with matching parent_call_id
     act(() => {
@@ -659,6 +661,10 @@ describe('ChatStore_GroupsFramesBySpan', () => {
     const terminalSpan = span?.status !== 'running' ? span : undefined
     expect((terminalSpan as import('@/store/chat').SubagentSpanTerminal | undefined)?.durationMs).toBe(4210)
     expect((terminalSpan as import('@/store/chat').SubagentSpanTerminal | undefined)?.finalResult).toBe('Found 1 Go file')
+    // agentId must survive the running → terminal transition (the subagent_end
+    // frame here carries no agent_id of its own, so this also exercises the
+    // `ef.agent_id ?? existingSpan.agentId` fallback taking the existing-span branch).
+    expect(span?.agentId).toBe('max')
   })
 
   it('out-of-order: tool_call_start arrives before subagent_start — buffered then drained', () => {

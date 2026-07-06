@@ -27,6 +27,8 @@ import {
   CaretUp,
 } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
+import { useChatPreferencesStore } from '@/store/chatPreferences'
+import { shouldRenderToolCall } from '@/lib/toolVisibility'
 
 // ── Args shape ────────────────────────────────────────────────────────────────
 //
@@ -80,6 +82,27 @@ function BashOutputBlock({
   isError?: boolean
 }) {
   const [expanded, setExpanded] = useState(true)
+
+  // Client-side render gate (verbose-chat off by default): hides noisy
+  // background `bash` dispatches (run_in_background) and poll/read calls
+  // unless the user has opted into verbose chat. Scoped to the literal
+  // canonical `bash` tool name only — the five legacy aliases below
+  // (`exec`, `workspace_shell`, `workspace_shell_bg`, and their dotted
+  // forms) render OLD, already-persisted transcripts exactly as they were
+  // stored and must NEVER be hidden by this new gate. An error outcome
+  // (the `isError` prop, threaded from status.type === 'incomplete' by
+  // makeBashUI below) always overrides the hide decision — a failed
+  // background dispatch must never disappear just because it looks like
+  // ordinary background dispatch. Must sit after every hook above and
+  // before the JSX return (Rules of Hooks); the hook itself is called
+  // unconditionally — only the resulting early return is gated on toolName.
+  const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
+  if (
+    toolName === 'bash' &&
+    !shouldRenderToolCall(toolName, args as unknown as Record<string, unknown>, verboseChatEnabled, !!isError)
+  ) {
+    return null
+  }
 
   const command = args.command || args.description || args.session_id || '(unknown command)'
   const action = args.action ?? 'run'

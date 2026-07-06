@@ -2,6 +2,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
+import * as React from 'react'
 import { act } from 'react'
 import { useChatStore } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
@@ -23,7 +24,6 @@ if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
 import { OmnipusComposer } from './ChatScreen'
 
 vi.mock('@assistant-ui/react', () => {
-  const React = require('react')
   return {
     useThreadViewportStore: () => ({ getState: () => ({ isAtBottom: true }) }),
     ThreadPrimitive: {
