@@ -14,8 +14,10 @@
  * avoiding the temporal dead zone issue with const declarations.
  */
 
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render } from '@testing-library/react'
+import { act } from 'react'
+import { useChatPreferencesStore } from '@/store/chatPreferences'
 import type { ToolCallStartFrame, ToolCallResultFrame } from '@/lib/api/generated/asyncapi-types'
 
 type RenderFn = (props: { args: unknown; result: unknown; status: { type: string } }) => React.ReactNode
@@ -316,3 +318,113 @@ describe.each([
     })
   }
 )
+
+// ── activity-bar tool visibility: verbose-chat gate ─────────────────────────
+// Traces to: src/lib/toolVisibility.ts shouldRenderToolCall — `bash` has its
+// own dedicated live UI (BashOutputBlock) that never goes through
+// GenericToolCall, so it needs its own gate. Scoped to the literal `bash`
+// tool name only; the legacy aliases (exec, workspace_shell,
+// workspace_shell_bg, dotted forms) must NEVER be hidden — they render OLD,
+// already-persisted transcripts as they were stored.
+
+describe('bash — verbose chat gate', () => {
+  beforeEach(() => {
+    act(() => {
+      useChatPreferencesStore.setState({ verboseChatEnabled: false })
+    })
+  })
+
+  it('hides a background bash run (run_in_background: true) by default', () => {
+    if (!captured.bashRender) {
+      expect(BashOutputUI).toBeDefined()
+      return
+    }
+    const element = captured.bashRender({
+      args: { command: 'tail -f log', run_in_background: true },
+      result: null,
+      status: { type: 'running' },
+    })
+    const { container } = render(element as React.ReactElement)
+    expect(container).toBeEmptyDOMElement()
+  })
+
+  it('shows a background bash run when verboseChatEnabled is true', () => {
+    act(() => {
+      useChatPreferencesStore.setState({ verboseChatEnabled: true })
+    })
+    if (!captured.bashRender) {
+      expect(BashOutputUI).toBeDefined()
+      return
+    }
+    const element = captured.bashRender({
+      args: { command: 'tail -f log', run_in_background: true },
+      result: null,
+      status: { type: 'running' },
+    })
+    const { container } = render(element as React.ReactElement)
+    expect(container).not.toBeEmptyDOMElement()
+  })
+
+  it('always shows a foreground bash run (no run_in_background) regardless of verbose setting', () => {
+    if (!captured.bashRender) {
+      expect(BashOutputUI).toBeDefined()
+      return
+    }
+    const element = captured.bashRender({
+      args: { command: 'echo hi' },
+      result: 'hi\n',
+      status: { type: 'complete' },
+    })
+    const { container } = render(element as React.ReactElement)
+    expect(container).not.toBeEmptyDOMElement()
+  })
+
+  it('regression guard: a LEGACY-named workspace_shell_bg call always renders regardless of verbose setting (exemption)', () => {
+    if (!captured.shellBgRender) {
+      expect(WorkspaceShellBgLegacyUI).toBeDefined()
+      return
+    }
+    const element = captured.shellBgRender({
+      args: { command: 'tail -f log', background: true },
+      result: null,
+      status: { type: 'running' },
+    })
+    const { container } = render(element as React.ReactElement)
+    expect(container).not.toBeEmptyDOMElement()
+  })
+
+  it('regression guard: a LEGACY-named exec call always renders regardless of verbose setting (exemption)', () => {
+    if (!captured.execRender) {
+      expect(ExecLegacyUI).toBeDefined()
+      return
+    }
+    const element = captured.execRender({
+      args: { command: 'echo hi', background: true },
+      result: null,
+      status: { type: 'running' },
+    })
+    const { container } = render(element as React.ReactElement)
+    expect(container).not.toBeEmptyDOMElement()
+  })
+
+  // REGRESSION for the invisible-denial/failure bug: a background bash
+  // dispatch normally hides (see the first test in this describe block), but
+  // an error outcome must override that — a failed background command must
+  // never disappear from the chat transcript just because its args look
+  // like ordinary background dispatch. makeBashUI threads
+  // `isError: status.type === 'incomplete'` into BashOutputBlock, so a
+  // status of 'incomplete' is the real-world error signal here.
+  it('REGRESSION: a background bash run with an error status (incomplete) is NOT hidden', () => {
+    if (!captured.bashRender) {
+      expect(BashOutputUI).toBeDefined()
+      return
+    }
+    const element = captured.bashRender({
+      args: { command: 'tail -f log', run_in_background: true },
+      result: 'command not found',
+      status: { type: 'incomplete' },
+    })
+    const { container } = render(element as React.ReactElement)
+    expect(container).not.toBeEmptyDOMElement()
+  })
+})

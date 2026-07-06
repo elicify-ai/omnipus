@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeAll } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
+import * as React from 'react'
 import { ModelSelector, type ModelGroup } from './model-selector'
 
 // cmdk (used by Command) uses ResizeObserver and scrollIntoView which are not
@@ -24,7 +25,6 @@ beforeAll(() => {
 // a real portal. We keep the real Command semantics for filtering but render
 // the content unconditionally (no Radix portal).
 vi.mock('@/components/ui/popover', () => {
-  const React = require('react')
   return {
     Popover: ({ children }: { children: React.ReactNode }) => React.createElement(React.Fragment, null, children),
     PopoverTrigger: ({ children, asChild }: { children: React.ReactNode; asChild?: boolean }) => {

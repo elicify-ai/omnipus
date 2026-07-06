@@ -51,6 +51,16 @@ interface SubagentSpanBase {
   parentCallId: string
   taskLabel: string
   steps: SpanStep[]
+  /**
+   * Id of the agent running this sub-turn (the delegate), when the frame
+   * carried one — used to resolve name/icon/type for display. Note: for
+   * native (non-external-CLI) delegation to a named target agent, this
+   * currently reflects the PARENT's id due to a backend limitation in
+   * pkg/agent/subturn.go — see the agent-resolution fallback in
+   * useRunningActivity.ts which works around this using the originating
+   * delegate call's own agent_id param.
+   */
+  agentId?: string
 }
 
 export interface SubagentSpanRunning extends SubagentSpanBase {
@@ -873,6 +883,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
           taskLabel: frame.task_label,
           status: 'running',
           steps: [],
+          agentId: frame.agent_id,
         }
         const bufferKey = `${sid}:${frame.parent_call_id}`
         const buffered = pendingByParentCallId[bufferKey] ?? []
@@ -949,6 +960,10 @@ export const useChatStore = create<ChatStore>((set, get) => {
               parentCallId: existingSpan.parentCallId,
               taskLabel: existingSpan.taskLabel,
               steps: existingSpan.steps,
+              // Defensive fallback: SubagentEndFrame carries its own optional
+              // agent_id; prefer it if the server ever populates it, else
+              // keep the value already stamped by subagent_start.
+              agentId: frame.agent_id ?? existingSpan.agentId,
               status: frame.status,
               durationMs: frame.duration_ms ?? 0,
               finalResult: frame.final_result,
@@ -2164,6 +2179,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 taskLabel: sf.task_label,
                 status: 'running',
                 steps: [],
+                agentId: sf.agent_id,
               }
               const bufferKey = `${targetSid}:${sf.parent_call_id}`
               const buffered = pendingByParentCallId[bufferKey] ?? []
@@ -2212,6 +2228,10 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   parentCallId: existingSpan.parentCallId,
                   taskLabel: existingSpan.taskLabel,
                   steps: existingSpan.steps,
+                  // Defensive fallback: SubagentEndFrame carries its own optional
+                  // agent_id; prefer it if the server ever populates it, else
+                  // keep the value already stamped by subagent_start.
+                  agentId: ef.agent_id ?? existingSpan.agentId,
                   status: ef.status,
                   durationMs: ef.duration_ms ?? 0,
                   finalResult: ef.final_result,

@@ -19,6 +19,8 @@ import type { ClientTruncatedResult } from '@/store/chat'
 import { useQuery } from '@tanstack/react-query'
 import { fetchToolResult } from '@/lib/api'
 import { humanizeToolName } from '@/lib/humanizeToolName'
+import { useChatPreferencesStore } from '@/store/chatPreferences'
+import { shouldRenderToolCall } from '@/lib/toolVisibility'
 
 interface GenericToolCallProps {
   toolName: string
@@ -258,6 +260,7 @@ export function GenericToolCall({
   sessionId = '',
 }: GenericToolCallProps) {
   const [expanded, setExpanded] = useState(false)
+  const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
 
   const isRunning = status.type === 'running'
   const isError = status.type === 'incomplete' || !!error
@@ -268,8 +271,39 @@ export function GenericToolCall({
   // G17: a delegation denial is an error-status result; surface it in the
   // COLLAPSED header ("Delegation denied · <axis>") instead of a generic
   // "Failed" so the user sees the policy block without expanding. The full
-  // reason stays in the expanded DelegationFailureDisplay.
+  // reason stays in the expanded DelegationFailureDisplay. Computed here
+  // (rather than after the gate below) because the gate needs it too — a
+  // delegation denial is an error outcome even when `status` alone doesn't
+  // say so.
   const delegationFailure = isDelegationFailure(result) ? result : null
+
+  // Marshal-error sentinel: the backend emits `{_marshal_error: "..."}` when
+  // JSON-marshaling a tool result fails during replay-frame construction —
+  // this can happen even when the tool call itself succeeded, so neither
+  // `status` nor `error` reflects it. Computed here (before the gate below,
+  // alongside delegationFailure) because the gate needs it too: a
+  // load_tool/background bash/delegate call whose args match the "hide by
+  // default" shape must still surface if its result silently failed to
+  // marshal, exactly like a policy-denied delegation must.
+  const marshalErr = isMarshalErrorResult(result) ? result : null
+
+  // Client-side render gate (verbose-chat off by default): hides noisy
+  // background infra calls (load_tool, background delegate/bash dispatch,
+  // status polls) unless the user has opted into verbose chat. An
+  // error/denial/marshal-failure outcome always overrides the hide decision —
+  // a policy-denied delegation or a marshal-error result must never disappear
+  // just because its default args look like ordinary background dispatch.
+  // Must sit after every hook above and before the JSX return (Rules of Hooks).
+  if (
+    !shouldRenderToolCall(
+      toolName,
+      args as Record<string, unknown> | undefined,
+      verboseChatEnabled,
+      isError || !!delegationFailure || !!marshalErr,
+    )
+  ) {
+    return null
+  }
 
   const statusConfig = isRunning
     ? { icon: <ArrowsClockwise size={12} className="animate-spin text-[var(--color-accent)]" />, label: 'Running...', border: 'border-[var(--color-border)]' }
@@ -284,8 +318,8 @@ export function GenericToolCall({
   const hasDetail = !isRunning && (args !== undefined || result !== undefined || error)
 
   // Resolve result rendering: determine which sentinel type (if any) applies.
+  // (marshalErr is already computed above, before the gate.)
   const truncated = isTruncatedResult(result) ? result : null
-  const marshalErr = isMarshalErrorResult(result) ? result : null
   const clientTruncated = isClientTruncatedResult(result) ? result : null
   const toolRef = isToolResultRef(result) ? result : null
   const plainResult =

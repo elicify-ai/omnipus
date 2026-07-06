@@ -1,9 +1,11 @@
 // GenericToolCall component tests — W1-4 truncation/marshal-error sentinel rendering
 // Traces to: temporal-puzzling-melody.md §Wave 1 W1-4 (TS half)
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
+import { act } from 'react'
 import { GenericToolCall } from './GenericToolCall'
+import { useChatPreferencesStore } from '@/store/chatPreferences'
 import type { MessagePartStatus } from '@assistant-ui/react'
 
 const COMPLETE_STATUS: MessagePartStatus = { type: 'complete' }
@@ -204,6 +206,45 @@ describe('GenericToolCall — delegation-denied result sentinel', () => {
     // The generic "Failed" label must not be used for a delegation denial.
     expect(badge).not.toHaveTextContent(/\bFailed\b/)
   })
+
+  // REGRESSION for the invisible-denial bug: shouldRenderToolCall used to
+  // decide visibility from tool+params alone, with no idea the call had
+  // been denied. A `delegate` call with fully default/absent args (the
+  // ordinary shape pkg/tools/delegate.go emits — action defaults to "run",
+  // async defaults to true) matches the "background dispatch, hide it" case
+  // even when the result is a policy denial — so the denial vanished with no
+  // chip, no error text, nothing. This is the exact scenario: no `args` prop
+  // at all, a DelegationFailure result, status incomplete.
+  it('REGRESSION: a policy-denied delegation with fully default/absent args is NOT hidden', () => {
+    const delegationDenied = {
+      error: 'delegation_denied' as const,
+      reason: 'Scout is not in your trust set for delegation.',
+      policy: 'trust_set' as const,
+      tool: 'delegate',
+      target_agent_id: 'scout-01',
+    }
+
+    render(
+      <GenericToolCall
+        toolName="delegate"
+        // No `args` prop at all — the default/common shape. Before the fix,
+        // this matched the background-dispatch hidden case regardless of
+        // the denial result.
+        result={delegationDenied}
+        status={{ type: 'incomplete', reason: 'error' } as MessagePartStatus}
+      />
+    )
+
+    // The chip itself must exist — this is what the bug made disappear entirely.
+    const badge = screen.getByTestId('tool-call-badge')
+    expect(badge).toBeInTheDocument()
+    expect(badge).toHaveTextContent('Delegation denied · Trust set')
+
+    fireEvent.click(screen.getByRole('button'))
+    const block = screen.getByTestId('result-delegation-denied')
+    expect(block).toBeInTheDocument()
+    expect(block).toHaveTextContent('Scout is not in your trust set for delegation.')
+  })
 })
 
 // ── Baseline: non-sentinel result still renders normally ────────────────────
@@ -236,5 +277,124 @@ describe('GenericToolCall — baseline rendering', () => {
     expect(screen.queryByTestId('result-marshal-error')).toBeNull()
     // JSON content renders
     expect(screen.getByText(/"stdout"/)).toBeInTheDocument()
+  })
+})
+
+// ── activity-bar tool visibility: verbose-chat gate ─────────────────────────
+// Traces to: src/lib/toolVisibility.ts shouldRenderToolCall — GenericToolCall
+// is the live/streaming fallback renderer for load_tool and delegate (neither
+// has a dedicated makeAssistantToolUI registration).
+
+describe('GenericToolCall — verbose chat gate', () => {
+  beforeEach(() => {
+    act(() => {
+      useChatPreferencesStore.setState({ verboseChatEnabled: false })
+    })
+  })
+
+  it('a load_tool call renders nothing when verboseChatEnabled is false', () => {
+    render(
+      <GenericToolCall
+        toolName="load_tool"
+        args={{ name: 'web_search' }}
+        status={COMPLETE_STATUS}
+      />
+    )
+    expect(screen.queryByTestId('tool-call-badge')).toBeNull()
+  })
+
+  it('a load_tool call renders normally when verboseChatEnabled is true', () => {
+    act(() => {
+      useChatPreferencesStore.setState({ verboseChatEnabled: true })
+    })
+    render(
+      <GenericToolCall
+        toolName="load_tool"
+        args={{ name: 'web_search' }}
+        status={COMPLETE_STATUS}
+      />
+    )
+    expect(screen.getByTestId('tool-call-badge')).toBeInTheDocument()
+  })
+
+  it('a background delegate call (default action=run, async=true) renders nothing when verboseChatEnabled is false', () => {
+    render(
+      <GenericToolCall
+        toolName="delegate"
+        args={{}}
+        status={COMPLETE_STATUS}
+      />
+    )
+    expect(screen.queryByTestId('tool-call-badge')).toBeNull()
+  })
+
+  it('a background delegate call renders normally when verboseChatEnabled is true', () => {
+    act(() => {
+      useChatPreferencesStore.setState({ verboseChatEnabled: true })
+    })
+    render(
+      <GenericToolCall
+        toolName="delegate"
+        args={{}}
+        status={COMPLETE_STATUS}
+      />
+    )
+    expect(screen.getByTestId('tool-call-badge')).toBeInTheDocument()
+  })
+
+  it('an explicit blocking delegate call (async: false) still renders regardless of verbose setting', () => {
+    render(
+      <GenericToolCall
+        toolName="delegate"
+        args={{ async: false }}
+        status={COMPLETE_STATUS}
+      />
+    )
+    expect(screen.getByTestId('tool-call-badge')).toBeInTheDocument()
+  })
+
+  it('an always-visible tool (remember) still renders regardless of verbose setting', () => {
+    render(
+      <GenericToolCall
+        toolName="remember"
+        args={{ content: 'note' }}
+        status={COMPLETE_STATUS}
+      />
+    )
+    expect(screen.getByTestId('tool-call-badge')).toBeInTheDocument()
+  })
+
+  // REGRESSION: a hidden-by-default background tool call (delegate, default
+  // action=run/async=true) whose result is the `_marshal_error` sentinel must
+  // still render — a result that silently failed to marshal during
+  // replay-frame construction is an error outcome even though `status` alone
+  // doesn't say so (the tool call itself can have succeeded). Before the
+  // fix, the visibility gate only looked at `isError`/`delegationFailure`,
+  // computed BEFORE `marshalErr` existed at all — so this case vanished
+  // with no chip, no error text, nothing. `bash`/`delegate` are used here
+  // (not `exec`, which falls into the switch's always-visible default
+  // bucket and wouldn't actually exercise the hidden-by-default gate).
+  it('REGRESSION: a background delegate call with a _marshal_error result and non-error status is NOT hidden', () => {
+    render(
+      <GenericToolCall
+        toolName="delegate"
+        args={{}}
+        result={{ _marshal_error: 'json: unsupported type: chan int' }}
+        status={COMPLETE_STATUS}
+      />
+    )
+    expect(screen.getByTestId('tool-call-badge')).toBeInTheDocument()
+  })
+
+  it('REGRESSION: a background bash call with a _marshal_error result and non-error status is NOT hidden', () => {
+    render(
+      <GenericToolCall
+        toolName="bash"
+        args={{ run_in_background: true }}
+        result={{ _marshal_error: 'json: unsupported type: chan int' }}
+        status={COMPLETE_STATUS}
+      />
+    )
+    expect(screen.getByTestId('tool-call-badge')).toBeInTheDocument()
   })
 })

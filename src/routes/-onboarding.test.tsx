@@ -25,7 +25,6 @@ vi.mock('@tanstack/react-router', () => ({
 // Mock Framer Motion — strip all animations so AnimatePresence doesn't keep
 // exit elements in the DOM during state transitions.
 vi.mock('framer-motion', () => {
-  const React = require('react')
   return {
     motion: new Proxy(
       {},
@@ -33,7 +32,7 @@ vi.mock('framer-motion', () => {
         get: (_target: object, prop: string) => {
           return React.forwardRef(
             ({ children, ...props }: Record<string, unknown>, ref: unknown) =>
-              React.createElement(prop as string, { ...props, ref }, children)
+              React.createElement(prop as string, { ...props, ref }, children as React.ReactNode)
           )
         },
       }

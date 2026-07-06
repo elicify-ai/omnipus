@@ -84,7 +84,6 @@ vi.mock('@/store/ui', () => ({
 // hasPointerCapture. The Select passes value/onValueChange so we wire them
 // through role=option elements using onChange semantics.
 vi.mock('@/components/ui/select', () => {
-  const React = require('react') as typeof import('react')
   type SelectProps = {
     value?: string
     onValueChange?: (value: string) => void

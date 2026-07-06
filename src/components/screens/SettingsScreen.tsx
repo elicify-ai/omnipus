@@ -7,6 +7,7 @@ import { DataSection } from '@/components/settings/DataSection'
 import { AboutSection } from '@/components/settings/AboutSection'
 import { DevicesSection } from '@/components/settings/DevicesSection'
 import { PerformanceSection } from '@/components/settings/PerformanceSection'
+import { ChatSection } from '@/components/settings/ChatSection'
 import { MemorySection } from '@/components/settings/MemorySection'
 import { ScreenHeader } from '@/components/layout/ScreenHeader'
 // O4: the passive RestartBanner at the top of Settings is replaced by the
@@ -39,6 +40,7 @@ export function SettingsScreen() {
             <TabsTrigger value="memory">Memory</TabsTrigger>
             <TabsTrigger value="devices">Devices</TabsTrigger>
             <TabsTrigger value="performance">Performance</TabsTrigger>
+            <TabsTrigger value="chat">Chat</TabsTrigger>
             <TabsTrigger data-testid="settings-tab-about" value="about">About</TabsTrigger>
           </TabsList>
 
@@ -72,6 +74,10 @@ export function SettingsScreen() {
 
           <TabsContent value="performance">
             <PerformanceSection />
+          </TabsContent>
+
+          <TabsContent value="chat">
+            <ChatSection />
           </TabsContent>
 
           <TabsContent value="about">

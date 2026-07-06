@@ -14,6 +14,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, act } from '@testing-library/react'
+import * as React from 'react'
 import { useChatStore, makeBucketMessages } from '@/store/chat'
 import type { ChatMessage } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
@@ -23,8 +24,14 @@ import { useConnectionStore } from '@/store/connection'
 // Captured here so tests can assert autoScroll delegation without re-implementing scroll math.
 let lastViewportAutoScroll: boolean | undefined
 
+// Reference the module-level `React` import (not an in-factory `require('react')`)
+// — the latter was corrupting the shared React module binding across test files
+// sharing a reused worker process (`pool: 'forks'` in vite.config.ts), causing an
+// intermittent `ReferenceError: useRef is not defined` in unrelated sibling test
+// files (e.g. useRunningActivity.test.ts / ActivityBar.test.tsx) run in the same
+// batch. vi.mock factories may reference top-level `import` bindings safely —
+// only same-file local `const`/`let` declarations have the hoisting restriction.
 vi.mock('@assistant-ui/react', () => {
-  const React = require('react')
   return {
     useThreadViewportStore: () => ({ getState: () => ({ isAtBottom: true }) }),
     ThreadPrimitive: {
@@ -144,7 +151,6 @@ vi.mock('@/lib/api', () => ({
 
 vi.mock('./historical-markdown', () => ({
   HistoricalMessageMarkdown: ({ content }: { content: string }) => {
-    const React = require('react')
     return React.createElement('div', { 'data-testid': 'historical-markdown' }, content)
   },
 }))
@@ -155,19 +161,16 @@ vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
 vi.mock('./SubagentBlock', () => ({ SubagentBlock: () => null }))
 vi.mock('./tools/GenericToolCall', () => ({
   GenericToolCall: ({ toolName }: { toolName: string }) => {
-    const React = require('react')
     return React.createElement('div', { 'data-testid': 'tool-call-badge' }, toolName)
   },
 }))
 vi.mock('./markdown-text', () => ({
   MarkdownText: () => {
-    const React = require('react')
     return React.createElement('div', {})
   },
 }))
 vi.mock('./shiki-highlighter', () => ({
   SyntaxHighlighter: ({ children }: { children?: React.ReactNode }) => {
-    const React = require('react')
     return React.createElement('pre', {}, children)
   },
   CopyCodeHeader: () => null,

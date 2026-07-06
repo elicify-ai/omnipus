@@ -26,7 +26,6 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
 
 // --- Framer Motion mock — strip animations so no async DOM leftovers ---
 vi.mock('framer-motion', () => {
-  const React = require('react')
   return {
     motion: new Proxy(
       {},
@@ -34,7 +33,7 @@ vi.mock('framer-motion', () => {
         get: (_target: object, prop: string) => {
           return React.forwardRef(
             ({ children, ...props }: Record<string, unknown>, ref: unknown) =>
-              React.createElement(prop as string, { ...props, ref }, children)
+              React.createElement(prop as string, { ...props, ref }, children as React.ReactNode)
           )
         },
       }
