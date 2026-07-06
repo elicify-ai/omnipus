@@ -1474,7 +1474,9 @@ func registerSharedTools(
 			// FR-6.2: full-policy gate for the background (async=true, the
 			// default) mode — trust set + mode("background") + depth. Takes
 			// precedence over the allowlist checker and surfaces a reason.
-			delegateTool.SetDelegationDenyCheckerBackground(buildDelegationDenyChecker(currentAgentID, cfg.Agents.Defaults, config.DelegationModeBackground))
+			delegateTool.SetDelegationDenyCheckerBackground(
+				buildDelegationDenyChecker(currentAgentID, cfg.Agents.Defaults, config.DelegationModeBackground),
+			)
 			// FR-6.3: gate the await (async=false) mode too. Uses the unified
 			// DelegationPolicy.To via IsDelegationAllowedAny (no explicit
 			// target for the untargeted case; the check is "can delegate at all").
@@ -1498,7 +1500,9 @@ func registerSharedTools(
 			// delegate(agent_id="X", async=false) is checked against the
 			// caller→X edge for the "await" mode, and an untargeted call
 			// falls back to evalUntargetedDelegation.
-			delegateTool.SetDelegationDenyCheckerAwait(buildDelegationDenyChecker(currentAgentID, cfg.Agents.Defaults, config.DelegationModeAwait))
+			delegateTool.SetDelegationDenyCheckerAwait(
+				buildDelegationDenyChecker(currentAgentID, cfg.Agents.Defaults, config.DelegationModeAwait),
+			)
 			// #477 / FR-D9-FR-D10: thread the SAME effective depth cap the
 			// gates above just authorized against into spawnSubTurn's own
 			// depth check — the resolver is mode-agnostic (sourced only from
@@ -1528,7 +1532,9 @@ func registerSharedTools(
 			taskCreate.SetDelegateChecker(buildDelegateChecker(agentCfg, cfg.Agents.Defaults))
 			// FR-6.2: full-policy gate — trust set + mode("task") + depth.
 			// Takes precedence over the boolean delegate checker.
-			taskCreate.SetDelegationDenyChecker(buildDelegationDenyChecker(currentAgentID, cfg.Agents.Defaults, config.DelegationModeTask))
+			taskCreate.SetDelegationDenyChecker(
+				buildDelegationDenyChecker(currentAgentID, cfg.Agents.Defaults, config.DelegationModeTask),
+			)
 			// Task-mode recursion bound: reject a task_create issued from within a
 			// task run whose delegation generation already sits at the ceiling. The
 			// per-agent depth gate cannot bound task mode on its own because every
@@ -1566,7 +1572,9 @@ func registerSharedTools(
 			// FR-6.2: reassignment is re-delegation — gate agent_id changes through
 			// the same trust-set + mode("task") + depth policy as task_create.
 			taskUpdate.SetDelegateChecker(buildDelegateChecker(agentCfg, cfg.Agents.Defaults))
-			taskUpdate.SetDelegationDenyChecker(buildDelegationDenyChecker(currentAgentID, cfg.Agents.Defaults, config.DelegationModeTask))
+			taskUpdate.SetDelegationDenyChecker(
+				buildDelegationDenyChecker(currentAgentID, cfg.Agents.Defaults, config.DelegationModeTask),
+			)
 			// Same subagent_3p reassignment guard as taskCreate above.
 			taskUpdate.SetExternalCLIWorkerChecker(cfg.IsExternalCLIWorkerID)
 			agent.Tools.Register(taskUpdate)
@@ -2092,7 +2100,11 @@ func errString(err error) string {
 // defaults is only consulted for its SubTurn.MaxDepth global depth cap — the
 // per-agent config.DelegationPolicy it used to carry is no longer read (the
 // graph supersedes it).
-func buildDelegationDenyChecker(currentAgentID string, defaults config.AgentDefaults, mode config.DelegationMode) func(ctx context.Context, targetAgentID string) *tools.DelegationDenial {
+func buildDelegationDenyChecker(
+	currentAgentID string,
+	defaults config.AgentDefaults,
+	mode config.DelegationMode,
+) func(ctx context.Context, targetAgentID string) *tools.DelegationDenial {
 	globalDepthCap := defaults.SubTurn.MaxDepth
 
 	return func(ctx context.Context, targetAgentID string) *tools.DelegationDenial {
