@@ -40,6 +40,9 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 	}
 
 	if cfg.Sandbox.DefaultToolPolicy != "" {
-		t.Errorf("expected DefaultToolPolicy to stay unset (resolves to 'allow'), got %q", cfg.Sandbox.DefaultToolPolicy)
+		t.Errorf(
+			"expected DefaultToolPolicy to stay unset (resolves to 'allow'), got %q",
+			cfg.Sandbox.DefaultToolPolicy,
+		)
 	}
 }

@@ -70,6 +70,12 @@ func TestModelConfig_FieldsSurvivedConstruction(t *testing.T) {
 		APIKeyRef:      keyRef,
 	}
 
+	if model.ModelName != "gpt-4" {
+		t.Errorf("expected model_name preserved, got %q", model.ModelName)
+	}
+	if model.Model != "openai/gpt-4o" {
+		t.Errorf("expected model preserved, got %q", model.Model)
+	}
 	if model.APIBase != "https://api.example.com" {
 		t.Errorf("expected api_base preserved, got %q", model.APIBase)
 	}
@@ -87,6 +93,9 @@ func TestModelConfig_FieldsSurvivedConstruction(t *testing.T) {
 	}
 	if model.ThinkingLevel != "high" {
 		t.Errorf("expected thinking_level preserved, got %q", model.ThinkingLevel)
+	}
+	if model.APIKeyRef != keyRef {
+		t.Errorf("expected api_key_ref preserved, got %q", model.APIKeyRef)
 	}
 }
 
