@@ -98,21 +98,21 @@ export const SKIP_ALLOWLIST: { test: string; issue: string; until: string; note?
   // chat.spec.ts — W1.6 user-approved permanent skip: #105 offline send queue
   {
     test: '(f) queue-on-disconnect: messages sent during WS disconnect send in order after reconnect',
-    issue: 'https://github.com/dapicom-ai/omnipus/issues/105',
+    issue: 'https://github.com/elicify-ai/omnipus/issues/105',
     until: '2026-09-30',
     note: 'useChatStore has no offline send queue; messages sent during WS disconnect are dropped.',
   },
   // media.spec.ts — W1.6 user-approved permanent skip: #107 mock-media tool
   {
     test: '(b) file-download fallback: large binary request triggers browser download dialog',
-    issue: 'https://github.com/dapicom-ai/omnipus/issues/107',
+    issue: 'https://github.com/elicify-ai/omnipus/issues/107',
     until: '2026-09-30',
     note: 'InlineMedia <a download> path requires a mock non-image media frame; no scenario provider yet.',
   },
   // contract-counters.spec.ts — production binary does not expose window.__omnipus_test_hooks
   {
     test: 'no schema-validation errors during authenticated page load + navigation',
-    issue: 'https://github.com/dapicom-ai/omnipus/issues/155',
+    issue: 'https://github.com/elicify-ai/omnipus/issues/155',
     until: '2026-12-31',
     note: 'window.__omnipus_test_hooks counters are only present in dev builds (import.meta.env.DEV). ' +
       'CI runs against the embedded production binary where MODE=production. ' +
@@ -162,10 +162,10 @@ export const SKIP_ALLOWLIST: { test: string; issue: string; until: string; note?
   // >40s to emit the expected tool call, even though every test passes alone
   // in 5-25s. Retries are NOT a cover for real bugs — the design-flaw fix
   // is deterministic scenario providers (T4.1). Soft-skip until then.
-  // Tracked: https://github.com/dapicom-ai/omnipus/issues/155 (v0.2 hardening)
+  // Tracked: https://github.com/elicify-ai/omnipus/issues/155 (v0.2 hardening)
   {
     test: '(c) live step counter: collapsed header step count increments during multi-step sub-turn',
-    issue: 'https://github.com/dapicom-ai/omnipus/issues/155',
+    issue: 'https://github.com/elicify-ai/omnipus/issues/155',
     until: '2026-12-31',
     note: 'LLM-driven live step counter occasionally takes >40s under suite load (12+ min wall-clock). Retries=3 in CI typically recover. The deterministic scenario-provider fix is tracked in T4.1.',
   },
@@ -488,7 +488,7 @@ export function softSkip(
   // The validator must accept a valid entry.
   const validEntry = {
     test: 'some test title',
-    issue: 'https://github.com/dapicom-ai/omnipus/issues/123',
+    issue: 'https://github.com/elicify-ai/omnipus/issues/123',
     until: '2099-12-31',
   };
   try {
@@ -530,7 +530,7 @@ export function softSkip(
   // The validator must reject a malformed 'until' date.
   threw = false;
   try {
-    validateAllowList([{ test: 'x', issue: 'https://github.com/dapicom-ai/omnipus/issues/1', until: '01/01/2099' }]);
+    validateAllowList([{ test: 'x', issue: 'https://github.com/elicify-ai/omnipus/issues/1', until: '01/01/2099' }]);
   } catch {
     threw = true;
   }
@@ -543,7 +543,7 @@ export function softSkip(
   // The validator must reject a missing 'until' field.
   threw = false;
   try {
-    validateAllowList([{ test: 'x', issue: 'https://github.com/dapicom-ai/omnipus/issues/1', until: '' }]);
+    validateAllowList([{ test: 'x', issue: 'https://github.com/elicify-ai/omnipus/issues/1', until: '' }]);
   } catch {
     threw = true;
   }

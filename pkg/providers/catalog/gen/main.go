@@ -30,7 +30,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/dapicom-ai/omnipus/pkg/providers/catalog"
+	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 )
 
 func main() {

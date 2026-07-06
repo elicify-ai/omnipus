@@ -17,8 +17,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/providers"
-	"github.com/dapicom-ai/omnipus/pkg/providers/protocoltypes"
+	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 )
 
 // normMsg is a local helper to build a providers.Message with role+content only.

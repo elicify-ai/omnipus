@@ -20,7 +20,7 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"gopkg.in/yaml.v3"
 
-	"github.com/dapicom-ai/omnipus/pkg/gateway/inboundschemas"
+	"github.com/elicify-ai/omnipus/pkg/gateway/inboundschemas"
 )
 
 // ── Inbound schema validator ──────────────────────────────────────────────────

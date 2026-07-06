@@ -10,8 +10,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/config"
-	"github.com/dapicom-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // TestSpawnSubTurn_HonorsExplicitPerEdgeDepthOverDefaultBackstop is the real

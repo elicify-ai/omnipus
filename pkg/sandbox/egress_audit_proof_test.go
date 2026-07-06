@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/audit"
 )
 
 // TestEgressProxy_AuditEntryShape wires a real audit.Logger to the

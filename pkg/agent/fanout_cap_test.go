@@ -8,7 +8,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // TestSubTurnFanOutCap_FollowsConfig verifies FR-6.6: the synchronous

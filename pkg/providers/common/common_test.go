@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/providers/protocoltypes"
+	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 )
 
 // --- NewHTTPClient tests ---

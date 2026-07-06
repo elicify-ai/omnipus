@@ -14,7 +14,7 @@ GO_VERSION=$(shell $(GO) version | awk '{print $$3}')
 # Build-time vars live at pkg/config: Version, GitCommit, BuildTime, GoVersion.
 # pkg/config/version.go documents this path explicitly. The CLI reads Version
 # via config.GetVersion(). (pkg/gateway has its own unrelated Version var.)
-CONFIG_PKG=github.com/dapicom-ai/omnipus/pkg/config
+CONFIG_PKG=github.com/elicify-ai/omnipus/pkg/config
 LDFLAGS=-X $(CONFIG_PKG).Version=$(VERSION) -X $(CONFIG_PKG).GitCommit=$(GIT_COMMIT) -X $(CONFIG_PKG).BuildTime=$(BUILD_TIME) -X $(CONFIG_PKG).GoVersion=$(GO_VERSION) -s -w
 
 # Go variables

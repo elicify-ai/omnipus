@@ -51,7 +51,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/dapicom-ai/omnipus/pkg/fileutil"
+	"github.com/elicify-ai/omnipus/pkg/fileutil"
 )
 
 const (

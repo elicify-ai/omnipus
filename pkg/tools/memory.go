@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/audit"
 )
 
 // MemoryEntry is the common result type returned by MemorySearcher.

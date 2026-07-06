@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 )
 
 // TestHandleAgentsCreate_201IsJSON drives the real 201 handler end-to-end

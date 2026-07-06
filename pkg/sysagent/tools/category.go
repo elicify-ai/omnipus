@@ -9,7 +9,7 @@
 
 package systools
 
-import "github.com/dapicom-ai/omnipus/pkg/tools"
+import "github.com/elicify-ai/omnipus/pkg/tools"
 
 // Agent tools
 

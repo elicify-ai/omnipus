@@ -12,10 +12,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/config"
-	anthropicmessages "github.com/dapicom-ai/omnipus/pkg/providers/anthropic_messages"
-	"github.com/dapicom-ai/omnipus/pkg/providers/azure"
-	"github.com/dapicom-ai/omnipus/pkg/providers/bedrock"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	anthropicmessages "github.com/elicify-ai/omnipus/pkg/providers/anthropic_messages"
+	"github.com/elicify-ai/omnipus/pkg/providers/azure"
+	"github.com/elicify-ai/omnipus/pkg/providers/bedrock"
 )
 
 // createClaudeAuthProvider creates a Claude provider using OAuth credentials from auth store.

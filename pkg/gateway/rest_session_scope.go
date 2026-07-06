@@ -11,9 +11,9 @@ import (
 	"log/slog"
 	"net/http"
 
-	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
-	"github.com/dapicom-ai/omnipus/pkg/audit"
-	"github.com/dapicom-ai/omnipus/pkg/routing"
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/routing"
 )
 
 // canonicalDMScopes is the closed set of accepted values for session.dm_scope,

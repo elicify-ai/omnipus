@@ -25,7 +25,7 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/sandbox"
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
 // Child exit-code convention (shared with the other Landlock subprocess tests):

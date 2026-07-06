@@ -24,7 +24,7 @@
 
 package browser
 
-import "github.com/dapicom-ai/omnipus/pkg/tools"
+import "github.com/elicify-ai/omnipus/pkg/tools"
 
 // BrowserBuiltinMetadata constructs metadata-only instances of every browser
 // builtin tool and returns them as a slice of tools.Tool. Each exposes correct

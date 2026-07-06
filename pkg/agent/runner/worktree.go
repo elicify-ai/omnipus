@@ -32,7 +32,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 // runDirPrefix is the fixed prefix of every runner run directory. The reaper

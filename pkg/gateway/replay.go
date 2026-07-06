@@ -18,9 +18,9 @@ import (
 	"strings"
 	"time"
 
-	generated "github.com/dapicom-ai/omnipus/pkg/api/generated"
-	"github.com/dapicom-ai/omnipus/pkg/media"
-	"github.com/dapicom-ai/omnipus/pkg/session"
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/media"
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 // replayMaxResultBytes is the maximum JSON-encoded size of a tool_call_result

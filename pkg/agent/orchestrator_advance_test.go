@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
 // ptrStatus returns a pointer to a task.Status value, for use with task.Patch.

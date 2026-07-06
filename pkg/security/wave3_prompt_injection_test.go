@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/dapicom-ai/omnipus/pkg/security"
+	"github.com/elicify-ai/omnipus/pkg/security"
 )
 
 // TestPromptInjectionTaggingLow verifies Low strictness wraps content with tags

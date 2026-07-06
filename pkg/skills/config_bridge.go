@@ -3,7 +3,7 @@ package skills
 import (
 	"net/http"
 
-	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 // MarketplacesFromConfig converts the persisted []config.MarketplaceConfig

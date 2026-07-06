@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/dapicom-ai/omnipus/pkg/security"
+	"github.com/elicify-ai/omnipus/pkg/security"
 )
 
 // TestSSRFChecker_PrivateIPv4Ranges validates all RFC 1918 private ranges, link-local,

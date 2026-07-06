@@ -30,9 +30,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/dapicom-ai/omnipus/cmd/omnipus/internal"
-	auditpkg "github.com/dapicom-ai/omnipus/pkg/audit"
-	"github.com/dapicom-ai/omnipus/pkg/credentials"
+	"github.com/elicify-ai/omnipus/cmd/omnipus/internal"
+	auditpkg "github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/credentials"
 )
 
 // NewAuditCommand returns the `omnipus audit` command tree.

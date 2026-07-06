@@ -42,7 +42,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/dapicom-ai/omnipus/pkg/sandbox"
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
 // sandboxChildEnv is the env-var sentinel the parent sets to route the

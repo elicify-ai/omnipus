@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/audit"
 )
 
 // listenLoopback opens a TCP listener on 127.0.0.1:0 for use in tests

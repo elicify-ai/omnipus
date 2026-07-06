@@ -26,8 +26,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	systools "github.com/dapicom-ai/omnipus/pkg/sysagent/tools"
-	"github.com/dapicom-ai/omnipus/pkg/task"
+	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
+	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
 // TestRegression_SysagentTaskUpdate_PreservesAllFields guards against the bug

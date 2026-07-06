@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/bus"
-	"github.com/dapicom-ai/omnipus/pkg/commands"
-	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/commands"
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 // TestRegisterCommands_ReturnsNil verifies that RegisterCommands succeeds (T12g).

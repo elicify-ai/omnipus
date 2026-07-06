@@ -10,8 +10,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/dapicom-ai/omnipus/pkg/devices/events"
-	"github.com/dapicom-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/devices/events"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
 var usbClassToCapability = map[string]string{

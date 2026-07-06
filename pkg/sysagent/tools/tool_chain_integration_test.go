@@ -23,9 +23,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/audit"
-	systools "github.com/dapicom-ai/omnipus/pkg/sysagent/tools"
-	"github.com/dapicom-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/audit"
+	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // ── helpers ──────────────────────────────────────────────────────────────────

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 // Dataset 1 from phase-1 spec §11 / TDD rows 1–5. The single underlying

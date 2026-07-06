@@ -15,8 +15,8 @@ import (
 
 	"github.com/oklog/ulid/v2"
 
-	"github.com/dapicom-ai/omnipus/pkg/tools"
-	workspacepkg "github.com/dapicom-ai/omnipus/pkg/workspace"
+	"github.com/elicify-ai/omnipus/pkg/tools"
+	workspacepkg "github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
 // workspace is the canonical on-disk workspace type shared with pkg/gateway.

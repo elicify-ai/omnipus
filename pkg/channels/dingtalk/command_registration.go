@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/dapicom-ai/omnipus/pkg/channels"
-	"github.com/dapicom-ai/omnipus/pkg/commands"
-	"github.com/dapicom-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/channels"
+	"github.com/elicify-ai/omnipus/pkg/commands"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
 // Compile-time assertion that DingTalkChannel implements CommandRegistrarCapable.

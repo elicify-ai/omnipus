@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/dapicom-ai/omnipus/pkg/testutil"
+	"github.com/elicify-ai/omnipus/pkg/testutil"
 )
 
 // TestXSSPayloads_Immutability verifies that mutating the slice returned by

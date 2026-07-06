@@ -8,10 +8,10 @@ import (
 // Build-time variables injected via ldflags during build process.
 // These are set by the Makefile or .goreleaser.yaml using the -X flag:
 //
-//	-X github.com/dapicom-ai/omnipus/pkg/config.Version=<version>
-//	-X github.com/dapicom-ai/omnipus/pkg/config.GitCommit=<commit>
-//	-X github.com/dapicom-ai/omnipus/pkg/config.BuildTime=<timestamp>
-//	-X github.com/dapicom-ai/omnipus/pkg/config.GoVersion=<go-version>
+//	-X github.com/elicify-ai/omnipus/pkg/config.Version=<version>
+//	-X github.com/elicify-ai/omnipus/pkg/config.GitCommit=<commit>
+//	-X github.com/elicify-ai/omnipus/pkg/config.BuildTime=<timestamp>
+//	-X github.com/elicify-ai/omnipus/pkg/config.GoVersion=<go-version>
 var (
 	Version   = "dev" // Default value when not built with ldflags
 	GitCommit string  // Git commit SHA (short)

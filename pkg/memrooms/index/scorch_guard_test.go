@@ -26,8 +26,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/dapicom-ai/omnipus/pkg/memrooms"
-	memindex "github.com/dapicom-ai/omnipus/pkg/memrooms/index"
+	"github.com/elicify-ai/omnipus/pkg/memrooms"
+	memindex "github.com/elicify-ai/omnipus/pkg/memrooms/index"
 )
 
 // TestBleve_DefaultIndexTypeIsScorch asserts that bleve's library-level default

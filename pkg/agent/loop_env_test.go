@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/bus"
 )
 
 // wireTestLoopWithGraphAndMaxDepth is a variant of wireTestLoopWithGraph

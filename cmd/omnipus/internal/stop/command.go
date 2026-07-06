@@ -16,8 +16,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/dapicom-ai/omnipus/cmd/omnipus/internal"
-	"github.com/dapicom-ai/omnipus/pkg/daemon"
+	"github.com/elicify-ai/omnipus/cmd/omnipus/internal"
+	"github.com/elicify-ai/omnipus/pkg/daemon"
 )
 
 // NewStopCommand returns the cobra command for `omnipus stop`.

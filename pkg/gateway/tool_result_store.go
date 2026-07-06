@@ -23,8 +23,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/api/generated"
-	"github.com/dapicom-ai/omnipus/pkg/fileutil"
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/fileutil"
 )
 
 // InlineToolResultMaxBytes is the threshold above which a tool result is offloaded to disk and replaced with a ToolResultRef sentinel in the WS frame.

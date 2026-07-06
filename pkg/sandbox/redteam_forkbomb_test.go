@@ -37,7 +37,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/dapicom-ai/omnipus/pkg/sandbox"
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
 // TestRedteam_ForkBomb_DirectPattern_Blocked verifies that the classic

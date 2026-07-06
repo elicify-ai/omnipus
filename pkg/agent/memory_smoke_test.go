@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/memrooms"
+	"github.com/elicify-ai/omnipus/pkg/memrooms"
 )
 
 // TestMemorySmoke verifies the core round-trip for the room-based store:

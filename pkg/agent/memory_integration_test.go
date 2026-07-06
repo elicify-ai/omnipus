@@ -17,8 +17,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/memrooms"
-	"github.com/dapicom-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/memrooms"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // TestRememberTool_RealAdapter_PersistsViaMemoryStore verifies the full

@@ -26,7 +26,7 @@ import (
 	"syscall"
 	"time"
 
-	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 )
 
 // selfRestartDrainSeconds is how long the gateway waits after acknowledging the

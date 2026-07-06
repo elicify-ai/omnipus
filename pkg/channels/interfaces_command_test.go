@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/commands"
+	"github.com/elicify-ai/omnipus/pkg/commands"
 )
 
 type mockRegistrar struct{}

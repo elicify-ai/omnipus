@@ -9,7 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/dapicom-ai/omnipus/pkg/policy"
+	"github.com/elicify-ai/omnipus/pkg/policy"
 )
 
 // TestGlobMatcher_ExecAllowlist validates glob pattern matching for allowed exec commands.

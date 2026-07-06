@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/channels"
+	"github.com/elicify-ai/omnipus/pkg/channels"
 )
 
 // TestIsCancelCommand_T11 verifies the T11 acceptance matrix from the spec

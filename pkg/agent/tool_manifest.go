@@ -5,8 +5,8 @@
 package agent
 
 import (
-	"github.com/dapicom-ai/omnipus/pkg/providers"
-	"github.com/dapicom-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // manifestSessionID derives the map key used to bucket loaded-tool state for a

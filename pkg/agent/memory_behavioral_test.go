@@ -15,7 +15,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/dapicom-ai/omnipus/pkg/memrooms"
+	"github.com/elicify-ai/omnipus/pkg/memrooms"
 )
 
 // ---------------------------------------------------------------------------

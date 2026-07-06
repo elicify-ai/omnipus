@@ -1,4 +1,4 @@
-module github.com/dapicom-ai/omnipus
+module github.com/elicify-ai/omnipus
 
 go 1.26.4
 
@@ -13,7 +13,6 @@ require (
 	github.com/bwmarrin/discordgo v0.29.0
 	github.com/caarlos0/env/v11 v11.4.1
 	github.com/chromedp/chromedp v0.15.1
-	github.com/creack/pty v1.1.24
 	github.com/emersion/go-imap/v2 v2.0.0-beta.8
 	github.com/ergochat/irc-go v0.6.0
 	github.com/gdamore/tcell/v2 v2.13.10

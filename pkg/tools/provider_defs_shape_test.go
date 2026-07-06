@@ -24,8 +24,8 @@ import (
 	"runtime"
 	"testing"
 
-	systools "github.com/dapicom-ai/omnipus/pkg/sysagent/tools"
-	"github.com/dapicom-ai/omnipus/pkg/tools"
+	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 var updateGolden = flag.Bool("update", false, "update golden files")

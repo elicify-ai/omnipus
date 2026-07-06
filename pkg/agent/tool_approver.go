@@ -24,7 +24,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/dapicom-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/audit"
 )
 
 // PolicyApprovalReq carries the fields needed to create and broadcast an approval.

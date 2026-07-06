@@ -6,8 +6,8 @@
 package agent
 
 import (
-	"github.com/dapicom-ai/omnipus/pkg/audit"
-	"github.com/dapicom-ai/omnipus/pkg/policy"
+	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/policy"
 )
 
 // auditBridge adapts an *audit.Logger to satisfy the policy.AuditLogger interface.

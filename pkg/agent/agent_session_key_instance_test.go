@@ -17,7 +17,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/bus"
 )
 
 // TestAgentSessionKey_IncludesInstanceID verifies TDD #12 / FR-023:

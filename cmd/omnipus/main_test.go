@@ -15,8 +15,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/dapicom-ai/omnipus/cmd/omnipus/internal/run"
-	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/cmd/omnipus/internal/run"
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 // TestNewOmnipusCommand_KeptCommandsPresent verifies that the minimized command

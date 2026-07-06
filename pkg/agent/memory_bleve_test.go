@@ -15,7 +15,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/memrooms"
+	"github.com/elicify-ai/omnipus/pkg/memrooms"
 )
 
 // newTestMemoryStore creates a fresh MemoryStore rooted under a temp dir.

@@ -13,7 +13,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/dapicom-ai/omnipus/pkg/media"
+	"github.com/elicify-ai/omnipus/pkg/media"
 )
 
 const (

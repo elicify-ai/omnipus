@@ -8,7 +8,7 @@ package utils
 import (
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 )
 
 func TestCalculateDefaultMaxContextRunes(t *testing.T) {

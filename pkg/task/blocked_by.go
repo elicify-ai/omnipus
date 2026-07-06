@@ -28,7 +28,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/fileutil"
+	"github.com/elicify-ai/omnipus/pkg/fileutil"
 )
 
 // maxBlockedByDepth bounds the longest blocked_by chain so the auto-advance

@@ -37,7 +37,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/dapicom-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/audit"
 )
 
 // TestRedteam_AuditLog_TruncationDetected documents the truncation half of

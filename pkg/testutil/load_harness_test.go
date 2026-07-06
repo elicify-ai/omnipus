@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/dapicom-ai/omnipus/pkg/testutil"
+	"github.com/elicify-ai/omnipus/pkg/testutil"
 )
 
 // TestPercentile_EmptySlice verifies that Percentile returns 0 for an empty input.

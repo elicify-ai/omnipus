@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
 // TestSetTodos_NewGoalCreatesTask proves that calling set_todos with a goal that

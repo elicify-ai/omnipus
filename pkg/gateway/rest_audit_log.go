@@ -12,8 +12,8 @@ import (
 	"log/slog"
 	"net/http"
 
-	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
-	"github.com/dapicom-ai/omnipus/pkg/audit"
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/audit"
 )
 
 // HandleSandboxAuditLog handles PUT /api/v1/security/audit-log.

@@ -158,7 +158,7 @@ func blankImportedChannels(t *testing.T, gatewayDir string) map[string]struct{} 
 	if err != nil {
 		t.Fatalf("read gateway dir: %v", err)
 	}
-	const channelPrefix = "github.com/dapicom-ai/omnipus/pkg/channels/"
+	const channelPrefix = "github.com/elicify-ai/omnipus/pkg/channels/"
 	fset := token.NewFileSet()
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") {

@@ -13,8 +13,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/memrooms"
-	"github.com/dapicom-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/memrooms"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // readCounterRecords parses a counters.jsonl file into CounterRecords.

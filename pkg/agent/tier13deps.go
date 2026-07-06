@@ -13,7 +13,7 @@
 package agent
 
 import (
-	"github.com/dapicom-ai/omnipus/pkg/sandbox"
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
 // Tier13Deps carries the shared singletons required to register the Tier 1

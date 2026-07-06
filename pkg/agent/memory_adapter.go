@@ -19,8 +19,8 @@ package agent
 import (
 	"strings"
 
-	"github.com/dapicom-ai/omnipus/pkg/memrooms"
-	"github.com/dapicom-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/memrooms"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // MemoryStoreAdapter wraps *MemoryStore to implement tools.MemoryAccess +

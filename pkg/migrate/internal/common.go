@@ -6,8 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/dapicom-ai/omnipus/pkg"
-	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg"
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 func ResolveTargetHome(override string) (string, error) {

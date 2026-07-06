@@ -12,8 +12,8 @@ import (
 	"sort"
 	"time"
 
-	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
-	"github.com/dapicom-ai/omnipus/pkg/session"
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 // byModelCell is the per-model token breakdown cell used in both the per-agent

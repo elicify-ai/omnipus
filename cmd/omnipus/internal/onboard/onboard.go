@@ -43,13 +43,13 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/term"
 
-	"github.com/dapicom-ai/omnipus/cmd/omnipus/internal/clitoken"
-	"github.com/dapicom-ai/omnipus/cmd/omnipus/internal/netinfo"
-	"github.com/dapicom-ai/omnipus/pkg/credentials"
-	"github.com/dapicom-ai/omnipus/pkg/datamodel"
-	"github.com/dapicom-ai/omnipus/pkg/fileutil"
-	"github.com/dapicom-ai/omnipus/pkg/onboarding"
-	"github.com/dapicom-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/cmd/omnipus/internal/clitoken"
+	"github.com/elicify-ai/omnipus/cmd/omnipus/internal/netinfo"
+	"github.com/elicify-ai/omnipus/pkg/credentials"
+	"github.com/elicify-ai/omnipus/pkg/datamodel"
+	"github.com/elicify-ai/omnipus/pkg/fileutil"
+	"github.com/elicify-ai/omnipus/pkg/onboarding"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 )
 
 // wizardIO is the dependency surface the wizard talks to. Splitting it out

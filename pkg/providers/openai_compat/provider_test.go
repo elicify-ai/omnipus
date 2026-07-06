@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/providers/common"
-	"github.com/dapicom-ai/omnipus/pkg/providers/protocoltypes"
+	"github.com/elicify-ai/omnipus/pkg/providers/common"
+	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 )
 
 func mustNewProvider(t *testing.T, apiKey, apiBase, proxy string, opts ...Option) *Provider {

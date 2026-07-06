@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/sandbox"
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
 // TestSpawn_NoLeakedParentFD_AfterStart (T2.20) counts open fds in the

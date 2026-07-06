@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	systools "github.com/dapicom-ai/omnipus/pkg/sysagent/tools"
+	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 )
 
 // ---- helpers ----

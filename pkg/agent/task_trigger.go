@@ -33,8 +33,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/cron"
-	"github.com/dapicom-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/cron"
+	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
 // taskTriggerOwnerSentinel is the AgentID written to cron jobs that belong to

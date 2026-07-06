@@ -10,7 +10,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/agent/testutil"
+	"github.com/elicify-ai/omnipus/pkg/agent/testutil"
 )
 
 func TestMain(m *testing.M) {

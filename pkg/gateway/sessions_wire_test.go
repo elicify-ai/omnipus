@@ -33,7 +33,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 
-	"github.com/dapicom-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 // loadMessageSchema compiles the Message.yaml component schema once per test

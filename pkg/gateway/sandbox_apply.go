@@ -42,9 +42,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/config"
-	"github.com/dapicom-ai/omnipus/pkg/sandbox"
-	"github.com/dapicom-ai/omnipus/pkg/tools/browser"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
+	"github.com/elicify-ai/omnipus/pkg/tools/browser"
 )
 
 // ExitSandboxConfig is the Sprint-J-specific exit code for Apply/Install

@@ -60,8 +60,8 @@ import (
 	"fmt"
 	"strings"
 
-	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
-	"github.com/dapicom-ai/omnipus/pkg/providers"
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 )
 
 // providersCatalogJSON is the embedded generated JSON artifact.

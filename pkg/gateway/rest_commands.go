@@ -3,8 +3,8 @@ package gateway
 import (
 	"net/http"
 
-	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
-	"github.com/dapicom-ai/omnipus/pkg/commands"
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/commands"
 )
 
 // HandleListCommands handles GET /api/v1/commands?surface=web|cli|channel.

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 // envSliceToMap parses a KEY=value env slice into a map for assertions.

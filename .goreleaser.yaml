@@ -6,9 +6,8 @@
 # Deferred (planned, not in v0.1): darwin/amd64 (Intel), windows/amd64 (#113),
 # linux/{riscv64,loong64,arm,mipsle}, freebsd/*, netbsd/*.
 #
-# Module path is still github.com/dapicom-ai/omnipus (go.mod). Renaming to
-# elicify-ai is a separate refactor — until then, LDFLAGS must target the
-# dapicom-ai path that the binary actually carries.
+# Module path is github.com/elicify-ai/omnipus (go.mod), matching the repo's
+# actual GitHub org — LDFLAGS below target that path.
 version: 2
 
 git:
@@ -45,10 +44,10 @@ builds:
       - stdjson
     ldflags:
       - -s -w
-      - -X github.com/dapicom-ai/omnipus/pkg/config.Version={{ .Version }}
-      - -X github.com/dapicom-ai/omnipus/pkg/config.GitCommit={{ .ShortCommit }}
-      - -X github.com/dapicom-ai/omnipus/pkg/config.BuildTime={{ .Date }}
-      - -X github.com/dapicom-ai/omnipus/pkg/config.GoVersion={{ .Env.GOVERSION }}
+      - -X github.com/elicify-ai/omnipus/pkg/config.Version={{ .Version }}
+      - -X github.com/elicify-ai/omnipus/pkg/config.GitCommit={{ .ShortCommit }}
+      - -X github.com/elicify-ai/omnipus/pkg/config.BuildTime={{ .Date }}
+      - -X github.com/elicify-ai/omnipus/pkg/config.GoVersion={{ .Env.GOVERSION }}
     goos:
       - linux
       - darwin

@@ -38,7 +38,7 @@ import (
 	bleveMapping "github.com/blevesearch/bleve/v2/mapping"
 	bleveQuery "github.com/blevesearch/bleve/v2/search/query"
 
-	"github.com/dapicom-ai/omnipus/pkg/memrooms"
+	"github.com/elicify-ai/omnipus/pkg/memrooms"
 )
 
 const (

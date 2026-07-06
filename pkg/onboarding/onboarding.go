@@ -20,7 +20,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/fileutil"
+	"github.com/elicify-ai/omnipus/pkg/fileutil"
 )
 
 // ErrAlreadyComplete is returned by ReserveComplete when onboarding has

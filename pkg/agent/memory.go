@@ -28,12 +28,12 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/dapicom-ai/omnipus/pkg/fileutil"
-	"github.com/dapicom-ai/omnipus/pkg/logger"
-	"github.com/dapicom-ai/omnipus/pkg/memrooms"
-	memindex "github.com/dapicom-ai/omnipus/pkg/memrooms/index"
-	"github.com/dapicom-ai/omnipus/pkg/memrooms/minhash"
-	"github.com/dapicom-ai/omnipus/pkg/validation"
+	"github.com/elicify-ai/omnipus/pkg/fileutil"
+	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/memrooms"
+	memindex "github.com/elicify-ai/omnipus/pkg/memrooms/index"
+	"github.com/elicify-ai/omnipus/pkg/memrooms/minhash"
+	"github.com/elicify-ai/omnipus/pkg/validation"
 )
 
 // MemoryCategory is the closed set of categories an agent may tag a long-term

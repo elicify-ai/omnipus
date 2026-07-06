@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/sandbox"
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
 // envSnapshotStub writes a stub CLI that dumps its OWN process environment to

@@ -9,7 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/dapicom-ai/omnipus/cmd/omnipus/internal"
+	"github.com/elicify-ai/omnipus/cmd/omnipus/internal"
 )
 
 // TestNewAuditCommand_Wired sanity-checks that the command tree is registered

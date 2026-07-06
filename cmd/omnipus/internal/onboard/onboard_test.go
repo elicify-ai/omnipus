@@ -15,9 +15,9 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/dapicom-ai/omnipus/cmd/omnipus/internal/clitoken"
-	"github.com/dapicom-ai/omnipus/pkg/credentials"
-	"github.com/dapicom-ai/omnipus/pkg/onboarding"
+	"github.com/elicify-ai/omnipus/cmd/omnipus/internal/clitoken"
+	"github.com/elicify-ai/omnipus/pkg/credentials"
+	"github.com/elicify-ai/omnipus/pkg/onboarding"
 )
 
 // newBufioReader is a convenience wrapper used by menu tests.

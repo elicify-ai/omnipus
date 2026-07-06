@@ -19,8 +19,8 @@ import (
 	"fmt"
 	"log/slog"
 
-	generated "github.com/dapicom-ai/omnipus/pkg/api/generated"
-	"github.com/dapicom-ai/omnipus/pkg/config"
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 // CoreAgentID identifies a core agent.

@@ -6,7 +6,7 @@ package routing
 import (
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 // testConfigWithChannels builds a *config.Config with agents, bindings, and a

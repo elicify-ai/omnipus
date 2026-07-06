@@ -1,7 +1,7 @@
 package tools
 
 import (
-	"github.com/dapicom-ai/omnipus/pkg/utils"
+	"github.com/elicify-ai/omnipus/pkg/utils"
 )
 
 // ToolSearchResult represents the result returned to the LLM.

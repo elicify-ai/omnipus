@@ -22,7 +22,7 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/sandbox"
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
 // TestChildCannotReadGatewayProcEnviron (T2.7) spawns a subprocess that

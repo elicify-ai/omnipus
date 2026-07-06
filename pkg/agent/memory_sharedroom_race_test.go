@@ -17,7 +17,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/memrooms"
+	"github.com/elicify-ai/omnipus/pkg/memrooms"
 )
 
 // TestSharedRoom_ConcurrentSetAndRead races SetWorkspaceID against every reader

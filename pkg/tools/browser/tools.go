@@ -11,8 +11,8 @@ import (
 
 	"github.com/chromedp/chromedp"
 
-	"github.com/dapicom-ai/omnipus/pkg/logger"
-	"github.com/dapicom-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // maxGetTextBytes caps browser_get_text output to prevent enormous DOM dumps.

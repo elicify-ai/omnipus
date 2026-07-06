@@ -22,7 +22,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/audit"
 )
 
 // tokenPrefixRE is the canonical pattern for the first 8 characters of a

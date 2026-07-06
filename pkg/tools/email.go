@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/dapicom-ai/omnipus/pkg/email"
+	"github.com/elicify-ai/omnipus/pkg/email"
 )
 
 // Email tools (M11) model mailbox accounts as a TOOL surface rather than a

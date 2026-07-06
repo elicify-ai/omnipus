@@ -6,7 +6,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/commands"
+	"github.com/elicify-ai/omnipus/pkg/commands"
 )
 
 // TestRegisterCommands_ReturnsNil verifies that RegisterCommands succeeds (T12e).

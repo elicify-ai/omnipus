@@ -14,7 +14,7 @@ import (
 
 	"github.com/adhocore/gronx"
 
-	"github.com/dapicom-ai/omnipus/pkg/fileutil"
+	"github.com/elicify-ai/omnipus/pkg/fileutil"
 )
 
 // Clock is the time source for the cron service. It is injected so tests can

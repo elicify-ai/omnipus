@@ -9,8 +9,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/dapicom-ai/omnipus/pkg"
-	"github.com/dapicom-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
 // OmnipusHomeDir resolves the base directory for all Omnipus-owned data.

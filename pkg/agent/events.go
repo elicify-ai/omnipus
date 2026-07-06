@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/channels"
-	"github.com/dapicom-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/channels"
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 // EventKind identifies a structured agent-loop event.

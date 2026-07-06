@@ -31,7 +31,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/audit"
 )
 
 // TestRotation_ConcurrentWritesNoPanic verifies that concurrent calls to

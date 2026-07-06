@@ -34,9 +34,9 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/dapicom-ai/omnipus/pkg/datamodel"
-	"github.com/dapicom-ai/omnipus/pkg/fileutil"
-	"github.com/dapicom-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/datamodel"
+	"github.com/elicify-ai/omnipus/pkg/fileutil"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // validateAgentMDFrontmatter parses the frontmatter block (if any) from content

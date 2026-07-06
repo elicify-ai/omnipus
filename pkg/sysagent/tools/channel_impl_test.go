@@ -17,9 +17,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/config"
-	"github.com/dapicom-ai/omnipus/pkg/credentials"
-	systools "github.com/dapicom-ai/omnipus/pkg/sysagent/tools"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/credentials"
+	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 )
 
 // newTestDepsWithCredStore creates a Deps backed by a real (unlocked) credential

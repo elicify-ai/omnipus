@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/audit"
 )
 
 // TestRunnerEgressProxy_AllowAllExternalEmptyList verifies that a runner proxy

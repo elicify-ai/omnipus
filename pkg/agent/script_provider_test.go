@@ -27,7 +27,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 )
 
 // errNoMoreScriptedResponses is returned when Chat is called after all scripted

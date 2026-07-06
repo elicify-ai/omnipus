@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
 // defaultTaskDrainInterval is the polling cadence for dispatchable (`next`)

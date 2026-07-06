@@ -14,7 +14,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/dapicom-ai/omnipus/pkg/policy"
+	"github.com/elicify-ai/omnipus/pkg/policy"
 )
 
 // GlobMatchResult is the result of matching a command against an exec allowlist.

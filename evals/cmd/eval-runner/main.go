@@ -30,7 +30,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/dapicom-ai/omnipus/evals/judge"
+	"github.com/elicify-ai/omnipus/evals/judge"
 )
 
 // ── Scenario schema ──────────────────────────────────────────────────────────

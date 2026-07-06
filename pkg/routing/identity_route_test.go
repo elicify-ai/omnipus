@@ -3,7 +3,7 @@ package routing
 import (
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 // TestResolveRoute_IdentityAgent_OverridesBindings covers Spec-2 US-5 point 1:

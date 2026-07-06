@@ -11,8 +11,8 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/dapicom-ai/omnipus/pkg/memory"
-	"github.com/dapicom-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/memory"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 )
 
 // breadcrumbTokenCap is the maximum token budget for the entire breadcrumb

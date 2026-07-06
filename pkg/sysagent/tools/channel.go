@@ -8,8 +8,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/dapicom-ai/omnipus/pkg/config"
-	"github.com/dapicom-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // channelEntry describes a channel's runtime state (not persisted — read from config).

@@ -62,7 +62,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/audit"
 )
 
 // restrictAuditHook is the package-level audit emitter for B1.2(d)

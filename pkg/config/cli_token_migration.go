@@ -25,8 +25,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/dapicom-ai/omnipus/pkg/fileutil"
-	"github.com/dapicom-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/fileutil"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
 // legacyCLIUsername is the role-less Gateway.Users[].Username value legacy

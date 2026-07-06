@@ -13,9 +13,9 @@ import (
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
 
-	"github.com/dapicom-ai/omnipus/pkg/providers/common"
-	orc "github.com/dapicom-ai/omnipus/pkg/providers/openai_responses_common"
-	"github.com/dapicom-ai/omnipus/pkg/providers/protocoltypes"
+	"github.com/elicify-ai/omnipus/pkg/providers/common"
+	orc "github.com/elicify-ai/omnipus/pkg/providers/openai_responses_common"
+	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 )
 
 type (

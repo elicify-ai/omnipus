@@ -8,8 +8,8 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/task"
-	"github.com/dapicom-ai/omnipus/pkg/workspace"
+	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
 // TaskListTool lists tasks for the calling agent.

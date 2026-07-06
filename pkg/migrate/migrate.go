@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/dapicom-ai/omnipus/pkg/migrate/internal"
-	"github.com/dapicom-ai/omnipus/pkg/migrate/sources/openclaw"
+	"github.com/elicify-ai/omnipus/pkg/migrate/internal"
+	"github.com/elicify-ai/omnipus/pkg/migrate/sources/openclaw"
 )
 
 type (

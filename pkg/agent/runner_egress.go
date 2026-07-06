@@ -15,8 +15,8 @@ package agent
 import (
 	"log/slog"
 
-	"github.com/dapicom-ai/omnipus/pkg/audit"
-	"github.com/dapicom-ai/omnipus/pkg/sandbox"
+	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
 // runnerEgressProxyAddr lazily starts (on first external-CLI dispatch) and

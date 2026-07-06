@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/daemon"
-	"github.com/dapicom-ai/omnipus/pkg/fileutil"
+	"github.com/elicify-ai/omnipus/pkg/daemon"
+	"github.com/elicify-ai/omnipus/pkg/fileutil"
 )
 
 // TestStop_NothingRunning verifies that daemon.Stop returns (false, nil) when

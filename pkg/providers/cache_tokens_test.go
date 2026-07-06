@@ -18,7 +18,7 @@ package providers
 import (
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/providers/protocoltypes"
+	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 )
 
 // TestClaudeCliProvider_CacheTokens_SeparatedFromPrompt verifies that the

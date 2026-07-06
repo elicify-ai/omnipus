@@ -5,7 +5,7 @@ package sandbox_test
 import (
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/sandbox"
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
 // TestGodModeAvailableDefault verifies that GodModeAvailable is true under the

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/agent/envcontext"
+	"github.com/elicify-ai/omnipus/pkg/agent/envcontext"
 )
 
 // ---------------------------------------------------------------------------

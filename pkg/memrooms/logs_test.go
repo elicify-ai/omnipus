@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/memrooms"
+	"github.com/elicify-ai/omnipus/pkg/memrooms"
 )
 
 // TestLogs_CounterRecord_FrozenFieldNames verifies the frozen counters.jsonl

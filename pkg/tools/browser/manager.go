@@ -17,8 +17,8 @@ import (
 
 	"github.com/chromedp/chromedp"
 
-	"github.com/dapicom-ai/omnipus/pkg/logger"
-	"github.com/dapicom-ai/omnipus/pkg/security"
+	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/security"
 )
 
 // DebugPort is the fixed loopback TCP port the managed Chromium binds its

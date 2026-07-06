@@ -9,13 +9,13 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/dapicom-ai/omnipus/cmd/omnipus/internal"
-	"github.com/dapicom-ai/omnipus/cmd/omnipus/internal/clitoken"
-	"github.com/dapicom-ai/omnipus/cmd/omnipus/internal/netinfo"
-	"github.com/dapicom-ai/omnipus/pkg/gateway"
-	"github.com/dapicom-ai/omnipus/pkg/logger"
-	"github.com/dapicom-ai/omnipus/pkg/sandbox"
-	"github.com/dapicom-ai/omnipus/pkg/utils"
+	"github.com/elicify-ai/omnipus/cmd/omnipus/internal"
+	"github.com/elicify-ai/omnipus/cmd/omnipus/internal/clitoken"
+	"github.com/elicify-ai/omnipus/cmd/omnipus/internal/netinfo"
+	"github.com/elicify-ai/omnipus/pkg/gateway"
+	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
+	"github.com/elicify-ai/omnipus/pkg/utils"
 )
 
 func NewGatewayCommand() *cobra.Command {

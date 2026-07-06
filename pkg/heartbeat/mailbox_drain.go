@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
 // defaultMailboxDrainInterval is the polling cadence for unhandled inbound mail.

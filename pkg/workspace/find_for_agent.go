@@ -11,7 +11,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/dapicom-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
 // teamRecord is the minimal subset of the on-disk workspace JSON FindForAgent

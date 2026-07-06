@@ -69,11 +69,11 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/dapicom-ai/omnipus/cmd/omnipus/internal/clitoken"
-	"github.com/dapicom-ai/omnipus/cmd/omnipus/internal/run"
-	"github.com/dapicom-ai/omnipus/pkg/agent/testutil"
-	"github.com/dapicom-ai/omnipus/pkg/config"
-	"github.com/dapicom-ai/omnipus/pkg/gateway"
+	"github.com/elicify-ai/omnipus/cmd/omnipus/internal/clitoken"
+	"github.com/elicify-ai/omnipus/cmd/omnipus/internal/run"
+	"github.com/elicify-ai/omnipus/pkg/agent/testutil"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/gateway"
 )
 
 // TestMain registers the real gateway.RunContext so testutil.StartTestGateway can
