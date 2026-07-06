@@ -3471,6 +3471,16 @@ func (a *restAPI) safeUpdateConfigJSON(mutate func(m map[string]any) error) erro
 	if mutateErr := mutate(m); mutateErr != nil {
 		return mutateErr
 	}
+	// Ensure "version" is always stamped before writing back, mirroring
+	// config.SaveConfig's own version-stamping for the struct-based save path.
+	// Without this, a config.json that reached this raw-map read-modify-write
+	// cycle without a "version" key (e.g. hand-edited, restored from an old
+	// backup, or — as this exact bug once did — a stale test fixture) would
+	// permanently fail every subsequent reload with "unsupported config
+	// version: 0", since there is no more v0 migration fallback to bail it out.
+	if v, ok := m["version"].(float64); !ok || int(v) < config.CurrentVersion {
+		m["version"] = config.CurrentVersion
+	}
 	out, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return fmt.Errorf("serialize config: %w", err)
