@@ -67,12 +67,15 @@ afterEach(() => {
 })
 
 describe('ActivityBar — idle (0 running)', () => {
-  it('renders a quiet idle label and stays clickable', async () => {
+  // Regression test for a /visual-qa finding: the bar previously always
+  // rendered, including an always-visible "No active background work" idle
+  // state stretched full-width above the composer — noise, not signal, and
+  // inconsistent with RateLimitIndicator's own precedent of conditional
+  // mounting. The bar must now render nothing at all when idle.
+  it('renders nothing when there is no running activity', () => {
     renderBar()
-    await waitFor(() => {
-      expect(screen.getByText('No active background work')).toBeInTheDocument()
-    })
-    expect(screen.getByTestId('activity-bar')).toBeEnabled()
+    expect(screen.queryByTestId('activity-bar')).not.toBeInTheDocument()
+    expect(screen.queryByText('No active background work')).not.toBeInTheDocument()
   })
 })
 
@@ -199,14 +202,12 @@ describe('ActivityBar — opens the panel on click', () => {
     expect(screen.getByText('digging into logs')).toBeInTheDocument()
   })
 
-  it('opens the panel even at rest (0 running), keeping recently-finished history reachable', async () => {
+  // Deliberate, accepted tradeoff (see ActivityBar.tsx's header comment): the
+  // bar is a pure "something is happening right now" glance, not a
+  // permanent history browser — at rest there's nothing to click, by design.
+  it('has no clickable entry point at rest — the panel is only reachable while something is running', () => {
     renderBar()
-    await waitFor(() => {
-      expect(screen.getByText('No active background work')).toBeInTheDocument()
-    })
-    fireEvent.click(screen.getByTestId('activity-bar'))
-    await waitFor(() => {
-      expect(screen.getByText('No background activity yet.')).toBeInTheDocument()
-    })
+    expect(screen.queryByTestId('activity-bar')).not.toBeInTheDocument()
+    expect(screen.queryByText('Running now')).not.toBeInTheDocument()
   })
 })
