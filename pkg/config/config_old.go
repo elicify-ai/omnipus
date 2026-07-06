@@ -86,9 +86,6 @@ type toolsConfigV0 struct {
 	Message         ToolConfig          `json:"message"                                                 envPrefix:"OMNIPUS_TOOLS_MESSAGE_"`
 	ReadFile        ReadFileToolConfig  `json:"read_file"                                               envPrefix:"OMNIPUS_TOOLS_READ_FILE_"`
 	SendFile        ToolConfig          `json:"send_file"                                               envPrefix:"OMNIPUS_TOOLS_SEND_FILE_"`
-	Spawn           ToolConfig          `json:"spawn"                                                   envPrefix:"OMNIPUS_TOOLS_SPAWN_"`
-	SpawnStatus     ToolConfig          `json:"spawn_status"                                            envPrefix:"OMNIPUS_TOOLS_SPAWN_STATUS_"`
-	Subagent        ToolConfig          `json:"subagent"                                                envPrefix:"OMNIPUS_TOOLS_SUBAGENT_"`
 	WebFetch        ToolConfig          `json:"web_fetch"                                               envPrefix:"OMNIPUS_TOOLS_WEB_FETCH_"`
 	WriteFile       ToolConfig          `json:"write_file"                                              envPrefix:"OMNIPUS_TOOLS_WRITE_FILE_"`
 }
@@ -1064,9 +1061,6 @@ func (c *configV0) Migrate() (*Config, error) {
 	cfg.Tools.Message = c.Tools.Message
 	cfg.Tools.ReadFile = c.Tools.ReadFile
 	cfg.Tools.SendFile = c.Tools.SendFile
-	cfg.Tools.Spawn = c.Tools.Spawn
-	cfg.Tools.SpawnStatus = c.Tools.SpawnStatus
-	cfg.Tools.Subagent = c.Tools.Subagent
 	cfg.Tools.WebFetch = c.Tools.WebFetch
 	cfg.Tools.AllowReadPaths = c.Tools.AllowReadPaths
 	cfg.Tools.AllowWritePaths = c.Tools.AllowWritePaths

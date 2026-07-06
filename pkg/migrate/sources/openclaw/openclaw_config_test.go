@@ -726,14 +726,6 @@ func TestToStandardConfig_ExecDenyPatterns_MigrateToShellDenyPatterns(t *testing
 
 	stdCfg := omnipusCfg.ToStandardConfig()
 
-	// The dead struct must not carry the migrated patterns.
-	if len(stdCfg.Tools.Exec.CustomDenyPatterns) != 0 {
-		t.Errorf(
-			"stdCfg.Tools.Exec.CustomDenyPatterns must stay empty (dead field), got %v",
-			stdCfg.Tools.Exec.CustomDenyPatterns,
-		)
-	}
-
 	// The live global field must carry the migrated patterns.
 	if len(stdCfg.Sandbox.ShellDenyPatterns) != 2 {
 		t.Fatalf(

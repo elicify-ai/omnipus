@@ -1394,36 +1394,6 @@ func TestAgentToolsCfg_JSONRoundTrip(t *testing.T) {
 	}
 }
 
-// TestDeprecatedEnableFlagsAreIgnored documents the post-refactor behavior:
-// tools.<name>.enabled is no longer consulted for gating. Tools always register
-// and the policy engine (pkg/policy) controls invocation via allow/ask/deny.
-// The legacy field remains in ToolsConfig so old configs still parse, but
-// warnDeprecatedEnableFlags emits a one-time WARN on load when any sub-flag
-// is explicitly false.
-//
-// BDD: Given a ToolsConfig with Browser.Enabled = false (legacy),
-//
-//	When warnDeprecatedEnableFlags is called,
-//	Then no panic occurs and the flag has no runtime effect.
-//
-// Traces to: the tool-enable refactor that removed IsToolEnabled.
-func TestDeprecatedEnableFlagsAreIgnored(t *testing.T) {
-	cfg := &ToolsConfig{}
-	cfg.Browser.Enabled = false
-	cfg.Browser.EvaluateEnabled = false
-	// Must not panic. We can't easily assert on the WARN log without a
-	// test logger, but the call exercises the entire scan path.
-	cfg.warnDeprecatedEnableFlags()
-
-	// Flag stays on the struct (back-compat for serialization).
-	if cfg.Browser.Enabled {
-		t.Error("Browser.Enabled should remain whatever the caller set (false here)")
-	}
-	// There is no behavioral contract to test here — that's the whole point.
-	// The matching behavioral contract lives in pkg/policy tests (browser.evaluate
-	// is denied by default via builtinToolPolicies).
-}
-
 func TestRetention_ZeroSessionDaysStillMeansDefault90(t *testing.T) {
 	r := OmnipusRetentionConfig{SessionDays: 0}
 	if got := r.RetentionSessionDays(); got != 90 {

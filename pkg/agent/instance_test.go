@@ -442,8 +442,7 @@ func TestNewAgentInstance_AllowsMediaTempDirForReadAndList_RejectsForBash(t *tes
 			ReadFile: config.ReadFileToolConfig{Enabled: true},
 			ListDir:  config.ToolConfig{Enabled: true},
 			Exec: config.ExecConfig{
-				ToolConfig:         config.ToolConfig{Enabled: true},
-				EnableDenyPatterns: true,
+				ToolConfig: config.ToolConfig{Enabled: true},
 			},
 		},
 	}
@@ -514,9 +513,7 @@ func TestNewAgentInstance_InvalidExecConfigDoesNotExit(t *testing.T) {
 		Tools: config.ToolsConfig{
 			ReadFile: config.ReadFileToolConfig{Enabled: true},
 			Exec: config.ExecConfig{
-				ToolConfig:         config.ToolConfig{Enabled: true},
-				EnableDenyPatterns: true,
-				CustomDenyPatterns: []string{"[invalid-regex"},
+				ToolConfig: config.ToolConfig{Enabled: true},
 			},
 		},
 	}

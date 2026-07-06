@@ -368,36 +368,12 @@ func DefaultConfig() *Config {
 			},
 			Exec: ExecConfig{
 				ToolConfig: ToolConfig{
-					// Enabled is still live: migrateDeprecatedToolEnableFlags
-					// (migration.go) translates an operator's
-					// tools.exec.enabled=false into a "bash" policy deny.
 					Enabled: true,
 				},
-				// EnableDenyPatterns/TimeoutSeconds/MaxBackgroundSeconds below
-				// are vestigial — see the Deprecated doc comments on
-				// ExecConfig (config.go): the ADR-036 `bash` tool never reads
-				// config.Tools.Exec at all. Left at their historical values
-				// (rather than zeroed) deliberately: these fields lack
-				// `omitempty` and are already persisted into every existing
-				// operator's config.json at these values, so changing the
-				// in-memory default would only change what a *fresh* install
-				// serializes (from true/60/300 to false/0/0) with zero
-				// functional difference either way (nothing reads them) —
-				// not worth the on-disk-diff confusion for operators
-				// comparing configs. warnDeprecatedExecConfigFields
-				// (exec_config_deprecation.go) flags real customization of
-				// these fields at boot.
-				EnableDenyPatterns:   true,
-				TimeoutSeconds:       60,
-				MaxBackgroundSeconds: 300, // 5 minutes; 0 = disabled
 			},
 			// Browser automation is a standard built-in tool — enabled by default
-			// like exec/web/cron. Without this entry tools.browser.Enabled defaulted
-			// to the bool zero value (false), which migrateDeprecatedToolEnableFlags
-			// then translated into a global "browser_*: deny" policy — silently
-			// hiding browser_navigate/browser_screenshot/etc. from EVERY agent's tool list.
-			// Headless on by default for server use; browser_evaluate stays opt-in
-			// (EvaluateEnabled=false) per SEC-04/SEC-06.
+			// like exec/web/cron. Headless on by default for server use;
+			// browser_evaluate stays opt-in (EvaluateEnabled=false) per SEC-04/SEC-06.
 			Browser: BrowserToolConfig{
 				ToolConfig: ToolConfig{
 					Enabled: true,
@@ -459,15 +435,6 @@ func DefaultConfig() *Config {
 			ReadFile: ReadFileToolConfig{
 				Enabled:         true,
 				MaxReadFileSize: 64 * 1024, // 64KB
-			},
-			Spawn: ToolConfig{
-				Enabled: true,
-			},
-			SpawnStatus: ToolConfig{
-				Enabled: false,
-			},
-			Subagent: ToolConfig{
-				Enabled: true,
 			},
 			WebFetch: ToolConfig{
 				Enabled: true,

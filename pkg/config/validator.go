@@ -296,8 +296,6 @@ func validateBootConfig(cfg *Config) error {
 		}
 	}
 
-	// WorkspaceShellEnabled: nil = unset; resolved per-agent in loop.go (false fallback). Jim's seed forces true for fresh installs and for upgrades where the prior validator wrote &false.
-
 	// Validate Tier3Commands: each entry must have ≥2 non-empty tokens after
 	// strings.Fields. The baseline allow-list always uses "binary subcommand"
 	// format (e.g. "next dev", "vite dev"). A single-token entry like "node"
