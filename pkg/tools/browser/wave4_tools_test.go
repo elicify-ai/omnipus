@@ -6,8 +6,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/dapicom-ai/omnipus/pkg/security"
-	"github.com/dapicom-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/security"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // TestBrowserToolRegistration verifies that RegisterTools registers all 7 browser tools.

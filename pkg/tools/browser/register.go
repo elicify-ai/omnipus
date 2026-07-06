@@ -1,8 +1,8 @@
 package browser
 
 import (
-	"github.com/dapicom-ai/omnipus/pkg/security"
-	"github.com/dapicom-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/security"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // RegisterTools registers browser automation tools with the given registry.

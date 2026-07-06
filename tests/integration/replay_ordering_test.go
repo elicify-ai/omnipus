@@ -31,7 +31,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/dapicom-ai/omnipus/pkg/agent/testutil"
+	"github.com/elicify-ai/omnipus/pkg/agent/testutil"
 )
 
 // TestReplayOrdering_ToolCallStartBeforeResult seeds a transcript with a

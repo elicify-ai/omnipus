@@ -1,7 +1,7 @@
 package agent
 
 import (
-	"github.com/dapicom-ai/omnipus/pkg/agent/envcontext"
+	"github.com/elicify-ai/omnipus/pkg/agent/envcontext"
 )
 
 // environmentProvider returns operator-facing runtime state (paths, sandbox

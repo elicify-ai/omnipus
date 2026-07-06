@@ -9,8 +9,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/media"
-	"github.com/dapicom-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/media"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 )
 
 // --- mock types ---

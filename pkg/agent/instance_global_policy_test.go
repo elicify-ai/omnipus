@@ -3,8 +3,8 @@ package agent
 import (
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/config"
-	"github.com/dapicom-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // TestAgentToolsCfgToPolicy_GlobalMerge verifies O7 (WS-G): the global sandbox

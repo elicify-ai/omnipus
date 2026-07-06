@@ -15,9 +15,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/memory"
-	"github.com/dapicom-ai/omnipus/pkg/providers"
-	"github.com/dapicom-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/memory"
+	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // recall_conversation bounds (FR-009, FR-008).

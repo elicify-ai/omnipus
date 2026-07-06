@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 func TestExtractProtocol(t *testing.T) {

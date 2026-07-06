@@ -31,8 +31,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/providers"
-	"github.com/dapicom-ai/omnipus/pkg/sandbox"
+	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
 // versionProbeTimeout bounds the `--version` handshake. A CLI that can't print

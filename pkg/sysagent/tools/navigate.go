@@ -8,7 +8,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/dapicom-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // NavigateCallback is an optional hook the gateway provides to receive

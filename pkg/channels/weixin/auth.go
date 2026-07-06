@@ -8,7 +8,7 @@ import (
 
 	"github.com/mdp/qrterminal/v3"
 
-	"github.com/dapicom-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
 // AuthFlowOpts configures the interactive QR login flow.

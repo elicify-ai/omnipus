@@ -16,9 +16,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/config"
-	"github.com/dapicom-ai/omnipus/pkg/providers"
-	"github.com/dapicom-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // providerFromModelRef extracts the provider prefix from a "provider/model" reference.

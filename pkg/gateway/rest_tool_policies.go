@@ -11,10 +11,10 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/dapicom-ai/omnipus/pkg/agent"
-	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
-	"github.com/dapicom-ai/omnipus/pkg/audit"
-	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/agent"
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 // HandleToolPolicies handles GET/PUT /api/v1/security/tool-policies.

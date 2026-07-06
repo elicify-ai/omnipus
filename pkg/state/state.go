@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/fileutil"
+	"github.com/elicify-ai/omnipus/pkg/fileutil"
 )
 
 // State represents the persistent state for a workspace.

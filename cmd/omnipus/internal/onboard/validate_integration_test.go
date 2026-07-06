@@ -39,9 +39,9 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/credentials"
-	"github.com/dapicom-ai/omnipus/pkg/datamodel"
-	"github.com/dapicom-ai/omnipus/pkg/onboarding"
+	"github.com/elicify-ai/omnipus/pkg/credentials"
+	"github.com/elicify-ai/omnipus/pkg/datamodel"
+	"github.com/elicify-ai/omnipus/pkg/onboarding"
 )
 
 // ── helpers ──────────────────────────────────────────────────────────────────

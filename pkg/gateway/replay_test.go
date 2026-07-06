@@ -22,9 +22,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 
-	"github.com/dapicom-ai/omnipus/pkg/agent"
-	generated "github.com/dapicom-ai/omnipus/pkg/api/generated"
-	"github.com/dapicom-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/agent"
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -652,8 +652,8 @@ func TestReplay_CtxCancelled_StopsCleanly(t *testing.T) {
 	// persistent workers, in case one is spawned *after* the snapshot by a concurrent test.
 	defer goleak.VerifyNone(t,
 		goleak.IgnoreCurrent(),
-		goleak.IgnoreTopFunction("github.com/dapicom-ai/omnipus/pkg/tools.NewSessionManager.func1"),
-		goleak.IgnoreTopFunction("github.com/dapicom-ai/omnipus/pkg/agent.(*HookManager).dispatchEvents"),
+		goleak.IgnoreTopFunction("github.com/elicify-ai/omnipus/pkg/tools.NewSessionManager.func1"),
+		goleak.IgnoreTopFunction("github.com/elicify-ai/omnipus/pkg/agent.(*HookManager).dispatchEvents"),
 		// bleve analysis workers are started at package-init time by the memory/bleve
 		// subsystem initialized via newTestWSHandler in other tests in this package.
 		// They are persistent infrastructure goroutines — not started by streamReplay.

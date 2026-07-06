@@ -8,8 +8,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/dapicom-ai/omnipus/pkg/config"
-	"github.com/dapicom-ai/omnipus/pkg/sandbox"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
 // DefaultProvider is the production implementation of Provider. It derives

@@ -12,8 +12,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/skills"
-	systools "github.com/dapicom-ai/omnipus/pkg/sysagent/tools"
+	"github.com/elicify-ai/omnipus/pkg/skills"
+	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 )
 
 // newDepsWithSkillsLoader builds a Deps with a real SkillsLoader rooted in a

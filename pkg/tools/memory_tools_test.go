@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/audit"
-	"github.com/dapicom-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // ---------------------------------------------------------------------------

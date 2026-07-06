@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/memrooms/minhash"
+	"github.com/elicify-ai/omnipus/pkg/memrooms/minhash"
 )
 
 // TestMinHash_IdenticalTextsMaxSimilarity verifies that identical texts have

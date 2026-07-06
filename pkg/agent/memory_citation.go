@@ -21,9 +21,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/dapicom-ai/omnipus/pkg/logger"
-	"github.com/dapicom-ai/omnipus/pkg/memrooms"
-	"github.com/dapicom-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/memrooms"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // citationTracker is the pkg/agent implementation of tools.CitationTracker.

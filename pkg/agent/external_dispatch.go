@@ -40,13 +40,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/agent/runner"
-	"github.com/dapicom-ai/omnipus/pkg/config"
-	"github.com/dapicom-ai/omnipus/pkg/fileutil"
-	"github.com/dapicom-ai/omnipus/pkg/sandbox"
-	"github.com/dapicom-ai/omnipus/pkg/session"
-	"github.com/dapicom-ai/omnipus/pkg/tools"
-	"github.com/dapicom-ai/omnipus/pkg/workspace"
+	"github.com/elicify-ai/omnipus/pkg/agent/runner"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/fileutil"
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
+	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
 // executorConfigOf returns the sub-agent executor config for an AgentInstance, or

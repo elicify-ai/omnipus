@@ -17,7 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/dapicom-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/audit"
 )
 
 // TestAuditLogger_WriteAndRotate is an integration test covering JSONL append,

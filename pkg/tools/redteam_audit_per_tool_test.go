@@ -39,7 +39,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/dapicom-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/audit"
 )
 
 // auditableToolFixture is the per-tool table row. Each entry knows how to

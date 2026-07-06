@@ -13,13 +13,13 @@ import (
 	"github.com/open-dingtalk/dingtalk-stream-sdk-go/client"
 	dinglog "github.com/open-dingtalk/dingtalk-stream-sdk-go/logger"
 
-	"github.com/dapicom-ai/omnipus/pkg/bus"
-	"github.com/dapicom-ai/omnipus/pkg/channels"
-	"github.com/dapicom-ai/omnipus/pkg/config"
-	"github.com/dapicom-ai/omnipus/pkg/credentials"
-	"github.com/dapicom-ai/omnipus/pkg/identity"
-	"github.com/dapicom-ai/omnipus/pkg/logger"
-	"github.com/dapicom-ai/omnipus/pkg/utils"
+	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/channels"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/credentials"
+	"github.com/elicify-ai/omnipus/pkg/identity"
+	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/utils"
 )
 
 // DingTalkChannel implements the Channel interface for DingTalk (钉钉)

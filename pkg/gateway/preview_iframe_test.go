@@ -42,10 +42,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/dapicom-ai/omnipus/pkg/agent"
-	"github.com/dapicom-ai/omnipus/pkg/audit"
-	"github.com/dapicom-ai/omnipus/pkg/gateway/middleware"
-	"github.com/dapicom-ai/omnipus/pkg/sandbox"
+	"github.com/elicify-ai/omnipus/pkg/agent"
+	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
 // parseTestURL parses a raw URL string and returns a *url.URL.

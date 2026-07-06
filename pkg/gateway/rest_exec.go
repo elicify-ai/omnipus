@@ -12,8 +12,8 @@ import (
 	"net/http"
 	"strings"
 
-	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
-	"github.com/dapicom-ai/omnipus/pkg/audit"
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/audit"
 )
 
 const (

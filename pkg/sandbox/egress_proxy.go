@@ -41,8 +41,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/audit"
-	"github.com/dapicom-ai/omnipus/pkg/security"
+	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/security"
 )
 
 // EgressAuditFunc is invoked for every denied egress request, and for any

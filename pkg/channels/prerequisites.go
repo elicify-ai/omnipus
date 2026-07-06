@@ -1,6 +1,6 @@
 package channels
 
-import "github.com/dapicom-ai/omnipus/pkg/config"
+import "github.com/elicify-ai/omnipus/pkg/config"
 
 // This file centralizes the per-channel-type prerequisite checks that guard
 // initChannels: each named checker verifies that an enabled channel instance

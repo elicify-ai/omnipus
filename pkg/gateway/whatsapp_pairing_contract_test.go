@@ -8,8 +8,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/dapicom-ai/omnipus/pkg/channels"
-	"github.com/dapicom-ai/omnipus/pkg/gateway/inboundschemas"
+	"github.com/elicify-ai/omnipus/pkg/channels"
+	"github.com/elicify-ai/omnipus/pkg/gateway/inboundschemas"
 )
 
 // TestWhatsAppPairingStatusEnumMatchesContract guards against drift between the

@@ -27,7 +27,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/dapicom-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/audit"
 )
 
 // testKey is a deterministic 32-byte chain key for tests. Using a fixed value

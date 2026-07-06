@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/config"
-	"github.com/dapicom-ai/omnipus/pkg/credentials"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/credentials"
 )
 
 // testMasterKey is the fixed AES key used by all test harnesses.

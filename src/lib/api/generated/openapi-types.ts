@@ -4215,7 +4215,7 @@ export interface components {
             abi_version?: number;
             /**
              * @description Set when a known kernel incompatibility is flagged. Do NOT hard-code the literal issue number in the SPA.
-             * @example https://github.com/dapicom-ai/omnipus/issues/123
+             * @example https://github.com/elicify-ai/omnipus/issues/123
              */
             issue_ref?: string;
             /** @description List of syscall names blocked by seccomp (when active). */

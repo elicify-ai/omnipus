@@ -35,7 +35,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/media"
+	"github.com/elicify-ai/omnipus/pkg/media"
 )
 
 // agentBSecretContent is the canonical sentinel string we plant in agent B's

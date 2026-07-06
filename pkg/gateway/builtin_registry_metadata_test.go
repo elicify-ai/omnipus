@@ -25,8 +25,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	systools "github.com/dapicom-ai/omnipus/pkg/sysagent/tools"
-	"github.com/dapicom-ai/omnipus/pkg/tools"
+	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // TestCentralBuiltinRegistry_ContainsGeneralAndSystemTools asserts that a

@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/bus"
-	basechannels "github.com/dapicom-ai/omnipus/pkg/channels"
-	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/bus"
+	basechannels "github.com/elicify-ai/omnipus/pkg/channels"
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 // newTestWeixinChannel builds a channel wired to an httptest server so outbound

@@ -20,10 +20,10 @@ import (
 	"net/http"
 	"strings"
 
-	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
-	"github.com/dapicom-ai/omnipus/pkg/config"
-	"github.com/dapicom-ai/omnipus/pkg/coreagent"
-	"github.com/dapicom-ai/omnipus/pkg/tools"
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/coreagent"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // toolSource is the discriminator for GET /api/v1/tools (FR-027).

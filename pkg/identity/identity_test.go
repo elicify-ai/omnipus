@@ -3,7 +3,7 @@ package identity
 import (
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/bus"
 )
 
 func TestBuildCanonicalID(t *testing.T) {

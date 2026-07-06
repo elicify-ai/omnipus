@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/dapicom-ai/omnipus/cmd/omnipus/internal/clitoken"
+	"github.com/elicify-ai/omnipus/cmd/omnipus/internal/clitoken"
 )
 
 func TestNewGatewayCommand(t *testing.T) {

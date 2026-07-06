@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 )
 
 // TestConfigureChannel_RejectsIdentity covers the FINAL-REVIEW HIGH security fix:

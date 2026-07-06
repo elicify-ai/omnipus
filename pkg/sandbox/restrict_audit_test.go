@@ -15,7 +15,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/audit"
 )
 
 // TestRestrictCurrentThread_FailureEmitsAudit (T2.15) installs a custom

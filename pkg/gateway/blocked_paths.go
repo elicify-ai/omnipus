@@ -6,7 +6,7 @@
 
 package gateway
 
-import "github.com/dapicom-ai/omnipus/pkg/config"
+import "github.com/elicify-ai/omnipus/pkg/config"
 
 // blockedPaths lists dotted configuration paths that the generic
 // PUT /api/v1/config endpoint must refuse to mutate at any nesting depth.

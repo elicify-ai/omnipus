@@ -12,7 +12,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/dapicom-ai/omnipus/pkg/agent"
+	"github.com/elicify-ai/omnipus/pkg/agent"
 )
 
 // TestWhatsAppPairing_CodeFrameDeliveredToSubscriber verifies a "code" pairing

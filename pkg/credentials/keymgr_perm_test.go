@@ -25,7 +25,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/credentials"
+	"github.com/elicify-ai/omnipus/pkg/credentials"
 )
 
 // validHexKey is a 64-character hex string (32 bytes = 256-bit key).

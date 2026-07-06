@@ -3,7 +3,7 @@ package channels
 import (
 	"context"
 
-	"github.com/dapicom-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/bus"
 )
 
 // MediaSender is an optional interface for channels that can send

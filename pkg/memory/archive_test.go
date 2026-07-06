@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 )
 
 // countFileLines counts the total non-empty lines in a file.

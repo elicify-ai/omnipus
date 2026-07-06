@@ -17,8 +17,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	systools "github.com/dapicom-ai/omnipus/pkg/sysagent/tools"
-	"github.com/dapicom-ai/omnipus/pkg/task"
+	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
+	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
 // seedTask writes a task.Task directly to disk at home/tasks/<id>.json.

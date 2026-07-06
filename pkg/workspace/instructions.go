@@ -12,8 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/dapicom-ai/omnipus/pkg/fileutil"
-	"github.com/dapicom-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/fileutil"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
 // ErrInvalidWorkspaceID is returned when a workspace id could escape the

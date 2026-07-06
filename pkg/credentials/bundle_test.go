@@ -8,8 +8,8 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/config"
-	"github.com/dapicom-ai/omnipus/pkg/credentials"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/credentials"
 )
 
 // TestResolveBundle_AllChannelRefs is a drift guard: it seeds the store with a

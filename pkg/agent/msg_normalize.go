@@ -45,8 +45,8 @@ package agent
 import (
 	"strings"
 
-	"github.com/dapicom-ai/omnipus/pkg/logger"
-	"github.com/dapicom-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 )
 
 // normalizeMessagesForProvider cleans an outgoing message slice so that strict

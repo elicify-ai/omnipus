@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/dapicom-ai/omnipus/pkg/agent"
+	"github.com/elicify-ai/omnipus/pkg/agent"
 )
 
 // notificationFrameDecoder decodes the fields the test asserts on.

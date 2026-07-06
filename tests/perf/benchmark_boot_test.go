@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/agent/testutil"
+	"github.com/elicify-ai/omnipus/pkg/agent/testutil"
 )
 
 // BenchmarkBootHealth measures the time from startPerfGateway return to the

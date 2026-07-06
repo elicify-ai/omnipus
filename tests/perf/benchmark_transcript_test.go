@@ -8,7 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/dapicom-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 const (

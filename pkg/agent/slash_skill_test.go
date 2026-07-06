@@ -15,9 +15,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/bus"
-	"github.com/dapicom-ai/omnipus/pkg/commands"
-	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/commands"
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 // writeSkillFile creates a minimal SKILL.md under workspace/skills/<name>/.

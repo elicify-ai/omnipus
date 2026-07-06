@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/media"
+	"github.com/elicify-ai/omnipus/pkg/media"
 )
 
 // singlePixelPNG is a 1x1 transparent PNG encoded as base64.

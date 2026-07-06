@@ -11,7 +11,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	tuicfg "github.com/dapicom-ai/omnipus/cmd/omnipus-launcher-tui/config"
+	tuicfg "github.com/elicify-ai/omnipus/cmd/omnipus-launcher-tui/config"
 )
 
 func (a *App) newSchemesPage() tview.Primitive {

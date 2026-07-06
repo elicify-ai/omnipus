@@ -43,10 +43,10 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/dapicom-ai/omnipus/pkg/agent/runner"
-	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
-	"github.com/dapicom-ai/omnipus/pkg/audit"
-	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/agent/runner"
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 // cliValidateInflight caps concurrent in-flight validations PER CALLER (not a

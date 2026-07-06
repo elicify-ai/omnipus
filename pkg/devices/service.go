@@ -6,12 +6,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/bus"
-	"github.com/dapicom-ai/omnipus/pkg/constants"
-	"github.com/dapicom-ai/omnipus/pkg/devices/events"
-	"github.com/dapicom-ai/omnipus/pkg/devices/sources"
-	"github.com/dapicom-ai/omnipus/pkg/logger"
-	"github.com/dapicom-ai/omnipus/pkg/state"
+	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/constants"
+	"github.com/elicify-ai/omnipus/pkg/devices/events"
+	"github.com/elicify-ai/omnipus/pkg/devices/sources"
+	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/state"
 )
 
 type Service struct {

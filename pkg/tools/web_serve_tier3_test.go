@@ -15,7 +15,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/audit"
 )
 
 // TestTier3CommandAllowList_AllowsBaselineDevServers (T2.1) verifies every

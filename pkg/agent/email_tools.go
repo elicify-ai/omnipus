@@ -6,9 +6,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/dapicom-ai/omnipus/pkg/config"
-	"github.com/dapicom-ai/omnipus/pkg/email"
-	"github.com/dapicom-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/email"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // registerEmailToolsForAgent registers the M11 email tools (read_inbox,

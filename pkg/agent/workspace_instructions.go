@@ -8,9 +8,9 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/dapicom-ai/omnipus/pkg/logger"
-	"github.com/dapicom-ai/omnipus/pkg/providers"
-	"github.com/dapicom-ai/omnipus/pkg/workspace"
+	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
 // injectWorkspaceInstructions inserts the workspace instructions note as a

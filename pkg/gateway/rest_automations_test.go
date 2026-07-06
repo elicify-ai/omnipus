@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/dapicom-ai/omnipus/pkg/cron"
+	"github.com/elicify-ai/omnipus/pkg/cron"
 )
 
 // automationsResp decodes the not-wire-format automations response body.

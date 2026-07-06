@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 )
 
 // TestValidateCLI_NonRegularExecutableRejected: a FIFO with the exec bit set is

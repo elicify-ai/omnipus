@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // TestRegistry_AllSysagentToolsCategory verifies that every tool returned by

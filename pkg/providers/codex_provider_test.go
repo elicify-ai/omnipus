@@ -11,7 +11,7 @@ import (
 	openaiopt "github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
 
-	orc "github.com/dapicom-ai/omnipus/pkg/providers/openai_responses_common"
+	orc "github.com/elicify-ai/omnipus/pkg/providers/openai_responses_common"
 )
 
 func TestBuildCodexParams_BasicMessage(t *testing.T) {

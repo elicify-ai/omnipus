@@ -26,7 +26,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/dapicom-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 // createTestSession creates a session via POST /api/v1/sessions and returns its ID.

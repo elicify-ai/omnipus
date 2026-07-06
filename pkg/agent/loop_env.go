@@ -5,11 +5,11 @@ import (
 	"os"
 	"strings"
 
-	"github.com/dapicom-ai/omnipus/pkg/agent/envcontext"
-	"github.com/dapicom-ai/omnipus/pkg/config"
-	"github.com/dapicom-ai/omnipus/pkg/coreagent"
-	"github.com/dapicom-ai/omnipus/pkg/logger"
-	"github.com/dapicom-ai/omnipus/pkg/workspace"
+	"github.com/elicify-ai/omnipus/pkg/agent/envcontext"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/coreagent"
+	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
 // wireEnvProviders injects an envcontext.DefaultProvider into every registered

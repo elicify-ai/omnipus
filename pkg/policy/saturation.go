@@ -26,7 +26,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/dapicom-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/audit"
 )
 
 // SaturationConfigKey is the canonical config-key string for the cap.

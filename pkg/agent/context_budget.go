@@ -9,7 +9,7 @@ import (
 	"encoding/json"
 	"unicode/utf8"
 
-	"github.com/dapicom-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 )
 
 // parseTurnBoundaries returns the starting index of each Turn in the history.

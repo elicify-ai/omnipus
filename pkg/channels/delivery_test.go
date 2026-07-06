@@ -22,7 +22,7 @@ import (
 
 	"golang.org/x/time/rate"
 
-	"github.com/dapicom-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/bus"
 )
 
 // ---------------------------------------------------------------------------

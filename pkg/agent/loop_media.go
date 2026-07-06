@@ -16,10 +16,10 @@ import (
 
 	"github.com/h2non/filetype"
 
-	"github.com/dapicom-ai/omnipus/pkg/docextract"
-	"github.com/dapicom-ai/omnipus/pkg/logger"
-	"github.com/dapicom-ai/omnipus/pkg/media"
-	"github.com/dapicom-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/docextract"
+	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/media"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 )
 
 // resolveMediaRefs resolves media:// refs in messages.

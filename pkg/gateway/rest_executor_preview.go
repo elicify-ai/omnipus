@@ -21,9 +21,9 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/dapicom-ai/omnipus/pkg/agent"
-	"github.com/dapicom-ai/omnipus/pkg/agent/runner"
-	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/agent"
+	"github.com/elicify-ai/omnipus/pkg/agent/runner"
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 )
 
 // executorPreviewDroppedArg is the exact anonymous shape oapi-codegen

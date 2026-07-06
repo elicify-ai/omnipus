@@ -12,9 +12,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/security"
-	"github.com/dapicom-ai/omnipus/pkg/session"
-	"github.com/dapicom-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/security"
+	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // ---- system.doctor.run ----

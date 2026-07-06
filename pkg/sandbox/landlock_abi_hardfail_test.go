@@ -20,7 +20,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/sandbox"
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
 // TestApplyOnABI4_EINVAL_HardFails (T2.19) verifies that on an ABI v4 kernel

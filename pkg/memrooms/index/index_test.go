@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/memrooms"
-	memindex "github.com/dapicom-ai/omnipus/pkg/memrooms/index"
+	"github.com/elicify-ai/omnipus/pkg/memrooms"
+	memindex "github.com/elicify-ai/omnipus/pkg/memrooms/index"
 )
 
 // makeTestRoom creates a temporary room directory and returns a memrooms.Room.

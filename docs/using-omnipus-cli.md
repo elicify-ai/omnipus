@@ -122,7 +122,7 @@ the answer back in your terminal — no browser required:
 
 ```bash
 # Talk to a specific agent
-omnipus jim "Summarise the open GitHub issues in dapicom-ai/omnipus"
+omnipus jim "Summarise the open GitHub issues in elicify-ai/omnipus"
 
 # Override the model for this turn
 omnipus mia --model openrouter/google/gemini-2.5-flash "Draft a welcome email"

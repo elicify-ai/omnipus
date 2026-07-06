@@ -17,8 +17,8 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/dapicom-ai/omnipus/cmd/omnipus/internal/run"
-	"github.com/dapicom-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/cmd/omnipus/internal/run"
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
 )
 
 // testToken is the bearer token the server expects from the client.

@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 // TestDefaultGatewayPort_UnifiedAtFiveThousand is the regression guard for

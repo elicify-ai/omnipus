@@ -3,7 +3,7 @@ package utils
 import (
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
 func TestHtmlToMarkdown(t *testing.T) {

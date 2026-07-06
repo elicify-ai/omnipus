@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/dapicom-ai/omnipus/pkg/cron"
+	"github.com/elicify-ai/omnipus/pkg/cron"
 )
 
 // TestRestAPI_CronService_AtomicStoreLoad asserts that restAPI.cronService is an

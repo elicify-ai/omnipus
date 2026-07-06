@@ -13,8 +13,8 @@ import (
 
 	"github.com/oklog/ulid/v2"
 
-	"github.com/dapicom-ai/omnipus/pkg/task"
-	"github.com/dapicom-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // unifiedTask is the canonical on-disk task type used by the sysagent tools.

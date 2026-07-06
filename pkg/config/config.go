@@ -31,9 +31,9 @@ import (
 	"github.com/caarlos0/env/v11"
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/dapicom-ai/omnipus/pkg"
-	"github.com/dapicom-ai/omnipus/pkg/fileutil"
-	"github.com/dapicom-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg"
+	"github.com/elicify-ai/omnipus/pkg/fileutil"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
 // rrCounter is a global counter for round-robin load balancing across models.

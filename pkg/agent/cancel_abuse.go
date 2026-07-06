@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/audit"
 )
 
 // abuseKey uniquely identifies a (user, channel) pair as a map key.

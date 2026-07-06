@@ -36,7 +36,7 @@
 
 package config
 
-import "github.com/dapicom-ai/omnipus/pkg/logger"
+import "github.com/elicify-ai/omnipus/pkg/logger"
 
 // warnAboutExtraUsers logs an advisory WARN naming every Gateway.Users entry
 // beyond the first when more than one is present. This is NOT a

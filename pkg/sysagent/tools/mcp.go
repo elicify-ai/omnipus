@@ -11,8 +11,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/dapicom-ai/omnipus/pkg/config"
-	"github.com/dapicom-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // mcpURLSchemeValid reports whether rawURL is acceptable for an sse/http MCP

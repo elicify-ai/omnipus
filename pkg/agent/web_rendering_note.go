@@ -5,8 +5,8 @@
 package agent
 
 import (
-	"github.com/dapicom-ai/omnipus/pkg/commands"
-	"github.com/dapicom-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/commands"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 )
 
 // webRenderingNote is the ephemeral system note injected on web-chat turns.

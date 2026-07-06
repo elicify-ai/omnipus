@@ -12,7 +12,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/dapicom-ai/omnipus/pkg/sandbox"
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
 // TestSandboxedCommandTransport_SpawnsAndReaps verifies the ADR-019 spawn path:

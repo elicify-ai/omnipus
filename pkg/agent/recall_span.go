@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"sync/atomic"
 
-	"github.com/dapicom-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 )
 
 // recallSpanDropCounters tracks recall_span_dropped_total{reason} (FR-018).

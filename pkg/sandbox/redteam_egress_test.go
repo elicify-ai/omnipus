@@ -50,7 +50,7 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/sandbox"
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
 // rawTCPConnect issues connect(2) directly on a fresh AF_INET TCP socket,

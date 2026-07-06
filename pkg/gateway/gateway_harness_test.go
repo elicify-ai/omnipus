@@ -22,7 +22,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/dapicom-ai/omnipus/pkg/agent/testutil"
+	"github.com/elicify-ai/omnipus/pkg/agent/testutil"
 )
 
 // TestHarnessBootsAndShutsDown verifies that StartTestGateway boots a real

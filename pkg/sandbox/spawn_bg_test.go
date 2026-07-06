@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/sandbox"
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
 // TestSpawnBackgroundChild_BasicSpawn verifies that SpawnBackgroundChild

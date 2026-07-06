@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 )
 
 // rest_voice.go — GET /api/v1/voice/provider.

@@ -10,7 +10,7 @@ import (
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
 
-	"github.com/dapicom-ai/omnipus/pkg/providers/protocoltypes"
+	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 )
 
 // TranslateMessages converts internal Message entries to the OpenAI Responses API

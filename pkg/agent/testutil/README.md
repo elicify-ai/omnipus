@@ -3,7 +3,7 @@
 Shared test infrastructure for all Plan-3 PRs. Import path:
 
 ```
-github.com/dapicom-ai/omnipus/pkg/agent/testutil
+github.com/elicify-ai/omnipus/pkg/agent/testutil
 ```
 
 ## What this package provides

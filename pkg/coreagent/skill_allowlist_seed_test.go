@@ -4,8 +4,8 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/config"
-	"github.com/dapicom-ai/omnipus/pkg/coreagent"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/coreagent"
 )
 
 // TestSeedConfig_SeedsSkillAllowlistMatrix verifies FR-9.4: SeedConfig seeds the

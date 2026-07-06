@@ -20,7 +20,7 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/sandbox"
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
 // TestLandlock_ApplySubprocess verifies that LinuxBackend.Apply actually

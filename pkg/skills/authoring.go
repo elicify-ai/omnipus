@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/fileutil"
+	"github.com/elicify-ai/omnipus/pkg/fileutil"
 )
 
 // MaxSkillMarkdownBytes caps the size of a SKILL.md body accepted by the

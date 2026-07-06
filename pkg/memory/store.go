@@ -3,7 +3,7 @@ package memory
 import (
 	"context"
 
-	"github.com/dapicom-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 )
 
 // StoreReader defines the read-only persistence operations for session

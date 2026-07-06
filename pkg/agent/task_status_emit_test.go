@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
 // newEmitTestExecutor builds a TaskExecutor backed by a real task.Store and a

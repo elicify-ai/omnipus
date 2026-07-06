@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
 // newAlWithTaskStore creates a minimal AgentLoop with a real task.Store rooted

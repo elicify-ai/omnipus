@@ -41,7 +41,7 @@ import (
 	"golang.org/x/crypto/argon2"
 	"golang.org/x/crypto/hkdf"
 
-	"github.com/dapicom-ai/omnipus/pkg/fileutil"
+	"github.com/elicify-ai/omnipus/pkg/fileutil"
 )
 
 const (

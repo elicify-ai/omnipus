@@ -20,8 +20,8 @@ import (
 
 	"golang.org/x/net/http2"
 
-	"github.com/dapicom-ai/omnipus/pkg/logger"
-	"github.com/dapicom-ai/omnipus/pkg/providers/protocoltypes"
+	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 )
 
 // Re-export protocol types used across providers.

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
 func makeCandidate(provider, model string) FallbackCandidate {

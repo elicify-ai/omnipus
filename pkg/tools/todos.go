@@ -6,8 +6,8 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/dapicom-ai/omnipus/pkg/task"
-	"github.com/dapicom-ai/omnipus/pkg/workspace"
+	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
 // SetTodosTool is the agent-facing scratchpad tool: a task-ID-opaque checklist

@@ -12,8 +12,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/dapicom-ai/omnipus/cmd/omnipus/internal"
-	"github.com/dapicom-ai/omnipus/pkg/credentials"
+	"github.com/elicify-ai/omnipus/cmd/omnipus/internal"
+	"github.com/elicify-ai/omnipus/pkg/credentials"
 )
 
 // NewCredentialsCommand returns the `omnipus credentials` command with subcommands.

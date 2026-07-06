@@ -21,8 +21,8 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/dapicom-ai/omnipus/pkg/agent/testutil"
-	perfutil "github.com/dapicom-ai/omnipus/pkg/testutil"
+	"github.com/elicify-ai/omnipus/pkg/agent/testutil"
+	perfutil "github.com/elicify-ai/omnipus/pkg/testutil"
 )
 
 // loadTestGuard returns true when OMNIPUS_RUN_LOAD_TEST=1.

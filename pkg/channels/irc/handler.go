@@ -9,10 +9,10 @@ import (
 	"github.com/ergochat/irc-go/ircevent"
 	"github.com/ergochat/irc-go/ircmsg"
 
-	"github.com/dapicom-ai/omnipus/pkg/bus"
-	"github.com/dapicom-ai/omnipus/pkg/channels"
-	"github.com/dapicom-ai/omnipus/pkg/identity"
-	"github.com/dapicom-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/channels"
+	"github.com/elicify-ai/omnipus/pkg/identity"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
 // onConnect is called after a successful connection (and on reconnect).

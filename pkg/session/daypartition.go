@@ -20,7 +20,7 @@ import (
 
 	"github.com/oklog/ulid/v2"
 
-	"github.com/dapicom-ai/omnipus/pkg/fileutil"
+	"github.com/elicify-ai/omnipus/pkg/fileutil"
 )
 
 // EntryType classifies a transcript entry.

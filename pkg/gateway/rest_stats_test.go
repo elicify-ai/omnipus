@@ -21,7 +21,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 )
 
 // TestHandleTokenStats_EmptyReturns200 verifies GET /api/v1/stats/tokens returns 200

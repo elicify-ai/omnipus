@@ -1,6 +1,6 @@
 package testutil
 
-import "github.com/dapicom-ai/omnipus/pkg/config"
+import "github.com/elicify-ai/omnipus/pkg/config"
 
 // Option is a functional option applied to harnessConfig before StartTestGateway fires.
 type Option func(*harnessConfig)

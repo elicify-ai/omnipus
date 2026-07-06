@@ -14,7 +14,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/dapicom-ai/omnipus/pkg/agent/testutil"
+	"github.com/elicify-ai/omnipus/pkg/agent/testutil"
 )
 
 // mockLLMServer mirrors tests/perf/mock_openrouter_test.go::mockOpenRouterServer.

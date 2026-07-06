@@ -10,9 +10,9 @@ import (
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
 
-	"github.com/dapicom-ai/omnipus/pkg/auth"
-	"github.com/dapicom-ai/omnipus/pkg/logger"
-	orc "github.com/dapicom-ai/omnipus/pkg/providers/openai_responses_common"
+	"github.com/elicify-ai/omnipus/pkg/auth"
+	"github.com/elicify-ai/omnipus/pkg/logger"
+	orc "github.com/elicify-ai/omnipus/pkg/providers/openai_responses_common"
 )
 
 const (

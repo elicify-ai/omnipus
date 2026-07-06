@@ -24,10 +24,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/h2non/filetype"
 
-	"github.com/dapicom-ai/omnipus/pkg/bus"
-	basechannels "github.com/dapicom-ai/omnipus/pkg/channels"
-	"github.com/dapicom-ai/omnipus/pkg/logger"
-	"github.com/dapicom-ai/omnipus/pkg/media"
+	"github.com/elicify-ai/omnipus/pkg/bus"
+	basechannels "github.com/elicify-ai/omnipus/pkg/channels"
+	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/media"
 )
 
 const (

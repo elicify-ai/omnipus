@@ -3,7 +3,7 @@ package envcontext
 import (
 	"fmt"
 
-	"github.com/dapicom-ai/omnipus/pkg/sandbox"
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
 // renderSandboxMode converts a sandbox.Status into the human-readable string

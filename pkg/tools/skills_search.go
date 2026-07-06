@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/dapicom-ai/omnipus/pkg/skills"
+	"github.com/elicify-ai/omnipus/pkg/skills"
 )
 
 // FindSkillsTool allows the LLM agent to search for installable skills from registries.

@@ -24,10 +24,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/agent"
-	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
-	"github.com/dapicom-ai/omnipus/pkg/audit"
-	"github.com/dapicom-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/agent"
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
 // validateMilestoneFK validates that a milestone exists and (when workspaceID is

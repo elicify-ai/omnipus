@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/dapicom-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
 // Drainer turns un-handled inbound mail into Board tasks (M11). Email is a TOOL

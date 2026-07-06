@@ -15,7 +15,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/dapicom-ai/omnipus/pkg/policy"
+	"github.com/elicify-ai/omnipus/pkg/policy"
 )
 
 // Strictness controls how aggressively PromptGuard sanitizes content.

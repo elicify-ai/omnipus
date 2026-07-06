@@ -18,12 +18,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/config"
-	"github.com/dapicom-ai/omnipus/pkg/credentials"
-	"github.com/dapicom-ai/omnipus/pkg/fileutil"
-	"github.com/dapicom-ai/omnipus/pkg/session"
-	"github.com/dapicom-ai/omnipus/pkg/skills"
-	"github.com/dapicom-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/credentials"
+	"github.com/elicify-ai/omnipus/pkg/fileutil"
+	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/skills"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // Deps bundles all shared dependencies for system tools.

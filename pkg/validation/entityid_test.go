@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/validation"
+	"github.com/elicify-ai/omnipus/pkg/validation"
 )
 
 // TestEntityID_BehaviorMatchesOldValidator pins the observable behavior of

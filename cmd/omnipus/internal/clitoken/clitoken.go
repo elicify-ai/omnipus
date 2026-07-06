@@ -28,7 +28,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/dapicom-ai/omnipus/pkg/fileutil"
+	"github.com/elicify-ai/omnipus/pkg/fileutil"
 )
 
 // ErrNoCLIToken is returned by LoadCLIToken when the token file does not

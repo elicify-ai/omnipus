@@ -1,7 +1,7 @@
 package routing
 
 import (
-	"github.com/dapicom-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 )
 
 // defaultThreshold is used when the config threshold is zero or negative.

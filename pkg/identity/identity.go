@@ -6,7 +6,7 @@ package identity
 import (
 	"strings"
 
-	"github.com/dapicom-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/bus"
 )
 
 // BuildCanonicalID constructs a canonical "platform:id" identifier.

@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/config"
-	"github.com/dapicom-ai/omnipus/pkg/session"
-	systools "github.com/dapicom-ai/omnipus/pkg/sysagent/tools"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/session"
+	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 )
 
 // makeSession is a helper that constructs a *session.UnifiedMeta with the

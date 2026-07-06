@@ -3,8 +3,8 @@ package session
 import (
 	"context"
 
-	"github.com/dapicom-ai/omnipus/pkg/memory"
-	"github.com/dapicom-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/memory"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 )
 
 // SessionReader defines the read-only operations used by the agent loop.

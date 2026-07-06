@@ -15,7 +15,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"github.com/dapicom-ai/omnipus/pkg/daemon"
+	"github.com/elicify-ai/omnipus/pkg/daemon"
 )
 
 // omnipusHome returns the Omnipus home directory (~/.omnipus).

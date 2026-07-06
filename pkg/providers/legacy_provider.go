@@ -8,7 +8,7 @@ package providers
 import (
 	"fmt"
 
-	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 // CreateProvider creates a provider based on the configuration.

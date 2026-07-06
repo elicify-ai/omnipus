@@ -3,8 +3,8 @@ package providers
 import (
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/auth"
-	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/auth"
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 func TestCreateProviderReturnsHTTPProviderForOpenRouter(t *testing.T) {

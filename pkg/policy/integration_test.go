@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/dapicom-ai/omnipus/pkg/policy"
+	"github.com/elicify-ai/omnipus/pkg/policy"
 )
 
 // TestConfigLoader_SecuritySection validates that a valid security config JSON is

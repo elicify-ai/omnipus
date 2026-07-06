@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/dapicom-ai/omnipus/pkg/skills"
+	"github.com/elicify-ai/omnipus/pkg/skills"
 )
 
 func TestFindSkillsToolName(t *testing.T) {

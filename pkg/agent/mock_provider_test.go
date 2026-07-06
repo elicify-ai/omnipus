@@ -3,7 +3,7 @@ package agent
 import (
 	"context"
 
-	"github.com/dapicom-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 )
 
 type mockProvider struct{}

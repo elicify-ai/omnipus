@@ -11,8 +11,8 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	tuicfg "github.com/dapicom-ai/omnipus/cmd/omnipus-launcher-tui/config"
-	"github.com/dapicom-ai/omnipus/cmd/omnipus-launcher-tui/ui"
+	tuicfg "github.com/elicify-ai/omnipus/cmd/omnipus-launcher-tui/config"
+	"github.com/elicify-ai/omnipus/cmd/omnipus-launcher-tui/ui"
 )
 
 func main() {

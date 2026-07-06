@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
 // TestFindForAgent_SingleWorkspace verifies the common case: an agent is a

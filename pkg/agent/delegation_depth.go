@@ -8,7 +8,7 @@ package agent
 import (
 	"context"
 
-	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 // resolveEffectiveDelegationDepth returns the effective onward-delegation depth

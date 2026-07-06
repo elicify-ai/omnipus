@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/dapicom-ai/omnipus/pkg/security"
+	"github.com/elicify-ai/omnipus/pkg/security"
 )
 
 // TestExecProxy_SSRFBlock is an integration test validating the exec HTTP proxy

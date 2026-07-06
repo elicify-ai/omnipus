@@ -62,8 +62,8 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/dapicom-ai/omnipus/pkg/config"
-	"github.com/dapicom-ai/omnipus/pkg/gateway/ctxkey"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/gateway/ctxkey"
 )
 
 // SessionCookieName is the name of the HttpOnly auth cookie issued at login.

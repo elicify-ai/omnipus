@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
 // fakeTransport is an in-memory Transport for drainer tests.

@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // TestMemoryRateLimiter_ConcurrentLoad_NoRace verifies that 6 writer

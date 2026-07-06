@@ -9,7 +9,7 @@ package gateway
 import (
 	"net/http"
 
-	"github.com/dapicom-ai/omnipus/pkg/sandbox"
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
 // rest_security_wave5.go — Wave 5 operator-facing REST endpoint (SEC-01/02/03).

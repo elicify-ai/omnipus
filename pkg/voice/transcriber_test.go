@@ -3,8 +3,8 @@ package voice
 import (
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/config"
-	"github.com/dapicom-ai/omnipus/pkg/credentials"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/credentials"
 )
 
 func TestDetectTranscriber(t *testing.T) {

@@ -19,9 +19,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/dapicom-ai/omnipus/pkg/agent"
-	"github.com/dapicom-ai/omnipus/pkg/agent/runner"
-	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/agent"
+	"github.com/elicify-ai/omnipus/pkg/agent/runner"
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 )
 
 // postExecutorPreview issues POST /api/v1/agents/executor-preview with the

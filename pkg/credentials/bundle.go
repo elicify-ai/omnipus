@@ -5,7 +5,7 @@
 package credentials
 
 import (
-	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 // SecretRef is the name of a credential stored in credentials.json.

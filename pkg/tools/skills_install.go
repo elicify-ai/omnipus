@@ -9,10 +9,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/fileutil"
-	"github.com/dapicom-ai/omnipus/pkg/logger"
-	"github.com/dapicom-ai/omnipus/pkg/skills"
-	"github.com/dapicom-ai/omnipus/pkg/utils"
+	"github.com/elicify-ai/omnipus/pkg/fileutil"
+	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/skills"
+	"github.com/elicify-ai/omnipus/pkg/utils"
 )
 
 // InstallSkillTool allows the LLM agent to install skills from registries.

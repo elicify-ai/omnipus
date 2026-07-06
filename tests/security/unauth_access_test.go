@@ -36,8 +36,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/dapicom-ai/omnipus/pkg/agent/testutil"
-	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/agent/testutil"
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 // unauthCase is one row: an unauthenticated request to a protected endpoint,

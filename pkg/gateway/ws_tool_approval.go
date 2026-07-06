@@ -23,7 +23,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
 )
 
 // broadcastToolApprovalRequired sends a tool_approval_required WS frame to

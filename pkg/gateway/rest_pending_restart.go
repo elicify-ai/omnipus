@@ -14,8 +14,8 @@ import (
 	"reflect"
 	"strings"
 
-	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
-	"github.com/dapicom-ai/omnipus/pkg/config"
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 // RestartGatedKeys is the authoritative list of config keys that require a

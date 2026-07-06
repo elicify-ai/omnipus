@@ -10,7 +10,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/providers/openai_compat"
+	"github.com/elicify-ai/omnipus/pkg/providers/openai_compat"
 )
 
 type HTTPProvider struct {

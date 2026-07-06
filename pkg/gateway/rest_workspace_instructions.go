@@ -11,8 +11,8 @@ import (
 	"log/slog"
 	"net/http"
 
-	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
-	"github.com/dapicom-ai/omnipus/pkg/workspace"
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
 // handleWorkspaceInstructionsGet returns the content of the workspace's AGENT.md

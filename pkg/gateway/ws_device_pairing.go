@@ -14,7 +14,7 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/dapicom-ai/omnipus/pkg/pairing"
+	"github.com/elicify-ai/omnipus/pkg/pairing"
 )
 
 // devicePairingRegistry tracks in-flight pairing requests awaiting admin approval.

@@ -483,10 +483,10 @@ pkg/channels/mychann/
 package mychann
 
 import (
-    "github.com/dapicom-ai/omnipus/pkg/bus"
-    "github.com/dapicom-ai/omnipus/pkg/channels"
-    "github.com/dapicom-ai/omnipus/pkg/config"
-    "github.com/dapicom-ai/omnipus/pkg/credentials"
+    "github.com/elicify-ai/omnipus/pkg/bus"
+    "github.com/elicify-ai/omnipus/pkg/channels"
+    "github.com/elicify-ai/omnipus/pkg/config"
+    "github.com/elicify-ai/omnipus/pkg/credentials"
 )
 
 func init() {
@@ -508,11 +508,11 @@ import (
     "context"
     "fmt"
 
-    "github.com/dapicom-ai/omnipus/pkg/bus"
-    "github.com/dapicom-ai/omnipus/pkg/channels"
-    "github.com/dapicom-ai/omnipus/pkg/config"
-    "github.com/dapicom-ai/omnipus/pkg/credentials"
-    "github.com/dapicom-ai/omnipus/pkg/identity"
+    "github.com/elicify-ai/omnipus/pkg/bus"
+    "github.com/elicify-ai/omnipus/pkg/channels"
+    "github.com/elicify-ai/omnipus/pkg/config"
+    "github.com/elicify-ai/omnipus/pkg/credentials"
+    "github.com/elicify-ai/omnipus/pkg/identity"
 )
 
 type MyChannel struct {
@@ -602,7 +602,7 @@ if channels.MyChann.Enabled && channels.MyChann.Token != "" {
 In `pkg/gateway/gateway.go`:
 
 ```go
-_ "github.com/dapicom-ai/omnipus/pkg/channels/mychann"
+_ "github.com/elicify-ai/omnipus/pkg/channels/mychann"
 ```
 
 ### Step 7: Implement optional interfaces as needed

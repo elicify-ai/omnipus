@@ -39,7 +39,7 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/sandbox"
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
 // nonTmpHome returns a fresh tempdir that is NOT under /tmp. The DefaultPolicy

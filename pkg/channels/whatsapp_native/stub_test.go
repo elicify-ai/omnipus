@@ -8,7 +8,7 @@ package whatsapp
 import (
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 // TestStubReturnsError asserts that, in builds where native WhatsApp is not

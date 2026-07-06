@@ -9,11 +9,11 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/dapicom-ai/omnipus/pkg/agent"
-	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
-	"github.com/dapicom-ai/omnipus/pkg/config"
-	"github.com/dapicom-ai/omnipus/pkg/credentials"
-	"github.com/dapicom-ai/omnipus/pkg/email"
+	"github.com/elicify-ai/omnipus/pkg/agent"
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/credentials"
+	"github.com/elicify-ai/omnipus/pkg/email"
 )
 
 // buildMailboxes resolves the set of enabled, password-resolvable mailboxes from

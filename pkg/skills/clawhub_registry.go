@@ -13,7 +13,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/utils"
+	"github.com/elicify-ai/omnipus/pkg/utils"
 )
 
 const (

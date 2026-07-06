@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/config"
-	"github.com/dapicom-ai/omnipus/pkg/gateway/ctxkey"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/gateway/ctxkey"
 )
 
 // EventSecuritySettingChange is the audit event emitted when an admin mutates a

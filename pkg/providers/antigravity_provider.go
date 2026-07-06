@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/auth"
-	"github.com/dapicom-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/auth"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
 const (

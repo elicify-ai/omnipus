@@ -10,8 +10,8 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/dapicom-ai/omnipus/pkg/skills"
-	"github.com/dapicom-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/skills"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // Skill authoring tools — create_skill and edit_skill (Spec-6 U2,

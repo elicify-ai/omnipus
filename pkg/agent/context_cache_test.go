@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 )
 
 // setupWorkspace creates a temporary workspace with standard directories and optional files.

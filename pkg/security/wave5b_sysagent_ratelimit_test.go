@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/dapicom-ai/omnipus/pkg/security"
+	"github.com/elicify-ai/omnipus/pkg/security"
 )
 
 // --- Wave 5b: System Agent Rate Limit Tests ---

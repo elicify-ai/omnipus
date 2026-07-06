@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/audit"
 )
 
 // TestEgressProxy_DenyEmitsAuditViaHook (T2.14) verifies that when a

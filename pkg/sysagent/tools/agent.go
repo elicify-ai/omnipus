@@ -14,10 +14,10 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/dapicom-ai/omnipus/pkg/config"
-	"github.com/dapicom-ai/omnipus/pkg/coreagent"
-	"github.com/dapicom-ai/omnipus/pkg/datamodel"
-	"github.com/dapicom-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/coreagent"
+	"github.com/elicify-ai/omnipus/pkg/datamodel"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // slugRegexp matches characters that should be replaced in agent name → ID conversion.

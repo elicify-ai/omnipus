@@ -26,10 +26,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/agent/testutil"
-	"github.com/dapicom-ai/omnipus/pkg/config"
-	"github.com/dapicom-ai/omnipus/pkg/credentials"
-	"github.com/dapicom-ai/omnipus/pkg/gateway"
+	"github.com/elicify-ai/omnipus/pkg/agent/testutil"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/credentials"
+	"github.com/elicify-ai/omnipus/pkg/gateway"
 )
 
 // testMasterKey matches the value in pkg/agent/testutil/gateway_harness.go.

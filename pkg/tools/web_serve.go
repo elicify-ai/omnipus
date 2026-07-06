@@ -36,8 +36,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/audit"
-	"github.com/dapicom-ai/omnipus/pkg/sandbox"
+	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
 // ToolNameWebServe is the canonical tool name for the unified web-serving tool.

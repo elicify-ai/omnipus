@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/email"
+	"github.com/elicify-ai/omnipus/pkg/email"
 )
 
 // fakeTransport is an in-memory email.Transport for unit tests — no real

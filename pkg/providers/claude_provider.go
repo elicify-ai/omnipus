@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	anthropicprovider "github.com/dapicom-ai/omnipus/pkg/providers/anthropic"
+	anthropicprovider "github.com/elicify-ai/omnipus/pkg/providers/anthropic"
 )
 
 type ClaudeProvider struct {

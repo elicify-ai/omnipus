@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	basechannels "github.com/dapicom-ai/omnipus/pkg/channels"
-	"github.com/dapicom-ai/omnipus/pkg/config"
+	basechannels "github.com/elicify-ai/omnipus/pkg/channels"
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

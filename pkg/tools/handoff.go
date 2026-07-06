@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 // ErrAlreadyActive is returned by SessionStore.SwitchAgent when the session is

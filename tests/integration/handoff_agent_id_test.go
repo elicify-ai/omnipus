@@ -31,8 +31,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/agent/testutil"
-	"github.com/dapicom-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/agent/testutil"
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 // mockLLMWithSingleToolCall returns a mock LLM server that emits one streaming

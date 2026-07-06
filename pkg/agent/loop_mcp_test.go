@@ -9,7 +9,7 @@ package agent
 import (
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 func boolPtr(b bool) *bool { return &b }

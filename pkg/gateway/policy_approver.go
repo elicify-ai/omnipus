@@ -18,7 +18,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/agent"
+	"github.com/elicify-ai/omnipus/pkg/agent"
 )
 
 // policyApproverAdapter implements agent.PolicyApprover using the in-process

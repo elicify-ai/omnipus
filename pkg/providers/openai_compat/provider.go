@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/logger"
-	"github.com/dapicom-ai/omnipus/pkg/providers/common"
-	"github.com/dapicom-ai/omnipus/pkg/providers/protocoltypes"
+	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/providers/common"
+	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 )
 
 type (

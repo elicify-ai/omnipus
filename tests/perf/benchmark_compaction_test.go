@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dapicom-ai/omnipus/pkg/agent/testutil"
+	"github.com/elicify-ai/omnipus/pkg/agent/testutil"
 )
 
 // compactionTurns is the total number of WS turns driven by compaction tests.

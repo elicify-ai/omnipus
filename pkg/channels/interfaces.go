@@ -3,8 +3,8 @@ package channels
 import (
 	"context"
 
-	"github.com/dapicom-ai/omnipus/pkg/bus"
-	"github.com/dapicom-ai/omnipus/pkg/commands"
+	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/commands"
 )
 
 // TypingCapable — channels that can show a typing/thinking indicator.

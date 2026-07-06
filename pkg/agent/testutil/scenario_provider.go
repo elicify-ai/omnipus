@@ -8,7 +8,7 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/dapicom-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 )
 
 // ErrNoMoreResponses signals the scenario has run out of scripted responses.

@@ -17,7 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/dapicom-ai/omnipus/pkg/providers/protocoltypes"
+	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 )
 
 func TestConvertMessages_SystemPrompts(t *testing.T) {

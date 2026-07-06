@@ -39,7 +39,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/dapicom-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
 )
 
 // Error sentinels returned by Run so the cmd layer can set a specific exit code
