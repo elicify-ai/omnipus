@@ -2,8 +2,7 @@
 // typed channel fields on the Config struct (Spec-2 SC-4 / TDD #8).
 //
 // Background: the channel configuration was migrated from a typed struct
-// (`channelsConfigV0` with fields `Telegram telegramConfigV0`, `Discord ...`,
-// etc., now used only for v0 migration in config_old.go) to a single
+// (with fields `Telegram telegramConfigV0`, `Discord ...`, etc.) to a single
 // `Channels map[string]ChannelInstanceConfig` map on Config. This test enforces
 // that no typed channel field (a field named after a channel type and/or of a
 // per-channel typed-config struct type) is re-introduced on the current Config
@@ -119,25 +118,6 @@ func TestConfig_HasNoPerChannelTypedConfigFieldType(t *testing.T) {
 				"Config field %q has per-channel typed-config type %s — channels must be map-keyed (SC-4)",
 				f.Name,
 				name,
-			)
-		}
-	}
-}
-
-// TestConfig_HasNoChannelsConfigV0Field asserts that no field on the Config
-// struct has the v0 typed channels struct type (channelsConfigV0). That struct
-// is allowed to live in config_old.go for migration only — it must never appear
-// as a field on the current Config.
-func TestConfig_HasNoChannelsConfigV0Field(t *testing.T) {
-	cfgType := reflect.TypeOf(Config{})
-	v0Type := reflect.TypeOf(channelsConfigV0{})
-
-	for i := 0; i < cfgType.NumField(); i++ {
-		f := cfgType.Field(i)
-		if f.Type == v0Type {
-			t.Errorf(
-				"Config field %q is of type channelsConfigV0 — the v0 typed channels struct must not be re-introduced on Config (SC-4)",
-				f.Name,
 			)
 		}
 	}

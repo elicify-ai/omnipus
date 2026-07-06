@@ -1,9 +1,7 @@
 package config
 
 import (
-	"bytes"
 	"encoding/json"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -100,23 +98,6 @@ func TestAgentModelConfig_MarshalObject(t *testing.T) {
 	json.Unmarshal(data, &result)
 	if result["primary"] != "claude-opus" {
 		t.Errorf("primary = %v", result["primary"])
-	}
-}
-
-func TestProvidersConfig_IsEmpty(t *testing.T) {
-	var empty providersConfigV0
-	t.Logf("empty: %+v", empty)
-	if !empty.IsEmpty() {
-		t.Fatal("empty providersConfig should report empty")
-	}
-
-	novita := providersConfigV0{
-		Novita: providerConfigV0{
-			APIKey: "test-key",
-		},
-	}
-	if novita.IsEmpty() {
-		t.Fatal("providersConfig with novita settings should not report empty")
 	}
 }
 
@@ -548,7 +529,8 @@ func TestLoadConfig_WebPreferNativeDefaultsTrueWhenUnset(t *testing.T) {
 func TestLoadConfig_WebPreferNativeCanBeDisabled(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.json")
-	if err := os.WriteFile(configPath, []byte(`{"tools":{"web":{"prefer_native":false}}}`), 0o600); err != nil {
+	rawCfg := []byte(`{"version":1,"tools":{"web":{"prefer_native":false}}}`)
+	if err := os.WriteFile(configPath, rawCfg, 0o600); err != nil {
 		t.Fatalf("WriteFile() error: %v", err)
 	}
 
@@ -1510,60 +1492,6 @@ func TestAgentConfig_ShellPolicy_OmittedWhenEmpty(t *testing.T) {
 	s := string(data)
 	if strings.Contains(s, "shell_policy") {
 		t.Errorf("shell_policy must be omitted when nil; got: %s", s)
-	}
-}
-
-// TestConfigMigration_LegacyMaixCamGracefullyIgnored verifies T28 from
-// docs/internal/specs/cancel-cross-channel-spec.md: a config.json that still contains a
-// "maixcam" section under "channels" loads without panic, emits a structured
-// Warn log entry, and leaves other channels intact.
-func TestConfigMigration_LegacyMaixCamGracefullyIgnored(t *testing.T) {
-	// Write a v1 config with a stale maixcam section and a live telegram section.
-	tmpDir := t.TempDir()
-	cfgPath := filepath.Join(tmpDir, "config.json")
-	rawCfg := `{
-		"version": 1,
-		"channels": {
-			"maixcam": {
-				"enabled": true,
-				"host": "192.168.1.42",
-				"port": 9999
-			},
-			"telegram": {
-				"enabled": true
-			}
-		}
-	}`
-	if err := os.WriteFile(cfgPath, []byte(rawCfg), 0o600); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-
-	// Capture slog output to assert the structured Warn is emitted.
-	var buf bytes.Buffer
-	handler := slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})
-	prev := slog.Default()
-	slog.SetDefault(slog.New(handler))
-	t.Cleanup(func() { slog.SetDefault(prev) })
-
-	// Must not panic.
-	cfg, err := LoadConfig(cfgPath)
-	if err != nil {
-		t.Fatalf("LoadConfig must not error on legacy maixcam section, got: %v", err)
-	}
-
-	// Telegram channel must still be loaded correctly.
-	if !cfg.Channels["telegram"].Enabled {
-		t.Error("telegram.enabled should be true; other channels must survive maixcam removal")
-	}
-
-	// A structured Warn mentioning "maixcam" must have been emitted.
-	output := buf.String()
-	if !strings.Contains(output, "maixcam") {
-		t.Errorf("expected a Warn log entry containing %q for the legacy channel section; got output: %s",
-			"maixcam", output)
-	}
-	if !strings.Contains(strings.ToLower(output), "warn") && !strings.Contains(output, `"level":"WARN"`) {
-		t.Errorf("expected log level WARN in output; got: %s", output)
 	}
 }
 

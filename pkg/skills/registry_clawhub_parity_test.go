@@ -40,10 +40,9 @@ func TestRegistryManagerFromConfig_IncludesClawHub(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	// Mirror what the agent loop passes after config.restoreSkillDiscoveryDefaults
-	// has healed an onboarded config: ClawHub enabled, BaseURL set (the loop also
-	// defaults an empty URL to https://clawhub.ai, but in tests we point at the
-	// stub server).
+	// Mirror what the agent loop passes for an onboarded config: ClawHub
+	// enabled, BaseURL set (the loop also defaults an empty URL to
+	// https://clawhub.ai, but in tests we point at the stub server).
 	mgr := NewRegistryManagerFromConfig(RegistryConfig{
 		MaxConcurrentSearches: 2,
 		Marketplaces: []MarketplaceConfig{{

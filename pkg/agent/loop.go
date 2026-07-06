@@ -1157,9 +1157,6 @@ func (al *AgentLoop) wireTier13DepsLocked(registry *AgentRegistry, deps Tier13De
 		// Linux at runtime inside the tool itself (Tier3UnsupportedMessage).
 		if deps.ServedSubdirs != nil {
 			previewURL := deps.GatewayPreviewBaseURL
-			if previewURL == "" {
-				previewURL = deps.GatewayBaseURL
-			}
 			portRange := cfg.Sandbox.DevServerPortRange
 			webServeCfg := tools.WebServeDevConfig{
 				Tier3Commands:   cfg.Sandbox.Tier3Commands,

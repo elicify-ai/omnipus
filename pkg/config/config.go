@@ -3249,9 +3249,18 @@ type MCPConfig struct {
 	Servers map[string]MCPServerConfig `json:"servers,omitempty"`
 }
 
-// LoadConfigWithStore loads a config and, for v0 configs, migrates legacy
-// plaintext secrets into the provided store. If store is nil and a v0 config
-// with plaintext secrets is found, an error is returned.
+// CredentialStore is a minimal interface satisfied by credentials.Store.
+// Using an interface here avoids a circular import (config → credentials).
+// The caller (gateway, CLI commands) supplies the real store.
+type CredentialStore interface {
+	// Set stores a named credential value.
+	Set(name, value string) error
+}
+
+// LoadConfigWithStore loads a config, threading store through to callers that
+// need it for credential-store-backed operations during load (per the
+// documented credential boot contract, ADR-004: NewStore → Unlock →
+// LoadConfigWithStore → InjectFromConfig → ...).
 func LoadConfigWithStore(path string, store CredentialStore) (*Config, error) {
 	return loadConfigInternal(path, store, nil)
 }
@@ -3319,12 +3328,8 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 		return nil, fmt.Errorf("failed to detect config version: %w", e)
 	}
 
-	// Reject removed keys only for v1+ configs (FR-001). Legacy v0 configs may
-	// legitimately contain restrict_to_workspace; we migrate them instead.
-	if versionInfo.Version >= CurrentVersion {
-		if validateErr := validateRemovedKeys(data); validateErr != nil {
-			return nil, validateErr
-		}
+	if validateErr := validateRemovedKeys(data); validateErr != nil {
+		return nil, validateErr
 	}
 	if len(data) <= 10 {
 		logger.Warn(fmt.Sprintf("content is [%s]", string(data)))
@@ -3334,39 +3339,6 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	// Load config based on detected version
 	var cfg *Config
 	switch versionInfo.Version {
-	case 0:
-		logger.InfoF("config migrate start", map[string]any{"from": versionInfo.Version, "to": CurrentVersion})
-		// Legacy config (no version field)
-		v, e := loadConfigV0(data)
-		if e != nil {
-			return nil, e
-		}
-		// Use MigrateWithStore when a store is available so legacy plaintext
-		// secrets are moved to the encrypted credential store. When store is nil,
-		// refuse to migrate if the v0 config contains any plaintext secrets to
-		// prevent silent data loss. If there are no secrets, plain Migrate is safe.
-		if store != nil {
-			cfg, e = v.(*configV0).MigrateWithStore(store)
-		} else if v.(*configV0).hasLegacySecrets() {
-			return nil, fmt.Errorf(
-				"config migration: v0 config contains plaintext secrets but no credential store was provided; " +
-					"use LoadConfigWithStore and ensure OMNIPUS_MASTER_KEY is set",
-			)
-		} else {
-			cfg, e = v.Migrate()
-		}
-		if e != nil {
-			logger.ErrorF("config migrate fail", map[string]any{"from": versionInfo.Version, "to": CurrentVersion})
-			return nil, e
-		}
-		logger.InfoF("config migrate success", map[string]any{"from": versionInfo.Version, "to": CurrentVersion})
-		err = makeBackup(path)
-		if err != nil {
-			return nil, err
-		}
-		defer func(cfg *Config) {
-			_ = SaveConfig(path, cfg)
-		}(cfg)
 	case CurrentVersion:
 		// Current version
 		cfg, err = loadConfig(data)
@@ -3447,22 +3419,6 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	// the provider protocol set is consistent across model_list and agents.
 	migrateAgentPrimaryProvider(cfg)
 
-	// Migrate the pre-FR-10.1 skills config shape (typed ClawHub singleton +
-	// separate Github block) into the unified Marketplaces list. Idempotent:
-	// a no-op when the raw config already carries a "marketplaces" key. Runs
-	// BEFORE restoreSkillDiscoveryDefaults so the healer sees the migrated
-	// list (and so operator values from the old shape are preserved).
-	migrateMarketplaces(cfg, data)
-
-	// Restore skill-discovery tool defaults (find_skills/install_skill enabled,
-	// ClawHub {enabled:true, base_url:"https://clawhub.ai"}) for configs that
-	// persisted them as disabled/empty zero values. Onboarded/legacy configs
-	// otherwise leave the agent loop's skills RegistryManager with ZERO
-	// registries, so the agent's find_skills/install_skill silently return
-	// nothing while the UI (which constructs ClawHub directly) works. Operator
-	// intent (an explicit enabled key) is preserved.
-	restoreSkillDiscoveryDefaults(cfg, data)
-
 	// Enforce at-most-one Default=true invariant across cfg.Agents.List.
 	// Hand-edited configs may contain multiple defaults; repair them now so the
 	// registry's GetDefaultAgent sees a clean canonical state (F11).
@@ -3485,17 +3441,7 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	// gone, that token gets a dedicated Gateway.CLIToken slot instead of a
 	// synthetic Users[] row. One-shot, best-effort, idempotent — see
 	// migrateCLITokenOutOfUsers in cli_token_migration.go.
-	//
-	// Only for CurrentVersion configs, mirroring the retired
-	// selfHealUserRolesOnDisk's own gating: a v0 config already gets its
-	// fully migrated (CurrentVersion-shaped, "cli"-Users-free) state written
-	// by the existing v0-migration SaveConfig call further up in this
-	// function — a v0-format raw-JSON patch attempt here would be redundant
-	// and would be probing a raw JSON shape (the legacy configV0 layout) this
-	// migration was never designed against.
-	if versionInfo.Version == CurrentVersion {
-		migrateCLITokenOutOfUsers(cfg, path, onSelfHeal)
-	}
+	migrateCLITokenOutOfUsers(cfg, path, onSelfHeal)
 
 	// Single-account diagnostic (single-user model follow-up): advisory
 	// only — every configured Gateway.Users account authenticates fine
@@ -3586,19 +3532,6 @@ func migrateAgentPrimaryProvider(cfg *Config) {
 			mc.Primary = rest
 		}
 	}
-}
-
-func makeBackup(path string) error {
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return nil
-	}
-	// Create backup of the config file before migration
-	bakPath := path + ".bak"
-	if err := fileutil.CopyFile(path, bakPath, 0o600); err != nil {
-		logger.ErrorF("failed to create config backup", map[string]any{"error": err})
-		return fmt.Errorf("failed to create config backup: %w", err)
-	}
-	return nil
 }
 
 func (c *Config) migrateChannelConfigs() {
