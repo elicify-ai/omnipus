@@ -1209,12 +1209,25 @@ export const useChatStore = create<ChatStore>((set, get) => {
       // hand the whole batch to `pendingDrainQueue` and let `maybeDrainNext`
       // send one at a time, re-triggered as each turn completes.
       //
-      // Append (not overwrite) `pendingDrainQueue`: if a previous drain cycle
+      // Merge (not overwrite) `pendingDrainQueue`: if a previous drain cycle
       // is still mid-flight (e.g. the connection dropped again partway
       // through and a couple of its items got kicked back to `outboundQueue`
       // via sendMessage's disconnected-WS branch) this preserves whatever is
       // still queued from that cycle instead of silently discarding it.
-      set((state) => ({ outboundQueue: [], pendingDrainQueue: [...state.pendingDrainQueue, ...queue] }))
+      //
+      // BUG FIX (2026-07, ordering regression): the bounced-back `queue` items
+      // were previously appended AFTER whatever remained in
+      // `pendingDrainQueue`. But anything still in `pendingDrainQueue` was
+      // dequeued from the FRONT of a FIFO by `maybeDrainNext()` — so an item
+      // still parked there was queued LATER (chronologically) than any item
+      // that already made it out to `sendMessage` and bounced back. E.g.
+      // A,B,C queued → drain sends A, pendingDrainQueue=[B,C] → mid-flight
+      // disconnect frees B, which bounces back to `outboundQueue=[B]`,
+      // leaving `pendingDrainQueue=[C]`. Appending (`[...pendingDrainQueue,
+      // ...queue]`) produced [C,B] — C (typed later) sent before B (typed
+      // earlier). Prepending the bounced queue instead restores the correct
+      // chronological order: [B,C].
+      set((state) => ({ outboundQueue: [], pendingDrainQueue: [...queue, ...state.pendingDrainQueue] }))
       maybeDrainNext()
     },
 

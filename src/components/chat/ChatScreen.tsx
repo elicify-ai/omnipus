@@ -1620,20 +1620,36 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           time after reconnect (pendingDrainQueue — see maybeDrainNext in
           store/chat.ts). Without the pendingDrainQueue branch this banner
           would disappear the instant reconnect fires even though several
-          messages are still waiting for their turn to go out. */}
+          messages are still waiting for their turn to go out.
+          Task 4 fix: on a flaky connection both arrays can be simultaneously
+          non-empty (e.g. some messages bounced back to outboundQueue on a
+          mid-drain disconnect while others are still parked in
+          pendingDrainQueue — see the chat.ts store's own doc comments on
+          drainOutboundQueue/maybeDrainNext). The previous if/else only ever
+          showed ONE of the two counts, undercounting the true total still
+          queued. Sum both counts whenever both are non-empty. */}
       {(outboundQueue.length > 0 || pendingDrainQueue.length > 0) && (
         <div
           data-testid="outbound-queue-indicator"
           className="mb-2 text-xs text-[var(--color-warning)] flex items-center gap-1.5"
         >
           <Clock size={12} className="shrink-0" />
-          {outboundQueue.length > 0
-            ? (outboundQueue.length === 1
+          {(() => {
+            const total = outboundQueue.length + pendingDrainQueue.length
+            if (outboundQueue.length > 0 && pendingDrainQueue.length > 0) {
+              return total === 1
                 ? '1 message queued — will send on reconnect'
-                : `${outboundQueue.length} messages queued — will send on reconnect`)
-            : (pendingDrainQueue.length === 1
-                ? '1 queued message sending…'
-                : `${pendingDrainQueue.length} queued messages sending…`)}
+                : `${total} messages queued — will send on reconnect`
+            }
+            if (outboundQueue.length > 0) {
+              return outboundQueue.length === 1
+                ? '1 message queued — will send on reconnect'
+                : `${outboundQueue.length} messages queued — will send on reconnect`
+            }
+            return pendingDrainQueue.length === 1
+              ? '1 queued message sending…'
+              : `${pendingDrainQueue.length} queued messages sending…`
+          })()}
         </div>
       )}
 

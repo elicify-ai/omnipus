@@ -913,9 +913,18 @@ func (a *restAPI) handleTaskDelete(w http.ResponseWriter, id string) {
 			jsonErr(w, http.StatusNotFound, "task not found")
 			return
 		}
-		slog.Error("rest: task delete failed", "id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, "could not delete task")
-		return
+		if !errors.Is(err, task.ErrCascadeEdgeCleanupFailed) {
+			slog.Error("rest: task delete failed", "id", id, "error", err)
+			jsonErr(w, http.StatusInternalServerError, "could not delete task")
+			return
+		}
+		// The task file itself was already removed successfully; only
+		// cleaning up OTHER tasks' dangling blocked_by edges partially
+		// failed. Non-fatal to this delete — log loudly and keep serving the
+		// successful delete, matching how the AdvanceUnblocked/advance-
+		// dependents write failures below are treated as a logged, non-fatal
+		// side effect rather than a failure of the primary operation.
+		slog.Warn("rest: task delete: cascade edge cleanup partially failed", "id", id, "error", err)
 	}
 	// A task whose blocked_by list became empty after this delete (all blockers
 	// gone) and is still `blocked` must advance to `next` — the cascade only

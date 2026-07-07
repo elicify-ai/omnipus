@@ -95,6 +95,17 @@ func (r *ChainResult) String() string {
 // Verify is a runtime self-check — it does not walk rotated files. Use
 // VerifyDir for a full directory walk including rotation history.
 //
+// Seed derivation: the current file's first entry is genesis-seeded ONLY
+// when it is the very first audit file ever written, or when retention has
+// deleted every file that used to precede it (the chainCheckpoint case —
+// see checkpoint.go). In every other case — any rotation has ever happened
+// and the rotated-out file is still on disk — rotate() (audit.go) chains
+// the new file's first entry from the rotated-out file's last HMAC, not
+// genesis. Hardcoding GenesisSeed() here would therefore report a false
+// "chain BROKEN" on any installation that has rotated at least once.
+// determineFileSeed reconstructs the correct seed from on-disk state alone
+// (see its doc comment) without turning this into a full directory walk.
+//
 // The Logger's chain key is used; ctx is currently only checked for
 // cancellation between entries (no per-entry I/O cancellation), but the
 // signature accepts a Context so future implementations can stream large
@@ -111,9 +122,11 @@ func (l *Logger) Verify(ctx context.Context) (*ChainResult, error) {
 	key := make([]byte, len(l.chainKey))
 	copy(key, l.chainKey)
 	path := l.auditPath()
+	dir := l.dir
 	l.mu.Unlock()
 
-	return VerifyFile(ctx, path, key, GenesisSeed())
+	seed := determineFileSeed(dir, key, path)
+	return VerifyFile(ctx, path, key, seed)
 }
 
 // VerifyFile walks `path`, recomputing each entry's HMAC against the
@@ -293,41 +306,7 @@ func VerifyDir(ctx context.Context, dir string, key []byte) (*ChainResult, error
 		return &ChainResult{Valid: true, BrokenAt: -1}, nil
 	}
 
-	seed := GenesisSeed()
-	if cp, cpErr := readChainCheckpoint(dir, key); cpErr != nil {
-		// Checkpoint exists but failed to parse or failed its integrity
-		// check. Per checkpoint.go's threat model, an attacker without the
-		// chain key cannot produce a checkpoint whose Sum verifies, so a
-		// mismatch here means either disk corruption or a forged checkpoint
-		// trying to redirect the chain seed. Either way we do NOT trust its
-		// FinalHMAC: fall back to genesis-seeding. This is the fail-closed
-		// choice — worst case is a false "chain broken" alarm on the
-		// new-oldest survivor (investigable by an operator), never a silent
-		// bypass of real tampering.
-		slog.Warn("audit: chain checkpoint failed integrity check, falling back to genesis seed",
-			"dir", dir, "error", cpErr)
-	} else if cp != nil {
-		oldestBase := filepath.Base(files[0])
-		if cp.AppliesToFile == oldestBase {
-			if mac, decErr := hex.DecodeString(cp.FinalHMAC); decErr == nil && len(mac) == 32 {
-				seed = mac
-			} else {
-				slog.Warn("audit: chain checkpoint final_hmac malformed, falling back to genesis seed",
-					"dir", dir)
-			}
-		} else {
-			// Stale/mismatched checkpoint: it names a different file boundary
-			// than what's actually oldest on disk right now (e.g. files were
-			// deleted manually outside cleanupExpired, or this checkpoint is
-			// left over from a different retention configuration). Trusting
-			// FinalHMAC here would seed the wrong file's chain walk and could
-			// mask a genuine break at the true boundary, so we fall back to
-			// genesis — same fail-closed reasoning as the integrity-failure
-			// branch above.
-			slog.Warn("audit: chain checkpoint does not match current oldest file, falling back to genesis seed",
-				"dir", dir, "checkpoint_applies_to", cp.AppliesToFile, "oldest_file", oldestBase)
-		}
-	}
+	seed := checkpointOrGenesisSeed(dir, key, filepath.Base(files[0]))
 	totalEntries := 0
 	totalPreChain := 0
 	for _, f := range files {
@@ -353,6 +332,123 @@ func VerifyDir(ctx context.Context, dir string, key []byte) (*ChainResult, error
 		PreChainEntries: totalPreChain,
 		FinalHMAC:       seed,
 	}, nil
+}
+
+// checkpointOrGenesisSeed determines the correct chain seed for a file that
+// is the chronologically OLDEST audit file currently on disk: consult the
+// persisted chain checkpoint (checkpoint.go) and trust its FinalHMAC only
+// when the checkpoint's integrity check passes AND its AppliesToFile names
+// exactly oldestBase; otherwise GenesisSeed(). This is the single source of
+// truth for the checkpoint-trust decision — shared by VerifyDir (for the
+// first file in its directory walk) and determineFileSeed (for Verify()'s
+// current-file check, when that file happens to be the oldest survivor) so
+// the two callers can never drift on when a checkpoint is trusted.
+func checkpointOrGenesisSeed(dir string, key []byte, oldestBase string) []byte {
+	cp, cpErr := readChainCheckpoint(dir, key)
+	if cpErr != nil {
+		// Checkpoint exists but failed to parse or failed its integrity
+		// check. Per checkpoint.go's threat model, an attacker without the
+		// chain key cannot produce a checkpoint whose Sum verifies, so a
+		// mismatch here means either disk corruption or a forged checkpoint
+		// trying to redirect the chain seed. Either way we do NOT trust its
+		// FinalHMAC: fall back to genesis-seeding. This is the fail-closed
+		// choice — worst case is a false "chain broken" alarm on the
+		// new-oldest survivor (investigable by an operator), never a silent
+		// bypass of real tampering.
+		slog.Warn("audit: chain checkpoint failed integrity check, falling back to genesis seed",
+			"dir", dir, "error", cpErr)
+		return GenesisSeed()
+	}
+	if cp == nil {
+		// No checkpoint file at all — the common case (no cleanup has ever
+		// deleted a file). Genesis-seeding is correct.
+		return GenesisSeed()
+	}
+	if cp.AppliesToFile != oldestBase {
+		// Stale/mismatched checkpoint: it names a different file boundary
+		// than what's actually oldest on disk right now (e.g. files were
+		// deleted manually outside cleanupExpired, or this checkpoint is
+		// left over from a different retention configuration). Trusting
+		// FinalHMAC here would seed the wrong file's chain walk and could
+		// mask a genuine break at the true boundary, so we fall back to
+		// genesis — same fail-closed reasoning as the integrity-failure
+		// branch above.
+		slog.Warn("audit: chain checkpoint does not match current oldest file, falling back to genesis seed",
+			"dir", dir, "checkpoint_applies_to", cp.AppliesToFile, "oldest_file", oldestBase)
+		return GenesisSeed()
+	}
+	mac, decErr := hex.DecodeString(cp.FinalHMAC)
+	if decErr != nil || len(mac) != 32 {
+		slog.Warn("audit: chain checkpoint final_hmac malformed, falling back to genesis seed", "dir", dir)
+		return GenesisSeed()
+	}
+	return mac
+}
+
+// determineFileSeed returns the correct chain-seed HMAC that targetPath's
+// FIRST entry should be verified against. Used by Logger.Verify (a
+// current-file-only self-check, see its doc comment) to derive the same
+// correct seed VerifyDir's full walk would arrive at, WITHOUT re-verifying
+// every prior file's content — that full re-verification is VerifyDir's
+// job, not Verify()'s.
+//
+// rotate()'s own chain-preservation mechanism (audit.go) means a file's
+// first entry is genesis-seeded ONLY when it is the very first audit file
+// ever written, or when retention has deleted every file that used to
+// precede it (the chainCheckpoint case). In every other case — any
+// rotation has ever happened and the rotated-out file is still on disk —
+// the correct seed is that predecessor's own last recorded `hmac` field,
+// exactly the value rotate() threads forward in memory as l.prevHMAC
+// within a single process. determineFileSeed reconstructs that same value
+// from on-disk state alone, so a fresh Verify() call (which has no access
+// to another Logger instance's in-memory prevHMAC, e.g. across a restart)
+// derives it correctly too:
+//
+//  1. List every audit file on disk (rotated + targetPath) in
+//     chronological order (sortAuditFilesChronologically) and find
+//     targetPath's position.
+//  2. If targetPath is the oldest (index 0, or — defensively — not found
+//     in the listing at all), delegate to checkpointOrGenesisSeed.
+//  3. Otherwise, read the immediately preceding file's last entry's
+//     `hmac` field directly via readChainSeedFromFile — a cheap tail
+//     read, not a full re-verification of that file's chain. A
+//     predecessor with no HMAC-bearing entries (pre-chain/legacy, or
+//     empty) falls back to GenesisSeed(), the same fail-closed default
+//     used throughout this package when a better seed can't be
+//     established.
+func determineFileSeed(dir string, key []byte, targetPath string) []byte {
+	targetBase := filepath.Base(targetPath)
+
+	rotated, _ := filepath.Glob(filepath.Join(dir, "audit-*.jsonl"))
+	files := append([]string{}, rotated...)
+	included := false
+	for _, f := range files {
+		if filepath.Base(f) == targetBase {
+			included = true
+			break
+		}
+	}
+	if !included {
+		files = append(files, targetPath)
+	}
+	sortAuditFilesChronologically(files)
+
+	targetIdx := -1
+	for i, f := range files {
+		if filepath.Base(f) == targetBase {
+			targetIdx = i
+			break
+		}
+	}
+
+	if targetIdx <= 0 {
+		return checkpointOrGenesisSeed(dir, key, targetBase)
+	}
+
+	if seed, ok := readChainSeedFromFile(files[targetIdx-1]); ok {
+		return seed
+	}
+	return GenesisSeed()
 }
 
 // readChainSeedFromFile returns the HMAC of the last complete entry in the

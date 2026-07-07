@@ -42,6 +42,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -694,6 +695,55 @@ func TestDropOrphanEdges_EmptyDir(t *testing.T) {
 	assert.Equal(t, 0, removed)
 }
 
+func TestDropOrphanEdges_WriteFailureSurfacesError(t *testing.T) {
+	// Traces to: blocked_by.go line 385 — DropOrphanEdges write-failure
+	// aggregation (same failedFiles/aggregated-error pattern as
+	// cascadeDeleteEdges and AdvanceBlockedDependents, since this is the same
+	// silent-continue-on-write-failure bug shape). A forced write failure on
+	// the one file whose orphan edge needs dropping must not be silently
+	// swallowed, and the returned removed-count must not claim an edge was
+	// dropped when it was never actually persisted to disk.
+	if os.Geteuid() == 0 {
+		t.Skip("running as root — directory permissions are bypassed; cannot trigger write failure")
+	}
+	s := newStore(t)
+
+	dep := mkTask("dep", "ws")
+	mustCreate(t, s, dep)
+
+	a := mkTask("a", "ws")
+	a.BlockedBy = []string{dep.ID}
+	mustCreate(t, s, a)
+
+	// Remove dep's file out-of-band so `a`'s edge becomes an orphan.
+	require.NoError(t, removeFileRaw(s, dep.ID))
+
+	// Force every subsequent write in the store dir to fail: WriteFileAtomic
+	// stages its temp file in the same directory as the target, so removing
+	// write permission on the dir blocks os.CreateTemp regardless of the
+	// target file's own permissions.
+	require.NoError(t, os.Chmod(s.dir, 0o500))
+	t.Cleanup(func() {
+		// Restore writable mode so t.TempDir cleanup can remove it.
+		_ = os.Chmod(s.dir, 0o700)
+	})
+
+	removed, err := s.DropOrphanEdges()
+	require.Error(t, err, "a forced write failure must not silently succeed")
+	assert.ErrorIs(t, err, ErrOrphanEdgeCleanupFailed,
+		"error must wrap ErrOrphanEdgeCleanupFailed so callers can identify a partial cleanup failure")
+	assert.Contains(t, err.Error(), a.ID+".json", "error must name the file whose write failed")
+	assert.Equal(t, 0, removed, "an edge whose write failed must not be counted as removed")
+
+	// Restore permissions so we can verify the on-disk state directly: the
+	// orphan edge must still be present since the write never landed.
+	require.NoError(t, os.Chmod(s.dir, 0o700))
+	got, gerr := s.Get(a.ID)
+	require.NoError(t, gerr)
+	assert.Equal(t, []string{dep.ID}, got.BlockedBy,
+		"the orphan edge must remain on disk since the write never landed")
+}
+
 // ---- cascadeDeleteEdges multi-dep logic ------------------------------------
 
 func TestCascadeDeleteEdges_MultiDepRemainingDone(t *testing.T) {
@@ -742,6 +792,53 @@ func TestCascadeDeleteEdges_MultiDepRemainingNotDone(t *testing.T) {
 	unblocked, err := s.Delete(b.ID)
 	require.NoError(t, err)
 	assert.NotContains(t, unblocked, c.ID, "C should NOT be unblocked when A is still unmet")
+}
+
+func TestCascadeDeleteEdges_WriteFailureSurfacesError(t *testing.T) {
+	// Traces to: blocked_by.go line 271 — cascadeDeleteEdges write-failure
+	// aggregation (sibling fix to AdvanceBlockedDependents's failedIDs/
+	// aggregated-error pattern). A forced write failure on the one dependent
+	// whose blocked_by edge needs rewriting must NOT be silently swallowed:
+	// cascadeDeleteEdges must return a non-nil error wrapping
+	// ErrCascadeEdgeCleanupFailed, and must NOT report that dependent as
+	// unblocked, since its edge rewrite never actually landed on disk.
+	if os.Geteuid() == 0 {
+		t.Skip("running as root — directory permissions are bypassed; cannot trigger write failure")
+	}
+	s := newStore(t)
+
+	dep := mkTask("dep", "ws")
+	mustCreate(t, s, dep)
+
+	// C depends solely on dep; deleting dep would normally leave C fully
+	// unblocked (empty blocked_by) — IF the edge rewrite succeeds.
+	c := mkTask("c", "ws")
+	c.Status = StatusBlocked
+	c.BlockedBy = []string{dep.ID}
+	mustCreate(t, s, c)
+
+	// Simulate the state cascadeDeleteEdges runs in when called from
+	// Store.Delete: dep's own file has already been removed by the time this
+	// fires.
+	require.NoError(t, removeFileRaw(s, dep.ID))
+
+	// Force every subsequent write in the store dir to fail: WriteFileAtomic
+	// stages its temp file in the same directory as the target, so removing
+	// write permission on the dir blocks os.CreateTemp regardless of the
+	// target file's own permissions.
+	require.NoError(t, os.Chmod(s.dir, 0o500))
+	t.Cleanup(func() {
+		// Restore writable mode so t.TempDir cleanup can remove it.
+		_ = os.Chmod(s.dir, 0o700)
+	})
+
+	unblocked, err := s.cascadeDeleteEdges(dep.ID)
+	require.Error(t, err, "a forced write failure must not silently succeed")
+	assert.ErrorIs(t, err, ErrCascadeEdgeCleanupFailed,
+		"error must wrap ErrCascadeEdgeCleanupFailed so callers can distinguish it from a hard delete failure")
+	assert.Contains(t, err.Error(), c.ID, "error must name the dependent whose write failed")
+	assert.NotContains(t, unblocked, c.ID,
+		"a dependent whose edge write failed must not be reported as unblocked")
 }
 
 // ---- AdvanceBlockedDependents dep-deleted path -----------------------------

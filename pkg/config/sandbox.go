@@ -199,8 +199,8 @@ type OmnipusSandboxConfig struct {
 	Tier3Commands []string `json:"tier3_commands,omitempty"`
 
 	// PathGuardAuditFailClosed controls behavior when the audit logger
-	// fails during a Tier 2 (build_static) or Tier 3 (web_serve / workspace
-	// shell) invocation. When nil or true (default via ResolveBool), the
+	// fails during a Tier 2 (build_static) or Tier 3 (web_serve / bash
+	// background-session) invocation. When nil or true (default via ResolveBool), the
 	// tool refuses to run without a guaranteed compliance trail. When
 	// explicitly set to false, the audit failure is logged at Error and
 	// execution proceeds (operator opt-out).

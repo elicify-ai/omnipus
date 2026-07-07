@@ -95,6 +95,7 @@ import {
   McpServer as McpServerSchema,
   McpServerTestResponse as McpServerTestResponseSchema,
   ActivityEventsResponse as ActivityEventsResponseSchema,
+  ClearAllSessionsResponse as ClearAllSessionsResponseSchema,
   // Wire-shape schemas used for raw-to-SPA transform validation:
   Message as WireMessageSchema,
   Session as WireSessionSchema,
@@ -290,6 +291,7 @@ import type {
   SkillInstallRequest,
   ActivityEvent,
   ActivityEventsResponse,
+  ClearAllSessionsResponse,
   UploadedFile,
   AgentToolsCfg,
   OnboardingCompleteRequest,
@@ -408,15 +410,6 @@ import type {
   ToolApprovalActionRequest,
 } from '@/lib/api/generated/openapi-types'
 
-// clearAllSessions' response is an inline (non-named) operation schema in
-// openapi.yaml — there is no components["schemas"]["ClearAllSessionsResponse"]
-// to import by name, so the type is derived directly off the generated
-// `operations` map (still 100% generated, per hard-constraint #8; nothing
-// here is hand-authored).
-import type { operations } from '@/lib/api/generated/openapi-types'
-export type ClearAllSessionsResponse =
-  operations['clearAllSessions']['responses']['200']['content']['application/json']
-
 export type {
   LoginResponse,
   ProbeProviderResponse,
@@ -460,6 +453,7 @@ export type {
   SkillInstallRequest,
   ActivityEvent,
   ActivityEventsResponse,
+  ClearAllSessionsResponse,
   UploadedFile,
   AgentToolsCfg,
   OnboardingCompleteRequest,
@@ -2286,13 +2280,15 @@ export function restoreBackup(filename: string): Promise<void> {
   return request<void>('/restore', { method: 'POST', body: JSON.stringify({ filename }) })
 }
 
+// ClearAllSessionsResponse — re-exported from generated openapi-types
+// (contract-first #8). See contracts/components/schemas/ClearAllSessionsResponse.yaml.
+// DELETE returns HTTP 200 with a JSON body { status, count, warnings? } (not
+// 204 No Content — see contracts/openapi.yaml clearAllSessions). `warnings`
+// carries non-fatal per-agent removal failures (pkg/session/unified.go's
+// ClearAll() aggregates them via errors.Join); callers must inspect it
+// rather than assuming full success.
 export function clearAllSessions(): Promise<ClearAllSessionsResponse> {
-  // no-schema: DELETE returns HTTP 200 with a JSON body { status, count,
-  // warnings? } (not 204 No Content — see contracts/openapi.yaml
-  // clearAllSessions, ~L3608-3647). `warnings` carries non-fatal per-agent
-  // removal failures (pkg/session/unified.go's ClearAll() aggregates them via
-  // errors.Join); callers must inspect it rather than assuming full success.
-  return request<ClearAllSessionsResponse>('/sessions/all', { method: 'DELETE' })
+  return request<ClearAllSessionsResponse>('/sessions/all', { method: 'DELETE' }, ClearAllSessionsResponseSchema)
 }
 
 export async function renameSession(id: string, title: string): Promise<Session> {

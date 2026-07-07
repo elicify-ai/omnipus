@@ -263,6 +263,17 @@ func (s *Store) AdvanceBlockedDependents(completedID string) (advancedIDs []stri
 	return advancedIDs, nil
 }
 
+// ErrCascadeEdgeCleanupFailed is the sentinel wrapped by cascadeDeleteEdges'
+// aggregated write-failure error. By the time this can fire, the deleted
+// task's own file has ALREADY been removed (Store.Delete removes it before
+// calling cascadeDeleteEdges) — this only means one or more OTHER tasks'
+// blocked_by lists could not be rewritten to drop the now-dangling reference.
+// Callers use errors.Is against this sentinel to tell that soft, non-fatal
+// cleanup failure apart from a hard delete failure (task not found / the
+// file removal itself failing), so a partial cascade failure does not get
+// mis-reported as "the delete failed" when the task is, in fact, gone.
+var ErrCascadeEdgeCleanupFailed = errors.New("task: cascade blocked_by edge cleanup failed for one or more dependents")
+
 // cascadeDeleteEdges removes deletedID from the blocked_by list of every other
 // task. It returns the IDs that became fully unblocked — meaning every REMAINING
 // blocker is satisfied (the list is now empty OR every surviving blocker is
@@ -278,6 +289,7 @@ func (s *Store) cascadeDeleteEdges(deletedID string) (unblockedIDs []string, err
 	}
 	// Cache blocker statuses so we don't re-read the same file for every dependent.
 	statusCache := make(map[string]Status)
+	var failedIDs []string // per-dependent write failures (surfaced as a non-nil err)
 	depDone := func(depID string) bool {
 		if st, ok := statusCache[depID]; ok {
 			return st == StatusDone
@@ -323,7 +335,13 @@ func (s *Store) cascadeDeleteEdges(deletedID string) (unblockedIDs []string, err
 		writeErr := s.write(fresh)
 		mu.Unlock()
 		if writeErr != nil {
+			// A per-dependent write fault leaves this dependent's blocked_by
+			// still pointing at the now-deleted ID, with no auto-retry. Surface
+			// it (not just log) so callers can warn the agent/operator — the
+			// unblockedIDs still holds the ones that DID get cleaned up. All
+			// callers already handle a non-nil error.
 			slog.Warn("task: cascadeDeleteEdges: write failed", "id", id, "error", writeErr)
+			failedIDs = append(failedIDs, id)
 			continue
 		}
 		slog.Info("task: cascade-cleaned blocked_by edge", "task_id", id, "deleted_dep", deletedID)
@@ -341,12 +359,33 @@ func (s *Store) cascadeDeleteEdges(deletedID string) (unblockedIDs []string, err
 			unblockedIDs = append(unblockedIDs, id)
 		}
 	}
+	if len(failedIDs) > 0 {
+		return unblockedIDs, fmt.Errorf(
+			"%w: write failed for %d dependent(s): %v",
+			ErrCascadeEdgeCleanupFailed,
+			len(failedIDs),
+			failedIDs,
+		)
+	}
 	return unblockedIDs, nil
 }
 
+// ErrOrphanEdgeCleanupFailed is the sentinel wrapped by DropOrphanEdges'
+// aggregated write-failure error. It mirrors ErrCascadeEdgeCleanupFailed:
+// the orphan edges were correctly identified, but one or more files could not
+// be rewritten to drop them. Since DropOrphanEdges only runs explicitly on
+// boot (not on every load), a swallowed write failure here would leave a
+// stale reference to a long-deleted task in place until the next restart —
+// potentially a very long time — with zero diagnostic trail. Callers use
+// errors.Is against this sentinel; the existing caller (the gateway's
+// reconcileOrphanBlockedByEdges) already logs any non-nil error at Error
+// level and continues booting, so no caller-side change is required.
+var ErrOrphanEdgeCleanupFailed = errors.New("task: orphan blocked_by edge cleanup failed for one or more files")
+
 // DropOrphanEdges scans every task file and removes blocked_by entries whose
-// target file no longer exists. Returns the number of orphan edges removed.
-// Safe to call on startup.
+// target file no longer exists. Returns the number of orphan edges actually
+// removed (persisted to disk — an edge whose file failed to write back is not
+// counted, since it was not, in fact, removed). Safe to call on startup.
 func (s *Store) DropOrphanEdges() (int, error) {
 	ids, err := s.scanTaskIDs()
 	if err != nil {
@@ -361,6 +400,7 @@ func (s *Store) DropOrphanEdges() (int, error) {
 	}
 
 	removed := 0
+	var failedFiles []string
 	for _, id := range ids {
 		fileName := id + ".json"
 		path := s.path(id)
@@ -375,15 +415,17 @@ func (s *Store) DropOrphanEdges() (int, error) {
 			continue
 		}
 		clean := t.BlockedBy[:0]
+		orphaned := 0
+		origLen := len(t.BlockedBy)
 		for _, dep := range t.BlockedBy {
 			if known[dep] {
 				clean = append(clean, dep)
 			} else {
-				removed++
+				orphaned++
 				slog.Info("task: dropping orphan blocked_by edge", "task_id", id, "missing_dep", dep)
 			}
 		}
-		if len(clean) == len(t.BlockedBy) {
+		if len(clean) == origLen {
 			continue
 		}
 		t.BlockedBy = clean
@@ -393,6 +435,7 @@ func (s *Store) DropOrphanEdges() (int, error) {
 		newData, merr := json.MarshalIndent(&t, "", "  ")
 		if merr != nil {
 			slog.Warn("task: DropOrphanEdges: marshal failed", "file", fileName, "error", merr)
+			failedFiles = append(failedFiles, fileName)
 			continue
 		}
 		mu := s.lock.Get(id)
@@ -402,8 +445,23 @@ func (s *Store) DropOrphanEdges() (int, error) {
 		})
 		mu.Unlock()
 		if werr != nil {
+			// Same reasoning as cascadeDeleteEdges above: the orphan edge(s) in
+			// this file were identified but NOT persisted as removed — no
+			// auto-retry until the next boot. Surface it via a non-nil
+			// aggregated error rather than silently under-reporting `removed`.
 			slog.Warn("task: DropOrphanEdges: write failed", "file", fileName, "error", werr)
+			failedFiles = append(failedFiles, fileName)
+			continue
 		}
+		removed += orphaned
+	}
+	if len(failedFiles) > 0 {
+		return removed, fmt.Errorf(
+			"%w: write failed for %d file(s): %v",
+			ErrOrphanEdgeCleanupFailed,
+			len(failedFiles),
+			failedFiles,
+		)
 	}
 	return removed, nil
 }

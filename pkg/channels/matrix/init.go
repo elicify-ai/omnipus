@@ -85,6 +85,20 @@ func migrateLegacyMatrixCryptoStore(cfg *config.Config, channelDir, instanceID, 
 	tmpPath := channelDir + ".pre-namespacing-migration-tmp"
 	legacyDBFile := filepath.Join(channelDir, dbName)
 
+	// Computed once, up front, from cfg only (no I/O) — used to gate BOTH the
+	// crash-resume path below and the fresh-migration path further down. The
+	// ambiguity guard must block every filesystem-mutating step this function
+	// can take, not just the fresh-migration one: there is no way to know
+	// which instance's keys are in a shared legacy/staged store, so mutating
+	// the filesystem before this check is consulted reintroduces the exact
+	// "guess dressed up as a fix" this function exists to prevent.
+	enabledMatrixInstances := 0
+	for _, other := range cfg.Channels {
+		if other.Enabled && other.Type == "matrix" {
+			enabledMatrixInstances++
+		}
+	}
+
 	_, legacyStatErr := os.Stat(legacyDBFile)
 	legacyPresent := legacyStatErr == nil
 	if legacyStatErr != nil && !os.IsNotExist(legacyStatErr) {
@@ -113,6 +127,30 @@ func migrateLegacyMatrixCryptoStore(cfg *config.Config, channelDir, instanceID, 
 	// fresh install — the real store would be silently and permanently
 	// orphaned at tmpPath with zero diagnostic trail.
 	if tmpInfo, err := os.Stat(tmpPath); err == nil && tmpInfo.IsDir() {
+		if enabledMatrixInstances != 1 {
+			// An interrupted migration was detected, but with multiple Matrix
+			// instances enabled there is no way to know which instance's keys
+			// are staged at tmpPath — auto-resuming here would silently
+			// complete exactly the guess this function's ambiguity guard
+			// exists to prevent (see the doc comment above). Whichever
+			// instance's factory call happens to run first (Go map iteration
+			// order is randomized in manager.go's initChannels) would
+			// otherwise win the staged store while every other instance
+			// silently gets a fresh, empty identity. Leave BOTH tmpPath and
+			// namespacedPath untouched — do not MkdirAll or Rename — and
+			// loudly ask for manual resolution instead.
+			logger.ErrorCF(
+				"matrix",
+				"An Olm/Megolm crypto store migration was interrupted mid-flight (likely a process crash) and could NOT be automatically resumed, because multiple Matrix instances are configured — there is no way to safely determine which instance's keys are staged at the temp path below. The ORIGINAL crypto store may still be recoverable there and was deliberately left untouched. Resolve this manually: once you know which instance the staged store belongs to, move it into that instance's namespaced directory yourself; until then, every enabled Matrix instance is running on a fresh, empty crypto identity and previously encrypted room history will remain permanently undecryptable",
+				map[string]any{
+					"tmp_path":                 tmpPath,
+					"namespaced_path":          namespacedPath,
+					"instance_id":              instanceID,
+					"enabled_matrix_instances": enabledMatrixInstances,
+				},
+			)
+			return
+		}
 		if _, destErr := os.Stat(namespacedPath); os.IsNotExist(destErr) {
 			// Nothing has used the namespaced destination yet since the crash
 			// (no fresh store was created there), so it is safe to finish the
@@ -180,12 +218,6 @@ func migrateLegacyMatrixCryptoStore(cfg *config.Config, channelDir, instanceID, 
 		return // destination already exists — never overwrite, and already migrated
 	}
 
-	enabledMatrixInstances := 0
-	for _, other := range cfg.Channels {
-		if other.Enabled && other.Type == "matrix" {
-			enabledMatrixInstances++
-		}
-	}
 	if enabledMatrixInstances != 1 {
 		logger.WarnCF(
 			"matrix",

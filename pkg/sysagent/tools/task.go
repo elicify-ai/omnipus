@@ -6,6 +6,7 @@ package systools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -453,8 +454,17 @@ func (t *TaskDeleteTool) Execute(ctx context.Context, args map[string]any) *tool
 
 	unblocked, err := store.Delete(id)
 	if err != nil {
-		return tools.ErrorResult(errorJSON("DELETE_FAILED", err.Error(),
-			"Use list_tasks_in_workspace to see available tasks"))
+		if !errors.Is(err, task.ErrCascadeEdgeCleanupFailed) {
+			return tools.ErrorResult(errorJSON("DELETE_FAILED", err.Error(),
+				"Use list_tasks_in_workspace to see available tasks"))
+		}
+		// The task itself was deleted; only cleaning up OTHER tasks' dangling
+		// blocked_by edges partially failed. Non-fatal — log and continue
+		// reporting success for the primary delete, matching how
+		// update_task_in_workspace above already treats
+		// AdvanceBlockedDependents's write-failure error as a logged,
+		// non-fatal side effect.
+		slog.Warn("delete_task_in_workspace: cascade edge cleanup partially failed", "deleted_id", id, "error", err)
 	}
 	if len(unblocked) > 0 {
 		slog.Info("sysagent: task delete: unblocked dependents", "deleted_id", id, "unblocked", unblocked)

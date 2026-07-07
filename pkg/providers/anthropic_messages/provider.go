@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers/common"
 	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 )
@@ -63,6 +64,11 @@ func NewProviderWithTimeout(apiKey, apiBase string, timeoutSeconds int) *Provide
 	// than assumed impossible.
 	httpClient, err := common.NewHTTPClient("")
 	if err != nil {
+		logger.WarnCF(
+			"anthropic_messages",
+			"NewHTTPClient failed, falling back to a plain http.Client without HTTP/2 health-check tuning",
+			map[string]any{"error": err.Error()},
+		)
 		httpClient = &http.Client{Timeout: defaultRequestTimeout}
 	}
 	if timeoutSeconds > 0 {

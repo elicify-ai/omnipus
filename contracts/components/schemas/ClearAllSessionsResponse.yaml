@@ -1,0 +1,25 @@
+title: ClearAllSessionsResponse
+description: >
+  Response from DELETE /api/v1/sessions/all (HTTP 200). Reports how many
+  sessions were removed and any non-fatal per-agent errors encountered along
+  the way (partial removal is still possible when warnings are present).
+type: object
+required:
+  - status
+  - count
+properties:
+  status:
+    type: string
+    enum:
+      - cleared
+    example: cleared
+  count:
+    type: integer
+    minimum: 0
+    example: 15
+  warnings:
+    type: array
+    items:
+      type: string
+    description: >
+      Per-agent errors (non-fatal — partial removal possible).

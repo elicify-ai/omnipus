@@ -6328,6 +6328,21 @@ export interface components {
             warning?: string;
         };
         /**
+         * ClearAllSessionsResponse
+         * @description Response from DELETE /api/v1/sessions/all (HTTP 200). Reports how many sessions were removed and any non-fatal per-agent errors encountered along the way (partial removal is still possible when warnings are present).
+         */
+        ClearAllSessionsResponse: {
+            /**
+             * @example cleared
+             * @enum {string}
+             */
+            status: "cleared";
+            /** @example 15 */
+            count: number;
+            /** @description Per-agent errors (non-fatal — partial removal possible). */
+            warnings?: string[];
+        };
+        /**
          * RotateTokenResponse
          * @description Response from POST /api/v1/config/gateway/rotate-token. Returns the newly generated bearer token. The caller must immediately update any stored token references — the previous token is no longer valid once the gateway processes the next request with the new token active.
          */
@@ -10950,17 +10965,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        /**
-                         * @example cleared
-                         * @enum {string}
-                         */
-                        status: "cleared";
-                        /** @example 15 */
-                        count: number;
-                        /** @description Per-agent errors (non-fatal — partial removal possible). */
-                        warnings?: string[];
-                    };
+                    "application/json": components["schemas"]["ClearAllSessionsResponse"];
                 };
             };
             /** @description Method not allowed. */
@@ -12931,6 +12936,7 @@ export type OperationResult = components["schemas"]["OperationResult"];
 export type ToolApprovalResponse = components["schemas"]["ToolApprovalResponse"];
 export type UploadFilesResponse = components["schemas"]["UploadFilesResponse"];
 export type ActivityEventsResponse = components["schemas"]["ActivityEventsResponse"];
+export type ClearAllSessionsResponse = components["schemas"]["ClearAllSessionsResponse"];
 export type RotateTokenResponse = components["schemas"]["RotateTokenResponse"];
 export type VersionResponse = components["schemas"]["VersionResponse"];
 export type UserContextRequest = components["schemas"]["UserContextRequest"];

@@ -113,6 +113,36 @@ func (sp *SeccompProgram) Install() error {
 	return nil
 }
 
+// x32SyscallBit is the Linux kernel's __X32_SYSCALL_BIT (bit 30 of the raw
+// syscall number, 0x40000000; see arch/x86/include/asm/unistd.h). It is a
+// fixed ABI constant, not an architecture-varying one — it only matters on
+// amd64, but its value is defined here (not in seccomp_linux_amd64.go)
+// because it is used unconditionally, gated at runtime by nativeAuditArch,
+// from assembleBPFMode below, which is compiled for every Linux GOARCH.
+//
+// amd64's x32 ABI (ILP32 userspace running on the x86_64 kernel) reports
+// seccomp_data.arch == AUDIT_ARCH_X86_64 — the SAME value a native 64-bit
+// syscall reports, so the arch check in assembleBPFMode does NOT by itself
+// distinguish x32 from native — but the kernel ORs this bit into
+// seccomp_data.nr for every x32 syscall. Since blockedNrs holds native
+// x86_64 numbers (all well under 1000, no high bits set), a blocked
+// syscall issued through the x32 ABI (e.g. ptrace = 101 natively,
+// 0x40000065 under x32) does not numerically match any blockedNrs entry
+// and would otherwise fall through to the default RET ALLOW: a second,
+// independent kernel-sandbox bypass distinct from the ia32 compat-mode
+// case handled by the arch check (which reports a different arch value
+// entirely).
+//
+// Rather than maintaining a parallel x32 syscall-number blocklist,
+// assembleBPFMode rejects the entire x32 ABI outright on amd64 — the same
+// approach Docker's default seccomp profile and systemd's
+// SystemCallArchitectures=native take. x32 is rarely used in practice
+// (glibc does not enable it by default and most distributions ship no x32
+// userspace at all), so blocking it entirely trades negligible
+// compatibility loss for closing this bypass completely instead of
+// chasing a second numbering table.
+const x32SyscallBit = 0x40000000
+
 // assembleBPFMode builds a classic BPF program that:
 //  1. Loads the syscall architecture from seccomp_data.arch (offset 4) and
 //     verifies it equals nativeAuditArch — the AUDIT_ARCH_* constant for the
@@ -130,11 +160,18 @@ func (sp *SeccompProgram) Install() error {
 //     with an ALLOWED native syscall number and reach ptrace/mount/bpf/etc.
 //     completely unfiltered. Any arch mismatch is therefore routed to the
 //     SAME deny target as a matched blocked syscall — no new disposition.
-//  2. Loads the syscall number from seccomp_data.nr (offset 0)
-//  3. Compares against each blocked syscall number
-//  4. In ModeEnforce: returns SECCOMP_RET_ERRNO(EPERM) for blocked syscalls
-//     or an arch mismatch. In ModePermissive: returns SECCOMP_RET_LOG — the
-//     syscall proceeds but the kernel writes an audit-log entry.
+//  2. On amd64 only (nativeAuditArch == AUDIT_ARCH_X86_64): loads the
+//     syscall number and rejects it outright if __X32_SYSCALL_BIT
+//     (x32SyscallBit) is set. x32-mode syscalls report the SAME arch value
+//     as native 64-bit syscalls (step 1's check does not catch them) but
+//     carry a tagged, differently-numbered nr — see x32SyscallBit's doc
+//     comment. Routed to the same deny target as everything else.
+//  3. Loads (or, on amd64, reloads) the syscall number from seccomp_data.nr
+//     (offset 0) and compares against each blocked syscall number.
+//  4. In ModeEnforce: returns SECCOMP_RET_ERRNO(EPERM) for blocked syscalls,
+//     an arch mismatch, or a tagged x32 syscall. In ModePermissive: returns
+//     SECCOMP_RET_LOG — the syscall proceeds but the kernel writes an
+//     audit-log entry.
 //  5. Returns SECCOMP_RET_ALLOW for everything else.
 func assembleBPFMode(blockedNrs []uint32, mode Mode) []unix.SockFilter {
 	// seccomp_data layout: offset 0 = nr (uint32), offset 4 = arch (uint32)
@@ -152,6 +189,8 @@ func assembleBPFMode(blockedNrs []uint32, mode Mode) []unix.SockFilter {
 		bpfJEQ = unix.BPF_JEQ
 		bpfK   = unix.BPF_K
 		bpfRET = unix.BPF_RET
+		bpfALU = unix.BPF_ALU
+		bpfAND = unix.BPF_AND
 
 		seccompRetAllow = unix.SECCOMP_RET_ALLOW
 		seccompRetErrno = unix.SECCOMP_RET_ERRNO
@@ -171,16 +210,38 @@ func assembleBPFMode(blockedNrs []uint32, mode Mode) []unix.SockFilter {
 		denyAction = uint32(seccompRetErrno) | uint32(unix.EPERM&0xFFFF)
 	}
 
-	n := len(blockedNrs)
-	// Program structure (arch-check prepended ahead of the nr load/compares):
-	// [0]         LD  [offsetArch]     — load syscall arch
-	// [1]         JEQ nativeAuditArch  — mismatch falls through to deny (n+4)
-	// [2]         LD  [offsetNr]       — load syscall number
-	// [3..n+2]    JEQ nr, goto_deny    — one JEQ per blocked syscall
-	// [n+3]       RET ALLOW            — default: allow
-	// [n+4]       RET deny             — deny target (arch mismatch OR blocked nr)
+	// x32Check: only amd64 has an x32 ABI. nativeAuditArch is a per-arch
+	// constant (see seccomp_linux_amd64.go et al.); comparing it against the
+	// fixed AUDIT_ARCH_X86_64 value is a compile-time-safe, arch-agnostic
+	// way to gate the extra instructions below without needing an
+	// amd64-only build tag on this shared file.
+	x32Check := nativeAuditArch == uint32(unix.AUDIT_ARCH_X86_64)
+	x32Len := 0
+	if x32Check {
+		x32Len = 3 // LD nr, AND x32SyscallBit, JEQ x32SyscallBit
+	}
 
-	prog := make([]unix.SockFilter, 0, n+5)
+	n := len(blockedNrs)
+	// Program structure (arch-check prepended ahead of the nr load/compares;
+	// the x32 sub-block, present only on amd64, is prepended ahead of the
+	// nr load that feeds the blocked-nr chain):
+	// [0]            LD  [offsetArch]        — load syscall arch
+	// [1]            JEQ nativeAuditArch      — mismatch falls through to deny
+	// amd64 only:
+	// [2]            LD  [offsetNr]           — load nr to test the x32 tag
+	// [3]            AND x32SyscallBit        — isolate the tag bit
+	// [4]            JEQ x32SyscallBit        — tag set: falls through to deny
+	// [base]         LD  [offsetNr]           — (re)load nr for the blocked-nr
+	//                                            chain (base = 2 + x32Len)
+	// [base+1..base+n]  JEQ nr, goto_deny     — one JEQ per blocked syscall
+	// [allowIdx]     RET ALLOW                — default: allow
+	// [denyIdx]      RET deny                 — deny target (arch mismatch,
+	//                                            x32 tag, OR blocked nr)
+	base := 2 + x32Len
+	allowIdx := base + n + 1
+	denyIdx := allowIdx + 1
+
+	prog := make([]unix.SockFilter, 0, denyIdx+1)
 
 	// Instruction 0: Load syscall arch
 	prog = append(prog, unix.SockFilter{
@@ -189,29 +250,60 @@ func assembleBPFMode(blockedNrs []uint32, mode Mode) []unix.SockFilter {
 	})
 
 	// Instruction 1: Verify arch matches nativeAuditArch. Jt=0 (fall through
-	// to instruction 2, the nr load) on a match. Jf jumps to the deny target
-	// at index n+4 on any mismatch. The jump is relative to the instruction
-	// AFTER this one (index 2), so Jf = (n+4) - 2 = n+2.
+	// to instruction 2) on a match. Jf jumps to the deny target on any
+	// mismatch. The jump is relative to the instruction AFTER this one
+	// (index 2), so Jf = denyIdx - 2.
 	prog = append(prog, unix.SockFilter{
 		Code: uint16(bpfJMP | bpfJEQ | bpfK),
 		Jt:   0,
-		Jf:   uint8(n + 2),
+		Jf:   uint8(denyIdx - 2),
 		K:    nativeAuditArch,
 	})
 
-	// Instruction 2: Load syscall number
+	if x32Check {
+		// Instruction 2: Load nr to test for the x32 tag bit. arch==native
+		// is already established by instruction 1, and on amd64 native ==
+		// AUDIT_ARCH_X86_64 covers BOTH true native 64-bit syscalls and x32
+		// syscalls (they are indistinguishable by arch alone), so this
+		// check must run before the syscall is allowed through.
+		prog = append(prog, unix.SockFilter{
+			Code: uint16(bpfLD | bpfW | bpfABS),
+			K:    offsetNr,
+		})
+		// Instruction 3: A &= x32SyscallBit — isolates the tag bit into A
+		// (0 if clear, x32SyscallBit if set). This clobbers the raw nr, so
+		// it must be reloaded afterward for the blocked-nr comparison chain.
+		prog = append(prog, unix.SockFilter{
+			Code: uint16(bpfALU | bpfAND | bpfK),
+			K:    x32SyscallBit,
+		})
+		// Instruction 4: A == x32SyscallBit means the tag bit was set (x32
+		// syscall) — deny unconditionally, regardless of the raw nr, since
+		// x32 is rejected outright. A == 0 (Jf, fall through) means the tag
+		// was clear (a true native 64-bit syscall) — proceed to reload nr
+		// and evaluate it against the ordinary blocked-list chain. The jump
+		// is relative to the instruction after this one (index base, the nr
+		// reload), so Jt = denyIdx - base.
+		prog = append(prog, unix.SockFilter{
+			Code: uint16(bpfJMP | bpfJEQ | bpfK),
+			Jt:   uint8(denyIdx - base),
+			Jf:   0,
+			K:    x32SyscallBit,
+		})
+	}
+
+	// Instruction `base`: (re)load syscall number for the blocked-nr chain.
 	prog = append(prog, unix.SockFilter{
 		Code: uint16(bpfLD | bpfW | bpfABS),
 		K:    offsetNr,
 	})
 
-	// Instructions 3..n+2: Jump to deny if syscall matches.
+	// Instructions base+1..base+n: Jump to deny if syscall matches.
 	// Jump targets are relative: Jt/Jf are number of instructions to skip.
-	// deny is at index n+4, allow is at index n+3. The gap between each
-	// JEQ's own fall-through successor and the deny target is (n-i)
-	// regardless of the two arch-check instructions prepended above, since
-	// both the JEQ instructions and the deny target shifted by the same
-	// +2 offset.
+	// deny is at denyIdx, allow is at allowIdx. The gap between each JEQ's
+	// own fall-through successor and the deny target is (n-i) regardless of
+	// how many instructions precede the chain, since both the JEQ
+	// instructions and the deny target shift by the same offset together.
 	for i, nr := range blockedNrs {
 		remaining := n - i // instructions left after this one before allow
 		prog = append(prog, unix.SockFilter{
@@ -222,15 +314,16 @@ func assembleBPFMode(blockedNrs []uint32, mode Mode) []unix.SockFilter {
 		})
 	}
 
-	// Instruction n+3: RET ALLOW (default)
+	// Instruction allowIdx: RET ALLOW (default)
 	prog = append(prog, unix.SockFilter{
 		Code: uint16(bpfRET | bpfK),
 		K:    seccompRetAllow,
 	})
 
-	// Instruction n+4: RET (deny). EPERM in enforce mode, RET_LOG in
-	// permissive. Reached via a blocked-syscall JEQ match OR an arch
-	// mismatch (instruction 1's Jf branch) — same disposition either way.
+	// Instruction denyIdx: RET (deny). EPERM in enforce mode, RET_LOG in
+	// permissive. Reached via a blocked-syscall JEQ match, an arch
+	// mismatch, or (amd64 only) a tagged x32 syscall — same disposition
+	// either way.
 	prog = append(prog, unix.SockFilter{
 		Code: uint16(bpfRET | bpfK),
 		K:    denyAction,

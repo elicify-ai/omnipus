@@ -39,6 +39,30 @@ export function DataSection() {
     queryFn: fetchStorageStats,
   })
 
+  // Task 3 fix: fetchStorageStats()'s `warnings` field (non-fatal per-agent
+  // collection errors — the stats are still a PARTIAL result) was previously
+  // discarded. Apply the same warnings→toast treatment already established
+  // in this file for clearAllSessions' onSuccess below. This is a query (not
+  // a mutation), so it's driven by an effect with a ref-guard: warnings are
+  // re-delivered on every successful refetch (staleTime refresh, window
+  // refocus, etc) and we only want to toast once per distinct warning set,
+  // not spam the user on every background refetch.
+  const lastStorageWarningsRef = useRef<string | null>(null)
+  useEffect(() => {
+    const warnings = stats?.warnings
+    if (!warnings || warnings.length === 0) {
+      lastStorageWarningsRef.current = null
+      return
+    }
+    const key = warnings.join('\n')
+    if (lastStorageWarningsRef.current === key) return
+    lastStorageWarningsRef.current = key
+    addToast({
+      message: `Storage stats may be incomplete — ${warnings.length} store${warnings.length === 1 ? '' : 's'} could not be read. See logs for details.`,
+      variant: 'warning',
+    })
+  }, [stats?.warnings, addToast])
+
   const { data: backups = [], isLoading: backupsLoading, isError: backupsError } = useQuery({
     queryKey: ['backups'],
     queryFn: fetchBackups,

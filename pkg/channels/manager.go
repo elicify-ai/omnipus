@@ -1114,10 +1114,33 @@ func (m *Manager) StopAll(ctx context.Context) error {
 // RegisterChannel, which has no config.Channels entry) — matching the
 // pre-existing behavior for that case. Caller must hold m.mu (all three
 // production call sites — StartAll, Reload, RegisterChannel — already do).
+//
+// The fallback covers two distinct cases, logged at two distinct levels:
+//   - No config.Channels entry at all for instanceID: a benign synthetic/
+//     internal registration with nothing to look up — DEBUG.
+//   - A config.Channels entry exists but its Type is empty: config-driven
+//     entries always get Type populated by config.normalizeChannelMap, so
+//     this means the entry and its Type went out of sync — a genuine
+//     config/instance desync bug, not a benign registration. This project's
+//     shipped default LogLevel is "warn" (pkg/config/defaults.go), so this
+//     case is logged at WARN — a DEBUG-only line here would never reach a
+//     default-level operator's logs, hiding the one diagnostic explaining why
+//     a configured multi-instance channel is silently using the wrong rate
+//     limit.
 func (m *Manager) channelTypeForRateLimit(instanceID string) string {
 	if m.config != nil {
-		if inst, ok := m.config.Channels[instanceID]; ok && inst.Type != "" {
-			return inst.Type
+		if inst, ok := m.config.Channels[instanceID]; ok {
+			if inst.Type != "" {
+				return inst.Type
+			}
+			logger.WarnCF(
+				"channels",
+				"config.Channels entry exists for instance but has no Type set; using instance ID as rate-limit type — this indicates a config/instance desync bug, not a benign synthetic registration",
+				map[string]any{
+					"instance_id": instanceID,
+				},
+			)
+			return instanceID
 		}
 	}
 	logger.DebugCF(

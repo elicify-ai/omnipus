@@ -781,7 +781,15 @@ func (t *TaskDeleteTool) Execute(ctx context.Context, args map[string]any) *Tool
 		if errors.Is(err, task.ErrNotFound) {
 			return ErrorResult(fmt.Sprintf("task %q not found", taskID))
 		}
-		return ErrorResult(fmt.Sprintf("could not delete task: %v", err))
+		if !errors.Is(err, task.ErrCascadeEdgeCleanupFailed) {
+			return ErrorResult(fmt.Sprintf("could not delete task: %v", err))
+		}
+		// The task itself was deleted; only cleaning up OTHER tasks' dangling
+		// blocked_by edges partially failed. Non-fatal — log and continue
+		// reporting success for the primary delete, matching how this file's
+		// update_task path already treats AdvanceBlockedDependents's
+		// write-failure error as a logged, non-fatal side effect.
+		slog.Warn("delete_task: cascade edge cleanup partially failed", "deleted_id", taskID, "error", err)
 	}
 
 	// Advance any dependents that became fully unblocked by this delete.

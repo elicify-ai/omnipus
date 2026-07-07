@@ -424,6 +424,8 @@ components:
             $ref: '#/components/schemas/UploadedFile'
     ActivityEventsResponse:
       $ref: ./components/schemas/ActivityEventsResponse.yaml
+    ClearAllSessionsResponse:
+      $ref: ./components/schemas/ClearAllSessionsResponse.yaml
     RotateTokenResponse:
       $ref: ./components/schemas/RotateTokenResponse.yaml
     VersionResponse:
@@ -3620,25 +3622,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                required:
-                - status
-                - count
-                properties:
-                  status:
-                    type: string
-                    enum:
-                    - cleared
-                    example: cleared
-                  count:
-                    type: integer
-                    minimum: 0
-                    example: 15
-                  warnings:
-                    type: array
-                    items:
-                      type: string
-                    description: "Per-agent errors (non-fatal \u2014 partial removal possible).\n"
+                $ref: '#/components/schemas/ClearAllSessionsResponse'
         '405':
           description: Method not allowed.
           content:

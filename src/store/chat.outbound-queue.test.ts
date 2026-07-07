@@ -228,6 +228,78 @@ describe('outboundQueue — drainOutboundQueue', () => {
     expect(useChatStore.getState().pendingDrainQueue).toHaveLength(0)
   })
 
+  it('preserves send order across TWO consecutive disconnects mid-drain (ordering regression, not the BUG 1 loss regression)', () => {
+    // Regression: a prior fix (BUG 1 above) stopped messages from being
+    // silently DROPPED on a mid-drain disconnect, but a follow-up review
+    // found it introduced silent REORDERING instead. Trace: A, B, C queued
+    // offline. Reconnect drains them — A is sent, leaving
+    // pendingDrainQueue=[B,C]. While A is in flight the connection drops
+    // again; the WS-close handler (`clearStreamingState`) sweeps streaming
+    // state and calls `maybeDrainNext()`, which pops B and hands it to
+    // `sendMessage` — but the connection is down, so sendMessage's
+    // disconnected-WS branch bounces B back onto `outboundQueue`, leaving
+    // pendingDrainQueue=[C]. On the NEXT reconnect, `drainOutboundQueue()`
+    // must merge the bounced-back `outboundQueue=[B]` back in FRONT of
+    // pendingDrainQueue=[C] (B is chronologically earlier — it was queued
+    // before C in the original batch) so the final wire order is A, B, C —
+    // not A, C, B.
+    const send = connectWithSendSpy()
+    act(() => {
+      useChatStore.setState({ outboundQueue: ['A', 'B', 'C'] })
+    })
+
+    // First reconnect: drains A,B,C into pendingDrainQueue and sends A.
+    act(() => {
+      useChatStore.getState().drainOutboundQueue()
+    })
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(send).toHaveBeenNthCalledWith(1, expect.objectContaining({ content: 'A' }))
+    expect(useChatStore.getState().pendingDrainQueue).toEqual(['B', 'C'])
+    expect(useChatStore.getState().isStreaming).toBe(true)
+
+    // Mid-flight disconnect while A is in flight. The real WS-close handler
+    // calls clearStreamingState(), which sweeps isStreaming and tries to
+    // release the next queued message via maybeDrainNext(). The connection
+    // is down, so B bounces back onto outboundQueue instead of being sent.
+    act(() => {
+      useConnectionStore.setState({ isConnected: false })
+    })
+    act(() => {
+      useChatStore.getState().clearStreamingState()
+    })
+    expect(send).toHaveBeenCalledTimes(1) // B did NOT reach the wire
+    expect(useChatStore.getState().outboundQueue).toEqual(['B'])
+    expect(useChatStore.getState().pendingDrainQueue).toEqual(['C'])
+
+    // Second reconnect: drainOutboundQueue must merge the bounced-back
+    // queue BACK IN FRONT of what's still parked, then immediately try to
+    // send the new head via its own maybeDrainNext() call.
+    act(() => {
+      useConnectionStore.setState({ isConnected: true })
+    })
+    act(() => {
+      useChatStore.getState().drainOutboundQueue()
+    })
+    expect(send).toHaveBeenCalledTimes(2)
+    expect(send).toHaveBeenNthCalledWith(2, expect.objectContaining({ content: 'B' }))
+    expect(useChatStore.getState().pendingDrainQueue).toEqual(['C'])
+
+    // Complete B's turn — C must go out last.
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'done', session_id: 'test-session' })
+    })
+    expect(send).toHaveBeenCalledTimes(3)
+    expect(send).toHaveBeenNthCalledWith(3, expect.objectContaining({ content: 'C' }))
+    expect(useChatStore.getState().pendingDrainQueue).toEqual([])
+
+    // Full send order across both disconnects must be A, B, C — not A, C, B.
+    expect(send.mock.calls.map((call) => (call[0] as { content: string }).content)).toEqual([
+      'A',
+      'B',
+      'C',
+    ])
+  })
+
   it('queue is empty after drain even when sendMessage re-enqueues (connection still down)', () => {
     // If sendMessage hits isConnected=false and re-enqueues, the drain function
     // cleared the queue first — so the net effect is the queue is replaced with
