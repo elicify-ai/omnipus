@@ -105,10 +105,87 @@ describe('C8 — clearStreamingState resolves a stuck stream', () => {
     const msg = bucket.messagesById['a1']
     expect(msg.isStreaming).toBe(false)
     expect(msg.status).toBe('done')
-    // Running tool calls are flipped to cancelled so nothing renders as in-flight.
-    expect(bucket.toolCalls['tc1'].status).toBe('cancelled')
+    // Running tool calls are flipped to cancelled and baked into the
+    // finalized message's tool_calls (see the dedicated baking test below);
+    // the live bucket map is cleared so nothing renders as in-flight via the
+    // stale live-bucket path.
+    expect(bucket.toolCalls).toEqual({})
+    expect(msg.tool_calls?.find((tc) => tc.id === 'tc1')?.status).toBe('cancelled')
     // Foreground projection is synced.
     expect(useChatStore.getState().isStreaming).toBe(false)
+  })
+
+  it('bakes in-flight tool calls into the finalized message, not just cancels them in place', () => {
+    // Regression test: once isStreaming flips false, the historical renderer
+    // (VirtualAssistantMessageRow) reads message.tool_calls instead of the
+    // live bucket.toolCalls map. Before the fix, the WS-disconnect fallback
+    // only flipped bucket.toolCalls['tc1'].status to 'cancelled' in place and
+    // never baked it into messagesById['a1'].tool_calls — so the in-flight
+    // tool call vanished from the UI the instant the stream was force-closed.
+    seedStreamingBucket(SID)
+    act(() => {
+      useChatStore.getState().clearStreamingState()
+    })
+    const bucket = useChatStore.getState().sessionsById[SID]
+    const msg = bucket.messagesById['a1']
+    expect(msg.tool_calls).toEqual([
+      { id: 'tc1', tool: 'exec', params: {}, result: undefined, status: 'cancelled', duration_ms: undefined, error: undefined },
+    ])
+    // The live bucket state must be cleared too, so it doesn't leak into the
+    // next turn (mirrors the `done` frame handler's baking contract).
+    expect(bucket.toolCalls).toEqual({})
+    expect(bucket.toolCallOrder).toEqual([])
+  })
+
+  it('preserves an already-baked tool_calls entry when baking a second in-flight call on disconnect', () => {
+    // If the message already has a baked tool call (e.g. from an earlier
+    // partial bake) and a different call is still live when disconnect
+    // fires, both must survive in the merged tool_calls array.
+    seedStreamingBucket(SID, {
+      messagesById: {
+        'a1': {
+          id: 'a1',
+          role: 'assistant',
+          content: 'thinking…',
+          timestamp: new Date().toISOString(),
+          status: 'streaming',
+          isStreaming: true,
+          tool_calls: [{ id: 'tc0', tool: 'read_file', params: {}, status: 'success' }],
+        },
+      },
+    })
+    act(() => {
+      useChatStore.getState().clearStreamingState()
+    })
+    const msg = useChatStore.getState().sessionsById[SID].messagesById['a1']
+    expect(msg.tool_calls?.map((tc) => tc.id)).toEqual(['tc0', 'tc1'])
+    expect(msg.tool_calls?.find((tc) => tc.id === 'tc1')?.status).toBe('cancelled')
+  })
+
+  it('bakes an already-resolved (non-running) tool call on disconnect, not just still-running ones', () => {
+    // Regression test: a tool_call_result frame commonly arrives before the
+    // trailing assistant text finishes streaming, flipping the tool call to a
+    // terminal status ('success'/'error') while the message is still
+    // isStreaming=true. If the WS drops in that window, the old
+    // `hasRunningTools` gate (status === 'running' only) skipped the entire
+    // bake-and-clear block, and the already-resolved tool call silently
+    // vanished once isStreaming flipped false and the historical renderer
+    // took over (it reads message.tool_calls, not the live bucket).
+    seedStreamingBucket(SID, {
+      toolCalls: { 'tc1': { id: 'tc1', call_id: 'tc1', tool: 'exec', params: {}, status: 'success', result: 'ok' } },
+    })
+    act(() => {
+      useChatStore.getState().clearStreamingState()
+    })
+    const bucket = useChatStore.getState().sessionsById[SID]
+    const msg = bucket.messagesById['a1']
+    // The already-terminal status is preserved as-is (only 'running' entries
+    // are flipped to 'cancelled' — a resolved call should not be relabeled).
+    expect(msg.tool_calls).toEqual([
+      { id: 'tc1', tool: 'exec', params: {}, result: 'ok', status: 'success', duration_ms: undefined, error: undefined },
+    ])
+    expect(bucket.toolCalls).toEqual({})
+    expect(bucket.toolCallOrder).toEqual([])
   })
 
   it('sweeps background buckets, not only the active one', () => {

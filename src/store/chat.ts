@@ -1598,8 +1598,16 @@ export const useChatStore = create<ChatStore>((set, get) => {
               break
             }
           }
-          const hasRunningTools = Object.values(bucket.toolCalls).some((tc) => tc.status === 'running')
-          if (!bucket.isStreaming && !needsMsgFix && !hasRunningTools && bucket.cancelStage === null) {
+          // Gate on "is there anything to bake at all" (mirrors the `done` frame
+          // handler's `draft.toolCallOrder.length > 0` gate, ~L1931) rather than
+          // "is something still running": a tool call flips to a terminal status
+          // ('success'/'error') the instant its tool_call_result frame arrives,
+          // which commonly happens before the trailing assistant text finishes
+          // streaming. If the WS drops in that window the tool call is already
+          // resolved but never baked — a status-'running' filter here would miss
+          // it and let it silently vanish once isStreaming flips false.
+          const hasPendingTools = bucket.toolCallOrder.length > 0
+          if (!bucket.isStreaming && !needsMsgFix && !hasPendingTools && bucket.cancelStage === null) {
             sessionsById[sid] = bucket
             continue
           }
@@ -1620,14 +1628,44 @@ export const useChatStore = create<ChatStore>((set, get) => {
             }
             next.messagesById = messagesById
           }
-          if (hasRunningTools) {
+          if (hasPendingTools) {
             const toolCalls = { ...bucket.toolCalls }
             for (const key of Object.keys(toolCalls)) {
               if (toolCalls[key].status === 'running') {
                 toolCalls[key] = { ...toolCalls[key], status: 'cancelled' }
               }
             }
-            next.toolCalls = toolCalls
+            // Bake every pending tool call — not just the ones just flipped to
+            // 'cancelled' above — into the last assistant message's tool_calls
+            // array before clearing the live bucket state below. Terminal
+            // ('success'/'error') calls need this too: otherwise they vanish
+            // the instant isStreaming flips false, because the renderer
+            // switches from the live toolCalls bucket to message.tool_calls at
+            // that point (mirrors the `done` frame handler's baking logic; see
+            // ~L1903-1918).
+            let lastAssistantId: string | null = null
+            for (let i = order.length - 1; i >= 0; i--) {
+              if (bucket.messagesById[order[i]]?.role === 'assistant') { lastAssistantId = order[i]; break }
+            }
+            const lastMsg = lastAssistantId ? next.messagesById[lastAssistantId] : undefined
+            if (lastAssistantId && lastMsg?.role === 'assistant') {
+              const baked = bucket.toolCallOrder
+                .filter((id) => toolCalls[id])
+                .map((id) => {
+                  const tc = toolCalls[id]
+                  return { id, tool: tc.tool, params: tc.params ?? {}, result: tc.result, status: tc.status, duration_ms: tc.duration_ms, error: tc.error }
+                })
+              const existing = lastMsg.tool_calls ?? []
+              const mergedById = new Map(existing.map((tc) => [tc.id, tc]))
+              for (const tc of baked) mergedById.set(tc.id, tc)
+              next.messagesById = {
+                ...next.messagesById,
+                [lastAssistantId]: { ...lastMsg, tool_calls: Array.from(mergedById.values()) },
+              }
+            }
+            next.toolCalls = {}
+            next.toolCallOrder = []
+            next.textAtToolCallStart = {}
           }
           sessionsById[sid] = next
         }

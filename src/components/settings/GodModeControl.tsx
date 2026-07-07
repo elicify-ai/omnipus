@@ -43,7 +43,7 @@ export function GodModeControl() {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
 
-  const { data: godMode, isLoading } = useQuery({
+  const { data: godMode, isLoading, isError } = useQuery({
     queryKey: ['god-mode'],
     queryFn: fetchGodMode,
   })
@@ -63,6 +63,11 @@ export function GodModeControl() {
   // clickable whenever the build supports god mode at all, since enabling is
   // exactly how an unauthorized boot GETS authorized (persist + restart).
   const supported = godMode?.supported === true
+  // True only when the query genuinely SUCCEEDED and reported no build
+  // support. `isError` must never collapse into this — a fetch failure
+  // (gateway offline) is not the same fact as "god-mode compiled out", and
+  // must not read (or behave, e.g. disabling the toggle) as if it were.
+  const knownUnsupported = !isLoading && !isError && !supported
 
   const { mutate: applyChange, isPending: isSaving } = useMutation({
     mutationFn: ({ next, token }: { next: boolean; token: string }) => setGodMode(next, token),
@@ -104,10 +109,13 @@ export function GodModeControl() {
 
   // requestToggle stages the desired state and opens the step-up dialog. The PUT
   // fires from onReAuthConfirmed once the password is verified. Gated on
-  // `supported` (build support), NOT `available` — enabling from an
+  // `knownUnsupported` — blocks only once a successful, non-loading fetch has
+  // confirmed god-mode is unsupported; a still-loading or failed fetch must
+  // NOT block the toggle, since those are "unknown" states, not a confirmed
+  // "unsupported" one. NOT gated on `available` — enabling from an
   // unauthorized boot is exactly the UI-driven enablement flow.
   function requestToggle() {
-    if (!supported || isSaving) return
+    if (knownUnsupported || isSaving) return
     setPendingNext(!enabled)
     setReauthOpen(true)
   }
@@ -153,7 +161,16 @@ export function GodModeControl() {
               <ShieldCheck size={12} weight="duotone" className="text-[var(--color-accent)] shrink-0" />
               Changing this requires re-typing your password.
             </p>
-            {!supported && !isLoading && (
+            {isError && (
+              <p
+                data-testid="god-mode-fetch-error-note"
+                className="text-[11px] text-[var(--color-error)]"
+              >
+                Could not fetch god-mode status — gateway may be offline. The state shown here may
+                be stale.
+              </p>
+            )}
+            {knownUnsupported && (
               <p
                 data-testid="god-mode-unavailable-note"
                 className="text-[11px] text-[var(--color-muted)] italic"
@@ -178,7 +195,7 @@ export function GodModeControl() {
             aria-checked={enabled}
             aria-label="God-mode"
             data-testid="god-mode-toggle"
-            disabled={!supported || busy || isLoading}
+            disabled={knownUnsupported || busy || isLoading}
             onClick={requestToggle}
             className={[
               'relative shrink-0 inline-flex h-6 w-11 items-center rounded-full transition-colors',
@@ -234,12 +251,40 @@ export function GodModeControl() {
  * Reads the live state from AppState; renders nothing when god-mode is off.
  */
 export function GodModeActiveBanner() {
-  const { data: godMode } = useQuery({
+  const { data: godMode, isError } = useQuery({
     queryKey: ['god-mode'],
     queryFn: fetchGodMode,
   })
 
-  if (godMode?.enabled !== true) return null
+  const enabled = godMode?.enabled === true
+
+  // Genuinely off (query succeeded and reported enabled=false) — nothing to
+  // warn about. NB: this must NOT be reached on a fetch failure — `enabled`
+  // collapses to false when `godMode` is undefined, which is indistinguishable
+  // from "really off" unless we check `isError` too. A transport error must
+  // never silently look like "sandboxing is definitely on" — that is exactly
+  // the moment an operator most needs a signal, not silence.
+  if (!enabled && !isError) return null
+
+  if (isError) {
+    return (
+      <div
+        role="alert"
+        data-testid="god-mode-status-unknown-banner"
+        className="flex items-start gap-3 rounded-lg border border-amber-500/60 bg-amber-500/10 px-4 py-3"
+      >
+        <Warning size={18} weight="fill" className="shrink-0 mt-0.5 text-amber-400" />
+        <div className="space-y-1">
+          <p className="text-sm font-semibold text-amber-400">God-mode status unavailable</p>
+          <p className="text-xs text-amber-400/80">
+            Could not fetch god-mode status from the gateway — it may be offline. If god-mode was
+            previously active, sandboxing may still be disabled right now and this banner cannot
+            confirm it either way. Check your connection and reload.
+          </p>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div

@@ -138,6 +138,13 @@ export function PerformanceSection(): React.ReactElement {
         setSaveStatus('saving')
         setPending(body)
         setReauthOpen(true)
+      } else {
+        // max_parallel_agents settled out of range — this path never goes
+        // through triggerSave, so without this branch the debounce would
+        // silently no-op: no toast, no indication the value wasn't saved.
+        // Mirror the same guidance triggerSave and the toggle path show.
+        setSaveStatus('idle')
+        addToast({ variant: 'error', message: 'max_parallel_agents must be between 2 and 16 (or leave blank for auto-detect).' })
       }
     }, AUTOSAVE_DEBOUNCE_MS)
   }
@@ -145,6 +152,7 @@ export function PerformanceSection(): React.ReactElement {
   // handleToolsOnDemandChange fires immediately (no debounce) — a toggle is an
   // unambiguous user action that doesn't need a settling delay.
   function handleToolsOnDemandChange(checked: boolean) {
+    const previousToolsOnDemand = toolsOnDemand
     setToolsOnDemand(checked)
     setDirty(true)
     if (debounceRef.current) clearTimeout(debounceRef.current)
@@ -155,9 +163,12 @@ export function PerformanceSection(): React.ReactElement {
       setReauthOpen(true)
     } else {
       // max_parallel_agents is out of range — the toggle can't proceed until
-      // the numeric field is fixed. Clear any stale 'saving' spinner so it
-      // doesn't stick forever.
+      // the numeric field is fixed. Revert the switch (it was optimistically
+      // flipped above but nothing will be saved), clear any stale 'saving'
+      // spinner so it doesn't stick forever, and tell the user why.
+      setToolsOnDemand(previousToolsOnDemand)
       setSaveStatus('idle')
+      addToast({ variant: 'error', message: 'max_parallel_agents must be between 2 and 16 (or leave blank for auto-detect).' })
     }
   }
 
@@ -327,6 +338,13 @@ export function PerformanceSection(): React.ReactElement {
           if (!o) {
             setPending(null)
             if (saveStatus === 'saving') setSaveStatus('idle')
+            // Cancelling re-auth means the pending change (toggle or typed
+            // value) was never persisted. Clear dirty so the sync effect
+            // above (`data && !dirty`) re-applies the last-known-good server
+            // values — otherwise the switch/input would keep showing the
+            // unsaved edit indefinitely, until the user happened to change
+            // it again.
+            setDirty(false)
           }
         }}
         title="Confirm to change performance settings"

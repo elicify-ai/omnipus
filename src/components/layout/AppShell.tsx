@@ -20,11 +20,15 @@ export function AppShell() {
   const reconnect = useConnectionStore((s) => s.reconnect)
   const hydrateNotifications = useNotificationsStore((s) => s.hydrate)
 
-  const { data: appState } = useQuery({
+  const { data: appState, isError: appStateError } = useQuery({
     queryKey: ['app-state'],
     queryFn: fetchAppState,
     staleTime: 60_000,
   })
+  // `dev_mode_bypass` is a security-relevant state — `appState` being
+  // undefined on a fetch failure must NOT collapse to the same "bypass is
+  // off" falsy value as a genuinely successful fetch that reports it off.
+  // See the app-state-fetch-error-banner below for the fetch-failure case.
   const devModeBypass = appState?.dev_mode_bypass === true
 
   // #264: seed the notification center from REST on mount; the `notification`
@@ -121,6 +125,23 @@ export function AppShell() {
               className="flex items-center gap-2 px-4 py-2 bg-[var(--color-error)] text-white text-xs font-medium shrink-0"
             >
               <span>Development mode active — authentication bypass enabled</span>
+            </div>
+          )}
+
+          {/* App-state fetch failed — dev-mode-bypass status is unknown, not
+              confirmed off. Must not silently vanish like the security-relevant
+              GodModeActiveBanner must not on its own fetch failure: show an
+              explicit "status unknown" indicator instead of nothing. */}
+          {appStateError && (
+            <div
+              data-testid="app-state-fetch-error-banner"
+              role="alert"
+              className="flex items-center gap-2 px-4 py-2 bg-amber-500/10 border-b border-amber-500/30 text-amber-400 text-xs font-medium shrink-0"
+            >
+              <span>
+                Could not fetch gateway state — security status (e.g. development-mode bypass) is
+                unknown. Check your connection and reload.
+              </span>
             </div>
           )}
 

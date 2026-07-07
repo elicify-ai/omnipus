@@ -700,3 +700,154 @@ describe('sandbox-config re-auth gate', () => {
     })
   })
 })
+
+// ── describe: re-auth CANCEL reverts optimistic state (bug #142 regression) ──
+//
+// Wave 1 added an isReAuthCancelled guard to doSaveMode/saveMutation/
+// saveDenyPatterns so a dismissed password prompt doesn't surface a spurious
+// "save failed" toast. But doSaveMode's cancel branch stopped short of
+// reverting the mode that handleModeChange had already flipped optimistically
+// — leaving the radio pointing at an unsaved target with zero error
+// indicator, and (because handleModeChange early-returns on
+// `mode === currentMode`) no way to even re-click the same radio to retry.
+// These tests exercise cancellation (not a mutation error) via the
+// `reauth-cancel` button and assert the optimistic edit is rolled back.
+describe('re-auth cancel reverts optimistic state', () => {
+  it('cancelling re-auth on a mode change reverts currentMode to the saved mode (not stuck on the unsaved target)', async () => {
+    vi.mocked(fetchSandboxConfig).mockResolvedValue({
+      ...baseConfig,
+      mode: 'permissive',
+    })
+    vi.mocked(updateSandboxConfig).mockRejectedValue(reAuth403())
+
+    renderSection()
+
+    await waitFor(() => {
+      expect(screen.getByRole('radio', { name: /sandbox mode: off/i })).toBeInTheDocument()
+    })
+    expect(screen.getByRole('radio', { name: /sandbox mode: permissive/i })).toBeChecked()
+
+    fireEvent.click(screen.getByRole('radio', { name: /sandbox mode: off/i }))
+
+    // Optimistic UI: "off" is shown as selected immediately, before the PUT settles.
+    await waitFor(() => {
+      expect(screen.getByRole('radio', { name: /sandbox mode: off/i })).toBeChecked()
+    })
+
+    // First PUT (token '') 403s on the re-auth gate -> consent dialog opens.
+    await waitFor(() => {
+      expect(screen.getByTestId('reauth-cancel')).toBeInTheDocument()
+    })
+
+    // User dismisses the password prompt instead of confirming.
+    fireEvent.click(screen.getByTestId('reauth-cancel'))
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('reauth-cancel')).not.toBeInTheDocument()
+    })
+
+    // The optimistic "off" selection must revert to the saved mode
+    // ("permissive") — this is the core bug-142 assertion.
+    await waitFor(() => {
+      expect(screen.getByRole('radio', { name: /sandbox mode: permissive/i })).toBeChecked()
+      expect(screen.getByRole('radio', { name: /sandbox mode: off/i })).not.toBeChecked()
+    })
+
+    // No error toast for a user-initiated cancel, and no retry attempt fired.
+    expect(mockAddToast).not.toHaveBeenCalled()
+    expect(updateSandboxConfig).toHaveBeenCalledTimes(1)
+
+    // Recovery check: clicking "off" again must still work now that
+    // currentMode is genuinely back at "permissive" (no same-value
+    // early-return trap left over from the optimistic update).
+    vi.mocked(updateSandboxConfig).mockResolvedValueOnce({ ...baseConfig, mode: 'off', requires_restart: true })
+    fireEvent.click(screen.getByRole('radio', { name: /sandbox mode: off/i }))
+    await waitFor(() => {
+      expect(updateSandboxConfig).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  it('cancelling re-auth on an allowed-path add reverts pathList to the saved server list', async () => {
+    vi.mocked(fetchSandboxConfig).mockResolvedValue({
+      ...baseConfig,
+      allowed_paths: ['/a'],
+    })
+    vi.mocked(updateSandboxConfig).mockRejectedValue(reAuth403())
+
+    renderSection()
+
+    await waitFor(() => {
+      expect(screen.getByText('/a')).toBeInTheDocument()
+    })
+
+    fireEvent.change(screen.getByRole('textbox', { name: /new allowed path/i }), { target: { value: '/valid' } })
+    fireEvent.click(screen.getByRole('button', { name: /add path/i }))
+
+    // Optimistic add renders immediately.
+    await waitFor(() => {
+      expect(screen.getByText('/valid')).toBeInTheDocument()
+    })
+
+    // First PUT (token '') 403s -> consent dialog opens.
+    await waitFor(() => {
+      expect(screen.getByTestId('reauth-cancel')).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByTestId('reauth-cancel'))
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('reauth-cancel')).not.toBeInTheDocument()
+    })
+
+    // The optimistic '/valid' row must be reverted — it was never persisted.
+    await waitFor(() => {
+      expect(screen.queryByText('/valid')).not.toBeInTheDocument()
+      expect(screen.getByText('/a')).toBeInTheDocument()
+    })
+
+    expect(mockAddToast).not.toHaveBeenCalled()
+    expect(updateSandboxConfig).toHaveBeenCalledTimes(1)
+  })
+
+  it('cancelling re-auth on a shell-deny-patterns edit reverts the textarea to the saved patterns', async () => {
+    vi.mocked(fetchSandboxConfig).mockResolvedValue({
+      ...baseConfig,
+      shell_deny_patterns: ['^curl\\s'],
+    })
+    vi.mocked(updateSandboxConfig).mockRejectedValue(reAuth403())
+
+    renderSection()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('shell-deny-patterns-textarea')).toHaveValue('^curl\\s')
+    })
+
+    fireEvent.change(screen.getByTestId('shell-deny-patterns-textarea'), {
+      target: { value: '^curl\\s\n^wget\\s' },
+    })
+
+    // Debounced autosave (400ms) fires the gated PUT; it 403s -> dialog opens.
+    await waitFor(
+      () => {
+        expect(screen.getByTestId('reauth-cancel')).toBeInTheDocument()
+      },
+      { timeout: 3000 },
+    )
+
+    fireEvent.click(screen.getByTestId('reauth-cancel'))
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('reauth-cancel')).not.toBeInTheDocument()
+    })
+
+    // The optimistic '^wget\s' line must be reverted to the saved patterns.
+    await waitFor(() => {
+      expect(screen.getByTestId('shell-deny-patterns-textarea')).toHaveValue('^curl\\s')
+    })
+
+    expect(mockAddToast).not.toHaveBeenCalled()
+    // Reverting must not itself re-trigger the debounced autosave (which
+    // would silently reopen the re-auth prompt for a no-op save).
+    expect(updateSandboxConfig).toHaveBeenCalledTimes(1)
+  }, 10_000)
+})
