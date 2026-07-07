@@ -199,11 +199,15 @@ type OmnipusSandboxConfig struct {
 	Tier3Commands []string `json:"tier3_commands,omitempty"`
 
 	// PathGuardAuditFailClosed controls behavior when the audit logger
-	// fails during a Tier 2 (build_static) or Tier 3 (web_serve / bash
-	// background-session) invocation. When nil or true (default via ResolveBool), the
-	// tool refuses to run without a guaranteed compliance trail. When
-	// explicitly set to false, the audit failure is logged at Error and
-	// execution proceeds (operator opt-out).
+	// fails during a Tier 2 (build_static) or Tier 3 (web_serve dev mode)
+	// invocation, or a "bash" (ADR-036 unified the retired
+	// "exec"/"workspace_shell"/"workspace_shell_bg" tools into it) invocation
+	// — foreground or background alike; the audit gate (emitAuditOrDeny) runs
+	// before the foreground/background branch, so both are covered by the
+	// same check. When nil or true (default via ResolveBool), the tool
+	// refuses to run without a guaranteed compliance trail. When explicitly
+	// set to false, the audit failure is logged at Error and execution
+	// proceeds (operator opt-out).
 	PathGuardAuditFailClosed *bool `json:"path_guard_audit_fail_closed,omitempty"`
 
 	// BrowserEvaluateEnabled gates browser.evaluate (arbitrary JS execution).

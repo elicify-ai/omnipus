@@ -147,11 +147,13 @@ func (a *restAPI) handleWorkspaceDelegationPut(w http.ResponseWriter, r *http.Re
 	}
 
 	if a.auditor != nil {
-		_ = a.auditor.Log(&audit.Entry{
+		if err := a.auditor.Log(&audit.Entry{
 			Event:    "workspace.delegation.update",
 			Decision: audit.DecisionAllow,
 			Details:  map[string]any{"id": ws.ID, "edge_count": len(edges)},
-		})
+		}); err != nil {
+			slog.Warn("audit write failed", "event", "workspace.delegation.update", "id", ws.ID, "error", err)
+		}
 	}
 
 	jsonOK(w, workspaceDelegationToWire(ws))
