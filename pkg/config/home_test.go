@@ -6,8 +6,11 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/elicify-ai/omnipus/pkg"
 )
 
 func TestOmnipusHomeDir_HonorsEnvOverride(t *testing.T) {
@@ -85,5 +88,130 @@ func TestOmnipusHomeDir_RelativeOverrideIsCleaned(t *testing.T) {
 	}
 	if strings.Contains(got, "//") || strings.Contains(got, "/./") {
 		t.Errorf("OmnipusHomeDir() returned un-cleaned path %q", got)
+	}
+}
+
+// The following tests prove that DefaultConfig() (pkg/config/defaults.go)
+// and the workspace-defaulting logic in loadConfigInternal
+// (pkg/config/config.go) — the two other home-directory-resolution call
+// sites — now route through OmnipusHomeDir() instead of reimplementing home
+// resolution themselves, and therefore agree with it (and each other) on the
+// edge cases where the three used to diverge: a relative $OMNIPUS_HOME
+// (previously trusted verbatim, unresolved, in both reimplementations) and a
+// missing $HOME (previously silently produced an empty/relative workspace
+// path in config.go's reimplementation, with no secure-temp-dir fallback).
+
+func TestDefaultConfig_WorkspaceAgreesWithOmnipusHomeDir_RelativeOverride(t *testing.T) {
+	t.Setenv(EnvHome, "relative/testhome-defaults")
+
+	wantHome := OmnipusHomeDir()
+	want := filepath.Join(wantHome, pkg.WorkspaceName)
+
+	cfg := DefaultConfig()
+	if !filepath.IsAbs(cfg.Agents.Defaults.Workspace) {
+		t.Fatalf("DefaultConfig().Agents.Defaults.Workspace = %q, want an absolute path", cfg.Agents.Defaults.Workspace)
+	}
+	if cfg.Agents.Defaults.Workspace != want {
+		t.Errorf(
+			"DefaultConfig().Agents.Defaults.Workspace = %q, want %q (OmnipusHomeDir()+workspace)",
+			cfg.Agents.Defaults.Workspace,
+			want,
+		)
+	}
+}
+
+func TestLoadConfig_WorkspaceDefaultAgreesWithOmnipusHomeDir_RelativeOverride(t *testing.T) {
+	t.Setenv(EnvHome, "relative/testhome-loadconfig")
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	// No agents.defaults.workspace set, so loadConfigInternal's
+	// workspace-defaulting branch (config.go) computes it itself.
+	if err := os.WriteFile(path, []byte(`{"version":1}`), 0o600); err != nil {
+		t.Fatalf("WriteFile() error: %v", err)
+	}
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig() error: %v", err)
+	}
+
+	// Relative-override resolution is a pure CWD join with no side effects,
+	// so calling OmnipusHomeDir() again yields the identical value used
+	// internally by loadConfigInternal.
+	wantHome := OmnipusHomeDir()
+	want := filepath.Join(wantHome, pkg.WorkspaceName)
+
+	if !filepath.IsAbs(cfg.Agents.Defaults.Workspace) {
+		t.Fatalf("cfg.Agents.Defaults.Workspace = %q, want an absolute path", cfg.Agents.Defaults.Workspace)
+	}
+	if cfg.Agents.Defaults.Workspace != want {
+		t.Errorf(
+			"cfg.Agents.Defaults.Workspace = %q, want %q (OmnipusHomeDir()+workspace)",
+			cfg.Agents.Defaults.Workspace,
+			want,
+		)
+	}
+}
+
+func TestDefaultConfigAndLoadConfig_AgreeOnSecureTempFallback_WhenHomeDirFails(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("HOME is not the home-dir env var on Windows (USERPROFILE); os.UserHomeDir failure path differs")
+	}
+	// Force os.UserHomeDir() to fail (on Unix it only reads $HOME) and ensure
+	// no explicit override is set, so both call sites must fall through to
+	// OmnipusHomeDir()'s secure-temp-dir fallback.
+	t.Setenv("HOME", "")
+	t.Setenv(EnvHome, "")
+
+	// DefaultConfig() call site.
+	cfg := DefaultConfig()
+	defaultsWorkspace := cfg.Agents.Defaults.Workspace
+	if !filepath.IsAbs(defaultsWorkspace) {
+		t.Fatalf(
+			"DefaultConfig().Agents.Defaults.Workspace = %q, want an absolute path even when $HOME is unset",
+			defaultsWorkspace,
+		)
+	}
+	if !strings.Contains(defaultsWorkspace, "omnipus-") {
+		t.Errorf(
+			"DefaultConfig().Agents.Defaults.Workspace = %q, want it under a secure omnipus- temp dir fallback",
+			defaultsWorkspace,
+		)
+	}
+	if filepath.Base(defaultsWorkspace) != pkg.WorkspaceName {
+		t.Errorf(
+			"DefaultConfig().Agents.Defaults.Workspace = %q, want basename %q",
+			defaultsWorkspace,
+			pkg.WorkspaceName,
+		)
+	}
+
+	// loadConfigInternal's workspace-defaulting branch (config.go) call site.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(path, []byte(`{"version":1}`), 0o600); err != nil {
+		t.Fatalf("WriteFile() error: %v", err)
+	}
+	loaded, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig() error: %v", err)
+	}
+	loadedWorkspace := loaded.Agents.Defaults.Workspace
+	if !filepath.IsAbs(loadedWorkspace) {
+		t.Fatalf(
+			"cfg.Agents.Defaults.Workspace = %q, want an absolute path even when $HOME is unset (previously fell back to a bare relative %q)",
+			loadedWorkspace,
+			pkg.WorkspaceName,
+		)
+	}
+	if !strings.Contains(loadedWorkspace, "omnipus-") {
+		t.Errorf(
+			"cfg.Agents.Defaults.Workspace = %q, want it under a secure omnipus- temp dir fallback",
+			loadedWorkspace,
+		)
+	}
+	if filepath.Base(loadedWorkspace) != pkg.WorkspaceName {
+		t.Errorf("cfg.Agents.Defaults.Workspace = %q, want basename %q", loadedWorkspace, pkg.WorkspaceName)
 	}
 }

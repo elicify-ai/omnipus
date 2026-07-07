@@ -442,6 +442,21 @@ interface ChatStore {
   enqueueOutboundMessage: (content: string) => boolean
   /** Send all queued messages now that the WS is connected. */
   drainOutboundQueue: () => void
+  /**
+   * BUG FIX (2026-07): messages handed off from `outboundQueue` by
+   * `drainOutboundQueue()`, sent ONE AT A TIME. `sendMessage` only allows one
+   * in-flight turn (`isStreaming`) — the previous implementation looped over
+   * the whole queue synchronously, so every message after the first hit the
+   * `isStreaming` guard and was silently dropped (no chat bubble, no error).
+   * `drainOutboundQueue` now moves the queue here and sends only the head;
+   * `maybeDrainNext()` (module-private, called from every place a turn ends —
+   * the `done`/`error` frame handlers, `cancelStream`, `clearStreamingState`,
+   * `markLastMessageInterrupted`, and the failed-send rollback in
+   * `sendMessage` itself) pops and sends the next item once `isStreaming`
+   * clears. Exposed on the store (not a closured helper) so tests can invoke
+   * it directly if needed.
+   */
+  pendingDrainQueue: string[]
 
   // ── Actions ───────────────────────────────────────────────────────────────────
   // opts.mediaRefs: optional media:// refs (e.g. uploaded images) threaded
@@ -583,11 +598,36 @@ export const useChatStore = create<ChatStore>((set, get) => {
     })
   }
 
+  /**
+   * BUG FIX (2026-07, offline-queue drain): pop and send the next drained
+   * message, but ONLY if no turn is currently in flight. Called every time a
+   * turn ends (done/error frames, explicit cancel, the C8 stream-clear sweep,
+   * or a failed send) so queued messages go out one at a time instead of the
+   * old synchronous loop that fired `sendMessage` for the whole queue in one
+   * tick — which silently dropped every message after the first because the
+   * very first call flips `isStreaming` synchronously and every subsequent
+   * call in that same loop hit the `isStreaming` guard in `sendMessage` (that
+   * guard shows a toast and returns WITHOUT re-enqueuing, unlike the
+   * disconnected-WS branch three lines below it).
+   *
+   * Reads `isStreaming` fresh via `get()` rather than trusting a closed-over
+   * value, since callers invoke this synchronously from inside a `set()`
+   * update that may have just flipped it.
+   */
+  function maybeDrainNext(): void {
+    const { pendingDrainQueue, isStreaming } = get()
+    if (pendingDrainQueue.length === 0 || isStreaming) return
+    const [next, ...rest] = pendingDrainQueue
+    set({ pendingDrainQueue: rest })
+    get().sendMessage(next)
+  }
+
   return {
     sessionsById: {},
 
     // ── Outbound queue initial state ─────────────────────────────────────────
     outboundQueue: [],
+    pendingDrainQueue: [],
 
     // Foreground selectors — derived from sessionsById[activeSessionId].
     // Initial values are the empty-session defaults projected through bucketToForeground.
@@ -816,6 +856,8 @@ export const useChatStore = create<ChatStore>((set, get) => {
           }
         }
       }
+      // This turn is over (interrupted) — send the next drained message, if any.
+      maybeDrainNext()
     },
 
     startToolCall: (callId, tool, params) => {
@@ -1160,28 +1202,19 @@ export const useChatStore = create<ChatStore>((set, get) => {
     drainOutboundQueue: () => {
       const queue = get().outboundQueue
       if (queue.length === 0) return
-      // Clear the queue first — drain is a best-effort flush. Messages that
-      // cannot be sent (connection still nil) are accepted as lost for this
-      // drain cycle; the caller (onConnected) only fires when WS is open so
-      // in production the send always succeeds. In unit tests isConnected may
-      // be set true while connection is null; we detect that below and do not
-      // re-queue.
-      set({ outboundQueue: [] })
-      const { isConnected } = useConnectionStore.getState()
-      for (const content of queue) {
-        // sendMessage will re-enqueue if !connection || !isConnected. When we
-        // are draining because the connection just came up (isConnected=true),
-        // an absent connection object means the send silently failed — we
-        // must NOT re-enqueue or the queue grows unboundedly. Prevent that
-        // by forcefully clearing the queue after each send attempt.
-        get().sendMessage(content)
-        if (isConnected) {
-          // Re-clear any item that sendMessage may have re-enqueued due to a
-          // stale/null connection object (impossible in production; defensive
-          // for unit-test scenarios where connection=null but isConnected=true).
-          set({ outboundQueue: [] })
-        }
-      }
+      // BUG FIX (2026-07): used to `for`-loop `sendMessage` over the whole
+      // queue synchronously — see the `maybeDrainNext` doc comment above for
+      // why that silently dropped every message after the first. Instead,
+      // hand the whole batch to `pendingDrainQueue` and let `maybeDrainNext`
+      // send one at a time, re-triggered as each turn completes.
+      //
+      // Append (not overwrite) `pendingDrainQueue`: if a previous drain cycle
+      // is still mid-flight (e.g. the connection dropped again partway
+      // through and a couple of its items got kicked back to `outboundQueue`
+      // via sendMessage's disconnected-WS branch) this preserves whatever is
+      // still queued from that cycle instead of silently discarding it.
+      set((state) => ({ outboundQueue: [], pendingDrainQueue: [...state.pendingDrainQueue, ...queue] }))
+      maybeDrainNext()
     },
 
     // Validate outbound MessageFrame against the generated Zod schema before
@@ -1400,6 +1433,9 @@ export const useChatStore = create<ChatStore>((set, get) => {
             }) as Partial<SessionChatState>
           })
           useConnectionStore.getState().setConnectionError('Message could not be sent — connection dropped. Your message was kept; press Retry to resend.')
+          // The attempted turn is over (it never started) — free the next
+          // drained message to send, if any.
+          maybeDrainNext()
         }
       } else {
         // No active session — send without session_id; server will mint one
@@ -1466,6 +1502,9 @@ export const useChatStore = create<ChatStore>((set, get) => {
             return { ...applyMessageArray(msgs, b), isStreaming: false }
           })
           useConnectionStore.getState().setConnectionError('Message could not be sent — connection dropped. Please try again.')
+          // The attempted turn is over (it never started) — free the next
+          // drained message to send, if any.
+          maybeDrainNext()
         }
       }
   },
@@ -1488,6 +1527,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
       if (!activeSessionId) {
         // No server-side session established yet — just clear local streaming state.
         withBucket(getActiveSid(), () => ({ isStreaming: false }))
+        maybeDrainNext()
         return
       }
 
@@ -1582,6 +1622,12 @@ export const useChatStore = create<ChatStore>((set, get) => {
         const fg = (activeSid ? sessionsById[activeSid] : null) ?? EMPTY_BUCKET
         return { sessionsById, ...bucketToForeground(fg) }
       })
+      // The stream was just force-terminated (WS close/terminal error) — if a
+      // drained message is waiting, try it now. If the connection is in fact
+      // down, sendMessage's own disconnected-WS branch will put it back on
+      // outboundQueue (visible in the UI) rather than leaving it stranded and
+      // invisible in pendingDrainQueue.
+      maybeDrainNext()
     },
 
     respondToPairing: (deviceId, decision) => {
@@ -1772,6 +1818,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   // Active bucket spinner is likely a stale remnant from the wiped
                   // session — safe to clear.
                   withBucket(activeSid, () => ({ isStreaming: false }))
+                  maybeDrainNext()
                 } else {
                   console.warn('chat.done_unknown_sid_skipped_active_mid_stream', {
                     targetSid,
@@ -1860,6 +1907,9 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 }
               }) as Partial<SessionChatState>
             })
+            // The turn that just completed may be one we sent from the
+            // offline-queue drain — send the next queued message, if any.
+            maybeDrainNext()
           }
           break
 
@@ -1947,6 +1997,9 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 ...(clearReplayingNow ? { isReplaying: false } : {}),
               }
             })
+            // The failed turn may have been one we sent from the offline-queue
+            // drain — send the next queued message, if any.
+            maybeDrainNext()
           }
           break
 

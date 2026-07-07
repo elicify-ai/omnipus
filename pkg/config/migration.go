@@ -42,7 +42,13 @@ func loadConfig(data []byte) (*Config, error) {
 
 	// FR-004 / FR-027: detect unknown top-level fields, log them at debug level,
 	// and store them for round-trip preservation on SaveConfig.
-	detectUnknownConfigFields(data, cfg)
+	//
+	// Must use compatData (post-rename), not the original data: data still has
+	// the legacy "model_list" key, which detectUnknownConfigFields would then
+	// flag as unrecognized and stash into cfg.UnknownFields — causing
+	// SaveConfig to write "model_list" back out permanently duplicated
+	// alongside the renamed "providers" key on every load+save round-trip.
+	detectUnknownConfigFields(compatData, cfg)
 
 	return cfg, nil
 }

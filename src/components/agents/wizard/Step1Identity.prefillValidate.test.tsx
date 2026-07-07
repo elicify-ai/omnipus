@@ -227,7 +227,24 @@ describe('Step1Identity / ExecutorInputs — FR-019 (never trap Create)', () => 
 
   it('editing the path after a block clears the block (no permanent trap)', async () => {
     vi.mocked(fetchCliDetect).mockResolvedValue(detect())
-    vi.mocked(fetchCliValidate).mockResolvedValue(validateResult({ ok: false, reason: 'missing-binary', resolved_path: null, version: null, detail: 'not found' }))
+    // Path-aware mock (TEST-DETERMINISM FIX, 2026-07) — deliberately NOT a
+    // single `mockResolvedValue` that always blocks regardless of the path
+    // argument. A real backend validates whatever path it's given; a mock
+    // that returns the same verdict for every call created a race against
+    // `useCliPathValidation`'s 400ms debounce (DEBOUNCE_MS in
+    // src/hooks/useCliPathValidation.ts): `advanceToStep3()` below uses real
+    // timers (`waitFor`/`findByTestId`), and on a loaded CI box its wall-clock
+    // cost can exceed 400ms — long enough for a stray re-validate to land and
+    // re-block Create with the stale "missing-binary" verdict, flaking this
+    // test. Making the mock respond per-path means any re-validate against
+    // the corrected path resolves `ok` instead, so the test no longer depends
+    // on exactly how much real time advanceToStep3() takes.
+    vi.mocked(fetchCliValidate).mockImplementation(async (_cli, cliPath) => {
+      if (cliPath === '/nope/claude') {
+        return validateResult({ ok: false, reason: 'missing-binary', resolved_path: null, version: null, detail: 'not found' })
+      }
+      return validateResult({ ok: true, reason: 'ok', resolved_path: cliPath })
+    })
     renderWizard({ initialCli: 'claude-code' })
 
     fireEvent.change(screen.getByTestId('wizard-cli-path'), { target: { value: '/nope/claude' } })

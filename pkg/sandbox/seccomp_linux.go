@@ -114,15 +114,34 @@ func (sp *SeccompProgram) Install() error {
 }
 
 // assembleBPFMode builds a classic BPF program that:
-//  1. Loads the syscall number from seccomp_data.nr (offset 0)
-//  2. Compares against each blocked syscall number
-//  3. In ModeEnforce: returns SECCOMP_RET_ERRNO(EPERM) for blocked syscalls.
-//     In ModePermissive: returns SECCOMP_RET_LOG — the syscall proceeds but
-//     the kernel writes an audit-log entry.
-//  4. Returns SECCOMP_RET_ALLOW for everything else.
+//  1. Loads the syscall architecture from seccomp_data.arch (offset 4) and
+//     verifies it equals nativeAuditArch — the AUDIT_ARCH_* constant for the
+//     GOARCH this binary was built for (defined per-arch: see
+//     seccomp_linux_amd64.go, seccomp_linux_arm64.go, seccomp_linux_arm.go,
+//     seccomp_linux_mipsle.go, seccomp_linux_riscv64.go,
+//     seccomp_linux_loong64.go). This closes a real bypass: syscall numbers
+//     are NOT stable across ABIs on the same CPU. On amd64, the legacy
+//     32-bit compat entry point (`int $0x80` / vDSO sysenter, arch ==
+//     AUDIT_ARCH_I386) hands the kernel a DIFFERENT numbering table than
+//     the native x86_64 table this file's blockedNrs were resolved against
+//     (e.g. native nr 101 is ptrace, but ia32 nr 101 is fork). Without this
+//     check, every JEQ comparison below is checking the wrong table for a
+//     compat-mode call, so an attacker can pick a 32-bit nr that collides
+//     with an ALLOWED native syscall number and reach ptrace/mount/bpf/etc.
+//     completely unfiltered. Any arch mismatch is therefore routed to the
+//     SAME deny target as a matched blocked syscall — no new disposition.
+//  2. Loads the syscall number from seccomp_data.nr (offset 0)
+//  3. Compares against each blocked syscall number
+//  4. In ModeEnforce: returns SECCOMP_RET_ERRNO(EPERM) for blocked syscalls
+//     or an arch mismatch. In ModePermissive: returns SECCOMP_RET_LOG — the
+//     syscall proceeds but the kernel writes an audit-log entry.
+//  5. Returns SECCOMP_RET_ALLOW for everything else.
 func assembleBPFMode(blockedNrs []uint32, mode Mode) []unix.SockFilter {
 	// seccomp_data layout: offset 0 = nr (uint32), offset 4 = arch (uint32)
-	const offsetNr = 0
+	const (
+		offsetNr   = 0
+		offsetArch = 4
+	)
 
 	// BPF constants from golang.org/x/sys/unix
 	const (
@@ -153,23 +172,46 @@ func assembleBPFMode(blockedNrs []uint32, mode Mode) []unix.SockFilter {
 	}
 
 	n := len(blockedNrs)
-	// Program structure:
-	// [0]         LD  [offsetNr]       — load syscall number
-	// [1..n]      JEQ nr, goto_deny    — one JEQ per blocked syscall
-	// [n+1]       RET ALLOW            — default: allow
-	// [n+2]       RET ERRNO(EPERM)     — deny target
+	// Program structure (arch-check prepended ahead of the nr load/compares):
+	// [0]         LD  [offsetArch]     — load syscall arch
+	// [1]         JEQ nativeAuditArch  — mismatch falls through to deny (n+4)
+	// [2]         LD  [offsetNr]       — load syscall number
+	// [3..n+2]    JEQ nr, goto_deny    — one JEQ per blocked syscall
+	// [n+3]       RET ALLOW            — default: allow
+	// [n+4]       RET deny             — deny target (arch mismatch OR blocked nr)
 
-	prog := make([]unix.SockFilter, 0, n+3)
+	prog := make([]unix.SockFilter, 0, n+5)
 
-	// Instruction 0: Load syscall number
+	// Instruction 0: Load syscall arch
+	prog = append(prog, unix.SockFilter{
+		Code: uint16(bpfLD | bpfW | bpfABS),
+		K:    offsetArch,
+	})
+
+	// Instruction 1: Verify arch matches nativeAuditArch. Jt=0 (fall through
+	// to instruction 2, the nr load) on a match. Jf jumps to the deny target
+	// at index n+4 on any mismatch. The jump is relative to the instruction
+	// AFTER this one (index 2), so Jf = (n+4) - 2 = n+2.
+	prog = append(prog, unix.SockFilter{
+		Code: uint16(bpfJMP | bpfJEQ | bpfK),
+		Jt:   0,
+		Jf:   uint8(n + 2),
+		K:    nativeAuditArch,
+	})
+
+	// Instruction 2: Load syscall number
 	prog = append(prog, unix.SockFilter{
 		Code: uint16(bpfLD | bpfW | bpfABS),
 		K:    offsetNr,
 	})
 
-	// Instructions 1..n: Jump to deny if syscall matches
-	// Jump targets are relative: Jt/Jf are number of instructions to skip
-	// deny is at index n+2, allow is at index n+1
+	// Instructions 3..n+2: Jump to deny if syscall matches.
+	// Jump targets are relative: Jt/Jf are number of instructions to skip.
+	// deny is at index n+4, allow is at index n+3. The gap between each
+	// JEQ's own fall-through successor and the deny target is (n-i)
+	// regardless of the two arch-check instructions prepended above, since
+	// both the JEQ instructions and the deny target shifted by the same
+	// +2 offset.
 	for i, nr := range blockedNrs {
 		remaining := n - i // instructions left after this one before allow
 		prog = append(prog, unix.SockFilter{
@@ -180,13 +222,15 @@ func assembleBPFMode(blockedNrs []uint32, mode Mode) []unix.SockFilter {
 		})
 	}
 
-	// Instruction n+1: RET ALLOW (default)
+	// Instruction n+3: RET ALLOW (default)
 	prog = append(prog, unix.SockFilter{
 		Code: uint16(bpfRET | bpfK),
 		K:    seccompRetAllow,
 	})
 
-	// Instruction n+2: RET (deny). EPERM in enforce mode, RET_LOG in permissive.
+	// Instruction n+4: RET (deny). EPERM in enforce mode, RET_LOG in
+	// permissive. Reached via a blocked-syscall JEQ match OR an arch
+	// mismatch (instruction 1's Jf branch) — same disposition either way.
 	prog = append(prog, unix.SockFilter{
 		Code: uint16(bpfRET | bpfK),
 		K:    denyAction,

@@ -6,11 +6,28 @@
  * Tests:
  *   1. enqueueOutboundMessage adds to the queue.
  *   2. enqueueOutboundMessage rejects when queue has >= 5 messages.
- *   3. drainOutboundQueue calls sendMessage for each queued message and clears the queue.
+ *   3. drainOutboundQueue sends queued messages ONE AT A TIME as each turn
+ *      completes, and clears the queue up front (BUG 1 fix — see below).
  *   4. sendMessage enqueues when WS is disconnected instead of showing a hard error.
+ *
+ * BUG 1 (fixed 2026-07): the previous drainOutboundQueue implementation
+ * looped `sendMessage` synchronously over the whole queue. The first call
+ * flips `isStreaming` synchronously (via zustand's `set()`); every
+ * subsequent call in that same loop then hit sendMessage's `isStreaming`
+ * guard, which shows a "please wait" toast and returns WITHOUT
+ * re-enqueuing (unlike the disconnected-WS branch) — so messages 2-5 were
+ * silently dropped with no chat bubble and no error. The fix moves the
+ * drained batch into `pendingDrainQueue` and sends one at a time, driven by
+ * `maybeDrainNext()` calls at every place a turn ends (done/error frames,
+ * cancelStream, clearStreamingState, markLastMessageInterrupted, and
+ * sendMessage's own failed-send rollback). The tests below assert actual
+ * delivery via a `connection.send` spy — not just that outboundQueue ends
+ * up empty (which was true even under the old buggy code, since the buggy
+ * loop cleared outboundQueue up front regardless of whether every message
+ * was actually delivered).
  */
 
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { act } from 'react'
 import { useChatStore } from './chat'
 import { useSessionStore } from './session'
@@ -35,6 +52,10 @@ function resetStores() {
       lastUserMessageAt: null,
       cancelStage: null,
       outboundQueue: [],
+      // BUG 1 fix: must be reset per-test too — it's module-level store state,
+      // not scoped to sessionsById, so a leftover value from a previous test
+      // would otherwise leak in and corrupt drain-order assertions.
+      pendingDrainQueue: [],
     })
     useConnectionStore.setState({
       connection: null,
@@ -51,6 +72,21 @@ function resetStores() {
       attachedTaskTitle: null,
     })
   })
+}
+
+/** Connect the store with a `send` spy that always succeeds, so drained
+ * messages actually attempt delivery instead of hitting the disconnected-WS
+ * re-enqueue branch. Returns the spy for assertions. */
+function connectWithSendSpy() {
+  const send = vi.fn().mockReturnValue(true)
+  act(() => {
+    useConnectionStore.setState({
+      connection: { send } as unknown as ReturnType<typeof useConnectionStore.getState>['connection'],
+      isConnected: true,
+      connectionError: null,
+    })
+  })
+  return send
 }
 
 // ── enqueueOutboundMessage ─────────────────────────────────────────────────────
@@ -112,16 +148,70 @@ describe('outboundQueue — enqueueOutboundMessage', () => {
 describe('outboundQueue — drainOutboundQueue', () => {
   beforeEach(resetStores)
 
-  it('clears the queue after draining', () => {
+  it('clears outboundQueue immediately, but only actually SENDS the first message — the rest wait for the turn to complete', () => {
+    const send = connectWithSendSpy()
     act(() => {
       useChatStore.setState({ outboundQueue: ['msg1', 'msg2'] })
-      // Put the store into a connected state so drain actually sends.
-      useConnectionStore.setState({ isConnected: true })
     })
     act(() => {
       useChatStore.getState().drainOutboundQueue()
     })
+    // outboundQueue is cleared up front (unchanged from before the fix)...
     expect(useChatStore.getState().outboundQueue).toHaveLength(0)
+    // ...but BUG 1: msg2 must NOT be dropped. It should be waiting in
+    // pendingDrainQueue, and only msg1 was actually handed to the WS so far —
+    // sendMessage's isStreaming guard would otherwise have silently discarded
+    // msg2 had both been sent synchronously in the same tick.
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ content: 'msg1' }))
+    expect(useChatStore.getState().pendingDrainQueue).toEqual(['msg2'])
+    expect(useChatStore.getState().isStreaming).toBe(true)
+
+    // Completing msg1's turn (the server's `done` frame) must release msg2 —
+    // this is the actual regression: previously msg2 was gone for good, with
+    // no chat bubble and no error toast.
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'done', session_id: 'test-session' })
+    })
+    expect(send).toHaveBeenCalledTimes(2)
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ content: 'msg2' }))
+    expect(useChatStore.getState().pendingDrainQueue).toEqual([])
+  })
+
+  it('drains 4 queued messages one at a time as each turn completes (BUG 1 regression — full delivery)', () => {
+    const send = connectWithSendSpy()
+    const queued = ['q-msg-1', 'q-msg-2', 'q-msg-3', 'q-msg-4']
+    act(() => {
+      useChatStore.setState({ outboundQueue: [...queued] })
+    })
+
+    act(() => {
+      useChatStore.getState().drainOutboundQueue()
+    })
+    expect(useChatStore.getState().outboundQueue).toEqual([])
+
+    // Drive each turn to completion in order and confirm every single
+    // message actually reaches connection.send exactly once, in the
+    // original order — not just that outboundQueue ends up empty (which the
+    // old buggy implementation also satisfied, despite dropping messages).
+    for (let i = 0; i < queued.length; i++) {
+      // Message i has just been sent — i+1 total sends so far.
+      expect(send).toHaveBeenCalledTimes(i + 1)
+      expect(send.mock.calls[i][0]).toEqual(expect.objectContaining({ content: queued[i] }))
+      // Everything after message i is still waiting its turn.
+      expect(useChatStore.getState().pendingDrainQueue).toEqual(queued.slice(i + 1))
+      if (i < queued.length - 1) {
+        // Complete message i's turn — this must release message i+1.
+        act(() => {
+          useChatStore.getState().handleFrame({ type: 'done', session_id: 'test-session' })
+        })
+      }
+    }
+
+    // All 4 messages were delivered; nothing left queued anywhere.
+    expect(send).toHaveBeenCalledTimes(queued.length)
+    expect(useChatStore.getState().outboundQueue).toEqual([])
+    expect(useChatStore.getState().pendingDrainQueue).toEqual([])
   })
 
   it('is a no-op on an empty queue', () => {
@@ -134,6 +224,7 @@ describe('outboundQueue — drainOutboundQueue', () => {
       useChatStore.getState().drainOutboundQueue()
     })
     expect(useChatStore.getState().outboundQueue).toHaveLength(0)
+    expect(useChatStore.getState().pendingDrainQueue).toHaveLength(0)
   })
 
   it('queue is empty after drain even when sendMessage re-enqueues (connection still down)', () => {
@@ -150,9 +241,14 @@ describe('outboundQueue — drainOutboundQueue', () => {
     act(() => {
       useChatStore.getState().drainOutboundQueue()
     })
-    // After draining, the messages were re-enqueued (sendMessage sees isConnected=false).
-    // The critical check: no infinite loop and queue is at most original length.
+    // After draining, the head message was re-enqueued (sendMessage sees
+    // isConnected=false). The critical checks: no infinite loop, no message
+    // is lost — 'first' is back in outboundQueue and 'second' is still
+    // waiting in pendingDrainQueue (neither array grows unboundedly).
     expect(useChatStore.getState().outboundQueue.length).toBeLessThanOrEqual(2)
+    expect(
+      useChatStore.getState().outboundQueue.length + useChatStore.getState().pendingDrainQueue.length
+    ).toBe(2)
   })
 })
 

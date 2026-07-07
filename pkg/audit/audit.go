@@ -16,7 +16,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -891,25 +890,102 @@ func lastIndexNewline(b []byte) int {
 	return -1
 }
 
+// cleanupExpired deletes rotated audit files older than the retention
+// period.
+//
+// Chain-checkpoint fix: deleting a rotated file can sever the HMAC chain
+// from GenesisSeed() if the deleted file was (transitively) the original
+// first file. Without recording anything, VerifyDir would later seed its
+// walk from genesis regardless, causing a false-positive "hmac mismatch" on
+// the new-oldest survivor's first entry — and because VerifyFile/VerifyDir
+// stop at the first break, every newer file after that point would be
+// silently skipped too (never checked). To prevent this, every time this
+// pass deletes at least one file that carried real chain-HMAC entries, we
+// persist a signed ChainCheckpoint (checkpoint.go) recording:
+//   - which file is now the oldest survivor (AppliesToFile)
+//   - the HMAC that survivor's first entry should be checked against
+//     (FinalHMAC — the last good link of the file we're about to erase)
+//
+// VerifyDir consults this checkpoint instead of GenesisSeed() when its
+// AppliesToFile matches what's actually oldest on disk (see verify.go).
 func (l *Logger) cleanupExpired() {
 	cutoff := time.Now().UTC().AddDate(0, 0, -l.retDays)
 	pattern := filepath.Join(l.dir, "audit-*.jsonl")
 	matches, _ := filepath.Glob(pattern)
-	sort.Strings(matches)
+	// Chronological by ModTime, NOT filename — see fileorder.go for why a
+	// plain sort.Strings gets multi-rotation-per-day files backwards.
+	sortAuditFilesChronologically(matches)
+
+	// lastDeletedFinalHMAC tracks the chain seed of the most recently deleted
+	// file, in chronological (sorted) iteration order. Because matches is
+	// sorted oldest-first, the LAST value captured here — by the time the
+	// loop finishes deleting everything eligible — is exactly the seed the
+	// new-oldest surviving file's first entry needs to be checked against.
+	// A pre-chain/legacy or empty deleted file (readChainSeedFromFile
+	// returns ok=false) contributes no chain information and deliberately
+	// does NOT clear a previously captured seed — the most recent REAL seed
+	// observed remains the best available checkpoint candidate.
+	var lastDeletedFinalHMAC []byte
+	deletedAny := false
 
 	for _, path := range matches {
 		info, err := os.Stat(path)
 		if err != nil {
 			continue
 		}
-		if info.ModTime().Before(cutoff) {
-			if err := os.Remove(path); err != nil {
-				slog.Error("Audit: failed to remove expired log", "path", path, "error", err)
-			} else {
-				slog.Info("Audit: removed expired log", "path", path)
-			}
+		if !info.ModTime().Before(cutoff) {
+			continue
 		}
+
+		// Capture the seed BEFORE removing the file — once it's gone we have
+		// no way to recover its last entry's HMAC.
+		if seed, ok := readChainSeedFromFile(path); ok {
+			lastDeletedFinalHMAC = seed
+		}
+
+		if err := os.Remove(path); err != nil {
+			slog.Error("Audit: failed to remove expired log", "path", path, "error", err)
+			continue
+		}
+		slog.Info("Audit: removed expired log", "path", path)
+		deletedAny = true
 	}
+
+	if !deletedAny || lastDeletedFinalHMAC == nil {
+		// Nothing deleted, or everything deleted was pre-chain/empty (no real
+		// HMAC to checkpoint) — leave any existing checkpoint untouched. It
+		// remains correct for whatever boundary it already recorded.
+		return
+	}
+
+	newOldest := l.newOldestSurvivingFileName()
+	if newOldest == "" {
+		// Defensive only — audit.jsonl is created by openCurrentFile before
+		// cleanupExpired ever runs, so this should not happen in practice.
+		return
+	}
+	if err := writeChainCheckpoint(l.dir, newOldest, lastDeletedFinalHMAC, l.chainKey); err != nil {
+		slog.Error("Audit: failed to persist chain-verification checkpoint after retention cleanup", "error", err)
+	}
+}
+
+// newOldestSurvivingFileName returns the base name of whichever audit file
+// is chronologically oldest on disk right now — the file a freshly-written
+// chain checkpoint's AppliesToFile must reference. Prefers the earliest
+// remaining rotated file; if none survive, falls back to the live
+// audit.jsonl (which must exist by the time cleanupExpired runs, since
+// NewLogger calls openCurrentFile first). Returns "" only if neither exists,
+// which should not happen in practice.
+func (l *Logger) newOldestSurvivingFileName() string {
+	remaining, _ := filepath.Glob(filepath.Join(l.dir, "audit-*.jsonl"))
+	sortAuditFilesChronologically(remaining)
+	if len(remaining) > 0 {
+		return filepath.Base(remaining[0])
+	}
+	if _, err := os.Stat(l.auditPath()); err == nil {
+		return filepath.Base(l.auditPath())
+	}
+	return ""
 }
 
 func (l *Logger) redactEntry(entry *Entry) {
