@@ -1685,10 +1685,11 @@ func registerSharedTools(
 		//
 		// When Compressed is OFF at turn time, the per-turn gates (cfg.Tools.Manifest.Compressed
 		// at lines ~5049, ~5115, ~5026) skip the compressed paths entirely: load_tool is never
-		// sent to the model and never force-added to policyFiltered. For deny-default agents it
-		// is also stripped by FilterToolsByPolicy in the uncompressed path (not in allow-list),
-		// so no spurious callable appears. For allow-default workers it may appear in the
-		// uncompressed defs, which is harmless (the model has all tools anyway).
+		// sent to the model and never force-added to policyFiltered. For an agent whose tools
+		// mostly resolve to deny it is also stripped by FilterToolsByPolicy in the uncompressed
+		// path (not in allow-list), so no spurious callable appears. For an agent whose tools
+		// mostly resolve to allow it may appear in the uncompressed defs, which is harmless
+		// (the model has all tools anyway).
 		//
 		// Guard against double-registration in case the MCP init path already added it.
 		{
@@ -5373,8 +5374,8 @@ turnLoop:
 		// the execution-time policy snapshot (filterTimePolicyMap, consulted by
 		// resolveToolPolicyAtExec) as "allow". This mirrors the defs force-include
 		// in buildCompressedToolDefs at the authorization layer. (Found by live
-		// validation: a deny-default agent called load_tool and the exec gate denied
-		// it — reachability broke.)
+		// validation: a deny-by-default agent called load_tool and the exec gate
+		// denied it — reachability broke.)
 		policyFilteredTools = ensureInfraToolsExecutable(
 			ts.agent.Tools, policyFilteredTools, filterTimePolicyMap)
 
@@ -5407,9 +5408,9 @@ turnLoop:
 			// load_tool is now present in policyFilteredTools even when
 			// compression is off; but load_tool exists only to drive the
 			// compressed manifest mechanism and has no function when compression is
-			// off, so the model never sees it here regardless of the agent's
-			// default policy (see stripInfraToolDefs for the deny- vs allow-default
-			// behavior note) (#438).
+			// off, so the model never sees it here regardless of what the agent's
+			// tool-policy map resolves for it (see stripInfraToolDefs for the
+			// mostly-deny vs. mostly-allow behavior note) (#438).
 			providerToolDefs = tools.ToolsToProviderDefs(stripInfraToolDefs(policyFilteredTools))
 		}
 
@@ -8812,7 +8813,8 @@ func (al *AgentLoop) resolveSingleToolPolicy(ts *turnState, toolName string) str
 	// it only exists on the agent when compressed mode or MCP discovery is on,
 	// and when present it MUST always be executable — it drives the manifest
 	// mechanism itself, so denying it makes every lazy tool unreachable. Treat a
-	// registered infra tool as "allow" regardless of the agent's default policy.
+	// registered infra tool as "allow" regardless of what the agent's own
+	// tool-policy map resolves for it.
 	// (Without this, resolveToolPolicyAtExec re-derives livePolicy="deny" for a
 	// deny-by-default agent and overrides the filter-time allow — the live bug.)
 	if tools.ToolManifestTier(toolName) == tools.ManifestInfra {

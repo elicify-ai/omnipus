@@ -114,8 +114,12 @@ func (sc *SecurityConfig) EffectiveSkillTrust() SkillTrustPolicy {
 	}
 }
 
-// GetDefaultPolicy returns the effective default policy, defaulting to "deny"
-// (deny-by-default per CLAUDE.md hard constraint #6).
+// GetDefaultPolicy returns the effective default policy for THIS package's
+// own SEC-05 exec-binary-allowlist mechanism (SecurityConfig.DefaultPolicy),
+// defaulting to "deny" when unset. Unrelated to the tool-policy system's
+// no-default-policy-fallback model (CLAUDE.md hard constraint 6, which
+// governs pkg/config.AgentBuiltinToolsCfg/pkg/tools.ToolPolicyCfg instead) —
+// the two happen to share a "DefaultPolicy" field name, nothing else.
 func (sc *SecurityConfig) GetDefaultPolicy() DefaultPolicy {
 	if sc.DefaultPolicy == "" {
 		return PolicyDeny

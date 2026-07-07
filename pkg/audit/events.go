@@ -58,10 +58,12 @@ const (
 	EventAgentConfigCorrupt = "agent.config.corrupt"
 
 	// EventAgentConfigInvalidPolicyValue — HIGH. Boot-time validator rejected
-	// a default_policy / per-tool policy / GlobalDefaultPolicy value that
-	// is outside `{"allow", "ask", "deny"}`. Includes empty strings (FR-085
-	// supersedes the legacy `agent.config.empty_policy_value_coerced`).
-	// FR-049, FR-085.
+	// a per-tool policy value that is outside `{"allow", "ask", "deny"}`.
+	// Includes empty strings (FR-085 supersedes the legacy
+	// `agent.config.empty_policy_value_coerced`). (There is no
+	// default_policy/GlobalDefaultPolicy field any more — CLAUDE.md hard
+	// constraint 6 — every tool-policy decision is an explicit, literal
+	// entry.) FR-049, FR-085.
 	EventAgentConfigInvalidPolicyValue = "agent.config.invalid_policy_value"
 
 	// EventAgentConfigUnknownToolInPolicy — WARN. Boot-time validator found
@@ -511,7 +513,7 @@ func EmitAgentConfigCorrupt(ctx context.Context, logger *Logger, agentID, agentT
 
 // EmitAgentConfigInvalidPolicyValue — HIGH. FR-049, FR-085.
 //
-// `entries` lists each invalid entry (e.g. `default_policy="banana"`);
+// `entries` lists each invalid entry (e.g. `policies["bash"]="banana"`);
 // the slice form is preserved so multiple invalid values in one config
 // emit one event, not N.
 func EmitAgentConfigInvalidPolicyValue(
@@ -537,9 +539,9 @@ func EmitAgentConfigInvalidPolicyValue(
 }
 
 // InvalidPolicyEntry describes one bad value found by the boot validator.
-// `Field` is a JSON-pointer-ish path (e.g. `default_policy`,
-// `policies["system.config.set"]`); `Value` is the raw string the operator
-// wrote; `Reason` is a short human explanation.
+// `Field` is a JSON-pointer-ish path (e.g. `policies["set_config"]`);
+// `Value` is the raw string the operator wrote; `Reason` is a short human
+// explanation.
 type InvalidPolicyEntry struct {
 	Field  string
 	Value  string

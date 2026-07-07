@@ -187,10 +187,10 @@ async function triggerLongStreamingTurn(page: Page): Promise<void> {
   await expect(picker).toContainText(/Jim/i, { timeout: 5_000 })
 
   // Forbid tools and demand inline prose: on a bare "write 500 words" prompt,
-  // gemini-2.5-flash intermittently shortcuts to the write_file TOOL (Jim has it on
-  // default_policy:allow), which ends the turn instantly with zero inline stream
-  // and no cancellable window. Forcing long inline prose keeps stop-btn live for
-  // several seconds so Stop/Escape/cancel land mid-stream.
+  // gemini-2.5-flash intermittently shortcuts to the write_file TOOL (Jim has an
+  // explicit "allow" policy entry for it), which ends the turn instantly with
+  // zero inline stream and no cancellable window. Forcing long inline prose
+  // keeps stop-btn live for several seconds so Stop/Escape/cancel land mid-stream.
   await input.fill(
     'Do not use any tools. Reply only with inline prose, no files. Write a detailed ' +
       '700-word essay about renewable energy, beginning immediately and continuing ' +
