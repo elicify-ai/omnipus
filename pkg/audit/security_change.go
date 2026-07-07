@@ -39,11 +39,13 @@ type SecurityChangeRecord struct {
 // visually distinguished from other audit categories.
 const redactedSentinel = "***redacted***"
 
-// sensitiveSubstrings lists the lowercase substrings whose presence in any map
-// key (case-insensitive) triggers unconditional redaction of that key's value.
-// Substring semantics (not exact-match) mean "password_hash", "token_hash",
-// "new_password", "my_api_key", and "client_secret" all redact.
-var sensitiveSubstrings = []string{"password", "token", "api_key", "secret"}
+// sensitiveSubstrings lists the normalized substrings whose presence in any
+// map key triggers unconditional redaction of that key's value. Substrings
+// are stored pre-normalized (lowercase, no '_'/'-') to match how the key is
+// compared in isSensitiveKey — see normalizeKey in redactor.go. Substring
+// semantics (not exact-match) mean "password_hash", "token_hash",
+// "new_password", "my_api_key"/"myApiKey", and "client_secret" all redact.
+var sensitiveSubstrings = []string{"password", "token", "apikey", "secret"}
 
 // EmitSecuritySettingChange writes one JSONL audit record for a security config
 // mutation when the audit logger is enabled. Fields: timestamp, event, actor,
@@ -148,13 +150,20 @@ func redactSensitive(v any) any {
 	}
 }
 
-// isSensitiveKey reports whether key (case-insensitive) contains any of the
-// sensitive substrings. Substring semantics catch "password_hash",
-// "token_hash", "new_password", "client_secret", "api_key_override", etc.
+// isSensitiveKey reports whether key contains any of the sensitive
+// substrings once normalized. Normalization reuses normalizeKey (defined in
+// redactor.go, same package): lowercase, then strip '_' and '-'. This keeps
+// this file's substring matching consistent with redactor.go's field-name
+// matching and argshash.go's `(?i)(api[_-]?key|...)` pattern — without
+// normalization, a camelCase key like "apiKey" lowercases to "apikey", which
+// does NOT contain the literal separator-bearing substring "api_key" and
+// would slip through unredacted. Substring semantics (matched against the
+// normalized forms) still catch "password_hash", "token_hash", "new_password",
+// "client_secret", "api_key_override", "apiKeyOverride", etc.
 func isSensitiveKey(key string) bool {
-	lower := strings.ToLower(key)
+	normalized := normalizeKey(key)
 	for _, s := range sensitiveSubstrings {
-		if strings.Contains(lower, s) {
+		if strings.Contains(normalized, s) {
 			return true
 		}
 	}

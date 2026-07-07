@@ -24,8 +24,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
@@ -181,7 +179,7 @@ func (s *Store) checkParentAcyclicLocked(newID, parentID string) error {
 // The caller MUST NOT hold the per-task lock of any dependent. Each rewritten
 // dependent is guarded by its own striped lock. Idempotent and cycle-safe.
 func (s *Store) AdvanceBlockedDependents(completedID string) (advancedIDs []string, err error) {
-	entries, err := os.ReadDir(s.dir)
+	ids, err := s.scanTaskIDs()
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
@@ -203,11 +201,7 @@ func (s *Store) AdvanceBlockedDependents(completedID string) (advancedIDs []stri
 		return dt.Status, true
 	}
 
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
-			continue
-		}
-		id := strings.TrimSuffix(e.Name(), ".json")
+	for _, id := range ids {
 		if id == completedID {
 			continue
 		}
@@ -275,7 +269,7 @@ func (s *Store) AdvanceBlockedDependents(completedID string) (advancedIDs []stri
 // already `done`), so the dependent is now dispatchable. Caller must already
 // have removed the deleted task's own file.
 func (s *Store) cascadeDeleteEdges(deletedID string) (unblockedIDs []string, err error) {
-	entries, err := os.ReadDir(s.dir)
+	ids, err := s.scanTaskIDs()
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
@@ -296,11 +290,7 @@ func (s *Store) cascadeDeleteEdges(deletedID string) (unblockedIDs []string, err
 		statusCache[depID] = dt.Status
 		return dt.Status == StatusDone
 	}
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
-			continue
-		}
-		id := strings.TrimSuffix(e.Name(), ".json")
+	for _, id := range ids {
 		if id == deletedID {
 			continue
 		}
@@ -358,36 +348,30 @@ func (s *Store) cascadeDeleteEdges(deletedID string) (unblockedIDs []string, err
 // target file no longer exists. Returns the number of orphan edges removed.
 // Safe to call on startup.
 func (s *Store) DropOrphanEdges() (int, error) {
-	entries, err := os.ReadDir(s.dir)
+	ids, err := s.scanTaskIDs()
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return 0, nil
 		}
 		return 0, fmt.Errorf("task: DropOrphanEdges: ReadDir: %w", err)
 	}
-	known := make(map[string]bool, len(entries))
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
-			continue
-		}
-		known[strings.TrimSuffix(e.Name(), ".json")] = true
+	known := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		known[id] = true
 	}
 
 	removed := 0
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
-			continue
-		}
-		id := strings.TrimSuffix(e.Name(), ".json")
-		path := filepath.Join(s.dir, e.Name())
+	for _, id := range ids {
+		fileName := id + ".json"
+		path := s.path(id)
 		data, rerr := os.ReadFile(path)
 		if rerr != nil {
-			slog.Warn("task: DropOrphanEdges: skipping unreadable file", "file", e.Name(), "error", rerr)
+			slog.Warn("task: DropOrphanEdges: skipping unreadable file", "file", fileName, "error", rerr)
 			continue
 		}
 		var t Task
 		if jerr := json.Unmarshal(data, &t); jerr != nil {
-			slog.Warn("task: DropOrphanEdges: skipping corrupt file", "file", e.Name(), "error", jerr)
+			slog.Warn("task: DropOrphanEdges: skipping corrupt file", "file", fileName, "error", jerr)
 			continue
 		}
 		clean := t.BlockedBy[:0]
@@ -408,7 +392,7 @@ func (s *Store) DropOrphanEdges() (int, error) {
 		}
 		newData, merr := json.MarshalIndent(&t, "", "  ")
 		if merr != nil {
-			slog.Warn("task: DropOrphanEdges: marshal failed", "file", e.Name(), "error", merr)
+			slog.Warn("task: DropOrphanEdges: marshal failed", "file", fileName, "error", merr)
 			continue
 		}
 		mu := s.lock.Get(id)
@@ -418,7 +402,7 @@ func (s *Store) DropOrphanEdges() (int, error) {
 		})
 		mu.Unlock()
 		if werr != nil {
-			slog.Warn("task: DropOrphanEdges: write failed", "file", e.Name(), "error", werr)
+			slog.Warn("task: DropOrphanEdges: write failed", "file", fileName, "error", werr)
 		}
 	}
 	return removed, nil

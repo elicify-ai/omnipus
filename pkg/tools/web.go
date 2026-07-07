@@ -1167,12 +1167,19 @@ type WebFetchTool struct {
 	client          *http.Client
 	format          string
 	fetchLimitBytes int64
-	whitelist       *privateHostWhitelist
-}
-
-type privateHostWhitelist struct {
-	exact map[string]struct{}
-	cidrs []*net.IPNet
+	// ssrf enforces SSRF protection (SEC-24) on every fetch_url request via
+	// the shared, tested security.SSRFChecker — never nil. Unlike
+	// WebSearchTool (which only gets SSRF protection when the operator opts
+	// into sandbox.ssrf.enabled — see WebSearchToolOptions.SSRFChecker),
+	// WebFetchTool has always enforced its own private-IP/cloud-metadata
+	// blocking unconditionally: the tool exists specifically to fetch
+	// arbitrary, LLM-supplied URLs, so this guard must never be optional.
+	// This checker is constructed fresh in every NewWebFetchToolWithConfig
+	// call from cfg.Tools.Web.PrivateHostWhitelist — it is intentionally NOT
+	// threaded through from a shared/optional caller-supplied checker the
+	// way WebSearchTool's is, to avoid silently losing protection on
+	// installs where sandbox.ssrf.enabled defaults to false.
+	ssrf *security.SSRFChecker
 }
 
 func NewWebFetchTool(maxChars int, format string, fetchLimitBytes int64) (*WebFetchTool, error) {
@@ -1204,10 +1211,15 @@ func NewWebFetchToolWithConfig(
 	if maxChars <= 0 {
 		maxChars = defaultMaxChars
 	}
-	whitelist, err := newPrivateHostWhitelist(privateHostWhitelist)
-	if err != nil {
+	if err := validateWebFetchWhitelist(privateHostWhitelist); err != nil {
 		return nil, fmt.Errorf("failed to parse web fetch private host whitelist: %w", err)
 	}
+	// SEC-24: WebFetchTool always builds its own SSRFChecker instance — see
+	// the doc comment on WebFetchTool.ssrf for why this is unconditional
+	// rather than threaded through from an optional, operator-toggled
+	// checker like WebSearchTool's.
+	ssrf := security.NewSSRFChecker(privateHostWhitelist)
+
 	client, err := utils.CreateHTTPClient(proxy, fetchTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create HTTP client for web fetch: %w", err)
@@ -1217,13 +1229,13 @@ func NewWebFetchToolWithConfig(
 			Timeout:   15 * time.Second,
 			KeepAlive: 30 * time.Second,
 		}
-		transport.DialContext = newSafeDialContext(dialer, whitelist)
+		transport.DialContext = webFetchDialContext(dialer, ssrf)
 	}
 	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		if len(via) >= maxRedirects {
 			return fmt.Errorf("stopped after %d redirects", maxRedirects)
 		}
-		if isObviousPrivateHost(req.URL.Hostname(), whitelist) {
+		if isObviousPrivateHost(req.URL.Hostname(), ssrf) {
 			return fmt.Errorf("redirect target is private or local network host")
 		}
 		return nil
@@ -1237,7 +1249,7 @@ func NewWebFetchToolWithConfig(
 		client:          client,
 		format:          format,
 		fetchLimitBytes: fetchLimitBytes,
-		whitelist:       whitelist,
+		ssrf:            ssrf,
 	}, nil
 }
 
@@ -1290,9 +1302,11 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	}
 
 	// Lightweight pre-flight: block obvious localhost/literal-IP without DNS resolution.
-	// The real SSRF guard is newSafeDialContext at connect time.
+	// The real SSRF guard is webFetchDialContext at connect time (SEC-24), which
+	// re-resolves and re-checks every candidate address to close the TOCTOU
+	// window a pre-flight-only check would leave open.
 	hostname := parsedURL.Hostname()
-	if isObviousPrivateHost(hostname, t.whitelist) {
+	if isObviousPrivateHost(hostname, t.ssrf) {
 		return ErrorResult("fetching private or local network hosts is not allowed")
 	}
 
@@ -1502,138 +1516,63 @@ func (t *WebFetchTool) extractText(htmlContent string) string {
 	return strings.Join(cleanLines, "\n")
 }
 
-// newSafeDialContext re-resolves DNS at connect time to mitigate DNS rebinding (TOCTOU)
-// where a hostname resolves to a public IP during pre-flight but a private IP at connect time.
-func newSafeDialContext(
+// webFetchDialContext re-resolves DNS at connect time to mitigate DNS rebinding
+// (TOCTOU) where a hostname resolves to a public IP during pre-flight but a
+// private IP at connect time. All SSRF enforcement (IP-range/CIDR classification,
+// cloud-metadata blocking, 6to4/Teredo unwrapping, allowlist handling — SEC-24)
+// is delegated to the shared, independently-tested security.SSRFChecker via
+// SafeDialContext rather than duplicated here. The only thing layered on top is
+// allowPrivateWebFetchHosts, a test-only escape hatch (see its doc comment)
+// that is specific to this tool's test suite and not a concept SSRFChecker
+// itself needs to know about.
+func webFetchDialContext(
 	dialer *net.Dialer,
-	whitelist *privateHostWhitelist,
+	ssrf *security.SSRFChecker,
 ) func(context.Context, string, string) (net.Conn, error) {
+	safeDial := ssrf.SafeDialContext(dialer)
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
 		if allowPrivateWebFetchHosts.Load() {
 			return dialer.DialContext(ctx, network, address)
 		}
-
-		host, port, err := net.SplitHostPort(address)
-		if err != nil {
-			return nil, fmt.Errorf("invalid target address %q: %w", address, err)
-		}
-		if host == "" {
-			return nil, fmt.Errorf("empty target host")
-		}
-
-		if ip := net.ParseIP(host); ip != nil {
-			if shouldBlockPrivateIP(ip, whitelist) {
-				return nil, fmt.Errorf("blocked private or local target: %s", host)
-			}
-			return dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
-		}
-
-		ipAddrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-		if err != nil {
-			return nil, fmt.Errorf("failed to resolve %s: %w", host, err)
-		}
-
-		attempted := 0
-		var lastErr error
-		for _, ipAddr := range ipAddrs {
-			if shouldBlockPrivateIP(ipAddr.IP, whitelist) {
-				continue
-			}
-			attempted++
-			conn, err := dialer.DialContext(
-				ctx,
-				network,
-				net.JoinHostPort(ipAddr.IP.String(), port),
-			)
-			if err == nil {
-				return conn, nil
-			}
-			lastErr = err
-		}
-
-		if attempted == 0 {
-			return nil, fmt.Errorf(
-				"all resolved addresses for %s are private, restricted, or not whitelisted",
-				host,
-			)
-		}
-		if lastErr != nil {
-			return nil, fmt.Errorf(
-				"failed connecting to public addresses for %s: %w",
-				host,
-				lastErr,
-			)
-		}
-		return nil, fmt.Errorf("failed connecting to public addresses for %s", host)
+		return safeDial(ctx, network, address)
 	}
 }
 
-func newPrivateHostWhitelist(entries []string) (*privateHostWhitelist, error) {
-	if len(entries) == 0 {
-		return nil, nil
-	}
-
-	whitelist := &privateHostWhitelist{
-		exact: make(map[string]struct{}),
-		cidrs: make([]*net.IPNet, 0, len(entries)),
-	}
+// validateWebFetchWhitelist enforces that WebFetchTool's private-host whitelist
+// entries (cfg.Tools.Web.PrivateHostWhitelist) are IP addresses or CIDR ranges
+// only. This is intentionally stricter than security.SSRFChecker's
+// allowInternal parameter, which also accepts bare hostnames (see
+// NewSSRFChecker's doc comment) — WebFetchTool's whitelist has always been
+// IP/CIDR-only, and silently accepting a mistyped entry as a "hostname
+// allow-rule" would fail in a confusing way (looks like validation passed, but
+// the allow-rule almost certainly never matches any real target). Rejecting
+// malformed entries at construction time keeps the fail-closed guarantee: a
+// bad config value is a startup error, not a silently inert no-op.
+func validateWebFetchWhitelist(entries []string) error {
 	for _, entry := range entries {
 		entry = strings.TrimSpace(entry)
 		if entry == "" {
 			continue
 		}
-		if ip := net.ParseIP(entry); ip != nil {
-			whitelist.exact[normalizeWhitelistIP(ip).String()] = struct{}{}
+		if net.ParseIP(entry) != nil {
 			continue
 		}
-		_, network, err := net.ParseCIDR(entry)
-		if err != nil {
-			return nil, fmt.Errorf("invalid entry %q: expected IP or CIDR", entry)
+		if _, _, err := net.ParseCIDR(entry); err == nil {
+			continue
 		}
-		whitelist.cidrs = append(whitelist.cidrs, network)
+		return fmt.Errorf("invalid entry %q: expected IP or CIDR", entry)
 	}
-
-	if len(whitelist.exact) == 0 && len(whitelist.cidrs) == 0 {
-		return nil, nil
-	}
-	return whitelist, nil
+	return nil
 }
 
-func (w *privateHostWhitelist) Contains(ip net.IP) bool {
-	if w == nil || ip == nil {
-		return false
-	}
-
-	normalized := normalizeWhitelistIP(ip)
-	if _, ok := w.exact[normalized.String()]; ok {
-		return true
-	}
-	for _, network := range w.cidrs {
-		if network.Contains(normalized) {
-			return true
-		}
-	}
-	return false
-}
-
-func normalizeWhitelistIP(ip net.IP) net.IP {
-	if ip == nil {
-		return nil
-	}
-	if ip4 := ip.To4(); ip4 != nil {
-		return ip4
-	}
-	return ip
-}
-
-func shouldBlockPrivateIP(ip net.IP, whitelist *privateHostWhitelist) bool {
-	return isPrivateOrRestrictedIP(ip) && !whitelist.Contains(ip)
-}
-
-// isObviousPrivateHost performs a lightweight, no-DNS check for obviously private hosts.
-// It catches localhost, literal private IPs, and empty hosts. It does NOT resolve DNS —
-// the real SSRF guard is newSafeDialContext which checks IPs at connect time.
-func isObviousPrivateHost(host string, whitelist *privateHostWhitelist) bool {
+// isObviousPrivateHost performs a lightweight, no-DNS check for obviously private
+// hosts. It catches localhost, literal private IPs, and empty hosts. It does NOT
+// resolve DNS — the real SSRF guard is webFetchDialContext, which checks
+// resolved IPs at connect time. IP-range classification (RFC 1918, loopback,
+// link-local, cloud metadata, multicast, 6to4/Teredo unwrapping, etc.) is
+// delegated to the shared security.SSRFChecker.CheckIP (SEC-24) instead of
+// being duplicated here.
+func isObviousPrivateHost(host string, ssrf *security.SSRFChecker) bool {
 	if allowPrivateWebFetchHosts.Load() {
 		return false
 	}
@@ -1649,54 +1588,7 @@ func isObviousPrivateHost(host string, whitelist *privateHostWhitelist) bool {
 	}
 
 	if ip := net.ParseIP(h); ip != nil {
-		return shouldBlockPrivateIP(ip, whitelist)
-	}
-
-	return false
-}
-
-// isPrivateOrRestrictedIP returns true for IPs that should never be reached via web_fetch:
-// RFC 1918, loopback, link-local (incl. cloud metadata 169.254.x.x), carrier-grade NAT,
-// IPv6 unique-local (fc00::/7), 6to4 (2002::/16), and Teredo (2001:0000::/32).
-func isPrivateOrRestrictedIP(ip net.IP) bool {
-	if ip == nil {
-		return true
-	}
-
-	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-		ip.IsMulticast() || ip.IsUnspecified() {
-		return true
-	}
-
-	if ip4 := ip.To4(); ip4 != nil {
-		// IPv4 private, loopback, link-local, and carrier-grade NAT ranges.
-		if ip4[0] == 10 ||
-			ip4[0] == 127 ||
-			ip4[0] == 0 ||
-			(ip4[0] == 172 && ip4[1] >= 16 && ip4[1] <= 31) ||
-			(ip4[0] == 192 && ip4[1] == 168) ||
-			(ip4[0] == 169 && ip4[1] == 254) ||
-			(ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127) {
-			return true
-		}
-		return false
-	}
-
-	if len(ip) == net.IPv6len {
-		// IPv6 unique local addresses (fc00::/7)
-		if (ip[0] & 0xfe) == 0xfc {
-			return true
-		}
-		// 6to4 addresses (2002::/16): check the embedded IPv4 at bytes [2:6].
-		if ip[0] == 0x20 && ip[1] == 0x02 {
-			embedded := net.IPv4(ip[2], ip[3], ip[4], ip[5])
-			return isPrivateOrRestrictedIP(embedded)
-		}
-		// Teredo (2001:0000::/32): client IPv4 is at bytes [12:16], XOR-inverted.
-		if ip[0] == 0x20 && ip[1] == 0x01 && ip[2] == 0x00 && ip[3] == 0x00 {
-			client := net.IPv4(ip[12]^0xff, ip[13]^0xff, ip[14]^0xff, ip[15]^0xff)
-			return isPrivateOrRestrictedIP(client)
-		}
+		return ssrf.CheckIP(ip) != nil
 	}
 
 	return false

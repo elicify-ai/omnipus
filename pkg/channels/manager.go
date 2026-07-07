@@ -921,8 +921,12 @@ func (m *Manager) StartAll(ctx context.Context) error {
 			})
 			continue
 		}
-		// Lazily create worker only after channel starts successfully
-		w := newChannelWorker(name, channel)
+		// Lazily create worker only after channel starts successfully. Rate
+		// limiting is keyed by channel TYPE, not instance ID (name here is the
+		// instanceID under N-per-type instancing) — resolve the type so a second
+		// instance of a rate-limited type doesn't silently fall back to
+		// defaultRateLimit.
+		w := newChannelWorker(m.channelTypeForRateLimit(name), channel)
 		m.workers[name] = w
 		go m.runWorker(dispatchCtx, name, w)
 		go m.runMediaWorker(dispatchCtx, name, w)
@@ -1095,11 +1099,38 @@ func (m *Manager) StopAll(ctx context.Context) error {
 	return nil
 }
 
-// newChannelWorker creates a channelWorker with a rate limiter configured
-// for the given channel name.
-func newChannelWorker(name string, ch Channel) *channelWorker {
+// channelTypeForRateLimit resolves the channel TYPE (e.g. "discord") for an
+// instance ID (e.g. "discord" for a bare single-instance key, or "discord.2"
+// for a second Discord instance under N-per-type instancing, FR-015 / WS-B).
+// channelRateConfig is keyed by TYPE, not instance ID, so a second instance of
+// a rate-limited channel type must resolve to the same conservative limit as
+// the first — otherwise it silently falls back to defaultRateLimit (10 msg/s)
+// instead of the type's configured limit (e.g. Discord's 1 msg/s).
+//
+// Looks up the instance's normalized Type from m.config.Channels (populated by
+// config.normalizeChannelMap at load time, so it is always present for a
+// config-driven instance). Falls back to instanceID itself when no config
+// entry exists (e.g. a synthetic/internal registration like "webchat" via
+// RegisterChannel, which has no config.Channels entry) — matching the
+// pre-existing behavior for that case. Caller must hold m.mu (all three
+// production call sites — StartAll, Reload, RegisterChannel — already do).
+func (m *Manager) channelTypeForRateLimit(instanceID string) string {
+	if m.config != nil {
+		if inst, ok := m.config.Channels[instanceID]; ok && inst.Type != "" {
+			return inst.Type
+		}
+	}
+	return instanceID
+}
+
+// newChannelWorker creates a channelWorker with a rate limiter configured for
+// the given channel TYPE. Callers must pass the channel's TYPE (e.g.
+// "discord"), not its instance ID — channelRateConfig is keyed by type so that
+// every instance of a given type shares the same rate limit. Use
+// Manager.channelTypeForRateLimit to resolve an instance ID to its type.
+func newChannelWorker(channelType string, ch Channel) *channelWorker {
 	rateVal := float64(defaultRateLimit)
-	if r, ok := channelRateConfig[name]; ok {
+	if r, ok := channelRateConfig[channelType]; ok {
 		rateVal = r
 	}
 	burst := int(math.Max(1, math.Ceil(rateVal/2)))
@@ -1739,8 +1770,9 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config, secrets creden
 			delete(list, n)
 			continue
 		}
-		// Lazily create worker only after channel starts successfully
-		w := newChannelWorker(n, channel)
+		// Lazily create worker only after channel starts successfully. Resolve
+		// TYPE from instance ID for rate limiting (see channelTypeForRateLimit).
+		w := newChannelWorker(m.channelTypeForRateLimit(n), channel)
 		m.workers[n] = w
 		go m.runWorker(dispatchCtx, n, w)
 		go m.runMediaWorker(dispatchCtx, n, w)
@@ -1815,7 +1847,7 @@ func (m *Manager) RegisterChannel(name string, channel Channel) {
 	// Without a worker, synchronous delivery (e.g., media frames) fails with
 	// "channel has no active worker".
 	if _, hasWorker := m.workers[name]; !hasWorker && m.dispatchCtx != nil {
-		w := newChannelWorker(name, channel)
+		w := newChannelWorker(m.channelTypeForRateLimit(name), channel)
 		m.workers[name] = w
 		go m.runWorker(m.dispatchCtx, name, w)
 		go m.runMediaWorker(m.dispatchCtx, name, w)

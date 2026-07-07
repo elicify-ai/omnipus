@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/security"
 )
 
 const (
@@ -943,7 +944,18 @@ func TestWebFetch_RedirectToPrivateBlocked(t *testing.T) {
 	}
 }
 
-func TestNewSafeDialContext_BlocksPrivateDNSResolutionWithoutWhitelist(t *testing.T) {
+// TestWebFetchDialContext_BlocksPrivateDNSResolutionWithoutWhitelist and
+// TestWebFetchDialContext_AllowsWhitelistedPrivateDNSResolution replace the
+// former TestNewSafeDialContext_* tests, which exercised WebFetchTool's own
+// hand-rolled newSafeDialContext. That function has been consolidated onto
+// security.SSRFChecker.SafeDialContext (SEC-24) — these tests now verify
+// webFetchDialContext's thin wrapper (allowPrivateWebFetchHosts bypass +
+// delegation) still produces the same externally-observable behavior: a
+// hostname ("localhost") that resolves via the real OS resolver to a private
+// address is blocked unless explicitly allowlisted. Equivalent coverage of
+// the underlying SSRFChecker.SafeDialContext/SafeTransport mechanism itself
+// (independent of WebFetchTool) lives in pkg/security/ssrf_test.go.
+func TestWebFetchDialContext_BlocksPrivateDNSResolutionWithoutWhitelist(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("failed to listen on loopback: %v", err)
@@ -955,17 +967,17 @@ func TestNewSafeDialContext_BlocksPrivateDNSResolutionWithoutWhitelist(t *testin
 		t.Fatalf("failed to split listener address: %v", err)
 	}
 
-	dialContext := newSafeDialContext(&net.Dialer{Timeout: time.Second}, nil)
+	dialContext := webFetchDialContext(&net.Dialer{Timeout: time.Second}, security.NewSSRFChecker(nil))
 	_, err = dialContext(context.Background(), "tcp", net.JoinHostPort("localhost", port))
 	if err == nil {
 		t.Fatal("expected localhost DNS resolution to be blocked without whitelist")
 	}
-	if !strings.Contains(err.Error(), "private") && !strings.Contains(err.Error(), "whitelisted") {
+	if !strings.Contains(err.Error(), "SSRF") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
-func TestNewSafeDialContext_AllowsWhitelistedPrivateDNSResolution(t *testing.T) {
+func TestWebFetchDialContext_AllowsWhitelistedPrivateDNSResolution(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("failed to listen on loopback: %v", err)
@@ -987,12 +999,8 @@ func TestNewSafeDialContext_AllowsWhitelistedPrivateDNSResolution(t *testing.T) 
 		t.Fatalf("failed to split listener address: %v", err)
 	}
 
-	whitelist, err := newPrivateHostWhitelist([]string{"127.0.0.0/8"})
-	if err != nil {
-		t.Fatalf("failed to parse whitelist: %v", err)
-	}
-
-	dialContext := newSafeDialContext(&net.Dialer{Timeout: time.Second}, whitelist)
+	ssrf := security.NewSSRFChecker([]string{"127.0.0.0/8"})
+	dialContext := webFetchDialContext(&net.Dialer{Timeout: time.Second}, ssrf)
 	conn, err := dialContext(context.Background(), "tcp", net.JoinHostPort("localhost", port))
 	if err != nil {
 		t.Fatalf("expected localhost DNS resolution to succeed with whitelist, got %v", err)
@@ -1006,44 +1014,40 @@ func TestNewSafeDialContext_AllowsWhitelistedPrivateDNSResolution(t *testing.T) 
 	}
 }
 
-// TestIsPrivateOrRestrictedIP_Table tests IP classification logic
-func TestIsPrivateOrRestrictedIP_Table(t *testing.T) {
+// TestIsObviousPrivateHost_Table verifies isObviousPrivateHost's wiring: the
+// no-DNS "localhost"/empty-host special cases, plus correct delegation to
+// security.SSRFChecker.CheckIP for literal-IP classification (RFC 1918,
+// loopback, link-local, cloud metadata, IPv4-mapped, unique-local, 6to4,
+// Teredo, multicast, unspecified). The exhaustive IP-range classification
+// dataset itself lives in pkg/security/ssrf_test.go against CheckIP directly —
+// this test only proves isObviousPrivateHost hands literal IPs to CheckIP
+// correctly and does not silently reintroduce hand-rolled classification.
+func TestIsObviousPrivateHost_Table(t *testing.T) {
+	ssrf := security.NewSSRFChecker(nil)
+
 	tests := []struct {
-		ip      string
+		host    string
 		blocked bool
 		desc    string
 	}{
-		{"127.0.0.1", true, "IPv4 loopback"},
-		{"10.0.0.1", true, "IPv4 private class A"},
-		{"172.16.0.1", true, "IPv4 private class B"},
-		{"192.168.1.1", true, "IPv4 private class C"},
-		{"169.254.169.254", true, "link-local / cloud metadata"},
-		{"100.64.0.1", true, "carrier-grade NAT"},
-		{"0.0.0.0", true, "unspecified"},
-		{"8.8.8.8", false, "public DNS"},
-		{"1.1.1.1", false, "public DNS"},
-		{"::1", true, "IPv6 loopback"},
-		{"::ffff:127.0.0.1", true, "IPv4-mapped IPv6 loopback"},
-		{"::ffff:10.0.0.1", true, "IPv4-mapped IPv6 private"},
-		{"fc00::1", true, "IPv6 unique local"},
-		{"fd00::1", true, "IPv6 unique local"},
-		{"2002:7f00:0001::1", true, "6to4 with embedded 127.x (private)"},
-		{"2002:0a00:0001::1", true, "6to4 with embedded 10.0.0.1 (private)"},
-		{"2002:0801:0101::1", false, "6to4 with embedded 8.1.1.1 (public)"},
-		{"2001:0000:4136:e378:8000:63bf:f5ff:fffe", true, "Teredo with client 10.0.0.1 (private)"},
-		{"2001:0000:4136:e378:8000:63bf:f7f6:fefe", false, "Teredo with client 8.9.1.1 (public)"},
-		{"2607:f8b0:4004:800::200e", false, "public IPv6 (Google)"},
+		{"", true, "empty host"},
+		{"localhost", true, "localhost literal"},
+		{"foo.localhost", true, "localhost suffix"},
+		{"127.0.0.1", true, "IPv4 loopback literal"},
+		{"10.0.0.1", true, "IPv4 private class A literal"},
+		{"169.254.169.254", true, "cloud metadata literal"},
+		{"2002:7f00:0001::1", true, "6to4 with embedded private IPv4 literal"},
+		{"2001:0000:4136:e378:8000:63bf:f5ff:fffe", true, "Teredo with embedded private IPv4 literal"},
+		{"8.8.8.8", false, "public IPv4 literal"},
+		{"2607:f8b0:4004:800::200e", false, "public IPv6 literal"},
+		{"example.com", false, "ordinary hostname (checked later at dial time, not here)"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.desc, func(t *testing.T) {
-			ip := net.ParseIP(tt.ip)
-			if ip == nil {
-				t.Fatalf("failed to parse IP: %s", tt.ip)
-			}
-			got := isPrivateOrRestrictedIP(ip)
+			got := isObviousPrivateHost(tt.host, ssrf)
 			if got != tt.blocked {
-				t.Errorf("isPrivateOrRestrictedIP(%s) = %v, want %v", tt.ip, got, tt.blocked)
+				t.Errorf("isObviousPrivateHost(%q) = %v, want %v", tt.host, got, tt.blocked)
 			}
 		})
 	}

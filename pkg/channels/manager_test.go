@@ -508,6 +508,59 @@ func TestNewChannelWorker_ConfiguredRate(t *testing.T) {
 	}
 }
 
+// TestChannelTypeForRateLimit_SecondInstance guards the multi-instance rate-
+// limit bug: a second instance of a rate-limited channel type (e.g.
+// "discord.2") is keyed by instance ID in m.channels/m.workers, but
+// channelRateConfig is keyed by TYPE. Manager.channelTypeForRateLimit must
+// resolve the instance ID back to its configured type via m.config.Channels
+// so the second instance gets the same conservative rate as the first,
+// instead of silently falling back to defaultRateLimit.
+func TestChannelTypeForRateLimit_SecondInstance(t *testing.T) {
+	m := &Manager{
+		channels: make(map[string]Channel),
+		workers:  make(map[string]*channelWorker),
+		config: &config.Config{
+			Channels: map[string]config.ChannelInstanceConfig{
+				"discord":   {Type: "discord", Enabled: true},
+				"discord.2": {Type: "discord", Enabled: true},
+			},
+		},
+	}
+
+	got := m.channelTypeForRateLimit("discord.2")
+	if got != "discord" {
+		t.Fatalf("expected instance %q to resolve to type %q, got %q", "discord.2", "discord", got)
+	}
+
+	// End-to-end: a worker built from the resolved type must carry Discord's
+	// configured 1 msg/s limit, not the 10 msg/s default.
+	w := newChannelWorker(m.channelTypeForRateLimit("discord.2"), &mockChannel{})
+	wantRate := rate.Limit(channelRateConfig["discord"])
+	if w.limiter.Limit() != wantRate {
+		t.Fatalf("second discord instance: expected rate %v, got %v (regressed to defaultRateLimit=%v)",
+			wantRate, w.limiter.Limit(), rate.Limit(defaultRateLimit))
+	}
+}
+
+// TestChannelTypeForRateLimit_Fallback covers the two cases where no config
+// entry exists for the instance ID: a nil m.config (matches
+// NewManagerForTesting / ad-hoc test managers) and a config with no matching
+// Channels entry (matches synthetic registrations like RegisterChannel's
+// "webchat", which has no config.Channels entry). Both must fall back to
+// treating the instance ID as the type, preserving pre-existing behavior for
+// legacy single-instance channels where instanceID == type.
+func TestChannelTypeForRateLimit_Fallback(t *testing.T) {
+	nilConfig := &Manager{}
+	if got := nilConfig.channelTypeForRateLimit("webchat"); got != "webchat" {
+		t.Fatalf("nil config: expected fallback to instanceID %q, got %q", "webchat", got)
+	}
+
+	noEntry := &Manager{config: &config.Config{Channels: map[string]config.ChannelInstanceConfig{}}}
+	if got := noEntry.channelTypeForRateLimit("telegram"); got != "telegram" {
+		t.Fatalf("no config entry: expected fallback to instanceID %q, got %q", "telegram", got)
+	}
+}
+
 func TestRunWorker_MessageSplitting(t *testing.T) {
 	m := newTestManager()
 

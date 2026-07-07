@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -156,6 +157,167 @@ func TestSSRFChecker_PrivateIPv6Ranges(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestSSRFChecker_6to4AndTeredoAddresses validates the IPv6 tunneling-scheme
+// unwrap logic in CheckIP: 6to4 (2002::/16, RFC 3056) embeds an IPv4 address in
+// bytes [2:6]; Teredo (2001:0000::/32, RFC 4380) embeds a XOR-inverted client
+// IPv4 in bytes [12:16]. Both must be unwrapped and re-checked against the
+// IPv4 rules so a tunneled private/metadata address cannot bypass SSRF
+// blocking by wrapping itself in an IPv6 tunneling prefix.
+//
+// Ported from the former pkg/tools.TestIsPrivateOrRestrictedIP_Table 6to4/Teredo
+// rows during the web_fetch SSRF consolidation (2026-07-07): WebFetchTool's
+// hand-rolled isPrivateOrRestrictedIP had byte-identical 6to4/Teredo unwrap
+// logic to CheckIP below, but CheckIP itself had no direct test coverage for
+// these two schemes before this addition — closing that gap here benefits
+// every SSRFChecker caller (browser tools, exec proxy, egress proxy,
+// web_search), not just web_fetch.
+func TestSSRFChecker_6to4AndTeredoAddresses(t *testing.T) {
+	checker := security.NewSSRFChecker(nil)
+
+	tests := []struct {
+		name        string
+		ip          string
+		wantBlocked bool
+	}{
+		{name: "6to4 embedding 127.x (loopback)", ip: "2002:7f00:0001::1", wantBlocked: true},
+		{name: "6to4 embedding 10.0.0.1 (RFC 1918)", ip: "2002:0a00:0001::1", wantBlocked: true},
+		{name: "6to4 embedding 8.1.1.1 (public)", ip: "2002:0801:0101::1", wantBlocked: false},
+		{
+			name:        "Teredo with client IPv4 10.0.0.1 (private, XOR-inverted)",
+			ip:          "2001:0000:4136:e378:8000:63bf:f5ff:fffe",
+			wantBlocked: true,
+		},
+		{
+			name:        "Teredo with client IPv4 8.9.1.1 (public, XOR-inverted)",
+			ip:          "2001:0000:4136:e378:8000:63bf:f7f6:fefe",
+			wantBlocked: false,
+		},
+		{
+			name:        "ordinary public IPv6 (Google) unaffected by tunneling checks",
+			ip:          "2607:f8b0:4004:800::200e",
+			wantBlocked: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ip := net.ParseIP(tc.ip)
+			require.NotNil(t, ip, "test setup: failed to parse IP %s", tc.ip)
+
+			err := checker.CheckIP(ip)
+			if tc.wantBlocked {
+				require.Error(t, err, "tunneled address %s should be blocked", tc.ip)
+				assert.Contains(t, err.Error(), "SSRF")
+			} else {
+				assert.NoError(t, err, "tunneled address %s should be allowed but got: %v", tc.ip, err)
+			}
+		})
+	}
+}
+
+// TestSSRFChecker_MulticastAndUnspecified validates that multicast
+// (224.0.0.0/4 IPv4, ff00::/8 IPv6) and unspecified (0.0.0.0, ::) addresses
+// are blocked. These are not meaningful unicast SSRF targets, but the former
+// pkg/tools.isPrivateOrRestrictedIP blocked them explicitly (via
+// net.IP.IsMulticast()/IsUnspecified()) and CheckIP's CIDR list did not cover
+// the multicast ranges or the IPv6 unspecified address "::" before this
+// addition — identified and closed during the web_fetch SSRF consolidation
+// (2026-07-07) so no protection was silently dropped in the migration.
+func TestSSRFChecker_MulticastAndUnspecified(t *testing.T) {
+	checker := security.NewSSRFChecker(nil)
+
+	tests := []struct {
+		name string
+		ip   string
+	}{
+		{name: "IPv4 multicast", ip: "224.0.0.1"},
+		{name: "IPv4 multicast upper bound", ip: "239.255.255.255"},
+		{name: "IPv6 multicast", ip: "ff02::1"},
+		{name: "IPv6 unspecified", ip: "::"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ip := net.ParseIP(tc.ip)
+			require.NotNil(t, ip, "test setup: failed to parse IP %s", tc.ip)
+
+			err := checker.CheckIP(ip)
+			require.Error(t, err, "%s should be blocked", tc.ip)
+			assert.Contains(t, err.Error(), "SSRF")
+		})
+	}
+
+	// 0.0.0.0 (IPv4 unspecified) was already covered by the 0.0.0.0/8 CIDR
+	// entry before this change; assert it is still blocked with its existing
+	// "private IP range" reason (see TestSSRFChecker_PrivateIPv4Ranges row 12)
+	// so the ordering of the new multicast/unspecified handling doesn't shift
+	// which message fires first for that address.
+	t.Run("IPv4 unspecified (0.0.0.0) retains its existing reason", func(t *testing.T) {
+		err := checker.CheckIP(net.ParseIP("0.0.0.0"))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "private IP range")
+	})
+}
+
+// TestSSRFChecker_SafeDialContext_RealDNSResolution exercises SafeDialContext
+// end-to-end with a real OS DNS resolution (hostname "localhost", not a
+// literal IP) and a real listener, verifying the allowlist decides whether a
+// private-resolving hostname may be dialed. Ported from WebFetchTool's former
+// TestNewSafeDialContext_* tests during the SSRF consolidation (2026-07-07):
+// SafeDialContext (extracted from the former unexported safeDialContext so
+// WebFetchTool and other custom-transport callers can reuse it) previously had
+// only indirect coverage through SafeClient()/CheckRedirect tests using
+// httptest.Server's literal 127.0.0.1 address, which short-circuits the
+// resolver via CheckHost's net.ParseIP fast path. This test forces the actual
+// net.Resolver.LookupIPAddr code path.
+func TestSSRFChecker_SafeDialContext_RealDNSResolution(t *testing.T) {
+	t.Run("blocks localhost resolution without allowlist", func(t *testing.T) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer listener.Close()
+
+		_, port, err := net.SplitHostPort(listener.Addr().String())
+		require.NoError(t, err)
+
+		checker := security.NewSSRFChecker(nil)
+		dialContext := checker.SafeDialContext(&net.Dialer{Timeout: time.Second})
+		_, err = dialContext(context.Background(), "tcp", net.JoinHostPort("localhost", port))
+		require.Error(t, err, "expected localhost DNS resolution to be blocked without an allowlist entry")
+		assert.Contains(t, err.Error(), "SSRF")
+	})
+
+	t.Run("allows localhost resolution when allowlisted by CIDR", func(t *testing.T) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer listener.Close()
+
+		accepted := make(chan struct{}, 1)
+		go func() {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			conn.Close()
+			accepted <- struct{}{}
+		}()
+
+		_, port, err := net.SplitHostPort(listener.Addr().String())
+		require.NoError(t, err)
+
+		checker := security.NewSSRFChecker([]string{"127.0.0.0/8"})
+		dialContext := checker.SafeDialContext(&net.Dialer{Timeout: time.Second})
+		conn, err := dialContext(context.Background(), "tcp", net.JoinHostPort("localhost", port))
+		require.NoError(t, err, "expected localhost DNS resolution to succeed once allowlisted")
+		conn.Close()
+
+		select {
+		case <-accepted:
+		case <-time.After(time.Second):
+			t.Fatal("expected localhost listener to accept a connection")
+		}
+	})
 }
 
 // TestSSRFChecker_Allowlist validates that IPs in the allowlist bypass SSRF blocking.

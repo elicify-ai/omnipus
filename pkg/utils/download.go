@@ -23,8 +23,10 @@ import (
 // removing it when done (defer os.Remove(path)).
 //
 // On any error the temp file is cleaned up automatically.
+//
+// This performs a single request via client.Do — it does not retry on
+// transient failures (429/5xx). Use DownloadToFileWithRetry for that.
 func DownloadToFile(ctx context.Context, client *http.Client, req *http.Request, maxBytes int64) (string, error) {
-	// Attach context.
 	req = req.WithContext(ctx)
 
 	logger.DebugCF("download", "Starting download", map[string]any{
@@ -36,6 +38,43 @@ func DownloadToFile(ctx context.Context, client *http.Client, req *http.Request,
 	if err != nil {
 		return "", fmt.Errorf("request failed: %w", err)
 	}
+
+	return streamResponseToTempFile(resp, maxBytes)
+}
+
+// DownloadToFileWithRetry behaves exactly like DownloadToFile, except the
+// request is issued via DoRequestWithRetry — transient failures (HTTP 429
+// and 5xx) are retried with backoff before the response is streamed to disk.
+//
+// Use this for downloads from registries/services expected to rate-limit or
+// occasionally 5xx (e.g. skill-registry ZIP downloads); use DownloadToFile
+// for single-attempt fetches where retry semantics aren't desired.
+func DownloadToFileWithRetry(
+	ctx context.Context,
+	client *http.Client,
+	req *http.Request,
+	maxBytes int64,
+) (string, error) {
+	req = req.WithContext(ctx)
+
+	logger.DebugCF("download", "Starting download (with retry)", map[string]any{
+		"url":       req.URL.String(),
+		"max_bytes": maxBytes,
+	})
+
+	resp, err := DoRequestWithRetry(client, req)
+	if err != nil {
+		return "", fmt.Errorf("request failed: %w", err)
+	}
+
+	return streamResponseToTempFile(resp, maxBytes)
+}
+
+// streamResponseToTempFile validates the response status and streams its
+// body to a new temp file in small chunks, enforcing maxBytes (0 = no
+// limit). It always closes resp.Body. On any error the temp file is cleaned
+// up automatically.
+func streamResponseToTempFile(resp *http.Response, maxBytes int64) (string, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {

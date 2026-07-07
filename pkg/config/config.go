@@ -1333,8 +1333,15 @@ type ToolFeedbackConfig struct {
 type AgentDefaults struct {
 	Workspace string `json:"workspace" env:"OMNIPUS_AGENTS_DEFAULTS_WORKSPACE"`
 	// RestrictToWorkspace and AllowReadOutsideWorkspace are removed from the v1
-	// schema (FR-001). Tags use json:"-" so SaveConfig never serializes them;
-	// validateRemovedKeys rejects any v1 config that still carries these keys.
+	// JSON schema only (FR-001): tags use json:"-" so SaveConfig never
+	// serializes them, and validateRemovedKeys rejects any v1 config JSON that
+	// still carries these keys. The fields themselves are NOT dead — they
+	// remain live via env var override (OMNIPUS_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE,
+	// OMNIPUS_AGENTS_DEFAULTS_ALLOW_READ_OUTSIDE_WORKSPACE) and are read for real
+	// sandboxing decisions in pkg/agent/loop.go and pkg/agent/instance.go. This
+	// is an intentional ops escape hatch: operator-facing JSON config hygiene
+	// rejects the keys, but the env var remains as a lower-level override for
+	// advanced/ops use.
 	RestrictToWorkspace       bool               `json:"-"                               env:"OMNIPUS_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE"`
 	AllowReadOutsideWorkspace bool               `json:"-"                               env:"OMNIPUS_AGENTS_DEFAULTS_ALLOW_READ_OUTSIDE_WORKSPACE"`
 	Provider                  string             `json:"provider"                        env:"OMNIPUS_AGENTS_DEFAULTS_PROVIDER"`
