@@ -531,19 +531,32 @@ func RunContext(ctx context.Context, debug bool, homePath, configPath string, al
 //     deps. Passing nil deps and a nil NavigateCallback is therefore safe
 //     PROVIDED the returned tools are never Execute()d here — and they never
 //     are; only .Name() is called below.
+//
+// The three static catalogs never change at runtime, so the result is
+// computed once (guarded by knownBuiltinToolNamesOnce) and the same shared
+// map is returned to every caller thereafter. Safe only because no caller
+// mutates the returned map — it is read-only past this function.
 func buildKnownBuiltinToolNames() map[string]struct{} {
-	out := make(map[string]struct{})
-	for _, t := range tools.GeneralBuiltinMetadata() {
-		out[t.Name()] = struct{}{}
-	}
-	for _, t := range browser.BrowserBuiltinMetadata() {
-		out[t.Name()] = struct{}{}
-	}
-	for _, t := range systools.AllTools(nil, nil) {
-		out[t.Name()] = struct{}{}
-	}
-	return out
+	knownBuiltinToolNamesOnce.Do(func() {
+		out := make(map[string]struct{})
+		for _, t := range tools.GeneralBuiltinMetadata() {
+			out[t.Name()] = struct{}{}
+		}
+		for _, t := range browser.BrowserBuiltinMetadata() {
+			out[t.Name()] = struct{}{}
+		}
+		for _, t := range systools.AllTools(nil, nil) {
+			out[t.Name()] = struct{}{}
+		}
+		knownBuiltinToolNamesCache = out
+	})
+	return knownBuiltinToolNamesCache
 }
+
+var (
+	knownBuiltinToolNamesOnce  sync.Once
+	knownBuiltinToolNamesCache map[string]struct{}
+)
 
 // repairAndValidateToolPolicyCoverage runs the shared "backfill pre-existing
 // gaps, then hard-validate what remains" sequence used identically at boot

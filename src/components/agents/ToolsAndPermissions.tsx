@@ -242,6 +242,15 @@ export function ToolsAndPermissions({
     // ADR-036: `bash` is the unified shell tool (replaces exec / workspace_shell
     // / workspace_shell_bg) — it's the one whose policy determines whether the
     // filesystem-bypass conflict below applies.
+    //
+    // Deliberate: resolvePolicy() can return `undefined` for a genuinely
+    // unconfigured tool (no exact/glob entry) — this check only ever compares
+    // against the literal 'deny', so an unconfigured bash or fs-tool policy
+    // reads as "no known conflict yet", not as an implicit allow/deny. That's
+    // intentional for this soft-advisory banner (it should only fire on a
+    // confirmed, saved deny), not a fallback to "fix" — the authoritative
+    // "needs configuration" surfacing for an unconfigured tool is the
+    // ToolPolicyEditor's own "Unset" badge/pill, not this banner.
     const shellPolicy = resolvePolicy('bash', policies)
     if (shellPolicy === 'deny') return false
     const fsTools = ['write_file', 'read_file', 'list_directory'] as const
