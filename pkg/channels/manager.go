@@ -1120,6 +1120,13 @@ func (m *Manager) channelTypeForRateLimit(instanceID string) string {
 			return inst.Type
 		}
 	}
+	logger.DebugCF(
+		"channels",
+		"No config.Channels entry for instance; using instance ID as rate-limit type",
+		map[string]any{
+			"instance_id": instanceID,
+		},
+	)
 	return instanceID
 }
 

@@ -1283,6 +1283,10 @@ func (t *WebFetchTool) Parameters() map[string]any {
 }
 
 func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	if t.ssrf == nil {
+		return ErrorResult("internal error: SSRF checker not initialized")
+	}
+
 	urlStr, ok := args["url"].(string)
 	if !ok {
 		return ErrorResult("url is required")
