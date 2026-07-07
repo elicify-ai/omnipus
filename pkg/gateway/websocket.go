@@ -605,29 +605,15 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn) bool {
 	cfg := h.agentLoop.GetConfig()
 	rawToken := authFrame.Token
 
-	// 1. The human account(s) in Gateway.Users. Single-user model: normally
-	// holds exactly one entry, but a pre-single-user-model install could
-	// still carry a leftover second (or third...) account from before the
-	// Users CRUD API was deleted (config.warnAboutExtraUsers logs a WARN
-	// for this at load time — deliberately not self-healed/truncated here,
-	// since that would race a legitimate account's own in-flight login).
-	// Looping keeps every configured account able to authenticate rather
-	// than silently and permanently locking out everyone but index 0 (SEC-1).
-	for i := range cfg.Gateway.Users {
-		if cfg.Gateway.Users[i].VerifyToken(rawToken) == nil {
-			wc.userID = cfg.Gateway.Users[i].Username // FR-073: needed for session_state user scoping
-			conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-			return true
-		}
-	}
-
-	// 2. The CLI's dedicated token — decoupled from the human account (see
-	// GatewayConfig.CLIToken doc). Verified via the nil-safe helper that
-	// wraps the same shared VerifyTokenAgainst logic UserConfig.VerifyToken
-	// uses internally, with no legacy hash to check.
-	if cfg.Gateway.VerifyCLIToken(rawToken) == nil {
-		wc.userID = "cli"
-		wc.isCLIToken = true
+	// 1 & 2. Configured identities — human Gateway.Users accounts, then the
+	// CLI's dedicated token. See resolveBearerIdentity's doc (auth.go) for
+	// the full rationale (looping every user, ViaCLIToken/isCLIToken
+	// semantics, etc.) — shared with checkBearerAuth (auth.go) and
+	// withOptionalAuth (rest_auth.go), which previously reimplemented this
+	// same lookup independently.
+	if user, viaCLIToken, matched := resolveBearerIdentity(cfg, rawToken); matched {
+		wc.userID = user.Username // FR-073: needed for session_state user scoping
+		wc.isCLIToken = viaCLIToken
 		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 		return true
 	}
@@ -637,7 +623,7 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn) bool {
 	// legacy env-token path below. This preserves prior behavior: once any
 	// account-based auth is configured, an unmatched token is rejected
 	// immediately rather than being checked against OMNIPUS_BEARER_TOKEN.
-	if len(cfg.Gateway.Users) > 0 || cfg.Gateway.CLIToken != nil {
+	if bearerAccountsConfigured(cfg) {
 		sendGenWSFrame(conn, generated.ErrorFrame{
 			Type:    string(generated.WsFrameTypeError),
 			Message: "unauthorized: invalid token",
@@ -776,7 +762,7 @@ func (h *WSHandler) readLoop(ctx context.Context, conn *websocket.Conn, wc *wsCo
 				})
 				continue
 			}
-			if f.Content == "" {
+			if f.Content == "" && len(f.Media) == 0 {
 				continue
 			}
 			var agentID string

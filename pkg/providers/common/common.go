@@ -204,10 +204,14 @@ func parseDataAudioURL(mediaURL string) (format, data string, ok bool) {
 
 // --- Response parsing ---
 
-// openaiNonStreamUsage is the intermediate struct for non-streaming OpenAI-compatible
-// usage objects. It captures prompt_tokens_details.cached_tokens to separate uncached
-// prompt tokens from cached ones before populating UsageInfo.
-type openaiNonStreamUsage struct {
+// OpenAINonStreamUsage is the intermediate struct for OpenAI-compatible usage
+// objects (both the non-streaming response's top-level "usage" field and a
+// streaming response's final SSE usage chunk share this shape). It captures
+// prompt_tokens_details.cached_tokens to separate uncached prompt tokens from
+// cached ones before populating UsageInfo. Exported so other providers in this
+// package family (e.g. openai_compat's SSE parser) can decode into it directly
+// instead of duplicating the struct and its conversion logic.
+type OpenAINonStreamUsage struct {
 	PromptTokens        int `json:"prompt_tokens"`
 	CompletionTokens    int `json:"completion_tokens"`
 	TotalTokens         int `json:"total_tokens"`
@@ -216,10 +220,10 @@ type openaiNonStreamUsage struct {
 	} `json:"prompt_tokens_details,omitempty"`
 }
 
-// toUsageInfo converts a non-streaming usage chunk to UsageInfo.
+// ToUsageInfo converts a non-streaming usage chunk to UsageInfo.
 // PromptTokens in the result is uncached input only. CacheReadTokens holds the
 // cached portion. CacheWriteTokens stays 0 (OpenAI does not report cache writes).
-func (u *openaiNonStreamUsage) toUsageInfo() *UsageInfo {
+func (u *OpenAINonStreamUsage) ToUsageInfo() *UsageInfo {
 	if u == nil {
 		return nil
 	}
@@ -268,7 +272,7 @@ func ParseResponse(body io.Reader) (*LLMResponse, error) {
 			} `json:"message"`
 			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
-		Usage *openaiNonStreamUsage `json:"usage"`
+		Usage *OpenAINonStreamUsage `json:"usage"`
 	}
 
 	if err := json.NewDecoder(body).Decode(&apiResponse); err != nil {
@@ -321,7 +325,7 @@ func ParseResponse(body io.Reader) (*LLMResponse, error) {
 		ReasoningDetails: choice.Message.ReasoningDetails,
 		ToolCalls:        toolCalls,
 		FinishReason:     normalizeFinishReason(choice.FinishReason),
-		Usage:            apiResponse.Usage.toUsageInfo(),
+		Usage:            apiResponse.Usage.ToUsageInfo(),
 	}, nil
 }
 

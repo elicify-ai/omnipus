@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/providers/common"
 	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 )
 
@@ -32,7 +33,7 @@ type (
 const (
 	defaultAPIVersion     = "2023-06-01"
 	defaultBaseURL        = "https://api.anthropic.com/v1"
-	defaultRequestTimeout = 120 * time.Second
+	defaultRequestTimeout = common.DefaultRequestTimeout
 )
 
 // Provider implements Anthropic Messages API via HTTP (without SDK).
@@ -51,17 +52,27 @@ func NewProvider(apiKey, apiBase string) *Provider {
 // NewProviderWithTimeout creates a provider with custom request timeout.
 func NewProviderWithTimeout(apiKey, apiBase string, timeoutSeconds int) *Provider {
 	baseURL := normalizeBaseURL(apiBase)
-	timeout := defaultRequestTimeout
+
+	// common.NewHTTPClient configures HTTP/2 health-check pings (ReadIdleTimeout)
+	// and a shortened idle-connection window so a pooled connection the server
+	// has since GOAWAY'd/closed is detected and discarded instead of reused
+	// mid-stream (see common.NewHTTPClient doc comment). Building the client by
+	// hand here (as this provider previously did) does not get that fix.
+	// NewHTTPClient only errors when given a non-empty, malformed proxy URL;
+	// this call always passes no proxy, so err is handled defensively rather
+	// than assumed impossible.
+	httpClient, err := common.NewHTTPClient("")
+	if err != nil {
+		httpClient = &http.Client{Timeout: defaultRequestTimeout}
+	}
 	if timeoutSeconds > 0 {
-		timeout = time.Duration(timeoutSeconds) * time.Second
+		httpClient.Timeout = time.Duration(timeoutSeconds) * time.Second
 	}
 
 	return &Provider{
-		apiKey:  apiKey,
-		apiBase: baseURL,
-		httpClient: &http.Client{
-			Timeout: timeout,
-		},
+		apiKey:     apiKey,
+		apiBase:    baseURL,
+		httpClient: httpClient,
 	}
 }
 
@@ -113,33 +124,22 @@ func (p *Provider) Chat(
 	}
 	defer resp.Body.Close()
 
+	// Check for HTTP errors. common.HandleErrorResponse also detects an HTML
+	// error body (misconfigured api_base or a proxy intercepting the request)
+	// and reports that distinctly, which the provider's previous hand-rolled
+	// per-status switch did not.
+	if resp.StatusCode != http.StatusOK {
+		return nil, common.HandleErrorResponse(resp, p.apiBase)
+	}
+
 	// Read response body
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("reading response body: %w", err)
 	}
 
-	// Check for HTTP errors with detailed messages
-	switch resp.StatusCode {
-	case http.StatusUnauthorized:
-		return nil, fmt.Errorf("authentication failed (401): check your API key")
-	case http.StatusTooManyRequests:
-		return nil, fmt.Errorf("rate limited (429): %s", string(body))
-	case http.StatusBadRequest:
-		return nil, fmt.Errorf("bad request (400): %s", string(body))
-	case http.StatusNotFound:
-		return nil, fmt.Errorf("endpoint not found (404): %s", string(body))
-	case http.StatusInternalServerError:
-		return nil, fmt.Errorf("internal server error (500): %s", string(body))
-	case http.StatusServiceUnavailable:
-		return nil, fmt.Errorf("service unavailable (503): %s", string(body))
-	default:
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, string(body))
-		}
-	}
-
-	// Parse response
+	// Parse response (Anthropic Messages wire format — not OpenAI-compatible,
+	// so this uses the provider's own parser rather than common.ParseResponse).
 	return parseResponseBody(body)
 }
 
@@ -174,7 +174,7 @@ func buildRequestBody(
 	options map[string]any,
 ) (map[string]any, error) {
 	// max_tokens is required and guaranteed by agent loop
-	maxTokens, ok := asInt(options["max_tokens"])
+	maxTokens, ok := common.AsInt(options["max_tokens"])
 	if !ok {
 		return nil, fmt.Errorf("max_tokens is required in options")
 	}
@@ -186,7 +186,7 @@ func buildRequestBody(
 	}
 
 	// Set temperature from options
-	if temp, ok := asFloat(options["temperature"]); ok {
+	if temp, ok := common.AsFloat(options["temperature"]); ok {
 		result["temperature"] = temp
 	}
 
@@ -460,34 +460,6 @@ func normalizeBaseURL(apiBase string) string {
 
 	// Add /v1 suffix (required by Anthropic Messages API)
 	return base + "/v1"
-}
-
-// Helper functions for type conversion
-
-func asInt(v any) (int, bool) {
-	switch val := v.(type) {
-	case int:
-		return val, true
-	case float64:
-		return int(val), true
-	case int64:
-		return int(val), true
-	default:
-		return 0, false
-	}
-}
-
-func asFloat(v any) (float64, bool) {
-	switch val := v.(type) {
-	case float64:
-		return val, true
-	case int:
-		return float64(val), true
-	case int64:
-		return float64(val), true
-	default:
-		return 0, false
-	}
 }
 
 // Anthropic API response structures

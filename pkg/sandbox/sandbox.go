@@ -64,7 +64,8 @@ type NetPortRule struct {
 //     CIDR-level filtering for the same code paths is enforced separately
 //     by the Go-side SSRFChecker (cfg.Sandbox.EgressAllowCIDRs and the SSRF
 //     allow_internal list); however, the SSRFChecker only applies to HTTP
-//     clients we control — a compiled binary spawned via workspace.shell
+//     clients we control — a compiled binary spawned via bash (ADR-036
+//     merged the former exec/workspace_shell/workspace_shell_bg into bash)
 //     bypasses it.
 //   - Pre-ABI v4 kernels silently degrade: ConnectPortRules are computed but
 //     not enforced. A boot-time WARN documents this.

@@ -6,7 +6,11 @@ package security_test
 
 import (
 	"context"
+	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -229,4 +233,126 @@ func TestSSRFChecker_DNSRebinding(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "SSRF")
 	})
+}
+
+// ---------------------------------------------------------------------------
+// CheckRedirect / SafeClient coverage — CheckRedirect (ssrf.go ~line 318) and
+// the SafeClient() constructor that wires it into an http.Client had ZERO
+// test coverage before this addition (the direct-dial path via SafeTransport
+// is covered above, but nothing exercised the redirect-following defense).
+// Gap identified in the whole-codebase Backend-High test-gap review
+// (2026-07-07). These tests use a real httptest.Server issuing real 30x
+// redirects, matching this file's existing DNS-rebinding-test style of
+// exercising real behavior rather than mocking internals.
+//
+// Each test allowlists the httptest.Server's own loopback address (127.0.0.1)
+// so the checker's dial-time check (SafeTransport) doesn't block the test
+// fixture itself — the interesting assertion is what happens to the
+// REDIRECT TARGET, which is deliberately NOT allowlisted.
+// ---------------------------------------------------------------------------
+
+// serverHostname extracts the bare hostname (no port) from an httptest.Server
+// URL, for allowlisting the test server's own address.
+func serverHostname(t *testing.T, rawURL string) string {
+	t.Helper()
+	u, err := url.Parse(rawURL)
+	require.NoError(t, err)
+	return u.Hostname()
+}
+
+// TestSSRFChecker_CheckRedirect_BlocksPrivateIPTarget verifies that a redirect
+// whose Location targets a private/internal IP is rejected by CheckRedirect
+// before any dial to that internal target is attempted.
+func TestSSRFChecker_CheckRedirect_BlocksPrivateIPTarget(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/redirect-private", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://10.1.2.3/internal", http.StatusFound)
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	checker := security.NewSSRFChecker([]string{serverHostname(t, server.URL)})
+	client := checker.SafeClient()
+
+	resp, err := client.Get(server.URL + "/redirect-private")
+	if resp != nil {
+		resp.Body.Close()
+	}
+	require.Error(t, err, "redirect to private IP 10.1.2.3 must be rejected, not followed")
+	assert.Contains(t, err.Error(), "SSRF")
+	assert.Contains(t, err.Error(), "private IP range")
+}
+
+// TestSSRFChecker_CheckRedirect_BlocksCloudMetadataTarget verifies a redirect
+// whose Location targets the cloud metadata endpoint (169.254.169.254) is
+// rejected, surfacing CheckIP's dedicated metadata-endpoint error message.
+func TestSSRFChecker_CheckRedirect_BlocksCloudMetadataTarget(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/redirect-metadata", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://169.254.169.254/latest/meta-data/", http.StatusFound)
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	checker := security.NewSSRFChecker([]string{serverHostname(t, server.URL)})
+	client := checker.SafeClient()
+
+	resp, err := client.Get(server.URL + "/redirect-metadata")
+	if resp != nil {
+		resp.Body.Close()
+	}
+	require.Error(t, err, "redirect to cloud metadata endpoint must be rejected, not followed")
+	assert.Contains(t, err.Error(), "SSRF")
+	assert.Contains(t, err.Error(), "cloud metadata endpoint")
+}
+
+// TestSSRFChecker_CheckRedirect_AllowsSameOriginRedirect verifies CheckRedirect
+// does NOT over-block: an ordinary same-origin redirect must still be
+// followed to completion and its real response body returned.
+func TestSSRFChecker_CheckRedirect_AllowsSameOriginRedirect(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/start", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/landed", http.StatusFound)
+	})
+	mux.HandleFunc("/landed", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	checker := security.NewSSRFChecker([]string{serverHostname(t, server.URL)})
+	client := checker.SafeClient()
+
+	resp, err := client.Get(server.URL + "/start")
+	require.NoError(t, err, "legitimate same-origin redirect must be followed, not blocked")
+	defer resp.Body.Close()
+	body, readErr := io.ReadAll(resp.Body)
+	require.NoError(t, readErr)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, "ok", string(body), "must have followed the redirect to /landed and read its real body")
+}
+
+// TestSSRFChecker_CheckRedirect_TooManyRedirectsRejected verifies the
+// len(via) >= 10 redirect-count limit in CheckRedirect: a server that keeps
+// issuing same-origin (otherwise-legal, allowlisted-host) redirects forever
+// is eventually cut off — the count limit is enforced independently of the
+// per-hop SSRF host check.
+func TestSSRFChecker_CheckRedirect_TooManyRedirectsRejected(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/loop", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/loop", http.StatusFound)
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	checker := security.NewSSRFChecker([]string{serverHostname(t, server.URL)})
+	client := checker.SafeClient()
+
+	resp, err := client.Get(server.URL + "/loop")
+	if resp != nil {
+		resp.Body.Close()
+	}
+	require.Error(t, err, "an infinite same-origin redirect loop must eventually be rejected")
+	assert.Contains(t, err.Error(), "too many redirects")
 }

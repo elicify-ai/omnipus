@@ -196,6 +196,33 @@ func TestExecApprovalManager_BinaryAllowanceCoversBareInvocation(t *testing.T) {
 		assert.True(t, res.Approved)
 		assert.True(t, res.AutoApproved)
 	})
+
+	// GAP TEST: matchAllowlistPattern's binary-allowance path compares
+	// policy.FirstToken(pattern) == policy.FirstToken(command). FirstToken
+	// trims surrounding whitespace before extracting the token, so a
+	// persisted pattern with stray leading/trailing whitespace (e.g. from a
+	// copy-paste into an "always allow" prompt, or a hand-edited allowlist
+	// file) must still match — this exercises FirstToken's trimming behavior
+	// at the real decision layer, not just in isolation. Added per the
+	// whole-codebase Backend-High test-gap review (2026-07-07) alongside the
+	// direct FirstToken unit tests in pkg/policy/firsttoken_test.go.
+	t.Run("persisted pattern with leading whitespace still matches via FirstToken trimming", func(t *testing.T) {
+		mgr := security.NewExecApprovalManager(security.ExecApprovalConfig{Mode: "ask"})
+		mgr.PersistPattern("  git") // leading whitespace, no wildcard -> binary allowance path
+		for _, cmd := range []string{"git", "git status", "git push origin main"} {
+			res := mgr.CheckApproval(cmd)
+			assert.True(t, res.Approved, "whitespace-padded persisted pattern must still allow %q", cmd)
+			assert.True(t, res.AutoApproved, "must be auto-approved (no prompt) for %q", cmd)
+		}
+	})
+
+	t.Run("persisted pattern with trailing whitespace still matches via FirstToken trimming", func(t *testing.T) {
+		mgr := security.NewExecApprovalManager(security.ExecApprovalConfig{Mode: "ask"})
+		mgr.PersistPattern("npm  ") // trailing whitespace, no wildcard -> binary allowance path
+		res := mgr.CheckApproval("npm install")
+		assert.True(t, res.Approved, "trailing-whitespace persisted pattern must still allow matching command")
+		assert.True(t, res.AutoApproved)
+	})
 }
 
 // TestExecApprovalManager_AllowlistFilePersistence validates that persisted patterns

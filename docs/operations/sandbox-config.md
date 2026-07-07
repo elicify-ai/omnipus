@@ -35,10 +35,7 @@ The gateway applies sandbox config exactly once, at boot. There is no hot-reload
     "browser_evaluate_enabled": false,
     "skill_trust": "warn_unverified",
     "prompt_injection_level": "medium",
-    "audit_log": true,
-    "experimental": {
-      "workspace_shell_enabled": false
-    }
+    "audit_log": true
   }
 }
 ```
@@ -55,9 +52,10 @@ Field reference (defaults applied by the boot validator when the field is omitte
 | `egress_allow_list` | `["registry.npmjs.org", "github.com", "raw.githubusercontent.com"]` | Host allow-list for the egress proxy used by Tier 2/Tier 3 children. |
 | `max_concurrent_dev_servers` | `4` | Tier 3 `web_serve` dev-mode cap across all agents (`pkg/config/sandbox.go:233`). |
 | `max_concurrent_builds` | `2` | Tier 2 `build_static` cap (`pkg/config/sandbox.go:237`). |
-| `dev_server_port_range` | `[18000, 18999]` | Inclusive port range for Tier 3 dev servers and `workspace.shell_bg`. Also feeds the Landlock bind/connect allow-list on ABI v4+. |
+| `dev_server_port_range` | `[18000, 18999]` | Inclusive port range for Tier 3 dev servers and `bash`'s background-session mode (ADR-036 merged the former `workspace.shell_bg` into `bash`). Also feeds the Landlock bind/connect allow-list on ABI v4+. |
 | `browser_evaluate_enabled` | `false` | Gates `browser.evaluate` (arbitrary JS execution). |
-| `experimental.workspace_shell_enabled` | `false` | Gates the `workspace.shell` and `workspace.shell_bg` builtins. Jim's seed forces this to `true`. |
+
+Note: there is no `experimental.workspace_shell_enabled` feature flag. `bash` (ADR-036's merge of the former `exec`/`workspace_shell`/`workspace_shell_bg`) is registered for every agent regardless of sandbox mode and is governed exclusively by each agent's explicit tool-policy entry (CLAUDE.md hard constraint 6) — set the `bash` policy to `deny` or `ask` per agent to restrict it, there is no global gate to flip.
 
 ## Modes
 

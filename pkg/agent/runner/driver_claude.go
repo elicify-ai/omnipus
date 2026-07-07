@@ -99,7 +99,10 @@ func NewClaudeDriver(consent ConsentHandler) *ClaudeDriver {
 
 // Run starts `claude -p --output-format stream-json` with the given options.
 // It returns a channel of RunEvents that is closed when the process exits.
-// FR-5.2: does NOT pass --dangerously-skip-permissions.
+// FR-5.2: buildArgs (below) DOES pass --dangerously-skip-permissions,
+// unconditionally (operator decision, 2026-07-05 — see the package doc's
+// SECURITY NOTE, issue #488, and the buildArgs doc comment for the full
+// rationale).
 //
 //nolint:dupl // driver-specific process lifecycle; the parallel exit/stderr handling shares shape with OpencodeDriver.Run but differs in per-CLI log prefixes and error-message text — a shared helper would obscure those per-CLI differences and risk behavior changes
 func (d *ClaudeDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEvent, error) {

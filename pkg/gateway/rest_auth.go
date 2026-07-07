@@ -313,27 +313,20 @@ func (a *restAPI) withOptionalAuth(handler http.HandlerFunc) http.HandlerFunc {
 		prefix := "Bearer "
 		if strings.HasPrefix(authHeader, prefix) {
 			rawToken := strings.TrimPrefix(authHeader, prefix)
-			// The human account(s) in Gateway.Users — looped, matching
-			// checkBearerAuth (pkg/gateway/auth.go): normally exactly one
-			// entry, but a pre-single-user-model install could still carry a
-			// leftover second account (config.warnAboutExtraUsers logs a
-			// WARN for this at load time).
-			for i := range cfg.Gateway.Users {
-				if cfg.Gateway.Users[i].VerifyToken(rawToken) == nil {
-					ctx := context.WithValue(r.Context(), UserContextKey{}, &cfg.Gateway.Users[i])
-					a.setCORSHeaders(w, r)
-					handler(w, r.WithContext(ctx))
-					return
+			// Resolve against configured identities via the shared resolver
+			// (resolveBearerIdentity, auth.go) — the same lookup checkBearerAuth
+			// and authenticateWS use. Unlike those two, a non-match here is NOT
+			// rejected: it falls through to the legacy env-token check below and
+			// then to anonymous pass-through, by design (this is the
+			// *optional*-auth path). CLITokenContextKey:true marks a CLI-token
+			// identity as NOT backed by a Gateway.Users row (see that key's doc
+			// for why callers like HandleLogout must check it before treating
+			// Username as a Gateway.Users lookup key).
+			if user, viaCLIToken, matched := resolveBearerIdentity(cfg, rawToken); matched {
+				ctx := context.WithValue(r.Context(), UserContextKey{}, user)
+				if viaCLIToken {
+					ctx = context.WithValue(ctx, CLITokenContextKey{}, true)
 				}
-			}
-			// The CLI's dedicated token — see checkBearerAuth for the same check.
-			// CLITokenContextKey:true marks this identity as NOT backed by a
-			// Gateway.Users row (see that key's doc for why callers like
-			// HandleLogout must check it before treating Username as a
-			// Gateway.Users lookup key).
-			if cfg.Gateway.VerifyCLIToken(rawToken) == nil {
-				ctx := context.WithValue(r.Context(), UserContextKey{}, &config.UserConfig{Username: "cli"})
-				ctx = context.WithValue(ctx, CLITokenContextKey{}, true)
 				a.setCORSHeaders(w, r)
 				handler(w, r.WithContext(ctx))
 				return

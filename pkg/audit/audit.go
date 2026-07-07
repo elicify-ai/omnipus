@@ -142,6 +142,7 @@ func IsValidEventName(e EventName) bool {
 		EventChannelRoutingDriftDrop,
 		EventChannelRoutingChanged,
 		EventChannelInstanceDeleted,
+		EventChannelInstanceConfigured,
 		// Cancel-flow events (FR-10, FR-11, FR-15, FR-17-21, FR-25a).
 		EventTurnCancelAttempt,
 		EventTurnCancelled,

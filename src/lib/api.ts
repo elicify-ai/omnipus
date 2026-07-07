@@ -94,7 +94,7 @@ import {
   SkillMarketplaceStatus as SkillMarketplaceStatusSchema,
   McpServer as McpServerSchema,
   McpServerTestResponse as McpServerTestResponseSchema,
-  ActivityEvent as ActivityEventSchema,
+  ActivityEventsResponse as ActivityEventsResponseSchema,
   // Wire-shape schemas used for raw-to-SPA transform validation:
   Message as WireMessageSchema,
   Session as WireSessionSchema,
@@ -289,6 +289,7 @@ import type {
   SkillMarketplaceStatus,
   SkillInstallRequest,
   ActivityEvent,
+  ActivityEventsResponse,
   UploadedFile,
   AgentToolsCfg,
   OnboardingCompleteRequest,
@@ -458,6 +459,7 @@ export type {
   SkillMarketplaceStatus,
   SkillInstallRequest,
   ActivityEvent,
+  ActivityEventsResponse,
   UploadedFile,
   AgentToolsCfg,
   OnboardingCompleteRequest,
@@ -2197,9 +2199,12 @@ export function runDoctor(): Promise<DoctorResult> {
 
 // ActivityEvent — re-exported from generated openapi-types (contract-first #8).
 // See contracts/components/schemas/ActivityEvent.yaml.
+// GET /activity returns ActivityEventsResponse ({ events, warning? }), not a bare
+// array — the backend surfaces a `warning` when a session store was unreadable
+// (partial results). See contracts/components/schemas/ActivityEventsResponse.yaml.
 
-export function fetchActivity(): Promise<ActivityEvent[]> {
-  return request<ActivityEvent[]>('/activity', undefined, z.array(ActivityEventSchema) as ZodType<ActivityEvent[]>)
+export function fetchActivity(): Promise<ActivityEventsResponse> {
+  return request<ActivityEventsResponse>('/activity', undefined, ActivityEventsResponseSchema)
 }
 
 // ── Credentials ───────────────────────────────────────────────────────────────

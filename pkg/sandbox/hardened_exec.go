@@ -1,5 +1,6 @@
 // Package sandbox — hardened-exec child wrapper for Tier 2 (build_static)
-// and Tier 3 (web_serve dev mode + workspace.shell_bg) tools.
+// and Tier 3 (web_serve dev mode + bash's background-session mode, ADR-036
+// merge of the former workspace.shell_bg) tools.
 //
 // Cross-platform contract — what each platform's applyPlatformHardening /
 // applyPostStartHardening actually does:
@@ -30,9 +31,10 @@
 // reliably inherits the kernel sandbox. Callers that build their own *exec.Cmd
 // and use ApplyChildHardening directly (instead of Run/StartLocked) do NOT get
 // that per-thread re-apply and must perform the spawn on an already-restricted
-// thread themselves (the workspace.shell_bg path routes through StartLocked for
-// exactly this reason). On older kernels, non-Linux platforms, and sandbox
-// mode "off", there is no Landlock/seccomp domain to inherit at all.
+// thread themselves (bash's background-session path, formerly workspace.shell_bg,
+// routes through StartLocked for exactly this reason). On older kernels,
+// non-Linux platforms, and sandbox mode "off", there is no Landlock/seccomp
+// domain to inherit at all.
 //
 // All platforms inject HTTP_PROXY/HTTPS_PROXY (lower- and upper-case) when
 // Limits.EgressProxyAddr is non-empty, and npm_config_cache when
@@ -218,8 +220,8 @@ func isAllowedChildEnvKey(name string) bool {
 
 // ScrubGatewayEnv returns a copy of os.Environ() filtered through the child
 // process allowlist (see allowedChildEnvKeys). It is exported so callers
-// outside this package (e.g. pkg/tools workspace.shell) can apply the same
-// filter regardless of whether the kernel sandbox is active.
+// outside this package (e.g. pkg/tools's bash, in shell.go) can apply the
+// same filter regardless of whether the kernel sandbox is active.
 //
 // Naming: the public function name is preserved across the v0.2 #155 item-3
 // rework (denylist → allowlist) so callers do not need to change. Internally
@@ -241,7 +243,8 @@ func ScrubGatewayEnv() []string {
 //	These keys CARRY SECRETS (API keys, OAuth bearer tokens). They are
 //	DELIBERATELY ABSENT from the generic allowedChildEnvKeys allowlist because
 //	the generic allowlist feeds EVERY hardened-exec child — every
-//	`workspace.shell`, `web_serve`, and `build_static` subprocess. Leaking an
+//	`bash` (ADR-036 merge of the former exec/workspace_shell/workspace_shell_bg),
+//	`web_serve`, and `build_static` subprocess. Leaking an
 //	Anthropic / OpenAI key into an arbitrary build script is exactly the
 //	fail-open class the v0.2 #155 allowlist rework closed.
 //
@@ -343,7 +346,7 @@ func RunnerCredentialEnvKeys() []string {
 // isRunnerCredentialEnvKey reports whether name is in the external-CLI runner
 // credential allowlist. It is NOT consulted by the generic isAllowedChildEnvKey
 // path — only by filterChildEnvForRunner — so these secret-bearing keys never
-// leak into a generic workspace.shell / build child.
+// leak into a generic bash / build child.
 func isRunnerCredentialEnvKey(name string) bool {
 	_, ok := runnerCredentialEnvKeys[name]
 	return ok
@@ -356,7 +359,7 @@ func isRunnerCredentialEnvKey(name string) bool {
 // This is the ONLY function that lets credential-bearing env vars through. It
 // is reserved for the Spec-4 external-agent CLI runner spawn path (FR-5.3 —
 // "the CLI's credentials are passed via the env-allowlist"). Generic children
-// (workspace.shell, web_serve, build_static) MUST keep using ScrubGatewayEnv,
+// (bash, web_serve, build_static) MUST keep using ScrubGatewayEnv,
 // which excludes these keys.
 //
 // The runner still spawns inside a git-worktree FS boundary and under the
@@ -843,9 +846,9 @@ func formatBytes(n int) string {
 
 // ApplyChildHardening exposes the platform-specific pre-start hardening
 // (Setpgid, Pdeathsig on Linux; Setpgid on darwin; no-op on windows) so
-// callers that need a non-blocking spawn (e.g. web_serve dev-mode and
-// workspace.shell_bg) can apply the same primitives without going through
-// Run.
+// callers that need a non-blocking spawn (e.g. web_serve dev-mode and bash's
+// background-session mode, ADR-036 merge of the former workspace.shell_bg)
+// can apply the same primitives without going through Run.
 //
 // Caller responsibility:
 // - Build the *exec.Cmd themselves (cmd.Dir, cmd.Env, etc.).

@@ -30,6 +30,7 @@ import (
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/gateway/ctxkey"
 )
 
@@ -714,6 +715,66 @@ func TestDeleteChannelInstance_EmitsAuditEvent(t *testing.T) {
 	}
 	assert.True(t, found,
 		"a channel.instance.deleted audit event must be emitted (ADR-029 FR-025); got events: %v",
+		func() []string {
+			evts := make([]string, 0, len(entries))
+			for _, e := range entries {
+				evts = append(evts, fmt.Sprintf("%v", e["event"]))
+			}
+			return evts
+		}())
+}
+
+// ── whole-codebase-review Backend-High finding #3: configure emits no audit ──
+
+// TestConfigureChannel_EmitsAuditEvent verifies a successful channel-instance
+// configure (a mutating, credential-touching write) emits a
+// channel.instance.configured audit entry with channel_id, type,
+// credential_cleanup_failed=false, and the set of top-level fields the request
+// touched — mirroring TestDeleteChannelInstance_EmitsAuditEvent above.
+// configureChannel previously had NO audit.Log call at all (Backend-High finding).
+func TestConfigureChannel_EmitsAuditEvent(t *testing.T) {
+	api, auditDir := newTestAPIWithAuditor(t)
+	// Wire an unlocked credential store so the token-bearing configure below
+	// can actually commit (Phase C's storeCredential call needs a working store).
+	t.Setenv("OMNIPUS_MASTER_KEY", testMasterKey)
+	credStore := credentials.NewStore(api.homePath + "/credentials.json")
+	require.NoError(t, credentials.Unlock(credStore), "unlock credential store")
+	api.credStore = credStore
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/channels/telegram/configure",
+		strings.NewReader(`{"token":"super-secret-123"}`))
+	r.Header.Set("Content-Type", "application/json")
+	api.configureChannel(w, r, "telegram")
+	require.Equal(t, http.StatusOK, w.Code, "configure must succeed; body=%s", w.Body.String())
+
+	entries := readAuditEventsForTest(t, auditDir)
+	require.NotEmpty(t, entries, "audit log must be non-empty after a configure")
+
+	var found bool
+	for _, e := range entries {
+		if e["event"] != string(audit.EventChannelInstanceConfigured) {
+			continue
+		}
+		found = true
+		assert.Equal(t, string(audit.DecisionAllow), e["decision"],
+			"happy-path configure decision must be allow")
+		details, _ := e["details"].(map[string]any)
+		require.NotNil(t, details, "configure audit entry must have a details map")
+		assert.Equal(t, "telegram", details["channel_id"], "audit channel_id must match")
+		assert.Equal(t, "telegram", details["type"], "audit type must be the base type")
+		assert.Equal(t, false, details["credential_cleanup_failed"],
+			"credential_cleanup_failed must be false on the happy path")
+		fields, _ := details["fields"].([]any)
+		assert.Contains(t, fields, "token_ref",
+			"fields must record the persisted token_ref (never the raw secret)")
+		for _, f := range fields {
+			assert.NotEqual(t, "super-secret-123", f, "raw secret value must never be logged")
+		}
+		break
+	}
+	assert.True(t, found,
+		"a channel.instance.configured audit event must be emitted; got events: %v",
 		func() []string {
 			evts := make([]string, 0, len(entries))
 			for _, e := range entries {
