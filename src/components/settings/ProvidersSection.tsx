@@ -62,6 +62,7 @@ import { PROVIDER_CATALOG } from '@/lib/generated/providerCatalog'
 import { resolveCatalogEntry } from '@/lib/providerMigration'
 import { ProviderRow } from './ProviderRow'
 import { ProviderPickerSheet } from './ProviderPickerSheet'
+import type { CatalogGroup } from './ProviderPickerSheet'
 import type { ProviderValidation, Provider } from '@/lib/api/generated/openapi-types'
 import type { ProviderCatalogEntry } from '@/lib/api/generated/openapi-types'
 
@@ -205,13 +206,10 @@ function configuredEntryIds(providers: Provider[]): Set<string> {
 }
 
 // Catalog entries grouped by company, excluding already-configured ids and
-// filtered by a free-text search (company name, label, or alias).
-export interface CatalogGroup {
-  company: string
-  logoSlug: string
-  entries: ProviderCatalogEntry[]
-}
-
+// filtered by a free-text search (company name, label, or alias). Returns
+// ProviderPickerSheet's CatalogGroup shape — owned there (see its doc
+// comment) since this function only builds the data to hand off to the
+// picker's Sheet; nothing in this file reads a group's fields itself.
 function buildCatalogGroups(excludeIds: Set<string>, query: string): CatalogGroup[] {
   const q = query.trim().toLowerCase()
   const order: string[] = []

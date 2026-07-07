@@ -505,8 +505,8 @@ interface ChatStore {
   //   server honors it when present and falls back to the agent's `model`
   //   config when absent.
   sendMessage: (content: string, opts?: { mediaRefs?: string[]; attachments?: MediaAttachment[]; model_name?: string }) => void
-  /** Validate an outbound MessageFrame against the generated Zod schema. Logs and dev-toasts on failure but never blocks the send. */
-  _validateOutboundFrame: (payload: unknown) => void
+  /** Validate an outbound MessageFrame against the generated Zod schema. Logs and dev-toasts on failure but never blocks the send. `sessionId` (the sending session, or the pending-bucket key when no session exists yet) is threaded through into the production telemetry record for operator correlation. */
+  _validateOutboundFrame: (payload: unknown, sessionId?: string | null) => void
   cancelStream: () => void
   respondToPairing: (deviceId: string, decision: 'approve' | 'reject') => void
 
@@ -1273,7 +1273,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
     // bump the dev counter + emit a dev-mode toast (matches the inbound
     // parseFrameSafe pattern in src/lib/ws.ts). A future required wire
     // field would otherwise be silently omitted on the way out.
-    _validateOutboundFrame: (payload: unknown) => {
+    _validateOutboundFrame: (payload: unknown, sessionId?: string | null) => {
       const result = MessageFrameSchema.safeParse(payload)
       if (result.success) return
       console.warn('[chat] outbound MessageFrame failed schema validation', result.error)
@@ -1285,7 +1285,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
       const description = first
         ? `${first.path.join('.') || 'root'}: ${first.message}`
         : result.error.message
-      _recordChatDiagnostic('chatOutboundFrameValidationFailed', { issue: description })
+      _recordChatDiagnostic('chatOutboundFrameValidationFailed', { issue: description, sessionId })
       // Gate the dev-toast on MODE (not DEV) so the toast also fires in
       // Vitest's 'test' mode, which bakes DEV=false at compile time. MODE
       // is 'production' for shipped builds so the toast is suppressed
@@ -1381,10 +1381,13 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
         withBucket(activeSessionId, (b) => {
           const msgs = getMessages(b)
-          let prevAssistantIdx = -1
-          for (let i = msgs.length - 1; i >= 0; i--) {
-            if (msgs[i].role === 'assistant') { prevAssistantIdx = i; break }
-          }
+          // Shares the single backward-scan implementation (findLastAssistantMessageId)
+          // with every other "find last assistant message" call site in this store.
+          // This site is the one exception that needs an array *index* (for the
+          // finalMsgs[prevAssistantIdx] splice below) rather than an id, so it
+          // resolves the id to an index via msgs.findIndex.
+          const prevAssistantId = findLastAssistantMessageId(b.messageOrder, b.messagesById)
+          const prevAssistantIdx = prevAssistantId !== null ? msgs.findIndex((m) => m.id === prevAssistantId) : -1
           let toolCallsAfterReset: typeof b.toolCalls = b.toolCalls
           let toolCallOrderAfterReset: string[] = b.toolCallOrder
           let finalMsgs = msgs
@@ -1454,7 +1457,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
           ...(mediaRefs.length > 0 ? { media: mediaRefs } : {}),
           ...metadataFrame,
         }
-        get()._validateOutboundFrame(payload)
+        get()._validateOutboundFrame(payload, activeSessionId)
         const sent = connection.send(payload)
 
         // W2-7c: clear the nextModel slot AFTER the WS send so a failed
@@ -1532,7 +1535,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
           ...(mediaRefs.length > 0 ? { media: mediaRefs } : {}),
           ...metadataFrame,
         }
-        get()._validateOutboundFrame(payload2)
+        get()._validateOutboundFrame(payload2, pendingSid)
         const sent = connection.send(payload2)
 
         // W2-7c: see comment in the active-session branch above — we
@@ -2242,7 +2245,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 }
                 // Fallback: O(N) scan (index miss — log a warning).
                 console.warn('[chat] tool_call_result: span index miss, falling back to O(N) scan', { parentCallId, callId: frame.call_id })
-                _recordChatDiagnostic('chatToolCallResultSpanIndexMiss', { parentCallId, callId: frame.call_id })
+                _recordChatDiagnostic('chatToolCallResultSpanIndexMiss', { parentCallId, callId: frame.call_id, sessionId: targetSid })
                 for (let i = bucket.messageOrder.length - 1; i >= 0; i--) {
                   const msgId = bucket.messageOrder[i]
                   const msg = bucket.messagesById[msgId]

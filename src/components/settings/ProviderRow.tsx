@@ -7,6 +7,9 @@ import { ProviderValidationBanner } from '@/components/providers/ProviderValidat
 import type { ProviderValidation, Provider } from '@/lib/api/generated/openapi-types'
 import type { ProviderCatalogEntry } from '@/lib/api/generated/openapi-types'
 
+// See ProvidersSection.tsx's file header for the FIX-N legend (this file
+// implements part of FIX-5, the Anthropic-endpoint chip below).
+
 // ---------------------------------------------------------------------------
 // Sub-component: a single configured-provider row (flat or inside a group)
 // ---------------------------------------------------------------------------

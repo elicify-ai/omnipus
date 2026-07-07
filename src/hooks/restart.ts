@@ -5,9 +5,6 @@ export const PENDING_RESTART_QUERY_KEY = ['pending-restart'] as const
 
 export const PENDING_RESTART_POLL_INTERVAL = 10_000
 
-// Re-export for backward compat with callers that imported ApiError from here
-export type { ApiError } from '@/lib/api'
-
 export function usePendingRestart(): {
   entries: PendingRestartEntry[]
   isLoading: boolean

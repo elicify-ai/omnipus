@@ -21,6 +21,7 @@ import { useChatStore } from './chat'
 import { useSessionStore } from './session'
 import { useConnectionStore } from './connection'
 import { useUiStore } from './ui'
+import * as telemetry from '@/lib/telemetry'
 
 const SID = 'outbound-validation-test-session'
 
@@ -192,5 +193,51 @@ describe('W2-29 _validateOutboundFrame', () => {
 
     expect(warnSpy).toHaveBeenCalled()
     vi.unstubAllEnvs()
+  })
+
+  it('emits a production logError telemetry record on schema validation failure, including sessionId (Wave 3 Fix 2 / Fix 1)', () => {
+    // Mirrors the established pattern in src/lib/api.test.ts (~L1596-1628) and
+    // src/store/chatPreferences.test.ts (~L108-124): force the production gate
+    // open, trigger the failure path, assert logError fires with the event
+    // name + diagnostic fields. Also covers Wave-3 Fix 1: sessionId must be
+    // present on this event (previously the only 2 of 16 diagnostic sites in
+    // chat.ts missing it), threaded through from sendMessage's call sites via
+    // the sessionId param added to _validateOutboundFrame.
+    vi.stubEnv('DEV', false)
+    vi.stubEnv('MODE', 'production')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const logErrorSpy = vi.spyOn(telemetry, 'logError')
+    const frame = {
+      type: 'message' as const,
+      // content omitted — Zod fails on the required field "content"
+      session_id: SID,
+    }
+
+    useChatStore.getState()._validateOutboundFrame(frame, SID)
+
+    expect(logErrorSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'chatOutboundFrameValidationFailed',
+        sessionId: SID,
+      }),
+    )
+    vi.unstubAllEnvs()
+  })
+
+  it('does NOT call logError in DEV/test builds — production/DEV split preserved', () => {
+    // Regression guard mirroring the DEV-vs-PROD split covered elsewhere in
+    // this file for the toast/console.warn behaviour — under the default
+    // test-mode gate (no env stubbing), _recordChatDiagnostic's own
+    // `!DEV && MODE !== 'test'` gate stays closed.
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const logErrorSpy = vi.spyOn(telemetry, 'logError')
+    const frame = {
+      type: 'message' as const,
+      session_id: SID,
+    }
+
+    useChatStore.getState()._validateOutboundFrame(frame, SID)
+
+    expect(logErrorSpy).not.toHaveBeenCalled()
   })
 })

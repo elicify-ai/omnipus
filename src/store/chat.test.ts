@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { act } from 'react'
-import { useChatStore, getMessages, makeBucketMessages, MAX_MESSAGES_PER_SESSION, clampToolResult, isClientTruncatedResult, evictMessageFromBucket } from './chat'
-import type { SessionChatState } from './chat'
+import { useChatStore, getMessages, makeBucketMessages, MAX_MESSAGES_PER_SESSION, clampToolResult, isClientTruncatedResult, evictMessageFromBucket, findLastAssistantMessageId } from './chat'
+import type { SessionChatState, ChatMessage } from './chat'
 import { useConnectionStore } from './connection'
 import { useSessionStore } from './session'
 import { useWhatsAppPairingStore } from './whatsappPairing'
@@ -1606,6 +1606,48 @@ describe('G4: clampToolResult — large result is clamped to ClientTruncatedResu
     const result = clampToolResult(serverTruncated)
     expect(result).toBe(serverTruncated)
     expect(isClientTruncatedResult(result)).toBe(false)
+  })
+})
+
+// ── Wave 3 Fix 3: findLastAssistantMessageId direct unit coverage ────────────
+//
+// findLastAssistantMessageId (chat.ts ~L265) is exported and used at 13 call
+// sites (WS-frame handlers, cancel, sendMessage's tool-call rebake), but
+// previously only had indirect coverage via reducer tests that happen to
+// exercise it. These are direct tests of the pure function itself.
+
+function makeMessage(id: string, role: ChatMessage['role']): ChatMessage {
+  return {
+    id,
+    role,
+    content: `content-${id}`,
+    timestamp: '2026-01-01T00:00:00.000Z',
+  } as ChatMessage
+}
+
+describe('findLastAssistantMessageId — direct unit coverage (Wave 3 Fix 3)', () => {
+  it('returns the id of the most recent assistant message in a mixed order', () => {
+    const msgs = [
+      makeMessage('u1', 'user'),
+      makeMessage('a1', 'assistant'),
+      makeMessage('u2', 'user'),
+      makeMessage('a2', 'assistant'),
+      makeMessage('u3', 'user'),
+    ]
+    const { messagesById, messageOrder } = makeBucketMessages(msgs)
+
+    expect(findLastAssistantMessageId(messageOrder, messagesById)).toBe('a2')
+  })
+
+  it('returns null when no assistant messages are present', () => {
+    const msgs = [makeMessage('u1', 'user'), makeMessage('u2', 'user'), makeMessage('s1', 'system')]
+    const { messagesById, messageOrder } = makeBucketMessages(msgs)
+
+    expect(findLastAssistantMessageId(messageOrder, messagesById)).toBeNull()
+  })
+
+  it('returns null for an empty order', () => {
+    expect(findLastAssistantMessageId([], {})).toBeNull()
   })
 })
 
