@@ -270,8 +270,7 @@ func TestProcessScheduled_AskToolAutoDenied(t *testing.T) {
 	stub := &dangerousStubTool{}
 	mia.Tools.Register(stub)
 	mia.StoreToolPolicy(&tools.ToolPolicyCfg{
-		DefaultPolicy: "allow",
-		Policies:      map[string]string{"dangerous_tool": "ask"},
+		Policies: map[string]string{"dangerous_tool": "ask"},
 	})
 
 	// Install an APPROVE-everything approver. If AutoDenyAsk is honored the run
@@ -430,8 +429,7 @@ func TestProcessScheduled_AskToolAutoDenied_EmitsScheduledAudit(t *testing.T) {
 	stub := &dangerousStubTool{}
 	mia.Tools.Register(stub)
 	mia.StoreToolPolicy(&tools.ToolPolicyCfg{
-		DefaultPolicy: "allow",
-		Policies:      map[string]string{"dangerous_tool": "ask"},
+		Policies: map[string]string{"dangerous_tool": "ask"},
 	})
 
 	// Auto-approve approver — must NEVER be consulted in a headless run.

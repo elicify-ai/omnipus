@@ -18,6 +18,7 @@ import (
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/coreagent"
 )
 
 // newMailboxTestAPI builds a restAPI with one agent ("mia"), an unlocked
@@ -463,17 +464,36 @@ func TestListMailboxes_EmptyAndConfigured(t *testing.T) {
 
 func TestSetAgentMailbox_GrantsEmailToolAllowsForDenyDefaultAgent(t *testing.T) {
 	// Only the Assistant seed carries the five email-tool allows; every other
-	// core agent is deny-by-default WITHOUT them, so a mailbox configured for
-	// e.g. Jim registered tools that policy silently hid (live-UAT find,
-	// 2026-07-03). Enabling a mailbox is the operator's explicit opt-in — the
-	// wire contract's `enabled` means "register the email tools" — so the save
-	// must fill in MISSING allow entries for deny-default agents. Explicit
-	// operator-set entries are intent and must never be overridden.
+	// agent is deny-by-default WITHOUT them (coreagent.NewCustomAgentToolsCfg
+	// — denyAllThenOverride — an explicit, fully-enumerated "deny" entry per
+	// tool, not an absent one; there is no default_policy field any more,
+	// CLAUDE.md hard constraint 6), so a mailbox configured for such an agent
+	// registered tools that policy silently hid (live-UAT find, 2026-07-03).
+	// Enabling a mailbox is the operator's explicit opt-in — the wire
+	// contract's `enabled` means "register the email tools" — so the save
+	// must flip the seed's deny-by-default email tools to allow. A genuine
+	// operator override survives: no seed ever sets an email tool to "ask"
+	// (only "allow" for Mia, or denyAllThenOverride's "deny" baseline for
+	// everyone else), so a persisted "ask" can only reflect a deliberate
+	// choice made via the Tool Policies UI/API, and grantEmailToolAllows must
+	// never override it.
 	api := newMailboxTestAPI(t, nil)
 	seedWorkspaceFile(t, api.homePath, "ws_my")
 
-	// Seed the on-disk config with a deny-default agent whose allowlist
-	// predates the mailbox: no email entries except an explicit send_email=deny.
+	// Seed the on-disk config with a real, fully-enumerated deny-by-default
+	// custom-agent tools_cfg via the ACTUAL seed constructor — not a
+	// hand-fabricated default_policy shape (that field was removed; a raw
+	// fixture using it silently stopped exercising this code path with no
+	// compile or runtime error, which is exactly how the original
+	// regression here went undetected).
+	seedPolicies := coreagent.NewCustomAgentToolsCfg().Builtin.Policies
+	policiesRaw := make(map[string]any, len(seedPolicies)+2)
+	for k, v := range seedPolicies {
+		policiesRaw[k] = string(v)
+	}
+	policiesRaw["create_task"] = "allow"
+	policiesRaw["send_email"] = "ask" // explicit operator intent — must survive
+
 	require.NoError(t, api.safeUpdateConfigJSON(func(m map[string]any) error {
 		m["agents"] = map[string]any{
 			"list": []any{
@@ -481,11 +501,7 @@ func TestSetAgentMailbox_GrantsEmailToolAllowsForDenyDefaultAgent(t *testing.T) 
 					"id": "mia",
 					"tools": map[string]any{
 						"builtin": map[string]any{
-							"default_policy": "deny",
-							"policies": map[string]any{
-								"create_task": "allow",
-								"send_email":  "deny", // explicit operator intent — must survive
-							},
+							"policies": policiesRaw,
 						},
 					},
 				},
@@ -507,12 +523,12 @@ func TestSetAgentMailbox_GrantsEmailToolAllowsForDenyDefaultAgent(t *testing.T) 
 	require.NoError(t, json.Unmarshal(raw, &cfg))
 	policies := cfg["agents"].(map[string]any)["list"].([]any)[0].(map[string]any)["tools"].(map[string]any)["builtin"].(map[string]any)["policies"].(map[string]any)
 
-	// Missing email tools were granted…
+	// Seed-deny email tools were granted…
 	for _, name := range []string{"read_inbox", "search_email", "read_message", "reply"} {
 		assert.Equal(t, "allow", policies[name], "tool %s must be granted", name)
 	}
-	// …the explicit deny survived…
-	assert.Equal(t, "deny", policies["send_email"], "explicit operator deny must never be overridden")
+	// …the explicit operator override survived…
+	assert.Equal(t, "ask", policies["send_email"], "explicit operator ask must never be overridden")
 	// …and unrelated entries are untouched.
 	assert.Equal(t, "allow", policies["create_task"])
 }
@@ -562,6 +578,100 @@ func TestSetAgentMailbox_DisabledSaveDoesNotGrantToolAllows(t *testing.T) {
 	}
 	assert.Equal(t, "allow", policies["create_task"], "unrelated entries must be untouched")
 	assert.Len(t, policies, 1, "only the pre-existing entry should remain")
+}
+
+// TestSetAgentMailbox_AlreadyEnabledEditDoesNotReGrantExplicitDeny is the
+// regression test for the privilege-widening bug found alongside the
+// grantEmailToolAllows dead-mailbox fix: grantEmailToolAllows used to run on
+// EVERY save where req.Enabled==true, not just the disabled→enabled
+// transition. Since a seed "deny" and an operator's later, deliberate "deny"
+// (set via the Tool Policies UI/API to lock an email tool back down AFTER
+// the mailbox was first enabled) are the same literal string in the data
+// model, ANY subsequent edit to an already-enabled mailbox (e.g. rotating
+// the password, changing the IMAP host) with enabled:true would silently
+// re-grant "allow" to a tool the operator had deliberately locked down — the
+// mirror image of the dead-mailbox bug the original fix closed.
+func TestSetAgentMailbox_AlreadyEnabledEditDoesNotReGrantExplicitDeny(t *testing.T) {
+	api := newMailboxTestAPI(t, nil)
+	seedWorkspaceFile(t, api.homePath, "ws_my")
+
+	// 1. Seed a real, fully-enumerated deny-by-default tools_cfg (the actual
+	//    seed constructor, not a hand-fabricated shape) and enable the
+	//    mailbox for the FIRST time — the disabled→enabled transition. This
+	//    must still grant the seed-deny email tools, proving the original
+	//    fix (TestSetAgentMailbox_GrantsEmailToolAllowsForDenyDefaultAgent)
+	//    stays intact.
+	seedPolicies := coreagent.NewCustomAgentToolsCfg().Builtin.Policies
+	policiesRaw := make(map[string]any, len(seedPolicies))
+	for k, v := range seedPolicies {
+		policiesRaw[k] = string(v)
+	}
+	require.NoError(t, api.safeUpdateConfigJSON(func(m map[string]any) error {
+		m["agents"] = map[string]any{
+			"list": []any{
+				map[string]any{
+					"id": "mia",
+					"tools": map[string]any{
+						"builtin": map[string]any{
+							"policies": policiesRaw,
+						},
+					},
+				},
+			},
+		}
+		return nil
+	}))
+
+	firstBody := `{"enabled":true,"imap_host":"i","smtp_host":"s","username":"mia@x.com","password":"p"}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/mia/mailboxes/ws_my", strings.NewReader(firstBody))
+	r.Header.Set("Content-Type", "application/json")
+	api.setAgentMailbox(w, r, "mia", "ws_my")
+	require.Equal(t, http.StatusOK, w.Code, "first enable body=%s", w.Body.String())
+
+	raw, err := os.ReadFile(filepath.Join(api.homePath, "config.json"))
+	require.NoError(t, err)
+	var cfg map[string]any
+	require.NoError(t, json.Unmarshal(raw, &cfg))
+	policies := cfg["agents"].(map[string]any)["list"].([]any)[0].(map[string]any)["tools"].(map[string]any)["builtin"].(map[string]any)["policies"].(map[string]any)
+	require.Equal(t, "allow", policies["send_email"],
+		"the disabled→enabled transition must still grant the seed-deny email tool")
+
+	// 2. Operator deliberately locks send_email back down to "deny" (e.g. via
+	//    the Tool Policies UI/API) — simulated as a direct config write,
+	//    since it is indistinguishable in the data model from the seed's
+	//    original "deny".
+	require.NoError(t, api.safeUpdateConfigJSON(func(m map[string]any) error {
+		list := m["agents"].(map[string]any)["list"].([]any)
+		agentMap := list[0].(map[string]any)
+		builtin := agentMap["tools"].(map[string]any)["builtin"].(map[string]any)
+		builtin["policies"].(map[string]any)["send_email"] = "deny"
+		return nil
+	}))
+
+	// 3. A SECOND save where the mailbox was ALREADY enabled — only the IMAP
+	//    host changes, enabled stays true throughout — must NOT re-grant
+	//    send_email.
+	secondBody := `{"enabled":true,"imap_host":"i2","smtp_host":"s","username":"mia@x.com"}`
+	w2 := httptest.NewRecorder()
+	r2 := httptest.NewRequest(http.MethodPut, "/api/v1/agents/mia/mailboxes/ws_my", strings.NewReader(secondBody))
+	r2.Header.Set("Content-Type", "application/json")
+	api.setAgentMailbox(w2, r2, "mia", "ws_my")
+	require.Equal(t, http.StatusOK, w2.Code, "second (already-enabled) edit body=%s", w2.Body.String())
+
+	raw2, err := os.ReadFile(filepath.Join(api.homePath, "config.json"))
+	require.NoError(t, err)
+	var cfg2 map[string]any
+	require.NoError(t, json.Unmarshal(raw2, &cfg2))
+	policies2 := cfg2["agents"].(map[string]any)["list"].([]any)[0].(map[string]any)["tools"].(map[string]any)["builtin"].(map[string]any)["policies"].(map[string]any)
+	assert.Equal(t, "deny", policies2["send_email"],
+		"an edit to an ALREADY-enabled mailbox must NOT re-grant an operator's explicit deny (privilege-widening regression)")
+	// The other seed-deny email tools (granted in step 1) must remain
+	// allowed — this proves the fix is scoped to skipping the re-grant on an
+	// already-enabled save, not a blanket regression of the original grant.
+	for _, name := range []string{"read_inbox", "search_email", "read_message", "reply"} {
+		assert.Equal(t, "allow", policies2[name], "tool %s must remain granted from the first enable", name)
+	}
 }
 
 // --- Workspace-existence gate (fix 2) ---

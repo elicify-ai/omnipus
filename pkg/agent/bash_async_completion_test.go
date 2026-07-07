@@ -131,8 +131,7 @@ func newBashAsyncTestLoop(t *testing.T, provider *testutil.ScenarioProvider) (
 			continue
 		}
 		ag.StoreToolPolicy(&tools.ToolPolicyCfg{
-			DefaultPolicy: "allow",
-			Policies:      map[string]string{"bash": "allow"},
+			Policies: map[string]string{"bash": "allow"},
 		})
 	}
 

@@ -74,6 +74,17 @@ var Version = "0.0.0-dev"
 // and map it to HTTP 409.
 var errConflict = errors.New("optimistic concurrency conflict")
 
+// errAgentVanishedDuringUpdate is the sentinel a persist closure returns when
+// its fresh, ID-based lookup against the on-disk agents list (read inside
+// a.configMu, at the top of updateConfigJSONLocked) fails to find the target
+// agent — e.g. a concurrent DELETE /agents/{id} raced this PUT in the window
+// between the handler's fast-path existence check (run before the lock, on a
+// config snapshot that can go stale) and the locked critical section actually
+// running. Silently returning nil in that case would be a phantom-200: the
+// caller's PUT reports success for an update that touched nothing because the
+// target no longer exists. Callers test with errors.Is and map it to HTTP 404.
+var errAgentVanishedDuringUpdate = errors.New("agent no longer exists")
+
 // restAPI holds shared dependencies for all REST endpoint handlers.
 // Handlers are registered as method-dispatching http.HandlerFuncs in gateway.go.
 // Note: do NOT cache *config.Config here — use a.agentLoop.GetConfig() for
@@ -1715,9 +1726,8 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 // all (the external runner manages its own tools), so this stays nil for that
 // variant.
 type agentCreateToolsCfgInput struct {
-	BuiltinDefaultPolicy string
-	BuiltinPolicies      map[string]string
-	MCPServers           []agentCreateMCPServerInput
+	BuiltinPolicies map[string]string
+	MCPServers      []agentCreateMCPServerInput
 }
 
 // agentCreateMCPServerInput is one entry of agentCreateToolsCfgInput.MCPServers.
@@ -1767,20 +1777,154 @@ func decodeAgentCreateVariant(w http.ResponseWriter, raw []byte, wireType, varia
 	return true
 }
 
-// wireStringMap converts an optional generated map pointer whose values are a
-// string-based enum (e.g. *map[string]AgentCreateRequestMainToolsCfgBuiltinPolicies)
-// into a plain map[string]string, preserving nil-vs-empty: a nil input
-// returns nil (field absent); a non-nil (possibly empty) input returns a
-// newly allocated map with every value stringified.
-func wireStringMap[V ~string](in *map[string]V) map[string]string {
+// wireStringMap converts a generated map whose values are a string-based enum
+// (e.g. map[string]AgentCreateRequestMainToolsCfgBuiltinPolicies) into a plain
+// map[string]string, preserving nil-vs-non-nil: a nil input returns nil
+// (field absent); a non-nil (possibly empty) input returns a newly allocated
+// map with every value stringified. Builtin.Policies is a required,
+// non-pointer map on the wire (there is no default_policy fallback any more —
+// CLAUDE.md hard constraint 6), so this takes the map directly rather than a
+// pointer-to-map.
+func wireStringMap[V ~string](in map[string]V) map[string]string {
 	if in == nil {
 		return nil
 	}
-	out := make(map[string]string, len(*in))
-	for k, v := range *in {
+	out := make(map[string]string, len(in))
+	for k, v := range in {
 		out[k] = string(v)
 	}
 	return out
+}
+
+// agentToolPolicyMapFromWire converts a generated per-tool policy map (whose
+// values are a request-specific string enum, e.g.
+// AgentUpdateRequestToolsCfgBuiltinPolicies) into config.ToolPolicy values.
+// Used to build a candidate config.AgentBuiltinToolsCfg for
+// config.ValidateToolPolicyCoverage before persisting a write (CLAUDE.md hard
+// constraint 6) — never mutates anything, purely a type conversion.
+func agentToolPolicyMapFromWire[V ~string](in map[string]V) map[string]config.ToolPolicy {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]config.ToolPolicy, len(in))
+	for k, v := range in {
+		out[k] = config.ToolPolicy(v)
+	}
+	return out
+}
+
+// validateCandidateToolPolicyCoverage clones cfg, applies mutate to the
+// clone, then checks tool-policy coverage (config.ValidateToolPolicyCoverage,
+// CLAUDE.md hard constraint 6). Returns gaps (nil = covered) or an error if
+// cloning failed. Shared by all 4 REST write paths that must reject an
+// incomplete tool-policy map before persisting: createAgent, updateAgent,
+// updateAgentTools (this file) and putToolPolicies (rest_tool_policies.go).
+//
+// Callers must hold a.configMu across both this validation call and the
+// subsequent persist (via updateConfigJSONLocked) so the two steps form one
+// atomic critical section — otherwise a second concurrent write could slip
+// in between validation and persist and reintroduce the exact coverage gap
+// this check exists to prevent (see updateConfigJSONLocked's doc comment).
+func (a *restAPI) validateCandidateToolPolicyCoverage(
+	cfg *config.Config,
+	mutate func(*config.Config),
+) ([]config.CoverageGap, error) {
+	candidateCfg, err := cfg.Clone()
+	if err != nil {
+		return nil, err
+	}
+	mutate(candidateCfg)
+	return config.ValidateToolPolicyCoverage(candidateCfg, buildKnownBuiltinToolNames()), nil
+}
+
+// withToolPolicyCoverageGuard runs the shared "fetch-fresh, validate,
+// persist" critical section for every write path that must reject an
+// incomplete tool-policy map before persisting (CLAUDE.md hard constraint 6).
+// It always fetches the CURRENT live config fresh, INSIDE a.configMu — never
+// a caller-supplied snapshot — because fetching before the lock (as
+// updateAgent/updateAgentTools used to) reopens the exact TOCTOU window the
+// lock exists to close (see updateConfigJSONLocked's doc comment): a
+// concurrent write between the pre-lock fetch and the lock acquisition could
+// swap the live config, so validation would silently run against stale data.
+//
+// mutate receives a clone of that freshly-fetched config and must locate any
+// agent it touches by ID (never a pre-lock-computed slice index — a
+// concurrently-changed agent list can shift or shrink that index between
+// fetch and lock). gapErrMsg renders the 400 body when coverage is
+// incomplete. persist is handed to updateConfigJSONLocked as-is: it must
+// perform its own fresh, ID-based lookup against the on-disk JSON map (never
+// trust a pre-lock index there either) and return errAgentVanishedDuringUpdate
+// if the target it expects to find is gone (mapped to 404 below), or
+// errConflict for an optimistic-concurrency mismatch (mapped to 409) — both
+// sentinels are safe to check unconditionally since only the call sites that
+// actually use them will ever produce them.
+//
+// mutate may be nil: some writes (e.g. updateAgent fields that have nothing
+// to do with tools_cfg — default flag, model, skills, …) must NOT run the
+// coverage check at all, because config.ValidateToolPolicyCoverage checks
+// EVERY agent in the whole roster, not just the one this write touches. A
+// pre-existing agent with an incomplete tools map (a config seeded before
+// full coverage enumeration, or a bare test fixture) would then turn an
+// entirely unrelated field update into a spurious 400 — a real regression
+// caught by rest_routing_test.go's default-flag fixtures, which carry no
+// Tools field at all. Skipping the check when mutate is nil restores the
+// original "only validate when this write actually changes tool policy"
+// behavior while still closing the TOCTOU for call sites that DO validate.
+//
+// Returns false once it has already written the HTTP response (error/reject
+// case); the caller just returns in that case.
+func (a *restAPI) withToolPolicyCoverageGuard(
+	w http.ResponseWriter,
+	mutate func(*config.Config),
+	gapErrMsg func(gaps []config.CoverageGap) string,
+	persist func(map[string]any) error,
+	persistErrLogMsg string,
+) bool {
+	a.configMu.Lock()
+	defer a.configMu.Unlock()
+
+	if mutate != nil {
+		cfg := a.agentLoop.GetConfig()
+		gaps, err := a.validateCandidateToolPolicyCoverage(cfg, mutate)
+		if err != nil {
+			jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("tool policy coverage check: %v", err))
+			return false
+		}
+		if len(gaps) > 0 {
+			jsonErr(w, http.StatusBadRequest, gapErrMsg(gaps))
+			return false
+		}
+	}
+	if err := a.updateConfigJSONLocked(persist); err != nil {
+		if errors.Is(err, errConflict) {
+			writeJSON(w, http.StatusConflict, gen.ErrorResponse{
+				Error: "conflict",
+				Code:  strPtr("conflict"),
+			})
+			return false
+		}
+		if errors.Is(err, errAgentVanishedDuringUpdate) {
+			jsonErr(w, http.StatusNotFound, err.Error())
+			return false
+		}
+		slog.Error(persistErrLogMsg, "error", err)
+		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
+		return false
+	}
+	return true
+}
+
+// joinCoverageGapMessages renders a []config.CoverageGap as a single
+// semicolon-joined human-readable string for 400 error bodies — the smallest
+// adaptation for existing strings.Join call sites now that
+// config.ValidateToolPolicyCoverage returns a structured []CoverageGap
+// instead of []string (see CoverageGap.String's doc comment).
+func joinCoverageGapMessages(gaps []config.CoverageGap) string {
+	msgs := make([]string, len(gaps))
+	for i, g := range gaps {
+		msgs[i] = g.String()
+	}
+	return strings.Join(msgs, "; ")
 }
 
 // agentCreateShellPolicyFromWire converts either variant's shell_policy wire
@@ -1806,20 +1950,24 @@ func agentCreateShellPolicyFromWire(wp *struct {
 
 // agentCreateToolsCfgFromWire converts either variant's tools_cfg wire object
 // into the common agentCreateToolsCfgInput, or nil when tc is nil. Generic
-// over DP/P — the two per-variant enum types oapi-codegen emits for
-// Builtin.DefaultPolicy and Builtin.Policies' map values
-// (AgentCreateRequestMainToolsCfgBuiltin* vs
-// AgentCreateRequestSubagentToolsCfgBuiltin*, both underlying type string) —
-// since that's the only reason ToolsCfg isn't structurally identical across
-// variants the way ShellPolicy is; every other field (including the
-// Mcp.Servers element shape, which carries no enum) is identical, so the
-// whole tools_cfg object is accepted directly (Go's generic type inference
-// resolves DP/P from tc's concrete argument type) rather than pre-extracting
-// each sub-field per call site.
-func agentCreateToolsCfgFromWire[DP ~string, P ~string](tc *struct {
+// over P — the per-variant enum type oapi-codegen emits for Builtin.Policies'
+// map values (AgentCreateRequestMainToolsCfgBuiltinPolicies vs
+// AgentCreateRequestSubagentToolsCfgBuiltinPolicies, both underlying type
+// string) — since that's the only reason ToolsCfg isn't structurally
+// identical across variants the way ShellPolicy is; every other field
+// (including the Mcp.Servers element shape, which carries no enum) is
+// identical, so the whole tools_cfg object is accepted directly (Go's
+// generic type inference resolves P from tc's concrete argument type) rather
+// than pre-extracting each sub-field per call site.
+//
+// There is no default_policy field on the wire (CLAUDE.md hard constraint
+// 6): Builtin.Policies is a required, fully-enumerated per-tool map.
+// createAgent enforces completeness via config.ValidateToolPolicyCoverage
+// against a candidate config snapshot before persisting — this helper only
+// normalizes the wire shape.
+func agentCreateToolsCfgFromWire[P ~string](tc *struct {
 	Builtin *struct {
-		DefaultPolicy *DP           `json:"default_policy,omitempty"`
-		Policies      *map[string]P `json:"policies,omitempty"`
+		Policies map[string]P `json:"policies"`
 	} `json:"builtin,omitempty"`
 	Mcp *struct {
 		Servers *[]struct {
@@ -1834,9 +1982,6 @@ func agentCreateToolsCfgFromWire[DP ~string, P ~string](tc *struct {
 	}
 	out := &agentCreateToolsCfgInput{}
 	if tc.Builtin != nil {
-		if tc.Builtin.DefaultPolicy != nil {
-			out.BuiltinDefaultPolicy = string(*tc.Builtin.DefaultPolicy)
-		}
 		out.BuiltinPolicies = wireStringMap(tc.Builtin.Policies)
 	}
 	if tc.Mcp != nil && tc.Mcp.Servers != nil {
@@ -2185,26 +2330,29 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		}
 		ac.DelegationPolicy = dp
 	}
-	// Seed the privilege rail (FR-008/FR-022): custom agents always get
-	// system.*: deny unless the caller explicitly overrides it. subagent_3p
+	// Seed the privilege rail (FR-008/FR-022): custom agents always get every
+	// static builtin tool explicitly denied except a narrow, conservative
+	// read-only allow-list (coreagent.NewCustomAgentToolsCfg —
+	// denyAllThenOverride), unless the caller explicitly overrides individual
+	// entries. There is no wildcard involved anywhere in this model (the old
+	// "system.*" glob matched zero real tool names and was retired). subagent_3p
 	// has no tools_cfg property at all (toolsCfgIn stays nil), so it always
 	// falls through to the seeded baseCfg — matching "the runner has its own
 	// tools" (field matrix).
 	baseCfg := coreagent.NewCustomAgentToolsCfg()
 	if toolsCfgIn != nil {
 		builtin := config.AgentBuiltinToolsCfg{
-			// Start with the base default_policy=allow.
-			DefaultPolicy: baseCfg.Builtin.DefaultPolicy,
-			// Inherit the system.*: deny seed.
+			// Inherit the fully-enumerated deny-by-default seed (every static
+			// tool present with an explicit "deny" or "allow" entry, no
+			// wildcard) so the merged map stays complete even when the
+			// caller's policies map is sparse.
 			Policies: make(map[string]config.ToolPolicy, len(baseCfg.Builtin.Policies)),
 		}
 		for k, v := range baseCfg.Builtin.Policies {
 			builtin.Policies[k] = v
 		}
-		if toolsCfgIn.BuiltinDefaultPolicy != "" {
-			builtin.DefaultPolicy = config.ToolPolicy(toolsCfgIn.BuiltinDefaultPolicy)
-		}
-		// Merge caller-supplied policies; caller's system.* entry overrides seed.
+		// Merge caller-supplied policies; the caller's per-tool entry (exact
+		// name, never a wildcard) overrides the corresponding seed entry.
 		for k, v := range toolsCfgIn.BuiltinPolicies {
 			builtin.Policies[k] = config.ToolPolicy(v)
 		}
@@ -2220,89 +2368,112 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		// No caller-supplied tools config: use the full base config.
 		ac.Tools = baseCfg
 	}
-	// Persist the new agent to config.json BEFORE mutating the live config.
-	// If persistence fails, the in-memory config stays consistent with disk.
-	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
-		agents, _ := m["agents"].(map[string]any)
-		if agents == nil {
-			agents = map[string]any{}
-			m["agents"] = agents
-		}
-		list, _ := agents["list"].([]any)
-		newAgent := map[string]any{
-			"id":   ac.ID,
-			"name": ac.Name,
-			"type": string(ac.Type),
-		}
-		if ac.Description != "" {
-			newAgent["description"] = ac.Description
-		}
-		if ac.Color != "" {
-			newAgent["color"] = ac.Color
-		}
-		if ac.Icon != "" {
-			newAgent["icon"] = ac.Icon
-		}
-		if ac.Model != nil {
-			modelMap := map[string]any{"primary": ac.Model.Primary}
-			// O3 two-field model: persist the explicit primary provider so it
-			// round-trips through a config reload and drives resolution.
-			if ac.Model.Provider != "" {
-				modelMap["provider"] = ac.Model.Provider
+	// CLAUDE.md hard constraint 6 / config.ValidateToolPolicyCoverage: reject
+	// the create if the new agent's tool-policy map — together with the
+	// global sandbox.tool_policies — would leave any static builtin tool
+	// without an explicit policy entry. Validated against a candidate config
+	// snapshot (the live config plus this new agent appended); nothing here
+	// persists or mutates the live in-memory config, so a rejected request
+	// leaves no partial state behind.
+	//
+	// The validate step and the persist step below run inside ONE
+	// a.configMu-locked critical section (closing a TOCTOU race two
+	// concurrent creates could otherwise open — see updateConfigJSONLocked's
+	// doc comment), via withToolPolicyCoverageGuard: it returns false once it
+	// has already written the HTTP response (error case), so the caller just
+	// returns.
+	if ok := a.withToolPolicyCoverageGuard(
+		w,
+		func(c *config.Config) {
+			c.Agents.List = append(c.Agents.List, ac)
+		},
+		func(gaps []config.CoverageGap) string {
+			return fmt.Sprintf(
+				"tool policy coverage incomplete for new agent (%d gap(s)): %s",
+				len(gaps), joinCoverageGapMessages(gaps),
+			)
+		},
+		// Persist the new agent to config.json BEFORE mutating the live config.
+		// If persistence fails, the in-memory config stays consistent with disk.
+		func(m map[string]any) error {
+			agents, _ := m["agents"].(map[string]any)
+			if agents == nil {
+				agents = map[string]any{}
+				m["agents"] = agents
 			}
-			newAgent["model"] = modelMap
-		}
-		if ac.Tools != nil {
-			builtinMap := map[string]any{
-				"default_policy": string(ac.Tools.Builtin.DefaultPolicy),
+			list, _ := agents["list"].([]any)
+			newAgent := map[string]any{
+				"id":   ac.ID,
+				"name": ac.Name,
+				"type": string(ac.Type),
 			}
-			if len(ac.Tools.Builtin.Policies) > 0 {
-				policies := make(map[string]string, len(ac.Tools.Builtin.Policies))
-				for k, v := range ac.Tools.Builtin.Policies {
-					policies[k] = string(v)
+			if ac.Description != "" {
+				newAgent["description"] = ac.Description
+			}
+			if ac.Color != "" {
+				newAgent["color"] = ac.Color
+			}
+			if ac.Icon != "" {
+				newAgent["icon"] = ac.Icon
+			}
+			if ac.Model != nil {
+				modelMap := map[string]any{"primary": ac.Model.Primary}
+				// O3 two-field model: persist the explicit primary provider so it
+				// round-trips through a config reload and drives resolution.
+				if ac.Model.Provider != "" {
+					modelMap["provider"] = ac.Model.Provider
 				}
-				builtinMap["policies"] = policies
+				newAgent["model"] = modelMap
 			}
-			toolsCfg := map[string]any{"builtin": builtinMap}
-			if len(ac.Tools.MCP.Servers) > 0 {
-				servers := make([]map[string]any, 0, len(ac.Tools.MCP.Servers))
-				for _, s := range ac.Tools.MCP.Servers {
-					srv := map[string]any{"id": s.ID}
-					if len(s.Tools) > 0 {
-						srv["tools"] = s.Tools
+			if ac.Tools != nil {
+				builtinMap := map[string]any{}
+				if len(ac.Tools.Builtin.Policies) > 0 {
+					policies := make(map[string]string, len(ac.Tools.Builtin.Policies))
+					for k, v := range ac.Tools.Builtin.Policies {
+						policies[k] = string(v)
 					}
-					servers = append(servers, srv)
+					builtinMap["policies"] = policies
 				}
-				toolsCfg["mcp"] = map[string]any{"servers": servers}
+				toolsCfg := map[string]any{"builtin": builtinMap}
+				if len(ac.Tools.MCP.Servers) > 0 {
+					servers := make([]map[string]any, 0, len(ac.Tools.MCP.Servers))
+					for _, s := range ac.Tools.MCP.Servers {
+						srv := map[string]any{"id": s.ID}
+						if len(s.Tools) > 0 {
+							srv["tools"] = s.Tools
+						}
+						servers = append(servers, srv)
+					}
+					toolsCfg["mcp"] = map[string]any{"servers": servers}
+				}
+				newAgent["tools"] = toolsCfg
 			}
-			newAgent["tools"] = toolsCfg
-		}
-		if len(ac.Skills) > 0 {
-			newAgent["skills"] = ac.Skills
-		}
-		if ac.Subagents != nil && ac.Subagents.Executor != nil {
-			newAgent["subagents"] = map[string]any{
-				"executor": executorConfigToMap(ac.Subagents.Executor),
+			if len(ac.Skills) > 0 {
+				newAgent["skills"] = ac.Skills
 			}
-		}
-		if ac.DelegationPolicy != nil {
-			newAgent["delegation_policy"] = delegationPolicyToMap(ac.DelegationPolicy)
-		}
-		if ac.ShellPolicy != nil {
-			shellPolicyMap := map[string]any{}
-			if ac.ShellPolicy.EnableDenyPatterns {
-				shellPolicyMap["enable_deny_patterns"] = true
+			if ac.Subagents != nil && ac.Subagents.Executor != nil {
+				newAgent["subagents"] = map[string]any{
+					"executor": executorConfigToMap(ac.Subagents.Executor),
+				}
 			}
-			if len(ac.ShellPolicy.CustomDenyPatterns) > 0 {
-				shellPolicyMap["custom_deny_patterns"] = ac.ShellPolicy.CustomDenyPatterns
+			if ac.DelegationPolicy != nil {
+				newAgent["delegation_policy"] = delegationPolicyToMap(ac.DelegationPolicy)
 			}
-			newAgent["shell_policy"] = shellPolicyMap
-		}
-		agents["list"] = append(list, newAgent)
-		return nil
-	}); err != nil {
-		slog.Error("rest: save config for new agent", "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
+			if ac.ShellPolicy != nil {
+				shellPolicyMap := map[string]any{}
+				if ac.ShellPolicy.EnableDenyPatterns {
+					shellPolicyMap["enable_deny_patterns"] = true
+				}
+				if len(ac.ShellPolicy.CustomDenyPatterns) > 0 {
+					shellPolicyMap["custom_deny_patterns"] = ac.ShellPolicy.CustomDenyPatterns
+				}
+				newAgent["shell_policy"] = shellPolicyMap
+			}
+			agents["list"] = append(list, newAgent)
+			return nil
+		},
+		"rest: save config for new agent",
+	); !ok {
 		return
 	}
 	// Persist the create-time soul to SOUL.md. createAgent previously
@@ -2827,269 +2998,382 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	if req.Model != nil {
 		newModel = *req.Model
 	}
-	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
-		agents, _ := m["agents"].(map[string]any)
-		if agents == nil {
-			return fmt.Errorf("agents section not found in config")
-		}
-		// Per-agent fields: name, model, timeout_seconds, max_tool_iterations,
-		// steering_mode, tool_feedback — stored under agents.list[*].
-		list, _ := agents["list"].([]any)
-		for _, entry := range list {
-			agentMap, ok := entry.(map[string]any)
-			if !ok {
-				continue
-			}
-			if agentMap["id"] == id {
-				// Optimistic concurrency check (runs INSIDE configMu so two
-				// concurrent PUTs cannot both pass the version check and then
-				// both write — closing the TOCTOU race that existed when this
-				// check ran against the in-memory cached config outside the
-				// lock). If the caller sent an updated_at value, it must match
-				// the persisted value exactly; otherwise another edit raced and
-				// we abort the mutate (nothing is written). The caller maps
-				// errConflict to HTTP 409.
-				if req.UpdatedAt != nil {
-					persistedStr, _ := agentMap["updated_at"].(string)
-					if persistedStr != "" {
-						persistedAt, parseErr := time.Parse(time.RFC3339, persistedStr)
-						if parseErr == nil && !req.UpdatedAt.Equal(persistedAt) {
-							return errConflict
-						}
-					}
+	// CLAUDE.md hard constraint 6 / config.ValidateToolPolicyCoverage: when
+	// the caller sends tools_cfg, the whole per-tool policies map is a full
+	// replacement of what gets persisted (see the tools_cfg branch in the
+	// updateConfigJSONLocked closure below) — so re-validate coverage for THIS
+	// agent's prospective policies (the request's map when tools_cfg.builtin
+	// is sent, else the agent's existing stored policies when tools_cfg is
+	// omitted or only touches mcp) against the current global
+	// sandbox.tool_policies, before persisting. Reject 400 with the full gap
+	// list on any hole rather than silently writing an incomplete map.
+	// Validated against a candidate config snapshot (a shallow copy of the
+	// live config with this one agent's Tools spliced in) — nothing here
+	// mutates the live in-memory config or disk, so a rejected request
+	// leaves no partial state behind.
+	//
+	// The validate step and the persist step below run inside ONE
+	// a.configMu-locked critical section (closing a TOCTOU race two
+	// concurrent updates could otherwise open — see updateConfigJSONLocked's
+	// doc comment), via withToolPolicyCoverageGuard: unlike the fast-path
+	// checks above (which read the top-of-function cfg/foundIdx snapshot —
+	// fine for those, since none of them persist anything), the guard always
+	// fetches the config FRESH, inside a.configMu, right before validating —
+	// so a concurrent write (e.g. another request's TriggerReload, or this
+	// same agent being deleted) cannot slip in between fetch and lock and go
+	// unobserved by the coverage check or the persist step. Returns false
+	// once it has already written the HTTP response (error case), so the
+	// caller just returns.
+	// Coverage validation only runs when this request actually touches
+	// tools_cfg: config.ValidateToolPolicyCoverage checks EVERY agent in the
+	// roster, not just this one, so running it unconditionally would turn an
+	// entirely unrelated field update (default flag, model, skills, …) into
+	// a spurious 400 whenever ANY other agent's tools map is incomplete
+	// (e.g. a bare/legacy fixture, or a pre-migration config). toolsCoverageMutate
+	// stays nil (skipping the check — see withToolPolicyCoverageGuard's doc
+	// comment) unless the caller actually sent tools_cfg.
+	var toolsCoverageMutate func(*config.Config)
+	if req.ToolsCfg != nil {
+		toolsCoverageMutate = func(c *config.Config) {
+			// Search by ID against the FRESHLY-fetched clone — never the
+			// pre-lock foundIdx, which can point at the wrong slot (or be out
+			// of bounds) if the agent list changed shape between the top-of-
+			// function fetch and this locked section (see
+			// errAgentVanishedDuringUpdate's doc comment for the sharper,
+			// persist-side consequence of the same staleness).
+			for i := range c.Agents.List {
+				if c.Agents.List[i].ID != id {
+					continue
 				}
-				if req.Name != nil {
-					agentMap["name"] = newName
+				var candidatePolicies map[string]config.ToolPolicy
+				if req.ToolsCfg.Builtin != nil {
+					candidatePolicies = agentToolPolicyMapFromWire(req.ToolsCfg.Builtin.Policies)
+				} else if c.Agents.List[i].Tools != nil {
+					candidatePolicies = c.Agents.List[i].Tools.Builtin.Policies
 				}
-				if req.Description != nil {
-					trimmed := strings.TrimSpace(*req.Description)
-					if trimmed == "" {
-						delete(agentMap, "description")
-					} else {
-						agentMap["description"] = trimmed
-					}
+				candidateAgent := c.Agents.List[i]
+				candidateAgent.Tools = &config.AgentToolsCfg{
+					Builtin: config.AgentBuiltinToolsCfg{Policies: candidatePolicies},
 				}
-				if req.Model != nil {
-					modelMap, _ := agentMap["model"].(map[string]any)
-					if modelMap == nil {
-						modelMap = map[string]any{}
-						agentMap["model"] = modelMap
-					}
-					modelMap["primary"] = newModel
-				}
-				// O3 two-field model: persist (or clear) the explicit primary
-				// provider. A non-empty value pins the provider; an explicit empty
-				// string clears it (fall back to default-provider resolution).
-				if req.Provider != nil {
-					provider := strings.TrimSpace(*req.Provider)
-					modelMap, _ := agentMap["model"].(map[string]any)
-					if modelMap == nil {
-						modelMap = map[string]any{}
-						agentMap["model"] = modelMap
-					}
-					if provider == "" {
-						delete(modelMap, "provider")
-					} else {
-						modelMap["provider"] = provider
-					}
-				}
-				if req.TimeoutSeconds != nil {
-					agentMap["timeout_seconds"] = *req.TimeoutSeconds
-				}
-				if req.MaxToolIterations != nil {
-					agentMap["max_tool_iterations"] = *req.MaxToolIterations
-				}
-				if req.SteeringMode != nil {
-					// W2 spec §4.24 / §9.2 row 14: workers are forced to
-					// "one-at-a-time" server-side regardless of the caller's
-					// value. Workers run only via delegation (no concurrent
-					// inbound), so queueing is meaningless. This is a silent
-					// override, not a 400 — the spec calls for 200 with the
-					// stored value forced to one-at-a-time.
-					sm := string(*req.SteeringMode)
-					if foundAgent.IsWorker() {
-						sm = "one-at-a-time"
-					}
-					agentMap["steering_mode"] = sm
-				}
-				// tool_feedback was removed from the wire in W1 (it's now per-channel
-				// runtime behavior driven by pkg/agent/loop.go: webchat skips). The
-				// global config-level agents.defaults.tool_feedback stays.
-				if req.ShellPolicy != nil {
-					// Load existing shell_policy from the persisted map (if any) so
-					// that a partial PATCH (e.g. only custom_deny_patterns) does not
-					// clobber fields the caller did not send.
-					existing, _ := agentMap["shell_policy"].(map[string]any)
-					if existing == nil {
-						existing = map[string]any{}
-					}
-					// Only overwrite enable_deny_patterns when the caller explicitly
-					// sent it (non-nil pointer). Writing nil would persist JSON null
-					// and reset the flag to false on next decode.
-					if req.ShellPolicy.EnableDenyPatterns != nil {
-						existing["enable_deny_patterns"] = *req.ShellPolicy.EnableDenyPatterns
-					}
-					// An explicitly-sent array overwrites, INCLUDING the empty array —
-					// that is how the SPA clears all deny patterns. Only a nil (field
-					// absent from the request) leaves the persisted list untouched.
-					// The old `len(...) > 0` guard made pattern lists impossible to
-					// clear over the wire: the PUT succeeded but the delete was
-					// silently dropped (found live, 2026-07-03).
-					if req.ShellPolicy.CustomDenyPatterns != nil {
-						existing["custom_deny_patterns"] = *req.ShellPolicy.CustomDenyPatterns
-					}
-					agentMap["shell_policy"] = existing
-				}
-				if req.Color != nil {
-					agentMap["color"] = *req.Color
-				}
-				if req.Icon != nil {
-					agentMap["icon"] = *req.Icon
-				}
-				if req.FallbackModels != nil {
-					agentMap["fallback_models"] = *req.FallbackModels
-				}
-				if req.ModelParams != nil {
-					mpMap := map[string]any{}
-					if req.ModelParams.Temperature != nil {
-						mpMap["temperature"] = *req.ModelParams.Temperature
-					}
-					if req.ModelParams.MaxTokens != nil {
-						mpMap["max_tokens"] = *req.ModelParams.MaxTokens
-					}
-					if req.ModelParams.TopP != nil {
-						mpMap["top_p"] = *req.ModelParams.TopP
-					}
-					agentMap["model_params"] = mpMap
-				}
-				if req.RateLimits != nil {
-					rlMap := map[string]any{}
-					if req.RateLimits.UseGlobalDefaults != nil {
-						rlMap["use_global_defaults"] = *req.RateLimits.UseGlobalDefaults
-					}
-					if req.RateLimits.MaxLlmCallsPerHour != nil {
-						rlMap["max_llm_calls_per_hour"] = *req.RateLimits.MaxLlmCallsPerHour
-					}
-					if req.RateLimits.MaxToolCallsPerMinute != nil {
-						rlMap["max_tool_calls_per_minute"] = *req.RateLimits.MaxToolCallsPerMinute
-					}
-					if req.RateLimits.MaxCostPerDay != nil {
-						rlMap["max_cost_per_day"] = *req.RateLimits.MaxCostPerDay
-					}
-					agentMap["rate_limits"] = rlMap
-				}
-				// Default flag: single-default invariant.
-				// If req.Default is set, handle two sub-cases:
-				//   true  → mark this agent as default; clear Default on all others.
-				//   false → clear Default on this agent only; leave others unchanged.
-				// If req.Default is nil (absent), leave all Default flags unchanged.
-				if req.Default != nil {
-					agentMap["default"] = *req.Default
-				}
-				if req.ToolsCfg != nil {
-					tcMap := map[string]any{}
-					if req.ToolsCfg.Builtin != nil {
-						builtinMap := map[string]any{}
-						if req.ToolsCfg.Builtin.DefaultPolicy != nil {
-							builtinMap["default_policy"] = string(*req.ToolsCfg.Builtin.DefaultPolicy)
-						}
-						if req.ToolsCfg.Builtin.Policies != nil {
-							builtinMap["policies"] = *req.ToolsCfg.Builtin.Policies
-						}
-						tcMap["builtin"] = builtinMap
-					}
-					if req.ToolsCfg.Mcp != nil && req.ToolsCfg.Mcp.Servers != nil {
-						servers := make([]map[string]any, 0, len(*req.ToolsCfg.Mcp.Servers))
-						for _, s := range *req.ToolsCfg.Mcp.Servers {
-							srv := map[string]any{"id": s.Id}
-							if s.Tools != nil {
-								srv["tools"] = *s.Tools
-							}
-							servers = append(servers, srv)
-						}
-						mcpMap := map[string]any{"servers": servers}
-						tcMap["mcp"] = mcpMap
-					}
-					agentMap["tools_cfg"] = tcMap
-				}
-				// Executor: write the sub-agent executor under subagents.executor when
-				// the caller sends it. kind="native" with no cli clears any prior
-				// external-cli config (executorConfigFromRequest returns nil → delete).
-				if req.Executor != nil {
-					subMap, _ := agentMap["subagents"].(map[string]any)
-					if updatedExecutor == nil {
-						if subMap != nil {
-							delete(subMap, "executor")
-							if len(subMap) == 0 {
-								delete(agentMap, "subagents")
-							}
-						}
-					} else {
-						if subMap == nil {
-							subMap = map[string]any{}
-							agentMap["subagents"] = subMap
-						}
-						subMap["executor"] = executorConfigToMap(updatedExecutor)
-					}
-				}
-				// Skills: replace the agent's skill list when the caller sends the field.
-				// An explicit empty array removes all skills. Nil (absent) leaves unchanged.
-				if req.Skills != nil {
-					if len(*req.Skills) > 0 {
-						agentMap["skills"] = *req.Skills
-					} else {
-						delete(agentMap, "skills")
-					}
-				}
-				// Delegation policy: only write when the caller sent the field.
-				// When omitted (delegationPolicyTouched=false), the stored policy is
-				// left untouched so seeded delegation is not wiped. The merged value
-				// already preserves inert accept_from/budget from the stored policy.
-				if delegationPolicyTouched {
-					if updatedDelegationPolicy != nil {
-						agentMap["delegation_policy"] = delegationPolicyToMap(updatedDelegationPolicy)
-					} else {
-						delete(agentMap, "delegation_policy")
-					}
-				}
-				// Heartbeat is workspace-scoped (ADR-027); per-agent heartbeat fields
-				// are ignored on PUT. Workspace handler manages member_configs.
-				// Optimistic concurrency timestamp: refresh on every successful save.
-				agentMap["updated_at"] = now.Format(time.RFC3339)
+				c.Agents.List[i] = candidateAgent
 				break
 			}
 		}
-		// Single-default invariant: when setting default=true on this agent,
-		// clear default on every OTHER agent in the list.
-		if req.Default != nil && *req.Default {
+	}
+	if ok := a.withToolPolicyCoverageGuard(
+		w,
+		toolsCoverageMutate,
+		func(gaps []config.CoverageGap) string {
+			return fmt.Sprintf(
+				"tool policy coverage incomplete for agent %q (%d gap(s)): %s",
+				id, len(gaps), joinCoverageGapMessages(gaps),
+			)
+		},
+		func(m map[string]any) error {
+			agents, _ := m["agents"].(map[string]any)
+			if agents == nil {
+				return fmt.Errorf("agents section not found in config")
+			}
+			// Per-agent fields: name, model, timeout_seconds, max_tool_iterations,
+			// steering_mode, tool_feedback — stored under agents.list[*].
+			list, _ := agents["list"].([]any)
+			agentFound := false
 			for _, entry := range list {
 				agentMap, ok := entry.(map[string]any)
 				if !ok {
 					continue
 				}
 				if agentMap["id"] == id {
-					continue // already set above
+					agentFound = true
+					// Optimistic concurrency check (runs INSIDE configMu so two
+					// concurrent PUTs cannot both pass the version check and then
+					// both write — closing the TOCTOU race that existed when this
+					// check ran against the in-memory cached config outside the
+					// lock). If the caller sent an updated_at value, it must match
+					// the persisted value exactly; otherwise another edit raced and
+					// we abort the mutate (nothing is written). The caller maps
+					// errConflict to HTTP 409.
+					if req.UpdatedAt != nil {
+						persistedStr, _ := agentMap["updated_at"].(string)
+						if persistedStr != "" {
+							persistedAt, parseErr := time.Parse(time.RFC3339, persistedStr)
+							if parseErr == nil && !req.UpdatedAt.Equal(persistedAt) {
+								return errConflict
+							}
+						}
+					}
+					if req.Name != nil {
+						agentMap["name"] = newName
+					}
+					if req.Description != nil {
+						trimmed := strings.TrimSpace(*req.Description)
+						if trimmed == "" {
+							delete(agentMap, "description")
+						} else {
+							agentMap["description"] = trimmed
+						}
+					}
+					if req.Model != nil {
+						modelMap, _ := agentMap["model"].(map[string]any)
+						if modelMap == nil {
+							modelMap = map[string]any{}
+							agentMap["model"] = modelMap
+						}
+						modelMap["primary"] = newModel
+					}
+					// O3 two-field model: persist (or clear) the explicit primary
+					// provider. A non-empty value pins the provider; an explicit empty
+					// string clears it (fall back to default-provider resolution).
+					if req.Provider != nil {
+						provider := strings.TrimSpace(*req.Provider)
+						modelMap, _ := agentMap["model"].(map[string]any)
+						if modelMap == nil {
+							modelMap = map[string]any{}
+							agentMap["model"] = modelMap
+						}
+						if provider == "" {
+							delete(modelMap, "provider")
+						} else {
+							modelMap["provider"] = provider
+						}
+					}
+					if req.TimeoutSeconds != nil {
+						agentMap["timeout_seconds"] = *req.TimeoutSeconds
+					}
+					if req.MaxToolIterations != nil {
+						agentMap["max_tool_iterations"] = *req.MaxToolIterations
+					}
+					if req.SteeringMode != nil {
+						// W2 spec §4.24 / §9.2 row 14: workers are forced to
+						// "one-at-a-time" server-side regardless of the caller's
+						// value. Workers run only via delegation (no concurrent
+						// inbound), so queueing is meaningless. This is a silent
+						// override, not a 400 — the spec calls for 200 with the
+						// stored value forced to one-at-a-time.
+						sm := string(*req.SteeringMode)
+						if foundAgent.IsWorker() {
+							sm = "one-at-a-time"
+						}
+						agentMap["steering_mode"] = sm
+					}
+					// tool_feedback was removed from the wire in W1 (it's now per-channel
+					// runtime behavior driven by pkg/agent/loop.go: webchat skips). The
+					// global config-level agents.defaults.tool_feedback stays.
+					if req.ShellPolicy != nil {
+						// Load existing shell_policy from the persisted map (if any) so
+						// that a partial PATCH (e.g. only custom_deny_patterns) does not
+						// clobber fields the caller did not send.
+						existing, _ := agentMap["shell_policy"].(map[string]any)
+						if existing == nil {
+							existing = map[string]any{}
+						}
+						// Only overwrite enable_deny_patterns when the caller explicitly
+						// sent it (non-nil pointer). Writing nil would persist JSON null
+						// and reset the flag to false on next decode.
+						if req.ShellPolicy.EnableDenyPatterns != nil {
+							existing["enable_deny_patterns"] = *req.ShellPolicy.EnableDenyPatterns
+						}
+						// An explicitly-sent array overwrites, INCLUDING the empty array —
+						// that is how the SPA clears all deny patterns. Only a nil (field
+						// absent from the request) leaves the persisted list untouched.
+						// The old `len(...) > 0` guard made pattern lists impossible to
+						// clear over the wire: the PUT succeeded but the delete was
+						// silently dropped (found live, 2026-07-03).
+						if req.ShellPolicy.CustomDenyPatterns != nil {
+							existing["custom_deny_patterns"] = *req.ShellPolicy.CustomDenyPatterns
+						}
+						agentMap["shell_policy"] = existing
+					}
+					if req.Color != nil {
+						agentMap["color"] = *req.Color
+					}
+					if req.Icon != nil {
+						agentMap["icon"] = *req.Icon
+					}
+					if req.FallbackModels != nil {
+						agentMap["fallback_models"] = *req.FallbackModels
+					}
+					if req.ModelParams != nil {
+						mpMap := map[string]any{}
+						if req.ModelParams.Temperature != nil {
+							mpMap["temperature"] = *req.ModelParams.Temperature
+						}
+						if req.ModelParams.MaxTokens != nil {
+							mpMap["max_tokens"] = *req.ModelParams.MaxTokens
+						}
+						if req.ModelParams.TopP != nil {
+							mpMap["top_p"] = *req.ModelParams.TopP
+						}
+						agentMap["model_params"] = mpMap
+					}
+					if req.RateLimits != nil {
+						rlMap := map[string]any{}
+						if req.RateLimits.UseGlobalDefaults != nil {
+							rlMap["use_global_defaults"] = *req.RateLimits.UseGlobalDefaults
+						}
+						if req.RateLimits.MaxLlmCallsPerHour != nil {
+							rlMap["max_llm_calls_per_hour"] = *req.RateLimits.MaxLlmCallsPerHour
+						}
+						if req.RateLimits.MaxToolCallsPerMinute != nil {
+							rlMap["max_tool_calls_per_minute"] = *req.RateLimits.MaxToolCallsPerMinute
+						}
+						if req.RateLimits.MaxCostPerDay != nil {
+							rlMap["max_cost_per_day"] = *req.RateLimits.MaxCostPerDay
+						}
+						agentMap["rate_limits"] = rlMap
+					}
+					// Default flag: single-default invariant.
+					// If req.Default is set, handle two sub-cases:
+					//   true  → mark this agent as default; clear Default on all others.
+					//   false → clear Default on this agent only; leave others unchanged.
+					// If req.Default is nil (absent), leave all Default flags unchanged.
+					if req.Default != nil {
+						agentMap["default"] = *req.Default
+					}
+					if req.ToolsCfg != nil {
+						// NOTE ON THE KEY NAME: config.AgentConfig.Tools is tagged
+						// `json:"tools"` (pkg/config/config.go) — the SAME on-disk
+						// key createAgent and updateAgentTools both write
+						// (newAgent["tools"] / agentMap["tools"]). This branch used
+						// to write agentMap["tools_cfg"] — the WIRE request field
+						// name (gen.AgentUpdateRequest's `tools_cfg` JSON tag), not
+						// the on-disk config key — which config.LoadConfig's
+						// json.Unmarshal silently ignores (unknown field). Every
+						// tools_cfg update sent through this endpoint was therefore
+						// persisted to a dead, orphaned "tools_cfg" key that never
+						// round-tripped back into AgentConfig.Tools on the next
+						// load/reload, while the REAL "tools" key (and the
+						// validation block above assumed its builtin.policies
+						// survived) sat untouched. Fixed to write "tools".
+						existingTools, _ := agentMap["tools"].(map[string]any)
+						tcMap := map[string]any{}
+						if req.ToolsCfg.Builtin != nil {
+							builtinMap := map[string]any{}
+							if len(req.ToolsCfg.Builtin.Policies) > 0 {
+								policies := make(map[string]string, len(req.ToolsCfg.Builtin.Policies))
+								for k, v := range req.ToolsCfg.Builtin.Policies {
+									policies[k] = string(v)
+								}
+								builtinMap["policies"] = policies
+							}
+							tcMap["builtin"] = builtinMap
+						} else if existingTools != nil {
+							// req.ToolsCfg is present (e.g. it only touches mcp) but
+							// omitted builtin — the coverage-validation block above
+							// assumed the agent's EXISTING persisted builtin.policies
+							// survives untouched in this case. tcMap is about to
+							// unconditionally REPLACE the agent's whole persisted
+							// tools object below, so anything not explicitly carried
+							// forward here is silently wiped from disk. Splice in the
+							// existing builtin object read from THIS agent's current
+							// on-disk state (agentMap, read fresh under configMu at
+							// the top of this closure) rather than dropping it.
+							if existingBuiltin, ok := existingTools["builtin"]; ok {
+								tcMap["builtin"] = existingBuiltin
+							}
+						}
+						if req.ToolsCfg.Mcp != nil && req.ToolsCfg.Mcp.Servers != nil {
+							servers := make([]map[string]any, 0, len(*req.ToolsCfg.Mcp.Servers))
+							for _, s := range *req.ToolsCfg.Mcp.Servers {
+								srv := map[string]any{"id": s.Id}
+								if s.Tools != nil {
+									srv["tools"] = *s.Tools
+								}
+								servers = append(servers, srv)
+							}
+							mcpMap := map[string]any{"servers": servers}
+							tcMap["mcp"] = mcpMap
+						} else if existingTools != nil {
+							// Symmetric preservation for mcp: req.ToolsCfg present but
+							// omitted mcp (e.g. a builtin-only policy update) must not
+							// silently drop the agent's existing MCP server bindings.
+							if existingMcp, ok := existingTools["mcp"]; ok {
+								tcMap["mcp"] = existingMcp
+							}
+						}
+						agentMap["tools"] = tcMap
+					}
+					// Executor: write the sub-agent executor under subagents.executor when
+					// the caller sends it. kind="native" with no cli clears any prior
+					// external-cli config (executorConfigFromRequest returns nil → delete).
+					if req.Executor != nil {
+						subMap, _ := agentMap["subagents"].(map[string]any)
+						if updatedExecutor == nil {
+							if subMap != nil {
+								delete(subMap, "executor")
+								if len(subMap) == 0 {
+									delete(agentMap, "subagents")
+								}
+							}
+						} else {
+							if subMap == nil {
+								subMap = map[string]any{}
+								agentMap["subagents"] = subMap
+							}
+							subMap["executor"] = executorConfigToMap(updatedExecutor)
+						}
+					}
+					// Skills: replace the agent's skill list when the caller sends the field.
+					// An explicit empty array removes all skills. Nil (absent) leaves unchanged.
+					if req.Skills != nil {
+						if len(*req.Skills) > 0 {
+							agentMap["skills"] = *req.Skills
+						} else {
+							delete(agentMap, "skills")
+						}
+					}
+					// Delegation policy: only write when the caller sent the field.
+					// When omitted (delegationPolicyTouched=false), the stored policy is
+					// left untouched so seeded delegation is not wiped. The merged value
+					// already preserves inert accept_from/budget from the stored policy.
+					if delegationPolicyTouched {
+						if updatedDelegationPolicy != nil {
+							agentMap["delegation_policy"] = delegationPolicyToMap(updatedDelegationPolicy)
+						} else {
+							delete(agentMap, "delegation_policy")
+						}
+					}
+					// Heartbeat is workspace-scoped (ADR-027); per-agent heartbeat fields
+					// are ignored on PUT. Workspace handler manages member_configs.
+					// Optimistic concurrency timestamp: refresh on every successful save.
+					agentMap["updated_at"] = now.Format(time.RFC3339)
+					break
 				}
-				// Clear default on every other agent. Delete the key so config
-				// stays minimal (omitempty in Go struct); false and missing are
-				// equivalent to the router but missing is cleaner JSON.
-				delete(agentMap, "default")
 			}
-		}
-		// O6: heartbeat is now fully per-agent (written inside the agent-found
-		// block above). The legacy global heartbeat block was removed; there is
-		// no cfg.Heartbeat mirror to maintain.
-		return nil
-	}); err != nil {
-		if errors.Is(err, errConflict) {
-			writeJSON(w, http.StatusConflict, gen.ErrorResponse{
-				Error: "conflict",
-				Code:  strPtr("conflict"),
-			})
-			return
-		}
-		slog.Error("rest: save config for agent update", "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
+			if !agentFound {
+				// The fast-path existence check at the top of updateAgent found
+				// this agent, but by the time this locked, fresh-disk lookup ran
+				// it was gone — e.g. a concurrent DELETE /agents/{id} raced this
+				// PUT. Returning nil here would be a phantom-200: a 200 response
+				// for an update that touched nothing. Mapped to 404 by
+				// withToolPolicyCoverageGuard (see errAgentVanishedDuringUpdate's
+				// doc comment).
+				return fmt.Errorf("%w: agent %q not found", errAgentVanishedDuringUpdate, id)
+			}
+			// Single-default invariant: when setting default=true on this agent,
+			// clear default on every OTHER agent in the list.
+			if req.Default != nil && *req.Default {
+				for _, entry := range list {
+					agentMap, ok := entry.(map[string]any)
+					if !ok {
+						continue
+					}
+					if agentMap["id"] == id {
+						continue // already set above
+					}
+					// Clear default on every other agent. Delete the key so config
+					// stays minimal (omitempty in Go struct); false and missing are
+					// equivalent to the router but missing is cleaner JSON.
+					delete(agentMap, "default")
+				}
+			}
+			// O6: heartbeat is now fully per-agent (written inside the agent-found
+			// block above). The legacy global heartbeat block was removed; there is
+			// no cfg.Heartbeat mirror to maintain.
+			return nil
+		},
+		"rest: save config for agent update",
+	); !ok {
 		return
 	}
 	// Write SOUL.md, HEARTBEAT.md, and AGENT.md BEFORE triggering reload,
@@ -3460,6 +3744,21 @@ func (a *restAPI) safeUpdateConfigJSON(mutate func(m map[string]any) error) erro
 	// which does not acquire configMu — so there is no lock ordering conflict.
 	a.configMu.Lock()
 	defer a.configMu.Unlock()
+	return a.updateConfigJSONLocked(mutate)
+}
+
+// updateConfigJSONLocked is safeUpdateConfigJSON's body with the configMu
+// acquisition factored out. Callers that must validate a candidate config
+// snapshot and persist it as ONE atomic critical section — closing a TOCTOU
+// window where two concurrent writes could each validate against a stale
+// snapshot and both pass individually while the COMBINED persisted result has
+// a gap neither observed alone (config.ValidateToolPolicyCoverage, CLAUDE.md
+// hard constraint 6) — take a.configMu.Lock() themselves around the whole
+// read-validate-persist sequence and call this method directly instead of
+// safeUpdateConfigJSON, which would deadlock re-acquiring the same
+// non-reentrant sync.Mutex. See createAgent, updateAgent, updateAgentTools
+// (this file) and putToolPolicies (rest_tool_policies.go) for the pattern.
+func (a *restAPI) updateConfigJSONLocked(mutate func(m map[string]any) error) error {
 	raw, err := os.ReadFile(a.configPath())
 	if err != nil {
 		return fmt.Errorf("read config: %w", err)
@@ -6205,46 +6504,40 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 		return
 	}
 
-	// Extract builtin fields with defaults.
-	builtinDefaultPolicy := ""
+	// Extract builtin fields. There is no default_policy field on the wire
+	// any more (CLAUDE.md hard constraint 6).
 	var builtinPolicies map[string]string
-	if req.Builtin != nil {
-		if req.Builtin.DefaultPolicy != nil {
-			builtinDefaultPolicy = string(*req.Builtin.DefaultPolicy)
+	if req.Builtin != nil && req.Builtin.Policies != nil {
+		builtinPolicies = make(map[string]string, len(req.Builtin.Policies))
+		for k, v := range req.Builtin.Policies {
+			builtinPolicies[k] = string(v)
 		}
-		if req.Builtin.Policies != nil {
-			builtinPolicies = make(map[string]string, len(*req.Builtin.Policies))
-			for k, v := range *req.Builtin.Policies {
-				builtinPolicies[k] = string(v)
-			}
+	}
+	// Legacy mode/visible compatibility (one release): only mode="explicit"
+	// with `visible` has any effect (populates builtinPolicies from visible
+	// names as "allow"), and ONLY when the caller did NOT also send a real
+	// `policies` map — policies always wins outright when present, matching
+	// the documented wire contract ("mode/visible are... ignored when
+	// policies is present"). Before this fix, the guard checked a now-inert
+	// `builtinDefaultPolicy` bookkeeping variable (always "" at this point —
+	// nothing set it earlier) instead of req.Builtin.Policies == nil, so a
+	// caller sending BOTH a real policies map AND mode="explicit"+visible had
+	// their real per-tool values silently discarded and replaced by the
+	// deny-all-except-visible legacy conversion a few lines below — found
+	// live, two independent reviewers, 2026-07-06. mode="inherit" alone is a
+	// no-op now that there is no default-policy fallback to inherit from
+	// (CLAUDE.md hard constraint 6) — an incomplete map is rejected by the
+	// coverage check below regardless.
+	if req.Builtin != nil && req.Builtin.Policies == nil && req.Builtin.Mode != nil &&
+		string(*req.Builtin.Mode) == "explicit" && req.Builtin.Visible != nil {
+		builtinPolicies = make(map[string]string, len(*req.Builtin.Visible))
+		for _, name := range *req.Builtin.Visible {
+			builtinPolicies[name] = "allow"
 		}
 	}
 
-	// Convert legacy format to policy format if needed.
-	if req.Builtin != nil && builtinDefaultPolicy == "" && req.Builtin.Mode != nil {
-		switch string(*req.Builtin.Mode) {
-		case "explicit":
-			builtinDefaultPolicy = "deny"
-			if req.Builtin.Visible != nil {
-				builtinPolicies = make(map[string]string, len(*req.Builtin.Visible))
-				for _, name := range *req.Builtin.Visible {
-					builtinPolicies[name] = "allow"
-				}
-			}
-		case "inherit":
-			builtinDefaultPolicy = "allow"
-		}
-	}
-	if builtinDefaultPolicy == "" {
-		builtinDefaultPolicy = "allow"
-	}
-
-	// Validate policy values.
+	// Validate per-tool policy values sent in the request.
 	validPolicies := map[string]bool{"allow": true, "ask": true, "deny": true}
-	if !validPolicies[builtinDefaultPolicy] {
-		jsonErr(w, http.StatusUnprocessableEntity, "builtin.default_policy must be 'allow', 'ask', or 'deny'")
-		return
-	}
 	for name, p := range builtinPolicies {
 		if !validPolicies[p] {
 			jsonErr(w, http.StatusUnprocessableEntity, fmt.Sprintf("invalid policy %q for tool %q", p, name))
@@ -6252,7 +6545,10 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 		}
 	}
 
-	// Validate MCP server IDs reference configured servers.
+	// Validate MCP server IDs reference configured servers. Computed before
+	// the locked validate+persist IIFE below (it does not feed
+	// config.ValidateToolPolicyCoverage, only the MCP section of the persist
+	// payload), then captured by that IIFE's persist closure.
 	var mcpServers []struct {
 		ID    string
 		Tools []string
@@ -6279,48 +6575,94 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 		}
 	}
 
-	// Persist to config.json.
-	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
-		agents, _ := m["agents"].(map[string]any)
-		if agents == nil {
-			return fmt.Errorf("agents section not found in config")
-		}
-		list, _ := agents["list"].([]any)
-		for i, raw := range list {
-			agentMap, ok := raw.(map[string]any)
-			if !ok {
-				continue
+	// CLAUDE.md hard constraint 6 / config.ValidateToolPolicyCoverage: this
+	// endpoint fully replaces the agent's builtin tools config on persist
+	// (see the updateConfigJSONLocked closure below), so builtinPolicies IS
+	// the prospective complete per-tool map for this agent — reject 400 with
+	// the full gap list if it (together with the current global
+	// sandbox.tool_policies) would leave any static builtin tool without an
+	// explicit policy entry, before persisting anything.
+	//
+	// The validate step and the persist step run inside ONE a.configMu-locked
+	// critical section (closing a TOCTOU race two concurrent tool-policy
+	// writes could otherwise open — see updateConfigJSONLocked's doc
+	// comment), via withToolPolicyCoverageGuard: it always fetches the config
+	// FRESH, inside a.configMu, discarding the `cfg` fetched at the top of
+	// this function (used only for the fast-path 404/locked/MCP-server-id
+	// checks above, none of which persist anything) — so a concurrent write
+	// racing this one cannot slip in between fetch and lock unobserved by
+	// either the coverage check or the persist step. Returns false once it
+	// has already written the HTTP response (error case), so the caller just
+	// returns.
+	if ok := a.withToolPolicyCoverageGuard(
+		w,
+		func(c *config.Config) {
+			candidatePolicies := make(map[string]config.ToolPolicy, len(builtinPolicies))
+			for k, v := range builtinPolicies {
+				candidatePolicies[k] = config.ToolPolicy(v)
 			}
-			if agentMap["id"] == agentID {
-				builtinCfg := map[string]any{
-					"default_policy": builtinDefaultPolicy,
+			// Base the candidate on the FRESHLY-fetched agent copy (from c,
+			// searched by ID), never the pre-lock foundAgent snapshot — only
+			// Tools is overridden below, so any other field a concurrent
+			// write changed in the meantime stays correctly reflected.
+			for i := range c.Agents.List {
+				if c.Agents.List[i].ID != agentID {
+					continue
 				}
-				if len(builtinPolicies) > 0 {
-					builtinCfg["policies"] = builtinPolicies
+				candidateAgent := c.Agents.List[i]
+				candidateAgent.Tools = &config.AgentToolsCfg{
+					Builtin: config.AgentBuiltinToolsCfg{Policies: candidatePolicies},
 				}
-				toolsCfg := map[string]any{
-					"builtin": builtinCfg,
+				c.Agents.List[i] = candidateAgent
+				break
+			}
+		},
+		func(gaps []config.CoverageGap) string {
+			return fmt.Sprintf(
+				"tool policy coverage incomplete for agent %q (%d gap(s)): %s",
+				agentID, len(gaps), joinCoverageGapMessages(gaps),
+			)
+		},
+		// Persist to config.json.
+		func(m map[string]any) error {
+			agents, _ := m["agents"].(map[string]any)
+			if agents == nil {
+				return fmt.Errorf("agents section not found in config")
+			}
+			list, _ := agents["list"].([]any)
+			for i, raw := range list {
+				agentMap, ok := raw.(map[string]any)
+				if !ok {
+					continue
 				}
-				if len(mcpServers) > 0 {
-					servers := make([]map[string]any, 0, len(mcpServers))
-					for _, s := range mcpServers {
-						srv := map[string]any{"id": s.ID}
-						if len(s.Tools) > 0 {
-							srv["tools"] = s.Tools
-						}
-						servers = append(servers, srv)
+				if agentMap["id"] == agentID {
+					builtinCfg := map[string]any{}
+					if len(builtinPolicies) > 0 {
+						builtinCfg["policies"] = builtinPolicies
 					}
-					toolsCfg["mcp"] = map[string]any{"servers": servers}
+					toolsCfg := map[string]any{
+						"builtin": builtinCfg,
+					}
+					if len(mcpServers) > 0 {
+						servers := make([]map[string]any, 0, len(mcpServers))
+						for _, s := range mcpServers {
+							srv := map[string]any{"id": s.ID}
+							if len(s.Tools) > 0 {
+								srv["tools"] = s.Tools
+							}
+							servers = append(servers, srv)
+						}
+						toolsCfg["mcp"] = map[string]any{"servers": servers}
+					}
+					agentMap["tools"] = toolsCfg
+					list[i] = agentMap
+					return nil
 				}
-				agentMap["tools"] = toolsCfg
-				list[i] = agentMap
-				return nil
 			}
-		}
-		return fmt.Errorf("agent %q not found in config list", agentID)
-	}); err != nil {
-		slog.Error("rest: update agent tools config", "agent_id", agentID, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
+			return fmt.Errorf("agent %q not found in config list", agentID)
+		},
+		fmt.Sprintf("rest: update agent tools config (agent_id=%s)", agentID),
+	); !ok {
 		return
 	}
 

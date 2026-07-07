@@ -2033,14 +2033,17 @@ func TestLoadTool_UncompressedDefs_LoadToolNotSentToModel(t *testing.T) {
 		require.True(t, ok)
 		allTools := ava.Tools.GetAll()
 
-		allowDefault := &tools.ToolPolicyCfg{
-			DefaultPolicy:       "allow",
-			GlobalDefaultPolicy: "allow",
-		}
+		// An empty ToolPolicyCfg is enough here: load_tool's infra force-allow
+		// (ManifestInfra) short-circuits BEFORE the global×agent merge, so its
+		// resolution is unconditional regardless of any policy configuration —
+		// there is no more "allow-default" config concept to synthesize
+		// (CLAUDE.md hard constraint 6), but the force-allow behavior this
+		// subtest actually exercises is unaffected by that removal.
+		allowDefault := &tools.ToolPolicyCfg{}
 		policyFiltered, policyMap := tools.FilterToolsByPolicy(allTools, ava.AgentType, allowDefault)
 
-		// Allow-default keeps load_tool (it would have been SENT uncompressed under
-		// the old code).
+		// load_tool is force-allowed regardless of policy (it would have been SENT
+		// uncompressed under the old code).
 		require.Equal(t, "allow", policyMap["load_tool"],
 			"allow-default: load_tool is allow in the filtered set")
 		require.Contains(t, toolNameSet(policyFiltered), "load_tool",

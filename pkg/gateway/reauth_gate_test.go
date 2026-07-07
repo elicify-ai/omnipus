@@ -154,8 +154,14 @@ func TestSandboxConfigPUT_WithReAuth_Succeeds(t *testing.T) {
 // gate was removed per UAT. This would fail (403) if the gate were restored.
 func TestToolPoliciesPUT_NoReAuthToken_Succeeds(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
+	// There is no default_policy field on the wire any more (CLAUDE.md hard
+	// constraint 6) — this body used to send one (and assert it echoed back)
+	// before that field was removed; a bare "policies" map is the current
+	// contract. newTestRestAPIWithHome seeds an empty agent list, so
+	// config.ValidateToolPolicyCoverage has nothing to check regardless of
+	// what this map contains.
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/tool-policies",
-		strings.NewReader(`{"default_policy":"ask","policies":{"exec":"deny"}}`))
+		strings.NewReader(`{"policies":{"bash":"ask"}}`))
 	r.Header.Set("Content-Type", "application/json")
 	r = withReAuthAdminNoToken(r) // admin user/role, but deliberately NO token
 	w := httptest.NewRecorder()
@@ -164,7 +170,8 @@ func TestToolPoliciesPUT_NoReAuthToken_Succeeds(t *testing.T) {
 		"tool-policies PUT must succeed without a re-auth token (gate removed per UAT); body=%s", w.Body.String())
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, "ask", resp["default_policy"])
+	policies, _ := resp["policies"].(map[string]any)
+	assert.Equal(t, "ask", policies["bash"])
 }
 
 // TestToolPoliciesPUT_WithReAuthToken_StillSucceeds proves a stale/legacy client
@@ -172,8 +179,10 @@ func TestToolPoliciesPUT_NoReAuthToken_Succeeds(t *testing.T) {
 // or not the token is present (the gate no longer consumes it).
 func TestToolPoliciesPUT_WithReAuthToken_StillSucceeds(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
+	// See TestToolPoliciesPUT_NoReAuthToken_Succeeds — no default_policy field
+	// on the wire any more.
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/tool-policies",
-		strings.NewReader(`{"default_policy":"ask","policies":{"exec":"deny"}}`))
+		strings.NewReader(`{"policies":{"bash":"ask"}}`))
 	r.Header.Set("Content-Type", "application/json")
 	r = withReAuthAdmin(t, api, r)
 	w := httptest.NewRecorder()
@@ -181,7 +190,8 @@ func TestToolPoliciesPUT_WithReAuthToken_StillSucceeds(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code, "tool-policies PUT must succeed; body=%s", w.Body.String())
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, "ask", resp["default_policy"])
+	policies, _ := resp["policies"].(map[string]any)
+	assert.Equal(t, "ask", policies["bash"])
 }
 
 // --- Provider / model API-key PUT (Spec-6 FR-12.2 / FR-6.6) ---
@@ -240,8 +250,23 @@ func TestAgentToolsPUT_NoReAuthToken_Succeeds(t *testing.T) {
 	onDisk := `{"version":1,"agents":{"defaults":{},"list":[{"id":"` + agentID + `","name":"Test Agent","type":"custom"}]},"providers":[]}`
 	require.NoError(t, os.WriteFile(filepath.Join(api.homePath, "config.json"), []byte(onDisk), 0o600))
 
+	// There is no default_policy field on the wire any more (CLAUDE.md hard
+	// constraint 6) — this body used to send one (which decodes to a no-op
+	// now, leaving builtinPolicies empty). updateAgentTools fully replaces
+	// the agent's builtin tools_cfg on persist, so a complete, explicit
+	// policies map is required for config.ValidateToolPolicyCoverage to pass
+	// (this fixture has no global sandbox.tool_policies floor either).
+	known := buildKnownBuiltinToolNames()
+	policies := make(map[string]string, len(known))
+	for name := range known {
+		policies[name] = "allow"
+	}
+	policiesJSON, err := json.Marshal(policies)
+	require.NoError(t, err)
+	body := `{"builtin":{"policies":` + string(policiesJSON) + `}}`
+
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+agentID+"/tools",
-		strings.NewReader(`{"builtin":{"default_policy":"allow"}}`))
+		strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	r = withReAuthAdminNoToken(r) // admin user/role, but deliberately NO token
 	w := httptest.NewRecorder()

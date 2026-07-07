@@ -91,7 +91,6 @@ func TestConfigValidator_ValidAgentConfig(t *testing.T) {
 		ID: "my-agent",
 		Tools: &AgentToolsCfg{
 			Builtin: AgentBuiltinToolsCfg{
-				DefaultPolicy: ToolPolicyAllow,
 				Policies: map[string]ToolPolicy{
 					"system.*": ToolPolicyDeny,
 				},
@@ -122,7 +121,6 @@ func TestConfigValidator_EmptyPolicyValue_RejectsConfig(t *testing.T) {
 		ID: "bad-agent",
 		Tools: &AgentToolsCfg{
 			Builtin: AgentBuiltinToolsCfg{
-				DefaultPolicy: ToolPolicyAllow,
 				Policies: map[string]ToolPolicy{
 					"search_web": "", // empty policy value: invalid per FR-085
 				},
@@ -330,4 +328,299 @@ func TestRepairMultipleDefaults_MultiDefault_KeepsFirst(t *testing.T) {
 func TestRepairMultipleDefaults_NilConfig_NoPanic(t *testing.T) {
 	// Must not panic.
 	RepairMultipleDefaults(nil)
+}
+
+// --- ValidateToolPolicyCoverage tests ---
+
+// TestValidateToolPolicyCoverage_FullyCovered_NoGaps verifies that when every
+// known tool has an explicit entry (global or per-agent) for every agent, the
+// function returns no gaps.
+func TestValidateToolPolicyCoverage_FullyCovered_NoGaps(t *testing.T) {
+	cfg := &Config{
+		Sandbox: OmnipusSandboxConfig{
+			ToolPolicies: map[string]string{"read_file": "allow"},
+		},
+		Agents: AgentsConfig{
+			List: []AgentConfig{
+				{
+					ID: "agent-a",
+					Tools: &AgentToolsCfg{
+						Builtin: AgentBuiltinToolsCfg{
+							Policies: map[string]ToolPolicy{"write_file": ToolPolicyAsk},
+						},
+					},
+				},
+			},
+		},
+	}
+	knownTools := map[string]struct{}{"read_file": {}, "write_file": {}}
+
+	gaps := ValidateToolPolicyCoverage(cfg, knownTools)
+	assert.Empty(t, gaps, "every known tool is covered globally or per-agent")
+}
+
+// TestValidateToolPolicyCoverage_AgentMissingOneTool_ReportsGap verifies that a
+// tool covered by neither the global map nor the agent's own map is reported.
+func TestValidateToolPolicyCoverage_AgentMissingOneTool_ReportsGap(t *testing.T) {
+	cfg := &Config{
+		Sandbox: OmnipusSandboxConfig{
+			ToolPolicies: map[string]string{"read_file": "allow"},
+		},
+		Agents: AgentsConfig{
+			List: []AgentConfig{
+				{
+					ID: "agent-b",
+					Tools: &AgentToolsCfg{
+						Builtin: AgentBuiltinToolsCfg{
+							Policies: map[string]ToolPolicy{}, // no entry for write_file
+						},
+					},
+				},
+			},
+		},
+	}
+	knownTools := map[string]struct{}{"read_file": {}, "write_file": {}}
+
+	gaps := ValidateToolPolicyCoverage(cfg, knownTools)
+	require.Len(t, gaps, 1, "write_file has no global or per-agent entry")
+	assert.Equal(t, "agent-b", gaps[0].AgentID)
+	assert.Equal(t, "write_file", gaps[0].ToolName)
+}
+
+// TestValidateToolPolicyCoverage_GlobalEntryCoversGap verifies that a global
+// sandbox.tool_policies entry is sufficient coverage even when the agent has
+// no Tools config at all (nil).
+func TestValidateToolPolicyCoverage_GlobalEntryCoversGap(t *testing.T) {
+	cfg := &Config{
+		Sandbox: OmnipusSandboxConfig{
+			ToolPolicies: map[string]string{
+				"read_file":  "allow",
+				"write_file": "ask",
+			},
+		},
+		Agents: AgentsConfig{
+			List: []AgentConfig{
+				{ID: "agent-c", Tools: nil},
+			},
+		},
+	}
+	knownTools := map[string]struct{}{"read_file": {}, "write_file": {}}
+
+	gaps := ValidateToolPolicyCoverage(cfg, knownTools)
+	assert.Empty(t, gaps, "global entries alone are sufficient coverage")
+}
+
+// TestValidateToolPolicyCoverage_CaseSensitive_NoFalseMatch verifies that tool
+// name matching is exact and case-sensitive: an entry for "Read_File" does not
+// cover "read_file".
+func TestValidateToolPolicyCoverage_CaseSensitive_NoFalseMatch(t *testing.T) {
+	cfg := &Config{
+		Sandbox: OmnipusSandboxConfig{
+			ToolPolicies: map[string]string{"Read_File": "allow"}, // wrong case
+		},
+		Agents: AgentsConfig{
+			List: []AgentConfig{
+				{ID: "agent-d", Tools: nil},
+			},
+		},
+	}
+	knownTools := map[string]struct{}{"read_file": {}}
+
+	gaps := ValidateToolPolicyCoverage(cfg, knownTools)
+	require.Len(t, gaps, 1, "case-mismatched key must not count as coverage")
+	assert.Equal(t, "read_file", gaps[0].ToolName)
+}
+
+// TestValidateToolPolicyCoverage_WildcardDoesNotCountAsCoverage verifies that a
+// wildcard entry (e.g. "system.*") does NOT satisfy coverage for an exact tool
+// name — CLAUDE.md hard constraint 6 requires a literal, wildcard-free entry
+// for the static builtin catalog.
+func TestValidateToolPolicyCoverage_WildcardDoesNotCountAsCoverage(t *testing.T) {
+	cfg := &Config{
+		Sandbox: OmnipusSandboxConfig{
+			ToolPolicies: map[string]string{"system.*": "deny"},
+		},
+		Agents: AgentsConfig{
+			List: []AgentConfig{
+				{ID: "agent-e", Tools: nil},
+			},
+		},
+	}
+	knownTools := map[string]struct{}{"system.agent.list": {}}
+
+	gaps := ValidateToolPolicyCoverage(cfg, knownTools)
+	require.Len(t, gaps, 1, "a wildcard entry must not count as literal coverage")
+	assert.Equal(t, "system.agent.list", gaps[0].ToolName)
+}
+
+// TestValidateToolPolicyCoverage_NilOrEmptyInputs_NoGaps verifies the
+// "nothing to check" guard: a nil cfg or an empty/nil knownTools set returns
+// no gaps rather than treating it as a universal gap.
+func TestValidateToolPolicyCoverage_NilOrEmptyInputs_NoGaps(t *testing.T) {
+	assert.Empty(t, ValidateToolPolicyCoverage(nil, map[string]struct{}{"read_file": {}}))
+
+	cfg := &Config{Agents: AgentsConfig{List: []AgentConfig{{ID: "agent-f"}}}}
+	assert.Empty(t, ValidateToolPolicyCoverage(cfg, nil))
+	assert.Empty(t, ValidateToolPolicyCoverage(cfg, map[string]struct{}{}))
+}
+
+// TestValidateToolPolicyCoverage_MultipleAgentsIndependentGaps verifies that
+// coverage is checked independently per agent: one agent's coverage does not
+// satisfy another agent's requirement for the same tool.
+func TestValidateToolPolicyCoverage_MultipleAgentsIndependentGaps(t *testing.T) {
+	cfg := &Config{
+		Agents: AgentsConfig{
+			List: []AgentConfig{
+				{
+					ID: "covered-agent",
+					Tools: &AgentToolsCfg{
+						Builtin: AgentBuiltinToolsCfg{
+							Policies: map[string]ToolPolicy{"read_file": ToolPolicyAllow},
+						},
+					},
+				},
+				{ID: "uncovered-agent", Tools: nil},
+			},
+		},
+	}
+	knownTools := map[string]struct{}{"read_file": {}}
+
+	gaps := ValidateToolPolicyCoverage(cfg, knownTools)
+	require.Len(t, gaps, 1, "only the uncovered agent should be reported")
+	assert.Equal(t, "uncovered-agent", gaps[0].AgentID)
+}
+
+// TestValidateToolPolicyCoverage_BothSidesPresentDifferentValues_NotAGap
+// verifies the documented, intentional semantic: coverage checks only the
+// PRESENCE of an explicit entry on either side (global or per-agent) — never
+// agreement between the two values. A tool with a global "ask" entry and a
+// conflicting per-agent "deny" entry for the same agent is fully covered,
+// NOT a gap. This is deliberate: per-agent overrides exist precisely to let
+// an agent diverge from the global default, so a future "fix" that started
+// requiring value agreement between the two layers would silently break
+// that override mechanism. This test locks the current (correct) behavior
+// in so such a regression fails loudly.
+func TestValidateToolPolicyCoverage_BothSidesPresentDifferentValues_NotAGap(t *testing.T) {
+	cfg := &Config{
+		Sandbox: OmnipusSandboxConfig{
+			ToolPolicies: map[string]string{"read_file": "ask"},
+		},
+		Agents: AgentsConfig{
+			List: []AgentConfig{
+				{
+					ID: "agent-h",
+					Tools: &AgentToolsCfg{
+						Builtin: AgentBuiltinToolsCfg{
+							// Deliberately disagrees with the global "ask" value above.
+							Policies: map[string]ToolPolicy{"read_file": ToolPolicyDeny},
+						},
+					},
+				},
+			},
+		},
+	}
+	knownTools := map[string]struct{}{"read_file": {}}
+
+	gaps := ValidateToolPolicyCoverage(cfg, knownTools)
+	assert.Empty(t, gaps, "mere presence of an entry on either layer satisfies coverage; the two layers are not required to agree on a value")
+}
+
+// --- RepairIncompleteToolPolicyCoverage tests ---
+
+// TestRepairIncompleteToolPolicyCoverage_BackfillsMissingToDeny simulates a
+// pre-existing installation whose on-disk agent config predates the removal
+// of the DefaultPolicy/default_policy fallback: the agent's
+// Tools.Builtin.Policies map is genuinely sparse (only a handful of entries,
+// as if every unlisted tool used to fall through to a deleted default).
+// After RepairIncompleteToolPolicyCoverage runs, every gap must be backfilled
+// to "deny", pre-existing entries must survive untouched, and a subsequent
+// ValidateToolPolicyCoverage call must find zero gaps.
+func TestRepairIncompleteToolPolicyCoverage_BackfillsMissingToDeny(t *testing.T) {
+	cfg := &Config{
+		Agents: AgentsConfig{
+			List: []AgentConfig{
+				{
+					ID: "legacy-agent",
+					Tools: &AgentToolsCfg{
+						Builtin: AgentBuiltinToolsCfg{
+							// Sparse: only 3 of the 6 known tools have an entry, as a
+							// pre-DefaultPolicy-removal config would have.
+							Policies: map[string]ToolPolicy{
+								"read_file":  ToolPolicyAllow,
+								"write_file": ToolPolicyAsk,
+								"bash":       ToolPolicyAllow,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	knownTools := map[string]struct{}{
+		"read_file": {}, "write_file": {}, "bash": {},
+		"delete_agent": {}, "create_agent": {}, "send_message": {},
+	}
+
+	repaired := RepairIncompleteToolPolicyCoverage(cfg, knownTools)
+	assert.Equal(t, 1, repaired, "exactly one agent should have been repaired")
+
+	agentPolicies := cfg.Agents.List[0].Tools.Builtin.Policies
+
+	// Pre-existing entries survive untouched.
+	assert.Equal(t, ToolPolicyAllow, agentPolicies["read_file"], "pre-existing entry must be untouched")
+	assert.Equal(t, ToolPolicyAsk, agentPolicies["write_file"], "pre-existing entry must be untouched")
+	assert.Equal(t, ToolPolicyAllow, agentPolicies["bash"], "pre-existing entry must be untouched")
+
+	// Every gap is backfilled to "deny" (the safe, fail-closed direction).
+	for _, name := range []string{"delete_agent", "create_agent", "send_message"} {
+		assert.Equal(t, ToolPolicyDeny, agentPolicies[name], "gap for %q must be backfilled to deny", name)
+	}
+
+	// The subsequent hard-validation pass must now find zero gaps.
+	gaps := ValidateToolPolicyCoverage(cfg, knownTools)
+	assert.Empty(t, gaps, "after repair, coverage validation must find no remaining gaps")
+}
+
+// TestRepairIncompleteToolPolicyCoverage_Idempotent verifies that repairing
+// an already-fully-covered config is a no-op: repairedAgentCount is 0 and no
+// existing policy values change.
+func TestRepairIncompleteToolPolicyCoverage_Idempotent(t *testing.T) {
+	cfg := &Config{
+		Agents: AgentsConfig{
+			List: []AgentConfig{
+				{
+					ID: "fully-covered-agent",
+					Tools: &AgentToolsCfg{
+						Builtin: AgentBuiltinToolsCfg{
+							Policies: map[string]ToolPolicy{
+								"read_file":  ToolPolicyAllow,
+								"write_file": ToolPolicyDeny,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	knownTools := map[string]struct{}{"read_file": {}, "write_file": {}}
+
+	// First call repairs nothing (already covered).
+	repaired := RepairIncompleteToolPolicyCoverage(cfg, knownTools)
+	assert.Equal(t, 0, repaired, "an already-fully-covered config must not be reported as repaired")
+	assert.Equal(t, ToolPolicyAllow, cfg.Agents.List[0].Tools.Builtin.Policies["read_file"])
+	assert.Equal(t, ToolPolicyDeny, cfg.Agents.List[0].Tools.Builtin.Policies["write_file"])
+
+	// Calling it again is still a no-op.
+	repairedAgain := RepairIncompleteToolPolicyCoverage(cfg, knownTools)
+	assert.Equal(t, 0, repairedAgain, "repeated repair calls on a covered config must stay a no-op")
+}
+
+// TestRepairIncompleteToolPolicyCoverage_NilOrEmptyInputs_NoOp verifies the
+// "nothing to repair" guard mirrors ValidateToolPolicyCoverage's own guard.
+func TestRepairIncompleteToolPolicyCoverage_NilOrEmptyInputs_NoOp(t *testing.T) {
+	assert.Equal(t, 0, RepairIncompleteToolPolicyCoverage(nil, map[string]struct{}{"read_file": {}}))
+
+	cfg := &Config{Agents: AgentsConfig{List: []AgentConfig{{ID: "agent-i"}}}}
+	assert.Equal(t, 0, RepairIncompleteToolPolicyCoverage(cfg, nil))
+	assert.Equal(t, 0, RepairIncompleteToolPolicyCoverage(cfg, map[string]struct{}{}))
 }

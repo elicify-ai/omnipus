@@ -703,7 +703,6 @@ func TestGetAgentTools_CustomAgent(t *testing.T) {
 					Name: "Tool Agent",
 					Tools: &config.AgentToolsCfg{
 						Builtin: config.AgentBuiltinToolsCfg{
-							DefaultPolicy: config.ToolPolicyDeny,
 							Policies: map[string]config.ToolPolicy{
 								"read_file":  config.ToolPolicyAllow,
 								"search_web": config.ToolPolicyAllow,
@@ -731,8 +730,10 @@ func TestGetAgentTools_CustomAgent(t *testing.T) {
 	assert.Equal(t, "Main", resp.AgentType)
 	builtin, ok := resp.Config["builtin"].(map[string]any)
 	require.True(t, ok)
-	// Legacy mode:"explicit" + visible:[...] is converted to policy format.
-	assert.Equal(t, "deny", builtin["default_policy"])
+	// There is no default_policy field any more (CLAUDE.md hard constraint
+	// 6) — the response carries only the agent's explicit policies map.
+	_, hasDefaultPolicy := builtin["default_policy"]
+	assert.False(t, hasDefaultPolicy, "default_policy no longer exists on the wire")
 	policies, ok := builtin["policies"].(map[string]any)
 	require.True(t, ok, "policies must be a map")
 	assert.Equal(t, "allow", policies["read_file"])
@@ -770,7 +771,11 @@ func TestUpdateAgentTools_Subagent3pRejected(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 	id := createSubagent3p(t, api)
 
-	body := `{"builtin":{"default_policy":"deny"}}`
+	// The locked-agent 403 / external-subagent 400 checks run before body
+	// parsing, so the exact policy shape here is incidental — a modern,
+	// fully-explicit-style body is used since default_policy no longer
+	// exists on the wire (CLAUDE.md hard constraint 6).
+	body := `{"builtin":{"policies":{"bash":"deny"}}}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+id+"/tools", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
@@ -844,8 +849,16 @@ func TestUpdateAgentTools_NotFound(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
-// TestUpdateAgentTools_InvalidMode verifies PUT with bad mode returns 422.
-func TestUpdateAgentTools_InvalidMode(t *testing.T) {
+// TestUpdateAgentTools_InvalidPolicyValue verifies PUT with an invalid
+// per-tool policy value returns 422. Renamed from the old
+// TestUpdateAgentTools_InvalidMode, which sent a "default_policy" field that
+// no longer exists on the wire (CLAUDE.md hard constraint 6) — with
+// ValidateInbound off (this harness's default), an unrecognized top-level
+// field is silently dropped by the non-strict JSON decode rather than
+// rejected, so that body no longer exercises any validation path at all. This
+// test exercises the still-live per-tool policy-value enum check instead (the
+// validation immediately after decode, before the coverage check runs).
+func TestUpdateAgentTools_InvalidPolicyValue(t *testing.T) {
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 
 	tmpDir := t.TempDir()
@@ -871,14 +884,14 @@ func TestUpdateAgentTools_InvalidMode(t *testing.T) {
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 	api := &restAPI{agentLoop: al, homePath: tmpDir}
 
-	// Invalid default_policy should be rejected.
-	body := `{"builtin":{"default_policy":"bogus"}}`
+	// Invalid per-tool policy value should be rejected.
+	body := `{"builtin":{"policies":{"bash":"bogus"}}}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent/tools", strings.NewReader(body))
 	r = withReAuthAdmin(t, api, r) // FR-3.3 re-auth gate on the per-agent tool grant
 	api.HandleAgents(w, r)
 
-	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
+	assert.Equal(t, http.StatusUnprocessableEntity, w.Code, "body: %s", w.Body.String())
 }
 
 // TestCreateAgent_WithToolsCfg verifies POST /api/v1/agents with tools_cfg persists the tools config.
@@ -908,6 +921,14 @@ func TestCreateAgent_WithToolsCfg(t *testing.T) {
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 	api := &restAPI{agentLoop: al, homePath: tmpDir}
 
+	// There is no default_policy field on the wire any more (CLAUDE.md hard
+	// constraint 6) — createAgent's strict decode (decodeAgentCreateVariant,
+	// DisallowUnknownFields, independent of ValidateInbound) rejects a stray
+	// "default_policy" key inside tools_cfg.builtin with 400, so it must not
+	// appear here. The caller-supplied "policies" map is merged on top of the
+	// seeded deny-all baseline (coreagent.NewCustomAgentToolsCfg), which is
+	// what keeps the resulting agent's tool-policy coverage complete even
+	// though only 3 tools are named below.
 	body := `{
 		"name": "Research Bot",
 		"type": "Main",
@@ -917,7 +938,6 @@ func TestCreateAgent_WithToolsCfg(t *testing.T) {
 		"icon": "magnifying-glass",
 		"tools_cfg": {
 			"builtin": {
-				"default_policy": "deny",
 				"policies": {
 					"read_file": "allow",
 					"search_web": "allow",
@@ -933,7 +953,7 @@ func TestCreateAgent_WithToolsCfg(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
 	api.HandleAgents(w, r)
 
-	require.Equal(t, http.StatusCreated, w.Code)
+	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
 
 	var resp struct {
 		ID   string `json:"id"`
@@ -945,7 +965,9 @@ func TestCreateAgent_WithToolsCfg(t *testing.T) {
 	assert.Equal(t, "Main", resp.Type)
 	assert.NotEmpty(t, resp.ID)
 
-	// Verify the config.json was updated with the tools config (new format: default_policy/policies).
+	// Verify the config.json was updated with the tools config (there is no
+	// default_policy field any more — CLAUDE.md hard constraint 6 — so the
+	// persisted builtin map carries only a complete "policies" map).
 	savedCfg, err := os.ReadFile(cfgPath)
 	require.NoError(t, err)
 	var savedMap map[string]any
@@ -959,10 +981,18 @@ func TestCreateAgent_WithToolsCfg(t *testing.T) {
 	toolsMap, ok := agentMap["tools"].(map[string]any)
 	require.True(t, ok, "tools config must be persisted")
 	builtinMap, _ := toolsMap["builtin"].(map[string]any)
-	assert.Equal(t, "deny", builtinMap["default_policy"])
+	_, hasDefaultPolicy := builtinMap["default_policy"]
+	assert.False(t, hasDefaultPolicy, "default_policy no longer exists on the wire")
 	policies, _ := builtinMap["policies"].(map[string]any)
+	// The caller's sparse overrides win...
 	assert.Equal(t, "allow", policies["read_file"])
 	assert.Equal(t, "allow", policies["search_web"])
+	assert.Equal(t, "allow", policies["fetch_url"])
+	// ...merged on top of the seeded deny-all baseline (coreagent.
+	// NewCustomAgentToolsCfg), so an unrelated tool the caller never
+	// mentioned is still explicitly covered (deny), and bash specifically
+	// stays denied (CRIT-001/FR-B12) since the caller did not override it.
+	assert.Equal(t, "deny", policies["bash"])
 }
 
 // TestCreateAgent_WithSkills verifies POST /api/v1/agents with skills persists and
@@ -1396,15 +1426,26 @@ func TestUpdateAgent_LockedRejectsSkills(t *testing.T) {
 }
 
 // TestUpdateAgentTools_Success verifies PUT /api/v1/agents/{id}/tools returns 200,
-// updates the response body with the correct agent_type and mode, and persists the
+// updates the response body with the correct agent_type, and persists the
 // tools config to config.json on disk.
 //
 // BDD: Given a custom agent exists in config and a config.json is on disk,
 //
-//	When PUT /api/v1/agents/{id}/tools is called with mode=explicit and visible=["read_file","search_web"],
-//	Then the response is 200, agent_type is "custom", config.builtin.mode is "explicit",
+//	When PUT /api/v1/agents/{id}/tools is called with a complete, explicit
+//	  per-tool policies map,
+//	Then the response is 200, agent_type is "Main",
 //	And config.json on disk reflects the persisted tools config.
 //
+// There is no default_policy field on the wire any more (CLAUDE.md hard
+// constraint 6) — a PUT must now carry a COMPLETE, explicit `policies` map
+// (config.ValidateToolPolicyCoverage enforces this at write time). This test
+// exercises that primary path directly with a full known-tool map. The
+// legacy mode:"explicit"+visible[] conversion is exercised separately in
+// TestUpdateAgentTools_LegacyModeAloneCoverageGapRejected below, which pins
+// the NEW behavior: submitted alone (no other coverage), it is now REJECTED
+// — the conversion only produces agent-level "allow" entries for the names
+// in visible[], it does not synthesize a deny-all baseline for every other
+// known tool, so it no longer amounts to a complete policy map by itself.
 // Traces to: parsed-inventing-gem.md — PR #41 Per-Agent Tool Visibility, updateAgentTools success path
 func TestUpdateAgentTools_Success(t *testing.T) {
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
@@ -1432,14 +1473,26 @@ func TestUpdateAgentTools_Success(t *testing.T) {
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 	api := &restAPI{agentLoop: al, homePath: tmpDir}
 
-	body := `{"builtin":{"mode":"explicit","visible":["read_file","search_web"]}}`
+	// Build a complete, explicit policies map: every known static builtin
+	// tool denied, except read_file/search_web which are allowed.
+	known := buildKnownBuiltinToolNames()
+	policies := make(map[string]string, len(known))
+	for name := range known {
+		policies[name] = "deny"
+	}
+	policies["read_file"] = "allow"
+	policies["search_web"] = "allow"
+	policiesJSON, err := json.Marshal(policies)
+	require.NoError(t, err)
+	body := `{"builtin":{"policies":` + string(policiesJSON) + `}}`
+
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/update-agent/tools", strings.NewReader(body))
 	r = withReAuthAdmin(t, api, r) // FR-3.3 re-auth gate on the per-agent tool grant
 	api.HandleAgents(w, r)
 
 	// Then: HTTP 200
-	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 
 	// Then: response body must parse into gen.AgentToolsResponse — verifying the
 	// PUT response uses `tools` (not `effective_tools`) matching the OpenAPI spec
@@ -1456,10 +1509,11 @@ func TestUpdateAgentTools_Success(t *testing.T) {
 	require.NotNil(t, genResp.AgentType, "PUT response must include agent_type")
 	assert.Equal(t, gen.AgentToolsResponseAgentTypeMain, *genResp.AgentType,
 		"updateAgentTools must return agent_type=Main for a user-created chat-colleague agent")
-	// Legacy mode:"explicit" + visible is converted to policy format (default_policy=deny).
-	require.NotNil(t, genResp.Config.Builtin.DefaultPolicy, "config.builtin.default_policy must be present")
-	assert.Equal(t, gen.AgentToolsResponseConfigBuiltinDefaultPolicyDeny, *genResp.Config.Builtin.DefaultPolicy,
-		"explicit mode converts to default_policy=deny")
+	// There is no default_policy field any more — the response's
+	// config.builtin.policies is the complete map just persisted.
+	assert.Equal(t, gen.AgentToolsResponseConfigBuiltinPoliciesAllow, genResp.Config.Builtin.Policies["read_file"])
+	assert.Equal(t, gen.AgentToolsResponseConfigBuiltinPoliciesAllow, genResp.Config.Builtin.Policies["search_web"])
+	assert.Equal(t, gen.AgentToolsResponseConfigBuiltinPoliciesDeny, genResp.Config.Builtin.Policies["bash"])
 
 	// Then: config.json on disk was updated with the tools config
 	savedCfg, err := os.ReadFile(cfgPath)
@@ -1473,12 +1527,142 @@ func TestUpdateAgentTools_Success(t *testing.T) {
 	toolsMap, ok := agentMap["tools"].(map[string]any)
 	require.True(t, ok, "tools config must be persisted to config.json")
 	persistedBuiltin, _ := toolsMap["builtin"].(map[string]any)
-	assert.Equal(t, "deny", persistedBuiltin["default_policy"],
-		"config.json must persist default_policy=deny (converted from mode=explicit)")
+	_, hasDefaultPolicy := persistedBuiltin["default_policy"]
+	assert.False(t, hasDefaultPolicy, "there is no default_policy field on the wire any more")
 	policiesRaw, ok := persistedBuiltin["policies"].(map[string]any)
 	require.True(t, ok, "config.json must persist policies map")
 	assert.Equal(t, "allow", policiesRaw["read_file"])
 	assert.Equal(t, "allow", policiesRaw["search_web"])
+	assert.Equal(t, "deny", policiesRaw["bash"])
+}
+
+// TestUpdateAgentTools_LegacyModeAloneCoverageGapRejected verifies that the
+// legacy mode:"explicit"+visible[] format, when submitted ALONE (no complete
+// policies map and no global sandbox.tool_policies floor covering the rest),
+// is now rejected with 400. pkg/gateway/rest.go's updateAgentTools converts
+// mode:"explicit"+visible into agent-level "allow" entries for exactly the
+// names in visible[] — it does not synthesize a deny-all baseline for every
+// other known tool, because there is no default-policy fallback any more
+// (CLAUDE.md hard constraint 6). The resulting sparse per-agent map fails
+// config.ValidateToolPolicyCoverage exactly like an incomplete `policies`
+// map submitted directly would.
+func TestUpdateAgentTools_LegacyModeAloneCoverageGapRejected(t *testing.T) {
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+
+	tmpDir := t.TempDir()
+	cfgPath := tmpDir + "/config.json"
+	cfgJSON := `{"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096},"list":[{"id":"update-agent-legacy","name":"Update Agent Legacy"}]}}`
+	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgJSON), 0o600))
+
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: tmpDir,
+				ModelName: "test-model",
+				MaxTokens: 4096,
+			},
+			List: []config.AgentConfig{
+				{ID: "update-agent-legacy", Name: "Update Agent Legacy"},
+			},
+		},
+	}
+	msgBus := bus.NewMessageBus()
+	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	api := &restAPI{agentLoop: al, homePath: tmpDir}
+
+	body := `{"builtin":{"mode":"explicit","visible":["read_file","search_web"]}}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/update-agent-legacy/tools", strings.NewReader(body))
+	r = withReAuthAdmin(t, api, r) // FR-3.3 re-auth gate on the per-agent tool grant
+	api.HandleAgents(w, r)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "coverage")
+}
+
+// TestUpdateAgentTools_PoliciesWinsOverLegacyModeVisible verifies that a
+// request carrying BOTH a real, complete `policies` map AND the legacy
+// mode:"explicit"+visible[] fields persists the caller's real policies
+// values — mode/visible must have NO effect whenever policies is present,
+// matching the documented wire contract ("mode/visible are... ignored when
+// policies is present"). Before the fix, updateAgentTools's legacy-mode
+// guard checked a now-inert `builtinDefaultPolicy` bookkeeping variable
+// (always "" — nothing ever set it earlier) instead of
+// req.Builtin.Policies == nil, so mode="explicit" unconditionally
+// overwrote the caller's real, already-built policies map with a fresh
+// deny-all-except-visible map whenever mode was ALSO sent — silently
+// discarding the caller's actual per-tool values (found live,
+// comment-analyzer + code-simplifier, 2026-07-06).
+func TestUpdateAgentTools_PoliciesWinsOverLegacyModeVisible(t *testing.T) {
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+
+	tmpDir := t.TempDir()
+	cfgPath := tmpDir + "/config.json"
+	cfgJSON := `{"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096},"list":[{"id":"update-agent-both","name":"Update Agent Both"}]}}`
+	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgJSON), 0o600))
+
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: tmpDir,
+				ModelName: "test-model",
+				MaxTokens: 4096,
+			},
+			List: []config.AgentConfig{
+				{ID: "update-agent-both", Name: "Update Agent Both"},
+			},
+		},
+	}
+	msgBus := bus.NewMessageBus()
+	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	api := &restAPI{agentLoop: al, homePath: tmpDir}
+
+	// A complete, real policies map: everything denied except read_file.
+	known := buildKnownBuiltinToolNames()
+	policies := make(map[string]string, len(known))
+	for name := range known {
+		policies[name] = "deny"
+	}
+	policies["read_file"] = "allow"
+	policiesJSON, err := json.Marshal(policies)
+	require.NoError(t, err)
+
+	// Send policies AND the legacy mode/visible fields naming a DIFFERENT
+	// tool (search_web, left "deny" in the real map). If mode/visible
+	// incorrectly won, search_web would end up "allow" and read_file would
+	// be dropped entirely (the legacy conversion only ever sets `visible`
+	// names to "allow" — it never carries `policies` forward).
+	body := `{"builtin":{"policies":` + string(policiesJSON) +
+		`,"mode":"explicit","visible":["search_web"]}}`
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/update-agent-both/tools", strings.NewReader(body))
+	r = withReAuthAdmin(t, api, r) // FR-3.3 re-auth gate on the per-agent tool grant
+	api.HandleAgents(w, r)
+
+	require.Equal(t, http.StatusOK, w.Code,
+		"a real, complete policies map must win over mode/visible, not be discarded: body: %s", w.Body.String())
+
+	savedCfg, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	var savedMap map[string]any
+	require.NoError(t, json.Unmarshal(savedCfg, &savedMap))
+	agentsMap, _ := savedMap["agents"].(map[string]any)
+	list, _ := agentsMap["list"].([]any)
+	require.Len(t, list, 1)
+	agentMap, _ := list[0].(map[string]any)
+	toolsMap, _ := agentMap["tools"].(map[string]any)
+	builtin, _ := toolsMap["builtin"].(map[string]any)
+	persisted, ok := builtin["policies"].(map[string]any)
+	require.True(t, ok, "policies must be persisted")
+
+	assert.Equal(t, "allow", persisted["read_file"], "the caller's real policies value must survive")
+	assert.Equal(t, "deny", persisted["bash"], "the caller's real policies value must survive")
+	assert.Equal(t, "deny", persisted["search_web"],
+		"mode/visible must have NO effect when policies is present — search_web must keep its "+
+			"real 'deny' value from the policies map, not become 'allow' from visible[]")
 }
 
 // TestUpdateAgentTools_ReloadFailure_Returns503 verifies that if TriggerReload fails
@@ -1524,7 +1708,27 @@ func TestUpdateAgentTools_ReloadFailure_Returns503(t *testing.T) {
 	})
 	api := &restAPI{agentLoop: al, homePath: tmpDir}
 
-	body := `{"builtin":{"mode":"inherit"}}`
+	// A complete, explicit policies map — NOT mode:"inherit" alone. Per
+	// CLAUDE.md hard constraint 6 (config.ValidateToolPolicyCoverage), the
+	// legacy mode:"inherit" conversion no longer synthesizes a deny-all
+	// baseline (see the "REAL CURRENT BEHAVIOR" comment on updateAgentTools'
+	// mode:"inherit" case in rest.go): sent alone, it now fails coverage
+	// validation and returns 400 BEFORE ever reaching TriggerReload, which
+	// would mask the very 503 path this test exists to exercise (this test
+	// predates the no-default-policy-fallback change and was never updated
+	// for it — TestUpdateAgentTools_LegacyModeAloneCoverageGapRejected pins
+	// the mode:"inherit"-alone-is-now-rejected behavior separately). A full
+	// map clears coverage validation so the handler proceeds to the
+	// simulated reload failure.
+	known := buildKnownBuiltinToolNames()
+	policies := make(map[string]string, len(known))
+	for name := range known {
+		policies[name] = "deny"
+	}
+	policies["read_file"] = "allow"
+	policiesJSON, err := json.Marshal(policies)
+	require.NoError(t, err)
+	body := `{"builtin":{"policies":` + string(policiesJSON) + `}}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/reload-test-agent/tools", strings.NewReader(body))
 	r = withReAuthAdmin(t, api, r) // FR-3.3 re-auth gate on the per-agent tool grant

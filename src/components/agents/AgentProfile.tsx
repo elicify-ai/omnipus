@@ -280,7 +280,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // closes the slide-over. Locked agents do not render the trigger.
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [toolsCfg, setToolsCfg] = useState<AgentToolsCfg>({
-    builtin: { default_policy: 'allow' },
+    builtin: { policies: {} },
   })
   // US-E6: per-agent skill assignment (opt-in, default none).
   const [agentSkills, setAgentSkills] = useState<string[]>([])

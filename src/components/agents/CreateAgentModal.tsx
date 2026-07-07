@@ -258,7 +258,7 @@ export function CreateAgentModal({
   const registryTools = toolsQuery.data ?? []
   const skills = skillsQuery.data ?? []
   const globalPolicies = globalPoliciesQuery.data
-    ? { default_policy: globalPoliciesQuery.data.default_policy, policies: globalPoliciesQuery.data.policies ?? {} }
+    ? { policies: globalPoliciesQuery.data.policies ?? {} }
     : undefined
 
   if (!isOpen) return null

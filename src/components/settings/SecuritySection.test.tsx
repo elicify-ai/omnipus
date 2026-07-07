@@ -131,7 +131,6 @@ const BUILTIN_AND_MCP_TOOLS: RegistryTool[] = [
 ]
 
 const GLOBAL_POLICIES = {
-  default_policy: 'ask' as const,
   policies: {},
 }
 
@@ -371,7 +370,6 @@ describe('SecuritySection — US-B3 ToolPolicyEditor in advanced section', () =>
     // so each category is uniform. We only test that the ToolPolicyEditor is
     // wired up and renders category pills; mixed-pill logic is tested in ToolPolicyEditor.test.tsx.
     vi.mocked(fetchGlobalToolPolicies).mockResolvedValue({
-      default_policy: 'allow',
       policies: {},
     })
 
@@ -479,7 +477,7 @@ describe('SecuritySection — global tool-policy re-auth gate', () => {
     // gate; the replay (with the minted token) succeeds.
     vi.mocked(updateGlobalToolPolicies)
       .mockRejectedValueOnce(reAuth403())
-      .mockResolvedValueOnce({ default_policy: 'allow', policies: {} } as never)
+      .mockResolvedValueOnce({ policies: {} } as never)
     vi.mocked(reAuth).mockResolvedValue({ verified: true, token: 'reauth_tok', expires_in: 300 } as never)
 
     renderSection()
@@ -700,7 +698,6 @@ describe('SecuritySection — MCP tools in GlobalToolPoliciesSection', () => {
   it('changing an MCP tool policy fires updateGlobalToolPolicies through the re-auth gate', async () => {
     // The auto-save is immediate on first success (no 403 on this path).
     vi.mocked(updateGlobalToolPolicies).mockResolvedValue({
-      default_policy: 'ask',
       policies: {},
     } as never)
 
@@ -735,7 +732,7 @@ describe('SecuritySection — MCP tools in GlobalToolPoliciesSection', () => {
   it('changing an MCP tool policy that triggers a re-auth 403 opens the consent dialog', async () => {
     vi.mocked(updateGlobalToolPolicies)
       .mockRejectedValueOnce(reAuth403())
-      .mockResolvedValueOnce({ default_policy: 'ask', policies: {} } as never)
+      .mockResolvedValueOnce({ policies: {} } as never)
     vi.mocked(reAuth).mockResolvedValue({ verified: true, token: 'tok_mcp', expires_in: 300 } as never)
 
     await renderWithMcpAndExpand()

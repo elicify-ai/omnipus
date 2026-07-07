@@ -36,6 +36,11 @@ import (
 // widen any non-infra tool the agent's policy denies.
 func TestResolveApprovalToolPolicy_InfraForceAllow(t *testing.T) {
 	// Ava: deny-by-default; create_agent/list_models allowed; load_tool NOT listed.
+	// There is no DefaultPolicy field any more (CLAUDE.md hard constraint 6) —
+	// "exec" gets an explicit "deny" entry below (replacing the removed
+	// default-deny fallback) so the "must not widen a denied tool" assertion
+	// below exercises an explicit policy decision rather than incidentally
+	// relying on the fail-closed "no entry on either side" path.
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			List: []config.AgentConfig{
@@ -43,10 +48,10 @@ func TestResolveApprovalToolPolicy_InfraForceAllow(t *testing.T) {
 					ID: "ava",
 					Tools: &config.AgentToolsCfg{
 						Builtin: config.AgentBuiltinToolsCfg{
-							DefaultPolicy: config.ToolPolicyDeny,
 							Policies: map[string]config.ToolPolicy{
 								"create_agent": config.ToolPolicyAllow,
 								"list_models":  config.ToolPolicyAllow,
+								"exec":         config.ToolPolicyDeny,
 							},
 						},
 					},

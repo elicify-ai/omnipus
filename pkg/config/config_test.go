@@ -1313,7 +1313,6 @@ func TestResolveType_NilCallback(t *testing.T) {
 func TestAgentToolsCfg_JSONRoundTrip(t *testing.T) {
 	original := AgentToolsCfg{
 		Builtin: AgentBuiltinToolsCfg{
-			DefaultPolicy: ToolPolicyDeny,
 			Policies: map[string]ToolPolicy{
 				"exec":       ToolPolicyAllow,
 				"search_web": ToolPolicyAllow,
@@ -1339,11 +1338,6 @@ func TestAgentToolsCfg_JSONRoundTrip(t *testing.T) {
 	var decoded AgentToolsCfg
 	if unmarshalErr := json.Unmarshal(data, &decoded); unmarshalErr != nil {
 		t.Fatalf("json.Unmarshal(AgentToolsCfg): %v", unmarshalErr)
-	}
-
-	// Builtin.DefaultPolicy
-	if decoded.Builtin.DefaultPolicy != original.Builtin.DefaultPolicy {
-		t.Errorf("Builtin.DefaultPolicy = %q, want %q", decoded.Builtin.DefaultPolicy, original.Builtin.DefaultPolicy)
 	}
 
 	// Builtin.Policies — count

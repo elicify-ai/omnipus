@@ -860,9 +860,7 @@ func TestBash_NewCustomAgentDeniedByDefault(t *testing.T) {
 		policies[k] = string(v)
 	}
 	polCfg := &tools.ToolPolicyCfg{
-		DefaultPolicy:       string(newAgent.Tools.Builtin.DefaultPolicy),
-		Policies:            policies,
-		GlobalDefaultPolicy: "allow",
+		Policies: policies,
 	}
 
 	// A fresh agent created via a display name ("Research Bot" -> "research-bot")
@@ -880,31 +878,29 @@ func TestBash_NewCustomAgentDeniedByDefault(t *testing.T) {
 	}
 }
 
-// TestBashScopeCore_UnlistedResolvesToAllow_WithoutExplicitSeed_RegressionBaseline
-// is the regression guard for FR-B12 (CRIT-001): it proves the fix above is
-// load-bearing, not redundant with some other pre-existing deny-by-default
-// mechanism. It hand-builds the EXACT ToolPolicyCfg shape AgentCreateTool.Execute
-// produces for a fresh custom agent MINUS the new `Policies["bash"] = deny` seed
-// line (i.e., DefaultPolicy: allow + the pre-existing system.*: deny entry only)
-// and asserts an unlisted ScopeCore tool ("bash") resolves to "allow" — the exact
-// fail-open gap this whole task closes. If this baseline ever stopped resolving
-// to "allow" (e.g. because passesScopeGate started hard-denying ScopeCore on
-// custom agents), TestBash_NewCustomAgentDeniedByDefault would no longer be
-// proof that the FR-B12 seed specifically is doing the work.
-func TestBashScopeCore_UnlistedResolvesToAllow_WithoutExplicitSeed_RegressionBaseline(t *testing.T) {
+// TestBashScopeCore_UnlistedResolvesToDeny_FailClosedBaseline replaces the
+// former "...ResolvesToAllow..." regression baseline. That test hand-built a
+// ToolPolicyCfg with DefaultPolicy: allow (no "bash" entry) to prove the
+// FR-B12 explicit bash:deny seed was "load-bearing" against a fail-open
+// default. DefaultPolicy/GlobalDefaultPolicy were removed project-wide
+// (CLAUDE.md hard constraint 6): the compositor itself now fails closed to
+// "deny" when a tool has no entry on either side (pkg/tools/compositor.go),
+// so an unlisted tool can no longer resolve to "allow" at all — bash's
+// explicit seed entry is now redundant with (not load-bearing against) the
+// systemic fail-closed default, which is the stronger guarantee. This test
+// pins that an unlisted ScopeCore tool with no explicit seed and no global
+// coverage resolves to "deny", not "allow".
+func TestBashScopeCore_UnlistedResolvesToDeny_FailClosedBaseline(t *testing.T) {
 	polCfg := &tools.ToolPolicyCfg{
-		DefaultPolicy: string(config.ToolPolicyAllow),
 		Policies: map[string]string{
-			"system.*": string(config.ToolPolicyDeny),
-			// Deliberately NO "bash" entry — this is the seed under test in
-			// agent.go, intentionally omitted here to establish the baseline it fixes.
+			// Deliberately NO "bash" entry — proving the fail-closed default,
+			// not any explicit seed, is what denies it here.
 		},
-		GlobalDefaultPolicy: "allow",
 	}
 
 	got := tools.EffectiveToolPolicy(polCfg, tools.ScopeCore, string(config.AgentTypeCustom), "bash")
-	if got != "allow" {
-		t.Fatalf("regression baseline broken: expected an unlisted ScopeCore tool with no explicit "+
-			"seed to resolve to %q (proving the fix is load-bearing), got %q", "allow", got)
+	if got != "deny" {
+		t.Fatalf("fail-closed baseline broken: expected an unlisted ScopeCore tool with no explicit "+
+			"seed and no global coverage to resolve to %q, got %q", "deny", got)
 	}
 }

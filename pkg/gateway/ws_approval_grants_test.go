@@ -110,11 +110,12 @@ func minimalAgentLoopCfg(t *testing.T, extra ...config.AgentConfig) *config.Conf
 // reached), this is what makes "policy deny overrides an existing grant" hold
 // for the system as a whole.
 func TestToolApproval_PolicyDenyOverridesGrant(t *testing.T) {
+	// There is no DefaultPolicy field any more (CLAUDE.md hard constraint 6);
+	// the explicit "exec": deny entry alone determines the verdict below.
 	cfg := minimalAgentLoopCfg(t, config.AgentConfig{
 		ID: "agent-a",
 		Tools: &config.AgentToolsCfg{
 			Builtin: config.AgentBuiltinToolsCfg{
-				DefaultPolicy: config.ToolPolicyAllow,
 				Policies: map[string]config.ToolPolicy{
 					"exec": config.ToolPolicyDeny,
 				},
@@ -138,11 +139,16 @@ func TestToolApproval_PolicyDenyOverridesGrant(t *testing.T) {
 // the "ask" branch where CheckGrantOrRequestApproval lives), this is what
 // makes "policy allow never prompts" hold for the system as a whole.
 func TestToolApproval_PolicyAllowNeverPrompts(t *testing.T) {
+	// The removed DefaultPolicy=allow fallback (CLAUDE.md hard constraint 6)
+	// is replaced with an explicit "exec": allow entry — this is the tool the
+	// test resolves policy for below, and coverage must now be explicit.
 	cfg := minimalAgentLoopCfg(t, config.AgentConfig{
 		ID: "agent-a",
 		Tools: &config.AgentToolsCfg{
 			Builtin: config.AgentBuiltinToolsCfg{
-				DefaultPolicy: config.ToolPolicyAllow,
+				Policies: map[string]config.ToolPolicy{
+					"exec": config.ToolPolicyAllow,
+				},
 			},
 		},
 	})

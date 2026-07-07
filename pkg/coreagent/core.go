@@ -213,71 +213,188 @@ func GetPrompt(id string) string {
 	return prompts[id]
 }
 
-// coreAgentSeed returns the constructor-seeded policy map for the named core
-// agent (FR-010, FR-022). The map is keyed by tool name (or trailing-wildcard
-// prefix like "system.*") with values "allow", "ask", or "deny".
+// allStaticToolNames is the complete, hardcoded enumeration of every static
+// builtin tool name known to the platform:
+//
+//   - 31 general builtin tools (pkg/tools/*.go, excluding pkg/tools/browser and
+//     the dynamic MCP-adapter tool names, which are per-server and can't be
+//     statically enumerated — see the Constraint #6 MCP exception).
+//   - 7 browser-automation tools (pkg/tools/browser/tools.go).
+//   - 35 sysagent management tools (pkg/sysagent/tools/*.go).
+//
+// This is a hardcoded Go literal, NOT computed by importing pkg/tools or
+// pkg/sysagent/tools: pkg/sysagent/tools/agent.go already imports
+// pkg/coreagent, so the reverse import would create a cycle. A boot-time hard
+// validator (pkg/gateway) independently enumerates the real tool registry and
+// aborts boot on any agent × tool coverage gap, so a drift here is caught
+// loudly rather than silently falling back to a default.
+var allStaticToolNames = []string{
+	// General builtin tools.
+	"bash",
+	"read_file", "write_file", "list_directory", "edit_file", "append_file",
+	"search_web", "fetch_url",
+	"send_message", "hand_off", "return_to_default", "send_file",
+	"find_skills", "install_skill",
+	"delegate",
+	"list_tasks", "create_task", "update_task", "delete_task", "list_agents",
+	"remember", "recall_memory", "run_retrospective",
+	"serve_web",
+	"set_todos",
+	"read_inbox", "search_email", "read_message", "send_email", "reply",
+	"load_tool",
+
+	// Browser automation tools.
+	"browser_navigate", "browser_click", "browser_type", "browser_screenshot",
+	"browser_get_text", "browser_wait", "browser_evaluate",
+
+	// Sysagent management tools.
+	"navigate",
+	"create_workspace", "update_workspace", "delete_workspace", "list_workspaces", "get_workspace",
+	"read_agent_metadata", "write_agent_metadata",
+	"configure_provider", "list_providers", "test_provider", "list_models",
+	"run_doctor", "get_usage",
+	"add_mcp_server", "remove_mcp_server", "list_mcp_servers",
+	"create_skill", "edit_skill",
+	"create_task_in_workspace", "update_task_in_workspace", "delete_task_in_workspace", "list_tasks_in_workspace",
+	"remove_skill", "list_skills",
+	"enable_channel", "configure_channel", "disable_channel", "list_channels", "test_channel",
+	"get_config", "set_config",
+	"create_agent", "update_agent", "delete_agent",
+}
+
+// AllStaticToolNames returns a copy of the full static builtin tool-name
+// catalog this package's seed functions enumerate against (denyAllThenOverride,
+// etc.). Exported so other packages (e.g. pkg/gateway's tool-catalog drift
+// test) can verify their own independently-derived "all known tools" set
+// stays in sync with this one, without needing to hand-copy it.
+func AllStaticToolNames() []string {
+	out := make([]string, len(allStaticToolNames))
+	copy(out, allStaticToolNames)
+	return out
+}
+
+// denyAllThenOverride returns a fully-enumerated policy map covering every
+// name in allStaticToolNames, starting every tool at "deny" and then applying
+// the given overrides. This is the mechanism the no-default-policy-fallback
+// rule requires: every tool-policy decision is an explicit, literal entry —
+// there is no DefaultPolicy field and no code-level allow/deny fallback. The
+// returned map is an independent allocation — callers may mutate it safely.
+//
+// overrides keys MUST already be members of allStaticToolNames — this is
+// checked and panics loudly on any unrecognized key, rather than silently
+// creating a dead, inert entry that reviewers/tests won't catch (coverage
+// validation only checks for MISSING keys, never extra/unrecognized ones,
+// so a typo'd or retired tool name here would otherwise leave the tool the
+// caller actually meant to override stuck at its "deny" default with no
+// signal anywhere). Every call site in this file is a hardcoded literal at
+// package-init-adjacent time, not user input, so a panic — an immediate,
+// loud test/boot failure — is the right disposition here, not an error
+// return that a caller could plausibly ignore.
+func denyAllThenOverride(overrides map[string]config.ToolPolicy) map[string]config.ToolPolicy {
+	out := make(map[string]config.ToolPolicy, len(allStaticToolNames))
+	for _, name := range allStaticToolNames {
+		out[name] = config.ToolPolicyDeny
+	}
+	for name, policy := range overrides {
+		if _, known := out[name]; !known {
+			panic(fmt.Sprintf(
+				"denyAllThenOverride: override for unknown tool %q — not in allStaticToolNames (typo, or a tool renamed since this seed was written?)",
+				name,
+			))
+		}
+		out[name] = policy
+	}
+	return out
+}
+
+// coreAgentSeed returns the constructor-seeded, fully-enumerated policy map
+// for the named core agent (FR-010, FR-022). The map has one literal entry
+// per name in allStaticToolNames — built via denyAllThenOverride, so every
+// tool is explicitly "allow", "ask", or "deny"; there is no default-policy
+// fallback for any tool the map doesn't mention.
 //
 // All four base agents (Mia, Jim, Ava, Ray) are LEAST-PRIVILEGE: deny-by-default
-// with an explicit allow-list for exactly the tools their role needs. The legacy
-// allow-by-default + "system.*" deny rail was retired from all base agents; it
-// still applies to the worker tier (IDWorker, IDPlanner, IDExplorer, IDResearcher)
-// which have narrower, well-understood surfaces.
+// with an explicit allow-list for exactly the tools their role needs. The
+// delegation-only subagent tier (IDWorker, IDPlanner, IDExplorer, IDResearcher)
+// is likewise deny-by-default with its own narrow, role-appropriate allow-list —
+// the legacy allow-by-default + dead "system.*" wildcard rail is retired
+// entirely; "system.*" matched zero real tool names (a leftover from a
+// since-renamed tool family), so it never actually rationed anything.
 //
 // The returned map is an independent allocation — callers may mutate it safely.
-func coreAgentSeed(
-	id CoreAgentID,
-) (defaultPolicy config.ToolPolicy, policies map[string]config.ToolPolicy) {
-	// Every core agent starts with the same rail: allow-by-default + deny system.*.
-	// Memory tools are explicitly seeded as allow (FR-016/FR-017) so they survive
-	// any future default_policy change and appear prominently in the tool picker UI.
-	// serve_web is explicitly allowed for every core agent (MAJOR-4): hoisting it
-	// here ensures that all agents have a traceable allow entry, not just Jim.
-	// Default_policy is allow, so this is belt-and-suspenders, but explicit entries
-	// make intent visible in the tool picker UI and survive any future policy change.
-	base := map[string]config.ToolPolicy{
-		"system.*":          config.ToolPolicyDeny,
-		"remember":          config.ToolPolicyAllow,
-		"recall_memory":     config.ToolPolicyAllow,
-		"run_retrospective": config.ToolPolicyAllow,
-		"serve_web":         config.ToolPolicyAllow,
-	}
-	// Browser automation: explicitly allow the navigate/capture tools (NOT
-	// browser_evaluate, which stays denied by the builtin policy) for the delegation
-	// workers/specialists (Worker, Explorer, Researcher) that still ride the legacy
-	// allow rail. Ray and Jim are handled by their own deny-by-default branches below
-	// (browser tools allowed explicitly there). Mia (router) and Ava (builder) are
-	// excluded by design — they delegate browser work; Planner only decomposes.
-	switch id {
-	case IDWorker, IDExplorer, IDResearcher:
-		// Jim is now deny-by-default (handled in the IDJim case below).
-		// Ray is handled by his own deny-by-default branch below.
-		// Workers/specialists still ride the legacy allow rail with belt-and-suspenders
-		// browser entries so the tools appear in the tool picker.
-		for _, b := range []string{
-			"browser_navigate", "browser_click", "browser_type",
-			"browser_screenshot", "browser_get_text", "browser_wait",
-		} {
-			base[b] = config.ToolPolicyAllow
+func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
+	allow := config.ToolPolicyAllow
+	// The delegation-only subagent tier (Worker + the three seeded specialists)
+	// is a leaf/near-leaf surface: narrower and more predictable than the base
+	// agents. Deny-by-default; only the tools each role plausibly needs are
+	// allowed. None of these ever get bash or any system-management tool
+	// (create_agent, set_config, add_mcp_server, …) — those stay denied.
+	if IsSubagentTierID(id) {
+		overrides := map[string]config.ToolPolicy{
+			// Every leaf reports its result back.
+			"send_message": allow,
 		}
-	}
-	// Workers get EPHEMERAL/run-log memory only — no persistent room. Deny
-	// the persistent-memory tools so a worker never writes to or relies on
-	// any memory room (scope: "no persistent room seeded/required for workers").
-	// serve_web is pointless for a delegation-only leaf, so drop it too.
-	if IsWorkerID(id) {
-		base["remember"] = config.ToolPolicyDeny
-		base["recall_memory"] = config.ToolPolicyDeny
-		base["run_retrospective"] = config.ToolPolicyDeny
-		delete(base, "serve_web")
-		return config.ToolPolicyAllow, base
-	}
-	// Specialist subagents (Planner/Explorer/Researcher) are delegation-only like
-	// the worker, but they DO get persistent memory (Explorer reads/writes memory;
-	// Planner records decompositions) — so the base memory allows stay. serve_web
-	// is dropped: a delegation-only specialist never serves an iframe preview.
-	if IsSpecialistID(id) {
-		delete(base, "serve_web")
-		return config.ToolPolicyAllow, base
+		switch id {
+		case IDWorker:
+			// General-purpose worker: executes one delegated task — file
+			// read/write and light web lookups. No task management (it does
+			// the task, it doesn't manage the DAG), no persistent memory
+			// (ephemeral/run-log only — "no persistent room" by design), no
+			// onward delegation (a leaf in the trust graph).
+			overrides["read_file"] = allow
+			overrides["write_file"] = allow
+			overrides["edit_file"] = allow
+			overrides["list_directory"] = allow
+			overrides["search_web"] = allow
+			overrides["fetch_url"] = allow
+		case IDPlanner:
+			// Decomposes a goal into a task DAG, delegating to Explorer/
+			// Researcher for context (bounded depth in the trust graph).
+			// Read-only file access, full task-management surface, delegate,
+			// and persistent memory to record decompositions. No browser —
+			// the Planner only decomposes, it doesn't browse.
+			overrides["read_file"] = allow
+			overrides["list_directory"] = allow
+			overrides["create_task"] = allow
+			overrides["update_task"] = allow
+			overrides["list_tasks"] = allow
+			overrides["delegate"] = allow
+			overrides["remember"] = allow
+			overrides["recall_memory"] = allow
+			overrides["run_retrospective"] = allow
+		case IDExplorer:
+			// File + memory exploration (internal context): read-only
+			// filesystem, persistent memory, plus interactive/visual
+			// browsing for pages that need rendering (NOT browser_evaluate).
+			overrides["read_file"] = allow
+			overrides["list_directory"] = allow
+			overrides["remember"] = allow
+			overrides["recall_memory"] = allow
+			overrides["run_retrospective"] = allow
+			for _, b := range []string{
+				"browser_navigate", "browser_click", "browser_type",
+				"browser_screenshot", "browser_get_text", "browser_wait",
+			} {
+				overrides[b] = allow
+			}
+		case IDResearcher:
+			// External-source research: web search/fetch, read-only file
+			// access (for fetched/local docs), persistent memory, plus
+			// interactive/visual browsing for sources that need it.
+			overrides["search_web"] = allow
+			overrides["fetch_url"] = allow
+			overrides["read_file"] = allow
+			overrides["remember"] = allow
+			overrides["recall_memory"] = allow
+			overrides["run_retrospective"] = allow
+			for _, b := range []string{
+				"browser_navigate", "browser_click", "browser_type",
+				"browser_screenshot", "browser_get_text", "browser_wait",
+			} {
+				overrides[b] = allow
+			}
+		}
+		return denyAllThenOverride(overrides)
 	}
 	switch id {
 	case IDAva:
@@ -288,8 +405,7 @@ func coreAgentSeed(
 		// management tools (create_workspace, set_config, …) no longer match the
 		// "system.*" glob, so every former-system tool fell through to allow.
 		ask := config.ToolPolicyAsk
-		allow := config.ToolPolicyAllow
-		return config.ToolPolicyDeny, map[string]config.ToolPolicy{
+		return denyAllThenOverride(map[string]config.ToolPolicy{
 			// Agent lifecycle — her core job. Delete is consent-gated (ask).
 			"create_agent": allow,
 			"update_agent": allow,
@@ -320,16 +436,15 @@ func coreAgentSeed(
 			"update_workspace": allow,
 			"list_workspaces":  allow,
 			"get_workspace":    allow,
-		}
+		})
 	case IDMia:
 		// Mia — the Assistant (default agent). LEAST-PRIVILEGE: deny-by-default,
 		// allow only the everyday-assistant surface (chat, memory, your tasks,
 		// email, light lookups, UI navigation). She ROUTES heavy work
 		// (build/shell/browser/research/admin) to Ava/Jim/Ray rather than doing
 		// it — matching her persona, which already refuses shell/browser.
-		allow := config.ToolPolicyAllow
 		ask := config.ToolPolicyAsk
-		return config.ToolPolicyDeny, map[string]config.ToolPolicy{
+		return denyAllThenOverride(map[string]config.ToolPolicy{
 			// Converse / route.
 			"send_message":      allow,
 			"hand_off":          allow,
@@ -357,15 +472,14 @@ func coreAgentSeed(
 			"search_web":  allow,
 			"fetch_url":   allow,
 			"find_skills": allow,
-		}
+		})
 	case IDRay:
 		// Ray — the Scout / research analyst. LEAST-PRIVILEGE: deny-by-default,
 		// allow only the research surface (search + read the web and local docs,
 		// drive a browser for interactive sources, write up findings to files,
 		// synthesize with memory, present with citations). No shell, no admin, no
 		// task/agent management — he researches and reports, he doesn't build or run.
-		allow := config.ToolPolicyAllow
-		return config.ToolPolicyDeny, map[string]config.ToolPolicy{
+		return denyAllThenOverride(map[string]config.ToolPolicy{
 			// Web research.
 			"search_web": allow,
 			"fetch_url":  allow,
@@ -398,7 +512,7 @@ func coreAgentSeed(
 			// Working aids (his summarize skill; a research checklist).
 			"find_skills": allow,
 			"set_todos":   allow,
-		}
+		})
 	case IDJim:
 		// Jim — the Planner & Orchestrator. LEAST-PRIVILEGE: deny-by-default,
 		// allow only the tools his role needs (plan, delegate, manage tasks +
@@ -407,11 +521,8 @@ func coreAgentSeed(
 		// rename silently broke — renamed management tools (create_workspace,
 		// set_config, …) no longer match the "system.*" glob, so every
 		// former-system tool fell through to allow.
-		// The shared `base` map (allow-rail with memory + serve_web) does NOT
-		// leak into Jim's return — we return an entirely new map here.
-		allow := config.ToolPolicyAllow
 		ask := config.ToolPolicyAsk
-		return config.ToolPolicyDeny, map[string]config.ToolPolicy{
+		return denyAllThenOverride(map[string]config.ToolPolicy{
 			// File operations — read, write, and navigate the workspace.
 			"read_file":      allow,
 			"write_file":     allow,
@@ -476,9 +587,12 @@ func coreAgentSeed(
 			"delete_task_in_workspace": ask,
 			"delete_workspace":         ask,
 			"remove_mcp_server":        ask,
-		}
+		})
 	}
-	return config.ToolPolicyAllow, base
+	// Defensive fallback for an ID outside the known roster (All() only ever
+	// passes Mia/Jim/Ava/Ray/Worker/Planner/Explorer/Researcher, so this branch
+	// should be unreachable) — deny every known tool, no implicit allow.
+	return denyAllThenOverride(nil)
 }
 
 // coreAgentSkills returns the seeded per-agent skill allowlist (FR-9.4). The
@@ -752,7 +866,7 @@ func SeedConfig(cfg *config.Config) bool {
 		if existing[string(ca.ID)] {
 			continue
 		}
-		dp, policies := coreAgentSeed(ca.ID)
+		policies := coreAgentSeed(ca.ID)
 		isSubagentTier := IsSubagentTierID(ca.ID)
 		// Mia is the default agent on fresh installs: she appears first in the
 		// All() list and is the friendliest entry-point for new users. A subagent
@@ -785,8 +899,7 @@ func SeedConfig(cfg *config.Config) bool {
 			DelegationPolicy: coreAgentDelegation(ca.ID),
 			Tools: &config.AgentToolsCfg{
 				Builtin: config.AgentBuiltinToolsCfg{
-					DefaultPolicy: dp,
-					Policies:      policies,
+					Policies: policies,
 				},
 			},
 		}
@@ -805,20 +918,22 @@ func SeedConfig(cfg *config.Config) bool {
 }
 
 // NewCustomAgentToolsCfg returns the default AgentToolsCfg for a newly created
-// custom agent (FR-008, FR-022). Every custom agent starts with:
-//
-//   - default_policy: allow  (per FR-008: explicit allow-by-default)
-//   - policies: {"system.*": "deny"}  (privilege rail — no system.* by default)
-//   - policies: {"bash": "deny"}  (CRIT-001, bash-tool-spec.md FR-B12 — see below)
+// custom/subagent/subagent_3p agent (FR-008, FR-022). Every new agent starts
+// fully-enumerated and deny-by-default (via denyAllThenOverride) — there is
+// no DefaultPolicy field and no allow-by-default fallback. Only a narrow,
+// conservative read-only surface is allowed out of the box; the operator
+// opts in explicitly (via the tool picker or tools.builtin.policies) for
+// anything else, including bash and every system-management tool
+// (create_agent, set_config, add_mcp_server, …), which all stay denied.
 //
 // Callers should embed this into config.AgentConfig.Tools when constructing a
-// new custom agent via the REST API or create_agent tool.
+// new agent via the REST API or create_agent tool.
 //
-// bash:deny seed rationale (CRIT-001/FR-B12): pkg/tools/compositor.go's
+// bash:deny rationale (CRIT-001/FR-B12): pkg/tools/compositor.go's
 // passesScopeGate does NOT hard-deny ScopeCore tools (which "bash" is) for
-// custom agents — it defers to the merged policy, which falls through to
-// DefaultPolicy (allow, set above). Without this explicit seed, a fresh
-// custom agent could call bash with zero configuration. This is the SINGLE
+// custom agents — it defers to the merged policy. Denying it here explicitly
+// (rather than relying on an absent map entry) is what keeps a fresh agent
+// from getting shell access with zero configuration. This is the SINGLE
 // shared seed location for both agent-creation paths (the REST
 // POST /api/v1/agents handler in pkg/gateway/rest.go's createAgent, and the
 // LLM-driven system.agent.create tool in
@@ -829,13 +944,18 @@ func SeedConfig(cfg *config.Config) bool {
 // pkg/config/shell_tool_policy_migration.go for existing persisted "exec"
 // policy entries).
 func NewCustomAgentToolsCfg() *config.AgentToolsCfg {
+	allow := config.ToolPolicyAllow
 	return &config.AgentToolsCfg{
 		Builtin: config.AgentBuiltinToolsCfg{
-			DefaultPolicy: config.ToolPolicyAllow,
-			Policies: map[string]config.ToolPolicy{
-				"system.*": config.ToolPolicyDeny,
-				"bash":     config.ToolPolicyDeny,
-			},
+			Policies: denyAllThenOverride(map[string]config.ToolPolicy{
+				// Conservative initial allow-list: read-only filesystem +
+				// persistent memory. Everything else — bash included — stays
+				// denied until the operator opts in.
+				"read_file":      allow,
+				"list_directory": allow,
+				"remember":       allow,
+				"recall_memory":  allow,
+			}),
 		},
 	}
 }

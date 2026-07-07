@@ -3115,19 +3115,13 @@ export interface components {
             /** @description Controls builtin tool visibility for this agent. */
             builtin?: {
                 /**
-                 * @description Fallback policy applied to any builtin tool not listed in policies. Custom agents are seeded with default_policy=allow and a system.*=deny entry to enforce the privilege rail.
-                 * @example allow
-                 * @enum {string}
-                 */
-                default_policy?: "allow" | "ask" | "deny";
-                /**
-                 * @description Per-tool policy overrides. Keys are tool names or glob patterns (e.g. "system.*", "workspace.shell"). Values are one of "allow", "ask", "deny".
+                 * @description Complete per-tool policy map. Every static builtin tool name MUST be present as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value — this is not a sparse override set with a fallback default, and wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
                  * @example {
-                 *       "system.*": "deny",
-                 *       "workspace.shell": "ask"
+                 *       "bash": "deny",
+                 *       "remember": "allow"
                  *     }
                  */
-                policies?: {
+                policies: {
                     [key: string]: "allow" | "ask" | "deny";
                 };
             };
@@ -3153,26 +3147,21 @@ export interface components {
         };
         /**
          * AgentToolsUpdateRequest
-         * @description Request body for PUT /api/v1/agents/{id}/tools. Replaces the agent's tool policy configuration. Supports both the current policy format (builtin.default_policy + builtin.policies) and the legacy explicit/inherit mode format (builtin.mode + builtin.visible) for backward compatibility. Legacy fields are converted to policy format server-side before persisting.
+         * @description Request body for PUT /api/v1/agents/{id}/tools. Replaces the agent's tool policy configuration. Supports both the current policy format (builtin.policies, a complete map) and the legacy explicit/inherit mode format (builtin.mode + builtin.visible) for backward compatibility. Legacy fields are converted to policy format server-side before persisting.
          */
         AgentToolsUpdateRequest: {
             /** @description Builtin tool policy configuration for this agent. */
             builtin?: {
-                /**
-                 * @description Fallback policy applied to any builtin tool not listed in policies. Defaults to "allow" when omitted.
-                 * @enum {string}
-                 */
-                default_policy?: "allow" | "ask" | "deny";
-                /** @description Per-tool policy overrides. Keys are canonical tool names or glob patterns (e.g. "system.*"). Values are "allow", "ask", or "deny". */
-                policies?: {
+                /** @description Complete per-tool policy map. Every static builtin tool name MUST be present as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value — this is not a sparse override set with a fallback default, and wildcard keys are not valid for the static builtin catalog. There is no default_policy field. Required on every request that includes builtin. Legacy callers that only have mode/visible available must resolve them to a complete policies map before sending this request; the server still accepts mode/visible alongside policies (ignored) for one release of transitional compatibility but no longer accepts them alone. */
+                policies: {
                     [key: string]: "allow" | "ask" | "deny";
                 };
                 /**
-                 * @description Legacy format: "explicit" builds a deny-all policy with allow entries for each name in visible[]. "inherit" sets default_policy=allow. Ignored when default_policy is present.
+                 * @description Legacy format, retained for one release of transitional compatibility. Ignored outright when a complete policies map is also present (policies always wins). Sent ALONE (no policies), mode does not successfully "build" a working policy on its own any more: under the mandatory coverage-validation model (no default_policy fallback), "explicit" converts visible[] into agent-level "allow" entries for just those names — it does not synthesize a deny-all baseline for every other static builtin tool — and "inherit" produces no per-tool entries at all. Both leave most static builtin tools without an explicit policy entry, so the request is rejected with 400 (a coverage-gap error) unless the global sandbox.tool_policies floor happens to cover every remaining tool. Callers must send a complete policies map to reliably succeed.
                  * @enum {string}
                  */
                 mode?: "explicit" | "inherit";
-                /** @description Legacy format: tool names to allow when mode="explicit". Ignored when default_policy is present. */
+                /** @description Legacy format: tool names converted to agent-level "allow" entries when mode="explicit". Ignored outright when policies is also present. Sent alone with mode="explicit", it does not cover every other static builtin tool, so the request is rejected with 400 for a coverage gap unless the global policy floor already covers the rest — see mode's description. */
                 visible?: string[];
             };
             /** @description MCP server bindings for this agent. */
@@ -3991,16 +3980,10 @@ export interface components {
          */
         GlobalToolPolicies: {
             /**
-             * @description Default policy for any tool not listed in policies.
-             * @example allow
-             * @enum {string}
-             */
-            default_policy: "allow" | "ask" | "deny";
-            /**
-             * @description Per-tool policy overrides. Keys are canonical tool names; values are the policy to apply. Never null — empty object when no overrides are configured.
+             * @description Complete per-tool policy map. Every static builtin tool name (the full catalog: general + browser + system.*-legacy-named sysagent tools) MUST be present as an explicit, literal key with an "allow"/"ask"/"deny" value — this is not a sparse override set with a fallback default. There is no default_policy field; coverage is enforced by hard validation at boot and at every write, never a silent runtime default. Never null — always the full map.
              * @example {
-             *       "exec": "ask",
-             *       "browser.evaluate": "deny"
+             *       "bash": "ask",
+             *       "browser_evaluate": "deny"
              *     }
              */
             policies: {

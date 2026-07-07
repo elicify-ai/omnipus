@@ -90,7 +90,7 @@ func TestBash_JimSeedPolicyAppliedInLoop(t *testing.T) {
 	if jimCfg == nil {
 		t.Fatal("jim not found in cfg.Agents.List after SeedConfig")
 	}
-	if jimCfg.Tools == nil || jimCfg.Tools.Builtin.ResolvePolicy("bash") != config.ToolPolicyAllow {
+	if jimCfg.Tools == nil || jimCfg.Tools.Builtin.Policies["bash"] != config.ToolPolicyAllow {
 		t.Fatalf("expected Jim's seeded bash policy to be %q, got %v",
 			config.ToolPolicyAllow, jimCfg.Tools)
 	}

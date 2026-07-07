@@ -85,8 +85,7 @@ func TestDelegateAsyncCompletion_CallsNotifyWithSourceKindDelegate(t *testing.T)
 			continue
 		}
 		ag.StoreToolPolicy(&tools.ToolPolicyCfg{
-			DefaultPolicy: "allow",
-			Policies:      map[string]string{"delegate": "allow"},
+			Policies: map[string]string{"delegate": "allow"},
 		})
 	}
 

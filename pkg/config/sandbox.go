@@ -277,11 +277,13 @@ type OmnipusSandboxConfig struct {
 	// ToolPolicies holds global per-tool access policies. Keys are tool names;
 	// values are "allow", "ask", or "deny". Takes precedence over agent-level
 	// policies when stricter (deny > ask > allow).
+	//
+	// There is no global default-policy fallback (CLAUDE.md hard constraint
+	// 6): every static builtin tool must resolve from an explicit, literal
+	// entry here and/or in an agent's tools.builtin.policies map. Coverage
+	// gaps are a hard validation failure (config.ValidateToolPolicyCoverage),
+	// never a runtime default.
 	ToolPolicies map[string]string `json:"tool_policies,omitempty"`
-
-	// DefaultToolPolicy is the fallback global policy for tools not listed in
-	// ToolPolicies. Valid values: "allow" (default), "ask", "deny".
-	DefaultToolPolicy string `json:"default_tool_policy,omitempty"`
 
 	// SSRF configures outbound-HTTP SSRF protection (SEC-24).
 	// When Enabled is true, all tool HTTP clients (web_search, skills installer,

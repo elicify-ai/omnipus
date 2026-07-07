@@ -262,9 +262,7 @@ func validatePolicyValues(
 		}
 	}
 
-	// FR-062: check always runs so an empty DefaultPolicy is caught and audited.
 	builtin := onDisk.Tools.Builtin
-	check("tools.builtin.default_policy", builtin.DefaultPolicy)
 	for toolName, policy := range builtin.Policies {
 		check(fmt.Sprintf("tools.builtin.policies[%q]", toolName), policy)
 	}
@@ -427,4 +425,176 @@ func RepairStaleChannelWildcardBindings(cfg *Config) {
 		dropped,
 	)
 	cfg.Bindings = kept
+}
+
+// CoverageGap identifies a single (agent, tool) pair found to have no
+// explicit tool-policy entry by ValidateToolPolicyCoverage — the structured
+// form of a coverage-validation finding. Exposing AgentID and ToolName as
+// fields (rather than only a formatted string) lets callers filter, group,
+// or count gaps programmatically — e.g. counting gaps per agent, or checking
+// whether a specific tool is the culprit — without parsing String() output.
+type CoverageGap struct {
+	AgentID  string
+	ToolName string
+}
+
+// String renders the gap as a human-readable message, matching the format
+// previously returned as a raw string by ValidateToolPolicyCoverage before
+// it was changed to return []CoverageGap. Implementing fmt.Stringer means
+// a single gap formats correctly via %s/%v, but a []CoverageGap slice does
+// NOT automatically join into the old comma-joined-string shape — callers
+// that need a []string (e.g. for strings.Join or a log field) must map
+// explicitly:
+//
+//	msgs := make([]string, len(gaps))
+//	for i, g := range gaps {
+//	    msgs[i] = g.String()
+//	}
+//
+// This explicit mapping step is intentional: it is the smallest possible
+// adaptation for existing %s/strings.Join call sites while giving new code
+// direct field access instead of string parsing.
+func (g CoverageGap) String() string {
+	return fmt.Sprintf("agent %q: no policy entry for tool %q (global or per-agent)", g.AgentID, g.ToolName)
+}
+
+// ValidateToolPolicyCoverage enforces CLAUDE.md hard constraint 6: every
+// static builtin tool in knownTools must resolve, for every agent in
+// cfg.Agents.List, from an explicit, literal (exact-match, wildcard-free)
+// policy entry — either globally (cfg.Sandbox.ToolPolicies[name]) or on the
+// agent itself (agent.Tools.Builtin.Policies[name]). Only one of the two
+// needs the entry; having it on either side counts as covered — the two
+// layers are NOT required to agree on the same value, only for at least one
+// of them to have an entry at all (see
+// TestValidateToolPolicyCoverage_BothSidesPresentDifferentValues_NotAGap).
+// Wildcard keys (trailing ".*"/"_*") do NOT count as coverage here —
+// wildcards remain valid only for MCP per-server bulk policies, which are
+// not part of the static builtin catalog knownTools represents.
+//
+// This is a pure, side-effect-free check: it returns every gap found rather
+// than stopping at the first one, so callers can report a complete
+// "agent × tool" list in a single validation pass. Callers decide the
+// disposition:
+//   - Boot (pkg/gateway/gateway.go): any gap aborts startup with the full
+//     gap list logged, so the failure is immediately actionable. Since
+//     upgrading installations can have sparse, pre-existing policy maps
+//     (from before the DefaultPolicy/default_policy fallback was removed),
+//     the boot sequence should call RepairIncompleteToolPolicyCoverage
+//     immediately before this function — see that function's doc comment
+//     for the exact call site.
+//   - Agent create/update/tools-write REST handlers: any gap rejects the
+//     write with 400 instead of silently persisting an uncovered tool.
+//
+// Returns nil (or an empty slice) when coverage is complete. A nil or empty
+// knownTools is treated as "nothing to check" (returns nil) rather than as
+// a universal gap — the caller is responsible for supplying the real catalog.
+func ValidateToolPolicyCoverage(cfg *Config, knownTools map[string]struct{}) []CoverageGap {
+	if cfg == nil || len(knownTools) == 0 {
+		return nil
+	}
+	var gaps []CoverageGap
+	for _, agentCfg := range cfg.Agents.List {
+		var agentPolicies map[string]ToolPolicy
+		if agentCfg.Tools != nil {
+			agentPolicies = agentCfg.Tools.Builtin.Policies
+		}
+		for toolName := range knownTools {
+			if _, ok := cfg.Sandbox.ToolPolicies[toolName]; ok {
+				continue // global exact-match entry covers it
+			}
+			if _, ok := agentPolicies[toolName]; ok {
+				continue // per-agent exact-match entry covers it
+			}
+			gaps = append(gaps, CoverageGap{AgentID: agentCfg.ID, ToolName: toolName})
+		}
+	}
+	sort.Slice(gaps, func(i, j int) bool {
+		if gaps[i].AgentID != gaps[j].AgentID {
+			return gaps[i].AgentID < gaps[j].AgentID
+		}
+		return gaps[i].ToolName < gaps[j].ToolName
+	})
+	return gaps
+}
+
+// RepairIncompleteToolPolicyCoverage backfills any missing tool-policy
+// coverage in cfg.Agents.List with explicit "deny" entries (the safe,
+// fail-closed direction) before ValidateToolPolicyCoverage is enforced.
+// This exists to migrate installations whose on-disk config predates the
+// removal of the DefaultPolicy/default_policy fallback (CLAUDE.md hard
+// constraint 6) — those agents have sparse Policies maps that relied on
+// the deleted default field to cover every unlisted tool. Without this
+// repair, ValidateToolPolicyCoverage would find a gap for nearly every
+// static tool on every such agent and abort boot, bricking any existing
+// installation on upgrade.
+//
+// Intended call site: pkg/gateway/gateway.go's boot sequence, immediately
+// BEFORE the existing config.ValidateToolPolicyCoverage(cfg,
+// buildKnownBuiltinToolNames()) call. As of this writing that call lives in
+// RunContextWithOptions, guarding gateway startup:
+//
+//	config.RepairIncompleteToolPolicyCoverage(cfg, buildKnownBuiltinToolNames())
+//	if gaps := config.ValidateToolPolicyCoverage(cfg, buildKnownBuiltinToolNames()); len(gaps) > 0 {
+//	    // ... abort boot, log gaps ...
+//	}
+//
+// Calling the repair first means the validation call should almost always
+// find zero gaps afterward — the repair IS the fix; validation remains as
+// the hard backstop for any gap the repair (by construction) cannot close,
+// e.g. if knownTools itself is empty/nil.
+//
+// Mutates cfg.Agents.List in place. For every agent, for every name in
+// knownTools not covered by either the global cfg.Sandbox.ToolPolicies map
+// or that agent's own Tools.Builtin.Policies map, adds an explicit "deny"
+// entry to the AGENT's map (never touches the global map — a missing global
+// entry is not this function's concern, since per-agent coverage alone is
+// sufficient). Logs one WARN per repaired agent naming the count and list of
+// backfilled tools, so operators can review/loosen the auto-tightened policy
+// afterward via the UI. Idempotent — a fully-covered config is a no-op, and
+// repeated calls after the first repair find nothing left to backfill.
+//
+// Returns the number of agents that had at least one tool backfilled (0 if
+// cfg or knownTools is nil/empty, or if coverage was already complete).
+func RepairIncompleteToolPolicyCoverage(cfg *Config, knownTools map[string]struct{}) (repairedAgentCount int) {
+	if cfg == nil || len(knownTools) == 0 {
+		return 0
+	}
+	for i := range cfg.Agents.List {
+		agentCfg := &cfg.Agents.List[i]
+		var missing []string
+		for toolName := range knownTools {
+			if _, ok := cfg.Sandbox.ToolPolicies[toolName]; ok {
+				continue // global exact-match entry already covers it
+			}
+			if agentCfg.Tools != nil {
+				if _, ok := agentCfg.Tools.Builtin.Policies[toolName]; ok {
+					continue // per-agent exact-match entry already covers it
+				}
+			}
+			missing = append(missing, toolName)
+		}
+		if len(missing) == 0 {
+			continue
+		}
+		if agentCfg.Tools == nil {
+			agentCfg.Tools = &AgentToolsCfg{}
+		}
+		if agentCfg.Tools.Builtin.Policies == nil {
+			agentCfg.Tools.Builtin.Policies = make(map[string]ToolPolicy, len(missing))
+		}
+		for _, toolName := range missing {
+			agentCfg.Tools.Builtin.Policies[toolName] = ToolPolicyDeny
+		}
+		sort.Strings(missing)
+		slog.Warn(
+			"config: agent had incomplete tool-policy coverage; backfilled missing tools to \"deny\" "+
+				"(migration from pre-DefaultPolicy-removal config shape; CLAUDE.md hard constraint 6 — "+
+				"review/loosen via the UI if any backfilled tool should actually be allow/ask)",
+			"agent_id", agentCfg.ID,
+			"backfilled_count", len(missing),
+			"backfilled_tools", missing,
+		)
+		repairedAgentCount++
+	}
+	return repairedAgentCount
 }

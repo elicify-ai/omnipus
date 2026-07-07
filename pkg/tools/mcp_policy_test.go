@@ -68,9 +68,13 @@ func TestFilterToolsByPolicy_DeniedMCPTool_ExcludedFromLLMView(t *testing.T) {
 	}
 
 	policyCfg := &ToolPolicyCfg{
-		DefaultPolicy: "allow",
 		Policies: map[string]string{
 			deniedTool: "deny",
+			// Explicit coverage (no default-policy fallback, CLAUDE.md hard
+			// constraint 6): these entries are what makes "survives" a real
+			// assertion rather than an artifact of a removed default-allow.
+			allowedTool:  "allow",
+			"search_web": "allow",
 		},
 	}
 
@@ -126,9 +130,9 @@ func TestFilterToolsByPolicy_MCPToolRegistryRoundTrip(t *testing.T) {
 	require.Len(t, allFromRegistry, 2, "MCPRegistry must contain both tools before filtering")
 
 	policyCfg := &ToolPolicyCfg{
-		DefaultPolicy: "allow",
 		Policies: map[string]string{
-			"mcp_uat_denied": "deny",
+			"mcp_uat_denied":  "deny",
+			"mcp_uat_allowed": "allow", // explicit coverage (no default-policy fallback)
 		},
 	}
 

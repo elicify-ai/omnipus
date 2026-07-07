@@ -54,9 +54,9 @@ import (
 //
 // BEHAVIOR CHANGE (intentional): this does NOT preserve the OLD gateway exec
 // gate verdict byte-for-byte. The old gateway resolved policy by EXACT-MATCH
-// only — cfg.Sandbox.ToolPolicies[name] for the floor and
-// AgentBuiltinToolsCfg.ResolvePolicy(name) for the agent layer, both of which
-// ignore wildcard keys. By routing through tools.EffectiveToolPolicy
+// only — cfg.Sandbox.ToolPolicies[name] for the floor and the old per-agent
+// exact-match policy lookup for the agent layer, both of which ignore
+// wildcard keys. By routing through tools.EffectiveToolPolicy
 // (buildWildcardIndex/resolveFromMap), this path now ALIGNS the exec gate to the
 // agent loop's wildcard-aware verdict: ".*"/"_*" policy keys on the global floor
 // AND the agent policy are now honored (most-specific-wins). This is the correct
@@ -83,42 +83,10 @@ func resolveApprovalToolPolicy(cfg *config.Config, toolName, agentID string) str
 		// above; everything else defaults to interactive approval.
 		return "ask"
 	}
-	polCfg := &tools.ToolPolicyCfg{DefaultPolicy: "allow"}
-	// Global sandbox floor.
-	if len(cfg.Sandbox.ToolPolicies) > 0 {
-		gp := make(map[string]string, len(cfg.Sandbox.ToolPolicies))
-		for k, v := range cfg.Sandbox.ToolPolicies {
-			gp[k] = v
-		}
-		polCfg.GlobalPolicies = gp
-	}
-	polCfg.GlobalDefaultPolicy = cfg.Sandbox.DefaultToolPolicy
-	// Agent builtin policy.
-	agentType := "custom"
-	for i := range cfg.Agents.List {
-		ac := &cfg.Agents.List[i]
-		if ac.ID != agentID {
-			continue
-		}
-		if ac.Type != "" {
-			agentType = string(ac.Type)
-		}
-		if ac.Tools != nil {
-			dp := string(ac.Tools.Builtin.DefaultPolicy)
-			if dp == "" {
-				dp = "allow"
-			}
-			polCfg.DefaultPolicy = dp
-			if len(ac.Tools.Builtin.Policies) > 0 {
-				ap := make(map[string]string, len(ac.Tools.Builtin.Policies))
-				for k, v := range ac.Tools.Builtin.Policies {
-					ap[k] = string(v)
-				}
-				polCfg.Policies = ap
-			}
-		}
-		break
-	}
+	// No default-policy fallback (CLAUDE.md hard constraint 6): only explicit
+	// global/agent entries are threaded through; a tool with no match on
+	// either side fails closed to "deny" inside tools.EffectiveToolPolicy.
+	polCfg, agentType := tools.BuildFallbackPolicyCfg(cfg, agentID)
 	return tools.EffectiveToolPolicy(polCfg, tools.ScopeGeneral, agentType, toolName)
 }
 

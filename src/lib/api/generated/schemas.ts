@@ -148,10 +148,9 @@ type Agent = {
   executor?: ExecutorConfig | undefined;
 };
 type AgentToolsCfg = Partial<{
-  builtin: Partial<{
-    default_policy: "allow" | "ask" | "deny";
+  builtin: {
     policies: {};
-  }>;
+  };
   mcp: Partial<{
     servers: Array<{
       id: string;
@@ -1119,11 +1118,7 @@ export const SessionRenameRequest = z.object({
 export const AgentToolsCfg: z.ZodType<AgentToolsCfg> = z
   .object({
     builtin: z
-      .object({
-        default_policy: z.enum(["allow", "ask", "deny"]),
-        policies: z.record(z.enum(["allow", "ask", "deny"])),
-      })
-      .partial()
+      .object({ policies: z.record(z.enum(["allow", "ask", "deny"])) })
       .passthrough(),
     mcp: z
       .object({
@@ -1431,12 +1426,10 @@ export const AgentToolsUpdateRequest = z
   .object({
     builtin: z
       .object({
-        default_policy: z.enum(["allow", "ask", "deny"]),
         policies: z.record(z.enum(["allow", "ask", "deny"])),
-        mode: z.enum(["explicit", "inherit"]),
-        visible: z.array(z.string()),
+        mode: z.enum(["explicit", "inherit"]).optional(),
+        visible: z.array(z.string()).optional(),
       })
-      .partial()
       .passthrough(),
     mcp: z
       .object({
@@ -1567,7 +1560,6 @@ export const ToolApprovalResponse = z
   })
   .passthrough();
 export const GlobalToolPolicies = z.object({
-  default_policy: z.enum(["allow", "ask", "deny"]),
   policies: z.record(z.enum(["allow", "ask", "deny"])),
 });
 export const ExecAllowlist = z.object({

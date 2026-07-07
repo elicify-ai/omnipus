@@ -33,6 +33,7 @@ import (
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/coreagent"
 )
 
 // buildExecutorTestAPI builds a minimal restAPI over a temp home with one mutable
@@ -50,8 +51,42 @@ func buildExecutorTestAPI(t *testing.T) *restAPI {
 	// succeed where the test expects it to fail (hermeticity bug, not behavior).
 	t.Setenv("OMNIPUS_HOME", tmpDir)
 	cfgPath := filepath.Join(tmpDir, "config.json")
-	cfgJSON := `{"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096},"list":[{"id":"test-agent","name":"Test Agent","type":"custom"}]}}`
-	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgJSON), 0o600))
+
+	// "test-agent" needs a COMPLETE, explicit tools.builtin.policies map:
+	// CLAUDE.md hard constraint 6 (config.ValidateToolPolicyCoverage) rejects
+	// createAgent/updateAgent/updateAgentTools whenever ANY agent already in
+	// the live config — not just the one being written — has an uncovered
+	// static tool. A bare {"id":...,"type":"custom"} fixture (no tools field
+	// at all) has zero policy entries, so every test in this file that goes
+	// through one of those 3 endpoints would 400 on the coverage check
+	// before ever reaching the behavior under test. A real installation
+	// gets an equivalent backfill automatically at gateway boot via
+	// config.RepairIncompleteToolPolicyCoverage; this harness constructs the
+	// agent loop directly (mustAgentLoop) and bypasses that boot sequence
+	// entirely, so the fixture must seed a complete map itself — matching
+	// what a real post-migration (or freshly-created) agent looks like via
+	// coreagent.NewCustomAgentToolsCfg(), the same seed createAgent itself
+	// uses for a caller that sends no tools_cfg.
+	testAgentPolicies := coreagent.NewCustomAgentToolsCfg().Builtin.Policies
+	cfgOnDisk := map[string]any{
+		"version": config.CurrentVersion,
+		"agents": map[string]any{
+			"defaults": map[string]any{"workspace": tmpDir, "model_name": "test-model", "max_tokens": 4096},
+			"list": []map[string]any{
+				{
+					"id":   "test-agent",
+					"name": "Test Agent",
+					"type": "custom",
+					"tools": map[string]any{
+						"builtin": map[string]any{"policies": testAgentPolicies},
+					},
+				},
+			},
+		},
+	}
+	cfgJSON, err := json.Marshal(cfgOnDisk)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(cfgPath, cfgJSON, 0o600))
 
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
@@ -62,7 +97,12 @@ func buildExecutorTestAPI(t *testing.T) *restAPI {
 				MaxTokens: 4096,
 			},
 			List: []config.AgentConfig{
-				{ID: "test-agent", Name: "Test Agent", Type: config.AgentTypeCustom},
+				{
+					ID:    "test-agent",
+					Name:  "Test Agent",
+					Type:  config.AgentTypeCustom,
+					Tools: coreagent.NewCustomAgentToolsCfg(),
+				},
 			},
 		},
 	}
@@ -393,6 +433,11 @@ func findExecutorInConfig(t *testing.T, m map[string]any, id string) map[string]
 func buildExecutorTestAPIWithWorker(t *testing.T) *restAPI {
 	t.Helper()
 	api := buildExecutorTestAPI(t)
+	// "test-worker" needs the same complete tools.builtin.policies map as
+	// "test-agent" above (see buildExecutorTestAPI's doc comment) — a bare
+	// worker fixture would otherwise reintroduce the exact coverage gap
+	// buildExecutorTestAPI was just fixed to avoid.
+	workerPolicies := coreagent.NewCustomAgentToolsCfg().Builtin.Policies
 	// Live config: append the worker.
 	cfg := api.agentLoop.GetConfig()
 	cfg.Agents.List = append(cfg.Agents.List, config.AgentConfig{
@@ -400,6 +445,7 @@ func buildExecutorTestAPIWithWorker(t *testing.T) *restAPI {
 		Name:   "Worker",
 		Type:   config.AgentTypeWorker,
 		Locked: true,
+		Tools:  coreagent.NewCustomAgentToolsCfg(),
 	})
 	// Disk: append the worker entry to config.json so the writer sees it.
 	raw, err := os.ReadFile(api.configPath())
@@ -417,6 +463,9 @@ func buildExecutorTestAPIWithWorker(t *testing.T) *restAPI {
 		"name":   "Worker",
 		"type":   "worker",
 		"locked": true,
+		"tools": map[string]any{
+			"builtin": map[string]any{"policies": workerPolicies},
+		},
 	})
 	buf, err := json.MarshalIndent(m, "", "  ")
 	require.NoError(t, err)
@@ -1052,6 +1101,126 @@ func TestUpdateAgent_StaleUpdatedAt_Returns409(t *testing.T) {
 	api.HandleAgents(w3, r3)
 	assert.Equal(t, http.StatusOK, w3.Code,
 		"a PUT with the current updated_at must succeed; body: %s", w3.Body.String())
+}
+
+// TestUpdateAgent_ToolsCfg_PersistsUnderToolsKey proves the general PUT
+// /api/v1/agents/{id} endpoint persists a tools_cfg body under the on-disk
+// "tools" key — config.AgentConfig.Tools' real `json:"tools"` tag — and NOT
+// the dead "tools_cfg" key (the wire request field name) this endpoint used
+// to write before the fix (see the "NOTE ON THE KEY NAME" comment in
+// updateAgent). Before the fix, every tools_cfg update sent through the
+// general agent PUT was silently persisted to an orphaned key that
+// config.LoadConfig's json.Unmarshal ignores on the next load/reload — the
+// write appeared to succeed (200 OK) but never actually took effect.
+func TestUpdateAgent_ToolsCfg_PersistsUnderToolsKey(t *testing.T) {
+	api := buildExecutorTestAPI(t)
+
+	// updateAgent's tools_cfg branch is a full replacement, not a merge (see
+	// the "whole per-tool policies map is a full replacement" doc comment on
+	// the coverage-validation block), so the body must carry a COMPLETE
+	// policy map — build it by copying the seed and overriding one entry.
+	seedPolicies := coreagent.NewCustomAgentToolsCfg().Builtin.Policies
+	policies := make(map[string]string, len(seedPolicies))
+	for k, v := range seedPolicies {
+		policies[k] = string(v)
+	}
+	policies["bash"] = "allow"
+	policiesJSON, err := json.Marshal(policies)
+	require.NoError(t, err)
+	body := `{"tools_cfg":{"builtin":{"policies":` + string(policiesJSON) + `}}}`
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(w, r)
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	// Read the actual persisted config.json and assert the policies landed
+	// under the real "tools" key, never the dead "tools_cfg" key.
+	raw, err := os.ReadFile(api.configPath())
+	require.NoError(t, err)
+	var disk map[string]any
+	require.NoError(t, json.Unmarshal(raw, &disk))
+	list, _ := disk["agents"].(map[string]any)["list"].([]any)
+	var agentMap map[string]any
+	for _, item := range list {
+		entry, _ := item.(map[string]any)
+		if entry["id"] == "test-agent" {
+			agentMap = entry
+			break
+		}
+	}
+	require.NotNil(t, agentMap, "test-agent must be present in persisted config")
+
+	_, hasDeadKey := agentMap["tools_cfg"]
+	assert.False(t, hasDeadKey, "must never persist under the dead 'tools_cfg' key")
+
+	toolsMap, ok := agentMap["tools"].(map[string]any)
+	require.True(t, ok, "tools_cfg must persist under the real 'tools' key")
+	builtin, ok := toolsMap["builtin"].(map[string]any)
+	require.True(t, ok, "tools.builtin must be present")
+	persistedPolicies, ok := builtin["policies"].(map[string]any)
+	require.True(t, ok, "tools.builtin.policies must be present")
+	assert.Equal(t, "allow", persistedPolicies["bash"])
+	assert.Equal(t, "deny", persistedPolicies["delete_agent"], "unrelated seed entries must survive")
+}
+
+// TestUpdateAgent_ConcurrentDeleteRace_Returns404NotPhantom200 proves the fix
+// to updateAgent's phantom-success bug. The fast-path existence check at the
+// top of updateAgent runs against the config snapshot fetched at the start
+// of the handler (a real, live gateway can have this go stale between fetch
+// and the locked critical section running — e.g. a concurrent
+// DELETE /agents/{id} that has already persisted to config.json but whose
+// TriggerReload hasn't yet swapped the in-memory registry this test's fixture
+// stands in for). The persist closure's fresh, ID-based lookup against the
+// ACTUAL on-disk config.json — not the stale pre-lock snapshot — must catch
+// this and return errAgentVanishedDuringUpdate (mapped to 404), never
+// silently return nil and report 200 for an update that touched nothing.
+func TestUpdateAgent_ConcurrentDeleteRace_Returns404NotPhantom200(t *testing.T) {
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+	tmpDir := t.TempDir()
+	t.Setenv("OMNIPUS_HOME", tmpDir)
+	cfgPath := filepath.Join(tmpDir, "config.json")
+
+	// On-disk config.json: "test-agent" is ALREADY GONE — simulating a
+	// concurrent DELETE that persisted to disk first.
+	cfgOnDisk := map[string]any{
+		"version": config.CurrentVersion,
+		"agents": map[string]any{
+			"defaults": map[string]any{"workspace": tmpDir, "model_name": "test-model", "max_tokens": 4096},
+			"list":     []map[string]any{},
+		},
+	}
+	cfgJSON, err := json.Marshal(cfgOnDisk)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(cfgPath, cfgJSON, 0o600))
+
+	// In-memory live config: "test-agent" STILL present — the fast-path
+	// existence check reads this stale snapshot, not disk.
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			List: []config.AgentConfig{
+				{ID: "test-agent", Name: "Test Agent", Type: config.AgentTypeCustom, Tools: coreagent.NewCustomAgentToolsCfg()},
+			},
+		},
+	}
+	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
+	api := &restAPI{agentLoop: al, homePath: tmpDir}
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent", strings.NewReader(`{"color":"#123456"}`))
+	r.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(w, r)
+
+	require.Equal(t, http.StatusNotFound, w.Code,
+		"a concurrent-delete race must 404, not phantom-succeed with 200: body=%s", w.Body.String())
+
+	// Nothing must have been persisted for the vanished agent.
+	raw, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), "#123456", "a 404'd update must not persist any field")
 }
 
 // TestUpdateAgent_ExecutorCliImmutable_Returns400 verifies that executor.cli is

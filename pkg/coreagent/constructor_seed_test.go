@@ -28,20 +28,18 @@ import (
 //
 // Traces to: pkg/coreagent/core.go — coreAgentSeed (FR-008, FR-010, FR-022).
 func TestBoot_ConstructorSeedDispositionMap(t *testing.T) {
-	// All four base agents are now LEAST-PRIVILEGE: deny-by-default, explicit
-	// allow/ask for exactly their role's tools, no "system.*" rail.
+	// All four base agents are now LEAST-PRIVILEGE: deny-by-default (via a
+	// fully-enumerated explicit map — the DefaultPolicy field was removed
+	// project-wide), explicit allow/ask for exactly their role's tools, no
+	// "system.*" rail.
 	tests := []struct {
 		id                   CoreAgentID
-		expectDefaultPolicy  config.ToolPolicy
-		expectSystemDeny     bool     // legacy "system.*": deny rail — must be absent for all redesigned agents
 		expectExtraAllows    []string // must be present AND == allow
 		expectAsk            []string // must be present AND == ask
 		expectExplicitDenies []string
 	}{
 		{
-			id:                  IDAva,
-			expectDefaultPolicy: config.ToolPolicyDeny,
-			expectSystemDeny:    false,
+			id: IDAva,
 			expectExtraAllows: []string{
 				"create_agent", "update_agent", "list_agents",
 				"list_models", "search_web", "fetch_url",
@@ -53,9 +51,7 @@ func TestBoot_ConstructorSeedDispositionMap(t *testing.T) {
 			expectAsk: []string{"delete_agent", "create_skill", "edit_skill", "install_skill"},
 		},
 		{
-			id:                  IDMia,
-			expectDefaultPolicy: config.ToolPolicyDeny,
-			expectSystemDeny:    false,
+			id: IDMia,
 			expectExtraAllows: []string{
 				"send_message", "hand_off", "return_to_default", "list_agents",
 				"send_file", "navigate",
@@ -67,9 +63,7 @@ func TestBoot_ConstructorSeedDispositionMap(t *testing.T) {
 			expectAsk: []string{"delete_task"},
 		},
 		{
-			id:                  IDRay,
-			expectDefaultPolicy: config.ToolPolicyDeny,
-			expectSystemDeny:    false,
+			id: IDRay,
 			expectExtraAllows: []string{
 				"search_web", "fetch_url",
 				"browser_navigate", "browser_click", "browser_type",
@@ -82,9 +76,7 @@ func TestBoot_ConstructorSeedDispositionMap(t *testing.T) {
 			},
 		},
 		{
-			id:                  IDJim,
-			expectDefaultPolicy: config.ToolPolicyDeny,
-			expectSystemDeny:    false,
+			id: IDJim,
 			// Jim's full explicit allow-list (a representative sample tested here).
 			expectExtraAllows: []string{
 				// File operations.
@@ -122,20 +114,12 @@ func TestBoot_ConstructorSeedDispositionMap(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(string(tc.id), func(t *testing.T) {
-			dp, policies := coreAgentSeed(tc.id)
+			policies := coreAgentSeed(tc.id)
 
-			assert.Equal(t, tc.expectDefaultPolicy, dp,
-				"agent %q default_policy mismatch", tc.id)
-
-			// Legacy "system.*" deny rail — present only for not-yet-redesigned agents.
-			if tc.expectSystemDeny {
-				p, ok := policies["system.*"]
-				require.True(t, ok, "policies must contain 'system.*' key")
-				assert.Equal(t, config.ToolPolicyDeny, p, "'system.*' must be deny")
-			} else {
-				_, ok := policies["system.*"]
-				assert.False(t, ok, "redesigned agent %q must NOT carry the dead 'system.*' rail", tc.id)
-			}
+			// "system.*" was never a real tool name (dead wildcard) — it must
+			// never appear as a key, for any agent.
+			_, hasRail := policies["system.*"]
+			assert.False(t, hasRail, "agent %q must NOT carry the dead 'system.*' rail", tc.id)
 
 			for _, toolName := range tc.expectExtraAllows {
 				p, ok := policies[toolName]
@@ -186,26 +170,56 @@ func TestBoot_HasSystemAllowsInConstructorSeed(t *testing.T) {
 	assert.False(t, HasSystemAllowsInConstructorSeed(""))
 }
 
-// TestAgentConstructor_CustomAgent_SeedsSystemDeny verifies that a newly created
-// custom agent config has {"system.*": "deny"} in its policy map.
+// TestAgentConstructor_CustomAgent_DenyByDefaultFullCoverage verifies that a
+// newly created custom agent config is deny-by-default via a fully-enumerated
+// explicit map (no DefaultPolicy field, no "system.*" wildcard — both retired
+// project-wide), with only a narrow, conservative allow-list.
 //
 // BDD: Given a new custom agent created via NewCustomAgentToolsCfg,
 //
 //	When the resulting config is inspected,
-//	Then default_policy is "allow" and policies["system.*"] is "deny".
+//	Then "system.*" is absent (dead wildcard, never a real tool name);
+//	And bash is explicitly "deny" (closes the historical privilege gap where
+//	the dead "system.*" wildcard let every system-management tool fall
+//	through to allow);
+//	And read_file/list_directory/remember/recall_memory are explicitly "allow";
+//	And every other known tool has an explicit "deny" entry (no gaps).
 //
-// Traces to: pkg/coreagent/core.go — NewCustomAgentToolsCfg (FR-022).
-func TestAgentConstructor_CustomAgent_SeedsSystemDeny(t *testing.T) {
+// Traces to: pkg/coreagent/core.go — NewCustomAgentToolsCfg.
+func TestAgentConstructor_CustomAgent_DenyByDefaultFullCoverage(t *testing.T) {
 	cfg := NewCustomAgentToolsCfg()
 	require.NotNil(t, cfg, "NewCustomAgentToolsCfg must return a non-nil config")
 
-	assert.Equal(t, config.ToolPolicyAllow, cfg.Builtin.DefaultPolicy,
-		"custom agent default_policy must be 'allow' (FR-022)")
+	_, hasRail := cfg.Builtin.Policies["system.*"]
+	assert.False(t, hasRail, "custom agent must NOT carry the dead 'system.*' wildcard")
 
-	p, ok := cfg.Builtin.Policies["system.*"]
-	require.True(t, ok, "custom agent must have 'system.*' in Policies (FR-022)")
-	assert.Equal(t, config.ToolPolicyDeny, p,
-		"custom agent 'system.*' must be 'deny' (FR-022)")
+	denyByDefault, ok := cfg.Builtin.Policies["bash"]
+	require.True(t, ok, "custom agent must have an explicit policy for 'bash'")
+	assert.Equal(t, config.ToolPolicyDeny, denyByDefault,
+		"custom agent 'bash' must be explicit 'deny' (closes the system.* privilege gap)")
+
+	for _, allow := range []string{"read_file", "list_directory", "remember", "recall_memory"} {
+		p, ok := cfg.Builtin.Policies[allow]
+		require.True(t, ok, "custom agent must have explicit policy for %q", allow)
+		assert.Equal(t, config.ToolPolicyAllow, p, "custom agent %q must be 'allow'", allow)
+	}
+
+	for _, deny := range []string{"create_agent", "set_config", "add_mcp_server", "delete_agent", "delete_workspace"} {
+		p, ok := cfg.Builtin.Policies[deny]
+		require.True(t, ok, "custom agent must have explicit policy for %q", deny)
+		assert.Equal(t, config.ToolPolicyDeny, p, "custom agent %q must be explicit 'deny'", deny)
+	}
+
+	// Full coverage, not just the sampled subset above: the policy map must
+	// have EXACTLY one entry per name in allStaticToolNames — no tool
+	// silently dropped (would show up as a missing key here even though the
+	// samples above wouldn't catch it) and no unexpected extra/stale key.
+	gotKeys := make([]string, 0, len(cfg.Builtin.Policies))
+	for k := range cfg.Builtin.Policies {
+		gotKeys = append(gotKeys, k)
+	}
+	assert.ElementsMatch(t, allStaticToolNames, gotKeys,
+		"custom agent policy map key set must exactly match allStaticToolNames — no gaps, no extras")
 }
 
 // TestAgentConstructor_CoreAgent_SeedsRailPlusAllowances verifies that each core
@@ -231,9 +245,8 @@ func TestAgentConstructor_CoreAgent_SeedsRailPlusAllowances(t *testing.T) {
 	require.NotNil(t, avaAgent, "SeedConfig must add Ava to cfg.Agents.List")
 	require.NotNil(t, avaAgent.Tools, "Ava's Tools config must be non-nil after seed")
 
-	// Ava is redesigned: deny-by-default, no legacy "system.*" rail.
-	assert.Equal(t, config.ToolPolicyDeny, avaAgent.Tools.Builtin.DefaultPolicy,
-		"Ava's seeded default_policy must be deny (least-privilege)")
+	// Ava is redesigned: deny-by-default (fully-enumerated explicit map, no
+	// DefaultPolicy field), no legacy "system.*" rail.
 	_, hasRail := avaAgent.Tools.Builtin.Policies["system.*"]
 	assert.False(t, hasRail, "Ava must NOT carry the dead 'system.*' rail after redesign")
 
@@ -265,10 +278,7 @@ func TestAgentConstructor_CoreAgent_SeedsRailPlusAllowances(t *testing.T) {
 //
 // Traces to: quizzical-marinating-frog.md Step 7 + Jim least-privilege redesign.
 func TestJimSeed_DenyDefaultWithExplicitAllows(t *testing.T) {
-	dp, policies := coreAgentSeed(IDJim)
-
-	assert.Equal(t, config.ToolPolicyDeny, dp,
-		"Jim must be deny-by-default (least-privilege redesign)")
+	policies := coreAgentSeed(IDJim)
 
 	for _, toolName := range []string{"bash", "serve_web"} {
 		p, ok := policies[toolName]
@@ -297,7 +307,7 @@ func TestJimSeed_DenyDefaultWithExplicitAllows(t *testing.T) {
 //
 // Traces to: Jim least-privilege redesign — delete/remove standing rule.
 func TestJimSeed_ConsentGatedDeleteTools(t *testing.T) {
-	_, policies := coreAgentSeed(IDJim)
+	policies := coreAgentSeed(IDJim)
 
 	for _, toolName := range []string{
 		"delete_task", "delete_task_in_workspace",
@@ -310,29 +320,25 @@ func TestJimSeed_ConsentGatedDeleteTools(t *testing.T) {
 	}
 }
 
-// TestJimSeed_DeniedToolsAbsent verifies that tools outside Jim's scope are
-// absent from his explicit policy map (they resolve "deny" via the default_policy).
+// TestJimSeed_OutOfScopeToolsExplicitlyDenied verifies that tools outside
+// Jim's scope carry an explicit "deny" entry in his policy map — under the
+// no-default-policy-fallback model every known tool has a literal entry, so
+// out-of-scope tools are denied by an explicit value, never by omission.
 //
 // BDD: Given coreAgentSeed(IDJim) is called,
 //
 //	When the policies map is inspected for out-of-scope tools,
-//	Then create_agent, navigate, configure_provider are all absent from the map
-//	(they fall through to the deny default_policy, not listed as explicit denies).
+//	Then create_agent, navigate, configure_provider are all present with an
+//	explicit "deny" value (no DefaultPolicy field exists to fall through to).
 //
-// Traces to: Jim least-privilege redesign.
-func TestJimSeed_DeniedToolsAbsent(t *testing.T) {
-	dp, policies := coreAgentSeed(IDJim)
+// Traces to: Jim least-privilege redesign; CLAUDE.md hard constraint 6
+// (no default-policy fallback — every tool-policy decision is explicit).
+func TestJimSeed_OutOfScopeToolsExplicitlyDenied(t *testing.T) {
+	policies := coreAgentSeed(IDJim)
 
-	require.Equal(t, config.ToolPolicyDeny, dp, "Jim must be deny-by-default")
-
-	// These tools must NOT appear in the map — they are implicitly denied by default_policy.
 	for _, toolName := range []string{"create_agent", "navigate", "configure_provider"} {
-		_, present := policies[toolName]
-		assert.False(
-			t,
-			present,
-			"Jim must NOT have an explicit entry for %q (implicitly denied by default_policy=deny)",
-			toolName,
-		)
+		p, present := policies[toolName]
+		require.True(t, present, "Jim must have an explicit policy entry for %q (no fallback exists)", toolName)
+		assert.Equal(t, config.ToolPolicyDeny, p, "Jim's policy for %q must be explicit 'deny'", toolName)
 	}
 }

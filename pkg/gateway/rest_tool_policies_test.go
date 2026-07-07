@@ -33,8 +33,11 @@ func withAdminRole(r *http.Request) *http.Request {
 	return r.WithContext(ctx)
 }
 
-// TestHandleToolPolicies_GET_EmptyState verifies that GET returns the default
-// shape when no tool policies have been configured.
+// TestHandleToolPolicies_GET_EmptyState verifies that GET returns the current
+// shape when no tool policies have been configured. There is no
+// default_policy field any more (CLAUDE.md hard constraint 6) — the response
+// carries only "policies", a complete-in-intent map that is empty here
+// because nothing has been configured yet.
 func TestHandleToolPolicies_GET_EmptyState(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/security/tool-policies", nil)
@@ -45,7 +48,8 @@ func TestHandleToolPolicies_GET_EmptyState(t *testing.T) {
 
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, "allow", resp["default_policy"])
+	_, hasDefaultPolicy := resp["default_policy"]
+	assert.False(t, hasDefaultPolicy, "default_policy no longer exists on the wire")
 	// policies must be an object (not null) even when empty.
 	policies, ok := resp["policies"].(map[string]any)
 	require.True(t, ok, "policies must be an object, got %T", resp["policies"])
@@ -53,11 +57,14 @@ func TestHandleToolPolicies_GET_EmptyState(t *testing.T) {
 }
 
 // TestHandleToolPolicies_PUT_ReturnsPersistedValues verifies that PUT accepts valid
-// policy values and echoes them back in the response.
+// policy values and echoes them back in the response. newTestRestAPIWithHome
+// seeds an empty agent list, so config.ValidateToolPolicyCoverage has no
+// per-agent gaps to find regardless of how sparse this PUT's policies map is
+// (coverage is only checked against agents that actually exist).
 func TestHandleToolPolicies_PUT_ReturnsPersistedValues(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 
-	body := `{"default_policy":"ask","policies":{"exec":"deny","search_web":"allow"}}`
+	body := `{"policies":{"exec":"deny","search_web":"allow"}}`
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/tool-policies", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	// withReAuthAdmin supplies the admin user/role AND the FR-3.3 re-auth token.
@@ -65,11 +72,12 @@ func TestHandleToolPolicies_PUT_ReturnsPersistedValues(t *testing.T) {
 	w := httptest.NewRecorder()
 	api.HandleToolPolicies(w, r)
 
-	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, "ask", resp["default_policy"])
+	_, hasDefaultPolicy := resp["default_policy"]
+	assert.False(t, hasDefaultPolicy, "default_policy no longer exists on the wire")
 	policies, ok := resp["policies"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "deny", policies["exec"])
@@ -82,7 +90,7 @@ func TestHandleToolPolicies_PUT_ReadBack(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 
 	// Write.
-	putBody := `{"default_policy":"deny","policies":{"browser_evaluate":"ask"}}`
+	putBody := `{"policies":{"browser_evaluate":"ask"}}`
 	putReq := httptest.NewRequest(http.MethodPut, "/api/v1/security/tool-policies", strings.NewReader(putBody))
 	putReq.Header.Set("Content-Type", "application/json")
 	putReq = withReAuthAdmin(t, api, putReq) // admin user/role + FR-3.3 re-auth token
@@ -98,30 +106,62 @@ func TestHandleToolPolicies_PUT_ReadBack(t *testing.T) {
 
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(getW.Body.Bytes(), &resp))
-	assert.Equal(t, "deny", resp["default_policy"])
+	_, hasDefaultPolicy := resp["default_policy"]
+	assert.False(t, hasDefaultPolicy, "default_policy no longer exists on the wire")
 	policies := resp["policies"].(map[string]any)
 	assert.Equal(t, "ask", policies["browser_evaluate"])
 }
 
-// TestHandleToolPolicies_PUT_InvalidDefaultPolicy verifies that an invalid
-// default_policy value is rejected with 400.
-func TestHandleToolPolicies_PUT_InvalidDefaultPolicy(t *testing.T) {
+// TestHandleToolPolicies_PUT_IncompleteCoverageRejected verifies that a PUT
+// is rejected with 400 when the resulting global+per-agent policy state would
+// leave a static builtin tool uncovered for a live agent
+// (config.ValidateToolPolicyCoverage, CLAUDE.md hard constraint 6). This
+// replaces the old TestHandleToolPolicies_PUT_InvalidDefaultPolicy, which
+// exercised a "default_policy" field that no longer exists on the wire — with
+// ValidateInbound off (this harness's default), an unrecognized field is
+// silently dropped by the non-strict JSON decode rather than rejected, so
+// that body no longer exercises any validation path at all. An incomplete
+// policy map is now the meaningful failure mode to test instead.
+func TestHandleToolPolicies_PUT_IncompleteCoverageRejected(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
-	body := `{"default_policy":"invalid"}`
+
+	// newTestRestAPIWithHome seeds an empty agent list, so coverage trivially
+	// passes with no agents to check. Add a live agent with a deliberately
+	// sparse builtin policy map (a single tool covered) so most known tools
+	// have no per-agent entry — and, since this PUT's global map covers only
+	// that same one tool, no global entry either — a genuine coverage gap.
+	cfg := api.agentLoop.GetConfig()
+	cfgCopy, err := cfg.Clone()
+	require.NoError(t, err)
+	cfgCopy.Agents.List = append(cfgCopy.Agents.List, config.AgentConfig{
+		ID:   "sparse-agent",
+		Name: "Sparse Agent",
+		Tools: &config.AgentToolsCfg{
+			Builtin: config.AgentBuiltinToolsCfg{
+				Policies: map[string]config.ToolPolicy{
+					"read_file": config.ToolPolicyAllow,
+				},
+			},
+		},
+	})
+	api.agentLoop.SwapConfig(cfgCopy)
+
+	body := `{"policies":{"read_file":"allow"}}`
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/tool-policies", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
-	r = withReAuthAdmin(t, api, r) // admin user/role + FR-3.3 re-auth token
+	r = withReAuthAdmin(t, api, r)
 	w := httptest.NewRecorder()
 	api.HandleToolPolicies(w, r)
 
-	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "coverage")
 }
 
 // TestHandleToolPolicies_PUT_InvalidPerToolPolicy verifies that an invalid
 // per-tool policy value is rejected with 400.
 func TestHandleToolPolicies_PUT_InvalidPerToolPolicy(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
-	body := `{"default_policy":"allow","policies":{"exec":"maybe"}}`
+	body := `{"policies":{"exec":"maybe"}}`
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/tool-policies", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	r = withReAuthAdmin(t, api, r) // admin user/role + FR-3.3 re-auth token

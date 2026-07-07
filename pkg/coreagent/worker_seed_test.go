@@ -172,9 +172,10 @@ func TestWorkerHasNoPersistentMemoryTools(t *testing.T) {
 		assert.Equal(t, config.ToolPolicyDeny, pol[tool],
 			"worker must deny persistent-memory tool %q (ephemeral memory only)", tool)
 	}
-	// The system.* deny rail is preserved.
-	assert.Equal(t, config.ToolPolicyDeny, pol["system.*"],
-		"worker keeps the system.* deny rail")
+	// "system.*" was never a real tool name (dead wildcard) — it must never
+	// appear as a key.
+	_, hasRail := pol["system.*"]
+	assert.False(t, hasRail, "worker must NOT carry the dead 'system.*' wildcard")
 }
 
 // TestWorkerSoulIsOptional_BootWithEmptySoul verifies the worker property-model

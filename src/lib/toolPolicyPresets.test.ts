@@ -1,12 +1,36 @@
 /**
  * toolPolicyPresets.test.ts — Issue #315 ACs.
  *
- * Verifies that the preset map exactly matches the §2.1 table from the spec,
- * with real tool ids (no delete_file).
+ * Verifies that the preset table exactly matches the §2.1 table from the spec,
+ * with real tool ids (no delete_file), and that applyRolePreset expands a
+ * preset into a COMPLETE per-tool policy map over whatever tool list it is
+ * given — there is no `default_policy` field on the wire anymore, so a preset
+ * must batch-author an explicit entry for every known tool.
  */
 
 import { describe, it, expect } from 'vitest'
 import { POLICY_PRESETS, applyRolePreset, type RolePreset } from './toolPolicyPresets'
+import type { RegistryTool } from '@/lib/api'
+
+function makeTool(name: string): RegistryTool {
+  return { name, description: `${name} description`, scope: 'general', category: 'core', source: 'builtin' }
+}
+
+const SOME_TOOLS: RegistryTool[] = [
+  makeTool('read_file'),
+  makeTool('exec'),
+  makeTool('web_search'),
+]
+
+const TOOLS_WITH_OVERRIDES: RegistryTool[] = [
+  makeTool('bash'),
+  makeTool('browser.navigate'),
+  makeTool('browser.click'),
+  makeTool('browser.type'),
+  makeTool('browser.evaluate'),
+  makeTool('write_file'),
+  makeTool('read_file'),
+]
 
 describe('POLICY_PRESETS', () => {
   it('defines exactly three roles: cautious, balanced, full_access', () => {
@@ -16,7 +40,7 @@ describe('POLICY_PRESETS', () => {
   describe('Cautious', () => {
     const preset = POLICY_PRESETS.cautious
 
-    it('has default_policy = ask', () => {
+    it('has defaultPolicy = ask', () => {
       expect(preset.defaultPolicy).toBe('ask')
     })
 
@@ -32,7 +56,7 @@ describe('POLICY_PRESETS', () => {
   describe('Balanced', () => {
     const preset = POLICY_PRESETS.balanced
 
-    it('has default_policy = allow', () => {
+    it('has defaultPolicy = allow', () => {
       expect(preset.defaultPolicy).toBe('allow')
     })
 
@@ -83,7 +107,7 @@ describe('POLICY_PRESETS', () => {
   describe('Full access', () => {
     const preset = POLICY_PRESETS.full_access
 
-    it('has default_policy = allow', () => {
+    it('has defaultPolicy = allow', () => {
       expect(preset.defaultPolicy).toBe('allow')
     })
 
@@ -97,17 +121,28 @@ describe('POLICY_PRESETS', () => {
   })
 })
 
-describe('applyRolePreset', () => {
-  it('Cautious → {default_policy:ask, policies:{}}', () => {
-    expect(applyRolePreset('cautious')).toStrictEqual({
-      default_policy: 'ask',
-      policies: {},
+describe('applyRolePreset — expands to a complete map over the given tool list', () => {
+  it('Cautious → every known tool explicitly set to "ask", no default_policy field', () => {
+    expect(applyRolePreset('cautious', SOME_TOOLS)).toStrictEqual({
+      policies: { read_file: 'ask', exec: 'ask', web_search: 'ask' },
     })
   })
 
-  it('Balanced → {default_policy:allow, policies:§2.1 overrides}', () => {
-    expect(applyRolePreset('balanced')).toStrictEqual({
-      default_policy: 'allow',
+  it('Full access → every known tool explicitly set to "allow"', () => {
+    expect(applyRolePreset('full_access', SOME_TOOLS)).toStrictEqual({
+      policies: { read_file: 'allow', exec: 'allow', web_search: 'allow' },
+    })
+  })
+
+  it('Balanced → tools with a §2.1 override get it; everything else gets "allow"', () => {
+    expect(applyRolePreset('balanced', SOME_TOOLS)).toStrictEqual({
+      // None of read_file/exec/web_search are in the §2.1 override table.
+      policies: { read_file: 'allow', exec: 'allow', web_search: 'allow' },
+    })
+  })
+
+  it('Balanced applies the exact §2.1 overrides when those tools are present', () => {
+    expect(applyRolePreset('balanced', TOOLS_WITH_OVERRIDES)).toStrictEqual({
       policies: {
         bash: 'ask',
         'browser.navigate': 'ask',
@@ -115,66 +150,86 @@ describe('applyRolePreset', () => {
         'browser.type': 'ask',
         'browser.evaluate': 'deny',
         write_file: 'ask',
+        read_file: 'allow', // not in the override table → falls back to defaultPolicy
       },
     })
   })
 
-  it('Full access → {default_policy:allow, policies:{}}', () => {
-    expect(applyRolePreset('full_access')).toStrictEqual({
-      default_policy: 'allow',
-      policies: {},
-    })
+  it('an empty tool list produces an empty (but still valid) policies map', () => {
+    expect(applyRolePreset('cautious', [])).toStrictEqual({ policies: {} })
   })
 
-  it('returns a new object (mutations do not affect the preset definition)', () => {
-    const result = applyRolePreset('balanced')
+  it('returns a new object each call (mutations do not affect the preset definition or a prior result)', () => {
+    const result = applyRolePreset('balanced', TOOLS_WITH_OVERRIDES)
     const presetOverridesBefore = { ...POLICY_PRESETS.balanced.overrides }
-    // Mutate the returned policies — should not affect the preset.
-    result.policies['new_tool'] = 'deny'
+    // Mutate the returned policies — should not affect the preset or a fresh call.
+    result.policies['bash'] = 'allow'
     expect(POLICY_PRESETS.balanced.overrides).toStrictEqual(presetOverridesBefore)
+    expect(applyRolePreset('balanced', TOOLS_WITH_OVERRIDES).policies['bash']).toBe('ask')
   })
 
-  // Verify each role produces its exact §2.1 shape
-  const cases: [RolePreset, { default_policy: string; policies: Record<string, string> }][] = [
-    ['cautious', { default_policy: 'ask', policies: {} }],
+  // Verify each role produces its exact §2.1 shape over TOOLS_WITH_OVERRIDES.
+  const cases: [RolePreset, Record<string, string>][] = [
+    [
+      'cautious',
+      {
+        bash: 'ask',
+        'browser.navigate': 'ask',
+        'browser.click': 'ask',
+        'browser.type': 'ask',
+        'browser.evaluate': 'ask',
+        write_file: 'ask',
+        read_file: 'ask',
+      },
+    ],
     [
       'balanced',
       {
-        default_policy: 'allow',
-        policies: {
-          bash: 'ask',
-          'browser.navigate': 'ask',
-          'browser.click': 'ask',
-          'browser.type': 'ask',
-          'browser.evaluate': 'deny',
-          write_file: 'ask',
-        },
+        bash: 'ask',
+        'browser.navigate': 'ask',
+        'browser.click': 'ask',
+        'browser.type': 'ask',
+        'browser.evaluate': 'deny',
+        write_file: 'ask',
+        read_file: 'allow',
       },
     ],
-    ['full_access', { default_policy: 'allow', policies: {} }],
+    [
+      'full_access',
+      {
+        bash: 'allow',
+        'browser.navigate': 'allow',
+        'browser.click': 'allow',
+        'browser.type': 'allow',
+        'browser.evaluate': 'allow',
+        write_file: 'allow',
+        read_file: 'allow',
+      },
+    ],
   ]
 
-  it.each(cases)('%s matches §2.1 table exactly', (role, expected) => {
-    expect(applyRolePreset(role)).toStrictEqual(expected)
+  it.each(cases)('%s matches the expected complete map over TOOLS_WITH_OVERRIDES', (role, expected) => {
+    expect(applyRolePreset(role, TOOLS_WITH_OVERRIDES).policies).toStrictEqual(expected)
   })
 })
 
 describe('ToolPolicyValue — HC#8 wire-type alignment', () => {
-  it('applyRolePreset returns an object with default_policy and policies fields (matching AgentToolsCfg.builtin shape)', () => {
-    const result = applyRolePreset('balanced')
-    // Verify both required fields are present and have the correct value types
-    expect(typeof result.default_policy).toBe('string')
-    expect(['allow', 'ask', 'deny']).toContain(result.default_policy)
+  it('applyRolePreset returns an object with only a `policies` field (no default_policy)', () => {
+    const result = applyRolePreset('balanced', SOME_TOOLS)
+    expect(Object.keys(result)).toEqual(['policies'])
     expect(typeof result.policies).toBe('object')
     expect(result.policies).not.toBeNull()
   })
 
-  it('no AppliedPolicy type exists — ToolPolicyValue is the one export for the shape', () => {
-    // This is a compile-time check enforced by TypeScript — if the file compiled
-    // with the generated type alias, the shape is correct. We verify at runtime
-    // that the return value has the expected structure with no extra fields.
-    const result = applyRolePreset('cautious')
-    const keys = Object.keys(result).sort()
-    expect(keys).toEqual(['default_policy', 'policies'])
+  it('every value in the returned policies map is a valid ToolPolicy', () => {
+    const result = applyRolePreset('balanced', TOOLS_WITH_OVERRIDES)
+    for (const v of Object.values(result.policies)) {
+      expect(['allow', 'ask', 'deny']).toContain(v)
+    }
+  })
+
+  it('the returned policies map covers every tool name passed in, exactly once', () => {
+    const result = applyRolePreset('cautious', TOOLS_WITH_OVERRIDES)
+    expect(Object.keys(result.policies).sort()).toEqual(TOOLS_WITH_OVERRIDES.map((t) => t.name).sort())
   })
 })

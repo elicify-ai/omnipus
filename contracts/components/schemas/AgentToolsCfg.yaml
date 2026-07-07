@@ -7,23 +7,20 @@ properties:
   builtin:
     type: object
     description: Controls builtin tool visibility for this agent.
+    required:
+      - policies
     properties:
-      default_policy:
-        type: string
-        enum:
-          - allow
-          - ask
-          - deny
-        description: >
-          Fallback policy applied to any builtin tool not listed in policies.
-          Custom agents are seeded with default_policy=allow and a system.*=deny
-          entry to enforce the privilege rail.
-        example: "allow"
       policies:
         type: object
         description: >
-          Per-tool policy overrides. Keys are tool names or glob patterns
-          (e.g. "system.*", "workspace.shell"). Values are one of "allow", "ask", "deny".
+          Complete per-tool policy map. Every static builtin tool name MUST be
+          present as an explicit, literal key (e.g. "bash", "remember") with an
+          "allow"/"ask"/"deny" value — this is not a sparse override set with a
+          fallback default, and wildcard keys are not valid for the static
+          builtin catalog. There is no default_policy field; every new custom
+          agent is seeded fully deny-by-default (every static tool explicitly
+          "deny"), with only a narrow, deliberately conservative allow-list for
+          its actual needs.
         additionalProperties:
           type: string
           enum:
@@ -31,8 +28,8 @@ properties:
             - ask
             - deny
         example:
-          "system.*": "deny"
-          "workspace.shell": "ask"
+          "bash": "deny"
+          "remember": "allow"
   mcp:
     type: object
     description: MCP server bindings for this agent.

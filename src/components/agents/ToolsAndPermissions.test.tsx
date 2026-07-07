@@ -126,7 +126,6 @@ const ADMIN_TOOL: RegistryTool = {
 
 const DEFAULT_TOOLS_CFG: AgentToolsCfg = {
   builtin: {
-    default_policy: 'allow',
     policies: {},
   },
 }
@@ -146,7 +145,6 @@ beforeEach(() => {
   })
   vi.mocked(api.fetchMcpServersForAgent).mockResolvedValue([])
   vi.mocked(api.fetchGlobalToolPolicies).mockResolvedValue({
-    default_policy: 'allow',
     policies: {},
   })
   // Default: updateAgentTools succeeds and returns the same config
@@ -236,7 +234,7 @@ describe('ToolsAndPermissions — system.* in flat category grid (US-1 / AC5 / F
     ])
     vi.mocked(api.fetchAgentTools).mockResolvedValue({
       config: {
-        builtin: { default_policy: 'allow', policies: { 'system.config.set': 'allow' } },
+        builtin: { policies: { 'system.config.set': 'allow' } },
       },
       tools: [],
     })
@@ -247,7 +245,7 @@ describe('ToolsAndPermissions — system.* in flat category grid (US-1 / AC5 / F
       <ToolsAndPermissions
         agentId="agent-1"
         agentType="Main"
-        tools={{ builtin: { default_policy: 'allow', policies: { 'system.config.set': 'allow' } } }}
+        tools={{ builtin: { policies: { 'system.config.set': 'allow' } } }}
         onChange={NOOP_CHANGE}
       />
     )
@@ -265,7 +263,7 @@ describe('ToolsAndPermissions — system.* in flat category grid (US-1 / AC5 / F
       <ToolsAndPermissions
         agentId="agent-1"
         agentType="Main"
-        tools={{ builtin: { default_policy: 'allow', policies: { 'system.config.set': 'allow' } } }}
+        tools={{ builtin: { policies: { 'system.config.set': 'allow' } } }}
         onChange={NOOP_CHANGE}
       />
     )
@@ -280,7 +278,7 @@ describe('ToolsAndPermissions — system.* in flat category grid (US-1 / AC5 / F
       <ToolsAndPermissions
         agentId="agent-1"
         agentType="Main"
-        tools={{ builtin: { default_policy: 'allow', policies: { 'system.config.set': 'allow' } } }}
+        tools={{ builtin: { policies: { 'system.config.set': 'allow' } } }}
         onChange={NOOP_CHANGE}
       />
     )
@@ -309,13 +307,12 @@ describe('ToolsAndPermissions — shell/fs conflict banner', () => {
   beforeEach(() => {
     vi.mocked(api.fetchRegistryTools).mockResolvedValue([SHELL_TOOL, ...FS_TOOLS])
     vi.mocked(api.fetchAgentTools).mockResolvedValue({ config: DEFAULT_TOOLS_CFG, tools: [] })
-    vi.mocked(api.fetchGlobalToolPolicies).mockResolvedValue({ default_policy: 'allow', policies: {} })
+    vi.mocked(api.fetchGlobalToolPolicies).mockResolvedValue({ policies: {} })
   })
 
   it('banner renders when bash is allow and a filesystem tool is deny', async () => {
     const conflictTools: AgentToolsCfg = {
       builtin: {
-        default_policy: 'allow',
         policies: { write_file: 'deny' },
       },
     }
@@ -335,7 +332,6 @@ describe('ToolsAndPermissions — shell/fs conflict banner', () => {
   it('banner hidden when bash is deny', async () => {
     const noConflictTools: AgentToolsCfg = {
       builtin: {
-        default_policy: 'allow',
         policies: { bash: 'deny', write_file: 'deny' },
       },
     }
@@ -369,7 +365,6 @@ describe('ToolsAndPermissions — shell/fs conflict banner', () => {
   it('banner text is visible when conflict exists', async () => {
     const conflictTools: AgentToolsCfg = {
       builtin: {
-        default_policy: 'allow',
         policies: { read_file: 'deny' },
       },
     }
@@ -422,13 +417,15 @@ describe('ToolsAndPermissions — role preset selector (US-D2 / #333)', () => {
     fireEvent.click(document.querySelector('[data-testid="preset-cautious"]')!)
 
     // The real save goes through updateAgentTools (re-auth gated mutation).
+    // The registry for this describe block is [read_file, mcp_search] (see
+    // beforeEach) — Cautious expands to a COMPLETE map over exactly those
+    // tools, each explicitly set to 'ask'. There is no default_policy field.
     await waitFor(() => {
       expect(api.updateAgentTools).toHaveBeenCalledWith(
         'agent-1',
         expect.objectContaining({
           builtin: expect.objectContaining({
-            default_policy: 'ask',
-            policies: {},
+            policies: { read_file: 'ask', mcp_search: 'ask' },
           }),
         }),
         '', // empty reAuthToken on first attempt (runGated optimistic call)
@@ -568,7 +565,6 @@ describe('ToolsAndPermissions — no spurious PUT on tab open (bug fix)', () => 
     // re-auth token was present.
     const serverConfig: AgentToolsCfg = {
       builtin: {
-        default_policy: 'allow',
         policies: {},
       },
     }
@@ -577,7 +573,7 @@ describe('ToolsAndPermissions — no spurious PUT on tab open (bug fix)', () => 
     // Parent starts with a slightly different config (simulates the gap between
     // agent.tools_cfg from the main GET and the dedicated tools GET result).
     const parentConfig: AgentToolsCfg = {
-      builtin: { default_policy: 'allow', policies: {} },
+      builtin: { policies: {} },
     }
 
     renderWithQuery(
@@ -608,14 +604,13 @@ describe('ToolsAndPermissions — no spurious PUT on tab open (bug fix)', () => 
     // parent's toolsCfg does not. The load-sync must still not fire a PUT.
     const serverConfig: AgentToolsCfg = {
       builtin: {
-        default_policy: 'deny',
         policies: { read_file: 'allow', write_file: 'deny' },
       },
     }
     vi.mocked(api.fetchAgentTools).mockResolvedValue({ config: serverConfig, tools: [] })
 
     const parentConfig: AgentToolsCfg = {
-      builtin: { default_policy: 'allow', policies: {} },
+      builtin: { policies: {} },
     }
 
     renderWithQuery(
@@ -669,11 +664,16 @@ describe('ToolsAndPermissions — re-auth-gated save on real edit', () => {
       expect(mockRunGated).toHaveBeenCalledTimes(1)
     })
 
-    // updateAgentTools was called through the gate with the token
+    // updateAgentTools was called through the gate with the token. The
+    // registry is [read_file, mcp_search] (beforeEach) — Cautious expands to
+    // a complete map over exactly those tools, each set to 'ask'. There is no
+    // default_policy field on the wire anymore.
     await waitFor(() => {
       expect(api.updateAgentTools).toHaveBeenCalledWith(
         'agent-1',
-        expect.objectContaining({ builtin: expect.objectContaining({ default_policy: 'ask' }) }),
+        expect.objectContaining({
+          builtin: expect.objectContaining({ policies: { read_file: 'ask', mcp_search: 'ask' } }),
+        }),
         '', // token from runGated's optimistic pass
       )
     })
@@ -830,6 +830,18 @@ describe('ToolsAndPermissions — latest-wins: no edit dropped during in-flight 
   //      used Full access config (latest-wins), not Cautious (stale A).
 
   it('latest-wins: edits B and C made while A is in-flight are not dropped; C persists', async () => {
+    // Add write_file to the registry so Balanced (which sets write_file:'ask'
+    // per the §2.1 override table) and Full access (write_file:'allow')
+    // produce genuinely DIFFERENT complete maps. With only read_file/mcp_search
+    // in scope neither preset has an override for either tool, so Balanced and
+    // Full access would collapse into an identical map and we could no longer
+    // tell "C won" from "B won" from the PUT payload alone.
+    const WRITE_FILE_TOOL: RegistryTool = {
+      name: 'write_file', scope: 'general', category: 'filesystem', description: 'Write file', source: 'builtin',
+    }
+    vi.mocked(api.fetchRegistryTools).mockResolvedValue([BUILTIN_TOOL, MCP_TOOL, WRITE_FILE_TOOL])
+    vi.mocked(api.fetchBuiltinTools).mockResolvedValue([BUILTIN_TOOL, MCP_TOOL, WRITE_FILE_TOOL])
+
     // Deferred promise to block the FIRST updateAgentTools call (A's save).
     let resolveFirstSave!: (v: { config: typeof DEFAULT_TOOLS_CFG; tools: [] }) => void
     const firstSavePromise = new Promise<{ config: typeof DEFAULT_TOOLS_CFG; tools: [] }>(
@@ -837,10 +849,8 @@ describe('ToolsAndPermissions — latest-wins: no edit dropped during in-flight 
     )
 
     // Full access config (edit C) — this is the expected final persisted value.
-    // Balanced overrides differ from full_access (has overrides), so we can
-    // distinguish "C won" from "B or A won" in the assertion.
     const fullAccessCfg = {
-      builtin: { default_policy: 'allow', policies: {} },
+      builtin: { policies: { read_file: 'allow', mcp_search: 'allow', write_file: 'allow' } },
     }
 
     vi.mocked(api.updateAgentTools)
@@ -869,7 +879,7 @@ describe('ToolsAndPermissions — latest-wins: no edit dropped during in-flight 
     // Switch to fake timers NOW — queries have resolved; only debounce timers remain.
     vi.useFakeTimers()
 
-    // Edit A: click Cautious preset (default_policy='ask', policies={}).
+    // Edit A: click Cautious preset — complete map, every known tool → 'ask'.
     fireEvent.click(document.querySelector('[data-testid="preset-cautious"]')!)
 
     // Advance past the useAutoSave debounce (500ms) → A's save fires.
@@ -878,15 +888,18 @@ describe('ToolsAndPermissions — latest-wins: no edit dropped during in-flight 
     // A's save is now in-flight (blocked by firstSavePromise).
     expect(api.updateAgentTools).toHaveBeenCalledTimes(1)
     expect(vi.mocked(api.updateAgentTools).mock.calls[0][1]).toMatchObject({
-      builtin: expect.objectContaining({ default_policy: 'ask' }),
+      builtin: expect.objectContaining({
+        policies: { read_file: 'ask', mcp_search: 'ask', write_file: 'ask' },
+      }),
     })
 
-    // Edit B while A is in-flight: Balanced (default_policy='allow', has overrides).
+    // Edit B while A is in-flight: Balanced (write_file → 'ask' per §2.1;
+    // read_file/mcp_search → 'allow', no override for either).
     // Does NOT call updateAgentTools yet — the debounce resets.
     fireEvent.click(document.querySelector('[data-testid="preset-balanced"]')!)
     await act(async () => { vi.advanceTimersByTime(100) })
 
-    // Edit C while A is still in-flight: Full access (default_policy='allow', no overrides).
+    // Edit C while A is still in-flight: Full access (every tool → 'allow').
     // B's debounce was cleared; C starts a fresh 500ms debounce.
     fireEvent.click(document.querySelector('[data-testid="preset-full_access"]')!)
     await act(async () => { vi.advanceTimersByTime(100) })
@@ -901,12 +914,12 @@ describe('ToolsAndPermissions — latest-wins: no edit dropped during in-flight 
     // C's save has now been called (second invocation). A is still pending.
     expect(api.updateAgentTools).toHaveBeenCalledTimes(2)
 
-    // The second call must use Full access config (C wins, not A or B).
+    // The second call must use Full access's complete map (C wins, not A or B) —
+    // write_file:'allow' distinguishes it from Balanced's write_file:'ask'.
     const secondCallCfg = vi.mocked(api.updateAgentTools).mock.calls[1][1]
     expect(secondCallCfg).toMatchObject({
       builtin: expect.objectContaining({
-        default_policy: 'allow',
-        policies: {}, // Full access has no overrides — distinguishes it from Balanced
+        policies: { read_file: 'allow', mcp_search: 'allow', write_file: 'allow' },
       }),
     })
 
@@ -924,7 +937,7 @@ describe('ToolsAndPermissions — latest-wins: no edit dropped during in-flight 
     // refetch must NOT overwrite the editor with A's stale value. The isDraftReady
     // gate blocks the hydration useEffect once the user has edited.
     const cautionsCfg = {
-      builtin: { default_policy: 'ask', policies: {} },
+      builtin: { policies: {} },
     }
 
     // fetchAgentTools: first call returns DEFAULT, re-fetch after A saves returns

@@ -85,7 +85,7 @@ const MCP_TOOL: RegistryTool = {
 }
 
 const DEFAULT_TOOLS_CFG: AgentToolsCfg = {
-  builtin: { default_policy: 'allow', policies: {} },
+  builtin: { policies: { 'system.config.set': 'allow', read_file: 'allow', mcp_github_search: 'allow' } },
 }
 
 function makeQueryClient() {
@@ -117,7 +117,6 @@ beforeEach(() => {
   })
   vi.mocked(api.fetchMcpServersForAgent).mockResolvedValue([])
   vi.mocked(api.fetchGlobalToolPolicies).mockResolvedValue({
-    default_policy: 'allow',
     policies: {},
   })
   vi.mocked(api.fetchProviders).mockResolvedValue([])

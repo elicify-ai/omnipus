@@ -4,24 +4,19 @@ description: >
   and accepted by PUT /api/v1/security/tool-policies.
 type: object
 required:
-  - default_policy
   - policies
 additionalProperties: false
 properties:
-  default_policy:
-    type: string
-    description: Default policy for any tool not listed in policies.
-    enum:
-      - allow
-      - ask
-      - deny
-    example: allow
   policies:
     type: object
     description: >
-      Per-tool policy overrides. Keys are canonical tool names;
-      values are the policy to apply. Never null — empty object
-      when no overrides are configured.
+      Complete per-tool policy map. Every static builtin tool name (the full
+      catalog: general + browser + system.*-legacy-named sysagent tools) MUST
+      be present as an explicit, literal key with an "allow"/"ask"/"deny"
+      value — this is not a sparse override set with a fallback default.
+      There is no default_policy field; coverage is enforced by hard
+      validation at boot and at every write, never a silent runtime default.
+      Never null — always the full map.
     additionalProperties:
       type: string
       enum:
@@ -29,5 +24,5 @@ properties:
         - ask
         - deny
     example:
-      exec: ask
-      browser.evaluate: deny
+      bash: ask
+      browser_evaluate: deny

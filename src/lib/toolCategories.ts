@@ -45,19 +45,20 @@ export const CATEGORY_LABELS: Record<string, string> = {
  *     We support the general `<prefix>.*` form: strip the trailing `.*` from
  *     the glob key, then check that the tool name starts with that prefix
  *     followed by '.'.
- *  3. Default policy fallback.
  *
- * The backend stores glob keys like `system.*` to seed the privilege rail
- * (custom agents default to system.*=deny). Without glob resolution the
- * per-agent consumer with that value renders system tools as if no override
- * exists, which is incorrect.
+ * There is no third "default policy" fallback step. The backend guarantees
+ * (via boot-time + write-time hard validation, Constraint #6) that every
+ * static builtin tool has an explicit, literal policy entry, so a tool that
+ * resolves to neither an exact nor a glob match is genuinely anomalous — stale
+ * or incomplete local state, not a legitimate "use the default" case. Callers
+ * MUST treat the `undefined` return as a distinct "unconfigured / needs
+ * attention" state — never silently coerce it to 'allow'.
  */
 export function resolvePolicy(
   toolName: string,
   policies: Record<string, ToolPolicy> | undefined,
-  defaultPolicy: ToolPolicy,
-): ToolPolicy {
-  if (!policies) return defaultPolicy
+): ToolPolicy | undefined {
+  if (!policies) return undefined
 
   // 1. Exact match (most specific — takes precedence over any glob).
   if (Object.prototype.hasOwnProperty.call(policies, toolName)) {
@@ -73,8 +74,8 @@ export function resolvePolicy(
     }
   }
 
-  // 3. Default.
-  return defaultPolicy
+  // 3. Genuinely unconfigured — no default to fall back to.
+  return undefined
 }
 
 export function groupByCategory(tools: BuiltinTool[]): Record<string, BuiltinTool[]> {

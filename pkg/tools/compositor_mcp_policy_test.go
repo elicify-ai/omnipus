@@ -73,9 +73,13 @@ func TestFilterToolsByPolicy_MCPToolGlobalDeny(t *testing.T) {
 	tools := makeMCPAdapters("code-server", "mcp_codeserver_search", "mcp_codeserver_lint")
 
 	cfg := &ToolPolicyCfg{
-		DefaultPolicy:       "allow",
-		GlobalPolicies:      map[string]string{"mcp_codeserver_search": "deny"},
-		GlobalDefaultPolicy: "allow",
+		GlobalPolicies: map[string]string{
+			"mcp_codeserver_search": "deny",
+			// Explicit coverage for the sibling (CLAUDE.md hard constraint 6: no
+			// default-policy fallback) so it exercises "survives with no deny",
+			// not "no coverage at all".
+			"mcp_codeserver_lint": "allow",
+		},
 	}
 
 	got, policyMap := FilterToolsByPolicy(tools, "custom", cfg)
@@ -109,10 +113,12 @@ func TestFilterToolsByPolicy_MCPToolGlobalDeny_OverridesAgentAllow(t *testing.T)
 	tools := makeMCPAdapters("exec-server", "mcp_execsvr_run", "mcp_execsvr_read")
 
 	cfg := &ToolPolicyCfg{
-		DefaultPolicy:       "allow",
-		Policies:            map[string]string{"mcp_execsvr_run": "allow"},
-		GlobalPolicies:      map[string]string{"mcp_execsvr_run": "deny"},
-		GlobalDefaultPolicy: "allow",
+		Policies: map[string]string{"mcp_execsvr_run": "allow"},
+		GlobalPolicies: map[string]string{
+			"mcp_execsvr_run": "deny",
+			// Explicit coverage for the sibling (no default-policy fallback).
+			"mcp_execsvr_read": "allow",
+		},
 	}
 
 	got, policyMap := FilterToolsByPolicy(tools, "custom", cfg)
@@ -153,9 +159,14 @@ func TestFilterToolsByPolicy_MCPTool_WildcardDoesNotMatch_ExactKeyRequired(t *te
 	// 1. Dot-segment wildcards do NOT match underscore MCP names — both survive.
 	for _, wildcard := range []string{"mcp.*", "mcp_search.*"} {
 		cfg := &ToolPolicyCfg{
-			DefaultPolicy:       "allow",
-			GlobalPolicies:      map[string]string{wildcard: "deny"},
-			GlobalDefaultPolicy: "allow",
+			GlobalPolicies: map[string]string{
+				wildcard: "deny",
+				// Explicit coverage (no default-policy fallback): these entries
+				// are what makes "survives" a real assertion rather than an
+				// artifact of a removed default-allow mechanic.
+				"mcp_search_query": "allow",
+				"mcp_search_index": "allow",
+			},
 		}
 		got, policyMap := FilterToolsByPolicy(mkTools(), "custom", cfg)
 		assert.Len(t, got, 2,
@@ -168,9 +179,10 @@ func TestFilterToolsByPolicy_MCPTool_WildcardDoesNotMatch_ExactKeyRequired(t *te
 
 	// 2. An EXACT key denies just that one tool.
 	cfg := &ToolPolicyCfg{
-		DefaultPolicy:       "allow",
-		GlobalPolicies:      map[string]string{"mcp_search_query": "deny"},
-		GlobalDefaultPolicy: "allow",
+		GlobalPolicies: map[string]string{
+			"mcp_search_query": "deny",
+			"mcp_search_index": "allow", // explicit coverage for the survivor
+		},
 	}
 	got, policyMap := FilterToolsByPolicy(mkTools(), "custom", cfg)
 	require.Len(t, got, 1, "exact deny must remove exactly one MCP tool")
@@ -201,9 +213,7 @@ func TestFilterToolsByPolicy_MCPTool_UnderscoreWildcard_BulkDeny(t *testing.T) {
 	// 1. "_*" wildcard bulk-denies all tools from the server.
 	t.Run("bulk_deny_all_server_tools", func(t *testing.T) {
 		cfg := &ToolPolicyCfg{
-			DefaultPolicy:       "allow",
-			GlobalPolicies:      map[string]string{"mcp_search_*": "deny"},
-			GlobalDefaultPolicy: "allow",
+			GlobalPolicies: map[string]string{"mcp_search_*": "deny"},
 		}
 		got, policyMap := FilterToolsByPolicy(mkTools(), "custom", cfg)
 		assert.Empty(t, got,
@@ -217,12 +227,10 @@ func TestFilterToolsByPolicy_MCPTool_UnderscoreWildcard_BulkDeny(t *testing.T) {
 	// 2. Exact key beats the "_*" wildcard (exact-wins precedence).
 	t.Run("exact_beats_underscore_wildcard", func(t *testing.T) {
 		cfg := &ToolPolicyCfg{
-			DefaultPolicy: "allow",
 			GlobalPolicies: map[string]string{
 				"mcp_search_*":     "deny",
 				"mcp_search_query": "allow", // exact override
 			},
-			GlobalDefaultPolicy: "allow",
 		}
 		got, policyMap := FilterToolsByPolicy(mkTools(), "custom", cfg)
 		require.Len(t, got, 1, "exact allow must override the wildcard deny for mcp_search_query")
@@ -238,9 +246,7 @@ func TestFilterToolsByPolicy_MCPTool_UnderscoreWildcard_BulkDeny(t *testing.T) {
 	// 3. Per-agent "_*" wildcard (not just global) also works.
 	t.Run("agent_level_underscore_wildcard", func(t *testing.T) {
 		cfg := &ToolPolicyCfg{
-			DefaultPolicy:       "allow",
-			Policies:            map[string]string{"mcp_search_*": "deny"},
-			GlobalDefaultPolicy: "allow",
+			Policies: map[string]string{"mcp_search_*": "deny"},
 		}
 		got, _ := FilterToolsByPolicy(mkTools(), "custom", cfg)
 		assert.Empty(t, got,
@@ -267,12 +273,10 @@ func TestFilterToolsByPolicy_MCPTool_UnderscoreWildcard_LongerPrefixWins(t *test
 	)
 
 	cfg := &ToolPolicyCfg{
-		DefaultPolicy: "allow",
 		GlobalPolicies: map[string]string{
 			"mcp_*":        "ask",
 			"mcp_search_*": "deny",
 		},
-		GlobalDefaultPolicy: "allow",
 	}
 
 	got, policyMap := FilterToolsByPolicy(allTools, "custom", cfg)
@@ -291,39 +295,35 @@ func TestFilterToolsByPolicy_MCPTool_UnderscoreWildcard_LongerPrefixWins(t *test
 	assert.Equal(t, "ask", p, "mcp_other_tool must have effective policy 'ask' from mcp_*")
 }
 
-// TestFilterToolsByPolicy_MCPToolAllowed_WhenNoDeny is the control case: an MCP
-// tool with no contrary global or agent policy survives filtering with effective
-// policy "allow".
+// TestFilterToolsByPolicy_MCPToolNoCoverage_FailsClosedToDeny is the control
+// case for "no policy override": an MCP tool with NO explicit global or agent
+// policy entry anywhere now fails closed to "deny" — CLAUDE.md hard constraint
+// 6 retires the "default allow" mechanic this test used to characterize (an
+// uncovered tool is never allowed by a hardcoded language-level fallback).
 //
 // BDD:
 //
-//	Given an MCP tool "mcp_docs_search" with no policy overrides,
-//	And DefaultPolicy="allow", GlobalDefaultPolicy="allow",
+//	Given an MCP tool "mcp_docs_search" with no policy entry on either side,
 //	When FilterToolsByPolicy is called for agentType "custom",
-//	Then "mcp_docs_search" appears in the result with policy "allow".
+//	Then "mcp_docs_search" is absent from the result and the policyMap.
 //
-// Traces to: compositor.go FilterToolsByPolicy — default-allow path.
-func TestFilterToolsByPolicy_MCPToolAllowed_WhenNoDeny(t *testing.T) {
+// Traces to: pkg/tools/compositor.go resolveEffectivePolicyWith — fail-closed path.
+func TestFilterToolsByPolicy_MCPToolNoCoverage_FailsClosedToDeny(t *testing.T) {
 	tools := makeMCPAdapters("docs-server",
 		"mcp_docs_search",
 		"mcp_docs_index",
 	)
 
-	cfg := &ToolPolicyCfg{
-		DefaultPolicy:       "allow",
-		GlobalDefaultPolicy: "allow",
-	}
+	cfg := &ToolPolicyCfg{}
 
 	got, policyMap := FilterToolsByPolicy(tools, "custom", cfg)
 
-	require.Len(t, got, 2,
-		"both MCP tools must pass when no deny policy is configured")
+	assert.Empty(t, got,
+		"MCP tools with no policy entry anywhere must fail closed to deny")
 
 	for _, name := range []string{"mcp_docs_search", "mcp_docs_index"} {
-		p, inMap := policyMap[name]
-		assert.True(t, inMap, "%q must appear in policyMap", name)
-		assert.Equal(t, "allow", p,
-			"%q must have effective policy 'allow' with no contrary configuration", name)
+		_, inMap := policyMap[name]
+		assert.False(t, inMap, "%q must not appear in policyMap (denied)", name)
 	}
 }
 
@@ -335,9 +335,14 @@ func TestFilterToolsByPolicy_MCPToolAllowed_WhenNoDeny(t *testing.T) {
 func TestFilterToolsByPolicy_MCPTool_ScopeGeneral_PassesForAnyAgentType(t *testing.T) {
 	mcpTools := makeMCPAdapters("any-server", "mcp_anysvr_tool_a", "mcp_anysvr_tool_b")
 
+	// Explicit coverage (no default-policy fallback): both tools are allowed via
+	// a real global entry, isolating the scope gate as the only variable across
+	// agentType below.
 	cfg := &ToolPolicyCfg{
-		DefaultPolicy:       "allow",
-		GlobalDefaultPolicy: "allow",
+		GlobalPolicies: map[string]string{
+			"mcp_anysvr_tool_a": "allow",
+			"mcp_anysvr_tool_b": "allow",
+		},
 	}
 
 	for _, agentType := range []string{"core", "custom", "worker"} {
@@ -362,13 +367,18 @@ func TestFilterToolsByPolicy_BareWildcardKeysAreIgnored(t *testing.T) {
 	for _, bare := range []string{"_*", ".*"} {
 		tools := makeMCPAdapters("any-server", "mcp_anysvr_alpha", "mcp_anysvr_beta")
 		cfg := &ToolPolicyCfg{
-			DefaultPolicy:       "allow",
-			GlobalPolicies:      map[string]string{bare: "deny"},
-			GlobalDefaultPolicy: "allow",
+			GlobalPolicies: map[string]string{
+				bare: "deny",
+				// Explicit coverage (no default-policy fallback): these entries
+				// isolate "the bare wildcard doesn't catch them" from "they have
+				// no coverage at all".
+				"mcp_anysvr_alpha": "allow",
+				"mcp_anysvr_beta":  "allow",
+			},
 		}
 		got, policyMap := FilterToolsByPolicy(tools, "custom", cfg)
 		assert.Len(t, got, 2,
-			"bare wildcard %q must be ignored — both tools survive at default allow", bare)
+			"bare wildcard %q must be ignored — both tools survive via their explicit allow", bare)
 		assert.Equal(t, "allow", policyMap["mcp_anysvr_alpha"],
 			"bare wildcard %q must not deny mcp_anysvr_alpha", bare)
 	}
