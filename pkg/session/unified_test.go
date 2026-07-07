@@ -818,6 +818,12 @@ func TestClearAll_BaseDirMissing_ReturnsZeroNoError(t *testing.T) {
 // `if err := os.RemoveAll(dir); err != nil { slog.Warn(...); continue }` path
 // and its final `return removed, errors.Join(errs...)`.
 func TestClearAll_ContinuesPastRemovalFailure(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip(
+			"test forces a real os.RemoveAll failure via directory permissions (chmod 0500) — root bypasses Unix permission checks (CAP_DAC_OVERRIDE), so this doesn't reproduce a failure when the test process runs as root (e.g. inside a CI container)",
+		)
+	}
+
 	store, _ := newTestStoreWithHome(t)
 
 	metaBad, err := store.NewSession(SessionTypeChat, "", "agent-a")
