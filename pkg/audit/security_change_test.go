@@ -149,6 +149,33 @@ func TestRedact_ApiKeyRedacted(t *testing.T) {
 	assert.Equal(t, "***redacted***", nv["api_key"])
 }
 
+// TestRedact_CamelCaseApiKeyRedacted — a camelCase "apiKey" field name MUST be
+// redacted just like the snake_case "api_key" form. Regression test for the
+// bug where isSensitiveKey matched the literal substring "api_key" against a
+// lowercased (but not separator-stripped) key: strings.ToLower("apiKey") ==
+// "apikey", which does NOT contain the substring "api_key" (with underscore),
+// so a camelCase field name — realistic for a JSON payload decoded straight
+// into map[string]any — slipped through unredacted. isSensitiveKey now
+// normalizes the key the same way redactor.go's sensitiveFieldNames matching
+// does (lowercase + strip '_'/'-') before the substring check.
+func TestRedact_CamelCaseApiKeyRedacted(t *testing.T) {
+	dir := t.TempDir()
+	logger, err := audit.NewLogger(audit.LoggerConfig{Dir: dir, RetentionDays: 90})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = logger.Close() })
+
+	ctx := ctxWithUser("admin")
+	newValue := map[string]any{"apiKey": "sk-camelcase-should-be-redacted"}
+	require.NoError(t, audit.EmitSecuritySettingChange(
+		ctx, logger, "providers.openai.apiKey", nil, newValue))
+
+	rec := readLastAuditLine(t, dir)
+	nv, ok := rec["new_value"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "***redacted***", nv["apiKey"],
+		"camelCase apiKey field must be redacted, not passed through in plaintext")
+}
+
 // TestRedact_CaseInsensitive — uppercase and mixed-case variants of sensitive
 // names (Password, PASSWORD, MyToken) MUST all trigger redaction.
 func TestRedact_CaseInsensitive(t *testing.T) {

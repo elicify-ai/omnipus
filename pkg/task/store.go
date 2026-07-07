@@ -178,10 +178,32 @@ func (f Filter) matches(t *Task) bool {
 	return true
 }
 
+// scanTaskIDs returns the task IDs present in the store directory, derived
+// from every regular *.json file's name (ReadDir → skip subdirectories and
+// non-.json entries → trim the .json suffix). It is the shared "scan the task
+// dir" idiom used by List and the blocked_by dependency-cascade scans
+// (AdvanceBlockedDependents, cascadeDeleteEdges, DropOrphanEdges). It returns
+// the raw os.ReadDir error as-is (including a not-exist error) so each caller
+// keeps its own missing-dir handling and error-wrapping context.
+func (s *Store) scanTaskIDs() ([]string, error) {
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		ids = append(ids, strings.TrimSuffix(e.Name(), ".json"))
+	}
+	return ids, nil
+}
+
 // List returns all tasks matching filter, sorted by priority ASC then
 // created_at ASC. Unreadable/corrupt files are logged at Warn and skipped.
 func (s *Store) List(filter Filter) ([]Task, error) {
-	entries, err := os.ReadDir(s.dir)
+	ids, err := s.scanTaskIDs()
 	if err != nil {
 		if os.IsNotExist(err) {
 			return []Task{}, nil
@@ -189,12 +211,8 @@ func (s *Store) List(filter Filter) ([]Task, error) {
 		return nil, fmt.Errorf("task: list dir: %w", err)
 	}
 
-	result := make([]Task, 0, len(entries))
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
-			continue
-		}
-		id := strings.TrimSuffix(e.Name(), ".json")
+	result := make([]Task, 0, len(ids))
+	for _, id := range ids {
 		t, err := s.load(id)
 		if err != nil {
 			slog.Warn("task: skip unreadable task file", "id", id, "error", err)

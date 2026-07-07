@@ -27,13 +27,21 @@ var privateIPv4Ranges = []string{
 	"198.18.0.0/15",   // Benchmarking
 	"198.51.100.0/24", // Documentation (TEST-NET-2)
 	"203.0.113.0/24",  // Documentation (TEST-NET-3)
+	// 224.0.0.0/4 (multicast) is not a meaningful unicast SSRF target, but is
+	// blocked anyway for defense-in-depth: found during the web_fetch SSRF
+	// consolidation (2026-07-07) as a class the old hand-rolled
+	// isPrivateOrRestrictedIP checked (via net.IP.IsMulticast()) that this
+	// checker's CIDR list did not yet cover.
+	"224.0.0.0/4", // Multicast
 }
 
 // Private and reserved IPv6 ranges.
 var privateIPv6Ranges = []string{
+	"::/128",        // Unspecified address
 	"::1/128",       // Loopback
 	"fe80::/10",     // Link-local
 	"fc00::/7",      // Unique local
+	"ff00::/8",      // Multicast (see 224.0.0.0/4 comment above — same rationale)
 	"::ffff:0:0/96", // IPv4-mapped — checked individually against IPv4 rules
 }
 
@@ -278,40 +286,58 @@ func extractHost(rawURL string) string {
 // SafeTransport returns an http.Transport that enforces SSRF rules on all connections.
 func (sc *SSRFChecker) SafeTransport() *http.Transport {
 	return &http.Transport{
-		DialContext:         sc.safeDialContext,
+		DialContext:         sc.SafeDialContext(&net.Dialer{Timeout: 30 * time.Second}),
 		MaxIdleConns:        100,
 		IdleConnTimeout:     90 * time.Second,
 		TLSHandshakeTimeout: 10 * time.Second,
 	}
 }
 
-func (sc *SSRFChecker) safeDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return nil, fmt.Errorf("SSRF: invalid address %q: %w", addr, err)
-	}
-
-	addrs, err := sc.CheckHost(ctx, host)
-	if err != nil {
-		return nil, err
-	}
-
-	var lastErr error
-	dialer := &net.Dialer{Timeout: 30 * time.Second}
-	for _, addr := range addrs {
-		target := net.JoinHostPort(addr.IP.String(), port)
-		conn, err := dialer.DialContext(ctx, network, target)
+// SafeDialContext returns a DialContext function that enforces SSRF rules —
+// dial-time re-resolution of the target host followed by a CheckIP pass over
+// every candidate address — using the given dialer's timeout/keep-alive
+// settings. Re-resolving at connect time (rather than trusting a pre-flight
+// resolution) closes the DNS-rebinding TOCTOU window where a hostname
+// resolves to a public IP during an earlier check but a private IP by the
+// time the connection is actually made.
+//
+// This exists as its own method (rather than being inlined into
+// SafeTransport) so callers that need their own *http.Transport — e.g. one
+// already configured for an upstream proxy, or with non-default dial
+// timeouts — can reuse the exact same TOCTOU-safe SSRF enforcement instead of
+// hand-rolling dial-time DNS-rebinding protection themselves. SafeTransport
+// is a thin convenience wrapper around this method with a default 30s dial
+// timeout and no keep-alive override.
+//
+// dialer must not be nil.
+func (sc *SSRFChecker) SafeDialContext(dialer *net.Dialer) func(context.Context, string, string) (net.Conn, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(addr)
 		if err != nil {
-			lastErr = err
-			continue
+			return nil, fmt.Errorf("SSRF: invalid address %q: %w", addr, err)
 		}
-		return conn, nil
-	}
 
-	if lastErr != nil {
-		return nil, lastErr
+		addrs, err := sc.CheckHost(ctx, host)
+		if err != nil {
+			return nil, err
+		}
+
+		var lastErr error
+		for _, resolved := range addrs {
+			target := net.JoinHostPort(resolved.IP.String(), port)
+			conn, dialErr := dialer.DialContext(ctx, network, target)
+			if dialErr != nil {
+				lastErr = dialErr
+				continue
+			}
+			return conn, nil
+		}
+
+		if lastErr != nil {
+			return nil, lastErr
+		}
+		return nil, fmt.Errorf("SSRF: no connectable address for %s", host)
 	}
-	return nil, fmt.Errorf("SSRF: no connectable address for %s", host)
 }
 
 // CheckRedirect validates redirect targets against SSRF rules before following them.
