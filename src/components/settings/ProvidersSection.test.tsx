@@ -1221,4 +1221,49 @@ describe('ProvidersSection — validation integration (MAJOR-3 / US8)', () => {
     })
     expect(screen.queryByTestId('test-validation-banner-openrouter')).not.toBeInTheDocument()
   })
+
+  it('Test button → thrown ApiError shows the clean userMessage, not the legacy "status: message" string', async () => {
+    vi.mocked(api.testProvider).mockRejectedValue(
+      new api.ApiError(500, 'The server is unavailable. Please try again in a moment.'),
+    )
+
+    renderSection()
+    await waitFor(() => screen.getByTestId('configure-btn-openrouter'))
+    fireEvent.click(screen.getByTestId('configure-btn-openrouter'))
+    await waitFor(() => screen.getByTestId('provider-config-sheet'))
+
+    fireEvent.click(screen.getByRole('button', { name: /^test$/i }))
+
+    await waitFor(() => {
+      expect(addToast).toHaveBeenCalledWith(
+        expect.objectContaining({
+          variant: 'error',
+          message: 'The server is unavailable. Please try again in a moment.',
+        }),
+      )
+    })
+    expect(addToast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining('500:') }),
+    )
+  })
+
+  it('Test button → a non-Error rejection falls back to a readable message, never the literal "undefined"', async () => {
+    vi.mocked(api.testProvider).mockRejectedValue('boom')
+
+    renderSection()
+    await waitFor(() => screen.getByTestId('configure-btn-openrouter'))
+    fireEvent.click(screen.getByTestId('configure-btn-openrouter'))
+    await waitFor(() => screen.getByTestId('provider-config-sheet'))
+
+    fireEvent.click(screen.getByRole('button', { name: /^test$/i }))
+
+    await waitFor(() => {
+      expect(addToast).toHaveBeenCalledWith(
+        expect.objectContaining({ variant: 'error', message: 'Connection test failed' }),
+      )
+    })
+    expect(addToast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'undefined' }),
+    )
+  })
 })

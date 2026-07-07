@@ -93,3 +93,24 @@ export function _resetTelemetryForTest(): void {
   _sampleWindowStart = 0
   _sampleCount = 0
 }
+
+/**
+ * Emit a production telemetry record for a store-level reducer diagnostic
+ * condition (dropped/unknown/malformed frame, index-miss fallback, dedup
+ * skip, a required collaborator never having registered itself, etc).
+ *
+ * Shared by src/store/chat.ts and src/store/session.ts, which previously
+ * each hand-rolled a byte-for-byte identical wrapper (`_recordChatDiagnostic`
+ * / `_recordSessionDiagnostic`) around the same gate + `logError` call. DEV
+ * and test builds already surface these conditions via the adjacent
+ * console.warn/console.error call at each call site (kept as-is, unchanged);
+ * this only adds a rate-limited structured `logError()` record in production
+ * builds — previously these conditions were console-only, so an operator
+ * running a shipped build had no durable signal that a frame was silently
+ * dropped or a reducer path fell into a defensive fallback.
+ */
+export function logDiagnostic(event: string, fields: Record<string, unknown>): void {
+  if (!import.meta.env.DEV && import.meta.env.MODE !== 'test') {
+    logError({ event, ...fields } as TelemetryEvent)
+  }
+}

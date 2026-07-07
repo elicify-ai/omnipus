@@ -419,6 +419,126 @@ describe('chat store — sendMessage optimistic render', () => {
   })
 })
 
+// ── Wave 3 Fix 3 (HIGH, pr-test-analyzer): sendMessage rebake-path coverage ──
+// Traces to: this review pass's Fix 3. sendMessage's "rebake" step (chat.ts,
+// inside the activeSessionId branch, just above the outbound WS payload build)
+// looks up the previous assistant message via findLastAssistantMessageId and,
+// if that message still has live/unbaked tool calls sitting in the bucket's
+// flat toolCalls/toolCallOrder maps, merges them into that message's
+// tool_calls array BEFORE the new user+assistant messages are appended. No
+// test — before or after the Wave 3 refactor that extracted
+// findLastAssistantMessageId — exercised this integration path; the existing
+// 'findLastAssistantMessageId — direct unit coverage' block below only tests
+// the extracted helper in isolation. This is the same tool-call-vanishing
+// failure mode already fixed once at the `done`-frame and
+// `clearStreamingState` baking sites (see those functions' comments above).
+describe('chat store — sendMessage rebakes pending tool calls into prior assistant message (Wave 3 Fix 3)', () => {
+  it('bakes a live, resolved tool call into the prior assistant message before appending the new turn', () => {
+    const mockSend = vi.fn().mockReturnValue(true)
+    act(() => {
+      // Seed a prior assistant message that finished streaming but whose tool
+      // call was never baked into tool_calls — e.g. the `done` frame's own
+      // bake step raced a slow tool_call_result, or a WS hiccup left it live.
+      // This is exactly the scenario the rebake step exists to recover.
+      useChatStore.getState().appendMessage({
+        id: 'asst_prior',
+        session_id: TEST_SESSION_ID,
+        role: 'assistant',
+        content: 'Here is the first answer.',
+        timestamp: '2026-03-29T10:00:00Z',
+        status: 'done',
+        isStreaming: false,
+      })
+      // A tool call from that turn is still "live" in the bucket's flat
+      // toolCalls/toolCallOrder maps — resolved (terminal), but never baked
+      // into asst_prior.tool_calls.
+      useChatStore.getState().startToolCall('tc_live_1', 'web_search', { query: 'weather in NYC' })
+      useChatStore.getState().resolveToolCall('tc_live_1', { temp_f: 61 }, 'success', 420)
+
+      useChatStore.setState({ isStreaming: false })
+      useConnectionStore.setState({
+        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as any,
+        isConnected: true,
+      })
+      useSessionStore.setState({ activeSessionId: TEST_SESSION_ID, activeAgentId: 'general-assistant' })
+
+      useChatStore.getState().sendMessage('Follow-up question')
+    })
+
+    const state = useChatStore.getState()
+
+    // The prior assistant message now carries the baked tool call — not dropped.
+    const priorMsg = state.messages.find((m) => m.id === 'asst_prior')
+    expect(priorMsg?.role).toBe('assistant')
+    expect(priorMsg?.tool_calls).toHaveLength(1)
+    expect(priorMsg?.tool_calls?.[0]).toMatchObject({
+      id: 'tc_live_1',
+      tool: 'web_search',
+      params: { query: 'weather in NYC' },
+      result: { temp_f: 61 },
+      status: 'success',
+      duration_ms: 420,
+    })
+
+    // The live tool-call bucket is cleared of the now-baked call.
+    expect(state.toolCalls['tc_live_1']).toBeUndefined()
+    expect(state.toolCallOrder).not.toContain('tc_live_1')
+
+    // The new turn was appended AFTER the (now-baked) prior assistant message,
+    // not before it and not in place of it.
+    expect(state.messages.map((m) => m.id)).toEqual([
+      'asst_prior',
+      expect.any(String), // new user message
+      expect.any(String), // new streaming assistant placeholder
+    ])
+    const newUserMsg = state.messages[1]
+    expect(newUserMsg.role).toBe('user')
+    expect(newUserMsg.content).toBe('Follow-up question')
+    const newAssistantMsg = state.messages[2]
+    expect(newAssistantMsg.role).toBe('assistant')
+    expect(newAssistantMsg.isStreaming).toBe(true)
+
+    // WS frame sent for the new turn.
+    expect(mockSend).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'message', content: 'Follow-up question' })
+    )
+  })
+
+  it('does not duplicate a tool call that was already baked into the prior assistant message', () => {
+    const mockSend = vi.fn().mockReturnValue(true)
+    act(() => {
+      // Prior assistant message already has the tool call baked (the normal
+      // path — a `done` frame already ran its own bake step for this call id).
+      useChatStore.getState().appendMessage({
+        id: 'asst_prior2',
+        session_id: TEST_SESSION_ID,
+        role: 'assistant',
+        content: 'Already baked.',
+        timestamp: '2026-03-29T10:00:00Z',
+        status: 'done',
+        isStreaming: false,
+        tool_calls: [
+          { id: 'tc_baked_1', tool: 'web_search', params: { query: 'x' }, result: { ok: true }, status: 'success' },
+        ],
+      })
+      useChatStore.setState({ isStreaming: false })
+      useConnectionStore.setState({
+        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as any,
+        isConnected: true,
+      })
+      useSessionStore.setState({ activeSessionId: TEST_SESSION_ID, activeAgentId: 'general-assistant' })
+
+      useChatStore.getState().sendMessage('Another follow-up')
+    })
+
+    const state = useChatStore.getState()
+    const priorMsg = state.messages.find((m) => m.id === 'asst_prior2')
+    // Still exactly one tool call — no duplicate entry from a spurious re-bake.
+    expect(priorMsg?.tool_calls).toHaveLength(1)
+    expect(priorMsg?.tool_calls?.[0].id).toBe('tc_baked_1')
+  })
+})
+
 // ── M4 (BLOCKER 1): workspace→turn binding ───────────────────────────────────
 // Traces to: wave5a-wire-ui-spec.md M4 — a chat sent inside a workspace must
 // stamp metadata.workspace_id so created/delegated tasks land on THIS workspace.

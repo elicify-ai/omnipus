@@ -789,7 +789,7 @@ export function ProvidersSection() {
         addToast({ message: result.error ?? 'Connection failed', variant: 'error' })
       }
     } catch (err) {
-      addToast({ message: (err as Error).message, variant: 'error' })
+      addToast({ message: getErrorMessage(err, 'Connection test failed'), variant: 'error' })
     } finally {
       setTesting((prev) => ({ ...prev, [id]: false }))
     }

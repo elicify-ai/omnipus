@@ -904,4 +904,122 @@ describe('re-auth cancel reverts optimistic state', () => {
     expect(mockAddToast).not.toHaveBeenCalled()
     expect(updateSandboxConfig).toHaveBeenCalledTimes(1)
   })
+
+  // handlePresetClick routes through the exact same commitPathsSsrfWithWildcardCheck
+  // -> commitPathsSsrf -> saveMutation.mutate machinery as handleAddSsrfEntry
+  // above (SandboxSection.tsx:524-530), and saveMutation.onError's
+  // isReAuthCancelled branch calls the same revertPathsSsrfToServer() — but
+  // had zero re-auth-cancel-revert coverage of its own.
+  it('cancelling re-auth on a preset click reverts the active SSRF preset to the saved server state', async () => {
+    // Server state matches "Allow loopback only" — advancedOpen stays
+    // collapsed at mount (mirrors the aria-pressed test earlier in this file).
+    vi.mocked(fetchSandboxConfig).mockResolvedValue({
+      ...baseConfig,
+      ssrf: { allow_internal: ['127.0.0.1', '::1'] },
+    })
+    vi.mocked(updateSandboxConfig).mockRejectedValue(reAuth403())
+
+    renderSection()
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /allow loopback only/i })).toHaveAttribute(
+        'aria-pressed',
+        'true',
+      )
+    })
+
+    // Click a DIFFERENT preset — optimistically flips the active preset and
+    // fires the same commit/save-mutation machinery as the tested add path.
+    fireEvent.click(screen.getByRole('button', { name: /allow rfc1918 \+ loopback/i }))
+
+    // Optimistic UI: RFC1918 preset shows pressed immediately, before the PUT settles.
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /allow rfc1918 \+ loopback/i })).toHaveAttribute(
+        'aria-pressed',
+        'true',
+      )
+    })
+
+    // First PUT (token '') 403s on the re-auth gate -> consent dialog opens.
+    await waitFor(() => {
+      expect(screen.getByTestId('reauth-cancel')).toBeInTheDocument()
+    })
+
+    // User dismisses the password prompt instead of confirming.
+    fireEvent.click(screen.getByTestId('reauth-cancel'))
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('reauth-cancel')).not.toBeInTheDocument()
+    })
+
+    // The optimistic preset switch must revert — active preset goes back to
+    // "Allow loopback only", the never-persisted RFC1918 selection is undone.
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /allow loopback only/i })).toHaveAttribute(
+        'aria-pressed',
+        'true',
+      )
+      expect(screen.getByRole('button', { name: /allow rfc1918 \+ loopback/i })).toHaveAttribute(
+        'aria-pressed',
+        'false',
+      )
+    })
+
+    // No error toast for a user-initiated cancel, and no retry attempt fired.
+    expect(mockAddToast).not.toHaveBeenCalled()
+    expect(updateSandboxConfig).toHaveBeenCalledTimes(1)
+  })
+
+  // handleDeleteSsrfEntry routes through the exact same commitPathsSsrf ->
+  // saveMutation.mutate machinery as handleAddSsrfEntry above
+  // (SandboxSection.tsx:532-539), and saveMutation.onError's
+  // isReAuthCancelled branch calls the same revertPathsSsrfToServer() — but
+  // had zero re-auth-cancel-revert coverage of its own.
+  it('cancelling re-auth on an SSRF entry delete restores the deleted entry from the saved server list', async () => {
+    // Two entries that match no SSRF_PRESETS (lengths are 0/2/6), so Advanced
+    // mode auto-expands on mount and both entries are visible without
+    // clicking the "Advanced (custom list)" toggle first.
+    vi.mocked(fetchSandboxConfig).mockResolvedValue({
+      ...baseConfig,
+      ssrf: { allow_internal: ['127.0.0.1', '10.0.0.0/8'] },
+    })
+    vi.mocked(updateSandboxConfig).mockRejectedValue(reAuth403())
+
+    renderSection()
+
+    await waitFor(() => {
+      expect(screen.getByText('127.0.0.1')).toBeInTheDocument()
+      expect(screen.getByText('10.0.0.0/8')).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /delete ssrf entry 10\.0\.0\.0\/8/i }))
+
+    // Optimistic delete: the entry disappears immediately, before the PUT settles.
+    await waitFor(() => {
+      expect(screen.queryByText('10.0.0.0/8')).not.toBeInTheDocument()
+    })
+
+    // First PUT (token '') 403s on the re-auth gate -> consent dialog opens.
+    await waitFor(() => {
+      expect(screen.getByTestId('reauth-cancel')).toBeInTheDocument()
+    })
+
+    // User dismisses the password prompt instead of confirming.
+    fireEvent.click(screen.getByTestId('reauth-cancel'))
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('reauth-cancel')).not.toBeInTheDocument()
+    })
+
+    // The optimistically deleted '10.0.0.0/8' entry must reappear — the
+    // delete was never persisted — while the untouched entry stays put.
+    await waitFor(() => {
+      expect(screen.getByText('10.0.0.0/8')).toBeInTheDocument()
+      expect(screen.getByText('127.0.0.1')).toBeInTheDocument()
+    })
+
+    // No error toast for a user-initiated cancel, and no retry attempt fired.
+    expect(mockAddToast).not.toHaveBeenCalled()
+    expect(updateSandboxConfig).toHaveBeenCalledTimes(1)
+  })
 })

@@ -14,6 +14,8 @@
 import { useCallback, useState } from 'react'
 import type { ComposerRuntime } from '@assistant-ui/react'
 import { useUiStore } from '@/store/ui'
+import { getErrorMessage } from '@/lib/api'
+import { logError } from '@/lib/telemetry'
 
 const HARMFUL_EXTENSIONS = ['.exe', '.bat', '.cmd', '.sh', '.ps1', '.dll', '.sys', '.msi', '.scr', '.com']
 
@@ -64,8 +66,13 @@ export function useFileUpload(composerRuntime: ComposerRuntime): UseFileUploadRe
       for (const file of files) {
         composerRuntime.addAttachment(file).catch((err: unknown) => {
           useUiStore.getState().addToast({
-            message: err instanceof Error ? err.message : `Could not attach "${file.name}"`,
+            message: getErrorMessage(err, `Could not attach "${file.name}"`),
             variant: 'error',
+          })
+          logError({
+            event: 'attachmentUploadFailed',
+            fileName: file.name,
+            message: err instanceof Error ? err.message : String(err),
           })
         })
       }

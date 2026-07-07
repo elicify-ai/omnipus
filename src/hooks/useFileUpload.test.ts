@@ -5,11 +5,13 @@
 // machine (stage transitions, commit/dismiss, and the error-toast paths on
 // a failed attach or an unmaterializable pasted image).
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 import type { ComposerRuntime } from '@assistant-ui/react'
 import { useFileUpload } from './useFileUpload'
 import { useUiStore } from '@/store/ui'
+import { ApiError } from '@/lib/api'
+import * as telemetry from '@/lib/telemetry'
 
 function safeFile(name = 'photo.png') {
   return new File(['hi'], name, { type: 'image/png' })
@@ -31,6 +33,10 @@ function dropEvent(files: File[]): React.DragEvent {
 
 beforeEach(() => {
   act(() => { useUiStore.setState({ toasts: [] }) })
+})
+
+afterEach(() => {
+  vi.restoreAllMocks()
 })
 
 describe('useFileUpload — drag state', () => {
@@ -66,8 +72,9 @@ describe('useFileUpload — non-harmful files attach immediately', () => {
     expect(result.current.isDragging).toBe(false)
   })
 
-  it('a failed addAttachment surfaces an error toast with the filename', async () => {
+  it('a failed addAttachment surfaces an error toast and logs telemetry', async () => {
     const addAttachment = vi.fn(() => Promise.reject(new Error('network down')))
+    const logErrorSpy = vi.spyOn(telemetry, 'logError')
     const { result } = renderHook(() => useFileUpload(makeComposerRuntime(addAttachment)))
 
     await act(async () => {
@@ -79,7 +86,45 @@ describe('useFileUpload — non-harmful files attach immediately', () => {
     const toasts = useUiStore.getState().toasts
     expect(toasts).toHaveLength(1)
     expect(toasts[0].variant).toBe('error')
+    // Plain (non-ApiError) errors fall through getErrorMessage to err.message —
+    // unchanged behavior for this class of error.
     expect(toasts[0].message).toBe('network down')
+    expect(logErrorSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'attachmentUploadFailed',
+        fileName: 'report.pdf',
+        message: 'network down',
+      })
+    )
+  })
+
+  it('a failed addAttachment with an ApiError shows the clean userMessage, not the legacy "status: message" string', async () => {
+    // uploadFiles() throws ApiError on a real 413 — userMessage is the clean,
+    // human-facing string; the inherited Error.message is the legacy
+    // "413: The request is too large." form that must NOT reach the toast.
+    const apiErr = new ApiError(413, 'The request is too large.')
+    const addAttachment = vi.fn(() => Promise.reject(apiErr))
+    const logErrorSpy = vi.spyOn(telemetry, 'logError')
+    const { result } = renderHook(() => useFileUpload(makeComposerRuntime(addAttachment)))
+
+    await act(async () => {
+      result.current.onDrop(dropEvent([safeFile('huge.zip')]))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const toasts = useUiStore.getState().toasts
+    expect(toasts).toHaveLength(1)
+    expect(toasts[0].variant).toBe('error')
+    expect(toasts[0].message).toBe('The request is too large.')
+    expect(toasts[0].message).not.toContain('413:')
+    expect(logErrorSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'attachmentUploadFailed',
+        fileName: 'huge.zip',
+        message: '413: The request is too large.',
+      })
+    )
   })
 })
 

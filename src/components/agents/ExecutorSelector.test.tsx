@@ -16,6 +16,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ExecutorSelector } from './ExecutorSelector'
+import { ApiError } from '@/lib/api'
 import type { ExecutorConfig, RunnerTestResponse } from '@/lib/api'
 
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -113,6 +114,26 @@ describe('ExecutorSelector — remote-a2a reserved note', () => {
       target: { value: 'remote-a2a' },
     })
     expect(onChange).toHaveBeenCalledWith({ kind: 'remote-a2a' })
+  })
+
+  // Traces to: wave2 findings-fix cycle — the note used to (incorrectly)
+  // claim the agent "will fall back to the native runtime until A2A
+  // resolution ships." That was verified false against the backend
+  // (pkg/agent/external_dispatch.go / pkg/agent/subturn.go), which reject
+  // remote-a2a sub-turns with an error rather than silently falling back to
+  // native. The copy was corrected to state the sub-turn fails with an
+  // error. The generic "reserved — not available in v0.1.0" substring
+  // (asserted above) would still match the OLD, misleading copy, so it does
+  // NOT catch a regression back to the false claim — only pinning the
+  // specific corrected sentence does.
+  it('pins the corrected remote-a2a copy (sub-turns fail with an error, do NOT fall back to native)', () => {
+    renderSelector({ value: { kind: 'remote-a2a' } })
+    const note = screen.getByTestId('executor-remote-a2a-note')
+    expect(note).toHaveTextContent(
+      /selecting this will cause delegated sub-turns to fail with an error until a2a resolution ships/i,
+    )
+    // The retired, inaccurate claim must never reappear.
+    expect(note).not.toHaveTextContent(/fall back to the native runtime/i)
   })
 })
 
@@ -309,5 +330,31 @@ describe('ExecutorSelector — Test Connection result states', () => {
     expect(err).toHaveTextContent(/network down/i)
     // No success result rendered on error.
     expect(screen.queryByTestId('runner-test-result')).toBeNull()
+  })
+
+  // Traces to: wave2 findings-fix cycle — getErrorMessage(error, 'Test
+  // request failed') (ExecutorSelector.tsx ~L235) branches on ApiError vs
+  // plain Error vs fallback. The existing "network down" test above only
+  // exercises the plain-Error branch (`err instanceof Error → err.message`).
+  // This test exercises the actual point of the helper: when the mutation
+  // rejects with a real ApiError, the rendered message must be the ApiError's
+  // `userMessage` — a safe, human-facing string — not the legacy
+  // "${status}: ${body}" Error.message shape and not the raw server body.
+  it('surfaces the ApiError userMessage (not the status-prefixed Error.message or raw body) when the mutation rejects with an ApiError', async () => {
+    mockedTest.mockRejectedValue(
+      new ApiError(503, 'The server is unavailable. Please try again in a moment.', {
+        body: '{"error":"executor subsystem unreachable: dial tcp refused"}',
+      }),
+    )
+    renderWithTest()
+    fireEvent.click(screen.getByTestId('runner-test-button'))
+    const err = await screen.findByTestId('runner-test-request-error')
+    expect(err).toHaveTextContent(
+      'Test request failed: The server is unavailable. Please try again in a moment.',
+    )
+    // Must not leak the legacy "503: ..." Error.message shape or the raw
+    // server-internal body text — userMessage is the only thing rendered.
+    expect(err).not.toHaveTextContent(/503:/)
+    expect(err).not.toHaveTextContent(/executor subsystem unreachable/i)
   })
 })
