@@ -345,12 +345,17 @@ test(
     await input.press('Enter');
 
     // Wait for assistant to respond (with or without delegate).
-    // 90s budget: natural-language prompt (no temperature pinning) is non-deterministic;
-    // the assistant may take 30-75s to land its first message under suite load.
-    await expect(assistantMessages(page)).toHaveCount(1, { timeout: 90_000 });
+    // 180s budget: natural-language prompt (no temperature pinning) is non-deterministic,
+    // and glm-5.2 (the standard e2e model, swapped in for the old gemini-2.5-flash pick —
+    // see tests/e2e/fixtures/onboard-via-api.ts) is reliably slower under suite load, per
+    // the same rationale sibling specs already budget for (cancel-cross-channel.spec.ts,
+    // memory-remember-recall.spec.ts). test.slow() above gives a 270s ceiling for the
+    // whole test, so 180s here leaves headroom for the isVisible()/consoleErrors checks
+    // that follow.
+    await expect(assistantMessages(page)).toHaveCount(1, { timeout: 180_000 });
 
     // Best-effort: IF a SubagentBlock appeared, verify basic UI behavior.
-    // Use .first(): a natural-language prompt is non-deterministic and gemini-2.5-flash
+    // Use .first(): a natural-language prompt is non-deterministic and glm-5.2
     // sometimes delegates to more than one subagent, which would make a bare locator
     // strict-mode-fail on isVisible(). We only care whether >=1 block appeared.
     const collapsedBlock = page.locator('[data-testid="subagent-collapsed"]').first();
