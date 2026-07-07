@@ -707,17 +707,15 @@ func (h *WSHandler) readLoop(ctx context.Context, conn *websocket.Conn, wc *wsCo
 				slog.Debug("ws: connection closed unexpectedly", "chat_id", chatID, "error", err)
 				return
 			}
-			// DIAGNOSTIC (temporary, root-causing a real-LLM e2e flake — remove
-			// once resolved): every other ReadMessage failure previously fell
-			// through to a silent return with zero log line, including a plain
+			// Every other ReadMessage failure previously fell through to a
+			// silent return with zero log line, including a plain
 			// read-deadline-exceeded I/O timeout (net.Error, not a close-code
 			// error, so neither branch above matches it) — meaning an operator
-			// had no visibility into why a WS connection, and any turn whose
-			// context is derived from it, died this way. Log every case here at
-			// WARN so the actual error/timeout-ness is visible.
+			// had no visibility into why a WS connection died this way. Log
+			// every case here so the actual error/timeout-ness is visible.
 			var netErr net.Error
 			isTimeout := errors.As(err, &netErr) && netErr.Timeout()
-			slog.Warn("ws: readLoop exiting on ReadMessage error",
+			slog.Debug("ws: readLoop exiting on ReadMessage error",
 				"chat_id", chatID, "error", err, "is_timeout", isTimeout)
 			return
 		}
@@ -1689,18 +1687,10 @@ func (h *WSHandler) writePump(wc *wsConn) {
 			}
 			if msg == nil {
 				// nil sentinel: send a WebSocket ping frame.
-				// DIAGNOSTIC (temporary, root-causing a real-LLM e2e flake —
-				// remove once resolved): log every ping attempt (success and
-				// failure) at WARN with the write duration, to check whether
-				// pings are actually reaching the wire promptly during a
-				// long-running turn or are getting delayed/dropped by sendCh
-				// contention from concurrent streaming writes.
-				pingStart := time.Now()
 				if err := wc.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-					slog.Warn("ws: ping write error", "error", err, "elapsed", time.Since(pingStart))
+					slog.Debug("ws: ping write error", "error", err)
 					return
 				}
-				slog.Warn("ws: ping write ok", "elapsed", time.Since(pingStart))
 				continue
 			}
 			if err := wc.conn.WriteMessage(websocket.TextMessage, msg); err != nil {
@@ -1721,16 +1711,8 @@ func (h *WSHandler) pingPump(wc *wsConn) {
 	for {
 		select {
 		case <-ticker.C:
-			// DIAGNOSTIC (temporary, see writePump's matching comment): log
-			// how long it takes to enqueue the ping sentinel onto sendCh — a
-			// long enqueue delay here means sendCh (256-buffered, shared with
-			// all regular streaming frames) is backed up.
-			enqueueStart := time.Now()
 			select {
 			case wc.sendCh <- wsPingMsg: // nil sentinel triggers a ping in writePump
-				if d := time.Since(enqueueStart); d > time.Second {
-					slog.Warn("ws: ping enqueue delayed", "elapsed", d)
-				}
 			case <-wc.doneCh:
 				return
 			}

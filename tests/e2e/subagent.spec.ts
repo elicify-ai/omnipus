@@ -328,9 +328,19 @@ test(
     // T0.1: OPENROUTER_API_KEY_CI soft-skip removed. The key is required in CI.
     // This test is best-effort (does not gate merge) but must not skip silently.
     requireApiKey(test);
-    // test.slow() triples the global 90s test timeout to 270s; same rationale
-    // as the sibling subagent tests (real-LLM delegate under suite load).
-    test.slow();
+    // 360s budget, matching cancel-cross-channel.spec.ts's T24a/T24b precedent
+    // for the same root cause: a natural-language prompt with no forced tool
+    // call is non-deterministic, and glm-5.2 (the standard e2e model, swapped
+    // in for the old gemini-2.5-flash pick — see
+    // tests/e2e/fixtures/onboard-via-api.ts) can genuinely take several
+    // minutes for a delegate round-trip under suite load. A too-tight budget
+    // here doesn't just fail this assertion — this repo's cancelOnTeardown
+    // fixture (tests/e2e/fixtures/console-errors.ts) then clicks Stop on
+    // teardown, which cancels the still-in-flight delegate turn too,
+    // producing a confusing "context canceled" server-side error that looks
+    // unrelated to the actual root cause (a plain timeout). Root-caused via
+    // direct gateway-log instrumentation on 2026-07-07 — see PR history.
+    test.setTimeout(360_000);
 
     await startFreshChat(page);
 
@@ -344,15 +354,10 @@ test(
     );
     await input.press('Enter');
 
-    // Wait for assistant to respond (with or without delegate).
-    // 180s budget: natural-language prompt (no temperature pinning) is non-deterministic,
-    // and glm-5.2 (the standard e2e model, swapped in for the old gemini-2.5-flash pick —
-    // see tests/e2e/fixtures/onboard-via-api.ts) is reliably slower under suite load, per
-    // the same rationale sibling specs already budget for (cancel-cross-channel.spec.ts,
-    // memory-remember-recall.spec.ts). test.slow() above gives a 270s ceiling for the
-    // whole test, so 180s here leaves headroom for the isVisible()/consoleErrors checks
-    // that follow.
-    await expect(assistantMessages(page)).toHaveCount(1, { timeout: 180_000 });
+    // Wait for assistant to respond (with or without delegate). 300s leaves
+    // 60s of the 360s test-level ceiling above for the isVisible()/
+    // consoleErrors checks that follow.
+    await expect(assistantMessages(page)).toHaveCount(1, { timeout: 300_000 });
 
     // Best-effort: IF a SubagentBlock appeared, verify basic UI behavior.
     // Use .first(): a natural-language prompt is non-deterministic and glm-5.2
