@@ -27,7 +27,7 @@ import {
   fetchSandboxStatus,
   fetchSandboxConfig,
   updateSandboxConfig,
-  isApiError,
+  getErrorMessage,
 } from '@/lib/api'
 import type { SandboxStatus } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
@@ -542,7 +542,7 @@ export function SandboxSection(): React.ReactElement {
         setGlobalDenyPatterns(extractShellDenyPatterns(configData))
         return
       }
-      addToast({ message: isApiError(err) ? err.userMessage : err.message, variant: 'error' })
+      addToast({ message: getErrorMessage(err, 'Failed to save deny patterns'), variant: 'error' })
     },
   })
 
@@ -668,7 +668,7 @@ export function SandboxSection(): React.ReactElement {
         return
       }
       setSaveState('error')
-      const msg = isApiError(err) ? err.userMessage : err.message
+      const msg = getErrorMessage(err, 'Save failed')
       setErrorMessage(msg)
       addToast({ message: msg, variant: 'error' })
       // Revert to server mode
@@ -705,7 +705,7 @@ export function SandboxSection(): React.ReactElement {
         return
       }
       setSaveState('error')
-      const msg = isApiError(err) ? err.userMessage : String(err)
+      const msg = getErrorMessage(err, 'Save failed')
       setErrorMessage(msg)
       const pathRowMatch = /allowed_paths\[(\d+)\]:\s*(.+)/.exec(msg)
       if (pathRowMatch) {
@@ -1136,11 +1136,7 @@ export function SandboxSection(): React.ReactElement {
 
                 {saveMutation.isError && (
                   <p className="text-xs text-[var(--color-error)]">
-                    {isApiError(saveMutation.error)
-                      ? saveMutation.error.userMessage
-                      : saveMutation.error instanceof Error
-                        ? saveMutation.error.message
-                        : 'Save failed'}
+                    {getErrorMessage(saveMutation.error, 'Save failed')}
                   </p>
                 )}
               </>

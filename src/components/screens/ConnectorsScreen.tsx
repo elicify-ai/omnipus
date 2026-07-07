@@ -31,7 +31,7 @@ import {
   disableChannel,
   createChannelInstance,
   deleteChannelInstance,
-  getChannelRouting,
+  fetchChannelRouting,
   setChannelRouting,
   fetchWorkspaces,
   fetchWorkspace,
@@ -149,7 +149,7 @@ function ChannelInstanceRow({
   // means "we don't know", the other means "we know there's nothing").
   const { data: routing, isLoading: routingLoading, isError: routingIsError } = useQuery({
     queryKey: ['channel-routing', instanceId],
-    queryFn: () => getChannelRouting(instanceId),
+    queryFn: () => fetchChannelRouting(instanceId),
     retry: false,
   })
 

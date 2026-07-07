@@ -130,7 +130,7 @@ const mockCreateChannelInstance = vi.fn()
 const mockDeleteChannelInstance = vi.fn()
 const mockEnableChannel = vi.fn()
 const mockDisableChannel = vi.fn()
-const mockGetChannelRouting = vi.fn()
+const mockFetchChannelRouting = vi.fn()
 const mockSetChannelRouting = vi.fn()
 const mockFetchWorkspaces = vi.fn()
 const mockFetchWorkspace = vi.fn()
@@ -145,7 +145,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     deleteChannelInstance: mockDeleteChannelInstance,
     enableChannel: mockEnableChannel,
     disableChannel: mockDisableChannel,
-    getChannelRouting: mockGetChannelRouting,
+    fetchChannelRouting: mockFetchChannelRouting,
     setChannelRouting: mockSetChannelRouting,
     fetchWorkspaces: mockFetchWorkspaces,
     fetchWorkspace: mockFetchWorkspace,
@@ -223,7 +223,7 @@ beforeEach(() => {
   channelConfigPanelOpens.length = 0
   // Sensible defaults so any per-instance routing/workspace/agent query that
   // fires never hangs or rejects unexpectedly.
-  mockGetChannelRouting.mockResolvedValue({})
+  mockFetchChannelRouting.mockResolvedValue({})
   mockFetchWorkspaces.mockResolvedValue([])
   mockFetchWorkspace.mockResolvedValue({ id: 'ws1', name: 'Sales', core_team: ['mia'] })
   mockFetchAgents.mockResolvedValue([])
@@ -319,7 +319,7 @@ describe('ConnectorsScreen — type-grouped rows (US-9 AS-1)', () => {
     // row's binding is resolved from ITS OWN routing query result, keyed by
     // its own instance id — never leaking one row's binding into another's.
     mockFetchChannels.mockResolvedValue([STUB_WHATSAPP_SALES, STUB_WHATSAPP_SUPPORT])
-    mockGetChannelRouting.mockImplementation((id: string) => {
+    mockFetchChannelRouting.mockImplementation((id: string) => {
       if (id === 'whatsapp.sales') return Promise.resolve({ workspace_id: 'ws-1', default_agent_id: 'agent-1' })
       if (id === 'whatsapp.support') return Promise.resolve({ workspace_id: 'ws-2', default_agent_id: 'agent-2' })
       return Promise.resolve({})
@@ -340,15 +340,15 @@ describe('ConnectorsScreen — type-grouped rows (US-9 AS-1)', () => {
       expect(screen.getByTestId('channel-binding-whatsapp.sales')).toHaveTextContent('Sales → Mia')
       expect(screen.getByTestId('channel-binding-whatsapp.support')).toHaveTextContent('Support → Jim')
     })
-    expect(mockGetChannelRouting).toHaveBeenCalledWith('whatsapp.sales')
-    expect(mockGetChannelRouting).toHaveBeenCalledWith('whatsapp.support')
+    expect(mockFetchChannelRouting).toHaveBeenCalledWith('whatsapp.sales')
+    expect(mockFetchChannelRouting).toHaveBeenCalledWith('whatsapp.support')
   })
 })
 
 describe('ConnectorsScreen — binding-first row title (US-9 AS-2)', () => {
   it('shows "<Workspace> → <Agent>" resolved from routing + workspace + agent queries', async () => {
     mockFetchChannels.mockResolvedValue([STUB_WHATSAPP_SALES])
-    mockGetChannelRouting.mockResolvedValue({ workspace_id: 'ws-1', default_agent_id: 'agent-1' })
+    mockFetchChannelRouting.mockResolvedValue({ workspace_id: 'ws-1', default_agent_id: 'agent-1' })
     mockFetchWorkspaces.mockResolvedValue([{ id: 'ws-1', name: 'Sales' }])
     mockFetchAgents.mockResolvedValue([{ id: 'agent-1', name: 'Mia' }])
 
@@ -365,7 +365,7 @@ describe('ConnectorsScreen — binding-first row title (US-9 AS-2)', () => {
   it('falls back to the raw workspace id when the name cannot be resolved', async () => {
     // "Never crash on missing routing data — fall back to raw ids."
     mockFetchChannels.mockResolvedValue([STUB_WHATSAPP_SALES])
-    mockGetChannelRouting.mockResolvedValue({ workspace_id: 'ws-unknown', default_agent_id: 'agent-unknown' })
+    mockFetchChannelRouting.mockResolvedValue({ workspace_id: 'ws-unknown', default_agent_id: 'agent-unknown' })
     mockFetchWorkspaces.mockResolvedValue([]) // ws-unknown not present
     mockFetchAgents.mockResolvedValue([]) // agent-unknown not present
 
@@ -379,7 +379,7 @@ describe('ConnectorsScreen — binding-first row title (US-9 AS-2)', () => {
 
   it('resolves the workspace name but falls back to the raw agent id when only the agent is unknown (B7)', async () => {
     mockFetchChannels.mockResolvedValue([STUB_WHATSAPP_SALES])
-    mockGetChannelRouting.mockResolvedValue({ workspace_id: 'ws-1', default_agent_id: 'agent-ghost' })
+    mockFetchChannelRouting.mockResolvedValue({ workspace_id: 'ws-1', default_agent_id: 'agent-ghost' })
     mockFetchWorkspaces.mockResolvedValue([{ id: 'ws-1', name: 'Sales' }])
     mockFetchAgents.mockResolvedValue([]) // agent-ghost not present
 
@@ -393,7 +393,7 @@ describe('ConnectorsScreen — binding-first row title (US-9 AS-2)', () => {
 
   it('falls back to the raw workspace id but resolves the agent name when only the workspace is unknown (B7)', async () => {
     mockFetchChannels.mockResolvedValue([STUB_WHATSAPP_SALES])
-    mockGetChannelRouting.mockResolvedValue({ workspace_id: 'ws-ghost', default_agent_id: 'agent-1' })
+    mockFetchChannelRouting.mockResolvedValue({ workspace_id: 'ws-ghost', default_agent_id: 'agent-1' })
     mockFetchWorkspaces.mockResolvedValue([]) // ws-ghost not present
     mockFetchAgents.mockResolvedValue([{ id: 'agent-1', name: 'Mia' }])
 
@@ -407,7 +407,7 @@ describe('ConnectorsScreen — binding-first row title (US-9 AS-2)', () => {
 
   it('shows "<Workspace> → unassigned agent" when routing has a workspace but no default agent (B5)', async () => {
     mockFetchChannels.mockResolvedValue([STUB_WHATSAPP_SALES])
-    mockGetChannelRouting.mockResolvedValue({ workspace_id: 'ws-1' })
+    mockFetchChannelRouting.mockResolvedValue({ workspace_id: 'ws-1' })
     mockFetchWorkspaces.mockResolvedValue([{ id: 'ws-1', name: 'Sales' }])
     mockFetchAgents.mockResolvedValue([])
 
@@ -421,7 +421,7 @@ describe('ConnectorsScreen — binding-first row title (US-9 AS-2)', () => {
 
   it('shows "No workspace bound" when the instance has no routing binding', async () => {
     mockFetchChannels.mockResolvedValue([STUB_TELEGRAM])
-    mockGetChannelRouting.mockResolvedValue({})
+    mockFetchChannelRouting.mockResolvedValue({})
 
     const { ConnectorsScreen } = await import('./ConnectorsScreen')
     render(React.createElement(ConnectorsScreen), { wrapper })
@@ -436,7 +436,7 @@ describe('ConnectorsScreen — binding-first row title (US-9 AS-2)', () => {
     // nothing). A rejected fetch means we DON'T KNOW — conflating the two
     // would mislead an operator into thinking the channel is genuinely unbound.
     mockFetchChannels.mockResolvedValue([STUB_TELEGRAM])
-    mockGetChannelRouting.mockRejectedValue(new Error('network error'))
+    mockFetchChannelRouting.mockRejectedValue(new Error('network error'))
 
     const { ConnectorsScreen } = await import('./ConnectorsScreen')
     render(React.createElement(ConnectorsScreen), { wrapper })

@@ -34,7 +34,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Warning, ShieldCheck, SpinnerGap } from '@phosphor-icons/react'
-import { fetchGodMode, setGodMode, isApiError } from '@/lib/api'
+import { fetchGodMode, setGodMode, getErrorMessage } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { ReAuthDialog } from './ReAuthDialog'
 import { GatewayRestartModal } from './GatewayRestartModal'
@@ -97,11 +97,7 @@ export function GodModeControl() {
     onError: (err: unknown) => {
       setPendingNext(null)
       addToast({
-        message: isApiError(err)
-          ? err.userMessage
-          : err instanceof Error
-            ? err.message
-            : 'Could not change god-mode',
+        message: getErrorMessage(err, 'Could not change god-mode'),
         variant: 'error',
       })
     },

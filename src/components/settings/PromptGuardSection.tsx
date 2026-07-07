@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Shield } from '@phosphor-icons/react'
-import { fetchPromptGuardLevel, updatePromptGuardLevel, isApiError } from '@/lib/api'
+import { fetchPromptGuardLevel, updatePromptGuardLevel, getErrorMessage } from '@/lib/api'
 import type { PromptInjectionLevel } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { SaveStatus, useSaveStatus } from './SaveStatus'
@@ -72,7 +72,7 @@ export function PromptGuardSection(): React.ReactElement {
     },
     onError: (err: Error) => {
       setSaveState('error')
-      const msg = isApiError(err) ? err.userMessage : err.message
+      const msg = getErrorMessage(err, 'Save failed')
       setErrorMessage(msg)
       addToast({ message: msg, variant: 'error' })
     },

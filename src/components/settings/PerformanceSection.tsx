@@ -23,7 +23,7 @@ import { Switch } from '@/components/ui/switch'
 import {
   fetchPerformanceSettings,
   updatePerformanceSettings,
-  isApiError,
+  getErrorMessage,
   type PerformanceSettingsUpdate,
 } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
@@ -97,7 +97,7 @@ export function PerformanceSection(): React.ReactElement {
     onError: (err) => {
       setSaveStatus('error')
       setPending(null)
-      const msg = isApiError(err) ? err.message : 'Failed to save performance settings.'
+      const msg = getErrorMessage(err, 'Failed to save performance settings.')
       addToast({ variant: 'error', message: msg })
     },
   })

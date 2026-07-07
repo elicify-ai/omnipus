@@ -65,7 +65,7 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog'
 import { useToolApprovalStore } from '@/store/toolApproval'
-import { postToolApproval, isApiError } from '@/lib/api'
+import { submitToolApproval, isApiError } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 
 function useCountdown(expiresAt: number): { remainingMs: number; progressPct: number; totalMs: number } {
@@ -149,14 +149,14 @@ function ToolApprovalCard({
   const hasExpired = remainingMs <= 0
 
   const handleAction = useCallback(
-    // Action union sourced from postToolApproval's own signature (which in
+    // Action union sourced from submitToolApproval's own signature (which in
     // turn is the generated ToolApprovalActionRequest['action']) rather than
     // a hand-rolled literal, per Constraint #8.
-    async (action: Parameters<typeof postToolApproval>[1]) => {
+    async (action: Parameters<typeof submitToolApproval>[1]) => {
       if (submitting) return
       setSubmitting(true)
       try {
-        await postToolApproval(approvalId, action)
+        await submitToolApproval(approvalId, action)
         dequeue(approvalId)
       } catch (err) {
         if (isApiError(err)) {

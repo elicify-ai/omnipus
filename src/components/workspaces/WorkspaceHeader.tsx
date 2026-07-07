@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { PencilSimple, Check, X, Link } from '@phosphor-icons/react'
+import { PencilSimple, Check, X, Link, ArrowsClockwise } from '@phosphor-icons/react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { MilestoneProgressBar } from './MilestoneProgressBar'
@@ -20,7 +20,7 @@ export function WorkspaceHeader({ workspace }: WorkspaceHeaderProps) {
   const [nameDraft, setNameDraft] = useState(workspace.name)
 
   // Fetch milestones for progress bars
-  const { data: milestones = [] } = useQuery({
+  const { data: milestones = [], isError: isMilestonesError, refetch: refetchMilestones } = useQuery({
     queryKey: milestonesQueryKeys.list(workspace.id),
     queryFn: () => fetchMilestones(workspace.id),
     staleTime: 30_000,
@@ -152,13 +152,32 @@ export function WorkspaceHeader({ workspace }: WorkspaceHeaderProps) {
         </span>
       </div>
 
-      {/* Milestone progress bars — hidden when no milestones */}
-      {milestones.length > 0 && (
-        <div className="flex flex-col gap-2 pt-2 border-t border-[var(--color-border)]/50">
-          {milestones.map((m) => (
-            <MilestoneProgressBar key={m.id} milestone={m} />
-          ))}
+      {/* A failed milestones fetch must not render identically to "this
+          workspace genuinely has no milestones" (the length===0 case below
+          simply renders nothing) — that would silently hide real milestone
+          progress. Show a distinct, visible error state with a retry action. */}
+      {isMilestonesError ? (
+        <div className="flex items-center justify-between gap-3 pt-2 mt-2 border-t border-[var(--color-error)]/40">
+          <p className="text-xs text-[var(--color-error)]">Couldn&apos;t load milestones.</p>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-6 px-2 gap-1 text-[11px]"
+            onClick={() => refetchMilestones()}
+          >
+            <ArrowsClockwise size={11} />
+            Retry
+          </Button>
         </div>
+      ) : (
+        /* Milestone progress bars — hidden when no milestones */
+        milestones.length > 0 && (
+          <div className="flex flex-col gap-2 pt-2 border-t border-[var(--color-border)]/50">
+            {milestones.map((m) => (
+              <MilestoneProgressBar key={m.id} milestone={m} />
+            ))}
+          </div>
+        )
       )}
     </div>
   )

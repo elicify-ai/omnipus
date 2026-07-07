@@ -241,3 +241,36 @@ export class ApiError extends Error {
 export function isApiError(err: unknown): err is ApiError {
   return err instanceof ApiError
 }
+
+/**
+ * getErrorMessage extracts a human-displayable string from a caught error (or
+ * a TanStack Query/`useMutation` `.error` field) for use in a toast, inline
+ * form error, or `SaveStatus` message.
+ *
+ * Consolidates the `isApiError(err) ? err.userMessage : err instanceof Error
+ * ? err.message : '<fallback>'` nested ternary that was hand-rolled
+ * independently across the Settings screens (DataSection, SecuritySection,
+ * SandboxSection, GodModeControl, ReAuthDialog, etc.) — same priority order,
+ * one place to fix if it needs to change.
+ *
+ * Priority: `ApiError.userMessage` (already a safe, human-facing string —
+ * see `ApiError.fromResponse` above) > `Error.message` > `fallback`.
+ *
+ * @param opts.status401 — when set, an `ApiError` with `status === 401`
+ * returns this string instead of `userMessage`. Used by call sites that want
+ * a specific "that password is incorrect" message for a 401 rather than the
+ * generic session-expired copy `defaultUserMessage(401)` would otherwise
+ * produce (see ReAuthDialog).
+ */
+export function getErrorMessage(
+  err: unknown,
+  fallback: string,
+  opts?: { status401?: string },
+): string {
+  if (isApiError(err)) {
+    if (opts?.status401 !== undefined && err.status === 401) return opts.status401
+    return err.userMessage
+  }
+  if (err instanceof Error) return err.message
+  return fallback
+}

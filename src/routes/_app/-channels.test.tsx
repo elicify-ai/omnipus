@@ -34,7 +34,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     disableChannel: vi.fn(),
     isApiError: vi.fn(() => false),
     fetchChannelConfig: vi.fn(),
-    getChannelRouting: vi.fn(),
+    fetchChannelRouting: vi.fn(),
     setChannelRouting: vi.fn(),
     fetchAgents: vi.fn(),
     configureChannel: vi.fn(),
@@ -86,7 +86,7 @@ import {
   enableChannel,
   disableChannel,
   fetchChannelConfig,
-  getChannelRouting,
+  fetchChannelRouting,
   setChannelRouting,
   fetchAgents,
   fetchWorkspaces,
@@ -321,7 +321,7 @@ describe('ChannelConfigPanel — Routing section', () => {
       { id: 'mia', name: 'Mia' } as never,
       { id: 'jim', name: 'Jim' } as never,
     ])
-    vi.mocked(getChannelRouting).mockResolvedValue({ default_agent_id: undefined })
+    vi.mocked(fetchChannelRouting).mockResolvedValue({ default_agent_id: undefined })
     vi.mocked(setChannelRouting).mockResolvedValue({ default_agent_id: 'mia' })
   })
 
@@ -417,7 +417,7 @@ describe('ChannelsScreen — degraded channel state', () => {
     // ConnectorsScreen resolves each configured row's workspace→agent binding
     // via these queries — give them deterministic empty defaults so the
     // "No workspace bound" fallback renders instead of an unmocked real fetch.
-    vi.mocked(getChannelRouting).mockResolvedValue({})
+    vi.mocked(fetchChannelRouting).mockResolvedValue({})
     vi.mocked(fetchWorkspaces).mockResolvedValue([])
     vi.mocked(fetchAgents).mockResolvedValue([])
   })

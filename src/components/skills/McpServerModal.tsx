@@ -18,7 +18,7 @@
  *     supports Headers key/value editor under AdvancedDisclosure.
  *
  * G8: edit mode — pass `initialServer` to pre-populate all fields; the modal
- * title becomes "Edit MCP server" and the submit path calls patchMcpServer
+ * title becomes "Edit MCP server" and the submit path calls updateMcpServer
  * with only the changed fields.
  *
  * G9: new inputs — Headers (sse/http), Env file (stdio).
@@ -50,7 +50,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { AdvancedDisclosure } from '@/components/shared/AdvancedDisclosure'
-import { addMcpServer, patchMcpServer, isApiError, type McpServer, type McpServerUpdate } from '@/lib/api'
+import { addMcpServer, updateMcpServer, isApiError, type McpServer, type McpServerUpdate } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 
 interface McpServerModalProps {
@@ -285,7 +285,7 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
         const headers = rowsToRecord(headerRows)
         if (headers) patch.headers = headers
       }
-      return patchMcpServer(initialServer.id, patch)
+      return updateMcpServer(initialServer.id, patch)
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['mcp-servers'] })

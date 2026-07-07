@@ -11,7 +11,7 @@
  * 7. FR-110 / US-7: modal renders as a Sheet (slide-out), not a Dialog.
  *    Focus-trap, ESC, and focus-restore are provided by Radix DialogPrimitive
  *    (the Sheet primitive) — tested at the integration level via dialog role.
- * 8. G8: edit mode pre-populates fields and submits via patchMcpServer.
+ * 8. G8: edit mode pre-populates fields and submits via updateMcpServer.
  * 9. G9: new fields (headers, env_file) included in payload.
  * 10. G7: Test button in SkillsScreen calls testMcpServer and toasts the result.
  */
@@ -32,7 +32,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return {
     ...actual,
     addMcpServer: vi.fn().mockResolvedValue({ id: 'test', name: 'test', transport: 'sse', status: 'disconnected', tool_count: 0 }),
-    patchMcpServer: vi.fn().mockResolvedValue({ id: 's1', name: 'my-sse-server', transport: 'sse', status: 'connected', tool_count: 3 }),
+    updateMcpServer: vi.fn().mockResolvedValue({ id: 's1', name: 'my-sse-server', transport: 'sse', status: 'connected', tool_count: 3 }),
     testMcpServer: vi.fn().mockResolvedValue({ success: true, message: 'Connected', tool_count: 5, tools: ['a', 'b', 'c', 'd', 'e'] }),
     fetchMcpServers: vi.fn().mockResolvedValue([]),
     fetchSkills: vi.fn().mockResolvedValue([]),
@@ -43,7 +43,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
   }
 })
 
-import { addMcpServer, patchMcpServer, testMcpServer } from '@/lib/api'
+import { addMcpServer, updateMcpServer, testMcpServer } from '@/lib/api'
 import { McpServerModal } from './McpServerModal'
 import { MCPServerPicker } from '@/components/agents/MCPServerPicker'
 
@@ -359,14 +359,14 @@ describe('McpServerModal — G8: edit mode', () => {
     })
   })
 
-  it('submit in edit mode calls patchMcpServer (not addMcpServer)', async () => {
+  it('submit in edit mode calls updateMcpServer (not addMcpServer)', async () => {
     renderModal(true, { initialServer: sseServer })
     const user = userEvent.setup()
     await waitFor(() => screen.getByTestId('network-url'))
     await user.type(screen.getByTestId('network-url'), 'https://new-endpoint.example.com/sse')
     await user.click(screen.getByTestId('submit-add'))
     await waitFor(() => {
-      expect(vi.mocked(patchMcpServer)).toHaveBeenCalledWith(
+      expect(vi.mocked(updateMcpServer)).toHaveBeenCalledWith(
         's1',
         expect.objectContaining({ url: 'https://new-endpoint.example.com/sse' })
       )

@@ -374,6 +374,30 @@ describe('CreateAgentModal — submit success path', () => {
     })
   })
 
+  // Regression: mutationFn used to cast the *request* payload to the
+  // response `Agent` type (`data as unknown as Agent`) when onCreateProp
+  // resolves to void, so onSuccess could silently read server-computed
+  // fields (id, timestamps, resolved defaults) off a value that never had
+  // them. mutationFn now resolves `null` for this path and onSuccess falls
+  // back to the submitted request's `name` — this pins that the success
+  // side effects (toast + close) still fire correctly with no synthesized
+  // entity in play.
+  it('legacy onCreate-resolves-to-void path: shows the success toast from the request name (not a synthesized Agent) and closes the modal', async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined)
+    const onClose = vi.fn()
+    renderModal({ open: true, onClose, onCreate })
+    await fillAndAdvanceToStep3()
+    fireEvent.click(screen.getByTestId('wizard-create'))
+    await waitFor(() => expect(onCreate).toHaveBeenCalled())
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce())
+    const toasts = useUiStore.getState().toasts
+    expect(toasts).toHaveLength(1)
+    expect(toasts[0]).toMatchObject({
+      message: 'Created agent "Research Bot"',
+      variant: 'success',
+    })
+  })
+
   it('Subagent submit includes description in the wire payload', async () => {
     const onCreate = vi.fn().mockResolvedValue(undefined)
     renderModal({ open: true, onClose: vi.fn(), onCreate, initialType: 'Subagent' })

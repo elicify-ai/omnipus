@@ -1,5 +1,7 @@
 // DevicesSection — admin-only device pairing management panel
-// Full implementation: Phase 3A (device pairing with admin approval)
+// Shipped, feature-flag-gated: the "Devices" tab only mounts this component when
+// isDevicePairingEnabled() is true (see SettingsScreen.tsx). The approve/reject
+// flow below is real and wired to the live /devices endpoint + respondToPairing.
 //
 // Traces to: wave3-skill-ecosystem-spec.md line 846 (Test #16: RBAC — admin-only REST endpoints)
 
@@ -63,7 +65,7 @@ export function DevicesSection() {
   const isConnected = useConnectionStore((s) => s.isConnected)
   const [showPairInstructions, setShowPairInstructions] = useState(false)
 
-  const { data, isLoading, isError } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['devices'],
     queryFn: fetchDevices,
     retry: false,
@@ -140,11 +142,14 @@ export function DevicesSection() {
         <div className="h-24 rounded-lg border animate-pulse" style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-surface-1)' }} />
       ) : isError ? (
         <div className="flex flex-col items-center justify-center gap-3 py-6 rounded-lg border border-dashed text-center" style={{ borderColor: 'var(--color-border)' }}>
-          <DeviceMobile size={22} weight="duotone" style={{ color: 'var(--color-muted)' }} />
+          <DeviceMobile size={22} weight="duotone" style={{ color: 'var(--color-error)' }} />
           <div>
-            <p className="text-xs font-medium" style={{ color: 'var(--color-muted)' }}>Device pairing coming soon</p>
-            <p className="text-xs mt-0.5" style={{ color: 'var(--color-muted)' }}>Remote device management will be available in a future release.</p>
+            <p className="text-xs font-medium" style={{ color: 'var(--color-error)' }}>Failed to load devices</p>
+            <p className="text-xs mt-0.5" style={{ color: 'var(--color-muted)' }}>Could not reach the gateway to list pending and paired devices.</p>
           </div>
+          <Button size="sm" variant="outline" onClick={() => refetch()} data-testid="devices-retry-btn">
+            Retry
+          </Button>
         </div>
       ) : pending.length === 0 ? (
         <div className="flex flex-col items-center justify-center gap-3 py-6 rounded-lg border border-dashed text-center" style={{ borderColor: 'var(--color-border)' }}>

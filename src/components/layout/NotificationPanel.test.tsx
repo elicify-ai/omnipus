@@ -1,10 +1,11 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, within } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { render, screen, fireEvent, within, waitFor } from '@testing-library/react'
 
 import { NotificationPanel } from './NotificationPanel'
 import { useUiStore } from '@/store/ui'
 import { useNotificationsStore } from '@/store/notifications'
 import type { NotificationFrame } from '@/lib/api/generated/asyncapi-types'
+import * as telemetry from '@/lib/telemetry'
 
 const mockNavigate = vi.fn()
 vi.mock('@tanstack/react-router', async (importOriginal) => {
@@ -101,5 +102,53 @@ describe('NotificationPanel (#264)', () => {
     // The read item still renders.
     const region = screen.getByText('Schedule failed')
     expect(within(region.closest('button')!).getByText('Schedule failed')).toBeInTheDocument()
+  })
+
+  describe('best-effort mark-read failures — observability without UI disruption', () => {
+    afterEach(() => {
+      vi.restoreAllMocks()
+    })
+
+    it('logs a telemetry event when markNotificationRead fails, with no error UI', async () => {
+      markNotificationRead.mockImplementationOnce(() => Promise.reject(new Error('network down')))
+      const logErrorSpy = vi.spyOn(telemetry, 'logError')
+
+      useNotificationsStore.getState().apply(frame({ id: 'a', title: 'Go', session_id: 'sess-3' }))
+      render(<NotificationPanel />)
+      fireEvent.click(screen.getByText('Go'))
+
+      // The optimistic local read state applies immediately regardless of
+      // the pending server call's outcome — no error toast, no reverted state.
+      expect(useNotificationsStore.getState().byId['a'].read).toBe(true)
+
+      await waitFor(() => {
+        expect(logErrorSpy).toHaveBeenCalledWith(
+          expect.objectContaining({ event: 'notificationMarkReadFailed', notificationId: 'a' })
+        )
+      })
+      // Still no error UI surfaced anywhere in the document.
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    })
+
+    it('logs a telemetry event when markAllNotificationsRead fails, with no error UI', async () => {
+      markAllNotificationsRead.mockImplementationOnce(() => Promise.reject(new Error('network down')))
+      const logErrorSpy = vi.spyOn(telemetry, 'logError')
+
+      const store = useNotificationsStore.getState()
+      store.apply(frame({ id: 'a' }))
+      store.apply(frame({ id: 'b' }))
+      render(<NotificationPanel />)
+      fireEvent.click(screen.getByText('Mark all read'))
+
+      // Local state is cleared immediately, independent of the server call.
+      expect(useNotificationsStore.getState().unreadCount).toBe(0)
+
+      await waitFor(() => {
+        expect(logErrorSpy).toHaveBeenCalledWith(
+          expect.objectContaining({ event: 'notificationMarkAllReadFailed' })
+        )
+      })
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    })
   })
 })

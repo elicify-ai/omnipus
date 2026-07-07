@@ -11,6 +11,7 @@
  */
 
 import { useQuery } from '@tanstack/react-query'
+import { ArrowsClockwise } from '@phosphor-icons/react'
 import { fetchSubtasks, tasksQueryKeys } from '@/lib/api'
 import type { Task } from '@/lib/api'
 import { STATUS_COLORS as STATUS_DOT, STATUS_LABELS as STATUS_LABEL } from '@/lib/statusColors'
@@ -25,7 +26,7 @@ interface TaskChildrenProps {
 }
 
 export function TaskChildren({ parentTaskId, preloaded, onChildClick }: TaskChildrenProps) {
-  const { data: children = preloaded ?? [], isLoading } = useQuery({
+  const { data: children = preloaded ?? [], isLoading, isError, refetch } = useQuery({
     // Only fetch if we don't have preloaded data
     queryKey: tasksQueryKeys.subtasks(parentTaskId),
     queryFn: () => fetchSubtasks(parentTaskId),
@@ -39,6 +40,28 @@ export function TaskChildren({ parentTaskId, preloaded, onChildClick }: TaskChil
         {[1, 2].map((i) => (
           <div key={i} className="h-5 rounded bg-[var(--color-surface-2)] animate-pulse" />
         ))}
+      </div>
+    )
+  }
+
+  // A failed fetch must not render identically to "this task genuinely has
+  // no children" (empty → null below) — that would silently hide subtasks
+  // that actually exist. Give the operator a distinct, visible error state
+  // with a way to retry, scaled to fit the compact nested-list context.
+  if (isError) {
+    return (
+      <div className="mt-2 pl-2 border-l-2 border-[var(--color-error)]/40">
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation()
+            refetch()
+          }}
+          className="flex items-center gap-1.5 rounded px-1.5 py-1 text-[11px] text-[var(--color-error)] hover:bg-[var(--color-surface-2)] transition-colors"
+        >
+          <ArrowsClockwise size={11} />
+          Couldn&apos;t load subtasks — Retry
+        </button>
       </div>
     )
   }

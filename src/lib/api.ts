@@ -13,7 +13,7 @@
 // rather than regex-matching err.message — see src/lib/api-error.ts.
 
 import { ApiError, isApiError as isApiErrorFn } from './api-error'
-export { ApiError, isApiError } from './api-error'
+export { ApiError, isApiError, getErrorMessage } from './api-error'
 import { maybeDevToast } from './dev-toast'
 import { logError } from './telemetry'
 
@@ -35,8 +35,15 @@ import { z } from 'zod'
 //   PUT /channels/:id/configure — void; channel-specific body; no generated schema.
 //   GET /credentials        — wire returns string[]; SPA shape is CredentialKey[]; the
 //     SPA-internal shape is a SPA-only concern, not a generated schema component.
-//   GET /about              — AboutInfo is a looser SPA-compatibility subset of AboutResponse
-//     (different field names: uptime_seconds vs uptime); cannot validate without false negatives.
+//
+// GET /about is NOT in the gap list above — it has a hand-written local schema
+// (AboutInfoSchema, defined next to the AboutInfo interface) rather than the
+// generated AboutResponse schema, because its field names genuinely drift from
+// the wire contract (uptime_seconds vs uptime) and several fields are
+// legitimately absent on older gateway versions. The local schema validates
+// the fields that must always be present and leaves the version-gated fields
+// optional, so it still rejects a genuinely malformed response without
+// false-negativing on backward compatibility.
 
 import {
   ChannelRouting as ChannelRoutingSchema,
@@ -45,17 +52,13 @@ import {
   Agent as AgentSchema,
   AgentSession as AgentSessionSchema,
   AuditLogResponse as AuditLogResponseSchema,
-  AuditLogToggle as AuditLogToggleSchema,
   ExecAllowlist as ExecAllowlistSchema,
   ExecProxyStatus as ExecProxyStatusSchema,
   GlobalToolPolicies as GlobalToolPoliciesSchema,
   PendingRestartEntry as PendingRestartEntrySchema,
   PromptGuardResponse as PromptGuardResponseSchema,
-  RetentionConfig as RetentionConfigSchema,
-  RetentionSweepResult as RetentionSweepResultSchema,
   SandboxConfig as SandboxConfigSchema,
   SandboxStatus as SandboxStatusSchema,
-  SessionScopeResponse as SessionScopeResponseSchema,
   SkillTrustResponse as SkillTrustResponseSchema,
   // New generated Zod schemas (contract-first #8):
   AppState as AppStateSchema,
@@ -101,13 +104,8 @@ import {
   Session as WireSessionSchema,
   SessionDetail as WireSessionDetailSchema,
   // Newly promoted from inline openapi.yaml schemas:
-  AuditLogUpdateResponse as AuditLogUpdateResponseSchema,
   SkillTrustUpdateResponse as SkillTrustUpdateResponseSchema,
   PromptGuardUpdateResponse as PromptGuardUpdateResponseSchema,
-  RateLimitsResponse as RateLimitsResponseSchema,
-  RateLimitsUpdateResponse as RateLimitsUpdateResponseSchema,
-  SessionScopeUpdateResponse as SessionScopeUpdateResponseSchema,
-  RetentionUpdateResponse as RetentionUpdateResponseSchema,
   AgentToolsResponse as AgentToolsResponseSchema,
   OperationResult as OperationResultSchema,
   UploadFilesResponse as UploadFilesResponseSchema,
@@ -1407,8 +1405,61 @@ function validEnum<T extends string>(value: unknown, valid: readonly T[], fallba
 }
 
 // cast provides a type-safe wrapper around the repetitive (raw.foo ?? fallback) as T pattern.
+// NOTE: cast<T>() only fills in null/undefined — it does NOT check the value's
+// runtime type, so a wrong-shaped-but-present wire value (e.g. a string where
+// a number was expected) passes straight through mistyped. That is fine for
+// low-risk/cosmetic fields (a display-only string, a passthrough token) but
+// NOT for fields whose wrong shape would cause visible breakage (rendering a
+// non-primitive as a React child) or a bad security/financial decision
+// downstream (a corrupted cost cap or rate limit silently turning into NaN →
+// null on the next PUT, effectively disabling the guardrail). For those,
+// use castString/castNumber/castOptionalNumber below, which mirror
+// validEnum's runtime-checked-with-safe-fallback pattern instead.
 function cast<T>(obj: unknown, fallback: T): T {
   return (obj ?? fallback) as T
+}
+
+// castString/castNumber: like validEnum, but for a scalar type rather than a
+// closed enum. Verifies typeof before accepting the wire value; a present
+// but wrong-typed value is coerced to the fallback and counted (same
+// telemetry/dev-warn behaviour as validEnum) rather than silently passed
+// through mistyped.
+function castString(value: unknown, fallback: string): string {
+  if (typeof value === 'string') return value
+  if (value !== undefined && value !== null) {
+    _configCoercionCount++
+    if (import.meta.env.DEV) {
+      console.warn(`[api] castString coercion: ${JSON.stringify(value)} → ${JSON.stringify(fallback)}`)
+    }
+  }
+  return fallback
+}
+
+function castNumber(value: unknown, fallback: number): number {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (value !== undefined && value !== null) {
+    _configCoercionCount++
+    if (import.meta.env.DEV) {
+      console.warn(`[api] castNumber coercion: ${JSON.stringify(value)} → ${fallback}`)
+    }
+  }
+  return fallback
+}
+
+// castOptionalNumber: for scalar fields that are legitimately optional on the
+// wire (no safe non-undefined fallback exists — e.g. an unset cost cap means
+// "no cap", not "cap of 0"). A present-but-wrong-typed value is dropped to
+// undefined (same as "not configured") rather than passed through mistyped,
+// since a bad number silently reaching a spend/rate-limit/timeout guardrail
+// is worse than that guardrail reading as "unset".
+function castOptionalNumber(value: unknown): number | undefined {
+  if (value === undefined || value === null) return undefined
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  _configCoercionCount++
+  if (import.meta.env.DEV) {
+    console.warn(`[api] castOptionalNumber coercion: ${JSON.stringify(value)} → undefined`)
+  }
+  return undefined
 }
 
 function rawToFrontendConfig(raw: Record<string, unknown>): Config {
@@ -1421,8 +1472,12 @@ function rawToFrontendConfig(raw: Record<string, unknown>): Config {
   const agentDefaults = cast<Record<string, unknown>>(agents.defaults, {})
   return {
     gateway: {
-      bind_address: cast<string>(gateway.host, '127.0.0.1'),
-      port: cast<number>(gateway.port, 8080),
+      // Connectivity basics: rendered directly into form inputs (GatewaySection)
+      // and .toString()'d for display — a wrong-shaped value here is visible
+      // breakage (a non-primitive rendered as a React child, or "[object
+      // Object]" from a stray .toString()), so these are runtime-type-checked.
+      bind_address: castString(gateway.host, '127.0.0.1'),
+      port: castNumber(gateway.port, 8080),
       token: gateway.token as string | undefined,
       hot_reload: gateway.hot_reload as boolean | undefined,
       log_level: gateway.log_level as string | undefined,
@@ -1432,19 +1487,29 @@ function rawToFrontendConfig(raw: Record<string, unknown>): Config {
       policy_mode: validEnum(security.policy_mode, VALID_POLICY_MODES, 'deny'),
       exec_approval: validEnum(security.exec_approval, VALID_EXEC_APPROVALS, 'ask'),
       prompt_injection_level: validEnum(security.prompt_injection_level, VALID_INJECTION_LEVELS, 'medium'),
-      daily_cost_cap: security.daily_cost_cap as number | undefined,
-      exec_timeout_seconds: security.exec_timeout_seconds as number | undefined,
-      max_background_seconds: security.max_background_seconds as number | undefined,
+      // Spend/execution guardrails: a wrong-shaped value here is a bad
+      // decision downstream, not just a display glitch — SecuritySection reads
+      // these with `?.toString()` (which happily stringifies ANY type without
+      // throwing) then feeds the result to parseFloat/parseInt on save, so a
+      // corrupted-but-truthy value would silently NaN out and strip the
+      // guardrail on the next PUT rather than failing loudly. Runtime-checked
+      // and dropped to undefined (== "not configured") instead.
+      daily_cost_cap: castOptionalNumber(security.daily_cost_cap),
+      exec_timeout_seconds: castOptionalNumber(security.exec_timeout_seconds),
+      max_background_seconds: castOptionalNumber(security.max_background_seconds),
       enable_deny_patterns: security.enable_deny_patterns as boolean | undefined,
       rate_limits: {
-        max_tokens_per_day: rateLimits.max_tokens_per_day as number | undefined,
-        max_cost_per_day: rateLimits.max_cost_per_day as number | undefined,
-        max_agent_llm_calls_per_hour: rateLimits.max_agent_llm_calls_per_hour as number | undefined,
-        max_agent_tool_calls_per_minute: rateLimits.max_agent_tool_calls_per_minute as number | undefined,
+        max_tokens_per_day: castOptionalNumber(rateLimits.max_tokens_per_day),
+        max_cost_per_day: castOptionalNumber(rateLimits.max_cost_per_day),
+        max_agent_llm_calls_per_hour: castOptionalNumber(rateLimits.max_agent_llm_calls_per_hour),
+        max_agent_tool_calls_per_minute: castOptionalNumber(rateLimits.max_agent_tool_calls_per_minute),
       },
     },
     data: {
-      session_retention_days: cast<number>(retention.session_days, 90),
+      // Same rationale as gateway.port above — DataSection reads this via
+      // .toString() directly (no optional chaining), so a non-number here
+      // throws at render time.
+      session_retention_days: castNumber(retention.session_days, 90),
     },
     agents: {
       defaults: {
@@ -1877,7 +1942,7 @@ export function configureChannel(id: string, config: Record<string, unknown>): P
 // ChannelRouting — re-exported from generated openapi-types (contract-first #8).
 // See contracts/components/schemas/ChannelRouting.yaml.
 
-export function getChannelRouting(id: string): Promise<ChannelRouting> {
+export function fetchChannelRouting(id: string): Promise<ChannelRouting> {
   return request<ChannelRouting>(
     `/channels/${encodeURIComponent(id)}/routing`,
     undefined,
@@ -2092,7 +2157,7 @@ export async function fetchMcpServerTools(id: string): Promise<string[]> {
   return resp.tools
 }
 
-export function patchMcpServer(id: string, body: McpServerUpdate): Promise<McpServer> {
+export function updateMcpServer(id: string, body: McpServerUpdate): Promise<McpServer> {
   return request<McpServer>(`/mcp-servers/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(body) }, McpServerSchema as ZodType<McpServer>)
 }
 
@@ -2336,11 +2401,28 @@ export interface AboutInfo { // not-wire-format: SPA-internal backward-compatibl
   device_pairing_enabled?: boolean
 }
 
+// AboutInfoSchema is a hand-written local schema (not from generated schemas —
+// see the GAP REPORT note above the generated-schema import block). It
+// mirrors the AboutInfo interface field-for-field: the five fields every
+// gateway version has always sent are required; every field added since are
+// `.optional()` so a response from an older gateway that predates them still
+// validates. A response failing this schema (e.g. version/os/arch missing or
+// wrong-typed) is a genuine contract break worth surfacing as ApiSchemaError.
+const AboutInfoSchema: ZodType<AboutInfo> = z.object({
+  version: z.string(),
+  go_version: z.string(),
+  os: z.string(),
+  arch: z.string(),
+  uptime_seconds: z.number(),
+  preview_port: z.number().optional(),
+  preview_origin: z.string().optional(),
+  preview_listener_enabled: z.boolean().optional(),
+  warmup_timeout_seconds: z.number().optional(),
+  device_pairing_enabled: z.boolean().optional(),
+})
+
 export function fetchAboutInfo(): Promise<AboutInfo> {
-  // no-schema: AboutInfo is a looser SPA-compatibility subset of the wire AboutResponse
-  // (different field names: uptime_seconds vs uptime). Validating against a strict schema
-  // would produce false negatives on older gateway versions.
-  return request<AboutInfo>('/about')
+  return request<AboutInfo>('/about', undefined, AboutInfoSchema)
 }
 
 /**
@@ -2538,14 +2620,26 @@ export function configureIntegrationProvider(
 // transcribeAudio uploads a recorded audio Blob to the active transcriber and
 // returns the recognised text. Multipart form-data; the request() helper is
 // JSON-only, so this uses fetch directly with the auth + CSRF headers.
+// MIME-type-fragment → file-extension lookup for transcribeAudio, in priority
+// order. 'webm' is both the first check and the fallback (recordAudio's
+// default MediaRecorder mimeType), so no matching fragment falls through to
+// the same value a match on 'webm' would produce.
+const AUDIO_EXT_BY_MIME_FRAGMENT: readonly (readonly [fragment: string, ext: string])[] = [
+  ['webm', 'webm'],
+  ['ogg', 'ogg'],
+  ['wav', 'wav'],
+  ['mp4', 'm4a'],
+  ['mpeg', 'm4a'],
+]
+
+function audioFileExtension(mimeType: string): string {
+  return AUDIO_EXT_BY_MIME_FRAGMENT.find(([fragment]) => mimeType.includes(fragment))?.[1] ?? 'webm'
+}
+
 export async function transcribeAudio(audio: Blob): Promise<TranscribeResponse> {
   const form = new FormData()
   // Preserve the recorded mime type's extension hint where possible.
-  const ext = audio.type.includes('webm') ? 'webm'
-    : audio.type.includes('ogg') ? 'ogg'
-    : audio.type.includes('wav') ? 'wav'
-    : audio.type.includes('mp4') || audio.type.includes('mpeg') ? 'm4a'
-    : 'webm'
+  const ext = audioFileExtension(audio.type)
   form.append('audio', audio, `recording.${ext}`)
 
   const csrf = readCSRFCookie()
@@ -2663,24 +2757,6 @@ export function setGodMode(enabled: boolean, reAuthToken?: string): Promise<GodM
   }, GodModeUpdateResponseSchema)
 }
 
-// Audit log toggle — distinct from GET /audit-log (which returns AuditEntry[]).
-// This endpoint controls whether audit logging is enabled at all.
-// AuditLogToggle is re-exported from generated openapi-types above.
-
-// AuditLogUpdateResponse — re-exported from generated openapi-types (contract-first #8).
-// See contracts/components/schemas/AuditLogUpdateResponse.yaml.
-
-export function fetchAuditLogToggle(): Promise<AuditLogToggle> {
-  return request<AuditLogToggle>('/security/audit-log', undefined, AuditLogToggleSchema)
-}
-
-export function updateAuditLog(enabled: boolean): Promise<AuditLogUpdateResponse> {
-  return request<AuditLogUpdateResponse>('/security/audit-log', {
-    method: 'PUT',
-    body: JSON.stringify({ enabled }),
-  }, AuditLogUpdateResponseSchema)
-}
-
 // Skill trust — controls how unverified community skills are handled.
 // SkillTrustResponse is re-exported from generated openapi-types above.
 // SkillTrustUpdateRequest — re-exported from generated openapi-types (contract-first #8).
@@ -2715,25 +2791,6 @@ export function updatePromptGuardLevel(level: PromptInjectionLevel): Promise<Pro
     method: 'PUT',
     body: JSON.stringify({ level } satisfies PromptGuardUpdateRequest),
   }, PromptGuardUpdateResponseSchema)
-}
-
-// Rate limits — adds write support and configures spending/throughput caps.
-// RateLimitsResponse — re-exported from generated openapi-types (contract-first #8).
-// See contracts/components/schemas/RateLimitsResponse.yaml.
-// RateLimitsUpdateRequest — re-exported from generated openapi-types (contract-first #8).
-// See contracts/components/schemas/RateLimitsUpdateRequest.yaml.
-// RateLimitsUpdateResponse — re-exported from generated openapi-types (contract-first #8).
-// See contracts/components/schemas/RateLimitsUpdateResponse.yaml.
-
-export function fetchRateLimits(): Promise<RateLimitsResponse> {
-  return request<RateLimitsResponse>('/security/rate-limits', undefined, RateLimitsResponseSchema)
-}
-
-export function updateRateLimits(body: RateLimitsUpdateRequest): Promise<RateLimitsUpdateResponse> {
-  return request<RateLimitsUpdateResponse>('/security/rate-limits', {
-    method: 'PUT',
-    body: JSON.stringify(body),
-  }, RateLimitsUpdateResponseSchema)
 }
 
 // Sandbox config — mode, allowed paths, SSRF controls, and the global
@@ -2772,61 +2829,23 @@ export function updateSandboxConfig(
 // See contracts/components/schemas/SessionScopeRequest.yaml.
 // SessionScopeUpdateResponse — re-exported from generated openapi-types (contract-first #8).
 // See contracts/components/schemas/SessionScopeUpdateResponse.yaml.
-
-export function fetchSessionScope(): Promise<SessionScopeResponse> {
-  return request<SessionScopeResponse>('/security/session-scope', undefined, SessionScopeResponseSchema as ZodType<SessionScopeResponse>)
-}
-
-export function updateSessionScope(dm_scope: DMScope): Promise<SessionScopeUpdateResponse> {
-  return request<SessionScopeUpdateResponse>('/security/session-scope', {
-    method: 'PUT',
-    body: JSON.stringify({ dm_scope } satisfies SessionScopeRequest),
-  }, SessionScopeUpdateResponseSchema)
-}
+//
+// No current caller reads or writes DM scope (fetchSessionScope/
+// updateSessionScope were removed as zero-consumer exports) — DMScope and
+// the re-exported types above remain available for a future Settings surface.
 
 // Retention — session log retention policy.
-
-// RetentionMode mirrors the Go pkg/config.RetentionMode enum. Derive with
-// retentionMode(resp) from the flat wire shape; the backend does not send
-// this as a field.
-export type RetentionMode = 'default' | 'custom' | 'forever'
-
-export function retentionMode(resp: {
-  session_days?: number
-  disabled?: boolean
-}): RetentionMode {
-  if (resp.disabled) return 'forever'
-  if ((resp.session_days ?? 0) > 0) return 'custom'
-  return 'default'
-}
-
-// GET /security/retention returns RetentionConfig (session_days?, disabled?).
 // RetentionConfig — re-exported from generated openapi-types (contract-first #8).
 // See contracts/components/schemas/RetentionConfig.yaml.
-
-// RetentionUpdateBody is a backward-compat alias for the PUT request body.
+//
+// No current caller reads, writes, or sweeps retention (fetchRetention/
+// updateRetention/triggerRetentionSweep/retentionMode were all removed as
+// zero-consumer exports). The two type aliases below remain available for a
+// future Settings surface — RetentionMode is the SPA-internal classification
+// of a RetentionConfig response; RetentionUpdateBody is the PUT request body
+// shape.
+export type RetentionMode = 'default' | 'custom' | 'forever'
 export type RetentionUpdateBody = RetentionConfig
-
-// RetentionUpdateResponse — re-exported from generated openapi-types (contract-first #8).
-// See contracts/components/schemas/RetentionUpdateResponse.yaml.
-
-export function fetchRetention(): Promise<RetentionConfig> {
-  return request<RetentionConfig>('/security/retention', undefined, RetentionConfigSchema)
-}
-
-export function updateRetention(body: RetentionUpdateBody): Promise<RetentionUpdateResponse> {
-  return request<RetentionUpdateResponse>('/security/retention', {
-    method: 'PUT',
-    body: JSON.stringify(body),
-  }, RetentionUpdateResponseSchema)
-}
-
-// Retention sweep — immediately purge sessions beyond the retention window.
-// RetentionSweepResult is re-exported from generated openapi-types above.
-
-export function triggerRetentionSweep(): Promise<RetentionSweepResult> {
-  return request<RetentionSweepResult>('/security/retention/sweep', { method: 'POST' }, RetentionSweepResultSchema)
-}
 
 // Performance — max-parallel agent concurrency settings.
 // PerformanceSettings and PerformanceSettingsUpdate are re-exported from
@@ -2921,7 +2940,7 @@ export function updateAgentTools(
  * "always" (approve this call AND record a session-scoped Always-Allow grant
  * via ApprovalGrantStore.Record; see pkg/gateway/rest_tool_registry.go).
  */
-export function postToolApproval(
+export function submitToolApproval(
   approvalId: string,
   action: ToolApprovalActionRequest['action'],
 ): Promise<void> {
@@ -3104,7 +3123,7 @@ export function fetchMilestones(workspaceId: string): Promise<Milestone[]> {
   ).then((res) => res.milestones)
 }
 
-export function getMilestone(workspaceId: string, milestoneId: string): Promise<Milestone> {
+export function fetchMilestone(workspaceId: string, milestoneId: string): Promise<Milestone> {
   return request<Milestone>(
     `/workspaces/${encodeURIComponent(workspaceId)}/milestones/${encodeURIComponent(milestoneId)}`,
     undefined,

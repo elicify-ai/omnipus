@@ -20,7 +20,6 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type {
   SkillTrustLevel,
   PromptInjectionLevel,
-  DMScope,
 } from './api'
 import { ApiSchemaError, getApiSchemaErrorCount, resetApiSchemaErrorCount } from './api'
 
@@ -233,44 +232,6 @@ describe('Security API helpers', () => {
     })
   })
 
-  // ── fetchAuditLogToggle / updateAuditLog ──────────────────────────────────
-
-  describe('fetchAuditLogToggle', () => {
-    it('GET /api/v1/security/audit-log — returns enabled flag', async () => {
-      fetchSpy.mockResolvedValueOnce(makeOkResponse({ enabled: true }))
-
-      const { fetchAuditLogToggle } = await import('./api')
-      const result = await fetchAuditLogToggle()
-
-      const [url] = fetchSpy.mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/v1/security/audit-log')
-      expect(result.enabled).toBe(true)
-    })
-  })
-
-  describe('updateAuditLog', () => {
-    it('PUT /api/v1/security/audit-log — sends CSRF and body', async () => {
-      fetchSpy.mockResolvedValueOnce(makeOkResponse({ saved: true, requires_restart: false, applied_enabled: true }))
-
-      const { updateAuditLog } = await import('./api')
-      await updateAuditLog(true)
-
-      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/v1/security/audit-log')
-      expect((init.method ?? '').toUpperCase()).toBe('PUT')
-      const headers = new Headers(init.headers as HeadersInit)
-      expect(headers.get('X-CSRF-Token')).toBe('test-csrf-token')
-      expect(JSON.parse(init.body as string)).toEqual({ enabled: true })
-    })
-
-    it('throws typed error on 400', async () => {
-      fetchSpy.mockResolvedValueOnce(make400Response('bad request'))
-
-      const { updateAuditLog } = await import('./api')
-      await expect(updateAuditLog(false)).rejects.toThrow('400')
-    })
-  })
-
   // ── fetchSkillTrust / updateSkillTrust ────────────────────────────────────
 
   describe('fetchSkillTrust', () => {
@@ -350,53 +311,6 @@ describe('Security API helpers', () => {
     })
   })
 
-  // ── fetchRateLimits / updateRateLimits ────────────────────────────────────
-
-  describe('fetchRateLimits', () => {
-    it('GET /api/v1/security/rate-limits — returns current limits', async () => {
-      // GET returns daily_cost_cap (not _usd) per contracts/components/schemas/RateLimitsResponse.yaml
-      fetchSpy.mockResolvedValueOnce(makeOkResponse({
-        enabled: true,
-        daily_cost_usd: 0.42,
-        daily_cost_cap: 5,
-        max_agent_llm_calls_per_hour: 100,
-        max_agent_tool_calls_per_minute: 60,
-      }))
-
-      const { fetchRateLimits } = await import('./api')
-      const result = await fetchRateLimits()
-
-      const [url] = fetchSpy.mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/v1/security/rate-limits')
-      expect(result.daily_cost_cap).toBe(5)
-    })
-  })
-
-  describe('updateRateLimits', () => {
-    it('PUT /api/v1/security/rate-limits — sends CSRF and body', async () => {
-      const body = { daily_cost_cap_usd: 10, max_agent_llm_calls_per_hour: 50 }
-      // PUT returns RateLimitsUpdateResponse per contracts/components/schemas/RateLimitsUpdateResponse.yaml
-      fetchSpy.mockResolvedValueOnce(makeOkResponse({ saved: true, requires_restart: false }))
-
-      const { updateRateLimits } = await import('./api')
-      await updateRateLimits(body)
-
-      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/v1/security/rate-limits')
-      expect((init.method ?? '').toUpperCase()).toBe('PUT')
-      const headers = new Headers(init.headers as HeadersInit)
-      expect(headers.get('X-CSRF-Token')).toBe('test-csrf-token')
-      expect(JSON.parse(init.body as string)).toEqual(body)
-    })
-
-    it('throws typed error on 400', async () => {
-      fetchSpy.mockResolvedValueOnce(make400Response('bad limits'))
-
-      const { updateRateLimits } = await import('./api')
-      await expect(updateRateLimits({ daily_cost_cap_usd: -1 })).rejects.toThrow('400')
-    })
-  })
-
   // ── fetchSandboxConfig / updateSandboxConfig ──────────────────────────────
 
   describe('fetchSandboxConfig', () => {
@@ -436,113 +350,6 @@ describe('Security API helpers', () => {
       const { updateSandboxConfig } = await import('./api')
       // @ts-expect-error — deliberately pass an invalid mode to verify error handling
       await expect(updateSandboxConfig({ mode: 'bad' })).rejects.toThrow('400')
-    })
-  })
-
-  // ── fetchSessionScope / updateSessionScope ────────────────────────────────
-
-  describe('fetchSessionScope', () => {
-    it('GET /api/v1/security/session-scope — returns dm_scope', async () => {
-      fetchSpy.mockResolvedValueOnce(makeOkResponse({ dm_scope: 'per-peer' as DMScope }))
-
-      const { fetchSessionScope } = await import('./api')
-      const result = await fetchSessionScope()
-
-      const [url] = fetchSpy.mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/v1/security/session-scope')
-      expect(result.dm_scope).toBe('per-peer')
-    })
-  })
-
-  describe('updateSessionScope', () => {
-    it('PUT /api/v1/security/session-scope — sends CSRF and dm_scope body', async () => {
-      fetchSpy.mockResolvedValueOnce(
-        makeOkResponse({ saved: true, requires_restart: true, applied_dm_scope: 'per-peer' }),
-      )
-
-      const { updateSessionScope } = await import('./api')
-      await updateSessionScope('per-peer')
-
-      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/v1/security/session-scope')
-      expect((init.method ?? '').toUpperCase()).toBe('PUT')
-      const headers = new Headers(init.headers as HeadersInit)
-      expect(headers.get('X-CSRF-Token')).toBe('test-csrf-token')
-      expect(JSON.parse(init.body as string)).toEqual({ dm_scope: 'per-peer' })
-    })
-
-    it('throws typed error on 400', async () => {
-      fetchSpy.mockResolvedValueOnce(make400Response('invalid scope'))
-
-      const { updateSessionScope } = await import('./api')
-      await expect(updateSessionScope('main')).rejects.toThrow('400')
-    })
-  })
-
-  // ── fetchRetention / updateRetention ──────────────────────────────────────
-
-  describe('fetchRetention', () => {
-    it('GET /api/v1/security/retention — returns policy', async () => {
-      fetchSpy.mockResolvedValueOnce(makeOkResponse({ session_days: 90, disabled: false }))
-
-      const { fetchRetention } = await import('./api')
-      const result = await fetchRetention()
-
-      const [url] = fetchSpy.mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/v1/security/retention')
-      expect(result.session_days).toBe(90)
-    })
-  })
-
-  describe('updateRetention', () => {
-    it('PUT /api/v1/security/retention — sends CSRF and body', async () => {
-      // The real handler returns flat {saved, requires_restart, session_days, disabled}
-      // (not nested applied: {...}).  The schema requires all four fields.
-      fetchSpy.mockResolvedValueOnce(
-        makeOkResponse({ saved: true, requires_restart: false, session_days: 30, disabled: false }),
-      )
-
-      const { updateRetention } = await import('./api')
-      await updateRetention({ session_days: 30 })
-
-      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/v1/security/retention')
-      expect((init.method ?? '').toUpperCase()).toBe('PUT')
-      const headers = new Headers(init.headers as HeadersInit)
-      expect(headers.get('X-CSRF-Token')).toBe('test-csrf-token')
-      expect(JSON.parse(init.body as string)).toEqual({ session_days: 30 })
-    })
-
-    it('throws typed error on 400', async () => {
-      fetchSpy.mockResolvedValueOnce(make400Response('invalid retention'))
-
-      const { updateRetention } = await import('./api')
-      await expect(updateRetention({ session_days: -1 })).rejects.toThrow('400')
-    })
-  })
-
-  // ── triggerRetentionSweep ─────────────────────────────────────────────────
-
-  describe('triggerRetentionSweep', () => {
-    it('POST /api/v1/security/retention/sweep — sends CSRF', async () => {
-      fetchSpy.mockResolvedValueOnce(makeOkResponse({ removed: 5 }))
-
-      const { triggerRetentionSweep } = await import('./api')
-      const result = await triggerRetentionSweep()
-
-      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/v1/security/retention/sweep')
-      expect((init.method ?? '').toUpperCase()).toBe('POST')
-      const headers = new Headers(init.headers as HeadersInit)
-      expect(headers.get('X-CSRF-Token')).toBe('test-csrf-token')
-      expect(result.removed).toBe(5)
-    })
-
-    it('throws typed error on 400', async () => {
-      fetchSpy.mockResolvedValueOnce(make400Response('sweep failed'))
-
-      const { triggerRetentionSweep } = await import('./api')
-      await expect(triggerRetentionSweep()).rejects.toThrow('400')
     })
   })
 
@@ -588,33 +395,6 @@ describe('Security API helpers', () => {
     })
   })
 
-  // ── retentionMode helper ────────────────────────────────────────────────────
-  describe('retentionMode', () => {
-    it('returns "default" when session_days is 0 and disabled is false', async () => {
-      const { retentionMode } = await import('./api')
-      expect(retentionMode({ session_days: 0, disabled: false })).toBe('default')
-    })
-
-    it('returns "default" when both fields are absent', async () => {
-      const { retentionMode } = await import('./api')
-      expect(retentionMode({})).toBe('default')
-    })
-
-    it('returns "custom" when session_days > 0 and disabled is false', async () => {
-      const { retentionMode } = await import('./api')
-      expect(retentionMode({ session_days: 30, disabled: false })).toBe('custom')
-    })
-
-    it('returns "forever" when disabled is true', async () => {
-      const { retentionMode } = await import('./api')
-      expect(retentionMode({ session_days: 0, disabled: true })).toBe('forever')
-    })
-
-    it('returns "forever" when disabled is true even with session_days > 0 (disabled takes precedence)', async () => {
-      const { retentionMode } = await import('./api')
-      expect(retentionMode({ session_days: 99, disabled: true })).toBe('forever')
-    })
-  })
 })
 
 // ── F-34 — isPreviewListenerEnabled accessor ───────────────────────────────────

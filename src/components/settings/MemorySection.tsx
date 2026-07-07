@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Brain, ArrowUp, ArrowDown, X, Warning } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { ModelSelector } from '@/components/ui/model-selector'
-import { fetchMemorySettings, updateMemorySettings, fetchProviders, isApiError } from '@/lib/api'
+import { fetchMemorySettings, updateMemorySettings, fetchProviders, getErrorMessage } from '@/lib/api'
 import type { MemorySettings, FallbackModel } from '@/lib/api'
 import { useModelToProvider } from '@/lib/agents/modelToProvider'
 import { useUiStore } from '@/store/ui'
@@ -189,7 +189,7 @@ export function MemorySection(): React.ReactElement {
     },
     onError: (err: Error) => {
       setSaveState('error')
-      const msg = isApiError(err) ? err.userMessage : err.message
+      const msg = getErrorMessage(err, 'Save failed')
       setErrorMessage(msg)
       addToast({ message: msg, variant: 'error' })
     },

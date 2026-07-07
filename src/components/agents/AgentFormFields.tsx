@@ -32,8 +32,12 @@ export interface BehaviorFieldsProps {
   setSoul?: (next: string) => void
   /**
    * Per-agent persona voice identifier (e.g. TTS voice name or voice model ID).
-   * Schema-pinned; not active until v0.2.0 TTS. Optional in both tiers — empty
-   * string means "no voice configured" (the wire field is omitted).
+   * The picker itself (`VoiceProviderSub`, rendered below) is live today — it
+   * queries the configured voice provider and lets the operator select or type
+   * a voice value, which is persisted on the agent. Only downstream TTS
+   * *playback* (the agent actually speaking with this voice) is deferred to
+   * v0.2.0. Optional in both tiers — empty string means "no voice configured"
+   * (the wire field is omitted).
    * W6-B4 / G1: this field has been on the wire for a while but had no UI.
    */
   voice: string

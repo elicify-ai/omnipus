@@ -58,7 +58,7 @@ import {
   fetchBuiltinTools,
   fetchGlobalToolPolicies,
   updateGlobalToolPolicies,
-  isApiError,
+  getErrorMessage,
 } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { DiagnosticsSection } from './DiagnosticsSection'
@@ -283,7 +283,7 @@ export function SecuritySection() {
     },
     onError: (err: unknown) => {
       if (isReAuthCancelled(err)) return // user dismissed the password prompt — no-op, not an error
-      addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Save failed', variant: 'error' })
+      addToast({ message: getErrorMessage(err, 'Save failed'), variant: 'error' })
     },
   })
 
@@ -296,7 +296,7 @@ export function SecuritySection() {
     },
     onError: (err: unknown) => {
       if (isReAuthCancelled(err)) return // user dismissed the password prompt — no-op, not an error
-      addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Delete failed', variant: 'error' })
+      addToast({ message: getErrorMessage(err, 'Delete failed'), variant: 'error' })
     },
   })
 
@@ -309,7 +309,7 @@ export function SecuritySection() {
     },
     onError: (err: unknown) => {
       if (isReAuthCancelled(err)) return
-      addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Rotation failed', variant: 'error' })
+      addToast({ message: getErrorMessage(err, 'Rotation failed'), variant: 'error' })
     },
   })
 
