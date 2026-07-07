@@ -303,6 +303,52 @@ func TestWSHandlerMessageMediaThreadedToBus(t *testing.T) {
 	}
 }
 
+// TestWSHandlerMessageMediaOnly_NotDropped verifies that a message frame with
+// empty Content but a real Media attachment (e.g. an image or file sent with
+// no caption) is NOT silently dropped. Regression test for the guard at
+// pkg/gateway/websocket.go's message-frame case: `if f.Content == ""` was
+// fixed to `if f.Content == "" && len(f.Media) == 0` so a media-only message
+// still threads through to the bus/agent loop instead of being discarded.
+// BDD: Given an active, authenticated WebSocket connection,
+// When the client sends {"type":"message","content":"","media":["media://abc123"]},
+// Then the message still reaches the bus with the media ref intact.
+func TestWSHandlerMessageMediaOnly_NotDropped(t *testing.T) {
+	handler, msgBus, _ := newTestWSHandler(t)
+	t.Cleanup(handler.Wait)
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	conn := dialTestWS(t, srv)
+	t.Cleanup(func() { _ = conn.Close() })
+	sendWSAuthFrameDevMode(t, conn)
+
+	received := make(chan bus.InboundMessage, 1)
+	go func() {
+		select {
+		case msg := <-msgBus.InboundChan():
+			received <- msg
+		case <-time.After(3 * time.Second):
+		}
+	}()
+
+	msgFrame := wsClientFrameTestHelper{
+		Type:    "message",
+		Content: "",
+		Media:   []string{"media://abc123"},
+	}
+	msgData, _ := json.Marshal(msgFrame)
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, msgData))
+
+	select {
+	case msg := <-received:
+		assert.Equal(t, "", msg.Content)
+		require.Equal(t, []string{"media://abc123"}, msg.Media,
+			"a media-only message (empty content) must still thread its media ref to the bus")
+	case <-time.After(3 * time.Second):
+		t.Fatal("media-only message was silently dropped instead of reaching the bus within 3 seconds")
+	}
+}
+
 // TestWSHandlerMessageMediaBogusRef_IncreasesDropCount verifies that a
 // non-media:// ref in the message frame's "media" array increments the
 // inbound dropped counter (observable metric) and does NOT reach the bus.

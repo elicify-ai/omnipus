@@ -1,9 +1,13 @@
 // Package sandbox — BuildDevURL: shared helper for constructing absolute
 // /preview/<agentID>/<token>/ preview URLs for dev-mode registrations.
 //
-// Originally lifted from the now-removed pkg/tools/run_in_workspace.go so
-// that both web_serve dev mode and bash's background-session mode (ADR-036
-// merged the former workspace.shell_bg into bash) use the same URL
+// Originally lifted from the now-removed pkg/tools/run_in_workspace.go, the
+// predecessor of the former workspace_shell_bg tool. When workspace_shell_bg
+// was merged into "bash" (ADR-036 unified the retired
+// "exec"/"workspace_shell"/"workspace_shell_bg" tools into it), its
+// port-exposure/preview-URL capability was dropped, not ported (ADR-036
+// §3.1) — bash's background-session mode has no preview URL and does not
+// use this helper. web_serve dev mode is the only mode that uses this URL
 // construction logic.
 //
 // Scheme coercion rule: if gatewayHost does not contain "://" it is treated
@@ -28,14 +32,15 @@ var devURLSchemeWarnOnce sync.Once
 // using gatewayHost as the origin. When gatewayHost is empty, returns just
 // the path (test wiring).
 //
-// Note: web_serve dev mode overrides the result to emit /preview/ URLs.
-// bash's background-session mode (formerly workspace.shell_bg, ADR-036)
-// still uses the /dev/ form directly (back-compat shim on the preview
-// listener resolves both paths).
+// Note: web_serve dev mode is the only consumer, and it overrides the
+// result to emit /preview/ URLs instead of the raw /dev/ form. bash's
+// background-session mode ("bash" — ADR-036 unified the retired
+// "exec"/"workspace_shell"/"workspace_shell_bg" tools into it) does not call
+// this helper: the equivalent preview-URL capability was dropped, not
+// ported, when workspace_shell_bg was merged (ADR-036 §3.1).
 //
-// gatewayHost examples accepted (results shown in the workspace.shell_bg
-// /dev/ form now emitted by bash's background-session mode; web_serve dev
-// mode substitutes /preview/):
+// gatewayHost examples accepted (raw /dev/ form shown; web_serve dev mode
+// substitutes /preview/ before returning the URL to the caller):
 //   - ""                       → "/dev/agent/token/"
 //   - "127.0.0.1:5001"         → "https://127.0.0.1:5001/dev/agent/token/"
 //   - "https://example.com"    → "https://example.com/dev/agent/token/"

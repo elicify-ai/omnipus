@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -2321,6 +2322,7 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 									"panic":   r,
 									"channel": msg.Channel,
 									"chat_id": msg.ChatID,
+									"stack":   string(debug.Stack()),
 								})
 						}
 					}()
@@ -2342,13 +2344,48 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 					// exactly as before this fix.
 					defer func() {
 						if r := recover(); r != nil {
+							// Log the ORIGINAL panic (with stack) BEFORE attempting the
+							// force-publish below. If publishResponseIfNeeded (or anything
+							// else in this block) itself panics, that new panic — not this
+							// log call — is what would otherwise reach the outer recover's
+							// log line, silently discarding the true root cause (the real
+							// panic from processMessage) behind a confusing secondary
+							// symptom. Logging first guarantees the root cause is always
+							// on record, no matter what happens next.
+							logger.ErrorCF("agent", "Panic in processMessage — emitting terminal error frame",
+								map[string]any{
+									"panic":   r,
+									"channel": msg.Channel,
+									"chat_id": msg.ChatID,
+									"stack":   string(debug.Stack()),
+								})
 							if response == "" {
 								response = "Error processing message: the agent turn failed unexpectedly. Please try again."
 							}
 							if !published {
-								termCtx, termCancel := context.WithTimeout(context.Background(), 5*time.Second)
-								al.publishResponseIfNeeded(termCtx, ag, msg.Channel, msg.ChatID, response)
-								termCancel()
+								// Isolate the force-publish in its own recover so a panic
+								// here (e.g. a bug in al.bus / publishResponseIfNeeded)
+								// cannot prevent the panic(r) re-throw below — the outer
+								// recover must always see the ORIGINAL panic value r, never
+								// a secondary symptom from this publish attempt.
+								func() {
+									defer func() {
+										if pr := recover(); pr != nil {
+											logger.ErrorCF(
+												"agent",
+												"Panic while force-publishing terminal frame for unroutable-message panic",
+												map[string]any{
+													"panic":   pr,
+													"channel": msg.Channel,
+													"chat_id": msg.ChatID,
+												},
+											)
+										}
+									}()
+									termCtx, termCancel := context.WithTimeout(context.Background(), 5*time.Second)
+									defer termCancel()
+									al.publishResponseIfNeeded(termCtx, ag, msg.Channel, msg.ChatID, response)
+								}()
 								published = true
 							}
 							panic(r)

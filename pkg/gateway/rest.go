@@ -3632,6 +3632,27 @@ func (a *restAPI) resolveCredentialRef(ref string) (string, error) {
 	return value, nil
 }
 
+// describeCredentialResolutionError classifies a resolveCredentialRef failure into
+// an operator-facing message with the CORRECT remediation advice. fmt.Errorf's %w
+// already preserves errors.As-compatibility through the wrap in resolveCredentialRef
+// above — the bug this helper fixes is that callers never called errors.As and instead
+// treated every non-nil error identically.
+//
+// Two semantically distinct causes exist:
+//   - *credentials.NotFoundError: the ref itself is not in the store (stale/deleted
+//     credential, a hand-edited config with a typo'd ref, …). Unlocking the vault
+//     changes nothing here — the correct advice is to re-enter the API key.
+//   - anything else (locked store, decrypt/auth failure, …): the vault genuinely
+//     could not be read. This is transient — unlock and retry IS correct advice.
+func describeCredentialResolutionError(err error) string {
+	var notFound *credentials.NotFoundError
+	if errors.As(err, &notFound) {
+		return "the configured credential reference no longer exists — re-enter the API key."
+	}
+	return "API key is configured but the credential vault could not be read " +
+		"(store locked or undecryptable) — unlock and retry."
+}
+
 // storeCredential stores an API key in the encrypted credentials store and
 // returns the credential reference name. Returns an error if the store is locked
 // or unavailable — never falls back to plaintext (SEC-23).
@@ -5594,11 +5615,13 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 		var resolvedAPIKey string
 		var firstModel string
 		var configuredAPIBase string
-		// keyConfiguredButUnreadable is true when the provider entry references an
-		// API key (api_key_ref) that the credential vault could NOT resolve (store
-		// locked / decrypt error). This is distinct from "no key configured" and
-		// must surface a different, actionable message (fix #5).
-		keyConfiguredButUnreadable := false
+		// credResolveErr captures a resolveCredentialRef failure when the provider
+		// entry references an api_key_ref that the credential vault could NOT
+		// resolve. This is distinct from "no key configured" and must surface a
+		// different, actionable message that depends on WHY resolution failed —
+		// see describeCredentialResolutionError (fix #5, hardened to distinguish
+		// "ref not found" from "vault locked/undecryptable").
+		var credResolveErr error
 		for _, entry := range providerList {
 			modelMap, ok := entry.(map[string]any)
 			if !ok {
@@ -5623,18 +5646,19 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 				}
 				if resolvedAPIKey == "" && apiKeyRef != "" {
 					if v, err := a.resolveCredentialRef(apiKeyRef); err != nil {
-						// A ref is present but the vault could not be read — do NOT
-						// fall through to "no API key configured" (misleading).
+						// A ref is present but could not be resolved — do NOT fall
+						// through to "no API key configured" (misleading). The exact
+						// remediation depends on WHY it failed; see
+						// describeCredentialResolutionError below.
 						slog.Warn("rest: provider test: credential store error", "ref", apiKeyRef, "error", err)
-						keyConfiguredButUnreadable = true
+						credResolveErr = err
 					} else {
 						resolvedAPIKey = v
 					}
 				}
 				if resolvedAPIKey == "" {
-					if keyConfiguredButUnreadable {
-						errMsg := "API key is configured but the credential vault could not be read " +
-							"(store locked or undecryptable) — unlock and retry."
+					if credResolveErr != nil {
+						errMsg := describeCredentialResolutionError(credResolveErr)
 						jsonOK(w, gen.OperationResult{Success: false, Error: &errMsg})
 						return
 					}
@@ -5783,12 +5807,13 @@ func (a *restAPI) refreshProviderModels(w http.ResponseWriter, r *http.Request, 
 		apiKey      string
 		userModels  []string
 		defaultName string
-		// keyConfiguredButUnreadable is true when the provider entry references an
-		// API key (api_key_ref) that the credential vault could NOT resolve (store
-		// locked / decrypt error). This is distinct from "no key configured" and
-		// must surface a different, actionable message — same distinction
-		// HandleProviders' test sub-path makes (~rest.go:5573-5619).
-		keyConfiguredButUnreadable bool
+		// credResolveErr captures a resolveCredentialRef failure when the provider
+		// entry references an api_key_ref that the credential vault could NOT
+		// resolve. This is distinct from "no key configured" and must surface a
+		// different, actionable message that depends on WHY resolution failed —
+		// see describeCredentialResolutionError, same distinction HandleProviders'
+		// test sub-path makes (~rest.go:5618).
+		credResolveErr error
 	)
 	for _, m := range cfg.Providers {
 		if m.IsVirtual() {
@@ -5808,10 +5833,12 @@ func (a *restAPI) refreshProviderModels(w http.ResponseWriter, r *http.Request, 
 			resolved := m.APIKey()
 			if resolved == "" && m.APIKeyRef != "" {
 				if v, err := a.resolveCredentialRef(m.APIKeyRef); err != nil {
-					// A ref is present but the vault could not be read — do NOT
-					// fall through to "no API key configured" (misleading).
+					// A ref is present but could not be resolved — do NOT fall
+					// through to "no API key configured" (misleading). The exact
+					// remediation depends on WHY it failed; see
+					// describeCredentialResolutionError below.
 					slog.Warn("rest: refresh-models: credential resolve failed", "ref", m.APIKeyRef, "error", err)
-					keyConfiguredButUnreadable = true
+					credResolveErr = err
 				} else {
 					resolved = v
 				}
@@ -5834,10 +5861,8 @@ func (a *restAPI) refreshProviderModels(w http.ResponseWriter, r *http.Request, 
 	var warning string
 	if hasEndpoint {
 		if apiKey == "" {
-			if keyConfiguredButUnreadable {
-				jsonErr(w, http.StatusUnprocessableEntity,
-					"API key is configured but the credential vault could not be read "+
-						"(store locked or undecryptable) — unlock and retry.")
+			if credResolveErr != nil {
+				jsonErr(w, http.StatusUnprocessableEntity, describeCredentialResolutionError(credResolveErr))
 				return
 			}
 			jsonErr(w, http.StatusUnprocessableEntity, "no API key configured for this provider")
@@ -8161,6 +8186,24 @@ func (a *restAPI) configureChannel(w http.ResponseWriter, r *http.Request, chann
 	// fields, so it MUST leave an audit trail even on the happy path.
 	// updates' keys (never values) are logged — secrets have already been
 	// stripped and replaced with *_ref entries by Phase C above.
+	//
+	// Cross-cutting interaction (intentional, fail-closed tradeoff — see the
+	// matching note in pkg/gateway/gateway.go's executeReload, next to
+	// "Cross-cutting interaction"): the safeUpdateConfigJSON write above
+	// triggers an async config reload via the file-watcher (HotReload
+	// defaults to true, pkg/config/defaults.go). executeReload's credential
+	// check runs against ALL enabled channels, not just this one, so this
+	// DecisionAllow audit entry (recorded because THIS handler's own write
+	// succeeded) can be followed moments later by executeReload rejecting
+	// the reload — and rolling back this channel's newly-saved config in
+	// memory — because a DIFFERENT, unrelated enabled channel's credential
+	// ref fails to resolve. There is no correlation ID between this audit
+	// entry and that later rejection. This is desired behavior (fail closed
+	// rather than silently run a channel with a broken credential), not a
+	// bug: an operator who wants to know whether their save actually "stuck"
+	// checks GET /health's reloadDegraded-driven 503 (surfaces
+	// runningServices.reloadError) alongside the gateway logs, not this
+	// audit event alone.
 	if a.auditor != nil {
 		decision := audit.DecisionAllow
 		if credentialCleanupFailed {
@@ -8175,10 +8218,10 @@ func (a *restAPI) configureChannel(w http.ResponseWriter, r *http.Request, chann
 			Event:    audit.EventChannelInstanceConfigured,
 			Decision: decision,
 			Details: map[string]any{
-				"channel_id":                channelID,
-				"type":                      chBaseType,
-				"fields":                    touchedFields,
-				"credential_cleanup_failed": credentialCleanupFailed,
+				"channel_id":     channelID,
+				"type":           chBaseType,
+				"fields":         touchedFields,
+				"cleanup_failed": credentialCleanupFailed,
 			},
 		})
 	}

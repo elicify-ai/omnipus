@@ -269,8 +269,9 @@ type SessionSummarizePayload struct {
 	// retries) and the result is a crude fallback — either per-batch
 	// truncation (summarizeBatch) or, for multi-part summaries, a raw
 	// concatenation of the two part-summaries instead of an LLM merge.
-	// Downstream consumers (logs, UI) use this to distinguish a real
-	// summary from a degraded fallback.
+	// Downstream consumers (logs today; a future UI surface could read this
+	// field, but none exists yet) use this to distinguish a real summary
+	// from a degraded fallback.
 	Degraded bool
 }
 

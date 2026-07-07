@@ -1,12 +1,16 @@
 // Package sandbox — SpawnBackgroundChild: shared helper for long-running
 // background processes (dev servers) that must run under sandbox hardening.
 //
-// Used by web_serve (dev mode) and bash's background-session mode (ADR-036
-// merged the former workspace.shell_bg into bash) to spawn child processes
-// through the sandbox's hardened-exec path. The two callers share the same
-// spawn+harden sequence so kernel restrictions (Landlock, seccomp,
-// no-new-privs) apply consistently regardless of which tool started the
-// child.
+// Used by web_serve (dev mode) to spawn its dev-server child process through
+// the sandbox's hardened-exec path. bash's background-session mode ("bash"
+// — ADR-036 unified the retired "exec"/"workspace_shell"/"workspace_shell_bg"
+// tools into it) does NOT call this helper: its runBackground path
+// (pkg/tools/shell.go) builds its own *exec.Cmd and calls
+// ApplyChildHardening / StartLocked directly rather than going through
+// SpawnBackgroundChild. Both paths apply the same underlying hardening
+// primitives, so kernel restrictions (Landlock, seccomp, no-new-privs) apply
+// consistently regardless of which tool started the child — but
+// SpawnBackgroundChild itself is web_serve-only.
 //
 // Callers are responsible for:
 //   - Waiting on the returned *exec.Cmd (via a goroutine) so the zombie

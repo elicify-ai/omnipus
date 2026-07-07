@@ -1,6 +1,10 @@
 // Package sandbox — hardened-exec child wrapper for Tier 2 (build_static)
-// and Tier 3 (web_serve dev mode + bash's background-session mode, ADR-036
-// merge of the former workspace.shell_bg) tools.
+// and Tier 3 (web_serve dev mode) tools, plus "bash" (ADR-036 unified the
+// retired "exec"/"workspace_shell"/"workspace_shell_bg" tools into it).
+// bash's background-session mode shares the same ApplyChildHardening /
+// StartLocked spawn path as Tier 2/3, but it is NOT itself "Tier 3" — it has
+// no dev-server port-exposure or preview-URL capability (that capability was
+// dropped, not ported, when workspace_shell_bg was merged; ADR-036 §3.1).
 //
 // Cross-platform contract — what each platform's applyPlatformHardening /
 // applyPostStartHardening actually does:
@@ -31,8 +35,9 @@
 // reliably inherits the kernel sandbox. Callers that build their own *exec.Cmd
 // and use ApplyChildHardening directly (instead of Run/StartLocked) do NOT get
 // that per-thread re-apply and must perform the spawn on an already-restricted
-// thread themselves (bash's background-session path, formerly workspace.shell_bg,
-// routes through StartLocked for exactly this reason). On older kernels,
+// thread themselves (bash's background-session path routes through StartLocked
+// for exactly this reason; "bash" is ADR-036's unification of the retired
+// "exec"/"workspace_shell"/"workspace_shell_bg" tools). On older kernels,
 // non-Linux platforms, and sandbox mode "off", there is no Landlock/seccomp
 // domain to inherit at all.
 //

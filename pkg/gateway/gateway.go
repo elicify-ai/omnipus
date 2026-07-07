@@ -26,6 +26,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	runtimedebug "runtime/debug"
 	"strconv"
@@ -284,26 +285,49 @@ func buildEnabledRefMap(cfg *config.Config) map[string]bool {
 	return m
 }
 
-// enabledRefFromBundleError attempts to attribute a non-NotFoundError credential
-// bundle resolution error (wrong master key, corrupted store entry, decrypt
-// failure, ...) to one of the currently-enabled channel refs in enabledRefs.
+// resolveAllRefPattern extracts the credential ref name that
+// credentials.ResolveAll embeds in every per-ref resolution error:
+// `fmt.Errorf("ResolveAll: credential %q: %w", ref, err)`. The capture group
+// is the full Go-quoted (%q) literal, including its surrounding double
+// quotes and any backslash escapes — decoded via strconv.Unquote below so a
+// ref name containing a quote or backslash (however unlikely) round-trips
+// correctly instead of truncating the match early.
+var resolveAllRefPattern = regexp.MustCompile(`credential ("(?:[^"\\]|\\.)*"):`)
+
+// enabledRefFromBundleError attributes a non-NotFoundError credential bundle
+// resolution error (wrong master key, corrupted store entry, decrypt
+// failure, ...) to the currently-enabled channel ref in enabledRefs.
 //
-// credentials.ResolveAll wraps every per-ref failure as
-// `fmt.Errorf("ResolveAll: credential %q: %w", ref, err)`, so the ref name is
-// always present verbatim (quoted) in err.Error(). Matching by substring lets
-// both bootCredentials and executeReload distinguish "an enabled channel's
-// secret is broken" (escalate) from "some other ref — a provider key, or a
-// disabled channel's ref — failed to resolve" (Warn is sufficient, as today).
+// This parses the ref name directly out of ResolveAll's wrap format via
+// resolveAllRefPattern instead of doing a Contains-loop over every enabled
+// ref. The Contains-loop approach was ambiguous: if two enabled refs are
+// substrings of each other's names (e.g. "sec" and "my_secret_token", both
+// enabled), a failure on "my_secret_token" could match "sec" first — Go map
+// iteration order is randomized, so the misattribution was nondeterministic
+// across runs. The escalation path (fatal boot / rejected reload) still
+// fired correctly either way — this was a misdirection bug for the operator
+// reading the error, not a missed-detection bug. Parsing the exact ref out
+// of the error message removes the ambiguity entirely: there is exactly one
+// ref embedded in the message, and we look it up in enabledRefs rather than
+// searching enabledRefs for a substring match against the message.
 //
-// Returns ("", false) when no enabled ref matches.
+// Returns ("", false) when the error doesn't match ResolveAll's wrap format,
+// or when the parsed ref is not present in enabledRefs (e.g. it belongs to a
+// disabled channel or a provider key — Warn is sufficient for those, as
+// today).
 func enabledRefFromBundleError(err error, enabledRefs map[string]bool) (string, bool) {
-	msg := err.Error()
-	for ref := range enabledRefs {
-		if ref != "" && strings.Contains(msg, ref) {
-			return ref, true
-		}
+	match := resolveAllRefPattern.FindStringSubmatch(err.Error())
+	if match == nil {
+		return "", false
 	}
-	return "", false
+	ref, unquoteErr := strconv.Unquote(match[1])
+	if unquoteErr != nil {
+		return "", false
+	}
+	if !enabledRefs[ref] {
+		return "", false
+	}
+	return ref, true
 }
 
 // bootCredentials runs the canonical credential + config boot sequence and
@@ -1509,6 +1533,30 @@ func executeReload(
 		// check here (unlike boot's equivalent NotFoundError-on-enabled fatal
 		// branch) would let a reload silently break an enabled channel's
 		// credentials while reporting success.
+		//
+		// Cross-cutting interaction (intentional, fail-closed tradeoff — see
+		// the matching note on rest.go's configureChannel audit block): this
+		// check is global, not scoped to whatever channel triggered this
+		// reload. Config writes default to HotReload=true
+		// (pkg/config/defaults.go), so ANY config.json write — including an
+		// unrelated configureChannel call that only touched a different
+		// channel — runs this same all-enabled-channels credential check via
+		// the file-watcher. That means a configureChannel request can be
+		// audited as DecisionAllow (its own write succeeded) and 200 OK to
+		// the caller, and then have its effect asynchronously rolled back
+		// moments later by markDegraded below because SOME OTHER enabled
+		// channel's pre-existing credential ref fails to resolve — not the
+		// channel the caller just configured. This is deliberate: we fail
+		// closed rather than silently run an enabled channel with a broken
+		// credential. There is no correlation ID linking the earlier audit
+		// entry to this later rejection; an operator discovers it via
+		// reloadDegraded surfaced on GET /health (503, "reason": "config
+		// reload failed: …") and the "config reload failed — rolling back to
+		// previous in-memory state" / "reload rejected: enabled channel
+		// credential …" slog.Error lines emitted by markDegraded and the
+		// branches below. Making rejection scoped to only the
+		// just-edited channel would be a structural change to
+		// reload-rejection scoping and is out of scope for this hotfix pass.
 		enabledRefs := buildEnabledRefMap(newCfg)
 		newBundle, bundleErrs := credentials.ResolveBundle(newCfg, cs)
 		for _, e := range bundleErrs {

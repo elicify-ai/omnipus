@@ -52,10 +52,10 @@ Field reference (defaults applied by the boot validator when the field is omitte
 | `egress_allow_list` | `["registry.npmjs.org", "github.com", "raw.githubusercontent.com"]` | Host allow-list for the egress proxy used by Tier 2/Tier 3 children. |
 | `max_concurrent_dev_servers` | `4` | Tier 3 `web_serve` dev-mode cap across all agents (`pkg/config/sandbox.go:233`). |
 | `max_concurrent_builds` | `2` | Tier 2 `build_static` cap (`pkg/config/sandbox.go:237`). |
-| `dev_server_port_range` | `[18000, 18999]` | Inclusive port range for Tier 3 dev servers and `bash`'s background-session mode (ADR-036 merged the former `workspace.shell_bg` into `bash`). Also feeds the Landlock bind/connect allow-list on ABI v4+. |
+| `dev_server_port_range` | `[18000, 18999]` | Inclusive port range for Tier 3 (`web_serve` dev-mode) dev servers only. `bash` (ADR-036 unified the retired `exec`/`workspace_shell`/`workspace_shell_bg` tools into it) has no port-exposure capability — that capability was dropped, not ported, when `workspace_shell_bg` was merged (ADR-036 §3.1). Also feeds the Landlock bind/connect allow-list on ABI v4+. |
 | `browser_evaluate_enabled` | `false` | Gates `browser.evaluate` (arbitrary JS execution). |
 
-Note: there is no `experimental.workspace_shell_enabled` feature flag. `bash` (ADR-036's merge of the former `exec`/`workspace_shell`/`workspace_shell_bg`) is registered for every agent regardless of sandbox mode and is governed exclusively by each agent's explicit tool-policy entry (CLAUDE.md hard constraint 6) — set the `bash` policy to `deny` or `ask` per agent to restrict it, there is no global gate to flip.
+Note: there is no `experimental.workspace_shell_enabled` feature flag. `bash` (ADR-036 unified the retired `exec`/`workspace_shell`/`workspace_shell_bg` tools into it) is registered for every agent regardless of sandbox mode and is governed exclusively by each agent's explicit tool-policy entry (CLAUDE.md hard constraint 6) — set the `bash` policy to `deny` or `ask` per agent to restrict it, there is no global gate to flip.
 
 ## Modes
 

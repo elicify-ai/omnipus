@@ -175,15 +175,19 @@ type OmnipusSandboxConfig struct {
 	MaxConcurrentBuilds int32 `json:"max_concurrent_builds,omitempty"`
 
 	// DevServerPortRange is the [min, max] inclusive port range for Tier 3
-	// (web_serve dev mode and bash's background-session mode — ADR-036 merged
-	// exec/workspace_shell/workspace_shell_bg into "bash"). Default [18000, 18999]
-	// applied by the boot validator when the field is zero.
+	// (web_serve dev mode only). bash's background-session mode ("bash" —
+	// ADR-036 unified the retired "exec"/"workspace_shell"/"workspace_shell_bg"
+	// tools into it) has no port-exposure capability — that capability was
+	// dropped, not ported, when workspace_shell_bg was merged (ADR-036 §3.1).
+	// Default [18000, 18999] applied by the boot validator when the field is
+	// zero.
 	DevServerPortRange PortRange `json:"dev_server_port_range,omitempty"`
 
 	// EgressAllowList is the operator-controlled host allow-list for the
 	// egress proxy used by Tier 2 (build_static) and Tier 3 (web_serve dev
-	// mode and bash's background-session mode, formerly workspace_shell_bg —
-	// ADR-036) child processes. Entries may be exact
+	// mode) child processes, plus "bash" (ADR-036 unified the retired
+	// "exec"/"workspace_shell"/"workspace_shell_bg" tools into it) for its
+	// background-session mode's proxied egress. Entries may be exact
 	// hostnames or "*.x" wildcard patterns. Default: ["registry.npmjs.org",
 	// "github.com", "raw.githubusercontent.com"] applied by the boot
 	// validator when empty.
@@ -241,15 +245,16 @@ type OmnipusSandboxConfig struct {
 	//     skills installer). Entries here are merged into the SSRFChecker's
 	//     allow-list at boot.
 	//
-	// Documented gap: a compiled binary spawned via bash (ADR-036 merged
-	// exec/workspace_shell/workspace_shell_bg into "bash") can still dial
-	// RFC1918 IPs on allowed ports (e.g. https://192.168.1.1/) because
-	// kernel enforcement is port-only. CIDR-level enforcement for compiled
-	// children would require eBPF cgroup CGROUP_INET4_CONNECT, deferred to a
-	// later release. Operators concerned about this gap should keep bash's
-	// tool-policy set to "deny" or "ask" (CLAUDE.md hard constraint 6 — bash
-	// has no feature-flag gate, only an explicit per-agent tool-policy entry)
-	// on agents that handle untrusted content.
+	// Documented gap: a compiled binary spawned via "bash" (ADR-036 unified
+	// the retired "exec"/"workspace_shell"/"workspace_shell_bg" tools into
+	// it) can still dial RFC1918 IPs on allowed ports (e.g.
+	// https://192.168.1.1/) because kernel enforcement is port-only.
+	// CIDR-level enforcement for compiled children would require eBPF cgroup
+	// CGROUP_INET4_CONNECT, deferred to a later release. Operators concerned
+	// about this gap should keep bash's tool-policy set to "deny" or "ask"
+	// (CLAUDE.md hard constraint 6 — bash has no feature-flag gate, only an
+	// explicit per-agent tool-policy entry) on agents that handle untrusted
+	// content.
 	//
 	// Empty list (the default) means strict-block of the default-deny set
 	// for code paths the gateway controls.
@@ -305,8 +310,8 @@ type OmnipusSandboxConfig struct {
 	//   - floors every agent's effective tool policy at "allow" (no prompts);
 	//   - forces the kernel sandbox off (full host fs + syscalls), network
 	//     egress open, and shell guard / deny-patterns off, regardless of the
-	//     fixed bash (ADR-036 merge of the former workspace_shell/
-	//     workspace_shell_bg) limits.
+	//     fixed "bash" (ADR-036 unified the retired
+	//     "exec"/"workspace_shell"/"workspace_shell_bg" tools into it) limits.
 	// Audit logging, the prompt-injection guard, and rate limiting are NOT
 	// disabled — those defend against external threats, not agent freedom.
 	//

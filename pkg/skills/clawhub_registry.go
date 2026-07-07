@@ -255,8 +255,9 @@ func (c *ClawHubRegistry) DownloadAndInstall(
 
 	// Step 1: Fetch metadata (with fallback).
 	// NOTE: when metadata is unavailable, hash verification is skipped and
-	// result.Verified stays false. Callers MUST enforce SkillTrustPolicy to
-	// decide whether to block or warn on unverified installs (SEC-09).
+	// result.Verified stays false. Callers MUST enforce config.SkillTrustLevel
+	// (wired via pkg/gateway/rest_skill_trust.go) to decide whether to block
+	// or warn on unverified installs (SEC-09).
 	result := &InstallResult{}
 	meta, err := c.GetSkillMeta(ctx, slug)
 	if err != nil {
