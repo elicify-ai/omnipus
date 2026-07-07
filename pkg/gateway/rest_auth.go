@@ -194,15 +194,75 @@ var (
 	cliValidateLimiter = newAPIRateLimiter(20, 1*time.Minute)
 )
 
-// clientIP extracts the client IP from the request, checking X-Forwarded-For first.
+// clientIP extracts the client IP from the request for rate-limiting and
+// audit-log purposes.
+//
+// SEC hardening: X-Forwarded-For is honored ONLY when the live config has
+// gateway.trust_xff enabled — mirrors canonicalRemoteIP's contract
+// (rest_preview_audit.go), which fixed the identical trust-XFF gap for
+// preview-serve audit logging (F-14). Before this fix, clientIP trusted
+// X-Forwarded-For unconditionally: on any deployment without a trusted
+// reverse proxy in front of it, an attacker could send a different spoofed
+// X-Forwarded-For value on every request to /api/v1/auth/login (or any
+// withRateLimit-wrapped endpoint) and receive a brand-new rate-limit bucket
+// each time, completely defeating globalLoginLimiter's brute-force
+// protection. gateway.trust_xff (config.GatewayConfig.TrustXFF) defaults to
+// false, so by default this function now ignores the header entirely and
+// keys on r.RemoteAddr instead, with the port stripped — also mirroring
+// canonicalRemoteIP, since keying on RemoteAddr's ephemeral port would let a
+// client that opens a fresh TCP connection per request evade rate limiting
+// even without touching any header.
+//
+// trustXFF is resolved from the request's context config snapshot, set by
+// configSnapshotMiddleware which wraps the entire HTTP handler chain before
+// mux dispatch (see the WrapHTTPHandler call in setupAndStartServices,
+// gateway.go). Every real security-deciding caller of clientIP —
+// withRateLimit, HandleLogin, cliValidateCallerKey/HandleSystemCliValidate —
+// runs after that point, so they always see a live snapshot in production.
+//
+// The one caller that runs earlier is the CSRF double-submit-cookie
+// middleware's mismatch reporter (wired in gateway.go), which executes
+// before configSnapshotMiddleware in the wrap order — that reporter uses
+// (*restAPI).clientIPWithLiveFallback instead of this bare function, since it
+// has receiver access to fall back to a live config read (mirroring
+// withOptionalAuth's pattern) rather than silently defaulting to
+// trustXFF=false. clientIP itself always defaults to false when no context
+// snapshot is present, which is correct (fail-closed) for every one of its
+// actual callers.
+//
+// Delegates to canonicalRemoteIP (rest_preview_audit.go) for the actual
+// extraction logic so the two IP-resolution helpers in this package cannot
+// drift apart.
 func clientIP(r *http.Request) string {
-	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-		if idx := strings.Index(fwd, ","); idx != -1 {
-			fwd = strings.TrimSpace(fwd[:idx])
-		}
-		return fwd
+	var trustXFF bool
+	if cfg := configFromContext(r.Context()); cfg != nil {
+		trustXFF = cfg.Gateway.TrustXFF
 	}
-	return r.RemoteAddr
+	return canonicalRemoteIP(r, trustXFF)
+}
+
+// clientIPWithLiveFallback resolves the client IP exactly like clientIP, but
+// for the one caller — the CSRF-mismatch audit reporter (gateway.go) — that
+// runs before configSnapshotMiddleware has injected a config snapshot into
+// the request context. Without this fallback, an operator who explicitly
+// configured gateway.trust_xff=true (a reverse-proxied deployment) would see
+// every csrf_mismatch audit entry's source_ip silently record the reverse
+// proxy's own address instead of the real client — not a security hole (the
+// request is already rejected by the time this runs), but a silent
+// degradation of the exact forensic signal SEC-15 exists to produce, in
+// precisely the topology where trust_xff matters. Falls back to a live
+// config read (mirroring withOptionalAuth's a.agentLoop.GetConfig() pattern)
+// so the real configured trust_xff setting is honored even pre-snapshot.
+func (a *restAPI) clientIPWithLiveFallback(r *http.Request) string {
+	if cfg := configFromContext(r.Context()); cfg != nil {
+		return canonicalRemoteIP(r, cfg.Gateway.TrustXFF)
+	}
+	if a.agentLoop != nil {
+		if liveCfg := a.agentLoop.GetConfig(); liveCfg != nil {
+			return canonicalRemoteIP(r, liveCfg.Gateway.TrustXFF)
+		}
+	}
+	return canonicalRemoteIP(r, false)
 }
 
 // withRateLimit wraps a handler with per-IP rate limiting. On limit exceeded,

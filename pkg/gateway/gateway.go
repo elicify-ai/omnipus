@@ -594,6 +594,84 @@ func repairAndValidateToolPolicyCoverage(cfg *config.Config) []config.CoverageGa
 	return config.ValidateToolPolicyCoverage(cfg, knownTools)
 }
 
+// egressProxyConstructor abstracts sandbox.NewEgressProxy so
+// buildEgressProxyOrAbort is unit-testable without depending on
+// sandbox.NewEgressProxy's real failure modes (a malformed allow-list entry,
+// or the practically-unforceable net.Listen("tcp", "127.0.0.1:0") error).
+// Production always passes sandbox.NewEgressProxy itself.
+type egressProxyConstructor func([]string, sandbox.EgressAuditFunc) (*sandbox.EgressProxy, error)
+
+// buildEgressProxyOrAbort constructs the Tier 2/3 egress proxy and decides
+// what a construction failure means, per CLAUDE.md hard constraint 6
+// (deny-by-default / fail-closed for security controls).
+//
+// Downstream, a nil *sandbox.EgressProxy is NOT a "feature refuses to run"
+// signal — it is silently interpreted as "run unrestricted":
+//   - pkg/tools/web_serve.go's (*WebServeTool).proxyAddr() returns "" for a
+//     nil proxy, so spawnDevChild's sandbox.Limits.EgressProxyAddr is "" and
+//     the Tier 3 dev-server child gets no HTTP_PROXY/HTTPS_PROXY at all.
+//   - pkg/tools/shell.go's sandboxLimitsEnv (~line 941-958) only injects
+//     HTTP_PROXY/HTTPS_PROXY when lim.EgressProxyAddr != "" — an empty addr
+//     means bash's hardened path runs with zero egress restriction.
+//
+// So: when the operator left sandbox.egress_allow_list EMPTY (never opted
+// into egress restriction), a construction failure is logged and swallowed
+// exactly as before — nil proxy, log-and-continue is the documented
+// graceful-degradation behavior for a feature nobody asked for.
+//
+// When the operator configured a NON-EMPTY sandbox.egress_allow_list
+// (explicit opt-in) and construction fails, continuing to boot would
+// silently run web_serve dev-mode and bash's egress-dependent path fully
+// unrestricted — the exact protection the operator asked for would vanish
+// with only a Warn-level log line. That is a strictly worse outcome than
+// refusing to start, so this mirrors the audit-logger-construction
+// precedent a few hundred lines up (RunContextWithOptions's
+// audit.LoggerConstructionError branch, ~line 723-741): wrap the error in
+// *SandboxBootError so cmd/omnipus's existing exit-code mapping
+// (EX_CONFIG=78, FR-J-004) applies without further plumbing, and emit the
+// same stderr breadcrumb via audit.EmitBootAbortStderr.
+func buildEgressProxyOrAbort(
+	allowList []string,
+	auditFn sandbox.EgressAuditFunc,
+	newProxy egressProxyConstructor,
+) (*sandbox.EgressProxy, error) {
+	proxy, err := newProxy(allowList, auditFn)
+	if err == nil {
+		return proxy, nil
+	}
+
+	if len(allowList) == 0 {
+		slog.Warn("gateway: egress proxy failed to start; web_serve dev mode will run without egress enforcement",
+			"error", err)
+		return nil, nil
+	}
+
+	audit.EmitBootAbortStderr(
+		"gateway.egress_proxy.construction_failed",
+		"-",
+		"",
+		err,
+		[]audit.KV{{Key: "allow_list_entries", Value: strconv.Itoa(len(allowList))}},
+	)
+	return nil, &SandboxBootError{Err: fmt.Errorf(
+		"gateway: egress proxy failed to start with sandbox.egress_allow_list configured (%d entr%s) — "+
+			"refusing to boot rather than silently running web_serve dev-mode and bash's hardened exec path "+
+			"WITHOUT the egress enforcement you configured; fix the allow-list entries or the underlying "+
+			"error and restart, or clear sandbox.egress_allow_list to accept unrestricted egress: %w",
+		len(allowList), pluralSuffix(len(allowList)), err,
+	)}
+}
+
+// pluralSuffix returns "y" for n == 1 ("entry") and "ies" otherwise
+// ("entries") — small formatting helper for buildEgressProxyOrAbort's error
+// message so it reads correctly for both singular and plural allow-lists.
+func pluralSuffix(n int) string {
+	if n == 1 {
+		return "y"
+	}
+	return "ies"
+}
+
 // RunContextWithOptions is the Sprint-J context-cancellable entry point.
 // RunContext is a thin wrapper that builds a legacy RunOptions and calls this.
 func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
@@ -1725,12 +1803,11 @@ func setupAndStartServices(
 		}
 	}
 
-	var egressProxy *sandbox.EgressProxy
-	if egressProx, epErr := sandbox.NewEgressProxy(cfg.Sandbox.EgressAllowList, egressAuditFn); epErr != nil {
-		slog.Warn("gateway: egress proxy failed to start; web_serve dev mode will run without egress enforcement",
-			"error", epErr)
-	} else {
-		egressProxy = egressProx
+	egressProxy, epErr := buildEgressProxyOrAbort(cfg.Sandbox.EgressAllowList, egressAuditFn, sandbox.NewEgressProxy)
+	if epErr != nil {
+		return nil, epErr
+	}
+	if egressProxy != nil {
 		runningServices.egressProxy = egressProxy
 	}
 
@@ -1967,7 +2044,13 @@ func setupAndStartServices(
 	// The net effect — state-changing requests without a valid cookie+header
 	// get rejected — is identical.
 	csrfMW := middleware.CSRFMiddleware(
-		middleware.WithClientIPFunc(clientIP),
+		// clientIPWithLiveFallback (not the bare clientIP) — this reporter runs
+		// before configSnapshotMiddleware injects a config snapshot (see the
+		// wrap-order comment below), so it needs the live-config fallback to
+		// honor an operator's real gateway.trust_xff setting in its audit log
+		// instead of silently defaulting to false. See clientIPWithLiveFallback's
+		// doc comment (rest_auth.go) for the full trace.
+		middleware.WithClientIPFunc(api.clientIPWithLiveFallback),
 		middleware.WithReporter(func(r *http.Request, sourceIP, route string) {
 			// Best-effort audit log of CSRF mismatches (SEC-15). Never blocks
 			// or crashes the request path — the middleware already returns 403.
