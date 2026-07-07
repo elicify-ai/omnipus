@@ -261,10 +261,15 @@ func (p *startupBlockedProvider) GetDefaultModel() string {
 // both of which call InjectFromConfig before ever consulting this map), so
 // they never need this map's separate escalation path.
 //
-// The non-channel categories mirror credentials.ResolveAll's nonChannelRefs
-// (pkg/credentials/inject.go) — that is the set of refs credentials.
-// ResolveBundle (== ResolveAll) can actually produce a resolution error for,
-// so this map must stay in sync with it or a corrupted ref there degrades to
+// The non-channel categories (voice, web-search tools, skill marketplaces)
+// mirror credentials.ResolveAll's nonChannelRefs slice (pkg/credentials/
+// inject.go). Mailbox refs are NOT part of that slice — ResolveAll resolves
+// cfg.Mailboxes via its own separate per-(agent,workspace) loop — but they
+// are still a category credentials.ResolveBundle (== ResolveAll) can
+// produce a resolution error for, so they are covered below too. Together,
+// nonChannelRefs + the mailbox loop + the channel *_ref fields above are the
+// full set of refs ResolveAll can fail to resolve; this map must stay in
+// sync with all of them or a corrupted ref anywhere in that set degrades to
 // a silent Warn again.
 func buildEnabledRefMap(cfg *config.Config) map[string]bool {
 	m := make(map[string]bool)
@@ -330,6 +335,23 @@ func buildEnabledRefMap(cfg *config.Config) map[string]bool {
 		}
 		for _, ref := range []string{mk.AuthTokenRef, mk.TokenRef} {
 			if ref != "" {
+				m[ref] = true
+			}
+		}
+	}
+	// Mailbox passwords (M11) — resolved by ResolveAll's own dedicated
+	// per-(agent,workspace) loop (pkg/credentials/inject.go), not part of
+	// nonChannelRefs. MailboxConfig.Enabled gates whether the owning agent's
+	// email tools are registered for that (agent, workspace) pair — mirror
+	// that as the "in use" signal here too, the same Enabled-gate pattern
+	// used for channels and skill marketplaces above (not the ref-presence-
+	// alone signal used for voice, which has no separate toggle).
+	for _, byWorkspace := range cfg.Mailboxes {
+		for _, mb := range byWorkspace {
+			if !mb.Enabled {
+				continue
+			}
+			if ref := mb.PasswordRef; ref != "" {
 				m[ref] = true
 			}
 		}

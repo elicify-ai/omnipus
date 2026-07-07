@@ -95,13 +95,16 @@ func (r *ChainResult) String() string {
 // Verify is a runtime self-check — it does not walk rotated files. Use
 // VerifyDir for a full directory walk including rotation history.
 //
-// Seed derivation: the current file's first entry is genesis-seeded ONLY
-// when it is the very first audit file ever written, or when retention has
+// Seed derivation: the current file's first entry is genesis-seeded when it
+// is the very first audit file ever written. When retention has instead
 // deleted every file that used to precede it (the chainCheckpoint case —
-// see checkpoint.go). In every other case — any rotation has ever happened
-// and the rotated-out file is still on disk — rotate() (audit.go) chains
-// the new file's first entry from the rotated-out file's last HMAC, not
-// genesis. Hardcoding GenesisSeed() here would therefore report a false
+// see checkpoint.go), the seed is checkpointOrGenesisSeed's result: the
+// checkpoint's FinalHMAC when a valid checkpoint exists for the new-oldest
+// survivor, falling back to GenesisSeed() only when no checkpoint exists or
+// it fails its integrity check. In every other case — any rotation has ever
+// happened and the rotated-out file is still on disk — rotate() (audit.go)
+// chains the new file's first entry from the rotated-out file's last HMAC,
+// not genesis. Hardcoding GenesisSeed() here would therefore report a false
 // "chain BROKEN" on any installation that has rotated at least once.
 // determineFileSeed reconstructs the correct seed from on-disk state alone
 // (see its doc comment) without turning this into a full directory walk.
@@ -393,11 +396,14 @@ func checkpointOrGenesisSeed(dir string, key []byte, oldestBase string) []byte {
 // job, not Verify()'s.
 //
 // rotate()'s own chain-preservation mechanism (audit.go) means a file's
-// first entry is genesis-seeded ONLY when it is the very first audit file
-// ever written, or when retention has deleted every file that used to
-// precede it (the chainCheckpoint case). In every other case — any
-// rotation has ever happened and the rotated-out file is still on disk —
-// the correct seed is that predecessor's own last recorded `hmac` field,
+// first entry is genesis-seeded only when it is the very first audit file
+// ever written. When retention has instead deleted every file that used to
+// precede it (the chainCheckpoint case), the seed is checkpointOrGenesisSeed's
+// result: the checkpoint's FinalHMAC when a valid checkpoint exists for the
+// new-oldest survivor, falling back to GenesisSeed() only when no checkpoint
+// exists or it fails its integrity check — see step 2 below. In every other
+// case — any rotation has ever happened and the rotated-out file is still on
+// disk — the correct seed is that predecessor's own last recorded `hmac` field,
 // exactly the value rotate() threads forward in memory as l.prevHMAC
 // within a single process. determineFileSeed reconstructs that same value
 // from on-disk state alone, so a fresh Verify() call (which has no access

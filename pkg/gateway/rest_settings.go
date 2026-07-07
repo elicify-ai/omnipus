@@ -571,9 +571,12 @@ func (a *restAPI) HandleClearSessions(w http.ResponseWriter, r *http.Request) {
 		}
 		totalRemoved += n
 	}
-	resp := map[string]any{"status": "cleared", "count": totalRemoved}
+	resp := gen.ClearAllSessionsResponse{
+		Status: gen.Cleared,
+		Count:  totalRemoved,
+	}
 	if len(warnings) > 0 {
-		resp["warnings"] = warnings
+		resp.Warnings = &warnings
 	}
 	jsonOK(w, resp)
 }

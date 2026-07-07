@@ -278,6 +278,14 @@ func TestHandleWorkspaces_CascadeDelete_RemovesMailboxes(t *testing.T) {
 
 	id := createWorkspaceViaAPI(t, api, "WithMailbox", "")
 
+	// Store both mailbox credentials BEFORE writing the config that
+	// references them: safeUpdateConfigJSON triggers refreshConfigAndRewireServices,
+	// which now resolves every enabled mailbox's password_ref and rejects the
+	// in-memory refresh if an enabled ref can't be resolved — so the
+	// credential must already exist in the store when the config write lands.
+	require.NoError(t, api.credStore.Set("mailbox_mia_"+id+"_password", "secret-mia"))
+	require.NoError(t, api.credStore.Set("mailbox_jim_ws_other_password", "secret-jim"))
+
 	// Seed two mailboxes directly in config.mailboxes: one bound to the
 	// workspace about to be deleted, one bound to an unrelated workspace ID
 	// (deliberately never created — the cascade must match by ID alone, not
@@ -299,8 +307,6 @@ func TestHandleWorkspaces_CascadeDelete_RemovesMailboxes(t *testing.T) {
 		}
 		return nil
 	}))
-	require.NoError(t, api.credStore.Set("mailbox_mia_"+id+"_password", "secret-mia"))
-	require.NoError(t, api.credStore.Set("mailbox_jim_ws_other_password", "secret-jim"))
 
 	// DELETE the workspace → 204.
 	wDel := httptest.NewRecorder()

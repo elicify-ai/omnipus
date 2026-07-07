@@ -206,6 +206,89 @@ func TestRefreshConfigAndRewireServices_RejectsOnMissingEnabledChannelCredential
 	assert.Same(t, baseCfg, al.GetConfig(), "in-memory config must not be swapped on rejection")
 }
 
+// TestRefreshConfigAndRewireServices_RejectsOnCorruptedEnabledMailboxCredential
+// pins the mailbox gap in buildEnabledRefMap: cfg.Mailboxes[agentID]
+// [workspaceID].PasswordRef is resolved by credentials.ResolveAll via its
+// own dedicated per-(agent,workspace) loop (pkg/credentials/inject.go) — NOT
+// part of the nonChannelRefs slice — so buildEnabledRefMap omitted mailbox
+// refs entirely despite its doc comment's (factually wrong) claim to mirror
+// everything ResolveAll's nonChannelRefs can error on.
+//
+// bootCredentials and executeReload happened to be masked from this gap by
+// their own unconditional InjectFromConfig call, which independently walks
+// cfg.Mailboxes and treats ANY mailbox resolution failure as fatal
+// regardless of Enabled — see InjectFromConfig, pkg/credentials/inject.go.
+// refreshConfigAndRewireServices has no InjectFromConfig call, only the
+// buildEnabledRefMap-gated ResolveBundle check below, so this is the call
+// site the gap was actually unmasked at: a corrupted enabled-mailbox
+// credential ref fell through to a Warn-only log instead of being escalated
+// — the opposite of what this whole credential-escalation cluster
+// guarantees for every other in-use credential category. This is reached in
+// production by setAgentMailbox (rest_mailbox.go) itself, via
+// safeUpdateConfigJSON -> updateConfigJSONLocked ->
+// refreshConfigAndRewireServices.
+func TestRefreshConfigAndRewireServices_RejectsOnCorruptedEnabledMailboxCredential(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("OMNIPUS_MASTER_KEY", fixedHexKey)
+
+	credsPath := filepath.Join(tmpDir, "credentials.json")
+	writeCorruptedCredentialsFile(t, credsPath, "MAILBOX_PW_REF")
+
+	credStore := credentials.NewStore(credsPath)
+	require.NoError(t, credentials.Unlock(credStore))
+
+	configPath := filepath.Join(tmpDir, "config.json")
+	cfgData := map[string]any{
+		"version": config.CurrentVersion,
+		"agents": map[string]any{
+			"defaults": map[string]any{"model_name": "test-model", "workspace": tmpDir, "max_tokens": 4096},
+			"list":     []any{},
+		},
+		"gateway":   map[string]any{"host": "127.0.0.1", "port": 19991},
+		"providers": []any{},
+		"mailboxes": map[string]any{
+			"mia": map[string]any{
+				"default": map[string]any{
+					"enabled":      true,
+					"workspace_id": "default",
+					"password_ref": "MAILBOX_PW_REF",
+				},
+			},
+		},
+	}
+	data, err := json.Marshal(cfgData)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(configPath, data, 0o600))
+
+	baseCfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+		},
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 19991},
+	}
+	msgBus := bus.NewMessageBus()
+	al := mustAgentLoop(t, baseCfg, msgBus, &restMockProvider{})
+
+	api := &restAPI{
+		agentLoop:     al,
+		allowedOrigin: "http://localhost:3000",
+		onboardingMgr: onboarding.NewManager(tmpDir),
+		homePath:      tmpDir,
+		taskStore:     task.New(tmpDir + "/tasks"),
+		credStore:     credStore,
+	}
+
+	err = api.refreshConfigAndRewireServices(configPath)
+	require.Error(t, err,
+		"expected refreshConfigAndRewireServices to reject a corrupted enabled-mailbox credential")
+	assert.Contains(t, err.Error(), "MAILBOX_PW_REF")
+	assert.Contains(t, err.Error(), "failed to resolve")
+
+	// The broken config must NOT have been swapped into the live in-memory
+	// pointer, same invariant as the enabled-channel counterpart above.
+	assert.Same(t, baseCfg, al.GetConfig(), "in-memory config must not be swapped on rejection")
+}
+
 // TestHandleProviders_CorruptedCredential_IsErrorStatus pins Task 3: when a
 // provider's api_key_ref is present in config but the credential store
 // cannot decrypt it (corrupted entry / wrong master key — worse than "not

@@ -903,7 +903,7 @@ func (a *restAPI) deleteSession(w http.ResponseWriter, _ *http.Request, id strin
 		if isProtected := computeSessionProtected(a.homePath, meta); isProtected != nil && *isProtected {
 			// C-1 (FR-014): audit the blocked delete before returning 409.
 			if a.auditor != nil {
-				_ = a.auditor.Log(&audit.Entry{
+				if err := a.auditor.Log(&audit.Entry{
 					Event:    "session.delete.blocked",
 					Decision: audit.DecisionDeny,
 					AgentID:  meta.AgentID,
@@ -913,7 +913,10 @@ func (a *restAPI) deleteSession(w http.ResponseWriter, _ *http.Request, id strin
 						"agent_id":     meta.AgentID,
 						"reason":       "heartbeat enabled",
 					},
-				})
+				}); err != nil {
+					slog.Warn("audit write failed", "event", "session.delete.blocked",
+						"session_id", id, "error", err)
+				}
 			}
 			jsonErr(w, http.StatusConflict,
 				"cannot delete a protected heartbeat session while its heartbeat is enabled; "+
@@ -2622,12 +2625,13 @@ func (a *restAPI) deleteAgent(w http.ResponseWriter, id string) {
 	if err := a.triggerReloadAndWait(); err != nil {
 		slog.Error("rest: deleteAgent: reload failed", "agent_id", id, "error", err)
 	}
-	// Audit the destructive action. Best-effort (matches rest_workspaces
-	// conventions: emit after the write succeeds, ignore logger errors). The
-	// auditor is nil only in unit-test fixtures where audit isn't wired; the
-	// pre-existing workspace handlers use the same nil-guard pattern.
+	// Audit the destructive action. Emitted after the write succeeds; a
+	// failed audit write is logged (not silently discarded) so audit-log
+	// gaps stay visible. The auditor is nil only in unit-test fixtures
+	// where audit isn't wired; the pre-existing workspace handlers use the
+	// same nil-guard pattern.
 	if a.auditor != nil {
-		_ = a.auditor.Log(&audit.Entry{
+		if err := a.auditor.Log(&audit.Entry{
 			Event:    "agent.delete",
 			Decision: audit.DecisionAllow,
 			AgentID:  id,
@@ -2636,7 +2640,9 @@ func (a *restAPI) deleteAgent(w http.ResponseWriter, id string) {
 				"agent_type": deletedType,
 				"agent_name": deletedName,
 			},
-		})
+		}); err != nil {
+			slog.Warn("audit write failed", "event", "agent.delete", "agent_id", id, "error", err)
+		}
 	}
 	// O6 — drop any heartbeat schedule the deleted agent owned (the reconciler
 	// removes heartbeat jobs whose agent is no longer in config).
@@ -7438,7 +7444,7 @@ func (a *restAPI) setChannelRouting(w http.ResponseWriter, r *http.Request, chan
 
 		// FR-030: emit routing-change audit event (STRIDE repudiation).
 		if a.auditor != nil {
-			_ = a.auditor.Log(&audit.Entry{
+			if err := a.auditor.Log(&audit.Entry{
 				Event:    audit.EventChannelRoutingChanged,
 				Decision: audit.DecisionAllow,
 				Details: map[string]any{
@@ -7447,7 +7453,10 @@ func (a *restAPI) setChannelRouting(w http.ResponseWriter, r *http.Request, chan
 					"agent_id":     agentID,
 					"flow":         "bound",
 				},
-			})
+			}); err != nil {
+				slog.Warn("audit write failed", "event", audit.EventChannelRoutingChanged,
+					"channel_id", channelID, "flow", "bound", "error", err)
+			}
 		}
 
 		// Return the bound representation.
@@ -7574,7 +7583,7 @@ func (a *restAPI) setChannelRouting(w http.ResponseWriter, r *http.Request, chan
 		agentIDForAudit = *req.DefaultAgentId
 	}
 	if a.auditor != nil {
-		_ = a.auditor.Log(&audit.Entry{
+		if err := a.auditor.Log(&audit.Entry{
 			Event:    audit.EventChannelRoutingChanged,
 			Decision: audit.DecisionAllow,
 			Details: map[string]any{
@@ -7582,7 +7591,10 @@ func (a *restAPI) setChannelRouting(w http.ResponseWriter, r *http.Request, chan
 				"agent_id":   agentIDForAudit,
 				"flow":       "unbound",
 			},
-		})
+		}); err != nil {
+			slog.Warn("audit write failed", "event", audit.EventChannelRoutingChanged,
+				"channel_id", channelID, "flow", "unbound", "error", err)
+		}
 	}
 
 	// Return the resulting routing state.
@@ -7805,7 +7817,7 @@ func (a *restAPI) deleteChannelInstance(w http.ResponseWriter, channelID string)
 		if cleanupFailed {
 			decision = audit.DecisionError
 		}
-		_ = a.auditor.Log(&audit.Entry{
+		if err := a.auditor.Log(&audit.Entry{
 			Event:    audit.EventChannelInstanceDeleted,
 			Decision: decision,
 			Details: map[string]any{
@@ -7813,7 +7825,10 @@ func (a *restAPI) deleteChannelInstance(w http.ResponseWriter, channelID string)
 				"type":           chBaseType,
 				"cleanup_failed": cleanupFailed,
 			},
-		})
+		}); err != nil {
+			slog.Warn("audit write failed", "event", audit.EventChannelInstanceDeleted,
+				"channel_id", channelID, "error", err)
+		}
 	}
 
 	slog.Info("rest: deleted channel instance", "id", channelID, "type", chBaseType, "cleanup_failed", cleanupFailed)

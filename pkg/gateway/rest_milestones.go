@@ -383,12 +383,15 @@ func (a *restAPI) handleMilestonePost(w http.ResponseWriter, r *http.Request, wo
 	}
 
 	if a.auditor != nil {
-		_ = a.auditor.Log(
+		if err := a.auditor.Log(
 			&audit.Entry{
 				Event: "milestone.create", Decision: audit.DecisionAllow,
 				Details: map[string]any{"id": m.ID, "workspace_id": workspaceID},
 			},
-		)
+		); err != nil {
+			slog.Warn("audit write failed", "event", "milestone.create",
+				"id", m.ID, "workspace_id", workspaceID, "error", err)
+		}
 	}
 
 	// Return with progress=0 (new milestone has no tasks yet).
@@ -614,12 +617,15 @@ func (a *restAPI) handleMilestonePut(
 	}
 
 	if a.auditor != nil {
-		_ = a.auditor.Log(
+		if err := a.auditor.Log(
 			&audit.Entry{
 				Event: "milestone.update", Decision: audit.DecisionAllow,
 				Details: map[string]any{"id": milestoneID, "workspace_id": workspaceID},
 			},
-		)
+		); err != nil {
+			slog.Warn("audit write failed", "event", "milestone.update",
+				"id", milestoneID, "workspace_id", workspaceID, "error", err)
+		}
 	}
 
 	mCounts, _ := computeMilestoneCounts(a.homePath)
@@ -676,12 +682,15 @@ func (a *restAPI) handleMilestoneDelete(
 	}
 
 	if a.auditor != nil {
-		_ = a.auditor.Log(
+		if err := a.auditor.Log(
 			&audit.Entry{
 				Event: "milestone.delete", Decision: audit.DecisionAllow,
 				Details: map[string]any{"id": milestoneID, "workspace_id": workspaceID},
 			},
-		)
+		); err != nil {
+			slog.Warn("audit write failed", "event", "milestone.delete",
+				"id", milestoneID, "workspace_id", workspaceID, "error", err)
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

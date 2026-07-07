@@ -610,13 +610,15 @@ func (a *restAPI) handleWorkspacePost(w http.ResponseWriter, r *http.Request) {
 	}
 	wire := workspaceToWire(ws, 0)
 	if a.auditor != nil {
-		_ = a.auditor.Log(
+		if err := a.auditor.Log(
 			&audit.Entry{
 				Event:    "workspace.create",
 				Decision: audit.DecisionAllow,
 				Details:  map[string]any{"id": ws.ID, "name": ws.Name},
 			},
-		)
+		); err != nil {
+			slog.Warn("audit write failed", "event", "workspace.create", "id", ws.ID, "error", err)
+		}
 	}
 	jsonCreated(w, wire)
 }
@@ -978,13 +980,15 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 	}
 
 	if a.auditor != nil {
-		_ = a.auditor.Log(
+		if err := a.auditor.Log(
 			&audit.Entry{
 				Event:    "workspace.update",
 				Decision: audit.DecisionAllow,
 				Details:  map[string]any{"id": id},
 			},
-		)
+		); err != nil {
+			slog.Warn("audit write failed", "event", "workspace.update", "id", id, "error", err)
+		}
 	}
 	jsonOK(w, workspaceToWire(ws, countTasksForWorkspace(a.homePath, id)))
 }
@@ -1072,13 +1076,15 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 	}
 
 	if a.auditor != nil {
-		_ = a.auditor.Log(
+		if err := a.auditor.Log(
 			&audit.Entry{
 				Event:    "workspace.delete",
 				Decision: audit.DecisionAllow,
 				Details:  map[string]any{"id": id},
 			},
-		)
+		); err != nil {
+			slog.Warn("audit write failed", "event", "workspace.delete", "id", id, "error", err)
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
