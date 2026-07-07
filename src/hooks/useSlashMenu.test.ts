@@ -7,7 +7,7 @@
 // fast and close to the cause, independent of AssistantUI's mocked
 // primitives.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 import type { ComposerRuntime } from '@assistant-ui/react'
 import { useSlashMenu } from './useSlashMenu'
@@ -18,6 +18,7 @@ const mockCommands = [
   { name: 'help', label: '/help', description: 'Show available commands', delivery: 'client', available_while_streaming: false },
   { name: 'model', label: '/model', description: 'Change the chat model', delivery: 'client', available_while_streaming: false },
   { name: 'agents', label: '/agents', description: 'Open agent selector', delivery: 'client', available_while_streaming: false },
+  { name: 'skills', label: '/skills', description: 'List installed skills', delivery: 'client', available_while_streaming: false },
   { name: 'cancel', label: '/cancel', description: 'Cancel the current turn', delivery: 'client', available_while_streaming: true },
   { name: 'unknown-agent-cmd', label: '/handoff', description: 'Agent-delivered command', delivery: 'agent', available_while_streaming: false },
 ]
@@ -70,6 +71,13 @@ beforeEach(() => {
   act(() => { useUiStore.setState({ modelSelectorOpen: false, agentSelectorOpen: false }) })
 })
 
+afterEach(() => {
+  // Safety net for tests that opt into fake timers (onInputBlur delay) —
+  // matches useCancelState.test.ts's convention so a thrown assertion can't
+  // leak fake timers into a later test.
+  vi.useRealTimers()
+})
+
 describe('useSlashMenu — gating', () => {
   it('shows nothing when inputValue does not start with "/"', () => {
     const { result } = renderHook(() => useSlashMenu(baseParams()))
@@ -95,7 +103,7 @@ describe('useSlashMenu — gating', () => {
     act(() => result.current.onInputChange('/'))
     expect(result.current.shouldShowSlash).toBe(true)
     expect(result.current.slashItems.map((i) => i.key)).toEqual([
-      '/clear', '/help', '/model', '/agents', '/cancel', '/handoff', 'web-research', 'code-review',
+      '/clear', '/help', '/model', '/agents', '/skills', '/cancel', '/handoff', 'web-research', 'code-review',
     ])
   })
 })
@@ -219,6 +227,45 @@ describe('useSlashMenu — client command dispatch', () => {
     expect(cancelIfStreaming).toHaveBeenCalledTimes(1)
   })
 
+  it('/skills sets the input to "/skills" and reopens the menu filtered to skills only (D9)', () => {
+    // Traces to: pkg/commands/cmd_skills.go (Name: "skills", Delivery: client)
+    // and pkg/commands/surface_test.go's clientCmds list — "skills" is a real
+    // client-delivery command, not just the isSkillsFilter text-match tested
+    // elsewhere in this file. Exercise it via actual dispatch: selecting the
+    // palette entry.
+    const composerRuntime = makeComposerRuntime()
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
+    act(() => result.current.onInputChange('/'))
+    const item = result.current.slashItems.find((i) => i.key === '/skills')!
+    act(() => item.onSelect())
+
+    // executeSlashCommand clears the composer first, then runClientCommand's
+    // "skills" branch re-sets it to "/skills" — the final call is what matters.
+    expect(composerRuntime.setText).toHaveBeenLastCalledWith('/skills')
+    expect(result.current.inputValue).toBe('/skills')
+    expect(result.current.slashOpen).toBe(true)
+    // D9: the re-opened menu is filtered to skills-only, proving this ran
+    // the real command handler and not a no-op.
+    expect(result.current.slashItems.every((i) => i.section === 'skills')).toBe(true)
+    expect(result.current.slashItems.map((i) => i.key)).toEqual(['web-research', 'code-review'])
+  })
+
+  it('typing "/skills" + Enter (send-path interception) dispatches the same client command', () => {
+    // Traces to: pkg/commands/surface_test.go clientCmds — confirms typing
+    // "/skills"+Enter converges with palette selection, per interceptClientCommand's
+    // own doc comment ("makes typing '/clear'+Enter behave identically to palette selection").
+    const composerRuntime = makeComposerRuntime('/skills')
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
+
+    let intercepted = false
+    act(() => { intercepted = result.current.interceptClientCommand() })
+
+    expect(intercepted).toBe(true)
+    expect(composerRuntime.setText).toHaveBeenLastCalledWith('/skills')
+    expect(result.current.inputValue).toBe('/skills')
+    expect(result.current.slashOpen).toBe(true)
+  })
+
   it('an agent-delivery command inserts "<label> " as text instead of running locally', () => {
     const composerRuntime = makeComposerRuntime()
     const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
@@ -312,5 +359,126 @@ describe('useSlashMenu — interceptClientCommand (send-path)', () => {
     act(() => { intercepted = result.current.interceptClientCommand() })
 
     expect(intercepted).toBe(false)
+  })
+})
+
+describe('useSlashMenu — onInputBlur (delayed close)', () => {
+  it('does not close the menu synchronously, then closes after the 150ms delay if nothing else happened', () => {
+    vi.useFakeTimers()
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('/'))
+    expect(result.current.slashOpen).toBe(true)
+
+    act(() => result.current.onInputBlur())
+    // Synchronously still open — the delay exists precisely so a menu-item's
+    // mousedown can win the race before the blur-triggered close happens.
+    expect(result.current.slashOpen).toBe(true)
+
+    // Not yet elapsed.
+    act(() => { vi.advanceTimersByTime(149) })
+    expect(result.current.slashOpen).toBe(true)
+
+    // Delay elapsed with nothing else happening — menu closes.
+    act(() => { vi.advanceTimersByTime(1) })
+    expect(result.current.slashOpen).toBe(false)
+  })
+
+  it('a mousedown-select within the delay window completes before the stale blur timer fires, and does not get undone by it', () => {
+    vi.useFakeTimers()
+    const startNewSession = vi.fn()
+    const { result } = renderHook(() => useSlashMenu(baseParams({ startNewSession })))
+    act(() => result.current.onInputChange('/'))
+
+    act(() => result.current.onInputBlur())
+    // Item's mousedown handler fires mid-delay (e.g. 50ms in) and wins the race.
+    act(() => { vi.advanceTimersByTime(50) })
+    const item = result.current.slashItems.find((i) => i.key === '/clear')!
+    act(() => item.onSelect())
+
+    expect(startNewSession).toHaveBeenCalledTimes(1)
+    expect(result.current.slashOpen).toBe(false)
+
+    // The original blur timer (now stale) still fires at the 150ms mark —
+    // it must be a harmless no-op, not resurrect/alter menu state.
+    act(() => { vi.advanceTimersByTime(100) })
+    expect(result.current.slashOpen).toBe(false)
+    expect(startNewSession).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('useSlashMenu — onHoverItem', () => {
+  it('moves the keyboard highlight to the hovered index, and Enter selects that hovered item', () => {
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('/'))
+    expect(result.current.slashHighlight).toBe(0)
+
+    // Index 3 in the unified list is "/agents" (clear, help, model, agents, ...).
+    act(() => result.current.onHoverItem(3))
+    expect(result.current.slashHighlight).toBe(3)
+    expect(result.current.slashItems[3].key).toBe('/agents')
+
+    // Prove the hover-set index is the SAME one keyboard selection acts on —
+    // not just a display-only value that Enter ignores.
+    act(() => result.current.handleKeyDown({ key: 'Enter', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
+    expect(useUiStore.getState().agentSelectorOpen).toBe(true)
+  })
+
+  it('a second hover moves the highlight again (differentiation — not stuck on the first value)', () => {
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('/'))
+
+    act(() => result.current.onHoverItem(2))
+    expect(result.current.slashHighlight).toBe(2)
+
+    act(() => result.current.onHoverItem(5))
+    expect(result.current.slashHighlight).toBe(5)
+  })
+})
+
+describe('useSlashMenu — cancelIfStreaming staleness across re-render', () => {
+  // Traces to: useSlashMenu.ts's file-header comment on why
+  // interceptClientCommand/runClientCommand are deliberately NOT wrapped in
+  // useCallback — they close over cancelIfStreaming, whose identity changes
+  // whenever isStreaming toggles (see useCancelState). Memoizing would risk
+  // calling a stale cancelIfStreaming after such a toggle. This test proves
+  // the current (unmemoized) implementation actually avoids that risk,
+  // rather than merely asserting SOME cancelIfStreaming mock was called.
+  it('after a re-render swaps cancelIfStreaming to a new identity, /cancel calls the NEW one, not the stale one', () => {
+    const oldCancel = vi.fn()
+    const newCancel = vi.fn()
+    const composerRuntime = makeComposerRuntime('/cancel')
+    const { result, rerender } = renderHook(
+      (props: Parameters<typeof useSlashMenu>[0]) => useSlashMenu(props),
+      { initialProps: baseParams({ composerRuntime, cancelIfStreaming: oldCancel }) },
+    )
+
+    // Simulate the parent's isStreaming toggling: useCancelState hands back
+    // a brand-new cancelIfStreaming closure, and the parent re-renders this
+    // hook with it — exactly the scenario the file-header comment reasons about.
+    rerender(baseParams({ composerRuntime, cancelIfStreaming: newCancel }))
+
+    act(() => { result.current.interceptClientCommand() })
+
+    expect(newCancel).toHaveBeenCalledTimes(1)
+    expect(oldCancel).not.toHaveBeenCalled()
+  })
+
+  it('same scenario via palette selection (executeSlashCommand path), not just interceptClientCommand', () => {
+    const oldCancel = vi.fn()
+    const newCancel = vi.fn()
+    const composerRuntime = makeComposerRuntime()
+    const { result, rerender } = renderHook(
+      (props: Parameters<typeof useSlashMenu>[0]) => useSlashMenu(props),
+      { initialProps: baseParams({ composerRuntime, isStreaming: true, cancelIfStreaming: oldCancel }) },
+    )
+    act(() => result.current.onInputChange('/'))
+
+    rerender(baseParams({ composerRuntime, isStreaming: true, cancelIfStreaming: newCancel }))
+
+    const item = result.current.slashItems.find((i) => i.key === '/cancel')!
+    act(() => item.onSelect())
+
+    expect(newCancel).toHaveBeenCalledTimes(1)
+    expect(oldCancel).not.toHaveBeenCalled()
   })
 })

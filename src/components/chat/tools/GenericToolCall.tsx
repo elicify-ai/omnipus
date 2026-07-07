@@ -20,7 +20,7 @@ import { fetchToolResult } from '@/lib/api'
 import { humanizeToolName } from '@/lib/humanizeToolName'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { shouldRenderToolCall } from '@/lib/toolVisibility'
-import { getToolBadgeStatusConfig } from '@/lib/toolStatusConfig'
+import { getToolBadgeStatusConfig, type ToolBadgeStatusConfig } from '@/lib/toolStatusConfig'
 
 interface GenericToolCallProps {
   toolName: string
@@ -299,7 +299,7 @@ export function GenericToolCall({
     return null
   }
 
-  let statusConfig: { icon: React.ReactNode; label: string; border: string }
+  let statusConfig: ToolBadgeStatusConfig
   if (isRunning) {
     statusConfig = getToolBadgeStatusConfig('running', { size: 12 })
   } else if (isCancelled) {

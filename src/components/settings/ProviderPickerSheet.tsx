@@ -10,13 +10,27 @@ import {
 import { BrandIcon } from '@/components/ui/brand-icon'
 import { BrandDisclaimer } from '@/components/ui/brand-disclaimer'
 import type { ProviderCatalogEntry } from '@/lib/api/generated/openapi-types'
-import type { CatalogGroup } from './ProvidersSection'
+
+// See ProvidersSection.tsx's file header for the FIX-N legend (this file
+// implements FIX-3).
 
 // ---------------------------------------------------------------------------
 // Sub-component: Provider picker Sheet (FIX-3) — search + catalog grouped by
 // company, excluding already-configured entries. Selecting an entry hands off
 // to the connect form (ProviderConfigSheet, mode: connect).
 // ---------------------------------------------------------------------------
+
+// Catalog entries grouped by company for this picker's rendering — built by
+// ProvidersSection's buildCatalogGroups() (already-configured ids excluded,
+// filtered by a free-text search over company name/label/alias) and passed
+// in via the `groups` prop below. Owned here rather than in ProvidersSection
+// because this file's JSX is the one reading `company`/`logoSlug`/`entries`;
+// ProvidersSection only builds the data and forwards it through.
+export interface CatalogGroup {
+  company: string
+  logoSlug: string
+  entries: ProviderCatalogEntry[]
+}
 
 interface ProviderPickerSheetProps {
   open: boolean

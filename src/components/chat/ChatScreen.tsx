@@ -1359,9 +1359,10 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           placeholder={agentRemoved ? 'Agent has been removed — this session is read-only' : composerPlaceholder(isConnected || reconnectPhase === 'reconnecting' || reconnectPhase === 'slow', isStreaming, isReplaying, activeAgentName, reconnectPhase === 'gave_up')}
           // FR-3a: the slash menu must be reachable mid-stream, which means the
           // textarea has to accept keystrokes during streaming. Submission is
-          // blocked elsewhere: the Send button has its own `!isStreaming` gate
-          // (line 1278) and the onKeyDown handler at line 1031 swallows Enter
-          // when streaming unless the slash menu is open. So gate visual-only
+          // blocked elsewhere: the ComposerPrimitive.Root's onSubmit handler
+          // above preventDefaults while isStreaming, and the composer's
+          // onKeyDown handler (handleKeyDown) swallows Enter while streaming
+          // unless the slash menu is open. So gate visual-only
           // (cursor-not-allowed/opacity) on isStreaming via the className
           // below, not the disabled attribute.
           disabled={!inputEnabled}

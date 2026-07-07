@@ -850,4 +850,58 @@ describe('re-auth cancel reverts optimistic state', () => {
     // would silently reopen the re-auth prompt for a no-op save).
     expect(updateSandboxConfig).toHaveBeenCalledTimes(1)
   }, 10_000)
+
+  // SsrfEditor (extracted from SandboxSection in Wave 3, same as
+  // AllowedPathsEditor) shares revertPathsSsrfToServer with the allowed-paths
+  // editor but had zero re-auth-cancel-revert coverage of its own — the two
+  // other tests in this block exercise the mode radio and
+  // ShellDenyPatternsEditor, not SsrfEditor's own optimistic add/revert path.
+  it('cancelling re-auth on an SSRF allow-internal add reverts ssrfList to the saved server list', async () => {
+    // A single-entry list matches no SSRF_PRESETS (lengths are 0/2/6), so
+    // Advanced mode auto-expands on mount and '127.0.0.1' is visible without
+    // needing to click the "Advanced (custom list)" toggle first.
+    vi.mocked(fetchSandboxConfig).mockResolvedValue({
+      ...baseConfig,
+      ssrf: { allow_internal: ['127.0.0.1'] },
+    })
+    vi.mocked(updateSandboxConfig).mockRejectedValue(reAuth403())
+
+    renderSection()
+
+    await waitFor(() => {
+      expect(screen.getByText('127.0.0.1')).toBeInTheDocument()
+    })
+
+    const input = screen.getByRole('textbox', { name: /new ssrf allow entry/i })
+    fireEvent.change(input, { target: { value: '10.0.0.0/8' } })
+    fireEvent.click(screen.getByRole('button', { name: /add ssrf entry/i }))
+
+    // Optimistic add renders immediately.
+    await waitFor(() => {
+      expect(screen.getByText('10.0.0.0/8')).toBeInTheDocument()
+    })
+
+    // First PUT (token '') 403s -> consent dialog opens.
+    await waitFor(() => {
+      expect(screen.getByTestId('reauth-cancel')).toBeInTheDocument()
+    })
+
+    // User dismisses the password prompt instead of confirming.
+    fireEvent.click(screen.getByTestId('reauth-cancel'))
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('reauth-cancel')).not.toBeInTheDocument()
+    })
+
+    // The optimistic '10.0.0.0/8' entry must be reverted — it was never
+    // persisted — while the pre-existing saved entry stays put.
+    await waitFor(() => {
+      expect(screen.queryByText('10.0.0.0/8')).not.toBeInTheDocument()
+      expect(screen.getByText('127.0.0.1')).toBeInTheDocument()
+    })
+
+    // No error toast for a user-initiated cancel, and no retry attempt fired.
+    expect(mockAddToast).not.toHaveBeenCalled()
+    expect(updateSandboxConfig).toHaveBeenCalledTimes(1)
+  })
 })

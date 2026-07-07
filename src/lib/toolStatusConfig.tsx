@@ -36,7 +36,7 @@ import { formatDuration } from './formatDuration'
 
 export type SpanLikeStatus = 'running' | 'success' | 'error' | 'cancelled' | 'interrupted' | 'timeout'
 
-export interface SpanStatusConfig {
+export interface SpanStatusConfig { // not-wire-format: SPA-internal render config for the "pill" status indicator (icon node, label text, border/pill CSS classes) consumed only by SubagentBlock/ActivityPanel — never serialized across the gateway/SPA boundary
   icon: ReactNode
   label: string
   /** Colored border class. SubagentBlock renders this; ActivityPanel's rows don't reference it. */
@@ -44,7 +44,7 @@ export interface SpanStatusConfig {
   pill: string
 }
 
-export interface SpanStatusConfigOptions {
+export interface SpanStatusConfigOptions { // not-wire-format: SPA-internal call-site options bag (icon pixel size, running-label override) for getSpanStatusConfig()'s local rendering behavior — a function parameter shape, never serialized
   /** Icon pixel size. SubagentBlock uses 13 (default); ActivityPanel uses 12. */
   size?: number
   /** Label for the 'running' case. SubagentBlock: "working" (default); ActivityPanel: "running". */
@@ -118,13 +118,13 @@ export function getSpanStatusConfig(
 
 export type ToolBadgeStatus = 'running' | 'success' | 'error' | 'cancelled'
 
-export interface ToolBadgeStatusConfig {
+export interface ToolBadgeStatusConfig { // not-wire-format: SPA-internal render config for the "inline" tool-badge status indicator (icon node, label text, border CSS class) consumed only by ToolCallBadge/GenericToolCall — never serialized
   icon: ReactNode
   label: string
   border: string
 }
 
-export interface ToolBadgeStatusOptions {
+export interface ToolBadgeStatusOptions { // not-wire-format: SPA-internal call-site options bag (icon size, duration folding, cancelled-variant styling) for getToolBadgeStatusConfig()'s local rendering behavior — never serialized
   /** Icon pixel size. ToolCallBadge uses 13 (default); GenericToolCall uses 12. */
   size?: number
   /** Duration folded into the 'success' label as `formatDuration(durationMs) || 'Done'`. */
