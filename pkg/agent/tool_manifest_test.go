@@ -1551,13 +1551,27 @@ func TestCanLoad_HiddenMCPTool_AllowDefaultAgent(t *testing.T) {
 		return tt.Execute(ctx, map[string]any{"names": []any{"mock_custom"}})
 	}
 
-	// The 4 core agents are now all deny-default; the seeded worker tier
-	// (worker/explorer/researcher) still rides the allow rail, so it is the
-	// allow-default fixture for "an allowed hidden tool loads".
-	t.Run("allow_default_agent_loads_hidden", func(t *testing.T) {
+	// No agent tier has an implicit allow rail anymore (CLAUDE.md hard
+	// constraint 6): the 4 core agents and the seeded worker/explorer/
+	// researcher tier are ALL deny-default. This subtest grants worker an
+	// explicit allow for the hidden tool's name to prove the load_tool
+	// mechanism succeeds when policy permits it, mirroring how ava's paired
+	// subtest below proves it correctly blocks when policy denies.
+	t.Run("explicitly_allowed_agent_loads_hidden", func(t *testing.T) {
+		worker, ok := al.registry.GetAgent("worker")
+		require.True(t, ok, "worker agent must exist")
+		worker.StoreToolPolicy(&tools.ToolPolicyCfg{
+			Policies: map[string]string{"mock_custom": "allow"},
+		})
+
 		res := loadHidden(t, "worker")
 		require.NotNil(t, res)
-		require.False(t, res.IsError, "worker (allow-default) must load the hidden tool, got error: %s", res.ForLLM)
+		require.False(
+			t,
+			res.IsError,
+			"worker (explicitly allowed) must load the hidden tool, got error: %s",
+			res.ForLLM,
+		)
 		require.Contains(t, res.ForLLM, "mock_custom", "result should report the loaded hidden tool")
 		require.Contains(t, res.ForLLM, "\"loaded\"")
 	})

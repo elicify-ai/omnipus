@@ -62,10 +62,30 @@ func buildDelegationTestAPI(t *testing.T) *restAPI {
 	// createAgent itself uses (coreagent.NewCustomAgentToolsCfg()).
 	rosterPolicies := coreagent.NewCustomAgentToolsCfg().Builtin.Policies
 	rosterAgentsOnDisk := []map[string]any{
-		{"id": "test-agent", "name": "Test Agent", "type": "custom", "tools": map[string]any{"builtin": map[string]any{"policies": rosterPolicies}}},
-		{"id": "ava", "name": "Ava", "type": "custom", "tools": map[string]any{"builtin": map[string]any{"policies": rosterPolicies}}},
-		{"id": "ray", "name": "Ray", "type": "custom", "tools": map[string]any{"builtin": map[string]any{"policies": rosterPolicies}}},
-		{"id": "laborer", "name": "Laborer", "type": "worker", "tools": map[string]any{"builtin": map[string]any{"policies": rosterPolicies}}},
+		{
+			"id":    "test-agent",
+			"name":  "Test Agent",
+			"type":  "custom",
+			"tools": map[string]any{"builtin": map[string]any{"policies": rosterPolicies}},
+		},
+		{
+			"id":    "ava",
+			"name":  "Ava",
+			"type":  "custom",
+			"tools": map[string]any{"builtin": map[string]any{"policies": rosterPolicies}},
+		},
+		{
+			"id":    "ray",
+			"name":  "Ray",
+			"type":  "custom",
+			"tools": map[string]any{"builtin": map[string]any{"policies": rosterPolicies}},
+		},
+		{
+			"id":    "laborer",
+			"name":  "Laborer",
+			"type":  "worker",
+			"tools": map[string]any{"builtin": map[string]any{"policies": rosterPolicies}},
+		},
 	}
 	cfgOnDisk := map[string]any{
 		"version": config.CurrentVersion,
@@ -91,10 +111,20 @@ func buildDelegationTestAPI(t *testing.T) *restAPI {
 				SubTurn:   config.SubTurnConfig{MaxDepth: 3},
 			},
 			List: []config.AgentConfig{
-				{ID: "test-agent", Name: "Test Agent", Type: config.AgentTypeCustom, Tools: coreagent.NewCustomAgentToolsCfg()},
+				{
+					ID:    "test-agent",
+					Name:  "Test Agent",
+					Type:  config.AgentTypeCustom,
+					Tools: coreagent.NewCustomAgentToolsCfg(),
+				},
 				{ID: "ava", Name: "Ava", Type: config.AgentTypeCustom, Tools: coreagent.NewCustomAgentToolsCfg()},
 				{ID: "ray", Name: "Ray", Type: config.AgentTypeCustom, Tools: coreagent.NewCustomAgentToolsCfg()},
-				{ID: "laborer", Name: "Laborer", Type: config.AgentTypeWorker, Tools: coreagent.NewCustomAgentToolsCfg()},
+				{
+					ID:    "laborer",
+					Name:  "Laborer",
+					Type:  config.AgentTypeWorker,
+					Tools: coreagent.NewCustomAgentToolsCfg(),
+				},
 			},
 		},
 	}

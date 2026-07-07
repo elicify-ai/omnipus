@@ -161,6 +161,12 @@ func TestAgentLoop_EmitsMinimalTurnEvents(t *testing.T) {
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
+	// No-default-policy model (CLAUDE.md hard constraint 6): an unlisted tool
+	// now fails closed to "deny" instead of the old implicit "allow", so this
+	// test's own exercised tool needs an explicit agent-level grant to run.
+	defaultAgent.StoreToolPolicy(&tools.ToolPolicyCfg{
+		Policies: map[string]string{"mock_custom": "allow"},
+	})
 
 	sub := al.SubscribeEvents(16)
 	defer al.UnsubscribeEvents(sub.ID)
@@ -306,6 +312,16 @@ func TestAgentLoop_EmitsSteeringAndSkippedToolEvents(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 	al.RegisterTool(tool1)
 	al.RegisterTool(tool2)
+	defaultAgent := al.registry.GetDefaultAgent()
+	if defaultAgent == nil {
+		t.Fatal("expected default agent")
+	}
+	// No-default-policy model (CLAUDE.md hard constraint 6): both exercised
+	// tools need an explicit agent-level grant, or they fail closed to "deny"
+	// before the steering/skip behavior under test ever gets a chance to run.
+	defaultAgent.StoreToolPolicy(&tools.ToolPolicyCfg{
+		Policies: map[string]string{"tool_one": "allow", "tool_two": "allow"},
+	})
 
 	sub := al.SubscribeEvents(32)
 	defer al.UnsubscribeEvents(sub.ID)
@@ -572,6 +588,12 @@ func TestAgentLoop_EmitsFollowUpQueuedEvent(t *testing.T) {
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
+	// No-default-policy model (CLAUDE.md hard constraint 6): the async tool
+	// under test needs an explicit agent-level grant, or it fails closed to
+	// "deny" and the follow-up-queued behavior never fires.
+	defaultAgent.StoreToolPolicy(&tools.ToolPolicyCfg{
+		Policies: map[string]string{"async_followup": "allow"},
+	})
 
 	sub := al.SubscribeEvents(32)
 	defer al.UnsubscribeEvents(sub.ID)

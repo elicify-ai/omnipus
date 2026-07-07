@@ -31,6 +31,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/agent/testutil"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // TestRunTurn_CoreTeamMember_WritesToWorkspaceSharedDir proves the operator
@@ -75,6 +76,16 @@ func TestRunTurn_CoreTeamMember_WritesToWorkspaceSharedDir(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 	defer al.Close()
+	defaultAgent := al.registry.GetDefaultAgent()
+	if defaultAgent == nil {
+		t.Fatal("expected default agent")
+	}
+	// No-default-policy model (CLAUDE.md hard constraint 6): write_file needs
+	// an explicit agent-level grant, or it fails closed to "deny" and the
+	// re-rooting behavior under test never gets exercised.
+	defaultAgent.StoreToolPolicy(&tools.ToolPolicyCfg{
+		Policies: map[string]string{"write_file": "allow"},
+	})
 
 	const sessionKey = "test-session-coreteam-reroot"
 	ctx := context.Background()
@@ -147,6 +158,16 @@ func TestRunTurn_NotCoreTeamMember_WritesToOwnDir(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 	defer al.Close()
+	defaultAgent := al.registry.GetDefaultAgent()
+	if defaultAgent == nil {
+		t.Fatal("expected default agent")
+	}
+	// No-default-policy model (CLAUDE.md hard constraint 6): write_file needs
+	// an explicit agent-level grant, or it fails closed to "deny" and the
+	// non-CoreTeam write-path under test never gets exercised.
+	defaultAgent.StoreToolPolicy(&tools.ToolPolicyCfg{
+		Policies: map[string]string{"write_file": "allow"},
+	})
 
 	const sessionKey = "test-session-no-coreteam"
 	ctx := context.Background()

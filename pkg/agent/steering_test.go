@@ -675,6 +675,16 @@ func TestAgentLoop_Steering_SkipsRemainingTools(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 	al.RegisterTool(tool1)
 	al.RegisterTool(tool2)
+	defaultAgent := al.registry.GetDefaultAgent()
+	if defaultAgent == nil {
+		t.Fatal("expected default agent")
+	}
+	// No-default-policy model (CLAUDE.md hard constraint 6): both exercised
+	// tools need an explicit agent-level grant, or they fail closed to "deny"
+	// before tool_one ever executes and signals tool1ExecCh.
+	defaultAgent.StoreToolPolicy(&tools.ToolPolicyCfg{
+		Policies: map[string]string{"tool_one": "allow", "tool_two": "allow"},
+	})
 
 	// Start processing in a goroutine
 	type result struct {
@@ -1175,6 +1185,16 @@ func TestAgentLoop_InterruptGraceful_UsesTerminalNoToolCall(t *testing.T) {
 	al.RegisterTool(tool1)
 	al.RegisterTool(tool2)
 	sessionKey := routing.BuildAgentMainSessionKey(routing.DefaultAgentID)
+	defaultAgent := al.registry.GetDefaultAgent()
+	if defaultAgent == nil {
+		t.Fatal("expected default agent")
+	}
+	// No-default-policy model (CLAUDE.md hard constraint 6): both exercised
+	// tools need an explicit agent-level grant, or they fail closed to "deny"
+	// before tool_one ever executes and signals tool1ExecCh.
+	defaultAgent.StoreToolPolicy(&tools.ToolPolicyCfg{
+		Policies: map[string]string{"tool_one": "allow", "tool_two": "allow"},
+	})
 
 	sub := al.SubscribeEvents(32)
 	defer al.UnsubscribeEvents(sub.ID)
@@ -1334,6 +1354,12 @@ func TestAgentLoop_InterruptHard_RestoresSession(t *testing.T) {
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
+	// No-default-policy model (CLAUDE.md hard constraint 6): cancel_tool needs
+	// an explicit agent-level grant, or it fails closed to "deny" before ever
+	// executing and signaling started.
+	defaultAgent.StoreToolPolicy(&tools.ToolPolicyCfg{
+		Policies: map[string]string{"cancel_tool": "allow"},
+	})
 
 	originalHistory := []providers.Message{
 		{Role: "user", Content: "before"},
@@ -1520,6 +1546,16 @@ func TestAgentLoop_Steering_SkippedToolsHaveErrorResults(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, msgBus, wrappedProvider)
 	al.RegisterTool(tool1)
 	al.RegisterTool(tool2)
+	defaultAgent := al.registry.GetDefaultAgent()
+	if defaultAgent == nil {
+		t.Fatal("expected default agent")
+	}
+	// No-default-policy model (CLAUDE.md hard constraint 6): both exercised
+	// tools need an explicit agent-level grant, or they fail closed to "deny"
+	// before ever executing and slow_tool never signals execCh.
+	defaultAgent.StoreToolPolicy(&tools.ToolPolicyCfg{
+		Policies: map[string]string{"slow_tool": "allow", "skipped_tool": "allow"},
+	})
 
 	resultCh := make(chan string, 1)
 	go func() {
@@ -1529,7 +1565,15 @@ func TestAgentLoop_Steering_SkippedToolsHaveErrorResults(t *testing.T) {
 		resultCh <- resp
 	}()
 
-	<-execCh
+	// Bounded wait (regression guard): before the explicit policy grant above,
+	// a denied slow_tool never signaled execCh and this blocked forever,
+	// masking a policy-fixture bug as a 10-minute test-binary hang instead of
+	// a fast, readable failure.
+	select {
+	case <-execCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for slow_tool to start")
+	}
 	al.Steer(providers.Message{Role: "user", Content: "interrupt!"})
 
 	select {

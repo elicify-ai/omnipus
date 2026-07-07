@@ -522,7 +522,11 @@ func TestValidateToolPolicyCoverage_BothSidesPresentDifferentValues_NotAGap(t *t
 	knownTools := map[string]struct{}{"read_file": {}}
 
 	gaps := ValidateToolPolicyCoverage(cfg, knownTools)
-	assert.Empty(t, gaps, "mere presence of an entry on either layer satisfies coverage; the two layers are not required to agree on a value")
+	assert.Empty(
+		t,
+		gaps,
+		"mere presence of an entry on either layer satisfies coverage; the two layers are not required to agree on a value",
+	)
 }
 
 // --- RepairIncompleteToolPolicyCoverage tests ---

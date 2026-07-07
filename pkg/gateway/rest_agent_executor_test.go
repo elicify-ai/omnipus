@@ -1202,7 +1202,12 @@ func TestUpdateAgent_ConcurrentDeleteRace_Returns404NotPhantom200(t *testing.T) 
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
 			List: []config.AgentConfig{
-				{ID: "test-agent", Name: "Test Agent", Type: config.AgentTypeCustom, Tools: coreagent.NewCustomAgentToolsCfg()},
+				{
+					ID:    "test-agent",
+					Name:  "Test Agent",
+					Type:  config.AgentTypeCustom,
+					Tools: coreagent.NewCustomAgentToolsCfg(),
+				},
 			},
 		},
 	}
