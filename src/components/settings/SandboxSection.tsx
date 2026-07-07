@@ -33,7 +33,7 @@ import type { SandboxStatus } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { SaveStatus, useSaveStatus } from './SaveStatus'
 import { ShellDenyPatternsEditor } from '@/components/agents/ShellDenyPatternsEditor'
-import { useReAuthGate } from './useReAuthGate'
+import { useReAuthGate, isReAuthCancelled } from './useReAuthGate'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -80,6 +80,14 @@ function listsMatch(a: string[], b: readonly string[]): boolean {
   const sortedA = [...a].sort()
   const sortedB = [...b].sort()
   return sortedA.every((v, i) => v === sortedB[i])
+}
+
+// Reads the canonical backend key (shell_deny_patterns) off a sandbox-config
+// response — see pkg/gateway/rest_sandbox_config.go GET response. Shared by
+// the configData→state hydration effect and the re-auth-cancel revert so
+// both read the server value the same way.
+function extractShellDenyPatterns(data: { shell_deny_patterns?: string[] } | undefined | null): string[] {
+  return Array.isArray(data?.shell_deny_patterns) ? data.shell_deny_patterns : []
 }
 
 // ── Status dot ────────────────────────────────────────────────────────────────
@@ -523,18 +531,25 @@ export function SandboxSection(): React.ReactElement {
     },
     onError: (err: Error) => {
       setDenyPatternsSaving(false)
+      if (isReAuthCancelled(err)) {
+        // user dismissed the password prompt — revert the optimistic edit so
+        // the textarea doesn't keep showing an unsaved change with no
+        // indicator that it was never persisted. denyPatternsTouched is
+        // cleared first (same technique the configData hydration effect
+        // uses) so this programmatic revert does not itself re-trigger the
+        // debounced autosave below.
+        denyPatternsTouched.current = false
+        setGlobalDenyPatterns(extractShellDenyPatterns(configData))
+        return
+      }
       addToast({ message: isApiError(err) ? err.userMessage : err.message, variant: 'error' })
     },
   })
 
-  // Sync globalDenyPatterns from configData. Reads the canonical backend key
-  // (shell_deny_patterns) — see pkg/gateway/rest_sandbox_config.go GET response.
+  // Sync globalDenyPatterns from configData.
   useEffect(() => {
     if (!configData) return
-    const raw = configData as Record<string, unknown>
-    if (Array.isArray(raw.shell_deny_patterns)) {
-      setGlobalDenyPatterns(raw.shell_deny_patterns as string[])
-    }
+    setGlobalDenyPatterns(extractShellDenyPatterns(configData))
   }, [configData])
 
   // Debounced autosave for the global deny patterns. The flag distinguishes
@@ -638,6 +653,20 @@ export function SandboxSection(): React.ReactElement {
       void queryClient.invalidateQueries({ queryKey: ['sandbox-config'] })
     },
     onError: (err: Error) => {
+      if (isReAuthCancelled(err)) {
+        // user dismissed the password prompt — no-op, not a toast-worthy
+        // error, but the mode was already flipped optimistically in
+        // handleModeChange before this mutation fired. It MUST be reverted
+        // here too (same as the real-error branch below) — otherwise the
+        // radio is left pointing at an unsaved target mode with no error
+        // indicator (saveState goes back to 'idle', which SaveStatus renders
+        // as nothing), and because handleModeChange early-returns when
+        // `mode === currentMode`, re-clicking the same (already-selected but
+        // unsaved) radio would not even refire onChange — no recovery path.
+        setSaveState('idle')
+        setCurrentMode(savedMode)
+        return
+      }
       setSaveState('error')
       const msg = isApiError(err) ? err.userMessage : err.message
       setErrorMessage(msg)
@@ -664,6 +693,17 @@ export function SandboxSection(): React.ReactElement {
       }
     },
     onError: (err: Error) => {
+      if (isReAuthCancelled(err)) {
+        // user dismissed the password prompt — no-op, not an error; but the
+        // path/SSRF add or delete that triggered this save already applied
+        // optimistically to pathList/ssrfList. Revert both to the last
+        // known-saved server state so the UI doesn't keep showing a "phantom"
+        // unsaved entry with no indicator that it was never persisted
+        // (mirrors doSaveMode's revert-on-cancel for the mode radio).
+        setSaveState('idle')
+        revertPathsSsrfToServer()
+        return
+      }
       setSaveState('error')
       const msg = isApiError(err) ? err.userMessage : String(err)
       setErrorMessage(msg)
@@ -682,6 +722,21 @@ export function SandboxSection(): React.ReactElement {
       setPathAddError(msg)
     },
   })
+
+  // Reverts pathList/ssrfList (and the derived SSRF preset/advanced-open
+  // state) back to the last known-saved server config. Used both when the
+  // wildcard-SSRF confirmation is backed out of and when the re-auth prompt
+  // for a paths/SSRF save is cancelled — in both cases an optimistic edit
+  // must not keep appearing applied when it was never persisted.
+  function revertPathsSsrfToServer() {
+    if (!configData) return
+    setPathList(configData.allowed_paths ?? [])
+    const serverSsrf = configData.ssrf?.allow_internal ?? []
+    setSsrfList(serverSsrf)
+    const matchedPreset = SSRF_PRESETS.findIndex((p) => listsMatch(serverSsrf, p.list))
+    setSsrfActivePreset(matchedPreset >= 0 ? matchedPreset : null)
+    setSsrfAdvancedOpen(matchedPreset < 0)
+  }
 
   // ── Commit helper (paths + SSRF) ──────────────────────────────────────────
   function commitPathsSsrf(paths: string[], ssrf: string[]) {
@@ -773,14 +828,7 @@ export function SandboxSection(): React.ReactElement {
   function handleWildcardCancel() {
     setShowWildcardModal(false)
     pendingSaveRef.current = null
-    // Revert SSRF list to server state
-    if (configData) {
-      const serverSsrf = configData.ssrf?.allow_internal ?? []
-      setSsrfList(serverSsrf)
-      const matchedPreset = SSRF_PRESETS.findIndex((p) => listsMatch(serverSsrf, p.list))
-      setSsrfActivePreset(matchedPreset >= 0 ? matchedPreset : null)
-      setSsrfAdvancedOpen(matchedPreset < 0)
-    }
+    revertPathsSsrfToServer()
   }
 
   // ── Enforce modal handlers ────────────────────────────────────────────────

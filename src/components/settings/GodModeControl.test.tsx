@@ -154,6 +154,22 @@ describe('GodModeControl', () => {
     expect(screen.queryByTestId('god-mode-restart-note')).not.toBeInTheDocument()
   })
 
+  // Regression: a fetch failure must show a distinct error note (not the
+  // "compiled out" copy, which implies a known, permanent build fact) and
+  // must not disable the toggle purely because the fetch failed — the
+  // operator should still be able to attempt the change; the mutation's own
+  // onError handling covers a genuinely unsupported backend.
+  it('shows a distinct fetch-error note (not "compiled out") and does not disable the toggle on fetch failure', async () => {
+    vi.mocked(api.fetchGodMode).mockRejectedValue(new Error('network error'))
+    renderControl()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('god-mode-fetch-error-note')).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('god-mode-unavailable-note')).not.toBeInTheDocument()
+    expect(screen.getByTestId('god-mode-toggle')).toBeEnabled()
+  })
+
   it('does not call setGodMode if the step-up dialog is cancelled', async () => {
     vi.mocked(api.fetchGodMode).mockResolvedValue(STATE_OFF)
     renderControl()
@@ -229,5 +245,19 @@ describe('GodModeActiveBanner', () => {
     })
     expect(screen.queryByTestId('god-mode-active-banner')).not.toBeInTheDocument()
     expect(container.querySelector('[role="alert"]')).toBeNull()
+  })
+
+  // Regression: a fetch failure must NOT collapse to the same falsy state as
+  // "god-mode is genuinely off" — the banner must show an explicit
+  // status-unknown indicator instead of silently rendering nothing, since
+  // silence here would look exactly like "sandboxing is confirmed on".
+  it('shows a status-unknown banner (not nothing) when the fetch fails', async () => {
+    vi.mocked(api.fetchGodMode).mockRejectedValue(new Error('network error'))
+    renderBanner()
+    await waitFor(() => {
+      expect(screen.getByTestId('god-mode-status-unknown-banner')).toBeInTheDocument()
+    })
+    expect(screen.getByText(/god-mode status unavailable/i)).toBeInTheDocument()
+    expect(screen.queryByTestId('god-mode-active-banner')).not.toBeInTheDocument()
   })
 })

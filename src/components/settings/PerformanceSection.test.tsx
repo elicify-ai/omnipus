@@ -313,4 +313,144 @@ describe('PerformanceSection — Tool loading toggle', () => {
     // not appear because the null buildBody guard cleared status back to 'idle'.
     expect(screen.queryByText('Saving...')).not.toBeInTheDocument()
   })
+
+  it('shows an error toast and reverts the switch when toggled while max_parallel_agents is out of range', async () => {
+    // Regression test for the silent-no-op bug: toggling tools_on_demand while
+    // the paired max_parallel_agents field is out of range used to flip the
+    // switch and silently drop the change (no toast, no PUT, no revert). The
+    // fix surfaces the same error toast triggerSave uses and reverts the
+    // switch to the value that is actually persisted.
+    vi.useRealTimers()
+    renderSection()
+    await waitFor(() => screen.getByLabelText('Max parallel agents'))
+
+    // Put an out-of-range value (99) into the input first.
+    fireEvent.change(screen.getByLabelText('Max parallel agents'), { target: { value: '99' } })
+
+    const toggle = screen.getByLabelText('Tool loading')
+    expect(toggle).toBeChecked() // starts ON (default from SETTINGS)
+
+    // Toggle OFF — this calls handleToolsOnDemandChange, which calls
+    // buildBody(inputValue='99', checked=false) → null (out of range).
+    fireEvent.click(toggle)
+
+    await waitFor(() => {
+      expect(addToast).toHaveBeenCalledWith({
+        variant: 'error',
+        message: 'max_parallel_agents must be between 2 and 16 (or leave blank for auto-detect).',
+      })
+    })
+
+    // The switch must be reverted to its previously-saved (checked) state —
+    // the toggle never actually saved, so the UI must not lie about it.
+    await waitFor(() => {
+      expect(screen.getByLabelText('Tool loading')).toBeChecked()
+    })
+
+    // No save was attempted.
+    expect(api.updatePerformanceSettings).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('reauth-confirm')).not.toBeInTheDocument()
+  })
+
+  it('shows an error toast and reverts the switch when toggled OFF-to-ON while max_parallel_agents is out of range', async () => {
+    // Mirror-direction regression test: the previous test only covered the
+    // default-ON -> toggle-OFF direction. Verify the same revert+toast fires
+    // starting from tools_on_demand=false and toggling ON, so the fix isn't
+    // accidentally coupled to a specific starting boolean.
+    vi.useRealTimers()
+    vi.mocked(api.fetchPerformanceSettings).mockResolvedValue({
+      ...SETTINGS,
+      tools_on_demand: false,
+    } as never)
+    renderSection()
+    await waitFor(() => screen.getByLabelText('Max parallel agents'))
+
+    // Put an out-of-range value (99) into the input first.
+    fireEvent.change(screen.getByLabelText('Max parallel agents'), { target: { value: '99' } })
+
+    const toggle = screen.getByLabelText('Tool loading')
+    expect(toggle).not.toBeChecked() // starts OFF
+
+    // Toggle ON — buildBody(inputValue='99', checked=true) -> null (out of range).
+    fireEvent.click(toggle)
+
+    await waitFor(() => {
+      expect(addToast).toHaveBeenCalledWith({
+        variant: 'error',
+        message: 'max_parallel_agents must be between 2 and 16 (or leave blank for auto-detect).',
+      })
+    })
+
+    // The switch must be reverted to its previously-saved (unchecked) state.
+    await waitFor(() => {
+      expect(screen.getByLabelText('Tool loading')).not.toBeChecked()
+    })
+
+    expect(api.updatePerformanceSettings).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('reauth-confirm')).not.toBeInTheDocument()
+  })
+
+  it('shows an error toast when the debounced max_parallel_agents input settles out of range (Bug 1)', async () => {
+    // Regression test: handleInputChange's debounced settle path never went
+    // through triggerSave, so an out-of-range value typed directly into the
+    // number field (rather than via the toggle) used to silently no-op —
+    // no toast, no indication the value wasn't saved. The fix surfaces the
+    // same error toast triggerSave and the toggle path already show.
+    renderSection()
+    await waitFor(() => screen.getByLabelText('Max parallel agents'))
+
+    vi.useFakeTimers()
+    fireEvent.change(screen.getByLabelText('Max parallel agents'), { target: { value: '99' } })
+    await act(async () => { vi.advanceTimersByTime(700) })
+    vi.useRealTimers()
+
+    await waitFor(() => {
+      expect(addToast).toHaveBeenCalledWith({
+        variant: 'error',
+        message: 'max_parallel_agents must be between 2 and 16 (or leave blank for auto-detect).',
+      })
+    })
+
+    // Dialog never opens and no PUT fires for the invalid value.
+    expect(screen.queryByTestId('reauth-confirm')).not.toBeInTheDocument()
+    expect(api.updatePerformanceSettings).not.toHaveBeenCalled()
+  })
+
+  it('reverts tools_on_demand to the server value when re-auth is cancelled after a valid toggle (Bug 2)', async () => {
+    // Regression test: cancelling the ReAuthDialog for a *valid* toggle left
+    // toolsOnDemand pointing at the optimistically-flipped value forever,
+    // with `dirty` stuck true so the resync effect could never restore the
+    // real server value. The fix clears `dirty` on cancel so the sync effect
+    // (`data && !dirty`) snaps the switch back to the truth.
+    vi.useRealTimers()
+    renderSection()
+    await waitFor(() => screen.getByLabelText('Tool loading'))
+
+    const toggle = screen.getByLabelText('Tool loading')
+    expect(toggle).toBeChecked() // starts ON (default from SETTINGS)
+
+    // Toggle OFF — a valid change (max_parallel_agents=4 stays in range).
+    fireEvent.click(toggle)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('reauth-confirm')).toBeInTheDocument()
+    })
+    // Switch is optimistically OFF while the dialog is open.
+    expect(screen.getByLabelText('Tool loading')).not.toBeChecked()
+
+    // Cancel re-auth instead of confirming.
+    fireEvent.click(screen.getByTestId('reauth-cancel'))
+
+    // Dialog closes and the switch reverts to the server's true value (ON) —
+    // it must not keep showing the unsaved OFF state.
+    await waitFor(() => {
+      expect(screen.queryByTestId('reauth-confirm')).not.toBeInTheDocument()
+    })
+    await waitFor(() => {
+      expect(screen.getByLabelText('Tool loading')).toBeChecked()
+    })
+
+    // No save was ever attempted.
+    expect(api.updatePerformanceSettings).not.toHaveBeenCalled()
+  })
 })

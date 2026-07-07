@@ -17,10 +17,15 @@ import { fetchAboutInfo, isDevicePairingEnabled } from '@/lib/api'
 // Operators find the restart action under Settings → Gateway.
 
 export function SettingsScreen() {
-  const { data: aboutInfo } = useQuery({
+  const { data: aboutInfo, isError: aboutInfoError } = useQuery({
     queryKey: ['about'],
     queryFn: fetchAboutInfo,
   })
+  // isDevicePairingEnabled treats a missing/undefined field as "off" (it's an
+  // opt-in flag) — which is also what `aboutInfo` looks like on a fetch
+  // failure. Without `aboutInfoError`, a transient gateway error would look
+  // identical to "device pairing is disabled" and silently hide the Devices
+  // tab instead of surfacing that the flag's real state is unknown.
   const devicePairingEnabled = isDevicePairingEnabled(aboutInfo)
 
   return (
@@ -35,6 +40,15 @@ export function SettingsScreen() {
             Configure providers, integrations, gateway, security, and data management.
             Personal preferences live under Profile.
           </p>
+          {aboutInfoError && (
+            <p
+              data-testid="settings-about-fetch-error"
+              className="text-xs text-[var(--color-error)] mt-2"
+            >
+              Could not fetch gateway build info — gateway may be offline. Feature-flagged tabs
+              (e.g. Devices) may be hidden or stale until this loads successfully.
+            </p>
+          )}
         </div>
 
         <Tabs defaultValue="providers">

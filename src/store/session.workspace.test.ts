@@ -6,7 +6,7 @@
 // singleton spy-accumulation issues across tests.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { useSessionStore } from './session'
+import { useSessionStore, registerChatResetForReplay } from './session'
 import { useWorkspacesStore } from './workspacesStore'
 import { useConnectionStore } from './connection'
 
@@ -343,5 +343,87 @@ describe('setWorkspaceSessionDescriptor — explicit descriptor write', () => {
       title: 'My task',
       agentId: 'ava',
     })
+  })
+})
+
+describe('setActiveSession — session type preservation (Wave-1 Bug 1 regression)', () => {
+  beforeEach(resetAll)
+
+  it('preserves the pre-existing attachedSessionType in sessionByWorkspace instead of falling back to "chat"', () => {
+    // BDD: Given attachedSessionType is 'task' (set by a prior attachToSession/
+    //   setAttachedContext call for the currently active session),
+    //   When setActiveSession is called to switch the active agent while the
+    //   session stays conceptually the same (e.g. ChatControls agent picker),
+    //   Then the sessionByWorkspace descriptor must record 'task', not 'chat' —
+    //   the second set() must not read attachedSessionType AFTER the first
+    //   set() has already nulled it out.
+    useWorkspacesStore.setState({ activeWorkspaceId: 'ws-1' })
+    useSessionStore.setState({ attachedSessionType: 'task', attachedTaskTitle: 'My task' })
+
+    useSessionStore.getState().setActiveSession('sess-task-1', 'agent-1', null)
+
+    const descriptor = useSessionStore.getState().sessionByWorkspace['ws-1']
+    expect(descriptor?.type).toBe('task')
+    expect(descriptor?.id).toBe('sess-task-1')
+    // Same stale-read hazard as attachedSessionType above, one field below:
+    // the second set()'s updater must use the pre-captured priorTaskTitle,
+    // not state.attachedTaskTitle (which the first set() already nulled).
+    expect(descriptor?.title).toBe('My task')
+  })
+
+  it('falls back to "chat" when there was no prior attachedSessionType', () => {
+    useWorkspacesStore.setState({ activeWorkspaceId: 'ws-1' })
+    useSessionStore.setState({ attachedSessionType: null, attachedTaskTitle: null })
+
+    useSessionStore.getState().setActiveSession('sess-plain', 'agent-1', null)
+
+    expect(useSessionStore.getState().sessionByWorkspace['ws-1']?.type).toBe('chat')
+  })
+
+  it('still resets attachedSessionType/attachedTaskTitle on the store itself for the new session', () => {
+    useWorkspacesStore.setState({ activeWorkspaceId: 'ws-1' })
+    useSessionStore.setState({ attachedSessionType: 'channel', attachedTaskTitle: 'Old title' })
+
+    useSessionStore.getState().setActiveSession('sess-new', 'agent-1', null)
+
+    // The live attachedSessionType/attachedTaskTitle fields are still cleared
+    // (unrelated to the sessionByWorkspace bug) — only the *captured* value
+    // used for the sessionByWorkspace descriptor is preserved.
+    expect(useSessionStore.getState().attachedSessionType).toBeNull()
+  })
+})
+
+describe('attachToSession — no bucket wipe on failed send (Wave-1 Bug 2 regression)', () => {
+  beforeEach(resetAll)
+
+  it('does NOT reset the chat bucket when connection.send returns false', () => {
+    const resetSpy = vi.fn()
+    registerChatResetForReplay(resetSpy)
+
+    useWorkspacesStore.setState({ activeWorkspaceId: 'ws-1' })
+    const failingConnection = { send: vi.fn().mockReturnValue(false), close: vi.fn(), isConnected: true }
+    useConnectionStore.setState({ connection: failingConnection as never, isConnected: true })
+
+    useSessionStore.getState().attachToSession('sess-fail', 'chat', 'Title', 'agent-1')
+
+    expect(resetSpy).not.toHaveBeenCalled()
+    // Connection error must be surfaced.
+    expect(useConnectionStore.getState().connectionError).toMatch(/Could not attach/)
+    // activeSessionId must NOT have been switched to the failed session.
+    expect(useSessionStore.getState().activeSessionId).toBeNull()
+  })
+
+  it('DOES reset the chat bucket once send is confirmed successful', () => {
+    const resetSpy = vi.fn()
+    registerChatResetForReplay(resetSpy)
+
+    useWorkspacesStore.setState({ activeWorkspaceId: 'ws-1' })
+    const okConnection = { send: vi.fn().mockReturnValue(true), close: vi.fn(), isConnected: true }
+    useConnectionStore.setState({ connection: okConnection as never, isConnected: true })
+
+    useSessionStore.getState().attachToSession('sess-ok', 'chat', 'Title', 'agent-1')
+
+    expect(resetSpy).toHaveBeenCalledWith('sess-ok')
+    expect(useSessionStore.getState().activeSessionId).toBe('sess-ok')
   })
 })

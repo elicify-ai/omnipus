@@ -91,6 +91,14 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   activeAgentType: null,
 
   setActiveSession: (sessionId, agentId, agentType) => {
+    // Capture the current session type BEFORE the reset below nulls it out.
+    // The set() call that follows clears attachedSessionType synchronously,
+    // so reading state.attachedSessionType inside the second set()'s updater
+    // (below) would always see null and mislabel every session as 'chat'.
+    const priorSessionType = get().attachedSessionType
+    // Same stale-read hazard as priorSessionType above: attachedTaskTitle is
+    // nulled by the set() call below, so it must be captured beforehand too.
+    const priorTaskTitle = get().attachedTaskTitle
     set((state) => ({
       ...state,
       activeSessionId: sessionId,
@@ -109,8 +117,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
             ...state.sessionByWorkspace,
             [wsId]: {
               id: sessionId,
-              type: state.attachedSessionType ?? 'chat',
-              title: state.attachedTaskTitle,
+              type: priorSessionType ?? 'chat',
+              title: priorTaskTitle,
               agentId: (agentId ?? get().activeAgentId) ?? null,
             },
           },
@@ -130,7 +138,6 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     const { connection } = useConnectionStore.getState()
 
     if (connection) {
-      resetChatBucketForReplay(sessionId)
       const sent = connection.send({ type: 'attach_session', session_id: sessionId })
       if (!sent) {
         useConnectionStore.getState().setConnectionError(
@@ -138,6 +145,11 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         )
         return
       }
+      // Only wipe the chat bucket once the attach frame is confirmed sent —
+      // resetting first (as before) would permanently lose the bucket's
+      // contents if send() failed (e.g. during a reconnect window), since
+      // there was no rollback for the pre-reset state.
+      resetChatBucketForReplay(sessionId)
       set((state) => ({
         activeSessionId: sessionId,
         attachedSessionType: type,
