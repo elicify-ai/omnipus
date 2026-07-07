@@ -6177,16 +6177,6 @@ turnLoop:
 			// C2: check for context cancellation/timeout before reporting a generic
 			// "LLM call failed" error — these are user/system actions, not LLM failures.
 			if errors.Is(err, context.Canceled) {
-				// DIAGNOSTIC (temporary, root-causing a real-LLM e2e flake —
-				// remove once resolved): log turnCtx.Err() and elapsed turn
-				// duration to correlate against websocket.go's ping/readLoop
-				// diagnostics and confirm whether this cancellation traces
-				// back to the WS connection's context (r.Context()) dying,
-				// independent of the LLM call itself.
-				logger.WarnCF("agent", "DIAGNOSTIC: turn canceled at llm_call site", map[string]any{
-					"turn_id": ts.turnID, "elapsed": time.Since(ts.startedAt).String(),
-					"turn_ctx_err": fmt.Sprint(turnCtx.Err()), "raw_err": err.Error(),
-				})
 				return turnResult{}, fmt.Errorf("turn canceled")
 			}
 			if errors.Is(err, context.DeadlineExceeded) {
@@ -6422,12 +6412,6 @@ turnLoop:
 			// If the inner retry loop set an error, surface it via the outer error path.
 			if err != nil {
 				if errors.Is(err, context.Canceled) {
-					// DIAGNOSTIC (temporary, see the matching comment at the
-					// llm_call site above — remove once resolved).
-					logger.WarnCF("agent", "DIAGNOSTIC: turn canceled at llm_empty_retry site", map[string]any{
-						"turn_id": ts.turnID, "elapsed": time.Since(ts.startedAt).String(),
-						"turn_ctx_err": fmt.Sprint(turnCtx.Err()), "raw_err": err.Error(),
-					})
 					return turnResult{}, fmt.Errorf("turn canceled")
 				}
 				if errors.Is(err, context.DeadlineExceeded) {

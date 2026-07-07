@@ -437,15 +437,6 @@ func (al *AgentLoop) InterruptSession(sessionID, hint string) (descendants []str
 	if sessionID == "" {
 		return nil, fmt.Errorf("empty session_id")
 	}
-	// DIAGNOSTIC (temporary, root-causing a real-LLM e2e flake — remove once
-	// resolved): log every InterruptSession call with its session_id and hint
-	// to identify the caller/reason. InterruptSession cascades to ALL turns
-	// sharing this session_id (parent + sub-turns), which is why a delegate
-	// call's providerCtx can be canceled without its own turnCtx ever being
-	// touched directly.
-	logger.WarnCF("agent", "DIAGNOSTIC: InterruptSession called", map[string]any{
-		"session_id": sessionID, "hint": hint,
-	})
 
 	// Collect all matching turn states before spawning goroutines so we hold the
 	// sync.Map range lock for as short a time as possible.
