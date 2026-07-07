@@ -265,7 +265,7 @@ func VerifyFile(ctx context.Context, path string, key []byte, seedHMAC []byte) (
 // the new-oldest survivor's first entry — and because this function returns
 // at the first break, every file after that point is silently never
 // checked. Before defaulting to genesis, we consult the persisted
-// ChainCheckpoint (checkpoint.go, written by cleanupExpired at the moment a
+// chainCheckpoint (checkpoint.go, written by cleanupExpired at the moment a
 // deletion would sever the genesis link) and use it as the seed when its
 // recorded AppliesToFile matches the file that is actually oldest on disk.
 func VerifyDir(ctx context.Context, dir string, key []byte) (*ChainResult, error) {
@@ -278,8 +278,9 @@ func VerifyDir(ctx context.Context, dir string, key []byte) (*ChainResult, error
 	if err != nil {
 		return nil, fmt.Errorf("audit: glob %s: %w", rotatedPattern, err)
 	}
-	// Chronological by ModTime, NOT filename — see fileorder.go for why a
-	// plain sort.Strings gets multi-rotation-per-day files backwards.
+	// Chronological by each file's first-entry timestamp (falling back to
+	// ModTime, then filename) — see fileorder.go for why filename/ModTime
+	// alone get multi-rotation-per-day files backwards.
 	sortAuditFilesChronologically(rotated)
 
 	currentPath := filepath.Join(dir, "audit.jsonl")

@@ -124,7 +124,7 @@ func (sp *SeccompProgram) Install() error {
 //     32-bit compat entry point (`int $0x80` / vDSO sysenter, arch ==
 //     AUDIT_ARCH_I386) hands the kernel a DIFFERENT numbering table than
 //     the native x86_64 table this file's blockedNrs were resolved against
-//     (e.g. native nr 101 is ptrace, but ia32 nr 101 is fork). Without this
+//     (e.g. native nr 101 is ptrace, but ia32 nr 101 is ioperm). Without this
 //     check, every JEQ comparison below is checking the wrong table for a
 //     compat-mode call, so an attacker can pick a 32-bit nr that collides
 //     with an ALLOWED native syscall number and reach ptrace/mount/bpf/etc.

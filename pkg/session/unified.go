@@ -831,7 +831,13 @@ func (us *UnifiedStore) DeleteSession(sessionID string) error {
 }
 
 // ClearAll removes every session directory from the store.
-// Returns the number of sessions removed.
+// Returns the number of sessions removed and, if one or more session
+// directories could not be removed, a non-nil aggregate error (via
+// errors.Join) describing every such failure. A per-entry removal failure
+// does not abort the operation — it is logged via slog.Warn and the loop
+// continues to the next entry — but the failure is still surfaced to the
+// caller so a "clear all sessions" request cannot silently under-deliver on
+// this privacy-sensitive, destructive action.
 func (us *UnifiedStore) ClearAll() (int, error) {
 	us.mu.Lock()
 	defer us.mu.Unlock()
@@ -846,6 +852,7 @@ func (us *UnifiedStore) ClearAll() (int, error) {
 
 	uploadsRoot := us.uploadsRoot()
 	removed := 0
+	var errs []error
 	for _, entry := range entries {
 		if !entry.IsDir() || entry.Name() == ".context" {
 			continue
@@ -853,6 +860,7 @@ func (us *UnifiedStore) ClearAll() (int, error) {
 		dir := filepath.Join(us.baseDir, entry.Name())
 		if err := os.RemoveAll(dir); err != nil {
 			slog.Warn("unified_store: clear all: remove session dir", "dir", dir, "error", err)
+			errs = append(errs, fmt.Errorf("unified_store: clear all: remove session dir %q: %w", entry.Name(), err))
 			continue
 		}
 		contextFile := filepath.Join(us.baseDir, ".context", entry.Name()+".jsonl")
@@ -865,7 +873,7 @@ func (us *UnifiedStore) ClearAll() (int, error) {
 		}
 		removed++
 	}
-	return removed, nil
+	return removed, errors.Join(errs...)
 }
 
 // readUnifiedMeta reads meta.json from sessionDir, handling both legacy SessionMeta

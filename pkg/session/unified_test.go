@@ -794,17 +794,15 @@ func TestClearAll_BaseDirMissing_ReturnsZeroNoError(t *testing.T) {
 	assert.Equal(t, 0, removed)
 }
 
-// TestClearAll_ContinuesPastRemovalFailure documents ClearAll's ACTUAL current
-// behavior when one session directory's os.RemoveAll fails: per the code at
-// pkg/session/unified.go:854-857, the error is logged via slog.Warn and the
+// TestClearAll_ContinuesPastRemovalFailure documents ClearAll's behavior when
+// one session directory's os.RemoveAll fails: per the code in
+// pkg/session/unified.go's ClearAll, the error is logged via slog.Warn and the
 // loop `continue`s to the next entry — it does NOT abort the whole operation,
-// and the failed entry is NOT counted in the returned removed total, but the
-// overall ClearAll call still returns a nil error (the per-entry failure is
-// swallowed, not surfaced to the caller).
-//
-// This test asserts that faithfully-observed behavior — NOT the possibly more
-// correct behavior of surfacing a non-nil aggregate error. Flagged in the
-// report as a potential issue (silent partial failure), not fixed here.
+// and the failed entry is NOT counted in the returned removed total. The
+// per-entry failure IS surfaced to the caller: ClearAll aggregates every
+// per-entry error (via errors.Join) and returns it alongside the partial
+// removed count, so a "clear all sessions" request cannot silently
+// under-deliver on this privacy-sensitive, destructive action.
 //
 // The real removal failure is forced by chmod'ing one session directory to
 // 0500 (r-x, no write) so the OS refuses to unlink meta.json/transcript.jsonl
@@ -813,10 +811,12 @@ func TestClearAll_BaseDirMissing_ReturnsZeroNoError(t *testing.T) {
 // BDD: Given 3 session directories where one cannot be removed due to
 // filesystem permissions, When ClearAll is called, Then the two removable
 // directories are removed and counted, the unremovable directory is left
-// fully intact, and ClearAll returns a nil error overall.
+// fully intact, and ClearAll returns a non-nil aggregate error describing the
+// failure alongside the correct partial count.
 //
-// Traces to: pkg/session/unified.go ClearAll (lines 854-857, the
-// `if err := os.RemoveAll(dir); err != nil { slog.Warn(...); continue }` path)
+// Traces to: pkg/session/unified.go ClearAll, the
+// `if err := os.RemoveAll(dir); err != nil { slog.Warn(...); continue }` path
+// and its final `return removed, errors.Join(errs...)`.
 func TestClearAll_ContinuesPastRemovalFailure(t *testing.T) {
 	store, _ := newTestStoreWithHome(t)
 
@@ -839,10 +839,12 @@ func TestClearAll_ContinuesPastRemovalFailure(t *testing.T) {
 
 	removed, err := store.ClearAll()
 
-	// Current behavior: overall error is nil even though one entry failed.
-	require.NoError(t, err,
-		"ClearAll's current behavior swallows per-entry RemoveAll failures (logged via slog.Warn), "+
-			"never surfacing them as the function's returned error")
+	// Current behavior: the per-entry RemoveAll failure is logged via
+	// slog.Warn AND surfaced as a non-nil aggregate error from ClearAll.
+	require.Error(t, err,
+		"ClearAll must surface a non-nil aggregate error when at least one session dir failed to remove")
+	assert.Contains(t, err.Error(), metaBad.ID,
+		"the aggregate error should mention the session whose removal failed")
 	assert.Equal(t, 2, removed,
 		"only the 2 removable session dirs must be counted; the dir whose RemoveAll failed must not be")
 

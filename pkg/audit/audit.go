@@ -10,6 +10,7 @@ package audit
 
 import (
 	"bufio"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -901,32 +902,58 @@ func lastIndexNewline(b []byte) int {
 // stop at the first break, every newer file after that point would be
 // silently skipped too (never checked). To prevent this, every time this
 // pass deletes at least one file that carried real chain-HMAC entries, we
-// persist a signed ChainCheckpoint (checkpoint.go) recording:
+// persist a signed chainCheckpoint (checkpoint.go) recording:
 //   - which file is now the oldest survivor (AppliesToFile)
 //   - the HMAC that survivor's first entry should be checked against
 //     (FinalHMAC — the last good link of the file we're about to erase)
 //
 // VerifyDir consults this checkpoint instead of GenesisSeed() when its
 // AppliesToFile matches what's actually oldest on disk (see verify.go).
+//
+// Staleness fix: a pass can also delete a file that carries NO chain HMAC
+// (pre-chain/legacy or empty) while that file is exactly the one an existing
+// checkpoint's AppliesToFile currently names. Leaving the checkpoint
+// untouched in that case would make it stale — it would name a file that no
+// longer exists, VerifyDir would treat that as a mismatch, and fall back to
+// genesis-seeding, reproducing the exact false-positive this feature exists
+// to prevent. So we read the existing checkpoint (if any) up front and, when
+// its AppliesToFile matches a file this pass deletes but no real HMAC was
+// captured to replace FinalHMAC, we re-point AppliesToFile at the new oldest
+// survivor and re-sign — keeping FinalHMAC unchanged, since an HMAC-less
+// file doesn't move the chain seed.
 func (l *Logger) cleanupExpired() {
 	cutoff := time.Now().UTC().AddDate(0, 0, -l.retDays)
 	pattern := filepath.Join(l.dir, "audit-*.jsonl")
 	matches, _ := filepath.Glob(pattern)
-	// Chronological by ModTime, NOT filename — see fileorder.go for why a
-	// plain sort.Strings gets multi-rotation-per-day files backwards.
+	// Chronological by each file's first-entry timestamp (falling back to
+	// ModTime, then filename) — see fileorder.go for why filename/ModTime
+	// alone get multi-rotation-per-day files backwards.
 	sortAuditFilesChronologically(matches)
 
+	// existingCheckpoint is read BEFORE any deletion so we can tell whether a
+	// deletion in this pass invalidates the CURRENT checkpoint's
+	// AppliesToFile pointer, even when the deleted file itself carries no
+	// chain HMAC (see the staleness fix above). A read failure (no
+	// checkpoint yet, or one that fails its integrity check) is treated the
+	// same as "nothing to keep in sync" here — VerifyDir independently
+	// detects and warns about a corrupt/forged checkpoint; this function's
+	// job is only to keep an already-trustworthy checkpoint from going
+	// stale.
+	existingCheckpoint, _ := readChainCheckpoint(l.dir, l.chainKey)
+
 	// lastDeletedFinalHMAC tracks the chain seed of the most recently deleted
-	// file, in chronological (sorted) iteration order. Because matches is
-	// sorted oldest-first, the LAST value captured here — by the time the
-	// loop finishes deleting everything eligible — is exactly the seed the
-	// new-oldest surviving file's first entry needs to be checked against.
-	// A pre-chain/legacy or empty deleted file (readChainSeedFromFile
-	// returns ok=false) contributes no chain information and deliberately
-	// does NOT clear a previously captured seed — the most recent REAL seed
-	// observed remains the best available checkpoint candidate.
+	// file that actually carried one, in chronological (sorted) iteration
+	// order. Because matches is sorted oldest-first, the LAST value captured
+	// here — by the time the loop finishes deleting everything eligible — is
+	// exactly the seed the new-oldest surviving file's first entry needs to
+	// be checked against. A pre-chain/legacy or empty deleted file
+	// (readChainSeedFromFile returns ok=false) contributes no chain
+	// information and deliberately does NOT clear a previously captured seed
+	// — the most recent REAL seed observed remains the best available
+	// checkpoint candidate.
 	var lastDeletedFinalHMAC []byte
 	deletedAny := false
+	deletedBaseNames := make(map[string]bool)
 
 	for _, path := range matches {
 		info, err := os.Stat(path)
@@ -937,11 +964,16 @@ func (l *Logger) cleanupExpired() {
 			continue
 		}
 
-		// Capture the seed BEFORE removing the file — once it's gone we have
-		// no way to recover its last entry's HMAC.
-		if seed, ok := readChainSeedFromFile(path); ok {
-			lastDeletedFinalHMAC = seed
-		}
+		// Read the seed BEFORE removing the file — once it's gone we have no
+		// way to recover its last entry's HMAC. This is only a READ: it must
+		// not be committed to lastDeletedFinalHMAC/deletedAny/deletedBaseNames
+		// until os.Remove below actually succeeds. Committing it unconditionally
+		// here would mean that if THIS file fails to delete (permission error,
+		// concurrent external deletion, etc.) while a later file in the same
+		// pass deletes successfully, lastDeletedFinalHMAC would end up holding
+		// a seed that doesn't correspond to the true new-oldest survivor —
+		// producing a checkpoint that can never validate.
+		seed, seedOK := readChainSeedFromFile(path)
 
 		if err := os.Remove(path); err != nil {
 			slog.Error("Audit: failed to remove expired log", "path", path, "error", err)
@@ -949,12 +981,15 @@ func (l *Logger) cleanupExpired() {
 		}
 		slog.Info("Audit: removed expired log", "path", path)
 		deletedAny = true
+		deletedBaseNames[filepath.Base(path)] = true
+		if seedOK {
+			lastDeletedFinalHMAC = seed
+		}
 	}
 
-	if !deletedAny || lastDeletedFinalHMAC == nil {
-		// Nothing deleted, or everything deleted was pre-chain/empty (no real
-		// HMAC to checkpoint) — leave any existing checkpoint untouched. It
-		// remains correct for whatever boundary it already recorded.
+	if !deletedAny {
+		// Nothing deleted — any existing checkpoint remains correct for
+		// whatever boundary it already recorded.
 		return
 	}
 
@@ -964,8 +999,36 @@ func (l *Logger) cleanupExpired() {
 		// cleanupExpired ever runs, so this should not happen in practice.
 		return
 	}
-	if err := writeChainCheckpoint(l.dir, newOldest, lastDeletedFinalHMAC, l.chainKey); err != nil {
-		slog.Error("Audit: failed to persist chain-verification checkpoint after retention cleanup", "error", err)
+
+	if lastDeletedFinalHMAC != nil {
+		if err := writeChainCheckpoint(l.dir, newOldest, lastDeletedFinalHMAC, l.chainKey); err != nil {
+			slog.Error("Audit: failed to persist chain-verification checkpoint after retention cleanup", "error", err)
+		}
+		return
+	}
+
+	// Everything deleted this pass was pre-chain/empty (no real HMAC to
+	// checkpoint). Normally that means leaving any existing checkpoint
+	// untouched — but if it named one of the files we just deleted as
+	// AppliesToFile, it is now stale and must be re-pointed (see the
+	// staleness fix above), not silently left dangling.
+	if existingCheckpoint != nil && deletedBaseNames[existingCheckpoint.AppliesToFile] {
+		finalMAC, decErr := hex.DecodeString(existingCheckpoint.FinalHMAC)
+		if decErr != nil || len(finalMAC) != 32 {
+			slog.Error(
+				"Audit: existing chain checkpoint has malformed final_hmac, cannot re-point stale AppliesToFile",
+				"error",
+				decErr,
+			)
+			return
+		}
+		if err := writeChainCheckpoint(l.dir, newOldest, finalMAC, l.chainKey); err != nil {
+			slog.Error(
+				"Audit: failed to re-point stale chain-verification checkpoint after retention cleanup",
+				"error",
+				err,
+			)
+		}
 	}
 }
 

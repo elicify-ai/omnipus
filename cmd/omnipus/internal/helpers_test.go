@@ -46,6 +46,24 @@ func TestGetConfigPath_WithOMNIPUS_CONFIG(t *testing.T) {
 	assert.Equal(t, want, got)
 }
 
+func TestGetOmnipusHome_RelativeOverrideAgreesWithOmnipusHomeDir(t *testing.T) {
+	// GetOmnipusHome() used to independently re-resolve $OMNIPUS_HOME/$HOME
+	// instead of delegating to the canonical config.OmnipusHomeDir(), so a
+	// relative $OMNIPUS_HOME was returned "trusted verbatim" here even after
+	// OmnipusHomeDir() itself was fixed to resolve relative overrides against
+	// the process CWD. With $HOME unset and a relative $OMNIPUS_HOME, both
+	// must now agree on the same absolute, CWD-resolved path.
+	t.Setenv("HOME", "")
+	t.Setenv("USERPROFILE", "")
+	t.Setenv(config.EnvHome, "relative/testhome-cmd-helpers")
+
+	want := config.OmnipusHomeDir()
+	got := GetOmnipusHome()
+
+	require.True(t, filepath.IsAbs(got), "GetOmnipusHome() = %q, want an absolute path", got)
+	assert.Equal(t, want, got)
+}
+
 func TestGetConfigPath_Windows(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("windows-specific HOME behavior varies; run on windows")
