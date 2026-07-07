@@ -53,10 +53,8 @@ func TestAgentToolsCfgToPolicy_GodMode_FloorsAndIsNonDestructive(t *testing.T) {
 	globalCfg := &config.Config{}
 	globalCfg.Sandbox.GodMode = true
 	globalCfg.Sandbox.ToolPolicies = map[string]string{"system.exec": "deny"}
-	globalCfg.Sandbox.DefaultToolPolicy = "deny"
 
 	agentCfg := &config.AgentToolsCfg{}
-	agentCfg.Builtin.DefaultPolicy = "deny"
 	agentCfg.Builtin.Policies = map[string]config.ToolPolicy{"fetch_url": "ask"}
 
 	withGodModeAvailable(t, true)

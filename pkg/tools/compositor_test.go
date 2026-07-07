@@ -62,14 +62,17 @@ func allPolicyTools() []Tool {
 }
 
 // --- FilterToolsByPolicy tests ---
+//
+// There is no default-policy fallback (CLAUDE.md hard constraint 6): every
+// ToolPolicyCfg below relies on explicit Policies/GlobalPolicies entries. A
+// tool with no exact-or-wildcard match on EITHER side fails closed to "deny"
+// (see TestFilterToolsByPolicy_NilConfig_FailsClosedToDenyAll).
 
 // TestFilterToolsByPolicy_GlobalDeny_RemovesTool verifies that a global "deny"
 // on a specific tool removes it from the output regardless of agent policy.
 func TestFilterToolsByPolicy_GlobalDeny_RemovesTool(t *testing.T) {
 	cfg := &ToolPolicyCfg{
-		DefaultPolicy:       "allow",
-		GlobalPolicies:      map[string]string{"search_web": "deny"},
-		GlobalDefaultPolicy: "allow",
+		GlobalPolicies: map[string]string{"search_web": "deny"},
 	}
 
 	got, policyMap := FilterToolsByPolicy(allPolicyTools(), "core", cfg)
@@ -88,10 +91,8 @@ func TestFilterToolsByPolicy_GlobalDeny_RemovesTool(t *testing.T) {
 // global policy is "ask" and agent policy is "allow", the effective result is "ask".
 func TestFilterToolsByPolicy_GlobalAsk_AgentAllow_EffectiveAsk(t *testing.T) {
 	cfg := &ToolPolicyCfg{
-		DefaultPolicy:       "allow",
-		Policies:            map[string]string{"search_web": "allow"},
-		GlobalPolicies:      map[string]string{"search_web": "ask"},
-		GlobalDefaultPolicy: "allow",
+		Policies:       map[string]string{"search_web": "allow"},
+		GlobalPolicies: map[string]string{"search_web": "ask"},
 	}
 
 	_, policyMap := FilterToolsByPolicy(allPolicyTools(), "core", cfg)
@@ -105,10 +106,8 @@ func TestFilterToolsByPolicy_GlobalAsk_AgentAllow_EffectiveAsk(t *testing.T) {
 // agent-level "deny" wins over global "allow".
 func TestFilterToolsByPolicy_GlobalAllow_AgentDeny_EffectiveDeny(t *testing.T) {
 	cfg := &ToolPolicyCfg{
-		DefaultPolicy:       "allow",
-		Policies:            map[string]string{"search_web": "deny"},
-		GlobalPolicies:      map[string]string{},
-		GlobalDefaultPolicy: "allow",
+		Policies:       map[string]string{"search_web": "deny"},
+		GlobalPolicies: map[string]string{"search_web": "allow"},
 	}
 
 	got, _ := FilterToolsByPolicy(allPolicyTools(), "core", cfg)
@@ -124,10 +123,8 @@ func TestFilterToolsByPolicy_GlobalAllow_AgentDeny_EffectiveDeny(t *testing.T) {
 // agent "ask" + global "allow" yields "ask".
 func TestFilterToolsByPolicy_GlobalAllow_AgentAsk_EffectiveAsk(t *testing.T) {
 	cfg := &ToolPolicyCfg{
-		DefaultPolicy:       "allow",
-		Policies:            map[string]string{"search_web": "ask"},
-		GlobalPolicies:      map[string]string{},
-		GlobalDefaultPolicy: "allow",
+		Policies:       map[string]string{"search_web": "ask"},
+		GlobalPolicies: map[string]string{"search_web": "allow"},
 	}
 
 	_, policyMap := FilterToolsByPolicy(allPolicyTools(), "core", cfg)
@@ -141,10 +138,8 @@ func TestFilterToolsByPolicy_GlobalAllow_AgentAsk_EffectiveAsk(t *testing.T) {
 // yields effective "allow".
 func TestFilterToolsByPolicy_AllAllow(t *testing.T) {
 	cfg := &ToolPolicyCfg{
-		DefaultPolicy:       "allow",
-		Policies:            map[string]string{"search_web": "allow"},
-		GlobalPolicies:      map[string]string{"search_web": "allow"},
-		GlobalDefaultPolicy: "allow",
+		Policies:       map[string]string{"search_web": "allow"},
+		GlobalPolicies: map[string]string{"search_web": "allow"},
 	}
 
 	_, policyMap := FilterToolsByPolicy(allPolicyTools(), "core", cfg)
@@ -158,9 +153,7 @@ func TestFilterToolsByPolicy_AllAllow(t *testing.T) {
 // per-agent "system.*: deny" wildcard policy blocks system.* tools.
 func TestFilterToolsByPolicy_SystemWildcardDeny_BlocksSystemTools(t *testing.T) {
 	cfg := &ToolPolicyCfg{
-		DefaultPolicy:       "allow",
-		Policies:            map[string]string{"system.*": "deny"},
-		GlobalDefaultPolicy: "allow",
+		Policies: map[string]string{"system.*": "deny"},
 	}
 
 	got, _ := FilterToolsByPolicy(allPolicyTools(), "core", cfg)
@@ -172,13 +165,13 @@ func TestFilterToolsByPolicy_SystemWildcardDeny_BlocksSystemTools(t *testing.T) 
 	}
 }
 
-// TestFilterToolsByPolicy_ScopeCore_BlockedForCustomUnlessExplicit verifies that
-// a ScopeCore tool is blocked for a custom agent when the effective policy is "deny".
+// TestFilterToolsByPolicy_ScopeCore_CustomAgent verifies that a ScopeCore tool
+// is blocked for a custom agent when the effective policy is "deny", and
+// passes through when explicitly allowed.
 func TestFilterToolsByPolicy_ScopeCore_CustomAgent(t *testing.T) {
-	// Custom agent + deny policy for exec → blocked
+	// Custom agent + explicit deny policy for exec → blocked.
 	denyCfg := &ToolPolicyCfg{
-		DefaultPolicy:       "deny",
-		GlobalDefaultPolicy: "allow",
+		Policies: map[string]string{"exec": "deny"},
 	}
 	got, _ := FilterToolsByPolicy(allPolicyTools(), "custom", denyCfg)
 	for _, tool := range got {
@@ -187,44 +180,46 @@ func TestFilterToolsByPolicy_ScopeCore_CustomAgent(t *testing.T) {
 		}
 	}
 
-	// Custom agent + allow policy for exec → allowed through
+	// Custom agent + explicit allow policy for exec → allowed through.
 	allowCfg := &ToolPolicyCfg{
-		DefaultPolicy:       "allow",
-		GlobalDefaultPolicy: "allow",
+		Policies: map[string]string{"exec": "allow"},
 	}
 	_, policyMap := FilterToolsByPolicy(allPolicyTools(), "custom", allowCfg)
 	if _, ok := policyMap["exec"]; !ok {
-		t.Error("core-scoped tool must be allowed for custom agent with allow policy")
+		t.Error("core-scoped tool must be allowed for custom agent with explicit allow policy")
 	}
 }
 
-// TestFilterToolsByPolicy_EmptyConfig_DefaultsToAllow verifies that a nil config
-// defaults to allow-all.
-func TestFilterToolsByPolicy_EmptyConfig_DefaultsToAllow(t *testing.T) {
+// TestFilterToolsByPolicy_NilConfig_FailsClosedToDenyAll verifies that a nil
+// config (no policy maps at all) fails closed to "deny" for every tool —
+// CLAUDE.md hard constraint 6 forbids a hardcoded "allow" fallback. Coverage
+// (an explicit global and/or per-agent entry for every static builtin tool,
+// for every agent) is enforced structurally at boot and at every agent write
+// by config.ValidateToolPolicyCoverage; a genuinely uncovered tool reaching
+// this resolver is a bug signal, not a normal path.
+func TestFilterToolsByPolicy_NilConfig_FailsClosedToDenyAll(t *testing.T) {
 	got, policyMap := FilterToolsByPolicy(allPolicyTools(), "core", nil)
 
-	if len(got) != 3 {
-		t.Errorf("expected 3 tools for core agent with nil config, got %d", len(got))
+	if len(got) != 0 {
+		t.Errorf("expected 0 tools for nil config (fail-closed, no coverage), got %d", len(got))
 	}
-	for _, name := range []string{"system.agent.list", "exec", "search_web"} {
-		if p, ok := policyMap[name]; !ok || p != "allow" {
-			t.Errorf("expected policy 'allow' for %q, got %q (ok=%v)", name, p, ok)
-		}
+	if len(policyMap) != 0 {
+		t.Errorf("expected empty policyMap for nil config (fail-closed), got %v", policyMap)
 	}
 }
 
 // TestFilterToolsByPolicy_UnknownScope_Denied verifies that a tool with an
-// unknown/zero-value scope is denied (fail-closed).
+// unknown/zero-value scope is denied (fail-closed) by the scope gate, while an
+// explicitly-allowed general-scope tool still passes alongside it.
 func TestFilterToolsByPolicy_UnknownScope_Denied(t *testing.T) {
 	unknownScopeTool := makeScopedTool("mystery_tool", ToolScope("unknown"))
-	tools := []Tool{unknownScopeTool, makeScopedTool("search_web", ScopeGeneral)}
+	toolSet := []Tool{unknownScopeTool, makeScopedTool("search_web", ScopeGeneral)}
 
 	cfg := &ToolPolicyCfg{
-		DefaultPolicy:       "allow",
-		GlobalDefaultPolicy: "allow",
+		Policies: map[string]string{"search_web": "allow"},
 	}
 
-	got, _ := FilterToolsByPolicy(tools, "core", cfg)
+	got, _ := FilterToolsByPolicy(toolSet, "core", cfg)
 
 	for _, tool := range got {
 		if tool.Name() == "mystery_tool" {
@@ -351,18 +346,16 @@ func TestFilterToolsByPolicy_WildcardSegmentPrecedence(t *testing.T) {
 	// system.config.set matches both "system.*" (ask) and "system.config.*" (deny).
 	// The more-specific "system.config.*" must win → deny.
 	cfg := &ToolPolicyCfg{
-		DefaultPolicy: "allow",
 		Policies: map[string]string{
 			"system.*":        "ask",
 			"system.config.*": "deny",
 		},
-		GlobalDefaultPolicy: "allow",
 	}
-	tools := []Tool{
+	toolSet := []Tool{
 		makeScopedTool("system.config.set", ScopeCore),
 		makeScopedTool("system.agent.list", ScopeCore),
 	}
-	got, policyMap := FilterToolsByPolicy(tools, "core", cfg)
+	got, policyMap := FilterToolsByPolicy(toolSet, "core", cfg)
 
 	// system.config.set must be denied (removed from result)
 	for _, t := range got {

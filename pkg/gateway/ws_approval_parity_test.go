@@ -69,15 +69,22 @@ type parityCase struct {
 }
 
 // buildParityConfig constructs a *config.Config whose agents mirror the deny- and
-// allow-default fixtures used by the pkg/tools parity matrix, plus a global deny
+// allow-postured fixtures used by the pkg/tools parity matrix, plus a global deny
 // floor entry, so the gateway resolver and FilterToolsByPolicy resolve from the
 // same intent.
+//
+// There is no DefaultPolicy/GlobalDefaultPolicy field any more (CLAUDE.md hard
+// constraint 6): every tool the parity cases below actually exercise gets an
+// explicit, literal Policies entry — including "send_message" (ava) and
+// "search_web" (jim), which used to resolve purely through each agent's now-
+// removed default. Without an explicit entry a tool fails closed to "deny"
+// (tools.resolveEffectivePolicyWith), which would silently break jim's
+// allow-by-default parity case.
 func buildParityConfig() *config.Config {
 	return &config.Config{
 		Sandbox: config.OmnipusSandboxConfig{
 			// Global deny floor on send_message_blocked to exercise strictest-wins.
-			ToolPolicies:      map[string]string{"send_message_blocked": "deny"},
-			DefaultToolPolicy: "allow",
+			ToolPolicies: map[string]string{"send_message_blocked": "deny"},
 		},
 		Agents: config.AgentsConfig{
 			List: []config.AgentConfig{
@@ -86,12 +93,13 @@ func buildParityConfig() *config.Config {
 					Type: config.AgentTypeCustom,
 					Tools: &config.AgentToolsCfg{
 						Builtin: config.AgentBuiltinToolsCfg{
-							DefaultPolicy: config.ToolPolicyDeny,
 							Policies: map[string]config.ToolPolicy{
 								"search_web":           config.ToolPolicyAllow,
 								"fetch_url":            config.ToolPolicyAsk,
 								"exec_allowed":         config.ToolPolicyAllow,
 								"send_message_blocked": config.ToolPolicyAllow, // global deny must still win
+								"send_message":         config.ToolPolicyDeny,  // explicit — replaces the removed deny-default
+								"exec":                 config.ToolPolicyDeny,  // explicit — replaces the removed deny-default
 							},
 						},
 					},
@@ -101,10 +109,10 @@ func buildParityConfig() *config.Config {
 					Type: config.AgentTypeCustom,
 					Tools: &config.AgentToolsCfg{
 						Builtin: config.AgentBuiltinToolsCfg{
-							DefaultPolicy: config.ToolPolicyAllow,
 							Policies: map[string]config.ToolPolicy{
-								"exec":      config.ToolPolicyDeny,
-								"fetch_url": config.ToolPolicyAsk,
+								"exec":       config.ToolPolicyDeny,
+								"fetch_url":  config.ToolPolicyAsk,
+								"search_web": config.ToolPolicyAllow, // explicit — replaces the removed allow-default
 							},
 						},
 					},
@@ -116,7 +124,9 @@ func buildParityConfig() *config.Config {
 
 func parityCases() []parityCase {
 	return []parityCase{
-		// deny-default agent (Ava-like).
+		// ava: mostly-deny fixture (Ava-like) — every tool below has an
+		// explicit Policies entry in buildParityConfig; none rely on a
+		// default any more (CLAUDE.md hard constraint 6).
 		{"ava/load_tool(infra)", "load_tool", tools.ScopeGeneral, "ava", "custom", "allow"},
 		{"ava/allowed", "search_web", tools.ScopeGeneral, "ava", "custom", "allow"},
 		{"ava/denied-unlisted", "send_message", tools.ScopeGeneral, "ava", "custom", "deny"},
@@ -125,7 +135,7 @@ func parityCases() []parityCase {
 		{"ava/scopecore-allowed", "exec_allowed", tools.ScopeCore, "ava", "custom", "allow"},
 		{"ava/global-deny-floor-wins", "send_message_blocked", tools.ScopeGeneral, "ava", "custom", "deny"},
 
-		// allow-default agent (Jim-like).
+		// jim: mostly-allow fixture (Jim-like) — same note as above.
 		{"jim/load_tool(infra)", "load_tool", tools.ScopeGeneral, "jim", "custom", "allow"},
 		{"jim/unlisted-allow", "search_web", tools.ScopeGeneral, "jim", "custom", "allow"},
 		{"jim/explicit-deny", "exec", tools.ScopeCore, "jim", "custom", "deny"},
@@ -134,10 +144,15 @@ func parityCases() []parityCase {
 }
 
 // agentToolPolicyCfg builds the tools.ToolPolicyCfg the loop would use for the
-// given agent from the parity config — the same construction the gateway
-// resolver performs internally, used here to drive FilterToolsByPolicy.
+// given agent from the parity config — the same construction
+// pkg/agent/instance.go's agentToolsCfgToPolicy performs internally (minus the
+// GodMode floor, which the parity cases below don't exercise), used here to
+// drive FilterToolsByPolicy. There is no DefaultPolicy/GlobalDefaultPolicy
+// field any more (CLAUDE.md hard constraint 6) — only the explicit
+// Policies/GlobalPolicies maps are threaded through; a tool with no match on
+// either side fails closed to "deny" inside tools.EffectiveToolPolicy itself.
 func agentToolPolicyCfg(cfg *config.Config, agentID string) *tools.ToolPolicyCfg {
-	out := &tools.ToolPolicyCfg{DefaultPolicy: "allow"}
+	out := &tools.ToolPolicyCfg{}
 	if len(cfg.Sandbox.ToolPolicies) > 0 {
 		gp := make(map[string]string, len(cfg.Sandbox.ToolPolicies))
 		for k, v := range cfg.Sandbox.ToolPolicies {
@@ -145,17 +160,11 @@ func agentToolPolicyCfg(cfg *config.Config, agentID string) *tools.ToolPolicyCfg
 		}
 		out.GlobalPolicies = gp
 	}
-	out.GlobalDefaultPolicy = cfg.Sandbox.DefaultToolPolicy
 	for i := range cfg.Agents.List {
 		ac := &cfg.Agents.List[i]
 		if ac.ID != agentID || ac.Tools == nil {
 			continue
 		}
-		dp := string(ac.Tools.Builtin.DefaultPolicy)
-		if dp == "" {
-			dp = "allow"
-		}
-		out.DefaultPolicy = dp
 		ap := make(map[string]string, len(ac.Tools.Builtin.Policies))
 		for k, v := range ac.Tools.Builtin.Policies {
 			ap[k] = string(v)
@@ -216,19 +225,19 @@ type wildcardParityCase struct {
 	wantPol  string
 }
 
-// wildcardAgentCfg builds a one-agent config with the given agent default policy
-// and per-tool policies, plus an optional global floor map.
+// wildcardAgentCfg builds a one-agent config with the given per-tool policies,
+// plus an optional global floor map. There is no default-policy field any
+// more (CLAUDE.md hard constraint 6) — each case below relies only on exact
+// or wildcard matches in agentPolicies/globalFloor; a tool with no match on
+// either side fails closed to "deny".
 func wildcardAgentCfg(
 	agentID string,
-	defaultPolicy config.ToolPolicy,
 	agentPolicies map[string]config.ToolPolicy,
 	globalFloor map[string]string,
-	globalDefault string,
 ) *config.Config {
 	return &config.Config{
 		Sandbox: config.OmnipusSandboxConfig{
-			ToolPolicies:      globalFloor,
-			DefaultToolPolicy: globalDefault,
+			ToolPolicies: globalFloor,
 		},
 		Agents: config.AgentsConfig{
 			List: []config.AgentConfig{
@@ -237,8 +246,7 @@ func wildcardAgentCfg(
 					Type: config.AgentTypeCustom,
 					Tools: &config.AgentToolsCfg{
 						Builtin: config.AgentBuiltinToolsCfg{
-							DefaultPolicy: defaultPolicy,
-							Policies:      agentPolicies,
+							Policies: agentPolicies,
 						},
 					},
 				},
@@ -255,46 +263,49 @@ func wildcardAgentCfg(
 func TestResolveApprovalToolPolicy_WildcardParity(t *testing.T) {
 	cases := []wildcardParityCase{
 		{
-			// (a) agent "browser_*":allow (deny-default) → matching tool allow.
-			name: "agent browser_*=allow (deny-default) → browser_navigate allow",
-			cfg: wildcardAgentCfg("wild", config.ToolPolicyDeny,
+			// (a) agent "browser_*":allow → matching tool allow.
+			name: "agent browser_*=allow → browser_navigate allow",
+			cfg: wildcardAgentCfg("wild",
 				map[string]config.ToolPolicy{"browser_*": config.ToolPolicyAllow},
-				nil, "allow"),
+				nil),
 			toolName: "browser_navigate",
 			scope:    tools.ScopeGeneral,
 			agentID:  "wild",
 			wantPol:  "allow",
 		},
 		{
-			// (b) global "browser_*":deny (allow-default agent) → matching tool deny
-			//     (wildcard floor wins via strictest-wins).
-			name: "global browser_*=deny (allow-default) → browser_navigate deny",
-			cfg: wildcardAgentCfg("wild", config.ToolPolicyAllow,
+			// (b) global "browser_*":deny → matching tool deny (wildcard floor
+			//     wins via strictest-wins; the agent has no competing entry).
+			name: "global browser_*=deny → browser_navigate deny",
+			cfg: wildcardAgentCfg("wild",
 				nil,
-				map[string]string{"browser_*": "deny"}, "allow"),
+				map[string]string{"browser_*": "deny"}),
 			toolName: "browser_navigate",
 			scope:    tools.ScopeGeneral,
 			agentID:  "wild",
 			wantPol:  "deny",
 		},
 		{
-			// (c1) agent "system.*":allow (deny-default) → matching system tool allow.
-			name: "agent system.*=allow (deny-default) → matching system tool allow",
-			cfg: wildcardAgentCfg("wild", config.ToolPolicyDeny,
+			// (c1) agent "system.*":allow → matching system tool allow.
+			name: "agent system.*=allow → matching system tool allow",
+			cfg: wildcardAgentCfg("wild",
 				map[string]config.ToolPolicy{"system.*": config.ToolPolicyAllow},
-				nil, "allow"),
+				nil),
 			toolName: "system.agent.list",
 			scope:    tools.ScopeCore,
 			agentID:  "wild",
 			wantPol:  "allow",
 		},
 		{
-			// (c2) SAME agent policy → NON-matching tool deny (default deny applies;
-			//      "system.*" does not cover "read_file").
-			name: "agent system.*=allow (deny-default) → non-matching tool deny",
-			cfg: wildcardAgentCfg("wild", config.ToolPolicyDeny,
+			// (c2) SAME agent policy → NON-matching tool deny. "system.*" does
+			// not cover "read_file", and there is no default-policy fallback
+			// any more (CLAUDE.md hard constraint 6) — an uncovered tool fails
+			// closed to "deny". This case pins that fail-closed guarantee
+			// directly, rather than an implicit per-agent default.
+			name: "agent system.*=allow → non-matching tool fails closed to deny",
+			cfg: wildcardAgentCfg("wild",
 				map[string]config.ToolPolicy{"system.*": config.ToolPolicyAllow},
-				nil, "allow"),
+				nil),
 			toolName: "read_file",
 			scope:    tools.ScopeGeneral,
 			agentID:  "wild",

@@ -61,9 +61,7 @@ func TestTurnRecheck_PolicyAtomicPointerUpdate(t *testing.T) {
 
 	// Initial policy: exec is allowed.
 	initialPolicy := &tools.ToolPolicyCfg{
-		DefaultPolicy:       "allow",
-		Policies:            map[string]string{"exec": "allow"},
-		GlobalDefaultPolicy: "allow",
+		Policies: map[string]string{"exec": "allow"},
 	}
 	agent.StoreToolPolicy(initialPolicy)
 
@@ -75,9 +73,7 @@ func TestTurnRecheck_PolicyAtomicPointerUpdate(t *testing.T) {
 
 	// Simulate mid-turn policy change: operator updates to deny.
 	updatedPolicy := &tools.ToolPolicyCfg{
-		DefaultPolicy:       "allow",
-		Policies:            map[string]string{"exec": "deny"},
-		GlobalDefaultPolicy: "allow",
+		Policies: map[string]string{"exec": "deny"},
 	}
 	agent.StoreToolPolicy(updatedPolicy)
 
@@ -105,9 +101,7 @@ func TestTurnRecheck_PolicyIsPerCallNotPerTurn(t *testing.T) {
 
 	// "Turn start" policy: exec is allowed.
 	allowExec := &tools.ToolPolicyCfg{
-		DefaultPolicy:       "allow",
-		Policies:            map[string]string{"exec": "allow"},
-		GlobalDefaultPolicy: "allow",
+		Policies: map[string]string{"exec": "allow"},
 	}
 	agent.StoreToolPolicy(allowExec)
 
@@ -125,9 +119,7 @@ func TestTurnRecheck_PolicyIsPerCallNotPerTurn(t *testing.T) {
 
 	// Simulate: operator changes policy to deny BEFORE Execute runs.
 	denyExec := &tools.ToolPolicyCfg{
-		DefaultPolicy:       "allow",
-		Policies:            map[string]string{"exec": "deny"},
-		GlobalDefaultPolicy: "allow",
+		Policies: map[string]string{"exec": "deny"},
 	}
 	agent.StoreToolPolicy(denyExec)
 
@@ -181,9 +173,7 @@ func TestTurnRecheck_MidTurnPolicySwapRace(t *testing.T) {
 	agent := newMinimalAgentInstance()
 
 	initial := &tools.ToolPolicyCfg{
-		DefaultPolicy:       "allow",
-		Policies:            map[string]string{"exec": "allow"},
-		GlobalDefaultPolicy: "allow",
+		Policies: map[string]string{"exec": "allow"},
 	}
 	agent.StoreToolPolicy(initial)
 
@@ -200,9 +190,7 @@ func TestTurnRecheck_MidTurnPolicySwapRace(t *testing.T) {
 					policy = "deny"
 				}
 				agent.StoreToolPolicy(&tools.ToolPolicyCfg{
-					DefaultPolicy:       "allow",
-					Policies:            map[string]string{"exec": policy},
-					GlobalDefaultPolicy: "allow",
+					Policies: map[string]string{"exec": policy},
 				})
 			}
 		}(i)

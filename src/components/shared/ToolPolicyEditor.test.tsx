@@ -13,13 +13,23 @@
  *   - Per-call-site coverage: global (GlobalToolPoliciesSection) and per-agent
  *     (ToolsAndPermissions) both render the flat list (AC6 — tested in
  *     AgentTools.test.tsx and ToolsAndPermissions.test.tsx).
+ *
+ * There is no `default_policy` field on the wire anymore — every static
+ * builtin tool must have an explicit, literal policy entry in a COMPLETE
+ * per-tool map. Tests that used to rely on "empty policies + default_policy
+ * falls back to allow" have been rewritten to supply an explicit, complete
+ * map instead (SAFE_VALUE below), and a handful of new tests cover the
+ * "genuinely missing entry → unconfigured / needs attention" anomaly path
+ * that replaces the old silent-default behavior.
  */
 
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { RegistryTool } from '@/lib/api'
+import type { ToolPolicy } from '@/components/shared/PolicyBadge'
 import { ToolPolicyEditor, type ToolPolicyValue } from './ToolPolicyEditor'
+import { POLICY_PRESETS, type RolePreset } from '@/lib/toolPolicyPresets'
 
 // ── Fixture helpers ────────────────────────────────────────────────────────────
 
@@ -92,7 +102,21 @@ const MCP_TOOL_NO_CATEGORY: RegistryTool = makeTool({
 // Mixed payload: system.*, general (core), file, browser, MCP tools.
 const ALL_TOOLS = [...SYSTEM_TOOLS, ...GENERAL_TOOLS, ...FILE_TOOLS, ...BROWSER_TOOLS, ...MCP_TOOLS]
 
-const SAFE_VALUE: ToolPolicyValue = { default_policy: 'allow', policies: {} }
+/**
+ * A COMPLETE per-tool policy map (every ALL_TOOLS name explicitly 'allow') —
+ * the realistic "no restriction configured" state under the new contract.
+ * There is no default_policy shortcut anymore: "safe/unrestricted" must be
+ * spelled out per tool.
+ */
+const SAFE_VALUE: ToolPolicyValue = {
+  policies: Object.fromEntries(ALL_TOOLS.map((t) => [t.name, 'allow' as ToolPolicy])),
+}
+
+/** Expand a preset over a tool list the same way applyRolePreset/ToolPolicyEditor do. */
+function expectedPresetMap(role: RolePreset, tools: RegistryTool[]): Record<string, ToolPolicy> {
+  const preset = POLICY_PRESETS[role]
+  return Object.fromEntries(tools.map((t) => [t.name, preset.overrides[t.name] ?? preset.defaultPolicy])) as Record<string, ToolPolicy>
+}
 
 function renderEditor(
   tools: RegistryTool[] = ALL_TOOLS,
@@ -234,7 +258,7 @@ describe('ToolPolicyEditor — allow/ask/deny controls present (AC5)', () => {
     expect(within(readFileRow).getByRole('button', { name: /deny/i })).toBeInTheDocument()
   })
 
-  it('clicking deny on a file tool calls onChange with the correct override', async () => {
+  it('clicking deny on a file tool calls onChange with the tool rewritten in place (rest of the complete map untouched)', async () => {
     const user = userEvent.setup()
     const onChange = vi.fn()
     renderEditor(FILE_TOOLS, SAFE_VALUE, onChange)
@@ -242,9 +266,10 @@ describe('ToolPolicyEditor — allow/ask/deny controls present (AC5)', () => {
     await user.click(within(categoryGrid).getByRole('button', { name: /file/i }))
     const readFileRow = screen.getByTestId('tool-row-read_file')
     await user.click(within(readFileRow).getByRole('button', { name: /deny/i }))
+    // The write is unconditional and preserves every other entry in the
+    // complete map — there is no "sparse override" shortcut anymore.
     expect(onChange).toHaveBeenCalledWith({
-      default_policy: 'allow',
-      policies: { read_file: 'deny' },
+      policies: { ...SAFE_VALUE.policies, read_file: 'deny' },
     })
   })
 })
@@ -259,39 +284,38 @@ describe('ToolPolicyEditor — preset application', () => {
     expect(screen.getByTestId('preset-full_access')).toBeInTheDocument()
   })
 
-  it('clicking Cautious calls onChange with default_policy=ask and empty policies', async () => {
+  it('clicking Cautious calls onChange with a complete map — every known tool explicitly "ask"', async () => {
     const user = userEvent.setup()
     const onChange = vi.fn()
     renderEditor(ALL_TOOLS, SAFE_VALUE, onChange)
     await user.click(screen.getByTestId('preset-cautious'))
-    expect(onChange).toHaveBeenCalledWith({ default_policy: 'ask', policies: {} })
+    expect(onChange).toHaveBeenCalledWith({ policies: expectedPresetMap('cautious', ALL_TOOLS) })
   })
 
-  it('clicking Balanced calls onChange with the §2.1 overrides', async () => {
+  it('clicking Balanced calls onChange with a complete map applying the §2.1 overrides', async () => {
     const user = userEvent.setup()
     const onChange = vi.fn()
     renderEditor(ALL_TOOLS, SAFE_VALUE, onChange)
     await user.click(screen.getByTestId('preset-balanced'))
-    expect(onChange).toHaveBeenCalledWith({
-      default_policy: 'allow',
-      policies: {
-        // ADR-036: `bash` replaces exec / workspace_shell / workspace_shell_bg.
-        bash: 'ask',
-        'browser.navigate': 'ask',
-        'browser.click': 'ask',
-        'browser.type': 'ask',
-        'browser.evaluate': 'deny',
-        write_file: 'ask',
-      },
-    })
+    const expected = expectedPresetMap('balanced', ALL_TOOLS)
+    expect(onChange).toHaveBeenCalledWith({ policies: expected })
+    // Sanity-check the §2.1 overrides landed (ADR-036: `bash` isn't in ALL_TOOLS,
+    // but the browser.* tools and write_file are).
+    expect(expected['browser.navigate']).toBe('ask')
+    expect(expected['browser.click']).toBe('ask')
+    expect(expected['browser.type']).toBe('ask')
+    expect(expected['browser.evaluate']).toBe('deny')
+    expect(expected['write_file']).toBe('ask')
+    // Tools with no override fall back to the preset's default ('allow').
+    expect(expected['read_file']).toBe('allow')
   })
 
-  it('clicking Full access calls onChange with default_policy=allow and no overrides', async () => {
+  it('clicking Full access calls onChange with a complete map — every known tool explicitly "allow"', async () => {
     const user = userEvent.setup()
     const onChange = vi.fn()
     renderEditor(ALL_TOOLS, SAFE_VALUE, onChange)
     await user.click(screen.getByTestId('preset-full_access'))
-    expect(onChange).toHaveBeenCalledWith({ default_policy: 'allow', policies: {} })
+    expect(onChange).toHaveBeenCalledWith({ policies: expectedPresetMap('full_access', ALL_TOOLS) })
   })
 })
 
@@ -299,7 +323,9 @@ describe('ToolPolicyEditor — preset application', () => {
 
 describe('ToolPolicyEditor — category rollup pills (M-9)', () => {
   it('shows a single pill when all tools in a category have the same policy', () => {
-    const value: ToolPolicyValue = { default_policy: 'allow', policies: {} }
+    const value: ToolPolicyValue = {
+      policies: { read_file: 'allow', write_file: 'allow', list_dir: 'allow' },
+    }
     renderEditor(FILE_TOOLS, value)
     // All file tools resolve to 'allow' — pill should say Allow
     const pill = screen.getByTestId('category-pill-file')
@@ -307,12 +333,13 @@ describe('ToolPolicyEditor — category rollup pills (M-9)', () => {
   })
 
   it('shows a Mixed pill when tools in a category have different resolved policies', () => {
-    // browser.navigate=ask, browser.evaluate=deny, others=allow → Mixed
+    // browser.navigate=ask, browser.evaluate=deny, click/type=allow → Mixed
     const value: ToolPolicyValue = {
-      default_policy: 'allow',
       policies: {
         'browser.navigate': 'ask',
         'browser.evaluate': 'deny',
+        'browser.click': 'allow',
+        'browser.type': 'allow',
       },
     }
     renderEditor(BROWSER_TOOLS, value)
@@ -320,9 +347,8 @@ describe('ToolPolicyEditor — category rollup pills (M-9)', () => {
     expect(pill).toHaveTextContent('Mixed')
   })
 
-  it('shows a uniform pill when all tools resolve to the same non-default policy', () => {
+  it('shows a uniform pill when all tools resolve to the same non-allow policy', () => {
     const value: ToolPolicyValue = {
-      default_policy: 'allow',
       policies: {
         read_file: 'ask',
         write_file: 'ask',
@@ -333,46 +359,34 @@ describe('ToolPolicyEditor — category rollup pills (M-9)', () => {
     const pill = screen.getByTestId('category-pill-file')
     expect(pill).toHaveTextContent('Ask')
   })
+
+  it('shows an "Unset" pill when a tool in the category has no explicit entry (anomalous gap)', () => {
+    const value: ToolPolicyValue = {
+      policies: { read_file: 'allow', write_file: 'allow' }, // list_dir intentionally absent
+    }
+    renderEditor(FILE_TOOLS, value)
+    const pill = screen.getByTestId('category-pill-file')
+    expect(pill).toHaveTextContent(/unset/i)
+  })
 })
 
-// ── Default policy control ─────────────────────────────────────────────────────
+// ── No default-policy concept — the "Customize defaults" section is gone ──────
 
-describe('ToolPolicyEditor — default policy control (advanced)', () => {
-  it('default policy control is accessible inside the Customize defaults section', async () => {
-    const user = userEvent.setup()
-    const onChange = vi.fn()
-    renderEditor(FILE_TOOLS, SAFE_VALUE, onChange)
-    // Find the "Customize defaults (advanced)" trigger button
-    const customizeTrigger = screen.getByRole('button', { name: /customize defaults/i })
-    await user.click(customizeTrigger)
-    // Default policy badges must now be visible
-    expect(screen.getAllByRole('button', { name: /allow/i }).length).toBeGreaterThan(0)
+describe('ToolPolicyEditor — no default-policy concept remains', () => {
+  it('there is no "Customize defaults (advanced)" disclosure', () => {
+    renderEditor(ALL_TOOLS)
+    expect(screen.queryByRole('button', { name: /customize defaults/i })).not.toBeInTheDocument()
   })
 
-  it('there is NO raw-tool-grid that re-lists all tools', async () => {
+  it('there is NO raw-tool-grid that re-lists all tools, even after expanding every category', async () => {
     const user = userEvent.setup()
     renderEditor(ALL_TOOLS)
-    // Even after opening Customize defaults, no raw-tool-grid data-testid should exist.
-    const customizeTrigger = screen.getByRole('button', { name: /customize defaults/i })
-    await user.click(customizeTrigger)
     expect(screen.queryByTestId('raw-tool-grid')).not.toBeInTheDocument()
-  })
-
-  it('changing default policy calls onChange dropping overrides that now match', async () => {
-    const user = userEvent.setup()
-    const onChange = vi.fn()
-    const valueWithOverride: ToolPolicyValue = {
-      default_policy: 'allow',
-      policies: { read_file: 'ask' },
+    const categoryButtons = document.querySelectorAll('[data-testid="category-grid"] button[aria-expanded]')
+    for (const btn of categoryButtons) {
+      await user.click(btn as HTMLElement)
     }
-    renderEditor(FILE_TOOLS, valueWithOverride, onChange)
-    // Open customize defaults
-    await user.click(screen.getByRole('button', { name: /customize defaults/i }))
-    // Click "Ask" on the default policy — the 'ask' override for read_file should be dropped
-    // since it now matches the new default.
-    const defaultPolicyBadges = screen.getAllByRole('button', { name: /^ask$/i })
-    await user.click(defaultPolicyBadges[0])
-    expect(onChange).toHaveBeenCalledWith({ default_policy: 'ask', policies: {} })
+    expect(screen.queryByTestId('raw-tool-grid')).not.toBeInTheDocument()
   })
 })
 
@@ -382,7 +396,6 @@ describe('ToolPolicyEditor — policy round-trip', () => {
   it('loading an existing per-tool override and not touching the UI emits no spurious calls', () => {
     const onChange = vi.fn()
     const existingValue: ToolPolicyValue = {
-      default_policy: 'allow',
       policies: {
         'browser.navigate': 'ask',
         'browser.evaluate': 'deny',
@@ -394,11 +407,10 @@ describe('ToolPolicyEditor — policy round-trip', () => {
     expect(onChange).not.toHaveBeenCalled()
   })
 
-  it('clicking a policy badge that matches default_policy removes the override', async () => {
+  it('clicking a policy badge always writes an explicit entry — no more delete-on-match-default optimization', async () => {
     const user = userEvent.setup()
     const existingValue: ToolPolicyValue = {
-      default_policy: 'allow',
-      policies: { read_file: 'ask' },
+      policies: { read_file: 'ask', write_file: 'allow', list_dir: 'allow' },
     }
     const onChange = vi.fn()
     renderEditor(FILE_TOOLS, existingValue, onChange)
@@ -406,9 +418,12 @@ describe('ToolPolicyEditor — policy round-trip', () => {
     const categoryGrid = screen.getByTestId('category-grid')
     await user.click(within(categoryGrid).getByRole('button', { name: /file/i }))
     const readFileRow = screen.getByTestId('tool-row-read_file')
-    // Click Allow (= the default_policy) — should remove the override.
+    // Click Allow on read_file — there is no "default" for it to match, so the
+    // entry is REWRITTEN to 'allow' explicitly, never deleted.
     await user.click(within(readFileRow).getByRole('button', { name: /allow/i }))
-    expect(onChange).toHaveBeenCalledWith({ default_policy: 'allow', policies: {} })
+    expect(onChange).toHaveBeenCalledWith({
+      policies: { read_file: 'allow', write_file: 'allow', list_dir: 'allow' },
+    })
   })
 })
 
@@ -514,9 +529,8 @@ describe('ToolPolicyEditor — MCP tools (F-G06 guard)', () => {
 describe('ToolPolicyEditor — glob-keyed policies (Blocker 4)', () => {
   it('system.* glob key resolves correctly for system tools in the category grid', async () => {
     const user = userEvent.setup()
-    // Seeded privilege rail: default_policy='allow', system.*='deny'
+    // Seeded privilege rail: system.*='deny' covers all 3 SYSTEM_TOOLS exactly.
     const valueWithGlob: ToolPolicyValue = {
-      default_policy: 'allow',
       policies: { 'system.*': 'deny' },
     }
     renderEditor(SYSTEM_TOOLS, valueWithGlob)
@@ -534,13 +548,14 @@ describe('ToolPolicyEditor — glob-keyed policies (Blocker 4)', () => {
     }
   })
 
-  it('system.* glob does not affect non-system tools', () => {
+  it('system.* glob does not affect non-system tools with their own explicit entries', () => {
+    // A complete map for FILE_TOOLS plus an unrelated system.* glob — the glob
+    // must not leak into tools it doesn't match.
     const valueWithGlob: ToolPolicyValue = {
-      default_policy: 'allow',
-      policies: { 'system.*': 'deny' },
+      policies: { 'system.*': 'deny', read_file: 'allow', write_file: 'allow', list_dir: 'allow' },
     }
     renderEditor(FILE_TOOLS, valueWithGlob)
-    // The category pill for 'file' should show 'Allow' (default), not 'Deny'
+    // The category pill for 'file' should show 'Allow', not 'Deny'
     const pill = screen.getByTestId('category-pill-file')
     expect(pill).toHaveTextContent('Allow')
   })
@@ -548,7 +563,6 @@ describe('ToolPolicyEditor — glob-keyed policies (Blocker 4)', () => {
   it('exact key takes precedence over a glob key for the same tool', async () => {
     const user = userEvent.setup()
     const valueWithBoth: ToolPolicyValue = {
-      default_policy: 'allow',
       // Glob denies all system.*, but system.config_read is explicitly allowed
       policies: { 'system.*': 'deny', 'system.config_read': 'allow' },
     }
@@ -574,7 +588,7 @@ describe('ToolPolicyEditor — global override locking', () => {
         tools={BROWSER_TOOLS}
         value={SAFE_VALUE}
         onChange={vi.fn()}
-        globalPolicies={{ default_policy: 'allow', policies: { 'browser.*': 'deny' } }}
+        globalPolicies={{ policies: { 'browser.*': 'deny' } }}
       />,
     )
     const categoryGrid = screen.getByTestId('category-grid')
@@ -598,7 +612,7 @@ describe('ToolPolicyEditor — global override locking', () => {
         tools={FILE_TOOLS}
         value={SAFE_VALUE}
         onChange={vi.fn()}
-        globalPolicies={{ default_policy: 'allow', policies: { read_file: 'ask' } }}
+        globalPolicies={{ policies: { read_file: 'ask' } }}
       />,
     )
     const categoryGrid = screen.getByTestId('category-grid')
@@ -611,14 +625,14 @@ describe('ToolPolicyEditor — global override locking', () => {
     expect(within(row).getByRole('button', { name: /deny/i })).not.toBeDisabled()
   })
 
-  it('no global override (allow) leaves every control enabled and shows no lock', async () => {
+  it('an explicit global allow for every tool leaves every control enabled and shows no lock', async () => {
     const user = userEvent.setup()
     render(
       <ToolPolicyEditor
         tools={FILE_TOOLS}
         value={SAFE_VALUE}
         onChange={vi.fn()}
-        globalPolicies={{ default_policy: 'allow', policies: {} }}
+        globalPolicies={{ policies: { read_file: 'allow', write_file: 'allow', list_dir: 'allow' } }}
       />,
     )
     const categoryGrid = screen.getByTestId('category-grid')
@@ -626,6 +640,31 @@ describe('ToolPolicyEditor — global override locking', () => {
 
     const row = screen.getByTestId('tool-row-write_file')
     expect(within(row).queryByTestId('global-override-write_file')).toBeNull()
+    expect(within(row).getByRole('button', { name: /allow/i })).not.toBeDisabled()
+    expect(within(row).getByRole('button', { name: /ask/i })).not.toBeDisabled()
+    expect(within(row).getByRole('button', { name: /deny/i })).not.toBeDisabled()
+  })
+
+  it('a genuinely missing global entry (stale/incomplete local state) shows a "needs attention" indicator without locking any control', async () => {
+    // Realistically this never happens — the server validates full coverage —
+    // but the frontend must surface the gap rather than silently treating it
+    // as an unrestricted "allow".
+    const user = userEvent.setup()
+    render(
+      <ToolPolicyEditor
+        tools={FILE_TOOLS}
+        value={SAFE_VALUE}
+        onChange={vi.fn()}
+        globalPolicies={{ policies: {} }} // no entry for any FILE_TOOLS tool
+      />,
+    )
+    const categoryGrid = screen.getByTestId('category-grid')
+    await user.click(within(categoryGrid).getByRole('button', { name: /file/i }))
+
+    const row = screen.getByTestId('tool-row-read_file')
+    const badge = within(row).getByTestId('global-override-read_file')
+    expect(badge).toHaveTextContent(/global:\s*unset/i)
+    // Not silently coerced to a restriction either — nothing is locked.
     expect(within(row).getByRole('button', { name: /allow/i })).not.toBeDisabled()
     expect(within(row).getByRole('button', { name: /ask/i })).not.toBeDisabled()
     expect(within(row).getByRole('button', { name: /deny/i })).not.toBeDisabled()
@@ -664,7 +703,7 @@ describe('ToolPolicyEditor — MCP tool policy controls', () => {
 
   // ── 1. allow/ask/deny clicks on MCP tool row call onChange with correct payload ──
 
-  it('clicking deny on an MCP tool row calls onChange with the MCP tool name + deny', async () => {
+  it('clicking deny on an MCP tool row calls onChange with the tool rewritten, rest of the map preserved', async () => {
     const onChange = vi.fn()
     const { user, serverContainer } = await renderAndExpandMcpServer(SAFE_VALUE, onChange)
 
@@ -672,12 +711,11 @@ describe('ToolPolicyEditor — MCP tool policy controls', () => {
     await user.click(within(row).getByRole('button', { name: /deny/i }))
 
     expect(onChange).toHaveBeenCalledWith({
-      default_policy: 'allow',
-      policies: { mcp_myserver_search: 'deny' },
+      policies: { ...SAFE_VALUE.policies, mcp_myserver_search: 'deny' },
     })
   })
 
-  it('clicking ask on an MCP tool row calls onChange with the MCP tool name + ask', async () => {
+  it('clicking ask on an MCP tool row calls onChange with the tool rewritten, rest of the map preserved', async () => {
     const onChange = vi.fn()
     const { user, serverContainer } = await renderAndExpandMcpServer(SAFE_VALUE, onChange)
 
@@ -685,27 +723,25 @@ describe('ToolPolicyEditor — MCP tool policy controls', () => {
     await user.click(within(row).getByRole('button', { name: /ask/i }))
 
     expect(onChange).toHaveBeenCalledWith({
-      default_policy: 'allow',
-      policies: { mcp_myserver_fetch: 'ask' },
+      policies: { ...SAFE_VALUE.policies, mcp_myserver_fetch: 'ask' },
     })
   })
 
-  it('clicking allow on an already-overridden MCP tool removes the override (round-trip clean)', async () => {
+  it('clicking allow on an already-overridden MCP tool writes an explicit allow entry (no longer removes it)', async () => {
     // Start with mcp_myserver_search overridden to 'deny'
     const startValue: ToolPolicyValue = {
-      default_policy: 'allow',
-      policies: { mcp_myserver_search: 'deny' },
+      policies: { ...SAFE_VALUE.policies, mcp_myserver_search: 'deny' },
     }
     const onChange = vi.fn()
     const { user, serverContainer } = await renderAndExpandMcpServer(startValue, onChange)
 
     const row = within(serverContainer).getByTestId('tool-row-mcp_myserver_search')
-    // Click Allow (= default_policy) — override should be removed
+    // Click Allow — there is no default to match, so the entry is REWRITTEN to
+    // 'allow' explicitly, never deleted (round-trip stays a complete map).
     await user.click(within(row).getByRole('button', { name: /allow/i }))
 
     expect(onChange).toHaveBeenCalledWith({
-      default_policy: 'allow',
-      policies: {},
+      policies: { ...startValue.policies, mcp_myserver_search: 'allow' },
     })
   })
 
@@ -716,7 +752,6 @@ describe('ToolPolicyEditor — MCP tool policy controls', () => {
     // (The glob pattern mcp_myserver.* would NOT work for MCP tool names because
     // resolvePolicy's glob check tests prefix + '.', but MCP names use underscores.)
     const globalPolicies: ToolPolicyValue = {
-      default_policy: 'allow',
       policies: { mcp_myserver_search: 'deny' },
     }
     const { serverContainer } = await renderAndExpandMcpServer(SAFE_VALUE, vi.fn(), globalPolicies)
@@ -735,14 +770,14 @@ describe('ToolPolicyEditor — MCP tool policy controls', () => {
   })
 
   it('a global deny lock does not bleed into a sibling MCP tool from the same server', async () => {
-    // Only mcp_myserver_search is locked; mcp_myserver_fetch must remain unlocked
+    // A COMPLETE global map covering both MCP tools: only mcp_myserver_search
+    // is denied; mcp_myserver_fetch is explicitly allowed (not merely absent).
     const globalPolicies: ToolPolicyValue = {
-      default_policy: 'allow',
-      policies: { mcp_myserver_search: 'deny' },
+      policies: { mcp_myserver_search: 'deny', mcp_myserver_fetch: 'allow' },
     }
     const { serverContainer } = await renderAndExpandMcpServer(SAFE_VALUE, vi.fn(), globalPolicies)
 
-    // mcp_myserver_fetch — no global override → all controls enabled, no lock badge
+    // mcp_myserver_fetch — explicit global allow → all controls enabled, no lock badge
     const fetchRow = within(serverContainer).getByTestId('tool-row-mcp_myserver_fetch')
     expect(within(fetchRow).queryByTestId('global-override-mcp_myserver_fetch')).toBeNull()
     expect(within(fetchRow).getByRole('button', { name: /allow/i })).not.toBeDisabled()
@@ -754,7 +789,6 @@ describe('ToolPolicyEditor — MCP tool policy controls', () => {
 
   it('a global exact-key ask locks only allow (ask + deny remain enabled)', async () => {
     const globalPolicies: ToolPolicyValue = {
-      default_policy: 'allow',
       policies: { mcp_myserver_search: 'ask' },
     }
     const { serverContainer } = await renderAndExpandMcpServer(SAFE_VALUE, vi.fn(), globalPolicies)
@@ -770,14 +804,14 @@ describe('ToolPolicyEditor — MCP tool policy controls', () => {
     expect(within(row).getByRole('button', { name: /deny/i })).not.toBeDisabled()
   })
 
-  // ── 4. Global default_policy deny (no per-tool overrides) locks all MCP rows ──
+  // ── 4. An explicit deny per MCP tool (no reliance on any default) locks both rows ──
 
-  it('a global default_policy=deny (no exact overrides) locks allow+ask on all MCP rows', async () => {
-    // When the global default is 'deny', globalOverrideFor returns 'deny' for every
-    // tool that has no more-specific override, including MCP tools.
+  it('an explicit global deny entry per MCP tool locks allow+ask on both rows', async () => {
+    // There is no more "global default deny locks everything with no override"
+    // shortcut — the floor now comes exclusively from an explicit entry (exact
+    // or glob) per tool.
     const globalPolicies: ToolPolicyValue = {
-      default_policy: 'deny',
-      policies: {},
+      policies: { mcp_myserver_search: 'deny', mcp_myserver_fetch: 'deny' },
     }
     const { serverContainer } = await renderAndExpandMcpServer(SAFE_VALUE, vi.fn(), globalPolicies)
 
@@ -872,6 +906,11 @@ describe('ToolPolicyEditor — G10: per-server bulk policy control', () => {
   /**
    * The wildcard key for the "myserver" group is "mcp_myserver_*".
    * MCP_TOOLS = [mcp_myserver_search, mcp_myserver_fetch] → common prefix = "mcp_myserver_".
+   *
+   * Every bulk click (including Allow) now writes the wildcard key explicitly
+   * — there is no more "Allow = remove the key" shortcut, since without a
+   * default policy that would leave every tool under the server unconfigured
+   * rather than allowed.
    */
 
   it('per-server bulk control is present in the MCP server group header', () => {
@@ -880,49 +919,44 @@ describe('ToolPolicyEditor — G10: per-server bulk policy control', () => {
     expect(bulkControls).toBeInTheDocument()
   })
 
-  it('clicking Deny all writes the mcp_<server>_* wildcard key via onChange', async () => {
+  it('clicking Deny all writes the mcp_<server>_* wildcard key via onChange, preserving the rest of the map', async () => {
     const user = userEvent.setup()
     const onChange = vi.fn()
     renderEditor(MCP_TOOLS, SAFE_VALUE, onChange)
     const denyBtn = screen.getByTestId('mcp-server-bulk-myserver-deny')
     await user.click(denyBtn)
     expect(onChange).toHaveBeenCalledWith({
-      default_policy: 'allow',
-      policies: { 'mcp_myserver_*': 'deny' },
+      policies: { ...SAFE_VALUE.policies, 'mcp_myserver_*': 'deny' },
     })
   })
 
-  it('clicking Ask all writes the mcp_<server>_* wildcard key with ask', async () => {
+  it('clicking Ask all writes the mcp_<server>_* wildcard key with ask, preserving the rest of the map', async () => {
     const user = userEvent.setup()
     const onChange = vi.fn()
     renderEditor(MCP_TOOLS, SAFE_VALUE, onChange)
     const askBtn = screen.getByTestId('mcp-server-bulk-myserver-ask')
     await user.click(askBtn)
     expect(onChange).toHaveBeenCalledWith({
-      default_policy: 'allow',
-      policies: { 'mcp_myserver_*': 'ask' },
+      policies: { ...SAFE_VALUE.policies, 'mcp_myserver_*': 'ask' },
     })
   })
 
-  it('clicking Allow all removes the wildcard key from policies', async () => {
+  it('clicking Allow all writes the wildcard key explicitly as "allow" (no longer removes it)', async () => {
     const user = userEvent.setup()
     const onChange = vi.fn()
     const startValue: ToolPolicyValue = {
-      default_policy: 'allow',
-      policies: { 'mcp_myserver_*': 'deny' },
+      policies: { ...SAFE_VALUE.policies, 'mcp_myserver_*': 'deny' },
     }
     renderEditor(MCP_TOOLS, startValue, onChange)
     const allowBtn = screen.getByTestId('mcp-server-bulk-myserver-allow')
     await user.click(allowBtn)
     expect(onChange).toHaveBeenCalledWith({
-      default_policy: 'allow',
-      policies: {},
+      policies: { ...startValue.policies, 'mcp_myserver_*': 'allow' },
     })
   })
 
   it('Deny bulk button is aria-pressed when the wildcard key is already set to deny', () => {
     const valueWithWildcard: ToolPolicyValue = {
-      default_policy: 'allow',
       policies: { 'mcp_myserver_*': 'deny' },
     }
     renderEditor(MCP_TOOLS, valueWithWildcard)
@@ -932,10 +966,13 @@ describe('ToolPolicyEditor — G10: per-server bulk policy control', () => {
     expect(screen.getByTestId('mcp-server-bulk-myserver-allow')).toHaveAttribute('aria-pressed', 'false')
   })
 
-  it('Allow bulk button is aria-pressed when no wildcard key exists (default state)', () => {
+  it('no bulk button is aria-pressed when no wildcard key exists (unconfigured bulk state)', () => {
+    // SAFE_VALUE sets each individual MCP tool to 'allow' but never writes the
+    // `mcp_myserver_*` wildcard key itself — the bulk control has no explicit
+    // setting yet, so none of the three buttons show as active.
     renderEditor(MCP_TOOLS, SAFE_VALUE)
-    const allowBtn = screen.getByTestId('mcp-server-bulk-myserver-allow')
-    expect(allowBtn).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByTestId('mcp-server-bulk-myserver-allow')).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.getByTestId('mcp-server-bulk-myserver-ask')).toHaveAttribute('aria-pressed', 'false')
     expect(screen.getByTestId('mcp-server-bulk-myserver-deny')).toHaveAttribute('aria-pressed', 'false')
   })
 
@@ -964,8 +1001,7 @@ describe('ToolPolicyEditor — G10: per-server bulk policy control', () => {
     const denyBtn = screen.getByTestId('mcp-server-bulk-github_mcp-deny')
     await user.click(denyBtn)
     expect(onChange).toHaveBeenCalledWith({
-      default_policy: 'allow',
-      policies: { 'mcp_github_mcp_*': 'deny' },
+      policies: { ...SAFE_VALUE.policies, 'mcp_github_mcp_*': 'deny' },
     })
   })
 })

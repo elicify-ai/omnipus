@@ -15,15 +15,17 @@
  *   - D12 (per-agent Tools & Permissions consolidation)
  */
 
-import type { AgentToolsCfg } from '@/lib/api/generated/openapi-types'
+import type { AgentToolsCfg, RegistryTool } from '@/lib/api'
 import type { ToolPolicy } from '@/components/shared/PolicyBadge'
 
 /**
  * The policy value shape used by ToolPolicyEditor and returned by applyRolePreset.
  *
- * HC#8: derived from the generated wire type AgentToolsCfg['builtin'] with both
- * fields required (the editor always has a definite default_policy and policies
- * map). This is the ONLY definition of this shape — do not create parallel types.
+ * HC#8: derived from the generated wire type AgentToolsCfg['builtin'] with the
+ * `policies` field required (the editor always has a definite, complete policy
+ * map — there is no `default_policy` field anymore; every static builtin tool
+ * name must be present as an explicit, literal key). This is the ONLY
+ * definition of this shape — do not create parallel types.
  */
 export type ToolPolicyValue = Required<NonNullable<AgentToolsCfg['builtin']>>
 
@@ -78,16 +80,25 @@ export const POLICY_PRESETS: Record<RolePreset, PresetDefinition> = {
 }
 
 /**
- * Apply a role preset, returning a ToolPolicyValue (= AgentToolsCfg['builtin'] with
- * both fields required) ready for the backend's AgentToolsCfg.builtin field.
+ * Apply a role preset, returning a ToolPolicyValue (= AgentToolsCfg['builtin']
+ * with `policies` required) ready for the backend's AgentToolsCfg.builtin field.
  *
- * The returned `policies` object is a shallow copy of the preset's overrides —
- * mutations to it do not affect the preset definition.
+ * The wire contract requires a COMPLETE per-tool policy map — every static
+ * builtin tool name must be present as an explicit, literal key (there is no
+ * `default_policy` fallback anymore). A preset therefore batch-authors that
+ * complete map by walking the full known tool catalog (`tools`, as returned by
+ * GET /api/v1/tools via fetchRegistryTools/fetchBuiltinTools — reused here,
+ * never re-invented) and assigning each tool the preset's per-tool override
+ * when one exists, otherwise the preset's default policy.
+ *
+ * The returned `policies` object is a fresh map — mutations to it do not
+ * affect the preset definition.
  */
-export function applyRolePreset(role: RolePreset): ToolPolicyValue {
+export function applyRolePreset(role: RolePreset, tools: RegistryTool[]): ToolPolicyValue {
   const preset = POLICY_PRESETS[role]
-  return {
-    default_policy: preset.defaultPolicy,
-    policies: { ...preset.overrides },
+  const policies: Record<string, ToolPolicy> = {}
+  for (const tool of tools) {
+    policies[tool.name] = preset.overrides[tool.name] ?? preset.defaultPolicy
   }
+  return { policies }
 }

@@ -195,11 +195,8 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 	policyCfg := toolsCfgToPolicy(toolsCfg)
 
 	// Also include global tool policies from sandbox config.
-	sandboxPolicies := cfg.Sandbox.ToolPolicies
-	sandboxDefault := cfg.Sandbox.DefaultToolPolicy
-	if len(sandboxPolicies) > 0 || sandboxDefault != "" {
-		policyCfg.GlobalPolicies = sandboxPolicies
-		policyCfg.GlobalDefaultPolicy = sandboxDefault
+	if len(cfg.Sandbox.ToolPolicies) > 0 {
+		policyCfg.GlobalPolicies = cfg.Sandbox.ToolPolicies
 	}
 
 	// Build tool entries as gen.AgentToolsResponse.Tools anonymous struct slice.
@@ -221,13 +218,23 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 
 		for _, t := range filtered {
 			name := t.Name()
-			effectivePolicy, _ := policyMap[name]
-			if effectivePolicy == "" {
-				effectivePolicy = "allow"
+			// This fallback is provably dead today: FilterToolsByPolicy always
+			// sets an entry in policyMap for every tool it returns. It is a
+			// literal hardcoded string sitting in a REST handler though —
+			// exactly the anti-pattern eliminated everywhere else in this
+			// diff (CLAUDE.md hard constraint 6: no hardcoded allow/deny/ask
+			// fallback anywhere in Go for tool-policy resolution) — so the
+			// fallback value is "deny" (fail-closed), not "allow", as
+			// defense-in-depth against a future FilterToolsByPolicy
+			// refactor silently reintroducing an allow-default through this
+			// now-vestigial guard.
+			effectivePolicy, ok := policyMap[name]
+			if !ok || effectivePolicy == "" {
+				effectivePolicy = "deny"
 			}
 
 			// configured_policy: what the agent config says.
-			configuredPolicy := resolveConfiguredPolicy(name, toolsCfg)
+			configuredPolicy := resolveConfiguredPolicy(name, toolsCfg, cfg.Sandbox.ToolPolicies)
 
 			// manifest_tier: map tools.ManifestTier to the wire enum.
 			tier := manifestTierToWire(tools.ToolManifestTier(name))
@@ -253,7 +260,7 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 			if tools.ToolManifestTier(name) != tools.ManifestInfra {
 				continue
 			}
-			configuredPolicy := resolveConfiguredPolicy(name, toolsCfg)
+			configuredPolicy := resolveConfiguredPolicy(name, toolsCfg, cfg.Sandbox.ToolPolicies)
 			toolEntries = append(toolEntries, toolsEntry{
 				Name:             name,
 				ConfiguredPolicy: gen.AgentToolsResponseToolsConfiguredPolicy(configuredPolicy),
@@ -271,10 +278,6 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 	// Use toolsCfgToPolicy so legacy mode:"explicit"+visible:[...] is converted to
 	// policy format consistently with the old getAgentTools handler.
 	policyCfgForResp := toolsCfgToPolicy(toolsCfg)
-	respDefaultPolicy := policyCfgForResp.DefaultPolicy
-	if respDefaultPolicy == "" {
-		respDefaultPolicy = "allow"
-	}
 	respPolicies := policyCfgForResp.Policies
 	if respPolicies == nil {
 		respPolicies = map[string]string{}
@@ -285,7 +288,6 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 	for k, v := range respPolicies {
 		builtinPolicies[k] = gen.AgentToolsResponseConfigBuiltinPolicies(v)
 	}
-	respBuiltinDefaultPolicy := gen.AgentToolsResponseConfigBuiltinDefaultPolicy(respDefaultPolicy)
 	agentTypeVal := gen.AgentToolsResponseAgentType(wireAgentType)
 
 	// Build the AgentToolsResponse. The Tools field uses the same anonymous struct
@@ -294,8 +296,7 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 		AgentType: &agentTypeVal,
 		Config: struct {
 			Builtin *struct {
-				DefaultPolicy *gen.AgentToolsResponseConfigBuiltinDefaultPolicy       `json:"default_policy,omitempty"`
-				Policies      *map[string]gen.AgentToolsResponseConfigBuiltinPolicies `json:"policies,omitempty"`
+				Policies map[string]gen.AgentToolsResponseConfigBuiltinPolicies `json:"policies"`
 			} `json:"builtin,omitempty"`
 			Mcp *struct {
 				Servers *[]struct {
@@ -305,11 +306,12 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 			} `json:"mcp,omitempty"`
 		}{
 			Builtin: &struct {
-				DefaultPolicy *gen.AgentToolsResponseConfigBuiltinDefaultPolicy       `json:"default_policy,omitempty"`
-				Policies      *map[string]gen.AgentToolsResponseConfigBuiltinPolicies `json:"policies,omitempty"`
+				Policies map[string]gen.AgentToolsResponseConfigBuiltinPolicies `json:"policies"`
 			}{
-				DefaultPolicy: &respBuiltinDefaultPolicy,
-				Policies:      &builtinPolicies,
+				// The default-policy fallback concept was removed (CLAUDE.md hard
+				// constraint 6) — Policies is now the complete, explicit per-tool
+				// source of truth, with no separate "default" value to report.
+				Policies: builtinPolicies,
 			},
 		},
 		Tools: toolEntries,
@@ -332,20 +334,23 @@ func manifestTierToWire(tier tools.ManifestTier) gen.AgentToolsResponseToolsMani
 	return gen.AgentToolsResponseToolsManifestTierCompressed
 }
 
-// resolveConfiguredPolicy returns the agent-configured policy for toolName
-// (ignoring global and fence overrides).
-func resolveConfiguredPolicy(toolName string, cfg *config.AgentToolsCfg) string {
-	if cfg == nil {
-		return "allow"
+// resolveConfiguredPolicy returns the explicitly configured policy for
+// toolName: the agent's own entry if present, else the global
+// sandbox.tool_policies entry if present. There is no default-policy
+// fallback (CLAUDE.md hard constraint 6) — coverage is always one of these
+// two explicit, literal sources (enforced by config.ValidateToolPolicyCoverage
+// at boot and at every agent write), never a hardcoded value. Returns "" only
+// if genuinely uncovered, which should not occur on a validated config.
+func resolveConfiguredPolicy(toolName string, cfg *config.AgentToolsCfg, globalPolicies map[string]string) string {
+	if cfg != nil {
+		if p, ok := cfg.Builtin.Policies[toolName]; ok {
+			return string(p)
+		}
 	}
-	if p, ok := cfg.Builtin.Policies[toolName]; ok {
-		return string(p)
+	if p, ok := globalPolicies[toolName]; ok {
+		return p
 	}
-	dp := string(cfg.Builtin.DefaultPolicy)
-	if dp == "" {
-		return "allow"
-	}
-	return dp
+	return ""
 }
 
 // HandleToolApprovals handles POST /api/v1/tool-approvals/{approval_id}.
@@ -486,17 +491,23 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 
 // toolsCfgToPolicy converts a config.AgentToolsCfg to ToolPolicyCfg.
 // Used by HandleAgentToolsRegistry to build the effective tool view.
+//
+// This is a near-duplicate of pkg/agent's unexported agentToolsCfgToPolicy,
+// but is not a clean candidate for reuse: that function is package-private
+// (lowercase) to pkg/agent, and it additionally threads GodMode + the global
+// sandbox floor — concerns this lighter read-path bridge deliberately leaves
+// to its caller (HandleAgentToolsRegistry sets GlobalPolicies itself, see
+// below). There is no default-policy fallback (CLAUDE.md hard constraint 6):
+// a tool with no exact-match entry in cfg.Builtin.Policies is simply absent
+// from the returned map, and resolves to "deny" downstream (fail-closed)
+// unless the global sandbox.tool_policies map covers it instead.
 func toolsCfgToPolicy(cfg *config.AgentToolsCfg) *tools.ToolPolicyCfg {
 	if cfg == nil {
-		return &tools.ToolPolicyCfg{DefaultPolicy: "allow"}
+		return &tools.ToolPolicyCfg{}
 	}
 	policies := make(map[string]string, len(cfg.Builtin.Policies))
 	for k, v := range cfg.Builtin.Policies {
 		policies[k] = string(v)
 	}
-	dp := string(cfg.Builtin.DefaultPolicy)
-	if dp == "" {
-		dp = "allow"
-	}
-	return &tools.ToolPolicyCfg{DefaultPolicy: dp, Policies: policies}
+	return &tools.ToolPolicyCfg{Policies: policies}
 }

@@ -252,8 +252,7 @@ func TestRepairHistory_PolicyDenyBlocksReinvocation(t *testing.T) {
 
 	// Policy denies search_web — repair must NOT re-invoke it.
 	denyPolicy := &tools.ToolPolicyCfg{
-		DefaultPolicy: "allow",
-		Policies:      map[string]string{"search_web": "deny"},
+		Policies: map[string]string{"search_web": "deny"},
 	}
 
 	out, stats := repairHistory(context.Background(), messages, store, sid, nil, "test-agent", denyPolicy)
@@ -285,8 +284,11 @@ func TestRepairHistory_NilRegistrySkipsReinvocation(t *testing.T) {
 		}},
 	}
 
-	// No policy restriction — allow-all.
-	allowPolicy := &tools.ToolPolicyCfg{DefaultPolicy: "allow"}
+	// No policy restriction configured; this test's point is the nil-registry
+	// guard (below), which short-circuits before the policy map is ever
+	// consulted — see tryReinvokeIdempotent's entry==nil||toolRegistry==nil
+	// check. An empty ToolPolicyCfg here is inert either way.
+	allowPolicy := &tools.ToolPolicyCfg{}
 
 	// Nil registry — can't reinvoke but not a policy deny.
 	out, stats := repairHistory(context.Background(), messages, store, sid, nil, "test-agent", allowPolicy)

@@ -10,7 +10,11 @@
  * 2. Single de-duplicated category grid — ALL builtin tools appear exactly once,
  *    grouped by their human-readable category label. MCP tools are NOT here.
  * 3. MCP tools — grouped per-server with a source badge.
- * 4. Default policy control (inside "Customize defaults (advanced)" — no tool re-list).
+ *
+ * There is no "Customize defaults (advanced)" section anymore — there is no
+ * default-policy concept left on the wire. Every tool's policy is set (or
+ * left as an explicit, always-visible allow/ask/deny control) directly in the
+ * category grid / MCP section above.
  *
  * Design decisions (US-1 / AC5 / FR-103):
  * - There is NO separate "system" disclosure — system.* tools appear in the
@@ -22,21 +26,28 @@
  *
  * Props:
  *   tools    — full RegistryTool[] from GET /api/v1/tools
- *   value    — {default_policy, policies} — the current (persisted or local) state
+ *   value    — {policies} — the current (persisted or local) complete per-tool
+ *              policy map. There is no default_policy field — every static
+ *              builtin tool name is expected to be present as an explicit key
+ *              (coverage is validated server-side).
  *   onChange — called synchronously with the new value on every user interaction
  *
  * Policy round-trip: loading a value and saving unchanged emits a byte-identical
  * payload. The component never mutates `value` in place.
  *
+ * Every per-tool write (handleToolPolicy / handleWildcardPolicy) always writes
+ * an explicit entry for the tool/wildcard being changed — there is no more
+ * "delete the entry because it matches the default" optimization, because
+ * there is no default to match against.
+ *
  * Spec §2.1 / US-1 / AC5 / FR-103 / Issue #357.
  */
 
 import { useMemo, useState } from 'react'
-import { CaretDown, CaretUp, Database, LockSimple } from '@phosphor-icons/react'
+import { CaretDown, CaretUp, Database, LockSimple, Warning } from '@phosphor-icons/react'
 import type { RegistryTool } from '@/lib/api'
 import type { ToolPolicy } from '@/components/shared/PolicyBadge'
 import { PolicyBadge } from '@/components/shared/PolicyBadge'
-import { AdvancedDisclosure } from '@/components/shared/AdvancedDisclosure'
 import { CATEGORY_LABELS, groupByCategory, resolvePolicy } from '@/lib/toolCategories'
 import {
   POLICY_PRESETS,
@@ -81,46 +92,65 @@ const ALL_POLICIES: ToolPolicy[] = ['allow', 'ask', 'deny']
 const POLICY_RANK: Record<ToolPolicy, number> = { allow: 0, ask: 1, deny: 2 }
 
 /**
- * Resolve the global override floor for a tool, or null when the global policy
- * imposes no restriction (resolves to "allow", or no global policy provided).
+ * The resolved "floor" a global policy imposes on a tool:
+ *   - `null`        — no global editor in play (no `global` prop), or the
+ *                     global policy resolves to an exact "allow" (no restriction).
+ *   - `'unconfigured'` — a global editor IS in play but its policy map has no
+ *                     exact or glob entry for this tool. This is anomalous
+ *                     (stale/incomplete local state — the server guarantees
+ *                     coverage) and must be surfaced, never silently treated
+ *                     as "allow".
+ *   - `ToolPolicy`  — the global policy ('ask' or 'deny') that floors this tool.
  */
-function globalOverrideFor(toolName: string, global?: ToolPolicyValue): ToolPolicy | null {
+type GlobalFloor = ToolPolicy | 'unconfigured' | null
+
+/** Resolve the global override floor for a tool (see GlobalFloor for the states). */
+function globalOverrideFor(toolName: string, global?: ToolPolicyValue): GlobalFloor {
   if (!global) return null
-  const g = resolvePolicy(toolName, global.policies, (global.default_policy || 'allow') as ToolPolicy)
+  const g = resolvePolicy(toolName, global.policies)
+  if (g === undefined) return 'unconfigured'
   return g === 'allow' ? null : g
 }
 
 /** A per-agent policy is locked when it is strictly less restrictive than the floor. */
-function isPolicyLocked(p: ToolPolicy, floor: ToolPolicy | null): boolean {
-  if (!floor) return false
+function isPolicyLocked(p: ToolPolicy, floor: GlobalFloor): boolean {
+  if (!floor || floor === 'unconfigured') return false
   return POLICY_RANK[p] < POLICY_RANK[floor]
 }
 
-/** Resolve the single summary policy for a category, or 'mixed' if heterogeneous. */
+/** The rolled-up policy shown in a category's summary pill. */
+type PolicySummary = ToolPolicy | 'mixed' | 'unconfigured'
+
+/**
+ * Resolve the single summary policy for a category, or 'mixed' if heterogeneous,
+ * or 'unconfigured' if any tool in the category has no explicit policy entry
+ * (anomalous — see resolvePolicy).
+ */
 function categorySummaryPolicy(
   toolsInCategory: RegistryTool[],
   policies: Record<string, ToolPolicy>,
-  defaultPolicy: ToolPolicy,
-): ToolPolicy | 'mixed' {
-  if (toolsInCategory.length === 0) return defaultPolicy
-  const first = resolvePolicy(toolsInCategory[0].name, policies, defaultPolicy)
-  for (let i = 1; i < toolsInCategory.length; i++) {
-    if (resolvePolicy(toolsInCategory[i].name, policies, defaultPolicy) !== first) {
-      return 'mixed'
-    }
-  }
-  return first
+): PolicySummary {
+  if (toolsInCategory.length === 0) return 'unconfigured'
+  const resolved = toolsInCategory.map((t) => resolvePolicy(t.name, policies))
+  if (resolved.some((p) => p === undefined)) return 'unconfigured'
+  const first = resolved[0] as ToolPolicy
+  return resolved.every((p) => p === first) ? first : 'mixed'
 }
 
-/** Detect which preset (if any) the current value matches. */
-function detectActivePreset(value: ToolPolicyValue): RolePreset | null {
-  for (const [key, preset] of Object.entries(POLICY_PRESETS) as [RolePreset, typeof POLICY_PRESETS[RolePreset]][]) {
-    if (preset.defaultPolicy !== value.default_policy) continue
-    const presetOverrideKeys = Object.keys(preset.overrides)
-    const currentOverrideKeys = Object.keys(value.policies)
-    if (presetOverrideKeys.length !== currentOverrideKeys.length) continue
-    const matches = presetOverrideKeys.every((k) => value.policies[k] === preset.overrides[k])
-    if (matches) return key
+/**
+ * Detect which preset (if any) the current value matches, by comparing the
+ * value's complete policy map against what applying each preset to the
+ * current tool list would produce. There is no `default_policy` to compare —
+ * a preset only "matches" when its expanded map is byte-identical to `value`.
+ */
+function detectActivePreset(value: ToolPolicyValue, tools: RegistryTool[]): RolePreset | null {
+  for (const role of Object.keys(POLICY_PRESETS) as RolePreset[]) {
+    const expected = applyRolePreset(role, tools).policies
+    const expectedKeys = Object.keys(expected)
+    const currentKeys = Object.keys(value.policies)
+    if (expectedKeys.length !== currentKeys.length) continue
+    const matches = expectedKeys.every((k) => value.policies[k] === expected[k])
+    if (matches) return role
   }
   return null
 }
@@ -214,30 +244,41 @@ function groupMcpByServer(mcpTools: RegistryTool[]): Record<string, RegistryTool
 function CategoryToolRow({
   tool,
   policies,
-  defaultPolicy,
   onChange,
   disabled,
   globalPolicies,
 }: {
   tool: RegistryTool
   policies: Record<string, ToolPolicy>
-  defaultPolicy: ToolPolicy
   onChange: (toolId: string, p: ToolPolicy) => void
   disabled?: boolean
   globalPolicies?: ToolPolicyValue
 }) {
-  const effective = resolvePolicy(tool.name, policies, defaultPolicy)
+  const effective = resolvePolicy(tool.name, policies)
   const floor = globalOverrideFor(tool.name, globalPolicies)
-  const floorLabel = floor === 'deny' ? 'Deny' : floor === 'ask' ? 'Ask' : ''
-  const lockTitle = floor
-    ? `Locked by a global "${floorLabel}" policy in Settings → Security. ` +
-      `The effective policy is the most restrictive of the global and per-agent values (deny > ask > allow), ` +
-      `so it cannot be relaxed here.`
-    : undefined
+  const isUnconfigured = floor === 'unconfigured'
+  const floorLabel = floor === 'deny' ? 'Deny' : floor === 'ask' ? 'Ask' : isUnconfigured ? 'Unset' : ''
+  const lockTitle = isUnconfigured
+    ? 'This tool has no explicit global policy configured — check Settings → Security.'
+    : floor
+      ? `Locked by a global "${floorLabel}" policy in Settings → Security. ` +
+        `The effective policy is the most restrictive of the global and per-agent values (deny > ask > allow), ` +
+        `so it cannot be relaxed here.`
+      : undefined
   return (
     <div className="flex items-center justify-between py-1 gap-2" data-testid={`tool-row-${tool.name}`}>
       <span className="text-[11px] text-[var(--color-muted)] font-mono truncate flex-1 flex items-center gap-1.5" title={tool.name}>
         <span className="truncate">{tool.name}</span>
+        {effective === undefined && (
+          <span
+            title="This tool has no explicit policy entry — needs attention."
+            data-testid={`tool-unconfigured-${tool.name}`}
+            className="inline-flex items-center gap-0.5 shrink-0 px-1 py-0.5 rounded text-[9px] font-semibold border border-[var(--color-border)] text-[var(--color-warning)]"
+          >
+            <Warning size={9} weight="bold" />
+            Unset
+          </span>
+        )}
         {floor && (
           // Hash link (no full reload) to Settings → Security where the global
           // policy is managed. Plain anchor (not router Link) so the editor
@@ -248,7 +289,7 @@ function CategoryToolRow({
             data-testid={`global-override-${tool.name}`}
             className="inline-flex items-center gap-0.5 shrink-0 px-1 py-0.5 rounded text-[9px] font-semibold border border-[var(--color-border)] text-[var(--color-warning)] hover:bg-[var(--color-surface-2)]"
           >
-            <LockSimple size={9} weight="bold" />
+            {isUnconfigured ? <Warning size={9} weight="bold" /> : <LockSimple size={9} weight="bold" />}
             Global: {floorLabel}
           </a>
         )}
@@ -283,7 +324,6 @@ function CategorySection({
   categoryKey,
   tools,
   policies,
-  defaultPolicy,
   onToolChange,
   disabled,
   globalPolicies,
@@ -291,28 +331,29 @@ function CategorySection({
   categoryKey: string
   tools: RegistryTool[]
   policies: Record<string, ToolPolicy>
-  defaultPolicy: ToolPolicy
   onToolChange: (toolId: string, p: ToolPolicy) => void
   disabled?: boolean
   globalPolicies?: ToolPolicyValue
 }) {
   const [open, setOpen] = useState(false)
   const label = CATEGORY_LABELS[categoryKey] ?? categoryKey
-  const summary = categorySummaryPolicy(tools, policies, defaultPolicy)
+  const summary = categorySummaryPolicy(tools, policies)
 
-  const PILL_CLASS: Record<ToolPolicy | 'mixed', string> = {
-    mixed:  'bg-violet-500/20 text-violet-300 border-violet-500/40',
-    allow:  'bg-emerald-500/20 text-emerald-400 border-emerald-500/40',
-    ask:    'bg-amber-500/20 text-amber-400 border-amber-500/40',
-    deny:   'bg-red-500/20 text-red-400 border-red-500/40',
+  const PILL_CLASS: Record<PolicySummary, string> = {
+    mixed:        'bg-violet-500/20 text-violet-300 border-violet-500/40',
+    allow:        'bg-emerald-500/20 text-emerald-400 border-emerald-500/40',
+    ask:          'bg-amber-500/20 text-amber-400 border-amber-500/40',
+    deny:         'bg-red-500/20 text-red-400 border-red-500/40',
+    unconfigured: 'bg-[var(--color-surface-2)] text-[var(--color-warning)] border-[var(--color-border)]',
   }
   const pillClass = PILL_CLASS[summary]
 
-  const PILL_LABEL: Record<ToolPolicy | 'mixed', string> = {
+  const PILL_LABEL: Record<PolicySummary, string> = {
     mixed: 'Mixed',
     allow: 'Allow',
     ask:   'Ask',
     deny:  'Deny',
+    unconfigured: 'Unset',
   }
 
   return (
@@ -348,7 +389,6 @@ function CategorySection({
                 key={tool.name}
                 tool={tool}
                 policies={policies}
-                defaultPolicy={defaultPolicy}
                 onChange={onToolChange}
                 disabled={disabled}
                 globalPolicies={globalPolicies}
@@ -368,7 +408,10 @@ function CategorySection({
  * Bulk controls write a single wildcard policy key (`<commonPrefix>*`) into the
  * policies map. The common prefix is the longest prefix of all tool names in the
  * group that ends with '_' (e.g. `mcp_github_mcp_` for tools from the server
- * "github_mcp"). Allow removes the wildcard key; Ask/Deny sets it.
+ * "github_mcp"). Every bulk click (including Allow) writes the wildcard key
+ * explicitly — there is no "Allow = remove the key" shortcut, because without a
+ * default policy, removing the key would leave every tool under that server
+ * unconfigured (anomalous) rather than allowed.
  *
  * The trigger button carries data-testid="advanced-disclosure-trigger" for
  * compatibility with existing tests that look for that attribute.
@@ -377,7 +420,6 @@ function McpServerSection({
   server,
   serverTools,
   policies,
-  defaultPolicy,
   onToolChange,
   onWildcardPolicy,
   disabled,
@@ -386,9 +428,8 @@ function McpServerSection({
   server: string
   serverTools: RegistryTool[]
   policies: Record<string, ToolPolicy>
-  defaultPolicy: ToolPolicy
   onToolChange: (toolId: string, p: ToolPolicy) => void
-  onWildcardPolicy: (wildcardKey: string, p: ToolPolicy | null) => void
+  onWildcardPolicy: (wildcardKey: string, p: ToolPolicy) => void
   disabled?: boolean
   globalPolicies?: ToolPolicyValue
 }) {
@@ -402,7 +443,9 @@ function McpServerSection({
   }, [serverTools])
 
   // Reflect current per-server state: look up the wildcard key in policies.
-  const currentWildcard: ToolPolicy | null = wildcardKey != null ? (policies[wildcardKey] ?? null) : null
+  // `undefined` (key absent) means the bulk control has no explicit setting yet
+  // — none of the three buttons is shown as active in that state.
+  const currentWildcard: ToolPolicy | undefined = wildcardKey != null ? policies[wildcardKey] : undefined
 
   const BULK_BUTTON_CLASS = (active: boolean, policy: ToolPolicy) => {
     const baseInactive = 'border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]'
@@ -440,8 +483,7 @@ function McpServerSection({
             data-testid={`mcp-server-bulk-${server}`}
           >
             {ALL_POLICIES.map((p) => {
-              // Allow = no wildcard override (remove the key)
-              const isActive = p === 'allow' ? currentWildcard === null : currentWildcard === p
+              const isActive = currentWildcard === p
               return (
                 <button
                   key={p}
@@ -452,11 +494,7 @@ function McpServerSection({
                   title={`Set all ${server} tools to ${p}`}
                   onClick={(e) => {
                     e.stopPropagation()
-                    if (p === 'allow') {
-                      onWildcardPolicy(wildcardKey, null)
-                    } else {
-                      onWildcardPolicy(wildcardKey, p)
-                    }
+                    onWildcardPolicy(wildcardKey, p)
                   }}
                   className={`px-2 py-0.5 rounded text-[10px] font-medium border transition-colors capitalize disabled:opacity-40 disabled:cursor-not-allowed ${BULK_BUTTON_CLASS(isActive, p)}`}
                 >
@@ -488,7 +526,6 @@ function McpServerSection({
                 key={tool.name}
                 tool={tool}
                 policies={policies}
-                defaultPolicy={defaultPolicy}
                 onChange={onToolChange}
                 disabled={disabled}
                 globalPolicies={globalPolicies}
@@ -504,7 +541,7 @@ function McpServerSection({
 // ── Main component ─────────────────────────────────────────────────────────────
 
 export function ToolPolicyEditor({ tools, value, onChange, disabled, globalPolicies }: ToolPolicyEditorProps) {
-  const { default_policy: defaultPolicy, policies } = value
+  const { policies } = value
 
   // ── Partition tools into two buckets ─────────────────────────────────────────
   // MCP tools → MCP section (grouped by server name).
@@ -538,48 +575,30 @@ export function ToolPolicyEditor({ tools, value, onChange, disabled, globalPolic
   const groupedMcp = useMemo(() => groupMcpByServer(mcpTools), [mcpTools])
 
   // Detect active preset.
-  const activePreset = useMemo(() => detectActivePreset(value), [value])
+  const activePreset = useMemo(() => detectActivePreset(value, tools), [value, tools])
 
   // ── Handlers ────────────────────────────────────────────────────────────────
 
   function handlePresetClick(role: RolePreset) {
-    onChange(applyRolePreset(role))
+    onChange(applyRolePreset(role, tools))
   }
 
+  /**
+   * Always writes an explicit entry for the tool being changed — there is no
+   * "matches the default, so remove the override" optimization anymore, since
+   * there is no default to match against. Every write is unconditional.
+   */
   function handleToolPolicy(toolId: string, p: ToolPolicy) {
-    const newPolicies = { ...policies }
-    if (p === defaultPolicy) {
-      // Matches default — remove the override so the round-trip is clean.
-      delete newPolicies[toolId]
-    } else {
-      newPolicies[toolId] = p
-    }
-    onChange({ default_policy: defaultPolicy, policies: newPolicies })
-  }
-
-  function handleDefaultPolicy(p: ToolPolicy) {
-    // Rebuild policies: drop any overrides that now match the new default.
-    const newPolicies: Record<string, ToolPolicy> = {}
-    for (const [toolId, pol] of Object.entries(policies)) {
-      if (pol !== p) {
-        newPolicies[toolId] = pol
-      }
-    }
-    onChange({ default_policy: p, policies: newPolicies })
+    onChange({ policies: { ...policies, [toolId]: p } })
   }
 
   /**
    * Bulk-set a per-server wildcard policy key (e.g. `mcp_github_mcp_*`).
-   * Pass null to remove the key (Allow = revert to default).
+   * Every value (including "Allow") writes the key explicitly — removing it
+   * would leave every tool under that server unconfigured rather than allowed.
    */
-  function handleWildcardPolicy(wildcardKey: string, p: ToolPolicy | null) {
-    const newPolicies = { ...policies }
-    if (p === null) {
-      delete newPolicies[wildcardKey]
-    } else {
-      newPolicies[wildcardKey] = p
-    }
-    onChange({ default_policy: defaultPolicy, policies: newPolicies })
+  function handleWildcardPolicy(wildcardKey: string, p: ToolPolicy) {
+    onChange({ policies: { ...policies, [wildcardKey]: p } })
   }
 
   // ── Render ───────────────────────────────────────────────────────────────────
@@ -627,7 +646,6 @@ export function ToolPolicyEditor({ tools, value, onChange, disabled, globalPolic
                 categoryKey={cat}
                 tools={catTools}
                 policies={policies}
-                defaultPolicy={defaultPolicy}
                 onToolChange={handleToolPolicy}
                 disabled={disabled}
                 globalPolicies={globalPolicies}
@@ -648,7 +666,6 @@ export function ToolPolicyEditor({ tools, value, onChange, disabled, globalPolic
                 server={server}
                 serverTools={serverTools}
                 policies={policies}
-                defaultPolicy={defaultPolicy}
                 onToolChange={handleToolPolicy}
                 onWildcardPolicy={handleWildcardPolicy}
                 disabled={disabled}
@@ -657,31 +674,6 @@ export function ToolPolicyEditor({ tools, value, onChange, disabled, globalPolic
             ))}
           </div>
         </div>
-      )}
-
-      {/* 4. Customize defaults (advanced) — default policy control only.
-              No per-tool re-listing here; each tool already appears exactly once
-              in the category grid above (AC5 / FR-103). */}
-      {tools.length > 0 && (
-        <AdvancedDisclosure
-          title="Customize defaults (advanced)"
-          summary={`${Object.keys(policies).length} override${Object.keys(policies).length !== 1 ? 's' : ''} active`}
-        >
-          <div className="space-y-1.5">
-            <p className="text-[11px] text-[var(--color-muted)]">Default policy (applies to any tool without an explicit override)</p>
-            <div className="flex gap-1.5">
-              {ALL_POLICIES.map((p) => (
-                <PolicyBadge
-                  key={p}
-                  policy={p}
-                  active={defaultPolicy === p}
-                  onClick={() => handleDefaultPolicy(p)}
-                  disabled={disabled}
-                />
-              ))}
-            </div>
-          </div>
-        </AdvancedDisclosure>
       )}
     </div>
   )

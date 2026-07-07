@@ -1,13 +1,20 @@
 /**
  * oldPresetCompat.test.tsx
  *
- * US-D2 (#333): An agent saved under a removed preset (Unrestricted / Standard
- * / Minimal) loads and re-saves under the new schema without mutating the
- * policy on mere render.
+ * US-D2 (#333): originally verified that an agent saved under a removed
+ * preset (Unrestricted / Standard / Minimal) loaded and re-saved under the
+ * newer {default_policy, policies} schema without mutating the policy on
+ * mere render.
  *
- * The ToolPolicyEditor (and ToolsAndPermissions wrapping it) MUST round-trip
- * any policy value byte-identically — loading a value and saving unchanged
- * emits a byte-identical payload. No mutation on render.
+ * The wire contract has since dropped `default_policy` entirely — every
+ * static builtin tool now MUST have an explicit, literal policy entry in a
+ * COMPLETE per-tool map (there is no sparse "overrides + fallback default"
+ * shape left anywhere, client or server). This file now verifies the
+ * equivalent invariant under the new contract: a persisted COMPLETE policy
+ * map — whatever its shape (all-allow, mixed, mostly-deny, arbitrary) — loads
+ * and round-trips through ToolsAndPermissions without mutation on mere
+ * render. There are no more named presets to be "compatible" with; the
+ * invariant that matters is round-trip identity of an explicit map.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -75,27 +82,24 @@ beforeEach(() => {
   vi.mocked(api.fetchBuiltinTools).mockResolvedValue(SOME_TOOLS)
   vi.mocked(api.fetchMcpServersForAgent).mockResolvedValue([])
   vi.mocked(api.fetchGlobalToolPolicies).mockResolvedValue({
-    default_policy: 'allow',
     policies: {},
   })
 })
 
 // ── Compatibility tests ────────────────────────────────────────────────────────
 
-describe('oldPresetCompat: agents saved under removed presets round-trip unchanged (#333)', () => {
+describe('oldPresetCompat: a persisted complete policy map round-trips unchanged (#333)', () => {
   /**
-   * An agent saved under the old "Unrestricted" preset had:
-   *   { default_policy: 'allow', policies: {} }
-   * The new schema does not have this preset label, but the policy value is
-   * identical to 'full_access'. The editor must render and re-save without
-   * mutating the policy.
+   * Equivalent of the retired "Unrestricted" shape: every known tool is
+   * explicitly allowed. There is no `default_policy: 'allow'` shortcut for
+   * this anymore — the map itself carries an explicit 'allow' per tool.
    */
-  it('Unrestricted preset (default_policy:allow, no overrides) loads unchanged', async () => {
-    const unrestrictedCfg: AgentToolsCfg = {
-      builtin: { default_policy: 'allow', policies: {} },
+  it('an all-allow complete map loads unchanged (no mutation on render)', async () => {
+    const allAllowCfg: AgentToolsCfg = {
+      builtin: { policies: { read_file: 'allow', exec: 'allow', web_search: 'allow' } },
     }
     vi.mocked(api.fetchAgentTools).mockResolvedValue({
-      config: unrestrictedCfg,
+      config: allAllowCfg,
       tools: [],
     })
 
@@ -103,9 +107,9 @@ describe('oldPresetCompat: agents saved under removed presets round-trip unchang
 
     render(
       <ToolsAndPermissions
-        agentId="agent-unrestricted"
+        agentId="agent-all-allow"
         agentType="Main"
-        tools={unrestrictedCfg}
+        tools={allAllowCfg}
         onChange={onChange}
       />,
       { wrapper },
@@ -122,69 +126,22 @@ describe('oldPresetCompat: agents saved under removed presets round-trip unchang
   })
 
   /**
-   * An agent saved under the old "Standard" preset had:
-   *   { default_policy: 'allow', policies: { exec: 'ask', 'browser.navigate': 'ask', ... } }
-   * The new 'balanced' preset has the same structure. The editor must not mutate.
+   * Equivalent of the retired "Standard" shape: exec requires confirmation,
+   * everything else is allowed — expressed as an explicit, complete map
+   * rather than a default + one override.
    */
-  it('Standard preset (default_policy:allow, exec:ask overrides) loads unchanged', async () => {
-    const standardCfg: AgentToolsCfg = {
+  it('a mixed complete map (exec:ask, others:allow) loads unchanged', async () => {
+    const mixedCfg: AgentToolsCfg = {
       builtin: {
-        default_policy: 'allow',
-        policies: {
-          exec: 'ask',
-          'browser.navigate': 'ask',
-          'browser.click': 'ask',
-          'browser.type': 'ask',
-          'browser.evaluate': 'deny',
-        },
-      },
-    }
-    vi.mocked(api.fetchAgentTools).mockResolvedValue({
-      config: standardCfg,
-      tools: [],
-    })
-
-    const onChange = vi.fn()
-
-    render(
-      <ToolsAndPermissions
-        agentId="agent-standard"
-        agentType="Main"
-        tools={standardCfg}
-        onChange={onChange}
-      />,
-      { wrapper },
-    )
-
-    await waitFor(() => {
-      expect(document.querySelector('[data-testid="tool-policy-editor"]')).toBeInTheDocument()
-    })
-
-    // No mutation on mere render
-    expect(onChange).not.toHaveBeenCalled()
-  })
-
-  /**
-   * An agent saved under the old "Minimal" preset had:
-   *   { default_policy: 'deny', policies: { read_file: 'allow', list_dir: 'allow', ... } }
-   * This matches no new preset (closest is 'cautious'). Must still load without mutation.
-   */
-  it('Minimal preset (default_policy:deny, few allows) loads unchanged', async () => {
-    const minimalCfg: AgentToolsCfg = {
-      builtin: {
-        default_policy: 'deny',
         policies: {
           read_file: 'allow',
-          list_dir: 'allow',
+          exec: 'ask',
           web_search: 'allow',
-          web_fetch: 'allow',
-          task_list: 'allow',
-          agent_list: 'allow',
         },
       },
     }
     vi.mocked(api.fetchAgentTools).mockResolvedValue({
-      config: minimalCfg,
+      config: mixedCfg,
       tools: [],
     })
 
@@ -192,9 +149,9 @@ describe('oldPresetCompat: agents saved under removed presets round-trip unchang
 
     render(
       <ToolsAndPermissions
-        agentId="agent-minimal"
+        agentId="agent-mixed"
         agentType="Main"
-        tools={minimalCfg}
+        tools={mixedCfg}
         onChange={onChange}
       />,
       { wrapper },
@@ -209,16 +166,56 @@ describe('oldPresetCompat: agents saved under removed presets round-trip unchang
   })
 
   /**
-   * An arbitrary custom policy (not matching any preset) must round-trip
-   * without mutation.
+   * Equivalent of the retired "Minimal" shape: mostly denied, with a couple
+   * of tools explicitly allowed — again expressed as a complete map, not a
+   * deny default plus allow overrides.
    */
-  it('arbitrary custom policy round-trips without mutation', async () => {
-    const customCfg: AgentToolsCfg = {
+  it('a mostly-deny complete map loads unchanged', async () => {
+    const mostlyDenyCfg: AgentToolsCfg = {
       builtin: {
-        default_policy: 'ask',
         policies: {
           read_file: 'allow',
           exec: 'deny',
+          web_search: 'allow',
+        },
+      },
+    }
+    vi.mocked(api.fetchAgentTools).mockResolvedValue({
+      config: mostlyDenyCfg,
+      tools: [],
+    })
+
+    const onChange = vi.fn()
+
+    render(
+      <ToolsAndPermissions
+        agentId="agent-mostly-deny"
+        agentType="Main"
+        tools={mostlyDenyCfg}
+        onChange={onChange}
+      />,
+      { wrapper },
+    )
+
+    await waitFor(() => {
+      expect(document.querySelector('[data-testid="tool-policy-editor"]')).toBeInTheDocument()
+    })
+
+    // No mutation on mere render
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  /**
+   * An arbitrary custom policy (not matching any preset's expanded shape)
+   * must round-trip without mutation.
+   */
+  it('an arbitrary custom complete map round-trips without mutation', async () => {
+    const customCfg: AgentToolsCfg = {
+      builtin: {
+        policies: {
+          read_file: 'allow',
+          exec: 'deny',
+          web_search: 'ask',
         },
       },
     }
@@ -244,6 +241,49 @@ describe('oldPresetCompat: agents saved under removed presets round-trip unchang
     })
 
     // No mutation on mere render
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  /**
+   * New regression coverage for the removed-fallback fix: a genuinely
+   * INCOMPLETE map (a tool missing from `policies` entirely) must still
+   * render without crashing or mutating — the missing tool just shows as
+   * "unconfigured" in the editor (ToolPolicyEditor.test.tsx covers the
+   * visual state in detail). This should never happen with real server data
+   * (coverage is validated at boot and at every write) but the frontend must
+   * degrade safely, not silently invent an 'allow'.
+   */
+  it('an incomplete map (a tool missing entirely) still renders without mutation', async () => {
+    const incompleteCfg: AgentToolsCfg = {
+      builtin: {
+        policies: {
+          read_file: 'allow',
+          // 'exec' and 'web_search' intentionally absent.
+        },
+      },
+    }
+    vi.mocked(api.fetchAgentTools).mockResolvedValue({
+      config: incompleteCfg,
+      tools: [],
+    })
+
+    const onChange = vi.fn()
+
+    render(
+      <ToolsAndPermissions
+        agentId="agent-incomplete"
+        agentType="Main"
+        tools={incompleteCfg}
+        onChange={onChange}
+      />,
+      { wrapper },
+    )
+
+    await waitFor(() => {
+      expect(document.querySelector('[data-testid="tool-policy-editor"]')).toBeInTheDocument()
+    })
+
+    // No mutation on mere render, even with a gap in the map.
     expect(onChange).not.toHaveBeenCalled()
   })
 })

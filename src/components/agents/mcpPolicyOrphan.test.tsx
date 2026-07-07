@@ -50,7 +50,7 @@ const BUILTIN_TOOL: RegistryTool = {
   source: 'builtin',
 }
 
-const EMPTY_POLICY: ToolPolicyValue = { default_policy: 'allow', policies: {} }
+const EMPTY_POLICY: ToolPolicyValue = { policies: {} }
 
 function makeQueryClient() {
   return new QueryClient({
@@ -155,7 +155,6 @@ describe('mcpPolicyOrphan: MCP per-server grouping and orphan persistence (#337 
     // The policy value itself still carries the entry — it stays in state, just
     // not rendered. This is M-6: no pruning job, orphan entries kept-but-inert.
     const policyWithDeny: ToolPolicyValue = {
-      default_policy: 'allow',
       policies: {
         mcp_github_search: 'deny',   // orphaned — server removed
       },
@@ -184,7 +183,6 @@ describe('mcpPolicyOrphan: MCP per-server grouping and orphan persistence (#337 
   it('re-adding the server re-applies the persisted Deny to the tool', async () => {
     // Start with orphaned Deny for the MCP tool (server absent)
     const policyWithDeny: ToolPolicyValue = {
-      default_policy: 'allow',
       policies: {
         mcp_github_search: 'deny',
       },

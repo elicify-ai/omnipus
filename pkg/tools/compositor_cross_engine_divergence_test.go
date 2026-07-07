@@ -54,8 +54,6 @@ func TestCompositor_SpecificAllowCarveOut_HonorsMostSpecific(t *testing.T) {
 				broad:    "deny",
 				carveout: "allow",
 			},
-			GlobalDefaultPolicy: "allow",
-			DefaultPolicy:       "allow",
 		},
 	)
 	names := toolNames(filtered)
@@ -79,9 +77,7 @@ func TestCompositor_BroadDenyNoCarveOut_DeniesAll(t *testing.T) {
 		makeMCPAdapters("bar", tool),
 		"custom-agent",
 		&ToolPolicyCfg{
-			GlobalPolicies:      map[string]string{broad: "deny"},
-			GlobalDefaultPolicy: "allow",
-			DefaultPolicy:       "allow",
+			GlobalPolicies: map[string]string{broad: "deny"},
 		},
 	)
 	assert.False(t, toolNames(filtered)[tool],

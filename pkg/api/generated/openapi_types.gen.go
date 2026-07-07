@@ -179,27 +179,6 @@ func (e AgentSteeringMode) Valid() bool {
 	}
 }
 
-// Defines values for AgentToolsCfgBuiltinDefaultPolicy.
-const (
-	AgentToolsCfgBuiltinDefaultPolicyAllow AgentToolsCfgBuiltinDefaultPolicy = "allow"
-	AgentToolsCfgBuiltinDefaultPolicyAsk   AgentToolsCfgBuiltinDefaultPolicy = "ask"
-	AgentToolsCfgBuiltinDefaultPolicyDeny  AgentToolsCfgBuiltinDefaultPolicy = "deny"
-)
-
-// Valid indicates whether the value is a known member of the AgentToolsCfgBuiltinDefaultPolicy enum.
-func (e AgentToolsCfgBuiltinDefaultPolicy) Valid() bool {
-	switch e {
-	case AgentToolsCfgBuiltinDefaultPolicyAllow:
-		return true
-	case AgentToolsCfgBuiltinDefaultPolicyAsk:
-		return true
-	case AgentToolsCfgBuiltinDefaultPolicyDeny:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for AgentToolsCfgBuiltinPolicies.
 const (
 	AgentToolsCfgBuiltinPoliciesAllow AgentToolsCfgBuiltinPolicies = "allow"
@@ -323,27 +302,6 @@ func (e AgentCreateRequestMainSteeringMode) Valid() bool {
 	}
 }
 
-// Defines values for AgentCreateRequestMainToolsCfgBuiltinDefaultPolicy.
-const (
-	AgentCreateRequestMainToolsCfgBuiltinDefaultPolicyAllow AgentCreateRequestMainToolsCfgBuiltinDefaultPolicy = "allow"
-	AgentCreateRequestMainToolsCfgBuiltinDefaultPolicyAsk   AgentCreateRequestMainToolsCfgBuiltinDefaultPolicy = "ask"
-	AgentCreateRequestMainToolsCfgBuiltinDefaultPolicyDeny  AgentCreateRequestMainToolsCfgBuiltinDefaultPolicy = "deny"
-)
-
-// Valid indicates whether the value is a known member of the AgentCreateRequestMainToolsCfgBuiltinDefaultPolicy enum.
-func (e AgentCreateRequestMainToolsCfgBuiltinDefaultPolicy) Valid() bool {
-	switch e {
-	case AgentCreateRequestMainToolsCfgBuiltinDefaultPolicyAllow:
-		return true
-	case AgentCreateRequestMainToolsCfgBuiltinDefaultPolicyAsk:
-		return true
-	case AgentCreateRequestMainToolsCfgBuiltinDefaultPolicyDeny:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for AgentCreateRequestMainToolsCfgBuiltinPolicies.
 const (
 	AgentCreateRequestMainToolsCfgBuiltinPoliciesAllow AgentCreateRequestMainToolsCfgBuiltinPolicies = "allow"
@@ -431,27 +389,6 @@ func (e AgentCreateRequestSubagentDelegationPolicyToKind) Valid() bool {
 	case AgentCreateRequestSubagentDelegationPolicyToKindLocal:
 		return true
 	case AgentCreateRequestSubagentDelegationPolicyToKindRemoteA2a:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for AgentCreateRequestSubagentToolsCfgBuiltinDefaultPolicy.
-const (
-	AgentCreateRequestSubagentToolsCfgBuiltinDefaultPolicyAllow AgentCreateRequestSubagentToolsCfgBuiltinDefaultPolicy = "allow"
-	AgentCreateRequestSubagentToolsCfgBuiltinDefaultPolicyAsk   AgentCreateRequestSubagentToolsCfgBuiltinDefaultPolicy = "ask"
-	AgentCreateRequestSubagentToolsCfgBuiltinDefaultPolicyDeny  AgentCreateRequestSubagentToolsCfgBuiltinDefaultPolicy = "deny"
-)
-
-// Valid indicates whether the value is a known member of the AgentCreateRequestSubagentToolsCfgBuiltinDefaultPolicy enum.
-func (e AgentCreateRequestSubagentToolsCfgBuiltinDefaultPolicy) Valid() bool {
-	switch e {
-	case AgentCreateRequestSubagentToolsCfgBuiltinDefaultPolicyAllow:
-		return true
-	case AgentCreateRequestSubagentToolsCfgBuiltinDefaultPolicyAsk:
-		return true
-	case AgentCreateRequestSubagentToolsCfgBuiltinDefaultPolicyDeny:
 		return true
 	default:
 		return false
@@ -677,27 +614,6 @@ func (e AgentToolsResponseAgentType) Valid() bool {
 	}
 }
 
-// Defines values for AgentToolsResponseConfigBuiltinDefaultPolicy.
-const (
-	AgentToolsResponseConfigBuiltinDefaultPolicyAllow AgentToolsResponseConfigBuiltinDefaultPolicy = "allow"
-	AgentToolsResponseConfigBuiltinDefaultPolicyAsk   AgentToolsResponseConfigBuiltinDefaultPolicy = "ask"
-	AgentToolsResponseConfigBuiltinDefaultPolicyDeny  AgentToolsResponseConfigBuiltinDefaultPolicy = "deny"
-)
-
-// Valid indicates whether the value is a known member of the AgentToolsResponseConfigBuiltinDefaultPolicy enum.
-func (e AgentToolsResponseConfigBuiltinDefaultPolicy) Valid() bool {
-	switch e {
-	case AgentToolsResponseConfigBuiltinDefaultPolicyAllow:
-		return true
-	case AgentToolsResponseConfigBuiltinDefaultPolicyAsk:
-		return true
-	case AgentToolsResponseConfigBuiltinDefaultPolicyDeny:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for AgentToolsResponseConfigBuiltinPolicies.
 const (
 	AgentToolsResponseConfigBuiltinPoliciesAllow AgentToolsResponseConfigBuiltinPolicies = "allow"
@@ -776,27 +692,6 @@ func (e AgentToolsResponseToolsManifestTier) Valid() bool {
 	case AgentToolsResponseToolsManifestTierFull:
 		return true
 	case AgentToolsResponseToolsManifestTierInfra:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for AgentToolsUpdateRequestBuiltinDefaultPolicy.
-const (
-	AgentToolsUpdateRequestBuiltinDefaultPolicyAllow AgentToolsUpdateRequestBuiltinDefaultPolicy = "allow"
-	AgentToolsUpdateRequestBuiltinDefaultPolicyAsk   AgentToolsUpdateRequestBuiltinDefaultPolicy = "ask"
-	AgentToolsUpdateRequestBuiltinDefaultPolicyDeny  AgentToolsUpdateRequestBuiltinDefaultPolicy = "deny"
-)
-
-// Valid indicates whether the value is a known member of the AgentToolsUpdateRequestBuiltinDefaultPolicy enum.
-func (e AgentToolsUpdateRequestBuiltinDefaultPolicy) Valid() bool {
-	switch e {
-	case AgentToolsUpdateRequestBuiltinDefaultPolicyAllow:
-		return true
-	case AgentToolsUpdateRequestBuiltinDefaultPolicyAsk:
-		return true
-	case AgentToolsUpdateRequestBuiltinDefaultPolicyDeny:
 		return true
 	default:
 		return false
@@ -932,27 +827,6 @@ func (e AgentUpdateRequestSteeringMode) Valid() bool {
 	case OneAtATime:
 		return true
 	case QueueAndProcess:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for AgentUpdateRequestToolsCfgBuiltinDefaultPolicy.
-const (
-	AgentUpdateRequestToolsCfgBuiltinDefaultPolicyAllow AgentUpdateRequestToolsCfgBuiltinDefaultPolicy = "allow"
-	AgentUpdateRequestToolsCfgBuiltinDefaultPolicyAsk   AgentUpdateRequestToolsCfgBuiltinDefaultPolicy = "ask"
-	AgentUpdateRequestToolsCfgBuiltinDefaultPolicyDeny  AgentUpdateRequestToolsCfgBuiltinDefaultPolicy = "deny"
-)
-
-// Valid indicates whether the value is a known member of the AgentUpdateRequestToolsCfgBuiltinDefaultPolicy enum.
-func (e AgentUpdateRequestToolsCfgBuiltinDefaultPolicy) Valid() bool {
-	switch e {
-	case AgentUpdateRequestToolsCfgBuiltinDefaultPolicyAllow:
-		return true
-	case AgentUpdateRequestToolsCfgBuiltinDefaultPolicyAsk:
-		return true
-	case AgentUpdateRequestToolsCfgBuiltinDefaultPolicyDeny:
 		return true
 	default:
 		return false
@@ -1403,27 +1277,6 @@ const (
 func (e GatewayRestartResponseStatus) Valid() bool {
 	switch e {
 	case Restarting:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for GlobalToolPoliciesDefaultPolicy.
-const (
-	GlobalToolPoliciesDefaultPolicyAllow GlobalToolPoliciesDefaultPolicy = "allow"
-	GlobalToolPoliciesDefaultPolicyAsk   GlobalToolPoliciesDefaultPolicy = "ask"
-	GlobalToolPoliciesDefaultPolicyDeny  GlobalToolPoliciesDefaultPolicy = "deny"
-)
-
-// Valid indicates whether the value is a known member of the GlobalToolPoliciesDefaultPolicy enum.
-func (e GlobalToolPoliciesDefaultPolicy) Valid() bool {
-	switch e {
-	case GlobalToolPoliciesDefaultPolicyAllow:
-		return true
-	case GlobalToolPoliciesDefaultPolicyAsk:
-		return true
-	case GlobalToolPoliciesDefaultPolicyDeny:
 		return true
 	default:
 		return false
@@ -3388,19 +3241,19 @@ func (e ToolCallStatus) Valid() bool {
 
 // Defines values for ToolPolicy.
 const (
-	ToolPolicyAllow ToolPolicy = "allow"
-	ToolPolicyAsk   ToolPolicy = "ask"
-	ToolPolicyDeny  ToolPolicy = "deny"
+	Allow ToolPolicy = "allow"
+	Ask   ToolPolicy = "ask"
+	Deny  ToolPolicy = "deny"
 )
 
 // Valid indicates whether the value is a known member of the ToolPolicy enum.
 func (e ToolPolicy) Valid() bool {
 	switch e {
-	case ToolPolicyAllow:
+	case Allow:
 		return true
-	case ToolPolicyAsk:
+	case Ask:
 		return true
-	case ToolPolicyDeny:
+	case Deny:
 		return true
 	default:
 		return false
@@ -4009,11 +3862,8 @@ type Agent struct {
 	ToolsCfg *struct {
 		// Builtin Controls builtin tool visibility for this agent.
 		Builtin *struct {
-			// DefaultPolicy Fallback policy applied to any builtin tool not listed in policies. Custom agents are seeded with default_policy=allow and a system.*=deny entry to enforce the privilege rail.
-			DefaultPolicy *AgentToolsCfgBuiltinDefaultPolicy `json:"default_policy,omitempty"`
-
-			// Policies Per-tool policy overrides. Keys are tool names or glob patterns (e.g. "system.*", "workspace.shell"). Values are one of "allow", "ask", "deny".
-			Policies *map[string]AgentToolsCfgBuiltinPolicies `json:"policies,omitempty"`
+			// Policies Complete per-tool policy map. Every static builtin tool name MUST be present as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value — this is not a sparse override set with a fallback default, and wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
+			Policies map[string]AgentToolsCfgBuiltinPolicies `json:"policies"`
 		} `json:"builtin,omitempty"`
 
 		// Mcp MCP server bindings for this agent.
@@ -4059,9 +3909,6 @@ type AgentStatus string
 
 // AgentSteeringMode Tool execution steering strategy. "one-at-a-time" = approve each tool call individually. Workers always use "one-at-a-time" (server-set).
 type AgentSteeringMode string
-
-// AgentToolsCfgBuiltinDefaultPolicy Fallback policy applied to any builtin tool not listed in policies. Custom agents are seeded with default_policy=allow and a system.*=deny entry to enforce the privilege rail.
-type AgentToolsCfgBuiltinDefaultPolicy string
 
 // AgentToolsCfgBuiltinPolicies defines model for Agent.ToolsCfg.Builtin.Policies.
 type AgentToolsCfgBuiltinPolicies string
@@ -4193,11 +4040,8 @@ type AgentCreateRequestMain struct {
 	ToolsCfg *struct {
 		// Builtin Controls builtin tool visibility for this agent.
 		Builtin *struct {
-			// DefaultPolicy Fallback policy applied to any builtin tool not listed in policies. Custom agents are seeded with default_policy=allow and a system.*=deny entry to enforce the privilege rail.
-			DefaultPolicy *AgentCreateRequestMainToolsCfgBuiltinDefaultPolicy `json:"default_policy,omitempty"`
-
-			// Policies Per-tool policy overrides. Keys are tool names or glob patterns (e.g. "system.*", "workspace.shell"). Values are one of "allow", "ask", "deny".
-			Policies *map[string]AgentCreateRequestMainToolsCfgBuiltinPolicies `json:"policies,omitempty"`
+			// Policies Complete per-tool policy map. Every static builtin tool name MUST be present as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value — this is not a sparse override set with a fallback default, and wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
+			Policies map[string]AgentCreateRequestMainToolsCfgBuiltinPolicies `json:"policies"`
 		} `json:"builtin,omitempty"`
 
 		// Mcp MCP server bindings for this agent.
@@ -4231,9 +4075,6 @@ type AgentCreateRequestMainDelegationPolicyToKind string
 
 // AgentCreateRequestMainSteeringMode Tool execution steering strategy. Main only; the server forces "one-at-a-time" for workers.
 type AgentCreateRequestMainSteeringMode string
-
-// AgentCreateRequestMainToolsCfgBuiltinDefaultPolicy Fallback policy applied to any builtin tool not listed in policies. Custom agents are seeded with default_policy=allow and a system.*=deny entry to enforce the privilege rail.
-type AgentCreateRequestMainToolsCfgBuiltinDefaultPolicy string
 
 // AgentCreateRequestMainToolsCfgBuiltinPolicies defines model for AgentCreateRequestMain.ToolsCfg.Builtin.Policies.
 type AgentCreateRequestMainToolsCfgBuiltinPolicies string
@@ -4357,11 +4198,8 @@ type AgentCreateRequestSubagent struct {
 	ToolsCfg *struct {
 		// Builtin Controls builtin tool visibility for this agent.
 		Builtin *struct {
-			// DefaultPolicy Fallback policy applied to any builtin tool not listed in policies. Custom agents are seeded with default_policy=allow and a system.*=deny entry to enforce the privilege rail.
-			DefaultPolicy *AgentCreateRequestSubagentToolsCfgBuiltinDefaultPolicy `json:"default_policy,omitempty"`
-
-			// Policies Per-tool policy overrides. Keys are tool names or glob patterns (e.g. "system.*", "workspace.shell"). Values are one of "allow", "ask", "deny".
-			Policies *map[string]AgentCreateRequestSubagentToolsCfgBuiltinPolicies `json:"policies,omitempty"`
+			// Policies Complete per-tool policy map. Every static builtin tool name MUST be present as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value — this is not a sparse override set with a fallback default, and wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
+			Policies map[string]AgentCreateRequestSubagentToolsCfgBuiltinPolicies `json:"policies"`
 		} `json:"builtin,omitempty"`
 
 		// Mcp MCP server bindings for this agent.
@@ -4389,9 +4227,6 @@ type AgentCreateRequestSubagentDelegationPolicyModes string
 
 // AgentCreateRequestSubagentDelegationPolicyToKind The kind of agent reference. "local" = a locally-registered agent resolved by id. "remote-a2a" = reserved for future A2A protocol external agent resolution; not enforced in v0.1.0.
 type AgentCreateRequestSubagentDelegationPolicyToKind string
-
-// AgentCreateRequestSubagentToolsCfgBuiltinDefaultPolicy Fallback policy applied to any builtin tool not listed in policies. Custom agents are seeded with default_policy=allow and a system.*=deny entry to enforce the privilege rail.
-type AgentCreateRequestSubagentToolsCfgBuiltinDefaultPolicy string
 
 // AgentCreateRequestSubagentToolsCfgBuiltinPolicies defines model for AgentCreateRequestSubagent.ToolsCfg.Builtin.Policies.
 type AgentCreateRequestSubagentToolsCfgBuiltinPolicies string
@@ -4650,11 +4485,8 @@ type AgentToolEntryManifestTier string
 type AgentToolsCfg struct {
 	// Builtin Controls builtin tool visibility for this agent.
 	Builtin *struct {
-		// DefaultPolicy Fallback policy applied to any builtin tool not listed in policies. Custom agents are seeded with default_policy=allow and a system.*=deny entry to enforce the privilege rail.
-		DefaultPolicy *AgentToolsCfgBuiltinDefaultPolicy `json:"default_policy,omitempty"`
-
-		// Policies Per-tool policy overrides. Keys are tool names or glob patterns (e.g. "system.*", "workspace.shell"). Values are one of "allow", "ask", "deny".
-		Policies *map[string]AgentToolsCfgBuiltinPolicies `json:"policies,omitempty"`
+		// Policies Complete per-tool policy map. Every static builtin tool name MUST be present as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value — this is not a sparse override set with a fallback default, and wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
+		Policies map[string]AgentToolsCfgBuiltinPolicies `json:"policies"`
 	} `json:"builtin,omitempty"`
 
 	// Mcp MCP server bindings for this agent.
@@ -4679,11 +4511,8 @@ type AgentToolsResponse struct {
 	Config struct {
 		// Builtin Controls builtin tool visibility for this agent.
 		Builtin *struct {
-			// DefaultPolicy Fallback policy applied to any builtin tool not listed in policies. Custom agents are seeded with default_policy=allow and a system.*=deny entry to enforce the privilege rail.
-			DefaultPolicy *AgentToolsResponseConfigBuiltinDefaultPolicy `json:"default_policy,omitempty"`
-
-			// Policies Per-tool policy overrides. Keys are tool names or glob patterns (e.g. "system.*", "workspace.shell"). Values are one of "allow", "ask", "deny".
-			Policies *map[string]AgentToolsResponseConfigBuiltinPolicies `json:"policies,omitempty"`
+			// Policies Complete per-tool policy map. Every static builtin tool name MUST be present as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value — this is not a sparse override set with a fallback default, and wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
+			Policies map[string]AgentToolsResponseConfigBuiltinPolicies `json:"policies"`
 		} `json:"builtin,omitempty"`
 
 		// Mcp MCP server bindings for this agent.
@@ -4718,9 +4547,6 @@ type AgentToolsResponse struct {
 // AgentToolsResponseAgentType Agent classification. Built-in roster (Mia / Jim / Ava / Ray) returns "core" with locked=true; legacy operator-supplied "system" entries remain for backward compatibility. User-created chat colleagues are "Main", native workers are "Subagent", and external-CLI workers are "subagent_3p" (distinguished from Subagent by executor.kind=external-cli). Informs the UI whether policy editing is allowed.
 type AgentToolsResponseAgentType string
 
-// AgentToolsResponseConfigBuiltinDefaultPolicy Fallback policy applied to any builtin tool not listed in policies. Custom agents are seeded with default_policy=allow and a system.*=deny entry to enforce the privilege rail.
-type AgentToolsResponseConfigBuiltinDefaultPolicy string
-
 // AgentToolsResponseConfigBuiltinPolicies defines model for AgentToolsResponse.Config.Builtin.Policies.
 type AgentToolsResponseConfigBuiltinPolicies string
 
@@ -4733,20 +4559,17 @@ type AgentToolsResponseToolsEffectivePolicy string
 // AgentToolsResponseToolsManifestTier How the tool is presented to the LLM when the manifest optimization is active. "full" = always sent as a callable tool definition every turn; "compressed" = listed by name only in the system context, schema fetched on demand via load_tool; "infra" = always-callable discovery tool (load_tool / search_tools_*) that drives the manifest mechanism itself and never appears in the manifest block.
 type AgentToolsResponseToolsManifestTier string
 
-// AgentToolsUpdateRequest Request body for PUT /api/v1/agents/{id}/tools. Replaces the agent's tool policy configuration. Supports both the current policy format (builtin.default_policy + builtin.policies) and the legacy explicit/inherit mode format (builtin.mode + builtin.visible) for backward compatibility. Legacy fields are converted to policy format server-side before persisting.
+// AgentToolsUpdateRequest Request body for PUT /api/v1/agents/{id}/tools. Replaces the agent's tool policy configuration. Supports both the current policy format (builtin.policies, a complete map) and the legacy explicit/inherit mode format (builtin.mode + builtin.visible) for backward compatibility. Legacy fields are converted to policy format server-side before persisting.
 type AgentToolsUpdateRequest struct {
 	// Builtin Builtin tool policy configuration for this agent.
 	Builtin *struct {
-		// DefaultPolicy Fallback policy applied to any builtin tool not listed in policies. Defaults to "allow" when omitted.
-		DefaultPolicy *AgentToolsUpdateRequestBuiltinDefaultPolicy `json:"default_policy,omitempty"`
-
-		// Mode Legacy format: "explicit" builds a deny-all policy with allow entries for each name in visible[]. "inherit" sets default_policy=allow. Ignored when default_policy is present.
+		// Mode Legacy format, retained for one release of transitional compatibility. Ignored outright when a complete policies map is also present (policies always wins). Sent ALONE (no policies), mode does not successfully "build" a working policy on its own any more: under the mandatory coverage-validation model (no default_policy fallback), "explicit" converts visible[] into agent-level "allow" entries for just those names — it does not synthesize a deny-all baseline for every other static builtin tool — and "inherit" produces no per-tool entries at all. Both leave most static builtin tools without an explicit policy entry, so the request is rejected with 400 (a coverage-gap error) unless the global sandbox.tool_policies floor happens to cover every remaining tool. Callers must send a complete policies map to reliably succeed.
 		Mode *AgentToolsUpdateRequestBuiltinMode `json:"mode,omitempty"`
 
-		// Policies Per-tool policy overrides. Keys are canonical tool names or glob patterns (e.g. "system.*"). Values are "allow", "ask", or "deny".
-		Policies *map[string]AgentToolsUpdateRequestBuiltinPolicies `json:"policies,omitempty"`
+		// Policies Complete per-tool policy map. Every static builtin tool name MUST be present as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value — this is not a sparse override set with a fallback default, and wildcard keys are not valid for the static builtin catalog. There is no default_policy field. Required on every request that includes builtin. Legacy callers that only have mode/visible available must resolve them to a complete policies map before sending this request; the server still accepts mode/visible alongside policies (ignored) for one release of transitional compatibility but no longer accepts them alone.
+		Policies map[string]AgentToolsUpdateRequestBuiltinPolicies `json:"policies"`
 
-		// Visible Legacy format: tool names to allow when mode="explicit". Ignored when default_policy is present.
+		// Visible Legacy format: tool names converted to agent-level "allow" entries when mode="explicit". Ignored outright when policies is also present. Sent alone with mode="explicit", it does not cover every other static builtin tool, so the request is rejected with 400 for a coverage gap unless the global policy floor already covers the rest — see mode's description.
 		Visible *[]string `json:"visible,omitempty"`
 	} `json:"builtin,omitempty"`
 
@@ -4763,10 +4586,7 @@ type AgentToolsUpdateRequest struct {
 	} `json:"mcp,omitempty"`
 }
 
-// AgentToolsUpdateRequestBuiltinDefaultPolicy Fallback policy applied to any builtin tool not listed in policies. Defaults to "allow" when omitted.
-type AgentToolsUpdateRequestBuiltinDefaultPolicy string
-
-// AgentToolsUpdateRequestBuiltinMode Legacy format: "explicit" builds a deny-all policy with allow entries for each name in visible[]. "inherit" sets default_policy=allow. Ignored when default_policy is present.
+// AgentToolsUpdateRequestBuiltinMode Legacy format, retained for one release of transitional compatibility. Ignored outright when a complete policies map is also present (policies always wins). Sent ALONE (no policies), mode does not successfully "build" a working policy on its own any more: under the mandatory coverage-validation model (no default_policy fallback), "explicit" converts visible[] into agent-level "allow" entries for just those names — it does not synthesize a deny-all baseline for every other static builtin tool — and "inherit" produces no per-tool entries at all. Both leave most static builtin tools without an explicit policy entry, so the request is rejected with 400 (a coverage-gap error) unless the global sandbox.tool_policies floor happens to cover every remaining tool. Callers must send a complete policies map to reliably succeed.
 type AgentToolsUpdateRequestBuiltinMode string
 
 // AgentToolsUpdateRequestBuiltinPolicies defines model for AgentToolsUpdateRequest.Builtin.Policies.
@@ -4925,11 +4745,8 @@ type AgentUpdateRequest struct {
 	ToolsCfg *struct {
 		// Builtin Controls builtin tool visibility for this agent.
 		Builtin *struct {
-			// DefaultPolicy Fallback policy applied to any builtin tool not listed in policies. Custom agents are seeded with default_policy=allow and a system.*=deny entry to enforce the privilege rail.
-			DefaultPolicy *AgentUpdateRequestToolsCfgBuiltinDefaultPolicy `json:"default_policy,omitempty"`
-
-			// Policies Per-tool policy overrides. Keys are tool names or glob patterns (e.g. "system.*", "workspace.shell"). Values are one of "allow", "ask", "deny".
-			Policies *map[string]AgentUpdateRequestToolsCfgBuiltinPolicies `json:"policies,omitempty"`
+			// Policies Complete per-tool policy map. Every static builtin tool name MUST be present as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value — this is not a sparse override set with a fallback default, and wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
+			Policies map[string]AgentUpdateRequestToolsCfgBuiltinPolicies `json:"policies"`
 		} `json:"builtin,omitempty"`
 
 		// Mcp MCP server bindings for this agent.
@@ -4966,9 +4783,6 @@ type AgentUpdateRequestExecutorKind string
 
 // AgentUpdateRequestSteeringMode New steering mode. Allowed on all agents (Main only — server forces "one-at-a-time" for workers).
 type AgentUpdateRequestSteeringMode string
-
-// AgentUpdateRequestToolsCfgBuiltinDefaultPolicy Fallback policy applied to any builtin tool not listed in policies. Custom agents are seeded with default_policy=allow and a system.*=deny entry to enforce the privilege rail.
-type AgentUpdateRequestToolsCfgBuiltinDefaultPolicy string
 
 // AgentUpdateRequestToolsCfgBuiltinPolicies defines model for AgentUpdateRequest.ToolsCfg.Builtin.Policies.
 type AgentUpdateRequestToolsCfgBuiltinPolicies string
@@ -5804,15 +5618,9 @@ type GatewayStatus struct {
 
 // GlobalToolPolicies Global tool policy configuration returned by GET /api/v1/security/tool-policies and accepted by PUT /api/v1/security/tool-policies.
 type GlobalToolPolicies struct {
-	// DefaultPolicy Default policy for any tool not listed in policies.
-	DefaultPolicy GlobalToolPoliciesDefaultPolicy `json:"default_policy"`
-
-	// Policies Per-tool policy overrides. Keys are canonical tool names; values are the policy to apply. Never null — empty object when no overrides are configured.
+	// Policies Complete per-tool policy map. Every static builtin tool name (the full catalog: general + browser + system.*-legacy-named sysagent tools) MUST be present as an explicit, literal key with an "allow"/"ask"/"deny" value — this is not a sparse override set with a fallback default. There is no default_policy field; coverage is enforced by hard validation at boot and at every write, never a silent runtime default. Never null — always the full map.
 	Policies map[string]GlobalToolPoliciesPolicies `json:"policies"`
 }
-
-// GlobalToolPoliciesDefaultPolicy Default policy for any tool not listed in policies.
-type GlobalToolPoliciesDefaultPolicy string
 
 // GlobalToolPoliciesPolicies defines model for GlobalToolPolicies.Policies.
 type GlobalToolPoliciesPolicies string

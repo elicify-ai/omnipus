@@ -12,11 +12,9 @@ import (
 // set, every tool resolves to "allow" regardless of deny/ask in the policy maps.
 func TestResolveEffectivePolicy_GodMode_FloorsAtAllow(t *testing.T) {
 	cfg := &ToolPolicyCfg{
-		DefaultPolicy:       "deny",
-		GlobalDefaultPolicy: "deny",
-		Policies:            map[string]string{"system.exec": "deny", "fetch_url": "ask"},
-		GlobalPolicies:      map[string]string{"system.*": "deny"},
-		GodMode:             true,
+		Policies:       map[string]string{"system.exec": "deny", "fetch_url": "ask"},
+		GlobalPolicies: map[string]string{"system.*": "deny"},
+		GodMode:        true,
 	}
 	for _, name := range []string{"system.exec", "fetch_url", "anything.else"} {
 		if got := ResolveEffectivePolicy(cfg, name); got != "allow" {
@@ -29,7 +27,6 @@ func TestResolveEffectivePolicy_GodMode_FloorsAtAllow(t *testing.T) {
 // is non-destructive: clearing GodMode restores the original deny/ask decisions.
 func TestResolveEffectivePolicy_GodModeOff_RestoresDecisions(t *testing.T) {
 	cfg := &ToolPolicyCfg{
-		DefaultPolicy:  "allow",
 		Policies:       map[string]string{"system.exec": "deny", "fetch_url": "ask"},
 		GlobalPolicies: map[string]string{},
 		GodMode:        false,

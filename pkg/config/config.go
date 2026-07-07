@@ -871,28 +871,15 @@ const (
 )
 
 // AgentBuiltinToolsCfg controls which builtin tools an agent can use and how.
+//
+// There is no default-policy fallback (CLAUDE.md hard constraint 6): every
+// static builtin tool must resolve from an explicit, literal entry in
+// Policies and/or the global sandbox.tool_policies map. Coverage gaps are a
+// hard validation failure (config.ValidateToolPolicyCoverage), never a
+// runtime default.
 type AgentBuiltinToolsCfg struct {
-	// DefaultPolicy applies to tools not listed in Policies.
-	// Default: "allow" (all scope-appropriate tools available).
-	DefaultPolicy ToolPolicy `json:"default_policy,omitempty"`
 	// Policies is a per-tool override map. Keys are tool names from the catalog.
 	Policies map[string]ToolPolicy `json:"policies,omitempty"`
-}
-
-// ResolvePolicy returns the effective policy for a tool name.
-// Checks per-tool overrides first, then falls back to DefaultPolicy.
-// If DefaultPolicy is empty, defaults to "allow".
-func (c *AgentBuiltinToolsCfg) ResolvePolicy(toolName string) ToolPolicy {
-	if c == nil {
-		return ToolPolicyAllow
-	}
-	if p, ok := c.Policies[toolName]; ok {
-		return p
-	}
-	if c.DefaultPolicy != "" {
-		return c.DefaultPolicy
-	}
-	return ToolPolicyAllow
 }
 
 // AgentMCPToolsCfg controls which MCP servers are available to an agent.

@@ -72,11 +72,12 @@ export function Step3Tools({
         <div className="space-y-2" data-testid="wizard-tools-cfg">
           <label className="text-sm font-medium">Tools policy</label>
           <p className="text-xs text-[var(--color-muted)]">
-            Default: deny. Per-tool allow / ask / deny editor.
+            Starts from the Balanced preset. Per-tool allow / ask / deny editor —
+            every tool has an explicit policy, no hidden default.
           </p>
           <ToolPolicyEditor
             tools={tools}
-            value={toolPolicyValue(payload.tools_cfg)}
+            value={toolPolicyValue(payload.tools_cfg, tools)}
             globalPolicies={globalPolicyValue}
             onChange={(next) =>
               setField(
@@ -284,18 +285,18 @@ function FallbackEditor({ payload, setField, providers }: FallbackEditorProps) {
 /**
  * Convert the wire-shape `AgentToolsCfg.builtin` (which is optional) into
  * the required shape `<ToolPolicyEditor>` consumes. Defaults to the
- * 'balanced' role preset when nothing is set yet so the editor has
- * something to render before the user picks anything.
+ * 'balanced' role preset — expanded to a complete map over the full known
+ * tool catalog — when nothing is set yet so the editor has something
+ * concrete to render before the user picks anything.
  */
-function toolPolicyValue(cfg: StepProps['payload']['tools_cfg']): ToolPolicyValue {
+function toolPolicyValue(cfg: StepProps['payload']['tools_cfg'], tools: RegistryTool[]): ToolPolicyValue {
   const builtin = cfg?.builtin
-  if (builtin && typeof builtin.default_policy === 'string' && typeof builtin.policies === 'object') {
+  if (builtin && typeof builtin.policies === 'object') {
     return {
-      default_policy: builtin.default_policy,
       policies: { ...builtin.policies },
     }
   }
-  return applyRolePreset('balanced')
+  return applyRolePreset('balanced', tools)
 }
 
 export default Step3Tools

@@ -38,29 +38,31 @@ type effectiveToolPolicyMatrixCase struct {
 	want      string
 }
 
-// denyDefaultCfg models a deny-by-default agent (Ava-like): default deny, with a
-// small explicit allow-list and one explicit ask.
+// denyDefaultCfg models an Ava-like custom agent with a small explicit
+// allow-list and one explicit ask. There is no default-policy field (CLAUDE.md
+// hard constraint 6): a tool with no exact/wildcard entry here fails closed to
+// "deny" — which is exactly what the matrix cases below exercise for unlisted
+// tools, so the "deny-by-default" name still describes the observed behavior
+// even though it is now the fail-closed no-coverage path, not a config field.
 func denyDefaultCfg() *ToolPolicyCfg {
 	return &ToolPolicyCfg{
-		DefaultPolicy: "deny",
 		Policies: map[string]string{
 			"search_web": "allow", // an explicitly allowed tool
 			"fetch_url":  "ask",   // an explicit ask tool
 		},
-		GlobalDefaultPolicy: "allow",
 	}
 }
 
-// allowDefaultCfg models an allow-by-default agent (Jim-like) with one explicit
-// deny and one explicit ask.
+// allowDefaultCfg models a custom agent with one explicit deny and one
+// explicit ask. There is no default-policy field: an unlisted tool now fails
+// closed to "deny" (see the matrix's "now-unlisted tool" case) — the old
+// "allow-by-default" config concept this cfg used to model is retired.
 func allowDefaultCfg() *ToolPolicyCfg {
 	return &ToolPolicyCfg{
-		DefaultPolicy: "allow",
 		Policies: map[string]string{
 			"exec":      "deny", // explicitly denied
 			"fetch_url": "ask",  // explicit ask
 		},
-		GlobalDefaultPolicy: "allow",
 	}
 }
 
@@ -107,9 +109,7 @@ func effectiveToolPolicyMatrix() []effectiveToolPolicyMatrixCase {
 		{
 			name: "deny-default/ScopeCore tool on custom agent (explicit allow)→allow",
 			cfg: &ToolPolicyCfg{
-				DefaultPolicy:       "deny",
-				Policies:            map[string]string{"exec": "allow"},
-				GlobalDefaultPolicy: "allow",
+				Policies: map[string]string{"exec": "allow"},
 			},
 			agentType: "custom",
 			tool:      makeScopedTool("exec", ScopeCore),
@@ -125,11 +125,14 @@ func effectiveToolPolicyMatrix() []effectiveToolPolicyMatrixCase {
 			want:      "allow",
 		},
 		{
-			name:      "allow-default/unlisted tool→allow",
+			// No default-policy fallback (CLAUDE.md hard constraint 6): a tool with
+			// no entry on either side now fails closed to deny — this is the exact
+			// "allow-by-default" behavior the constraint retires.
+			name:      "allow-default/now-unlisted tool→deny (fail-closed, no default)",
 			cfg:       allowDefaultCfg(),
 			agentType: "custom",
 			tool:      makeScopedTool("search_web", ScopeGeneral),
-			want:      "allow",
+			want:      "deny",
 		},
 		{
 			name:      "allow-default/explicit deny→deny",
@@ -150,10 +153,8 @@ func effectiveToolPolicyMatrix() []effectiveToolPolicyMatrixCase {
 		{
 			name: "global-deny-floor overrides agent allow→deny",
 			cfg: &ToolPolicyCfg{
-				DefaultPolicy:       "allow",
-				Policies:            map[string]string{"send_message": "allow"},
-				GlobalPolicies:      map[string]string{"send_message": "deny"},
-				GlobalDefaultPolicy: "allow",
+				Policies:       map[string]string{"send_message": "allow"},
+				GlobalPolicies: map[string]string{"send_message": "deny"},
 			},
 			agentType: "custom",
 			tool:      makeScopedTool("send_message", ScopeGeneral),
@@ -162,8 +163,8 @@ func effectiveToolPolicyMatrix() []effectiveToolPolicyMatrixCase {
 
 		// --- core agent: ScopeCore passes the gate ---
 		{
-			name:      "core-agent/ScopeCore tool→allow (allow-default)",
-			cfg:       &ToolPolicyCfg{DefaultPolicy: "allow", GlobalDefaultPolicy: "allow"},
+			name:      "core-agent/ScopeCore tool→allow (explicit global allow)",
+			cfg:       &ToolPolicyCfg{GlobalPolicies: map[string]string{"exec": "allow"}},
 			agentType: "core",
 			tool:      makeScopedTool("exec", ScopeCore),
 			want:      "allow",
@@ -172,7 +173,7 @@ func effectiveToolPolicyMatrix() []effectiveToolPolicyMatrixCase {
 		// --- unknown scope is fail-closed regardless of policy ---
 		{
 			name:      "unknown-scope tool→deny (fail-closed)",
-			cfg:       &ToolPolicyCfg{DefaultPolicy: "allow", GlobalDefaultPolicy: "allow"},
+			cfg:       &ToolPolicyCfg{},
 			agentType: "custom",
 			tool:      makeScopedTool("weird_tool", ToolScope("bogus")),
 			want:      "deny",
@@ -186,9 +187,7 @@ func effectiveToolPolicyMatrix() []effectiveToolPolicyMatrixCase {
 			//     underscore-wildcard tool.
 			name: "wildcard/agent browser_*=allow (deny-default) → browser_navigate allow",
 			cfg: &ToolPolicyCfg{
-				DefaultPolicy:       "deny",
-				Policies:            map[string]string{"browser_*": "allow"},
-				GlobalDefaultPolicy: "allow",
+				Policies: map[string]string{"browser_*": "allow"},
 			},
 			agentType: "custom",
 			tool:      makeScopedTool("browser_navigate", ScopeGeneral),
@@ -199,9 +198,7 @@ func effectiveToolPolicyMatrix() []effectiveToolPolicyMatrixCase {
 			//     allow-default agent (strictest-wins on the wildcard floor).
 			name: "wildcard/global browser_*=deny (allow-default) → browser_navigate deny",
 			cfg: &ToolPolicyCfg{
-				DefaultPolicy:       "allow",
-				GlobalPolicies:      map[string]string{"browser_*": "deny"},
-				GlobalDefaultPolicy: "allow",
+				GlobalPolicies: map[string]string{"browser_*": "deny"},
 			},
 			agentType: "custom",
 			tool:      makeScopedTool("browser_navigate", ScopeGeneral),
@@ -213,9 +210,7 @@ func effectiveToolPolicyMatrix() []effectiveToolPolicyMatrixCase {
 			//      which the wildcard allow satisfies).
 			name: "wildcard/agent system.*=allow (deny-default) → matching system tool allow",
 			cfg: &ToolPolicyCfg{
-				DefaultPolicy:       "deny",
-				Policies:            map[string]string{"system.*": "allow"},
-				GlobalDefaultPolicy: "allow",
+				Policies: map[string]string{"system.*": "allow"},
 			},
 			agentType: "custom",
 			tool:      makeScopedTool("system.agent.list", ScopeCore),
@@ -226,9 +221,7 @@ func effectiveToolPolicyMatrix() []effectiveToolPolicyMatrixCase {
 			//      "system.*" does not cover "read_file").
 			name: "wildcard/agent system.*=allow (deny-default) → non-matching tool deny",
 			cfg: &ToolPolicyCfg{
-				DefaultPolicy:       "deny",
-				Policies:            map[string]string{"system.*": "allow"},
-				GlobalDefaultPolicy: "allow",
+				Policies: map[string]string{"system.*": "allow"},
 			},
 			agentType: "custom",
 			tool:      makeScopedTool("read_file", ScopeGeneral),
@@ -300,11 +293,9 @@ func TestEffectiveToolPolicy_FilterParity(t *testing.T) {
 // exec gate honors god mode identically to the loop).
 func TestEffectiveToolPolicy_GodModeFloorsAllow(t *testing.T) {
 	cfg := &ToolPolicyCfg{
-		DefaultPolicy:       "deny",
-		Policies:            map[string]string{"exec": "deny"},
-		GlobalPolicies:      map[string]string{"exec": "deny"},
-		GlobalDefaultPolicy: "deny",
-		GodMode:             true,
+		Policies:       map[string]string{"exec": "deny"},
+		GlobalPolicies: map[string]string{"exec": "deny"},
+		GodMode:        true,
 	}
 	// Even a doubly-denied ScopeCore tool on a custom agent is allowed under god mode.
 	assert.Equal(t, "allow",
@@ -316,10 +307,13 @@ func TestEffectiveToolPolicy_GodModeFloorsAllow(t *testing.T) {
 }
 
 // TestEffectiveToolPolicy_NilCfg verifies nil-cfg handling matches
-// FilterToolsByPolicy: infra force-allows, a known-scope tool resolves to allow.
+// FilterToolsByPolicy: infra force-allows unconditionally (registration-gated,
+// not policy-gated), but a known-scope tool with no policy maps to resolve
+// from now fails closed to "deny" — CLAUDE.md hard constraint 6 forbids the
+// historical hardcoded "allow" fallback.
 func TestEffectiveToolPolicy_NilCfg(t *testing.T) {
 	assert.Equal(t, "allow", EffectiveToolPolicy(nil, ScopeGeneral, "custom", "load_tool"))
-	assert.Equal(t, "allow", EffectiveToolPolicy(nil, ScopeGeneral, "custom", "search_web"))
+	assert.Equal(t, "deny", EffectiveToolPolicy(nil, ScopeGeneral, "custom", "search_web"))
 	// Unknown scope is still fail-closed even with a nil cfg.
 	assert.Equal(t, "deny", EffectiveToolPolicy(nil, ToolScope("bogus"), "custom", "x"))
 }

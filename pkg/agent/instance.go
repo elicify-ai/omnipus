@@ -628,17 +628,6 @@ func findModelConfigForProvider(cfg *config.Config, providerName string) (*confi
 	return nil, fmt.Errorf("provider %q not found in configured providers", providerName)
 }
 
-// agentToolsCfgToPolicy converts config.AgentToolsCfg to tools.ToolPolicyCfg for
-// use at LLM-call assembly time (FR-003, FR-041). Reads from cfg.Builtin which
-// holds the per-tool DefaultPolicy and Policies map.
-//
-// O7 (WS-G): the global sandbox tool policies (sandbox.tool_policies +
-// sandbox.default_tool_policy) MUST be threaded in alongside the per-agent
-// policy so that runtime FilterToolsByPolicy enforces most-restrictive-wins
-// (deny > ask > allow). Without GlobalPolicies populated, an admin's global
-// deny showed enforced in the REST view but did NOT block the tool at call
-// time. The full config is required to source those globals; a nil config
-// degrades to per-agent-only (test/legacy construction paths).
 // godModeAvailable is the process-level god-mode AVAILABILITY gate (O14). It is
 // set once at boot by SetAllowGodMode to ((--allow-god-mode OR
 // config.Sandbox.GodModeAllowed) AND sandbox.GodModeAvailable) — the gateway
@@ -670,8 +659,15 @@ func GodModeActive(globalCfg *config.Config) bool {
 	return globalCfg != nil && globalCfg.Sandbox.GodMode && godModeAvailable.Load()
 }
 
+// agentToolsCfgToPolicy builds the *tools.ToolPolicyCfg the runtime filter
+// resolves against. There is no default-policy fallback (CLAUDE.md hard
+// constraint 6): every static builtin tool must have an explicit, literal
+// entry in cfg.Builtin.Policies and/or globalCfg.Sandbox.ToolPolicies for
+// every agent — coverage is enforced structurally by
+// config.ValidateToolPolicyCoverage at boot and at every agent write, not by
+// a hardcoded "allow" here.
 func agentToolsCfgToPolicy(globalCfg *config.Config, cfg *config.AgentToolsCfg) *tools.ToolPolicyCfg {
-	out := &tools.ToolPolicyCfg{DefaultPolicy: "allow"}
+	out := &tools.ToolPolicyCfg{}
 	// O14 god-mode: when the global switch is active, floor every tool's
 	// effective policy at "allow" (no prompts, no deny) and skip the admin-ask
 	// fence. Set the flag and return early — the per-agent and global policy
@@ -684,29 +680,21 @@ func agentToolsCfgToPolicy(globalCfg *config.Config, cfg *config.AgentToolsCfg) 
 		return out
 	}
 	if cfg != nil {
-		dp := string(cfg.Builtin.DefaultPolicy)
-		if dp == "" {
-			dp = "allow"
-		}
 		policies := make(map[string]string, len(cfg.Builtin.Policies))
 		for k, v := range cfg.Builtin.Policies {
 			policies[k] = string(v)
 		}
-		out.DefaultPolicy = dp
 		out.Policies = policies
 	}
 	// Thread global sandbox tool policies so the runtime filter enforces
 	// global × agent most-restrictive-wins (O7). FilterToolsByPolicy applies
 	// GlobalPolicies before agent policies; a global deny always blocks.
-	if globalCfg != nil {
-		if len(globalCfg.Sandbox.ToolPolicies) > 0 {
-			gp := make(map[string]string, len(globalCfg.Sandbox.ToolPolicies))
-			for k, v := range globalCfg.Sandbox.ToolPolicies {
-				gp[k] = v
-			}
-			out.GlobalPolicies = gp
+	if globalCfg != nil && len(globalCfg.Sandbox.ToolPolicies) > 0 {
+		gp := make(map[string]string, len(globalCfg.Sandbox.ToolPolicies))
+		for k, v := range globalCfg.Sandbox.ToolPolicies {
+			gp[k] = v
 		}
-		out.GlobalDefaultPolicy = globalCfg.Sandbox.DefaultToolPolicy
+		out.GlobalPolicies = gp
 	}
 	return out
 }

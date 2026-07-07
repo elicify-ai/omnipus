@@ -52,9 +52,7 @@ func TestReloadRace_PolicyAtomicNoTornReads(t *testing.T) {
 
 	// Seed an initial policy.
 	agent.StoreToolPolicy(&tools.ToolPolicyCfg{
-		DefaultPolicy:       "allow",
-		Policies:            map[string]string{"exec": "allow"},
-		GlobalDefaultPolicy: "allow",
+		Policies: map[string]string{"exec": "allow"},
 	})
 
 	// Run for a short time under the race detector.
@@ -79,9 +77,7 @@ func TestReloadRace_PolicyAtomicNoTornReads(t *testing.T) {
 						policyVal = "deny"
 					}
 					agent.StoreToolPolicy(&tools.ToolPolicyCfg{
-						DefaultPolicy:       "allow",
-						Policies:            map[string]string{"exec": policyVal},
-						GlobalDefaultPolicy: "allow",
+						Policies: map[string]string{"exec": policyVal},
 					})
 				}
 			}
@@ -104,11 +100,9 @@ func TestReloadRace_PolicyAtomicNoTornReads(t *testing.T) {
 						// after the initial Store.
 						continue
 					}
-					// The loaded policy must have a valid DefaultPolicy.
-					if p.DefaultPolicy != "allow" && p.DefaultPolicy != "deny" && p.DefaultPolicy != "ask" {
-						atomic.AddInt64(&loadErrors, 1)
-					}
-					// Exec policy must be one of the valid values.
+					// Exec policy must be one of the valid values (torn-read check —
+					// there is no DefaultPolicy field anymore, CLAUDE.md hard
+					// constraint 6, so this map read is the sole coherence probe).
 					if v := p.Policies["exec"]; v != "allow" && v != "deny" && v != "ask" && v != "" {
 						atomic.AddInt64(&loadErrors, 1)
 					}
@@ -133,8 +127,7 @@ func TestReloadRace_MultipleAgentsConcurrent(t *testing.T) {
 	for i := range numAgents {
 		agents[i] = &AgentInstance{ID: "agent-" + string(rune('A'+i)), AgentType: "core"}
 		agents[i].StoreToolPolicy(&tools.ToolPolicyCfg{
-			DefaultPolicy: "allow",
-			Policies:      map[string]string{"tool": "allow"},
+			Policies: map[string]string{"tool": "allow"},
 		})
 	}
 
@@ -158,19 +151,17 @@ func TestReloadRace_MultipleAgentsConcurrent(t *testing.T) {
 					return
 				default:
 					ag.StoreToolPolicy(&tools.ToolPolicyCfg{
-						DefaultPolicy: policyVal,
-						Policies:      map[string]string{"tool": policyVal},
+						Policies: map[string]string{"tool": policyVal},
 					})
 					p := ag.LoadToolPolicy()
 					if p == nil {
 						continue
 					}
-					// Verify this agent's read is coherent — should be own value.
-					if p.DefaultPolicy != policyVal {
-						// The race might produce a brief view of the other policy;
-						// that's fine — we're checking for torn reads, not stale reads.
-					}
-					if p.DefaultPolicy != "allow" && p.DefaultPolicy != "deny" && p.DefaultPolicy != "ask" {
+					// Torn-read check on the map value (there is no DefaultPolicy
+					// field anymore, CLAUDE.md hard constraint 6). A stale read of
+					// the other goroutine's value is fine — we're only checking
+					// for a torn/invalid value, not for freshness.
+					if v := p.Policies["tool"]; v != "allow" && v != "deny" && v != "ask" && v != "" {
 						atomic.AddInt64(&errors, 1)
 					}
 				}

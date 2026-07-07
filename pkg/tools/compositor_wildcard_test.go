@@ -258,9 +258,11 @@ func TestFilterToolsByPolicy_PrefixWildcard_DeniesSystemTools(t *testing.T) {
 	)
 
 	cfg := &ToolPolicyCfg{
-		DefaultPolicy:       "allow",
-		Policies:            map[string]string{"system.*": "deny"},
-		GlobalDefaultPolicy: "allow",
+		Policies: map[string]string{
+			"system.*":   "deny",
+			"read_file":  "allow", // explicit coverage: no default-policy fallback (CLAUDE.md hard constraint 6)
+			"write_file": "allow",
+		},
 	}
 
 	got, policyMap := FilterToolsByPolicy(allTools, "core", cfg)
@@ -292,12 +294,10 @@ func TestFilterToolsByPolicy_ExactBeatsWildcard(t *testing.T) {
 	)
 
 	cfg := &ToolPolicyCfg{
-		DefaultPolicy: "allow",
 		Policies: map[string]string{
 			"system.config.set": "allow",
 			"system.*":          "deny",
 		},
-		GlobalDefaultPolicy: "allow",
 	}
 
 	got, policyMap := FilterToolsByPolicy(allTools, "core", cfg)
@@ -333,12 +333,10 @@ func TestFilterToolsByPolicy_LongestWildcard_FourSegment(t *testing.T) {
 	)
 
 	cfg := &ToolPolicyCfg{
-		DefaultPolicy: "allow",
 		Policies: map[string]string{
 			"system.alerts.long_thing.*": "deny",
 			"system.agent.subagent.*":    "ask",
 		},
-		GlobalDefaultPolicy: "allow",
 	}
 
 	_, policyMap := FilterToolsByPolicy(allTools, "core", cfg)
@@ -360,9 +358,7 @@ func TestFilterToolsByPolicy_LongestWildcard_FourSegment(t *testing.T) {
 func TestFilterToolsByPolicy_WildcardDataset(t *testing.T) {
 	tests := []struct {
 		name             string
-		globalDefault    string
 		globalPolicies   map[string]string
-		defaultPolicy    string
 		policies         map[string]string
 		toolRequested    string
 		expectedInOutput bool   // true = tool appears in filtered list
@@ -370,9 +366,7 @@ func TestFilterToolsByPolicy_WildcardDataset(t *testing.T) {
 	}{
 		{
 			name:             "row9-exact-wins-over-wildcard",
-			globalDefault:    "allow",
 			globalPolicies:   map[string]string{},
-			defaultPolicy:    "allow",
 			policies:         map[string]string{"system.config.set": "allow", "system.*": "deny"},
 			toolRequested:    "system.config.set",
 			expectedInOutput: true,
@@ -380,9 +374,7 @@ func TestFilterToolsByPolicy_WildcardDataset(t *testing.T) {
 		},
 		{
 			name:             "row10-wildcard-deny-matches-system-tool",
-			globalDefault:    "allow",
 			globalPolicies:   map[string]string{},
-			defaultPolicy:    "allow",
 			policies:         map[string]string{"system.*": "deny"},
 			toolRequested:    "system.agent.list",
 			expectedInOutput: false,
@@ -390,19 +382,19 @@ func TestFilterToolsByPolicy_WildcardDataset(t *testing.T) {
 		},
 		{
 			name:             "row11-global-deny-wins-over-agent-allow",
-			globalDefault:    "allow",
 			globalPolicies:   map[string]string{"exec": "deny"},
-			defaultPolicy:    "allow",
 			policies:         map[string]string{"exec": "allow"},
 			toolRequested:    "exec",
 			expectedInOutput: false,
 			expectedPolicy:   "",
 		},
 		{
-			name:             "row12-global-default-deny-strips-all",
-			globalDefault:    "deny",
+			// No default-policy fallback (CLAUDE.md hard constraint 6): a tool with
+			// no exact-or-wildcard entry on EITHER side fails closed to "deny" —
+			// this replaces the old "global default-policy deny" mechanism, which
+			// no longer exists, with the same observable (deny) outcome.
+			name:             "row12-no-coverage-fails-closed-to-deny",
 			globalPolicies:   map[string]string{},
-			defaultPolicy:    "allow",
 			policies:         map[string]string{},
 			toolRequested:    "read_file",
 			expectedInOutput: false,
@@ -421,10 +413,8 @@ func TestFilterToolsByPolicy_WildcardDataset(t *testing.T) {
 			allTools := []Tool{tool}
 
 			cfg := &ToolPolicyCfg{
-				DefaultPolicy:       tc.defaultPolicy,
-				Policies:            tc.policies,
-				GlobalDefaultPolicy: tc.globalDefault,
-				GlobalPolicies:      tc.globalPolicies,
+				Policies:       tc.policies,
+				GlobalPolicies: tc.globalPolicies,
 			}
 
 			_, policyMap := FilterToolsByPolicy(allTools, "core", cfg)
@@ -458,12 +448,10 @@ func TestFilterToolsByPolicy_DeterministicOrdering(t *testing.T) {
 	)
 
 	cfg := &ToolPolicyCfg{
-		DefaultPolicy: "allow",
 		Policies: map[string]string{
 			"system.agent.*": "ask",
 			"system.*":       "deny",
 		},
-		GlobalDefaultPolicy: "allow",
 	}
 
 	firstRun, _ := FilterToolsByPolicy(allTools, "core", cfg)

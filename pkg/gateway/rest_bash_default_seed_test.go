@@ -69,15 +69,17 @@ func TestCreateAgent_Bash_NewCustomAgentDeniedByDefault(t *testing.T) {
 	// Resolve through the single authoritative primitive
 	// (pkg/tools/compositor.go's EffectiveToolPolicy), built the same way
 	// pkg/agent/instance.go's agentToolsCfgToPolicy converts
-	// AgentBuiltinToolsCfg for a non-god-mode agent.
+	// AgentBuiltinToolsCfg for a non-god-mode agent. There is no
+	// DefaultPolicy/GlobalDefaultPolicy field any more (CLAUDE.md hard
+	// constraint 6) — an uncovered tool now fails closed to "deny" inside
+	// EffectiveToolPolicy itself, so this test's seeded "bash": deny entry is
+	// asserted directly rather than via a fallback field.
 	policies := make(map[string]string, len(newAgent.Tools.Builtin.Policies))
 	for k, v := range newAgent.Tools.Builtin.Policies {
 		policies[k] = string(v)
 	}
 	polCfg := &tools.ToolPolicyCfg{
-		DefaultPolicy:       string(newAgent.Tools.Builtin.DefaultPolicy),
-		Policies:            policies,
-		GlobalDefaultPolicy: "allow",
+		Policies: policies,
 	}
 	agentType := string(newAgent.ResolveType(nil))
 	require.Equal(t, string(config.AgentTypeCustom), agentType,
@@ -94,8 +96,15 @@ func TestCreateAgent_Bash_NewCustomAgentDeniedByDefault(t *testing.T) {
 func TestCreateAgent_Bash_CallerOverrideRespected(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 
+	// There is no default_policy field on the wire any more (CLAUDE.md hard
+	// constraint 6) — createAgent's strict decode (decodeAgentCreateVariant,
+	// DisallowUnknownFields, independent of ValidateInbound) now rejects a
+	// stray "default_policy" key inside tools_cfg.builtin with 400, so it must
+	// not appear here. The caller-supplied "policies" map is merged on top of
+	// the seeded deny-all baseline (coreagent.NewCustomAgentToolsCfg), which
+	// is what makes bash:allow reachable without listing every other tool.
 	body := `{"name":"Bash Enabled Bot","type":"Main","description":"Needs bash","soul":"s",` +
-		`"tools_cfg":{"builtin":{"default_policy":"allow","policies":{"bash":"allow"}}}}`
+		`"tools_cfg":{"builtin":{"policies":{"bash":"allow"}}}}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
@@ -116,7 +125,13 @@ func TestCreateAgent_Bash_CallerOverrideRespected(t *testing.T) {
 	require.NotNil(t, newAgent.Tools, "created agent must have a Tools config")
 	require.Equal(t, config.ToolPolicyAllow, newAgent.Tools.Builtin.Policies["bash"],
 		"explicit caller override must win over the default deny seed")
-	// system.* seed must still be present (caller did not override it).
-	require.Equal(t, config.ToolPolicyDeny, newAgent.Tools.Builtin.Policies["system.*"],
+	// An unrelated seed entry must still be present at its seeded "deny"
+	// value (the caller only overrode "bash"). "system.*" was the OLD,
+	// retired wildcard mechanism (matched zero real tool names) this test
+	// used to check — the current seed (coreagent.NewCustomAgentToolsCfg,
+	// denyAllThenOverride) is a fully-enumerated, wildcard-free map, so the
+	// equivalent "untouched" check is any other real tool name that stays at
+	// its seeded deny default.
+	require.Equal(t, config.ToolPolicyDeny, newAgent.Tools.Builtin.Policies["delete_agent"],
 		"unrelated seed entries must survive a partial caller override")
 }

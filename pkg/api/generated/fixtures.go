@@ -11,7 +11,7 @@ func FixtureToolApprovalRequiredFrame_Populated() ToolApprovalRequiredFrame {
 		Type:        "tool_approval_required",
 		ApprovalId:  "ap-550e8400-e29b-41d4-a716-446655440001",
 		ToolCallId:  "tc-550e8400-e29b-41d4-a716-446655440002",
-		ToolName:    "workspace.shell",
+		ToolName:    "bash",
 		Args:        map[string]any{"command": "ls -la", "working_dir": "/tmp"},
 		AgentId:     "jim",
 		SessionId:   "sess-550e8400-e29b-41d4-a716-446655440003",
@@ -37,7 +37,7 @@ func FixtureToolApprovalRequiredFrame_NilArgs() ToolApprovalRequiredFrame {
 		Type:        "tool_approval_required",
 		ApprovalId:  "ap-1",
 		ToolCallId:  "tc-1",
-		ToolName:    "workspace.shell",
+		ToolName:    "bash",
 		Args:        nil, // THE BUG — must be caught by the contract test
 		AgentId:     "jim",
 		SessionId:   "sess-1",
@@ -52,7 +52,7 @@ func FixtureToolApprovalRequiredFrame_Edge() ToolApprovalRequiredFrame {
 		Type:        "tool_approval_required",
 		ApprovalId:  "ap-edge-" + repeatStr("x", 100),
 		ToolCallId:  "tc-edge-1",
-		ToolName:    "system.spawn_subagent",
+		ToolName:    "delegate",
 		Args:        map[string]any{}, // empty object is valid — not null
 		AgentId:     "ava-🐙",
 		SessionId:   "sess-edge-1",
@@ -72,7 +72,7 @@ func FixtureSessionStateFrame_Populated() SessionStateFrame {
 			{
 				ApprovalId:  "ap-1",
 				SessionId:   "sess-1",
-				ToolName:    "workspace.shell",
+				ToolName:    "bash",
 				AgentId:     "jim",
 				ExpiresInMs: 30000,
 			},
@@ -172,7 +172,7 @@ func FixtureToolCallStartFrame_Populated() ToolCallStartFrame {
 	return ToolCallStartFrame{
 		Type:         "tool_call_start",
 		SessionId:    "sess-1",
-		Tool:         "workspace.shell",
+		Tool:         "bash",
 		CallId:       "call-xyz-1",
 		Params:       map[string]any{"command": "echo hello", "working_dir": "/workspace"},
 		ParentCallId: &parentCallId,
@@ -191,7 +191,7 @@ func FixtureToolCallStartFrame_NilParams() ToolCallStartFrame {
 	return ToolCallStartFrame{
 		Type:      "tool_call_start",
 		SessionId: "sess-1",
-		Tool:      "workspace.shell",
+		Tool:      "bash",
 		CallId:    "call-1",
 		Params:    nil, // must fail: schema requires type: object
 	}
@@ -311,7 +311,7 @@ func FixtureToolCallResultFrame_Populated() ToolCallResultFrame {
 	return ToolCallResultFrame{
 		Type:         "tool_call_result",
 		SessionId:    "sess-1",
-		Tool:         "workspace.shell",
+		Tool:         "bash",
 		CallId:       "call-1",
 		Result:       map[string]any{"stdout": "hello\n", "exit_code": float64(0)},
 		Status:       "success",
@@ -330,7 +330,7 @@ func FixtureToolCallResultFrame_Error() ToolCallResultFrame {
 	return ToolCallResultFrame{
 		Type:      "tool_call_result",
 		SessionId: "sess-1",
-		Tool:      "workspace.shell",
+		Tool:      "bash",
 		CallId:    "call-err-1",
 		Result:    nil,
 		Status:    "error",
@@ -342,7 +342,7 @@ func FixtureToolCallResultFrame_Edge() ToolCallResultFrame {
 	return ToolCallResultFrame{
 		Type:      "tool_call_result",
 		SessionId: "sess-edge-1",
-		Tool:      "system.spawn_subagent",
+		Tool:      "delegate",
 		CallId:    "call-edge-1",
 		Result:    "plain string result", // result is oneOf: any value is valid
 		Status:    "success",
@@ -434,12 +434,12 @@ func FixtureReplayMessageFrame_ZeroValue() ReplayMessageFrame {
 
 func FixtureRateLimitFrame_Populated() RateLimitFrame {
 	agentId := "jim"
-	tool := "workspace.shell"
+	tool := "bash"
 	return RateLimitFrame{
 		Type:              "rate_limit",
 		SessionId:         "sess-1",
 		PolicyRule:        "100req/min",
-		Resource:          "workspace.shell",
+		Resource:          "bash",
 		RetryAfterSeconds: 60.0,
 		Scope:             "agent",
 		AgentId:           &agentId,
@@ -1771,15 +1771,13 @@ func FixtureRetentionUpdateResponse_Edge() RetentionUpdateResponse {
 
 func FixtureAgentToolsResponse_Populated() AgentToolsResponse {
 	agentType := AgentToolsResponseAgentTypeCore
-	allow := AgentToolsResponseConfigBuiltinDefaultPolicyAllow
 	toolCfgAllow := AgentToolsResponseToolsConfiguredPolicyAllow
 	toolEffAllow := AgentToolsResponseToolsEffectivePolicyAllow
 	return AgentToolsResponse{
 		AgentType: &agentType,
 		Config: struct {
 			Builtin *struct {
-				DefaultPolicy *AgentToolsResponseConfigBuiltinDefaultPolicy       `json:"default_policy,omitempty"`
-				Policies      *map[string]AgentToolsResponseConfigBuiltinPolicies `json:"policies,omitempty"`
+				Policies map[string]AgentToolsResponseConfigBuiltinPolicies `json:"policies"`
 			} `json:"builtin,omitempty"`
 			Mcp *struct {
 				Servers *[]struct {
@@ -1789,9 +1787,10 @@ func FixtureAgentToolsResponse_Populated() AgentToolsResponse {
 			} `json:"mcp,omitempty"`
 		}{
 			Builtin: &struct {
-				DefaultPolicy *AgentToolsResponseConfigBuiltinDefaultPolicy       `json:"default_policy,omitempty"`
-				Policies      *map[string]AgentToolsResponseConfigBuiltinPolicies `json:"policies,omitempty"`
-			}{DefaultPolicy: &allow},
+				Policies map[string]AgentToolsResponseConfigBuiltinPolicies `json:"policies"`
+			}{Policies: map[string]AgentToolsResponseConfigBuiltinPolicies{
+				"bash": AgentToolsResponseConfigBuiltinPoliciesAllow,
+			}},
 		},
 		Tools: []struct {
 			ConfiguredPolicy AgentToolsResponseToolsConfiguredPolicy `json:"configured_policy"`
@@ -1800,7 +1799,7 @@ func FixtureAgentToolsResponse_Populated() AgentToolsResponse {
 			Name             string                                  `json:"name"`
 		}{
 			{
-				Name:             "workspace.shell",
+				Name:             "bash",
 				ConfiguredPolicy: toolCfgAllow,
 				EffectivePolicy:  toolEffAllow,
 				ManifestTier:     AgentToolsResponseToolsManifestTierCompressed,
@@ -1816,15 +1815,13 @@ func FixtureAgentToolsResponse_ZeroValue() AgentToolsResponse {
 func FixtureAgentToolsResponse_Edge() AgentToolsResponse {
 	agentType := AgentToolsResponseAgentTypeMain
 	_ = agentType
-	deny := AgentToolsResponseConfigBuiltinDefaultPolicyDeny
 	toolCfgDeny := AgentToolsResponseToolsConfiguredPolicyDeny
 	toolEffAsk := AgentToolsResponseToolsEffectivePolicyAsk
 	return AgentToolsResponse{
 		AgentType: &agentType,
 		Config: struct {
 			Builtin *struct {
-				DefaultPolicy *AgentToolsResponseConfigBuiltinDefaultPolicy       `json:"default_policy,omitempty"`
-				Policies      *map[string]AgentToolsResponseConfigBuiltinPolicies `json:"policies,omitempty"`
+				Policies map[string]AgentToolsResponseConfigBuiltinPolicies `json:"policies"`
 			} `json:"builtin,omitempty"`
 			Mcp *struct {
 				Servers *[]struct {
@@ -1834,9 +1831,10 @@ func FixtureAgentToolsResponse_Edge() AgentToolsResponse {
 			} `json:"mcp,omitempty"`
 		}{
 			Builtin: &struct {
-				DefaultPolicy *AgentToolsResponseConfigBuiltinDefaultPolicy       `json:"default_policy,omitempty"`
-				Policies      *map[string]AgentToolsResponseConfigBuiltinPolicies `json:"policies,omitempty"`
-			}{DefaultPolicy: &deny},
+				Policies map[string]AgentToolsResponseConfigBuiltinPolicies `json:"policies"`
+			}{Policies: map[string]AgentToolsResponseConfigBuiltinPolicies{
+				"delete_agent": AgentToolsResponseConfigBuiltinPoliciesDeny,
+			}},
 		},
 		Tools: []struct {
 			ConfiguredPolicy AgentToolsResponseToolsConfiguredPolicy `json:"configured_policy"`
@@ -1845,7 +1843,7 @@ func FixtureAgentToolsResponse_Edge() AgentToolsResponse {
 			Name             string                                  `json:"name"`
 		}{
 			{
-				Name:             "system.spawn_subagent",
+				Name:             "delete_agent",
 				ConfiguredPolicy: toolCfgDeny,
 				EffectivePolicy:  toolEffAsk,
 				ManifestTier:     AgentToolsResponseToolsManifestTierCompressed,
@@ -2165,7 +2163,6 @@ func FixtureAgentCreateRequestMain_Populated() AgentCreateRequestMain {
 	icon := "Robot"
 	model := "claude-sonnet-4-6"
 	enabled := true
-	defaultPolicy := AgentCreateRequestMainToolsCfgBuiltinDefaultPolicyAllow
 	deny := AgentCreateRequestMainToolsCfgBuiltinPoliciesDeny
 	steering := AgentCreateRequestMainSteeringModeOneAtATime
 	mode := AgentCreateRequestMainDelegationPolicyModesAwait
@@ -2246,8 +2243,7 @@ func FixtureAgentCreateRequestMain_Populated() AgentCreateRequestMain {
 		},
 		ToolsCfg: &struct {
 			Builtin *struct {
-				DefaultPolicy *AgentCreateRequestMainToolsCfgBuiltinDefaultPolicy       `json:"default_policy,omitempty"`
-				Policies      *map[string]AgentCreateRequestMainToolsCfgBuiltinPolicies `json:"policies,omitempty"`
+				Policies map[string]AgentCreateRequestMainToolsCfgBuiltinPolicies `json:"policies"`
 			} `json:"builtin,omitempty"`
 			Mcp *struct {
 				Servers *[]struct {
@@ -2257,12 +2253,10 @@ func FixtureAgentCreateRequestMain_Populated() AgentCreateRequestMain {
 			} `json:"mcp,omitempty"`
 		}{
 			Builtin: &struct {
-				DefaultPolicy *AgentCreateRequestMainToolsCfgBuiltinDefaultPolicy       `json:"default_policy,omitempty"`
-				Policies      *map[string]AgentCreateRequestMainToolsCfgBuiltinPolicies `json:"policies,omitempty"`
+				Policies map[string]AgentCreateRequestMainToolsCfgBuiltinPolicies `json:"policies"`
 			}{
-				DefaultPolicy: &defaultPolicy,
-				Policies: &map[string]AgentCreateRequestMainToolsCfgBuiltinPolicies{
-					"system.*": deny,
+				Policies: map[string]AgentCreateRequestMainToolsCfgBuiltinPolicies{
+					"bash": deny,
 				},
 			},
 			Mcp: &struct {
@@ -2296,7 +2290,6 @@ func FixtureAgentCreateRequestSubagent_Populated() AgentCreateRequestSubagent {
 	icon := "Robot"
 	model := "claude-sonnet-4-6"
 	description := "Native delegation-only research worker"
-	defaultPolicy := AgentCreateRequestSubagentToolsCfgBuiltinDefaultPolicyAllow
 	deny := AgentCreateRequestSubagentToolsCfgBuiltinPoliciesDeny
 	mode := AgentCreateRequestSubagentDelegationPolicyModesTask
 	toKind := AgentCreateRequestSubagentDelegationPolicyToKindLocal
@@ -2340,8 +2333,7 @@ func FixtureAgentCreateRequestSubagent_Populated() AgentCreateRequestSubagent {
 		},
 		ToolsCfg: &struct {
 			Builtin *struct {
-				DefaultPolicy *AgentCreateRequestSubagentToolsCfgBuiltinDefaultPolicy       `json:"default_policy,omitempty"`
-				Policies      *map[string]AgentCreateRequestSubagentToolsCfgBuiltinPolicies `json:"policies,omitempty"`
+				Policies map[string]AgentCreateRequestSubagentToolsCfgBuiltinPolicies `json:"policies"`
 			} `json:"builtin,omitempty"`
 			Mcp *struct {
 				Servers *[]struct {
@@ -2351,12 +2343,10 @@ func FixtureAgentCreateRequestSubagent_Populated() AgentCreateRequestSubagent {
 			} `json:"mcp,omitempty"`
 		}{
 			Builtin: &struct {
-				DefaultPolicy *AgentCreateRequestSubagentToolsCfgBuiltinDefaultPolicy       `json:"default_policy,omitempty"`
-				Policies      *map[string]AgentCreateRequestSubagentToolsCfgBuiltinPolicies `json:"policies,omitempty"`
+				Policies map[string]AgentCreateRequestSubagentToolsCfgBuiltinPolicies `json:"policies"`
 			}{
-				DefaultPolicy: &defaultPolicy,
-				Policies: &map[string]AgentCreateRequestSubagentToolsCfgBuiltinPolicies{
-					"system.*": deny,
+				Policies: map[string]AgentCreateRequestSubagentToolsCfgBuiltinPolicies{
+					"bash": deny,
 				},
 			},
 		},
@@ -2484,7 +2474,7 @@ func FixtureAgentCreateRequestSubagent3p_ForbiddenFieldJSON() []byte {
 		"name": "Bad 3p",
 		"soul": "Valid soul content.",
 		"executor": {"cli": "codex", "cli_path": "/usr/local/bin/codex"},
-		"tools_cfg": {"builtin": {"default_policy": "allow"}}
+		"tools_cfg": {"builtin": {"policies": {}}}
 	}`)
 }
 
@@ -2500,7 +2490,6 @@ func FixtureAgentUpdateRequest_Populated() AgentUpdateRequest {
 	temperature := 0.5
 	maxTokens := 2048
 	topP := 0.9
-	defaultPolicy := AgentUpdateRequestToolsCfgBuiltinDefaultPolicyAsk
 	allow := AgentUpdateRequestToolsCfgBuiltinPoliciesAllow
 	steering := QueueAndProcess
 	mode := AgentUpdateRequestDelegationPolicyModesBackground
@@ -2533,8 +2522,7 @@ func FixtureAgentUpdateRequest_Populated() AgentUpdateRequest {
 		},
 		ToolsCfg: &struct {
 			Builtin *struct {
-				DefaultPolicy *AgentUpdateRequestToolsCfgBuiltinDefaultPolicy       `json:"default_policy,omitempty"`
-				Policies      *map[string]AgentUpdateRequestToolsCfgBuiltinPolicies `json:"policies,omitempty"`
+				Policies map[string]AgentUpdateRequestToolsCfgBuiltinPolicies `json:"policies"`
 			} `json:"builtin,omitempty"`
 			Mcp *struct {
 				Servers *[]struct {
@@ -2544,12 +2532,10 @@ func FixtureAgentUpdateRequest_Populated() AgentUpdateRequest {
 			} `json:"mcp,omitempty"`
 		}{
 			Builtin: &struct {
-				DefaultPolicy *AgentUpdateRequestToolsCfgBuiltinDefaultPolicy       `json:"default_policy,omitempty"`
-				Policies      *map[string]AgentUpdateRequestToolsCfgBuiltinPolicies `json:"policies,omitempty"`
+				Policies map[string]AgentUpdateRequestToolsCfgBuiltinPolicies `json:"policies"`
 			}{
-				DefaultPolicy: &defaultPolicy,
-				Policies: &map[string]AgentUpdateRequestToolsCfgBuiltinPolicies{
-					"workspace.shell": allow,
+				Policies: map[string]AgentUpdateRequestToolsCfgBuiltinPolicies{
+					"bash": allow,
 				},
 			},
 		},

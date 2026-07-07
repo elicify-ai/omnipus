@@ -8,6 +8,7 @@ package gateway
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -22,36 +23,35 @@ import (
 // GET returns the current global tool policy configuration:
 //
 //	{
-//	  "default_policy": "allow",
 //	  "policies": {"exec": "ask", "browser_evaluate": "deny"}
 //	}
 //
 // PUT accepts the same format, validates all policy values, and persists to
-// config.json under sandbox.tool_policies and sandbox.default_tool_policy via
-// safeUpdateConfigJSON (preserves credential refs). Changes are audit-logged
-// per SEC-15. After the write, putToolPolicies calls TriggerReload to enforce
-// the new policy on already-running agents by rebuilding every agent instance
-// with the new global policy — SwapConfig alone does not (see the O7 hot-path
-// note in putToolPolicies). A reload failure is logged loudly and never masks
-// the successful persist (the policy still applies after the next restart).
+// config.json under sandbox.tool_policies via safeUpdateConfigJSON (preserves
+// credential refs). There is no default_policy field (CLAUDE.md hard
+// constraint 6): every static builtin tool must resolve from an explicit,
+// literal entry either here (globally) or in an agent's
+// tools.builtin.policies map — putToolPolicies rejects a PUT that would
+// leave any agent with an uncovered tool (config.ValidateToolPolicyCoverage)
+// before persisting anything. Changes are audit-logged per SEC-15. After the
+// write, putToolPolicies calls TriggerReload to enforce the new policy on
+// already-running agents by rebuilding every agent instance with the new
+// global policy — SwapConfig alone does not (see the O7 hot-path note in
+// putToolPolicies). A reload failure is logged loudly and never masks the
+// successful persist (the policy still applies after the next restart).
 //
 // Valid policy values: "allow", "ask", "deny".
 func (a *restAPI) HandleToolPolicies(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		cfg := a.agentLoop.GetConfig()
-		defaultPolicy := cfg.Sandbox.DefaultToolPolicy
-		if defaultPolicy == "" {
-			defaultPolicy = "allow"
-		}
 		// Coerce policies to the generated map type — never null (Ava-chat bug class).
 		policies := make(map[string]gen.GlobalToolPoliciesPolicies)
 		for k, v := range cfg.Sandbox.ToolPolicies {
 			policies[k] = gen.GlobalToolPoliciesPolicies(v)
 		}
 		jsonOK(w, gen.GlobalToolPolicies{
-			DefaultPolicy: gen.GlobalToolPoliciesDefaultPolicy(defaultPolicy),
-			Policies:      policies,
+			Policies: policies,
 		})
 
 	case http.MethodPut:
@@ -89,19 +89,6 @@ func (a *restAPI) putToolPolicies(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate default_policy.
-	switch string(body.DefaultPolicy) {
-	case "", "allow", "ask", "deny":
-		// valid; empty string is treated as "allow"
-	default:
-		jsonErr(w, http.StatusBadRequest, "default_policy must be 'allow', 'ask', or 'deny'")
-		return
-	}
-	defaultPolicy := string(body.DefaultPolicy)
-	if defaultPolicy == "" {
-		defaultPolicy = "allow"
-	}
-
 	// Validate per-tool policies.
 	for toolName, p := range body.Policies {
 		switch string(p) {
@@ -120,24 +107,52 @@ func (a *restAPI) putToolPolicies(w http.ResponseWriter, r *http.Request) {
 		policiesStr[k] = string(v)
 	}
 
-	// Persist to config.json under the sandbox key, preserving all other fields.
-	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
-		sandbox, _ := m["sandbox"].(map[string]any)
-		if sandbox == nil {
-			sandbox = map[string]any{}
-			m["sandbox"] = sandbox
-		}
-		sandbox["default_tool_policy"] = defaultPolicy
-		if body.Policies != nil {
-			sandbox["tool_policies"] = policiesStr
-		} else {
-			// Explicit null from the client clears the map.
-			sandbox["tool_policies"] = map[string]any{}
-		}
-		return nil
-	}); err != nil {
-		slog.Error("rest: update tool policies", "error", err)
-		jsonErr(w, http.StatusInternalServerError, "could not save config")
+	// CLAUDE.md hard constraint 6 / config.ValidateToolPolicyCoverage: this
+	// endpoint fully replaces the global sandbox.tool_policies map on
+	// persist (below) — policiesStr IS the prospective new global map.
+	// Reject the write 400 with the full gap list if it, together with
+	// every agent's CURRENT per-agent tools.builtin.policies, would leave
+	// any static builtin tool uncovered for any agent. This is the
+	// mechanism that also structurally closes off a PUT here silently
+	// resetting the global policy to fully-permissive for every agent —
+	// incompleteness is rejected up front, before anything is persisted or
+	// applied to the live in-memory config.
+	//
+	// The validate step and the persist step run inside ONE a.configMu-locked
+	// critical section (closing a TOCTOU race two concurrent tool-policy
+	// writes could otherwise open — see updateConfigJSONLocked's doc comment
+	// in rest.go), via withToolPolicyCoverageGuard: it always fetches the
+	// config FRESH, inside a.configMu, immediately before validating. Returns
+	// false once it has already written the HTTP response (error case), so
+	// the caller just returns.
+	if ok := a.withToolPolicyCoverageGuard(
+		w,
+		func(c *config.Config) {
+			c.Sandbox.ToolPolicies = policiesStr
+		},
+		func(gaps []config.CoverageGap) string {
+			return fmt.Sprintf(
+				"tool policy coverage incomplete (%d gap(s)): %s",
+				len(gaps), joinCoverageGapMessages(gaps),
+			)
+		},
+		// Persist to config.json under the sandbox key, preserving all other fields.
+		func(m map[string]any) error {
+			sandbox, _ := m["sandbox"].(map[string]any)
+			if sandbox == nil {
+				sandbox = map[string]any{}
+				m["sandbox"] = sandbox
+			}
+			if body.Policies != nil {
+				sandbox["tool_policies"] = policiesStr
+			} else {
+				// Explicit null from the client clears the map.
+				sandbox["tool_policies"] = map[string]any{}
+			}
+			return nil
+		},
+		"rest: update tool policies",
+	); !ok {
 		return
 	}
 
@@ -148,9 +163,8 @@ func (a *restAPI) putToolPolicies(w http.ResponseWriter, r *http.Request) {
 				Event:    audit.EventPolicyEval,
 				Decision: audit.DecisionAllow,
 				Details: map[string]any{
-					"action":         "tool_policies_update",
-					"default_policy": defaultPolicy,
-					"policy_count":   len(body.Policies),
+					"action":       "tool_policies_update",
+					"policy_count": len(body.Policies),
 				},
 			}); err != nil {
 				slog.Warn("rest: audit log tool policies update", "error", err)
@@ -191,7 +205,6 @@ func (a *restAPI) putToolPolicies(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("rest: global tool policies updated",
-		"default_policy", defaultPolicy,
 		"policy_count", len(body.Policies),
 	)
 
@@ -203,7 +216,6 @@ func (a *restAPI) putToolPolicies(w http.ResponseWriter, r *http.Request) {
 		respPolicies[k] = v
 	}
 	jsonOK(w, gen.GlobalToolPolicies{
-		DefaultPolicy: gen.GlobalToolPoliciesDefaultPolicy(defaultPolicy),
-		Policies:      respPolicies,
+		Policies: respPolicies,
 	})
 }

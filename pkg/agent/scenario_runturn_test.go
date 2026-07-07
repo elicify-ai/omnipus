@@ -148,7 +148,6 @@ func TestRunTurn_ScriptedToolCall_PolicyDeniesAndAudits(t *testing.T) {
 			continue
 		}
 		agent.StoreToolPolicy(&tools.ToolPolicyCfg{
-			DefaultPolicy: "allow",
 			Policies: map[string]string{
 				"dangerous_tool": "deny",
 			},

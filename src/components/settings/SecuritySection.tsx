@@ -86,7 +86,6 @@ function GlobalToolPoliciesSection() {
   })
 
   const [toolPolicyValue, setToolPolicyValue] = useState<ToolPolicyValue>({
-    default_policy: 'ask',
     policies: {},
   })
   const [isDraftReady, setIsDraftReady] = useState(false)
@@ -103,7 +102,6 @@ function GlobalToolPoliciesSection() {
   useEffect(() => {
     if (!globalPolicies || isDraftReady) return
     setToolPolicyValue({
-      default_policy: globalPolicies.default_policy,
       policies: globalPolicies.policies ?? {},
     })
     setIsDraftReady(true)
@@ -153,7 +151,7 @@ function GlobalToolPoliciesSection() {
       <div className="pt-2 flex items-center gap-3">
         <AutoSaveIndicator status={saveStatus} error={saveError} />
         <span className="text-[10px] text-[var(--color-muted)]">
-          {Object.keys(toolPolicyValue.policies).length} override{Object.keys(toolPolicyValue.policies).length !== 1 ? 's' : ''} | Default: {toolPolicyValue.default_policy}
+          {Object.keys(toolPolicyValue.policies).length} tool polic{Object.keys(toolPolicyValue.policies).length !== 1 ? 'ies' : 'y'} configured
         </span>
       </div>
       {reAuthDialog}

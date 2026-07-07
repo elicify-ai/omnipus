@@ -495,6 +495,56 @@ func RunContext(ctx context.Context, debug bool, homePath, configPath string, al
 	})
 }
 
+// buildKnownBuiltinToolNames returns the set of every static builtin tool name
+// across the three built-in catalogs — general, browser, and sysagent (the
+// system.* / "system agent" tools). This is the wildcard-free literal
+// universe config.ValidateToolPolicyCoverage checks every agent's tool-policy
+// map against (CLAUDE.md hard constraint 6). MCP tool names are deliberately
+// excluded: they aren't known until an operator connects a server at runtime
+// and remain governed by the per-server wildcard-bulk-policy exception.
+//
+// All three sources are metadata-only, never-Execute()d constructions:
+//
+//   - tools.GeneralBuiltinMetadata() and browser.BrowserBuiltinMetadata() are
+//     the existing central-registry catalog functions (Issue #350, ADR-018
+//     D-A1).
+//
+//     NOTE: this function is NOT the source GET /api/v1/tools uses (an
+//     earlier version of this comment incorrectly claimed it was — confirmed
+//     false by architect review). That endpoint (HandleToolsRegistry,
+//     pkg/gateway/rest_tool_registry.go) enumerates tools independently via
+//     a.builtinRegistry.All() (or, when unwired, the default agent's live
+//     registered Tools.GetAll()) plus a.mcpRegistry.All() for MCP — a
+//     completely separate, independently-maintained code path that only
+//     coincidentally agrees with this function's output today (every static
+//     tool registers with IsCore:true unconditionally, so it always appears
+//     regardless of which agent is default; only MCP tools use a different,
+//     TTL-gated registration path). See
+//     TestBuildKnownBuiltinToolNames_MatchesCoreagentStaticToolCatalog for
+//     the drift-detection regression test this package carries instead.
+//
+//   - systools.AllTools(nil, nil) has no equivalent metadata-only catalog
+//     function, but is safe to call for name-harvesting alone: every
+//     constructor in pkg/sysagent/tools does nothing but store the *Deps
+//     pointer it is given (never dereferenced at construction time), and
+//     every tool's Name() method is a static string literal that never reads
+//     deps. Passing nil deps and a nil NavigateCallback is therefore safe
+//     PROVIDED the returned tools are never Execute()d here — and they never
+//     are; only .Name() is called below.
+func buildKnownBuiltinToolNames() map[string]struct{} {
+	out := make(map[string]struct{})
+	for _, t := range tools.GeneralBuiltinMetadata() {
+		out[t.Name()] = struct{}{}
+	}
+	for _, t := range browser.BrowserBuiltinMetadata() {
+		out[t.Name()] = struct{}{}
+	}
+	for _, t := range systools.AllTools(nil, nil) {
+		out[t.Name()] = struct{}{}
+	}
+	return out
+}
+
 // RunContextWithOptions is the Sprint-J context-cancellable entry point.
 // RunContext is a thin wrapper that builds a legacy RunOptions and calls this.
 func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
@@ -716,6 +766,41 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		}
 		if abortBoot {
 			return fmt.Errorf("gateway: agent config validation failed — aborting boot (FR-062)")
+		}
+
+		// Hard-validation of tool-policy COVERAGE (CLAUDE.md hard constraint
+		// 6): every static builtin tool must resolve from an explicit,
+		// literal, wildcard-free policy entry — global sandbox.tool_policies
+		// and/or an agent's tools.builtin.policies — for every agent. There is
+		// no hardcoded allow/deny/ask fallback anywhere in Go for tool-policy
+		// resolution (pkg/tools/compositor.go now fails closed to "deny" on a
+		// genuine no-match); this is the other half of that contract — a gap
+		// must abort boot, not surface as a silent runtime deny the operator
+		// never asked for. The gap list is logged in full so the failure is
+		// immediately actionable.
+		//
+		// RepairIncompleteToolPolicyCoverage runs FIRST, immediately before
+		// validation: it migrates installations whose on-disk config predates
+		// the DefaultPolicy/default_policy fallback removal (sparse Policies
+		// maps that relied on the deleted default field) by backfilling every
+		// missing entry to explicit "deny". Without this, upgrading an
+		// existing installation would find a coverage gap for nearly every
+		// static tool on nearly every agent and abort boot on every restart.
+		// After the repair, ValidateToolPolicyCoverage should almost always
+		// find zero gaps — it remains as the hard backstop for anything the
+		// repair cannot close (e.g. a genuinely corrupt config).
+		knownTools := buildKnownBuiltinToolNames()
+		if repairedCount := config.RepairIncompleteToolPolicyCoverage(cfg, knownTools); repairedCount > 0 {
+			slog.Warn("gateway: backfilled incomplete tool-policy coverage on load", "agent_count", repairedCount)
+		}
+		if gaps := config.ValidateToolPolicyCoverage(cfg, knownTools); len(gaps) > 0 {
+			for _, g := range gaps {
+				slog.Error("gateway: tool-policy coverage gap", "detail", g.String())
+			}
+			return fmt.Errorf(
+				"gateway: tool-policy coverage validation failed — aborting boot (%d gap(s), see preceding error logs)",
+				len(gaps),
+			)
 		}
 	}
 
@@ -1216,6 +1301,38 @@ func executeReload(
 		runningServices.reloadDegraded = false
 		runningServices.reloadError = nil
 		runningServices.reloadMu.Unlock()
+	}
+
+	// CLAUDE.md hard constraint 6 / config.ValidateToolPolicyCoverage: a
+	// config reload (file-watcher poll via configReloadChan, or manual
+	// /reload via manualReloadChan — both funnel through this function) must
+	// be held to the same tool-policy coverage bar as boot and the REST
+	// write handlers. Without this check, a hand-edited config.json picked
+	// up by hot-reload would bypass coverage enforcement entirely, silently
+	// reintroducing a runtime-default gap this whole change eliminated.
+	// Repair first (same migration semantics as boot: backfill any missing
+	// entry to explicit "deny"), then validate as the hard backstop. A
+	// genuine gap rejects the reload and keeps serving the PREVIOUS live
+	// config — mirrors the credential-injection-failure rejection pattern
+	// immediately below.
+	{
+		knownTools := buildKnownBuiltinToolNames()
+		if repairedCount := config.RepairIncompleteToolPolicyCoverage(newCfg, knownTools); repairedCount > 0 {
+			slog.Warn("gateway: reload backfilled incomplete tool-policy coverage", "agent_count", repairedCount)
+		}
+		if gaps := config.ValidateToolPolicyCoverage(newCfg, knownTools); len(gaps) > 0 {
+			msgs := make([]string, len(gaps))
+			for i, g := range gaps {
+				msgs[i] = g.String()
+				slog.Error("gateway: reload tool-policy coverage gap", "detail", g.String())
+			}
+			reloadErr := fmt.Errorf(
+				"reload rejected: tool-policy coverage validation failed (%d gap(s): %s)",
+				len(gaps), strings.Join(msgs, "; "),
+			)
+			markDegraded(reloadErr)
+			return reloadErr
+		}
 	}
 
 	// Re-inject provider credentials for the new config so LLM SDK clients
@@ -2479,15 +2596,27 @@ func emitGHSARemovalWarn(cfg *config.Config) {
 		return
 	}
 
-	// Scan agents: flag any that do not explicitly deny bash.
+	// Scan agents: flag any that do not explicitly deny bash. This is a boot
+	// diagnostic (informational WARN), not an enforcement path — the real
+	// enforcement is tools.EffectiveToolPolicy's fail-closed global×agent
+	// merge (CLAUDE.md hard constraint 6: no default-policy fallback). Reading
+	// the per-agent map directly here (rather than a resolver) means an agent
+	// whose bash coverage comes only from the global sandbox.tool_policies map
+	// is reported as "unset" at the per-agent layer — that is accurate for
+	// this diagnostic's stated scope (per-agent policy), not a false positive.
 	var flagged []string
 	for _, ag := range cfg.Agents.List {
 		if ag.Tools == nil {
-			// No tools config → inherits default_policy (allow). Flagged.
+			// No tools config at all → no explicit per-agent bash policy. Flagged.
 			flagged = append(flagged, ag.ID)
 			continue
 		}
-		policy := ag.Tools.Builtin.ResolvePolicy("bash")
+		policy, ok := ag.Tools.Builtin.Policies["bash"]
+		if !ok {
+			// No explicit per-agent entry for bash. Flagged (informational).
+			flagged = append(flagged, ag.ID)
+			continue
+		}
 		if policy != config.ToolPolicyDeny {
 			flagged = append(flagged, ag.ID)
 		}

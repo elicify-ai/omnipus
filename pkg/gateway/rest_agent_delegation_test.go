@@ -34,6 +34,7 @@ import (
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/coreagent"
 )
 
 // buildDelegationTestAPI builds a restAPI over a temp home with a roster of agents
@@ -45,13 +46,40 @@ func buildDelegationTestAPI(t *testing.T) *restAPI {
 
 	tmpDir := t.TempDir()
 	cfgPath := filepath.Join(tmpDir, "config.json")
-	cfgJSON := `{"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096,"subturn":{"max_depth":3}},"list":[` +
-		`{"id":"test-agent","name":"Test Agent","type":"custom"},` +
-		`{"id":"ava","name":"Ava","type":"custom"},` +
-		`{"id":"ray","name":"Ray","type":"custom"},` +
-		`{"id":"laborer","name":"Laborer","type":"worker"}` +
-		`]}}`
-	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgJSON), 0o600))
+
+	// Every agent needs a COMPLETE, explicit tools.builtin.policies map:
+	// CLAUDE.md hard constraint 6 (config.ValidateToolPolicyCoverage) rejects
+	// createAgent/updateAgent whenever ANY agent in the live config has an
+	// uncovered static tool — not just the one being written. A bare
+	// {"id":...,"type":"custom"} fixture (no tools field) has zero policy
+	// entries, so every test in this file that hits one of those 2 endpoints
+	// would 400 on the coverage check before reaching the delegation-policy
+	// behavior under test. A real installation gets an equivalent backfill
+	// automatically at gateway boot via
+	// config.RepairIncompleteToolPolicyCoverage; this harness constructs the
+	// agent loop directly (mustAgentLoop) and bypasses that boot sequence, so
+	// the fixture must seed complete maps itself via the same seed
+	// createAgent itself uses (coreagent.NewCustomAgentToolsCfg()).
+	rosterPolicies := coreagent.NewCustomAgentToolsCfg().Builtin.Policies
+	rosterAgentsOnDisk := []map[string]any{
+		{"id": "test-agent", "name": "Test Agent", "type": "custom", "tools": map[string]any{"builtin": map[string]any{"policies": rosterPolicies}}},
+		{"id": "ava", "name": "Ava", "type": "custom", "tools": map[string]any{"builtin": map[string]any{"policies": rosterPolicies}}},
+		{"id": "ray", "name": "Ray", "type": "custom", "tools": map[string]any{"builtin": map[string]any{"policies": rosterPolicies}}},
+		{"id": "laborer", "name": "Laborer", "type": "worker", "tools": map[string]any{"builtin": map[string]any{"policies": rosterPolicies}}},
+	}
+	cfgOnDisk := map[string]any{
+		"version": config.CurrentVersion,
+		"agents": map[string]any{
+			"defaults": map[string]any{
+				"workspace": tmpDir, "model_name": "test-model", "max_tokens": 4096,
+				"subturn": map[string]any{"max_depth": 3},
+			},
+			"list": rosterAgentsOnDisk,
+		},
+	}
+	cfgJSON, err := json.Marshal(cfgOnDisk)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(cfgPath, cfgJSON, 0o600))
 
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
@@ -63,10 +91,10 @@ func buildDelegationTestAPI(t *testing.T) *restAPI {
 				SubTurn:   config.SubTurnConfig{MaxDepth: 3},
 			},
 			List: []config.AgentConfig{
-				{ID: "test-agent", Name: "Test Agent", Type: config.AgentTypeCustom},
-				{ID: "ava", Name: "Ava", Type: config.AgentTypeCustom},
-				{ID: "ray", Name: "Ray", Type: config.AgentTypeCustom},
-				{ID: "laborer", Name: "Laborer", Type: config.AgentTypeWorker},
+				{ID: "test-agent", Name: "Test Agent", Type: config.AgentTypeCustom, Tools: coreagent.NewCustomAgentToolsCfg()},
+				{ID: "ava", Name: "Ava", Type: config.AgentTypeCustom, Tools: coreagent.NewCustomAgentToolsCfg()},
+				{ID: "ray", Name: "Ray", Type: config.AgentTypeCustom, Tools: coreagent.NewCustomAgentToolsCfg()},
+				{ID: "laborer", Name: "Laborer", Type: config.AgentTypeWorker, Tools: coreagent.NewCustomAgentToolsCfg()},
 			},
 		},
 	}

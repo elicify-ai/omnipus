@@ -3238,40 +3238,10 @@ func (al *AgentLoop) ResolveApprovalToolPolicy(agentID, toolName string) string 
 	if cfg == nil {
 		return "ask"
 	}
-	polCfg := &tools.ToolPolicyCfg{DefaultPolicy: "allow"}
-	if len(cfg.Sandbox.ToolPolicies) > 0 {
-		gp := make(map[string]string, len(cfg.Sandbox.ToolPolicies))
-		for k, v := range cfg.Sandbox.ToolPolicies {
-			gp[k] = v
-		}
-		polCfg.GlobalPolicies = gp
-	}
-	polCfg.GlobalDefaultPolicy = cfg.Sandbox.DefaultToolPolicy
-	agentType := "custom"
-	for i := range cfg.Agents.List {
-		ac := &cfg.Agents.List[i]
-		if ac.ID != agentID {
-			continue
-		}
-		if ac.Type != "" {
-			agentType = string(ac.Type)
-		}
-		if ac.Tools != nil {
-			dp := string(ac.Tools.Builtin.DefaultPolicy)
-			if dp == "" {
-				dp = "allow"
-			}
-			polCfg.DefaultPolicy = dp
-			if len(ac.Tools.Builtin.Policies) > 0 {
-				ap := make(map[string]string, len(ac.Tools.Builtin.Policies))
-				for k, v := range ac.Tools.Builtin.Policies {
-					ap[k] = string(v)
-				}
-				polCfg.Policies = ap
-			}
-		}
-		break
-	}
+	// No default-policy fallback (CLAUDE.md hard constraint 6): only explicit
+	// global/agent entries are threaded through; a tool with no match on
+	// either side fails closed to "deny" inside tools.EffectiveToolPolicy.
+	polCfg, agentType := tools.BuildFallbackPolicyCfg(cfg, agentID)
 	return tools.EffectiveToolPolicy(polCfg, tools.ScopeGeneral, agentType, toolName)
 }
 

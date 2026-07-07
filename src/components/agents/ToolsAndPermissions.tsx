@@ -63,7 +63,6 @@ interface ToolsAndPermissionsProps {
 /** Convert AgentToolsCfg (wire shape) to ToolPolicyValue (editor shape). */
 function cfgToValue(tools: AgentToolsCfg): ToolPolicyValue {
   return {
-    default_policy: (tools.builtin?.default_policy as ToolPolicy) ?? 'allow',
     policies: (tools.builtin?.policies as Record<string, ToolPolicy>) ?? {},
   }
 }
@@ -74,7 +73,6 @@ function valueToCfg(value: ToolPolicyValue, existing: AgentToolsCfg): AgentTools
     ...existing,
     builtin: {
       ...existing.builtin,
-      default_policy: value.default_policy,
       policies: value.policies,
     },
   }
@@ -126,7 +124,7 @@ export function ToolsAndPermissions({
     queryFn: fetchGlobalToolPolicies,
   })
   const globalPolicyValue: ToolPolicyValue | undefined = globalPolicies
-    ? { default_policy: globalPolicies.default_policy, policies: globalPolicies.policies ?? {} }
+    ? { policies: globalPolicies.policies ?? {} }
     : undefined
 
   // Local copy for ToolPolicyEditor (controlled).
@@ -236,19 +234,19 @@ export function ToolsAndPermissions({
   }
 
   // Shell/fs conflict detection (retained from previous version).
-  // Uses the default_policy + per-tool overrides from `tools` prop.
-  const defaultPolicy = (tools.builtin?.default_policy as ToolPolicy) ?? 'allow'
+  // Uses the per-tool policy map from `tools` prop. A tool with no explicit
+  // entry resolves to `undefined` (unconfigured) — never treated as 'deny'.
   const policies = (tools.builtin?.policies as Record<string, ToolPolicy>) ?? {}
 
   const shellFsConflict = useMemo(() => {
     // ADR-036: `bash` is the unified shell tool (replaces exec / workspace_shell
     // / workspace_shell_bg) — it's the one whose policy determines whether the
     // filesystem-bypass conflict below applies.
-    const shellPolicy = resolvePolicy('bash', policies, defaultPolicy)
+    const shellPolicy = resolvePolicy('bash', policies)
     if (shellPolicy === 'deny') return false
     const fsTools = ['write_file', 'read_file', 'list_directory'] as const
-    return fsTools.some((t) => resolvePolicy(t, policies, defaultPolicy) === 'deny')
-  }, [policies, defaultPolicy])
+    return fsTools.some((t) => resolvePolicy(t, policies) === 'deny')
+  }, [policies])
 
   if (toolsLoading) {
     return (
@@ -327,7 +325,7 @@ export function ToolsAndPermissions({
         <div className="flex items-center gap-3">
           <AutoSaveIndicator status={saveStatus} error={saveError} />
           <span className="text-[10px] text-[var(--color-muted)]">
-            {Object.keys(policies).length} override{Object.keys(policies).length !== 1 ? 's' : ''} | Default: {defaultPolicy}
+            {Object.keys(policies).length} tool polic{Object.keys(policies).length !== 1 ? 'ies' : 'y'} configured
           </span>
         </div>
       )}

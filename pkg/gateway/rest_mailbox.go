@@ -317,6 +317,14 @@ func (a *restAPI) setAgentMailbox(w http.ResponseWriter, r *http.Request, agentI
 			existing = map[string]any{}
 		}
 
+		// Capture the mailbox's enabled state as it stood BEFORE this save —
+		// a fresh/absent entry (first-time configure) type-asserts to the
+		// false zero value, matching "not previously enabled". This is the
+		// disabled→enabled transition signal grantEmailToolAllows's call
+		// below needs; it must be read before existing["enabled"] is
+		// overwritten with the request's new value a few lines down.
+		wasEnabled, _ := existing["enabled"].(bool)
+
 		existing["enabled"] = req.Enabled
 		existing["workspace_id"] = workspaceID
 		existing["imap_host"] = req.ImapHost
@@ -348,12 +356,31 @@ func (a *restAPI) setAgentMailbox(w http.ResponseWriter, r *http.Request, agentI
 		// Tool-policy grant: enabling a mailbox is the operator's explicit
 		// opt-in to the email tools for this agent (the wire contract's
 		// `enabled` literally means "register the email tools"). Agents with a
-		// deny-by-default builtin allowlist that predates the mailbox (only the
-		// Assistant seed carries the five email allows) would otherwise get the
-		// tools registered but policy-hidden — a silently dead mailbox. Fill in
-		// ONLY missing entries: an explicit operator-set allow/ask/deny is
-		// intent and stays untouched.
-		if req.Enabled {
+		// deny-by-default builtin allowlist that predates the mailbox (every
+		// agent except the Assistant seed) would otherwise get the tools
+		// registered but policy-hidden — a silently dead mailbox. Fill in any
+		// email tool that is missing or explicitly "deny" (the ubiquitous,
+		// non-deliberate baseline every such agent inherits from the seed
+		// under the mandatory-coverage model — CLAUDE.md hard constraint 6,
+		// there is no default_policy field to distinguish "unset" from "seed
+		// default" any more); an entry already "allow" or "ask" is left
+		// untouched (see grantEmailToolAllows's doc comment for why "ask" is
+		// the one value that can only reflect genuine operator intent).
+		//
+		// Gated on the ACTUAL disabled→enabled transition (req.Enabled &&
+		// !wasEnabled), not merely "the saved value is enabled": this handler
+		// runs on EVERY mailbox save, including edits to an already-enabled
+		// mailbox (rotate a password, change the IMAP host, …). Before this
+		// fix, any such edit re-ran the grant unconditionally whenever
+		// req.Enabled was true — and since a seed "deny" and an operator's
+		// later, deliberate "deny" (set via the Tool Policies UI to lock an
+		// email tool back down after first enabling the mailbox) are the same
+		// literal string in the data model, that meant an unrelated edit to
+		// an already-enabled mailbox would silently RE-GRANT "allow" to a
+		// tool the operator had just locked down — a privilege-widening
+		// regression, the mirror image of the dead-mailbox bug this grant
+		// exists to fix (found live, silent-failure-hunter, 2026-07-06).
+		if req.Enabled && !wasEnabled {
 			grantEmailToolAllows(m, agentID)
 		}
 		return nil
@@ -583,12 +610,40 @@ func (a *restAPI) listMailboxes(w http.ResponseWriter, r *http.Request) {
 // emailToolNames are the five M11 email tools gated by mailbox ownership.
 var emailToolNames = []string{"read_inbox", "search_email", "read_message", "send_email", "reply"}
 
-// grantEmailToolAllows fills in missing "allow" entries for the email tools in
-// the agent's builtin tool policy, but ONLY when that policy is
-// deny-by-default (under default-allow a missing entry already permits the
-// tool) and ONLY for names with no existing entry (an explicit operator
-// allow/ask/deny is intent and is never overridden). Operates on the raw
-// config map inside a safeUpdateConfigJSON write.
+// grantEmailToolAllows fills in "allow" for the email tools in the agent's
+// builtin tool policy when a mailbox is enabled, treating a missing entry or
+// an explicit "deny" as fill-eligible, but never touching a tool already
+// "allow" or "ask". Operates on the raw config map inside a
+// safeUpdateConfigJSON write.
+//
+// Historical context: before the DefaultPolicy/default_policy fallback was
+// removed (CLAUDE.md hard constraint 6), an agent's builtin.policies map was
+// typically SPARSE — a missing entry meant "fall back to the agent's
+// default_policy field," so a deny-by-default agent's email tools were
+// implicitly denied simply by being absent from the map. This function used
+// to check that default_policy field and only fill genuinely-missing
+// entries. Now every agent's policies map is fully enumerated (seeded
+// explicitly allow/deny per tool via coreagent.denyAllThenOverride, backfilled
+// for pre-migration configs by config.RepairIncompleteToolPolicyCoverage) —
+// there is no default_policy field any more, so a deny-by-default agent's
+// email tools are no longer "missing," they carry an EXPLICIT "deny" entry
+// inherited from the seed. Checking builtin["default_policy"] (as this
+// function used to) is therefore always empty/absent, always compares
+// unequal to "deny", and the function ALWAYS silently no-op'd — meaning
+// enabling a mailbox for any agent whose email tools are seed-deny (every
+// agent except Mia) left those tools permanently denied with zero
+// operator-visible signal (found live, three independent reviewers,
+// 2026-07-06).
+//
+// Fixed to operate directly on the real builtin["policies"] map: an entry
+// currently "deny" (the ubiquitous, non-deliberate baseline inherited from
+// the seed) is functionally equivalent to the old "missing" case and is
+// fill-eligible. An entry already "allow" needs no change. An entry "ask" is
+// preserved untouched: no core-agent seed (pkg/coreagent/core.go) ever
+// assigns "ask" to an email tool — only "allow" (Mia) or the
+// denyAllThenOverride baseline "deny" — so a persisted "ask" can only have
+// come from a deliberate operator action via the Tool Policies UI/API, which
+// this function must never override.
 func grantEmailToolAllows(m map[string]any, agentID string) {
 	agents, _ := m["agents"].(map[string]any)
 	list, _ := agents["list"].([]any)
@@ -599,20 +654,13 @@ func grantEmailToolAllows(m map[string]any, agentID string) {
 		}
 		toolsCfg, _ := ag["tools"].(map[string]any)
 		if toolsCfg == nil {
-			slog.Debug("mailbox: no per-agent tool config — defaults apply, nothing to grant",
-				"agent_id", agentID)
-			return // no per-agent tool config → defaults apply (allow)
+			toolsCfg = map[string]any{}
+			ag["tools"] = toolsCfg
 		}
 		builtin, _ := toolsCfg["builtin"].(map[string]any)
 		if builtin == nil {
-			slog.Debug("mailbox: no builtin tool policy block — defaults apply, nothing to grant",
-				"agent_id", agentID)
-			return
-		}
-		if dp, _ := builtin["default_policy"].(string); dp != "deny" {
-			slog.Debug("mailbox: builtin default_policy is not deny — missing entries already allow, nothing to grant",
-				"agent_id", agentID, "default_policy", dp)
-			return // default-allow: missing entries already permit the tools
+			builtin = map[string]any{}
+			toolsCfg["builtin"] = builtin
 		}
 		policies, _ := builtin["policies"].(map[string]any)
 		if policies == nil {
@@ -621,13 +669,15 @@ func grantEmailToolAllows(m map[string]any, agentID string) {
 		}
 		granted := make([]string, 0, len(emailToolNames))
 		for _, name := range emailToolNames {
-			if _, exists := policies[name]; !exists {
-				policies[name] = "allow"
-				granted = append(granted, name)
+			current, _ := policies[name].(string)
+			if current == "ask" || current == "allow" {
+				continue // already permits, or a deliberate operator choice — leave it
 			}
+			policies[name] = "allow"
+			granted = append(granted, name)
 		}
 		if len(granted) > 0 {
-			slog.Info("mailbox: granted email tool allows (deny-default agent, mailbox enabled)",
+			slog.Info("mailbox: granted email tool allows (deny/missing email-tool policy, mailbox enabled)",
 				"agent_id", agentID, "tools", strings.Join(granted, ","))
 		}
 		return
