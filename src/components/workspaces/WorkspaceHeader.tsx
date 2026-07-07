@@ -4,7 +4,7 @@ import { PencilSimple, Check, X, Link, ArrowsClockwise } from '@phosphor-icons/r
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { MilestoneProgressBar } from './MilestoneProgressBar'
-import { fetchMilestones, updateWorkspace, milestonesQueryKeys, workspacesQueryKeys, isApiError } from '@/lib/api'
+import { fetchMilestones, updateWorkspace, milestonesQueryKeys, workspacesQueryKeys, getErrorMessage } from '@/lib/api'
 import type { Workspace } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { cn } from '@/lib/utils'
@@ -35,7 +35,7 @@ export function WorkspaceHeader({ workspace }: WorkspaceHeaderProps) {
       setEditingName(false)
     },
     onError: (err) => {
-      const msg = isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to update workspace'
+      const msg = getErrorMessage(err, 'Failed to update workspace')
       addToast({ message: msg, variant: 'error' })
     },
   })

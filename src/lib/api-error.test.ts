@@ -10,7 +10,7 @@
 //   6. Network-error case (status 0)
 
 import { describe, it, expect } from 'vitest'
-import { ApiError, isApiError } from './api-error'
+import { ApiError, isApiError, getErrorMessage } from './api-error'
 
 describe('ApiError constructor + defaults', () => {
   it('uses provided userMessage when non-empty', () => {
@@ -103,6 +103,48 @@ describe('isApiError discriminator', () => {
     expect(isApiError(undefined)).toBe(false)
     expect(isApiError('string error')).toBe(false)
     expect(isApiError({ status: 401, message: 'fake' })).toBe(false)
+  })
+})
+
+describe('getErrorMessage', () => {
+  it('returns the statusOverrides entry when the ApiError status matches', () => {
+    const err = new ApiError(401, 'Your session has expired. Please log in again.')
+    const msg = getErrorMessage(err, 'fallback', {
+      statusOverrides: { 401: 'That password is incorrect. Please try again.' },
+    })
+    expect(msg).toBe('That password is incorrect. Please try again.')
+  })
+
+  it('returns .userMessage for an ApiError with no matching statusOverrides entry', () => {
+    const err = new ApiError(404, 'Agent not found')
+    const msg = getErrorMessage(err, 'fallback', {
+      statusOverrides: { 401: 'That password is incorrect. Please try again.' },
+    })
+    expect(msg).toBe('Agent not found')
+  })
+
+  it('returns .userMessage for an ApiError when opts is omitted entirely', () => {
+    const err = new ApiError(500, 'The server is unavailable. Please try again in a moment.')
+    expect(getErrorMessage(err, 'fallback')).toBe(
+      'The server is unavailable. Please try again in a moment.',
+    )
+  })
+
+  it('returns .message for a plain Error', () => {
+    const err = new Error('boom')
+    expect(getErrorMessage(err, 'fallback')).toBe('boom')
+  })
+
+  it('returns the fallback for a raw string thrown value', () => {
+    expect(getErrorMessage('some string error', 'fallback')).toBe('fallback')
+  })
+
+  it('returns the fallback for null', () => {
+    expect(getErrorMessage(null, 'fallback')).toBe('fallback')
+  })
+
+  it('returns the fallback for undefined', () => {
+    expect(getErrorMessage(undefined, 'fallback')).toBe('fallback')
   })
 })
 

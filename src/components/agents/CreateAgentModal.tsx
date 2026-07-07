@@ -27,7 +27,7 @@ import {
   fetchProviders,
   fetchRegistryTools,
   fetchSkills,
-  isApiError,
+  getErrorMessage,
 } from '@/lib/api'
 import type {
   Agent,
@@ -231,11 +231,7 @@ export function CreateAgentModal({
       // toast here is the only place the user gets a global notification,
       // since the wizard's catch only sets state (no toast — the parent
       // owns the lifecycle). See CreateAgentWizard.handleSubmit.
-      const message = isApiError(err)
-        ? err.userMessage
-        : err instanceof Error
-          ? err.message
-          : 'Failed to create agent'
+      const message = getErrorMessage(err, 'Failed to create agent')
       addToast({ message, variant: 'error' })
     },
   })

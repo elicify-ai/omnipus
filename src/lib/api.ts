@@ -309,16 +309,11 @@ import type {
   BackupEntry,
   StorageStats,
   // Newly promoted from inline openapi.yaml schemas:
-  AuditLogUpdateResponse,
   SkillTrustUpdateRequest,
   SkillTrustUpdateResponse,
   PromptGuardUpdateRequest,
   PromptGuardUpdateResponse,
-  RateLimitsResponse,
-  RateLimitsUpdateRequest,
-  RateLimitsUpdateResponse,
   SessionScopeUpdateResponse,
-  RetentionUpdateResponse,
   ChannelEnabledResponse,
   AgentToolsResponse,
   UploadFilesResponse,
@@ -471,16 +466,11 @@ export type {
   BackupEntry,
   StorageStats,
   // Promoted from inline openapi.yaml schemas:
-  AuditLogUpdateResponse,
   SkillTrustUpdateRequest,
   SkillTrustUpdateResponse,
   PromptGuardUpdateRequest,
   PromptGuardUpdateResponse,
-  RateLimitsResponse,
-  RateLimitsUpdateRequest,
-  RateLimitsUpdateResponse,
   SessionScopeUpdateResponse,
-  RetentionUpdateResponse,
   ChannelEnabledResponse,
   AgentToolsResponse,
   UploadFilesResponse,
@@ -1393,13 +1383,55 @@ const VALID_POLICY_MODES = ['allow', 'deny'] as const
 const VALID_EXEC_APPROVALS = ['auto', 'ask', 'deny'] as const
 const VALID_INJECTION_LEVELS = ['off', 'low', 'medium', 'high'] as const
 
-function validEnum<T extends string>(value: unknown, valid: readonly T[], fallback: T): T {
+// describeCoercedValue renders an arbitrary wire value into a short, loggable
+// string for recordCoercion's console.warn/logError payloads. TelemetryEvent
+// only accepts string | number | boolean | null | undefined properties, so an
+// object/array value must be stringified rather than passed through raw —
+// and JSON.stringify itself can throw (circular refs) or return undefined
+// (a bare `undefined`/function/symbol value), so this stays defensive.
+function describeCoercedValue(value: unknown): string {
+  if (value === undefined) return 'undefined'
+  try {
+    const json = JSON.stringify(value)
+    return json !== undefined ? json : String(value)
+  } catch {
+    return String(value)
+  }
+}
+
+// recordCoercion centralizes the telemetry/dev-warn side effect shared by
+// validEnum/castString/castNumber/castOptionalNumber below: bump the
+// module-level coercion counter, and make the event visible somewhere a
+// human can see it. DEV builds get a console.warn (unchanged from before);
+// non-DEV (production) builds now get a rate-limited logError() telemetry
+// record instead — mirroring _recordApiSchemaError's pattern above — so a
+// wrong-shaped value silently substituted for a security-relevant field
+// (e.g. security.daily_cost_cap, security.rate_limits.*) is never a fully
+// silent event in a production build. Previously this counter+console.warn
+// pair was the ONLY signal, and the console.warn was DEV-only, so a
+// production coercion of a guardrail field produced no observable trace
+// anywhere (issue #146).
+function recordCoercion(fieldLabel: string, value: unknown, fallback: unknown): void {
+  _configCoercionCount++
+  if (import.meta.env.DEV) {
+    console.warn(`[api] config coercion (${fieldLabel}): ${describeCoercedValue(value)} → ${describeCoercedValue(fallback)}`)
+    return
+  }
+  if (import.meta.env.MODE !== 'test') {
+    logError({
+      event: 'configCoercion',
+      field: fieldLabel,
+      coercedValue: describeCoercedValue(value),
+      fallbackValue: describeCoercedValue(fallback),
+      totalCoercions: _configCoercionCount,
+    })
+  }
+}
+
+function validEnum<T extends string>(value: unknown, valid: readonly T[], fallback: T, fieldLabel: string): T {
   if (typeof value === 'string' && (valid as readonly string[]).includes(value)) return value as T
   if (value !== undefined && value !== null) {
-    _configCoercionCount++
-    if (import.meta.env.DEV) {
-      console.warn(`[api] validEnum coercion: ${JSON.stringify(value)} → ${fallback}`)
-    }
+    recordCoercion(fieldLabel, value, fallback)
   }
   return fallback
 }
@@ -1421,27 +1453,21 @@ function cast<T>(obj: unknown, fallback: T): T {
 
 // castString/castNumber: like validEnum, but for a scalar type rather than a
 // closed enum. Verifies typeof before accepting the wire value; a present
-// but wrong-typed value is coerced to the fallback and counted (same
-// telemetry/dev-warn behaviour as validEnum) rather than silently passed
-// through mistyped.
-function castString(value: unknown, fallback: string): string {
+// but wrong-typed value is coerced to the fallback and counted via
+// recordCoercion (same telemetry/dev-warn behaviour as validEnum) rather
+// than silently passed through mistyped.
+function castString(value: unknown, fallback: string, fieldLabel: string): string {
   if (typeof value === 'string') return value
   if (value !== undefined && value !== null) {
-    _configCoercionCount++
-    if (import.meta.env.DEV) {
-      console.warn(`[api] castString coercion: ${JSON.stringify(value)} → ${JSON.stringify(fallback)}`)
-    }
+    recordCoercion(fieldLabel, value, fallback)
   }
   return fallback
 }
 
-function castNumber(value: unknown, fallback: number): number {
+function castNumber(value: unknown, fallback: number, fieldLabel: string): number {
   if (typeof value === 'number' && Number.isFinite(value)) return value
   if (value !== undefined && value !== null) {
-    _configCoercionCount++
-    if (import.meta.env.DEV) {
-      console.warn(`[api] castNumber coercion: ${JSON.stringify(value)} → ${fallback}`)
-    }
+    recordCoercion(fieldLabel, value, fallback)
   }
   return fallback
 }
@@ -1452,13 +1478,10 @@ function castNumber(value: unknown, fallback: number): number {
 // undefined (same as "not configured") rather than passed through mistyped,
 // since a bad number silently reaching a spend/rate-limit/timeout guardrail
 // is worse than that guardrail reading as "unset".
-function castOptionalNumber(value: unknown): number | undefined {
+function castOptionalNumber(value: unknown, fieldLabel: string): number | undefined {
   if (value === undefined || value === null) return undefined
   if (typeof value === 'number' && Number.isFinite(value)) return value
-  _configCoercionCount++
-  if (import.meta.env.DEV) {
-    console.warn(`[api] castOptionalNumber coercion: ${JSON.stringify(value)} → undefined`)
-  }
+  recordCoercion(fieldLabel, value, undefined)
   return undefined
 }
 
@@ -1476,17 +1499,17 @@ function rawToFrontendConfig(raw: Record<string, unknown>): Config {
       // and .toString()'d for display — a wrong-shaped value here is visible
       // breakage (a non-primitive rendered as a React child, or "[object
       // Object]" from a stray .toString()), so these are runtime-type-checked.
-      bind_address: castString(gateway.host, '127.0.0.1'),
-      port: castNumber(gateway.port, 8080),
+      bind_address: castString(gateway.host, '127.0.0.1', 'gateway.host'),
+      port: castNumber(gateway.port, 8080, 'gateway.port'),
       token: gateway.token as string | undefined,
       hot_reload: gateway.hot_reload as boolean | undefined,
       log_level: gateway.log_level as string | undefined,
       dev_mode_bypass: gateway.dev_mode_bypass as boolean | undefined,
     },
     security: {
-      policy_mode: validEnum(security.policy_mode, VALID_POLICY_MODES, 'deny'),
-      exec_approval: validEnum(security.exec_approval, VALID_EXEC_APPROVALS, 'ask'),
-      prompt_injection_level: validEnum(security.prompt_injection_level, VALID_INJECTION_LEVELS, 'medium'),
+      policy_mode: validEnum(security.policy_mode, VALID_POLICY_MODES, 'deny', 'security.policy_mode'),
+      exec_approval: validEnum(security.exec_approval, VALID_EXEC_APPROVALS, 'ask', 'security.exec_approval'),
+      prompt_injection_level: validEnum(security.prompt_injection_level, VALID_INJECTION_LEVELS, 'medium', 'security.prompt_injection_level'),
       // Spend/execution guardrails: a wrong-shaped value here is a bad
       // decision downstream, not just a display glitch — SecuritySection reads
       // these with `?.toString()` (which happily stringifies ANY type without
@@ -1494,22 +1517,28 @@ function rawToFrontendConfig(raw: Record<string, unknown>): Config {
       // corrupted-but-truthy value would silently NaN out and strip the
       // guardrail on the next PUT rather than failing loudly. Runtime-checked
       // and dropped to undefined (== "not configured") instead.
-      daily_cost_cap: castOptionalNumber(security.daily_cost_cap),
-      exec_timeout_seconds: castOptionalNumber(security.exec_timeout_seconds),
-      max_background_seconds: castOptionalNumber(security.max_background_seconds),
+      daily_cost_cap: castOptionalNumber(security.daily_cost_cap, 'security.daily_cost_cap'),
+      exec_timeout_seconds: castOptionalNumber(security.exec_timeout_seconds, 'security.exec_timeout_seconds'),
+      max_background_seconds: castOptionalNumber(security.max_background_seconds, 'security.max_background_seconds'),
       enable_deny_patterns: security.enable_deny_patterns as boolean | undefined,
       rate_limits: {
-        max_tokens_per_day: castOptionalNumber(rateLimits.max_tokens_per_day),
-        max_cost_per_day: castOptionalNumber(rateLimits.max_cost_per_day),
-        max_agent_llm_calls_per_hour: castOptionalNumber(rateLimits.max_agent_llm_calls_per_hour),
-        max_agent_tool_calls_per_minute: castOptionalNumber(rateLimits.max_agent_tool_calls_per_minute),
+        max_tokens_per_day: castOptionalNumber(rateLimits.max_tokens_per_day, 'security.rate_limits.max_tokens_per_day'),
+        max_cost_per_day: castOptionalNumber(rateLimits.max_cost_per_day, 'security.rate_limits.max_cost_per_day'),
+        max_agent_llm_calls_per_hour: castOptionalNumber(rateLimits.max_agent_llm_calls_per_hour, 'security.rate_limits.max_agent_llm_calls_per_hour'),
+        max_agent_tool_calls_per_minute: castOptionalNumber(rateLimits.max_agent_tool_calls_per_minute, 'security.rate_limits.max_agent_tool_calls_per_minute'),
       },
     },
     data: {
       // Same rationale as gateway.port above — DataSection reads this via
-      // .toString() directly (no optional chaining), so a non-number here
-      // throws at render time.
-      session_retention_days: castNumber(retention.session_days, 90),
+      // .toString() directly (no optional chaining, so a null/undefined
+      // value WOULD throw a TypeError at render time). castNumber guarantees
+      // session_retention_days is never null/undefined, but without the
+      // runtime type check a wrong-shaped-but-present value (e.g. an object)
+      // would NOT throw — .toString() happily renders it as garbage text
+      // ("[object Object]") instead of a number. Runtime-checked here for
+      // the same reason as gateway.port: a corrupted display, not a crash,
+      // is still the failure being guarded against.
+      session_retention_days: castNumber(retention.session_days, 90, 'storage.retention.session_days'),
     },
     agents: {
       defaults: {
@@ -2621,9 +2650,8 @@ export function configureIntegrationProvider(
 // returns the recognised text. Multipart form-data; the request() helper is
 // JSON-only, so this uses fetch directly with the auth + CSRF headers.
 // MIME-type-fragment → file-extension lookup for transcribeAudio, in priority
-// order. 'webm' is both the first check and the fallback (recordAudio's
-// default MediaRecorder mimeType), so no matching fragment falls through to
-// the same value a match on 'webm' would produce.
+// order. 'webm' is both the first check and the fallback, so no matching
+// fragment falls through to the same value a match on 'webm' would produce.
 const AUDIO_EXT_BY_MIME_FRAGMENT: readonly (readonly [fragment: string, ext: string])[] = [
   ['webm', 'webm'],
   ['ogg', 'ogg'],
@@ -3121,14 +3149,6 @@ export function fetchMilestones(workspaceId: string): Promise<Milestone[]> {
     undefined,
     MilestoneListResponseSchema,
   ).then((res) => res.milestones)
-}
-
-export function fetchMilestone(workspaceId: string, milestoneId: string): Promise<Milestone> {
-  return request<Milestone>(
-    `/workspaces/${encodeURIComponent(workspaceId)}/milestones/${encodeURIComponent(milestoneId)}`,
-    undefined,
-    MilestoneSchema,
-  )
 }
 
 export function createMilestone(workspaceId: string, body: MilestoneCreateRequest): Promise<Milestone> {

@@ -416,6 +416,48 @@ describe('PerformanceSection — Tool loading toggle', () => {
     expect(api.updatePerformanceSettings).not.toHaveBeenCalled()
   })
 
+  it('shows the ApiError.userMessage (not the status-prefixed err.message) when updatePerformanceSettings rejects — Wave 2 getErrorMessage() fix', async () => {
+    // Traces to: Wave 2 findings-fix (task #149, gap 2) — pr-test-analyzer.
+    // Wave 2 fixed a real bug: PerformanceSection previously read err.message
+    // off the caught error instead of the intended err.userMessage off an
+    // ApiError. err.message carries the legacy "${status}: ${userMessage}"
+    // format (see ApiError constructor in src/lib/api-error.ts) — a 422 here
+    // would render as "422: Unprocessable value for max_parallel_agents" if
+    // the bug regressed. This test asserts the toast shows the bare
+    // userMessage, which only getErrorMessage()'s ApiError-first priority
+    // produces.
+    vi.mocked(api.reAuth).mockResolvedValue({ verified: true, token: 'reauth_tok3', expires_in: 300 } as never)
+    vi.mocked(api.updatePerformanceSettings).mockRejectedValue(
+      new api.ApiError(422, 'Unprocessable value for max_parallel_agents'),
+    )
+
+    vi.useRealTimers()
+    renderSection()
+    await waitFor(() => screen.getByLabelText('Max parallel agents'))
+
+    vi.useFakeTimers()
+    fireEvent.change(screen.getByLabelText('Max parallel agents'), { target: { value: '8' } })
+    await act(async () => { vi.advanceTimersByTime(700) })
+    vi.useRealTimers()
+
+    await waitFor(() => screen.getByTestId('reauth-password-input'))
+    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'mypassword' } })
+    fireEvent.click(screen.getByTestId('reauth-confirm'))
+
+    await waitFor(() => {
+      expect(addToast).toHaveBeenCalledWith({
+        variant: 'error',
+        message: 'Unprocessable value for max_parallel_agents',
+      })
+    })
+    // Pin the negative: the garbled status-prefixed err.message string must
+    // NOT be what was shown.
+    expect(addToast).not.toHaveBeenCalledWith({
+      variant: 'error',
+      message: '422: Unprocessable value for max_parallel_agents',
+    })
+  })
+
   it('reverts tools_on_demand to the server value when re-auth is cancelled after a valid toggle (Bug 2)', async () => {
     // Regression test: cancelling the ReAuthDialog for a *valid* toggle left
     // toolsOnDemand pointing at the optimistically-flipped value forever,

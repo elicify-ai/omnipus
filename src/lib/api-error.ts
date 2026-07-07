@@ -256,19 +256,22 @@ export function isApiError(err: unknown): err is ApiError {
  * Priority: `ApiError.userMessage` (already a safe, human-facing string —
  * see `ApiError.fromResponse` above) > `Error.message` > `fallback`.
  *
- * @param opts.status401 — when set, an `ApiError` with `status === 401`
- * returns this string instead of `userMessage`. Used by call sites that want
- * a specific "that password is incorrect" message for a 401 rather than the
- * generic session-expired copy `defaultUserMessage(401)` would otherwise
- * produce (see ReAuthDialog).
+ * @param opts.statusOverrides — an optional map of HTTP status → message.
+ * When an `ApiError`'s `status` has a matching entry, that string is
+ * returned instead of `userMessage`. Used by call sites that want a
+ * status-specific message rather than the generic
+ * `defaultUserMessage(status)` copy would otherwise produce (see
+ * ReAuthDialog, which overrides 401 with a "that password is incorrect"
+ * message instead of the generic session-expired copy).
  */
 export function getErrorMessage(
   err: unknown,
   fallback: string,
-  opts?: { status401?: string },
+  opts?: { statusOverrides?: Partial<Record<number, string>> },
 ): string {
   if (isApiError(err)) {
-    if (opts?.status401 !== undefined && err.status === 401) return opts.status401
+    const override = opts?.statusOverrides?.[err.status]
+    if (override !== undefined) return override
     return err.userMessage
   }
   if (err instanceof Error) return err.message

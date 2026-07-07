@@ -76,11 +76,16 @@ function makeClient() {
 }
 
 function renderModal(props: Parameters<typeof CreateAgentModal>[0] = {}) {
-  return render(
-    <QueryClientProvider client={makeClient()}>
+  const client = makeClient()
+  const utils = render(
+    <QueryClientProvider client={client}>
       <CreateAgentModal {...props} />
     </QueryClientProvider>,
   )
+  // Expose the QueryClient alongside the render utils so tests can inspect
+  // the mutation cache directly (e.g. to pin a mutation's *resolved value*,
+  // not just its externally-visible side effects like toasts).
+  return { ...utils, client }
 }
 
 /** Drive the wizard through steps ① → ② → ③ with valid minimal inputs
@@ -385,7 +390,7 @@ describe('CreateAgentModal — submit success path', () => {
   it('legacy onCreate-resolves-to-void path: shows the success toast from the request name (not a synthesized Agent) and closes the modal', async () => {
     const onCreate = vi.fn().mockResolvedValue(undefined)
     const onClose = vi.fn()
-    renderModal({ open: true, onClose, onCreate })
+    const { client } = renderModal({ open: true, onClose, onCreate })
     await fillAndAdvanceToStep3()
     fireEvent.click(screen.getByTestId('wizard-create'))
     await waitFor(() => expect(onCreate).toHaveBeenCalled())
@@ -396,6 +401,24 @@ describe('CreateAgentModal — submit success path', () => {
       message: 'Created agent "Research Bot"',
       variant: 'success',
     })
+
+    // The toast-text assertion above is byte-identical whether the fix is
+    // applied or not: AgentCreateRequestMain.name is required, and the OLD
+    // buggy `data as unknown as Agent` cast made `agent.name` resolve to
+    // `data.name` — the exact same value the NEW code's `variables.name`
+    // fallback produces. It does NOT pin the actual defect (reading a
+    // server-computed field off a request-shaped object).
+    //
+    // What DOES distinguish the fix from the bug: the mutation's *resolved
+    // value* itself. Post-fix, mutationFn resolves `null` for this legacy
+    // onCreateProp path (see CreateAgentModal.tsx's createAgentMutation
+    // comment). Pre-fix, it would have resolved the request payload cast to
+    // Agent — a truthy, `Research Bot`-shaped object, not null. Inspect the
+    // settled mutation directly via the QueryClient's mutation cache rather
+    // than only observing the onSuccess side effects.
+    const mutations = client.getMutationCache().getAll()
+    expect(mutations).toHaveLength(1)
+    expect(mutations[0].state.data).toBeNull()
   })
 
   it('Subagent submit includes description in the wire payload', async () => {
