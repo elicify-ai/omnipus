@@ -4138,7 +4138,7 @@ func (al *AgentLoop) ProcessScheduled(
 		return "", fmt.Errorf("scheduled run: transcript write failed for session %q: %w", sessionID, err)
 	}
 
-	return al.runAgentLoop(ctx, agent, processOptions{
+	resp, err := al.runAgentLoop(ctx, agent, processOptions{
 		SessionKey:          sessionKey,
 		Channel:             channel,
 		ChatID:              chatID,
@@ -4150,6 +4150,21 @@ func (al *AgentLoop) ProcessScheduled(
 		TranscriptStore:     transcriptStore,
 		AutoDenyAsk:         true, // FR-009: headless — auto-deny ask-policy tools
 	})
+	if err == nil && ctx.Err() == context.DeadlineExceeded {
+		// A deadline-forced hard abort (pkg/gateway/schedules.go's
+		// watchDeadline, on this run's own ctx deadline expiring) escalates
+		// through the identical ts.requestHardAbort()/InterruptSessionHard
+		// path a live user's own turn-cancel takes. abortTurn treats both as
+		// a clean, intentional stop and returns a nil error — correct for an
+		// interactive chat user who already knows their cancel landed, but
+		// wrong here: a headless scheduled run has no such user, and the
+		// caller (schedules.go) needs a non-nil error to classify this run
+		// as a timeout rather than silently recording it as a success.
+		// Restore the "aborted (canceled/deadline) run returns a
+		// context-derived error promptly" contract promised above.
+		err = fmt.Errorf("scheduled run: %w", context.DeadlineExceeded)
+	}
+	return resp, err
 }
 
 func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage) (string, *AgentInstance, error) {
@@ -4773,6 +4788,10 @@ func (al *AgentLoop) runAgentLoop(
 		return "", err
 	}
 	if result.status == TurnEndStatusAborted {
+		// Reached only for a case-1 (user-initiated) hard abort — abortTurn
+		// returns a non-nil error for every system-initiated abort (case 2),
+		// which the `if err != nil` branch above already returned from. See
+		// abortTurn's doc comment for the full case split.
 		return "", nil
 	}
 
@@ -7232,28 +7251,64 @@ turnLoop:
 	}, nil
 }
 
-// hardInterruptAbortReason is the default abort reason used when a turn is
-// hard-aborted by an operator/client-initiated cancellation (requestHardAbort
-// via InterruptHard/InterruptSessionHard or steering) rather than by a hook
-// decision or the synthetic-error floor, neither of which have a more
+// hardInterruptAbortReason is the abort reason used when a turn is
+// hard-aborted via ts.requestHardAbort() (InterruptHard/InterruptSessionHard,
+// reached from the turn loop's ts.hardAbortRequested() checks) rather than by
+// a hook decision or the synthetic-error floor, neither of which have a more
 // specific reason string available at the call site.
+//
+// abortTurn treats this exact reason string as the signal for a clean,
+// intentional stop rather than a failure needing a surfaced error (see
+// abortTurn's doc comment). Every production path that reaches it funnels
+// through RequestCancel's escalation timer (pkg/agent/cancel.go) calling
+// InterruptSessionHard — this includes both a live user canceling their own
+// turn AND pkg/gateway/schedules.go's watchDeadline force-aborting a scheduled
+// run once its deadline expires. ProcessScheduled (below) independently
+// re-derives a real error for the deadline case from ctx.Err(), since a
+// headless scheduled run has no live user to "already know" the run stopped
+// early — see ProcessScheduled's comment.
 const hardInterruptAbortReason = "turn canceled by hard interrupt request"
 
-// abortTurn finalizes a hard-aborted turn. Bug fix (agent turn engine
-// correctness): previously this returned turnResult{status: Aborted} with a
-// nil error, which runAgentLoop turned into a bare ("", nil) — the deferred
-// publish guard in session_worker.go (processTurn) only synthesizes a
-// user-facing "Error processing message: %v" response when processMessage
-// returns a non-nil error, so a hard-aborted turn produced ZERO response on
-// every channel (Telegram, Discord, Slack, CLI, webchat alike).
+// abortTurn finalizes a hard-aborted turn.
 //
-// Now abortTurn synthesizes a real, non-nil error — mirroring
-// hookAbortError's shape (emit an error event, append to the transcript so
-// replay shows it, return a wrapped error) — carrying stage and reason so
-// the caller and the user both learn why the turn ended. runAgentLoop's
-// existing `if err != nil { return "", err }` branch naturally propagates
-// it, and processTurn's deferred guard turns it into the terminal
-// user-facing frame every channel already knows how to render.
+// Bug fix (agent turn engine correctness, commit 499b569f): previously this
+// always returned turnResult{status: Aborted} with a nil error, which
+// runAgentLoop turned into a bare ("", nil) for every call site. Immediately
+// after processMessage returns, session_worker.go's processTurn synthesizes
+// the user-facing "Error processing message: %v" response only when the
+// returned error is non-nil (pkg/agent/session_worker.go ~279-283) — so a
+// hard-aborted turn produced ZERO response on every channel (Telegram,
+// Discord, Slack, CLI, webchat alike), including the security/policy-driven
+// aborts (repeated-policy-denial floor, hook hard-abort decisions) that
+// silently dropped the user with no explanation at all. 499b569f fixed that
+// by synthesizing a real, non-nil error unconditionally, mirroring
+// hookAbortError's shape.
+//
+// That blanket fix over-corrected: it also changed the genuinely different
+// case of a USER explicitly canceling their own in-flight turn (InterruptHard
+// / InterruptSessionHard / the turn loop's ts.hardAbortRequested() checks) —
+// an intentional, successful action the caller already knows about, not a
+// failure. TestAgentLoop_InterruptHard_RestoresSession asserts exactly this:
+// a hard-interrupted turn restores the session cleanly with a nil error.
+//
+// abortTurn now differentiates the two cases by reason string:
+//
+//   - reason == hardInterruptAbortReason (the shared constant every
+//     hardAbortRequested()-gated call site passes): a clean, user-initiated
+//     cancel. Returns turnResult{status: Aborted} with a nil error and skips
+//     the error event/transcript entry entirely — restoring the exact
+//     pre-499b569f behavior for this case. runAgentLoop's
+//     `if result.status == TurnEndStatusAborted { return "", nil }` branch
+//     then does the normal silent unwind.
+//
+//   - any other reason (the synthetic-error floor's abortMsg, or a hook's
+//     decision.Reason): a system-initiated abort — the case the bug fix
+//     above was actually about. Synthesizes a real, non-nil error carrying
+//     stage + reason, emits an error event, and appends it to the transcript
+//     so the user (and replay) learn why the turn ended. runAgentLoop's
+//     existing `if err != nil { return "", err }` branch propagates it, and
+//     session_worker.go's processTurn turns it into the terminal
+//     user-facing frame every channel already knows how to render.
 func (al *AgentLoop) abortTurn(ts *turnState, stage, reason string) (turnResult, error) {
 	ts.setPhase(TurnPhaseAborted)
 	if !ts.opts.NoHistory {
@@ -7269,6 +7324,16 @@ func (al *AgentLoop) abortTurn(ts *turnState, stage, reason string) (turnResult,
 			return turnResult{}, err
 		}
 	}
+
+	// Case 1: user-initiated hard interrupt/cancel — a successful, intentional
+	// action, not a failure. No error event, no transcript entry, nil error —
+	// identical to abortTurn's behavior before 499b569f for this specific case.
+	if reason == hardInterruptAbortReason {
+		return turnResult{status: TurnEndStatusAborted}, nil
+	}
+
+	// Case 2: system-initiated abort (policy/hook decision or the
+	// synthetic-error floor) — synthesize a real, surfaced error.
 	if reason == "" {
 		reason = "no reason provided"
 	}

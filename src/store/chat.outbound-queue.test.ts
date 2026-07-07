@@ -14,9 +14,10 @@
  * looped `sendMessage` synchronously over the whole queue. The first call
  * flips `isStreaming` synchronously (via zustand's `set()`); every
  * subsequent call in that same loop then hit sendMessage's `isStreaming`
- * guard, which shows a "please wait" toast and returns WITHOUT
- * re-enqueuing (unlike the disconnected-WS branch) — so messages 2-5 were
- * silently dropped with no chat bubble and no error. The fix moves the
+ * guard, which shows a "please wait" connection-error banner and returns
+ * WITHOUT re-enqueuing (unlike the disconnected-WS branch checked
+ * immediately after the isStreaming guard in sendMessage) — so messages
+ * 2-5 were silently dropped with no chat bubble and no error. The fix moves the
  * drained batch into `pendingDrainQueue` and sends one at a time, driven by
  * `maybeDrainNext()` calls at every place a turn ends (done/error frames,
  * cancelStream, clearStreamingState, markLastMessageInterrupted, and
@@ -169,7 +170,7 @@ describe('outboundQueue — drainOutboundQueue', () => {
 
     // Completing msg1's turn (the server's `done` frame) must release msg2 —
     // this is the actual regression: previously msg2 was gone for good, with
-    // no chat bubble and no error toast.
+    // no chat bubble and no connection-error banner.
     act(() => {
       useChatStore.getState().handleFrame({ type: 'done', session_id: 'test-session' })
     })

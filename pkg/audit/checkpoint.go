@@ -18,7 +18,7 @@ package audit
 // newer (and perfectly intact) file after that point is silently never
 // checked at all.
 //
-// Fix: cleanupExpired persists a small signed sidecar — ChainCheckpoint — the
+// Fix: cleanupExpired persists a small signed sidecar — chainCheckpoint — the
 // moment a deletion would sever the chain from genesis. It records which
 // file is now the oldest survivor and the HMAC that survivor's first entry
 // should be checked against (the last good link of whatever was superseded).
@@ -57,7 +57,7 @@ import (
 )
 
 // checkpointFileName is the sidecar file that persists the HMAC chain
-// checkpoint. See the package doc comment above for the naming rationale.
+// checkpoint. See this file's doc comment above for the naming rationale.
 const checkpointFileName = "audit-chain-checkpoint.json"
 
 // checkpointHMACInfo domain-separates the checkpoint's integrity HMAC from
@@ -67,11 +67,11 @@ const checkpointFileName = "audit-chain-checkpoint.json"
 // "omnipus-audit-genesis-v1".
 const checkpointHMACInfo = "omnipus-audit-checkpoint-v1"
 
-// ChainCheckpoint is the on-disk (JSON) shape of the persisted chain-seed
+// chainCheckpoint is the on-disk (JSON) shape of the persisted chain-seed
 // checkpoint written by Logger.cleanupExpired whenever retention cleanup
 // deletes the file that was, until then, needed to seed genesis-based
 // verification.
-type ChainCheckpoint struct {
+type chainCheckpoint struct {
 	// AppliesToFile is the base name (not full path) of the file that is now
 	// the oldest surviving audit file as of this checkpoint — i.e. the file
 	// whose FIRST entry should be verified against FinalHMAC instead of
@@ -95,8 +95,8 @@ type ChainCheckpoint struct {
 	// Sum is the hex-encoded (64 chars / 32 bytes) integrity HMAC over
 	// (AppliesToFile, FinalHMAC), keyed with the same audit chain key used
 	// for entry HMACs. Without the chain key, a forged checkpoint cannot
-	// produce a Sum that verifies — see the package doc comment's threat
-	// model.
+	// produce a Sum that verifies — see this file's doc comment for the
+	// threat model.
 	Sum string `json:"sum"`
 }
 
@@ -123,7 +123,7 @@ func computeCheckpointSum(appliesToFile string, finalHMAC []byte, key []byte) []
 }
 
 // writeChainCheckpoint persists (atomically, via temp-file + rename) a
-// ChainCheckpoint recording that appliesToFile is now the oldest surviving
+// chainCheckpoint recording that appliesToFile is now the oldest surviving
 // audit file and finalHMAC is the seed its first entry should be verified
 // against. Called from Logger.cleanupExpired immediately after a deletion
 // that supersedes the previous chain-verification starting point.
@@ -139,7 +139,7 @@ func writeChainCheckpoint(dir, appliesToFile string, finalHMAC, key []byte) erro
 	}
 
 	sum := computeCheckpointSum(appliesToFile, finalHMAC, key)
-	cp := ChainCheckpoint{
+	cp := chainCheckpoint{
 		AppliesToFile: appliesToFile,
 		FinalHMAC:     hex.EncodeToString(finalHMAC),
 		CreatedAt:     time.Now().UTC(),
@@ -180,7 +180,7 @@ func writeChainCheckpoint(dir, appliesToFile string, finalHMAC, key []byte) erro
 //   - (cp, nil): the checkpoint parsed and its Sum verified against key.
 //     Callers still must confirm cp.AppliesToFile matches the actual oldest
 //     surviving file before trusting cp.FinalHMAC as a seed — see VerifyDir.
-func readChainCheckpoint(dir string, key []byte) (*ChainCheckpoint, error) {
+func readChainCheckpoint(dir string, key []byte) (*chainCheckpoint, error) {
 	path := checkpointPath(dir)
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -190,7 +190,7 @@ func readChainCheckpoint(dir string, key []byte) (*ChainCheckpoint, error) {
 		return nil, fmt.Errorf("audit: read chain checkpoint: %w", err)
 	}
 
-	var cp ChainCheckpoint
+	var cp chainCheckpoint
 	if err = json.Unmarshal(data, &cp); err != nil {
 		return nil, fmt.Errorf("audit: parse chain checkpoint: %w", err)
 	}

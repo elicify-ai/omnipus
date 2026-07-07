@@ -90,9 +90,16 @@ export function DataSection() {
 
   const { mutate: doClearSessions, isPending: isClearing } = useMutation({
     mutationFn: clearAllSessions,
-    onSuccess: () => {
+    onSuccess: (res) => {
       queryClient.invalidateQueries({ queryKey: ['storage-stats'] })
-      addToast({ message: 'All sessions cleared', variant: 'success' })
+      if (res.warnings && res.warnings.length > 0) {
+        addToast({
+          message: `Sessions cleared, but ${res.warnings.length} could not be removed — see logs for details.`,
+          variant: 'warning',
+        })
+      } else {
+        addToast({ message: 'All sessions cleared', variant: 'success' })
+      }
       setClearConfirmOpen(false)
     },
     onError: (err: unknown) => addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Clear failed', variant: 'error' }),

@@ -407,6 +407,15 @@ import type {
   ToolApprovalActionRequest,
 } from '@/lib/api/generated/openapi-types'
 
+// clearAllSessions' response is an inline (non-named) operation schema in
+// openapi.yaml — there is no components["schemas"]["ClearAllSessionsResponse"]
+// to import by name, so the type is derived directly off the generated
+// `operations` map (still 100% generated, per hard-constraint #8; nothing
+// here is hand-authored).
+import type { operations } from '@/lib/api/generated/openapi-types'
+export type ClearAllSessionsResponse =
+  operations['clearAllSessions']['responses']['200']['content']['application/json']
+
 export type {
   LoginResponse,
   ProbeProviderResponse,
@@ -677,11 +686,13 @@ async function request<T>(path: string, init?: RequestInit, schema?: ZodType<T>)
   // res.json() ("Unexpected end of JSON input"), making a successful mutation
   // appear to fail. Detect the DEFINITIVE empty-body signals and resolve with
   // `undefined` — the correct value for the Promise<void> callers (deleteTask,
-  // deleteSkill, deleteMcpServer, deleteCredential, deleteSchedule,
-  // clearAllSessions, …). We deliberately do NOT key off Content-Type here: a
-  // non-JSON body with actual content (e.g. an HTML error page served with a
-  // misconfigured 200) is a different failure that must still flow to the
-  // schema/JSON-parse path below so it surfaces as an ApiSchemaError, not a
+  // deleteSkill, deleteMcpServer, deleteCredential, deleteSchedule, …).
+  // clearAllSessions is NOT one of these — it returns HTTP 200 with a JSON
+  // body, handled by the parse path below. We deliberately do NOT key off
+  // Content-Type here: a non-JSON body with actual content (e.g. an HTML
+  // error page served with a misconfigured 200) is a different failure
+  // that must still flow to the schema/JSON-parse path below so it
+  // surfaces as an ApiSchemaError, not a
   // silent success.
   const contentLength = res.headers.get('Content-Length')
   if (res.status === 204 || res.status === 205 || contentLength === '0') {
@@ -2270,9 +2281,13 @@ export function restoreBackup(filename: string): Promise<void> {
   return request<void>('/restore', { method: 'POST', body: JSON.stringify({ filename }) })
 }
 
-export function clearAllSessions(): Promise<void> {
-  // no-schema: void response; DELETE returns 204 No Content.
-  return request<void>('/sessions/all', { method: 'DELETE' })
+export function clearAllSessions(): Promise<ClearAllSessionsResponse> {
+  // no-schema: DELETE returns HTTP 200 with a JSON body { status, count,
+  // warnings? } (not 204 No Content — see contracts/openapi.yaml
+  // clearAllSessions, ~L3608-3647). `warnings` carries non-fatal per-agent
+  // removal failures (pkg/session/unified.go's ClearAll() aggregates them via
+  // errors.Join); callers must inspect it rather than assuming full success.
+  return request<ClearAllSessionsResponse>('/sessions/all', { method: 'DELETE' })
 }
 
 export async function renameSession(id: string, title: string): Promise<Session> {

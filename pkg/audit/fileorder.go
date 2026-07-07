@@ -49,7 +49,7 @@ import (
 )
 
 // sortAuditFilesChronologically sorts full file paths in place, oldest
-// first. See the package doc comment above for the three-tier ordering
+// first. See the file header comment above for the three-tier ordering
 // signal (first-entry timestamp, then ModTime, then filename) and why
 // filename-only or ModTime-only ordering are both unsafe once rotations
 // happen in quick succession or more than once within the same UTC day.

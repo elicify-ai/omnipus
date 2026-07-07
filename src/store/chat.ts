@@ -607,8 +607,9 @@ export const useChatStore = create<ChatStore>((set, get) => {
    * tick — which silently dropped every message after the first because the
    * very first call flips `isStreaming` synchronously and every subsequent
    * call in that same loop hit the `isStreaming` guard in `sendMessage` (that
-   * guard shows a toast and returns WITHOUT re-enqueuing, unlike the
-   * disconnected-WS branch three lines below it).
+   * guard shows a connection-error banner and returns WITHOUT re-enqueuing,
+   * unlike the disconnected-WS branch checked immediately after the
+   * isStreaming guard in sendMessage).
    *
    * Reads `isStreaming` fresh via `get()` rather than trusting a closed-over
    * value, since callers invoke this synchronously from inside a `set()`
@@ -1826,6 +1827,13 @@ export const useChatStore = create<ChatStore>((set, get) => {
                     lastUserMessageAt: activeBucket.lastUserMessageAt,
                   })
                 }
+              } else {
+                // Defensive (boundary case, not an observed failure): no active
+                // bucket to force-clear here — e.g. no active session at all, or
+                // its bucket doesn't exist yet. isStreaming may already be false
+                // via other means, but drain anyway so a message queued behind
+                // this unknown-sid done can't get permanently stranded.
+                maybeDrainNext()
               }
               break
             }
@@ -1909,6 +1917,14 @@ export const useChatStore = create<ChatStore>((set, get) => {
             })
             // The turn that just completed may be one we sent from the
             // offline-queue drain — send the next queued message, if any.
+            maybeDrainNext()
+          } else {
+            // Defensive (boundary case, not an observed failure): a 'done'
+            // frame with no session_id at all (a protocol-violating/malformed
+            // frame) skips the whole block above, including the
+            // maybeDrainNext() call inside it. isStreaming may already be
+            // false via other means, but drain anyway so a message queued
+            // behind this malformed done can't get permanently stranded.
             maybeDrainNext()
           }
           break
