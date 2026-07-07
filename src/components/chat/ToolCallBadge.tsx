@@ -1,22 +1,12 @@
 import { useState } from 'react'
-import {
-  ArrowsClockwise,
-  CheckCircle,
-  XCircle,
-  CaretDown,
-  CaretUp,
-  Terminal,
-  Globe,
-  FileText,
-  Wrench,
-  Prohibit,
-} from '@phosphor-icons/react'
+import { CaretDown, CaretUp, Terminal, Globe, FileText, Wrench } from '@phosphor-icons/react'
 import type { ToolCall } from '@/lib/api'
 import type { MarshalErrorResult } from '@/lib/ws'
 import { cn } from '@/lib/utils'
 import { humanizeToolName } from '@/lib/humanizeToolName'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { shouldRenderToolCall } from '@/lib/toolVisibility'
+import { getToolBadgeStatusConfig } from '@/lib/toolStatusConfig'
 
 interface ToolCallBadgeProps {
   toolCall: ToolCall & { call_id: string }
@@ -44,12 +34,6 @@ function getToolIcon(tool: string) {
   if (tool === 'web_search' || tool === 'browser.search') return Globe
   if (tool.startsWith('file.') || tool.startsWith('fs.')) return FileText
   return Wrench
-}
-
-function formatDuration(ms?: number): string {
-  if (!ms) return ''
-  if (ms < 1000) return `${ms}ms`
-  return `${(ms / 1000).toFixed(1)}s`
 }
 
 export function ToolCallBadge({ toolCall }: ToolCallBadgeProps) {
@@ -80,30 +64,7 @@ export function ToolCallBadge({ toolCall }: ToolCallBadgeProps) {
 
   const Icon = getToolIcon(toolCall.tool)
 
-  const statusConfig = {
-    running: {
-      icon: <ArrowsClockwise size={13} className="animate-spin text-[var(--color-accent)]" />,
-      label: 'Running...',
-      border: 'border-[var(--color-border)]',
-    },
-    success: {
-      icon: <CheckCircle size={13} className="text-[var(--color-success)]" weight="fill" />,
-      label: toolCall.duration_ms ? formatDuration(toolCall.duration_ms) : 'Done',
-      border: 'border-[var(--color-success)]/20',
-    },
-    error: {
-      icon: <XCircle size={13} className="text-[var(--color-error)]" weight="fill" />,
-      label: 'Failed',
-      border: 'border-[var(--color-error)]/20',
-    },
-    cancelled: {
-      icon: <Prohibit size={13} className="text-[var(--color-cancelled)]" weight="fill" />,
-      label: 'Cancelled',
-      border: 'border-[var(--color-cancelled)]/20',
-    },
-  }
-
-  const config = statusConfig[toolCall.status]
+  const config = getToolBadgeStatusConfig(toolCall.status, { durationMs: toolCall.duration_ms })
 
   return (
     <div

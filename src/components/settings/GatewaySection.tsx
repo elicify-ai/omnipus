@@ -26,7 +26,7 @@ import { useUiStore } from '@/store/ui'
 import { useAutoSave } from '@/hooks/useAutoSave'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
 import { RiskySettingControl } from '@/components/shared/RiskySettingControl'
-import { usePendingRestart, PENDING_RESTART_QUERY_KEY } from '@/store/restart'
+import { usePendingRestart, PENDING_RESTART_QUERY_KEY } from '@/hooks/restart'
 import { GatewayRestartModal } from './GatewayRestartModal'
 import { GodModeControl, GodModeActiveBanner } from './GodModeControl'
 

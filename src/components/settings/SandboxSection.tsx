@@ -9,12 +9,9 @@ import {
   CaretUp,
   XCircle,
   Cpu,
-  Trash,
-  Plus,
   Warning,
 } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import {
   Dialog,
   DialogContent,
@@ -34,20 +31,12 @@ import { useUiStore } from '@/store/ui'
 import { SaveStatus, useSaveStatus } from './SaveStatus'
 import { ShellDenyPatternsEditor } from '@/components/agents/ShellDenyPatternsEditor'
 import { useReAuthGate, isReAuthCancelled } from './useReAuthGate'
+import { AllowedPathsEditor } from './AllowedPathsEditor'
+import { SsrfEditor, SSRF_PRESETS } from './SsrfEditor'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const ABI4_BANNER_SESSION_KEY = 'omnipus:abi4-banner-dismissed'
-
-// SSRF preset definitions
-const SSRF_PRESETS = [
-  { label: 'Block all', list: [] as string[] },
-  { label: 'Allow loopback only', list: ['127.0.0.1', '::1'] },
-  {
-    label: 'Allow RFC1918 + loopback',
-    list: ['127.0.0.1', '::1', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', 'fc00::/7'],
-  },
-] as const
 
 // SSRF entry validation — hostname/IP/CIDR check matching server-side rules.
 function isValidSsrfEntry(entry: string): boolean {
@@ -115,36 +104,6 @@ function CapBadge({ children }: { children: React.ReactNode }) {
   return (
     <span className="inline-block rounded px-1.5 py-0.5 text-[10px] font-mono border border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-secondary)]">
       {children}
-    </span>
-  )
-}
-
-// Read-only badge with tooltip for allowed_paths rows
-function ReadOnlyBadge() {
-  const [tip, setTip] = useState(false)
-  return (
-    <span className="relative inline-block">
-      <button
-        type="button"
-        className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-mono border border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)] cursor-default"
-        onMouseEnter={() => setTip(true)}
-        onMouseLeave={() => setTip(false)}
-        onFocus={() => setTip(true)}
-        onBlur={() => setTip(false)}
-        tabIndex={0}
-        aria-describedby={tip ? 'ro-tip' : undefined}
-      >
-        read-only
-      </button>
-      {tip && (
-        <span
-          id="ro-tip"
-          role="tooltip"
-          className="absolute bottom-full left-0 mb-1 z-50 w-64 rounded border border-[var(--color-border)] bg-[var(--color-surface-1)] px-2 py-1.5 text-[10px] text-[var(--color-muted)] shadow-lg pointer-events-none"
-        >
-          AllowedPaths entries grant read-only access. Write access is never available via this editor.
-        </span>
-      )}
     </span>
   )
 }
@@ -251,224 +210,6 @@ function Abi4Banner({
       >
         Dismiss for session
       </button>
-    </div>
-  )
-}
-
-// ── Allowed Paths Editor ──────────────────────────────────────────────────────
-
-interface AllowedPathsEditorProps {
-  paths: string[]
-  rowErrors: Record<number, string>
-  restartedRows: Set<number>
-  onDelete: (index: number) => void
-  newPath: string
-  onNewPathChange: (v: string) => void
-  onAdd: () => void
-  addError: string | null
-}
-
-function AllowedPathsEditor({
-  paths,
-  rowErrors,
-  restartedRows,
-  onDelete,
-  newPath,
-  onNewPathChange,
-  onAdd,
-  addError,
-}: AllowedPathsEditorProps) {
-  return (
-    <div className="space-y-2">
-      <p className="text-xs font-semibold text-[var(--color-secondary)]">
-        Filesystem paths the sandbox may read
-      </p>
-
-      {paths.length === 0 && (
-        <p className="text-xs text-[var(--color-muted)] italic">No allowed paths configured.</p>
-      )}
-
-      <div className="space-y-1">
-        {paths.map((p, i) => (
-          <div key={i} className="flex flex-col gap-0.5">
-            <div className="flex items-center gap-2 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1.5">
-              <span className="flex-1 text-xs font-mono text-[var(--color-secondary)] break-all">
-                {p}
-              </span>
-              <ReadOnlyBadge />
-              {restartedRows.has(i) && (
-                <span className="inline-block rounded px-1.5 py-0.5 text-[10px] border border-yellow-500/40 bg-yellow-500/10 text-yellow-400">
-                  restart required
-                </span>
-              )}
-              <button
-                type="button"
-                aria-label={`Delete path ${p}`}
-                className="text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)] rounded"
-                onClick={() => onDelete(i)}
-              >
-                <Trash size={12} />
-              </button>
-            </div>
-            {rowErrors[i] && (
-              <p className="text-[10px] text-[var(--color-error)] pl-2">{rowErrors[i]}</p>
-            )}
-          </div>
-        ))}
-      </div>
-
-      <div className="space-y-1">
-        <div className="flex items-center gap-2">
-          <Input
-            value={newPath}
-            onChange={(e) => onNewPathChange(e.target.value)}
-            placeholder="/var/data/shared"
-            className="h-7 text-xs font-mono flex-1"
-            aria-label="New allowed path"
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') { e.preventDefault(); onAdd() }
-            }}
-          />
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            className="h-7 px-2 gap-1 text-xs shrink-0"
-            onClick={onAdd}
-            aria-label="Add path"
-          >
-            <Plus size={11} />
-            Add
-          </Button>
-        </div>
-        {addError && (
-          <p className="text-[10px] text-[var(--color-error)]">{addError}</p>
-        )}
-      </div>
-    </div>
-  )
-}
-
-// ── SSRF Editor ───────────────────────────────────────────────────────────────
-
-interface SsrfEditorProps {
-  list: string[]
-  activePreset: number | null
-  advancedOpen: boolean
-  onAdvancedToggle: () => void
-  onPresetClick: (idx: number) => void
-  advancedErrors: Record<number, string>
-  onDeleteAdvanced: (idx: number) => void
-  newSsrfEntry: string
-  onNewSsrfEntryChange: (v: string) => void
-  onAddSsrfEntry: () => void
-  ssrfAddError: string | null
-}
-
-function SsrfEditor({
-  list,
-  activePreset,
-  advancedOpen,
-  onAdvancedToggle,
-  onPresetClick,
-  advancedErrors,
-  onDeleteAdvanced,
-  newSsrfEntry,
-  onNewSsrfEntryChange,
-  onAddSsrfEntry,
-  ssrfAddError,
-}: SsrfEditorProps) {
-  return (
-    <div className="space-y-2 border-t border-[var(--color-border)] pt-3">
-      <p className="text-xs font-semibold text-[var(--color-secondary)]">
-        SSRF internal-network policy
-      </p>
-
-      <div className="flex flex-wrap gap-2">
-        {SSRF_PRESETS.map((preset, idx) => (
-          <button
-            key={preset.label}
-            type="button"
-            onClick={() => onPresetClick(idx)}
-            className={[
-              'rounded border px-3 py-1 text-xs transition-colors focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)] cursor-pointer',
-              activePreset === idx
-                ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/10 text-[var(--color-accent)]'
-                : 'border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:border-[var(--color-accent)]/50',
-            ].join(' ')}
-            aria-pressed={activePreset === idx}
-          >
-            {preset.label}
-          </button>
-        ))}
-      </div>
-
-      <button
-        type="button"
-        onClick={onAdvancedToggle}
-        className="flex items-center gap-1 text-[10px] text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors focus:outline-none"
-        aria-expanded={advancedOpen}
-      >
-        {advancedOpen ? <CaretUp size={10} /> : <CaretDown size={10} />}
-        Advanced (custom list)
-      </button>
-
-      {advancedOpen && (
-        <div className="space-y-1 pl-3 border-l border-[var(--color-border)]">
-          {list.length === 0 && (
-            <p className="text-xs text-[var(--color-muted)] italic">Empty — all internal traffic blocked.</p>
-          )}
-          {list.map((entry, i) => (
-            <div key={i} className="flex flex-col gap-0.5">
-              <div className="flex items-center gap-2 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1">
-                <span className="flex-1 text-xs font-mono text-[var(--color-secondary)] break-all">
-                  {entry}
-                </span>
-                <button
-                  type="button"
-                  aria-label={`Delete SSRF entry ${entry}`}
-                  className="text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)] rounded"
-                  onClick={() => onDeleteAdvanced(i)}
-                >
-                  <Trash size={12} />
-                </button>
-              </div>
-              {advancedErrors[i] && (
-                <p className="text-[10px] text-[var(--color-error)] pl-2">{advancedErrors[i]}</p>
-              )}
-            </div>
-          ))}
-
-          <div className="space-y-1 pt-1">
-            <div className="flex items-center gap-2">
-              <Input
-                value={newSsrfEntry}
-                onChange={(e) => onNewSsrfEntryChange(e.target.value)}
-                placeholder="10.0.0.0/8 or internal.corp"
-                className="h-7 text-xs font-mono flex-1"
-                aria-label="New SSRF allow entry"
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') { e.preventDefault(); onAddSsrfEntry() }
-                }}
-              />
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                className="h-7 px-2 gap-1 text-xs shrink-0"
-                onClick={onAddSsrfEntry}
-                aria-label="Add SSRF entry"
-              >
-                <Plus size={11} />
-                Add
-              </Button>
-            </div>
-            {ssrfAddError && (
-              <p className="text-[10px] text-[var(--color-error)]">{ssrfAddError}</p>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   )
 }

@@ -17,7 +17,7 @@ import { fetchSkillTrust, updateSkillTrust, getErrorMessage } from '@/lib/api'
 import type { SkillTrustLevel } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { SaveStatus, useSaveStatus } from './SaveStatus'
-import { PENDING_RESTART_QUERY_KEY } from '@/store/restart'
+import { PENDING_RESTART_QUERY_KEY } from '@/hooks/restart'
 
 // ── Level metadata ────────────────────────────────────────────────────────────
 

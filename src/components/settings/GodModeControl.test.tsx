@@ -28,9 +28,9 @@ vi.mock('@/store/ui', () => ({
 }))
 
 // GatewayRestartModal (rendered by GodModeControl) reads the pending-restart
-// store; mock it so the nested modal doesn't fire a real network query.
+// hook; mock it so the nested modal doesn't fire a real network query.
 const mockRefetchPending = vi.fn().mockResolvedValue(undefined)
-vi.mock('@/store/restart', () => ({
+vi.mock('@/hooks/restart', () => ({
   usePendingRestart: () => ({ refetch: mockRefetchPending }),
 }))
 

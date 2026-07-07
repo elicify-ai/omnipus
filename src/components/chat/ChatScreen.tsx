@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { generateId } from '@/lib/constants'
 import { useQuery } from '@tanstack/react-query'
 import {
   ThreadPrimitive,
@@ -62,17 +61,9 @@ import { AttachmentCard, AttachmentRemoveX, useFilePreview } from './AttachmentC
 import { cn } from '@/lib/utils'
 import { HistoricalMessageMarkdown } from './historical-markdown'
 import { ChatImage } from './ChatImage'
-
-// ── Slash/skill palette item shape ───────────────────────────────────────────
-
-interface SlashItem {
-  key: string
-  label: string
-  description: string
-  section: 'commands' | 'skills'
-  argumentHint?: string
-  onSelect: () => void
-}
+import { useSlashMenu } from '@/hooks/useSlashMenu'
+import { useFileUpload } from '@/hooks/useFileUpload'
+import { useCancelState } from '@/hooks/useCancelState'
 
 // ── Skill-aware message content renderer (R2/F1/F7/F9) ───────────────────────
 
@@ -1068,8 +1059,6 @@ function composerPlaceholder(
   return `Message ${agentName}…`
 }
 
-const HARMFUL_EXTENSIONS = ['.exe', '.bat', '.cmd', '.sh', '.ps1', '.dll', '.sys', '.msi', '.scr', '.com']
-
 /**
  * Renders one pending composer attachment as a ChatGPT-style card — an image
  * preview (from the local File) or a colour-coded, type-specific file card —
@@ -1120,47 +1109,11 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   const appendMessage = useChatStore((s) => s.appendMessage)
   const activeAgentId = useSessionStore((s) => s.activeAgentId)
   const startNewSession = useSessionStore((s) => s.startNewSession)
-  const addToast = useUiStore((s) => s.addToast)
   const composerRuntime = useComposerRuntime()
 
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
   const activeAgentName = agents.find((a) => a.id === activeAgentId)?.name ?? 'Omnipus'
 
-  const [inputValue, setInputValue] = useState('')
-  const [slashOpen, setSlashOpen] = useState(false)
-  const [slashHighlight, setSlashHighlight] = useState(0)
-  const [isDragging, setIsDragging] = useState(false)
-  // Ghost text after skill selection — shown when value is exactly `/<skill-id> `
-  // F3-frontend: also store the skill's argument_hint so the ghost can show it
-  // instead of the generic `<message>` when the skill declares one.
-  const [ghostSkillId, setGhostSkillId] = useState<string | null>(null)
-  const [ghostArgumentHint, setGhostArgumentHint] = useState<string | null>(null)
-  // Harmful-file upload confirmation (replaces the two native window.confirm calls).
-  // `harmfulConfirm` holds the files awaiting confirmation plus the flagged names;
-  // it is the open/closed signal — the dialog is closed when `harmfulConfirm` is
-  // null and open otherwise. `harmfulStage` is typed 1 | 2 (never null) and only
-  // advances 1 → 2 (double-confirm) before commit; it is reset to 1 each time a
-  // new harmful set is queued (see handleFilesSelected).
-  const [harmfulConfirm, setHarmfulConfirm] = useState<{
-    files: File[]
-    harmfulNames: string[]
-  } | null>(null)
-  const [harmfulStage, setHarmfulStage] = useState<1 | 2>(1)
-  // EC-15 / FR-21: stop button label progression:
-  //   'stop'     — idle, button shows Stop icon
-  //   'stopping' — user clicked, button shows "Stopping..." (synchronous, no network RTT)
-  const [stopLabel, setStopLabel] = useState<'stop' | 'stopping'>('stop')
-  // T25: track when stopLabel last transitioned to 'stopping' so we can enforce a
-  // minimum display duration. Without this, a very fast LLM response causes the done
-  // frame to arrive within milliseconds of the click, immediately triggering the
-  // useEffect([isStreaming]) reset and making "Stopping..." vanish before any
-  // assertion (or user eye) can catch it.
-  const stoppingStartedAt = useRef<number>(0)
-  // T23: track when streaming last started. Used by the global Escape handler to
-  // decide whether Escape should still trigger a cancel in the race window where
-  // isStreaming just went false (done frame arrived) but the user pressed Escape
-  // intending to cancel a turn they just observed streaming.
-  const streamingStartedAt = useRef<number>(0)
   // Tracks whether we already warned for the current large-input threshold crossing,
   // so we only fire one toast per paste/input event that exceeds 1MB.
   const hasWarnedLargeInput = useRef(false)
@@ -1173,291 +1126,26 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   // easy to miss when the textarea looks fully interactive.
   const inputEnabled = !agentRemoved && !isReplaying && !(reconnectPhase === 'gave_up') && isConnected
 
-  // US-4 / FR-008: fetch the web-surface command list from the single source of truth.
-  // On error the palette shows nothing — no crash (per integration boundary spec).
-  const { data: commands = [] } = useQuery<SlashCommand[]>({
-    queryKey: ['commands', 'web'],
-    queryFn: () => fetchCommands('web'),
-    staleTime: 60_000,
-    enabled: inputEnabled,
+  // The 3 previously-tangled composer concerns (slash/skill palette, file
+  // upload incl. harmful-file confirm, stop/cancel state machine) each own
+  // their own state via a dedicated hook — see src/hooks/useSlashMenu.ts,
+  // useFileUpload.ts, useCancelState.ts. cancelState is instantiated first
+  // because the slash menu's `/cancel` command delegates to it.
+  const cancelState = useCancelState(isStreaming, cancelStream)
+  const fileUpload = useFileUpload(composerRuntime)
+  const slashMenu = useSlashMenu({
+    isStreaming,
+    isReplaying,
+    inputEnabled,
+    composerRuntime,
+    appendMessage,
+    startNewSession,
+    cancelIfStreaming: cancelState.cancelIfStreaming,
   })
 
-  // Skills query: always enabled when input is enabled (not gated on skill-arg mode).
-  // staleTime of 60s matches the commands query — skills change rarely.
-  const { data: skills = [] } = useQuery<Skill[]>({
-    queryKey: ['skills'],
-    // Wrapped (not a bare `fetchSkills` reference) to match the commands query's
-    // `() => fetchCommands('web')` pattern: the binding is read only when the
-    // queryFn is invoked, so sibling tests whose useQuery mock ignores queryFn
-    // don't need to add fetchSkills to their @/lib/api mock.
-    queryFn: () => fetchSkills(),
-    staleTime: 60_000,
-    enabled: inputEnabled,
-  })
-
-  // FR-005: partitioned slash menu — Commands + Skills sections
-  // Triggered when input starts with "/" (no old skill-arg gate)
-  const menuFilter = (() => {
-    if (!inputValue.startsWith('/') || isReplaying || !inputEnabled) return null
-    return inputValue.slice(1).toLowerCase() // the text after "/"
-  })()
-
-  const isSkillsFilter = menuFilter === 'skills'
-
-  // Commands section — hidden when typing "/skills" (D9)
-  const visibleCommandItems: SlashItem[] = (() => {
-    if (menuFilter === null || isSkillsFilter) return []
-    const all = commands.filter((cmd) => {
-      const cmdName = cmd.label.slice(1).toLowerCase() // strip leading /
-      return menuFilter === '' || cmdName.startsWith(menuFilter)
-    })
-    const filtered = isStreaming ? all.filter((cmd) => cmd.available_while_streaming === true) : all
-    return filtered.map((cmd) => ({
-      key: cmd.label,
-      label: cmd.label,
-      description: cmd.description,
-      section: 'commands' as const,
-      onSelect: () => executeSlashCommand(cmd.label),
-    }))
-  })()
-
-  // Skills section — always shown when "/" typed, unless empty
-  const visibleSkillMenuItems: SlashItem[] = (() => {
-    if (menuFilter === null) return []
-    const lower = isSkillsFilter ? '' : menuFilter
-    const filtered = skills.filter((s) =>
-      lower === '' ||
-      s.id.toLowerCase().startsWith(lower) ||
-      s.name.toLowerCase().startsWith(lower),
-    )
-    return filtered.slice(0, 8).map((s) => {
-      // F3-frontend/FR-014/R3: the skill's argument_hint drives the menu help text
-      // and the inline ghost (Skill.argument_hint is on the generated wire type).
-      const argHint: string | undefined = s.argument_hint
-      return {
-        key: s.id,
-        label: `/${s.id}`,
-        description: s.name + (s.description ? ` — ${s.description}` : ''),
-        section: 'skills' as const,
-        argumentHint: argHint,
-        onSelect: () => completeSkillName(s.id, argHint),
-      }
-    })
-  })()
-
-  // Unified list for keyboard nav — commands first, then skills
-  const slashItems: SlashItem[] = [...visibleCommandItems, ...visibleSkillMenuItems]
-  const shouldShowSlash = slashItems.length > 0 && !isReplaying && inputEnabled
-
-  // Reset highlight to 0 when the visible list changes (length or content) so
-  // the cursor never points out-of-bounds as the filter narrows.
-  const slashItemKeys = slashItems.map((i) => i.key).join(',')
-  useEffect(() => { setSlashHighlight(0) }, [slashItemKeys])
-
-  // T23: record when a new stream starts so the global Escape handler can detect
-  // the race window where the done frame arrived before Escape was pressed.
-  useEffect(() => {
-    if (isStreaming) {
-      streamingStartedAt.current = Date.now()
-    }
-  }, [isStreaming])
-
-  // EC-15: reset the stop label back to 'stop' whenever streaming ends so the
-  // button is fresh for the next turn.
-  // T25: enforce a minimum 1000ms display of "Stopping..." before resetting.
-  // Fast LLM responses can deliver the done frame within milliseconds of the
-  // cancel click, making "Stopping..." invisible to tests and users. We delay
-  // the reset by the remaining portion of the minimum display window.
-  const MIN_STOPPING_DISPLAY_MS = 1000
-  useEffect(() => {
-    if (!isStreaming) {
-      const elapsed = Date.now() - stoppingStartedAt.current
-      const remaining = MIN_STOPPING_DISPLAY_MS - elapsed
-      if (stopLabel === 'stopping' && remaining > 0) {
-        const timer = setTimeout(() => setStopLabel('stop'), remaining)
-        return () => clearTimeout(timer)
-      }
-      setStopLabel('stop')
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isStreaming])
-
-  function closeSlash() {
-    setSlashOpen(false)
-    setSlashHighlight(0)
-  }
-
-  // runClientCommand — shared handler for client-delivery slash commands.
-  // Called both from palette selection (executeSlashCommand) and from the
-  // send-path interception so that typing "/clear"+Enter converges with
-  // selecting /clear from the palette — both run client-side, never reaching
-  // the backend.
-  //
-  // Returns true when the command was handled (caller must NOT send the text),
-  // false when the name is not a known client command (caller should fall
-  // through to inserting as text — Issue 3 fallback).
-  function runClientCommand(name: string): boolean {
-    if (name === 'clear') {
-      // US-4/AC-2: start a new conversation per spec — aligned to the "new
-      // conversation" semantic (startNewSession) rather than just wiping the
-      // local message list.
-      startNewSession()
-      return true
-    }
-
-    if (name === 'help') {
-      // US-4/AC-2: build the help text from the fetched command list.
-      const helpLines = commands
-        .map((c) => `- \`${c.label}\` — ${c.description}`)
-        .join('\n')
-      const helpText = `**Omnipus commands:**\n${helpLines}\n\n**Tips:**\n- Press **Enter** to send, **Shift+Enter** for newline\n- Click tool call headers to expand/collapse details\n- Hover over messages to copy them`
-      appendMessage({
-        id: generateId(),
-        role: 'system',
-        content: helpText,
-        timestamp: new Date().toISOString(),
-        status: 'done',
-      })
-      return true
-    }
-
-    if (name === 'model') {
-      // US-4/AC-2: open the model selector in the chat header (ChatControls).
-      // Setting modelSelectorOpen=true drives the controlled Popover in ModelSelector
-      // without the user having to click it directly.
-      // Per A4: web-only client action; opens the chat model selector, not the
-      // server agent default.
-      useUiStore.getState().setModelSelectorOpen(true)
-      return true
-    }
-
-    if (name === 'agents') {
-      // Open the agent selector in the chat header (ChatControls) via the ui store flag.
-      useUiStore.getState().setAgentSelectorOpen(true)
-      return true
-    }
-
-    if (name === 'skills') {
-      // D9: set input to "/skills" to trigger the skills-only filter in the menu.
-      // The menu handles this: when inputValue === "/skills", isSkillsFilter is true
-      // and only the Skills section shows. Re-open the menu after the clear.
-      composerRuntime.setText('/skills')
-      setInputValue('/skills')
-      setSlashOpen(true)
-      return true
-    }
-
-    if (name === 'cancel') {
-      // FR-3a: /cancel uses the same cancelStream() as the Stop button.
-      // Only morph the button to "Stopping..." if the turn is actively streaming.
-      if (isStreaming) {
-        stoppingStartedAt.current = Date.now()
-        setStopLabel('stopping')
-      }
-      cancelStream()
-      return true
-    }
-
-    // Issue 3 fallback: unknown client command — do NOT silently drop.
-    // Return false so the caller inserts it as text rather than clearing the composer.
-    return false
-  }
-
-  // executeSlashCommand — called when the user selects a palette entry.
-  // `label` is the full label string from the SlashCommand (e.g. "/clear").
-  // FR-009: dispatch by `delivery`:
-  //   - 'client' → run the local handler via runClientCommand; do NOT send.
-  //   - 'agent'  → insert the label as text into the composer so the user can
-  //                complete it and forward it via the message frame on send.
-  function executeSlashCommand(label: string) {
-    closeSlash()
-
-    // Look up the full command definition by label to get the name + delivery.
-    const def = commands.find((c) => c.label === label)
-
-    if (!def) {
-      // Unknown label (shouldn't happen with API-driven palette, but be safe).
-      return
-    }
-
-    if (def.delivery === 'agent') {
-      // Insert "/name " as text so the user can complete it and send.
-      composerRuntime.setText(`${def.label} `)
-      setInputValue(`${def.label} `)
-      return
-    }
-
-    // delivery === 'client': clear the composer then run the handler.
-    composerRuntime.setText('')
-    setInputValue('')
-
-    const handled = runClientCommand(def.name)
-    if (!handled) {
-      // Issue 3: unknown client command — insert text so it isn't silently lost.
-      composerRuntime.setText(`${def.label} `)
-      setInputValue(`${def.label} `)
-    }
-  }
-
-  // completeSkillName — called when the user selects a skill from the
-  // partitioned skill menu.  Sets the input to `/<id> ` and shows ghost text.
-  // Accepts the skill's argument_hint so the ghost shows it instead of the
-  // generic `<message>` when the skill declares one (FR-006/R3).
-  function completeSkillName(id: string, argumentHint?: string) {
-    const text = `/${id} `
-    composerRuntime.setText(text)
-    setInputValue(text)
-    setGhostSkillId(id)
-    setGhostArgumentHint(argumentHint ?? null)
-    closeSlash()
-  }
-
-  // Send-path interception: before AssistantUI's onNew fires, check if the
-  // trimmed input is exactly a client-delivery slash command (e.g. "/clear").
-  // If it is, run it locally and prevent the message from reaching the backend.
-  // This makes typing "/clear"+Enter behave identically to palette selection.
-  //
-  // Returns true if the text was intercepted (caller must stop the send),
-  // false if the message should proceed normally.
-  function interceptClientCommand(text: string): boolean {
-    const trimmed = text.trim()
-    if (!trimmed.startsWith('/')) return false
-    const def = commands.find((c) => c.delivery === 'client' && c.label === trimmed)
-    if (!def) return false
-    composerRuntime.setText('')
-    setInputValue('')
-    runClientCommand(def.name)
-    return true
-  }
-
-  // commitFiles hands each file to the native composer attachment system; the
-  // AttachmentAdapter uploads on send and threads the media:// ref through
-  // onNew. Used by drag-drop and image paste.
-  function commitFiles(files: File[]) {
-    for (const file of files) {
-      composerRuntime.addAttachment(file).catch((err: unknown) => {
-        addToast({
-          message: err instanceof Error ? err.message : `Could not attach "${file.name}"`,
-          variant: 'error',
-        })
-      })
-    }
-  }
-
-  function handleFilesSelected(files: File[]) {
-    const harmful = files.filter((f) =>
-      HARMFUL_EXTENSIONS.some((ext) => f.name.toLowerCase().endsWith(ext))
-    )
-    if (harmful.length > 0) {
-      // Defer to the AlertDialog double-confirm flow; commit happens only when
-      // the user clicks through both stages (preserves the original semantics).
-      setHarmfulStage(1)
-      setHarmfulConfirm({ files, harmfulNames: harmful.map((f) => f.name) })
-      return
-    }
-    commitFiles(files)
-  }
-
+  // Top-level keydown orchestration — precedence matches the original
+  // composer exactly: cancel-Escape first (US-1.4/FR-23), then
+  // Enter-blocked-while-streaming, then slash-menu navigation.
   function handleKeyDown(e: React.KeyboardEvent) {
     // US-1.4 / FR-23: Escape cancels a turn.
     // Only morph the button to "Stopping..." if the turn is actively streaming
@@ -1465,110 +1153,30 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
     // Escape on a completed turn still marks the message as interrupted via
     // cancelStream() → markLastMessageInterrupted(), but there is no streaming
     // button to morph — setting 'stopping' when isStreaming is false would leave
-    // the button stuck because the useEffect([isStreaming]) does not fire again.
-    if (e.key === 'Escape' && (isStreaming || stopLabel === 'stopping')) {
+    // the button stuck because the reset effect does not fire again.
+    if (e.key === 'Escape' && (isStreaming || cancelState.stopLabel === 'stopping')) {
       e.preventDefault()
-      if (isStreaming) {
-        stoppingStartedAt.current = Date.now()
-        setStopLabel('stopping')
-      }
-      cancelStream()
+      cancelState.cancelIfStreaming()
       return
     }
 
     // Block Enter submission while streaming — slash menu Enter still works below.
-    if (e.key === 'Enter' && isStreaming && !slashOpen) {
+    if (e.key === 'Enter' && isStreaming && !slashMenu.slashOpen) {
       e.preventDefault()
       return
     }
 
-    if (!shouldShowSlash) return
-
-    if (e.key === 'ArrowDown') {
-      e.preventDefault()
-      setSlashHighlight((h) => (h + 1) % slashItems.length)
-      setSlashOpen(true)
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault()
-      setSlashHighlight((h) => (h - 1 + slashItems.length) % slashItems.length)
-      setSlashOpen(true)
-    } else if (e.key === 'Enter' && slashOpen) {
-      e.preventDefault()
-      slashItems[slashHighlight]?.onSelect()
-    } else if (e.key === 'Escape') {
-      closeSlash()
-    }
+    slashMenu.handleKeyDown(e)
   }
-
-  // US-1.4 / FR-23: Global Escape key handler — cancels a turn.
-  // Fires even when the input does not have focus (e.g. user
-  // clicked somewhere else on the page). The input-level handler above covers
-  // the focused-input case; this effect covers the unfocused case (T23).
-  //
-  // T23 FIX: Two problems existed with the previous implementation:
-  //
-  //   AssistantUI's cancelOnEscape: ComposerPrimitive.Input has cancelOnEscape
-  //   defaulting to true, which consumed the Escape keydown before our React onKeyDown
-  //   handler saw it. Fixed by passing cancelOnEscape={false} to that component.
-  //
-  //   Problem 2 — Guard vs. race window: The Playwright test calls page.keyboard.press
-  //   ('Escape') immediately after triggerLongStreamingTurn() returns (stop button first
-  //   visible). A fast LLM (Gemini 2.5 Flash) can complete the turn and deliver the done
-  //   frame in <1s, so by the time Escape fires: isStreaming=false, stopLabel='stop' (the
-  //   useEffect reset it), and the old guard `if (!isStreaming && stopLabel !== 'stopping')`
-  //   causes a silent early-return — cancellation never happens and (interrupted) never
-  //   appears.
-  //
-  //   Fix: use a read-through to the Zustand store to check if the last assistant message
-  //   is in a cancellable state: either actively streaming (isStreaming:true on the message)
-  //   or very recently completed (status:'done' but no prior cancel). This is a snapshot
-  //   read — it bypasses the React closure's stale isStreaming value entirely.
-  //
-  // cancelStream() internally gates the WS send on isStreaming, so calling it when
-  // the turn is already done is safe: it just calls markLastMessageInterrupted() to
-  // set the interrupted label on the last message, which is correct and desired here.
-  useEffect(() => {
-    // T23 RACE-WINDOW constant: allow Escape to cancel a turn that completed within
-    // this many ms of the stream starting. When a fast LLM (Gemini 2.5 Flash) delivers
-    // a full response in <2s, the done frame can arrive and clear isStreaming before
-    // the test (or user) presses Escape. We treat Escape as a cancel intent if the
-    // stream started within the last CANCEL_RACE_WINDOW_MS ms.
-    const CANCEL_RACE_WINDOW_MS = 8_000
-    function handleGlobalEscape(e: KeyboardEvent) {
-      if (e.key !== 'Escape') return
-      // Read live state from the store — bypasses the stale React closure value for isStreaming.
-      const liveState = useChatStore.getState()
-      const withinRaceWindow =
-        streamingStartedAt.current > 0 &&
-        Date.now() - streamingStartedAt.current < CANCEL_RACE_WINDOW_MS
-      const shouldCancel = liveState.isStreaming || withinRaceWindow || stopLabel === 'stopping'
-      if (!shouldCancel) return
-      e.preventDefault()
-      if (liveState.isStreaming) {
-        stoppingStartedAt.current = Date.now()
-        setStopLabel('stopping')
-      }
-      cancelStream()
-    }
-    document.addEventListener('keydown', handleGlobalEscape)
-    return () => document.removeEventListener('keydown', handleGlobalEscape)
-  // stopLabel is included so the effect re-registers when the label changes, ensuring
-  // the closure capture of stopLabel is fresh for the 'stopping' guard.
-  }, [stopLabel, cancelStream])
 
   return (
     <div
       className="relative"
-      onDragOver={(e) => { e.preventDefault(); setIsDragging(true) }}
-      onDragLeave={() => setIsDragging(false)}
-      onDrop={(e) => {
-        e.preventDefault()
-        setIsDragging(false)
-        const droppedFiles = Array.from(e.dataTransfer.files)
-        if (droppedFiles.length > 0) handleFilesSelected(droppedFiles)
-      }}
+      onDragOver={fileUpload.onDragOver}
+      onDragLeave={fileUpload.onDragLeave}
+      onDrop={fileUpload.onDrop}
     >
-      {isDragging && (
+      {fileUpload.isDragging && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-[var(--color-primary)]/80 border-2 border-dashed border-[var(--color-accent)] rounded-lg">
           <p className="text-[var(--color-accent)] font-medium">Drop files here</p>
         </div>
@@ -1658,13 +1266,13 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           transition, making the `section` field load-bearing and removing the
           duplicate render blocks + the off-by-one `globalIndex` variable.
           FR-014/R3: skill items show their argument_hint as muted help text. */}
-      {shouldShowSlash && slashOpen && (
+      {slashMenu.shouldShowSlash && slashMenu.slashOpen && (
         <div
           data-testid="slash-menu"
           className="mb-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] overflow-hidden shadow-lg"
         >
-          {slashItems.map((item, globalIndex) => {
-            const prevSection = globalIndex > 0 ? slashItems[globalIndex - 1].section : null
+          {slashMenu.slashItems.map((item, globalIndex) => {
+            const prevSection = globalIndex > 0 ? slashMenu.slashItems[globalIndex - 1].section : null
             const isFirstInSection = item.section !== prevSection
             return (
               <React.Fragment key={item.key}>
@@ -1682,7 +1290,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                   type="button"
                   className={cn(
                     'w-full flex items-baseline gap-3 px-3 py-2 text-left transition-colors',
-                    globalIndex === slashHighlight
+                    globalIndex === slashMenu.slashHighlight
                       ? 'bg-[var(--color-accent)]/10 text-[var(--color-secondary)]'
                       : 'text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-secondary)]',
                   )}
@@ -1690,7 +1298,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                     e.preventDefault()
                     item.onSelect()
                   }}
-                  onMouseEnter={() => setSlashHighlight(globalIndex)}
+                  onMouseEnter={() => slashMenu.onHoverItem(globalIndex)}
                 >
                   <span className="font-mono text-xs text-[var(--color-accent)]">{item.label}</span>
                   <span className="text-[11px]">{item.description}</span>
@@ -1739,8 +1347,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           // slash command (e.g. "/clear", "/help", "/model", "/cancel"), handle it
           // locally and prevent it from reaching the backend. This converges the
           // typed+Enter path with the palette selection path.
-          const currentText = composerRuntime.getState().text ?? inputValue
-          if (interceptClientCommand(currentText)) {
+          if (slashMenu.interceptClientCommand()) {
             e.preventDefault()
           }
         }}
@@ -1770,17 +1377,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           aria-label="Message input"
           onChange={(e) => {
             const val = (e.target as HTMLTextAreaElement).value
-            setInputValue(val)
-            // Clear ghost if value no longer exactly matches `/<ghostSkillId> `
-            if (ghostSkillId && val !== `/${ghostSkillId} `) {
-              setGhostSkillId(null)
-              setGhostArgumentHint(null)
-            }
-            if (val.startsWith('/')) {
-              setSlashOpen(true)
-            } else {
-              closeSlash()
-            }
+            slashMenu.onInputChange(val)
             if (val.length > 1_000_000) {
               if (!hasWarnedLargeInput.current) {
                 hasWarnedLargeInput.current = true
@@ -1794,76 +1391,52 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
             }
           }}
           onKeyDown={handleKeyDown}
-          onBlur={() => {
-            // Delay so mouseDown on slash item fires first
-            setGhostSkillId(null)
-            setGhostArgumentHint(null)
-            setTimeout(closeSlash, 150)
-          }}
-          onPaste={(e) => {
-            const items = Array.from(e.clipboardData?.items ?? [])
-            const imageItems = items.filter((item) => item.type.startsWith('image/'))
-            const imageFiles = imageItems.map((item) => item.getAsFile()).filter(Boolean) as File[]
-            if (imageFiles.length > 0) {
-              e.preventDefault()
-              handleFilesSelected(imageFiles)
-            } else if (imageItems.length > 0) {
-              // Images were in clipboard but couldn't be materialized as files
-              e.preventDefault()
-              addToast({ message: 'Could not paste image — try saving it to a file first', variant: 'error' })
-            }
-          }}
+          onBlur={slashMenu.onInputBlur}
+          onPaste={fileUpload.onPaste}
         />
         {/* Ghost text overlay — shown when value is exactly `/<skillId> ` after skill selection.
             F3-frontend/FR-006/R3: shows the skill's argument_hint when declared, else `<message>`.
-            The hint comes from `ghostArgumentHint` set when the skill was selected from the menu. */}
-        {ghostSkillId && inputValue === `/${ghostSkillId} ` && (
+            The hint comes from the skill selected from the menu. */}
+        {slashMenu.showGhostText && (
           <div
             aria-hidden="true"
             className="pointer-events-none absolute inset-0 px-4 py-2.5 text-sm leading-6 flex items-start"
             data-testid="ghost-text"
           >
-            <span className="invisible whitespace-pre">{`/${ghostSkillId} `}</span>
+            <span className="invisible whitespace-pre">{slashMenu.inputValue}</span>
             <span className="text-[var(--color-muted)] opacity-60">
-              {ghostArgumentHint ?? '<message>'}
+              {slashMenu.ghostText}
             </span>
           </div>
         )}
         </div>
 
-        {isStreaming || stopLabel === 'stopping' ? (
+        {isStreaming || cancelState.stopLabel === 'stopping' ? (
           <button
             type="button"
             data-testid="stop-btn"
             onClick={() => {
-              // EC-15 / FR-21: set label synchronously so the UI updates
-              // within the same React render tick, before the cancel
-              // network round-trip starts (no perceived latency).
-              // Do NOT guard with isStreaming here — cancelStream() handles the
-              // server-send gate internally. Guarding here would silently no-op
-              // when the turn races to completion between render and click,
-              // preventing the (interrupted) label from appearing.
-              // T25: record the timestamp so the minimum-display-time logic in
-              // useEffect([isStreaming]) can delay the 'stop' reset if the done
-              // frame arrives before 1000ms elapses.
-              stoppingStartedAt.current = Date.now()
-              setStopLabel('stopping')
-              cancelStream()
+              // EC-15 / FR-21: cancelUnconditional() sets the label synchronously
+              // so the UI updates within the same React render tick, before the
+              // cancel network round-trip starts (no perceived latency). It does
+              // NOT guard on isStreaming — see useCancelState's doc comment for
+              // why guarding here would silently no-op on the render/click race.
+              cancelState.cancelUnconditional()
             }}
             className={cn(
               'shrink-0 rounded-xl flex items-center justify-center transition-colors',
-              stopLabel === 'stopping'
+              cancelState.stopLabel === 'stopping'
                 ? 'px-3 h-11 gap-1.5 text-xs font-medium bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30'
                 : 'w-11 h-11',
               isStreaming
                 ? 'bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30'
                 : 'bg-[var(--color-surface-3)] text-[var(--color-muted)] cursor-wait',
             )}
-            aria-label={stopLabel === 'stopping' ? 'Stopping...' : 'Stop generation'}
+            aria-label={cancelState.stopLabel === 'stopping' ? 'Stopping...' : 'Stop generation'}
             title="Stop (Escape)"
           >
             <Stop size={15} weight="fill" />
-            {stopLabel === 'stopping' && <span>Stopping...</span>}
+            {cancelState.stopLabel === 'stopping' && <span>Stopping...</span>}
           </button>
         ) : (
           // FR-I-014: also disabled during replay so user cannot send out-of-order.
@@ -1909,19 +1482,19 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           Stage 1 warns and lists the flagged files; stage 2 is the second
           confirmation. Files are only attached after the user confirms stage 2. */}
       <AlertDialog
-        open={harmfulConfirm !== null}
+        open={fileUpload.harmfulConfirm !== null}
         onOpenChange={(open) => {
-          if (!open) setHarmfulConfirm(null)
+          if (!open) fileUpload.dismissHarmfulConfirm()
         }}
       >
         <AlertDialogContent>
-          {harmfulStage === 1 ? (
+          {fileUpload.harmfulStage === 1 ? (
             <>
               <AlertDialogHeader>
                 <AlertDialogTitle>Potentially harmful file(s)</AlertDialogTitle>
                 <AlertDialogDescription>
-                  {harmfulConfirm
-                    ? `${harmfulConfirm.harmfulNames.join(', ')} may be potentially harmful file(s).\n\nAre you sure you want to upload?`
+                  {fileUpload.harmfulConfirm
+                    ? `${fileUpload.harmfulConfirm.harmfulNames.join(', ')} may be potentially harmful file(s).\n\nAre you sure you want to upload?`
                     : ''}
                 </AlertDialogDescription>
               </AlertDialogHeader>
@@ -1929,7 +1502,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                 <AlertDialogCancel>Cancel</AlertDialogCancel>
                 <AlertDialogAction
                   variant="destructive"
-                  onClick={() => setHarmfulStage(2)}
+                  onClick={fileUpload.advanceHarmfulStage}
                 >
                   Continue
                 </AlertDialogAction>
@@ -1940,8 +1513,8 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
               <AlertDialogHeader>
                 <AlertDialogTitle>Confirm upload</AlertDialogTitle>
                 <AlertDialogDescription>
-                  {harmfulConfirm
-                    ? `Please confirm again: Upload ${harmfulConfirm.harmfulNames.length} potentially harmful file(s)?`
+                  {fileUpload.harmfulConfirm
+                    ? `Please confirm again: Upload ${fileUpload.harmfulConfirm.harmfulNames.length} potentially harmful file(s)?`
                     : ''}
                 </AlertDialogDescription>
               </AlertDialogHeader>
@@ -1949,10 +1522,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                 <AlertDialogCancel>Cancel</AlertDialogCancel>
                 <AlertDialogAction
                   variant="destructive"
-                  onClick={() => {
-                    if (harmfulConfirm) commitFiles(harmfulConfirm.files)
-                    setHarmfulConfirm(null)
-                  }}
+                  onClick={fileUpload.confirmHarmfulUpload}
                 >
                   Upload
                 </AlertDialogAction>

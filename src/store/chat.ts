@@ -14,6 +14,7 @@ import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useNotificationsStore } from '@/store/notifications'
 import { useToolApprovalStore } from '@/store/toolApproval'
 import { registerSyncChatForeground } from '@/store/session'
+import { logError } from '@/lib/telemetry'
 
 // Maximum messages kept in the visible ring buffer per session.
 // Older messages are evicted once this limit is exceeded; full transcript is preserved server-side.
@@ -24,6 +25,21 @@ const MAX_TOOL_RESULT_BYTES = 50_000
 
 // Preview size for client-side truncated results (4 KiB).
 const CLIENT_TRUNCATION_PREVIEW_BYTES = 4_096
+
+// Emit a production telemetry record for a WS-frame-reducer diagnostic
+// condition (dropped/unknown/malformed frame, index-miss fallback, dedup
+// skip, etc). Mirrors the src/lib/api.ts `_recordApiSchemaError` / src/lib/ws.ts
+// `_recordDropped` pattern: DEV and test builds already surface these via the
+// adjacent console.warn/console.error call (kept as-is, unchanged), so this
+// only adds a rate-limited structured logError() record in production builds
+// — previously these conditions were console-only, so an operator running a
+// shipped build had no durable signal that a frame was silently dropped or a
+// reducer path fell into a defensive fallback.
+function _recordChatDiagnostic(event: string, fields: Record<string, string | number | boolean | null | undefined>): void {
+  if (!import.meta.env.DEV && import.meta.env.MODE !== 'test') {
+    logError({ event, ...fields })
+  }
+}
 
 export interface MediaAttachment {
   type: 'image' | 'audio' | 'video' | 'file'
@@ -235,6 +251,26 @@ function emptySessionState(): SessionChatState {
 /** Return the ordered message array for a bucket. O(N) — call once per reducer, not per frame. */
 export function getMessages(bucket: Pick<SessionChatState, 'messagesById' | 'messageOrder'>): ChatMessage[] {
   return bucket.messageOrder.map((id) => bucket.messagesById[id]).filter(Boolean)
+}
+
+/**
+ * Backward-scan a bucket's message order for the id of the most recent
+ * assistant message, returning null when none exists. This is the single
+ * shared implementation of a "find last assistant message" scan that used
+ * to be hand-rolled at every WS-frame-handler / cancel / span call site in
+ * this store. Takes the two order/lookup fields directly (rather than a
+ * bucket object) so it accepts a plain SessionChatState's fields as well as
+ * an Immer produce() draft's fields without an assignability question.
+ */
+export function findLastAssistantMessageId(
+  order: readonly string[],
+  messagesById: Record<string, ChatMessage>,
+): string | null {
+  for (let i = order.length - 1; i >= 0; i--) {
+    const id = order[i]
+    if (messagesById[id]?.role === 'assistant') return id
+  }
+  return null
 }
 
 /** Test helper: build ring-buffer fields for a SessionChatState from a plain ChatMessage array. */
@@ -488,6 +524,7 @@ interface ChatStore {
 
 // Module-scoped handle for the 60s auto-clear timer on rate-limit events, keyed per session.
 const rateLimitClearTimers: Record<string, ReturnType<typeof setTimeout>> = {}
+const RATE_LIMIT_CLEAR_MS = 60_000
 
 // Tracks when isReplaying was most recently set to true per session, keyed by session_id.
 const replayingStartedAt: Record<string, number> = {}
@@ -599,6 +636,35 @@ export const useChatStore = create<ChatStore>((set, get) => {
   }
 
   /**
+   * Sets a session's rate-limit event and arms the shared auto-clear timer:
+   * cancels any existing timer for the session, stores the new event, then
+   * after RATE_LIMIT_CLEAR_MS clears it — but only if the bucket's event is
+   * still referentially the one just set (a newer rate_limit event that
+   * replaced it before the timer fired is left alone). Shared by
+   * setRateLimitEvent and the 'rate_limit' WS-frame handler so the
+   * "set + timeout + clear" logic isn't implemented twice.
+   */
+  function armRateLimitClear(sid: string, event: RateLimitEventData): void {
+    if (rateLimitClearTimers[sid] != null) {
+      clearTimeout(rateLimitClearTimers[sid])
+      delete rateLimitClearTimers[sid]
+    }
+    withBucket(sid, () => ({ rateLimitEvent: event }))
+    rateLimitClearTimers[sid] = setTimeout(() => {
+      delete rateLimitClearTimers[sid]
+      set((state) => {
+        const bucket = state.sessionsById[sid]
+        if (!bucket || bucket.rateLimitEvent !== event) return {}
+        const updated: SessionChatState = { ...bucket, rateLimitEvent: null }
+        const sessionsById = { ...state.sessionsById, [sid]: updated }
+        const activeSid = getActiveSid()
+        const fg = (activeSid ? sessionsById[activeSid] : null) ?? EMPTY_BUCKET
+        return { sessionsById, ...bucketToForeground(fg) }
+      })
+    }, RATE_LIMIT_CLEAR_MS)
+  }
+
+  /**
    * BUG FIX (2026-07, offline-queue drain): pop and send the next drained
    * message, but ONLY if no turn is currently in flight. Called every time a
    * turn ends (done/error frames, explicit cancel, the C8 stream-clear sweep,
@@ -681,6 +747,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
       if (!current?.isReplaying) {
         if (sawReplayMessageThisTurn[sid]) {
           console.warn('[chat] setReplaying(false) ignored — isReplaying was already false despite replay_message having been processed. Likely attachToSession race.')
+          _recordChatDiagnostic('chatSetReplayingIgnored', { sessionId: sid })
         }
         return
       }
@@ -737,12 +804,8 @@ export const useChatStore = create<ChatStore>((set, get) => {
       if (!sid) return
       withBucket(sid, (b) => {
         return produce(b, (draft) => {
-          const order = draft.messageOrder
-          let lastIdx = -1
-          for (let i = order.length - 1; i >= 0; i--) {
-            if (draft.messagesById[order[i]]?.role === 'assistant') { lastIdx = i; break }
-          }
-          if (lastIdx === -1) {
+          let msgId = findLastAssistantMessageId(draft.messageOrder, draft.messagesById)
+          if (msgId === null) {
             const placeholder: ChatMessage = {
               id: generateId(),
               role: 'assistant',
@@ -753,9 +816,8 @@ export const useChatStore = create<ChatStore>((set, get) => {
             }
             draft.messagesById[placeholder.id] = placeholder
             draft.messageOrder.push(placeholder.id)
-            lastIdx = draft.messageOrder.length - 1
+            msgId = placeholder.id
           }
-          const msgId = draft.messageOrder[lastIdx]
           const msg = draft.messagesById[msgId]
           msg.content = msg.content + content
           msg.isStreaming = !done
@@ -768,11 +830,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
     markLastMessageInterrupted: () => {
       const sid = getActiveSid()
       withBucket(sid, (b) => {
-        const order = b.messageOrder
-        let lastMsgId: string | null = null
-        for (let i = order.length - 1; i >= 0; i--) {
-          if (b.messagesById[order[i]]?.role === 'assistant') { lastMsgId = order[i]; break }
-        }
+        const lastMsgId = findLastAssistantMessageId(b.messageOrder, b.messagesById)
         if (!lastMsgId) {
           // FR-21 / T21–T23: No assistant message exists yet (cancel fired between
           // session_started and the first token frame). The server may still send
@@ -824,11 +882,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
       if (!hasInterruptedInActive) {
         for (const [bucketSid, bucket] of Object.entries(state.sessionsById)) {
           if (bucketSid === sid) continue
-          const order = bucket.messageOrder
-          let lastMsgId: string | null = null
-          for (let i = order.length - 1; i >= 0; i--) {
-            if (bucket.messagesById[order[i]]?.role === 'assistant') { lastMsgId = order[i]; break }
-          }
+          const lastMsgId = findLastAssistantMessageId(bucket.messageOrder, bucket.messagesById)
           if (lastMsgId && bucket.messagesById[lastMsgId].isStreaming) {
             // Update the background bucket AND sync the updated messages to the foreground
             // flat field so callers reading get().messages can see the change.
@@ -914,11 +968,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
       const sid = getActiveSid()
       if (!sid) return
       withBucket(sid, (b) => {
-        // Find last assistant message id
-        let lastMsgId: string | null = null
-        for (let i = b.messageOrder.length - 1; i >= 0; i--) {
-          if (b.messagesById[b.messageOrder[i]]?.role === 'assistant') { lastMsgId = b.messageOrder[i]; break }
-        }
+        const lastMsgId = findLastAssistantMessageId(b.messageOrder, b.messagesById)
         if (!lastMsgId) return {}
         const span: SubagentSpanRunning = {
           spanId: frame.span_id,
@@ -1018,6 +1068,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
             return
           }
           console.warn('[chat] subagent_end received for unknown span_id', { spanId: frame.span_id })
+          _recordChatDiagnostic('chatSubagentEndUnknownSpanId', { spanId: frame.span_id, sessionId: sid })
         }) as Partial<SessionChatState>
       })
     },
@@ -1049,6 +1100,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
         }
         // Fallback: O(N) scan (legacy path, index miss).
         console.warn('[chat] attachStepToSpan: span index miss, falling back to O(N) scan', { parentCallId })
+        _recordChatDiagnostic('chatAttachStepSpanIndexMiss', { parentCallId, sessionId: sid })
         for (let i = b.messageOrder.length - 1; i >= 0; i--) {
           const msgId = b.messageOrder[i]
           const msg = b.messagesById[msgId]
@@ -1097,23 +1149,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
     setRateLimitEvent: (event) => {
       const sid = getActiveSid()
       if (!sid) return
-      if (rateLimitClearTimers[sid] != null) {
-        clearTimeout(rateLimitClearTimers[sid])
-        delete rateLimitClearTimers[sid]
-      }
-      withBucket(sid, () => ({ rateLimitEvent: event }))
-      rateLimitClearTimers[sid] = setTimeout(() => {
-        delete rateLimitClearTimers[sid]
-        set((state) => {
-          const bucket = state.sessionsById[sid]
-          if (!bucket || bucket.rateLimitEvent !== event) return {}
-          const updated: SessionChatState = { ...bucket, rateLimitEvent: null }
-          const sessionsById = { ...state.sessionsById, [sid]: updated }
-          const activeSid = getActiveSid()
-          const fg = (activeSid ? sessionsById[activeSid] : undefined) ?? EMPTY_BUCKET
-          return { sessionsById, ...bucketToForeground(fg) }
-        })
-      }, 60_000)
+      armRateLimitClear(sid, event)
     },
 
     clearRateLimitEvent: () => {
@@ -1241,19 +1277,21 @@ export const useChatStore = create<ChatStore>((set, get) => {
       const result = MessageFrameSchema.safeParse(payload)
       if (result.success) return
       console.warn('[chat] outbound MessageFrame failed schema validation', result.error)
+      // Focused 1-line Zod message (matches src/lib/ws.ts parseFrameSafe).
+      // result.error.message is multi-line JSON; downstream consumers (the
+      // dev-toast below and the production telemetry record) only need the
+      // first failing field + its issue.
+      const first = result.error.issues[0]
+      const description = first
+        ? `${first.path.join('.') || 'root'}: ${first.message}`
+        : result.error.message
+      _recordChatDiagnostic('chatOutboundFrameValidationFailed', { issue: description })
       // Gate the dev-toast on MODE (not DEV) so the toast also fires in
       // Vitest's 'test' mode, which bakes DEV=false at compile time. MODE
       // is 'production' for shipped builds so the toast is suppressed
       // there. Without this gate change the W2-29 / W4-15 dev-toast test
       // is unreachable (it has always been — see pre-W4 history).
       if (import.meta.env.MODE !== 'production') {
-        // Focused 1-line Zod message (matches src/lib/ws.ts parseFrameSafe).
-        // result.error.message is multi-line JSON; the toast only needs the
-        // first failing field + its issue so the dev sees what to fix.
-        const first = result.error.issues[0]
-        const description = first
-          ? `${first.path.join('.') || 'root'}: ${first.message}`
-          : result.error.message
         useUiStore.getState().addToast({
           message: `Outbound frame validation failed (dev): ${description}`,
           variant: 'error',
@@ -1552,6 +1590,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
         const sent = connection.send({ type: 'cancel', session_id: activeSessionId })
         if (!sent) {
           console.warn('[chat] cancelStream: send failed — connection may be closed')
+          _recordChatDiagnostic('chatCancelStreamSendFailed', { sessionId: activeSessionId })
           useUiStore.getState().addToast({
             message: 'Could not send cancel — connection dropped. The response may continue briefly.',
             variant: 'error',
@@ -1643,10 +1682,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
             // switches from the live toolCalls bucket to message.tool_calls at
             // that point (mirrors the `done` frame handler's baking logic; see
             // ~L1903-1918).
-            let lastAssistantId: string | null = null
-            for (let i = order.length - 1; i >= 0; i--) {
-              if (bucket.messagesById[order[i]]?.role === 'assistant') { lastAssistantId = order[i]; break }
-            }
+            const lastAssistantId = findLastAssistantMessageId(order, bucket.messagesById)
             const lastMsg = lastAssistantId ? next.messagesById[lastAssistantId] : undefined
             if (lastAssistantId && lastMsg?.role === 'assistant') {
               const baked = bucket.toolCallOrder
@@ -1714,6 +1750,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
           }
           // In production: drop the frame and surface a one-shot connection error.
           console.error('[chat] server frame missing session_id — dropping', { type: frame.type })
+          _recordChatDiagnostic('chatFrameMissingSessionId', { frameType: frame.type })
           useConnectionStore.getState().setConnectionError(
             'internal: server frame missing session_id — please reload'
           )
@@ -1793,11 +1830,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
           if (targetSid) {
             withBucket(targetSid, (b) => {
               return produce(b, (draft) => {
-                const order = draft.messageOrder
-                let lastMsgId: string | null = null
-                for (let i = order.length - 1; i >= 0; i--) {
-                  if (draft.messagesById[order[i]]?.role === 'assistant') { lastMsgId = order[i]; break }
-                }
+                let lastMsgId = findLastAssistantMessageId(draft.messageOrder, draft.messagesById)
                 // FR-21 / T21–T26: if the last assistant message was already
                 // interrupted (user clicked Stop / pressed Escape / used /cancel),
                 // discard any trailing tokens the server sends before it processes
@@ -1859,6 +1892,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
             const knownSid = !!get().sessionsById[targetSid]
             if (!knownSid) {
               console.warn('chat.done_unknown_sid', { targetSid, activeSid: activeSid })
+              _recordChatDiagnostic('chatDoneUnknownSid', { targetSid, activeSid })
               const STREAM_GRACE_MS = 10_000
               if (activeSid && activeSid !== targetSid && get().sessionsById[activeSid]) {
                 const activeBucket = get().sessionsById[activeSid]!
@@ -1873,6 +1907,11 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   maybeDrainNext()
                 } else {
                   console.warn('chat.done_unknown_sid_skipped_active_mid_stream', {
+                    targetSid,
+                    activeSid,
+                    lastUserMessageAt: activeBucket.lastUserMessageAt,
+                  })
+                  _recordChatDiagnostic('chatDoneUnknownSidSkippedActiveMidStream', {
                     targetSid,
                     activeSid,
                     lastUserMessageAt: activeBucket.lastUserMessageAt,
@@ -1914,11 +1953,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
             }
             withBucket(sid, (b) => {
               return produce(b, (draft) => {
-                const order = draft.messageOrder
-                let lastMsgId: string | null = null
-                for (let i = order.length - 1; i >= 0; i--) {
-                  if (draft.messagesById[order[i]]?.role === 'assistant') { lastMsgId = order[i]; break }
-                }
+                const lastMsgId = findLastAssistantMessageId(draft.messageOrder, draft.messagesById)
                 if (lastMsgId) {
                   // FR-21 / T21–T25: do NOT overwrite 'interrupted' status with 'done'.
                   const msg = draft.messagesById[lastMsgId]
@@ -2018,11 +2053,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
               }
             }
             withBucket(targetSid, (b) => {
-              const order = b.messageOrder
-              let lastMsgId: string | null = null
-              for (let i = order.length - 1; i >= 0; i--) {
-                if (b.messagesById[order[i]]?.role === 'assistant') { lastMsgId = order[i]; break }
-              }
+              const lastMsgId = findLastAssistantMessageId(b.messageOrder, b.messagesById)
               if (lastMsgId) {
                 const prevMsg = b.messagesById[lastMsgId]
                 const prevStatus = prevMsg.status
@@ -2105,6 +2136,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
               const bufferKey = `${targetSid}:${parentCallId}`
               bufferForSpan(bufferKey, frame, (buffered) => {
                 console.warn(`[chat] orphan frame: parent_call_id="${parentCallId}" session="${targetSid}" — subagent_start never arrived within ${ORPHAN_BUFFER_TTL_MS}ms. Releasing as flat tool calls.`)
+                _recordChatDiagnostic('chatOrphanFrameReleased', { parentCallId, sessionId: targetSid, ttlMs: ORPHAN_BUFFER_TTL_MS })
                 useUiStore.getState().addToast({
                   variant: 'default',
                   message: 'Some subagent steps arrived without their span — displayed as flat tool calls',
@@ -2210,6 +2242,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 }
                 // Fallback: O(N) scan (index miss — log a warning).
                 console.warn('[chat] tool_call_result: span index miss, falling back to O(N) scan', { parentCallId, callId: frame.call_id })
+                _recordChatDiagnostic('chatToolCallResultSpanIndexMiss', { parentCallId, callId: frame.call_id })
                 for (let i = bucket.messageOrder.length - 1; i >= 0; i--) {
                   const msgId = bucket.messageOrder[i]
                   const msg = bucket.messagesById[msgId]
@@ -2237,6 +2270,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
               const bufferKey = `${targetSid}:${parentCallId}`
               bufferForSpan(bufferKey, frame, (buffered) => {
                 console.warn(`[chat] orphan frame: parent_call_id="${parentCallId}" session="${targetSid}" — subagent_start never arrived within ${ORPHAN_BUFFER_TTL_MS}ms. Releasing as flat tool calls.`)
+                _recordChatDiagnostic('chatOrphanFrameReleased', { parentCallId, sessionId: targetSid, ttlMs: ORPHAN_BUFFER_TTL_MS })
                 useUiStore.getState().addToast({
                   variant: 'default',
                   message: 'Some subagent steps arrived without their span — displayed as flat tool calls',
@@ -2287,11 +2321,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
           const sf = frame as WsSubagentStartFrame
           withBucket(targetSid, (b) => {
             return produce(b, (draft) => {
-              const order = draft.messageOrder
-              let lastMsgId: string | null = null
-              for (let i = order.length - 1; i >= 0; i--) {
-                if (draft.messagesById[order[i]]?.role === 'assistant') { lastMsgId = order[i]; break }
-              }
+              const lastMsgId = findLastAssistantMessageId(draft.messageOrder, draft.messagesById)
               if (!lastMsgId) return
               const span: SubagentSpanRunning = {
                 spanId: sf.span_id,
@@ -2362,6 +2392,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 return
               }
               console.warn('[chat] subagent_end received for unknown span_id', { spanId: ef.span_id })
+              _recordChatDiagnostic('chatSubagentEndUnknownSpanId', { spanId: ef.span_id, sessionId: targetSid })
             }) as Partial<SessionChatState>
           })
           break
@@ -2413,6 +2444,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
               if (messageId) {
                 if (draft.messageOrder.includes(messageId)) {
                   console.warn('chat.replay_dedup_skipped', { id: messageId, role, reason: 'id-match' })
+                  _recordChatDiagnostic('chatReplayDedupSkipped', { messageId, role, reason: 'id-match', sessionId: targetSid })
                   return
                 }
               } else {
@@ -2428,16 +2460,14 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   (tailTs === frameTs || (tailTs === '' && frameTs === ''))
                 ) {
                   console.warn('chat.replay_dedup_skipped', { role, reason: 'content-tuple-match' })
+                  _recordChatDiagnostic('chatReplayDedupSkipped', { role, reason: 'content-tuple-match', sessionId: targetSid })
                   return
                 }
               }
               // Coalesce assistant text into the trailing empty assistant bubble
               // that tool_call_start frames already created.
               if (role === 'assistant') {
-                let lastMsgId: string | null = null
-                for (let i = draft.messageOrder.length - 1; i >= 0; i--) {
-                  if (draft.messagesById[draft.messageOrder[i]]?.role === 'assistant') { lastMsgId = draft.messageOrder[i]; break }
-                }
+                const lastMsgId = findLastAssistantMessageId(draft.messageOrder, draft.messagesById)
                 if (lastMsgId && (draft.messagesById[lastMsgId].content ?? '') === '') {
                   // Bake any tool calls that belong to this turn BEFORE taking the early
                   // return. Without this, toolCallOrder accumulates across turns and ends
@@ -2538,12 +2568,10 @@ export const useChatStore = create<ChatStore>((set, get) => {
           if (!targetSid) break
           if (!Array.isArray(frame.parts) || frame.parts.length === 0) {
             console.warn('[chat] Received media frame with empty or invalid parts — appending notice')
+            _recordChatDiagnostic('chatMediaFrameInvalidParts', { sessionId: targetSid })
             withBucket(targetSid, (b) => {
               return produce(b, (draft) => {
-                let lastMsgId: string | null = null
-                for (let i = draft.messageOrder.length - 1; i >= 0; i--) {
-                  if (draft.messagesById[draft.messageOrder[i]]?.role === 'assistant') { lastMsgId = draft.messageOrder[i]; break }
-                }
+                const lastMsgId = findLastAssistantMessageId(draft.messageOrder, draft.messagesById)
                 if (lastMsgId) {
                   const msg = draft.messagesById[lastMsgId]
                   msg.content = (msg.content ?? '') + (msg.content ? '\n\n' : '') + '_1 attachment could not be displayed._'
@@ -2564,10 +2592,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
           if (attachments.length === 0) {
             withBucket(targetSid, (b) => {
               return produce(b, (draft) => {
-                let lastMsgId: string | null = null
-                for (let i = draft.messageOrder.length - 1; i >= 0; i--) {
-                  if (draft.messagesById[draft.messageOrder[i]]?.role === 'assistant') { lastMsgId = draft.messageOrder[i]; break }
-                }
+                const lastMsgId = findLastAssistantMessageId(draft.messageOrder, draft.messagesById)
                 if (lastMsgId) {
                   const msg = draft.messagesById[lastMsgId]
                   msg.content = (msg.content ?? '') + (msg.content ? '\n\n' : '') +
@@ -2579,10 +2604,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
           }
           withBucket(targetSid, (b) => {
             return produce(b, (draft) => {
-              let lastMsgId: string | null = null
-              for (let i = draft.messageOrder.length - 1; i >= 0; i--) {
-                if (draft.messagesById[draft.messageOrder[i]]?.role === 'assistant') { lastMsgId = draft.messageOrder[i]; break }
-              }
+              const lastMsgId = findLastAssistantMessageId(draft.messageOrder, draft.messagesById)
               const dedupe = (existing: MediaAttachment[] | undefined, incoming: MediaAttachment[]) => {
                 const seen = new Set((existing ?? []).map((a) => a.url))
                 const fresh = incoming.filter((a) => !seen.has(a.url))
@@ -2614,10 +2636,6 @@ export const useChatStore = create<ChatStore>((set, get) => {
           const rlFrame = frame as WsRateLimitFrame
           const sid = targetSid ?? getActiveSid()
           if (!sid) break
-          if (rateLimitClearTimers[sid] != null) {
-            clearTimeout(rateLimitClearTimers[sid])
-            delete rateLimitClearTimers[sid]
-          }
           const event: RateLimitEventData = {
             scope: rlFrame.scope,
             resource: rlFrame.resource,
@@ -2626,19 +2644,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
             agentId: rlFrame.agent_id,
             tool: rlFrame.tool,
           }
-          withBucket(sid, () => ({ rateLimitEvent: event }))
-          rateLimitClearTimers[sid] = setTimeout(() => {
-            delete rateLimitClearTimers[sid]
-            set((state) => {
-              const bucket = state.sessionsById[sid]
-              if (!bucket || bucket.rateLimitEvent !== event) return {}
-              const updated: SessionChatState = { ...bucket, rateLimitEvent: null }
-              const sessionsById = { ...state.sessionsById, [sid]: updated }
-              const activeSidNow = getActiveSid()
-              const fg = (activeSidNow ? sessionsById[activeSidNow] : null) ?? EMPTY_BUCKET
-              return { sessionsById, ...bucketToForeground(fg) }
-            })
-          }, 60_000)
+          armRateLimitClear(sid, event)
           break
         }
         case 'whatsapp_pairing': {
@@ -2703,6 +2709,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
         default:
           unknownFrameCount++
           console.warn('[chat] Unknown frame type', { type: (frame as { type?: string }).type, count: unknownFrameCount })
+          _recordChatDiagnostic('chatUnknownFrameType', { frameType: (frame as { type?: string }).type, count: unknownFrameCount })
           if (unknownFrameCount >= UNKNOWN_FRAME_TOAST_THRESHOLD) {
             useUiStore.getState().addToast({
               message: "Server is sending events this UI doesn't understand — refresh to update.",

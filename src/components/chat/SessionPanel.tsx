@@ -97,6 +97,14 @@ interface SessionItemProps {
   deleteDisabled?: boolean
 }
 
+const SESSION_TYPE_LABELS: Record<Session['type'], string> = {
+  task: 'Task',
+  scheduled: 'Scheduled',
+  channel: 'Channel',
+  heartbeat: 'Heartbeat',
+  chat: 'Chat',
+}
+
 function taskStatusStyle(status: string | undefined): { color: string; label: string } {
   switch (status) {
     case 'archived':
@@ -173,16 +181,7 @@ function SessionHoverCard({
     participantIds.map((id) => agents.find((a) => a.id === id)?.name ?? '[removed]').join(', ') ||
     '—'
 
-  const typeLabel =
-    session.type === 'task'
-      ? 'Task'
-      : session.type === 'scheduled'
-        ? 'Scheduled'
-        : session.type === 'channel'
-          ? 'Channel'
-          : session.type === 'heartbeat'
-            ? 'Heartbeat'
-            : 'Chat'
+  const typeLabel = SESSION_TYPE_LABELS[session.type]
   // Status semantics (running/completed/failed) only apply to task runs.
   const statusLabel =
     session.type === 'task' && session.status ? taskStatusStyle(session.status).label : ''
