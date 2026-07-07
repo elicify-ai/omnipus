@@ -595,6 +595,80 @@ func TestHandleLogin_RateLimitBlocksAtLimit(t *testing.T) {
 	assert.Contains(t, resp["error"], "too many login attempts")
 }
 
+// TestHandleLogin_SpoofedXFFDoesNotBypassLoginRateLimit is the direct
+// regression test for the vulnerability the clientIP/TrustXFF fix closes:
+// with gateway.trust_xff at its default (false), an attacker cannot defeat
+// globalLoginLimiter's brute-force protection by sending a different spoofed
+// X-Forwarded-For value on every request. Unlike TestHandleLogin_RateLimitBlocksAtLimit
+// (which never sets X-Forwarded-For at all, so it wouldn't catch a
+// regression that reintroduced XFF-trusting logic inside HandleLogin
+// specifically), every attempt here comes from the SAME real RemoteAddr but
+// a DIFFERENT spoofed XFF value — the 6th attempt must still be rate
+// limited, proving clientIP resolves the real RemoteAddr for the actual
+// HandleLogin call path, not just in isolation.
+func TestHandleLogin_SpoofedXFFDoesNotBypassLoginRateLimit(t *testing.T) {
+	globalLoginLimiter = newLoginRateLimiter()
+	tmpDir := t.TempDir()
+	hash, err := bcrypt.GenerateFromPassword([]byte("correctpassword"), bcrypt.DefaultCost)
+	require.NoError(t, err)
+	createTestConfigWithUser(t, tmpDir, "xffuser", string(hash))
+
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080}, // TrustXFF left at its zero-value default: false
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: tmpDir,
+				ModelName: "test-model",
+				MaxTokens: 4096,
+			},
+		},
+	}
+	msgBus := bus.NewMessageBus()
+	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	api := &restAPI{
+		agentLoop:     al,
+		homePath:      tmpDir,
+		allowedOrigin: "http://localhost:3000",
+		onboardingMgr: onboarding.NewManager(tmpDir),
+		taskStore:     task.New(tmpDir + "/tasks"),
+	}
+
+	body := `{"username":"xffuser","password":"wrongpassword"}`
+
+	// First 5 attempts: same real RemoteAddr, a DIFFERENT spoofed
+	// X-Forwarded-For on every request (simulating the exact attack this
+	// fix closes). All 5 return 401 (wrong password), not yet rate limited.
+	for i := 0; i < 5; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Forwarded-For", fmt.Sprintf("10.0.0.%d", i+1))
+		req.RemoteAddr = "192.168.1.200:12345"
+		w := httptest.NewRecorder()
+		api.HandleLogin(w, req)
+		assert.Equal(t, http.StatusUnauthorized, w.Code, "attempt %d should return 401", i+1)
+	}
+
+	if testing.Short() {
+		t.Skip("skipping rate limit test in short mode")
+	}
+
+	// 6th attempt, yet another distinct spoofed XFF value: if clientIP were
+	// still trusting X-Forwarded-For unconditionally, this would land in a
+	// brand-new rate-limit bucket and return 401 (wrong password) instead of
+	// 429 — the exact bypass this fix closes. It must be rate limited.
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Forwarded-For", "10.0.0.99")
+	req.RemoteAddr = "192.168.1.200:12345"
+	w := httptest.NewRecorder()
+	api.HandleLogin(w, req)
+	assert.Equal(t, http.StatusTooManyRequests, w.Code,
+		"6th attempt with a fresh spoofed X-Forwarded-For must still be rate limited (default trust_xff=false)")
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Contains(t, resp["error"], "too many login attempts")
+}
+
 // TestHandleLogin_DevModeBypass_DenyByDefault verifies that when no users are configured
 // and no OMNIPUS_BEARER_TOKEN env var is set, requests are rejected with 401 (deny-by-default).
 // BDD: Given no users in config.json and no OMNIPUS_BEARER_TOKEN env var set,
@@ -1428,6 +1502,115 @@ func TestWithRateLimit_Returns429WithRetryAfterHeader(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &resp))
 	assert.Contains(t, resp["error"].(string), "rate limit exceeded",
 		"429 body must describe the rate limit error")
+}
+
+// --- clientIP / TrustXFF tests ---
+//
+// These prove the fix for the XFF-trust gap: clientIP used to trust
+// X-Forwarded-For unconditionally, letting a caller send a different spoofed
+// value on every request to get a fresh rate-limit bucket each time and
+// defeat login/API brute-force protection. clientIP must now honor XFF only
+// when the context config snapshot has Gateway.TrustXFF true, and must strip
+// the port from the RemoteAddr fallback (matching canonicalRemoteIP).
+
+// contextWithTrustXFF returns a context carrying a config snapshot with the
+// given Gateway.TrustXFF value, simulating what configSnapshotMiddleware
+// injects on every real request in production (see
+// TestConfigSnapshotMiddleware_InjectsConfig below for the middleware itself).
+func contextWithTrustXFF(trustXFF bool) context.Context {
+	cfg := &config.Config{Gateway: config.GatewayConfig{TrustXFF: trustXFF}}
+	return context.WithValue(context.Background(), configContextKey{}, cfg)
+}
+
+// TestClientIP_IgnoresSpoofedXFFByDefault verifies that with no config in
+// context (or TrustXFF: false, the documented default) a client-supplied
+// X-Forwarded-For header is ignored entirely — clientIP falls back to
+// r.RemoteAddr. This is the core brute-force-protection fix: an attacker
+// cannot spoof a fresh IP per request to dodge globalLoginLimiter/apiRateLimiter.
+func TestClientIP_IgnoresSpoofedXFFByDefault(t *testing.T) {
+	// No config in context at all (mirrors a caller that runs before
+	// configSnapshotMiddleware, e.g. the CSRF mismatch reporter).
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", nil)
+	req.RemoteAddr = "203.0.113.9:54321"
+	req.Header.Set("X-Forwarded-For", "6.6.6.6")
+	assert.Equal(t, "203.0.113.9", clientIP(req),
+		"without a config snapshot, XFF must be ignored and RemoteAddr (port-stripped) used")
+
+	// Explicit TrustXFF: false in context — the documented default posture.
+	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", nil)
+	req2.RemoteAddr = "203.0.113.9:9999"
+	req2.Header.Set("X-Forwarded-For", "6.6.6.6")
+	req2 = req2.WithContext(contextWithTrustXFF(false))
+	assert.Equal(t, "203.0.113.9", clientIP(req2),
+		"TrustXFF: false must ignore a spoofed X-Forwarded-For header")
+}
+
+// TestClientIP_HonorsXFFWhenTrustXFFConfigured verifies the behind-a-trusted-
+// proxy use case still works: when the config snapshot has Gateway.TrustXFF
+// true, X-Forwarded-For is honored (first comma-separated entry).
+func TestClientIP_HonorsXFFWhenTrustXFFConfigured(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", nil)
+	req.RemoteAddr = "10.0.0.1:443" // the trusted reverse proxy's address
+	req.Header.Set("X-Forwarded-For", "198.51.100.42, 10.0.0.1")
+	req = req.WithContext(contextWithTrustXFF(true))
+
+	assert.Equal(t, "198.51.100.42", clientIP(req),
+		"TrustXFF: true must honor the first X-Forwarded-For entry (real client, not the proxy)")
+}
+
+// TestClientIP_StripsPortFromRemoteAddr verifies the second bug fix: the
+// no-XFF fallback path must strip the port from r.RemoteAddr, not return it
+// verbatim. Before the fix, a client whose HTTP client opened a fresh TCP
+// connection per request (a new ephemeral port each time) would get a fresh
+// rate-limit bucket every time even without touching any header.
+func TestClientIP_StripsPortFromRemoteAddr(t *testing.T) {
+	req1 := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", nil)
+	req1.RemoteAddr = "192.168.1.50:11111"
+	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", nil)
+	req2.RemoteAddr = "192.168.1.50:22222"
+
+	ip1 := clientIP(req1)
+	ip2 := clientIP(req2)
+	assert.Equal(t, "192.168.1.50", ip1, "port must be stripped from RemoteAddr")
+	assert.Equal(t, ip1, ip2,
+		"two requests from the same host on different ephemeral ports must resolve to the same client IP")
+}
+
+// TestWithRateLimit_SpoofedXFFDoesNotBypassLimitByDefault is the end-to-end
+// enforcement proof: two requests from the SAME underlying connection but
+// with DIFFERENT spoofed X-Forwarded-For values must land in the SAME
+// rate-limit bucket (the attack this whole fix defeats), because
+// withRateLimit uses clientIP, and by default (no trusted-proxy config)
+// clientIP ignores X-Forwarded-For entirely.
+func TestWithRateLimit_SpoofedXFFDoesNotBypassLimitByDefault(t *testing.T) {
+	limiter := newAPIRateLimiter(1, time.Minute)
+	handlerCalled := 0
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handlerCalled++
+		w.WriteHeader(http.StatusOK)
+	})
+	wrapped := withRateLimit(limiter, inner)
+
+	// First request: allowed. Spoofed XFF #1.
+	req1 := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", nil)
+	req1.RemoteAddr = "203.0.113.77:5000"
+	req1.Header.Set("X-Forwarded-For", "1.1.1.1")
+	w1 := httptest.NewRecorder()
+	wrapped.ServeHTTP(w1, req1)
+	require.Equal(t, http.StatusOK, w1.Code, "first request must be allowed")
+
+	// Second request: same underlying connection (RemoteAddr), but a
+	// DIFFERENT spoofed XFF value. Before the fix this created a brand-new
+	// rate-limit bucket and would have been allowed (200); after the fix it
+	// must be blocked (429) because the real RemoteAddr is what's counted.
+	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", nil)
+	req2.RemoteAddr = "203.0.113.77:5001"
+	req2.Header.Set("X-Forwarded-For", "2.2.2.2")
+	w2 := httptest.NewRecorder()
+	wrapped.ServeHTTP(w2, req2)
+	assert.Equal(t, http.StatusTooManyRequests, w2.Code,
+		"a different spoofed X-Forwarded-For value must NOT reset the rate-limit bucket")
+	assert.Equal(t, 1, handlerCalled, "inner handler must be called exactly once")
 }
 
 // --- configSnapshotMiddleware / configFromContext tests ---
