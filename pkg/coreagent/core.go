@@ -286,10 +286,12 @@ func AllStaticToolNames() []string {
 // validation only checks for MISSING keys, never extra/unrecognized ones,
 // so a typo'd or retired tool name here would otherwise leave the tool the
 // caller actually meant to override stuck at its "deny" default with no
-// signal anywhere). Every call site in this file is a hardcoded literal at
-// package-init-adjacent time, not user input, so a panic — an immediate,
-// loud test/boot failure — is the right disposition here, not an error
-// return that a caller could plausibly ignore.
+// signal anywhere). Every call site's override map is a hardcoded Go literal
+// (never user/request/config-derived — NewCustomAgentToolsCfg runs per
+// agent-creation request, but its override keys are still compile-time
+// literals, not data), so a panic — an immediate, loud test/boot/first-call
+// failure — is the right disposition here, not an error return that a
+// caller could plausibly ignore.
 func denyAllThenOverride(overrides map[string]config.ToolPolicy) map[string]config.ToolPolicy {
 	out := make(map[string]config.ToolPolicy, len(allStaticToolNames))
 	for _, name := range allStaticToolNames {

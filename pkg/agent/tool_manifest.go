@@ -70,19 +70,19 @@ func ensureInfraToolsExecutable(
 // stripInfraToolDefs returns the subset of tools with manifest infra tools
 // (load_tool) removed. Used on the NON-compressed defs path: load_tool is the
 // driver of the compressed manifest mechanism and has no function when
-// compression is off, so the model never sees it there — regardless of the
-// agent's default policy.
+// compression is off, so the model never sees it there — regardless of what
+// the agent's own tool-policy map resolves for it.
 //
 // Unification note (#438): the single resolver now force-allows infra
 // UNCONDITIONALLY, so FilterToolsByPolicy keeps load_tool in the filtered slice
-// for EVERY agent. This path strips it so it is not surfaced uncompressed. For a
-// deny-default agent this matches the old behavior (the old filter dropped
-// load_tool, so it was never sent uncompressed). For an allow-default agent it
-// is a deliberate, narrow change: the old path DID send load_tool uncompressed,
-// the new path does not — correct, because an uncompressed turn has no
-// load_tool affordance (no manifest block telling the model to use it). The
-// strip touches ONLY infra tools; every other tool's surfaced verdict is
-// unchanged.
+// for EVERY agent. This path strips it so it is not surfaced uncompressed. For
+// an agent whose tools mostly resolve to deny, this matches the old behavior
+// (the old filter dropped load_tool, so it was never sent uncompressed). For
+// an agent whose tools mostly resolve to allow it is a deliberate, narrow
+// change: the old path DID send load_tool uncompressed, the new path does not
+// — correct, because an uncompressed turn has no load_tool affordance (no
+// manifest block telling the model to use it). The strip touches ONLY infra
+// tools; every other tool's surfaced verdict is unchanged.
 func stripInfraToolDefs(in []tools.Tool) []tools.Tool {
 	out := make([]tools.Tool, 0, len(in))
 	for _, t := range in {
