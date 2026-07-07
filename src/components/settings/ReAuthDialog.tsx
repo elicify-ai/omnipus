@@ -11,7 +11,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { reAuth, isApiError } from '@/lib/api'
+import { reAuth, getErrorMessage } from '@/lib/api'
 
 // ReAuthDialog implements the Spec-6 FR-12.2 consent primitive at the UI layer.
 // It prompts the single user to re-type their one password, calls POST
@@ -68,13 +68,9 @@ export function ReAuthDialog({
     } catch (err) {
       setSubmitting(false)
       // A wrong password returns 401; surface it inline so the user can retry.
-      const message = isApiError(err)
-        ? err.status === 401
-          ? 'That password is incorrect. Please try again.'
-          : err.userMessage
-        : err instanceof Error
-          ? err.message
-          : 'Re-authentication failed'
+      const message = getErrorMessage(err, 'Re-authentication failed', {
+        status401: 'That password is incorrect. Please try again.',
+      })
       setError(message)
     }
   }

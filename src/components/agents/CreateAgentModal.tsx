@@ -204,18 +204,24 @@ export function CreateAgentModal({
   const effectiveCli: WizardCli | undefined =
     initialCli ?? (createAgentModalCli as WizardCli | undefined)
 
-  const createAgentMutation = useMutation<Agent, Error, AgentCreateRequest>({
+  const createAgentMutation = useMutation<Agent | null, Error, AgentCreateRequest>({
     mutationFn: (data) =>
       onCreateProp
-        ? // Legacy / test prop returns Promise<void>; synthesize an Agent
-          // with the wire fields so the success path can still fire
-          // (toast, query invalidation, close).
-          onCreateProp(data).then(() => data as unknown as Agent)
+        ? // Legacy / test prop returns Promise<void> — it never hands back a
+          // server-computed Agent (id, timestamps, resolved defaults, etc.),
+          // so the mutation result is `null` for this path. Do NOT cast the
+          // request payload to Agent: it only shares a few field *names*
+          // with the response entity and callers must not assume any
+          // server-computed field is present.
+          onCreateProp(data).then(() => null)
         : createAgent(data),
-    onSuccess: (agent: Agent) => {
+    onSuccess: (agent, variables) => {
       queryClient.invalidateQueries({ queryKey: ['agents'] })
       addToast({
-        message: `Created agent "${agent.name}"`,
+        // Real create path: use the server-echoed name. Legacy path (agent
+        // is null, no server entity was returned): fall back to the name
+        // from the submitted request — the only field guaranteed to exist.
+        message: `Created agent "${agent ? agent.name : variables.name}"`,
         variant: 'success',
       })
       handleClose()

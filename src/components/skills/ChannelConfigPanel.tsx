@@ -17,7 +17,7 @@ import {
   fetchChannelConfig,
   configureChannel,
   enableChannel,
-  getChannelRouting,
+  fetchChannelRouting,
   setChannelRouting,
   fetchAgents,
   fetchWorkspaces,
@@ -380,7 +380,7 @@ export function ChannelConfigPanel({
 
   const { data: routing, isError: routingError } = useQuery({
     queryKey: ['channel-routing', channelId],
-    queryFn: () => getChannelRouting(channelId),
+    queryFn: () => fetchChannelRouting(channelId),
     enabled: open && !isWebchat,
   })
 

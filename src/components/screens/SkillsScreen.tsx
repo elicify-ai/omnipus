@@ -38,7 +38,7 @@ import {
   deleteSkill,
   deleteMcpServer,
   testMcpServer,
-  patchMcpServer,
+  updateMcpServer,
   isApiError,
   type McpServer,
   type ToolRegistryEntry,
@@ -105,7 +105,7 @@ export function SkillsScreen() {
 
   const { mutate: doToggleEnabled } = useMutation({
     mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
-      patchMcpServer(id, { enabled }),
+      updateMcpServer(id, { enabled }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['mcp-servers'] })
     },

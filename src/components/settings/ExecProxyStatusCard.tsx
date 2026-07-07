@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Globe, ArrowsClockwise, Warning, CheckCircle, XCircle, ArrowCounterClockwise } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
-import { fetchExecProxyStatus, updateConfig, isApiError } from '@/lib/api'
+import { fetchExecProxyStatus, updateConfig, getErrorMessage } from '@/lib/api'
 import { RestartConfirmDialog } from '@/components/ui/RestartConfirmDialog'
 import { useUiStore } from '@/store/ui'
 
@@ -77,7 +77,7 @@ export function ExecProxyStatusCard(): React.ReactElement {
       queryClient.invalidateQueries({ queryKey: ['config'] })
     },
     onError: (err: unknown) => {
-      const msg = isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Save failed'
+      const msg = getErrorMessage(err, 'Save failed')
       setPendingEnabled(null)
       addToast({ message: `Failed to save proxy setting: ${msg}`, variant: 'error' })
     },

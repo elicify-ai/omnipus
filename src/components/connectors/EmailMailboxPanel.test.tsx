@@ -53,9 +53,9 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchWorkspace: vi.fn(),
     fetchWorkspaces: vi.fn(),
     // ADR-031 Track 2 — ConnectorsScreen resolves each configured row's
-    // workspace→agent binding via getChannelRouting; mock it so the real
+    // workspace→agent binding via fetchChannelRouting; mock it so the real
     // (unmocked) implementation never fires a network call in Node.
-    getChannelRouting: vi.fn(),
+    fetchChannelRouting: vi.fn(),
     enableChannel: vi.fn(),
     disableChannel: vi.fn(),
     isApiError: vi.fn(() => false),
@@ -82,7 +82,7 @@ import {
   fetchWorkspace,
   fetchWorkspaces,
   fetchChannels,
-  getChannelRouting,
+  fetchChannelRouting,
 } from '@/lib/api'
 import type { Mailbox } from '@/lib/api'
 import { EmailMailboxPanel } from './EmailMailboxPanel'
@@ -176,7 +176,7 @@ describe('ConnectorsScreen — email mailbox account section', () => {
     vi.mocked(fetchMailboxes).mockResolvedValue([])
     vi.mocked(fetchAgents).mockResolvedValue([])
     vi.mocked(fetchWorkspaces).mockResolvedValue([])
-    vi.mocked(getChannelRouting).mockResolvedValue({})
+    vi.mocked(fetchChannelRouting).mockResolvedValue({})
   })
 
   it('renders the email mailbox account card (empty state)', async () => {
@@ -228,7 +228,7 @@ describe('ConnectorsScreen — multi-mailbox roster (one row per (agent, workspa
       { id: 'telegram', instance_id: 'telegram', name: 'Telegram', transport: 'webhook', enabled: false, identity: { kind: 'agent', id: 'mia' } } as never,
       { id: 'email', name: 'Email', transport: 'email', enabled: false } as never,
     ])
-    vi.mocked(getChannelRouting).mockResolvedValue({})
+    vi.mocked(fetchChannelRouting).mockResolvedValue({})
   })
 
   it('renders one row per mailbox, titled with the owning agent\'s display name', async () => {

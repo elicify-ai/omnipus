@@ -27,7 +27,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { useUiStore } from '@/store/ui'
 import { usePendingRestart } from '@/store/restart'
-import { isApiError, gatewayRestart } from '@/lib/api'
+import { getErrorMessage, gatewayRestart } from '@/lib/api'
 
 // Poll /health until the gateway responds, then resolve. Times out after
 // timeoutMs (default 60 s). Polls every intervalMs (default 1 s).
@@ -91,13 +91,7 @@ export function GatewayRestartModal({ open, onClose }: GatewayRestartModalProps)
     } catch (err) {
       if (abortRef.current) return
       setPhase('error')
-      setErrorMsg(
-        isApiError(err)
-          ? err.userMessage
-          : err instanceof Error
-          ? err.message
-          : 'Restart request failed',
-      )
+      setErrorMsg(getErrorMessage(err, 'Restart request failed'))
       return
     }
 

@@ -17,7 +17,7 @@ import {
   TableHead,
   TableCell,
 } from '@/components/ui/table'
-import { fetchAuditLog, isApiError } from '@/lib/api'
+import { fetchAuditLog, getErrorMessage } from '@/lib/api'
 import type { AuditEntry } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 
@@ -227,7 +227,7 @@ export function AuditLogViewer({ open, onOpenChange }: AuditLogViewerProps) {
 
   function handleRefresh() {
     refetch().catch((err: unknown) => {
-      addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Refresh failed', variant: 'error' })
+      addToast({ message: getErrorMessage(err, 'Refresh failed'), variant: 'error' })
     })
   }
 

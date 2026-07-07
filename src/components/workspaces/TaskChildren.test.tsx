@@ -8,6 +8,9 @@
  *     a row per child with its status label (the altitude-expand fetch path),
  *   - uses preloaded children WITHOUT fetching when they are supplied,
  *   - clicking a child row invokes onChildClick with that child.
+ *   - a failed fetch shows a distinct error+retry state, NOT the same
+ *     empty (null) render as "genuinely no children" — retry re-triggers
+ *     the fetch (isError-blindness regression, Wave 2).
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -97,5 +100,27 @@ describe('TaskChildren', () => {
     expect(onChildClick).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'c5', title: 'Clickable child' }),
     )
+  })
+
+  // Regression: a failed fetch must not collapse to the same "nothing
+  // rendered" state as a task that genuinely has no children — that would
+  // silently hide real subtasks. It must show a distinct error state with
+  // a way to retry.
+  it('shows a distinct error state (not empty → null) when the fetch fails, and retry re-fetches', async () => {
+    fetchSubtasksMock.mockRejectedValue(new Error('network error'))
+    const { container } = renderChildren()
+
+    await waitFor(() => expect(fetchSubtasksMock).toHaveBeenCalledWith('p1'))
+    expect(await screen.findByText(/Couldn.t load subtasks/i)).toBeInTheDocument()
+    // Distinct from the empty case: the empty case renders no [aria-label="Subtasks"]
+    // list AND no error text; here we assert the error text is actually present
+    // (already done above) and that it renders via its own element, not silently.
+    expect(container.querySelector('[aria-label="Subtasks"]')).toBeNull()
+
+    fetchSubtasksMock.mockResolvedValueOnce([child({ id: 'c1', title: 'Recovered child' })])
+    fireEvent.click(screen.getByText(/Couldn.t load subtasks/i))
+
+    await screen.findByText('Recovered child')
+    expect(fetchSubtasksMock).toHaveBeenCalledTimes(2)
   })
 })

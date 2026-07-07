@@ -85,7 +85,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return {
     ...actual,
     fetchChannelConfig: vi.fn(),
-    getChannelRouting: vi.fn(),
+    fetchChannelRouting: vi.fn(),
     fetchAgents: vi.fn(),
     fetchWorkspaces: vi.fn(),
     fetchWorkspace: vi.fn(),
@@ -111,7 +111,7 @@ vi.mock('framer-motion', () => ({
 import { useUiStore } from '@/store/ui'
 import {
   fetchChannelConfig,
-  getChannelRouting,
+  fetchChannelRouting,
   fetchAgents,
   fetchWorkspaces,
   fetchWorkspace,
@@ -187,7 +187,7 @@ describe('ChannelConfigPanel — WhatsApp QR 5-state machine (#325 / US-C3)', ()
     vi.clearAllMocks()
     mockUiStore()
     vi.mocked(fetchChannelConfig).mockResolvedValue({})
-    vi.mocked(getChannelRouting).mockResolvedValue({ default_agent_id: undefined })
+    vi.mocked(fetchChannelRouting).mockResolvedValue({ default_agent_id: undefined })
     vi.mocked(fetchAgents).mockResolvedValue([])
     vi.mocked(fetchWorkspaces).mockResolvedValue([])
     vi.mocked(fetchWorkspace).mockResolvedValue({} as Workspace)
@@ -290,7 +290,7 @@ describe('ChannelConfigPanel — WhatsApp QR 5-state machine (#325 / US-C3)', ()
     vi.clearAllMocks()
     mockUiStore()
     vi.mocked(fetchChannelConfig).mockResolvedValue({})
-    vi.mocked(getChannelRouting).mockResolvedValue({ default_agent_id: undefined })
+    vi.mocked(fetchChannelRouting).mockResolvedValue({ default_agent_id: undefined })
     vi.mocked(fetchAgents).mockResolvedValue([])
     mockPairingState('error')
     renderPanel('whatsapp', 'WhatsApp', undefined, true)
@@ -340,7 +340,7 @@ describe('ChannelConfigPanel — WhatsApp Retry bounded timeout (MAJOR fix)', ()
     pairingByChannel = {}
     mockUiStore()
     vi.mocked(fetchChannelConfig).mockResolvedValue({})
-    vi.mocked(getChannelRouting).mockResolvedValue({ default_agent_id: undefined })
+    vi.mocked(fetchChannelRouting).mockResolvedValue({ default_agent_id: undefined })
     vi.mocked(fetchAgents).mockResolvedValue([])
     vi.mocked(fetchWorkspaces).mockResolvedValue([])
     vi.mocked(fetchWorkspace).mockResolvedValue({} as Workspace)
@@ -522,7 +522,7 @@ describe('ChannelConfigPanel — WhatsApp is always native (#283)', () => {
     vi.clearAllMocks()
     mockUiStore()
     vi.mocked(fetchChannelConfig).mockResolvedValue({})
-    vi.mocked(getChannelRouting).mockResolvedValue({ default_agent_id: undefined })
+    vi.mocked(fetchChannelRouting).mockResolvedValue({ default_agent_id: undefined })
     vi.mocked(fetchAgents).mockResolvedValue([])
     vi.mocked(fetchWorkspaces).mockResolvedValue([])
     vi.mocked(fetchWorkspace).mockResolvedValue({} as Workspace)
@@ -607,7 +607,7 @@ describe('ChannelConfigPanel — Google Chat authGroup picker (#324 / US-C2)', (
     vi.clearAllMocks()
     mockUiStore()
     vi.mocked(fetchChannelConfig).mockResolvedValue({})
-    vi.mocked(getChannelRouting).mockResolvedValue({ default_agent_id: undefined })
+    vi.mocked(fetchChannelRouting).mockResolvedValue({ default_agent_id: undefined })
     vi.mocked(fetchAgents).mockResolvedValue([])
     vi.mocked(fetchWorkspaces).mockResolvedValue([])
     vi.mocked(fetchWorkspace).mockResolvedValue({} as Workspace)
@@ -789,7 +789,7 @@ describe('ChannelConfigPanel — [configured] sentinel never round-trips (secret
   beforeEach(() => {
     vi.clearAllMocks()
     mockUiStore()
-    vi.mocked(getChannelRouting).mockResolvedValue({ default_agent_id: undefined })
+    vi.mocked(fetchChannelRouting).mockResolvedValue({ default_agent_id: undefined })
     vi.mocked(fetchAgents).mockResolvedValue([])
     vi.mocked(fetchWorkspaces).mockResolvedValue([])
     vi.mocked(fetchWorkspace).mockResolvedValue({} as Workspace)
@@ -941,7 +941,7 @@ describe('ChannelConfigPanel — human-label errors + a11y (#326 / US-C4)', () =
     vi.clearAllMocks()
     mockUiStore()
     vi.mocked(fetchChannelConfig).mockResolvedValue({})
-    vi.mocked(getChannelRouting).mockResolvedValue({ default_agent_id: undefined })
+    vi.mocked(fetchChannelRouting).mockResolvedValue({ default_agent_id: undefined })
     vi.mocked(fetchAgents).mockResolvedValue([])
     vi.mocked(fetchWorkspaces).mockResolvedValue([])
     vi.mocked(fetchWorkspace).mockResolvedValue({} as Workspace)
@@ -969,7 +969,7 @@ describe('ChannelConfigPanel — helper + link render (#322 / US-C1)', () => {
     vi.clearAllMocks()
     mockUiStore()
     vi.mocked(fetchChannelConfig).mockResolvedValue({})
-    vi.mocked(getChannelRouting).mockResolvedValue({ default_agent_id: undefined })
+    vi.mocked(fetchChannelRouting).mockResolvedValue({ default_agent_id: undefined })
     vi.mocked(fetchAgents).mockResolvedValue([])
     vi.mocked(fetchWorkspaces).mockResolvedValue([])
     vi.mocked(fetchWorkspace).mockResolvedValue({} as Workspace)
@@ -1015,7 +1015,7 @@ describe('ChannelConfigPanel — non-whatsapp channels', () => {
     vi.clearAllMocks()
     mockUiStore()
     vi.mocked(fetchChannelConfig).mockResolvedValue({})
-    vi.mocked(getChannelRouting).mockResolvedValue({ default_agent_id: undefined })
+    vi.mocked(fetchChannelRouting).mockResolvedValue({ default_agent_id: undefined })
     vi.mocked(fetchAgents).mockResolvedValue([])
     vi.mocked(fetchWorkspaces).mockResolvedValue([])
     vi.mocked(fetchWorkspace).mockResolvedValue({} as Workspace)
@@ -1040,7 +1040,7 @@ describe('ChannelConfigPanel — Save & Enable panel close behavior (#358)', () 
     vi.clearAllMocks()
     mockUiStore()
     vi.mocked(fetchChannelConfig).mockResolvedValue({})
-    vi.mocked(getChannelRouting).mockResolvedValue({ default_agent_id: undefined })
+    vi.mocked(fetchChannelRouting).mockResolvedValue({ default_agent_id: undefined })
     vi.mocked(fetchAgents).mockResolvedValue([])
     vi.mocked(fetchWorkspaces).mockResolvedValue([])
     vi.mocked(fetchWorkspace).mockResolvedValue({} as Workspace)
@@ -1096,7 +1096,7 @@ describe('ChannelConfigPanel — client-side save validation', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockUiStore()
-    vi.mocked(getChannelRouting).mockResolvedValue({ default_agent_id: undefined })
+    vi.mocked(fetchChannelRouting).mockResolvedValue({ default_agent_id: undefined })
     vi.mocked(fetchAgents).mockResolvedValue([])
     vi.mocked(fetchWorkspaces).mockResolvedValue([])
     vi.mocked(fetchWorkspace).mockResolvedValue({} as Workspace)
@@ -1285,7 +1285,7 @@ describe('ChannelConfigPanel — routing picker excludes workers', () => {
     mockUiStore()
     vi.mocked(fetchChannelConfig).mockResolvedValue({})
     // routing has workspace_id set → bound flow; agent select is enabled
-    vi.mocked(getChannelRouting).mockResolvedValue({ workspace_id: 'sales', default_agent_id: undefined })
+    vi.mocked(fetchChannelRouting).mockResolvedValue({ workspace_id: 'sales', default_agent_id: undefined })
     vi.mocked(fetchAgents).mockResolvedValue([
       { id: 'mia', name: 'Mia', type: 'core' },
       { id: 'builder', name: 'Builder Worker', type: 'worker' },
@@ -1363,7 +1363,7 @@ describe('ChannelConfigPanel — RoutingDebounce', () => {
     vi.clearAllMocks()
     mockUiStore()
     vi.mocked(fetchChannelConfig).mockResolvedValue({})
-    vi.mocked(getChannelRouting).mockResolvedValue({ workspace_id: 'ws-1', default_agent_id: undefined })
+    vi.mocked(fetchChannelRouting).mockResolvedValue({ workspace_id: 'ws-1', default_agent_id: undefined })
     vi.mocked(fetchAgents).mockResolvedValue([{ id: 'agent-1', name: 'Agent One', type: 'core' }] as never)
     vi.mocked(setChannelRouting).mockResolvedValue({ default_agent_id: 'agent-1' } as never)
     vi.mocked(fetchWorkspaces).mockResolvedValue([{ id: 'ws-1', name: 'WS One' } as Workspace])
@@ -1471,7 +1471,7 @@ function renderWithWorkspace(opts: {
   } = opts
 
   vi.mocked(fetchChannelConfig).mockResolvedValue({})
-  vi.mocked(getChannelRouting).mockResolvedValue(routing)
+  vi.mocked(fetchChannelRouting).mockResolvedValue(routing)
   vi.mocked(fetchAgents).mockResolvedValue(agents as never)
   vi.mocked(fetchWorkspaces).mockResolvedValue(workspaces)
   vi.mocked(fetchWorkspace).mockResolvedValue(workspaceDetail)
@@ -1814,7 +1814,7 @@ describe('ChannelConfigPanel — workspace fetch error surface (Finding #1)', ()
 
   it('shows routing-workspace-load-error when fetchWorkspace rejects in bound flow', async () => {
     vi.mocked(fetchChannelConfig).mockResolvedValue({})
-    vi.mocked(getChannelRouting).mockResolvedValue({ workspace_id: 'sales', default_agent_id: undefined })
+    vi.mocked(fetchChannelRouting).mockResolvedValue({ workspace_id: 'sales', default_agent_id: undefined })
     vi.mocked(fetchAgents).mockResolvedValue([AGENT_MIA, AGENT_RAY] as never)
     vi.mocked(fetchWorkspaces).mockResolvedValue([WS_SALES])
     // fetchWorkspace rejects — simulates network error or 500
@@ -1857,7 +1857,7 @@ describe('ChannelConfigPanel — workspace fetch error surface (Finding #1)', ()
   it('does not show routing-workspace-load-error in unbound flow (fetchWorkspace not called)', async () => {
     // When no workspace is selected, fetchWorkspace is disabled — error state must not appear.
     vi.mocked(fetchChannelConfig).mockResolvedValue({})
-    vi.mocked(getChannelRouting).mockResolvedValue({ default_agent_id: undefined })
+    vi.mocked(fetchChannelRouting).mockResolvedValue({ default_agent_id: undefined })
     vi.mocked(fetchAgents).mockResolvedValue([AGENT_MIA] as never)
     vi.mocked(fetchWorkspaces).mockResolvedValue([WS_SALES])
     vi.mocked(fetchWorkspace).mockRejectedValue(new Error('Should not be called'))
@@ -1894,7 +1894,7 @@ describe('ChannelConfigPanel — unbind flow (Finding #2 / W1-6)', () => {
 
   it('fires PUT with no workspace_id/default_agent_id when unselecting workspace from bound state', async () => {
     Element.prototype.scrollIntoView = vi.fn()
-    vi.mocked(getChannelRouting).mockResolvedValue({ workspace_id: 'sales', default_agent_id: 'ray' })
+    vi.mocked(fetchChannelRouting).mockResolvedValue({ workspace_id: 'sales', default_agent_id: 'ray' })
     vi.mocked(setChannelRouting).mockResolvedValue({ default_agent_id: undefined } as never)
 
     const client = makeQueryClient()
@@ -1959,7 +1959,7 @@ describe('ChannelConfigPanel — unbind flow (Finding #2 / W1-6)', () => {
 
   it('does NOT fire PUT when selecting "No workspace" when already unbound', async () => {
     // Already unbound (no workspace_id in routing) → selecting __none__ again is a no-op.
-    vi.mocked(getChannelRouting).mockResolvedValue({ default_agent_id: undefined })
+    vi.mocked(fetchChannelRouting).mockResolvedValue({ default_agent_id: undefined })
     vi.mocked(setChannelRouting).mockResolvedValue({ default_agent_id: undefined } as never)
 
     const client = makeQueryClient()
@@ -1997,7 +1997,7 @@ describe('ChannelConfigPanel — unbind flow (Finding #2 / W1-6)', () => {
 
   it('UI reflects unbound state after unbind (agent select disabled, required hint gone)', async () => {
     Element.prototype.scrollIntoView = vi.fn()
-    vi.mocked(getChannelRouting).mockResolvedValue({ workspace_id: 'sales', default_agent_id: 'ray' })
+    vi.mocked(fetchChannelRouting).mockResolvedValue({ workspace_id: 'sales', default_agent_id: 'ray' })
     vi.mocked(setChannelRouting).mockResolvedValue({ default_agent_id: undefined } as never)
 
     const client = makeQueryClient()

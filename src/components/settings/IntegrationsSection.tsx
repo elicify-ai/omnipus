@@ -15,7 +15,7 @@ import { Badge } from '@/components/ui/badge'
 import {
   fetchIntegrationProviders,
   configureIntegrationProvider,
-  isApiError,
+  getErrorMessage,
   type IntegrationProvider,
   type IntegrationProviderUpdateRequest,
 } from '@/lib/api'
@@ -62,7 +62,7 @@ export function IntegrationsSection() {
     },
     onError: (err: Error) => {
       addToast({
-        message: isApiError(err) ? err.userMessage : err.message,
+        message: getErrorMessage(err, 'Integration update failed'),
         variant: 'error',
       })
       setPending(null)

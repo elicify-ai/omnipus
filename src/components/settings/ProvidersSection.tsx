@@ -54,7 +54,7 @@ import {
   configureProvider,
   refreshProviderModels,
   testProvider,
-  isApiError,
+  getErrorMessage,
 } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { PROVIDER_HINTS } from '@/lib/constants'
@@ -971,7 +971,7 @@ export function ProvidersSection() {
       setApiKeys((prev) => ({ ...prev, [draftKey]: '' }))
     },
     onError: (err: Error) => {
-      addToast({ message: isApiError(err) ? err.userMessage : err.message, variant: 'error' })
+      addToast({ message: getErrorMessage(err, 'Provider save failed'), variant: 'error' })
       setPending(null)
     },
   })
@@ -998,7 +998,7 @@ export function ProvidersSection() {
         addToast({ message: `Model list refreshed (${updated.models?.length ?? 0})`, variant: 'success' })
       }
     } catch (err) {
-      addToast({ message: isApiError(err) ? err.userMessage : (err as Error).message, variant: 'error' })
+      addToast({ message: getErrorMessage(err, 'Model refresh failed'), variant: 'error' })
     } finally {
       setRefreshing((prev) => ({ ...prev, [id]: false }))
     }

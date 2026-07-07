@@ -11,6 +11,7 @@ import { EmptyState } from '@/components/shared/ListStates'
 import { useUiStore } from '@/store/ui'
 import { useNotificationsStore, type NotifItem } from '@/store/notifications'
 import { markNotificationRead, markAllNotificationsRead } from '@/lib/api'
+import { logError } from '@/lib/telemetry'
 
 // #264 — header notification center (right-side Sheet). Lists notifications
 // newest-first; unread items are visually distinct (surface-2 background + a
@@ -53,9 +54,14 @@ export function NotificationPanel() {
   function handleClick(item: NotifItem) {
     if (!item.read) {
       storeMarkRead(item.id)
-      void markNotificationRead(item.id).catch(() => {
+      void markNotificationRead(item.id).catch((err) => {
         // Best-effort: the optimistic local read state stays; a failed server
         // write reconciles on the next hydrate. No error UI clutter.
+        logError({
+          event: 'notificationMarkReadFailed',
+          notificationId: item.id,
+          message: err instanceof Error ? err.message : String(err),
+        })
       })
     }
     closePanel()
@@ -68,8 +74,12 @@ export function NotificationPanel() {
 
   function handleMarkAllRead() {
     storeMarkAllRead()
-    void markAllNotificationsRead().catch(() => {
+    void markAllNotificationsRead().catch((err) => {
       // Best-effort; local state already cleared.
+      logError({
+        event: 'notificationMarkAllReadFailed',
+        message: err instanceof Error ? err.message : String(err),
+      })
     })
   }
 

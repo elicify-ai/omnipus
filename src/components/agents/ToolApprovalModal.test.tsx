@@ -18,7 +18,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { act } from 'react'
 import type { ToolApprovalRequiredFrame } from '@/lib/api/generated/asyncapi-types'
 
-// We mock postToolApproval but pass-through ApiError + isApiError so the
+// We mock submitToolApproval but pass-through ApiError + isApiError so the
 // component's `isApiError(err)` branch matches errors thrown from inside the
 // mock implementation. Without re-exporting them, the mock would shadow them
 // with undefined and crash on any thrown error.
@@ -26,7 +26,7 @@ vi.mock('@/lib/api', async () => {
   const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api')
   return {
     ...actual,
-    postToolApproval: vi.fn(),
+    submitToolApproval: vi.fn(),
   }
 })
 
@@ -62,7 +62,7 @@ beforeEach(async () => {
     useToolApprovalStore.setState({ queue: [] })
   })
   vi.clearAllMocks()
-  vi.mocked(api.postToolApproval).mockResolvedValue(undefined)
+  vi.mocked(api.submitToolApproval).mockResolvedValue(undefined)
 })
 
 const SAMPLE_APPROVAL = {
@@ -183,7 +183,7 @@ describe('ToolApprovalModal — bash command preview (ADR-036 §3.4 port)', () =
 })
 
 describe('ToolApprovalModal — button dispatch', () => {
-  it('Approve button calls postToolApproval with action:"approve"', async () => {
+  it('Approve button calls submitToolApproval with action:"approve"', async () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
     })
@@ -192,11 +192,11 @@ describe('ToolApprovalModal — button dispatch', () => {
     fireEvent.click(screen.getByRole('button', { name: /Approve/i }))
 
     await waitFor(() => {
-      expect(api.postToolApproval).toHaveBeenCalledWith('appr-001', 'approve')
+      expect(api.submitToolApproval).toHaveBeenCalledWith('appr-001', 'approve')
     })
   })
 
-  it('Deny button calls postToolApproval with action:"deny"', async () => {
+  it('Deny button calls submitToolApproval with action:"deny"', async () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
     })
@@ -205,11 +205,11 @@ describe('ToolApprovalModal — button dispatch', () => {
     fireEvent.click(screen.getByRole('button', { name: /Deny/i }))
 
     await waitFor(() => {
-      expect(api.postToolApproval).toHaveBeenCalledWith('appr-001', 'deny')
+      expect(api.submitToolApproval).toHaveBeenCalledWith('appr-001', 'deny')
     })
   })
 
-  it('Cancel button calls postToolApproval with action:"cancel"', async () => {
+  it('Cancel button calls submitToolApproval with action:"cancel"', async () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
     })
@@ -218,14 +218,14 @@ describe('ToolApprovalModal — button dispatch', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Cancel$/i }))
 
     await waitFor(() => {
-      expect(api.postToolApproval).toHaveBeenCalledWith('appr-001', 'cancel')
+      expect(api.submitToolApproval).toHaveBeenCalledWith('appr-001', 'cancel')
     })
   })
 
   // ADR-036 §3.4 gap closure: the retired ExecApprovalBlock's 3-way decision
   // (Allow / Deny / "Always Allow") is now fully reachable from the generic
   // modal for every tool, not just bash.
-  it('Always Allow button calls postToolApproval with action:"always"', async () => {
+  it('Always Allow button calls submitToolApproval with action:"always"', async () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
     })
@@ -234,7 +234,7 @@ describe('ToolApprovalModal — button dispatch', () => {
     fireEvent.click(screen.getByRole('button', { name: /Always Allow/i }))
 
     await waitFor(() => {
-      expect(api.postToolApproval).toHaveBeenCalledWith('appr-001', 'always')
+      expect(api.submitToolApproval).toHaveBeenCalledWith('appr-001', 'always')
     })
   })
 
@@ -283,10 +283,10 @@ describe('ToolApprovalModal — a11y safe-default contract (C2)', () => {
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape', code: 'Escape' })
 
     await waitFor(() => {
-      expect(api.postToolApproval).toHaveBeenCalledWith('appr-001', 'deny')
+      expect(api.submitToolApproval).toHaveBeenCalledWith('appr-001', 'deny')
     })
     // The safe default must NEVER be an approve.
-    expect(api.postToolApproval).not.toHaveBeenCalledWith('appr-001', 'approve')
+    expect(api.submitToolApproval).not.toHaveBeenCalledWith('appr-001', 'approve')
   })
 
   it('lands default focus on the Deny button when the modal opens', async () => {
@@ -308,7 +308,7 @@ describe('ToolApprovalModal — a11y safe-default contract (C2)', () => {
 
 describe('ToolApprovalModal — error handling', () => {
   it('dismisses silently on 410 Gone (already resolved)', async () => {
-    vi.mocked(api.postToolApproval).mockRejectedValue(new api.ApiError(410, 'Gone'))
+    vi.mocked(api.submitToolApproval).mockRejectedValue(new api.ApiError(410, 'Gone'))
 
     act(() => {
       useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
@@ -326,7 +326,7 @@ describe('ToolApprovalModal — error handling', () => {
   })
 
   it('shows admin-required toast on 403', async () => {
-    vi.mocked(api.postToolApproval).mockRejectedValue(new api.ApiError(403, 'Forbidden'))
+    vi.mocked(api.submitToolApproval).mockRejectedValue(new api.ApiError(403, 'Forbidden'))
 
     act(() => {
       useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
@@ -348,7 +348,7 @@ describe('ToolApprovalModal — error handling', () => {
   })
 
   it('shows re-auth toast on 401', async () => {
-    vi.mocked(api.postToolApproval).mockRejectedValue(new api.ApiError(401, 'Unauthorized'))
+    vi.mocked(api.submitToolApproval).mockRejectedValue(new api.ApiError(401, 'Unauthorized'))
 
     act(() => {
       useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })

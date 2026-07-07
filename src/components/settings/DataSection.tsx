@@ -13,7 +13,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { Separator } from '@/components/ui/separator'
-import { fetchConfig, updateConfig, fetchStorageStats, createBackup, fetchBackups, restoreBackup, clearAllSessions, isApiError } from '@/lib/api'
+import { fetchConfig, updateConfig, fetchStorageStats, createBackup, fetchBackups, restoreBackup, clearAllSessions, getErrorMessage } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 
 function formatBytes(bytes: number): string {
@@ -100,7 +100,7 @@ export function DataSection() {
       queryClient.invalidateQueries({ queryKey: ['backups'] })
       addToast({ message: `Backup created: ${res.path}`, variant: 'success' })
     },
-    onError: (err: unknown) => addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Backup failed', variant: 'error' }),
+    onError: (err: unknown) => addToast({ message: getErrorMessage(err, 'Backup failed'), variant: 'error' }),
   })
 
   const { mutate: doRestore, isPending: isRestoring } = useMutation({
@@ -109,7 +109,7 @@ export function DataSection() {
       addToast({ message: 'Restore complete. Restart gateway to apply.', variant: 'success' })
       setRestoreTarget(null)
     },
-    onError: (err: unknown) => addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Restore failed', variant: 'error' }),
+    onError: (err: unknown) => addToast({ message: getErrorMessage(err, 'Restore failed'), variant: 'error' }),
   })
 
   const { mutate: doClearSessions, isPending: isClearing } = useMutation({
@@ -126,7 +126,7 @@ export function DataSection() {
       }
       setClearConfirmOpen(false)
     },
-    onError: (err: unknown) => addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Clear failed', variant: 'error' }),
+    onError: (err: unknown) => addToast({ message: getErrorMessage(err, 'Clear failed'), variant: 'error' }),
   })
 
   const isLoading = configLoading || statsLoading

@@ -8,9 +8,11 @@ import { isApiError } from '@/lib/api'
 // Spec-4 FR-4.1/FR-4.2 — Executor selector + external-CLI runner connection test.
 //
 // A sub-agent's executor controls which runtime runs its tasks:
-//   - native      → run inside the Omnipus agent loop (default; only functional kind in v0.1.0)
-//   - external-cli → delegate to an external CLI agent (claude-code / codex / opencode)
-//   - remote-a2a  → RESERVED; not resolvable in v0.1.0
+//   - native      → run inside the Omnipus agent loop (default)
+//   - external-cli → delegate to an external CLI agent (claude-code / codex / opencode);
+//                    fully wired below (CLI picker + Test Connection button with 6
+//                    distinct outcome states) but experimental in v0.1.0
+//   - remote-a2a  → RESERVED; not resolvable in v0.1.0 — falls back to native
 //
 // When kind=external-cli the operator can run a connection test that validates the
 // CLI binary is present, runs, and is authenticated WITHOUT spending any tokens.
