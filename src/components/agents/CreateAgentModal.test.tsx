@@ -19,7 +19,7 @@ import { act } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { CreateAgentModal } from './CreateAgentModal'
 import { useUiStore } from '@/store/ui'
-import { createAgent, fetchSkills } from '@/lib/api'
+import { createAgent, fetchSkills, ApiError } from '@/lib/api'
 import type { Skill } from '@/lib/api'
 
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -518,6 +518,44 @@ describe('CreateAgentModal — submit error path', () => {
     fireEvent.change(screen.getByTestId('wizard-soul'), { target: { value: 'rewritten' } })
     // Banner should be gone after the field edit.
     expect(screen.queryByTestId('wizard-submit-error')).toBeNull()
+  })
+})
+
+// Traces to: wave2 findings-fix cycle — the top-level createAgentMutation's
+// onError (CreateAgentModal.tsx ~L229-236) was dedup'd from a raw
+// isApiError ternary into getErrorMessage() but had no test exercising it.
+// The existing "submit error path" tests above only cover the wizard's own
+// inline wizard-submit-error banner via the onCreate PROP override — they
+// never drive the real wire-level createAgent() call this handler guards,
+// and never assert on the toast this handler fires.
+describe('CreateAgentModal — top-level create-mutation error toast (getErrorMessage migration)', () => {
+  it('fires an error toast with the ApiError userMessage when the wire-level createAgent() call rejects (no onCreate override)', async () => {
+    vi.mocked(createAgent).mockRejectedValue(
+      new ApiError(409, 'An agent with this name already exists.', {
+        body: '{"error":"agent name conflict: Research Bot"}',
+      }),
+    )
+    // No onCreate prop — this drives the real createAgent() mutationFn
+    // branch, not the legacy onCreateProp path the other error tests use.
+    renderModal({ open: true, onClose: vi.fn() })
+    await fillAndAdvanceToStep3()
+    fireEvent.click(screen.getByTestId('wizard-create'))
+    await waitFor(() => expect(createAgent).toHaveBeenCalled())
+
+    await waitFor(() => {
+      const toasts = useUiStore.getState().toasts
+      expect(toasts).toContainEqual(
+        expect.objectContaining({
+          message: 'An agent with this name already exists.',
+          variant: 'error',
+        }),
+      )
+    })
+
+    // The raw server body is debug-only (ApiError.body) and must never leak
+    // into the user-facing toast — only userMessage may appear.
+    const toasts = useUiStore.getState().toasts
+    expect(toasts.some((t) => /agent name conflict/i.test(t.message))).toBe(false)
   })
 })
 

@@ -16,6 +16,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { WorkspaceHeader } from './WorkspaceHeader'
+import { ApiError } from '@/lib/api'
 import type { Workspace, Milestone } from '@/lib/api'
 
 const addToast = vi.fn()
@@ -26,12 +27,14 @@ vi.mock('@/store/ui', () => ({
 }))
 
 const fetchMilestonesMock = vi.fn()
+const updateWorkspaceMock = vi.fn()
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
     ...actual,
     fetchMilestones: (id: string) => fetchMilestonesMock(id),
+    updateWorkspace: (id: string, patch: Record<string, unknown>) => updateWorkspaceMock(id, patch),
     milestonesQueryKeys: {
       ...actual.milestonesQueryKeys,
       list: (id: string) => ['milestones', id],
@@ -77,6 +80,7 @@ function renderHeader(props: Partial<React.ComponentProps<typeof WorkspaceHeader
 describe('WorkspaceHeader', () => {
   beforeEach(() => {
     fetchMilestonesMock.mockReset()
+    updateWorkspaceMock.mockReset()
     addToast.mockReset()
   })
 
@@ -120,5 +124,43 @@ describe('WorkspaceHeader', () => {
 
     await screen.findByText('Recovered Milestone')
     expect(fetchMilestonesMock).toHaveBeenCalledTimes(2)
+  })
+
+  // Traces to: wave2 findings-fix cycle — updateMutation's onError
+  // (WorkspaceHeader.tsx ~L37-40) was dedup'd from a raw isApiError ternary
+  // into getErrorMessage(). addToast was mocked in this file already but
+  // never actually triggered/asserted for this rename-failure path.
+  it('shows an error toast with the ApiError userMessage when the rename mutation rejects, and stays in edit mode', async () => {
+    fetchMilestonesMock.mockResolvedValue([])
+    updateWorkspaceMock.mockRejectedValue(
+      new ApiError(409, 'This conflicts with the current state. Please refresh and try again.', {
+        body: '{"error":"workspace name conflict"}',
+      }),
+    )
+    renderHeader()
+    await waitFor(() => expect(fetchMilestonesMock).toHaveBeenCalledWith('ws-1'))
+
+    fireEvent.click(screen.getByRole('button', { name: /edit workspace name/i }))
+    const input = screen.getByRole('textbox')
+    fireEvent.change(input, { target: { value: 'Renamed Workspace' } })
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
+
+    await waitFor(() =>
+      expect(updateWorkspaceMock).toHaveBeenCalledWith('ws-1', { name: 'Renamed Workspace' }),
+    )
+    await waitFor(() =>
+      expect(addToast).toHaveBeenCalledWith({
+        message: 'This conflicts with the current state. Please refresh and try again.',
+        variant: 'error',
+      }),
+    )
+    // onError never calls setEditingName(false) (only onSuccess does) — the
+    // input must remain visible, proving the failure path doesn't silently
+    // behave like success.
+    expect(screen.getByRole('textbox')).toBeInTheDocument()
+    // The raw server body is debug-only and must never leak into the toast.
+    expect(addToast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringMatching(/workspace name conflict/i) }),
+    )
   })
 })

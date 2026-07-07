@@ -14,7 +14,7 @@ import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useNotificationsStore } from '@/store/notifications'
 import { useToolApprovalStore } from '@/store/toolApproval'
 import { registerSyncChatForeground } from '@/store/session'
-import { logError } from '@/lib/telemetry'
+import { logDiagnostic } from '@/lib/telemetry'
 
 // Maximum messages kept in the visible ring buffer per session.
 // Older messages are evicted once this limit is exceeded; full transcript is preserved server-side.
@@ -25,21 +25,6 @@ const MAX_TOOL_RESULT_BYTES = 50_000
 
 // Preview size for client-side truncated results (4 KiB).
 const CLIENT_TRUNCATION_PREVIEW_BYTES = 4_096
-
-// Emit a production telemetry record for a WS-frame-reducer diagnostic
-// condition (dropped/unknown/malformed frame, index-miss fallback, dedup
-// skip, etc). Mirrors the src/lib/api.ts `_recordApiSchemaError` / src/lib/ws.ts
-// `_recordDropped` pattern: DEV and test builds already surface these via the
-// adjacent console.warn/console.error call (kept as-is, unchanged), so this
-// only adds a rate-limited structured logError() record in production builds
-// — previously these conditions were console-only, so an operator running a
-// shipped build had no durable signal that a frame was silently dropped or a
-// reducer path fell into a defensive fallback.
-function _recordChatDiagnostic(event: string, fields: Record<string, string | number | boolean | null | undefined>): void {
-  if (!import.meta.env.DEV && import.meta.env.MODE !== 'test') {
-    logError({ event, ...fields })
-  }
-}
 
 export interface MediaAttachment {
   type: 'image' | 'audio' | 'video' | 'file'
@@ -747,7 +732,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
       if (!current?.isReplaying) {
         if (sawReplayMessageThisTurn[sid]) {
           console.warn('[chat] setReplaying(false) ignored — isReplaying was already false despite replay_message having been processed. Likely attachToSession race.')
-          _recordChatDiagnostic('chatSetReplayingIgnored', { sessionId: sid })
+          logDiagnostic('chatSetReplayingIgnored', { sessionId: sid })
         }
         return
       }
@@ -1068,7 +1053,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
             return
           }
           console.warn('[chat] subagent_end received for unknown span_id', { spanId: frame.span_id })
-          _recordChatDiagnostic('chatSubagentEndUnknownSpanId', { spanId: frame.span_id, sessionId: sid })
+          logDiagnostic('chatSubagentEndUnknownSpanId', { spanId: frame.span_id, sessionId: sid })
         }) as Partial<SessionChatState>
       })
     },
@@ -1100,7 +1085,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
         }
         // Fallback: O(N) scan (legacy path, index miss).
         console.warn('[chat] attachStepToSpan: span index miss, falling back to O(N) scan', { parentCallId })
-        _recordChatDiagnostic('chatAttachStepSpanIndexMiss', { parentCallId, sessionId: sid })
+        logDiagnostic('chatAttachStepSpanIndexMiss', { parentCallId, sessionId: sid })
         for (let i = b.messageOrder.length - 1; i >= 0; i--) {
           const msgId = b.messageOrder[i]
           const msg = b.messagesById[msgId]
@@ -1285,7 +1270,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
       const description = first
         ? `${first.path.join('.') || 'root'}: ${first.message}`
         : result.error.message
-      _recordChatDiagnostic('chatOutboundFrameValidationFailed', { issue: description, sessionId })
+      logDiagnostic('chatOutboundFrameValidationFailed', { issue: description, sessionId })
       // Gate the dev-toast on MODE (not DEV) so the toast also fires in
       // Vitest's 'test' mode, which bakes DEV=false at compile time. MODE
       // is 'production' for shipped builds so the toast is suppressed
@@ -1593,7 +1578,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
         const sent = connection.send({ type: 'cancel', session_id: activeSessionId })
         if (!sent) {
           console.warn('[chat] cancelStream: send failed — connection may be closed')
-          _recordChatDiagnostic('chatCancelStreamSendFailed', { sessionId: activeSessionId })
+          logDiagnostic('chatCancelStreamSendFailed', { sessionId: activeSessionId })
           useUiStore.getState().addToast({
             message: 'Could not send cancel — connection dropped. The response may continue briefly.',
             variant: 'error',
@@ -1640,8 +1625,8 @@ export const useChatStore = create<ChatStore>((set, get) => {
               break
             }
           }
-          // Gate on "is there anything to bake at all" (mirrors the `done` frame
-          // handler's `draft.toolCallOrder.length > 0` gate, ~L1931) rather than
+          // Gate on "is there anything to bake at all" (mirrors the `done` case's
+          // `toolCallOrder.length > 0` gate/baking block below) rather than
           // "is something still running": a tool call flips to a terminal status
           // ('success'/'error') the instant its tool_call_result frame arrives,
           // which commonly happens before the trailing assistant text finishes
@@ -1683,8 +1668,8 @@ export const useChatStore = create<ChatStore>((set, get) => {
             // ('success'/'error') calls need this too: otherwise they vanish
             // the instant isStreaming flips false, because the renderer
             // switches from the live toolCalls bucket to message.tool_calls at
-            // that point (mirrors the `done` frame handler's baking logic; see
-            // ~L1903-1918).
+            // that point (mirrors the `done` case's `toolCallOrder.length > 0`
+            // gate/baking block below).
             const lastAssistantId = findLastAssistantMessageId(order, bucket.messagesById)
             const lastMsg = lastAssistantId ? next.messagesById[lastAssistantId] : undefined
             if (lastAssistantId && lastMsg?.role === 'assistant') {
@@ -1753,7 +1738,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
           }
           // In production: drop the frame and surface a one-shot connection error.
           console.error('[chat] server frame missing session_id — dropping', { type: frame.type })
-          _recordChatDiagnostic('chatFrameMissingSessionId', { frameType: frame.type })
+          logDiagnostic('chatFrameMissingSessionId', { frameType: frame.type })
           useConnectionStore.getState().setConnectionError(
             'internal: server frame missing session_id — please reload'
           )
@@ -1895,7 +1880,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
             const knownSid = !!get().sessionsById[targetSid]
             if (!knownSid) {
               console.warn('chat.done_unknown_sid', { targetSid, activeSid: activeSid })
-              _recordChatDiagnostic('chatDoneUnknownSid', { targetSid, activeSid })
+              logDiagnostic('chatDoneUnknownSid', { targetSid, activeSid })
               const STREAM_GRACE_MS = 10_000
               if (activeSid && activeSid !== targetSid && get().sessionsById[activeSid]) {
                 const activeBucket = get().sessionsById[activeSid]!
@@ -1914,7 +1899,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
                     activeSid,
                     lastUserMessageAt: activeBucket.lastUserMessageAt,
                   })
-                  _recordChatDiagnostic('chatDoneUnknownSidSkippedActiveMidStream', {
+                  logDiagnostic('chatDoneUnknownSidSkippedActiveMidStream', {
                     targetSid,
                     activeSid,
                     lastUserMessageAt: activeBucket.lastUserMessageAt,
@@ -2139,7 +2124,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
               const bufferKey = `${targetSid}:${parentCallId}`
               bufferForSpan(bufferKey, frame, (buffered) => {
                 console.warn(`[chat] orphan frame: parent_call_id="${parentCallId}" session="${targetSid}" — subagent_start never arrived within ${ORPHAN_BUFFER_TTL_MS}ms. Releasing as flat tool calls.`)
-                _recordChatDiagnostic('chatOrphanFrameReleased', { parentCallId, sessionId: targetSid, ttlMs: ORPHAN_BUFFER_TTL_MS })
+                logDiagnostic('chatOrphanFrameReleased', { parentCallId, sessionId: targetSid, ttlMs: ORPHAN_BUFFER_TTL_MS })
                 useUiStore.getState().addToast({
                   variant: 'default',
                   message: 'Some subagent steps arrived without their span — displayed as flat tool calls',
@@ -2245,7 +2230,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 }
                 // Fallback: O(N) scan (index miss — log a warning).
                 console.warn('[chat] tool_call_result: span index miss, falling back to O(N) scan', { parentCallId, callId: frame.call_id })
-                _recordChatDiagnostic('chatToolCallResultSpanIndexMiss', { parentCallId, callId: frame.call_id, sessionId: targetSid })
+                logDiagnostic('chatToolCallResultSpanIndexMiss', { parentCallId, callId: frame.call_id, sessionId: targetSid })
                 for (let i = bucket.messageOrder.length - 1; i >= 0; i--) {
                   const msgId = bucket.messageOrder[i]
                   const msg = bucket.messagesById[msgId]
@@ -2273,7 +2258,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
               const bufferKey = `${targetSid}:${parentCallId}`
               bufferForSpan(bufferKey, frame, (buffered) => {
                 console.warn(`[chat] orphan frame: parent_call_id="${parentCallId}" session="${targetSid}" — subagent_start never arrived within ${ORPHAN_BUFFER_TTL_MS}ms. Releasing as flat tool calls.`)
-                _recordChatDiagnostic('chatOrphanFrameReleased', { parentCallId, sessionId: targetSid, ttlMs: ORPHAN_BUFFER_TTL_MS })
+                logDiagnostic('chatOrphanFrameReleased', { parentCallId, sessionId: targetSid, ttlMs: ORPHAN_BUFFER_TTL_MS })
                 useUiStore.getState().addToast({
                   variant: 'default',
                   message: 'Some subagent steps arrived without their span — displayed as flat tool calls',
@@ -2395,7 +2380,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 return
               }
               console.warn('[chat] subagent_end received for unknown span_id', { spanId: ef.span_id })
-              _recordChatDiagnostic('chatSubagentEndUnknownSpanId', { spanId: ef.span_id, sessionId: targetSid })
+              logDiagnostic('chatSubagentEndUnknownSpanId', { spanId: ef.span_id, sessionId: targetSid })
             }) as Partial<SessionChatState>
           })
           break
@@ -2447,7 +2432,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
               if (messageId) {
                 if (draft.messageOrder.includes(messageId)) {
                   console.warn('chat.replay_dedup_skipped', { id: messageId, role, reason: 'id-match' })
-                  _recordChatDiagnostic('chatReplayDedupSkipped', { messageId, role, reason: 'id-match', sessionId: targetSid })
+                  logDiagnostic('chatReplayDedupSkipped', { messageId, role, reason: 'id-match', sessionId: targetSid })
                   return
                 }
               } else {
@@ -2463,7 +2448,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   (tailTs === frameTs || (tailTs === '' && frameTs === ''))
                 ) {
                   console.warn('chat.replay_dedup_skipped', { role, reason: 'content-tuple-match' })
-                  _recordChatDiagnostic('chatReplayDedupSkipped', { role, reason: 'content-tuple-match', sessionId: targetSid })
+                  logDiagnostic('chatReplayDedupSkipped', { role, reason: 'content-tuple-match', sessionId: targetSid })
                   return
                 }
               }
@@ -2571,7 +2556,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
           if (!targetSid) break
           if (!Array.isArray(frame.parts) || frame.parts.length === 0) {
             console.warn('[chat] Received media frame with empty or invalid parts — appending notice')
-            _recordChatDiagnostic('chatMediaFrameInvalidParts', { sessionId: targetSid })
+            logDiagnostic('chatMediaFrameInvalidParts', { sessionId: targetSid })
             withBucket(targetSid, (b) => {
               return produce(b, (draft) => {
                 const lastMsgId = findLastAssistantMessageId(draft.messageOrder, draft.messagesById)
@@ -2712,7 +2697,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
         default:
           unknownFrameCount++
           console.warn('[chat] Unknown frame type', { type: (frame as { type?: string }).type, count: unknownFrameCount })
-          _recordChatDiagnostic('chatUnknownFrameType', { frameType: (frame as { type?: string }).type, count: unknownFrameCount })
+          logDiagnostic('chatUnknownFrameType', { frameType: (frame as { type?: string }).type, count: unknownFrameCount })
           if (unknownFrameCount >= UNKNOWN_FRAME_TOAST_THRESHOLD) {
             useUiStore.getState().addToast({
               message: "Server is sending events this UI doesn't understand — refresh to update.",
