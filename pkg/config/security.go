@@ -168,6 +168,12 @@ func collectSensitive(v reflect.Value, values *[]string) {
 
 const (
 	notHere = `"[NOT_HERE]"`
+	// notHereValue is the unquoted redaction marker for non-JSON marshalers
+	// (e.g. MarshalYAML). notHere above is a raw JSON literal (already
+	// quoted) returned verbatim as MarshalJSON's []byte output; YAML
+	// marshalers return `any` and let the yaml encoder quote as needed, so
+	// the literal quote characters in notHere must not be embedded here.
+	notHereValue = "[NOT_HERE]"
 )
 
 // SecureStrings is a slice of SecureString.
@@ -282,8 +288,11 @@ func (s *SecureString) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// MarshalYAML redacts the value in YAML output, mirroring MarshalJSON. The
+// credential should NEVER be serialized to YAML in plaintext — use
+// credentials.json + APIKeyRef for persistence.
 func (s SecureString) MarshalYAML() (any, error) {
-	return s.resolved, nil
+	return notHereValue, nil
 }
 
 func (s *SecureString) UnmarshalYAML(value *yaml.Node) error {

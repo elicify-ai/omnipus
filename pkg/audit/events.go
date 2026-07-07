@@ -155,6 +155,20 @@ const (
 	// credential blob could not be removed and is now orphaned in the store — the
 	// operator asked to delete the credential but it remains encrypted at rest.
 	EventChannelInstanceDeleted = "channel.instance.deleted"
+
+	// EventChannelInstanceConfigured — INFO. An operator created or updated a
+	// channel instance's configuration via POST/PUT /api/v1/channels/{id}/configure
+	// (SEC-23 / #289). Emitted by pkg/gateway/rest.go's configureChannel handler
+	// after the config write (and any credential store writes/clears) have
+	// committed. A configure call can create, rotate, or clear stored encrypted
+	// secrets and change arbitrary instance fields, so — like
+	// EventChannelInstanceDeleted — it MUST leave an audit trail even on the
+	// happy path. Fields: {channel_id, type, fields, credential_cleanup_failed}.
+	// fields is the set of top-level config keys touched by the request (names
+	// only — never values, to avoid leaking secrets into the audit log).
+	// credential_cleanup_failed=true means a cleared secret's stored credential
+	// could not be removed and is now orphaned in the store.
+	EventChannelInstanceConfigured = "channel.instance.configured"
 )
 
 // ---------------------------------------------------------------------------

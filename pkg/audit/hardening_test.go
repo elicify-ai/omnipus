@@ -420,6 +420,9 @@ func TestTypedEnums_IsValidEventName(t *testing.T) {
 		// Channel instance delete event (ADR-029 FR-025). Must be in the allowlist
 		// or every instance deletion trips the unknown-event warn-once.
 		{"channel.instance.deleted valid", audit.EventChannelInstanceDeleted, true},
+		// Channel instance configure event (SEC-23 / #289). Must be in the
+		// allowlist or every configure call trips the unknown-event warn-once.
+		{"channel.instance.configured valid", audit.EventChannelInstanceConfigured, true},
 		{"empty rejected", "", false},
 		{"typo rejected", "tool_calll", false},
 		{"workspace typo rejected", audit.EventName("workspace.craete"), false},

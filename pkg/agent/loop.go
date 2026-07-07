@@ -2302,6 +2302,18 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 				al.activeRequests.Add(1)
 				go func() {
 					defer al.activeRequests.Done()
+
+					var response string
+					var ag *AgentInstance
+					published := false
+
+					// Outer recover — preserved from before this fix. This is the
+					// only supervising recover for this bare dispatcher goroutine
+					// (unlike session_worker.go's runLoop→processTurn split, there
+					// is no outer layer above it), so it must keep swallowing the
+					// panic (log-and-exit-goroutine) rather than re-panicking again
+					// — doing so would crash the whole gateway process, not just
+					// this one message.
 					defer func() {
 						if r := recover(); r != nil {
 							logger.ErrorCF("agent", "Panic in unroutable-message goroutine",
@@ -2312,12 +2324,45 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 								})
 						}
 					}()
-					response, ag, err := al.processMessage(runCtx, msg)
+
+					// C8 (chat-stream-hang): guarantee a terminal frame on EVERY
+					// exit path, including panic-recover — mirrors the per-session
+					// pattern in session_worker.go's processTurn defer. processMessage
+					// can panic (e.g. a provider/tool nil-deref that escapes the inner
+					// recovers); when it does, response is still "" and nothing is
+					// ever published, leaving the SPA stuck "thinking" forever for
+					// unroutable-path messages too.
+					//
+					// Registered AFTER the outer recover above so that — defers
+					// being LIFO — THIS recover runs FIRST during unwinding: it
+					// synthesizes an error response and force-publishes it via a
+					// fresh bounded-timeout context (runCtx may be canceled during
+					// panic unwinding), then re-panics so the outer recover above
+					// still logs the "Panic in unroutable-message goroutine" event
+					// exactly as before this fix.
+					defer func() {
+						if r := recover(); r != nil {
+							if response == "" {
+								response = "Error processing message: the agent turn failed unexpectedly. Please try again."
+							}
+							if !published {
+								termCtx, termCancel := context.WithTimeout(context.Background(), 5*time.Second)
+								al.publishResponseIfNeeded(termCtx, ag, msg.Channel, msg.ChatID, response)
+								termCancel()
+								published = true
+							}
+							panic(r)
+						}
+					}()
+
+					var err error
+					response, ag, err = al.processMessage(runCtx, msg)
 					if err != nil && response == "" {
 						response = fmt.Sprintf("Error processing message: %v", err)
 					}
 					if response != "" {
 						al.publishResponseIfNeeded(runCtx, ag, msg.Channel, msg.ChatID, response)
+						published = true
 					}
 				}()
 				continue
@@ -2923,6 +2968,7 @@ func (al *AgentLoop) logEvent(evt Event) {
 		fields["kept_messages"] = payload.KeptMessages
 		fields["summary_len"] = payload.SummaryLen
 		fields["omitted_oversized"] = payload.OmittedOversized
+		fields["degraded"] = payload.Degraded
 	case ToolExecStartPayload:
 		fields["tool"] = payload.Tool
 		fields["args_count"] = len(payload.Arguments)
@@ -8180,6 +8226,7 @@ func (al *AgentLoop) summarizeSession(agent *AgentInstance, sessionKey string, t
 
 	// Multi-Part Summarization
 	var finalSummary string
+	var degraded bool
 	if len(validMessages) > maxSummarizationMessages {
 		mid := len(validMessages) / 2
 
@@ -8188,8 +8235,9 @@ func (al *AgentLoop) summarizeSession(agent *AgentInstance, sessionKey string, t
 		part1 := validMessages[:mid]
 		part2 := validMessages[mid:]
 
-		s1, _ := al.summarizeBatch(ctx, agent, part1, "")
-		s2, _ := al.summarizeBatch(ctx, agent, part2, "")
+		s1, s1Degraded := al.summarizeBatch(ctx, agent, part1, "")
+		s2, s2Degraded := al.summarizeBatch(ctx, agent, part2, "")
+		degraded = s1Degraded || s2Degraded
 
 		mergePrompt := fmt.Sprintf(
 			"Merge these two conversation summaries into one cohesive summary:\n\n1: %s\n\n2: %s",
@@ -8198,13 +8246,22 @@ func (al *AgentLoop) summarizeSession(agent *AgentInstance, sessionKey string, t
 		)
 
 		resp, err := al.retryLLMCall(ctx, agent, mergePrompt, llmMaxRetries)
-		if err == nil && resp.Content != "" {
+		if err == nil && resp != nil && resp.Content != "" {
 			finalSummary = resp.Content
 		} else {
+			logger.WarnCF(
+				"agent",
+				"summarizeSession: LLM merge of multi-part summaries failed after retries, falling back to concatenation",
+				map[string]any{
+					"session_key": sessionKey,
+					"reason":      errString(err),
+				},
+			)
 			finalSummary = s1 + " " + s2
+			degraded = true
 		}
 	} else {
-		finalSummary, _ = al.summarizeBatch(ctx, agent, validMessages, summary)
+		finalSummary, degraded = al.summarizeBatch(ctx, agent, validMessages, summary)
 	}
 
 	if omitted && finalSummary != "" {
@@ -8226,6 +8283,7 @@ func (al *AgentLoop) summarizeSession(agent *AgentInstance, sessionKey string, t
 				KeptMessages:       keepCount,
 				SummaryLen:         len(finalSummary),
 				OmittedOversized:   omitted,
+				Degraded:           degraded,
 			},
 		)
 	}
@@ -8300,13 +8358,16 @@ func (al *AgentLoop) retryLLMCall(
 	return resp, err
 }
 
-// summarizeBatch summarizes a batch of messages.
+// summarizeBatch summarizes a batch of messages. It returns the summary text
+// and a degraded flag: degraded is true when the LLM summarization call
+// failed after retries and the returned text is a crude per-message
+// truncation fallback rather than a real LLM-produced summary.
 func (al *AgentLoop) summarizeBatch(
 	ctx context.Context,
 	agent *AgentInstance,
 	batch []providers.Message,
 	existingSummary string,
-) (string, error) {
+) (string, bool) {
 	const (
 		llmMaxRetries             = 3
 		llmTemperature            = 0.3
@@ -8330,9 +8391,21 @@ func (al *AgentLoop) summarizeBatch(
 	prompt := sb.String()
 
 	response, err := al.retryLLMCall(ctx, agent, prompt, llmMaxRetries)
-	if err == nil && response.Content != "" {
-		return strings.TrimSpace(response.Content), nil
+	if err == nil && response != nil && response.Content != "" {
+		return strings.TrimSpace(response.Content), false
 	}
+
+	reason := "LLM returned empty content"
+	if err != nil {
+		reason = errString(err)
+	}
+	logger.WarnCF("agent", "summarizeBatch: LLM summarization failed after retries, falling back to crude truncation",
+		map[string]any{
+			"agent_id":    agent.ID,
+			"batch_size":  len(batch),
+			"max_retries": llmMaxRetries,
+			"reason":      reason,
+		})
 
 	var fallback strings.Builder
 	fallback.WriteString("Conversation summary: ")
@@ -8362,7 +8435,7 @@ func (al *AgentLoop) summarizeBatch(
 		}
 		fallback.WriteString(fmt.Sprintf("%s: %s", m.Role, content))
 	}
-	return fallback.String(), nil
+	return fallback.String(), true
 }
 
 // estimateTokens estimates the number of tokens in a message list.

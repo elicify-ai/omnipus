@@ -1,9 +1,10 @@
 // Package sandbox — SpawnBackgroundChild: shared helper for long-running
 // background processes (dev servers) that must run under sandbox hardening.
 //
-// Used by web_serve (dev mode) and workspace.shell_bg to spawn child
-// processes through the sandbox's hardened-exec path. The two callers share
-// the same spawn+harden sequence so kernel restrictions (Landlock, seccomp,
+// Used by web_serve (dev mode) and bash's background-session mode (ADR-036
+// merged the former workspace.shell_bg into bash) to spawn child processes
+// through the sandbox's hardened-exec path. The two callers share the same
+// spawn+harden sequence so kernel restrictions (Landlock, seccomp,
 // no-new-privs) apply consistently regardless of which tool started the
 // child.
 //

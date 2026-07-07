@@ -265,6 +265,13 @@ type SessionSummarizePayload struct {
 	KeptMessages       int
 	SummaryLen         int
 	OmittedOversized   bool
+	// Degraded is true when the LLM summarization call failed (after
+	// retries) and the result is a crude fallback — either per-batch
+	// truncation (summarizeBatch) or, for multi-part summaries, a raw
+	// concatenation of the two part-summaries instead of an LLM merge.
+	// Downstream consumers (logs, UI) use this to distinguish a real
+	// summary from a degraded fallback.
+	Degraded bool
 }
 
 // ToolExecStartPayload describes a tool execution request.

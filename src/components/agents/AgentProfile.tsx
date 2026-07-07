@@ -117,11 +117,14 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     queryFn: fetchProviders,
   })
 
-  const { data: allActivity = [], isError: activityError } = useQuery({
+  const { data: allActivityResp, isError: activityError } = useQuery({
     queryKey: ['activity'],
     queryFn: fetchActivity,
     staleTime: 30_000,
   })
+  // GET /activity returns ActivityEventsResponse ({ events, warning? }), not a
+  // bare array — unwrap to the events list for the filter/slice below.
+  const allActivity = allActivityResp?.events ?? []
 
 
   // US-E6: fetch available (installed) skills so the picker can show them.

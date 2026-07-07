@@ -6,7 +6,10 @@
 // Pairing flow: device generates Ed25519 key pair → 6-digit code + fingerprint → admin approves in browser.
 package pairing
 
-import "time"
+import (
+	"errors"
+	"time"
+)
 
 // PairingState describes the state of a device pairing request.
 type PairingState string
@@ -45,6 +48,11 @@ type PairingDecision struct {
 	State PairingState
 	Token string // non-empty only when approved
 }
+
+// ErrDeviceNotFound is returned when a pairing operation references a device
+// ID that has no matching pending request (never registered, already
+// resolved, or expired and purged by ExpireOldPending).
+var ErrDeviceNotFound = errors.New("pairing: device not found")
 
 // PairingStore is the global store of pending and paired devices.
 // Accessed by REST handlers (GET /api/v1/devices) and WSHandler (pairing requests, admin decisions).
@@ -97,10 +105,11 @@ func (s *PairingStore) ListPending() []PendingDevice {
 
 // Approve moves a pending device to paired state.
 // Returns the PairedDevice and a generated token (caller stores it encrypted).
+// Returns ErrDeviceNotFound if deviceID has no matching pending request.
 func (s *PairingStore) Approve(deviceID, token string) (PairedDevice, error) {
 	pending, ok := s.pending[deviceID]
 	if !ok {
-		return PairedDevice{}, nil // not found
+		return PairedDevice{}, ErrDeviceNotFound
 	}
 	paired := PairedDevice{
 		DeviceID:    pending.DeviceID,

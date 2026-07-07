@@ -2,7 +2,8 @@
 // /preview/<agentID>/<token>/ preview URLs for dev-mode registrations.
 //
 // Originally lifted from the now-removed pkg/tools/run_in_workspace.go so
-// that both web_serve dev mode and workspace.shell_bg use the same URL
+// that both web_serve dev mode and bash's background-session mode (ADR-036
+// merged the former workspace.shell_bg into bash) use the same URL
 // construction logic.
 //
 // Scheme coercion rule: if gatewayHost does not contain "://" it is treated
@@ -28,11 +29,13 @@ var devURLSchemeWarnOnce sync.Once
 // the path (test wiring).
 //
 // Note: web_serve dev mode overrides the result to emit /preview/ URLs.
-// workspace.shell_bg still uses the /dev/ form directly (back-compat shim
-// on the preview listener resolves both paths).
+// bash's background-session mode (formerly workspace.shell_bg, ADR-036)
+// still uses the /dev/ form directly (back-compat shim on the preview
+// listener resolves both paths).
 //
 // gatewayHost examples accepted (results shown in the workspace.shell_bg
-// /dev/ form; web_serve dev mode substitutes /preview/):
+// /dev/ form now emitted by bash's background-session mode; web_serve dev
+// mode substitutes /preview/):
 //   - ""                       → "/dev/agent/token/"
 //   - "127.0.0.1:5001"         → "https://127.0.0.1:5001/dev/agent/token/"
 //   - "https://example.com"    → "https://example.com/dev/agent/token/"

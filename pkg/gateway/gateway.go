@@ -284,6 +284,28 @@ func buildEnabledRefMap(cfg *config.Config) map[string]bool {
 	return m
 }
 
+// enabledRefFromBundleError attempts to attribute a non-NotFoundError credential
+// bundle resolution error (wrong master key, corrupted store entry, decrypt
+// failure, ...) to one of the currently-enabled channel refs in enabledRefs.
+//
+// credentials.ResolveAll wraps every per-ref failure as
+// `fmt.Errorf("ResolveAll: credential %q: %w", ref, err)`, so the ref name is
+// always present verbatim (quoted) in err.Error(). Matching by substring lets
+// both bootCredentials and executeReload distinguish "an enabled channel's
+// secret is broken" (escalate) from "some other ref — a provider key, or a
+// disabled channel's ref — failed to resolve" (Warn is sufficient, as today).
+//
+// Returns ("", false) when no enabled ref matches.
+func enabledRefFromBundleError(err error, enabledRefs map[string]bool) (string, bool) {
+	msg := err.Error()
+	for ref := range enabledRefs {
+		if ref != "" && strings.Contains(msg, ref) {
+			return ref, true
+		}
+	}
+	return "", false
+}
+
 // bootCredentials runs the canonical credential + config boot sequence and
 // returns the initialized config, secret bundle, and store.
 //
@@ -340,6 +362,22 @@ func bootCredentials(
 			}
 			slog.Info("channel credential not found (channel is disabled)", "ref", notFound.Name)
 			continue
+		}
+		// Any error other than "ref not found" (wrong master key, corrupted
+		// credential store entry, decrypt failure, ...) means the ref IS
+		// configured but unreadable — worse than a simple missing ref, since
+		// the operator believes the channel is set up correctly. On a
+		// channel that is actually ENABLED this would otherwise only produce
+		// a slog.Warn an operator can easily miss, then the channel starts
+		// silently without its secret. Escalate to the same fatal treatment
+		// boot already applies to the NotFoundError-on-enabled-channel case
+		// above, instead of inventing a separate degraded-signal mechanism.
+		if ref, ok := enabledRefFromBundleError(e, enabledRefs); ok {
+			return nil, nil, nil, fmt.Errorf(
+				"fatal: enabled channel credential %q failed to resolve (not simply "+
+					"missing — check OMNIPUS_MASTER_KEY / credentials.json integrity): %w",
+				ref, e,
+			)
 		}
 		slog.Warn("credential bundle resolution error", "error", e)
 	}
@@ -1464,12 +1502,42 @@ func executeReload(
 		}
 
 		// Re-resolve the SecretBundle for channels (no os.Setenv for channel creds).
+		// enabledRefs mirrors bootCredentials: a NotFoundError (or any other
+		// resolution error) on a channel ref that IS enabled in newCfg must
+		// reject the reload — not silently continue — because "channel may be
+		// disabled" is only true if we actually check. Missing the enabled
+		// check here (unlike boot's equivalent NotFoundError-on-enabled fatal
+		// branch) would let a reload silently break an enabled channel's
+		// credentials while reporting success.
+		enabledRefs := buildEnabledRefMap(newCfg)
 		newBundle, bundleErrs := credentials.ResolveBundle(newCfg, cs)
 		for _, e := range bundleErrs {
 			var notFound *credentials.NotFoundError
 			if errors.As(e, &notFound) {
-				slog.Info("reload: channel credential not found (channel may be disabled)", "error", e)
+				if enabledRefs[notFound.Name] {
+					reloadErr := fmt.Errorf(
+						"reload rejected: enabled channel credential %q not found in store: %w",
+						notFound.Name, e,
+					)
+					markDegraded(reloadErr)
+					return reloadErr
+				}
+				slog.Info("reload: channel credential not found (channel is disabled)", "ref", notFound.Name)
 				continue
+			}
+			// Any error other than "not found" on an enabled channel's ref is
+			// worse than a simple missing ref (the credential exists but can't
+			// be read) — escalate exactly like the NotFoundError-on-enabled
+			// case above, reusing the existing reject-and-rollback mechanism
+			// (markDegraded / reloadDegraded) rather than a log-only Warn or a
+			// new degraded-signal field.
+			if ref, ok := enabledRefFromBundleError(e, enabledRefs); ok {
+				reloadErr := fmt.Errorf(
+					"reload rejected: enabled channel credential %q failed to resolve: %w",
+					ref, e,
+				)
+				markDegraded(reloadErr)
+				return reloadErr
 			}
 			slog.Warn("reload: credential bundle resolution error", "error", e)
 		}
@@ -2245,7 +2313,19 @@ func handleConfigReload(
 		logger.Errorf("  ⚠ Error creating new provider: %v", err)
 		logger.Warn("  Attempting to restart services with old provider and config...")
 		if restartErr := restartServices(al, runningServices, msgBus); restartErr != nil {
+			// The rollback restart ALSO failed — services may now be left in a
+			// worse, partially-restarted state than a plain "provider creation
+			// failed" error implies. Discarding restartErr here (previously only
+			// logged) would hide that from the caller (executeReload's
+			// markDegraded only ever sees the returned error); join both so
+			// reloadError / the reload's returned error surfaces the compound
+			// failure instead of just the primary one.
 			logger.Errorf("  ⚠ Failed to restart services: %v", restartErr)
+			return fmt.Errorf(
+				"error creating new provider: %w; additionally, rollback restart failed: %w",
+				err,
+				restartErr,
+			)
 		}
 		return fmt.Errorf("error creating new provider: %w", err)
 	}
@@ -2264,7 +2344,15 @@ func handleConfigReload(
 		}
 		logger.Warn("  Attempting to restart services with old provider and config...")
 		if restartErr := restartServices(al, runningServices, msgBus); restartErr != nil {
+			// Same compound-failure concern as the provider-creation branch
+			// above: surface the rollback failure alongside the primary one
+			// instead of discarding it after only a log line.
 			logger.Errorf("  ⚠ Failed to restart services: %v", restartErr)
+			return fmt.Errorf(
+				"error reloading agent loop: %w; additionally, rollback restart failed: %w",
+				err,
+				restartErr,
+			)
 		}
 		return fmt.Errorf("error reloading agent loop: %w", err)
 	}

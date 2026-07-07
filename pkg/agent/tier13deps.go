@@ -41,10 +41,11 @@ type Tier13Deps struct {
 	// Sourced from cfg.Gateway.PreviewOrigin when set, otherwise computed
 	// from cfg.Gateway.Host + cfg.Gateway.PreviewPort at boot.
 	//
-	// web_serve and workspace.shell_bg use this to build absolute preview
-	// URLs returned in tool results — web_serve emits /preview/<agent>/<token>/,
-	// workspace.shell_bg emits /dev/<agent>/<token>/. The preview origin is
-	// browser-cross-origin to the SPA's main origin, providing the T-01
-	// mitigation (parent.localStorage access throws SecurityError).
+	// web_serve and bash's background-session mode (ADR-036 merge of the
+	// former workspace.shell_bg) use this to build absolute preview URLs
+	// returned in tool results — web_serve emits /preview/<agent>/<token>/,
+	// bash's background-session mode emits /dev/<agent>/<token>/. The preview
+	// origin is browser-cross-origin to the SPA's main origin, providing the
+	// T-01 mitigation (parent.localStorage access throws SecurityError).
 	GatewayPreviewBaseURL string
 }

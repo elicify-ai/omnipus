@@ -1,6 +1,7 @@
 // Package sandbox — BuildLimits constructs the fixed Limits struct consumed by
-// Run / ApplyChildHardening for the workspace_shell and workspace_shell_bg
-// tools.
+// Run / ApplyChildHardening for bash's foreground-exec and background-session
+// paths (ADR-036 merged the former workspace_shell / workspace_shell_bg tools
+// into bash; see pkg/tools/shell.go).
 //
 // Design note (ADR-035-remove-per-agent-sandbox-profile): Omnipus previously
 // offered a per-agent "sandbox profile" (workspace / workspace+net / host /
@@ -25,7 +26,8 @@
 // ApplyChildHardening, audit logging) still applies to every invocation. The
 // sole escape hatch is god mode (agent.GodModeActive), which the caller
 // resolves once and threads through as an explicit bool — see
-// workspace_shell.go / workspace_shell_bg.go.
+// pkg/tools/shell.go (ADR-036 merged the former workspace_shell.go /
+// workspace_shell_bg.go into bash).
 
 package sandbox
 
@@ -35,8 +37,9 @@ import (
 	"path/filepath"
 )
 
-// BuildLimits returns the sandbox.Limits every workspace_shell /
-// workspace_shell_bg invocation runs under: cwd confinement to workspaceDir,
+// BuildLimits returns the sandbox.Limits every bash foreground-exec /
+// background-session invocation (ADR-036 merge of the former workspace_shell /
+// workspace_shell_bg) runs under: cwd confinement to workspaceDir,
 // resource limits derived from timeoutSec, and the SSRF-protected egress
 // proxy address (when proxy is non-nil). Kept as a named function (rather
 // than inlined at call sites) so there is one place to change resource-limit
@@ -58,15 +61,18 @@ func BuildLimits(workspaceDir string, proxy *EgressProxy, timeoutSec int32) (Lim
 	}, nil
 }
 
-// ResolveLimits returns the fixed Limits for a workspace_shell{,_bg}
+// ResolveLimits returns the fixed Limits for a bash foreground-exec /
+// background-session (ADR-036 merge of the former workspace_shell{,_bg})
 // invocation, or the zero value when godMode is true. God mode bypasses
 // hardening entirely, so BuildLimits' side effects (workspace mkdir, proxy
 // resolution) are also skipped rather than computed and discarded — this
 // matches the pre-ADR-035 behavior where the "off" profile short-circuited
 // before any filesystem touch, and closes the asymmetry where the foreground
-// workspace_shell tool called BuildLimits unconditionally (a real MkdirAll
-// that could fail on an empty/invalid workspaceDir even though its result was
-// immediately overwritten) while workspace_shell_bg skipped it under god mode.
+// path (then the separate workspace_shell tool, now bash's foreground mode)
+// called BuildLimits unconditionally (a real MkdirAll that could fail on an
+// empty/invalid workspaceDir even though its result was immediately
+// overwritten) while the background path (then workspace_shell_bg, now
+// bash's background mode) skipped it under god mode.
 func ResolveLimits(godMode bool, workspaceDir string, proxy *EgressProxy, timeoutSec int32) (Limits, error) {
 	if godMode {
 		return Limits{}, nil

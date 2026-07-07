@@ -5127,13 +5127,37 @@ func (a *restAPI) HandleActivity(w http.ResponseWriter, r *http.Request) {
 	if len(events) > 50 {
 		events = events[:50]
 	}
-	if events == nil {
-		events = []gen.ActivityEvent{}
+
+	// FINAL-REVIEW HIGH — a partial-failure session-listing warning was computed
+	// above (sessionWarning) but previously only slog'd and then discarded: the
+	// handler always returned the bare events array, so a caller had no way to
+	// know the results were incomplete. gen.ActivityEventsResponse carries an
+	// explicit Warning field for exactly this case (contracts/components/schemas/
+	// ActivityEventsResponse.yaml) — return it instead of the bare array so the
+	// caller can surface the partial-failure state.
+	resp := gen.ActivityEventsResponse{
+		Events: make([]struct {
+			AgentId   *string                              `json:"agent_id,omitempty"`
+			AgentName *string                              `json:"agent_name,omitempty"`
+			Id        string                               `json:"id"`
+			Summary   *string                              `json:"summary,omitempty"`
+			Timestamp time.Time                            `json:"timestamp"`
+			Type      gen.ActivityEventsResponseEventsType `json:"type"`
+		}, len(events)),
+	}
+	for i, ev := range events {
+		resp.Events[i].AgentId = ev.AgentId
+		resp.Events[i].AgentName = ev.AgentName
+		resp.Events[i].Id = ev.Id
+		resp.Events[i].Summary = ev.Summary
+		resp.Events[i].Timestamp = ev.Timestamp
+		resp.Events[i].Type = gen.ActivityEventsResponseEventsType(ev.Type)
 	}
 	if sessionWarning != "" {
 		slog.Warn("rest: activity: partial results due to session listing errors", "warning", sessionWarning)
+		resp.Warning = &sessionWarning
 	}
-	jsonOK(w, events)
+	jsonOK(w, resp)
 }
 
 // --- Providers ---
@@ -5759,6 +5783,12 @@ func (a *restAPI) refreshProviderModels(w http.ResponseWriter, r *http.Request, 
 		apiKey      string
 		userModels  []string
 		defaultName string
+		// keyConfiguredButUnreadable is true when the provider entry references an
+		// API key (api_key_ref) that the credential vault could NOT resolve (store
+		// locked / decrypt error). This is distinct from "no key configured" and
+		// must surface a different, actionable message — same distinction
+		// HandleProviders' test sub-path makes (~rest.go:5573-5619).
+		keyConfiguredButUnreadable bool
 	)
 	for _, m := range cfg.Providers {
 		if m.IsVirtual() {
@@ -5778,7 +5808,10 @@ func (a *restAPI) refreshProviderModels(w http.ResponseWriter, r *http.Request, 
 			resolved := m.APIKey()
 			if resolved == "" && m.APIKeyRef != "" {
 				if v, err := a.resolveCredentialRef(m.APIKeyRef); err != nil {
+					// A ref is present but the vault could not be read — do NOT
+					// fall through to "no API key configured" (misleading).
 					slog.Warn("rest: refresh-models: credential resolve failed", "ref", m.APIKeyRef, "error", err)
+					keyConfiguredButUnreadable = true
 				} else {
 					resolved = v
 				}
@@ -5801,6 +5834,12 @@ func (a *restAPI) refreshProviderModels(w http.ResponseWriter, r *http.Request, 
 	var warning string
 	if hasEndpoint {
 		if apiKey == "" {
+			if keyConfiguredButUnreadable {
+				jsonErr(w, http.StatusUnprocessableEntity,
+					"API key is configured but the credential vault could not be read "+
+						"(store locked or undecryptable) — unlock and retry.")
+				return
+			}
 			jsonErr(w, http.StatusUnprocessableEntity, "no API key configured for this provider")
 			return
 		}
@@ -8107,11 +8146,43 @@ func (a *restAPI) configureChannel(w http.ResponseWriter, r *http.Request, chann
 	// Config (with cleared refs) is durable now — delete the now-unreferenced
 	// credentials. A failure here only leaves an orphaned encrypted blob (the ref
 	// is already gone), so log rather than fail the already-committed request.
+	credentialCleanupFailed := false
 	for _, refName := range clearedRefs {
 		if err := a.removeStoredCredential(refName); err != nil {
+			credentialCleanupFailed = true
 			slog.Error("rest: delete cleared channel credential", "channel", channelID, "ref", refName, "error", err)
 		}
 	}
+
+	// FINAL-REVIEW HIGH — configureChannel had no audit trail for a mutating,
+	// credential-touching config write (unlike its sibling deleteChannelInstance,
+	// which emits EventChannelInstanceDeleted). A configure call can create,
+	// rotate, or clear stored encrypted secrets and change arbitrary instance
+	// fields, so it MUST leave an audit trail even on the happy path.
+	// updates' keys (never values) are logged — secrets have already been
+	// stripped and replaced with *_ref entries by Phase C above.
+	if a.auditor != nil {
+		decision := audit.DecisionAllow
+		if credentialCleanupFailed {
+			decision = audit.DecisionError
+		}
+		touchedFields := make([]string, 0, len(updates))
+		for k := range updates {
+			touchedFields = append(touchedFields, k)
+		}
+		sort.Strings(touchedFields)
+		_ = a.auditor.Log(&audit.Entry{
+			Event:    audit.EventChannelInstanceConfigured,
+			Decision: decision,
+			Details: map[string]any{
+				"channel_id":                channelID,
+				"type":                      chBaseType,
+				"fields":                    touchedFields,
+				"credential_cleanup_failed": credentialCleanupFailed,
+			},
+		})
+	}
+
 	jsonOK(w, redactChannelConfig(channelID, updatedCh))
 }
 
