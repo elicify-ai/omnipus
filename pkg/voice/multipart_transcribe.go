@@ -53,9 +53,11 @@ type multipartTranscribeSpec struct {
 // doMultipartTranscribe performs the shared file-open -> multipart-encode ->
 // HTTP POST -> JSON-decode flow common to every multipart-upload
 // transcription provider (Groq, ElevenLabs, ...). Only the values in spec
-// vary by provider; the request/response mechanics and log/error text are
-// byte-identical to what each provider's hand-written implementation did
-// before this was extracted.
+// vary by provider; the request/response mechanics are functionally
+// equivalent to what each provider's hand-written implementation did before
+// this was extracted, with two intentional ElevenLabs-side observability
+// improvements: it now also logs the copy-progress and WriteField-failure
+// lines that Groq's implementation already had but ElevenLabs's didn't.
 func doMultipartTranscribe(
 	ctx context.Context,
 	httpClient *http.Client,
