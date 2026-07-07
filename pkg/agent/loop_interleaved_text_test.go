@@ -88,7 +88,7 @@ func TestInterleavedAssistantText_AllSegmentsPersisted(t *testing.T) {
 	// whole scenario depends on the scripted "remember" tool calls actually
 	// executing so the interleaved-transcript ordering can be observed.
 	mia.StoreToolPolicy(&tools.ToolPolicyCfg{
-		Policies: map[string]string{"remember": "allow"},
+		Policies: map[string]config.ToolPolicy{"remember": "allow"},
 	})
 
 	// -----------------------------------------------------------------------

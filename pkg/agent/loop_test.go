@@ -741,7 +741,7 @@ func TestProcessMessage_MediaToolDeliveryEmitsMediaAndCallsFollowUp(t *testing.T
 	// needs an explicit agent-level grant, or it fails closed to "deny" before
 	// the media-delivery/follow-up behavior under test ever gets a chance to run.
 	defaultAgent.StoreToolPolicy(&tools.ToolPolicyCfg{
-		Policies: map[string]string{"handled_media_tool": "allow"},
+		Policies: map[string]config.ToolPolicy{"handled_media_tool": "allow"},
 	})
 
 	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
@@ -847,7 +847,7 @@ func TestProcessMessage_HandledToolProcessesQueuedSteeringBeforeReturning(t *tes
 	// it fails closed to "deny" before the queued-steering behavior under test
 	// ever gets a chance to run.
 	defaultAgent.StoreToolPolicy(&tools.ToolPolicyCfg{
-		Policies: map[string]string{"handled_media_with_steering_tool": "allow"},
+		Policies: map[string]config.ToolPolicy{"handled_media_with_steering_tool": "allow"},
 	})
 
 	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
@@ -911,7 +911,7 @@ func TestProcessMessage_MediaArtifactCanBeForwardedBySendFile(t *testing.T) {
 	// explicit agent-level grants, or they fail closed to "deny" before the
 	// artifact-forwarding behavior under test ever gets a chance to run.
 	defaultAgent.StoreToolPolicy(&tools.ToolPolicyCfg{
-		Policies: map[string]string{
+		Policies: map[string]config.ToolPolicy{
 			"media_artifact_tool": "allow",
 			"send_file":           "allow",
 		},
@@ -2778,7 +2778,7 @@ func TestProcessMessage_PublishesToolFeedbackWhenEnabled(t *testing.T) {
 	// an explicit agent-level grant, or it fails closed to "deny" and the
 	// tool-feedback publish under test never fires.
 	defaultAgent.StoreToolPolicy(&tools.ToolPolicyCfg{
-		Policies: map[string]string{"read_file": "allow"},
+		Policies: map[string]config.ToolPolicy{"read_file": "allow"},
 	})
 
 	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{

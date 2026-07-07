@@ -278,7 +278,7 @@ func TestAgentLoop_Hooks_ToolInterceptorCanRewrite(t *testing.T) {
 	// explicit agent-level grant, or it fails closed to "deny" before the
 	// in-process tool rewrite under test ever gets a chance to run.
 	agent.StoreToolPolicy(&tools.ToolPolicyCfg{
-		Policies: map[string]string{"echo_text": "allow"},
+		Policies: map[string]config.ToolPolicy{"echo_text": "allow"},
 	})
 	if err := al.MountHook(NamedHook("tool-rewrite", &toolRewriteHook{})); err != nil {
 		t.Fatalf("MountHook failed: %v", err)

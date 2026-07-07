@@ -24,6 +24,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 // mcpCategoryTool is a minimal Tool whose Category() returns CategoryMCP.
@@ -68,7 +70,7 @@ func TestFilterToolsByPolicy_DeniedMCPTool_ExcludedFromLLMView(t *testing.T) {
 	}
 
 	policyCfg := &ToolPolicyCfg{
-		Policies: map[string]string{
+		Policies: map[string]config.ToolPolicy{
 			deniedTool: "deny",
 			// Explicit coverage (no default-policy fallback, CLAUDE.md hard
 			// constraint 6): these entries are what makes "survives" a real
@@ -130,7 +132,7 @@ func TestFilterToolsByPolicy_MCPToolRegistryRoundTrip(t *testing.T) {
 	require.Len(t, allFromRegistry, 2, "MCPRegistry must contain both tools before filtering")
 
 	policyCfg := &ToolPolicyCfg{
-		Policies: map[string]string{
+		Policies: map[string]config.ToolPolicy{
 			"mcp_uat_denied":  "deny",
 			"mcp_uat_allowed": "allow", // explicit coverage (no default-policy fallback)
 		},

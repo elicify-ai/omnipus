@@ -35,6 +35,8 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 // makeMCPAdapter is a test helper that builds a real mcpToolAdapter for a named
@@ -73,7 +75,7 @@ func TestFilterToolsByPolicy_MCPToolGlobalDeny(t *testing.T) {
 	tools := makeMCPAdapters("code-server", "mcp_codeserver_search", "mcp_codeserver_lint")
 
 	cfg := &ToolPolicyCfg{
-		GlobalPolicies: map[string]string{
+		GlobalPolicies: map[string]config.ToolPolicy{
 			"mcp_codeserver_search": "deny",
 			// Explicit coverage for the sibling (CLAUDE.md hard constraint 6: no
 			// default-policy fallback) so it exercises "survives with no deny",
@@ -113,8 +115,8 @@ func TestFilterToolsByPolicy_MCPToolGlobalDeny_OverridesAgentAllow(t *testing.T)
 	tools := makeMCPAdapters("exec-server", "mcp_execsvr_run", "mcp_execsvr_read")
 
 	cfg := &ToolPolicyCfg{
-		Policies: map[string]string{"mcp_execsvr_run": "allow"},
-		GlobalPolicies: map[string]string{
+		Policies: map[string]config.ToolPolicy{"mcp_execsvr_run": "allow"},
+		GlobalPolicies: map[string]config.ToolPolicy{
 			"mcp_execsvr_run": "deny",
 			// Explicit coverage for the sibling (no default-policy fallback).
 			"mcp_execsvr_read": "allow",
@@ -159,7 +161,7 @@ func TestFilterToolsByPolicy_MCPTool_WildcardDoesNotMatch_ExactKeyRequired(t *te
 	// 1. Dot-segment wildcards do NOT match underscore MCP names — both survive.
 	for _, wildcard := range []string{"mcp.*", "mcp_search.*"} {
 		cfg := &ToolPolicyCfg{
-			GlobalPolicies: map[string]string{
+			GlobalPolicies: map[string]config.ToolPolicy{
 				wildcard: "deny",
 				// Explicit coverage (no default-policy fallback): these entries
 				// are what makes "survives" a real assertion rather than an
@@ -179,7 +181,7 @@ func TestFilterToolsByPolicy_MCPTool_WildcardDoesNotMatch_ExactKeyRequired(t *te
 
 	// 2. An EXACT key denies just that one tool.
 	cfg := &ToolPolicyCfg{
-		GlobalPolicies: map[string]string{
+		GlobalPolicies: map[string]config.ToolPolicy{
 			"mcp_search_query": "deny",
 			"mcp_search_index": "allow", // explicit coverage for the survivor
 		},
@@ -213,7 +215,7 @@ func TestFilterToolsByPolicy_MCPTool_UnderscoreWildcard_BulkDeny(t *testing.T) {
 	// 1. "_*" wildcard bulk-denies all tools from the server.
 	t.Run("bulk_deny_all_server_tools", func(t *testing.T) {
 		cfg := &ToolPolicyCfg{
-			GlobalPolicies: map[string]string{"mcp_search_*": "deny"},
+			GlobalPolicies: map[string]config.ToolPolicy{"mcp_search_*": "deny"},
 		}
 		got, policyMap := FilterToolsByPolicy(mkTools(), "custom", cfg)
 		assert.Empty(t, got,
@@ -227,7 +229,7 @@ func TestFilterToolsByPolicy_MCPTool_UnderscoreWildcard_BulkDeny(t *testing.T) {
 	// 2. Exact key beats the "_*" wildcard (exact-wins precedence).
 	t.Run("exact_beats_underscore_wildcard", func(t *testing.T) {
 		cfg := &ToolPolicyCfg{
-			GlobalPolicies: map[string]string{
+			GlobalPolicies: map[string]config.ToolPolicy{
 				"mcp_search_*":     "deny",
 				"mcp_search_query": "allow", // exact override
 			},
@@ -246,7 +248,7 @@ func TestFilterToolsByPolicy_MCPTool_UnderscoreWildcard_BulkDeny(t *testing.T) {
 	// 3. Per-agent "_*" wildcard (not just global) also works.
 	t.Run("agent_level_underscore_wildcard", func(t *testing.T) {
 		cfg := &ToolPolicyCfg{
-			Policies: map[string]string{"mcp_search_*": "deny"},
+			Policies: map[string]config.ToolPolicy{"mcp_search_*": "deny"},
 		}
 		got, _ := FilterToolsByPolicy(mkTools(), "custom", cfg)
 		assert.Empty(t, got,
@@ -273,7 +275,7 @@ func TestFilterToolsByPolicy_MCPTool_UnderscoreWildcard_LongerPrefixWins(t *test
 	)
 
 	cfg := &ToolPolicyCfg{
-		GlobalPolicies: map[string]string{
+		GlobalPolicies: map[string]config.ToolPolicy{
 			"mcp_*":        "ask",
 			"mcp_search_*": "deny",
 		},
@@ -339,7 +341,7 @@ func TestFilterToolsByPolicy_MCPTool_ScopeGeneral_PassesForAnyAgentType(t *testi
 	// a real global entry, isolating the scope gate as the only variable across
 	// agentType below.
 	cfg := &ToolPolicyCfg{
-		GlobalPolicies: map[string]string{
+		GlobalPolicies: map[string]config.ToolPolicy{
 			"mcp_anysvr_tool_a": "allow",
 			"mcp_anysvr_tool_b": "allow",
 		},
@@ -367,7 +369,7 @@ func TestFilterToolsByPolicy_BareWildcardKeysAreIgnored(t *testing.T) {
 	for _, bare := range []string{"_*", ".*"} {
 		tools := makeMCPAdapters("any-server", "mcp_anysvr_alpha", "mcp_anysvr_beta")
 		cfg := &ToolPolicyCfg{
-			GlobalPolicies: map[string]string{
+			GlobalPolicies: map[string]config.ToolPolicy{
 				bare: "deny",
 				// Explicit coverage (no default-policy fallback): these entries
 				// isolate "the bare wildcard doesn't catch them" from "they have

@@ -338,7 +338,7 @@ func TestAsyncNotifier_NotificationGrantsNoCapability(t *testing.T) {
 			continue
 		}
 		ag.StoreToolPolicy(&tools.ToolPolicyCfg{
-			Policies: map[string]string{
+			Policies: map[string]config.ToolPolicy{
 				"dangerous_tool_notifier": "deny",
 			},
 		})

@@ -17,6 +17,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 // wildTestTool is a minimal Tool for wildcard policy tests.
@@ -58,7 +60,7 @@ func makeWildTools(names ...string) []Tool {
 //
 // Traces to: tool-registry-redesign-spec.md FR-009 (trailing-only wildcard rule)
 func TestBuildWildcardIndex_TrailingOnlyWildcard(t *testing.T) {
-	policies := map[string]string{
+	policies := map[string]config.ToolPolicy{
 		"system.*":       "deny",
 		"*.bad":          "allow", // leading — not a valid wildcard
 		"foo.*.bar":      "ask",   // embedded — not a valid wildcard
@@ -88,7 +90,7 @@ func TestBuildWildcardIndex_TrailingOnlyWildcard(t *testing.T) {
 //
 // Traces to: tool-registry-redesign-spec.md FR-071
 func TestBuildWildcardIndex_LongestPrefixFirst(t *testing.T) {
-	policies := map[string]string{
+	policies := map[string]config.ToolPolicy{
 		"a.*":       "deny",
 		"a.b.c.d.*": "ask",
 		"a.b.*":     "allow",
@@ -119,7 +121,7 @@ func TestBuildWildcardIndex_LongestPrefixFirst(t *testing.T) {
 func TestBuildWildcardIndex_LexicographicTieBreak(t *testing.T) {
 	// Construct two wildcards with exactly the same prefix length.
 	// "system.aaaaa" (12) and "system.bbbbb" (12) — same length, lex sort decides.
-	policies := map[string]string{
+	policies := map[string]config.ToolPolicy{
 		"system.bbbbb.*": "deny",
 		"system.aaaaa.*": "ask",
 	}
@@ -144,7 +146,7 @@ func TestBuildWildcardIndex_LexicographicTieBreak(t *testing.T) {
 //
 // Traces to: tool-registry-redesign-spec.md FR-009 §2 (exact > wildcard)
 func TestResolveFromMap_ExactWinsOverWildcard(t *testing.T) {
-	policies := map[string]string{
+	policies := map[string]config.ToolPolicy{
 		"system.agent.create": "allow",
 		"system.*":            "deny",
 		"system.agent.*":      "ask",
@@ -152,7 +154,7 @@ func TestResolveFromMap_ExactWinsOverWildcard(t *testing.T) {
 	wildcards := buildWildcardIndex(policies)
 
 	policy := resolveFromMap("system.agent.create", policies, wildcards)
-	assert.Equal(t, "allow", policy, "exact match must win over wildcards")
+	assert.Equal(t, "allow", string(policy), "exact match must win over wildcards")
 }
 
 // TestResolveFromMap_LongestWildcardWins verifies that among wildcards,
@@ -164,7 +166,7 @@ func TestResolveFromMap_ExactWinsOverWildcard(t *testing.T) {
 //
 // Traces to: tool-registry-redesign-spec.md FR-009 §2 (longest prefix wins)
 func TestResolveFromMap_LongestWildcardWins(t *testing.T) {
-	policies := map[string]string{
+	policies := map[string]config.ToolPolicy{
 		"system.agent.*": "ask",
 		"system.*":       "deny",
 	}
@@ -184,7 +186,7 @@ func TestResolveFromMap_LongestWildcardWins(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.toolName, func(t *testing.T) {
 			p := resolveFromMap(tc.toolName, policies, wildcards)
-			assert.Equal(t, tc.expectedPolicy, p, tc.note)
+			assert.Equal(t, tc.expectedPolicy, string(p), tc.note)
 		})
 	}
 }
@@ -194,14 +196,14 @@ func TestResolveFromMap_LongestWildcardWins(t *testing.T) {
 //
 // Traces to: tool-registry-redesign-spec.md FR-009 (fallback to default_policy)
 func TestResolveFromMap_NoMatch(t *testing.T) {
-	policies := map[string]string{
+	policies := map[string]config.ToolPolicy{
 		"read_file": "allow",
 		"system.*":  "deny",
 	}
 	wildcards := buildWildcardIndex(policies)
 
 	p := resolveFromMap("unregistered_tool", policies, wildcards)
-	assert.Equal(t, "", p, "no match must return empty string (caller uses default_policy)")
+	assert.Equal(t, "", string(p), "no match must return empty string (caller uses default_policy)")
 }
 
 // TestResolveFromMap_EqualSegmentTieBreak verifies the worked example from FR-009 §5.
@@ -214,7 +216,7 @@ func TestResolveFromMap_NoMatch(t *testing.T) {
 //
 // Traces to: tool-registry-redesign-spec.md BDD Scenario "Wildcard tie-break"
 func TestResolveFromMap_EqualSegmentTieBreak(t *testing.T) {
-	policies := map[string]string{
+	policies := map[string]config.ToolPolicy{
 		"system.alerts.long_thing.*": "deny",
 		"system.agent.subagent.*":    "ask",
 	}
@@ -231,7 +233,7 @@ func TestResolveFromMap_EqualSegmentTieBreak(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.toolName, func(t *testing.T) {
 			p := resolveFromMap(tc.toolName, policies, wildcards)
-			assert.Equal(t, tc.expectedPolicy, p,
+			assert.Equal(t, tc.expectedPolicy, string(p),
 				"resolveFromMap(%q) must return %q", tc.toolName, tc.expectedPolicy)
 		})
 	}
@@ -258,7 +260,7 @@ func TestFilterToolsByPolicy_PrefixWildcard_DeniesSystemTools(t *testing.T) {
 	)
 
 	cfg := &ToolPolicyCfg{
-		Policies: map[string]string{
+		Policies: map[string]config.ToolPolicy{
 			"system.*":   "deny",
 			"read_file":  "allow", // explicit coverage: no default-policy fallback (CLAUDE.md hard constraint 6)
 			"write_file": "allow",
@@ -294,7 +296,7 @@ func TestFilterToolsByPolicy_ExactBeatsWildcard(t *testing.T) {
 	)
 
 	cfg := &ToolPolicyCfg{
-		Policies: map[string]string{
+		Policies: map[string]config.ToolPolicy{
 			"system.config.set": "allow",
 			"system.*":          "deny",
 		},
@@ -333,7 +335,7 @@ func TestFilterToolsByPolicy_LongestWildcard_FourSegment(t *testing.T) {
 	)
 
 	cfg := &ToolPolicyCfg{
-		Policies: map[string]string{
+		Policies: map[string]config.ToolPolicy{
 			"system.alerts.long_thing.*": "deny",
 			"system.agent.subagent.*":    "ask",
 		},
@@ -358,32 +360,32 @@ func TestFilterToolsByPolicy_LongestWildcard_FourSegment(t *testing.T) {
 func TestFilterToolsByPolicy_WildcardDataset(t *testing.T) {
 	tests := []struct {
 		name             string
-		globalPolicies   map[string]string
-		policies         map[string]string
+		globalPolicies   map[string]config.ToolPolicy
+		policies         map[string]config.ToolPolicy
 		toolRequested    string
 		expectedInOutput bool   // true = tool appears in filtered list
 		expectedPolicy   string // expected value in policyMap (empty if not in output)
 	}{
 		{
 			name:             "row9-exact-wins-over-wildcard",
-			globalPolicies:   map[string]string{},
-			policies:         map[string]string{"system.config.set": "allow", "system.*": "deny"},
+			globalPolicies:   map[string]config.ToolPolicy{},
+			policies:         map[string]config.ToolPolicy{"system.config.set": "allow", "system.*": "deny"},
 			toolRequested:    "system.config.set",
 			expectedInOutput: true,
 			expectedPolicy:   "allow",
 		},
 		{
 			name:             "row10-wildcard-deny-matches-system-tool",
-			globalPolicies:   map[string]string{},
-			policies:         map[string]string{"system.*": "deny"},
+			globalPolicies:   map[string]config.ToolPolicy{},
+			policies:         map[string]config.ToolPolicy{"system.*": "deny"},
 			toolRequested:    "system.agent.list",
 			expectedInOutput: false,
 			expectedPolicy:   "",
 		},
 		{
 			name:             "row11-global-deny-wins-over-agent-allow",
-			globalPolicies:   map[string]string{"exec": "deny"},
-			policies:         map[string]string{"exec": "allow"},
+			globalPolicies:   map[string]config.ToolPolicy{"exec": "deny"},
+			policies:         map[string]config.ToolPolicy{"exec": "allow"},
 			toolRequested:    "exec",
 			expectedInOutput: false,
 			expectedPolicy:   "",
@@ -394,8 +396,8 @@ func TestFilterToolsByPolicy_WildcardDataset(t *testing.T) {
 			// this replaces the old "global default-policy deny" mechanism, which
 			// no longer exists, with the same observable (deny) outcome.
 			name:             "row12-no-coverage-fails-closed-to-deny",
-			globalPolicies:   map[string]string{},
-			policies:         map[string]string{},
+			globalPolicies:   map[string]config.ToolPolicy{},
+			policies:         map[string]config.ToolPolicy{},
 			toolRequested:    "read_file",
 			expectedInOutput: false,
 			expectedPolicy:   "",
@@ -448,7 +450,7 @@ func TestFilterToolsByPolicy_DeterministicOrdering(t *testing.T) {
 	)
 
 	cfg := &ToolPolicyCfg{
-		Policies: map[string]string{
+		Policies: map[string]config.ToolPolicy{
 			"system.agent.*": "ask",
 			"system.*":       "deny",
 		},

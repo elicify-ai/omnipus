@@ -91,7 +91,7 @@ func TestRunTurn_MultiMembership_AdvertisementMatchesEnforcement(t *testing.T) {
 	// an explicit agent-level grant, or it fails closed to "deny" and the
 	// multi-membership tie-break under test never gets exercised.
 	defaultAgent.StoreToolPolicy(&tools.ToolPolicyCfg{
-		Policies: map[string]string{"write_file": "allow"},
+		Policies: map[string]config.ToolPolicy{"write_file": "allow"},
 	})
 
 	msg := bus.InboundMessage{

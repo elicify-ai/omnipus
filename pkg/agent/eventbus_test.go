@@ -165,7 +165,7 @@ func TestAgentLoop_EmitsMinimalTurnEvents(t *testing.T) {
 	// now fails closed to "deny" instead of the old implicit "allow", so this
 	// test's own exercised tool needs an explicit agent-level grant to run.
 	defaultAgent.StoreToolPolicy(&tools.ToolPolicyCfg{
-		Policies: map[string]string{"mock_custom": "allow"},
+		Policies: map[string]config.ToolPolicy{"mock_custom": "allow"},
 	})
 
 	sub := al.SubscribeEvents(16)
@@ -320,7 +320,7 @@ func TestAgentLoop_EmitsSteeringAndSkippedToolEvents(t *testing.T) {
 	// tools need an explicit agent-level grant, or they fail closed to "deny"
 	// before the steering/skip behavior under test ever gets a chance to run.
 	defaultAgent.StoreToolPolicy(&tools.ToolPolicyCfg{
-		Policies: map[string]string{"tool_one": "allow", "tool_two": "allow"},
+		Policies: map[string]config.ToolPolicy{"tool_one": "allow", "tool_two": "allow"},
 	})
 
 	sub := al.SubscribeEvents(32)
@@ -592,7 +592,7 @@ func TestAgentLoop_EmitsFollowUpQueuedEvent(t *testing.T) {
 	// under test needs an explicit agent-level grant, or it fails closed to
 	// "deny" and the follow-up-queued behavior never fires.
 	defaultAgent.StoreToolPolicy(&tools.ToolPolicyCfg{
-		Policies: map[string]string{"async_followup": "allow"},
+		Policies: map[string]config.ToolPolicy{"async_followup": "allow"},
 	})
 
 	sub := al.SubscribeEvents(32)
