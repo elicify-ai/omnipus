@@ -1031,6 +1031,21 @@ func (e ChannelIdentityKind) Valid() bool {
 	}
 }
 
+// Defines values for ClearAllSessionsResponseStatus.
+const (
+	Cleared ClearAllSessionsResponseStatus = "cleared"
+)
+
+// Valid indicates whether the value is a known member of the ClearAllSessionsResponseStatus enum.
+func (e ClearAllSessionsResponseStatus) Valid() bool {
+	switch e {
+	case Cleared:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CliDetectClaudeSource.
 const (
 	CliDetectClaudeSourcePath      CliDetectClaudeSource = "path"
@@ -3485,21 +3500,6 @@ func (e ListSessionsParamsType) Valid() bool {
 	}
 }
 
-// Defines values for ClearAllSessions200JSONResponseBodyStatus.
-const (
-	Cleared ClearAllSessions200JSONResponseBodyStatus = "cleared"
-)
-
-// Valid indicates whether the value is a known member of the ClearAllSessions200JSONResponseBodyStatus enum.
-func (e ClearAllSessions200JSONResponseBodyStatus) Valid() bool {
-	switch e {
-	case Cleared:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for GetTokenStatsParamsPeriod.
 const (
 	All   GetTokenStatsParamsPeriod = "all"
@@ -5141,6 +5141,18 @@ type ChannelTestResponse struct {
 	// Success True when all required credential fields are present.
 	Success bool `json:"success"`
 }
+
+// ClearAllSessionsResponse Response from DELETE /api/v1/sessions/all (HTTP 200). Reports how many sessions were removed and any non-fatal per-agent errors encountered along the way (partial removal is still possible when warnings are present).
+type ClearAllSessionsResponse struct {
+	Count  int                            `json:"count"`
+	Status ClearAllSessionsResponseStatus `json:"status"`
+
+	// Warnings Per-agent errors (non-fatal — partial removal possible).
+	Warnings *[]string `json:"warnings,omitempty"`
+}
+
+// ClearAllSessionsResponseStatus defines model for ClearAllSessionsResponse.Status.
+type ClearAllSessionsResponseStatus string
 
 // CliDetect Host-side CLI detection result. Probes whether each external-CLI runner binary (claude-code/codex/opencode) is present for the gateway process — searching $PATH first, then a curated per-OS well-known-install-location list — and returns the resolved absolute path and how it was found. Used by the roster screen's "+ Add Subagent (External)" disclosure to grey-out CLIs the host cannot actually run, and by the create wizard / edit form to prefill the executor cli_path field. Read-only, unaudited — detection never spawns a subprocess.
 type CliDetect struct {
@@ -8705,9 +8717,6 @@ type ListSessions200JSONResponseBody1 struct {
 type ListSessions200JSONResponseBody struct {
 	union json.RawMessage
 }
-
-// ClearAllSessions200JSONResponseBodyStatus defines parameters for ClearAllSessions.
-type ClearAllSessions200JSONResponseBodyStatus string
 
 // SearchSkillsParams defines parameters for SearchSkills.
 type SearchSkillsParams struct {

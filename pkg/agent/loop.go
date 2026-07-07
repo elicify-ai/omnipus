@@ -7352,46 +7352,33 @@ turnLoop:
 // early — see ProcessScheduled's comment.
 const hardInterruptAbortReason = "turn canceled by hard interrupt request"
 
-// abortTurn finalizes a hard-aborted turn.
-//
-// Bug fix (agent turn engine correctness, commit 499b569f): previously this
-// always returned turnResult{status: Aborted} with a nil error, which
-// runAgentLoop turned into a bare ("", nil) for every call site. Immediately
-// after processMessage returns, session_worker.go's processTurn synthesizes
-// the user-facing "Error processing message: %v" response only when the
-// returned error is non-nil (pkg/agent/session_worker.go ~279-283) — so a
-// hard-aborted turn produced ZERO response on every channel (Telegram,
-// Discord, Slack, CLI, webchat alike), including the security/policy-driven
-// aborts (repeated-policy-denial floor, hook hard-abort decisions) that
-// silently dropped the user with no explanation at all. 499b569f fixed that
-// by synthesizing a real, non-nil error unconditionally, mirroring
-// hookAbortError's shape.
-//
-// That blanket fix over-corrected: it also changed the genuinely different
-// case of a USER explicitly canceling their own in-flight turn (InterruptHard
-// / InterruptSessionHard / the turn loop's ts.hardAbortRequested() checks) —
-// an intentional, successful action the caller already knows about, not a
-// failure. TestAgentLoop_InterruptHard_RestoresSession asserts exactly this:
-// a hard-interrupted turn restores the session cleanly with a nil error.
-//
-// abortTurn now differentiates the two cases by reason string:
+// abortTurn finalizes a hard-aborted turn. It differentiates two cases by
+// reason string, because they need opposite treatment: one is a successful
+// user action that should end silently, the other is a failure the user
+// must be told about.
 //
 //   - reason == hardInterruptAbortReason (the shared constant every
 //     hardAbortRequested()-gated call site passes): a clean, user-initiated
-//     cancel. Returns turnResult{status: Aborted} with a nil error and skips
-//     the error event/transcript entry entirely — restoring the exact
-//     pre-499b569f behavior for this case. runAgentLoop's
+//     cancel (InterruptHard / InterruptSessionHard / the turn loop's
+//     ts.hardAbortRequested() checks) — an intentional, successful action
+//     the caller already knows about, not a failure. Returns
+//     turnResult{status: Aborted} with a nil error and skips the error
+//     event/transcript entry entirely. runAgentLoop's
 //     `if result.status == TurnEndStatusAborted { return "", nil }` branch
 //     then does the normal silent unwind.
+//     TestAgentLoop_InterruptHard_RestoresSession asserts this: a
+//     hard-interrupted turn restores the session cleanly with a nil error.
 //
 //   - any other reason (the synthetic-error floor's abortMsg, or a hook's
-//     decision.Reason): a system-initiated abort — the case the bug fix
-//     above was actually about. Synthesizes a real, non-nil error carrying
-//     stage + reason, emits an error event, and appends it to the transcript
-//     so the user (and replay) learn why the turn ended. runAgentLoop's
-//     existing `if err != nil { return "", err }` branch propagates it, and
-//     session_worker.go's processTurn turns it into the terminal
-//     user-facing frame every channel already knows how to render.
+//     decision.Reason): a system-initiated abort — e.g. the repeated-policy-
+//     denial floor or a hook's HookActionHardAbort decision. Synthesizes a
+//     real, non-nil error carrying stage + reason, mirroring
+//     hookAbortError's shape; emits an error event; and appends it to the
+//     transcript so the user (and replay) learn why the turn ended.
+//     runAgentLoop's existing `if err != nil { return "", err }` branch
+//     propagates it, and session_worker.go's processTurn turns it into the
+//     terminal user-facing frame every channel already knows how to render
+//     (rather than silently dropping the user with no explanation).
 func (al *AgentLoop) abortTurn(ts *turnState, stage, reason string) (turnResult, error) {
 	ts.setPhase(TurnPhaseAborted)
 	if !ts.opts.NoHistory {

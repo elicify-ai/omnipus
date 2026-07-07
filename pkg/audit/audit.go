@@ -267,6 +267,22 @@ type LoggerConfig struct {
 
 const defaultMaxSize = 50 * 1024 * 1024 // 50MB
 
+// maxRotateCollisionAttempts caps the probe loop rotate() runs when the
+// per-day rotated filename (and its millisecond-suffixed fallback) are
+// already taken. A sane upper bound rather than an unbounded loop — see
+// rotate() for the collision scenario this guards against.
+const maxRotateCollisionAttempts = 1000
+
+// rotateClockNow is the clock rotate() consults when computing the
+// millisecond-suffixed fallback name for a same-day rotation collision.
+// It exists solely as a test seam (see rotation_collision_test.go) so a
+// test can force consecutive rotations to observe the identical
+// millisecond value, deterministically reproducing the same-millisecond
+// collision that is otherwise only plausible under a real rapid rotation
+// write burst. Production code always uses time.Now; never reassigned
+// outside tests.
+var rotateClockNow = time.Now
+
 // Logger writes audit entries as JSONL with rotation and retention.
 type Logger struct {
 	mu          sync.Mutex
@@ -717,8 +733,46 @@ func (l *Logger) rotate() error {
 	src := l.auditPath()
 	dst := filepath.Join(l.dir, fmt.Sprintf("audit-%s.jsonl", l.currentDate))
 	if _, err := os.Stat(dst); err == nil {
-		dst = filepath.Join(l.dir, fmt.Sprintf("audit-%s-%d.jsonl",
-			l.currentDate, time.Now().UnixMilli()))
+		// The bare per-day name is already taken (an earlier rotation
+		// happened today). Fall back to a millisecond-suffixed name — but a
+		// SECOND same-millisecond rotation (plausible under rapid,
+		// size-triggered rotation during a write burst, or under test/CI
+		// timing) would collide on that fallback too. Because os.Rename
+		// silently replaces an existing destination (POSIX rename(2)
+		// semantics), computing the same fallback name twice and blindly
+		// renaming into it would permanently and silently destroy the
+		// first rotated file's real security events. Probe with an
+		// incrementing counter suffix until a name that genuinely does not
+		// exist is found, capped so a pathological stat-failure run can't
+		// loop forever.
+		millis := rotateClockNow().UnixMilli()
+		found := false
+		for attempt := 0; attempt < maxRotateCollisionAttempts; attempt++ {
+			var candidate string
+			if attempt == 0 {
+				// Preserve the existing (common single-collision) naming
+				// convention for the first fallback attempt.
+				candidate = filepath.Join(l.dir, fmt.Sprintf("audit-%s-%d.jsonl", l.currentDate, millis))
+			} else {
+				candidate = filepath.Join(l.dir, fmt.Sprintf("audit-%s-%d-%d.jsonl", l.currentDate, millis, attempt))
+			}
+			if _, statErr := os.Stat(candidate); os.IsNotExist(statErr) {
+				dst = candidate
+				found = true
+				break
+			}
+		}
+		if !found {
+			// CRIT-3-style fail closed: do not guess a name and risk an
+			// overwrite. Latch degraded exactly like the os.Rename failure
+			// path below.
+			l.degraded = true
+			l.file = nil
+			l.writer = nil
+			return fmt.Errorf(
+				"audit: rotate: exhausted %d attempts finding a free rotated filename for date %s (millis=%d)",
+				maxRotateCollisionAttempts, l.currentDate, millis)
+		}
 	}
 
 	if err := os.Rename(src, dst); err != nil {

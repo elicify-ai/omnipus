@@ -293,3 +293,103 @@ func TestMigrateLegacyMatrixCryptoStore_InterruptedMigration_DestinationAlreadyE
 		)
 	}
 }
+
+// TestMigrateLegacyMatrixCryptoStore_InterruptedMigration_MultipleInstances_NeitherInherits
+// is the regression test for the crash-resume-bypasses-ambiguity-guard bug:
+// the crash-resume block (tested above for the single-instance case) used to
+// run its MkdirAll+Rename BEFORE the enabledMatrixInstances != 1 ambiguity
+// guard was ever consulted. That reintroduced exactly the guess the guard
+// exists to prevent (see the function's own doc comment): with an interrupted
+// single-instance migration staged at tmpPath, if a second Matrix instance
+// gets enabled before the next restart, whichever instance's factory call
+// happens to run first (Go map iteration order is randomized in
+// manager.go's initChannels) would silently complete the resume into its OWN
+// namespaced path — the other instance then gets a fresh, empty crypto
+// identity with zero warning about the ambiguity.
+//
+// This simulates that exact scenario: an interrupted single-instance
+// migration (tmpPath staged, matching the resume test's setup above), but
+// with TWO Matrix instances enabled by the time migration runs for either of
+// them. The fix must make NEITHER instance silently inherit the staged
+// store — both must come up on fresh, empty identities, and a loud
+// multi-instance warning must be logged (matching the ambiguous fresh-
+// migration case's assertion style), regardless of which instance's factory
+// call happens first.
+func TestMigrateLegacyMatrixCryptoStore_InterruptedMigration_MultipleInstances_NeitherInherits(t *testing.T) {
+	base := t.TempDir()
+	channelDir := filepath.Join(base, "matrix")
+	tmpPath := channelDir + ".pre-namespacing-migration-tmp"
+	if err := os.MkdirAll(tmpPath, 0o700); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	stagedFile := filepath.Join(tmpPath, dbName)
+	if err := os.WriteFile(stagedFile, []byte("real-olm-crypto-keys"), 0o600); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	cfg := &config.Config{
+		Channels: map[string]config.ChannelInstanceConfig{
+			"matrix.eu": {Type: "matrix", Enabled: true},
+			"matrix.us": {Type: "matrix", Enabled: true},
+		},
+	}
+
+	// Capture logger output (same pattern as the single-instance interrupted
+	// test above) so the loud multi-instance warning can be asserted
+	// directly, not just inferred from filesystem side effects.
+	tmpDir := t.TempDir()
+	logFile := filepath.Join(tmpDir, "matrix-migration-multi.log")
+	prevLevel := logger.GetLevel()
+	logger.DisableConsole()
+	logger.SetLevel(logger.WARN)
+	if err := logger.EnableFileLogging(logFile); err != nil {
+		t.Fatalf("EnableFileLogging: %v", err)
+	}
+	t.Cleanup(func() {
+		logger.DisableFileLogging()
+		logger.SetLevel(prevLevel)
+	})
+
+	namespacedEU := filepath.Join(channelDir, "matrix.eu")
+	namespacedUS := filepath.Join(channelDir, "matrix.us")
+
+	// Boot order is Go map-iteration-random in production; call both
+	// deterministically here — the fix must make the result independent of
+	// which one happens to run "first".
+	migrateLegacyMatrixCryptoStore(cfg, channelDir, "matrix.eu", namespacedEU)
+	migrateLegacyMatrixCryptoStore(cfg, channelDir, "matrix.us", namespacedUS)
+
+	// Neither instance may silently inherit the ambiguous staged store.
+	if _, err := os.Stat(namespacedEU); !os.IsNotExist(err) {
+		t.Fatalf("matrix.eu must NOT inherit the ambiguous staged store, stat err = %v", err)
+	}
+	if _, err := os.Stat(namespacedUS); !os.IsNotExist(err) {
+		t.Fatalf("matrix.us must NOT inherit the ambiguous staged store, stat err = %v", err)
+	}
+
+	// The original store must remain recoverable, untouched, at tmpPath —
+	// neither call may have deleted or altered it.
+	staged, err := os.ReadFile(stagedFile)
+	if err != nil {
+		t.Fatalf("expected the stranded original store to remain recoverable at %s, got error: %v", stagedFile, err)
+	}
+	if string(staged) != "real-olm-crypto-keys" {
+		t.Fatalf("stranded original store was corrupted: got %q", string(staged))
+	}
+
+	logged, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", logFile, err)
+	}
+	logStr := string(logged)
+	if !strings.Contains(logStr, "multiple Matrix instances") {
+		t.Errorf("log file missing an explanation that multiple instances make the resume ambiguous; got:\n%s", logStr)
+	}
+	if !strings.Contains(logStr, tmpPath) {
+		t.Errorf(
+			"log file missing the recoverable temp path %q an operator needs to manually recover the store; got:\n%s",
+			tmpPath,
+			logStr,
+		)
+	}
+}

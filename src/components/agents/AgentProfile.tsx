@@ -1830,6 +1830,23 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 />
               </div>
             )}
+            {allActivityResp?.warning && (
+              // Task 2 fix: fetchActivity() returns a `warning` when a session
+              // store was unreadable — the returned `events` list is a PARTIAL
+              // result. Surface it inline (mirrors the workspaceUnavailable
+              // banner pattern below) so a partial-data 200 isn't silently
+              // indistinguishable from "no activity ever happened".
+              <div
+                data-testid="activity-warning-banner"
+                className="rounded-md border border-[var(--color-warning)]/30 bg-[var(--color-warning)]/10 px-3 py-2 flex items-start gap-2"
+                role="alert"
+              >
+                <Warning size={14} weight="fill" className="text-[var(--color-warning)] shrink-0 mt-0.5" aria-hidden="true" />
+                <p className="text-xs text-[var(--color-warning)]">
+                  Showing partial activity — {allActivityResp.warning}
+                </p>
+              </div>
+            )}
             {activityError ? (
               <p className="text-sm text-[var(--color-error)]">Failed to load activity</p>
             ) : recentActivity.length === 0 ? (

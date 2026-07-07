@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -46,12 +47,65 @@ var privateIPv6Ranges = []string{
 }
 
 // SSRFChecker validates IP addresses and hostnames against SSRF rules.
+//
+// The zero value (e.g. `var sc SSRFChecker`, or a struct literal that skips
+// NewSSRFChecker) is safe to use directly: ipv4Nets/ipv6Nets/resolver are
+// lazily populated with the built-in block-list and default DNS resolver on
+// first use via initOnce (see ensureInit). This is a deliberate fail-closed
+// property — a misconstructed checker must still enforce the full built-in
+// private/reserved-range block list, never silently permit every private IP
+// because its block-list slices happened to be nil. allowList/allowCIDRs are
+// intentionally NOT lazily populated: they hold operator-supplied config
+// that NewSSRFChecker reads from allowInternal, and correctly stay empty on
+// a zero value since there is no config to read.
 type SSRFChecker struct {
+	initOnce   sync.Once
 	ipv4Nets   []*net.IPNet
 	ipv6Nets   []*net.IPNet
 	allowList  map[string]bool // Allowlisted exact IPs and hostnames
 	allowCIDRs []*net.IPNet    // Allowlisted CIDR ranges
 	resolver   Resolver        // DNS resolver (injectable for testing)
+}
+
+// ensureInit lazily populates the built-in CIDR block-lists and default DNS
+// resolver so that even a zero-value SSRFChecker enforces SSRF protection.
+// Called at the top of every method that reads ipv4Nets, ipv6Nets, or
+// resolver. Guarded by initOnce so a checker constructed via NewSSRFChecker
+// (which already populates these fields) pays only a single no-op atomic
+// check per instance, not a rebuild.
+//
+// Threat model: without this guard, `var sc SSRFChecker` has empty
+// ipv4Nets/ipv6Nets slices, so CheckIP's range-membership loops never match
+// and every private/loopback/RFC1918/link-local/cloud-metadata IP silently
+// passes as "safe" (fail OPEN) — a silent SSRF-defense bypass. CheckHost
+// would additionally panic on a nil resolver. Lazily building the same
+// defaults NewSSRFChecker(nil) would have built closes both gaps: the zero
+// value now fails CLOSED (blocks the full built-in range list) with no
+// allowlist, exactly matching NewSSRFChecker(nil)'s behavior.
+func (sc *SSRFChecker) ensureInit() {
+	sc.initOnce.Do(func() {
+		if sc.ipv4Nets == nil {
+			for _, cidr := range privateIPv4Ranges {
+				_, ipNet, err := net.ParseCIDR(cidr)
+				if err != nil {
+					panic(fmt.Sprintf("BUG: invalid hardcoded IPv4 CIDR %q: %v", cidr, err))
+				}
+				sc.ipv4Nets = append(sc.ipv4Nets, ipNet)
+			}
+		}
+		if sc.ipv6Nets == nil {
+			for _, cidr := range privateIPv6Ranges {
+				_, ipNet, err := net.ParseCIDR(cidr)
+				if err != nil {
+					panic(fmt.Sprintf("BUG: invalid hardcoded IPv6 CIDR %q: %v", cidr, err))
+				}
+				sc.ipv6Nets = append(sc.ipv6Nets, ipNet)
+			}
+		}
+		if sc.resolver == nil {
+			sc.resolver = &defaultResolver{r: net.DefaultResolver}
+		}
+	})
 }
 
 // Resolver abstracts DNS resolution for testability.
@@ -135,6 +189,8 @@ func (sc *SSRFChecker) SetResolver(r Resolver) {
 // CheckIP verifies that an IP address is not in a private/reserved range.
 // Returns an error if the IP is blocked, nil if it is safe.
 func (sc *SSRFChecker) CheckIP(ip net.IP) error {
+	sc.ensureInit()
+
 	if ip == nil {
 		return fmt.Errorf("SSRF: nil IP address rejected")
 	}
@@ -210,6 +266,8 @@ func (sc *SSRFChecker) CheckIP(ip net.IP) error {
 // individually checked). This lets operators explicitly permit internal services
 // by name (e.g. "localhost", "internal.corp") without having to enumerate IPs.
 func (sc *SSRFChecker) CheckHost(ctx context.Context, host string) ([]net.IPAddr, error) {
+	sc.ensureInit()
+
 	// If host is already an IP, check it directly.
 	if ip := net.ParseIP(host); ip != nil {
 		if err := sc.CheckIP(ip); err != nil {
@@ -309,8 +367,21 @@ func (sc *SSRFChecker) SafeTransport() *http.Transport {
 // is a thin convenience wrapper around this method with a default 30s dial
 // timeout and no keep-alive override.
 //
-// dialer must not be nil.
+// dialer must not be nil. A nil dialer is guarded against below rather than
+// left to panic deep inside the returned closure the first time it's
+// invoked — the same defensive treatment given to WebFetchTool.Execute's
+// nil-ssrf guard (pkg/tools/web.go) during the same hardening pass. The
+// check runs once here, at SafeDialContext's own call site, rather than on
+// every dial: a nil dialer is a caller wiring bug, not a per-request
+// condition, so every invocation of the returned closure can return the
+// same clear error immediately instead of repeating the check after doing
+// DNS resolution work first.
 func (sc *SSRFChecker) SafeDialContext(dialer *net.Dialer) func(context.Context, string, string) (net.Conn, error) {
+	if dialer == nil {
+		return func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return nil, fmt.Errorf("SSRF: SafeDialContext called with nil dialer")
+		}
+	}
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(addr)
 		if err != nil {

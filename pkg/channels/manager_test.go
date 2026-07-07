@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -15,6 +17,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
 // mockChannel is a test double that delegates Send to a configurable function.
@@ -558,6 +561,57 @@ func TestChannelTypeForRateLimit_Fallback(t *testing.T) {
 	noEntry := &Manager{config: &config.Config{Channels: map[string]config.ChannelInstanceConfig{}}}
 	if got := noEntry.channelTypeForRateLimit("telegram"); got != "telegram" {
 		t.Fatalf("no config entry: expected fallback to instanceID %q, got %q", "telegram", got)
+	}
+}
+
+// TestChannelTypeForRateLimit_ConfigEntryWithEmptyType_LogsAtWarn covers the
+// third, distinct fallback case: a config.Channels entry EXISTS for the
+// instance but its Type is empty. Unlike the two benign cases in
+// TestChannelTypeForRateLimit_Fallback (no entry at all — a synthetic
+// registration with nothing to look up), this means a genuinely configured
+// instance's Type went out of sync with config.normalizeChannelMap's
+// invariant that Type is always populated — a real desync bug. This
+// project's shipped default LogLevel is "warn" (pkg/config/defaults.go), so
+// this case must log at WARN, not DEBUG, or the one diagnostic line
+// explaining why the instance silently fell back to the wrong rate limit
+// would never reach a default-level operator's logs.
+func TestChannelTypeForRateLimit_ConfigEntryWithEmptyType_LogsAtWarn(t *testing.T) {
+	m := &Manager{
+		config: &config.Config{
+			Channels: map[string]config.ChannelInstanceConfig{
+				"desynced": {Type: "", Enabled: true},
+			},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	logFile := filepath.Join(tmpDir, "ratelimit-desync.log")
+	prevLevel := logger.GetLevel()
+	logger.DisableConsole()
+	logger.SetLevel(logger.WARN)
+	if err := logger.EnableFileLogging(logFile); err != nil {
+		t.Fatalf("EnableFileLogging: %v", err)
+	}
+	t.Cleanup(func() {
+		logger.DisableFileLogging()
+		logger.SetLevel(prevLevel)
+	})
+
+	got := m.channelTypeForRateLimit("desynced")
+	if got != "desynced" {
+		t.Fatalf("expected fallback to instanceID %q, got %q", "desynced", got)
+	}
+
+	logged, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", logFile, err)
+	}
+	logStr := string(logged)
+	if !strings.Contains(logStr, "desync") {
+		t.Errorf("expected the WARN-level log to explain the config/instance desync; got:\n%s", logStr)
+	}
+	if !strings.Contains(logStr, "desynced") {
+		t.Errorf("expected the WARN-level log to name the instance %q; got:\n%s", "desynced", logStr)
 	}
 }
 

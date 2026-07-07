@@ -1,7 +1,7 @@
 package tools
 
 // ExecResponse is the wire shape returned by the bash tool (pkg/tools/shell.go)
-// for exec/status/session-list actions.
+// for run/poll/read/kill actions.
 type ExecResponse struct {
 	SessionID string        `json:"sessionId,omitempty"`
 	Status    string        `json:"status,omitempty"`

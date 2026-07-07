@@ -261,6 +261,70 @@ func TestSSRFChecker_MulticastAndUnspecified(t *testing.T) {
 	})
 }
 
+// TestSSRFChecker_ZeroValue_FailsClosed proves the hardening fix: a zero-value
+// SSRFChecker (`var sc security.SSRFChecker`, e.g. constructed by mistake
+// without NewSSRFChecker, as a same-package test elsewhere in this codebase
+// does for WebFetchTool) must still block private/reserved IPs via CheckIP —
+// not silently pass every private IP as "safe" because its block-list slices
+// were never populated. Before the ensureInit/sync.Once fix, this test would
+// fail: CheckIP on the zero value returned nil (no error) for 10.0.0.1.
+func TestSSRFChecker_ZeroValue_FailsClosed(t *testing.T) {
+	var sc security.SSRFChecker
+
+	t.Run("blocks RFC1918 private IP", func(t *testing.T) {
+		err := sc.CheckIP(net.ParseIP("10.0.0.1"))
+		require.Error(t, err, "zero-value SSRFChecker must block private IPs, not fail open")
+		assert.Contains(t, err.Error(), "SSRF")
+	})
+
+	t.Run("blocks cloud metadata endpoint", func(t *testing.T) {
+		err := sc.CheckIP(net.ParseIP("169.254.169.254"))
+		require.Error(t, err, "zero-value SSRFChecker must block the cloud metadata endpoint")
+		assert.Contains(t, err.Error(), "cloud metadata endpoint")
+	})
+
+	t.Run("blocks IPv6 unique-local", func(t *testing.T) {
+		err := sc.CheckIP(net.ParseIP("fc00::1"))
+		require.Error(t, err, "zero-value SSRFChecker must block private IPv6 ranges")
+		assert.Contains(t, err.Error(), "SSRF")
+	})
+
+	t.Run("still allows public IP", func(t *testing.T) {
+		err := sc.CheckIP(net.ParseIP("8.8.8.8"))
+		assert.NoError(t, err, "zero-value SSRFChecker must still allow public IPs")
+	})
+}
+
+// TestSSRFChecker_ZeroValue_CheckHost_DoesNotPanic proves CheckHost on a
+// zero-value SSRFChecker no longer panics on the nil resolver field (the
+// second half of the fail-open/panic gap this hardening closes) and instead
+// enforces the same block-list as CheckIP. Using a literal-IP host exercises
+// CheckHost's net.ParseIP fast path without depending on network access.
+func TestSSRFChecker_ZeroValue_CheckHost_DoesNotPanic(t *testing.T) {
+	var sc security.SSRFChecker
+
+	require.NotPanics(t, func() {
+		_, err := sc.CheckHost(context.Background(), "192.168.1.1")
+		require.Error(t, err, "zero-value SSRFChecker must block private IPs via CheckHost")
+		assert.Contains(t, err.Error(), "SSRF")
+	})
+}
+
+// TestSSRFChecker_SafeDialContext_NilDialer proves SafeDialContext no longer
+// panics deep inside the returned closure when called with a nil dialer —
+// it now returns a clear "SSRF: SafeDialContext called with nil dialer"
+// error on first invocation instead.
+func TestSSRFChecker_SafeDialContext_NilDialer(t *testing.T) {
+	checker := security.NewSSRFChecker(nil)
+	dialContext := checker.SafeDialContext(nil)
+
+	require.NotPanics(t, func() {
+		_, err := dialContext(context.Background(), "tcp", "example.com:443")
+		require.Error(t, err, "nil dialer must produce a clear error, not a panic")
+		assert.Contains(t, err.Error(), "nil dialer")
+	})
+}
+
 // TestSSRFChecker_SafeDialContext_RealDNSResolution exercises SafeDialContext
 // end-to-end with a real OS DNS resolution (hostname "localhost", not a
 // literal IP) and a real listener, verifying the allowlist decides whether a

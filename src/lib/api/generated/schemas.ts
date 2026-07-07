@@ -1880,6 +1880,13 @@ export const StorageStats = z
     warnings: z.array(z.string()).optional(),
   })
   .passthrough();
+export const ClearAllSessionsResponse = z
+  .object({
+    status: z.literal("cleared"),
+    count: z.number().int().gte(0),
+    warnings: z.array(z.string()).optional(),
+  })
+  .passthrough();
 export const GatewayStatus = z.object({
   online: z.boolean(),
   agent_count: z.number().int().gte(0),
@@ -5548,13 +5555,7 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
     description: `Removes all session directories across all agent stores. Returns the count of removed sessions and any per-agent warnings.
 `,
     requestFormat: "json",
-    response: z
-      .object({
-        status: z.literal("cleared"),
-        count: z.number().int().gte(0),
-        warnings: z.array(z.string()).optional(),
-      })
-      .passthrough(),
+    response: ClearAllSessionsResponse,
     errors: [
       {
         status: 405,

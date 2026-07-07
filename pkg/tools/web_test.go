@@ -170,6 +170,33 @@ func TestWebTool_WebFetch_MissingURL(t *testing.T) {
 	}
 }
 
+// TestWebFetchTool_Execute_NilSSRFGuard verifies that Execute on a WebFetchTool
+// built with a nil ssrf field (e.g. via a bare &WebFetchTool{} struct literal,
+// as TestWebFetchTool_extractText below constructs for unrelated HTML-parsing
+// coverage) returns an error ToolResult instead of panicking. This is the
+// direct regression test for the nil-guard at the top of Execute (web.go —
+// SSRF checker not initialized), which previously had no test exercising it.
+func TestWebFetchTool_Execute_NilSSRFGuard(t *testing.T) {
+	tool := &WebFetchTool{}
+	if tool.ssrf != nil {
+		t.Fatalf("test setup: expected zero-value WebFetchTool to have nil ssrf")
+	}
+
+	ctx := context.Background()
+	args := map[string]any{
+		"url": "https://example.com",
+	}
+
+	result := tool.Execute(ctx, args)
+
+	if !result.IsError {
+		t.Fatalf("Expected error result for nil ssrf checker, got success: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "SSRF checker not initialized") {
+		t.Errorf("Expected error message about SSRF checker not initialized, got: %s", result.ForLLM)
+	}
+}
+
 // TestWebTool_WebFetch_Truncation verifies content truncation
 func TestWebTool_WebFetch_Truncation(t *testing.T) {
 	withPrivateWebFetchHostsAllowed(t)

@@ -45,6 +45,16 @@ const redactedSentinel = "***redacted***"
 // compared in isSensitiveKey — see normalizeKey in redactor.go. Substring
 // semantics (not exact-match) mean "password_hash", "token_hash",
 // "new_password", "my_api_key"/"myApiKey", and "client_secret" all redact.
+//
+// This is deliberately this file's OWN broader, substring-matched layer —
+// isSensitiveKey additionally checks exact membership in redactor.go's
+// sensitiveFieldNames set (see isSensitiveKey below) rather than hand-
+// duplicating those entries here, so the two vocabularies can no longer
+// silently drift apart on the exact-match names (pwd, passwd, passphrase,
+// authorization, auth, bearer, privatekey, signingkey, ...): any future
+// addition to sensitiveFieldNames automatically also protects
+// EmitSecuritySettingChange, which — unlike Logger.Log's redaction
+// pipeline — has no second-layer value-pattern regex fallback.
 var sensitiveSubstrings = []string{"password", "token", "apikey", "secret"}
 
 // EmitSecuritySettingChange writes one JSONL audit record for a security config
@@ -150,18 +160,35 @@ func redactSensitive(v any) any {
 	}
 }
 
-// isSensitiveKey reports whether key contains any of the sensitive
-// substrings once normalized. Normalization reuses normalizeKey (defined in
-// redactor.go, same package): lowercase, then strip '_' and '-'. This keeps
-// this file's substring matching consistent with redactor.go's field-name
-// matching and argshash.go's `(?i)(api[_-]?key|...)` pattern — without
-// normalization, a camelCase key like "apiKey" lowercases to "apikey", which
-// does NOT contain the literal separator-bearing substring "api_key" and
-// would slip through unredacted. Substring semantics (matched against the
-// normalized forms) still catch "password_hash", "token_hash", "new_password",
-// "client_secret", "api_key_override", "apiKeyOverride", etc.
+// isSensitiveKey reports whether key is shaped like a secret-carrying field
+// name. Normalization reuses normalizeKey (defined in redactor.go, same
+// package): lowercase, then strip '_' and '-'. This keeps this file's
+// matching consistent with redactor.go's field-name matching and
+// argshash.go's `(?i)(api[_-]?key|...)` pattern — without normalization, a
+// camelCase key like "apiKey" lowercases to "apikey", which does NOT contain
+// the literal separator-bearing substring "api_key" and would slip through
+// unredacted.
+//
+// Two layers, both required — this function is the SOLE safety net for
+// EmitSecuritySettingChange (writeLine bypasses Logger.Log's full Redactor
+// pipeline, including its second-layer value-pattern regex fallback):
+//
+//  1. Exact membership in redactor.go's sensitiveFieldNames set (the same
+//     canonical map redactField consults) — catches names like
+//     "authorization", "auth", "bearer", "pwd", "passwd", "passphrase",
+//     "private_key"/"privateKey", "signing_key" that are not substrings of
+//     anything in sensitiveSubstrings below. Referencing sensitiveFieldNames
+//     directly (rather than hand-copying its entries) means the two
+//     vocabularies can no longer silently drift apart on this layer.
+//  2. Substring match against sensitiveSubstrings (this file's own, broader
+//     layer) — catches "password_hash", "token_hash", "new_password",
+//     "client_secret", "api_key_override", "apiKeyOverride", etc., which are
+//     NOT exact matches in sensitiveFieldNames.
 func isSensitiveKey(key string) bool {
 	normalized := normalizeKey(key)
+	if _, exact := sensitiveFieldNames[normalized]; exact {
+		return true
+	}
 	for _, s := range sensitiveSubstrings {
 		if strings.Contains(normalized, s) {
 			return true

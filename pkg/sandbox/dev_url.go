@@ -1,5 +1,5 @@
-// Package sandbox — BuildDevURL: shared helper for constructing absolute
-// /preview/<agentID>/<token>/ preview URLs for dev-mode registrations.
+// Package sandbox — BuildDevURL: helper for constructing absolute
+// /dev/<agentID>/<token>/ preview URLs for dev-mode registrations.
 //
 // Originally lifted from the now-removed pkg/tools/run_in_workspace.go, the
 // predecessor of the former workspace_shell_bg tool. When workspace_shell_bg
@@ -7,8 +7,14 @@
 // "exec"/"workspace_shell"/"workspace_shell_bg" tools into it), its
 // port-exposure/preview-URL capability was dropped, not ported (ADR-036
 // §3.1) — bash's background-session mode has no preview URL and does not
-// use this helper. web_serve dev mode is the only mode that uses this URL
-// construction logic.
+// use this helper.
+//
+// BuildDevURL currently has no production caller: web_serve.go builds its
+// "/preview/..." URL independently via plain string concatenation (see the
+// comment at its call site), having removed its own call to this helper in
+// an earlier commit. BuildDevURL is kept as a documented reference
+// implementation of the "/dev/" URL shape and scheme-coercion rule below,
+// exercised only by dev_url_test.go.
 //
 // Scheme coercion rule: if gatewayHost does not contain "://" it is treated
 // as a bare host[:port] and "https://" is prepended. Operators running a
@@ -32,15 +38,16 @@ var devURLSchemeWarnOnce sync.Once
 // using gatewayHost as the origin. When gatewayHost is empty, returns just
 // the path (test wiring).
 //
-// Note: web_serve dev mode is the only consumer, and it overrides the
-// result to emit /preview/ URLs instead of the raw /dev/ form. bash's
-// background-session mode ("bash" — ADR-036 unified the retired
-// "exec"/"workspace_shell"/"workspace_shell_bg" tools into it) does not call
-// this helper: the equivalent preview-URL capability was dropped, not
-// ported, when workspace_shell_bg was merged (ADR-036 §3.1).
+// Note: unused in production (see the package doc comment above) — web_serve
+// dev mode builds its own "/preview/..." URL independently rather than
+// calling this function. bash's background-session mode ("bash" — ADR-036
+// unified the retired "exec"/"workspace_shell"/"workspace_shell_bg" tools
+// into it) also does not call this helper: the equivalent preview-URL
+// capability was dropped, not ported, when workspace_shell_bg was merged
+// (ADR-036 §3.1).
 //
-// gatewayHost examples accepted (raw /dev/ form shown; web_serve dev mode
-// substitutes /preview/ before returning the URL to the caller):
+// gatewayHost examples accepted (raw /dev/ form shown; this is NOT the
+// /preview/ form web_serve dev mode actually returns to callers):
 //   - ""                       → "/dev/agent/token/"
 //   - "127.0.0.1:5001"         → "https://127.0.0.1:5001/dev/agent/token/"
 //   - "https://example.com"    → "https://example.com/dev/agent/token/"

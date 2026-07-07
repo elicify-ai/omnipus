@@ -247,10 +247,25 @@ func (p *startupBlockedProvider) GetDefaultModel() string {
 }
 
 // buildEnabledRefMap returns a set of credential ref names that belong to
-// channels that are currently enabled. Used by bootCredentials to distinguish
-// a missing credential on an enabled channel (fatal) from one on a disabled
-// channel (Info + continue). Only channel refs are included — provider
-// APIKeyRef misses are already fatal via InjectFromConfig.
+// channels that are currently enabled, PLUS the non-channel credential refs
+// (voice transcription, web-search tools, skill marketplaces) that are
+// currently in use. Used by bootCredentials/executeReload/
+// refreshConfigAndRewireServices to distinguish a credential resolution
+// failure on something actually in use (fatal — see enabledRefFromBundleError
+// for why a non-NotFoundError failure is worse than a simple missing ref)
+// from one on a disabled/unused feature (Info/Warn + continue).
+//
+// Provider APIKeyRef misses are NOT included here — they are already fatal
+// via InjectFromConfig, which independently aborts boot/reload on any
+// provider credential injection error (see bootCredentials and executeReload,
+// both of which call InjectFromConfig before ever consulting this map), so
+// they never need this map's separate escalation path.
+//
+// The non-channel categories mirror credentials.ResolveAll's nonChannelRefs
+// (pkg/credentials/inject.go) — that is the set of refs credentials.
+// ResolveBundle (== ResolveAll) can actually produce a resolution error for,
+// so this map must stay in sync with it or a corrupted ref there degrades to
+// a silent Warn again.
 func buildEnabledRefMap(cfg *config.Config) map[string]bool {
 	m := make(map[string]bool)
 	for _, inst := range cfg.Channels {
@@ -282,6 +297,43 @@ func buildEnabledRefMap(cfg *config.Config) map[string]bool {
 			}
 		}
 	}
+	// Voice transcription keys have no separate on/off toggle in VoiceConfig
+	// (unlike the web-search tools below) — a populated ref IS the "in use"
+	// signal, matching how the ElevenLabs/Groq transcribers key off ref
+	// presence alone.
+	for _, ref := range []string{cfg.Voice.ElevenLabsAPIKeyRef, cfg.Voice.GroqAPIKeyRef} {
+		if ref != "" {
+			m[ref] = true
+		}
+	}
+	// Web-search tool keys — only "in use" when the tool itself is enabled,
+	// mirroring the channel-Enabled gate above.
+	for _, webTool := range []struct {
+		enabled bool
+		ref     string
+	}{
+		{cfg.Tools.Web.Brave.Enabled, cfg.Tools.Web.Brave.APIKeyRef},
+		{cfg.Tools.Web.Tavily.Enabled, cfg.Tools.Web.Tavily.APIKeyRef},
+		{cfg.Tools.Web.Perplexity.Enabled, cfg.Tools.Web.Perplexity.APIKeyRef},
+		{cfg.Tools.Web.GLMSearch.Enabled, cfg.Tools.Web.GLMSearch.APIKeyRef},
+		{cfg.Tools.Web.BaiduSearch.Enabled, cfg.Tools.Web.BaiduSearch.APIKeyRef},
+	} {
+		if webTool.enabled && webTool.ref != "" {
+			m[webTool.ref] = true
+		}
+	}
+	// Skill marketplace credential refs — only "in use" when the marketplace
+	// entry itself is enabled.
+	for _, mk := range cfg.Tools.Skills.Marketplaces {
+		if !mk.Enabled {
+			continue
+		}
+		for _, ref := range []string{mk.AuthTokenRef, mk.TokenRef} {
+			if ref != "" {
+				m[ref] = true
+			}
+		}
+	}
 	return m
 }
 
@@ -296,7 +348,9 @@ var resolveAllRefPattern = regexp.MustCompile(`credential ("(?:[^"\\]|\\.)*"):`)
 
 // enabledRefFromBundleError attributes a non-NotFoundError credential bundle
 // resolution error (wrong master key, corrupted store entry, decrypt
-// failure, ...) to the currently-enabled channel ref in enabledRefs.
+// failure, ...) to the currently-in-use ref in enabledRefs — an enabled
+// channel's ref or an in-use non-channel ref (voice, web-search tool, skill
+// marketplace; see buildEnabledRefMap).
 //
 // This parses the ref name directly out of ResolveAll's wrap format via
 // resolveAllRefPattern instead of doing a Contains-loop over every enabled
@@ -366,8 +420,9 @@ func bootCredentials(
 		)
 	}
 
-	// Build a ref→enabled map so we can distinguish a missing credential on an
-	// enabled channel (fatal) from one on a disabled channel (Info + continue).
+	// Build a ref→in-use map so we can distinguish a missing credential on
+	// something actually enabled/in-use (fatal) from one on a disabled
+	// channel or unused feature (Info + continue).
 	enabledRefs := buildEnabledRefMap(cfg)
 
 	// Resolve all credential refs into a SecretBundle. Channels receive secrets
@@ -377,28 +432,30 @@ func bootCredentials(
 		var notFound *credentials.NotFoundError
 		if errors.As(e, &notFound) {
 			if enabledRefs[notFound.Name] {
-				// Missing credential on an enabled channel is fatal at boot.
+				// Missing credential on something actually enabled/in-use
+				// (channel, voice, web-search tool, skill marketplace) is
+				// fatal at boot.
 				return nil, nil, nil, fmt.Errorf(
-					"fatal: enabled channel credential %q not found in store — "+
+					"fatal: enabled credential %q not found in store — "+
 						"ensure the credential is stored before starting: %w",
 					notFound.Name, e,
 				)
 			}
-			slog.Info("channel credential not found (channel is disabled)", "ref", notFound.Name)
+			slog.Info("credential not found (not currently enabled/in use)", "ref", notFound.Name)
 			continue
 		}
 		// Any error other than "ref not found" (wrong master key, corrupted
 		// credential store entry, decrypt failure, ...) means the ref IS
 		// configured but unreadable — worse than a simple missing ref, since
-		// the operator believes the channel is set up correctly. On a
-		// channel that is actually ENABLED this would otherwise only produce
-		// a slog.Warn an operator can easily miss, then the channel starts
-		// silently without its secret. Escalate to the same fatal treatment
-		// boot already applies to the NotFoundError-on-enabled-channel case
+		// the operator believes it is set up correctly. On something that is
+		// actually ENABLED/in-use this would otherwise only produce a
+		// slog.Warn an operator can easily miss, then it starts (or keeps
+		// running) silently without its secret. Escalate to the same fatal
+		// treatment boot already applies to the NotFoundError-on-enabled case
 		// above, instead of inventing a separate degraded-signal mechanism.
 		if ref, ok := enabledRefFromBundleError(e, enabledRefs); ok {
 			return nil, nil, nil, fmt.Errorf(
-				"fatal: enabled channel credential %q failed to resolve (not simply "+
+				"fatal: enabled credential %q failed to resolve (not simply "+
 					"missing — check OMNIPUS_MASTER_KEY / credentials.json integrity): %w",
 				ref, e,
 			)
@@ -1564,16 +1621,16 @@ func executeReload(
 			if errors.As(e, &notFound) {
 				if enabledRefs[notFound.Name] {
 					reloadErr := fmt.Errorf(
-						"reload rejected: enabled channel credential %q not found in store: %w",
+						"reload rejected: enabled credential %q not found in store: %w",
 						notFound.Name, e,
 					)
 					markDegraded(reloadErr)
 					return reloadErr
 				}
-				slog.Info("reload: channel credential not found (channel is disabled)", "ref", notFound.Name)
+				slog.Info("reload: credential not found (not currently enabled/in use)", "ref", notFound.Name)
 				continue
 			}
-			// Any error other than "not found" on an enabled channel's ref is
+			// Any error other than "not found" on an enabled/in-use ref is
 			// worse than a simple missing ref (the credential exists but can't
 			// be read) — escalate exactly like the NotFoundError-on-enabled
 			// case above, reusing the existing reject-and-rollback mechanism
@@ -1581,7 +1638,7 @@ func executeReload(
 			// new degraded-signal field.
 			if ref, ok := enabledRefFromBundleError(e, enabledRefs); ok {
 				reloadErr := fmt.Errorf(
-					"reload rejected: enabled channel credential %q failed to resolve: %w",
+					"reload rejected: enabled credential %q failed to resolve: %w",
 					ref, e,
 				)
 				markDegraded(reloadErr)

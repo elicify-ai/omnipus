@@ -3887,6 +3887,22 @@ func ensureMap(m map[string]any, keys ...string) map[string]any {
 // falls back to config.LoadConfig (no migration, no credential resolution) and
 // skips RegisterSensitiveValues — there are no credentials to re-arm in that case.
 //
+// Credential-resolution escalation: mirrors bootCredentials/executeReload
+// (gateway.go) — a resolution failure on a ref that buildEnabledRefMap
+// considers actually enabled/in-use (an enabled channel, or an in-use voice /
+// web-search / skill-marketplace credential) is escalated to an error instead
+// of a bare Warn, whether the failure is a NotFoundError (ref genuinely
+// missing) or something worse (wrong master key, corrupted store entry —
+// the ref IS configured but unreadable). Unlike executeReload, this call site
+// cannot "reject and roll back" a config write: by the time this method runs,
+// updateConfigJSONLocked has ALREADY durably written the new config.json to
+// disk (fileutil.WriteFileAtomic runs before this call). Rejection here
+// therefore means: do NOT swap the broken config into the live in-memory
+// pointer below (the gateway keeps serving the previous good config), and
+// return the error so the caller's HTTP handler surfaces a 500 instead of
+// silently reporting success — the operator then knows the save did not fully
+// take effect and must fix the credential before it applies.
+//
 // Called while a.configMu is held.
 func (a *restAPI) refreshConfigAndRewireServices(configPath string) error {
 	if a.credStore == nil {
@@ -3908,11 +3924,42 @@ func (a *restAPI) refreshConfigAndRewireServices(configPath string) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
+	// Build a ref→in-use map so a resolution failure on something actually
+	// enabled/in-use (fatal — surfaced as a failed request) can be
+	// distinguished from one on a disabled channel or unused feature
+	// (Warn + continue), matching bootCredentials/executeReload.
+	enabledRefs := buildEnabledRefMap(newCfg)
 	bundle, bundleErrs := credentials.ResolveBundle(newCfg, a.credStore)
 	for _, e := range bundleErrs {
-		// Non-fatal: a disabled channel missing its cred is acceptable here.
-		// Enabled-channel fatality is enforced at boot; REST-initiated reloads
-		// are best-effort so we log and continue.
+		var notFound *credentials.NotFoundError
+		if errors.As(e, &notFound) {
+			if enabledRefs[notFound.Name] {
+				refreshErr := fmt.Errorf(
+					"enabled credential %q not found in store: %w", notFound.Name, e,
+				)
+				slog.Error("refreshConfigAndRewireServices: rejecting in-memory refresh — "+
+					"enabled credential not found", "ref", notFound.Name, "error", e)
+				return refreshErr
+			}
+			slog.Info("refreshConfigAndRewireServices: credential not found (not currently enabled/in use)",
+				"ref", notFound.Name)
+			continue
+		}
+		// Any error other than "not found" on an enabled/in-use ref is worse
+		// than a simple missing ref (the credential exists but can't be
+		// read) — escalate exactly like the NotFoundError-on-enabled case
+		// above instead of a log-only Warn.
+		if ref, ok := enabledRefFromBundleError(e, enabledRefs); ok {
+			refreshErr := fmt.Errorf(
+				"enabled credential %q failed to resolve (not simply missing — check "+
+					"OMNIPUS_MASTER_KEY / credentials.json integrity): %w", ref, e,
+			)
+			slog.Error("refreshConfigAndRewireServices: rejecting in-memory refresh — "+
+				"enabled credential failed to resolve", "ref", ref, "error", e)
+			return refreshErr
+		}
+		// Non-fatal: a disabled channel / unused feature missing its cred is
+		// acceptable here.
 		slog.Warn("refreshConfigAndRewireServices: bundle resolution error", "error", e)
 	}
 	// Replace (not append) the entire sensitive-values set so rotated secrets
@@ -5199,6 +5246,13 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 		// providers that have no live /models endpoint (UAT model-catalog fix).
 		providerUserModels := make(map[string][]string)
 		providerAPIKeys := make(map[string]string)
+		// providerCredErrors holds an operator-facing message, keyed by provider
+		// name, for the case where a.resolveCredentialRef failed for a reason
+		// WORSE than "ref not found" (locked/undecryptable vault) — see
+		// describeCredentialResolutionError. Without this, that case and "no key
+		// configured at all" were both reported as plain status=disconnected,
+		// indistinguishable to the operator viewing Settings/Providers.
+		providerCredErrors := make(map[string]string)
 		providerOrder := make([]string, 0)
 		for _, m := range cfg.Providers {
 			providerName := inferProviderName(m.Provider, m.Model)
@@ -5216,6 +5270,10 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 				if resolved == "" && m.APIKeyRef != "" {
 					if v, err := a.resolveCredentialRef(m.APIKeyRef); err != nil {
 						slog.Warn("rest: could not resolve provider credential", "ref", m.APIKeyRef, "error", err)
+						var notFound *credentials.NotFoundError
+						if !errors.As(err, &notFound) {
+							providerCredErrors[providerName] = describeCredentialResolutionError(err)
+						}
 					} else {
 						resolved = v
 					}
@@ -5287,6 +5345,16 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			}
 			if modelFetchWarning != "" {
 				p.Warning = &modelFetchWarning
+			}
+			// A credential-resolution failure worse than "not configured" (locked/
+			// undecryptable vault) is reported as status=error with the classified
+			// remediation message, instead of a plain "disconnected" indistinguishable
+			// from a provider that was never configured at all (Task 3 fix).
+			if status != gen.ProviderStatusConnected {
+				if credErrMsg, ok := providerCredErrors[name]; ok {
+					p.Status = gen.ProviderStatusError
+					p.Error = &credErrMsg
+				}
 			}
 			providers = append(providers, p)
 		}
@@ -8214,7 +8282,7 @@ func (a *restAPI) configureChannel(w http.ResponseWriter, r *http.Request, chann
 			touchedFields = append(touchedFields, k)
 		}
 		sort.Strings(touchedFields)
-		_ = a.auditor.Log(&audit.Entry{
+		if err := a.auditor.Log(&audit.Entry{
 			Event:    audit.EventChannelInstanceConfigured,
 			Decision: decision,
 			Details: map[string]any{
@@ -8223,7 +8291,9 @@ func (a *restAPI) configureChannel(w http.ResponseWriter, r *http.Request, chann
 				"fields":         touchedFields,
 				"cleanup_failed": credentialCleanupFailed,
 			},
-		})
+		}); err != nil {
+			slog.Warn("audit write failed", "event", audit.EventChannelInstanceConfigured, "error", err)
+		}
 	}
 
 	jsonOK(w, redactChannelConfig(channelID, updatedCh))

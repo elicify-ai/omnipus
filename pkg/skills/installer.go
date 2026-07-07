@@ -249,8 +249,10 @@ func (si *SkillInstaller) downloadRaw(ctx context.Context, owner, repo, ref, sub
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 
-	// Use chunked download to temporary file.
-	tmpPath, err := utils.DownloadToFile(ctx, si.client, req, 0)
+	// Use chunked download to temporary file, retrying on transient
+	// GitHub rate-limit/5xx failures (same root cause DownloadToFileWithRetry
+	// was built to address for the primary getGithubDirAllFiles path above).
+	tmpPath, err := utils.DownloadToFileWithRetry(ctx, si.client, req, 0)
 	if err != nil {
 		return fmt.Errorf("failed to fetch skill: %w", err)
 	}
@@ -276,8 +278,9 @@ func (si *SkillInstaller) downloadFile(ctx context.Context, url, localPath strin
 		return err
 	}
 
-	// Use chunked download to temporary file, then move atomically to target.
-	tmpPath, err := utils.DownloadToFile(ctx, si.client, req, 0)
+	// Use chunked download to temporary file, retrying on transient
+	// GitHub rate-limit/5xx failures, then move atomically to target.
+	tmpPath, err := utils.DownloadToFileWithRetry(ctx, si.client, req, 0)
 	if err != nil {
 		return err
 	}

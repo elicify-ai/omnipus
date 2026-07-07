@@ -176,6 +176,50 @@ func TestRedact_CamelCaseApiKeyRedacted(t *testing.T) {
 		"camelCase apiKey field must be redacted, not passed through in plaintext")
 }
 
+// TestRedact_PreviouslyMissingNamesNowRedacted — regression test for the
+// vocabulary-drift gap between isSensitiveKey (security_change.go) and
+// redactor.go's sensitiveFieldNames set: isSensitiveKey's substring list
+// ("password", "token", "apikey", "secret") did not cover several exact
+// field names that sensitiveFieldNames has always protected elsewhere in
+// the audit package — "authorization" and "private_key" ("privateKey"
+// normalizes the same way) are neither of those four substrings. Because
+// EmitSecuritySettingChange writes via writeLine, bypassing Logger.Log's
+// full Redactor pipeline entirely, isSensitiveKey was the SOLE safety net
+// for this security-critical event category, with no second-layer
+// value-pattern fallback. isSensitiveKey now also checks exact membership
+// in redactor.go's sensitiveFieldNames set, closing the gap.
+func TestRedact_PreviouslyMissingNamesNowRedacted(t *testing.T) {
+	dir := t.TempDir()
+	logger, err := audit.NewLogger(audit.LoggerConfig{Dir: dir, RetentionDays: 90})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = logger.Close() })
+
+	ctx := ctxWithUser("admin")
+
+	cases := []struct {
+		name string
+		key  string
+	}{
+		{"authorization", "authorization"},
+		{"private_key snake_case", "private_key"},
+		{"privateKey camelCase", "privateKey"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			newValue := map[string]any{tc.key: "raw-secret-value"}
+			require.NoError(t, audit.EmitSecuritySettingChange(
+				ctx, logger, "test."+tc.key, nil, newValue))
+
+			rec := readLastAuditLine(t, dir)
+			nv, ok := rec["new_value"].(map[string]any)
+			require.True(t, ok)
+			assert.Equal(t, "***redacted***", nv[tc.key],
+				"key %q must now be redacted by EmitSecuritySettingChange, "+
+					"previously slipped through unredacted", tc.key)
+		})
+	}
+}
+
 // TestRedact_CaseInsensitive — uppercase and mixed-case variants of sensitive
 // names (Password, PASSWORD, MyToken) MUST all trigger redaction.
 func TestRedact_CaseInsensitive(t *testing.T) {
