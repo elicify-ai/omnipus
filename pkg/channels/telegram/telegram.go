@@ -49,7 +49,6 @@ type TelegramChannel struct {
 	bh         *th.BotHandler
 	config     *config.Config
 	instanceID string // config-map key for this instance (e.g. "telegram", "telegram.main")
-	chatIDs    map[string]int64
 	ctx        context.Context
 	cancel     context.CancelFunc
 
@@ -121,7 +120,6 @@ func NewTelegramChannel(
 		bot:         bot,
 		config:      cfg,
 		instanceID:  instanceID,
-		chatIDs:     make(map[string]int64),
 	}, nil
 }
 
@@ -584,7 +582,6 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, message *telego.Mes
 	}
 
 	chatID := message.Chat.ID
-	c.chatIDs[platformID] = chatID
 
 	content := ""
 	mediaPaths := []string{}

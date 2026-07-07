@@ -6,48 +6,22 @@
 package config
 
 import (
-	"os"
 	"path/filepath"
 
 	"github.com/elicify-ai/omnipus/pkg"
-	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
 // DefaultConfig returns the default configuration for Omnipus.
 func DefaultConfig() *Config {
-	// Determine the base path for the workspace.
-	// Priority: $OMNIPUS_HOME > ~/.omnipus
-	var homePath string
-	if omnipusHome := os.Getenv(EnvHome); omnipusHome != "" {
-		homePath = omnipusHome
-	} else {
-		userHome, homeErr := os.UserHomeDir()
-		if homeErr != nil {
-			// H14: create a user-specific subdirectory under TempDir with 0700 permissions
-			// to prevent other local users from accessing the omnipus data directory.
-			// Use os.MkdirTemp for a randomly-suffixed name to avoid the predictability
-			// and non-uniqueness problems of a PID-based name.
-			userTempDir, mkErr := os.MkdirTemp(os.TempDir(), "omnipus-")
-			if mkErr != nil {
-				logger.ErrorCF(
-					"config",
-					"UserHomeDir failed and could not create secure temp dir; data isolation not guaranteed",
-					map[string]any{"error": homeErr.Error(), "mkdir_error": mkErr.Error()},
-				)
-				userTempDir = os.TempDir()
-			} else {
-				// MkdirTemp creates with 0700 on Unix; ensure correct permissions.
-				if chErr := os.Chmod(userTempDir, 0o700); chErr != nil {
-					logger.WarnCF("config", "Could not set 0700 on temp dir",
-						map[string]any{"path": userTempDir, "error": chErr.Error()})
-				}
-				logger.WarnCF("config", "UserHomeDir failed in DefaultConfig; using user-specific temp directory",
-					map[string]any{"error": homeErr.Error(), "fallback": userTempDir})
-			}
-			userHome = userTempDir
-		}
-		homePath = filepath.Join(userHome, pkg.DefaultOmnipusHome)
-	}
+	// Determine the base path for the workspace via the single mandatory
+	// home-dir helper (OmnipusHomeDir, pkg/config/home.go) — every subsystem
+	// MUST resolve $OMNIPUS_HOME / ~/.omnipus / the secure-temp-dir fallback
+	// through that one helper so behavior (relative-path resolution, 0700
+	// temp-dir fallback when UserHomeDir fails) stays consistent everywhere
+	// instead of being reimplemented ad hoc. In the common case (OMNIPUS_HOME
+	// unset, a real $HOME) this produces the same
+	// filepath.Join(userHome, pkg.DefaultOmnipusHome) result as before.
+	homePath := OmnipusHomeDir()
 	workspacePath := filepath.Join(homePath, pkg.WorkspaceName)
 
 	return &Config{

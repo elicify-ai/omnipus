@@ -5195,7 +5195,7 @@ turnLoop:
 	}() {
 		if ts.hardAbortRequested() {
 			turnStatus = TurnEndStatusAborted
-			return al.abortTurn(ts)
+			return al.abortTurn(ts, "turn_loop", hardInterruptAbortReason)
 		}
 
 		iteration := ts.currentIteration() + 1
@@ -5389,9 +5389,9 @@ turnLoop:
 				ts.agent.Sessions.AddFullMessage(ts.sessionKey, syntheticDenyMsg)
 				ts.recordPersistedMessage(syntheticDenyMsg)
 			}
-			if shouldAbort, _ := al.recordSyntheticDeny(ts); shouldAbort {
+			if shouldAbort, abortMsg := al.recordSyntheticDeny(ts); shouldAbort {
 				turnStatus = TurnEndStatusAborted
-				return al.abortTurn(ts)
+				return al.abortTurn(ts, "synthetic_error_floor", abortMsg)
 			}
 			// Fail the LLM call for this iteration by returning an error turn result.
 			turnStatus = TurnEndStatusError
@@ -5535,7 +5535,7 @@ turnLoop:
 			case HookActionHardAbort:
 				_ = ts.requestHardAbort()
 				turnStatus = TurnEndStatusAborted
-				return al.abortTurn(ts)
+				return al.abortTurn(ts, "before_llm", decision.Reason)
 			}
 		}
 
@@ -5728,7 +5728,7 @@ turnLoop:
 			}
 			if ts.hardAbortRequested() && errors.Is(err, context.Canceled) {
 				turnStatus = TurnEndStatusAborted
-				return al.abortTurn(ts)
+				return al.abortTurn(ts, "llm_call", hardInterruptAbortReason)
 			}
 
 			// I3: if the FallbackChain already exhausted all candidates, don't retry
@@ -5803,7 +5803,7 @@ turnLoop:
 					if sleepErr := sleepWithContext(turnCtx, backoff); sleepErr != nil {
 						if ts.hardAbortRequested() {
 							turnStatus = TurnEndStatusAborted
-							return al.abortTurn(ts)
+							return al.abortTurn(ts, "llm_retry_backoff", hardInterruptAbortReason)
 						}
 						err = sleepErr
 						break
@@ -5990,7 +5990,7 @@ turnLoop:
 				if sleepErr := sleepWithContext(turnCtx, backoff); sleepErr != nil {
 					if ts.hardAbortRequested() {
 						turnStatus = TurnEndStatusAborted
-						return al.abortTurn(ts)
+						return al.abortTurn(ts, "llm_timeout_backoff", hardInterruptAbortReason)
 					}
 					err = sleepErr
 					break
@@ -6160,7 +6160,7 @@ turnLoop:
 			case HookActionHardAbort:
 				_ = ts.requestHardAbort()
 				turnStatus = TurnEndStatusAborted
-				return al.abortTurn(ts)
+				return al.abortTurn(ts, "after_llm", decision.Reason)
 			}
 		}
 
@@ -6429,7 +6429,7 @@ turnLoop:
 		for i, tc := range normalizedToolCalls {
 			if ts.hardAbortRequested() {
 				turnStatus = TurnEndStatusAborted
-				return al.abortTurn(ts)
+				return al.abortTurn(ts, "tool_loop", hardInterruptAbortReason)
 			}
 
 			// Unsanitize tool name from LLM — dots were replaced with underscores
@@ -6478,7 +6478,7 @@ turnLoop:
 				case HookActionHardAbort:
 					_ = ts.requestHardAbort()
 					turnStatus = TurnEndStatusAborted
-					return al.abortTurn(ts)
+					return al.abortTurn(ts, "before_tool", decision.Reason)
 				}
 			}
 
@@ -6558,9 +6558,9 @@ turnLoop:
 						Reason: "permission_denied (mid-turn policy change)",
 					},
 				)
-				if shouldAbort, _ := al.recordSyntheticDeny(ts); shouldAbort {
+				if shouldAbort, abortMsg := al.recordSyntheticDeny(ts); shouldAbort {
 					turnStatus = TurnEndStatusAborted
-					return al.abortTurn(ts)
+					return al.abortTurn(ts, "synthetic_error_floor", abortMsg)
 				}
 				continue
 			}
@@ -6605,9 +6605,9 @@ turnLoop:
 							Reason: fmt.Sprintf("permission_denied (ask auto-denied: %s)", denialReason),
 						},
 					)
-					if shouldAbort, _ := al.recordSyntheticDeny(ts); shouldAbort {
+					if shouldAbort, abortMsg := al.recordSyntheticDeny(ts); shouldAbort {
 						turnStatus = TurnEndStatusAborted
-						return al.abortTurn(ts)
+						return al.abortTurn(ts, "synthetic_error_floor", abortMsg)
 					}
 					continue
 				}
@@ -6640,9 +6640,9 @@ turnLoop:
 							Reason: fmt.Sprintf("permission_denied (ask denied: %s)", denialReason),
 						},
 					)
-					if shouldAbort, _ := al.recordSyntheticDeny(ts); shouldAbort {
+					if shouldAbort, abortMsg := al.recordSyntheticDeny(ts); shouldAbort {
 						turnStatus = TurnEndStatusAborted
-						return al.abortTurn(ts)
+						return al.abortTurn(ts, "synthetic_error_floor", abortMsg)
 					}
 					continue
 				}
@@ -6831,7 +6831,7 @@ turnLoop:
 
 			if ts.hardAbortRequested() {
 				turnStatus = TurnEndStatusAborted
-				return al.abortTurn(ts)
+				return al.abortTurn(ts, "after_tool_exec", hardInterruptAbortReason)
 			}
 
 			if al.hooks != nil {
@@ -6860,7 +6860,7 @@ turnLoop:
 				case HookActionHardAbort:
 					_ = ts.requestHardAbort()
 					turnStatus = TurnEndStatusAborted
-					return al.abortTurn(ts)
+					return al.abortTurn(ts, "after_tool", decision.Reason)
 				}
 			}
 
@@ -7153,7 +7153,7 @@ turnLoop:
 
 	if ts.hardAbortRequested() {
 		turnStatus = TurnEndStatusAborted
-		return al.abortTurn(ts)
+		return al.abortTurn(ts, "turn_finalize", hardInterruptAbortReason)
 	}
 
 	if finalContent == "" {
@@ -7232,7 +7232,29 @@ turnLoop:
 	}, nil
 }
 
-func (al *AgentLoop) abortTurn(ts *turnState) (turnResult, error) {
+// hardInterruptAbortReason is the default abort reason used when a turn is
+// hard-aborted by an operator/client-initiated cancellation (requestHardAbort
+// via InterruptHard/InterruptSessionHard or steering) rather than by a hook
+// decision or the synthetic-error floor, neither of which have a more
+// specific reason string available at the call site.
+const hardInterruptAbortReason = "turn canceled by hard interrupt request"
+
+// abortTurn finalizes a hard-aborted turn. Bug fix (agent turn engine
+// correctness): previously this returned turnResult{status: Aborted} with a
+// nil error, which runAgentLoop turned into a bare ("", nil) — the deferred
+// publish guard in session_worker.go (processTurn) only synthesizes a
+// user-facing "Error processing message: %v" response when processMessage
+// returns a non-nil error, so a hard-aborted turn produced ZERO response on
+// every channel (Telegram, Discord, Slack, CLI, webchat alike).
+//
+// Now abortTurn synthesizes a real, non-nil error — mirroring
+// hookAbortError's shape (emit an error event, append to the transcript so
+// replay shows it, return a wrapped error) — carrying stage and reason so
+// the caller and the user both learn why the turn ended. runAgentLoop's
+// existing `if err != nil { return "", err }` branch naturally propagates
+// it, and processTurn's deferred guard turns it into the terminal
+// user-facing frame every channel already knows how to render.
+func (al *AgentLoop) abortTurn(ts *turnState, stage, reason string) (turnResult, error) {
 	ts.setPhase(TurnPhaseAborted)
 	if !ts.opts.NoHistory {
 		if err := ts.restoreSession(ts.agent); err != nil {
@@ -7247,7 +7269,20 @@ func (al *AgentLoop) abortTurn(ts *turnState) (turnResult, error) {
 			return turnResult{}, err
 		}
 	}
-	return turnResult{status: TurnEndStatusAborted}, nil
+	if reason == "" {
+		reason = "no reason provided"
+	}
+	err := fmt.Errorf("turn aborted during %s: %s", stage, reason)
+	al.emitEvent(
+		EventKindError,
+		ts.eventMeta("abortTurn", "turn.error"),
+		ErrorPayload{
+			Stage:   stage,
+			Message: err.Error(),
+		},
+	)
+	ts.appendErrorTranscript(EventKindError.String(), stage, err.Error())
+	return turnResult{status: TurnEndStatusAborted}, err
 }
 
 // defaultSyntheticErrorFloor is the default value of

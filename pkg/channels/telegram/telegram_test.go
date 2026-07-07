@@ -131,7 +131,6 @@ func newTestChannelWithConstructor(
 	return &TelegramChannel{
 		BaseChannel: base,
 		bot:         bot,
-		chatIDs:     make(map[string]int64),
 		config:      config.DefaultConfig(),
 	}
 }
@@ -523,7 +522,6 @@ func TestHandleMessage_ForumTopic_SetsMetadata(t *testing.T) {
 	messageBus := bus.NewMessageBus()
 	ch := &TelegramChannel{
 		BaseChannel: channels.NewBaseChannel("telegram", nil, messageBus, nil),
-		chatIDs:     make(map[string]int64),
 		ctx:         context.Background(),
 	}
 
@@ -564,7 +562,6 @@ func TestHandleMessage_NoForum_NoThreadMetadata(t *testing.T) {
 	messageBus := bus.NewMessageBus()
 	ch := &TelegramChannel{
 		BaseChannel: channels.NewBaseChannel("telegram", nil, messageBus, nil),
-		chatIDs:     make(map[string]int64),
 		ctx:         context.Background(),
 	}
 
@@ -603,7 +600,6 @@ func TestHandleMessage_ReplyThread_NonForum_NoIsolation(t *testing.T) {
 	messageBus := bus.NewMessageBus()
 	ch := &TelegramChannel{
 		BaseChannel: channels.NewBaseChannel("telegram", nil, messageBus, nil),
-		chatIDs:     make(map[string]int64),
 		ctx:         context.Background(),
 	}
 
@@ -646,7 +642,6 @@ func TestHandleMessage_EmptyContent_Ignored(t *testing.T) {
 	messageBus := bus.NewMessageBus()
 	ch := &TelegramChannel{
 		BaseChannel: channels.NewBaseChannel("telegram", nil, messageBus, nil),
-		chatIDs:     make(map[string]int64),
 		ctx:         context.Background(),
 	}
 

@@ -3384,19 +3384,16 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 		return nil, err
 	}
 
-	// Ensure Workspace has a default if not set
+	// Ensure Workspace has a default if not set. Routed through the single
+	// mandatory OmnipusHomeDir helper (pkg/config/home.go) instead of
+	// reimplementing $OMNIPUS_HOME / ~/.omnipus / temp-dir-fallback
+	// resolution here — that reimplementation used to skip the temp-dir
+	// safety net entirely when os.UserHomeDir() failed (silently continuing
+	// with an empty home path) and never resolved a relative $OMNIPUS_HOME,
+	// unlike OmnipusHomeDir(). Common case (env unset, real $HOME) is
+	// byte-identical to before.
 	if cfg.Agents.Defaults.Workspace == "" {
-		homePath, homeErr := os.UserHomeDir()
-		if homeErr != nil {
-			logger.WarnCF("config", "UserHomeDir failed; workspace path may be incomplete",
-				map[string]any{"error": homeErr.Error()})
-		}
-		if omnipusHome := os.Getenv(EnvHome); omnipusHome != "" {
-			homePath = omnipusHome
-		} else if homePath != "" {
-			homePath = filepath.Join(homePath, pkg.DefaultOmnipusHome)
-		}
-		cfg.Agents.Defaults.Workspace = filepath.Join(homePath, pkg.WorkspaceName)
+		cfg.Agents.Defaults.Workspace = filepath.Join(OmnipusHomeDir(), pkg.WorkspaceName)
 	}
 
 	migrateProviderFields(cfg)
