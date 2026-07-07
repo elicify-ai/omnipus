@@ -274,6 +274,12 @@ func TestAgentLoop_Hooks_ToolInterceptorCanRewrite(t *testing.T) {
 	defer cleanup()
 
 	al.RegisterTool(&echoTextTool{})
+	// No-default-policy model (CLAUDE.md hard constraint 6): echo_text needs an
+	// explicit agent-level grant, or it fails closed to "deny" before the
+	// in-process tool rewrite under test ever gets a chance to run.
+	agent.StoreToolPolicy(&tools.ToolPolicyCfg{
+		Policies: map[string]string{"echo_text": "allow"},
+	})
 	if err := al.MountHook(NamedHook("tool-rewrite", &toolRewriteHook{})); err != nil {
 		t.Fatalf("MountHook failed: %v", err)
 	}

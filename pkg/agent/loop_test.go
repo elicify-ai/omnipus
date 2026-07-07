@@ -733,6 +733,16 @@ func TestProcessMessage_MediaToolDeliveryEmitsMediaAndCallsFollowUp(t *testing.T
 		store: store,
 		path:  imagePath,
 	})
+	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	if defaultAgent == nil {
+		t.Fatal("expected default agent")
+	}
+	// No-default-policy model (CLAUDE.md hard constraint 6): handled_media_tool
+	// needs an explicit agent-level grant, or it fails closed to "deny" before
+	// the media-delivery/follow-up behavior under test ever gets a chance to run.
+	defaultAgent.StoreToolPolicy(&tools.ToolPolicyCfg{
+		Policies: map[string]string{"handled_media_tool": "allow"},
+	})
 
 	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
 		Channel: "telegram",
@@ -774,10 +784,6 @@ func TestProcessMessage_MediaToolDeliveryEmitsMediaAndCallsFollowUp(t *testing.T
 	default:
 	}
 
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
-	if defaultAgent == nil {
-		t.Fatal("expected default agent")
-	}
 	route, _, err := al.resolveMessageRoute(bus.InboundMessage{
 		Channel: "telegram",
 		ChatID:  "chat1",
@@ -832,6 +838,17 @@ func TestProcessMessage_HandledToolProcessesQueuedSteeringBeforeReturning(t *tes
 		path:  imagePath,
 		loop:  al,
 	})
+	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	if defaultAgent == nil {
+		t.Fatal("expected default agent")
+	}
+	// No-default-policy model (CLAUDE.md hard constraint 6):
+	// handled_media_with_steering_tool needs an explicit agent-level grant, or
+	// it fails closed to "deny" before the queued-steering behavior under test
+	// ever gets a chance to run.
+	defaultAgent.StoreToolPolicy(&tools.ToolPolicyCfg{
+		Policies: map[string]string{"handled_media_with_steering_tool": "allow"},
+	})
 
 	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
 		Channel: "telegram",
@@ -884,6 +901,20 @@ func TestProcessMessage_MediaArtifactCanBeForwardedBySendFile(t *testing.T) {
 	al.RegisterTool(&mediaArtifactTool{
 		store: store,
 		path:  imagePath,
+	})
+	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	if defaultAgent == nil {
+		t.Fatal("expected default agent")
+	}
+	// No-default-policy model (CLAUDE.md hard constraint 6): both the custom
+	// media_artifact_tool and the builtin send_file tool it forwards to need
+	// explicit agent-level grants, or they fail closed to "deny" before the
+	// artifact-forwarding behavior under test ever gets a chance to run.
+	defaultAgent.StoreToolPolicy(&tools.ToolPolicyCfg{
+		Policies: map[string]string{
+			"media_artifact_tool": "allow",
+			"send_file":           "allow",
+		},
 	})
 
 	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
@@ -2739,6 +2770,16 @@ func TestProcessMessage_PublishesToolFeedbackWhenEnabled(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	provider := &toolFeedbackProvider{filePath: heartbeatFile}
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
+	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	if defaultAgent == nil {
+		t.Fatal("expected default agent")
+	}
+	// No-default-policy model (CLAUDE.md hard constraint 6): read_file needs
+	// an explicit agent-level grant, or it fails closed to "deny" and the
+	// tool-feedback publish under test never fires.
+	defaultAgent.StoreToolPolicy(&tools.ToolPolicyCfg{
+		Policies: map[string]string{"read_file": "allow"},
+	})
 
 	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
 		Channel: "telegram",

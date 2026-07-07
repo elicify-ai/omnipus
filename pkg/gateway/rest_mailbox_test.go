@@ -664,8 +664,12 @@ func TestSetAgentMailbox_AlreadyEnabledEditDoesNotReGrantExplicitDeny(t *testing
 	var cfg2 map[string]any
 	require.NoError(t, json.Unmarshal(raw2, &cfg2))
 	policies2 := cfg2["agents"].(map[string]any)["list"].([]any)[0].(map[string]any)["tools"].(map[string]any)["builtin"].(map[string]any)["policies"].(map[string]any)
-	assert.Equal(t, "deny", policies2["send_email"],
-		"an edit to an ALREADY-enabled mailbox must NOT re-grant an operator's explicit deny (privilege-widening regression)")
+	assert.Equal(
+		t,
+		"deny",
+		policies2["send_email"],
+		"an edit to an ALREADY-enabled mailbox must NOT re-grant an operator's explicit deny (privilege-widening regression)",
+	)
 	// The other seed-deny email tools (granted in step 1) must remain
 	// allowed — this proves the fix is scoped to skipping the re-grant on an
 	// already-enabled save, not a blanket regression of the original grant.

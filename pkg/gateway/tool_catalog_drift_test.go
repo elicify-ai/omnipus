@@ -9,8 +9,9 @@ package gateway
 import (
 	"testing"
 
-	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/elicify-ai/omnipus/pkg/coreagent"
 )
 
 // TestBuildKnownBuiltinToolNames_MatchesCoreagentStaticToolCatalog is a

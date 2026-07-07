@@ -35,8 +35,18 @@ func TestGlobalToolPolicy_HotUpdate_EnforcedOnRunningAgent(t *testing.T) {
 
 	// Put a real agent in the CONFIG list so it survives a reload (which rebuilds
 	// the registry from cfg.Agents.List — the exact NewAgentRegistry path the
-	// live PUT triggers). Build it once with NO global deny.
+	// live PUT triggers). Build it once with an explicit GLOBAL allow (no
+	// global deny yet).
+	//
+	// Under the no-default-policy model (CLAUDE.md hard constraint 6) a tool
+	// with zero coverage on either side fails closed to "deny" — there is no
+	// more implicit "allow" to lean on for the "before" baseline, so this test
+	// grants the baseline explicitly. This still faithfully drives the O7
+	// regression: the reload below replaces this global "allow" with a global
+	// "deny" on a freshly rebuilt agent instance, proving the live reload path
+	// (not just GET) enforces the new policy at exec time.
 	al.cfg.Agents.List = []config.AgentConfig{{ID: agentID, Name: agentID}}
+	al.cfg.Sandbox.ToolPolicies = map[string]string{tool: "allow"}
 	require.NoError(t,
 		al.ReloadProviderAndConfig(context.Background(), &mockProvider{}, al.cfg),
 		"initial reload to seed the configured agent must succeed",

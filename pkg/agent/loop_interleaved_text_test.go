@@ -27,6 +27,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // TestInterleavedAssistantText_AllSegmentsPersisted reproduces bug #416.
@@ -80,7 +81,15 @@ func TestInterleavedAssistantText_AllSegmentsPersisted(t *testing.T) {
 	t.Cleanup(func() { al.Close() })
 
 	// Register the agent that will own the scheduled session.
-	registerAgent(t, al, home, "mia", provider, true)
+	mia := registerAgent(t, al, home, "mia", provider, true)
+	// No-default-policy model (CLAUDE.md hard constraint 6): "remember" is a
+	// real builtin tool with zero policy coverage on this bare test config, so
+	// it now fails closed to "deny" unless granted explicitly — this test's
+	// whole scenario depends on the scripted "remember" tool calls actually
+	// executing so the interleaved-transcript ordering can be observed.
+	mia.StoreToolPolicy(&tools.ToolPolicyCfg{
+		Policies: map[string]string{"remember": "allow"},
+	})
 
 	// -----------------------------------------------------------------------
 	// Arrange: session that carries a transcript store.
