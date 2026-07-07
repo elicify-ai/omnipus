@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
@@ -77,7 +78,7 @@ func TestAgentLoop_MountProcessHook_ToolRewrite(t *testing.T) {
 	// explicit agent-level grant, or it fails closed to "deny" before the
 	// process-hook tool rewrite under test ever gets a chance to run.
 	agent.StoreToolPolicy(&tools.ToolPolicyCfg{
-		Policies: map[string]string{"echo_text": "allow"},
+		Policies: map[string]config.ToolPolicy{"echo_text": "allow"},
 	})
 	if err := al.MountProcessHook(context.Background(), "ipc-tool", ProcessHookOptions{
 		Command:       processHookHelperCommand(),

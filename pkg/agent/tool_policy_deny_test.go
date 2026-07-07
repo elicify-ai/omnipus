@@ -75,7 +75,7 @@ func TestToolPolicyCfg_DenyBash_ExcludedFromLLMView(t *testing.T) {
 
 	// Apply a deny policy for bash and verify FilterToolsByPolicy excludes it.
 	policyCfg := &tools.ToolPolicyCfg{
-		Policies: map[string]string{
+		Policies: map[string]config.ToolPolicy{
 			"bash": "deny",
 		},
 	}

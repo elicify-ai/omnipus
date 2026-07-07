@@ -26,6 +26,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 // toolNames extracts the Name() of each tool for set assertions.
@@ -50,7 +52,7 @@ func TestCompositor_SpecificAllowCarveOut_HonorsMostSpecific(t *testing.T) {
 		makeMCPAdapters("foo", carveout, danger),
 		"custom-agent",
 		&ToolPolicyCfg{
-			GlobalPolicies: map[string]string{
+			GlobalPolicies: map[string]config.ToolPolicy{
 				broad:    "deny",
 				carveout: "allow",
 			},
@@ -77,7 +79,7 @@ func TestCompositor_BroadDenyNoCarveOut_DeniesAll(t *testing.T) {
 		makeMCPAdapters("bar", tool),
 		"custom-agent",
 		&ToolPolicyCfg{
-			GlobalPolicies: map[string]string{broad: "deny"},
+			GlobalPolicies: map[string]config.ToolPolicy{broad: "deny"},
 		},
 	)
 	assert.False(t, toolNames(filtered)[tool],

@@ -27,6 +27,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 // effectiveToolPolicyMatrixCase is one (agent, tool) cell of the parity matrix.
@@ -46,7 +48,7 @@ type effectiveToolPolicyMatrixCase struct {
 // even though it is now the fail-closed no-coverage path, not a config field.
 func denyDefaultCfg() *ToolPolicyCfg {
 	return &ToolPolicyCfg{
-		Policies: map[string]string{
+		Policies: map[string]config.ToolPolicy{
 			"search_web": "allow", // an explicitly allowed tool
 			"fetch_url":  "ask",   // an explicit ask tool
 		},
@@ -59,7 +61,7 @@ func denyDefaultCfg() *ToolPolicyCfg {
 // "allow-by-default" config concept this cfg used to model is retired.
 func allowDefaultCfg() *ToolPolicyCfg {
 	return &ToolPolicyCfg{
-		Policies: map[string]string{
+		Policies: map[string]config.ToolPolicy{
 			"exec":      "deny", // explicitly denied
 			"fetch_url": "ask",  // explicit ask
 		},
@@ -109,7 +111,7 @@ func effectiveToolPolicyMatrix() []effectiveToolPolicyMatrixCase {
 		{
 			name: "deny-default/ScopeCore tool on custom agent (explicit allow)→allow",
 			cfg: &ToolPolicyCfg{
-				Policies: map[string]string{"exec": "allow"},
+				Policies: map[string]config.ToolPolicy{"exec": "allow"},
 			},
 			agentType: "custom",
 			tool:      makeScopedTool("exec", ScopeCore),
@@ -153,8 +155,8 @@ func effectiveToolPolicyMatrix() []effectiveToolPolicyMatrixCase {
 		{
 			name: "global-deny-floor overrides agent allow→deny",
 			cfg: &ToolPolicyCfg{
-				Policies:       map[string]string{"send_message": "allow"},
-				GlobalPolicies: map[string]string{"send_message": "deny"},
+				Policies:       map[string]config.ToolPolicy{"send_message": "allow"},
+				GlobalPolicies: map[string]config.ToolPolicy{"send_message": "deny"},
 			},
 			agentType: "custom",
 			tool:      makeScopedTool("send_message", ScopeGeneral),
@@ -164,7 +166,7 @@ func effectiveToolPolicyMatrix() []effectiveToolPolicyMatrixCase {
 		// --- core agent: ScopeCore passes the gate ---
 		{
 			name:      "core-agent/ScopeCore tool→allow (explicit global allow)",
-			cfg:       &ToolPolicyCfg{GlobalPolicies: map[string]string{"exec": "allow"}},
+			cfg:       &ToolPolicyCfg{GlobalPolicies: map[string]config.ToolPolicy{"exec": "allow"}},
 			agentType: "core",
 			tool:      makeScopedTool("exec", ScopeCore),
 			want:      "allow",
@@ -187,7 +189,7 @@ func effectiveToolPolicyMatrix() []effectiveToolPolicyMatrixCase {
 			//     underscore-wildcard tool.
 			name: "wildcard/agent browser_*=allow (deny-default) → browser_navigate allow",
 			cfg: &ToolPolicyCfg{
-				Policies: map[string]string{"browser_*": "allow"},
+				Policies: map[string]config.ToolPolicy{"browser_*": "allow"},
 			},
 			agentType: "custom",
 			tool:      makeScopedTool("browser_navigate", ScopeGeneral),
@@ -198,7 +200,7 @@ func effectiveToolPolicyMatrix() []effectiveToolPolicyMatrixCase {
 			//     allow-default agent (strictest-wins on the wildcard floor).
 			name: "wildcard/global browser_*=deny (allow-default) → browser_navigate deny",
 			cfg: &ToolPolicyCfg{
-				GlobalPolicies: map[string]string{"browser_*": "deny"},
+				GlobalPolicies: map[string]config.ToolPolicy{"browser_*": "deny"},
 			},
 			agentType: "custom",
 			tool:      makeScopedTool("browser_navigate", ScopeGeneral),
@@ -210,7 +212,7 @@ func effectiveToolPolicyMatrix() []effectiveToolPolicyMatrixCase {
 			//      which the wildcard allow satisfies).
 			name: "wildcard/agent system.*=allow (deny-default) → matching system tool allow",
 			cfg: &ToolPolicyCfg{
-				Policies: map[string]string{"system.*": "allow"},
+				Policies: map[string]config.ToolPolicy{"system.*": "allow"},
 			},
 			agentType: "custom",
 			tool:      makeScopedTool("system.agent.list", ScopeCore),
@@ -221,7 +223,7 @@ func effectiveToolPolicyMatrix() []effectiveToolPolicyMatrixCase {
 			//      "system.*" does not cover "read_file").
 			name: "wildcard/agent system.*=allow (deny-default) → non-matching tool deny",
 			cfg: &ToolPolicyCfg{
-				Policies: map[string]string{"system.*": "allow"},
+				Policies: map[string]config.ToolPolicy{"system.*": "allow"},
 			},
 			agentType: "custom",
 			tool:      makeScopedTool("read_file", ScopeGeneral),
@@ -293,8 +295,8 @@ func TestEffectiveToolPolicy_FilterParity(t *testing.T) {
 // exec gate honors god mode identically to the loop).
 func TestEffectiveToolPolicy_GodModeFloorsAllow(t *testing.T) {
 	cfg := &ToolPolicyCfg{
-		Policies:       map[string]string{"exec": "deny"},
-		GlobalPolicies: map[string]string{"exec": "deny"},
+		Policies:       map[string]config.ToolPolicy{"exec": "deny"},
+		GlobalPolicies: map[string]config.ToolPolicy{"exec": "deny"},
 		GodMode:        true,
 	}
 	// Even a doubly-denied ScopeCore tool on a custom agent is allowed under god mode.

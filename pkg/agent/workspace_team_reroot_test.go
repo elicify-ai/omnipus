@@ -84,7 +84,7 @@ func TestRunTurn_CoreTeamMember_WritesToWorkspaceSharedDir(t *testing.T) {
 	// an explicit agent-level grant, or it fails closed to "deny" and the
 	// re-rooting behavior under test never gets exercised.
 	defaultAgent.StoreToolPolicy(&tools.ToolPolicyCfg{
-		Policies: map[string]string{"write_file": "allow"},
+		Policies: map[string]config.ToolPolicy{"write_file": "allow"},
 	})
 
 	const sessionKey = "test-session-coreteam-reroot"
@@ -166,7 +166,7 @@ func TestRunTurn_NotCoreTeamMember_WritesToOwnDir(t *testing.T) {
 	// an explicit agent-level grant, or it fails closed to "deny" and the
 	// non-CoreTeam write-path under test never gets exercised.
 	defaultAgent.StoreToolPolicy(&tools.ToolPolicyCfg{
-		Policies: map[string]string{"write_file": "allow"},
+		Policies: map[string]config.ToolPolicy{"write_file": "allow"},
 	})
 
 	const sessionKey = "test-session-no-coreteam"

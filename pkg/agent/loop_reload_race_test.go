@@ -36,6 +36,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -52,7 +53,7 @@ func TestReloadRace_PolicyAtomicNoTornReads(t *testing.T) {
 
 	// Seed an initial policy.
 	agent.StoreToolPolicy(&tools.ToolPolicyCfg{
-		Policies: map[string]string{"exec": "allow"},
+		Policies: map[string]config.ToolPolicy{"exec": "allow"},
 	})
 
 	// Run for a short time under the race detector.
@@ -72,12 +73,12 @@ func TestReloadRace_PolicyAtomicNoTornReads(t *testing.T) {
 				case <-ctx.Done():
 					return
 				default:
-					policyVal := "allow"
+					policyVal := config.ToolPolicyAllow
 					if n%2 == 0 {
-						policyVal = "deny"
+						policyVal = config.ToolPolicyDeny
 					}
 					agent.StoreToolPolicy(&tools.ToolPolicyCfg{
-						Policies: map[string]string{"exec": policyVal},
+						Policies: map[string]config.ToolPolicy{"exec": policyVal},
 					})
 				}
 			}
@@ -127,7 +128,7 @@ func TestReloadRace_MultipleAgentsConcurrent(t *testing.T) {
 	for i := range numAgents {
 		agents[i] = &AgentInstance{ID: "agent-" + string(rune('A'+i)), AgentType: "core"}
 		agents[i].StoreToolPolicy(&tools.ToolPolicyCfg{
-			Policies: map[string]string{"tool": "allow"},
+			Policies: map[string]config.ToolPolicy{"tool": "allow"},
 		})
 	}
 
@@ -141,9 +142,9 @@ func TestReloadRace_MultipleAgentsConcurrent(t *testing.T) {
 		wg.Add(1)
 		go func(agentIdx int, ag *AgentInstance) {
 			defer wg.Done()
-			policyVal := "allow"
+			policyVal := config.ToolPolicyAllow
 			if agentIdx%2 == 0 {
-				policyVal = "deny"
+				policyVal = config.ToolPolicyDeny
 			}
 			for {
 				select {
@@ -151,7 +152,7 @@ func TestReloadRace_MultipleAgentsConcurrent(t *testing.T) {
 					return
 				default:
 					ag.StoreToolPolicy(&tools.ToolPolicyCfg{
-						Policies: map[string]string{"tool": policyVal},
+						Policies: map[string]config.ToolPolicy{"tool": policyVal},
 					})
 					p := ag.LoadToolPolicy()
 					if p == nil {

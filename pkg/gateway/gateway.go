@@ -545,6 +545,42 @@ func buildKnownBuiltinToolNames() map[string]struct{} {
 	return out
 }
 
+// repairAndValidateToolPolicyCoverage runs the shared "backfill pre-existing
+// gaps, then hard-validate what remains" sequence used identically at boot
+// (RunContextWithOptions) and at hot-reload (executeReload) — CLAUDE.md hard
+// constraint 6. Both call sites previously hand-rolled this same
+// knownTools-assembly + repair + summary-log sequence independently; sharing
+// one helper means the two can no longer silently diverge on what "repair
+// then validate" means, mirroring the reasoning behind
+// config.RepairIncompleteToolPolicyCoverage now delegating to
+// config.ValidateToolPolicyCoverage instead of re-deriving its predicate.
+//
+// Repairing first means installations whose on-disk config predates the
+// DefaultPolicy/default_policy fallback removal (sparse per-agent Policies
+// maps) get backfilled to explicit "deny" instead of tripping validation on
+// every restart/reload. Logs one WARN naming every backfilled (agent, tool)
+// pair (config.RepairIncompleteToolPolicyCoverage itself also logs one WARN
+// per repaired agent; this one is the gateway-level summary).
+//
+// Returns the remaining gaps (empty = fully covered) — the caller decides
+// what "remaining gaps" means for it (abort boot vs. reject the reload and
+// keep serving the previous config).
+func repairAndValidateToolPolicyCoverage(cfg *config.Config) []config.CoverageGap {
+	knownTools := buildKnownBuiltinToolNames()
+	if repaired := config.RepairIncompleteToolPolicyCoverage(cfg, knownTools); len(repaired) > 0 {
+		agentIDs := make(map[string]struct{}, len(repaired))
+		for _, gap := range repaired {
+			agentIDs[gap.AgentID] = struct{}{}
+		}
+		slog.Warn("gateway: backfilled incomplete tool-policy coverage on load",
+			"agent_count", len(agentIDs),
+			"gap_count", len(repaired),
+			"gaps", joinCoverageGapMessages(repaired),
+		)
+	}
+	return config.ValidateToolPolicyCoverage(cfg, knownTools)
+}
+
 // RunContextWithOptions is the Sprint-J context-cancellable entry point.
 // RunContext is a thin wrapper that builds a legacy RunOptions and calls this.
 func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
@@ -779,21 +815,18 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		// never asked for. The gap list is logged in full so the failure is
 		// immediately actionable.
 		//
-		// RepairIncompleteToolPolicyCoverage runs FIRST, immediately before
-		// validation: it migrates installations whose on-disk config predates
-		// the DefaultPolicy/default_policy fallback removal (sparse Policies
+		// repairAndValidateToolPolicyCoverage runs the shared "backfill
+		// pre-existing gaps, then hard-validate what remains" sequence: it
+		// migrates installations whose on-disk config predates the
+		// DefaultPolicy/default_policy fallback removal (sparse Policies
 		// maps that relied on the deleted default field) by backfilling every
 		// missing entry to explicit "deny". Without this, upgrading an
 		// existing installation would find a coverage gap for nearly every
 		// static tool on nearly every agent and abort boot on every restart.
-		// After the repair, ValidateToolPolicyCoverage should almost always
-		// find zero gaps — it remains as the hard backstop for anything the
-		// repair cannot close (e.g. a genuinely corrupt config).
-		knownTools := buildKnownBuiltinToolNames()
-		if repairedCount := config.RepairIncompleteToolPolicyCoverage(cfg, knownTools); repairedCount > 0 {
-			slog.Warn("gateway: backfilled incomplete tool-policy coverage on load", "agent_count", repairedCount)
-		}
-		if gaps := config.ValidateToolPolicyCoverage(cfg, knownTools); len(gaps) > 0 {
+		// After the repair, validation should almost always find zero gaps —
+		// it remains as the hard backstop for anything the repair cannot
+		// close (e.g. a genuinely corrupt config).
+		if gaps := repairAndValidateToolPolicyCoverage(cfg); len(gaps) > 0 {
 			for _, g := range gaps {
 				slog.Error("gateway: tool-policy coverage gap", "detail", g.String())
 			}
@@ -1310,29 +1343,21 @@ func executeReload(
 	// write handlers. Without this check, a hand-edited config.json picked
 	// up by hot-reload would bypass coverage enforcement entirely, silently
 	// reintroducing a runtime-default gap this whole change eliminated.
-	// Repair first (same migration semantics as boot: backfill any missing
-	// entry to explicit "deny"), then validate as the hard backstop. A
-	// genuine gap rejects the reload and keeps serving the PREVIOUS live
-	// config — mirrors the credential-injection-failure rejection pattern
-	// immediately below.
-	{
-		knownTools := buildKnownBuiltinToolNames()
-		if repairedCount := config.RepairIncompleteToolPolicyCoverage(newCfg, knownTools); repairedCount > 0 {
-			slog.Warn("gateway: reload backfilled incomplete tool-policy coverage", "agent_count", repairedCount)
+	// repairAndValidateToolPolicyCoverage repairs first (same migration
+	// semantics as boot: backfill any missing entry to explicit "deny"), then
+	// validates as the hard backstop. A genuine gap rejects the reload and
+	// keeps serving the PREVIOUS live config — mirrors the
+	// credential-injection-failure rejection pattern immediately below.
+	if gaps := repairAndValidateToolPolicyCoverage(newCfg); len(gaps) > 0 {
+		for _, g := range gaps {
+			slog.Error("gateway: reload tool-policy coverage gap", "detail", g.String())
 		}
-		if gaps := config.ValidateToolPolicyCoverage(newCfg, knownTools); len(gaps) > 0 {
-			msgs := make([]string, len(gaps))
-			for i, g := range gaps {
-				msgs[i] = g.String()
-				slog.Error("gateway: reload tool-policy coverage gap", "detail", g.String())
-			}
-			reloadErr := fmt.Errorf(
-				"reload rejected: tool-policy coverage validation failed (%d gap(s): %s)",
-				len(gaps), strings.Join(msgs, "; "),
-			)
-			markDegraded(reloadErr)
-			return reloadErr
-		}
+		reloadErr := fmt.Errorf(
+			"reload rejected: tool-policy coverage validation failed (%d gap(s): %s)",
+			len(gaps), joinCoverageGapMessages(gaps),
+		)
+		markDegraded(reloadErr)
+		return reloadErr
 	}
 
 	// Re-inject provider credentials for the new config so LLM SDK clients

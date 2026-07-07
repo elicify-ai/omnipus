@@ -31,6 +31,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/policy"
 )
@@ -272,7 +273,7 @@ func TestBash_PolicyAllowDoesNotBypassDenyPatterns(t *testing.T) {
 // calling ExecuteWithContext.
 func TestBash_PolicyDenyRejectsBeforeSpawn(t *testing.T) {
 	polCfg := &ToolPolicyCfg{
-		Policies: map[string]string{"bash": "deny"},
+		Policies: map[string]config.ToolPolicy{"bash": "deny"},
 	}
 	got := EffectiveToolPolicy(polCfg, ScopeCore, "custom", "bash")
 	require.Equal(t, "deny", got, "an agent with bash:deny must resolve to deny before any Execute call")

@@ -1561,7 +1561,7 @@ func TestCanLoad_HiddenMCPTool_AllowDefaultAgent(t *testing.T) {
 		worker, ok := al.registry.GetAgent("worker")
 		require.True(t, ok, "worker agent must exist")
 		worker.StoreToolPolicy(&tools.ToolPolicyCfg{
-			Policies: map[string]string{"mock_custom": "allow"},
+			Policies: map[string]config.ToolPolicy{"mock_custom": "allow"},
 		})
 
 		res := loadHidden(t, "worker")

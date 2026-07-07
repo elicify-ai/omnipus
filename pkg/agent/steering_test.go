@@ -683,7 +683,7 @@ func TestAgentLoop_Steering_SkipsRemainingTools(t *testing.T) {
 	// tools need an explicit agent-level grant, or they fail closed to "deny"
 	// before tool_one ever executes and signals tool1ExecCh.
 	defaultAgent.StoreToolPolicy(&tools.ToolPolicyCfg{
-		Policies: map[string]string{"tool_one": "allow", "tool_two": "allow"},
+		Policies: map[string]config.ToolPolicy{"tool_one": "allow", "tool_two": "allow"},
 	})
 
 	// Start processing in a goroutine
@@ -1193,7 +1193,7 @@ func TestAgentLoop_InterruptGraceful_UsesTerminalNoToolCall(t *testing.T) {
 	// tools need an explicit agent-level grant, or they fail closed to "deny"
 	// before tool_one ever executes and signals tool1ExecCh.
 	defaultAgent.StoreToolPolicy(&tools.ToolPolicyCfg{
-		Policies: map[string]string{"tool_one": "allow", "tool_two": "allow"},
+		Policies: map[string]config.ToolPolicy{"tool_one": "allow", "tool_two": "allow"},
 	})
 
 	sub := al.SubscribeEvents(32)
@@ -1358,7 +1358,7 @@ func TestAgentLoop_InterruptHard_RestoresSession(t *testing.T) {
 	// an explicit agent-level grant, or it fails closed to "deny" before ever
 	// executing and signaling started.
 	defaultAgent.StoreToolPolicy(&tools.ToolPolicyCfg{
-		Policies: map[string]string{"cancel_tool": "allow"},
+		Policies: map[string]config.ToolPolicy{"cancel_tool": "allow"},
 	})
 
 	originalHistory := []providers.Message{
@@ -1554,7 +1554,7 @@ func TestAgentLoop_Steering_SkippedToolsHaveErrorResults(t *testing.T) {
 	// tools need an explicit agent-level grant, or they fail closed to "deny"
 	// before ever executing and slow_tool never signals execCh.
 	defaultAgent.StoreToolPolicy(&tools.ToolPolicyCfg{
-		Policies: map[string]string{"slow_tool": "allow", "skipped_tool": "allow"},
+		Policies: map[string]config.ToolPolicy{"slow_tool": "allow", "skipped_tool": "allow"},
 	})
 
 	resultCh := make(chan string, 1)

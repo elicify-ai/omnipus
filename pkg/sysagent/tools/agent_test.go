@@ -855,9 +855,9 @@ func TestBash_NewCustomAgentDeniedByDefault(t *testing.T) {
 	// pkg/agent/instance.go's agentToolsCfgToPolicy converts AgentBuiltinToolsCfg
 	// for a non-god-mode agent — matching the calling convention in
 	// pkg/tools/effective_tool_policy_test.go.
-	policies := make(map[string]string, len(newAgent.Tools.Builtin.Policies))
+	policies := make(map[string]config.ToolPolicy, len(newAgent.Tools.Builtin.Policies))
 	for k, v := range newAgent.Tools.Builtin.Policies {
-		policies[k] = string(v)
+		policies[k] = v
 	}
 	polCfg := &tools.ToolPolicyCfg{
 		Policies: policies,
@@ -892,7 +892,7 @@ func TestBash_NewCustomAgentDeniedByDefault(t *testing.T) {
 // coverage resolves to "deny", not "allow".
 func TestBashScopeCore_UnlistedResolvesToDeny_FailClosedBaseline(t *testing.T) {
 	polCfg := &tools.ToolPolicyCfg{
-		Policies: map[string]string{
+		Policies: map[string]config.ToolPolicy{
 			// Deliberately NO "bash" entry — proving the fail-closed default,
 			// not any explicit seed, is what denies it here.
 		},

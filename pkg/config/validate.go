@@ -528,14 +528,18 @@ func ValidateToolPolicyCoverage(cfg *Config, knownTools map[string]struct{}) []C
 // static tool on every such agent and abort boot, bricking any existing
 // installation on upgrade.
 //
-// Intended call site: pkg/gateway/gateway.go's boot sequence, immediately
-// BEFORE the existing config.ValidateToolPolicyCoverage(cfg,
-// buildKnownBuiltinToolNames()) call. As of this writing that call lives in
-// RunContextWithOptions, guarding gateway startup:
+// Intended call site: pkg/gateway/gateway.go's shared
+// repairAndValidateToolPolicyCoverage helper, immediately BEFORE the existing
+// config.ValidateToolPolicyCoverage(cfg, buildKnownBuiltinToolNames()) call.
+// That helper is called identically from both the boot sequence
+// (RunContextWithOptions) and the hot-reload path (executeReload):
 //
-//	config.RepairIncompleteToolPolicyCoverage(cfg, buildKnownBuiltinToolNames())
-//	if gaps := config.ValidateToolPolicyCoverage(cfg, buildKnownBuiltinToolNames()); len(gaps) > 0 {
-//	    // ... abort boot, log gaps ...
+//	func repairAndValidateToolPolicyCoverage(cfg *config.Config) []config.CoverageGap {
+//	    knownTools := buildKnownBuiltinToolNames()
+//	    if repaired := config.RepairIncompleteToolPolicyCoverage(cfg, knownTools); len(repaired) > 0 {
+//	        // ... log a WARN naming every backfilled (agent, tool) pair ...
+//	    }
+//	    return config.ValidateToolPolicyCoverage(cfg, knownTools)
 //	}
 //
 // Calling the repair first means the validation call should almost always
@@ -553,48 +557,74 @@ func ValidateToolPolicyCoverage(cfg *Config, knownTools map[string]struct{}) []C
 // afterward via the UI. Idempotent — a fully-covered config is a no-op, and
 // repeated calls after the first repair find nothing left to backfill.
 //
-// Returns the number of agents that had at least one tool backfilled (0 if
-// cfg or knownTools is nil/empty, or if coverage was already complete).
-func RepairIncompleteToolPolicyCoverage(cfg *Config, knownTools map[string]struct{}) (repairedAgentCount int) {
+// Returns every (AgentID, ToolName) pair that was actually backfilled — the
+// exact gap list ValidateToolPolicyCoverage(cfg, knownTools) returned
+// immediately before the repair ran (every gap found gets backfilled to
+// "deny", so the two lists are identical in content). Empty/nil when cfg or
+// knownTools is nil/empty, or when coverage was already complete — callers
+// that only care about "was anything repaired" can check len(repaired) > 0,
+// while callers that want structured detail (e.g. a future UI review screen)
+// get real (agent, tool) pairs instead of a bare count.
+func RepairIncompleteToolPolicyCoverage(cfg *Config, knownTools map[string]struct{}) (repaired []CoverageGap) {
 	if cfg == nil || len(knownTools) == 0 {
-		return 0
+		return nil
 	}
+
+	// Delegate the "(agent, tool) is covered?" predicate entirely to
+	// ValidateToolPolicyCoverage rather than re-deriving it here — the two
+	// functions must never be able to silently diverge on what "covered"
+	// means. The returned gaps are already sorted by (AgentID, ToolName).
+	gaps := ValidateToolPolicyCoverage(cfg, knownTools)
+	if len(gaps) == 0 {
+		return nil
+	}
+
+	agentIndex := make(map[string]*AgentConfig, len(cfg.Agents.List))
 	for i := range cfg.Agents.List {
-		agentCfg := &cfg.Agents.List[i]
-		var missing []string
-		for toolName := range knownTools {
-			if _, ok := cfg.Sandbox.ToolPolicies[toolName]; ok {
-				continue // global exact-match entry already covers it
-			}
-			if agentCfg.Tools != nil {
-				if _, ok := agentCfg.Tools.Builtin.Policies[toolName]; ok {
-					continue // per-agent exact-match entry already covers it
-				}
-			}
-			missing = append(missing, toolName)
-		}
-		if len(missing) == 0 {
+		agentIndex[cfg.Agents.List[i].ID] = &cfg.Agents.List[i]
+	}
+
+	// Backfill every gap to an explicit "deny" entry on the agent's OWN
+	// Tools.Builtin.Policies map (never the global map — a missing global
+	// entry is not this function's concern; per-agent coverage alone is
+	// sufficient, exactly as before). Track per-agent tool names purely for
+	// the one-WARN-per-agent log below; agentOrder preserves first-seen
+	// order from gaps (already AgentID-sorted) for deterministic log output.
+	agentOrder := make([]string, 0)
+	backfilledByAgent := make(map[string][]string)
+	for _, gap := range gaps {
+		agentCfg, ok := agentIndex[gap.AgentID]
+		if !ok {
+			// Defensive: unreachable in practice since gaps are derived from
+			// cfg.Agents.List itself, but never mutate a nonexistent agent.
 			continue
 		}
 		if agentCfg.Tools == nil {
 			agentCfg.Tools = &AgentToolsCfg{}
 		}
 		if agentCfg.Tools.Builtin.Policies == nil {
-			agentCfg.Tools.Builtin.Policies = make(map[string]ToolPolicy, len(missing))
+			agentCfg.Tools.Builtin.Policies = make(map[string]ToolPolicy)
 		}
-		for _, toolName := range missing {
-			agentCfg.Tools.Builtin.Policies[toolName] = ToolPolicyDeny
+		agentCfg.Tools.Builtin.Policies[gap.ToolName] = ToolPolicyDeny
+
+		if _, seen := backfilledByAgent[gap.AgentID]; !seen {
+			agentOrder = append(agentOrder, gap.AgentID)
 		}
-		sort.Strings(missing)
+		backfilledByAgent[gap.AgentID] = append(backfilledByAgent[gap.AgentID], gap.ToolName)
+	}
+
+	for _, agentID := range agentOrder {
+		toolNames := backfilledByAgent[agentID]
+		sort.Strings(toolNames)
 		slog.Warn(
 			"config: agent had incomplete tool-policy coverage; backfilled missing tools to \"deny\" "+
 				"(migration from pre-DefaultPolicy-removal config shape; CLAUDE.md hard constraint 6 — "+
 				"review/loosen via the UI if any backfilled tool should actually be allow/ask)",
-			"agent_id", agentCfg.ID,
-			"backfilled_count", len(missing),
-			"backfilled_tools", missing,
+			"agent_id", agentID,
+			"backfilled_count", len(toolNames),
+			"backfilled_tools", toolNames,
 		)
-		repairedAgentCount++
 	}
-	return repairedAgentCount
+
+	return gaps
 }

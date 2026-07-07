@@ -6,6 +6,8 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 // --- test doubles ---
@@ -72,7 +74,7 @@ func allPolicyTools() []Tool {
 // on a specific tool removes it from the output regardless of agent policy.
 func TestFilterToolsByPolicy_GlobalDeny_RemovesTool(t *testing.T) {
 	cfg := &ToolPolicyCfg{
-		GlobalPolicies: map[string]string{"search_web": "deny"},
+		GlobalPolicies: map[string]config.ToolPolicy{"search_web": "deny"},
 	}
 
 	got, policyMap := FilterToolsByPolicy(allPolicyTools(), "core", cfg)
@@ -91,8 +93,8 @@ func TestFilterToolsByPolicy_GlobalDeny_RemovesTool(t *testing.T) {
 // global policy is "ask" and agent policy is "allow", the effective result is "ask".
 func TestFilterToolsByPolicy_GlobalAsk_AgentAllow_EffectiveAsk(t *testing.T) {
 	cfg := &ToolPolicyCfg{
-		Policies:       map[string]string{"search_web": "allow"},
-		GlobalPolicies: map[string]string{"search_web": "ask"},
+		Policies:       map[string]config.ToolPolicy{"search_web": "allow"},
+		GlobalPolicies: map[string]config.ToolPolicy{"search_web": "ask"},
 	}
 
 	_, policyMap := FilterToolsByPolicy(allPolicyTools(), "core", cfg)
@@ -106,8 +108,8 @@ func TestFilterToolsByPolicy_GlobalAsk_AgentAllow_EffectiveAsk(t *testing.T) {
 // agent-level "deny" wins over global "allow".
 func TestFilterToolsByPolicy_GlobalAllow_AgentDeny_EffectiveDeny(t *testing.T) {
 	cfg := &ToolPolicyCfg{
-		Policies:       map[string]string{"search_web": "deny"},
-		GlobalPolicies: map[string]string{"search_web": "allow"},
+		Policies:       map[string]config.ToolPolicy{"search_web": "deny"},
+		GlobalPolicies: map[string]config.ToolPolicy{"search_web": "allow"},
 	}
 
 	got, _ := FilterToolsByPolicy(allPolicyTools(), "core", cfg)
@@ -123,8 +125,8 @@ func TestFilterToolsByPolicy_GlobalAllow_AgentDeny_EffectiveDeny(t *testing.T) {
 // agent "ask" + global "allow" yields "ask".
 func TestFilterToolsByPolicy_GlobalAllow_AgentAsk_EffectiveAsk(t *testing.T) {
 	cfg := &ToolPolicyCfg{
-		Policies:       map[string]string{"search_web": "ask"},
-		GlobalPolicies: map[string]string{"search_web": "allow"},
+		Policies:       map[string]config.ToolPolicy{"search_web": "ask"},
+		GlobalPolicies: map[string]config.ToolPolicy{"search_web": "allow"},
 	}
 
 	_, policyMap := FilterToolsByPolicy(allPolicyTools(), "core", cfg)
@@ -138,8 +140,8 @@ func TestFilterToolsByPolicy_GlobalAllow_AgentAsk_EffectiveAsk(t *testing.T) {
 // yields effective "allow".
 func TestFilterToolsByPolicy_AllAllow(t *testing.T) {
 	cfg := &ToolPolicyCfg{
-		Policies:       map[string]string{"search_web": "allow"},
-		GlobalPolicies: map[string]string{"search_web": "allow"},
+		Policies:       map[string]config.ToolPolicy{"search_web": "allow"},
+		GlobalPolicies: map[string]config.ToolPolicy{"search_web": "allow"},
 	}
 
 	_, policyMap := FilterToolsByPolicy(allPolicyTools(), "core", cfg)
@@ -153,7 +155,7 @@ func TestFilterToolsByPolicy_AllAllow(t *testing.T) {
 // per-agent "system.*: deny" wildcard policy blocks system.* tools.
 func TestFilterToolsByPolicy_SystemWildcardDeny_BlocksSystemTools(t *testing.T) {
 	cfg := &ToolPolicyCfg{
-		Policies: map[string]string{"system.*": "deny"},
+		Policies: map[string]config.ToolPolicy{"system.*": "deny"},
 	}
 
 	got, _ := FilterToolsByPolicy(allPolicyTools(), "core", cfg)
@@ -171,7 +173,7 @@ func TestFilterToolsByPolicy_SystemWildcardDeny_BlocksSystemTools(t *testing.T) 
 func TestFilterToolsByPolicy_ScopeCore_CustomAgent(t *testing.T) {
 	// Custom agent + explicit deny policy for exec → blocked.
 	denyCfg := &ToolPolicyCfg{
-		Policies: map[string]string{"exec": "deny"},
+		Policies: map[string]config.ToolPolicy{"exec": "deny"},
 	}
 	got, _ := FilterToolsByPolicy(allPolicyTools(), "custom", denyCfg)
 	for _, tool := range got {
@@ -182,7 +184,7 @@ func TestFilterToolsByPolicy_ScopeCore_CustomAgent(t *testing.T) {
 
 	// Custom agent + explicit allow policy for exec → allowed through.
 	allowCfg := &ToolPolicyCfg{
-		Policies: map[string]string{"exec": "allow"},
+		Policies: map[string]config.ToolPolicy{"exec": "allow"},
 	}
 	_, policyMap := FilterToolsByPolicy(allPolicyTools(), "custom", allowCfg)
 	if _, ok := policyMap["exec"]; !ok {
@@ -216,7 +218,7 @@ func TestFilterToolsByPolicy_UnknownScope_Denied(t *testing.T) {
 	toolSet := []Tool{unknownScopeTool, makeScopedTool("search_web", ScopeGeneral)}
 
 	cfg := &ToolPolicyCfg{
-		Policies: map[string]string{"search_web": "allow"},
+		Policies: map[string]config.ToolPolicy{"search_web": "allow"},
 	}
 
 	got, _ := FilterToolsByPolicy(toolSet, "core", cfg)
@@ -314,7 +316,7 @@ func TestMCPContentText_ConcatenatesTextContent(t *testing.T) {
 // TestBuildWildcardIndex_SegmentPrimarySort verifies FR-071: segment count is the
 // primary sort key so "system.config.*" (2 segments) sorts before "system.*" (1 segment).
 func TestBuildWildcardIndex_SegmentPrimarySort(t *testing.T) {
-	policies := map[string]string{
+	policies := map[string]config.ToolPolicy{
 		"system.*":        "ask",
 		"system.config.*": "deny",
 		"a.*":             "allow",
@@ -346,7 +348,7 @@ func TestFilterToolsByPolicy_WildcardSegmentPrecedence(t *testing.T) {
 	// system.config.set matches both "system.*" (ask) and "system.config.*" (deny).
 	// The more-specific "system.config.*" must win → deny.
 	cfg := &ToolPolicyCfg{
-		Policies: map[string]string{
+		Policies: map[string]config.ToolPolicy{
 			"system.*":        "ask",
 			"system.config.*": "deny",
 		},

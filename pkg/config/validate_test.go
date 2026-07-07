@@ -537,8 +537,9 @@ func TestValidateToolPolicyCoverage_BothSidesPresentDifferentValues_NotAGap(t *t
 // Tools.Builtin.Policies map is genuinely sparse (only a handful of entries,
 // as if every unlisted tool used to fall through to a deleted default).
 // After RepairIncompleteToolPolicyCoverage runs, every gap must be backfilled
-// to "deny", pre-existing entries must survive untouched, and a subsequent
-// ValidateToolPolicyCoverage call must find zero gaps.
+// to "deny", pre-existing entries must survive untouched, the returned
+// []CoverageGap must name exactly the backfilled (agent, tool) pairs, and a
+// subsequent ValidateToolPolicyCoverage call must find zero gaps.
 func TestRepairIncompleteToolPolicyCoverage_BackfillsMissingToDeny(t *testing.T) {
 	cfg := &Config{
 		Agents: AgentsConfig{
@@ -566,7 +567,14 @@ func TestRepairIncompleteToolPolicyCoverage_BackfillsMissingToDeny(t *testing.T)
 	}
 
 	repaired := RepairIncompleteToolPolicyCoverage(cfg, knownTools)
-	assert.Equal(t, 1, repaired, "exactly one agent should have been repaired")
+	require.Len(t, repaired, 3, "exactly three gaps should have been repaired")
+
+	wantGaps := []CoverageGap{
+		{AgentID: "legacy-agent", ToolName: "create_agent"},
+		{AgentID: "legacy-agent", ToolName: "delete_agent"},
+		{AgentID: "legacy-agent", ToolName: "send_message"},
+	}
+	assert.ElementsMatch(t, wantGaps, repaired, "repaired must name exactly the backfilled (agent, tool) pairs")
 
 	agentPolicies := cfg.Agents.List[0].Tools.Builtin.Policies
 
@@ -585,8 +593,92 @@ func TestRepairIncompleteToolPolicyCoverage_BackfillsMissingToDeny(t *testing.T)
 	assert.Empty(t, gaps, "after repair, coverage validation must find no remaining gaps")
 }
 
+// TestRepairIncompleteToolPolicyCoverage_GlobalEntryCoversGap_NoRedundantPerAgentEntry
+// verifies that a tool already covered globally (cfg.Sandbox.ToolPolicies)
+// does NOT get a redundant per-agent entry added by the repair — the repair
+// must respect the same "either layer counts as covered" rule
+// ValidateToolPolicyCoverage enforces, not just backfill everything
+// unconditionally onto the agent.
+func TestRepairIncompleteToolPolicyCoverage_GlobalEntryCoversGap_NoRedundantPerAgentEntry(t *testing.T) {
+	cfg := &Config{
+		Sandbox: OmnipusSandboxConfig{
+			ToolPolicies: map[string]string{"send_message": "allow"},
+		},
+		Agents: AgentsConfig{
+			List: []AgentConfig{
+				{
+					ID: "agent-j",
+					Tools: &AgentToolsCfg{
+						Builtin: AgentBuiltinToolsCfg{
+							Policies: map[string]ToolPolicy{"read_file": ToolPolicyAllow},
+						},
+					},
+				},
+			},
+		},
+	}
+	knownTools := map[string]struct{}{"read_file": {}, "send_message": {}}
+
+	repaired := RepairIncompleteToolPolicyCoverage(cfg, knownTools)
+	assert.Empty(t, repaired, "a tool already covered globally must not be reported as repaired")
+
+	agentPolicies := cfg.Agents.List[0].Tools.Builtin.Policies
+	_, hasPerAgentEntry := agentPolicies["send_message"]
+	assert.False(t, hasPerAgentEntry, "globally-covered tool must not gain a redundant per-agent entry")
+	assert.Equal(t, ToolPolicyAllow, agentPolicies["read_file"], "pre-existing entry must be untouched")
+}
+
+// TestRepairIncompleteToolPolicyCoverage_DelegatesToValidate is a
+// characterization test locking in that the repair function derives its gap
+// list by CALLING ValidateToolPolicyCoverage rather than re-implementing the
+// coverage predicate a second time. It exercises the exact
+// "both-sides-present-different-values-not-a-gap" scenario
+// TestValidateToolPolicyCoverage_BothSidesPresentDifferentValues_NotAGap locks
+// in for ValidateToolPolicyCoverage: if the repair ever grew its own,
+// independent notion of "covered" that disagreed with ValidateToolPolicyCoverage
+// (the exact class of bug this whole session's work fixed elsewhere), this
+// test would catch the divergence by asserting repair finds nothing to do
+// here even though a naive re-implementation might.
+func TestRepairIncompleteToolPolicyCoverage_DelegatesToValidate(t *testing.T) {
+	cfg := &Config{
+		Sandbox: OmnipusSandboxConfig{
+			ToolPolicies: map[string]string{"read_file": "ask"},
+		},
+		Agents: AgentsConfig{
+			List: []AgentConfig{
+				{
+					ID: "agent-k",
+					Tools: &AgentToolsCfg{
+						Builtin: AgentBuiltinToolsCfg{
+							// Deliberately disagrees with the global "ask" value above —
+							// mere presence on either side satisfies coverage, so this must
+							// NOT be treated as a gap by the repair either.
+							Policies: map[string]ToolPolicy{"read_file": ToolPolicyDeny},
+						},
+					},
+				},
+			},
+		},
+	}
+	knownTools := map[string]struct{}{"read_file": {}}
+
+	// Sanity check: ValidateToolPolicyCoverage (the authority) finds no gap.
+	require.Empty(t, ValidateToolPolicyCoverage(cfg, knownTools))
+
+	repaired := RepairIncompleteToolPolicyCoverage(cfg, knownTools)
+	assert.Empty(
+		t,
+		repaired,
+		"repair must agree with ValidateToolPolicyCoverage: value disagreement across layers is not a gap",
+	)
+	assert.Equal(
+		t, ToolPolicyDeny, cfg.Agents.List[0].Tools.Builtin.Policies["read_file"],
+		"pre-existing per-agent value must be left untouched, not overwritten to deny",
+	)
+}
+
 // TestRepairIncompleteToolPolicyCoverage_Idempotent verifies that repairing
-// an already-fully-covered config is a no-op: repairedAgentCount is 0 and no
+// an already-fully-covered config is a no-op: repaired is empty and no
 // existing policy values change.
 func TestRepairIncompleteToolPolicyCoverage_Idempotent(t *testing.T) {
 	cfg := &Config{
@@ -610,21 +702,21 @@ func TestRepairIncompleteToolPolicyCoverage_Idempotent(t *testing.T) {
 
 	// First call repairs nothing (already covered).
 	repaired := RepairIncompleteToolPolicyCoverage(cfg, knownTools)
-	assert.Equal(t, 0, repaired, "an already-fully-covered config must not be reported as repaired")
+	assert.Empty(t, repaired, "an already-fully-covered config must not be reported as repaired")
 	assert.Equal(t, ToolPolicyAllow, cfg.Agents.List[0].Tools.Builtin.Policies["read_file"])
 	assert.Equal(t, ToolPolicyDeny, cfg.Agents.List[0].Tools.Builtin.Policies["write_file"])
 
 	// Calling it again is still a no-op.
 	repairedAgain := RepairIncompleteToolPolicyCoverage(cfg, knownTools)
-	assert.Equal(t, 0, repairedAgain, "repeated repair calls on a covered config must stay a no-op")
+	assert.Empty(t, repairedAgain, "repeated repair calls on a covered config must stay a no-op")
 }
 
 // TestRepairIncompleteToolPolicyCoverage_NilOrEmptyInputs_NoOp verifies the
 // "nothing to repair" guard mirrors ValidateToolPolicyCoverage's own guard.
 func TestRepairIncompleteToolPolicyCoverage_NilOrEmptyInputs_NoOp(t *testing.T) {
-	assert.Equal(t, 0, RepairIncompleteToolPolicyCoverage(nil, map[string]struct{}{"read_file": {}}))
+	assert.Empty(t, RepairIncompleteToolPolicyCoverage(nil, map[string]struct{}{"read_file": {}}))
 
 	cfg := &Config{Agents: AgentsConfig{List: []AgentConfig{{ID: "agent-i"}}}}
-	assert.Equal(t, 0, RepairIncompleteToolPolicyCoverage(cfg, nil))
-	assert.Equal(t, 0, RepairIncompleteToolPolicyCoverage(cfg, map[string]struct{}{}))
+	assert.Empty(t, RepairIncompleteToolPolicyCoverage(cfg, nil))
+	assert.Empty(t, RepairIncompleteToolPolicyCoverage(cfg, map[string]struct{}{}))
 }

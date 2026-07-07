@@ -74,9 +74,9 @@ func TestCreateAgent_Bash_NewCustomAgentDeniedByDefault(t *testing.T) {
 	// constraint 6) — an uncovered tool now fails closed to "deny" inside
 	// EffectiveToolPolicy itself, so this test's seeded "bash": deny entry is
 	// asserted directly rather than via a fallback field.
-	policies := make(map[string]string, len(newAgent.Tools.Builtin.Policies))
+	policies := make(map[string]config.ToolPolicy, len(newAgent.Tools.Builtin.Policies))
 	for k, v := range newAgent.Tools.Builtin.Policies {
-		policies[k] = string(v)
+		policies[k] = v
 	}
 	polCfg := &tools.ToolPolicyCfg{
 		Policies: policies,

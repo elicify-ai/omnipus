@@ -29,6 +29,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -61,26 +62,26 @@ func TestTurnRecheck_PolicyAtomicPointerUpdate(t *testing.T) {
 
 	// Initial policy: exec is allowed.
 	initialPolicy := &tools.ToolPolicyCfg{
-		Policies: map[string]string{"exec": "allow"},
+		Policies: map[string]config.ToolPolicy{"exec": "allow"},
 	}
 	agent.StoreToolPolicy(initialPolicy)
 
 	// Verify initial state.
 	loaded := agent.LoadToolPolicy()
 	require.NotNil(t, loaded, "LoadToolPolicy must return the stored policy")
-	assert.Equal(t, "allow", loaded.Policies["exec"],
+	assert.Equal(t, "allow", string(loaded.Policies["exec"]),
 		"initial policy for exec must be 'allow'")
 
 	// Simulate mid-turn policy change: operator updates to deny.
 	updatedPolicy := &tools.ToolPolicyCfg{
-		Policies: map[string]string{"exec": "deny"},
+		Policies: map[string]config.ToolPolicy{"exec": "deny"},
 	}
 	agent.StoreToolPolicy(updatedPolicy)
 
 	// After Store, the next Load must observe the new policy.
 	reloaded := agent.LoadToolPolicy()
 	require.NotNil(t, reloaded)
-	assert.Equal(t, "deny", reloaded.Policies["exec"],
+	assert.Equal(t, "deny", string(reloaded.Policies["exec"]),
 		"post-update LoadToolPolicy must return 'deny' for exec")
 }
 
@@ -101,7 +102,7 @@ func TestTurnRecheck_PolicyIsPerCallNotPerTurn(t *testing.T) {
 
 	// "Turn start" policy: exec is allowed.
 	allowExec := &tools.ToolPolicyCfg{
-		Policies: map[string]string{"exec": "allow"},
+		Policies: map[string]config.ToolPolicy{"exec": "allow"},
 	}
 	agent.StoreToolPolicy(allowExec)
 
@@ -119,7 +120,7 @@ func TestTurnRecheck_PolicyIsPerCallNotPerTurn(t *testing.T) {
 
 	// Simulate: operator changes policy to deny BEFORE Execute runs.
 	denyExec := &tools.ToolPolicyCfg{
-		Policies: map[string]string{"exec": "deny"},
+		Policies: map[string]config.ToolPolicy{"exec": "deny"},
 	}
 	agent.StoreToolPolicy(denyExec)
 
@@ -173,7 +174,7 @@ func TestTurnRecheck_MidTurnPolicySwapRace(t *testing.T) {
 	agent := newMinimalAgentInstance()
 
 	initial := &tools.ToolPolicyCfg{
-		Policies: map[string]string{"exec": "allow"},
+		Policies: map[string]config.ToolPolicy{"exec": "allow"},
 	}
 	agent.StoreToolPolicy(initial)
 
@@ -185,12 +186,12 @@ func TestTurnRecheck_MidTurnPolicySwapRace(t *testing.T) {
 	for i := range goroutines / 2 {
 		go func(n int) {
 			for range iterations {
-				policy := "allow"
+				policy := config.ToolPolicyAllow
 				if n%2 == 0 {
-					policy = "deny"
+					policy = config.ToolPolicyDeny
 				}
 				agent.StoreToolPolicy(&tools.ToolPolicyCfg{
-					Policies: map[string]string{"exec": policy},
+					Policies: map[string]config.ToolPolicy{"exec": policy},
 				})
 			}
 		}(i)

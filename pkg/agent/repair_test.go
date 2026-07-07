@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -252,7 +253,7 @@ func TestRepairHistory_PolicyDenyBlocksReinvocation(t *testing.T) {
 
 	// Policy denies search_web — repair must NOT re-invoke it.
 	denyPolicy := &tools.ToolPolicyCfg{
-		Policies: map[string]string{"search_web": "deny"},
+		Policies: map[string]config.ToolPolicy{"search_web": "deny"},
 	}
 
 	out, stats := repairHistory(context.Background(), messages, store, sid, nil, "test-agent", denyPolicy)

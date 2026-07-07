@@ -52,7 +52,7 @@ type wildcardEntry struct {
 	prefix    string // the part before ".*" or "_*"
 	segments  int    // number of dot-separated segments (primary sort key, FR-071)
 	delimiter byte   // '.' for ".*" wildcards, '_' for "_*" wildcards
-	policy    string
+	policy    config.ToolPolicy
 }
 
 // buildWildcardIndex parses a policy map and returns a sorted slice of wildcard
@@ -69,7 +69,7 @@ type wildcardEntry struct {
 //
 // Pre-existing "_*" keys were previously no-ops (the ".*" branch did not match them),
 // so enabling them is non-regressing for existing configs.
-func buildWildcardIndex(policies map[string]string) []wildcardEntry {
+func buildWildcardIndex(policies map[string]config.ToolPolicy) []wildcardEntry {
 	var entries []wildcardEntry
 	for k, v := range policies {
 		switch {
@@ -119,7 +119,11 @@ func buildWildcardIndex(policies map[string]string) []wildcardEntry {
 // Exact matches win over wildcards; among wildcards longest-prefix wins (FR-009, FR-071).
 // Returns "" if no entry matches — callers resolve that to "deny" (fail-closed);
 // there is no default-policy fallback (CLAUDE.md hard constraint 6).
-func resolveFromMap(toolName string, policies map[string]string, wildcards []wildcardEntry) string {
+func resolveFromMap(
+	toolName string,
+	policies map[string]config.ToolPolicy,
+	wildcards []wildcardEntry,
+) config.ToolPolicy {
 	// 1. Exact match always wins.
 	if p, ok := policies[toolName]; ok {
 		return p
@@ -159,7 +163,7 @@ func resolveEffectivePolicyWith(
 	cfg *ToolPolicyCfg,
 	toolName string,
 	agentWildcards, globalWildcards []wildcardEntry,
-) string {
+) config.ToolPolicy {
 	// God-mode override (O14): the global "bypass-permissions" switch floors
 	// EVERY tool's effective policy at "allow" — no permission prompts, no
 	// deny. This is the #1 effect of god mode and intentionally short-circuits
@@ -169,7 +173,7 @@ func resolveEffectivePolicyWith(
 	// non-destructive: cfg.Policies / cfg.GlobalPolicies are NOT mutated, so
 	// clearing cfg.GodMode restores the prior decision exactly.
 	if cfg.GodMode {
-		return "allow"
+		return config.ToolPolicyAllow
 	}
 	g := resolveFromMap(toolName, cfg.GlobalPolicies, globalWildcards)
 	a := resolveFromMap(toolName, cfg.Policies, agentWildcards)
@@ -181,19 +185,19 @@ func resolveEffectivePolicyWith(
 		// defaulting to "allow".
 		slog.Error("tools: no policy entry (global or agent) for tool; failing closed to deny",
 			"tool", toolName)
-		return "deny"
+		return config.ToolPolicyDeny
 	case g == "":
 		return a
 	case a == "":
 		return g
 	default:
-		if g == "deny" || a == "deny" {
-			return "deny"
+		if g == config.ToolPolicyDeny || a == config.ToolPolicyDeny {
+			return config.ToolPolicyDeny
 		}
-		if g == "ask" || a == "ask" {
-			return "ask"
+		if g == config.ToolPolicyAsk || a == config.ToolPolicyAsk {
+			return config.ToolPolicyAsk
 		}
-		return "allow"
+		return config.ToolPolicyAllow
 	}
 }
 
@@ -212,11 +216,11 @@ func ResolveEffectivePolicy(cfg *ToolPolicyCfg, toolName string) string {
 	if cfg == nil {
 		slog.Error("tools: ResolveEffectivePolicy called with nil cfg; failing closed to deny",
 			"tool", toolName)
-		return "deny"
+		return string(config.ToolPolicyDeny)
 	}
 	agentWildcards := buildWildcardIndex(cfg.Policies)
 	globalWildcards := buildWildcardIndex(cfg.GlobalPolicies)
-	return resolveEffectivePolicyWith(cfg, toolName, agentWildcards, globalWildcards)
+	return string(resolveEffectivePolicyWith(cfg, toolName, agentWildcards, globalWildcards))
 }
 
 // effectiveToolPolicyWith is the unified single-tool resolver: it produces the
@@ -257,10 +261,10 @@ func effectiveToolPolicyWith(
 	scope ToolScope,
 	agentType, toolName string,
 	agentWildcards, globalWildcards []wildcardEntry,
-) string {
+) config.ToolPolicy {
 	// 1. Infra force-allow (unconditional). See doc comment.
 	if ToolManifestTier(toolName) == ManifestInfra {
-		return "allow"
+		return config.ToolPolicyAllow
 	}
 
 	// 2. Scope gate (fail-closed for unknown scopes). The structural guard that
@@ -272,7 +276,7 @@ func effectiveToolPolicyWith(
 	//    so we do the same. ScopeGeneral always passes the gate. Unknown/zero
 	//    scopes fail the gate, are not ScopeCore, and are denied (fail-closed).
 	if !passesScopeGate(scope, agentType) && scope != ScopeCore {
-		return "deny"
+		return config.ToolPolicyDeny
 	}
 
 	// 3. Global×agent strictest-wins merge (god-mode + wildcards inside; fails
@@ -303,7 +307,7 @@ func EffectiveToolPolicy(cfg *ToolPolicyCfg, scope ToolScope, agentType, toolNam
 	}
 	agentWildcards := buildWildcardIndex(cfg.Policies)
 	globalWildcards := buildWildcardIndex(cfg.GlobalPolicies)
-	return effectiveToolPolicyWith(cfg, scope, agentType, toolName, agentWildcards, globalWildcards)
+	return string(effectiveToolPolicyWith(cfg, scope, agentType, toolName, agentWildcards, globalWildcards))
 }
 
 // BuildFallbackPolicyCfg builds a *ToolPolicyCfg from the global config alone
@@ -328,9 +332,19 @@ func EffectiveToolPolicy(cfg *ToolPolicyCfg, scope ToolScope, agentType, toolNam
 func BuildFallbackPolicyCfg(cfg *config.Config, agentID string) (polCfg *ToolPolicyCfg, agentType string) {
 	polCfg = &ToolPolicyCfg{}
 	if len(cfg.Sandbox.ToolPolicies) > 0 {
-		gp := make(map[string]string, len(cfg.Sandbox.ToolPolicies))
+		// cfg.Sandbox.ToolPolicies is raw config data (map[string]string) — its
+		// values are validated at the write boundary (rest_tool_policies.go's
+		// putToolPolicies rejects anything outside allow/ask/deny before
+		// persisting), so this is a trusting conversion, matching this
+		// codebase's existing pattern of trusting validated config rather than
+		// re-validating everywhere. NOTE: boot-time load of a hand-edited
+		// config.json does NOT re-validate these specific values (only
+		// per-agent tools.builtin.policies entries are checked by
+		// config.validatePolicyValues) — see this function's caller-facing
+		// doc comment for the flagged gap.
+		gp := make(map[string]config.ToolPolicy, len(cfg.Sandbox.ToolPolicies))
 		for k, v := range cfg.Sandbox.ToolPolicies {
-			gp[k] = v
+			gp[k] = config.ToolPolicy(v)
 		}
 		polCfg.GlobalPolicies = gp
 	}
@@ -344,9 +358,11 @@ func BuildFallbackPolicyCfg(cfg *config.Config, agentID string) (polCfg *ToolPol
 			agentType = string(ac.Type)
 		}
 		if ac.Tools != nil && len(ac.Tools.Builtin.Policies) > 0 {
-			ap := make(map[string]string, len(ac.Tools.Builtin.Policies))
+			// ac.Tools.Builtin.Policies is already map[string]config.ToolPolicy
+			// (typed at the config layer) — a direct copy, no string round-trip.
+			ap := make(map[string]config.ToolPolicy, len(ac.Tools.Builtin.Policies))
 			for k, v := range ac.Tools.Builtin.Policies {
-				ap[k] = string(v)
+				ap[k] = v
 			}
 			polCfg.Policies = ap
 		}
@@ -365,11 +381,11 @@ func BuildFallbackPolicyCfg(cfg *config.Config, agentID string) (polCfg *ToolPol
 // is enforced structurally by config.ValidateToolPolicyCoverage at boot and at
 // every agent create/update/tools-write.
 type ToolPolicyCfg struct {
-	Policies map[string]string // per-tool overrides (supports trailing ".*" wildcards)
+	Policies map[string]config.ToolPolicy // per-tool overrides (supports trailing ".*" wildcards)
 
 	// GlobalPolicies holds the operator-level global tool policy overrides.
 	// Applied before agent-level policies; deny always wins (deny > ask > allow).
-	GlobalPolicies map[string]string // per-tool global overrides (supports wildcards)
+	GlobalPolicies map[string]config.ToolPolicy // per-tool global overrides (supports wildcards)
 
 	// GodMode, when true, activates the O14 global "bypass-permissions"
 	// override: every tool's effective policy is floored at "allow" — no tool
@@ -416,14 +432,14 @@ func FilterToolsByPolicy(allTools []Tool, agentType string, cfg *ToolPolicyCfg) 
 		// loop's sent-defs view and the gateway's exec gate provably identical —
 		// they cannot diverge because they run the SAME function.
 		verdict := effectiveToolPolicyWith(cfg, t.Scope(), agentType, t.Name(), agentWildcards, globalWildcards)
-		if verdict == "deny" {
+		if verdict == config.ToolPolicyDeny {
 			activeToolMetricsRecorder.IncFilterTotal(agentType, "deny")
 			continue
 		}
 
-		activeToolMetricsRecorder.IncFilterTotal(agentType, verdict)
+		activeToolMetricsRecorder.IncFilterTotal(agentType, string(verdict))
 		out = append(out, t)
-		policyMap[t.Name()] = verdict
+		policyMap[t.Name()] = string(verdict)
 	}
 	return out, policyMap
 }

@@ -194,9 +194,18 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 
 	policyCfg := toolsCfgToPolicy(toolsCfg)
 
-	// Also include global tool policies from sandbox config.
+	// Also include global tool policies from sandbox config. cfg.Sandbox.ToolPolicies
+	// is raw config data (map[string]string) — its values are validated at the
+	// write boundary (rest_tool_policies.go's putToolPolicies rejects anything
+	// outside allow/ask/deny before persisting), so this is a trusting
+	// conversion, matching this codebase's existing pattern of trusting
+	// validated config rather than re-validating everywhere.
 	if len(cfg.Sandbox.ToolPolicies) > 0 {
-		policyCfg.GlobalPolicies = cfg.Sandbox.ToolPolicies
+		gp := make(map[string]config.ToolPolicy, len(cfg.Sandbox.ToolPolicies))
+		for k, v := range cfg.Sandbox.ToolPolicies {
+			gp[k] = config.ToolPolicy(v)
+		}
+		policyCfg.GlobalPolicies = gp
 	}
 
 	// Build tool entries as gen.AgentToolsResponse.Tools anonymous struct slice.
@@ -280,7 +289,7 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 	policyCfgForResp := toolsCfgToPolicy(toolsCfg)
 	respPolicies := policyCfgForResp.Policies
 	if respPolicies == nil {
-		respPolicies = map[string]string{}
+		respPolicies = map[string]config.ToolPolicy{}
 	}
 
 	// Convert map[string]string to map[string]AgentToolsResponseConfigBuiltinPolicies.
@@ -505,9 +514,12 @@ func toolsCfgToPolicy(cfg *config.AgentToolsCfg) *tools.ToolPolicyCfg {
 	if cfg == nil {
 		return &tools.ToolPolicyCfg{}
 	}
-	policies := make(map[string]string, len(cfg.Builtin.Policies))
+	// cfg.Builtin.Policies is already map[string]config.ToolPolicy (typed at the
+	// config layer) — a direct copy, no string round-trip needed now that
+	// tools.ToolPolicyCfg.Policies is typed too.
+	policies := make(map[string]config.ToolPolicy, len(cfg.Builtin.Policies))
 	for k, v := range cfg.Builtin.Policies {
-		policies[k] = string(v)
+		policies[k] = v
 	}
 	return &tools.ToolPolicyCfg{Policies: policies}
 }

@@ -154,9 +154,9 @@ func parityCases() []parityCase {
 func agentToolPolicyCfg(cfg *config.Config, agentID string) *tools.ToolPolicyCfg {
 	out := &tools.ToolPolicyCfg{}
 	if len(cfg.Sandbox.ToolPolicies) > 0 {
-		gp := make(map[string]string, len(cfg.Sandbox.ToolPolicies))
+		gp := make(map[string]config.ToolPolicy, len(cfg.Sandbox.ToolPolicies))
 		for k, v := range cfg.Sandbox.ToolPolicies {
-			gp[k] = v
+			gp[k] = config.ToolPolicy(v)
 		}
 		out.GlobalPolicies = gp
 	}
@@ -165,9 +165,9 @@ func agentToolPolicyCfg(cfg *config.Config, agentID string) *tools.ToolPolicyCfg
 		if ac.ID != agentID || ac.Tools == nil {
 			continue
 		}
-		ap := make(map[string]string, len(ac.Tools.Builtin.Policies))
+		ap := make(map[string]config.ToolPolicy, len(ac.Tools.Builtin.Policies))
 		for k, v := range ac.Tools.Builtin.Policies {
-			ap[k] = string(v)
+			ap[k] = v
 		}
 		out.Policies = ap
 		break

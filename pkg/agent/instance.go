@@ -680,19 +680,29 @@ func agentToolsCfgToPolicy(globalCfg *config.Config, cfg *config.AgentToolsCfg) 
 		return out
 	}
 	if cfg != nil {
-		policies := make(map[string]string, len(cfg.Builtin.Policies))
+		// cfg.Builtin.Policies is already map[string]config.ToolPolicy (typed at
+		// the config layer) — a direct copy, no string round-trip needed now
+		// that tools.ToolPolicyCfg.Policies is typed too.
+		policies := make(map[string]config.ToolPolicy, len(cfg.Builtin.Policies))
 		for k, v := range cfg.Builtin.Policies {
-			policies[k] = string(v)
+			policies[k] = v
 		}
 		out.Policies = policies
 	}
 	// Thread global sandbox tool policies so the runtime filter enforces
 	// global × agent most-restrictive-wins (O7). FilterToolsByPolicy applies
 	// GlobalPolicies before agent policies; a global deny always blocks.
+	//
+	// globalCfg.Sandbox.ToolPolicies is raw config data (map[string]string) —
+	// its values are validated at the write boundary (rest_tool_policies.go's
+	// putToolPolicies rejects anything outside allow/ask/deny before
+	// persisting), so this is a trusting conversion, matching this codebase's
+	// existing pattern of trusting validated config rather than re-validating
+	// everywhere.
 	if globalCfg != nil && len(globalCfg.Sandbox.ToolPolicies) > 0 {
-		gp := make(map[string]string, len(globalCfg.Sandbox.ToolPolicies))
+		gp := make(map[string]config.ToolPolicy, len(globalCfg.Sandbox.ToolPolicies))
 		for k, v := range globalCfg.Sandbox.ToolPolicies {
-			gp[k] = v
+			gp[k] = config.ToolPolicy(v)
 		}
 		out.GlobalPolicies = gp
 	}
