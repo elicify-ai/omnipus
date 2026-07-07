@@ -3,7 +3,7 @@ import { CheckCircle, WarningCircle, XCircle, Spinner, Info } from '@phosphor-ic
 import { Button } from '@/components/ui/button'
 import { testAgentRunner } from '@/lib/api'
 import type { ExecutorConfig, RunnerTestResponse } from '@/lib/api'
-import { isApiError } from '@/lib/api'
+import { getErrorMessage } from '@/lib/api'
 
 // Spec-4 FR-4.1/FR-4.2 — Executor selector + external-CLI runner connection test.
 //
@@ -12,7 +12,7 @@ import { isApiError } from '@/lib/api'
 //   - external-cli → delegate to an external CLI agent (claude-code / codex / opencode);
 //                    fully wired below (CLI picker + Test Connection button with 6
 //                    distinct outcome states) but experimental in v0.1.0
-//   - remote-a2a  → RESERVED; not resolvable in v0.1.0 — falls back to native
+//   - remote-a2a  → RESERVED; not resolvable in v0.1.0 — dispatch fails the sub-turn with an error
 //
 // When kind=external-cli the operator can run a connection test that validates the
 // CLI binary is present, runs, and is authenticated WITHOUT spending any tokens.
@@ -177,7 +177,7 @@ export function ExecutorSelector({ value, onChange, agentId, disabled = false, e
           <Info size={14} className="text-[var(--color-muted)] shrink-0 mt-0.5" weight="fill" />
           <p className="text-[11px] text-[var(--color-muted)] leading-snug">
             Remote (A2A) executors are <strong className="text-[var(--color-secondary)]">reserved — not available in v0.1.0</strong>.
-            The agent will fall back to the native runtime until A2A resolution ships.
+            Selecting this will cause delegated sub-turns to fail with an error until A2A resolution ships.
           </p>
         </div>
       )}
@@ -232,7 +232,7 @@ function RunnerTestButton({ agentId }: { agentId: string }) {
         >
           <XCircle size={14} className="text-[var(--color-error)] shrink-0 mt-0.5" weight="fill" />
           <p className="text-[11px] text-[var(--color-error)] leading-snug">
-            Test request failed: {isApiError(error) ? error.userMessage : error.message}
+            Test request failed: {getErrorMessage(error, 'Test request failed')}
           </p>
         </div>
       )}

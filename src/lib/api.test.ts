@@ -21,7 +21,15 @@ import type {
   SkillTrustLevel,
   PromptInjectionLevel,
 } from './api'
-import { ApiSchemaError, getApiSchemaErrorCount, resetApiSchemaErrorCount } from './api'
+import {
+  ApiSchemaError,
+  getApiSchemaErrorCount,
+  resetApiSchemaErrorCount,
+  fetchConfig,
+  getConfigCoercionCount,
+  resetConfigCoercionCount,
+} from './api'
+import * as telemetry from './telemetry'
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -1523,6 +1531,208 @@ describe('validEnum / _configCoercionCount', () => {
 
     // Two invalid enum values should produce count ≥ 2 (one per field).
     expect(getConfigCoercionCount()).toBeGreaterThanOrEqual(2)
+  })
+})
+
+// ── castString / castNumber / castOptionalNumber coercion telemetry (#146) ───
+//
+// Wave 2 added castString/castNumber/castOptionalNumber alongside validEnum to
+// runtime-check select Config scalar fields — including security-relevant
+// guardrails (security.daily_cost_cap, exec_timeout_seconds,
+// max_background_seconds, rate_limits.*) — but had ZERO direct test coverage
+// of a wrong-shaped wire value actually reaching any of the three functions,
+// and the only production signal for a coercion was a silently-incremented
+// counter (no toast, no console line, no telemetry event — a CRITICAL finding
+// from the 7-reviewer gate's silent-failure-hunter). recordCoercion() now
+// fixes the silence by calling logError() in production (mirroring
+// _recordApiSchemaError's DEV-console.warn / PROD-logError split). These
+// tests exercise the real fetchConfig()→rawToFrontendConfig() path with
+// wrong-typed wire values for security-relevant fields and assert: (a) a safe
+// fallback, (b) logError is called with diagnostic context, (c) the coercion
+// counter increments.
+
+describe('castString/castNumber/castOptionalNumber: wrong-shaped value coercion + production telemetry', () => {
+  let fetchSpy: ReturnType<typeof vi.fn>
+
+  // NOTE: this block deliberately uses the file-top-level static imports of
+  // fetchConfig/getConfigCoercionCount/resetConfigCoercionCount (and of the
+  // `telemetry` namespace) rather than the `await import('./api')` pattern
+  // used elsewhere in this file. Several earlier describe blocks call
+  // `vi.resetModules()` in their afterEach; a dynamic `await import('./api')`
+  // AFTER one of those resets loads a fresh module graph whose OWN internal
+  // `import { logError } from './telemetry'` binding resolves against a
+  // fresh telemetry module instance — a different object than the one this
+  // file's static `import * as telemetry from './telemetry'` captured at
+  // file-load time. vi.spyOn(telemetry, 'logError') would then spy on a
+  // stale, disconnected instance and silently observe zero calls even
+  // though the real logError() demonstrably ran (visible via its
+  // console.error side effect). Staying on the static imports keeps
+  // `fetchConfig` and `telemetry` on the same original module instance so
+  // the spy actually intercepts the call.
+  beforeEach(() => {
+    fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
+    resetConfigCoercionCount()
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.unstubAllEnvs()
+    vi.restoreAllMocks()
+    sessionStorage.clear()
+    resetConfigCoercionCount()
+  })
+
+  function mockConfigResponse(wireConfig: Record<string, unknown>) {
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(wireConfig), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+  }
+
+  it('castOptionalNumber: security.daily_cost_cap="unlimited" (wrong-typed) falls back to undefined, increments the counter, and calls logError in production', async () => {
+    // "unlimited" is exactly the kind of wrong-shaped-but-truthy value that
+    // used to pass straight through cast<T>() before Wave 2 — a string where
+    // a number spend cap was expected.
+    mockConfigResponse({
+      gateway: { host: '127.0.0.1', port: 8080 },
+      security: { policy_mode: 'deny', exec_approval: 'ask', daily_cost_cap: 'unlimited' },
+    })
+
+    // Force the production (non-DEV) branch of recordCoercion so logError
+    // fires instead of the DEV console.warn — mirrors the established
+    // pattern in src/lib/ws.test.ts's metadata-drift-detector suite.
+    vi.stubEnv('DEV', false)
+    vi.stubEnv('MODE', 'production')
+    const logErrorSpy = vi.spyOn(telemetry, 'logError')
+
+    const config = await fetchConfig()
+
+    // (a) safe fallback — an optional guardrail field drops to "unset"
+    // rather than passing a corrupted string through.
+    expect(config.security.daily_cost_cap).toBeUndefined()
+    // (c) counter increments.
+    expect(getConfigCoercionCount()).toBeGreaterThan(0)
+    // (b) logError called with diagnostic context — field name + what was
+    // substituted, not just "something got coerced somewhere".
+    expect(logErrorSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'configCoercion',
+        field: 'security.daily_cost_cap',
+        coercedValue: JSON.stringify('unlimited'),
+      }),
+    )
+  })
+
+  it('castNumber: gateway.port="8080" (string, wrong-typed) falls back to the default port, increments the counter, and calls logError in production', async () => {
+    mockConfigResponse({
+      gateway: { host: '127.0.0.1', port: '8080' },
+      security: { policy_mode: 'deny', exec_approval: 'ask' },
+    })
+
+    vi.stubEnv('DEV', false)
+    vi.stubEnv('MODE', 'production')
+    const logErrorSpy = vi.spyOn(telemetry, 'logError')
+
+    const config = await fetchConfig()
+
+    // (a) safe fallback — a string that happens to look numeric is still
+    // wrong-typed and must NOT be silently accepted as the wire value; the
+    // hardcoded 8080 fallback is used instead.
+    expect(config.gateway.port).toBe(8080)
+    expect(typeof config.gateway.port).toBe('number')
+    // (c) counter increments.
+    expect(getConfigCoercionCount()).toBeGreaterThan(0)
+    // (b) logError called with diagnostic context.
+    expect(logErrorSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'configCoercion',
+        field: 'gateway.port',
+        coercedValue: JSON.stringify('8080'),
+        fallbackValue: JSON.stringify(8080),
+      }),
+    )
+  })
+
+  it('castString: gateway.host=12345 (number, wrong-typed) falls back to the default bind address, increments the counter, and calls logError in production', async () => {
+    mockConfigResponse({
+      gateway: { host: 12345, port: 8080 },
+      security: { policy_mode: 'deny', exec_approval: 'ask' },
+    })
+
+    vi.stubEnv('DEV', false)
+    vi.stubEnv('MODE', 'production')
+    const logErrorSpy = vi.spyOn(telemetry, 'logError')
+
+    const config = await fetchConfig()
+
+    // (a) safe fallback.
+    expect(config.gateway.bind_address).toBe('127.0.0.1')
+    // (c) counter increments.
+    expect(getConfigCoercionCount()).toBeGreaterThan(0)
+    // (b) logError called with diagnostic context.
+    expect(logErrorSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'configCoercion',
+        field: 'gateway.host',
+        coercedValue: JSON.stringify(12345),
+      }),
+    )
+  })
+
+  it('multiple wrong-typed rate_limits fields each produce a distinct logError call with their own field label', async () => {
+    // Two guardrail fields corrupted at once — verifies field names are not
+    // conflated into a single generic message (the code-simplifier finding
+    // this fix addresses: "not just 'something got coerced somewhere'").
+    mockConfigResponse({
+      gateway: { host: '127.0.0.1', port: 8080 },
+      security: {
+        policy_mode: 'deny',
+        exec_approval: 'ask',
+        rate_limits: { max_tokens_per_day: 'unlimited', max_cost_per_day: {} },
+      },
+    })
+
+    vi.stubEnv('DEV', false)
+    vi.stubEnv('MODE', 'production')
+    const logErrorSpy = vi.spyOn(telemetry, 'logError')
+
+    const config = await fetchConfig()
+
+    expect(config.security.rate_limits?.max_tokens_per_day).toBeUndefined()
+    expect(config.security.rate_limits?.max_cost_per_day).toBeUndefined()
+    expect(getConfigCoercionCount()).toBeGreaterThanOrEqual(2)
+
+    const fields = logErrorSpy.mock.calls.map((call) => (call[0] as { field?: string }).field)
+    expect(fields).toContain('security.rate_limits.max_tokens_per_day')
+    expect(fields).toContain('security.rate_limits.max_cost_per_day')
+  })
+
+  it('DEV builds do NOT call logError for a coercion — console.warn only (production/DEV split preserved)', async () => {
+    // Regression guard for the split this fix introduces: DEV must keep its
+    // existing console.warn-only behaviour (no telemetry event), matching
+    // _recordApiSchemaError's established DEV/PROD split above.
+    mockConfigResponse({
+      gateway: { host: '127.0.0.1', port: 8080 },
+      security: { policy_mode: 'deny', exec_approval: 'ask', daily_cost_cap: 'unlimited' },
+    })
+
+    vi.stubEnv('DEV', true)
+    vi.stubEnv('MODE', 'development')
+    const logErrorSpy = vi.spyOn(telemetry, 'logError')
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const config = await fetchConfig()
+
+    expect(config.security.daily_cost_cap).toBeUndefined()
+    expect(getConfigCoercionCount()).toBeGreaterThan(0)
+    expect(logErrorSpy).not.toHaveBeenCalled()
+    expect(warnSpy).toHaveBeenCalled()
+    const warned = warnSpy.mock.calls.some((call) => String(call[0]).includes('security.daily_cost_cap'))
+    expect(warned).toBe(true)
   })
 })
 

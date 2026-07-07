@@ -261,7 +261,7 @@ async function registerBaseRoutes(
   })
 
   // Stub GET/PUT /api/v1/channels/<id>/routing — the redesigned rows
-  // (ChannelInstanceRow) fire getChannelRouting(instanceId) per rendered row
+  // (ChannelInstanceRow) fire fetchChannelRouting(instanceId) per rendered row
   // to resolve their workspace→agent binding title, and CreateChannelSheet
   // fires setChannelRouting(newId, ...) right after a successful create.
   // Defaults to an unbound instance on GET ({}) and a 200 echo of the body on

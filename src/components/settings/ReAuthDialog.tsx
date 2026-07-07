@@ -69,7 +69,7 @@ export function ReAuthDialog({
       setSubmitting(false)
       // A wrong password returns 401; surface it inline so the user can retry.
       const message = getErrorMessage(err, 'Re-authentication failed', {
-        status401: 'That password is incorrect. Please try again.',
+        statusOverrides: { 401: 'That password is incorrect. Please try again.' },
       })
       setError(message)
     }
