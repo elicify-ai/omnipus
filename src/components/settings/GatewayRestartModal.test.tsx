@@ -22,9 +22,9 @@ vi.mock('@/lib/api', async (importOriginal) => {
   }
 })
 
-// ── Mock the restart store ─────────────────────────────────────────────────────
+// ── Mock the restart hook ──────────────────────────────────────────────────────
 const mockRefetchPending = vi.fn().mockResolvedValue(undefined)
-vi.mock('@/store/restart', () => ({
+vi.mock('@/hooks/restart', () => ({
   usePendingRestart: () => ({ refetch: mockRefetchPending }),
 }))
 

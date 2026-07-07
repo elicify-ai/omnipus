@@ -4,21 +4,14 @@
 // Expanded body: nested ToolCallBadges + optional final result section.
 // Visual grammar matches ToolCallBadge (same border/surface palette).
 
-import {
-  ArrowsClockwise,
-  CheckCircle,
-  XCircle,
-  Prohibit,
-  Clock,
-  CaretDown,
-  CaretUp,
-  UserCircle,
-} from '@phosphor-icons/react'
+import { CaretDown, CaretUp, UserCircle } from '@phosphor-icons/react'
 import { ToolCallBadge } from './ToolCallBadge'
 import type { SubagentSpan, SubagentSpanTerminal } from '@/store/chat'
 import type { WsSubagentEndFrame } from '@/lib/ws'
 import { useUiStore } from '@/store/ui'
 import { cn } from '@/lib/utils'
+import { formatDuration } from '@/lib/formatDuration'
+import { getSpanStatusConfig } from '@/lib/toolStatusConfig'
 
 type SubagentEndReason = WsSubagentEndFrame['reason']
 
@@ -31,84 +24,9 @@ function truncateLabel(raw: string): string {
   return clusters.slice(0, 60).join('') + '\u2026'
 }
 
-// ── Duration formatting ───────────────────────────────────────────────────────
-
-function formatDuration(ms?: number): string {
-  if (ms == null) return ''
-  if (ms < 1000) return `${ms}ms`
-  return `${(ms / 1000).toFixed(1)}s`
-}
-
-// ── Status config ─────────────────────────────────────────────────────────────
-
-type SpanStatus = SubagentSpan['status']
-
-interface StatusConfig {
-  icon: React.ReactNode
-  label: string
-  border: string
-  pill: string
-}
-
-function getStatusConfig(status: SpanStatus): StatusConfig {
-  switch (status) {
-    case 'running':
-      return {
-        icon: <ArrowsClockwise size={13} className="animate-spin text-[var(--color-accent)]" aria-hidden="true" />,
-        label: 'working',
-        border: 'border-[var(--color-border)]',
-        pill: 'bg-[var(--color-accent)]/10 text-[var(--color-accent)]',
-      }
-    case 'success':
-      return {
-        icon: <CheckCircle size={13} className="text-[var(--color-success)]" weight="fill" aria-hidden="true" />,
-        label: 'done',
-        border: 'border-[var(--color-success)]/20',
-        pill: 'bg-[var(--color-success)]/10 text-[var(--color-success)]',
-      }
-    case 'error':
-      return {
-        icon: <XCircle size={13} className="text-[var(--color-error)]" weight="fill" aria-hidden="true" />,
-        label: 'failed',
-        border: 'border-[var(--color-error)]/20',
-        pill: 'bg-[var(--color-error)]/10 text-[var(--color-error)]',
-      }
-    case 'cancelled':
-      return {
-        icon: <Prohibit size={13} className="text-[var(--color-cancelled)]" weight="fill" aria-hidden="true" />,
-        label: 'cancelled',
-        border: 'border-[var(--color-cancelled)]/20',
-        pill: 'bg-[var(--color-cancelled)]/10 text-[var(--color-cancelled)]',
-      }
-    case 'interrupted':
-      return {
-        icon: <Prohibit size={13} className="text-[var(--color-muted)]" weight="fill" aria-hidden="true" />,
-        label: 'interrupted',
-        border: 'border-[var(--color-muted)]/20',
-        pill: 'bg-[var(--color-muted)]/10 text-[var(--color-muted)]',
-      }
-    case 'timeout':
-      // W4-2: timeout is treated like interrupted but with a Clock icon
-      return {
-        icon: <Clock size={13} className="text-[var(--color-muted)]" weight="fill" aria-hidden="true" />,
-        label: 'timed out',
-        border: 'border-[var(--color-muted)]/20',
-        pill: 'bg-[var(--color-muted)]/10 text-[var(--color-muted)]',
-      }
-    default: {
-      // W4-6: safe fallback for any unexpected status value arriving from the wire.
-      // Prevents the "unknown status → undefined → render crash" latent bug.
-      const _exhaustive: never = status
-      void _exhaustive
-      return {
-        icon: <Prohibit size={13} className="text-[var(--color-muted)]" weight="fill" aria-hidden="true" />,
-        label: 'unknown',
-        border: 'border-[var(--color-muted)]/20',
-        pill: 'bg-[var(--color-muted)]/10 text-[var(--color-muted)]',
-      }
-    }
-  }
-}
+// ── Duration formatting + status config ──────────────────────────────────────
+// Shared with ActivityPanel.tsx (pill family) — see src/lib/toolStatusConfig.tsx.
+// SubagentBlock uses the defaults: icon size 13, 'running' label "working".
 
 // ── Step count text ───────────────────────────────────────────────────────────
 
@@ -143,7 +61,7 @@ export function SubagentBlock({ span }: SubagentBlockProps) {
 
   // W4-4: narrow to terminal type before accessing durationMs/finalResult.
   const terminal = isTerminal ? (span as SubagentSpanTerminal) : null
-  const config = getStatusConfig(span.status)
+  const config = getSpanStatusConfig(span.status)
   const label = truncateLabel(span.taskLabel ?? '')
   const stepCount = span.steps.length
   const hasFinalResult = Boolean(terminal?.finalResult)

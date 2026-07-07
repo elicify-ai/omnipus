@@ -14,13 +14,25 @@ interface MessageItemProps {
   message: ChatMessage
 }
 
-// Wraps in try/catch because Date parsing can fail on malformed ISO strings
+// toLocaleTimeString() never throws on a malformed/unparseable timestamp — it
+// simply renders the string "Invalid Date".
 function formatTimestamp(ts: string): string {
-  try {
-    return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-  } catch {
-    return ''
+  return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
+// Avatar background/text color: accent-tinted for the user, the agent's own
+// color when known, else a neutral surface fallback.
+function avatarStyle(isUser: boolean, agentColor: string | undefined): React.CSSProperties {
+  if (isUser) {
+    return {
+      backgroundColor: 'color-mix(in srgb, var(--color-accent) 20%, transparent)',
+      color: 'var(--color-accent)',
+    }
   }
+  if (agentColor) {
+    return { backgroundColor: agentColor, color: 'var(--color-secondary)' }
+  }
+  return { backgroundColor: 'var(--color-surface-3)', color: 'var(--color-secondary)' }
 }
 
 export function MessageItem({ message }: MessageItemProps) {
@@ -62,13 +74,7 @@ export function MessageItem({ message }: MessageItemProps) {
           message showed the same Robot regardless of which agent spoke. */}
       <div
         className={cn('shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs')}
-        style={
-          isUser
-            ? { backgroundColor: 'color-mix(in srgb, var(--color-accent) 20%, transparent)', color: 'var(--color-accent)' }
-            : agent?.color
-            ? { backgroundColor: agent.color, color: 'var(--color-secondary)' }
-            : { backgroundColor: 'var(--color-surface-3)', color: 'var(--color-secondary)' }
-        }
+        style={avatarStyle(isUser, agent?.color)}
       >
         {isUser ? (
           <User size={14} weight="bold" />

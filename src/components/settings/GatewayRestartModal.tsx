@@ -26,7 +26,7 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { useUiStore } from '@/store/ui'
-import { usePendingRestart } from '@/store/restart'
+import { usePendingRestart } from '@/hooks/restart'
 import { getErrorMessage, gatewayRestart } from '@/lib/api'
 
 // Poll /health until the gateway responds, then resolve. Times out after

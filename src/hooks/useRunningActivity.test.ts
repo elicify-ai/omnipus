@@ -21,7 +21,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
 import { fetchAgents } from '@/lib/api'
 import { useRunningActivity } from './useRunningActivity'
 
-// ── Wrapper (mirrors src/store/restart.test.ts's QueryClientProvider pattern) ──
+// ── Wrapper (mirrors src/hooks/restart.test.ts's QueryClientProvider pattern) ──
 
 function makeWrapper(client: QueryClient) {
   return function Wrapper({ children }: { children: React.ReactNode }) {

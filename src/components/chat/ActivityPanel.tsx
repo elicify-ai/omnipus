@@ -3,29 +3,23 @@
 //
 // Two sections — "Running now" / "Recently finished" — each hidden entirely
 // when empty. Status badges follow SubagentBlock.tsx's status→style mapping
-// (getStatusConfig there isn't exported, so the same theme tokens are
-// reproduced here rather than inventing new ones — not exported/shared
-// because two things intentionally differ: this row has no per-status
-// border, and the "running" label reads "running" here vs "working" there
-// since a row can be a bash call as well as an agent span).
+// via the shared getSpanStatusConfig helper (src/lib/toolStatusConfig.tsx) —
+// two things intentionally differ here vs SubagentBlock, expressed as options
+// rather than a separate reimplementation: this row doesn't use the `border`
+// field (icon size 12 + no per-status border), and the "running" label reads
+// "running" here vs "working" there, since a row can be a bash call as well
+// as an agent span.
 
 import { useState } from 'react'
-import type { ReactNode } from 'react'
-import {
-  ArrowsClockwise,
-  CheckCircle,
-  XCircle,
-  Prohibit,
-  Clock,
-  CaretDown,
-  CaretUp,
-} from '@phosphor-icons/react'
+import { CaretDown, CaretUp } from '@phosphor-icons/react'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { Badge } from '@/components/ui/badge'
 import { ActivityAvatar } from './ActivityAvatar'
 import { ToolCallBadge } from './ToolCallBadge'
-import type { ActivityItem, ActivityStatus } from '@/hooks/useRunningActivity'
+import type { ActivityItem } from '@/hooks/useRunningActivity'
 import { cn } from '@/lib/utils'
+import { formatDuration } from '@/lib/formatDuration'
+import { getSpanStatusConfig } from '@/lib/toolStatusConfig'
 
 export interface ActivityPanelProps {
   open: boolean
@@ -34,72 +28,9 @@ export interface ActivityPanelProps {
   recentlyFinished: ActivityItem[]
 }
 
-interface StatusPillConfig {
-  icon: ReactNode
-  label: string
-  pill: string
-}
-
-/** Same theme tokens as SubagentBlock.tsx's getStatusConfig (not exported there) — see file header for the two deliberate differences. */
-function getActivityStatusConfig(status: ActivityStatus): StatusPillConfig {
-  switch (status) {
-    case 'running':
-      return {
-        icon: <ArrowsClockwise size={12} className="animate-spin text-[var(--color-accent)]" aria-hidden="true" />,
-        label: 'running',
-        pill: 'bg-[var(--color-accent)]/10 text-[var(--color-accent)]',
-      }
-    case 'success':
-      return {
-        icon: <CheckCircle size={12} className="text-[var(--color-success)]" weight="fill" aria-hidden="true" />,
-        label: 'done',
-        pill: 'bg-[var(--color-success)]/10 text-[var(--color-success)]',
-      }
-    case 'error':
-      return {
-        icon: <XCircle size={12} className="text-[var(--color-error)]" weight="fill" aria-hidden="true" />,
-        label: 'failed',
-        pill: 'bg-[var(--color-error)]/10 text-[var(--color-error)]',
-      }
-    case 'cancelled':
-      return {
-        icon: <Prohibit size={12} className="text-[var(--color-cancelled)]" weight="fill" aria-hidden="true" />,
-        label: 'cancelled',
-        pill: 'bg-[var(--color-cancelled)]/10 text-[var(--color-cancelled)]',
-      }
-    case 'interrupted':
-      return {
-        icon: <Prohibit size={12} className="text-[var(--color-muted)]" weight="fill" aria-hidden="true" />,
-        label: 'interrupted',
-        pill: 'bg-[var(--color-muted)]/10 text-[var(--color-muted)]',
-      }
-    case 'timeout':
-      return {
-        icon: <Clock size={12} className="text-[var(--color-muted)]" weight="fill" aria-hidden="true" />,
-        label: 'timed out',
-        pill: 'bg-[var(--color-muted)]/10 text-[var(--color-muted)]',
-      }
-    default: {
-      const _exhaustive: never = status
-      void _exhaustive
-      return {
-        icon: <Prohibit size={12} className="text-[var(--color-muted)]" weight="fill" aria-hidden="true" />,
-        label: 'unknown',
-        pill: 'bg-[var(--color-muted)]/10 text-[var(--color-muted)]',
-      }
-    }
-  }
-}
-
-function formatDuration(ms?: number): string | null {
-  if (ms == null) return null
-  if (ms < 1000) return `${ms}ms`
-  return `${(ms / 1000).toFixed(1)}s`
-}
-
 function ActivityRow({ item }: { item: ActivityItem }) {
   const [expanded, setExpanded] = useState(false)
-  const config = getActivityStatusConfig(item.status)
+  const config = getSpanStatusConfig(item.status, { size: 12, runningLabel: 'running' })
   const duration = formatDuration(item.durationMs)
   const label = item.kind === 'bash' ? item.command : item.taskLabel
   // Narrowed inline (not via a stored boolean) so `steps` stays typed without a cast.

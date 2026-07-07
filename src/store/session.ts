@@ -2,6 +2,21 @@ import { create } from 'zustand'
 import type { AgentKind, Session } from '@/lib/api'
 import { useConnectionStore } from '@/store/connection'
 import { useWorkspacesStore } from '@/store/workspacesStore'
+import { logError } from '@/lib/telemetry'
+
+// Emit a production telemetry record for a session-management diagnostic
+// condition. Mirrors src/store/chat.ts's `_recordChatDiagnostic` / src/lib/api.ts's
+// `_recordApiSchemaError` / src/lib/ws.ts's `_recordDropped` pattern: DEV and
+// test builds already surface these via the adjacent console.warn call (kept
+// as-is, unchanged), so this only adds a rate-limited structured logError()
+// record in production builds — previously these conditions were
+// console-only, so an operator running a shipped build had no durable signal.
+function _recordSessionDiagnostic(event: string, fields: Record<string, string | number | boolean | null | undefined>): void {
+  if (!import.meta.env.DEV && import.meta.env.MODE !== 'test') {
+    logError({ event, ...fields })
+  }
+}
+
 // syncChatForeground is imported lazily to avoid the chat ↔ session circular init.
 // It is resolved at call-time via a dynamic require-style closure.
 let _syncChatForeground: (() => void) | null = null
@@ -82,6 +97,7 @@ function setChatReplaying(value: boolean): void {
     _chatSetReplaying(value)
   } else {
     console.warn('[session] setChatReplaying called before chat store registered — isReplaying not set')
+    _recordSessionDiagnostic('sessionSetChatReplayingUnregistered', { value })
   }
 }
 
@@ -175,6 +191,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       setChatReplaying(true)
     } else {
       console.warn('[session] attachToSession: no connection — attach_session not sent')
+      _recordSessionDiagnostic('sessionAttachToSessionNoConnection', { sessionId, type })
       set((state) => ({
         activeSessionId: sessionId,
         attachedSessionType: type,

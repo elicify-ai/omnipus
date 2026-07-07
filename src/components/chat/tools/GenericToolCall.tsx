@@ -2,7 +2,6 @@ import { useState } from 'react'
 import {
   Wrench,
   ArrowsClockwise,
-  CheckCircle,
   XCircle,
   Prohibit,
   CaretDown,
@@ -21,6 +20,7 @@ import { fetchToolResult } from '@/lib/api'
 import { humanizeToolName } from '@/lib/humanizeToolName'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { shouldRenderToolCall } from '@/lib/toolVisibility'
+import { getToolBadgeStatusConfig } from '@/lib/toolStatusConfig'
 
 interface GenericToolCallProps {
   toolName: string
@@ -35,12 +35,6 @@ interface GenericToolCallProps {
   defaultCollapsed?: boolean
   /** Session this tool call belongs to. Required to fetch ToolResultRef bodies session-scoped. */
   sessionId?: string
-}
-
-function formatDuration(ms?: number): string {
-  if (!ms) return ''
-  if (ms < 1000) return `${ms}ms`
-  return `${(ms / 1000).toFixed(1)}s`
 }
 
 function safeJson(value: unknown): string {
@@ -305,15 +299,22 @@ export function GenericToolCall({
     return null
   }
 
-  const statusConfig = isRunning
-    ? { icon: <ArrowsClockwise size={12} className="animate-spin text-[var(--color-accent)]" />, label: 'Running...', border: 'border-[var(--color-border)]' }
-    : isCancelled
-    ? { icon: <Prohibit size={12} weight="fill" className="text-[var(--color-muted)]" />, label: 'Cancelled', border: 'border-[var(--color-border)]' }
-    : delegationFailure
-    ? { icon: <Prohibit size={12} weight="fill" className="text-[var(--color-warning)]" />, label: `Delegation denied · ${policyAxisLabel(delegationFailure.policy)}`, border: 'border-[var(--color-warning)]/20' }
-    : isError
-    ? { icon: <XCircle size={12} weight="fill" className="text-[var(--color-error)]" />, label: 'Failed', border: 'border-[var(--color-error)]/20' }
-    : { icon: <CheckCircle size={12} weight="fill" className="text-[var(--color-success)]" />, label: formatDuration(durationMs) || 'Done', border: 'border-[var(--color-success)]/20' }
+  let statusConfig: { icon: React.ReactNode; label: string; border: string }
+  if (isRunning) {
+    statusConfig = getToolBadgeStatusConfig('running', { size: 12 })
+  } else if (isCancelled) {
+    statusConfig = getToolBadgeStatusConfig('cancelled', { size: 12, cancelledVariant: 'muted' })
+  } else if (delegationFailure) {
+    statusConfig = {
+      icon: <Prohibit size={12} weight="fill" className="text-[var(--color-warning)]" />,
+      label: `Delegation denied · ${policyAxisLabel(delegationFailure.policy)}`,
+      border: 'border-[var(--color-warning)]/20',
+    }
+  } else if (isError) {
+    statusConfig = getToolBadgeStatusConfig('error', { size: 12 })
+  } else {
+    statusConfig = getToolBadgeStatusConfig('success', { size: 12, durationMs })
+  }
 
   const hasDetail = !isRunning && (args !== undefined || result !== undefined || error)
 
