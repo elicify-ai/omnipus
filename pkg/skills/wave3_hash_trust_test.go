@@ -116,7 +116,8 @@ func TestHashMismatchDetection(t *testing.T) {
 // BDD Scenario Outline: Install with different trust policies
 // policy=block_unverified, can_verify=cannot → install blocked, audit logged.
 // NOTE: The install pipeline itself returns result.Verified=false when no hash is available.
-// The trust policy blocking is enforced by the caller using policy.EffectiveSkillTrust.
+// The trust policy blocking is enforced by the caller using config.SkillTrustLevel
+// (pkg/config/sandbox.go), wired via pkg/gateway/rest_skill_trust.go.
 
 func TestTrustPolicyBlockUnverified(t *testing.T) {
 	// Traces to: wave3-skill-ecosystem-spec.md line 447 (Scenario Outline: Install with different trust policies)

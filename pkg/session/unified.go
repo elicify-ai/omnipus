@@ -97,6 +97,15 @@ func (us *UnifiedStore) BaseDir() string {
 	return us.baseDir
 }
 
+// removeAllFn is a package-level test seam for ClearAll's per-session-directory
+// removal call. It defaults to os.RemoveAll; tests override it to force a
+// deterministic removal failure without depending on OS permission enforcement
+// (which root bypasses via CAP_DAC_OVERRIDE, making a chmod-based
+// failure-injection test a no-op in CI, which runs as root). Scoped narrowly
+// to ClearAll's one call site — not a general refactor of the package's other
+// os.RemoveAll/os.ReadDir calls.
+var removeAllFn = os.RemoveAll
+
 // validateSessionID rejects IDs that could escape the base directory.
 func validateSessionID(id string) error {
 	if id == "" || strings.Contains(id, "/") || strings.Contains(id, "\\") ||
@@ -858,7 +867,7 @@ func (us *UnifiedStore) ClearAll() (int, error) {
 			continue
 		}
 		dir := filepath.Join(us.baseDir, entry.Name())
-		if err := os.RemoveAll(dir); err != nil {
+		if err := removeAllFn(dir); err != nil {
 			slog.Warn("unified_store: clear all: remove session dir", "dir", dir, "error", err)
 			errs = append(errs, fmt.Errorf("unified_store: clear all: remove session dir %q: %w", entry.Name(), err))
 			continue

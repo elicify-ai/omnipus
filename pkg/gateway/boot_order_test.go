@@ -15,6 +15,10 @@
 package gateway
 
 import (
+	"crypto/rand"
+	"encoding/base64"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,6 +27,48 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 )
+
+// writeCorruptedCredentialsFile writes a credentials.json containing exactly
+// one entry, credName, whose nonce/ciphertext are random bytes rather than a
+// real AES-256-GCM seal produced with fixedHexKey. Decrypting it with ANY key
+// fails GCM tag authentication (credentials.ErrWrongKey) — this simulates a
+// corrupted store entry / wrong-master-key scenario, which is a fundamentally
+// different failure mode than "ref not present in the store"
+// (credentials.NotFoundError, covered by TestGatewayBoot_MissingCredentialRefFailsFast
+// above). The salt is unused by the OMNIPUS_MASTER_KEY unlock path (it only
+// matters for passphrase-derived keys) but is included so the file matches
+// the documented on-disk schema (pkg/credentials/store.go's package doc).
+func writeCorruptedCredentialsFile(t *testing.T, path, credName string) {
+	t.Helper()
+	nonce := make([]byte, 12)
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		t.Fatalf("generate random nonce: %v", err)
+	}
+	ciphertext := make([]byte, 32)
+	if _, err := io.ReadFull(rand.Reader, ciphertext); err != nil {
+		t.Fatalf("generate random ciphertext: %v", err)
+	}
+	salt := make([]byte, 32)
+	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
+		t.Fatalf("generate random salt: %v", err)
+	}
+	content := fmt.Sprintf(`{
+		"version": 1,
+		"salt": %q,
+		"credentials": {
+			%q: {
+				"nonce": %q,
+				"ciphertext": %q
+			}
+		}
+	}`,
+		base64.StdEncoding.EncodeToString(salt),
+		credName,
+		base64.StdEncoding.EncodeToString(nonce),
+		base64.StdEncoding.EncodeToString(ciphertext),
+	)
+	writeBootTestFile(t, path, content)
+}
 
 // fixedHexKey is a deterministic 64-character hex key for use in tests.
 // Using a fixed key avoids Argon2id KDF overhead (which would add ~2s per test).
@@ -172,6 +218,61 @@ func TestGatewayBoot_MissingCredentialRefFailsFast(t *testing.T) {
 	}
 	if !hasNotFound {
 		t.Errorf("bundleErrs must contain a NotFoundError; got: %v", bundleErrs)
+	}
+}
+
+// TestGatewayBoot_CorruptedCredentialForEnabledChannelFailsFast verifies that
+// bootCredentials aborts boot (fatal error, not merely a slog.Warn) when an
+// ENABLED channel's credential ref IS present in the store but fails to
+// decrypt — a corrupted store entry / wrong-master-key scenario. This is a
+// worse failure than a simple NotFoundError (already covered by
+// TestGatewayBoot_MissingCredentialRefFailsFast): the operator believes the
+// channel is configured correctly, so silently continuing with a Warn would
+// let the channel start without a usable credential. This pins the
+// enabledRefFromBundleError escalation branch added alongside the
+// NotFoundError-on-enabled-channel fatal branch in bootCredentials.
+func TestGatewayBoot_CorruptedCredentialForEnabledChannelFailsFast(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("OMNIPUS_MASTER_KEY", fixedHexKey)
+
+	credsPath := filepath.Join(tmpDir, "credentials.json")
+	writeCorruptedCredentialsFile(t, credsPath, "TELEGRAM_TOKEN")
+
+	configPath := filepath.Join(tmpDir, "config.json")
+	writeBootTestFile(t, configPath, `{
+		"version": 1,
+		"channels": {
+			"telegram": {
+				"enabled": true,
+				"token_ref": "TELEGRAM_TOKEN"
+			}
+		},
+		"gateway": { "host": "127.0.0.1", "port": 19996 }
+	}`)
+
+	_, _, _, err := bootCredentials(tmpDir, configPath) //nolint:dogsled
+	if err == nil {
+		t.Fatal(
+			"bootCredentials must fail when an enabled channel's credential ref fails to decrypt (corrupted store entry)",
+		)
+	}
+	if !strings.Contains(err.Error(), "TELEGRAM_TOKEN") {
+		t.Errorf("error must mention the failing ref TELEGRAM_TOKEN; got: %q", err.Error())
+	}
+	// Must route through the enabledRefFromBundleError escalation branch
+	// ("failed to resolve" / "not simply missing"), not the NotFoundError
+	// branch ("not found in store — ensure the credential is stored").
+	if !strings.Contains(err.Error(), "failed to resolve") {
+		t.Errorf(
+			"error must indicate the ref failed to resolve (decrypt failure), not merely be missing; got: %q",
+			err.Error(),
+		)
+	}
+	if strings.Contains(err.Error(), "not found in store") {
+		t.Errorf(
+			"error must NOT be attributed to the NotFoundError branch (ref IS present, just undecryptable); got: %q",
+			err.Error(),
+		)
 	}
 }
 

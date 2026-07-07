@@ -16,6 +16,7 @@
 package session
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -865,5 +866,75 @@ func TestClearAll_ContinuesPastRemovalFailure(t *testing.T) {
 	for _, m := range []*UnifiedMeta{metaGood1, metaGood2} {
 		_, statErr := os.Stat(filepath.Join(store.BaseDir(), m.ID))
 		assert.True(t, os.IsNotExist(statErr), "removable session dir for %s must be gone", m.ID)
+	}
+}
+
+// TestClearAll_ContinuesPastRemovalFailure_InjectedError asserts the exact
+// same aggregate-error behavior as TestClearAll_ContinuesPastRemovalFailure
+// above, but via the removeAllFn package-level test seam instead of chmod'ing
+// a directory to 0500. The chmod-based test is skipped when the test process
+// runs as root (CAP_DAC_OVERRIDE bypasses the permission check) — which is
+// exactly how CI runs it — so that test provides zero coverage of this
+// behavior in CI. This test forces a deterministic os.RemoveAll-shaped error
+// for one specific session directory regardless of privilege level, so it
+// runs identically under root or non-root and actually exercises the
+// aggregation path in CI.
+//
+// BDD: Given 3 session directories where removeAllFn is stubbed to fail for
+// exactly one of them, When ClearAll is called, Then the two unaffected
+// directories are removed and counted, and ClearAll returns a non-nil
+// aggregate error mentioning the failed session's ID alongside the correct
+// partial count.
+//
+// Traces to: pkg/session/unified.go ClearAll's
+// `if err := removeAllFn(dir); err != nil { slog.Warn(...); continue }` path
+// and its final `return removed, errors.Join(errs...)`.
+func TestClearAll_ContinuesPastRemovalFailure_InjectedError(t *testing.T) {
+	store, _ := newTestStoreWithHome(t)
+
+	metaBad, err := store.NewSession(SessionTypeChat, "", "agent-a")
+	require.NoError(t, err)
+	metaGood1, err := store.NewSession(SessionTypeChat, "", "agent-a")
+	require.NoError(t, err)
+	metaGood2, err := store.NewSession(SessionTypeChat, "", "agent-a")
+	require.NoError(t, err)
+
+	badDir := filepath.Join(store.BaseDir(), metaBad.ID)
+	injectedErr := fmt.Errorf("injected removeAllFn failure for %s", metaBad.ID)
+
+	// Override the package-level seam for the duration of this test, save/
+	// restore via t.Cleanup so other tests are unaffected.
+	origRemoveAllFn := removeAllFn
+	t.Cleanup(func() { removeAllFn = origRemoveAllFn })
+	removeAllFn = func(path string) error {
+		if path == badDir {
+			return injectedErr
+		}
+		return origRemoveAllFn(path)
+	}
+
+	removed, err := store.ClearAll()
+
+	require.Error(t, err,
+		"ClearAll must surface a non-nil aggregate error when removeAllFn failed for one session dir")
+	assert.Contains(t, err.Error(), metaBad.ID,
+		"the aggregate error should mention the session whose removal failed")
+	assert.Contains(t, err.Error(), injectedErr.Error(),
+		"the aggregate error should wrap the injected removeAllFn error")
+	assert.Equal(t, 2, removed,
+		"only the 2 unaffected session dirs must be counted; the one whose removeAllFn failed must not be")
+
+	// The bad directory was never actually touched by the real os.RemoveAll
+	// (the stub short-circuited it), so it must still exist, fully intact.
+	_, statErr := os.Stat(badDir)
+	assert.NoError(t, statErr, "the session dir whose removeAllFn failed must still exist on disk")
+	_, statErr = os.Stat(filepath.Join(badDir, "meta.json"))
+	assert.NoError(t, statErr, "meta.json inside the unremoved dir must still be present")
+
+	// The two unaffected directories must be gone (removed via the real
+	// os.RemoveAll passthrough in the stub).
+	for _, m := range []*UnifiedMeta{metaGood1, metaGood2} {
+		_, statErr := os.Stat(filepath.Join(store.BaseDir(), m.ID))
+		assert.True(t, os.IsNotExist(statErr), "unaffected session dir for %s must be gone", m.ID)
 	}
 }

@@ -13,6 +13,7 @@ package gateway
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
@@ -118,5 +119,113 @@ func TestExecuteReload_MarksDegradedOnCredInjectionFailure(t *testing.T) {
 	}
 	if clearedErr != nil {
 		t.Errorf("expected reloadError == nil after ClearDegradedForTest, got %v", clearedErr)
+	}
+}
+
+// TestExecuteReload_RejectsOnCorruptedEnabledChannelCredential verifies that
+// executeReload rejects (marks degraded, does NOT apply) a reload when an
+// ENABLED channel's credential ref is present in the store but fails to
+// decrypt — a corrupted store entry / wrong-master-key scenario, distinct
+// from (and worse than) a simple missing ref. This pins the
+// enabledRefFromBundleError escalation branch in executeReload's channel
+// credential re-resolution step (the reload-side counterpart to
+// TestGatewayBoot_CorruptedCredentialForEnabledChannelFailsFast in
+// boot_order_test.go, which covers the equivalent bootCredentials path).
+//
+// Providers is left empty so credentials.InjectFromConfig (the provider-key
+// step immediately before the channel-credential step) trivially succeeds —
+// this test isolates the channel-credential rejection branch specifically.
+func TestExecuteReload_RejectsOnCorruptedEnabledChannelCredential(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("OMNIPUS_MASTER_KEY", fixedHexKey)
+
+	credsPath := filepath.Join(tmpDir, "credentials.json")
+	writeCorruptedCredentialsFile(t, credsPath, "TELEGRAM_TOKEN")
+
+	credStore := credentials.NewStore(credsPath)
+	if err := credentials.Unlock(credStore); err != nil {
+		t.Fatalf("credentials.Unlock: %v", err)
+	}
+
+	msgBus := bus.NewMessageBus()
+
+	baseCfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: tmpDir,
+				ModelName: "test-model",
+				MaxTokens: 4096,
+			},
+		},
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 19987},
+	}
+
+	p := providers.LLMProvider(&restMockProvider{})
+	al := mustAgentLoop(t, baseCfg, msgBus, p)
+
+	// The new config being reloaded to: an ENABLED telegram channel pointing
+	// at the corrupted credential ref.
+	newCfg := &config.Config{
+		Agents:  baseCfg.Agents,
+		Gateway: baseCfg.Gateway,
+		Channels: map[string]config.ChannelInstanceConfig{
+			"telegram": {
+				Enabled:  true,
+				TokenRef: "TELEGRAM_TOKEN",
+			},
+		},
+	}
+
+	sentinelCM, err := channels.NewManager(baseCfg, credentials.SecretBundle{}, msgBus, nil)
+	if err != nil {
+		t.Fatalf("channels.NewManager: %v", err)
+	}
+	sentinelBundle := credentials.SecretBundle{"sentinel": "value"}
+
+	svc := &services{
+		ChannelManager: sentinelCM,
+		bundle:         sentinelBundle,
+		credStore:      credStore,
+	}
+	svc.reloading.Store(true) // executeReload will Store(false) via defer
+
+	err = executeReload(context.Background(), al, newCfg, &p, svc, msgBus, true)
+	if err == nil {
+		t.Fatal(
+			"expected executeReload to reject the reload when an enabled channel's credential fails to decrypt, got nil error",
+		)
+	}
+	if !strings.Contains(err.Error(), "TELEGRAM_TOKEN") {
+		t.Errorf("reload error must mention the failing ref TELEGRAM_TOKEN; got: %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "failed to resolve") {
+		t.Errorf(
+			"reload error must indicate the ref failed to resolve (decrypt failure), not merely be missing; got: %q",
+			err.Error(),
+		)
+	}
+
+	// Assert degraded state is set — this is how an operator discovers the
+	// rejection via GET /health (SetDegradedFunc surfaces reloadDegraded/
+	// reloadError as a 503 "reason").
+	svc.reloadMu.Lock()
+	isDegraded := svc.reloadDegraded
+	reloadErr := svc.reloadError
+	svc.reloadMu.Unlock()
+
+	if !isDegraded {
+		t.Error("expected reloadDegraded == true after rejected reload")
+	}
+	if reloadErr == nil {
+		t.Error("expected reloadError != nil after rejected reload")
+	}
+
+	// Assert rollback: the previous ChannelManager/bundle must be restored,
+	// not replaced by anything derived from the rejected newCfg.
+	if svc.ChannelManager != sentinelCM {
+		t.Error("expected ChannelManager to be rolled back to sentinel after rejected reload")
+	}
+	if svc.bundle["sentinel"] != "value" {
+		t.Errorf("expected bundle to be rolled back; got %v", svc.bundle)
 	}
 }
