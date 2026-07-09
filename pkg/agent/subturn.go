@@ -608,36 +608,63 @@ func spawnSubTurn(
 		LightCandidates:           baseAgent.LightCandidates,
 		LightProvider:             baseAgent.LightProvider,
 	}
-	// External-cli dispatch runs as a SEPARATE process outside Omnipus's own
-	// LLM-call machinery — runExternalCLISubTurn never consults
-	// Candidates/Provider/ProviderPool — so it is safe to source the run
-	// identity (workspace, model, turn cap, executor config) from the
-	// resolved TARGET here. Native dispatch is deliberately left untouched
-	// (still 100% baseAgent-sourced) to avoid a Model/Candidates/Provider
-	// mismatch in the native LLM-call resolution path, which would be a
-	// larger refactor outside this fix's scope.
-	if dispatchKind == runner.DispatchKindExternalCLI && targetAgent != nil {
-		// FIX 2 (data race): targetAgent is a LIVE registry pointer too — its
-		// Model is protected by targetAgent.mu the same as baseAgent.mu above.
-		// Snapshot under a brief RLock before assigning.
-		targetAgent.mu.RLock()
-		targetModel := targetAgent.Model
-		targetAgent.mu.RUnlock()
+	// The child's tool-policy snapshot lives in an unexported atomic field
+	// (AgentInstance.toolPolicy) that the struct literal above cannot copy —
+	// left unset, LoadToolPolicy() returns nil and FilterToolsByPolicy treats
+	// that as an empty policy, which fails EVERY tool closed to deny
+	// (resolveEffectivePolicyWith: no entry on either side -> deny). Source it
+	// from execSource (the resolved delegate when TargetAgentID matched a real
+	// registry agent, else baseAgent for self-delegation) via the existing
+	// public setter, so the child is governed by the SAME agent's policy its
+	// identity is set to below — not the parent's, and not a silent deny-all.
+	agent.StoreToolPolicy(execSource.LoadToolPolicy())
 
-		// FIX 1 (correctness, HIGH — wrong audit attribution): ID/Name must
-		// also come from the TARGET, not just Workspace/Model/MaxIterations/
-		// Subagents. Without this, childTS.agentID (set from agent.ID by
-		// newTurnState, turn.go:252) stays the PARENT's ID even though the
-		// run executes with the target's workspace/model — the human
-		// tool-approval broadcast (PolicyApprovalReq.AgentID), the transcript
-		// AgentID, and the SubTurnSpawn/End WS payloads would all attribute
-		// the delegated run to the wrong agent.
+	// Identity fields are sourced from the resolved TARGET, for BOTH native
+	// and external-cli dispatch, whenever cfg.TargetAgentID matched a real
+	// registry agent. Model/Candidates/Provider/ProviderPool are deliberately
+	// EXCLUDED even here — those are the mutex-protected fields that drive
+	// the native LLM-call's own provider resolution (see the RLock snapshot
+	// above and AgentInstance.mu's doc comment), and giving every delegate
+	// its own live model/candidates resolution would be a larger refactor
+	// outside this fix's scope.
+	//
+	// Without ID/Name/ContextBuilder swapped for NATIVE dispatch specifically,
+	// a native sub-turn silently keeps running as the PARENT:
+	// ContextBuilder.BuildSystemPrompt() resolves the compiled soul via
+	// cb.agentID, so reusing baseAgent's ContextBuilder here means the
+	// "delegate" literally answers as the parent — observed live: delegating
+	// to Worker (an intentionally soul-less agent) returned Jim's own
+	// compiled persona verbatim. This also fixes the tool-policy split-brain
+	// exposed by that same bug: tools.WithAgentID(turnCtx, ts.agent.ID)
+	// (loop.go) threads agent.ID into the tool-execution context, and
+	// load_tool's canLoad resolver looks up "the calling agent" by that ID
+	// via a fresh al.registry.GetAgent(...) call — so an unswapped ID meant
+	// canLoad was checking the PARENT's real, registry-backed policy while
+	// the final FilterToolsByPolicy call (loop.go) read the child's own
+	// (nil, deny-all) toolPolicy above — two different verdicts for the same
+	// tool, observed live as an infinite load_tool retry loop (load_tool
+	// reports success against the parent's policy, the tool is then absent
+	// from what the model can actually call).
+	if targetAgent != nil {
 		agent.ID = targetAgent.ID
 		agent.Name = targetAgent.Name
 		agent.Workspace = targetAgent.Workspace
-		agent.Model = targetModel
+		agent.ContextBuilder = targetAgent.ContextBuilder
 		agent.MaxIterations = targetAgent.MaxIterations
 		agent.Subagents = targetAgent.Subagents
+	}
+	// External-cli dispatch additionally sources Model from the target: it
+	// runs as a SEPARATE process outside Omnipus's own LLM-call machinery
+	// (runExternalCLISubTurn never consults Candidates/Provider/ProviderPool),
+	// so swapping Model alone carries none of the native-path risk above.
+	if dispatchKind == runner.DispatchKindExternalCLI && targetAgent != nil {
+		// targetAgent is a LIVE registry pointer too — its Model is protected
+		// by targetAgent.mu the same as baseAgent.mu above. Snapshot under a
+		// brief RLock before assigning.
+		targetAgent.mu.RLock()
+		targetModel := targetAgent.Model
+		targetAgent.mu.RUnlock()
+		agent.Model = targetModel
 	}
 
 	// Tool-approval grant inheritance (consent boundary — delegation): the
@@ -671,8 +698,23 @@ func spawnSubTurn(
 	// UNCHANGED by that merge, just re-expressed against the single tool name:
 	//   - delegate: the unified delegation tool (async AND sync modes)
 	//   - handoff:  agent switch
-	if baseAgent.Tools != nil {
-		agent.Tools = baseAgent.Tools.CloneExcept(tools.ExcludedDelegate, tools.ExcludedHandoff)
+	// Sourced from execSource (the resolved delegate, or baseAgent for
+	// self-delegation) — NOT unconditionally baseAgent. Workspace-scoped
+	// tools (read_file/write_file/edit_file/bash/...) bind their root
+	// directory ONCE, at NewAgentInstance construction time
+	// (tools.NewReadFileTool(workspace, ...), tools.NewExecToolWithConfig
+	// (workspace, ...)) — CloneExcept is a shallow filter that copies the
+	// SAME underlying tool pointers, it does not rebind them. Cloning from
+	// baseAgent.Tools regardless of delegation target would leave a native
+	// delegate's actual file/bash sandbox boundary silently pinned to the
+	// PARENT's workspace even after the identity/ContextBuilder swap above
+	// says "you are the target" — a declared-vs-enforced mismatch and a real
+	// data-boundary gap between parent and delegate workspaces. Cloning from
+	// execSource.Tools instead reuses the TARGET's own already-correctly
+	// -workspace-bound tool objects, the same pattern already used for
+	// ContextBuilder.
+	if execSource.Tools != nil {
+		agent.Tools = execSource.Tools.CloneExcept(tools.ExcludedDelegate, tools.ExcludedHandoff)
 		// Log the constructed registry so operators can debug "my subagent has no tools" issues.
 		slog.Info("subturn: child registry constructed",
 			"excluded", []string{"delegate", "hand_off"},
