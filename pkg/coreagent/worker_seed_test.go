@@ -158,20 +158,50 @@ func TestSeedConfig_DoesNotReseedExplicitEmptyDelegation(t *testing.T) {
 		"SeedConfig must NOT re-seed the trust graph over an operator's explicit deny-all policy")
 }
 
-// TestWorkerHasNoPersistentMemoryTools verifies the worker gets ephemeral memory
-// only: the persistent-memory tools are denied so it never relies on a private
-// memory room (scope: no persistent room required for workers).
-func TestWorkerHasNoPersistentMemoryTools(t *testing.T) {
+// TestWorkerToolPolicyTightensGlobalCeiling verifies the worker's own policy
+// map is SPARSE: channels, providers, platform, most of agents (list_agents
+// excepted), most of tasks (update_task/set_todos/list_tasks excepted), and
+// workspaces are tightened to explicit "deny" — but every other tool
+// (including the persistent-memory tools) is deliberately ABSENT from the
+// worker's own map, so it inherits the seeded global ceiling
+// (sandbox.tool_policies, "allow") via the coverage validator's OR-semantics.
+// This is an operator-confirmed design choice, not a gap — see
+// pkg/coreagent/core.go's coreAgentSeed IDWorker branch and
+// tightenGlobalCeiling.
+func TestWorkerToolPolicyTightensGlobalCeiling(t *testing.T) {
 	cfg := &config.Config{}
 	require.True(t, coreagent.SeedConfig(cfg))
 	worker := findSeeded(t, cfg, string(coreagent.IDWorker))
 
 	require.NotNil(t, worker.Tools)
 	pol := worker.Tools.Builtin.Policies
-	for _, tool := range []string{"remember", "recall_memory", "run_retrospective"} {
-		assert.Equal(t, config.ToolPolicyDeny, pol[tool],
-			"worker must deny persistent-memory tool %q (ephemeral memory only)", tool)
+
+	// Tightened past the global ceiling to an explicit "deny".
+	for _, tool := range []string{
+		"enable_channel", "configure_channel", "disable_channel", "list_channels", "test_channel",
+		"configure_provider", "list_providers", "test_provider", "list_models",
+		"get_config", "set_config", "run_doctor", "get_usage", "navigate",
+		"create_agent", "update_agent", "delete_agent", "read_agent_metadata", "write_agent_metadata",
+		"create_task", "delete_task", "create_task_in_workspace", "update_task_in_workspace",
+		"delete_task_in_workspace", "list_tasks_in_workspace",
+		"create_workspace", "update_workspace", "delete_workspace", "list_workspaces", "get_workspace",
+	} {
+		got, ok := pol[tool]
+		require.True(t, ok, "worker must have an explicit deny for tightened tool %q", tool)
+		assert.Equal(t, config.ToolPolicyDeny, got, "worker tool %q must be explicit 'deny'", tool)
 	}
+
+	// Deliberately absent from the worker's own map — inherits the global
+	// ceiling's "allow": the 3 named task exceptions, list_agents, and every
+	// tool outside the 6 tightened categories (e.g. the memory tools).
+	for _, tool := range []string{
+		"list_agents", "update_task", "set_todos", "list_tasks",
+		"remember", "recall_memory", "run_retrospective",
+	} {
+		_, ok := pol[tool]
+		assert.False(t, ok, "worker must NOT have its own entry for %q — it inherits the global ceiling", tool)
+	}
+
 	// "system.*" was never a real tool name (dead wildcard) — it must never
 	// appear as a key.
 	_, hasRail := pol["system.*"]
