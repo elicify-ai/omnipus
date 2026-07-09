@@ -273,6 +273,32 @@ func AllStaticToolNames() []string {
 	return out
 }
 
+// validateOverrideKeys panics if any key in overrides is not a member of
+// allStaticToolNames. Shared typo/rename-safety net for denyAllThenOverride
+// and tightenGlobalCeiling: every call site's override map is a hardcoded Go
+// literal (never user/request/config-derived — NewCustomAgentToolsCfg runs
+// per agent-creation request, but its override keys are still compile-time
+// literals, not data), so a panic — an immediate, loud test/boot/first-call
+// failure — is the right disposition here, not an error return that a
+// caller could plausibly ignore.
+func validateOverrideKeys(overrides map[string]config.ToolPolicy) {
+	for name := range overrides {
+		known := false
+		for _, n := range allStaticToolNames {
+			if n == name {
+				known = true
+				break
+			}
+		}
+		if !known {
+			panic(fmt.Sprintf(
+				"tool-policy override for unknown tool %q — not in allStaticToolNames (typo, or a tool renamed since this seed was written?)",
+				name,
+			))
+		}
+	}
+}
+
 // denyAllThenOverride returns a fully-enumerated policy map covering every
 // name in allStaticToolNames, starting every tool at "deny" and then applying
 // the given overrides. This is the mechanism the no-default-policy-fallback
@@ -280,54 +306,115 @@ func AllStaticToolNames() []string {
 // there is no DefaultPolicy field and no code-level allow/deny fallback. The
 // returned map is an independent allocation — callers may mutate it safely.
 //
-// overrides keys MUST already be members of allStaticToolNames — this is
-// checked and panics loudly on any unrecognized key, rather than silently
-// creating a dead, inert entry that reviewers/tests won't catch (coverage
-// validation only checks for MISSING keys, never extra/unrecognized ones,
-// so a typo'd or retired tool name here would otherwise leave the tool the
-// caller actually meant to override stuck at its "deny" default with no
-// signal anywhere). Every call site's override map is a hardcoded Go literal
-// (never user/request/config-derived — NewCustomAgentToolsCfg runs per
-// agent-creation request, but its override keys are still compile-time
-// literals, not data), so a panic — an immediate, loud test/boot/first-call
-// failure — is the right disposition here, not an error return that a
-// caller could plausibly ignore.
+// overrides keys MUST already be members of allStaticToolNames — see
+// validateOverrideKeys. Coverage validation only checks for MISSING keys,
+// never extra/unrecognized ones, so a typo'd or retired tool name here would
+// otherwise leave the tool the caller actually meant to override stuck at its
+// "deny" default with no signal anywhere.
 func denyAllThenOverride(overrides map[string]config.ToolPolicy) map[string]config.ToolPolicy {
+	validateOverrideKeys(overrides)
 	out := make(map[string]config.ToolPolicy, len(allStaticToolNames))
 	for _, name := range allStaticToolNames {
 		out[name] = config.ToolPolicyDeny
 	}
 	for name, policy := range overrides {
-		if _, known := out[name]; !known {
-			panic(fmt.Sprintf(
-				"denyAllThenOverride: override for unknown tool %q — not in allStaticToolNames (typo, or a tool renamed since this seed was written?)",
-				name,
-			))
-		}
 		out[name] = policy
 	}
 	return out
 }
 
-// coreAgentSeed returns the constructor-seeded, fully-enumerated policy map
-// for the named core agent (FR-010, FR-022). The map has one literal entry
-// per name in allStaticToolNames — built via denyAllThenOverride, so every
-// tool is explicitly "allow", "ask", or "deny"; there is no default-policy
-// fallback for any tool the map doesn't mention.
+// tightenGlobalCeiling returns a SPARSE policy map containing only the given
+// overrides (validated against allStaticToolNames — same typo/rename safety
+// net as denyAllThenOverride). Unlike denyAllThenOverride, every tool NOT
+// listed here is deliberately left absent from the returned map, not filled
+// with "deny" — the boot-time/write-time coverage validator
+// (config.ValidateToolPolicyCoverage) is OR-based per (agent, tool): a tool
+// missing from an agent's own policy map is still covered as long as the
+// global ceiling (sandbox.tool_policies, pkg/config/defaults.go) has an entry
+// for it, and the runtime filter resolves global x agent as
+// most-restrictive-wins (pkg/agent/instance.go:agentToolsCfgToPolicy) — so an
+// absent key here means "inherit the global default for this tool," not
+// "denied." Use this for a seed that is meant to track the global ceiling
+// except for specific, named tightenings.
+func tightenGlobalCeiling(overrides map[string]config.ToolPolicy) map[string]config.ToolPolicy {
+	validateOverrideKeys(overrides)
+	out := make(map[string]config.ToolPolicy, len(overrides))
+	for name, policy := range overrides {
+		out[name] = policy
+	}
+	return out
+}
+
+// coreAgentSeed returns the constructor-seeded policy map for the named core
+// agent (FR-010, FR-022). For every agent EXCEPT IDWorker, the map is
+// fully-enumerated (one literal entry per name in allStaticToolNames, built
+// via denyAllThenOverride) so every tool is explicitly "allow", "ask", or
+// "deny" with no default-policy fallback. IDWorker is the one deliberate
+// exception — see the tightenGlobalCeiling call below.
 //
 // All four base agents (Mia, Jim, Ava, Ray) are LEAST-PRIVILEGE: deny-by-default
 // with an explicit allow-list for exactly the tools their role needs. The
-// delegation-only subagent tier (IDWorker, IDPlanner, IDExplorer, IDResearcher)
-// is likewise deny-by-default with its own narrow, role-appropriate allow-list —
-// the legacy allow-by-default + dead "system.*" wildcard rail is retired
-// entirely; "system.*" matched zero real tool names (a leftover from a
-// since-renamed tool family), so it never actually rationed anything.
+// seeded specialists (IDPlanner, IDExplorer, IDResearcher) are likewise
+// deny-by-default with their own narrow, role-appropriate allow-list — the
+// legacy allow-by-default + dead "system.*" wildcard rail is retired entirely;
+// "system.*" matched zero real tool names (a leftover from a since-renamed
+// tool family), so it never actually rationed anything.
 //
 // The returned map is an independent allocation — callers may mutate it safely.
 func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 	allow := config.ToolPolicyAllow
-	// The delegation-only subagent tier (Worker + the three seeded specialists)
-	// is a leaf/near-leaf surface: narrower and more predictable than the base
+	deny := config.ToolPolicyDeny
+	if id == IDWorker {
+		// Worker tracks the seeded global tool-policy ceiling
+		// (sandbox.tool_policies, pkg/config/defaults.go) for every tool NOT
+		// listed here — a deliberate design choice (operator-confirmed), not
+		// an oversight: everything absent from this map inherits the global
+		// default via coverage-validator OR-semantics
+		// (config.ValidateToolPolicyCoverage). Only the categories below are
+		// tightened past the global ceiling to "deny": channels, providers,
+		// platform, most of agents (list_agents stays open), most of tasks
+		// (list_tasks/update_task/set_todos stay open), and workspaces.
+		return tightenGlobalCeiling(map[string]config.ToolPolicy{
+			// --- Channels ---
+			"enable_channel":    deny,
+			"configure_channel": deny,
+			"disable_channel":   deny,
+			"list_channels":     deny,
+			"test_channel":      deny,
+			// --- Providers ---
+			"configure_provider": deny,
+			"list_providers":     deny,
+			"test_provider":      deny,
+			"list_models":        deny,
+			// --- Platform ---
+			"get_config": deny,
+			"set_config": deny,
+			"run_doctor": deny,
+			"get_usage":  deny,
+			"navigate":   deny,
+			// --- Agents (list_agents stays at the global default) ---
+			"create_agent":         deny,
+			"update_agent":         deny,
+			"delete_agent":         deny,
+			"read_agent_metadata":  deny,
+			"write_agent_metadata": deny,
+			// --- Tasks (update_task/set_todos/list_tasks stay at the global default) ---
+			"create_task":              deny,
+			"delete_task":              deny,
+			"create_task_in_workspace": deny,
+			"update_task_in_workspace": deny,
+			"delete_task_in_workspace": deny,
+			"list_tasks_in_workspace":  deny,
+			// --- Workspaces ---
+			"create_workspace": deny,
+			"update_workspace": deny,
+			"delete_workspace": deny,
+			"list_workspaces":  deny,
+			"get_workspace":    deny,
+		})
+	}
+	// The delegation-only specialist tier (Planner/Explorer/Researcher) is a
+	// leaf/near-leaf surface: narrower and more predictable than the base
 	// agents. Deny-by-default; only the tools each role plausibly needs are
 	// allowed. None of these ever get bash or any system-management tool
 	// (create_agent, set_config, add_mcp_server, …) — those stay denied.
@@ -337,18 +424,6 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			"send_message": allow,
 		}
 		switch id {
-		case IDWorker:
-			// General-purpose worker: executes one delegated task — file
-			// read/write and light web lookups. No task management (it does
-			// the task, it doesn't manage the DAG), no persistent memory
-			// (ephemeral/run-log only — "no persistent room" by design), no
-			// onward delegation (a leaf in the trust graph).
-			overrides["read_file"] = allow
-			overrides["write_file"] = allow
-			overrides["edit_file"] = allow
-			overrides["list_directory"] = allow
-			overrides["search_web"] = allow
-			overrides["fetch_url"] = allow
 		case IDPlanner:
 			// Decomposes a goal into a task DAG, delegating to Explorer/
 			// Researcher for context (bounded depth in the trust graph).
@@ -728,7 +803,17 @@ func coreAgentDelegation(id CoreAgentID) *config.DelegationPolicy {
 		}
 	default:
 		// Explorer, Researcher, and the generic worker are leaves: no onward
-		// delegation by default.
+		// delegation by default. For IDWorker specifically this nil is
+		// load-bearing, not incidental: the worker's tool-policy map
+		// (coreAgentSeed's IDWorker branch) deliberately leaves "delegate"
+		// absent so it inherits the global ceiling's "allow" — the delegate
+		// tool's registration-time gates independently require a non-nil
+		// DelegationPolicy (or a workspace delegation-graph edge) before
+		// onward delegation is reachable, so today "delegate: allow" on the
+		// worker is inert. If a future change ever seeds a delegation edge
+		// FROM the worker, that edge plus this inherited "allow" would
+		// combine to make onward delegation real — revisit the worker's
+		// tool-policy overrides at the same time.
 		return nil
 	}
 }
