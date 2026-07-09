@@ -253,25 +253,110 @@ func DefaultConfig() *Config {
 			LogLevel:  "warn",
 		},
 		Sandbox: OmnipusSandboxConfig{
-			// Seeded, per-tool baseline for a fresh install (v0.2 pentest hardening):
-			// a handful of irreversible/destructive actions ask for confirmation;
-			// every other static builtin tool's coverage comes from an explicit
-			// per-agent tools.builtin.policies entry (seeded in
-			// pkg/coreagent/core.go) — there is no default-policy fallback
-			// (CLAUDE.md hard constraint 6; config.ValidateToolPolicyCoverage
-			// enforces this at boot and at every agent write). This map is a
-			// genuine configuration value, not resolution-code logic — visible in
+			// Seeded, fully-enumerated GLOBAL CEILING for a fresh install: every
+			// static builtin tool defaults to "allow" except irreversible
+			// delete_*/remove_* actions, which ask for confirmation. This is a
+			// ceiling, not a grant — the runtime filter resolves global x agent
+			// as most-restrictive-wins (pkg/agent/instance.go:agentToolsCfgToPolicy;
+			// "a global deny always blocks"), so a global "allow" here can never
+			// loosen an agent's own, independently-seeded policy
+			// (pkg/coreagent/core.go's per-agent tools.builtin.policies, which
+			// stays deny-by-default least-privilege per role). An operator/agent
+			// policy MAY be set stricter than this ceiling (e.g. deny a delete_*
+			// tool this map asks for) but never looser (e.g. allow one) — matching
+			// the same one-line rule config.ValidateToolPolicyCoverage enforces
+			// structurally: no default-policy fallback, only explicit, literal
+			// entries (CLAUDE.md hard constraint 6). This map is a genuine
+			// configuration value, not resolution-code logic — visible in
 			// config.json's sandbox.tool_policies and editable at any time via
 			// Settings -> Security -> Tool Policies or PUT /api/v1/security/tool-policies,
-			// exactly like any operator-set entry. Deliberately narrow: irreversible
-			// deletions only. delete_task_in_workspace stays allow (tasks are not
-			// considered destructive enough to warrant a prompt); disable_channel is
-			// reversible and also stays allow.
+			// exactly like any operator-set entry.
+			//
+			// Every entry below mirrors pkg/coreagent/core.go's allStaticToolNames
+			// literal-for-literal (73 tools: 31 general + 7 browser + 35 sysagent) —
+			// pkg/config cannot import pkg/coreagent (coreagent already imports
+			// config, so the reverse would cycle), so this list is a second,
+			// independent hardcoded literal. A drift between the two is caught
+			// loudly at boot by the same coverage validator, not silently ignored.
 			ToolPolicies: map[string]string{
-				"delete_agent":      "ask",
-				"delete_workspace":  "ask",
-				"remove_mcp_server": "ask",
-				"remove_skill":      "ask",
+				// --- General builtin tools ---
+				"bash":              "allow",
+				"read_file":         "allow",
+				"write_file":        "allow",
+				"list_directory":    "allow",
+				"edit_file":         "allow",
+				"append_file":       "allow",
+				"search_web":        "allow",
+				"fetch_url":         "allow",
+				"send_message":      "allow",
+				"hand_off":          "allow",
+				"return_to_default": "allow",
+				"send_file":         "allow",
+				"find_skills":       "allow",
+				"install_skill":     "allow",
+				"delegate":          "allow",
+				"list_tasks":        "allow",
+				"create_task":       "allow",
+				"update_task":       "allow",
+				"delete_task":       "ask", // irreversible delete
+				"list_agents":       "allow",
+				"remember":          "allow",
+				"recall_memory":     "allow",
+				"run_retrospective": "allow",
+				"serve_web":         "allow",
+				"set_todos":         "allow",
+				"read_inbox":        "allow",
+				"search_email":      "allow",
+				"read_message":      "allow",
+				"send_email":        "allow",
+				"reply":             "allow",
+				"load_tool":         "allow",
+
+				// --- Browser automation tools ---
+				"browser_navigate":   "allow",
+				"browser_click":      "allow",
+				"browser_type":       "allow",
+				"browser_screenshot": "allow",
+				"browser_get_text":   "allow",
+				"browser_wait":       "allow",
+				"browser_evaluate":   "allow",
+
+				// --- Sysagent management tools ---
+				"navigate":                 "allow",
+				"create_workspace":         "allow",
+				"update_workspace":         "allow",
+				"delete_workspace":         "ask", // irreversible delete
+				"list_workspaces":          "allow",
+				"get_workspace":            "allow",
+				"read_agent_metadata":      "allow",
+				"write_agent_metadata":     "allow",
+				"configure_provider":       "allow",
+				"list_providers":           "allow",
+				"test_provider":            "allow",
+				"list_models":              "allow",
+				"run_doctor":               "allow",
+				"get_usage":                "allow",
+				"add_mcp_server":           "allow",
+				"remove_mcp_server":        "ask", // irreversible delete
+				"list_mcp_servers":         "allow",
+				"create_skill":             "allow",
+				"edit_skill":               "allow",
+				"create_task_in_workspace": "allow",
+				"update_task_in_workspace": "allow",
+				"delete_task_in_workspace": "ask", // irreversible delete
+				"list_tasks_in_workspace":  "allow",
+				"remove_skill":             "ask", // irreversible delete
+				"list_skills":              "allow",
+				"enable_channel":           "allow",
+				"configure_channel":        "allow",
+				"disable_channel":          "allow", // reversible, not a delete
+				"list_channels":            "allow",
+				"test_channel":             "allow",
+				"get_config":               "allow",
+				"set_config":               "allow",
+				"create_agent":             "allow",
+				"update_agent":             "allow",
+				"delete_agent":             "ask", // irreversible delete
 			},
 		},
 		Tools: ToolsConfig{
