@@ -315,20 +315,22 @@ func (p *identityCapturingProvider) snapshot() (model, workspace, agentID string
 	return p.sawModel, p.sawWorkspace, p.sawAgentID, p.calls
 }
 
-// TestSpawnSubTurn_NativeDispatch_AdoptsTargetIdentityKeepsParentModel proves
-// the CURRENT (post-identity-fix) split: for a NATIVE target, spawnSubTurn
-// adopts the TARGET's Workspace/ID/Name/ContextBuilder (so the sub-turn's
-// system prompt, memory, skills, and file/bash cwd are genuinely the
-// delegate's own — the pre-fix bug this replaces had a native delegate
-// silently answering as the PARENT, verbatim, because it reused the parent's
-// own ContextBuilder), while Model/Candidates/Provider/ProviderPool stay the
-// PARENT's — those are the mutex-protected fields that drive the native
-// LLM-call's own provider resolution, and swapping Model alone without also
-// rebuilding Candidates/ProviderPool would risk a "model configured but no
-// matching provider" mismatch. A regression that widened the swap to include
-// Model (or narrowed it back to skip Workspace/ID/ContextBuilder for native)
-// would violate one half of this split.
-func TestSpawnSubTurn_NativeDispatch_AdoptsTargetIdentityKeepsParentModel(t *testing.T) {
+// TestSpawnSubTurn_NativeDispatch_AdoptsFullTargetIdentityIncludingModel
+// proves the operator-confirmed no-inheritance principle: a delegated
+// sub-turn inherits NOTHING from the parent — delegating to an agent means
+// running that agent's own real instance. For a NATIVE target, spawnSubTurn
+// adopts the TARGET's Workspace/ID/Name/ContextBuilder/Model (so the
+// sub-turn's system prompt, memory, skills, file/bash cwd, AND the model it
+// actually thinks with are genuinely the delegate's own). An earlier version
+// of this fix deliberately kept Model/Candidates/Provider/ProviderPool as the
+// PARENT's (citing a mutex/mismatch risk) — that was superseded: the risk is
+// resolved by reading the WHOLE Model/Provider/Candidates/ThinkingLevel quad
+// from the SAME source (execSource) under one lock, never mixing sources.
+// The identity-leak bug this test also guards against: reusing the parent's
+// own ContextBuilder meant a delegate answered AS the parent — observed live,
+// delegating to Worker (an intentionally soul-less agent) returned Jim's own
+// compiled persona verbatim.
+func TestSpawnSubTurn_NativeDispatch_AdoptsFullTargetIdentityIncludingModel(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv(config.EnvHome, home)
 
@@ -402,19 +404,19 @@ func TestSpawnSubTurn_NativeDispatch_AdoptsTargetIdentityKeepsParentModel(t *tes
 	if calls == 0 {
 		t.Fatal("mock provider Chat was never called — native dispatch did not run")
 	}
-	// Model stays the PARENT's — native dispatch deliberately does not adopt
-	// the target's Model (see the mutex/ProviderPool rationale above).
-	if sawModel != parent.Model {
-		t.Errorf("LLM call model = %q, want the PARENT's model %q (native dispatch must not adopt the target's Model)",
-			sawModel, parent.Model)
+	// Model DOES come from the TARGET — no inheritance from the parent for
+	// ANY agent-level setting, including which model the delegate thinks
+	// with.
+	if sawModel != target.Model {
+		t.Errorf("LLM call model = %q, want the TARGET's model %q (native dispatch must not inherit the parent's Model)",
+			sawModel, target.Model)
 	}
-	// Workspace DOES come from the TARGET now — the identity fix's whole
-	// point is that the sub-turn's file/bash cwd and ContextBuilder-resolved
-	// context (SOUL.md, memory, skills) are the delegate's own, not the
-	// parent's.
+	// Workspace comes from the TARGET too — the identity fix's whole point is
+	// that the sub-turn's file/bash cwd and ContextBuilder-resolved context
+	// (SOUL.md, memory, skills) are the delegate's own, not the parent's.
 	if sawWorkspace != target.Workspace {
 		t.Errorf(
-			"childTS.agent.Workspace = %q, want the TARGET's workspace %q (native dispatch must adopt the target's identity, just not its Model)",
+			"childTS.agent.Workspace = %q, want the TARGET's workspace %q (native dispatch must adopt the target's full identity)",
 			sawWorkspace,
 			target.Workspace,
 		)
@@ -769,6 +771,157 @@ func TestSpawnSubTurn_NativeDispatch_AdoptsTargetWorkspaceForFileTools(t *testin
 			"read_file result = %q, want it to contain the TARGET's file content %q (native dispatch must adopt the target's own workspace-bound tool objects, not just the Workspace string field)",
 			toolContent, targetContent,
 		)
+	}
+}
+
+// providerPoolCapturingProvider wraps a real providers.LLMProvider and
+// records, via turnStateFromContext (the same context path every other
+// capturing provider in this file uses), whether the sub-turn's OWN
+// AgentInstance.providerPool was ever populated — direct field access is
+// legal here (same package as AgentInstance). Wrapping (rather than
+// stubbing) a real provider is necessary because buildProviderPool only
+// publishes a non-nil pool when it can actually resolve+construct a
+// provider for at least one candidate (findModelConfigForProvider /
+// CreateProviderFromConfig against real cfg.Providers entries) — a bare
+// "mock" provider config with no matching cfg.Providers entry always yields
+// an empty pool, which buildProviderPool folds to nil, making it
+// indistinguishable from "never copied" (the exact bug this test guards
+// against).
+type providerPoolCapturingProvider struct {
+	wrapped    providers.LLMProvider
+	mu         sync.Mutex
+	sawPoolNil bool
+	calls      int
+}
+
+func (p *providerPoolCapturingProvider) Chat(
+	ctx context.Context,
+	messages []providers.Message,
+	toolDefs []providers.ToolDefinition,
+	model string,
+	opts map[string]any,
+) (*providers.LLMResponse, error) {
+	p.mu.Lock()
+	p.calls++
+	ts := turnStateFromContext(ctx)
+	if ts == nil || ts.agent == nil {
+		p.sawPoolNil = true
+	} else if ts.agent.providerPool.Load() == nil {
+		p.sawPoolNil = true
+	}
+	p.mu.Unlock()
+	return p.wrapped.Chat(ctx, messages, toolDefs, model, opts)
+}
+
+func (p *providerPoolCapturingProvider) GetDefaultModel() string { return p.wrapped.GetDefaultModel() }
+
+func (p *providerPoolCapturingProvider) snapshot() (poolNil bool, calls int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.sawPoolNil, p.calls
+}
+
+// TestSpawnSubTurn_ProviderPoolCopiedFromParent is a regression guard for the
+// deferred follow-up the security-lead review surfaced alongside the
+// identity/policy/filesystem fix above: AgentInstance.providerPool is an
+// unexported atomic field the struct literal in spawnSubTurn cannot copy,
+// same as toolPolicy — left unset, GetProviderForCandidate silently falls
+// back to agent.Provider for every FR-007 provider-pinned fallback
+// candidate, in every sub-turn (native or external-cli), not just ones with
+// a resolved delegation target. This test asserts the child's pool is
+// non-nil — i.e., genuinely copied from baseAgent, not left at its
+// atomic.Pointer zero value — using a plain self-delegation (no
+// TargetAgentID) since the pool is baseAgent-sourced unconditionally, not
+// gated on a resolved target. Config mirrors newPoolTestConfig
+// (provider_pool_test.go) — two distinct configured providers are required
+// for buildProviderPool to actually publish a non-nil pool at all (see
+// providerPoolCapturingProvider's doc comment).
+func TestSpawnSubTurn_ProviderPoolCopiedFromParent(t *testing.T) {
+	t.Setenv("W4_17_OPENROUTER_KEY_SUBTURN", "or-key")
+	t.Setenv("W4_17_ANTHROPIC_KEY_SUBTURN", "anth-key")
+
+	home := t.TempDir()
+	t.Setenv(config.EnvHome, home)
+
+	parentWorkspace := t.TempDir()
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         parentWorkspace,
+				Provider:          "openrouter",
+				ModelName:         "openrouter-default",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+		},
+		Providers: []*config.ModelConfig{
+			{
+				ModelName: "openrouter-default",
+				Model:     "openrouter/anthropic/claude-sonnet-4.6",
+				Provider:  "openrouter",
+				APIBase:   "https://openrouter.ai/api/v1",
+				APIKeyRef: "W4_17_OPENROUTER_KEY_SUBTURN",
+			},
+			{
+				ModelName: "anthropic-haiku",
+				Model:     "claude-haiku-4-5-20251001",
+				Provider:  "anthropic",
+				APIBase:   "https://api.anthropic.com",
+				APIKeyRef: "W4_17_ANTHROPIC_KEY_SUBTURN",
+			},
+		},
+	}
+	// The WRAPPED provider (what actually answers Chat()) is a plain mock —
+	// no network call, always succeeds. cfg.Providers above is what matters
+	// for buildProviderPool: it calls providers.CreateProviderFromConfig
+	// directly against those entries to populate the pool, entirely
+	// independent of whichever provider is passed as this agent's primary.
+	// Those pool-entry provider objects are never invoked by this test (only
+	// their presence in the pool is asserted), so they need no real network
+	// connectivity either.
+	recorder := &providerPoolCapturingProvider{wrapped: &simpleMockProviderAPI{response: "ok"}}
+	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), recorder)
+
+	parent := al.registry.GetDefaultAgent()
+	if parent == nil {
+		t.Fatal("test setup: no default agent")
+	}
+	if parent.providerPool.Load() == nil {
+		t.Fatal("test setup invariant broken: parent's own providerPool is nil — NewAgentInstance did not publish one, this test cannot distinguish copied-vs-not")
+	}
+
+	parentTS := &turnState{
+		ctx:            context.Background(),
+		turnID:         "parent-provider-pool",
+		depth:          0,
+		childTurnIDs:   []string{},
+		pendingResults: make(chan *tools.ToolResult, 4),
+		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
+		session:        &ephemeralSessionStore{},
+		agent:          parent,
+	}
+
+	spawnCtx := withSpawnToolCallID(context.Background(), "test-spawn-call-provider-pool")
+	result, err := spawnSubTurn(spawnCtx, al, parentTS, SubTurnConfig{
+		Model:        "sub-turn-config-model-unused-for-target-resolution",
+		SystemPrompt: "do the task",
+		// TargetAgentID intentionally empty — self-delegation; the pool copy
+		// is unconditional, not gated on a resolved target.
+		Async: false,
+	})
+	if err != nil {
+		t.Fatalf("spawnSubTurn error: %v", err)
+	}
+	if result == nil || result.Err != nil {
+		t.Fatalf("expected a successful result, got %+v", result)
+	}
+
+	poolNil, calls := recorder.snapshot()
+	if calls == 0 {
+		t.Fatal("mock provider Chat was never called — sub-turn did not run")
+	}
+	if poolNil {
+		t.Error("child sub-turn's providerPool is nil — not copied from baseAgent (FR-007 provider-pinned fallback candidates would silently fall back to the primary provider)")
 	}
 }
 

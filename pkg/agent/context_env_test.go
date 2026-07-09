@@ -265,16 +265,19 @@ func TestContextBuilder_Cache_InvalidatesOnLastSessionWrite(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // #63 — TestSubturn_ContextBuilderPointerShared
-// Traces to: env-awareness-and-memory-spec.md, subturn.go:402
-// Child agent struct literal assigns ContextBuilder: baseAgent.ContextBuilder.
-// We verify pointer equality between parent and child CB by directly mirroring
-// the struct-literal assignment pattern.
+// Traces to: env-awareness-and-memory-spec.md, subturn.go.
+// Child agent struct literal assigns ContextBuilder: execSource.ContextBuilder
+// — execSource is the resolved delegation TARGET when one was named, else
+// baseAgent for self-delegation (operator-confirmed no-inheritance principle:
+// a delegated sub-turn runs as the target's own instance, not a clone of the
+// parent's). We verify pointer equality by directly mirroring the
+// struct-literal assignment pattern.
 // ---------------------------------------------------------------------------
 
 func TestSubturn_ContextBuilderPointerShared(t *testing.T) {
 	// Two assertions, both needed:
 	//
-	// 1. Source-level: the subturn clone site must still assign
+	// 1. Source-level: the subturn build site must still assign
 	//    ContextBuilder *by reference* (not by clone). A grep on subturn.go
 	//    catches refactors that switch to CloneContextBuilder(...) or
 	//    similar — that would be a design change requiring a new FR per the
@@ -289,15 +292,15 @@ func TestSubturn_ContextBuilderPointerShared(t *testing.T) {
 		t.Fatalf("read subturn.go: %v", err)
 	}
 	// Must contain the exact share-by-reference assignment.
-	re := regexp.MustCompile(`ContextBuilder\s*:\s*baseAgent\.ContextBuilder\s*,`)
+	re := regexp.MustCompile(`ContextBuilder\s*:\s*execSource\.ContextBuilder\s*,`)
 	if !re.Match(src) {
-		t.Fatalf("subturn.go no longer shares parent ContextBuilder by reference — " +
+		t.Fatalf("subturn.go no longer shares the source agent's ContextBuilder by reference — " +
 			"this is a design change; update FR-058 or restore the assignment")
 	}
 	// Must NOT contain a cloning variant.
 	cloneRe := regexp.MustCompile(`ContextBuilder\s*:\s*[A-Za-z_]*[Cc]lone[A-Za-z_]*\(.*ContextBuilder`)
 	if cloneRe.Match(src) {
-		t.Fatalf("subturn.go appears to clone the parent ContextBuilder; " +
+		t.Fatalf("subturn.go appears to clone the source agent's ContextBuilder; " +
 			"pointer-sharing contract (FR-058) is broken")
 	}
 
