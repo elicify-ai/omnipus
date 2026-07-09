@@ -511,19 +511,20 @@ func spawnSubTurn(
 		return nil, errors.New("parent turnState has no agent instance")
 	}
 
-	// ADR-032 / external-agent identity fix: resolve the actual DELEGATE named
-	// by TargetAgentID from the registry. Previously the dispatch-kind
-	// decision (native vs external-cli) and — for external-cli — the run's
-	// workspace/model/turn-cap/executor config always came from baseAgent
-	// (the PARENT doing the delegating), never the target. That meant (a) an
-	// external-cli worker could silently run natively whenever the PARENT's
-	// own Subagents.Executor was unset/native, and (b) an external-cli run
-	// always executed in the PARENT's workspace with the PARENT's model.
+	// ADR-032 / no-inheritance identity fix: resolve the actual DELEGATE named
+	// by TargetAgentID from the registry. A delegated sub-turn runs as that
+	// agent's own real instance — dispatch kind, workspace, model/provider,
+	// tools, tool policy, and every other agent-level setting all come from
+	// the resolved target, never from baseAgent (the PARENT doing the
+	// delegating). The parent contributes only the task prompt and the fact
+	// that delegating to this target was authorized (the workspace
+	// delegation-graph gate, enforced before spawnSubTurn is reached) — see
+	// the execSource construction below for the full field list this covers.
 	// Resolution is best-effort: an unresolvable target (deleted/renamed
 	// since delegation was configured, or self-delegation where
 	// TargetAgentID=="") falls back to baseAgent, so a sub-turn is never
-	// silently dropped and native dispatch stays byte-for-byte unchanged for
-	// that case.
+	// silently dropped — self-delegation trivially satisfies "inherit
+	// nothing from the parent" by being its own source.
 	var targetAgent *AgentInstance
 	// FIX 3 (silent failure F1 / arch #5): when TargetAgentID is set but does
 	// not resolve (deleted/renamed delegate), the fallback below to the
@@ -563,109 +564,117 @@ func spawnSubTurn(
 	// only when the DECISION is computed.
 	dispatchKind, dispatchErr := runner.ResolveDispatch(executorConfigOf(execSource))
 
-	// FIX 2 (data race): baseAgent.Model is one of the four fields
-	// (Model/Provider/Candidates/ThinkingLevel) protected by baseAgent.mu
-	// (see AgentInstance.mu's doc comment, instance.go:27-30) — it can be
-	// concurrently written by SwitchModel/ApplyAgentModel (loop.go
-	// ~3479-3496, which takes mu.Lock() around the full tuple flip) while a
-	// turn referencing this same live registry AgentInstance is in flight.
-	// Reading it unlocked would race. A brief RLock-snapshot-RUnlock here
-	// mirrors the existing sibling read-sites (loop.go:5249-5255,
-	// 5570-5572, 8554-8556) rather than nesting a lock inside the struct
-	// literal below. Verified deadlock-safe: runTurn's tool-dispatch loop
+	// Operator-confirmed design principle: a delegated sub-turn inherits
+	// NOTHING from the parent — delegating to an agent means running that
+	// agent's own real instance. The parent's only contribution is the task
+	// prompt (SubTurnConfig.SystemPrompt, used as the child's first user
+	// message) and the fact that delegation to this target was authorized at
+	// all (the workspace delegation-graph gate, enforced before spawnSubTurn
+	// is ever reached). Every agent-level setting below — including
+	// Model/Provider/Candidates, previously deliberately left as the
+	// PARENT's — comes from execSource (the resolved delegate when
+	// TargetAgentID matched a real registry agent, else baseAgent itself for
+	// self-delegation, where "inherit nothing from the parent" trivially
+	// means "use its own settings").
+	//
+	// execSource.Model/Provider/Candidates/ThinkingLevel are the four fields
+	// protected by execSource.mu (AgentInstance.mu's doc comment,
+	// instance.go:27-30) — concurrently written by SwitchModel/ApplyAgentModel
+	// (loop.go ~3418-3435, which takes mu.Lock() around the full tuple flip
+	// AND the providerPool swap — its own comment there states this makes
+	// "(Model, Provider, Candidates, ProviderPool) a single coherent swap
+	// from any reader's perspective") while a turn referencing this same live
+	// registry AgentInstance is in flight. A single RLock-snapshot-RUnlock
+	// here (one lock acquisition, not one per field) avoids both a race and a
+	// torn read across the quad, mirroring the existing sibling read-sites
+	// (loop.go:5249-5255, 5570-5572, 8554-8556). providerPool.Load() is
+	// captured in this SAME window — it is a separate atomic field, not one
+	// of the four mu names, but ApplyAgentModel's writer-side lock covers it
+	// too, so reading it outside this RLock would reopen the exact
+	// torn-snapshot window the lock exists to close: a concurrent
+	// ApplyAgentModel between RUnlock and a later, separate Load() could pair
+	// this snapshot's (now-stale) Candidates with a providerPool already
+	// rebuilt for a NEW candidate set, which GetProviderForCandidate would
+	// silently mismatch. Verified deadlock-safe: runTurn's tool-dispatch loop
 	// (loop.go ~6900, which reaches here via the spawn/subagent tools) does
-	// NOT hold baseAgent.mu across the ExecuteWithContext call that
-	// eventually invokes spawnSubTurn, so this RLock cannot contend with a
-	// lock already held by our own call stack.
-	baseAgent.mu.RLock()
-	baseAgentModel := baseAgent.Model
-	baseAgent.mu.RUnlock()
+	// NOT hold this lock across the ExecuteWithContext call that eventually
+	// invokes spawnSubTurn, so this RLock cannot contend with a lock already
+	// held by our own call stack.
+	execSource.mu.RLock()
+	execModel := execSource.Model
+	execProvider := execSource.Provider
+	execCandidates := execSource.Candidates
+	execThinkingLevel := execSource.ThinkingLevel
+	execProviderPool := execSource.providerPool.Load()
+	execSource.mu.RUnlock()
 
 	ephemeralStore := newEphemeralSession(nil)
-	// Build a new AgentInstance from baseAgent fields to avoid copying the mutex.
+	// Build a new AgentInstance from execSource's fields to avoid copying the
+	// mutex. Sessions is the one deliberate exception — always a fresh
+	// ephemeral (in-memory only) store, so child turns never pollute or
+	// persist to the source agent's real session history. Tools is set below
+	// (needs the delegate/hand_off exclusion, not a plain copy); toolPolicy
+	// and providerPool are unexported atomic fields a struct literal cannot
+	// copy at all, also set below.
 	agent := AgentInstance{
-		ID:                        baseAgent.ID,
-		Name:                      baseAgent.Name,
-		Model:                     baseAgentModel,
-		Fallbacks:                 baseAgent.Fallbacks,
-		Workspace:                 baseAgent.Workspace,
-		MaxIterations:             baseAgent.MaxIterations,
-		MaxTokens:                 baseAgent.MaxTokens,
-		Temperature:               baseAgent.Temperature,
-		ThinkingLevel:             baseAgent.ThinkingLevel,
-		ContextWindow:             baseAgent.ContextWindow,
-		SummarizeMessageThreshold: baseAgent.SummarizeMessageThreshold,
-		SummarizeTokenPercent:     baseAgent.SummarizeTokenPercent,
-		Provider:                  baseAgent.Provider,
+		ID:                        execSource.ID,
+		Name:                      execSource.Name,
+		Model:                     execModel,
+		Fallbacks:                 execSource.Fallbacks,
+		FallbackModels:            execSource.FallbackModels,
+		Workspace:                 execSource.Workspace,
+		MaxIterations:             execSource.MaxIterations,
+		MaxTokens:                 execSource.MaxTokens,
+		Temperature:               execSource.Temperature,
+		ThinkingLevel:             execThinkingLevel,
+		ContextWindow:             execSource.ContextWindow,
+		SummarizeMessageThreshold: execSource.SummarizeMessageThreshold,
+		SummarizeTokenPercent:     execSource.SummarizeTokenPercent,
+		Provider:                  execProvider,
 		Sessions:                  ephemeralStore,
-		ContextBuilder:            baseAgent.ContextBuilder,
-		Tools:                     baseAgent.Tools,
-		Subagents:                 baseAgent.Subagents,
-		SkillsFilter:              baseAgent.SkillsFilter,
-		Candidates:                baseAgent.Candidates,
-		TimeoutSeconds:            baseAgent.TimeoutSeconds,
-		Router:                    baseAgent.Router,
-		LightCandidates:           baseAgent.LightCandidates,
-		LightProvider:             baseAgent.LightProvider,
+		ContextBuilder:            execSource.ContextBuilder,
+		Subagents:                 execSource.Subagents,
+		SkillsFilter:              execSource.SkillsFilter,
+		Candidates:                execCandidates,
+		TimeoutSeconds:            execSource.TimeoutSeconds,
+		Router:                    execSource.Router,
+		LightCandidates:           execSource.LightCandidates,
+		LightProvider:             execSource.LightProvider,
+		AgentType:                 execSource.AgentType,
+		DelegationPolicy:          execSource.DelegationPolicy,
+		IsRoutingDefault:          execSource.IsRoutingDefault,
 	}
-	// The child's tool-policy snapshot lives in an unexported atomic field
-	// (AgentInstance.toolPolicy) that the struct literal above cannot copy —
-	// left unset, LoadToolPolicy() returns nil and FilterToolsByPolicy treats
-	// that as an empty policy, which fails EVERY tool closed to deny
-	// (resolveEffectivePolicyWith: no entry on either side -> deny). Source it
-	// from execSource (the resolved delegate when TargetAgentID matched a real
-	// registry agent, else baseAgent for self-delegation) via the existing
-	// public setter, so the child is governed by the SAME agent's policy its
-	// identity is set to below — not the parent's, and not a silent deny-all.
+	// providerPool is tied to the SAME Candidates it was built for — now that
+	// Candidates is execSource's own (above), the pool must match, or
+	// GetProviderForCandidate would silently miss every FR-007
+	// provider-pinned fallback candidate and fall back to the primary
+	// provider. execProviderPool was captured inside the RLock above,
+	// alongside Candidates — NOT re-Load()'d here — so the pairing is
+	// guaranteed consistent even if ApplyAgentModel runs concurrently between
+	// this point and the snapshot above.
+	if execProviderPool != nil {
+		agent.StoreProviderPool(*execProviderPool)
+	}
+	// LoadToolPolicy()/StoreToolPolicy() — same "unexported atomic field, struct
+	// literal can't copy it" situation as providerPool. Left unset, every tool
+	// fails closed to deny (resolveEffectivePolicyWith: no entry on either
+	// side -> deny) — this was the second half of the original identity bug
+	// (see below).
 	agent.StoreToolPolicy(execSource.LoadToolPolicy())
-
-	// Identity fields are sourced from the resolved TARGET, for BOTH native
-	// and external-cli dispatch, whenever cfg.TargetAgentID matched a real
-	// registry agent. Model/Candidates/Provider/ProviderPool are deliberately
-	// EXCLUDED even here — those are the mutex-protected fields that drive
-	// the native LLM-call's own provider resolution (see the RLock snapshot
-	// above and AgentInstance.mu's doc comment), and giving every delegate
-	// its own live model/candidates resolution would be a larger refactor
-	// outside this fix's scope.
-	//
-	// Without ID/Name/ContextBuilder swapped for NATIVE dispatch specifically,
-	// a native sub-turn silently keeps running as the PARENT:
-	// ContextBuilder.BuildSystemPrompt() resolves the compiled soul via
-	// cb.agentID, so reusing baseAgent's ContextBuilder here means the
-	// "delegate" literally answers as the parent — observed live: delegating
-	// to Worker (an intentionally soul-less agent) returned Jim's own
-	// compiled persona verbatim. This also fixes the tool-policy split-brain
-	// exposed by that same bug: tools.WithAgentID(turnCtx, ts.agent.ID)
-	// (loop.go) threads agent.ID into the tool-execution context, and
-	// load_tool's canLoad resolver looks up "the calling agent" by that ID
-	// via a fresh al.registry.GetAgent(...) call — so an unswapped ID meant
-	// canLoad was checking the PARENT's real, registry-backed policy while
-	// the final FilterToolsByPolicy call (loop.go) read the child's own
+	// ID/ContextBuilder — the first half of the original identity bug, still
+	// worth naming explicitly: ContextBuilder.BuildSystemPrompt() resolves
+	// the compiled soul via cb.agentID, so reusing the PARENT's ContextBuilder
+	// (the pre-fix behavior) meant a delegate literally answered as the
+	// parent — observed live: delegating to Worker (an intentionally
+	// soul-less agent) returned Jim's own compiled persona verbatim. This
+	// also caused the tool-policy split-brain: tools.WithAgentID(turnCtx,
+	// ts.agent.ID) (loop.go) threads agent.ID into the tool-execution
+	// context, and load_tool's canLoad resolver looks up "the calling agent"
+	// by that ID via a fresh al.registry.GetAgent(...) call — so an unswapped
+	// ID meant canLoad checked the PARENT's real, registry-backed policy
+	// while the final FilterToolsByPolicy call (loop.go) read the child's own
 	// (nil, deny-all) toolPolicy above — two different verdicts for the same
-	// tool, observed live as an infinite load_tool retry loop (load_tool
-	// reports success against the parent's policy, the tool is then absent
-	// from what the model can actually call).
-	if targetAgent != nil {
-		agent.ID = targetAgent.ID
-		agent.Name = targetAgent.Name
-		agent.Workspace = targetAgent.Workspace
-		agent.ContextBuilder = targetAgent.ContextBuilder
-		agent.MaxIterations = targetAgent.MaxIterations
-		agent.Subagents = targetAgent.Subagents
-	}
-	// External-cli dispatch additionally sources Model from the target: it
-	// runs as a SEPARATE process outside Omnipus's own LLM-call machinery
-	// (runExternalCLISubTurn never consults Candidates/Provider/ProviderPool),
-	// so swapping Model alone carries none of the native-path risk above.
-	if dispatchKind == runner.DispatchKindExternalCLI && targetAgent != nil {
-		// targetAgent is a LIVE registry pointer too — its Model is protected
-		// by targetAgent.mu the same as baseAgent.mu above. Snapshot under a
-		// brief RLock before assigning.
-		targetAgent.mu.RLock()
-		targetModel := targetAgent.Model
-		targetAgent.mu.RUnlock()
-		agent.Model = targetModel
-	}
+	// tool, observed live as an infinite load_tool retry loop.
 
 	// Tool-approval grant inheritance (consent boundary — delegation): the
 	// child sub-turn inherits every "Always Allow" grant the PARENT has
@@ -677,13 +686,13 @@ func spawnSubTurn(
 	//
 	// parentTS.agentID is the identity under which the PARENT's own tool
 	// calls are scoped (turnState.eventMeta/snapshot -> ToolApprovalRequest.
-	// Meta.AgentID); agent.ID (finalized above) is the identity THIS child
-	// turn will use for its own tool-approval requests (see
+	// Meta.AgentID); agent.ID (== execSource.ID above) is the identity THIS
+	// child turn will use for its own tool-approval requests (see
 	// newTurnState(&agent, ...) below, which sets childTS.agentID = agent.
 	// ID). Keying the inherit call on the same variable the child will
-	// actually be looked up under keeps this correct for both native
-	// dispatch (agent.ID == baseAgent.ID — a harmless same-key union) and
-	// external-CLI dispatch (agent.ID == targetAgent.ID, the real delegate).
+	// actually be looked up under keeps this correct whether execSource is
+	// baseAgent (self-delegation — a harmless same-key union) or a resolved
+	// target (agent.ID == targetAgent.ID, the real delegate).
 	al.ApprovalGrants().Inherit(parentTS.transcriptSessionID, parentTS.agentID, agent.ID)
 
 	// FR-H-006: exclude delegation-adjacent tools from the child's registry so
