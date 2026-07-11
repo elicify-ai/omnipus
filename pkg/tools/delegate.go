@@ -386,6 +386,29 @@ func (t *DelegateTool) executeAsync(
 	// delegate exposes its own soul and a soul-less worker runs with an empty
 	// system role (worker souls are OPTIONAL by design). The label, when set,
 	// is preserved as the task label for the WS subTurn_start frame.
+	//
+	// Critical: true is REQUIRED here, not optional. Background delegation's
+	// entire premise is "the parent moves on; tell me later" — the parent
+	// turn routinely finishes (its own follow-up LLM call after receiving
+	// this async ack, then Finish(false)) in well under the time it takes
+	// the delegate to run even one tool call. Without Critical:true, the
+	// child sub-turn's own loop (pkg/agent/loop.go's "Parent turn ended"
+	// check, evaluated at the TOP of every iteration) treats
+	// !ts.critical && ts.IsParentEnded() as a signal to exit gracefully
+	// BEFORE making the next LLM call — silently discarding the delegate's
+	// real answer for any task needing more than a single LLM turn (i.e.
+	// any task that calls a tool before its final answer). The delegate's
+	// pre-tool-call narration survives (persisted per-iteration), but the
+	// synthesized final answer is never produced at all: spawnSubTurn's
+	// result comes back with ForLLM/ForUser == "", and asyncCallback's
+	// `content == "" { return }` guard (pkg/agent/loop.go) then silently
+	// drops it — no error, no notification, nothing delivered to the user,
+	// live or on reload. Critical:true lets the child keep running past the
+	// parent's own finish (it still delivers as an "orphan" on the
+	// now-moot pendingResults channel — see deliverSubTurnResult — but its
+	// REAL delivery path, this same cb -> AsyncNotifier.Notify chain, is
+	// unaffected by parent lifecycle and fires correctly once the child
+	// actually finishes). See SubTurnConfig.Critical's doc comment.
 	go func() {
 		result, err := t.spawner.SpawnSubTurn(ctx, SubTurnConfig{
 			Model:            t.defaultModel,
@@ -395,6 +418,7 @@ func (t *DelegateTool) executeAsync(
 			MaxTokens:        t.maxTokens,
 			Temperature:      t.temperature,
 			Async:            true,
+			Critical:         true,
 			TaskLabel:        label,
 			ResolvedMaxDepth: resolvedMaxDepth,
 		})
