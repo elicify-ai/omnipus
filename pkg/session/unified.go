@@ -630,13 +630,22 @@ func (us *UnifiedStore) MarkLastEntryTruncated(sessionID, turnID string) error {
 	}
 	entries[targetIdx] = json.RawMessage(rewritten)
 
-	// Rebuild the file contents (one JSON object per line, no trailing newline on last).
+	// Rebuild the file contents: one JSON object per line, WITH a trailing
+	// newline after the LAST line too. This is load-bearing, not cosmetic:
+	// AppendJSONL (pkg/fileutil/file.go) always O_APPENDs "record\n" with no
+	// check that the existing file already ends in a newline. A rewrite that
+	// omits the final newline leaves the next AppendTranscript call's record
+	// concatenated directly onto this rewrite's last line — e.g.
+	// "{lastEntry}{newRecord}\n" — which ReadTranscript cannot parse as JSON
+	// and silently drops via its "skipping malformed transcript line"
+	// continue, losing BOTH entries. Confirmed via a byte-level repro
+	// (rewrite → append → inspect raw bytes → ReadTranscript entry count)
+	// before this fix; see TestMarkLastEntryTruncated_TrailingNewlineSurvivesSubsequentAppend
+	// and TestUpdateToolCallStatus_TrailingNewlineSurvivesSubsequentAppend.
 	var buf bytes.Buffer
-	for i, line := range entries {
+	for _, line := range entries {
 		buf.Write(line)
-		if i < len(entries)-1 {
-			buf.WriteByte('\n')
-		}
+		buf.WriteByte('\n')
 	}
 
 	if writeErr := fileutil.WriteFileAtomic(transcriptPath, buf.Bytes(), 0o600); writeErr != nil {
@@ -666,19 +675,34 @@ func (us *UnifiedStore) MarkLastEntryTruncated(sessionID, turnID string) error {
 // replay.go already applies when reading (buildSpawnIDsWithChildren /
 // latestByID in pkg/gateway/replay.go).
 //
-// Returns nil (no-op) when no entry with a matching ToolCall.ID is found.
-// This is the expected outcome for SYNCHRONOUS delegation (DelegateTool.
-// executeSync): spawnSubTurn blocks until the child turn finishes, so at the
-// point EventKindSubTurnEnd fires the caller has not yet appended the
-// spawning tool call's own record — it does so correctly itself moments
-// later, once spawnSubTurn returns with the real result. Returns an error
-// only on I/O failure.
-func (us *UnifiedStore) UpdateToolCallStatus(sessionID string, toolCallID ToolCallID, status string, durationMS int64) error {
+// Returns found=false (with a nil error) when no entry with a matching
+// ToolCall.ID is found — NOT necessarily an error condition (see below), but
+// the caller can now distinguish this from a real update. This is the
+// expected outcome for SYNCHRONOUS delegation (DelegateTool.executeSync):
+// spawnSubTurn blocks until the child turn finishes, so at the point
+// EventKindSubTurnEnd fires the caller has not yet appended the spawning
+// tool call's own record — it does so correctly itself moments later, once
+// spawnSubTurn returns with the real result.
+//
+// found=false can ALSO legitimately occur for ASYNC delegation due to a real
+// race: DelegateTool.executeAsync launches the child sub-turn in a goroutine
+// and returns immediately, while the PARENT (the turn that called the
+// "delegate" tool) writes this tool call's OWN placeholder ack record only
+// after further processing (hooks, media, events) in its own call stack. If
+// the child's spawnSubTurn dispatch fails fast (e.g. a depth-limit or
+// target-resolution rejection), its cleanup defer can call
+// UpdateToolCallStatus BEFORE the parent's placeholder record exists yet.
+// Callers in that race window (currently only spawnSubTurn's cleanup defer,
+// pkg/agent/subturn.go) MUST retry briefly rather than treat found=false as
+// terminal — see updateToolCallStatusWithRetry.
+//
+// Returns a non-nil error only on I/O failure.
+func (us *UnifiedStore) UpdateToolCallStatus(sessionID string, toolCallID ToolCallID, status string, durationMS int64) (found bool, err error) {
 	if err := validateSessionID(sessionID); err != nil {
-		return err
+		return false, err
 	}
 	if toolCallID == "" {
-		return nil
+		return false, nil
 	}
 
 	us.mu.Lock()
@@ -689,9 +713,9 @@ func (us *UnifiedStore) UpdateToolCallStatus(sessionID string, toolCallID ToolCa
 	if err != nil {
 		if os.IsNotExist(err) {
 			// No transcript at all — nothing to update; treat as no-op.
-			return nil
+			return false, nil
 		}
-		return fmt.Errorf("unified_store: update tool call status: read transcript: %w", err)
+		return false, fmt.Errorf("unified_store: update tool call status: read transcript: %w", err)
 	}
 
 	// Split into non-empty lines and parse.
@@ -706,7 +730,7 @@ func (us *UnifiedStore) UpdateToolCallStatus(sessionID string, toolCallID ToolCa
 	}
 
 	if len(entries) == 0 {
-		return nil
+		return false, nil
 	}
 
 	// Walk backward to find the last entry carrying a ToolCall with this ID.
@@ -742,13 +766,13 @@ func (us *UnifiedStore) UpdateToolCallStatus(sessionID string, toolCallID ToolCa
 
 	if targetIdx == -1 {
 		// No matching tool-call entry found — no-op, not an error (see doc comment).
-		return nil
+		return false, nil
 	}
 
 	// Unmarshal the target entry, update the matching ToolCall in place, re-marshal.
 	var target TranscriptEntry
 	if jsonErr := json.Unmarshal(entries[targetIdx], &target); jsonErr != nil {
-		return fmt.Errorf("unified_store: update tool call status: unmarshal target entry: %w", jsonErr)
+		return false, fmt.Errorf("unified_store: update tool call status: unmarshal target entry: %w", jsonErr)
 	}
 	for ti := range target.ToolCalls {
 		if target.ToolCalls[ti].ID == toolCallID {
@@ -758,23 +782,28 @@ func (us *UnifiedStore) UpdateToolCallStatus(sessionID string, toolCallID ToolCa
 	}
 	rewritten, jsonErr := json.Marshal(target)
 	if jsonErr != nil {
-		return fmt.Errorf("unified_store: update tool call status: marshal updated entry: %w", jsonErr)
+		return false, fmt.Errorf("unified_store: update tool call status: marshal updated entry: %w", jsonErr)
 	}
 	entries[targetIdx] = json.RawMessage(rewritten)
 
-	// Rebuild the file contents (one JSON object per line, no trailing newline on last).
+	// Rebuild the file contents: one JSON object per line, WITH a trailing
+	// newline after the LAST line too — see MarkLastEntryTruncated's doc
+	// comment above for why omitting it silently corrupts and drops BOTH
+	// this rewrite's last entry AND whatever AppendTranscript writes next
+	// (the confirmed root cause of the Wave 3 fix-5b/5d data-loss bug: this
+	// function's own rewrite, immediately followed by AsyncNotifier's
+	// delivery of the delegate's result via AppendTranscript, corrupted and
+	// dropped both).
 	var buf bytes.Buffer
-	for i, line := range entries {
+	for _, line := range entries {
 		buf.Write(line)
-		if i < len(entries)-1 {
-			buf.WriteByte('\n')
-		}
+		buf.WriteByte('\n')
 	}
 
 	if writeErr := fileutil.WriteFileAtomic(transcriptPath, buf.Bytes(), 0o600); writeErr != nil {
-		return fmt.Errorf("unified_store: update tool call status: write transcript: %w", writeErr)
+		return false, fmt.Errorf("unified_store: update tool call status: write transcript: %w", writeErr)
 	}
-	return nil
+	return true, nil
 }
 
 // ReadTranscript returns all entries from {session-id}/transcript.jsonl.

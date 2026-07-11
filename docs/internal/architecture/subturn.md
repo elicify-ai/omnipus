@@ -144,11 +144,12 @@ SubTurns emit specific events to the Omnipus `EventBus` for observability and de
 
 ## Async Result Delivery (AsyncNotifier — Post-Turn Re-Injection)
 
-The mechanisms above (`pendingResults` polling, Orphan Results) both assume the
-**parent turn is still the one that will consume the result** — either it is
-still running and polls for it, or it has finished and the result is simply
-dropped with an inert event. There is a third, separate mechanism for a
-different situation: an **async-capable tool's background work finishes and
+The mechanisms described so far — `pendingResults` polling (above, under
+[Agent Loop Integration](#agent-loop-integration)) and Orphan Results (below)
+— both assume the **parent turn is still the one that will consume the
+result**: either it is still running and polls for it, or it has finished and
+the result is simply dropped with an inert event. There is a third, separate
+mechanism for a different situation: an **async-capable tool's background work finishes and
 the result needs to reach the user as a genuinely new turn**, regardless of
 whether the originating turn (or even the originating WebSocket connection)
 still exists.
@@ -244,7 +245,7 @@ serialization scope for them). `processSystemMessage`:
 
 ### Contrast With Orphan Results
 
-`SubTurnOrphanResultEvent` (see [Orphan Results](#orphan-results) above) is a
+`SubTurnOrphanResultEvent` (see [Orphan Results](#orphan-results) below) is a
 narrower, SubTurn-specific signal: it fires only for a `Critical: true`
 sub-turn whose result can't reach its *still-in-memory* parent's
 `pendingResults` channel (channel full, or the parent has finished). It is
@@ -368,7 +369,7 @@ When a result becomes orphan:
 - External systems can listen to this event for custom handling
 
 > **Not to be confused with [Async Result Delivery (AsyncNotifier)](#async-result-delivery-asyncnotifier--post-turn-re-injection)
-> below** — a separate, more general mechanism (any async-capable tool, not
+> above** — a separate, more general mechanism (any async-capable tool, not
 > just `Critical` sub-turns) that *does* start a real, persisted new turn
 > when a background result needs to reach the user after its originating
 > turn has ended. This section's orphan event is genuinely inert by design.
