@@ -814,6 +814,11 @@ type WriteFileTool struct {
 	rerootable
 	fs        fileSystem
 	workspace string
+	// auditLogger receives file_op audit entries on successful writes, so
+	// lastWriterForPath (path_audit.go) can attribute a CoreTeam-shared-dir
+	// overwrite to the agent that last touched the path. Nil means audit
+	// logging is disabled (best-effort, no attribution note — never blocking).
+	auditLogger *audit.Logger
 }
 
 func NewWriteFileTool(workspace string, restrict bool, allowPaths ...[]*regexp.Regexp) *WriteFileTool {
@@ -826,6 +831,17 @@ func NewWriteFileTool(workspace string, restrict bool, allowPaths ...[]*regexp.R
 		fs:         buildFs(workspace, restrict, patterns),
 		workspace:  workspace,
 	}
+}
+
+// SetAuditLogger injects an audit.Logger so successful writes are recorded
+// (file_op events) and overwrite calls can look up the prior writer. Satisfies
+// the auditLoggerAware contract used by the ToolRegistry. Calling this on a
+// nil WriteFileTool is a no-op.
+func (t *WriteFileTool) SetAuditLogger(l *audit.Logger) {
+	if t == nil {
+		return
+	}
+	t.auditLogger = l
 }
 
 func (t *WriteFileTool) Name() string {
@@ -886,10 +902,42 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *ToolR
 
 	overwrite, _ := args["overwrite"].(bool)
 
+	// Canonical path for audit-log keying, resolved against the effective
+	// workspace root (the CoreTeam-shared dir when the turn is re-rooted,
+	// else the agent's own workspace) — NOT the raw arg path. This is what
+	// makes the cross-agent note below correct rather than a false positive:
+	// two agents writing "identity.txt" into their own SEPARATE private
+	// workspaces resolve to different canonical paths (no note), while the
+	// same relative name written into the SAME shared workspace directory
+	// resolves to the same canonical path (note fires). Falls back to the
+	// raw path when there is no workspace to resolve against (static tools
+	// with no agent workspace concept) — best-effort, never blocking either way.
+	canonicalPath := path
+	if effWorkspace != "" {
+		if resolved, err := resolveAbsPath(path, effWorkspace); err == nil {
+			canonicalPath = resolved
+		}
+	}
+
+	var clobberNote string
 	if !overwrite {
 		if f, err := effFs.Open(path); err == nil {
 			f.Close()
 			return ErrorResult(fmt.Sprintf("file: %s already exists. Set overwrite=true to replace.", path))
+		}
+	} else if f, err := effFs.Open(path); err == nil {
+		// We are about to replace a file that already exists. Look up who
+		// last wrote it (per the audit log's write history) and, if it was a
+		// DIFFERENT agent, surface that as a purely informational note — no
+		// new blocking behavior, this write proceeds regardless.
+		f.Close()
+		if writerID, found := lastWriterForPath(t.auditLogger, canonicalPath, ToolAgentID(ctx)); found {
+			// Precisely scoped wording: only write_file calls are tracked
+			// (edit_file/append_file are not), and only within
+			// LastWriterForPath's current-file-plus-most-recent-rotated-file
+			// window — "last written via write_file by" says exactly that,
+			// rather than implying a complete modification history.
+			clobberNote = fmt.Sprintf(" Note: you are replacing a file last written via write_file by agent %s.", writerID)
 		}
 	}
 
@@ -897,7 +945,9 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *ToolR
 		return ErrorResult(err.Error())
 	}
 
-	return SilentResult(fmt.Sprintf("File written: %s", path))
+	emitFileWriteAudit(ctx, t.auditLogger, t.Name(), canonicalPath)
+
+	return SilentResult(fmt.Sprintf("File written: %s", path) + clobberNote)
 }
 
 type ListDirTool struct {
