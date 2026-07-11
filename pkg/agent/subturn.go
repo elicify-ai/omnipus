@@ -917,6 +917,36 @@ func spawnSubTurn(
 				"parent_call_id", parentSpawnCallID,
 				"agent_id", childTS.agentID,
 			)
+
+			// Wave 3 fix 5b: persist the sub-turn's REAL terminal status/duration
+			// onto the spawning "delegate" tool call's own persisted
+			// session.ToolCall record. For async delegation (DelegateTool.
+			// executeAsync, pkg/tools/delegate.go) that record was already
+			// written moments after spawnSubTurn started, carrying a
+			// placeholder ack (Status="success", DurationMS≈0, from
+			// tools.AsyncResult) — this corrects it to the real value so a
+			// session reload (pkg/gateway/replay.go) shows the same
+			// status/duration the live WS stream showed, instead of
+			// emitNestedToolCalls re-deriving a different, incompatible
+			// aggregate from child tool calls (which flips to "error" on any
+			// single denied child tool, even when the sub-turn itself
+			// completed successfully). No-op for synchronous delegation — see
+			// UpdateToolCallStatus's doc comment for why.
+			if parentTS.transcriptStore != nil && parentTS.transcriptSessionID != "" {
+				if updateErr := parentTS.transcriptStore.UpdateToolCallStatus(
+					parentTS.transcriptSessionID,
+					session.ToolCallID(parentSpawnCallID),
+					string(endStatus),
+					subTurnDurationMS,
+				); updateErr != nil {
+					slog.Warn("subturn: failed to persist real end status/duration onto spawn tool call",
+						"session_id", parentTS.transcriptSessionID,
+						"parent_spawn_call_id", parentSpawnCallID,
+						"error", updateErr,
+					)
+				}
+			}
+
 			al.emitEvent(EventKindSubTurnEnd,
 				childTS.eventMeta("spawnSubTurn", "subturn.end"),
 				SubTurnEndPayload{

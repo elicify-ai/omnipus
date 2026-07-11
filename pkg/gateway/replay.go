@@ -13,6 +13,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -179,6 +180,36 @@ func streamReplay(
 			continue
 		}
 
+		// Wave 3 fix 5c: emit a role:"turn_canceled" ReplayMessageFrame for
+		// EntryTypeTurnCancelled entries (pkg/agent/cancel.go's onCancelFinish
+		// callback, ~line 224). Before this fix, replay had no code path that
+		// read these persisted entries at all — a canceled turn simply
+		// vanished on reload instead of showing the same cancellation marker
+		// the live WS stream showed. entry.TurnID (stamped by the same
+		// callback) travels onto the frame's turn_id field so the client can
+		// match this cancellation to the specific preceding assistant message
+		// it interrupted without relying on stream-adjacency — async
+		// delegation can interleave other agents'/turns' frames in between.
+		// This entry type carries no Content (cancel.go's literal never sets
+		// it), so it needs its own unconditional branch rather than falling
+		// through the `entry.Content != ""` gate below.
+		if entry.Type == session.EntryTypeTurnCancelled {
+			cancelFrame := generated.ReplayMessageFrame{
+				Type:      string(generated.WsFrameTypeReplayMessage),
+				SessionId: sessionID,
+				Role:      "turn_canceled",
+				Content:   turnCancelledContent(entry),
+			}
+			if entry.TurnID != "" {
+				turnIDCopy := entry.TurnID
+				cancelFrame.TurnId = &turnIDCopy
+			}
+			if err2 := emitFrame(cancelFrame); err2 != nil {
+				return framesEmitted, err2
+			}
+			continue
+		}
+
 		// Update the running fallback agent ID.
 		if entry.AgentID != "" {
 			lastSeenAgentID = entry.AgentID
@@ -206,6 +237,15 @@ func streamReplay(
 			if entry.AgentID != "" {
 				agentIDCopy := entry.AgentID
 				msgFrame.AgentId = &agentIDCopy
+			}
+			// Wave 3 fix 5c: surface TranscriptEntry.TurnID (stamped on every
+			// assistant entry, pkg/agent/turn.go:447,685) so the client can
+			// correlate a later turn_canceled frame to the specific assistant
+			// message it cancels. Empty for legacy entries written before
+			// turn-id stamping landed.
+			if entry.TurnID != "" {
+				turnIDCopy := entry.TurnID
+				msgFrame.TurnId = &turnIDCopy
 			}
 			// Phase 1B (FR-013/FR-014): surface per-turn model. Populated from
 			// TranscriptEntry.Model on every assistant message written via
@@ -314,7 +354,13 @@ func streamReplay(
 				}
 
 				// Emit all nested tool calls (children with ParentToolCallID == tc.ID).
-				nestedDurationMS, nestedStatus, nestedErr := emitNestedToolCalls(
+				// The returned aggregate duration/status exist only to drive
+				// emitNestedToolCalls' own internal bookkeeping historically — they
+				// are deliberately NOT used for the outer span's own Status/
+				// DurationMs below (Wave 3 fix 5b, see comment there). This call is
+				// still required: it emits the individual nested child
+				// tool_call_start/tool_call_result frames.
+				_, _, nestedErr := emitNestedToolCalls(
 					ctx, sessionID, tcID, entries, latestByID, effectiveAgentID, emitFrame, toolStore,
 				)
 				if nestedErr != nil {
@@ -322,13 +368,30 @@ func streamReplay(
 				}
 
 				// Emit subagent_end.
-				nestedDurMS := int(nestedDurationMS)
+				//
+				// Wave 3 fix 5b: the span's own Status/DurationMs are read directly
+				// from tc — the spawn/delegate ToolCall's OWN persisted record —
+				// instead of emitNestedToolCalls' aggregate over child tool calls.
+				// pkg/agent/subturn.go's spawnSubTurn (EventKindSubTurnEnd) now
+				// persists the sub-turn's REAL completion status/wall-clock
+				// duration onto this exact record via session.UnifiedStore.
+				// UpdateToolCallStatus once the child turn actually finishes. The
+				// aggregate is a fundamentally different, incompatible semantic —
+				// it flips to "error" whenever ANY child tool call was denied, even
+				// when the sub-turn itself legitimately completed "success" at the
+				// LLM level (a denied tool attempt is not itself a sub-turn
+				// failure), and its duration is a sum of child tool-call durations
+				// that structurally cannot reflect real wall-clock time. Live
+				// rendering (pkg/gateway/websocket.go's EventKindSubTurnEnd
+				// handler) has always used this real status/duration directly —
+				// this makes replay match it.
+				spanDurationMS := int(tc.DurationMS)
 				subEnd := generated.SubagentEndFrame{
 					Type:       string(generated.WsFrameTypeSubagentEnd),
 					SessionId:  sessionID,
 					SpanId:     spanID,
-					DurationMs: &nestedDurMS,
-					Status:     nestedStatus,
+					DurationMs: &spanDurationMS,
+					Status:     resolveStatus(tc.Status),
 				}
 				if effectiveAgentID != "" {
 					agentIDCopy := effectiveAgentID
@@ -678,6 +741,21 @@ func resolveStatus(s string) string {
 		return "success"
 	}
 	return s
+}
+
+// turnCancelledContent builds the required `content` string for a
+// role:"turn_canceled" ReplayMessageFrame. The SPA treats turn_canceled as
+// metadata-only (contracts/components/schemas/ReplayMessageFrame.yaml: "skips
+// turn_canceled" — no chat bubble is rendered for it), but `content` is still
+// a required field on the frame, so this returns a short human-readable
+// description rather than an empty string, for operator-facing traces (WS
+// debug logs, future consumers) — entry.Content itself is always empty for
+// EntryTypeTurnCancelled (pkg/agent/cancel.go's literal never sets it).
+func turnCancelledContent(entry session.TranscriptEntry) string {
+	if entry.CancelMethod != "" {
+		return fmt.Sprintf("Turn canceled (%s)", entry.CancelMethod)
+	}
+	return "Turn canceled"
 }
 
 // resolveErrorKind maps an error transcript entry to the wire-level `kind`
