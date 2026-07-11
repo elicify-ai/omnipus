@@ -476,17 +476,17 @@ func TestDelegationWiring_Parity_AdvertisedMatchesEnforced(t *testing.T) {
 	}
 
 	// (c) gate: mia→ray await allowed.
-	checkAwait := buildDelegationDenyChecker("mia", config.AgentDefaults{}, config.DelegationModeAwait)
+	checkAwait := buildDelegationDenyChecker("mia", config.AgentDefaults{}, config.DelegationModeAwait, false)
 	if denial := checkAwait(ctxWS(wsID, 0), "ray"); denial != nil {
 		t.Errorf("parity: gate must allow mia→ray await (advertised); got deny: %+v", denial)
 	}
 	// (c) gate: mia→ray background allowed.
-	checkBG := buildDelegationDenyChecker("mia", config.AgentDefaults{}, config.DelegationModeBackground)
+	checkBG := buildDelegationDenyChecker("mia", config.AgentDefaults{}, config.DelegationModeBackground, false)
 	if denial := checkBG(ctxWS(wsID, 0), "ray"); denial != nil {
 		t.Errorf("parity: gate must allow mia→ray background (advertised); got deny: %+v", denial)
 	}
 	// (c) gate: mia→ray task DENIED (not advertised, not in edge).
-	checkTask := buildDelegationDenyChecker("mia", config.AgentDefaults{}, config.DelegationModeTask)
+	checkTask := buildDelegationDenyChecker("mia", config.AgentDefaults{}, config.DelegationModeTask, true)
 	if denial := checkTask(ctxWS(wsID, 0), "ray"); denial == nil {
 		t.Errorf("parity: gate must DENY mia→ray task (not in edge Modes); got allow")
 	}

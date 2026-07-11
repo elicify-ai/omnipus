@@ -1476,7 +1476,9 @@ func registerSharedTools(
 			// default) mode — trust set + mode("background") + depth. Takes
 			// precedence over the allowlist checker and surfaces a reason.
 			delegateTool.SetDelegationDenyCheckerBackground(
-				buildDelegationDenyChecker(currentAgentID, cfg.Agents.Defaults, config.DelegationModeBackground),
+				// selfAssignmentExempt=false: delegate(agent_id=self) spawns a real
+				// sub-turn and MUST be graph-gated (and thus denied), never exempted.
+				buildDelegationDenyChecker(currentAgentID, cfg.Agents.Defaults, config.DelegationModeBackground, false),
 			)
 			// FR-6.3: gate the await (async=false) mode too. Uses the unified
 			// DelegationPolicy.To via IsDelegationAllowedAny (no explicit
@@ -1502,7 +1504,9 @@ func registerSharedTools(
 			// caller→X edge for the "await" mode, and an untargeted call
 			// falls back to evalUntargetedDelegation.
 			delegateTool.SetDelegationDenyCheckerAwait(
-				buildDelegationDenyChecker(currentAgentID, cfg.Agents.Defaults, config.DelegationModeAwait),
+				// selfAssignmentExempt=false: same reasoning as the background gate —
+				// a self-targeted await delegate() is real delegation, graph-gated.
+				buildDelegationDenyChecker(currentAgentID, cfg.Agents.Defaults, config.DelegationModeAwait, false),
 			)
 			// #477 / FR-D9-FR-D10: thread the SAME effective depth cap the
 			// gates above just authorized against into spawnSubTurn's own
@@ -1534,7 +1538,9 @@ func registerSharedTools(
 			// FR-6.2: full-policy gate — trust set + mode("task") + depth.
 			// Takes precedence over the boolean delegate checker.
 			taskCreate.SetDelegationDenyChecker(
-				buildDelegationDenyChecker(currentAgentID, cfg.Agents.Defaults, config.DelegationModeTask),
+				// selfAssignmentExempt=true: assigning a NEW task to oneself is not
+				// delegation (no new instance spawned) and must not be graph-gated.
+				buildDelegationDenyChecker(currentAgentID, cfg.Agents.Defaults, config.DelegationModeTask, true),
 			)
 			// Task-mode recursion bound: reject a task_create issued from within a
 			// task run whose delegation generation already sits at the ceiling. The
@@ -1574,7 +1580,9 @@ func registerSharedTools(
 			// the same trust-set + mode("task") + depth policy as task_create.
 			taskUpdate.SetDelegateChecker(buildDelegateChecker(agentCfg, cfg.Agents.Defaults))
 			taskUpdate.SetDelegationDenyChecker(
-				buildDelegationDenyChecker(currentAgentID, cfg.Agents.Defaults, config.DelegationModeTask),
+				// selfAssignmentExempt=true: reassigning a task to its existing owner
+				// is a no-op reassignment, not delegation — must not be graph-gated.
+				buildDelegationDenyChecker(currentAgentID, cfg.Agents.Defaults, config.DelegationModeTask, true),
 			)
 			// Same subagent_3p reassignment guard as taskCreate above.
 			taskUpdate.SetExternalCLIWorkerChecker(cfg.IsExternalCLIWorkerID)
@@ -2096,8 +2104,20 @@ func errString(err error) string {
 // An empty targetAgentID means "no explicit target" (the LLM omitted agent_id);
 // the trust check is then skipped here — untargeted spawns resolve to the default
 // agent — while mode and depth (against any one of the caller's outgoing edges)
-// still apply. Self-assignment (target == caller) is NOT delegation and is
-// always allowed without consulting the graph.
+// still apply.
+//
+// selfAssignmentExempt controls the self-target (target == caller) case, and it
+// is the whole reason this parameter exists. It MUST be true ONLY for the
+// task-tool wiring (create_task / update_task): reassigning a task to the agent
+// that already owns it is genuinely NOT delegation — no new instance is spawned —
+// so it is allowed without consulting the graph. For the delegate TOOL it MUST be
+// false: delegate(agent_id=self) spawns a real sub-turn instance, so it IS
+// delegation and MUST be gated by the graph exactly like any other target. Since
+// workspace.DelegationEdge.Validate hard-forbids self-edges, that graph lookup
+// permanently DENIES self-delegation with trust_set — the correct, fail-closed
+// outcome. A single unscoped self-exemption here previously let delegate(self)
+// bypass the trust-set, mode, and depth checks entirely (a self-delegation
+// authorization bypass); gating it per call site closes that gap.
 //
 // defaults is only consulted for its SubTurn.MaxDepth global depth cap — the
 // per-agent config.DelegationPolicy it used to carry is no longer read (the
@@ -2106,13 +2126,17 @@ func buildDelegationDenyChecker(
 	currentAgentID string,
 	defaults config.AgentDefaults,
 	mode config.DelegationMode,
+	selfAssignmentExempt bool,
 ) func(ctx context.Context, targetAgentID string) *tools.DelegationDenial {
 	globalDepthCap := defaults.SubTurn.MaxDepth
 
 	return func(ctx context.Context, targetAgentID string) *tools.DelegationDenial {
-		// Self-assignment (target == caller) is NOT delegation — an agent
-		// creating/reassigning a task to itself does not consult the graph.
-		if targetAgentID == currentAgentID {
+		// Self-assignment (target == caller) is NOT delegation ONLY for the task
+		// tools (create_task / update_task reassigning a task to its existing
+		// owner). For the delegate tool selfAssignmentExempt is false and this
+		// carve-out is skipped, so a self-targeted delegate() falls through to the
+		// normal graph lookup below and is denied (no self-edge can exist).
+		if selfAssignmentExempt && targetAgentID == currentAgentID {
 			return nil
 		}
 
@@ -2230,7 +2254,10 @@ func (al *AgentLoop) NewSysagentDelegationDeny() func(ctx context.Context, calle
 		if cfg := al.GetConfig(); cfg != nil {
 			defaults = cfg.Agents.Defaults
 		}
-		gate := buildDelegationDenyChecker(callerAgentID, defaults, config.DelegationModeTask)
+		// selfAssignmentExempt=true: these are the cross-workspace TASK tools
+		// (create_task_in_workspace / update_task_in_workspace) — a self-target is a
+		// no-op task reassignment, not delegation (also short-circuited above).
+		gate := buildDelegationDenyChecker(callerAgentID, defaults, config.DelegationModeTask, true)
 		return gate(ctx, targetAgentID)
 	}
 }
