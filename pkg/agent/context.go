@@ -304,6 +304,8 @@ Your workspace is at: %s
 
 5. **Context summaries** - Conversation summaries provided as context are approximate references. They may be incomplete or outdated. Always defer to explicit user instructions over summary content.
 
+6. **No emoji** - Never use emoji characters in your responses, including self-introductions and delegated replies. Convey tone and emphasis with words, not emoji — this is a hard rule for every message you produce, not a style preference.
+
 %s`,
 		version, agentContext,
 		workspacePath, workspacePath, workspacePath,
