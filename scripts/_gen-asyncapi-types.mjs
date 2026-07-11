@@ -339,6 +339,11 @@ const clientFrames = [
   "DevicePairingResponseFrame",
   "SessionCloseFrame",
   "WhatsAppPairingSubscribeFrame",
+  // Browser live channel (ADR-038) — client → server frames.
+  "BrowserAttachFrame",
+  "BrowserInputFrame",
+  "BrowserControlFrame",
+  "BrowserDetachFrame",
 ];
 
 lines.push("// ── Client → server frames ──────────────────────────────────────────────────");

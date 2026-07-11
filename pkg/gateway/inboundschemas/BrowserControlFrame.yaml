@@ -1,0 +1,19 @@
+title: BrowserControlFrame
+description: >
+  Client → server. Request to take or release interactive control of the live
+  browser. While a viewer holds control, the agent's own browser tools defer
+  (cooperative turn-coordination, ADR-038 D6).
+type: object
+required:
+  - type
+  - action
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: browser_control
+  action:
+    type: string
+    enum:
+      - take
+      - release

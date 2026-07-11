@@ -1,0 +1,16 @@
+title: BrowserDetachFrame
+description: >
+  Client → server. Detach this viewer from the live browser; the server stops the
+  screencast when the last viewer detaches. Sent when the panel closes. See ADR-038.
+type: object
+required:
+  - type
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: browser_detach
+  session_id:
+    type: string
+    maxLength: 128
+    description: Optional session id to detach from (defaults to the attached one).

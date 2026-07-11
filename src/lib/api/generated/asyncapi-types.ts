@@ -38,7 +38,13 @@ export type WsFrameType =
   | "device_pairing_request"
   | "whatsapp_pairing"
   | "whatsapp_pairing_subscribe"
-  | "notification";
+  | "notification"
+  | "browser_attach"
+  | "browser_input"
+  | "browser_control"
+  | "browser_detach"
+  | "browser_screencast"
+  | "browser_status";
 
 // ── Frame payload types ─────────────────────────────────────────────────────
 
@@ -364,6 +370,57 @@ export interface NotificationFrame {
   agent_id?: string;
 }
 
+export interface BrowserAttachFrame {
+  type: "browser_attach";
+  session_id: string;
+  agent_id: string;
+}
+
+export interface BrowserInputFrame {
+  type: "browser_input";
+  kind: "mouse_move" | "mouse_down" | "mouse_up" | "wheel" | "key_down" | "key_up" | "text";
+  x?: number;
+  y?: number;
+  button?: "none" | "left" | "middle" | "right" | "back" | "forward";
+  delta_x?: number;
+  delta_y?: number;
+  key?: string;
+  code?: string;
+  text?: string;
+  modifiers?: number;
+}
+
+export interface BrowserControlFrame {
+  type: "browser_control";
+  action: "take" | "release";
+}
+
+export interface BrowserDetachFrame {
+  type: "browser_detach";
+  session_id?: string;
+}
+
+export interface BrowserScreencastFrame {
+  type: "browser_screencast";
+  session_id: string;
+  seq: number;
+  data: string;
+  width: number;
+  height: number;
+  page_scale?: number;
+  offset_top?: number;
+  scroll_offset_x?: number;
+  scroll_offset_y?: number;
+}
+
+export interface BrowserStatusFrame {
+  type: "browser_status";
+  state: "attached" | "idle" | "controlling" | "released" | "detached" | "error";
+  message?: string;
+  controller?: string;
+  session_id?: string;
+}
+
 // ── Union of all WS frames (discriminated by the `type` field) ──────────────
 
 export type WsFrame =
@@ -398,7 +455,13 @@ export type WsFrame =
   | WhatsAppPairingFrame
   | SessionCloseFrame
   | WhatsAppPairingSubscribeFrame
-  | NotificationFrame;
+  | NotificationFrame
+  | BrowserAttachFrame
+  | BrowserInputFrame
+  | BrowserControlFrame
+  | BrowserDetachFrame
+  | BrowserScreencastFrame
+  | BrowserStatusFrame;
 
 // ── Client → server frames ──────────────────────────────────────────────────
 
@@ -410,12 +473,16 @@ export type ClientFrame =
   | AttachSessionFrame
   | DevicePairingResponseFrame
   | SessionCloseFrame
-  | WhatsAppPairingSubscribeFrame;
+  | WhatsAppPairingSubscribeFrame
+  | BrowserAttachFrame
+  | BrowserInputFrame
+  | BrowserControlFrame
+  | BrowserDetachFrame;
 
 // ── ClientFrameTypes constant — generated from spec, not hand-written ─────────
 // Import this in ws.ts to build CLIENT_FRAME_TYPES set. Never edit directly.
 
-export const ClientFrameTypes = ["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "whatsapp_pairing_subscribe"] as const
+export const ClientFrameTypes = ["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "whatsapp_pairing_subscribe", "browser_attach", "browser_input", "browser_control", "browser_detach"] as const
 
 // ── Server → client frames ──────────────────────────────────────────────────
 
@@ -443,4 +510,6 @@ export type ServerFrame =
   | SessionCloseAckFrame
   | DevicePairingRequestFrame
   | WhatsAppPairingFrame
-  | NotificationFrame;
+  | NotificationFrame
+  | BrowserScreencastFrame
+  | BrowserStatusFrame;

@@ -37,6 +37,64 @@ type AuthFrame struct {
 	Type  string `json:"type"`
 }
 
+// BrowserAttachFrame — Client → server. Binds this browser-live WebSocket connection to a session's browser and starts the screencast. session_id selects the tab (the agent's default browser session); agent_id selects which agent's BrowserManager the live view attaches to.
+type BrowserAttachFrame struct {
+	AgentId   string `json:"agent_id"`
+	SessionId string `json:"session_id"`
+	Type      string `json:"type"`
+}
+
+// BrowserControlFrame — Client → server. Take or release interactive control of the live browser. While a viewer holds control, the agent's own browser tools defer (cooperative turn-coordination, ADR-038 D6).
+type BrowserControlFrame struct {
+	Action string `json:"action"`
+	Type   string `json:"type"`
+}
+
+// BrowserDetachFrame — Client → server. Detach this viewer from the live browser; the server stops the screencast when the last viewer detaches. Sent when the panel closes.
+type BrowserDetachFrame struct {
+	SessionId *string `json:"session_id,omitempty"`
+	Type      string  `json:"type"`
+}
+
+// BrowserInputFrame — Client → server. A viewer input event to inject into the live browser via CDP Input.dispatch*. Only honoured while the viewer holds control (browser_control action=take). Coordinates are device (CSS) pixels of the screencast frame.
+type BrowserInputFrame struct {
+	Button    *string  `json:"button,omitempty"`
+	Code      *string  `json:"code,omitempty"`
+	DeltaX    *float64 `json:"delta_x,omitempty"`
+	DeltaY    *float64 `json:"delta_y,omitempty"`
+	Key       *string  `json:"key,omitempty"`
+	Kind      string   `json:"kind"`
+	Modifiers *int     `json:"modifiers,omitempty"`
+	Text      *string  `json:"text,omitempty"`
+	Type      string   `json:"type"`
+	X         *float64 `json:"x,omitempty"`
+	Y         *float64 `json:"y,omitempty"`
+}
+
+// BrowserScreencastFrame — Server → client. One CDP screencast frame (a JPEG snapshot of the live browser tab) plus the metadata needed to map viewer input coordinates back to the page. Screencast is repaint-driven, not fixed-FPS.
+type BrowserScreencastFrame struct {
+	// Base64-encoded JPEG image (no data URI prefix).
+	Data          string   `json:"data"`
+	Height        int      `json:"height"`
+	OffsetTop     *float64 `json:"offset_top,omitempty"`
+	PageScale     *float64 `json:"page_scale,omitempty"`
+	ScrollOffsetX *float64 `json:"scroll_offset_x,omitempty"`
+	ScrollOffsetY *float64 `json:"scroll_offset_y,omitempty"`
+	Seq           int      `json:"seq"`
+	SessionId     string   `json:"session_id"`
+	Type          string   `json:"type"`
+	Width         int      `json:"width"`
+}
+
+// BrowserStatusFrame — Server → client. Lifecycle / control status for the live browser connection. state=controlling means this viewer holds interactive control; released means control was dropped; error carries a human-readable message.
+type BrowserStatusFrame struct {
+	Controller *string `json:"controller,omitempty"`
+	Message    *string `json:"message,omitempty"`
+	SessionId  *string `json:"session_id,omitempty"`
+	State      string  `json:"state"`
+	Type       string  `json:"type"`
+}
+
 // CancelFrame — Client → server cancel in-progress turn.
 type CancelFrame struct {
 	SessionId string `json:"session_id"`
@@ -418,4 +476,10 @@ const (
 	WsFrameTypeWhatsappPairing          WsFrameType = "whatsapp_pairing"
 	WsFrameTypeWhatsappPairingSubscribe WsFrameType = "whatsapp_pairing_subscribe"
 	WsFrameTypeNotification             WsFrameType = "notification"
+	WsFrameTypeBrowserAttach            WsFrameType = "browser_attach"
+	WsFrameTypeBrowserInput             WsFrameType = "browser_input"
+	WsFrameTypeBrowserControl           WsFrameType = "browser_control"
+	WsFrameTypeBrowserDetach            WsFrameType = "browser_detach"
+	WsFrameTypeBrowserScreencast        WsFrameType = "browser_screencast"
+	WsFrameTypeBrowserStatus            WsFrameType = "browser_status"
 )

@@ -1,0 +1,63 @@
+title: BrowserInputFrame
+description: >
+  Client → server. A viewer input event to inject into the live browser via CDP
+  Input.dispatch*. Only honoured while the viewer holds control (browser_control
+  action=take). Coordinates are in device (CSS) pixels of the screencast frame.
+  See ADR-038.
+type: object
+required:
+  - type
+  - kind
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: browser_input
+  kind:
+    type: string
+    enum:
+      - mouse_move
+      - mouse_down
+      - mouse_up
+      - wheel
+      - key_down
+      - key_up
+      - text
+  x:
+    type: number
+    description: Device (CSS) x for mouse/wheel events.
+  y:
+    type: number
+    description: Device (CSS) y for mouse/wheel events.
+  button:
+    type: string
+    enum:
+      - none
+      - left
+      - middle
+      - right
+      - back
+      - forward
+  delta_x:
+    type: number
+    description: Wheel delta X (wheel kind).
+  delta_y:
+    type: number
+    description: Wheel delta Y (wheel kind).
+  key:
+    type: string
+    maxLength: 64
+    description: DOM key value (key_down/key_up), e.g. "Enter", "a".
+  code:
+    type: string
+    maxLength: 64
+    description: DOM code (key_down/key_up), e.g. "Enter", "KeyA".
+  text:
+    type: string
+    maxLength: 8192
+    description: Text to insert (text kind) or the character for a key event.
+  modifiers:
+    type: integer
+    minimum: 0
+    maximum: 15
+    description: CDP modifier bitmask — Alt=1, Ctrl=2, Meta=4, Shift=8.

@@ -7140,7 +7140,7 @@ export function createApiClient(baseUrl: string, options?: ZodiosOptions) {
 // Do not edit directly — re-run: node scripts/_gen-asyncapi-types.mjs
 // These extend the REST schemas above with all WS frame types.
 
-export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "subagent_start", "subagent_end", "task_status_changed", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification"]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "subagent_start", "subagent_end", "task_status_changed", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_screencast", "browser_status"]);
 
 export const AuthFrame = z
   .object({
@@ -7554,6 +7554,69 @@ export const NotificationFrame = z
   })
   .strict();
 
+export const BrowserAttachFrame = z
+  .object({
+    type: z.literal("browser_attach"),
+    session_id: z.string().min(1).max(128),
+    agent_id: z.string().min(1).max(128),
+  })
+  .strict();
+
+export const BrowserInputFrame = z
+  .object({
+    type: z.literal("browser_input"),
+    kind: z.enum(["mouse_move", "mouse_down", "mouse_up", "wheel", "key_down", "key_up", "text"]),
+    x: z.number().optional(),
+    y: z.number().optional(),
+    button: z.enum(["none", "left", "middle", "right", "back", "forward"]).optional(),
+    delta_x: z.number().optional(),
+    delta_y: z.number().optional(),
+    key: z.string().max(64).optional(),
+    code: z.string().max(64).optional(),
+    text: z.string().max(8192).optional(),
+    modifiers: z.number().int().min(0).max(15).optional(),
+  })
+  .strict();
+
+export const BrowserControlFrame = z
+  .object({
+    type: z.literal("browser_control"),
+    action: z.enum(["take", "release"]),
+  })
+  .strict();
+
+export const BrowserDetachFrame = z
+  .object({
+    type: z.literal("browser_detach"),
+    session_id: z.string().max(128).optional(),
+  })
+  .strict();
+
+export const BrowserScreencastFrame = z
+  .object({
+    type: z.literal("browser_screencast"),
+    session_id: z.string().min(1),
+    seq: z.number().int().min(0),
+    data: z.string().min(1),
+    width: z.number().int().min(1),
+    height: z.number().int().min(1),
+    page_scale: z.number().optional(),
+    offset_top: z.number().optional(),
+    scroll_offset_x: z.number().optional(),
+    scroll_offset_y: z.number().optional(),
+  })
+  .strict();
+
+export const BrowserStatusFrame = z
+  .object({
+    type: z.literal("browser_status"),
+    state: z.enum(["attached", "idle", "controlling", "released", "detached", "error"]),
+    message: z.string().max(512).optional(),
+    controller: z.string().max(128).optional(),
+    session_id: z.string().optional(),
+  })
+  .strict();
+
 // ── WS frame discriminated union ─────────────────────────────────────────────
 
 export const WsFrame = z.discriminatedUnion("type", [
@@ -7589,6 +7652,12 @@ export const WsFrame = z.discriminatedUnion("type", [
   SessionCloseFrame,
   WhatsAppPairingSubscribeFrame,
   NotificationFrame,
+  BrowserAttachFrame,
+  BrowserInputFrame,
+  BrowserControlFrame,
+  BrowserDetachFrame,
+  BrowserScreencastFrame,
+  BrowserStatusFrame,
 ]);
 
 export type WsFrameType = z.infer<typeof WsFrameType>;

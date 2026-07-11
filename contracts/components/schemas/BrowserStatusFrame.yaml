@@ -1,0 +1,32 @@
+title: BrowserStatusFrame
+description: >
+  Server → client. Lifecycle / control status for the live browser connection.
+  state=controlling means this viewer holds interactive control; released means
+  control was dropped; error carries a human-readable message. See ADR-038.
+type: object
+required:
+  - type
+  - state
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: browser_status
+  state:
+    type: string
+    enum:
+      - attached
+      - idle
+      - controlling
+      - released
+      - detached
+      - error
+  message:
+    type: string
+    maxLength: 512
+  controller:
+    type: string
+    maxLength: 128
+    description: Identifier of the viewer currently holding control, if any.
+  session_id:
+    type: string
