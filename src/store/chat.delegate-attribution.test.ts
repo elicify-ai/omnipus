@@ -1,11 +1,11 @@
 // Regression test for the delegator/delegate speaker-misattribution bug found in
-// live UAT (personas "Dana" and "Alex").
+// live UAT.
 //
 // Symptom (two manifestations of the same root cause):
-//   1. Persisted (Dana, D-B1): the delegator's (Jim's) own pre-delegate reasoning
+//   1. Persisted: the delegator's (Jim's) own pre-delegate reasoning
 //      text was consistently labeled with the DELEGATE's ("Worker") name/avatar in
 //      the persisted chat bubble.
-//   2. Live-only, self-healing (Alex): mid-stream, Jim's pre-delegate reasoning was
+//   2. Live-only, self-healing: mid-stream, Jim's pre-delegate reasoning was
 //      transiently labeled with the delegate's ("Researcher") name for ~2s (avatar
 //      stayed Jim's, since AssistantMessageAvatar reads session-level activeAgentId,
 //      not the per-message agentId) before self-correcting once Jim's own turn
@@ -21,9 +21,9 @@
 // unconditionally relabeled the WHOLE bubble, including the delegator's own
 // already-rendered text, as the delegate's. If the delegator's turn later
 // resumes (its own further tokens re-stamp the bubble back), the mislabeling
-// self-heals before the turn finalizes (Alex's case); if the delegate's
+// self-heals before the turn finalizes (the live-only case); if the delegate's
 // contribution is the last writer before the bubble closes, the mislabeling
-// survives into the persisted transcript (Dana's case).
+// survives into the persisted transcript (the persisted case).
 //
 // Fix: treat a bubble/frame agent_id mismatch as a "new producer segment"
 // boundary — exactly like the pre-existing closed-bubble segment boundary — so

@@ -1043,7 +1043,7 @@ describe('ChatStore_ReplaySequence_MatchesLiveSequence', () => {
     const liveContent = liveAssistant!.content
     // After done, tool calls are baked into message.tool_calls and live map is cleared.
     const liveBakedToolCalls = liveAssistant!.tool_calls ?? []
-    // Live-UAT regression fix (persona "Dana"): a tool call starting while the
+    // Live-UAT regression fix: a tool call starting while the
     // bubble still holds text is a new-logical-unit boundary — the next token
     // gets a paragraph break instead of gluing directly onto the trailing
     // text (previously 'AB' with zero separator, matching the exact bug
@@ -1130,6 +1130,108 @@ describe('ChatStore_ReplaySequence_MatchesLiveSequence', () => {
     expect(replayAssistant!.isStreaming).toBe(false)
     // Live and replay both settle identically after done
     expect(replayAssistant!.isStreaming).toBe(liveAssistant!.isStreaming)
+  })
+})
+
+// TDD row 18b: ChatStore_ReplaySequence_InterleavedTurn_TwoFrames
+// Traces to: sprint-i-historical-replay-fidelity-spec.md FR-I-010
+//
+// This test PINS DOWN (documents), but does NOT fix, a pre-existing structural
+// divergence between live and reload rendering of an interleaved
+// (narration -> tool call -> narration) turn. It is NOT a regression from this
+// fix wave's pendingTextBoundary change — the live-side bubble count (one) is
+// unchanged by that fix; only the reload-side behavior below was newly traced
+// while writing this fix wave's justification for weakening the whitespace
+// comparison in ChatStore_ReplaySequence_MatchesLiveSequence above. Fixing the
+// divergence itself (either the backend's transcript-entry-splitting behavior
+// or the frontend's replay-frame-merging logic) is a larger, separate change
+// that needs its own deliberate design decision — tracked as a follow-up, out
+// of scope here.
+//
+// Why two frames: for a REAL interleaved turn, the backend persists the
+// pre-tool-call narration as its OWN transcript entry, separate from the
+// post-tool-call narration's entry (pkg/agent/turn.go's
+// appendIntermediateAssistantTranscript, the pre-existing "Bug #416" fix).
+// pkg/gateway/replay.go emits ONE replay_message frame per non-empty-content
+// entry, so a real interleaved turn replays as TWO SEPARATE replay_message
+// frames ("A" then "B") — not the single merged frame the synthetic fixture
+// in ChatStore_ReplaySequence_MatchesLiveSequence above uses.
+//
+// What the reducer actually does with two frames (traced below): the first
+// frame creates a new bubble ("A"). The second frame's "coalesce into the
+// trailing empty bubble" check fails — the first bubble already holds
+// content — so it falls through and creates a SECOND, separate bubble ("B").
+// Net result: live rendering of this turn produces ONE bubble ("A\n\nB", via
+// the pendingTextBoundary paragraph-break fix above); a real reload of the
+// SAME turn produces TWO bubbles ("A" and "B").
+describe('ChatStore_ReplaySequence_InterleavedTurn_TwoFrames (documents a known live/reload divergence — not fixed by this test)', () => {
+  it('two separate replay_message frames (matching real interleaved-turn backend output) produce two bubbles, not one merged bubble', () => {
+    act(() => { useChatStore.getState().resetSession() })
+
+    // Entry 1: pre-tool-call narration, persisted as its own transcript entry
+    // with the tool call attached to it (mirrors appendIntermediateAssistantTranscript).
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'replay_message',
+        role: 'assistant',
+        content: 'A',
+        id: 'entry-1',
+        turn_id: 'turn-interleaved-1',
+        session_id: TEST_SESSION_ID,
+      })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'tool_call_start',
+        call_id: 'tc_interleaved_1',
+        tool: 'shell',
+        params: { cmd: 'echo hi' },
+        session_id: TEST_SESSION_ID,
+      })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'tool_call_result',
+        call_id: 'tc_interleaved_1',
+        tool: 'shell',
+        result: { stdout: 'hi\n' },
+        status: 'success',
+        duration_ms: 42,
+        session_id: TEST_SESSION_ID,
+      })
+    })
+    // Entry 2: post-tool-call narration — its OWN separate transcript entry,
+    // same turn_id as entry 1 (both stamped from the same ts.turnID).
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'replay_message',
+        role: 'assistant',
+        content: 'B',
+        id: 'entry-2',
+        turn_id: 'turn-interleaved-1',
+        session_id: TEST_SESSION_ID,
+      })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'done', session_id: TEST_SESSION_ID })
+    })
+
+    const state = useChatStore.getState()
+    const assistantMsgs = state.messages.filter((m) => m.role === 'assistant')
+
+    // THE PIN: current behavior is TWO separate bubbles, not the single
+    // "A\n\nB" bubble the live path produces for the same underlying turn.
+    expect(assistantMsgs).toHaveLength(2)
+    expect(assistantMsgs[0].content).toBe('A')
+    expect(assistantMsgs[1].content).toBe('B')
+
+    // The tool call lands on the FIRST bubble — it was attached to entry 1
+    // before entry 2's replay_message frame ever arrived — not the second.
+    const firstToolCalls = assistantMsgs[0].tool_calls ?? []
+    const secondToolCalls = assistantMsgs[1].tool_calls ?? []
+    expect(firstToolCalls).toHaveLength(1)
+    expect(firstToolCalls[0].tool).toBe('shell')
+    expect(secondToolCalls).toHaveLength(0)
   })
 })
 
