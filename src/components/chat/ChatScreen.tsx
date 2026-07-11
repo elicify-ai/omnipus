@@ -56,7 +56,7 @@ import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import { fetchAgents, fetchSessionMessages, fetchCommands, fetchSkills } from '@/lib/api'
-import type { SlashCommand, Skill } from '@/lib/api'
+import type { SlashCommand, Skill, Agent } from '@/lib/api'
 import { AttachmentCard, AttachmentRemoveX, useFilePreview } from './AttachmentCard'
 import { cn } from '@/lib/utils'
 import { HistoricalMessageMarkdown } from './historical-markdown'
@@ -375,11 +375,7 @@ function SubagentSpansRenderer() {
   )
 }
 
-function AssistantMessageAvatar() {
-  const activeAgentId = useSessionStore((s) => s.activeAgentId)
-  const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
-  const agent = agents.find((a) => a.id === activeAgentId)
-
+function AssistantMessageAvatar({ agent }: { agent?: Agent }) {
   return (
     <div
       className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-[var(--color-secondary)]"
@@ -979,7 +975,7 @@ function AssistantMessage() {
       data-status={message.status?.type ?? 'complete'}
       className="group flex gap-3 px-4 py-3"
     >
-      <AssistantMessageAvatar />
+      <AssistantMessageAvatar agent={agent} />
       <div className="flex flex-col gap-1 max-w-[85%] min-w-0 flex-1">
         {agentDisplayName && (
           <span data-testid="agent-label" className="text-[10px] text-[var(--color-muted)]">{agentDisplayName}</span>
