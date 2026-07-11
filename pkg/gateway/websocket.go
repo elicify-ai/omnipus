@@ -222,7 +222,9 @@ type WSHandler struct {
 
 	// streamOwners tracks, per chatID, which turn currently "owns" live
 	// TokenFrame delivery to that chat connection. Keys are chatID (string);
-	// values are the owning turnID (string).
+	// values are streamOwnerClaim (owning turnID + the time it claimed the
+	// slot, the latter backing the stale-claim reclaim safety net described
+	// below).
 	//
 	// Root cause this closes (live UAT bug, persona "Alex"): TokenFrame and
 	// DoneFrame (contracts/asyncapi.yaml) carry only session_id (+ an
@@ -242,17 +244,36 @@ type WSHandler struct {
 	// caches and replays; each streamer's own transcript entry, keyed by its
 	// own TurnID, was already correctly isolated before this fix).
 	//
-	// claimStreamOwnership/wsStreamer.Update/wsStreamer.Finalize implement
-	// the gate: the first streamer to claim a chatID's slot for its turnID
-	// streams live as before (zero behavior change for the common
-	// single-active-stream case); any OTHER concurrent turnID's streamer
-	// still accumulates every token into its own private
+	// claimStreamOwnership/wsStreamer.Update/wsStreamer.ReleaseStreamOwnership
+	// implement the gate: the first streamer to claim a chatID's slot for
+	// its turnID streams live as before (zero behavior change for the
+	// common single-active-stream case); any OTHER concurrent turnID's
+	// streamer still accumulates every token into its own private
 	// wsStreamer.accumulated (so its Finalize-written transcript entry stays
 	// fully correct) but withholds the live TokenFrame send until the owner
-	// releases its claim (Finalize, called exactly once per turn via
-	// turnState's deferred finalizeStreamer) — so two concurrent streams can
-	// never interleave on the wire, regardless of what the frontend does
-	// with the frames it receives.
+	// releases its claim — so two concurrent streams can never interleave
+	// on the wire, regardless of what the frontend does with the frames it
+	// receives.
+	//
+	// Release points: wsStreamer.Finalize (the normal, once-per-turn path
+	// via turnState's deferred finalizeStreamer), wsStreamer.Cancel (no
+	// production call sites today, kept as defensive symmetry), and
+	// turnState.finalizeStreamer's B4 abandoned-turn early return
+	// (pkg/agent/turn.go) — which deliberately skips the rest of Finalize
+	// (no done frame, no transcript write for a stuck goroutine) but MUST
+	// still release any ownership claim its streamer held, via the
+	// streamOwnershipReleaser optional interface. Found missing in a
+	// 7-reviewer gate (architect/silent-failure-hunter/type-design-analyzer/
+	// pr-test-analyzer unanimous): a background delegate that became the
+	// live owner for a chatID and was later MarkAbandoned()'d by
+	// cancel.go's PHASE C left that chatID's entry pointing at the dead
+	// turn's ID forever — no other release path touched it, permanently
+	// shadowing every later turn on the same chat. claimStreamOwnership's
+	// staleness check (streamOwnershipStaleAfter) is the backstop for any
+	// FUTURE bug in this family: an unreleased claim older than the
+	// threshold can be force-reclaimed by a new claimant, so a leak
+	// degrades to "briefly wrong attribution" instead of "permanently mute
+	// chat".
 	streamOwners sync.Map
 
 	upgrader websocket.Upgrader
@@ -1154,8 +1175,8 @@ func (h *WSHandler) handleChatMessage(
 			// Team tab AFTER the session's first bind would never be consulted
 			// by resolveEffectiveWorkspaceID (pkg/agent/loop.go), which reads
 			// this same session meta fresh every turn — so the UI's "Saved just
-			// now" was genuine (see TestRepro_AddWorkerThenWireEdge) but the
-			// running session kept enforcing/advertising delegation against its
+			// now" was genuine (see TestWorkspaceDelegation_EdgeWiredViaTeamTabPersistsForLiveSession)
+			// but the running session kept enforcing/advertising delegation against its
 			// ORIGINAL workspace until the operator started a brand new session.
 			// Only skip the rewrite when this message carries no workspace_id at
 			// all (workspaceID == "") — an absent value must never blank out an
@@ -2597,18 +2618,80 @@ type wsStreamer struct {
 	isShadowStream bool
 }
 
+// streamOwnerClaim is the value stored in WSHandler.streamOwners: which turn
+// holds a chatID's live-stream slot, and when it claimed it. claimedAt backs
+// claimStreamOwnership's stale-claim force-reclaim safety net.
+type streamOwnerClaim struct {
+	turnID    string
+	claimedAt time.Time
+}
+
+// streamOwnershipStaleAfter bounds how long an unreleased live-stream
+// ownership claim is honored before a new claimant on the same chatID may
+// force-reclaim it. Deliberately generous — every real release path
+// (Finalize, Cancel, the abandoned-turn early return) frees the claim
+// immediately, well within this window — this exists purely as a backstop
+// against a future bug in this family leaving a claim permanently
+// unreleased, so such a leak degrades to "briefly wrong attribution" rather
+// than "permanently mute chat" (see WSHandler.streamOwners' doc comment).
+const streamOwnershipStaleAfter = 10 * time.Minute
+
 // claimStreamOwnership attempts to claim (or re-confirm) chatID's live
 // TokenFrame-delivery slot in owners for turnID. See WSHandler.streamOwners'
 // doc comment for the full rationale. Returns true when turnID owns the slot
-// — either because it just claimed an empty slot, or because it already
-// owned it (a single turn typically opens several sequential wsStreamer
-// instances across its own tool-calling iterations — see turnState.
-// lastStreamer/finalizeStreamer in pkg/agent/turn.go — and each must see
-// itself as "still the owner", not a foreign claimant). Returns false only
-// when a DIFFERENT, still-active turnID already owns the slot.
+// — either because it just claimed an empty slot, because it already owned
+// it (a single turn typically opens several sequential wsStreamer instances
+// across its own tool-calling iterations — see turnState.lastStreamer/
+// finalizeStreamer in pkg/agent/turn.go — and each must see itself as "still
+// the owner", not a foreign claimant), or because the existing claim is
+// older than streamOwnershipStaleAfter and was force-reclaimed. Returns
+// false only when a DIFFERENT, still-fresh turnID already owns the slot.
 func claimStreamOwnership(owners *sync.Map, chatID, turnID string) bool {
-	actual, _ := owners.LoadOrStore(chatID, turnID)
-	return actual.(string) == turnID
+	now := time.Now()
+	newClaim := streamOwnerClaim{turnID: turnID, claimedAt: now}
+	actual, loaded := owners.LoadOrStore(chatID, newClaim)
+	for {
+		if !loaded {
+			return true
+		}
+		claim, ok := actual.(streamOwnerClaim)
+		if !ok || claim.turnID == turnID {
+			return true
+		}
+		if now.Sub(claim.claimedAt) < streamOwnershipStaleAfter {
+			return false
+		}
+		// The existing claim is stale — force-reclaim it. CompareAndSwap only
+		// succeeds if the entry is still exactly what we last observed, so a
+		// concurrent claimant racing us here safely retries instead of both
+		// believing they own the slot.
+		if owners.CompareAndSwap(chatID, actual, newClaim) {
+			return true
+		}
+		actual, loaded = owners.Load(chatID)
+	}
+}
+
+// releaseStreamOwnershipClaim releases turnID's live-stream ownership claim
+// for chatID in owners, if it currently holds it. A no-op when turnID never
+// held the claim (e.g. a shadow stream, or a turn that never called
+// Update()) or when it has already been released or force-reclaimed by a
+// stale-claim takeover. Load-then-CompareAndDelete rather than a bare delete
+// so a concurrent stale-claim reclaim racing this release can never clobber
+// a different, newer claimant's entry.
+func releaseStreamOwnershipClaim(owners *sync.Map, chatID, turnID string) {
+	if turnID == "" {
+		return
+	}
+	actual, ok := owners.Load(chatID)
+	if !ok {
+		return
+	}
+	claim, ok := actual.(streamOwnerClaim)
+	if !ok || claim.turnID != turnID {
+		return
+	}
+	owners.CompareAndDelete(chatID, actual)
 }
 
 // SetProducedModel stamps the model string that produced this streamed
@@ -2856,15 +2939,15 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 
 	// Release this turn's live-stream ownership claim (if held) so a
 	// different, still-running turn on the same chatID can become the live
-	// owner (see WSHandler.streamOwners' doc comment). Finalize is called
-	// exactly once per turn via turnState's deferred finalizeStreamer
-	// (pkg/agent/turn.go), so this is the single, guaranteed release point —
-	// safe/no-op when this stream was never the owner (a shadow stream) or
-	// never claimed at all (e.g. an immediate tool-only round with no
-	// narration text, so Update() was never called).
-	if turnID != "" && s.channel != nil && s.channel.wsHandler != nil {
-		s.channel.wsHandler.streamOwners.CompareAndDelete(s.chatID, turnID)
-	}
+	// owner (see WSHandler.streamOwners' doc comment). Finalize is the
+	// normal, once-per-turn release point via turnState's deferred
+	// finalizeStreamer (pkg/agent/turn.go) — safe/no-op when this stream was
+	// never the owner (a shadow stream) or never claimed at all (e.g. an
+	// immediate tool-only round with no narration text, so Update() was
+	// never called). See ReleaseStreamOwnership for the other release
+	// points (Cancel, and finalizeStreamer's B4 abandoned-turn path, which
+	// deliberately skips the rest of this method).
+	s.ReleaseStreamOwnership()
 
 	doneStats.Tokens = &tokensF
 	doneStats.Cost = &costF
@@ -2939,11 +3022,34 @@ func (s *wsStreamer) Cancel(_ context.Context) {
 	// Finalize, never Cancel — see turn.go), but release the ownership
 	// claim here too so a future caller of Cancel cannot leak the chatID's
 	// live-stream slot forever.
+	s.ReleaseStreamOwnership()
+	s.conn.close()
+}
+
+// ReleaseStreamOwnership releases this streamer's live-stream ownership
+// claim for its chatID (if held), allowing a different, still-running turn
+// on the same chatID to become the live owner (see WSHandler.streamOwners'
+// doc comment). Safe to call multiple times, concurrently, or when the claim
+// was never held — releaseStreamOwnershipClaim only deletes an entry that
+// still matches this exact turnID.
+//
+// This is the single implementation shared by Finalize, Cancel, and — via
+// the streamOwnershipReleaser optional interface pkg/agent's finalizeStreamer
+// type-asserts for — the B4 abandoned-turn early return (pkg/agent/turn.go).
+// That early return deliberately skips the rest of Finalize (no done frame,
+// no transcript write, so a stuck goroutine cannot send a spurious signal to
+// the frontend) but was found, in a 7-reviewer gate, to also skip releasing
+// this claim: a background delegate that became the live owner for a chatID
+// and was later MarkAbandoned()'d by cancel.go's PHASE C left that chatID
+// permanently shadowed, since Finalize (the only other release point;
+// Cancel has no production call sites) never ran. Exported so pkg/agent can
+// reach it through bus.Streamer's optional-interface pattern without either
+// package importing the other's concrete type.
+func (s *wsStreamer) ReleaseStreamOwnership() {
 	s.statsMu.Lock()
 	turnID := s.turnID
 	s.statsMu.Unlock()
-	if turnID != "" && s.channel != nil && s.channel.wsHandler != nil {
-		s.channel.wsHandler.streamOwners.CompareAndDelete(s.chatID, turnID)
+	if s.channel != nil && s.channel.wsHandler != nil {
+		releaseStreamOwnershipClaim(&s.channel.wsHandler.streamOwners, s.chatID, turnID)
 	}
-	s.conn.close()
 }

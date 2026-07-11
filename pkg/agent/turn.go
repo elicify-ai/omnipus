@@ -628,14 +628,42 @@ func (ts *turnState) SetFinalContent(content string) {
 	ts.mu.Unlock()
 }
 
+// streamOwnershipReleaser is an optional interface a Streamer may implement
+// to release a live-stream ownership claim (see gateway's
+// WSHandler.streamOwners doc comment) without performing the rest of
+// Finalize's work — sending the done frame, persisting the transcript
+// entry. finalizeStreamer's B4 abandoned-turn early return deliberately
+// skips the full Finalize call so a stuck goroutine cannot send a spurious
+// done signal to the frontend, but it must still relinquish any live-stream
+// ownership claim the streamer holds: without this, a background delegate
+// that became the live owner for a chatID and was later MarkAbandoned()'d
+// by cancel.go's PHASE C left that chatID permanently shadowed — no other
+// release path runs for an abandoned turn (Finalize never fires; there's no
+// TTL or sweep on the gateway side either). Confirmed as a critical,
+// unanimous finding across a 7-reviewer gate.
+type streamOwnershipReleaser interface {
+	ReleaseStreamOwnership()
+}
+
 func (ts *turnState) finalizeStreamer(ctx context.Context) {
 	// B4: if the turn has been abandoned, suppress the final "done" frame so
 	// a stuck goroutine cannot send a spurious done signal to the frontend.
 	if ts.abandoned.Load() {
 		abandonedWritesSuppressed.Add(1)
 		ts.mu.Lock()
+		s := ts.lastStreamer
 		ts.lastStreamer = nil
 		ts.mu.Unlock()
+		// Even though the full Finalize (done frame + transcript write) is
+		// skipped above, this streamer may already hold a live-stream
+		// ownership claim for its chatID — claimed on its first Update()
+		// call, before abandonment occurred. Release it here so a later,
+		// unrelated turn on the same chatID is not shadowed forever.
+		if s != nil {
+			if releaser, ok := s.(streamOwnershipReleaser); ok {
+				releaser.ReleaseStreamOwnership()
+			}
+		}
 		return
 	}
 	ts.mu.Lock()
