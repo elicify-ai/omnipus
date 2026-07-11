@@ -133,10 +133,9 @@ Cross-references use the `KI-n` numbering from `uat-plan-agent-features.md`.
 - **Impact:** Collapsed, the call reads just "Failed" — the user can miss *why* it was denied (trust set / mode / depth).
 - **Fix direction:** Surface the denial reason in the collapsed summary or via a toast.
 
-### 🟢 LOW — G18. No inline delegation editing in Agent Profile
-- **Where:** `src/components/agents/AgentProfile.tsx:810-840` — shows a summary + deep-links to `/agents/trust`.
-- **Impact:** All delegation edits require navigating to the trust graph (by design per Spec-3 FR-6.2) — a discoverability cost, not a functional gap.
-- **Fix direction:** Optional — allow basic edits inline, or keep the deep-link (acceptable).
+### ⚪ RESOLVED (superseded) — G18. No inline delegation editing in Agent Profile
+- **Where:** was `src/components/agents/AgentProfile.tsx` — showed a summary + deep-link to `/agents/trust`.
+- **Status:** `/agents/trust` (the global per-agent Delegation Graph screen) and the Agent Profile summary link to it were both deleted in ADR-037 — the screen edited `config.AgentConfig.DelegationPolicy`, which had been fully dead in the runtime enforcement path since 2026-06-27 (confirmed via live UAT: edits there saved successfully but had zero effect on real delegation). Delegation is now exclusively configured via a workspace's own Team tab, which this gap's premise ("delegation edits require the trust graph, by design per Spec-3 FR-6.2") no longer applies to — that spec section is itself superseded by ADR-037. No inline-editing fix is needed; the Team tab already supports direct in-place editing.
 
 ---
 
