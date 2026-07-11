@@ -636,6 +636,108 @@ func TestReplay_CompactionEntry_Skipped(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Wave 3 fix 5c — EntryTypeTurnCancelled emits a role:"turn_canceled"
+// ReplayMessageFrame; assistant entries carry turn_id.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// TestReplay_TurnCancelledEntry_EmitsReplayMessage is the core regression test
+// for fix 5c: before this fix, streamReplay had NO code path that read
+// EntryTypeTurnCancelled entries at all — a canceled turn simply vanished on
+// reload. This verifies the entry now produces a replay_message frame with
+// role="turn_canceled" and turn_id set from TranscriptEntry.TurnID (mirroring
+// what pkg/agent/cancel.go's onCancelFinish callback persists).
+//
+// Traces to: Wave 3 fix 5c (confirmed root cause: live-vs-reload divergence).
+func TestReplay_TurnCancelledEntry_EmitsReplayMessage(t *testing.T) {
+	cancelEntry := session.TranscriptEntry{
+		ID:                   "session_x_canceled",
+		Type:                 session.EntryTypeTurnCancelled,
+		TurnID:               "turn-42",
+		CancelledByUser:      "user-1",
+		CancelledByChannel:   "webchat",
+		CancelMethod:         "graceful",
+		DescendantsCancelled: []string{"child-1"},
+	}
+	entries := []session.TranscriptEntry{cancelEntry}
+
+	frames, n := runReplay(t, entries)
+
+	types := frameTypes(frames)
+	require.Equal(t, []string{"replay_message", "done"}, types,
+		"a turn_canceled entry must produce exactly one replay_message frame before done")
+	assert.Equal(t, 1, n, "turn_canceled entry counts as one content frame")
+
+	msg := findFrame(frames, "replay_message")
+	require.NotNil(t, msg)
+	assert.Equal(t, "turn_canceled", msg.Role)
+	assert.Equal(t, "turn-42", msg.TurnID, "turn_id must be sourced from TranscriptEntry.TurnID")
+	assert.NotEmpty(t, msg.Content, "content is a required field on ReplayMessageFrame — must not be empty")
+}
+
+// TestReplay_TurnCancelledEntry_NoTurnID verifies that a legacy/degenerate
+// turn_canceled entry with an empty TurnID replays without setting turn_id on
+// the wire (rather than emitting an empty string), matching the same
+// omitempty convention already used for AgentID/Model on assistant frames.
+func TestReplay_TurnCancelledEntry_NoTurnID(t *testing.T) {
+	cancelEntry := session.TranscriptEntry{
+		ID:           "session_y_canceled",
+		Type:         session.EntryTypeTurnCancelled,
+		CancelMethod: "hard",
+	}
+	entries := []session.TranscriptEntry{cancelEntry}
+
+	frames, _ := runReplay(t, entries)
+
+	msg := findFrame(frames, "replay_message")
+	require.NotNil(t, msg)
+	assert.Equal(t, "turn_canceled", msg.Role)
+	assert.Empty(t, msg.TurnID, "turn_id must be omitted when TranscriptEntry.TurnID is empty")
+}
+
+// TestReplay_AssistantEntry_CarriesTurnID verifies that an ordinary assistant
+// entry's TurnID (stamped by pkg/agent/turn.go:447,685 on every assistant
+// entry) is surfaced as turn_id on its replay_message frame — the second half
+// of fix 5c, giving the client the correlation data needed to match a later
+// turn_canceled frame to the specific assistant message it interrupted.
+func TestReplay_AssistantEntry_CarriesTurnID(t *testing.T) {
+	entries := []session.TranscriptEntry{
+		{
+			ID:      "asst-1",
+			Role:    "assistant",
+			Content: "Working on it...",
+			AgentID: "jim",
+			TurnID:  "turn-7",
+		},
+	}
+
+	frames, _ := runReplay(t, entries)
+
+	msg := findFrame(frames, "replay_message")
+	require.NotNil(t, msg)
+	assert.Equal(t, "turn-7", msg.TurnID)
+}
+
+// TestReplay_AssistantEntry_EmptyTurnID_OmitsField verifies that legacy
+// assistant entries written before turn-id stamping landed (TurnID=="") still
+// replay cleanly with no turn_id on the wire — no placeholder, no panic.
+func TestReplay_AssistantEntry_EmptyTurnID_OmitsField(t *testing.T) {
+	entries := []session.TranscriptEntry{
+		{
+			ID:      "asst-legacy",
+			Role:    "assistant",
+			Content: "Legacy entry, no turn id",
+			AgentID: "jim",
+		},
+	}
+
+	frames, _ := runReplay(t, entries)
+
+	msg := findFrame(frames, "replay_message")
+	require.NotNil(t, msg)
+	assert.Empty(t, msg.TurnID, "turn_id must be omitted for legacy entries with no TurnID")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // TDD Row 13 — TestReplay_EmptyTranscript_JustDone
 // ─────────────────────────────────────────────────────────────────────────────
 
