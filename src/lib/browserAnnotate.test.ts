@@ -1,0 +1,125 @@
+// browserAnnotate.test.ts — unit tests for the annotate-a-region-and-discuss
+// submit orchestration (ADR-039 D-B1/B2/B3): upload → best-effort inspect →
+// sendMessage. api.ts and the stores are mocked so this exercises ONLY the
+// sequencing/fallback logic, not real network/canvas — jsdom cannot
+// rasterise canvas (see media-actions.test.ts), so the cropped File is
+// supplied directly rather than produced via a real crop.
+
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { submitAnnotation } from './browserAnnotate'
+import { useSessionStore } from '@/store/session'
+import { useChatStore } from '@/store/chat'
+
+vi.mock('@/lib/api', () => ({
+  uploadFiles: vi.fn(),
+  inspectBrowserElement: vi.fn(),
+}))
+
+import { uploadFiles, inspectBrowserElement } from '@/lib/api'
+
+const mockUploadFiles = vi.mocked(uploadFiles)
+const mockInspectBrowserElement = vi.mocked(inspectBrowserElement)
+
+function makeFile(): File {
+  return new File([new Uint8Array([1, 2, 3])], 'annotation.png', { type: 'image/png' })
+}
+
+describe('submitAnnotation', () => {
+  const sendMessageSpy = vi.fn()
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    useSessionStore.setState({ activeSessionId: 'sess-1', activeAgentId: 'agent-1' })
+    useChatStore.setState({ sendMessage: sendMessageSpy })
+    mockUploadFiles.mockResolvedValue({
+      files: [
+        { name: 'annotation_abc.png', path: 'uploads/sess-1/annotation_abc.png', size: 3, content_type: 'image/png', ref: 'media://ref-1' },
+      ],
+    })
+    mockInspectBrowserElement.mockResolvedValue({ ok: false })
+  })
+
+  it('throws when there is no active session', async () => {
+    useSessionStore.setState({ activeSessionId: null, activeAgentId: null })
+    await expect(
+      submitAnnotation({ comment: 'hi', file: makeFile(), point: { x: 1, y: 1 } }),
+    ).rejects.toThrow(/no active chat session/i)
+    expect(mockUploadFiles).not.toHaveBeenCalled()
+  })
+
+  it('throws when there is no active agent', async () => {
+    useSessionStore.setState({ activeSessionId: 'sess-1', activeAgentId: null })
+    await expect(
+      submitAnnotation({ comment: 'hi', file: makeFile(), point: { x: 1, y: 1 } }),
+    ).rejects.toThrow(/no active chat session/i)
+  })
+
+  it('uploads to the active session, calls inspect at the given point, and sends with the media ref', async () => {
+    mockInspectBrowserElement.mockResolvedValue({ ok: true, tag: 'button', text: 'Submit' })
+
+    await submitAnnotation({ comment: 'What does this do?', file: makeFile(), point: { x: 42, y: 84 } })
+
+    expect(mockUploadFiles).toHaveBeenCalledWith('sess-1', [expect.any(File)])
+    expect(mockInspectBrowserElement).toHaveBeenCalledWith({
+      session_id: 'sess-1',
+      agent_id: 'agent-1',
+      x: 42,
+      y: 84,
+    })
+    expect(sendMessageSpy).toHaveBeenCalledTimes(1)
+    const [comment, opts] = sendMessageSpy.mock.calls[0]
+    expect(comment).toBe('What does this do?\n\nElement: button — Submit')
+    expect(opts.mediaRefs).toEqual(['media://ref-1'])
+    expect(opts.attachments).toEqual([
+      { type: 'image', url: '/api/v1/uploads/sess-1/annotation_abc.png', filename: 'annotation.png', contentType: 'image/png' },
+    ])
+  })
+
+  it('sends the comment unmodified when inspect resolves ok but with no text', async () => {
+    mockInspectBrowserElement.mockResolvedValue({ ok: true, tag: 'div' })
+
+    await submitAnnotation({ comment: 'Look at this', file: makeFile(), point: { x: 1, y: 2 } })
+
+    expect(sendMessageSpy).toHaveBeenCalledTimes(1)
+    expect(sendMessageSpy.mock.calls[0][0]).toBe('Look at this')
+  })
+
+  it('sends the comment unmodified when inspect resolves ok:false (best-effort, D-B3)', async () => {
+    mockInspectBrowserElement.mockResolvedValue({ ok: false, reason: 'cross-origin frame' })
+
+    await submitAnnotation({ comment: 'Look at this', file: makeFile(), point: { x: 1, y: 2 } })
+
+    expect(sendMessageSpy).toHaveBeenCalledTimes(1)
+    expect(sendMessageSpy.mock.calls[0][0]).toBe('Look at this')
+  })
+
+  it('sends the image + comment even when the inspect REQUEST itself rejects (network error)', async () => {
+    mockInspectBrowserElement.mockRejectedValue(new Error('network down'))
+
+    await submitAnnotation({ comment: 'Still works', file: makeFile(), point: { x: 1, y: 2 } })
+
+    expect(sendMessageSpy).toHaveBeenCalledTimes(1)
+    expect(sendMessageSpy.mock.calls[0][0]).toBe('Still works')
+    expect(sendMessageSpy.mock.calls[0][1].mediaRefs).toEqual(['media://ref-1'])
+  })
+
+  it('throws and never calls sendMessage when the upload fails', async () => {
+    mockUploadFiles.mockRejectedValue(new Error('upload failed'))
+
+    await expect(
+      submitAnnotation({ comment: 'hi', file: makeFile(), point: { x: 1, y: 1 } }),
+    ).rejects.toThrow('upload failed')
+    expect(sendMessageSpy).not.toHaveBeenCalled()
+  })
+
+  it('throws and never calls sendMessage when the upload response has no media ref', async () => {
+    mockUploadFiles.mockResolvedValue({
+      files: [{ name: 'annotation_abc.png', path: 'uploads/sess-1/annotation_abc.png', size: 3, content_type: 'image/png' }],
+    })
+
+    await expect(
+      submitAnnotation({ comment: 'hi', file: makeFile(), point: { x: 1, y: 1 } }),
+    ).rejects.toThrow(/no media reference/i)
+    expect(sendMessageSpy).not.toHaveBeenCalled()
+  })
+})

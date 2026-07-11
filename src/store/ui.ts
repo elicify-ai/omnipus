@@ -118,6 +118,16 @@ interface UiStore {
   browserPanel: { sessionId: string; agentId: string } | null
   openBrowserPanel: (sessionId: string, agentId: string) => void
   closeBrowserPanel: () => void
+
+  // Composer prefill bridge (ADR-039 D-A3) — "Hand to agent" in the live
+  // browser panel sets this to drop a hint into the chat composer. The panel
+  // is mounted OUTSIDE the AssistantRuntimeProvider (BrowserLivePanel is a
+  // sibling of OmnipusRuntimeProvider in AppShell.tsx), so it cannot call
+  // `composerRuntime.setText()` directly — a small bridge effect inside
+  // ChatScreen (which DOES hold the runtime's composerRuntime) watches this
+  // field, applies it, then clears it. null = no pending prefill.
+  composerPrefill: string | null
+  setComposerPrefill: (text: string | null) => void
 }
 
 /** Discriminated payload for the global media lightbox: a raster image (by URL)
@@ -202,4 +212,7 @@ export const useUiStore = create<UiStore>((set, get) => ({
   browserPanel: null,
   openBrowserPanel: (sessionId, agentId) => set({ browserPanel: { sessionId, agentId } }),
   closeBrowserPanel: () => set({ browserPanel: null }),
+
+  composerPrefill: null,
+  setComposerPrefill: (text) => set({ composerPrefill: text }),
 }))
