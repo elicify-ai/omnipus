@@ -2265,5 +2265,11 @@ components:
         controller:
           type: string
           maxLength: 128
+        controlled_by_other:
+          type: boolean
+          description: >-
+            Server-computed per-connection: true when some OTHER connection on
+            this session holds interactive control. Keeps the docked panel and
+            the pop-out window in agreement about who is driving.
         session_id:
           type: string

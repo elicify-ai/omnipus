@@ -34,5 +34,17 @@ properties:
       string under token-based or dev-mode-bypass authentication, where no
       per-user identity is resolved — an empty controller does not mean
       nobody is in control.
+  controlled_by_other:
+    type: boolean
+    description: >-
+      Server-computed, per-connection: true when some OTHER connection on this
+      same session currently holds interactive control (the server compares the
+      session's controller viewerID against THIS connection's viewerID, so it is
+      unambiguous even when `controller` display name is empty). The SPA uses
+      this to keep every viewer of a shared session (docked panel + pop-out
+      window) in agreement about who is driving — a viewer with
+      controlled_by_other=true disables its Take-control affordance and shows
+      "Someone else is driving" instead of offering control it cannot get.
+      Absent/false means control is free or held by this very connection.
   session_id:
     type: string

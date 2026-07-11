@@ -89,11 +89,13 @@ type BrowserScreencastFrame struct {
 
 // BrowserStatusFrame — Server → client. Lifecycle / control status for the live browser connection. state=controlling means this viewer holds interactive control; released means control was dropped; error carries a human-readable message.
 type BrowserStatusFrame struct {
-	Controller *string `json:"controller,omitempty"`
-	Message    *string `json:"message,omitempty"`
-	SessionId  *string `json:"session_id,omitempty"`
-	State      string  `json:"state"`
-	Type       string  `json:"type"`
+	// Server-computed per-connection: true when some OTHER connection on this session holds interactive control. Keeps the docked panel and the pop-out window in agreement about who is driving.
+	ControlledByOther *bool   `json:"controlled_by_other,omitempty"`
+	Controller        *string `json:"controller,omitempty"`
+	Message           *string `json:"message,omitempty"`
+	SessionId         *string `json:"session_id,omitempty"`
+	State             string  `json:"state"`
+	Type              string  `json:"type"`
 }
 
 // CancelFrame — Client → server cancel in-progress turn.

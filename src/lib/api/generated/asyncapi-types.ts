@@ -419,6 +419,7 @@ export interface BrowserStatusFrame {
   state: "attached" | "idle" | "controlling" | "released" | "detached" | "error";
   message?: string;
   controller?: string;
+  controlled_by_other?: boolean;
   session_id?: string;
 }
 
