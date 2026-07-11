@@ -29,6 +29,13 @@ const (
 // mouse-move stream while bounding a runaway or malicious client.
 const maxInputEventsPerSecond = 50
 
+// screencastAckTimeout bounds each Page.screencastFrameAck CDP round trip
+// issued by runAckWorker. Acks are lightweight, so this is deliberately much
+// shorter than BrowserManager.PageTimeout() — if a single ack call hangs
+// (wedged/overloaded transport), the worker recovers in bounded time and
+// moves on to the next (coalesced, latest) frame instead of getting stuck.
+const screencastAckTimeout = 5 * time.Second
+
 // LiveFrame is one CDP screencast frame plus the metadata a viewer needs to
 // map its own rendered coordinates back to CSS pixels on the page. Field set
 // mirrors generated.BrowserScreencastFrame minus session_id/seq/type, which
@@ -102,6 +109,25 @@ func newLiveViewRegistry(mgr *BrowserManager) *LiveViewRegistry {
 	return &LiveViewRegistry{mgr: mgr, views: make(map[string]*LiveView)}
 }
 
+// runCDPWithTimeout executes actions via chromedp.Run against a
+// timeout-bounded child of ctx. Every CDP round trip in this file goes
+// through this indirection (LiveView.runCDP) rather than calling
+// chromedp.Run directly, for two reasons:
+//
+//  1. Correctness: a bare chromedp.Run(tabCtx, ...) call has no deadline of
+//     its own — under a wedged/overloaded CDP transport it can hang
+//     forever. See attach()'s doc comment for the ADR-038 deadlock
+//     postmortem this caused.
+//  2. Testability: LiveView.runCDP is a field, not a package-level call, so
+//     tests can substitute a controllable stand-in to deterministically
+//     simulate a slow/hung CDP round trip without a real Chromium — see
+//     live_deadlock_test.go.
+func runCDPWithTimeout(ctx context.Context, timeout time.Duration, actions ...chromedp.Action) error {
+	boundedCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return chromedp.Run(boundedCtx, actions...)
+}
+
 // resolveSessionID applies the same default-session convention the rest of
 // pkg/tools/browser uses (tools.go's defaultSessionID) so callers can omit
 // session_id and mean "the agent's one shared tab."
@@ -124,6 +150,8 @@ func (r *LiveViewRegistry) view(sessionID string) *LiveView {
 			sessionID:   sessionID,
 			viewers:     make(map[string]FrameSink),
 			statusSinks: make(map[string]StatusSink),
+			ackCh:       make(chan int64, 1),
+			runCDP:      runCDPWithTimeout,
 		}
 		r.views[sessionID] = lv
 	}
@@ -262,6 +290,20 @@ type LiveView struct {
 	// bookkeeping needed.
 	inputWindowStart time.Time
 	inputCount       int
+
+	// ackCh is the mailbox runAckWorker consumes from: handleScreencastEvent
+	// hands off each frame's session ID here (coalescing to the latest via
+	// queueAck) instead of spawning a chromedp.Run goroutine per frame. Never
+	// nil for a LiveView constructed via LiveViewRegistry.view (the only
+	// production constructor); tests that build a LiveView by hand must set
+	// it explicitly before calling queueAck/handleScreencastEvent.
+	ackCh chan int64
+
+	// runCDP executes a bounded chromedp CDP round trip. See
+	// runCDPWithTimeout's doc comment for why this is a field instead of a
+	// direct chromedp.Run call. Every call site in this file MUST call it
+	// with no LiveView lock held.
+	runCDP func(ctx context.Context, timeout time.Duration, actions ...chromedp.Action) error
 }
 
 // isActiveLocked reports whether the screencast is currently subscribed
@@ -276,16 +318,38 @@ func (lv *LiveView) isActiveLocked() bool {
 
 // attach registers viewerID's sinks and starts the CDP screencast if no
 // screencast is currently active for this session. onStatus may be nil.
+//
+// ADR-038 DEADLOCK POSTMORTEM: this method used to hold lv.mu (via
+// defer lv.mu.Unlock()) across the blocking page.StartScreencast()
+// chromedp.Run call below, which also ran on the bare tabCtx with no
+// timeout of its own. Under a heavy page and/or the (separately fixed)
+// unbounded ack-goroutine pile-up in handleScreencastEvent, that CDP round
+// trip could hang indefinitely — and because it hung while lv.mu was held,
+// lv.mu never unlocked. Every browser tool's controlledResult() check
+// (browser_navigate/click/type/evaluate — tools.go) calls
+// LiveViewRegistry.IsControlled → ... → lv.getController(), which takes
+// lv.mu with a bare, non-context-aware sync.Mutex.Lock(). Once lv.mu was
+// stuck, EVERY subsequent call to those tools blocked forever: no timeout
+// (Lock() has none), no error, no log line, and "Stop" (which only cancels
+// the agent turn's context) had no effect on a plain mutex wait. This is
+// exactly the reported symptom: a single browser_screenshot timeout was
+// followed by every later browser_navigate call hanging indefinitely.
+//
+// The fix has two parts, both required: (1) lv.mu is released before the
+// CDP call, so a concurrent getController()/dispatchInput()/takeControl()
+// is never blocked by it; (2) the CDP call itself now runs through
+// lv.runCDP, which bounds it with mgr.PageTimeout() so even a wedged
+// transport fails this one attach() attempt in bounded time instead of
+// hanging the calling goroutine forever.
 func (lv *LiveView) attach(tabCtx context.Context, viewerID string, onFrame FrameSink, onStatus StatusSink) error {
 	lv.mu.Lock()
-	defer lv.mu.Unlock()
-
 	lv.viewers[viewerID] = onFrame
 	if onStatus != nil {
 		lv.statusSinks[viewerID] = onStatus
 	}
 
 	if lv.isActiveLocked() {
+		lv.mu.Unlock()
 		return nil // screencast already running — this viewer just piggybacks on it
 	}
 
@@ -293,15 +357,24 @@ func (lv *LiveView) attach(tabCtx context.Context, viewerID string, onFrame Fram
 	listenCtx, cancel := context.WithCancel(tabCtx)
 	lv.listenCtx = listenCtx
 	lv.stopListen = cancel
+	lv.mu.Unlock()
 
-	// Capture tabCtx by value for the ack goroutine below — reading lv.tabCtx
-	// from inside the callback would race the next attach()/detach() cycle.
+	// Capture tabCtx by value for the ack worker/callback below — reading
+	// lv.tabCtx from inside the callback would race the next
+	// attach()/detach() cycle.
 	ackCtx := tabCtx
 	chromedp.ListenTarget(listenCtx, func(ev any) {
 		lv.handleScreencastEvent(ackCtx, ev)
 	})
 
-	err := chromedp.Run(tabCtx,
+	// Single dedicated ack worker for this screencast epoch (see
+	// handleScreencastEvent/runAckWorker) instead of one chromedp.Run
+	// goroutine per frame. Scoped to listenCtx so it exits when this epoch
+	// ends, whether via a clean detach() or watchForUnexpectedDeath.
+	go lv.runAckWorker(ackCtx, listenCtx)
+
+	// No lock held here — see the deadlock postmortem above.
+	err := lv.runCDP(tabCtx, lv.mgr.PageTimeout(),
 		page.StartScreencast().
 			WithFormat(page.ScreencastFormatJpeg).
 			WithQuality(screencastQuality).
@@ -309,14 +382,23 @@ func (lv *LiveView) attach(tabCtx context.Context, viewerID string, onFrame Fram
 			WithMaxHeight(screencastMaxHeight).
 			WithEveryNthFrame(screencastEveryNthFrame),
 	)
+
+	lv.mu.Lock()
 	if err != nil {
 		delete(lv.viewers, viewerID)
 		delete(lv.statusSinks, viewerID)
-		cancel()
-		lv.listenCtx = nil
-		lv.stopListen = nil
+		// Only tear down the shared listen/ack state if nothing else (a
+		// concurrent attach() that piggybacked while this call was in
+		// flight, or a concurrent detach()) has since superseded it.
+		if lv.listenCtx == listenCtx {
+			cancel()
+			lv.listenCtx = nil
+			lv.stopListen = nil
+		}
+		lv.mu.Unlock()
 		return fmt.Errorf("browser live: failed to start screencast: %w", err)
 	}
+	lv.mu.Unlock()
 
 	// ADR-038 finding #2: watch for this screencast's tab context dying
 	// WITHOUT going through detach() first — e.g. BrowserManager.Shutdown()
@@ -362,26 +444,78 @@ func (lv *LiveView) watchForUnexpectedDeath(watchedListenCtx context.Context) {
 
 // handleScreencastEvent is the chromedp.ListenTarget callback. Per chromedp's
 // contract this runs synchronously on the CDP event-dispatch goroutine and
-// must never block — the frame ack is dispatched from its own goroutine
-// (spike-proven, ADR-038 D3: acking inline deadlocks the CDP transport,
-// which StartScreencast/Ack share with every other command on this context).
+// must never block — the frame ack is handed off to the single ack worker
+// via queueAck (never blocks, see its doc comment) rather than acked inline
+// or from a per-frame goroutine.
+//
+// ADR-038 DEADLOCK POSTMORTEM: the previous implementation spawned one
+// `go func() { chromedp.Run(tabCtx, page.ScreencastFrameAck(...)) }()` per
+// frame. Under a heavy page (full frame rate, no throttling) those
+// goroutines could pile up faster than their CDP round trips completed —
+// every chromedp.Run for this browser process funnels through one
+// fixed-capacity command queue drained by one goroutine
+// (chromedp@v0.15.1 browser.go: cmdQueue is buffered 32, Browser.run is
+// the sole writer/reader loop) — saturating it and stalling every other
+// command on this browser (any session, any tool) behind the backlog. This
+// is a plausible contributor to the reported "single browser_screenshot
+// timeout wedges everything" symptom even independent of the lv.mu bug
+// fixed in attach(): reducing frame/ack volume here removes the pressure
+// that made the wedged CDP call in attach() likely in the first place.
 func (lv *LiveView) handleScreencastEvent(tabCtx context.Context, ev any) {
 	frame, ok := ev.(*page.EventScreencastFrame)
 	if !ok {
 		return
 	}
 
-	sessionID := frame.SessionID
-	go func() {
-		if err := chromedp.Run(tabCtx, page.ScreencastFrameAck(sessionID)); err != nil {
-			logger.WarnCF("browser", "live view: frame ack failed", map[string]any{
-				"error":      err.Error(),
-				"session_id": lv.sessionID,
-			})
-		}
-	}()
-
+	lv.queueAck(frame.SessionID)
 	lv.deliver(frame)
+}
+
+// queueAck hands sessionID off to runAckWorker, coalescing to the newest
+// frame instead of piling up: if the worker hasn't drained the previous
+// pending ack yet, it is overwritten rather than queued behind. This keeps
+// queueAck O(1) and non-blocking regardless of frame rate or how slow the
+// worker currently is — see handleScreencastEvent's contract (must never
+// block, it runs on chromedp's own CDP event-dispatch goroutine) and the
+// ADR-038 deadlock postmortem above. Losing an ack for a stale frame is
+// harmless: acking the newest frame is what unblocks Chrome's screencast
+// pipeline to keep sending further frames.
+func (lv *LiveView) queueAck(sessionID int64) {
+	for {
+		select {
+		case lv.ackCh <- sessionID:
+			return
+		default:
+			select {
+			case <-lv.ackCh:
+			default:
+			}
+		}
+	}
+}
+
+// runAckWorker is the single goroutine that acks screencast frames for one
+// screencast epoch (bounded by workerCtx, which is that epoch's listenCtx —
+// it exits when the screencast stops, cleanly or unexpectedly). Reading from
+// lv.ackCh here instead of handleScreencastEvent spawning a goroutine per
+// frame means acks can never pile up: queueAck always coalesces to the
+// latest frame, so this worker is always working the newest frame available,
+// never a backlog, and a slow/stuck ack (bounded by screencastAckTimeout)
+// only delays the NEXT ack, it never blocks the CDP event-dispatch path.
+func (lv *LiveView) runAckWorker(tabCtx, workerCtx context.Context) {
+	for {
+		select {
+		case <-workerCtx.Done():
+			return
+		case sessionID := <-lv.ackCh:
+			if err := lv.runCDP(tabCtx, screencastAckTimeout, page.ScreencastFrameAck(sessionID)); err != nil {
+				logger.WarnCF("browser", "live view: frame ack failed", map[string]any{
+					"error":      err.Error(),
+					"session_id": lv.sessionID,
+				})
+			}
+		}
+	}
 }
 
 // deliver fans a decoded screencast frame out to every currently-attached
@@ -453,8 +587,11 @@ func (lv *LiveView) detach(viewerID string) {
 	}
 	// Unsubscribe first so no further events reach handleScreencastEvent
 	// while we tear down, then ask CDP to actually stop generating frames.
+	// No lock held here (already released above) — bounded via lv.runCDP so
+	// a wedged transport can't hang the caller (e.g. the gateway's WS
+	// cleanup path) forever.
 	stopListen()
-	if err := chromedp.Run(tabCtx, page.StopScreencast()); err != nil {
+	if err := lv.runCDP(tabCtx, lv.mgr.PageTimeout(), page.StopScreencast()); err != nil {
 		logger.WarnCF("browser", "live view: stop screencast failed", map[string]any{
 			"error":      err.Error(),
 			"session_id": lv.sessionID,
@@ -536,7 +673,10 @@ func (lv *LiveView) dispatchInput(viewerID string, in LiveInput) error {
 	if err != nil {
 		return realInputError("%w", err)
 	}
-	if err := chromedp.Run(tabCtx, action); err != nil {
+	// No lock held here (already released above) — bounded via lv.runCDP so
+	// a wedged transport can't hang the caller (the gateway's input-handling
+	// goroutine) forever.
+	if err := lv.runCDP(tabCtx, lv.mgr.PageTimeout(), action); err != nil {
 		return realInputError("browser live: input dispatch failed: %w", err)
 	}
 	return nil

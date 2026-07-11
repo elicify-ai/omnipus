@@ -82,17 +82,19 @@ func TestLiveView_DeliverWithNoViewers(t *testing.T) {
 // --- ack dispatched off the event-dispatch goroutine ---
 
 func TestLiveView_HandleScreencastEvent_DeliversAndDoesNotBlockOnAck(t *testing.T) {
-	lv := &LiveView{sessionID: "s1", viewers: make(map[string]FrameSink)}
+	lv := &LiveView{sessionID: "s1", viewers: make(map[string]FrameSink), ackCh: make(chan int64, 1)}
 	received := make(chan LiveFrame, 1)
 	lv.viewers["v1"] = func(f LiveFrame) { received <- f }
 
-	// tabCtx is a plain context.Background(), not a real chromedp context, so
-	// the ack's chromedp.Run(tabCtx, page.ScreencastFrameAck(...)) call
-	// returns chromedp.ErrInvalidContext instead of dialing a browser. What
-	// this test proves is the contract that matters here: handleScreencastEvent
-	// itself returns immediately (the ack goroutine is fire-and-forget) and the
-	// frame still reaches the viewer synchronously — i.e. delivery is never
-	// gated on the ack succeeding.
+	// handleScreencastEvent must never block: it runs synchronously on
+	// chromedp's own CDP event-dispatch goroutine (see its doc comment), so
+	// the ack is only ever queued (queueAck, non-blocking, coalescing) for a
+	// separate ack worker to consume — never dispatched inline and never via
+	// a fresh goroutine per frame (ADR-038 deadlock postmortem: the latter
+	// piled up under a heavy page and helped saturate the shared CDP
+	// transport). Nobody is draining lv.ackCh in this test, which is exactly
+	// the point: it must still return immediately, and the frame must still
+	// reach the viewer synchronously.
 	start := time.Now()
 	lv.handleScreencastEvent(context.Background(), &page.EventScreencastFrame{
 		Data:      "CCCC",
@@ -101,7 +103,7 @@ func TestLiveView_HandleScreencastEvent_DeliversAndDoesNotBlockOnAck(t *testing.
 	})
 	elapsed := time.Since(start)
 	require.Less(t, elapsed, 500*time.Millisecond,
-		"handleScreencastEvent must return immediately — the ack is dispatched off-goroutine (ADR-038 D3)")
+		"handleScreencastEvent must return immediately regardless of ack worker state")
 
 	select {
 	case f := <-received:
@@ -109,6 +111,14 @@ func TestLiveView_HandleScreencastEvent_DeliversAndDoesNotBlockOnAck(t *testing.
 		require.Equal(t, 1, f.Seq)
 	case <-time.After(2 * time.Second):
 		t.Fatal("frame was not delivered to the viewer")
+	}
+
+	// The ack was queued for the (absent, in this test) worker to consume.
+	select {
+	case sessionID := <-lv.ackCh:
+		require.Equal(t, int64(42), sessionID)
+	default:
+		t.Fatal("frame's session ID was not queued for ack")
 	}
 }
 
@@ -187,7 +197,13 @@ func TestLiveView_AllowInputLocked_CapsPerSecond(t *testing.T) {
 // --- viewer refcount: screencast stops only when the last viewer detaches ---
 
 func TestLiveView_Detach_RefCountsViewers(t *testing.T) {
-	lv := &LiveView{sessionID: "s1", viewers: make(map[string]FrameSink)}
+	// mgr is needed because detach()'s teardown path (the last viewer
+	// leaving) reads mgr.PageTimeout() to bound its StopScreencast call —
+	// see the ADR-038 deadlock postmortem in live.go. Production LiveViews
+	// always go through LiveViewRegistry.view(), which sets mgr; this
+	// hand-built test LiveView needs it set explicitly.
+	mgr := &BrowserManager{cfg: BrowserConfig{PageTimeout: 5 * time.Second}}
+	lv := &LiveView{mgr: mgr, sessionID: "s1", viewers: make(map[string]FrameSink), runCDP: runCDPWithTimeout}
 
 	// Fake an "active" screencast the same way attach() would have left it,
 	// without a real chromedp.Run(StartScreencast) call (spike-proven CDP
