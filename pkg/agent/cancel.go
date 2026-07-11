@@ -290,7 +290,17 @@ func (al *AgentLoop) RequestCancel(
 		}
 	}
 
-	// --- PHASE B: 3s timer → hard abort if turn is still alive ---
+	// --- PHASE B: 3s timer → hard abort if ANY turn in the session cascade
+	// (root or a still-running descendant, e.g. an orphaned background
+	// delegate) is still alive ---
+	//
+	// Gated on al.sessionTurnsStillAlive(sessionID) rather than
+	// activeTurn.IsAlive() alone: activeTurn is the single hook resolved once
+	// above (GetActiveTurnHookForSession prefers the root turn), so gating
+	// purely on ITS liveness meant a background delegate sub-turn that
+	// outlived its already-gracefully-finished parent was never escalated to
+	// — see sessionTurnsStillAlive's doc comment (pkg/agent/steering.go) for
+	// the full root-cause writeup of the delegation-cancel bug this closes.
 	time.AfterFunc(3*time.Second, func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -302,8 +312,8 @@ func (al *AgentLoop) RequestCancel(
 				)
 			}
 		}()
-		if !activeTurn.IsAlive() {
-			return // already finished
+		if len(al.sessionTurnsStillAlive(sessionID)) == 0 {
+			return // already finished — no live descendants either
 		}
 		if _, err := al.InterruptSessionHard(sessionID, hint); err != nil {
 			slog.Warn("agent: RequestCancel: hard abort failed",
@@ -313,7 +323,8 @@ func (al *AgentLoop) RequestCancel(
 			hooks.SendStageFrame(sessionID, "hard")
 		}
 
-		// --- PHASE C: 5s after hard → detach if still alive ---
+		// --- PHASE C: 5s after hard → detach any turn in the cascade still
+		// alive (same session-wide liveness check as PHASE B; see above) ---
 		hardAt := time.Now()
 		time.AfterFunc(5*time.Second, func() {
 			defer func() {
@@ -326,10 +337,13 @@ func (al *AgentLoop) RequestCancel(
 					)
 				}
 			}()
-			if !activeTurn.IsAlive() {
+			stillAlive := al.sessionTurnsStillAlive(sessionID)
+			if len(stillAlive) == 0 {
 				return // finished in the meantime
 			}
-			activeTurn.MarkAbandoned()
+			for _, ts := range stillAlive {
+				ts.MarkAbandoned()
+			}
 			if hooks.SendStageFrame != nil {
 				hooks.SendStageFrame(sessionID, "detached")
 			}

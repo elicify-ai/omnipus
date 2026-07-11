@@ -220,6 +220,41 @@ type WSHandler struct {
 	// last-seen code immediately on subscribe via subscribePairingInterest.
 	lastPairingState sync.Map
 
+	// streamOwners tracks, per chatID, which turn currently "owns" live
+	// TokenFrame delivery to that chat connection. Keys are chatID (string);
+	// values are the owning turnID (string).
+	//
+	// Root cause this closes (live UAT bug, persona "Alex"): TokenFrame and
+	// DoneFrame (contracts/asyncapi.yaml) carry only session_id (+ an
+	// optional agent_id on TokenFrame) — no turn/span discriminator — and
+	// TokenFrame.yaml's own documented contract is "the SPA appends each
+	// token's content to the last assistant message bubble". That is correct
+	// only when a single turn streams to a given chatID at a time. A
+	// background (async) delegate sub-turn that outlives its own already-
+	// finished parent (see pkg/agent/steering.go's sessionTurnsStillAlive doc
+	// comment for that half of the bug) can resurface and stream
+	// concurrently with a LATER, unrelated turn's own delegate call on the
+	// SAME chatID; without this gate, both streamers' Update() calls race to
+	// send TokenFrames the client can only append to whichever bubble
+	// happens to be open, word-interleaving two unrelated narrations into
+	// one garbled message — confirmed live and reproducible on reload
+	// (the live view, not the transcript JSONL, is what a naive client
+	// caches and replays; each streamer's own transcript entry, keyed by its
+	// own TurnID, was already correctly isolated before this fix).
+	//
+	// claimStreamOwnership/wsStreamer.Update/wsStreamer.Finalize implement
+	// the gate: the first streamer to claim a chatID's slot for its turnID
+	// streams live as before (zero behavior change for the common
+	// single-active-stream case); any OTHER concurrent turnID's streamer
+	// still accumulates every token into its own private
+	// wsStreamer.accumulated (so its Finalize-written transcript entry stays
+	// fully correct) but withholds the live TokenFrame send until the owner
+	// releases its claim (Finalize, called exactly once per turn via
+	// turnState's deferred finalizeStreamer) — so two concurrent streams can
+	// never interleave on the wire, regardless of what the frontend does
+	// with the frames it receives.
+	streamOwners sync.Map
+
 	upgrader websocket.Upgrader
 }
 
@@ -1119,10 +1154,9 @@ func (h *WSHandler) handleChatMessage(
 			// Team tab AFTER the session's first bind would never be consulted
 			// by resolveEffectiveWorkspaceID (pkg/agent/loop.go), which reads
 			// this same session meta fresh every turn — so the UI's "Saved just
-			// now" was genuine (see TestWorkspaceDelegation_EdgeWiredViaTeamTabPersistsForLiveSession)
-			// but the running session kept enforcing/advertising delegation
-			// against its ORIGINAL workspace until the operator started a brand
-			// new session.
+			// now" was genuine (see TestRepro_AddWorkerThenWireEdge) but the
+			// running session kept enforcing/advertising delegation against its
+			// ORIGINAL workspace until the operator started a brand new session.
 			// Only skip the rewrite when this message carries no workspace_id at
 			// all (workspaceID == "") — an absent value must never blank out an
 			// existing binding (e.g. a non-workspace-aware channel message
@@ -2547,6 +2581,34 @@ type wsStreamer struct {
 	// the lastStreamer that gets finalized). Guarded by statsMu, which Finalize
 	// already holds while reading stats.
 	transcriptPersisted bool
+
+	// shadowResolved/isShadowStream implement the concurrent-stream
+	// interleaving fix — see WSHandler.streamOwners' doc comment for the
+	// full root-cause writeup. isShadowStream is resolved once, lazily, on
+	// this streamer's first Update() call (via claimStreamOwnership) and
+	// reused for the rest of this instance's lifetime: a wsStreamer's
+	// Update() calls all run on the single goroutine driving its ChatStream
+	// callback, so no extra synchronization beyond the existing statsMu
+	// (already held for every Update/Finalize access to these fields) is
+	// needed. true means a DIFFERENT, still-live turnID already owns live
+	// delivery for this chatID — this streamer still accumulates every
+	// token (see `accumulated` above) but withholds the live TokenFrame send.
+	shadowResolved bool
+	isShadowStream bool
+}
+
+// claimStreamOwnership attempts to claim (or re-confirm) chatID's live
+// TokenFrame-delivery slot in owners for turnID. See WSHandler.streamOwners'
+// doc comment for the full rationale. Returns true when turnID owns the slot
+// — either because it just claimed an empty slot, or because it already
+// owned it (a single turn typically opens several sequential wsStreamer
+// instances across its own tool-calling iterations — see turnState.
+// lastStreamer/finalizeStreamer in pkg/agent/turn.go — and each must see
+// itself as "still the owner", not a foreign claimant). Returns false only
+// when a DIFFERENT, still-active turnID already owns the slot.
+func claimStreamOwnership(owners *sync.Map, chatID, turnID string) bool {
+	actual, _ := owners.LoadOrStore(chatID, turnID)
+	return actual.(string) == turnID
 }
 
 // SetProducedModel stamps the model string that produced this streamed
@@ -2656,7 +2718,38 @@ func (s *wsStreamer) SetTurnFailed(failed bool) {
 func (s *wsStreamer) Update(_ context.Context, content string) error {
 	s.statsMu.Lock()
 	producerAgentID := s.agentID
+	// Guarded by statsMu so StreamedContentLen() (read by the agent loop's
+	// inline-retry guard, possibly from a different goroutine) observes a
+	// consistent length. Accumulate BEFORE the live-delivery gate below —
+	// a shadow (non-owning, see below) stream's content must still be fully
+	// captured for its own Finalize/transcript write even though it
+	// withholds live frames. Finalize reads accumulated only after
+	// streaming has completed, so it remains lock-free there.
+	s.accumulated.WriteString(content)
+	// Live-stream ownership gate (see WSHandler.streamOwners' doc comment):
+	// resolved once, lazily, on this streamer's first Update() call, then
+	// reused. A streamer with no turnID (legacy/best-effort caller) or no
+	// channel/wsHandler wired (e.g. a bare unit-test fixture) always streams
+	// live — the gate degrades to the pre-fix always-live behavior rather
+	// than silently withholding content it has no way to attribute.
+	if !s.shadowResolved {
+		if s.turnID != "" && s.channel != nil && s.channel.wsHandler != nil {
+			s.isShadowStream = !claimStreamOwnership(&s.channel.wsHandler.streamOwners, s.chatID, s.turnID)
+		}
+		s.shadowResolved = true
+	}
+	shadow := s.isShadowStream
 	s.statsMu.Unlock()
+
+	if shadow {
+		// A DIFFERENT, still-live turn already owns live TokenFrame delivery
+		// to this chatID. This stream's content is fully captured in
+		// s.accumulated above and will be persisted correctly by Finalize —
+		// withholding the live frame here is what prevents two concurrent
+		// delegate streams from interleaving their deltas into one garbled
+		// message, live or on a client that caches/replays the live view.
+		return nil
+	}
 
 	frame := generated.TokenFrame{
 		Type:      string(generated.WsFrameTypeToken),
@@ -2696,13 +2789,6 @@ func (s *wsStreamer) Update(_ context.Context, content string) error {
 		slog.Warn("ws: token backpressure", "session_id", s.sessionID, "chat_id", s.chatID, "agent_id", producerAgentID)
 		return fmt.Errorf("ws: token channel full, token dropped")
 	}
-	// Guarded by statsMu so StreamedContentLen() (read by the agent loop's
-	// inline-retry guard, possibly from a different goroutine) observes a
-	// consistent length. Finalize reads accumulated only after streaming has
-	// completed, so it remains lock-free there.
-	s.statsMu.Lock()
-	s.accumulated.WriteString(content)
-	s.statsMu.Unlock()
 	// Cross-browser session attach (#133): also forward the token to every
 	// other connection bound to the same session. The originating chat
 	// already received the frame above; secondary tabs see the live stream
@@ -2767,6 +2853,19 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 	producerAgentID := s.agentID
 	turnID := s.turnID
 	s.statsMu.Unlock()
+
+	// Release this turn's live-stream ownership claim (if held) so a
+	// different, still-running turn on the same chatID can become the live
+	// owner (see WSHandler.streamOwners' doc comment). Finalize is called
+	// exactly once per turn via turnState's deferred finalizeStreamer
+	// (pkg/agent/turn.go), so this is the single, guaranteed release point —
+	// safe/no-op when this stream was never the owner (a shadow stream) or
+	// never claimed at all (e.g. an immediate tool-only round with no
+	// narration text, so Update() was never called).
+	if turnID != "" && s.channel != nil && s.channel.wsHandler != nil {
+		s.channel.wsHandler.streamOwners.CompareAndDelete(s.chatID, turnID)
+	}
+
 	doneStats.Tokens = &tokensF
 	doneStats.Cost = &costF
 	doneStats.DurationMs = &durF
@@ -2835,5 +2934,16 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 }
 
 func (s *wsStreamer) Cancel(_ context.Context) {
+	// Defensive symmetry with Finalize's release: Cancel is not on the
+	// agent loop's normal per-turn path (finalizeStreamer always calls
+	// Finalize, never Cancel — see turn.go), but release the ownership
+	// claim here too so a future caller of Cancel cannot leak the chatID's
+	// live-stream slot forever.
+	s.statsMu.Lock()
+	turnID := s.turnID
+	s.statsMu.Unlock()
+	if turnID != "" && s.channel != nil && s.channel.wsHandler != nil {
+		s.channel.wsHandler.streamOwners.CompareAndDelete(s.chatID, turnID)
+	}
 	s.conn.close()
 }

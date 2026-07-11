@@ -554,6 +554,50 @@ func (al *AgentLoop) InterruptSessionHard(sessionID, hint string) (descendants [
 	return descendants, nil
 }
 
+// sessionTurnsStillAlive returns every turnState matching sessionID
+// (transcriptSessionID equality — the same predicate InterruptSession/
+// InterruptSessionHard/collectDescendantTurnIDs use) that has NOT yet
+// finished (turnState.IsAlive()).
+//
+// Root cause this closes (delegation-cancel bug, UAT persona "Alex"):
+// RequestCancel's PHASE B/C escalation timers (pkg/agent/cancel.go) used to
+// gate hard-abort escalation on `activeTurn.IsAlive()` alone, where
+// activeTurn is the SINGLE hook resolved once via GetActiveTurnHookForSession
+// — which always prefers the ROOT turn when one exists (see that method's
+// doc comment). A background (async) delegate sub-turn shares the parent's
+// transcriptSessionID but is a SEPARATE turnState; when the root/parent turn
+// finishes gracefully within the 3s escalation window (routine — the
+// graceful providerCancel() an interrupt fires usually unwinds the root's
+// own in-flight LLM call almost immediately), `activeTurn.IsAlive()` goes
+// false and the OLD code skipped InterruptSessionHard for the WHOLE
+// session — never reaching the still-running child at all. The child's own
+// graceful nudge (also delivered by InterruptSession's cascade) only aborts
+// its CURRENT in-flight LLM call; because the retry loop only treats a
+// canceled call as terminal when THIS turn's own hardAbortRequested() is
+// true (pkg/agent/loop.go, the `errors.Is(err, context.Canceled)` checks),
+// an un-hard-aborted child simply retries with a fresh, uncanceled context
+// and keeps running — invisibly, for as long as its own task takes (minutes,
+// for a multi-step delegate) — until it resurfaces, sometimes concurrently
+// with a later, unrelated delegate call on the same session.
+//
+// Callers use this to decide whether ANY turn in the session cascade —
+// not just the one originally resolved — is still alive and therefore
+// still needs the hard-abort escalation.
+func (al *AgentLoop) sessionTurnsStillAlive(sessionID string) []*turnState {
+	if sessionID == "" {
+		return nil
+	}
+	var alive []*turnState
+	al.activeTurnStates.Range(func(_, value any) bool {
+		ts := value.(*turnState)
+		if ts.transcriptSessionID == sessionID && ts.IsAlive() {
+			alive = append(alive, ts)
+		}
+		return true
+	})
+	return alive
+}
+
 func (al *AgentLoop) InterruptHard() error {
 	ts := al.getAnyActiveTurnState()
 	if ts == nil {
