@@ -38,7 +38,6 @@ import {
   type AgentToolsCfg,
 } from '@/lib/api'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
-import { applyRolePreset } from '@/lib/toolPolicyPresets'
 import { useReAuthGate, isReAuthCancelled } from '@/components/settings/useReAuthGate'
 import { useUiStore } from '@/store/ui'
 import { useAutoSave } from '@/hooks/useAutoSave'
@@ -360,6 +359,3 @@ export function ToolsAndPermissions({
     </div>
   )
 }
-
-// Re-export applyRolePreset for use in CreateAgentModal default init
-export { applyRolePreset }

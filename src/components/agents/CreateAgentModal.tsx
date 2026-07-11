@@ -17,7 +17,7 @@
 // compatibility — we map them to the new wire enum ('custom' → 'Main',
 // 'worker' → 'Subagent').
 
-import { useCallback } from 'react'
+import { useCallback, useEffect } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { useUiStore } from '@/store/ui'
@@ -35,7 +35,9 @@ import type {
   AgentCreateRequestMain,
   AgentCreateRequestSubagent,
   AgentCreateRequestSubagent3p,
+  RegistryTool,
 } from '@/lib/api'
+import { findOrphanedPresetOverrideKeys, resolveToolsCfg } from '@/lib/toolPolicyPresets'
 
 import {
   CreateAgentWizard,
@@ -89,9 +91,24 @@ function normalizeWizardType(
  *    subagent_3p always sends `kind: external-cli` (the variant requires it).
  *  - All string fields are `.trim()`-ed to match the wizard's step
  *    gating (which validates `.trim().length > 0`).
+ *  - Main / Subagent (when not inheriting tools) send `tools_cfg` via
+ *    `resolveToolsCfg` (`@/lib/toolPolicyPresets`) — the SAME helper
+ *    Step3Tools.tsx's `toolPolicyValue()` uses for its uncommitted-default
+ *    render, so an untouched Tools step still commits the Balanced-preset
+ *    policy the wizard displayed, rather than silently omitting the field
+ *    and falling back to the backend's much-more-restrictive
+ *    `NewCustomAgentToolsCfg()` seed. `resolveToolsCfg` returns `undefined`
+ *    (field omitted, same as before any default was committed) only in the
+ *    degenerate case where the tool registry hasn't resolved yet — see its
+ *    doc comment.
+ *  - subagent_3p never has this concern: its variant schema
+ *    (`AgentCreateRequestSubagent3p`, `additionalProperties: false`) does
+ *    not carry `tools_cfg` at all — the external CLI runs its own tool loop
+ *    and never reaches the Tools step (2-step wizard for that type).
  */
 function payloadToCreateRequest(
   payload: WizardSubmitPayload,
+  tools: RegistryTool[],
 ): AgentCreateRequest {
   const name = payload.name.trim()
   const soul = payload.soul.trim()
@@ -140,7 +157,10 @@ function payloadToCreateRequest(
     if (!inheritModel && payload.model.trim()) req.model = payload.model.trim()
     if (!inheritModel && payload.provider?.trim()) req.provider = payload.provider.trim()
     if (!inheritModel && payload.fallback_models !== undefined) req.fallback_models = payload.fallback_models
-    if (!inheritTools && payload.tools_cfg !== undefined) req.tools_cfg = payload.tools_cfg
+    if (!inheritTools) {
+      const toolsCfg = resolveToolsCfg(payload.tools_cfg, tools)
+      if (toolsCfg !== undefined) req.tools_cfg = toolsCfg
+    }
     if (!inheritSkills && payload.skills !== undefined) req.skills = payload.skills
     if (payload.model_params !== undefined) req.model_params = payload.model_params
     if (payload.shell_policy !== undefined) req.shell_policy = payload.shell_policy
@@ -161,7 +181,8 @@ function payloadToCreateRequest(
   if (payload.model.trim()) req.model = payload.model.trim()
   if (payload.provider?.trim()) req.provider = payload.provider.trim()
   if (payload.voice !== undefined && payload.voice !== '') req.voice = payload.voice
-  if (payload.tools_cfg !== undefined) req.tools_cfg = payload.tools_cfg
+  const toolsCfg = resolveToolsCfg(payload.tools_cfg, tools)
+  if (toolsCfg !== undefined) req.tools_cfg = toolsCfg
   if (payload.skills !== undefined) req.skills = payload.skills
   if (payload.fallback_models !== undefined) req.fallback_models = payload.fallback_models
   if (payload.model_params !== undefined) req.model_params = payload.model_params
@@ -236,14 +257,6 @@ export function CreateAgentModal({
     },
   })
 
-  const handleSubmit = useCallback(
-    async (payload: WizardSubmitPayload) => {
-      const req = payloadToCreateRequest(payload)
-      await createAgentMutation.mutateAsync(req)
-    },
-    [createAgentMutation],
-  )
-
   // Providers / tools / skills — fetched at the modal level (which sits
   // inside QueryClientProvider) and forwarded as props so the wizard
   // sub-components stay query-client-free and unit-testable.
@@ -262,6 +275,35 @@ export function CreateAgentModal({
   const globalPolicies = globalPoliciesQuery.data
     ? { policies: globalPoliciesQuery.data.policies ?? {} }
     : undefined
+
+  // Dev-time drift guard: once the full tool registry resolves, warn if any
+  // role-preset override key (toolPolicyPresets.ts) doesn't match a real
+  // tool name — the exact class of bug that shipped with the dotted
+  // `browser.navigate` etc. override keys (fixed 2026-07-11; see
+  // toolPolicyPresets.ts's Balanced preset comment). Console-only, dev
+  // builds only — never throws, never blocks the wizard.
+  useEffect(() => {
+    if (!import.meta.env.DEV || registryTools.length === 0) return
+    const orphaned = findOrphanedPresetOverrideKeys(registryTools)
+    if (orphaned.length > 0) {
+      console.warn(
+        '[toolPolicyPresets] override key(s) do not match any tool in the live registry ' +
+          '(silently fall through to defaultPolicy instead of applying):',
+        orphaned,
+      )
+    }
+  }, [registryTools])
+
+  // `registryTools` also feeds `resolveToolsCfg` (see payloadToCreateRequest)
+  // so the tools_cfg committed on submit is built from the SAME catalog the
+  // Tools step rendered its Balanced-preset default from.
+  const handleSubmit = useCallback(
+    async (payload: WizardSubmitPayload) => {
+      const req = payloadToCreateRequest(payload, registryTools)
+      await createAgentMutation.mutateAsync(req)
+    },
+    [createAgentMutation, registryTools],
+  )
 
   if (!isOpen) return null
 
