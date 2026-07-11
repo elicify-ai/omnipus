@@ -109,6 +109,15 @@ interface UiStore {
   mediaLightbox: MediaLightboxContent | null
   openMediaLightbox: (content: MediaLightboxContent) => void
   closeMediaLightbox: () => void
+
+  // Live browser panel (ADR-038) — overlay showing a real-time screencast of
+  // an agent's shared browser session, with optional human take-control.
+  // A SINGLE global instance mounted at the app root (AppShell), mirroring
+  // mediaLightbox above. null = closed. Opened from the "Watch live"
+  // affordance on a running browser tool-call (BrowserTool.tsx).
+  browserPanel: { sessionId: string; agentId: string } | null
+  openBrowserPanel: (sessionId: string, agentId: string) => void
+  closeBrowserPanel: () => void
 }
 
 /** Discriminated payload for the global media lightbox: a raster image (by URL)
@@ -189,4 +198,8 @@ export const useUiStore = create<UiStore>((set, get) => ({
   mediaLightbox: null,
   openMediaLightbox: (content) => set({ mediaLightbox: content }),
   closeMediaLightbox: () => set({ mediaLightbox: null }),
+
+  browserPanel: null,
+  openBrowserPanel: (sessionId, agentId) => set({ browserPanel: { sessionId, agentId } }),
+  closeBrowserPanel: () => set({ browserPanel: null }),
 }))

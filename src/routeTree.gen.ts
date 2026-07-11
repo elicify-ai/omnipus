@@ -22,6 +22,7 @@ import { Route as AppProfileRouteImport } from './routes/_app/profile'
 import { Route as AppPoliciesRouteImport } from './routes/_app/policies'
 import { Route as AppConnectorsRouteImport } from './routes/_app/connectors'
 import { Route as AppCommandCenterRouteImport } from './routes/_app/command-center'
+import { Route as AppBrowserLiveRouteImport } from './routes/_app/browser-live'
 import { Route as AppAutomationsRouteImport } from './routes/_app/automations'
 import { Route as AppAgentsRouteImport } from './routes/_app/agents'
 import { Route as AppWorkspacesIndexRouteImport } from './routes/_app/workspaces.index'
@@ -101,6 +102,11 @@ const AppConnectorsRoute = AppConnectorsRouteImport.update({
 const AppCommandCenterRoute = AppCommandCenterRouteImport.update({
   id: '/command-center',
   path: '/command-center',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppBrowserLiveRoute = AppBrowserLiveRouteImport.update({
+  id: '/browser-live',
+  path: '/browser-live',
   getParentRoute: () => AppRoute,
 } as any)
 const AppAutomationsRoute = AppAutomationsRouteImport.update({
@@ -200,6 +206,7 @@ export interface FileRoutesByFullPath {
   '/onboarding': typeof OnboardingRoute
   '/agents': typeof AppAgentsRouteWithChildren
   '/automations': typeof AppAutomationsRoute
+  '/browser-live': typeof AppBrowserLiveRoute
   '/command-center': typeof AppCommandCenterRoute
   '/connectors': typeof AppConnectorsRoute
   '/policies': typeof AppPoliciesRoute
@@ -228,6 +235,7 @@ export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/onboarding': typeof OnboardingRoute
   '/automations': typeof AppAutomationsRoute
+  '/browser-live': typeof AppBrowserLiveRoute
   '/command-center': typeof AppCommandCenterRoute
   '/connectors': typeof AppConnectorsRoute
   '/policies': typeof AppPoliciesRoute
@@ -259,6 +267,7 @@ export interface FileRoutesById {
   '/onboarding': typeof OnboardingRoute
   '/_app/agents': typeof AppAgentsRouteWithChildren
   '/_app/automations': typeof AppAutomationsRoute
+  '/_app/browser-live': typeof AppBrowserLiveRoute
   '/_app/command-center': typeof AppCommandCenterRoute
   '/_app/connectors': typeof AppConnectorsRoute
   '/_app/policies': typeof AppPoliciesRoute
@@ -292,6 +301,7 @@ export interface FileRouteTypes {
     | '/onboarding'
     | '/agents'
     | '/automations'
+    | '/browser-live'
     | '/command-center'
     | '/connectors'
     | '/policies'
@@ -320,6 +330,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/onboarding'
     | '/automations'
+    | '/browser-live'
     | '/command-center'
     | '/connectors'
     | '/policies'
@@ -350,6 +361,7 @@ export interface FileRouteTypes {
     | '/onboarding'
     | '/_app/agents'
     | '/_app/automations'
+    | '/_app/browser-live'
     | '/_app/command-center'
     | '/_app/connectors'
     | '/_app/policies'
@@ -473,6 +485,13 @@ declare module '@tanstack/react-router' {
       path: '/command-center'
       fullPath: '/command-center'
       preLoaderRoute: typeof AppCommandCenterRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/browser-live': {
+      id: '/_app/browser-live'
+      path: '/browser-live'
+      fullPath: '/browser-live'
+      preLoaderRoute: typeof AppBrowserLiveRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/automations': {
@@ -639,6 +658,7 @@ const AppWorkspacesWorkspaceIdRouteWithChildren =
 interface AppRouteChildren {
   AppAgentsRoute: typeof AppAgentsRouteWithChildren
   AppAutomationsRoute: typeof AppAutomationsRoute
+  AppBrowserLiveRoute: typeof AppBrowserLiveRoute
   AppCommandCenterRoute: typeof AppCommandCenterRoute
   AppConnectorsRoute: typeof AppConnectorsRoute
   AppPoliciesRoute: typeof AppPoliciesRoute
@@ -656,6 +676,7 @@ interface AppRouteChildren {
 const AppRouteChildren: AppRouteChildren = {
   AppAgentsRoute: AppAgentsRouteWithChildren,
   AppAutomationsRoute: AppAutomationsRoute,
+  AppBrowserLiveRoute: AppBrowserLiveRoute,
   AppCommandCenterRoute: AppCommandCenterRoute,
   AppConnectorsRoute: AppConnectorsRoute,
   AppPoliciesRoute: AppPoliciesRoute,

@@ -21,8 +21,11 @@ import {
   TextT,
   Timer,
   Code,
+  Broadcast,
 } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
+import { useSessionStore } from '@/store/session'
+import { useUiStore } from '@/store/ui'
 
 // ── Shared result parser ──────────────────────────────────────────────────────
 
@@ -116,6 +119,19 @@ export function BrowserToolBlock({
     return null
   }
 
+  // ADR-038: "Watch live" opens the app-root BrowserLivePanel overlay onto the
+  // browser session driving this tool call. Imperative store reads (not hooks)
+  // — this block renders once per browser tool call in a conversation, so
+  // subscribing here would cause needless re-renders across the whole list.
+  function handleWatchLive() {
+    const { activeSessionId, activeAgentId } = useSessionStore.getState()
+    if (!activeSessionId || !activeAgentId) {
+      useUiStore.getState().addToast({ message: 'No active session to watch.', variant: 'error' })
+      return
+    }
+    useUiStore.getState().openBrowserPanel(activeSessionId, activeAgentId)
+  }
+
   return (
     <div
       className={cn(
@@ -125,24 +141,41 @@ export function BrowserToolBlock({
           : 'border-[var(--color-border)]'
       )}
     >
-      {/* Header */}
-      <button
-        type="button"
-        onClick={() => hasDetail && setExpanded((e) => !e)}
-        className={cn(
-          'flex w-full items-center gap-2 px-3 py-2 bg-[var(--color-surface-1)] transition-colors text-left',
-          hasDetail && 'hover:bg-[var(--color-surface-2)] cursor-pointer',
-          !hasDetail && 'cursor-default'
+      {/* Header — a row of composed controls (mirrors ChromeBar in IframePreview.tsx):
+          the expand/collapse toggle is its own button so "Watch live" can be a
+          separate, independently clickable sibling rather than nested inside it. */}
+      <div className="flex w-full items-center gap-1 bg-[var(--color-surface-1)] transition-colors">
+        <button
+          type="button"
+          onClick={() => hasDetail && setExpanded((e) => !e)}
+          className={cn(
+            'flex flex-1 min-w-0 items-center gap-2 px-3 py-2 text-left',
+            hasDetail && 'hover:bg-[var(--color-surface-2)] cursor-pointer',
+            !hasDetail && 'cursor-default'
+          )}
+          aria-expanded={expanded}
+          disabled={!hasDetail}
+        >
+          <ToolIcon size={13} weight="duotone" className={iconColorClass()} />
+          <span className="text-[var(--color-muted)] shrink-0">{toolName}</span>
+          <span className="font-mono text-[var(--color-accent)] truncate flex-1 min-w-0 text-[10px]">
+            {summary}
+          </span>
+        </button>
+
+        {isRunning && (
+          <button
+            type="button"
+            onClick={handleWatchLive}
+            aria-label="Watch live"
+            title="Watch this browser session live"
+            className="shrink-0 p-1.5 rounded text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-accent)]"
+          >
+            <Broadcast size={13} />
+          </button>
         )}
-        aria-expanded={expanded}
-        disabled={!hasDetail}
-      >
-        <ToolIcon size={13} weight="duotone" className={iconColorClass()} />
-        <span className="text-[var(--color-muted)] shrink-0">{toolName}</span>
-        <span className="font-mono text-[var(--color-accent)] truncate flex-1 min-w-0 text-[10px]">
-          {summary}
-        </span>
-        <span className="flex items-center gap-1 shrink-0">
+
+        <span className="flex items-center gap-1 shrink-0 pr-3 py-2">
           {renderStatusIcon()}
           {hasDetail && (
             <span className="ml-1 text-[var(--color-muted)]">
@@ -150,7 +183,7 @@ export function BrowserToolBlock({
             </span>
           )}
         </span>
-      </button>
+      </div>
 
       {/* Detail panel */}
       {expanded && hasDetail && (
