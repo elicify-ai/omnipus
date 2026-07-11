@@ -109,7 +109,7 @@ export type ChatMessage = Message & {
    */
   turnId?: string
   /**
-   * Text-join seam marker (live-UAT regression, persona "Dana"): set on a
+   * Text-join seam marker (live-UAT regression fix): set on a
    * still-streaming assistant bubble whenever a top-level tool call starts
    * while it holds text (see the non-spanned branch of `case 'tool_call_start'`).
    * A tool call — including a synchronous ("await") `delegate` call whose own
@@ -856,6 +856,9 @@ export const useChatStore = create<ChatStore>((set, get) => {
           msg.content = msg.content + content
           msg.isStreaming = !done
           msg.status = done ? 'done' : 'streaming'
+          // Clear the seam marker whenever the bubble finalizes — a "boundary
+          // pending" flag is meaningless once no further token is coming.
+          if (done) msg.pendingTextBoundary = false
           draft.isStreaming = !done
         }) as Partial<SessionChatState>
       })
@@ -902,7 +905,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
         // rather than creating a second placeholder or overwriting the interrupted status.
         return produce(b, (draft) => {
           const m = draft.messagesById[lastMsgId!]
-          if (m) { m.isStreaming = false; m.status = 'interrupted' }
+          if (m) { m.isStreaming = false; m.status = 'interrupted'; m.pendingTextBoundary = false }
         }) as Partial<SessionChatState>
       })
       // If no streaming assistant message was found in the active bucket, search
@@ -931,7 +934,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 // The outer loop already restricts lastMsgId to role:'assistant' entries,
                 // so this guard is defence-in-depth against future refactors that could
                 // break that invariant.
-                updatedById[lastMsgId!] = { ...target, isStreaming: false, status: 'interrupted' } as ChatMessage
+                updatedById[lastMsgId!] = { ...target, isStreaming: false, status: 'interrupted', pendingTextBoundary: false } as ChatMessage
               }
               const updated: SessionChatState = { ...b, messagesById: updatedById }
               const updatedSessions = { ...s.sessionsById, [bucketSid]: updated }
@@ -1699,6 +1702,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   ...m,
                   isStreaming: false,
                   status: m.status === 'interrupted' ? 'interrupted' : 'done',
+                  pendingTextBoundary: false,
                 } as ChatMessage
               }
             }
@@ -1952,8 +1956,8 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 // since the last token was appended, so this frame begins a
                 // new logical unit — insert a paragraph break instead of
                 // gluing it directly onto the trailing narration (live-UAT
-                // regression, persona "Dana" — e.g. "...now.Now delegating…"
-                // / "...inline:ping" with zero separator).
+                // regression — e.g. "...now.Now delegating…" / "...inline:ping"
+                // with zero separator).
                 if (msg.pendingTextBoundary) {
                   if (msg.content) msg.content += '\n\n'
                   msg.pendingTextBoundary = false
@@ -2053,6 +2057,12 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   const msg = draft.messagesById[lastMsgId]
                   msg.isStreaming = false
                   msg.status = msg.status === 'interrupted' ? 'interrupted' : 'done'
+                  // Clear the tool-call text-boundary marker on finalize. If the
+                  // turn's last event was a tool call with no trailing narration
+                  // token before `done`, pendingTextBoundary would otherwise be
+                  // left `true` on a message with no next token coming — a
+                  // representable-but-meaningless state for a finalized bubble.
+                  msg.pendingTextBoundary = false
                 }
                 // Bake any pending tool calls into the last assistant message so
                 // VirtualAssistantMessageRow can render them from message.tool_calls.
@@ -2163,6 +2173,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
                     : (msg.content || frame.message)
                   msg.isStreaming = false
                   msg.status = resolvedStatus
+                  msg.pendingTextBoundary = false
                   draft.isStreaming = false
                   if (clearReplayingNow) {
                     draft.isReplaying = false
@@ -2557,7 +2568,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   return
                 }
                 const m = draft.messagesById[matchId]
-                if (m) { m.isStreaming = false; m.status = 'interrupted' }
+                if (m) { m.isStreaming = false; m.status = 'interrupted'; m.pendingTextBoundary = false }
               }) as Partial<SessionChatState>
             })
             break
@@ -2636,6 +2647,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   m.content = text
                   m.status = 'done'
                   m.isStreaming = false
+                  m.pendingTextBoundary = false
                   if (replayAgentId) m.agentId = replayAgentId
                   // Stamp the per-turn model on the coalesced assistant turn (FR-014).
                   // Only set when the frame carried a non-empty model —

@@ -1,5 +1,5 @@
 // Regression test for the delegator-narration/delegate-content text-glue bug
-// found in live UAT (persona "Dana"), reproduced verbatim as:
+// found in live UAT, reproduced verbatim as:
 //
 //   "...Let me load the delegate tool and send the task now.Now delegating
 //   the "ping" task to Worker synchronously so we get the result inline:ping"
@@ -62,7 +62,7 @@ function resetStore() {
 beforeEach(resetStore)
 
 describe('chat store — delegator-narration/delegate-content text join (regression)', () => {
-  it('reproduces the exact "Dana" repro text with the join fixed (paragraph breaks, not glue)', () => {
+  it('reproduces the exact live-UAT repro text with the join fixed (paragraph breaks, not glue)', () => {
     // Jim's own pre-tool-call narration streams in.
     act(() => {
       useChatStore.getState().handleFrame({
@@ -172,5 +172,46 @@ describe('chat store — delegator-narration/delegate-content text join (regress
     const msgs = useChatStore.getState().messages
     expect(msgs).toHaveLength(1)
     expect(msgs[0].content).toBe('Done.')
+  })
+
+  it('clears pendingTextBoundary when a turn ends with a tool call as its last event (no trailing token before done)', () => {
+    // Narration streams in, then a tool call starts — flags the seam so the
+    // NEXT token (if any) gets a paragraph break before it.
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'token', content: 'Running the command now.', agent_id: 'jim', session_id: SESSION_ID })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'tool_call_start', call_id: 'shell_1', tool: 'shell', params: { cmd: 'echo hi' }, agent_id: 'jim', session_id: SESSION_ID,
+      })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'tool_call_result', call_id: 'shell_1', tool: 'shell', result: { stdout: 'hi\n' }, status: 'success', session_id: SESSION_ID,
+      })
+    })
+
+    // Sanity: the seam marker IS set right after tool_call_start, before done.
+    const midMsgs = useChatStore.getState().messages
+    expect(midMsgs).toHaveLength(1)
+    expect(midMsgs[0].pendingTextBoundary).toBe(true)
+
+    // The turn ends here — the agent's final action was the tool call, with
+    // NO further narration token arriving before `done` (e.g. the agent's
+    // last action in the turn was a tool call with no trailing text).
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'done', session_id: SESSION_ID })
+    })
+
+    const finalMsgs = useChatStore.getState().messages
+    expect(finalMsgs).toHaveLength(1)
+    expect(finalMsgs[0].content).toBe('Running the command now.')
+    expect(finalMsgs[0].status).toBe('done')
+    expect(finalMsgs[0].isStreaming).toBe(false)
+    // THE FIX: pendingTextBoundary must be cleared on finalization. Left
+    // uncleared, it would be a representable-but-meaningless `true` on a
+    // finalized message that has no next token coming — a trap for future
+    // code that reads this field and assumes `true` means "still mid-stream".
+    expect(finalMsgs[0].pendingTextBoundary).toBe(false)
   })
 })
