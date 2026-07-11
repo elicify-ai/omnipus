@@ -420,6 +420,7 @@ export interface BrowserStatusFrame {
   message?: string;
   controller?: string;
   controlled_by_other?: boolean;
+  control_only?: boolean;
   session_id?: string;
 }
 

@@ -46,5 +46,16 @@ properties:
       controlled_by_other=true disables its Take-control affordance and shows
       "Someone else is driving" instead of offering control it cannot get.
       Absent/false means control is free or held by this very connection.
+  control_only:
+    type: boolean
+    description: >-
+      True on a frame whose SOLE purpose is to update control-ownership
+      (`controlled_by_other`) on the OTHER viewers of a session after a
+      take/release/detach — it carries no lifecycle/error meaning. The SPA
+      must apply only `controlled_by_other` from such a frame and leave its
+      status/error banner and lifecycle state untouched (a control-only frame
+      is NOT a real status change; treating it as one would wipe a still-valid
+      error message or reset the pill). Absent/false = an ordinary
+      lifecycle/error/attach frame, applied normally.
   session_id:
     type: string

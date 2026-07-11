@@ -2271,5 +2271,12 @@ components:
             Server-computed per-connection: true when some OTHER connection on
             this session holds interactive control. Keeps the docked panel and
             the pop-out window in agreement about who is driving.
+        control_only:
+          type: boolean
+          description: >-
+            True on a frame whose sole purpose is to update control-ownership on
+            other viewers (take/release/detach) — carries no lifecycle/error
+            meaning; the SPA applies only controlled_by_other and leaves its
+            status/error banner untouched.
         session_id:
           type: string

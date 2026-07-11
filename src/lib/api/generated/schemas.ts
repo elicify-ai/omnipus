@@ -7661,6 +7661,7 @@ export const BrowserStatusFrame = z
     message: z.string().max(512).optional(),
     controller: z.string().max(128).optional(),
     controlled_by_other: z.boolean().optional(),
+    control_only: z.boolean().optional(),
     session_id: z.string().optional(),
   })
   .strict();
