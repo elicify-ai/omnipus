@@ -51,6 +51,9 @@ func (t *NavigateTool) Execute(ctx context.Context, args map[string]any) *tools.
 	if rawURL == "" {
 		return tools.ErrorResult("browser_navigate: 'url' parameter is required")
 	}
+	if result := controlledResult(t.mgr, t.Name()); result != nil {
+		return result
+	}
 
 	if err := t.mgr.ValidateURL(ctx, rawURL); err != nil {
 		return tools.ErrorResult(err.Error())
@@ -130,6 +133,9 @@ func (t *ClickTool) Execute(ctx context.Context, args map[string]any) *tools.Too
 	if selector == "" {
 		return tools.ErrorResult("browser_click: 'selector' parameter is required")
 	}
+	if result := controlledResult(t.mgr, t.Name()); result != nil {
+		return result
+	}
 
 	tabCtx, err := t.mgr.Session(defaultSessionID)
 	if err != nil {
@@ -180,6 +186,9 @@ func (t *TypeTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 	text, _ := args["text"].(string)
 	if selector == "" {
 		return tools.ErrorResult("browser_type: 'selector' parameter is required")
+	}
+	if result := controlledResult(t.mgr, t.Name()); result != nil {
+		return result
 	}
 
 	tabCtx, err := t.mgr.Session(defaultSessionID)
@@ -429,6 +438,9 @@ func (t *EvaluateTool) Execute(ctx context.Context, args map[string]any) *tools.
 	if js == "" {
 		return tools.ErrorResult("browser_evaluate: 'js' parameter is required")
 	}
+	if result := controlledResult(t.mgr, t.Name()); result != nil {
+		return result
+	}
 
 	tabCtx, err := t.mgr.Session(defaultSessionID)
 	if err != nil {
@@ -480,6 +492,34 @@ func classifyEvalResult(raw []byte) *tools.ToolResult {
 	}
 
 	return jsonResult(map[string]any{"result": v})
+}
+
+// controlledResult implements ADR-038 D6's cooperative turn-coordination: when
+// a human viewer currently holds interactive control of the browser's live
+// view (see pkg/tools/browser/live.go), the agent's own interactive tools
+// (navigate/click/type/evaluate — the ones that would "fight for the cursor")
+// defer instead of executing, returning a non-error, visible ToolResult so
+// the LLM can see why nothing happened and tell the user to wait. Read-only
+// tools (browser_screenshot, browser_get_text, browser_wait) are NOT gated —
+// they don't inject input, so they can't conflict with a human driving the
+// same page.
+//
+// Returns nil (no deferral) when the session is uncontrolled or has no live
+// view at all — the overwhelmingly common case, so this stays a cheap map
+// lookup on the hot path.
+//
+// LIMITATION (documented per ADR-038 D6): this is cooperative, not
+// preemptive. A tool call already in flight when a human takes control
+// finishes normally — there is no mid-tool preemption in v1.
+func controlledResult(mgr *BrowserManager, toolName string) *tools.ToolResult {
+	if !mgr.Live().IsControlled(defaultSessionID) {
+		return nil
+	}
+	return tools.NewToolResult(fmt.Sprintf(
+		"%s: deferred — a human is currently controlling this browser via the live view. "+
+			"Wait for them to release control before driving the browser further.",
+		toolName,
+	))
 }
 
 // jsonResult marshals v to JSON and returns a SilentResult.

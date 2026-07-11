@@ -97,6 +97,14 @@ type BrowserManager struct {
 	allocCancel context.CancelFunc // cancels the allocator (kills browser)
 	sessions    map[string]*sessionEntry
 	started     bool
+
+	// live is the ADR-038 live-interactive-browser engine registry, keyed by
+	// session ID. Since BrowserManager is itself scoped to one agent (see
+	// pkg/agent/loop.go's per-agent manager map), a LiveView keyed by session
+	// ID inside this manager already satisfies the (agentID, sessionID)
+	// uniqueness ADR-038 D3 calls for — no separate agentID key is needed
+	// here. Never nil after NewBrowserManager.
+	live *LiveViewRegistry
 }
 
 // NewBrowserManager creates a manager. ssrf must be non-nil — SSRF protection
@@ -108,11 +116,19 @@ func NewBrowserManager(cfg BrowserConfig, ssrf *security.SSRFChecker) (*BrowserM
 			"browser: SSRFChecker is required — cannot create browser manager without SSRF protection (SEC-24)",
 		)
 	}
-	return &BrowserManager{
+	mgr := &BrowserManager{
 		cfg:      cfg,
 		ssrf:     ssrf,
 		sessions: make(map[string]*sessionEntry),
-	}, nil
+	}
+	mgr.live = newLiveViewRegistry(mgr)
+	return mgr, nil
+}
+
+// Live returns this manager's ADR-038 live-interactive-browser engine
+// registry. Never nil for a manager constructed via NewBrowserManager.
+func (m *BrowserManager) Live() *LiveViewRegistry {
+	return m.live
 }
 
 // blockedSchemes are URL schemes that bypass network-level SSRF and must be
@@ -222,6 +238,12 @@ func (m *BrowserManager) ensureStarted() error {
 		// "Permission denied" spam during browser startup.
 		chromedp.Flag("disable-crash-reporter", true),
 		chromedp.Flag("disable-breakpad", true),
+		// /dev/shm is frequently tiny (or absent) in containers; Chrome falls
+		// back to disk-backed shared memory for renderer<->GPU transport when
+		// this is set, avoiding renderer crashes under container defaults
+		// (ADR-038 D4 — needed for the CDP screencast to stream reliably from
+		// a containerized gateway).
+		chromedp.Flag("disable-dev-shm-usage", true),
 		// Pin the DevTools WebSocket to a fixed loopback port so the
 		// gateway's Landlock NET_CONNECT_TCP allow-list can include it
 		// (v0.1 fix for "browser_navigate: dial tcp 127.0.0.1:<random>:

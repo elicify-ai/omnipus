@@ -336,6 +336,44 @@ func (c *wsConn) close() {
 	c.closeOnce.Do(func() { close(c.doneCh) })
 }
 
+// wsCheckOrigin builds a gorilla websocket.Upgrader.CheckOrigin function that
+// allows same-origin requests (Origin hostname+port matches the request
+// Host) plus the configured allowedOrigin, and — only when no allowedOrigin
+// is configured — localhost/127.0.0.1 for local development. Shared by every
+// WS endpoint in the gateway (chat's /api/v1/chat/ws, ADR-038's
+// /api/v1/browser/ws) so origin policy can never drift between them.
+func wsCheckOrigin(allowedOrigin string) func(r *http.Request) bool {
+	return func(r *http.Request) bool {
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			return true // non-browser or same-origin
+		}
+		if allowedOrigin != "" && origin == allowedOrigin {
+			return true
+		}
+		parsed, err := url.Parse(origin)
+		if err != nil {
+			return false
+		}
+		hostname := parsed.Hostname()
+		originPort := parsed.Port()
+		// Allow same-origin: Origin hostname+port matches the request Host.
+		if r.Host != "" {
+			hostOnly := r.Host
+			hostPort := ""
+			if h, p, err := net.SplitHostPort(r.Host); err == nil {
+				hostOnly = h
+				hostPort = p
+			}
+			if hostname == hostOnly && originPort == hostPort {
+				return true
+			}
+		}
+		// Allow localhost and loopback for development ONLY when no explicit origin is configured.
+		return allowedOrigin == "" && (hostname == "localhost" || hostname == "127.0.0.1")
+	}
+}
+
 // newWSHandler creates a WSHandler and registers it as the MessageBus stream delegate,
 // replacing any previously registered delegate (e.g., the Wave 1 SSE handler).
 func newWSHandler(
@@ -353,37 +391,7 @@ func newWSHandler(
 		devicePairingRegistry: newDevicePairingRegistry(),
 		pairingStore:          pairing.NewPairingStore(),
 		upgrader: websocket.Upgrader{
-			// CheckOrigin: parses the Origin URL and compares hostname against the request
-			// Host to allow same-origin requests. Also allows localhost/127.0.0.1 for development.
-			CheckOrigin: func(r *http.Request) bool {
-				origin := r.Header.Get("Origin")
-				if origin == "" {
-					return true // non-browser or same-origin
-				}
-				if allowedOrigin != "" && origin == allowedOrigin {
-					return true
-				}
-				parsed, err := url.Parse(origin)
-				if err != nil {
-					return false
-				}
-				hostname := parsed.Hostname()
-				originPort := parsed.Port()
-				// Allow same-origin: Origin hostname+port matches the request Host.
-				if r.Host != "" {
-					hostOnly := r.Host
-					hostPort := ""
-					if h, p, err := net.SplitHostPort(r.Host); err == nil {
-						hostOnly = h
-						hostPort = p
-					}
-					if hostname == hostOnly && originPort == hostPort {
-						return true
-					}
-				}
-				// Allow localhost and loopback for development ONLY when no explicit origin is configured.
-				return allowedOrigin == "" && (hostname == "localhost" || hostname == "127.0.0.1")
-			},
+			CheckOrigin: wsCheckOrigin(allowedOrigin),
 		},
 	}
 	// NOTE: Do NOT call msgBus.SetStreamDelegate(h) here.
