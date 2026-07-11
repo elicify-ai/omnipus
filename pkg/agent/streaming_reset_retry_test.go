@@ -24,6 +24,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -444,7 +445,7 @@ func TestRetryOnStreamingReset_ScenarioProviderVariant(t *testing.T) {
 // len(window) <= 1 early return. Since the ORIGINAL error that triggered this
 // branch was a transient network/streaming reset (not a real context-overflow
 // rejection from the provider), abandoning the retry there defeats the whole
-// purpose of the streaming-reset-retry fix for any turn near the budget edge.
+// purpose of the timeout-retry path for any turn near the budget edge.
 //
 // This test forces "over budget" deterministically (rather than relying on
 // incidental proximity to a default threshold, which is what made the
@@ -513,4 +514,155 @@ func TestRetryOnStreamingReset_NothingToTrimStillRetries(t *testing.T) {
 			"the over-budget context has nothing eligible to trim; got error: %v", err)
 	assert.Equal(t, 2, provider.callIdx,
 		"provider must be called exactly twice: once for the reset, once for the success")
+}
+
+// recallSpanInjectingProvider wraps failingThenSuccessProvider and, on its
+// first call only, activates a recall span AFTER Site-1 message assembly has
+// already happened — simulating a recall span that becomes active mid-turn
+// (e.g. a recall_conversation tool call in an earlier iteration) rather than
+// one already active when the turn began. This isolates windowTrim's
+// recall-span-drop-alone branch (case 2, see TestWindowTrim_
+// RecallSpanDropAloneReturnsOK in window_trim_test.go for the direct unit
+// test) to the timeout-recovery call site (runTurn's compaction-attempt
+// branch): the proactive pre-call compaction check runs earlier, against the
+// original span-free assembled messages, before this provider is ever
+// invoked.
+type recallSpanInjectingProvider struct {
+	*failingThenSuccessProvider
+	al         *AgentLoop
+	sessionKey string
+	span       *RecallSpan
+	injected   bool
+}
+
+func (p *recallSpanInjectingProvider) Chat(
+	ctx context.Context,
+	msgs []providers.Message,
+	defs []providers.ToolDefinition,
+	model string,
+	opts map[string]any,
+) (*providers.LLMResponse, error) {
+	if !p.injected {
+		p.injected = true
+		p.al.setRecallSpan(p.sessionKey, p.span)
+	}
+	return p.failingThenSuccessProvider.Chat(ctx, msgs, defs, model, opts)
+}
+
+// TestRetryOnStreamingReset_RecallSpanDropAloneStillRetries is a regression
+// test for windowTrim's case-2 return-value bug found in review: when an
+// active recall span alone (not any window Turn) pushes the assembled
+// context over the raw ContextWindow threshold, and dropping that span
+// brings the window back under the compaction budget, windowTrim used to
+// report this exactly like a genuine compaction failure (ok=false,
+// NothingToTrim=false) — even though a real, useful eviction (FR-019: drop
+// the recall span first) just happened. runTurn's timeout-recovery branch
+// treated that identically to "TruncateHistory could not shrink the window"
+// and broke out of the retry loop, abandoning a turn that could simply have
+// been retried with the (now smaller) assembled messages.
+//
+// The recall span is activated from inside the mock provider's first call
+// (recallSpanInjectingProvider), after the proactive pre-call compaction
+// check has already run against the original, span-free messages. This
+// isolates the fix to the specific call site under test — the
+// timeout-recovery branch's own windowTrim call — rather than the earlier
+// proactive one, which would otherwise intercept a recall span that was
+// already active before the turn began.
+//
+// BDD: Given a turn whose assembled context is small at first, but a huge
+// recall span becomes active during the (failed) first provider call,
+// When the resulting transient streaming-reset error triggers the
+// timeout-recovery branch,
+// Then windowTrim drops the recall span, reports ok=true (a real eviction,
+// not a failure),
+// And the retry proceeds with the span dropped,
+// And the turn SUCCEEDS via the second call.
+func TestRetryOnStreamingReset_RecallSpanDropAloneStillRetries(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	streamingResetErr := errors.New("streaming read error: http2: response body closed")
+	inner := &failingThenSuccessProvider{
+		failures: []error{streamingResetErr},
+		successResp: &providers.LLMResponse{
+			Content:   "retry succeeded after recall-span drop",
+			ToolCalls: []providers.ToolCall{},
+		},
+	}
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: tmpDir,
+				ModelName: "test-model",
+				// Raw ContextWindow stays generous so the small initial
+				// (span-free) messages never trip the proactive pre-call
+				// compaction check, which uses the raw window. The tiny
+				// SummarizeTokenPercent instead forces the timeout-recovery
+				// branch's own pre-check (which scales ContextWindow by
+				// SummarizeTokenPercent) to always attempt compaction,
+				// mirroring the technique
+				// TestRetryOnStreamingReset_NothingToTrimStillRetries uses
+				// to force isOverContextBudget deterministically.
+				ContextWindow:         100000,
+				SummarizeTokenPercent: 1,
+				MaxTokens:             2000,
+				MaxToolIterations:     10,
+			},
+		},
+	}
+
+	msgBus := bus.NewMessageBus()
+	t.Cleanup(func() { msgBus.Close() })
+
+	const sessionKey = "recall-span-drop-retry-session"
+
+	// A huge recall span (~150,000 estimated tokens) — comfortably over the
+	// 100,000-token raw ContextWindow on its own, so once active it forces
+	// windowTrim's FR-019 drop-span-first branch.
+	hugeRecallContent := strings.Repeat("r", 375000)
+	recallMsgs := []providers.Message{
+		{Role: "user", Content: hugeRecallContent},
+		{Role: "assistant", Content: "recalled answer"},
+	}
+	span := newRecallSpan(1, 1, recallMsgs, []int{1})
+
+	provider := &recallSpanInjectingProvider{
+		failingThenSuccessProvider: inner,
+		sessionKey:                 sessionKey,
+		span:                       span,
+	}
+	al := mustNewAgentLoop(t, cfg, msgBus, provider)
+	provider.al = al
+	t.Cleanup(al.Close)
+
+	agentInst := al.GetRegistry().GetDefaultAgent()
+	require.NotNil(t, agentInst, "default agent must be registered")
+
+	// Seed a small prior turn so the persisted window has more than the
+	// single in-flight user message — keeps this test clear of case 1
+	// ("len(window) <= 1"), covered by the sibling test above.
+	priorTurn := []providers.Message{
+		{Role: "user", Content: "earlier question"},
+		{Role: "assistant", Content: "earlier answer"},
+	}
+	agentInst.Sessions.SetHistory(sessionKey, priorTurn)
+	require.NoError(t, agentInst.Sessions.Save(sessionKey))
+
+	ctx := context.Background()
+	_, err := al.runAgentLoop(ctx, agentInst, processOptions{
+		SessionKey:      sessionKey,
+		Channel:         "web",
+		ChatID:          "test-chat-recall-drop",
+		UserMessage:     "hello",
+		DefaultResponse: defaultResponse,
+		EnableSummary:   false,
+		SendResponse:    false,
+	})
+	require.NoError(t, err,
+		"turn must succeed after retrying a transient streaming reset when only "+
+			"the recall span (not the window) needed evicting; got error: %v", err)
+	assert.Equal(t, 2, inner.callIdx,
+		"provider must be called exactly twice: once for the reset, once for the success")
+	assert.Nil(t, al.activeRecallSpan(sessionKey),
+		"the recall span must have been dropped (FR-019 pressure eviction) during timeout recovery")
 }

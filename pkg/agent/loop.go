@@ -6181,6 +6181,16 @@ turnLoop:
 						callMessages, toolDefs, ts.agent.MaxTokens,
 					) {
 						compactionAttemptedOnTimeout = true
+						// windowTrim has three possible outcomes here:
+						//  1. ok=true — a real eviction occurred, either window Turns were
+						//     dropped or dropping the active recall span alone (FR-019)
+						//     brought the window back under budget — rebuild messages and
+						//     retry (this branch).
+						//  2. ok=false, NothingToTrim=true — nothing was eligible to evict
+						//     (e.g. a fresh turn with no compressible history) — not a
+						//     failure; fall through to backoff+retry unchanged.
+						//  3. ok=false, NothingToTrim=false — TruncateHistory was attempted
+						//     but the window genuinely did not shrink — abandon the retry.
 						compression, ok := al.windowTrim(ts.agent, ts.sessionKey)
 						if ok {
 							al.emitEvent(
@@ -6217,8 +6227,8 @@ turnLoop:
 							// This is not a compaction failure — the error that got us
 							// here was a transient network/streaming reset (isTimeoutError),
 							// not a genuine context-overflow rejection from the provider.
-							// Abandoning the whole retry here would defeat the streaming-
-							// reset-retry fix for any turn that happens to sit near the
+							// Abandoning the whole retry here would defeat the timeout-
+							// retry path for any turn that happens to sit near the
 							// context-budget edge with little/no history. Fall through to
 							// the backoff-and-retry below with the existing messages
 							// unchanged — the retried call may simply succeed.
@@ -7806,12 +7816,24 @@ type compressionResult struct {
 	RemainingMessages int
 	// NothingToTrim is set (alongside ok=false) when windowTrim declined to
 	// run because the live window had nothing eligible to evict (e.g. a
-	// fresh turn with a single-message window) — as opposed to ok=false
-	// because TruncateHistory genuinely failed to shrink the window. Callers
-	// that treat ok=false as "compaction failed, abandon retry" should check
-	// this flag first: a no-op trim is not a failure of the compaction
-	// mechanism and should not, on its own, be grounds for giving up on a
-	// retry triggered by an unrelated transient error.
+	// fresh turn with a single-message window). Callers that treat ok=false
+	// as "compaction failed, abandon retry" should check this flag first: a
+	// no-op trim is not a failure of the compaction mechanism and should
+	// not, on its own, be grounds for giving up on a retry triggered by an
+	// unrelated transient error.
+	//
+	// windowTrim's other ok=false path — TruncateHistory was attempted but
+	// the window did not actually shrink — is a genuine failure and leaves
+	// this flag unset; the window is still over budget in that case, so
+	// retrying against it is unlikely to help.
+	//
+	// A third windowTrim outcome exists but is deliberately NOT reported
+	// through this flag: dropping the active recall span alone (FR-019) can
+	// bring the window back under budget without evicting any window Turns.
+	// That is a real, successful eviction, so windowTrim reports it the same
+	// way as a normal window eviction — ok=true with DroppedMessages==0 —
+	// rather than ok=false+NothingToTrim, so callers rebuild the assembled
+	// messages (dropping the now-stale recall-span content) before retrying.
 	NothingToTrim bool
 }
 
@@ -7952,7 +7974,15 @@ func (al *AgentLoop) windowTrim(agent *AgentInstance, sessionKey string) (compre
 		// Using raw contextWindow here would pass cases that the suffix walk
 		// would still reject, causing unnecessary evictions on the next call.
 		if currentWindowTokens+toolDefsTokens <= budget {
-			return compressionResult{}, false
+			// The recall span alone was the problem: dropping it brought the
+			// window back under budget without evicting any window Turns.
+			// This IS a real, successful eviction — FR-019 names the span
+			// drop as step 3 of the documented algorithm — so report
+			// ok=true, the same as a normal window eviction, rather than
+			// ok=false. That makes the caller rebuild the assembled
+			// messages (dropping the now-stale recall-span content) instead
+			// of treating a useful eviction as a compaction failure.
+			return compressionResult{RemainingMessages: len(window)}, true
 		}
 	}
 

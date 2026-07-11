@@ -67,6 +67,23 @@ func newTestRestAPIWithTaskExecutor(t *testing.T) *restAPI {
 	}
 }
 
+// getTaskStartedAt reads back a task via GET /api/v1/tasks/{id} and returns
+// its started_at pointer (nil when unset). Used by the launch-revert tests
+// below to confirm a reverted in_progress transition doesn't leave a phantom
+// "started" timestamp behind (see the store's StartedAt auto-stamp in
+// updateLocked).
+func getTaskStartedAt(t *testing.T, api *restAPI, id string) *time.Time {
+	t.Helper()
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/"+id, nil)
+	r.URL.Path = "/api/v1/tasks/" + id
+	api.HandleTasks(w, r)
+	require.Equal(t, http.StatusOK, w.Code, "getTaskStartedAt GET must return 200; body=%s", w.Body.String())
+	var tsk gen.Task
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &tsk))
+	return tsk.StartedAt
+}
+
 // advanceTaskToNext advances a task from inbox to next (adding a description for
 // the partial-task guard).
 func advanceTaskToNext(t *testing.T, api *restAPI, id string) {
@@ -229,6 +246,13 @@ func TestHandleTaskPatch_InProgress_NilTaskExecutor(t *testing.T) {
 	statusAfter := getTaskStatus(t, api, tsk.Id)
 	assert.Equal(t, gen.TaskStatusNext, statusAfter,
 		"task must revert to 'next' after nil-executor 503 (not left as in_progress)")
+
+	// StartedAt must be cleared, not left carrying a "started" timestamp from
+	// an attempt that never actually ran (the in_progress patch above stamped
+	// it before the nil-executor check reverted the status).
+	startedAtAfter := getTaskStartedAt(t, api, tsk.Id)
+	assert.Nil(t, startedAtAfter,
+		"task must have StartedAt cleared after nil-executor revert, not a phantom 'started' timestamp")
 }
 
 // TestHandleTaskPatch_InProgress_WithKnownAgent verifies that PATCH
@@ -449,6 +473,13 @@ func TestHandleTaskPatch_RunTask_StartErrRevertsStatus(t *testing.T) {
 	statusAfter := getTaskStatus(t, api, tsk.Id)
 	assert.Equal(t, gen.TaskStatusNext, statusAfter,
 		"task must revert to 'next' after StartTaskNow error (not left as in_progress)")
+
+	// StartedAt must be cleared, not left carrying a "started" timestamp from
+	// an attempt that never actually ran (the in_progress patch above stamped
+	// it before StartTaskNow's failure reverted the status).
+	startedAtAfter := getTaskStartedAt(t, api, tsk.Id)
+	assert.Nil(t, startedAtAfter,
+		"task must have StartedAt cleared after StartTaskNow-error revert, not a phantom 'started' timestamp")
 }
 
 // TestHandleTaskPatch_RunTask_DispatchCapReturns409 verifies that when the
@@ -503,6 +534,13 @@ func TestHandleTaskPatch_RunTask_DispatchCapReturns409(t *testing.T) {
 	statusAfter := getTaskStatus(t, api, tsk.Id)
 	assert.Equal(t, gen.TaskStatusNext, statusAfter,
 		"task must revert to 'next' after 409 (not left as in_progress)")
+
+	// StartedAt must be cleared, not left carrying a "started" timestamp from
+	// an attempt that never actually ran (the in_progress patch above stamped
+	// it before the dispatch-cap failure reverted the status).
+	startedAtAfter := getTaskStartedAt(t, api, tsk.Id)
+	assert.Nil(t, startedAtAfter,
+		"task must have StartedAt cleared after dispatch-cap revert, not a phantom 'started' timestamp")
 }
 
 // TestHandleTaskPatch_RunTask_NilExecutorReturns503 verifies that PATCH

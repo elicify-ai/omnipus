@@ -834,6 +834,12 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 	//   409 — dispatch cap exhausted (retryable congestion)
 	//   500 — any other launch error
 	//
+	// The revert also clears StartedAt: the in_progress patch above (via
+	// Store.updateLocked) stamped it on the (failed) transition, so a bare
+	// Status-only revert would leave the task carrying a "started" timestamp
+	// from an attempt that never actually ran, until the next real in_progress
+	// transition happens to overwrite it.
+	//
 	// Guard: only fire when the client explicitly set status=in_progress in this
 	// PATCH (req.Status != nil). A PATCH with no status field must never enter
 	// the launch path even if the task happens to already be in_progress —
@@ -848,7 +854,9 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 		if a.taskExecutor == nil {
 			// Revert the task to its prior status so it is not left stranded.
 			revertStatus := preUpdateStatus
-			if _, rErr := a.taskStore.Update(id, task.Patch{Status: &revertStatus}); rErr != nil {
+			revertStartedAt := ""
+			revertPatch := task.Patch{Status: &revertStatus, StartedAt: &revertStartedAt}
+			if _, rErr := a.taskStore.Update(id, revertPatch); rErr != nil {
 				slog.Error("rest: could not revert task status after nil-executor failure",
 					"id", id, "revert_to", revertStatus, "error", rErr)
 			}
@@ -861,7 +869,9 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 		if startErr != nil {
 			// Revert the task to its prior status so it is not left stranded.
 			revertStatus := preUpdateStatus
-			if _, rErr := a.taskStore.Update(id, task.Patch{Status: &revertStatus}); rErr != nil {
+			revertStartedAt := ""
+			revertPatch := task.Patch{Status: &revertStatus, StartedAt: &revertStartedAt}
+			if _, rErr := a.taskStore.Update(id, revertPatch); rErr != nil {
 				slog.Error("rest: could not revert task status after StartTaskNow failure",
 					"id", id, "revert_to", revertStatus, "error", rErr)
 			}

@@ -558,7 +558,7 @@ func (s *Store) updateLocked(id string, patch Patch) (*Task, error) {
 		// explicit StartedAt in this same patch (which wins). This is the single
 		// choke point for every Update-based path that flips a task to
 		// in_progress: it closes the gap where the REST PATCH "Start" action
-		// (rest_tasks.go's handleTaskUpdate, which only sets status and then
+		// (rest_tasks.go's handleTaskPatch, which only sets status and then
 		// hands off to TaskExecutor.StartTaskNow) left started_at permanently
 		// empty because neither of those steps stamped it. The scheduler/
 		// heartbeat dispatch path (TaskExecutor.ExecuteTask) does not go through
