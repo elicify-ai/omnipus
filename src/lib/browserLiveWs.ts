@@ -2,11 +2,15 @@
 //
 // A second, self-contained WS connection separate from the chat WS
 // (src/lib/ws.ts). Deliberately lighter-weight than WsConnection: no Web
-// Worker parse offload, no visibility/online listeners, no ping/pong
-// heartbeat — the panel is user-opened/closed on demand and the backend's
-// browser_status heartbeat (ADR-038 D3) already covers liveness. Reuses the
-// same first-message `{type:"auth",token}` handshake and the same
-// sessionStorage → localStorage token lookup as ws.ts.
+// Worker parse offload, no visibility/online listeners, no application-level
+// ping/pong heartbeat — the panel is user-opened/closed on demand, liveness
+// is left to the browser's own WS transport ping/pong plus the socket's
+// close event (see ws.onclose below), and the screencast is repaint-driven
+// (CDP only emits a frame when the page's compositor actually paints), so an
+// idle-but-healthy page can legitimately go quiet with no frames for a long
+// stretch — that is not, by itself, a liveness signal. Reuses the same
+// first-message `{type:"auth",token}` handshake and the same sessionStorage
+// → localStorage token lookup as ws.ts.
 //
 // Wire types are sourced exclusively from the generated AsyncAPI types/Zod —
 // hand-written interface declarations for wire-format frames are FORBIDDEN

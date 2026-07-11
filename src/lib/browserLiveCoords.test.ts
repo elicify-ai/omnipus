@@ -58,6 +58,33 @@ describe('mapClientToDevice', () => {
     const rect = { left: 0, top: 0, width: 1280, height: 720 }
     expect(mapClientToDevice(10, 10, rect, 0, 0)).toBeNull()
   })
+
+  it('divides by page_scale (pageScaleFactor != 1): CDP dispatch coords are CSS px, the frame is device px', () => {
+    // 1:1 rect→frame (no CSS shrink), but the page reports pageScaleFactor 2.0
+    // (e.g. pinch-zoom) — the frame-space coord must be halved to land back
+    // in the CSS-pixel space CDP's Input.dispatchMouseEvent expects.
+    const rect = { left: 0, top: 0, width: 1280, height: 720 }
+    const result = mapClientToDevice(640, 360, rect, 1280, 720, 2.0)
+    expect(result).toEqual({ x: 320, y: 180 })
+  })
+
+  it('treats an undefined page_scale as 1 (unchanged from the non-scaled formula)', () => {
+    const rect = { left: 0, top: 0, width: 1280, height: 720 }
+    const result = mapClientToDevice(640, 360, rect, 1280, 720, undefined)
+    expect(result).toEqual({ x: 640, y: 360 })
+  })
+
+  it('treats a zero or negative page_scale as 1 (guards against a malformed frame)', () => {
+    const rect = { left: 0, top: 0, width: 1280, height: 720 }
+    expect(mapClientToDevice(640, 360, rect, 1280, 720, 0)).toEqual({ x: 640, y: 360 })
+    expect(mapClientToDevice(640, 360, rect, 1280, 720, -1)).toEqual({ x: 640, y: 360 })
+  })
+
+  it('clamps to the page_scale-adjusted frame edge, not the raw device-pixel edge', () => {
+    const rect = { left: 0, top: 0, width: 1280, height: 720 }
+    const result = mapClientToDevice(2000, 2000, rect, 1280, 720, 2.0)
+    expect(result).toEqual({ x: 640, y: 360 }) // clamps to 1280/2, 720/2 — not 1280, 720
+  })
 })
 
 describe('computeModifiers', () => {
