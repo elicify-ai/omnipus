@@ -44,10 +44,14 @@ func targetAgentID(f generated.DelegationFailure) string {
 // ADR-037 retired the legacy boolean allowlistCheck/delegateChecker fallbacks
 // these tools used to fall back to when the deny-checker above was nil (that
 // fallback was only ever reachable in the never-happens-in-production case of
-// an unwired deny-checker). What remains of that behavior is fail-OPEN when
-// no deny-checker is installed at all — proved by the
-// *_NilDenyChecker_FailsOpen tests below, replacing the old
-// *_FallsBackToAllowlist tests.
+// an unwired deny-checker). The legacy fallback was ITSELF deny-by-default
+// (config.IsDelegationAllowed / registry.CanSpawnSubagent both returned false
+// on an unset policy) — so deleting it must not also delete that safety net.
+// The *_NilDenyChecker_FailsClosed tests below (7-reviewer-gate follow-up,
+// silent-failure-hunter finding) prove the corrected behavior: an unwired
+// deny-checker now DENIES, not allows, replacing an earlier *_FailsOpen
+// version of these same tests that characterized (and thereby normalized) the
+// unsafe fall-through as if it were intentional.
 
 // TestDelegateTool_DelegationDenyChecker_Aborts proves that a deny-checker
 // returning a non-empty reason aborts the (default async/background) delegate
@@ -228,14 +232,20 @@ func TestDelegateTool_AwaitDelegationDenyChecker_Aborts(t *testing.T) {
 	}
 }
 
-// TestDelegateTool_AwaitNilDenyChecker_FailsOpen proves that with NO await-mode
-// deny checker installed (SetDelegationDenyCheckerAwait never called), an
-// await (async=false) delegate call is unaffected by the gate — ADR-037
-// retired the legacy boolean delegateChecker fallback this used to consult.
-// Standalone/test contexts with an unwired checker are therefore fail-open;
-// production always wires SetDelegationDenyCheckerAwait (pkg/agent/loop.go),
-// so this is never reachable there.
-func TestDelegateTool_AwaitNilDenyChecker_FailsOpen(t *testing.T) {
+// TestDelegateTool_AwaitNilDenyChecker_FailsClosed proves that with NO
+// await-mode deny checker installed (SetDelegationDenyCheckerAwait never
+// called), an await (async=false) delegate call is DENIED, not silently
+// allowed. 7-reviewer-gate follow-up (silent-failure-hunter): the original
+// ADR-037 removal deleted the legacy allowlistCheck/delegateChecker fallback
+// AND, as an unintended side effect, the deny-by-default safety net those
+// fallbacks provided when unwired. An unwired checker is a configuration
+// error, not a permission grant — this test pins the corrected fail-CLOSED
+// behavior. Production always wires SetDelegationDenyCheckerAwait
+// (pkg/agent/loop.go), so this path is unreachable there today; the test
+// exists to protect the NEXT wiring bug (new construction path, v0.3 plugin
+// entry point, refactor slip), the same way the tests it replaces used to
+// characterize the (undetected) fail-open regression.
+func TestDelegateTool_AwaitNilDenyChecker_FailsClosed(t *testing.T) {
 	tool := NewDelegateTool("test-model", 0, 0)
 	spawned := false
 	tool.SetSpawner(spawnerFunc(func(context.Context, SubTurnConfig) (*ToolResult, error) {
@@ -245,20 +255,28 @@ func TestDelegateTool_AwaitNilDenyChecker_FailsOpen(t *testing.T) {
 
 	// No SetDelegationDenyCheckerAwait installed at all.
 	result := tool.Execute(context.Background(), map[string]any{
-		"task":  "do the thing",
-		"async": false,
+		"task":     "do the thing",
+		"agent_id": "some-agent",
+		"async":    false,
 	})
-	if result == nil || result.IsError {
-		t.Fatalf("expected an unwired await deny-checker to fail open, got %+v", result)
+	if result == nil || !result.IsError {
+		t.Fatalf("expected an unwired await deny-checker to fail CLOSED (deny), got %+v", result)
 	}
-	if !spawned {
-		t.Error("spawner must run when no deny-checker is installed (fail-open-when-unwired)")
+	failure := decodeDelegationFailure(t, result)
+	if failure.Tool != "delegate" {
+		t.Errorf("expected structured failure tool 'delegate', got %q", failure.Tool)
+	}
+	if failure.Policy != string(DenyTrustSet) {
+		t.Errorf("expected policy %q, got %q", DenyTrustSet, failure.Policy)
+	}
+	if spawned {
+		t.Error("spawner must NOT run when no deny-checker is installed (fail-closed-when-unwired)")
 	}
 }
 
-// TestDelegateTool_BackgroundNilDenyChecker_FailsOpen mirrors the await test
-// above for the background (async=true, default) mode.
-func TestDelegateTool_BackgroundNilDenyChecker_FailsOpen(t *testing.T) {
+// TestDelegateTool_BackgroundNilDenyChecker_FailsClosed mirrors the await
+// test above for the background (async=true, default) mode.
+func TestDelegateTool_BackgroundNilDenyChecker_FailsClosed(t *testing.T) {
 	tool := NewDelegateTool("test-model", 0, 0)
 	spawned := make(chan struct{}, 1)
 	tool.SetSpawner(spawnerFunc(func(context.Context, SubTurnConfig) (*ToolResult, error) {
@@ -271,22 +289,28 @@ func TestDelegateTool_BackgroundNilDenyChecker_FailsOpen(t *testing.T) {
 		"task":     "do the thing",
 		"agent_id": "some-agent",
 	})
-	if result == nil || result.IsError {
-		t.Fatalf("expected an unwired background deny-checker to fail open, got %+v", result)
+	if result == nil || !result.IsError {
+		t.Fatalf("expected an unwired background deny-checker to fail CLOSED (deny), got %+v", result)
+	}
+	failure := decodeDelegationFailure(t, result)
+	if failure.Tool != "delegate" {
+		t.Errorf("expected structured failure tool 'delegate', got %q", failure.Tool)
+	}
+	if failure.Policy != string(DenyTrustSet) {
+		t.Errorf("expected policy %q, got %q", DenyTrustSet, failure.Policy)
 	}
 	select {
 	case <-spawned:
-		// spawner ran, as expected for fail-open.
-	case <-time.After(2 * time.Second):
-		t.Error("spawner must run when no deny-checker is installed (fail-open-when-unwired)")
+		t.Error("spawner must NOT run when no deny-checker is installed (fail-closed-when-unwired)")
+	case <-time.After(200 * time.Millisecond):
+		// spawner did not run within the window, as expected for fail-closed.
 	}
 }
 
-// TestTaskCreateTool_NilDenyChecker_FailsOpen proves that with no
-// SetDelegationDenyChecker installed, task_create is unaffected by the
-// (removed) legacy delegateCheck fallback — ADR-037 retired it, leaving
-// fail-open-when-unwired as the only remaining nil-checker behavior.
-func TestTaskCreateTool_NilDenyChecker_FailsOpen(t *testing.T) {
+// TestTaskCreateTool_NilDenyChecker_FailsClosed proves that with no
+// SetDelegationDenyChecker installed, create_task is DENIED, not silently
+// allowed — same 7-reviewer-gate follow-up as the DelegateTool tests above.
+func TestTaskCreateTool_NilDenyChecker_FailsClosed(t *testing.T) {
 	store := task.New(t.TempDir())
 	tool := NewTaskCreateTool(store)
 
@@ -297,16 +321,61 @@ func TestTaskCreateTool_NilDenyChecker_FailsOpen(t *testing.T) {
 		"prompt":   "do work",
 		"agent_id": "any-agent",
 	})
-	if result == nil || result.IsError {
-		t.Fatalf("expected an unwired delegation-deny checker to fail open, got %+v", result)
+	if result == nil || !result.IsError {
+		t.Fatalf("expected an unwired delegation-deny checker to fail CLOSED (deny), got %+v", result)
+	}
+	failure := decodeDelegationFailure(t, result)
+	if failure.Tool != "create_task" {
+		t.Errorf("expected structured failure tool 'create_task', got %q", failure.Tool)
+	}
+	if failure.Policy != string(DenyTrustSet) {
+		t.Errorf("expected policy %q, got %q", DenyTrustSet, failure.Policy)
 	}
 
 	tasks, err := store.List(task.Filter{})
 	if err != nil {
 		t.Fatalf("list tasks: %v", err)
 	}
-	if len(tasks) != 1 {
-		t.Errorf("expected the task to be persisted (fail-open-when-unwired), got %d", len(tasks))
+	if len(tasks) != 0 {
+		t.Errorf("expected zero tasks persisted (fail-closed-when-unwired), got %d", len(tasks))
+	}
+}
+
+// TestTaskUpdateTool_NilDenyChecker_FailsClosed mirrors
+// TestTaskCreateTool_NilDenyChecker_FailsClosed for update_task's
+// reassignment path (agent_id changed from the task's current assignee),
+// which routes through the same delegationDeny gate.
+func TestTaskUpdateTool_NilDenyChecker_FailsClosed(t *testing.T) {
+	store := task.New(t.TempDir())
+	tk := seedTask(t, store, "agent-a", "agent-a", "ws-1")
+
+	tool := NewTaskUpdateTool(store)
+	// No SetDelegationDenyChecker installed at all.
+
+	ctx := WithAgentID(context.Background(), "agent-a")
+	result := tool.Execute(ctx, map[string]any{
+		"task_id":  tk.ID,
+		"status":   "in_progress",
+		"agent_id": "agent-b",
+	})
+	if result == nil || !result.IsError {
+		t.Fatalf("expected an unwired delegation-deny checker to fail CLOSED (deny), got %+v", result)
+	}
+	failure := decodeDelegationFailure(t, result)
+	if failure.Tool != "update_task" {
+		t.Errorf("expected structured failure tool 'update_task', got %q", failure.Tool)
+	}
+	if failure.Policy != string(DenyTrustSet) {
+		t.Errorf("expected policy %q, got %q", DenyTrustSet, failure.Policy)
+	}
+
+	// No side effect: the task's assignee must be unchanged.
+	reloaded, err := store.Get(tk.ID)
+	if err != nil {
+		t.Fatalf("reload task: %v", err)
+	}
+	if reloaded.AgentID != "agent-a" {
+		t.Errorf("expected agent_id unchanged at 'agent-a' after a rejected reassignment, got %q", reloaded.AgentID)
 	}
 }
 

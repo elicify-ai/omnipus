@@ -208,6 +208,10 @@ func TestTaskCreateTool_WorkspaceFromCtx(t *testing.T) {
 	t.Parallel()
 	store := task.New(t.TempDir())
 	tool := NewTaskCreateTool(store)
+	// This test's concern is workspace resolution, not the delegation-policy
+	// gate — wire a permissive deny-checker so the (fail-closed per the
+	// 7-reviewer-gate fix) gate doesn't mask the assertion under test.
+	tool.SetDelegationDenyChecker(func(context.Context, string) *DelegationDenial { return nil })
 
 	ctx := WithAgentID(context.Background(), "caller")
 	ctx = WithWorkspaceID(ctx, "ws-explicit")
@@ -264,6 +268,8 @@ func TestTaskCreateTool_StaleCtxWorkspace_LandsOnDefault(t *testing.T) {
 	store := task.New(t.TempDir())
 	tool := NewTaskCreateTool(store)
 	tool.SetHome(home)
+	// This test's concern is workspace resolution, not the delegation-policy gate.
+	tool.SetDelegationDenyChecker(func(context.Context, string) *DelegationDenial { return nil })
 
 	ctx := WithAgentID(context.Background(), "caller")
 	ctx = WithWorkspaceID(ctx, "01JXBOGUS00000000000000099")
@@ -303,6 +309,8 @@ func TestTaskCreateTool_WorkspaceFromHome(t *testing.T) {
 	store := task.New(t.TempDir())
 	tool := NewTaskCreateTool(store)
 	tool.SetHome(home)
+	// This test's concern is workspace resolution, not the delegation-policy gate.
+	tool.SetDelegationDenyChecker(func(context.Context, string) *DelegationDenial { return nil })
 
 	ctx := WithAgentID(context.Background(), "caller")
 	result := tool.Execute(ctx, map[string]any{
@@ -329,6 +337,8 @@ func TestTaskCreateTool_NoWorkspaceError(t *testing.T) {
 	t.Parallel()
 	store := task.New(t.TempDir())
 	tool := NewTaskCreateTool(store) // home not set
+	// This test's concern is workspace resolution, not the delegation-policy gate.
+	tool.SetDelegationDenyChecker(func(context.Context, string) *DelegationDenial { return nil })
 
 	ctx := WithAgentID(context.Background(), "caller")
 	result := tool.Execute(ctx, map[string]any{
@@ -352,6 +362,9 @@ func TestTaskCreateTool_DelegationDepthStamped(t *testing.T) {
 	store := task.New(t.TempDir())
 	tool := NewTaskCreateTool(store)
 	tool.SetMaxDelegationDepth(10)
+	// This test's concern is delegation-depth stamping, not the
+	// delegation-policy trust gate.
+	tool.SetDelegationDenyChecker(func(context.Context, string) *DelegationDenial { return nil })
 
 	// Root context (no delegation depth) → child stamped generation 1.
 	ctx := WithAgentID(context.Background(), "caller")
@@ -393,6 +406,8 @@ func TestTaskCreateTool_DelegationDepthBound(t *testing.T) {
 	store := task.New(t.TempDir())
 	tool := NewTaskCreateTool(store)
 	tool.SetMaxDelegationDepth(10)
+	// This test's concern is the depth ceiling, not the delegation-policy trust gate.
+	tool.SetDelegationDenyChecker(func(context.Context, string) *DelegationDenial { return nil })
 
 	ctx := WithAgentID(context.Background(), "caller")
 	ctx = WithWorkspaceID(ctx, "ws")
@@ -583,6 +598,12 @@ func TestTaskUpdate_EditsAgentID(t *testing.T) {
 	tk := seedTask(t, store, "agent-a", "agent-a", "ws-1")
 
 	tool := NewTaskUpdateTool(store)
+	// This test's concern is agent_id reassignment persisting, not the
+	// delegation-policy gate itself — wire a permissive deny-checker so the
+	// (now fail-closed-when-unwired, per the 7-reviewer-gate fix) gate
+	// doesn't block an otherwise-unrelated test. See
+	// TestTaskUpdateTool_NilDenyChecker_FailsClosed for the unwired case.
+	tool.SetDelegationDenyChecker(func(context.Context, string) *DelegationDenial { return nil })
 	ctx := WithAgentID(context.Background(), "agent-a")
 
 	res := tool.Execute(ctx, map[string]any{
@@ -837,6 +858,8 @@ func TestTaskCreate_WithBlockedBy(t *testing.T) {
 	t.Parallel()
 	store := task.New(t.TempDir())
 	tool := NewTaskCreateTool(store)
+	// This test's concern is blocked_by persistence, not the delegation-policy gate.
+	tool.SetDelegationDenyChecker(func(context.Context, string) *DelegationDenial { return nil })
 
 	// Seed a blocker in ws-1.
 	blocker := seedTask(t, store, "agent-a", "agent-a", "ws-1")
@@ -885,6 +908,12 @@ func TestTaskCreate_BlockedByRejectsNonExistentBlocker(t *testing.T) {
 	t.Parallel()
 	store := task.New(t.TempDir())
 	tool := NewTaskCreateTool(store)
+	// This test's concern is the blocked_by cross-task guard, not the
+	// delegation-policy gate — wire a permissive checker so the rejection this
+	// test asserts on genuinely comes from the blocked_by guard, not from an
+	// (now fail-closed) unwired delegation gate short-circuiting first for the
+	// wrong reason.
+	tool.SetDelegationDenyChecker(func(context.Context, string) *DelegationDenial { return nil })
 
 	ctx := WithAgentID(context.Background(), "caller")
 	ctx = WithWorkspaceID(ctx, "ws-1")
@@ -914,6 +943,10 @@ func TestTaskCreate_BlockedByRejectsCrossWorkspace(t *testing.T) {
 	t.Parallel()
 	store := task.New(t.TempDir())
 	tool := NewTaskCreateTool(store)
+	// This test's concern is the cross-workspace blocked_by guard, not the
+	// delegation-policy gate — wire a permissive checker so the rejection
+	// genuinely comes from the cross-workspace guard.
+	tool.SetDelegationDenyChecker(func(context.Context, string) *DelegationDenial { return nil })
 
 	// Blocker lives in ws-beta; new task will land in ws-alpha.
 	blocker := seedTask(t, store, "agent-a", "agent-a", "ws-beta")
@@ -1472,15 +1505,22 @@ func TestTaskCreate_RejectsSubagent3pWorker_EvenWhenDelegationAllows(t *testing.
 }
 
 // TestTaskCreate_ExternalCLICheck_NilFailsOpen proves the established
-// fail-open-when-unwired convention (matching delegateCheck/delegationDeny):
+// fail-open-when-unwired convention for externalCLIWorkerCheck specifically:
 // when SetExternalCLIWorkerChecker is never called (nil), task creation is
-// unaffected by the guard. This is a control proving the guard's absence is
+// unaffected by that guard. This is a control proving the guard's absence is
 // benign in standalone/test contexts, not that it is silently bypassable in
 // production — the production agent loop wires it (see pkg/agent/loop.go).
+//
+// NOTE: this fail-open convention is externalCLIWorkerCheck-specific.
+// delegationDeny is NOT fail-open when unwired (7-reviewer-gate follow-up —
+// see TestTaskCreateTool_NilDenyChecker_FailsClosed in
+// delegation_deny_wiring_test.go) — a permissive delegationDeny checker is
+// wired below so this test isolates the externalCLIWorkerCheck behavior only.
 func TestTaskCreate_ExternalCLICheck_NilFailsOpen(t *testing.T) {
 	t.Parallel()
 	store := task.New(t.TempDir())
 	tool := NewTaskCreateTool(store)
+	tool.SetDelegationDenyChecker(func(context.Context, string) *DelegationDenial { return nil })
 
 	ctx := WithAgentID(context.Background(), "jim")
 	ctx = WithWorkspaceID(ctx, "ws-1")
