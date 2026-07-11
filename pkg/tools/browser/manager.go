@@ -392,18 +392,22 @@ func (m *BrowserManager) Session(sessionID string) (context.Context, error) {
 		m.mu.Unlock()
 
 		ctx, cancel := chromedp.NewContext(allocCtx)
-		// Eagerly create the target on this ctx. Without this, the first
-		// chromedp.Run binds the target to whichever (possibly timeout-wrapped)
-		// ctx a tool passes — and when that wrapper is canceled, the tab dies.
-		// The next tool call then silently creates a fresh blank tab, so e.g.
-		// screenshot-after-navigate returns a blank page.
+		// Eagerly create the target on THIS long-lived ctx. Without this, the
+		// first chromedp.Run binds the target to whichever (possibly
+		// timeout-wrapped) ctx a tool passes — and when that wrapper is
+		// canceled, the tab dies; the next tool call then silently creates a
+		// fresh blank tab (screenshot-after-navigate returns a blank page).
 		//
-		// Bounded (see doc comment above) so a wedged/overloaded CDP
-		// transport can't hang this call — and therefore every Session()
-		// caller waiting on m.pending for this ID — forever.
-		startCtx, startCancel := context.WithTimeout(ctx, m.cfg.PageTimeout)
-		err := chromedp.Run(startCtx)
-		startCancel()
+		// This MUST run on `ctx` itself, never a WithTimeout(ctx, …) child:
+		// chromedp binds the target's lifetime to the context of its first Run,
+		// so running the eager creation on a timeout child and cancelling it
+		// would tear the freshly-created tab straight back down (StartScreencast
+		// / the next tool would then fail with "context canceled"). The
+		// deadlock this whole refactor fixes is solved by NOT holding m.mu
+		// across this call (the lock is released above), so a slow tab creation
+		// here can only stall this one session's own callers, never the whole
+		// browser subsystem.
+		err := chromedp.Run(ctx)
 
 		m.mu.Lock()
 		delete(m.pending, sessionID)
