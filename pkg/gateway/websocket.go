@@ -151,6 +151,9 @@ type replayFrameDecoder struct { // not-wire-format: decode-only test assertion 
 	TaskLabel    string `json:"task_label,omitempty"`
 	// Phase 1B (FR-013/FR-014): per-turn model on replay_message.
 	Model string `json:"model,omitempty"`
+	// Wave 3 fix 5c: turn-correlation id on replay_message (assistant and
+	// turn_canceled entries).
+	TurnID string `json:"turn_id,omitempty"`
 	// Phase 1B (FR-014): ReplayErrorFrame wire fields. Decoder-only — production
 	// code uses the generated type directly. The `Message` field above (the
 	// legacy ErrorFrame.message) doubles as the replay_error.message sink

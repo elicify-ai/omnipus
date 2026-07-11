@@ -398,6 +398,121 @@ func TestReplay_SpawnSpan_Synthesizes_StartEnd(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Wave 3 fix 5b — subagent_end reads the spawn ToolCall's OWN persisted
+// Status/DurationMS, not emitNestedToolCalls' recomputed child aggregate.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// TestReplay_SpawnSpan_StatusFromPersistedRecord_NotChildAggregate is the
+// core regression test for fix 5b: a sub-turn that completed successfully at
+// the LLM level (pkg/agent/subturn.go persists Status="success" onto the
+// spawn/delegate ToolCall's own record via session.UnifiedStore.
+// UpdateToolCallStatus once EventKindSubTurnEnd fires) despite one denied
+// child tool call (Status="error" on the NESTED record) must replay with
+// subagent_end.status == "success" — matching live rendering — not "error".
+// Before the fix, emitNestedToolCalls' aggregateStatus flipped to "error"
+// whenever ANY child tool call had Status=="error", which is a fundamentally
+// different, incompatible semantic from the sub-turn's own real completion
+// status.
+//
+// Traces to: Wave 3 fix 5b (confirmed root cause: live-vs-reload divergence).
+func TestReplay_SpawnSpan_StatusFromPersistedRecord_NotChildAggregate(t *testing.T) {
+	spawnTC := session.ToolCall{
+		ID:         "c1",
+		Tool:       "delegate",
+		Status:     "success", // the REAL persisted end status (Wave 3 fix 5b)
+		DurationMS: 250,       // the REAL persisted wall-clock duration
+		Parameters: map[string]any{"task": "audit go files"},
+		Result:     map[string]any{"result": "done"},
+	}
+	// A denied/errored child tool call. Under the OLD (pre-fix) aggregate
+	// logic this alone would flip the outer span's status to "error" even
+	// though the sub-turn itself completed successfully.
+	deniedChildTC := session.ToolCall{
+		ID:               "t2",
+		Tool:             "bash",
+		Status:           "error",
+		DurationMS:       10,
+		ParentToolCallID: "c1",
+	}
+	entries := []session.TranscriptEntry{
+		assistantEntry("delegating", "jim", spawnTC, deniedChildTC),
+	}
+
+	frames, _ := runReplay(t, entries)
+
+	subEnd := findFrame(frames, "subagent_end")
+	require.NotNil(t, subEnd, "subagent_end frame must be emitted")
+	assert.Equal(t, "success", subEnd.Status,
+		"subagent_end.status must reflect the spawn ToolCall's own persisted status (success), "+
+			"not emitNestedToolCalls' aggregate flipped to error by the denied child")
+	assert.EqualValues(t, 250, subEnd.DurationMs,
+		"subagent_end.duration_ms must equal the spawn ToolCall's own persisted DurationMS (real "+
+			"wall-clock time), not the sum of child tool-call durations (10ms)")
+
+	// The outer tool_call_result frame for the spawn call itself must also
+	// reflect the same persisted success status (buildResult already read
+	// tc.Status/tc.DurationMS directly — this pins that it stays consistent
+	// with the subagent_end frame after the fix).
+	resultFrames := filterByType(frames, "tool_call_result")
+	var spawnResult *replayFrameDecoder
+	for i := range resultFrames {
+		if resultFrames[i].CallID == "c1" {
+			spawnResult = &resultFrames[i]
+		}
+	}
+	require.NotNil(t, spawnResult, "spawn call's own tool_call_result frame must be emitted")
+	assert.Equal(t, "success", spawnResult.Status)
+	assert.EqualValues(t, 250, spawnResult.DurationMs)
+
+	// The nested child's own tool_call_result frame must still independently
+	// report its real "error" status — only the OUTER span's status changed,
+	// per the fix's scope (nested frames are unaffected).
+	var childResult *replayFrameDecoder
+	for i := range resultFrames {
+		if resultFrames[i].CallID == "t2" {
+			childResult = &resultFrames[i]
+		}
+	}
+	require.NotNil(t, childResult, "nested child's own tool_call_result frame must be emitted")
+	assert.Equal(t, "error", childResult.Status,
+		"the nested child tool call's own status must remain 'error' — only the outer span status changed")
+}
+
+// TestReplay_SpawnSpan_StatusFromPersistedRecord_ErrorPropagates verifies the
+// mirror case: when the spawn ToolCall's own persisted Status is "error"
+// (the sub-turn's real EventKindSubTurnEnd/spawnSubTurn Go-level error),
+// subagent_end.status is "error" even when every child tool call succeeded —
+// proving the fix reads the persisted record directly rather than special-
+// casing "success" or silently keeping the old aggregate as a fallback.
+func TestReplay_SpawnSpan_StatusFromPersistedRecord_ErrorPropagates(t *testing.T) {
+	spawnTC := session.ToolCall{
+		ID:         "c9",
+		Tool:       "delegate",
+		Status:     "error",
+		DurationMS: 75,
+	}
+	childTC := session.ToolCall{
+		ID:               "t10",
+		Tool:             "read_file",
+		Status:           "success",
+		DurationMS:       5,
+		ParentToolCallID: "c9",
+	}
+	entries := []session.TranscriptEntry{
+		assistantEntry("delegating", "jim", spawnTC, childTC),
+	}
+
+	frames, _ := runReplay(t, entries)
+
+	subEnd := findFrame(frames, "subagent_end")
+	require.NotNil(t, subEnd)
+	assert.Equal(t, "error", subEnd.Status,
+		"subagent_end.status must reflect the spawn ToolCall's own persisted 'error' status "+
+			"even though the only child tool call succeeded")
+	assert.EqualValues(t, 75, subEnd.DurationMs)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // TDD Row 9 — TestReplay_NoSpawnSpans_WhenNoChildren
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -518,6 +633,108 @@ func TestReplay_CompactionEntry_Skipped(t *testing.T) {
 		"compaction entry must produce zero frames before done")
 	// Done frame is excluded from framesEmitted (content frames only).
 	assert.Equal(t, 0, n, "compaction-only transcript produces 0 content frames")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Wave 3 fix 5c — EntryTypeTurnCancelled emits a role:"turn_canceled"
+// ReplayMessageFrame; assistant entries carry turn_id.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// TestReplay_TurnCancelledEntry_EmitsReplayMessage is the core regression test
+// for fix 5c: before this fix, streamReplay had NO code path that read
+// EntryTypeTurnCancelled entries at all — a canceled turn simply vanished on
+// reload. This verifies the entry now produces a replay_message frame with
+// role="turn_canceled" and turn_id set from TranscriptEntry.TurnID (mirroring
+// what pkg/agent/cancel.go's onCancelFinish callback persists).
+//
+// Traces to: Wave 3 fix 5c (confirmed root cause: live-vs-reload divergence).
+func TestReplay_TurnCancelledEntry_EmitsReplayMessage(t *testing.T) {
+	cancelEntry := session.TranscriptEntry{
+		ID:                   "session_x_canceled",
+		Type:                 session.EntryTypeTurnCancelled,
+		TurnID:               "turn-42",
+		CancelledByUser:      "user-1",
+		CancelledByChannel:   "webchat",
+		CancelMethod:         "graceful",
+		DescendantsCancelled: []string{"child-1"},
+	}
+	entries := []session.TranscriptEntry{cancelEntry}
+
+	frames, n := runReplay(t, entries)
+
+	types := frameTypes(frames)
+	require.Equal(t, []string{"replay_message", "done"}, types,
+		"a turn_canceled entry must produce exactly one replay_message frame before done")
+	assert.Equal(t, 1, n, "turn_canceled entry counts as one content frame")
+
+	msg := findFrame(frames, "replay_message")
+	require.NotNil(t, msg)
+	assert.Equal(t, "turn_canceled", msg.Role)
+	assert.Equal(t, "turn-42", msg.TurnID, "turn_id must be sourced from TranscriptEntry.TurnID")
+	assert.NotEmpty(t, msg.Content, "content is a required field on ReplayMessageFrame — must not be empty")
+}
+
+// TestReplay_TurnCancelledEntry_NoTurnID verifies that a legacy/degenerate
+// turn_canceled entry with an empty TurnID replays without setting turn_id on
+// the wire (rather than emitting an empty string), matching the same
+// omitempty convention already used for AgentID/Model on assistant frames.
+func TestReplay_TurnCancelledEntry_NoTurnID(t *testing.T) {
+	cancelEntry := session.TranscriptEntry{
+		ID:           "session_y_canceled",
+		Type:         session.EntryTypeTurnCancelled,
+		CancelMethod: "hard",
+	}
+	entries := []session.TranscriptEntry{cancelEntry}
+
+	frames, _ := runReplay(t, entries)
+
+	msg := findFrame(frames, "replay_message")
+	require.NotNil(t, msg)
+	assert.Equal(t, "turn_canceled", msg.Role)
+	assert.Empty(t, msg.TurnID, "turn_id must be omitted when TranscriptEntry.TurnID is empty")
+}
+
+// TestReplay_AssistantEntry_CarriesTurnID verifies that an ordinary assistant
+// entry's TurnID (stamped by pkg/agent/turn.go:447,685 on every assistant
+// entry) is surfaced as turn_id on its replay_message frame — the second half
+// of fix 5c, giving the client the correlation data needed to match a later
+// turn_canceled frame to the specific assistant message it interrupted.
+func TestReplay_AssistantEntry_CarriesTurnID(t *testing.T) {
+	entries := []session.TranscriptEntry{
+		{
+			ID:      "asst-1",
+			Role:    "assistant",
+			Content: "Working on it...",
+			AgentID: "jim",
+			TurnID:  "turn-7",
+		},
+	}
+
+	frames, _ := runReplay(t, entries)
+
+	msg := findFrame(frames, "replay_message")
+	require.NotNil(t, msg)
+	assert.Equal(t, "turn-7", msg.TurnID)
+}
+
+// TestReplay_AssistantEntry_EmptyTurnID_OmitsField verifies that legacy
+// assistant entries written before turn-id stamping landed (TurnID=="") still
+// replay cleanly with no turn_id on the wire — no placeholder, no panic.
+func TestReplay_AssistantEntry_EmptyTurnID_OmitsField(t *testing.T) {
+	entries := []session.TranscriptEntry{
+		{
+			ID:      "asst-legacy",
+			Role:    "assistant",
+			Content: "Legacy entry, no turn id",
+			AgentID: "jim",
+		},
+	}
+
+	frames, _ := runReplay(t, entries)
+
+	msg := findFrame(frames, "replay_message")
+	require.NotNil(t, msg)
+	assert.Empty(t, msg.TurnID, "turn_id must be omitted for legacy entries with no TurnID")
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
