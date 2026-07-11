@@ -89,6 +89,8 @@ type BrowserScreencastFrame struct {
 
 // BrowserStatusFrame — Server → client. Lifecycle / control status for the live browser connection. state=controlling means this viewer holds interactive control; released means control was dropped; error carries a human-readable message.
 type BrowserStatusFrame struct {
+	// True on a frame whose sole purpose is to update control-ownership on other viewers (take/release/detach) — carries no lifecycle/error meaning; the SPA applies only controlled_by_other and leaves its status/error banner untouched.
+	ControlOnly *bool `json:"control_only,omitempty"`
 	// Server-computed per-connection: true when some OTHER connection on this session holds interactive control. Keeps the docked panel and the pop-out window in agreement about who is driving.
 	ControlledByOther *bool   `json:"controlled_by_other,omitempty"`
 	Controller        *string `json:"controller,omitempty"`
