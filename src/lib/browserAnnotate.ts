@@ -106,8 +106,11 @@ export async function submitAnnotation({ comment, file, point, sessionId, agentI
         }: "${snippet}". The attached image is the source of truth — describe what you see there.]`
       }
     }
-  } catch {
-    // Best-effort — swallow and proceed with the image + comment alone.
+  } catch (err) {
+    // Best-effort — proceed with the image + comment alone, but trace it so
+    // a systemic failure (e.g. contract drift on BrowserInspectRequest/
+    // Response) doesn't degrade silently with zero diagnostic signal.
+    console.debug('[browser] inspect enrichment failed:', err)
   }
 
   // sendMessage always targets whatever chat is CURRENTLY active — re-check

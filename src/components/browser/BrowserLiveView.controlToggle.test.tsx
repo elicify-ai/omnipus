@@ -241,6 +241,79 @@ describe('BrowserLiveView — control toggle', () => {
     expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_down' }))
   })
 
+  // Reviewer finding F1(a): a `control_only` frame's SOLE purpose is to
+  // broadcast a control-ownership change to OTHER viewers of the session —
+  // it arrives as state:'idle' with no message. Treating it like any other
+  // status frame used to WIPE a real, still-valid error banner shown on
+  // this viewer.
+  it('does not clear a pre-set error banner when a control_only frame arrives', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    act(() => {
+      callbacksRef.current?.onConnected?.()
+      callbacksRef.current?.onScreencast?.({
+        type: 'browser_screencast',
+        session_id: 's1',
+        seq: 1,
+        data: 'AAAA',
+        width: 1280,
+        height: 720,
+      })
+      callbacksRef.current?.onStatus?.({
+        type: 'browser_status',
+        state: 'error',
+        message: 'Live view is disabled for this agent.',
+      })
+    })
+    expect(screen.getByRole('alert')).toHaveTextContent('Live view is disabled for this agent.')
+
+    act(() => {
+      callbacksRef.current?.onStatus?.({
+        type: 'browser_status',
+        state: 'idle',
+        control_only: true,
+      })
+    })
+
+    // The error banner — and the Error pill — must survive: a control-only
+    // broadcast is not a real lifecycle/error change.
+    expect(screen.getByRole('alert')).toHaveTextContent('Live view is disabled for this agent.')
+    expect(screen.getByTestId('browser-live-status-pill')).toHaveTextContent('Error')
+  })
+
+  // Reviewer finding F1(b): a tab-death/error frame omits
+  // `controlled_by_other` entirely (it's not a control-ownership frame) —
+  // resetting it to false via `?? false` wrongly re-enabled "Take control"
+  // while another viewer was still actually driving.
+  it('does not reset a pre-set controlledByOther when an error frame omits the field', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    act(() => {
+      callbacksRef.current?.onConnected?.()
+      callbacksRef.current?.onScreencast?.({
+        type: 'browser_screencast',
+        session_id: 's1',
+        seq: 1,
+        data: 'AAAA',
+        width: 1280,
+        height: 720,
+      })
+      callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'attached', controlled_by_other: true })
+    })
+    expect(screen.getByRole('button', { name: /someone else is currently driving/i })).toBeDisabled()
+
+    act(() => {
+      callbacksRef.current?.onStatus?.({
+        type: 'browser_status',
+        state: 'error',
+        message: 'browser session terminated unexpectedly',
+      })
+    })
+
+    // Still gated — the error frame never reported controlled_by_other, so
+    // the prior true value must be left alone.
+    expect(screen.getByRole('button', { name: /someone else is currently driving/i })).toBeDisabled()
+    expect(screen.getByRole('alert')).toHaveTextContent('browser session terminated unexpectedly')
+  })
+
   it('calls detach() then close() on unmount so the backend engine can ref-count down', () => {
     const { unmount } = render(<BrowserLiveView sessionId="s1" agentId="a1" />)
     unmount()
