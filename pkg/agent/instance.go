@@ -71,12 +71,8 @@ type AgentInstance struct {
 	ContextBuilder *ContextBuilder
 	Tools          *tools.ToolRegistry
 	Subagents      *config.SubagentsConfig
-	// DelegationPolicy is the canonical unified delegation policy for this agent.
-	// When non-nil, it takes precedence over Subagents.AllowAgents in CanSpawnSubagent.
-	// Nil means fall back to legacy Subagents.AllowAgents check.
-	DelegationPolicy *config.DelegationPolicy
-	SkillsFilter     []string
-	Candidates       []providers.FallbackCandidate
+	SkillsFilter   []string
+	Candidates     []providers.FallbackCandidate
 
 	// TimeoutSeconds is the per-turn hard timeout. 0 = disabled.
 	// Populated from AgentDefaults.TimeoutSeconds; per-agent override if available.
@@ -167,15 +163,11 @@ func NewAgentInstance(
 	var subagents *config.SubagentsConfig
 	var skillsFilter []string
 
-	var delegationPolicy *config.DelegationPolicy
 	if agentCfg != nil {
 		agentID = routing.NormalizeAgentID(agentCfg.ID)
 		agentName = agentCfg.Name
 		subagents = agentCfg.Subagents
 		skillsFilter = agentCfg.Skills
-		delegationPolicy = agentCfg.DelegationPolicy
-		// Emit startup WARN for inert delegation policy fields (accept_from, budget).
-		delegationPolicy.WarnIfInertFieldsSet(agentCfg.ID)
 	}
 
 	sessionsDir := filepath.Join(workspace, "sessions")
@@ -370,7 +362,6 @@ func NewAgentInstance(
 		TimeoutSeconds:            timeoutSeconds,
 		AgentType:                 resolvedAgentType,
 		IsRoutingDefault:          isRoutingDefault,
-		DelegationPolicy:          delegationPolicy,
 	}
 	// Publish the eagerly-built pool. StoreProviderPool uses the atomic
 	// pointer; calling it here (vs. direct field assignment) keeps the

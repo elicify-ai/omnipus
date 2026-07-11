@@ -18,6 +18,11 @@ import (
 // edges into a workspace graph and assert the runtime gate enforces them. The
 // gateway's defaultWorkspaceDelegationEdges has its own round-trip test
 // (pkg/gateway) proving the seed→graph derivation.
+//
+// ADR-037 (Wave 2): AgentConfig.DelegationPolicy no longer exists — the seed
+// source of truth is now coreagent.SeedDelegationEdges (an exported wrapper
+// around coreAgentDelegation), consulted by id rather than read off a seeded
+// AgentConfig field.
 
 // seededAgent returns the seeded AgentConfig for id after running coreagent.SeedConfig.
 func seededAgent(t *testing.T, cfg *config.Config, id string) *config.AgentConfig {
@@ -31,15 +36,16 @@ func seededAgent(t *testing.T, cfg *config.Config, id string) *config.AgentConfi
 	return nil
 }
 
-// seedEdgesFromConfig replays a config's per-agent DelegationPolicy into the
-// equivalent workspace graph edges (the same derivation
+// seedEdgesFromConfig replays coreagent's per-agent seed delegation policy
+// (coreagent.SeedDelegationEdges, keyed by each agent id present in cfg) into
+// the equivalent workspace graph edges (the same derivation
 // defaultWorkspaceDelegationEdges performs in pkg/gateway). Local, non-wildcard,
 // non-self targets only.
 func seedEdgesFromConfig(cfg *config.Config) []graphEdge {
 	var edges []graphEdge
 	for i := range cfg.Agents.List {
 		ac := &cfg.Agents.List[i]
-		dp := ac.DelegationPolicy
+		dp := coreagent.SeedDelegationEdges(coreagent.CoreAgentID(ac.ID))
 		if dp == nil || len(dp.To) == 0 {
 			continue
 		}
@@ -67,18 +73,22 @@ func seedEdgesFromConfig(cfg *config.Config) []graphEdge {
 func TestSeedConfig_JimToAvaTaskEdgePresent(t *testing.T) {
 	cfg := &config.Config{}
 	coreagent.SeedConfig(cfg)
-	jim := seededAgent(t, cfg, string(coreagent.IDJim))
-	if jim.DelegationPolicy == nil {
+	// Confirm Jim still seeds into the roster — the delegation-edges check
+	// below is against the separate seed source, not this AgentConfig.
+	seededAgent(t, cfg, string(coreagent.IDJim))
+
+	jimDP := coreagent.SeedDelegationEdges(coreagent.IDJim)
+	if jimDP == nil {
 		t.Fatal("Jim must have a seeded DelegationPolicy")
 	}
 	found := false
-	for _, ref := range jim.DelegationPolicy.To {
+	for _, ref := range jimDP.To {
 		if ref.ID == string(coreagent.IDAva) {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("Jim's seeded trust set must include Ava, got: %+v", jim.DelegationPolicy.To)
+		t.Fatalf("Jim's seeded trust set must include Ava, got: %+v", jimDP.To)
 	}
 }
 

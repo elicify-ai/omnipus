@@ -126,24 +126,6 @@ type Agent = {
   default?: boolean | undefined;
   skills?: Array<string> | undefined;
   updated_at?: string | undefined;
-  delegation_policy?:
-    | Partial<{
-        to: Array<{
-          kind: "local" | "remote-a2a";
-          id: string;
-        }>;
-        accept_from: Array<{
-          kind: "local" | "remote-a2a";
-          id: string;
-        }>;
-        modes: Array<"await" | "background" | "task">;
-        depth: number;
-        budget: Partial<{
-          max_cost_usd: number;
-          max_tokens: number;
-        }>;
-      }>
-    | undefined;
   voice?: (string | null) | undefined;
   executor?: ExecutorConfig | undefined;
 };
@@ -222,29 +204,12 @@ type AgentCreateRequestMain = {
     | undefined;
   skills?: Array<string> | undefined;
   soul: string;
-  delegation_policy?: delegation_policy | undefined;
   voice?: (string | null) | undefined;
   shell_policy?: AgentShellPolicy | undefined;
   timeout_seconds?: number | undefined;
   max_tool_iterations?: number | undefined;
   steering_mode?: ("one-at-a-time" | "queue-and-process") | undefined;
 };
-type delegation_policy = Partial<{
-  to: Array<{
-    kind: "local" | "remote-a2a";
-    id: string;
-  }>;
-  accept_from: Array<{
-    kind: "local" | "remote-a2a";
-    id: string;
-  }>;
-  modes: Array<"await" | "background" | "task">;
-  depth: number;
-  budget: Partial<{
-    max_cost_usd: number;
-    max_tokens: number;
-  }>;
-}>;
 type AgentCreateRequestSubagent = {
   type: "Subagent";
   name: string;
@@ -272,7 +237,6 @@ type AgentCreateRequestSubagent = {
     | undefined;
   skills?: Array<string> | undefined;
   soul: string;
-  delegation_policy?: delegation_policy | undefined;
   shell_policy?: AgentShellPolicy | undefined;
   timeout_seconds?: number | undefined;
   max_tool_iterations?: number | undefined;
@@ -294,7 +258,6 @@ type AgentCreateRequestSubagent3p = {
       }>
     | undefined;
   soul: string;
-  delegation_policy?: delegation_policy | undefined;
   executor: ExecutorConfig;
   timeout_seconds?: number | undefined;
 };
@@ -332,7 +295,6 @@ type AgentUpdateRequest = Partial<{
   tools_cfg: AgentToolsCfg;
   default: boolean;
   skills: Array<string>;
-  delegation_policy: delegation_policy;
   voice: string | null;
   executor: ExecutorConfig;
 }>;
@@ -1208,41 +1170,10 @@ export const Agent: z.ZodType<Agent> = z
     default: z.boolean().optional(),
     skills: z.array(z.string()).optional(),
     updated_at: z.string().datetime({ offset: true }).optional(),
-    delegation_policy: z
-      .object({
-        to: z.array(
-          z.object({ kind: z.enum(["local", "remote-a2a"]), id: z.string() })
-        ),
-        accept_from: z.array(
-          z.object({ kind: z.enum(["local", "remote-a2a"]), id: z.string() })
-        ),
-        modes: z.array(z.enum(["await", "background", "task"])),
-        depth: z.number().int().gte(0),
-        budget: z
-          .object({ max_cost_usd: z.number(), max_tokens: z.number().int() })
-          .partial(),
-      })
-      .partial()
-      .optional(),
     voice: z.string().nullish(),
     executor: ExecutorConfig.optional(),
   })
   .passthrough();
-export const delegation_policy: z.ZodType<delegation_policy> = z
-  .object({
-    to: z.array(
-      z.object({ kind: z.enum(["local", "remote-a2a"]), id: z.string() })
-    ),
-    accept_from: z.array(
-      z.object({ kind: z.enum(["local", "remote-a2a"]), id: z.string() })
-    ),
-    modes: z.array(z.enum(["await", "background", "task"])),
-    depth: z.number().int().gte(0),
-    budget: z
-      .object({ max_cost_usd: z.number(), max_tokens: z.number().int() })
-      .partial(),
-  })
-  .partial();
 export const AgentCreateRequestMain =
   z.object({
     type: z.literal("Main"),
@@ -1278,7 +1209,6 @@ export const AgentCreateRequestMain =
       .optional(),
     skills: z.array(z.string()).optional(),
     soul: z.string().min(1),
-    delegation_policy: delegation_policy.optional(),
     voice: z.string().nullish(),
     shell_policy: AgentShellPolicy.optional(),
     timeout_seconds: z.number().int().gte(0).optional(),
@@ -1320,7 +1250,6 @@ export const AgentCreateRequestSubagent =
       .optional(),
     skills: z.array(z.string()).optional(),
     soul: z.string().min(1),
-    delegation_policy: delegation_policy.optional(),
     shell_policy: AgentShellPolicy.optional(),
     timeout_seconds: z.number().int().gte(0).optional(),
     max_tool_iterations: z.number().int().gte(0).optional(),
@@ -1348,7 +1277,6 @@ export const AgentCreateRequestSubagent3p =
       .passthrough()
       .optional(),
     soul: z.string().min(1),
-    delegation_policy: delegation_policy.optional(),
     executor: ExecutorConfig,
     timeout_seconds: z.number().int().gte(0).optional(),
   }).strict() satisfies z.ZodType<AgentCreateRequestSubagent3p>;
@@ -1402,7 +1330,6 @@ export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z
     tools_cfg: AgentToolsCfg,
     default: z.boolean(),
     skills: z.array(z.string()),
-    delegation_policy: delegation_policy,
     voice: z.string().nullable(),
     executor: ExecutorConfig,
   })

@@ -80,12 +80,13 @@ func (t *TaskListTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 // TaskCreateTool creates a task and delegates it to another agent.
 type TaskCreateTool struct {
 	BaseTool
-	store         *task.Store
-	delegateCheck func(targetAgentID string) bool
+	store *task.Store
 	// delegationDeny, when non-nil, applies the full delegation policy (trust
 	// set + modes ("task") + depth — FR-6.2). Returns a non-nil *DelegationDenial
 	// to DENY (carrying the structured reason + policy axis) or nil to ALLOW.
-	// Takes precedence over delegateCheck.
+	// This is the ONLY delegation gate (ADR-037 retired the legacy boolean
+	// delegateCheck fallback, which was only ever consulted when this was nil —
+	// never happened in production wiring).
 	delegationDeny func(ctx context.Context, targetAgentID string) *DelegationDenial
 	// onCreate, when non-nil, is invoked after a task is successfully created so
 	// the caller can emit a task_status_changed event.
@@ -115,8 +116,8 @@ type TaskCreateTool struct {
 	// type, independent of whether the caller may delegate to it), mirroring
 	// validateTaskAgentID's own check ordering.
 	//
-	// Nil (tests/standalone) fails OPEN, matching delegateCheck/delegationDeny's
-	// established fail-open-when-unwired convention on this struct; the
+	// Nil (tests/standalone) fails OPEN, matching delegationDeny's established
+	// fail-open-when-unwired convention on this struct; the
 	// production agent loop MUST wire this via SetExternalCLIWorkerChecker
 	// (typically to (*config.Config).IsExternalCLIWorkerID via a closure that
 	// re-reads the live config, the same function rest_tasks.go's
@@ -146,11 +147,6 @@ func NewTaskCreateTool(store *task.Store) *TaskCreateTool {
 // tool (pkg/agent/loop.go ~line 1608).
 func (t *TaskCreateTool) SetHome(home string) {
 	t.home = home
-}
-
-// SetDelegateChecker sets the function that checks whether delegation to a target agent is allowed.
-func (t *TaskCreateTool) SetDelegateChecker(fn func(targetAgentID string) bool) {
-	t.delegateCheck = fn
 }
 
 // SetMaxDelegationDepth installs the hard task-mode recursion bound. A
@@ -332,16 +328,12 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 	}
 
 	// Delegation policy gate (FR-6.2): trust set + modes ("task") + depth.
+	// ADR-037: the legacy boolean delegateCheck fallback is retired — this is
+	// now the only gate.
 	if t.delegationDeny != nil {
 		if denial := t.delegationDeny(ctx, agentID); denial != nil {
 			return DelegationDeniedResult("create_task", denial)
 		}
-	} else if t.delegateCheck != nil && !t.delegateCheck(agentID) {
-		return DelegationDeniedResult("create_task", &DelegationDenial{
-			Reason:        fmt.Sprintf("delegation to %s not allowed", agentID),
-			Policy:        DenyTrustSet,
-			TargetAgentID: agentID,
-		})
 	}
 
 	// Task-mode recursion bound (SEC): a task_create issued from *within* a task
@@ -430,14 +422,11 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 type TaskUpdateTool struct {
 	BaseTool
 	store *task.Store
-	// delegateCheck, when non-nil, gates reassignment to a different agent
-	// (reassignment is re-delegation). Returns false to DENY. Ignored when
-	// delegationDeny is non-nil (delegationDeny takes precedence).
-	delegateCheck func(targetAgentID string) bool
 	// delegationDeny, when non-nil, applies the full delegation policy (trust
 	// set + modes ("task") + depth — FR-6.2) to a reassignment. Returns a
-	// non-nil *DelegationDenial to DENY or nil to ALLOW. Takes precedence over
-	// delegateCheck. Reassignment is re-delegation, so it routes through the
+	// non-nil *DelegationDenial to DENY or nil to ALLOW. This is the ONLY
+	// delegation gate (ADR-037 retired the legacy boolean delegateCheck
+	// fallback). Reassignment is re-delegation, so it routes through the
 	// SAME gate task_create uses.
 	delegationDeny func(ctx context.Context, targetAgentID string) *DelegationDenial
 	onComplete     func(*task.Task)
@@ -456,12 +445,6 @@ func NewTaskUpdateTool(store *task.Store) *TaskUpdateTool {
 // SetOnComplete sets the callback invoked when a task reaches a terminal status.
 func (t *TaskUpdateTool) SetOnComplete(fn func(*task.Task)) {
 	t.onComplete = fn
-}
-
-// SetDelegateChecker sets the function that checks whether reassignment to a
-// target agent is allowed (reassignment is re-delegation).
-func (t *TaskUpdateTool) SetDelegateChecker(fn func(targetAgentID string) bool) {
-	t.delegateCheck = fn
 }
 
 // SetDelegationDenyChecker installs the full delegation-policy gate (FR-6.2)
@@ -632,12 +615,6 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 			if denial := t.delegationDeny(ctx, agentID); denial != nil {
 				return DelegationDeniedResult("update_task", denial)
 			}
-		} else if t.delegateCheck != nil && !t.delegateCheck(agentID) {
-			return DelegationDeniedResult("update_task", &DelegationDenial{
-				Reason:        fmt.Sprintf("delegation to %s not allowed", agentID),
-				Policy:        DenyTrustSet,
-				TargetAgentID: agentID,
-			})
 		}
 		patch.AgentID = &agentID
 		updatedFields = append(updatedFields, "agent_id")
