@@ -35,7 +35,9 @@ import type {
   AgentCreateRequestMain,
   AgentCreateRequestSubagent,
   AgentCreateRequestSubagent3p,
+  RegistryTool,
 } from '@/lib/api'
+import { applyRolePreset } from '@/lib/toolPolicyPresets'
 
 import {
   CreateAgentWizard,
@@ -74,6 +76,38 @@ function normalizeWizardType(
   return t
 }
 
+/**
+ * The Tools step (Step3Tools.tsx) DISPLAYS a Balanced-preset default before
+ * the user has touched the per-tool editor — "something concrete to render"
+ * — but only ever commits `payload.tools_cfg` when the operator genuinely
+ * interacts with `ToolPolicyEditor` (a preset button or an individual
+ * allow/ask/deny toggle). If the operator submits without touching Step 3,
+ * `payload.tools_cfg` is still `undefined` here.
+ *
+ * We MUST commit the same Balanced-preset policy that was displayed in that
+ * case — otherwise omitting `tools_cfg` from the request lets the backend's
+ * `NewCustomAgentToolsCfg()` seed apply instead (deny-everything except a
+ * narrow read-only allow-list), silently far more restrictive than what the
+ * wizard showed the operator. `applyRolePreset('balanced', tools)` is the
+ * exact same call Step3Tools.tsx's `toolPolicyValue()` makes for its
+ * uncommitted-default render path — single source of truth in
+ * `@/lib/toolPolicyPresets`, not a re-derived literal.
+ *
+ * Only applies to Main / Subagent (native agents governed by Omnipus's own
+ * tool-policy mechanism). subagent_3p never has this problem: its variant
+ * schema (`AgentCreateRequestSubagent3p`, `additionalProperties: false`)
+ * does not carry `tools_cfg` at all — the external CLI runs its own tool
+ * loop and never reaches the Tools step (2-step wizard for that type).
+ */
+function defaultToolsCfg(
+  payload: WizardSubmitPayload,
+  tools: RegistryTool[],
+): NonNullable<AgentCreateRequestMain['tools_cfg']> {
+  return payload.tools_cfg !== undefined
+    ? payload.tools_cfg
+    : { builtin: applyRolePreset('balanced', tools) }
+}
+
 /** Convert the wizard's submit payload to a wire AgentCreateRequest.
  *
  *  AgentCreateRequest is a discriminated union (one variant per agent type,
@@ -89,9 +123,14 @@ function normalizeWizardType(
  *    subagent_3p always sends `kind: external-cli` (the variant requires it).
  *  - All string fields are `.trim()`-ed to match the wizard's step
  *    gating (which validates `.trim().length > 0`).
+ *  - Main / Subagent (when not inheriting tools) always send `tools_cfg` —
+ *    see `defaultToolsCfg` above for why an untouched Tools step must still
+ *    commit the displayed Balanced-preset default rather than omit the
+ *    field.
  */
 function payloadToCreateRequest(
   payload: WizardSubmitPayload,
+  tools: RegistryTool[],
 ): AgentCreateRequest {
   const name = payload.name.trim()
   const soul = payload.soul.trim()
@@ -140,7 +179,7 @@ function payloadToCreateRequest(
     if (!inheritModel && payload.model.trim()) req.model = payload.model.trim()
     if (!inheritModel && payload.provider?.trim()) req.provider = payload.provider.trim()
     if (!inheritModel && payload.fallback_models !== undefined) req.fallback_models = payload.fallback_models
-    if (!inheritTools && payload.tools_cfg !== undefined) req.tools_cfg = payload.tools_cfg
+    if (!inheritTools) req.tools_cfg = defaultToolsCfg(payload, tools)
     if (!inheritSkills && payload.skills !== undefined) req.skills = payload.skills
     if (payload.model_params !== undefined) req.model_params = payload.model_params
     if (payload.shell_policy !== undefined) req.shell_policy = payload.shell_policy
@@ -161,7 +200,7 @@ function payloadToCreateRequest(
   if (payload.model.trim()) req.model = payload.model.trim()
   if (payload.provider?.trim()) req.provider = payload.provider.trim()
   if (payload.voice !== undefined && payload.voice !== '') req.voice = payload.voice
-  if (payload.tools_cfg !== undefined) req.tools_cfg = payload.tools_cfg
+  req.tools_cfg = defaultToolsCfg(payload, tools)
   if (payload.skills !== undefined) req.skills = payload.skills
   if (payload.fallback_models !== undefined) req.fallback_models = payload.fallback_models
   if (payload.model_params !== undefined) req.model_params = payload.model_params
@@ -236,14 +275,6 @@ export function CreateAgentModal({
     },
   })
 
-  const handleSubmit = useCallback(
-    async (payload: WizardSubmitPayload) => {
-      const req = payloadToCreateRequest(payload)
-      await createAgentMutation.mutateAsync(req)
-    },
-    [createAgentMutation],
-  )
-
   // Providers / tools / skills — fetched at the modal level (which sits
   // inside QueryClientProvider) and forwarded as props so the wizard
   // sub-components stay query-client-free and unit-testable.
@@ -262,6 +293,17 @@ export function CreateAgentModal({
   const globalPolicies = globalPoliciesQuery.data
     ? { policies: globalPoliciesQuery.data.policies ?? {} }
     : undefined
+
+  // `registryTools` also feeds `defaultToolsCfg` (see payloadToCreateRequest)
+  // so the tools_cfg committed on submit is built from the SAME catalog the
+  // Tools step rendered its Balanced-preset default from.
+  const handleSubmit = useCallback(
+    async (payload: WizardSubmitPayload) => {
+      const req = payloadToCreateRequest(payload, registryTools)
+      await createAgentMutation.mutateAsync(req)
+    },
+    [createAgentMutation, registryTools],
+  )
 
   if (!isOpen) return null
 

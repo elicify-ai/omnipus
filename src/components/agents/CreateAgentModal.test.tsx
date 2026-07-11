@@ -19,8 +19,9 @@ import { act } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { CreateAgentModal } from './CreateAgentModal'
 import { useUiStore } from '@/store/ui'
-import { createAgent, fetchSkills, ApiError } from '@/lib/api'
-import type { Skill } from '@/lib/api'
+import { createAgent, fetchRegistryTools, fetchSkills, ApiError } from '@/lib/api'
+import type { RegistryTool, Skill } from '@/lib/api'
+import { applyRolePreset } from '@/lib/toolPolicyPresets'
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
@@ -170,6 +171,10 @@ beforeEach(() => {
   // leaks into the next test (the "default none" AC1 test would see the
   // previous test's skills list).
   vi.mocked(fetchSkills).mockReset().mockResolvedValue([])
+  // Same leak risk for fetchRegistryTools — the tools_cfg-default tests below
+  // override it with a real tool catalog; reset back to [] so unrelated
+  // tests (which assume no tools) are not affected.
+  vi.mocked(fetchRegistryTools).mockReset().mockResolvedValue([])
 })
 
 describe('CreateAgentModal — prop-driven opening', () => {
@@ -494,6 +499,90 @@ describe('CreateAgentModal — submit success path', () => {
     const call = onCreate.mock.calls.at(-1)![0]
     expect(call.type).toBe('subagent_3p')
     expect(call.description).toBe('Runs in claude-code')
+  })
+})
+
+// ── tools_cfg commit-on-submit default (untouched Tools step) ───────────────
+//
+// Regression coverage for the bug where Step3Tools.tsx's toolPolicyValue()
+// DISPLAYS a Balanced-preset default (applyRolePreset('balanced', tools))
+// before the operator interacts with ToolPolicyEditor, but
+// payloadToCreateRequest only forwarded payload.tools_cfg when it was
+// defined — i.e. only after a genuine ToolPolicyEditor onChange. Submitting
+// with the Tools step untouched therefore omitted tools_cfg entirely, and
+// the backend's NewCustomAgentToolsCfg() seed (deny-everything except a
+// narrow read-only allow-list) applied instead of the Balanced policy the
+// wizard had shown. The fix commits the SAME displayed default into the
+// request at submit time when payload.tools_cfg is still undefined.
+describe('CreateAgentModal — tools_cfg commit-on-submit default (untouched Tools step)', () => {
+  const CATALOG: RegistryTool[] = [
+    { name: 'bash', description: 'bash', scope: 'general', category: 'core', source: 'builtin' },
+    { name: 'read_file', description: 'read_file', scope: 'general', category: 'core', source: 'builtin' },
+    { name: 'write_file', description: 'write_file', scope: 'general', category: 'core', source: 'builtin' },
+    { name: 'web_search', description: 'web_search', scope: 'general', category: 'core', source: 'builtin' },
+  ]
+
+  it('Main: submitting without touching Step 3 commits the Balanced-preset tools_cfg (not an omitted field)', async () => {
+    vi.mocked(fetchRegistryTools).mockResolvedValue(CATALOG)
+    const onCreate = vi.fn().mockResolvedValue(undefined)
+    renderModal({ open: true, onClose: vi.fn(), onCreate, initialType: 'Main' })
+    await fillAndAdvanceToStep3({ initialType: 'Main' })
+    // Deliberately do NOT touch the ToolPolicyEditor (no preset click, no
+    // per-tool toggle) — go straight to Create.
+    fireEvent.click(screen.getByTestId('wizard-create'))
+    await waitFor(() => expect(onCreate).toHaveBeenCalled())
+    const call = onCreate.mock.calls.at(-1)![0]
+    expect(call.tools_cfg).toBeDefined()
+    expect(call.tools_cfg).toEqual({ builtin: applyRolePreset('balanced', CATALOG) })
+    // Spot-check the exact policy values the wizard displayed (§2.1 Balanced
+    // overrides): bash=ask, write_file=ask, everything else allow.
+    expect(call.tools_cfg.builtin.policies.bash).toBe('ask')
+    expect(call.tools_cfg.builtin.policies.write_file).toBe('ask')
+    expect(call.tools_cfg.builtin.policies.read_file).toBe('allow')
+    expect(call.tools_cfg.builtin.policies.web_search).toBe('allow')
+  })
+
+  it('Subagent (not inheriting tools): submitting without touching Step 3 commits the Balanced-preset tools_cfg', async () => {
+    vi.mocked(fetchRegistryTools).mockResolvedValue(CATALOG)
+    const onCreate = vi.fn().mockResolvedValue(undefined)
+    renderModal({ open: true, onClose: vi.fn(), onCreate, initialType: 'Subagent' })
+    await fillAndAdvanceToStep3({ initialType: 'Subagent' })
+    // fillAndAdvanceToStep3 already flips wizard-inherit-tools OFF for
+    // Subagent so the per-tool editor renders; still never touched.
+    fireEvent.click(screen.getByTestId('wizard-create'))
+    await waitFor(() => expect(onCreate).toHaveBeenCalled())
+    const call = onCreate.mock.calls.at(-1)![0]
+    expect(call.tools_cfg).toEqual({ builtin: applyRolePreset('balanced', CATALOG) })
+  })
+
+  it('Main: an explicitly-touched Tools step still forwards the user-chosen policy verbatim (no override)', async () => {
+    vi.mocked(fetchRegistryTools).mockResolvedValue(CATALOG)
+    const onCreate = vi.fn().mockResolvedValue(undefined)
+    renderModal({ open: true, onClose: vi.fn(), onCreate, initialType: 'Main' })
+    await fillAndAdvanceToStep3({ initialType: 'Main' })
+    // Genuinely interact with the editor: pick the Cautious preset.
+    fireEvent.click(screen.getByTestId('preset-cautious'))
+    fireEvent.click(screen.getByTestId('wizard-create'))
+    await waitFor(() => expect(onCreate).toHaveBeenCalled())
+    const call = onCreate.mock.calls.at(-1)![0]
+    expect(call.tools_cfg).toEqual({ builtin: applyRolePreset('cautious', CATALOG) })
+  })
+
+  it('subagent_3p never carries tools_cfg — the variant schema forbids it (additionalProperties: false)', async () => {
+    vi.mocked(fetchRegistryTools).mockResolvedValue(CATALOG)
+    const onCreate = vi.fn().mockResolvedValue(undefined)
+    renderModal({
+      open: true,
+      onClose: vi.fn(),
+      onCreate,
+      initialType: 'subagent_3p',
+      initialCli: 'claude-code',
+    })
+    await fillAndAdvanceToStep3({ initialType: 'subagent_3p', cliPath: '/usr/local/bin/claude-code' })
+    fireEvent.click(screen.getByTestId('wizard-create'))
+    await waitFor(() => expect(onCreate).toHaveBeenCalled())
+    const call = onCreate.mock.calls.at(-1)![0]
+    expect(call).not.toHaveProperty('tools_cfg')
   })
 })
 
