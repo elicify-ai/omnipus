@@ -62,6 +62,23 @@ export interface BrowserLiveViewProps {
    * than rendering a control that would silently no-op.
    */
   onHandToAgent?: () => void
+  /**
+   * ADR-039 D-B1/B2 "Annotate a region" — like `onHandToAgent`, this mode
+   * only works when hosted in the SAME JS realm as the AssistantUI runtime
+   * (annotate's Send calls `useChatStore.sendMessage` directly, see
+   * browserAnnotate.ts). Defaults to `false` (dead-end-proof by default) so
+   * a future third host doesn't silently inherit annotate support it can't
+   * deliver on — the docked panel (BrowserLivePanel.tsx) explicitly opts in.
+   *
+   * UAT finding FE-4: the fullscreen pop-out (`routes/_app/browser-live.tsx`)
+   * is a separate `window.open` document with no chat store at all —
+   * starting an annotation there and hitting Send could NEVER succeed
+   * (submitAnnotation's own re-check always sees a mismatched/absent active
+   * chat) and only "Cancel" escaped, discarding the drafted comment. Hiding
+   * the "Annotate" button there entirely removes the dead-end, exactly like
+   * "Hand to agent" is already hidden rather than rendering a no-op control.
+   */
+  canAnnotate?: boolean
   className?: string
 }
 
@@ -73,7 +90,18 @@ type PillConfig = { label: string; className: string }
 // connection lifecycle, not anything the backend ever sends as a status.
 type LiveStatus = BrowserStatusFrame['state'] | 'connecting' | 'disconnected'
 
-function pillConfig(state: LiveStatus): PillConfig {
+// UAT finding FE-6: `controlled_by_other` (BrowserStatusFrame) is set true by
+// the backend on a viewer whenever a DIFFERENT connection of the same
+// session holds control — e.g. the docked panel and the pop-out window both
+// watching the same agent. It can never be true together with state ===
+// 'controlling' (that would mean THIS connection is simultaneously the
+// controller and controlled by someone else), but the guard below is
+// defensive rather than relying on the backend never sending that
+// combination.
+function pillConfig(state: LiveStatus, controlledByOther: boolean): PillConfig {
+  if (controlledByOther && state !== 'controlling') {
+    return { label: 'Someone else is driving', className: 'bg-[var(--color-surface-3)] text-[var(--color-muted)]' }
+  }
   switch (state) {
     case 'controlling':
       return { label: "You're driving", className: 'bg-[var(--color-accent)]/15 text-[var(--color-accent)]' }
@@ -91,6 +119,28 @@ function pillConfig(state: LiveStatus): PillConfig {
   }
 }
 
+// UAT finding FE-7: the backend surfaces raw Go error strings verbatim on a
+// terminal browser_status{state:'error'} frame — e.g.
+// `browser input failed: browser live: navigate blocked: ... SSRF: blocked
+// cloud metadata endpoint 169.254.169.254` or Go's url.Parse format
+// `parse "...": invalid character " " in host name`. Map the two known,
+// user-triggerable cases to plain language; anything unrecognized passes
+// through unchanged rather than risk hiding real diagnostic information the
+// existing doc comment above (already-controlled, take-control-disabled,
+// no-manager-for-agent, live-view-disabled, malformed control) already
+// treats as reasonably readable.
+function friendlyBrowserStatusMessage(raw: string): string {
+  if (/navigate blocked|SSRF/i.test(raw)) {
+    console.debug('[browser] navigation blocked:', raw)
+    return 'That address is blocked for security reasons.'
+  }
+  if (/invalid character .* in host name|^parse "/i.test(raw)) {
+    console.debug('[browser] invalid URL:', raw)
+    return "That doesn't look like a valid web address."
+  }
+  return raw
+}
+
 /** A finalized region selection, cropped to a File and ready to send (ADR-039 D-B1/B2). */
 interface PendingAnnotation { // not-wire-format: local annotate-popover state, never serialized across the gateway/SPA boundary
   file: File
@@ -99,7 +149,7 @@ interface PendingAnnotation { // not-wire-format: local annotate-popover state, 
   point: { x: number; y: number }
 }
 
-export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, onHandToAgent, className }: BrowserLiveViewProps) {
+export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, onHandToAgent, canAnnotate = false, className }: BrowserLiveViewProps) {
   const wsRef = useRef<BrowserLiveWsConnection | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const imgRef = useRef<HTMLImageElement | null>(null)
@@ -139,6 +189,11 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, onHandT
   const [connError, setConnError] = useState<string | null>(null)
   const [connected, setConnected] = useState(false)
   const [cursorPos, setCursorPos] = useState<{ x: number; y: number } | null>(null)
+  // UAT finding FE-6: true whenever the LATEST browser_status frame reported
+  // another connection of this same browser session is the one holding
+  // control (e.g. the docked panel and a pop-out both watching the same
+  // agent) — distinct from `isControlling`, which is about THIS connection.
+  const [controlledByOther, setControlledByOther] = useState(false)
 
   // ── URL bar (ADR-039 D-A2) ──────────────────────────────────────────────
   const [urlInput, setUrlInput] = useState('')
@@ -226,9 +281,14 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, onHandT
       // updater (correct even for two onStatus calls delivered in the same
       // tick, since it reads the latest pending value, not a stale closure).
       onStatus: (f) => {
-        setStatusMessage(f.message ?? null)
+        // FE-7: only error-state messages get the raw-Go-string treatment —
+        // other states' messages (if ever present) are left alone.
+        setStatusMessage(f.state === 'error' && f.message ? friendlyBrowserStatusMessage(f.message) : f.message ?? null)
         setStatusIsError(f.state === 'error')
         setStatusState((prev) => (f.state === 'error' && prev === 'controlling' ? prev : f.state))
+        // FE-6: optional-chaining-safe — an omitted field (older backend
+        // build, or any non-error state that never sets it) reads as false.
+        setControlledByOther(f.controlled_by_other ?? false)
       },
       onError: (message) => setConnError(message),
       onConnected: () => {
@@ -250,6 +310,10 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, onHandT
         // A stale error surface (e.g. a blocked-navigate message from just
         // before the drop) must not keep showing through a disconnect.
         setStatusIsError(false)
+        // Same staleness reasoning as statusIsError above — the last-known
+        // "someone else is driving" fact is only trustworthy up to the drop;
+        // the fresh browser_attach → browser_status round-trip refreshes it.
+        setControlledByOther(false)
         pendingMoveRef.current = null
       },
     })
@@ -644,7 +708,14 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, onHandT
     }
   }, [])
 
-  const pill = pillConfig(connError ? 'error' : statusState)
+  // UAT finding FE-5: entering annotate mode releases control (see
+  // handleToggleAnnotate), which used to flip the pill to the control-derived
+  // "Agent driving" label even though the user is actively mid-annotation —
+  // this branch takes priority over the control-derived pillConfig() result
+  // whenever annotateMode is on.
+  const pill = annotateMode
+    ? { label: "You're annotating", className: 'bg-[var(--color-accent)]/15 text-[var(--color-accent)]' }
+    : pillConfig(connError ? 'error' : statusState, controlledByOther)
 
   return (
     <div className={cn('flex h-full min-h-0 flex-col bg-[var(--color-primary)]', className)}>
@@ -669,30 +740,37 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, onHandT
         {/* Annotate toggle (ADR-039 D-B1/B2) — a third interaction mode,
             mutually exclusive with driving: entering it releases control
             (handleToggleAnnotate), and Take control is disabled while it's
-            active (below), so the two states can never overlap. */}
-        <button
-          type="button"
-          onClick={handleToggleAnnotate}
-          disabled={!connected}
-          aria-label={annotateMode ? 'Exit annotate mode' : 'Annotate a region'}
-          title={annotateMode ? 'Exit annotate mode' : 'Drag a region (or click a spot) to comment on it'}
-          className={cn(
-            'flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded px-2.5 py-1.5 text-xs font-medium transition-colors',
-            'disabled:cursor-not-allowed disabled:opacity-40',
-            annotateMode
-              ? 'bg-[var(--color-accent)] text-[var(--color-primary)] hover:opacity-90'
-              : 'border border-[var(--color-border)] text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]',
-          )}
-        >
-          <ChatCircleDots size={13} />
-          {annotateMode ? 'Exit annotate' : 'Annotate'}
-        </button>
+            active (below), so the two states can never overlap. Hidden
+            entirely when !canAnnotate (FE-4) — see the prop's doc comment. */}
+        {canAnnotate && (
+          <button
+            type="button"
+            onClick={handleToggleAnnotate}
+            disabled={!connected}
+            aria-label={annotateMode ? 'Exit annotate mode' : 'Annotate a region'}
+            title={annotateMode ? 'Exit annotate mode' : 'Drag a region (or click a spot) to comment on it'}
+            className={cn(
+              'flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded px-2.5 py-1.5 text-xs font-medium transition-colors',
+              'disabled:cursor-not-allowed disabled:opacity-40',
+              annotateMode
+                ? 'bg-[var(--color-accent)] text-[var(--color-primary)] hover:opacity-90'
+                : 'border border-[var(--color-border)] text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]',
+            )}
+          >
+            <ChatCircleDots size={13} />
+            {annotateMode ? 'Exit annotate' : 'Annotate'}
+          </button>
+        )}
         <button
           type="button"
           onClick={handleToggleControl}
-          disabled={!connected || annotateMode}
-          aria-label={isControlling ? 'Release control' : 'Take control'}
-          title={isControlling ? 'Release control' : 'Take control'}
+          // FE-6: also disabled when another connection of this same session
+          // already holds control — taking it here would just race the
+          // other viewer for a lock this connection can't win any faster by
+          // clicking.
+          disabled={!connected || annotateMode || controlledByOther}
+          aria-label={isControlling ? 'Release control' : controlledByOther ? 'Someone else is currently driving' : 'Take control'}
+          title={isControlling ? 'Release control' : controlledByOther ? 'Someone else is currently driving' : 'Take control'}
           className={cn(
             'flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded px-2.5 py-1.5 text-xs font-medium transition-colors',
             'disabled:cursor-not-allowed disabled:opacity-40',

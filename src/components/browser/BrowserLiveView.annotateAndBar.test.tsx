@@ -157,7 +157,7 @@ describe('BrowserLiveView — Hand to agent (ADR-039 D-A3)', () => {
 
 describe('BrowserLiveView — Annotate mode ⟷ take-control mutual exclusion (ADR-039 D-B1/B2)', () => {
   it('disables Take control while annotate mode is active', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" canAnnotate />)
     connectAndFrame()
 
     fireEvent.click(screen.getByRole('button', { name: /annotate a region/i }))
@@ -165,7 +165,7 @@ describe('BrowserLiveView — Annotate mode ⟷ take-control mutual exclusion (A
   })
 
   it('releases control automatically when entering annotate mode while driving', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" canAnnotate />)
     connectAndFrame()
     takeControl()
 
@@ -185,7 +185,7 @@ describe('BrowserLiveView — Annotate mode ⟷ take-control mutual exclusion (A
   // branching on annotateMode first), so annotate mode must actually engage
   // here, well before any browser_status('released') round-trip.
   it('actually enters annotate mode on the first click while driving, despite the async release gap', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" canAnnotate />)
     connectAndFrame()
     takeControl()
 
@@ -200,7 +200,7 @@ describe('BrowserLiveView — Annotate mode ⟷ take-control mutual exclusion (A
   })
 
   it('exiting annotate mode re-enables Take control', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" canAnnotate />)
     connectAndFrame()
 
     fireEvent.click(screen.getByRole('button', { name: /annotate a region/i }))
@@ -209,7 +209,7 @@ describe('BrowserLiveView — Annotate mode ⟷ take-control mutual exclusion (A
   })
 
   it('sets a crosshair cursor over the frame while annotating', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" canAnnotate />)
     connectAndFrame()
     fireEvent.click(screen.getByRole('button', { name: /annotate a region/i }))
 
@@ -217,7 +217,7 @@ describe('BrowserLiveView — Annotate mode ⟷ take-control mutual exclusion (A
   })
 
   it('a drag inside the frame does NOT forward any control input while annotating', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" canAnnotate />)
     connectAndFrame()
     fireEvent.click(screen.getByRole('button', { name: /annotate a region/i }))
 
@@ -230,7 +230,7 @@ describe('BrowserLiveView — Annotate mode ⟷ take-control mutual exclusion (A
   })
 
   it('renders a live selection-box overlay while dragging in annotate mode', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" canAnnotate />)
     connectAndFrame()
     fireEvent.click(screen.getByRole('button', { name: /annotate a region/i }))
 
@@ -250,7 +250,7 @@ describe('BrowserLiveView — Annotate mode ⟷ take-control mutual exclusion (A
   // browserLiveCoords.test.ts's computeCropRect/mapClientToFramePixels and
   // browserAnnotate.test.ts's post-crop orchestration).
   it('a completed drag attempts the crop and surfaces a graceful failure toast when capture is unavailable', async () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" canAnnotate />)
     connectAndFrame()
     fireEvent.click(screen.getByRole('button', { name: /annotate a region/i }))
 
@@ -264,5 +264,124 @@ describe('BrowserLiveView — Annotate mode ⟷ take-control mutual exclusion (A
     })
     // No popover — the crop never succeeded.
     expect(screen.queryByTestId('annotate-popover')).not.toBeInTheDocument()
+  })
+
+  // UAT finding FE-5: entering annotate mode releases control, which used to
+  // flip the header pill to the control-derived "Agent driving" label even
+  // though the user is actively mid-annotation and Take-control is disabled.
+  it('shows an "annotating" status pill instead of the control-derived label', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" canAnnotate />)
+    connectAndFrame()
+
+    fireEvent.click(screen.getByRole('button', { name: /annotate a region/i }))
+
+    expect(screen.getByTestId('browser-live-status-pill')).toHaveTextContent(/annotating/i)
+    expect(screen.getByTestId('browser-live-status-pill')).not.toHaveTextContent(/agent driving/i)
+  })
+})
+
+// UAT finding FE-4: annotate needs the chat (submitAnnotation sends through
+// useChatStore directly), which only a host sharing the SAME JS realm as
+// ChatScreen can deliver on. The fullscreen pop-out (routes/_app/browser-live.tsx)
+// is a separate `window.open` document with no chat store — starting an
+// annotation there could never succeed and only "Cancel" escaped it, losing
+// the drafted comment. `canAnnotate` defaults to false (mirrors onHandToAgent's
+// opt-in-only pattern) so a host must explicitly declare it can deliver
+// annotate to chat; the pop-out route deliberately omits the prop.
+describe('BrowserLiveView — Annotate visibility gate (ADR-039 D-B1/B2, UAT FE-4)', () => {
+  it('does not render the Annotate button when canAnnotate is not provided (e.g. the pop-out window)', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    expect(screen.queryByRole('button', { name: /annotate a region/i })).not.toBeInTheDocument()
+  })
+
+  it('does not render the Annotate button when canAnnotate is explicitly false', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" canAnnotate={false} />)
+    connectAndFrame()
+    expect(screen.queryByRole('button', { name: /annotate a region/i })).not.toBeInTheDocument()
+  })
+
+  it('renders the Annotate button when canAnnotate is true (e.g. the docked panel)', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" canAnnotate />)
+    connectAndFrame()
+    expect(screen.getByRole('button', { name: /annotate a region/i })).toBeInTheDocument()
+  })
+})
+
+// UAT finding FE-6: `controlled_by_other` on BrowserStatusFrame is set true
+// by the backend on a viewer whenever a DIFFERENT connection of the same
+// browser session holds control (e.g. the docked panel and a pop-out both
+// watching the same agent).
+describe('BrowserLiveView — controlled_by_other (ADR-038, UAT FE-6)', () => {
+  it('disables Take control and shows "someone else is driving" when controlled_by_other is true', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    act(() => {
+      callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'attached', controlled_by_other: true })
+    })
+
+    expect(screen.getByRole('button', { name: /someone else is currently driving/i })).toBeDisabled()
+    expect(screen.getByTestId('browser-live-status-pill')).toHaveTextContent(/someone else is driving/i)
+  })
+
+  it('leaves Take control enabled and shows "agent driving" when controlled_by_other is false/absent', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    act(() => {
+      callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'attached' })
+    })
+
+    expect(screen.getByRole('button', { name: /^take control$/i })).not.toBeDisabled()
+    expect(screen.getByTestId('browser-live-status-pill')).toHaveTextContent(/agent driving/i)
+  })
+})
+
+// UAT finding FE-7: raw Go error strings (SSRF-blocked navigate, url.Parse
+// failures) were shown to users verbatim. Known cases are mapped to plain
+// language; anything unrecognized passes through unchanged.
+describe('BrowserLiveView — friendly error messages (UAT FE-7)', () => {
+  it('maps an SSRF-blocked navigate error to plain language', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    act(() => {
+      callbacksRef.current?.onStatus?.({
+        type: 'browser_status',
+        state: 'error',
+        message:
+          'browser input failed: browser live: navigate blocked: SSRF: blocked cloud metadata endpoint 169.254.169.254',
+      })
+    })
+
+    expect(screen.getByRole('alert')).toHaveTextContent('That address is blocked for security reasons.')
+  })
+
+  it('maps a URL-parse failure to plain language', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    act(() => {
+      callbacksRef.current?.onStatus?.({
+        type: 'browser_status',
+        state: 'error',
+        message: 'parse "http://exa mple.com": invalid character " " in host name',
+      })
+    })
+
+    expect(screen.getByRole('alert')).toHaveTextContent("That doesn't look like a valid web address.")
+  })
+
+  it('passes an unrecognized error message through unchanged', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    act(() => {
+      callbacksRef.current?.onStatus?.({
+        type: 'browser_status',
+        state: 'error',
+        message: 'no browser manager for agent "a1" (browser tools may not be registered for this agent)',
+      })
+    })
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'no browser manager for agent "a1" (browser tools may not be registered for this agent)',
+    )
   })
 })

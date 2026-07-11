@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useLocation, useNavigate } from '@tanstack/react-router'
-import { Robot, ArrowsClockwise, CaretDown, PencilSimpleLine, CaretLeft, Monitor } from '@phosphor-icons/react'
+import { Robot, ArrowsClockwise, CaretDown, PencilSimpleLine, CaretLeft, Monitor, SpinnerGap } from '@phosphor-icons/react'
 import { IconRenderer } from '@/components/shared/IconRenderer'
 import {
   DropdownMenu,
@@ -15,7 +15,7 @@ import { useChatStore } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useUiStore } from '@/store/ui'
-import { fetchAgents, fetchWorkspaces, fetchProviders, isWorker, workspacesQueryKeys } from '@/lib/api'
+import { createSession, fetchAgents, fetchWorkspaces, fetchProviders, isWorker, workspacesQueryKeys } from '@/lib/api'
 import { formatTokens } from '@/lib/formatTokens'
 import { cn } from '@/lib/utils'
 
@@ -85,14 +85,52 @@ export function ChatControls({ className }: ChatControlsProps) {
   // pkg/gateway/rest.go's listAgents — so that capability isn't cheaply
   // knowable client-side); the panel's own browser_status(error) surface
   // already handles a no-manager-for-agent response for agents without
-  // browser tools (Mia/Ava by seed). Mirrors the same activeSessionId/
-  // activeAgentId guard as BrowserTool.tsx's handleWatchLive.
-  const handleOpenBrowser = () => {
-    if (!activeSessionId || !activeAgentId) {
-      addToast({ message: 'Start a chat before opening the live browser.', variant: 'error' })
+  // browser tools (Mia/Ava by seed).
+  //
+  // UAT finding FE-1: the live view attaches by agentId alone — the WS
+  // handshake's session_id is only used for logging/echo on the backend
+  // (browser_ws.go's handleAttach always binds to browser.DefaultSessionID,
+  // never frame.SessionId — see that file's doc comment), but the frame
+  // schema still requires a non-empty session_id, so a brand-new chat with
+  // zero messages (activeSessionId === null) could never open the panel at
+  // all — the "Open browser" launcher errored on the very case ADR-039
+  // designed it for. Fixed by ensuring a real session exists first, mirroring
+  // attachment-adapter.ts's ensureSession(): create one via the same
+  // POST /sessions the composer's first-send path uses, and adopt it as the
+  // active session, before opening the panel. BrowserTool.tsx's
+  // handleWatchLive (the "Watch live" affordance on an in-transcript tool
+  // call) still requires activeSessionId to already exist there instead — a
+  // running tool call implies a session already exists, so it never hits
+  // this codepath.
+  const [creatingBrowserSession, setCreatingBrowserSession] = useState(false)
+  const handleOpenBrowser = async () => {
+    if (!activeAgentId) {
+      addToast({ message: 'Select an agent before opening the live browser.', variant: 'error' })
       return
     }
-    useUiStore.getState().openBrowserPanel(activeSessionId, activeAgentId)
+    // '__pending' is chat.ts's transient placeholder bucket key for a
+    // just-sent first message whose real session_started ack hasn't landed
+    // yet (see sendMessage's no-active-session branch) — not a real backend
+    // session the browser WS can usefully attach against. Same check as
+    // attachment-adapter.ts's ensureSession().
+    if (activeSessionId && activeSessionId !== '__pending') {
+      useUiStore.getState().openBrowserPanel(activeSessionId, activeAgentId)
+      return
+    }
+    if (creatingBrowserSession) return
+    setCreatingBrowserSession(true)
+    try {
+      const created = await createSession(activeAgentId)
+      setActiveSession(created.id, created.agent_id, null)
+      useUiStore.getState().openBrowserPanel(created.id, created.agent_id)
+    } catch (err) {
+      addToast({
+        message: err instanceof Error ? err.message : 'Could not start a browser session — try again.',
+        variant: 'error',
+      })
+    } finally {
+      setCreatingBrowserSession(false)
+    }
   }
 
   const { data: agents = [], isError: agentsError } = useQuery({
@@ -345,17 +383,20 @@ export function ChatControls({ className }: ChatControlsProps) {
           independent of any agent tool call. */}
       <button
         type="button"
-        onClick={handleOpenBrowser}
+        onClick={() => void handleOpenBrowser()}
+        disabled={creatingBrowserSession}
         aria-label="Open browser"
+        aria-busy={creatingBrowserSession}
         title="Open a live browser session"
         className={cn(
           'flex items-center justify-center shrink-0 px-2 h-8 gap-1.5 rounded-md',
           'text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)]',
           'transition-colors text-xs whitespace-nowrap',
+          'disabled:cursor-not-allowed disabled:opacity-50',
           'pointer-coarse:min-h-[44px] pointer-coarse:px-3',
         )}
       >
-        <Monitor size={15} />
+        {creatingBrowserSession ? <SpinnerGap size={15} className="animate-spin" /> : <Monitor size={15} />}
         <span className="hidden @2xl:inline">Open browser</span>
       </button>
     </div>

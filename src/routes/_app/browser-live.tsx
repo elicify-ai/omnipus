@@ -66,6 +66,10 @@ function BrowserLiveRoute() {
         window.close()
         navigate({ to: '/' })
       }}
+      // canAnnotate deliberately omitted (defaults to false) — this route is
+      // a separate `window.open` document with no chat store, so annotate's
+      // Send could never reach the chat here (UAT finding FE-4). Same
+      // reasoning as the already-omitted onHandToAgent prop above.
       className="absolute inset-0"
     />
   )
