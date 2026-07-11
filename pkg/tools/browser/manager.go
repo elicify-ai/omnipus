@@ -379,6 +379,18 @@ func (m *BrowserManager) PageTimeout() time.Duration {
 	return m.cfg.PageTimeout
 }
 
+// Started reports whether the browser allocator has been launched (lazy
+// init via ensureStarted, triggered by the first Session call) and not since
+// Shutdown(). Exposed for tests that need to observe Shutdown() actually
+// resetting manager state without spinning up a real Chromium process — see
+// pkg/agent/browser_manager_test.go's ADR-038 finding #2 regression guard
+// for the hot-reload leak fix in registerSharedTools.
+func (m *BrowserManager) Started() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.started
+}
+
 // Shutdown gracefully shuts down the browser process and all sessions.
 func (m *BrowserManager) Shutdown() {
 	m.mu.Lock()

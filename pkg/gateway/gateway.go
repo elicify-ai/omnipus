@@ -2035,10 +2035,16 @@ func setupAndStartServices(
 	runningServices.ChannelManager.RegisterChannel("webchat", wch)
 
 	// Live interactive browser panel WebSocket (ADR-038 D1) — a dedicated
-	// socket, separate from chat, always registered; per-connection config
-	// gates (tools.browser.live_view_enabled / take_control_enabled) refuse
-	// with a browser_status(error) frame rather than a missing route, so a
-	// disabled feature still gives the SPA a clear, parseable reason.
+	// socket, separate from chat, on this SAME gateway listener (there is no
+	// second TCP port here, unlike gateway.preview_port). The route is
+	// registered UNCONDITIONALLY, regardless of
+	// tools.browser.live_view_enabled/take_control_enabled — those are
+	// per-connection, POST-AUTH config gates that BrowserWSHandler.ServeHTTP
+	// / handleControl check after the WS upgrade + auth handshake succeed,
+	// refusing with a browser_status(error) frame rather than ever removing
+	// the route or the listener. See config.go's LiveViewEnabled doc for why
+	// (a raw HTTP-level rejection would surface to browser JS as an opaque,
+	// unparseable WebSocket error).
 	browserWSHandler := newBrowserWSHandler(agentLoop, allowedOrigin)
 	runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/browser/ws", browserWSHandler)
 

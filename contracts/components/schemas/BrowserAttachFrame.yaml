@@ -18,7 +18,14 @@ properties:
     type: string
     minLength: 1
     maxLength: 128
-    description: Browser session id (usually the chat session id).
+    description: >-
+      The client's chat session id, carried for context/correlation and
+      logging only — echoed back on outgoing browser_screencast /
+      browser_status frames so the client can match them to this attach
+      request. It does NOT select which browser tab the live view attaches
+      to: the server always binds to the target agent's single actual
+      browser tab (its default browser session, the same one browser_navigate
+      / browser_click / etc. drive), regardless of the value sent here.
   agent_id:
     type: string
     minLength: 1

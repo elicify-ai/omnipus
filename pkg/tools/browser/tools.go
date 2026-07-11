@@ -18,9 +18,26 @@ import (
 // maxGetTextBytes caps browser_get_text output to prevent enormous DOM dumps.
 const maxGetTextBytes = 100 * 1024 // 100KB per spec edge case
 
-// defaultSessionID is the session used by all browser tools. Sequential tool
+// DefaultSessionID is the session used by all browser tools. Sequential tool
 // calls (navigate → click → get_text) operate on the same Chromium tab.
-const defaultSessionID = "default"
+//
+// Exported (ADR-038 finding #1) so the gateway's live-view WS handler
+// (pkg/gateway/browser_ws.go) can bind the live view to this SAME tab
+// instead of a session keyed by the client-supplied (chat) session id. Before
+// this fix, browser_attach{session_id: <chat session uuid>} caused
+// BrowserManager.Session to lazily create a brand-new, blank tab distinct
+// from the one the agent's tools drive — the live view showed a different
+// tab than the agent controlled, and "take control" locked a session the
+// tools never checked. The client's session_id is still accepted on the wire
+// for context/logging (see BrowserAttachFrame), but the gateway must always
+// resolve/attach/control DefaultSessionID, never the raw client value.
+const DefaultSessionID = "default"
+
+// defaultSessionID is a package-private alias retained so every existing
+// call site inside this package (which predates the export) keeps working
+// unchanged. New code — inside or outside this package — should prefer
+// DefaultSessionID directly.
+const defaultSessionID = DefaultSessionID
 
 // --- browser_navigate (US-5) ---
 

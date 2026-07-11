@@ -937,6 +937,19 @@ func wsFrameSchemaName(frameType string) string {
 		return "WhatsAppPairingSubscribeFrame"
 	case string(generated.WsFrameTypePing):
 		return "PingFrame"
+	// ADR-038 finding #3: the 4 browser-live client→server frame types.
+	// These never arrive on the chat WS this function primarily serves —
+	// browser_ws.go's own readLoop is the actual caller for these cases —
+	// but the mapping lives here so there is exactly one frame-type→schema
+	// table for the whole gateway, not two that can drift apart.
+	case string(generated.WsFrameTypeBrowserAttach):
+		return "BrowserAttachFrame"
+	case string(generated.WsFrameTypeBrowserInput):
+		return "BrowserInputFrame"
+	case string(generated.WsFrameTypeBrowserControl):
+		return "BrowserControlFrame"
+	case string(generated.WsFrameTypeBrowserDetach):
+		return "BrowserDetachFrame"
 	default:
 		return ""
 	}

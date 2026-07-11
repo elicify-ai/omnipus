@@ -27,6 +27,12 @@ properties:
   controller:
     type: string
     maxLength: 128
-    description: Identifier of the viewer currently holding control, if any.
+    description: >-
+      The controlling user's display name/username, when state=controlling
+      (the gateway sends the authenticated userID resolved for this
+      connection, NOT an internal viewer/connection id). May be an empty
+      string under token-based or dev-mode-bypass authentication, where no
+      per-user identity is resolved — an empty controller does not mean
+      nobody is in control.
   session_id:
     type: string

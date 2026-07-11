@@ -2,6 +2,7 @@ package browser
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -347,15 +348,27 @@ func TestBuildInputAction(t *testing.T) {
 		in      LiveInput
 		wantErr bool
 	}{
-		{"mouse_move", LiveInput{Kind: "mouse_move", X: 1, Y: 2}, false},
-		{"mouse_down", LiveInput{Kind: "mouse_down", X: 1, Y: 2, Button: "left"}, false},
-		{"mouse_up", LiveInput{Kind: "mouse_up", X: 1, Y: 2, Button: "right"}, false},
-		{"wheel", LiveInput{Kind: "wheel", X: 1, Y: 2, DeltaX: 3, DeltaY: 4}, false},
+		{"mouse_move", LiveInput{Kind: "mouse_move", X: 1, Y: 2, HasXY: true}, false},
+		{"mouse_down", LiveInput{Kind: "mouse_down", X: 1, Y: 2, HasXY: true, Button: "left"}, false},
+		{"mouse_up", LiveInput{Kind: "mouse_up", X: 1, Y: 2, HasXY: true, Button: "right"}, false},
+		{"wheel", LiveInput{Kind: "wheel", X: 1, Y: 2, HasXY: true, DeltaX: 3, DeltaY: 4}, false},
 		{"key_down", LiveInput{Kind: "key_down", Key: "a", Code: "KeyA"}, false},
 		{"key_up", LiveInput{Kind: "key_up", Key: "a", Code: "KeyA"}, false},
 		{"text", LiveInput{Kind: "text", Text: "hello"}, false},
 		{"text requires non-empty", LiveInput{Kind: "text", Text: ""}, true},
 		{"unknown kind", LiveInput{Kind: "bogus"}, true},
+		// ADR-038 finding #5: per-kind validation added alongside the
+		// pre-existing "text" guard — mouse/wheel kinds need real
+		// coordinates (HasXY unset must be rejected, not silently dispatched
+		// at (0,0)), key kinds need at least a key or a code.
+		{"mouse_move without coordinates", LiveInput{Kind: "mouse_move"}, true},
+		{"mouse_down without coordinates", LiveInput{Kind: "mouse_down"}, true},
+		{"mouse_up without coordinates", LiveInput{Kind: "mouse_up"}, true},
+		{"wheel without coordinates", LiveInput{Kind: "wheel"}, true},
+		{"key_down without key or code", LiveInput{Kind: "key_down"}, true},
+		{"key_up without key or code", LiveInput{Kind: "key_up"}, true},
+		{"key_down with only code", LiveInput{Kind: "key_down", Code: "KeyA"}, false},
+		{"key_up with only key", LiveInput{Kind: "key_up", Key: "a"}, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -369,6 +382,36 @@ func TestBuildInputAction(t *testing.T) {
 			require.NotNil(t, action)
 		})
 	}
+}
+
+// TestBuildInputAction_ClampsModifiers guards against a malformed
+// out-of-range modifiers bitmask reaching cdproto directly (ADR-038 finding
+// #5) — schema validation (finding #3) catches this on the wire when
+// gateway.validate_inbound=true, but this is the defense-in-depth backstop
+// for when it's off, or for any future caller that bypasses the WS frame
+// entirely.
+func TestBuildInputAction_ClampsModifiers(t *testing.T) {
+	require.Equal(t, 0, clampModifiers(-5))
+	require.Equal(t, 0, clampModifiers(0))
+	require.Equal(t, 15, clampModifiers(15))
+	require.Equal(t, 15, clampModifiers(999))
+
+	// End-to-end through buildInputAction: an out-of-range value must not
+	// error (it's clamped, not rejected) and must produce a valid action.
+	action, err := buildInputAction(LiveInput{Kind: "text", Text: "x", Modifiers: 999})
+	require.NoError(t, err)
+	require.NotNil(t, action)
+}
+
+// TestIsBenignLiveInputError verifies the benign/real classification
+// (ADR-038 finding #4) that browser_ws.go's handleInput relies on to decide
+// whether a dispatchInput failure is worth a browser_status(error) frame.
+func TestIsBenignLiveInputError(t *testing.T) {
+	require.True(t, IsBenignLiveInputError(benignInputError("x")))
+	require.False(t, IsBenignLiveInputError(realInputError("x")))
+	require.False(t, IsBenignLiveInputError(nil), "a nil error is not a benign LiveInputError")
+	require.False(t, IsBenignLiveInputError(fmt.Errorf("plain error")),
+		"an unclassified error must be treated as real (fail-safe direction)")
 }
 
 func TestMouseButton(t *testing.T) {
