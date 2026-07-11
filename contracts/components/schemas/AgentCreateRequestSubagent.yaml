@@ -133,8 +133,6 @@ properties:
       The CLI never reads a file from disk. Backend trims before length-validation,
       so whitespace-only is rejected as minLength violation.
     example: "You are a focused research assistant..."
-  delegation_policy:
-    $ref: './DelegationPolicy.yaml'
   shell_policy:
     $ref: './AgentShellPolicy.yaml'
   timeout_seconds:

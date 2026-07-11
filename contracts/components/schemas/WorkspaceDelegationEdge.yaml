@@ -27,7 +27,8 @@ properties:
     type: array
     description: >
       Allowed delegation modes for this edge. An empty/absent list means all modes
-      are allowed. Mirrors DelegationPolicy.modes semantics.
+      are allowed. Values match the DelegationMode enum used across delegation
+      configuration.
       "await" = synchronous subagent (blocks caller until result).
       "background" = async spawn (caller continues; result posted when done).
       "task" = task_create delegation (persistent task for another agent).

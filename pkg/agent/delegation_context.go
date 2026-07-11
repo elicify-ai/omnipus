@@ -14,8 +14,9 @@ import (
 
 // delegationTarget carries the per-edge render model for a single allowed
 // delegation target. It is sourced from the workspace delegation graph
-// (workspaces/<id>.json → Delegation[]), NOT from config.DelegationPolicy —
-// the graph is the SOLE runtime authority (see buildDelegationDenyChecker).
+// (workspaces/<id>.json → Delegation[]) — the graph is the SOLE runtime
+// authority (see buildDelegationDenyChecker); there is no separate per-agent
+// delegation-policy config to fall back to (ADR-037).
 //
 // Fields:
 //   - ID:    the target agent id (from the edge's ToAgent field)
