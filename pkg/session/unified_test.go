@@ -352,6 +352,60 @@ func TestMarkLastEntryTruncated_FlagsLastAssistantEntry(t *testing.T) {
 	assert.Equal(t, "test-agent", got.AgentID, "AgentID must be preserved")
 }
 
+// TestMarkLastEntryTruncated_TrailingNewlineSurvivesSubsequentAppend is the
+// MarkLastEntryTruncated counterpart to
+// TestUpdateToolCallStatus_TrailingNewlineSurvivesSubsequentAppend: this
+// rewrite path shares the exact same "no trailing newline on last line" bug
+// pattern and must be verified independently, since a fix to one function
+// does not guarantee the sibling function (which duplicates the same
+// rebuild-the-file logic) was fixed too.
+//
+// Negative-test discipline: this test was confirmed to FAIL against the
+// pre-fix MarkLastEntryTruncated before the fix was applied.
+func TestMarkLastEntryTruncated_TrailingNewlineSurvivesSubsequentAppend(t *testing.T) {
+	store := newTestStore(t)
+
+	meta, err := store.NewSession(SessionTypeChat, "", "test-agent")
+	require.NoError(t, err)
+	sessionID := meta.ID
+
+	require.NoError(t, store.AppendTranscript(sessionID, TranscriptEntry{
+		ID:      "entry-001",
+		Type:    EntryTypeMessage,
+		Role:    "assistant",
+		Content: "Partial response before cancel",
+		AgentID: "test-agent",
+		TurnID:  "turn-001",
+	}))
+
+	require.NoError(t, store.MarkLastEntryTruncated(sessionID, "turn-001"))
+
+	transcriptPath := filepath.Join(store.baseDir, sessionID, "transcript.jsonl")
+	raw, err := os.ReadFile(transcriptPath)
+	require.NoError(t, err)
+	require.True(t, len(raw) > 0 && raw[len(raw)-1] == '\n',
+		"MarkLastEntryTruncated's rewritten transcript file must end with a trailing "+
+			"newline; got %q", raw)
+
+	// A follow-up turn appends a new assistant entry after the cancel.
+	require.NoError(t, store.AppendTranscript(sessionID, TranscriptEntry{
+		ID:      "entry-002",
+		Type:    EntryTypeMessage,
+		Role:    "assistant",
+		Content: "New turn after the cancel",
+		AgentID: "test-agent",
+		TurnID:  "turn-002",
+	}))
+
+	entries, err := store.ReadTranscript(sessionID)
+	require.NoError(t, err)
+	require.Len(t, entries, 2,
+		"both the truncated entry AND the subsequently appended assistant entry must "+
+			"survive — neither may be silently dropped by a newline-corrupted line")
+	assert.True(t, entries[0].Truncated)
+	assert.Equal(t, "New turn after the cancel", entries[1].Content)
+}
+
 // TestMarkLastEntryTruncated_NoAssistantEntryIsNoOp verifies that calling
 // MarkLastEntryTruncated on a session with no assistant entries (only user
 // entries or an empty transcript) is a no-op — nil error, no file mutation.
@@ -548,7 +602,9 @@ func TestUpdateToolCallStatus_RewritesMatchingToolCall(t *testing.T) {
 	}))
 
 	// The sub-turn actually finishes later with a real status/duration.
-	require.NoError(t, store.UpdateToolCallStatus(sessionID, "c1", "success", 4210))
+	found, updateErr := store.UpdateToolCallStatus(sessionID, "c1", "success", 4210)
+	require.NoError(t, updateErr)
+	assert.True(t, found, "the matching tool-call entry must be found")
 
 	entries, err := store.ReadTranscript(sessionID)
 	require.NoError(t, err)
@@ -583,7 +639,9 @@ func TestUpdateToolCallStatus_FlipsToError(t *testing.T) {
 		},
 	}))
 
-	require.NoError(t, store.UpdateToolCallStatus(sessionID, "c2", "error", 987))
+	found, updateErr := store.UpdateToolCallStatus(sessionID, "c2", "error", 987)
+	require.NoError(t, updateErr)
+	assert.True(t, found, "the matching tool-call entry must be found")
 
 	entries, err := store.ReadTranscript(sessionID)
 	require.NoError(t, err)
@@ -620,8 +678,9 @@ func TestUpdateToolCallStatus_NoMatchIsNoOp(t *testing.T) {
 		},
 	}))
 
-	err = store.UpdateToolCallStatus(sessionID, "does-not-exist", "success", 999)
+	found, err := store.UpdateToolCallStatus(sessionID, "does-not-exist", "success", 999)
 	require.NoError(t, err, "no matching ToolCall.ID must be a no-op, not an error")
+	assert.False(t, found, "no matching ToolCall.ID must report found=false")
 
 	entries, err := store.ReadTranscript(sessionID)
 	require.NoError(t, err)
@@ -642,8 +701,80 @@ func TestUpdateToolCallStatus_EmptyTranscriptIsNoOp(t *testing.T) {
 	require.NoError(t, err)
 	sessionID := meta.ID
 
-	err = store.UpdateToolCallStatus(sessionID, "c1", "error", 100)
+	found, err := store.UpdateToolCallStatus(sessionID, "c1", "error", 100)
 	assert.NoError(t, err, "no transcript file yet must be a no-op, not an error")
+	assert.False(t, found, "no transcript file yet must report found=false")
+}
+
+// TestUpdateToolCallStatus_TrailingNewlineSurvivesSubsequentAppend is the
+// dedicated regression test for the real-world data-loss bug found by live
+// verification: UpdateToolCallStatus's read-mutate-rewrite previously
+// omitted the trailing newline on the rewritten file's last line. The VERY
+// NEXT AppendTranscript call (exactly the sequence Wave 3 fix 5b's
+// UpdateToolCallStatus call, immediately followed by fix 5d's
+// AsyncNotifier-delivered result, produces in production) then concatenated
+// its record directly onto that line, producing invalid JSON that
+// ReadTranscript's line parser could not parse — silently dropping BOTH the
+// rewritten entry AND the newly appended one.
+//
+// Unlike TestUpdateToolCallStatus_RewritesMatchingToolCall (which reads
+// immediately after the rewrite and therefore could never observe this bug),
+// this test performs the full rewrite-THEN-append-THEN-read sequence.
+//
+// Negative-test discipline: this test was confirmed to FAIL against the
+// pre-fix UpdateToolCallStatus (which built the rewritten file without a
+// trailing newline on the last line) before the fix was applied — see the
+// delivery report for the byte-level repro output.
+func TestUpdateToolCallStatus_TrailingNewlineSurvivesSubsequentAppend(t *testing.T) {
+	store := newTestStore(t)
+
+	meta, err := store.NewSession(SessionTypeChat, "", "jim")
+	require.NoError(t, err)
+	sessionID := meta.ID
+
+	// 1. The spawning delegate tool call's placeholder ack.
+	require.NoError(t, store.AppendTranscript(sessionID, TranscriptEntry{
+		ID:      "c1",
+		Type:    EntryTypeToolCall,
+		AgentID: "jim",
+		ToolCalls: []ToolCall{
+			{ID: "c1", Tool: "delegate", Status: "success", DurationMS: 0},
+		},
+	}))
+
+	// 2. The sub-turn's real terminal status/duration corrects the placeholder
+	// (fix 5b) — this is the rewrite that must terminate with a newline.
+	found, updateErr := store.UpdateToolCallStatus(sessionID, "c1", "success", 4210)
+	require.NoError(t, updateErr)
+	require.True(t, found)
+
+	// Assert the raw file bytes on disk actually end in a newline — the
+	// precise mechanism, not just the end-to-end symptom.
+	transcriptPath := filepath.Join(store.baseDir, sessionID, "transcript.jsonl")
+	raw, err := os.ReadFile(transcriptPath)
+	require.NoError(t, err)
+	require.True(t, len(raw) > 0 && raw[len(raw)-1] == '\n',
+		"UpdateToolCallStatus's rewritten transcript file must end with a trailing "+
+			"newline; got %q", raw)
+
+	// 3. The delegate's async result lands as a new assistant entry (fix 5d) —
+	// this is the append that, pre-fix, would corrupt onto the rewritten line.
+	require.NoError(t, store.AppendTranscript(sessionID, TranscriptEntry{
+		ID:      "c2",
+		Role:    "assistant",
+		AgentID: "ray",
+		Content: "Ray's delegated narration.",
+	}))
+
+	entries, err := store.ReadTranscript(sessionID)
+	require.NoError(t, err)
+	require.Len(t, entries, 2,
+		"both the corrected tool-call entry AND the subsequently appended assistant "+
+			"entry must survive — neither may be silently dropped by a newline-corrupted line")
+	assert.Equal(t, "success", entries[0].ToolCalls[0].Status)
+	assert.EqualValues(t, 4210, entries[0].ToolCalls[0].DurationMS)
+	assert.Equal(t, "Ray's delegated narration.", entries[1].Content)
+	assert.Equal(t, "ray", entries[1].AgentID)
 }
 
 // --- Cascade-delete uploads tests (N-B fix) ---

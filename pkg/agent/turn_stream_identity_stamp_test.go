@@ -8,16 +8,31 @@ import (
 )
 
 // producerAgentIDMockStreamer is a bus.Streamer that also records
-// SetProducerAgentID calls, mirroring *gateway.wsStreamer's method of the
-// same name. It lets stampStreamerProducerAgentID's type-assertion be
-// exercised without importing the gateway package.
+// SetProducerAgentID and SetTurnID calls, mirroring *gateway.wsStreamer's
+// methods of the same names. It lets stampStreamerProducerAgentID's and
+// stampStreamerTurnID's type-assertions be exercised without importing the
+// gateway package.
 type producerAgentIDMockStreamer struct {
 	mockStreamer
 	setProducerAgentIDCalls []string
+	setTurnIDCalls          []string
 }
 
 func (m *producerAgentIDMockStreamer) SetProducerAgentID(agentID string) {
 	m.setProducerAgentIDCalls = append(m.setProducerAgentIDCalls, agentID)
+}
+
+// SetTurnID mirrors *gateway.wsStreamer.SetTurnID's own no-op-on-empty
+// guard, so tests exercising stampStreamerTurnID's caller-side behavior
+// (which — unlike stampStreamerProducerAgentID — has no nil-pointer reason
+// to skip the call itself, and so unconditionally forwards to the streamer,
+// relying on the streamer's own empty check) observe production-equivalent
+// results.
+func (m *producerAgentIDMockStreamer) SetTurnID(turnID string) {
+	if turnID == "" {
+		return
+	}
+	m.setTurnIDCalls = append(m.setTurnIDCalls, turnID)
 }
 
 // TestStampStreamerProducerAgentID_UsesTurnsOwnAgent verifies FIX 5a's wiring:
@@ -86,4 +101,54 @@ func TestStampStreamerProducerAgentID_NoOpWhenAgentNil(t *testing.T) {
 	})
 	assert.Empty(t, streamer.setProducerAgentIDCalls,
 		"must not stamp the streamer when the turn has no resolved agent")
+}
+
+// TestStampStreamerTurnID_UsesTurnsOwnID verifies FIX 5c/1's wiring:
+// stampStreamerTurnID must stamp the streamer with the CURRENT turn's own
+// ID (ts.turnID). This is the fix for the confirmed live-verification bug
+// where the assistant transcript entry carried no TurnID at all, breaking
+// both the turn_canceled replay correlation and MarkLastEntryTruncated's
+// own turn-scoped matching.
+//
+// Traces to: pkg/agent/turn.go stampStreamerTurnID; called from
+// pkg/agent/loop.go's streaming branch immediately after GetStreamer,
+// alongside stampStreamerProducerAgentID.
+func TestStampStreamerTurnID_UsesTurnsOwnID(t *testing.T) {
+	ts := &turnState{turnID: "turn-abc123"}
+	streamer := &producerAgentIDMockStreamer{}
+
+	ts.stampStreamerTurnID(streamer)
+
+	require.Len(t, streamer.setTurnIDCalls, 1, "SetTurnID must be called exactly once")
+	assert.Equal(t, "turn-abc123", streamer.setTurnIDCalls[0],
+		"the streamer must be stamped with the TURN's own ID")
+}
+
+// TestStampStreamerTurnID_NoOpWhenStreamerDoesNotImplementInterface mirrors
+// TestStampStreamerProducerAgentID_NoOpWhenStreamerDoesNotImplementInterface
+// for SetTurnID: non-webchat streamers are left untouched.
+func TestStampStreamerTurnID_NoOpWhenStreamerDoesNotImplementInterface(t *testing.T) {
+	ts := &turnState{turnID: "turn-abc123"}
+	streamer := &mockStreamer{} // does NOT implement SetTurnID
+
+	assert.NotPanics(t, func() {
+		ts.stampStreamerTurnID(streamer)
+	}, "must be a safe no-op for streamers without SetTurnID")
+}
+
+// TestStampStreamerTurnID_NoOpWhenTurnIDEmpty guards against an empty
+// ts.turnID (should not happen for a live turn). Unlike
+// stampStreamerProducerAgentID (which skips the call at the caller to avoid
+// a nil-pointer dereference on ts.agent.ID), stampStreamerTurnID has no such
+// structural reason to skip and always forwards to SetTurnID — the no-op
+// guarantee comes from the callee's own empty check (mirrored by the mock
+// here), exactly like production *gateway.wsStreamer.SetTurnID.
+func TestStampStreamerTurnID_NoOpWhenTurnIDEmpty(t *testing.T) {
+	ts := &turnState{}
+	streamer := &producerAgentIDMockStreamer{}
+
+	ts.stampStreamerTurnID(streamer)
+
+	assert.Empty(t, streamer.setTurnIDCalls,
+		"must not stamp the streamer when the turn has no ID")
 }
