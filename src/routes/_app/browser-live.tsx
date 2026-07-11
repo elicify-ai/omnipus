@@ -11,6 +11,7 @@
 // (`_app.tsx`'s beforeLoad) — the browser WS handshake needs a valid bearer
 // token exactly like every other authenticated surface in the SPA.
 
+import { useEffect } from 'react'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { z } from 'zod'
 import { BrowserLiveView } from '@/components/browser/BrowserLiveView'
@@ -28,6 +29,22 @@ export const Route = createFileRoute('/_app/browser-live')({
 function BrowserLiveRoute() {
   const { session, agent } = Route.useSearch()
   const navigate = useNavigate()
+
+  // Consume the pop-out auth hand-off: the opener staged the bearer token in
+  // localStorage because window.open'd tabs don't inherit sessionStorage (where
+  // the token normally lives). Migrate it into this tab's sessionStorage and
+  // purge the shared localStorage copy so the token doesn't persist there.
+  // (The _app beforeLoad guard already accepted the localStorage fallback, so
+  // this only cleans up.)
+  useEffect(() => {
+    const staged = localStorage.getItem('omnipus_auth_token')
+    if (staged) {
+      if (!sessionStorage.getItem('omnipus_auth_token')) {
+        sessionStorage.setItem('omnipus_auth_token', staged)
+      }
+      localStorage.removeItem('omnipus_auth_token')
+    }
+  }, [])
 
   if (!session || !agent) {
     return (

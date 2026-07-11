@@ -36,11 +36,22 @@ export function BrowserLivePanel() {
             agentId={browserPanel.agentId}
             onClose={closeBrowserPanel}
             onPopOut={() => {
+              // The auth token lives in sessionStorage (per-tab, for XSS
+              // hygiene) which window.open'd tabs do NOT inherit — so the
+              // pop-out would land on the login screen. Briefly mirror the
+              // token into localStorage as a same-origin hand-off; the
+              // /browser-live route migrates it back into sessionStorage and
+              // purges this copy on mount (see browser-live.tsx).
+              const token = sessionStorage.getItem('omnipus_auth_token')
+              if (token) localStorage.setItem('omnipus_auth_token', token)
               const params = new URLSearchParams({
                 session: browserPanel.sessionId,
                 agent: browserPanel.agentId,
               })
-              window.open(`/browser-live?${params.toString()}`, '_blank', 'noopener,noreferrer')
+              // The SPA uses HASH routing (#/…) — the route + search must live in
+              // the fragment, not the path, or the router ignores it and falls to
+              // the default route. Must be `/#/browser-live?…`, not `/browser-live?…`.
+              window.open(`/#/browser-live?${params.toString()}`, '_blank', 'noopener,noreferrer')
             }}
           />
         </SheetContent>
