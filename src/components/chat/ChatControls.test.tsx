@@ -67,6 +67,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
       },
     ]),
     fetchWorkspaces: vi.fn().mockResolvedValue([]),
+    createSession: vi.fn(),
     fetchProviders: vi.fn().mockResolvedValue([
       {
         id: 'openrouter',
@@ -449,6 +450,7 @@ describe('ChatControls — Open browser launcher', () => {
     act(() => {
       useUiStore.setState({ browserPanel: null, toasts: [] })
     })
+    vi.mocked(api.createSession).mockReset()
   })
 
   it('renders an "Open browser" button', async () => {
@@ -457,16 +459,55 @@ describe('ChatControls — Open browser launcher', () => {
     expect(btn).toBeInTheDocument()
   })
 
-  it('opens the browser panel with the active session/agent when clicked', async () => {
+  it('opens the browser panel with the active session/agent when clicked (session already exists)', async () => {
     renderControls()
     const btn = await vi.waitFor(() => screen.getByRole('button', { name: /open browser/i }))
 
     expect(useUiStore.getState().browserPanel).toBeNull()
     fireEvent.click(btn)
     expect(useUiStore.getState().browserPanel).toEqual({ sessionId: 'sess_1', agentId: 'mia' })
+    // No session existed to create — createSession must not be called.
+    expect(api.createSession).not.toHaveBeenCalled()
   })
 
-  it('toasts an error instead of opening the panel when there is no active session', async () => {
+  // UAT finding FE-1: a brand-new chat (zero messages sent yet) has
+  // activeSessionId === null. Per ADR-039 D-A1 the launcher must still open a
+  // ready/blank browser rather than erroring — it now ensures a real session
+  // exists first (mirroring attachment-adapter.ts's ensureSession), exactly
+  // like the composer's own first-send path does.
+  it('creates a session and opens the panel with it when there is no active session yet', async () => {
+    act(() => {
+      useSessionStore.setState({ activeSessionId: null, activeAgentId: 'mia' })
+    })
+    const createdSession: Awaited<ReturnType<typeof api.createSession>> = {
+      id: 'sess_new',
+      agent_id: 'mia',
+      title: 'New chat',
+      type: 'chat',
+      created_at: '2026-07-11T00:00:00Z',
+      updated_at: '2026-07-11T00:00:00Z',
+      message_count: 0,
+      total_tokens: 0,
+      total_cost: 0,
+    }
+    vi.mocked(api.createSession).mockResolvedValue(createdSession)
+    renderControls()
+    const btn = await vi.waitFor(() => screen.getByRole('button', { name: /open browser/i }))
+
+    fireEvent.click(btn)
+
+    await vi.waitFor(() => {
+      expect(api.createSession).toHaveBeenCalledWith('mia')
+    })
+    await vi.waitFor(() => {
+      expect(useUiStore.getState().browserPanel).toEqual({ sessionId: 'sess_new', agentId: 'mia' })
+    })
+    expect(useSessionStore.getState().activeSessionId).toBe('sess_new')
+    // No error toast — this is the success path.
+    expect(useUiStore.getState().toasts.some((t) => t.variant === 'error')).toBe(false)
+  })
+
+  it('toasts an error instead of opening the panel when there is no active agent at all', async () => {
     act(() => {
       useSessionStore.setState({ activeSessionId: null, activeAgentId: null })
     })
@@ -475,6 +516,23 @@ describe('ChatControls — Open browser launcher', () => {
 
     fireEvent.click(btn)
     expect(useUiStore.getState().browserPanel).toBeNull()
-    expect(useUiStore.getState().toasts.some((t) => /start a chat/i.test(t.message))).toBe(true)
+    expect(useUiStore.getState().toasts.some((t) => /select an agent/i.test(t.message))).toBe(true)
+    expect(api.createSession).not.toHaveBeenCalled()
+  })
+
+  it('toasts an error and does not open the panel when session creation fails', async () => {
+    act(() => {
+      useSessionStore.setState({ activeSessionId: null, activeAgentId: 'mia' })
+    })
+    vi.mocked(api.createSession).mockRejectedValue(new Error('network down'))
+    renderControls()
+    const btn = await vi.waitFor(() => screen.getByRole('button', { name: /open browser/i }))
+
+    fireEvent.click(btn)
+
+    await vi.waitFor(() => {
+      expect(useUiStore.getState().toasts.some((t) => t.variant === 'error' && /network down/i.test(t.message))).toBe(true)
+    })
+    expect(useUiStore.getState().browserPanel).toBeNull()
   })
 })
