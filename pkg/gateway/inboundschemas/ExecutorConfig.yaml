@@ -22,7 +22,7 @@ description: >
   for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation,
   and retries are managed by the CLI itself (not Omnipus), so fields like
   shell_policy / tools_cfg / fallback_models / model_params
-  / skills / delegation_policy are hidden for subagent_3p agents and rejected
+  / skills are hidden for subagent_3p agents and rejected
   400 on PUT if set.
 
   "cli" (required for subagent_3p agents when kind="external-cli") is locked

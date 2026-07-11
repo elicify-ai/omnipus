@@ -233,56 +233,6 @@ func TestAgentRegistry_GetDefaultAgent_OnlyWorkerAndBaseSkipsWorker(t *testing.T
 	}
 }
 
-func TestAgentRegistry_CanSpawnSubagent(t *testing.T) {
-	cfg := testCfg([]config.AgentConfig{
-		{
-			ID:      "parent",
-			Default: true,
-			Subagents: &config.SubagentsConfig{
-				AllowAgents: []string{"child1", "child2"},
-			},
-		},
-		{ID: "child1"},
-		{ID: "child2"},
-		{ID: "restricted"},
-	})
-	registry := NewAgentRegistry(cfg, &mockRegistryProvider{})
-
-	if !registry.CanSpawnSubagent("parent", "child1") {
-		t.Error("expected parent to be allowed to spawn child1")
-	}
-	if !registry.CanSpawnSubagent("parent", "child2") {
-		t.Error("expected parent to be allowed to spawn child2")
-	}
-	if registry.CanSpawnSubagent("parent", "restricted") {
-		t.Error("expected parent to NOT be allowed to spawn restricted")
-	}
-	if registry.CanSpawnSubagent("child1", "child2") {
-		t.Error("expected child1 to NOT be allowed to spawn (no subagents config)")
-	}
-}
-
-func TestAgentRegistry_CanSpawnSubagent_Wildcard(t *testing.T) {
-	cfg := testCfg([]config.AgentConfig{
-		{
-			ID:      "admin",
-			Default: true,
-			Subagents: &config.SubagentsConfig{
-				AllowAgents: []string{"*"},
-			},
-		},
-		{ID: "any-agent"},
-	})
-	registry := NewAgentRegistry(cfg, &mockRegistryProvider{})
-
-	if !registry.CanSpawnSubagent("admin", "any-agent") {
-		t.Error("expected wildcard to allow spawning any agent")
-	}
-	if !registry.CanSpawnSubagent("admin", "nonexistent") {
-		t.Error("expected wildcard to allow spawning even nonexistent agents")
-	}
-}
-
 func TestAgentInstance_Model(t *testing.T) {
 	model := &config.AgentModelConfig{Primary: "claude-opus"}
 	cfg := testCfg([]config.AgentConfig{

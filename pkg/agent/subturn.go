@@ -641,7 +641,6 @@ func spawnSubTurn(
 		LightCandidates:           execSource.LightCandidates,
 		LightProvider:             execSource.LightProvider,
 		AgentType:                 execSource.AgentType,
-		DelegationPolicy:          execSource.DelegationPolicy,
 		IsRoutingDefault:          execSource.IsRoutingDefault,
 	}
 	// providerPool is tied to the SAME Candidates it was built for — now that

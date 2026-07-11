@@ -19,9 +19,9 @@
 //     off) rather than coerced-with-a-warning (the old runtime coercion
 //     check is gone; see TestCreateAgent_ValidateInbound_MainWithExecutorRejected
 //     in rest_inbound_validate_test.go for the ValidateInbound-on 400 case).
-//  7. Worker create with a delegation_policy that has a non-empty to[] within
-//     depth → 201 (bounded subagent delegation, M5); depth above the ceiling
-//     → 400 (depth is the safety boundary, owned by buildDelegationPolicy).
+//  7. Worker create with a delegation_policy field at all → 400 (ADR-037:
+//     delegation_policy is retired from the wire entirely; delegation is
+//     configured exclusively via the per-workspace Team tab now).
 //
 // The test scaffolding is the same as rest_agent_executor_test.go:
 // buildExecutorTestAPI() gives a fresh temp config.json + restAPI handle so
@@ -344,64 +344,27 @@ func TestUpdateAgent_DoesNotChangeTypeOnWorker(t *testing.T) {
 		"update must not change Type on a worker either")
 }
 
-// TestCreateAgent_Worker_AllowsNonEmptyToList proves the bounded-delegation
-// unlock at create time: a worker/Subagent created with a delegation_policy
-// that has a non-empty `to` list pointing at a valid in-roster target (within
-// depth) is now accepted (201). The previous worker-leaf rejection is removed;
-// depth is the safety boundary, enforced in buildDelegationPolicy.
-func TestCreateAgent_Worker_AllowsNonEmptyToList(t *testing.T) {
+// TestCreateAgent_Subagent_DelegationPolicyRejected proves ADR-037's retirement
+// of delegation_policy from the wire holds for the Subagent (native worker)
+// variant too, not just subagent_3p (see
+// TestCreateAgent_Subagent3p_DelegationPolicyRejected in
+// rest_agent_executor_test.go and TestContract_AgentCreateRequestSubagent3p_DelegationPolicyRejected
+// in pkg/api/generated/contract_test.go). This test replaces the three
+// pre-ADR-037 tests that exercised create-time to[]/depth validation
+// (TestCreateAgent_Worker_AllowsNonEmptyToList,
+// TestCreateAgent_Worker_DepthExceededRejected,
+// TestCreateAgent_Worker_AllowsEmptyToList) — that validation no longer
+// exists; delegation_policy is now an unconditionally-rejected unknown field
+// regardless of its content.
+func TestCreateAgent_Subagent_DelegationPolicyRejected(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 
-	body := `{"name":"Worker With To","type":"Subagent","description":"non-empty to regression","soul":"worker-with-to-soul","delegation_policy":{"to":[{"kind":"local","id":"test-agent"}],"modes":["task"],"depth":1}}`
+	body := `{"name":"Worker With To","type":"Subagent","description":"delegation_policy retired","soul":"worker-with-to-soul","delegation_policy":{"to":[{"kind":"local","id":"test-agent"}],"modes":["task"],"depth":1}}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 
-	require.Equal(
-		t,
-		http.StatusCreated,
-		w.Code,
-		"worker onward delegation within depth must be allowed; body: %s",
-		w.Body.String(),
-	)
-	created := decodeAgentResp(t, w.Body.Bytes())
-	require.NotNil(t, created.DelegationPolicy)
-	require.NotNil(t, created.DelegationPolicy.To)
-	require.Len(t, *created.DelegationPolicy.To, 1)
-	assert.Equal(t, "test-agent", (*created.DelegationPolicy.To)[0].Id)
-}
-
-// TestCreateAgent_Worker_DepthExceededRejected proves depth remains the cap:
-// a worker created with a non-empty to[] whose depth exceeds the global subturn
-// ceiling is rejected (400), naming the depth rule.
-func TestCreateAgent_Worker_DepthExceededRejected(t *testing.T) {
-	api := buildExecutorTestAPI(t)
-
-	body := `{"name":"Worker Deep","type":"Subagent","description":"depth regression","soul":"worker-deep-soul","delegation_policy":{"to":[{"kind":"local","id":"test-agent"}],"depth":99}}`
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
-	r.Header.Set("Content-Type", "application/json")
-	api.HandleAgents(w, r)
-
-	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
-	assert.Contains(t, w.Body.String(), "depth",
-		"the rejection must name the depth rule")
-}
-
-// TestCreateAgent_Worker_AllowsEmptyToList is the control: a worker
-// created with an explicitly-empty `to` list (deny-all delegation) is
-// permitted — the worker-leaf rule only blocks a non-empty to[].
-func TestCreateAgent_Worker_AllowsEmptyToList(t *testing.T) {
-	api := buildExecutorTestAPI(t)
-
-	body := `{"name":"Worker No To","type":"Subagent","description":"empty to regression","soul":"worker-no-to-soul","delegation_policy":{"to":[]}}`
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
-	r.Header.Set("Content-Type", "application/json")
-	api.HandleAgents(w, r)
-
-	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
-	created := decodeAgentResp(t, w.Body.Bytes())
-	assert.Equal(t, gen.AgentTypeSubagent, created.Type)
+	require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "delegation_policy")
 }

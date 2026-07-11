@@ -807,19 +807,34 @@ func coreAgentDelegation(id CoreAgentID) *config.DelegationPolicy {
 		// load-bearing, not incidental: the worker's tool-policy map
 		// (coreAgentSeed's IDWorker branch) deliberately leaves "delegate"
 		// absent so it inherits the global ceiling's "allow" — the delegate
-		// tool's registration-time gates independently require a non-nil
-		// DelegationPolicy (or a workspace delegation-graph edge) before
-		// onward delegation is reachable, so today "delegate: allow" on the
-		// worker is inert. If a future change ever seeds a delegation edge
-		// FROM the worker, that edge plus this inherited "allow" would
-		// combine to make onward delegation real — revisit the worker's
-		// tool-policy overrides at the same time.
+		// tool's runtime gate (buildDelegationDenyChecker, ADR-037) requires a
+		// matching edge in the per-workspace delegation graph before onward
+		// delegation is reachable, so today "delegate: allow" on the worker is
+		// inert (no such edge is seeded FROM the worker). If a future change
+		// ever seeds a delegation edge FROM the worker, that edge plus this
+		// inherited "allow" would combine to make onward delegation real —
+		// revisit the worker's tool-policy overrides at the same time.
 		return nil
 	}
 }
 
 // intPtr returns a pointer to v. Used to set DelegationPolicy.Depth in seeds.
 func intPtr(v int) *int { return &v }
+
+// SeedDelegationEdges returns the seeded canonical delegation policy for a
+// core agent ID (ADR-037, Wave 2). AgentConfig.DelegationPolicy — the field
+// this used to be copied onto at boot — has been removed entirely; the
+// per-workspace delegation graph (pkg/workspace/delegation.go) is the sole
+// runtime delegation-enforcement mechanism. pkg/gateway's
+// defaultWorkspaceDelegationEdges now calls this directly to bootstrap a
+// fresh workspace's delegation graph, instead of reading
+// cfg.Agents.List[i].DelegationPolicy (which no longer exists). Returns nil
+// for any ID with no seeded delegation policy (Explorer/Researcher, the
+// generic worker, and any non-core/custom agent ID) — exactly what
+// coreAgentDelegation returned for those IDs before this export existed.
+func SeedDelegationEdges(id CoreAgentID) *config.DelegationPolicy {
+	return coreAgentDelegation(id)
+}
 
 // SeedConfig ensures all core agents exist in cfg.Agents.List with Locked=true
 // and with the correct constructor-seeded tool policy (FR-010, FR-022).
@@ -924,17 +939,13 @@ func SeedConfig(cfg *config.Config) bool {
 			}
 		}
 
-		// Idempotent delegation-policy migration: seed the base-agent trust graph
-		// only when the existing entry declares none (DelegationPolicy nil). An
-		// operator who customized delegation keeps their choice. Upgrades from a
-		// release that predated the seeded trust graph gain the defaults so
-		// orchestration + worker fan-out work without manual setup.
-		if a.DelegationPolicy == nil {
-			if seedDP := coreAgentDelegation(ca.ID); seedDP != nil {
-				a.DelegationPolicy = seedDP
-				modified = true
-			}
-		}
+		// ADR-037: the per-agent delegation-policy migration that used to live here
+		// (seeding AgentConfig.DelegationPolicy on existing agents) is retired —
+		// that field no longer exists. Delegation seeding now happens only at
+		// workspace-creation time via SeedDelegationEdges, reading coreAgentDelegation
+		// directly (see pkg/gateway/rest_workspace_delegation.go's
+		// defaultWorkspaceDelegationEdges) — there is nothing left to migrate onto
+		// AgentConfig itself.
 
 		// ADR-036: bash is now universally registered (like the old `exec`),
 		// governed exclusively by ToolPolicyCfg — there is no more
@@ -980,10 +991,11 @@ func SeedConfig(cfg *config.Config) bool {
 			// Per-agent skill allowlist (FR-9.4): default-DENY enforced at skill
 			// resolution. Nil for agents with no seeded skills (unrestricted).
 			Skills: coreAgentSkills(ca.ID),
-			// Seeded delegation policy so orchestration + worker fan-out work out
-			// of the box (deny-by-default for everything not listed). Nil for the
-			// worker (a leaf — it does not delegate onward by default).
-			DelegationPolicy: coreAgentDelegation(ca.ID),
+			// ADR-037: no more AgentConfig.DelegationPolicy field to seed here —
+			// the workspace-graph seed (SeedDelegationEdges, reading
+			// coreAgentDelegation) is applied at workspace-creation time instead
+			// (pkg/gateway/rest_workspace_delegation.go's
+			// defaultWorkspaceDelegationEdges), not at agent-creation time.
 			Tools: &config.AgentToolsCfg{
 				Builtin: config.AgentBuiltinToolsCfg{
 					Policies: policies,

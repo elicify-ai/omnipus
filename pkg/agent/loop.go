@@ -390,9 +390,10 @@ type processOptions struct {
 	// InitialDelegationDepth seeds the root turnState depth for a task run. A
 	// task created from within another task run carries a non-zero generation
 	// (task.Task.DelegationDepth); processTaskDirect seeds it here so the
-	// per-agent DelegationPolicy depth gate (currentDelegationDepth) trips on
-	// onward await/background delegation even though a task run otherwise starts
-	// a fresh turn at depth 0. Interactive/chat turns leave this 0.
+	// per-workspace delegation-graph edge's depth gate (currentDelegationDepth)
+	// trips on onward await/background delegation even though a task run
+	// otherwise starts a fresh turn at depth 0. Interactive/chat turns leave
+	// this 0.
 	InitialDelegationDepth int
 }
 
@@ -1458,45 +1459,21 @@ func registerSharedTools(
 			delegateTool := tools.NewDelegateTool(agent.Model, agent.MaxTokens, agent.Temperature)
 			delegateTool.SetSpawner(NewSubTurnSpawner(al))
 			currentAgentID := agentID
-			// delegate: repointed to unified DelegationPolicy.To (FR-6.3).
-			// Falls back to SubagentsConfig.AllowAgents via CanSpawnSubagent
-			// when DelegationPolicy is nil (backward compat, no silent widening).
-			delegateAgentCfg := findAgentConfig(cfg, currentAgentID)
-			delegateTool.SetAllowlistChecker(func(targetAgentID string) bool {
-				toList := config.ResolveDelegationTo(delegateAgentCfg, cfg.Agents.Defaults)
-				if toList != nil {
-					// Canonical unified policy is set — use it.
-					return config.IsDelegationAllowed(toList, targetAgentID)
-				}
-				// Unified policy not set for this agent — fall back to
-				// SubagentsConfig.AllowAgents (legacy path, deny-by-default preserved).
-				return registry.CanSpawnSubagent(currentAgentID, targetAgentID)
-			})
+			// ADR-037: the legacy DelegationPolicy.To / SubagentsConfig.AllowAgents
+			// allowlist checkers (SetAllowlistChecker / SetDelegateChecker) are
+			// retired — config.AgentConfig.DelegationPolicy no longer exists, and
+			// those checkers were only ever consulted as a fallback when the graph
+			// checkers below were nil, which never happens in production wiring.
+			// The per-workspace delegation graph (buildDelegationDenyChecker) is
+			// now the ONLY delegation gate.
+			//
 			// FR-6.2: full-policy gate for the background (async=true, the
-			// default) mode — trust set + mode("background") + depth. Takes
-			// precedence over the allowlist checker and surfaces a reason.
+			// default) mode — trust set + mode("background") + depth.
 			delegateTool.SetDelegationDenyCheckerBackground(
 				// ForDelegate bakes in exempt=false: delegate(agent_id=self) spawns a
 				// real sub-turn and MUST be graph-gated (and thus denied), never exempted.
 				buildDelegationDenyCheckerForDelegate(currentAgentID, cfg.Agents.Defaults, config.DelegationModeBackground),
 			)
-			// FR-6.3: gate the await (async=false) mode too. Uses the unified
-			// DelegationPolicy.To via IsDelegationAllowedAny (no explicit
-			// target for the untargeted case; the check is "can delegate at all").
-			delegateTool.SetDelegateChecker(func() bool {
-				toList := config.ResolveDelegationTo(delegateAgentCfg, cfg.Agents.Defaults)
-				if toList != nil {
-					// Canonical policy present — allowed only if at least one target is permitted.
-					return config.IsDelegationAllowedAny(toList)
-				}
-				// No canonical policy — fall back to SubagentsConfig.AllowAgents existence.
-				// If AllowAgents is non-nil (even empty), the operator set a spawn policy;
-				// treat non-nil as opt-in allowed (AllowAgents nil → deny, per legacy semantics).
-				if delegateAgentCfg != nil && delegateAgentCfg.Subagents != nil {
-					return delegateAgentCfg.Subagents.AllowAgents != nil
-				}
-				return false
-			})
 			// FR-6.2: full-policy gate for the await (async=false) mode. Uses
 			// the same buildDelegationDenyChecker as the background gate
 			// above but with DelegationModeAwait, so a targeted
@@ -1525,7 +1502,6 @@ func registerSharedTools(
 		// Task tools — require a task store (available after first NewAgentLoop call).
 		if al.taskStore != nil {
 			currentAgentID := agentID
-			agentCfg := findAgentConfig(cfg, currentAgentID)
 
 			agent.Tools.Register(tools.NewTaskListTool(al.taskStore))
 
@@ -1534,9 +1510,11 @@ func registerSharedTools(
 			// chat-delegated task has no workspace bound to the turn — never the
 			// literal "default" (which would land it in an invisible workspace).
 			taskCreate.SetHome(filepath.Dir(cfg.WorkspacePath()))
-			taskCreate.SetDelegateChecker(buildDelegateChecker(agentCfg, cfg.Agents.Defaults))
+			// ADR-037: the legacy boolean delegateCheck (SetDelegateChecker,
+			// backed by config.ResolveDelegationTo) is retired — the field it
+			// read no longer exists. The graph-based deny checker below is the
+			// only gate now (it was already the sole gate in production).
 			// FR-6.2: full-policy gate — trust set + mode("task") + depth.
-			// Takes precedence over the boolean delegate checker.
 			taskCreate.SetDelegationDenyChecker(
 				// ForTaskReassignment bakes in exempt=true: assigning a NEW task to
 				// oneself is not delegation (no new instance spawned), not graph-gated.
@@ -1576,9 +1554,10 @@ func registerSharedTools(
 				// drops jobs for terminal tasks); a non-terminal update re-syncs it.
 				al.NotifyTaskUpserted(t)
 			})
+			// ADR-037: legacy SetDelegateChecker retired here too — see the
+			// taskCreate comment above.
 			// FR-6.2: reassignment is re-delegation — gate agent_id changes through
 			// the same trust-set + mode("task") + depth policy as task_create.
-			taskUpdate.SetDelegateChecker(buildDelegateChecker(agentCfg, cfg.Agents.Defaults))
 			taskUpdate.SetDelegationDenyChecker(
 				// ForTaskReassignment bakes in exempt=true: reassigning a task to its
 				// existing owner is a no-op reassignment, not delegation — not graph-gated.
@@ -1848,31 +1827,6 @@ func registerSharedTools(
 	}
 }
 
-// findAgentConfig returns the AgentConfig for the given agent ID, or nil if not found.
-func findAgentConfig(cfg *config.Config, agentID string) *config.AgentConfig {
-	for i := range cfg.Agents.List {
-		if cfg.Agents.List[i].ID == agentID {
-			return &cfg.Agents.List[i]
-		}
-	}
-	return nil
-}
-
-// buildDelegateChecker returns a function that checks whether delegation from agentCfg
-// to a target agent is allowed.
-//
-// FR-6.3 (Spec-3 keystone): repointed to the unified DelegationPolicy.To via
-// config.ResolveDelegationTo + config.IsDelegationAllowed. The legacy
-// CanDelegateTo fields remain as a backward-compat fallback when
-// DelegationPolicy is nil (handled inside ResolveDelegationTo).
-// No silent authz widening: deny-by-default is preserved when toList is nil.
-func buildDelegateChecker(agentCfg *config.AgentConfig, defaults config.AgentDefaults) func(string) bool {
-	toList := config.ResolveDelegationTo(agentCfg, defaults)
-	return func(targetAgentID string) bool {
-		return config.IsDelegationAllowed(toList, targetAgentID)
-	}
-}
-
 // currentDelegationDepth reports the delegation-chain depth of the turn that is
 // about to delegate, read from the turnState carried on ctx. The root user turn
 // has depth 0; each nested sub-turn increments it. Returns 0 when no turnState is
@@ -2082,8 +2036,9 @@ func errString(err error) string {
 // buildDelegationDenyChecker returns the per-workspace, graph-authoritative
 // delegation gate for a targeted delegation tool (delegate with async=true =
 // "background", create_task / update_task = "task"). The per-workspace
-// delegation graph (workspaces/<id>.json → Delegation[] edges) is the SOLE runtime authority:
-// the per-agent config.DelegationPolicy is seed-only and is NOT read here.
+// delegation graph (workspaces/<id>.json → Delegation[] edges) is the SOLE
+// runtime authority (ADR-037) — there is no separate per-agent delegation
+// policy at all; it is never read here.
 //
 // It enforces, in order, returning the first violation (nil = allowed):
 //
@@ -2137,9 +2092,9 @@ func errString(err error) string {
 // prohibition as the guard, and with a distinct reason so the caught bypass
 // attempt is distinguishable from a routine trust_set denial.
 //
-// defaults is only consulted for its SubTurn.MaxDepth global depth cap — the
-// per-agent config.DelegationPolicy it used to carry is no longer read (the
-// graph supersedes it).
+// defaults is only consulted for its SubTurn.MaxDepth global depth cap — there
+// is no per-agent config.DelegationPolicy to read anymore (ADR-037); the
+// per-workspace graph is the sole authority.
 func buildDelegationDenyChecker(
 	currentAgentID string,
 	defaults config.AgentDefaults,
@@ -3276,8 +3231,8 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	}
 
 	// Re-wire per-turn delegation injectors on the new registry so that the
-	// updated DelegationPolicy (from the fresh AgentInstances) is reflected
-	// on every agent's next turn without a static-prompt cache bust.
+	// updated per-workspace delegation graph (read fresh per call) is
+	// reflected on every agent's next turn without a static-prompt cache bust.
 	wireDelegationInjectors(al, registry)
 
 	// Re-wire per-turn working-directory injectors on the new registry, same

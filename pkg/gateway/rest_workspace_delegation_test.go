@@ -29,6 +29,7 @@ import (
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
@@ -437,27 +438,26 @@ func intPtrGW(n int) *int { return &n }
 
 // TestDefaultWorkspaceSeeder_TeamAndEdges proves ensureDefaultWorkspace seeds the
 // team + edges from a config carrying seeded per-agent delegation policies.
+//
+// ADR-037 (Wave 2) rewrote defaultWorkspaceDelegationEdges to read
+// coreagent.SeedDelegationEdges(id) directly instead of
+// cfg.Agents.List[i].DelegationPolicy — that field no longer exists on
+// AgentConfig at all. This test therefore can no longer construct arbitrary
+// custom DelegationPolicy values on the fixture AgentConfigs (there is
+// nowhere left to put them); it instead uses the REAL core-agent IDs so the
+// REAL coreagent seed matrix (coreAgentDelegation) drives the edges, and
+// asserts the exact resulting graph.
 func TestDefaultWorkspaceSeeder_TeamAndEdges(t *testing.T) {
 	home := t.TempDir()
-	depth := 3
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			List: []config.AgentConfig{
 				{ID: "mia", Type: config.AgentTypeCore},
-				{ID: "jim", Type: config.AgentTypeCore, DelegationPolicy: &config.DelegationPolicy{
-					To:    []config.AgentRef{{Kind: config.AgentRefKindLocal, ID: "planner"}},
-					Modes: []config.DelegationMode{config.DelegationModeTask},
-					Depth: &depth,
-				}},
+				{ID: "jim", Type: config.AgentTypeCore},
 				{ID: "ava", Type: config.AgentTypeCore},
 				{ID: "ray", Type: config.AgentTypeCore},
-				{ID: "planner", Type: config.AgentTypeWorker, DelegationPolicy: &config.DelegationPolicy{
-					To: []config.AgentRef{
-						{Kind: config.AgentRefKindLocal, ID: "explorer"},
-						{Kind: config.AgentRefKindLocal, ID: "researcher"},
-					},
-					Modes: []config.DelegationMode{config.DelegationModeAwait},
-				}},
+				{ID: "worker", Type: config.AgentTypeWorker},
+				{ID: "planner", Type: config.AgentTypeWorker},
 				{ID: "explorer", Type: config.AgentTypeWorker},
 				{ID: "researcher", Type: config.AgentTypeWorker},
 			},
@@ -470,18 +470,128 @@ func TestDefaultWorkspaceSeeder_TeamAndEdges(t *testing.T) {
 	require.Len(t, wss, 1)
 	ws := wss[0]
 	assert.True(t, ws.IsDefault)
+	// defaultWorkspaceTeam's hardcoded roster (pre-existing, untouched by
+	// ADR-037) deliberately excludes the general-purpose worker from the
+	// default workspace team — only the 4 base agents + the 3 specialists.
+	// seedEdgesForTeam then drops any edge whose endpoint is off-team, so
+	// every →worker edge in the coreagent seed matrix is filtered out below.
 	assert.ElementsMatch(t,
 		[]string{"mia", "jim", "ava", "ray", "planner", "explorer", "researcher"},
 		ws.CoreTeam)
-	// Edges: jim→planner, planner→explorer, planner→researcher.
-	require.Len(t, ws.Delegation, 3)
-	pairs := make(map[string]bool)
+
+	// Edges: the coreAgentDelegation seed matrix restricted to the default
+	// team (no "worker" node) — Jim→ava/ray (Jim→worker dropped, off-team),
+	// Mia→worker and Ava→worker dropped entirely (their only seeded target),
+	// Ray→researcher (Ray→worker dropped), Planner→explorer/researcher.
+	require.Len(t, ws.Delegation, 5)
+	byPair := make(map[string]storedDelegationEdge, len(ws.Delegation))
 	for _, e := range ws.Delegation {
-		pairs[e.FromAgent+"->"+e.ToAgent] = true
+		byPair[e.FromAgent+"->"+e.ToAgent] = e
 	}
-	assert.True(t, pairs["jim->planner"])
-	assert.True(t, pairs["planner->explorer"])
-	assert.True(t, pairs["planner->researcher"])
+	for _, want := range []string{
+		"jim->ava", "jim->ray",
+		"ray->researcher",
+		"planner->explorer", "planner->researcher",
+	} {
+		assert.Contains(t, byPair, want, "expected seeded edge %s", want)
+	}
+	for _, notWant := range []string{"jim->worker", "mia->worker", "ava->worker", "ray->worker"} {
+		assert.NotContains(t, byPair, notWant,
+			"edge %s must be dropped — worker is not on the default workspace team", notWant)
+	}
+
+	// Jim's edges carry all three modes (task, background, await).
+	jimToAva := byPair["jim->ava"]
+	assert.ElementsMatch(t,
+		[]workspace.DelegationMode{workspace.ModeTask, workspace.ModeBackground, workspace.ModeAwait},
+		jimToAva.Modes, "jim->ava must carry Jim's seeded modes")
+
+	// Planner's edges are depth-bounded at 2 (bounded subagent delegation, M5).
+	plannerToExplorer := byPair["planner->explorer"]
+	require.NotNil(t, plannerToExplorer.Depth, "planner->explorer must carry the seeded depth cap")
+	assert.Equal(t, 2, *plannerToExplorer.Depth)
+	assert.ElementsMatch(t,
+		[]workspace.DelegationMode{workspace.ModeAwait, workspace.ModeTask},
+		plannerToExplorer.Modes, "planner->explorer must carry Planner's seeded modes")
+
+	// The two research specialists are leaves: no outgoing edges seeded for them.
+	for _, e := range ws.Delegation {
+		assert.NotEqual(t, "explorer", e.FromAgent, "explorer must not have a seeded outgoing edge")
+		assert.NotEqual(t, "researcher", e.FromAgent, "researcher must not have a seeded outgoing edge")
+	}
+}
+
+// TestDefaultWorkspaceDelegationEdges_MatchesCoreagentSeed is the diff-behavior
+// regression pin ADR-037 (Wave 2) requires: defaultWorkspaceDelegationEdges's
+// output for a config produced by coreagent.SeedConfig (i.e. a genuinely fresh
+// install, with no operator customization) must be byte-for-byte the SAME
+// edge set the pre-ADR-037 implementation produced — that implementation read
+// cfg.Agents.List[i].DelegationPolicy, which on a fresh install was always
+// exactly coreAgentDelegation(id) (coreagent.SeedConfig seeded it verbatim
+// onto every fresh AgentConfig — see the now-deleted seed assignment this ADR
+// removed from pkg/coreagent/core.go). Reading coreagent.SeedDelegationEdges(id)
+// directly is therefore provably equivalent for this case: it is the exact
+// same coreAgentDelegation call, just invoked one hop earlier (at
+// workspace-seed time instead of at agent-seed time). This test asserts that
+// equivalence directly: for every agent id coreagent.SeedConfig seeds, the
+// edges defaultWorkspaceDelegationEdges derives from the live config match
+// coreagent.SeedDelegationEdges(id) field-for-field (target, modes, depth) —
+// proving the ADR-037 rewrite changed WHERE the seed is read from, not WHAT
+// it produces.
+func TestDefaultWorkspaceDelegationEdges_MatchesCoreagentSeed(t *testing.T) {
+	cfg := &config.Config{}
+	require.True(t, coreagent.SeedConfig(cfg), "SeedConfig on empty config must modify")
+
+	got := defaultWorkspaceDelegationEdges(cfg)
+
+	// Build the expected edge set directly from coreagent.SeedDelegationEdges,
+	// independent of defaultWorkspaceDelegationEdges's own implementation, by
+	// replaying the exact same derivation the function's doc comment describes.
+	var want []storedDelegationEdge
+	for i := range cfg.Agents.List {
+		ac := &cfg.Agents.List[i]
+		dp := coreagent.SeedDelegationEdges(coreagent.CoreAgentID(ac.ID))
+		if dp == nil || len(dp.To) == 0 {
+			continue
+		}
+		modes := make([]workspace.DelegationMode, 0, len(dp.Modes))
+		for _, m := range dp.Modes {
+			modes = append(modes, workspace.DelegationMode(m))
+		}
+		var depth *int
+		if dp.Depth != nil {
+			d := *dp.Depth
+			depth = &d
+		}
+		for _, ref := range dp.To {
+			if ref.Kind != config.AgentRefKindLocal || ref.ID == "*" || ref.ID == ac.ID {
+				continue
+			}
+			want = append(want, storedDelegationEdge{
+				FromAgent: ac.ID,
+				ToAgent:   ref.ID,
+				Modes:     append([]workspace.DelegationMode(nil), modes...),
+				Depth:     depth,
+			})
+		}
+	}
+
+	require.Len(t, got, len(want), "edge count must match the coreagent seed exactly")
+	gotByPair := make(map[string]storedDelegationEdge, len(got))
+	for _, e := range got {
+		gotByPair[e.FromAgent+"->"+e.ToAgent] = e
+	}
+	for _, w := range want {
+		g, ok := gotByPair[w.FromAgent+"->"+w.ToAgent]
+		require.True(t, ok, "expected edge %s->%s in defaultWorkspaceDelegationEdges output", w.FromAgent, w.ToAgent)
+		assert.ElementsMatch(t, w.Modes, g.Modes, "modes mismatch for %s->%s", w.FromAgent, w.ToAgent)
+		if w.Depth == nil {
+			assert.Nil(t, g.Depth, "depth mismatch for %s->%s (want nil)", w.FromAgent, w.ToAgent)
+		} else {
+			require.NotNil(t, g.Depth, "depth mismatch for %s->%s (want %d, got nil)", w.FromAgent, w.ToAgent, *w.Depth)
+			assert.Equal(t, *w.Depth, *g.Depth, "depth mismatch for %s->%s", w.FromAgent, w.ToAgent)
+		}
+	}
 }
 
 // TestSeedEdgesForTeam_PartialRosterDropsOffTeamEdge proves a custom core_team
