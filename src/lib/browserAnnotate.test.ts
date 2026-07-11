@@ -71,7 +71,9 @@ describe('submitAnnotation', () => {
     })
     expect(sendMessageSpy).toHaveBeenCalledTimes(1)
     const [comment, opts] = sendMessageSpy.mock.calls[0]
-    expect(comment).toBe('What does this do?\n\nElement: button — Submit')
+    expect(comment).toBe(
+      'What does this do?\n\n[Auto-detected context for the annotated region (<button>): "Submit". The attached image is the source of truth — describe what you see there.]',
+    )
     expect(opts.mediaRefs).toEqual(['media://ref-1'])
     expect(opts.attachments).toEqual([
       { type: 'image', url: '/api/v1/uploads/sess-1/annotation_abc.png', filename: 'annotation.png', contentType: 'image/png' },
