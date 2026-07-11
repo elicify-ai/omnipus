@@ -54,7 +54,7 @@ UI; inherits `agents.defaults`.
 | `max_tool_iterations` (per-turn cap) | O (editable; Execution knobs exposed for locked, decided 2026-07-03) | O (default 200/turn) | O (default 200/turn) | — excluded (operator-decided 2026-07-03; the external CLI runs its own loop; schema-rejected on create, 400 on update) |
 | `steering_mode` | O (Main-surface concept) | O (**Main-only** among user types; workers forced `one-at-a-time` server-side) | — | — |
 | `rate_limits` | O | O | O | O (calls still metered at the gateway) |
-| `delegation_policy` / `can_delegate_to` | O (e.g. Jim's orchestration edges) | O | O (as delegation *target*) | O (as delegation *target*) |
+| ~~`delegation_policy` / `can_delegate_to`~~ — **removed by [ADR-037]** (delegation is workspace-scoped; edit via the workspace Team tab, `pkg/workspace/delegation.go`) | — | — | — | — |
 | `default` (★ default agent) | O (Mia seeded default) | O | — (workers are never chat targets) | — |
 | `heartbeat` | — **moved**: workspace-scoped (`member_configs`, ADR-027) — not an agent field for any type | — | — | — |
 | `workspace` membership | via workspace `core_team` | via `core_team` | via `core_team` | via `core_team` |
@@ -88,8 +88,8 @@ UI; inherits `agents.defaults`.
    create (discriminated-union variant), 400 on update, hidden in UI.
 2. `timeout_seconds` on `subagent_3p`: **kept** — process-level kill for a
    hung CLI; settable at create (slim Advanced) and edit.
-3. `delegation_policy` on `subagent_3p` create: **allowed** (matrix +
-   update-path consistency; previously 400).
+3. ~~`delegation_policy` on `subagent_3p` create: **allowed** (matrix +
+   update-path consistency; previously 400).~~ — **superseded by [ADR-037]:** the `delegation_policy` field no longer exists for any agent type; `PUT`/create now 400 on it via a raw-body sniff. Delegation is workspace-scoped (workspace Team tab).
 4. The create contract is a discriminated union (`AgentCreateRequestMain` /
    `AgentCreateRequestSubagent` / `AgentCreateRequestSubagent3p`, hosted
    inline in `contracts/openapi.yaml`, `additionalProperties: false`,
@@ -98,3 +98,5 @@ UI; inherits `agents.defaults`.
    Ratified — including WHY the union wrapper is inline (oapi-codegen
    file-ref-oneOf limitation) and the breaking-change notes — in
    [ADR-034](ADR-034-agent-create-discriminated-union.md).
+
+[ADR-037]: ADR-037-remove-global-delegation-policy.md

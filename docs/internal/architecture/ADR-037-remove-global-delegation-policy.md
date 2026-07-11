@@ -80,6 +80,7 @@ Verified against the tree at `hotfix/v0.1.1` @ `4a2526a4` on 2026-07-11. Wave 2 
   - `pkg/gateway/rest_workspace_delegation.go` — `defaultWorkspaceDelegationEdges` (`:170-205`): repoint to the relocated seed source (keep the function; change where `dp` comes from).
   - `pkg/gateway/rest.go`, `pkg/gateway/rest_agent_delegation.go` — any create/update handler reads of `delegation_policy`.
   - `pkg/task/task.go`, `pkg/tools/result.go` — incidental `DelegationPolicy` references to audit.
+  - **[Found during Wave 2 review, 2026-07-11 — missing from the original list above.]** `pkg/sysagent/tools/agent.go` — the `create_agent`/`update_agent` system-tool schema still advertises a `can_delegate_to` parameter that writes `config.AgentConfig.CanDelegateTo`, a field whose last reader this removal deleted. An LLM agent (e.g. Ava) can still set it, believing it grants delegation trust, but it is now completely inert. Flagged independently by silent-failure-hunter and comment-analyzer; the parameter and the `CanDelegateTo` field are being removed by the Wave 2 backend track (see §7).
 - **Contracts (delete the per-agent field; keep the graph):**
   - Remove `delegation_policy` from `contracts/components/schemas/{Agent,AgentCreateRequestMain,AgentCreateRequestSubagent,AgentCreateRequestSubagent3p,AgentUpdateRequest}.yaml` and the mirrored `pkg/gateway/inboundschemas/` copies; regenerate `pkg/api/generated/{openapi_types.gen.go,contract_test.go,fixtures.go}` and `src/lib/api/generated/{openapi-types.ts,schemas.ts}`.
   - Correct prose in `contracts/components/schemas/WorkspaceDelegation.yaml` (`:7`) and `ExecutorConfig.yaml` (`:25`).
@@ -102,4 +103,17 @@ Verified against the tree at `hotfix/v0.1.1` @ `4a2526a4` on 2026-07-11. Wave 2 
 
 ## 7. Post-decision review & fixes
 
-Reserved. This ADR records a decision whose implementation is carried out by a separate track (Wave 2). Per the mandatory 7-reviewer quality gate (CLAUDE.md), Wave 2's removal diff must pass architect + the six pr-review-toolkit reviewers before it merges to base; any regressions found there (in particular the `PUT`-decode-strictness question raised in §4, mirroring ADR-035 §7 finding #2) are to be recorded here at that time.
+The Wave 2 removal diff (backend + frontend) went through the mandatory 7-reviewer gate (architect + the six pr-review-toolkit reviewers). The removal itself was approved clean by most reviewers. Findings recorded 2026-07-11:
+
+1. **`PUT`-decode-strictness question (§4) — RESOLVED.** Wave 2 implemented the ADR-035 §7 finding #2 fix: `PUT /api/v1/agents/{id}` now sniffs the raw request body for a `delegation_policy` key and returns an explicit 400 (mirroring the `sandbox_profile` precedent) rather than silently dropping the retired field. The config-load path tolerates a legacy persisted `delegation_policy` (ignore-and-load), so a pre-upgrade `config.json` still loads without error.
+
+2. **Seed relocation done.** The `DelegationPolicy` shape survives only as an unexported seed DTO for new-workspace bootstrap (`coreagent.SeedDelegationEdges`); it is never persisted on `AgentConfig` and never crosses the wire. `defaultWorkspaceDelegationEdges` was repointed to it.
+
+3. **Inert `can_delegate_to` system-tool parameter (silent-failure-hunter + comment-analyzer, converged).** `pkg/sysagent/tools/agent.go` still advertised a `can_delegate_to` parameter writing `AgentConfig.CanDelegateTo`, whose last reader this removal deleted — a settable-but-inert knob an LLM agent could believe grants trust. Recorded in §5 as a found-during-review addendum; the parameter and field are removed by the Wave 2 backend track.
+
+4. **Stale-reference sweep (comment-analyzer, repo-wide).** Several living reference docs and one code comment still described the retired mechanism as active. Corrected in a follow-up commit (this ADR's own author, except where noted):
+   - `pkg/workspace/workspace.go`'s `Delegation` field doc comment repeated the exact false *"the per-agent delegation_policy remains the enforcement cap"* claim this ADR was written to correct (also independently found by architect) — corrected by the Wave 2 backend track.
+   - `CLAUDE.md`'s "Delegation identity" entry carried a stale `DelegationPolicy` field-list claim and had no ADR-037 entry — corrected and a "Delegation Graph removal (ADR-037)" entry added by the coordinator.
+   - `docs/internal/architecture/ADR-032` (header amendment block) still listed `DelegationPolicy` among the fields `spawnSubTurn` sources from the target — a dated `2026-07-11` amendment was appended.
+   - `docs/internal/architecture/agent-types-field-matrix.md`, `docs/internal/specs/agent-config-matrix-spec.md`, and `docs/internal/specs/agent-form-requirements.md` still documented `delegation_policy.*` and the `/agents/trust` editor as active fields/surfaces — struck and marked "removed by ADR-037" at each site.
+   - `docs/internal/specs/v01-spec3-agents-delegation-orchestrator-spec.md` (the original planning spec for the retired design) — a "Superseded by ADR-037" banner was added at the top rather than rewriting the dated planning doc.
