@@ -41,3 +41,13 @@ Add an authenticated `POST /api/v1/browser/inspect` (OpenAPI contract: `BrowserI
 2. **Parallel dev:** BE-1 (navigate + SSRF), BE-2 (inspect endpoint, disjoint new files), FE (launcher + URL bar + hand-to-agent + annotate/crop-attach + inspect-call — one owner of `BrowserLiveView`).
 3. **Tests** → **7-reviewer gate** → fix.
 4. **UAT matrix** (2 independent human-tester agents, edge cases + usability) → fix. No deferrals.
+
+## Post-review amendments (2026-07-11, after the 7-reviewer gate)
+
+Corrections so this record matches the shipped code, plus the fixes folded back:
+
+- **D-B3 as-built:** the inspect endpoint runs `document.elementFromPoint(x,y)` via `chromedp.Evaluate` on the shared tab (CSS-pixel viewport space; text/HTML truncated in-page before returning) — **not** `DOM.getNodeForLocation`/`getOuterHTML`/`getBoxModel`, and `cdproto/dom` is not used. It runs via `BrowserManager.Session` + a `PageTimeout`-bounded `chromedp.Run` (the same lock-free pattern the read-only browser tools use), **not** `LiveView.runCDP`. The request is `BrowserInspectRequest{session_id, agent_id, x, y}` — there are no `width`/`height` fields.
+- **D-B1 click behaviour:** a click (sub-threshold drag) synthesizes a small fixed-size box centred on the point — it does **not** select the clicked element's bounding box (element-bounds selection is a deferred enhancement).
+- **D-B2 send path:** because `BrowserLivePanel` mounts outside the assistant-ui runtime, the annotation is sent **directly** (`uploadFiles` → media ref → chat-store `sendMessage`), not via `composerRuntime.addAttachment`. Hand-to-agent uses a `composerPrefill` ui-store bridge consumed by `ChatScreen`.
+- **D-A1 launcher:** shown for **all** agents (a client-side browser-capability check isn't cheaply available from the agents list); an agent without browser tools yields a clear `browser_status(error)` in the panel — accepted as the v1 behaviour.
+- **Fixes applied after the gate:** SSRF `ValidateURL` is now `PageTimeout`-bounded (no DNS hang on the WS read-loop); the annotate/take-control mutual-exclusion race is fixed (the reactive revert that made "Annotate" no-op on first click while driving is removed; guards remain procedural); a `browser_status(error)` no longer drops the local "controlling" state; a zero-axis drag no longer throws (guarded → toast+reset); annotating while a turn is streaming warns instead of silently losing the message; the composer-prefill no longer clobbers a non-empty draft; annotation targets the panel's pinned (session, agent); "Hand to agent" is hidden in the pop-out (where the chat composer is unreachable); inspect logs real CDP errors before collapsing to `ok:false`.
