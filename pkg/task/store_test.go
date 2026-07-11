@@ -101,6 +101,100 @@ func TestUpdatePartial(t *testing.T) {
 	}
 }
 
+// TestUpdate_TransitionToInProgress_StampsStartedAt is a regression test for
+// the Board card bug where "Started" never populated: a plain Update() call
+// that flips status into in_progress (the path the REST PATCH "Start" action
+// uses — see rest_tasks.go's handleTaskUpdate, which calls Store.Update
+// directly rather than ClaimForRun) must stamp StartedAt itself when the
+// caller did not supply one, mirroring what ClaimForRun already does for the
+// scheduler/heartbeat dispatch path.
+func TestUpdate_TransitionToInProgress_StampsStartedAt(t *testing.T) {
+	s := newStore(t)
+	tk := mkTask("t", "ws")
+	if err := s.Create(tk); err != nil {
+		t.Fatal(err)
+	}
+	if tk.StartedAt != "" {
+		t.Fatalf("newly-created task must start with empty StartedAt, got %q", tk.StartedAt)
+	}
+
+	newStatus := StatusInProgress
+	got, err := s.Update(tk.ID, Patch{Status: &newStatus})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if got.Status != StatusInProgress {
+		t.Fatalf("status not applied: %+v", got)
+	}
+	if got.StartedAt == "" {
+		t.Fatal("Update did not auto-stamp StartedAt on transition into in_progress")
+	}
+	if _, perr := time.Parse(time.RFC3339, got.StartedAt); perr != nil {
+		t.Fatalf("StartedAt is not a valid RFC 3339 timestamp: %q (%v)", got.StartedAt, perr)
+	}
+
+	// Persisted, not just returned in-memory.
+	reread, err := s.Get(tk.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if reread.StartedAt != got.StartedAt {
+		t.Fatalf("StartedAt did not persist: got %q on reread, want %q", reread.StartedAt, got.StartedAt)
+	}
+}
+
+// TestUpdate_InProgressNoOp_DoesNotRestampStartedAt verifies that a same-
+// status PATCH (task already in_progress) does not overwrite the original
+// StartedAt — only a genuine transition INTO in_progress stamps it.
+func TestUpdate_InProgressNoOp_DoesNotRestampStartedAt(t *testing.T) {
+	s := newStore(t)
+	tk := mkTask("t", "ws")
+	tk.Status = StatusNext
+	if err := s.Create(tk); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := s.ClaimForRun(tk.ID, time.Now())
+	if err != nil {
+		t.Fatalf("ClaimForRun: %v", err)
+	}
+	original := claimed.StartedAt
+	if original == "" {
+		t.Fatal("ClaimForRun must have stamped StartedAt")
+	}
+
+	// A no-op status PATCH (already in_progress) must not re-stamp.
+	sameStatus := StatusInProgress
+	got, err := s.Update(tk.ID, Patch{Status: &sameStatus})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if got.StartedAt != original {
+		t.Fatalf("no-op in_progress PATCH re-stamped StartedAt: got %q, want unchanged %q", got.StartedAt, original)
+	}
+}
+
+// TestUpdate_ExplicitStartedAt_OverridesAutoStamp verifies that an
+// explicitly-supplied patch.StartedAt (e.g. from TaskUpdateTool's own
+// self-report, or a future wire-supplied value) always wins over the
+// store's auto-stamp.
+func TestUpdate_ExplicitStartedAt_OverridesAutoStamp(t *testing.T) {
+	s := newStore(t)
+	tk := mkTask("t", "ws")
+	if err := s.Create(tk); err != nil {
+		t.Fatal(err)
+	}
+
+	explicit := "2020-01-01T00:00:00Z"
+	newStatus := StatusInProgress
+	got, err := s.Update(tk.ID, Patch{Status: &newStatus, StartedAt: &explicit})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if got.StartedAt != explicit {
+		t.Fatalf("explicit StartedAt was overridden: got %q, want %q", got.StartedAt, explicit)
+	}
+}
+
 func TestUpdateNotFound(t *testing.T) {
 	s := newStore(t)
 	st := StatusDone
