@@ -1043,7 +1043,21 @@ describe('ChatStore_ReplaySequence_MatchesLiveSequence', () => {
     const liveContent = liveAssistant!.content
     // After done, tool calls are baked into message.tool_calls and live map is cleared.
     const liveBakedToolCalls = liveAssistant!.tool_calls ?? []
-    expect(liveContent).toBe('AB')
+    // Live-UAT regression fix (persona "Dana"): a tool call starting while the
+    // bubble still holds text is a new-logical-unit boundary — the next token
+    // gets a paragraph break instead of gluing directly onto the trailing
+    // text (previously 'AB' with zero separator, matching the exact bug
+    // repro shape "...now.Now delegating..."). See `pendingTextBoundary` on
+    // ChatMessage. This diverges from the byte-for-byte live/replay parity
+    // asserted below ONLY in this whitespace-formatting respect: the real
+    // backend persists a tool-call-interrupted turn's pre/post narration as
+    // SEPARATE transcript entries (pkg/agent/turn.go
+    // appendIntermediateAssistantTranscript, Bug #416 fix), which replay
+    // reconstructs as separate bubbles — not the single reused-bubble shape
+    // this synthetic fixture exercises — so real replay never hits the glue
+    // bug this fixes. The content-parity assertion below is normalized to
+    // ignore this whitespace-only difference accordingly.
+    expect(liveContent).toBe('A\n\nB')
     expect(liveBakedToolCalls).toHaveLength(1)
     expect(liveBakedToolCalls[0].tool).toBe('shell')
     expect(liveBakedToolCalls[0].status).toBe('success')
@@ -1095,8 +1109,13 @@ describe('ChatStore_ReplaySequence_MatchesLiveSequence', () => {
     expect(replayAssistant).toBeDefined()
 
     // ── Assert shape parity ────────────────────────────────────────────────────
-    // Content must match
-    expect(replayAssistant!.content).toBe(liveContent)
+    // Content must match modulo whitespace: the live path now inserts a
+    // paragraph break at the tool-call boundary (see comment above
+    // `liveContent`'s assertion) — replay's single `replay_message` fixture
+    // here has no equivalent boundary to break at, so it stays 'AB'. The
+    // WORDS must still be identical; only the deliberate live-only
+    // formatting differs.
+    expect(replayAssistant!.content.replace(/\s+/g, '')).toBe(liveContent.replace(/\s+/g, ''))
 
     // Tool-call count must match (both baked into message.tool_calls after done)
     const replayBakedToolCalls = replayAssistant!.tool_calls ?? []
