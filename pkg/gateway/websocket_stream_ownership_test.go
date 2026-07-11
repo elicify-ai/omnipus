@@ -24,6 +24,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"testing"
 	"time"
 
@@ -243,4 +244,121 @@ func TestWsStreamer_Finalize_ShadowStreamStillPersistsCompleteCorrectTranscript(
 	assert.Equal(t, "FINAL_SYNTHESIZED_ANSWER-delegate research complete", shadowEntry.Content,
 		"a shadow stream's content must be fully and correctly persisted even though live delivery was withheld")
 	assert.Equal(t, "worker-delegate", shadowEntry.AgentID)
+}
+
+// TestWsStreamer_AbandonedPathReleasesOwnership_NextConcurrentTurnBecomesLive
+// is the regression test for a CRITICAL bug unanimously flagged by a
+// 7-reviewer gate (architect, silent-failure-hunter, type-design-analyzer,
+// pr-test-analyzer): turnState.finalizeStreamer's B4 abandoned-turn early
+// return (pkg/agent/turn.go) skips the whole Finalize call — Finalize being
+// the ONLY place a wsStreamer released its WSHandler.streamOwners live-
+// stream ownership claim before this fix. A background delegate that became
+// the live owner for a chatID and was later MarkAbandoned()'d (cancel.go
+// PHASE C, 5s after a hard-abort escalation) left that chatID's ownership
+// entry stuck on the dead turn's ID forever — no TTL, no sweep, no
+// WS-teardown hook ever touches streamOwners — permanently shadowing every
+// later turn on the same chat.
+//
+// This test simulates that exact abandoned path by calling
+// streamA.ReleaseStreamOwnership() directly instead of streamA.Finalize(...)
+// — precisely mirroring what turnState.finalizeStreamer's abandoned branch
+// now does via the streamOwnershipReleaser optional interface (pkg/agent
+// cannot be imported here — gateway imports agent, not the reverse — so this
+// exercises the SAME production method pkg/agent's type assertion resolves
+// to on a real *wsStreamer; see TestTurnState_Abandoned_ReleasesStreamOwnership
+// in pkg/agent/turn_test.go for the companion test proving finalizeStreamer
+// actually calls it).
+//
+// BDD: Given stream A has claimed live-stream ownership for a chatID (via
+// Update) and a second stream B on the same chatID is consequently shadowed,
+// When A's turn is abandoned — releasing ownership via
+// ReleaseStreamOwnership instead of the normal Finalize path — and a THIRD
+// stream C (a later, unrelated turn) then calls Update on the same chatID,
+// Then C successfully claims live ownership and its frames are delivered —
+// the chatID is NOT permanently shadowed.
+func TestWsStreamer_AbandonedPathReleasesOwnership_NextConcurrentTurnBecomesLive(t *testing.T) {
+	h, _, al := newTestWSHandler(t)
+	t.Cleanup(al.Close)
+	wch := newWebchatChannel(h)
+
+	const chatID = "chat-abandoned-releases-ownership"
+	streamA, chA := buildOwnershipTestStreamer(t, h, wch, chatID, "turn-A-abandoned")
+	streamB, chB := buildOwnershipTestStreamer(t, h, wch, chatID, "turn-B-shadow")
+
+	// A claims the slot first (simulating the background delegate that will
+	// later be abandoned).
+	require.NoError(t, streamA.Update(context.Background(), "delegate narration before stop"))
+	drainTokenFrame(t, chA, 2*time.Second)
+
+	// B is shadow while A owns the slot — proves the claim really is held.
+	require.NoError(t, streamB.Update(context.Background(), "should be withheld while A owns the slot"))
+	assertNoFrame(t, chB, 300*time.Millisecond)
+
+	// A's turn is abandoned (cancel.go PHASE C): finalizeStreamer's B4 branch
+	// never calls Finalize, only ReleaseStreamOwnership via the optional
+	// interface. Simulate exactly that here.
+	streamA.ReleaseStreamOwnership()
+
+	// A THIRD, later, unrelated turn now claims the freshly-released slot.
+	// BUG REGRESSION: before this fix, nothing ever released A's claim once
+	// it was abandoned, so this Update would be silently withheld forever —
+	// the chatID permanently shadowed.
+	streamC, chC := buildOwnershipTestStreamer(t, h, wch, chatID, "turn-C-later")
+	require.NoError(t, streamC.Update(context.Background(), "later turn, must stream live"))
+	frameC := drainTokenFrame(t, chC, 2*time.Second)
+	assert.Equal(t, "later turn, must stream live", frameC.Content,
+		"BUG REGRESSION: an abandoned turn's live-stream ownership claim must be released "+
+			"even though Finalize is never called, or every later turn on the same chatID is "+
+			"permanently shadowed")
+
+	// Idempotency: releasing an already-released (or never-held) claim must
+	// not panic or affect a different, still-live owner.
+	require.NotPanics(t, func() { streamA.ReleaseStreamOwnership() })
+	require.NoError(t, streamC.Update(context.Background(), " still live after a redundant release call"))
+	frameC2 := drainTokenFrame(t, chC, 2*time.Second)
+	assert.Equal(t, " still live after a redundant release call", frameC2.Content)
+}
+
+// TestClaimStreamOwnership_StaleClaimIsForceReclaimed exercises the
+// defense-in-depth backstop (streamOwnershipStaleAfter): an unreleased claim
+// older than the staleness threshold degrades to "reclaimable by a new
+// turn" rather than shadowing a chatID forever, protecting against any
+// FUTURE bug in this family (not just the abandoned-turn path this wave
+// fixed directly).
+func TestClaimStreamOwnership_StaleClaimIsForceReclaimed(t *testing.T) {
+	var owners sync.Map
+	owners.Store("chat-stale", streamOwnerClaim{
+		turnID:    "turn-old-leaked",
+		claimedAt: time.Now().Add(-streamOwnershipStaleAfter - time.Minute),
+	})
+
+	ok := claimStreamOwnership(&owners, "chat-stale", "turn-new")
+	assert.True(t, ok, "a claim older than streamOwnershipStaleAfter must be force-reclaimable by a new turn")
+
+	actual, loaded := owners.Load("chat-stale")
+	require.True(t, loaded)
+	claim, ok := actual.(streamOwnerClaim)
+	require.True(t, ok)
+	assert.Equal(t, "turn-new", claim.turnID, "the stored claim must now belong to the reclaiming turn")
+}
+
+// TestClaimStreamOwnership_FreshClaimIsNotReclaimed proves the staleness
+// backstop does not weaken the normal, fast-path ownership gate: a claim
+// well within streamOwnershipStaleAfter held by a different turn must still
+// deny a concurrent claimant, exactly like before the staleness feature was
+// added.
+func TestClaimStreamOwnership_FreshClaimIsNotReclaimed(t *testing.T) {
+	var owners sync.Map
+	owners.Store("chat-fresh", streamOwnerClaim{
+		turnID:    "turn-current-owner",
+		claimedAt: time.Now(),
+	})
+
+	ok := claimStreamOwnership(&owners, "chat-fresh", "turn-other")
+	assert.False(t, ok, "a fresh (non-stale) claim held by a different turn must not be reclaimed")
+
+	actual, loaded := owners.Load("chat-fresh")
+	require.True(t, loaded)
+	claim := actual.(streamOwnerClaim)
+	assert.Equal(t, "turn-current-owner", claim.turnID, "the original owner's claim must be untouched")
 }
