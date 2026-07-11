@@ -32,6 +32,7 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -50,6 +51,36 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/elicify-ai/omnipus/pkg/tools/browser"
 )
+
+// browserWSSkipIfNoBrowser mirrors pkg/tools/browser/browser_e2e_test.go's
+// skipIfNoBrowser convention (that helper lives in an internal test file of
+// a different package, so it isn't importable here — duplicating this tiny
+// probe avoids adding a cross-package test dependency for one helper): skip
+// in CI unless explicitly opted in, and probe each candidate Chromium/Chrome
+// binary with --version rather than trusting exec.LookPath alone, since
+// Ubuntu ships a snap stub at /usr/bin/chromium-browser that exits 1 on
+// launch. Used by the handful of tests in this file that need a REAL
+// attach()→CDP screencast round trip (everything else in this file
+// deliberately avoids that — see the file's header comment) — those tests
+// SKIP here (this devpod has no working Chromium binary) but run for real
+// wherever a working browser is available.
+func browserWSSkipIfNoBrowser(t *testing.T) {
+	t.Helper()
+	if os.Getenv("CI") != "" && os.Getenv("OMNIPUS_BROWSER_E2E") == "" {
+		t.Skip("skipping browser E2E test in CI — set OMNIPUS_BROWSER_E2E=1 to enable")
+	}
+	for _, name := range []string{"chromium-browser", "chromium", "google-chrome", "google-chrome-stable"} {
+		path, err := exec.LookPath(name)
+		if err != nil {
+			continue
+		}
+		probe := exec.Command(path, "--version")
+		if probe.Run() == nil {
+			return // real browser found
+		}
+	}
+	t.Skip("skipping browser E2E test: no working Chromium/Chrome binary found in PATH")
+}
 
 // browserFrameDecoder is a test-only decode target for server→client
 // browser-live frames (browser_status / error). Not a wire-format type —
@@ -731,4 +762,168 @@ func TestBrowserWS_HandleControl_UnknownAction_Rejected(t *testing.T) {
 
 	assert.False(t, state.mgr.Live().IsControlled(browser.DefaultSessionID),
 		"an unknown action must not grant control as a side effect")
+}
+
+// ---------------------------------------------------------------------------
+// Real-input-error throttle is content-aware (7-reviewer LOW finding)
+// ---------------------------------------------------------------------------
+
+// TestBrowserWS_HandleInput_ThrottleIsContentAware verifies the
+// minInputErrorInterval cooldown only suppresses a REPEATED, IDENTICAL
+// failure message — never a genuinely different one, even inside the same
+// window. Producing two truly distinct dispatchInput failures needs an
+// attached, real CDP tab (see this file's header comment on why full
+// attach+screencast is reserved for the browserWSSkipIfNoBrowser-gated
+// suite), so the "different message" half of this test pre-seeds
+// browserConnState.lastInputErrorMessage with a synthetic prior value —
+// isolating the throttle's own content-comparison logic (handleInput's
+// `message != state.lastInputErrorMessage || ... >= minInputErrorInterval`
+// condition) from dispatchInput's specific failure text.
+// BDD: Given a real dispatch failure (control taken but never attached, so
+// dispatchInput fails closed at "session is not attached" every time),
+// When the SAME failure repeats immediately (within minInputErrorInterval),
+// Then only the first browser_status(error) frame is sent.
+// And when the connection's last-recorded message differs from the new
+// failure's own message,
+// Then the new frame is sent immediately, even inside the same window.
+func TestBrowserWS_HandleInput_ThrottleIsContentAware(t *testing.T) {
+	handler, _ := newBrowserWSTestHandler(t, nil)
+	wc, state := newControlTestFixtures(t)
+	require.True(t, state.mgr.Live().TakeControl(browser.DefaultSessionID, "viewer1"),
+		"test setup: take control WITHOUT a real attach, so dispatchInput fails deterministically "+
+			"and identically every call ('session is not attached', tabCtx nil) — no CDP/browser needed")
+
+	navURL := "http://8.8.8.8/"
+	navigateFrame, err := json.Marshal(generated.BrowserInputFrame{
+		Type: string(generated.WsFrameTypeBrowserInput), Kind: "navigate", Url: &navURL,
+	})
+	require.NoError(t, err)
+
+	// First call: nothing recorded yet, must send immediately.
+	handler.handleInput(wc, state, "viewer1", navigateFrame)
+	first := readWCFrame(t, wc, 2*time.Second)
+	assert.Equal(t, "browser_status", first.Type)
+	assert.Equal(t, "error", first.State)
+	assert.NotEmpty(t, first.Message)
+
+	// Second call, immediately after (well inside minInputErrorInterval),
+	// with the IDENTICAL underlying failure — must be throttled (no frame).
+	handler.handleInput(wc, state, "viewer1", navigateFrame)
+	select {
+	case f := <-wc.sendCh:
+		t.Fatalf("an identical repeated error must still be throttled inside minInputErrorInterval, got: %s", f)
+	case <-time.After(300 * time.Millisecond):
+		// expected: nothing sent
+	}
+
+	// Simulate the connection's last-sent message having been something
+	// else (in production this would be a genuinely different failure, e.g.
+	// a different blocked navigate URL) — the throttle must compare against
+	// the CURRENT failure's own message and send immediately, not stay
+	// suppressed just because it landed inside the same 2s window.
+	state.lastInputErrorMessage = "a completely different prior failure message"
+	handler.handleInput(wc, state, "viewer1", navigateFrame)
+	third := readWCFrame(t, wc, 2*time.Second)
+	assert.Equal(t, "browser_status", third.Type)
+	assert.Equal(t, "error", third.State)
+	assert.NotEqual(t, "a completely different prior failure message", third.Message,
+		"the frame sent must carry the NEW dispatch failure's own message, not the pre-seeded one")
+}
+
+// ---------------------------------------------------------------------------
+// Full WS round trip: browser_attach → browser_control{take} →
+// browser_input{navigate} (ADR-039 D-A2, 7-reviewer MEDIUM finding)
+// ---------------------------------------------------------------------------
+
+// TestBrowserWS_Input_Navigate_SSRFBlocked_FullRoundTrip is a real,
+// end-to-end (real headless Chromium, real WS socket, real attach + real CDP
+// screencast) regression guard for ADR-039 D-A2's live-WS navigate SSRF
+// gate: attach to a real agent's browser manager, take control, then send
+// browser_input{kind:"navigate", url:"http://127.0.0.1/"} over the wire, and
+// confirm a browser_status(error) naming the block comes back — proving
+// handleInput's wire-to-engine URL translation (`if frame.Url != nil {
+// in.URL = *frame.Url }`) reaches dispatchInput's SSRF gate end to end, not
+// just via the pkg/tools/browser-internal LiveView tests (live_test.go),
+// which stub out CDP entirely and never touch this handler's own JSON
+// decode/field-mapping line.
+//
+// Unlike every other test in this file (see the file's header comment), this
+// one genuinely needs handleAttach's mgr.Live().Attach() to succeed, which
+// starts a real CDP screencast (page.StartScreencast) against a real tab —
+// so it is gated by browserWSSkipIfNoBrowser exactly like
+// pkg/tools/browser's own skipIfNoBrowser-gated E2E suite: SKIP (never a
+// false pass, never a hang) wherever no working Chromium/Chrome binary is
+// available (e.g. this devpod's Ubuntu snap-stub chromium-browser), REAL
+// coverage everywhere one is.
+// BDD: Given a real agent with a registered, real BrowserManager,
+// When the client attaches, takes control, then sends
+// browser_input{kind:"navigate", url:"http://127.0.0.1/"},
+// Then the server responds browser_status{state:"error"} naming the SSRF
+// block, and the CDP navigate is never actually dispatched.
+func TestBrowserWS_Input_Navigate_SSRFBlocked_FullRoundTrip(t *testing.T) {
+	browserWSSkipIfNoBrowser(t)
+
+	tmpDir := t.TempDir()
+	handler, al := newBrowserWSTestHandler(t, func(cfg *config.Config) {
+		cfg.Tools.Browser.Headless = true
+		cfg.Tools.Browser.ProfileDir = filepath.Join(tmpDir, "browser-profile")
+		cfg.Tools.Browser.PageTimeoutSec = 30
+		cfg.Tools.Browser.MaxTabs = 5
+	})
+	t.Cleanup(handler.Wait)
+
+	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	require.NotNil(t, defaultAgent, "test fixture must seed at least one agent")
+	agentID := defaultAgent.ID
+	mgr, ok := al.BrowserManagerForAgent(agentID)
+	require.True(t, ok, "registerSharedTools must have registered a browser manager for the default agent")
+	t.Cleanup(mgr.Shutdown)
+
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	conn := dialBrowserTestWS(t, srv)
+	t.Cleanup(func() { _ = conn.Close() })
+	conn.SetReadDeadline(time.Now().Add(20 * time.Second)) //nolint:errcheck
+
+	sendWSAuthFrameDevMode(t, conn)
+
+	attach := generated.BrowserAttachFrame{
+		Type:      string(generated.WsFrameTypeBrowserAttach),
+		AgentId:   agentID,
+		SessionId: "nav-round-trip-session",
+	}
+	attachData, err := json.Marshal(attach)
+	require.NoError(t, err)
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, attachData))
+
+	attachResp := readBrowserFrame(t, conn, 20*time.Second)
+	require.Equal(t, "browser_status", attachResp.Type)
+	require.Equal(t, "attached", attachResp.State,
+		"attach must succeed against a real headless Chromium: %+v", attachResp)
+
+	control := generated.BrowserControlFrame{Type: string(generated.WsFrameTypeBrowserControl), Action: "take"}
+	controlData, err := json.Marshal(control)
+	require.NoError(t, err)
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, controlData))
+
+	controlResp := readBrowserFrame(t, conn, 5*time.Second)
+	require.Equal(t, "browser_status", controlResp.Type)
+	require.Equal(t, "controlling", controlResp.State)
+
+	navURL := "http://127.0.0.1/"
+	navigate := generated.BrowserInputFrame{
+		Type: string(generated.WsFrameTypeBrowserInput),
+		Kind: "navigate",
+		Url:  &navURL,
+	}
+	navigateData, err := json.Marshal(navigate)
+	require.NoError(t, err)
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, navigateData))
+
+	navResp := readBrowserFrame(t, conn, 5*time.Second)
+	assert.Equal(t, "browser_status", navResp.Type)
+	assert.Equal(t, "error", navResp.State)
+	assert.Contains(t, navResp.Message, "navigate blocked",
+		"a loopback navigate URL must be refused by the SSRF gate: %+v", navResp)
 }

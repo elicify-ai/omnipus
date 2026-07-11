@@ -130,11 +130,22 @@ type browserConnState struct { // not-wire-format: internal connection bookkeepi
 	// per rejected event. Only touched from readLoop's goroutine, same as
 	// every other field here.
 	lastInputErrorSentAt time.Time
+	// lastInputErrorMessage is the text of the last real-input-error
+	// browser_status(error) frame actually sent (7-reviewer LOW finding,
+	// ADR-039): paired with lastInputErrorSentAt so the minInputErrorInterval
+	// cooldown only ever suppresses a REPEATED, identical failure (e.g. a
+	// dead tab failing every mouse-move the same way) — a genuinely NEW
+	// failure reason, such as the user retrying navigate against a
+	// DIFFERENT blocked URL right after an earlier one, is never swallowed
+	// just because it landed inside the same 2s window. See handleInput's
+	// doc comment.
+	lastInputErrorMessage string
 }
 
-// minInputErrorInterval is the minimum gap between two real-input-error
-// browser_status(error) frames sent to the same connection (ADR-038 finding
-// #4).
+// minInputErrorInterval is the minimum gap between two IDENTICAL real-input-
+// error browser_status(error) frames sent to the same connection (ADR-038
+// finding #4). A different error message bypasses the cooldown entirely —
+// see browserConnState.lastInputErrorMessage's doc comment.
 const minInputErrorInterval = 2 * time.Second
 
 // BrowserWSHandler implements the /api/v1/browser/ws endpoint (ADR-038):
@@ -540,8 +551,12 @@ func (h *BrowserWSHandler) handleAttach(wc *browserWSConn, state *browserConnSta
 // at all, an unknown input kind, an SSRF-/scheme-blocked "navigate" URL
 // (ADR-039 D-A2), or — most importantly — a genuine CDP transport error
 // meaning the tab crashed or is unreachable) ARE surfaced, throttled to at
-// most one browser_status(error) per minInputErrorInterval so a burst of
-// failed dispatches against a dead tab can't flood the connection.
+// most one IDENTICAL browser_status(error) per minInputErrorInterval so a
+// burst of failed dispatches against a dead tab can't flood the connection —
+// but a DIFFERENT failure message (e.g. the user's quick retry against a
+// different blocked navigate URL) is never suppressed just for landing
+// inside that same cooldown window (7-reviewer LOW finding: the user must
+// always see WHY their navigate was refused).
 func (h *BrowserWSHandler) handleInput(wc *browserWSConn, state *browserConnState, viewerID string, data []byte) {
 	if state.mgr == nil || state.sessionID == "" {
 		return
@@ -595,9 +610,12 @@ func (h *BrowserWSHandler) handleInput(wc *browserWSConn, state *browserConnStat
 			return
 		}
 		slog.Warn("browser-ws: input dispatch failed", "error", err, "session_id", state.sessionID)
-		if now := time.Now(); now.Sub(state.lastInputErrorSentAt) >= minInputErrorInterval {
+		message := fmt.Sprintf("browser input failed: %s", err)
+		now := time.Now()
+		if message != state.lastInputErrorMessage || now.Sub(state.lastInputErrorSentAt) >= minInputErrorInterval {
 			state.lastInputErrorSentAt = now
-			wc.sendCriticalGen(sessionErrorStatus(state.sessionID, fmt.Sprintf("browser input failed: %s", err)))
+			state.lastInputErrorMessage = message
+			wc.sendCriticalGen(sessionErrorStatus(state.sessionID, message))
 		}
 	}
 }

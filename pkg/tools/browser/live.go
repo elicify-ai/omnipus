@@ -71,6 +71,16 @@ type LiveInput struct {
 	// BrowserManager.ValidateURL — the same SSRF/scheme gate the agent's
 	// browser_navigate tool applies — before dispatch, since the live-WS
 	// input path otherwise has no URL gate of its own.
+	//
+	// Type-safety note (7-reviewer LOW finding): LiveInput is a flat struct,
+	// so URL can technically coexist with X/Y/HasXY on one value — that is
+	// safe TODAY only because buildInputAction/dispatchInput both switch
+	// exclusively on Kind and never read URL for a non-"navigate" kind (or
+	// X/Y for "navigate"). buildInputAction additionally rejects a
+	// "navigate" input that also carries HasXY, as defense-in-depth against
+	// a future refactor accidentally reading X/Y (or skipping the SSRF gate)
+	// for what the wire actually meant as a navigate. If LiveInput is ever
+	// split into a real discriminated union, preserve this invariant.
 	URL       string
 	Modifiers int // bit field: Alt=1, Ctrl=2, Meta=4, Shift=8 — clamped to [0,15] by buildInputAction.
 }
@@ -699,8 +709,26 @@ func (lv *LiveView) dispatchInput(viewerID string, in LiveInput) error {
 	// its own. A blocked URL is a real, user-visible failure (not the benign
 	// not-controller/rate-limit kind) so the gateway surfaces it as a
 	// browser_status(error) frame instead of silently dropping it.
+	//
+	// 7-reviewer BLOCKER: ValidateURL's SSRF check does DNS resolution
+	// (resolver.LookupIPAddr) with no deadline of its own. tabCtx is the
+	// live agent tab's own context — it does not expire on any per-call
+	// schedule — so calling ValidateURL(tabCtx, ...) directly means a
+	// blackholed/slow-DNS hostname can hang this call for however long the
+	// resolver is willing to wait (its own internal ceiling, 10-30s+ or
+	// unbounded). Because handleInput (browser_ws.go) runs synchronously in
+	// the connection's single readLoop goroutine, that hang freezes the
+	// WHOLE connection — it can't even process a browser_detach — which is
+	// exactly the unbounded-wait hazard the ADR-038 deadlock postmortem
+	// documented in this file (see runCDPWithTimeout's doc comment) exists
+	// to prevent. Mirror that same fix here: bound the call to a
+	// context.WithTimeout child of tabCtx, so even a wedged resolver fails
+	// this one navigate attempt in bounded time instead of hanging forever.
 	if in.Kind == "navigate" {
-		if err := lv.mgr.ValidateURL(tabCtx, in.URL); err != nil {
+		validateCtx, cancel := context.WithTimeout(tabCtx, lv.mgr.PageTimeout())
+		err := lv.mgr.ValidateURL(validateCtx, in.URL)
+		cancel()
+		if err != nil {
 			return realInputError("browser live: navigate blocked: %w", err)
 		}
 	}
@@ -840,6 +868,15 @@ func buildInputAction(in LiveInput) (chromedp.Action, error) {
 		}
 		return input.InsertText(in.Text), nil
 	case "navigate":
+		// Defense-in-depth (7-reviewer LOW finding, see LiveInput.URL's doc
+		// comment): a "navigate" input carrying HasXY would be a malformed/
+		// confused frame — reject it rather than silently ignoring X/Y, so a
+		// future refactor that starts reading X/Y for this kind fails loudly
+		// instead of quietly bypassing the SSRF gate for what looked like a
+		// mouse event.
+		if in.HasXY {
+			return nil, fmt.Errorf("browser live: navigate input must not carry x/y coordinates")
+		}
 		if in.URL == "" {
 			return nil, fmt.Errorf("browser live: navigate input requires a non-empty url field")
 		}
