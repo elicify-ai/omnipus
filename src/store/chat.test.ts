@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { act } from 'react'
-import { useChatStore, getMessages, makeBucketMessages, MAX_MESSAGES_PER_SESSION, clampToolResult, isClientTruncatedResult, evictMessageFromBucket, findLastAssistantMessageId } from './chat'
+import { useChatStore, getMessages, makeBucketMessages, MAX_MESSAGES_PER_SESSION, clampToolResult, isClientTruncatedResult, evictMessageFromBucket, findLastAssistantMessageId, findAssistantMessageIdByTurnId } from './chat'
 import type { SessionChatState, ChatMessage } from './chat'
 import { useConnectionStore } from './connection'
 import { useSessionStore } from './session'
@@ -2336,5 +2336,224 @@ describe('chat store — B1: placeholder agentId stamped at creation, not at ren
     const msg = afterSwitch.messages.find((m) => m.role === 'assistant')
     expect(msg).toBeDefined()
     expect(msg?.agentId).toBe('agent-mia')
+  })
+})
+
+// Wave 3 Fix 5a: TokenFrame.agent_id is now populated by the backend with the
+// real producer's agent id at the point tokens are emitted. Live attribution
+// must consume it instead of the client-side activeAgentId guess, which is
+// wrong for background/delegated sub-turns where the true producer isn't
+// "whoever the user happens to be chatting with".
+describe('chat store — Fix 5a: live token attribution consumes TokenFrame.agent_id', () => {
+  it('token frame carrying agent_id attributes a new placeholder to that agent, not activeAgentId', () => {
+    act(() => {
+      useSessionStore.setState({ activeSessionId: TEST_SESSION_ID, activeAgentId: 'agent-mia', activeAgentType: null })
+      useChatStore.getState().handleFrame({
+        type: 'token',
+        content: 'Hello',
+        session_id: TEST_SESSION_ID,
+        agent_id: 'agent-jim', // real producer per the backend, differs from the client's activeAgentId guess
+      })
+    })
+    const placeholder = useChatStore.getState().messages.find((m) => m.role === 'assistant')
+    expect(placeholder).toBeDefined()
+    expect(placeholder?.agentId).toBe('agent-jim')
+  })
+
+  it('token frame carrying agent_id backfills attribution onto the optimistic sendMessage() placeholder (no agentId yet)', () => {
+    // This is the actual real-world path: sendMessage() creates an assistant
+    // placeholder synchronously with no agentId (the true producer isn't known
+    // at send time), then the first 'token' frame for the reply arrives and
+    // reuses that SAME bubble (still isStreaming) rather than creating a new
+    // one. Fix 5a must stamp agentId on this reuse path too, not only at
+    // placeholder-creation time.
+    const mockSend = vi.fn().mockReturnValue(true)
+    act(() => {
+      useConnectionStore.setState({
+        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as any,
+        isConnected: true,
+      })
+      useSessionStore.setState({ activeSessionId: TEST_SESSION_ID, activeAgentId: 'agent-mia', activeAgentType: null })
+    })
+    act(() => {
+      useChatStore.getState().sendMessage('hi there')
+    })
+    const optimisticPlaceholder = useChatStore.getState().messages.find((m) => m.role === 'assistant')
+    expect(optimisticPlaceholder).toBeDefined()
+    expect(optimisticPlaceholder?.agentId).toBeUndefined()
+
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'token',
+        content: 'Hello',
+        session_id: TEST_SESSION_ID,
+        agent_id: 'agent-jim',
+      })
+    })
+    const afterToken = useChatStore.getState().messages.find((m) => m.role === 'assistant')
+    expect(afterToken?.agentId).toBe('agent-jim')
+    expect(afterToken?.content).toBe('Hello')
+  })
+
+  it('token frame WITHOUT agent_id still falls back to the activeAgentId guess (no regression)', () => {
+    act(() => {
+      useSessionStore.setState({ activeSessionId: TEST_SESSION_ID, activeAgentId: 'agent-mia', activeAgentType: null })
+      useChatStore.getState().handleFrame({
+        type: 'token',
+        content: 'Hello',
+        session_id: TEST_SESSION_ID,
+        // agent_id omitted — legacy/older-format frame.
+      })
+    })
+    const placeholder = useChatStore.getState().messages.find((m) => m.role === 'assistant')
+    expect(placeholder).toBeDefined()
+    expect(placeholder?.agentId).toBe('agent-mia')
+  })
+})
+
+// Wave 3 Fix 5c: pkg/gateway/replay.go now emits a role:"turn_canceled"
+// ReplayMessageFrame carrying a turn_id that correlates to the specific
+// assistant replay_message entry it interrupted (both stamped from
+// TranscriptEntry.TurnID). The frontend must consume this to mark that exact
+// message interrupted, matching the live-cancel rendering
+// (markLastMessageInterrupted), instead of silently discarding the frame.
+describe('chat store — Fix 5c: turn_canceled replay correlation via turn_id', () => {
+  it('turn_canceled replay frame with a matching turn_id marks the correct message interrupted', () => {
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'replay_message',
+        role: 'user',
+        content: 'do the thing',
+        session_id: TEST_SESSION_ID,
+      })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'replay_message',
+        role: 'assistant',
+        content: 'partial respo',
+        session_id: TEST_SESSION_ID,
+        turn_id: 'turn-abc',
+      } as Parameters<ReturnType<typeof useChatStore.getState>['handleFrame']>[0])
+    })
+    const beforeCancel = useChatStore.getState().messages.find((m) => m.role === 'assistant')
+    expect(beforeCancel?.status).toBe('done')
+
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'replay_message',
+        role: 'turn_canceled',
+        content: '',
+        session_id: TEST_SESSION_ID,
+        turn_id: 'turn-abc',
+      } as Parameters<ReturnType<typeof useChatStore.getState>['handleFrame']>[0])
+    })
+
+    const state = useChatStore.getState()
+    const assistantMsgs = state.messages.filter((m) => m.role === 'assistant')
+    // The turn_canceled entry itself must never render as its own bubble.
+    expect(assistantMsgs).toHaveLength(1)
+    expect(assistantMsgs[0].content).toBe('partial respo')
+    expect(assistantMsgs[0].status).toBe('interrupted')
+    expect(assistantMsgs[0].isStreaming).toBe(false)
+  })
+
+  it('turn_canceled correctly targets the matching turn among multiple assistant turns (not just the last one)', () => {
+    // Simulates async delegation interleaving: turn-1 finishes, turn-2 starts
+    // and is still the "last" assistant message, but the cancellation belongs
+    // to turn-1. Correlation must be by turn_id, never by stream adjacency.
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'replay_message', role: 'user', content: 'q1', session_id: TEST_SESSION_ID,
+      })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'replay_message', role: 'assistant', content: 'turn 1 reply', session_id: TEST_SESSION_ID, turn_id: 'turn-1',
+      } as Parameters<ReturnType<typeof useChatStore.getState>['handleFrame']>[0])
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'replay_message', role: 'user', content: 'q2', session_id: TEST_SESSION_ID,
+      })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'replay_message', role: 'assistant', content: 'turn 2 reply', session_id: TEST_SESSION_ID, turn_id: 'turn-2',
+      } as Parameters<ReturnType<typeof useChatStore.getState>['handleFrame']>[0])
+    })
+
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'replay_message', role: 'turn_canceled', content: '', session_id: TEST_SESSION_ID, turn_id: 'turn-1',
+      } as Parameters<ReturnType<typeof useChatStore.getState>['handleFrame']>[0])
+    })
+
+    const state = useChatStore.getState()
+    const [turn1Msg, turn2Msg] = state.messages.filter((m) => m.role === 'assistant')
+    expect(turn1Msg.content).toBe('turn 1 reply')
+    expect(turn1Msg.status).toBe('interrupted')
+    // turn 2 must be completely unaffected — no false-positive interruption.
+    expect(turn2Msg.content).toBe('turn 2 reply')
+    expect(turn2Msg.status).toBe('done')
+  })
+
+  it('turn_canceled frame with no matching message is handled gracefully — no crash, no false-positive interruption', () => {
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'replay_message', role: 'user', content: 'q1', session_id: TEST_SESSION_ID,
+      })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'replay_message', role: 'assistant', content: 'unrelated reply', session_id: TEST_SESSION_ID, turn_id: 'turn-real',
+      } as Parameters<ReturnType<typeof useChatStore.getState>['handleFrame']>[0])
+    })
+
+    expect(() => {
+      act(() => {
+        useChatStore.getState().handleFrame({
+          type: 'replay_message', role: 'turn_canceled', content: '', session_id: TEST_SESSION_ID, turn_id: 'turn-nonexistent',
+        } as Parameters<ReturnType<typeof useChatStore.getState>['handleFrame']>[0])
+      })
+    }).not.toThrow()
+
+    const state = useChatStore.getState()
+    const assistantMsgs = state.messages.filter((m) => m.role === 'assistant')
+    expect(assistantMsgs).toHaveLength(1)
+    // The unrelated message must NOT be mis-marked as interrupted.
+    expect(assistantMsgs[0].status).toBe('done')
+  })
+
+  it('turn_canceled frame with no turn_id at all is dropped gracefully (legacy frame, nothing to correlate)', () => {
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'replay_message', role: 'assistant', content: 'some reply', session_id: TEST_SESSION_ID, turn_id: 'turn-x',
+      } as Parameters<ReturnType<typeof useChatStore.getState>['handleFrame']>[0])
+    })
+
+    expect(() => {
+      act(() => {
+        useChatStore.getState().handleFrame({
+          type: 'replay_message', role: 'turn_canceled', content: '', session_id: TEST_SESSION_ID,
+          // turn_id omitted entirely.
+        } as Parameters<ReturnType<typeof useChatStore.getState>['handleFrame']>[0])
+      })
+    }).not.toThrow()
+
+    const msg = useChatStore.getState().messages.find((m) => m.role === 'assistant')
+    expect(msg?.status).toBe('done')
+  })
+
+  it('findAssistantMessageIdByTurnId finds the assistant message by turnId, ignoring role and scanning backward', () => {
+    const messagesById: Record<string, ChatMessage> = {
+      u1: { id: 'u1', role: 'user', content: 'hi', timestamp: 't', status: 'done' },
+      a1: { id: 'a1', role: 'assistant', content: 'r1', timestamp: 't', status: 'done', turnId: 'turn-1' },
+      a2: { id: 'a2', role: 'assistant', content: 'r2', timestamp: 't', status: 'done', turnId: 'turn-2' },
+    }
+    const order = ['u1', 'a1', 'a2']
+    expect(findAssistantMessageIdByTurnId(order, messagesById, 'turn-1')).toBe('a1')
+    expect(findAssistantMessageIdByTurnId(order, messagesById, 'turn-2')).toBe('a2')
+    expect(findAssistantMessageIdByTurnId(order, messagesById, 'turn-missing')).toBeNull()
   })
 })
