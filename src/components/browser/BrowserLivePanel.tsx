@@ -7,7 +7,7 @@
 // Right-side overlay with `overlay={false}` (chat stays visible behind it),
 // mirroring ActivityPanel.tsx's Sheet usage.
 
-import { Sheet, SheetContent } from '@/components/ui/sheet'
+import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet'
 import { useUiStore } from '@/store/ui'
 import { BrowserLiveView } from './BrowserLiveView'
 
@@ -19,6 +19,12 @@ export function BrowserLivePanel() {
     <Sheet open={browserPanel !== null} onOpenChange={(open) => !open && closeBrowserPanel()}>
       {browserPanel && (
         <SheetContent side="right" overlay={false} className="w-[70vw] max-w-[56rem] p-0 flex flex-col">
+          {/* Radix requires a DialogTitle descendant for a11y (screen-reader
+              announcement on open). BrowserLiveView already renders a visible
+              "Live Browser" <h2> in its own header — this sr-only SheetTitle
+              supplies the accessible name without duplicating that heading
+              visually. */}
+          <SheetTitle className="sr-only">Live Browser</SheetTitle>
           <BrowserLiveView
             // Keys the mount to the (session, agent) pair so switching targets
             // while the panel is already open (a second "Watch live" click)

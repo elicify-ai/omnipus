@@ -168,11 +168,84 @@ describe('parseResult — result parsing helper', () => {
 
 // Import the BrowserNavigateUI component to verify it renders without throwing.
 // This also exercises the displayUrl helper via the rendered URL display.
-import { BrowserNavigateUI } from './BrowserNavigate'
+import { BrowserNavigateUI, BrowserNavigateBlock } from './BrowserNavigate'
 
 describe('BrowserNavigate component — smoke tests', () => {
   it('exports BrowserNavigateUI', () => {
     // Traces to: vivid-roaming-planet.md line 173
     expect(BrowserNavigateUI).toBeDefined()
+  })
+})
+
+// --- "Watch live" button (ADR-038 UAT Bug 1) ---
+//
+// browser_navigate renders through a separate component from the other
+// browser.* tools (BrowserTool.tsx's BrowserToolBlock), and was missed when
+// the "Watch live" launcher was first added there. These tests assert the
+// launcher is present on BrowserNavigateBlock rows too — running AND
+// completed, since navigate is the near-universal first browser action and
+// the browser session persists after the call finishes.
+
+import { render, screen, fireEvent } from '@testing-library/react'
+import { beforeEach, afterEach } from 'vitest'
+import { useSessionStore } from '@/store/session'
+import { useUiStore } from '@/store/ui'
+
+describe('BrowserNavigateBlock — "Watch live" launcher', () => {
+  beforeEach(() => {
+    useUiStore.getState().closeBrowserPanel()
+    useSessionStore.setState({ activeSessionId: null, activeAgentId: null })
+  })
+
+  afterEach(() => {
+    useUiStore.getState().closeBrowserPanel()
+    useSessionStore.setState({ activeSessionId: null, activeAgentId: null })
+  })
+
+  it('renders the Watch live button on a completed navigate row', () => {
+    render(
+      <BrowserNavigateBlock
+        args={{ url: 'https://example.com' }}
+        result={{ title: 'Example', url: 'https://example.com' }}
+        isRunning={false}
+      />
+    )
+    expect(screen.getByRole('button', { name: 'Watch live' })).toBeInTheDocument()
+  })
+
+  it('renders the Watch live button on a still-running navigate row (not gated on status)', () => {
+    render(<BrowserNavigateBlock args={{ url: 'https://example.com' }} result={null} isRunning={true} />)
+    expect(screen.getByRole('button', { name: 'Watch live' })).toBeInTheDocument()
+  })
+
+  it('clicking Watch live opens the browser panel for the active session/agent', () => {
+    useSessionStore.getState().setActiveSession('sess-1', 'agent-1')
+
+    render(
+      <BrowserNavigateBlock
+        args={{ url: 'https://example.com' }}
+        result={{ title: 'Example' }}
+        isRunning={false}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Watch live' }))
+
+    expect(useUiStore.getState().browserPanel).toEqual({ sessionId: 'sess-1', agentId: 'agent-1' })
+  })
+
+  it('shows an error toast and does not open the panel when there is no active session', () => {
+    render(
+      <BrowserNavigateBlock
+        args={{ url: 'https://example.com' }}
+        result={{ title: 'Example' }}
+        isRunning={false}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Watch live' }))
+
+    expect(useUiStore.getState().browserPanel).toBeNull()
+    expect(useUiStore.getState().toasts.some((t) => t.message === 'No active session to watch.')).toBe(
+      true
+    )
   })
 })
