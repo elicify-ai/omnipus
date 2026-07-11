@@ -431,3 +431,86 @@ func TestRetryOnStreamingReset_ScenarioProviderVariant(t *testing.T) {
 	require.NoError(t, err,
 		"ScenarioProvider variant: turn must succeed after retrying the streaming reset")
 }
+
+// TestRetryOnStreamingReset_NothingToTrimStillRetries is a regression test for
+// a fragility uncovered by bisecting a real failure: the timeout-recovery
+// branch of runTurn's retry loop treated windowTrim's ok=false identically
+// whether it meant "nothing eligible to evict" or "trim mechanism genuinely
+// failed" — unconditionally `break`-ing the ENTIRE retry attempt in both
+// cases. A turn whose assembled context sits over the (SummarizeTokenPercent-
+// scaled) compaction budget but has little/no compressible history (e.g. the
+// very first turn of a session — a single user message and no prior
+// conversation) hits exactly the "nothing to evict" case: windowTrim's
+// len(window) <= 1 early return. Since the ORIGINAL error that triggered this
+// branch was a transient network/streaming reset (not a real context-overflow
+// rejection from the provider), abandoning the retry there defeats the whole
+// purpose of the streaming-reset-retry fix for any turn near the budget edge.
+//
+// This test forces "over budget" deterministically (rather than relying on
+// incidental proximity to a default threshold, which is what made the
+// original regression easy to trip and hard to pin down): ContextWindow=100,
+// SummarizeTokenPercent=100 means the timeout-recovery compaction check uses
+// a 100-token budget, and MaxTokens=4096 alone exceeds it — so
+// isOverContextBudget is true on the very first (single-message) turn,
+// windowTrim has nothing to evict and returns ok=false, and the fix must
+// still let the retry proceed.
+//
+// BDD: Given a fresh turn (no compressible history) whose context sits over
+// the compaction budget, and a provider that drops the connection on the
+// first call then succeeds on the second,
+// When the agent loop handles the transient error,
+// Then windowTrim reports "nothing to trim" (ok=false, NothingToTrim=true),
+// And the retry loop falls through to backoff+retry instead of abandoning,
+// And the turn SUCCEEDS via the second call.
+func TestRetryOnStreamingReset_NothingToTrimStillRetries(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	streamingResetErr := errors.New("streaming read error: http2: response body closed")
+	provider := &failingThenSuccessProvider{
+		failures: []error{streamingResetErr},
+		successResp: &providers.LLMResponse{
+			Content:   "retry succeeded despite nothing to trim",
+			ToolCalls: []providers.ToolCall{},
+		},
+	}
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: tmpDir,
+				ModelName: "test-model",
+				// Deliberately tiny/scaled so isOverContextBudget is true on
+				// a fresh, single-message turn (100 * 100/100 == 100 <
+				// MaxTokens alone), independent of any default-config edge.
+				ContextWindow:         100,
+				SummarizeTokenPercent: 100,
+				MaxTokens:             4096,
+				MaxToolIterations:     10,
+			},
+		},
+	}
+
+	msgBus := bus.NewMessageBus()
+	t.Cleanup(func() { msgBus.Close() })
+	al := mustNewAgentLoop(t, cfg, msgBus, provider)
+	t.Cleanup(al.Close)
+
+	ctx := context.Background()
+	agent := al.GetRegistry().GetDefaultAgent()
+	require.NotNil(t, agent, "default agent must be registered")
+
+	_, err := al.runAgentLoop(ctx, agent, processOptions{
+		SessionKey:      "nothing-to-trim-retry-session",
+		Channel:         "web",
+		ChatID:          "test-chat-nothing-to-trim",
+		UserMessage:     "hello",
+		DefaultResponse: defaultResponse,
+		EnableSummary:   false,
+		SendResponse:    false,
+	})
+	require.NoError(t, err,
+		"turn must succeed after retrying a transient streaming reset even when "+
+			"the over-budget context has nothing eligible to trim; got error: %v", err)
+	assert.Equal(t, 2, provider.callIdx,
+		"provider must be called exactly twice: once for the reset, once for the success")
+}
