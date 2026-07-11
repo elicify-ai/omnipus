@@ -31,6 +31,7 @@ if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
 import { OmnipusComposer } from './ChatScreen'
 
 const mockSetText = vi.fn()
+const mockGetComposerState = vi.fn(() => ({ text: '' }))
 
 vi.mock('@assistant-ui/react', () => {
   return {
@@ -92,7 +93,7 @@ vi.mock('@assistant-ui/react', () => {
     },
     AuiIf: () => null,
     useComposerRuntime: vi.fn(() => ({
-      getState: () => ({ text: '' }),
+      getState: mockGetComposerState,
       setText: mockSetText,
       addAttachment: vi.fn(),
     })),
@@ -165,6 +166,8 @@ function resetStores() {
 
 beforeEach(() => {
   mockSetText.mockClear()
+  mockGetComposerState.mockReset()
+  mockGetComposerState.mockReturnValue({ text: '' })
   resetStores()
 })
 
@@ -201,6 +204,23 @@ describe('OmnipusComposer — composer-prefill bridge (ADR-039 D-A3)', () => {
       useChatStore.setState({ sessionTokens: 123 })
     })
     expect(mockSetText).toHaveBeenCalledTimes(1)
+  })
+
+  // Reviewer finding: a full-replace setText() silently discarded an
+  // in-progress draft. An in-flight composer draft must be preserved —
+  // appended to, not clobbered — when the hand-to-agent hint arrives.
+  it('appends the hint to an in-progress draft instead of replacing it', async () => {
+    mockGetComposerState.mockReturnValue({ text: 'I was already typing this' })
+    render(<OmnipusComposer />)
+
+    act(() => {
+      useUiStore.getState().setComposerPrefill('Continue from the current page: ')
+    })
+
+    await vi.waitFor(() => {
+      expect(mockSetText).toHaveBeenCalledWith('I was already typing this\nContinue from the current page: ')
+    })
+    expect(useUiStore.getState().composerPrefill).toBeNull()
   })
 })
 

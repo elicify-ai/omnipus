@@ -6,7 +6,7 @@
 // supplied directly rather than produced via a real crop.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { submitAnnotation } from './browserAnnotate'
+import { submitAnnotation, AnnotationBusyError } from './browserAnnotate'
 import { useSessionStore } from '@/store/session'
 import { useChatStore } from '@/store/chat'
 
@@ -24,13 +24,18 @@ function makeFile(): File {
   return new File([new Uint8Array([1, 2, 3])], 'annotation.png', { type: 'image/png' })
 }
 
+// Reviewer finding (D-B1/B2 gate #7): submitAnnotation targets the PINNED
+// sessionId/agentId params (the panel's own props), not whatever chat is
+// active in useSessionStore — so every case below pins 'sess-1'/'agent-1'
+// (matching the active-session store state) unless a test explicitly
+// exercises the mismatch/busy guards.
 describe('submitAnnotation', () => {
   const sendMessageSpy = vi.fn()
 
   beforeEach(() => {
     vi.clearAllMocks()
     useSessionStore.setState({ activeSessionId: 'sess-1', activeAgentId: 'agent-1' })
-    useChatStore.setState({ sendMessage: sendMessageSpy })
+    useChatStore.setState({ sendMessage: sendMessageSpy, isStreaming: false })
     mockUploadFiles.mockResolvedValue({
       files: [
         { name: 'annotation_abc.png', path: 'uploads/sess-1/annotation_abc.png', size: 3, content_type: 'image/png', ref: 'media://ref-1' },
@@ -39,25 +44,23 @@ describe('submitAnnotation', () => {
     mockInspectBrowserElement.mockResolvedValue({ ok: false })
   })
 
-  it('throws when there is no active session', async () => {
-    useSessionStore.setState({ activeSessionId: null, activeAgentId: null })
+  it('throws when sessionId is empty', async () => {
     await expect(
-      submitAnnotation({ comment: 'hi', file: makeFile(), point: { x: 1, y: 1 } }),
+      submitAnnotation({ comment: 'hi', file: makeFile(), point: { x: 1, y: 1 }, sessionId: '', agentId: 'agent-1' }),
     ).rejects.toThrow(/no active chat session/i)
     expect(mockUploadFiles).not.toHaveBeenCalled()
   })
 
-  it('throws when there is no active agent', async () => {
-    useSessionStore.setState({ activeSessionId: 'sess-1', activeAgentId: null })
+  it('throws when agentId is empty', async () => {
     await expect(
-      submitAnnotation({ comment: 'hi', file: makeFile(), point: { x: 1, y: 1 } }),
+      submitAnnotation({ comment: 'hi', file: makeFile(), point: { x: 1, y: 1 }, sessionId: 'sess-1', agentId: '' }),
     ).rejects.toThrow(/no active chat session/i)
   })
 
-  it('uploads to the active session, calls inspect at the given point, and sends with the media ref', async () => {
+  it('uploads to the pinned session, calls inspect at the given point, and sends with the media ref', async () => {
     mockInspectBrowserElement.mockResolvedValue({ ok: true, tag: 'button', text: 'Submit' })
 
-    await submitAnnotation({ comment: 'What does this do?', file: makeFile(), point: { x: 42, y: 84 } })
+    await submitAnnotation({ comment: 'What does this do?', file: makeFile(), point: { x: 42, y: 84 }, sessionId: 'sess-1', agentId: 'agent-1' })
 
     expect(mockUploadFiles).toHaveBeenCalledWith('sess-1', [expect.any(File)])
     expect(mockInspectBrowserElement).toHaveBeenCalledWith({
@@ -78,7 +81,7 @@ describe('submitAnnotation', () => {
   it('sends the comment unmodified when inspect resolves ok but with no text', async () => {
     mockInspectBrowserElement.mockResolvedValue({ ok: true, tag: 'div' })
 
-    await submitAnnotation({ comment: 'Look at this', file: makeFile(), point: { x: 1, y: 2 } })
+    await submitAnnotation({ comment: 'Look at this', file: makeFile(), point: { x: 1, y: 2 }, sessionId: 'sess-1', agentId: 'agent-1' })
 
     expect(sendMessageSpy).toHaveBeenCalledTimes(1)
     expect(sendMessageSpy.mock.calls[0][0]).toBe('Look at this')
@@ -87,7 +90,7 @@ describe('submitAnnotation', () => {
   it('sends the comment unmodified when inspect resolves ok:false (best-effort, D-B3)', async () => {
     mockInspectBrowserElement.mockResolvedValue({ ok: false, reason: 'cross-origin frame' })
 
-    await submitAnnotation({ comment: 'Look at this', file: makeFile(), point: { x: 1, y: 2 } })
+    await submitAnnotation({ comment: 'Look at this', file: makeFile(), point: { x: 1, y: 2 }, sessionId: 'sess-1', agentId: 'agent-1' })
 
     expect(sendMessageSpy).toHaveBeenCalledTimes(1)
     expect(sendMessageSpy.mock.calls[0][0]).toBe('Look at this')
@@ -96,7 +99,7 @@ describe('submitAnnotation', () => {
   it('sends the image + comment even when the inspect REQUEST itself rejects (network error)', async () => {
     mockInspectBrowserElement.mockRejectedValue(new Error('network down'))
 
-    await submitAnnotation({ comment: 'Still works', file: makeFile(), point: { x: 1, y: 2 } })
+    await submitAnnotation({ comment: 'Still works', file: makeFile(), point: { x: 1, y: 2 }, sessionId: 'sess-1', agentId: 'agent-1' })
 
     expect(sendMessageSpy).toHaveBeenCalledTimes(1)
     expect(sendMessageSpy.mock.calls[0][0]).toBe('Still works')
@@ -107,7 +110,7 @@ describe('submitAnnotation', () => {
     mockUploadFiles.mockRejectedValue(new Error('upload failed'))
 
     await expect(
-      submitAnnotation({ comment: 'hi', file: makeFile(), point: { x: 1, y: 1 } }),
+      submitAnnotation({ comment: 'hi', file: makeFile(), point: { x: 1, y: 1 }, sessionId: 'sess-1', agentId: 'agent-1' }),
     ).rejects.toThrow('upload failed')
     expect(sendMessageSpy).not.toHaveBeenCalled()
   })
@@ -118,8 +121,46 @@ describe('submitAnnotation', () => {
     })
 
     await expect(
-      submitAnnotation({ comment: 'hi', file: makeFile(), point: { x: 1, y: 1 } }),
+      submitAnnotation({ comment: 'hi', file: makeFile(), point: { x: 1, y: 1 }, sessionId: 'sess-1', agentId: 'agent-1' }),
     ).rejects.toThrow(/no media reference/i)
+    expect(sendMessageSpy).not.toHaveBeenCalled()
+  })
+
+  // Reviewer finding #6 (CRITICAL silent-loss): a streaming turn must never
+  // silently swallow the annotation — submitAnnotation must refuse BEFORE
+  // uploading, not upload+send into sendMessage's own silent isStreaming no-op.
+  it('throws AnnotationBusyError and never uploads when the target session is already streaming', async () => {
+    useChatStore.setState({ isStreaming: true })
+
+    await expect(
+      submitAnnotation({ comment: 'hi', file: makeFile(), point: { x: 1, y: 1 }, sessionId: 'sess-1', agentId: 'agent-1' }),
+    ).rejects.toBeInstanceOf(AnnotationBusyError)
+    expect(mockUploadFiles).not.toHaveBeenCalled()
+    expect(sendMessageSpy).not.toHaveBeenCalled()
+  })
+
+  // Reviewer finding #7 (MEDIUM): the annotation must target the panel's
+  // PINNED pair, and must refuse — not silently misdirect — when the
+  // active chat has since diverged from it (sendMessage has no session
+  // override; it always posts to whatever is CURRENTLY active).
+  it('throws and never sends when the active session has diverged from the pinned session by send time', async () => {
+    useSessionStore.setState({ activeSessionId: 'sess-OTHER', activeAgentId: 'agent-1' })
+
+    await expect(
+      submitAnnotation({ comment: 'hi', file: makeFile(), point: { x: 1, y: 1 }, sessionId: 'sess-1', agentId: 'agent-1' }),
+    ).rejects.toThrow(/active chat has changed/i)
+    // The upload still happens (it's addressed to the pinned session, which
+    // is valid on its own) — only the final send is refused.
+    expect(mockUploadFiles).toHaveBeenCalledWith('sess-1', [expect.any(File)])
+    expect(sendMessageSpy).not.toHaveBeenCalled()
+  })
+
+  it('throws and never sends when the active agent has diverged from the pinned agent by send time', async () => {
+    useSessionStore.setState({ activeSessionId: 'sess-1', activeAgentId: 'agent-OTHER' })
+
+    await expect(
+      submitAnnotation({ comment: 'hi', file: makeFile(), point: { x: 1, y: 1 }, sessionId: 'sess-1', agentId: 'agent-1' }),
+    ).rejects.toThrow(/active chat has changed/i)
     expect(sendMessageSpy).not.toHaveBeenCalled()
   })
 })

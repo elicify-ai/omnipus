@@ -188,6 +188,59 @@ describe('BrowserLiveView — control toggle', () => {
     expect(mockSendInput).not.toHaveBeenCalled()
   })
 
+  // Reviewer finding: onStatus overwrote statusState with EVERY frame,
+  // including the routine `error` state a blocked `navigate` produces —
+  // that flipped isControlling to false (URL bar/cursor vanish, Take
+  // control reappears) even though the server never released control. A
+  // per-request error must surface without dropping the "You're driving"
+  // state.
+  it('keeps "You\'re driving" and shows the error when a browser_status error frame arrives while controlling', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    act(() => {
+      callbacksRef.current?.onConnected?.()
+      callbacksRef.current?.onScreencast?.({
+        type: 'browser_screencast',
+        session_id: 's1',
+        seq: 1,
+        data: 'AAAA',
+        width: 1280,
+        height: 720,
+      })
+      callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' })
+    })
+    expect(screen.getByTestId('browser-live-status-pill')).toHaveTextContent("You're driving")
+
+    act(() => {
+      callbacksRef.current?.onStatus?.({
+        type: 'browser_status',
+        state: 'error',
+        message: 'Navigation blocked: target resolves to a private address.',
+      })
+    })
+
+    // Still driving — the pill must NOT flip to "Error" / the toggle must
+    // NOT revert to "Take control".
+    expect(screen.getByTestId('browser-live-status-pill')).toHaveTextContent("You're driving")
+    expect(screen.getByRole('button', { name: /release control/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^take control$/i })).not.toBeInTheDocument()
+    // But the error itself is still surfaced.
+    expect(screen.getByRole('alert')).toHaveTextContent('Navigation blocked: target resolves to a private address.')
+
+    // And input keeps flowing — the human is still actually in control.
+    // jsdom performs no real layout (getBoundingClientRect() returns a 0×0
+    // rect by default), which mapClientToDevice treats as "unmeasurable" and
+    // no-ops on — stub it so a real device coordinate resolves, same pattern
+    // as BrowserLiveView.mouseMoveThrottle.test.tsx's mountControllingWithFrame.
+    mockSendInput.mockClear()
+    const container = screen.getByTestId('browser-live-frame')
+    vi.spyOn(container, 'getBoundingClientRect').mockReturnValue({
+      left: 0, top: 0, width: 1280, height: 720, right: 1280, bottom: 720, x: 0, y: 0,
+      toJSON() { return {} },
+    } as DOMRect)
+    fireEvent.pointerDown(container, { clientX: 20, clientY: 20 })
+    expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_down' }))
+  })
+
   it('calls detach() then close() on unmount so the backend engine can ref-count down', () => {
     const { unmount } = render(<BrowserLiveView sessionId="s1" agentId="a1" />)
     unmount()

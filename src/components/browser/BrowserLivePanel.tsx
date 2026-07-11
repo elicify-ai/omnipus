@@ -35,6 +35,20 @@ export function BrowserLivePanel() {
             sessionId={browserPanel.sessionId}
             agentId={browserPanel.agentId}
             onClose={closeBrowserPanel}
+            // Only the docked panel (this component) shares a JS realm with
+            // ChatScreen/the composer-prefill bridge — the fullscreen
+            // pop-out route (browser-live.tsx) deliberately omits this prop
+            // so its "Hand to agent" button doesn't render at all (it would
+            // otherwise silently no-op: writing composerPrefill from a
+            // separate `window.open` document is invisible to the original
+            // tab's chat). See BrowserLiveView's onHandToAgent doc comment.
+            onHandToAgent={() => {
+              useUiStore.getState().setComposerPrefill('Continue from the current page: ')
+              useUiStore.getState().addToast({
+                message: 'Control released — a hint was added to the chat composer.',
+                variant: 'default',
+              })
+            }}
             onPopOut={() => {
               // The auth token lives in sessionStorage (per-tab, for XSS
               // hygiene) which window.open'd tabs do NOT inherit — so the

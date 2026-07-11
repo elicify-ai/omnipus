@@ -273,4 +273,22 @@ describe('computeCropRect', () => {
   it('returns null for a pathological zero-area frame', () => {
     expect(computeCropRect({ x: 0, y: 0 }, { x: 10, y: 10 }, 0, 0)).toBeNull()
   })
+
+  // Reviewer finding: an EXACT axis-aligned drag (dx or dy rounds to 0) used
+  // to fall through to the rectangle branch with a zero width/height — a
+  // rect canvas.drawImage cannot crop (throws IndexSizeError). It must
+  // synthesize the click box instead, exactly like a true click does.
+  it('treats an exact vertical drag (dx===0, dy past minDragSize) as a click, not a zero-width rect', () => {
+    const rect = computeCropRect({ x: 200, y: 100 }, { x: 200, y: 300 }, 1280, 720, { clickBoxSize: 48 })
+    expect(rect).toEqual({ x: 176, y: 76, width: 48, height: 48 })
+    expect(rect!.width).toBeGreaterThan(0)
+    expect(rect!.height).toBeGreaterThan(0)
+  })
+
+  it('treats an exact horizontal drag (dy===0, dx past minDragSize) as a click, not a zero-height rect', () => {
+    const rect = computeCropRect({ x: 100, y: 300 }, { x: 300, y: 300 }, 1280, 720, { clickBoxSize: 48 })
+    expect(rect).toEqual({ x: 76, y: 276, width: 48, height: 48 })
+    expect(rect!.width).toBeGreaterThan(0)
+    expect(rect!.height).toBeGreaterThan(0)
+  })
 })

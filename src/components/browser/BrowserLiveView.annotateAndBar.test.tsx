@@ -120,21 +120,38 @@ describe('BrowserLiveView — URL bar (ADR-039 D-A2)', () => {
 
 describe('BrowserLiveView — Hand to agent (ADR-039 D-A3)', () => {
   it('is not rendered while not controlling', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" onHandToAgent={vi.fn()} />)
     connectAndFrame()
     expect(screen.queryByRole('button', { name: /hand to agent/i })).not.toBeInTheDocument()
   })
 
-  it('releases control and drops a hint into the composer-prefill bridge', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+  it('releases control and invokes the onHandToAgent callback', () => {
+    const onHandToAgent = vi.fn()
+    render(<BrowserLiveView sessionId="s1" agentId="a1" onHandToAgent={onHandToAgent} />)
     connectAndFrame()
     takeControl()
 
     fireEvent.click(screen.getByRole('button', { name: /hand to agent/i }))
 
     expect(mockSendControl).toHaveBeenCalledWith('release')
-    expect(useUiStore.getState().composerPrefill).toBe('Continue from the current page: ')
-    expect(useUiStore.getState().toasts.some((t) => /control released/i.test(t.message))).toBe(true)
+    expect(onHandToAgent).toHaveBeenCalledTimes(1)
+  })
+
+  // Reviewer finding (CRITICAL): the pop-out window (routes/_app/browser-live.tsx)
+  // is a separate `window.open` JS realm with its own useUiStore instance —
+  // ChatScreen (the only composerPrefill consumer) isn't mounted there, so
+  // writing composerPrefill from that realm is a silent no-op with a false
+  // success toast. The fix hides the button entirely when the host doesn't
+  // provide onHandToAgent, rather than rendering a control that does nothing.
+  it('is hidden even while controlling when onHandToAgent is not provided (e.g. the pop-out window)', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    takeControl()
+
+    expect(screen.queryByRole('button', { name: /hand to agent/i })).not.toBeInTheDocument()
+    // Release control is still available from the pop-out — only the
+    // agent-hand-off affordance is gated on onHandToAgent.
+    expect(screen.getByRole('button', { name: /release control/i })).toBeInTheDocument()
   })
 })
 
@@ -154,6 +171,32 @@ describe('BrowserLiveView — Annotate mode ⟷ take-control mutual exclusion (A
 
     fireEvent.click(screen.getByRole('button', { name: /annotate a region/i }))
     expect(mockSendControl).toHaveBeenCalledWith('release')
+  })
+
+  // Reviewer finding (CRITICAL race): sendControl('release') is async — the
+  // server's browser_status frame (which is what actually flips
+  // isControlling) has NOT arrived yet by the time handleToggleAnnotate
+  // returns, so isControlling is still stale-true on the very next render.
+  // A reactive `if (isControlling && annotateMode) setAnnotateMode(false)`
+  // effect used to see that stale-true value and immediately revert the
+  // toggle the user just clicked — "Annotate" silently no-op'd on the first
+  // click while driving. Mutual exclusion is enforced procedurally instead
+  // (release-before-entering + Take-control disabled + pointer handlers
+  // branching on annotateMode first), so annotate mode must actually engage
+  // here, well before any browser_status('released') round-trip.
+  it('actually enters annotate mode on the first click while driving, despite the async release gap', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    takeControl()
+
+    fireEvent.click(screen.getByRole('button', { name: /annotate a region/i }))
+
+    // No browser_status('released') frame has arrived — the mock ws never
+    // emits one on its own — so this exercises exactly the stale-isControlling
+    // window the race lived in.
+    expect(screen.getByRole('button', { name: /exit annotate mode/i })).toBeInTheDocument()
+    expect(screen.queryByRole('textbox', { name: /navigate to url/i })).not.toBeInTheDocument()
+    expect(screen.getByTestId('browser-live-frame')).toHaveStyle({ cursor: 'crosshair' })
   })
 
   it('exiting annotate mode re-enables Take control', () => {
