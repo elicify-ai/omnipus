@@ -123,6 +123,14 @@ export function BrowserToolBlock({
   // browser session driving this tool call. Imperative store reads (not hooks)
   // — this block renders once per browser tool call in a conversation, so
   // subscribing here would cause needless re-renders across the whole list.
+  //
+  // v1 limitation: this reads the globally-active session/agent, not the
+  // agent that actually owns THIS tool call. For a delegated sub-turn (this
+  // browser call made by a subagent mid-delegation), the globally-active
+  // agent in the store may be the parent, not the delegate that opened the
+  // browser session — "Watch live" would then attach to the wrong agent's
+  // browser (or none). Fine for the common case (no delegation in flight);
+  // revisit if/when this tool block gets access to its own owning agent id.
   function handleWatchLive() {
     const { activeSessionId, activeAgentId } = useSessionStore.getState()
     if (!activeSessionId || !activeAgentId) {

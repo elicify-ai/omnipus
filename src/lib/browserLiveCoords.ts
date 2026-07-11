@@ -19,22 +19,39 @@ export interface DeviceCoords { // not-wire-format: local {x,y} result of coordi
 
 /**
  * Maps a client-space pointer coordinate (from a PointerEvent/MouseEvent/
- * WheelEvent's clientX/clientY) to device-space coordinates matching the
- * dimensions of the latest `browser_screencast` frame.
+ * WheelEvent's clientX/clientY) to the CSS-pixel coordinate space CDP's
+ * Input.dispatchMouseEvent/dispatchKeyEvent expect, matching the dimensions
+ * of the latest `browser_screencast` frame.
  *
  * Formula (ADR-038 D5): the frame container is sized to exactly match the
  * screencast frame's aspect ratio (no letterboxing — see BrowserLiveView),
- * so a simple linear scale from the container's rendered CSS box to the
- * frame's device pixel box is correct:
+ * so the first step is a simple linear scale from the container's rendered
+ * CSS box to the frame's device pixel box:
  *
- *   deviceX = (clientX - rect.left) * (frameWidth / rect.width)
- *   deviceY = (clientY - rect.top)  * (frameHeight / rect.height)
+ *   frameX = (clientX - rect.left) * (frameWidth / rect.width)
+ *   frameY = (clientY - rect.top)  * (frameHeight / rect.height)
+ *
+ * The screencast frame itself is captured at DeviceWidth×DeviceHeight
+ * (Page.startScreencast), which is CSS-pixel size × pageScaleFactor. CDP's
+ * dispatch coordinates, however, are always plain CSS pixels — so when
+ * `pageScale` (the frame's `page_scale`, i.e. pageScaleFactor) differs from
+ * 1, `frameX`/`frameY` must be divided by it to land back in the space the
+ * backend's CDP call expects:
+ *
+ *   deviceX = frameX / pageScale
+ *   deviceY = frameY / pageScale
+ *
+ * An unset, zero, or negative `pageScale` is treated as 1 (no-op) — CDP
+ * only reports pageScaleFactor via Page.getLayoutMetrics, so a frame from a
+ * backend build that doesn't thread it through must not corrupt the mapping.
  *
  * Returns null when the container has no measurable size yet (rect.width/
  * height <= 0 — e.g. first render before layout) rather than dividing by
- * zero. Result is clamped to [0, frameWidth] / [0, frameHeight] so a pointer
- * event that fires a pixel or two outside the container (common during fast
- * drags) never sends an out-of-bounds coordinate to the backend.
+ * zero. Result is clamped to [0, frameWidth/pageScale] / [0, frameHeight/
+ * pageScale] — the page_scale-adjusted frame edge, not the raw device-pixel
+ * edge — so a pointer event that fires a pixel or two outside the container
+ * (common during fast drags) never sends an out-of-bounds coordinate to the
+ * backend.
  */
 export function mapClientToDevice(
   clientX: number,
@@ -42,15 +59,19 @@ export function mapClientToDevice(
   rect: RectLike,
   frameWidth: number,
   frameHeight: number,
+  pageScale?: number,
 ): DeviceCoords | null {
   if (rect.width <= 0 || rect.height <= 0 || frameWidth <= 0 || frameHeight <= 0) {
     return null
   }
-  const rawX = (clientX - rect.left) * (frameWidth / rect.width)
-  const rawY = (clientY - rect.top) * (frameHeight / rect.height)
+  const scale = pageScale !== undefined && pageScale > 0 ? pageScale : 1
+  const rawX = ((clientX - rect.left) * (frameWidth / rect.width)) / scale
+  const rawY = ((clientY - rect.top) * (frameHeight / rect.height)) / scale
+  const maxX = frameWidth / scale
+  const maxY = frameHeight / scale
   return {
-    x: Math.min(Math.max(rawX, 0), frameWidth),
-    y: Math.min(Math.max(rawY, 0), frameHeight),
+    x: Math.min(Math.max(rawX, 0), maxX),
+    y: Math.min(Math.max(rawY, 0), maxY),
   }
 }
 

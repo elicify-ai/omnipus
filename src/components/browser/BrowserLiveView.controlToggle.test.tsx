@@ -97,6 +97,97 @@ describe('BrowserLiveView — control toggle', () => {
     expect(screen.getByText('session not found')).toBeInTheDocument()
   })
 
+  // Reviewer finding: browser_status.message was discarded (only f.state was kept),
+  // so a terminal browser_status{state:'error', message:...} — already-controlled,
+  // take-control-disabled, no-manager-for-agent, live-view-disabled, malformed
+  // control — left the user stuck on the "Connecting…" spinner forever, with no
+  // frame ever going to arrive to break out of the `!frame` branch.
+  it('surfaces a browser_status error message before any frame arrives, stopping the connecting spinner', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    act(() => {
+      callbacksRef.current?.onConnected?.()
+      callbacksRef.current?.onStatus?.({
+        type: 'browser_status',
+        state: 'error',
+        message: 'This session already has a controller.',
+      })
+    })
+
+    expect(screen.getByTestId('browser-live-status-pill')).toHaveTextContent('Error')
+    expect(screen.getByText('This session already has a controller.')).toBeInTheDocument()
+    expect(screen.queryByText('Connecting to the live browser…')).not.toBeInTheDocument()
+    expect(screen.queryByText('Waiting for the first frame…')).not.toBeInTheDocument()
+  })
+
+  it('surfaces a browser_status error message in the persistent strip once a frame has already arrived', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    act(() => {
+      callbacksRef.current?.onConnected?.()
+      callbacksRef.current?.onScreencast?.({
+        type: 'browser_screencast',
+        session_id: 's1',
+        seq: 1,
+        data: 'AAAA',
+        width: 1280,
+        height: 720,
+      })
+      callbacksRef.current?.onStatus?.({
+        type: 'browser_status',
+        state: 'error',
+        message: 'Live view is disabled for this agent.',
+      })
+    })
+
+    expect(screen.getByTestId('browser-live-status-pill')).toHaveTextContent('Error')
+    expect(screen.getByRole('alert')).toHaveTextContent('Live view is disabled for this agent.')
+  })
+
+  // Reviewer finding: onDisconnected only cleared `connected`, leaving statusState
+  // (and therefore isControlling/controllingRef) at 'controlling' — the pill kept
+  // claiming "You're driving" and pointer/keyboard handlers kept attempting
+  // sendInput (silently dropped by the transport) for the whole reconnect window.
+  it('reverts control state and stops accepting input when the socket disconnects mid-control', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    act(() => {
+      callbacksRef.current?.onConnected?.()
+      callbacksRef.current?.onScreencast?.({
+        type: 'browser_screencast',
+        session_id: 's1',
+        seq: 1,
+        data: 'AAAA',
+        width: 1280,
+        height: 720,
+      })
+      callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' })
+    })
+    expect(screen.getByTestId('browser-live-status-pill')).toHaveTextContent("You're driving")
+    expect(screen.getByRole('button', { name: /release control/i })).not.toBeDisabled()
+
+    act(() => {
+      callbacksRef.current?.onDisconnected?.()
+    })
+
+    // Pill drops out of "controlling" — no human is actually driving anything
+    // once the transport is gone.
+    expect(screen.getByTestId('browser-live-status-pill')).toHaveTextContent('Reconnecting…')
+    // The toggle button re-derives its disabled state from `connected`, which
+    // onDisconnected also clears.
+    expect(screen.getByRole('button', { name: /take control/i })).toBeDisabled()
+    // The synthetic cursor overlay is control-gated too — it must clear.
+    expect(screen.queryByTestId('synthetic-cursor')).not.toBeInTheDocument()
+
+    // Pointer/keyboard handlers must no-op while disconnected, not silently
+    // attempt (and drop) a send.
+    mockSendInput.mockClear()
+    const container = screen.getByTestId('browser-live-frame')
+    fireEvent.pointerMove(container, { clientX: 20, clientY: 20 })
+    fireEvent.pointerDown(container, { clientX: 20, clientY: 20 })
+    fireEvent.pointerUp(container, { clientX: 20, clientY: 20 })
+    fireEvent.keyDown(container, { key: 'a' })
+    fireEvent.keyUp(container, { key: 'a' })
+    expect(mockSendInput).not.toHaveBeenCalled()
+  })
+
   it('calls detach() then close() on unmount so the backend engine can ref-count down', () => {
     const { unmount } = render(<BrowserLiveView sessionId="s1" agentId="a1" />)
     unmount()

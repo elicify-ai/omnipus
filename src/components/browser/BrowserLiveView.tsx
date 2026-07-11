@@ -38,7 +38,13 @@ export interface BrowserLiveViewProps {
 
 type PillConfig = { label: string; className: string }
 
-function pillConfig(state: BrowserStatusFrame['state'] | 'connecting'): PillConfig {
+// Local-only pill states layered on top of the wire `BrowserStatusFrame.state`
+// enum: 'connecting' (never attached yet) and 'disconnected' (was attached,
+// the WS transport dropped, a reconnect is in flight) both describe SPA
+// connection lifecycle, not anything the backend ever sends as a status.
+type LiveStatus = BrowserStatusFrame['state'] | 'connecting' | 'disconnected'
+
+function pillConfig(state: LiveStatus): PillConfig {
   switch (state) {
     case 'controlling':
       return { label: "You're driving", className: 'bg-[var(--color-accent)]/15 text-[var(--color-accent)]' }
@@ -48,6 +54,8 @@ function pillConfig(state: BrowserStatusFrame['state'] | 'connecting'): PillConf
       return { label: 'Detached', className: 'bg-[var(--color-surface-3)] text-[var(--color-muted)]' }
     case 'connecting':
       return { label: 'Connecting…', className: 'bg-[var(--color-surface-3)] text-[var(--color-muted)]' }
+    case 'disconnected':
+      return { label: 'Reconnecting…', className: 'bg-[var(--color-surface-3)] text-[var(--color-muted)]' }
     default:
       // 'attached' | 'idle' | 'released' — no human holds the control-lock.
       return { label: 'Agent driving', className: 'bg-[var(--color-surface-3)] text-[var(--color-secondary)]' }
@@ -59,14 +67,32 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, classNa
   const containerRef = useRef<HTMLDivElement | null>(null)
   const frameRef = useRef<BrowserScreencastFrame | null>(null)
   const controllingRef = useRef(false)
+  // mouse_move RAF-coalescing (see handlePointerMove below): only the latest
+  // pointer position per animation frame is ever sent, so the highest rate
+  // this can flood the server's input rate limiter at is one frame's worth
+  // of paint cadence — never the native pointermove rate (60-120Hz+, higher
+  // on gaming mice/some trackpads).
+  const pendingMoveRef = useRef<{ x: number; y: number; modifiers: number } | null>(null)
+  const moveFlushScheduledRef = useRef(false)
 
   const [frame, setFrame] = useState<BrowserScreencastFrame | null>(null)
-  const [statusState, setStatusState] = useState<BrowserStatusFrame['state'] | 'connecting'>('connecting')
+  const [statusState, setStatusState] = useState<LiveStatus>('connecting')
+  // The human-readable text carried on the latest browser_status frame (set
+  // whenever state === 'error' — already-controlled, take-control-disabled,
+  // no-manager-for-agent, live-view-disabled, malformed control, etc.).
+  // Distinct from connError, which is transport-level (WS create/send/auth
+  // failures) rather than a semantic status the backend reported.
+  const [statusMessage, setStatusMessage] = useState<string | null>(null)
   const [connError, setConnError] = useState<string | null>(null)
   const [connected, setConnected] = useState(false)
   const [cursorPos, setCursorPos] = useState<{ x: number; y: number } | null>(null)
 
   const isControlling = statusState === 'controlling'
+  // Unified error surface: a transport-level error always wins; otherwise a
+  // terminal browser_status{state:'error'} frame's message is shown. This is
+  // what actually renders (both before and after the first frame arrives) —
+  // see the "!frame" branch and the persistent error strip below.
+  const displayError = connError ?? (statusState === 'error' ? statusMessage ?? 'The live browser session reported an error.' : null)
 
   useEffect(() => {
     frameRef.current = frame
@@ -83,13 +109,29 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, classNa
   useEffect(() => {
     const conn = new BrowserLiveWsConnection(sessionId, agentId, {
       onScreencast: (f) => setFrame(f),
-      onStatus: (f) => setStatusState(f.state),
+      onStatus: (f) => {
+        setStatusState(f.state)
+        setStatusMessage(f.message ?? null)
+      },
       onError: (message) => setConnError(message),
       onConnected: () => {
         setConnected(true)
         setConnError(null)
       },
-      onDisconnected: () => setConnected(false),
+      onDisconnected: () => {
+        setConnected(false)
+        // The control-lock is server-side and per-connection — once the
+        // transport drops, whatever control state we last knew is stale (the
+        // human is no longer "driving" anything). Move to the local
+        // 'disconnected' pill state so the UI stops claiming control is
+        // held, the synthetic cursor clears (via the isControlling effect
+        // below), and every pointer/keyboard/wheel handler's `controllingRef`
+        // guard starts short-circuiting for the whole reconnect window —
+        // re-establishing control requires an explicit take-control action
+        // once the fresh browser_attach → browser_status round-trip lands.
+        setStatusState('disconnected')
+        pendingMoveRef.current = null
+      },
     })
     wsRef.current = conn
     conn.connect()
@@ -112,7 +154,14 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, classNa
       if (!controllingRef.current || !frameRef.current) return
       e.preventDefault()
       const rect = el!.getBoundingClientRect()
-      const device = mapClientToDevice(e.clientX, e.clientY, rect, frameRef.current.width, frameRef.current.height)
+      const device = mapClientToDevice(
+        e.clientX,
+        e.clientY,
+        rect,
+        frameRef.current.width,
+        frameRef.current.height,
+        frameRef.current.page_scale,
+      )
       if (!device) return
       wsRef.current?.sendInput({
         kind: 'wheel',
@@ -127,6 +176,43 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, classNa
     return () => el.removeEventListener('wheel', onWheel)
   }, [frame !== null])
 
+  // ── mouse_move RAF coalescing ────────────────────────────────────────────
+  // Native pointermove fires far faster than the backend's input rate limiter
+  // (50 events/sec) can absorb — a 120Hz+ mouse/trackpad would flood it,
+  // causing silent server-side drops and a janky remote cursor. Coalesce to
+  // "at most one send per animation frame": every handlePointerMove call
+  // overwrites pendingMoveRef with the latest position; a single scheduled
+  // flush (idempotent — moveFlushScheduledRef guards re-scheduling) drains
+  // whatever is pending when the frame/timer fires. Mirrors the rAF-or-
+  // setTimeout(0) fallback ws.ts already uses for inbound batching (rAF is
+  // unavailable in jsdom/node and a hidden tab never fires it).
+  const flushPendingMove = useCallback(() => {
+    moveFlushScheduledRef.current = false
+    const pending = pendingMoveRef.current
+    if (!pending) return
+    pendingMoveRef.current = null
+    wsRef.current?.sendInput({ kind: 'mouse_move', x: pending.x, y: pending.y, modifiers: pending.modifiers })
+  }, [])
+
+  const scheduleMoveFlush = useCallback(() => {
+    if (moveFlushScheduledRef.current) return
+    moveFlushScheduledRef.current = true
+    if (typeof requestAnimationFrame !== 'undefined' && document.visibilityState !== 'hidden') {
+      requestAnimationFrame(flushPendingMove)
+    } else {
+      setTimeout(flushPendingMove, 0)
+    }
+  }, [flushPendingMove])
+
+  // Cancel any in-flight coalesced move on unmount — nothing to flush once
+  // the socket is about to be closed/detached by the WS lifecycle effect.
+  useEffect(() => {
+    return () => {
+      moveFlushScheduledRef.current = false
+      pendingMoveRef.current = null
+    }
+  }, [])
+
   const handleToggleControl = useCallback(() => {
     if (!wsRef.current) return
     wsRef.current.sendControl(isControlling ? 'release' : 'take')
@@ -135,11 +221,22 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, classNa
   const handlePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (!controllingRef.current || !frameRef.current || !containerRef.current) return
     const rect = containerRef.current.getBoundingClientRect()
+    // Local cursor overlay updates immediately every event — only the
+    // network send is throttled, so the synthetic cursor still tracks the
+    // pointer at full native resolution.
     setCursorPos({ x: e.clientX - rect.left, y: e.clientY - rect.top })
-    const device = mapClientToDevice(e.clientX, e.clientY, rect, frameRef.current.width, frameRef.current.height)
+    const device = mapClientToDevice(
+      e.clientX,
+      e.clientY,
+      rect,
+      frameRef.current.width,
+      frameRef.current.height,
+      frameRef.current.page_scale,
+    )
     if (!device) return
-    wsRef.current?.sendInput({ kind: 'mouse_move', x: device.x, y: device.y, modifiers: computeModifiers(e) })
-  }, [])
+    pendingMoveRef.current = { x: device.x, y: device.y, modifiers: computeModifiers(e) }
+    scheduleMoveFlush()
+  }, [scheduleMoveFlush])
 
   const handlePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (!controllingRef.current || !frameRef.current || !containerRef.current) return
@@ -155,7 +252,14 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, classNa
       // back to normal bounds-limited pointer events.
     }
     const rect = containerRef.current.getBoundingClientRect()
-    const device = mapClientToDevice(e.clientX, e.clientY, rect, frameRef.current.width, frameRef.current.height)
+    const device = mapClientToDevice(
+      e.clientX,
+      e.clientY,
+      rect,
+      frameRef.current.width,
+      frameRef.current.height,
+      frameRef.current.page_scale,
+    )
     if (!device) return
     wsRef.current?.sendInput({
       kind: 'mouse_down',
@@ -169,7 +273,14 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, classNa
   const handlePointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (!controllingRef.current || !frameRef.current || !containerRef.current) return
     const rect = containerRef.current.getBoundingClientRect()
-    const device = mapClientToDevice(e.clientX, e.clientY, rect, frameRef.current.width, frameRef.current.height)
+    const device = mapClientToDevice(
+      e.clientX,
+      e.clientY,
+      rect,
+      frameRef.current.width,
+      frameRef.current.height,
+      frameRef.current.page_scale,
+    )
     if (!device) return
     wsRef.current?.sendInput({
       kind: 'mouse_up',
@@ -274,10 +385,10 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, classNa
       <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-black p-2">
         {!frame && (
           <div className="flex flex-col items-center gap-2 p-6 text-center text-sm text-[var(--color-muted)]">
-            {connError ? (
+            {displayError ? (
               <>
                 <WarningCircle size={22} className="text-[var(--color-error)]" />
-                <p className="text-[var(--color-error)]">{connError}</p>
+                <p className="text-[var(--color-error)]">{displayError}</p>
               </>
             ) : (
               <>
@@ -324,10 +435,13 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, classNa
       </div>
 
       {/* Persistent error strip — shown alongside the frame once one has rendered (the
-          empty-state branch above already surfaces connError before any frame arrives). */}
-      {frame && connError && (
+          empty-state branch above already surfaces displayError before any frame arrives).
+          Covers both transport errors (connError) and a terminal browser_status{state:'error'}
+          (already-controlled, take-control-disabled, no-manager-for-agent, live-view-disabled,
+          malformed control, …) so a semantic status error is just as visible as a transport one. */}
+      {frame && displayError && (
         <div role="alert" className="shrink-0 border-t border-[var(--color-error)]/30 bg-[var(--color-error)]/10 px-4 py-2 text-xs text-[var(--color-error)]">
-          {connError}
+          {displayError}
         </div>
       )}
     </div>
