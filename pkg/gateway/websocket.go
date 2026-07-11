@@ -1108,11 +1108,26 @@ func (h *WSHandler) handleChatMessage(
 				})
 				return
 			}
-			// M4: if the resumed session has no workspace binding yet but the
-			// client supplied one (workspace chat), stamp it now so tasks the
-			// agent creates this turn land on the active workspace's board. Never
-			// rewrite an existing binding — the first binding wins.
-			if workspaceID != "" && existingMeta != nil && existingMeta.WorkspaceID == "" {
+			// M4: track the ACTIVE workspace on every message, not just the first
+			// one. The SPA resends the CURRENTLY active workspace_id on every
+			// outbound frame (src/store/chat.ts sendMessage, read live from
+			// useWorkspacesStore) specifically so a task/delegation this turn
+			// creates lands on whatever workspace the operator is looking at
+			// right now — including an ongoing chat session that started in one
+			// workspace and is continuing in another. A stale "first binding
+			// wins" rule broke that: a delegation edge wired on a workspace's
+			// Team tab AFTER the session's first bind would never be consulted
+			// by resolveEffectiveWorkspaceID (pkg/agent/loop.go), which reads
+			// this same session meta fresh every turn — so the UI's "Saved just
+			// now" was genuine (see TestWorkspaceDelegation_EdgeWiredViaTeamTabPersistsForLiveSession)
+			// but the running session kept enforcing/advertising delegation
+			// against its ORIGINAL workspace until the operator started a brand
+			// new session.
+			// Only skip the rewrite when this message carries no workspace_id at
+			// all (workspaceID == "") — an absent value must never blank out an
+			// existing binding (e.g. a non-workspace-aware channel message
+			// resuming a workspace-bound session), it just leaves it as-is.
+			if workspaceID != "" && existingMeta != nil && existingMeta.WorkspaceID != workspaceID {
 				wsCopy := workspaceID
 				if err := store.SetMeta(sessionID, session.MetaPatch{WorkspaceID: &wsCopy}); err != nil {
 					slog.Warn("ws: could not bind workspace to session", "session_id", sessionID, "error", err)
