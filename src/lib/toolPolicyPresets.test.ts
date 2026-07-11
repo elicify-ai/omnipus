@@ -9,8 +9,14 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { POLICY_PRESETS, applyRolePreset, type RolePreset } from './toolPolicyPresets'
-import type { RegistryTool } from '@/lib/api'
+import {
+  POLICY_PRESETS,
+  applyRolePreset,
+  findOrphanedPresetOverrideKeys,
+  resolveToolsCfg,
+  type RolePreset,
+} from './toolPolicyPresets'
+import type { AgentToolsCfg, RegistryTool } from '@/lib/api'
 
 function makeTool(name: string): RegistryTool {
   return { name, description: `${name} description`, scope: 'general', category: 'core', source: 'builtin' }
@@ -24,10 +30,10 @@ const SOME_TOOLS: RegistryTool[] = [
 
 const TOOLS_WITH_OVERRIDES: RegistryTool[] = [
   makeTool('bash'),
-  makeTool('browser.navigate'),
-  makeTool('browser.click'),
-  makeTool('browser.type'),
-  makeTool('browser.evaluate'),
+  makeTool('browser_navigate'),
+  makeTool('browser_click'),
+  makeTool('browser_type'),
+  makeTool('browser_evaluate'),
   makeTool('write_file'),
   makeTool('read_file'),
 ]
@@ -68,20 +74,20 @@ describe('POLICY_PRESETS', () => {
       expect(preset.overrides['bash']).toBe('ask')
     })
 
-    it('sets browser.navigate = ask', () => {
-      expect(preset.overrides['browser.navigate']).toBe('ask')
+    it('sets browser_navigate = ask', () => {
+      expect(preset.overrides['browser_navigate']).toBe('ask')
     })
 
-    it('sets browser.click = ask', () => {
-      expect(preset.overrides['browser.click']).toBe('ask')
+    it('sets browser_click = ask', () => {
+      expect(preset.overrides['browser_click']).toBe('ask')
     })
 
-    it('sets browser.type = ask', () => {
-      expect(preset.overrides['browser.type']).toBe('ask')
+    it('sets browser_type = ask', () => {
+      expect(preset.overrides['browser_type']).toBe('ask')
     })
 
-    it('sets browser.evaluate = deny', () => {
-      expect(preset.overrides['browser.evaluate']).toBe('deny')
+    it('sets browser_evaluate = deny', () => {
+      expect(preset.overrides['browser_evaluate']).toBe('deny')
     })
 
     it('sets write_file = ask', () => {
@@ -95,10 +101,10 @@ describe('POLICY_PRESETS', () => {
     it('matches the §2.1 table exactly (full snapshot)', () => {
       expect(preset.overrides).toStrictEqual({
         bash: 'ask',
-        'browser.navigate': 'ask',
-        'browser.click': 'ask',
-        'browser.type': 'ask',
-        'browser.evaluate': 'deny',
+        'browser_navigate': 'ask',
+        'browser_click': 'ask',
+        'browser_type': 'ask',
+        'browser_evaluate': 'deny',
         write_file: 'ask',
       })
     })
@@ -145,10 +151,10 @@ describe('applyRolePreset — expands to a complete map over the given tool list
     expect(applyRolePreset('balanced', TOOLS_WITH_OVERRIDES)).toStrictEqual({
       policies: {
         bash: 'ask',
-        'browser.navigate': 'ask',
-        'browser.click': 'ask',
-        'browser.type': 'ask',
-        'browser.evaluate': 'deny',
+        'browser_navigate': 'ask',
+        'browser_click': 'ask',
+        'browser_type': 'ask',
+        'browser_evaluate': 'deny',
         write_file: 'ask',
         read_file: 'allow', // not in the override table → falls back to defaultPolicy
       },
@@ -174,10 +180,10 @@ describe('applyRolePreset — expands to a complete map over the given tool list
       'cautious',
       {
         bash: 'ask',
-        'browser.navigate': 'ask',
-        'browser.click': 'ask',
-        'browser.type': 'ask',
-        'browser.evaluate': 'ask',
+        'browser_navigate': 'ask',
+        'browser_click': 'ask',
+        'browser_type': 'ask',
+        'browser_evaluate': 'ask',
         write_file: 'ask',
         read_file: 'ask',
       },
@@ -186,10 +192,10 @@ describe('applyRolePreset — expands to a complete map over the given tool list
       'balanced',
       {
         bash: 'ask',
-        'browser.navigate': 'ask',
-        'browser.click': 'ask',
-        'browser.type': 'ask',
-        'browser.evaluate': 'deny',
+        'browser_navigate': 'ask',
+        'browser_click': 'ask',
+        'browser_type': 'ask',
+        'browser_evaluate': 'deny',
         write_file: 'ask',
         read_file: 'allow',
       },
@@ -198,10 +204,10 @@ describe('applyRolePreset — expands to a complete map over the given tool list
       'full_access',
       {
         bash: 'allow',
-        'browser.navigate': 'allow',
-        'browser.click': 'allow',
-        'browser.type': 'allow',
-        'browser.evaluate': 'allow',
+        'browser_navigate': 'allow',
+        'browser_click': 'allow',
+        'browser_type': 'allow',
+        'browser_evaluate': 'allow',
         write_file: 'allow',
         read_file: 'allow',
       },
@@ -231,5 +237,122 @@ describe('ToolPolicyValue — HC#8 wire-type alignment', () => {
   it('the returned policies map covers every tool name passed in, exactly once', () => {
     const result = applyRolePreset('cautious', TOOLS_WITH_OVERRIDES)
     expect(Object.keys(result.policies).sort()).toEqual(TOOLS_WITH_OVERRIDES.map((t) => t.name).sort())
+  })
+})
+
+// ── Regression: preset override keys must match the LIVE registry's real ──────
+// tool names (underscored), not a legacy/invented dotted namespace ─────────────
+//
+// Bug (fixed 2026-07-11): the Balanced preset's browser-tool overrides were
+// keyed with dotted names (`browser.navigate` etc.) that never matched
+// anything in the real GET /api/v1/tools registry (confirmed underscored:
+// `browser_navigate`, `browser_click`, `browser_type`, `browser_evaluate` —
+// see humanizeToolName.ts's "New canonical browser tool names" vs. "Legacy
+// dotted names" split). The mismatch meant `applyRolePreset('balanced', ...)`
+// silently fell through to defaultPolicy ('allow') for all four browser
+// tools instead of asking/denying them — verified live via a wizard-created
+// agent's persisted config.json. These tests pin the fix and would have
+// caught the original bug directly (unlike the pre-fix suite, which used
+// the same wrong dotted names in its own fixtures and therefore couldn't
+// detect the mismatch).
+describe('Balanced preset — browser-tool override keys match the real registry naming', () => {
+  const REAL_BROWSER_TOOLS: RegistryTool[] = [
+    makeTool('browser_navigate'),
+    makeTool('browser_click'),
+    makeTool('browser_type'),
+    makeTool('browser_evaluate'),
+    makeTool('browser_screenshot'),
+    makeTool('browser_get_text'),
+    makeTool('browser_wait'),
+  ]
+
+  it('applies ask/deny to the real underscored tool names, not "allow"', () => {
+    const result = applyRolePreset('balanced', REAL_BROWSER_TOOLS)
+    expect(result.policies.browser_navigate).toBe('ask')
+    expect(result.policies.browser_click).toBe('ask')
+    expect(result.policies.browser_type).toBe('ask')
+    expect(result.policies.browser_evaluate).toBe('deny')
+    // No override for these three → defaultPolicy ('allow') is correct.
+    expect(result.policies.browser_screenshot).toBe('allow')
+    expect(result.policies.browser_get_text).toBe('allow')
+    expect(result.policies.browser_wait).toBe('allow')
+  })
+
+  it('none of the Balanced preset overrides contain a dot (no legacy/invented namespacing)', () => {
+    for (const key of Object.keys(POLICY_PRESETS.balanced.overrides)) {
+      expect(key).not.toContain('.')
+    }
+  })
+})
+
+describe('findOrphanedPresetOverrideKeys', () => {
+  it('returns an empty array when every override key matches a real tool name', () => {
+    const fullCatalog: RegistryTool[] = [
+      makeTool('bash'),
+      makeTool('browser_navigate'),
+      makeTool('browser_click'),
+      makeTool('browser_type'),
+      makeTool('browser_evaluate'),
+      makeTool('write_file'),
+    ]
+    expect(findOrphanedPresetOverrideKeys(fullCatalog)).toEqual([])
+  })
+
+  it('flags an override key that does not match any tool in the given registry', () => {
+    // Simulates the original bug: dotted keys that never match a real tool.
+    const registryMissingBrowserTools: RegistryTool[] = [makeTool('bash'), makeTool('write_file')]
+    const orphaned = findOrphanedPresetOverrideKeys(registryMissingBrowserTools)
+    expect(orphaned).toEqual(
+      expect.arrayContaining(['browser_navigate', 'browser_click', 'browser_type', 'browser_evaluate']),
+    )
+  })
+
+  it('an empty registry flags every override key as orphaned (nothing to match against)', () => {
+    const orphaned = findOrphanedPresetOverrideKeys([])
+    expect(orphaned.length).toBeGreaterThan(0)
+  })
+})
+
+// ── resolveToolsCfg — single source of truth for display default + commit default ──
+
+describe('resolveToolsCfg', () => {
+  const TOOLS: RegistryTool[] = [
+    makeTool('bash'),
+    makeTool('read_file'),
+    makeTool('write_file'),
+  ]
+
+  it('returns undefined when cfg is undefined and the tool list is empty (registry not resolved yet)', () => {
+    expect(resolveToolsCfg(undefined, [])).toBeUndefined()
+  })
+
+  it('computes the Balanced default when cfg is undefined and tools are available', () => {
+    const result = resolveToolsCfg(undefined, TOOLS)
+    expect(result).toEqual({ builtin: applyRolePreset('balanced', TOOLS) })
+  })
+
+  it('returns cfg unchanged when it already carries a genuine builtin.policies object', () => {
+    const cfg: AgentToolsCfg = { builtin: { policies: { bash: 'deny' } } }
+    expect(resolveToolsCfg(cfg, TOOLS)).toBe(cfg)
+  })
+
+  it('treats a cfg of {} as incomplete — falls through to the Balanced default, not passed through unchanged', () => {
+    const result = resolveToolsCfg({}, TOOLS)
+    expect(result).toEqual({ builtin: applyRolePreset('balanced', TOOLS) })
+  })
+
+  it('treats a cfg carrying only .mcp (no .builtin) as incomplete — computes builtin and preserves .mcp', () => {
+    const cfg: AgentToolsCfg = { mcp: { servers: [{ id: 'srv1' }] } }
+    const result = resolveToolsCfg(cfg, TOOLS)
+    expect(result).toEqual({
+      mcp: { servers: [{ id: 'srv1' }] },
+      builtin: applyRolePreset('balanced', TOOLS),
+    })
+  })
+
+  it('returns undefined (omit tools_cfg) when tools is empty even if cfg is a non-complete object', () => {
+    // Degenerate race: registry query hasn't resolved, and no prior explicit
+    // config exists either. Must NOT commit an explicit-but-empty policies map.
+    expect(resolveToolsCfg({}, [])).toBeUndefined()
   })
 })

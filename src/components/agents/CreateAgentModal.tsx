@@ -17,7 +17,7 @@
 // compatibility — we map them to the new wire enum ('custom' → 'Main',
 // 'worker' → 'Subagent').
 
-import { useCallback } from 'react'
+import { useCallback, useEffect } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { useUiStore } from '@/store/ui'
@@ -37,7 +37,7 @@ import type {
   AgentCreateRequestSubagent3p,
   RegistryTool,
 } from '@/lib/api'
-import { applyRolePreset } from '@/lib/toolPolicyPresets'
+import { findOrphanedPresetOverrideKeys, resolveToolsCfg } from '@/lib/toolPolicyPresets'
 
 import {
   CreateAgentWizard,
@@ -76,38 +76,6 @@ function normalizeWizardType(
   return t
 }
 
-/**
- * The Tools step (Step3Tools.tsx) DISPLAYS a Balanced-preset default before
- * the user has touched the per-tool editor — "something concrete to render"
- * — but only ever commits `payload.tools_cfg` when the operator genuinely
- * interacts with `ToolPolicyEditor` (a preset button or an individual
- * allow/ask/deny toggle). If the operator submits without touching Step 3,
- * `payload.tools_cfg` is still `undefined` here.
- *
- * We MUST commit the same Balanced-preset policy that was displayed in that
- * case — otherwise omitting `tools_cfg` from the request lets the backend's
- * `NewCustomAgentToolsCfg()` seed apply instead (deny-everything except a
- * narrow read-only allow-list), silently far more restrictive than what the
- * wizard showed the operator. `applyRolePreset('balanced', tools)` is the
- * exact same call Step3Tools.tsx's `toolPolicyValue()` makes for its
- * uncommitted-default render path — single source of truth in
- * `@/lib/toolPolicyPresets`, not a re-derived literal.
- *
- * Only applies to Main / Subagent (native agents governed by Omnipus's own
- * tool-policy mechanism). subagent_3p never has this problem: its variant
- * schema (`AgentCreateRequestSubagent3p`, `additionalProperties: false`)
- * does not carry `tools_cfg` at all — the external CLI runs its own tool
- * loop and never reaches the Tools step (2-step wizard for that type).
- */
-function defaultToolsCfg(
-  payload: WizardSubmitPayload,
-  tools: RegistryTool[],
-): NonNullable<AgentCreateRequestMain['tools_cfg']> {
-  return payload.tools_cfg !== undefined
-    ? payload.tools_cfg
-    : { builtin: applyRolePreset('balanced', tools) }
-}
-
 /** Convert the wizard's submit payload to a wire AgentCreateRequest.
  *
  *  AgentCreateRequest is a discriminated union (one variant per agent type,
@@ -123,10 +91,20 @@ function defaultToolsCfg(
  *    subagent_3p always sends `kind: external-cli` (the variant requires it).
  *  - All string fields are `.trim()`-ed to match the wizard's step
  *    gating (which validates `.trim().length > 0`).
- *  - Main / Subagent (when not inheriting tools) always send `tools_cfg` —
- *    see `defaultToolsCfg` above for why an untouched Tools step must still
- *    commit the displayed Balanced-preset default rather than omit the
- *    field.
+ *  - Main / Subagent (when not inheriting tools) send `tools_cfg` via
+ *    `resolveToolsCfg` (`@/lib/toolPolicyPresets`) — the SAME helper
+ *    Step3Tools.tsx's `toolPolicyValue()` uses for its uncommitted-default
+ *    render, so an untouched Tools step still commits the Balanced-preset
+ *    policy the wizard displayed, rather than silently omitting the field
+ *    and falling back to the backend's much-more-restrictive
+ *    `NewCustomAgentToolsCfg()` seed. `resolveToolsCfg` returns `undefined`
+ *    (field omitted, same as before any default was committed) only in the
+ *    degenerate case where the tool registry hasn't resolved yet — see its
+ *    doc comment.
+ *  - subagent_3p never has this concern: its variant schema
+ *    (`AgentCreateRequestSubagent3p`, `additionalProperties: false`) does
+ *    not carry `tools_cfg` at all — the external CLI runs its own tool loop
+ *    and never reaches the Tools step (2-step wizard for that type).
  */
 function payloadToCreateRequest(
   payload: WizardSubmitPayload,
@@ -179,7 +157,10 @@ function payloadToCreateRequest(
     if (!inheritModel && payload.model.trim()) req.model = payload.model.trim()
     if (!inheritModel && payload.provider?.trim()) req.provider = payload.provider.trim()
     if (!inheritModel && payload.fallback_models !== undefined) req.fallback_models = payload.fallback_models
-    if (!inheritTools) req.tools_cfg = defaultToolsCfg(payload, tools)
+    if (!inheritTools) {
+      const toolsCfg = resolveToolsCfg(payload.tools_cfg, tools)
+      if (toolsCfg !== undefined) req.tools_cfg = toolsCfg
+    }
     if (!inheritSkills && payload.skills !== undefined) req.skills = payload.skills
     if (payload.model_params !== undefined) req.model_params = payload.model_params
     if (payload.shell_policy !== undefined) req.shell_policy = payload.shell_policy
@@ -200,7 +181,8 @@ function payloadToCreateRequest(
   if (payload.model.trim()) req.model = payload.model.trim()
   if (payload.provider?.trim()) req.provider = payload.provider.trim()
   if (payload.voice !== undefined && payload.voice !== '') req.voice = payload.voice
-  req.tools_cfg = defaultToolsCfg(payload, tools)
+  const toolsCfg = resolveToolsCfg(payload.tools_cfg, tools)
+  if (toolsCfg !== undefined) req.tools_cfg = toolsCfg
   if (payload.skills !== undefined) req.skills = payload.skills
   if (payload.fallback_models !== undefined) req.fallback_models = payload.fallback_models
   if (payload.model_params !== undefined) req.model_params = payload.model_params
@@ -294,7 +276,25 @@ export function CreateAgentModal({
     ? { policies: globalPoliciesQuery.data.policies ?? {} }
     : undefined
 
-  // `registryTools` also feeds `defaultToolsCfg` (see payloadToCreateRequest)
+  // Dev-time drift guard: once the full tool registry resolves, warn if any
+  // role-preset override key (toolPolicyPresets.ts) doesn't match a real
+  // tool name — the exact class of bug that shipped with the dotted
+  // `browser.navigate` etc. override keys (fixed 2026-07-11; see
+  // toolPolicyPresets.ts's Balanced preset comment). Console-only, dev
+  // builds only — never throws, never blocks the wizard.
+  useEffect(() => {
+    if (!import.meta.env.DEV || registryTools.length === 0) return
+    const orphaned = findOrphanedPresetOverrideKeys(registryTools)
+    if (orphaned.length > 0) {
+      console.warn(
+        '[toolPolicyPresets] override key(s) do not match any tool in the live registry ' +
+          '(silently fall through to defaultPolicy instead of applying):',
+        orphaned,
+      )
+    }
+  }, [registryTools])
+
+  // `registryTools` also feeds `resolveToolsCfg` (see payloadToCreateRequest)
   // so the tools_cfg committed on submit is built from the SAME catalog the
   // Tools step rendered its Balanced-preset default from.
   const handleSubmit = useCallback(

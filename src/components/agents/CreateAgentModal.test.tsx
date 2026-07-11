@@ -515,11 +515,19 @@ describe('CreateAgentModal — submit success path', () => {
 // wizard had shown. The fix commits the SAME displayed default into the
 // request at submit time when payload.tools_cfg is still undefined.
 describe('CreateAgentModal — tools_cfg commit-on-submit default (untouched Tools step)', () => {
+  // Includes browser_navigate / browser_evaluate — a real gap in prior
+  // coverage: the Balanced preset's browser-tool overrides were keyed with
+  // wrong (dotted, non-matching) names until 2026-07-11, and this catalog
+  // previously had NO browser tools at all, so the commit-on-submit test
+  // suite would have stayed green while shipping that defect (it silently
+  // committed 'allow' for browser tools instead of the displayed ask/deny).
   const CATALOG: RegistryTool[] = [
     { name: 'bash', description: 'bash', scope: 'general', category: 'core', source: 'builtin' },
     { name: 'read_file', description: 'read_file', scope: 'general', category: 'core', source: 'builtin' },
     { name: 'write_file', description: 'write_file', scope: 'general', category: 'core', source: 'builtin' },
     { name: 'web_search', description: 'web_search', scope: 'general', category: 'core', source: 'builtin' },
+    { name: 'browser_navigate', description: 'browser_navigate', scope: 'general', category: 'browser', source: 'builtin' },
+    { name: 'browser_evaluate', description: 'browser_evaluate', scope: 'general', category: 'browser', source: 'builtin' },
   ]
 
   it('Main: submitting without touching Step 3 commits the Balanced-preset tools_cfg (not an omitted field)', async () => {
@@ -535,11 +543,16 @@ describe('CreateAgentModal — tools_cfg commit-on-submit default (untouched Too
     expect(call.tools_cfg).toBeDefined()
     expect(call.tools_cfg).toEqual({ builtin: applyRolePreset('balanced', CATALOG) })
     // Spot-check the exact policy values the wizard displayed (§2.1 Balanced
-    // overrides): bash=ask, write_file=ask, everything else allow.
+    // overrides): bash=ask, write_file=ask, browser_navigate=ask,
+    // browser_evaluate=deny, everything else allow. The browser-tool
+    // assertions are the direct regression check for the wrong-override-key
+    // bug — before the fix these silently committed 'allow'.
     expect(call.tools_cfg.builtin.policies.bash).toBe('ask')
     expect(call.tools_cfg.builtin.policies.write_file).toBe('ask')
     expect(call.tools_cfg.builtin.policies.read_file).toBe('allow')
     expect(call.tools_cfg.builtin.policies.web_search).toBe('allow')
+    expect(call.tools_cfg.builtin.policies.browser_navigate).toBe('ask')
+    expect(call.tools_cfg.builtin.policies.browser_evaluate).toBe('deny')
   })
 
   it('Subagent (not inheriting tools): submitting without touching Step 3 commits the Balanced-preset tools_cfg', async () => {
@@ -579,6 +592,38 @@ describe('CreateAgentModal — tools_cfg commit-on-submit default (untouched Too
       initialCli: 'claude-code',
     })
     await fillAndAdvanceToStep3({ initialType: 'subagent_3p', cliPath: '/usr/local/bin/claude-code' })
+    fireEvent.click(screen.getByTestId('wizard-create'))
+    await waitFor(() => expect(onCreate).toHaveBeenCalled())
+    const call = onCreate.mock.calls.at(-1)![0]
+    expect(call).not.toHaveProperty('tools_cfg')
+  })
+
+  // Regression coverage for the empty/unresolved-registry race (5 independent
+  // reviewers flagged this on the first pass of this fix): registryTools =
+  // toolsQuery.data ?? [] has no loading/error gate, so submitting while the
+  // /tools query is still empty (unresolved, or — degenerately — a genuinely
+  // tool-less catalog) must NOT commit an explicit-but-empty
+  // `{ builtin: { policies: {} } }`, which would trip the backend's
+  // full-coverage validation and surface a confusing 400. It must fall back
+  // to omitting tools_cfg — the same as the pre-existing (pre-default-commit)
+  // behavior for this one degenerate case. resolveToolsCfg (@/lib/
+  // toolPolicyPresets) encodes this guard.
+  it('Main: an empty/unresolved tool registry omits tools_cfg rather than committing an empty policies map', async () => {
+    // fetchRegistryTools resolves to [] here (the beforeEach default) —
+    // simulating the query never having populated a catalog by submit time.
+    const onCreate = vi.fn().mockResolvedValue(undefined)
+    renderModal({ open: true, onClose: vi.fn(), onCreate, initialType: 'Main' })
+    await fillAndAdvanceToStep3({ initialType: 'Main' })
+    fireEvent.click(screen.getByTestId('wizard-create'))
+    await waitFor(() => expect(onCreate).toHaveBeenCalled())
+    const call = onCreate.mock.calls.at(-1)![0]
+    expect(call).not.toHaveProperty('tools_cfg')
+  })
+
+  it('Subagent (not inheriting tools): an empty/unresolved tool registry omits tools_cfg rather than committing an empty policies map', async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined)
+    renderModal({ open: true, onClose: vi.fn(), onCreate, initialType: 'Subagent' })
+    await fillAndAdvanceToStep3({ initialType: 'Subagent' })
     fireEvent.click(screen.getByTestId('wizard-create'))
     await waitFor(() => expect(onCreate).toHaveBeenCalled())
     const call = onCreate.mock.calls.at(-1)![0]

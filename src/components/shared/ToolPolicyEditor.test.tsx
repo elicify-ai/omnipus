@@ -73,11 +73,19 @@ const FILE_TOOLS: RegistryTool[] = [
   makeTool({ name: 'list_dir', category: 'file', scope: 'core' }),
 ]
 
+// Real registry names are underscored (confirmed live via GET /api/v1/tools —
+// see toolPolicyPresets.ts's Balanced preset comment on the 2026-07-11 fix).
+// Dotted forms like `browser.navigate` are LEGACY aliases kept only for
+// humanizing old session transcripts (humanizeToolName.ts) — they were never
+// the real registry naming, and using them here previously masked the
+// Balanced-preset override-key mismatch bug (the fixture and the preset
+// table used the same wrong convention, so the tests passed for the wrong
+// reason). Do not revert to dotted names.
 const BROWSER_TOOLS: RegistryTool[] = [
-  makeTool({ name: 'browser.navigate', category: 'browser', scope: 'core' }),
-  makeTool({ name: 'browser.click', category: 'browser', scope: 'core' }),
-  makeTool({ name: 'browser.type', category: 'browser', scope: 'core' }),
-  makeTool({ name: 'browser.evaluate', category: 'browser', scope: 'core' }),
+  makeTool({ name: 'browser_navigate', category: 'browser', scope: 'core' }),
+  makeTool({ name: 'browser_click', category: 'browser', scope: 'core' }),
+  makeTool({ name: 'browser_type', category: 'browser', scope: 'core' }),
+  makeTool({ name: 'browser_evaluate', category: 'browser', scope: 'core' }),
 ]
 
 /**
@@ -300,11 +308,11 @@ describe('ToolPolicyEditor — preset application', () => {
     const expected = expectedPresetMap('balanced', ALL_TOOLS)
     expect(onChange).toHaveBeenCalledWith({ policies: expected })
     // Sanity-check the §2.1 overrides landed (ADR-036: `bash` isn't in ALL_TOOLS,
-    // but the browser.* tools and write_file are).
-    expect(expected['browser.navigate']).toBe('ask')
-    expect(expected['browser.click']).toBe('ask')
-    expect(expected['browser.type']).toBe('ask')
-    expect(expected['browser.evaluate']).toBe('deny')
+    // but the browser_* tools and write_file are).
+    expect(expected['browser_navigate']).toBe('ask')
+    expect(expected['browser_click']).toBe('ask')
+    expect(expected['browser_type']).toBe('ask')
+    expect(expected['browser_evaluate']).toBe('deny')
     expect(expected['write_file']).toBe('ask')
     // Tools with no override fall back to the preset's default ('allow').
     expect(expected['read_file']).toBe('allow')
@@ -333,13 +341,13 @@ describe('ToolPolicyEditor — category rollup pills (M-9)', () => {
   })
 
   it('shows a Mixed pill when tools in a category have different resolved policies', () => {
-    // browser.navigate=ask, browser.evaluate=deny, click/type=allow → Mixed
+    // browser_navigate=ask, browser_evaluate=deny, click/type=allow → Mixed
     const value: ToolPolicyValue = {
       policies: {
-        'browser.navigate': 'ask',
-        'browser.evaluate': 'deny',
-        'browser.click': 'allow',
-        'browser.type': 'allow',
+        browser_navigate: 'ask',
+        browser_evaluate: 'deny',
+        browser_click: 'allow',
+        browser_type: 'allow',
       },
     }
     renderEditor(BROWSER_TOOLS, value)
@@ -397,8 +405,8 @@ describe('ToolPolicyEditor — policy round-trip', () => {
     const onChange = vi.fn()
     const existingValue: ToolPolicyValue = {
       policies: {
-        'browser.navigate': 'ask',
-        'browser.evaluate': 'deny',
+        browser_navigate: 'ask',
+        browser_evaluate: 'deny',
         write_file: 'ask',
       },
     }
@@ -582,21 +590,30 @@ describe('ToolPolicyEditor — glob-keyed policies (Blocker 4)', () => {
 
 describe('ToolPolicyEditor — global override locking', () => {
   it('locks less-restrictive per-agent controls when a global glob denies the tool', async () => {
+    // Uses SYSTEM_TOOLS / 'system.*' rather than BROWSER_TOOLS / 'browser.*':
+    // the glob mechanism (resolvePolicy in toolCategories.ts) matches on a
+    // literal dot-namespace prefix, and only system.* tools genuinely use
+    // dot namespacing in the real registry — browser tool names are flat
+    // underscored (browser_navigate etc., confirmed live via GET
+    // /api/v1/tools; see toolPolicyPresets.ts's Balanced preset comment on
+    // the 2026-07-11 fix). A 'browser.*' glob cannot match any real browser
+    // tool post-fix, so this test now exercises the glob mechanism on a
+    // namespace where it actually applies.
     const user = userEvent.setup()
     render(
       <ToolPolicyEditor
-        tools={BROWSER_TOOLS}
+        tools={SYSTEM_TOOLS}
         value={SAFE_VALUE}
         onChange={vi.fn()}
-        globalPolicies={{ policies: { 'browser.*': 'deny' } }}
+        globalPolicies={{ policies: { 'system.*': 'deny' } }}
       />,
     )
     const categoryGrid = screen.getByTestId('category-grid')
-    await user.click(within(categoryGrid).getByRole('button', { name: /browser/i }))
+    await user.click(within(categoryGrid).getByRole('button', { name: /system/i }))
 
-    const row = screen.getByTestId('tool-row-browser.navigate')
+    const row = screen.getByTestId('tool-row-system.config_read')
     // A "Global: Deny" indicator links to Settings → Security.
-    const link = within(row).getByTestId('global-override-browser.navigate')
+    const link = within(row).getByTestId('global-override-system.config_read')
     expect(link).toHaveTextContent(/global:\s*deny/i)
     expect(link).toHaveAttribute('href', '/#/settings')
     // allow + ask are locked (less restrictive than deny); deny stays enabled.
