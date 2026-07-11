@@ -5,6 +5,7 @@ import { NotificationPanel } from './NotificationPanel'
 import { ToastContainer } from '@/components/ui/toast-container'
 import { ToolApprovalModal } from '@/components/agents/ToolApprovalModal'
 import { MediaLightbox } from '@/components/chat/MediaLightbox'
+import { BrowserLivePanel } from '@/components/browser/BrowserLivePanel'
 import { OmnipusRuntimeProvider } from '@/components/chat/OmnipusRuntimeProvider'
 import { ErrorBoundary } from '@/components/ui/error-boundary'
 import { queryClient } from '@/lib/queryClient'
@@ -166,6 +167,9 @@ export function AppShell() {
 
       {/* Notification center panel — #264 */}
       <NotificationPanel />
+
+      {/* Live interactive browser panel — ADR-038 */}
+      <BrowserLivePanel />
     </div>
   )
 }
