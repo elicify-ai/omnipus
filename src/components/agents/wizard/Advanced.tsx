@@ -1,8 +1,8 @@
 // Advanced — collapsible disclosure rendered ABOVE the footer (NOT a 4th
 // step in the stepper). Houses the wire-format fields that the operator
 // rarely touches on first-create: model_params, shell_policy, rate_limits,
-// delegation_policy, timeout_seconds, max_tool_iterations, steering_mode,
-// and the subagent_3p executor block.
+// timeout_seconds, max_tool_iterations, steering_mode, and the subagent_3p
+// executor block.
 //
 // All fields are type-branched (per the field matrix in
 // docs/internal/architecture/agent-types-field-matrix.md):
@@ -25,7 +25,6 @@
 // inputs) and reuses the executor inputs from `<Step1Identity>` so the
 // disclosure stays in sync with the Step 1 editor.
 
-import { Link } from '@tanstack/react-router'
 import { SmartSelect } from '@/components/ui/smart-select'
 import { Input } from '@/components/ui/input'
 import { AdvancedDisclosure } from '@/components/shared/AdvancedDisclosure'
@@ -203,17 +202,6 @@ function MainAdvancedFields({ payload, setField, isMain }: MainAdvancedFieldsPro
                   { value: 'queue-and-process', label: 'Queue and process' },
                 ]}
               />
-            </div>
-          )}
-          {isMain && (
-            <div className="space-y-1 pt-2 border-t border-[var(--color-border)]">
-              <p className="text-[11px] text-[var(--color-muted)]">Delegation policy</p>
-              <Link
-                to="/agents/trust"
-                className="text-xs text-[var(--color-accent)] hover:underline"
-              >
-                Configure delegation policy →
-              </Link>
             </div>
           )}
         </div>
