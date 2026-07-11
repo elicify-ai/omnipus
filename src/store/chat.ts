@@ -1873,6 +1873,33 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 if (lastMsgId && !draft.messagesById[lastMsgId].isStreaming) {
                   lastMsgId = null
                 }
+                // Delegate-attribution fix: a still-streaming bubble is ALSO a
+                // "new segment" boundary when the incoming frame's producer
+                // differs from the bubble's already-known producer. Without
+                // this, a background delegate's own token stream — which per
+                // Fix 5a correctly carries the DELEGATE's agent_id on the wire
+                // — lands on the delegator's still-open bubble (the delegator's
+                // turn is not "done" while it waits on the delegate) and the
+                // unconditional `msg.agentId = frame.agent_id` write below
+                // silently relabels the ENTIRE bubble — including the
+                // delegator's own already-rendered lead-in reasoning text — as
+                // the delegate's. That produced both the persisted
+                // misattribution (the delegate's tokens are the last writer
+                // before the bubble finalizes) and the transient live flicker
+                // (the delegator's own follow-up tokens later re-claim it).
+                // Only split when BOTH ids are known and they actually
+                // disagree — an unset bubble agentId (e.g. the optimistic
+                // placeholder from sendMessage()) or a frame that omits
+                // agent_id (legacy) must keep the existing permissive
+                // behavior.
+                if (
+                  lastMsgId &&
+                  frame.agent_id &&
+                  draft.messagesById[lastMsgId].agentId &&
+                  draft.messagesById[lastMsgId].agentId !== frame.agent_id
+                ) {
+                  lastMsgId = null
+                }
                 if (!lastMsgId) {
                   const placeholder: ChatMessage = {
                     id: generateId(),
