@@ -38,7 +38,7 @@ import {
   type FrameCropRect,
 } from '@/lib/browserLiveCoords'
 import { normalizeNavigateUrl } from '@/lib/browserLiveUrl'
-import { submitAnnotation } from '@/lib/browserAnnotate'
+import { submitAnnotation, AnnotationBusyError } from '@/lib/browserAnnotate'
 import { useUiStore } from '@/store/ui'
 import type { BrowserScreencastFrame, BrowserStatusFrame } from '@/lib/api/generated/asyncapi-types'
 
@@ -49,6 +49,19 @@ export interface BrowserLiveViewProps {
   onPopOut?: () => void
   /** Rendered as a header "Close" button when provided. */
   onClose?: () => void
+  /**
+   * ADR-039 D-A3 "Hand to agent" — release control and let the caller drop a
+   * hint into the chat composer. Only meaningful when this view is hosted in
+   * the SAME JS realm as the AssistantUI runtime that owns the composer
+   * (ChatScreen) — i.e. the docked Sheet panel (BrowserLivePanel.tsx), never
+   * the fullscreen pop-out (`routes/_app/browser-live.tsx`), which is a
+   * separate `window.open` document with its own module/store instances, so
+   * writing composerPrefill there is invisible to the original tab's chat.
+   * The "Hand to agent" button is rendered ONLY when this is provided —
+   * omitting it (as the pop-out route does) hides the button entirely rather
+   * than rendering a control that would silently no-op.
+   */
+  onHandToAgent?: () => void
   className?: string
 }
 
@@ -86,7 +99,7 @@ interface PendingAnnotation { // not-wire-format: local annotate-popover state, 
   point: { x: number; y: number }
 }
 
-export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, className }: BrowserLiveViewProps) {
+export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, onHandToAgent, className }: BrowserLiveViewProps) {
   const wsRef = useRef<BrowserLiveWsConnection | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const imgRef = useRef<HTMLImageElement | null>(null)
@@ -116,6 +129,13 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, classNa
   // Distinct from connError, which is transport-level (WS create/send/auth
   // failures) rather than a semantic status the backend reported.
   const [statusMessage, setStatusMessage] = useState<string | null>(null)
+  // True exactly when the LATEST browser_status frame processed was a
+  // terminal error one — tracked independently of `statusState` (see the
+  // onStatus handler below: a routine per-request error like a blocked
+  // navigate must surface a message WITHOUT overwriting statusState away
+  // from 'controlling'), so displayError can't rely on `statusState ===
+  // 'error'` alone.
+  const [statusIsError, setStatusIsError] = useState(false)
   const [connError, setConnError] = useState<string | null>(null)
   const [connected, setConnected] = useState(false)
   const [cursorPos, setCursorPos] = useState<{ x: number; y: number } | null>(null)
@@ -136,11 +156,14 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, classNa
   const [annotateError, setAnnotateError] = useState<string | null>(null)
 
   const isControlling = statusState === 'controlling'
-  // Unified error surface: a transport-level error always wins; otherwise a
-  // terminal browser_status{state:'error'} frame's message is shown. This is
-  // what actually renders (both before and after the first frame arrives) —
-  // see the "!frame" branch and the persistent error strip below.
-  const displayError = connError ?? (statusState === 'error' ? statusMessage ?? 'The live browser session reported an error.' : null)
+  // Unified error surface: a transport-level error always wins; otherwise
+  // the latest browser_status{state:'error'} frame's message is shown —
+  // gated on `statusIsError` rather than `statusState === 'error'` so this
+  // still surfaces even when onStatus deliberately left statusState alone
+  // (the "error while controlling" case below). This is what actually
+  // renders (both before and after the first frame arrives) — see the
+  // "!frame" branch and the persistent error strip below.
+  const displayError = connError ?? (statusIsError ? statusMessage ?? 'The live browser session reported an error.' : null)
 
   useEffect(() => {
     frameRef.current = frame
@@ -170,24 +193,42 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, classNa
     }
   }, [])
 
-  // Defense in depth: annotate mode and driving (isControlling) are mutually
-  // exclusive (ADR-039 D-B1/B2). The normal path already enforces this
-  // (handleToggleAnnotate releases control before entering annotate mode,
-  // and the Take-control button is disabled while annotating) — this effect
-  // is a belt-and-braces guard against any future code path that could grant
-  // control while still in annotate mode.
-  useEffect(() => {
-    if (isControlling && annotateMode) setAnnotateMode(false)
-  }, [isControlling, annotateMode])
+  // NOTE: annotate mode and driving (isControlling) are mutually exclusive
+  // (ADR-039 D-B1/B2), enforced PROCEDURALLY rather than by a reactive
+  // effect: handleToggleAnnotate releases control before entering annotate
+  // mode, the Take-control button is disabled while annotating, and the
+  // pointer handlers (handlePointerMove/Down/Up) branch on `annotateMode`
+  // BEFORE ever consulting `controllingRef` — so no CDP input can be
+  // double-dispatched during the async release gap. A reactive
+  // `if (isControlling && annotateMode) setAnnotateMode(false)` effect used
+  // to live here as a "belt and braces" guard, but it was actively harmful:
+  // `sendControl('release')` is async (isControlling only flips once the
+  // server's browser_status frame round-trips back), so the effect fired on
+  // the very next render — while isControlling was still stale-true — and
+  // immediately reverted the annotate-mode toggle the user just clicked,
+  // making "Annotate" a silent no-op on the first click while driving.
 
   // ── WS lifecycle — one connection per mount (host keys this component by
   // `${sessionId}:${agentId}` so a new target always gets a fresh mount). ──
   useEffect(() => {
     const conn = new BrowserLiveWsConnection(sessionId, agentId, {
       onScreencast: (f) => setFrame(f),
+      // Reviewer finding: a terminal browser_status{state:'error'} (e.g. a
+      // blocked `navigate`) used to overwrite statusState unconditionally —
+      // including while `controlling` — which flipped isControlling to
+      // false (URL bar/cursor vanish, Take-control reappears) even though
+      // the server never actually released control. `statusMessage` and
+      // `statusIsError` always update (the error must still surface), but
+      // `statusState` — the sole source of `isControlling` — is now only
+      // overwritten by TRUE lifecycle frames (attached/controlling/
+      // released/detached/idle); an error frame arriving while controlling
+      // leaves the prior 'controlling' state alone via the functional
+      // updater (correct even for two onStatus calls delivered in the same
+      // tick, since it reads the latest pending value, not a stale closure).
       onStatus: (f) => {
-        setStatusState(f.state)
         setStatusMessage(f.message ?? null)
+        setStatusIsError(f.state === 'error')
+        setStatusState((prev) => (f.state === 'error' && prev === 'controlling' ? prev : f.state))
       },
       onError: (message) => setConnError(message),
       onConnected: () => {
@@ -206,6 +247,9 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, classNa
         // re-establishing control requires an explicit take-control action
         // once the fresh browser_attach → browser_status round-trip lands.
         setStatusState('disconnected')
+        // A stale error surface (e.g. a blocked-navigate message from just
+        // before the drop) must not keep showing through a disconnect.
+        setStatusIsError(false)
         pendingMoveRef.current = null
       },
     })
@@ -303,14 +347,18 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, classNa
     setSelectionCurrent(null)
   }, [])
 
+  const handleCancelAnnotation = useCallback(() => {
+    if (pendingAnnotationRef.current) URL.revokeObjectURL(pendingAnnotationRef.current.previewUrl)
+    setPendingAnnotation(null)
+    setAnnotateComment('')
+    setAnnotateError(null)
+    resetSelection()
+  }, [resetSelection])
+
   const handleToggleAnnotate = useCallback(() => {
     if (annotateMode) {
       setAnnotateMode(false)
-      resetSelection()
-      if (pendingAnnotationRef.current) URL.revokeObjectURL(pendingAnnotationRef.current.previewUrl)
-      setPendingAnnotation(null)
-      setAnnotateComment('')
-      setAnnotateError(null)
+      handleCancelAnnotation()
       return
     }
     // Mutually exclusive with driving (ADR-039 D-B1/B2) — release control
@@ -320,15 +368,7 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, classNa
       wsRef.current?.sendControl('release')
     }
     setAnnotateMode(true)
-  }, [annotateMode, isControlling, resetSelection])
-
-  const handleCancelAnnotation = useCallback(() => {
-    if (pendingAnnotationRef.current) URL.revokeObjectURL(pendingAnnotationRef.current.previewUrl)
-    setPendingAnnotation(null)
-    setAnnotateComment('')
-    setAnnotateError(null)
-    resetSelection()
-  }, [resetSelection])
+  }, [annotateMode, isControlling, handleCancelAnnotation])
 
   // Crops the CURRENTLY-RENDERED screencast frame's <img> to a PNG File
   // (mirrors the canvas pattern in media-actions.ts's fetchImagePng). Reads
@@ -338,15 +378,27 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, classNa
   const cropFrameToFile = useCallback(async (rect: FrameCropRect): Promise<File | null> => {
     const img = imgRef.current
     if (!img || !img.complete || img.naturalWidth === 0) return null
-    const canvas = document.createElement('canvas')
-    canvas.width = rect.width
-    canvas.height = rect.height
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return null
-    ctx.drawImage(img, rect.x, rect.y, rect.width, rect.height, 0, 0, rect.width, rect.height)
-    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'))
-    if (!blob) return null
-    return new File([blob], 'annotation.png', { type: 'image/png' })
+    // Reviewer finding: drawImage/getContext can throw synchronously (e.g.
+    // IndexSizeError on a degenerate zero-width/height rect, or a tainted
+    // canvas) — this function is awaited from finalizeSelection, which is
+    // itself invoked fire-and-forget (`void finalizeSelection(...)` from the
+    // pointerup handler), so an uncaught rejection here would surface as an
+    // unhandled promise rejection with no toast and a frozen selection box.
+    // Returning null on ANY failure routes through finalizeSelection's
+    // existing `if (!file) return fail()` path instead.
+    try {
+      const canvas = document.createElement('canvas')
+      canvas.width = rect.width
+      canvas.height = rect.height
+      const ctx = canvas.getContext('2d')
+      if (!ctx) return null
+      ctx.drawImage(img, rect.x, rect.y, rect.width, rect.height, 0, 0, rect.width, rect.height)
+      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'))
+      if (!blob) return null
+      return new File([blob], 'annotation.png', { type: 'image/png' })
+    } catch {
+      return null
+    }
   }, [])
 
   // Finalizes a drag/click selection into a pendingAnnotation (crop + open
@@ -399,15 +451,20 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, classNa
   )
 
   // ── Hand to agent (ADR-039 D-A3) ─────────────────────────────────────────
+  // The composer-prefill bridge (useUiStore.composerPrefill → ChatScreen)
+  // only works when this view shares a JS realm with ChatScreen, which the
+  // fullscreen pop-out (routes/_app/browser-live.tsx) does NOT — it's a
+  // separate `window.open` document with its own store instances. Rather
+  // than reaching into useUiStore directly (which would silently no-op from
+  // the pop-out while still showing a success toast), that responsibility is
+  // delegated entirely to the caller-supplied `onHandToAgent`; this view
+  // only owns the one thing every host CAN do — release the WS control-lock
+  // — and the button itself is hidden whenever `onHandToAgent` is absent.
 
   const handleHandToAgent = useCallback(() => {
     wsRef.current?.sendControl('release')
-    useUiStore.getState().setComposerPrefill('Continue from the current page: ')
-    useUiStore.getState().addToast({
-      message: 'Control released — a hint was added to the chat composer.',
-      variant: 'default',
-    })
-  }, [])
+    onHandToAgent?.()
+  }, [onHandToAgent])
 
   const handlePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (annotateMode) {
@@ -435,6 +492,23 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, classNa
     scheduleMoveFlush()
   }, [scheduleMoveFlush, annotateMode])
 
+  // Focuses the frame container (so keyboard input starts flowing) and
+  // best-effort captures the pointer so a drag that leaves the container
+  // bounds (a fast selection, or a slider drag while driving) still
+  // delivers move/up events here — without this, releasing outside the
+  // frame would leave the remote page thinking the mouse button is still
+  // held down. Shared by both handlePointerDown branches (annotate-drag
+  // start and remote mouse_down) — the capture step is identical either way.
+  const focusAndCapturePointer = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    containerRef.current?.focus()
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId)
+    } catch {
+      // Pointer capture is best-effort — unsupported/jsdom environments fall
+      // back to normal bounds-limited pointer events.
+    }
+  }, [])
+
   const handlePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (annotateMode) {
       // pendingAnnotationRef (not state) — a selection popover already open
@@ -442,13 +516,7 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, classNa
       // ref (rather than adding pendingAnnotation to the dep array) keeps
       // this callback's identity stable across every popover open/close.
       if (!frameRef.current || !containerRef.current || pendingAnnotationRef.current) return
-      containerRef.current.focus()
-      try {
-        e.currentTarget.setPointerCapture(e.pointerId)
-      } catch {
-        // Pointer capture is best-effort — unsupported/jsdom environments fall
-        // back to normal bounds-limited pointer events.
-      }
+      focusAndCapturePointer(e)
       const rect = containerRef.current.getBoundingClientRect()
       const point = { x: e.clientX - rect.left, y: e.clientY - rect.top }
       selectionStartClientRef.current = { x: e.clientX, y: e.clientY }
@@ -458,17 +526,7 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, classNa
       return
     }
     if (!controllingRef.current || !frameRef.current || !containerRef.current) return
-    containerRef.current.focus()
-    // Capture the pointer so a drag that leaves the container bounds (e.g.
-    // a fast selection or slider drag) still delivers move/up events here —
-    // without this, releasing outside the frame would leave the remote page
-    // thinking the mouse button is still held down.
-    try {
-      e.currentTarget.setPointerCapture(e.pointerId)
-    } catch {
-      // Pointer capture is best-effort — unsupported/jsdom environments fall
-      // back to normal bounds-limited pointer events.
-    }
+    focusAndCapturePointer(e)
     const rect = containerRef.current.getBoundingClientRect()
     const device = mapClientToDevice(
       e.clientX,
@@ -486,7 +544,7 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, classNa
       button: mapMouseButton(e.button),
       modifiers: computeModifiers(e),
     })
-  }, [annotateMode])
+  }, [annotateMode, focusAndCapturePointer])
 
   const handlePointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (annotateMode) {
@@ -529,7 +587,10 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, classNa
     if (!annotation || comment.length === 0) return
     setAnnotateSubmitting(true)
     setAnnotateError(null)
-    submitAnnotation({ comment, file: annotation.file, point: annotation.point })
+    // sessionId/agentId — this view's own pinned props, NOT re-read from
+    // useSessionStore — so the annotation always targets the browser being
+    // annotated even if the globally-active chat has since changed.
+    submitAnnotation({ comment, file: annotation.file, point: annotation.point, sessionId, agentId })
       .then(() => {
         useUiStore.getState().addToast({ message: 'Annotation sent to the agent.', variant: 'success' })
         URL.revokeObjectURL(annotation.previewUrl)
@@ -539,12 +600,19 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, classNa
         resetSelection()
       })
       .catch((err: unknown) => {
+        if (err instanceof AnnotationBusyError) {
+          // Never a silent no-op: surface via toast AND keep the popover
+          // open (pendingAnnotation is untouched) so the user can just hit
+          // Send again once the agent is free.
+          useUiStore.getState().addToast({ message: err.message, variant: 'error' })
+          return
+        }
         setAnnotateError(err instanceof Error ? err.message : String(err))
       })
       .finally(() => {
         setAnnotateSubmitting(false)
       })
-  }, [pendingAnnotation, annotateComment, resetSelection])
+  }, [pendingAnnotation, annotateComment, resetSelection, sessionId, agentId])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
     if (!controllingRef.current) return
@@ -636,7 +704,7 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, classNa
           {isControlling ? <HandPalm size={13} /> : <HandGrabbing size={13} />}
           {isControlling ? 'Release control' : 'Take control'}
         </button>
-        {isControlling && (
+        {isControlling && onHandToAgent && (
           <button
             type="button"
             onClick={handleHandToAgent}
@@ -675,8 +743,15 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, classNa
       {/* URL bar (ADR-039 D-A2) — shown + enabled only while the viewer holds
           control; the server's ValidateURL SSRF gate (run on every `navigate`
           input frame) is the real authority, and any rejection surfaces via
-          the existing browser_status(error) strip below. */}
-      {isControlling && (
+          the existing browser_status(error) strip below.
+          `!annotateMode` matters beyond the isControlling check alone:
+          entering annotate mode releases control asynchronously (the
+          server's browser_status('released') round-trip hasn't landed yet),
+          so isControlling can still read stale-true for a brief window —
+          without this, a real `navigate` could be submitted through the
+          still-visible address bar while nominally in local-only annotate
+          mode. */}
+      {isControlling && !annotateMode && (
         <form
           onSubmit={handleNavigateSubmit}
           className="flex shrink-0 items-center gap-2 border-b border-[var(--color-border)] px-4 py-2"

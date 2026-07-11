@@ -185,6 +185,13 @@ export function framePixelToDeviceCoords(x: number, y: number, pageScale?: numbe
  *
  * Returns null only when the frame itself has no measurable area (a
  * pathological 0×0 frame) — a normal click or drag always yields a rect.
+ *
+ * Also synthesizes the click box for an exact axis-aligned drag (dx or dy
+ * rounds to exactly 0 — e.g. a perfectly vertical or horizontal drag) even
+ * though the OTHER axis clears minDragSize: a rectangle with a zero
+ * dimension is not a valid crop (canvas.drawImage throws IndexSizeError on
+ * sw/sh === 0), so any degenerate width/height, not just "both axes below
+ * threshold", must fall back to the fixed box.
  */
 export function computeCropRect(
   start: DeviceCoords,
@@ -198,8 +205,10 @@ export function computeCropRect(
   const clickBoxSize = Math.max(1, Math.min(opts?.clickBoxSize ?? 48, frameWidth, frameHeight))
   const dx = Math.abs(end.x - start.x)
   const dy = Math.abs(end.y - start.y)
+  const width = Math.round(dx)
+  const height = Math.round(dy)
 
-  if (dx < minDragSize && dy < minDragSize) {
+  if ((dx < minDragSize && dy < minDragSize) || width <= 0 || height <= 0) {
     const half = clickBoxSize / 2
     const x = Math.min(Math.max(start.x - half, 0), Math.max(frameWidth - clickBoxSize, 0))
     const y = Math.min(Math.max(start.y - half, 0), Math.max(frameHeight - clickBoxSize, 0))
@@ -213,8 +222,6 @@ export function computeCropRect(
 
   const x = Math.round(Math.min(start.x, end.x))
   const y = Math.round(Math.min(start.y, end.y))
-  const width = Math.round(dx)
-  const height = Math.round(dy)
   return { x, y, width, height }
 }
 

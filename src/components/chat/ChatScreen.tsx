@@ -1118,9 +1118,16 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   // cannot reach composerRuntime directly, so it drops the hint text into
   // the ui store; this bridge effect applies it here (inside the runtime)
   // and clears the field so it never re-applies on a later remount.
+  //
+  // Reviewer finding: a `setText(composerPrefill)` full-replace silently
+  // discarded whatever the user had already typed into the composer. An
+  // in-progress draft is appended-to instead of clobbered — only an EMPTY
+  // composer gets the hint written in directly (unchanged behaviour for the
+  // common case of hand-off happening before the user has typed anything).
   useEffect(() => {
     if (composerPrefill === null) return
-    composerRuntime.setText(composerPrefill)
+    const existingText = composerRuntime.getState().text
+    composerRuntime.setText(existingText.length > 0 ? `${existingText}\n${composerPrefill}` : composerPrefill)
     setComposerPrefill(null)
   }, [composerPrefill, composerRuntime, setComposerPrefill])
 
