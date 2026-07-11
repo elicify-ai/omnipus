@@ -908,7 +908,24 @@ func spawnSubTurn(
 		// W1-12: only emit span end event when parentSpawnCallID was non-empty.
 		if emitSpanEvents {
 			endStatus := SubTurnStatusSuccess
-			if err != nil {
+			switch {
+			case err != nil && errors.Is(childCtx.Err(), context.Canceled):
+				// FIX 5: the child's own context was explicitly canceled —
+				// reached via the parent's hard-abort cascade
+				// (turnState.Finish(true) calling childTS.cancelFunc(),
+				// which IS childCtx's own cancel func, assigned at
+				// childTS.cancelFunc = cancel above). A user-cancelling the
+				// parent turn while this async delegate was in flight must
+				// read back on replay as "interrupted" — not "error", which
+				// is indistinguishable from a genuine failure sitting right
+				// next to the parent's own correctly-labeled
+				// "(interrupted)" entry. A genuine timeout
+				// (context.DeadlineExceeded, the sub-turn's own Timeout
+				// config expiring rather than an external cancel) falls
+				// through to SubTurnStatusError below — that IS a real
+				// failure, not a cancellation.
+				endStatus = SubTurnStatusInterrupted
+			case err != nil:
 				endStatus = SubTurnStatusError
 			}
 			subTurnDurationMS := time.Since(subTurnStartedAt).Milliseconds()
@@ -932,12 +949,27 @@ func spawnSubTurn(
 			// single denied child tool, even when the sub-turn itself
 			// completed successfully). No-op for synchronous delegation — see
 			// UpdateToolCallStatus's doc comment for why.
+			//
+			// FIX 4: for ASYNC delegation specifically, "not found on the
+			// first attempt" is not necessarily a permanent no-op — it can be
+			// a genuine happens-before race: DelegateTool.executeAsync
+			// launches this sub-turn in a goroutine and returns to the
+			// parent immediately, while the parent only writes ITS OWN
+			// placeholder ack record after further processing (hooks, media,
+			// events) back in its own call stack. A fast-failing dispatch
+			// can reach this defer before that write lands.
+			// updateToolCallStatusWithRetry retries briefly (bounded, ~1s
+			// total) ONLY when cfg.Async is true, establishing real
+			// happens-before ordering instead of silently leaving the
+			// placeholder permanent.
 			if parentTS.transcriptStore != nil && parentTS.transcriptSessionID != "" {
-				if updateErr := parentTS.transcriptStore.UpdateToolCallStatus(
+				if _, updateErr := updateToolCallStatusWithRetry(
+					parentTS.transcriptStore,
 					parentTS.transcriptSessionID,
 					session.ToolCallID(parentSpawnCallID),
 					string(endStatus),
 					subTurnDurationMS,
+					cfg.Async,
 				); updateErr != nil {
 					slog.Warn("subturn: failed to persist real end status/duration onto spawn tool call",
 						"session_id", parentTS.transcriptSessionID,
@@ -1030,6 +1062,73 @@ func spawnSubTurn(
 	}
 
 	return result, err
+}
+
+// updateToolCallStatusRetryDelays is the bounded backoff schedule
+// updateToolCallStatusWithRetry uses when retrying for async delegation.
+// Total budget: ~935ms across 6 retries (after the first, immediate
+// attempt) — comfortably covering the parent's own tool-result
+// post-processing (hooks/media/events) between ExecuteWithContext returning
+// and ts.appendToolCallTranscript actually persisting the placeholder ack,
+// without meaningfully delaying anything user-visible (this all runs inside
+// spawnSubTurn's cleanup defer, on the child sub-turn's OWN background
+// goroutine — never blocking the parent's turn).
+var updateToolCallStatusRetryDelays = []time.Duration{
+	10 * time.Millisecond,
+	25 * time.Millisecond,
+	50 * time.Millisecond,
+	100 * time.Millisecond,
+	250 * time.Millisecond,
+	500 * time.Millisecond,
+}
+
+// updateToolCallStatusWithRetry calls store.UpdateToolCallStatus, retrying
+// with updateToolCallStatusRetryDelays's bounded backoff when async is true
+// and the first attempt finds no matching record yet (found=false, err=nil).
+//
+// FIX 4 (confirmed independently by silent-failure-hunter, architect, and
+// code-reviewer): DelegateTool.executeAsync (pkg/tools/delegate.go) launches
+// the child sub-turn in a goroutine and returns to the parent turn
+// immediately; the PARENT writes this SAME tool call's own placeholder ack
+// record only after further processing (hooks, media, events) in its own
+// call stack, back in pkg/agent/loop.go's tool-execution loop. When the
+// child's dispatch fails fast (e.g. a depth-limit or target-resolution
+// rejection), spawnSubTurn's cleanup defer — this function's only caller —
+// can reach UpdateToolCallStatus BEFORE the parent's placeholder write
+// lands, and UpdateToolCallStatus's "not found" case was previously
+// (incorrectly, for this specific caller) treated as a terminal, expected
+// no-op. Retrying establishes REAL happens-before ordering without
+// requiring pkg/tools (which deliberately has no transcript-store access —
+// SubTurnSpawner/AsyncExecutor exist specifically to avoid an agent<->tools
+// import cycle) to change at all.
+//
+// For SYNCHRONOUS delegation (async=false), found=false on the first
+// attempt is the documented, PERMANENT, expected outcome — the caller
+// (DelegateTool.executeSync, via the tool-execution loop) will append the
+// record itself moments later, once spawnSubTurn returns with the real
+// result. Retrying in that case would only waste the full backoff budget on
+// every synchronous delegation for no benefit, so this makes a single,
+// no-retry attempt when async is false.
+func updateToolCallStatusWithRetry(
+	store *session.UnifiedStore,
+	sessionID string,
+	toolCallID session.ToolCallID,
+	status string,
+	durationMS int64,
+	async bool,
+) (found bool, err error) {
+	found, err = store.UpdateToolCallStatus(sessionID, toolCallID, status, durationMS)
+	if err != nil || found || !async {
+		return found, err
+	}
+	for _, delay := range updateToolCallStatusRetryDelays {
+		time.Sleep(delay)
+		found, err = store.UpdateToolCallStatus(sessionID, toolCallID, status, durationMS)
+		if err != nil || found {
+			return found, err
+		}
+	}
+	return false, nil
 }
 
 // ====================== Result Delivery ======================

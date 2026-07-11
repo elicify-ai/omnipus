@@ -1,8 +1,10 @@
 package fileutil
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -172,5 +174,109 @@ func TestWriteFileAtomic_InvalidPath(t *testing.T) {
 	err := WriteFileAtomic("/dev/null/impossible/file.txt", []byte("data"), 0o644)
 	if err == nil {
 		t.Error("expected error for invalid path, got nil")
+	}
+}
+
+// TestAppendJSONL_TwoAppendsBothSurvive is the baseline: two ordinary
+// AppendJSONL calls must both be independently readable back as valid JSON
+// lines, with no corruption.
+func TestAppendJSONL_TwoAppendsBothSurvive(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "transcript.jsonl")
+
+	if err := AppendJSONL(path, map[string]string{"id": "a"}); err != nil {
+		t.Fatalf("first AppendJSONL failed: %v", err)
+	}
+	if err := AppendJSONL(path, map[string]string{"id": "b"}); err != nil {
+		t.Fatalf("second AppendJSONL failed: %v", err)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile failed: %v", err)
+	}
+	want := "{\"id\":\"a\"}\n{\"id\":\"b\"}\n"
+	if string(got) != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// TestAppendJSONL_DefensivelyRecoversFromMissingTrailingNewline is the
+// dedicated regression test for the newline-corruption data-loss bug: a
+// caller that (incorrectly, simulating a bug in some OTHER rewrite path —
+// deliberately NOT going through pkg/session/unified.go here, to isolate
+// AppendJSONL's own defensive layer from the primary fix in that package)
+// leaves the file without a trailing newline. AppendJSONL must detect this
+// and prepend a newline before its own record, rather than letting the two
+// records concatenate onto one unparseable line.
+//
+// Negative-test discipline: this test was confirmed to FAIL against the
+// pre-fix AppendJSONL (raw concatenation, no defensive check) before the fix
+// was added — see the delivery report.
+func TestAppendJSONL_DefensivelyRecoversFromMissingTrailingNewline(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "transcript.jsonl")
+
+	// Simulate a buggy rewrite that omits the trailing newline — bypassing
+	// AppendJSONL entirely, exactly as pkg/session/unified.go's
+	// MarkLastEntryTruncated/UpdateToolCallStatus did before their fix.
+	corrupted := `{"id":"a"}`
+	if err := os.WriteFile(path, []byte(corrupted), 0o600); err != nil {
+		t.Fatalf("seed write failed: %v", err)
+	}
+
+	if err := AppendJSONL(path, map[string]string{"id": "b"}); err != nil {
+		t.Fatalf("AppendJSONL failed: %v", err)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile failed: %v", err)
+	}
+	want := "{\"id\":\"a\"}\n{\"id\":\"b\"}\n"
+	if string(got) != want {
+		t.Fatalf("got %q, want %q — AppendJSONL must prepend a newline when the "+
+			"existing file does not end in one, not concatenate onto the last line",
+			got, want)
+	}
+
+	// Confirm both lines independently parse as valid JSON (the real-world
+	// consequence check: ReadTranscript-style line-oriented parsing must not
+	// see one unparseable merged line).
+	lines := strings.Split(strings.TrimRight(string(got), "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 lines, got %d: %v", len(lines), lines)
+	}
+	for i, line := range lines {
+		var v map[string]string
+		if err := json.Unmarshal([]byte(line), &v); err != nil {
+			t.Errorf("line %d (%q) is not valid JSON: %v", i, line, err)
+		}
+	}
+}
+
+// TestAppendJSONL_NoOpWhenAlreadyEndsInNewline verifies the defensive check
+// does not add a spurious blank line when the file already correctly ends in
+// a newline (the common, non-corrupted case).
+func TestAppendJSONL_NoOpWhenAlreadyEndsInNewline(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "transcript.jsonl")
+
+	if err := os.WriteFile(path, []byte("{\"id\":\"a\"}\n"), 0o600); err != nil {
+		t.Fatalf("seed write failed: %v", err)
+	}
+
+	if err := AppendJSONL(path, map[string]string{"id": "b"}); err != nil {
+		t.Fatalf("AppendJSONL failed: %v", err)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile failed: %v", err)
+	}
+	want := "{\"id\":\"a\"}\n{\"id\":\"b\"}\n"
+	if string(got) != want {
+		t.Errorf("got %q, want %q — must not insert a spurious blank line when the file "+
+			"already ends in a newline", got, want)
 	}
 }

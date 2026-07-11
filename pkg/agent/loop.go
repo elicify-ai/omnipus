@@ -2310,6 +2310,24 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 			}
 
 			// System messages are handled inline in a goroutine (no scope).
+			//
+			// FIX 5d follow-up (tracked, not fixed in this pass — see
+			// architect's review): before FIX 5d, an AsyncNotifier-originated
+			// system message was inert here w.r.t. the origin session (no
+			// TranscriptSessionID/TranscriptStore bound), so this lack of
+			// per-session serialization was harmless. FIX 5d now threads
+			// AsyncOriginAgentID/AsyncTranscriptSessionID through
+			// processSystemMessage, so this goroutine CAN run a real turn
+			// concurrently against the SAME origin session as a live user
+			// turn (unlike every other inbound message, which IS serialized
+			// per session via the sessionWorker pool below). File-level
+			// writes stay safe (UnifiedStore's mutex + WriteFileAtomic), so
+			// this is not a NEW corruption risk on its own, but the
+			// single-writer-per-session invariant other turn types rely on
+			// no longer holds for this specific path. Revisit if this proves
+			// to matter in practice (e.g. interleaved/out-of-order transcript
+			// entries for a session receiving both a live turn and an async
+			// delegate result at the same moment).
 			if msg.Channel == "system" {
 				// Track in activeRequests so graceful shutdown's
 				// WaitForActiveRequests drains this turn before teardown —
@@ -5101,10 +5119,10 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	defer turnCancel()
 	ts.setTurnCancel(turnCancel)
 
-	// Finalize the streamer when the turn ends (regardless of how it exits).
-	// This sends the "done" frame exactly once, at turn completion, rather than
-	// after each intermediate LLM call that may be followed by tool execution.
-	defer ts.finalizeStreamer(ctx)
+	// NOTE: finalizeStreamer's defer is registered further below (after
+	// ts.Finish(false)/al.clearActiveTurn), not here — see that registration
+	// site's comment for why the ORDER relative to Finish is load-bearing
+	// (FIX 1/5c live-verification finding).
 
 	// Inject turnState and AgentLoop into context so tools (e.g. delegate) can retrieve them.
 	turnCtx = withTurnState(turnCtx, ts)
@@ -5227,6 +5245,33 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// closeOnce.Do executing at most once.
 	defer ts.Finish(false)
 	defer al.clearActiveTurn(ts)
+
+	// FIX 1/5c (confirmed via live verification, not just unit tests):
+	// finalizeStreamer must run BEFORE ts.Finish(false) above — registered
+	// here, AFTER Finish/clearActiveTurn, so Go's LIFO defer order runs it
+	// FIRST. finalizeStreamer is what calls wsStreamer.Finalize(), which
+	// writes the assistant transcript entry (now carrying TurnID — FIX 1).
+	// Finish(false)'s onCancelFinish callback (pkg/agent/cancel.go) is what
+	// writes the turn_canceled entry AND calls MarkLastEntryTruncated to flag
+	// the assistant entry. Both depend on the assistant entry already
+	// existing in transcript.jsonl:
+	//   - MarkLastEntryTruncated's backward-walk finds nothing to flag if the
+	//     assistant entry isn't there yet (silently succeeds as a no-op —
+	//     Truncated never gets set).
+	//   - The frontend's turn_canceled -> assistant-message replay
+	//     correlation (chatTurnCanceledNoMatch) requires the assistant
+	//     ReplayMessageFrame to have already arrived on the wire before the
+	//     turn_canceled frame that references its TurnID — replay emits
+	//     frames in transcript.jsonl's on-disk order, so if turn_canceled is
+	//     written first, it replays first too, and the frontend's "find the
+	//     existing message" lookup always misses.
+	// Before this fix, finalizeStreamer was deferred FIRST in this function
+	// (right after ts.setTurnCancel), which — being LIFO — made it run LAST,
+	// AFTER Finish's callback: exactly backwards. Live-verified via a
+	// mid-stream cancel: transcript.jsonl showed user -> turn_canceled ->
+	// assistant (wrong order) before this fix, user -> assistant ->
+	// turn_canceled (correct) after it.
+	defer ts.finalizeStreamer(ctx)
 
 	turnStatus := TurnEndStatusCompleted
 	defer func() {
@@ -5824,9 +5869,11 @@ turnLoop:
 				logger.DebugCF("agent", "Provider supports streaming, checking for streamer", map[string]any{"channel": ts.channel, "chat_id": ts.chatID})
 				if streamer, hasStreamer := al.bus.GetStreamer(providerCtx, ts.channel, ts.chatID, ts.transcriptSessionID); hasStreamer {
 					logger.InfoCF("agent", "Using streaming for response", map[string]any{"channel": ts.channel, "chat_id": ts.chatID})
-					// FIX 5a: stamp the TRUE per-turn producer before any token can
-					// flow — see stampStreamerProducerAgentID's doc comment.
+					// FIX 5a/5c: stamp the TRUE per-turn producer and this turn's own
+					// ID before any token can flow — see stampStreamerProducerAgentID
+					// and stampStreamerTurnID's doc comments.
 					ts.stampStreamerProducerAgentID(streamer)
+					ts.stampStreamerTurnID(streamer)
 					var lastChunk string
 					resp, streamErr := sp.ChatStream(providerCtx, messagesForCall, toolDefsForCall, llmModel, llmOpts, func(accumulated string) {
 						// B4: if the turn has been abandoned (stuck-goroutine detach),

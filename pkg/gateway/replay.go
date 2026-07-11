@@ -238,11 +238,15 @@ func streamReplay(
 				agentIDCopy := entry.AgentID
 				msgFrame.AgentId = &agentIDCopy
 			}
-			// Wave 3 fix 5c: surface TranscriptEntry.TurnID (stamped on every
-			// assistant entry, pkg/agent/turn.go:447,685) so the client can
-			// correlate a later turn_canceled frame to the specific assistant
-			// message it cancels. Empty for legacy entries written before
-			// turn-id stamping landed.
+			// Wave 3 fix 5c/1: surface TranscriptEntry.TurnID — stamped on
+			// every real assistant entry at its three production write sites:
+			// pkg/agent/turn.go's appendIntermediateAssistantTranscript and
+			// appendAssistantTranscript (both set TurnID: ts.turnID), and
+			// pkg/gateway/websocket.go's wsStreamer.Finalize (stamped via
+			// SetTurnID, mirroring SetProducerAgentID's pattern) — so the
+			// client can correlate a later turn_canceled frame to the
+			// specific assistant message it cancels. Empty for legacy
+			// entries written before turn-id stamping landed.
 			if entry.TurnID != "" {
 				turnIDCopy := entry.TurnID
 				msgFrame.TurnId = &turnIDCopy
@@ -354,12 +358,16 @@ func streamReplay(
 				}
 
 				// Emit all nested tool calls (children with ParentToolCallID == tc.ID).
-				// The returned aggregate duration/status exist only to drive
-				// emitNestedToolCalls' own internal bookkeeping historically — they
-				// are deliberately NOT used for the outer span's own Status/
-				// DurationMs below (Wave 3 fix 5b, see comment there). This call is
-				// still required: it emits the individual nested child
-				// tool_call_start/tool_call_result frames.
+				// emitNestedToolCalls returns an aggregate (totalDurationMS,
+				// aggregateStatus) computed by summing/rolling up its own child
+				// tool calls — historically THIS CALLER (not the function
+				// itself) used that aggregate to set the outer span's own
+				// Status/DurationMs on the subagent_end frame below. Wave 3 fix
+				// 5b replaced that with tc's own persisted Status/DurationMS
+				// (see the comment there), so the aggregate is now discarded
+				// here (`_, _`) — deliberately, not an oversight. This call is
+				// still required regardless: it's what emits the individual
+				// nested child tool_call_start/tool_call_result frames.
 				_, _, nestedErr := emitNestedToolCalls(
 					ctx, sessionID, tcID, entries, latestByID, effectiveAgentID, emitFrame, toolStore,
 				)

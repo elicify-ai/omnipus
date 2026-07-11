@@ -563,6 +563,27 @@ func (ts *turnState) stampStreamerProducerAgentID(streamer bus.Streamer) {
 	}
 }
 
+// stampStreamerTurnID stamps this turn's own ID onto a freshly-obtained
+// streamer, before any token can flow through it. Mirrors
+// stampStreamerProducerAgentID exactly.
+//
+// FIX 5c/1: without this, the assistant transcript entry Finalize writes
+// carries no TurnID at all — confirmed via live verification to break BOTH
+// the frontend's turn_canceled -> assistant-message replay correlation
+// (chatTurnCanceledNoMatch fires on every reload after a mid-stream cancel)
+// and MarkLastEntryTruncated's own turn-scoped backward-walk matching
+// (pkg/session/unified.go), silently disabling the Truncated flag for every
+// real cancel.
+//
+// Uses a type-assertion to an inline interface so bus.Streamer needs no new
+// method — non-webchat streamers (telegram, wecom, sse) are untouched; only
+// wsStreamer implements SetTurnID.
+func (ts *turnState) stampStreamerTurnID(streamer bus.Streamer) {
+	if tid, ok := streamer.(interface{ SetTurnID(string) }); ok {
+		tid.SetTurnID(ts.turnID)
+	}
+}
+
 // streamerStatsSetter is an optional interface a Streamer may implement to
 // receive turn-end stats (tokens, cost, duration) before Finalize is called.
 // The ws streamer uses this to populate the "done" frame so the chat UI shows
@@ -905,6 +926,13 @@ func (ts *turnState) appendIntermediateAssistantTranscript(content string, produ
 		Content:   content,
 		Timestamp: time.Now().UTC(),
 		Model:     model,
+		// TurnID: without this, neither MarkLastEntryTruncated's own
+		// turn-scoped backward-walk (H2 fix — it matches on e.TurnID ==
+		// turnID) nor the frontend's turn_canceled -> assistant-message
+		// replay correlation can ever match a REAL entry; both were only
+		// ever exercised by tests that hand-seed TurnID directly. See
+		// appendAssistantTranscript's identical fix for the full rationale.
+		TurnID: ts.turnID,
 		// Tokens and Cost are intentionally 0 — the turn total is attributed to
 		// the final assistant entry only. See appendAssistantTranscript.
 	}
@@ -943,10 +971,22 @@ func (ts *turnState) appendAssistantTranscript(content string, producedModel ...
 	turnTokens, turnCost := ts.GetTurnStats()
 	turnCacheRead, turnCacheWrite := ts.GetTurnCacheStats()
 	entry := session.TranscriptEntry{
-		ID:               uuid.New().String(),
-		Role:             "assistant",
-		AgentID:          agentID,
-		Content:          content,
+		ID:      uuid.New().String(),
+		Role:    "assistant",
+		AgentID: agentID,
+		Content: content,
+		// TurnID stamps this entry with its own producing turn. This is
+		// THE fix for the confirmed live-verification bug: before this,
+		// TurnID was set on the turn_canceled entry (cancel.go) but NEVER on
+		// the assistant entry it describes, so (1) the frontend's
+		// turn_canceled -> assistant-message replay correlation could never
+		// match a real entry (chatTurnCanceledNoMatch always fired on
+		// reload), and (2) MarkLastEntryTruncated's own turn-scoped
+		// backward-walk (which requires e.TurnID == turnID) could never
+		// match a real entry either, silently disabling the Truncated flag
+		// for every real cancel. Both were only ever exercised by tests that
+		// hand-seed TurnID directly on the entry.
+		TurnID:           ts.turnID,
 		Timestamp:        time.Now().UTC(),
 		Tokens:           int(turnTokens),
 		Cost:             turnCost,

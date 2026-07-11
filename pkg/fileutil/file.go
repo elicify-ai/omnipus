@@ -147,6 +147,19 @@ func CopyFile(src, dst string, perm os.FileMode) error {
 // underlying file description. For production usage, callers should use a
 // single-writer goroutine or explicit locking when strict ordering is required.
 //
+// Defensive newline hardening: if the file already has content and its last
+// byte is NOT '\n', a '\n' is prepended before this record. This is a second
+// layer of protection — the primary fix is that every caller which rewrites
+// an existing JSONL file in place (e.g. pkg/session/unified.go's
+// MarkLastEntryTruncated / UpdateToolCallStatus) must always terminate the
+// rewritten content with a trailing newline. Without EITHER layer, a record
+// written by a caller that forgets this concatenates directly onto the
+// previous line (e.g. "{lastEntry}{newRecord}\n"), producing invalid JSON
+// that a line-oriented reader cannot parse — silently dropping BOTH the
+// prior line's content and this new record. Confirmed as the exact
+// mechanism behind a real data-loss bug (Wave 3 fix 5b's UpdateToolCallStatus
+// immediately followed by fix 5d's AsyncNotifier-triggered AppendTranscript).
+//
 // The directory is created if it does not exist.
 func AppendJSONL(path string, record any) error {
 	dir := filepath.Dir(path)
@@ -158,9 +171,6 @@ func AppendJSONL(path string, record any) error {
 	if err != nil {
 		return fmt.Errorf("fileutil: marshal jsonl record: %w", err)
 	}
-	// Append record + newline in one write to stay atomic on Linux.
-	// Use explicit allocation to avoid mutating the backing array of data.
-	//
 	// Cap the per-record size at 1 GiB so the make() below cannot integer-
 	// overflow on a 32-bit build (CodeQL go/allocation-size-overflow) and
 	// so a runaway encoder cannot exhaust memory. JSONL records that hit
@@ -169,14 +179,40 @@ func AppendJSONL(path string, record any) error {
 	if len(data) > maxJsonlRecord {
 		return fmt.Errorf("fileutil: jsonl record (%d bytes) exceeds %d cap", len(data), maxJsonlRecord)
 	}
-	line := make([]byte, len(data)+1)
-	copy(line, data)
-	line[len(data)] = '\n'
 
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	// O_RDWR (not O_WRONLY) so we can peek at the existing last byte via
+	// ReadAt below — O_APPEND still guarantees every Write() targets EOF
+	// regardless of the read-write mode.
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0o600)
 	if err != nil {
 		return fmt.Errorf("fileutil: open jsonl file: %w", err)
 	}
+
+	needsLeadingNewline := false
+	if info, statErr := f.Stat(); statErr == nil && info.Size() > 0 {
+		lastByte := make([]byte, 1)
+		if _, readErr := f.ReadAt(lastByte, info.Size()-1); readErr == nil && lastByte[0] != '\n' {
+			needsLeadingNewline = true
+			slog.Warn("fileutil: jsonl file did not end in newline; prepending one defensively",
+				"path", path)
+		}
+	}
+
+	// Append record + newline (and a defensive leading newline when needed)
+	// in one write to stay atomic on Linux. Use explicit allocation to avoid
+	// mutating the backing array of data.
+	extra := 1
+	if needsLeadingNewline {
+		extra = 2
+	}
+	line := make([]byte, len(data)+extra)
+	offset := 0
+	if needsLeadingNewline {
+		line[0] = '\n'
+		offset = 1
+	}
+	copy(line[offset:], data)
+	line[offset+len(data)] = '\n'
 
 	if _, err := f.Write(line); err != nil {
 		f.Close()
