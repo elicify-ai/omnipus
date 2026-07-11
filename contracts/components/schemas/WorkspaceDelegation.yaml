@@ -4,8 +4,9 @@ description: >
   surfaced in the workspace Team tab and the Agents-area "Workspace Teams" view —
   always workspace-scoped, never global. Nodes are the workspace team's agents
   (core_team ∪ every agent named by an edge); edges are the directed delegation
-  authorizations. The per-agent delegation_policy remains as an enforcement cap,
-  but this graph is what the UI edits.
+  authorizations. This graph is the sole delegation-enforcement mechanism — there
+  is no separate global per-agent delegation policy; the graph is both what the
+  UI edits and what the runtime enforces.
 required:
   - workspace_id
   - edges

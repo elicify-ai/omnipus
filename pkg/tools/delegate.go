@@ -104,22 +104,16 @@ type DelegateTool struct {
 	tasks  map[string]*DelegateTaskState
 	nextID int
 
-	// allowlistCheck is the legacy trust-only fallback for the background
-	// (async=true) mode, consulted only when delegationDenyBackground is nil.
-	// Mirrors the pre-merge SpawnTool.allowlistCheck exactly.
-	allowlistCheck func(targetAgentID string) bool
-	// delegateChecker is the legacy trust-only fallback for the await
-	// (async=false) mode, consulted only when delegationDenyAwait is nil.
-	// Mirrors the pre-merge SubagentTool.delegateChecker exactly.
-	delegateChecker func() bool
-
 	// delegationDenyBackground applies the full delegation-policy gate
 	// (FR-6.2: trust set + mode("background") + depth) for async=true calls.
-	// Takes precedence over allowlistCheck.
+	// This is the ONLY gate for the background mode (ADR-037 retired the
+	// legacy trust-only allowlistCheck fallback — it was only ever consulted
+	// when this was nil, which never happens in production wiring).
 	delegationDenyBackground func(ctx context.Context, targetAgentID string) *DelegationDenial
 	// delegationDenyAwait applies the full delegation-policy gate (FR-6.2:
-	// trust set + mode("await") + depth) for async=false calls. Takes
-	// precedence over delegateChecker.
+	// trust set + mode("await") + depth) for async=false calls. This is the
+	// ONLY gate for the await mode (ADR-037 retired the legacy trust-only
+	// delegateChecker fallback — same reasoning as delegationDenyBackground).
 	delegationDenyAwait func(ctx context.Context, targetAgentID string) *DelegationDenial
 
 	// delegationDepthResolver, when non-nil, resolves the effective onward-
@@ -152,18 +146,6 @@ func NewDelegateTool(defaultModel string, maxTokens int, temperature float64) *D
 // SetSpawner sets the SubTurnSpawner used for both async and sync delegation.
 func (t *DelegateTool) SetSpawner(spawner SubTurnSpawner) {
 	t.spawner = spawner
-}
-
-// SetAllowlistChecker sets the legacy background-mode trust-only fallback,
-// consulted only when SetDelegationDenyCheckerBackground has not been set.
-func (t *DelegateTool) SetAllowlistChecker(check func(targetAgentID string) bool) {
-	t.allowlistCheck = check
-}
-
-// SetDelegateChecker sets the legacy await-mode trust-only fallback,
-// consulted only when SetDelegationDenyCheckerAwait has not been set.
-func (t *DelegateTool) SetDelegateChecker(check func() bool) {
-	t.delegateChecker = check
 }
 
 // SetDelegationDenyCheckerBackground installs the full delegation-policy gate
@@ -306,16 +288,13 @@ func (t *DelegateTool) executeRun(ctx context.Context, args map[string]any, cb A
 
 	// Delegation policy gate (FR-6.2): trust set + mode + depth, mode selected
 	// by the async flag ("background" vs "await") — applied identically
-	// regardless of async value (FR-D3).
+	// regardless of async value (FR-D3). ADR-037: this is now the ONLY gate —
+	// the legacy trust-only allowlistCheck/delegateChecker fallbacks (consulted
+	// only when these were nil, which never happened in production) are retired.
 	if async {
 		if t.delegationDenyBackground != nil {
 			if denial := t.delegationDenyBackground(ctx, agentID); denial != nil {
 				return DelegationDeniedResult("delegate", denial)
-			}
-		} else if agentID != "" && t.allowlistCheck != nil {
-			// Backward-compat: legacy trust-only allowlist check.
-			if !t.allowlistCheck(agentID) {
-				return ErrorResult(fmt.Sprintf("not allowed to spawn agent '%s'", agentID))
 			}
 		}
 	} else {
@@ -323,12 +302,6 @@ func (t *DelegateTool) executeRun(ctx context.Context, args map[string]any, cb A
 			if denial := t.delegationDenyAwait(ctx, agentID); denial != nil {
 				return DelegationDeniedResult("delegate", denial)
 			}
-		} else if t.delegateChecker != nil && !t.delegateChecker() {
-			// Backward-compat: legacy boolean trust-only gate.
-			return ErrorResult(
-				"delegation not allowed: no target agent is permitted by this agent's delegation policy",
-			).
-				WithError(fmt.Errorf("delegation policy denied: agent has no delegation targets in its 'to' allowlist"))
 		}
 	}
 

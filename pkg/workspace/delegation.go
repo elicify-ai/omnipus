@@ -172,9 +172,10 @@ type delegationRecord struct {
 // workspaces/<workspaceID>.json under home.
 //
 // This is the SOLE runtime authority for who-may-delegate-to-whom in a
-// workspace: the per-agent config.DelegationPolicy is seed-only and is NOT
-// consulted at runtime enforcement. Callers that fail to read the graph MUST
-// fail closed (deny), never fall open.
+// workspace (ADR-037) — there is no separate global per-agent delegation
+// policy at all; coreagent's seeded trust graph is consulted only to
+// bootstrap a fresh workspace's initial edges, never at enforcement time.
+// Callers that fail to read the graph MUST fail closed (deny), never fall open.
 //
 // Returns:
 //   - (edges, nil)        when the workspace file exists and parses. An empty

@@ -122,52 +122,6 @@ func (r *AgentRegistry) ListAgentIDs() []string {
 	return ids
 }
 
-// CanSpawnSubagent checks if parentAgentID is allowed to spawn targetAgentID.
-//
-// FR-6.3 (Spec-3 keystone): consults the unified DelegationPolicy.To first
-// when non-nil, falling back to the legacy SubagentsConfig.AllowAgents path.
-// Deny-by-default is preserved in both paths.
-func (r *AgentRegistry) CanSpawnSubagent(parentAgentID, targetAgentID string) bool {
-	parent, ok := r.GetAgent(parentAgentID)
-	if !ok {
-		return false
-	}
-
-	// Unified DelegationPolicy.To takes precedence when set.
-	if parent.DelegationPolicy != nil {
-		targetNorm := routing.NormalizeAgentID(targetAgentID)
-		for _, ref := range parent.DelegationPolicy.To {
-			if ref.Kind != "local" && ref.Kind != "" {
-				// remote-a2a and unknown kinds are not resolved locally in v0.1.0.
-				continue
-			}
-			if ref.ID == "*" {
-				return true
-			}
-			if routing.NormalizeAgentID(ref.ID) == targetNorm {
-				return true
-			}
-		}
-		// Policy was set explicitly — deny (empty To = deny all).
-		return false
-	}
-
-	// Legacy fallback: SubagentsConfig.AllowAgents (deny when nil).
-	if parent.Subagents == nil || parent.Subagents.AllowAgents == nil {
-		return false
-	}
-	targetNorm := routing.NormalizeAgentID(targetAgentID)
-	for _, allowed := range parent.Subagents.AllowAgents {
-		if allowed == "*" {
-			return true
-		}
-		if routing.NormalizeAgentID(allowed) == targetNorm {
-			return true
-		}
-	}
-	return false
-}
-
 // ForEachTool calls fn for every tool registered under the given name
 // across all agents. This is useful for propagating dependencies (e.g.
 // MediaStore) to tools after registry construction.
