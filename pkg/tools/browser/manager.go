@@ -96,7 +96,15 @@ type BrowserManager struct {
 	allocCtx    context.Context    // chromedp allocator context
 	allocCancel context.CancelFunc // cancels the allocator (kills browser)
 	sessions    map[string]*sessionEntry
-	started     bool
+	// pending tracks session IDs currently being created by Session() — see
+	// Session()'s doc comment (ADR-038 deadlock postmortem) for why tab
+	// creation must release m.mu before its blocking chromedp.Run call, and
+	// why a concurrent Session() call for the same ID must wait here instead
+	// of also calling chromedp.NewContext/Run for that ID (which would
+	// create and leak a second tab, and corrupt MaxTabs accounting). Lazily
+	// initialized; nil is a valid empty state.
+	pending map[string]chan struct{}
+	started bool
 
 	// live is the ADR-038 live-interactive-browser engine registry, keyed by
 	// session ID. Since BrowserManager is itself scoped to one agent (see
@@ -327,40 +335,89 @@ func (m *BrowserManager) resolveExecPath(ctx context.Context) (string, error) {
 // Session returns a persistent tab context for the given session ID.
 // If the session does not exist, a new tab is created (subject to MaxTabs).
 // The "default" session is used by all tools unless a session_id is specified.
+//
+// ADR-038 DEADLOCK POSTMORTEM: creating a brand-new tab is the only path
+// here that talks to CDP (chromedp.Run below), and it used to run under m.mu
+// (held via defer) with no timeout of its own. Every browser tool calls
+// Session() first, so a single wedged/overloaded CDP transport (see
+// pkg/tools/browser/live.go's attach() for the sibling bug that hit this
+// same shape) could freeze m.mu forever and, with it, every browser tool —
+// permanently, since a bare sync.Mutex.Lock() has no deadline and produces
+// no error or log line while it waits. The fix: only the MaxTabs check and
+// map bookkeeping happen under m.mu; the blocking chromedp.NewContext/Run
+// call runs with m.mu released and bounded by m.cfg.PageTimeout. A
+// concurrent Session() call for the SAME sessionID that arrives while
+// creation is in flight waits on m.pending instead of independently calling
+// chromedp.NewContext/Run for that ID too (which would create and leak a
+// second tab for one logical session).
 func (m *BrowserManager) Session(sessionID string) (context.Context, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if err := m.ensureStarted(); err != nil {
-		return nil, err
-	}
-
-	if s, ok := m.sessions[sessionID]; ok {
-		// Verify the session context is still valid
-		if s.ctx.Err() == nil {
-			return s.ctx, nil
+	for {
+		m.mu.Lock()
+		if err := m.ensureStarted(); err != nil {
+			m.mu.Unlock()
+			return nil, err
 		}
-		// Session expired (browser crash, etc.) — clean up and recreate
-		s.cancel()
-		delete(m.sessions, sessionID)
-	}
 
-	if len(m.sessions) >= m.cfg.MaxTabs {
-		return nil, fmt.Errorf("maximum concurrent tabs (%d) reached. Close a tab first", m.cfg.MaxTabs)
-	}
+		if s, ok := m.sessions[sessionID]; ok {
+			// Verify the session context is still valid
+			if s.ctx.Err() == nil {
+				m.mu.Unlock()
+				return s.ctx, nil
+			}
+			// Session expired (browser crash, etc.) — clean up and recreate
+			s.cancel()
+			delete(m.sessions, sessionID)
+		}
 
-	ctx, cancel := chromedp.NewContext(m.allocCtx)
-	// Eagerly create the target on this ctx. Without this, the first
-	// chromedp.Run binds the target to whichever (possibly timeout-wrapped)
-	// ctx a tool passes — and when that wrapper is canceled, the tab dies.
-	// The next tool call then silently creates a fresh blank tab, so e.g.
-	// screenshot-after-navigate returns a blank page.
-	if err := chromedp.Run(ctx); err != nil {
-		cancel()
-		return nil, fmt.Errorf("browser: failed to initialize tab: %w", err)
+		if wait, ok := m.pending[sessionID]; ok {
+			// Someone else is already creating this session's tab — wait
+			// for them to finish, then loop back and re-check m.sessions,
+			// rather than racing to create a second tab for the same ID.
+			m.mu.Unlock()
+			<-wait
+			continue
+		}
+
+		if len(m.sessions) >= m.cfg.MaxTabs {
+			m.mu.Unlock()
+			return nil, fmt.Errorf("maximum concurrent tabs (%d) reached. Close a tab first", m.cfg.MaxTabs)
+		}
+
+		done := make(chan struct{})
+		if m.pending == nil {
+			m.pending = make(map[string]chan struct{})
+		}
+		m.pending[sessionID] = done
+		allocCtx := m.allocCtx
+		m.mu.Unlock()
+
+		ctx, cancel := chromedp.NewContext(allocCtx)
+		// Eagerly create the target on this ctx. Without this, the first
+		// chromedp.Run binds the target to whichever (possibly timeout-wrapped)
+		// ctx a tool passes — and when that wrapper is canceled, the tab dies.
+		// The next tool call then silently creates a fresh blank tab, so e.g.
+		// screenshot-after-navigate returns a blank page.
+		//
+		// Bounded (see doc comment above) so a wedged/overloaded CDP
+		// transport can't hang this call — and therefore every Session()
+		// caller waiting on m.pending for this ID — forever.
+		startCtx, startCancel := context.WithTimeout(ctx, m.cfg.PageTimeout)
+		err := chromedp.Run(startCtx)
+		startCancel()
+
+		m.mu.Lock()
+		delete(m.pending, sessionID)
+		if err != nil {
+			cancel()
+			m.mu.Unlock()
+			close(done)
+			return nil, fmt.Errorf("browser: failed to initialize tab: %w", err)
+		}
+		m.sessions[sessionID] = &sessionEntry{ctx: ctx, cancel: cancel}
+		m.mu.Unlock()
+		close(done)
+		return ctx, nil
 	}
-	m.sessions[sessionID] = &sessionEntry{ctx: ctx, cancel: cancel}
-	return ctx, nil
 }
 
 // CloseSession closes a specific session tab.
