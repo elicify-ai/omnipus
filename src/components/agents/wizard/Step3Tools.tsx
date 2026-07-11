@@ -22,7 +22,7 @@ import type {
   RegistryTool,
 } from '@/lib/api'
 import { useModelToProvider } from '@/lib/agents/modelToProvider'
-import { applyRolePreset } from '@/lib/toolPolicyPresets'
+import { resolveToolsCfg } from '@/lib/toolPolicyPresets'
 import { ToolPolicyEditor, type ToolPolicyValue } from '@/components/shared/ToolPolicyEditor'
 import { InheritToggle } from './InheritToggle'
 import type { Provider } from '@/lib/api/generated/openapi-types'
@@ -288,15 +288,17 @@ function FallbackEditor({ payload, setField, providers }: FallbackEditorProps) {
  * 'balanced' role preset — expanded to a complete map over the full known
  * tool catalog — when nothing is set yet so the editor has something
  * concrete to render before the user picks anything.
+ *
+ * Delegates to `resolveToolsCfg` (`@/lib/toolPolicyPresets`) — the SAME
+ * helper `CreateAgentModal.tsx` uses to compute the commit-on-submit
+ * default, so this render and that submit can never independently drift on
+ * what counts as "already set." When `resolveToolsCfg` returns `undefined`
+ * (registry not yet loaded — see its doc comment), fall back to an empty
+ * policies map so the editor still has something to render; there is
+ * nothing to default over yet regardless.
  */
 function toolPolicyValue(cfg: StepProps['payload']['tools_cfg'], tools: RegistryTool[]): ToolPolicyValue {
-  const builtin = cfg?.builtin
-  if (builtin && typeof builtin.policies === 'object') {
-    return {
-      policies: { ...builtin.policies },
-    }
-  }
-  return applyRolePreset('balanced', tools)
+  return resolveToolsCfg(cfg, tools)?.builtin ?? { policies: {} }
 }
 
 export default Step3Tools
