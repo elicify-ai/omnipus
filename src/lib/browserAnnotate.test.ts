@@ -165,4 +165,34 @@ describe('submitAnnotation', () => {
     ).rejects.toThrow(/active chat has changed/i)
     expect(sendMessageSpy).not.toHaveBeenCalled()
   })
+
+  // F6 coverage gap: the inspect-text truncation (280 chars + "…") had no
+  // test — a large inspected element (e.g. a whole <article> or <body>) must
+  // not dump a wall of text into the annotation comment.
+  it('truncates an inspect-text longer than 280 characters to 280 chars + an ellipsis', async () => {
+    const longText = 'x'.repeat(300)
+    mockInspectBrowserElement.mockResolvedValue({ ok: true, tag: 'article', text: longText })
+
+    await submitAnnotation({ comment: 'What is this?', file: makeFile(), point: { x: 1, y: 2 }, sessionId: 'sess-1', agentId: 'agent-1' })
+
+    expect(sendMessageSpy).toHaveBeenCalledTimes(1)
+    const [comment] = sendMessageSpy.mock.calls[0]
+    const snippet = 'x'.repeat(280) + '…'
+    expect(comment).toBe(
+      `What is this?\n\n[Auto-detected context for the annotated region (<article>): "${snippet}". The attached image is the source of truth — describe what you see there.]`,
+    )
+    // The full 300-char text must NOT appear verbatim — only the capped 280 + ellipsis.
+    expect(comment).not.toContain(longText)
+  })
+
+  it('does not truncate or append an ellipsis to inspect-text at or under 280 characters', async () => {
+    const exactText = 'y'.repeat(280)
+    mockInspectBrowserElement.mockResolvedValue({ ok: true, tag: 'p', text: exactText })
+
+    await submitAnnotation({ comment: 'Look', file: makeFile(), point: { x: 1, y: 2 }, sessionId: 'sess-1', agentId: 'agent-1' })
+
+    const [comment] = sendMessageSpy.mock.calls[0]
+    expect(comment).toContain(`"${exactText}"`)
+    expect(comment).not.toContain('…')
+  })
 })

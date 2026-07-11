@@ -131,15 +131,30 @@ function pillConfig(state: LiveStatus, controlledByOther: boolean): PillConfig {
 // no-manager-for-agent, live-view-disabled, malformed control) already
 // treats as reasonably readable.
 function friendlyBrowserStatusMessage(raw: string): string {
-  // Order matters: the backend wraps EVERY navigate failure — including a Go
-  // url.Parse error — as "... navigate blocked: ...", so the more-specific
-  // invalid-URL signature must be checked BEFORE the generic blocked/SSRF one,
-  // or a malformed address is mislabeled "blocked for security" (UAT finding).
+  // Order matters: the backend wraps EVERY navigate failure — a Go url.Parse
+  // error, an ordinary DNS/network failure, AND an actual SSRF policy block
+  // — identically as "... navigate blocked: ...", so classification must run
+  // from MOST specific to LEAST specific. Reviewer finding F2: the old
+  // `navigate blocked|SSRF` catch-all also matched the ordinary "domain
+  // doesn't resolve / typo / site down" path — pkg/security/ssrf.go's
+  // resolver returns e.g. "SSRF: DNS resolution failed for <host>" or
+  // "SSRF: no addresses found for <host>" for that path (string-prefixed
+  // "SSRF:" because the resolver lives in the SSRF-guarded dial path, not
+  // because the address was actually policy-blocked) — so a mistyped or
+  // unreachable URL was wrongly told it was "blocked for security reasons".
+  // The invalid-URL and unreachable branches below are checked BEFORE the
+  // real-block branch, and the real-block branch is narrowed to the actual
+  // policy-deny messages (cloud metadata / private IP range / explicit
+  // "SSRF: blocked ...") rather than any string merely containing "SSRF".
   if (/invalid character .* in host name|parse "[^"]*":/i.test(raw)) {
     console.debug('[browser] invalid URL:', raw)
     return "That doesn't look like a valid web address."
   }
-  if (/navigate blocked|SSRF/i.test(raw)) {
+  if (/DNS resolution failed|no addresses found|too many redirects|cannot extract host|could not resolve/i.test(raw)) {
+    console.debug('[browser] address unreachable:', raw)
+    return "That address couldn't be reached — check the URL and try again."
+  }
+  if (/blocked cloud metadata|blocked private IP|blocked .* range|SSRF: blocked/i.test(raw)) {
     console.debug('[browser] navigation blocked:', raw)
     return 'That address is blocked for security reasons.'
   }
@@ -286,14 +301,32 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, onHandT
       // updater (correct even for two onStatus calls delivered in the same
       // tick, since it reads the latest pending value, not a stale closure).
       onStatus: (f) => {
+        // Reviewer finding F1: a `control_only` frame's SOLE purpose is to
+        // broadcast a control-ownership change (take/release/detach) to the
+        // OTHER viewers of this session — it carries no lifecycle/error
+        // meaning (see BrowserStatusFrame.control_only's doc comment). Two
+        // real bugs came from treating it like any other status frame: (a)
+        // it arrives as state:'idle' with no message, so unconditionally
+        // running the branches below WIPED a real, still-valid error banner
+        // shown on this viewer; (b) applying `controlled_by_other ?? false`
+        // to every frame meant a later tab-death/error frame (which omits
+        // controlled_by_other) would reset it to false and wrongly
+        // re-enable "Take control" while someone else was still driving.
+        // Apply ONLY the control-ownership axis here and stop.
+        if (f.control_only) {
+          setControlledByOther(f.controlled_by_other ?? false)
+          return
+        }
         // FE-7: only error-state messages get the raw-Go-string treatment —
         // other states' messages (if ever present) are left alone.
         setStatusMessage(f.state === 'error' && f.message ? friendlyBrowserStatusMessage(f.message) : f.message ?? null)
         setStatusIsError(f.state === 'error')
         setStatusState((prev) => (f.state === 'error' && prev === 'controlling' ? prev : f.state))
-        // FE-6: optional-chaining-safe — an omitted field (older backend
-        // build, or any non-error state that never sets it) reads as false.
-        setControlledByOther(f.controlled_by_other ?? false)
+        // FE-6: only overwrite `controlledByOther` when the server actually
+        // reported the field on THIS lifecycle/error frame — a frame that
+        // omits it (e.g. a tab-death/error frame) must not reset a
+        // still-true "someone else is driving" back to false.
+        if (f.controlled_by_other !== undefined) setControlledByOther(f.controlled_by_other)
       },
       onError: (message) => setConnError(message),
       onConnected: () => {
@@ -451,14 +484,17 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, onHandT
       // UAT finding (blank crop): `rect` is in frame-METADATA space
       // (frame.width/height = CDP Metadata.DeviceWidth/DeviceHeight — the full
       // viewport device-pixel size), but the screencast JPEG is captured with
-      // WithMaxWidth(screencastMaxWidth=1280) (live.go), so the decoded <img>'s
-      // natural pixels (img.naturalWidth/Height) are DOWNSCALED whenever the
-      // device width exceeds 1280. Using `rect` directly as the drawImage
-      // SOURCE rect then reads an out-of-bounds/misaligned region of the
-      // smaller bitmap → drawImage draws nothing → a transparent (blank
-      // white/black) crop. Scale the source rect from frame space into the
-      // img's actual natural-pixel space; the destination canvas is sized to
-      // that native region so we capture at the JPEG's true resolution.
+      // BOTH WithMaxWidth(screencastMaxWidth=1280) AND
+      // WithMaxHeight(screencastMaxHeight=720) (live.go), so the decoded
+      // <img>'s natural pixels (img.naturalWidth/Height) are DOWNSCALED
+      // whenever the device size exceeds the screencast max bound on EITHER
+      // axis (a narrow-tall/portrait viewport hits the same downscale via the
+      // height axis). Using `rect` directly as the drawImage SOURCE rect then
+      // reads an out-of-bounds/misaligned region of the smaller bitmap →
+      // drawImage draws nothing → a transparent (blank white/black) crop.
+      // Scale the source rect from frame space into the img's actual
+      // natural-pixel space; the destination canvas is sized to that native
+      // region so we capture at the JPEG's true resolution.
       const src = scaleCropToImagePixels(rect, frameWidth, frameHeight, img.naturalWidth, img.naturalHeight)
       const { x: sx, y: sy, width: sw, height: sh } = src
       // Reviewer finding: drawImage/getContext can throw synchronously (e.g.
@@ -745,6 +781,17 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, onHandT
     ? { label: "You're annotating", className: 'bg-[var(--color-accent)]/15 text-[var(--color-accent)]' }
     : pillConfig(connError ? 'error' : statusState, controlledByOther)
 
+  // Reviewer finding F5: shared by both aria-label and title on the
+  // take/release-control button below (previously duplicated verbatim in
+  // both attributes) — the visible button TEXT intentionally keeps its own,
+  // narrower 2-branch ternary (isControlling ? 'Release control' : 'Take
+  // control'), unchanged.
+  const controlButtonLabel = isControlling
+    ? 'Release control'
+    : controlledByOther
+      ? 'Someone else is currently driving'
+      : 'Take control'
+
   return (
     <div className={cn('flex h-full min-h-0 flex-col bg-[var(--color-primary)]', className)}>
       {/* Header. pr-14 (not just px-4) reserves room past the row's own buttons:
@@ -797,8 +844,8 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, onHandT
           // other viewer for a lock this connection can't win any faster by
           // clicking.
           disabled={!connected || annotateMode || controlledByOther}
-          aria-label={isControlling ? 'Release control' : controlledByOther ? 'Someone else is currently driving' : 'Take control'}
-          title={isControlling ? 'Release control' : controlledByOther ? 'Someone else is currently driving' : 'Take control'}
+          aria-label={controlButtonLabel}
+          title={controlButtonLabel}
           className={cn(
             'flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded px-2.5 py-1.5 text-xs font-medium transition-colors',
             'disabled:cursor-not-allowed disabled:opacity-40',

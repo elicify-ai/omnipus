@@ -116,6 +116,32 @@ describe('BrowserLiveView — URL bar (ADR-039 D-A2)', () => {
 
     expect(mockSendInput).toHaveBeenCalledWith({ kind: 'navigate', url: 'https://example.com/path' })
   })
+
+  // F6 coverage gap: a prior blocked-navigate error banner used to persist
+  // through a subsequent SUCCESSFUL navigate (a successful navigate emits
+  // only screencast frames, never a browser_status, so nothing cleared it) —
+  // handleNavigateSubmit clears it optimistically on every new submit.
+  it('clears a stale error banner when a new navigate is submitted', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    takeControl()
+
+    act(() => {
+      callbacksRef.current?.onStatus?.({
+        type: 'browser_status',
+        state: 'error',
+        message: 'That address is blocked for security reasons.',
+      })
+    })
+    expect(screen.getByRole('alert')).toHaveTextContent('That address is blocked for security reasons.')
+
+    const input = screen.getByRole('textbox', { name: /navigate to url/i })
+    fireEvent.change(input, { target: { value: 'example.com' } })
+    fireEvent.click(screen.getByRole('button', { name: /^go$/i }))
+
+    expect(mockSendInput).toHaveBeenCalledWith({ kind: 'navigate', url: 'https://example.com' })
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
 })
 
 describe('BrowserLiveView — Hand to agent (ADR-039 D-A3)', () => {
@@ -383,5 +409,60 @@ describe('BrowserLiveView — friendly error messages (UAT FE-7)', () => {
     expect(screen.getByRole('alert')).toHaveTextContent(
       'no browser manager for agent "a1" (browser tools may not be registered for this agent)',
     )
+  })
+
+  // Reviewer finding F2: the old catch-all `/navigate blocked|SSRF/i` also
+  // matched the ordinary "domain doesn't resolve / typo / site down" path —
+  // pkg/security/ssrf.go's resolver returns e.g. "SSRF: DNS resolution
+  // failed for <host>" for that path too (it's prefixed "SSRF:" because the
+  // resolver lives in the SSRF-guarded dial path, not because the address
+  // was actually policy-blocked) — so a mistyped/unreachable URL was wrongly
+  // told it was "blocked for security reasons".
+  it.each([
+    ['browser input failed: browser live: navigate blocked: SSRF: DNS resolution failed for nosuchhost.example: lookup nosuchhost.example: no such host'],
+    ['browser input failed: browser live: navigate blocked: SSRF: no addresses found for nosuchhost.example'],
+    ['browser input failed: browser live: navigate blocked: SSRF: too many redirects'],
+    ['browser input failed: browser live: navigate blocked: SSRF: cannot extract host from URL "not-a-url"'],
+  ])('maps an unreachable/DNS-failure navigate error to plain "couldn\'t be reached" language: %s', (message) => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    act(() => {
+      callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'error', message })
+    })
+
+    expect(screen.getByRole('alert')).toHaveTextContent("That address couldn't be reached — check the URL and try again.")
+  })
+
+  // Reviewer finding F2 — the "order matters" regression the old tests
+  // didn't actually exercise: a message containing BOTH "navigate blocked"
+  // AND the invalid-character url.Parse signature (the real backend shape
+  // for a malformed host) must map to the invalid-URL message, not the
+  // security-block one — the invalid-URL branch must run FIRST.
+  it('maps a message containing both "navigate blocked" and an invalid-character host to the invalid-URL message (order matters)', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    act(() => {
+      callbacksRef.current?.onStatus?.({
+        type: 'browser_status',
+        state: 'error',
+        message: 'browser input failed: browser live: navigate blocked: parse "http://exa mple.com": invalid character " " in host name',
+      })
+    })
+
+    expect(screen.getByRole('alert')).toHaveTextContent("That doesn't look like a valid web address.")
+  })
+
+  it.each([
+    ['browser input failed: browser live: navigate blocked: SSRF: blocked cloud metadata endpoint 169.254.169.254'],
+    ['browser input failed: browser live: navigate blocked: SSRF: blocked private IP range 10.0.0.5 (10.0.0.0/8)'],
+    ['browser input failed: browser live: navigate blocked: SSRF: blocked private IPv6 range fd00:: (fd00::/8)'],
+  ])('maps an actual SSRF policy block to the "blocked for security" message: %s', (message) => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    act(() => {
+      callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'error', message })
+    })
+
+    expect(screen.getByRole('alert')).toHaveTextContent('That address is blocked for security reasons.')
   })
 })

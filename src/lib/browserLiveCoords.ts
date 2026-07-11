@@ -179,12 +179,14 @@ export function framePixelToDeviceCoords(x: number, y: number, pageScale?: numbe
  * `<img>`'s NATURAL-pixel space (naturalWidth×naturalHeight).
  *
  * Why this is needed (UAT blank-crop finding): the screencast JPEG is captured
- * with `WithMaxWidth(screencastMaxWidth=1280)` (live.go), so whenever the
- * device width exceeds 1280 the decoded bitmap is DOWNSCALED — its natural
- * pixels are smaller than the reported device size. Passing the unscaled rect
- * straight to `ctx.drawImage(img, sx, sy, sw, sh, …)` then reads an
- * out-of-bounds / misaligned region of the smaller bitmap, so drawImage draws
- * nothing and the crop comes out blank (transparent → white or black).
+ * with BOTH `WithMaxWidth(screencastMaxWidth=1280)` AND
+ * `WithMaxHeight(screencastMaxHeight=720)` (live.go), so the decoded bitmap is
+ * DOWNSCALED whenever the device size exceeds the screencast max bound on
+ * EITHER axis — not just a wide viewport, but also a narrow-tall (portrait/
+ * mobile) one hitting the height cap. Passing the unscaled rect straight to
+ * `ctx.drawImage(img, sx, sy, sw, sh, …)` then reads an out-of-bounds /
+ * misaligned region of the smaller bitmap, so drawImage draws nothing and the
+ * crop comes out blank (transparent → white or black).
  *
  * A non-positive frame or natural dimension falls back to scale 1 (no-op), and
  * width/height are floored at 1 so the destination canvas is never 0×0
