@@ -79,7 +79,7 @@ Convention:
 | 22 | `executor.env_overrides` | — | — | — | — | O |
 | 23 | `executor.cli_args` | — | — | — | — | O |
 | 24 | `rate_limits.{use_global_defaults, max_llm_calls_per_hour, max_tool_calls_per_minute, max_cost_per_day}` | O | O | O | O | O |
-| 25 | `delegation_policy.{to[], accept_from, modes, depth, budget}` | ro (seeded) | **—** | **external editor** (`/agents/trust`) | **—** | **—** |
+| 25 | ~~`delegation_policy.{to[], accept_from, modes, depth, budget}`~~ **removed by ADR-037** — delegation is workspace-scoped (workspace Team tab); the global `/agents/trust` editor is deleted | — | — | — | — | — |
 | 26 | `default` (the "is this the global default agent?" toggle) | ro (Mia seeded) | **—** | O | **—** | **—** |
 | 27 | `timeout_seconds` | R (seeded) | R (seeded) | R (UI default 300) | R (UI default 300) | R (UI default 300) |
 | 28 | `max_tool_iterations` | R (seeded) | R (seeded) | R (UI default 50) | R (UI default 50) | R (UI default 50) |
@@ -252,13 +252,23 @@ global `agents.defaults.rate_limits` applies. For Subagent (External),
 these gate the Omnipus-mediated retries and callbacks, NOT the CLI's
 internal rate (the CLI manages that).
 
-### 3.21 `delegation_policy.*` (row 25)
-Edited in the **delegation graph UI** (`/agents/trust`), never in the
-agent form. **Main agents only** — workers don't delegate.
+### 3.21 `delegation_policy.*` (row 25) — REMOVED by ADR-037
+The per-agent `delegation_policy` field and the global `/agents/trust`
+delegation-graph editor were **deleted entirely by
+[ADR-037](../architecture/ADR-037-remove-global-delegation-policy.md)** (no
+back-compat, matching the ADR-035 `sandbox_profile` precedent). Delegation
+trust is **workspace-scoped**: edit it in a workspace's **Team tab**. The
+per-workspace `Delegation[]` edge list (`pkg/workspace/delegation.go`) has been
+the sole runtime authority since commit `822202ad` (2026-06-27); the per-agent
+field was dead in enforcement and only seeded new workspaces. `accept_from`,
+`modes`, `depth`, `budget` no longer exist even in the retained seed DTO. The
+struck prose below is kept only as a record of the removed surface.
 
-`accept_from`, `modes`, `depth`, `budget` are schema fields but **NOT
-enforced in v0.1.0** per the contract comment ("a startup WARN is emitted
-if either field is non-empty"). They show up in the graph UI as advisory.
+> ~~Edited in the delegation graph UI (`/agents/trust`), never in the agent
+> form. Main agents only — workers don't delegate. `accept_from`, `modes`,
+> `depth`, `budget` were schema fields but NOT enforced in v0.1.0 (a startup
+> WARN was emitted if either was non-empty); they showed up in the graph UI as
+> advisory.~~
 
 ### 3.22 `default` (row 26) — the G3 toggle
 Whether this agent is the global default that handles unrouted inbound.
@@ -414,7 +424,7 @@ wire schema where they were never load-bearing):
 
 | Type | Subsequent steps |
 |---|---|
-| **Main** | ① Identity → ② Personality (soul ⭐ R + heartbeat + voice + instructions) → ③ Tools (tools_cfg + skills + fallback_models) → Advanced disclosure (sandbox_profile + shell_policy + rate_limits + delegation_policy + timeout + max_iter + steering + tool_feedback REMOVED) |
+| **Main** | ① Identity → ② Personality (soul ⭐ R + heartbeat + voice + instructions) → ③ Tools (tools_cfg + skills + fallback_models) → Advanced disclosure (sandbox_profile + shell_policy + rate_limits + timeout + max_iter + steering + tool_feedback REMOVED + **delegation_policy REMOVED — ADR-037**) |
 | **Subagent** | ① Identity → ② Personality (soul ⭐ R + instructions only — no heartbeat/voice) → ③ Tools (tools_cfg + skills + fallback_models) → Advanced disclosure (sandbox_profile + shell_policy + rate_limits + timeout + max_iter) |
 | **Subagent (External)** | ① CLI choice (claude-code / codex / opencode) → ② Identity → ③ Runtime config (cli_path R + env_overrides + cli_args) → ④ Tools (skills + fallback_models; tools_cfg hidden) → Advanced disclosure (model, rate_limits, timeout, max_iter) |
 
