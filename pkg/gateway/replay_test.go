@@ -398,6 +398,121 @@ func TestReplay_SpawnSpan_Synthesizes_StartEnd(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Wave 3 fix 5b — subagent_end reads the spawn ToolCall's OWN persisted
+// Status/DurationMS, not emitNestedToolCalls' recomputed child aggregate.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// TestReplay_SpawnSpan_StatusFromPersistedRecord_NotChildAggregate is the
+// core regression test for fix 5b: a sub-turn that completed successfully at
+// the LLM level (pkg/agent/subturn.go persists Status="success" onto the
+// spawn/delegate ToolCall's own record via session.UnifiedStore.
+// UpdateToolCallStatus once EventKindSubTurnEnd fires) despite one denied
+// child tool call (Status="error" on the NESTED record) must replay with
+// subagent_end.status == "success" — matching live rendering — not "error".
+// Before the fix, emitNestedToolCalls' aggregateStatus flipped to "error"
+// whenever ANY child tool call had Status=="error", which is a fundamentally
+// different, incompatible semantic from the sub-turn's own real completion
+// status.
+//
+// Traces to: Wave 3 fix 5b (confirmed root cause: live-vs-reload divergence).
+func TestReplay_SpawnSpan_StatusFromPersistedRecord_NotChildAggregate(t *testing.T) {
+	spawnTC := session.ToolCall{
+		ID:         "c1",
+		Tool:       "delegate",
+		Status:     "success", // the REAL persisted end status (Wave 3 fix 5b)
+		DurationMS: 250,       // the REAL persisted wall-clock duration
+		Parameters: map[string]any{"task": "audit go files"},
+		Result:     map[string]any{"result": "done"},
+	}
+	// A denied/errored child tool call. Under the OLD (pre-fix) aggregate
+	// logic this alone would flip the outer span's status to "error" even
+	// though the sub-turn itself completed successfully.
+	deniedChildTC := session.ToolCall{
+		ID:               "t2",
+		Tool:             "bash",
+		Status:           "error",
+		DurationMS:       10,
+		ParentToolCallID: "c1",
+	}
+	entries := []session.TranscriptEntry{
+		assistantEntry("delegating", "jim", spawnTC, deniedChildTC),
+	}
+
+	frames, _ := runReplay(t, entries)
+
+	subEnd := findFrame(frames, "subagent_end")
+	require.NotNil(t, subEnd, "subagent_end frame must be emitted")
+	assert.Equal(t, "success", subEnd.Status,
+		"subagent_end.status must reflect the spawn ToolCall's own persisted status (success), "+
+			"not emitNestedToolCalls' aggregate flipped to error by the denied child")
+	assert.EqualValues(t, 250, subEnd.DurationMs,
+		"subagent_end.duration_ms must equal the spawn ToolCall's own persisted DurationMS (real "+
+			"wall-clock time), not the sum of child tool-call durations (10ms)")
+
+	// The outer tool_call_result frame for the spawn call itself must also
+	// reflect the same persisted success status (buildResult already read
+	// tc.Status/tc.DurationMS directly — this pins that it stays consistent
+	// with the subagent_end frame after the fix).
+	resultFrames := filterByType(frames, "tool_call_result")
+	var spawnResult *replayFrameDecoder
+	for i := range resultFrames {
+		if resultFrames[i].CallID == "c1" {
+			spawnResult = &resultFrames[i]
+		}
+	}
+	require.NotNil(t, spawnResult, "spawn call's own tool_call_result frame must be emitted")
+	assert.Equal(t, "success", spawnResult.Status)
+	assert.EqualValues(t, 250, spawnResult.DurationMs)
+
+	// The nested child's own tool_call_result frame must still independently
+	// report its real "error" status — only the OUTER span's status changed,
+	// per the fix's scope (nested frames are unaffected).
+	var childResult *replayFrameDecoder
+	for i := range resultFrames {
+		if resultFrames[i].CallID == "t2" {
+			childResult = &resultFrames[i]
+		}
+	}
+	require.NotNil(t, childResult, "nested child's own tool_call_result frame must be emitted")
+	assert.Equal(t, "error", childResult.Status,
+		"the nested child tool call's own status must remain 'error' — only the outer span status changed")
+}
+
+// TestReplay_SpawnSpan_StatusFromPersistedRecord_ErrorPropagates verifies the
+// mirror case: when the spawn ToolCall's own persisted Status is "error"
+// (the sub-turn's real EventKindSubTurnEnd/spawnSubTurn Go-level error),
+// subagent_end.status is "error" even when every child tool call succeeded —
+// proving the fix reads the persisted record directly rather than special-
+// casing "success" or silently keeping the old aggregate as a fallback.
+func TestReplay_SpawnSpan_StatusFromPersistedRecord_ErrorPropagates(t *testing.T) {
+	spawnTC := session.ToolCall{
+		ID:         "c9",
+		Tool:       "delegate",
+		Status:     "error",
+		DurationMS: 75,
+	}
+	childTC := session.ToolCall{
+		ID:               "t10",
+		Tool:             "read_file",
+		Status:           "success",
+		DurationMS:       5,
+		ParentToolCallID: "c9",
+	}
+	entries := []session.TranscriptEntry{
+		assistantEntry("delegating", "jim", spawnTC, childTC),
+	}
+
+	frames, _ := runReplay(t, entries)
+
+	subEnd := findFrame(frames, "subagent_end")
+	require.NotNil(t, subEnd)
+	assert.Equal(t, "error", subEnd.Status,
+		"subagent_end.status must reflect the spawn ToolCall's own persisted 'error' status "+
+			"even though the only child tool call succeeded")
+	assert.EqualValues(t, 75, subEnd.DurationMs)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // TDD Row 9 — TestReplay_NoSpawnSpans_WhenNoChildren
 // ─────────────────────────────────────────────────────────────────────────────
 

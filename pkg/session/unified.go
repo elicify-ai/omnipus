@@ -645,6 +645,138 @@ func (us *UnifiedStore) MarkLastEntryTruncated(sessionID, turnID string) error {
 	return nil
 }
 
+// UpdateToolCallStatus finds the transcript entry carrying a ToolCall with the
+// given ID and rewrites that ToolCall's Status and DurationMS fields in place.
+//
+// This exists for the ASYNC delegation path (DelegateTool.executeAsync,
+// pkg/tools/delegate.go): the spawning "delegate" tool call itself completes
+// — and its own ToolCall record is appended via appendToolCallTranscript —
+// almost instantly with a placeholder ack (Status="success", DurationMS≈0,
+// from tools.AsyncResult), well BEFORE the actual sub-turn goroutine finishes
+// running. The sub-turn's real terminal status/wall-clock duration is only
+// known later, at EventKindSubTurnEnd (spawnSubTurn's cleanup defer,
+// pkg/agent/subturn.go) — this method lets that defer go back and correct the
+// already-persisted placeholder record so a session reload replays the same
+// status/duration the live WS stream showed (Wave 3 fix 5b).
+//
+// Mirrors MarkLastEntryTruncated's read-mutate-rewrite-one-line pattern and
+// shares its mutex. Walks backward so a duplicate ID (should not normally
+// occur — appendToolCallTranscript writes one entry per completed tool call)
+// updates the LATEST occurrence, matching the "last occurrence wins" semantics
+// replay.go already applies when reading (buildSpawnIDsWithChildren /
+// latestByID in pkg/gateway/replay.go).
+//
+// Returns nil (no-op) when no entry with a matching ToolCall.ID is found.
+// This is the expected outcome for SYNCHRONOUS delegation (DelegateTool.
+// executeSync): spawnSubTurn blocks until the child turn finishes, so at the
+// point EventKindSubTurnEnd fires the caller has not yet appended the
+// spawning tool call's own record — it does so correctly itself moments
+// later, once spawnSubTurn returns with the real result. Returns an error
+// only on I/O failure.
+func (us *UnifiedStore) UpdateToolCallStatus(sessionID string, toolCallID ToolCallID, status string, durationMS int64) error {
+	if err := validateSessionID(sessionID); err != nil {
+		return err
+	}
+	if toolCallID == "" {
+		return nil
+	}
+
+	us.mu.Lock()
+	defer us.mu.Unlock()
+
+	transcriptPath := filepath.Join(us.baseDir, sessionID, "transcript.jsonl")
+	data, err := os.ReadFile(transcriptPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// No transcript at all — nothing to update; treat as no-op.
+			return nil
+		}
+		return fmt.Errorf("unified_store: update tool call status: read transcript: %w", err)
+	}
+
+	// Split into non-empty lines and parse.
+	rawLines := bytes.Split(data, []byte{'\n'})
+	entries := make([]json.RawMessage, 0, len(rawLines))
+	for _, line := range rawLines {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
+			continue
+		}
+		entries = append(entries, json.RawMessage(line))
+	}
+
+	if len(entries) == 0 {
+		return nil
+	}
+
+	// Walk backward to find the last entry carrying a ToolCall with this ID.
+	targetIdx := -1
+	for i := len(entries) - 1; i >= 0; i-- {
+		var e TranscriptEntry
+		if jsonErr := json.Unmarshal(entries[i], &e); jsonErr != nil {
+			// Skip malformed lines.
+			slog.Warn(
+				"unified_store: update tool call status: skipping malformed line",
+				"session_id",
+				sessionID,
+				"index",
+				i,
+				"error",
+				jsonErr,
+			)
+			continue
+		}
+		matched := false
+		for _, tc := range e.ToolCalls {
+			if tc.ID == toolCallID {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			continue
+		}
+		targetIdx = i
+		break
+	}
+
+	if targetIdx == -1 {
+		// No matching tool-call entry found — no-op, not an error (see doc comment).
+		return nil
+	}
+
+	// Unmarshal the target entry, update the matching ToolCall in place, re-marshal.
+	var target TranscriptEntry
+	if jsonErr := json.Unmarshal(entries[targetIdx], &target); jsonErr != nil {
+		return fmt.Errorf("unified_store: update tool call status: unmarshal target entry: %w", jsonErr)
+	}
+	for ti := range target.ToolCalls {
+		if target.ToolCalls[ti].ID == toolCallID {
+			target.ToolCalls[ti].Status = status
+			target.ToolCalls[ti].DurationMS = durationMS
+		}
+	}
+	rewritten, jsonErr := json.Marshal(target)
+	if jsonErr != nil {
+		return fmt.Errorf("unified_store: update tool call status: marshal updated entry: %w", jsonErr)
+	}
+	entries[targetIdx] = json.RawMessage(rewritten)
+
+	// Rebuild the file contents (one JSON object per line, no trailing newline on last).
+	var buf bytes.Buffer
+	for i, line := range entries {
+		buf.Write(line)
+		if i < len(entries)-1 {
+			buf.WriteByte('\n')
+		}
+	}
+
+	if writeErr := fileutil.WriteFileAtomic(transcriptPath, buf.Bytes(), 0o600); writeErr != nil {
+		return fmt.Errorf("unified_store: update tool call status: write transcript: %w", writeErr)
+	}
+	return nil
+}
+
 // ReadTranscript returns all entries from {session-id}/transcript.jsonl.
 func (us *UnifiedStore) ReadTranscript(sessionID string) ([]TranscriptEntry, error) {
 	if err := validateSessionID(sessionID); err != nil {
