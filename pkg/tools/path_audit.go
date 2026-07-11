@@ -140,3 +140,68 @@ func emitPathAccessDenied(
 		slog.Error("path_audit: log write failed", "error", err, "session_id", entry.SessionID)
 	}
 }
+
+// FileWriteEvent is the canonical event name for a successful write_file
+// audit entry. It reuses audit.EventFileOp — a name that was declared in
+// audit.IsValidEventName's vocabulary but never actually emitted by any
+// production code path before this. This is its first production emission.
+const FileWriteEvent = audit.EventFileOp
+
+// emitFileWriteAudit writes one file_op audit entry (Decision=allow) for a
+// successful write_file call. This is the "successful write" counterpart to
+// emitPathAccessDenied's "denied" entries above, and it exists specifically
+// so lastWriterForPath (below) has a queryable write-history record to scan:
+// the cross-agent overwrite-attribution note in WriteFileTool.Execute
+// depends on every successful write — not just overwrites — being recorded,
+// since the FIRST write of a path (before any overwrite ever happens) is
+// exactly the entry a later overwrite needs to find.
+//
+// canonicalPath must already be resolved against the effective workspace
+// root (see resolveAbsPath) — NOT the raw tool-call path — so that two
+// different agents writing the same relative filename into two different
+// PRIVATE workspaces never collide, while the same relative filename
+// written into the SAME shared CoreTeam workspace directory always does.
+// `auditLog` nil is a no-op (best-effort, mirrors emitPathAccessDenied).
+func emitFileWriteAudit(
+	ctx context.Context,
+	auditLog *audit.Logger,
+	toolName string,
+	canonicalPath string,
+) {
+	if auditLog == nil || canonicalPath == "" {
+		return
+	}
+	entry := &audit.Entry{
+		Timestamp: time.Now().UTC(),
+		Event:     FileWriteEvent,
+		Decision:  audit.DecisionAllow,
+		AgentID:   ToolAgentID(ctx),
+		SessionID: ToolTranscriptSessionID(ctx),
+		Tool:      toolName,
+		Details: map[string]any{
+			"path": canonicalPath,
+			"op":   "write",
+		},
+	}
+	if err := auditLog.Log(entry); err != nil {
+		slog.Error("path_audit: file write audit log write failed", "error", err, "session_id", entry.SessionID)
+	}
+}
+
+// lastWriterForPath looks up the most recent OTHER agent recorded as having
+// successfully written canonicalPath, per the audit log's file_op history
+// (see audit.Logger.LastWriterForPath for the scope bound — current audit
+// file only). Returns ("", false) when auditLog is nil, canonicalPath is
+// empty, no prior writer is on record, or the only prior writer on record IS
+// callerAgentID itself — an agent overwriting its own earlier file is normal
+// collaboration, not the cross-agent clobber this note exists to surface.
+func lastWriterForPath(auditLog *audit.Logger, canonicalPath, callerAgentID string) (writerAgentID string, found bool) {
+	if auditLog == nil || canonicalPath == "" {
+		return "", false
+	}
+	agentID, ok := auditLog.LastWriterForPath(FileWriteEvent, canonicalPath)
+	if !ok || agentID == "" || agentID == callerAgentID {
+		return "", false
+	}
+	return agentID, true
+}
