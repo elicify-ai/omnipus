@@ -816,8 +816,8 @@ describe('ToolsAndPermissions — latest-wins: no edit dropped during in-flight 
   // latest value is ALWAYS persisted — coalesced rapid edits into a trailing
   // save — and isDraftReady gates hydration so the editor never snaps back.
   //
-  // FIX 3 (useAutoSave serialization, agent fallback_models UAT bug,
-  // 2026-07-11): useAutoSave now also guarantees at most ONE save is ever
+  // FIX 3 (useAutoSave serialization, agent fallback_models UAT bug):
+  // useAutoSave now also guarantees at most ONE save is ever
   // in flight — a debounce firing while a prior save is still outstanding no
   // longer dispatches a second, concurrent request (which previously could
   // let a stale save's response arrive at the server AFTER a fresher one and

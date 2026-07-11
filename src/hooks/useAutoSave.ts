@@ -86,20 +86,7 @@ export function useAutoSave<T>(
   // "pending" — the unmount flush + page-hide beacon still fire and retry it.
   // Without this, a thrown save would still mark the edit as saved and the
   // user's delegation-edge changes would silently vanish on reload.
-  //
-  // FIX 2 — stale-resolve guard: only advance this ref when the just-resolved
-  // save is the most recently FIRED one. Without this guard, a concurrent save
-  // A that fires before B but resolves after B writes json_A (stale) into
-  // lastSavedJsonRef while latestDataRef already holds json_B. That leaves
-  // hasPendingChanges()=true and an extra (correct-valued) PUT fires on unmount.
-  // Tracking the fired-sequence counter and comparing at resolution time prevents
-  // the stale write. Latest-wins correctness is preserved: save B always resolves
-  // its own json_B, and A's late resolution is simply ignored.
   const lastSavedJsonRef = useRef<string>('')
-  // Monotonically increasing counter: incremented each time a save is FIRED.
-  // Each save closure captures its own sequence number and only advances
-  // lastSavedJsonRef when its sequence equals the latest fired sequence.
-  const firedSeqRef = useRef<number>(0)
   // FIX 3 — serialize saves, never let two be in flight at once. Without
   // this, two debounce cycles firing more than `debounceMs` apart — but with
   // the FIRST save's async work (network latency, or a pre-save step like an
@@ -108,12 +95,15 @@ export function useAutoSave<T>(
   // SERVER processes/returns last wins the write, even when it carries an
   // OLDER form-state snapshot than the other in-flight request: a classic
   // last-write-wins clobber (root cause of the agent fallback_models UAT
-  // data-loss bug, 2026-07-11 — a debounced save fired from stale state
-  // arrived after a fresher save and silently wiped its fallback_models).
-  // FIX 2's stale-resolve guard above only protected this hook's OWN
-  // bookkeeping from a stale-resolving concurrent save; it never stopped the
-  // second network request from going out in the first place. Serializing —
-  // never fire while one is outstanding, always re-run against the LATEST
+  // data-loss bug — a debounced save fired from stale state arrived after a
+  // fresher save and silently wiped its fallback_models).
+  // An earlier stale-resolve guard (a fired-sequence counter compared at
+  // resolution time) only protected this hook's OWN bookkeeping from a
+  // stale-resolving concurrent save; it never stopped the second network
+  // request from going out in the first place, and is redundant now that
+  // serialization guarantees at most one save is ever in flight — it has
+  // been removed rather than kept as unreachable defensive code. Serializing
+  // — never fire while one is outstanding, always re-run against the LATEST
   // data once the outstanding one settles — makes the final persisted state
   // deterministic regardless of network ordering. This is strictly safer
   // than aborting the in-flight fetch: once a PUT has been transmitted,
@@ -149,20 +139,11 @@ export function useAutoSave<T>(
     // Snapshot what we're about to persist so success marks exactly that JSON
     // saved (data may change again while the request is in flight).
     const inFlightJson = JSON.stringify(latestDataRef.current)
-    // FIX 2: capture the sequence number for this particular fire so we can
-    // guard against a stale-resolving concurrent save clobbering lastSavedJsonRef.
-    firedSeqRef.current += 1
-    const thisSeq = firedSeqRef.current
     try {
       await saveFnRef.current(latestDataRef.current)
       // Only NOW is the data durable — advance the saved marker so
       // hasPendingChanges() flips false for this exact payload.
-      // FIX 2: only advance if no newer save has been fired since this one;
-      // a later-fired save that already resolved would have set a higher seq,
-      // and we must not regress lastSavedJsonRef to our (older) payload.
-      if (thisSeq === firedSeqRef.current) {
-        lastSavedJsonRef.current = inFlightJson
-      }
+      lastSavedJsonRef.current = inFlightJson
       setStatus('saved')
       setLastSavedAt(new Date())
       // Fade back to idle after 2s. Cancel any previous fade timer first to
@@ -301,7 +282,14 @@ export function useAutoSave<T>(
         clearTimeout(fadeTimerRef.current)
         fadeTimerRef.current = null
       }
-      // Flush pending save (fire-and-forget — component is unmounting)
+      // Flush pending save (fire-and-forget — component is unmounting).
+      // Routed through `doSave()` itself — the same function the debounce
+      // timer and `saveNow` fire through — rather than calling
+      // `saveFnRef.current` directly, so all three save-firing sites
+      // visibly share one serialization guard instead of this call site
+      // quietly depending on an invariant that lives elsewhere. `doSave()`
+      // re-checks `isSavingRef` on entry (a cheap, synchronous check before
+      // its own first `await`), so calling it here is safe.
       if (initializedRef.current) {
         // FIX 3: if a save is already in flight, do NOT fire a second,
         // concurrent flush PUT straight past the serialize guard in
@@ -313,13 +301,11 @@ export function useAutoSave<T>(
         if (isSavingRef.current) {
           rerunPendingRef.current = true
         } else if (hasPendingChanges()) {
-          saveFnRef.current(latestDataRef.current).catch((err) => {
-            console.error('[useAutoSave] unmount flush save failed:', err)
-          })
+          void doSave()
         }
       }
     }
-  }, [hasPendingChanges])
+  }, [hasPendingChanges, doSave])
 
   return { status, error, lastSavedAt, saveNow: doSave }
 }
