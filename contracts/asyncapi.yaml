@@ -2117,6 +2117,7 @@ components:
             - key_down
             - key_up
             - text
+            - navigate
         x:
           type: number
         y:
@@ -2147,6 +2148,9 @@ components:
           type: integer
           minimum: 0
           maximum: 15
+        url:
+          type: string
+          maxLength: 2048
 
     BrowserControlFrame:
       title: BrowserControlFrame

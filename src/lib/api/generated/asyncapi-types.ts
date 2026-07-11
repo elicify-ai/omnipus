@@ -378,7 +378,7 @@ export interface BrowserAttachFrame {
 
 export interface BrowserInputFrame {
   type: "browser_input";
-  kind: "mouse_move" | "mouse_down" | "mouse_up" | "wheel" | "key_down" | "key_up" | "text";
+  kind: "mouse_move" | "mouse_down" | "mouse_up" | "wheel" | "key_down" | "key_up" | "text" | "navigate";
   x?: number;
   y?: number;
   button?: "none" | "left" | "middle" | "right" | "back" | "forward";
@@ -388,6 +388,7 @@ export interface BrowserInputFrame {
   code?: string;
   text?: string;
   modifiers?: number;
+  url?: string;
 }
 
 export interface BrowserControlFrame {

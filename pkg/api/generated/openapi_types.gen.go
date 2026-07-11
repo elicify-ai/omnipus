@@ -4973,6 +4973,39 @@ type BackupEntry struct {
 // BearerToken Canonical opaque bearer token format used by Omnipus. Two forms are accepted: the current id-tagged form "omnipus_" + 8 hex (token id) + "_" + 64 hex (32 random bytes) = 81 characters, and the legacy form "omnipus_" + 64 hex = 72 characters (still honored for tokens minted before the multi-token model). The id segment routes verification to the right hash in the user's token set; only the 64-hex secret is bcrypt-hashed (kept under bcrypt's 72-byte limit). Used in Authorization headers, WS AuthFrame, and rotate-token responses.
 type BearerToken = string
 
+// BrowserInspectRequest Resolve the DOM element at a point in the live browser so the SPA can attach the element's text/HTML as context when a user annotates a spot. Coordinates are device (CSS) pixels of the screencast frame. Best-effort — see ADR-039.
+type BrowserInspectRequest struct {
+	// AgentId Agent whose BrowserManager owns the live tab.
+	AgentId string `json:"agent_id"`
+
+	// SessionId Browser session id (context/correlation; the live tab is the agent's default).
+	SessionId string `json:"session_id"`
+
+	// X Device (CSS) x of the point to inspect.
+	X float32 `json:"x"`
+
+	// Y Device (CSS) y of the point to inspect.
+	Y float32 `json:"y"`
+}
+
+// BrowserInspectResponse Best-effort result of resolving the DOM element at a point in the live browser (ADR-039). ok=false (with reason) when the element can't be resolved — e.g. a cross-origin frame, a detached node, or a timeout — in which case the SPA falls back to the cropped-image annotation alone.
+type BrowserInspectResponse struct {
+	// Html Trimmed outerHTML of the resolved element (truncated), when ok.
+	Html *string `json:"html,omitempty"`
+
+	// Ok Whether an element was resolved.
+	Ok bool `json:"ok"`
+
+	// Reason Why resolution failed, when ok=false.
+	Reason *string `json:"reason,omitempty"`
+
+	// Tag Resolved element tag name (e.g. "button", "a"), when ok.
+	Tag *string `json:"tag,omitempty"`
+
+	// Text Trimmed innerText of the resolved element (truncated), when ok.
+	Text *string `json:"text,omitempty"`
+}
+
 // ChangePasswordRequest Body for POST /auth/change-password. Changes the authenticated user's own password.
 type ChangePasswordRequest struct {
 	// CurrentPassword The user's current password for verification. Maximum 72 characters (bcrypt limit).
@@ -8831,6 +8864,9 @@ type LoginJSONRequestBody = LoginRequest
 
 // ReAuthJSONRequestBody defines body for ReAuth for application/json ContentType.
 type ReAuthJSONRequestBody = ReAuthRequest
+
+// BrowserInspectJSONRequestBody defines body for BrowserInspect for application/json ContentType.
+type BrowserInspectJSONRequestBody = BrowserInspectRequest
 
 // CreateChannelInstanceJSONRequestBody defines body for CreateChannelInstance for application/json ContentType.
 type CreateChannelInstanceJSONRequestBody = ChannelCreateRequest
