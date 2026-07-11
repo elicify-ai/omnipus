@@ -7,7 +7,6 @@ import {
   GitFork,
   Plus,
   Robot,
-  ShareNetwork,
   Users,
   WarningCircle,
 } from '@phosphor-icons/react'
@@ -608,14 +607,6 @@ export function AgentListScreen() {
             <p className="text-sm text-[var(--color-muted)] mt-0.5">
               Browse, configure, and create your AI agents.
             </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Link
-              to="/agents/trust"
-              className="inline-flex items-center gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2 text-xs font-medium text-[var(--color-secondary)] transition-colors hover:border-[var(--color-accent)]/40 hover:text-[var(--color-accent)]"
-            >
-              <ShareNetwork size={14} weight="bold" /> Delegation Graph
-            </Link>
           </div>
         </div>
 
