@@ -14,18 +14,24 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
-// Regression coverage for the self-delegation authorization bypass: the
-// self-assignment carve-out in buildDelegationDenyChecker is correct ONLY for the
-// task tools (reassigning a task to its existing owner is not delegation). The
-// delegate TOOL spawns a real sub-turn instance, so delegate(agent_id=self) IS
-// delegation and MUST be graph-gated — and since workspace.DelegationEdge.Validate
-// forbids any self-edge, that gate permanently DENIES it (trust_set). These tests
-// pin selfAssignmentExempt=false (the real delegate-tool wiring) and prove the
-// denial both in the checker in isolation and end-to-end through DelegateTool.Execute.
+// Regression coverage for the self-delegation authorization bypass and its
+// intentionally-asymmetric counterpart. The delegate TOOL spawns a real sub-turn
+// instance, so delegate(agent_id=self) IS delegation and is ALWAYS denied
+// (buildDelegationDenyCheckerForDelegate). The task tools, in contrast, treat a
+// self-target as a no-op reassignment to the task's existing owner and correctly
+// ALLOW it (buildDelegationDenyCheckerForTaskReassignment).
 //
-// The complementary "task-mode self-assignment IS allowed" property is pinned by
+// This file proves BOTH halves end-to-end, not just at the raw checker level:
+//   - delegate self-target DENIED — in the checker, through DelegateTool.Execute
+//     (background + await), and with the depth resolver never reached;
+//   - task self-target ALLOWED — through the real registerSharedTools construction
+//     path (TestTaskCreate_SelfAssignmentAllowedThroughRegisterSharedTools);
+//   - the cross-workspace task gate (NewSysagentDelegationDeny) enforces the same
+//     asymmetry (TestNewSysagentDelegationDeny_SelfAllowedNonSelfGated).
+//
+// The task-mode-in-isolation "self-assignment IS allowed" property is also pinned by
 // TestDelegationDenyChecker_SelfAssignmentSkipsGraph (delegation_enforce_test.go),
-// which must stay green — the two carve-out halves are intentionally asymmetric.
+// which must stay green.
 
 // spyDelegateSpawner records whether SpawnSubTurn was invoked. A DENIED delegation
 // must never reach the spawner.
@@ -47,7 +53,7 @@ func TestDelegationDenyChecker_SelfTargetDeniedForBackgroundDelegate(t *testing.
 	seedWorkspaceGraph(t, testWS, true, []graphEdge{
 		edge("mia", "ray", []string{"background"}, nil),
 	})
-	check := buildDelegationDenyChecker("mia", config.AgentDefaults{}, config.DelegationModeBackground, false)
+	check := buildDelegationDenyCheckerForDelegate("mia", config.AgentDefaults{}, config.DelegationModeBackground)
 
 	denial := check(ctxWS(testWS, 0), "mia") // self-target
 	if denial == nil {
@@ -65,7 +71,7 @@ func TestDelegationDenyChecker_SelfTargetDeniedForAwaitDelegate(t *testing.T) {
 	seedWorkspaceGraph(t, testWS, true, []graphEdge{
 		edge("mia", "ray", []string{"await"}, nil),
 	})
-	check := buildDelegationDenyChecker("mia", config.AgentDefaults{}, config.DelegationModeAwait, false)
+	check := buildDelegationDenyCheckerForDelegate("mia", config.AgentDefaults{}, config.DelegationModeAwait)
 
 	denial := check(ctxWS(testWS, 0), "mia") // self-target
 	if denial == nil {
@@ -85,9 +91,9 @@ func newSelfTargetDelegateTool() (*tools.DelegateTool, *spyDelegateSpawner) {
 	spy := &spyDelegateSpawner{}
 	dt.SetSpawner(spy)
 	dt.SetDelegationDenyCheckerBackground(
-		buildDelegationDenyChecker("mia", config.AgentDefaults{}, config.DelegationModeBackground, false))
+		buildDelegationDenyCheckerForDelegate("mia", config.AgentDefaults{}, config.DelegationModeBackground))
 	dt.SetDelegationDenyCheckerAwait(
-		buildDelegationDenyChecker("mia", config.AgentDefaults{}, config.DelegationModeAwait, false))
+		buildDelegationDenyCheckerForDelegate("mia", config.AgentDefaults{}, config.DelegationModeAwait))
 	dt.SetDelegationDepthResolver(buildDelegationDepthResolver("mia", config.AgentDefaults{}))
 	return dt, spy
 }
@@ -139,7 +145,7 @@ func TestDelegateTool_SelfTargetDeniedBeforeDepthResolver(t *testing.T) {
 	spy := &spyDelegateSpawner{}
 	dt.SetSpawner(spy)
 	dt.SetDelegationDenyCheckerBackground(
-		buildDelegationDenyChecker("mia", config.AgentDefaults{}, config.DelegationModeBackground, false))
+		buildDelegationDenyCheckerForDelegate("mia", config.AgentDefaults{}, config.DelegationModeBackground))
 
 	depthResolverCalled := false
 	realResolver := buildDelegationDepthResolver("mia", config.AgentDefaults{})
@@ -162,5 +168,104 @@ func TestDelegateTool_SelfTargetDeniedBeforeDepthResolver(t *testing.T) {
 	}
 	if spy.called {
 		t.Fatal("spawner must not run for a denied self-target delegation")
+	}
+}
+
+// TestTaskCreate_SelfAssignmentAllowedThroughRegisterSharedTools proves the OTHER
+// half of the asymmetry end-to-end: the task tools MUST still exempt self-assignment.
+// It builds the tools through the REAL construction path (NewAgentLoop →
+// registerSharedTools), retrieves the agent's actual create_task tool (carrying the
+// deny checker registerSharedTools wired — buildDelegationDenyCheckerForTaskReassignment),
+// and drives create_task(agent_id=self) end-to-end, asserting success.
+//
+// This closes the gap pr-test-analyzer proved: swapping the task-tool wiring to the
+// delegate variant (exempt=false — the copy-paste mistake this whole fix guards
+// against) would deny this self-assignment, and this test would fail. A non-self,
+// un-edged target is the control: it is real delegation and must still be denied.
+func TestTaskCreate_SelfAssignmentAllowedThroughRegisterSharedTools(t *testing.T) {
+	const agentID = "mia"
+	// The default workspace graph has NO mia→mia edge (none can exist). The task
+	// tools' exempt short-circuit must allow self-assignment WITHOUT consulting it.
+	// mia→ray (task) exists only so the control non-self case has a real graph.
+	seedWorkspaceGraph(t, testWS, true, []graphEdge{
+		edge("mia", "ray", []string{"task"}, nil),
+	})
+	al, _ := wireTestLoopWithGraph(t, agentID)
+
+	inst, ok := al.GetRegistry().GetAgent(agentID)
+	if !ok || inst == nil {
+		t.Fatalf("agent %q not registered after loop init", agentID)
+	}
+	tool, ok := inst.Tools.Get("create_task")
+	if !ok {
+		t.Fatal("create_task tool not registered on agent (task tools require a task store)")
+	}
+
+	// Self-assignment: must SUCCEED (not delegation).
+	res := tool.Execute(context.Background(), map[string]any{
+		"title":    "self task",
+		"prompt":   "do the thing myself",
+		"agent_id": agentID, // SELF
+	})
+	if res == nil {
+		t.Fatal("nil result from create_task")
+	}
+	if res.IsError {
+		t.Fatalf("self-assignment create_task must SUCCEED (self-reassignment is not delegation), "+
+			"got error: %s", res.ForLLM)
+	}
+	if !strings.Contains(res.ForLLM, `"task_id"`) {
+		t.Fatalf("expected a created task_id payload for self-assignment, got: %s", res.ForLLM)
+	}
+
+	// Control — non-self, un-edged target (no mia→ava edge): real delegation, DENIED.
+	denRes := tool.Execute(context.Background(), map[string]any{
+		"title":    "cross task",
+		"prompt":   "hand off to ava",
+		"agent_id": "ava",
+	})
+	if denRes == nil || !denRes.IsError {
+		t.Fatalf("non-self un-edged create_task must be DENIED, got: %+v", denRes)
+	}
+	if !strings.Contains(denRes.ForLLM, `"policy":"trust_set"`) {
+		t.Fatalf("expected trust_set denial for un-edged non-self assignment, got: %s", denRes.ForLLM)
+	}
+}
+
+// TestNewSysagentDelegationDeny_SelfAllowedNonSelfGated gives the cross-workspace
+// task-tool delegation gate (AgentLoop.NewSysagentDelegationDeny) its first direct
+// coverage — pr-test-analyzer confirmed it had ZERO. It backs the sysagent
+// create_task_in_workspace / update_task_in_workspace tools, so it must enforce the
+// SAME task-mode policy as the plain task tools: self-target and empty-target are
+// no-op reassignments (allowed), a trusted non-self target is allowed, an un-edged
+// non-self target is denied trust_set.
+func TestNewSysagentDelegationDeny_SelfAllowedNonSelfGated(t *testing.T) {
+	const callerID = "jim"
+	seedWorkspaceGraph(t, testWS, true, []graphEdge{
+		edge("jim", "ava", []string{"task"}, nil), // jim→ava trusted (task)
+	})
+	al, _ := wireTestLoopWithGraph(t, callerID)
+	deny := al.NewSysagentDelegationDeny()
+
+	// Self-target: a no-op task reassignment to the owner — allowed.
+	if d := deny(ctxWS(testWS, 0), callerID, callerID); d != nil {
+		t.Fatalf("self-target task reassignment must be allowed, got deny: %+v", d)
+	}
+	// Empty target: no-op assignment — allowed.
+	if d := deny(ctxWS(testWS, 0), callerID, ""); d != nil {
+		t.Fatalf("empty target must be a no-op (allowed), got deny: %+v", d)
+	}
+	// Trusted non-self (jim→ava task edge present): allowed.
+	if d := deny(ctxWS(testWS, 0), callerID, "ava"); d != nil {
+		t.Fatalf("jim→ava is task-edged and must be allowed, got deny: %+v", d)
+	}
+	// Un-edged non-self (no jim→ray edge): DENIED trust_set.
+	d := deny(ctxWS(testWS, 0), callerID, "ray")
+	if d == nil {
+		t.Fatal("jim→ray (no edge) must be DENIED, got allow")
+	}
+	if d.Policy != tools.DenyTrustSet {
+		t.Fatalf("expected trust_set denial for un-edged cross-workspace target, got: %q (%s)",
+			d.Policy, d.Reason)
 	}
 }
