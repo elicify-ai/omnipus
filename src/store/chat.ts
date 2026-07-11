@@ -108,6 +108,19 @@ export type ChatMessage = Message & {
    * true status directly and need no correlation.
    */
   turnId?: string
+  /**
+   * Text-join seam marker (live-UAT regression, persona "Dana"): set on a
+   * still-streaming assistant bubble whenever a top-level tool call starts
+   * while it holds text (see the non-spanned branch of `case 'tool_call_start'`).
+   * A tool call — including a synchronous ("await") `delegate` call whose own
+   * reply rides back on the SAME bubble because it shares the delegator's
+   * agent_id / omits one — is a new logical unit starting. Without this, the
+   * next `token` frame's content is glued directly onto the trailing
+   * narration with no space or break (e.g. "...now.Now delegating..." or
+   * "...inline:ping"). Consumed (cleared) by the `case 'token'` handler,
+   * which inserts a paragraph break before appending when the flag is set.
+   */
+  pendingTextBoundary?: boolean
 }
 
 // Client-side truncation sentinel — parallel to server TruncatedResult/ToolResultRef shapes.
@@ -1935,6 +1948,16 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 if (frame.agent_id) {
                   msg.agentId = frame.agent_id
                 }
+                // Consume the seam marker: a tool call started on this bubble
+                // since the last token was appended, so this frame begins a
+                // new logical unit — insert a paragraph break instead of
+                // gluing it directly onto the trailing narration (live-UAT
+                // regression, persona "Dana" — e.g. "...now.Now delegating…"
+                // / "...inline:ping" with zero separator).
+                if (msg.pendingTextBoundary) {
+                  if (msg.content) msg.content += '\n\n'
+                  msg.pendingTextBoundary = false
+                }
                 msg.content = msg.content + frame.content
                 msg.isStreaming = true
                 msg.status = 'streaming'
@@ -2269,6 +2292,14 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   const ph: ChatMessage = { id: generateId(), role: 'assistant', content: '', timestamp: new Date().toISOString(), status: 'streaming', isStreaming: true, agentId: frame.agent_id ?? useSessionStore.getState().activeAgentId ?? undefined }
                   draft.messagesById[ph.id] = ph
                   draft.messageOrder.push(ph.id)
+                } else if (lastMsgId) {
+                  // A tool call is starting on the bubble that's still holding
+                  // the delegator's own narration — flag the seam so the next
+                  // token append (the post-tool-call continuation, or a
+                  // synchronous delegate's own reply riding the same bubble)
+                  // gets a paragraph break instead of gluing on with no
+                  // separator. See `pendingTextBoundary` on ChatMessage.
+                  draft.messagesById[lastMsgId].pendingTextBoundary = true
                 }
                 if (shouldMarkStreaming) draft.isStreaming = true
                 if (!existingTC || existingTC.status === 'running') {

@@ -19,6 +19,7 @@ import {
   type NodeChange,
   type EdgeProps,
   type IsValidConnection,
+  type OnConnectEnd,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import '../reactflow-theme.css'
@@ -28,6 +29,8 @@ import { cn } from '@/lib/utils'
 import { EdgeModeEditor, EdgeLabelChip } from './EdgeModeEditor'
 import {
   validateConnection,
+  rejectionMessageForFailedConnection,
+  REJECTION_MESSAGE,
   type DelegationMode,
   type TeamEdgeModel,
   type TeamNodeModel,
@@ -355,12 +358,6 @@ export interface WorkspaceTeamGraphProps {
   onOpenAgent?: (agentId: string) => void
 }
 
-const REJECTION_MESSAGE: Record<string, string> = {
-  'self-edge': 'An agent cannot delegate to itself.',
-  duplicate: 'That delegation edge already exists.',
-  'not-member': 'Both agents must be on the team first.',
-}
-
 function WorkspaceTeamGraphInner({
   nodes,
   edges,
@@ -467,6 +464,28 @@ function WorkspaceTeamGraphInner({
     [editState, workerIds, onConnect, onRejectConnection],
   )
 
+  // Bug fix (live-UAT, persona "Sam"): React Flow only calls `onConnect` when
+  // `isValidConnection` passed — a REJECTED drag (self-edge, duplicate,
+  // non-member) never reaches `handleConnect` above at all, so a self-edge
+  // drop (e.g. jim → jim) produced no edge and zero feedback, and the drop
+  // fell through to the node's own click handler (opening its profile panel)
+  // with no explanation. `onConnectEnd` is the one connect-lifecycle event
+  // React Flow fires unconditionally, valid or not, so it's the only place a
+  // rejected attempt can be observed and surfaced.
+  const handleConnectEnd = useCallback<OnConnectEnd>(
+    (_event, connectionState) => {
+      const message = rejectionMessageForFailedConnection(
+        connectionState.fromNode?.id,
+        connectionState.toNode?.id,
+        connectionState.isValid,
+        editState,
+        workerIds,
+      )
+      if (message) onRejectConnection(message)
+    },
+    [editState, workerIds, onRejectConnection],
+  )
+
   return (
     <div
       data-testid="team-graph-canvas"
@@ -480,6 +499,7 @@ function WorkspaceTeamGraphInner({
         edgeTypes={edgeTypes}
         onNodesChange={onNodesChange}
         onConnect={handleConnect}
+        onConnectEnd={handleConnectEnd}
         isValidConnection={isValidConnection}
         onPaneClick={() => setSelectedEdgeId(null)}
         nodesDraggable

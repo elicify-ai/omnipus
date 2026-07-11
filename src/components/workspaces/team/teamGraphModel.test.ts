@@ -12,12 +12,14 @@ import {
   unsavedMembers,
   normalizeDepth,
   normalizeModes,
+  rejectionMessageForFailedConnection,
   removeEdge,
   removeMember,
   setEdgeDepth,
   teamEdgeId,
   toggleEdgeMode,
   validateConnection,
+  REJECTION_MESSAGE,
   type TeamEditState,
 } from './teamGraphModel'
 
@@ -190,6 +192,54 @@ describe('validateConnection', () => {
   })
   it('allows a valid new edge', () => {
     expect(validateConnection('jim', 'planner', state, WORKER_IDS)).toBeNull()
+  })
+})
+
+// ── rejectionMessageForFailedConnection — live-UAT regression, persona "Sam" ──
+// React Flow only calls `onConnect` when `isValidConnection` passed, so a
+// rejected drag (self-edge in particular) never reaches a handler wired to
+// `onConnect` — it's silently swallowed with zero feedback. The fix wires
+// `onConnectEnd` (which React Flow ALWAYS fires) to this helper instead.
+
+describe('rejectionMessageForFailedConnection', () => {
+  const state: TeamEditState = {
+    members: ['mia', 'jim', 'planner'],
+    edges: [{ from: 'mia', to: 'jim', modes: ['await'] }],
+  }
+
+  it('surfaces the self-edge message for a rejected self-drag (jim -> jim)', () => {
+    // This is the exact drag the bug report reproduces: a handle dragged back
+    // onto its own node.
+    expect(rejectionMessageForFailedConnection('jim', 'jim', false, state, WORKER_IDS)).toBe(
+      REJECTION_MESSAGE['self-edge'],
+    )
+  })
+
+  it('surfaces the duplicate-edge message for a rejected re-drag of an existing edge', () => {
+    expect(rejectionMessageForFailedConnection('mia', 'jim', false, state, WORKER_IDS)).toBe(
+      REJECTION_MESSAGE['duplicate'],
+    )
+  })
+
+  it('surfaces the not-member message for a rejected drag to a non-team id', () => {
+    expect(rejectionMessageForFailedConnection('mia', 'ray', false, state, WORKER_IDS)).toBe(
+      REJECTION_MESSAGE['not-member'],
+    )
+  })
+
+  it('returns null when the connection was actually valid (isValid !== false)', () => {
+    // onConnect already handles the success path — onConnectEnd must stay
+    // silent so a successful drag doesn't ALSO pop a toast.
+    expect(rejectionMessageForFailedConnection('jim', 'planner', true, state, WORKER_IDS)).toBeNull()
+    expect(rejectionMessageForFailedConnection('jim', 'planner', null, state, WORKER_IDS)).toBeNull()
+  })
+
+  it('returns null when the drag never settled on an identifiable node (dropped on empty canvas)', () => {
+    // A cancelled drag with no target handle nearby — not a rejected attempt,
+    // just the user letting go. Must not produce a spurious toast.
+    expect(rejectionMessageForFailedConnection('jim', null, false, state, WORKER_IDS)).toBeNull()
+    expect(rejectionMessageForFailedConnection(undefined, 'jim', false, state, WORKER_IDS)).toBeNull()
+    expect(rejectionMessageForFailedConnection(null, null, false, state, WORKER_IDS)).toBeNull()
   })
 })
 

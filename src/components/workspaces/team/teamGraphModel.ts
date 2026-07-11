@@ -305,6 +305,45 @@ export function validateConnection(
   return null
 }
 
+/** Plain-language, per-repo-copywriting-convention message for each rejection reason. */
+export const REJECTION_MESSAGE: Record<ConnectionRejection, string> = {
+  'self-edge': 'An agent cannot delegate to itself.',
+  duplicate: 'That delegation edge already exists.',
+  'not-member': 'Both agents must be on the team first.',
+}
+
+/**
+ * Derive the toast message for a FAILED connection drag, given the
+ * React Flow `FinalConnectionState`-shaped from/to node ids and validity.
+ *
+ * React Flow only invokes `onConnect` when `isValidConnection` passed — a
+ * rejected drop (self-edge, duplicate, non-member) never reaches `onConnect`
+ * at all, so a rejection handler wired there is unreachable dead code. The
+ * drag is instead silently swallowed: no edge, no feedback (live-UAT bug,
+ * persona "Sam" — dragging a handle back onto its own node). The one event
+ * React Flow ALWAYS fires, valid or not, is `onConnectEnd` — this helper
+ * recomputes the same rejection reason from its `FinalConnectionState` so a
+ * caller wired to `onConnectEnd` can surface it.
+ *
+ * Returns `null` when there's nothing to report: the connection succeeded
+ * (`isValid !== false`), or the drag was released without ever settling over
+ * an identifiable target node (e.g. dropped on empty canvas — a normal
+ * "cancel the drag" gesture, not a rejected attempt).
+ */
+export function rejectionMessageForFailedConnection(
+  fromId: string | null | undefined,
+  toId: string | null | undefined,
+  isValid: boolean | null,
+  state: TeamEditState,
+  workerIds?: ReadonlySet<string>,
+): string | null {
+  if (isValid !== false) return null
+  if (!fromId || !toId) return null
+  const reason = validateConnection(fromId, toId, state, workerIds)
+  if (reason === null) return null
+  return REJECTION_MESSAGE[reason] ?? 'Connection not allowed.'
+}
+
 /** Immutably add an edge from → to (seeded with the default modes). */
 export function addEdge(
   state: TeamEditState,
