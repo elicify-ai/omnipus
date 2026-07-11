@@ -2480,7 +2480,19 @@ type wsStreamer struct {
 	// ADR-032, no inheritance from the parent) differs from the session's
 	// "active" (parent) agent. Guarded by statsMu since Update/Finalize may
 	// read it from a different goroutine than SetProducerAgentID writes it.
-	agentID     string
+	agentID string
+	// turnID identifies the turn that produced this streamer's transcript
+	// entry (FIX 5c/1). Stamped by the agent loop via SetTurnID immediately
+	// after obtaining the streamer, mirroring SetProducerAgentID's pattern
+	// exactly. Without this, the entry Finalize writes carries no TurnID at
+	// all — the confirmed cause of two real bugs: (1) the frontend's
+	// turn_canceled -> assistant-message replay correlation can never match
+	// a real entry (chatTurnCanceledNoMatch fires on every reload after a
+	// mid-stream cancel), and (2) MarkLastEntryTruncated's own turn-scoped
+	// backward-walk (pkg/session/unified.go, requires e.TurnID == turnID)
+	// can never match a real entry either, silently disabling the Truncated
+	// flag for every real cancel. Guarded by statsMu like agentID.
+	turnID      string
 	channel     *webchatChannel // to mark streaming complete and suppress duplicate Send()
 	accumulated strings.Builder // accumulates full response text
 
@@ -2543,6 +2555,29 @@ func (s *wsStreamer) SetProducerAgentID(agentID string) {
 	}
 	s.statsMu.Lock()
 	s.agentID = agentID
+	s.statsMu.Unlock()
+}
+
+// SetTurnID stamps the turn ID that will be attributed to the transcript
+// entry Finalize writes. Called by the agent loop (via the inline SetTurnID
+// interface, mirroring SetProducerAgentID exactly) immediately after
+// obtaining the streamer for an LLM streaming call, before any Update/
+// Finalize can observe it.
+//
+// FIX 5c/1: without this, the assistant entry Finalize writes carries no
+// TurnID, so a mid-stream cancel's turn_canceled entry (which DOES carry
+// TurnID — see pkg/agent/cancel.go) can never be correlated with the
+// assistant message it interrupted on replay, and
+// MarkLastEntryTruncated's own turn-scoped matching can never find the
+// entry to flag. A no-op on an empty turnID so a caller with no resolved
+// turn ID (should not happen in practice) cannot blank out an
+// already-stamped value.
+func (s *wsStreamer) SetTurnID(turnID string) {
+	if turnID == "" {
+		return
+	}
+	s.statsMu.Lock()
+	s.turnID = turnID
 	s.statsMu.Unlock()
 }
 
@@ -2702,10 +2737,11 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 	transcriptAlreadyPersisted := s.transcriptPersisted
 	producedModel := s.producedModel
 	turnFailed := s.statsTurnFailed
-	// FIX 5a: read under statsMu — SetProducerAgentID (called by the agent
-	// loop at streaming-call start) may run on a different goroutine than
-	// Finalize (called at turn end).
+	// FIX 5a/5c: read under statsMu — SetProducerAgentID/SetTurnID (called by
+	// the agent loop at streaming-call start) may run on a different
+	// goroutine than Finalize (called at turn end).
 	producerAgentID := s.agentID
+	turnID := s.turnID
 	s.statsMu.Unlock()
 	doneStats.Tokens = &tokensF
 	doneStats.Cost = &costF
@@ -2752,9 +2788,14 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 		}
 		if content != "" {
 			entry := session.TranscriptEntry{
-				ID:        uuid.New().String(),
-				Role:      "assistant",
-				AgentID:   producerAgentID,
+				ID:      uuid.New().String(),
+				Role:    "assistant",
+				AgentID: producerAgentID,
+				// TurnID (FIX 5c/1): stamped via SetTurnID so a mid-stream
+				// cancel's turn_canceled entry can be correlated with THIS
+				// entry on replay, and so MarkLastEntryTruncated's
+				// turn-scoped backward-walk can find it.
+				TurnID:    turnID,
 				Content:   content,
 				Timestamp: time.Now().UTC(),
 				Tokens:    int(tokensF),

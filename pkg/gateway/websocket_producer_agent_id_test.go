@@ -187,3 +187,142 @@ func TestWsStreamer_Finalize_AttributesTranscriptToProducerAgentID(t *testing.T)
 		"the persisted transcript entry must attribute to the TRUE producer, not the "+
 			"session's active-agent guess")
 }
+
+// TestWsStreamer_Finalize_StampsTurnID is the FIX 5c/1 "point of emission"
+// test: the assistant transcript entry Finalize writes must carry the
+// stamped TurnID, not an empty string.
+//
+// BDD:
+//
+//	Given a wsStreamer whose agent loop has stamped TurnID "turn-xyz" via
+//	  SetTurnID (as stampStreamerTurnID does),
+//	When Update streams content and Finalize persists the transcript,
+//	Then the persisted assistant transcript entry's TurnID is "turn-xyz".
+//
+// Traces to: pkg/gateway/websocket.go wsStreamer.SetTurnID / Finalize;
+// pkg/agent/turn.go stampStreamerTurnID.
+func TestWsStreamer_Finalize_StampsTurnID(t *testing.T) {
+	_, _, al := newTestWSHandler(t)
+
+	store := al.GetSessionStore()
+	require.NotNil(t, store, "session store must exist")
+
+	meta, err := store.NewSession(session.SessionTypeChat, "webchat", "jim")
+	require.NoError(t, err, "create session")
+	t.Cleanup(func() { _ = store.DeleteSession(meta.ID) })
+
+	wc := &wsConn{
+		sendCh:         make(chan []byte, 256),
+		doneCh:         make(chan struct{}),
+		replayDivertCh: make(chan []byte, replayLiveBufferCap),
+	}
+	s := &wsStreamer{
+		conn:       wc,
+		chatID:     "chat-turnid-emission",
+		sessionID:  meta.ID,
+		agentStore: store,
+		agentID:    "jim",
+	}
+	s.SetTurnID("turn-xyz")
+
+	require.NoError(t, s.Update(context.Background(), "hello"))
+	require.NoError(t, s.Finalize(context.Background(), "hello"))
+
+	entries, err := store.ReadTranscript(meta.ID)
+	require.NoError(t, err)
+	var assistantEntries []session.TranscriptEntry
+	for _, e := range entries {
+		if e.Role == "assistant" {
+			assistantEntries = append(assistantEntries, e)
+		}
+	}
+	require.Len(t, assistantEntries, 1)
+	assert.Equal(t, "turn-xyz", assistantEntries[0].TurnID,
+		"the persisted entry must carry the stamped TurnID, not an empty string")
+}
+
+// TestWsStreamer_SetTurnID_EmptyIsNoop mirrors
+// TestWsStreamer_SetProducerAgentID_EmptyIsNoop for SetTurnID.
+func TestWsStreamer_SetTurnID_EmptyIsNoop(t *testing.T) {
+	s, _ := buildWsStreamer(t)
+	s.turnID = "turn-existing"
+
+	s.SetTurnID("") // must be a no-op
+
+	s.statsMu.Lock()
+	got := s.turnID
+	s.statsMu.Unlock()
+	assert.Equal(t, "turn-existing", got, "an empty SetTurnID call must not clobber the existing turnID")
+}
+
+// TestWsStreamer_Finalize_TurnIDEnablesMarkLastEntryTruncatedCorrelation is
+// the end-to-end regression test proving FIX 5c/1 actually closes the live-
+// verification bug: MarkLastEntryTruncated's own turn-scoped backward-walk
+// (pkg/session/unified.go, requires e.TurnID == turnID) must now find and
+// flag a REAL entry written through the production wsStreamer.Finalize path
+// — not just a hand-seeded test fixture. Before this fix, EVERY real
+// assistant entry had TurnID=="" while MarkLastEntryTruncated is always
+// called with a genuine non-empty turn ID (pkg/agent/cancel.go), so the
+// match could never succeed and Truncated was silently never set for any
+// real cancel.
+//
+// BDD:
+//
+//	Given a wsStreamer stamped with TurnID "turn-cancel-1" (as the agent loop
+//	  does via stampStreamerTurnID before any token flows),
+//	  And Update/Finalize have persisted the resulting assistant entry
+//	  exactly as a live mid-stream turn would,
+//	When MarkLastEntryTruncated(sessionID, "turn-cancel-1") is called
+//	  (exactly as pkg/agent/cancel.go's RequestCancel does),
+//	Then the REAL persisted entry is found and flagged Truncated=true.
+func TestWsStreamer_Finalize_TurnIDEnablesMarkLastEntryTruncatedCorrelation(t *testing.T) {
+	_, _, al := newTestWSHandler(t)
+
+	store := al.GetSessionStore()
+	require.NotNil(t, store, "session store must exist")
+
+	meta, err := store.NewSession(session.SessionTypeChat, "webchat", "jim")
+	require.NoError(t, err, "create session")
+	t.Cleanup(func() { _ = store.DeleteSession(meta.ID) })
+
+	wc := &wsConn{
+		sendCh:         make(chan []byte, 256),
+		doneCh:         make(chan struct{}),
+		replayDivertCh: make(chan []byte, replayLiveBufferCap),
+	}
+
+	s := &wsStreamer{
+		conn:       wc,
+		chatID:     "chat-turnid-corr",
+		sessionID:  meta.ID,
+		agentStore: store,
+		agentID:    "jim",
+	}
+	// Exactly what the agent loop does via stampStreamerProducerAgentID /
+	// stampStreamerTurnID immediately after obtaining the streamer.
+	s.SetProducerAgentID("jim")
+	s.SetTurnID("turn-cancel-1")
+
+	require.NoError(t, s.Update(context.Background(), "Partial response before cancel..."))
+	require.NoError(t, s.Finalize(context.Background(), "Partial response before cancel..."))
+
+	// This is the exact call pkg/agent/cancel.go's RequestCancel makes on a
+	// mid-stream cancel, with the real turn ID it tracked throughout the turn.
+	require.NoError(t, store.MarkLastEntryTruncated(meta.ID, "turn-cancel-1"))
+
+	entries, err := store.ReadTranscript(meta.ID)
+	require.NoError(t, err, "read transcript")
+
+	var assistantEntries []session.TranscriptEntry
+	for _, e := range entries {
+		if e.Role == "assistant" {
+			assistantEntries = append(assistantEntries, e)
+		}
+	}
+	require.Len(t, assistantEntries, 1)
+	assert.Equal(t, "turn-cancel-1", assistantEntries[0].TurnID,
+		"the persisted entry must carry the stamped TurnID")
+	assert.True(t, assistantEntries[0].Truncated,
+		"MarkLastEntryTruncated must find and flag the REAL entry via TurnID correlation — "+
+			"before FIX 5c/1 this always silently failed to match on production data")
+}
