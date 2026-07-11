@@ -390,12 +390,18 @@ describe('useAutoSave', () => {
   })
 
   // ── FIX 2: stale-resolving concurrent save does not clobber lastSavedJsonRef ─
+  //
+  // NOTE: as of FIX 3 (serialized saves), two saveFn calls can no longer be
+  // concurrently in flight at all — see the "FIX 3" describe block below for
+  // the primary regression coverage for the actual data-loss bug. This test
+  // is updated to reflect the new reality: a save requested while one is
+  // outstanding is QUEUED and only fires once the outstanding one settles,
+  // so "B resolves before A" can no longer happen — there is no more A/B
+  // resolution-order to race. What's still worth asserting is that the
+  // queued (later) data wins and the bookkeeping ends up consistent (no
+  // redundant unmount flush).
 
-  it('FIX-2: stale-resolves-after-latest ordering leaves hasPendingChanges false after latest resolves', async () => {
-    // Simulate: save A fires (json_A), then save B fires (json_B).
-    // Save A resolves AFTER save B. lastSavedJsonRef must end up as json_B,
-    // not json_A, so hasPendingChanges() returns false and no unmount flush fires.
-
+  it('FIX-2/FIX-3: a save requested while one is in flight is queued, runs after it settles, and its (latest) data wins — no redundant unmount flush', async () => {
     let resolveA!: () => void
     let resolveB!: () => void
     const promiseA = new Promise<void>((r) => { resolveA = r })
@@ -403,7 +409,7 @@ describe('useAutoSave', () => {
 
     const saveFn = vi.fn()
       .mockReturnValueOnce(promiseA)  // first fire (A)
-      .mockReturnValueOnce(promiseB)  // second fire (B)
+      .mockReturnValueOnce(promiseB)  // queued re-run (B)
 
     let data = { v: 1 }
 
@@ -418,22 +424,30 @@ describe('useAutoSave', () => {
     await act(async () => { vi.advanceTimersByTime(150) })
     expect(saveFn).toHaveBeenCalledTimes(1)
 
-    // Fire save B before A resolves.
+    // Data changes again while A is still in flight (unresolved). This must
+    // NOT dispatch a second, concurrent saveFn call.
     data = { v: 3 }
     rerender({ d: data })
     await act(async () => { vi.advanceTimersByTime(150) })
+    expect(saveFn).toHaveBeenCalledTimes(1)
+
+    // Resolve A — the queued re-run (carrying v3, the latest data) fires
+    // immediately afterward, strictly AFTER A settled.
+    await act(async () => {
+      resolveA()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
     expect(saveFn).toHaveBeenCalledTimes(2)
+    expect(saveFn).toHaveBeenLastCalledWith({ v: 3 })
 
-    // Resolve B first (latest), then A (stale).
+    // Resolve the queued re-run (B).
     await act(async () => { resolveB(); await Promise.resolve() })
-    await act(async () => { resolveA(); await Promise.resolve() })
 
-    // After both resolve, unmount should NOT trigger another save because
-    // lastSavedJsonRef correctly reflects json_B (the latest fired payload).
+    // lastSavedJsonRef now reflects v3 — unmount must NOT trigger another save.
     unmount()
     await act(async () => { await Promise.resolve() })
 
-    // saveFn called exactly twice — no extra unmount flush.
     expect(saveFn).toHaveBeenCalledTimes(2)
   })
 
@@ -462,5 +476,114 @@ describe('useAutoSave', () => {
     await act(async () => { await Promise.resolve() })
 
     expect(saveFn).toHaveBeenCalledTimes(2)
+  })
+
+  // ── FIX 3: serialized saves (regression — agent fallback_models save race) ──
+  //
+  // Live UAT (persona "Priya") found that the agent edit form's fallback
+  // model editor silently lost data: a PUT correctly carrying
+  // `fallback_models: [{...}]` was clobbered by a SECOND PUT — fired from a
+  // slightly earlier interaction — that carried no `fallback_models` key at
+  // all, because full-resource PUT semantics + two overlapping in-flight
+  // requests + last-network-arrival-wins meant the fresher save could be
+  // overwritten by a staler one. Root cause: `doSave` had no guard against
+  // firing a second concurrent request while one was already outstanding.
+
+  it('FIX-3: does not fire a second concurrent saveFn while one is in flight; the queued re-run always carries the LATEST data', async () => {
+    // Mirrors the exact wire shapes from the UAT network trace: interaction 1
+    // (an earlier field edit, no fallbacks yet) fires a save that stays in
+    // flight; interaction 2 ("+ Add fallback") happens before it resolves.
+    let resolveEarlier!: (v?: unknown) => void
+    const promiseEarlier = new Promise((r) => { resolveEarlier = r })
+    const saveFn = vi.fn()
+      .mockReturnValueOnce(promiseEarlier)
+      .mockResolvedValueOnce(undefined)
+
+    interface AgentFormData {
+      name: string
+      fallback_models?: { model: string; provider: string }[]
+    }
+
+    let data: AgentFormData = { name: 'Support Bot' }
+
+    const { rerender } = renderHook(
+      ({ d }) => useAutoSave(d, saveFn, { debounceMs: 50 }),
+      { initialProps: { d: data } },
+    )
+
+    // Interaction 1 (earlier): an edit with no fallback configured yet.
+    data = { name: 'Support Bot (renamed)' }
+    rerender({ d: data })
+    await act(async () => { vi.advanceTimersByTime(100) })
+    expect(saveFn).toHaveBeenCalledTimes(1)
+    expect(saveFn).toHaveBeenNthCalledWith(1, { name: 'Support Bot (renamed)' })
+
+    // Interaction 2 (slightly later — "+ Add fallback"): fires WHILE
+    // interaction 1's save is still unresolved (slow network).
+    data = {
+      name: 'Support Bot (renamed)',
+      fallback_models: [{ model: '~openai/gpt-mini-latest', provider: 'openrouter' }],
+    }
+    rerender({ d: data })
+    await act(async () => { vi.advanceTimersByTime(100) })
+
+    // The debounce for interaction 2 fired, but the hook must NOT have
+    // dispatched a second, concurrent saveFn call — that's the exact
+    // condition that let the UAT bug's two PUTs race on the wire.
+    expect(saveFn).toHaveBeenCalledTimes(1)
+
+    // Resolve interaction 1's (stale, no-fallback) save.
+    await act(async () => {
+      resolveEarlier()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    // Only now does the queued re-run fire — carrying the LATEST data (with
+    // fallback_models), never the other way around, and never concurrently.
+    expect(saveFn).toHaveBeenCalledTimes(2)
+    expect(saveFn).toHaveBeenNthCalledWith(2, {
+      name: 'Support Bot (renamed)',
+      fallback_models: [{ model: '~openai/gpt-mini-latest', provider: 'openrouter' }],
+    })
+  })
+
+  it('FIX-3: saveNow() called while a debounced save is in flight queues rather than races', async () => {
+    let resolveFirst!: (v?: unknown) => void
+    const promiseFirst = new Promise((r) => { resolveFirst = r })
+    const saveFn = vi.fn()
+      .mockReturnValueOnce(promiseFirst)
+      .mockResolvedValueOnce(undefined)
+
+    let data = { v: 1 }
+
+    const { result, rerender } = renderHook(
+      ({ d }) => useAutoSave(d, saveFn, { debounceMs: 50 }),
+      { initialProps: { d: data } },
+    )
+
+    data = { v: 2 }
+    rerender({ d: data })
+    await act(async () => { vi.advanceTimersByTime(100) })
+    expect(saveFn).toHaveBeenCalledTimes(1)
+    expect(result.current.status).toBe('saving')
+
+    // A newer edit + an explicit "save now" both happen before the first
+    // request resolves.
+    data = { v: 3 }
+    rerender({ d: data })
+    act(() => { result.current.saveNow() })
+
+    // Still only one saveFn call outstanding.
+    expect(saveFn).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      resolveFirst()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(saveFn).toHaveBeenCalledTimes(2)
+    expect(saveFn).toHaveBeenLastCalledWith({ v: 3 })
   })
 })
