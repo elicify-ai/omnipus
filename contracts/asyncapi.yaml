@@ -984,6 +984,8 @@ components:
         content:
           type: string
           maxLength: 65536
+        agent_id:
+          type: string
 
     DoneStats:
       title: DoneStats
@@ -1399,6 +1401,15 @@ components:
           description: >
             Model identifier that produced this assistant message (Phase 1B, FR-013/FR-014).
             Omitted for legacy entries written before per-turn model recording landed.
+        turn_id:
+          type: string
+          description: >
+            Turn-correlation identifier (from TranscriptEntry.TurnID), stamped on
+            assistant entries and turn-cancellation entries. Lets the client match
+            a replayed turn_canceled entry to the specific preceding assistant
+            message it cancels, without relying on stream adjacency (async
+            delegation can interleave other agents'/turns' frames in between).
+            Omitted for legacy entries written before turn-id stamping landed.
 
     ReplayErrorFrame:
       title: ReplayErrorFrame

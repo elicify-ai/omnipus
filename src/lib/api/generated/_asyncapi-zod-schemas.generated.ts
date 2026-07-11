@@ -78,6 +78,7 @@ export const TokenFrame = z
     type: z.literal("token"),
     session_id: z.string().min(1).max(128),
     content: z.string().max(65536),
+    agent_id: z.string().optional(),
   })
   .strict();
 
@@ -218,6 +219,7 @@ export const ReplayMessageFrame = z
     timestamp: z.string().optional(),
     agent_id: z.string().optional(),
     model: z.string().max(256).optional(),
+    turn_id: z.string().optional(),
   })
   .strict();
 
