@@ -6181,7 +6181,8 @@ turnLoop:
 						callMessages, toolDefs, ts.agent.MaxTokens,
 					) {
 						compactionAttemptedOnTimeout = true
-						if compression, ok := al.windowTrim(ts.agent, ts.sessionKey); ok {
+						compression, ok := al.windowTrim(ts.agent, ts.sessionKey)
+						if ok {
 							al.emitEvent(
 								EventKindContextCompress,
 								ts.eventMeta("runTurn", "turn.context.compress"),
@@ -6210,8 +6211,25 @@ turnLoop:
 							if gracefulTerminal {
 								callMessages = append(append([]providers.Message(nil), messages...), ts.interruptHintMessage())
 							}
+						} else if compression.NothingToTrim {
+							// Nothing eligible to evict (e.g. a fresh turn with a
+							// single-message window, no compressible history yet).
+							// This is not a compaction failure — the error that got us
+							// here was a transient network/streaming reset (isTimeoutError),
+							// not a genuine context-overflow rejection from the provider.
+							// Abandoning the whole retry here would defeat the streaming-
+							// reset-retry fix for any turn that happens to sit near the
+							// context-budget edge with little/no history. Fall through to
+							// the backoff-and-retry below with the existing messages
+							// unchanged — the retried call may simply succeed.
+							logger.DebugCF("agent", "Window trim skipped during timeout recovery: nothing eligible to evict; proceeding with retry",
+								map[string]any{"agent_id": ts.agent.ID, "iteration": iteration})
 						} else {
-							// Trim failed: return partial content + timeout message.
+							// Trim was attempted against real compressible history and
+							// genuinely failed (e.g. TruncateHistory could not shrink the
+							// window) — the window is still over budget and retrying
+							// against it would likely fail again. Return partial content
+							// + timeout message rather than retry.
 							logger.WarnCF("agent", "Window trim failed during timeout recovery; returning partial response",
 								map[string]any{"agent_id": ts.agent.ID, "iteration": iteration})
 							break
@@ -7786,6 +7804,15 @@ func (al *AgentLoop) maybeSummarize(agent *AgentInstance, sessionKey string, tur
 type compressionResult struct {
 	DroppedMessages   int
 	RemainingMessages int
+	// NothingToTrim is set (alongside ok=false) when windowTrim declined to
+	// run because the live window had nothing eligible to evict (e.g. a
+	// fresh turn with a single-message window) — as opposed to ok=false
+	// because TruncateHistory genuinely failed to shrink the window. Callers
+	// that treat ok=false as "compaction failed, abandon retry" should check
+	// this flag first: a no-op trim is not a failure of the compaction
+	// mechanism and should not, on its own, be grounds for giving up on a
+	// retry triggered by an unrelated transient error.
+	NothingToTrim bool
 }
 
 // assembleMessages is the single consistent helper that reads the archive,
@@ -7869,7 +7896,7 @@ func (al *AgentLoop) windowTrim(agent *AgentInstance, sessionKey string) (compre
 	window := agent.Sessions.GetHistory(sessionKey)
 	if len(window) <= 1 {
 		// Nothing to evict: a single-message window cannot be shrunk further.
-		return compressionResult{}, false
+		return compressionResult{NothingToTrim: true}, false
 	}
 
 	toolDefs := agent.Tools.ToProviderDefs()
