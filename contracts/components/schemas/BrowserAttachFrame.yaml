@@ -1,0 +1,26 @@
+title: BrowserAttachFrame
+description: >
+  Client → server. Binds this browser-live WebSocket connection to a session's
+  browser and starts the screencast. session_id selects the browser tab (the
+  agent's default browser session); agent_id selects which agent's BrowserManager
+  the live view attaches to. See ADR-038.
+type: object
+required:
+  - type
+  - session_id
+  - agent_id
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: browser_attach
+  session_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: Browser session id (usually the chat session id).
+  agent_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: Agent whose BrowserManager owns the live tab.

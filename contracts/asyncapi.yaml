@@ -128,6 +128,35 @@ channels:
       NotificationFrame:
         $ref: '#/components/messages/NotificationFrame'
 
+  browser:
+    address: /api/v1/browser/ws
+    description: >
+      Live interactive browser channel (ADR-038). A dedicated WebSocket, separate
+      from the chat channel, carrying CDP screencast frames (server → client) and
+      viewer input / control frames (client → server) for the live browser panel.
+      Authenticated with the same first-message auth frame as the chat channel.
+    servers:
+      - $ref: '#/servers/gateway'
+    messages:
+      # ── Client → server ───────────────────────────────────────────────────────
+      AuthFrame:
+        $ref: '#/components/messages/AuthFrame'
+      BrowserAttachFrame:
+        $ref: '#/components/messages/BrowserAttachFrame'
+      BrowserInputFrame:
+        $ref: '#/components/messages/BrowserInputFrame'
+      BrowserControlFrame:
+        $ref: '#/components/messages/BrowserControlFrame'
+      BrowserDetachFrame:
+        $ref: '#/components/messages/BrowserDetachFrame'
+      # ── Server → client ───────────────────────────────────────────────────────
+      ErrorFrame:
+        $ref: '#/components/messages/ErrorFrame'
+      BrowserScreencastFrame:
+        $ref: '#/components/messages/BrowserScreencastFrame'
+      BrowserStatusFrame:
+        $ref: '#/components/messages/BrowserStatusFrame'
+
 operations:
   # ── Client → server (action: send from SPA perspective) ─────────────────────
 
@@ -460,6 +489,69 @@ operations:
     messages:
       - $ref: '#/channels/chat/messages/NotificationFrame'
 
+  # ── Browser live channel (ADR-038) ──────────────────────────────────────────
+
+  sendBrowserAttach:
+    action: send
+    channel:
+      $ref: '#/channels/browser'
+    summary: >
+      Bind this browser-live connection to a session's browser and start the
+      screencast. Sent after the auth frame. The server responds with
+      browser_status(attached) then a stream of browser_screencast frames.
+    messages:
+      - $ref: '#/channels/browser/messages/BrowserAttachFrame'
+
+  sendBrowserInput:
+    action: send
+    channel:
+      $ref: '#/channels/browser'
+    summary: >
+      Inject a viewer input event (mouse/wheel/key/text) into the live browser.
+      Honoured only while the viewer holds control (browser_control action=take).
+    messages:
+      - $ref: '#/channels/browser/messages/BrowserInputFrame'
+
+  sendBrowserControl:
+    action: send
+    channel:
+      $ref: '#/channels/browser'
+    summary: >
+      Take or release interactive control of the live browser. The server replies
+      with browser_status(controlling) or browser_status(released).
+    messages:
+      - $ref: '#/channels/browser/messages/BrowserControlFrame'
+
+  sendBrowserDetach:
+    action: send
+    channel:
+      $ref: '#/channels/browser'
+    summary: >
+      Detach this viewer; the server stops the screencast when the last viewer
+      leaves. Sent when the live panel closes.
+    messages:
+      - $ref: '#/channels/browser/messages/BrowserDetachFrame'
+
+  receiveBrowserScreencast:
+    action: receive
+    channel:
+      $ref: '#/channels/browser'
+    summary: >
+      One CDP screencast frame (JPEG + coordinate metadata) for the live browser.
+      Repaint-driven, not fixed-FPS. The SPA blits it and maps input coordinates.
+    messages:
+      - $ref: '#/channels/browser/messages/BrowserScreencastFrame'
+
+  receiveBrowserStatus:
+    action: receive
+    channel:
+      $ref: '#/channels/browser'
+    summary: >
+      Lifecycle / control status for the live browser (attached, controlling,
+      released, detached, idle, error).
+    messages:
+      - $ref: '#/channels/browser/messages/BrowserStatusFrame'
+
 components:
   messages:
     # ── Client → server messages ───────────────────────────────────────────────
@@ -728,6 +820,56 @@ components:
       payload:
         $ref: '#/components/schemas/NotificationFrame'
 
+    # ── Browser live channel (ADR-038) ─────────────────────────────────────────
+
+    BrowserAttachFrame:
+      name: BrowserAttachFrame
+      title: browser_attach
+      summary: Attach to a session's live browser and start the screencast (client → server).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/BrowserAttachFrame'
+
+    BrowserInputFrame:
+      name: BrowserInputFrame
+      title: browser_input
+      summary: Inject a viewer input event into the live browser (client → server).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/BrowserInputFrame'
+
+    BrowserControlFrame:
+      name: BrowserControlFrame
+      title: browser_control
+      summary: Take or release control of the live browser (client → server).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/BrowserControlFrame'
+
+    BrowserDetachFrame:
+      name: BrowserDetachFrame
+      title: browser_detach
+      summary: Detach this viewer from the live browser (client → server).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/BrowserDetachFrame'
+
+    BrowserScreencastFrame:
+      name: BrowserScreencastFrame
+      title: browser_screencast
+      summary: One CDP screencast frame of the live browser (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/BrowserScreencastFrame'
+
+    BrowserStatusFrame:
+      name: BrowserStatusFrame
+      title: browser_status
+      summary: Live browser lifecycle / control status (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/BrowserStatusFrame'
+
   schemas:
     WsFrameType:
       title: WsFrameType
@@ -766,6 +908,12 @@ components:
         - whatsapp_pairing
         - whatsapp_pairing_subscribe
         - notification
+        - browser_attach
+        - browser_input
+        - browser_control
+        - browser_detach
+        - browser_screencast
+        - browser_status
 
     AuthFrame:
       title: AuthFrame
@@ -1913,4 +2061,205 @@ components:
         session_id:
           type: string
         agent_id:
+          type: string
+
+    # ── Browser live channel schemas (ADR-038) ─────────────────────────────────
+
+    BrowserAttachFrame:
+      title: BrowserAttachFrame
+      description: >
+        Client → server. Binds this browser-live WebSocket connection to a
+        session's browser and starts the screencast. session_id selects the tab
+        (the agent's default browser session); agent_id selects which agent's
+        BrowserManager the live view attaches to.
+      type: object
+      required:
+        - type
+        - session_id
+        - agent_id
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: browser_attach
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        agent_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+
+    BrowserInputFrame:
+      title: BrowserInputFrame
+      description: >
+        Client → server. A viewer input event to inject into the live browser via
+        CDP Input.dispatch*. Only honoured while the viewer holds control
+        (browser_control action=take). Coordinates are device (CSS) pixels of the
+        screencast frame.
+      type: object
+      required:
+        - type
+        - kind
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: browser_input
+        kind:
+          type: string
+          enum:
+            - mouse_move
+            - mouse_down
+            - mouse_up
+            - wheel
+            - key_down
+            - key_up
+            - text
+        x:
+          type: number
+        y:
+          type: number
+        button:
+          type: string
+          enum:
+            - none
+            - left
+            - middle
+            - right
+            - back
+            - forward
+        delta_x:
+          type: number
+        delta_y:
+          type: number
+        key:
+          type: string
+          maxLength: 64
+        code:
+          type: string
+          maxLength: 64
+        text:
+          type: string
+          maxLength: 8192
+        modifiers:
+          type: integer
+          minimum: 0
+          maximum: 15
+
+    BrowserControlFrame:
+      title: BrowserControlFrame
+      description: >
+        Client → server. Take or release interactive control of the live browser.
+        While a viewer holds control, the agent's own browser tools defer
+        (cooperative turn-coordination, ADR-038 D6).
+      type: object
+      required:
+        - type
+        - action
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: browser_control
+        action:
+          type: string
+          enum:
+            - take
+            - release
+
+    BrowserDetachFrame:
+      title: BrowserDetachFrame
+      description: >
+        Client → server. Detach this viewer from the live browser; the server
+        stops the screencast when the last viewer detaches. Sent when the panel
+        closes.
+      type: object
+      required:
+        - type
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: browser_detach
+        session_id:
+          type: string
+          maxLength: 128
+
+    BrowserScreencastFrame:
+      title: BrowserScreencastFrame
+      description: >
+        Server → client. One CDP screencast frame (a JPEG snapshot of the live
+        browser tab) plus the metadata needed to map viewer input coordinates back
+        to the page. Screencast is repaint-driven, not fixed-FPS.
+      type: object
+      required:
+        - type
+        - session_id
+        - seq
+        - data
+        - width
+        - height
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: browser_screencast
+        session_id:
+          type: string
+          minLength: 1
+        seq:
+          type: integer
+          minimum: 0
+        data:
+          type: string
+          minLength: 1
+          description: Base64-encoded JPEG image (no data URI prefix).
+        width:
+          type: integer
+          minimum: 1
+        height:
+          type: integer
+          minimum: 1
+        page_scale:
+          type: number
+        offset_top:
+          type: number
+        scroll_offset_x:
+          type: number
+        scroll_offset_y:
+          type: number
+
+    BrowserStatusFrame:
+      title: BrowserStatusFrame
+      description: >
+        Server → client. Lifecycle / control status for the live browser
+        connection. state=controlling means this viewer holds interactive control;
+        released means control was dropped; error carries a human-readable message.
+      type: object
+      required:
+        - type
+        - state
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: browser_status
+        state:
+          type: string
+          enum:
+            - attached
+            - idle
+            - controlling
+            - released
+            - detached
+            - error
+        message:
+          type: string
+          maxLength: 512
+        controller:
+          type: string
+          maxLength: 128
+        session_id:
           type: string
