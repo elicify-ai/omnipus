@@ -392,7 +392,11 @@ func TestBuildSystemPrompt_NoEmojiRule_AppliesUniformly(t *testing.T) {
 
 		prompt := cb.BuildSystemPrompt()
 		if !strings.Contains(prompt, noEmojiMarker) {
-			t.Errorf("core-agent prompt missing %q, first 800 chars:\n%s", noEmojiMarker, prompt[:min(len(prompt), 800)])
+			t.Errorf(
+				"core-agent prompt missing %q, first 800 chars:\n%s",
+				noEmojiMarker,
+				prompt[:min(len(prompt), 800)],
+			)
 		}
 	})
 
@@ -402,7 +406,11 @@ func TestBuildSystemPrompt_NoEmojiRule_AppliesUniformly(t *testing.T) {
 		if err := os.MkdirAll(soulDir, 0o755); err != nil {
 			t.Fatalf("MkdirAll: %v", err)
 		}
-		if err := os.WriteFile(filepath.Join(soulDir, "SOUL.md"), []byte("You are Custom Bot, a friendly helper."), 0o644); err != nil {
+		if err := os.WriteFile(
+			filepath.Join(soulDir, "SOUL.md"),
+			[]byte("You are Custom Bot, a friendly helper."),
+			0o644,
+		); err != nil {
 			t.Fatalf("WriteFile SOUL.md: %v", err)
 		}
 
@@ -411,7 +419,11 @@ func TestBuildSystemPrompt_NoEmojiRule_AppliesUniformly(t *testing.T) {
 
 		prompt := cb.BuildSystemPrompt()
 		if !strings.Contains(prompt, noEmojiMarker) {
-			t.Errorf("custom-agent (SOUL.md) prompt missing %q, first 800 chars:\n%s", noEmojiMarker, prompt[:min(len(prompt), 800)])
+			t.Errorf(
+				"custom-agent (SOUL.md) prompt missing %q, first 800 chars:\n%s",
+				noEmojiMarker,
+				prompt[:min(len(prompt), 800)],
+			)
 		}
 	})
 
@@ -426,7 +438,11 @@ func TestBuildSystemPrompt_NoEmojiRule_AppliesUniformly(t *testing.T) {
 
 		prompt := cb.BuildSystemPrompt()
 		if !strings.Contains(prompt, noEmojiMarker) {
-			t.Errorf("worker-fallback prompt missing %q, first 800 chars:\n%s", noEmojiMarker, prompt[:min(len(prompt), 800)])
+			t.Errorf(
+				"worker-fallback prompt missing %q, first 800 chars:\n%s",
+				noEmojiMarker,
+				prompt[:min(len(prompt), 800)],
+			)
 		}
 	})
 }

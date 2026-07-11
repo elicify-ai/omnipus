@@ -39,7 +39,12 @@ import (
 // unlike buildWsStreamer's bare fixture, which leaves channel nil and is
 // used by tests that don't exercise the ownership gate) sharing chatID, and
 // returns the streamer plus its own connection's outbound frame channel.
-func buildOwnershipTestStreamer(t *testing.T, h *WSHandler, wch *webchatChannel, chatID, turnID string) (*wsStreamer, chan []byte) {
+func buildOwnershipTestStreamer(
+	t *testing.T,
+	h *WSHandler,
+	wch *webchatChannel,
+	chatID, turnID string,
+) (*wsStreamer, chan []byte) {
 	t.Helper()
 	ch := make(chan []byte, 16)
 	conn := &wsConn{
@@ -78,7 +83,10 @@ func assertNoFrame(t *testing.T, ch chan []byte, window time.Duration) {
 	t.Helper()
 	select {
 	case raw := <-ch:
-		t.Fatalf("BUG REGRESSION: unexpected frame delivered to a shadow (non-owning) stream's connection: %s", string(raw))
+		t.Fatalf(
+			"BUG REGRESSION: unexpected frame delivered to a shadow (non-owning) stream's connection: %s",
+			string(raw),
+		)
 	case <-time.After(window):
 		// expected — no frame
 	}

@@ -6,7 +6,7 @@
 // "Alex"): clicking "Stop generation" on a turn that had just dispatched a
 // background (async) `delegate` call did not reliably cancel the delegate.
 // No span/badge remained in chat at the moment of interruption — it LOOKED
-// cleanly cancelled — but the underlying delegate sub-turn kept running
+// cleanly canceled — but the underlying delegate sub-turn kept running
 // invisibly and resurfaced minutes later, sometimes concurrently with a
 // LATER, unrelated delegate call, whose token streams then interleaved into
 // one garbled message (see pkg/gateway/websocket_stream_ownership_test.go
@@ -74,7 +74,11 @@ func TestSessionTurnsStillAlive_ReturnsOnlyAliveMatchingTurns(t *testing.T) {
 	child := &turnState{turnID: "child-1", transcriptSessionID: sid, finishedChan: make(chan struct{})}
 	// child intentionally left unfinished (simulates the still-running orphan).
 
-	unrelated := &turnState{turnID: "unrelated-1", transcriptSessionID: "other-session", finishedChan: make(chan struct{})}
+	unrelated := &turnState{
+		turnID:              "unrelated-1",
+		transcriptSessionID: "other-session",
+		finishedChan:        make(chan struct{}),
+	}
 
 	al.activeTurnStates.Store(root.turnID, root)
 	al.activeTurnStates.Store(child.turnID, child)
