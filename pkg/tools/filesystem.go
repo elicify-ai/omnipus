@@ -937,7 +937,10 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *ToolR
 			// LastWriterForPath's current-file-plus-most-recent-rotated-file
 			// window — "last written via write_file by" says exactly that,
 			// rather than implying a complete modification history.
-			clobberNote = fmt.Sprintf(" Note: you are replacing a file last written via write_file by agent %s.", writerID)
+			clobberNote = fmt.Sprintf(
+				" Note: you are replacing a file last written via write_file by agent %s.",
+				writerID,
+			)
 		}
 	}
 

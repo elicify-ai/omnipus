@@ -50,7 +50,11 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 	// sysagent), matching pkg/coreagent's allStaticToolNames literal-for-literal.
 	const wantToolCount = 73
 	if got := len(cfg.Sandbox.ToolPolicies); got != wantToolCount {
-		t.Errorf("expected sandbox.tool_policies to enumerate all %d static builtin tools, got %d entries", wantToolCount, got)
+		t.Errorf(
+			"expected sandbox.tool_policies to enumerate all %d static builtin tools, got %d entries",
+			wantToolCount,
+			got,
+		)
 	}
 
 	// Every non-destructive entry must be "allow" — this is an allow-by-default

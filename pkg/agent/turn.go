@@ -558,7 +558,7 @@ func (ts *turnState) markLastStreamerTranscriptPersisted() {
 // method — non-webchat streamers (telegram, wecom, sse) are untouched; only
 // wsStreamer implements SetProducerAgentID.
 func (ts *turnState) stampStreamerProducerAgentID(streamer bus.Streamer) {
-	if pas, ok := streamer.(interface{ SetProducerAgentID(string) }); ok && ts.agent != nil {
+	if pas, ok := streamer.(interface{ SetProducerAgentID(agentID string) }); ok && ts.agent != nil {
 		pas.SetProducerAgentID(ts.agent.ID)
 	}
 }
@@ -579,7 +579,7 @@ func (ts *turnState) stampStreamerProducerAgentID(streamer bus.Streamer) {
 // method — non-webchat streamers (telegram, wecom, sse) are untouched; only
 // wsStreamer implements SetTurnID.
 func (ts *turnState) stampStreamerTurnID(streamer bus.Streamer) {
-	if tid, ok := streamer.(interface{ SetTurnID(string) }); ok {
+	if tid, ok := streamer.(interface{ SetTurnID(turnID string) }); ok {
 		tid.SetTurnID(ts.turnID)
 	}
 }

@@ -2,7 +2,7 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// FIX 5 regression coverage: cancelling a parent turn while an async
+// FIX 5 regression coverage: canceling a parent turn while an async
 // delegate is in flight must record the sub-turn's EventKindSubTurnEnd
 // status as SubTurnStatusInterrupted, not SubTurnStatusError — the latter
 // is indistinguishable from a genuine failure on replay, sitting right next
@@ -140,6 +140,7 @@ func TestSpawnSubTurn_ParentHardAbort_RecordsInterruptedStatus(t *testing.T) {
 	// "unknown" (see spawnSubTurn's cleanup defer doc comment) — proving
 	// the fallback path, complementary to
 	// TestSpawnSubTurn_ExplicitCancelViaRequestCancel_RecordsCancelledAndReason's
+	//nolint:misspell // documents the literal wire enum value, matches frontend TS union
 	// "parent_cancelled" case below, which drives a REAL RequestCancel.
 	assert.Equal(t, "unknown", subTurnEndEvents[0].Reason,
 		"when the parent's own cancel was never claimed via RequestCancel/ClaimCancel, the "+
@@ -162,6 +163,10 @@ func TestSpawnSubTurn_ParentHardAbort_RecordsInterruptedStatus(t *testing.T) {
 // Negative-test discipline: confirmed to FAIL (Reason == "" instead of
 // "parent_cancelled") against the pre-fix cleanup defer (which never set
 // endReason at all) before the fix was applied.
+//
+// "parent_cancelled" and the SubTurnStatusCancelled identifier verbatim; both match the frontend TS union.
+//
+//nolint:misspell // this func's doc comment + assertions reference the literal wire enum value
 func TestSpawnSubTurn_ExplicitCancelViaRequestCancel_RecordsCancelledAndReason(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
@@ -251,10 +256,11 @@ func TestSpawnSubTurn_ExplicitCancelViaRequestCancel_RecordsCancelledAndReason(t
 	mu.Lock()
 	defer mu.Unlock()
 	require.Len(t, subTurnEndEvents, 1, "exactly one EventKindSubTurnEnd must be emitted")
+	//nolint:misspell // shorthand for SubTurnStatusCancelled, spelled to match
 	assert.Equal(t, SubTurnStatusInterrupted, subTurnEndEvents[0].Status,
 		"the CHILD's own cancelFired was never claimed (only the parent's was) — this remains "+
 			"the cascade case (Interrupted), not the direct-target case (Cancelled)")
-	assert.Equal(t, "parent_cancelled", subTurnEndEvents[0].Reason,
+	assert.Equal(t, "parent_cancelled", subTurnEndEvents[0].Reason, //nolint:misspell // wire value, frontend TS union
 		"once the parent's own cancel was explicitly claimed via RequestCancel, the cascaded "+
 			"child's reason must be 'parent_cancelled', not the 'unknown' fallback")
 }

@@ -115,8 +115,17 @@ func (l *Logger) LastWriterForPath(event, path string) (agentID string, found bo
 	for _, filePath := range files {
 		fileAgent, fileFound, scanErr := scanFileForLastWriter(filePath, event, path)
 		if scanErr != nil {
-			slog.Warn("audit: LastWriterForPath could not scan a file — attribution for this path may be stale or missing",
-				"file", filePath, "event", event, "path", path, "error", scanErr)
+			slog.Warn(
+				"audit: LastWriterForPath could not scan a file — attribution for this path may be stale or missing",
+				"file",
+				filePath,
+				"event",
+				event,
+				"path",
+				path,
+				"error",
+				scanErr,
+			)
 			continue
 		}
 		if fileFound {

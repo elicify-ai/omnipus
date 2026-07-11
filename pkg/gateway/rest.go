@@ -2751,8 +2751,11 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 		return
 	}
 	if bytes.Contains(rawBody, []byte(`"delegation_policy"`)) {
-		jsonErr(w, http.StatusBadRequest,
-			`delegation_policy is retired — delegation is now configured exclusively via the workspace Team tab (PUT /api/v1/workspaces/{id}/delegation)`)
+		jsonErr(
+			w,
+			http.StatusBadRequest,
+			`delegation_policy is retired — delegation is now configured exclusively via the workspace Team tab (PUT /api/v1/workspaces/{id}/delegation)`,
+		)
 		return
 	}
 
