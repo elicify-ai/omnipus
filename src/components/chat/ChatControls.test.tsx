@@ -441,3 +441,40 @@ describe('ChatControls — responsive layout (structural)', () => {
     expect(sessionBtns).toHaveLength(1)
   })
 })
+
+// ── Control: Open browser (ADR-039 D-A1) ────────────────────────────────────
+
+describe('ChatControls — Open browser launcher', () => {
+  beforeEach(() => {
+    act(() => {
+      useUiStore.setState({ browserPanel: null, toasts: [] })
+    })
+  })
+
+  it('renders an "Open browser" button', async () => {
+    renderControls()
+    const btn = await vi.waitFor(() => screen.getByRole('button', { name: /open browser/i }))
+    expect(btn).toBeInTheDocument()
+  })
+
+  it('opens the browser panel with the active session/agent when clicked', async () => {
+    renderControls()
+    const btn = await vi.waitFor(() => screen.getByRole('button', { name: /open browser/i }))
+
+    expect(useUiStore.getState().browserPanel).toBeNull()
+    fireEvent.click(btn)
+    expect(useUiStore.getState().browserPanel).toEqual({ sessionId: 'sess_1', agentId: 'mia' })
+  })
+
+  it('toasts an error instead of opening the panel when there is no active session', async () => {
+    act(() => {
+      useSessionStore.setState({ activeSessionId: null, activeAgentId: null })
+    })
+    renderControls()
+    const btn = await vi.waitFor(() => screen.getByRole('button', { name: /open browser/i }))
+
+    fireEvent.click(btn)
+    expect(useUiStore.getState().browserPanel).toBeNull()
+    expect(useUiStore.getState().toasts.some((t) => /start a chat/i.test(t.message))).toBe(true)
+  })
+})

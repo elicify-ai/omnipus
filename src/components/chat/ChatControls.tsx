@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useLocation, useNavigate } from '@tanstack/react-router'
-import { Robot, ArrowsClockwise, CaretDown, PencilSimpleLine, CaretLeft } from '@phosphor-icons/react'
+import { Robot, ArrowsClockwise, CaretDown, PencilSimpleLine, CaretLeft, Monitor } from '@phosphor-icons/react'
 import { IconRenderer } from '@/components/shared/IconRenderer'
 import {
   DropdownMenu,
@@ -75,6 +75,24 @@ export function ChatControls({ className }: ChatControlsProps) {
       return
     }
     void navigate({ to: '/' })
+  }
+
+  // ADR-039 D-A1: persistent "Open browser" launcher. The backend
+  // BrowserManager.Session() lazily creates a blank tab on WS attach, so
+  // opening before the agent has browsed anything yields a ready blank
+  // browser. Not gated on the active agent actually having browser tools
+  // (GET /agents' list response never populates tools_cfg — see
+  // pkg/gateway/rest.go's listAgents — so that capability isn't cheaply
+  // knowable client-side); the panel's own browser_status(error) surface
+  // already handles a no-manager-for-agent response for agents without
+  // browser tools (Mia/Ava by seed). Mirrors the same activeSessionId/
+  // activeAgentId guard as BrowserTool.tsx's handleWatchLive.
+  const handleOpenBrowser = () => {
+    if (!activeSessionId || !activeAgentId) {
+      addToast({ message: 'Start a chat before opening the live browser.', variant: 'error' })
+      return
+    }
+    useUiStore.getState().openBrowserPanel(activeSessionId, activeAgentId)
   }
 
   const { data: agents = [], isError: agentsError } = useQuery({
@@ -321,6 +339,24 @@ export function ChatControls({ className }: ChatControlsProps) {
       >
         <span className="hidden @2xl:inline">Sessions</span>
         <CaretLeft size={13} className="rotate-180" />
+      </button>
+
+      {/* 6. Open browser — ADR-039 D-A1: user-initiated live browser session,
+          independent of any agent tool call. */}
+      <button
+        type="button"
+        onClick={handleOpenBrowser}
+        aria-label="Open browser"
+        title="Open a live browser session"
+        className={cn(
+          'flex items-center justify-center shrink-0 px-2 h-8 gap-1.5 rounded-md',
+          'text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)]',
+          'transition-colors text-xs whitespace-nowrap',
+          'pointer-coarse:min-h-[44px] pointer-coarse:px-3',
+        )}
+      >
+        <Monitor size={15} />
+        <span className="hidden @2xl:inline">Open browser</span>
       </button>
     </div>
   )

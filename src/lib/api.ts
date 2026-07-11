@@ -154,6 +154,8 @@ import {
   // M11 per-(agent, workspace) email mailbox account (contract-first #8):
   Mailbox as MailboxSchema,
   MailboxListResponse as MailboxListResponseSchema,
+  // ADR-039 — user-initiated browsing + annotate-a-region-and-discuss:
+  BrowserInspectResponse as BrowserInspectResponseSchema,
 } from '@/lib/api/generated/schemas'
 
 // ── Schema validation error ────────────────────────────────────────────────────
@@ -401,6 +403,9 @@ import type {
   MailboxConfigureRequest,
   // Tool-approval "always" grant action (commit 35447760, contract-first #8):
   ToolApprovalActionRequest,
+  // ADR-039 — user-initiated browsing + annotate-a-region-and-discuss:
+  BrowserInspectRequest,
+  BrowserInspectResponse,
 } from '@/lib/api/generated/openapi-types'
 
 export type {
@@ -538,6 +543,9 @@ export type {
   // M11 per-(agent, workspace) email mailbox account:
   Mailbox,
   MailboxConfigureRequest,
+  // ADR-039 — user-initiated browsing + annotate-a-region-and-discuss:
+  BrowserInspectRequest,
+  BrowserInspectResponse,
 }
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? ''
@@ -2586,6 +2594,28 @@ export async function uploadFiles(sessionId: string, files: File[]): Promise<Upl
     throw new ApiSchemaError('/upload', issues, raw)
   }
   return parsed.data
+}
+
+// ── Live Browser (ADR-039) ──────────────────────────────────────────────────
+
+/**
+ * Best-effort DOM-element resolution at a point in an agent's live browser
+ * tab (ADR-039 D-B3). Used by the annotate-and-discuss flow in
+ * BrowserLiveView to enrich a cropped-image annotation with the underlying
+ * element's tag/text when possible.
+ *
+ * The endpoint is best-effort SERVER-side (`ok:false` + `reason` on a
+ * cross-origin frame / detached node / timeout) — that is a normal 200
+ * response, not a request failure. Callers must not treat a transport-level
+ * failure (network error, 4xx/5xx) any differently: either way, the caller's
+ * job is to fall back to the image+comment alone, never to block on this.
+ */
+export function inspectBrowserElement(req: BrowserInspectRequest): Promise<BrowserInspectResponse> {
+  return request<BrowserInspectResponse>(
+    '/browser/inspect',
+    { method: 'POST', body: JSON.stringify(req) },
+    BrowserInspectResponseSchema as ZodType<BrowserInspectResponse>,
+  )
 }
 
 // ── Auth ──────────────────────────────────────────────────────────────────────

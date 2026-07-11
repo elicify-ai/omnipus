@@ -13,17 +13,33 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ArrowSquareOut,
+  ChatCircleDots,
   Cursor,
   HandGrabbing,
   HandPalm,
   Monitor,
+  PaperPlaneTilt,
   SpinnerGap,
   WarningCircle,
   X,
 } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
+import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
 import { BrowserLiveWsConnection } from '@/lib/browserLiveWs'
-import { computeModifiers, isPrintableKey, mapClientToDevice, mapMouseButton } from '@/lib/browserLiveCoords'
+import {
+  computeCropRect,
+  computeModifiers,
+  framePixelToDeviceCoords,
+  isPrintableKey,
+  mapClientToDevice,
+  mapClientToFramePixels,
+  mapMouseButton,
+  type FrameCropRect,
+} from '@/lib/browserLiveCoords'
+import { normalizeNavigateUrl } from '@/lib/browserLiveUrl'
+import { submitAnnotation } from '@/lib/browserAnnotate'
+import { useUiStore } from '@/store/ui'
 import type { BrowserScreencastFrame, BrowserStatusFrame } from '@/lib/api/generated/asyncapi-types'
 
 export interface BrowserLiveViewProps {
@@ -62,11 +78,28 @@ function pillConfig(state: LiveStatus): PillConfig {
   }
 }
 
+/** A finalized region selection, cropped to a File and ready to send (ADR-039 D-B1/B2). */
+interface PendingAnnotation { // not-wire-format: local annotate-popover state, never serialized across the gateway/SPA boundary
+  file: File
+  previewUrl: string
+  /** Device (CSS) pixel point — center of the crop — for the D-B3 inspect call. */
+  point: { x: number; y: number }
+}
+
 export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, className }: BrowserLiveViewProps) {
   const wsRef = useRef<BrowserLiveWsConnection | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
+  const imgRef = useRef<HTMLImageElement | null>(null)
   const frameRef = useRef<BrowserScreencastFrame | null>(null)
   const controllingRef = useRef(false)
+  // ── Annotate-a-region state (ADR-039 D-B1/B2) — a third interaction mode,
+  // mutually exclusive with driving (isControlling). annotateDraggingRef +
+  // selectionStartClientRef are refs (not state) so the pointerup handler
+  // always reads the exact values captured on pointerdown, never a stale
+  // closure — same pattern as frameRef/controllingRef above.
+  const annotateDraggingRef = useRef(false)
+  const selectionStartClientRef = useRef<{ x: number; y: number } | null>(null)
+  const pendingAnnotationRef = useRef<PendingAnnotation | null>(null)
   // mouse_move RAF-coalescing (see handlePointerMove below): only the latest
   // pointer position per animation frame is ever sent, so the highest rate
   // this can flood the server's input rate limiter at is one frame's worth
@@ -87,6 +120,21 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, classNa
   const [connected, setConnected] = useState(false)
   const [cursorPos, setCursorPos] = useState<{ x: number; y: number } | null>(null)
 
+  // ── URL bar (ADR-039 D-A2) ──────────────────────────────────────────────
+  const [urlInput, setUrlInput] = useState('')
+
+  // ── Annotate mode (ADR-039 D-B1/B2) — container-relative CSS coords for
+  // the live selection-box overlay; frozen (not cleared) once a selection
+  // finalizes into pendingAnnotation, so the box stays visible behind the
+  // comment popover.
+  const [annotateMode, setAnnotateMode] = useState(false)
+  const [selectionStart, setSelectionStart] = useState<{ x: number; y: number } | null>(null)
+  const [selectionCurrent, setSelectionCurrent] = useState<{ x: number; y: number } | null>(null)
+  const [pendingAnnotation, setPendingAnnotation] = useState<PendingAnnotation | null>(null)
+  const [annotateComment, setAnnotateComment] = useState('')
+  const [annotateSubmitting, setAnnotateSubmitting] = useState(false)
+  const [annotateError, setAnnotateError] = useState<string | null>(null)
+
   const isControlling = statusState === 'controlling'
   // Unified error surface: a transport-level error always wins; otherwise a
   // terminal browser_status{state:'error'} frame's message is shown. This is
@@ -103,6 +151,34 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, classNa
     // cursor overlay rather than leaving it frozen at the last position.
     if (!isControlling) setCursorPos(null)
   }, [isControlling])
+
+  // Keep pendingAnnotationRef in sync so the unmount-cleanup effect below
+  // (which must run with empty deps, i.e. read only refs) always revokes the
+  // CURRENT preview object URL rather than a stale one captured on mount.
+  useEffect(() => {
+    pendingAnnotationRef.current = pendingAnnotation
+  }, [pendingAnnotation])
+
+  // Revoke any outstanding annotation preview object URL when the component
+  // unmounts with a comment popover still open (e.g. the Sheet was closed
+  // mid-annotation) — otherwise the blob URL leaks for the tab's lifetime.
+  useEffect(() => {
+    return () => {
+      if (pendingAnnotationRef.current) {
+        URL.revokeObjectURL(pendingAnnotationRef.current.previewUrl)
+      }
+    }
+  }, [])
+
+  // Defense in depth: annotate mode and driving (isControlling) are mutually
+  // exclusive (ADR-039 D-B1/B2). The normal path already enforces this
+  // (handleToggleAnnotate releases control before entering annotate mode,
+  // and the Take-control button is disabled while annotating) — this effect
+  // is a belt-and-braces guard against any future code path that could grant
+  // control while still in annotate mode.
+  useEffect(() => {
+    if (isControlling && annotateMode) setAnnotateMode(false)
+  }, [isControlling, annotateMode])
 
   // ── WS lifecycle — one connection per mount (host keys this component by
   // `${sessionId}:${agentId}` so a new target always gets a fresh mount). ──
@@ -218,7 +294,128 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, classNa
     wsRef.current.sendControl(isControlling ? 'release' : 'take')
   }, [isControlling])
 
+  // ── Annotate mode (ADR-039 D-B1/B2) ─────────────────────────────────────
+
+  const resetSelection = useCallback(() => {
+    annotateDraggingRef.current = false
+    selectionStartClientRef.current = null
+    setSelectionStart(null)
+    setSelectionCurrent(null)
+  }, [])
+
+  const handleToggleAnnotate = useCallback(() => {
+    if (annotateMode) {
+      setAnnotateMode(false)
+      resetSelection()
+      if (pendingAnnotationRef.current) URL.revokeObjectURL(pendingAnnotationRef.current.previewUrl)
+      setPendingAnnotation(null)
+      setAnnotateComment('')
+      setAnnotateError(null)
+      return
+    }
+    // Mutually exclusive with driving (ADR-039 D-B1/B2) — release control
+    // first so pointer events stop being forwarded as remote input the
+    // instant annotate mode takes over.
+    if (isControlling) {
+      wsRef.current?.sendControl('release')
+    }
+    setAnnotateMode(true)
+  }, [annotateMode, isControlling, resetSelection])
+
+  const handleCancelAnnotation = useCallback(() => {
+    if (pendingAnnotationRef.current) URL.revokeObjectURL(pendingAnnotationRef.current.previewUrl)
+    setPendingAnnotation(null)
+    setAnnotateComment('')
+    setAnnotateError(null)
+    resetSelection()
+  }, [resetSelection])
+
+  // Crops the CURRENTLY-RENDERED screencast frame's <img> to a PNG File
+  // (mirrors the canvas pattern in media-actions.ts's fetchImagePng). Reads
+  // the live <img> at call time (not a stale snapshot) so the crop always
+  // reflects exactly what the user was looking at when they finished the
+  // drag/click.
+  const cropFrameToFile = useCallback(async (rect: FrameCropRect): Promise<File | null> => {
+    const img = imgRef.current
+    if (!img || !img.complete || img.naturalWidth === 0) return null
+    const canvas = document.createElement('canvas')
+    canvas.width = rect.width
+    canvas.height = rect.height
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return null
+    ctx.drawImage(img, rect.x, rect.y, rect.width, rect.height, 0, 0, rect.width, rect.height)
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'))
+    if (!blob) return null
+    return new File([blob], 'annotation.png', { type: 'image/png' })
+  }, [])
+
+  // Finalizes a drag/click selection into a pendingAnnotation (crop + open
+  // the comment popover). Never forwards anything over the control-input WS
+  // path — annotate mode is a purely local, client-side interaction until
+  // the user hits Send (submitAnnotation).
+  const finalizeSelection = useCallback(
+    async (containerRect: DOMRect, startClient: { x: number; y: number }, endClient: { x: number; y: number }) => {
+      // No popover is open yet at any failure point here (pendingAnnotation
+      // is only set on full success below) — setAnnotateError would render
+      // into a popover that doesn't exist, and silently returning would leave
+      // the frozen selection box up with no feedback (a stuck-looking UI).
+      // Every failure path — frame gone, unmeasurable container, degenerate
+      // crop rect, or the crop itself failing — toasts and resets instead.
+      const fail = () => {
+        useUiStore.getState().addToast({ message: 'Could not capture that region — try again.', variant: 'error' })
+        resetSelection()
+      }
+      const frame = frameRef.current
+      if (!frame) return fail()
+      const startPx = mapClientToFramePixels(startClient.x, startClient.y, containerRect, frame.width, frame.height)
+      const endPx = mapClientToFramePixels(endClient.x, endClient.y, containerRect, frame.width, frame.height)
+      if (!startPx || !endPx) return fail()
+      const cropRect = computeCropRect(startPx, endPx, frame.width, frame.height)
+      if (!cropRect) return fail()
+
+      const file = await cropFrameToFile(cropRect)
+      if (!file) return fail()
+      const center = framePixelToDeviceCoords(
+        cropRect.x + cropRect.width / 2,
+        cropRect.y + cropRect.height / 2,
+        frame.page_scale,
+      )
+      setPendingAnnotation({ file, previewUrl: URL.createObjectURL(file), point: center })
+    },
+    [cropFrameToFile, resetSelection],
+  )
+
+  // ── URL bar (ADR-039 D-A2) ───────────────────────────────────────────────
+
+  const handleNavigateSubmit = useCallback(
+    (e: React.FormEvent) => {
+      e.preventDefault()
+      const normalized = normalizeNavigateUrl(urlInput)
+      if (!normalized) return
+      wsRef.current?.sendInput({ kind: 'navigate', url: normalized })
+      setUrlInput(normalized)
+    },
+    [urlInput],
+  )
+
+  // ── Hand to agent (ADR-039 D-A3) ─────────────────────────────────────────
+
+  const handleHandToAgent = useCallback(() => {
+    wsRef.current?.sendControl('release')
+    useUiStore.getState().setComposerPrefill('Continue from the current page: ')
+    useUiStore.getState().addToast({
+      message: 'Control released — a hint was added to the chat composer.',
+      variant: 'default',
+    })
+  }, [])
+
   const handlePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (annotateMode) {
+      if (!annotateDraggingRef.current || !containerRef.current) return
+      const rect = containerRef.current.getBoundingClientRect()
+      setSelectionCurrent({ x: e.clientX - rect.left, y: e.clientY - rect.top })
+      return
+    }
     if (!controllingRef.current || !frameRef.current || !containerRef.current) return
     const rect = containerRef.current.getBoundingClientRect()
     // Local cursor overlay updates immediately every event — only the
@@ -236,9 +433,30 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, classNa
     if (!device) return
     pendingMoveRef.current = { x: device.x, y: device.y, modifiers: computeModifiers(e) }
     scheduleMoveFlush()
-  }, [scheduleMoveFlush])
+  }, [scheduleMoveFlush, annotateMode])
 
   const handlePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (annotateMode) {
+      // pendingAnnotationRef (not state) — a selection popover already open
+      // must be Cancelled or Sent before starting a new drag; reading the
+      // ref (rather than adding pendingAnnotation to the dep array) keeps
+      // this callback's identity stable across every popover open/close.
+      if (!frameRef.current || !containerRef.current || pendingAnnotationRef.current) return
+      containerRef.current.focus()
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId)
+      } catch {
+        // Pointer capture is best-effort — unsupported/jsdom environments fall
+        // back to normal bounds-limited pointer events.
+      }
+      const rect = containerRef.current.getBoundingClientRect()
+      const point = { x: e.clientX - rect.left, y: e.clientY - rect.top }
+      selectionStartClientRef.current = { x: e.clientX, y: e.clientY }
+      annotateDraggingRef.current = true
+      setSelectionStart(point)
+      setSelectionCurrent(point)
+      return
+    }
     if (!controllingRef.current || !frameRef.current || !containerRef.current) return
     containerRef.current.focus()
     // Capture the pointer so a drag that leaves the container bounds (e.g.
@@ -268,9 +486,23 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, classNa
       button: mapMouseButton(e.button),
       modifiers: computeModifiers(e),
     })
-  }, [])
+  }, [annotateMode])
 
   const handlePointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (annotateMode) {
+      if (!annotateDraggingRef.current || !containerRef.current) {
+        annotateDraggingRef.current = false
+        return
+      }
+      annotateDraggingRef.current = false
+      const startClient = selectionStartClientRef.current
+      const rect = containerRef.current.getBoundingClientRect()
+      setSelectionCurrent({ x: e.clientX - rect.left, y: e.clientY - rect.top })
+      if (startClient) {
+        void finalizeSelection(rect, startClient, { x: e.clientX, y: e.clientY })
+      }
+      return
+    }
     if (!controllingRef.current || !frameRef.current || !containerRef.current) return
     const rect = containerRef.current.getBoundingClientRect()
     const device = mapClientToDevice(
@@ -289,7 +521,30 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, classNa
       button: mapMouseButton(e.button),
       modifiers: computeModifiers(e),
     })
-  }, [])
+  }, [annotateMode, finalizeSelection])
+
+  const handleSendAnnotation = useCallback(() => {
+    const annotation = pendingAnnotation
+    const comment = annotateComment.trim()
+    if (!annotation || comment.length === 0) return
+    setAnnotateSubmitting(true)
+    setAnnotateError(null)
+    submitAnnotation({ comment, file: annotation.file, point: annotation.point })
+      .then(() => {
+        useUiStore.getState().addToast({ message: 'Annotation sent to the agent.', variant: 'success' })
+        URL.revokeObjectURL(annotation.previewUrl)
+        setPendingAnnotation(null)
+        setAnnotateComment('')
+        setAnnotateMode(false)
+        resetSelection()
+      })
+      .catch((err: unknown) => {
+        setAnnotateError(err instanceof Error ? err.message : String(err))
+      })
+      .finally(() => {
+        setAnnotateSubmitting(false)
+      })
+  }, [pendingAnnotation, annotateComment, resetSelection])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
     if (!controllingRef.current) return
@@ -330,24 +585,48 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, classNa
           own built-in close (absolute right-2 top-2, h-11 w-11) on top of
           whatever sits underneath — without this reserved gap the rightmost
           header button here would sit directly under it. */}
-      <div className="flex shrink-0 items-center gap-2 border-b border-[var(--color-border)] pl-4 pr-14 py-3">
-        <Monitor size={16} weight="duotone" className="text-[var(--color-accent)]" />
-        <h2 className="font-headline text-sm font-semibold text-[var(--color-secondary)]">Live Browser</h2>
+      <div
+        className="flex shrink-0 items-center gap-2 overflow-x-auto border-b border-[var(--color-border)] pl-4 pr-14 py-3"
+        style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' } as React.CSSProperties}
+      >
+        <Monitor size={16} weight="duotone" className="shrink-0 text-[var(--color-accent)]" />
+        <h2 className="shrink-0 font-headline text-sm font-semibold text-[var(--color-secondary)]">Live Browser</h2>
         <span
           data-testid="browser-live-status-pill"
-          className={cn('rounded px-2 py-0.5 text-[10px] font-medium', pill.className)}
+          className={cn('shrink-0 rounded px-2 py-0.5 text-[10px] font-medium whitespace-nowrap', pill.className)}
         >
           {pill.label}
         </span>
-        <div className="flex-1" />
+        <div className="flex-1 min-w-2" />
+        {/* Annotate toggle (ADR-039 D-B1/B2) — a third interaction mode,
+            mutually exclusive with driving: entering it releases control
+            (handleToggleAnnotate), and Take control is disabled while it's
+            active (below), so the two states can never overlap. */}
+        <button
+          type="button"
+          onClick={handleToggleAnnotate}
+          disabled={!connected}
+          aria-label={annotateMode ? 'Exit annotate mode' : 'Annotate a region'}
+          title={annotateMode ? 'Exit annotate mode' : 'Drag a region (or click a spot) to comment on it'}
+          className={cn(
+            'flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded px-2.5 py-1.5 text-xs font-medium transition-colors',
+            'disabled:cursor-not-allowed disabled:opacity-40',
+            annotateMode
+              ? 'bg-[var(--color-accent)] text-[var(--color-primary)] hover:opacity-90'
+              : 'border border-[var(--color-border)] text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]',
+          )}
+        >
+          <ChatCircleDots size={13} />
+          {annotateMode ? 'Exit annotate' : 'Annotate'}
+        </button>
         <button
           type="button"
           onClick={handleToggleControl}
-          disabled={!connected}
+          disabled={!connected || annotateMode}
           aria-label={isControlling ? 'Release control' : 'Take control'}
           title={isControlling ? 'Release control' : 'Take control'}
           className={cn(
-            'flex items-center gap-1.5 rounded px-2.5 py-1.5 text-xs font-medium transition-colors',
+            'flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded px-2.5 py-1.5 text-xs font-medium transition-colors',
             'disabled:cursor-not-allowed disabled:opacity-40',
             isControlling
               ? 'bg-[var(--color-accent)] text-[var(--color-primary)] hover:opacity-90'
@@ -357,13 +636,25 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, classNa
           {isControlling ? <HandPalm size={13} /> : <HandGrabbing size={13} />}
           {isControlling ? 'Release control' : 'Take control'}
         </button>
+        {isControlling && (
+          <button
+            type="button"
+            onClick={handleHandToAgent}
+            aria-label="Hand to agent"
+            title="Release control and let the agent continue from here"
+            className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded px-2.5 py-1.5 text-xs font-medium border border-[var(--color-border)] text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)]"
+          >
+            <PaperPlaneTilt size={13} />
+            Hand to agent
+          </button>
+        )}
         {onPopOut && (
           <button
             type="button"
             onClick={onPopOut}
             aria-label="Pop out"
             title="Pop out into its own window"
-            className="rounded p-1.5 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-accent)]"
+            className="shrink-0 rounded p-1.5 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-accent)]"
           >
             <ArrowSquareOut size={15} />
           </button>
@@ -374,12 +665,39 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, classNa
             onClick={onClose}
             aria-label="Close live browser panel"
             title="Close"
-            className="rounded p-1.5 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-accent)]"
+            className="shrink-0 rounded p-1.5 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-accent)]"
           >
             <X size={15} />
           </button>
         )}
       </div>
+
+      {/* URL bar (ADR-039 D-A2) — shown + enabled only while the viewer holds
+          control; the server's ValidateURL SSRF gate (run on every `navigate`
+          input frame) is the real authority, and any rejection surfaces via
+          the existing browser_status(error) strip below. */}
+      {isControlling && (
+        <form
+          onSubmit={handleNavigateSubmit}
+          className="flex shrink-0 items-center gap-2 border-b border-[var(--color-border)] px-4 py-2"
+        >
+          <Input
+            type="text"
+            value={urlInput}
+            onChange={(e) => setUrlInput(e.target.value)}
+            placeholder="Enter a URL and press Go…"
+            aria-label="Navigate to URL"
+            className="h-8 flex-1 text-xs"
+          />
+          <button
+            type="submit"
+            disabled={urlInput.trim().length === 0}
+            className="shrink-0 rounded-md bg-[var(--color-accent)] px-3 h-8 text-xs font-medium text-[var(--color-primary)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Go
+          </button>
+        </form>
+      )}
 
       {/* Body */}
       <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-black p-2">
@@ -407,7 +725,7 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, classNa
             aria-label="Live browser view"
             data-testid="browser-live-frame"
             className="relative inline-block max-h-full max-w-full select-none outline-none"
-            style={{ cursor: isControlling ? 'none' : 'default' }}
+            style={{ cursor: annotateMode ? 'crosshair' : isControlling ? 'none' : 'default' }}
             onPointerMove={handlePointerMove}
             onPointerDown={handlePointerDown}
             onPointerUp={handlePointerUp}
@@ -416,6 +734,7 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, classNa
             onDragStart={(e) => e.preventDefault()}
           >
             <img
+              ref={imgRef}
               src={`data:image/jpeg;base64,${frame.data}`}
               alt="Live browser session"
               draggable={false}
@@ -430,6 +749,86 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, classNa
                 <Cursor size={20} weight="fill" className="text-[var(--color-accent)] drop-shadow" />
               </div>
             )}
+            {/* Selection-box overlay (ADR-039 D-B1/B2) — container-relative CSS
+                coords, drawn live while dragging and frozen once the
+                selection finalizes into pendingAnnotation (comment popover
+                below stays anchored to it). */}
+            {annotateMode && selectionStart && selectionCurrent && (
+              <div
+                data-testid="annotate-selection-box"
+                className="pointer-events-none absolute z-10 border-2 border-[var(--color-accent)] bg-[var(--color-accent)]/15"
+                style={{
+                  left: Math.min(selectionStart.x, selectionCurrent.x),
+                  top: Math.min(selectionStart.y, selectionCurrent.y),
+                  width: Math.abs(selectionCurrent.x - selectionStart.x),
+                  height: Math.abs(selectionCurrent.y - selectionStart.y),
+                }}
+              />
+            )}
+          </div>
+        )}
+
+        {/* Annotate comment popover (ADR-039 D-B1/B2) — appears once a
+            drag/click selection finalizes into a cropped pendingAnnotation.
+            Bottom-anchored (rather than positioned relative to the possibly
+            edge-of-frame selection box) to sidestep viewport-clamping math;
+            the frozen selection-box overlay above stays visible so the
+            connection to what's being discussed is still clear. */}
+        {annotateMode && pendingAnnotation && (
+          <div
+            data-testid="annotate-popover"
+            className="absolute inset-x-0 bottom-0 z-20 border-t border-[var(--color-border)] bg-[var(--color-surface-1)] p-3 shadow-lg"
+          >
+            <div className="flex items-start gap-3">
+              <img
+                src={pendingAnnotation.previewUrl}
+                alt="Selected region"
+                className="h-16 w-16 shrink-0 rounded border border-[var(--color-border)] object-cover"
+              />
+              <div className="min-w-0 flex-1">
+                <Textarea
+                  value={annotateComment}
+                  onChange={(e) => setAnnotateComment(e.target.value)}
+                  onKeyDown={(e) => {
+                    // Cancel the pending annotation on Escape rather than
+                    // letting it bubble to Radix's Sheet (which would close
+                    // the whole panel and discard the drafted comment).
+                    if (e.key === 'Escape') {
+                      e.stopPropagation()
+                      handleCancelAnnotation()
+                    }
+                  }}
+                  placeholder="What would you like to discuss about this?"
+                  aria-label="Annotation comment"
+                  className="min-h-[60px] text-xs"
+                  disabled={annotateSubmitting}
+                  autoFocus
+                />
+                {annotateError && (
+                  <p role="alert" className="mt-1 text-[11px] text-[var(--color-error)]">
+                    {annotateError}
+                  </p>
+                )}
+                <div className="mt-2 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={handleCancelAnnotation}
+                    disabled={annotateSubmitting}
+                    className="rounded px-2.5 py-1 text-xs text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSendAnnotation}
+                    disabled={annotateSubmitting || annotateComment.trim().length === 0}
+                    className="rounded bg-[var(--color-accent)] px-3 py-1 text-xs font-medium text-[var(--color-primary)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    {annotateSubmitting ? 'Sending…' : 'Send'}
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
         )}
       </div>

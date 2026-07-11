@@ -116,6 +116,108 @@ export function mapMouseButton(button: number): BrowserInputButton {
   }
 }
 
+// ── Annotate-a-region crop mapping (ADR-039 D-B1/B2/B3) ────────────────────
+
+export interface FrameCropRect { // not-wire-format: local crop-rectangle result in screencast-frame pixel space, never serialized across the gateway/SPA boundary
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+/**
+ * Maps a client-space pointer coordinate to the NATURAL PIXEL space of the
+ * screencast frame's `<img>` (i.e. frame.width × frame.height — the raw JPEG
+ * dimensions CDP captured via Page.startScreencast). This is the coordinate
+ * space `ctx.drawImage(img, sx, sy, sw, sh, …)` expects when cropping the
+ * currently-rendered `<img>` element (annotate-and-discuss, ADR-039 D-B1/B2).
+ *
+ * Deliberately distinct from mapClientToDevice: that function additionally
+ * divides by pageScaleFactor to land in the CSS-pixel space CDP's
+ * Input.dispatch* calls expect. Cropping the raw bitmap needs the
+ * UN-divided natural-pixel space instead — reusing mapClientToDevice's output
+ * here would crop the wrong region whenever pageScaleFactor != 1.
+ *
+ * Returns null when the container/frame has no measurable size (mirrors
+ * mapClientToDevice's guard). Result is clamped to [0, frameWidth] /
+ * [0, frameHeight].
+ */
+export function mapClientToFramePixels(
+  clientX: number,
+  clientY: number,
+  rect: RectLike,
+  frameWidth: number,
+  frameHeight: number,
+): DeviceCoords | null {
+  if (rect.width <= 0 || rect.height <= 0 || frameWidth <= 0 || frameHeight <= 0) {
+    return null
+  }
+  const rawX = (clientX - rect.left) * (frameWidth / rect.width)
+  const rawY = (clientY - rect.top) * (frameHeight / rect.height)
+  return {
+    x: Math.min(Math.max(rawX, 0), frameWidth),
+    y: Math.min(Math.max(rawY, 0), frameHeight),
+  }
+}
+
+/**
+ * Converts a point already in the screencast frame's natural-pixel space
+ * (see mapClientToFramePixels) into the device (CSS) pixel space
+ * `BrowserInspectRequest.x`/`.y` expect (ADR-039 D-B3) — the SAME
+ * page_scale-adjusted space mapClientToDevice's mouse-dispatch coordinates
+ * use, so an inspect request always agrees with where a click would land.
+ */
+export function framePixelToDeviceCoords(x: number, y: number, pageScale?: number): DeviceCoords {
+  const scale = pageScale !== undefined && pageScale > 0 ? pageScale : 1
+  return { x: x / scale, y: y / scale }
+}
+
+/**
+ * Computes a crop rectangle (in frame natural-pixel space, see
+ * mapClientToFramePixels) from a drag gesture's start/end points.
+ *
+ * A drag shorter than `minDragSize` in BOTH axes is treated as a click
+ * rather than a rectangle — Codex parity (ADR-039 D-B1/B2: "the user drags
+ * a rectangle (or clicks…)") synthesizes a fixed-size box (`clickBoxSize`)
+ * centered on the point instead of discarding a tap-to-annotate gesture.
+ * The synthesized box is clamped to stay fully inside
+ * [0,frameWidth] × [0,frameHeight].
+ *
+ * Returns null only when the frame itself has no measurable area (a
+ * pathological 0×0 frame) — a normal click or drag always yields a rect.
+ */
+export function computeCropRect(
+  start: DeviceCoords,
+  end: DeviceCoords,
+  frameWidth: number,
+  frameHeight: number,
+  opts?: { minDragSize?: number; clickBoxSize?: number },
+): FrameCropRect | null {
+  if (frameWidth <= 0 || frameHeight <= 0) return null
+  const minDragSize = opts?.minDragSize ?? 6
+  const clickBoxSize = Math.max(1, Math.min(opts?.clickBoxSize ?? 48, frameWidth, frameHeight))
+  const dx = Math.abs(end.x - start.x)
+  const dy = Math.abs(end.y - start.y)
+
+  if (dx < minDragSize && dy < minDragSize) {
+    const half = clickBoxSize / 2
+    const x = Math.min(Math.max(start.x - half, 0), Math.max(frameWidth - clickBoxSize, 0))
+    const y = Math.min(Math.max(start.y - half, 0), Math.max(frameHeight - clickBoxSize, 0))
+    return {
+      x: Math.round(x),
+      y: Math.round(y),
+      width: Math.round(clickBoxSize),
+      height: Math.round(clickBoxSize),
+    }
+  }
+
+  const x = Math.round(Math.min(start.x, end.x))
+  const y = Math.round(Math.min(start.y, end.y))
+  const width = Math.round(dx)
+  const height = Math.round(dy)
+  return { x, y, width, height }
+}
+
 /**
  * True when a keydown/keyup event represents a single printable character
  * that should be forwarded as a `text` input frame (Input.insertText on the

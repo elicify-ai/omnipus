@@ -778,6 +778,11 @@ describe('ClientFrameTypes — contract test', () => {
       'device_pairing_response',
       'session_close',
       'whatsapp_pairing_subscribe',
+      // ADR-038 — live interactive browser panel client→server frames.
+      'browser_attach',
+      'browser_input',
+      'browser_control',
+      'browser_detach',
     ])
     expect(new Set(ClientFrameTypes)).toEqual(expectedTypes)
   })
