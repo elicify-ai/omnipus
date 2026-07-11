@@ -3,14 +3,14 @@
 // This test file uses //go:build !cgo so it compiles when CGO is disabled.
 // See websocket_test.go for the same rationale.
 
-// Regression coverage for a live-UAT-reported HIGH-severity bug (persona
-// "Alex"): two concurrent delegate turns streaming to the same webchat
-// chatID had their token deltas interleave into one garbled message —
-// confirmed via screenshot, and confirmed to survive reload (the live
-// view, cached/replayed by the client, is what was corrupted; each
-// streamer's own Finalize-written transcript entry was already correctly
-// isolated per turn before this fix — see WSHandler.streamOwners' doc
-// comment in websocket.go for the full root-cause writeup).
+// Regression coverage for a live-UAT-reported HIGH-severity bug: two
+// concurrent delegate turns streaming to the same webchat chatID had their
+// token deltas interleave into one garbled message — confirmed via
+// screenshot, and confirmed to survive reload (the live view, cached/replayed
+// by the client, is what was corrupted; each streamer's own Finalize-written
+// transcript entry was already correctly isolated per turn before this fix —
+// see WSHandler.streamOwners' doc comment in websocket.go for the full
+// root-cause writeup).
 //
 // This scenario is reachable even without the companion cancel-orphan bug
 // (see pkg/agent/cancel_orphan_delegate_test.go): the delegation system

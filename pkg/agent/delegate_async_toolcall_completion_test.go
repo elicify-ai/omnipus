@@ -16,9 +16,9 @@
 // routinely finishes (Finish(false), after its own brief follow-up LLM call
 // acknowledging the "running in background" ack) well before the delegate
 // completes even one tool call. Without Critical:true, the delegate's own
-// turn loop (pkg/agent/loop.go, the "Parent turn ended" check evaluated at
-// the TOP of every iteration) sees !ts.critical && ts.IsParentEnded() and
-// exits gracefully BEFORE making the next LLM call — silently discarding the
+// turn loop (pkg/agent/loop.go, the "Parent turn ended" check evaluated
+// early in each iteration, before the next LLM call) sees !ts.critical &&
+// ts.IsParentEnded() and exits gracefully — silently discarding the
 // synthesized answer for any task that needed more than one LLM turn. The
 // preamble survives (it was already persisted per-iteration), but the real
 // answer is never even generated: spawnSubTurn's result comes back with

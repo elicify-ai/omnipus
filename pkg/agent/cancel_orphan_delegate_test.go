@@ -2,9 +2,9 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// Regression coverage for a live-UAT-reported HIGH-severity bug (persona
-// "Alex"): clicking "Stop generation" on a turn that had just dispatched a
-// background (async) `delegate` call did not reliably cancel the delegate.
+// Regression coverage for a live-UAT-reported HIGH-severity bug: clicking
+// "Stop generation" on a turn that had just dispatched a background (async)
+// `delegate` call did not reliably cancel the delegate.
 // No span/badge remained in chat at the moment of interruption — it LOOKED
 // cleanly canceled — but the underlying delegate sub-turn kept running
 // invisibly and resurfaced minutes later, sometimes concurrently with a
