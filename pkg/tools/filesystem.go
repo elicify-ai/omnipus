@@ -932,7 +932,12 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *ToolR
 		// new blocking behavior, this write proceeds regardless.
 		f.Close()
 		if writerID, found := lastWriterForPath(t.auditLogger, canonicalPath, ToolAgentID(ctx)); found {
-			clobberNote = fmt.Sprintf(" Note: you are replacing a file last modified by agent %s.", writerID)
+			// Precisely scoped wording: only write_file calls are tracked
+			// (edit_file/append_file are not), and only within
+			// LastWriterForPath's current-file-plus-most-recent-rotated-file
+			// window — "last written via write_file by" says exactly that,
+			// rather than implying a complete modification history.
+			clobberNote = fmt.Sprintf(" Note: you are replacing a file last written via write_file by agent %s.", writerID)
 		}
 	}
 

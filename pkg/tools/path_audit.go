@@ -184,17 +184,19 @@ func emitFileWriteAudit(
 		},
 	}
 	if err := auditLog.Log(entry); err != nil {
-		slog.Error("path_audit: file write audit log write failed", "error", err, "session_id", entry.SessionID)
+		slog.Error("path_audit: file write audit log write failed",
+			"error", err, "session_id", entry.SessionID, "agent_id", entry.AgentID, "path", canonicalPath)
 	}
 }
 
 // lastWriterForPath looks up the most recent OTHER agent recorded as having
 // successfully written canonicalPath, per the audit log's file_op history
 // (see audit.Logger.LastWriterForPath for the scope bound — current audit
-// file only). Returns ("", false) when auditLog is nil, canonicalPath is
-// empty, no prior writer is on record, or the only prior writer on record IS
-// callerAgentID itself — an agent overwriting its own earlier file is normal
-// collaboration, not the cross-agent clobber this note exists to surface.
+// file plus the single most-recently-rotated one). Returns ("", false) when
+// auditLog is nil, canonicalPath is empty, no prior writer is on record, or
+// the only prior writer on record IS callerAgentID itself — an agent
+// overwriting its own earlier file is normal collaboration, not the
+// cross-agent clobber this note exists to surface.
 func lastWriterForPath(auditLog *audit.Logger, canonicalPath, callerAgentID string) (writerAgentID string, found bool) {
 	if auditLog == nil || canonicalPath == "" {
 		return "", false

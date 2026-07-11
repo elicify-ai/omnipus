@@ -94,7 +94,7 @@ func TestWriteFileTool_CrossAgentOverwrite_AttributesPriorWriter(t *testing.T) {
 	// The tool result must attribute the prior writer.
 	assert.Contains(t, workerResult.ForLLM, "agent-jim",
 		"worker's write result must reference jim as the file's last writer, got: %s", workerResult.ForLLM)
-	assert.True(t, strings.Contains(workerResult.ForLLM, "Note: you are replacing a file last modified by agent agent-jim"),
+	assert.True(t, strings.Contains(workerResult.ForLLM, "Note: you are replacing a file last written via write_file by agent agent-jim"),
 		"expected a well-formed attribution note, got: %s", workerResult.ForLLM)
 }
 
@@ -215,6 +215,40 @@ func TestWriteFileTool_NilAuditLogger_NoNoteNoPanic(t *testing.T) {
 	})
 	require.False(t, second.IsError, "overwrite should still succeed without an audit logger: %s", second.ForLLM)
 	assert.NotContains(t, second.ForLLM, "Note: you are replacing")
+}
+
+// ---------------------------------------------------------------------------
+// TestWriteFileTool_DegradedAuditLogger_NoNoteNoBlock
+// Distinct from TestWriteFileTool_NilAuditLogger_NoNoteNoPanic above: here an
+// audit logger IS wired in (t.auditLogger != nil), but the lookup itself
+// fails (closedAuditLogger — see bash_test.go — is latched into degraded
+// mode). Protects the "never blocking" contract against a future refactor
+// that might accidentally make WriteFileTool's read path error-propagating:
+// the write must still succeed and simply omit the note, exactly as if no
+// logger were configured at all.
+// ---------------------------------------------------------------------------
+func TestWriteFileTool_DegradedAuditLogger_NoNoteNoBlock(t *testing.T) {
+	sharedDir := t.TempDir()
+	tool := NewWriteFileTool(sharedDir, true)
+	tool.SetAuditLogger(closedAuditLogger(t)) // present but degraded -> lookup fails
+
+	jimCtx := WithAgentID(context.Background(), "agent-jim")
+	jimCtx = WithTurnWorkspaceDir(jimCtx, sharedDir)
+	first := tool.Execute(jimCtx, map[string]any{"path": "f.txt", "content": "a"})
+	require.False(t, first.IsError, "first write must succeed even though the audit logger is degraded: %s", first.ForLLM)
+
+	workerCtx := WithAgentID(context.Background(), "agent-worker")
+	workerCtx = WithTurnWorkspaceDir(workerCtx, sharedDir)
+	second := tool.Execute(workerCtx, map[string]any{
+		"path": "f.txt", "content": "b", "overwrite": true,
+	})
+	require.False(t, second.IsError, "overwrite must succeed even though the audit-backed lookup fails: %s", second.ForLLM)
+	assert.NotContains(t, second.ForLLM, "Note: you are replacing",
+		"a degraded/unreadable audit logger must never block the write or fabricate a note, got: %s", second.ForLLM)
+
+	data, err := os.ReadFile(filepath.Join(sharedDir, "f.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "b", string(data), "overwrite must proceed regardless of the failed lookup")
 }
 
 // ---------------------------------------------------------------------------
