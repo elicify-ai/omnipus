@@ -3,6 +3,7 @@ package browser
 import (
 	"context"
 	"fmt"
+	"net"
 	"sync"
 	"testing"
 	"time"
@@ -232,6 +233,88 @@ func TestLiveView_DispatchInput_Navigate_BlockedSchemeNotDispatched(t *testing.T
 	require.False(t, IsBenignLiveInputError(err))
 	require.Contains(t, err.Error(), "navigate blocked")
 	require.False(t, dispatched, "a blocked scheme must never reach CDP dispatch")
+}
+
+// TestLiveView_DispatchInput_Navigate_DataSchemeNotDispatched covers the one
+// blocked scheme (data:) not exercised elsewhere at this call site — the
+// "javascript:" case above proves the blocked-scheme gate fires at all, but
+// data: URLs are a distinct XSS/exfiltration vector (inline HTML/script
+// payload, no network fetch involved) worth its own regression guard
+// (7-reviewer MEDIUM finding: test coverage).
+func TestLiveView_DispatchInput_Navigate_DataSchemeNotDispatched(t *testing.T) {
+	var dispatched bool
+	lv := newNavigateTestLiveView(t, func(context.Context, time.Duration, ...chromedp.Action) error {
+		dispatched = true
+		return nil
+	})
+	require.True(t, lv.takeControl("viewerA"))
+
+	err := lv.dispatchInput("viewerA", LiveInput{Kind: "navigate", URL: "data:text/html,<script>alert(1)</script>"})
+	require.Error(t, err)
+	require.False(t, IsBenignLiveInputError(err))
+	require.Contains(t, err.Error(), "navigate blocked")
+	require.False(t, dispatched, "a data: URL must never reach CDP dispatch")
+}
+
+// blockingResolver is a security.Resolver stub that never returns on its
+// own — it blocks until its ctx is Done, exactly the worst case a
+// blackholed/slow-DNS hostname can produce against the real resolver.
+type blockingResolver struct{}
+
+func (blockingResolver) LookupIPAddr(ctx context.Context, _ string) ([]net.IPAddr, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// TestLiveView_DispatchInput_Navigate_DNSResolutionIsBounded is the
+// regression guard for the 7-reviewer BLOCKER finding: dispatchInput used to
+// pass the bare tabCtx straight into BrowserManager.ValidateURL, whose SSRF
+// host check does DNS resolution with no deadline of its own. tabCtx here is
+// deliberately context.Background() — never-expiring, mirroring the REAL
+// tabCtx dispatchInput receives (the live agent tab's own context, not a
+// per-call timeout) — so against blockingResolver (which only ever returns
+// once ITS ctx is canceled) this test would hang forever against the pre-fix
+// code: nothing would ever cancel a context.Background(). dispatchInput now
+// wraps the ValidateURL call in context.WithTimeout(tabCtx,
+// lv.mgr.PageTimeout()), so the call is bounded even though tabCtx itself
+// never expires — proven here via a short PageTimeout and a test-level
+// deadline well above it.
+func TestLiveView_DispatchInput_Navigate_DNSResolutionIsBounded(t *testing.T) {
+	ssrf := security.NewSSRFChecker(nil)
+	ssrf.SetResolver(blockingResolver{})
+
+	mgr, err := NewBrowserManager(BrowserConfig{PageTimeout: 200 * time.Millisecond}, ssrf)
+	require.NoError(t, err)
+
+	var dispatched bool
+	lv := &LiveView{
+		mgr:       mgr,
+		sessionID: "s1",
+		viewers:   make(map[string]FrameSink),
+		tabCtx:    context.Background(), // deliberately never-expiring — see doc comment
+		runCDP: func(context.Context, time.Duration, ...chromedp.Action) error {
+			dispatched = true
+			return nil
+		},
+	}
+	require.True(t, lv.takeControl("viewerA"))
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- lv.dispatchInput("viewerA", LiveInput{Kind: "navigate", URL: "http://blackholed.invalid.example/"})
+	}()
+
+	select {
+	case dispatchErr := <-errCh:
+		require.Error(t, dispatchErr, "a blackholed DNS lookup must fail closed, not succeed")
+		require.False(t, IsBenignLiveInputError(dispatchErr))
+		require.Contains(t, dispatchErr.Error(), "navigate blocked")
+	case <-time.After(2 * time.Second):
+		t.Fatal("dispatchInput hung well past PageTimeout — the DNS resolution call has no bounded " +
+			"deadline of its own (the exact unbounded-wait hazard the ADR-038 deadlock postmortem exists " +
+			"to prevent: a hung call here freezes the whole browser-ws connection's single readLoop goroutine)")
+	}
+	require.False(t, dispatched, "a blackholed-DNS navigate must never reach CDP dispatch")
 }
 
 func TestLiveView_DispatchInput_Navigate_MalformedURLNotDispatched(t *testing.T) {
@@ -517,6 +600,10 @@ func TestBuildInputAction(t *testing.T) {
 		// dispatchInput, covered by the Navigate_* tests below.
 		{"navigate", LiveInput{Kind: "navigate", URL: "http://example.com/path"}, false},
 		{"navigate requires non-empty url", LiveInput{Kind: "navigate", URL: ""}, true},
+		// 7-reviewer LOW finding (type-safety defense-in-depth): a navigate
+		// input must not also carry mouse coordinates — see LiveInput.URL's
+		// doc comment.
+		{"navigate must not carry coordinates", LiveInput{Kind: "navigate", URL: "http://example.com/", HasXY: true}, true},
 		{"unknown kind", LiveInput{Kind: "bogus"}, true},
 		// ADR-038 finding #5: per-kind validation added alongside the
 		// pre-existing "text" guard — mouse/wheel kinds need real

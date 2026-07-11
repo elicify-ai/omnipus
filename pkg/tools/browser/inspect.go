@@ -10,6 +10,8 @@ import (
 	"strconv"
 
 	"github.com/chromedp/chromedp"
+
+	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
 // ADR-039 D-B3 — best-effort DOM inspect. inspectMaxTextChars/
@@ -118,8 +120,18 @@ func (m *BrowserManager) InspectPoint(x, y float64) (InspectResult, error) {
 
 	var res inspectEvalResult
 	if err := chromedp.Run(ctx, chromedp.Evaluate(js, &res)); err != nil {
-		// Best-effort (see doc comment above): report "nothing resolved"
-		// rather than propagating the CDP/eval error to the caller.
+		// Best-effort (see doc comment above): still report "nothing
+		// resolved" to the caller rather than propagating the CDP/eval error
+		// — but log it first (7-reviewer MEDIUM finding). Without this, a
+		// crashed/wedged tab or a call that timed out against m.PageTimeout()
+		// was silently indistinguishable from the normal "no element under
+		// the point" outcome (which logs nothing, by design — see the
+		// !res.Ok branch below), making a real infrastructure problem
+		// undiagnosable from the logs.
+		logger.WarnCF("browser", "inspect: CDP/eval round trip failed, reporting best-effort no-result", map[string]any{
+			"error":      err.Error(),
+			"session_id": DefaultSessionID,
+		})
 		return InspectResult{}, nil
 	}
 
