@@ -40,10 +40,7 @@ func ctxAtDepth(depth int) context.Context {
 	return withTurnState(context.Background(), &turnState{depth: depth})
 }
 
-// agentWithPolicy builds an AgentConfig carrying the given delegation policy.
-// Retained for the (now seed-only) config tests in other files; the runtime
-// delegation gate no longer reads DelegationPolicy.
-// Per-workspace, graph-authoritative delegation enforcement.
+// This file tests per-workspace, graph-authoritative delegation enforcement.
 //
 // MIGRATED from the prior config.DelegationPolicy model: the per-workspace
 // delegation graph (workspaces/<id>.json → Delegation[]) is now the SOLE runtime

@@ -21,7 +21,9 @@
 package agent
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -194,4 +196,79 @@ func TestSpawnSubTurn_CorrectsAsyncAckRecord_Error(t *testing.T) {
 		}
 	}
 	require.True(t, found, "the placeholder ack ToolCall record must still be present")
+}
+
+// TestSpawnSubTurn_AsyncAckNeverFound_LogsWarnAfterRetryBudgetExhausted is the
+// regression test for FIX 3 (7-reviewer-gate follow-up on the Wave 3 fix
+// pass): the call site in spawnSubTurn's cleanup defer previously discarded
+// updateToolCallStatusWithRetry's `found` return value via `_` — so when the
+// retry budget (~935ms across 6 attempts) was exhausted WITHOUT ever finding
+// the placeholder record (a real, named scenario in that function's own doc
+// comment: the parent's hooks/media/event processing taking longer than the
+// budget), the call returned (false, nil) — no error, so NO warning was
+// logged at all. The delegate's transcript entry permanently kept the stale
+// placeholder ack (success/0ms) with zero trace of why — exactly the
+// "reload silently disagrees with live" failure class this whole epic was
+// built to close, reopened in the brand-new retry code itself.
+//
+// This test never seeds a placeholder ack record for the spawn call ID at
+// all, guaranteeing UpdateToolCallStatus finds nothing on every one of the
+// retry attempts, so the retry budget is genuinely exhausted (not just
+// raced) — deterministic, not a delay-vs-schedule timing gamble.
+//
+// Negative-test discipline: confirmed to FAIL (logBuf empty, no WARN) against
+// the pre-fix call site (`if _, updateErr := updateToolCallStatusWithRetry(...)`)
+// before the fix was applied — see the delivery report for the revert/
+// confirm/restore transcript.
+func TestSpawnSubTurn_AsyncAckNeverFound_LogsWarnAfterRetryBudgetExhausted(t *testing.T) {
+	al := newWave5bTestAgentLoop(t, &slowMockProvider{delay: 20 * time.Millisecond})
+
+	store, err := session.NewUnifiedStore(t.TempDir())
+	require.NoError(t, err)
+	meta, err := store.NewSession(session.SessionTypeChat, "", "jim")
+	require.NoError(t, err)
+	sessionID := meta.ID
+
+	// Deliberately NOT seeding a placeholder ack record for this callID —
+	// simulating the parent's own placeholder write never landing at all
+	// (the worst case of the FIX 4 race: not just "late", but "never"),
+	// which is exactly what exhausts updateToolCallStatusWithRetry's full
+	// retry budget.
+	const callID = "c-fix3-never-found"
+
+	baseAgent := al.GetRegistry().GetDefaultAgent()
+	require.NotNil(t, baseAgent, "default agent must exist")
+
+	parent := &turnState{
+		ctx:                 context.Background(),
+		turnID:              "parent-fix3",
+		depth:               0,
+		childTurnIDs:        []string{},
+		pendingResults:      make(chan *tools.ToolResult, 10),
+		session:             &ephemeralSessionStore{},
+		agent:               baseAgent,
+		transcriptStore:     store,
+		transcriptSessionID: sessionID,
+	}
+
+	var logBuf bytes.Buffer
+	oldHandler := slog.Default().Handler()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	defer slog.SetDefault(slog.New(oldHandler))
+
+	// Async: true is required — the new warn branch is gated on cfg.Async &&
+	// !found; synchronous delegation's "not found" is the documented,
+	// permanent, expected outcome and must NOT warn (see
+	// TestUpdateToolCallStatusWithRetry_SyncDoesNotWaitForDelayedRecord).
+	cfg := SubTurnConfig{Model: "gpt-4o-mini", Tools: []tools.Tool{}, Async: true}
+	ctx := withSpawnToolCallID(context.Background(), callID)
+	_, spawnErr := spawnSubTurn(ctx, al, parent, cfg)
+	require.NoError(t, spawnErr, "spawnSubTurn must succeed with slowMockProvider")
+
+	logOutput := logBuf.String()
+	assert.Contains(t, logOutput, "gave up waiting for spawn tool call's placeholder record",
+		"a WARN must be logged when the retry budget is exhausted without ever finding the placeholder — "+
+			"silently discarding `found` leaves this permanently undiagnosable in production")
+	assert.Contains(t, logOutput, callID, "the WARN must include the parent_spawn_call_id for diagnosis")
+	assert.Contains(t, logOutput, sessionID, "the WARN must include the session_id for diagnosis")
 }

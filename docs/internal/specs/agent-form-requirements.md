@@ -581,7 +581,7 @@ indicator honest while letting the user keep typing.
 │  ▼ Tools (visible)                                   │
 │   ToolPolicyEditor · Skills · Fallback models         │
 │  ▼ Advanced                                          │
-│   Sandbox · Shell · Rate limits · Delegation → /trust │
+│   Sandbox · Shell · Rate limits                      │
 │   Timeout · Max iter · Steering                      │
 │                                                      │
 ├──────────────────────────────────────────────────────┤

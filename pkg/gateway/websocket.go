@@ -2148,6 +2148,15 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 				pc := string(p.ParentSpawnCallID)
 				endFrameEnd.ParentCallId = &pc
 			}
+			// FIX 4 (7-reviewer-gate follow-up): surface SubTurnEndPayload.Reason
+			// (populated by spawnSubTurn's cleanup defer, pkg/agent/subturn.go,
+			// only when Status == "interrupted") as the wire contract's
+			// SubagentEndFrame.reason. The frontend (SubagentBlock.tsx) already
+			// renders this — it just never received a value before this fix.
+			if p.Reason != "" {
+				reason := p.Reason
+				endFrameEnd.Reason = &reason
+			}
 			sendConnGenFrame(wc, string(generated.WsFrameTypeSubagentEnd), endFrameEnd)
 			// Signal the watchdog that the span closed normally.
 			closeSpan(string(p.ParentSpawnCallID))
