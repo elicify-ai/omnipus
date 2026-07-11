@@ -11,7 +11,7 @@
 // (`_app.tsx`'s beforeLoad) — the browser WS handshake needs a valid bearer
 // token exactly like every other authenticated surface in the SPA.
 
-import { createFileRoute } from '@tanstack/react-router'
+import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { z } from 'zod'
 import { BrowserLiveView } from '@/components/browser/BrowserLiveView'
 
@@ -27,6 +27,7 @@ export const Route = createFileRoute('/_app/browser-live')({
 
 function BrowserLiveRoute() {
   const { session, agent } = Route.useSearch()
+  const navigate = useNavigate()
 
   if (!session || !agent) {
     return (
@@ -41,7 +42,13 @@ function BrowserLiveRoute() {
       key={`${session}:${agent}`}
       sessionId={session}
       agentId={agent}
-      onClose={() => window.close()}
+      onClose={() => {
+        // A script-opened pop-out can close itself; a directly-navigated tab
+        // cannot (window.close() is a silent no-op there), so fall back to
+        // navigating back into the app.
+        window.close()
+        navigate({ to: '/' })
+      }}
       className="absolute inset-0"
     />
   )

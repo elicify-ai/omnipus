@@ -171,17 +171,20 @@ export function BrowserToolBlock({
           </span>
         </button>
 
-        {isRunning && (
-          <button
-            type="button"
-            onClick={handleWatchLive}
-            aria-label="Watch live"
-            title="Watch this browser session live"
-            className="shrink-0 p-1.5 rounded text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-accent)]"
-          >
-            <Broadcast size={13} />
-          </button>
-        )}
+        {/* "Watch live" is shown on every browser tool-call row, not only while
+            the call is running: browser tools complete in well under a second,
+            but the agent's browser session persists afterwards, so the viewer
+            can open the live panel to watch/continue at any point. */}
+        <button
+          type="button"
+          onClick={handleWatchLive}
+          aria-label="Watch live"
+          title="Watch this agent's browser live"
+          className="shrink-0 flex items-center gap-1 px-2 py-1 rounded text-[10px] text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-accent)]"
+        >
+          <Broadcast size={13} />
+          <span>Watch live</span>
+        </button>
 
         <span className="flex items-center gap-1 shrink-0 pr-3 py-2">
           {renderStatusIcon()}
