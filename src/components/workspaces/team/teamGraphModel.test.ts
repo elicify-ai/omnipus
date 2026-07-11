@@ -195,7 +195,7 @@ describe('validateConnection', () => {
   })
 })
 
-// ── rejectionMessageForFailedConnection — live-UAT regression, persona "Sam" ──
+// ── rejectionMessageForFailedConnection — live-UAT regression ──
 // React Flow only calls `onConnect` when `isValidConnection` passed, so a
 // rejected drag (self-edge in particular) never reaches a handler wired to
 // `onConnect` — it's silently swallowed with zero feedback. The fix wires

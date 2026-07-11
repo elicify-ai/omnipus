@@ -464,7 +464,7 @@ function WorkspaceTeamGraphInner({
     [editState, workerIds, onConnect, onRejectConnection],
   )
 
-  // Bug fix (live-UAT, persona "Sam"): React Flow only calls `onConnect` when
+  // Bug fix (live-UAT): React Flow only calls `onConnect` when
   // `isValidConnection` passed — a REJECTED drag (self-edge, duplicate,
   // non-member) never reaches `handleConnect` above at all, so a self-edge
   // drop (e.g. jim → jim) produced no edge and zero feedback, and the drop

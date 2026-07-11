@@ -319,8 +319,8 @@ export const REJECTION_MESSAGE: Record<ConnectionRejection, string> = {
  * React Flow only invokes `onConnect` when `isValidConnection` passed — a
  * rejected drop (self-edge, duplicate, non-member) never reaches `onConnect`
  * at all, so a rejection handler wired there is unreachable dead code. The
- * drag is instead silently swallowed: no edge, no feedback (live-UAT bug,
- * persona "Sam" — dragging a handle back onto its own node). The one event
+ * drag is instead silently swallowed: no edge, no feedback (e.g. dragging a
+ * handle back onto its own node produces a silent no-op). The one event
  * React Flow ALWAYS fires, valid or not, is `onConnectEnd` — this helper
  * recomputes the same rejection reason from its `FinalConnectionState` so a
  * caller wired to `onConnectEnd` can surface it.
