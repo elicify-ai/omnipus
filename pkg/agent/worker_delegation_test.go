@@ -89,7 +89,7 @@ func TestSeededGraph_JimToAvaTaskAllowed(t *testing.T) {
 	coreagent.SeedConfig(cfg)
 	seedWorkspaceGraph(t, testWS, true, seedEdgesFromConfig(cfg))
 
-	check := buildDelegationDenyChecker(string(coreagent.IDJim), cfg.Agents.Defaults, config.DelegationModeTask)
+	check := buildDelegationDenyChecker(string(coreagent.IDJim), cfg.Agents.Defaults, config.DelegationModeTask, true)
 	if denial := check(ctxWS(testWS, 0), string(coreagent.IDAva)); denial != nil {
 		t.Fatalf("Jim → Ava (task) must be allowed, got deny: %+v", denial)
 	}
@@ -105,7 +105,7 @@ func TestSeededGraph_BaseToWorkerAllowed(t *testing.T) {
 	for _, id := range []coreagent.CoreAgentID{
 		coreagent.IDJim, coreagent.IDMia, coreagent.IDRay, coreagent.IDAva,
 	} {
-		check := buildDelegationDenyChecker(string(id), cfg.Agents.Defaults, config.DelegationModeTask)
+		check := buildDelegationDenyChecker(string(id), cfg.Agents.Defaults, config.DelegationModeTask, true)
 		if denial := check(ctxWS(testWS, 0), string(coreagent.IDWorker)); denial != nil {
 			t.Fatalf("%s → worker (task) must be allowed, got deny: %+v", id, denial)
 		}
@@ -119,7 +119,7 @@ func TestSeededGraph_DisallowedTargetDenied(t *testing.T) {
 	coreagent.SeedConfig(cfg)
 	seedWorkspaceGraph(t, testWS, true, seedEdgesFromConfig(cfg))
 
-	check := buildDelegationDenyChecker(string(coreagent.IDMia), cfg.Agents.Defaults, config.DelegationModeTask)
+	check := buildDelegationDenyChecker(string(coreagent.IDMia), cfg.Agents.Defaults, config.DelegationModeTask, true)
 	if denial := check(ctxWS(testWS, 0), string(coreagent.IDAva)); denial == nil {
 		t.Fatal("Mia → Ava must be DENIED (no edge in the seeded graph)")
 	}
@@ -133,12 +133,12 @@ func TestSeededGraph_JimAwaitModeAllowed(t *testing.T) {
 	coreagent.SeedConfig(cfg)
 	seedWorkspaceGraph(t, testWS, true, seedEdgesFromConfig(cfg))
 
-	jimCheck := buildDelegationDenyChecker(string(coreagent.IDJim), cfg.Agents.Defaults, config.DelegationModeAwait)
+	jimCheck := buildDelegationDenyChecker(string(coreagent.IDJim), cfg.Agents.Defaults, config.DelegationModeAwait, false)
 	if denial := jimCheck(ctxWS(testWS, 0), string(coreagent.IDWorker)); denial != nil {
 		t.Fatalf("Jim → worker (await) must be allowed, got deny: %+v", denial)
 	}
 
-	miaCheck := buildDelegationDenyChecker(string(coreagent.IDMia), cfg.Agents.Defaults, config.DelegationModeAwait)
+	miaCheck := buildDelegationDenyChecker(string(coreagent.IDMia), cfg.Agents.Defaults, config.DelegationModeAwait, false)
 	if denial := miaCheck(ctxWS(testWS, 0), string(coreagent.IDWorker)); denial == nil {
 		t.Fatal("Mia → worker (await) must be DENIED — Mia only has task/background seeded")
 	}

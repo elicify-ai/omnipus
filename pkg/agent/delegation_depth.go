@@ -67,8 +67,17 @@ func resolveEffectiveDelegationDepth(edgeDepth *int, globalMaxDepth int) int {
 //
 // Returns nil ("no override — fall back to spawnSubTurn's own, shared-function
 // default resolution via getSubTurnConfig") for:
-//   - self-assignment (targetAgentID == currentAgentID) — not delegation, no
-//     graph edge is consulted;
+//   - self-assignment (targetAgentID == currentAgentID) — a DEFENSIVE no-op that
+//     is UNREACHABLE for this resolver's only consumer, the delegate tool. The
+//     deny checker (buildDelegationDenyChecker with selfAssignmentExempt=false),
+//     consulted FIRST at the same call site (DelegateTool.executeRun runs the
+//     deny checker and returns on denial BEFORE calling this resolver), DENIES a
+//     self-targeted delegate() with trust_set — no self-edge can exist because
+//     workspace.DelegationEdge.Validate forbids one. So a self-target never
+//     reaches this branch; it is kept only as a fail-safe against a future
+//     reordering of the two checks (a regression that TestDelegateTool_
+//     SelfTargetDeniedBeforeDepthResolver guards). Do NOT treat this branch as a
+//     live "self is allowed" decision — it is not, self-delegation is denied;
 //   - the untargeted path (targetAgentID == "") — no single edge's Depth
 //     uniquely applies, since evalUntargetedDelegation may be satisfied by any
 //     one of several outgoing edges;
@@ -84,6 +93,9 @@ func buildDelegationDepthResolver(
 	globalDepthCap := defaults.SubTurn.MaxDepth
 
 	return func(ctx context.Context, targetAgentID string) *int {
+		// targetAgentID == currentAgentID is unreachable for the delegate tool:
+		// the deny checker (run first) already denied self-delegation. Untargeted
+		// ("") has no single edge whose Depth applies. Both are no-override no-ops.
 		if targetAgentID == "" || targetAgentID == currentAgentID {
 			return nil
 		}
