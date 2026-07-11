@@ -537,11 +537,11 @@ func (h *BrowserWSHandler) handleAttach(wc *browserWSConn, state *browserConnSta
 // stray mouse-move sent just before/after losing control is an expected,
 // frequent occurrence, and a status frame per rejected event would flood a
 // client that's still moving the mouse. Real failures (session not attached
-// at all, an unknown input kind, or — most importantly — a genuine CDP
-// transport error meaning the tab crashed or is unreachable) ARE surfaced,
-// throttled to at most one browser_status(error) per minInputErrorInterval
-// so a burst of failed dispatches against a dead tab can't flood the
-// connection.
+// at all, an unknown input kind, an SSRF-/scheme-blocked "navigate" URL
+// (ADR-039 D-A2), or — most importantly — a genuine CDP transport error
+// meaning the tab crashed or is unreachable) ARE surfaced, throttled to at
+// most one browser_status(error) per minInputErrorInterval so a burst of
+// failed dispatches against a dead tab can't flood the connection.
 func (h *BrowserWSHandler) handleInput(wc *browserWSConn, state *browserConnState, viewerID string, data []byte) {
 	if state.mgr == nil || state.sessionID == "" {
 		return
@@ -581,6 +581,9 @@ func (h *BrowserWSHandler) handleInput(wc *browserWSConn, state *browserConnStat
 	}
 	if frame.Text != nil {
 		in.Text = *frame.Text
+	}
+	if frame.Url != nil {
+		in.URL = *frame.Url
 	}
 	if frame.Modifiers != nil {
 		in.Modifiers = *frame.Modifiers

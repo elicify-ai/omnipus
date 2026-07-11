@@ -4862,6 +4862,12 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	// Token usage stats endpoint (Wave 2b).
 	// Traces to: contracts/components/schemas/TokenUsageSummary.yaml.
 	cm.RegisterHTTPHandler("/api/v1/stats/tokens", a.withAuth(withRateLimit(configLimiter, a.HandleTokenStats)))
+
+	// Best-effort DOM inspect for the live interactive browser panel
+	// (ADR-039 D-B3) — resolves the element at a point so the SPA can attach
+	// its text/HTML when a user annotates a spot. Sibling to, but registered
+	// independently of, /api/v1/browser/ws (gateway.go).
+	cm.RegisterHTTPHandler("/api/v1/browser/inspect", a.withAuth(a.HandleBrowserInspect))
 }
 
 // registerPreviewEndpoints registers /preview/ on the preview mux ONLY
