@@ -94,7 +94,16 @@ export async function submitAnnotation({ comment, file, point, sessionId, agentI
       const tag = inspectResult.tag?.trim()
       const text = inspectResult.text?.trim()
       if (text) {
-        finalComment = `${comment}\n\nElement: ${tag ? `${tag} — ${text}` : text}`
+        // UAT finding: the previous raw `Element: h1 — <text>` suffix read as
+        // authoritative — the agent quoted the whole label (prefix included) as
+        // "the exact text in the region" instead of reading the image. Frame it
+        // explicitly as auto-detected *context* with the image as source of
+        // truth, and cap the length so a large element doesn't dump a wall of
+        // text into the chat comment.
+        const snippet = text.length > 280 ? `${text.slice(0, 280)}…` : text
+        finalComment = `${comment}\n\n[Auto-detected context for the annotated region${
+          tag ? ` (<${tag}>)` : ''
+        }: "${snippet}". The attached image is the source of truth — describe what you see there.]`
       }
     }
   } catch {
