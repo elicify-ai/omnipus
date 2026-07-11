@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/chromedp/chromedp"
 
@@ -23,6 +24,33 @@ const (
 	inspectMaxTextChars = 8000
 	inspectMaxHTMLChars = 16000
 )
+
+// inspectEvalTimeout bounds InspectPoint's chromedp.Evaluate round trip.
+// Deliberately much shorter than BrowserManager.PageTimeout() (the budget
+// for a full page load/navigation, commonly 30s+) — document.elementFromPoint
+// is a trivial synchronous DOM query, not a page load, so there is no reason
+// to let it wait as long as a full page when the shared CDP command queue is
+// contended (every chromedp.Run for this browser process funnels through one
+// fixed-capacity command queue drained by one goroutine — see
+// handleScreencastEvent's doc comment in live.go for the full ADR-038
+// analysis of why one busy/wedged command can back up every other command on
+// this browser, any session, any tool).
+//
+// UAT finding (ADR-039 BE-2): a tester's pop-out annotate flow got a 502 from
+// /api/v1/browser/inspect. The gateway log showed InspectPoint's CDP call DID
+// fail cleanly with "context deadline exceeded" (the existing best-effort
+// contract below already degrades that to a soft {ok:false}) — but it took
+// the full m.PageTimeout() to get there, because a concurrent agent
+// browser_screenshot tool call had the shared CDP transport backed up at the
+// same moment. A ~30s-blocked HTTP handler is well within range to trip a
+// fronting reverse proxy's idle/response timeout (Vite's dev proxy, an
+// operator's nginx, etc.), which is what actually produced the 502 the
+// tester saw — even though this Go handler was always going to resolve to a
+// clean 200. Bounding this specific call tightly keeps the worst case within
+// a few seconds regardless of what else is contending for the transport,
+// mirroring the same "this should be fast, don't reuse the page-load budget"
+// pattern screencastAckTimeout (live.go) already established for frame acks.
+const inspectEvalTimeout = 5 * time.Second
 
 // InspectResult is the outcome of resolving the DOM element at a point on the
 // agent's shared live-view tab (ADR-039 D-B3).
@@ -107,29 +135,60 @@ func formatCoord(v float64) string {
 // chromedp.Run against the shared tab — it deliberately does not go through
 // the LiveView/live-view registry at all (no screencast, no control-lock
 // interaction), so it stays disjoint from live.go/browser_ws.go.
-func (m *BrowserManager) InspectPoint(x, y float64) (InspectResult, error) {
-	tabCtx, err := m.Session(DefaultSessionID)
-	if err != nil {
-		return InspectResult{}, fmt.Errorf("browser: inspect: cannot resolve session: %w", err)
+//
+// Panic-safe (ADR-039 UAT BE-2): the whole body runs under a defer/recover
+// that degrades ANY panic (a future chromedp/cdproto internal bug, a
+// malformed CDP response from a wedged/crashing tab, etc.) to the exact same
+// best-effort InspectResult{Ok:false}, err=nil outcome as every other
+// failure mode above, logged at ERROR so it's diagnosable server-side. Without
+// this, a panic here would unwind past net/http's per-request recover with no
+// response ever written, which the calling HTTP connection sees as an abrupt
+// reset — exactly the class of failure that can surface to a browser as a 502
+// through any fronting reverse proxy. The gateway's HandleBrowserInspect
+// (pkg/gateway/browser_inspect.go) is written entirely in terms of this
+// function's (result, err) contract and needs no panic-handling of its own as
+// long as that contract genuinely always holds — this is where it's enforced.
+func (m *BrowserManager) InspectPoint(x, y float64) (result InspectResult, err error) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			logger.ErrorCF("browser", "inspect: panic recovered, reporting best-effort no-result", map[string]any{
+				"panic":      fmt.Sprintf("%v", rec),
+				"session_id": DefaultSessionID,
+			})
+			result, err = InspectResult{}, nil
+		}
+	}()
+
+	tabCtx, sessionErr := m.Session(DefaultSessionID)
+	if sessionErr != nil {
+		return InspectResult{}, fmt.Errorf("browser: inspect: cannot resolve session: %w", sessionErr)
 	}
 
-	ctx, cancel := context.WithTimeout(tabCtx, m.PageTimeout())
+	// inspectEvalTimeout, not m.PageTimeout() — see its doc comment (ADR-039
+	// UAT BE-2): a DOM point-lookup is trivial and must fail fast under CDP
+	// transport contention, not wait as long as a full page load.
+	ctx, cancel := context.WithTimeout(tabCtx, inspectEvalTimeout)
 	defer cancel()
 
 	js := fmt.Sprintf(inspectJSTemplate, formatCoord(x), formatCoord(y), inspectMaxTextChars, inspectMaxHTMLChars)
 
+	runCDP := m.evalCDP
+	if runCDP == nil {
+		runCDP = chromedp.Run
+	}
+
 	var res inspectEvalResult
-	if err := chromedp.Run(ctx, chromedp.Evaluate(js, &res)); err != nil {
+	if runErr := runCDP(ctx, chromedp.Evaluate(js, &res)); runErr != nil {
 		// Best-effort (see doc comment above): still report "nothing
 		// resolved" to the caller rather than propagating the CDP/eval error
 		// — but log it first (7-reviewer MEDIUM finding). Without this, a
-		// crashed/wedged tab or a call that timed out against m.PageTimeout()
-		// was silently indistinguishable from the normal "no element under
-		// the point" outcome (which logs nothing, by design — see the
-		// !res.Ok branch below), making a real infrastructure problem
-		// undiagnosable from the logs.
+		// crashed/wedged tab or a call that timed out against
+		// inspectEvalTimeout was silently indistinguishable from the normal
+		// "no element under the point" outcome (which logs nothing, by
+		// design — see the !res.Ok branch below), making a real
+		// infrastructure problem undiagnosable from the logs.
 		logger.WarnCF("browser", "inspect: CDP/eval round trip failed, reporting best-effort no-result", map[string]any{
-			"error":      err.Error(),
+			"error":      runErr.Error(),
 			"session_id": DefaultSessionID,
 		})
 		return InspectResult{}, nil

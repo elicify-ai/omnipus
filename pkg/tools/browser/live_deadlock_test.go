@@ -59,11 +59,12 @@ func TestLiveView_Attach_DoesNotHoldMutexAcrossCDPCall(t *testing.T) {
 
 	mgr := &BrowserManager{cfg: BrowserConfig{PageTimeout: 5 * time.Second}}
 	lv := &LiveView{
-		mgr:         mgr,
-		sessionID:   "s1",
-		viewers:     make(map[string]FrameSink),
-		statusSinks: make(map[string]StatusSink),
-		ackCh:       make(chan int64, 1),
+		mgr:          mgr,
+		sessionID:    "s1",
+		viewers:      make(map[string]FrameSink),
+		statusSinks:  make(map[string]StatusSink),
+		controlSinks: make(map[string]ControlSink),
+		ackCh:        make(chan int64, 1),
 		runCDP: func(ctx context.Context, timeout time.Duration, actions ...chromedp.Action) error {
 			close(cdpStarted)
 			select {
@@ -86,7 +87,8 @@ func TestLiveView_Attach_DoesNotHoldMutexAcrossCDPCall(t *testing.T) {
 
 	attachDone := make(chan error, 1)
 	go func() {
-		attachDone <- lv.attach(tabCtx, "viewer1", func(LiveFrame) {}, nil)
+		_, err := lv.attach(tabCtx, "viewer1", func(LiveFrame) {}, nil, nil)
+		attachDone <- err
 	}()
 
 	select {

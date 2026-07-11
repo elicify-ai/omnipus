@@ -505,6 +505,109 @@ func TestLiveView_TakeReleaseControl(t *testing.T) {
 	require.True(t, lv.takeControl("viewerB"))
 }
 
+// TestLiveView_TakeReleaseControl_BroadcastsToOtherViewers is the focused
+// regression test for ADR-039 UAT finding BE-1 ("two viewers of the same
+// live browser session disagree about who's driving"): the server has
+// always single-controller-locked (takeControl/releaseControl above), but
+// before this fix no OTHER attached connection ever learned about a
+// take/release — each one kept showing whatever status frame it happened to
+// receive last. Simulates two fake connections (conn A, conn B) attached to
+// the same session via their registered ControlSinks — no CDP/chromedp
+// needed, this is pure LiveView bookkeeping (see the file header comment).
+func TestLiveView_TakeReleaseControl_BroadcastsToOtherViewers(t *testing.T) {
+	lv := &LiveView{sessionID: "s1", viewers: make(map[string]FrameSink), controlSinks: make(map[string]ControlSink)}
+
+	var muA, muB sync.Mutex
+	var gotA, gotB []bool
+	lv.controlSinks["connA"] = func(controlledByOther bool) { muA.Lock(); gotA = append(gotA, controlledByOther); muA.Unlock() }
+	lv.controlSinks["connB"] = func(controlledByOther bool) { muB.Lock(); gotB = append(gotB, controlledByOther); muB.Unlock() }
+
+	require.True(t, lv.takeControl("connA"))
+
+	muA.Lock()
+	require.Empty(t, gotA, "the acting connection is never broadcast to — it gets its own direct browser_status response instead")
+	muA.Unlock()
+	muB.Lock()
+	require.Equal(t, []bool{true}, gotB, "conn B (not the new controller) must be told someone else now controls")
+	muB.Unlock()
+
+	lv.releaseControl("connA")
+
+	muB.Lock()
+	require.Equal(t, []bool{true, false}, gotB, "conn B must be told control was freed")
+	muB.Unlock()
+	muA.Lock()
+	require.Empty(t, gotA, "the acting connection is still never broadcast to on its own release")
+	muA.Unlock()
+}
+
+// TestLiveView_TakeReleaseControl_BroadcastSkippedOnDeniedTake verifies a
+// DENIED take (someone else already controls) never fans out — the control
+// state didn't actually change, so no OTHER viewer's display should move.
+func TestLiveView_TakeReleaseControl_BroadcastSkippedOnDeniedTake(t *testing.T) {
+	lv := &LiveView{sessionID: "s1", viewers: make(map[string]FrameSink), controlSinks: make(map[string]ControlSink)}
+
+	var muC sync.Mutex
+	var gotC []bool
+	lv.controlSinks["connC"] = func(controlledByOther bool) { muC.Lock(); gotC = append(gotC, controlledByOther); muC.Unlock() }
+
+	require.True(t, lv.takeControl("connA"))
+	muC.Lock()
+	require.Equal(t, []bool{true}, gotC)
+	muC.Unlock()
+
+	// connB's take is denied (connA already controls) — must not re-notify connC.
+	require.False(t, lv.takeControl("connB"))
+	muC.Lock()
+	require.Equal(t, []bool{true}, gotC, "a denied take must not re-broadcast")
+	muC.Unlock()
+
+	// connB releasing (it never held control) is a no-op — must not broadcast.
+	lv.releaseControl("connB")
+	muC.Lock()
+	require.Equal(t, []bool{true}, gotC, "releasing as a non-controller must not broadcast")
+	muC.Unlock()
+}
+
+// TestLiveView_Attach_ReturnsControlledByOtherForNewViewer covers the
+// "attaches while already controlled" half of ADR-039 UAT BE-1: a NEW
+// connection attaching to a session some other viewer already controls must
+// see controlled_by_other=true on its very first status frame, not only on
+// the next take/release broadcast. Exercises the piggyback attach path (a
+// screencast already active) so no chromedp.Run(StartScreencast) call is
+// needed — see attach()'s isActiveLocked branch.
+func TestLiveView_Attach_ReturnsControlledByOtherForNewViewer(t *testing.T) {
+	lv := &LiveView{
+		sessionID:    "s1",
+		viewers:      make(map[string]FrameSink),
+		statusSinks:  make(map[string]StatusSink),
+		controlSinks: make(map[string]ControlSink),
+	}
+	// Fake an already-active screencast so attach() takes the piggyback path
+	// (no CDP call) — same technique as TestLiveView_Detach_RefCountsViewers.
+	listenCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	lv.tabCtx = context.Background()
+	lv.listenCtx = listenCtx
+
+	require.True(t, lv.takeControl("viewerA"))
+
+	controlledByOther, err := lv.attach(context.Background(), "viewerB", func(LiveFrame) {}, nil, nil)
+	require.NoError(t, err)
+	require.True(t, controlledByOther, "a new viewer attaching while another viewer already controls must see controlled_by_other=true")
+
+	// The controller itself sees controlled_by_other=false on its own (re-)attach.
+	controlledByOther, err = lv.attach(context.Background(), "viewerA", func(LiveFrame) {}, nil, nil)
+	require.NoError(t, err)
+	require.False(t, controlledByOther, "the controller's own attach must never report itself as 'someone else'")
+
+	// A third viewer attaching after control was released sees false.
+	lv.releaseControl("viewerA")
+	controlledByOther, err = lv.attach(context.Background(), "viewerC", func(LiveFrame) {}, nil, nil)
+	require.NoError(t, err)
+	require.False(t, controlledByOther, "an uncontrolled session must report controlled_by_other=false to a new attach")
+}
+
 // --- LiveViewRegistry: session keying, default-session resolution, and the
 //     public surface the gateway's WS handler drives. ---
 
