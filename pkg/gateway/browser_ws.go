@@ -89,23 +89,37 @@ func (c *browserWSConn) sendFrameGen(frame any) {
 // error) — these carry state transitions the SPA needs to see, unlike the
 // high-volume screencast stream. Blocks briefly rather than silently
 // dropping; gives up after 2s so a wedged connection can't hang the caller.
-func (c *browserWSConn) sendCritical(data []byte) {
+// dropCtx is a short, caller-supplied identifier (see dropContext) logged
+// ONLY if the frame is actually dropped (B6, 7-reviewer finding): before
+// this the drop-warning below carried nothing identifying, making a dropped
+// control-sync/error frame — now the SOLE trail of that event — impossible
+// to correlate with a specific session/viewer after the fact.
+func (c *browserWSConn) sendCritical(data []byte, dropCtx string) {
 	select {
 	case c.sendCh <- data:
 	case <-c.doneCh:
 	case <-time.After(2 * time.Second):
-		slog.Warn("browser-ws: send channel full, dropping critical frame")
+		slog.Warn("browser-ws: send channel full, dropping critical frame", "context", dropCtx)
 	}
 }
 
 // sendCriticalGen marshals and enqueues a critical frame via sendCritical.
-func (c *browserWSConn) sendCriticalGen(frame any) {
+// dropCtx is forwarded verbatim — see sendCritical's doc comment.
+func (c *browserWSConn) sendCriticalGen(frame any, dropCtx string) {
 	data, err := json.Marshal(frame)
 	if err != nil {
 		slog.Error("browser-ws: marshal frame failed", "error", err)
 		return
 	}
-	c.sendCritical(data)
+	c.sendCritical(data, dropCtx)
+}
+
+// dropContext builds the short, human-readable identifier sendCritical(Gen)
+// logs on a drop (B6): session id + viewer id + a short label for what was
+// being sent, using whichever the call site has cheaply on hand (sessionID
+// may legitimately be "" before a live view is attached).
+func dropContext(sessionID, viewerID, label string) string {
+	return fmt.Sprintf("session=%q viewer=%q frame=%s", sessionID, viewerID, label)
 }
 
 // browserConnState tracks the single live-browser attachment this connection
@@ -411,7 +425,7 @@ func (h *BrowserWSHandler) readLoop(conn *websocket.Conn, wc *browserWSConn, vie
 			wc.sendCriticalGen(generated.ErrorFrame{
 				Type:    string(generated.WsFrameTypeError),
 				Message: "invalid frame: not JSON",
-			})
+			}, dropContext("", viewerID, "invalid-json"))
 			continue
 		}
 
@@ -434,7 +448,8 @@ func (h *BrowserWSHandler) readLoop(conn *websocket.Conn, wc *browserWSConn, vie
 						slog.Warn("browser-ws: inbound frame schema validation failed — dropping",
 							"schema", schemaName, "frame_type", typ.Type, "error", errMsg)
 					}
-					wc.sendCriticalGen(errorStatus(fmt.Sprintf("frame schema validation failed (%s): %s", schemaName, errMsg)))
+					wc.sendCriticalGen(errorStatus(fmt.Sprintf("frame schema validation failed (%s): %s", schemaName, errMsg)),
+						dropContext("", viewerID, "schema-invalid:"+typ.Type))
 					continue
 				}
 			}
@@ -453,7 +468,7 @@ func (h *BrowserWSHandler) readLoop(conn *websocket.Conn, wc *browserWSConn, vie
 			wc.sendCriticalGen(generated.ErrorFrame{
 				Type:    string(generated.WsFrameTypeError),
 				Message: fmt.Sprintf("unknown frame type %q", typ.Type),
-			})
+			}, dropContext("", viewerID, "unknown-type:"+typ.Type))
 		}
 	}
 }
@@ -479,11 +494,12 @@ func (h *BrowserWSHandler) readLoop(conn *websocket.Conn, wc *browserWSConn, vie
 func (h *BrowserWSHandler) handleAttach(wc *browserWSConn, state *browserConnState, viewerID, userID string, data []byte) {
 	var frame generated.BrowserAttachFrame
 	if err := json.Unmarshal(data, &frame); err != nil {
-		wc.sendCriticalGen(errorStatus("browser_attach: invalid frame"))
+		wc.sendCriticalGen(errorStatus("browser_attach: invalid frame"), dropContext("", viewerID, "attach-invalid"))
 		return
 	}
 	if frame.AgentId == "" || frame.SessionId == "" {
-		wc.sendCriticalGen(errorStatus("browser_attach: agent_id and session_id are required"))
+		wc.sendCriticalGen(errorStatus("browser_attach: agent_id and session_id are required"),
+			dropContext(frame.SessionId, viewerID, "attach-missing-fields"))
 		return
 	}
 
@@ -496,7 +512,8 @@ func (h *BrowserWSHandler) handleAttach(wc *browserWSConn, state *browserConnSta
 	mgr, ok := h.agentLoop.BrowserManagerForAgent(frame.AgentId)
 	if !ok {
 		wc.sendCriticalGen(sessionErrorStatus(frame.SessionId,
-			fmt.Sprintf("no browser manager for agent %q (browser tools may not be registered for this agent)", frame.AgentId)))
+			fmt.Sprintf("no browser manager for agent %q (browser tools may not be registered for this agent)", frame.AgentId)),
+			dropContext(frame.SessionId, viewerID, "attach-no-manager"))
 		return
 	}
 
@@ -523,7 +540,7 @@ func (h *BrowserWSHandler) handleAttach(wc *browserWSConn, state *browserConnSta
 		// client so it can re-attach (which resolves the CURRENT manager via
 		// BrowserManagerForAgent) instead of silently watching a frozen frame
 		// forever.
-		wc.sendCriticalGen(sessionErrorStatus(chatSessionID, message))
+		wc.sendCriticalGen(sessionErrorStatus(chatSessionID, message), dropContext(chatSessionID, viewerID, "status-death"))
 	}, func(controlledByOther bool) {
 		// ADR-039 UAT BE-1: fan-out from LiveView.takeControl/releaseControl —
 		// some OTHER connection on this session just took or released
@@ -540,10 +557,22 @@ func (h *BrowserWSHandler) handleAttach(wc *browserWSConn, state *browserConnSta
 			State:             "idle",
 			SessionId:         &chatSessionID,
 			ControlledByOther: &cbo,
-		})
+			// ControlOnly (B1): this frame's SOLE purpose is to update
+			// control-ownership on this OTHER viewer — it carries no real
+			// lifecycle/error meaning. Without this flag it's
+			// indistinguishable on the wire from a genuine status
+			// transition, so the SPA was wiping any displayed error banner
+			// and resetting other state on every take/release/detach by a
+			// DIFFERENT viewer. Deliberately NOT set on the initial attach
+			// response below (state="attached") — that one is a real
+			// lifecycle frame that also happens to carry
+			// controlled_by_other.
+			ControlOnly: boolPtr(true),
+		}, dropContext(chatSessionID, viewerID, "control-broadcast"))
 	})
 	if err != nil {
-		wc.sendCriticalGen(sessionErrorStatus(chatSessionID, fmt.Sprintf("browser_attach failed: %s", err)))
+		wc.sendCriticalGen(sessionErrorStatus(chatSessionID, fmt.Sprintf("browser_attach failed: %s", err)),
+			dropContext(chatSessionID, viewerID, "attach-failed"))
 		return
 	}
 
@@ -556,7 +585,7 @@ func (h *BrowserWSHandler) handleAttach(wc *browserWSConn, state *browserConnSta
 		State:             "attached",
 		SessionId:         &chatSessionID,
 		ControlledByOther: &cbo,
-	})
+	}, dropContext(chatSessionID, viewerID, "attach-ok"))
 }
 
 // handleInput dispatches a viewer input event, gated by the LiveView's
@@ -575,7 +604,13 @@ func (h *BrowserWSHandler) handleAttach(wc *browserWSConn, state *browserConnSta
 // but a DIFFERENT failure message (e.g. the user's quick retry against a
 // different blocked navigate URL) is never suppressed just for landing
 // inside that same cooldown window (7-reviewer LOW finding: the user must
-// always see WHY their navigate was refused).
+// always see WHY their navigate was refused), AND a "navigate"-kind error is
+// NEVER throttled at all regardless of message content (B4, 7-reviewer
+// finding): unlike a mouse-move stream, a navigate is one submission per
+// Enter keypress, and the SPA clears its error banner optimistically on each
+// submit — so suppressing even a byte-identical repeat (e.g. resubmitting
+// the exact same blocked URL) would leave the user looking at no error at
+// all after their retry was refused again.
 func (h *BrowserWSHandler) handleInput(wc *browserWSConn, state *browserConnState, viewerID string, data []byte) {
 	if state.mgr == nil || state.sessionID == "" {
 		return
@@ -631,10 +666,23 @@ func (h *BrowserWSHandler) handleInput(wc *browserWSConn, state *browserConnStat
 		slog.Warn("browser-ws: input dispatch failed", "error", err, "session_id", state.sessionID)
 		message := fmt.Sprintf("browser input failed: %s", err)
 		now := time.Now()
-		if message != state.lastInputErrorMessage || now.Sub(state.lastInputErrorSentAt) >= minInputErrorInterval {
+		// B4 (7-reviewer finding): a navigate error is one-per-Enter and
+		// user-initiated, unlike the high-frequency mouse_move/etc kinds this
+		// cooldown exists to tame. The SPA clears its error banner
+		// optimistically on every navigate submit, so suppressing a
+		// byte-identical repeat here — the same URL rejected twice in a row
+		// — would leave the user looking at NO error after resubmitting,
+		// even though their submission was refused again. Navigate errors
+		// therefore always emit; every other kind keeps the content-aware
+		// cooldown.
+		throttled := frame.Kind != "navigate" &&
+			message == state.lastInputErrorMessage &&
+			now.Sub(state.lastInputErrorSentAt) < minInputErrorInterval
+		if !throttled {
 			state.lastInputErrorSentAt = now
 			state.lastInputErrorMessage = message
-			wc.sendCriticalGen(sessionErrorStatus(state.sessionID, message))
+			wc.sendCriticalGen(sessionErrorStatus(state.sessionID, message),
+				dropContext(state.sessionID, viewerID, "input-error"))
 		}
 	}
 }
@@ -647,12 +695,14 @@ func (h *BrowserWSHandler) handleInput(wc *browserWSConn, state *browserConnStat
 // requirement.
 func (h *BrowserWSHandler) handleControl(wc *browserWSConn, state *browserConnState, viewerID, userID string, data []byte, cfg *config.Config) {
 	if state.mgr == nil || state.sessionID == "" {
-		wc.sendCriticalGen(errorStatus("browser_control: attach before requesting control"))
+		wc.sendCriticalGen(errorStatus("browser_control: attach before requesting control"),
+			dropContext("", viewerID, "control-not-attached"))
 		return
 	}
 	var frame generated.BrowserControlFrame
 	if err := json.Unmarshal(data, &frame); err != nil {
-		wc.sendCriticalGen(errorStatus("browser_control: invalid frame"))
+		wc.sendCriticalGen(errorStatus("browser_control: invalid frame"),
+			dropContext(state.sessionID, viewerID, "control-invalid"))
 		return
 	}
 
@@ -664,12 +714,14 @@ func (h *BrowserWSHandler) handleControl(wc *browserWSConn, state *browserConnSt
 	case "take":
 		if !cfg.Tools.Browser.TakeControlEnabled {
 			h.auditControl(userID, chatSessionID, viewerID, audit.SeverityWarn, "take_control_disabled")
-			wc.sendCriticalGen(sessionErrorStatus(chatSessionID, "take-control is disabled by the operator"))
+			wc.sendCriticalGen(sessionErrorStatus(chatSessionID, "take-control is disabled by the operator"),
+				dropContext(chatSessionID, viewerID, "control-take-disabled"))
 			return
 		}
 		if !state.mgr.Live().TakeControl(browser.DefaultSessionID, viewerID) {
 			h.auditControl(userID, chatSessionID, viewerID, audit.SeverityWarn, "already_controlled")
-			wc.sendCriticalGen(sessionErrorStatus(chatSessionID, "another viewer already controls this browser"))
+			wc.sendCriticalGen(sessionErrorStatus(chatSessionID, "another viewer already controls this browser"),
+				dropContext(chatSessionID, viewerID, "control-take-denied"))
 			return
 		}
 		h.auditControl(userID, chatSessionID, viewerID, audit.SeverityInfo, "take")
@@ -679,7 +731,7 @@ func (h *BrowserWSHandler) handleControl(wc *browserWSConn, state *browserConnSt
 			State:      "controlling",
 			SessionId:  &chatSessionID,
 			Controller: &controller,
-		})
+		}, dropContext(chatSessionID, viewerID, "control-take-ok"))
 	case "release":
 		state.mgr.Live().ReleaseControl(browser.DefaultSessionID, viewerID)
 		h.auditRelease(userID, chatSessionID, viewerID)
@@ -687,9 +739,10 @@ func (h *BrowserWSHandler) handleControl(wc *browserWSConn, state *browserConnSt
 			Type:      string(generated.WsFrameTypeBrowserStatus),
 			State:     "released",
 			SessionId: &chatSessionID,
-		})
+		}, dropContext(chatSessionID, viewerID, "control-release-ok"))
 	default:
-		wc.sendCriticalGen(errorStatus(fmt.Sprintf("browser_control: unknown action %q", frame.Action)))
+		wc.sendCriticalGen(errorStatus(fmt.Sprintf("browser_control: unknown action %q", frame.Action)),
+			dropContext(chatSessionID, viewerID, "control-unknown-action"))
 	}
 }
 
@@ -706,7 +759,7 @@ func (h *BrowserWSHandler) handleDetach(wc *browserWSConn, state *browserConnSta
 		Type:      string(generated.WsFrameTypeBrowserStatus),
 		State:     "detached",
 		SessionId: &chatSessionID,
-	})
+	}, dropContext(chatSessionID, viewerID, "detach-ok"))
 }
 
 // detach releases viewerID from the live view (stopping the screencast if it

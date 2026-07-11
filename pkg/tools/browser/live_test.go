@@ -505,6 +505,39 @@ func TestLiveView_TakeReleaseControl(t *testing.T) {
 	require.True(t, lv.takeControl("viewerB"))
 }
 
+// requireControlBroadcast reads the next value off ch, failing the test if
+// none arrives within a generous bound. Needed because broadcastControl (B2,
+// live.go) dispatches each ControlSink on its own goroutine rather than
+// invoking it inline — takeControl/releaseControl/detach all return before
+// their broadcast(s) are actually delivered, so a test asserting on a
+// ControlSink's output must synchronize on the channel, not on the
+// take/release call returning.
+func requireControlBroadcast(t *testing.T, ch <-chan bool, want bool, msg string) {
+	t.Helper()
+	select {
+	case got := <-ch:
+		require.Equal(t, want, got, msg)
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for control broadcast: %s", msg)
+	}
+}
+
+// requireNoControlBroadcast asserts nothing arrives on ch within a short
+// bounded window. This is a ceiling on how long an (incorrect) broadcast
+// would take to arrive, not a synchronization mechanism — every EXPECTED
+// broadcast preceding this call has already been drained via
+// requireControlBroadcast, so there is nothing legitimately in flight this
+// could race against; a value landing here would only ever be an erroneous
+// extra broadcast the fix under test must not produce.
+func requireNoControlBroadcast(t *testing.T, ch <-chan bool, msg string) {
+	t.Helper()
+	select {
+	case got := <-ch:
+		t.Fatalf("unexpected control broadcast %v: %s", got, msg)
+	case <-time.After(150 * time.Millisecond):
+	}
+}
+
 // TestLiveView_TakeReleaseControl_BroadcastsToOtherViewers is the focused
 // regression test for ADR-039 UAT finding BE-1 ("two viewers of the same
 // live browser session disagree about who's driving"): the server has
@@ -514,31 +547,25 @@ func TestLiveView_TakeReleaseControl(t *testing.T) {
 // receive last. Simulates two fake connections (conn A, conn B) attached to
 // the same session via their registered ControlSinks — no CDP/chromedp
 // needed, this is pure LiveView bookkeeping (see the file header comment).
+// Uses buffered channels (not a captured slice) because broadcastControl
+// (B2) delivers asynchronously, on its own goroutine per sink.
 func TestLiveView_TakeReleaseControl_BroadcastsToOtherViewers(t *testing.T) {
 	lv := &LiveView{sessionID: "s1", viewers: make(map[string]FrameSink), controlSinks: make(map[string]ControlSink)}
 
-	var muA, muB sync.Mutex
-	var gotA, gotB []bool
-	lv.controlSinks["connA"] = func(controlledByOther bool) { muA.Lock(); gotA = append(gotA, controlledByOther); muA.Unlock() }
-	lv.controlSinks["connB"] = func(controlledByOther bool) { muB.Lock(); gotB = append(gotB, controlledByOther); muB.Unlock() }
+	gotA := make(chan bool, 4)
+	gotB := make(chan bool, 4)
+	lv.controlSinks["connA"] = func(controlledByOther bool) { gotA <- controlledByOther }
+	lv.controlSinks["connB"] = func(controlledByOther bool) { gotB <- controlledByOther }
 
 	require.True(t, lv.takeControl("connA"))
 
-	muA.Lock()
-	require.Empty(t, gotA, "the acting connection is never broadcast to — it gets its own direct browser_status response instead")
-	muA.Unlock()
-	muB.Lock()
-	require.Equal(t, []bool{true}, gotB, "conn B (not the new controller) must be told someone else now controls")
-	muB.Unlock()
+	requireControlBroadcast(t, gotB, true, "conn B (not the new controller) must be told someone else now controls")
+	requireNoControlBroadcast(t, gotA, "the acting connection is never broadcast to — it gets its own direct browser_status response instead")
 
 	lv.releaseControl("connA")
 
-	muB.Lock()
-	require.Equal(t, []bool{true, false}, gotB, "conn B must be told control was freed")
-	muB.Unlock()
-	muA.Lock()
-	require.Empty(t, gotA, "the acting connection is still never broadcast to on its own release")
-	muA.Unlock()
+	requireControlBroadcast(t, gotB, false, "conn B must be told control was freed")
+	requireNoControlBroadcast(t, gotA, "the acting connection is still never broadcast to on its own release")
 }
 
 // TestLiveView_TakeReleaseControl_BroadcastSkippedOnDeniedTake verifies a
@@ -547,26 +574,45 @@ func TestLiveView_TakeReleaseControl_BroadcastsToOtherViewers(t *testing.T) {
 func TestLiveView_TakeReleaseControl_BroadcastSkippedOnDeniedTake(t *testing.T) {
 	lv := &LiveView{sessionID: "s1", viewers: make(map[string]FrameSink), controlSinks: make(map[string]ControlSink)}
 
-	var muC sync.Mutex
-	var gotC []bool
-	lv.controlSinks["connC"] = func(controlledByOther bool) { muC.Lock(); gotC = append(gotC, controlledByOther); muC.Unlock() }
+	gotC := make(chan bool, 4)
+	lv.controlSinks["connC"] = func(controlledByOther bool) { gotC <- controlledByOther }
 
 	require.True(t, lv.takeControl("connA"))
-	muC.Lock()
-	require.Equal(t, []bool{true}, gotC)
-	muC.Unlock()
+	requireControlBroadcast(t, gotC, true, "connA's successful take must broadcast true to connC")
 
 	// connB's take is denied (connA already controls) — must not re-notify connC.
 	require.False(t, lv.takeControl("connB"))
-	muC.Lock()
-	require.Equal(t, []bool{true}, gotC, "a denied take must not re-broadcast")
-	muC.Unlock()
+	requireNoControlBroadcast(t, gotC, "a denied take must not re-broadcast")
 
 	// connB releasing (it never held control) is a no-op — must not broadcast.
 	lv.releaseControl("connB")
-	muC.Lock()
-	require.Equal(t, []bool{true}, gotC, "releasing as a non-controller must not broadcast")
-	muC.Unlock()
+	requireNoControlBroadcast(t, gotC, "releasing as a non-controller must not broadcast")
+}
+
+// TestLiveView_Detach_ImplicitReleaseBroadcastsToOtherViewers is the coverage
+// gap the review flagged (B3): detach() broadcasts controlledByOther=false to
+// other viewers when the CONTROLLING connection disconnects WITHOUT ever
+// calling releaseControl() itself — a distinct code path from
+// TestLiveView_TakeReleaseControl_BroadcastsToOtherViewers above (which only
+// exercises the explicit-release branch). Mirrors
+// TestLiveView_Detach_ReleasesControl's setup but adds a second viewer (B)
+// with a registered ControlSink to observe the implicit-release fan-out.
+func TestLiveView_Detach_ImplicitReleaseBroadcastsToOtherViewers(t *testing.T) {
+	lv := &LiveView{sessionID: "s1", viewers: make(map[string]FrameSink), controlSinks: make(map[string]ControlSink)}
+	lv.viewers["viewerA"] = func(LiveFrame) {}
+	lv.viewers["viewerB"] = func(LiveFrame) {}
+
+	gotB := make(chan bool, 4)
+	lv.controlSinks["viewerB"] = func(controlledByOther bool) { gotB <- controlledByOther }
+
+	require.True(t, lv.takeControl("viewerA"))
+	require.Equal(t, "viewerA", lv.getController())
+
+	// viewerA disconnects without ever sending browser_control{action:"release"}.
+	lv.detach("viewerA")
+
+	require.Equal(t, "", lv.getController(), "a departing controller must never leave the lock dangling")
+	requireControlBroadcast(t, gotB, false, "viewerB must learn the lock was implicitly freed by viewerA's detach, not just an explicit release")
 }
 
 // TestLiveView_Attach_ReturnsControlledByOtherForNewViewer covers the

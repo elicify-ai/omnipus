@@ -97,6 +97,11 @@ type browserFrameDecoder struct { // not-wire-format: decode-only test assertion
 	// distinguish "field absent" from "field present and false" — the wire
 	// field is `omitempty`, so a plain bool would silently conflate the two.
 	ControlledByOther *bool `json:"controlled_by_other,omitempty"`
+	// ControlOnly (B1, 7-reviewer finding) is set true only on a
+	// control-ownership-only broadcast (handleAttach's onControl callback) —
+	// never on a real lifecycle frame such as the initial attach response.
+	// Pointer for the same "absent vs. false" reason as ControlledByOther.
+	ControlOnly *bool `json:"control_only,omitempty"`
 }
 
 // newBrowserWSTestHandler builds a BrowserWSHandler backed by a minimal
@@ -798,14 +803,17 @@ func TestBrowserWS_HandleControl_UnknownAction_Rejected(t *testing.T) {
 // TestBrowserWS_HandleInput_ThrottleIsContentAware verifies the
 // minInputErrorInterval cooldown only suppresses a REPEATED, IDENTICAL
 // failure message — never a genuinely different one, even inside the same
-// window. Producing two truly distinct dispatchInput failures needs an
-// attached, real CDP tab (see this file's header comment on why full
-// attach+screencast is reserved for the browserWSSkipIfNoBrowser-gated
+// window. Uses a "mouse_move" frame (not "navigate" — B4 exempts navigate
+// from this cooldown entirely, see TestBrowserWS_HandleInput_Navigate_
+// AlwaysBypassesThrottle below) as the high-frequency kind this cooldown
+// actually exists for. Producing two truly distinct dispatchInput failures
+// needs an attached, real CDP tab (see this file's header comment on why
+// full attach+screencast is reserved for the browserWSSkipIfNoBrowser-gated
 // suite), so the "different message" half of this test pre-seeds
 // browserConnState.lastInputErrorMessage with a synthetic prior value —
 // isolating the throttle's own content-comparison logic (handleInput's
-// `message != state.lastInputErrorMessage || ... >= minInputErrorInterval`
-// condition) from dispatchInput's specific failure text.
+// throttled-frame.Kind/message/interval condition) from dispatchInput's
+// specific failure text.
 // BDD: Given a real dispatch failure (control taken but never attached, so
 // dispatchInput fails closed at "session is not attached" every time),
 // When the SAME failure repeats immediately (within minInputErrorInterval),
@@ -820,14 +828,14 @@ func TestBrowserWS_HandleInput_ThrottleIsContentAware(t *testing.T) {
 		"test setup: take control WITHOUT a real attach, so dispatchInput fails deterministically "+
 			"and identically every call ('session is not attached', tabCtx nil) — no CDP/browser needed")
 
-	navURL := "http://8.8.8.8/"
-	navigateFrame, err := json.Marshal(generated.BrowserInputFrame{
-		Type: string(generated.WsFrameTypeBrowserInput), Kind: "navigate", Url: &navURL,
+	mmX, mmY := 10.0, 20.0
+	moveFrame, err := json.Marshal(generated.BrowserInputFrame{
+		Type: string(generated.WsFrameTypeBrowserInput), Kind: "mouse_move", X: &mmX, Y: &mmY,
 	})
 	require.NoError(t, err)
 
 	// First call: nothing recorded yet, must send immediately.
-	handler.handleInput(wc, state, "viewer1", navigateFrame)
+	handler.handleInput(wc, state, "viewer1", moveFrame)
 	first := readWCFrame(t, wc, 2*time.Second)
 	assert.Equal(t, "browser_status", first.Type)
 	assert.Equal(t, "error", first.State)
@@ -835,7 +843,7 @@ func TestBrowserWS_HandleInput_ThrottleIsContentAware(t *testing.T) {
 
 	// Second call, immediately after (well inside minInputErrorInterval),
 	// with the IDENTICAL underlying failure — must be throttled (no frame).
-	handler.handleInput(wc, state, "viewer1", navigateFrame)
+	handler.handleInput(wc, state, "viewer1", moveFrame)
 	select {
 	case f := <-wc.sendCh:
 		t.Fatalf("an identical repeated error must still be throttled inside minInputErrorInterval, got: %s", f)
@@ -845,16 +853,62 @@ func TestBrowserWS_HandleInput_ThrottleIsContentAware(t *testing.T) {
 
 	// Simulate the connection's last-sent message having been something
 	// else (in production this would be a genuinely different failure, e.g.
-	// a different blocked navigate URL) — the throttle must compare against
-	// the CURRENT failure's own message and send immediately, not stay
-	// suppressed just because it landed inside the same 2s window.
+	// a stray mouse-move right after the tab died a different way) — the
+	// throttle must compare against the CURRENT failure's own message and
+	// send immediately, not stay suppressed just because it landed inside
+	// the same 2s window.
 	state.lastInputErrorMessage = "a completely different prior failure message"
-	handler.handleInput(wc, state, "viewer1", navigateFrame)
+	handler.handleInput(wc, state, "viewer1", moveFrame)
 	third := readWCFrame(t, wc, 2*time.Second)
 	assert.Equal(t, "browser_status", third.Type)
 	assert.Equal(t, "error", third.State)
 	assert.NotEqual(t, "a completely different prior failure message", third.Message,
 		"the frame sent must carry the NEW dispatch failure's own message, not the pre-seeded one")
+}
+
+// TestBrowserWS_HandleInput_Navigate_AlwaysBypassesThrottle is the regression
+// test for B4 (7-reviewer finding): a user-initiated navigate error must
+// always surface, even a rapid identical resubmit of the same blocked URL —
+// unlike TestBrowserWS_HandleInput_ThrottleIsContentAware's mouse_move case
+// above, TWO byte-identical navigate-blocked errors sent back-to-back must
+// BOTH produce a browser_status(error) frame. Without this exemption, the
+// SPA (which clears its error banner optimistically on every navigate
+// submit) would leave the user looking at no error at all after resubmitting
+// the exact same bad URL within minInputErrorInterval.
+// BDD: Given a real dispatch failure on a "navigate" input (control taken
+// but never attached, so dispatchInput fails closed identically every call),
+// When the SAME navigate is resubmitted immediately (well inside
+// minInputErrorInterval), Then BOTH calls produce a browser_status(error)
+// frame — the cooldown that suppresses a repeated mouse_move failure must
+// never apply to "navigate".
+func TestBrowserWS_HandleInput_Navigate_AlwaysBypassesThrottle(t *testing.T) {
+	handler, _ := newBrowserWSTestHandler(t, nil)
+	wc, state := newControlTestFixtures(t)
+	require.True(t, state.mgr.Live().TakeControl(browser.DefaultSessionID, "viewer1"),
+		"test setup: take control WITHOUT a real attach, so dispatchInput fails deterministically "+
+			"and identically every call ('session is not attached', tabCtx nil) — no CDP/browser needed")
+
+	navURL := "http://8.8.8.8/"
+	navigateFrame, err := json.Marshal(generated.BrowserInputFrame{
+		Type: string(generated.WsFrameTypeBrowserInput), Kind: "navigate", Url: &navURL,
+	})
+	require.NoError(t, err)
+
+	handler.handleInput(wc, state, "viewer1", navigateFrame)
+	first := readWCFrame(t, wc, 2*time.Second)
+	assert.Equal(t, "browser_status", first.Type)
+	assert.Equal(t, "error", first.State)
+	assert.NotEmpty(t, first.Message)
+
+	// Immediate, byte-identical resubmit — well inside minInputErrorInterval.
+	// A non-navigate kind would be throttled here (see the sibling test
+	// above); navigate must NOT be.
+	handler.handleInput(wc, state, "viewer1", navigateFrame)
+	second := readWCFrame(t, wc, 2*time.Second)
+	assert.Equal(t, "browser_status", second.Type)
+	assert.Equal(t, "error", second.State)
+	assert.Equal(t, first.Message, second.Message,
+		"both calls dispatch the identical failing navigate — the message content is expected to match")
 }
 
 // ---------------------------------------------------------------------------
@@ -1022,12 +1076,14 @@ func TestBrowserWS_Control_ControlledByOther_BroadcastsToSecondConnection(t *tes
 	require.Equal(t, "attached", attachRespA.State, "conn A attach must succeed against a real headless Chromium: %+v", attachRespA)
 	require.NotNil(t, attachRespA.ControlledByOther)
 	assert.False(t, *attachRespA.ControlledByOther, "conn A attaches first — nobody controls yet")
+	assert.Nil(t, attachRespA.ControlOnly, "the initial attach response is a real lifecycle frame — control_only must not be set (B1)")
 
 	require.NoError(t, connB.WriteMessage(websocket.TextMessage, attachFrame("controlled-by-other-session")))
 	attachRespB := readBrowserStatusFrame(t, connB, 20*time.Second)
 	require.Equal(t, "attached", attachRespB.State, "conn B attach (piggyback on A's screencast) must succeed: %+v", attachRespB)
 	require.NotNil(t, attachRespB.ControlledByOther)
 	assert.False(t, *attachRespB.ControlledByOther, "still nobody controls at conn B's attach time")
+	assert.Nil(t, attachRespB.ControlOnly, "the initial attach response is a real lifecycle frame — control_only must not be set (B1)")
 
 	control := func(action string) []byte {
 		data, err := json.Marshal(generated.BrowserControlFrame{Type: string(generated.WsFrameTypeBrowserControl), Action: action})
@@ -1042,12 +1098,17 @@ func TestBrowserWS_Control_ControlledByOther_BroadcastsToSecondConnection(t *tes
 	broadcastToB := readBrowserStatusFrame(t, connB, 5*time.Second)
 	require.NotNil(t, broadcastToB.ControlledByOther, "conn B must receive an unprompted controlled_by_other broadcast: %+v", broadcastToB)
 	assert.True(t, *broadcastToB.ControlledByOther, "conn B never took control — it must be told someone else did")
+	require.NotNil(t, broadcastToB.ControlOnly, "a take/release fan-out frame must be flagged control_only (B1): %+v", broadcastToB)
+	assert.True(t, *broadcastToB.ControlOnly, "conn B's frame carries no real lifecycle/error meaning — the SPA must not treat it as a status change")
 
 	require.NoError(t, connA.WriteMessage(websocket.TextMessage, control("release")))
 	releaseRespA := readBrowserStatusFrame(t, connA, 5*time.Second)
 	require.Equal(t, "released", releaseRespA.State, "conn A's own release response: %+v", releaseRespA)
+	assert.Nil(t, releaseRespA.ControlOnly, "conn A's own direct browser_status response is a real lifecycle frame, not a broadcast (B1)")
 
 	broadcastToB2 := readBrowserStatusFrame(t, connB, 5*time.Second)
 	require.NotNil(t, broadcastToB2.ControlledByOther)
 	assert.False(t, *broadcastToB2.ControlledByOther, "conn B must be told the lock was freed")
+	require.NotNil(t, broadcastToB2.ControlOnly, "the release fan-out frame must also be flagged control_only (B1): %+v", broadcastToB2)
+	assert.True(t, *broadcastToB2.ControlOnly)
 }
