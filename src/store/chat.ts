@@ -94,6 +94,20 @@ export type ChatMessage = Message & {
   spans?: SubagentSpan[]
   /** Agent that produced this message (assistant messages only). */
   agentId?: string
+  /**
+   * Turn-correlation id (Fix 5c; wire field ReplayMessageFrame.turn_id, sourced
+   * from TranscriptEntry.TurnID), stamped on assistant messages hydrated via WS
+   * replay. Lets a later `turn_canceled` replay entry find and re-mark this
+   * exact message as interrupted, without relying on stream adjacency — async
+   * delegation can interleave other agents'/turns' frames in between, so "last
+   * assistant message" is not a safe proxy for replay correlation. Not
+   * populated for messages created via live token streaming (TokenFrame
+   * carries no turn_id on the wire — live cancellation instead uses
+   * markLastMessageInterrupted()'s last-assistant scan) or via the REST
+   * cold-load path (fetchSessions), whose persisted entries already carry the
+   * true status directly and need no correlation.
+   */
+  turnId?: string
 }
 
 // Client-side truncation sentinel — parallel to server TruncatedResult/ToolResultRef shapes.
@@ -254,6 +268,28 @@ export function findLastAssistantMessageId(
   for (let i = order.length - 1; i >= 0; i--) {
     const id = order[i]
     if (messagesById[id]?.role === 'assistant') return id
+  }
+  return null
+}
+
+/**
+ * Find the id of the assistant message carrying the given turnId — used to
+ * correlate a replayed `turn_canceled` entry (Fix 5c) to the specific
+ * assistant message it interrupted. Deliberately independent of
+ * findLastAssistantMessageId: async delegation can interleave other agents'/
+ * turns' frames between an assistant entry and its later cancellation, so
+ * "last assistant message" is not a safe proxy here — only an exact turnId
+ * match is.
+ */
+export function findAssistantMessageIdByTurnId(
+  order: readonly string[],
+  messagesById: Record<string, ChatMessage>,
+  turnId: string,
+): string | null {
+  for (let i = order.length - 1; i >= 0; i--) {
+    const id = order[i]
+    const m = messagesById[id]
+    if (m?.role === 'assistant' && m.turnId === turnId) return id
   }
   return null
 }
@@ -1845,13 +1881,33 @@ export const useChatStore = create<ChatStore>((set, get) => {
                     timestamp: new Date().toISOString(),
                     status: 'streaming',
                     isStreaming: true,
-                    agentId: useSessionStore.getState().activeAgentId ?? undefined,
+                    // Fix 5a: prefer the real producer's agent id (populated by the
+                    // backend at token-emission time) over the client-side
+                    // activeAgentId guess — the guess is wrong for background/
+                    // delegated sub-turns where the true producer isn't "whoever
+                    // the user happens to be chatting with". Falls back to the
+                    // guess only for legacy/older frames that omit agent_id.
+                    agentId: frame.agent_id ?? useSessionStore.getState().activeAgentId ?? undefined,
                   }
                   draft.messagesById[placeholder.id] = placeholder
                   draft.messageOrder.push(placeholder.id)
                   lastMsgId = placeholder.id
                 }
                 const msg = draft.messagesById[lastMsgId]
+                // Fix 5a (cont.): the bubble being appended to here may be the
+                // OPTIMISTIC placeholder created synchronously in sendMessage()
+                // (which has no agentId yet — the true producer isn't known at
+                // send time) rather than the one created above. Stamp/refresh the
+                // attribution from the frame as soon as the backend tells us,
+                // rather than only at placeholder-creation time — this is the
+                // path that actually fires for the common "user message → agent
+                // reply" case. Strict improvement: only overrides when the frame
+                // carries agent_id; otherwise the existing value (possibly
+                // undefined, falling back to activeAgentId at render time) is
+                // left untouched — no behavior change for legacy frames.
+                if (frame.agent_id) {
+                  msg.agentId = frame.agent_id
+                }
                 msg.content = msg.content + frame.content
                 msg.isStreaming = true
                 msg.status = 'streaming'
@@ -2406,10 +2462,48 @@ export const useChatStore = create<ChatStore>((set, get) => {
           if (!targetSid) break
           sawReplayMessageThisTurn[targetSid] = true
           const replayFrame = frame as WsReplayMessageFrame
-          // FR-16: turn_canceled entries are metadata-only and must not render
-          // as chat bubbles. The preceding assistant entry with truncated:true
-          // (status:"interrupted") still renders with the (interrupted) suffix.
-          if (replayFrame.role === 'turn_canceled') break
+          // FR-16 / Fix 5c: turn_canceled entries are metadata-only and must
+          // never render as their own chat bubble. ReplayMessageFrame carries
+          // no status/truncated field, so — unlike a fresh REST cold-load,
+          // where the persisted TranscriptEntry.Status already says
+          // "interrupted" — this WS-replay path only learns a turn was
+          // cancelled from this separate turn_canceled entry, correlated by
+          // TurnId to the specific assistant entry it interrupted (both
+          // stamped from TranscriptEntry.TurnID by pkg/gateway/replay.go).
+          // Find that message via turnId (captured below whenever an
+          // assistant replay_message frame carries one) and mark it
+          // interrupted the same way the live-cancel path
+          // (markLastMessageInterrupted) does, so reload and live rendering
+          // match — that parity is the entire point of this fix.
+          if (replayFrame.role === 'turn_canceled') {
+            const canceledTurnId = replayFrame.turn_id
+            if (!canceledTurnId) {
+              // Legacy/undecorated cancellation entry (no turn_id) — nothing
+              // to correlate against. Drop gracefully rather than guessing at
+              // "last assistant message", which could mis-mark an unrelated
+              // turn when async delegation has interleaved other frames.
+              console.warn('chat.turn_canceled_missing_turn_id', { sessionId: targetSid })
+              logDiagnostic('chatTurnCanceledMissingTurnId', { sessionId: targetSid })
+              break
+            }
+            withBucket(targetSid, (b) => {
+              return produce(b, (draft) => {
+                const matchId = findAssistantMessageIdByTurnId(draft.messageOrder, draft.messagesById, canceledTurnId)
+                if (!matchId) {
+                  // No assistant message in this bucket carries this turnId
+                  // (e.g. evicted from the ring buffer, or replay delivered the
+                  // cancellation before its assistant entry). No-op — never
+                  // guess which message to mark.
+                  console.warn('chat.turn_canceled_no_match', { sessionId: targetSid, turnId: canceledTurnId })
+                  logDiagnostic('chatTurnCanceledNoMatch', { sessionId: targetSid, turnId: canceledTurnId })
+                  return
+                }
+                const m = draft.messagesById[matchId]
+                if (m) { m.isStreaming = false; m.status = 'interrupted' }
+              }) as Partial<SessionChatState>
+            })
+            break
+          }
           const role = (replayFrame.role || 'assistant') as 'user' | 'assistant'
           const text = replayFrame.content ?? ''
           const messageId = replayFrame.id
@@ -2421,6 +2515,11 @@ export const useChatStore = create<ChatStore>((set, get) => {
           // as absent — matches the renderer trim guard.
           const replayModelRaw = replayFrame.model
           const replayModel = typeof replayModelRaw === 'string' ? replayModelRaw.trim() : ''
+          // Fix 5c: turn-correlation id, stamped by the backend on assistant
+          // replay entries so a later turn_canceled entry (handled above) can
+          // find this exact message. Captured on the ChatMessage so it survives
+          // for the lifetime of the bucket entry (until ring-buffer eviction).
+          const replayTurnId = replayFrame.turn_id
           withBucket(targetSid, (b) => {
             return produce(b, (draft) => {
               // Cursor advancement is handled centrally before the switch (I1);
@@ -2485,6 +2584,9 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   // legacy frames and non-model-producing turns stay
                   // model-less.
                   if (replayModel) m.model = replayModel
+                  // Fix 5c: stamp the turn-correlation id so a later
+                  // turn_canceled replay entry can find this exact message.
+                  if (replayTurnId) m.turnId = replayTurnId
                   // Coalesce path: this empty placeholder was created by the
                   // turn's own tool_call_start frames, so any pending live tool
                   // calls belong to THIS assistant. Bake them in before the early
@@ -2537,6 +2639,11 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 // don't carry a producer model). Empty model is treated as
                 // absent so the renderer doesn't show a phantom footer.
                 ...(replayModel && role === 'assistant' ? { model: replayModel } : {}),
+                // Fix 5c: turn-correlation id. Only meaningful on assistant
+                // messages (the backend stamps turn_id on assistant + turn-
+                // cancellation entries only) — lets a later turn_canceled
+                // replay entry find this exact message.
+                ...(replayTurnId && role === 'assistant' ? { turnId: replayTurnId } : {}),
               }
               draft.messagesById[newMsg.id] = newMsg
               draft.messageOrder.push(newMsg.id)
