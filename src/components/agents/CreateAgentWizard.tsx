@@ -92,7 +92,6 @@ export interface WizardSubmitPayload {
     max_tool_calls_per_minute?: number
     max_cost_per_day?: number
   }
-  delegation_policy?: string
   timeout_seconds?: number
   max_tool_iterations?: number
   steering_mode?: 'one-at-a-time' | 'queue-and-process'
