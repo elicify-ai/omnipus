@@ -104,7 +104,7 @@ func TestUpdatePartial(t *testing.T) {
 // TestUpdate_TransitionToInProgress_StampsStartedAt is a regression test for
 // the Board card bug where "Started" never populated: a plain Update() call
 // that flips status into in_progress (the path the REST PATCH "Start" action
-// uses — see rest_tasks.go's handleTaskUpdate, which calls Store.Update
+// uses — see rest_tasks.go's handleTaskPatch, which calls Store.Update
 // directly rather than ClaimForRun) must stamp StartedAt itself when the
 // caller did not supply one, mirroring what ClaimForRun already does for the
 // scheduler/heartbeat dispatch path.
