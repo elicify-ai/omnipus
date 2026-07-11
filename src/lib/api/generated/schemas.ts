@@ -861,6 +861,19 @@ export const ErrorResponse = z
     details: z.object({}).partial().passthrough().optional(),
   })
   .passthrough();
+export const BrowserInspectRequest = z.object({
+  session_id: z.string().min(1).max(128),
+  agent_id: z.string().min(1).max(128),
+  x: z.number().gte(0),
+  y: z.number().gte(0),
+});
+export const BrowserInspectResponse = z.object({
+  ok: z.boolean(),
+  tag: z.string().max(64).optional(),
+  text: z.string().max(8192).optional(),
+  html: z.string().max(16384).optional(),
+  reason: z.string().max(256).optional(),
+});
 export const ValidateTokenResponse = z
   .object({ username: z.string() })
   .passthrough();
@@ -3310,6 +3323,39 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 405,
         description: `Method not allowed.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/browser/inspect",
+    alias: "browserInspect",
+    description: `Best-effort resolution of the element at a device-pixel point in the agent&#x27;s live browser tab, so the SPA can attach the element&#x27;s text/HTML as context when a user annotates a spot in the Live Browser panel. Requires authentication. Returns ok&#x3D;false (with a reason) when the element can&#x27;t be resolved (cross-origin frame, detached node, timeout); the SPA then falls back to the cropped-image annotation alone.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: BrowserInspectRequest,
+      },
+    ],
+    response: BrowserInspectResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
         schema: ErrorResponse,
       },
     ],
@@ -7565,7 +7611,7 @@ export const BrowserAttachFrame = z
 export const BrowserInputFrame = z
   .object({
     type: z.literal("browser_input"),
-    kind: z.enum(["mouse_move", "mouse_down", "mouse_up", "wheel", "key_down", "key_up", "text"]),
+    kind: z.enum(["mouse_move", "mouse_down", "mouse_up", "wheel", "key_down", "key_up", "text", "navigate"]),
     x: z.number().optional(),
     y: z.number().optional(),
     button: z.enum(["none", "left", "middle", "right", "back", "forward"]).optional(),
@@ -7575,6 +7621,7 @@ export const BrowserInputFrame = z
     code: z.string().max(64).optional(),
     text: z.string().max(8192).optional(),
     modifiers: z.number().int().min(0).max(15).optional(),
+    url: z.string().max(2048).optional(),
   })
   .strict();
 

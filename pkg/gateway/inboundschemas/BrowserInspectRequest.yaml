@@ -1,0 +1,31 @@
+title: BrowserInspectRequest
+description: >
+  Resolve the DOM element at a point in the live browser so the SPA can attach
+  the element's text/HTML as context when a user annotates a spot. Coordinates
+  are device (CSS) pixels of the screencast frame. Best-effort — see ADR-039.
+type: object
+required:
+  - session_id
+  - agent_id
+  - x
+  - y
+additionalProperties: false
+properties:
+  session_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: Browser session id (context/correlation; the live tab is the agent's default).
+  agent_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: Agent whose BrowserManager owns the live tab.
+  x:
+    type: number
+    minimum: 0
+    description: Device (CSS) x of the point to inspect.
+  y:
+    type: number
+    minimum: 0
+    description: Device (CSS) y of the point to inspect.

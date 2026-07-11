@@ -1,0 +1,30 @@
+title: BrowserInspectResponse
+description: >
+  Best-effort result of resolving the DOM element at a point in the live browser
+  (ADR-039). ok=false (with reason) when the element can't be resolved — e.g. a
+  cross-origin frame, a detached node, or a timeout — in which case the SPA falls
+  back to the cropped-image annotation alone.
+type: object
+required:
+  - ok
+additionalProperties: false
+properties:
+  ok:
+    type: boolean
+    description: Whether an element was resolved.
+  tag:
+    type: string
+    maxLength: 64
+    description: Resolved element tag name (e.g. "button", "a"), when ok.
+  text:
+    type: string
+    maxLength: 8192
+    description: Trimmed innerText of the resolved element (truncated), when ok.
+  html:
+    type: string
+    maxLength: 16384
+    description: Trimmed outerHTML of the resolved element (truncated), when ok.
+  reason:
+    type: string
+    maxLength: 256
+    description: Why resolution failed, when ok=false.

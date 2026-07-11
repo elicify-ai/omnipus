@@ -67,6 +67,7 @@ type BrowserInputFrame struct {
 	Modifiers *int     `json:"modifiers,omitempty"`
 	Text      *string  `json:"text,omitempty"`
 	Type      string   `json:"type"`
+	Url       *string  `json:"url,omitempty"`
 	X         *float64 `json:"x,omitempty"`
 	Y         *float64 `json:"y,omitempty"`
 }

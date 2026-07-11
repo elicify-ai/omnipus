@@ -77,6 +77,10 @@ components:
       $ref: ./components/schemas/LoginRequest.yaml
     LoginResponse:
       $ref: ./components/schemas/LoginResponse.yaml
+    BrowserInspectRequest:
+      $ref: ./components/schemas/BrowserInspectRequest.yaml
+    BrowserInspectResponse:
+      $ref: ./components/schemas/BrowserInspectResponse.yaml
     ChangePasswordRequest:
       $ref: ./components/schemas/ChangePasswordRequest.yaml
     OnboardingCompleteRequest:
@@ -652,6 +656,38 @@ paths:
           $ref: '#/components/responses/401Unauthorized'
         '429':
           $ref: '#/components/responses/429TooManyRequests'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+  /browser/inspect:
+    post:
+      operationId: browserInspect
+      summary: Resolve the DOM element at a point in the live browser (ADR-039)
+      description: >
+        Best-effort resolution of the element at a device-pixel point in the
+        agent's live browser tab, so the SPA can attach the element's text/HTML
+        as context when a user annotates a spot in the Live Browser panel.
+        Requires authentication. Returns ok=false (with a reason) when the element
+        can't be resolved (cross-origin frame, detached node, timeout); the SPA
+        then falls back to the cropped-image annotation alone.
+      tags:
+      - browser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BrowserInspectRequest'
+      responses:
+        '200':
+          description: Inspection result (ok true or false).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BrowserInspectResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
         '500':
           $ref: '#/components/responses/500InternalServerError'
   /auth/logout:

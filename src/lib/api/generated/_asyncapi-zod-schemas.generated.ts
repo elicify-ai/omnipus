@@ -418,7 +418,7 @@ export const BrowserAttachFrame = z
 export const BrowserInputFrame = z
   .object({
     type: z.literal("browser_input"),
-    kind: z.enum(["mouse_move", "mouse_down", "mouse_up", "wheel", "key_down", "key_up", "text"]),
+    kind: z.enum(["mouse_move", "mouse_down", "mouse_up", "wheel", "key_down", "key_up", "text", "navigate"]),
     x: z.number().optional(),
     y: z.number().optional(),
     button: z.enum(["none", "left", "middle", "right", "back", "forward"]).optional(),
@@ -428,6 +428,7 @@ export const BrowserInputFrame = z
     code: z.string().max(64).optional(),
     text: z.string().max(8192).optional(),
     modifiers: z.number().int().min(0).max(15).optional(),
+    url: z.string().max(2048).optional(),
   })
   .strict();
 

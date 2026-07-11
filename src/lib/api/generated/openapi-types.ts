@@ -24,6 +24,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/browser/inspect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resolve the DOM element at a point in the live browser (ADR-039)
+         * @description Best-effort resolution of the element at a device-pixel point in the agent's live browser tab, so the SPA can attach the element's text/HTML as context when a user annotates a spot in the Live Browser panel. Requires authentication. Returns ok=false (with a reason) when the element can't be resolved (cross-origin frame, detached node, timeout); the SPA then falls back to the cropped-image annotation alone.
+         */
+        post: operations["browserInspect"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/logout": {
         parameters: {
             query?: never;
@@ -2440,6 +2460,36 @@ export interface components {
              * @example API key stored in plaintext — set OMNIPUS_MASTER_KEY for encrypted storage
              */
             warning?: string;
+        };
+        /**
+         * BrowserInspectRequest
+         * @description Resolve the DOM element at a point in the live browser so the SPA can attach the element's text/HTML as context when a user annotates a spot. Coordinates are device (CSS) pixels of the screencast frame. Best-effort — see ADR-039.
+         */
+        BrowserInspectRequest: {
+            /** @description Browser session id (context/correlation; the live tab is the agent's default). */
+            session_id: string;
+            /** @description Agent whose BrowserManager owns the live tab. */
+            agent_id: string;
+            /** @description Device (CSS) x of the point to inspect. */
+            x: number;
+            /** @description Device (CSS) y of the point to inspect. */
+            y: number;
+        };
+        /**
+         * BrowserInspectResponse
+         * @description Best-effort result of resolving the DOM element at a point in the live browser (ADR-039). ok=false (with reason) when the element can't be resolved — e.g. a cross-origin frame, a detached node, or a timeout — in which case the SPA falls back to the cropped-image annotation alone.
+         */
+        BrowserInspectResponse: {
+            /** @description Whether an element was resolved. */
+            ok: boolean;
+            /** @description Resolved element tag name (e.g. "button", "a"), when ok. */
+            tag?: string;
+            /** @description Trimmed innerText of the resolved element (truncated), when ok. */
+            text?: string;
+            /** @description Trimmed outerHTML of the resolved element (truncated), when ok. */
+            html?: string;
+            /** @description Why resolution failed, when ok=false. */
+            reason?: string;
         };
         /** @description Body for POST /auth/change-password. Changes the authenticated user's own password. */
         ChangePasswordRequest: {
@@ -7875,6 +7925,33 @@ export interface operations {
             500: components["responses"]["500InternalServerError"];
         };
     };
+    browserInspect: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BrowserInspectRequest"];
+            };
+        };
+        responses: {
+            /** @description Inspection result (ok true or false). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrowserInspectResponse"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
     logout: {
         parameters: {
             query?: never;
@@ -12815,6 +12892,8 @@ export interface operations {
 export type ErrorResponse = components["schemas"]["ErrorResponse"];
 export type LoginRequest = components["schemas"]["LoginRequest"];
 export type LoginResponse = components["schemas"]["LoginResponse"];
+export type BrowserInspectRequest = components["schemas"]["BrowserInspectRequest"];
+export type BrowserInspectResponse = components["schemas"]["BrowserInspectResponse"];
 export type ChangePasswordRequest = components["schemas"]["ChangePasswordRequest"];
 export type OnboardingCompleteRequest = components["schemas"]["OnboardingCompleteRequest"];
 export type OnboardingCompleteResponse = components["schemas"]["OnboardingCompleteResponse"];
