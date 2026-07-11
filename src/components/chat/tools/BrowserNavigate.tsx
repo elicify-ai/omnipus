@@ -8,8 +8,11 @@ import {
   CaretDown,
   CaretUp,
   Camera,
+  Broadcast,
 } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
+import { useSessionStore } from '@/store/session'
+import { useUiStore } from '@/store/ui'
 
 interface BrowserNavigateArgs {
   url?: string
@@ -50,7 +53,7 @@ function parseResult(result: unknown): BrowserResult {
   return {}
 }
 
-function BrowserNavigateBlock({
+export function BrowserNavigateBlock({
   args,
   result,
   isRunning,
@@ -70,6 +73,20 @@ function BrowserNavigateBlock({
   const pageTitle = parsed.title
   const hasDetail = !isRunning && hasResult
 
+  // ADR-038: "Watch live" opens the app-root BrowserLivePanel overlay onto the
+  // browser session driving this tool call. Imperative store reads (not hooks)
+  // — mirrors BrowserToolBlock's handleWatchLive in BrowserTool.tsx exactly.
+  // Same v1 limitation applies: reads the globally-active session/agent, not
+  // necessarily the agent that owns THIS specific tool call.
+  function handleWatchLive() {
+    const { activeSessionId, activeAgentId } = useSessionStore.getState()
+    if (!activeSessionId || !activeAgentId) {
+      useUiStore.getState().addToast({ message: 'No active session to watch.', variant: 'error' })
+      return
+    }
+    useUiStore.getState().openBrowserPanel(activeSessionId, activeAgentId)
+  }
+
   return (
     <div
       className={cn(
@@ -79,37 +96,57 @@ function BrowserNavigateBlock({
           : 'border-[var(--color-border)]'
       )}
     >
-      {/* Header */}
-      <button
-        type="button"
-        onClick={() => hasDetail && setExpanded((e) => !e)}
-        className={cn(
-          'flex w-full items-center gap-2 px-3 py-2 bg-[var(--color-surface-1)] transition-colors text-left',
-          hasDetail && 'hover:bg-[var(--color-surface-2)] cursor-pointer',
-          !hasDetail && 'cursor-default'
-        )}
-        aria-expanded={expanded}
-        disabled={!hasDetail}
-      >
-        <Globe
-          size={13}
-          weight="duotone"
+      {/* Header — a row of composed controls (mirrors BrowserToolBlock in
+          BrowserTool.tsx): the expand/collapse toggle is its own button so
+          "Watch live" can be a separate, independently clickable sibling
+          rather than nested inside it. */}
+      <div className="flex w-full items-center gap-1 bg-[var(--color-surface-1)] transition-colors">
+        <button
+          type="button"
+          onClick={() => hasDetail && setExpanded((e) => !e)}
           className={cn(
-            isRunning ? 'text-[var(--color-accent)]' :
-            isError ? 'text-[var(--color-error)]' :
-            'text-[var(--color-secondary)]'
+            'flex flex-1 min-w-0 items-center gap-2 px-3 py-2 text-left',
+            hasDetail && 'hover:bg-[var(--color-surface-2)] cursor-pointer',
+            !hasDetail && 'cursor-default'
           )}
-        />
-        <span className="text-[var(--color-muted)] shrink-0">browser.navigate</span>
-        <span className="font-mono text-[var(--color-accent)] truncate flex-1 min-w-0 text-[10px]">
-          {displayUrl(url)}
-        </span>
-        {pageTitle && !isRunning && (
-          <span className="text-[var(--color-muted)] truncate max-w-[120px] text-[10px] hidden sm:inline">
-            {pageTitle}
+          aria-expanded={expanded}
+          disabled={!hasDetail}
+        >
+          <Globe
+            size={13}
+            weight="duotone"
+            className={cn(
+              isRunning ? 'text-[var(--color-accent)]' :
+              isError ? 'text-[var(--color-error)]' :
+              'text-[var(--color-secondary)]'
+            )}
+          />
+          <span className="text-[var(--color-muted)] shrink-0">browser.navigate</span>
+          <span className="font-mono text-[var(--color-accent)] truncate flex-1 min-w-0 text-[10px]">
+            {displayUrl(url)}
           </span>
-        )}
-        <span className="flex items-center gap-1 shrink-0">
+          {pageTitle && !isRunning && (
+            <span className="text-[var(--color-muted)] truncate max-w-[120px] text-[10px] hidden sm:inline">
+              {pageTitle}
+            </span>
+          )}
+        </button>
+
+        {/* "Watch live" is shown on every navigate row, running or completed —
+            browser.navigate is the near-universal first browser action, and
+            the agent's browser session persists after the call completes. */}
+        <button
+          type="button"
+          onClick={handleWatchLive}
+          aria-label="Watch live"
+          title="Watch this agent's browser live"
+          className="shrink-0 flex items-center gap-1 px-2 py-1 rounded text-[10px] text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-accent)]"
+        >
+          <Broadcast size={13} />
+          <span>Watch live</span>
+        </button>
+
+        <span className="flex items-center gap-1 shrink-0 pr-3 py-2">
           {isRunning ? (
             <ArrowsClockwise size={12} className="animate-spin text-[var(--color-accent)]" />
           ) : isError ? (
@@ -126,7 +163,7 @@ function BrowserNavigateBlock({
             </span>
           )}
         </span>
-      </button>
+      </div>
 
       {/* Detail panel */}
       {expanded && hasDetail && (
