@@ -393,10 +393,10 @@ func (t *DelegateTool) executeAsync(
 	// this async ack, then Finish(false)) in well under the time it takes
 	// the delegate to run even one tool call. Without Critical:true, the
 	// child sub-turn's own loop (pkg/agent/loop.go's "Parent turn ended"
-	// check, evaluated at the TOP of every iteration) treats
-	// !ts.critical && ts.IsParentEnded() as a signal to exit gracefully
-	// BEFORE making the next LLM call — silently discarding the delegate's
-	// real answer for any task needing more than a single LLM turn (i.e.
+	// check, evaluated early in each iteration, before the next LLM call)
+	// treats !ts.critical && ts.IsParentEnded() as a signal to exit
+	// gracefully — silently discarding the delegate's real answer for any
+	// task needing more than a single LLM turn (i.e.
 	// any task that calls a tool before its final answer). The delegate's
 	// pre-tool-call narration survives (persisted per-iteration), but the
 	// synthesized final answer is never produced at all: spawnSubTurn's

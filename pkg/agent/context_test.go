@@ -360,7 +360,7 @@ func TestBuildSystemPrompt_CustomAgentUsesDefaultIdentity(t *testing.T) {
 }
 
 // TestBuildSystemPrompt_NoEmojiRule_AppliesUniformly is a regression test for
-// the live-UAT finding (persona "Dana"): the seeded Worker subagent's
+// a live-UAT finding: the seeded Worker subagent's
 // self-identification reply persisted an emoji into the session transcript,
 // violating CLAUDE.md's "No emoji in stored data or UI chrome" rule. Worker's
 // compiled prompt is intentionally empty (coreagent.prompts["worker"] == ""),
