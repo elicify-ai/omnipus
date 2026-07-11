@@ -2465,13 +2465,24 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 // wsStreamer implements bus.Streamer, pushing token/done frames into a wsConn's send channel.
 // It also accumulates the full response to persist it to the session transcript on Finalize.
 type wsStreamer struct {
-	conn        *wsConn
-	chatID      string
-	sessionID   string                // for recording assistant message
-	agentStore  *session.UnifiedStore // for recording assistant message
-	agentID     string                // active agent at streamer creation time (for transcript AgentID)
-	channel     *webchatChannel       // to mark streaming complete and suppress duplicate Send()
-	accumulated strings.Builder       // accumulates full response text
+	conn       *wsConn
+	chatID     string
+	sessionID  string                // for recording assistant message
+	agentStore *session.UnifiedStore // for recording assistant message
+	// agentID identifies the producer this streamer's frames/transcript entry
+	// are attributed to. Initialized at streamer-creation time (GetStreamer) to
+	// the session's "active" agent — a reasonable default for the common case
+	// where the visibly-active chat agent is also the one producing this
+	// response. The agent loop overrides it via SetProducerAgentID with the
+	// TRUE per-turn producer (ts.agent.ID) immediately after obtaining the
+	// streamer for an LLM streaming call (FIX 5a) — required for
+	// background/delegated sub-turns, where the delegate's identity (per
+	// ADR-032, no inheritance from the parent) differs from the session's
+	// "active" (parent) agent. Guarded by statsMu since Update/Finalize may
+	// read it from a different goroutine than SetProducerAgentID writes it.
+	agentID     string
+	channel     *webchatChannel // to mark streaming complete and suppress duplicate Send()
+	accumulated strings.Builder // accumulates full response text
 
 	// producedModel is the model string that produced this streamed response.
 	// Set by the agent loop via SetProducedModel before Finalize so the
@@ -2510,6 +2521,28 @@ type wsStreamer struct {
 func (s *wsStreamer) SetProducedModel(model string) {
 	s.statsMu.Lock()
 	s.producedModel = strings.TrimSpace(model)
+	s.statsMu.Unlock()
+}
+
+// SetProducerAgentID overrides the streamer's attributed agent with the TRUE
+// per-turn producer (ts.agent.ID). Called by the agent loop (via the inline
+// SetProducerAgentID interface, mirroring the SetProducedModel/
+// SuppressTranscriptWrite pattern) immediately after obtaining the streamer
+// for an LLM streaming call, before any Update/Finalize can observe it.
+//
+// FIX 5a: without this, both the live TokenFrame.AgentId (Update) and the
+// persisted transcript entry (Finalize) fall back to the "active session
+// agent" guess computed at GetStreamer time — correct for an ordinary turn,
+// but wrong for a background/delegated sub-turn, where ADR-032 guarantees
+// the delegate runs as its own identity, never the parent's. A no-op on an
+// empty agentID so a caller that genuinely has no resolved agent (should not
+// happen in practice) cannot blank out the GetStreamer-time guess.
+func (s *wsStreamer) SetProducerAgentID(agentID string) {
+	if agentID == "" {
+		return
+	}
+	s.statsMu.Lock()
+	s.agentID = agentID
 	s.statsMu.Unlock()
 }
 
@@ -2562,11 +2595,23 @@ func (s *wsStreamer) SetTurnFailed(failed bool) {
 }
 
 func (s *wsStreamer) Update(_ context.Context, content string) error {
-	data, err := json.Marshal(generated.TokenFrame{
+	s.statsMu.Lock()
+	producerAgentID := s.agentID
+	s.statsMu.Unlock()
+
+	frame := generated.TokenFrame{
 		Type:      string(generated.WsFrameTypeToken),
 		Content:   content,
 		SessionId: s.sessionID,
-	})
+	}
+	// FIX 5a: attribute the frame to the turn's TRUE producer (stamped via
+	// SetProducerAgentID) rather than leaving the client to guess based on
+	// whichever agent it happens to be actively chatting with — wrong for
+	// background/delegated sub-turns.
+	if producerAgentID != "" {
+		frame.AgentId = &producerAgentID
+	}
+	data, err := json.Marshal(frame)
 	if err != nil {
 		return fmt.Errorf("ws: marshal token frame: %w", err)
 	}
@@ -2589,7 +2634,7 @@ func (s *wsStreamer) Update(_ context.Context, content string) error {
 	originalDropped := s.conn.droppedTokens.Load()
 	sendRawFrameBytes(s.conn, string(generated.WsFrameTypeToken), data)
 	if s.conn.droppedTokens.Load() > originalDropped {
-		slog.Warn("ws: token backpressure", "session_id", s.sessionID, "chat_id", s.chatID, "agent_id", s.agentID)
+		slog.Warn("ws: token backpressure", "session_id", s.sessionID, "chat_id", s.chatID, "agent_id", producerAgentID)
 		return fmt.Errorf("ws: token channel full, token dropped")
 	}
 	// Guarded by statsMu so StreamedContentLen() (read by the agent loop's
@@ -2657,6 +2702,10 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 	transcriptAlreadyPersisted := s.transcriptPersisted
 	producedModel := s.producedModel
 	turnFailed := s.statsTurnFailed
+	// FIX 5a: read under statsMu — SetProducerAgentID (called by the agent
+	// loop at streaming-call start) may run on a different goroutine than
+	// Finalize (called at turn end).
+	producerAgentID := s.agentID
 	s.statsMu.Unlock()
 	doneStats.Tokens = &tokensF
 	doneStats.Cost = &costF
@@ -2705,7 +2754,7 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 			entry := session.TranscriptEntry{
 				ID:        uuid.New().String(),
 				Role:      "assistant",
-				AgentID:   s.agentID,
+				AgentID:   producerAgentID,
 				Content:   content,
 				Timestamp: time.Now().UTC(),
 				Tokens:    int(tokensF),

@@ -45,6 +45,17 @@ type AsyncNotifyEvent struct {
 	ChatID string
 	// AgentID is the agent whose turn produced the background work.
 	AgentID string
+	// TranscriptSessionID is the transcript-store session ID the originating
+	// turn was persisting to (turnState.transcriptSessionID). FIX 5d: threaded
+	// through so the new turn Notify triggers persists into the SAME session
+	// the originating turn was writing to, instead of leaving the reconstructed
+	// turn with no transcript binding at all — which made persistence depend
+	// entirely on a live WebSocket connection still being open by the time the
+	// async result lands (see docs/internal/architecture/subturn.md). Empty
+	// when the producer had no transcript-bound turn (should not happen for a
+	// live turn today, but Notify treats it the same as any other unset field
+	// — best-effort, never a hard error).
+	TranscriptSessionID string
 	// SourceKind identifies the producer (e.g. "spawn", "bash", "delegate").
 	// Composed into the synthetic inbound message's sender CanonicalID as
 	// "async:<SourceKind>", exactly matching today's convention.
@@ -251,6 +262,13 @@ func (n *asyncNotifierImpl) Notify(ctx context.Context, event AsyncNotifyEvent) 
 			},
 			ChatID:  fmt.Sprintf("%s:%s", event.Channel, event.ChatID),
 			Content: event.Content,
+			// FIX 5d: dedicated carriers so processSystemMessage can resolve
+			// the TRUE originating agent and transcript session instead of
+			// guessing GetDefaultAgent() / leaving the reconstructed turn with
+			// no transcript binding at all. See bus.InboundMessage's doc
+			// comments on these two fields for the full rationale.
+			AsyncOriginAgentID:       event.AgentID,
+			AsyncTranscriptSessionID: event.TranscriptSessionID,
 		})
 	} else {
 		publishErr = fmt.Errorf("async notifier: no message bus available (source %q)", event.SourceKind)
