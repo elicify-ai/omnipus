@@ -2311,23 +2311,22 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 
 			// System messages are handled inline in a goroutine (no scope).
 			//
-			// FIX 5d follow-up (tracked, not fixed in this pass — see
-			// architect's review): before FIX 5d, an AsyncNotifier-originated
-			// system message was inert here w.r.t. the origin session (no
-			// TranscriptSessionID/TranscriptStore bound), so this lack of
-			// per-session serialization was harmless. FIX 5d now threads
-			// AsyncOriginAgentID/AsyncTranscriptSessionID through
-			// processSystemMessage, so this goroutine CAN run a real turn
-			// concurrently against the SAME origin session as a live user
-			// turn (unlike every other inbound message, which IS serialized
-			// per session via the sessionWorker pool below). File-level
-			// writes stay safe (UnifiedStore's mutex + WriteFileAtomic), so
-			// this is not a NEW corruption risk on its own, but the
-			// single-writer-per-session invariant other turn types rely on
-			// no longer holds for this specific path. Revisit if this proves
-			// to matter in practice (e.g. interleaved/out-of-order transcript
-			// entries for a session receiving both a live turn and an async
-			// delegate result at the same moment).
+			// FIX 5d follow-up — tracked as elicify-ai/omnipus#505 (filed,
+			// not fixed in this pass): before FIX 5d, an AsyncNotifier-
+			// originated system message was inert here w.r.t. the origin
+			// session (no TranscriptSessionID/TranscriptStore bound), so
+			// this lack of per-session serialization was harmless. FIX 5d
+			// now threads AsyncOriginAgentID/AsyncTranscriptSessionID
+			// through processSystemMessage, so this goroutine CAN run a real
+			// turn concurrently against the SAME origin session as a live
+			// user turn (unlike every other inbound message, which IS
+			// serialized per session via the sessionWorker pool below).
+			// File-level writes stay safe (UnifiedStore's mutex +
+			// WriteFileAtomic), so this is not a NEW corruption risk on its
+			// own, but the single-writer-per-session invariant other turn
+			// types rely on no longer holds for this specific path. See
+			// #505 for the suggested follow-up (route through sessionWorker,
+			// or prove file-level locking is sufficient and close it).
 			if msg.Channel == "system" {
 				// Track in activeRequests so graceful shutdown's
 				// WaitForActiveRequests drains this turn before teardown —

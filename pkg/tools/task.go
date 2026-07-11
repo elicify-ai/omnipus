@@ -116,12 +116,16 @@ type TaskCreateTool struct {
 	// type, independent of whether the caller may delegate to it), mirroring
 	// validateTaskAgentID's own check ordering.
 	//
-	// Nil (tests/standalone) fails OPEN, matching delegationDeny's established
-	// fail-open-when-unwired convention on this struct; the
-	// production agent loop MUST wire this via SetExternalCLIWorkerChecker
-	// (typically to (*config.Config).IsExternalCLIWorkerID via a closure that
-	// re-reads the live config, the same function rest_tasks.go's
-	// validateTaskAgentID calls).
+	// Nil (tests/standalone) fails OPEN by design: this is a categorical
+	// engine-limitation check on the TARGET agent's type, not a trust
+	// decision, so an unwired checker degrades to "no engine-limitation
+	// check performed" rather than "deny everything". This is NOT the same
+	// convention as delegationDeny (see above), which fails CLOSED when
+	// unwired because it IS a trust decision. The production agent loop
+	// MUST wire this via SetExternalCLIWorkerChecker (typically to
+	// (*config.Config).IsExternalCLIWorkerID via a closure that re-reads
+	// the live config, the same function rest_tasks.go's validateTaskAgentID
+	// calls).
 	externalCLIWorkerCheck func(agentID string) bool
 }
 
