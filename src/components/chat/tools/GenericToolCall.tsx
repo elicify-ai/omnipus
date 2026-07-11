@@ -8,8 +8,11 @@ import {
   CaretUp,
   Warning,
   DownloadSimple,
+  Broadcast,
 } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
+import { useSessionStore } from '@/store/session'
+import { useUiStore } from '@/store/ui'
 import type { MessagePartStatus } from '@assistant-ui/react'
 import type { TruncatedResult, MarshalErrorResult } from '@/lib/ws'
 import type { ToolResultRef, DelegationFailure } from '@/lib/api/generated/asyncapi-types'
@@ -299,6 +302,22 @@ export function GenericToolCall({
     return null
   }
 
+  // ADR-038: browser tool calls expose a "Watch live" launcher on their
+  // finalized/replayed row too. Browser tools complete sub-second, so the live
+  // AssistantUI block (which carries its own "Watch live") is essentially never
+  // seen — this GenericToolCall row is what the user actually looks at once the
+  // turn finalizes. Mirrors the web_serve replay-parity precedent (ChatScreen).
+  const isBrowserTool = /^browser[._]/.test(toolName)
+  function handleWatchLive() {
+    const { activeSessionId, activeAgentId } = useSessionStore.getState()
+    const sid = sessionId || activeSessionId
+    if (!sid || !activeAgentId) {
+      useUiStore.getState().addToast({ message: 'No active session to watch.', variant: 'error' })
+      return
+    }
+    useUiStore.getState().openBrowserPanel(sid, activeAgentId)
+  }
+
   let statusConfig: ToolBadgeStatusConfig
   if (isRunning) {
     statusConfig = getToolBadgeStatusConfig('running', { size: 12 })
@@ -334,32 +353,47 @@ export function GenericToolCall({
       data-tool={toolName}
       className={cn('mt-2 rounded-md border bg-[var(--color-surface-1)] text-xs font-mono overflow-hidden', statusConfig.border)}
     >
-      {/* Header row */}
-      <button
-        type="button"
-        onClick={() => hasDetail && setExpanded((e) => !e)}
-        className={cn(
-          'flex w-full items-center gap-2 px-3 py-2 text-left transition-colors',
-          hasDetail && 'hover:bg-[var(--color-surface-2)] cursor-pointer',
-          !hasDetail && 'cursor-default'
-        )}
-        aria-expanded={expanded}
-        disabled={!hasDetail}
-      >
-        <Wrench size={13} className="text-[var(--color-muted)] shrink-0" />
-        <span className="text-[var(--color-secondary)] font-medium">
-          {humanizeToolName(toolName)}
-        </span>
-        <span className="flex items-center gap-1 ml-1">
-          {statusConfig.icon}
-          <span className="text-[var(--color-muted)]">{statusConfig.label}</span>
-        </span>
-        {hasDetail && (
-          <span className="ml-auto text-[var(--color-muted)]">
-            {expanded ? <CaretUp size={12} /> : <CaretDown size={12} />}
+      {/* Header row — a composed row so browser tools can carry a separate,
+          independently clickable "Watch live" launcher next to the toggle. */}
+      <div className="flex w-full items-center">
+        <button
+          type="button"
+          onClick={() => hasDetail && setExpanded((e) => !e)}
+          className={cn(
+            'flex flex-1 min-w-0 items-center gap-2 px-3 py-2 text-left transition-colors',
+            hasDetail && 'hover:bg-[var(--color-surface-2)] cursor-pointer',
+            !hasDetail && 'cursor-default'
+          )}
+          aria-expanded={expanded}
+          disabled={!hasDetail}
+        >
+          <Wrench size={13} className="text-[var(--color-muted)] shrink-0" />
+          <span className="text-[var(--color-secondary)] font-medium">
+            {humanizeToolName(toolName)}
           </span>
+          <span className="flex items-center gap-1 ml-1">
+            {statusConfig.icon}
+            <span className="text-[var(--color-muted)]">{statusConfig.label}</span>
+          </span>
+          {hasDetail && (
+            <span className="ml-auto text-[var(--color-muted)]">
+              {expanded ? <CaretUp size={12} /> : <CaretDown size={12} />}
+            </span>
+          )}
+        </button>
+        {isBrowserTool && (
+          <button
+            type="button"
+            onClick={handleWatchLive}
+            aria-label="Watch live"
+            title="Watch this agent's browser live"
+            className="shrink-0 flex items-center gap-1 px-2 py-2 text-[10px] text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-accent)]"
+          >
+            <Broadcast size={13} />
+            <span>Watch live</span>
+          </button>
         )}
-      </button>
+      </div>
 
       {/* Expanded detail */}
       {expanded && hasDetail && (

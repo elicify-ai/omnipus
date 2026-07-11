@@ -69,7 +69,9 @@ describe('baked/replay tool chips — humanized label, raw id preserved', () => 
         />,
       )
 
-      fireEvent.click(screen.getByRole('button'))
+      // The expand toggle is the button carrying aria-expanded; browser tools
+      // also render a separate "Watch live" button, so disambiguate.
+      fireEvent.click(screen.getByRole('button', { expanded: false }))
 
       // (b) Expanded "Tool" section shows the raw id verbatim.
       const badge = screen.getByTestId('tool-call-badge')
