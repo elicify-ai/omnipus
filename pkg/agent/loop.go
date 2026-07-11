@@ -4843,8 +4843,27 @@ func (al *AgentLoop) processSystemMessage(
 		return "", nil
 	}
 
-	// Use default agent for system messages
-	agent := al.GetRegistry().GetDefaultAgent()
+	// FIX 5d (#1): resolve the TRUE originating agent when the message carries
+	// one (AsyncNotifier.Notify sets AsyncOriginAgentID for an async tool/
+	// delegate result) — never guess GetDefaultAgent() when the real producer
+	// is known. This is the confirmed, exact cause of a live "Worker vs Jim"
+	// speaker-attribution flip: an async result from a non-default agent used
+	// to be silently reattributed to whichever agent happens to be default.
+	// GetDefaultAgent() remains the fallback for messages with no async
+	// origin (or a named agent that has since been deleted) — a genuine
+	// last resort, not the primary path.
+	var agent *AgentInstance
+	if msg.AsyncOriginAgentID != "" {
+		if named, ok := al.GetRegistry().GetAgent(msg.AsyncOriginAgentID); ok && named != nil {
+			agent = named
+		} else {
+			logger.WarnCF("agent", "processSystemMessage: named async origin agent not found; falling back to default agent",
+				map[string]any{"agent_id": msg.AsyncOriginAgentID})
+		}
+	}
+	if agent == nil {
+		agent = al.GetRegistry().GetDefaultAgent()
+	}
 	if agent == nil {
 		return "", fmt.Errorf("no default agent for system message")
 	}
@@ -4852,14 +4871,39 @@ func (al *AgentLoop) processSystemMessage(
 	// Use the origin session for context
 	sessionKey := routing.BuildAgentMainSessionKey(agent.ID)
 
+	// FIX 5d (#2): resolve the originating turn's transcript session/store so
+	// this reconstructed turn persists into the SAME session the producing
+	// turn was writing to — the same "run a turn that must land in a
+	// specific, pre-existing session" pattern ProcessScheduled and
+	// spawnSubTurn already use (al.ResolveSessionStore /
+	// TranscriptSessionID+TranscriptStore threading). Without this,
+	// persistence depended ENTIRELY on a live WebSocket connection still
+	// being open when the async result landed — if it had already closed,
+	// the result was silently, permanently lost. A session ID that no longer
+	// resolves to a store (deleted session) degrades to "not persisted" —
+	// the same outcome as before this fix, not a new failure mode.
+	var transcriptSessionID string
+	var transcriptStore *session.UnifiedStore
+	if msg.AsyncTranscriptSessionID != "" {
+		if store := al.ResolveSessionStore(msg.AsyncTranscriptSessionID); store != nil {
+			transcriptSessionID = msg.AsyncTranscriptSessionID
+			transcriptStore = store
+		} else {
+			logger.WarnCF("agent", "processSystemMessage: async transcript session not found; result will not be persisted to a session",
+				map[string]any{"session_id": msg.AsyncTranscriptSessionID})
+		}
+	}
+
 	return al.runAgentLoop(ctx, agent, processOptions{
-		SessionKey:      sessionKey,
-		Channel:         originChannel,
-		ChatID:          originChatID,
-		UserMessage:     fmt.Sprintf("[System: %s] %s", msg.Sender.CanonicalID, msg.Content),
-		DefaultResponse: "Background task completed.",
-		EnableSummary:   false,
-		SendResponse:    true,
+		SessionKey:          sessionKey,
+		Channel:             originChannel,
+		ChatID:              originChatID,
+		UserMessage:         fmt.Sprintf("[System: %s] %s", msg.Sender.CanonicalID, msg.Content),
+		DefaultResponse:     "Background task completed.",
+		EnableSummary:       false,
+		SendResponse:        true,
+		TranscriptSessionID: transcriptSessionID,
+		TranscriptStore:     transcriptStore,
 	})
 }
 
@@ -5780,6 +5824,9 @@ turnLoop:
 				logger.DebugCF("agent", "Provider supports streaming, checking for streamer", map[string]any{"channel": ts.channel, "chat_id": ts.chatID})
 				if streamer, hasStreamer := al.bus.GetStreamer(providerCtx, ts.channel, ts.chatID, ts.transcriptSessionID); hasStreamer {
 					logger.InfoCF("agent", "Using streaming for response", map[string]any{"channel": ts.channel, "chat_id": ts.chatID})
+					// FIX 5a: stamp the TRUE per-turn producer before any token can
+					// flow — see stampStreamerProducerAgentID's doc comment.
+					ts.stampStreamerProducerAgentID(streamer)
 					var lastChunk string
 					resp, streamErr := sp.ChatStream(providerCtx, messagesForCall, toolDefsForCall, llmModel, llmOpts, func(accumulated string) {
 						// B4: if the turn has been abandoned (stuck-goroutine detach),
@@ -6895,11 +6942,16 @@ turnLoop:
 					ts.scope.meta(toolIteration, "runTurn", "turn.follow_up.queued"),
 				)
 				if notifyErr := al.asyncNotifier.Notify(notifyCtx, AsyncNotifyEvent{
-					Channel:    ts.channel,
-					ChatID:     ts.chatID,
-					AgentID:    ts.agent.ID,
-					SourceKind: asyncToolName,
-					Content:    content,
+					Channel: ts.channel,
+					ChatID:  ts.chatID,
+					AgentID: ts.agent.ID,
+					// FIX 5d: thread the originating turn's transcript binding
+					// through so the reconstructed turn persists into the SAME
+					// session, independent of whether a live WS connection is
+					// still open when the async result lands.
+					TranscriptSessionID: ts.transcriptSessionID,
+					SourceKind:          asyncToolName,
+					Content:             content,
 				}); notifyErr != nil {
 					logger.ErrorCF("agent", "Failed to publish async tool result; result permanently lost",
 						map[string]any{"tool": asyncToolName, "channel": ts.channel, "error": notifyErr.Error()})

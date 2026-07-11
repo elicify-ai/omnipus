@@ -542,6 +542,27 @@ func (ts *turnState) markLastStreamerTranscriptPersisted() {
 	}
 }
 
+// stampStreamerProducerAgentID stamps the TRUE per-turn producer (ts.agent.ID)
+// onto a freshly-obtained streamer, before any token can flow through it.
+//
+// FIX 5a: without this, a streaming-capable streamer's own "active session
+// agent" guess (computed by the channel Manager/WSHandler at GetStreamer
+// time, from session metadata) leaks into both the live TokenFrame.AgentId
+// and the streamer's own Finalize transcript entry. That guess is correct
+// for an ordinary turn, but wrong for a background/delegated sub-turn: per
+// ADR-032 (no inheritance from the parent), the delegate runs as its own
+// identity, never the parent's, so the session's "active" (parent) agent and
+// this specific turn's real producer (ts.agent.ID) can legitimately differ.
+//
+// Uses a type-assertion to an inline interface so bus.Streamer needs no new
+// method — non-webchat streamers (telegram, wecom, sse) are untouched; only
+// wsStreamer implements SetProducerAgentID.
+func (ts *turnState) stampStreamerProducerAgentID(streamer bus.Streamer) {
+	if pas, ok := streamer.(interface{ SetProducerAgentID(string) }); ok && ts.agent != nil {
+		pas.SetProducerAgentID(ts.agent.ID)
+	}
+}
+
 // streamerStatsSetter is an optional interface a Streamer may implement to
 // receive turn-end stats (tokens, cost, duration) before Finalize is called.
 // The ws streamer uses this to populate the "done" frame so the chat UI shows
