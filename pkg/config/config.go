@@ -3192,9 +3192,21 @@ type BrowserToolConfig struct {
 	// opted in by the operator since evaluate runs arbitrary JavaScript.
 	EvaluateEnabled bool `json:"evaluate_enabled" env:"OMNIPUS_TOOLS_BROWSER_EVALUATE_ENABLED"`
 	// LiveViewEnabled gates the ADR-038 live interactive browser panel: the
-	// /api/v1/browser/ws screencast relay. Defaults to true. Setting this
-	// false makes the gateway refuse every browser_attach with a
-	// browser_status(error) frame — no second listener, no extra surface.
+	// /api/v1/browser/ws screencast relay. Defaults to true.
+	//
+	// IMPORTANT: this does NOT control whether the /api/v1/browser/ws route
+	// or HTTP handler exists — that WebSocket endpoint is ALWAYS registered
+	// on the gateway's single listener (see gateway.go's newBrowserWSHandler
+	// call site), unlike gateway.preview_listener_enabled, which really does
+	// start/skip a SECOND TCP listener on gateway.preview_port. Setting this
+	// false only changes what happens AFTER a client connects and
+	// authenticates: the gateway accepts the WS upgrade as normal, then
+	// refuses the first browser_attach with a browser_status(error) frame
+	// instead of starting a screencast. This is deliberate (ADR-038 D6's
+	// comment on the handler): rejecting post-auth with a parseable error
+	// frame gives the SPA a clear, typed reason, whereas refusing the
+	// upgrade itself would surface to browser JS as an opaque WebSocket
+	// error with no message.
 	LiveViewEnabled bool `json:"live_view_enabled" env:"OMNIPUS_TOOLS_BROWSER_LIVE_VIEW_ENABLED"`
 	// TakeControlEnabled gates interactive input injection on top of
 	// LiveViewEnabled (ADR-038 D6). Defaults to true. Setting this false

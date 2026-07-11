@@ -5,6 +5,7 @@
 package gateway
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
@@ -109,12 +110,32 @@ func (c *browserWSConn) sendCriticalGen(frame any) {
 
 // browserConnState tracks the single live-browser attachment this connection
 // currently holds. Mutated only from readLoop's goroutine — the screencast
-// FrameSink callback (a different goroutine, driven by chromedp's CDP event
-// dispatch) never touches it, only wc.sendFrame(Gen), which is channel-safe.
+// FrameSink/StatusSink callbacks (a different goroutine, driven by chromedp's
+// CDP event dispatch) never touch it, only wc.sendFrame(Gen)/wc.sendCritical(Gen),
+// which are channel-safe.
 type browserConnState struct { // not-wire-format: internal connection bookkeeping, never marshaled.
-	mgr       *browser.BrowserManager
+	mgr *browser.BrowserManager
+	// sessionID is the CLIENT-supplied (chat) session id from the attach
+	// frame, kept only for logging and for echoing back on outgoing wire
+	// frames (ADR-038 finding #1). It is NEVER passed to mgr.Live() — every
+	// interaction with the live-view engine uses browser.DefaultSessionID,
+	// the one tab the agent's browser_* tools actually drive. A non-empty
+	// value also doubles as "this connection currently has a live view
+	// attached."
 	sessionID string
+	// lastInputErrorSentAt throttles real-input-error browser_status(error)
+	// frames (ADR-038 finding #4): a dead/crashed browser tab can fail every
+	// subsequent input dispatch, and without this a fast input stream (mouse
+	// moves while "driving") would flood the connection with one error frame
+	// per rejected event. Only touched from readLoop's goroutine, same as
+	// every other field here.
+	lastInputErrorSentAt time.Time
 }
+
+// minInputErrorInterval is the minimum gap between two real-input-error
+// browser_status(error) frames sent to the same connection (ADR-038 finding
+// #4).
+const minInputErrorInterval = 2 * time.Second
 
 // BrowserWSHandler implements the /api/v1/browser/ws endpoint (ADR-038):
 // screencast-out + input-injection-in for the live interactive browser
@@ -383,11 +404,36 @@ func (h *BrowserWSHandler) readLoop(conn *websocket.Conn, wc *browserWSConn, vie
 			continue
 		}
 
+		// Inbound schema validation (ADR-038 finding #3), mirroring
+		// websocket.go's chat-WS readLoop exactly: gated by
+		// gateway.validate_inbound, enforces the enum/maxLength/modifiers
+		// (0-15) constraints declared in
+		// contracts/components/schemas/Browser{Attach,Input,Control,Detach}Frame.yaml
+		// server-side, before the frame is dispatched. A schema-invalid
+		// frame is dropped and reported as a browser_status(error) — this
+		// socket has no ErrorFrame-based rejection path for client frames,
+		// browser_status is the one client-visible failure channel.
+		if cfg.Gateway.ValidateInbound {
+			if schemaName := wsFrameSchemaName(typ.Type); schemaName != "" {
+				if errMsg, serverErr := ValidateInboundFrameJSON(schemaName, data); errMsg != "" {
+					if serverErr {
+						slog.Error("browser-ws: inbound schema unavailable, dropping frame",
+							"schema", schemaName, "frame_type", typ.Type)
+					} else {
+						slog.Warn("browser-ws: inbound frame schema validation failed — dropping",
+							"schema", schemaName, "frame_type", typ.Type, "error", errMsg)
+					}
+					wc.sendCriticalGen(errorStatus(fmt.Sprintf("frame schema validation failed (%s): %s", schemaName, errMsg)))
+					continue
+				}
+			}
+		}
+
 		switch typ.Type {
 		case string(generated.WsFrameTypeBrowserAttach):
 			h.handleAttach(wc, &state, viewerID, userID, data)
 		case string(generated.WsFrameTypeBrowserInput):
-			h.handleInput(&state, viewerID, data)
+			h.handleInput(wc, &state, viewerID, data)
 		case string(generated.WsFrameTypeBrowserControl):
 			h.handleControl(wc, &state, viewerID, userID, data, cfg)
 		case string(generated.WsFrameTypeBrowserDetach):
@@ -401,11 +447,24 @@ func (h *BrowserWSHandler) readLoop(conn *websocket.Conn, wc *browserWSConn, vie
 	}
 }
 
-// handleAttach binds this connection to a session's live browser (ADR-038
-// D3): resolves the target agent's BrowserManager, starts (or joins) its
+// handleAttach binds this connection to the target agent's live browser
+// (ADR-038 D3): resolves the agent's BrowserManager, starts (or joins) its
 // screencast, and streams browser_screencast frames back until detach. A
 // second browser_attach on an already-attached connection first detaches the
-// previous session — one connection, one live view at a time.
+// previous attachment — one connection, one live view at a time.
+//
+// ADR-038 finding #1: the live view ALWAYS binds to browser.DefaultSessionID
+// — the one Chromium tab the target agent's browser_* tools actually drive —
+// never to frame.SessionId. frame.SessionId is the client's chat session id;
+// before this fix it was passed straight to mgr.Live().Attach(), which
+// lazily created a brand-new, blank tab keyed by that chat UUID, distinct
+// from the tab the agent was navigating. The result: the live view showed an
+// unrelated blank tab, and browser_control{take} locked a session the
+// agent's own tools (which always check IsControlled(DefaultSessionID)) never
+// consulted — "take control" was a no-op from the agent's perspective.
+// frame.SessionId is retained ONLY as chatSessionID below, for logging and
+// for echoing back on outgoing wire frames so the client can correlate
+// responses with its own chat session.
 func (h *BrowserWSHandler) handleAttach(wc *browserWSConn, state *browserConnState, viewerID, userID string, data []byte) {
 	var frame generated.BrowserAttachFrame
 	if err := json.Unmarshal(data, &frame); err != nil {
@@ -430,12 +489,12 @@ func (h *BrowserWSHandler) handleAttach(wc *browserWSConn, state *browserConnSta
 		return
 	}
 
-	sessionID := frame.SessionId
-	err := mgr.Live().Attach(sessionID, viewerID, func(lf browser.LiveFrame) {
+	chatSessionID := frame.SessionId // context/logging + wire echo ONLY — see doc comment above.
+	err := mgr.Live().Attach(browser.DefaultSessionID, viewerID, func(lf browser.LiveFrame) {
 		pageScale, offsetTop, scrollX, scrollY := lf.PageScale, lf.OffsetTop, lf.ScrollOffsetX, lf.ScrollOffsetY
 		wc.sendFrameGen(generated.BrowserScreencastFrame{
 			Type:          string(generated.WsFrameTypeBrowserScreencast),
-			SessionId:     sessionID,
+			SessionId:     chatSessionID,
 			Seq:           lf.Seq,
 			Data:          lf.Data,
 			Width:         lf.Width,
@@ -445,29 +504,45 @@ func (h *BrowserWSHandler) handleAttach(wc *browserWSConn, state *browserConnSta
 			ScrollOffsetX: &scrollX,
 			ScrollOffsetY: &scrollY,
 		})
+	}, func(message string) {
+		// ADR-038 finding #2's split-brain fix: the LiveView's underlying tab
+		// context died without an explicit browser_detach — e.g. this
+		// connection is still holding a reference to a BrowserManager that
+		// registerSharedTools has since Shutdown()'d on hot-reload. Tell the
+		// client so it can re-attach (which resolves the CURRENT manager via
+		// BrowserManagerForAgent) instead of silently watching a frozen frame
+		// forever.
+		wc.sendCriticalGen(sessionErrorStatus(chatSessionID, message))
 	})
 	if err != nil {
-		wc.sendCriticalGen(sessionErrorStatus(sessionID, fmt.Sprintf("browser_attach failed: %s", err)))
+		wc.sendCriticalGen(sessionErrorStatus(chatSessionID, fmt.Sprintf("browser_attach failed: %s", err)))
 		return
 	}
 
 	state.mgr = mgr
-	state.sessionID = sessionID
+	state.sessionID = chatSessionID
 
 	wc.sendCriticalGen(generated.BrowserStatusFrame{
 		Type:      string(generated.WsFrameTypeBrowserStatus),
 		State:     "attached",
-		SessionId: &sessionID,
+		SessionId: &chatSessionID,
 	})
 }
 
 // handleInput dispatches a viewer input event, gated by the LiveView's
-// control lock (ADR-038 D6). Rejections (not attached, not controlling,
+// control lock (ADR-038 D6). ADR-038 finding #4: LiveViewRegistry.Input
+// classifies its failure as benign or real (browser.IsBenignLiveInputError).
+// Benign, high-frequency rejections (not attached, not controlling,
 // rate-limited) are logged at Debug and NOT surfaced as a status frame — a
 // stray mouse-move sent just before/after losing control is an expected,
 // frequent occurrence, and a status frame per rejected event would flood a
-// client that's still moving the mouse.
-func (h *BrowserWSHandler) handleInput(state *browserConnState, viewerID string, data []byte) {
+// client that's still moving the mouse. Real failures (session not attached
+// at all, an unknown input kind, or — most importantly — a genuine CDP
+// transport error meaning the tab crashed or is unreachable) ARE surfaced,
+// throttled to at most one browser_status(error) per minInputErrorInterval
+// so a burst of failed dispatches against a dead tab can't flood the
+// connection.
+func (h *BrowserWSHandler) handleInput(wc *browserWSConn, state *browserConnState, viewerID string, data []byte) {
 	if state.mgr == nil || state.sessionID == "" {
 		return
 	}
@@ -483,6 +558,12 @@ func (h *BrowserWSHandler) handleInput(state *browserConnState, viewerID string,
 	if frame.Y != nil {
 		in.Y = *frame.Y
 	}
+	// HasXY records whether BOTH coordinates were actually present on the
+	// wire (ADR-038 finding #5) — LiveInput.X/Y are plain float64, so without
+	// this flag "coordinate omitted" would be indistinguishable from "0,0
+	// sent explicitly," and buildInputAction would silently dispatch a
+	// (0,0)-origin mouse event for a malformed frame instead of rejecting it.
+	in.HasXY = frame.X != nil && frame.Y != nil
 	if frame.Button != nil {
 		in.Button = *frame.Button
 	}
@@ -505,8 +586,16 @@ func (h *BrowserWSHandler) handleInput(state *browserConnState, viewerID string,
 		in.Modifiers = *frame.Modifiers
 	}
 
-	if err := state.mgr.Live().Input(state.sessionID, viewerID, in); err != nil {
-		slog.Debug("browser-ws: input rejected", "error", err, "session_id", state.sessionID)
+	if err := state.mgr.Live().Input(browser.DefaultSessionID, viewerID, in); err != nil {
+		if browser.IsBenignLiveInputError(err) {
+			slog.Debug("browser-ws: input rejected (benign)", "error", err, "session_id", state.sessionID)
+			return
+		}
+		slog.Warn("browser-ws: input dispatch failed", "error", err, "session_id", state.sessionID)
+		if now := time.Now(); now.Sub(state.lastInputErrorSentAt) >= minInputErrorInterval {
+			state.lastInputErrorSentAt = now
+			wc.sendCriticalGen(sessionErrorStatus(state.sessionID, fmt.Sprintf("browser input failed: %s", err)))
+		}
 	}
 }
 
@@ -527,34 +616,37 @@ func (h *BrowserWSHandler) handleControl(wc *browserWSConn, state *browserConnSt
 		return
 	}
 
-	sessionID := state.sessionID
+	// chatSessionID is echoed on outgoing frames / audit entries; every call
+	// into mgr.Live() below uses browser.DefaultSessionID, the agent's actual
+	// tab (ADR-038 finding #1) — see handleAttach's doc comment.
+	chatSessionID := state.sessionID
 	switch frame.Action {
 	case "take":
 		if !cfg.Tools.Browser.TakeControlEnabled {
-			h.auditControl(userID, sessionID, viewerID, audit.DecisionDeny, "take_control_disabled")
-			wc.sendCriticalGen(sessionErrorStatus(sessionID, "take-control is disabled by the operator"))
+			h.auditControl(userID, chatSessionID, viewerID, audit.SeverityWarn, "take_control_disabled")
+			wc.sendCriticalGen(sessionErrorStatus(chatSessionID, "take-control is disabled by the operator"))
 			return
 		}
-		if !state.mgr.Live().TakeControl(sessionID, viewerID) {
-			h.auditControl(userID, sessionID, viewerID, audit.DecisionDeny, "already_controlled")
-			wc.sendCriticalGen(sessionErrorStatus(sessionID, "another viewer already controls this browser"))
+		if !state.mgr.Live().TakeControl(browser.DefaultSessionID, viewerID) {
+			h.auditControl(userID, chatSessionID, viewerID, audit.SeverityWarn, "already_controlled")
+			wc.sendCriticalGen(sessionErrorStatus(chatSessionID, "another viewer already controls this browser"))
 			return
 		}
-		h.auditControl(userID, sessionID, viewerID, audit.DecisionAllow, "take")
+		h.auditControl(userID, chatSessionID, viewerID, audit.SeverityInfo, "take")
 		controller := userID
 		wc.sendCriticalGen(generated.BrowserStatusFrame{
 			Type:       string(generated.WsFrameTypeBrowserStatus),
 			State:      "controlling",
-			SessionId:  &sessionID,
+			SessionId:  &chatSessionID,
 			Controller: &controller,
 		})
 	case "release":
-		state.mgr.Live().ReleaseControl(sessionID, viewerID)
-		h.auditRelease(userID, sessionID, viewerID)
+		state.mgr.Live().ReleaseControl(browser.DefaultSessionID, viewerID)
+		h.auditRelease(userID, chatSessionID, viewerID)
 		wc.sendCriticalGen(generated.BrowserStatusFrame{
 			Type:      string(generated.WsFrameTypeBrowserStatus),
 			State:     "released",
-			SessionId: &sessionID,
+			SessionId: &chatSessionID,
 		})
 	default:
 		wc.sendCriticalGen(errorStatus(fmt.Sprintf("browser_control: unknown action %q", frame.Action)))
@@ -566,62 +658,66 @@ func (h *BrowserWSHandler) handleDetach(wc *browserWSConn, state *browserConnSta
 	if state.mgr == nil || state.sessionID == "" {
 		return
 	}
-	sessionID := state.sessionID
-	h.detach(state.mgr, sessionID, viewerID, userID)
+	chatSessionID := state.sessionID
+	h.detach(state.mgr, chatSessionID, viewerID, userID)
 	state.mgr = nil
 	state.sessionID = ""
 	wc.sendCriticalGen(generated.BrowserStatusFrame{
 		Type:      string(generated.WsFrameTypeBrowserStatus),
 		State:     "detached",
-		SessionId: &sessionID,
+		SessionId: &chatSessionID,
 	})
 }
 
-// detach releases viewerID from sessionID's live view (stopping the
-// screencast if it was the last viewer) and audits a control release if this
-// viewer was the controller — used both by explicit browser_detach and by
-// readLoop's disconnect cleanup, so a dropped connection is indistinguishable
-// from a clean detach for audit and resource-cleanup purposes.
-func (h *BrowserWSHandler) detach(mgr *browser.BrowserManager, sessionID, viewerID, userID string) {
-	wasController := mgr.Live().Controller(sessionID) == viewerID
-	mgr.Live().Detach(sessionID, viewerID)
+// detach releases viewerID from the live view (stopping the screencast if it
+// was the last viewer) and audits a control release if this viewer was the
+// controller — used both by explicit browser_detach and by readLoop's
+// disconnect cleanup, so a dropped connection is indistinguishable from a
+// clean detach for audit and resource-cleanup purposes. chatSessionID is
+// used only for the audit entry / log context; the live-view call always
+// targets browser.DefaultSessionID (ADR-038 finding #1).
+func (h *BrowserWSHandler) detach(mgr *browser.BrowserManager, chatSessionID, viewerID, userID string) {
+	wasController := mgr.Live().Controller(browser.DefaultSessionID) == viewerID
+	mgr.Live().Detach(browser.DefaultSessionID, viewerID)
 	if wasController {
-		h.auditRelease(userID, sessionID, viewerID)
+		h.auditRelease(userID, chatSessionID, viewerID)
 	}
 }
 
-// auditControl logs a take-control attempt (allowed or denied).
-func (h *BrowserWSHandler) auditControl(userID, sessionID, viewerID, decision, reason string) {
+// auditControl logs a take-control attempt (allowed or denied). ADR-038
+// finding #6b: audit.EventBrowserLiveControlTaken's doc comment claims
+// INFO/WARN severity, but audit.Entry (the al.Log wire shape this used to go
+// through) has no Severity field at all — the claim was never actually true
+// on the wire. audit.Emit is the shape that DOES carry Severity, so this now
+// goes through Emit with the severity the comment always claimed: INFO for
+// an allowed take, WARN for a denied one — appropriate for a remote-control
+// security surface.
+func (h *BrowserWSHandler) auditControl(userID, sessionID, viewerID string, sev audit.Severity, reason string) {
 	al := h.agentLoop.AuditLogger()
 	if al == nil {
 		return
 	}
-	if err := al.Log(&audit.Entry{
-		Event:     audit.EventBrowserLiveControlTaken,
-		Decision:  decision,
-		SessionID: sessionID,
-		User:      userID,
-		Details:   map[string]any{"viewer_id": viewerID, "reason": reason},
-	}); err != nil {
-		slog.Warn("audit write failed", "event", audit.EventBrowserLiveControlTaken, "error", err)
-	}
+	audit.Emit(context.Background(), al, audit.EventBrowserLiveControlTaken, sev, map[string]any{
+		"session_id": sessionID,
+		"user":       userID,
+		"viewer_id":  viewerID,
+		"reason":     reason,
+	})
 }
 
 // auditRelease logs a control release (explicit or implicit via detach).
+// Always INFO (see auditControl's doc comment) — a release is never itself a
+// denied action.
 func (h *BrowserWSHandler) auditRelease(userID, sessionID, viewerID string) {
 	al := h.agentLoop.AuditLogger()
 	if al == nil {
 		return
 	}
-	if err := al.Log(&audit.Entry{
-		Event:     audit.EventBrowserLiveControlReleased,
-		Decision:  audit.DecisionAllow,
-		SessionID: sessionID,
-		User:      userID,
-		Details:   map[string]any{"viewer_id": viewerID},
-	}); err != nil {
-		slog.Warn("audit write failed", "event", audit.EventBrowserLiveControlReleased, "error", err)
-	}
+	audit.Emit(context.Background(), al, audit.EventBrowserLiveControlReleased, audit.SeverityInfo, map[string]any{
+		"session_id": sessionID,
+		"user":       userID,
+		"viewer_id":  viewerID,
+	})
 }
 
 // errorStatus builds a session-less browser_status(error) frame.

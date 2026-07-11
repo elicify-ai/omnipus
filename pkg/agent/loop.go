@@ -163,9 +163,18 @@ type AgentLoop struct {
 	// browserMgrs holds one BrowserManager per agent (US-4/US-6/US-7; ADR-038
 	// D4). Populated in registerSharedTools, keyed by agentID; guarded by mu
 	// (the same lock the old single al.browserMgr field used). Every entry's
-	// Shutdown() is called in AgentLoop.Close().
+	// Shutdown() is called in AgentLoop.Close() — AND, per ADR-038 finding
+	// #2, whenever registerSharedTools replaces an existing agentID's entry
+	// on hot-reload (see the Shutdown() call at that site): a Chromium
+	// subprocess is only killed by calling Shutdown() (which cancels the
+	// chromedp allocator context) — dropping the Go *BrowserManager
+	// reference does NOT kill it, since the allocator context is parented on
+	// context.Background(), not on anything that goes away with the
+	// reference. registerSharedTools re-runs on every
+	// ReloadProviderAndConfig (any Settings save), so failing to Shutdown()
+	// the replaced entry leaked one headless Chromium process per reload.
 	//
-	// Before ADR-038 this was a single `browserMgr *browser.BrowserManager`
+	// Before ADR-038 D4 this was a single `browserMgr *browser.BrowserManager`
 	// field, overwritten (with the prior value Shutdown()'d) on every agent
 	// processed by registerSharedTools's per-agent loop — so only the LAST
 	// agent registered ended up with a live manager; every earlier agent's
@@ -1657,20 +1666,37 @@ func registerSharedTools(
 						"ensure Chromium/Chrome is installed or set tools.browser.cdp_url",
 						map[string]any{"error": regErr.Error()})
 				} else {
-					// ADR-038 D4: store per-agent, keyed by agentID. Do NOT
-					// Shutdown() a prior entry for this SAME agentID before
-					// replacing it — registerSharedTools can re-run on hot
-					// reload (ReloadProviderAndConfig), and any live-view
-					// viewer currently attached to the old manager's
-					// screencast would be killed out from under it. The old
-					// manager for this agentID is simply dropped for GC;
-					// its Chromium process (if any tab was ever opened) is
-					// reaped by the OS once the allocator context has no
-					// remaining references — acceptable because hot-reload
-					// of browser config is rare and the alternative (killing
-					// a live view mid-session) is worse. Shutdown() for ALL
-					// entries still happens once, unconditionally, in Close().
+					// ADR-038 D4/finding #2: store per-agent, keyed by
+					// agentID. registerSharedTools can re-run on hot reload
+					// (ReloadProviderAndConfig, any Settings save) — when it
+					// does, Shutdown() the PRIOR manager for this SAME
+					// agentID (if any) before installing the new one. This
+					// is a restoration of the pre-ADR-038 D4 behavior: an
+					// earlier version of this comment argued the old
+					// manager's Chromium process would be "reaped by the OS
+					// once the allocator context has no remaining
+					// references" and could be safely dropped — that claim
+					// is wrong. Only BrowserManager.Shutdown() (which cancels
+					// the chromedp allocator context) kills the subprocess;
+					// dropping the Go reference does nothing, because the
+					// allocator context is parented on context.Background(),
+					// not on this reference. Without the Shutdown() call
+					// below, every hot reload leaked one headless Chromium
+					// process.
+					//
+					// A viewer attached to the OLD manager's live view is not
+					// silently orphaned by this: BrowserManager.Shutdown()
+					// cancels every session's chromedp context, which
+					// LiveView.watchForUnexpectedDeath (pkg/tools/browser/live.go,
+					// also finding #2) detects and reports to any attached
+					// viewer as a browser_status(error) frame, so the SPA can
+					// re-attach — which resolves the NEW manager via
+					// BrowserManagerForAgent. Shutdown() for ALL entries
+					// still also happens, unconditionally, in Close().
 					al.mu.Lock()
+					if prior, ok := al.browserMgrs[agentID]; ok && prior != nil {
+						prior.Shutdown()
+					}
 					al.browserMgrs[agentID] = mgr
 					al.mu.Unlock()
 				}

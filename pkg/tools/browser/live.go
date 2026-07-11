@@ -2,6 +2,7 @@ package browser
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -51,13 +52,14 @@ type LiveFrame struct {
 type LiveInput struct {
 	Kind      string
 	X, Y      float64
+	HasXY     bool   // ADR-038 finding #5: whether X/Y were actually present on the wire — see buildInputAction.
 	Button    string // none|left|middle|right|back|forward ("" treated as none)
 	DeltaX    float64
 	DeltaY    float64
 	Key       string
 	Code      string
 	Text      string
-	Modifiers int // bit field: Alt=1, Ctrl=2, Meta=4, Shift=8
+	Modifiers int // bit field: Alt=1, Ctrl=2, Meta=4, Shift=8 — clamped to [0,15] by buildInputAction.
 }
 
 // FrameSink receives screencast frames for one attached viewer. Implementations
@@ -66,6 +68,21 @@ type LiveInput struct {
 // consumer should hand off to its own buffered channel (the gateway's
 // per-connection sendCh already does this).
 type FrameSink func(LiveFrame)
+
+// StatusSink receives a live-view lifecycle notification for one attached
+// viewer (ADR-038 finding #2's split-brain fix). Today the only event it
+// carries is "the screencast died unexpectedly" — the underlying chromedp
+// tab context was canceled out from under an attached viewer WITHOUT going
+// through Detach first. The prototypical cause: pkg/agent/loop.go's
+// registerSharedTools now calls Shutdown() on an agent's PRIOR
+// BrowserManager before installing a fresh one on hot-reload
+// (ReloadProviderAndConfig) — Shutdown() cancels every session context,
+// including one a viewer's WS connection is still attached to. Without this
+// sink, that connection would keep streaming nothing forever and never learn
+// why; the message is meant to be surfaced as a browser_status(error) frame
+// so the client re-attaches (which resolves the CURRENT manager). Same
+// non-blocking contract as FrameSink.
+type StatusSink func(message string)
 
 // LiveViewRegistry manages one LiveView per browser session for a single
 // BrowserManager. Since a BrowserManager is itself scoped to one agent
@@ -102,7 +119,12 @@ func (r *LiveViewRegistry) view(sessionID string) *LiveView {
 	defer r.mu.Unlock()
 	lv, ok := r.views[sessionID]
 	if !ok {
-		lv = &LiveView{mgr: r.mgr, sessionID: sessionID, viewers: make(map[string]FrameSink)}
+		lv = &LiveView{
+			mgr:         r.mgr,
+			sessionID:   sessionID,
+			viewers:     make(map[string]FrameSink),
+			statusSinks: make(map[string]StatusSink),
+		}
 		r.views[sessionID] = lv
 	}
 	return lv
@@ -122,9 +144,11 @@ func (r *LiveViewRegistry) lookup(sessionID string) (*LiveView, bool) {
 // Attach binds viewerID to sessionID's live view, starting the CDP
 // screencast if this is the first viewer of that session (ref-counted, D3).
 // onFrame is invoked for every screencast frame until Detach(sessionID,
-// viewerID). Resolves the manager's session tab itself, so callers only need
-// a session ID, not a chromedp context.
-func (r *LiveViewRegistry) Attach(sessionID, viewerID string, onFrame FrameSink) error {
+// viewerID); onStatus (ADR-038 finding #2, may be nil) is invoked if the
+// underlying tab context dies unexpectedly before that Detach happens.
+// Resolves the manager's session tab itself, so callers only need a session
+// ID, not a chromedp context.
+func (r *LiveViewRegistry) Attach(sessionID, viewerID string, onFrame FrameSink, onStatus StatusSink) error {
 	sessionID = resolveSessionID(sessionID)
 	if viewerID == "" {
 		return fmt.Errorf("browser live: viewer id is required")
@@ -133,7 +157,7 @@ func (r *LiveViewRegistry) Attach(sessionID, viewerID string, onFrame FrameSink)
 	if err != nil {
 		return fmt.Errorf("browser live: cannot resolve session %q: %w", sessionID, err)
 	}
-	return r.view(sessionID).attach(tabCtx, viewerID, onFrame)
+	return r.view(sessionID).attach(tabCtx, viewerID, onFrame, onStatus)
 }
 
 // Detach unbinds viewerID from sessionID's live view. When this was the last
@@ -157,7 +181,11 @@ func (r *LiveViewRegistry) Input(sessionID, viewerID string, in LiveInput) error
 	sessionID = resolveSessionID(sessionID)
 	lv, ok := r.lookup(sessionID)
 	if !ok {
-		return fmt.Errorf("browser live: no active live view for session %q", sessionID)
+		// Real, not benign (ADR-038 finding #4): nobody has ever attached
+		// (or the tab was torn down entirely), which the caller needs to
+		// know about — unlike a not-controller/rate-limit rejection, this
+		// isn't an expected steady-state occurrence.
+		return realInputError("browser live: no active live view for session %q", sessionID)
 	}
 	return lv.dispatchInput(viewerID, in)
 }
@@ -222,8 +250,12 @@ type LiveView struct {
 	listenCtx  context.Context // child of tabCtx; canceling it detaches the chromedp.ListenTarget subscription without touching the tab
 	stopListen context.CancelFunc
 	viewers    map[string]FrameSink
-	seq        int
-	controller string // viewerID holding control; "" = uncontrolled
+	// statusSinks parallels viewers (ADR-038 finding #2): one optional
+	// StatusSink per attached viewerID, notified only on an unexpected
+	// screencast death (watchForUnexpectedDeath), never on a clean Detach.
+	statusSinks map[string]StatusSink
+	seq         int
+	controller  string // viewerID holding control; "" = uncontrolled
 
 	// Rate limiting: input can only ever come from the single controller at a
 	// time, so one shared counter per LiveView is sufficient — no per-viewer
@@ -242,13 +274,16 @@ func (lv *LiveView) isActiveLocked() bool {
 	return lv.listenCtx != nil && lv.listenCtx.Err() == nil
 }
 
-// attach registers viewerID's sink and starts the CDP screencast if no
-// screencast is currently active for this session.
-func (lv *LiveView) attach(tabCtx context.Context, viewerID string, onFrame FrameSink) error {
+// attach registers viewerID's sinks and starts the CDP screencast if no
+// screencast is currently active for this session. onStatus may be nil.
+func (lv *LiveView) attach(tabCtx context.Context, viewerID string, onFrame FrameSink, onStatus StatusSink) error {
 	lv.mu.Lock()
 	defer lv.mu.Unlock()
 
 	lv.viewers[viewerID] = onFrame
+	if onStatus != nil {
+		lv.statusSinks[viewerID] = onStatus
+	}
 
 	if lv.isActiveLocked() {
 		return nil // screencast already running — this viewer just piggybacks on it
@@ -276,13 +311,53 @@ func (lv *LiveView) attach(tabCtx context.Context, viewerID string, onFrame Fram
 	)
 	if err != nil {
 		delete(lv.viewers, viewerID)
+		delete(lv.statusSinks, viewerID)
 		cancel()
 		lv.listenCtx = nil
 		lv.stopListen = nil
 		return fmt.Errorf("browser live: failed to start screencast: %w", err)
 	}
 
+	// ADR-038 finding #2: watch for this screencast's tab context dying
+	// WITHOUT going through detach() first — e.g. BrowserManager.Shutdown()
+	// canceling every session context out from under an attached viewer
+	// during a hot-reload manager replacement (pkg/agent/loop.go's
+	// registerSharedTools). One watcher per screencast "epoch" (i.e. per
+	// listenCtx); it self-identifies as stale once a clean detach or a fresh
+	// attach cycle has moved lv.listenCtx on.
+	go lv.watchForUnexpectedDeath(listenCtx)
+
 	return nil
+}
+
+// watchForUnexpectedDeath blocks until watchedListenCtx is Done, then — ONLY
+// if lv.listenCtx is still that exact context (i.e. nothing else already
+// handled the teardown) — clears the active-screencast state and notifies
+// every attached viewer's StatusSink. detach() always nils lv.listenCtx out
+// BEFORE canceling it, so a context that dies while still installed as
+// lv.listenCtx can only mean an external cancellation (the tab/allocator
+// context above it died), never a normal detach.
+func (lv *LiveView) watchForUnexpectedDeath(watchedListenCtx context.Context) {
+	<-watchedListenCtx.Done()
+
+	lv.mu.Lock()
+	if lv.listenCtx != watchedListenCtx {
+		// A clean detach (or a subsequent attach cycle) already superseded
+		// this watcher — nothing unexpected happened.
+		lv.mu.Unlock()
+		return
+	}
+	lv.listenCtx = nil
+	lv.stopListen = nil
+	sinks := make([]StatusSink, 0, len(lv.statusSinks))
+	for _, s := range lv.statusSinks {
+		sinks = append(sinks, s)
+	}
+	lv.mu.Unlock()
+
+	for _, s := range sinks {
+		s("browser session ended unexpectedly (the browser was restarted or shut down) — re-attach to resume watching")
+	}
 }
 
 // handleScreencastEvent is the chromedp.ListenTarget callback. Per chromedp's
@@ -354,6 +429,7 @@ func (lv *LiveView) deliver(frame *page.EventScreencastFrame) {
 func (lv *LiveView) detach(viewerID string) {
 	lv.mu.Lock()
 	delete(lv.viewers, viewerID)
+	delete(lv.statusSinks, viewerID)
 	if lv.controller == viewerID {
 		lv.controller = ""
 	}
@@ -386,31 +462,82 @@ func (lv *LiveView) detach(viewerID string) {
 	}
 }
 
+// LiveInputErrorKind classifies a LiveViewRegistry.Input / dispatchInput
+// failure (ADR-038 finding #4) so the gateway's handleInput can decide
+// whether it's worth surfacing to the user as a browser_status(error) frame.
+type LiveInputErrorKind int
+
+const (
+	// LiveInputErrorBenign covers expected, high-frequency rejections: the
+	// viewer doesn't currently hold control (e.g. a stray event sent just
+	// after losing control) or the per-second rate limit was hit. These are
+	// routine and NOT worth a status frame — the previous behavior (Debug
+	// log only, no status frame) is preserved for this kind.
+	LiveInputErrorBenign LiveInputErrorKind = iota
+	// LiveInputErrorReal covers everything else: no live view/session ever
+	// attached, the tab context is missing, an unknown/malformed input kind,
+	// or — most importantly — a genuine chromedp.Run transport failure,
+	// which is the signal that the browser tab crashed or is unreachable.
+	// Before this fix ALL of these were logged at Debug and invisible to the
+	// user; a dead browser looked identical to a healthy, idle one.
+	LiveInputErrorReal
+)
+
+// LiveInputError wraps a LiveViewRegistry.Input failure with its
+// classification. Implements error (via Unwrap, so errors.Is/As still see
+// through to the underlying cause).
+type LiveInputError struct {
+	Kind LiveInputErrorKind
+	err  error
+}
+
+func (e *LiveInputError) Error() string { return e.err.Error() }
+func (e *LiveInputError) Unwrap() error { return e.err }
+
+func benignInputError(format string, args ...any) error {
+	return &LiveInputError{Kind: LiveInputErrorBenign, err: fmt.Errorf(format, args...)}
+}
+
+func realInputError(format string, args ...any) error {
+	return &LiveInputError{Kind: LiveInputErrorReal, err: fmt.Errorf(format, args...)}
+}
+
+// IsBenignLiveInputError reports whether err (returned by
+// LiveViewRegistry.Input) is a benign, high-frequency rejection that callers
+// should log quietly rather than surface to the user (ADR-038 finding #4).
+// An error that isn't a *LiveInputError at all (shouldn't happen — every
+// return path in this file uses the classified constructors) is treated as
+// real/not-benign, the fail-safe direction for a security-adjacent surface.
+func IsBenignLiveInputError(err error) bool {
+	var liveErr *LiveInputError
+	return errors.As(err, &liveErr) && liveErr.Kind == LiveInputErrorBenign
+}
+
 // dispatchInput validates control + rate limit, then dispatches one CDP
 // input action. Called with no locks held by the caller.
 func (lv *LiveView) dispatchInput(viewerID string, in LiveInput) error {
 	lv.mu.Lock()
 	if lv.controller == "" || lv.controller != viewerID {
 		lv.mu.Unlock()
-		return fmt.Errorf("browser live: viewer does not hold control of this session")
+		return benignInputError("browser live: viewer does not hold control of this session")
 	}
 	if !lv.allowInputLocked() {
 		lv.mu.Unlock()
-		return fmt.Errorf("browser live: input rate limit exceeded (%d/s)", maxInputEventsPerSecond)
+		return benignInputError("browser live: input rate limit exceeded (%d/s)", maxInputEventsPerSecond)
 	}
 	tabCtx := lv.tabCtx
 	lv.mu.Unlock()
 
 	if tabCtx == nil {
-		return fmt.Errorf("browser live: session is not attached")
+		return realInputError("browser live: session is not attached")
 	}
 
 	action, err := buildInputAction(in)
 	if err != nil {
-		return err
+		return realInputError("%w", err)
 	}
 	if err := chromedp.Run(tabCtx, action); err != nil {
-		return fmt.Errorf("browser live: input dispatch failed: %w", err)
+		return realInputError("browser live: input dispatch failed: %w", err)
 	}
 	return nil
 }
@@ -458,38 +585,79 @@ func (lv *LiveView) getController() string {
 	return lv.controller
 }
 
+// clampModifiers clamps the CDP modifier bitmask to the valid [0,15] range
+// (Alt=1, Ctrl=2, Meta=4, Shift=8; ADR-038 finding #5) — defense in depth
+// alongside the wire schema's minimum/maximum constraint
+// (BrowserInputFrame.yaml), since schema validation only runs when
+// gateway.validate_inbound=true (finding #3). Without this, an
+// out-of-range value would be passed straight to cdproto's input.Modifier,
+// which has no validation of its own.
+func clampModifiers(m int) int {
+	if m < 0 {
+		return 0
+	}
+	if m > 15 {
+		return 15
+	}
+	return m
+}
+
 // buildInputAction maps a wire-level LiveInput to the corresponding CDP
 // Input.dispatch* action (spike-proven mechanics, ADR-038 context section).
+//
+// ADR-038 finding #5: every kind is validated before building its action —
+// previously only "text" was guarded, so a malformed mouse/wheel frame with
+// no coordinates silently dispatched a (0,0)-origin event (a click in the
+// page's top-left corner) instead of being rejected, and a malformed key
+// event with neither key nor code silently dispatched a no-op keystroke.
 func buildInputAction(in LiveInput) (chromedp.Action, error) {
-	mods := input.Modifier(in.Modifiers)
+	mods := input.Modifier(clampModifiers(in.Modifiers))
 
 	switch in.Kind {
 	case "mouse_move":
+		if !in.HasXY {
+			return nil, fmt.Errorf("browser live: mouse_move input requires x and y coordinates")
+		}
 		return input.DispatchMouseEvent(input.MouseMoved, in.X, in.Y).
 			WithButton(mouseButton(in.Button)).
 			WithModifiers(mods), nil
 	case "mouse_down":
+		if !in.HasXY {
+			return nil, fmt.Errorf("browser live: mouse_down input requires x and y coordinates")
+		}
 		return input.DispatchMouseEvent(input.MousePressed, in.X, in.Y).
 			WithButton(mouseButton(in.Button)).
 			WithClickCount(1).
 			WithModifiers(mods), nil
 	case "mouse_up":
+		if !in.HasXY {
+			return nil, fmt.Errorf("browser live: mouse_up input requires x and y coordinates")
+		}
 		return input.DispatchMouseEvent(input.MouseReleased, in.X, in.Y).
 			WithButton(mouseButton(in.Button)).
 			WithClickCount(1).
 			WithModifiers(mods), nil
 	case "wheel":
+		if !in.HasXY {
+			return nil, fmt.Errorf("browser live: wheel input requires x and y coordinates")
+		}
 		return input.DispatchMouseEvent(input.MouseWheel, in.X, in.Y).
 			WithDeltaX(in.DeltaX).
 			WithDeltaY(in.DeltaY).
 			WithModifiers(mods), nil
 	case "key_down":
+		if in.Key == "" && in.Code == "" {
+			return nil, fmt.Errorf("browser live: key_down input requires a key or code")
+		}
 		return input.DispatchKeyEvent(input.KeyRawDown).
 			WithKey(in.Key).
 			WithCode(in.Code).
 			WithText(in.Text).
 			WithModifiers(mods), nil
 	case "key_up":
+		if in.Key == "" && in.Code == "" {
+			return nil, fmt.Errorf("browser live: key_up input requires a key or code")
+		}
 		return input.DispatchKeyEvent(input.KeyUp).
 			WithKey(in.Key).
 			WithCode(in.Code).
