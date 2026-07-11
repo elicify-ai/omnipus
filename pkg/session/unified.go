@@ -632,16 +632,20 @@ func (us *UnifiedStore) MarkLastEntryTruncated(sessionID, turnID string) error {
 
 	// Rebuild the file contents: one JSON object per line, WITH a trailing
 	// newline after the LAST line too. This is load-bearing, not cosmetic:
-	// AppendJSONL (pkg/fileutil/file.go) always O_APPENDs "record\n" with no
-	// check that the existing file already ends in a newline. A rewrite that
-	// omits the final newline leaves the next AppendTranscript call's record
-	// concatenated directly onto this rewrite's last line — e.g.
-	// "{lastEntry}{newRecord}\n" — which ReadTranscript cannot parse as JSON
-	// and silently drops via its "skipping malformed transcript line"
-	// continue, losing BOTH entries. Confirmed via a byte-level repro
-	// (rewrite → append → inspect raw bytes → ReadTranscript entry count)
-	// before this fix; see TestMarkLastEntryTruncated_TrailingNewlineSurvivesSubsequentAppend
+	// a rewrite that omits the final newline would leave the next
+	// AppendTranscript call's record concatenated directly onto this
+	// rewrite's last line — e.g. "{lastEntry}{newRecord}\n" — which
+	// ReadTranscript cannot parse as JSON and silently drops via its
+	// "skipping malformed transcript line" continue, losing BOTH entries.
+	// Confirmed via a byte-level repro (rewrite → append → inspect raw
+	// bytes → ReadTranscript entry count) before this fix; see
+	// TestMarkLastEntryTruncated_TrailingNewlineSurvivesSubsequentAppend
 	// and TestUpdateToolCallStatus_TrailingNewlineSurvivesSubsequentAppend.
+	// This is the PRIMARY fix; AppendJSONL (pkg/fileutil/file.go) now also
+	// carries a SECOND, independent defensive layer — it detects a missing
+	// trailing newline on the existing file and prepends one before its own
+	// record — so even a future rewrite site that forgets this discipline
+	// degrades to a defensively-recovered file, not silent data loss.
 	var buf bytes.Buffer
 	for _, line := range entries {
 		buf.Write(line)

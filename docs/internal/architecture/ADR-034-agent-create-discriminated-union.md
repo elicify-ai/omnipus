@@ -2,7 +2,22 @@
 
 - **Status:** Accepted (operator-approved 2026-07-03, implemented on `hotfix/v0.1.1`)
 - **Date:** 2026-07-03
+- **Amended: 2026-07-11 (ADR-037) — the `delegation_policy` per-type
+  decision in Decision 6 below is retired.** [ADR-037](./ADR-037-remove-global-delegation-policy.md)
+  subsequently deleted `config.AgentConfig.DelegationPolicy` and the
+  `/agents/trust` delegation-graph editor entirely — the field is no longer
+  create-writable (or update-writable) on ANY variant, `Main`/`Subagent`/
+  `subagent_3p` alike. `PUT /api/v1/agents/{id}` (and, per this ADR's own
+  Decision 4 strictness, the create path too) now 400s on a
+  `delegation_policy` field in the request body regardless of variant,
+  mirroring the ADR-035 `sandbox_profile` precedent. Delegation trust is
+  workspace-scoped only (a workspace's own `Delegation[]` edge list, edited
+  via that workspace's Team tab) — see ADR-037 for the full removal
+  rationale. Every other per-type field decision in Decision 6 is
+  unaffected by this amendment.
 - **Related:** ADR-013 (inbound validation), ADR-032 (external agent execution),
+  [ADR-037](./ADR-037-remove-global-delegation-policy.md) (removed
+  `delegation_policy` entirely — see the amendment above),
   `docs/internal/architecture/agent-types-field-matrix.md` (authoritative
   per-type field allocation), `docs/internal/specs/agent-form-requirements.md`
 
@@ -57,11 +72,14 @@ leaks on every surface.
 6. **Per-type field decisions** (operator, 2026-07-03): `subagent_3p`
    EXCLUDES `max_tool_iterations` (the external CLI runs its own tool loop)
    and KEEPS `timeout_seconds` (process-level kill for a hung CLI);
-   `delegation_policy` is allowed on ALL variants including `subagent_3p`
-   create (previously 400); locked core agents expose EDITABLE execution
-   knobs (sampling, rate limits, execution) in the profile UI while
-   `name/description/soul/color/icon/skills` remain locked (403), with
-   description/color/icon shown read-only.
+   ~~`delegation_policy` is allowed on ALL variants including `subagent_3p`
+   create (previously 400)~~ **removed — ADR-037 (2026-07-11): see the
+   amendment above. `delegation_policy` is no longer create- or
+   update-writable on any variant; delegation trust moved to the
+   workspace-scoped `Delegation[]` edge list.** Locked core agents expose
+   EDITABLE execution knobs (sampling, rate limits, execution) in the
+   profile UI while `name/description/soul/color/icon/skills` remain locked
+   (403), with description/color/icon shown read-only.
 
 ## Breaking changes (integrator notes)
 

@@ -24,6 +24,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -133,4 +134,127 @@ func TestSpawnSubTurn_ParentHardAbort_RecordsInterruptedStatus(t *testing.T) {
 		"a sub-turn canceled via the parent's hard-abort cascade must be recorded as "+
 			"'interrupted', not 'error' — 'error' is indistinguishable from a genuine failure "+
 			"on replay, sitting right next to the parent's own correctly-labeled (interrupted) entry")
+	// FIX 4: this test calls parentTS.Finish(true) DIRECTLY (bypassing
+	// RequestCancel/ClaimCancel entirely — see the setup above), so
+	// parentTS.cancelFired stays false. The honest reason in that case is
+	// "unknown" (see spawnSubTurn's cleanup defer doc comment) — proving
+	// the fallback path, complementary to
+	// TestSpawnSubTurn_ExplicitCancelViaRequestCancel_RecordsCancelledAndReason's
+	// "parent_cancelled" case below, which drives a REAL RequestCancel.
+	assert.Equal(t, "unknown", subTurnEndEvents[0].Reason,
+		"when the parent's own cancel was never claimed via RequestCancel/ClaimCancel, the "+
+			"honest reason is 'unknown', not a fabricated 'parent_cancelled'")
+}
+
+// TestSpawnSubTurn_ExplicitCancelViaRequestCancel_RecordsCancelledAndReason
+// drives a REAL RequestCancel call against the parent's session — the actual
+// production cancel path a live /stop click or scheduled-run deadline
+// force-abort takes — and asserts two things FIX 4 adds:
+//  1. parentTS.cancelFired becomes true (RequestCancel's ClaimCancel claims
+//     it), so the cascaded child's Reason is populated as "parent_cancelled"
+//     — not the "unknown" fallback the sibling test above exercises.
+//  2. The status is still SubTurnStatusInterrupted (not Cancelled) for this
+//     cascade case, since the CHILD's own cancelFired stays false — only the
+//     PARENT's was claimed. SubTurnStatusCancelled is reserved for the
+//     narrower case where the sub-turn's OWN session is targeted directly
+//     (see SubTurnStatusCancelled's doc comment, pkg/agent/events.go).
+//
+// Negative-test discipline: confirmed to FAIL (Reason == "" instead of
+// "parent_cancelled") against the pre-fix cleanup defer (which never set
+// endReason at all) before the fix was applied.
+func TestSpawnSubTurn_ExplicitCancelViaRequestCancel_RecordsCancelledAndReason(t *testing.T) {
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Provider: "mock"},
+		},
+	}
+	msgBus := bus.NewMessageBus()
+	provider := &slowMockProvider{delay: 5 * time.Second}
+	al := mustNewAgentLoop(t, cfg, msgBus, provider)
+	t.Cleanup(al.Close)
+
+	store := al.GetSessionStore()
+	require.NotNil(t, store, "shared session store must be non-nil")
+	meta, err := store.NewSession(session.SessionTypeChat, "web", "main")
+	require.NoError(t, err)
+	sessionID := meta.ID
+
+	var mu sync.Mutex
+	var subTurnEndEvents []SubTurnEndPayload
+	sub := al.SubscribeEvents(32)
+	defer al.UnsubscribeEvents(sub.ID)
+	go func() {
+		for evt := range sub.C {
+			if payload, ok := evt.Payload.(SubTurnEndPayload); ok {
+				mu.Lock()
+				subTurnEndEvents = append(subTurnEndEvents, payload)
+				mu.Unlock()
+			}
+		}
+	}()
+
+	ctx := context.Background()
+	parentTS := &turnState{
+		turnID:              "parent-explicit-cancel",
+		transcriptSessionID: sessionID,
+		depth:               0,
+		session:             newEphemeralSession(nil),
+		pendingResults:      make(chan *tools.ToolResult, 16),
+		concurrencySem:      make(chan struct{}, testMaxConcurrentSubTurns),
+		al:                  al,
+		finishedChan:        make(chan struct{}),
+	}
+	parentTS.ctx, parentTS.cancelFunc = context.WithCancel(ctx)
+	al.activeTurnStates.Store(sessionID, parentTS)
+	defer al.activeTurnStates.Delete(sessionID)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		spawnCtx := withSpawnToolCallID(parentTS.ctx, "call-explicit-cancel-1")
+		subCfg := SubTurnConfig{Model: "slow-model", Async: true, Critical: true}
+		_, _ = spawnSubTurn(spawnCtx, al, parentTS, subCfg)
+	}()
+
+	require.Eventually(t, func() bool {
+		parentTS.mu.RLock()
+		defer parentTS.mu.RUnlock()
+		return len(parentTS.childTurnIDs) > 0
+	}, 2*time.Second, 5*time.Millisecond, "child sub-turn must register itself on the parent before the cancel fires")
+
+	// The REAL production cancel path: RequestCancel -> ClaimCancel (sets
+	// parentTS.cancelFired=true) -> ... -> Finish(true) via the escalation
+	// this test drives directly for determinism (RequestCancel itself only
+	// starts the graceful->hard timer; calling Finish(true) here is
+	// equivalent to that timer firing, without waiting out its real delay).
+	outcome, cancelErr := al.RequestCancel(
+		context.Background(),
+		CancelScope{SessionID: sessionID},
+		CancelCanceller{UserID: "test-user", Channel: "web"},
+		CancelHooks{},
+	)
+	require.NoError(t, cancelErr)
+	require.True(t, outcome.Fired, "RequestCancel must fire for the actively-registered parent turn")
+	require.True(t, parentTS.cancelFired.Load(), "RequestCancel's ClaimCancel must claim parentTS.cancelFired")
+
+	parentTS.Finish(true) // simulates the graceful->hard escalation timer firing
+
+	wg.Wait()
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(subTurnEndEvents) > 0
+	}, 2*time.Second, 5*time.Millisecond, "EventKindSubTurnEnd must be observed by the subscriber")
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, subTurnEndEvents, 1, "exactly one EventKindSubTurnEnd must be emitted")
+	assert.Equal(t, SubTurnStatusInterrupted, subTurnEndEvents[0].Status,
+		"the CHILD's own cancelFired was never claimed (only the parent's was) — this remains "+
+			"the cascade case (Interrupted), not the direct-target case (Cancelled)")
+	assert.Equal(t, "parent_cancelled", subTurnEndEvents[0].Reason,
+		"once the parent's own cancel was explicitly claimed via RequestCancel, the cascaded "+
+			"child's reason must be 'parent_cancelled', not the 'unknown' fallback")
 }

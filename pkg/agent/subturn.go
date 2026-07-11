@@ -908,7 +908,27 @@ func spawnSubTurn(
 		// W1-12: only emit span end event when parentSpawnCallID was non-empty.
 		if emitSpanEvents {
 			endStatus := SubTurnStatusSuccess
+			var endReason string
 			switch {
+			case err != nil && errors.Is(childCtx.Err(), context.Canceled) && childTS.cancelFired.Load():
+				// FIX 4 (7-reviewer-gate follow-up on FIX 5): this SPECIFIC
+				// sub-turn's own ClaimCancel was claimed — i.e. RequestCancel
+				// targeted THIS turn directly, not the parent. Reachable, if
+				// narrow: GetActiveTurnHookForSession's fallback (turn.go)
+				// resolves to a sub-turn when its session's ROOT turn has
+				// already finished but a Critical:true sub-turn (which
+				// survives a graceful parent finish by design — see
+				// SubTurnConfig.Critical's doc comment) is still running on
+				// that same session, and a later RequestCancel against that
+				// session finds and cancels the sub-turn itself. Distinct
+				// from — and takes priority over — the more common cascade
+				// case below (childTS.cancelFired stays false there because
+				// the parent's Finish(true) calls childTS.Finish(true)
+				// directly, bypassing ClaimCancel entirely). No `reason` is
+				// set: the wire contract documents reason as meaningful only
+				// "when status is interrupted", and this is a genuine direct
+				// cancel, not a parent-caused interruption.
+				endStatus = SubTurnStatusCancelled
 			case err != nil && errors.Is(childCtx.Err(), context.Canceled):
 				// FIX 5: the child's own context was explicitly canceled —
 				// reached via the parent's hard-abort cascade
@@ -925,6 +945,30 @@ func spawnSubTurn(
 				// through to SubTurnStatusError below — that IS a real
 				// failure, not a cancellation.
 				endStatus = SubTurnStatusInterrupted
+				// FIX 4: populate the wire contract's SubagentEndFrame.reason
+				// (frontend already renders it — src/components/chat/SubagentBlock.tsx
+				// — but no Go path ever set it before this fix, so it silently
+				// rendered without the "(reason)" detail chip for every
+				// interrupted span). parentTS.cancelFired is the cheapest
+				// honest signal available here: it is true whenever the
+				// PARENT's own ClaimCancel was claimed, which covers both a
+				// live user cancel (web SPA/CLI/Tier A/B -> RequestCancel)
+				// AND pkg/gateway/schedules.go's watchDeadline force-abort on
+				// a scheduled run's deadline (it too calls RequestCancel,
+				// with CancelCanceller{UserID:"scheduler",Channel:"cron"}) —
+				// both are honestly summarized as "parent_cancelled" here.
+				// Distinguishing "the parent was explicitly canceled" from
+				// "the parent hit its own deadline" precisely would require
+				// threading the canceller identity through turnState, which
+				// is a bigger change than this fix's scope; "unknown" is the
+				// honest fallback for any other, rarer trigger (e.g. a hook
+				// decision's hard-abort) where parentTS.cancelFired never
+				// got set at all.
+				if parentTS.cancelFired.Load() {
+					endReason = "parent_cancelled"
+				} else {
+					endReason = "unknown"
+				}
 			case err != nil:
 				endStatus = SubTurnStatusError
 			}
@@ -963,18 +1007,41 @@ func spawnSubTurn(
 			// happens-before ordering instead of silently leaving the
 			// placeholder permanent.
 			if parentTS.transcriptStore != nil && parentTS.transcriptSessionID != "" {
-				if _, updateErr := updateToolCallStatusWithRetry(
+				found, updateErr := updateToolCallStatusWithRetry(
 					parentTS.transcriptStore,
 					parentTS.transcriptSessionID,
 					session.ToolCallID(parentSpawnCallID),
 					string(endStatus),
 					subTurnDurationMS,
 					cfg.Async,
-				); updateErr != nil {
+				)
+				switch {
+				case updateErr != nil:
 					slog.Warn("subturn: failed to persist real end status/duration onto spawn tool call",
 						"session_id", parentTS.transcriptSessionID,
 						"parent_spawn_call_id", parentSpawnCallID,
 						"error", updateErr,
+					)
+				case cfg.Async && !found:
+					// FIX 3 (7-reviewer-gate follow-up): updateErr == nil AND
+					// found == false means the retry budget (~935ms across 6
+					// attempts) was exhausted without ever locating the
+					// placeholder record — a real, named scenario in
+					// updateToolCallStatusWithRetry's own doc comment (the
+					// parent's hooks/media/event processing taking longer
+					// than the retry budget). Without this branch, that
+					// outcome was silently undiagnosable: no error, so no
+					// log — the delegate's transcript entry permanently
+					// keeps the stale placeholder ack (success/0ms) with
+					// zero trace of why. This is exactly the "reload
+					// silently disagrees with live" failure class this
+					// whole fix pass exists to close.
+					slog.Warn("subturn: gave up waiting for spawn tool call's placeholder record after "+
+						"exhausting retry budget; reload will show the stale placeholder ack instead of "+
+						"the real terminal status",
+						"session_id", parentTS.transcriptSessionID,
+						"parent_spawn_call_id", parentSpawnCallID,
+						"resolved_status", endStatus,
 					)
 				}
 			}
@@ -989,6 +1056,7 @@ func spawnSubTurn(
 					DurationMS:        subTurnDurationMS,
 					ChatID:            parentTS.chatID,
 					SessionID:         parentTS.transcriptSessionID,
+					Reason:            endReason,
 				},
 			)
 		}

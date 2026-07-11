@@ -695,10 +695,13 @@ func TestReplay_TurnCancelledEntry_NoTurnID(t *testing.T) {
 }
 
 // TestReplay_AssistantEntry_CarriesTurnID verifies that an ordinary assistant
-// entry's TurnID (stamped by pkg/agent/turn.go:447,685 on every assistant
-// entry) is surfaced as turn_id on its replay_message frame — the second half
-// of fix 5c, giving the client the correlation data needed to match a later
-// turn_canceled frame to the specific assistant message it interrupted.
+// entry's TurnID (stamped on every real assistant entry by
+// pkg/agent/turn.go's appendIntermediateAssistantTranscript and
+// appendAssistantTranscript — both set TurnID: ts.turnID — and by
+// pkg/gateway/websocket.go's wsStreamer.Finalize via SetTurnID) is surfaced
+// as turn_id on its replay_message frame — the second half of fix 5c, giving
+// the client the correlation data needed to match a later turn_canceled
+// frame to the specific assistant message it interrupted.
 func TestReplay_AssistantEntry_CarriesTurnID(t *testing.T) {
 	entries := []session.TranscriptEntry{
 		{
