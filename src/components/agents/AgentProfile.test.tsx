@@ -33,16 +33,6 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
     ...actual,
     useNavigate: () => mockNavigate,
     useParams: () => ({}),
-    // W6-C1 / G2: AgentProfile now renders a <Link to="/agents/trust"> so
-    // the operator can jump to the delegation graph. TanStack Router's
-    // real <Link> calls useLinkProps → useRouter, which throws without
-    // a RouterProvider; stub it with a plain anchor so the screen renders
-    // in isolation (these tests assert content, not navigation behaviour).
-    Link: ({ children, to, ...rest }: { children?: React.ReactNode; to?: string } & Record<string, unknown>) => (
-      <a href={typeof to === 'string' ? to : '#'} {...(rest as Record<string, unknown>)}>
-        {children}
-      </a>
-    ),
   }
 })
 
@@ -1405,7 +1395,6 @@ describe('AgentProfile — subagent_3p payload restriction', () => {
     expect(payload).not.toHaveProperty('shell_policy')
     expect(payload).not.toHaveProperty('fallback_models')
     expect(payload).not.toHaveProperty('model_params')
-    expect(payload).not.toHaveProperty('delegation_policy')
     // agent-types-field-matrix.md, Decisions #1 (resolved 2026-07-03):
     // excluded — max_tool_iterations is excluded for subagent_3p.
     expect(payload).not.toHaveProperty('max_tool_iterations')
@@ -2011,12 +2000,11 @@ describe('AgentProfile — locked core agent shell_policy persistence (live-bug 
   })
 })
 
-// Test-coverage gap (test-analyzer): the Default-agent toggle row and the
-// delegation-policy summary are gated on `!isWorkerAgent` only — NOT
-// `!isLocked` (operator decision 2026-07-03: locked core agents keep these
-// editable/visible). No prior test asserted either fact for a locked core
-// agent, nor their absence for a worker.
-describe('AgentProfile — Default-agent toggle and delegation-policy summary visibility (field matrix, W2c)', () => {
+// Test-coverage gap (test-analyzer): the Default-agent toggle row is gated
+// on `!isWorkerAgent` only — NOT `!isLocked` (operator decision 2026-07-03:
+// locked core agents keep it editable/visible). No prior test asserted
+// either fact for a locked core agent, nor its absence for a worker.
+describe('AgentProfile — Default-agent toggle visibility (field matrix, W2c)', () => {
   it('shows the Default-agent toggle row for a locked core agent', async () => {
     vi.mocked(fetchAgent).mockResolvedValue(mockLockedCoreAgent)
     renderProfile('mia')
@@ -2024,21 +2012,13 @@ describe('AgentProfile — Default-agent toggle and delegation-policy summary vi
     expect((await screen.findAllByTestId('default-toggle-row')).length).toBeGreaterThanOrEqual(1)
   })
 
-  it('shows the delegation-policy summary for a locked core agent', async () => {
-    vi.mocked(fetchAgent).mockResolvedValue(mockLockedCoreAgent)
-    renderProfile('mia')
-    await screen.findByText('Mia')
-    expect((await screen.findAllByTestId('delegation-policy-summary')).length).toBeGreaterThanOrEqual(1)
-  })
-
-  it('hides the Default-agent toggle row and delegation-policy summary for a worker (Subagent)', async () => {
+  it('hides the Default-agent toggle row for a worker (Subagent)', async () => {
     vi.mocked(fetchAgent).mockResolvedValue(mockWorkerAgent)
     renderProfile('web-researcher')
     await screen.findByText('Web Researcher')
     await waitFor(() => {
       expect(screen.queryAllByTestId('default-toggle-row').length).toBe(0)
     })
-    expect(screen.queryAllByTestId('delegation-policy-summary').length).toBe(0)
   })
 })
 
