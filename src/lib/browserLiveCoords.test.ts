@@ -7,6 +7,7 @@ import {
   mapClientToFramePixels,
   framePixelToDeviceCoords,
   computeCropRect,
+  scaleCropToImagePixels,
 } from './browserLiveCoords'
 
 describe('mapClientToDevice', () => {
@@ -290,5 +291,43 @@ describe('computeCropRect', () => {
     expect(rect).toEqual({ x: 76, y: 276, width: 48, height: 48 })
     expect(rect!.width).toBeGreaterThan(0)
     expect(rect!.height).toBeGreaterThan(0)
+  })
+})
+
+describe('scaleCropToImagePixels', () => {
+  // Regression: the screencast JPEG is capped at 1280px wide (WithMaxWidth), so
+  // on a wider viewport the decoded <img> is downscaled and a crop rect in
+  // device space must be scaled into the img's natural pixels — otherwise
+  // drawImage reads out of bounds and the crop is blank (UAT finding).
+  it('downscales a device-space rect into the smaller decoded-image space', () => {
+    // Frame reports 1920×1080 (device), but the JPEG decoded to 1280×720.
+    const rect = { x: 960, y: 540, width: 200, height: 100 }
+    const scaled = scaleCropToImagePixels(rect, 1920, 1080, 1280, 720)
+    // scaleX = 1280/1920 = 2/3, scaleY = 720/1080 = 2/3
+    expect(scaled.x).toBeCloseTo(640)
+    expect(scaled.y).toBeCloseTo(360)
+    expect(scaled.width).toBeCloseTo(133.333, 2)
+    expect(scaled.height).toBeCloseTo(66.667, 2)
+    // The source rect must stay inside the decoded image bounds.
+    expect(scaled.x + scaled.width).toBeLessThanOrEqual(1280)
+    expect(scaled.y + scaled.height).toBeLessThanOrEqual(720)
+  })
+
+  it('is a no-op when the decoded image equals the frame (scale 1)', () => {
+    const rect = { x: 100, y: 50, width: 40, height: 30 }
+    expect(scaleCropToImagePixels(rect, 1280, 720, 1280, 720)).toEqual(rect)
+  })
+
+  it('falls back to scale 1 on a non-positive frame or natural dimension', () => {
+    const rect = { x: 10, y: 20, width: 30, height: 40 }
+    expect(scaleCropToImagePixels(rect, 0, 0, 1280, 720)).toEqual(rect)
+    expect(scaleCropToImagePixels(rect, 1280, 720, 0, 0)).toEqual(rect)
+  })
+
+  it('floors width/height at 1 so the destination canvas is never 0×0', () => {
+    const rect = { x: 0, y: 0, width: 0, height: 0 }
+    const scaled = scaleCropToImagePixels(rect, 1920, 1080, 1280, 720)
+    expect(scaled.width).toBe(1)
+    expect(scaled.height).toBe(1)
   })
 })
