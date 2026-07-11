@@ -88,6 +88,11 @@ func TestDelegateTool_Execute_EmptyTask(t *testing.T) {
 
 func TestDelegateTool_Execute_NilSpawner(t *testing.T) {
 	tool := NewDelegateTool("test-model", 0, 0)
+	// This test's concern is the nil-spawner guard, not the delegation-policy
+	// gate — wire a permissive deny-checker for both modes so the (fail-closed
+	// per the 7-reviewer-gate fix) gate doesn't mask the assertion under test.
+	tool.SetDelegationDenyCheckerBackground(func(context.Context, string) *DelegationDenial { return nil })
+	tool.SetDelegationDenyCheckerAwait(func(context.Context, string) *DelegationDenial { return nil })
 
 	ctx := context.Background()
 	args := map[string]any{"task": "test task"}
@@ -154,6 +159,8 @@ func (m *mockDelegateSpawner) SpawnSubTurn(ctx context.Context, cfg SubTurnConfi
 // spawner is invoked in the background rather than blocking the caller.
 func TestDelegate_DefaultIsAsync(t *testing.T) {
 	tool := NewDelegateTool("test-model", 0, 0)
+	// This test's concern is the async default, not the delegation-policy gate.
+	tool.SetDelegationDenyCheckerBackground(func(context.Context, string) *DelegationDenial { return nil })
 
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -189,6 +196,9 @@ func TestDelegate_DefaultIsAsync(t *testing.T) {
 // matching the former run_subagent behavior exactly.
 func TestDelegate_AsyncFalseBlocks(t *testing.T) {
 	tool := NewDelegateTool("test-model", 0, 0)
+	// This test's concern is the async=false blocking behavior, not the
+	// delegation-policy gate.
+	tool.SetDelegationDenyCheckerAwait(func(context.Context, string) *DelegationDenial { return nil })
 	tool.SetSpawner(spawnerFunc(func(context.Context, SubTurnConfig) (*ToolResult, error) {
 		time.Sleep(20 * time.Millisecond) // simulate real work
 		return &ToolResult{ForLLM: "Task completed: compute Y", ForUser: "done"}, nil
@@ -225,6 +235,8 @@ func TestDelegate_AsyncFalseBlocks(t *testing.T) {
 // could read from).
 func TestDelegate_StatusReflectsRealState(t *testing.T) {
 	tool := NewDelegateTool("test-model", 0, 0)
+	// This test's concern is action:"status" tracking, not the delegation-policy gate.
+	tool.SetDelegationDenyCheckerBackground(func(context.Context, string) *DelegationDenial { return nil })
 
 	release := make(chan struct{})
 	var wg sync.WaitGroup
@@ -581,11 +593,19 @@ func TestDelegateStatus_DifferentConversation_NotFound(t *testing.T) {
 // check_spawn_status at all.
 func TestDelegate_AsyncFalse_DoesNotRecordStatusTask(t *testing.T) {
 	tool := NewDelegateTool("test-model", 0, 0)
+	// This test's concern is executeSync not touching tool.tasks, not the
+	// delegation-policy gate — wire a permissive checker so the call actually
+	// reaches executeSync (an unwired/denied call would also leave tool.tasks
+	// empty, but for the wrong reason, silently testing nothing real).
+	tool.SetDelegationDenyCheckerAwait(func(context.Context, string) *DelegationDenial { return nil })
 	tool.SetSpawner(spawnerFunc(func(context.Context, SubTurnConfig) (*ToolResult, error) {
 		return NewToolResult("done"), nil
 	}))
 
-	tool.Execute(context.Background(), map[string]any{"task": "sync work", "async": false})
+	result := tool.Execute(context.Background(), map[string]any{"task": "sync work", "async": false})
+	if result == nil || result.IsError {
+		t.Fatalf("expected the sync delegate call to succeed, got: %+v", result)
+	}
 
 	tool.mu.Lock()
 	count := len(tool.tasks)

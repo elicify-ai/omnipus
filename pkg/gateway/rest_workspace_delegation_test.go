@@ -521,23 +521,27 @@ func TestDefaultWorkspaceSeeder_TeamAndEdges(t *testing.T) {
 	}
 }
 
-// TestDefaultWorkspaceDelegationEdges_MatchesCoreagentSeed is the diff-behavior
-// regression pin ADR-037 (Wave 2) requires: defaultWorkspaceDelegationEdges's
-// output for a config produced by coreagent.SeedConfig (i.e. a genuinely fresh
-// install, with no operator customization) must be byte-for-byte the SAME
-// edge set the pre-ADR-037 implementation produced — that implementation read
-// cfg.Agents.List[i].DelegationPolicy, which on a fresh install was always
-// exactly coreAgentDelegation(id) (coreagent.SeedConfig seeded it verbatim
-// onto every fresh AgentConfig — see the now-deleted seed assignment this ADR
-// removed from pkg/coreagent/core.go). Reading coreagent.SeedDelegationEdges(id)
-// directly is therefore provably equivalent for this case: it is the exact
-// same coreAgentDelegation call, just invoked one hop earlier (at
-// workspace-seed time instead of at agent-seed time). This test asserts that
-// equivalence directly: for every agent id coreagent.SeedConfig seeds, the
-// edges defaultWorkspaceDelegationEdges derives from the live config match
-// coreagent.SeedDelegationEdges(id) field-for-field (target, modes, depth) —
-// proving the ADR-037 rewrite changed WHERE the seed is read from, not WHAT
-// it produces.
+// TestDefaultWorkspaceDelegationEdges_MatchesCoreagentSeed verifies the
+// TRANSFORMATION LOOP inside defaultWorkspaceDelegationEdges is correct
+// relative to whatever coreagent.SeedDelegationEdges currently returns: for
+// every agent id coreagent.SeedConfig seeds into a fresh config, the edges
+// defaultWorkspaceDelegationEdges derives match coreagent.SeedDelegationEdges(id)
+// field-for-field (target, modes, depth) — i.e. the per-agent →
+// per-target-edge expansion (mode conversion, depth-pointer copy, self/
+// wildcard/remote-a2a filtering) does not drop or corrupt data on the way
+// from the seed matrix to the workspace graph shape.
+//
+// NOTE (pr-test-analyzer, 7-reviewer-gate follow-up): this is a
+// SELF-CONSISTENCY check, not an independent pre/post-ADR-037 baseline —
+// both sides of the comparison ultimately call the same
+// coreagent.SeedDelegationEdges/coreAgentDelegation function, so corrupting
+// the seed DATA itself (as opposed to the transformation loop) would not
+// make this test fail (confirmed via fault injection). The actual content
+// pin — the test that WOULD catch a seed-data regression, because it asserts
+// hardcoded literal expected edges/modes/depths rather than deriving its
+// expectation from the same function under test — is the sibling
+// TestDefaultWorkspaceSeeder_TeamAndEdges above. Keep both: this one for the
+// transformation loop, that one for the actual seeded content.
 func TestDefaultWorkspaceDelegationEdges_MatchesCoreagentSeed(t *testing.T) {
 	cfg := &config.Config{}
 	require.True(t, coreagent.SeedConfig(cfg), "SeedConfig on empty config must modify")

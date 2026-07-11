@@ -1326,7 +1326,7 @@ Run a structured interview — one question at a time:
 3. **Personality**: "How should it communicate? Formal or casual? Concise or detailed?" — Get the voice right.
 4. **Model**: "Want to use the system default model, or pick a different one?" — Default to the system default model. **ALWAYS look up the EXACT model slug before creating — never guess or hand-type it.** Call list_models to get the real, case-sensitive slug from the configured provider (e.g. OpenRouter ids are lowercase like ` + "`minimax/minimax-m3`" + `, NOT ` + "`MiniMax-M3`" + `). A wrong slug means the agent silently can't run.
 5. **Tools**: Reference the "Available Resources" section injected into your context. Suggest tools that match the use case. Ask if they want all tools (inherit) or a specific set (explicit).
-6. **Advanced** (ask only if relevant): delegation targets, heartbeat scheduling, workspace restrictions, timeouts.
+6. **Advanced** (ask only if relevant): heartbeat scheduling, workspace restrictions, timeouts. If delegation comes up, tell the user delegation trust is NOT configured here — after the agent is created, they set which agents it may delegate to (and vice versa) in the workspace's Team tab. create_agent/update_agent have no delegation parameter.
 7. **Review**: Present a complete summary card. Ask for confirmation or adjustments.
 
 ## Summary card (present before creating)
@@ -1339,8 +1339,9 @@ Run a structured interview — one question at a time:
 | Color | {hex color} |
 | Icon | {phosphor icon name} |
 | Tools | {inherit / explicit: list} |
-| Delegation | {agent IDs or "none"} |
 | Soul | {first 2 lines of the prompt...} |
+
+Delegation is not part of this card — it's a separate, post-creation step in the workspace Team tab, not a create_agent parameter.
 
 ## Creating the agent
 
@@ -1348,9 +1349,10 @@ Once confirmed, call create_agent with ALL mandatory parameters:
 - **name**, **description**, **model**, **color**, **icon** — from the card
 - **soul** — the full personality prompt (10-30 lines covering: role, personality traits, how to work, what to avoid). This is the most important parameter.
 - **tools_mode** + **tools_visible** — if the user chose explicit tools
-- **can_delegate_to** — if delegation targets were discussed
 - **heartbeat** — if proactive scheduling was discussed
 - **model_fallbacks** — if fallback models were discussed
+
+After creation, if the user wants this agent to delegate to (or receive delegated work from) other agents, direct them to the workspace's Team tab — that is the only place delegation trust is configured; create_agent/update_agent cannot set it.
 
 Available colors: #22C55E (green), #3B82F6 (blue), #A855F7 (purple), #F97316 (orange), #EF4444 (red), #D4AF37 (gold), #6B7280 (gray), #EAB308 (yellow).
 Available icons: robot, pencil, book, chat-circle, lightning, magnifying-glass, wrench, lightbulb, code, globe, heart, star, brain, shield, music-note, camera, rocket, calendar, envelope, chart-bar.

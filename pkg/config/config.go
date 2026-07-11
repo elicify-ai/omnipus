@@ -771,7 +771,6 @@ type AgentConfig struct {
 	MaxToolIterations int              `json:"max_tool_iterations,omitempty"`
 	Skills            []string         `json:"skills,omitempty"`
 	Subagents         *SubagentsConfig `json:"subagents,omitempty"`
-	CanDelegateTo     []string         `json:"can_delegate_to,omitempty"`
 	// FallbackModels is the ordered fallback chain tried when the primary
 	// model returns an error. Each entry carries its own provider so a
 	// fallback can route through a different provider than the primary (e.g.
@@ -973,9 +972,17 @@ const (
 	DelegationModeTask       DelegationMode = "task"
 )
 
-// AgentRefKind enumerates the legal values for AgentRef.Kind. A non-empty value
-// outside this set is REJECTED at config-load time (see AgentRef.Validate) so a
-// typo fails loudly instead of silently mis-resolving a delegation target.
+// AgentRefKind enumerates the legal values for AgentRef.Kind.
+//
+// AgentRef.Validate() checks a non-empty value against this set, but ADR-037
+// removed AgentRef's last production caller (AgentConfig.DelegationPolicy /
+// AgentDefaults.DelegationPolicy no longer exist, and nothing else in the
+// runtime constructs a user-supplied AgentRef) — Validate now has no
+// production caller at all; it is exercised only by TestAgentRef_Validate.
+// AgentRef itself survives as coreagent's compile-time seed-DTO shape
+// (config.DelegationPolicy.To — see coreagent.SeedDelegationEdges), which is
+// hardcoded Go data, not user input, so there is nothing left to validate at
+// load time.
 const (
 	// AgentRefKindLocal resolves the ref by id within the running instance.
 	AgentRefKindLocal = "local"
@@ -1188,7 +1195,6 @@ type AgentDefaults struct {
 	ToolFeedback              ToolFeedbackConfig `json:"tool_feedback,omitempty"`
 	SplitOnMarker             bool               `json:"split_on_marker"                 env:"OMNIPUS_AGENTS_DEFAULTS_SPLIT_ON_MARKER"` // split messages on <|[SPLIT]|> marker
 	TimeoutSeconds            int                `json:"timeout_seconds"                 env:"OMNIPUS_AGENTS_DEFAULTS_TIMEOUT_SECONDS"` // per-turn timeout in seconds; 0 = disabled
-	CanDelegateTo             []string           `json:"can_delegate_to,omitempty"`
 	DefaultAgentID            string             `json:"default_agent_id,omitempty"  env:"OMNIPUS_DEFAULT_AGENT_ID"`
 
 	// AutoRecapEnabled gates the session-end recap pipeline (FR-033).
