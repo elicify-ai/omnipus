@@ -7,6 +7,7 @@ package browser
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"strconv"
 	"time"
 
@@ -153,6 +154,7 @@ func (m *BrowserManager) InspectPoint(x, y float64) (result InspectResult, err e
 		if rec := recover(); rec != nil {
 			logger.ErrorCF("browser", "inspect: panic recovered, reporting best-effort no-result", map[string]any{
 				"panic":      fmt.Sprintf("%v", rec),
+				"stack":      string(debug.Stack()),
 				"session_id": DefaultSessionID,
 			})
 			result, err = InspectResult{}, nil

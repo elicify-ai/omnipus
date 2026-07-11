@@ -667,10 +667,10 @@ func (lv *LiveView) detach(viewerID string) {
 	// screencast-teardown path below) so a departing controller's implicit
 	// release is broadcast even when other viewers remain attached and the
 	// screencast keeps running — the common case for the two-viewer scenario
-	// this fixes.
-	for _, sink := range otherSinks {
-		sink(false)
-	}
+	// this fixes. Dispatched via broadcastControl (B2) so a slow OTHER
+	// viewer's sink can never stall this connection's own detach/disconnect
+	// cleanup path — see broadcastControl's doc comment.
+	broadcastControl(otherSinks, false)
 
 	if !wasActive {
 		return
@@ -825,7 +825,8 @@ func (lv *LiveView) allowInputLocked() bool {
 // UAT BE-1: "two viewers disagree about who's driving") — the server has
 // always single-controller-locked here, this is what makes every OTHER
 // connection's display agree with that lock instead of continuing to show
-// stale state. The sinks are invoked with no lock held, mirroring deliver().
+// stale state. The sinks are dispatched via broadcastControl (no lock held),
+// mirroring deliver().
 func (lv *LiveView) takeControl(viewerID string) bool {
 	lv.mu.Lock()
 	if lv.controller != "" && lv.controller != viewerID {
@@ -836,9 +837,7 @@ func (lv *LiveView) takeControl(viewerID string) bool {
 	otherSinks := lv.snapshotControlSinksExceptLocked(viewerID)
 	lv.mu.Unlock()
 
-	for _, sink := range otherSinks {
-		sink(true)
-	}
+	broadcastControl(otherSinks, true)
 	return true
 }
 
@@ -857,8 +856,29 @@ func (lv *LiveView) releaseControl(viewerID string) {
 	otherSinks := lv.snapshotControlSinksExceptLocked(viewerID)
 	lv.mu.Unlock()
 
-	for _, sink := range otherSinks {
-		sink(false)
+	broadcastControl(otherSinks, false)
+}
+
+// broadcastControl dispatches controlledByOther to every sink in sinks, each
+// on its own goroutine (B2, 7-reviewer finding: reintroduced-deadlock-hazard
+// class per the ADR-038 postmortem documented above attach()). handleControl
+// (browser_ws.go) runs in the acting connection's single-goroutine readLoop,
+// and each sink's underlying delivery (the gateway's sendCritical) can block
+// up to 2s waiting for a slow/wedged peer connection's send buffer to drain.
+// Invoking N sinks synchronously in a loop — as takeControl/releaseControl/
+// detach used to — would therefore freeze the ACTING viewer's own connection
+// for up to N*2s whenever other viewers are slow, even though the actor's
+// own take/release/detach has nothing to do with how fast anyone else is
+// draining their socket. Firing each sink on its own goroutine bounds the
+// caller's wait to O(1) regardless of N or how slow any individual sink is —
+// the same "never let a slow consumer stall the actor" contract FrameSink/
+// StatusSink/ControlSink's doc comments already require, just not previously
+// honored at THIS fan-out site. Callers must still invoke this with no
+// LiveView lock held (sinks may themselves call back into LiveView methods
+// that take lv.mu).
+func broadcastControl(sinks []ControlSink, controlledByOther bool) {
+	for _, sink := range sinks {
+		go sink(controlledByOther)
 	}
 }
 
