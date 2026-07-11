@@ -290,18 +290,47 @@ func (t *DelegateTool) executeRun(ctx context.Context, args map[string]any, cb A
 	// by the async flag ("background" vs "await") — applied identically
 	// regardless of async value (FR-D3). ADR-037: this is now the ONLY gate —
 	// the legacy trust-only allowlistCheck/delegateChecker fallbacks (consulted
-	// only when these were nil, which never happened in production) are retired.
+	// only when these were nil, which never happened in production) are
+	// retired.
+	//
+	// FAIL CLOSED, not open, when no checker is wired: an unwired deny-checker
+	// is a configuration error, never a permission grant. This is unreachable
+	// in today's production wiring — pkg/agent/loop.go's registerSharedTools
+	// unconditionally calls SetDelegationDenyCheckerBackground/Await for every
+	// agent — but removing the legacy fallback (which was itself deny-by-
+	// default: config.IsDelegationAllowed/CanSpawnSubagent both returned false
+	// on an unset policy) must not also remove the safety net for the NEXT
+	// wiring bug: a new agent-construction path, a v0.3 plugin-system entry
+	// point, or a refactor slip that forgets to call the setter. Do NOT
+	// "simplify" this back to fail-open — CLAUDE.md Hard Constraint #6 exists
+	// precisely to forbid a silent runtime default here.
 	if async {
 		if t.delegationDenyBackground != nil {
 			if denial := t.delegationDenyBackground(ctx, agentID); denial != nil {
 				return DelegationDeniedResult("delegate", denial)
 			}
+		} else {
+			slog.Error("delegate: no background delegation-deny checker installed — denying by default",
+				"agent_id", agentID)
+			return DelegationDeniedResult("delegate", &DelegationDenial{
+				Reason:        "delegation is not configured for this agent (no policy gate installed) — denying by default",
+				Policy:        DenyTrustSet,
+				TargetAgentID: agentID,
+			})
 		}
 	} else {
 		if t.delegationDenyAwait != nil {
 			if denial := t.delegationDenyAwait(ctx, agentID); denial != nil {
 				return DelegationDeniedResult("delegate", denial)
 			}
+		} else {
+			slog.Error("delegate: no await delegation-deny checker installed — denying by default",
+				"agent_id", agentID)
+			return DelegationDeniedResult("delegate", &DelegationDenial{
+				Reason:        "delegation is not configured for this agent (no policy gate installed) — denying by default",
+				Policy:        DenyTrustSet,
+				TargetAgentID: agentID,
+			})
 		}
 	}
 

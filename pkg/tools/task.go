@@ -330,10 +330,28 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 	// Delegation policy gate (FR-6.2): trust set + modes ("task") + depth.
 	// ADR-037: the legacy boolean delegateCheck fallback is retired — this is
 	// now the only gate.
+	//
+	// FAIL CLOSED, not open, when no checker is wired: an unwired deny-checker
+	// is a configuration error, never a permission grant. Unreachable in
+	// today's production wiring (pkg/agent/loop.go always calls
+	// SetDelegationDenyChecker), but the legacy fallback this replaced was
+	// itself deny-by-default — removing it must not silently flip the
+	// unwired-checker case from deny to allow for the NEXT wiring bug (a new
+	// agent-construction path, a v0.3 plugin-system entry point, a refactor
+	// slip). Do NOT "simplify" this back to fail-open — CLAUDE.md Hard
+	// Constraint #6 forbids a silent runtime default here.
 	if t.delegationDeny != nil {
 		if denial := t.delegationDeny(ctx, agentID); denial != nil {
 			return DelegationDeniedResult("create_task", denial)
 		}
+	} else {
+		slog.Error("create_task: no delegation-deny checker installed — denying by default",
+			"caller_id", callerID, "target_agent_id", agentID)
+		return DelegationDeniedResult("create_task", &DelegationDenial{
+			Reason:        "delegation is not configured for this agent (no policy gate installed) — denying by default",
+			Policy:        DenyTrustSet,
+			TargetAgentID: agentID,
+		})
 	}
 
 	// Task-mode recursion bound (SEC): a task_create issued from *within* a task
@@ -611,10 +629,22 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		if t.externalCLIWorkerCheck != nil && t.externalCLIWorkerCheck(agentID) {
 			return ErrorResult(externalCLIWorkerDenialMessage(agentID))
 		}
+		// FAIL CLOSED, not open, when no checker is wired — same rationale as
+		// TaskCreateTool.Execute above: an unwired deny-checker is a
+		// configuration error, never a permission grant. Do NOT "simplify"
+		// this back to fail-open.
 		if t.delegationDeny != nil {
 			if denial := t.delegationDeny(ctx, agentID); denial != nil {
 				return DelegationDeniedResult("update_task", denial)
 			}
+		} else {
+			slog.Error("update_task: no delegation-deny checker installed — denying by default",
+				"caller_id", callerID, "target_agent_id", agentID)
+			return DelegationDeniedResult("update_task", &DelegationDenial{
+				Reason:        "delegation is not configured for this agent (no policy gate installed) — denying by default",
+				Policy:        DenyTrustSet,
+				TargetAgentID: agentID,
+			})
 		}
 		patch.AgentID = &agentID
 		updatedFields = append(updatedFields, "agent_id")

@@ -43,8 +43,10 @@ type Workspace struct { // not-wire-format: internal disk-cache struct, mapped t
 	// Delegation is the per-workspace delegation graph (M5): the directed edges
 	// that authorize who-delegates-to-whom on this workspace. This is the
 	// editable source of truth surfaced in the workspace Team tab. nil/empty
-	// means no delegation configured. The per-agent delegation_policy remains
-	// the enforcement cap; this graph is what the UI and update_workspace edit.
+	// means no delegation configured. This graph is the SOLE delegation
+	// enforcement mechanism (ADR-037) — there is no separate per-agent
+	// delegation_policy; that field was removed entirely, and this graph is
+	// both what the UI/update_workspace edit AND what the runtime enforces.
 	//
 	// DelegationEdge is defined in delegation.go and has the same JSON tags as
 	// the former storedDelegationEdge in pkg/gateway; they are structurally

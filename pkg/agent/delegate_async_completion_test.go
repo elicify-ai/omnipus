@@ -72,11 +72,16 @@ func TestDelegateAsyncCompletion_CallsNotifyWithSourceKindDelegate(t *testing.T)
 
 	// Register a real DelegateTool wired to a real spawner — mirrors
 	// loop.go's own production wiring (NewDelegateTool + SetSpawner +
-	// NewSubTurnSpawner) at registration time, line for line. No
-	// delegationDenyBackground/allowlistCheck is installed, matching a
-	// freshly constructed DelegateTool's default (delegation gate open).
+	// NewSubTurnSpawner) at registration time, line for line. This test's
+	// concern is the async-completion notification chain, not the
+	// delegation-policy gate itself — wire a permissive background
+	// deny-checker so the delegate call actually reaches the spawner (the
+	// gate is fail-CLOSED when unwired per the 7-reviewer-gate follow-up to
+	// ADR-037 — see TestDelegateTool_BackgroundNilDenyChecker_FailsClosed in
+	// pkg/tools).
 	delegateTool := tools.NewDelegateTool(cfg.Agents.Defaults.ModelName, cfg.Agents.Defaults.MaxTokens, 0)
 	delegateTool.SetSpawner(NewSubTurnSpawner(al))
+	delegateTool.SetDelegationDenyCheckerBackground(func(context.Context, string) *tools.DelegationDenial { return nil })
 	al.RegisterTool(delegateTool)
 
 	for _, agentID := range al.GetRegistry().ListAgentIDs() {
