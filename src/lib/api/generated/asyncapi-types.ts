@@ -94,6 +94,7 @@ export interface TokenFrame {
   type: "token";
   session_id: string;
   content: string;
+  agent_id?: string;
 }
 
 export interface DoneStats {
@@ -211,6 +212,7 @@ export interface ReplayMessageFrame {
   timestamp?: string;
   agent_id?: string;
   model?: string;
+  turn_id?: string;
 }
 
 export interface ReplayErrorFrame {

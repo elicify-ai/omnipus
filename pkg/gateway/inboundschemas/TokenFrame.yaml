@@ -22,3 +22,9 @@ properties:
     type: string
     maxLength: 65536
     description: Partial LLM response text to append. Maximum 64 KiB per token chunk.
+  agent_id:
+    type: string
+    description: >
+      Agent that produced this token. Identifies the origin agent for
+      background/delegated sub-turns, where the client's active-agent
+      session state would otherwise guess incorrectly.
