@@ -42,7 +42,10 @@ const asyncResultTestDelegateID = "ava-worker"
 // newAsyncResultTestLoop builds a real AgentLoop with two agents: the
 // registry's auto-created default and the named, non-default delegate
 // asyncResultTestDelegateID.
-func newAsyncResultTestLoop(t *testing.T, provider providers.LLMProvider) (al *AgentLoop, msgBus *bus.MessageBus, delegate *AgentInstance, defaultAgent *AgentInstance) {
+func newAsyncResultTestLoop(
+	t *testing.T,
+	provider providers.LLMProvider,
+) (al *AgentLoop, msgBus *bus.MessageBus, delegate *AgentInstance, defaultAgent *AgentInstance) {
 	t.Helper()
 	tmpDir := t.TempDir()
 	cfg := &config.Config{

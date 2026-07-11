@@ -81,7 +81,9 @@ func TestDelegateAsyncCompletion_CallsNotifyWithSourceKindDelegate(t *testing.T)
 	// pkg/tools).
 	delegateTool := tools.NewDelegateTool(cfg.Agents.Defaults.ModelName, cfg.Agents.Defaults.MaxTokens, 0)
 	delegateTool.SetSpawner(NewSubTurnSpawner(al))
-	delegateTool.SetDelegationDenyCheckerBackground(func(context.Context, string) *tools.DelegationDenial { return nil })
+	delegateTool.SetDelegationDenyCheckerBackground(
+		func(context.Context, string) *tools.DelegationDenial { return nil },
+	)
 	al.RegisterTool(delegateTool)
 
 	for _, agentID := range al.GetRegistry().ListAgentIDs() {

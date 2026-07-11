@@ -934,7 +934,7 @@ func spawnSubTurn(
 				// reached via the parent's hard-abort cascade
 				// (turnState.Finish(true) calling childTS.cancelFunc(),
 				// which IS childCtx's own cancel func, assigned at
-				// childTS.cancelFunc = cancel above). A user-cancelling the
+				// childTS.cancelFunc = cancel above). A user-canceling the
 				// parent turn while this async delegate was in flight must
 				// read back on replay as "interrupted" — not "error", which
 				// is indistinguishable from a genuine failure sitting right
@@ -956,6 +956,7 @@ func spawnSubTurn(
 				// AND pkg/gateway/schedules.go's watchDeadline force-abort on
 				// a scheduled run's deadline (it too calls RequestCancel,
 				// with CancelCanceller{UserID:"scheduler",Channel:"cron"}) —
+				//nolint:misspell // documents the literal wire enum value, matches frontend TS union
 				// both are honestly summarized as "parent_cancelled" here.
 				// Distinguishing "the parent was explicitly canceled" from
 				// "the parent hit its own deadline" precisely would require
@@ -965,7 +966,7 @@ func spawnSubTurn(
 				// decision's hard-abort) where parentTS.cancelFired never
 				// got set at all.
 				if parentTS.cancelFired.Load() {
-					endReason = "parent_cancelled"
+					endReason = "parent_cancelled" //nolint:misspell // wire value, frontend TS union
 				} else {
 					endReason = "unknown"
 				}

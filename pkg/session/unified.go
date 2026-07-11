@@ -701,9 +701,14 @@ func (us *UnifiedStore) MarkLastEntryTruncated(sessionID, turnID string) error {
 // terminal — see updateToolCallStatusWithRetry.
 //
 // Returns a non-nil error only on I/O failure.
-func (us *UnifiedStore) UpdateToolCallStatus(sessionID string, toolCallID ToolCallID, status string, durationMS int64) (found bool, err error) {
-	if err := validateSessionID(sessionID); err != nil {
-		return false, err
+func (us *UnifiedStore) UpdateToolCallStatus(
+	sessionID string,
+	toolCallID ToolCallID,
+	status string,
+	durationMS int64,
+) (found bool, err error) {
+	if validationErr := validateSessionID(sessionID); validationErr != nil {
+		return false, validationErr
 	}
 	if toolCallID == "" {
 		return false, nil

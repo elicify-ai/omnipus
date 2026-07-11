@@ -143,6 +143,10 @@ func TestLastWriterForPath_RotationBoundary(t *testing.T) {
 	defer logger2.Close()
 
 	agentID, found := logger2.LastWriterForPath(audit.EventFileOp, "/shared/identity.txt")
-	require.True(t, found, "LastWriterForPath must find a write recorded in the most-recently-rotated file, not just the current one")
+	require.True(
+		t,
+		found,
+		"LastWriterForPath must find a write recorded in the most-recently-rotated file, not just the current one",
+	)
 	assert.Equal(t, "agent-jim", agentID)
 }

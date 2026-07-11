@@ -230,6 +230,10 @@ func defaultWorkspaceDelegationEdges(cfg *config.Config) []storedDelegationEdge 
 		return nil
 	}
 	var edges []storedDelegationEdge
+	//nolint:dupl // TestDefaultWorkspaceDelegationEdges_MatchesCoreagentSeed deliberately
+	// replays this exact loop independently (not via a shared helper) so it can catch a
+	// regression in THIS transformation logic; sharing a helper would make that test
+	// tautological (see the test's own doc comment for the full rationale).
 	for i := range cfg.Agents.List {
 		ac := &cfg.Agents.List[i]
 		dp := coreagent.SeedDelegationEdges(coreagent.CoreAgentID(ac.ID))

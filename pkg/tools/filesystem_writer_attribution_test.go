@@ -94,8 +94,15 @@ func TestWriteFileTool_CrossAgentOverwrite_AttributesPriorWriter(t *testing.T) {
 	// The tool result must attribute the prior writer.
 	assert.Contains(t, workerResult.ForLLM, "agent-jim",
 		"worker's write result must reference jim as the file's last writer, got: %s", workerResult.ForLLM)
-	assert.True(t, strings.Contains(workerResult.ForLLM, "Note: you are replacing a file last written via write_file by agent agent-jim"),
-		"expected a well-formed attribution note, got: %s", workerResult.ForLLM)
+	assert.True(
+		t,
+		strings.Contains(
+			workerResult.ForLLM,
+			"Note: you are replacing a file last written via write_file by agent agent-jim",
+		),
+		"expected a well-formed attribution note, got: %s",
+		workerResult.ForLLM,
+	)
 }
 
 // ---------------------------------------------------------------------------
@@ -235,14 +242,24 @@ func TestWriteFileTool_DegradedAuditLogger_NoNoteNoBlock(t *testing.T) {
 	jimCtx := WithAgentID(context.Background(), "agent-jim")
 	jimCtx = WithTurnWorkspaceDir(jimCtx, sharedDir)
 	first := tool.Execute(jimCtx, map[string]any{"path": "f.txt", "content": "a"})
-	require.False(t, first.IsError, "first write must succeed even though the audit logger is degraded: %s", first.ForLLM)
+	require.False(
+		t,
+		first.IsError,
+		"first write must succeed even though the audit logger is degraded: %s",
+		first.ForLLM,
+	)
 
 	workerCtx := WithAgentID(context.Background(), "agent-worker")
 	workerCtx = WithTurnWorkspaceDir(workerCtx, sharedDir)
 	second := tool.Execute(workerCtx, map[string]any{
 		"path": "f.txt", "content": "b", "overwrite": true,
 	})
-	require.False(t, second.IsError, "overwrite must succeed even though the audit-backed lookup fails: %s", second.ForLLM)
+	require.False(
+		t,
+		second.IsError,
+		"overwrite must succeed even though the audit-backed lookup fails: %s",
+		second.ForLLM,
+	)
 	assert.NotContains(t, second.ForLLM, "Note: you are replacing",
 		"a degraded/unreadable audit logger must never block the write or fabricate a note, got: %s", second.ForLLM)
 

@@ -1472,7 +1472,11 @@ func registerSharedTools(
 			delegateTool.SetDelegationDenyCheckerBackground(
 				// ForDelegate bakes in exempt=false: delegate(agent_id=self) spawns a
 				// real sub-turn and MUST be graph-gated (and thus denied), never exempted.
-				buildDelegationDenyCheckerForDelegate(currentAgentID, cfg.Agents.Defaults, config.DelegationModeBackground),
+				buildDelegationDenyCheckerForDelegate(
+					currentAgentID,
+					cfg.Agents.Defaults,
+					config.DelegationModeBackground,
+				),
 			)
 			// FR-6.2: full-policy gate for the await (async=false) mode. Uses
 			// the same buildDelegationDenyChecker as the background gate
@@ -1518,7 +1522,11 @@ func registerSharedTools(
 			taskCreate.SetDelegationDenyChecker(
 				// ForTaskReassignment bakes in exempt=true: assigning a NEW task to
 				// oneself is not delegation (no new instance spawned), not graph-gated.
-				buildDelegationDenyCheckerForTaskReassignment(currentAgentID, cfg.Agents.Defaults, config.DelegationModeTask),
+				buildDelegationDenyCheckerForTaskReassignment(
+					currentAgentID,
+					cfg.Agents.Defaults,
+					config.DelegationModeTask,
+				),
 			)
 			// Task-mode recursion bound: reject a task_create issued from within a
 			// task run whose delegation generation already sits at the ceiling. The
@@ -1561,7 +1569,11 @@ func registerSharedTools(
 			taskUpdate.SetDelegationDenyChecker(
 				// ForTaskReassignment bakes in exempt=true: reassigning a task to its
 				// existing owner is a no-op reassignment, not delegation — not graph-gated.
-				buildDelegationDenyCheckerForTaskReassignment(currentAgentID, cfg.Agents.Defaults, config.DelegationModeTask),
+				buildDelegationDenyCheckerForTaskReassignment(
+					currentAgentID,
+					cfg.Agents.Defaults,
+					config.DelegationModeTask,
+				),
 			)
 			// Same subagent_3p reassignment guard as taskCreate above.
 			taskUpdate.SetExternalCLIWorkerChecker(cfg.IsExternalCLIWorkerID)
@@ -4874,8 +4886,11 @@ func (al *AgentLoop) processSystemMessage(
 		if named, ok := al.GetRegistry().GetAgent(msg.AsyncOriginAgentID); ok && named != nil {
 			agent = named
 		} else {
-			logger.WarnCF("agent", "processSystemMessage: named async origin agent not found; falling back to default agent",
-				map[string]any{"agent_id": msg.AsyncOriginAgentID})
+			logger.WarnCF(
+				"agent",
+				"processSystemMessage: named async origin agent not found; falling back to default agent",
+				map[string]any{"agent_id": msg.AsyncOriginAgentID},
+			)
 		}
 	}
 	if agent == nil {
@@ -4906,8 +4921,11 @@ func (al *AgentLoop) processSystemMessage(
 			transcriptSessionID = msg.AsyncTranscriptSessionID
 			transcriptStore = store
 		} else {
-			logger.WarnCF("agent", "processSystemMessage: async transcript session not found; result will not be persisted to a session",
-				map[string]any{"session_id": msg.AsyncTranscriptSessionID})
+			logger.WarnCF(
+				"agent",
+				"processSystemMessage: async transcript session not found; result will not be persisted to a session",
+				map[string]any{"session_id": msg.AsyncTranscriptSessionID},
+			)
 		}
 	}
 
@@ -5236,24 +5254,35 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	turnCtx = tools.WithCitationTracker(turnCtx, citationTracker)
 
 	al.registerActiveTurn(ts)
-	// B1: Finish must run before clearActiveTurn so that IsAlive() goes false
-	// and the onCancelFinish callback fires on natural turn completion, not only
-	// on explicit cancel paths. closeOnce.Do inside Finish makes repeated calls
-	// safe — the cancel path may have already called Finish(true); the second
-	// call here is a no-op via isFinished.Store(true) being idempotent and
-	// closeOnce.Do executing at most once.
-	defer ts.Finish(false)
-	defer al.clearActiveTurn(ts)
-
-	// FIX 1/5c (confirmed via live verification, not just unit tests):
-	// finalizeStreamer must run BEFORE ts.Finish(false) above — registered
-	// here, AFTER Finish/clearActiveTurn, so Go's LIFO defer order runs it
-	// FIRST. finalizeStreamer is what calls wsStreamer.Finalize(), which
-	// writes the assistant transcript entry (now carrying TurnID — FIX 1).
-	// Finish(false)'s onCancelFinish callback (pkg/agent/cancel.go) is what
-	// writes the turn_canceled entry AND calls MarkLastEntryTruncated to flag
-	// the assistant entry. Both depend on the assistant entry already
-	// existing in transcript.jsonl:
+	// Execution order (LIFO defer — registered in reverse of desired run
+	// order): clearActiveTurn runs FIRST, then finalizeStreamer, then
+	// Finish(false) LAST.
+	//
+	// clearActiveTurn must run before finalizeStreamer, which sends the
+	// "done" WS frame. IsAlive()/onCancelFinish are unaffected by
+	// clearActiveTurn's timing — they're driven by ts.isFinished/
+	// ts.cancelFired directly, never by activeTurnStates map membership — so
+	// an earlier version of this ordering (clearActiveTurn registered
+	// straight after Finish, i.e. running AFTER finalizeStreamer) was correct
+	// for that reasoning but wrong in practice: TestWS_Cancel_OnlyInterruptsTargetSession
+	// caught a real race. A client that receives "done" and immediately sends
+	// "cancel" for the same session_id can have that cancel reach
+	// handleCancel -> GetActiveTurnHookForSession before this goroutine's own
+	// remaining defers run — a loopback WS round trip can beat two sequential
+	// Go defer calls under scheduler contention. GetActiveTurnHookForSession
+	// then still finds the (already-finished) turnState in the map,
+	// ClaimCancel succeeds, and a spurious cancel_stage frame goes out for a
+	// turn the client already knows is done. Deleting the map entry before
+	// "done" is sent closes that window: any cancel arriving after closes on
+	// nothing to claim.
+	//
+	// finalizeStreamer must still run BEFORE ts.Finish(false) — registered
+	// here, between clearActiveTurn and Finish. finalizeStreamer is what
+	// calls wsStreamer.Finalize(), which writes the assistant transcript
+	// entry (FIX 1). Finish(false)'s onCancelFinish callback
+	// (pkg/agent/cancel.go) is what writes the turn_canceled entry AND calls
+	// MarkLastEntryTruncated to flag the assistant entry. Both depend on the
+	// assistant entry already existing in transcript.jsonl:
 	//   - MarkLastEntryTruncated's backward-walk finds nothing to flag if the
 	//     assistant entry isn't there yet (silently succeeds as a no-op —
 	//     Truncated never gets set).
@@ -5264,13 +5293,15 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	//     frames in transcript.jsonl's on-disk order, so if turn_canceled is
 	//     written first, it replays first too, and the frontend's "find the
 	//     existing message" lookup always misses.
-	// Before this fix, finalizeStreamer was deferred FIRST in this function
-	// (right after ts.setTurnCancel), which — being LIFO — made it run LAST,
-	// AFTER Finish's callback: exactly backwards. Live-verified via a
-	// mid-stream cancel: transcript.jsonl showed user -> turn_canceled ->
-	// assistant (wrong order) before this fix, user -> assistant ->
-	// turn_canceled (correct) after it.
+	// Live-verified via a mid-stream cancel: transcript.jsonl showed user ->
+	// turn_canceled -> assistant (wrong order) when finalizeStreamer ran
+	// after Finish's callback; user -> assistant -> turn_canceled (correct)
+	// with finalizeStreamer running first. closeOnce.Do inside Finish makes
+	// repeated Finish calls safe — the cancel path may have already called
+	// Finish(true); this deferred Finish(false) is then a no-op.
+	defer ts.Finish(false)
 	defer ts.finalizeStreamer(ctx)
+	defer al.clearActiveTurn(ts)
 
 	turnStatus := TurnEndStatusCompleted
 	defer func() {

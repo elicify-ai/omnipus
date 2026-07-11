@@ -437,6 +437,7 @@ type SubTurnEndPayload struct {
 	// Reason is populated ONLY when Status == SubTurnStatusInterrupted (FIX 4,
 	// 7-reviewer-gate follow-up on the Wave 3 fix pass), mirroring the wire
 	// contract's SubagentEndFrame.reason field ("why the sub-turn was
+	//nolint:misspell // documents the literal wire enum value, matches frontend TS union
 	// interrupted by the parent" — parent_timeout | parent_cancelled |
 	// parent_done_early | unknown). spawnSubTurn's cleanup defer sets this
 	// from the cheapest honest signal available at that point

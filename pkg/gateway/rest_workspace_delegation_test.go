@@ -552,6 +552,9 @@ func TestDefaultWorkspaceDelegationEdges_MatchesCoreagentSeed(t *testing.T) {
 	// independent of defaultWorkspaceDelegationEdges's own implementation, by
 	// replaying the exact same derivation the function's doc comment describes.
 	var want []storedDelegationEdge
+	//nolint:dupl // deliberately replays defaultWorkspaceDelegationEdges's loop independently
+	// (not via a shared helper) so this test can catch a regression in THAT transformation
+	// logic; sharing a helper would make this test tautological (see the doc comment above).
 	for i := range cfg.Agents.List {
 		ac := &cfg.Agents.List[i]
 		dp := coreagent.SeedDelegationEdges(coreagent.CoreAgentID(ac.ID))
