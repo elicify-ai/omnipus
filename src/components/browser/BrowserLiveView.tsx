@@ -35,6 +35,7 @@ import {
   mapClientToDevice,
   mapClientToFramePixels,
   mapMouseButton,
+  scaleCropToImagePixels,
   type FrameCropRect,
 } from '@/lib/browserLiveCoords'
 import { normalizeNavigateUrl } from '@/lib/browserLiveUrl'
@@ -130,13 +131,17 @@ function pillConfig(state: LiveStatus, controlledByOther: boolean): PillConfig {
 // no-manager-for-agent, live-view-disabled, malformed control) already
 // treats as reasonably readable.
 function friendlyBrowserStatusMessage(raw: string): string {
+  // Order matters: the backend wraps EVERY navigate failure — including a Go
+  // url.Parse error — as "... navigate blocked: ...", so the more-specific
+  // invalid-URL signature must be checked BEFORE the generic blocked/SSRF one,
+  // or a malformed address is mislabeled "blocked for security" (UAT finding).
+  if (/invalid character .* in host name|parse "[^"]*":/i.test(raw)) {
+    console.debug('[browser] invalid URL:', raw)
+    return "That doesn't look like a valid web address."
+  }
   if (/navigate blocked|SSRF/i.test(raw)) {
     console.debug('[browser] navigation blocked:', raw)
     return 'That address is blocked for security reasons.'
-  }
-  if (/invalid character .* in host name|^parse "/i.test(raw)) {
-    console.debug('[browser] invalid URL:', raw)
-    return "That doesn't look like a valid web address."
   }
   return raw
 }
@@ -439,31 +444,47 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, onHandT
   // the live <img> at call time (not a stale snapshot) so the crop always
   // reflects exactly what the user was looking at when they finished the
   // drag/click.
-  const cropFrameToFile = useCallback(async (rect: FrameCropRect): Promise<File | null> => {
-    const img = imgRef.current
-    if (!img || !img.complete || img.naturalWidth === 0) return null
-    // Reviewer finding: drawImage/getContext can throw synchronously (e.g.
-    // IndexSizeError on a degenerate zero-width/height rect, or a tainted
-    // canvas) — this function is awaited from finalizeSelection, which is
-    // itself invoked fire-and-forget (`void finalizeSelection(...)` from the
-    // pointerup handler), so an uncaught rejection here would surface as an
-    // unhandled promise rejection with no toast and a frozen selection box.
-    // Returning null on ANY failure routes through finalizeSelection's
-    // existing `if (!file) return fail()` path instead.
-    try {
-      const canvas = document.createElement('canvas')
-      canvas.width = rect.width
-      canvas.height = rect.height
-      const ctx = canvas.getContext('2d')
-      if (!ctx) return null
-      ctx.drawImage(img, rect.x, rect.y, rect.width, rect.height, 0, 0, rect.width, rect.height)
-      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'))
-      if (!blob) return null
-      return new File([blob], 'annotation.png', { type: 'image/png' })
-    } catch {
-      return null
-    }
-  }, [])
+  const cropFrameToFile = useCallback(
+    async (rect: FrameCropRect, frameWidth: number, frameHeight: number): Promise<File | null> => {
+      const img = imgRef.current
+      if (!img || !img.complete || img.naturalWidth === 0) return null
+      // UAT finding (blank crop): `rect` is in frame-METADATA space
+      // (frame.width/height = CDP Metadata.DeviceWidth/DeviceHeight — the full
+      // viewport device-pixel size), but the screencast JPEG is captured with
+      // WithMaxWidth(screencastMaxWidth=1280) (live.go), so the decoded <img>'s
+      // natural pixels (img.naturalWidth/Height) are DOWNSCALED whenever the
+      // device width exceeds 1280. Using `rect` directly as the drawImage
+      // SOURCE rect then reads an out-of-bounds/misaligned region of the
+      // smaller bitmap → drawImage draws nothing → a transparent (blank
+      // white/black) crop. Scale the source rect from frame space into the
+      // img's actual natural-pixel space; the destination canvas is sized to
+      // that native region so we capture at the JPEG's true resolution.
+      const src = scaleCropToImagePixels(rect, frameWidth, frameHeight, img.naturalWidth, img.naturalHeight)
+      const { x: sx, y: sy, width: sw, height: sh } = src
+      // Reviewer finding: drawImage/getContext can throw synchronously (e.g.
+      // IndexSizeError on a degenerate zero-width/height rect, or a tainted
+      // canvas) — this function is awaited from finalizeSelection, which is
+      // itself invoked fire-and-forget (`void finalizeSelection(...)` from the
+      // pointerup handler), so an uncaught rejection here would surface as an
+      // unhandled promise rejection with no toast and a frozen selection box.
+      // Returning null on ANY failure routes through finalizeSelection's
+      // existing `if (!file) return fail()` path instead.
+      try {
+        const canvas = document.createElement('canvas')
+        canvas.width = Math.round(sw)
+        canvas.height = Math.round(sh)
+        const ctx = canvas.getContext('2d')
+        if (!ctx) return null
+        ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height)
+        const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'))
+        if (!blob) return null
+        return new File([blob], 'annotation.png', { type: 'image/png' })
+      } catch {
+        return null
+      }
+    },
+    [],
+  )
 
   // Finalizes a drag/click selection into a pendingAnnotation (crop + open
   // the comment popover). Never forwards anything over the control-input WS
@@ -489,7 +510,7 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, onHandT
       const cropRect = computeCropRect(startPx, endPx, frame.width, frame.height)
       if (!cropRect) return fail()
 
-      const file = await cropFrameToFile(cropRect)
+      const file = await cropFrameToFile(cropRect, frame.width, frame.height)
       if (!file) return fail()
       const center = framePixelToDeviceCoords(
         cropRect.x + cropRect.width / 2,
@@ -508,6 +529,13 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, onHandT
       e.preventDefault()
       const normalized = normalizeNavigateUrl(urlInput)
       if (!normalized) return
+      // UAT finding: a prior blocked-navigate error banner persisted through a
+      // subsequent SUCCESSFUL navigate (a successful navigate emits only
+      // screencast frames, never a browser_status, so nothing cleared it).
+      // Clear it optimistically on each new submit — if THIS navigate is also
+      // rejected, a fresh browser_status(error) re-raises the banner.
+      setStatusMessage(null)
+      setStatusIsError(false)
       wsRef.current?.sendInput({ kind: 'navigate', url: normalized })
       setUrlInput(normalized)
     },
