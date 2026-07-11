@@ -2034,6 +2034,14 @@ func setupAndStartServices(
 	wsHandler.webchatCh = wch
 	runningServices.ChannelManager.RegisterChannel("webchat", wch)
 
+	// Live interactive browser panel WebSocket (ADR-038 D1) — a dedicated
+	// socket, separate from chat, always registered; per-connection config
+	// gates (tools.browser.live_view_enabled / take_control_enabled) refuse
+	// with a browser_status(error) frame rather than a missing route, so a
+	// disabled feature still gives the SPA a clear, parseable reason.
+	browserWSHandler := newBrowserWSHandler(agentLoop, allowedOrigin)
+	runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/browser/ws", browserWSHandler)
+
 	// Build the in-process tool-approval registry (FR-016, FR-070, M10).
 	// policy.ValidateSaturationCap enforces FR-016 semantics:
 	//   cap < 0 → fatal (emit HIGH audit + abort)

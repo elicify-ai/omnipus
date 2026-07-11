@@ -148,6 +148,9 @@ func IsValidEventName(e EventName) bool {
 		EventTurnCancelled,
 		EventTurnCancelStuck,
 		EventCancelAbusePattern,
+		// Live interactive browser panel events (ADR-038 D6).
+		EventBrowserLiveControlTaken,
+		EventBrowserLiveControlReleased,
 		// security_change.go.
 		EventSecuritySettingChange,
 		// Misc event names emitted by other packages with stable wire

@@ -131,6 +131,20 @@ const (
 	// logic or intentional abuse (FR-25a).
 	EventCancelAbusePattern = "cancel.abuse_pattern"
 
+	// EventBrowserLiveControlTaken — INFO (Decision=allow) or WARN
+	// (Decision=deny). A /api/v1/browser/ws viewer requested interactive
+	// control of an agent's live browser (ADR-038 D6). Decision=allow means
+	// the viewer now holds the control lock; Decision=deny means the request
+	// was refused (another viewer already controls it, or
+	// tools.browser.take_control_enabled=false). This is the remote-control
+	// surface ADR-038 flags as needing an audit trail.
+	EventBrowserLiveControlTaken = "browser.live.control_taken"
+
+	// EventBrowserLiveControlReleased — INFO. A viewer released (explicitly,
+	// or implicitly via detach/disconnect) interactive control of an agent's
+	// live browser (ADR-038 D6).
+	EventBrowserLiveControlReleased = "browser.live.control_released"
+
 	// EventChannelRoutingDriftDrop — WARN. A workspace-bound channel instance's
 	// configured agent is unresolvable (deleted or a worker): the
 	// inbound message is dropped rather than silently degraded to the global

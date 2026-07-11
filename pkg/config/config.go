@@ -3191,6 +3191,17 @@ type BrowserToolConfig struct {
 	// Defaults to false (deny-by-default per SEC-04/SEC-06). Must be explicitly
 	// opted in by the operator since evaluate runs arbitrary JavaScript.
 	EvaluateEnabled bool `json:"evaluate_enabled" env:"OMNIPUS_TOOLS_BROWSER_EVALUATE_ENABLED"`
+	// LiveViewEnabled gates the ADR-038 live interactive browser panel: the
+	// /api/v1/browser/ws screencast relay. Defaults to true. Setting this
+	// false makes the gateway refuse every browser_attach with a
+	// browser_status(error) frame — no second listener, no extra surface.
+	LiveViewEnabled bool `json:"live_view_enabled" env:"OMNIPUS_TOOLS_BROWSER_LIVE_VIEW_ENABLED"`
+	// TakeControlEnabled gates interactive input injection on top of
+	// LiveViewEnabled (ADR-038 D6). Defaults to true. Setting this false
+	// keeps the live view watch-only: browser_control{action:"take"} is
+	// refused with browser_status(error) even though the screencast itself
+	// still streams.
+	TakeControlEnabled bool `json:"take_control_enabled" env:"OMNIPUS_TOOLS_BROWSER_TAKE_CONTROL_ENABLED"`
 }
 
 // IsFilterSensitiveDataEnabled returns true if sensitive data filtering is enabled

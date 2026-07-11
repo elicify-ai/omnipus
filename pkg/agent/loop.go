@@ -160,9 +160,20 @@ type AgentLoop struct {
 	// receive this instance so the allow_internal policy is honored uniformly.
 	ssrfChecker *security.SSRFChecker
 
-	// Browser automation manager (US-4/US-6/US-7). Nil when browser tools
-	// are disabled. Shutdown() is called in AgentLoop.Close().
-	browserMgr *browser.BrowserManager
+	// browserMgrs holds one BrowserManager per agent (US-4/US-6/US-7; ADR-038
+	// D4). Populated in registerSharedTools, keyed by agentID; guarded by mu
+	// (the same lock the old single al.browserMgr field used). Every entry's
+	// Shutdown() is called in AgentLoop.Close().
+	//
+	// Before ADR-038 this was a single `browserMgr *browser.BrowserManager`
+	// field, overwritten (with the prior value Shutdown()'d) on every agent
+	// processed by registerSharedTools's per-agent loop — so only the LAST
+	// agent registered ended up with a live manager; every earlier agent's
+	// browser tools silently operated on an already-Shutdown() manager. Do
+	// NOT reintroduce a single shared field — the gateway's live-view WS
+	// handler (pkg/gateway/browser_ws.go) needs a specific agent's manager,
+	// not "whichever agent registered last."
+	browserMgrs map[string]*browser.BrowserManager
 
 	// Tier 1/3 deps — stored so WireTier13Deps can re-run on hot reload.
 	// Without this, hot-reload would drop web_serve, workspace.shell, and
@@ -531,6 +542,7 @@ func NewAgentLoop(
 		contextBuilderRegistry: NewContextBuilderRegistry(),
 		admission:              newAdmissionController(0),
 		loadedTools:            make(map[string]map[string]bool),
+		browserMgrs:            make(map[string]*browser.BrowserManager),
 	}
 	al.hooks = NewHookManager(eventBus)
 	configureHookManagerFromConfig(al.hooks, cfg)
@@ -1645,11 +1657,21 @@ func registerSharedTools(
 						"ensure Chromium/Chrome is installed or set tools.browser.cdp_url",
 						map[string]any{"error": regErr.Error()})
 				} else {
+					// ADR-038 D4: store per-agent, keyed by agentID. Do NOT
+					// Shutdown() a prior entry for this SAME agentID before
+					// replacing it — registerSharedTools can re-run on hot
+					// reload (ReloadProviderAndConfig), and any live-view
+					// viewer currently attached to the old manager's
+					// screencast would be killed out from under it. The old
+					// manager for this agentID is simply dropped for GC;
+					// its Chromium process (if any tab was ever opened) is
+					// reaped by the OS once the allocator context has no
+					// remaining references — acceptable because hot-reload
+					// of browser config is rare and the alternative (killing
+					// a live view mid-session) is worse. Shutdown() for ALL
+					// entries still happens once, unconditionally, in Close().
 					al.mu.Lock()
-					if al.browserMgr != nil {
-						al.browserMgr.Shutdown()
-					}
-					al.browserMgr = mgr
+					al.browserMgrs[agentID] = mgr
 					al.mu.Unlock()
 				}
 			}
@@ -2590,11 +2612,12 @@ func (al *AgentLoop) Close() {
 	// own context; a double-cancel is a no-op.
 	al.stopSessionWorkers()
 
-	// Shutdown the browser manager (if any) to kill the Chromium subprocess.
+	// Shutdown every agent's browser manager (ADR-038 D4) to kill their
+	// Chromium subprocesses.
 	al.mu.Lock()
-	if al.browserMgr != nil {
-		al.browserMgr.Shutdown()
-		al.browserMgr = nil
+	for agentID, mgr := range al.browserMgrs {
+		mgr.Shutdown()
+		delete(al.browserMgrs, agentID)
 	}
 	al.mu.Unlock()
 
@@ -3258,6 +3281,20 @@ func (al *AgentLoop) GetConfig() *config.Config {
 	al.mu.RLock()
 	defer al.mu.RUnlock()
 	return al.cfg
+}
+
+// BrowserManagerForAgent returns agentID's BrowserManager (ADR-038 D4),
+// thread-safe. Returns (nil, false) when the agent has no browser manager —
+// either browser tools failed to register for it (see the ErrorCF log in
+// registerSharedTools) or agentID is unknown. The gateway's live-view WS
+// handler (pkg/gateway/browser_ws.go) is the primary caller: it resolves the
+// manager for the attached agent, then calls .Session(sessionID) on it to
+// reach the same chromedp context that agent's browser_* tools drive.
+func (al *AgentLoop) BrowserManagerForAgent(agentID string) (*browser.BrowserManager, bool) {
+	al.mu.RLock()
+	defer al.mu.RUnlock()
+	mgr, ok := al.browserMgrs[agentID]
+	return mgr, ok
 }
 
 // ResolveApprovalToolPolicy returns the effective tool policy ("allow"/"ask"/

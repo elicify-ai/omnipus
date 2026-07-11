@@ -433,6 +433,12 @@ func DefaultConfig() *Config {
 					Enabled: true,
 				},
 				Headless: true,
+				// ADR-038: the live interactive browser panel and take-control
+				// are both on by default — operators can disable either via
+				// config (LiveViewEnabled=false drops the second listener
+				// entirely; TakeControlEnabled=false keeps it watch-only).
+				LiveViewEnabled:    true,
+				TakeControlEnabled: true,
 			},
 			Skills: SkillsToolsConfig{
 				ToolConfig: ToolConfig{
