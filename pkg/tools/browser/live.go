@@ -55,17 +55,23 @@ type LiveFrame struct {
 // LiveInput is the engine-level input event the gateway decodes from a
 // generated.BrowserInputFrame before calling LiveViewRegistry.Input. Kind
 // mirrors the AsyncAPI BrowserInputFrame `kind` enum exactly: mouse_move,
-// mouse_down, mouse_up, wheel, key_down, key_up, text.
+// mouse_down, mouse_up, wheel, key_down, key_up, text, navigate.
 type LiveInput struct {
-	Kind      string
-	X, Y      float64
-	HasXY     bool   // ADR-038 finding #5: whether X/Y were actually present on the wire — see buildInputAction.
-	Button    string // none|left|middle|right|back|forward ("" treated as none)
-	DeltaX    float64
-	DeltaY    float64
-	Key       string
-	Code      string
-	Text      string
+	Kind   string
+	X, Y   float64
+	HasXY  bool   // ADR-038 finding #5: whether X/Y were actually present on the wire — see buildInputAction.
+	Button string // none|left|middle|right|back|forward ("" treated as none)
+	DeltaX float64
+	DeltaY float64
+	Key    string
+	Code   string
+	Text   string
+	// URL is the target for the "navigate" kind (ADR-039 D-A2: user-driven
+	// address bar). Unlike every other kind, dispatchInput runs this through
+	// BrowserManager.ValidateURL — the same SSRF/scheme gate the agent's
+	// browser_navigate tool applies — before dispatch, since the live-WS
+	// input path otherwise has no URL gate of its own.
+	URL       string
 	Modifiers int // bit field: Alt=1, Ctrl=2, Meta=4, Shift=8 — clamped to [0,15] by buildInputAction.
 }
 
@@ -685,6 +691,20 @@ func (lv *LiveView) dispatchInput(viewerID string, in LiveInput) error {
 	if err != nil {
 		return realInputError("%w", err)
 	}
+
+	// ADR-039 D-A2 (BLOCKING): a user-driven navigate MUST pass the same
+	// SSRF/scheme gate the agent's browser_navigate tool applies
+	// (BrowserManager.ValidateURL — tools.go's NavigateTool.Execute) before
+	// ever reaching CDP. The live-WS input path otherwise has no URL gate of
+	// its own. A blocked URL is a real, user-visible failure (not the benign
+	// not-controller/rate-limit kind) so the gateway surfaces it as a
+	// browser_status(error) frame instead of silently dropping it.
+	if in.Kind == "navigate" {
+		if err := lv.mgr.ValidateURL(tabCtx, in.URL); err != nil {
+			return realInputError("browser live: navigate blocked: %w", err)
+		}
+	}
+
 	// No lock held here (already released above) — bounded via lv.runCDP so
 	// a wedged transport can't hang the caller (the gateway's input-handling
 	// goroutine) forever.
@@ -819,6 +839,11 @@ func buildInputAction(in LiveInput) (chromedp.Action, error) {
 			return nil, fmt.Errorf("browser live: text input requires a non-empty text field")
 		}
 		return input.InsertText(in.Text), nil
+	case "navigate":
+		if in.URL == "" {
+			return nil, fmt.Errorf("browser live: navigate input requires a non-empty url field")
+		}
+		return chromedp.Navigate(in.URL), nil
 	default:
 		return nil, fmt.Errorf("browser live: unknown input kind %q", in.Kind)
 	}

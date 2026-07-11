@@ -9,6 +9,7 @@ import (
 
 	"github.com/chromedp/cdproto/input"
 	"github.com/chromedp/cdproto/page"
+	"github.com/chromedp/chromedp"
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/security"
@@ -172,6 +173,144 @@ func TestLiveView_DispatchInput_RateLimited(t *testing.T) {
 	}
 	require.Error(t, lastErr)
 	require.Contains(t, lastErr.Error(), "rate limit")
+}
+
+// --- navigate: ADR-039 D-A2 SSRF gate on the live-WS input path ---
+//
+// Unlike the agent's browser_navigate tool (tools.go's NavigateTool.Execute,
+// which calls BrowserManager.ValidateURL before ever touching CDP), the
+// live-WS input path had no URL gate of its own before this feature — a
+// user-driven "navigate" input went straight to CDP. dispatchInput now runs
+// the SAME ValidateURL check before dispatch (see live.go's dispatchInput).
+// These tests use IP-literal URLs so CheckHost's fail-closed private-range
+// check applies with no DNS lookup — no live network dependency, matching
+// this file's "no real Chromium/CDP connection" convention (see the package
+// doc comment at the top of this file).
+
+// newNavigateTestLiveView builds a LiveView backed by a real BrowserManager
+// (so ValidateURL's SSRF/scheme logic is genuinely exercised, not mocked)
+// with a stub runCDP so no real chromedp/Chromium connection is needed.
+func newNavigateTestLiveView(t *testing.T, runCDP func(ctx context.Context, timeout time.Duration, actions ...chromedp.Action) error) *LiveView {
+	t.Helper()
+	mgr, err := NewBrowserManager(BrowserConfig{PageTimeout: 5 * time.Second}, security.NewSSRFChecker(nil))
+	require.NoError(t, err)
+	return &LiveView{
+		mgr:       mgr,
+		sessionID: "s1",
+		viewers:   make(map[string]FrameSink),
+		tabCtx:    context.Background(),
+		runCDP:    runCDP,
+	}
+}
+
+func TestLiveView_DispatchInput_Navigate_SSRFBlocked_PrivateIPNotDispatched(t *testing.T) {
+	var dispatched bool
+	lv := newNavigateTestLiveView(t, func(context.Context, time.Duration, ...chromedp.Action) error {
+		dispatched = true
+		return nil
+	})
+	require.True(t, lv.takeControl("viewerA"))
+
+	err := lv.dispatchInput("viewerA", LiveInput{Kind: "navigate", URL: "http://127.0.0.1/admin"})
+	require.Error(t, err)
+	require.False(t, IsBenignLiveInputError(err),
+		"a blocked navigate URL must be a REAL error so the gateway surfaces browser_status(error) — never silently dropped as benign")
+	require.Contains(t, err.Error(), "navigate blocked")
+	require.False(t, dispatched, "an SSRF-blocked URL must never reach CDP dispatch")
+}
+
+func TestLiveView_DispatchInput_Navigate_BlockedSchemeNotDispatched(t *testing.T) {
+	var dispatched bool
+	lv := newNavigateTestLiveView(t, func(context.Context, time.Duration, ...chromedp.Action) error {
+		dispatched = true
+		return nil
+	})
+	require.True(t, lv.takeControl("viewerA"))
+
+	err := lv.dispatchInput("viewerA", LiveInput{Kind: "navigate", URL: "javascript:alert(1)"})
+	require.Error(t, err)
+	require.False(t, IsBenignLiveInputError(err))
+	require.Contains(t, err.Error(), "navigate blocked")
+	require.False(t, dispatched, "a blocked scheme must never reach CDP dispatch")
+}
+
+func TestLiveView_DispatchInput_Navigate_MalformedURLNotDispatched(t *testing.T) {
+	var dispatched bool
+	lv := newNavigateTestLiveView(t, func(context.Context, time.Duration, ...chromedp.Action) error {
+		dispatched = true
+		return nil
+	})
+	require.True(t, lv.takeControl("viewerA"))
+
+	err := lv.dispatchInput("viewerA", LiveInput{Kind: "navigate", URL: "http://a b.com/"})
+	require.Error(t, err)
+	require.False(t, IsBenignLiveInputError(err))
+	require.Contains(t, err.Error(), "navigate blocked")
+	require.False(t, dispatched, "a malformed URL must never reach CDP dispatch")
+}
+
+func TestLiveView_DispatchInput_Navigate_EmptyURLNotDispatched(t *testing.T) {
+	var dispatched bool
+	lv := newNavigateTestLiveView(t, func(context.Context, time.Duration, ...chromedp.Action) error {
+		dispatched = true
+		return nil
+	})
+	require.True(t, lv.takeControl("viewerA"))
+
+	err := lv.dispatchInput("viewerA", LiveInput{Kind: "navigate", URL: ""})
+	require.Error(t, err)
+	require.False(t, IsBenignLiveInputError(err))
+	require.Contains(t, err.Error(), "non-empty")
+	require.False(t, dispatched, "an empty URL must never reach CDP dispatch")
+}
+
+func TestLiveView_DispatchInput_Navigate_ValidURLPassesSSRFAndDispatches(t *testing.T) {
+	var dispatched bool
+	var gotActions []chromedp.Action
+	lv := newNavigateTestLiveView(t, func(_ context.Context, _ time.Duration, actions ...chromedp.Action) error {
+		dispatched = true
+		gotActions = actions
+		return nil
+	})
+	require.True(t, lv.takeControl("viewerA"))
+
+	// A public IP literal: not in any blocked/private range, and (being an
+	// IP literal) CheckHost resolves it with no DNS lookup.
+	err := lv.dispatchInput("viewerA", LiveInput{Kind: "navigate", URL: "http://8.8.8.8/"})
+	require.NoError(t, err)
+	require.True(t, dispatched, "an unblocked URL must reach CDP dispatch")
+	require.Len(t, gotActions, 1, "dispatchInput must build and dispatch exactly one navigate action")
+}
+
+// TestLiveView_DispatchInput_Navigate_RequiresControl proves the pre-existing
+// control-lock gate (checked at the very top of dispatchInput) still applies
+// to the new "navigate" kind exactly like every other kind — and, since the
+// control check runs before the SSRF check, an uncontrolled/wrong-viewer
+// navigate never even reaches ValidateURL or CDP.
+func TestLiveView_DispatchInput_Navigate_RequiresControl(t *testing.T) {
+	var dispatched bool
+	lv := newNavigateTestLiveView(t, func(context.Context, time.Duration, ...chromedp.Action) error {
+		dispatched = true
+		return nil
+	})
+
+	// Nobody holds control yet.
+	err := lv.dispatchInput("viewerA", LiveInput{Kind: "navigate", URL: "http://8.8.8.8/"})
+	require.Error(t, err)
+	require.True(t, IsBenignLiveInputError(err), "not-controller is the benign, high-frequency rejection kind")
+	require.Contains(t, err.Error(), "does not hold control")
+	require.False(t, dispatched)
+
+	require.True(t, lv.takeControl("viewerA"))
+
+	// viewerB never took control — still refused even though someone holds
+	// it, and the SSRF gate is never reached even for a URL that would
+	// otherwise pass it.
+	err = lv.dispatchInput("viewerB", LiveInput{Kind: "navigate", URL: "http://8.8.8.8/"})
+	require.Error(t, err)
+	require.True(t, IsBenignLiveInputError(err))
+	require.Contains(t, err.Error(), "does not hold control")
+	require.False(t, dispatched)
 }
 
 func TestLiveView_AllowInputLocked_CapsPerSecond(t *testing.T) {
@@ -372,6 +511,12 @@ func TestBuildInputAction(t *testing.T) {
 		{"key_up", LiveInput{Kind: "key_up", Key: "a", Code: "KeyA"}, false},
 		{"text", LiveInput{Kind: "text", Text: "hello"}, false},
 		{"text requires non-empty", LiveInput{Kind: "text", Text: ""}, true},
+		// ADR-039 D-A2: navigate mirrors the pre-existing "text" empty guard —
+		// buildInputAction rejects an empty URL on its own (no BrowserManager
+		// needed for this check); the SSRF/scheme gate is a separate step in
+		// dispatchInput, covered by the Navigate_* tests below.
+		{"navigate", LiveInput{Kind: "navigate", URL: "http://example.com/path"}, false},
+		{"navigate requires non-empty url", LiveInput{Kind: "navigate", URL: ""}, true},
 		{"unknown kind", LiveInput{Kind: "bogus"}, true},
 		// ADR-038 finding #5: per-kind validation added alongside the
 		// pre-existing "text" guard — mouse/wheel kinds need real
