@@ -104,7 +104,7 @@ export type ChatMessage = Message & {
    * populated for messages created via live token streaming (TokenFrame
    * carries no turn_id on the wire — live cancellation instead uses
    * markLastMessageInterrupted()'s last-assistant scan) or via the REST
-   * cold-load path (fetchSessions), whose persisted entries already carry the
+   * cold-load path (fetchSessionMessages), whose persisted entries already carry the
    * true status directly and need no correlation.
    */
   turnId?: string
