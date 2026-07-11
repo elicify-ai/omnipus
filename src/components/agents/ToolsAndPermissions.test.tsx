@@ -816,6 +816,17 @@ describe('ToolsAndPermissions — latest-wins: no edit dropped during in-flight 
   // latest value is ALWAYS persisted — coalesced rapid edits into a trailing
   // save — and isDraftReady gates hydration so the editor never snaps back.
   //
+  // FIX 3 (useAutoSave serialization, agent fallback_models UAT bug,
+  // 2026-07-11): useAutoSave now also guarantees at most ONE save is ever
+  // in flight — a debounce firing while a prior save is still outstanding no
+  // longer dispatches a second, concurrent request (which previously could
+  // let a stale save's response arrive at the server AFTER a fresher one and
+  // silently clobber it via last-write-wins full-resource PUT semantics).
+  // Instead it queues and re-fires against the LATEST data once the
+  // outstanding request settles. This test's assertions are updated to match:
+  // C's save no longer fires WHILE A is in-flight — it fires immediately
+  // after A settles, still carrying C's (latest) data.
+  //
   // Test strategy (fake timers throughout, except during initial data load):
   //   1. Load editor (real timers for queries to resolve).
   //   2. Switch to fake timers.
@@ -823,11 +834,12 @@ describe('ToolsAndPermissions — latest-wins: no edit dropped during in-flight 
   //   4. Advance 600ms → A's save fires (blocked by a deferred promise).
   //   5. While in-flight: click preset B (Balanced) → debounce starts.
   //   6. While in-flight: click preset C (Full access) → debounce resets.
-  //   7. Advance 600ms → C's debounce fires → second updateAgentTools
-  //      called (with C's config) before A has even resolved.
-  //   8. Resolve A's save → A completes.
-  //   9. Assert updateAgentTools was called at least twice; the final call
-  //      used Full access config (latest-wins), not Cautious (stale A).
+  //   7. Advance 600ms → C's debounce fires, but the save is QUEUED (not
+  //      dispatched) because A is still in flight — still only 1 call.
+  //   8. Resolve A's save → the queued save for C fires immediately after,
+  //      as the second updateAgentTools call, carrying C's config.
+  //   9. Assert updateAgentTools was called exactly twice, and the SECOND
+  //      call used Full access config (latest-wins), not Cautious (stale A).
 
   it('latest-wins: edits B and C made while A is in-flight are not dropped; C persists', async () => {
     // Add write_file to the registry so Balanced (which sets write_file:'ask'
@@ -908,10 +920,20 @@ describe('ToolsAndPermissions — latest-wins: no edit dropped during in-flight 
     expect(api.updateAgentTools).toHaveBeenCalledTimes(1)
 
     // Advance past C's debounce (500ms total − 100ms already passed = 400ms more).
-    // C's save fires HERE — BEFORE A has resolved. useAutoSave fires independently.
+    // C's debounce fires, but useAutoSave is now serialized (FIX 3): since A
+    // is still in flight, C's save is QUEUED rather than dispatched — still
+    // only 1 call. This is the behavior that closes the UAT data-loss bug:
+    // no second request goes out while one is outstanding, so there is no
+    // network-ordering race for the server to resolve incorrectly.
     await act(async () => { vi.advanceTimersByTime(500) })
+    expect(api.updateAgentTools).toHaveBeenCalledTimes(1)
 
-    // C's save has now been called (second invocation). A is still pending.
+    // Now resolve A — the queued save for C fires immediately afterward,
+    // as the second call, strictly AFTER A settled (never concurrently).
+    resolveFirstSave({ config: DEFAULT_TOOLS_CFG, tools: [] })
+    // Allow Promise microtasks to flush.
+    await act(async () => { vi.advanceTimersByTime(100) })
+
     expect(api.updateAgentTools).toHaveBeenCalledTimes(2)
 
     // The second call must use Full access's complete map (C wins, not A or B) —
@@ -923,12 +945,9 @@ describe('ToolsAndPermissions — latest-wins: no edit dropped during in-flight 
       }),
     })
 
-    // Now resolve A — it completes after C. Order proves latest-wins.
-    resolveFirstSave({ config: DEFAULT_TOOLS_CFG, tools: [] })
-    // Allow Promise microtasks to flush.
+    // No further save fires — resolving A's queued follow-up did not
+    // trigger a spurious third save.
     await act(async () => { vi.advanceTimersByTime(100) })
-
-    // Still exactly 2 calls — resolving A did not trigger a spurious third save.
     expect(api.updateAgentTools).toHaveBeenCalledTimes(2)
   })
 

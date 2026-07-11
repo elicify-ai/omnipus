@@ -100,6 +100,27 @@ export function useAutoSave<T>(
   // Each save closure captures its own sequence number and only advances
   // lastSavedJsonRef when its sequence equals the latest fired sequence.
   const firedSeqRef = useRef<number>(0)
+  // FIX 3 — serialize saves, never let two be in flight at once. Without
+  // this, two debounce cycles firing more than `debounceMs` apart — but with
+  // the FIRST save's async work (network latency, or a pre-save step like an
+  // executor runner-test) still outstanding — dispatch TWO overlapping PUT
+  // requests for the same full-resource replacement. Whichever response the
+  // SERVER processes/returns last wins the write, even when it carries an
+  // OLDER form-state snapshot than the other in-flight request: a classic
+  // last-write-wins clobber (root cause of the agent fallback_models UAT
+  // data-loss bug, 2026-07-11 — a debounced save fired from stale state
+  // arrived after a fresher save and silently wiped its fallback_models).
+  // FIX 2's stale-resolve guard above only protected this hook's OWN
+  // bookkeeping from a stale-resolving concurrent save; it never stopped the
+  // second network request from going out in the first place. Serializing —
+  // never fire while one is outstanding, always re-run against the LATEST
+  // data once the outstanding one settles — makes the final persisted state
+  // deterministic regardless of network ordering. This is strictly safer
+  // than aborting the in-flight fetch: once a PUT has been transmitted,
+  // cancelling the client's wait for the response does not guarantee the
+  // server discards the write.
+  const isSavingRef = useRef(false)
+  const rerunPendingRef = useRef(false)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const fadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const latestDataRef = useRef<T>(data)
@@ -113,6 +134,16 @@ export function useAutoSave<T>(
 
   const doSave = useCallback(async () => {
     if (disabled) return
+    // FIX 3: a save is already in flight — do not fire a second, concurrent
+    // request. Queue a re-run for when the in-flight one settles; that
+    // re-run reads `latestDataRef.current` at THAT time, so it always picks
+    // up the freshest edits rather than whatever snapshot existed when this
+    // call was attempted.
+    if (isSavingRef.current) {
+      rerunPendingRef.current = true
+      return
+    }
+    isSavingRef.current = true
     setStatus('saving')
     setError(undefined)
     // Snapshot what we're about to persist so success marks exactly that JSON
@@ -152,6 +183,19 @@ export function useAutoSave<T>(
       }
       setStatus('error')
       setError(isApiError(err) ? err.userMessage : err instanceof Error ? err.message : String(err))
+    } finally {
+      // FIX 3: release the guard, then honor any re-run queued while this
+      // save was outstanding — but only if the data actually still differs
+      // from what just (successfully or not) became the persisted marker,
+      // so a queued re-run that this save's own outcome already covers
+      // doesn't fire a redundant no-op PUT.
+      isSavingRef.current = false
+      if (rerunPendingRef.current) {
+        rerunPendingRef.current = false
+        if (JSON.stringify(latestDataRef.current) !== lastSavedJsonRef.current) {
+          void doSave()
+        }
+      }
     }
   }, [disabled])
 
@@ -259,7 +303,16 @@ export function useAutoSave<T>(
       }
       // Flush pending save (fire-and-forget — component is unmounting)
       if (initializedRef.current) {
-        if (hasPendingChanges()) {
+        // FIX 3: if a save is already in flight, do NOT fire a second,
+        // concurrent flush PUT straight past the serialize guard in
+        // `doSave` — that would reintroduce the exact overlapping-request
+        // race this hook exists to prevent. Queue a re-run instead; the
+        // in-flight save's own `finally` block re-checks the latest data
+        // and re-fires if anything changed. Refs/closures outlive the
+        // unmount, so this still runs to completion.
+        if (isSavingRef.current) {
+          rerunPendingRef.current = true
+        } else if (hasPendingChanges()) {
           saveFnRef.current(latestDataRef.current).catch((err) => {
             console.error('[useAutoSave] unmount flush save failed:', err)
           })
