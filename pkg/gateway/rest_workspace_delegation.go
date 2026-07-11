@@ -30,9 +30,12 @@ import (
 //
 // Relocated from the now-deleted rest_agent_delegation.go (ADR-037, Wave 2) —
 // this helper is not delegation-*policy*-specific, it is a shared depth-ceiling
-// lookup consumed by both workspace delegation-edge validation
-// (handleWorkspaceDelegationPut, defaultWorkspaceDelegationEdges below) and
-// workspace create/team validation (rest_workspaces.go).
+// lookup consumed by handleWorkspaceDelegationPut (this file, validating an
+// operator-submitted edge's depth) and by workspace create/team validation
+// (rest_workspaces.go, x2). NOT consumed by defaultWorkspaceDelegationEdges
+// below — that function seeds edges from the fixed coreagent matrix and
+// copies each seeded Depth verbatim, with no ceiling clamp (the coreagent
+// seed data is trusted, hardcoded Go, not operator input).
 const delegationDepthCeilingFallback = 3
 
 // delegationDepthCeiling returns the effective maximum delegation chain depth a
@@ -207,6 +210,21 @@ func (a *restAPI) handleWorkspaceDelegationPut(w http.ResponseWriter, r *http.Re
 // screen — i.e. every fresh install — which is the only case this function's
 // output is required to match byte-for-byte (see
 // TestDefaultWorkspaceDelegationEdges_MatchesCoreagentSeed).
+//
+// KNOWN, NARROW EXCEPTION (7-reviewer-gate follow-up to ADR-037,
+// silent-failure-hunter): an operator who, pre-upgrade, actually hand-edited
+// an agent's DelegationPolicy.To via the (decorative-for-enforcement, but
+// NOT decorative-for-seeding) /agents/trust screen — e.g. widened or
+// narrowed Jim's default targets before this upgrade — will silently lose
+// that customization's effect on any workspace created AFTER upgrading:
+// this function now always seeds from the fixed coreagent matrix, never from
+// whatever the operator last wrote to that field. This is a real, if narrow,
+// deviation from ADR-037's "no behavior change" framing, which covered
+// runtime *enforcement* only — it did not account for this seed-into-
+// NEW-workspace path specifically. Existing workspaces created before the
+// upgrade are entirely unaffected (their persisted Delegation[] edges are
+// untouched by this function, which only runs at workspace-creation time).
+// See ADR-037 §7 (Post-decision review) for the acknowledgment.
 func defaultWorkspaceDelegationEdges(cfg *config.Config) []storedDelegationEdge {
 	if cfg == nil {
 		return nil
