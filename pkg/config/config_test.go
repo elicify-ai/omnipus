@@ -263,6 +263,24 @@ func TestDefaultConfig_Temperature(t *testing.T) {
 	}
 }
 
+// TestDefaultConfig_BrowserLiveView verifies the ADR-038 live interactive
+// browser panel and its take-control capability are both enabled by default,
+// matching every other standard built-in tool (exec/web/cron default
+// Enabled=true) — the operator kill-switches
+// (tools.browser.live_view_enabled / tools.browser.take_control_enabled)
+// default ON, not OFF.
+// Traces to: docs/internal/architecture/ADR-038-live-interactive-browser-panel.md
+func TestDefaultConfig_BrowserLiveView(t *testing.T) {
+	cfg := DefaultConfig()
+
+	if !cfg.Tools.Browser.LiveViewEnabled {
+		t.Error("Tools.Browser.LiveViewEnabled should default to true (ADR-038)")
+	}
+	if !cfg.Tools.Browser.TakeControlEnabled {
+		t.Error("Tools.Browser.TakeControlEnabled should default to true (ADR-038 D6)")
+	}
+}
+
 // TestDefaultConfig_Gateway verifies gateway defaults
 func TestDefaultConfig_Gateway(t *testing.T) {
 	cfg := DefaultConfig()
