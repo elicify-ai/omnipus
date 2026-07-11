@@ -480,7 +480,7 @@ describe('useAutoSave', () => {
 
   // ── FIX 3: serialized saves (regression — agent fallback_models save race) ──
   //
-  // Live UAT (persona "Priya") found that the agent edit form's fallback
+  // Live UAT found that the agent edit form's fallback
   // model editor silently lost data: a PUT correctly carrying
   // `fallback_models: [{...}]` was clobbered by a SECOND PUT — fired from a
   // slightly earlier interaction — that carried no `fallback_models` key at
@@ -585,5 +585,59 @@ describe('useAutoSave', () => {
 
     expect(saveFn).toHaveBeenCalledTimes(2)
     expect(saveFn).toHaveBeenLastCalledWith({ v: 3 })
+  })
+
+  it('FIX-3: a queued save still fires with the LATEST data after the in-flight save REJECTS (not silently dropped)', async () => {
+    // Regression-gap coverage: the `finally` block that honors
+    // `rerunPendingRef` is unconditional — it must fire a queued re-run
+    // whether the in-flight save resolved OR rejected. A rejected first
+    // save (e.g. a flaky network blip) is a realistic real-world trigger:
+    // without this coverage, an edit queued behind a FAILED save could
+    // regress to being silently dropped instead of retried.
+    let rejectFirst!: (err?: unknown) => void
+    const promiseFirst = new Promise<void>((_resolve, reject) => { rejectFirst = reject })
+    const saveFn = vi.fn()
+      .mockReturnValueOnce(promiseFirst)
+      .mockResolvedValueOnce(undefined)
+
+    let data = { v: 1 }
+
+    const { result, rerender } = renderHook(
+      ({ d }) => useAutoSave(d, saveFn, { debounceMs: 50 }),
+      { initialProps: { d: data } },
+    )
+
+    // Fire the first save — it will reject.
+    data = { v: 2 }
+    rerender({ d: data })
+    await act(async () => { vi.advanceTimersByTime(100) })
+    expect(saveFn).toHaveBeenCalledTimes(1)
+    expect(result.current.status).toBe('saving')
+
+    // A newer edit arrives while the first save is still outstanding — it
+    // must be queued via rerunPendingRef, not dispatched as a second,
+    // concurrent request.
+    data = { v: 3 }
+    rerender({ d: data })
+    await act(async () => { vi.advanceTimersByTime(100) })
+    expect(saveFn).toHaveBeenCalledTimes(1)
+
+    // The first save rejects. The queued re-run must still fire immediately
+    // afterward, carrying the LATEST data.
+    await act(async () => {
+      rejectFirst(new Error('Network blip'))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(saveFn).toHaveBeenCalledTimes(2)
+    expect(saveFn).toHaveBeenLastCalledWith({ v: 3 })
+
+    // The queued re-run's own save settles successfully — the edit was
+    // NOT silently dropped after the first save's failure.
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(result.current.status).toBe('saved')
   })
 })
