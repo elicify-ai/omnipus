@@ -36,6 +36,7 @@
 // tracks the live value on every message (rebinds whenever the incoming,
 // non-empty workspace_id differs from what's currently stored), while still
 // never blanking an existing binding when a later message carries none at all.
+
 package gateway
 
 import (
@@ -90,7 +91,10 @@ func TestWorkspaceDelegation_EdgeWiredViaTeamTabPersistsForLiveSession(t *testin
 	// part of the default team roster, so wiring it is always a manual,
 	// UI-driven Team-tab edit.
 	cfg := api.agentLoop.GetConfig()
-	cfg.Agents.List = append(cfg.Agents.List, config.AgentConfig{ID: "worker", Name: "Worker", Type: config.AgentTypeWorker})
+	cfg.Agents.List = append(
+		cfg.Agents.List,
+		config.AgentConfig{ID: "worker", Name: "Worker", Type: config.AgentTypeWorker},
+	)
 
 	// Step 1 (mirrors updateWorkspace(workspaceId, {core_team: members})):
 	// add "worker" to the team BEFORE the edge, exactly as WorkspaceTeamTab's
@@ -221,5 +225,10 @@ func TestWorkspaceDelegation_SessionRebind_IgnoresAbsentWorkspaceID(t *testing.T
 
 	meta, err := store.GetMeta(sessionID)
 	require.NoError(t, err)
-	assert.Equal(t, wsA, meta.WorkspaceID, "an absent workspace_id on a later message must not clear the existing binding")
+	assert.Equal(
+		t,
+		wsA,
+		meta.WorkspaceID,
+		"an absent workspace_id on a later message must not clear the existing binding",
+	)
 }
