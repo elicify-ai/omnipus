@@ -283,7 +283,12 @@ type LiveView struct {
 	// screencast death (watchForUnexpectedDeath), never on a clean Detach.
 	statusSinks map[string]StatusSink
 	seq         int
-	controller  string // viewerID holding control; "" = uncontrolled
+	// lastFrame caches the most recently delivered screencast frame so a viewer
+	// that attaches to an already-running screencast (a second panel, a pop-out)
+	// sees the current state immediately instead of waiting for the next repaint
+	// (which never comes on an idle page). Guarded by mu.
+	lastFrame  *LiveFrame
+	controller string // viewerID holding control; "" = uncontrolled
 
 	// Rate limiting: input can only ever come from the single controller at a
 	// time, so one shared counter per LiveView is sufficient — no per-viewer
@@ -349,8 +354,17 @@ func (lv *LiveView) attach(tabCtx context.Context, viewerID string, onFrame Fram
 	}
 
 	if lv.isActiveLocked() {
+		// Screencast already running — this viewer piggybacks on it. Replay the
+		// last delivered frame so it renders the current page immediately rather
+		// than waiting for the next repaint (which may never come on an idle
+		// page — the "Waiting for the first frame…" hang a pop-out / second
+		// panel would otherwise show).
+		cached := lv.lastFrame
 		lv.mu.Unlock()
-		return nil // screencast already running — this viewer just piggybacks on it
+		if cached != nil {
+			onFrame(*cached)
+		}
+		return nil
 	}
 
 	lv.tabCtx = tabCtx
@@ -521,20 +535,7 @@ func (lv *LiveView) runAckWorker(tabCtx, workerCtx context.Context) {
 // deliver fans a decoded screencast frame out to every currently-attached
 // viewer sink.
 func (lv *LiveView) deliver(frame *page.EventScreencastFrame) {
-	lv.mu.Lock()
-	lv.seq++
-	seq := lv.seq
-	sinks := make([]FrameSink, 0, len(lv.viewers))
-	for _, sink := range lv.viewers {
-		sinks = append(sinks, sink)
-	}
-	lv.mu.Unlock()
-
-	if len(sinks) == 0 {
-		return
-	}
-
-	lf := LiveFrame{Seq: seq, Data: frame.Data}
+	lf := LiveFrame{Data: frame.Data}
 	if frame.Metadata != nil {
 		lf.Width = int(frame.Metadata.DeviceWidth)
 		lf.Height = int(frame.Metadata.DeviceHeight)
@@ -552,6 +553,17 @@ func (lv *LiveView) deliver(frame *page.EventScreencastFrame) {
 	if lf.Height <= 0 {
 		lf.Height = screencastMaxHeight
 	}
+
+	lv.mu.Lock()
+	lv.seq++
+	lf.Seq = lv.seq
+	cached := lf
+	lv.lastFrame = &cached // replayed to viewers that attach mid-screencast
+	sinks := make([]FrameSink, 0, len(lv.viewers))
+	for _, sink := range lv.viewers {
+		sinks = append(sinks, sink)
+	}
+	lv.mu.Unlock()
 
 	for _, sink := range sinks {
 		sink(lf)
