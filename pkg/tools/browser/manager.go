@@ -113,6 +113,19 @@ type BrowserManager struct {
 	// uniqueness ADR-038 D3 calls for — no separate agentID key is needed
 	// here. Never nil after NewBrowserManager.
 	live *LiveViewRegistry
+
+	// evalCDP executes a one-off, non-screencast chromedp action against a
+	// resolved tab context — currently only InspectPoint's (ADR-039 D-B3)
+	// chromedp.Evaluate call. A field rather than a direct chromedp.Run call,
+	// mirroring LiveView.runCDP's rationale exactly (see runCDPWithTimeout's
+	// doc comment in live.go): it lets tests substitute a controllable
+	// stand-in to deterministically exercise InspectPoint's panic-recovery
+	// path (ADR-039 UAT BE-2) without a real Chromium/CDP connection — see
+	// inspect_test.go's TestInspectPoint_PanicDuringCDPCall_RecoversToSoftNoResult.
+	// nil-checked at the call site and defaults to chromedp.Run, so every
+	// existing hand-built &BrowserManager{} test literal that never calls
+	// InspectPoint is unaffected.
+	evalCDP func(ctx context.Context, actions ...chromedp.Action) error
 }
 
 // NewBrowserManager creates a manager. ssrf must be non-nil — SSRF protection

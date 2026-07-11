@@ -185,3 +185,105 @@ func TestInspectPoint_NoElementAtPoint(t *testing.T) {
 	assert.False(t, result.Ok)
 	assert.Empty(t, result.Tag)
 }
+
+// --- ADR-039 UAT BE-2: InspectPoint must never keep the caller's HTTP
+// request blocked for up to a large PageTimeout ---
+
+// TestInspectPoint_BoundedByInspectEvalTimeout_NotPageTimeout is the direct
+// regression test for UAT finding BE-2 ("POST /api/v1/browser/inspect
+// returned a 502 during a pop-out annotate"). Root cause: InspectPoint's CDP
+// eval was bounded by m.PageTimeout() (a full page-load budget, commonly
+// 30s+) instead of its own short deadline, so when the shared CDP command
+// queue was contended (a concurrent agent tool call — in the actual UAT
+// incident, browser_screenshot — occupying the transport, exactly as
+// reproduced here via a synchronous JS busy-loop on the SAME tab/session),
+// the HTTP handler could stay blocked long enough to trip a fronting reverse
+// proxy's idle timeout, which is what actually surfaced to the tester as a
+// 502 even though this Go handler always resolved to a clean best-effort
+// result. Configures a deliberately large PageTimeout (45s) so a pass here
+// proves InspectPoint is bounded by inspectEvalTimeout, not PageTimeout.
+// BDD: Given a tab whose shared CDP command queue is occupied by a
+// long-running synchronous JS evaluation, and PageTimeout is configured much
+// larger than inspectEvalTimeout,
+// When InspectPoint is called against that same tab,
+// Then it returns Ok:false, err:nil well within inspectEvalTimeout-scale
+// latency, never anywhere near the full PageTimeout budget.
+func TestInspectPoint_BoundedByInspectEvalTimeout_NotPageTimeout(t *testing.T) {
+	skipIfNoBrowser(t)
+
+	srv := startInspectTestServer(t)
+	defer srv.Close()
+
+	tmpDir := t.TempDir()
+	cfg := BrowserConfig{
+		ProfileDir:  filepath.Join(tmpDir, "profile"),
+		Headless:    true,
+		PageTimeout: 45 * time.Second, // deliberately large — proves InspectPoint does NOT wait anywhere near this long
+		MaxTabs:     5,
+	}
+	mgr, err := NewBrowserManager(cfg, security.NewSSRFChecker(nil))
+	require.NoError(t, err)
+	t.Cleanup(mgr.Shutdown)
+
+	tabCtx, err := mgr.Session(DefaultSessionID)
+	require.NoError(t, err)
+	navCtx, cancel := context.WithTimeout(tabCtx, mgr.PageTimeout())
+	defer cancel()
+	require.NoError(t, chromedp.Run(navCtx, chromedp.Navigate(srv.URL)))
+
+	// Occupy the shared CDP command dispatch loop with a synchronous JS busy
+	// loop on the SAME tab — every chromedp.Run for one browser process
+	// funnels through a single fixed-capacity command queue drained by one
+	// goroutine (see inspectEvalTimeout's doc comment and live.go's
+	// handleScreencastEvent for the full ADR-038 analysis), so this
+	// reproduces the exact contention shape the UAT incident hit.
+	const busyLoopJS = `(function(){var s=Date.now(); while(Date.now()-s<8000){} return true;})()`
+	go func() {
+		_ = chromedp.Run(tabCtx, chromedp.Evaluate(busyLoopJS, nil))
+	}()
+	time.Sleep(300 * time.Millisecond) // let the busy loop actually start occupying the queue
+
+	start := time.Now()
+	result, err := mgr.InspectPoint(30, 20)
+	elapsed := time.Since(start)
+
+	require.NoError(t, err, "a contended/timed-out CDP eval is a soft outcome, not an error")
+	assert.False(t, result.Ok)
+	assert.Less(t, elapsed, 20*time.Second,
+		"InspectPoint must be bounded by inspectEvalTimeout (5s), not m.PageTimeout() (45s) — a contended "+
+			"shared CDP transport must fail this call fast, not block the whole HTTP handler for tens of seconds")
+}
+
+// TestInspectPoint_PanicDuringCDPCall_RecoversToSoftNoResult verifies
+// InspectPoint's defer/recover safety net (ADR-039 UAT BE-2): a panic during
+// the CDP call (simulated deterministically via BrowserManager.evalCDP — a
+// test seam mirroring LiveView.runCDP's exact rationale, standing in for a
+// currently-unknown chromedp/cdproto-internal panic, e.g. a malformed CDP
+// response from a wedged tab) must degrade to the SAME best-effort
+// InspectResult{Ok:false}, err:nil contract as every other InspectPoint
+// failure mode, never propagate past this function. An unrecovered panic
+// here would unwind into net/http's own per-request recovery, which closes
+// the connection with NO response ever written — exactly the class of
+// failure that can surface to a client as a 502 through any fronting reverse
+// proxy, which is the user-visible symptom this whole fix addresses.
+//
+// No real Chromium needed: the manager is hand-built (white-box, same
+// package) with started=true and a pre-populated DefaultSessionID session
+// entry, so m.Session() resolves without ever touching ensureStarted()/CDP —
+// only evalCDP (the substitute that panics) is ever invoked.
+func TestInspectPoint_PanicDuringCDPCall_RecoversToSoftNoResult(t *testing.T) {
+	mgr := &BrowserManager{
+		cfg:      BrowserConfig{PageTimeout: 5 * time.Second, MaxTabs: 5},
+		started:  true,
+		sessions: map[string]*sessionEntry{DefaultSessionID: {ctx: context.Background(), cancel: func() {}}},
+		evalCDP: func(ctx context.Context, actions ...chromedp.Action) error {
+			panic("simulated chromedp/cdproto-internal panic")
+		},
+	}
+
+	require.NotPanics(t, func() {
+		result, err := mgr.InspectPoint(30, 20)
+		require.NoError(t, err, "a recovered panic must still report the best-effort nil-error contract")
+		assert.False(t, result.Ok, "a recovered panic must never fabricate a resolved element")
+	}, "InspectPoint must never let an internal panic propagate to its caller")
+}

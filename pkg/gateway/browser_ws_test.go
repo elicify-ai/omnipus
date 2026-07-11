@@ -93,6 +93,10 @@ type browserFrameDecoder struct { // not-wire-format: decode-only test assertion
 	Message    string `json:"message,omitempty"`
 	SessionID  string `json:"session_id,omitempty"`
 	Controller string `json:"controller,omitempty"`
+	// ControlledByOther is a pointer (ADR-039 UAT BE-1) so tests can
+	// distinguish "field absent" from "field present and false" — the wire
+	// field is `omitempty`, so a plain bool would silently conflate the two.
+	ControlledByOther *bool `json:"controlled_by_other,omitempty"`
 }
 
 // newBrowserWSTestHandler builds a BrowserWSHandler backed by a minimal
@@ -158,6 +162,29 @@ func readBrowserFrame(t *testing.T, conn *websocket.Conn, timeout time.Duration)
 	var f browserFrameDecoder
 	require.NoError(t, json.Unmarshal(raw, &f))
 	return f
+}
+
+// readBrowserStatusFrame reads frames off conn, skipping any non-
+// browser_status frame, until a browser_status frame arrives or timeout
+// elapses. Needed once a real CDP screencast is running (the
+// browserWSSkipIfNoBrowser-gated full-round-trip tests below): screencast
+// delivery is repaint-driven and asynchronous to control/status delivery
+// (ADR-038 D3), so a browser_screencast frame interleaving ahead of the
+// browser_status frame a test is actually asserting on is a normal, expected
+// race — not a bug — and a naive single readBrowserFrame call would flake.
+func readBrowserStatusFrame(t *testing.T, conn *websocket.Conn, timeout time.Duration) browserFrameDecoder {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			t.Fatal("no browser_status frame received within timeout")
+		}
+		f := readBrowserFrame(t, conn, remaining)
+		if f.Type == "browser_status" {
+			return f
+		}
+	}
 }
 
 // assertBrowserConnProceeds sends a browser_attach for an agent that is
@@ -926,4 +953,101 @@ func TestBrowserWS_Input_Navigate_SSRFBlocked_FullRoundTrip(t *testing.T) {
 	assert.Equal(t, "error", navResp.State)
 	assert.Contains(t, navResp.Message, "navigate blocked",
 		"a loopback navigate URL must be refused by the SSRF gate: %+v", navResp)
+}
+
+// TestBrowserWS_Control_ControlledByOther_BroadcastsToSecondConnection is the
+// gateway-level, full-round-trip regression guard for ADR-039 UAT finding
+// BE-1 ("two viewers of the same live browser session disagree about who's
+// driving"): two REAL WebSocket connections attach to the SAME agent/session
+// (mirroring a docked panel + a pop-out window), connection A takes control,
+// and connection B — which never asked for anything — must receive an
+// unprompted browser_status frame with controlled_by_other=true. Releasing
+// must broadcast controlled_by_other=false back to B. This complements the
+// no-CDP-needed LiveView-level tests in pkg/tools/browser/live_test.go
+// (TestLiveView_TakeReleaseControl_BroadcastsToOtherViewers) by proving the
+// gateway's onControl wiring (handleAttach, browser_ws.go) actually reaches
+// a second live WS connection end to end — same rationale as the sibling
+// navigate-SSRF full-round-trip test above.
+//
+// Gated exactly like that sibling test: needs a real CDP screencast
+// (handleAttach's mgr.Live().Attach() call), so it SKIPs wherever no working
+// Chromium/Chrome binary is available and runs for real everywhere one is.
+// BDD: Given connection A and connection B both attached to the same
+// (agent, session), When A sends browser_control{action:"take"}, Then B
+// (which sent nothing) receives browser_status{controlled_by_other:true};
+// When A then sends browser_control{action:"release"}, Then B receives
+// browser_status{controlled_by_other:false}.
+func TestBrowserWS_Control_ControlledByOther_BroadcastsToSecondConnection(t *testing.T) {
+	browserWSSkipIfNoBrowser(t)
+
+	tmpDir := t.TempDir()
+	handler, al := newBrowserWSTestHandler(t, func(cfg *config.Config) {
+		cfg.Tools.Browser.Headless = true
+		cfg.Tools.Browser.ProfileDir = filepath.Join(tmpDir, "browser-profile")
+		cfg.Tools.Browser.PageTimeoutSec = 30
+		cfg.Tools.Browser.MaxTabs = 5
+	})
+	t.Cleanup(handler.Wait)
+
+	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	require.NotNil(t, defaultAgent, "test fixture must seed at least one agent")
+	agentID := defaultAgent.ID
+	mgr, ok := al.BrowserManagerForAgent(agentID)
+	require.True(t, ok, "registerSharedTools must have registered a browser manager for the default agent")
+	t.Cleanup(mgr.Shutdown)
+
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	connA := dialBrowserTestWS(t, srv)
+	t.Cleanup(func() { _ = connA.Close() })
+	connA.SetReadDeadline(time.Now().Add(20 * time.Second)) //nolint:errcheck
+	sendWSAuthFrameDevMode(t, connA)
+
+	connB := dialBrowserTestWS(t, srv)
+	t.Cleanup(func() { _ = connB.Close() })
+	connB.SetReadDeadline(time.Now().Add(20 * time.Second)) //nolint:errcheck
+	sendWSAuthFrameDevMode(t, connB)
+
+	attachFrame := func(sessionID string) []byte {
+		data, err := json.Marshal(generated.BrowserAttachFrame{
+			Type: string(generated.WsFrameTypeBrowserAttach), AgentId: agentID, SessionId: sessionID,
+		})
+		require.NoError(t, err)
+		return data
+	}
+
+	require.NoError(t, connA.WriteMessage(websocket.TextMessage, attachFrame("controlled-by-other-session")))
+	attachRespA := readBrowserStatusFrame(t, connA, 20*time.Second)
+	require.Equal(t, "attached", attachRespA.State, "conn A attach must succeed against a real headless Chromium: %+v", attachRespA)
+	require.NotNil(t, attachRespA.ControlledByOther)
+	assert.False(t, *attachRespA.ControlledByOther, "conn A attaches first — nobody controls yet")
+
+	require.NoError(t, connB.WriteMessage(websocket.TextMessage, attachFrame("controlled-by-other-session")))
+	attachRespB := readBrowserStatusFrame(t, connB, 20*time.Second)
+	require.Equal(t, "attached", attachRespB.State, "conn B attach (piggyback on A's screencast) must succeed: %+v", attachRespB)
+	require.NotNil(t, attachRespB.ControlledByOther)
+	assert.False(t, *attachRespB.ControlledByOther, "still nobody controls at conn B's attach time")
+
+	control := func(action string) []byte {
+		data, err := json.Marshal(generated.BrowserControlFrame{Type: string(generated.WsFrameTypeBrowserControl), Action: action})
+		require.NoError(t, err)
+		return data
+	}
+
+	require.NoError(t, connA.WriteMessage(websocket.TextMessage, control("take")))
+	takeRespA := readBrowserStatusFrame(t, connA, 5*time.Second)
+	require.Equal(t, "controlling", takeRespA.State, "conn A's own take response: %+v", takeRespA)
+
+	broadcastToB := readBrowserStatusFrame(t, connB, 5*time.Second)
+	require.NotNil(t, broadcastToB.ControlledByOther, "conn B must receive an unprompted controlled_by_other broadcast: %+v", broadcastToB)
+	assert.True(t, *broadcastToB.ControlledByOther, "conn B never took control — it must be told someone else did")
+
+	require.NoError(t, connA.WriteMessage(websocket.TextMessage, control("release")))
+	releaseRespA := readBrowserStatusFrame(t, connA, 5*time.Second)
+	require.Equal(t, "released", releaseRespA.State, "conn A's own release response: %+v", releaseRespA)
+
+	broadcastToB2 := readBrowserStatusFrame(t, connB, 5*time.Second)
+	require.NotNil(t, broadcastToB2.ControlledByOther)
+	assert.False(t, *broadcastToB2.ControlledByOther, "conn B must be told the lock was freed")
 }

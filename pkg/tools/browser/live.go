@@ -107,6 +107,25 @@ type FrameSink func(LiveFrame)
 // non-blocking contract as FrameSink.
 type StatusSink func(message string)
 
+// ControlSink receives a control-ownership change notification for one
+// attached viewer (ADR-039 UAT BE-1: "two viewers of the same live session
+// disagree about who's driving"). The server already single-controller-locks
+// (takeControl/releaseControl below) — this sink is what fixes the DISPLAY
+// side: every viewer OTHER than the one that just took/released control is
+// invoked with the freshly-computed controlledByOther value so it can update
+// its own status pill instead of continuing to show stale "Agent driving" /
+// "You're driving" state. Invoked with true when a DIFFERENT viewer just
+// took control (this viewer is not — and was never — the new controller);
+// invoked with false when control was released. The acting viewer itself is
+// never sent a ControlSink notification for its own take/release — it
+// already gets an authoritative browser_status frame as the direct response
+// to its own browser_control request (handleControl, browser_ws.go). Same
+// non-blocking contract as FrameSink: the LiveView invokes every registered
+// sink synchronously with no lock held (see takeControl/releaseControl), so
+// a slow consumer must hand off to its own buffered channel exactly like the
+// gateway's per-connection sendCh already does for frames/status.
+type ControlSink func(controlledByOther bool)
+
 // LiveViewRegistry manages one LiveView per browser session for a single
 // BrowserManager. Since a BrowserManager is itself scoped to one agent
 // (pkg/agent/loop.go's per-agent manager map, ADR-038 D4), keying LiveViews
@@ -162,12 +181,13 @@ func (r *LiveViewRegistry) view(sessionID string) *LiveView {
 	lv, ok := r.views[sessionID]
 	if !ok {
 		lv = &LiveView{
-			mgr:         r.mgr,
-			sessionID:   sessionID,
-			viewers:     make(map[string]FrameSink),
-			statusSinks: make(map[string]StatusSink),
-			ackCh:       make(chan int64, 1),
-			runCDP:      runCDPWithTimeout,
+			mgr:          r.mgr,
+			sessionID:    sessionID,
+			viewers:      make(map[string]FrameSink),
+			statusSinks:  make(map[string]StatusSink),
+			controlSinks: make(map[string]ControlSink),
+			ackCh:        make(chan int64, 1),
+			runCDP:       runCDPWithTimeout,
 		}
 		r.views[sessionID] = lv
 	}
@@ -189,19 +209,27 @@ func (r *LiveViewRegistry) lookup(sessionID string) (*LiveView, bool) {
 // screencast if this is the first viewer of that session (ref-counted, D3).
 // onFrame is invoked for every screencast frame until Detach(sessionID,
 // viewerID); onStatus (ADR-038 finding #2, may be nil) is invoked if the
-// underlying tab context dies unexpectedly before that Detach happens.
+// underlying tab context dies unexpectedly before that Detach happens;
+// onControl (ADR-039 UAT BE-1, may be nil) is invoked whenever some OTHER
+// viewer takes or releases control after this call returns.
 // Resolves the manager's session tab itself, so callers only need a session
 // ID, not a chromedp context.
-func (r *LiveViewRegistry) Attach(sessionID, viewerID string, onFrame FrameSink, onStatus StatusSink) error {
+//
+// Returns controlledByOther: true when, AT THE MOMENT OF THIS ATTACH,
+// sessionID is already controlled by a viewer other than viewerID — so a
+// newly-attaching connection (a second panel, a pop-out) can render the
+// correct "someone else is driving" state on its very first status frame
+// instead of only learning about it on the NEXT take/release broadcast.
+func (r *LiveViewRegistry) Attach(sessionID, viewerID string, onFrame FrameSink, onStatus StatusSink, onControl ControlSink) (bool, error) {
 	sessionID = resolveSessionID(sessionID)
 	if viewerID == "" {
-		return fmt.Errorf("browser live: viewer id is required")
+		return false, fmt.Errorf("browser live: viewer id is required")
 	}
 	tabCtx, err := r.mgr.Session(sessionID)
 	if err != nil {
-		return fmt.Errorf("browser live: cannot resolve session %q: %w", sessionID, err)
+		return false, fmt.Errorf("browser live: cannot resolve session %q: %w", sessionID, err)
 	}
-	return r.view(sessionID).attach(tabCtx, viewerID, onFrame, onStatus)
+	return r.view(sessionID).attach(tabCtx, viewerID, onFrame, onStatus, onControl)
 }
 
 // Detach unbinds viewerID from sessionID's live view. When this was the last
@@ -298,7 +326,11 @@ type LiveView struct {
 	// StatusSink per attached viewerID, notified only on an unexpected
 	// screencast death (watchForUnexpectedDeath), never on a clean Detach.
 	statusSinks map[string]StatusSink
-	seq         int
+	// controlSinks parallels viewers (ADR-039 UAT BE-1): one optional
+	// ControlSink per attached viewerID, notified whenever some OTHER
+	// viewer takes or releases control (takeControl/releaseControl below).
+	controlSinks map[string]ControlSink
+	seq          int
 	// lastFrame caches the most recently delivered screencast frame so a viewer
 	// that attaches to an already-running screencast (a second panel, a pop-out)
 	// sees the current state immediately instead of waiting for the next repaint
@@ -362,12 +394,21 @@ func (lv *LiveView) isActiveLocked() bool {
 // lv.runCDP, which bounds it with mgr.PageTimeout() so even a wedged
 // transport fails this one attach() attempt in bounded time instead of
 // hanging the calling goroutine forever.
-func (lv *LiveView) attach(tabCtx context.Context, viewerID string, onFrame FrameSink, onStatus StatusSink) error {
+//
+// Returns controlledByOther (ADR-039 UAT BE-1): true when sessionID is
+// already controlled by a viewer other than viewerID at the moment of this
+// attach — computed and returned under lv.mu before any CDP call, so it is
+// available even on the fast piggyback path below.
+func (lv *LiveView) attach(tabCtx context.Context, viewerID string, onFrame FrameSink, onStatus StatusSink, onControl ControlSink) (bool, error) {
 	lv.mu.Lock()
 	lv.viewers[viewerID] = onFrame
 	if onStatus != nil {
 		lv.statusSinks[viewerID] = onStatus
 	}
+	if onControl != nil {
+		lv.controlSinks[viewerID] = onControl
+	}
+	controlledByOther := lv.controller != "" && lv.controller != viewerID
 
 	if lv.isActiveLocked() {
 		// Screencast already running — this viewer piggybacks on it. Replay the
@@ -380,7 +421,7 @@ func (lv *LiveView) attach(tabCtx context.Context, viewerID string, onFrame Fram
 		if cached != nil {
 			onFrame(*cached)
 		}
-		return nil
+		return controlledByOther, nil
 	}
 
 	lv.tabCtx = tabCtx
@@ -417,6 +458,7 @@ func (lv *LiveView) attach(tabCtx context.Context, viewerID string, onFrame Fram
 	if err != nil {
 		delete(lv.viewers, viewerID)
 		delete(lv.statusSinks, viewerID)
+		delete(lv.controlSinks, viewerID)
 		// Only tear down the shared listen/ack state if nothing else (a
 		// concurrent attach() that piggybacked while this call was in
 		// flight, or a concurrent detach()) has since superseded it.
@@ -426,7 +468,7 @@ func (lv *LiveView) attach(tabCtx context.Context, viewerID string, onFrame Fram
 			lv.stopListen = nil
 		}
 		lv.mu.Unlock()
-		return fmt.Errorf("browser live: failed to start screencast: %w", err)
+		return false, fmt.Errorf("browser live: failed to start screencast: %w", err)
 	}
 	lv.mu.Unlock()
 
@@ -439,7 +481,7 @@ func (lv *LiveView) attach(tabCtx context.Context, viewerID string, onFrame Fram
 	// attach cycle has moved lv.listenCtx on.
 	go lv.watchForUnexpectedDeath(listenCtx)
 
-	return nil
+	return controlledByOther, nil
 }
 
 // watchForUnexpectedDeath blocks until watchedListenCtx is Done, then — ONLY
@@ -592,8 +634,18 @@ func (lv *LiveView) detach(viewerID string) {
 	lv.mu.Lock()
 	delete(lv.viewers, viewerID)
 	delete(lv.statusSinks, viewerID)
-	if lv.controller == viewerID {
+	delete(lv.controlSinks, viewerID)
+	wasController := lv.controller == viewerID
+	if wasController {
 		lv.controller = ""
+	}
+	var otherSinks []ControlSink
+	if wasController {
+		// The departing viewer held control — every other attached viewer
+		// must learn the lock is now free (ADR-039 UAT BE-1), same as an
+		// explicit release. viewerID was already removed from controlSinks
+		// above, so this snapshot naturally excludes it.
+		otherSinks = lv.snapshotControlSinksExceptLocked(viewerID)
 	}
 
 	var (
@@ -609,6 +661,16 @@ func (lv *LiveView) detach(viewerID string) {
 		lv.stopListen = nil
 	}
 	lv.mu.Unlock()
+
+	// No lock held here — see the deliver()/takeControl() convention this
+	// mirrors. Fired unconditionally (independent of wasActive/the
+	// screencast-teardown path below) so a departing controller's implicit
+	// release is broadcast even when other viewers remain attached and the
+	// screencast keeps running — the common case for the two-viewer scenario
+	// this fixes.
+	for _, sink := range otherSinks {
+		sink(false)
+	}
 
 	if !wasActive {
 		return
@@ -758,23 +820,45 @@ func (lv *LiveView) allowInputLocked() bool {
 }
 
 // takeControl grants viewerID control if uncontrolled or already the
-// controller; returns false if someone else holds it.
+// controller; returns false if someone else holds it. On a successful grant,
+// every OTHER attached viewer's ControlSink is invoked with true (ADR-039
+// UAT BE-1: "two viewers disagree about who's driving") — the server has
+// always single-controller-locked here, this is what makes every OTHER
+// connection's display agree with that lock instead of continuing to show
+// stale state. The sinks are invoked with no lock held, mirroring deliver().
 func (lv *LiveView) takeControl(viewerID string) bool {
 	lv.mu.Lock()
-	defer lv.mu.Unlock()
 	if lv.controller != "" && lv.controller != viewerID {
+		lv.mu.Unlock()
 		return false
 	}
 	lv.controller = viewerID
+	otherSinks := lv.snapshotControlSinksExceptLocked(viewerID)
+	lv.mu.Unlock()
+
+	for _, sink := range otherSinks {
+		sink(true)
+	}
 	return true
 }
 
-// releaseControl clears the control lock only if viewerID currently holds it.
+// releaseControl clears the control lock only if viewerID currently holds
+// it. On an actual release, every OTHER attached viewer's ControlSink is
+// invoked with false (ADR-039 UAT BE-1) so a stale "someone else is driving"
+// display clears the moment the lock is actually freed. No-op (and no
+// broadcast) if viewerID isn't the current controller.
 func (lv *LiveView) releaseControl(viewerID string) {
 	lv.mu.Lock()
-	defer lv.mu.Unlock()
-	if lv.controller == viewerID {
-		lv.controller = ""
+	if lv.controller != viewerID {
+		lv.mu.Unlock()
+		return
+	}
+	lv.controller = ""
+	otherSinks := lv.snapshotControlSinksExceptLocked(viewerID)
+	lv.mu.Unlock()
+
+	for _, sink := range otherSinks {
+		sink(false)
 	}
 }
 
@@ -783,6 +867,22 @@ func (lv *LiveView) getController() string {
 	lv.mu.Lock()
 	defer lv.mu.Unlock()
 	return lv.controller
+}
+
+// snapshotControlSinksExceptLocked returns every registered ControlSink
+// except excludeViewerID's own (ADR-039 UAT BE-1: the acting viewer gets its
+// outcome via its own direct browser_status response, not a broadcast — see
+// ControlSink's doc comment). Must be called with mu held; the returned
+// sinks must be invoked with no lock held (mirrors deliver()'s convention).
+func (lv *LiveView) snapshotControlSinksExceptLocked(excludeViewerID string) []ControlSink {
+	sinks := make([]ControlSink, 0, len(lv.controlSinks))
+	for id, sink := range lv.controlSinks {
+		if id == excludeViewerID {
+			continue
+		}
+		sinks = append(sinks, sink)
+	}
+	return sinks
 }
 
 // clampModifiers clamps the CDP modifier bitmask to the valid [0,15] range

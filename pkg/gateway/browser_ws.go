@@ -501,7 +501,7 @@ func (h *BrowserWSHandler) handleAttach(wc *browserWSConn, state *browserConnSta
 	}
 
 	chatSessionID := frame.SessionId // context/logging + wire echo ONLY — see doc comment above.
-	err := mgr.Live().Attach(browser.DefaultSessionID, viewerID, func(lf browser.LiveFrame) {
+	controlledByOther, err := mgr.Live().Attach(browser.DefaultSessionID, viewerID, func(lf browser.LiveFrame) {
 		pageScale, offsetTop, scrollX, scrollY := lf.PageScale, lf.OffsetTop, lf.ScrollOffsetX, lf.ScrollOffsetY
 		wc.sendFrameGen(generated.BrowserScreencastFrame{
 			Type:          string(generated.WsFrameTypeBrowserScreencast),
@@ -524,6 +524,23 @@ func (h *BrowserWSHandler) handleAttach(wc *browserWSConn, state *browserConnSta
 		// BrowserManagerForAgent) instead of silently watching a frozen frame
 		// forever.
 		wc.sendCriticalGen(sessionErrorStatus(chatSessionID, message))
+	}, func(controlledByOther bool) {
+		// ADR-039 UAT BE-1: fan-out from LiveView.takeControl/releaseControl —
+		// some OTHER connection on this session just took or released
+		// control. state="idle" here (never "controlling"/"released", which
+		// describe THIS connection's own action) — see BrowserStatusFrame's
+		// enum and BrowserLiveView.tsx's pillConfig, where 'idle' already
+		// falls into the same "no human holds the lock" display bucket as
+		// 'attached'/'released' by default, so this is a safe no-op display
+		// change for a client that hasn't yet started reading
+		// controlled_by_other, and the correct signal for one that has.
+		cbo := controlledByOther
+		wc.sendCriticalGen(generated.BrowserStatusFrame{
+			Type:              string(generated.WsFrameTypeBrowserStatus),
+			State:             "idle",
+			SessionId:         &chatSessionID,
+			ControlledByOther: &cbo,
+		})
 	})
 	if err != nil {
 		wc.sendCriticalGen(sessionErrorStatus(chatSessionID, fmt.Sprintf("browser_attach failed: %s", err)))
@@ -533,10 +550,12 @@ func (h *BrowserWSHandler) handleAttach(wc *browserWSConn, state *browserConnSta
 	state.mgr = mgr
 	state.sessionID = chatSessionID
 
+	cbo := controlledByOther
 	wc.sendCriticalGen(generated.BrowserStatusFrame{
-		Type:      string(generated.WsFrameTypeBrowserStatus),
-		State:     "attached",
-		SessionId: &chatSessionID,
+		Type:              string(generated.WsFrameTypeBrowserStatus),
+		State:             "attached",
+		SessionId:         &chatSessionID,
+		ControlledByOther: &cbo,
 	})
 }
 
