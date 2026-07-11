@@ -314,7 +314,13 @@ func streamReplay(
 				}
 
 				// Emit all nested tool calls (children with ParentToolCallID == tc.ID).
-				nestedDurationMS, nestedStatus, nestedErr := emitNestedToolCalls(
+				// The returned aggregate duration/status exist only to drive
+				// emitNestedToolCalls' own internal bookkeeping historically — they
+				// are deliberately NOT used for the outer span's own Status/
+				// DurationMs below (Wave 3 fix 5b, see comment there). This call is
+				// still required: it emits the individual nested child
+				// tool_call_start/tool_call_result frames.
+				_, _, nestedErr := emitNestedToolCalls(
 					ctx, sessionID, tcID, entries, latestByID, effectiveAgentID, emitFrame, toolStore,
 				)
 				if nestedErr != nil {
@@ -322,13 +328,30 @@ func streamReplay(
 				}
 
 				// Emit subagent_end.
-				nestedDurMS := int(nestedDurationMS)
+				//
+				// Wave 3 fix 5b: the span's own Status/DurationMs are read directly
+				// from tc — the spawn/delegate ToolCall's OWN persisted record —
+				// instead of emitNestedToolCalls' aggregate over child tool calls.
+				// pkg/agent/subturn.go's spawnSubTurn (EventKindSubTurnEnd) now
+				// persists the sub-turn's REAL completion status/wall-clock
+				// duration onto this exact record via session.UnifiedStore.
+				// UpdateToolCallStatus once the child turn actually finishes. The
+				// aggregate is a fundamentally different, incompatible semantic —
+				// it flips to "error" whenever ANY child tool call was denied, even
+				// when the sub-turn itself legitimately completed "success" at the
+				// LLM level (a denied tool attempt is not itself a sub-turn
+				// failure), and its duration is a sum of child tool-call durations
+				// that structurally cannot reflect real wall-clock time. Live
+				// rendering (pkg/gateway/websocket.go's EventKindSubTurnEnd
+				// handler) has always used this real status/duration directly —
+				// this makes replay match it.
+				spanDurationMS := int(tc.DurationMS)
 				subEnd := generated.SubagentEndFrame{
 					Type:       string(generated.WsFrameTypeSubagentEnd),
 					SessionId:  sessionID,
 					SpanId:     spanID,
-					DurationMs: &nestedDurMS,
-					Status:     nestedStatus,
+					DurationMs: &spanDurationMS,
+					Status:     resolveStatus(tc.Status),
 				}
 				if effectiveAgentID != "" {
 					agentIDCopy := effectiveAgentID

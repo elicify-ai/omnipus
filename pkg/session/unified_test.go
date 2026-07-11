@@ -504,6 +504,148 @@ func TestMarkLastEntryTruncated_DoesNotMutatePreviousTurnEntry(t *testing.T) {
 	assert.False(t, t2.Truncated, "T2 entry must NOT be marked truncated by a T1 cancel")
 }
 
+// --- UpdateToolCallStatus tests (Wave 3 fix 5b) ---
+
+// TestUpdateToolCallStatus_RewritesMatchingToolCall verifies the core invariant
+// of fix 5b: after calling UpdateToolCallStatus with a ToolCall.ID that exists in
+// the transcript, ReadTranscript returns that ToolCall with the new Status and
+// DurationMS while every other field (Tool, Parameters, Result, ...) is preserved.
+//
+// This simulates the ASYNC delegation scenario: the spawning "delegate" tool call
+// is first persisted with a placeholder ack (Status="success", DurationMS=0, per
+// tools.AsyncResult), then corrected once the real sub-turn finishes.
+//
+// BDD: Given a transcript entry carrying a ToolCall with ID "c1" and a placeholder
+//
+//	Status/DurationMS,
+//	When UpdateToolCallStatus is called for "c1" with the real status/duration,
+//	Then ReadTranscript returns "c1" with the updated Status/DurationMS and all
+//	other fields unchanged.
+//
+// Traces to: pkg/session/unified.go UpdateToolCallStatus (Wave 3 fix 5b)
+func TestUpdateToolCallStatus_RewritesMatchingToolCall(t *testing.T) {
+	store := newTestStore(t)
+
+	meta, err := store.NewSession(SessionTypeChat, "", "test-agent")
+	require.NoError(t, err)
+	sessionID := meta.ID
+
+	// Simulate the async delegation "ack" record loop.go's standard tool-completion
+	// path writes immediately after DelegateTool.executeAsync returns AsyncResult.
+	require.NoError(t, store.AppendTranscript(sessionID, TranscriptEntry{
+		ID:      "c1",
+		Type:    EntryTypeToolCall,
+		AgentID: "jim",
+		ToolCalls: []ToolCall{
+			{
+				ID:         "c1",
+				Tool:       "delegate",
+				Status:     "success",
+				DurationMS: 0,
+				Parameters: map[string]any{"task": "audit go files"},
+			},
+		},
+	}))
+
+	// The sub-turn actually finishes later with a real status/duration.
+	require.NoError(t, store.UpdateToolCallStatus(sessionID, "c1", "success", 4210))
+
+	entries, err := store.ReadTranscript(sessionID)
+	require.NoError(t, err)
+	require.Len(t, entries, 1, "must have exactly one entry")
+
+	require.Len(t, entries[0].ToolCalls, 1)
+	got := entries[0].ToolCalls[0]
+	assert.Equal(t, ToolCallID("c1"), got.ID, "ID must be preserved")
+	assert.Equal(t, "delegate", got.Tool, "Tool must be preserved")
+	assert.Equal(t, "success", got.Status, "Status must be updated to the real terminal status")
+	assert.EqualValues(t, 4210, got.DurationMS, "DurationMS must be updated to the real wall-clock duration")
+	assert.Equal(t, "audit go files", got.Parameters["task"], "Parameters must be preserved")
+}
+
+// TestUpdateToolCallStatus_FlipsToError verifies UpdateToolCallStatus can move a
+// ToolCall from a placeholder "success" to a real "error" status — the mirror
+// case of the success-preserved test, proving the function does not hardcode a
+// bias toward either terminal value.
+func TestUpdateToolCallStatus_FlipsToError(t *testing.T) {
+	store := newTestStore(t)
+
+	meta, err := store.NewSession(SessionTypeChat, "", "test-agent")
+	require.NoError(t, err)
+	sessionID := meta.ID
+
+	require.NoError(t, store.AppendTranscript(sessionID, TranscriptEntry{
+		ID:      "c2",
+		Type:    EntryTypeToolCall,
+		AgentID: "jim",
+		ToolCalls: []ToolCall{
+			{ID: "c2", Tool: "delegate", Status: "success", DurationMS: 0},
+		},
+	}))
+
+	require.NoError(t, store.UpdateToolCallStatus(sessionID, "c2", "error", 987))
+
+	entries, err := store.ReadTranscript(sessionID)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Len(t, entries[0].ToolCalls, 1)
+	got := entries[0].ToolCalls[0]
+	assert.Equal(t, "error", got.Status)
+	assert.EqualValues(t, 987, got.DurationMS)
+}
+
+// TestUpdateToolCallStatus_NoMatchIsNoOp verifies that calling UpdateToolCallStatus
+// with a ToolCall.ID that does not exist in the transcript is a no-op: nil error,
+// and every existing entry is byte-for-byte unchanged.
+//
+// This is the expected outcome for SYNCHRONOUS delegation (DelegateTool.
+// executeSync): spawnSubTurn blocks until the child finishes, so at the moment
+// EventKindSubTurnEnd fires the spawning tool call's own record has not been
+// appended to the transcript yet.
+//
+// Traces to: pkg/session/unified.go UpdateToolCallStatus doc comment (Wave 3 fix 5b)
+func TestUpdateToolCallStatus_NoMatchIsNoOp(t *testing.T) {
+	store := newTestStore(t)
+
+	meta, err := store.NewSession(SessionTypeChat, "", "test-agent")
+	require.NoError(t, err)
+	sessionID := meta.ID
+
+	require.NoError(t, store.AppendTranscript(sessionID, TranscriptEntry{
+		ID:      "c3",
+		Type:    EntryTypeToolCall,
+		AgentID: "jim",
+		ToolCalls: []ToolCall{
+			{ID: "c3", Tool: "read_file", Status: "success", DurationMS: 12},
+		},
+	}))
+
+	err = store.UpdateToolCallStatus(sessionID, "does-not-exist", "success", 999)
+	require.NoError(t, err, "no matching ToolCall.ID must be a no-op, not an error")
+
+	entries, err := store.ReadTranscript(sessionID)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Len(t, entries[0].ToolCalls, 1)
+	got := entries[0].ToolCalls[0]
+	assert.Equal(t, "success", got.Status, "unrelated entry must be unchanged")
+	assert.EqualValues(t, 12, got.DurationMS, "unrelated entry must be unchanged")
+}
+
+// TestUpdateToolCallStatus_EmptyTranscriptIsNoOp verifies that calling
+// UpdateToolCallStatus on a session with no transcript file yet is a no-op
+// (nil error), mirroring MarkLastEntryTruncated's os.IsNotExist handling.
+func TestUpdateToolCallStatus_EmptyTranscriptIsNoOp(t *testing.T) {
+	store := newTestStore(t)
+
+	meta, err := store.NewSession(SessionTypeChat, "", "test-agent")
+	require.NoError(t, err)
+	sessionID := meta.ID
+
+	err = store.UpdateToolCallStatus(sessionID, "c1", "error", 100)
+	assert.NoError(t, err, "no transcript file yet must be a no-op, not an error")
+}
+
 // --- Cascade-delete uploads tests (N-B fix) ---
 
 // TestDeleteSession_CascadeDeletesUploads_SharedStore verifies that DeleteSession
