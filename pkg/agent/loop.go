@@ -1476,7 +1476,9 @@ func registerSharedTools(
 			// default) mode — trust set + mode("background") + depth. Takes
 			// precedence over the allowlist checker and surfaces a reason.
 			delegateTool.SetDelegationDenyCheckerBackground(
-				buildDelegationDenyChecker(currentAgentID, cfg.Agents.Defaults, config.DelegationModeBackground),
+				// ForDelegate bakes in exempt=false: delegate(agent_id=self) spawns a
+				// real sub-turn and MUST be graph-gated (and thus denied), never exempted.
+				buildDelegationDenyCheckerForDelegate(currentAgentID, cfg.Agents.Defaults, config.DelegationModeBackground),
 			)
 			// FR-6.3: gate the await (async=false) mode too. Uses the unified
 			// DelegationPolicy.To via IsDelegationAllowedAny (no explicit
@@ -1502,7 +1504,9 @@ func registerSharedTools(
 			// caller→X edge for the "await" mode, and an untargeted call
 			// falls back to evalUntargetedDelegation.
 			delegateTool.SetDelegationDenyCheckerAwait(
-				buildDelegationDenyChecker(currentAgentID, cfg.Agents.Defaults, config.DelegationModeAwait),
+				// ForDelegate bakes in exempt=false: same reasoning as the background
+				// gate — a self-targeted await delegate() is real delegation, graph-gated.
+				buildDelegationDenyCheckerForDelegate(currentAgentID, cfg.Agents.Defaults, config.DelegationModeAwait),
 			)
 			// #477 / FR-D9-FR-D10: thread the SAME effective depth cap the
 			// gates above just authorized against into spawnSubTurn's own
@@ -1534,7 +1538,9 @@ func registerSharedTools(
 			// FR-6.2: full-policy gate — trust set + mode("task") + depth.
 			// Takes precedence over the boolean delegate checker.
 			taskCreate.SetDelegationDenyChecker(
-				buildDelegationDenyChecker(currentAgentID, cfg.Agents.Defaults, config.DelegationModeTask),
+				// ForTaskReassignment bakes in exempt=true: assigning a NEW task to
+				// oneself is not delegation (no new instance spawned), not graph-gated.
+				buildDelegationDenyCheckerForTaskReassignment(currentAgentID, cfg.Agents.Defaults, config.DelegationModeTask),
 			)
 			// Task-mode recursion bound: reject a task_create issued from within a
 			// task run whose delegation generation already sits at the ceiling. The
@@ -1574,7 +1580,9 @@ func registerSharedTools(
 			// the same trust-set + mode("task") + depth policy as task_create.
 			taskUpdate.SetDelegateChecker(buildDelegateChecker(agentCfg, cfg.Agents.Defaults))
 			taskUpdate.SetDelegationDenyChecker(
-				buildDelegationDenyChecker(currentAgentID, cfg.Agents.Defaults, config.DelegationModeTask),
+				// ForTaskReassignment bakes in exempt=true: reassigning a task to its
+				// existing owner is a no-op reassignment, not delegation — not graph-gated.
+				buildDelegationDenyCheckerForTaskReassignment(currentAgentID, cfg.Agents.Defaults, config.DelegationModeTask),
 			)
 			// Same subagent_3p reassignment guard as taskCreate above.
 			taskUpdate.SetExternalCLIWorkerChecker(cfg.IsExternalCLIWorkerID)
@@ -2096,8 +2104,38 @@ func errString(err error) string {
 // An empty targetAgentID means "no explicit target" (the LLM omitted agent_id);
 // the trust check is then skipped here — untargeted spawns resolve to the default
 // agent — while mode and depth (against any one of the caller's outgoing edges)
-// still apply. Self-assignment (target == caller) is NOT delegation and is
-// always allowed without consulting the graph.
+// still apply.
+//
+// selfAssignmentExempt controls the self-target (target == caller) case.
+//
+// DO NOT call this function directly at a wiring site. Use one of the two
+// intent-named wrappers instead, so the exempt value can never be flipped
+// wrong (a delegate-tool site with exempt=true silently reopens the
+// self-delegation bypass — a security regression; a task-tool site with
+// exempt=false merely denies a legitimate self-reassignment — loud and
+// harmless, but still wrong):
+//
+//   - buildDelegationDenyCheckerForDelegate         (exempt=false) — the
+//     `delegate` tool's background + await gates. delegate(agent_id=self) spawns
+//     a real sub-turn instance, so it IS delegation and is graph-gated (and, for
+//     self, ALWAYS denied — see below).
+//   - buildDelegationDenyCheckerForTaskReassignment (exempt=true)  — the task
+//     tools: create_task / update_task AND the cross-workspace
+//     create_task_in_workspace / update_task_in_workspace via
+//     NewSysagentDelegationDeny. Reassigning a task to the agent that already
+//     owns it is NOT delegation (no new instance is spawned), so it is allowed
+//     without consulting the graph.
+//
+// The exempt choice is a property of the CALLER (which tool wired this checker),
+// NOT of `mode`. NEVER derive selfAssignmentExempt from `mode` — the two happen
+// to correlate today (delegate uses background/await, tasks use task), but that
+// is coincidence, not an invariant: a future delegate-in-task-mode would reopen
+// the bypass if someone "simplified" by deriving the flag from the mode.
+//
+// When exempt is false, a self-target is DENIED directly here (defense-in-depth),
+// without relying solely on workspace.DelegationEdge.Validate's self-edge
+// prohibition as the guard, and with a distinct reason so the caught bypass
+// attempt is distinguishable from a routine trust_set denial.
 //
 // defaults is only consulted for its SubTurn.MaxDepth global depth cap — the
 // per-agent config.DelegationPolicy it used to carry is no longer read (the
@@ -2106,14 +2144,34 @@ func buildDelegationDenyChecker(
 	currentAgentID string,
 	defaults config.AgentDefaults,
 	mode config.DelegationMode,
+	selfAssignmentExempt bool,
 ) func(ctx context.Context, targetAgentID string) *tools.DelegationDenial {
 	globalDepthCap := defaults.SubTurn.MaxDepth
 
 	return func(ctx context.Context, targetAgentID string) *tools.DelegationDenial {
-		// Self-assignment (target == caller) is NOT delegation — an agent
-		// creating/reassigning a task to itself does not consult the graph.
 		if targetAgentID == currentAgentID {
-			return nil
+			// Self-target. For the task tools (exempt=true) this is a no-op
+			// reassignment to the task's existing owner, not delegation — allow.
+			if selfAssignmentExempt {
+				return nil
+			}
+			// For the delegate tool (exempt=false) self-delegation IS delegation
+			// and is ALWAYS denied. Deny directly (defense-in-depth) instead of
+			// falling through to findDelegationEdge and relying on the graph's
+			// self-edge prohibition (DelegationEdge.Validate) as the sole guard. A
+			// distinct reason + log distinguishes this caught self-delegation
+			// bypass attempt from a routine "target not trusted" trust_set denial.
+			logger.WarnCF("agent", "delegation denied: self-delegation is not permitted", map[string]any{
+				"agent_id": currentAgentID, "target": targetAgentID, "mode": string(mode),
+			})
+			return &tools.DelegationDenial{
+				Reason: fmt.Sprintf(
+					"an agent cannot delegate to itself (%q): self-delegation is never permitted",
+					currentAgentID,
+				),
+				Policy:        tools.DenyTrustSet,
+				TargetAgentID: targetAgentID,
+			}
 		}
 
 		if targetAgentID != "" {
@@ -2131,6 +2189,33 @@ func buildDelegationDenyChecker(
 		// Mode + depth still apply against that edge.
 		return evalUntargetedDelegation(ctx, currentAgentID, mode, globalDepthCap)
 	}
+}
+
+// buildDelegationDenyCheckerForDelegate is the wiring-site constructor for the
+// `delegate` tool's background and await gates. It bakes in selfAssignmentExempt=false:
+// delegate(agent_id=self) spawns a real sub-turn instance, so it IS delegation and a
+// self-target is ALWAYS denied. Use this — never the raw core with a literal false —
+// so the security-critical exempt value can never be flipped wrong at a call site.
+func buildDelegationDenyCheckerForDelegate(
+	currentAgentID string,
+	defaults config.AgentDefaults,
+	mode config.DelegationMode,
+) func(ctx context.Context, targetAgentID string) *tools.DelegationDenial {
+	return buildDelegationDenyChecker(currentAgentID, defaults, mode, false)
+}
+
+// buildDelegationDenyCheckerForTaskReassignment is the wiring-site constructor for the
+// task tools: create_task / update_task and the cross-workspace
+// create_task_in_workspace / update_task_in_workspace (via NewSysagentDelegationDeny).
+// It bakes in selfAssignmentExempt=true: reassigning a task to the agent that already
+// owns it is NOT delegation (no new instance is spawned), so a self-target is allowed
+// without consulting the graph. Non-self targets are still fully graph-gated.
+func buildDelegationDenyCheckerForTaskReassignment(
+	currentAgentID string,
+	defaults config.AgentDefaults,
+	mode config.DelegationMode,
+) func(ctx context.Context, targetAgentID string) *tools.DelegationDenial {
+	return buildDelegationDenyChecker(currentAgentID, defaults, mode, true)
 }
 
 // evalUntargetedDelegation gates an untargeted delegation (no explicit target)
@@ -2219,10 +2304,12 @@ func evalUntargetedDelegation(
 // workspace DENIES (fail-closed) inside buildDelegationDenyChecker.
 func (al *AgentLoop) NewSysagentDelegationDeny() func(ctx context.Context, callerAgentID, targetAgentID string) *tools.DelegationDenial {
 	return func(ctx context.Context, callerAgentID, targetAgentID string) *tools.DelegationDenial {
-		// Self-assignment / untargeted is not delegation and is allowed before
-		// touching the graph, matching buildDelegationDenyChecker's own short
-		// circuits (the cross-workspace tools always supply a concrete target on a
-		// reassignment; an empty target here is a no-op assignment).
+		// Self-assignment / untargeted is a no-op reassignment, not delegation, and
+		// is allowed before touching the graph. This mirrors the exempt=true
+		// self-target short-circuit inside buildDelegationDenyCheckerForTaskReassignment
+		// (used below) and additionally covers the empty-target case (which the gate
+		// would otherwise route through evalUntargetedDelegation). The cross-workspace
+		// tools always supply a concrete target on a real reassignment.
 		if targetAgentID == "" || targetAgentID == callerAgentID {
 			return nil
 		}
@@ -2230,7 +2317,10 @@ func (al *AgentLoop) NewSysagentDelegationDeny() func(ctx context.Context, calle
 		if cfg := al.GetConfig(); cfg != nil {
 			defaults = cfg.Agents.Defaults
 		}
-		gate := buildDelegationDenyChecker(callerAgentID, defaults, config.DelegationModeTask)
+		// ForTaskReassignment (exempt=true): these are the cross-workspace TASK tools
+		// (create_task_in_workspace / update_task_in_workspace) — a self-target is a
+		// no-op task reassignment, not delegation (also short-circuited above).
+		gate := buildDelegationDenyCheckerForTaskReassignment(callerAgentID, defaults, config.DelegationModeTask)
 		return gate(ctx, targetAgentID)
 	}
 }
