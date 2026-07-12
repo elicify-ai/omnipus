@@ -669,3 +669,122 @@ func TestLiveView_RebindScreencast_ConcurrentRebind_ConvergesOnLatestActiveTab(t
 	// total. G2 never got far enough to start one of its own.
 	assert.Equal(t, int32(3), atomic.LoadInt32(&startScreencastCalls))
 }
+
+// ---------------------------------------------------------------------------
+// Live-UAT fix, 2026-07-12 — "closing the ACTIVE tab fires a false 'browser
+// session ended unexpectedly' banner and leaves the screencast frozen on the
+// CLOSED tab's stale content", confirmed 2/2 by two independent live testers
+// via the live panel WITH A VIEWER ATTACHED (the earlier close test that
+// shipped this regression had no attached viewer — a StatusSink attaches to
+// nothing, so it could never have observed the false broadcast). Root cause:
+// BrowserManager.CloseTab cancels the closed tab's own chromedp context
+// BEFORE calling notifyTabsChanged; since LiveView.listenCtx is a CHILD of
+// the active tab's context, that cancellation synchronously kills listenCtx
+// too — so by the time onTabsChanged/rebindScreencastOnce run, the epoch
+// already looks "dead" (isActiveLocked()==false) even though the browser and
+// the surviving tab are perfectly alive, deterministically skipping the
+// rebind onTabsChanged owed; watchForUnexpectedDeath's background goroutine,
+// racing in on that same dead listenCtx, then fires a FALSE death broadcast.
+// The fix: hasEpochLocked (weaker than isActiveLocked — "an epoch is
+// installed, dead or alive") drives the rebind decision, and
+// watchForUnexpectedDeath consults BrowserManager.browserAlive before ever
+// broadcasting — see both functions' doc comments in live.go.
+//
+// This test drives the fix through the REAL BrowserManager.CloseTab path
+// (not a hand-built LiveView) — via newTestManagerWithFakeTabs's
+// createTabFn seam (tabs_test.go) — with a real *LiveViewRegistry wired via
+// newLiveViewRegistry, and a fake LiveView.runCDP so no real Chromium/CDP
+// connection is needed, exactly mirroring this file's existing ADR-041 rebind
+// tests. Unlike those, it exercises the ACTUAL tab-context cancellation
+// CloseTab performs (closing.cancel() in manager.go), which is the load-
+// bearing trigger for this bug — none of the existing rebindScreencast tests
+// above cancel a real tab context, only the LiveView's OWN listenCtx via
+// oldStopListen(), which is why they never caught this.
+// ---------------------------------------------------------------------------
+
+// TestLiveView_CloseActiveTab_NoFalseDeathAndRebindsToSurvivor is the
+// regression guard for the live-UAT close-active-tab fix. It attaches a
+// viewer with BOTH a FrameSink and a StatusSink (the earlier close test's
+// gap), opens a second tab, closes the ACTIVE tab, and asserts (a) the
+// StatusSink never receives a "session ended"/error status, and (b) the
+// LiveView's tabCtx converges on the surviving tab (the screencast follows
+// the neighbour) rather than staying stuck on the closed tab or going dead.
+func TestLiveView_CloseActiveTab_NoFalseDeathAndRebindsToSurvivor(t *testing.T) {
+	m := newTestManagerWithFakeTabs(t, 5)
+	reg := newLiveViewRegistry(m)
+
+	_, err := m.Session(DefaultSessionID) // tab 0
+	require.NoError(t, err)
+	tab1, err := m.OpenTab(DefaultSessionID) // tab 1, becomes active
+	require.NoError(t, err)
+	require.Equal(t, 1, tab1.Index)
+	require.True(t, tab1.Active)
+
+	survivorCtxBeforeClose, err := m.Session(DefaultSessionID)
+	require.NoError(t, err)
+
+	// Fake CDP for the LiveView's own screencast calls — StartScreencast/
+	// StopScreencast/ack all succeed trivially, so no real Chromium is
+	// needed. Set BEFORE Attach (view() is create-if-not-exists, keyed by
+	// session ID, so this is the SAME LiveView Attach below reuses).
+	lv := reg.view(DefaultSessionID)
+	var startScreencastCalls int32
+	lv.runCDP = func(ctx context.Context, timeout time.Duration, actions ...chromedp.Action) error {
+		for _, a := range actions {
+			if _, ok := a.(*page.StartScreencastParams); ok {
+				atomic.AddInt32(&startScreencastCalls, 1)
+			}
+		}
+		return nil
+	}
+
+	var statusMu sync.Mutex
+	var statusMsgs []string
+	onStatus := func(msg string) {
+		statusMu.Lock()
+		statusMsgs = append(statusMsgs, msg)
+		statusMu.Unlock()
+	}
+
+	controlledByOther, err := reg.Attach(DefaultSessionID, "viewer1",
+		func(LiveFrame) {}, onStatus, nil, nil)
+	require.NoError(t, err)
+	require.False(t, controlledByOther)
+	require.Equal(t, int32(1), atomic.LoadInt32(&startScreencastCalls), "attach() must have started its own screencast")
+
+	lv.mu.Lock()
+	require.Equal(t, survivorCtxBeforeClose, lv.tabCtx, "sanity: the live view must be bound to tab 1 (the active tab) before the close")
+	lv.mu.Unlock()
+
+	// Close the ACTIVE tab (index 1) — the exact live-UAT repro. Tab 0 slides
+	// in as the new active tab.
+	closedTabs, newActiveIdx, err := m.CloseTab(DefaultSessionID, 1)
+	require.NoError(t, err)
+	require.Len(t, closedTabs, 1)
+	require.Equal(t, 0, newActiveIdx)
+
+	survivorCtx, err := m.Session(DefaultSessionID)
+	require.NoError(t, err)
+	require.NotEqual(t, survivorCtxBeforeClose, survivorCtx, "sanity: the survivor is a genuinely different tab context than the closed one")
+
+	// (b) The live view must rebind to the surviving tab — not stay stuck on
+	// the closed tab, and not go dead (nil listenCtx).
+	require.Eventually(t, func() bool {
+		lv.mu.Lock()
+		defer lv.mu.Unlock()
+		return lv.listenCtx != nil && lv.tabCtx == survivorCtx
+	}, 2*time.Second, 5*time.Millisecond,
+		"the live view must rebind to the surviving tab after the active tab closes — "+
+			"it must not stay frozen on the closed tab's stale content or go dead")
+
+	// (a) No false "session ended" status must EVER reach the attached
+	// viewer. By the time the Eventually above succeeded, both the
+	// (possibly racing) watcher and the rebind have had every opportunity to
+	// run — this is not a best-effort "probably didn't race" check.
+	statusMu.Lock()
+	got := append([]string(nil), statusMsgs...)
+	statusMu.Unlock()
+	assert.Empty(t, got,
+		"closing the ACTIVE tab (with the browser and the surviving tab alive) must never emit a "+
+			"false 'session ended' status to an attached viewer: %v", got)
+}

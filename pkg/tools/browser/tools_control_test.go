@@ -71,6 +71,11 @@ func TestExecute_ControlLock_InteractiveToolsDeferWhileControlled(t *testing.T) 
 		{"browser_click", map[string]any{"selector": "#btn"}},
 		{"browser_type", map[string]any{"selector": "#input", "text": "hi"}},
 		{"browser_evaluate", map[string]any{"js": "1+1"}},
+		// browser_open_tab changes what the live view screencasts (it opens +
+		// activates a new tab) exactly like SwitchTab/CloseTab, so it defers
+		// the same way. No url given here — the deferral must fire on the
+		// controlledResult check itself, before ever touching chromedp.
+		{"browser_open_tab", map[string]any{}},
 	}
 
 	for _, tc := range cases {

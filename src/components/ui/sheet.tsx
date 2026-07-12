@@ -35,6 +35,18 @@ interface SheetContentProps
    * slideout needs to be wider/narrower than the standard 20rem (320px).
    */
   widthClass?: string
+  /**
+   * UAT finding (browser live panel, ADR-040/041): defaults to `true` for
+   * every existing Sheet consumer (unchanged). Set `false` when the content
+   * already renders its OWN close affordance — e.g. BrowserLivePanel.tsx's
+   * `<BrowserLiveView>` header has a custom `aria-label="Close live browser
+   * panel"` button — so this component's own unconditional
+   * `DialogPrimitive.Close` doesn't render a SECOND, unlabeled ("Close",
+   * ~38px, absolute right-2 top-2) close control stacked on top of it. Radix
+   * still closes on Escape / onOpenChange / the caller's own close button
+   * either way — this prop only ever suppresses the REDUNDANT visual button.
+   */
+  showClose?: boolean
 }
 
 const sideVariants = {
@@ -62,7 +74,7 @@ const sideDefaultWidth = {
 const SheetContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   SheetContentProps
->(({ side = 'right', overlay = true, widthClass, className, children, ...props }, ref) => (
+>(({ side = 'right', overlay = true, widthClass, showClose = true, className, children, ...props }, ref) => (
   <SheetPortal>
     {overlay && <SheetOverlay />}
     <DialogPrimitive.Content
@@ -83,10 +95,12 @@ const SheetContent = React.forwardRef<
       {...props}
     >
       {children}
-      <DialogPrimitive.Close className="absolute right-2 top-2 flex h-11 w-11 items-center justify-center rounded-sm opacity-70 ring-offset-[var(--color-primary)] transition-opacity hover:opacity-100 focus:outline-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] focus-visible:ring-offset-2">
-        <X size={16} />
-        <span className="sr-only">Close</span>
-      </DialogPrimitive.Close>
+      {showClose && (
+        <DialogPrimitive.Close className="absolute right-2 top-2 flex h-11 w-11 items-center justify-center rounded-sm opacity-70 ring-offset-[var(--color-primary)] transition-opacity hover:opacity-100 focus:outline-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] focus-visible:ring-offset-2">
+          <X size={16} />
+          <span className="sr-only">Close</span>
+        </DialogPrimitive.Close>
+      )}
     </DialogPrimitive.Content>
   </SheetPortal>
 ))

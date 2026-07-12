@@ -273,7 +273,7 @@ func DefaultConfig() *Config {
 			// exactly like any operator-set entry.
 			//
 			// Every entry below mirrors pkg/coreagent/core.go's allStaticToolNames
-			// literal-for-literal (73 tools: 31 general + 7 browser + 35 sysagent) —
+			// literal-for-literal (77 tools: 31 general + 11 browser + 35 sysagent) —
 			// pkg/config cannot import pkg/coreagent (coreagent already imports
 			// config, so the reverse would cycle), so this list is a second,
 			// independent hardcoded literal. A drift between the two is caught
@@ -324,6 +324,7 @@ func DefaultConfig() *Config {
 				"browser_list_tabs":  "allow",
 				"browser_switch_tab": "allow",
 				"browser_close_tab":  "allow",
+				"browser_open_tab":   "allow",
 
 				// --- Sysagent management tools ---
 				"navigate":                 "allow",

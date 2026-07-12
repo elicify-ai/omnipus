@@ -13,7 +13,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/chromedp/chromedp"
 	"github.com/stretchr/testify/assert"
@@ -266,4 +268,208 @@ func TestSwitchTab_RealChromium_SessionFollowsActiveTab(t *testing.T) {
 	var title2 string
 	require.NoError(t, chromedp.Run(followedCtx2, chromedp.Title(&title2)))
 	assert.Equal(t, "Booked", title2, "tab 1 must retain ITS own navigation state independent of tab 0")
+}
+
+// TestCloseTab_RealChromium_ActiveTabClose_LiveViewFollowsSurvivorNoFalseDeath
+// is the real-Chromium regression guard for the live-UAT fix ("closing the
+// ACTIVE tab fires a false 'session ended' banner and leaves the screencast
+// frozen on stale content", confirmed 2/2 by two independent live testers
+// WITH A VIEWER ATTACHED). It attaches the real ADR-038 live-view engine
+// (mgr.Live().Attach — the same path pkg/gateway/browser_ws.go drives) to
+// the active tab, closes it, and proves against a REAL CDP screencast that
+// (a) no false "session ended" status ever reaches the viewer, and (b) the
+// screencast is genuinely re-bound to the surviving tab — proven by
+// navigating the survivor and observing a FRESH frame arrive, which is only
+// possible if a real, working screencast is bound to that live tab (the
+// pre-fix code left the live view with no active epoch at all after the
+// false-death broadcast, so no further frame would ever arrive).
+func TestCloseTab_RealChromium_ActiveTabClose_LiveViewFollowsSurvivorNoFalseDeath(t *testing.T) {
+	skipIfNoBrowser(t)
+
+	srv := targetBlankServer(t)
+	cfg := testBrowserCfg(t)
+	_, mgr := newPermissiveRegistry(t, cfg)
+
+	tab0Ctx, err := mgr.Session(defaultSessionID)
+	require.NoError(t, err)
+	require.NoError(t, chromedp.Run(tab0Ctx, chromedp.Navigate(srv.URL)))
+
+	tab1, err := mgr.OpenTab(defaultSessionID)
+	require.NoError(t, err)
+	require.Equal(t, 1, tab1.Index)
+	require.True(t, tab1.Active)
+
+	var statusMu sync.Mutex
+	var statusMsgs []string
+	onStatus := func(msg string) {
+		statusMu.Lock()
+		statusMsgs = append(statusMsgs, msg)
+		statusMu.Unlock()
+	}
+	frameCh := make(chan struct{}, 1)
+	onFrame := func(LiveFrame) {
+		select {
+		case frameCh <- struct{}{}:
+		default:
+		}
+	}
+
+	controlledByOther, err := mgr.Live().Attach(defaultSessionID, "viewer1", onFrame, onStatus, nil, nil)
+	require.NoError(t, err)
+	require.False(t, controlledByOther)
+	t.Cleanup(func() { mgr.Live().Detach(defaultSessionID, "viewer1") })
+
+	// Wait for a real screencast frame so we know the live view is genuinely
+	// bound and streaming from tab 1 (the active tab) before closing it.
+	select {
+	case <-frameCh:
+	case <-time.After(10 * time.Second):
+		t.Fatal("never received an initial screencast frame from the active tab")
+	}
+	// Drain any further already-queued frames so the post-close check below
+	// only observes a frame that arrives AFTER the close.
+	for drained := true; drained; {
+		select {
+		case <-frameCh:
+		default:
+			drained = false
+		}
+	}
+
+	// Close the ACTIVE tab (index 1) — the exact live-UAT repro. Tab 0
+	// survives and becomes active.
+	closedTabs, activeIdx, err := mgr.CloseTab(defaultSessionID, 1)
+	require.NoError(t, err)
+	require.Len(t, closedTabs, 1)
+	require.Equal(t, 0, activeIdx)
+
+	// Navigate the surviving tab — this can only produce a delivered
+	// screencast frame if the live view's screencast is genuinely re-bound
+	// to it (a real, working CDP subscription on a live, open target). Under
+	// the pre-fix bug, the false-death broadcast left the live view with no
+	// active epoch at all, so no frame would ever arrive here.
+	survivorCtx, err := mgr.Session(defaultSessionID)
+	require.NoError(t, err)
+	require.NoError(t, chromedp.Run(survivorCtx, chromedp.Navigate(srv.URL+"/booked")))
+
+	select {
+	case <-frameCh:
+	case <-time.After(10 * time.Second):
+		t.Fatal("live view did not deliver a frame for the survivor's post-close navigation — the " +
+			"screencast is not genuinely bound to the surviving tab (stuck on stale/closed-tab content, " +
+			"or torn down entirely by a false death broadcast)")
+	}
+
+	statusMu.Lock()
+	got := append([]string(nil), statusMsgs...)
+	statusMu.Unlock()
+	assert.Empty(t, got,
+		"closing the ACTIVE tab (browser and survivor alive) must never emit a false 'session ended' "+
+			"status to an attached viewer: %v", got)
+}
+
+// TestExecute_OpenTab_RealChromium_OpensBlankTab is the real-Chromium
+// acceptance test for browser_open_tab's no-url form: it must open a NEW
+// tab (not reuse the current one, unlike browser_navigate), make it active,
+// and leave the original tab's content untouched.
+func TestExecute_OpenTab_RealChromium_OpensBlankTab(t *testing.T) {
+	skipIfNoBrowser(t)
+
+	srv := targetBlankServer(t)
+	cfg := testBrowserCfg(t)
+	registry, mgr := newPermissiveRegistry(t, cfg)
+	ctx := context.Background()
+
+	nav := mustGetTool(t, registry, "browser_navigate")
+	navRes := nav.Execute(ctx, map[string]any{"url": srv.URL})
+	require.NotNil(t, navRes)
+	require.False(t, navRes.IsError, "navigate must succeed; got: %s", navRes.ForLLM)
+
+	openTab := mustGetTool(t, registry, "browser_open_tab")
+	openRes := openTab.Execute(ctx, map[string]any{})
+	require.NotNil(t, openRes)
+	require.False(t, openRes.IsError, "browser_open_tab (no url) must succeed; got: %s", openRes.ForLLM)
+	openData := decodeJSON(t, openRes.ForLLM)
+	assert.Equal(t, true, openData["success"])
+	assert.EqualValues(t, 1, openData["active_index"], "the new tab must be tab index 1")
+
+	tabs, activeIdx, err := mgr.ListTabs(defaultSessionID)
+	require.NoError(t, err)
+	require.Len(t, tabs, 2, "browser_open_tab must ADD a tab, not reuse the current one")
+	assert.Equal(t, 1, activeIdx, "the new tab must become active")
+	assert.True(t, tabs[1].Active)
+
+	// Tab 0's content must be untouched — proves this genuinely opened a
+	// SECOND tab rather than navigating the existing one away.
+	_, err = mgr.SwitchTab(defaultSessionID, 0)
+	require.NoError(t, err)
+	tab0Ctx, err := mgr.Session(defaultSessionID)
+	require.NoError(t, err)
+	var heading string
+	require.NoError(t, chromedp.Run(tab0Ctx, chromedp.Text("h1", &heading, chromedp.ByQuery)))
+	assert.Equal(t, "Contact", heading, "tab 0 must still show its own page — browser_open_tab must not have navigated it away")
+}
+
+// TestExecute_OpenTab_RealChromium_NavigatesToURL is the real-Chromium
+// acceptance test for browser_open_tab{url}: the new tab must actually load
+// the given URL and report its title/url back, exactly like browser_navigate
+// does for the current tab.
+func TestExecute_OpenTab_RealChromium_NavigatesToURL(t *testing.T) {
+	skipIfNoBrowser(t)
+
+	srv := targetBlankServer(t)
+	cfg := testBrowserCfg(t)
+	registry, mgr := newPermissiveRegistry(t, cfg)
+	ctx := context.Background()
+
+	nav := mustGetTool(t, registry, "browser_navigate")
+	navRes := nav.Execute(ctx, map[string]any{"url": srv.URL})
+	require.NotNil(t, navRes)
+	require.False(t, navRes.IsError, "navigate must succeed; got: %s", navRes.ForLLM)
+
+	openTab := mustGetTool(t, registry, "browser_open_tab")
+	openRes := openTab.Execute(ctx, map[string]any{"url": srv.URL + "/booked"})
+	require.NotNil(t, openRes)
+	require.False(t, openRes.IsError, "browser_open_tab{url} must succeed; got: %s", openRes.ForLLM)
+	openData := decodeJSON(t, openRes.ForLLM)
+	assert.Equal(t, "Booked", openData["title"])
+	assert.True(t, strings.Contains(openData["url"].(string), "/booked"))
+
+	tabs, activeIdx, err := mgr.ListTabs(defaultSessionID)
+	require.NoError(t, err)
+	require.Len(t, tabs, 2)
+	assert.True(t, strings.Contains(tabs[activeIdx].URL, "/booked"))
+
+	// The new tab is genuinely usable — read its content via the actual
+	// browser_get_text TOOL path (proves DefaultSessionID plumbing follows
+	// the newly-opened, newly-active tab end to end).
+	getText := mustGetTool(t, registry, "browser_get_text")
+	getTextRes := getText.Execute(ctx, map[string]any{"selector": "#sched"})
+	require.NotNil(t, getTextRes)
+	require.False(t, getTextRes.IsError, "browser_get_text must work on the new tab; got: %s", getTextRes.ForLLM)
+	data := decodeJSON(t, getTextRes.ForLLM)
+	assert.Equal(t, "Scheduling", data["text"])
+}
+
+// TestExecute_OpenTab_SSRFBlockedURL_NoTabConsumed proves a blocked url is
+// rejected BEFORE any tab is opened — exactly like browser_navigate's own
+// SSRF gate — so a malicious/blocked target never wastes a slot against
+// MaxTabs nor leaves a half-opened tab behind. Does not need skipIfNoBrowser:
+// ValidateURL runs before BrowserManager.OpenTab is ever called, so this
+// never touches chromedp (mirrors TestExecute_Navigate_SchemeBlocks's own
+// no-browser-needed rationale).
+func TestExecute_OpenTab_SSRFBlockedURL_NoTabConsumed(t *testing.T) {
+	cfg := testBrowserCfg(t)
+	registry, mgr := newPermissiveRegistry(t, cfg)
+	ctx := context.Background()
+
+	openTab := mustGetTool(t, registry, "browser_open_tab")
+	openRes := openTab.Execute(ctx, map[string]any{"url": "file:///etc/passwd"})
+	require.NotNil(t, openRes)
+	assert.True(t, openRes.IsError, "a blocked scheme must error, not silently no-op")
+	assert.Contains(t, openRes.ForLLM, "blocked")
+
+	tabs, _, err := mgr.ListTabs(defaultSessionID)
+	require.NoError(t, err)
+	assert.Empty(t, tabs, "a blocked url must not consume a tab — no browsing context should exist yet")
 }

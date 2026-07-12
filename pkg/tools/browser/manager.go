@@ -1664,6 +1664,36 @@ func (m *BrowserManager) PageTimeout() time.Duration {
 	return m.cfg.PageTimeout
 }
 
+// browserAlive reports whether sessionID's browsing context — the
+// underlying Chromium browser process/target, not any single tab within it
+// — is still alive. A pure, side-effect-free read (m.mu only, never a CDP
+// round trip, never Session()'s create-or-recover-on-death recovery
+// behavior) so it is safe to call from LiveView.watchForUnexpectedDeath
+// (pkg/tools/browser/live.go) without ever accidentally relaunching/
+// self-healing a Chromium process for what may be a deliberate whole-manager
+// CloseSession()/Shutdown() (ADR-038 finding #2's hot-reload case, where a
+// genuine "session ended" broadcast IS the correct signal — it tells
+// attached viewers to re-attach, which resolves the fresh manager).
+//
+// Returns false whenever sessionID has no browsing context registered at all
+// (CloseSession/Shutdown already deleted the entry, or nothing ever created
+// one) or its browser-owning context has itself been canceled (a genuine
+// crash, or an explicit se.browserCancel() call). Returns true whenever the
+// browsing context is still running, REGARDLESS of which individual tab
+// within it just closed — ADR-041's whole point is that closing any one tab,
+// including the active one, only cancels that tab's own context, never
+// se.browserCtx (see sessionEntry's doc comment) — so a dead tab context
+// alone must never be read as a dead browser.
+func (m *BrowserManager) browserAlive(sessionID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	se, ok := m.sessions[sessionID]
+	if !ok || se.browserCtx == nil {
+		return false
+	}
+	return se.browserCtx.Err() == nil
+}
+
 // Started reports whether the browser allocator has been launched (lazy
 // init via ensureStarted, triggered by the first Session call) and not since
 // Shutdown(). Exposed for tests that need to observe Shutdown() actually

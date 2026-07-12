@@ -170,6 +170,15 @@ export function BrowserLivePanel() {
           // so this override lands only here, matching the modal={false}
           // set on the Root above without touching the shared component.
           aria-modal={false}
+          // UAT finding (leaked/duplicate close button): BrowserLiveView's
+          // own header already renders a custom, labeled
+          // `aria-label="Close live browser panel"` X button (wired to
+          // `onClose` above) — SheetContent's default unconditional
+          // DialogPrimitive.Close would stack a SECOND, unlabeled generic
+          // "Close" button directly on top of it (both absolute
+          // right-2/right-2-ish top-2). Suppress the built-in one; Escape and
+          // the custom Close still close the panel exactly as before.
+          showClose={false}
           className="w-[70vw] max-w-[56rem] p-0 flex flex-col"
         >
           {/* Radix requires a DialogTitle descendant for a11y (screen-reader
