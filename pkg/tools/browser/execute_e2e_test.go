@@ -578,10 +578,14 @@ func TestExecute_Screenshot_ReturnsDataURL(t *testing.T) {
 	assert.False(t, result.IsError,
 		"browser_screenshot must succeed; got ForLLM: %s", result.ForLLM)
 
-	// Verify the ForLLM is a valid data URL with base64-encoded image data.
-	dataURL := result.ForLLM
-	assert.True(t, strings.HasPrefix(dataURL, "data:image/"),
-		"screenshot ForLLM must start with 'data:image/'; got: %.80s", dataURL)
+	// Verify the ForLLM contains a valid data URL with base64-encoded image
+	// data. browser_screenshot prepends "Current page URL:"/"Page title:"
+	// context lines before the data URL (see ScreenshotTool.Execute), so the
+	// data URL is embedded, not at the very start.
+	imgIdx := strings.Index(result.ForLLM, "data:image/")
+	require.GreaterOrEqual(t, imgIdx, 0,
+		"screenshot ForLLM must contain a 'data:image/' URL; got: %.120s", result.ForLLM)
+	dataURL := result.ForLLM[imgIdx:]
 	// Strip the data URL prefix and check the base64 is decodable.
 	commaIdx := strings.Index(dataURL, ",")
 	require.Greater(t, commaIdx, 0, "data URL must contain a comma separator")
