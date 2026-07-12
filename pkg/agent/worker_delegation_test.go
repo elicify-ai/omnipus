@@ -189,6 +189,9 @@ func TestSeededGraph_JimAwaitModeAllowed(t *testing.T) {
 		config.DelegationModeAwait,
 	)
 	if denial := miaCheck(ctxWS(testWS, 0), string(coreagent.IDWorker)); denial != nil {
-		t.Fatalf("Mia → worker (await) must be allowed post-collapse (background⇒direct⇒await too), got deny: %+v", denial)
+		t.Fatalf(
+			"Mia → worker (await) must be allowed post-collapse (background⇒direct⇒await too), got deny: %+v",
+			denial,
+		)
 	}
 }
