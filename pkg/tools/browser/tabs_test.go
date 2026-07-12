@@ -303,6 +303,88 @@ func TestCloseTab_CancelsTheClosedTabsContext(t *testing.T) {
 	assert.EqualValues(t, 1, atomic.LoadInt32(canceled), "closing a tab must cancel its chromedp context")
 }
 
+// --- ADR-041 fix F3: passive Target.targetCreated listener re-arm ---
+//
+// chromedp.ListenTarget's registration is scoped to the ctx it was given, so
+// closing the tab whose ctx currently holds the ADR-041 D2 passive listener
+// silently ends new-tab detection forever unless something re-installs it on
+// whichever tab becomes the new tab 0. installTargetListenerLocked does this
+// re-arm, tracked via sessionEntry.listenerTarget. These tests can't fire a
+// real CDP Target.targetCreated event in this pod (no Chromium binary), so
+// they verify the re-arm BOOKKEEPING directly: se.listenerTarget must track
+// se.tabs[0].targetID after any operation that changes which tab occupies
+// slot 0.
+
+// TestCloseTab_NonLastBranch_RearmsListenerOnNewTab0 covers CloseTab's
+// non-last branch: closing tab 0 out of >= 2 tabs slides another tab into
+// slot 0, and the listener must be re-armed onto IT.
+func TestCloseTab_NonLastBranch_RearmsListenerOnNewTab0(t *testing.T) {
+	m := newTestManagerWithFakeTabs(t, 5)
+	_, err := m.Session(DefaultSessionID)
+	require.NoError(t, err)
+	_, err = m.OpenTab(DefaultSessionID) // tab 1
+	require.NoError(t, err)
+
+	m.mu.Lock()
+	se := m.sessions[DefaultSessionID]
+	oldListenerTarget := se.listenerTarget
+	oldTab0TargetID := se.tabs[0].targetID
+	newTab0TargetIDBeforeClose := se.tabs[1].targetID // what will slide into slot 0
+	m.mu.Unlock()
+
+	require.Equal(t, oldTab0TargetID, oldListenerTarget, "the listener must start out armed on tab 0")
+
+	// Close tab 0 — the ONLY non-last branch that changes which tab occupies
+	// slot 0 without going through registerFreshSessionLocked.
+	_, _, err = m.CloseTab(DefaultSessionID, 0)
+	require.NoError(t, err)
+
+	m.mu.Lock()
+	se = m.sessions[DefaultSessionID]
+	newListenerTarget := se.listenerTarget
+	newTab0TargetID := se.tabs[0].targetID
+	m.mu.Unlock()
+
+	assert.Equal(t, newTab0TargetIDBeforeClose, newTab0TargetID, "sanity: the surviving tab slid into slot 0")
+	assert.Equal(t, newTab0TargetID, newListenerTarget,
+		"the listener must be re-armed onto the NEW tab 0 after closing the old one")
+	assert.NotEqual(t, oldListenerTarget, newListenerTarget,
+		"the listener bookkeeping must actually change — re-arming onto the same (now-closed) target would "+
+			"silently leave new-tab detection dead")
+}
+
+// TestCloseTab_LastRemainingTab_RearmsListenerOnReplacement covers the
+// last-tab-replacement path (registerFreshSessionLocked, via createFirstTab):
+// closing the LAST tab tears down the whole sessionEntry and builds a brand
+// new one around a fresh blank tab — the listener must be armed on THAT tab,
+// not left pointing at the torn-down one.
+func TestCloseTab_LastRemainingTab_RearmsListenerOnReplacement(t *testing.T) {
+	m := newTestManagerWithFakeTabs(t, 5)
+	_, err := m.Session(DefaultSessionID)
+	require.NoError(t, err)
+
+	m.mu.Lock()
+	oldListenerTarget := m.sessions[DefaultSessionID].listenerTarget
+	oldTab0TargetID := m.sessions[DefaultSessionID].tabs[0].targetID
+	m.mu.Unlock()
+	require.Equal(t, oldTab0TargetID, oldListenerTarget)
+
+	tabs, _, err := m.CloseTab(DefaultSessionID, 0)
+	require.NoError(t, err, "closing the last tab must succeed via the fresh-replacement path")
+	require.Len(t, tabs, 1)
+
+	m.mu.Lock()
+	se := m.sessions[DefaultSessionID]
+	newListenerTarget := se.listenerTarget
+	newTab0TargetID := se.tabs[0].targetID
+	m.mu.Unlock()
+
+	assert.Equal(t, newTab0TargetID, newListenerTarget,
+		"the listener must be armed on the replacement tab's target, not the torn-down one")
+	assert.NotEqual(t, oldListenerTarget, newListenerTarget,
+		"the replacement tab is a genuinely new CDP target — the listener bookkeeping must have moved on")
+}
+
 // --- ADR-041 fix F1: Session/OpenTab/CloseTab must not race to
 // independently create (and leak) the first tab of a not-yet-existing
 // browsing context ---
@@ -673,6 +755,66 @@ func TestReconcileTabs_MaxTabsCap_ReportsUnadopted(t *testing.T) {
 	assert.Nil(t, result["opened_new_tab"], "an unadopted tab must not ALSO be reported as opened_new_tab")
 }
 
+// TestReconcileTabs_OneClickTwoNewTargets_OneAdoptedOneStranded is the
+// second-fix-wave regression guard for the exact bug UAT caught: a single
+// click that spawns TWO new CDP targets in one go, where the first is
+// adopted (filling the MaxTabs cap) and the second is then capped. Before
+// this fix, ReconcileOutcome aggregated both signals correctly at the
+// manager level, but applyReconcileOutcome's if/else-if (tools.go) reported
+// only the FIRST-matched signal (Adopted) to the agent and silently dropped
+// the second target's Unadopted/Reason — the agent was told a tab opened but
+// never told a second one was stranded. Asserts BOTH the ReconcileOutcome
+// itself AND the applyReconcileOutcome result map carry both signals.
+func TestReconcileTabs_OneClickTwoNewTargets_OneAdoptedOneStranded(t *testing.T) {
+	m := newTestManagerWithFakeTabs(t, 2) // root tab (1) + exactly one more (2) fits; a third does not
+	_, err := m.Session(DefaultSessionID)
+	require.NoError(t, err)
+
+	m.mu.Lock()
+	rootTargetID := m.sessions[DefaultSessionID].tabs[0].targetID
+	m.mu.Unlock()
+
+	// One click handler that opened two target="_blank" links: the first
+	// fills the remaining MaxTabs slot, the second is then over the cap.
+	m.listTargets = func(ctx context.Context) ([]*target.Info, error) {
+		return []*target.Info{
+			{TargetID: rootTargetID, Type: "page", OpenerID: ""},
+			{TargetID: target.ID("adoptable-target"), Type: "page", OpenerID: rootTargetID, URL: "https://example.com/a"},
+			{TargetID: target.ID("stranded-target"), Type: "page", OpenerID: rootTargetID, URL: "https://example.com/b"},
+		}, nil
+	}
+
+	outcome, err := m.ReconcileTabs(DefaultSessionID)
+	require.NoError(t, err)
+
+	// Both signals must survive the aggregation — neither clears the other.
+	// (The adopted tab's URL isn't asserted here: fakeTabFactory, the test
+	// seam used by newTestManagerWithFakeTabs, never populates title/url —
+	// only the real createTab does, via refreshTabMeta's chromedp calls —
+	// mirroring TestReconcileTabs_AdoptsNewlyDetectedTarget's identical
+	// omission above.)
+	require.True(t, outcome.Adopted, "the first new target must be reported as adopted")
+	require.NotNil(t, outcome.NewActive)
+	assert.Equal(t, 1, outcome.NewActive.Index)
+	require.True(t, outcome.Unadopted, "the second new target must be reported as stranded, not silently dropped")
+	assert.Equal(t, tabAdoptReasonMaxTabs, outcome.Reason)
+	assert.Equal(t, 1, outcome.UnadoptedCount)
+
+	tabs, _, err := m.ListTabs(DefaultSessionID)
+	require.NoError(t, err)
+	assert.Len(t, tabs, 2, "exactly one of the two new targets is adopted — MaxTabs=2 caps the total")
+
+	// The result map browser_click actually returns to the agent must carry
+	// BOTH keys — this is the exact bug: an if/else-if here used to report
+	// only one of the two.
+	result := map[string]any{"success": true}
+	applyReconcileOutcome(result, outcome)
+	assert.Equal(t, true, result["opened_new_tab"], "the adopted tab must still be reported")
+	assert.Equal(t, true, result["tab_opened_but_not_adopted"], "the stranded tab must ALSO be reported, not dropped")
+	assert.Equal(t, string(tabAdoptReasonMaxTabs), result["reason"])
+	assert.NotEmpty(t, result["note"], "the agent needs a human-readable explanation of both outcomes")
+}
+
 // TestApplyReconcileOutcome_AdoptedVsUnadoptedVsNoop pins the three
 // result-map shapes applyReconcileOutcome (tools.go) produces from a
 // BrowserManager.ReconcileOutcome — the mapping ClickTool.Execute relies on
@@ -711,6 +853,23 @@ func TestApplyReconcileOutcome_AdoptedVsUnadoptedVsNoop(t *testing.T) {
 		assert.Nil(t, result["opened_new_tab"])
 		assert.Nil(t, result["tab_opened_but_not_adopted"])
 		assert.Nil(t, result["note"])
+	})
+
+	// Second-fix-wave regression: a single click can spawn two new targets in
+	// one go — one adopted, one stranded. Both keys must appear together;
+	// before the fix an if/else-if here reported only the Adopted case.
+	t.Run("adopted_and_unadopted_together", func(t *testing.T) {
+		tab := Tab{Index: 1, URL: "https://example.com/a", Active: true}
+		result := map[string]any{"success": true}
+		applyReconcileOutcome(result, ReconcileOutcome{
+			Adopted: true, NewActive: &tab,
+			Unadopted: true, Reason: tabAdoptReasonMaxTabs, UnadoptedCount: 1,
+		})
+		assert.Equal(t, true, result["opened_new_tab"], "adoption must still be reported")
+		assert.Equal(t, 1, result["new_tab_index"])
+		assert.Equal(t, true, result["tab_opened_but_not_adopted"], "the stranded tab must ALSO be reported")
+		assert.Equal(t, "max_tabs_reached", result["reason"])
+		assert.NotEmpty(t, result["note"])
 	})
 }
 

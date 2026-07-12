@@ -447,3 +447,225 @@ func TestLiveView_RebindScreencast_StartFailure_NotifiesStatusSink(t *testing.T)
 	defer lv.mu.Unlock()
 	assert.Nil(t, lv.listenCtx, "a failed rebind must leave listenCtx cleared (no half-installed epoch)")
 }
+
+// ---------------------------------------------------------------------------
+// ADR-041 second fix wave (7-reviewer findings A/B, 2026-07-12) — the F1 fix
+// above (nil lv.listenCtx under lock BEFORE calling oldStopListen()) opened
+// two residual races of its own, both fixed in rebindScreencast/
+// rebindScreencastOnce:
+//
+//   - Finding A: the LAST viewer's detach() can land in the exact window
+//     rebindScreencastOnce leaves unlocked between nilling lv.listenCtx and
+//     re-locking to install the new epoch. detach() sees
+//     isActiveLocked()==false (transiently) and removes the viewer without
+//     stopping anything, trusting the in-flight rebind to leave things
+//     consistent — but the in-flight rebind used to go ahead and install a
+//     brand new screencast + ack worker anyway, for zero viewers.
+//   - Finding B: two concurrent rebindScreencast calls for the same session
+//     (a human tab switch racing the agent's own async adopt-and-switch) —
+//     whichever reaches the top guard SECOND sees listenCtx already nilled
+//     by the first and silently drops its own target tab.
+//
+// Both tests below drive the exact interleaving via the runCDP fake-CDP
+// seam (no sleeps), the same technique TestLiveView_RebindScreencast_
+// NoFalseDeathBroadcast and ...StartFailure_NotifiesStatusSink already use.
+// ---------------------------------------------------------------------------
+
+// TestLiveView_RebindScreencast_LastViewerDetachDuringTeardown_NoOrphan is
+// the regression guard for Finding A. It lands the last (and only) attached
+// viewer's detach() call from INSIDE the runCDP stub, at the exact point
+// rebindScreencastOnce makes its old-screencast StopScreencast CDP call —
+// i.e. strictly after lv.listenCtx has already been nilled and the lock
+// released, which is precisely the window the finding describes. Without
+// the len(lv.viewers)==0 re-check, rebindScreencastOnce would go on to
+// install a brand new screencast epoch (and spawn a fresh ack-worker
+// goroutine) for a session that, by the time it re-locks, has zero
+// registered viewers.
+func TestLiveView_RebindScreencast_LastViewerDetachDuringTeardown_NoOrphan(t *testing.T) {
+	mgr := &BrowserManager{cfg: BrowserConfig{PageTimeout: 5 * time.Second}}
+
+	var startScreencastCalls int32
+	var detachTriggered int32
+
+	lv := &LiveView{
+		mgr:          mgr,
+		sessionID:    "s1",
+		viewers:      make(map[string]FrameSink),
+		statusSinks:  make(map[string]StatusSink),
+		controlSinks: make(map[string]ControlSink),
+		tabsSinks:    make(map[string]TabsSink),
+		ackCh:        make(chan int64, 1),
+	}
+	lv.runCDP = func(ctx context.Context, timeout time.Duration, actions ...chromedp.Action) error {
+		for _, a := range actions {
+			switch a.(type) {
+			case *page.StopScreencastParams:
+				if atomic.AddInt32(&detachTriggered, 1) == 1 {
+					// Land the LAST viewer's detach() exactly inside
+					// rebindScreencastOnce's unlocked teardown window
+					// (Finding A): lv.listenCtx has already been nilled and
+					// the lock released by this point, so detach() sees
+					// isActiveLocked()==false and — correctly, per its own
+					// contract — does not try to stop the screencast
+					// itself, leaving that to this in-flight rebind.
+					lv.detach("viewer1")
+				}
+			case *page.StartScreencastParams:
+				atomic.AddInt32(&startScreencastCalls, 1)
+			}
+		}
+		return nil
+	}
+
+	oldTabCtx, oldCancel := chromedp.NewContext(context.Background())
+	defer oldCancel()
+	_, err := lv.attach(oldTabCtx, "viewer1", func(LiveFrame) {}, nil, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, int32(1), atomic.LoadInt32(&startScreencastCalls), "attach() must have started its own screencast")
+
+	newTabCtx, newCancel := chromedp.NewContext(context.Background())
+	defer newCancel()
+
+	lv.rebindScreencast(newTabCtx)
+
+	assert.Equal(t, int32(1), atomic.LoadInt32(&startScreencastCalls),
+		"rebindScreencast must NOT start a new screencast epoch when the last viewer detached during "+
+			"teardown (Finding A) — only attach()'s original StartScreencast should ever have fired")
+
+	lv.mu.Lock()
+	defer lv.mu.Unlock()
+	assert.Nil(t, lv.listenCtx, "no screencast epoch should remain active with zero viewers left")
+	assert.Empty(t, lv.viewers, "the detached viewer must be gone")
+}
+
+// TestLiveView_RebindScreencast_ConcurrentRebind_ConvergesOnLatestActiveTab
+// is the regression guard for Finding B. Two goroutines race to rebind the
+// same LiveView: G1 targets a STALE tab, G2 targets the tab the
+// BrowserManager actually reports as active. G2 is made to land its call
+// while G1 is blocked mid-teardown with lv.listenCtx already nil — the exact
+// interleaving under which G2's own top guard (isActiveLocked()==false)
+// silently drops its target, proving the drop itself is real. What must NOT
+// happen is the live view getting stuck on G1's stale target just because
+// G1's install happens to land first: once G1 finishes installing, its
+// post-install self-check must notice the manager's real active tab
+// (tabCurrent) differs from what it just bound (tabStale) and chase it down,
+// so the screencast converges on tabCurrent — the same authoritative source
+// (BrowserManager.Session) onTabsChanged itself already trusts — without
+// waiting for a further, unrelated tab-change event.
+func TestLiveView_RebindScreencast_ConcurrentRebind_ConvergesOnLatestActiveTab(t *testing.T) {
+	tabInit, cancelInit := chromedp.NewContext(context.Background())
+	defer cancelInit()
+	tabStale, cancelStale := chromedp.NewContext(context.Background())
+	defer cancelStale()
+	tabCurrent, cancelCurrent := chromedp.NewContext(context.Background())
+	defer cancelCurrent()
+
+	// The manager's own truth: tabCurrent (index 1) is the ACTUALLY active
+	// tab. started:true + a pre-populated sessions map means Session()
+	// resolves it directly without touching the real chromedp allocator.
+	mgr := &BrowserManager{
+		cfg:     BrowserConfig{PageTimeout: 5 * time.Second},
+		started: true,
+		sessions: map[string]*sessionEntry{
+			"s1": {
+				tabs: []*tabEntry{
+					{ctx: tabStale, cancel: cancelStale},
+					{ctx: tabCurrent, cancel: cancelCurrent},
+				},
+				activeIdx: 1,
+			},
+		},
+	}
+
+	stopInitStarted := make(chan struct{})
+	releaseStopInit := make(chan struct{})
+	var stopInitOnce sync.Once
+	var startScreencastCalls int32
+
+	lv := &LiveView{
+		mgr:          mgr,
+		sessionID:    "s1",
+		viewers:      make(map[string]FrameSink),
+		statusSinks:  make(map[string]StatusSink),
+		controlSinks: make(map[string]ControlSink),
+		tabsSinks:    make(map[string]TabsSink),
+		ackCh:        make(chan int64, 1),
+	}
+	lv.runCDP = func(ctx context.Context, timeout time.Duration, actions ...chromedp.Action) error {
+		for _, a := range actions {
+			switch a.(type) {
+			case *page.StopScreencastParams:
+				if ctx == tabInit {
+					// The first rebind's teardown of attach()'s original
+					// epoch — block here so the second (concurrent) rebind
+					// call can land squarely in the window where
+					// lv.listenCtx has already been nilled but this first
+					// caller hasn't re-locked yet (the interleaving Finding
+					// B describes).
+					stopInitOnce.Do(func() { close(stopInitStarted) })
+					<-releaseStopInit
+				}
+			case *page.StartScreencastParams:
+				atomic.AddInt32(&startScreencastCalls, 1)
+			}
+		}
+		return nil
+	}
+
+	_, err := lv.attach(tabInit, "viewer1", func(LiveFrame) {}, nil, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, int32(1), atomic.LoadInt32(&startScreencastCalls))
+
+	// G1: rebind to the STALE target. Reaches the guard FIRST, so its
+	// install wins the race.
+	g1Done := make(chan struct{})
+	go func() {
+		defer close(g1Done)
+		lv.rebindScreencast(tabStale)
+	}()
+
+	select {
+	case <-stopInitStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("G1's rebindScreencast never reached the old-epoch StopScreencast call")
+	}
+
+	// G2: rebind to the CURRENT (real, authoritative) target, landing while
+	// G1 is blocked mid-teardown with lv.listenCtx already nil. Per Finding
+	// B, G2's own top guard sees "not active" and drops its target
+	// silently — proven here by requiring it to return promptly rather than
+	// block, and with no screencast started on its behalf.
+	g2Done := make(chan struct{})
+	go func() {
+		defer close(g2Done)
+		lv.rebindScreencast(tabCurrent)
+	}()
+	select {
+	case <-g2Done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("G2's rebindScreencast should have returned promptly (dropped by the top guard), not blocked")
+	}
+
+	close(releaseStopInit)
+
+	select {
+	case <-g1Done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("G1's rebindScreencast did not complete")
+	}
+
+	lv.mu.Lock()
+	finalTabCtx := lv.tabCtx
+	finalListenCtx := lv.listenCtx
+	lv.mu.Unlock()
+
+	require.NotNil(t, finalListenCtx, "the live view must not be left with no active screencast epoch")
+	assert.Equal(t, tabCurrent, finalTabCtx,
+		"Finding B: the screencast must converge on the ACTUAL current active tab (tabCurrent) — not "+
+			"get stuck on the stale target (tabStale) just because that caller's install happened to "+
+			"land first")
+	// attach()'s own start, G1's stale-target install, and the
+	// self-correcting install onto tabCurrent: three StartScreencast calls
+	// total. G2 never got far enough to start one of its own.
+	assert.Equal(t, int32(3), atomic.LoadInt32(&startScreencastCalls))
+}

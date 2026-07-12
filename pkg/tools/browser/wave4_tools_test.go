@@ -38,6 +38,10 @@ func TestBrowserToolRegistration(t *testing.T) {
 		"browser_get_text",
 		"browser_wait",
 		"browser_evaluate",
+		// ADR-041 multi-tab tools:
+		"browser_list_tabs",
+		"browser_switch_tab",
+		"browser_close_tab",
 	}
 
 	for _, name := range expectedTools {
@@ -48,7 +52,8 @@ func TestBrowserToolRegistration(t *testing.T) {
 		}
 	}
 
-	assert.Len(t, expectedTools, 7, "spec requires exactly 7 browser tools (FR-009)")
+	// 7 original browser tools (FR-009) + 3 ADR-041 multi-tab tools.
+	assert.Len(t, expectedTools, 10, "expected 10 browser tools (7 FR-009 + 3 ADR-041 tab tools)")
 }
 
 // TestBrowserToolNames verifies that each registered tool returns the correct name and
@@ -72,6 +77,9 @@ func TestBrowserToolNames(t *testing.T) {
 		"browser_get_text",
 		"browser_wait",
 		"browser_evaluate",
+		"browser_list_tabs",
+		"browser_switch_tab",
+		"browser_close_tab",
 	}
 
 	for _, name := range toolNames {

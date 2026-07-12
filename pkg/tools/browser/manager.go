@@ -1105,11 +1105,31 @@ const reconcileTargetListTimeout = 5 * time.Second
 // adopted" from "a new tab was detected but could not be adopted" from
 // "nothing new happened", so browser_click (tools.go) can tell the agent a
 // tab was stranded instead of silently reporting plain success.
+//
+// Adopted/NewActive and Unadopted/Reason/UnadoptedCount are aggregated
+// INDEPENDENTLY across every target ReconcileTabs's loop processes in one
+// pass (ADR-041 second-fix-wave, F2 follow-up): a single click can spawn
+// MULTIPLE new targets in one go (e.g. two target="_blank" links inside one
+// click handler), and one may adopt cleanly while another is capped or fails
+// to attach. Once Unadopted is set true it is STICKY for the rest of the
+// pass — a later target that DOES adopt successfully must not clear it (and
+// symmetrically a later Unadopted target must not clear an already-set
+// Adopted/NewActive) — both signals must reach the caller so
+// applyReconcileOutcome (tools.go) can report BOTH "opened_new_tab" and
+// "tab_opened_but_not_adopted" in the same tool result instead of silently
+// dropping whichever one didn't win a mutually-exclusive if/else.
 type ReconcileOutcome struct {
 	Adopted   bool
 	NewActive *Tab
 	Unadopted bool
-	Reason    tabAdoptReason
+	// Reason is the FIRST unadopted reason encountered in this pass (stable
+	// and deterministic when multiple stranded targets have different
+	// reasons); see UnadoptedCount for how many targets were stranded.
+	Reason tabAdoptReason
+	// UnadoptedCount is how many genuinely-new targets in this pass could
+	// NOT be adopted. Always 0 when Unadopted is false; always >= 1 when
+	// Unadopted is true.
+	UnadoptedCount int
 }
 
 // ReconcileTabs looks for CDP targets opened by one of sessionID's own tabs
@@ -1121,10 +1141,13 @@ type ReconcileOutcome struct {
 // (installTargetListenerLocked). Outcome.Adopted/NewActive report a
 // successful adoption (if a page opened more than one new tab in one go, the
 // LAST one adopted ends up active, same as if they'd been adopted one at a
-// time via the passive listener); Outcome.Unadopted/Reason report a
-// genuinely new target that could NOT be adopted (ADR-041 fix F2) — e.g. the
-// MaxTabs cap, or the CDP attach itself failing — so the caller can surface
-// that to the agent instead of the tab silently vanishing from view.
+// time via the passive listener); Outcome.Unadopted/Reason/UnadoptedCount
+// report a genuinely new target that could NOT be adopted (ADR-041 fix F2)
+// — e.g. the MaxTabs cap, or the CDP attach itself failing — so the caller
+// can surface that to the agent instead of the tab silently vanishing from
+// view. The two signals are tracked independently across the whole pass
+// (see ReconcileOutcome's doc comment) — a click that spawns two new targets
+// where one adopts and the other is stranded reports BOTH.
 func (m *BrowserManager) ReconcileTabs(sessionID string) (ReconcileOutcome, error) {
 	m.mu.Lock()
 	se, ok := m.sessions[sessionID]
@@ -1173,6 +1196,10 @@ func (m *BrowserManager) ReconcileTabs(sessionID string) (ReconcileOutcome, erro
 				"error":      aerr.Error(),
 			})
 		}
+		// Adopted and Unadopted are set on DISJOINT fields of out — deliberately
+		// NOT an if/else — so a click that opens two new targets where one
+		// adopts and one is stranded reports BOTH signals, regardless of which
+		// order this loop processes them in. See ReconcileOutcome's doc comment.
 		switch {
 		case result.Adopted != nil:
 			out.Adopted = true
@@ -1180,7 +1207,10 @@ func (m *BrowserManager) ReconcileTabs(sessionID string) (ReconcileOutcome, erro
 			tracked[info.TargetID] = struct{}{} // avoid reprocessing within this pass
 		case result.Unadopted:
 			out.Unadopted = true
-			out.Reason = result.Reason
+			if out.Reason == "" {
+				out.Reason = result.Reason // first reason wins — stable across the pass
+			}
+			out.UnadoptedCount++
 			tracked[info.TargetID] = struct{}{} // avoid reprocessing within this pass
 		}
 	}
