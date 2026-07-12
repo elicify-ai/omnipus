@@ -1176,26 +1176,6 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   const activeAgentId = useSessionStore((s) => s.activeAgentId)
   const startNewSession = useSessionStore((s) => s.startNewSession)
   const composerRuntime = useComposerRuntime()
-  const composerPrefill = useUiStore((s) => s.composerPrefill)
-  const setComposerPrefill = useUiStore((s) => s.setComposerPrefill)
-
-  // ADR-039 D-A3: "Hand to agent" in the live browser panel (mounted OUTSIDE
-  // the AssistantRuntimeProvider — see AppShell.tsx / BrowserLivePanel.tsx)
-  // cannot reach composerRuntime directly, so it drops the hint text into
-  // the ui store; this bridge effect applies it here (inside the runtime)
-  // and clears the field so it never re-applies on a later remount.
-  //
-  // Reviewer finding: a `setText(composerPrefill)` full-replace silently
-  // discarded whatever the user had already typed into the composer. An
-  // in-progress draft is appended-to instead of clobbered — only an EMPTY
-  // composer gets the hint written in directly (unchanged behaviour for the
-  // common case of hand-off happening before the user has typed anything).
-  useEffect(() => {
-    if (composerPrefill === null) return
-    const existingText = composerRuntime.getState().text
-    composerRuntime.setText(existingText.length > 0 ? `${existingText}\n${composerPrefill}` : composerPrefill)
-    setComposerPrefill(null)
-  }, [composerPrefill, composerRuntime, setComposerPrefill])
 
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
   const activeAgentName = agents.find((a) => a.id === activeAgentId)?.name ?? 'Omnipus'

@@ -21,19 +21,29 @@
 //     out of `data-app-shell`'s flow entirely (Radix's Dialog.Portal), so it
 //     never participated in the flex row to begin with.
 //
-// CAVEAT — the live WS survives a pin toggle only in the sense that it isn't
-// torn down GRATUITOUSLY (switching the (session, agent) pair, or nothing at
-// all, never remounts BrowserLiveView) — but flipping 📌 WHILE a session is
-// open DOES remount it: the Sheet branch and the docked branch are different
-// root element types (Radix's Dialog/Portal vs. a plain <aside>) at the same
-// position in AppShell's children. React always fully unmounts + remounts a
-// subtree when the root element type at a given position changes, regardless
-// of an inner element's `key` — `key` only preserves identity across
-// siblings within the SAME parent shape, not across two structurally
-// different trees. So toggling pin re-runs BrowserLiveView's WS
-// connect/detach lifecycle effect (a fresh `browser_attach`). ADR-040 D4
-// accepts this explicitly ("preserve … where practical") rather than forcing
-// a portal-based identity hack into Radix's Sheet/Dialog machinery.
+// CAVEAT — BrowserLiveView's WS connection is torn down and restarted in TWO
+// cases, both deliberate or deliberately-accepted, not one:
+//   1. The (session, agent) pair changes while the panel is open — the
+//      `key={...}` below (see its own comment further down) intentionally
+//      remounts BrowserLiveView so a second "Watch live" click tears down
+//      the stale WS and starts a fresh one for the new target.
+//   2. The pin toggle flips WHILE a session is open — the Sheet branch and
+//      the docked branch below are different root element TYPES (Radix's
+//      Dialog/Portal vs. a plain <aside>), both returned from THIS
+//      component's own conditional render (not a fixed position inside
+//      AppShell's children — AppShell just mounts <BrowserLivePanel/> once
+//      and this component alone decides which branch to render). React
+//      always fully unmounts + remounts a subtree when the root element
+//      type changes, regardless of any inner element's `key` — `key` only
+//      preserves identity across siblings of the SAME element type, not
+//      across two structurally different trees. So toggling 📌 re-runs
+//      BrowserLiveView's WS connect/detach lifecycle effect (a fresh
+//      `browser_attach`) even though neither the session nor the agent
+//      changed. ADR-040 D4 accepts this explicitly ("preserve … where
+//      practical") rather than forcing a portal-based identity hack into
+//      Radix's Sheet/Dialog machinery.
+// Only when NEITHER the (session, agent) pair NOR the pin state changes does
+// the WS connection survive a re-render.
 
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/ui/sheet'
 import { useUiStore } from '@/store/ui'
@@ -45,8 +55,33 @@ export function BrowserLivePanel() {
   const browserPanelPinned = useUiStore((s) => s.browserPanelPinned)
   const toggleBrowserPanelPinned = useUiStore((s) => s.toggleBrowserPanelPinned)
 
+  // Pop-out opens a fullscreen tab for the SAME session/agent — redundant
+  // (and visually confusing) once the panel is already docked side-by-side
+  // with the chat, so it's conditionally omitted below when pinned.
+  const handlePopOut = browserPanel
+    ? () => {
+        // The auth token lives in sessionStorage (per-tab, for XSS hygiene)
+        // which window.open'd tabs do NOT inherit — so the pop-out would
+        // land on the login screen. Briefly mirror the token into
+        // localStorage as a same-origin hand-off; the /browser-live route
+        // migrates it back into sessionStorage and purges this copy on
+        // mount (see browser-live.tsx).
+        const token = sessionStorage.getItem('omnipus_auth_token')
+        if (token) localStorage.setItem('omnipus_auth_token', token)
+        const params = new URLSearchParams({
+          session: browserPanel.sessionId,
+          agent: browserPanel.agentId,
+        })
+        // The SPA uses HASH routing (#/…) — the route + search must live in
+        // the fragment, not the path, or the router ignores it and falls to
+        // the default route. Must be `/#/browser-live?…`, not `/browser-live?…`.
+        window.open(`/#/browser-live?${params.toString()}`, '_blank', 'noopener,noreferrer')
+      }
+    : undefined
+
   // Shared between both layouts below — same (session, agent)-keyed mount,
-  // same capability props, regardless of pin state.
+  // same capability props, regardless of pin state (except `onPopOut` —
+  // see below).
   const view = browserPanel && (
     <BrowserLiveView
       // Keys the mount to the (session, agent) pair so switching targets
@@ -67,29 +102,17 @@ export function BrowserLivePanel() {
       // render at all, mirroring the isPinned/onTogglePin omission there
       // rather than rendering a control that dead-ends.
       canAnnotate
-      // ADR-040 D4 seam: display-only for the view (it hides its own
-      // Pop-out affordance while pinned) — this component owns the Pin
-      // control's backing state and passes it through, plus the toggle.
+      // ADR-040 D4 seam: this component owns the Pin control's backing
+      // state and passes it through, plus the toggle. `isPinned`/
+      // `onTogglePin` are display-only for the view either way, but
+      // `onPopOut` below is CONDITIONALLY omitted while pinned — the view
+      // gates its own Pop-out affordance purely on `onPopOut`'s presence
+      // (see BrowserLiveView.tsx), so passing a handler here regardless of
+      // pin state would render a Pop-out button that makes no sense from
+      // inside an already-docked panel.
       isPinned={browserPanelPinned}
       onTogglePin={toggleBrowserPanelPinned}
-      onPopOut={() => {
-        // The auth token lives in sessionStorage (per-tab, for XSS hygiene)
-        // which window.open'd tabs do NOT inherit — so the pop-out would
-        // land on the login screen. Briefly mirror the token into
-        // localStorage as a same-origin hand-off; the /browser-live route
-        // migrates it back into sessionStorage and purges this copy on
-        // mount (see browser-live.tsx).
-        const token = sessionStorage.getItem('omnipus_auth_token')
-        if (token) localStorage.setItem('omnipus_auth_token', token)
-        const params = new URLSearchParams({
-          session: browserPanel.sessionId,
-          agent: browserPanel.agentId,
-        })
-        // The SPA uses HASH routing (#/…) — the route + search must live in
-        // the fragment, not the path, or the router ignores it and falls to
-        // the default route. Must be `/#/browser-live?…`, not `/browser-live?…`.
-        window.open(`/#/browser-live?${params.toString()}`, '_blank', 'noopener,noreferrer')
-      }}
+      {...(browserPanelPinned ? {} : { onPopOut: handlePopOut })}
     />
   )
 

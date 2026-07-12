@@ -426,7 +426,14 @@ interface ChatStore {
   setMessages: (messages: Message[]) => void
   appendMessage: (message: ChatMessage) => void
   updateLastAssistantMessage: (content: string, done?: boolean) => void
-  markLastMessageInterrupted: () => void
+  /**
+   * Marks the target session's last assistant message as interrupted.
+   * `sessionId` optionally scopes this to a specific (possibly background)
+   * session — e.g. the browser panel's "Take over" pausing its own pinned
+   * session. Omitted (the default) targets the active session, matching
+   * every pre-existing call site (Stop button, Escape, `/cancel`).
+   */
+  markLastMessageInterrupted: (sessionId?: string) => void
 
   startToolCall: (callId: string, tool: string, params: Record<string, unknown>) => void
   resolveToolCall: (callId: string, result: unknown, status: 'success' | 'error', durationMs?: number, error?: string) => void
@@ -492,7 +499,15 @@ interface ChatStore {
   sendMessage: (content: string, opts?: { mediaRefs?: string[]; attachments?: MediaAttachment[]; model_name?: string }) => void
   /** Validate an outbound MessageFrame against the generated Zod schema. Logs and dev-toasts on failure but never blocks the send. `sessionId` (the sending session, or the pending-bucket key when no session exists yet) is threaded through into the production telemetry record for operator correlation. */
   _validateOutboundFrame: (payload: unknown, sessionId?: string | null) => void
-  cancelStream: () => void
+  /**
+   * Cancels the target session's in-flight turn (sends the `cancel` WS frame
+   * and marks its last assistant message interrupted). `sessionId` optionally
+   * scopes this to a specific session — e.g. the browser panel's "Take over"
+   * pausing the RIGHT (pinned) session instead of whatever chat is
+   * foreground. Omitted (the default) targets the active session, matching
+   * every pre-existing call site (Stop button, Escape, `/cancel`).
+   */
+  cancelStream: (sessionId?: string) => void
   respondToPairing: (deviceId: string, decision: 'approve' | 'reject') => void
 
   // C8: defensively clear in-flight/streaming state for every session bucket.
@@ -812,8 +827,8 @@ export const useChatStore = create<ChatStore>((set, get) => {
       })
     },
 
-    markLastMessageInterrupted: () => {
-      const sid = getActiveSid()
+    markLastMessageInterrupted: (sessionId) => {
+      const sid = sessionId ?? getActiveSid()
       withBucket(sid, (b) => {
         const lastMsgId = findLastAssistantMessageId(b.messageOrder, b.messagesById)
         if (!lastMsgId) {
@@ -856,6 +871,17 @@ export const useChatStore = create<ChatStore>((set, get) => {
           if (m) { m.isStreaming = false; m.status = 'interrupted' }
         }) as Partial<SessionChatState>
       })
+      // An explicit `sessionId` (e.g. the browser panel's pinned session)
+      // must never leak into interrupting a message in some OTHER,
+      // unrelated session — the cross-bucket fallback scan below exists only
+      // to cover legacy edge cases for the DEFAULT (active-session) call
+      // site, where a message can land in a bucket other than the one
+      // `getActiveSid()` currently names (e.g. a race in test scaffolding).
+      // Skip it whenever the caller named a specific target.
+      if (sessionId !== undefined) {
+        maybeDrainNext()
+        return
+      }
       // If no streaming assistant message was found in the active bucket, search
       // all buckets. This handles scenarios where a message was appended to a
       // different bucket before the active session was set (e.g. in test scaffolding).
@@ -1547,36 +1573,53 @@ export const useChatStore = create<ChatStore>((set, get) => {
       }
   },
 
-    cancelStream: () => {
+    cancelStream: (sessionId) => {
       const { connection } = useConnectionStore.getState()
       const { activeSessionId } = useSessionStore.getState()
-      const { isStreaming } = get()
+      const targetSid = sessionId ?? activeSessionId
+      // When a `sessionId` is passed explicitly (e.g. the browser panel's
+      // pinned session), resolve ITS streaming state from that session's own
+      // bucket — the flat `isStreaming` foreground field below only ever
+      // reflects the ACTIVE session's projection (via bucketToForeground),
+      // so reading it here for a background session would silently answer
+      // for the wrong session. The default (no-argument) path keeps reading
+      // the flat field exactly as before — this is what the pre-existing
+      // Stop-button call site (ChatScreen.tsx) has always relied on, and
+      // must stay byte-for-byte unchanged. Both reads happen BEFORE
+      // markLastMessageInterrupted() below, whose own withBucket call can
+      // resync the flat field out from under a post-hoc read.
+      const targetIsStreaming = sessionId !== undefined
+        ? (get().sessionsById[sessionId]?.isStreaming ?? false)
+        : get().isStreaming
 
       // FR-21 / T21–T25: always mark the last assistant message as interrupted
-      // when the user explicitly invokes cancel (stop button, Escape, /cancel).
-      // We do this BEFORE the isStreaming guard so that a stop-button click that
-      // races a done frame still produces the (interrupted) label. Without this,
-      // a turn that completes in <100ms after the stop button appears but before
+      // when the user explicitly invokes cancel (stop button, Escape, /cancel,
+      // or the browser panel's "Take over" for its pinned session). Scoped to
+      // `sessionId` when the caller passed one, else defaults to the active
+      // session (existing behaviour, unchanged). We do this BEFORE the
+      // isStreaming guard so that a stop-button click that races a done frame
+      // still produces the (interrupted) label. Without this, a turn that
+      // completes in <100ms after the stop button appears but before
       // Playwright (or a real user) clicks it would silently do nothing because
       // isStreaming flips to false between render and click.
-      get().markLastMessageInterrupted()
+      get().markLastMessageInterrupted(sessionId)
 
       if (!connection) return
-      if (!activeSessionId) {
+      if (!targetSid) {
         // No server-side session established yet — just clear local streaming state.
         withBucket(getActiveSid(), () => ({ isStreaming: false }))
         maybeDrainNext()
         return
       }
 
-      if (isStreaming) {
+      if (targetIsStreaming) {
         // Only send the cancel frame to the server if the turn is still active.
         // Sending cancel for a completed turn is a no-op on the server but wastes
         // a round-trip and may confuse the audit log.
-        const sent = connection.send({ type: 'cancel', session_id: activeSessionId })
+        const sent = connection.send({ type: 'cancel', session_id: targetSid })
         if (!sent) {
           console.warn('[chat] cancelStream: send failed — connection may be closed')
-          logDiagnostic('chatCancelStreamSendFailed', { sessionId: activeSessionId })
+          logDiagnostic('chatCancelStreamSendFailed', { sessionId: targetSid })
           useUiStore.getState().addToast({
             message: 'Could not send cancel — connection dropped. The response may continue briefly.',
             variant: 'error',
@@ -1584,7 +1627,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
         }
       }
 
-      withBucket(activeSessionId, (b) => {
+      withBucket(targetSid, (b) => {
         const updated = { ...b.toolCalls }
         for (const key of Object.keys(updated)) {
           if (updated[key].status === 'running') {
