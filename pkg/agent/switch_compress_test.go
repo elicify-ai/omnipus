@@ -12,6 +12,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -384,6 +385,119 @@ func TestSwitchTime_UnknownModel_LogsWarn(t *testing.T) {
 	}
 	if !strings.Contains(logged, `"level":"warn"`) {
 		t.Errorf("log file missing the warn level; got:\n%s", logged)
+	}
+}
+
+// TestSwitchTime_UnknownModel_SurfacesToUserNotJustLog is the regression test
+// for item C: previously, when the caller's requested metadata.model_name
+// could not be resolved, runTurn logged a backend-only WARN
+// ("switch-time compress failed; continuing with current model") and
+// silently continued the turn on the agent's current model — nothing else
+// told the caller their model selection was ignored. This is the exact
+// "picking a model has no effect" failure mode.
+//
+// Unlike TestSwitchTime_UnknownModel_LogsWarn (which drives handleModelSwitch
+// directly and only asserts the WARN log), this test drives a FULL turn via
+// runAgentLoop so it exercises runTurn's caller-side handling of a failed
+// switch — the WARN log is necessary but not sufficient; the fix ALSO must:
+//  1. write a Status="error" system entry to the JSONL transcript
+//     (appendErrorTranscript, mirroring FR-001/FR-002's existing
+//     rate-limit/provider-error pattern) so a session reopen shows it, and
+//  2. push a live agent.EventKindNotification so the CURRENT session learns
+//     immediately, without waiting for a reload.
+//
+// It also asserts the turn itself completes successfully on the OLD model
+// (non-fatal — the user still gets a reply) rather than failing the whole
+// turn.
+func TestSwitchTime_UnknownModel_SurfacesToUserNotJustLog(t *testing.T) {
+	al, _, cleanup := newSwitchTestAgentLoop(t, "test-model")
+	defer cleanup()
+
+	agent := al.GetRegistry().GetDefaultAgent()
+	require.NotNil(t, agent)
+	oldModel := agent.Model
+	require.NotEmpty(t, oldModel, "test setup: default agent must have a model")
+
+	const typoModel = "not-a-real-model-typo"
+	require.NotEqual(t, oldModel, typoModel, "test invariant: requested model must differ from current model")
+
+	store := al.GetSessionStore()
+	require.NotNil(t, store)
+	meta, err := store.NewSession(session.SessionTypeChat, "web", agent.ID)
+	require.NoError(t, err)
+	sessionID := meta.ID
+
+	// Subscribe to the event bus BEFORE the turn runs so we don't race the emit.
+	sub := al.eventBus.Subscribe(8)
+	defer al.eventBus.Unsubscribe(sub.ID)
+
+	ctx := context.Background()
+	result, runErr := al.runAgentLoop(ctx, agent, processOptions{
+		SessionKey:          "switch-unknown-model-turn",
+		Channel:             "web",
+		ChatID:              sessionID,
+		UserMessage:         "hello",
+		DefaultResponse:     defaultResponse,
+		EnableSummary:       false,
+		SendResponse:        false,
+		TranscriptSessionID: sessionID,
+		TranscriptStore:     store,
+		Metadata:            map[string]string{"model_name": typoModel},
+	})
+
+	// Non-fatal: the turn must still complete (on the old model) and hand
+	// back the mock provider's reply — a caller-side resolution failure must
+	// not fail the whole turn.
+	require.NoError(t, runErr, "a failed model switch must not fail the turn itself")
+	assert.Equal(t, "Mock response", result, "turn must complete using mockProvider's reply on the OLD model")
+
+	// --- 1. Transcript: a Status="error" system entry must exist and name
+	//        both the requested (unresolvable) model and the model actually used.
+	entries := readTranscriptEntries(t, store, sessionID)
+	sysEntries := findSystemEntries(entries)
+	var found *session.TranscriptEntry
+	for i := range sysEntries {
+		if sysEntries[i].Status == "error" && strings.Contains(sysEntries[i].Content, typoModel) {
+			cp := sysEntries[i]
+			found = &cp
+			break
+		}
+	}
+	require.NotNil(t, found,
+		"transcript must contain a Status=\"error\" system entry naming the unresolvable "+
+			"model %q so a session reopen still shows why the switch was ignored; entries: %+v",
+		typoModel, sysEntries)
+	assert.Contains(t, found.Content, oldModel,
+		"the error entry should also name the model the turn actually used, so the user "+
+			"understands what happened")
+
+	// --- 2. Live signal: both EventKindError (persistence-companion, FR-002
+	//        pattern) and EventKindNotification (live, in-session visibility)
+	//        must have been emitted for this failure.
+	var sawError, sawNotification bool
+	drain := time.After(2 * time.Second)
+	for !sawError || !sawNotification {
+		select {
+		case evt := <-sub.C:
+			switch evt.Kind {
+			case EventKindError:
+				if p, ok := evt.Payload.(ErrorPayload); ok && p.Stage == "model_switch" {
+					sawError = true
+					assert.Contains(t, p.Message, typoModel)
+				}
+			case EventKindNotification:
+				if p, ok := evt.Payload.(NotificationPayload); ok && p.NotificationType == "model_switch_failed" {
+					sawNotification = true
+					assert.Equal(t, "warning", p.Severity)
+					assert.NotEmpty(t, p.ID, "notification ID must be set (non-empty) for the wire's required id field")
+					assert.Contains(t, p.Body, typoModel)
+				}
+			}
+		case <-drain:
+			t.Fatalf("timed out waiting for both EventKindError(model_switch) and "+
+				"EventKindNotification(model_switch_failed); sawError=%v sawNotification=%v",
+				sawError, sawNotification)
+		}
 	}
 }
 
