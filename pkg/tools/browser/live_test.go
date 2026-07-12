@@ -608,6 +608,16 @@ func TestLiveView_Detach_ImplicitReleaseBroadcastsToOtherViewers(t *testing.T) {
 	require.True(t, lv.takeControl("viewerA"))
 	require.Equal(t, "viewerA", lv.getController())
 
+	// takeControl's own broadcast to viewerB ("someone else now controls")
+	// must be drained before asserting on detach's broadcast below — both
+	// land on the same buffered gotB channel, in order, and an un-drained
+	// "true" here would otherwise be misread by requireControlBroadcast as
+	// detach's "false" broadcast (a channel-ordering bug, not a real
+	// assertion failure) — caught by -race, which perturbs goroutine
+	// scheduling enough to make the two broadcasts' relative timing (and
+	// thus this pre-existing bug) actually surface.
+	requireControlBroadcast(t, gotB, true, "viewerB must first learn viewerA took control")
+
 	// viewerA disconnects without ever sending browser_control{action:"release"}.
 	lv.detach("viewerA")
 

@@ -628,11 +628,83 @@ func (lv *LiveView) onTabsChanged(tabs []Tab, activeIdx int) {
 // claim the slot while I was tearing down the old screencast" is now
 // expressed as "is lv.listenCtx still nil" rather than a pointer comparison
 // against the (now-erased) old value.
+//
+// Second fix wave (7-reviewer findings A/B, ADR-041, 2026-07-12):
+//
+// Finding A — orphaned screencast + leaked ack-worker when the LAST viewer
+// detaches during the rebind's unlocked teardown window. Interleaving: the
+// F1 fix above nils lv.listenCtx and unlocks BEFORE calling oldStopListen();
+// if the last attached viewer's detach() lands in that exact window, its
+// `len(lv.viewers)==0 && lv.isActiveLocked()` guard reads isActiveLocked()
+// as false (listenCtx is transiently nil) and removes the viewer WITHOUT
+// stopping the screencast itself — reasonably so, since this very rebind is
+// already mid-teardown of that same epoch. The bug was in what happened
+// next: rebindScreencastOnce would re-lock, see nobody had reclaimed the
+// listenCtx slot, and go ahead and install a BRAND NEW screencast + ack
+// worker for a session that now has ZERO registered viewers — an orphaned
+// CDP screencast and a leaked goroutine that nothing will ever detach or
+// stop. Fixed by re-checking len(lv.viewers)==0 under the SAME re-acquired
+// lock the "did someone else reclaim the slot" check already uses,
+// immediately before installing the new epoch: if nobody is watching
+// anymore, leave the screencast torn down rather than starting one nobody
+// will ever tear down.
+//
+// Finding B — a second, concurrent rebindScreencast call silently drops its
+// target. Two goroutines can call onTabsChanged -> rebindScreencast for the
+// same session concurrently (e.g. a human browser_switch_tab racing the
+// agent's own async adopt-and-switch); whichever reaches
+// rebindScreencastOnce's very first "if !lv.isActiveLocked() { return }"
+// guard SECOND observes lv.listenCtx already nilled by the first caller's
+// teardown and bails out immediately, discarding its own -- possibly more
+// current -- target tab with no further effect. The manager's tab-set
+// state (activeIdx, browser_tabs) is correct throughout; only the
+// screencast binding lags. Rather than trying to serialize the two callers
+// (which would mean holding lv.mu across a CDP call -- exactly the ADR-038
+// deadlock this file exists to avoid), rebindScreencast now self-corrects:
+// after EVERY successful rebindScreencastOnce install, it re-reads the
+// manager's actual current active tab via lv.mgr.Session -- the SAME
+// authoritative call onTabsChanged itself already trusts, independent of
+// which racing goroutine's local newCtx parameter would otherwise have
+// won. If the tab that's now actually active differs from what was just
+// bound, it loops and rebinds again to the fresh target, so the live view
+// always converges on the LAST real switch instead of getting stuck on
+// whichever concurrent caller happened to finish its install first. This
+// cannot busy-spin: it only loops when Session() reports an actual,
+// different active tab, and each iteration performs a real bounded CDP
+// round trip (via lv.runCDP) -- there is no lock held across any of it,
+// and no lock is held across the Session() call itself either.
 func (lv *LiveView) rebindScreencast(newCtx context.Context) {
+	for {
+		boundCtx, installed := lv.rebindScreencastOnce(newCtx)
+		if !installed {
+			return
+		}
+		currentCtx, err := lv.mgr.Session(lv.sessionID)
+		if err != nil || currentCtx == boundCtx {
+			return
+		}
+		// Finding B: the active tab moved again while we were rebinding —
+		// chase it instead of leaving the screencast bound to a tab the tab
+		// strip no longer shows as active.
+		newCtx = currentCtx
+	}
+}
+
+// rebindScreencastOnce performs a single stop-old/start-new rebind pass
+// targeting newCtx, on behalf of rebindScreencast's self-correcting loop
+// (see its doc comment for the Finding A/B context). Returns (newCtx, true)
+// if it actually installed a new screencast epoch bound to newCtx; returns
+// (nil, false) if it declined to — the screencast wasn't active to begin
+// with, a concurrent attach()/rebind already reclaimed the slot, no viewers
+// were left to serve (Finding A), or the new screencast failed to start
+// (logged/notified at that site, same as before). Deadlock-safe per
+// ADR-038: mirrors attach()'s discipline exactly — no LiveView lock held
+// across any CDP call.
+func (lv *LiveView) rebindScreencastOnce(newCtx context.Context) (context.Context, bool) {
 	lv.mu.Lock()
 	if !lv.isActiveLocked() {
 		lv.mu.Unlock()
-		return
+		return nil, false
 	}
 	oldTabCtx := lv.tabCtx
 	oldStopListen := lv.stopListen
@@ -661,7 +733,18 @@ func (lv *LiveView) rebindScreencast(newCtx context.Context) {
 		// concurrent rebind that won the race) — back off rather than
 		// clobber whatever it installed.
 		lv.mu.Unlock()
-		return
+		return nil, false
+	}
+	if len(lv.viewers) == 0 {
+		// Finding A: the last attached viewer detached while we were
+		// tearing down the old screencast above — its detach() saw
+		// isActiveLocked()==false (listenCtx was already nilled) and so
+		// correctly left the screencast teardown to us, trusting this
+		// rebind to leave things consistent. With nobody left to watch,
+		// don't install a new screencast + ack worker that nothing will
+		// ever detach or stop.
+		lv.mu.Unlock()
+		return nil, false
 	}
 	lv.tabCtx = newCtx
 	listenCtx, cancel := context.WithCancel(newCtx)
@@ -708,10 +791,11 @@ func (lv *LiveView) rebindScreencast(newCtx context.Context) {
 		for _, s := range sinks {
 			s("couldn't switch the live view to the new tab — re-attach to resume watching")
 		}
-		return
+		return nil, false
 	}
 
 	go lv.watchForUnexpectedDeath(listenCtx)
+	return newCtx, true
 }
 
 // watchForUnexpectedDeath blocks until watchedListenCtx is Done, then — ONLY

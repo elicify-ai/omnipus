@@ -28,6 +28,9 @@ import (
 //   - browser_get_text  — extract inner text from an element
 //   - browser_wait      — wait for an element to appear
 //   - browser_evaluate  — execute JS (policy-gated deny-by-default, SEC-04)
+//   - browser_list_tabs  — list the open tabs + which is active (ADR-041)
+//   - browser_switch_tab — make a tab active; tools + live view follow it (ADR-041)
+//   - browser_close_tab  — close a tab; never leaves zero tabs (ADR-041)
 //   - browser_list_tabs   — list the tab set (ADR-041 D3)
 //   - browser_switch_tab  — switch the active tab (ADR-041 D3)
 //   - browser_close_tab   — close a tab (ADR-041 D3)

@@ -211,27 +211,53 @@ func (t *ClickTool) Execute(ctx context.Context, args map[string]any) *tools.Too
 // out of ClickTool.Execute so the mapping logic is unit-testable without a
 // live Chromium/CDP connection (see tabs_test.go's
 // TestApplyReconcileOutcome_* cases).
+//
+// The two "opened_new_tab" and "tab_opened_but_not_adopted" reportings below
+// are deliberately INDEPENDENT ifs, not a switch/if-else-if (ADR-041
+// second-fix-wave regression: a single click can spawn TWO new targets in
+// one go — one adopts, the other is capped or fails to attach — and
+// ReconcileOutcome already aggregates both signals independently; an
+// if/else-if here silently dropped whichever signal lost the mutual
+// exclusion, most commonly the stranded tab's Unadopted/Reason, since Adopted
+// was checked first). Both keys, and both notes, can appear in the same
+// result map.
 func applyReconcileOutcome(result map[string]any, outcome ReconcileOutcome) {
-	switch {
-	case outcome.Adopted && outcome.NewActive != nil:
+	var notes []string
+
+	if outcome.Adopted && outcome.NewActive != nil {
 		result["opened_new_tab"] = true
 		result["new_tab_index"] = outcome.NewActive.Index
 		result["new_tab_url"] = outcome.NewActive.URL
-		result["note"] = fmt.Sprintf("opened and switched to new tab %d: %s", outcome.NewActive.Index, outcome.NewActive.URL)
-	case outcome.Unadopted:
+		notes = append(notes, fmt.Sprintf("opened and switched to new tab %d: %s", outcome.NewActive.Index, outcome.NewActive.URL))
+	}
+
+	if outcome.Unadopted {
 		result["tab_opened_but_not_adopted"] = true
 		result["reason"] = string(outcome.Reason)
+		if outcome.UnadoptedCount > 1 {
+			result["unadopted_count"] = outcome.UnadoptedCount
+		}
+		// "another" phrasing when an adoption note was already appended above
+		// — the click both switched to a new tab AND stranded a second one.
+		lead := "the click opened a new tab, but"
+		if len(notes) > 0 {
+			lead = "the click also opened another new tab, but"
+		}
 		switch outcome.Reason {
 		case tabAdoptReasonMaxTabs:
-			result["note"] = "the click opened a new tab, but the maximum concurrent tabs limit was " +
-				"reached, so it could not be adopted. Close a tab with browser_close_tab and retry, or " +
-				"tell the user a tab could not be opened."
+			notes = append(notes, lead+" the maximum concurrent tabs limit was reached, so it could not "+
+				"be adopted. Close a tab with browser_close_tab and retry, or tell the user a tab could "+
+				"not be opened.")
 		case tabAdoptReasonAttachFailed:
-			result["note"] = "the click opened a new tab, but attaching to it failed — it may not be " +
-				"usable. Call browser_list_tabs to check what's open."
+			notes = append(notes, lead+" attaching to it failed — it may not be usable. Call "+
+				"browser_list_tabs to check what's open.")
 		default:
-			result["note"] = "the click opened a new tab that could not be adopted."
+			notes = append(notes, lead+" it could not be adopted.")
 		}
+	}
+
+	if len(notes) > 0 {
+		result["note"] = strings.Join(notes, " ")
 	}
 }
 
