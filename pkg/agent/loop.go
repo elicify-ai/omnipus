@@ -7329,7 +7329,27 @@ turnLoop:
 				},
 			)
 			tcStatus := "success"
-			if toolResult.IsError {
+			switch {
+			case toolResult.Interrupted:
+				// Finding F (A-I4 round 5): a synchronous delegate/spawn call
+				// whose child sub-turn was interrupted by a parent-turn
+				// cancellation — see pkg/agent/subturn.go's spawnSubTurn
+				// cleanup defer, the single source of truth for this
+				// classification (ToolResult.Interrupted's doc comment).
+				// Persisting "interrupted" here — rather than folding it into
+				// the generic "error" case below — is what lets a session
+				// reload's subagent_end frame (pkg/gateway/replay.go reads
+				// this exact tc.Status back) show the same terminal status
+				// the live WS stream already showed, instead of "failed"
+				// (SubagentEndFrame.yaml's status enum explicitly supports
+				// "interrupted" for this). The OUTER tool_call_result frame
+				// for this same call is unaffected — replay.go clamps any
+				// non-success tc.Status down to "error" for that stricter,
+				// binary wire enum, matching toolResult.IsError (still true
+				// here) and today's unchanged live behavior for the outer
+				// badge.
+				tcStatus = "interrupted"
+			case toolResult.IsError:
 				tcStatus = "error"
 			}
 			tcRecord := session.ToolCall{

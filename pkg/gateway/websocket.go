@@ -1575,12 +1575,40 @@ func (h *WSHandler) handleAttachSession(
 	// h.sessions is keyed by chatID for the lifetime of the connection — do NOT
 	// add an attachID alias here. taskChatIDs maps chatID→attachID so the event
 	// forwarder can match events emitted under the attached session's ID.
+	//
+	// Finding E (A-I4 round 5): h.sessionIDs[chatID] — this connection's OWN
+	// chatID→session mapping, read by fanOutToSessionPeers/matchesEvent/
+	// GetStreamer to decide "does this connection currently belong to session
+	// X" — used to be written ONLY after replay+hydrate finished (see the
+	// second h.sessionIDs[chatID] assignment below, previously the sole
+	// writer). Between this function's entry and that later write, the
+	// mapping kept whatever value a PRIOR attach_session on this same
+	// connection last set it to (or "" for a brand-new connection). A
+	// connection that attaches twice in quick succession — e.g. a reconnect
+	// whose first attach_session targets a stale/leftover session id
+	// (frontend activeSessionId not yet corrected to the URL's real session)
+	// followed immediately by a second, correcting attach_session for the
+	// right session — left h.sessionIDs[chatID] pointing at the FIRST
+	// (wrong, unrelated) session for this whole replay window. Any OTHER,
+	// genuinely unrelated session's background delegate fanning out a live
+	// token/done frame during that window (fanOutToSessionPeers, matched
+	// purely by sessionID equality) found this connection listed as one of
+	// its peers and delivered straight into wc.sendCh — landing mid-replay,
+	// live-verified as a stray, uninstructed bubble duplicating another
+	// session's already-delivered content with a garbled leading fragment.
+	// Setting the real mapping HERE, atomically with taskChatIDs/the
+	// self-map, closes the window: from this point on h.sessionIDs[chatID]
+	// always reflects the CURRENT attach target, so no other session can
+	// ever be mistaken for a peer of this connection. Purely additive — the
+	// second assignment after replay/hydrate is left in place as a
+	// redundant, idempotent reaffirmation.
 	h.mu.Lock()
 	if oldTID, ok := h.taskChatIDs[chatID]; ok {
 		delete(h.sessionIDs, oldTID)
 	}
 	h.taskChatIDs[chatID] = attachID
 	h.sessionIDs[attachID] = attachID
+	h.sessionIDs[chatID] = attachID
 	h.mu.Unlock()
 
 	// Arm the divert: any sendConnGenFrame calls after this point will route live
@@ -3097,7 +3125,7 @@ func (s *wsStreamer) Update(_ context.Context, content string) error {
 	// other connection bound to the same session. The originating chat
 	// already received the frame above; secondary tabs see the live stream
 	// through this fan-out instead of waiting for a transcript reload.
-	s.fanOutToSessionPeers(data)
+	s.fanOutToSessionPeers(string(generated.WsFrameTypeToken), data)
 	return nil
 }
 
@@ -3105,7 +3133,23 @@ func (s *wsStreamer) Update(_ context.Context, content string) error {
 // streamer's session, skipping the originating connection. Used by Update
 // (token frames) and Finalize (done frame) so a second browser tab attached
 // mid-turn observes the live stream as it happens.
-func (s *wsStreamer) fanOutToSessionPeers(data []byte) {
+//
+// Finding E (A-I4 round 5): this used to write straight into peer.sendCh,
+// bypassing the exact replay-divert/backpressure protocol sendRawFrameBytes
+// implements for every other live-frame path (see that function's doc
+// comment — "shared by sendConnGenFrame and wsStreamer.Update", which this
+// method's own token/done sends already honor for the ORIGINATING
+// connection via the sendRawFrameBytes call just above, but never did for
+// fanned-out PEERS). A peer mid-attach_session-replay (wc.isReplayingLive
+// true) has no way to divert a directly-enqueued sendCh write into
+// replayDivertCh — the frame lands interleaved with that peer's own
+// in-flight replay frames instead of being correctly ordered after them,
+// live-verified as a stray, out-of-place bubble. Routing through
+// sendRawFrameBytes closes that gap unconditionally: it degrades to the
+// exact same direct-sendCh-with-backoff behavior this used to hand-roll
+// when the peer isn't replaying (the common case), and correctly diverts
+// when it is.
+func (s *wsStreamer) fanOutToSessionPeers(frameType string, data []byte) {
 	if s.channel == nil || s.sessionID == "" {
 		return
 	}
@@ -3125,12 +3169,7 @@ func (s *wsStreamer) fanOutToSessionPeers(data []byte) {
 	}
 	h.mu.Unlock()
 	for _, peer := range peers {
-		select {
-		case peer.sendCh <- data:
-		default:
-			peer.droppedTokens.Add(1)
-			slog.Warn("ws: peer token dropped", "session_id", s.sessionID)
-		}
+		sendRawFrameBytes(peer, frameType, data)
 	}
 }
 
@@ -3238,7 +3277,7 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 		// needs the done frame too, otherwise its UI stays in "streaming" state
 		// forever even after our token fan-out delivered the full content.
 		if doneData, mErr := json.Marshal(doneFrame); mErr == nil {
-			s.fanOutToSessionPeers(doneData)
+			s.fanOutToSessionPeers(string(generated.WsFrameTypeDone), doneData)
 		}
 		// Only mark as streamed if we actually sent content. If the LLM failed
 		// before producing any tokens, let the outbound Send path deliver the
