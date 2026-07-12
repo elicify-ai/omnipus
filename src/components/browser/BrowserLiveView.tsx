@@ -34,8 +34,10 @@ import {
   ChatCircleDots,
   Cursor,
   Eye,
+  Globe,
   HandGrabbing,
   Monitor,
+  Plus,
   PushPin,
   PushPinSlash,
   Robot,
@@ -64,7 +66,7 @@ import { useUiStore } from '@/store/ui'
 import { useChatStore } from '@/store/chat'
 import { queryClient } from '@/lib/queryClient'
 import type { Agent } from '@/lib/api'
-import type { BrowserScreencastFrame, BrowserStatusFrame } from '@/lib/api/generated/asyncapi-types'
+import type { BrowserScreencastFrame, BrowserStatusFrame, BrowserTabsFrame } from '@/lib/api/generated/asyncapi-types'
 
 export interface BrowserLiveViewProps {
   sessionId: string
@@ -217,6 +219,26 @@ function friendlyBrowserStatusMessage(raw: string): string {
   return raw
 }
 
+/**
+ * ADR-041 D4 — a tab's display label: prefer `title`, fall back to the
+ * hostname parsed from `url`, fall back to "New tab". The wire type carries
+ * no favicon URL (BrowserTabsFrame.tabs[] has no such field) — the strip
+ * uses a plain Phosphor globe glyph per tab instead of attempting to fetch
+ * one, so there is no missing-favicon broken-image state to handle.
+ */
+function tabLabel(tab: BrowserTabsFrame['tabs'][number]): string {
+  if (tab.title && tab.title.trim().length > 0) return tab.title
+  if (tab.url) {
+    try {
+      const hostname = new URL(tab.url).hostname
+      return hostname || tab.url
+    } catch {
+      return tab.url
+    }
+  }
+  return 'New tab'
+}
+
 /** A finalized region selection, cropped to a File and ready to send (ADR-039 D-B1/B2). */
 interface PendingAnnotation { // not-wire-format: local annotate-popover state, never serialized across the gateway/SPA boundary
   file: File
@@ -330,6 +352,17 @@ export function BrowserLiveView({
 
   // ── Omnibox (ADR-039 D-A2, ADR-040 D5 — always visible) ──────────────────
   const [urlInput, setUrlInput] = useState('')
+
+  // ── Tab strip (ADR-041 D4) — the latest known tab list + active index,
+  // straight off the most recent `browser_tabs` frame. `null` until the
+  // first one arrives (the strip stays unrendered — never shown empty).
+  // Deliberately no optimistic local "active" override on click: the ADR
+  // permits an optimistic highlight but doesn't require one, and the
+  // backend re-binds the screencast + re-broadcasts `browser_tabs` on every
+  // switch/close/open, so reconciling to the next frame alone keeps this
+  // free of drift between what's highlighted and what's actually active.
+  const [tabs, setTabs] = useState<BrowserTabsFrame['tabs'] | null>(null)
+  const [activeTabIndex, setActiveTabIndex] = useState(0)
 
   // ── Annotate mode (ADR-039 D-B1/B2) — container-relative CSS coords for
   // the live selection-box overlay; frozen (not cleared) once a selection
@@ -572,6 +605,14 @@ export function BrowserLiveView({
   useEffect(() => {
     const conn = new BrowserLiveWsConnection(sessionId, agentId, {
       onScreencast: (f) => setFrame(f),
+      // ADR-041 D4 — tab list + active index, broadcast on any
+      // open/close/switch/title-change. This is the sole source of truth
+      // the tab strip renders from (see the `tabs`/`activeTabIndex` state
+      // doc comment above).
+      onTabs: (f) => {
+        setTabs(f.tabs)
+        setActiveTabIndex(f.active_index)
+      },
       // Reviewer finding: a terminal browser_status{state:'error'} (e.g. a
       // blocked `navigate`) used to overwrite statusState unconditionally —
       // including while `controlling` — which flipped isControlling to
@@ -981,6 +1022,27 @@ export function BrowserLiveView({
     },
     [urlInput, takeWheelIfNeeded],
   )
+
+  // ── Tab strip actions (ADR-041 D4) — switching/opening/closing a tab is a
+  // viewer action, like the omnibox, independent of the D2 drive-lock model:
+  // it never itself acquires/releases control. Each just sends the frame;
+  // the resulting highlight/list update comes from the next `browser_tabs`
+  // broadcast (see the `tabs` state doc comment), not from any local write
+  // here.
+  const handleTabSwitch = useCallback((index: number) => {
+    wsRef.current?.sendTabAction('switch', index)
+  }, [])
+
+  const handleTabClose = useCallback((index: number, e: React.MouseEvent) => {
+    // Stop the click from bubbling to the tab chip's own onClick (which
+    // would also fire a redundant 'switch' for the tab being closed).
+    e.stopPropagation()
+    wsRef.current?.sendTabAction('close', index)
+  }, [])
+
+  const handleTabOpen = useCallback(() => {
+    wsRef.current?.sendTabAction('open')
+  }, [])
 
   const handlePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (annotateMode) {
@@ -1405,6 +1467,80 @@ export function BrowserLiveView({
           Go
         </button>
       </form>
+
+      {/* Tab strip (ADR-041 D4) — open tabs: favicon-or-globe + truncated
+          title/hostname + active highlight + close ✕, plus a trailing ＋ to
+          open a new tab. Rendered whenever the tab list is known (the
+          backend always keeps at least one tab — see `tabs`' state doc
+          comment — so "known" and "non-empty" coincide in practice; the
+          `tabs.length > 0` check is just defense in depth against an
+          ill-formed frame). Sits below the always-visible omnibox and above
+          the screencast frame, matching the ADR-040 header/omnibox stack. */}
+      {tabs && tabs.length > 0 && (
+        <div
+          role="tablist"
+          aria-label="Open tabs"
+          data-testid="browser-tab-strip"
+          className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-[var(--color-border)] px-2 py-1.5"
+          style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' } as React.CSSProperties}
+        >
+          {tabs.map((tab) => {
+            const active = tab.index === activeTabIndex
+            const label = tabLabel(tab)
+            return (
+              <div
+                key={tab.index}
+                role="tab"
+                aria-selected={active}
+                tabIndex={0}
+                data-testid={`browser-tab-${tab.index}`}
+                onClick={() => handleTabSwitch(tab.index)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    handleTabSwitch(tab.index)
+                  }
+                }}
+                title={tab.title || tab.url || 'New tab'}
+                className={cn(
+                  'flex shrink-0 max-w-[180px] cursor-pointer items-center gap-1.5 rounded-t-md border-b-2 px-2.5 py-1 text-xs transition-colors',
+                  // Active tab: Forge-Gold underline + full opacity + a
+                  // heavier label weight — colour is never the only signal
+                  // (WCAG). Inactive: dimmed, transparent underline.
+                  active
+                    ? 'border-[var(--color-accent)] bg-[var(--color-surface-2)] text-[var(--color-secondary)] opacity-100'
+                    : 'border-transparent text-[var(--color-muted)] opacity-70 hover:bg-[var(--color-surface-1)] hover:opacity-100',
+                )}
+              >
+                <Globe size={12} weight={active ? 'fill' : 'regular'} className="shrink-0" />
+                <span className={cn('min-w-0 flex-1 truncate', active && 'font-medium')}>{label}</span>
+                <button
+                  type="button"
+                  onClick={(e) => handleTabClose(tab.index, e)}
+                  disabled={!connected}
+                  aria-label={`Close tab: ${label}`}
+                  title="Close tab"
+                  data-testid={`browser-tab-close-${tab.index}`}
+                  className="shrink-0 rounded p-0.5 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-1)] hover:text-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <X size={10} weight="bold" />
+                </button>
+              </div>
+            )
+          })}
+          <button
+            type="button"
+            onClick={handleTabOpen}
+            disabled={!connected}
+            aria-label="Open new tab"
+            title="Open a new tab"
+            data-testid="browser-tab-new"
+            className="shrink-0 rounded p-1 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <Plus size={13} />
+          </button>
+        </div>
+      )}
 
       {/* Body */}
       <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-black p-2">

@@ -28,6 +28,9 @@ import (
 //   - browser_get_text  — extract inner text from an element
 //   - browser_wait      — wait for an element to appear
 //   - browser_evaluate  — execute JS (policy-gated deny-by-default, SEC-04)
+//   - browser_list_tabs   — list the tab set (ADR-041 D3)
+//   - browser_switch_tab  — switch the active tab (ADR-041 D3)
+//   - browser_close_tab   — close a tab (ADR-041 D3)
 func RegisterTools(
 	registry *tools.ToolRegistry,
 	cfg BrowserConfig,
@@ -49,6 +52,10 @@ func RegisterTools(
 	// flag is forwarded to the tool's Execute method, which is the SOLE live gate
 	// (deny-by-default unless the operator opts in) — see the doc comment above.
 	registry.Register(&EvaluateTool{mgr: mgr, executeEnabled: evaluateEnabled})
+	// ADR-041 D3 — tab-management tools.
+	registry.Register(&ListTabsTool{mgr: mgr})
+	registry.Register(&SwitchTabTool{mgr: mgr})
+	registry.Register(&CloseTabTool{mgr: mgr})
 
 	return mgr, nil
 }

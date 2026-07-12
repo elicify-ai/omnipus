@@ -462,6 +462,8 @@ func (h *BrowserWSHandler) readLoop(conn *websocket.Conn, wc *browserWSConn, vie
 			h.handleInput(wc, &state, viewerID, data)
 		case string(generated.WsFrameTypeBrowserControl):
 			h.handleControl(wc, &state, viewerID, userID, data, cfg)
+		case string(generated.WsFrameTypeBrowserTabAction):
+			h.handleTabAction(wc, &state, viewerID, data)
 		case string(generated.WsFrameTypeBrowserDetach):
 			h.handleDetach(wc, &state, viewerID, userID)
 		default:
@@ -569,6 +571,20 @@ func (h *BrowserWSHandler) handleAttach(wc *browserWSConn, state *browserConnSta
 			// controlled_by_other.
 			ControlOnly: boolPtr(true),
 		}, dropContext(chatSessionID, viewerID, "control-broadcast"))
+	}, func(tabs []browser.Tab, activeIdx int) {
+		// ADR-041 D4: the tab set changed (open/close/switch/adopt, or a
+		// best-effort title/url update) — broadcast the current tab strip.
+		// Fired once immediately on attach (with the CURRENT tab set) and
+		// again on every subsequent change; delivered to every attached
+		// viewer, including the one that caused the change (unlike
+		// ControlSink, a tabs update carries no "who acted" distinction that
+		// needs excluding the actor).
+		wc.sendCriticalGen(generated.BrowserTabsFrame{
+			Type:        string(generated.WsFrameTypeBrowserTabs),
+			SessionId:   &chatSessionID,
+			ActiveIndex: activeIdx,
+			Tabs:        tabsToBrowserTabsWire(tabs),
+		}, dropContext(chatSessionID, viewerID, "tabs-broadcast"))
 	})
 	if err != nil {
 		wc.sendCriticalGen(sessionErrorStatus(chatSessionID, fmt.Sprintf("browser_attach failed: %s", err)),
@@ -747,6 +763,99 @@ func (h *BrowserWSHandler) handleControl(wc *browserWSConn, state *browserConnSt
 		wc.sendCriticalGen(errorStatus(fmt.Sprintf("browser_control: unknown action %q", frame.Action)),
 			dropContext(chatSessionID, viewerID, "control-unknown-action"))
 	}
+}
+
+// handleTabAction processes a browser_tab_action frame (ADR-041 D3/D4):
+// switch/close/open a tab in the attached session's browsing context (always
+// browser.DefaultSessionID — the agent's actual tab set, same convention as
+// handleControl/handleInput). The resulting browser_tabs broadcast to every
+// attached viewer (including this one) is delivered automatically via the
+// BrowserManager.tabsChanged → LiveView.onTabsChanged → TabsSink fan-out
+// wired at attach time (see handleAttach's onTabs callback) — this handler's
+// only DIRECT response to the caller is a browser_status(error) frame on
+// failure (an out-of-range index, no live session attached, an unknown
+// action). Unlike browser_control's take/release, a tab action has no
+// "who acted" distinction that needs excluding the actor from the broadcast,
+// so there is no direct success response either.
+func (h *BrowserWSHandler) handleTabAction(wc *browserWSConn, state *browserConnState, viewerID string, data []byte) {
+	if state.mgr == nil || state.sessionID == "" {
+		wc.sendCriticalGen(errorStatus("browser_tab_action: attach before managing tabs"),
+			dropContext("", viewerID, "tab-action-not-attached"))
+		return
+	}
+	var frame generated.BrowserTabActionFrame
+	if err := json.Unmarshal(data, &frame); err != nil {
+		wc.sendCriticalGen(errorStatus("browser_tab_action: invalid frame"),
+			dropContext(state.sessionID, viewerID, "tab-action-invalid"))
+		return
+	}
+
+	// chatSessionID is echoed on outgoing error frames; every call into
+	// state.mgr below uses browser.DefaultSessionID, the agent's actual tab
+	// set (ADR-038 finding #1 / ADR-041) — see handleAttach's doc comment.
+	chatSessionID := state.sessionID
+	switch frame.Action {
+	case "switch":
+		if frame.Index == nil {
+			wc.sendCriticalGen(sessionErrorStatus(chatSessionID, "browser_tab_action: index is required for switch"),
+				dropContext(chatSessionID, viewerID, "tab-switch-missing-index"))
+			return
+		}
+		if _, err := state.mgr.SwitchTab(browser.DefaultSessionID, *frame.Index); err != nil {
+			wc.sendCriticalGen(sessionErrorStatus(chatSessionID, fmt.Sprintf("browser_tab_action: %s", err)),
+				dropContext(chatSessionID, viewerID, "tab-switch-failed"))
+		}
+	case "close":
+		if frame.Index == nil {
+			wc.sendCriticalGen(sessionErrorStatus(chatSessionID, "browser_tab_action: index is required for close"),
+				dropContext(chatSessionID, viewerID, "tab-close-missing-index"))
+			return
+		}
+		if _, _, err := state.mgr.CloseTab(browser.DefaultSessionID, *frame.Index); err != nil {
+			wc.sendCriticalGen(sessionErrorStatus(chatSessionID, fmt.Sprintf("browser_tab_action: %s", err)),
+				dropContext(chatSessionID, viewerID, "tab-close-failed"))
+		}
+	case "open":
+		if _, err := state.mgr.OpenTab(browser.DefaultSessionID); err != nil {
+			wc.sendCriticalGen(sessionErrorStatus(chatSessionID, fmt.Sprintf("browser_tab_action: %s", err)),
+				dropContext(chatSessionID, viewerID, "tab-open-failed"))
+		}
+	default:
+		wc.sendCriticalGen(errorStatus(fmt.Sprintf("browser_tab_action: unknown action %q", frame.Action)),
+			dropContext(chatSessionID, viewerID, "tab-action-unknown"))
+	}
+}
+
+// tabsToBrowserTabsWire converts a []browser.Tab snapshot to the anonymous
+// struct slice type generated.BrowserTabsFrame.Tabs expects (oapi-codegen
+// inlines the `tabs.items` schema as an anonymous struct rather than a named
+// type, since it isn't referenced elsewhere — Constraint #8 still applies:
+// this is the SAME generated type, just spelled out structurally so a plain
+// []browser.Tab is assignable to it).
+func tabsToBrowserTabsWire(tabs []browser.Tab) []struct {
+	Active *bool   `json:"active,omitempty"`
+	Index  int     `json:"index"`
+	Title  *string `json:"title,omitempty"`
+	Url    *string `json:"url,omitempty"`
+} {
+	out := make([]struct {
+		Active *bool   `json:"active,omitempty"`
+		Index  int     `json:"index"`
+		Title  *string `json:"title,omitempty"`
+		Url    *string `json:"url,omitempty"`
+	}, len(tabs))
+	for i, t := range tabs {
+		active := t.Active
+		title := t.Title
+		url := t.URL
+		out[i] = struct {
+			Active *bool   `json:"active,omitempty"`
+			Index  int     `json:"index"`
+			Title  *string `json:"title,omitempty"`
+			Url    *string `json:"url,omitempty"`
+		}{Active: &active, Index: t.Index, Title: &title, Url: &url}
+	}
+	return out
 }
 
 // handleDetach unbinds this connection from its current live view.

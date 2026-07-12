@@ -169,11 +169,14 @@ func TestMaxTabsExceeded_SessionReturnsError(t *testing.T) {
 	m, err := NewBrowserManager(cfg, ssrf)
 	require.NoError(t, err)
 	m.started = true
-	// Simulate 3 existing sessions at limit
+	// Simulate 3 existing sessions (each a one-tab browsing context) at the
+	// MaxTabs cap — ADR-041 generalizes MaxTabs to a total-tab-count cap
+	// across every browsing context (totalTabCountLocked), so 3 one-tab
+	// sessions still exercise the exact same limit-enforcement path.
 	for i := range 3 {
 		m.sessions[fmt.Sprintf("tab-%d", i)] = &sessionEntry{
-			ctx:    context.Background(),
-			cancel: func() {},
+			tabs:      []*tabEntry{{ctx: context.Background(), cancel: func() {}}},
+			activeIdx: 0,
 		}
 	}
 

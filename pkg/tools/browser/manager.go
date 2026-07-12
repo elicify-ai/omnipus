@@ -17,6 +17,7 @@ import (
 
 	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/page"
+	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
@@ -79,10 +80,74 @@ func DefaultConfig() (BrowserConfig, error) {
 	}, nil
 }
 
-// sessionEntry tracks a chromedp tab context that persists across tool calls.
+// tabEntry tracks one browser tab — a single chromedp target — within a
+// browsing context's tab set (ADR-041 D1). Before ADR-041 this data lived
+// directly on sessionEntry (one tab per session); it is now the element type
+// of sessionEntry.tabs so a browsing context can hold more than one.
+type tabEntry struct {
+	ctx      context.Context
+	cancel   context.CancelFunc
+	targetID target.ID
+	// title/url are a best-effort, occasionally-stale cache (refreshed on
+	// creation/adoption via refreshTabMeta, and opportunistically on
+	// target.EventTargetInfoChanged via handleTargetEvent) — cosmetic only,
+	// used for browser_list_tabs and the generated.BrowserTabsFrame
+	// broadcast (ADR-041 D3/D4). Never load-bearing for tool correctness.
+	title string
+	url   string
+}
+
+// sessionEntry is a browsing context: an ordered set of tabs (chromedp
+// targets) with one active tab (ADR-041 D1). Before ADR-041 a sessionEntry
+// held exactly one tab directly; it is now reframed as a tab SET so a
+// target="_blank" click or window.open can be adopted as an additional tab
+// instead of stranding the agent on the opener page — see manager.go's
+// package doc and ADR-041. Guarded by BrowserManager.mu, same as before.
 type sessionEntry struct {
-	ctx    context.Context
-	cancel context.CancelFunc
+	tabs      []*tabEntry
+	activeIdx int
+	// listenerInstalled guards ADR-041 D2's passive Target.targetCreated
+	// listener so it is attached only ONCE per browsing context, on the
+	// root (first) tab — see installTargetListenerLocked's doc comment for
+	// why installing it on every tab would multiply duplicate events.
+	listenerInstalled bool
+}
+
+// active returns the currently-active tab, or nil if activeIdx is somehow
+// out of range (defensive; CloseTab/Session's recovery path guarantee at
+// least one valid tab exists for any sessionEntry reachable from
+// BrowserManager.sessions).
+func (se *sessionEntry) active() *tabEntry {
+	if se == nil || se.activeIdx < 0 || se.activeIdx >= len(se.tabs) {
+		return nil
+	}
+	return se.tabs[se.activeIdx]
+}
+
+// indexOfTarget returns the tab-set index of targetID, or -1 if this
+// browsing context doesn't already track it.
+func (se *sessionEntry) indexOfTarget(id target.ID) int {
+	for i, t := range se.tabs {
+		if t.targetID == id {
+			return i
+		}
+	}
+	return -1
+}
+
+// Tab is the public, metadata-only snapshot of one browser tab in a
+// session's tab set (ADR-041 D1/D3). Returned by ListTabs/SwitchTab/
+// CloseTab/OpenTab/ReconcileTabs and passed to the ADR-041 D4
+// tabs-changed callback (SetTabsChangedFunc) — used by pkg/gateway to build
+// the generated.BrowserTabsFrame broadcast and by the browser_list_tabs
+// tool. Carries no chromedp context; callers that need the tab's live
+// context resolve it via BrowserManager.Session (which always returns the
+// ACTIVE tab's context — ADR-041 D1).
+type Tab struct {
+	Index  int
+	Title  string
+	URL    string
+	Active bool
 }
 
 // BrowserManager manages the Chromium lifecycle and tab pool.
@@ -107,6 +172,47 @@ type BrowserManager struct {
 	// initialized; nil is a valid empty state.
 	pending map[string]chan struct{}
 	started bool
+
+	// pendingAdopt tracks CDP target IDs currently being adopted (ADR-041
+	// D2's adoptTarget), mirroring `pending`'s exact race-guard shape: the
+	// best-effort passive listener (installTargetListenerLocked) and a
+	// deterministic ReconcileTabs pass can both observe the same
+	// freshly-created target and race to adopt it — without this, the
+	// second racer would attach a SECOND chromedp context to the same
+	// target and append a duplicate tab. Lazily initialized; nil is a valid
+	// empty state.
+	pendingAdopt map[target.ID]struct{}
+
+	// listTargets executes chromedp.Targets against a resolved tab context
+	// to list every CDP target the browser currently knows about (ADR-041
+	// D2's ReconcileTabs). A field — not a direct chromedp.Targets call at
+	// the use site — so tests can substitute a controllable stand-in and
+	// deterministically exercise adoption without a real Chromium/CDP
+	// connection, exactly mirroring evalCDP's testability rationale (see its
+	// doc comment below). nil-checked at the call site and defaults to
+	// chromedp.Targets.
+	listTargets func(ctx context.Context) ([]*target.Info, error)
+
+	// createTabFn, when non-nil, overrides createTab's default CDP-driving
+	// body. A field — not a direct call at each use site — purely for
+	// testability, mirroring evalCDP/listTargets' exact rationale: tests
+	// substitute a controllable stand-in so OpenTab/CloseTab's
+	// last-tab-replacement and adoptTarget's full flow can be exercised
+	// deterministically without a real Chromium/CDP connection. nil by
+	// default, in which case createTab runs its normal chromedp body.
+	createTabFn func(allocCtx context.Context, targetID target.ID) (*tabEntry, error)
+
+	// tabsChanged is invoked (ADR-041 D4) whenever a browsing context's tab
+	// set changes shape or its active tab moves — open/close/switch/adopt,
+	// and best-effort title/url updates observed via the passive target
+	// listener. Optional; nil is a valid no-op default. Set via
+	// SetTabsChangedFunc — pkg/tools/browser/live.go wires this to
+	// LiveViewRegistry.handleTabsChanged so pkg/gateway's browser WS handler
+	// can broadcast generated.BrowserTabsFrame and rebind the live
+	// screencast to a newly-active tab. MUST be invoked with NO
+	// BrowserManager lock held (ADR-038 rule) — every call site in this
+	// file dispatches it only via notifyTabsChanged, after releasing m.mu.
+	tabsChanged func(sessionID string, tabs []Tab, activeIdx int)
 
 	// live is the ADR-038 live-interactive-browser engine registry, keyed by
 	// session ID. Since BrowserManager is itself scoped to one agent (see
@@ -364,9 +470,12 @@ func (m *BrowserManager) resolveExecPath(ctx context.Context) (string, error) {
 	return EnsureChromium(ctx, installRoot)
 }
 
-// Session returns a persistent tab context for the given session ID.
-// If the session does not exist, a new tab is created (subject to MaxTabs).
-// The "default" session is used by all tools unless a session_id is specified.
+// Session returns the ACTIVE tab's context for the given browsing context
+// (ADR-041 D1). If the browsing context does not exist, a new one is created
+// with a single tab (subject to MaxTabs). The "default" session is used by
+// all tools unless a session_id is specified. Every existing browser tool
+// and the LiveView engine call this and therefore automatically follow
+// whichever tab is active — they never need to know about the tab SET.
 //
 // ADR-038 DEADLOCK POSTMORTEM: creating a brand-new tab is the only path
 // here that talks to CDP (chromedp.Run below), and it used to run under m.mu
@@ -381,7 +490,9 @@ func (m *BrowserManager) resolveExecPath(ctx context.Context) (string, error) {
 // concurrent Session() call for the SAME sessionID that arrives while
 // creation is in flight waits on m.pending instead of independently calling
 // chromedp.NewContext/Run for that ID too (which would create and leak a
-// second tab for one logical session).
+// second tab for one logical session). ADR-041 preserves this discipline
+// exactly — createTab (below) is the same "no lock across CDP" call, now
+// factored out so it's shared with OpenTab/CloseTab/adoptTarget.
 func (m *BrowserManager) Session(sessionID string) (context.Context, error) {
 	for {
 		m.mu.Lock()
@@ -390,14 +501,22 @@ func (m *BrowserManager) Session(sessionID string) (context.Context, error) {
 			return nil, err
 		}
 
-		if s, ok := m.sessions[sessionID]; ok {
-			// Verify the session context is still valid
-			if s.ctx.Err() == nil {
+		if se, ok := m.sessions[sessionID]; ok {
+			if tab := se.active(); tab != nil && tab.ctx.Err() == nil {
 				m.mu.Unlock()
-				return s.ctx, nil
+				return tab.ctx, nil
 			}
-			// Session expired (browser crash, etc.) — clean up and recreate
-			s.cancel()
+			// The active tab's context died (browser crash, etc). Tear down
+			// the whole browsing context and recreate a fresh single-tab one
+			// below — the same crash-recovery behavior the pre-ADR-041 code
+			// applied to its one-tab-per-session model, now applied to the
+			// tab SET. (Resurrecting a different surviving tab as active
+			// instead is a possible future refinement; out of scope here —
+			// an active tab dying out from under the manager, as opposed to
+			// an explicit CloseTab, is not the case ADR-041 targets.)
+			for _, t := range se.tabs {
+				t.cancel()
+			}
 			delete(m.sessions, sessionID)
 		}
 
@@ -410,7 +529,7 @@ func (m *BrowserManager) Session(sessionID string) (context.Context, error) {
 			continue
 		}
 
-		if len(m.sessions) >= m.cfg.MaxTabs {
+		if m.totalTabCountLocked() >= m.cfg.MaxTabs {
 			m.mu.Unlock()
 			return nil, fmt.Errorf("maximum concurrent tabs (%d) reached. Close a tab first", m.cfg.MaxTabs)
 		}
@@ -423,44 +542,515 @@ func (m *BrowserManager) Session(sessionID string) (context.Context, error) {
 		allocCtx := m.allocCtx
 		m.mu.Unlock()
 
-		ctx, cancel := chromedp.NewContext(allocCtx)
-		// Eagerly create the target on THIS long-lived ctx. Without this, the
-		// first chromedp.Run binds the target to whichever (possibly
-		// timeout-wrapped) ctx a tool passes — and when that wrapper is
-		// canceled, the tab dies; the next tool call then silently creates a
-		// fresh blank tab (screenshot-after-navigate returns a blank page).
-		//
-		// This MUST run on `ctx` itself, never a WithTimeout(ctx, …) child:
-		// chromedp binds the target's lifetime to the context of its first Run,
-		// so running the eager creation on a timeout child and cancelling it
-		// would tear the freshly-created tab straight back down (StartScreencast
-		// / the next tool would then fail with "context canceled"). The
-		// deadlock this whole refactor fixes is solved by NOT holding m.mu
-		// across this call (the lock is released above), so a slow tab creation
-		// here can only stall this one session's own callers, never the whole
-		// browser subsystem.
-		err := chromedp.Run(ctx)
-
-		// The target is now bound to ctx (above). Apply best-effort stealth on
-		// a bounded timeout CHILD of ctx — safe because cancelling a child of
-		// an already-bound target does NOT tear the tab down (same pattern the
-		// read-only tools use). Never fatal to tab creation.
-		if err == nil {
-			applyStealth(ctx, m.PageTimeout())
-		}
+		tab, err := m.createTab(allocCtx, "")
 
 		m.mu.Lock()
 		delete(m.pending, sessionID)
 		if err != nil {
-			cancel()
 			m.mu.Unlock()
 			close(done)
 			return nil, fmt.Errorf("browser: failed to initialize tab: %w", err)
 		}
-		m.sessions[sessionID] = &sessionEntry{ctx: ctx, cancel: cancel}
+		se := &sessionEntry{tabs: []*tabEntry{tab}, activeIdx: 0}
+		m.installTargetListenerLocked(sessionID, se)
+		m.sessions[sessionID] = se
+		tabs := snapshotTabsLocked(se)
 		m.mu.Unlock()
 		close(done)
-		return ctx, nil
+		m.notifyTabsChanged(sessionID, tabs, 0)
+		return tab.ctx, nil
+	}
+}
+
+// createTab performs the CDP work to bind a chromedp context to a browser
+// tab — either a brand-new target (targetID == "") or an existing one
+// (targetID != "", ADR-041 D2 adoption via chromedp.WithTargetID). MUST be
+// called with NO BrowserManager lock held; this is the CDP entry point every
+// tab-creating/adopting call site in this file shares, all obeying the exact
+// discipline Session()'s doc comment above describes (never wrap the FIRST
+// Run on a fresh ctx in a timeout — chromedp binds the target's lifetime to
+// that first Run's context).
+func (m *BrowserManager) createTab(allocCtx context.Context, targetID target.ID) (*tabEntry, error) {
+	if m.createTabFn != nil {
+		return m.createTabFn(allocCtx, targetID)
+	}
+	var opts []chromedp.ContextOption
+	if targetID != "" {
+		opts = append(opts, chromedp.WithTargetID(targetID))
+	}
+	ctx, cancel := chromedp.NewContext(allocCtx, opts...)
+
+	if err := chromedp.Run(ctx); err != nil {
+		cancel()
+		return nil, err
+	}
+
+	// Best-effort stealth on a bounded timeout CHILD of ctx — safe because
+	// cancelling a child of an already-bound target does NOT tear the tab
+	// down. Never fatal to tab creation.
+	applyStealth(ctx, m.PageTimeout())
+
+	resolvedID := targetID
+	if cc := chromedp.FromContext(ctx); cc != nil && cc.Target != nil && cc.Target.TargetID != "" {
+		resolvedID = cc.Target.TargetID
+	}
+
+	tab := &tabEntry{ctx: ctx, cancel: cancel, targetID: resolvedID}
+	tab.title, tab.url = refreshTabMeta(ctx, m.PageTimeout())
+	return tab, nil
+}
+
+// refreshTabMeta best-effort reads the current title/url of tabCtx, bounded
+// by timeout so a slow/hung page never blocks tab creation or adoption.
+// Failures are silent (empty strings) — title/url are cosmetic (tab-strip
+// display, browser_list_tabs), never required for tool correctness.
+func refreshTabMeta(tabCtx context.Context, timeout time.Duration) (title, url string) {
+	ctx, cancel := context.WithTimeout(tabCtx, timeout)
+	defer cancel()
+	_ = chromedp.Run(ctx,
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			_ = chromedp.Title(&title).Do(ctx)
+			_ = chromedp.Location(&url).Do(ctx)
+			return nil
+		}),
+	)
+	return title, url
+}
+
+// totalTabCountLocked sums the number of tabs across every browsing context
+// this manager tracks — the MaxTabs enforcement universe (ADR-041: MaxTabs
+// now caps tabs-in-the-set, generalizing its pre-ADR-041 meaning of "total
+// concurrent tabs" from a proxy of len(m.sessions), back when every session
+// held exactly one tab). Must be called with m.mu held.
+func (m *BrowserManager) totalTabCountLocked() int {
+	n := 0
+	for _, se := range m.sessions {
+		n += len(se.tabs)
+	}
+	return n
+}
+
+// snapshotTabsLocked builds the public, metadata-only Tab slice for se. Must
+// be called with m.mu held; the returned slice is a defensive copy safe to
+// use after unlocking.
+func snapshotTabsLocked(se *sessionEntry) []Tab {
+	out := make([]Tab, len(se.tabs))
+	for i, t := range se.tabs {
+		out[i] = Tab{Index: i, Title: t.title, URL: t.url, Active: i == se.activeIdx}
+	}
+	return out
+}
+
+// notifyTabsChanged invokes the registered ADR-041 D4 tabs-changed callback
+// (if any) with tabs/activeIdx already computed by the caller. Only
+// m.tabsChanged itself is read under lock; the callback is always invoked
+// with NO BrowserManager lock held (ADR-038 rule) — every mutating tab-set
+// method in this file (Session, OpenTab, CloseTab, SwitchTab, adoptTarget,
+// handleTargetEvent) calls this only after releasing m.mu.
+func (m *BrowserManager) notifyTabsChanged(sessionID string, tabs []Tab, activeIdx int) {
+	m.mu.Lock()
+	cb := m.tabsChanged
+	m.mu.Unlock()
+	if cb != nil {
+		cb(sessionID, tabs, activeIdx)
+	}
+}
+
+// SetTabsChangedFunc registers cb to be invoked (ADR-041 D4) whenever any
+// browsing context's tab set changes shape or its active tab moves —
+// open/close/switch/adopt, and best-effort title/url updates. Overwrites any
+// previously-registered callback; pass nil to unregister. Safe to call at
+// any time. The callback itself is always invoked with NO BrowserManager
+// lock held — see notifyTabsChanged.
+func (m *BrowserManager) SetTabsChangedFunc(cb func(sessionID string, tabs []Tab, activeIdx int)) {
+	m.mu.Lock()
+	m.tabsChanged = cb
+	m.mu.Unlock()
+}
+
+// ListTabs returns a snapshot of sessionID's tab set and which index is
+// active. Returns a nil, empty slice with no error when the browsing
+// context doesn't exist yet (no tool has navigated there) — "nothing open
+// yet" is not treated as a failure, mirroring LiveViewRegistry.lookup's
+// convention for a not-yet-attached session.
+func (m *BrowserManager) ListTabs(sessionID string) (tabs []Tab, activeIdx int, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	se, ok := m.sessions[sessionID]
+	if !ok {
+		return nil, 0, nil
+	}
+	return snapshotTabsLocked(se), se.activeIdx, nil
+}
+
+// SwitchTab makes tab `index` the active tab of sessionID's browsing
+// context (ADR-041 D3). Subsequent tool calls (via Session) and the live
+// screencast (via the ADR-041 D4 tabs-changed callback) follow it.
+func (m *BrowserManager) SwitchTab(sessionID string, index int) (Tab, error) {
+	m.mu.Lock()
+	se, ok := m.sessions[sessionID]
+	if !ok {
+		m.mu.Unlock()
+		return Tab{}, fmt.Errorf("browser: no active session %q", sessionID)
+	}
+	if index < 0 || index >= len(se.tabs) {
+		m.mu.Unlock()
+		return Tab{}, fmt.Errorf("browser: tab index %d out of range (0-%d)", index, len(se.tabs)-1)
+	}
+	se.activeIdx = index
+	tabs := snapshotTabsLocked(se)
+	m.mu.Unlock()
+
+	m.notifyTabsChanged(sessionID, tabs, index)
+	return tabs[index], nil
+}
+
+// CloseTab closes tab `index` in sessionID's browsing context (cancels its
+// chromedp target — a cheap, non-blocking call; see BrowserManager.
+// CloseSession's identical existing pattern). If it was the active tab, a
+// neighbour is activated instead (the tab that slid into the same index;
+// falls back to the new last tab if the closed tab was the set's last).
+// NEVER leaves the browsing context with zero tabs (ADR-041 D3/
+// Consequences) — closing the last remaining tab opens a fresh blank
+// replacement instead, which DOES talk to CDP and therefore runs with no
+// BrowserManager lock held, mirroring Session()'s discipline.
+func (m *BrowserManager) CloseTab(sessionID string, index int) (tabs []Tab, activeIdx int, err error) {
+	m.mu.Lock()
+	se, ok := m.sessions[sessionID]
+	if !ok {
+		m.mu.Unlock()
+		return nil, 0, fmt.Errorf("browser: no active session %q", sessionID)
+	}
+	if index < 0 || index >= len(se.tabs) {
+		m.mu.Unlock()
+		return nil, 0, fmt.Errorf("browser: tab index %d out of range (0-%d)", index, len(se.tabs)-1)
+	}
+
+	if len(se.tabs) == 1 {
+		closing := se.tabs[0]
+		delete(m.sessions, sessionID) // torn down; recreated below on success
+		allocCtx := m.allocCtx
+		m.mu.Unlock()
+
+		closing.cancel()
+		newTab, cerr := m.createTab(allocCtx, "")
+		if cerr != nil {
+			return nil, 0, fmt.Errorf("browser: closed last tab but failed to open a replacement: %w", cerr)
+		}
+
+		m.mu.Lock()
+		newSE := &sessionEntry{tabs: []*tabEntry{newTab}, activeIdx: 0}
+		m.installTargetListenerLocked(sessionID, newSE)
+		m.sessions[sessionID] = newSE
+		tabs = snapshotTabsLocked(newSE)
+		activeIdx = 0
+		m.mu.Unlock()
+
+		m.notifyTabsChanged(sessionID, tabs, activeIdx)
+		return tabs, activeIdx, nil
+	}
+
+	closing := se.tabs[index]
+	se.tabs = append(se.tabs[:index], se.tabs[index+1:]...)
+	switch {
+	case se.activeIdx == index && index >= len(se.tabs):
+		// Closed the active tab AND it was the set's last slot — fall back
+		// to the new last tab.
+		se.activeIdx = len(se.tabs) - 1
+	case se.activeIdx == index:
+		// Closed the active tab; the tab that slid into this same index
+		// becomes active — no index change needed.
+	case se.activeIdx > index:
+		se.activeIdx--
+	}
+	tabs = snapshotTabsLocked(se)
+	activeIdx = se.activeIdx
+	m.mu.Unlock()
+
+	closing.cancel()
+	m.notifyTabsChanged(sessionID, tabs, activeIdx)
+	return tabs, activeIdx, nil
+}
+
+// OpenTab opens a fresh blank tab in sessionID's browsing context and makes
+// it active, subject to MaxTabs (ADR-041 D3). Creates the browsing context
+// if it doesn't exist yet, mirroring Session()'s lazy-creation semantics.
+func (m *BrowserManager) OpenTab(sessionID string) (Tab, error) {
+	m.mu.Lock()
+	if err := m.ensureStarted(); err != nil {
+		m.mu.Unlock()
+		return Tab{}, err
+	}
+	if m.totalTabCountLocked() >= m.cfg.MaxTabs {
+		m.mu.Unlock()
+		return Tab{}, fmt.Errorf("maximum concurrent tabs (%d) reached. Close a tab first", m.cfg.MaxTabs)
+	}
+	allocCtx := m.allocCtx
+	m.mu.Unlock()
+
+	newTab, err := m.createTab(allocCtx, "")
+	if err != nil {
+		return Tab{}, fmt.Errorf("browser: failed to open new tab: %w", err)
+	}
+
+	m.mu.Lock()
+	se, ok := m.sessions[sessionID]
+	if !ok {
+		se = &sessionEntry{}
+		m.sessions[sessionID] = se
+	}
+	// Re-check the cap post-CDP-call — a concurrent OpenTab/adoption could
+	// have raced us to it while createTab ran unlocked.
+	if len(se.tabs) > 0 && m.totalTabCountLocked() >= m.cfg.MaxTabs {
+		m.mu.Unlock()
+		newTab.cancel()
+		return Tab{}, fmt.Errorf("maximum concurrent tabs (%d) reached. Close a tab first", m.cfg.MaxTabs)
+	}
+	se.tabs = append(se.tabs, newTab)
+	se.activeIdx = len(se.tabs) - 1
+	m.installTargetListenerLocked(sessionID, se)
+	tabs := snapshotTabsLocked(se)
+	activeIdx := se.activeIdx
+	m.mu.Unlock()
+
+	m.notifyTabsChanged(sessionID, tabs, activeIdx)
+	return tabs[activeIdx], nil
+}
+
+// adoptTarget attaches a chromedp context to an existing CDP target — one a
+// target="_blank" click, window.open, or Ctrl/Cmd+click spawned — and
+// appends it as a new tab to sessionID's tab set, making it active by
+// default (ADR-041 D2). Idempotent: a target already tracked, or one a
+// concurrent adoption is already in flight for, is a silent no-op (nil, nil)
+// rather than an error. Enforces MaxTabs: a runaway window.open loop is
+// capped, not unbounded — adoption beyond the cap is silently refused
+// (logged at WARN), matching "drop/refuse beyond the cap" per ADR-041,
+// since this path has no direct caller to return an error to (it fires from
+// a background CDP event or a reconcile pass, never a synchronous tool call
+// the LLM is waiting on).
+//
+// Deadlock-safe per ADR-038: createTab's CDP attach runs with NO
+// BrowserManager lock held.
+func (m *BrowserManager) adoptTarget(sessionID string, targetID target.ID) (*Tab, error) {
+	if targetID == "" {
+		return nil, nil //nolint:nilnil // sentinel "nothing to adopt", not a failure — see doc comment
+	}
+
+	m.mu.Lock()
+	se, ok := m.sessions[sessionID]
+	if !ok {
+		m.mu.Unlock()
+		return nil, nil //nolint:nilnil // no browsing context to adopt into yet
+	}
+	if se.indexOfTarget(targetID) >= 0 {
+		m.mu.Unlock()
+		return nil, nil //nolint:nilnil // already ours
+	}
+	if m.pendingAdopt == nil {
+		m.pendingAdopt = make(map[target.ID]struct{})
+	}
+	if _, already := m.pendingAdopt[targetID]; already {
+		m.mu.Unlock()
+		return nil, nil //nolint:nilnil // a concurrent adoption is already in flight for this target
+	}
+	if m.totalTabCountLocked() >= m.cfg.MaxTabs {
+		m.mu.Unlock()
+		logger.WarnCF("browser", "new tab target detected but MaxTabs reached — not adopting", map[string]any{
+			"session_id": sessionID,
+			"target_id":  string(targetID),
+			"max_tabs":   m.cfg.MaxTabs,
+		})
+		return nil, nil //nolint:nilnil // capped, not an error — see doc comment
+	}
+	m.pendingAdopt[targetID] = struct{}{}
+	allocCtx := m.allocCtx
+	m.mu.Unlock()
+
+	newTab, err := m.createTab(allocCtx, targetID)
+
+	m.mu.Lock()
+	delete(m.pendingAdopt, targetID)
+	if err != nil {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("browser: failed to adopt new tab target %s: %w", targetID, err)
+	}
+	se, ok = m.sessions[sessionID]
+	if !ok || se.indexOfTarget(targetID) >= 0 || m.totalTabCountLocked() >= m.cfg.MaxTabs {
+		// The browsing context vanished, another racer already adopted this
+		// target, or we're now over cap — all re-checked post-CDP-call since
+		// createTab ran unlocked. Release the just-created tab rather than
+		// leaking it.
+		m.mu.Unlock()
+		newTab.cancel()
+		return nil, nil //nolint:nilnil // superseded by a concurrent change — not an error
+	}
+	se.tabs = append(se.tabs, newTab)
+	se.activeIdx = len(se.tabs) - 1 // ADR-041 D2: adopted tabs become active by default
+	tabs := snapshotTabsLocked(se)
+	activeIdx := se.activeIdx
+	m.mu.Unlock()
+
+	m.notifyTabsChanged(sessionID, tabs, activeIdx)
+	active := tabs[activeIdx]
+	return &active, nil
+}
+
+// reconcileTargetListTimeout bounds the chromedp.Targets CDP round trip
+// ReconcileTabs issues — a read-only "list every target" query, but still
+// routed through a deadline (ADR-038 discipline: every CDP round trip is
+// bounded) so a wedged transport fails this one reconcile pass instead of
+// hanging its caller (browser_click) forever.
+const reconcileTargetListTimeout = 5 * time.Second
+
+// ReconcileTabs looks for CDP targets opened by one of sessionID's own tabs
+// (target="_blank", window.open, Ctrl/Cmd+click) that this browsing context
+// hasn't adopted yet, and adopts them (ADR-041 D2). Called deterministically
+// right after browser_click (tools.go) — the guaranteed detection point —
+// complementing the best-effort passive Target.targetCreated listener
+// installed on each browsing context's root tab
+// (installTargetListenerLocked). Returns adopted=true and the finally-active
+// tab when at least one adoption succeeded (if a page opened more than one
+// new tab in one go, the LAST one adopted ends up active, same as if they'd
+// been adopted one at a time via the passive listener).
+func (m *BrowserManager) ReconcileTabs(sessionID string) (adopted bool, newActive *Tab, err error) {
+	m.mu.Lock()
+	se, ok := m.sessions[sessionID]
+	if !ok || len(se.tabs) == 0 {
+		m.mu.Unlock()
+		return false, nil, nil
+	}
+	execCtx := se.active().ctx
+	tracked := make(map[target.ID]struct{}, len(se.tabs))
+	for _, t := range se.tabs {
+		tracked[t.targetID] = struct{}{}
+	}
+	listTargets := m.listTargets
+	m.mu.Unlock()
+
+	if listTargets == nil {
+		listTargets = chromedp.Targets
+	}
+
+	timeoutCtx, cancel := context.WithTimeout(execCtx, reconcileTargetListTimeout)
+	infos, lerr := listTargets(timeoutCtx)
+	cancel()
+	if lerr != nil {
+		return false, nil, fmt.Errorf("browser: failed to list targets for reconcile: %w", lerr)
+	}
+
+	for _, info := range infos {
+		if info == nil || info.Type != "page" {
+			continue
+		}
+		if _, already := tracked[info.TargetID]; already {
+			continue
+		}
+		if info.OpenerID == "" {
+			continue // not opened by a page — a top-level target, not ours to adopt
+		}
+		if _, openerIsOurs := tracked[info.OpenerID]; !openerIsOurs {
+			continue // opened by a target outside this browsing context
+		}
+		tab, aerr := m.adoptTarget(sessionID, info.TargetID)
+		if aerr != nil {
+			logger.WarnCF("browser", "reconcile: failed to adopt detected tab", map[string]any{
+				"session_id": sessionID,
+				"target_id":  string(info.TargetID),
+				"error":      aerr.Error(),
+			})
+			continue
+		}
+		if tab != nil {
+			adopted = true
+			newActive = tab
+			tracked[info.TargetID] = struct{}{} // avoid reprocessing within this pass
+		}
+	}
+	return adopted, newActive, nil
+}
+
+// installTargetListenerLocked attaches the ADR-041 D2 passive
+// target-created listener to se's ROOT tab (its first tab at call time) —
+// once per browsing context, guarded by se.listenerInstalled. chromedp
+// enables Target.setDiscoverTargets(true) per tab-session, but discovery
+// itself is browser-global, so installing this listener on every tab would
+// multiply duplicate (idempotently-handled by adoptTarget, but wasteful)
+// events for the same new target. Must be called with m.mu held — chromedp.
+// ListenTarget itself is a cheap, non-blocking, lock-free append (mirrors
+// how live.go's attach() calls it), never a CDP round trip.
+func (m *BrowserManager) installTargetListenerLocked(sessionID string, se *sessionEntry) {
+	if se.listenerInstalled || len(se.tabs) == 0 {
+		return
+	}
+	rootCtx := se.tabs[0].ctx
+	se.listenerInstalled = true
+	chromedp.ListenTarget(rootCtx, func(ev any) {
+		m.handleTargetEvent(sessionID, ev)
+	})
+}
+
+// handleTargetEvent is the chromedp.ListenTarget callback for a browsing
+// context's root tab (ADR-041 D2/D4). Per chromedp's contract (mirrors
+// live.go's handleScreencastEvent exactly) this runs SYNCHRONOUSLY on the
+// CDP event-dispatch goroutine and must never block or call chromedp.Run
+// inline: for an already-tracked tab, a title/url change is cheap
+// bookkeeping done inline (no CDP call); adopting a brand-new target is
+// dispatched onto its own goroutine.
+func (m *BrowserManager) handleTargetEvent(sessionID string, ev any) {
+	info, ok := targetInfoFromEvent(ev)
+	if !ok || info == nil || info.Type != "page" {
+		return
+	}
+
+	m.mu.Lock()
+	se, exists := m.sessions[sessionID]
+	if exists {
+		if idx := se.indexOfTarget(info.TargetID); idx >= 0 {
+			// Already-tracked tab: best-effort title/url refresh (ADR-041
+			// D4's "or its title/url changes" broadcast trigger) — no CDP
+			// call, no adoption needed.
+			changed := se.tabs[idx].title != info.Title || se.tabs[idx].url != info.URL
+			se.tabs[idx].title = info.Title
+			se.tabs[idx].url = info.URL
+			if changed {
+				tabs := snapshotTabsLocked(se)
+				activeIdx := se.activeIdx
+				m.mu.Unlock()
+				m.notifyTabsChanged(sessionID, tabs, activeIdx)
+				return
+			}
+			m.mu.Unlock()
+			return
+		}
+	}
+	m.mu.Unlock()
+
+	if info.OpenerID == "" {
+		return // not opened by a page — a top-level/browser-initiated target, not ours
+	}
+	go func() {
+		if _, err := m.adoptTarget(sessionID, info.TargetID); err != nil {
+			logger.WarnCF("browser", "auto-attach: failed to adopt new tab target", map[string]any{
+				"session_id": sessionID,
+				"target_id":  string(info.TargetID),
+				"error":      err.Error(),
+			})
+		}
+	}()
+}
+
+// targetInfoFromEvent extracts *target.Info from the two CDP event types
+// that carry it (mirrors chromedp.WaitNewTarget's own switch in the chromedp
+// package — the same pair of events can carry an unattached child target's
+// info, depending on timing).
+func targetInfoFromEvent(ev any) (*target.Info, bool) {
+	switch e := ev.(type) {
+	case *target.EventTargetCreated:
+		return e.TargetInfo, true
+	case *target.EventTargetInfoChanged:
+		return e.TargetInfo, true
+	default:
+		return nil, false
 	}
 }
 
@@ -523,13 +1113,16 @@ func applyStealth(tabCtx context.Context, timeout time.Duration) {
 	}
 }
 
-// CloseSession closes a specific session tab.
+// CloseSession closes every tab in a specific browsing context (ADR-041 D1:
+// a session is now a tab SET, so this cancels all of them, not just one).
 func (m *BrowserManager) CloseSession(sessionID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if s, ok := m.sessions[sessionID]; ok {
-		s.cancel()
+	if se, ok := m.sessions[sessionID]; ok {
+		for _, t := range se.tabs {
+			t.cancel()
+		}
 		delete(m.sessions, sessionID)
 	}
 }
@@ -556,8 +1149,10 @@ func (m *BrowserManager) Shutdown() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	for id, s := range m.sessions {
-		s.cancel()
+	for id, se := range m.sessions {
+		for _, t := range se.tabs {
+			t.cancel()
+		}
 		delete(m.sessions, id)
 	}
 

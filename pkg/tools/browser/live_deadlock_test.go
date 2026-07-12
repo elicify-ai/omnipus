@@ -87,7 +87,7 @@ func TestLiveView_Attach_DoesNotHoldMutexAcrossCDPCall(t *testing.T) {
 
 	attachDone := make(chan error, 1)
 	go func() {
-		_, err := lv.attach(tabCtx, "viewer1", func(LiveFrame) {}, nil, nil)
+		_, err := lv.attach(tabCtx, "viewer1", func(LiveFrame) {}, nil, nil, nil)
 		attachDone <- err
 	}()
 
