@@ -16,6 +16,11 @@ const TEST_SESSION_ID = 'test-session-1'
 
 function resetStore() {
   act(() => {
+    // F-S3: clearStreamingState() also drains the module-scoped
+    // pendingCancelAckSids tracker (see chat.ts) — call it before rebuilding
+    // state so a cancelStream(sessionId) from a PRIOR test can never bleed
+    // into this test's missing-session_id frame-routing fallback.
+    useChatStore.getState().clearStreamingState()
     useChatStore.setState({
       sessionsById: {},
       messages: [],
@@ -433,6 +438,179 @@ describe('chat store — cancel/interrupt (test_cancel_preserves_partial)', () =
     expect(mockSend).toHaveBeenCalledWith({ type: 'cancel', session_id: TEST_SESSION_ID })
     const msg = useChatStore.getState().messages.find((m) => m.id === 'asst_default')
     expect(msg?.status).toBe('interrupted')
+  })
+
+  // ADR-040 UAT (Bug 1, F-S3): "Take over" on the browser panel calls
+  // cancelStream(bgSid) while a DIFFERENT session is foreground. Both UAT
+  // testers saw the server's cancellation acknowledgment leak a spurious
+  // "Error processing message: turn canceled" bubble/status into the ACTIVE
+  // (foreground) session instead of the cancelled background one.
+  function setUpActiveAndBackground(mockSend: ReturnType<typeof vi.fn>) {
+    const OTHER_SID = 'bg-ray-sid'
+    const activeMsgs: ChatMessage[] = [
+      { id: 'asst_active', session_id: TEST_SESSION_ID, role: 'assistant', content: 'mia is mid-turn...', timestamp: '2026-03-29T10:00:01Z', status: 'streaming', isStreaming: true },
+    ]
+    const otherMsgs: ChatMessage[] = [
+      { id: 'asst_other', session_id: OTHER_SID, role: 'assistant', content: 'ray is browsing...', timestamp: '2026-03-29T10:00:01Z', status: 'streaming', isStreaming: true },
+    ]
+    useConnectionStore.setState({
+      connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as any,
+      isConnected: true,
+    })
+    useChatStore.setState({
+      sessionsById: {
+        [TEST_SESSION_ID]: bucketFor(activeMsgs),
+        [OTHER_SID]: bucketFor(otherMsgs),
+      },
+      isStreaming: true,
+      messages: activeMsgs,
+    })
+    return { OTHER_SID, activeMsgs, otherMsgs }
+  }
+
+  it('post-cancel token+done frames TAGGED with the background session id land only in that bucket (no regression)', () => {
+    const mockSend = vi.fn(() => true)
+    const { OTHER_SID } = setUpActiveAndBackground(mockSend)
+
+    act(() => {
+      useChatStore.getState().cancelStream(OTHER_SID)
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'token', session_id: OTHER_SID, content: 'Error processing message: turn canceled' })
+      useChatStore.getState().handleFrame({ type: 'done', session_id: OTHER_SID, stats: { tokens: 1, cost: 0, duration_ms: 5 } })
+    })
+
+    const state = useChatStore.getState()
+    const otherMsgs = getMessages(state.sessionsById[OTHER_SID])
+    expect(otherMsgs).toHaveLength(1)
+    expect(otherMsgs[0].status).toBe('interrupted')
+    expect(otherMsgs[0].content).toBe('ray is browsing...') // trailing token swallowed, not appended
+
+    // The active (foreground) session must show no trace of the background cancellation.
+    const activeMsgs = getMessages(state.sessionsById[TEST_SESSION_ID])
+    expect(activeMsgs).toHaveLength(1)
+    expect(activeMsgs[0].status).toBe('streaming')
+    expect(activeMsgs[0].isStreaming).toBe(true)
+    expect(activeMsgs[0].content).toBe('mia is mid-turn...')
+    expect(state.isStreaming).toBe(true)
+    expect(useConnectionStore.getState().connectionError).toBeNull()
+  })
+
+  it('a post-cancel error frame MISSING session_id is attributed to the cancelled background session, not the active one', () => {
+    const mockSend = vi.fn(() => true)
+    const { OTHER_SID } = setUpActiveAndBackground(mockSend)
+
+    act(() => {
+      useChatStore.getState().cancelStream(OTHER_SID)
+    })
+    // Simulate the server's cancellation ack arriving with NO session_id at all —
+    // the untagged case (a plausible backend gap for a generic error-wrap path).
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'error', message: 'Error processing message: turn canceled' })
+    })
+
+    const state = useChatStore.getState()
+
+    // The background (cancelled) session absorbs the ack.
+    const otherMsgs = getMessages(state.sessionsById[OTHER_SID])
+    expect(otherMsgs[0].status).toBe('interrupted')
+
+    // CRITICAL: the active session's own in-flight message and isStreaming
+    // projection must be completely untouched — this is the exact leak UAT saw.
+    const activeMsgs = getMessages(state.sessionsById[TEST_SESSION_ID])
+    expect(activeMsgs).toHaveLength(1)
+    expect(activeMsgs[0].status).toBe('streaming')
+    expect(activeMsgs[0].isStreaming).toBe(true)
+    expect(activeMsgs[0].content).toBe('mia is mid-turn...')
+    expect(state.isStreaming).toBe(true)
+    expect(useConnectionStore.getState().connectionError).toBeNull()
+  })
+
+  it('a post-cancel token+done pair MISSING session_id both land on the cancelled background session', () => {
+    const mockSend = vi.fn(() => true)
+    const { OTHER_SID } = setUpActiveAndBackground(mockSend)
+
+    act(() => {
+      useChatStore.getState().cancelStream(OTHER_SID)
+    })
+    act(() => {
+      // Untagged token+done, mirroring the UAT report's literal claim.
+      useChatStore.getState().handleFrame({ type: 'token', content: 'Error processing message: turn canceled' } as any)
+      useChatStore.getState().handleFrame({ type: 'done', stats: { tokens: 1, cost: 0, duration_ms: 5 } } as any)
+    })
+
+    const state = useChatStore.getState()
+    const otherBucket = state.sessionsById[OTHER_SID]
+    expect(otherBucket.isStreaming).toBe(false)
+    const otherMsgs = getMessages(otherBucket)
+    expect(otherMsgs[0].status).toBe('interrupted')
+    expect(otherMsgs[0].content).toBe('ray is browsing...')
+
+    const activeMsgs = getMessages(state.sessionsById[TEST_SESSION_ID])
+    expect(activeMsgs[0].status).toBe('streaming')
+    expect(activeMsgs[0].isStreaming).toBe(true)
+    expect(state.isStreaming).toBe(true)
+  })
+
+  it('an untagged cancellation-ack frame falls back to the active session when it IS the only pending cancel (ordinary Stop-button flow, unchanged)', () => {
+    const mockSend = vi.fn(() => true)
+    const activeMsgs: ChatMessage[] = [
+      { id: 'asst_active', session_id: TEST_SESSION_ID, role: 'assistant', content: 'active turn...', timestamp: '2026-03-29T10:00:01Z', status: 'streaming', isStreaming: true },
+    ]
+    act(() => {
+      useConnectionStore.setState({
+        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as any,
+        isConnected: true,
+      })
+      useChatStore.setState({
+        sessionsById: { [TEST_SESSION_ID]: bucketFor(activeMsgs) },
+        isStreaming: true,
+        messages: activeMsgs,
+      })
+      // Stop button — no explicit sessionId, defaults to the active session.
+      useChatStore.getState().cancelStream()
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'error', message: 'Error processing message: turn canceled' })
+    })
+    const msg = useChatStore.getState().messages.find((m) => m.id === 'asst_active')
+    expect(msg?.status).toBe('interrupted')
+  })
+
+  it('an untagged cancellation-ack frame with TWO ambiguous pending cancels falls back to the active session rather than guessing wrong', () => {
+    const mockSend = vi.fn(() => true)
+    const { OTHER_SID } = setUpActiveAndBackground(mockSend)
+    const SECOND_BG_SID = 'bg-ava-sid'
+    const secondMsgs: ChatMessage[] = [
+      { id: 'asst_second', session_id: SECOND_BG_SID, role: 'assistant', content: 'ava is drafting...', timestamp: '2026-03-29T10:00:01Z', status: 'streaming', isStreaming: true },
+    ]
+    act(() => {
+      useChatStore.setState({
+        sessionsById: {
+          ...useChatStore.getState().sessionsById,
+          [SECOND_BG_SID]: bucketFor(secondMsgs),
+        },
+      })
+    })
+
+    act(() => {
+      useChatStore.getState().cancelStream(OTHER_SID)
+      useChatStore.getState().cancelStream(SECOND_BG_SID)
+    })
+    act(() => {
+      // Ambiguous: two sessions are awaiting a cancel ack. Must not guess —
+      // falls back to the pre-existing activeSid behaviour.
+      useChatStore.getState().handleFrame({ type: 'error', message: 'Error processing message: turn canceled' })
+    })
+
+    const state = useChatStore.getState()
+    // Both backgrounds are independently marked interrupted by their own explicit cancelStream() calls.
+    expect(getMessages(state.sessionsById[OTHER_SID])[0].status).toBe('interrupted')
+    expect(getMessages(state.sessionsById[SECOND_BG_SID])[0].status).toBe('interrupted')
+    // The untagged frame itself, being ambiguous, falls back to the active session (unchanged
+    // pre-existing behaviour) rather than silently guessing one of the two backgrounds.
+    const activeMsgs = getMessages(state.sessionsById[TEST_SESSION_ID])
+    expect(activeMsgs[0].status).toBe('interrupted')
   })
 })
 

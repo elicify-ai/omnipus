@@ -545,6 +545,16 @@ const ORPHAN_BUFFER_TTL_MS = 10_000
 const pendingByParentCallId: Record<string, BufferedFrame[]> = {}
 const orphanTimers: Record<string, ReturnType<typeof setTimeout>> = {}
 
+// UAT (browser-panel "Take over"): session ids with an explicit
+// cancelStream(sessionId) sent to the server but no terminal (done/error)
+// frame acknowledging it yet. Populated by cancelStream(), drained by the
+// 'done'/'error' handlers once a frame is attributed to that session (by any
+// means — matched session_id or the fallback below), and swept on socket
+// disconnect. Used ONLY to disambiguate an untagged cancellation-ack-shaped
+// frame (token/done/error missing session_id) that would otherwise
+// misattribute to whatever session happens to be foreground — see F-S3 below.
+const pendingCancelAckSids = new Set<string>()
+
 // ── Frame-routing helpers ─────────────────────────────────────────────────────
 
 /** O(1) span check using the spanByParentCallId index. */
@@ -585,6 +595,15 @@ const SESSION_SCOPED_FRAME_TYPES = new Set([
   'tool_approval_required', 'rate_limit', 'media', 'session_started',
   'system_overload', 'session_close_ack', 'cancel_stage',
 ])
+
+// F-S3: frame types that can carry a turn-cancellation acknowledgment
+// ("Error processing message: turn canceled" and similar) — the only types
+// eligible for the pendingCancelAckSids disambiguation fallback below. This
+// is deliberately a NARROW subset of SESSION_SCOPED_FRAME_TYPES (plus
+// 'error', a global type): every other session-scoped frame missing
+// session_id keeps its existing strict drop-in-production behaviour, and
+// every other global frame keeps falling back to the active session.
+const CANCEL_ACK_FRAME_TYPES = new Set(['token', 'done', 'error'])
 
 // F-S2: FALLBACK_SID exists only in test mode so tests that don't establish a session
 // still route frames to a consistent bucket. In production getActiveSid() returns null
@@ -1624,6 +1643,12 @@ export const useChatStore = create<ChatStore>((set, get) => {
             message: 'Could not send cancel — connection dropped. The response may continue briefly.',
             variant: 'error',
           })
+        } else {
+          // F-S3: the server now owes this session a terminal ack. Track it so
+          // an untagged (missing session_id) token/done/error frame that
+          // arrives while a DIFFERENT session is foreground can be attributed
+          // here instead of misrouted to whatever's active — see handleFrame.
+          pendingCancelAckSids.add(targetSid)
         }
       }
 
@@ -1648,6 +1673,10 @@ export const useChatStore = create<ChatStore>((set, get) => {
     },
 
     clearStreamingState: () => {
+      // F-S3: a socket drop means no more terminal frames are coming for any
+      // outstanding cancel — stale entries here would otherwise persist across
+      // reconnects and could misattribute an unrelated later frame.
+      pendingCancelAckSids.clear()
       // Sweep every bucket — not just the active one — because a background
       // session can be mid-stream when the socket drops. Any bucket left with
       // isStreaming=true would wedge if the user switches to it later.
@@ -1771,6 +1800,25 @@ export const useChatStore = create<ChatStore>((set, get) => {
       const targetSid: string | null = (() => {
         if (frame.type === 'session_started') return activeSid // handled below, value unused
         if (frameSessionId) return frameSessionId
+        // F-S3 (UAT, browser-panel "Take over"): an untagged (no session_id)
+        // token/done/error frame that is really the server's cancellation
+        // acknowledgment for a BACKGROUND session (cancelStream(sessionId),
+        // e.g. the browser panel's "Take over" pausing its own pinned
+        // session while a different chat is foreground) must not be
+        // misattributed to whatever session happens to be active — that
+        // corrupts the active session's own, unrelated in-flight turn with a
+        // stray (interrupted)/error status. When there is exactly one
+        // session with an outstanding, unacknowledged explicit cancel and it
+        // is NOT the active session, it is unambiguously the more likely
+        // origin than "whatever's on screen" — route there instead. Any
+        // other case (no pending cancel, more than one pending, or the
+        // pending one IS the active session — the ordinary single-session
+        // Stop-button flow) falls through unchanged to the existing
+        // behaviour below.
+        if (CANCEL_ACK_FRAME_TYPES.has(frame.type) && pendingCancelAckSids.size === 1) {
+          const [onlyPendingSid] = pendingCancelAckSids
+          if (onlyPendingSid !== activeSid) return onlyPendingSid
+        }
         if (SESSION_SCOPED_FRAME_TYPES.has(frame.type)) {
           if (import.meta.env.MODE === 'test') {
             // In test mode: fall back to active session so test scaffolding stays simple.
@@ -1962,6 +2010,10 @@ export const useChatStore = create<ChatStore>((set, get) => {
             // a nested withBucket call, because the outer set() commits the bucket
             // last and clobbers any nested writes that ran during the updater.
             const sid = targetSid
+            // F-S3: this session's cancellation (if any) has now been
+            // terminally acknowledged — stop treating it as "pending" so a
+            // later, unrelated untagged frame doesn't get misattributed here.
+            pendingCancelAckSids.delete(sid)
             const wasReplaying = (get().sessionsById[sid] ?? EMPTY_BUCKET).isReplaying
             const elapsed = wasReplaying ? Date.now() - (replayingStartedAt[sid] ?? 0) : 0
             // FR-I-014: mirror the same MIN_REPLAY_DISPLAY_MS used in setReplaying above.
@@ -2065,6 +2117,8 @@ export const useChatStore = create<ChatStore>((set, get) => {
             // clear immediately once MIN_REPLAY_DISPLAY_MS has elapsed, otherwise
             // defer to a timer (cancelling any stale one first).
             const sid = targetSid
+            // F-S3: see the matching comment in the 'done' case above.
+            pendingCancelAckSids.delete(sid)
             const wasReplaying = (get().sessionsById[sid] ?? EMPTY_BUCKET).isReplaying
             const replayElapsed = wasReplaying ? Date.now() - (replayingStartedAt[sid] ?? 0) : 0
             const MIN_REPLAY_DISPLAY_MS = 750
