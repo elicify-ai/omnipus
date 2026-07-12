@@ -1940,12 +1940,57 @@ func findDelegationEdge(
 	}
 }
 
+// EdgeModeCategory maps the delegate tool's real 3-value runtime parameter
+// (config.DelegationMode: Await/Background/Task) down to the trust edge's
+// collapsed 2-value vocabulary (workspace.DelegationMode: Direct/Task). Task
+// maps 1:1 to workspace.ModeTask; both Await and Background — the sync-vs-async
+// choice is a delegate-tool call parameter, not something the trust edge gates
+// separately — map to workspace.ModeDirect. This is the single authority for
+// that collapse at the enforcement gate; the inverse expansion (Direct back to
+// both Await and Background for system-prompt advertising) lives in
+// wireDelegationInjectors (pkg/agent/loop_env.go), and defaultWorkspaceDelegationEdges
+// (pkg/gateway/rest_workspace_delegation.go) calls this function directly for
+// the collapse-on-seed case — pkg/gateway already imports pkg/agent extensively
+// (gateway.go, rest.go, rest_auth.go, ...), so there is no package-boundary
+// reason to duplicate this logic there; exported (not unexported) specifically
+// so that call site can reuse it instead of re-implementing the collapse.
+//
+// The switch below is deliberately exhaustive over the CLOSED 3-value
+// config.DelegationMode enum (Await/Background/Task) rather than an if/else on
+// the Task case with an implicit "else -> Direct" fallthrough: an if/else
+// fallback is invisible to golangci's exhaustive linter (which only inspects
+// real switch statements over enum-typed values) and would silently collapse
+// any future 4th mode value into ModeDirect with no signal anywhere. The
+// default case below keeps that same safe collapse (ModeDirect is the
+// currently-correct behavior per the closed 3-value enum) but makes an
+// unrecognized value NOISY via a warning log instead of silent, matching this
+// file's existing convention of logging every denial/exceptional path.
+func EdgeModeCategory(mode config.DelegationMode) workspace.DelegationMode {
+	switch mode {
+	case config.DelegationModeTask:
+		return workspace.ModeTask
+	case config.DelegationModeAwait, config.DelegationModeBackground:
+		return workspace.ModeDirect
+	default:
+		logger.WarnCF("agent",
+			"EdgeModeCategory: unrecognized config.DelegationMode value, defaulting to ModeDirect category",
+			map[string]any{"mode": string(mode)},
+		)
+		return workspace.ModeDirect
+	}
+}
+
 // enforceEdgeModeAndDepth applies the modes and depth constraints of a matched
 // delegation edge. Returns nil when the delegation is permitted, or a
 // *DelegationDenial (mode / depth) otherwise.
 //
-//   - modes: empty edge.Modes ⇒ all modes allowed; otherwise the current mode
-//     MUST be in edge.Modes.
+//   - modes: empty edge.Modes ⇒ all modes allowed; otherwise the current mode's
+//     CATEGORY (via EdgeModeCategory — Await/Background both collapse to
+//     Direct, Task stays Task) MUST be in edge.Modes. This is category
+//     membership, not a raw string/cast comparison: edge.Modes uses the
+//     collapsed 2-value workspace.DelegationMode vocabulary while mode is the
+//     tool's real 3-value config.DelegationMode parameter, so the two are never
+//     directly comparable.
 //   - depth: edge.Depth (when non-nil) is the per-edge onward-delegation cap; nil
 //     inherits — no per-edge cap. The global SubTurn.MaxDepth ceiling (passed as
 //     globalDepthCap, 0 = none) ALWAYS applies as an additional, independent cap.
@@ -1956,13 +2001,14 @@ func enforceEdgeModeAndDepth(
 	mode config.DelegationMode,
 	globalDepthCap int,
 ) *tools.DelegationDenial {
-	// Modes. edge.Modes is []workspace.DelegationMode (a string type); compare via
-	// a string cast to the request's config.DelegationMode. Empty edge.Modes ⇒ all
-	// modes allowed (handled by the len > 0 guard).
+	// Modes. Empty edge.Modes ⇒ all modes allowed (handled by the len > 0 guard).
+	// Otherwise compare the edge's collapsed vocabulary against mode's category,
+	// not mode itself.
 	if len(edge.Modes) > 0 {
+		category := EdgeModeCategory(mode)
 		allowed := false
 		for _, m := range edge.Modes {
-			if config.DelegationMode(m) == mode {
+			if m == category {
 				allowed = true
 				break
 			}
@@ -2058,8 +2104,8 @@ func errString(err error) string {
 //     delegation graph. No edge ⇒ DENY (trust_set). The workspace is the one
 //     bound to the turn, defaulting to the is_default workspace when none is
 //     bound — so a graph is ALWAYS consulted (never an implicit allow).
-//  2. mode      — the tool's delegation mode must be in the edge's Modes (empty
-//     Modes = all allowed).
+//  2. mode      — the tool's delegation mode's CATEGORY (via EdgeModeCategory)
+//     must be in the edge's Modes (empty Modes = all allowed).
 //  3. depth     — the current delegation-chain depth must be below the edge's
 //     Depth cap (nil = inherit; 0 = no onward delegation). The global
 //     SubTurn.MaxDepth ceiling always applies as an additional cap.

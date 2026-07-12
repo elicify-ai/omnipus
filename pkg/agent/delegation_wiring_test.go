@@ -427,22 +427,29 @@ func TestDelegationWiring_WorkspaceIDThreaded(t *testing.T) {
 // ---------------------------------------------------------------------------
 // TestDelegationWiring_Parity_AdvertisedMatchesEnforced
 //
-// This is the parity test: seeds a graph (mia→ray await+background only,
-// NO mia→ava), renders the delegation block for mia, and asserts:
-//   (a) 'ray' appears with exactly the await+background tools, NO create_task.
+// This is the parity test: seeds a graph (mia→ray "direct" only — the
+// collapsed edge vocabulary's entry that covers BOTH the sync/await and
+// background delegate-tool call patterns — NO mia→ava), renders the
+// delegation block for mia, and asserts:
+//   (a) 'ray' appears with exactly the await+background tools (both expand
+//       from the single "direct" edge entry — see wireDelegationInjectors),
+//       NO create_task.
 //   (b) 'ava' does NOT appear.
-//   (c) buildDelegationDenyChecker for mia→ray allows await and background,
-//       denies task — matching (a) exactly.
+//   (c) buildDelegationDenyChecker for mia→ray allows await and background
+//       (both collapse to the edge's "direct" category — see
+//       EdgeModeCategory), denies task — matching (a) exactly.
 //   (d) buildDelegationDenyChecker for mia→ava denies — matching (b) exactly.
 //
-// This proves advertisement == enforcement by construction.
+// This proves advertisement == enforcement by construction, INCLUDING across
+// the collapse (EdgeModeCategory) / expand (wireDelegationInjectors) pair —
+// the two must stay inverses of each other or this parity breaks.
 // ---------------------------------------------------------------------------
 
 func TestDelegationWiring_Parity_AdvertisedMatchesEnforced(t *testing.T) {
 	const wsID = "01JWWIRINGPARITY000000001"
 	seedWorkspaceGraph(t, wsID, true, []graphEdge{
-		// mia→ray: await+background only, no task.
-		edge("mia", "ray", []string{"await", "background"}, nil),
+		// mia→ray: direct only (covers both await and background), no task.
+		edge("mia", "ray", []string{"direct"}, nil),
 		// No mia→ava edge.
 	})
 

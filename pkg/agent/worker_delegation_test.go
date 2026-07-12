@@ -148,8 +148,24 @@ func TestSeededGraph_DisallowedTargetDenied(t *testing.T) {
 }
 
 // TestSeededGraph_JimAwaitModeAllowed verifies Jim's seeded policy permits the
-// synchronous (await) subagent mode, while a base worker-offloader (Mia) does NOT
-// permit await (only task/background seeded).
+// synchronous (await) subagent mode.
+//
+// This test previously also asserted the inverse for Mia (background-only
+// seeded ⇒ await denied), on the premise that a workspace-graph edge could
+// grant background dispatch without also granting await dispatch. That
+// premise is retired by the operator-ratified Team-graph edge simplification
+// (see docs/internal/architecture/ADR-040-fr-h-006-nested-delegation-reversal.md's
+// sibling decision, and pkg/workspace/delegation.go's DelegationMode doc
+// comment): the trust edge now only distinguishes Direct vs. Task delegation,
+// not sync vs. async within Direct — so any edge granting background dispatch
+// necessarily grants await dispatch too, by design, not by omission. Mia's
+// real seed (`task, background`) collapses to `task, direct` and therefore
+// now correctly allows await, matching Jim. Mode-restriction enforcement
+// itself (a genuinely task-only edge denying await/background) remains
+// covered by delegation_enforce_test.go, which constructs a synthetic
+// task-only edge directly rather than relying on seeded data — no real seed
+// in this codebase happens to be direct-only or task-only today, so this
+// seeded-graph-specific test can no longer exercise that case meaningfully.
 func TestSeededGraph_JimAwaitModeAllowed(t *testing.T) {
 	cfg := &config.Config{}
 	coreagent.SeedConfig(cfg)
@@ -164,12 +180,15 @@ func TestSeededGraph_JimAwaitModeAllowed(t *testing.T) {
 		t.Fatalf("Jim → worker (await) must be allowed, got deny: %+v", denial)
 	}
 
+	// Mia's seed (task, background) collapses to (task, direct), which now
+	// correctly allows await too — background and await are no longer
+	// separately grantable at the trust-edge layer.
 	miaCheck := buildDelegationDenyCheckerForDelegate(
 		string(coreagent.IDMia),
 		cfg.Agents.Defaults,
 		config.DelegationModeAwait,
 	)
-	if denial := miaCheck(ctxWS(testWS, 0), string(coreagent.IDWorker)); denial == nil {
-		t.Fatal("Mia → worker (await) must be DENIED — Mia only has task/background seeded")
+	if denial := miaCheck(ctxWS(testWS, 0), string(coreagent.IDWorker)); denial != nil {
+		t.Fatalf("Mia → worker (await) must be allowed post-collapse (background⇒direct⇒await too), got deny: %+v", denial)
 	}
 }

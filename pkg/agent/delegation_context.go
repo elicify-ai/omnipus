@@ -22,8 +22,13 @@ import (
 //   - ID:    the target agent id (from the edge's ToAgent field)
 //   - Label: the human-readable label resolved via resolveDelegationLabel;
 //     empty means the target is unknown/unavailable and must be skipped.
-//   - Modes: the edge's Modes field; empty ⇒ all three modes (await/background/task)
-//     are allowed, matching enforceEdgeModeAndDepth semantics exactly.
+//   - Modes: the delegate tool's 3-value config.DelegationMode vocabulary
+//     (await/background/task), already EXPANDED from the workspace edge's
+//     collapsed 2-value form (direct/task) by wireDelegationInjectors — this
+//     type never sees the raw edge.Modes. Empty ⇒ all three modes are allowed,
+//     matching enforceEdgeModeAndDepth semantics exactly (an edge that allows
+//     "direct" always expands to both await and background, so a target
+//     advertising only one of the two never happens).
 //   - Depth: the edge's Depth field; nil ⇒ inherit (no per-edge cap),
 //     0 ⇒ this edge grants NO onward delegation,
 //     >0 ⇒ per-edge onward-delegation cap.

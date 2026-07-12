@@ -752,6 +752,18 @@ func HasSystemAllowsInConstructorSeed(agentID string) bool {
 // listed stays deny-by-default. Returns nil for an agent with no seeded
 // delegation (incl. Explorer/Researcher and the generic worker — leaves that do
 // not delegate onward by default).
+//
+// The modes above are this SEED's own 3-value vocabulary (config.DelegationMode:
+// task/background/await — the delegate tool's real runtime call parameter) and
+// deliberately do NOT change when the workspace trust-edge vocabulary collapses
+// to 2 values (workspace.DelegationMode: direct/task). pkg/gateway's
+// defaultWorkspaceDelegationEdges (via agent.EdgeModeCategory) is the ONE seam
+// that translates this matrix onto a fresh workspace's graph edges, collapsing
+// background/await into a single "direct" entry per edge (deduped) — so e.g.
+// Jim's seeded [task, background, await] becomes a graph edge with
+// Modes: [task, direct], not three separate entries. This function's own
+// output is never itself the graph; it stays a seed DTO consumed once, at
+// workspace-creation time.
 func coreAgentDelegation(id CoreAgentID) *config.DelegationPolicy {
 	ref := func(agentID CoreAgentID) config.AgentRef {
 		return config.AgentRef{Kind: config.AgentRefKindLocal, ID: string(agentID)}

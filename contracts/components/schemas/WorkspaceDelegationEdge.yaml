@@ -27,20 +27,22 @@ properties:
     type: array
     description: >
       Allowed delegation modes for this edge. An empty/absent list means all modes
-      are allowed. Values match the DelegationMode enum used across delegation
-      configuration.
-      "await" = synchronous subagent (blocks caller until result).
-      "background" = async spawn (caller continues; result posted when done).
-      "task" = task_create delegation (persistent task for another agent).
+      are allowed.
+      "direct" = Direct Delegation — the delegate tool dispatches to the target
+      agent, either synchronously (await) or as a background spawn. Which of the
+      two happens is a runtime parameter of the delegate tool call itself, not a
+      trust distinction the edge gates separately — an edge that allows "direct"
+      allows both call patterns.
+      "task" = Task Delegation — task_create-style delegation (a persistent task
+      assigned to another agent).
     items:
       type: string
       enum:
-        - await
-        - background
+        - direct
         - task
     uniqueItems: true
     example:
-      - await
+      - direct
       - task
   depth:
     type: integer

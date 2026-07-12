@@ -77,7 +77,8 @@ const AGENTS: Agent[] = [
 const DELEGATION: WorkspaceDelegation = {
   workspace_id: 'ws-1',
   team: ['mia', 'jim', 'planner'],
-  edges: [{ from_agent: 'jim', to_agent: 'planner', modes: ['await', 'task'], depth: 2 }],
+  edges: [{ from_agent: 'jim', to_agent: 'planner', modes: ['direct', 'task'], depth: 2 }],
+  default_depth: 3,
 }
 
 // ── Mocks ───────────────────────────────────────────────────────────────────
@@ -221,6 +222,7 @@ describe('WorkspaceTeamTab', () => {
       workspace_id: 'ws-1',
       team: [],
       edges: [],
+      default_depth: 3,
     } as WorkspaceDelegation)
     // core_team would normally seed members; for this case the workspace mock
     // already supplies core_team, so to get a truly empty graph we also clear
@@ -268,8 +270,9 @@ describe('WorkspaceTeamTab', () => {
       team: ['mia', 'jim', 'planner', 'ray'],
       edges: [
         ...(DELEGATION.edges ?? []),
-        { from_agent: 'jim', to_agent: 'ray', modes: ['await', 'background', 'task'] },
+        { from_agent: 'jim', to_agent: 'ray', modes: ['direct', 'task'] },
       ],
+      default_depth: 3,
     })
 
     // Seed the status-keyed active AND archived list caches the way
