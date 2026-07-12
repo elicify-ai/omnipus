@@ -6134,10 +6134,19 @@ turnLoop:
 								callMessages = append(append([]providers.Message(nil), messages...), ts.interruptHintMessage())
 							}
 						} else {
-							// Trim failed: return partial content + timeout message.
-							logger.WarnCF("agent", "Window trim failed during timeout recovery; returning partial response",
+							// Trim failed (e.g. nothing to evict yet on a fresh/short
+							// session — windowTrim refuses to shrink a <=1-message
+							// window). The isOverContextBudget check above is a
+							// conservative proactive heuristic (75% of the context
+							// window), not a hard limit, and the error being handled
+							// here is a transient transport drop (streaming reset /
+							// GOAWAY) that has nothing to do with context size — so an
+							// inability to compact must not cancel the retry. Mirrors
+							// the analogous C3 fix in the isContextError branch below:
+							// don't burn the retry budget looping on a compaction that
+							// can't succeed, but still let this one retry through.
+							logger.WarnCF("agent", "Window trim failed during timeout recovery; proceeding to retry without compaction",
 								map[string]any{"agent_id": ts.agent.ID, "iteration": iteration})
-							break
 						}
 					}
 				}
