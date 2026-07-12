@@ -396,10 +396,28 @@ func streamReplay(
 			// never for an ordinary tool call.
 			isDelegateSpawnCall := tc.Tool == "spawn" || tc.Tool == "delegate"
 
-			// For spawn calls that have children: emit subagent_start before
-			// the nested frames, then subagent_end after.  We detect this
-			// entry as a spawn-parent if its own ID is in spawnIDsWithChildren.
-			isSpawnParent := spawnIDsWithChildren[tcID]
+			// Finding C (A-I4 round 4): every spawn/delegate call gets a
+			// subagent_start/subagent_end bracket on replay, matching live
+			// unconditionally — pkg/agent/subturn.go's spawnSubTurn always
+			// fires EventKindSubTurnSpawn/EventKindSubTurnEnd for a delegate
+			// call regardless of how many tool calls the CHILD itself made,
+			// so pkg/gateway/websocket.go's eventForwarder always emits a
+			// live subagent_start/subagent_end pair too. This used to be
+			// gated on spawnIDsWithChildren (spans requiring at least one
+			// RECORDED NESTED CHILD tool call) — correct for deciding
+			// whether emitNestedToolCalls has anything to emit, but wrong as
+			// the gate for whether to bracket at all: a delegate whose child
+			// replies directly with zero tool calls (a common case — many
+			// delegated tasks are simple, no-tool Q&A, and it's also exactly
+			// what a child interrupted before its first tool call looks
+			// like) got NO span bracket whatsoever on reload, silently
+			// dropping the nested "label, 0 steps, status, duration"
+			// progress row live always shows, even though the outer call's
+			// own Status/DurationMS are fully known and persisted either
+			// way. isDelegateSpawnCall (above) is the correct test — it
+			// doesn't require any children to exist; emitNestedToolCalls
+			// below naturally emits zero nested frames when there are none.
+			isSpawnParent := isDelegateSpawnCall
 
 			// stillActive is true when isSpanActive (wired to
 			// agent.AgentLoop.IsSubTurnActiveForSpawnCall) reports that this
@@ -1051,7 +1069,22 @@ type replayStats struct {
 func computeReplayStats(entries []session.TranscriptEntry) replayStats {
 	var rs replayStats
 	spawnIDsWithChildren := buildSpawnIDsWithChildren(entries)
-	rs.spanCount = len(spawnIDsWithChildren)
+	// Finding C (A-I4 round 4): count every delegate/spawn call here, not just
+	// ones with at least one recorded nested child (spawnIDsWithChildren) —
+	// streamReplay now brackets ALL of them with subagent_start/end (see its
+	// isSpawnParent), so this diagnostic (surfaced as span_count_detected in
+	// operator logs) must match what actually gets emitted, or a genuinely
+	// bracketed "0 steps" delegate call under-reports as if no span existed
+	// at all.
+	seenSpawnIDs := make(map[string]bool)
+	for _, entry := range entries {
+		for _, tc := range entry.ToolCalls {
+			if (tc.Tool == "spawn" || tc.Tool == "delegate") && tc.ID != "" {
+				seenSpawnIDs[string(tc.ID)] = true
+			}
+		}
+	}
+	rs.spanCount = len(seenSpawnIDs)
 
 	// Count duplicates: seenIDs tracks first occurrence; a second hit increments the counter.
 	seenIDs := make(map[string]bool, len(entries))

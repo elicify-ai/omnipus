@@ -3010,8 +3010,34 @@ func (s *wsStreamer) Update(_ context.Context, content string) error {
 	// channel/wsHandler wired (e.g. a bare unit-test fixture) always streams
 	// live — the gate degrades to the pre-fix always-live behavior rather
 	// than silently withholding content it has no way to attribute.
+	//
+	// Finding B (A-I4 round 4): a delegated CHILD sub-turn (s.parentSpawnCallID
+	// != "", stamped by stampStreamerParentSpawnCallID before any Update/
+	// Finalize call can observe it) must NEVER become the live-stream owner
+	// for its shared chatID, full stop — never via claimStreamOwnership's
+	// normal empty-slot-wins/stale-reclaim paths either. The pre-fix
+	// claimStreamOwnership-only check let a background/async child win a
+	// vacated ownership claim and start streaming its own raw, hidden-by-
+	// design narration live: turnState.finalizeStreamer's B4 abandoned-turn
+	// path (pkg/agent/turn.go) calls ReleaseStreamOwnership() on the PARENT's
+	// claim the instant the parent is canceled (e.g. user clicks Stop) —
+	// but a background delegate is intentionally allowed to keep running
+	// past its parent's cancellation (see the Critical:true / "background
+	// delegate's final answer lost when parent finishes first" fix), so the
+	// child's NEXT streaming round (a fresh wsStreamer instance, its own
+	// lazy shadowResolved=false) then finds the slot empty and legitimately
+	// "wins" it under the old rule — even though a child's own token stream
+	// is supposed to stay hidden unconditionally, exactly like the
+	// already-correct sync/await case and replay.go's ParentSpawnCallID skip
+	// (see that doc comment). Live-verified: reproduced the leak (a second,
+	// delegate-authored top-level bubble with raw narration) via a
+	// background delegation canceled mid-flight, confirmed the fix removes
+	// it. A root/non-delegated turn is unaffected — this branch only ever
+	// narrows behavior for parentSpawnCallID != "".
 	if !s.shadowResolved {
-		if s.turnID != "" && s.channel != nil && s.channel.wsHandler != nil {
+		if s.parentSpawnCallID != "" {
+			s.isShadowStream = true
+		} else if s.turnID != "" && s.channel != nil && s.channel.wsHandler != nil {
 			s.isShadowStream = !claimStreamOwnership(&s.channel.wsHandler.streamOwners, s.chatID, s.turnID)
 		}
 		s.shadowResolved = true
@@ -3131,6 +3157,46 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 	producerAgentID := s.agentID
 	turnID := s.turnID
 	parentSpawnCallID := s.parentSpawnCallID
+	// A-I4 round 4 / Finding A: resolve the live-stream shadow gate HERE too,
+	// not just in Update(). Every turn — root OR a delegated child sub-turn —
+	// runs through the exact same pkg/agent/loop.go runTurn/finalizeStreamer
+	// path (spawnSubTurn calls al.runTurn(childCtx, childTS) directly, see
+	// subturn.go), so a child's own Finalize fires — sending an UNCONDITIONAL
+	// "done" WS frame to the CHATID IT SHARES WITH ITS PARENT — the instant
+	// the child's own sub-turn completes, even while the parent's own turn is
+	// still actively streaming (the common case for a synchronous/"await"
+	// delegate call, which blocks the parent mid-turn while the child runs).
+	// DoneFrame carries no turn/parent discriminator, so the client's `done`
+	// handler (src/store/chat.ts) has no way to tell "a nested child
+	// finished" from "the outer turn finished" — it unconditionally closes
+	// whichever bubble is current, so the parent's still-open bubble is
+	// finalized prematurely and every following narration segment opens a
+	// brand-new bubble. Live-verified via a real 3-round synchronous
+	// delegation: a `done` frame lands right after each child's
+	// subagent_start (duration_ms matching that child's own subagent_end),
+	// well before the parent's real, final `done` — producing N+1 bubbles for
+	// N sequential delegate calls instead of one continuous bubble matching
+	// the child's own hidden-narration invariant (replay.go's
+	// ParentSpawnCallID skip / this same Update() shadow gate already treat a
+	// child's own text as never visible — Finalize simply never enforced
+	// that for the "done" signal it also sends).
+	//
+	// Mirrors Update()'s lazy resolution exactly, including the same "a
+	// delegated child NEVER owns the live slot" rule Update() gained for
+	// Finding B below — a streamer whose Update() was never called (e.g. an
+	// immediate tool-only round with no narration text) would otherwise
+	// reach Finalize with shadowResolved still false and default to
+	// isShadowStream=false (treated as live), which is wrong for a child
+	// sub-turn that happened to stream zero tokens of its own.
+	if !s.shadowResolved {
+		if parentSpawnCallID != "" {
+			s.isShadowStream = true
+		} else if turnID != "" && s.channel != nil && s.channel.wsHandler != nil {
+			s.isShadowStream = !claimStreamOwnership(&s.channel.wsHandler.streamOwners, s.chatID, turnID)
+		}
+		s.shadowResolved = true
+	}
+	shadow := s.isShadowStream
 	s.statsMu.Unlock()
 
 	// Release this turn's live-stream ownership claim (if held) so a
@@ -3157,18 +3223,29 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 		SessionId: s.sessionID,
 		Stats:     doneStats,
 	}
-	sendConnGenFrame(s.conn, string(generated.WsFrameTypeDone), doneFrame)
-	// Cross-browser session attach (#133): a second tab attached mid-turn
-	// needs the done frame too, otherwise its UI stays in "streaming" state
-	// forever even after our token fan-out delivered the full content.
-	if doneData, mErr := json.Marshal(doneFrame); mErr == nil {
-		s.fanOutToSessionPeers(doneData)
-	}
-	// Only mark as streamed if we actually sent content. If the LLM failed
-	// before producing any tokens, let the outbound Send path deliver the
-	// error message — otherwise the user sees a stuck "thinking" spinner.
-	if s.channel != nil && s.accumulated.Len() > 0 {
-		s.channel.markStreamed(s.chatID)
+	// A-I4 round 4 / Finding A: a shadow stream (a delegated child sub-turn
+	// that never owned — and, per the rule above, can never win — this
+	// chatID's live-stream slot) must not send its own "done" either. Its
+	// content was never shown live in the first place (Update() withheld
+	// every token); sending "done" anyway prematurely finalizes whatever
+	// bubble the OWNING (parent) turn currently has open. The transcript
+	// write below stays unconditional — persistence must not depend on live
+	// visibility — only the live-facing signals (done frame, peer fan-out,
+	// markStreamed) are gated.
+	if !shadow {
+		sendConnGenFrame(s.conn, string(generated.WsFrameTypeDone), doneFrame)
+		// Cross-browser session attach (#133): a second tab attached mid-turn
+		// needs the done frame too, otherwise its UI stays in "streaming" state
+		// forever even after our token fan-out delivered the full content.
+		if doneData, mErr := json.Marshal(doneFrame); mErr == nil {
+			s.fanOutToSessionPeers(doneData)
+		}
+		// Only mark as streamed if we actually sent content. If the LLM failed
+		// before producing any tokens, let the outbound Send path deliver the
+		// error message — otherwise the user sees a stuck "thinking" spinner.
+		if s.channel != nil && s.accumulated.Len() > 0 {
+			s.channel.markStreamed(s.chatID)
+		}
 	}
 	// Record the full assistant response to the session transcript — unless the
 	// agent loop already persisted this round's narration via

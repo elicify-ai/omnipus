@@ -2778,8 +2778,36 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   // (e.g. evicted from the ring buffer, or replay delivered the
                   // cancellation before its assistant entry). No-op — never
                   // guess which message to mark.
+                  //
+                  // Finding D (A-I4 round 4): live-verified this is the EXPECTED,
+                  // benign shape for the common case — a turn canceled before it
+                  // streamed any narration text at all (e.g. Stop clicked while
+                  // still on the first LLM call of a round, right after a
+                  // background delegate() dispatch). pkg/gateway/replay.go only
+                  // ever emits a replay_message frame — the ONLY frame type that
+                  // stamps `.turnId` onto a ChatMessage — when
+                  // TranscriptEntry.Content is non-empty; tool_call_start/
+                  // subagent_start (which DO still replay correctly, since they
+                  // key off entry.ToolCalls independent of Content) carry no
+                  // turn_id field on the wire at all. So a turn with empty
+                  // narration legitimately has NO bubble anywhere carrying its
+                  // turnId for this correlation to find — not a bug, just a gap
+                  // in what there is to correlate against. Confirmed this has NO
+                  // user-visible effect: the interrupted delegation still renders
+                  // correctly (SubagentBlock reads its OWN status field, set
+                  // independently via subagent_end/tool_call_result, never via
+                  // this turnId match) — reproduced via a real background
+                  // delegation canceled mid-dispatch, reloaded twice, span showed
+                  // "interrupted" correctly both times despite this no-op firing
+                  // both times too. Kept as a dev-visible console.warn (unchanged
+                  // behavior) but deliberately NOT escalated to production
+                  // error-telemetry (logDiagnostic) — that tier is for
+                  // conditions with observable impact, and this one has none.
+                  // The ring-buffer-eviction case this branch also covers is not
+                  // meaningfully more severe: the underlying data is safely in
+                  // transcript.jsonl regardless, only this session's bounded
+                  // in-memory window lost the (also-cosmetic) correlation.
                   console.warn('chat.turn_canceled_no_match', { sessionId: targetSid, turnId: canceledTurnId })
-                  logDiagnostic('chatTurnCanceledNoMatch', { sessionId: targetSid, turnId: canceledTurnId })
                   return
                 }
                 const m = draft.messagesById[matchId]

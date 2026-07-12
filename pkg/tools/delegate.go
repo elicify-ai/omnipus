@@ -441,8 +441,48 @@ func (t *DelegateTool) executeAsync(
 		}
 		t.mu.Unlock()
 
-		if err != nil {
+		switch {
+		case err != nil:
 			result = ErrorResult(fmt.Sprintf("Delegate failed: %v", err)).WithError(err)
+		case result != nil:
+			// Finding B (A-I4 round 4, live-verified): mirror executeSync's
+			// own wrapping below — the raw spawner result's ForUser field
+			// (spawnSubTurn / pkg/agent/subturn.go sets it to
+			// turnRes.finalContent, the CHILD's own unwrapped, first-person
+			// final text) must never reach pkg/agent/loop.go's asyncCallback
+			// unmodified. asyncCallback unconditionally does
+			// `if !result.Silent && result.ForUser != "" { PublishOutbound(...
+			// Content: result.ForUser ...) }` — a DIRECT, immediate publish
+			// with no relation to the wsStreamer/shadow-stream machinery at
+			// all (confirmed via a live background delegation: the leaked
+			// bubble appeared even with no cancellation involved, the moment
+			// the child's own final answer happened to require no wrapping —
+			// e.g. a policy-denied task explaining itself in its own voice).
+			// That silently turns the delegate's own raw narration into a
+			// second, unattributed top-level chat bubble the instant the
+			// parent's own turn has already ended — the common case for
+			// background delegation (Critical:true's own doc comment above:
+			// "the parent turn routinely finishes ... in well under the time
+			// it takes the delegate to run even one tool call"). This is
+			// exactly the content class the design intends to keep hidden,
+			// matching the already-correct sync/await case (executeSync
+			// below never independently publishes anything — its result only
+			// ever becomes a normal tool_call_result) and
+			// pkg/gateway/replay.go's ParentSpawnCallID skip. The LLM-facing
+			// AsyncNotifier continuation turn (still fed the wrapped ForLLM
+			// content below) already informs the user, in the DELEGATOR's
+			// own voice, that the delegation finished and what it found —
+			// clearing ForUser here removes the duplicate, unattributed raw
+			// dump without losing any user-facing information.
+			labelStr := label
+			if labelStr == "" {
+				labelStr = "(unnamed)"
+			}
+			result = &ToolResult{
+				ForLLM:  fmt.Sprintf("Subagent task completed:\nLabel: %s\nResult: %s", labelStr, result.ForLLM),
+				IsError: result.IsError,
+				Async:   true,
+			}
 		}
 
 		// Call callback if provided
