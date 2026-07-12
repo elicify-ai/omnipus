@@ -13,6 +13,16 @@
 // 2026-04-20 owner reversal) is UNCHANGED by that merge — it is simply re-expressed
 // against the single merged tool name instead of the former two names.
 //
+// FR-H-006 REVERSAL (live UAT, 2026-07-12): every test in this file constructs
+// its own child registry directly via parentRegistry.CloneExcept("delegate",
+// "hand_off") on a hand-built registry — it does NOT drive the real
+// pkg/agent/subturn.go::spawnSubTurn call site, which now excludes ONLY
+// "hand_off" (delegate is retained so a delegated sub-turn can itself
+// delegate onward, gated by the trust-graph/mode/depth system — see
+// pkg/agent/subturn_delegate_nesting_test.go). These tests remain valid as
+// exercises of the CloneExcept primitive with an explicit "delegate" argument;
+// they no longer describe spawnSubTurn's actual production exclusion set.
+//
 // SCENARIO-PROVIDER GAP NOTE:
 // The ideal implementation would use a scenario-provider mock LLM that emits tool calls
 // in a scripted sequence. The current test infrastructure uses a mockProvider (returns

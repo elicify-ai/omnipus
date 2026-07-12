@@ -217,3 +217,133 @@ describe('chat store — delegator/delegate token attribution (regression)', () 
     expect(msgs[0].agentId).toBe('jim')
   })
 })
+
+// Bug 2 regression (live UAT, persona Dana, DOM evidence via
+// data-testid="agent-label"): in SYNCHRONOUS/AWAIT-mode delegation
+// specifically, the delegator's OWN "Delegate task" tool-call card rendered
+// inside a bubble labeled with the DELEGATE's agent-label instead of the
+// delegator's — distinct from (and not fixed by) the token-attribution fix
+// above, which only stamps agentId from 'token' frames.
+//
+// Root cause: the top-level (non-spanned) `tool_call_start` handler in
+// chat.ts never stamped `agentId` on an EXISTING bubble it reused — only on
+// a brand-new placeholder it created. frame.agent_id on a tool_call_start is
+// always the CALLER of the tool (pkg/agent/turn.go's
+// appendToolCallTranscript / resolveActiveAgentID; replay.go's buildStart
+// sources it from the owning TranscriptEntry.AgentID) — for the delegator's
+// own "delegate" call, that's the delegator, never the delegate. When the
+// delegator emits NO leading narration before calling `delegate` (the fast,
+// ~1s synchronous round-trip described in the bug report), the optimistic
+// placeholder sendMessage() creates (no agentId at creation) is STILL
+// unattributed when tool_call_start fires — and stays that way, since the
+// old code never stamped it there either. The delegate's own reply tokens
+// then arrive (its sub-turn shares the parent's transcriptSessionID/
+// transcriptStore per pkg/agent/subturn.go regardless of Async), and because
+// the `token` case's agent_id-boundary rule (Fix 5a) only opens a NEW bubble
+// when BOTH sides are known and mismatched, an unset bubble agentId is
+// permissive — the delegate's tokens silently claim the WHOLE bubble,
+// including the delegator's own tool-call card.
+//
+// In background/async-mode delegation this window rarely bites because the
+// delegator's own turn continues immediately and typically stamps the
+// bubble with its own id before the (genuinely concurrent) delegate's
+// tokens arrive — matching the bug report's confirmation that async mode
+// was already correct.
+//
+// Fix: stamp/lock `agentId` from `frame.agent_id` when tool_call_start
+// reuses an existing bubble, exactly mirroring what the 'token' case
+// already does — so the bubble's identity is locked to its rightful owner
+// (the tool's caller) the instant the call starts, before any later frame
+// from a different producer can land on it.
+describe('chat store — synchronous/await-mode delegate tool-call attribution (Bug 2 regression)', () => {
+  it('the delegator\'s own "Delegate task" call is attributed to the delegator, not the delegate, in a fast synchronous round-trip', () => {
+    // sendMessage() creates the optimistic placeholder with NO agentId yet —
+    // this is the exact race window the bug lived in.
+    act(() => {
+      useChatStore.getState().appendMessage({
+        id: 'optimistic-sync-1',
+        session_id: SESSION_ID,
+        role: 'assistant',
+        content: '',
+        timestamp: new Date().toISOString(),
+        status: 'streaming',
+        isStreaming: true,
+      })
+    })
+
+    // Jim (the delegator) calls `delegate` with ZERO leading narration — no
+    // prior token frame has stamped the placeholder's agentId yet.
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'tool_call_start', call_id: 'delegate_sync_1', tool: 'delegate', params: { task: 'Ping' }, agent_id: 'jim', session_id: SESSION_ID,
+      })
+    })
+
+    // THE core Bug 2 regression assertion: the bubble holding the
+    // delegator's own tool-call card must already be attributed to the
+    // delegator as soon as the call starts — not left unattributed for a
+    // later frame to claim.
+    const afterStart = useChatStore.getState().messages
+    expect(afterStart).toHaveLength(1)
+    expect(afterStart[0].agentId).toBe('jim')
+
+    // The delegate's synchronous sub-turn runs with zero nested tool calls
+    // (matching the bug report's DOM evidence: "0 steps") and its own reply
+    // streams back on the SAME session, correctly carrying the delegate's
+    // own agent_id on the wire.
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'token', content: 'pong', agent_id: 'explorer', session_id: SESSION_ID })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'tool_call_result', call_id: 'delegate_sync_1', tool: 'delegate', result: { steps: 0 }, status: 'success', duration_ms: 1000, session_id: SESSION_ID,
+      })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'done', session_id: SESSION_ID })
+    })
+
+    const final = useChatStore.getState().messages
+    // The delegator's own tool-call card and the delegate's reply must
+    // render in SEPARATE, correctly-labeled bubbles — never a single bubble
+    // mislabeled with the delegate's name.
+    expect(final).toHaveLength(2)
+    const delegatorBubble = final.find((m) => m.agentId === 'jim')
+    const delegateBubble = final.find((m) => m.agentId === 'explorer')
+    expect(delegatorBubble, "the delegator's own bubble (holding the Delegate task card) must exist").toBeDefined()
+    expect(delegateBubble, "the delegate's own reply bubble must exist separately").toBeDefined()
+    expect(delegateBubble!.content).toBe('pong')
+    expect(delegatorBubble!.id).not.toBe(delegateBubble!.id)
+
+    // The tool call must be baked onto the DELEGATOR's bubble (the one that
+    // actually issued it), not lost, and not baked onto the delegate's
+    // bubble just because the delegate's reply happened to be the last
+    // message when the turn ended. Without this, ChatScreen.tsx's
+    // VirtualizedMessageListInner — which renders every non-last message via
+    // the historical VirtualAssistantMessageRow, reading message.tool_calls
+    // only — would show the "Delegate task" pill on the wrong bubble (or not
+    // at all) the instant the delegate's reply superseded the delegator's
+    // bubble as "last", well before this `done` frame even arrives.
+    const delegatorToolCalls = delegatorBubble!.tool_calls ?? []
+    const delegateToolCalls = delegateBubble!.tool_calls ?? []
+    expect(delegatorToolCalls).toHaveLength(1)
+    expect(delegatorToolCalls[0].id).toBe('delegate_sync_1')
+    expect(delegatorToolCalls[0].tool).toBe('delegate')
+    expect(delegatorToolCalls[0].status).toBe('success')
+    expect(delegateToolCalls).toHaveLength(0)
+  })
+
+  it('a top-level tool call started by the SAME agent already holding the bubble is a harmless re-stamp (no regression)', () => {
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'token', content: 'Running a command.', agent_id: 'jim', session_id: SESSION_ID })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'tool_call_start', call_id: 'shell_1', tool: 'shell', params: { cmd: 'echo hi' }, agent_id: 'jim', session_id: SESSION_ID,
+      })
+    })
+    const msgs = useChatStore.getState().messages
+    expect(msgs).toHaveLength(1)
+    expect(msgs[0].agentId).toBe('jim')
+  })
+})

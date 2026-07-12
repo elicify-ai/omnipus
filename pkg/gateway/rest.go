@@ -3296,7 +3296,23 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 					// Heartbeat is workspace-scoped (ADR-027); per-agent heartbeat fields
 					// are ignored on PUT. Workspace handler manages member_configs.
 					// Optimistic concurrency timestamp: refresh on every successful save.
-					agentMap["updated_at"] = now.Format(time.RFC3339)
+					// RFC3339Nano (not RFC3339): the frontend uses this field as an
+					// ordinal "is this newer" comparator (lastIncorporatedUpdatedAtRef in
+					// AgentProfile.tsx). Whole-second RFC3339 precision let two distinct
+					// autosave writes within the same wall-clock second collide on an
+					// identical truncated timestamp, defeating the ordinal comparison and
+					// silently discarding a legitimate newer save (reopening the P-F2
+					// fallback_models data-loss class this fix wave closed). Sub-second
+					// precision is schema-safe: Agent.yaml/AgentUpdateRequest.yaml both
+					// declare updated_at as `format: date-time`, which permits RFC3339's
+					// optional fractional-second component, and time.Parse(time.RFC3339, ...)
+					// already parses fractional seconds correctly even though the RFC3339
+					// layout constant doesn't declare them (verified: Go's time.Parse
+					// special-cases a trailing fractional-second field regardless of
+					// layout) — so the read-back parse at persistedAt above, and
+					// config.AgentConfig.UpdatedAt's *time.Time JSON unmarshal, both keep
+					// working unmodified against the higher-precision value.
+					agentMap["updated_at"] = now.Format(time.RFC3339Nano)
 					break
 				}
 			}
