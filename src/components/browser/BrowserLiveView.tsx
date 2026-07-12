@@ -757,7 +757,11 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, onHandT
     if (isPrintableKey(e)) {
       wsRef.current?.sendInput({ kind: 'text', text: e.key, modifiers })
     } else {
-      wsRef.current?.sendInput({ kind: 'key_down', key: e.key, code: e.code, modifiers })
+      // key_code (DOM KeyboardEvent.keyCode) is REQUIRED for CDP to actually
+      // perform editing/navigation keys (Backspace, Delete, Enter, Tab,
+      // arrows) and modifier shortcuts (Ctrl+A/C/V) — key/code alone deliver
+      // the event but don't delete/submit/move/select. See ADR-039.
+      wsRef.current?.sendInput({ kind: 'key_down', key: e.key, code: e.code, key_code: e.keyCode, modifiers })
     }
   }, [])
 
@@ -768,7 +772,7 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, onHandT
     // 'text' input is a one-shot insert (no matching key_up — mirrors
     // Input.insertText on the backend, which has no down/up phase).
     if (!isPrintableKey(e)) {
-      wsRef.current?.sendInput({ kind: 'key_up', key: e.key, code: e.code, modifiers: computeModifiers(e) })
+      wsRef.current?.sendInput({ kind: 'key_up', key: e.key, code: e.code, key_code: e.keyCode, modifiers: computeModifiers(e) })
     }
   }, [])
 
