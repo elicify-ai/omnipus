@@ -4900,9 +4900,6 @@ func (al *AgentLoop) processSystemMessage(
 		return "", fmt.Errorf("no default agent for system message")
 	}
 
-	// Use the origin session for context
-	sessionKey := routing.BuildAgentMainSessionKey(agent.ID)
-
 	// FIX 5d (#2): resolve the originating turn's transcript session/store so
 	// this reconstructed turn persists into the SAME session the producing
 	// turn was writing to — the same "run a turn that must land in a
@@ -4927,6 +4924,53 @@ func (al *AgentLoop) processSystemMessage(
 				map[string]any{"session_id": msg.AsyncTranscriptSessionID},
 			)
 		}
+	}
+
+	// A-I4 round 6, Priority 2: scope the reconstructed turn's SessionKey to
+	// the SPECIFIC originating session (mirroring agentSessionKey's
+	// "agent:<id>:session:<sid>" convention every regular routed turn
+	// already uses — pkg/agent/loop.go:4794) rather than the agent-wide
+	// routing.BuildAgentMainSessionKey "agent:<id>:main" bucket this used to
+	// hard-code unconditionally.
+	//
+	// SessionKey drives THREE things that must never be shared across
+	// unrelated originating sessions: (1) agent.Sessions.GetHistory/
+	// SetHistory/Save — the in-memory LLM conversation history this turn's
+	// prompt is built from (loop.go:5415, 6223, 6367, 7819, 7944, 8084,
+	// 8254, 8464, 8949-8951); (2) activeTurnStates registration/lookup; and
+	// (3) the per-scope sessionWorker (pkg/agent/session_worker.go) that
+	// serializes turns and steers same-scope late-arriving messages into an
+	// ALREADY-RUNNING turn rather than starting a new one.
+	//
+	// Root cause this closes (A-I4 round 6 Priority 2 cross-session leak,
+	// live-verified 2026-07): every delegate-completion notification for the
+	// SAME agent — regardless of which real chat session originated the
+	// underlying delegate/background work — used to collapse onto the ONE
+	// "agent:<id>:main" key. Two delegate completions for the same agent
+	// landing close together (routine under normal use — an orchestrator
+	// like Jim commonly has several concurrent background delegates) then
+	// shared: the same in-memory history bucket (so the second notify-turn's
+	// LLM prompt was contaminated with the first, unrelated notify-turn's
+	// conversation, producing a recap that blends or hallucinates facts from
+	// a DIFFERENT session's delegation — reproduced live: a session that
+	// only ever delegated to "Ava" received a persisted assistant turn
+	// narrating a nonexistent "delegation to Ray" pulled from an unrelated
+	// session's exchange); and the same sessionWorker scope (so the second
+	// notify-turn could be STEERED into the first's still-running turn as a
+	// mid-turn continuation instead of running as its own turn — see
+	// session_worker.go's enqueue doc comment — further blending two
+	// unrelated sessions' content into one LLM call).
+	//
+	// TranscriptSessionID/TranscriptStore (already correctly scoped by FIX
+	// 5d above) only controls WHERE the turn's output is persisted — it does
+	// nothing to isolate WHAT content that turn's own LLM call is built
+	// from. Both must agree for one session's recap to never see another
+	// session's data. Falls back to the unscoped main key only when no
+	// origin session is known (a system message with no AsyncNotifier
+	// origin), matching the pre-fix behavior for that narrower case.
+	sessionKey := routing.BuildAgentMainSessionKey(agent.ID)
+	if transcriptSessionID != "" {
+		sessionKey = fmt.Sprintf("agent:%s:session:%s", agent.ID, transcriptSessionID)
 	}
 
 	return al.runAgentLoop(ctx, agent, processOptions{
