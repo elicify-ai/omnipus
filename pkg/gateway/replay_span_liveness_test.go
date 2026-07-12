@@ -187,11 +187,24 @@ func TestStreamReplay_ActiveSpawnCall_NoChildrenYet_WithholdsResult(t *testing.T
 	frames, _ := runReplayWithSpanActive(t, entries, func(id string) bool { return id == "c1" })
 
 	types := frameTypes(frames)
+	// Finding C (A-I4 round 4): every spawn/delegate call now gets a
+	// subagent_start bracket unconditionally (streamReplay's isSpawnParent
+	// is isDelegateSpawnCall, not "has at least one recorded child") —
+	// matching live, which always fires EventKindSubTurnSpawn for a delegate
+	// call regardless of how many tool calls the child has made so far. A
+	// still-active 0-step call now correctly shows "0 steps, working" on
+	// reload instead of no span at all; this assertion was updated from its
+	// prior `["replay_message", "tool_call_start", "done"]` (no
+	// subagent_start) to match. subagent_end + the outer tool_call_result
+	// stay withheld (Symptom A's own regression coverage, unaffected by this
+	// change) — the placeholder ack's success/0ms result must still never be
+	// shown as done.
 	require.Equal(t,
-		[]string{"replay_message", "tool_call_start", "done"},
+		[]string{"replay_message", "tool_call_start", "subagent_start", "done"},
 		types,
-		"BUG REGRESSION: an active spawn/delegate call with no recorded children yet must still only "+
-			"emit tool_call_start — the placeholder ack's success/0ms result must never be shown as done",
+		"an active spawn/delegate call with no recorded children yet must emit tool_call_start + "+
+			"subagent_start (matching live's always-on EventKindSubTurnSpawn) but withhold subagent_end/"+
+			"tool_call_result — the placeholder ack's success/0ms result must never be shown as done",
 	)
 }
 

@@ -216,40 +216,94 @@ describe('chat store — delegator-narration/delegate-content text join (regress
   })
 })
 
-// Bug 1 regression (live UAT, "A-I4 — live vs reload rendering parity"): a
-// multi-step delegate narration (narration -> tool call -> narration -> tool
-// call -> narration) must render as the SAME single bubble on reload as it
-// does live — not one bubble per underlying Bug #416-split transcript entry.
+// Bug 1 / Finding A regression (A-I4 round 4 — live vs reload rendering
+// parity for multi-round AWAIT-mode delegation): a multi-step
+// narration -> delegate call -> narration -> delegate call -> narration
+// turn must render as the SAME single bubble on reload as it does live.
+//
+// IMPORTANT — why this test was rewritten (round 4): the PREVIOUS version of
+// this test simulated its "live sequence" using plain `web_search`/
+// `web_fetch` tool calls instead of real `delegate` calls, and never
+// exercised subagent_start/subagent_end at all. That premise was never
+// checked against a real browser. Live UAT re-verification this round (a
+// real 3-round synchronous delegation driven through an actual gateway +
+// headless browser) found that a REAL delegate call sequence rendered as
+// FOUR separate bubbles live, not one — directly contradicting what the old
+// test asserted "live" does. Root cause (traced via a real WS frame capture,
+// not guesswork): pkg/agent/subturn.go's spawnSubTurn runs a delegated child
+// through the EXACT SAME pkg/agent/loop.go runTurn/finalizeStreamer path as
+// a root turn — so the CHILD's own wsStreamer.Finalize (pkg/gateway/
+// websocket.go) fired its own live "done" WS frame the instant the child's
+// (synchronous, blocking) sub-turn finished, mid-parent-turn. DoneFrame
+// carries no turn/parent discriminator, so the client's `done` case
+// (unconditionally closes whichever bubble is currently open) prematurely
+// finalized the delegator's still-open bubble after EVERY delegate call,
+// producing N+1 bubbles for N delegate calls. Fixed by gating Finalize's
+// live-facing signals (the done frame, session-peer fan-out, markStreamed)
+// on the SAME shadow-stream-ownership check Update() already used — a
+// delegated child's streamer is never the live-stream owner, so it now never
+// sends a live "done" either. With that backend fix in place, live's ACTUAL,
+// verified behavior for a real delegate call sequence — reproduced below —
+// IS one continuous bubble: this test's assertions were always correct in
+// their OUTCOME, but the fix belongs in the BACKEND (making live's real
+// behavior match the design), never in reload's merge logic (which already
+// correctly merged same-turn/same-agent entries and was not the bug).
+//
+// This rewrite exercises the REAL frame shapes a delegate call actually
+// produces — tool_call_start{tool:"delegate"} bracketed by subagent_start/
+// subagent_end — for both the live and reload sequences, verified against
+// the real WS frame capture from a live gateway (3 sequential AWAIT-mode
+// delegate calls, glm-5.2, 2026-07-12): live produces exactly one "done"
+// frame (at the true end of the whole turn, not one per delegate round), one
+// continuous bubble with all narration + all 3 tool-call chips + all 3
+// nested subagent spans, and reload of that exact persisted session
+// reproduces the identical bubble/tool-call/span structure.
+//
 // See the merge-boundary fix in the `replay_message` case of chat.ts (turn_id
 // + agent_id as the replay-side equivalent of the live 'token' case's
 // agent_id-boundary rule) and the corresponding
 // ChatStore_ReplaySequence_InterleavedTurn_TwoFrames tests in chat.test.ts.
-describe('chat store — live vs reload rendering parity for multi-step delegate narration (Bug 1 regression, A-I4)', () => {
-  it('a multi-step await-mode delegate narration renders as ONE bubble both live and on reload — same bubble count, same content, same tool-call count, one model tag not one per split segment', () => {
-    // ── Live sequence: Ray narrates, calls a tool, narrates again, calls
-    // another tool, then narrates a final synthesis — all as ONE continuous
-    // live token stream sharing Ray's own agent_id throughout (the bubble
-    // never closes mid-sub-turn; see Fix 5a / the 'token' case).
+describe('chat store — live vs reload rendering parity for multi-round delegate calls (Bug 1 / Finding A regression, A-I4 round 4)', () => {
+  it('a 2-round await-mode delegation renders as ONE bubble both live and on reload — same bubble count, same content, same tool-call count, same span count, one model tag not one per split segment', () => {
+    // ── Live sequence: Ray narrates, calls delegate (bracketed by
+    // subagent_start/end, matching a real await-mode delegation), narrates
+    // again, calls delegate a second time, then narrates a final synthesis —
+    // all as ONE continuous live token stream sharing Ray's own agent_id
+    // throughout. Exactly ONE 'done' frame at the very end (the backend fix
+    // under test: a delegate child's own Finalize must never send a live
+    // "done" mid-turn).
     act(() => {
-      useChatStore.getState().handleFrame({ type: 'token', content: 'Step 1: searching for sources.', agent_id: 'ray', session_id: SESSION_ID })
+      useChatStore.getState().handleFrame({ type: 'token', content: 'Step 1: researching topic alpha.', agent_id: 'ray', session_id: SESSION_ID })
     })
     act(() => {
-      useChatStore.getState().handleFrame({ type: 'tool_call_start', call_id: 'search_1', tool: 'web_search', params: { query: 'x' }, agent_id: 'ray', session_id: SESSION_ID })
+      useChatStore.getState().handleFrame({ type: 'tool_call_start', call_id: 'delegate_1', tool: 'delegate', params: { task: 'alpha', async: false }, agent_id: 'ray', session_id: SESSION_ID })
     })
     act(() => {
-      useChatStore.getState().handleFrame({ type: 'tool_call_result', call_id: 'search_1', tool: 'web_search', result: { hits: 3 }, status: 'success', duration_ms: 500, session_id: SESSION_ID })
+      useChatStore.getState().handleFrame({ type: 'subagent_start', span_id: 'span_delegate_1', parent_call_id: 'delegate_1', task_label: 'topic alpha', agent_id: 'ray', session_id: SESSION_ID })
     })
     act(() => {
-      useChatStore.getState().handleFrame({ type: 'token', content: 'Step 2: fetching the top result.', agent_id: 'ray', session_id: SESSION_ID })
+      useChatStore.getState().handleFrame({ type: 'subagent_end', span_id: 'span_delegate_1', parent_call_id: 'delegate_1', status: 'success', duration_ms: 900, agent_id: 'ray', session_id: SESSION_ID })
     })
     act(() => {
-      useChatStore.getState().handleFrame({ type: 'tool_call_start', call_id: 'fetch_1', tool: 'web_fetch', params: { url: 'https://example.com' }, agent_id: 'ray', session_id: SESSION_ID })
+      useChatStore.getState().handleFrame({ type: 'tool_call_result', call_id: 'delegate_1', tool: 'delegate', result: 'Subagent task completed:\nLabel: topic alpha\nResult: alpha-result', status: 'success', duration_ms: 900, agent_id: 'ray', session_id: SESSION_ID })
     })
     act(() => {
-      useChatStore.getState().handleFrame({ type: 'tool_call_result', call_id: 'fetch_1', tool: 'web_fetch', result: { body: '...' }, status: 'success', duration_ms: 300, session_id: SESSION_ID })
+      useChatStore.getState().handleFrame({ type: 'token', content: 'Step 2: researching topic beta.', agent_id: 'ray', session_id: SESSION_ID })
     })
     act(() => {
-      useChatStore.getState().handleFrame({ type: 'token', content: 'Final answer: the sources agree on X.', agent_id: 'ray', session_id: SESSION_ID })
+      useChatStore.getState().handleFrame({ type: 'tool_call_start', call_id: 'delegate_2', tool: 'delegate', params: { task: 'beta', async: false }, agent_id: 'ray', session_id: SESSION_ID })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'subagent_start', span_id: 'span_delegate_2', parent_call_id: 'delegate_2', task_label: 'topic beta', agent_id: 'ray', session_id: SESSION_ID })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'subagent_end', span_id: 'span_delegate_2', parent_call_id: 'delegate_2', status: 'success', duration_ms: 1100, agent_id: 'ray', session_id: SESSION_ID })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'tool_call_result', call_id: 'delegate_2', tool: 'delegate', result: 'Subagent task completed:\nLabel: topic beta\nResult: beta-result', status: 'success', duration_ms: 1100, agent_id: 'ray', session_id: SESSION_ID })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'token', content: 'Both topics are done.', agent_id: 'ray', session_id: SESSION_ID })
     })
     act(() => {
       useChatStore.getState().handleFrame({ type: 'done', session_id: SESSION_ID })
@@ -260,49 +314,62 @@ describe('chat store — live vs reload rendering parity for multi-step delegate
     expect(liveMsgs).toHaveLength(1)
     expect(liveMsgs[0].agentId).toBe('ray')
     expect(liveMsgs[0].content).toBe(
-      'Step 1: searching for sources.\n\n' +
-        'Step 2: fetching the top result.\n\n' +
-        'Final answer: the sources agree on X.',
+      'Step 1: researching topic alpha.\n\n' +
+        'Step 2: researching topic beta.\n\n' +
+        'Both topics are done.',
     )
     // Live 'token' streaming never sets .model — only replay_message does.
     expect(liveMsgs[0].model).toBeUndefined()
     expect(liveMsgs[0].tool_calls ?? []).toHaveLength(2)
+    expect(liveMsgs[0].spans ?? []).toHaveLength(2)
 
     // ── Reload sequence: the SAME turn, replayed from a transcript that
     // persisted the Bug #416-split entries — three separate replay_message
     // frames sharing ONE turn_id (ts.turnID) and Ray's agent_id, interleaved
-    // with the same two tool calls (pkg/gateway/replay.go emits one
-    // replay_message per non-empty-content entry, and one
-    // tool_call_start/result pair per persisted ToolCall).
+    // with the same two delegate calls, each bracketed by subagent_start/end
+    // exactly as pkg/gateway/replay.go emits them for a spawn/delegate call
+    // with recorded children (FR-I-003).
     act(() => { useChatStore.getState().resetSession() })
 
     act(() => {
       useChatStore.getState().handleFrame({
-        type: 'replay_message', role: 'assistant', content: 'Step 1: searching for sources.',
+        type: 'replay_message', role: 'assistant', content: 'Step 1: researching topic alpha.',
         id: 'r-entry-1', agent_id: 'ray', turn_id: 'ray-subturn-1', model: 'z-ai/glm-5.2', session_id: SESSION_ID,
       })
     })
     act(() => {
-      useChatStore.getState().handleFrame({ type: 'tool_call_start', call_id: 'search_1', tool: 'web_search', params: { query: 'x' }, agent_id: 'ray', session_id: SESSION_ID })
+      useChatStore.getState().handleFrame({ type: 'tool_call_start', call_id: 'delegate_1', tool: 'delegate', params: { task: 'alpha', async: false }, agent_id: 'ray', session_id: SESSION_ID })
     })
     act(() => {
-      useChatStore.getState().handleFrame({ type: 'tool_call_result', call_id: 'search_1', tool: 'web_search', result: { hits: 3 }, status: 'success', duration_ms: 500, session_id: SESSION_ID })
+      useChatStore.getState().handleFrame({ type: 'subagent_start', span_id: 'span_delegate_1', parent_call_id: 'delegate_1', task_label: 'topic alpha', agent_id: 'ray', session_id: SESSION_ID })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'subagent_end', span_id: 'span_delegate_1', parent_call_id: 'delegate_1', status: 'success', duration_ms: 900, agent_id: 'ray', session_id: SESSION_ID })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'tool_call_result', call_id: 'delegate_1', tool: 'delegate', result: 'Subagent task completed:\nLabel: topic alpha\nResult: alpha-result', status: 'success', duration_ms: 900, agent_id: 'ray', session_id: SESSION_ID })
     })
     act(() => {
       useChatStore.getState().handleFrame({
-        type: 'replay_message', role: 'assistant', content: 'Step 2: fetching the top result.',
+        type: 'replay_message', role: 'assistant', content: 'Step 2: researching topic beta.',
         id: 'r-entry-2', agent_id: 'ray', turn_id: 'ray-subturn-1', model: 'z-ai/glm-5.2', session_id: SESSION_ID,
       })
     })
     act(() => {
-      useChatStore.getState().handleFrame({ type: 'tool_call_start', call_id: 'fetch_1', tool: 'web_fetch', params: { url: 'https://example.com' }, agent_id: 'ray', session_id: SESSION_ID })
+      useChatStore.getState().handleFrame({ type: 'tool_call_start', call_id: 'delegate_2', tool: 'delegate', params: { task: 'beta', async: false }, agent_id: 'ray', session_id: SESSION_ID })
     })
     act(() => {
-      useChatStore.getState().handleFrame({ type: 'tool_call_result', call_id: 'fetch_1', tool: 'web_fetch', result: { body: '...' }, status: 'success', duration_ms: 300, session_id: SESSION_ID })
+      useChatStore.getState().handleFrame({ type: 'subagent_start', span_id: 'span_delegate_2', parent_call_id: 'delegate_2', task_label: 'topic beta', agent_id: 'ray', session_id: SESSION_ID })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'subagent_end', span_id: 'span_delegate_2', parent_call_id: 'delegate_2', status: 'success', duration_ms: 1100, agent_id: 'ray', session_id: SESSION_ID })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'tool_call_result', call_id: 'delegate_2', tool: 'delegate', result: 'Subagent task completed:\nLabel: topic beta\nResult: beta-result', status: 'success', duration_ms: 1100, agent_id: 'ray', session_id: SESSION_ID })
     })
     act(() => {
       useChatStore.getState().handleFrame({
-        type: 'replay_message', role: 'assistant', content: 'Final answer: the sources agree on X.',
+        type: 'replay_message', role: 'assistant', content: 'Both topics are done.',
         id: 'r-entry-3', agent_id: 'ray', turn_id: 'ray-subturn-1', model: 'z-ai/glm-5.2', session_id: SESSION_ID,
       })
     })
@@ -319,8 +386,11 @@ describe('chat store — live vs reload rendering parity for multi-step delegate
     expect(reloadMsgs[0].agentId).toBe(liveMsgs[0].agentId)
     // Content matches live byte-for-byte.
     expect(reloadMsgs[0].content).toBe(liveMsgs[0].content)
-    // Both tool calls land on the SAME merged bubble, matching live.
+    // Both delegate calls land on the SAME merged bubble, matching live.
     expect((reloadMsgs[0].tool_calls ?? []).length).toBe((liveMsgs[0].tool_calls ?? []).length)
+    // Finding C: both nested subagent spans land on the SAME merged bubble
+    // too, matching live — not silently dropped.
+    expect((reloadMsgs[0].spans ?? []).length).toBe((liveMsgs[0].spans ?? []).length)
     // Exactly one model tag on the merged bubble — not one per split segment.
     expect(reloadMsgs[0].model).toBe('z-ai/glm-5.2')
   })
