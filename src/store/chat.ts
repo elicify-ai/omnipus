@@ -1445,13 +1445,14 @@ export const useChatStore = create<ChatStore>((set, get) => {
         get()._validateOutboundFrame(payload, activeSessionId)
         const sent = connection.send(payload)
 
-        // W2-7c: clear the nextModel slot AFTER the WS send so a failed
-        // send leaves the user's pick intact (they can Retry without
-        // having to re-pick the model). Clearing before the send would
-        // silently lose the override on a transport rejection.
-        if (sent) {
-          set({ nextModel: null })
-        }
+        // Sticky model selection: the user's picked model PERSISTS after a
+        // successful send (previously it was cleared to null here, so the
+        // composer selector snapped back to the agent default and the pick had
+        // to be re-made every message). Keeping it means the composer keeps
+        // showing the chosen model and the NEXT message defaults to the same
+        // one — matching ChatControls' re-seed-from-last-used-model intent. A
+        // failed send already kept it (for Retry); switching session/agent
+        // re-seeds it from that session's last-used model.
 
         if (!sent) {
           // #253 (P0 data loss): the user turn must NEVER be silently dropped.
@@ -1523,12 +1524,9 @@ export const useChatStore = create<ChatStore>((set, get) => {
         get()._validateOutboundFrame(payload2, pendingSid)
         const sent = connection.send(payload2)
 
-        // W2-7c: see comment in the active-session branch above — we
-        // clear AFTER the send so a transport rejection leaves the
-        // pick in place for Retry.
-        if (sent) {
-          set({ nextModel: null })
-        }
+        // Sticky model selection — see the active-session branch above: the
+        // pick persists after a successful send so the composer keeps showing
+        // it and the next message defaults to the same model.
         if (!sent) {
           // #253(a): Mark the user message with status:'error' and remove the
           // optimistic assistant placeholder. This preserves the typed content
