@@ -5901,9 +5901,15 @@ turnLoop:
 					logger.InfoCF("agent", "Using streaming for response", map[string]any{"channel": ts.channel, "chat_id": ts.chatID})
 					// FIX 5a/5c: stamp the TRUE per-turn producer and this turn's own
 					// ID before any token can flow — see stampStreamerProducerAgentID
-					// and stampStreamerTurnID's doc comments.
+					// and stampStreamerTurnID's doc comments. stampStreamerParentSpawnCallID
+					// additionally stamps this turn's delegation-nesting correlation
+					// (empty for a root turn) so a delegate's own streamed final
+					// response round-trips through Finalize with the same
+					// ParentSpawnCallID its non-streaming siblings carry — see its
+					// own doc comment.
 					ts.stampStreamerProducerAgentID(streamer)
 					ts.stampStreamerTurnID(streamer)
+					ts.stampStreamerParentSpawnCallID(streamer)
 					var lastChunk string
 					resp, streamErr := sp.ChatStream(providerCtx, messagesForCall, toolDefsForCall, llmModel, llmOpts, func(accumulated string) {
 						// B4: if the turn has been abandoned (stuck-goroutine detach),

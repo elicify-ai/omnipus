@@ -2737,9 +2737,18 @@ type wsStreamer struct {
 	// backward-walk (pkg/session/unified.go, requires e.TurnID == turnID)
 	// can never match a real entry either, silently disabling the Truncated
 	// flag for every real cancel. Guarded by statsMu like agentID.
-	turnID      string
-	channel     *webchatChannel // to mark streaming complete and suppress duplicate Send()
-	accumulated strings.Builder // accumulates full response text
+	turnID string
+	// parentSpawnCallID identifies the spawning "delegate"/"spawn" ToolCall.ID
+	// in the PARENT turn when this streamer belongs to a CHILD delegation
+	// sub-turn (empty for a root/non-delegated turn). Stamped by the agent
+	// loop via SetParentSpawnCallID, mirroring SetTurnID's pattern exactly.
+	// Carried onto the transcript entry Finalize writes so
+	// pkg/gateway/replay.go can withhold a delegate's own streamed narration
+	// from top-level replay — see session.TranscriptEntry.ParentSpawnCallID's
+	// doc comment. Guarded by statsMu like turnID/agentID.
+	parentSpawnCallID string
+	channel           *webchatChannel // to mark streaming complete and suppress duplicate Send()
+	accumulated       strings.Builder // accumulates full response text
 
 	// producedModel is the model string that produced this streamed response.
 	// Set by the agent loop via SetProducedModel before Finalize so the
@@ -2913,6 +2922,26 @@ func (s *wsStreamer) SetTurnID(turnID string) {
 	}
 	s.statsMu.Lock()
 	s.turnID = turnID
+	s.statsMu.Unlock()
+}
+
+// SetParentSpawnCallID stamps the delegation-nesting correlation that will be
+// attributed to the transcript entry Finalize writes. Called by the agent
+// loop (via the inline SetParentSpawnCallID interface, mirroring SetTurnID
+// exactly) immediately after obtaining the streamer for an LLM streaming
+// call, before any Update/Finalize can observe it.
+//
+// Unlike SetTurnID/SetProducerAgentID, an EMPTY parentSpawnCallID is a valid,
+// common value — it means "this is a root turn, not a delegation child" —
+// so, unlike those two setters, this one does NOT no-op on empty; it always
+// stamps whatever the caller passes (including clearing back to "" for a
+// caller that resolves no parent span, which should never blank out a
+// previously-stamped value in practice since each wsStreamer instance is
+// single-use for one turn, but matches the field's own zero-value semantics
+// rather than silently refusing a legitimate "no parent" write).
+func (s *wsStreamer) SetParentSpawnCallID(parentSpawnCallID string) {
+	s.statsMu.Lock()
+	s.parentSpawnCallID = parentSpawnCallID
 	s.statsMu.Unlock()
 }
 
@@ -3101,6 +3130,7 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 	// goroutine than Finalize (called at turn end).
 	producerAgentID := s.agentID
 	turnID := s.turnID
+	parentSpawnCallID := s.parentSpawnCallID
 	s.statsMu.Unlock()
 
 	// Release this turn's live-stream ownership claim (if held) so a
@@ -3173,6 +3203,14 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 				Tokens:    int(tokensF),
 				Cost:      costF,
 				Model:     producedModel,
+				// ParentSpawnCallID: stamped via SetParentSpawnCallID so a
+				// delegation child sub-turn's own streamed narration/final
+				// response carries the same nesting correlation its
+				// non-streaming siblings (appendIntermediateAssistantTranscript
+				// / appendAssistantTranscript) already stamp — see
+				// session.TranscriptEntry.ParentSpawnCallID's doc comment.
+				// Empty (the common case) for a root turn.
+				ParentSpawnCallID: parentSpawnCallID,
 			}
 			if err := s.agentStore.AppendTranscript(s.sessionID, entry); err != nil {
 				slog.Warn("ws: could not record streamed assistant message", "session_id", s.sessionID, "error", err)
