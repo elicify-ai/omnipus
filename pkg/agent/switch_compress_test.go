@@ -471,32 +471,24 @@ func TestSwitchTime_UnknownModel_SurfacesToUserNotJustLog(t *testing.T) {
 		"the error entry should also name the model the turn actually used, so the user "+
 			"understands what happened")
 
-	// --- 2. Live signal: both EventKindError (persistence-companion, FR-002
-	//        pattern) and EventKindNotification (live, in-session visibility)
-	//        must have been emitted for this failure.
-	var sawError, sawNotification bool
+	// --- 2. Live signal: an EventKindError (persistence-companion, FR-002
+	//        pattern) must have been emitted for this failure. (No notification
+	//        frame: `model_switch_failed` is not a contract NotificationFrame
+	//        notification_type, so the SPA would drop it — the error event +
+	//        the transcript entry above are the surfacing.)
+	var sawError bool
 	drain := time.After(2 * time.Second)
-	for !sawError || !sawNotification {
+	for !sawError {
 		select {
 		case evt := <-sub.C:
-			switch evt.Kind {
-			case EventKindError:
+			if evt.Kind == EventKindError {
 				if p, ok := evt.Payload.(ErrorPayload); ok && p.Stage == "model_switch" {
 					sawError = true
 					assert.Contains(t, p.Message, typoModel)
 				}
-			case EventKindNotification:
-				if p, ok := evt.Payload.(NotificationPayload); ok && p.NotificationType == "model_switch_failed" {
-					sawNotification = true
-					assert.Equal(t, "warning", p.Severity)
-					assert.NotEmpty(t, p.ID, "notification ID must be set (non-empty) for the wire's required id field")
-					assert.Contains(t, p.Body, typoModel)
-				}
 			}
 		case <-drain:
-			t.Fatalf("timed out waiting for both EventKindError(model_switch) and "+
-				"EventKindNotification(model_switch_failed); sawError=%v sawNotification=%v",
-				sawError, sawNotification)
+			t.Fatalf("timed out waiting for EventKindError(model_switch)")
 		}
 	}
 }

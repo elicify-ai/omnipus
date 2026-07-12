@@ -510,23 +510,17 @@ func TestResolveModelCfg_PassthroughTieBreak_VivgridOnly(t *testing.T) {
 }
 
 // =============================================================================
-// W2-27 — knownProviderPrefixes whitelist (additional prefixes)
+// W2-27 (revised) — vendor-prefixed slugs route through a passthrough aggregator
 // =============================================================================
 //
-// W2-27 (test-analyzer-A #11) flagged that the 16-prefix whitelist is only
-// exercised via the openai prefix in existing tests. A typo regression in
-// any other prefix would be invisible. We lock the prefix list at
-// load-time by reading the same source as ResolveModelCfg and asserting
-// every documented prefix is present.
-//
-// We don't import the unexported map from another package; we just look up
-// a few representative prefixes through ResolveModelCfg, which reads
-// knownProviderPrefixes internally.
-func TestResolveModelCfg_AdditionalPrefixes_NotHijacked(t *testing.T) {
-	// Build a cfg that ONLY has openrouter configured (so the passthrough
-	// fallback is the ONLY way to handle a bare slug). For each known
-	// provider prefix, the input "<prefix>/<model>" must be REJECTED —
-	// passthrough must NOT silently rewrite a deliberately-prefixed input.
+// Supersedes the original W2-27 "additional prefixes are NOT hijacked"
+// assertion, which locked in the regression this test now guards against: with
+// only an OpenRouter (aggregator) provider configured, a vendor-prefixed slug
+// like "anthropic/…" or "google/…" is one of OpenRouter's OWN catalog ids and
+// MUST route through openrouter — it is not a request for a separately
+// configured "anthropic"/"google" provider. The old guard rejected all of
+// these, so every OpenRouter catalog pick silently fell back to the default.
+func TestResolveModelCfg_VendorPrefixedSlugs_RouteViaPassthrough(t *testing.T) {
 	cfg := &config.Config{
 		Providers: []*config.ModelConfig{
 			{
@@ -539,24 +533,22 @@ func TestResolveModelCfg_AdditionalPrefixes_NotHijacked(t *testing.T) {
 		},
 	}
 
-	// These prefixes are documented in knownProviderPrefixes. For each, an
-	// input "<prefix>/gpt-4o" must be REJECTED because no such provider
-	// is configured. This locks the BDD-23 / Dataset 1 row 4 contract:
-	// passthrough MUST NOT silently rewrite an explicit provider request.
+	// Each of these is a real OpenRouter catalog vendor prefix; with openrouter
+	// configured they must resolve THROUGH openrouter, not error.
 	prefixes := []string{
 		"anthropic", "azure", "azure-openai", "google", "gemini",
 		"bedrock", "cohere", "mistral", "groq", "deepseek",
-		"xai", "perplexity",
+		"xai", "perplexity", "openai",
 	}
 	for _, p := range prefixes {
 		t.Run(p, func(t *testing.T) {
-			_, err := ResolveModelCfg(cfg, p+"/gpt-4o", "")
-			require.Error(t, err,
-				"prefix %q is in knownProviderPrefixes and must NOT be hijacked by passthrough; "+
-					"resolve must return an error when no such provider is configured", p)
-			require.Contains(t, err.Error(), p,
-				"error must mention the requested prefix %q so the caller can tell which provider was missing; got %q",
-				p, err.Error())
+			mc, err := ResolveModelCfg(cfg, p+"/gpt-4o", "")
+			require.NoError(t, err,
+				"vendor-prefixed slug %q/gpt-4o must route through the configured openrouter aggregator", p)
+			require.NotNil(t, mc)
+			require.Equal(t, "openrouter", mc.Provider)
+			require.Equal(t, "openrouter/"+p+"/gpt-4o", mc.Model,
+				"the aggregator provider name is prefixed once; the vendor segment stays part of the slug")
 		})
 	}
 }
