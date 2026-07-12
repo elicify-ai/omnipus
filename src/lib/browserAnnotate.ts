@@ -81,8 +81,9 @@ export async function submitAnnotation({ comment, file, point, sessionId, agentI
   // Best-effort element enrichment (D-B3): a failure here — network error,
   // cross-origin frame, detached node, timeout, or a plain ok:false result —
   // must never block delivering the image + comment. Only a genuinely
-  // resolved element with non-empty text is appended.
-  let finalComment = comment
+  // resolved element with non-empty text contributes the extra context
+  // clause folded into the framing note below.
+  let autoContext = ''
   try {
     const inspectResult = await inspectBrowserElement({
       session_id: sessionId,
@@ -96,14 +97,13 @@ export async function submitAnnotation({ comment, file, point, sessionId, agentI
       if (text) {
         // UAT finding: the previous raw `Element: h1 — <text>` suffix read as
         // authoritative — the agent quoted the whole label (prefix included) as
-        // "the exact text in the region" instead of reading the image. Frame it
-        // explicitly as auto-detected *context* with the image as source of
-        // truth, and cap the length so a large element doesn't dump a wall of
-        // text into the chat comment.
+        // "the exact text in the region" instead of reading the image. Framed
+        // explicitly as auto-detected *context* below, folded into the SAME
+        // framing block as every send (see the blank-region note below)
+        // rather than its own separate bracket, and capped in length so a
+        // large element doesn't dump a wall of text into the chat comment.
         const snippet = text.length > 280 ? `${text.slice(0, 280)}…` : text
-        finalComment = `${comment}\n\n[Auto-detected context for the annotated region${
-          tag ? ` (<${tag}>)` : ''
-        }: "${snippet}". The attached image is the source of truth — describe what you see there.]`
+        autoContext = ` Auto-detected context for this region${tag ? ` (<${tag}>)` : ''}: "${snippet}".`
       }
     }
   } catch (err) {
@@ -112,6 +112,18 @@ export async function submitAnnotation({ comment, file, point, sessionId, agentI
     // Response) doesn't degrade silently with zero diagnostic signal.
     console.debug('[browser] inspect enrichment failed:', err)
   }
+
+  // UAT finding (Tester 2, blank-region false negative): a low-content crop
+  // (a mostly-blank background/whitespace region) paired with a short
+  // comment and no auto-detected element text left the model with nothing
+  // but a bare image attachment — it sometimes replied "I don't see an
+  // attached image" instead of describing the (genuinely sparse) region.
+  // Every send now carries this short, constant framing note — appended
+  // AFTER the user's own comment (never prepended/rewritten) — telling the
+  // model the image IS attached, IS a cropped screenshot region, and MAY be
+  // mostly blank on purpose, so it should describe what it actually sees
+  // rather than deny the attachment.
+  const finalComment = `${comment}\n\n[This is a cropped screenshot region from the live browser — it may be mostly blank.${autoContext} The attached image is the source of truth — describe what you actually see rather than saying no image was attached.]`
 
   // sendMessage always targets whatever chat is CURRENTLY active — re-check
   // right before sending (the user could have switched chats during the

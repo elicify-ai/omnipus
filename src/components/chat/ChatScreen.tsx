@@ -376,10 +376,19 @@ function SubagentSpansRenderer() {
   )
 }
 
-function AssistantMessageAvatar() {
-  const activeAgentId = useSessionStore((s) => s.activeAgentId)
+// Bug 2 (UAT, ADR-040 browser-panel round): `messageAgentId` is the CALLER's
+// already-resolved `message.agentId ?? activeAgentId` (see AssistantMessage
+// below) — the same per-message-first precedence VirtualAssistantMessageRow
+// uses for historical rows. Previously this component derived its own agent
+// straight from activeAgentId, so switching the agent picker mid-turn would
+// instantly repaint the CURRENTLY STREAMING bubble's avatar to the
+// newly-picked agent while its (correctly per-message-scoped) name label kept
+// showing the original agent — a live, user-visible mismatch that only
+// self-corrected on reload. Accepting the resolved id as a prop keeps a
+// single source of truth between the label and the avatar.
+function AssistantMessageAvatar({ messageAgentId }: { messageAgentId: string | null }) {
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
-  const agent = agents.find((a) => a.id === activeAgentId)
+  const agent = agents.find((a) => a.id === messageAgentId)
 
   return (
     <div
@@ -1033,7 +1042,7 @@ function AssistantMessage() {
       data-status={message.status?.type ?? 'complete'}
       className="group flex gap-3 px-4 py-3"
     >
-      <AssistantMessageAvatar />
+      <AssistantMessageAvatar messageAgentId={messageAgentId} />
       <div className="flex flex-col gap-1 max-w-[85%] min-w-0 flex-1">
         {agentDisplayName && (
           <span data-testid="agent-label" className="text-[10px] text-[var(--color-muted)]">{agentDisplayName}</span>

@@ -130,11 +130,15 @@ type VisualState = 'agent-working' | 'you-driving' | 'annotating' | 'error' | 'i
  * was already up and dispatch was already blocked.
  *
  * `computeDriveMode` is the ONE place priority is decided (annotating >
- * agent-working > you-driving > disconnected > other-driving > idle) —
- * `driveMode` below is computed from it every render, mirrored into
- * `driveModeRef` for the stable-identity handlers, and is what
- * `visualState`, the cursor style, the header chip, and `canDispatchInput`
- * all derive from.
+ * agent-working > you-driving > disconnected > other-driving > idle).
+ * `driveMode` below is the AUTHORITATIVE call — computed from real
+ * `isControlling` only, mirrored into `driveModeRef` for the stable-identity
+ * handlers, and is what `canDispatchInput`, the cursor style, and
+ * `handlePointerDown`'s own "can I acquire the lock" branch all derive
+ * from. It must stay tied to the confirmed server state ONLY — see
+ * `visualDriveMode`'s doc comment (further down, where `pendingTake` is
+ * folded in) for why a DISPLAY-only second call exists instead of adding an
+ * optimistic flag to this one.
  */
 type DriveMode = 'annotating' | 'agent-working' | 'you-driving' | 'disconnected' | 'other-driving' | 'idle'
 
@@ -248,7 +252,11 @@ export function BrowserLiveView({
   // browser_status round-trips back (or the take is superseded/abandoned).
   // Prevents a double-fire: a second pointerdown (or a fast double-click on
   // Take over) while a take is already in flight must NOT send a second
-  // redundant `browser_control{action:'take'}` frame.
+  // redundant `browser_control{action:'take'}` frame. The synchronous
+  // source of truth for those in-flight guards — always read/written via
+  // `setPendingTake` below so the reactive `pendingTake` state (which
+  // `driveMode` needs for the chip/glow to update immediately) never drifts
+  // out of sync with it.
   const pendingTakeRef = useRef(false)
   // True for the span of a single pointer gesture that implicitly acquired
   // the lock (click-to-drive) — lets pointermove/pointerup for THAT SAME
@@ -313,6 +321,12 @@ export function BrowserLiveView({
   // control (e.g. the docked panel and a pop-out both watching the same
   // agent) — distinct from `isControlling`, which is about THIS connection.
   const [controlledByOther, setControlledByOther] = useState(false)
+  // UAT finding A8 — the reactive mirror of pendingTakeRef (see its own doc
+  // comment): a ref alone never triggers a re-render, so `driveMode` (and
+  // therefore the header chip / glow border) kept showing stale 'idle' for
+  // the whole async gap between sending a take and its ack landing. Written
+  // ONLY via `setPendingTake` below, in lockstep with the ref.
+  const [pendingTake, setPendingTakeFlag] = useState(false)
 
   // ── Omnibox (ADR-039 D-A2, ADR-040 D5 — always visible) ──────────────────
   const [urlInput, setUrlInput] = useState('')
@@ -355,29 +369,66 @@ export function BrowserLiveView({
   // mounted standalone by two very different hosts (the docked Sheet and the
   // fullscreen pop-out, which has no app-wide providers set up beyond its own
   // route tree), and a plain `queryClient.getQueryData` read needs no
-  // `QueryClientProvider` in the tree, never issues its own network request,
-  // and simply falls back to 'Agent' if the cache hasn't been populated yet.
-  const agentDisplayName = queryClient.getQueryData<Agent[]>(['agents'])?.find((a) => a.id === agentId)?.name ?? 'Agent'
+  // `QueryClientProvider` in the tree, never issues its own network request.
+  // `resolvedAgentName` is `undefined` when the cache miss — the header chip
+  // and the UAT-fix hand-back hint below each pick their own grammatically
+  // appropriate fallback rather than sharing one ('Agent' reads fine as a
+  // chip label; a hint sentence needs "the agent").
+  const resolvedAgentName = queryClient.getQueryData<Agent[]>(['agents'])?.find((a) => a.id === agentId)?.name
+  const agentDisplayName = resolvedAgentName ?? 'Agent'
 
-  // ── ADR-040 D2 refactor — the single "who can drive" mode (see
-  // computeDriveMode's doc comment above for the priority order and the
-  // cursor/visualState inconsistency it fixes). Everything downstream
-  // (visualState, cursor style, the header chip, canDispatchInput) derives
-  // from this ONE value instead of separately re-deriving it.
+  // ── ADR-040 D2 refactor — the single AUTHORITATIVE "who can actually
+  // drive right now" mode (see computeDriveMode's doc comment above for the
+  // priority order and the cursor/visualState inconsistency it fixes).
+  // `canDispatchInput`, the cursor style, and every pointer/keyboard/wheel
+  // handler's own gate derive from this ONE value — never from
+  // `visualDriveMode` below, which is display-only.
   const driveMode: DriveMode = computeDriveMode({ annotateMode, agentWorking, isControlling, connected, controlledByOther })
+
+  // ── UAT finding A8 (both testers) — a DISPLAY-only second call to the
+  // exact same priority function, used ONLY to compute `visualState` (→ the
+  // header chip + D6 glow border) below. A take (explicit "Take over", or
+  // the implicit click-to-drive first pointerdown) only flips the real
+  // `isControlling` once the server's 'controlling' browser_status ack
+  // round-trips back; right after Take-over, `cancelStream` (called first)
+  // often flips `agentWorking` to false well BEFORE that ack lands, so
+  // `driveMode` above used to fall all the way through to 'idle' ("Click to
+  // drive") for that whole async window — even though the user just
+  // explicitly took the wheel. Passing `isControlling: isControlling ||
+  // pendingTake` here (pendingTake: true from the instant a take is SENT
+  // until it's acknowledged/rejected/abandoned/disconnected — see
+  // `setPendingTake`) makes the chip/glow show "you're driving" immediately.
+  //
+  // Deliberately NOT folded into `driveMode` itself: an earlier version of
+  // this fix did exactly that, and it broke the "a second gesture starting
+  // while the first take is still unacked must not double-dispatch" guard —
+  // `handlePointerDown` reads the authoritative `driveMode` to decide
+  // whether it's allowed to try ACQUIRING the lock (`mode !== 'idle'`); if
+  // that read already said 'you-driving' during the optimistic window, a
+  // brand-new gesture skipped the `pendingTakeRef` in-flight check entirely
+  // and dispatched input for a take that was never actually confirmed.
+  // Keeping `driveMode` strictly tied to the confirmed `isControlling` and
+  // only optimistic-izing this separate display value avoids that.
+  const visualDriveMode: DriveMode = computeDriveMode({
+    annotateMode,
+    agentWorking,
+    isControlling: isControlling || pendingTake,
+    connected,
+    controlledByOther,
+  })
 
   // ── ADR-040 D2/D6 — the "who's driving" VISUAL bucket, used by both the
   // header chip and the D6 glow border. Folds `disconnected`/`other-driving`
   // into `idle` (the chip itself further distinguishes those — see
   // `driveChip` below) and adds the `error` bucket, which isn't part of
-  // `driveMode` at all (a transport/status error is orthogonal to who's
+  // `DriveMode` at all (a transport/status error is orthogonal to who's
   // driving). Converted from a nested ternary to if/else per CLAUDE.md.
   let visualState: VisualState
-  if (driveMode === 'annotating') {
+  if (visualDriveMode === 'annotating') {
     visualState = 'annotating'
-  } else if (driveMode === 'agent-working') {
+  } else if (visualDriveMode === 'agent-working') {
     visualState = 'agent-working'
-  } else if (driveMode === 'you-driving') {
+  } else if (visualDriveMode === 'you-driving') {
     visualState = 'you-driving'
   } else if (displayError) {
     visualState = 'error'
@@ -406,6 +457,18 @@ export function BrowserLiveView({
     cursorStyle = 'pointer'
   }
 
+  // UAT finding A8 — the ONE place `pendingTakeRef`/`pendingTake` is ever
+  // written, so the ref (synchronous guards) and the state (drives
+  // `computeDriveMode`'s render-time read) can never drift apart. Stable
+  // identity (empty deps — both setters it closes over are themselves
+  // stable), safe to call from any effect/callback below, including ones
+  // defined before this point in render order (function declarations don't
+  // need to, and refs/setState setters are available from the first render).
+  const setPendingTake = useCallback((value: boolean) => {
+    pendingTakeRef.current = value
+    setPendingTakeFlag(value)
+  }, [])
+
   useEffect(() => {
     frameRef.current = frame
   }, [frame])
@@ -417,8 +480,8 @@ export function BrowserLiveView({
     // ADR-040 D2: once the server confirms this connection holds the lock,
     // any implicit/explicit take that was in flight has resolved — clear the
     // in-flight guard so a FUTURE idle→drive transition can fire again.
-    if (isControlling) pendingTakeRef.current = false
-  }, [isControlling])
+    if (isControlling) setPendingTake(false)
+  }, [isControlling, setPendingTake])
   useEffect(() => {
     agentWorkingRef.current = agentWorking
     // A gesture-scoped implicit-drive window (see implicitDriveRef's doc
@@ -528,8 +591,10 @@ export function BrowserLiveView({
         // another by now — clear the in-flight guard unconditionally rather
         // than only on the 'controlling' branch, so a REJECTED take (e.g. an
         // error frame, or another viewer beat us to it) doesn't leave
-        // click-to-drive/Take-over permanently wedged.
-        pendingTakeRef.current = false
+        // click-to-drive/Take-over permanently wedged. Also drops the
+        // optimistic "you're driving" chip (UAT A8) if the take was in fact
+        // rejected — see `visualDriveMode`'s doc comment.
+        setPendingTake(false)
         // Reviewer finding F1: a `control_only` frame's SOLE purpose is to
         // broadcast a control-ownership change (take/release/detach) to the
         // OTHER viewers of this session — it carries no lifecycle/error
@@ -584,8 +649,9 @@ export function BrowserLiveView({
         pendingMoveRef.current = null
         // ADR-040 D2: a disconnect mid-take (or mid implicit-drive gesture)
         // must not leave either guard stuck — the fresh browser_attach →
-        // browser_status round-trip after reconnect starts clean.
-        pendingTakeRef.current = false
+        // browser_status round-trip after reconnect starts clean. Also
+        // drops the optimistic "you're driving" chip (UAT A8).
+        setPendingTake(false)
         implicitDriveRef.current = false
       },
     })
@@ -733,9 +799,14 @@ export function BrowserLiveView({
       // loop). Always pass this panel's own pinned session id.
       useChatStore.getState().cancelStream(sessionId)
     }
-    pendingTakeRef.current = true
+    // UAT finding A8: flip the reactive chip/glow to "you're driving"
+    // OPTIMISTICALLY, the same instant the take is sent — see
+    // `visualDriveMode`'s doc comment for why waiting on the server's ack
+    // (isControlling) left a visible "Click to drive" flash, and why this is
+    // display-only (driveMode/canDispatchInput still wait for the real ack).
+    setPendingTake(true)
     wsRef.current?.sendControl('take')
-  }, [sessionId])
+  }, [sessionId, setPendingTake])
 
   // ── Annotate mode (ADR-039 D-B1/B2) ─────────────────────────────────────
 
@@ -769,10 +840,13 @@ export function BrowserLiveView({
     // ADR-040 D2: also abandon any implicit-drive gesture/in-flight take —
     // entering Pen mid-gesture must not let a delayed take ack silently
     // start driving again out from under the now-active annotate mode.
+    // (computeDriveMode already gives 'annotating' top priority over a
+    // stale pendingTake, but clearing it here too keeps the ref and the
+    // reactive state from drifting once annotate mode exits again.)
     implicitDriveRef.current = false
-    pendingTakeRef.current = false
+    setPendingTake(false)
     setAnnotateMode(true)
-  }, [annotateMode, isControlling, handleCancelAnnotation])
+  }, [annotateMode, isControlling, handleCancelAnnotation, setPendingTake])
 
   // Crops the CURRENTLY-RENDERED screencast frame's <img> to a PNG File
   // (mirrors the canvas pattern in media-actions.ts's fetchImagePng). Reads
@@ -1155,10 +1229,11 @@ export function BrowserLiveView({
     if (visualState === 'error') {
       return { label: 'Error', Icon: WarningCircle, textClass: 'text-[var(--color-error)]', dotClass: 'bg-[var(--color-error)]', pulse: false }
     }
-    // 'idle' visualState — driveMode further distinguishes disconnected/
-    // other-driving/genuinely-idle, reading the SAME single source of truth
-    // instead of re-deriving `!connected`/`controlledByOther` here too.
-    if (driveMode === 'disconnected') {
+    // 'idle' visualState — visualDriveMode further distinguishes
+    // disconnected/other-driving/genuinely-idle, reading the SAME display
+    // source of truth `visualState` itself derives from, instead of
+    // re-deriving `!connected`/`controlledByOther` here too.
+    if (visualDriveMode === 'disconnected') {
       return {
         label: statusState === 'disconnected' ? 'Reconnecting…' : 'Connecting…',
         Icon: SpinnerGap,
@@ -1167,7 +1242,7 @@ export function BrowserLiveView({
         pulse: false,
       }
     }
-    if (driveMode === 'other-driving') {
+    if (visualDriveMode === 'other-driving') {
       return { label: 'Someone else is driving', Icon: Eye, textClass: 'text-[var(--color-muted)]', dotClass: 'bg-[var(--color-muted)]', pulse: false }
     }
     return { label: 'Click to drive', Icon: Eye, textClass: 'text-[var(--color-muted)]', dotClass: 'bg-[var(--color-muted)]', pulse: false }
@@ -1286,6 +1361,23 @@ export function BrowserLiveView({
           </button>
         )}
       </div>
+
+      {/* UAT finding (both testers): neither could discover that sending a
+          chat message hands control back to the agent — the file header
+          comment explains the mechanism ("handing back is just sending a
+          chat message") but nothing on screen ever hinted at it. A single
+          small, muted line — shown ONLY while the user actually holds the
+          wheel (`visualState === 'you-driving'`, which now also covers the
+          UAT-A8 optimistic pendingTake window right after Take-over) — right
+          under the header where the "You're driving" chip already lives. */}
+      {visualState === 'you-driving' && (
+        <p
+          data-testid="browser-live-handback-hint"
+          className="shrink-0 px-4 pb-1.5 text-[11px] text-[var(--color-muted)]"
+        >
+          Send a message to hand back to {resolvedAgentName ?? 'the agent'}
+        </p>
+      )}
 
       {/* Omnibox (ADR-039 D-A2, ADR-040 D5) — ALWAYS visible now, not gated on
           driving/annotate state. The server's ValidateURL SSRF gate (run on

@@ -72,7 +72,7 @@ describe('submitAnnotation', () => {
     expect(sendMessageSpy).toHaveBeenCalledTimes(1)
     const [comment, opts] = sendMessageSpy.mock.calls[0]
     expect(comment).toBe(
-      'What does this do?\n\n[Auto-detected context for the annotated region (<button>): "Submit". The attached image is the source of truth — describe what you see there.]',
+      'What does this do?\n\n[This is a cropped screenshot region from the live browser — it may be mostly blank. Auto-detected context for this region (<button>): "Submit". The attached image is the source of truth — describe what you actually see rather than saying no image was attached.]',
     )
     expect(opts.mediaRefs).toEqual(['media://ref-1'])
     expect(opts.attachments).toEqual([
@@ -80,31 +80,42 @@ describe('submitAnnotation', () => {
     ])
   })
 
-  it('sends the comment unmodified when inspect resolves ok but with no text', async () => {
+  // UAT finding (Tester 2, blank-region false negative): every send now
+  // carries the blank-region framing note regardless of inspect outcome —
+  // this test used to assert the comment went out byte-for-byte unmodified;
+  // it now asserts the base framing note is present with NO auto-detected
+  // context clause (inspect resolved ok but found no text).
+  it('appends only the base blank-region framing note (no auto-detected context) when inspect resolves ok but with no text', async () => {
     mockInspectBrowserElement.mockResolvedValue({ ok: true, tag: 'div' })
 
     await submitAnnotation({ comment: 'Look at this', file: makeFile(), point: { x: 1, y: 2 }, sessionId: 'sess-1', agentId: 'agent-1' })
 
     expect(sendMessageSpy).toHaveBeenCalledTimes(1)
-    expect(sendMessageSpy.mock.calls[0][0]).toBe('Look at this')
+    expect(sendMessageSpy.mock.calls[0][0]).toBe(
+      'Look at this\n\n[This is a cropped screenshot region from the live browser — it may be mostly blank. The attached image is the source of truth — describe what you actually see rather than saying no image was attached.]',
+    )
   })
 
-  it('sends the comment unmodified when inspect resolves ok:false (best-effort, D-B3)', async () => {
+  it('appends only the base blank-region framing note (no auto-detected context) when inspect resolves ok:false (best-effort, D-B3)', async () => {
     mockInspectBrowserElement.mockResolvedValue({ ok: false, reason: 'cross-origin frame' })
 
     await submitAnnotation({ comment: 'Look at this', file: makeFile(), point: { x: 1, y: 2 }, sessionId: 'sess-1', agentId: 'agent-1' })
 
     expect(sendMessageSpy).toHaveBeenCalledTimes(1)
-    expect(sendMessageSpy.mock.calls[0][0]).toBe('Look at this')
+    expect(sendMessageSpy.mock.calls[0][0]).toBe(
+      'Look at this\n\n[This is a cropped screenshot region from the live browser — it may be mostly blank. The attached image is the source of truth — describe what you actually see rather than saying no image was attached.]',
+    )
   })
 
-  it('sends the image + comment even when the inspect REQUEST itself rejects (network error)', async () => {
+  it('sends the image + comment (with the base blank-region framing note) even when the inspect REQUEST itself rejects (network error)', async () => {
     mockInspectBrowserElement.mockRejectedValue(new Error('network down'))
 
     await submitAnnotation({ comment: 'Still works', file: makeFile(), point: { x: 1, y: 2 }, sessionId: 'sess-1', agentId: 'agent-1' })
 
     expect(sendMessageSpy).toHaveBeenCalledTimes(1)
-    expect(sendMessageSpy.mock.calls[0][0]).toBe('Still works')
+    expect(sendMessageSpy.mock.calls[0][0]).toBe(
+      'Still works\n\n[This is a cropped screenshot region from the live browser — it may be mostly blank. The attached image is the source of truth — describe what you actually see rather than saying no image was attached.]',
+    )
     expect(sendMessageSpy.mock.calls[0][1].mediaRefs).toEqual(['media://ref-1'])
   })
 
@@ -179,7 +190,7 @@ describe('submitAnnotation', () => {
     const [comment] = sendMessageSpy.mock.calls[0]
     const snippet = 'x'.repeat(280) + '…'
     expect(comment).toBe(
-      `What is this?\n\n[Auto-detected context for the annotated region (<article>): "${snippet}". The attached image is the source of truth — describe what you see there.]`,
+      `What is this?\n\n[This is a cropped screenshot region from the live browser — it may be mostly blank. Auto-detected context for this region (<article>): "${snippet}". The attached image is the source of truth — describe what you actually see rather than saying no image was attached.]`,
     )
     // The full 300-char text must NOT appear verbatim — only the capped 280 + ellipsis.
     expect(comment).not.toContain(longText)

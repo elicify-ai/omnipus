@@ -513,3 +513,98 @@ describe('BrowserLiveView — D6 driving-state chip + glow border', () => {
     expect(dot?.className).not.toContain('motion-safe:animate-pulse')
   })
 })
+
+describe('BrowserLiveView — A8 optimistic driving chip (UAT polish)', () => {
+  // The bug: cancelStream (called first, inside takeWheelIfNeeded) often
+  // flips `agentWorking` to false well before the server's 'controlling'
+  // ack for the take lands — computeDriveMode used to have nothing to fall
+  // back on for that gap and dropped straight to 'idle' ("Click to drive"),
+  // even though the user just explicitly took the wheel.
+  it('shows the driving-state chip immediately after Take-over is clicked, once the agent stops working, before the take ack lands', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    setAgentWorking('s1', true)
+    vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => {})
+
+    fireEvent.click(screen.getByRole('button', { name: /take over/i }))
+    // No browser_status('controlling') ack has arrived yet — simulate only
+    // the real-world side effect of cancelStream succeeding fast.
+    setAgentWorking('s1', false)
+
+    const chip = screen.getByTestId('browser-live-status-chip')
+    expect(chip).toHaveTextContent("You're driving")
+    expect(chip).not.toHaveTextContent('Click to drive')
+  })
+
+  it('also shows the driving-state chip immediately for click-to-drive (idle + first pointerdown), before the take ack lands', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    const container = stubFrameRect()
+
+    fireEvent.pointerDown(container, { clientX: 20, clientY: 20 })
+
+    expect(screen.getByTestId('browser-live-status-chip')).toHaveTextContent("You're driving")
+  })
+
+  it('falls back off the optimistic driving chip if the take is rejected/abandoned (any status frame clears it, isControlling never lands)', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    setAgentWorking('s1', true)
+    vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => {})
+
+    fireEvent.click(screen.getByRole('button', { name: /take over/i }))
+    setAgentWorking('s1', false)
+    expect(screen.getByTestId('browser-live-status-chip')).toHaveTextContent("You're driving")
+
+    // The server rejects/abandons the take (e.g. another viewer grabbed the
+    // lock first) — any status frame clears the in-flight guard per the
+    // onStatus handler; isControlling never becomes true.
+    act(() => {
+      callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'idle' })
+    })
+
+    const chip = screen.getByTestId('browser-live-status-chip')
+    expect(chip).not.toHaveTextContent("You're driving")
+    expect(chip).toHaveTextContent('Click to drive')
+  })
+})
+
+describe('BrowserLiveView — hand-back discoverability hint (UAT polish)', () => {
+  it('shows a hand-back hint using the resolved agent name only while you-driving', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    expect(screen.queryByTestId('browser-live-handback-hint')).not.toBeInTheDocument()
+
+    act(() => {
+      callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' })
+    })
+
+    // No agents query cache populated in this suite — falls back to "the agent".
+    expect(screen.getByTestId('browser-live-handback-hint')).toHaveTextContent(
+      'Send a message to hand back to the agent',
+    )
+  })
+
+  it('does not render the hand-back hint while the agent is working', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    setAgentWorking('s1', true)
+
+    expect(screen.queryByTestId('browser-live-handback-hint')).not.toBeInTheDocument()
+  })
+
+  it('hides the hand-back hint again once control is released', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    act(() => {
+      callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' })
+    })
+    expect(screen.getByTestId('browser-live-handback-hint')).toBeInTheDocument()
+
+    act(() => {
+      callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'released' })
+    })
+
+    expect(screen.queryByTestId('browser-live-handback-hint')).not.toBeInTheDocument()
+  })
+})
