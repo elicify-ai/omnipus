@@ -591,7 +591,24 @@ func TestAdoptTarget_NoBrowsingContext_IsNoop(t *testing.T) {
 	assert.False(t, result.Unadopted)
 }
 
-func TestAdoptTarget_ConcurrentAdoptionOfSameTarget_OnlyOneWins(t *testing.T) {
+// TestAdoptTarget_ConcurrentAdoptionOfSameTarget_AllCallersSeeTheSameOutcome
+// is the concurrency-safety guard for adoptTarget's pendingAdoptEntry design
+// (see its doc comment in manager.go). It supersedes an earlier version of
+// this test (renamed from *_OnlyOneWins) whose "exactly one caller sees
+// Adopted" assertion encoded the OLD, since-fixed contract: a "losing"
+// concurrent caller used to get told nothing happened (a blind no-op) even
+// though the winner went on to succeed. That is exactly the gap that made
+// browser_click silently report plain success on a target="_blank" click —
+// its own ReconcileTabs call routinely LOST this same race to the async
+// passive listener (a real CDP target-created event can be dispatched before
+// the click's own CDP round trip even returns), so it saw "already pending"
+// and reported nothing. The fix: a losing caller now WAITS for the winner's
+// actual result and returns THAT, so every caller asking about the same
+// target — winner and waiters alike — ends up with the SAME, correct answer.
+// The one invariant that must still hold unconditionally: exactly ONE
+// physical tab gets created for the target, never a duplicate, no matter how
+// many concurrent callers ask about it.
+func TestAdoptTarget_ConcurrentAdoptionOfSameTarget_AllCallersSeeTheSameOutcome(t *testing.T) {
 	m := newTestManagerWithFakeTabs(t, 10)
 	_, err := m.Session(DefaultSessionID)
 	require.NoError(t, err)
@@ -615,13 +632,17 @@ func TestAdoptTarget_ConcurrentAdoptionOfSameTarget_OnlyOneWins(t *testing.T) {
 		require.NoError(t, errs[i])
 		if results[i].Adopted != nil {
 			adoptedCount++
+			assert.Equal(t, 1, results[i].Adopted.Index,
+				"every caller that sees Adopted must see the SAME adopted tab, not a duplicate")
 		}
 	}
-	assert.Equal(t, 1, adoptedCount, "exactly one concurrent adoptTarget call for the same target ID must win")
+	assert.Equal(t, n, adoptedCount,
+		"ALL concurrent callers asking about the same target must see it was adopted — a losing racer waits "+
+			"for and returns the winner's actual outcome instead of a blind no-op (pendingAdoptEntry)")
 
 	tabs, _, err := m.ListTabs(DefaultSessionID)
 	require.NoError(t, err)
-	assert.Len(t, tabs, 2, "the target must be adopted exactly once, not duplicated")
+	assert.Len(t, tabs, 2, "the target must be adopted EXACTLY ONCE — no duplicate tab despite 8 concurrent callers")
 }
 
 // --- ADR-041 D2: ReconcileTabs ---

@@ -106,6 +106,40 @@ type tabEntry struct {
 type sessionEntry struct {
 	tabs      []*tabEntry
 	activeIdx int
+	// browserCtx/browserCancel is the browsing context's browser-owning
+	// chromedp context — the ONE-TIME chromedp.NewContext(m.allocCtx) + Run
+	// that actually launches (managed mode) or attaches to (remote CDP mode)
+	// the running *Browser (see bootstrapBrowserCtx's doc comment for the
+	// chromedp mechanics: a *Browser is bound to the FIRST context created
+	// from an allocator, never to the allocator context itself). EVERY tab in
+	// this browsing context — tab 0 included — is created as a CHILD of
+	// browserCtx (chromedp.NewContext(se.browserCtx, ...)), never straight off
+	// m.allocCtx again; that reuse-off-the-allocator bug (adoptTarget/OpenTab
+	// each independently calling chromedp.NewContext(m.allocCtx, ...) for the
+	// 2nd+ tab) is exactly what made tab adoption try to launch a SECOND
+	// Chromium on the same fixed debug port and fail — the live-UAT-caught
+	// bug this field's introduction fixes.
+	//
+	// browserCtx owns an "implicit" initial target (the about:blank tab
+	// Chrome opens on launch, which the bootstrap Run attaches browserCtx's
+	// OWN chromedp.Context.Target to as a side effect) that is deliberately
+	// NEVER exposed as a tabEntry/Tab — se.tabs holds only EXPLICITLY created
+	// children of browserCtx. That implicit target has no opener among our
+	// tabs (it's the browser's own default tab, not opened by any page), so
+	// ReconcileTabs/handleTargetEvent's existing "OpenerID == '' → not ours"
+	// filters already exclude it from adoption without any extra code.
+	//
+	// browserCancel MUST be called ONLY on whole-session teardown
+	// (CloseSession, Shutdown, Session()'s crash-recovery path) — never on an
+	// individual tab close. Closing any single user tab (including tab 0)
+	// cancels only THAT tab's own cancelFunc, which — because that tab is a
+	// non-"first" child of browserCtx, not browserCtx itself — closes just its
+	// one CDP target and leaves the browser (and every sibling tab) alive.
+	// nil only for hand-built sessionEntry literals in tests that bypass
+	// Session()/createFirstTab entirely (e.g. live_deadlock_test.go,
+	// inspect_test.go) — every nil-checked at its two call sites.
+	browserCtx    context.Context
+	browserCancel context.CancelFunc
 	// listenerTarget tracks which tab's chromedp ctx currently has the
 	// ADR-041 D2 passive Target.targetCreated listener installed (the zero
 	// value, "", means none yet). installTargetListenerLocked (re-)installs
@@ -184,11 +218,18 @@ type BrowserManager struct {
 	// D2's adoptTarget), mirroring `pending`'s exact race-guard shape: the
 	// best-effort passive listener (installTargetListenerLocked) and a
 	// deterministic ReconcileTabs pass can both observe the same
-	// freshly-created target and race to adopt it — without this, the
-	// second racer would attach a SECOND chromedp context to the same
-	// target and append a duplicate tab. Lazily initialized; nil is a valid
-	// empty state.
-	pendingAdopt map[target.ID]struct{}
+	// freshly-created target and race to adopt it. Unlike `pending`, a racer
+	// that finds an entry here does not just no-op — it WAITS on the entry's
+	// done channel and returns the SAME result the winning adopter computed
+	// (see adoptTarget's doc comment for why: with a real browser attached,
+	// the async passive listener routinely wins this race first — CDP
+	// target-created events can arrive before the click's own CDP round trip
+	// even returns — leaving the caller-visible, deterministic ReconcileTabs
+	// path (browser_click's own adoption attempt) with nothing to report
+	// unless it waits for the in-flight winner instead of silently
+	// discarding the "someone else is already handling this" case). Lazily
+	// initialized; nil is a valid empty state.
+	pendingAdopt map[target.ID]*pendingAdoptEntry
 
 	// listTargets executes chromedp.Targets against a resolved tab context
 	// to list every CDP target the browser currently knows about (ADR-041
@@ -540,6 +581,9 @@ func (m *BrowserManager) Session(sessionID string) (context.Context, error) {
 			for _, t := range se.tabs {
 				t.cancel()
 			}
+			if se.browserCancel != nil {
+				se.browserCancel()
+			}
 			delete(m.sessions, sessionID)
 		}
 		m.mu.Unlock()
@@ -552,14 +596,30 @@ func (m *BrowserManager) Session(sessionID string) (context.Context, error) {
 	}
 }
 
-// createFirstTab is the shared "create + register the FIRST tab of a
-// not-yet-existing browsing context" primitive (ADR-041 fix F1), used by
-// Session()'s lazy-creation path, OpenTab() when sessionID has no tabs yet,
-// and CloseTab()'s last-tab-replacement. It reuses exactly the m.pending
-// dedup loop Session() used to run inline: only one goroutine at a time
-// creates sessionID's first tab; every other concurrent caller waits on
+// createFirstTab is the shared "ensure sessionID's browsing context has AT
+// LEAST ONE tab" primitive (ADR-041 fix F1), used by Session()'s
+// lazy-creation path, OpenTab() when sessionID has no tabs yet, and
+// CloseTab()'s last-tab-replacement. It reuses exactly the m.pending dedup
+// loop Session() used to run inline: only one goroutine at a time creates
+// sessionID's next tab; every other concurrent caller waits on
 // m.pending[sessionID] and, on return, finds m.sessions[sessionID] already
 // populated instead of racing to create (and leak) a second one.
+//
+// Two distinct scenarios both funnel through here, distinguished by whether
+// m.sessions[sessionID] already exists (with zero tabs) at the moment this
+// goroutine wins the m.pending race:
+//
+//   - sessionID has NEVER been seen before (Session()'s and OpenTab()'s
+//     lazy-creation case): bootstraps a BRAND NEW browser-owning context
+//     (bootstrapBrowserCtx) and registers a brand-new sessionEntry around it
+//     (registerFreshSessionLocked).
+//   - sessionID's sessionEntry already exists but currently has zero tabs
+//     (CloseTab's last-tab-replacement clears se.tabs to nil before calling
+//     here): REUSES the existing, still-running se.browserCtx instead of
+//     bootstrapping a second one — bootstrapping a second browser here would
+//     try to bind Chrome's fixed debug port a second time and fail. This is
+//     the browserCtx lifetime fix: the browser (and its browserCtx) now
+//     outlives any single tab, including tab 0.
 //
 // No-op (nil error, no CDP call) if sessionID already has at least one tab
 // by the time this runs — including if a concurrent creator won the race
@@ -580,7 +640,7 @@ func (m *BrowserManager) createFirstTab(sessionID string) error {
 
 		if wait, ok := m.pending[sessionID]; ok {
 			// Someone else is already creating this browsing context's
-			// first tab — wait for them to finish, then loop back and
+			// next tab — wait for them to finish, then loop back and
 			// re-check m.sessions, rather than racing to create a second
 			// tab for the same ID.
 			m.mu.Unlock()
@@ -598,10 +658,32 @@ func (m *BrowserManager) createFirstTab(sessionID string) error {
 			m.pending = make(map[string]chan struct{})
 		}
 		m.pending[sessionID] = done
+		// existing is non-nil exactly in the "reuse" scenario above (see
+		// doc comment): a sessionEntry that already exists but currently has
+		// zero tabs. nil means "sessionID has never been seen before" —
+		// bootstrap a brand new browser-owning context for it below.
+		existing := m.sessions[sessionID]
 		allocCtx := m.allocCtx
 		m.mu.Unlock()
 
-		tab, err := m.createTab(allocCtx, "")
+		var (
+			tab           *tabEntry
+			browserCtx    context.Context
+			browserCancel context.CancelFunc
+			err           error
+		)
+		if existing != nil {
+			browserCtx = existing.browserCtx
+			tab, err = m.createTab(browserCtx, "")
+		} else {
+			browserCtx, browserCancel, err = m.bootstrapBrowserCtx(allocCtx)
+			if err == nil {
+				tab, err = m.createTab(browserCtx, "")
+				if err != nil {
+					browserCancel()
+				}
+			}
+		}
 
 		m.mu.Lock()
 		delete(m.pending, sessionID)
@@ -610,26 +692,103 @@ func (m *BrowserManager) createFirstTab(sessionID string) error {
 			close(done)
 			return fmt.Errorf("browser: failed to initialize tab: %w", err)
 		}
-		tabs := m.registerFreshSessionLocked(sessionID, tab)
+
+		var tabs []Tab
+		notify := true
+		if existing == nil {
+			tabs = m.registerFreshSessionLocked(sessionID, tab, browserCtx, browserCancel)
+		} else {
+			switch se := m.sessions[sessionID]; {
+			case se == nil:
+				// The whole browsing context was torn down (CloseSession/
+				// Shutdown/Session()'s crash-recovery) while we were creating
+				// its replacement tab. Nothing left to attach to — release it.
+				m.mu.Unlock()
+				tab.cancel()
+				close(done)
+				return fmt.Errorf("browser: session %q closed while creating its next tab", sessionID)
+			case len(se.tabs) > 0:
+				// A concurrent OpenTab (which does not participate in
+				// m.pending — it only guards the "session has zero tabs"
+				// bootstrap/reuse case, not ordinary appends) already ensured
+				// this reused browsing context has a tab while we were
+				// creating ours. Discard our now-redundant tab instead of
+				// either clobbering theirs (leak) or inflating the count.
+				tab.cancel()
+				tabs = snapshotTabsLocked(se)
+				notify = false
+			default:
+				se.tabs = []*tabEntry{tab}
+				se.activeIdx = 0
+				m.installTargetListenerLocked(sessionID, se)
+				tabs = snapshotTabsLocked(se)
+			}
+		}
 		m.mu.Unlock()
 		close(done)
-		m.notifyTabsChanged(sessionID, tabs, 0)
+		if notify {
+			m.notifyTabsChanged(sessionID, tabs, 0)
+		}
 		return nil
 	}
 }
 
 // registerFreshSessionLocked installs tab as the sole tab of a brand-new
-// sessionEntry for sessionID, registers it in m.sessions, arms the ADR-041
+// sessionEntry for sessionID, owned by browserCtx/browserCancel (see
+// sessionEntry's doc comment), registers it in m.sessions, arms the ADR-041
 // D2 passive target listener on it, and returns a snapshot — the exact
-// sequence createFirstTab (used by Session/OpenTab/CloseTab's
-// last-tab-replacement) needs after successfully creating a tab (ADR-041 fix
-// F6: this sequence used to be duplicated inline at each call site). Must be
-// called with m.mu held.
-func (m *BrowserManager) registerFreshSessionLocked(sessionID string, tab *tabEntry) []Tab {
-	se := &sessionEntry{tabs: []*tabEntry{tab}, activeIdx: 0}
+// sequence createFirstTab needs after successfully bootstrapping a session's
+// first-ever tab (ADR-041 fix F6: this sequence used to be duplicated inline
+// at each call site). Must be called with m.mu held.
+func (m *BrowserManager) registerFreshSessionLocked(sessionID string, tab *tabEntry, browserCtx context.Context, browserCancel context.CancelFunc) []Tab {
+	se := &sessionEntry{tabs: []*tabEntry{tab}, activeIdx: 0, browserCtx: browserCtx, browserCancel: browserCancel}
 	m.installTargetListenerLocked(sessionID, se)
 	m.sessions[sessionID] = se
 	return snapshotTabsLocked(se)
+}
+
+// bootstrapBrowserCtx creates the ONE-TIME browser-owning chromedp context
+// for a brand-new browsing context: chromedp.NewContext(allocCtx) followed by
+// a forcing chromedp.Run (no actions) so the browser actually launches
+// (managed mode) or attaches (remote CDP mode). This is the ONLY context in
+// this manager that may be created directly off allocCtx/m.allocCtx for a
+// tab-bearing purpose — every subsequent tab in the resulting browsing
+// context must be a CHILD of the returned context (chromedp.NewContext(
+// browserCtx, ...)), never straight off the allocator again.
+//
+// Why: chromedp binds a *Browser to the FIRST context created from an
+// allocator (chromedp.NewContext's "c.first = c.Browser == nil" — the
+// allocator context's own stored chromedp.Context always has Browser == nil,
+// forever), NOT to the allocator context itself. A second
+// chromedp.NewContext(allocCtx, ...) + Run therefore tries to launch a SECOND
+// browser process rather than attaching to the first one — and since the
+// managed-mode ExecAllocator pins a FIXED debug port (browserDebugPort,
+// already held by the first browser), that second launch fails outright.
+// This was exactly the live-UAT-caught ADR-041 adoption bug: adoptTarget and
+// OpenTab each independently called chromedp.NewContext(m.allocCtx, ...) for
+// the 2nd+ tab of an already-running session.
+//
+// Must be called with NO BrowserManager lock held — this issues a real,
+// blocking chromedp.Run call, subject to the same "no lock across CDP"
+// discipline documented on Session() and createTab() (ADR-038).
+//
+// Test seam: when m.createTabFn is set (unit tests — see tabs_test.go's
+// fakeTabFactory), this returns a bare cancelable context instead of driving
+// real chromedp, mirroring createTab's own createTabFn short-circuit exactly
+// — the fake tab factory never dials CDP and ignores whatever parent context
+// it's given, so there is nothing for a real bootstrap to attach to, and
+// running one for real here would dereference the tests' nil m.allocCtx.
+func (m *BrowserManager) bootstrapBrowserCtx(allocCtx context.Context) (context.Context, context.CancelFunc, error) {
+	if m.createTabFn != nil {
+		ctx, cancel := context.WithCancel(context.Background())
+		return ctx, cancel, nil
+	}
+	ctx, cancel := chromedp.NewContext(allocCtx)
+	if err := chromedp.Run(ctx); err != nil {
+		cancel()
+		return nil, nil, fmt.Errorf("browser: failed to launch browser: %w", err)
+	}
+	return ctx, cancel, nil
 }
 
 // maxTabsReachedErr is the shared "MaxTabs cap reached" error every
@@ -664,15 +823,32 @@ func (m *BrowserManager) lookupTabLocked(sessionID string, index int) (*sessionE
 // discipline Session()'s doc comment above describes (never wrap the FIRST
 // Run on a fresh ctx in a timeout — chromedp binds the target's lifetime to
 // that first Run's context).
-func (m *BrowserManager) createTab(allocCtx context.Context, targetID target.ID) (*tabEntry, error) {
+//
+// parentCtx MUST be a context that already owns the browsing context's
+// running *Browser — i.e. a sessionEntry.browserCtx (see its doc comment),
+// or the raw allocator context ONLY when bootstrapping that very browserCtx
+// for the first time (bootstrapBrowserCtx does this, then all further
+// createTab calls for that session pass its returned browserCtx here).
+// Passing the raw allocator context for anything past that first bootstrap
+// is the exact bug this function's callers used to have: chromedp's
+// initContextBrowser calls Allocator.Allocate() whenever the context's own
+// Browser is nil — which it always is for a context created straight from
+// the allocator, since the allocator's own stored chromedp.Context never
+// gets its Browser field populated — so a second chromedp.NewContext(
+// m.allocCtx, ...) + Run tries to launch a SECOND Chromium process (and,
+// with the fixed managed-mode debug port already held by the first one,
+// fails outright, even when WithTargetID names an existing target: the
+// browser-allocation step in Run's initContextBrowser happens before the
+// WithTargetID attach logic ever runs).
+func (m *BrowserManager) createTab(parentCtx context.Context, targetID target.ID) (*tabEntry, error) {
 	if m.createTabFn != nil {
-		return m.createTabFn(allocCtx, targetID)
+		return m.createTabFn(parentCtx, targetID)
 	}
 	var opts []chromedp.ContextOption
 	if targetID != "" {
 		opts = append(opts, chromedp.WithTargetID(targetID))
 	}
-	ctx, cancel := chromedp.NewContext(allocCtx, opts...)
+	ctx, cancel := chromedp.NewContext(parentCtx, opts...)
 
 	if err := chromedp.Run(ctx); err != nil {
 		cancel()
@@ -802,12 +978,17 @@ func (m *BrowserManager) SwitchTab(sessionID string, index int) (Tab, error) {
 
 // CloseTab closes tab `index` in sessionID's browsing context (cancels its
 // chromedp target — a cheap, non-blocking call; see BrowserManager.
-// CloseSession's identical existing pattern). If it was the active tab, a
-// neighbour is activated instead (the tab that slid into the same index;
-// falls back to the new last tab if the closed tab was the set's last).
-// NEVER leaves the browsing context with zero tabs (ADR-041 D3/
-// Consequences) — closing the last remaining tab opens a fresh blank
-// replacement instead, which DOES talk to CDP and therefore runs with no
+// CloseSession's identical existing pattern). Cancelling a single tab's own
+// context never tears down the browsing context's browser-owning
+// se.browserCtx (see sessionEntry's doc comment) — the browser, and every
+// OTHER tab in the set, stay alive and usable regardless of which tab is
+// closed, including tab 0. If the closed tab was the active tab, a neighbour
+// is activated instead (the tab that slid into the same index; falls back to
+// the new last tab if the closed tab was the set's last). NEVER leaves the
+// browsing context with zero tabs (ADR-041 D3/Consequences) — closing the
+// last remaining tab opens a fresh blank replacement in the SAME
+// still-running browser instead (via createFirstTab's reuse path — see its
+// doc comment), which DOES talk to CDP and therefore runs with no
 // BrowserManager lock held, mirroring Session()'s discipline.
 func (m *BrowserManager) CloseTab(sessionID string, index int) (tabs []Tab, activeIdx int, err error) {
 	m.mu.Lock()
@@ -819,16 +1000,20 @@ func (m *BrowserManager) CloseTab(sessionID string, index int) (tabs []Tab, acti
 
 	if len(se.tabs) == 1 {
 		closing := se.tabs[0]
-		delete(m.sessions, sessionID) // torn down; recreated via createFirstTab below on success
+		// Clear the tab set but keep the sessionEntry — and, critically, its
+		// still-running se.browserCtx/browserCancel — in m.sessions. The
+		// ADR-041 D3 "never leaves zero tabs" invariant is restored by
+		// createFirstTab below, which REUSES this same browserCtx instead of
+		// tearing the whole browsing context down and relaunching a second
+		// Chromium on the fixed debug port (which would fail to bind — see
+		// bootstrapBrowserCtx's doc comment). A concurrent OpenTab/Session()
+		// call that observes se.tabs momentarily empty converges on the same
+		// createFirstTab pending-dedup gate (ADR-041 fix F1) instead of racing
+		// this replacement.
+		se.tabs = nil
 		m.mu.Unlock()
 
-		closing.cancel()
-		// ADR-041 fix F1: route the replacement tab through the SAME
-		// pending-dedup primitive Session()/OpenTab() use, instead of
-		// independently creating a tab and blindly overwriting
-		// m.sessions[sessionID] — a concurrent OpenTab/Session racing this
-		// replacement for the same sessionID must wait for it (or vice
-		// versa) rather than each installing a tab the other then discards.
+		closing.cancel() // closes only THIS target; the browser (browserCtx) lives on
 		if cerr := m.createFirstTab(sessionID); cerr != nil {
 			return nil, 0, fmt.Errorf("browser: closed last tab but failed to open a replacement: %w", cerr)
 		}
@@ -897,21 +1082,39 @@ func (m *BrowserManager) OpenTab(sessionID string) (Tab, error) {
 	}
 
 	// Existing browsing context with at least one tab — append an
-	// additional tab. Re-check the cap AFTER creating unlocked (ADR-041 fix
-	// F4: this recheck used to be gated on `len(se.tabs) > 0`, which is
-	// always false the very first time a NEW session's first tab is
-	// created — the exact race window the recheck exists to catch — so it
-	// silently never fired. Firing it unconditionally here is safe because
-	// this branch only runs once hasTabs is already true.)
+	// additional tab, as a CHILD of the session's own browserCtx (ADR-041
+	// live-UAT fix: NOT m.allocCtx — see sessionEntry.browserCtx's and
+	// createTab's doc comments for why reusing the raw allocator here tried
+	// to launch a SECOND Chromium and failed). Re-check the cap AFTER
+	// creating unlocked (ADR-041 fix F4: this recheck used to be gated on
+	// `len(se.tabs) > 0`, which is always false the very first time a NEW
+	// session's first tab is created — the exact race window the recheck
+	// exists to catch — so it silently never fired. Firing it unconditionally
+	// here is safe because this branch only runs once hasTabs is already
+	// true.)
 	m.mu.Lock()
 	if m.totalTabCountLocked() >= m.cfg.MaxTabs {
 		m.mu.Unlock()
 		return Tab{}, maxTabsReachedErr(m.cfg.MaxTabs)
 	}
-	allocCtx := m.allocCtx
+	se, exists = m.sessions[sessionID]
+	if !exists || len(se.tabs) == 0 {
+		// The browsing context vanished, or was raced down to zero tabs (e.g.
+		// a concurrent CloseTab last-tab-replacement), between the hasTabs
+		// check above and now. Don't dereference a stale/absent browserCtx —
+		// fall back to the shared first-tab path, which dedups against any
+		// concurrent recreation/reuse (ADR-041 fix F1, extended for
+		// browserCtx reuse — see createFirstTab's doc comment).
+		m.mu.Unlock()
+		if err := m.createFirstTab(sessionID); err != nil {
+			return Tab{}, err
+		}
+		return m.activeTabSnapshot(sessionID)
+	}
+	browserCtx := se.browserCtx
 	m.mu.Unlock()
 
-	newTab, err := m.createTab(allocCtx, "")
+	newTab, err := m.createTab(browserCtx, "")
 	if err != nil {
 		return Tab{}, fmt.Errorf("browser: failed to open new tab: %w", err)
 	}
@@ -1002,12 +1205,38 @@ type tabAdoptResult struct {
 	Reason    tabAdoptReason
 }
 
+// pendingAdoptEntry tracks a single in-flight adoptTarget call so a racing
+// caller for the SAME target ID can WAIT for it to finish and reuse its
+// result, instead of treating "someone else is already handling this" as a
+// silent no-op. This matters because of a race exposed once tab adoption's
+// CDP attach actually succeeds (the browserCtx fix above): the best-effort
+// passive listener (installTargetListenerLocked, dispatched async via `go
+// func()` in handleTargetEvent) and the deterministic ReconcileTabs pass
+// (browser_click's own guaranteed detection point, called synchronously
+// right after the click) both race to adopt the same freshly-created
+// target — and the async listener routinely WINS, since a CDP
+// Target.targetCreated/EventTargetInfoChanged event can arrive and be
+// dispatched before the click's own CDP round trip has even returned. Before
+// this fix, ReconcileTabs's own attempt would see "already pending" and
+// return a true no-op with nothing to report — so browser_click returned
+// plain success with no opened_new_tab, even though the OTHER (async, not
+// yet visible to the caller) attempt would go on to succeed moments later.
+// Waiting for the winner's actual result closes that gap.
+type pendingAdoptEntry struct {
+	done   chan struct{}
+	result tabAdoptResult
+	err    error
+}
+
 // adoptTarget attaches a chromedp context to an existing CDP target — one a
 // target="_blank" click, window.open, or Ctrl/Cmd+click spawned — and
 // appends it as a new tab to sessionID's tab set, making it active by
-// default (ADR-041 D2). Idempotent: a target already tracked, or one a
-// concurrent adoption is already in flight for, is a true no-op (a zero
-// tabAdoptResult, nil error) — nothing was found, nothing to report.
+// default (ADR-041 D2). Idempotent: a target already tracked is a true no-op
+// (a zero tabAdoptResult, nil error) — nothing was found, nothing to report.
+// A target a concurrent adoption is already in flight for is NOT a no-op —
+// this call WAITS for that in-flight attempt (see pendingAdoptEntry's doc
+// comment) and returns its actual result, bounded by m.PageTimeout() so a
+// wedged concurrent attempt cannot hang this caller forever.
 //
 // Enforces MaxTabs: a runaway window.open loop is capped, not unbounded.
 // Unlike the pre-fix version, refusal is never silent to the CALLER — it is
@@ -1019,8 +1248,9 @@ type tabAdoptResult struct {
 // adopter/cap-filler while createTab ran unlocked) stays silent in the log,
 // matching the pre-fix behavior; both set Unadopted/Reason regardless.
 //
-// Deadlock-safe per ADR-038: createTab's CDP attach runs with NO
-// BrowserManager lock held.
+// Deadlock-safe per ADR-038: createTab's CDP attach, and the bounded wait on
+// a racing caller's in-flight attempt, both run with NO BrowserManager lock
+// held.
 func (m *BrowserManager) adoptTarget(sessionID string, targetID target.ID) (tabAdoptResult, error) {
 	if targetID == "" {
 		return tabAdoptResult{}, nil
@@ -1037,11 +1267,23 @@ func (m *BrowserManager) adoptTarget(sessionID string, targetID target.ID) (tabA
 		return tabAdoptResult{}, nil // already ours
 	}
 	if m.pendingAdopt == nil {
-		m.pendingAdopt = make(map[target.ID]struct{})
+		m.pendingAdopt = make(map[target.ID]*pendingAdoptEntry)
 	}
-	if _, already := m.pendingAdopt[targetID]; already {
+	if entry, already := m.pendingAdopt[targetID]; already {
 		m.mu.Unlock()
-		return tabAdoptResult{}, nil // a concurrent adoption is already in flight for this target
+		// Wait for the in-flight winner's actual outcome (see
+		// pendingAdoptEntry's doc comment) instead of silently reporting
+		// nothing. Bounded so a wedged concurrent attempt cannot hang this
+		// caller forever.
+		timer := time.NewTimer(m.PageTimeout())
+		defer timer.Stop()
+		select {
+		case <-entry.done:
+			return entry.result, entry.err
+		case <-timer.C:
+			return tabAdoptResult{Unadopted: true, Reason: tabAdoptReasonAttachFailed},
+				fmt.Errorf("browser: timed out waiting for a concurrent adoption of target %s", targetID)
+		}
 	}
 	if m.totalTabCountLocked() >= m.cfg.MaxTabs {
 		m.mu.Unlock()
@@ -1052,18 +1294,29 @@ func (m *BrowserManager) adoptTarget(sessionID string, targetID target.ID) (tabA
 		})
 		return tabAdoptResult{Unadopted: true, Reason: tabAdoptReasonMaxTabs}, nil
 	}
-	m.pendingAdopt[targetID] = struct{}{}
-	allocCtx := m.allocCtx
+	entry := &pendingAdoptEntry{done: make(chan struct{})}
+	m.pendingAdopt[targetID] = entry
+	// Attach as a CHILD of this browsing context's own browserCtx (ADR-041
+	// live-UAT fix) — NOT m.allocCtx. This is THE core fix: adopting a
+	// target="_blank"/window.open target used to reuse the raw allocator
+	// context here, which chromedp treats as "launch a brand new browser"
+	// (see createTab's and sessionEntry.browserCtx's doc comments), and with
+	// the managed-mode debug port already held by the running browser, that
+	// launch failed outright — the tab silently never got adopted.
+	browserCtx := se.browserCtx
 	m.mu.Unlock()
 
-	newTab, err := m.createTab(allocCtx, targetID)
+	newTab, err := m.createTab(browserCtx, targetID)
 
 	m.mu.Lock()
 	delete(m.pendingAdopt, targetID)
 	if err != nil {
 		m.mu.Unlock()
-		return tabAdoptResult{Unadopted: true, Reason: tabAdoptReasonAttachFailed},
-			fmt.Errorf("browser: failed to adopt new tab target %s: %w", targetID, err)
+		result := tabAdoptResult{Unadopted: true, Reason: tabAdoptReasonAttachFailed}
+		wrapped := fmt.Errorf("browser: failed to adopt new tab target %s: %w", targetID, err)
+		entry.result, entry.err = result, wrapped
+		close(entry.done)
+		return result, wrapped
 	}
 	se, ok = m.sessions[sessionID]
 	if !ok || se.indexOfTarget(targetID) >= 0 {
@@ -1075,12 +1328,16 @@ func (m *BrowserManager) adoptTarget(sessionID string, targetID target.ID) (tabA
 		// own adoptTarget call already reports ITS successful adoption.
 		m.mu.Unlock()
 		newTab.cancel()
+		close(entry.done) // result/err stay zero-value: a true no-op for any waiter too
 		return tabAdoptResult{}, nil
 	}
 	if m.totalTabCountLocked() >= m.cfg.MaxTabs {
 		m.mu.Unlock()
 		newTab.cancel()
-		return tabAdoptResult{Unadopted: true, Reason: tabAdoptReasonMaxTabs}, nil
+		result := tabAdoptResult{Unadopted: true, Reason: tabAdoptReasonMaxTabs}
+		entry.result = result
+		close(entry.done)
+		return result, nil
 	}
 	se.tabs = append(se.tabs, newTab)
 	se.activeIdx = len(se.tabs) - 1 // ADR-041 D2: adopted tabs become active by default
@@ -1090,7 +1347,10 @@ func (m *BrowserManager) adoptTarget(sessionID string, targetID target.ID) (tabA
 
 	m.notifyTabsChanged(sessionID, tabs, activeIdx)
 	active := tabs[activeIdx]
-	return tabAdoptResult{Adopted: &active}, nil
+	result := tabAdoptResult{Adopted: &active}
+	entry.result = result
+	close(entry.done)
+	return result, nil
 }
 
 // reconcileTargetListTimeout bounds the chromedp.Targets CDP round trip
@@ -1379,8 +1639,11 @@ func applyStealth(tabCtx context.Context, timeout time.Duration) {
 	}
 }
 
-// CloseSession closes every tab in a specific browsing context (ADR-041 D1:
-// a session is now a tab SET, so this cancels all of them, not just one).
+// CloseSession closes every tab in a specific browsing context AND its
+// browser-owning se.browserCtx (ADR-041 D1: a session is now a tab SET, so
+// this cancels all of them, not just one — plus the browser itself, since
+// whole-session teardown is one of the few places that's actually meant to
+// happen, per sessionEntry.browserCtx's doc comment).
 func (m *BrowserManager) CloseSession(sessionID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1388,6 +1651,9 @@ func (m *BrowserManager) CloseSession(sessionID string) {
 	if se, ok := m.sessions[sessionID]; ok {
 		for _, t := range se.tabs {
 			t.cancel()
+		}
+		if se.browserCancel != nil {
+			se.browserCancel()
 		}
 		delete(m.sessions, sessionID)
 	}
@@ -1418,6 +1684,9 @@ func (m *BrowserManager) Shutdown() {
 	for id, se := range m.sessions {
 		for _, t := range se.tabs {
 			t.cancel()
+		}
+		if se.browserCancel != nil {
+			se.browserCancel()
 		}
 		delete(m.sessions, id)
 	}
