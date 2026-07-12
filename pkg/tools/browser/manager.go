@@ -467,9 +467,25 @@ func (m *BrowserManager) Session(sessionID string) (context.Context, error) {
 // stealthInitScript runs before any page script on every new document, hiding
 // the residual automation tells that survive the launch flags. Kept minimal
 // and side-effect-free so it can never break a page.
-const stealthInitScript = `Object.defineProperty(navigator,'webdriver',{get:()=>undefined});` +
-	`window.chrome=window.chrome||{runtime:{}};` +
-	`Object.defineProperty(navigator,'languages',{get:()=>['en-US','en']});`
+// Each override is independently try/catch-wrapped so one failing (e.g. a
+// non-configurable property on a given Chrome build) never aborts the rest,
+// and webdriver is also deleted off the prototype as a fallback for builds
+// where the accessor lives there.
+//
+// Effectiveness caveat: the webdriver override lands on full-Chrome
+// --headless=new, but NOT on the bundled chrome-headless-shell (--headless=old,
+// what the installer fetches) — there navigator.webdriver is set
+// non-overridably by the shell, so it still reads true regardless of this
+// script or --disable-blink-features=AutomationControlled. Verified in the wild
+// that Google still loads without a CAPTCHA anyway (UA + IP dominate); a
+// hardcore detector could still flag the webdriver bit. Fully closing it would
+// require shipping full Chrome new-headless instead of chrome-headless-shell.
+const stealthInitScript = `(function(){` +
+	`try{Object.defineProperty(navigator,'webdriver',{get:function(){return undefined},configurable:true})}catch(e){}` +
+	`try{delete Navigator.prototype.webdriver}catch(e){}` +
+	`try{window.chrome=window.chrome||{runtime:{}}}catch(e){}` +
+	`try{Object.defineProperty(navigator,'languages',{get:function(){return['en-US','en']},configurable:true})}catch(e){}` +
+	`})();`
 
 // deHeadlessUA rewrites a chrome-headless-shell User-Agent into the equivalent
 // regular-Chrome string ("HeadlessChrome/…" → "Chrome/…"), removing the single
