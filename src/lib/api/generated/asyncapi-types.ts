@@ -44,7 +44,9 @@ export type WsFrameType =
   | "browser_control"
   | "browser_detach"
   | "browser_screencast"
-  | "browser_status";
+  | "browser_status"
+  | "browser_tab_action"
+  | "browser_tabs";
 
 // ── Frame payload types ─────────────────────────────────────────────────────
 
@@ -425,6 +427,26 @@ export interface BrowserStatusFrame {
   session_id?: string;
 }
 
+export interface BrowserTabActionFrame {
+  type: "browser_tab_action";
+  session_id?: string;
+  agent_id?: string;
+  action: "switch" | "close" | "open";
+  index?: number;
+}
+
+export interface BrowserTabsFrame {
+  type: "browser_tabs";
+  session_id?: string;
+  active_index: number;
+  tabs: Array<{
+    index: number;
+    title?: string;
+    url?: string;
+    active?: boolean;
+  }>;
+}
+
 // ── Union of all WS frames (discriminated by the `type` field) ──────────────
 
 export type WsFrame =
@@ -465,7 +487,9 @@ export type WsFrame =
   | BrowserControlFrame
   | BrowserDetachFrame
   | BrowserScreencastFrame
-  | BrowserStatusFrame;
+  | BrowserStatusFrame
+  | BrowserTabActionFrame
+  | BrowserTabsFrame;
 
 // ── Client → server frames ──────────────────────────────────────────────────
 
@@ -516,4 +540,6 @@ export type ServerFrame =
   | WhatsAppPairingFrame
   | NotificationFrame
   | BrowserScreencastFrame
-  | BrowserStatusFrame;
+  | BrowserStatusFrame
+  | BrowserTabActionFrame
+  | BrowserTabsFrame;

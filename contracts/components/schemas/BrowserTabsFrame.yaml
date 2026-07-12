@@ -1,0 +1,47 @@
+title: BrowserTabsFrame
+description: >
+  Server → client. The current set of open tabs for a live-browser session and
+  which one is active, broadcast whenever a tab is opened (e.g. a target=_blank
+  click or window.open the agent/user followed), closed, switched, or its
+  title/url changes. The SPA renders this as the panel's tab strip; the live
+  screencast always reflects the active tab. See ADR-041.
+type: object
+required:
+  - type
+  - tabs
+  - active_index
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: browser_tabs
+  session_id:
+    type: string
+  active_index:
+    type: integer
+    minimum: 0
+    description: Index into `tabs` of the currently-active (screencasted) tab.
+  tabs:
+    type: array
+    maxItems: 32
+    items:
+      type: object
+      required:
+        - index
+      additionalProperties: false
+      properties:
+        index:
+          type: integer
+          minimum: 0
+          description: Stable position of this tab in the set (0-based).
+        title:
+          type: string
+          maxLength: 512
+          description: The tab's document.title, when known.
+        url:
+          type: string
+          maxLength: 4096
+          description: The tab's current URL, when known.
+        active:
+          type: boolean
+          description: True for the active tab (mirrors active_index).
