@@ -72,7 +72,29 @@ func streamReplay(
 	emit func(any) error,
 	mediaStore media.MediaStore,
 	toolStore *toolResultStore,
+	isSpanActive func(parentSpawnCallID string) bool,
 ) (framesEmitted int, err error) {
+	// isSpanActive lets a caller (handleAttachSession, wired to
+	// agent.AgentLoop.IsSubTurnActiveForSpawnCall) tell replay that a given
+	// spawn/delegate ToolCall's real sub-turn is STILL genuinely running,
+	// even though its persisted record may carry a placeholder terminal
+	// status (async delegation writes Status="success", DurationMS≈0 the
+	// instant the spawning call returns — see
+	// session.UnifiedStore.UpdateToolCallStatus's doc comment — well before
+	// the delegate itself finishes). When isSpanActive reports true for a
+	// call, streamReplay withholds that call's own terminal frame(s)
+	// (tool_call_result / subagent_end) so the client is never shown a
+	// fabricated "done" for a turn that has not actually completed — it
+	// sees only tool_call_start / subagent_start, the same "started, no
+	// result yet" shape a genuinely in-flight LIVE call would show. The
+	// real completion then arrives over the live WS event stream once the
+	// sub-turn actually finishes. nil is treated as "nothing is active"
+	// (never withhold) — callers that have no liveness authority (e.g.
+	// tests) can pass nil safely.
+	if isSpanActive == nil {
+		isSpanActive = func(string) bool { return false }
+	}
+
 	// Track underlying file paths already emitted so the SPA never receives
 	// two media frames for the same file. Older transcripts can carry
 	// multiple media:// refs pointing at the same on-disk file (browser.
@@ -88,6 +110,13 @@ func streamReplay(
 	// to bracket. See buildSpawnIDsWithChildren's own doc comment below for
 	// why both tool names are checked (ADR-036 spawn→delegate rename).
 	spawnIDsWithChildren := buildSpawnIDsWithChildren(entries)
+
+	// spanRealAgentIDs maps a spawn/delegate ToolCall.ID (that has at least
+	// one child) to the REAL delegate agent's own ID, resolved from its
+	// first nested child tool call's own transcript entry. See
+	// buildSpanRealAgentIDs' doc comment for why this differs from — and is
+	// more correct than — entry.AgentID on the OUTER spawn/delegate call.
+	spanRealAgentIDs := buildSpanRealAgentIDs(entries, spawnIDsWithChildren)
 
 	// deduped: for each ToolCall.ID keep only the index of the last occurrence
 	// across ALL entries.  key = ToolCall.ID, value = (entryIdx, tcIdx).
@@ -328,10 +357,31 @@ func streamReplay(
 				effectiveAgentID = lastSeenAgentID
 			}
 
+			// isDelegateSpawnCall identifies a spawn/delegate tool call (the
+			// two names checked mirror buildSpawnIDsWithChildren's own
+			// ADR-036 rename note). Used below both to resolve span-level
+			// agent-id and to gate the still-active liveness check — a
+			// terminal snapshot is only ever withheld for THIS call kind,
+			// never for an ordinary tool call.
+			isDelegateSpawnCall := tc.Tool == "spawn" || tc.Tool == "delegate"
+
 			// For spawn calls that have children: emit subagent_start before
 			// the nested frames, then subagent_end after.  We detect this
 			// entry as a spawn-parent if its own ID is in spawnIDsWithChildren.
 			isSpawnParent := spawnIDsWithChildren[tcID]
+
+			// stillActive is true when isSpanActive (wired to
+			// agent.AgentLoop.IsSubTurnActiveForSpawnCall) reports that this
+			// spawn/delegate call's REAL sub-turn has not actually finished
+			// yet, even though its persisted ToolCall record may already
+			// carry a terminal-looking Status/DurationMS (async delegation's
+			// placeholder ack — see streamReplay's isSpanActive doc comment
+			// above). When true, this call's OWN terminal frame(s) —
+			// tool_call_result / subagent_end — are withheld so the client
+			// is never shown a fabricated "done" for a turn that is, in
+			// truth, still working; the real completion arrives later over
+			// the live WS event stream.
+			stillActive := isDelegateSpawnCall && isSpanActive(tcID)
 
 			if isSpawnParent {
 				// Emit tool_call_start for the spawn call itself FIRST.
@@ -340,8 +390,25 @@ func streamReplay(
 				}
 
 				// Emit subagent_start to bracket nested frames.
+				//
+				// Span-level agent attribution: prefer the REAL delegate
+				// agent's own ID (resolved from its first nested child's own
+				// transcript entry, see buildSpanRealAgentIDs) over
+				// effectiveAgentID, which reflects the PARENT's active agent
+				// (the outer spawn/delegate ToolCall's own entry.AgentID is
+				// written by the PARENT turn's appendToolCallTranscript, not
+				// the child's). Live subagent_start/subagent_end frames
+				// (pkg/gateway/websocket.go's eventForwarder) already carry
+				// the child's real identity (SubTurnSpawnPayload.AgentID :=
+				// childTS.agentID, pkg/agent/subturn.go) — this makes replay
+				// match live instead of mislabeling the specialized
+				// per-agent span with the delegator's own identity.
 				spanID := "span_" + tcID
 				taskLabel := resolveTaskLabel(tc)
+				spanAgentID := effectiveAgentID
+				if realAgentID, ok := spanRealAgentIDs[tcID]; ok && realAgentID != "" {
+					spanAgentID = realAgentID
+				}
 				subStart := generated.SubagentStartFrame{
 					Type:         string(generated.WsFrameTypeSubagentStart),
 					SessionId:    sessionID,
@@ -349,8 +416,8 @@ func streamReplay(
 					ParentCallId: tcID,
 					TaskLabel:    taskLabel,
 				}
-				if effectiveAgentID != "" {
-					agentIDCopy := effectiveAgentID
+				if spanAgentID != "" {
+					agentIDCopy := spanAgentID
 					subStart.AgentId = &agentIDCopy
 				}
 				if err2 := emitFrame(subStart); err2 != nil {
@@ -367,12 +434,25 @@ func streamReplay(
 				// (see the comment there), so the aggregate is now discarded
 				// here (`_, _`) — deliberately, not an oversight. This call is
 				// still required regardless: it's what emits the individual
-				// nested child tool_call_start/tool_call_result frames.
+				// nested child tool_call_start/tool_call_result frames. These
+				// are always emitted, even when stillActive — they are
+				// historical, already-completed child tool calls; only the
+				// OUTER span's own terminal frames are conditionally withheld
+				// below.
 				_, _, nestedErr := emitNestedToolCalls(
 					ctx, sessionID, tcID, entries, latestByID, effectiveAgentID, emitFrame, toolStore,
 				)
 				if nestedErr != nil {
 					return framesEmitted, nestedErr
+				}
+
+				if stillActive {
+					// Withhold subagent_end + the outer tool_call_result: the
+					// real sub-turn is still genuinely running. The client
+					// already has tool_call_start + subagent_start for this
+					// call from above, which is the same "started, no result
+					// yet" shape a genuinely in-flight LIVE call shows.
+					continue
 				}
 
 				// Emit subagent_end.
@@ -401,8 +481,8 @@ func streamReplay(
 					DurationMs: &spanDurationMS,
 					Status:     resolveStatus(tc.Status),
 				}
-				if effectiveAgentID != "" {
-					agentIDCopy := effectiveAgentID
+				if spanAgentID != "" {
+					agentIDCopy := spanAgentID
 					subEnd.AgentId = &agentIDCopy
 				}
 				if err2 := emitFrame(subEnd); err2 != nil {
@@ -430,6 +510,15 @@ func streamReplay(
 			}
 			if err2 := emitFrame(buildStart(tc, effectiveAgentID, parentForFlat)); err2 != nil {
 				return framesEmitted, err2
+			}
+			if stillActive {
+				// A spawn/delegate call whose real sub-turn is still running
+				// but has made no (recorded) nested tool calls yet — e.g. a
+				// background delegate reloaded before its first step landed
+				// (symptom: "0 steps working" live, "done 0ms" on reload).
+				// Withhold the result frame; the client sees only
+				// tool_call_start, i.e. genuinely in progress.
+				continue
 			}
 			if err2 := emitFrame(buildResult(tc, effectiveAgentID, parentForFlat)); err2 != nil {
 				return framesEmitted, err2
@@ -593,6 +682,60 @@ func buildSpawnIDsWithChildren(entries []session.TranscriptEntry) map[string]boo
 		}
 	}
 	return withChildren
+}
+
+// buildSpanRealAgentIDs maps each spawn/delegate ToolCall.ID present in
+// withChildren to the REAL delegate agent's own ID — resolved from the
+// AgentID recorded on its FIRST nested child tool call (document order),
+// i.e. the earliest transcript entry whose ParentToolCallID equals that
+// span's ID.
+//
+// This exists because the OUTER spawn/delegate ToolCall's own transcript
+// entry.AgentID is written by the PARENT turn (turnState.
+// appendToolCallTranscript's ts.resolveActiveAgentID(), called when the
+// parent's "delegate" tool call itself completes) — it reflects the
+// delegator's identity, never the delegate's. A nested CHILD tool call, by
+// contrast, is appended by the CHILD sub-turn's own turnState — per ADR-032
+// ("no inheritance from the parent"), childTS.agentID is the resolved
+// DELEGATE's real identity, so a child entry's AgentID is the correct
+// source. Live rendering already gets this right independently:
+// pkg/agent/subturn.go's spawnSubTurn stamps SubTurnSpawnPayload.AgentID :=
+// childTS.agentID directly, so the live subagent_start/subagent_end frames
+// (pkg/gateway/websocket.go's eventForwarder) always carry the delegate's
+// own identity. Without this helper, replay instead fell back to
+// entry.AgentID (the delegator) or lastSeenAgentID for the span-level
+// subagent_start/subagent_end AgentID — a live/replay mismatch that made a
+// delegation's specialized, per-agent span widget mismatch or fail to
+// render correctly after a reload, even though the flat "Delegate task"
+// pill (which intentionally keeps the delegator's own attribution) stayed
+// correct.
+//
+// A span with no children is never bracketed at all (see
+// buildSpawnIDsWithChildren), so this only needs to cover IDs already
+// present in withChildren.
+func buildSpanRealAgentIDs(entries []session.TranscriptEntry, withChildren map[string]bool) map[string]string {
+	if len(withChildren) == 0 {
+		return nil
+	}
+	realAgentIDs := make(map[string]string, len(withChildren))
+	for _, entry := range entries {
+		for _, tc := range entry.ToolCalls {
+			if tc.ParentToolCallID == "" {
+				continue
+			}
+			parentID := string(tc.ParentToolCallID)
+			if !withChildren[parentID] {
+				continue
+			}
+			if _, already := realAgentIDs[parentID]; already {
+				continue
+			}
+			if entry.AgentID != "" {
+				realAgentIDs[parentID] = entry.AgentID
+			}
+		}
+	}
+	return realAgentIDs
 }
 
 type tcAddr struct{ entryIdx, tcIdx int }

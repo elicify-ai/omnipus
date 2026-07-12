@@ -223,6 +223,42 @@ export function useAutoSave<T>(
   // used by the ~6 other callers that only ever write one endpoint.
   const flushBeacon = useCallback(() => {
     if ((!flushUrl && !beaconFlush) || !initializedRef.current || !hasPendingChanges()) return
+    // FIX 5 (7-reviewer-gate finding, supersedes FIX 4 below): FIX 4 gated
+    // this beacon fetch behind isSavingRef to close an overlapping-PUT race
+    // — correct in isolation, but it traded that race for a worse
+    // regression. flushBeacon only ever runs from
+    // visibilitychange/beforeunload/pagehide — exactly the moment a real
+    // tab-close might happen — and gating the keepalive fetch behind
+    // isSavingRef meant a save-in-flight-at-unload got NO keepalive fetch at
+    // all: the newest edit was queued through doSave()'s own `finally`
+    // block instead, which fires a non-keepalive fetch once the in-flight
+    // save settles — but a non-keepalive fetch has no guarantee of
+    // completing after the page has genuinely unloaded. Net effect: closing
+    // the tab within ~500ms of an edit (while a debounced save happens to be
+    // in flight) had a plausible path to silently drop the newest edit
+    // entirely — the exact class of data-loss bug this whole track exists
+    // to fix, just moved to a narrower trigger condition.
+    //
+    // Fix: fire the keepalive fetch (or the caller-supplied `beaconFlush`,
+    // which carries the same keepalive-on-unload contract — see its option
+    // doc comment) with the LATEST data regardless of whether a save is
+    // already in flight. Accepting a possible duplicate/overlapping
+    // keepalive write is strictly safer for data durability on genuine
+    // unload than guaranteeing none goes out (the backend's optimistic-
+    // concurrency handling, plus the `updated_at`-precision fix landing
+    // alongside this one, makes an overlapping pair of writes recoverable;
+    // a guaranteed-lost edit on tab-close is not). Still queue a re-run
+    // through doSave() too — belt-and-braces for the visibilitychange case,
+    // where the tab may just be backgrounded rather than genuinely closing,
+    // so a normal serialized save (with response handling / status update /
+    // `lastSavedJsonRef` advancement, none of which this raw fetch does)
+    // still happens once the in-flight one settles. This is a DELIBERATE
+    // divergence from the unmount-cleanup site's guard below (which still
+    // skips firing when a save is in flight) — see that comment for the
+    // full 4-site invariant and keep the two in sync on any future change.
+    if (isSavingRef.current) {
+      rerunPendingRef.current = true
+    }
     if (beaconFlush) {
       try {
         beaconFlush()
@@ -284,12 +320,24 @@ export function useAutoSave<T>(
       }
       // Flush pending save (fire-and-forget — component is unmounting).
       // Routed through `doSave()` itself — the same function the debounce
-      // timer and `saveNow` fire through — rather than calling
-      // `saveFnRef.current` directly, so all three save-firing sites
-      // visibly share one serialization guard instead of this call site
-      // quietly depending on an invariant that lives elsewhere. `doSave()`
-      // re-checks `isSavingRef` on entry (a cheap, synchronous check before
-      // its own first `await`), so calling it here is safe.
+      // timer and `saveNow` fire through — so THIS call site shares
+      // `doSave()`'s serialization guard rather than quietly depending on an
+      // invariant that lives elsewhere. `doSave()` re-checks `isSavingRef`
+      // on entry (a cheap, synchronous check before its own first `await`),
+      // so calling it here is safe.
+      //
+      // Note this hook has a 4th save-firing site — `flushBeacon` (above) —
+      // that does NOT route through `doSave()`: it needs `keepalive: true`
+      // (or a caller-supplied `beaconFlush`), which `doSave()`'s fetch does
+      // not use, so it duplicate-checks `isSavingRef`/`rerunPendingRef` by
+      // hand instead. Per FIX 5 (see `flushBeacon`'s own comment),
+      // `flushBeacon` deliberately does NOT skip firing when a save is
+      // already in flight — unlike this unmount site and the debounce-timer/
+      // `saveNow` sites, which do skip (queueing a re-run) to avoid an
+      // overlapping PUT. A future change to the guard invariant at ANY of
+      // these four sites must be checked against the other three —
+      // `flushBeacon`'s comment cross-references this one; keep them in
+      // sync.
       if (initializedRef.current) {
         // FIX 3: if a save is already in flight, do NOT fire a second,
         // concurrent flush PUT straight past the serialize guard in

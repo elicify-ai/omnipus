@@ -598,6 +598,71 @@ func (al *AgentLoop) sessionTurnsStillAlive(sessionID string) []*turnState {
 	return alive
 }
 
+// IsSubTurnActiveForSpawnCall reports whether a sub-turn spawned by the spawn
+// tool call identified by parentSpawnCallID is currently registered as an
+// active turn — meaning either not-yet-finished, OR finished but its
+// persisted spawn-call record has not yet been corrected with the real
+// terminal status (see the "Active therefore covers TWO distinct states"
+// paragraph below). Returns false for an empty ID or when no matching
+// turnState is found in activeTurnStates.
+//
+// Root cause this closes (reload/replay fabricated-status bug, live UAT
+// re-verification 2026-07): async delegation (DelegateTool.executeAsync)
+// persists a placeholder ack — Status="success", DurationMS≈0 — on the
+// spawning ToolCall record the instant the tool call itself returns, well
+// before the delegate's own sub-turn actually finishes (see
+// session.UnifiedStore.UpdateToolCallStatus's doc comment). That placeholder
+// is only corrected once the real EventKindSubTurnEnd fires, at the END of
+// spawnSubTurn's cleanup defer. A session reload/replay landing in the
+// window between the placeholder write and that correction previously read
+// the placeholder literally and presented a fabricated "done 0ms" snapshot
+// for a delegate that was, in truth, still working — invisible before
+// 7dd9e7a5 ("background delegate's final answer lost when parent finishes
+// first") because a delegate needing more than one LLM turn used to exit its
+// loop early the instant its parent turn ended, closing this window almost
+// immediately; Critical:true now lets it run for its full, genuine duration
+// (sometimes tens of seconds), making the window routinely observable.
+//
+// Callers (pkg/gateway/replay.go's isSpanActive, pkg/gateway/websocket.go's
+// orphan watchdog) use this to distinguish "genuinely still running" from
+// "genuinely finished" before trusting a persisted terminal snapshot or
+// synthesizing one of their own.
+//
+// "Active" therefore covers TWO distinct states, not one: genuinely still
+// running (ts.IsAlive()), OR finished but the spawning tool-call's placeholder
+// record has not yet been corrected with the real terminal status/duration
+// (!ts.subTurnRecordPersisted.Load()). Collapsing those into a single
+// "isFinished" check reopens the exact bug this primitive exists to close:
+// runTurn's own `defer ts.Finish(false)` (loop.go) flips isFinished true and
+// fully returns BEFORE spawnSubTurn's own cleanup defer (subturn.go) even
+// begins correcting the placeholder ToolCall record written earlier by
+// DelegateTool.executeAsync — a correction that can take up to ~935ms of
+// retry backoff plus real I/O. A reload/replay landing in that gap must still
+// see "active" so it withholds the fabricated "done 0ms" snapshot rather than
+// serving it as genuine. See turnState.subTurnRecordPersisted's doc comment
+// (turn.go) for the full mechanics.
+func (al *AgentLoop) IsSubTurnActiveForSpawnCall(parentSpawnCallID string) bool {
+	if parentSpawnCallID == "" {
+		return false
+	}
+	active := false
+	al.activeTurnStates.Range(func(_, value any) bool {
+		ts, ok := value.(*turnState)
+		if !ok {
+			return true
+		}
+		ts.mu.RLock()
+		matches := ts.parentSpawnCallID == parentSpawnCallID
+		ts.mu.RUnlock()
+		if matches && (ts.IsAlive() || !ts.subTurnRecordPersisted.Load()) {
+			active = true
+			return false // stop — found a live or persistence-pending match
+		}
+		return true
+	})
+	return active
+}
+
 func (al *AgentLoop) InterruptHard() error {
 	ts := al.getAnyActiveTurnState()
 	if ts == nil {

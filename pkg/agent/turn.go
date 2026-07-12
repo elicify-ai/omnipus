@@ -129,15 +129,33 @@ type turnState struct {
 	persistedMessages   []providers.Message
 
 	// SubTurn support
-	depth                int                    // SubTurn depth (0 for root turn)
-	parentTurnID         string                 // Parent turn ID (empty for root turn)
-	childTurnIDs         []string               // Child turn IDs
-	pendingResults       chan *tools.ToolResult // Channel for SubTurn results
-	concurrencySem       chan struct{}          // Semaphore for limiting concurrent SubTurns
-	isFinished           atomic.Bool            // Whether this turn has finished
-	session              session.SessionStore   // Session store reference
-	initialHistoryLength int                    // Snapshot of window (GetHistory) length at turn start
-	initialArchiveLen    int                    // Snapshot of archive (ReadArchive) line count at turn start — for Skip-preserving rollback
+	depth          int                    // SubTurn depth (0 for root turn)
+	parentTurnID   string                 // Parent turn ID (empty for root turn)
+	childTurnIDs   []string               // Child turn IDs
+	pendingResults chan *tools.ToolResult // Channel for SubTurn results
+	concurrencySem chan struct{}          // Semaphore for limiting concurrent SubTurns
+	isFinished     atomic.Bool            // Whether this turn has finished
+	// subTurnRecordPersisted is true once this sub-turn's OWN spawning
+	// "delegate"/"spawn" tool-call record (on the PARENT's transcript) has
+	// been corrected with the real terminal status/duration — or it has been
+	// determined that no correction attempt was needed/possible (no
+	// transcript store, no session ID). isFinished flips the instant runTurn
+	// returns (its own `defer ts.Finish(false)`), but spawnSubTurn's cleanup
+	// defer — which performs the correction via updateToolCallStatusWithRetry,
+	// up to ~935ms of retry backoff for async delegation — only runs AFTER
+	// that point, once spawnSubTurn itself returns. A reload/replay landing
+	// in that window previously read isFinished==true as "safe to trust the
+	// persisted record" and served the still-stale async placeholder ack
+	// (Status="success", DurationMS≈0) as genuine. IsSubTurnActiveForSpawnCall
+	// treats "finished but not yet persisted" as still active so callers
+	// withhold a terminal frame/replay snapshot until BOTH are true. Zero
+	// value (false) is correct for turns with no parentSpawnCallID too — they
+	// are never matched by IsSubTurnActiveForSpawnCall, which requires a
+	// non-empty parentSpawnCallID equality match first.
+	subTurnRecordPersisted atomic.Bool
+	session                session.SessionStore // Session store reference
+	initialHistoryLength   int                  // Snapshot of window (GetHistory) length at turn start
+	initialArchiveLen      int                  // Snapshot of archive (ReadArchive) line count at turn start — for Skip-preserving rollback
 	// parentSpawnCallID is the ToolCall.ID of the spawn tool call in the parent turn that
 	// triggered this sub-turn. Set by spawnSubTurn at child construction (FR-H-003).
 	// Empty for root turns. Used to populate ParentSpawnCallID on ToolExec* payloads

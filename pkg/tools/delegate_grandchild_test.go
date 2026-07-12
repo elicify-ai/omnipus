@@ -20,13 +20,29 @@
 // This test (TestDelegateCannotSpawnGrandchild) asserts the contract, now
 // expressed against the single merged tool (formerly TestSubagentCannotSpawnGrandchild,
 // which registered SpawnTool + SubagentTool separately):
-//   - A sub-turn's tool registry is constructed via CloneExcept(ExcludedDelegate, ExcludedHandoff).
-//   - "delegate" and "hand_off" are absent from the registry.
-//   - Any LLM tool call for either of those inside a sub-turn receives an unknown-tool error.
+//   - A sub-turn's tool registry CAN be constructed via CloneExcept(ExcludedDelegate, ExcludedHandoff).
+//   - When both names are passed, "delegate" and "hand_off" are absent from the registry.
+//   - Any LLM tool call for either of those against such a registry receives an unknown-tool error.
 //   - No grandchild subagent_start frame is emitted.
 //
-// The enforcement is at the registry level (FR-H-006), not a depth check in the tool.
-// Traces to: sprint-h-subagent-block-spec.md FR-H-006, FR-H-007, US-3, BDD Scenario 9 & 10.
+// FR-H-006 REVERSAL (live UAT, 2026-07-12): pkg/agent/subturn.go's spawnSubTurn —
+// the actual production call site — no longer passes ExcludedDelegate to
+// CloneExcept (it now excludes ONLY hand_off), because the blanket "one level
+// only" registry-level block silently defeated the per-edge depth-cap +
+// trust-graph delegation system that already exists and is meant to be the
+// real gate for multi-hop chains (see pkg/agent/subturn_delegate_nesting_test.go
+// and the CloneExcept call site's doc comment in subturn.go for the full
+// story). THIS test still verifies the CloneExcept PRIMITIVE in isolation —
+// that behavior is unchanged and still correct when a caller explicitly asks
+// to exclude "delegate" — but it no longer describes what spawnSubTurn
+// actually does in production. Do not use this test as evidence that
+// grandchild delegation is blocked; pkg/agent/subturn_delegate_nesting_test.go
+// is the current source of truth for that behavior.
+//
+// The enforcement THIS test exercises is at the registry level, not a depth
+// check in the tool. Traces to: sprint-h-subagent-block-spec.md FR-H-006,
+// FR-H-007, US-3, BDD Scenario 9 & 10 (production wiring for "delegate"
+// superseded by the 2026-07-12 reversal above).
 
 package tools
 

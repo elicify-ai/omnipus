@@ -694,18 +694,49 @@ func spawnSubTurn(
 	// target (agent.ID == targetAgent.ID, the real delegate).
 	al.ApprovalGrants().Inherit(parentTS.transcriptSessionID, parentTS.agentID, agent.ID)
 
-	// FR-H-006: exclude delegation-adjacent tools from the child's registry so
-	// it cannot recursively delegate to a grandchild or hand off. Registry-
-	// level filter — the tools are absent, not refused at execute time. One
-	// level only (owner decision 2026-04-20).
+	// FR-H-006 REVERSAL (live UAT, 2026-07-12): "delegate" is NO LONGER excluded
+	// from the child's registry. Note: distinct from the identity-swap
+	// load_tool bug documented just above (ID/ContextBuilder, ~line 663) —
+	// that one was wrong AGENT IDENTITY (an unswapped childTS.agentID made
+	// canLoad resolve the PARENT's policy instead of the child's own); this
+	// one is an INCOMPLETE TOOL SET for a correctly-identified agent (the
+	// child's identity was already right, but "delegate" was unconditionally
+	// missing from its registry regardless of identity or policy). Both
+	// happen to manifest through the same load_tool fabricated-success
+	// symptom described below, but the two are independent bugs with
+	// independent fixes — do not conflate them when debugging a future
+	// load_tool report. The original FR-H-006 rationale ("one level
+	// only for general subagents", owner decision 2026-04-20) predates the
+	// per-edge depth-cap + trust-graph delegation system that now exists
+	// (workspace.DelegationEdge.Depth, config.SubTurn.MaxDepth,
+	// resolveEffectiveDelegationDepth/enforceEdgeModeAndDepth — see
+	// delegation_depth.go and loop.go's buildDelegationDenyCheckerForDelegate),
+	// which ALREADY supports and correctly enforces multi-hop chains up to a
+	// configurable depth (default defaultMaxSubTurnDepth == 3) gated by the
+	// per-workspace trust graph. Excluding "delegate" from the registry was a
+	// blunt, unconditional, registry-level block layered UNDERNEATH that real
+	// gate — it did not just enforce "one level only", it made ANY grandchild
+	// delegation structurally impossible regardless of an explicit, wired,
+	// "unrestricted" trust edge, and it failed in a confusing way: the
+	// unified `load_tool` infra tool (ScopeCore, lazily loaded — see
+	// pkg/tools/tools_tool.go) reports a fabricated LOAD SUCCESS for
+	// "delegate" inside a child sub-turn (its canLoad/markLoaded closures
+	// resolve the caller's agent via al.registry.GetAgent(callerID), i.e. the
+	// PERSISTENT top-level agent instance, not this ephemeral child's own
+	// execSource.Tools clone), while the child's own ts.agent.Tools —
+	// consulted by loop.go's per-iteration filterTimePolicyMap / FR-079
+	// resolveToolPolicyAtExec TOCTOU re-check — never actually gained the
+	// tool. The LLM would then be told "delegate" loaded fine and immediately
+	// hit `{"error":"permission_denied", ...}` on the very next call, without
+	// ever reaching DelegateTool.Execute's real trust-set/mode/depth gate
+	// (delegationDenyBackground/Await, SetDelegationDepthResolver) at all —
+	// blocking every multi-hop chain (e.g. jim -> ray -> planner ->
+	// {explorer|researcher}) even when every edge in the chain was explicitly
+	// authorized. "hand_off" remains excluded: a nested sub-turn hijacking the
+	// ACTIVE parent session's agent is a distinct, still-valid concern
+	// (session takeover) unrelated to task-delegation chain depth, and is not
+	// governed by the depth-cap/trust-graph system at all.
 	//
-	// ADR-036 (2026-07-04) merged the former spawn (async delegation) and
-	// run_subagent (sync delegation) tools into one `delegate` tool, so what
-	// used to be two excluded names (ExcludedSpawn, ExcludedSubagent) is now
-	// one (ExcludedDelegate) — the "one level only" invariant itself is
-	// UNCHANGED by that merge, just re-expressed against the single tool name:
-	//   - delegate: the unified delegation tool (async AND sync modes)
-	//   - handoff:  agent switch
 	// Sourced from execSource (the resolved delegate, or baseAgent for
 	// self-delegation) — NOT unconditionally baseAgent. Workspace-scoped
 	// tools (read_file/write_file/edit_file/bash/...) bind their root
@@ -722,10 +753,21 @@ func spawnSubTurn(
 	// -workspace-bound tool objects, the same pattern already used for
 	// ContextBuilder.
 	if execSource.Tools != nil {
-		agent.Tools = execSource.Tools.CloneExcept(tools.ExcludedDelegate, tools.ExcludedHandoff)
+		// Known residual gap (not fixed here, documented only): unlike
+		// "delegate" above, "hand_off" is unconditionally excluded from
+		// EVERY child sub-turn's registry, and the SAME load_tool
+		// fabricated-success-then-permission_denied bug just cured for
+		// "delegate" is still live for "hand_off" — canLoad/markLoaded
+		// (pkg/tools/tools_tool.go) resolve the caller via
+		// al.registry.GetAgent(callerID), the PERSISTENT top-level agent,
+		// not this ephemeral child's own registry, so load_tool can still
+		// report a fabricated success for "hand_off" here even though it is
+		// structurally absent from agent.Tools. Root-caused but out of
+		// scope for this fix (tools_tool.go is a larger, separate change).
+		agent.Tools = execSource.Tools.CloneExcept(tools.ExcludedHandoff)
 		// Log the constructed registry so operators can debug "my subagent has no tools" issues.
 		slog.Info("subturn: child registry constructed",
-			"excluded", []string{"delegate", "hand_off"},
+			"excluded", []string{"hand_off"},
 			"remaining_count", agent.Tools.Count(),
 			"child_id", childID,
 		)
@@ -1047,6 +1089,14 @@ func spawnSubTurn(
 				}
 			}
 
+			// The correction attempt (above) is now genuinely done — either it
+			// succeeded, it exhausted its retry budget (logged above), or there
+			// was nothing to correct (nil store/empty session ID). Only NOW is
+			// it safe for IsSubTurnActiveForSpawnCall to let a reload/replay
+			// trust this turn's persisted terminal record; see
+			// turnState.subTurnRecordPersisted's doc comment (turn.go).
+			childTS.subTurnRecordPersisted.Store(true)
+
 			al.emitEvent(EventKindSubTurnEnd,
 				childTS.eventMeta("spawnSubTurn", "subturn.end"),
 				SubTurnEndPayload{
@@ -1104,6 +1154,26 @@ func spawnSubTurn(
 
 	// Native path (default, existing behavior — unchanged).
 	turnRes, turnErr := al.runTurn(childCtx, childTS)
+
+	// Re-register childTS in activeTurnStates: runTurn's OWN internal defer
+	// chain (loop.go) already deleted it — al.clearActiveTurn(ts) (keyed by
+	// ts.sessionKey, which equals childID here) runs as part of runTurn's
+	// unwind BEFORE ts.Finish(false) even sets isFinished=true, deleting the
+	// exact map entry IsSubTurnActiveForSpawnCall's Range scan depends on to
+	// find this turn at all. Without this re-Store, the entry would be gone
+	// from activeTurnStates for the ENTIRE remainder of this function —
+	// including the persist-retry window below (up to ~935ms) — so
+	// IsSubTurnActiveForSpawnCall could never report "active" for THIS span
+	// again no matter what subTurnRecordPersisted says, defeating that fix
+	// entirely (Range finds nothing to check IsAlive()/subTurnRecordPersisted
+	// against in the first place). Re-storing under the SAME key (childID)
+	// used at construction (see "Register child turn state" above) makes the
+	// span findable again for exactly as long as the cleanup defer below
+	// needs it; the pre-existing `defer al.activeTurnStates.Delete(childID)`
+	// (registered earlier, so it runs AFTER the cleanup defer per LIFO order)
+	// removes it for real once that defer — including the persistence
+	// correction — has fully completed.
+	al.activeTurnStates.Store(childID, childTS)
 
 	// Release the concurrency semaphore immediately after runTurn completes,
 	// before the cleanup defer runs. This prevents a deadlock where:

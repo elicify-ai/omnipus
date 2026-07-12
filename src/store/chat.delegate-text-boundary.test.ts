@@ -215,3 +215,113 @@ describe('chat store — delegator-narration/delegate-content text join (regress
     expect(finalMsgs[0].pendingTextBoundary).toBe(false)
   })
 })
+
+// Bug 1 regression (live UAT, "A-I4 — live vs reload rendering parity"): a
+// multi-step delegate narration (narration -> tool call -> narration -> tool
+// call -> narration) must render as the SAME single bubble on reload as it
+// does live — not one bubble per underlying Bug #416-split transcript entry.
+// See the merge-boundary fix in the `replay_message` case of chat.ts (turn_id
+// + agent_id as the replay-side equivalent of the live 'token' case's
+// agent_id-boundary rule) and the corresponding
+// ChatStore_ReplaySequence_InterleavedTurn_TwoFrames tests in chat.test.ts.
+describe('chat store — live vs reload rendering parity for multi-step delegate narration (Bug 1 regression, A-I4)', () => {
+  it('a multi-step await-mode delegate narration renders as ONE bubble both live and on reload — same bubble count, same content, same tool-call count, one model tag not one per split segment', () => {
+    // ── Live sequence: Ray narrates, calls a tool, narrates again, calls
+    // another tool, then narrates a final synthesis — all as ONE continuous
+    // live token stream sharing Ray's own agent_id throughout (the bubble
+    // never closes mid-sub-turn; see Fix 5a / the 'token' case).
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'token', content: 'Step 1: searching for sources.', agent_id: 'ray', session_id: SESSION_ID })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'tool_call_start', call_id: 'search_1', tool: 'web_search', params: { query: 'x' }, agent_id: 'ray', session_id: SESSION_ID })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'tool_call_result', call_id: 'search_1', tool: 'web_search', result: { hits: 3 }, status: 'success', duration_ms: 500, session_id: SESSION_ID })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'token', content: 'Step 2: fetching the top result.', agent_id: 'ray', session_id: SESSION_ID })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'tool_call_start', call_id: 'fetch_1', tool: 'web_fetch', params: { url: 'https://example.com' }, agent_id: 'ray', session_id: SESSION_ID })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'tool_call_result', call_id: 'fetch_1', tool: 'web_fetch', result: { body: '...' }, status: 'success', duration_ms: 300, session_id: SESSION_ID })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'token', content: 'Final answer: the sources agree on X.', agent_id: 'ray', session_id: SESSION_ID })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'done', session_id: SESSION_ID })
+    })
+
+    const liveState = useChatStore.getState()
+    const liveMsgs = liveState.messages.filter((m) => m.role === 'assistant')
+    expect(liveMsgs).toHaveLength(1)
+    expect(liveMsgs[0].agentId).toBe('ray')
+    expect(liveMsgs[0].content).toBe(
+      'Step 1: searching for sources.\n\n' +
+        'Step 2: fetching the top result.\n\n' +
+        'Final answer: the sources agree on X.',
+    )
+    // Live 'token' streaming never sets .model — only replay_message does.
+    expect(liveMsgs[0].model).toBeUndefined()
+    expect(liveMsgs[0].tool_calls ?? []).toHaveLength(2)
+
+    // ── Reload sequence: the SAME turn, replayed from a transcript that
+    // persisted the Bug #416-split entries — three separate replay_message
+    // frames sharing ONE turn_id (ts.turnID) and Ray's agent_id, interleaved
+    // with the same two tool calls (pkg/gateway/replay.go emits one
+    // replay_message per non-empty-content entry, and one
+    // tool_call_start/result pair per persisted ToolCall).
+    act(() => { useChatStore.getState().resetSession() })
+
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'replay_message', role: 'assistant', content: 'Step 1: searching for sources.',
+        id: 'r-entry-1', agent_id: 'ray', turn_id: 'ray-subturn-1', model: 'z-ai/glm-5.2', session_id: SESSION_ID,
+      })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'tool_call_start', call_id: 'search_1', tool: 'web_search', params: { query: 'x' }, agent_id: 'ray', session_id: SESSION_ID })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'tool_call_result', call_id: 'search_1', tool: 'web_search', result: { hits: 3 }, status: 'success', duration_ms: 500, session_id: SESSION_ID })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'replay_message', role: 'assistant', content: 'Step 2: fetching the top result.',
+        id: 'r-entry-2', agent_id: 'ray', turn_id: 'ray-subturn-1', model: 'z-ai/glm-5.2', session_id: SESSION_ID,
+      })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'tool_call_start', call_id: 'fetch_1', tool: 'web_fetch', params: { url: 'https://example.com' }, agent_id: 'ray', session_id: SESSION_ID })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'tool_call_result', call_id: 'fetch_1', tool: 'web_fetch', result: { body: '...' }, status: 'success', duration_ms: 300, session_id: SESSION_ID })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'replay_message', role: 'assistant', content: 'Final answer: the sources agree on X.',
+        id: 'r-entry-3', agent_id: 'ray', turn_id: 'ray-subturn-1', model: 'z-ai/glm-5.2', session_id: SESSION_ID,
+      })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'done', session_id: SESSION_ID })
+    })
+
+    const reloadState = useChatStore.getState()
+    const reloadMsgs = reloadState.messages.filter((m) => m.role === 'assistant')
+
+    // Bubble count and header must match live exactly — not one bubble per
+    // underlying transcript entry.
+    expect(reloadMsgs).toHaveLength(liveMsgs.length)
+    expect(reloadMsgs[0].agentId).toBe(liveMsgs[0].agentId)
+    // Content matches live byte-for-byte.
+    expect(reloadMsgs[0].content).toBe(liveMsgs[0].content)
+    // Both tool calls land on the SAME merged bubble, matching live.
+    expect((reloadMsgs[0].tool_calls ?? []).length).toBe((liveMsgs[0].tool_calls ?? []).length)
+    // Exactly one model tag on the merged bubble — not one per split segment.
+    expect(reloadMsgs[0].model).toBe('z-ai/glm-5.2')
+  })
+})

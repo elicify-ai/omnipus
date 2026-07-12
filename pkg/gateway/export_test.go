@@ -30,3 +30,15 @@ func SetOrphanWatchdogTimeoutForTest(d time.Duration) func() {
 	orphanWatchdogTimeout = d
 	return func() { orphanWatchdogTimeout = orig }
 }
+
+// SetOrphanWatchdogMaxRechecksForTest overrides orphanWatchdogMaxRechecks for
+// the duration of a test, restoring the original value at test cleanup. Used
+// to prove the watchdog eventually force-fires a synthetic "interrupted"
+// frame for a span whose IsSubTurnActiveForSpawnCall liveness check reports
+// active forever (a genuinely wedged/deadlocked turn) without the test
+// needing to wait for the real 15-reschedule default ceiling.
+func SetOrphanWatchdogMaxRechecksForTest(n int) func() {
+	orig := orphanWatchdogMaxRechecks
+	orphanWatchdogMaxRechecks = n
+	return func() { orphanWatchdogMaxRechecks = orig }
+}

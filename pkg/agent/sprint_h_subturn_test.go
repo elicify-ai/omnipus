@@ -3,20 +3,35 @@
 // W2-3: TestSpawnSubTurn_ChildRegistry_OmitsDelegationTools
 //
 // Regression test that pins the production wiring in pkg/agent/subturn.go —
-// specifically that spawnSubTurn calls CloneExcept("delegate", "hand_off")
-// and the child receives a registry with neither delegation-adjacent tool.
+// UPDATED (live UAT, 2026-07-12, FR-H-006 REVERSAL): spawnSubTurn now calls
+// CloneExcept("hand_off") ONLY. "delegate" is deliberately RETAINED in the
+// child's registry so a delegated sub-turn can itself delegate onward,
+// subject to the real trust-graph/mode/depth gate
+// (buildDelegationDenyCheckerForDelegate + resolveEffectiveDelegationDepth,
+// see pkg/agent/loop.go and pkg/agent/delegation_depth.go), never a blanket
+// registry-level omission. See the doc comment on the CloneExcept call site
+// in subturn.go for the full rationale (the old blanket exclusion silently
+// defeated the depth-cap + trust-graph system that already exists, and did
+// so via a confusing path: load_tool reported a fabricated success for
+// "delegate" while the child's OWN tool registry never actually gained it —
+// pkg/agent/subturn_delegate_nesting_test.go is the regression test proving
+// the fix). "hand_off" is still excluded — a nested sub-turn hijacking the
+// ACTIVE parent session's agent remains a distinct, still-valid concern.
 //
 // ADR-036 (2026-07-04) merged spawn + run_subagent + check_spawn_status into one
 // `delegate` tool, collapsing the former two excluded names (spawn, run_subagent)
-// into one (delegate). The "one level only" invariant itself is unchanged.
+// into one (delegate). That merge is orthogonal to the FR-H-006 reversal above.
 //
-// This test is distinct from pkg/tools/delegate_grandchild_test.go which tests the
-// CloneExcept primitive in isolation. This test exercises the full production wiring:
+// This test is distinct from pkg/tools/delegate_grandchild_test.go, which still
+// tests the CloneExcept primitive in isolation (CloneExcept itself is unchanged —
+// it still omits whatever names are passed to it; only spawnSubTurn's call site
+// changed which names it passes). This test exercises the full production wiring:
 // a real baseAgent with both tools registered, passed through spawnSubTurn,
 // with the child's registry verified at the output.
 //
 // Traces to: temporal-puzzling-melody.md W2-3
-// Traces to: sprint-h-subagent-block-spec.md FR-H-006, TDD row 2 (production wiring)
+// Traces to: sprint-h-subagent-block-spec.md FR-H-006, TDD row 2 (production wiring;
+// REVERSED for "delegate" per the live UAT multi-hop delegation bug, 2026-07-12)
 
 package agent
 
@@ -33,8 +48,9 @@ import (
 
 // TestSpawnSubTurn_ChildRegistry_OmitsDelegationTools verifies that when
 // spawnSubTurn constructs the child AgentInstance it calls CloneExcept with
-// both delegation-adjacent tool names ("delegate", "hand_off"), so the
-// child's tool registry contains neither of them.
+// ONLY "hand_off" (FR-H-006 REVERSAL, live UAT 2026-07-12) — "delegate" is
+// deliberately RETAINED in the child's tool registry so a delegated sub-turn
+// can itself delegate onward, subject to the real trust-graph/mode/depth gate.
 //
 // Strategy: intercept the child registry by subscribing to the SubTurnSpawn event
 // and then checking the child's tool list. Since spawnSubTurn constructs the child
@@ -43,19 +59,19 @@ import (
 //
 // The most reliable approach: build a baseAgent with both tools explicitly
 // registered, call spawnSubTurn, and verify via the child's event/outcome that
-// neither tool is in the child's registry by checking the clone directly on
-// the AgentInstance produced inside spawnSubTurn.
+// hand_off (only) is absent from the child's registry by checking the clone
+// directly on the AgentInstance produced inside spawnSubTurn.
 //
 // Since spawnSubTurn creates the child AgentInstance internally, we verify the
 // tool registry state by observing the clone logic: we build the parentRegistry
 // with both delegation-adjacent tools and an additional neutral tool, clone it
-// the same way subturn.go does, and assert both are absent while the neutral
-// tool remains.
+// the same way subturn.go does, and assert hand_off is absent while delegate and
+// the neutral tool remain.
 func TestSpawnSubTurn_ChildRegistry_OmitsDelegationTools(t *testing.T) {
 	// BDD: Given a baseAgent with delegate and hand_off both registered
 	// BDD: When spawnSubTurn constructs the child AgentInstance (CloneExcept in subturn.go)
-	// BDD: Then child.Tools.List() contains NEITHER of: delegate, hand_off
-	// Traces to: temporal-puzzling-melody.md W2-3
+	// BDD: Then child.Tools.List() contains hand_off's exclusion only; delegate remains
+	// Traces to: temporal-puzzling-melody.md W2-3; FR-H-006 REVERSAL (live UAT, 2026-07-12)
 
 	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled // only al+cleanup used here
 	defer cleanup()
@@ -76,16 +92,17 @@ func TestSpawnSubTurn_ChildRegistry_OmitsDelegationTools(t *testing.T) {
 	_, hasReadFileBefore := parentRegistry.Get("read_file")
 	require.True(t, hasReadFileBefore, "read_file must be in parent registry (pre-condition)")
 
-	// Apply the same CloneExcept logic that spawnSubTurn uses (FR-H-006, subturn.go:~657).
-	// This directly tests the production wiring strings: "delegate", "hand_off".
-	childRegistry := parentRegistry.CloneExcept("delegate", "hand_off")
+	// Apply the same CloneExcept logic that spawnSubTurn uses (subturn.go, post-
+	// FR-H-006-reversal call site). This directly tests the production wiring
+	// string: "hand_off" only — "delegate" is no longer passed to CloneExcept.
+	childRegistry := parentRegistry.CloneExcept("hand_off")
 
-	// BDD: Then delegate is ABSENT from child registry
+	// BDD: Then delegate REMAINS in the child registry (the fix under test)
 	childDelegate, childHasDelegate := childRegistry.Get("delegate")
-	assert.False(t, childHasDelegate, "delegate must NOT be in child registry (FR-H-006)")
-	assert.Nil(t, childDelegate, "delegate tool entry must be nil in child registry")
+	assert.True(t, childHasDelegate, "delegate MUST remain in child registry (FR-H-006 reversal)")
+	assert.NotNil(t, childDelegate, "delegate tool entry must be non-nil in child registry")
 
-	// BDD: And hand_off is ABSENT from child registry
+	// BDD: And hand_off is ABSENT from child registry (unchanged invariant)
 	childHandoff, childHasHandoff := childRegistry.Get("hand_off")
 	assert.False(t, childHasHandoff, "hand_off must NOT be in child registry (FR-H-006)")
 	assert.Nil(t, childHandoff, "hand_off tool entry must be nil in child registry")
@@ -95,18 +112,16 @@ func TestSpawnSubTurn_ChildRegistry_OmitsDelegationTools(t *testing.T) {
 	assert.True(t, childHasReadFile, "read_file must remain in child registry (non-excluded)")
 	assert.NotNil(t, childReadFile, "read_file tool entry must be non-nil")
 
-	// Count assertion: child must have exactly 2 fewer tools than parent
-	assert.Equal(t, parentRegistry.Count()-2, childRegistry.Count(),
-		"child registry must have exactly 2 fewer tools than parent")
+	// Count assertion: child must have exactly 1 fewer tool than parent (hand_off only)
+	assert.Equal(t, parentRegistry.Count()-1, childRegistry.Count(),
+		"child registry must have exactly 1 fewer tool than parent (hand_off only)")
 
-	// Verify neither tool name appears in List()
+	// Verify hand_off is absent from List(), but delegate is present.
 	childList := childRegistry.List()
-	for _, name := range childList {
-		assert.NotEqual(t, "delegate", name,
-			"delegate must not appear in child.List() — production wiring check (FR-H-006)")
-		assert.NotEqual(t, "hand_off", name,
-			"hand_off must not appear in child.List() — production wiring check (FR-H-006)")
-	}
+	assert.NotContains(t, childList, "hand_off",
+		"hand_off must not appear in child.List() — production wiring check (FR-H-006)")
+	assert.Contains(t, childList, "delegate",
+		"delegate MUST appear in child.List() — production wiring check (FR-H-006 reversal)")
 
 	// ── Part 2: Event bus check via real spawnSubTurn ────────────────────────────
 	// Use the real default agent (which has ContextBuilder set) to verify that
@@ -130,7 +145,8 @@ func TestSpawnSubTurn_ChildRegistry_OmitsDelegationTools(t *testing.T) {
 	defer collectCleanup()
 
 	// Call spawnSubTurn with the real base agent — the production path calls
-	// CloneExcept("delegate", "hand_off") on baseAgent.Tools in subturn.go.
+	// CloneExcept("hand_off") on baseAgent.Tools in subturn.go (delegate is
+	// retained post-reversal).
 	cfg := SubTurnConfig{Model: "gpt-4o-mini", Tools: []tools.Tool{}}
 	// W1-12: inject a parentSpawnCallID so the span lifecycle events emit
 	// (mirrors the production path where the delegate tool provides the call ID).
