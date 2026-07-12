@@ -19,6 +19,19 @@ import (
 // maxGetTextBytes caps browser_get_text output to prevent enormous DOM dumps.
 const maxGetTextBytes = 100 * 1024 // 100KB per spec edge case
 
+// getTextWaitTimeout bounds the initial element-presence wait for
+// browser_get_text and browser_wait with a SHORT, dedicated timeout instead
+// of the full page-load budget (BrowserManager.PageTimeout(), commonly 30s).
+// Without this, a selector that exists but is never visible (e.g. "title" —
+// <title> lives in <head> and is never rendered/visible), or one that
+// matches nothing on the page at all, blocked for the ENTIRE PageTimeout
+// before failing — observed live as a ~30s hang on
+// browser_get_text{selector:"title"}. 8s is generous for a DOM
+// presence/visibility check to settle while still keeping a stuck agent turn
+// responsive; PageTimeout remains the outer ceiling for the rest of each
+// tool's work (e.g. the subsequent chromedp.Text call).
+const getTextWaitTimeout = 8 * time.Second
+
 // DefaultSessionID is the session used by all browser tools. Sequential tool
 // calls (navigate → click → get_text) operate on the same Chromium tab.
 //
@@ -364,11 +377,21 @@ func (t *GetTextTool) Execute(ctx context.Context, args map[string]any) *tools.T
 	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, t.mgr.PageTimeout())
 	defer timeoutCancel()
 
+	// Wait for the node to exist with a SHORT, dedicated timeout — not the
+	// full PageTimeout — and use WaitReady (DOM presence) rather than
+	// WaitVisible (rendered/visible). A node like <title> is present but
+	// never "visible"; WaitVisible would block for the full PageTimeout on
+	// every such selector before failing. See getTextWaitTimeout's doc
+	// comment for the observed 30s hang this fixes.
+	waitCtx, waitCancel := context.WithTimeout(tabCtx, getTextWaitTimeout)
+	err = chromedp.Run(waitCtx, chromedp.WaitReady(selector, chromedp.ByQuery))
+	waitCancel()
+	if err != nil {
+		return tools.ErrorResult(fmt.Sprintf("browser_get_text: element not found: %s", err))
+	}
+
 	var text string
-	err = chromedp.Run(tabCtx,
-		chromedp.WaitVisible(selector, chromedp.ByQuery),
-		chromedp.Text(selector, &text, chromedp.ByQuery),
-	)
+	err = chromedp.Run(tabCtx, chromedp.Text(selector, &text, chromedp.ByQuery))
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("browser_get_text: element not found: %s", err))
 	}
@@ -418,7 +441,13 @@ func (t *WaitTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, t.mgr.PageTimeout())
 	defer timeoutCancel()
 
-	err = chromedp.Run(tabCtx, chromedp.WaitVisible(selector, chromedp.ByQuery))
+	// Same fail-fast rationale as browser_get_text (see getTextWaitTimeout's
+	// doc comment): a selector that never appears would otherwise block for
+	// the full PageTimeout (commonly 30s) before failing. Bound the wait with
+	// the same short, dedicated timeout so a missing selector fails fast.
+	waitCtx, waitCancel := context.WithTimeout(tabCtx, getTextWaitTimeout)
+	err = chromedp.Run(waitCtx, chromedp.WaitVisible(selector, chromedp.ByQuery))
+	waitCancel()
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("browser_wait: timeout waiting for %q: %s", selector, err))
 	}

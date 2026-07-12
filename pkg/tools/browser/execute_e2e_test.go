@@ -645,6 +645,70 @@ func TestExecute_Wait_TimeoutForAbsentSelector(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Case 7c — browser_get_text fails fast on an invisible-but-present or
+// entirely absent selector, bounded by getTextWaitTimeout, NOT the full
+// (deliberately large, here) PageTimeout.
+//
+// Regression test for a live-observed ~30s hang on
+// browser_get_text{selector:"title"}: <title> lives in <head> and is never
+// "visible", so the old chromedp.WaitVisible blocked for the ENTIRE
+// PageTimeout before failing. The fix (1) swaps to chromedp.WaitReady (DOM
+// presence, not rendered visibility) so a present-but-invisible node like
+// <title> resolves immediately instead of never, and (2) bounds the
+// existence check with the short, dedicated getTextWaitTimeout so a
+// genuinely missing selector still fails fast rather than riding the full
+// page-load budget.
+//
+// PageTimeout is set deliberately large (20s, comfortably above
+// getTextWaitTimeout's 8s) so a regression back to
+// WaitVisible-bounded-by-PageTimeout would show up as a ~20s+ elapsed time
+// on the missing-selector case, not just as an assertion on IsError.
+//
+// Traces to: tools.go GetTextTool.Execute, getTextWaitTimeout
+// ---------------------------------------------------------------------------
+
+func TestExecute_GetText_FailsFastOnInvisibleOrMissingSelector(t *testing.T) {
+	skipIfNoBrowser(t)
+
+	srv := executeTestServer(t)
+	cfg := BrowserConfig{
+		Enabled:     true,
+		Headless:    true,
+		PageTimeout: 20 * time.Second,
+		MaxTabs:     2,
+		ProfileDir:  t.TempDir(),
+	}
+	registry, mgr := newPermissiveRegistry(t, cfg)
+	defer mgr.Shutdown()
+	ctx := context.Background()
+
+	navTool := mustGetTool(t, registry, "browser_navigate")
+	navResult := navTool.Execute(ctx, map[string]any{"url": srv.URL})
+	require.False(t, navResult.IsError, "navigate must succeed before get_text test")
+
+	getTextTool := mustGetTool(t, registry, "browser_get_text")
+
+	// "title" is present in <head> but never rendered/visible — the exact
+	// selector from the live-observed hang. Must now succeed quickly.
+	start := time.Now()
+	result := getTextTool.Execute(ctx, map[string]any{"selector": "title"})
+	elapsed := time.Since(start)
+	assert.False(t, result.IsError,
+		"browser_get_text on <title> must succeed (WaitReady, not WaitVisible); got: %s", result.ForLLM)
+	assert.Less(t, elapsed, 10*time.Second,
+		"browser_get_text on <title> must resolve well under the 20s PageTimeout (got %s)", elapsed)
+
+	// A genuinely missing selector must fail FAST — bounded by
+	// getTextWaitTimeout (8s), not the full 20s PageTimeout.
+	start = time.Now()
+	result = getTextTool.Execute(ctx, map[string]any{"selector": "#totally-absent-element"})
+	elapsed = time.Since(start)
+	assert.True(t, result.IsError, "browser_get_text on a missing selector must return IsError=true")
+	assert.Less(t, elapsed, 12*time.Second,
+		"browser_get_text on a missing selector must fail fast (bounded by getTextWaitTimeout, not the 20s PageTimeout); got %s", elapsed)
+}
+
+// ---------------------------------------------------------------------------
 // Case 7b — Session persistence: two sequential Execute calls share the tab
 //
 // BDD: Given browser_navigate is called on a fixture page,
