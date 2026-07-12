@@ -117,10 +117,11 @@ describe('useOmnipusRuntime — onNew → model_name plumbing (FR-010 / W4-21)',
     }
   })
 
-  it('reflects a fresh pick on each send (the store clears nextModel after the first send)', async () => {
-    // After the first send, the chat store clears nextModel (it's a
-    // "next message" indicator, not a persistent preference). A
-    // second send without a re-pick MUST NOT carry the old model.
+  it('keeps the picked model on subsequent sends (sticky — the store no longer clears nextModel)', async () => {
+    // Sticky model selection: a pick PERSISTS across sends (it is no longer
+    // cleared after the first send), so a second send without a re-pick MUST
+    // still carry the same model. This is the fix for the composer selector
+    // snapping back to the agent default after every message.
     useChatStore.getState().setNextModel('z-ai/glm-5.2')
 
     const { result } = renderHook(() => useOmnipusRuntime())
@@ -135,21 +136,14 @@ describe('useOmnipusRuntime — onNew → model_name plumbing (FR-010 / W4-21)',
     const [, opts1] = sendSpy.mock.calls[0]
     expect(opts1?.model_name).toBe('z-ai/glm-5.2')
 
-    // Simulate the store clearing nextModel (this happens inside
-    // sendMessage after the wire dispatch).
-    act(() => {
-      useChatStore.setState({ nextModel: null })
-    })
-
-    // Second send without a re-pick — no model_name.
+    // Second send WITHOUT a re-pick — the pick is sticky, so the same model
+    // is still forwarded (nextModel was not cleared).
     await act(async () => {
       composer.setText('second message')
       await composer.send()
     })
     expect(sendSpy).toHaveBeenCalledTimes(2)
     const [, opts2] = sendSpy.mock.calls[1]
-    if (opts2 !== undefined) {
-      expect(Object.prototype.hasOwnProperty.call(opts2, 'model_name')).toBe(false)
-    }
+    expect(opts2?.model_name).toBe('z-ai/glm-5.2')
   })
 })
