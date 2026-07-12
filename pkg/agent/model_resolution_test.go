@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -86,12 +85,15 @@ func TestResolveModelCfg_PassthroughProviderFallback(t *testing.T) {
 	}
 }
 
-// TestResolveModelCfg_OpenaiPrefixWithoutOpenaiProvider_ReturnsFalse covers
-// Dataset 1 row 4 (BDD-23): an input with an explicit "openai/" prefix MUST
-// NOT be re-prefixed by the passthrough fallback when no openai provider is
-// configured. The original buildModelListResolver silently re-prefixed it as
-// "openrouter/openai/gpt-4o", which was the bug the spec wants fixed.
-func TestResolveModelCfg_OpenaiPrefixWithoutOpenaiProvider_ReturnsFalse(t *testing.T) {
+// TestResolveModelCfg_VendorPrefixedSlug_RoutesViaPassthrough covers the
+// aggregator case (regression fix; supersedes the former row-4 "returns error"
+// expectation). OpenRouter's own catalog uses vendor-prefixed ids like
+// "openai/gpt-4o" and "anthropic/claude-3.5-haiku"; the vendor segment is part
+// of OpenRouter's slug, not a request for a separately-configured provider. So
+// with only an openrouter provider configured, such a pick MUST route through
+// openrouter — the earlier guard wrongly refused it, silently falling back to
+// the default (the composer lists these models but the runtime couldn't use them).
+func TestResolveModelCfg_VendorPrefixedSlug_RoutesViaPassthrough(t *testing.T) {
 	cfg := &config.Config{
 		Providers: []*config.ModelConfig{
 			{
@@ -103,12 +105,43 @@ func TestResolveModelCfg_OpenaiPrefixWithoutOpenaiProvider_ReturnsFalse(t *testi
 			},
 		},
 	}
-	mc, err := ResolveModelCfg(cfg, "openai/gpt-4o", "")
-	if err == nil {
-		t.Fatalf("expected error for explicit openai/ prefix without openai provider, got %+v", mc)
+	for _, slug := range []string{"openai/gpt-4o", "anthropic/claude-3.5-haiku", "google/gemini-2.5-flash"} {
+		mc, err := ResolveModelCfg(cfg, slug, "")
+		if err != nil || mc == nil {
+			t.Fatalf("expected %q to route via the openrouter passthrough, got err=%v mc=%+v", slug, err, mc)
+		}
+		if mc.Provider != "openrouter" {
+			t.Errorf("%q: expected Provider=openrouter, got %q", slug, mc.Provider)
+		}
+		if mc.Model != "openrouter/"+slug {
+			t.Errorf("%q: expected Model=openrouter/%s, got %q", slug, slug, mc.Model)
+		}
+		if mc.APIKeyRef != "OPENROUTER_KEY" {
+			t.Errorf("%q: expected inherited APIKeyRef, got %q", slug, mc.APIKeyRef)
+		}
 	}
-	if mc != nil {
-		t.Errorf("expected nil ModelConfig on miss, got %+v", mc)
+}
+
+// TestResolveModelCfg_VendorPrefixedSlug_NoPassthrough_Errors preserves the
+// legitimate half of the old guard: when NO passthrough/aggregator provider is
+// configured (only a dedicated, non-aggregator provider that doesn't match),
+// an unmatched vendor-prefixed model still errors — a dedicated-only setup
+// can't invent a route for a model none of its providers expose.
+func TestResolveModelCfg_VendorPrefixedSlug_NoPassthrough_Errors(t *testing.T) {
+	cfg := &config.Config{
+		Providers: []*config.ModelConfig{
+			{
+				ModelName: "gpt-4o",
+				Model:     "openai/gpt-4o",
+				Provider:  "openai",
+				APIBase:   "https://api.openai.com/v1",
+				APIKeyRef: "OPENAI_KEY",
+			},
+		},
+	}
+	mc, err := ResolveModelCfg(cfg, "anthropic/claude-3.5-haiku", "")
+	if err == nil || mc != nil {
+		t.Fatalf("expected error (no passthrough provider) for anthropic/… slug, got mc=%+v", mc)
 	}
 }
 
@@ -241,10 +274,14 @@ func TestBuildModelListResolver_MatchesResolveModelCfg(t *testing.T) {
 	}
 }
 
-// TestBuildModelListResolver_RejectsPrefixedPassthrough confirms the UI
-// selector path also enforces the same "no blind re-prefixing" rule that
-// ResolveModelCfg enforces (Dataset 1 row 4 — the bug being fixed).
-func TestBuildModelListResolver_RejectsPrefixedPassthrough(t *testing.T) {
+// TestBuildModelListResolver_ResolvesPrefixedViaPassthrough confirms the UI
+// selector path resolves an aggregator's vendor-prefixed catalog model the
+// SAME way the chat runtime does (buildModelListResolver shares ResolveModelCfg
+// — the whole point is that the picker and the runtime agree on what's usable).
+// Supersedes the former "rejects prefixed passthrough" assertion, which locked
+// in the regression where the composer offered OpenRouter models the runtime
+// then refused.
+func TestBuildModelListResolver_ResolvesPrefixedViaPassthrough(t *testing.T) {
 	cfg := &config.Config{
 		Providers: []*config.ModelConfig{
 			{
@@ -258,12 +295,11 @@ func TestBuildModelListResolver_RejectsPrefixedPassthrough(t *testing.T) {
 	}
 	resolver := buildModelListResolver(cfg)
 	got, ok := resolver("openai/gpt-4o")
-	if ok {
-		t.Errorf("expected false for openai/gpt-4o without openai provider, got (%+v, true)", got)
+	if !ok {
+		t.Fatalf("expected openai/gpt-4o to resolve via the openrouter aggregator, got (%+v, false)", got)
 	}
-	// Sanity: the helper must NOT have invented "openrouter/openai/gpt-4o".
-	if got.Model != "" && strings.Contains(got.Model, "openai/gpt-4o") && !strings.HasPrefix(got.Model, "openai/") {
-		t.Errorf("passthrough should not have re-prefixed openai/gpt-4o, got %q", got.Model)
+	if got.Provider != "openrouter" || got.Model != "openrouter/openai/gpt-4o" {
+		t.Errorf("expected (openrouter, openrouter/openai/gpt-4o), got (%q, %q)", got.Provider, got.Model)
 	}
 }
 

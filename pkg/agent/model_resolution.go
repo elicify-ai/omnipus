@@ -66,26 +66,42 @@ func ResolveModelCfg(cfg *config.Config, modelName, workspace string) (*config.M
 		}
 	}
 
-	// 4. Passthrough fallback. A passthrough provider (openrouter, vivgrid)
-	// routes arbitrary slugs through its own API, so when the input looks
-	// like a model slug (no slash, OR a slash whose prefix isn't a known
-	// provider name) we route it through the first matching passthrough
-	// provider. We MUST NOT hijack an input that explicitly names a provider
-	// that doesn't exist — e.g. "openai/gpt-4o" when no openai provider is
-	// configured (Dataset 1 row 4 / BDD-23).
-	if looksLikeBareModelSlug(raw) {
-		for i := range cfg.Providers {
-			provName := strings.TrimSpace(cfg.Providers[i].Provider)
-			if provName == "" {
-				continue
-			}
-			if providers.IsPassthroughProvider(provName, cfg.Providers[i].APIBase) {
-				clone := cloneWithWorkspace(cfg.Providers[i], workspace)
+	// 4. Passthrough fallback. A passthrough provider (openrouter, vivgrid) is
+	// an AGGREGATOR whose OWN model catalog uses "<vendor>/<model>" ids —
+	// "anthropic/claude-3.5-haiku", "openai/gpt-4o", "z-ai/glm-5.2". The vendor
+	// segment there is part of the aggregator's slug, NOT a request for a
+	// separately-configured provider. So ANY model that didn't match an
+	// explicit provider entry above is routed through the first configured
+	// passthrough provider, regardless of its vendor prefix.
+	//
+	// Regression fix: an earlier guard (looksLikeBareModelSlug /
+	// knownProviderPrefixes, added in 2225b5ea to "close Dataset 1 row 4")
+	// rejected any "anthropic/…" or "openai/…" slug as an "explicit provider
+	// request", which made every OpenRouter catalog pick unresolvable — the
+	// composer lists OpenRouter's upstream /models (vendor-prefixed ids) but
+	// the runtime then refused them, silently falling back to the default. The
+	// row-4 assumption ("openai/gpt-4o means the openai provider") is wrong for
+	// an aggregator: with openrouter configured, openrouter serves openai/gpt-4o.
+	// When NO passthrough provider is configured, an unmatched model still
+	// errors below — a dedicated-only setup can't invent a route for a model
+	// none of its providers expose.
+	for i := range cfg.Providers {
+		provName := strings.TrimSpace(cfg.Providers[i].Provider)
+		if provName == "" {
+			continue
+		}
+		if providers.IsPassthroughProvider(provName, cfg.Providers[i].APIBase) {
+			clone := cloneWithWorkspace(cfg.Providers[i], workspace)
+			// Prefix the aggregator provider name unless the caller already did
+			// (avoids "openrouter/openrouter/…" on an explicitly-prefixed input).
+			if strings.HasPrefix(strings.ToLower(raw), strings.ToLower(provName)+"/") {
+				clone.Model = raw
+			} else {
 				clone.Model = provName + "/" + raw
-				// Clone already carries the provider's own Provider field; keep
-				// it so CreateProviderFromConfig routes via the right backend.
-				return clone, nil
 			}
+			// Clone already carries the provider's own Provider field; keep
+			// it so CreateProviderFromConfig routes via the right backend.
+			return clone, nil
 		}
 	}
 
@@ -139,53 +155,6 @@ func buildModelListResolver(cfg *config.Config) func(raw string) (providers.Reso
 	return func(raw string) (providers.ResolvedRef, bool) {
 		return resolveModelRef(cfg, raw)
 	}
-}
-
-// knownProviderPrefixes is the conservative list of slash-prefixes that mean
-// "explicit provider request" (not a model slug). When the input is
-// "<prefix>/<model>" and the prefix matches one of these (case-insensitive),
-// the resolver MUST NOT passthrough-rewrite it; the caller is asking for a
-// specific provider. This catches the Dataset 1 row 4 case ("openai/gpt-4o"
-// when no openai provider is configured) even when the only configured
-// provider is a passthrough that would otherwise blindly re-prefix the input.
-var knownProviderPrefixes = map[string]struct{}{
-	"openai":            {},
-	"openai-compatible": {},
-	"anthropic":         {},
-	"azure":             {},
-	"azure-openai":      {},
-	"openrouter":        {},
-	"vivgrid":           {},
-	"google":            {},
-	"gemini":            {},
-	"bedrock":           {},
-	"cohere":            {},
-	"mistral":           {},
-	"groq":              {},
-	"deepseek":          {},
-	"xai":               {},
-	"perplexity":        {},
-}
-
-// looksLikeBareModelSlug decides whether the input is safe to pass through a
-// passthrough provider. It returns false when the input names a provider
-// explicitly (e.g. "openai/gpt-4o" — the caller is asking for openai); it
-// returns true when the input is unprefixed ("glm-5-turbo") or has a slash
-// whose prefix is a model vendor, not a provider (e.g. "z-ai/glm-5-turbo"
-// — "z-ai" is the model vendor, not a provider).
-func looksLikeBareModelSlug(input string) bool {
-	if !strings.Contains(input, "/") {
-		return true
-	}
-	prefix, _, _ := strings.Cut(input, "/")
-	prefix = strings.ToLower(strings.TrimSpace(prefix))
-	if prefix == "" {
-		return true
-	}
-	if _, ok := knownProviderPrefixes[prefix]; ok {
-		return false
-	}
-	return true
 }
 
 func resolveModelCandidates(

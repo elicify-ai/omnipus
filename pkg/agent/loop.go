@@ -23,8 +23,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/channels"
@@ -5280,28 +5278,13 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 					ErrorPayload{Stage: "model_switch", Message: switchFailMsg},
 				)
 				ts.appendErrorTranscript(EventKindError.String(), "model_switch", switchFailMsg)
-				recipient := ts.auditUser()
-				if recipient == "" {
-					// No authenticated gateway principal on this turn (dev-mode
-					// bypass or a channel-originated message) — fall back to the
-					// admin-broadcast sentinel so a connected SPA tab still sees
-					// it. Same rationale EmitNotification's doc comment and
-					// resolveRecipients (pkg/gateway/schedules.go) already use:
-					// under the single-user model, "broadcast" and "the one
-					// account's connections" are the same audience.
-					recipient = NotificationAdminBroadcast
-				}
-				al.EmitNotification(NotificationPayload{
-					Recipient:        recipient,
-					ID:               uuid.New().String(),
-					NotificationType: "model_switch_failed",
-					Title:            "Model switch failed",
-					Body:             switchFailMsg,
-					Severity:         "warning",
-					CreatedAtMs:      time.Now().UnixMilli(),
-					SessionID:        ts.transcriptSessionID,
-					AgentID:          ts.agentID,
-				})
+				// NB: no notification frame here — `model_switch_failed` is not a
+				// contract NotificationFrame.notification_type, so the SPA's
+				// inbound Zod validation would drop it. The EventKindError +
+				// error-transcript record above is the surfacing; the aggregator
+				// resolver fix (ResolveModelCfg step 4) means a composer-catalog
+				// pick now resolves, so this branch only fires for a genuinely
+				// unroutable model (no passthrough provider configured).
 			} else if switchedAgent != nil {
 				// Re-point the turn at the (possibly mutated) agent so
 				// subsequent reads of ts.agent.Model reflect the switch.

@@ -1003,15 +1003,35 @@ func TestUpdateAgent_ModelLiveApplyFailure_ReturnsWarning(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 
 	// The model string must genuinely fail live-apply so the warning path fires.
-	// A *bare* slug ("foo") is NOT a reliable failure trigger: the PUT handler
-	// reloads config via refreshConfigAndRewireServices, which seeds the built-in
-	// provider catalog (incl. passthrough providers openrouter/vivgrid). A bare
-	// slug then resolves through passthrough and live-apply SUCCEEDS — no warning.
-	// A slug whose prefix is a *known provider name* (here "anthropic") is not
-	// hijacked by passthrough (looksLikeBareModelSlug → false), and with no
-	// matching configured/credentialed anthropic model it fails resolution in
-	// ApplyAgentModel → resolvedModelConfig, which is exactly the live-apply
-	// failure this test asserts surfaces as a warning.
+	// After the aggregator-resolver fix, a passthrough provider (openrouter /
+	// vivgrid) resolves ANY vendor-prefixed slug (that's the correct behavior —
+	// OpenRouter serves "anthropic/…"/"openai/…" from its own catalog), so no
+	// model NAME triggers a resolution failure while a passthrough is present.
+	// To reach the persist-but-cannot-apply path we pin the on-disk config to a
+	// single DEDICATED (non-passthrough) provider: an explicit providers list
+	// suppresses the default passthrough-catalog seeding, so an unmatched slug
+	// like "anthropic/…" has no route and fails in ApplyAgentModel →
+	// resolvedModelConfig — exactly the live-apply failure this test asserts
+	// surfaces as a (soft) warning rather than a hard error.
+	{
+		raw, err := os.ReadFile(api.configPath())
+		require.NoError(t, err)
+		var m map[string]any
+		require.NoError(t, json.Unmarshal(raw, &m))
+		m["providers"] = []map[string]any{
+			{
+				"provider":   "openai",
+				"model_name": "gpt-4o",
+				"model":      "openai/gpt-4o",
+				"api_base":   "https://api.openai.com/v1",
+				"api_key":    "sk-test-dummy",
+			},
+		}
+		out, err := json.Marshal(m)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(api.configPath(), out, 0o600))
+	}
+
 	body := `{"model":"anthropic/omnipus-nonexistent-model-zzz"}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent", strings.NewReader(body))
