@@ -42,5 +42,9 @@ func BrowserBuiltinMetadata() []tools.Tool {
 		&GetTextTool{},
 		&WaitTool{},
 		&EvaluateTool{executeEnabled: false},
+		// ADR-041 D3 — tab-management tools.
+		&ListTabsTool{},
+		&SwitchTabTool{},
+		&CloseTabTool{},
 	}
 }

@@ -46,6 +46,7 @@ function makeCallbacks() {
   return {
     onScreencast: vi.fn(),
     onStatus: vi.fn(),
+    onTabs: vi.fn(),
     onError: vi.fn(),
     onConnected: vi.fn(),
     onDisconnected: vi.fn(),
@@ -169,6 +170,28 @@ describe('BrowserLiveWsConnection — inbound frame dispatch', () => {
     expect(callbacks.onError).not.toHaveBeenCalled()
   })
 
+  it('routes a browser_tabs frame to onTabs', () => {
+    const callbacks = makeCallbacks()
+    const conn = new BrowserLiveWsConnection('sess-1', 'agent-1', callbacks)
+    conn.connect()
+    openSocket()
+
+    const frame = {
+      type: 'browser_tabs',
+      session_id: 'sess-1',
+      active_index: 1,
+      tabs: [
+        { index: 0, title: 'First tab', url: 'https://example.com', active: false },
+        { index: 1, title: 'Second tab', url: 'https://example.org', active: true },
+      ],
+    }
+    lastWsInstance.onmessage?.({ data: JSON.stringify(frame) })
+
+    expect(callbacks.onTabs).toHaveBeenCalledWith(frame)
+    expect(callbacks.onScreencast).not.toHaveBeenCalled()
+    expect(callbacks.onStatus).not.toHaveBeenCalled()
+  })
+
   it('drops a chat-only frame type (e.g. done) — not relevant to this socket', () => {
     const callbacks = makeCallbacks()
     const conn = new BrowserLiveWsConnection('sess-1', 'agent-1', callbacks)
@@ -225,6 +248,45 @@ describe('BrowserLiveWsConnection — outbound sends', () => {
     conn.sendControl('release')
 
     expect(sentFrames()).toEqual([{ type: 'browser_control', action: 'release' }])
+  })
+
+  it('sendTabAction("switch", i) sends a browser_tab_action frame with action:switch and the index', () => {
+    const conn = new BrowserLiveWsConnection('sess-1', 'agent-1', makeCallbacks())
+    conn.connect()
+    openSocket()
+    lastWsInstance.send.mockClear()
+
+    conn.sendTabAction('switch', 2)
+
+    expect(sentFrames()).toEqual([
+      { type: 'browser_tab_action', session_id: 'sess-1', agent_id: 'agent-1', action: 'switch', index: 2 },
+    ])
+  })
+
+  it('sendTabAction("close", i) sends a browser_tab_action frame with action:close and the index', () => {
+    const conn = new BrowserLiveWsConnection('sess-1', 'agent-1', makeCallbacks())
+    conn.connect()
+    openSocket()
+    lastWsInstance.send.mockClear()
+
+    conn.sendTabAction('close', 0)
+
+    expect(sentFrames()).toEqual([
+      { type: 'browser_tab_action', session_id: 'sess-1', agent_id: 'agent-1', action: 'close', index: 0 },
+    ])
+  })
+
+  it('sendTabAction("open") sends a browser_tab_action frame with action:open and no index', () => {
+    const conn = new BrowserLiveWsConnection('sess-1', 'agent-1', makeCallbacks())
+    conn.connect()
+    openSocket()
+    lastWsInstance.send.mockClear()
+
+    conn.sendTabAction('open')
+
+    expect(sentFrames()).toEqual([
+      { type: 'browser_tab_action', session_id: 'sess-1', agent_id: 'agent-1', action: 'open' },
+    ])
   })
 
   it('detach() sends a browser_detach frame carrying the session id', () => {
@@ -335,6 +397,15 @@ describe('parseBrowserFrame', () => {
       data: 'abc',
       width: 100,
       height: 100,
+    }
+    expect(parseBrowserFrame(JSON.stringify(payload))).toEqual(payload)
+  })
+
+  it('accepts a valid browser_tabs payload', () => {
+    const payload = {
+      type: 'browser_tabs',
+      active_index: 0,
+      tabs: [{ index: 0, title: 'A tab', url: 'https://example.com', active: true }],
     }
     expect(parseBrowserFrame(JSON.stringify(payload))).toEqual(payload)
   })

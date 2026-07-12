@@ -638,18 +638,18 @@ func TestLiveView_Attach_ReturnsControlledByOtherForNewViewer(t *testing.T) {
 
 	require.True(t, lv.takeControl("viewerA"))
 
-	controlledByOther, err := lv.attach(context.Background(), "viewerB", func(LiveFrame) {}, nil, nil)
+	controlledByOther, err := lv.attach(context.Background(), "viewerB", func(LiveFrame) {}, nil, nil, nil)
 	require.NoError(t, err)
 	require.True(t, controlledByOther, "a new viewer attaching while another viewer already controls must see controlled_by_other=true")
 
 	// The controller itself sees controlled_by_other=false on its own (re-)attach.
-	controlledByOther, err = lv.attach(context.Background(), "viewerA", func(LiveFrame) {}, nil, nil)
+	controlledByOther, err = lv.attach(context.Background(), "viewerA", func(LiveFrame) {}, nil, nil, nil)
 	require.NoError(t, err)
 	require.False(t, controlledByOther, "the controller's own attach must never report itself as 'someone else'")
 
 	// A third viewer attaching after control was released sees false.
 	lv.releaseControl("viewerA")
-	controlledByOther, err = lv.attach(context.Background(), "viewerC", func(LiveFrame) {}, nil, nil)
+	controlledByOther, err = lv.attach(context.Background(), "viewerC", func(LiveFrame) {}, nil, nil, nil)
 	require.NoError(t, err)
 	require.False(t, controlledByOther, "an uncontrolled session must report controlled_by_other=false to a new attach")
 }

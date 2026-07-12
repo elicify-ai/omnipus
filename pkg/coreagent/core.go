@@ -246,6 +246,8 @@ var allStaticToolNames = []string{
 	// Browser automation tools.
 	"browser_navigate", "browser_click", "browser_type", "browser_screenshot",
 	"browser_get_text", "browser_wait", "browser_evaluate",
+	// Browser tab-management tools (ADR-041 D3).
+	"browser_list_tabs", "browser_switch_tab", "browser_close_tab",
 
 	// Sysagent management tools.
 	"navigate",
@@ -451,6 +453,9 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			for _, b := range []string{
 				"browser_navigate", "browser_click", "browser_type",
 				"browser_screenshot", "browser_get_text", "browser_wait",
+				// ADR-041 D3 — tab-management, same allow as the rest of the
+				// interactive/visual browsing surface above.
+				"browser_list_tabs", "browser_switch_tab", "browser_close_tab",
 			} {
 				overrides[b] = allow
 			}
@@ -467,6 +472,9 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			for _, b := range []string{
 				"browser_navigate", "browser_click", "browser_type",
 				"browser_screenshot", "browser_get_text", "browser_wait",
+				// ADR-041 D3 — tab-management, same allow as the rest of the
+				// interactive/visual browsing surface above.
+				"browser_list_tabs", "browser_switch_tab", "browser_close_tab",
 			} {
 				overrides[b] = allow
 			}
@@ -567,6 +575,11 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			"browser_get_text":   allow,
 			"browser_wait":       allow,
 			"browser_screenshot": allow,
+			// ADR-041 D3 — tab-management, same allow as the rest of Ray's
+			// interactive/visual browsing surface.
+			"browser_list_tabs":  allow,
+			"browser_switch_tab": allow,
+			"browser_close_tab":  allow,
 			// Local sources + writing up research results.
 			"read_file":      allow,
 			"list_directory": allow,
@@ -659,6 +672,11 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			"browser_get_text":   allow,
 			"browser_screenshot": allow,
 			"browser_evaluate":   allow,
+			// ADR-041 D3 — tab-management, same allow as the rest of Jim's
+			// browser automation surface.
+			"browser_list_tabs":  allow,
+			"browser_switch_tab": allow,
+			"browser_close_tab":  allow,
 			// Delete / remove operations are consent-gated (ask) — standing rule.
 			"delete_task":              ask,
 			"delete_task_in_workspace": ask,

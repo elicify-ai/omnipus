@@ -24,15 +24,19 @@ import type {
   BrowserInputFrame,
   BrowserScreencastFrame,
   BrowserStatusFrame,
+  BrowserTabActionFrame,
+  BrowserTabsFrame,
   ErrorFrame,
 } from '@/lib/api/generated/asyncapi-types'
 
 /** Frame types this socket ever receives — a narrow slice of the full WsFrame union. */
-type BrowserServerFrame = BrowserScreencastFrame | BrowserStatusFrame | ErrorFrame
+type BrowserServerFrame = BrowserScreencastFrame | BrowserStatusFrame | BrowserTabsFrame | ErrorFrame
 
 export interface BrowserLiveWsCallbacks { // not-wire-format: SPA-only callback interface passed to BrowserLiveWsConnection's constructor. Never serialized to or from the gateway.
   onScreencast: (frame: BrowserScreencastFrame) => void
   onStatus: (frame: BrowserStatusFrame) => void
+  /** ADR-041 D4 — the current tab list + active index, broadcast on any tab open/close/switch/title-change. */
+  onTabs: (frame: BrowserTabsFrame) => void
   /** Fires for both server-sent `error` frames and local transport errors (create/send/reconnect-exhausted). */
   onError: (message: string) => void
   onConnected?: () => void
@@ -72,7 +76,12 @@ export function parseBrowserFrame(data: unknown): BrowserServerFrame | null {
   if (!result.success) return null
 
   const frame = result.data
-  if (frame.type === 'browser_screencast' || frame.type === 'browser_status' || frame.type === 'error') {
+  if (
+    frame.type === 'browser_screencast' ||
+    frame.type === 'browser_status' ||
+    frame.type === 'browser_tabs' ||
+    frame.type === 'error'
+  ) {
     return frame
   }
   // Any other (chat-only) frame type is not relevant to this socket — the
@@ -139,6 +148,8 @@ export class BrowserLiveWsConnection {
         this.callbacks.onScreencast(frame)
       } else if (frame.type === 'browser_status') {
         this.callbacks.onStatus(frame)
+      } else if (frame.type === 'browser_tabs') {
+        this.callbacks.onTabs(frame)
       } else {
         this.callbacks.onError(frame.message)
       }
@@ -199,6 +210,25 @@ export class BrowserLiveWsConnection {
 
   sendControl(action: 'take' | 'release'): boolean {
     const frame: BrowserControlFrame = { type: 'browser_control', action }
+    return this._rawSend(frame)
+  }
+
+  /**
+   * ADR-041 D4 — switch/close/open a tab. `index` is required for
+   * 'switch'/'close' (identifies which tab) and omitted for 'open' (the
+   * backend appends a fresh tab and reports it back on the next
+   * `browser_tabs` frame). Carries session_id/agent_id explicitly, same as
+   * `browser_attach`/`detach()`, so the backend can route the action even if
+   * this connection is ever multiplexed across sessions.
+   */
+  sendTabAction(action: 'switch' | 'close' | 'open', index?: number): boolean {
+    const frame: BrowserTabActionFrame = {
+      type: 'browser_tab_action',
+      session_id: this.sessionId,
+      agent_id: this.agentId,
+      action,
+      ...(index !== undefined ? { index } : {}),
+    }
     return this._rawSend(frame)
   }
 

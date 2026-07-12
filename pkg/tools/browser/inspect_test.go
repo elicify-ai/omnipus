@@ -273,9 +273,11 @@ func TestInspectPoint_BoundedByInspectEvalTimeout_NotPageTimeout(t *testing.T) {
 // only evalCDP (the substitute that panics) is ever invoked.
 func TestInspectPoint_PanicDuringCDPCall_RecoversToSoftNoResult(t *testing.T) {
 	mgr := &BrowserManager{
-		cfg:      BrowserConfig{PageTimeout: 5 * time.Second, MaxTabs: 5},
-		started:  true,
-		sessions: map[string]*sessionEntry{DefaultSessionID: {ctx: context.Background(), cancel: func() {}}},
+		cfg:     BrowserConfig{PageTimeout: 5 * time.Second, MaxTabs: 5},
+		started: true,
+		sessions: map[string]*sessionEntry{
+			DefaultSessionID: {tabs: []*tabEntry{{ctx: context.Background(), cancel: func() {}}}, activeIdx: 0},
+		},
 		evalCDP: func(ctx context.Context, actions ...chromedp.Action) error {
 			panic("simulated chromedp/cdproto-internal panic")
 		},

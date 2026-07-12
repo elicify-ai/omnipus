@@ -184,7 +184,27 @@ func (t *ClickTool) Execute(ctx context.Context, args map[string]any) *tools.Too
 		return tools.ErrorResult(fmt.Sprintf("browser_click: element not found or not clickable: %s", err))
 	}
 
-	return jsonResult(map[string]any{"success": true, "selector": selector})
+	result := map[string]any{"success": true, "selector": selector}
+
+	// ADR-041 D2: a click on a target="_blank" link or an element that calls
+	// window.open may have spawned a new browser tab. Reconcile
+	// deterministically right here — the guaranteed detection point per the
+	// ADR, complementing the best-effort passive Target.targetCreated
+	// listener (manager.go's handleTargetEvent) — and report it so the
+	// agent knows a redirect happened and it is now on the new tab, instead
+	// of continuing to act on the (now-background) opener page. This is
+	// what fixes the headline ADR-041 failure: a Cal.com-style booking
+	// button that opens its flow in a new tab.
+	if adopted, newActive, rerr := t.mgr.ReconcileTabs(defaultSessionID); rerr != nil {
+		logger.WarnCF("browser", "browser_click: tab reconcile failed", map[string]any{"error": rerr.Error()})
+	} else if adopted && newActive != nil {
+		result["opened_new_tab"] = true
+		result["new_tab_index"] = newActive.Index
+		result["new_tab_url"] = newActive.URL
+		result["note"] = fmt.Sprintf("opened and switched to new tab %d: %s", newActive.Index, newActive.URL)
+	}
+
+	return jsonResult(result)
 }
 
 // --- browser_type (US-5) ---

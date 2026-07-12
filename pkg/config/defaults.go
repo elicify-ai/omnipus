@@ -320,6 +320,10 @@ func DefaultConfig() *Config {
 				"browser_get_text":   "allow",
 				"browser_wait":       "allow",
 				"browser_evaluate":   "allow",
+				// ADR-041 D3 — tab-management tools.
+				"browser_list_tabs":  "allow",
+				"browser_switch_tab": "allow",
+				"browser_close_tab":  "allow",
 
 				// --- Sysagent management tools ---
 				"navigate":                 "allow",

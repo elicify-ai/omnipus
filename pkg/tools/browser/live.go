@@ -113,6 +113,18 @@ type FrameSink func(LiveFrame)
 // non-blocking contract as FrameSink.
 type StatusSink func(message string)
 
+// TabsSink receives a tab-set snapshot for one attached viewer (ADR-041 D4).
+// Invoked once immediately on Attach (with the CURRENT tab set, so a viewer
+// renders the tab strip right away instead of waiting for the next change —
+// a session with a single tab may never emit one during this viewer's whole
+// attachment) and again on every subsequent tab-set change
+// (open/close/switch/adopt/title-url-update). Same non-blocking contract as
+// FrameSink/StatusSink/ControlSink: the LiveView invokes every registered
+// sink synchronously with no lock held, so a slow consumer must hand off to
+// its own buffered channel exactly like the gateway's per-connection sendCh
+// already does.
+type TabsSink func(tabs []Tab, activeIdx int)
+
 // ControlSink receives a control-ownership change notification for one
 // attached viewer (ADR-039 UAT BE-1: "two viewers of the same live session
 // disagree about who's driving"). The server already single-controller-locks
@@ -146,8 +158,30 @@ type LiveViewRegistry struct {
 
 // newLiveViewRegistry constructs a registry bound to mgr. Unexported —
 // callers get one via BrowserManager.Live().
+//
+// ADR-041 D4: wires mgr's tabs-changed callback to this registry so a
+// BrowserManager tab-set change (open/close/switch/adopt) fans out to the
+// LiveView for that session, if one exists — see handleTabsChanged.
 func newLiveViewRegistry(mgr *BrowserManager) *LiveViewRegistry {
-	return &LiveViewRegistry{mgr: mgr, views: make(map[string]*LiveView)}
+	r := &LiveViewRegistry{mgr: mgr, views: make(map[string]*LiveView)}
+	mgr.SetTabsChangedFunc(r.handleTabsChanged)
+	return r
+}
+
+// handleTabsChanged is the callback registered via mgr.SetTabsChangedFunc in
+// newLiveViewRegistry (ADR-041 D4): it fans a BrowserManager tab-set change
+// out to the LiveView for that session, if one exists. Uses lookup rather
+// than view() — if nobody has ever attached a live view for this session,
+// there is nothing to broadcast to or rebind, and creating a LiveView here
+// would allocate state nobody is watching (mirrors the lookup-vs-view
+// rationale documented on LiveViewRegistry.lookup).
+func (r *LiveViewRegistry) handleTabsChanged(sessionID string, tabs []Tab, activeIdx int) {
+	sessionID = resolveSessionID(sessionID)
+	lv, ok := r.lookup(sessionID)
+	if !ok {
+		return
+	}
+	lv.onTabsChanged(tabs, activeIdx)
 }
 
 // runCDPWithTimeout executes actions via chromedp.Run against a
@@ -192,6 +226,7 @@ func (r *LiveViewRegistry) view(sessionID string) *LiveView {
 			viewers:      make(map[string]FrameSink),
 			statusSinks:  make(map[string]StatusSink),
 			controlSinks: make(map[string]ControlSink),
+			tabsSinks:    make(map[string]TabsSink),
 			ackCh:        make(chan int64, 1),
 			runCDP:       runCDPWithTimeout,
 		}
@@ -217,7 +252,9 @@ func (r *LiveViewRegistry) lookup(sessionID string) (*LiveView, bool) {
 // viewerID); onStatus (ADR-038 finding #2, may be nil) is invoked if the
 // underlying tab context dies unexpectedly before that Detach happens;
 // onControl (ADR-039 UAT BE-1, may be nil) is invoked whenever some OTHER
-// viewer takes or releases control after this call returns.
+// viewer takes or releases control after this call returns. onTabs
+// (ADR-041 D4, may be nil) is invoked once immediately with the CURRENT tab
+// set and again on every subsequent tab-set change.
 // Resolves the manager's session tab itself, so callers only need a session
 // ID, not a chromedp context.
 //
@@ -226,7 +263,7 @@ func (r *LiveViewRegistry) lookup(sessionID string) (*LiveView, bool) {
 // newly-attaching connection (a second panel, a pop-out) can render the
 // correct "someone else is driving" state on its very first status frame
 // instead of only learning about it on the NEXT take/release broadcast.
-func (r *LiveViewRegistry) Attach(sessionID, viewerID string, onFrame FrameSink, onStatus StatusSink, onControl ControlSink) (bool, error) {
+func (r *LiveViewRegistry) Attach(sessionID, viewerID string, onFrame FrameSink, onStatus StatusSink, onControl ControlSink, onTabs TabsSink) (bool, error) {
 	sessionID = resolveSessionID(sessionID)
 	if viewerID == "" {
 		return false, fmt.Errorf("browser live: viewer id is required")
@@ -235,7 +272,22 @@ func (r *LiveViewRegistry) Attach(sessionID, viewerID string, onFrame FrameSink,
 	if err != nil {
 		return false, fmt.Errorf("browser live: cannot resolve session %q: %w", sessionID, err)
 	}
-	return r.view(sessionID).attach(tabCtx, viewerID, onFrame, onStatus, onControl)
+	controlledByOther, err := r.view(sessionID).attach(tabCtx, viewerID, onFrame, onStatus, onControl, onTabs)
+	if err != nil {
+		return false, err
+	}
+
+	// ADR-041 D4: give the newly-attached viewer the CURRENT tab strip
+	// immediately, mirroring lastFrame's "don't make a piggybacking/fresh
+	// viewer wait for the next change" rationale — a session with only one
+	// tab may never emit another tabs-changed event during this viewer's
+	// whole attachment.
+	if onTabs != nil {
+		if tabs, activeIdx, terr := r.mgr.ListTabs(sessionID); terr == nil && len(tabs) > 0 {
+			onTabs(tabs, activeIdx)
+		}
+	}
+	return controlledByOther, nil
 }
 
 // Detach unbinds viewerID from sessionID's live view. When this was the last
@@ -336,7 +388,11 @@ type LiveView struct {
 	// ControlSink per attached viewerID, notified whenever some OTHER
 	// viewer takes or releases control (takeControl/releaseControl below).
 	controlSinks map[string]ControlSink
-	seq          int
+	// tabsSinks parallels viewers (ADR-041 D4): one optional TabsSink per
+	// attached viewerID, notified once on attach with the current tab set
+	// and again on every subsequent tab-set change (see onTabsChanged).
+	tabsSinks map[string]TabsSink
+	seq       int
 	// lastFrame caches the most recently delivered screencast frame so a viewer
 	// that attaches to an already-running screencast (a second panel, a pop-out)
 	// sees the current state immediately instead of waiting for the next repaint
@@ -405,7 +461,7 @@ func (lv *LiveView) isActiveLocked() bool {
 // already controlled by a viewer other than viewerID at the moment of this
 // attach — computed and returned under lv.mu before any CDP call, so it is
 // available even on the fast piggyback path below.
-func (lv *LiveView) attach(tabCtx context.Context, viewerID string, onFrame FrameSink, onStatus StatusSink, onControl ControlSink) (bool, error) {
+func (lv *LiveView) attach(tabCtx context.Context, viewerID string, onFrame FrameSink, onStatus StatusSink, onControl ControlSink, onTabs TabsSink) (bool, error) {
 	lv.mu.Lock()
 	lv.viewers[viewerID] = onFrame
 	if onStatus != nil {
@@ -413,6 +469,9 @@ func (lv *LiveView) attach(tabCtx context.Context, viewerID string, onFrame Fram
 	}
 	if onControl != nil {
 		lv.controlSinks[viewerID] = onControl
+	}
+	if onTabs != nil {
+		lv.tabsSinks[viewerID] = onTabs
 	}
 	controlledByOther := lv.controller != "" && lv.controller != viewerID
 
@@ -465,6 +524,7 @@ func (lv *LiveView) attach(tabCtx context.Context, viewerID string, onFrame Fram
 		delete(lv.viewers, viewerID)
 		delete(lv.statusSinks, viewerID)
 		delete(lv.controlSinks, viewerID)
+		delete(lv.tabsSinks, viewerID)
 		// Only tear down the shared listen/ack state if nothing else (a
 		// concurrent attach() that piggybacked while this call was in
 		// flight, or a concurrent detach()) has since superseded it.
@@ -488,6 +548,123 @@ func (lv *LiveView) attach(tabCtx context.Context, viewerID string, onFrame Fram
 	go lv.watchForUnexpectedDeath(listenCtx)
 
 	return controlledByOther, nil
+}
+
+// onTabsChanged is invoked (ADR-041 D4, via LiveViewRegistry.handleTabsChanged
+// ← BrowserManager.tabsChanged) whenever this session's tab set changes.
+// Broadcasts a snapshot to every attached viewer's TabsSink and, if the
+// active tab moved to a different underlying chromedp target, rebinds the
+// live screencast to follow it. Never tears down the browsing context — only
+// the screencast subscription moves.
+func (lv *LiveView) onTabsChanged(tabs []Tab, activeIdx int) {
+	lv.mu.Lock()
+	sinks := make([]TabsSink, 0, len(lv.tabsSinks))
+	for _, s := range lv.tabsSinks {
+		sinks = append(sinks, s)
+	}
+	lv.mu.Unlock()
+
+	for _, s := range sinks {
+		s(tabs, activeIdx)
+	}
+
+	// Session() always resolves the ACTIVE tab's context (ADR-041 D1) — reuse
+	// it here instead of threading a raw ctx through the tabs-changed
+	// callback, so Tab (the public snapshot type) can stay metadata-only.
+	newCtx, err := lv.mgr.Session(lv.sessionID)
+	if err != nil {
+		// Nothing to rebind to — e.g. the browsing context is mid-recreation
+		// after a crash. watchForUnexpectedDeath already handles notifying
+		// attached viewers if the tab context died out from under them.
+		return
+	}
+
+	lv.mu.Lock()
+	needsRebind := lv.isActiveLocked() && lv.tabCtx != newCtx
+	lv.mu.Unlock()
+	if needsRebind {
+		lv.rebindScreencast(newCtx)
+	}
+}
+
+// rebindScreencast re-targets an ALREADY-ACTIVE screencast to newCtx
+// (ADR-041 D4 — the trickiest piece of the tab-strip switch): stops the CDP
+// screencast + event listener on the previous active tab's context and
+// starts it fresh on newCtx, without touching the browsing context (a
+// chromedp target's lifetime is independent of this) and without dropping
+// any attached viewer's registration — only the underlying CDP subscription
+// moves, so every viewer keeps watching the SAME logical live session, now
+// following the new active tab. A no-op if the screencast isn't currently
+// active (e.g. no viewers attached — the next Attach simply resolves the
+// by-then-current active tab via mgr.Session, so there's nothing to rebind
+// yet).
+//
+// Deadlock-safe per ADR-038: mirrors attach()'s discipline exactly — no
+// LiveView lock held across any CDP call.
+func (lv *LiveView) rebindScreencast(newCtx context.Context) {
+	lv.mu.Lock()
+	if !lv.isActiveLocked() {
+		lv.mu.Unlock()
+		return
+	}
+	oldTabCtx := lv.tabCtx
+	oldStopListen := lv.stopListen
+	oldListenCtx := lv.listenCtx
+	lv.mu.Unlock()
+
+	// Stop the old screencast + unsubscribe, bounded — mirrors detach()'s
+	// teardown sequence (unsubscribe first, then ask CDP to stop) exactly.
+	// Best-effort: oldTabCtx may already be canceled (the opener tab was
+	// closed via browser_close_tab right after the switch, say), in which
+	// case this simply fails harmlessly — there's nothing left to stop.
+	oldStopListen()
+	if err := lv.runCDP(oldTabCtx, lv.mgr.PageTimeout(), page.StopScreencast()); err != nil {
+		logger.WarnCF("browser", "live view: rebind — stop old screencast failed (old tab may already be closed)",
+			map[string]any{"error": err.Error(), "session_id": lv.sessionID})
+	}
+
+	lv.mu.Lock()
+	if lv.listenCtx != oldListenCtx {
+		// A concurrent rebind or detach already superseded this epoch —
+		// nothing more to do.
+		lv.mu.Unlock()
+		return
+	}
+	lv.tabCtx = newCtx
+	listenCtx, cancel := context.WithCancel(newCtx)
+	lv.listenCtx = listenCtx
+	lv.stopListen = cancel
+	lv.mu.Unlock()
+
+	ackCtx := newCtx
+	chromedp.ListenTarget(listenCtx, func(ev any) {
+		lv.handleScreencastEvent(ackCtx, ev)
+	})
+	go lv.runAckWorker(ackCtx, listenCtx)
+
+	// No lock held here — see the deadlock postmortem above attach().
+	err := lv.runCDP(newCtx, lv.mgr.PageTimeout(),
+		page.StartScreencast().
+			WithFormat(page.ScreencastFormatJpeg).
+			WithQuality(screencastQuality).
+			WithMaxWidth(screencastMaxWidth).
+			WithMaxHeight(screencastMaxHeight).
+			WithEveryNthFrame(screencastEveryNthFrame),
+	)
+	if err != nil {
+		logger.WarnCF("browser", "live view: rebind — start screencast on new active tab failed",
+			map[string]any{"error": err.Error(), "session_id": lv.sessionID})
+		lv.mu.Lock()
+		if lv.listenCtx == listenCtx {
+			cancel()
+			lv.listenCtx = nil
+			lv.stopListen = nil
+		}
+		lv.mu.Unlock()
+		return
+	}
+
+	go lv.watchForUnexpectedDeath(listenCtx)
 }
 
 // watchForUnexpectedDeath blocks until watchedListenCtx is Done, then — ONLY
@@ -641,6 +818,7 @@ func (lv *LiveView) detach(viewerID string) {
 	delete(lv.viewers, viewerID)
 	delete(lv.statusSinks, viewerID)
 	delete(lv.controlSinks, viewerID)
+	delete(lv.tabsSinks, viewerID)
 	wasController := lv.controller == viewerID
 	if wasController {
 		lv.controller = ""

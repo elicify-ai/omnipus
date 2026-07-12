@@ -950,6 +950,11 @@ func wsFrameSchemaName(frameType string) string {
 		return "BrowserControlFrame"
 	case string(generated.WsFrameTypeBrowserDetach):
 		return "BrowserDetachFrame"
+	// ADR-041 D4: the client→server tab-management frame. browser_ws.go's
+	// own readLoop is the actual caller (this socket, not the chat WS), same
+	// rationale as the 4 ADR-038 browser-live frame types above.
+	case string(generated.WsFrameTypeBrowserTabAction):
+		return "BrowserTabActionFrame"
 	default:
 		return ""
 	}
