@@ -23,6 +23,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/channels"
@@ -5256,6 +5258,50 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 						"new_model":  requested,
 						"error":      switchErr.Error(),
 					})
+				// The caller explicitly asked for `requested` (typically a model
+				// picked from the composer's live catalog) and the switch could not
+				// be applied — the turn is about to proceed on the agent's current
+				// model instead. A backend-only WARN log is not enough: nothing else
+				// tells the caller their selection was ignored, which is exactly the
+				// "picking a model has no effect" failure mode. Mirror the
+				// FR-001/FR-002 pattern already used for rate-limit/provider errors
+				// (docs/internal/specs/phase-1-chat-model-and-errors.md): emit
+				// EventKindError + persist a transcript entry so replay shows it
+				// (appendErrorTranscript), AND push a live notification so the
+				// CURRENT session learns immediately — the transcript write alone
+				// only becomes visible after a reload.
+				switchFailMsg := fmt.Sprintf(
+					"Could not switch to model %q: %s. This reply used %q instead.",
+					requested, switchErr.Error(), ts.agent.Model,
+				)
+				al.emitEvent(
+					EventKindError,
+					ts.eventMeta("runTurn", "turn.error"),
+					ErrorPayload{Stage: "model_switch", Message: switchFailMsg},
+				)
+				ts.appendErrorTranscript(EventKindError.String(), "model_switch", switchFailMsg)
+				recipient := ts.auditUser()
+				if recipient == "" {
+					// No authenticated gateway principal on this turn (dev-mode
+					// bypass or a channel-originated message) — fall back to the
+					// admin-broadcast sentinel so a connected SPA tab still sees
+					// it. Same rationale EmitNotification's doc comment and
+					// resolveRecipients (pkg/gateway/schedules.go) already use:
+					// under the single-user model, "broadcast" and "the one
+					// account's connections" are the same audience.
+					recipient = NotificationAdminBroadcast
+				}
+				al.EmitNotification(NotificationPayload{
+					Recipient:        recipient,
+					ID:               uuid.New().String(),
+					NotificationType: "model_switch_failed",
+					Title:            "Model switch failed",
+					Body:             switchFailMsg,
+					Severity:         "warning",
+					CreatedAtMs:      time.Now().UnixMilli(),
+					SessionID:        ts.transcriptSessionID,
+					AgentID:          ts.agentID,
+				})
 			} else if switchedAgent != nil {
 				// Re-point the turn at the (possibly mutated) agent so
 				// subsequent reads of ts.agent.Model reflect the switch.
@@ -7217,7 +7263,18 @@ turnLoop:
 					}
 					descs = append(descs, d)
 				}
-				tcRecord.Result = map[string]any{"media": descs}
+				// Persist the tool's human-readable result text ALONGSIDE the
+				// media descriptors. Previously only {media} was stored, so a
+				// media-bearing tool's text vanished on reload — e.g.
+				// browser_screenshot's "Current page URL: …" header showed live
+				// but the reloaded-from-history view had only {media:[…]}.
+				// buildMediaFrame still re-emits from Result["media"]; the
+				// added "text" key is what the replayed tool card renders.
+				result := map[string]any{"media": descs}
+				if resultText := strings.TrimSpace(contentForLLM); resultText != "" {
+					result["text"] = resultText
+				}
+				tcRecord.Result = result
 			}
 			ts.appendToolCallTranscript(tcRecord)
 			messages = append(messages, toolResultMsg)
