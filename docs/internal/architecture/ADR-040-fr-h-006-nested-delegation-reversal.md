@@ -1,8 +1,8 @@
 # ADR-040: Reverse FR-H-006's Registry-Level "One Level Only" Delegation Block
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-07-12
-**Deciders:** architect (recording); requires product-owner ratification (Daniel Piatkowski) — see "Why this needs ratification" below
+**Deciders:** architect (recording); ratified by Daniel Piatkowski (product owner), 2026-07-12 — "the one level only decision needs to be changed, we have the depth level as configuration globally and on delegation policy level instead." Confirms the trust-graph/depth-cap system (global `SubTurn.MaxDepth` default + per-edge `DelegationEdge.Depth` override) as the intended, sole mechanism, superseding FR-H-006's hardcoded one-hop ceiling.
 **Relates to:** [ADR-036 — Consolidate shell and subagent tools](./ADR-036-consolidate-shell-and-subagent-tools.md) (renamed spawn/run_subagent → `delegate`, carried the exclusion forward unchanged), [ADR-037 — Remove the global per-agent delegation policy](./ADR-037-remove-global-delegation-policy.md) (made the per-workspace trust graph the sole delegation authority — this ADR relies on that authority being sufficient on its own)
 **Superseded requirement:** `docs/internal/_archive/plan/sprint-h-subagent-block-spec.md` FR-H-006 ("one level only for general subagents", dated as an owner decision 2026-04-20)
 
@@ -30,7 +30,9 @@ Reverse FR-H-006's registry-level exclusion. `spawnSubTurn` now constructs a del
 
 ## Why this needs ratification
 
-FR-H-006 was recorded as a dated **owner decision**, not a default or an oversight. This ADR is a de-facto reversal of that decision, currently justified and shipped as part of a "bug fix" PR on the strength of an architecture review, not a fresh product sign-off. The trust-graph/depth-cap system is judged sufficient as the sole safety boundary (see Consequences), but the change in *product-level delegation topology* — general subagents can now form chains of depth up to 3 by default, not just one hop — is a decision with cost/autonomy/compute-exposure implications an operator may want to weigh in on explicitly, per this repo's own convention that decisions "high-cost, irreversible, or needing justification later" get an ADR rather than being absorbed silently into a bug-fix diff. Recommend: product owner reviews and flips Status to Accepted (or requests changes) before this ships past the current hotfix branch.
+FR-H-006 was recorded as a dated **owner decision**, not a default or an oversight. This ADR is a de-facto reversal of that decision, initially shipped as part of a "bug fix" PR on the strength of an architecture review alone, not a fresh product sign-off. The trust-graph/depth-cap system is judged sufficient as the sole safety boundary (see Consequences), and the change in *product-level delegation topology* — general subagents can now form chains of depth up to 3 by default, not just one hop — was a decision with cost/autonomy/compute-exposure implications worth an explicit sign-off, per this repo's own convention that decisions "high-cost, irreversible, or needing justification later" get an ADR rather than being absorbed silently into a bug-fix diff.
+
+**Resolved 2026-07-12:** ratified by the product owner (see Deciders above). The one-hop ceiling is replaced by the existing configurable depth system — a global default (`SubTurn.MaxDepth`) plus a per-edge override (`DelegationEdge.Depth`) — as the intended, permanent mechanism, not a temporary/theoretical backstop. One gap surfaced during ratification, tracked as follow-up, not blocking: the global default is currently `config.json`/env-only (`pkg/config/config.go:1152-1154`, `OMNIPUS_AGENTS_DEFAULTS_SUBTURN_MAX_DEPTH`) with no REST handler or Settings UI to set it — the per-edge override already has a full UI (Team-graph `EdgeModeEditor`), but the global default does not. Worth a small follow-up PR if the global default is meant to be as operator-facing as the per-edge one.
 
 ## Consequences
 
