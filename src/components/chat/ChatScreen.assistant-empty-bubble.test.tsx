@@ -1,0 +1,195 @@
+// D — "An empty assistant bubble renders before every reply."
+//
+// The chat store's optimistic assistant placeholder (store/chat.ts sendMessage)
+// starts as content:'' / status:'streaming' the instant a message is sent, and
+// that placeholder is the LAST message in the store, so VirtualizedMessageListInner
+// routes it to the LIVE AssistantMessage() render (via real ThreadPrimitive.Messages),
+// not the historical VirtualAssistantMessageRow path. Every other test file in this
+// directory that touches ChatScreen fully mocks '@assistant-ui/react' (Messages: () =>
+// null), which means the live AssistantMessage() render — where this bug actually
+// lives — has never been exercised by a test. This file deliberately leaves
+// '@assistant-ui/react' UNMOCKED and mounts ChatScreen inside a real
+// AssistantRuntimeProvider (via the real useOmnipusRuntime hook, skipping
+// OmnipusRuntimeProvider's WsLifecycle so no real WebSocket is attempted) so the
+// assertions exercise the actual AssistantMessage() component, not a stand-in.
+//
+// BDD:
+//   Given: the last assistant message is streaming (isStreaming:true) with
+//          empty content, no tool calls, no media, no subagent spans
+//   Then:  the bubble shows the thinking indicator and NOT a Copy button
+//          (nothing has streamed in yet — there is nothing to copy)
+//   Given: the same message now has streamed-in text
+//   Then:  the bubble shows that text AND the Copy button
+
+import { describe, it, expect, vi } from 'vitest'
+import { render, screen, within } from '@testing-library/react'
+import * as React from 'react'
+import { act } from 'react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { AssistantRuntimeProvider, useMessagePartText } from '@assistant-ui/react'
+import { useChatStore, makeBucketMessages } from '@/store/chat'
+import type { ChatMessage } from '@/store/chat'
+import { useSessionStore } from '@/store/session'
+import { useConnectionStore } from '@/store/connection'
+import { useOmnipusRuntime } from '@/lib/omnipus-runtime'
+
+class ResizeObserverStub {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+vi.stubGlobal('ResizeObserver', ResizeObserverStub)
+if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = function () {}
+}
+// jsdom has no layout engine and doesn't implement scrollTo — the real (unmocked)
+// ThreadPrimitive.Viewport's autoscroll effect calls it on a rAF callback that can
+// fire after the test body returns, otherwise surfacing as an unhandled rejection.
+if (typeof Element !== 'undefined' && !Element.prototype.scrollTo) {
+  Element.prototype.scrollTo = function () {}
+}
+
+// '@assistant-ui/react' is intentionally NOT mocked in this file — see header.
+
+vi.mock('@/lib/api', () => ({
+  fetchAgents: vi.fn().mockResolvedValue([
+    { id: 'agent-1', name: 'Mia', color: '#123456', icon: null },
+  ]),
+  fetchSessionMessages: vi.fn().mockResolvedValue([]),
+  fetchCommands: vi.fn().mockResolvedValue([]),
+  fetchSkills: vi.fn().mockResolvedValue([]),
+  uploadFiles: vi.fn(),
+  fetchProviders: vi.fn().mockResolvedValue([]),
+}))
+
+vi.mock('@tanstack/react-router', () => ({
+  useRouter: () => ({ navigate: vi.fn() }),
+  useSearch: () => ({}),
+  Link: ({ children }: { children: React.ReactNode }) => children,
+}))
+
+vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: 'omnipus-avatar.svg' }))
+vi.mock('./SessionPanel', () => ({ SessionPanel: () => null }))
+vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
+vi.mock('./SubagentBlock', () => ({ SubagentBlock: () => null }))
+vi.mock('./ActivityBar', () => ({ ActivityBar: () => null }))
+vi.mock('./tools/GenericToolCall', () => ({ GenericToolCall: () => null }))
+vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null }))
+// Real MarkdownText pulls in Shiki/Mermaid/KaTeX — far more than this test needs.
+// Replace it with a minimal renderer built on the REAL useMessagePartText hook
+// (unmocked '@assistant-ui/react') so the DOM still reflects the actual streamed
+// text, just without the heavy markdown pipeline.
+vi.mock('./markdown-text', () => ({
+  MarkdownText: () => {
+    const { text } = useMessagePartText()
+    return React.createElement('span', { 'data-testid': 'assistant-text' }, text)
+  },
+}))
+
+import { ChatScreen } from './ChatScreen'
+
+const SID = 'sess_empty_bubble_test'
+
+function Providers({ children }: { children: React.ReactNode }) {
+  const queryClientRef = React.useRef<QueryClient | null>(null)
+  if (!queryClientRef.current) {
+    queryClientRef.current = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  }
+  const runtime = useOmnipusRuntime()
+  return (
+    <QueryClientProvider client={queryClientRef.current}>
+      <AssistantRuntimeProvider runtime={runtime}>{children}</AssistantRuntimeProvider>
+    </QueryClientProvider>
+  )
+}
+
+/** Seeds a user message followed by a streaming assistant placeholder. */
+function seedStreamingAssistant(assistantContent: string): void {
+  const userMsg: ChatMessage = {
+    id: 'msg_user',
+    role: 'user',
+    content: 'hi',
+    timestamp: new Date().toISOString(),
+    status: 'done',
+  }
+  const streamingMsg: ChatMessage = {
+    id: 'msg_assistant',
+    role: 'assistant',
+    content: assistantContent,
+    timestamp: new Date().toISOString(),
+    status: 'streaming',
+    isStreaming: true,
+  }
+  const allMessages = [userMsg, streamingMsg]
+  const bucket = makeBucketMessages(allMessages)
+  useChatStore.setState((s) => ({
+    ...s,
+    sessionsById: {
+      [SID]: {
+        ...((s.sessionsById ?? {})[SID] ?? {}),
+        ...bucket,
+        isStreaming: true,
+        isReplaying: false,
+        replayCompletedForSession: SID,
+        toolCalls: {},
+        toolCallOrder: [],
+        textAtToolCallStart: {},
+        sessionTokens: 0,
+        sessionCost: 0,
+        rateLimitEvent: null,
+        lastUserMessageAt: null,
+        cancelStage: null,
+        lastReceivedEventTime: null,
+        spanByParentCallId: {},
+        trimmedCount: 0,
+      },
+    },
+    messages: allMessages,
+    isStreaming: true,
+    isReplaying: false,
+    replayCompletedForSession: SID,
+  }))
+  useSessionStore.setState({ activeSessionId: SID, activeAgentId: 'agent-1' })
+  useConnectionStore.setState({ connection: null, isConnected: true, connectionError: null })
+}
+
+describe('D: empty streaming assistant bubble (live AssistantMessage render)', () => {
+  it('renders the thinking indicator, not an empty Copy-only bubble, while content is empty', async () => {
+    seedStreamingAssistant('')
+
+    await act(async () => {
+      render(
+        <Providers>
+          <ChatScreen />
+        </Providers>,
+      )
+    })
+
+    const bubble = screen.getByTestId('assistant-message')
+    // No Copy affordance while there's nothing to copy.
+    expect(within(bubble).queryByText('Copy')).toBeNull()
+    expect(within(bubble).queryByLabelText('Copy message')).toBeNull()
+    // The thinking indicator (rotating status text) is shown instead.
+    expect(
+      within(bubble).getByText(
+        /Thinking…|Composing response…|Processing your request…|Analyzing…|Generating…/,
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it('renders the streamed text and the Copy button once content has arrived', async () => {
+    seedStreamingAssistant('Hello there')
+
+    await act(async () => {
+      render(
+        <Providers>
+          <ChatScreen />
+        </Providers>,
+      )
+    })
+
+    const bubble = screen.getByTestId('assistant-message')
+    expect(within(bubble).getByTestId('assistant-text').textContent).toBe('Hello there')
+    expect(within(bubble).getByText('Copy')).toBeInTheDocument()
+  })
+})
