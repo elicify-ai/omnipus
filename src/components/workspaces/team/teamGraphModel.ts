@@ -17,9 +17,17 @@ import { isWorker } from '@/lib/api'
 // EDGE DIRECTION: edge `from_agent → to_agent` means "from_agent may delegate to
 // to_agent", labelled by that edge's own `modes` (+ optional `depth` cap).
 
-export type DelegationMode = 'await' | 'background' | 'task'
+/**
+ * "direct" covers what used to be split across `await`/`background` — the
+ * delegate tool's sync-vs-background dispatch is a runtime parameter of the
+ * tool call itself, not a trust distinction the Team-graph edge gates
+ * separately. An edge that allows "direct" allows both call patterns.
+ * "task" = task_create-style delegation (a persistent task assigned to
+ * another agent), unchanged.
+ */
+export type DelegationMode = 'direct' | 'task'
 
-export const ALL_MODES: readonly DelegationMode[] = ['await', 'background', 'task']
+export const ALL_MODES: readonly DelegationMode[] = ['direct', 'task']
 
 /**
  * The mode set a NEW edge starts with. CRITICAL (matches the backend contract):
@@ -30,7 +38,17 @@ export const ALL_MODES: readonly DelegationMode[] = ['await', 'background', 'tas
  * edge therefore seeds every mode, and the editor refuses to remove the last
  * remaining mode (keeps >= 1). The displayed modes always equal the enforced.
  */
-export const DEFAULT_EDGE_MODES: readonly DelegationMode[] = ['await', 'background', 'task']
+export const DEFAULT_EDGE_MODES: readonly DelegationMode[] = ['direct', 'task']
+
+/**
+ * Fallback depth used only when a caller doesn't supply a `default_depth`
+ * (e.g. an undefined delegation response before the first load, or a test
+ * fixture). Mirrors the backend's own backstop (`defaultMaxSubTurnDepth`) —
+ * this is a UI-legibility default, not a duplicated source of truth: any real
+ * `WorkspaceDelegation` response always carries a concrete, server-computed
+ * `default_depth`.
+ */
+export const DEFAULT_DEPTH_FALLBACK = 3
 
 const VALID_MODE = new Set<string>(ALL_MODES)
 
@@ -54,9 +72,14 @@ export function normalizeModes(raw: unknown): DelegationMode[] {
 /**
  * Normalise a raw depth from the wire. The backend documents `0` as "no onward
  * delegation past this hop" and "absent means the workspace/global default
- * applies". We model an UNSET cap as `undefined` (UI shows ∞ / inherits) and a
- * real cap as a positive integer. A wire `0` is preserved as `0` (an explicit
- * "no onward hop" choice) — only negative / non-finite values collapse to unset.
+ * applies". We model an UNSET cap as `undefined` at this normalisation layer —
+ * a legacy edge persisted before this UI existed may still carry no depth, and
+ * stays that way until the user next touches it (see `TeamEdgeEdit.depth`) —
+ * and a real cap as a non-negative integer. A wire `0` is preserved as `0` (an
+ * explicit "no onward hop" choice) — only negative / non-finite values
+ * collapse to unset. The DISPLAY layer (`EdgeModeEditor`/`EdgeLabelChip`)
+ * always resolves an unset depth to the workspace's concrete `defaultDepth`
+ * before rendering — there is no user-facing "∞"/blank state anymore.
  */
 export function normalizeDepth(raw: unknown): number | undefined {
   if (typeof raw !== 'number' || !Number.isFinite(raw)) return undefined
@@ -84,7 +107,12 @@ export interface TeamEdgeEdit {
   from: string
   to: string
   modes: DelegationMode[]
-  /** Depth cap (>= 0) when set; undefined = inherit/unset. */
+  /**
+   * Depth cap (>= 0). `undefined` only ever describes a legacy edge loaded
+   * from the wire that has never been touched by this UI — every edge
+   * CREATED or EDITED here (`addEdge`, `setEdgeDepth`) is seeded with a
+   * concrete value (`TeamEditState.defaultDepth`) instead of `undefined`.
+   */
   depth?: number
 }
 
@@ -92,6 +120,13 @@ export interface TeamEditState {
   /** Agent ids on the team (node set), order preserved for stable layout. */
   members: string[]
   edges: TeamEdgeEdit[]
+  /**
+   * The workspace's currently-resolved depth ceiling (wire
+   * `WorkspaceDelegation.default_depth`) — a concrete number a new or
+   * cleared edge's depth is seeded with, and what the UI displays for any
+   * edge whose own `depth` is still unset.
+   */
+  defaultDepth: number
 }
 
 /** A node in the rendered graph = one team agent (or a ghost for a deleted id). */
@@ -124,6 +159,8 @@ export interface TeamEdgeModel {
 export interface TeamGraphModel {
   nodes: TeamNodeModel[]
   edges: TeamEdgeModel[]
+  /** Carried straight through from the edit state — see `TeamEditState.defaultDepth`. */
+  defaultDepth: number
 }
 
 // ── Building the edit state from the wire ────────────────────────────────────
@@ -135,9 +172,13 @@ export interface TeamGraphModel {
  * (e.g. the workspace's core_team) when the response carries no team.
  */
 export function buildTeamEditState(
-  delegation: { edges?: WorkspaceDelegationEdge[]; team?: string[] } | undefined,
+  delegation:
+    | { edges?: WorkspaceDelegationEdge[]; team?: string[]; default_depth?: number }
+    | undefined,
   seedTeam: string[] = [],
 ): TeamEditState {
+  const defaultDepth = delegation?.default_depth ?? DEFAULT_DEPTH_FALLBACK
+
   const edges: TeamEdgeEdit[] = (delegation?.edges ?? []).map((e) => ({
     from: e.from_agent,
     to: e.to_agent,
@@ -155,7 +196,7 @@ export function buildTeamEditState(
     members.add(e.to)
   }
 
-  return { members: [...members], edges }
+  return { members: [...members], edges, defaultDepth }
 }
 
 /** Humanise an agent type into a short role subtitle. */
@@ -271,7 +312,7 @@ export function buildTeamGraphModel(
 
   const positions = layoutTeamGraph(baseNodes, edges)
   const nodes = baseNodes.map((n) => ({ ...n, position: positions[n.id] ?? n.position }))
-  return { nodes, edges }
+  return { nodes, edges, defaultDepth: state.defaultDepth }
 }
 
 // ── Mutations (immutable) ────────────────────────────────────────────────────
@@ -344,7 +385,11 @@ export function rejectionMessageForFailedConnection(
   return REJECTION_MESSAGE[reason] ?? 'Connection not allowed.'
 }
 
-/** Immutably add an edge from → to (seeded with the default modes). */
+/**
+ * Immutably add an edge from → to, seeded with the default modes and the
+ * workspace's concrete `defaultDepth` (never `undefined` — depth is always a
+ * real number for an edge the user actively creates here).
+ */
 export function addEdge(
   state: TeamEditState,
   from: string,
@@ -354,7 +399,10 @@ export function addEdge(
   if (validateConnection(from, to, state, workerIds) !== null) return state
   return {
     ...state,
-    edges: [...state.edges, { from, to, modes: [...DEFAULT_EDGE_MODES], depth: undefined }],
+    edges: [
+      ...state.edges,
+      { from, to, modes: [...DEFAULT_EDGE_MODES], depth: state.defaultDepth },
+    ],
   }
 }
 
@@ -400,14 +448,19 @@ export function toggleEdgeMode(
   }
 }
 
-/** Immutably set the from→to edge's depth cap (undefined clears it). */
+/**
+ * Immutably set the from→to edge's depth cap. Passing `undefined` (e.g. the
+ * editor's depth field cleared to empty) no longer leaves the edge unset —
+ * it resolves to the workspace's concrete `defaultDepth` instead, since depth
+ * is always a real number for an edge the user is actively editing.
+ */
 export function setEdgeDepth(
   state: TeamEditState,
   from: string,
   to: string,
   depth: number | undefined,
 ): TeamEditState {
-  const clean = normalizeDepth(depth)
+  const clean = normalizeDepth(depth) ?? state.defaultDepth
   return {
     ...state,
     edges: state.edges.map((e) =>
@@ -428,6 +481,7 @@ export function addMember(state: TeamEditState, agentId: string): TeamEditState 
  */
 export function removeMember(state: TeamEditState, agentId: string): TeamEditState {
   return {
+    ...state,
     members: state.members.filter((m) => m !== agentId),
     edges: state.edges.filter((e) => e.from !== agentId && e.to !== agentId),
   }
@@ -437,21 +491,34 @@ export function removeMember(state: TeamEditState, agentId: string): TeamEditSta
 
 /**
  * Serialise the edit state's edges to the wire `WorkspaceDelegationEdge[]`.
- * `depth` is sent only when explicitly set (the backend treats absence as
- * "inherit default"); `modes` always carries >= 1 entry (the editor guarantees
- * it), so the backend never falls into its empty-modes = "all allowed" branch
- * for an edge the user is actively shaping.
+ *
+ * CRITICAL — granularity is per-EDGE-TOUCH, not per-graph-save. `depth` is
+ * carried through EXACTLY as it sits in the edit state: `e.depth` is only
+ * ever a concrete number when the user actively created this edge (`addEdge`)
+ * or explicitly set its depth (`setEdgeDepth`) — both seed a real number on
+ * purpose. Every other edge — loaded from the wire with an unset depth and
+ * never touched by either path this session — keeps `depth: undefined` here,
+ * which `JSON.stringify` (see `updateWorkspaceDelegation`) omits from the
+ * request body entirely. That is load-bearing: this save PUTs the WHOLE edge
+ * set (not a per-edge patch — see `WorkspaceTeamTab.saveFn`), so if we
+ * defaulted every unset depth to `state.defaultDepth` here, ONE unrelated
+ * autosave (toggling a mode on a different edge, adding one new member) would
+ * silently freeze the depth of EVERY untouched edge in the graph, permanently
+ * opting them out of "dynamically track the live global default" (the
+ * documented contract semantics — see `WorkspaceDelegationEdge.depth` in
+ * `contracts/components/schemas/WorkspaceDelegation.yaml`) with zero
+ * indication to the operator. Do NOT reintroduce `e.depth ?? state.defaultDepth`
+ * here — that was exactly this bug. `modes` always carries >= 1 entry (the
+ * editor guarantees it), so the backend never falls into its empty-modes =
+ * "all allowed" branch for an edge the user is actively shaping.
  */
 export function buildSaveEdges(state: TeamEditState): WorkspaceDelegationEdge[] {
-  return state.edges.map((e) => {
-    const out: WorkspaceDelegationEdge = {
-      from_agent: e.from,
-      to_agent: e.to,
-      modes: [...e.modes],
-    }
-    if (typeof e.depth === 'number') out.depth = e.depth
-    return out
-  })
+  return state.edges.map((e) => ({
+    from_agent: e.from,
+    to_agent: e.to,
+    modes: [...e.modes],
+    depth: e.depth,
+  }))
 }
 
 // ── Membership persistence ───────────────────────────────────────────────────

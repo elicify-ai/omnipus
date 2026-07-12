@@ -765,11 +765,12 @@ type WorkspaceDelegation = {
   workspace_id: string;
   edges: Array<WorkspaceDelegationEdge>;
   team?: Array<string> | undefined;
+  default_depth: number;
 };
 type WorkspaceDelegationEdge = {
   from_agent: string;
   to_agent: string;
-  modes?: Array<"await" | "background" | "task"> | undefined;
+  modes?: Array<"direct" | "task"> | undefined;
   depth?: number | undefined;
 };
 type WorkspaceDelegationUpdateRequest = {
@@ -2294,13 +2295,14 @@ export const WorkspaceDelegationEdge: z.ZodType<WorkspaceDelegationEdge> =
   z.object({
     from_agent: z.string().min(1),
     to_agent: z.string().min(1),
-    modes: z.array(z.enum(["await", "background", "task"])).optional(),
+    modes: z.array(z.enum(["direct", "task"])).optional(),
     depth: z.number().int().gte(0).optional(),
   });
 export const WorkspaceDelegation: z.ZodType<WorkspaceDelegation> = z.object({
   workspace_id: z.string(),
   edges: z.array(WorkspaceDelegationEdge),
   team: z.array(z.string()).optional(),
+  default_depth: z.number().int().gte(0),
 });
 export const WorkspaceDelegationUpdateRequest: z.ZodType<WorkspaceDelegationUpdateRequest> =
   z.object({ edges: z.array(WorkspaceDelegationEdge) });

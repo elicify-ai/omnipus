@@ -7458,13 +7458,13 @@ export interface components {
              */
             to_agent: string;
             /**
-             * @description Allowed delegation modes for this edge. An empty/absent list means all modes are allowed. Values match the DelegationMode enum used across delegation configuration. "await" = synchronous subagent (blocks caller until result). "background" = async spawn (caller continues; result posted when done). "task" = task_create delegation (persistent task for another agent).
+             * @description Allowed delegation modes for this edge. An empty/absent list means all modes are allowed. "direct" = Direct Delegation — the delegate tool dispatches to the target agent, either synchronously (await) or as a background spawn. Which of the two happens is a runtime parameter of the delegate tool call itself, not a trust distinction the edge gates separately — an edge that allows "direct" allows both call patterns. "task" = Task Delegation — task_create-style delegation (a persistent task assigned to another agent).
              * @example [
-             *       "await",
+             *       "direct",
              *       "task"
              *     ]
              */
-            modes?: ("await" | "background" | "task")[];
+            modes?: ("direct" | "task")[];
             /**
              * @description Maximum delegation chain depth for this edge (number of hops). 0 = no onward delegation past this hop. Bounded by the global subturn depth ceiling. Absent means the workspace/global default applies.
              * @example 3
@@ -7491,6 +7491,11 @@ export interface components {
              *     ]
              */
             team?: string[];
+            /**
+             * @description The currently-resolved depth ceiling an edge inherits when its own `depth` is unset — the global configured default if set, otherwise the defaultMaxSubTurnDepth backstop. This is a read-only, already-computed value (no new depth logic; see delegationDepthCeiling) exposed purely so the UI can always pre-fill/display a concrete number for any edge instead of an ambiguous blank/"∞" state. It does NOT change per-edge enforcement: an edge with depth unset still dynamically tracks the live global default at enforcement time, this field is a snapshot for display purposes only.
+             * @example 3
+             */
+            default_depth: number;
         };
         /** @description Request body for PUT /workspaces/{id}/delegation. Replaces the workspace's delegation edge set wholesale (full replace, not a merge) so the Team-tab graph editor can persist the exact graph the operator drew. Every from_agent / to_agent must resolve to a known agent; self-edges and depths above the global subturn ceiling are rejected. */
         WorkspaceDelegationUpdateRequest: {

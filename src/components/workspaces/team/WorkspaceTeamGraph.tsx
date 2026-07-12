@@ -45,6 +45,7 @@ interface AgentNodeData extends Record<string, unknown> {
 }
 interface DelegationEdgeData extends Record<string, unknown> {
   model: TeamEdgeModel
+  defaultDepth: number
   onToggleMode: (from: string, to: string, mode: DelegationMode) => void
   onSetDepth: (from: string, to: string, depth: number | undefined) => void
   onDelete: (from: string, to: string) => void
@@ -325,13 +326,18 @@ function DelegationEdge({
           {selected ? (
             <EdgeModeEditor
               model={model}
+              defaultDepth={data.defaultDepth}
               onToggleMode={data.onToggleMode}
               onSetDepth={data.onSetDepth}
               onDelete={data.onDelete}
               onClose={() => data.onSelect(null)}
             />
           ) : (
-            <EdgeLabelChip model={model} onClick={() => data.onSelect(id)} />
+            <EdgeLabelChip
+              model={model}
+              defaultDepth={data.defaultDepth}
+              onClick={() => data.onSelect(id)}
+            />
           )}
         </div>
       </EdgeLabelRenderer>
@@ -348,6 +354,9 @@ export interface WorkspaceTeamGraphProps {
   workerIds: ReadonlySet<string>
   /** The current edit state — needed for live connection validation. */
   editState: TeamEditState
+  /** The workspace's currently-resolved depth ceiling — threaded down to
+   *  every edge's inline editor/label so depth always shows a concrete number. */
+  defaultDepth: number
   onConnect: (from: string, to: string) => void
   onToggleMode: (from: string, to: string, mode: DelegationMode) => void
   onSetDepth: (from: string, to: string, depth: number | undefined) => void
@@ -363,6 +372,7 @@ function WorkspaceTeamGraphInner({
   edges,
   workerIds,
   editState,
+  defaultDepth,
   onConnect,
   onToggleMode,
   onSetDepth,
@@ -431,6 +441,7 @@ function WorkspaceTeamGraphInner({
         markerEnd: { type: MarkerType.ArrowClosed, color: 'var(--color-border)' },
         data: {
           model,
+          defaultDepth,
           onToggleMode,
           onSetDepth,
           onDelete: onDeleteEdge,
@@ -438,7 +449,7 @@ function WorkspaceTeamGraphInner({
           onSelect: handleSelectEdge,
         },
       })),
-    [edges, selectedEdgeId, onToggleMode, onSetDepth, onDeleteEdge, handleSelectEdge],
+    [edges, selectedEdgeId, defaultDepth, onToggleMode, onSetDepth, onDeleteEdge, handleSelectEdge],
   )
 
   const isValidConnection: IsValidConnection<DelegationFlowEdge> = useCallback(

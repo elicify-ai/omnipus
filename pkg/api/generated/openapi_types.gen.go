@@ -3055,17 +3055,14 @@ func (e WorkspaceStatus) Valid() bool {
 
 // Defines values for WorkspaceDelegationEdgesModes.
 const (
-	WorkspaceDelegationEdgesModesAwait      WorkspaceDelegationEdgesModes = "await"
-	WorkspaceDelegationEdgesModesBackground WorkspaceDelegationEdgesModes = "background"
-	WorkspaceDelegationEdgesModesTask       WorkspaceDelegationEdgesModes = "task"
+	WorkspaceDelegationEdgesModesDirect WorkspaceDelegationEdgesModes = "direct"
+	WorkspaceDelegationEdgesModesTask   WorkspaceDelegationEdgesModes = "task"
 )
 
 // Valid indicates whether the value is a known member of the WorkspaceDelegationEdgesModes enum.
 func (e WorkspaceDelegationEdgesModes) Valid() bool {
 	switch e {
-	case WorkspaceDelegationEdgesModesAwait:
-		return true
-	case WorkspaceDelegationEdgesModesBackground:
+	case WorkspaceDelegationEdgesModesDirect:
 		return true
 	case WorkspaceDelegationEdgesModesTask:
 		return true
@@ -3076,17 +3073,14 @@ func (e WorkspaceDelegationEdgesModes) Valid() bool {
 
 // Defines values for WorkspaceDelegationEdgeModes.
 const (
-	WorkspaceDelegationEdgeModesAwait      WorkspaceDelegationEdgeModes = "await"
-	WorkspaceDelegationEdgeModesBackground WorkspaceDelegationEdgeModes = "background"
-	WorkspaceDelegationEdgeModesTask       WorkspaceDelegationEdgeModes = "task"
+	WorkspaceDelegationEdgeModesDirect WorkspaceDelegationEdgeModes = "direct"
+	WorkspaceDelegationEdgeModesTask   WorkspaceDelegationEdgeModes = "task"
 )
 
 // Valid indicates whether the value is a known member of the WorkspaceDelegationEdgeModes enum.
 func (e WorkspaceDelegationEdgeModes) Valid() bool {
 	switch e {
-	case WorkspaceDelegationEdgeModesAwait:
-		return true
-	case WorkspaceDelegationEdgeModesBackground:
+	case WorkspaceDelegationEdgeModesDirect:
 		return true
 	case WorkspaceDelegationEdgeModesTask:
 		return true
@@ -3097,17 +3091,14 @@ func (e WorkspaceDelegationEdgeModes) Valid() bool {
 
 // Defines values for WorkspaceDelegationUpdateRequestEdgesModes.
 const (
-	WorkspaceDelegationUpdateRequestEdgesModesAwait      WorkspaceDelegationUpdateRequestEdgesModes = "await"
-	WorkspaceDelegationUpdateRequestEdgesModesBackground WorkspaceDelegationUpdateRequestEdgesModes = "background"
-	WorkspaceDelegationUpdateRequestEdgesModesTask       WorkspaceDelegationUpdateRequestEdgesModes = "task"
+	WorkspaceDelegationUpdateRequestEdgesModesDirect WorkspaceDelegationUpdateRequestEdgesModes = "direct"
+	WorkspaceDelegationUpdateRequestEdgesModesTask   WorkspaceDelegationUpdateRequestEdgesModes = "task"
 )
 
 // Valid indicates whether the value is a known member of the WorkspaceDelegationUpdateRequestEdgesModes enum.
 func (e WorkspaceDelegationUpdateRequestEdgesModes) Valid() bool {
 	switch e {
-	case WorkspaceDelegationUpdateRequestEdgesModesAwait:
-		return true
-	case WorkspaceDelegationUpdateRequestEdgesModesBackground:
+	case WorkspaceDelegationUpdateRequestEdgesModesDirect:
 		return true
 	case WorkspaceDelegationUpdateRequestEdgesModesTask:
 		return true
@@ -8015,6 +8006,9 @@ type WorkspaceCreateRequest struct {
 
 // WorkspaceDelegation The per-workspace delegation graph (M5). This is the editable source of truth surfaced in the workspace Team tab and the Agents-area "Workspace Teams" view — always workspace-scoped, never global. Nodes are the workspace team's agents (core_team ∪ every agent named by an edge); edges are the directed delegation authorizations. This graph is the sole delegation-enforcement mechanism — there is no separate global per-agent delegation policy; the graph is both what the UI edits and what the runtime enforces.
 type WorkspaceDelegation struct {
+	// DefaultDepth The currently-resolved depth ceiling an edge inherits when its own `depth` is unset — the global configured default if set, otherwise the defaultMaxSubTurnDepth backstop. This is a read-only, already-computed value (no new depth logic; see delegationDepthCeiling) exposed purely so the UI can always pre-fill/display a concrete number for any edge instead of an ambiguous blank/"∞" state. It does NOT change per-edge enforcement: an edge with depth unset still dynamically tracks the live global default at enforcement time, this field is a snapshot for display purposes only.
+	DefaultDepth int `json:"default_depth"`
+
 	// Edges The directed delegation edges. May be empty (no delegation configured). Deduplicated by (from_agent, to_agent) at write time — last writer wins.
 	Edges []WorkspaceDelegationEdge `json:"edges"`
 
@@ -8036,7 +8030,7 @@ type WorkspaceDelegationEdge struct {
 	// FromAgent Agent ID of the delegating agent (the source node). Must be a member of the workspace team (present in core_team or referenced by another edge).
 	FromAgent string `json:"from_agent"`
 
-	// Modes Allowed delegation modes for this edge. An empty/absent list means all modes are allowed. Values match the DelegationMode enum used across delegation configuration. "await" = synchronous subagent (blocks caller until result). "background" = async spawn (caller continues; result posted when done). "task" = task_create delegation (persistent task for another agent).
+	// Modes Allowed delegation modes for this edge. An empty/absent list means all modes are allowed. "direct" = Direct Delegation — the delegate tool dispatches to the target agent, either synchronously (await) or as a background spawn. Which of the two happens is a runtime parameter of the delegate tool call itself, not a trust distinction the edge gates separately — an edge that allows "direct" allows both call patterns. "task" = Task Delegation — task_create-style delegation (a persistent task assigned to another agent).
 	Modes *[]WorkspaceDelegationEdgeModes `json:"modes,omitempty"`
 
 	// ToAgent Agent ID of the delegate (the target node). Must be a member of the workspace team. Self-edges (from_agent == to_agent) are rejected.

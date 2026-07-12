@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/agent"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -73,8 +74,12 @@ func delegationEdgeToWire(e storedDelegationEdge) gen.WorkspaceDelegationEdge {
 
 // workspaceDelegationToWire builds the GET/PUT response body for a workspace's
 // delegation graph. The team node set is the union of the workspace core_team and
-// every agent referenced by an edge, sorted for stable output.
-func workspaceDelegationToWire(ws storedWorkspace) gen.WorkspaceDelegation {
+// every agent referenced by an edge, sorted for stable output. defaultDepth is
+// the already-computed depth ceiling (delegationDepthCeiling(cfg)) an edge
+// inherits when its own depth is unset — no new depth logic here, purely
+// exposing that existing value so the frontend can always pre-fill/display a
+// concrete number instead of an ambiguous blank/"∞" state.
+func workspaceDelegationToWire(ws storedWorkspace, defaultDepth int) gen.WorkspaceDelegation {
 	edges := make([]gen.WorkspaceDelegationEdge, 0, len(ws.Delegation))
 	teamSet := make(map[string]struct{}, len(ws.CoreTeam)+2*len(ws.Delegation))
 	for _, id := range ws.CoreTeam {
@@ -92,8 +97,9 @@ func workspaceDelegationToWire(ws storedWorkspace) gen.WorkspaceDelegation {
 	sort.Strings(team)
 
 	out := gen.WorkspaceDelegation{
-		WorkspaceId: ws.ID,
-		Edges:       edges,
+		WorkspaceId:  ws.ID,
+		Edges:        edges,
+		DefaultDepth: defaultDepth,
 	}
 	if len(team) > 0 {
 		out.Team = &team
@@ -112,7 +118,8 @@ func (a *restAPI) handleWorkspaceDelegationGet(w http.ResponseWriter, _ *http.Re
 	if !ok {
 		return
 	}
-	jsonOK(w, workspaceDelegationToWire(ws))
+	cfg := a.agentLoop.GetConfig()
+	jsonOK(w, workspaceDelegationToWire(ws, delegationDepthCeiling(cfg)))
 }
 
 // handleWorkspaceDelegationPut replaces the workspace's delegation edge set.
@@ -124,7 +131,7 @@ func (a *restAPI) handleWorkspaceDelegationGet(w http.ResponseWriter, _ *http.Re
 //     expand the team with an off-team agent
 //   - self-edges (from_agent == to_agent) are rejected
 //   - the resulting graph must be acyclic (no A→B→A delegation cycle)
-//   - modes ⊆ {await, background, task}
+//   - modes ⊆ {direct, task}
 //   - depth must be >= 0 and <= the global subturn depth ceiling
 //
 // Edges are deduplicated by (from_agent, to_agent); the last writer wins.
@@ -188,7 +195,7 @@ func (a *restAPI) handleWorkspaceDelegationPut(w http.ResponseWriter, r *http.Re
 		}
 	}
 
-	jsonOK(w, workspaceDelegationToWire(ws))
+	jsonOK(w, workspaceDelegationToWire(ws, ceiling))
 }
 
 // defaultWorkspaceDelegationEdges derives the seed delegation graph for a new
@@ -230,8 +237,8 @@ func defaultWorkspaceDelegationEdges(cfg *config.Config) []storedDelegationEdge 
 		return nil
 	}
 	var edges []storedDelegationEdge
-	//nolint:dupl // TestDefaultWorkspaceDelegationEdges_MatchesCoreagentSeed deliberately
-	// replays this exact loop independently (not via a shared helper) so it can catch a
+	// TestDefaultWorkspaceDelegationEdges_MatchesCoreagentSeed deliberately replays
+	// this exact loop independently (not via a shared helper) so it can catch a
 	// regression in THIS transformation logic; sharing a helper would make that test
 	// tautological (see the test's own doc comment for the full rationale).
 	for i := range cfg.Agents.List {
@@ -240,11 +247,22 @@ func defaultWorkspaceDelegationEdges(cfg *config.Config) []storedDelegationEdge 
 		if dp == nil || len(dp.To) == 0 {
 			continue
 		}
-		// config.DelegationMode → workspace.DelegationMode (both string types):
-		// seed the edge graph with the typed modes the stored edge now carries.
+		// Collapse+dedupe the coreagent seed's real 3-value tool-call vocabulary
+		// down to the trust edge's 2-value vocabulary via agent.EdgeModeCategory —
+		// the SAME function the enforcement gate uses (pkg/agent/loop.go) — deduped
+		// so a seed listing both Await and Background (e.g. Jim's [Task,
+		// Background, Await]) yields a single Direct entry, not two. pkg/gateway
+		// already imports pkg/agent extensively, so there is no package-boundary
+		// reason to maintain a separate copy of this collapse here.
 		modes := make([]workspace.DelegationMode, 0, len(dp.Modes))
+		seenMode := make(map[workspace.DelegationMode]bool, len(dp.Modes))
 		for _, m := range dp.Modes {
-			modes = append(modes, workspace.DelegationMode(m))
+			wm := agent.EdgeModeCategory(m)
+			if seenMode[wm] {
+				continue
+			}
+			seenMode[wm] = true
+			modes = append(modes, wm)
 		}
 		var depth *int
 		if dp.Depth != nil {
@@ -384,7 +402,7 @@ func buildWorkspaceDelegationEdges(
 		}
 
 		// Single shared authority for the per-edge invariants (non-empty, no
-		// self-edge, endpoints ∈ team, modes ⊆ {await,background,task}, depth in
+		// self-edge, endpoints ∈ team, modes ⊆ {direct,task}, depth in
 		// [0, ceiling]). Validate returns the canonical wire messages verbatim, so
 		// the 400 body is byte-identical to the previous inline checks. The
 		// whole-graph acyclicity check stays below (it is graph-level, not

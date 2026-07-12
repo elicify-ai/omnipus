@@ -110,7 +110,7 @@ func TestWorkspaceDelegation_EdgeWiredViaTeamTabPersistsForLiveSession(t *testin
 	// Step 2 (mirrors updateWorkspaceDelegation(workspaceId, edges)): wire the
 	// jim->worker delegation edge the Team-tab graph editor draws.
 	w := putDelegation(t, api, id,
-		`{"edges":[{"from_agent":"jim","to_agent":"worker","modes":["await","background","task"]}]}`)
+		`{"edges":[{"from_agent":"jim","to_agent":"worker","modes":["direct","task"]}]}`)
 	require.Equal(t, http.StatusOK, w.Code, "delegation PUT: body=%s", w.Body.String())
 
 	// Immediately (same test "session" — no reload, no wait) read the edge back
