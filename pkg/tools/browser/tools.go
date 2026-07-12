@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/chromedp/chromedp"
@@ -239,7 +240,7 @@ func (t *ScreenshotTool) Name() string                 { return "browser_screens
 func (t *ScreenshotTool) Scope() tools.ToolScope       { return tools.ScopeCore }
 func (t *ScreenshotTool) Category() tools.ToolCategory { return tools.CategoryBrowser }
 func (t *ScreenshotTool) Description() string {
-	return "Capture a screenshot of the current page as a JPEG image."
+	return "Capture a screenshot of the CURRENT page as a JPEG image, and report its current URL and title. Use this to see what page is open — including a page the user navigated to themselves via the live browser panel (the tab is shared). Do not guess the URL from the visual content; read it from this tool's output."
 }
 
 func (t *ScreenshotTool) Parameters() map[string]any {
@@ -263,6 +264,7 @@ func (t *ScreenshotTool) Execute(ctx context.Context, args map[string]any) *tool
 	// be loading. Poll until document.readyState is "complete", then wait an
 	// additional 500ms for client-side JS frameworks to finish painting.
 	var buf []byte
+	var pageURL, pageTitle string
 	err = chromedp.Run(tabCtx,
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			// Best-effort readyState poll. Any error during the poll is
@@ -283,6 +285,17 @@ func (t *ScreenshotTool) Execute(ctx context.Context, args map[string]any) *tool
 			return nil //nolint:nilerr // poll errors are non-fatal by design
 		}),
 		chromedp.FullScreenshot(&buf, 90),
+		// Capture the current URL + title so the model KNOWS where it is —
+		// critical when the USER drove the shared tab somewhere via the live
+		// panel (the agent otherwise has no way to read the location and was
+		// observed guessing it from the visual content, e.g. reporting
+		// "example.com" for the identical-looking example.org). Best-effort:
+		// wrapped so a Location/Title failure never fails the screenshot.
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			_ = chromedp.Location(&pageURL).Do(ctx)
+			_ = chromedp.Title(&pageTitle).Do(ctx)
+			return nil
+		}),
 	)
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("browser_screenshot: %s", err))
@@ -297,10 +310,18 @@ func (t *ScreenshotTool) Execute(ctx context.Context, args map[string]any) *tool
 
 	// FullScreenshot with quality>0 produces JPEG. Return as data URL so
 	// normalizeToolResult can extract it, store via MediaStore, and deliver
-	// inline as a media frame.
+	// inline as a media frame. The current-page header is PREPENDED as plain
+	// text: normalizeToolResult strips the data: URL into the Media array but
+	// KEEPS the surrounding text, so the model receives both the image and an
+	// authoritative "you are on <url>" line (it must not infer the URL from
+	// the pixels — see Description).
 	dataURL := "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(buf)
+	header := "Current page URL: " + strings.TrimSpace(pageURL)
+	if title := strings.TrimSpace(pageTitle); title != "" {
+		header += "\nPage title: " + title
+	}
 	return &tools.ToolResult{
-		ForLLM:       dataURL,
+		ForLLM:       header + "\n" + dataURL,
 		ArtifactTags: []string{fmt.Sprintf("[file:%s]", path)},
 	}
 }

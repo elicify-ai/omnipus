@@ -648,6 +648,9 @@ func (h *BrowserWSHandler) handleInput(wc *browserWSConn, state *browserConnStat
 	if frame.Code != nil {
 		in.Code = *frame.Code
 	}
+	if frame.KeyCode != nil {
+		in.KeyCode = *frame.KeyCode
+	}
 	if frame.Text != nil {
 		in.Text = *frame.Text
 	}

@@ -800,6 +800,23 @@ func TestBuildInputAction_ClampsModifiers(t *testing.T) {
 	require.NotNil(t, action)
 }
 
+// TestBuildInputAction_KeyEventCarriesVirtualKeyCode guards the UAT keyboard
+// fix: an editing/navigation key (Backspace, Delete, Enter, arrows) and
+// modifier shortcuts (Ctrl+A) only PERFORM their action in the page when the
+// CDP Input.dispatchKeyEvent carries the Windows/native virtual key code —
+// key/code alone deliver an event that does nothing. Assert the built action's
+// params thread KeyCode through to both fields for key_down and key_up.
+func TestBuildInputAction_KeyEventCarriesVirtualKeyCode(t *testing.T) {
+	for _, kind := range []string{"key_down", "key_up"} {
+		action, err := buildInputAction(LiveInput{Kind: kind, Key: "Backspace", Code: "Backspace", KeyCode: 8})
+		require.NoError(t, err)
+		p, ok := action.(*input.DispatchKeyEventParams)
+		require.True(t, ok, "%s must build a *input.DispatchKeyEventParams", kind)
+		require.Equal(t, int64(8), p.WindowsVirtualKeyCode, "%s WindowsVirtualKeyCode", kind)
+		require.Equal(t, int64(8), p.NativeVirtualKeyCode, "%s NativeVirtualKeyCode", kind)
+	}
+}
+
 // TestIsBenignLiveInputError verifies the benign/real classification
 // (ADR-038 finding #4) that browser_ws.go's handleInput relies on to decide
 // whether a dispatchInput failure is worth a browser_status(error) frame.
