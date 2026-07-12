@@ -2405,7 +2405,11 @@ components:
               index:
                 type: integer
                 minimum: 0
-                description: Stable position of this tab in the set (0-based).
+                description: >-
+                  0-based position of this tab in the CURRENT tab list. NOT a
+                  persistent identifier — indices shift down when an earlier tab
+                  closes; always re-read from the latest browser_tabs /
+                  browser_list_tabs before acting on a specific index.
               title:
                 type: string
                 maxLength: 512

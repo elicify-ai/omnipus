@@ -356,13 +356,19 @@ export function BrowserLiveView({
   // ── Tab strip (ADR-041 D4) — the latest known tab list + active index,
   // straight off the most recent `browser_tabs` frame. `null` until the
   // first one arrives (the strip stays unrendered — never shown empty).
-  // Deliberately no optimistic local "active" override on click: the ADR
-  // permits an optimistic highlight but doesn't require one, and the
-  // backend re-binds the screencast + re-broadcasts `browser_tabs` on every
-  // switch/close/open, so reconciling to the next frame alone keeps this
-  // free of drift between what's highlighted and what's actually active.
-  const [tabs, setTabs] = useState<BrowserTabsFrame['tabs'] | null>(null)
-  const [activeTabIndex, setActiveTabIndex] = useState(0)
+  // Collapsed into a single state slice (reviewer finding F5): `tabs` and
+  // `activeIndex` used to be two separate `useState` calls that are ALWAYS
+  // set together (in `onTabs` below) and ALWAYS read together (the
+  // tab-strip render further down) — two hooks for one atomic value is a
+  // foot-gun, since nothing stops a future edit from updating one without
+  // the other. Deliberately no optimistic local "active" override on click:
+  // the backend re-binds the screencast + re-broadcasts `browser_tabs` on
+  // every switch/close/open, so reconciling to the next frame alone keeps
+  // this free of drift between what's highlighted and what's actually
+  // active. (The ADR itself is silent on whether an optimistic highlight
+  // would also be acceptable — this "reconcile from the next frame" choice
+  // is a local implementation decision, not something the ADR mandates.)
+  const [tabState, setTabState] = useState<{ tabs: BrowserTabsFrame['tabs']; activeIndex: number } | null>(null)
 
   // ── Annotate mode (ADR-039 D-B1/B2) — container-relative CSS coords for
   // the live selection-box overlay; frozen (not cleared) once a selection
@@ -607,11 +613,9 @@ export function BrowserLiveView({
       onScreencast: (f) => setFrame(f),
       // ADR-041 D4 — tab list + active index, broadcast on any
       // open/close/switch/title-change. This is the sole source of truth
-      // the tab strip renders from (see the `tabs`/`activeTabIndex` state
-      // doc comment above).
+      // the tab strip renders from (see the `tabState` doc comment above).
       onTabs: (f) => {
-        setTabs(f.tabs)
-        setActiveTabIndex(f.active_index)
+        setTabState({ tabs: f.tabs, activeIndex: f.active_index })
       },
       // Reviewer finding: a terminal browser_status{state:'error'} (e.g. a
       // blocked `navigate`) used to overwrite statusState unconditionally —
@@ -846,7 +850,25 @@ export function BrowserLiveView({
     // (isControlling) left a visible "Click to drive" flash, and why this is
     // display-only (driveMode/canDispatchInput still wait for the real ack).
     setPendingTake(true)
-    wsRef.current?.sendControl('take')
+    // Reviewer finding F3: `sendControl('take')`'s boolean return used to be
+    // discarded here. If the socket was left technically OPEN but the send
+    // itself failed (or the transport had already begun closing before the
+    // `close` event fired), no frame ever reaches the server, no ack ever
+    // lands, and `pendingTakeRef`/`pendingTake` would stay stuck true
+    // forever — the "take control" affordance permanently shows "you're
+    // driving" while real control never transfers, and every later click is
+    // no-op'd by `takeWheelIfNeeded`'s own `pendingTakeRef.current` guard
+    // above. Mirrors the auto-release effect's existing failed-send
+    // recovery (further up this file): clear the optimistic flag and tell
+    // the user to retry rather than leaving it wedged.
+    const sent = wsRef.current?.sendControl('take')
+    if (!sent) {
+      setPendingTake(false)
+      useUiStore.getState().addToast({
+        message: 'Could not confirm taking control — click Take over again if needed.',
+        variant: 'error',
+      })
+    }
   }, [sessionId, setPendingTake])
 
   // ── Annotate mode (ADR-039 D-B1/B2) ─────────────────────────────────────
@@ -1024,25 +1046,46 @@ export function BrowserLiveView({
   )
 
   // ── Tab strip actions (ADR-041 D4) — switching/opening/closing a tab is a
-  // viewer action, like the omnibox, independent of the D2 drive-lock model:
-  // it never itself acquires/releases control. Each just sends the frame;
-  // the resulting highlight/list update comes from the next `browser_tabs`
-  // broadcast (see the `tabs` state doc comment), not from any local write
-  // here.
+  // driving action, exactly like the omnibox (D5): the backend only honours
+  // `browser_tab_action` when this connection holds the control lock, or
+  // nobody controls (idle) — a merely-watching viewer's tab action would be
+  // rejected. Reviewer finding F1: every handler below routes through
+  // `takeWheelIfNeeded()` FIRST, matching the omnibox's own "take, then act
+  // on the same connection" ordering — same-connection WS message ordering
+  // guarantees the server processes `browser_control{take}` before the
+  // `browser_tab_action` sent right after it, so a user watching the agent
+  // browse who clicks a tab takes over before the switch/close/open is
+  // honoured. Reviewer finding F2: `sendTabAction`'s boolean return is now
+  // checked — a failed send (dead/reconnecting transport) surfaces a toast
+  // instead of silently no-opping. The resulting highlight/list update
+  // itself still comes from the next `browser_tabs` broadcast (see the
+  // `tabState` doc comment), never from a local write here.
   const handleTabSwitch = useCallback((index: number) => {
-    wsRef.current?.sendTabAction('switch', index)
-  }, [])
+    takeWheelIfNeeded()
+    const sent = wsRef.current?.sendTabAction('switch', index)
+    if (!sent) {
+      useUiStore.getState().addToast({ message: 'Could not switch tabs — check your connection and try again.', variant: 'error' })
+    }
+  }, [takeWheelIfNeeded])
 
   const handleTabClose = useCallback((index: number, e: React.MouseEvent) => {
     // Stop the click from bubbling to the tab chip's own onClick (which
     // would also fire a redundant 'switch' for the tab being closed).
     e.stopPropagation()
-    wsRef.current?.sendTabAction('close', index)
-  }, [])
+    takeWheelIfNeeded()
+    const sent = wsRef.current?.sendTabAction('close', index)
+    if (!sent) {
+      useUiStore.getState().addToast({ message: 'Could not close that tab — check your connection and try again.', variant: 'error' })
+    }
+  }, [takeWheelIfNeeded])
 
   const handleTabOpen = useCallback(() => {
-    wsRef.current?.sendTabAction('open')
-  }, [])
+    takeWheelIfNeeded()
+    const sent = wsRef.current?.sendTabAction('open')
+    if (!sent) {
+      useUiStore.getState().addToast({ message: 'Could not open a new tab — check your connection and try again.', variant: 'error' })
+    }
+  }, [takeWheelIfNeeded])
 
   const handlePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (annotateMode) {
@@ -1471,12 +1514,13 @@ export function BrowserLiveView({
       {/* Tab strip (ADR-041 D4) — open tabs: favicon-or-globe + truncated
           title/hostname + active highlight + close ✕, plus a trailing ＋ to
           open a new tab. Rendered whenever the tab list is known (the
-          backend always keeps at least one tab — see `tabs`' state doc
+          backend always keeps at least one tab — see `tabState`'s doc
           comment — so "known" and "non-empty" coincide in practice; the
-          `tabs.length > 0` check is just defense in depth against an
-          ill-formed frame). Sits below the always-visible omnibox and above
-          the screencast frame, matching the ADR-040 header/omnibox stack. */}
-      {tabs && tabs.length > 0 && (
+          `tabState.tabs.length > 0` check is just defense in depth against
+          an ill-formed frame). Sits below the always-visible omnibox and
+          above the screencast frame, matching the ADR-040 header/omnibox
+          stack. */}
+      {tabState && tabState.tabs.length > 0 && (
         <div
           role="tablist"
           aria-label="Open tabs"
@@ -1484,18 +1528,29 @@ export function BrowserLiveView({
           className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-[var(--color-border)] px-2 py-1.5"
           style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' } as React.CSSProperties}
         >
-          {tabs.map((tab) => {
-            const active = tab.index === activeTabIndex
+          {tabState.tabs.map((tab) => {
+            const active = tab.index === tabState.activeIndex
             const label = tabLabel(tab)
             return (
               <div
                 key={tab.index}
                 role="tab"
                 aria-selected={active}
+                aria-disabled={!connected}
                 tabIndex={0}
                 data-testid={`browser-tab-${tab.index}`}
-                onClick={() => handleTabSwitch(tab.index)}
+                onClick={() => {
+                  // Reviewer finding F2: the ✕/＋ buttons below already gate
+                  // on `disabled={!connected}` (a native disabled button
+                  // never fires onClick at all), but this <div role="tab">
+                  // has no native disabled state — without this guard,
+                  // clicking a tab while the WS is reconnecting silently
+                  // no-op'd (sendTabAction returning false, discarded).
+                  if (!connected) return
+                  handleTabSwitch(tab.index)
+                }}
                 onKeyDown={(e) => {
+                  if (!connected) return
                   if (e.key === 'Enter' || e.key === ' ') {
                     e.preventDefault()
                     handleTabSwitch(tab.index)
@@ -1503,7 +1558,8 @@ export function BrowserLiveView({
                 }}
                 title={tab.title || tab.url || 'New tab'}
                 className={cn(
-                  'flex shrink-0 max-w-[180px] cursor-pointer items-center gap-1.5 rounded-t-md border-b-2 px-2.5 py-1 text-xs transition-colors',
+                  'flex shrink-0 max-w-[180px] items-center gap-1.5 rounded-t-md border-b-2 px-2.5 py-1 text-xs transition-colors',
+                  connected ? 'cursor-pointer' : 'cursor-not-allowed',
                   // Active tab: Forge-Gold underline + full opacity + a
                   // heavier label weight — colour is never the only signal
                   // (WCAG). Inactive: dimmed, transparent underline.

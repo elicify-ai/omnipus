@@ -195,16 +195,44 @@ func (t *ClickTool) Execute(ctx context.Context, args map[string]any) *tools.Too
 	// of continuing to act on the (now-background) opener page. This is
 	// what fixes the headline ADR-041 failure: a Cal.com-style booking
 	// button that opens its flow in a new tab.
-	if adopted, newActive, rerr := t.mgr.ReconcileTabs(defaultSessionID); rerr != nil {
+	if outcome, rerr := t.mgr.ReconcileTabs(defaultSessionID); rerr != nil {
 		logger.WarnCF("browser", "browser_click: tab reconcile failed", map[string]any{"error": rerr.Error()})
-	} else if adopted && newActive != nil {
-		result["opened_new_tab"] = true
-		result["new_tab_index"] = newActive.Index
-		result["new_tab_url"] = newActive.URL
-		result["note"] = fmt.Sprintf("opened and switched to new tab %d: %s", newActive.Index, newActive.URL)
+	} else {
+		applyReconcileOutcome(result, outcome)
 	}
 
 	return jsonResult(result)
+}
+
+// applyReconcileOutcome maps a BrowserManager.ReconcileOutcome onto
+// browser_click's result map (ADR-041 fix F2 — the ADR headline bug
+// re-created: a click that spawns a new tab beyond MaxTabs, or whose CDP
+// attach fails, used to surface as a plain success with no signal). Factored
+// out of ClickTool.Execute so the mapping logic is unit-testable without a
+// live Chromium/CDP connection (see tabs_test.go's
+// TestApplyReconcileOutcome_* cases).
+func applyReconcileOutcome(result map[string]any, outcome ReconcileOutcome) {
+	switch {
+	case outcome.Adopted && outcome.NewActive != nil:
+		result["opened_new_tab"] = true
+		result["new_tab_index"] = outcome.NewActive.Index
+		result["new_tab_url"] = outcome.NewActive.URL
+		result["note"] = fmt.Sprintf("opened and switched to new tab %d: %s", outcome.NewActive.Index, outcome.NewActive.URL)
+	case outcome.Unadopted:
+		result["tab_opened_but_not_adopted"] = true
+		result["reason"] = string(outcome.Reason)
+		switch outcome.Reason {
+		case tabAdoptReasonMaxTabs:
+			result["note"] = "the click opened a new tab, but the maximum concurrent tabs limit was " +
+				"reached, so it could not be adopted. Close a tab with browser_close_tab and retry, or " +
+				"tell the user a tab could not be opened."
+		case tabAdoptReasonAttachFailed:
+			result["note"] = "the click opened a new tab, but attaching to it failed — it may not be " +
+				"usable. Call browser_list_tabs to check what's open."
+		default:
+			result["note"] = "the click opened a new tab that could not be adopted."
+		}
+	}
 }
 
 // --- browser_type (US-5) ---

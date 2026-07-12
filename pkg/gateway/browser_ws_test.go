@@ -615,6 +615,243 @@ func readWCFrame(t *testing.T, wc *browserWSConn, timeout time.Duration) browser
 	return browserFrameDecoder{}
 }
 
+// newTabActionTestFixtures mirrors newControlTestFixtures exactly (a bare
+// browserWSConn + browserConnState backed by a real, never-started
+// *browser.BrowserManager) but scopes OMNIPUS_HOME/ProfileDir to a t.TempDir()
+// and points ExecPath at a path that deliberately does not exist. Unlike
+// SwitchTab/CloseTab (pure in-memory lookups, no CDP), OpenTab calls
+// ensureStarted() — resolveExecPath's very first step is a synchronous
+// os.Stat on cfg.ExecPath when it's set (manager.go), so a bogus path fails
+// fast and deterministically ("browser: cannot locate chromium: ...") with
+// no real Chromium launch, no network, and no dependency on whether this
+// host happens to have a (possibly broken, e.g. an Ubuntu snap-stub)
+// chromium binary on PATH.
+func newTabActionTestFixtures(t *testing.T) (*browserWSConn, *browserConnState) {
+	t.Helper()
+	tmpDir := t.TempDir()
+	t.Setenv("OMNIPUS_HOME", tmpDir)
+	browserCfg, err := browser.DefaultConfig()
+	require.NoError(t, err)
+	browserCfg.ExecPath = filepath.Join(tmpDir, "no-such-chromium-binary")
+	mgr, err := browser.NewBrowserManager(browserCfg, security.NewSSRFChecker(nil))
+	require.NoError(t, err)
+	wc := &browserWSConn{sendCh: make(chan []byte, 8), doneCh: make(chan struct{})}
+	state := &browserConnState{mgr: mgr, sessionID: "tab-action-test-session"}
+	return wc, state
+}
+
+// marshalTabActionFrame builds a raw browser_tab_action frame body.
+func marshalTabActionFrame(t *testing.T, action string, index *int) []byte {
+	t.Helper()
+	data, err := json.Marshal(generated.BrowserTabActionFrame{
+		Type:   string(generated.WsFrameTypeBrowserTabAction),
+		Action: action,
+		Index:  index,
+	})
+	require.NoError(t, err)
+	return data
+}
+
+// ---------------------------------------------------------------------------
+// browser_tab_action (ADR-041 D3/D4, F5 gateway coverage)
+// ---------------------------------------------------------------------------
+
+// TestBrowserWS_HandleTabAction_NotAttached_Rejected mirrors
+// TestBrowserWS_HandleControl_NotAttached_Rejected: the "attach before
+// managing tabs" gate must fire before any manager state is consulted.
+func TestBrowserWS_HandleTabAction_NotAttached_Rejected(t *testing.T) {
+	handler, _ := newBrowserWSTestHandler(t, nil)
+	wc := &browserWSConn{sendCh: make(chan []byte, 8), doneCh: make(chan struct{})}
+	state := &browserConnState{} // zero value: mgr==nil, sessionID=="" — never attached
+
+	handler.handleTabAction(wc, state, "viewer1", marshalTabActionFrame(t, "switch", intPtr(0)))
+
+	resp := readWCFrame(t, wc, 2*time.Second)
+	assert.Equal(t, "browser_status", resp.Type)
+	assert.Equal(t, "error", resp.State)
+	assert.Contains(t, resp.Message, "attach before managing tabs")
+}
+
+// TestBrowserWS_HandleTabAction_Switch_MissingIndex_Rejected verifies index
+// is required for "switch" and the rejection never reaches the manager (an
+// out-of-range/nil index dereference must never panic).
+func TestBrowserWS_HandleTabAction_Switch_MissingIndex_Rejected(t *testing.T) {
+	handler, _ := newBrowserWSTestHandler(t, nil)
+	wc, state := newControlTestFixtures(t)
+
+	handler.handleTabAction(wc, state, "viewer1", marshalTabActionFrame(t, "switch", nil))
+
+	resp := readWCFrame(t, wc, 2*time.Second)
+	assert.Equal(t, "browser_status", resp.Type)
+	assert.Equal(t, "error", resp.State)
+	assert.Contains(t, resp.Message, "index is required for switch")
+}
+
+// TestBrowserWS_HandleTabAction_Close_MissingIndex_Rejected mirrors the
+// switch case for "close".
+func TestBrowserWS_HandleTabAction_Close_MissingIndex_Rejected(t *testing.T) {
+	handler, _ := newBrowserWSTestHandler(t, nil)
+	wc, state := newControlTestFixtures(t)
+
+	handler.handleTabAction(wc, state, "viewer1", marshalTabActionFrame(t, "close", nil))
+
+	resp := readWCFrame(t, wc, 2*time.Second)
+	assert.Equal(t, "browser_status", resp.Type)
+	assert.Equal(t, "error", resp.State)
+	assert.Contains(t, resp.Message, "index is required for close")
+}
+
+// TestBrowserWS_HandleTabAction_Switch_DispatchesToManager_NoSessionErrors
+// proves "switch" reaches the REAL BrowserManager.SwitchTab (not a stub, not
+// a silent drop): against a manager that has no browsing context for
+// browser.DefaultSessionID yet, the real error SwitchTab returns
+// ("no active session") comes back as browser_status(error) — never a panic.
+// (Numeric out-of-range coverage against a REAL tab set lives in
+// pkg/tools/browser/tabs_test.go's TestSwitchTab_OutOfRange_ReturnsError,
+// which needs a real tab and is covered at that layer; this test proves the
+// gateway handler's forwarding, not SwitchTab's own index arithmetic.)
+func TestBrowserWS_HandleTabAction_Switch_DispatchesToManager_NoSessionErrors(t *testing.T) {
+	handler, _ := newBrowserWSTestHandler(t, nil)
+	wc, state := newControlTestFixtures(t)
+
+	handler.handleTabAction(wc, state, "viewer1", marshalTabActionFrame(t, "switch", intPtr(0)))
+
+	resp := readWCFrame(t, wc, 2*time.Second)
+	assert.Equal(t, "browser_status", resp.Type)
+	assert.Equal(t, "error", resp.State)
+	assert.Equal(t, state.sessionID, resp.SessionID)
+	assert.Contains(t, resp.Message, "no active session",
+		"the error must be SwitchTab's own — proof the handler actually called into the manager")
+}
+
+// TestBrowserWS_HandleTabAction_Close_DispatchesToManager_NoSessionErrors
+// mirrors the switch case for "close" (BrowserManager.CloseTab).
+func TestBrowserWS_HandleTabAction_Close_DispatchesToManager_NoSessionErrors(t *testing.T) {
+	handler, _ := newBrowserWSTestHandler(t, nil)
+	wc, state := newControlTestFixtures(t)
+
+	handler.handleTabAction(wc, state, "viewer1", marshalTabActionFrame(t, "close", intPtr(0)))
+
+	resp := readWCFrame(t, wc, 2*time.Second)
+	assert.Equal(t, "browser_status", resp.Type)
+	assert.Equal(t, "error", resp.State)
+	assert.Contains(t, resp.Message, "no active session",
+		"the error must be CloseTab's own — proof the handler actually called into the manager")
+}
+
+// TestBrowserWS_HandleTabAction_Open_DispatchesToManager_ExecPathError
+// proves "open" reaches the REAL BrowserManager.OpenTab: against a manager
+// whose ExecPath deliberately points at a nonexistent binary (no Chromium
+// dependency, fails fast via os.Stat inside resolveExecPath), OpenTab's own
+// "cannot locate chromium" error comes back as browser_status(error).
+func TestBrowserWS_HandleTabAction_Open_DispatchesToManager_ExecPathError(t *testing.T) {
+	handler, _ := newBrowserWSTestHandler(t, nil)
+	wc, state := newTabActionTestFixtures(t)
+
+	handler.handleTabAction(wc, state, "viewer1", marshalTabActionFrame(t, "open", nil))
+
+	resp := readWCFrame(t, wc, 5*time.Second)
+	assert.Equal(t, "browser_status", resp.Type)
+	assert.Equal(t, "error", resp.State)
+	assert.Contains(t, resp.Message, "cannot locate chromium",
+		"the error must be OpenTab's own (via ensureStarted/resolveExecPath) — proof the handler "+
+			"actually called into the manager, not a stub")
+}
+
+// TestBrowserWS_HandleTabAction_UnknownAction_Rejected verifies an
+// unrecognized action string is rejected with a descriptive error rather
+// than silently ignored or treated as switch/close/open.
+func TestBrowserWS_HandleTabAction_UnknownAction_Rejected(t *testing.T) {
+	handler, _ := newBrowserWSTestHandler(t, nil)
+	wc, state := newControlTestFixtures(t)
+
+	handler.handleTabAction(wc, state, "viewer1", marshalTabActionFrame(t, "bogus-action", nil))
+
+	resp := readWCFrame(t, wc, 2*time.Second)
+	assert.Equal(t, "browser_status", resp.Type)
+	assert.Equal(t, "error", resp.State)
+	assert.Contains(t, resp.Message, "unknown action")
+}
+
+// ---------------------------------------------------------------------------
+// F3 (7-reviewer MAJOR): handleTabAction's control-lock gate.
+//
+// Before this fix, handleTabAction had NO control-lock check at all — any
+// merely-attached (non-controlling) viewer could switch/close/open tabs out
+// from under whoever actually holds control. The fix mirrors
+// dispatchInput's gate (LiveView.dispatchInput's "lv.controller == viewerID"
+// check, reached here via the SAME read-only accessor handleControl already
+// uses: LiveViewRegistry.Controller): a tab action is honoured only when the
+// acting viewer holds control, or nobody does (idle).
+// ---------------------------------------------------------------------------
+
+// TestBrowserWS_HandleTabAction_ControlGate_OtherViewerControls_Rejected
+// proves a viewer that is NOT the controller is rejected BEFORE the request
+// ever reaches the manager: the response is the gate's own message, not
+// SwitchTab's "no active session" error the sibling dispatch tests above
+// prove the manager itself would return — the only way to distinguish "the
+// gate blocked it" from "the gate let it through and the manager failed" is
+// the exact error text, which is asserted here.
+func TestBrowserWS_HandleTabAction_ControlGate_OtherViewerControls_Rejected(t *testing.T) {
+	handler, _ := newBrowserWSTestHandler(t, nil)
+	wc, state := newControlTestFixtures(t)
+
+	require.True(t, state.mgr.Live().TakeControl(browser.DefaultSessionID, "controlling-viewer"),
+		"test setup: first take must succeed on an uncontrolled session")
+
+	handler.handleTabAction(wc, state, "other-viewer", marshalTabActionFrame(t, "switch", intPtr(0)))
+
+	resp := readWCFrame(t, wc, 2*time.Second)
+	assert.Equal(t, "browser_status", resp.Type)
+	assert.Equal(t, "error", resp.State)
+	assert.Contains(t, resp.Message, "take control first",
+		"a non-controller's tab action must be rejected by the gate itself, never reach the manager")
+	assert.NotContains(t, resp.Message, "no active session",
+		"the manager's own error must never appear — the gate must block before dispatch")
+
+	assert.Equal(t, "controlling-viewer", state.mgr.Live().Controller(browser.DefaultSessionID),
+		"a rejected tab action must not disturb the existing controller")
+}
+
+// TestBrowserWS_HandleTabAction_ControlGate_IdleAllowsDispatch proves an
+// uncontrolled (idle) session lets ANY attached viewer's tab action through
+// to the manager — the gate only blocks when a DIFFERENT viewer already
+// holds control, never merely "nobody has taken control yet".
+func TestBrowserWS_HandleTabAction_ControlGate_IdleAllowsDispatch(t *testing.T) {
+	handler, _ := newBrowserWSTestHandler(t, nil)
+	wc, state := newControlTestFixtures(t)
+
+	require.False(t, state.mgr.Live().IsControlled(browser.DefaultSessionID), "precondition: uncontrolled")
+
+	handler.handleTabAction(wc, state, "any-viewer", marshalTabActionFrame(t, "switch", intPtr(0)))
+
+	resp := readWCFrame(t, wc, 2*time.Second)
+	assert.Equal(t, "browser_status", resp.Type)
+	assert.Equal(t, "error", resp.State)
+	assert.Contains(t, resp.Message, "no active session",
+		"an idle session must let the tab action reach the real manager (SwitchTab's own error), "+
+			"not be blocked by the control gate")
+}
+
+// TestBrowserWS_HandleTabAction_ControlGate_SelfControllerAllowsDispatch
+// proves the viewer that itself holds control is always allowed through.
+func TestBrowserWS_HandleTabAction_ControlGate_SelfControllerAllowsDispatch(t *testing.T) {
+	handler, _ := newBrowserWSTestHandler(t, nil)
+	wc, state := newControlTestFixtures(t)
+
+	require.True(t, state.mgr.Live().TakeControl(browser.DefaultSessionID, "driving-viewer"),
+		"test setup: take control must succeed on an uncontrolled session")
+
+	handler.handleTabAction(wc, state, "driving-viewer", marshalTabActionFrame(t, "close", intPtr(0)))
+
+	resp := readWCFrame(t, wc, 2*time.Second)
+	assert.Equal(t, "browser_status", resp.Type)
+	assert.Equal(t, "error", resp.State)
+	assert.Contains(t, resp.Message, "no active session",
+		"the controller's own tab action must reach the real manager (CloseTab's own error), "+
+			"not be blocked by the gate it itself satisfies")
+}
+
 // marshalControlFrame builds a raw browser_control frame body for the given action.
 func marshalControlFrame(t *testing.T, action string) []byte {
 	t.Helper()

@@ -601,6 +601,33 @@ func (lv *LiveView) onTabsChanged(tabs []Tab, activeIdx int) {
 //
 // Deadlock-safe per ADR-038: mirrors attach()'s discipline exactly — no
 // LiveView lock held across any CDP call.
+//
+// F1 ordering fix (7-reviewer BLOCKER, ADR-041 fix wave): the previous
+// version captured oldListenCtx under lock but left lv.listenCtx POINTING AT
+// IT all the way through oldStopListen()'s cancellation and the blocking
+// StopScreencast CDP call below — exactly the window watchForUnexpectedDeath
+// treats as "my watched listenCtx died while still installed as
+// lv.listenCtx", i.e. a genuine external death. On every tab switch the
+// watcher (started by the earlier attach()/rebind for the OLD epoch) would
+// race in — woken by oldStopListen()'s cancellation — see its watched ctx
+// STILL installed, fire a FALSE "session ended unexpectedly" broadcast to
+// every viewer, and nil out lv.listenCtx itself. This method would then
+// re-lock below, see lv.listenCtx no longer matched the oldListenCtx it
+// captured, and bail out without ever starting the new screencast — the
+// live view sat dead until a manual re-attach. The fix mirrors detach()'s
+// discipline exactly (see the len(lv.viewers)==0 branch there): nil
+// lv.listenCtx/lv.stopListen under lv.mu BEFORE releasing the lock and
+// calling oldStopListen(). This establishes a genuine happens-before
+// relationship (the nil write happens-before the unlock, which
+// happens-before oldStopListen()'s cancellation, which happens-before the
+// watcher's <-watchedListenCtx.Done() wakes it, which happens-before its own
+// lv.mu.Lock()) — so the watcher's "still installed" check is GUARANTEED to
+// see the nil, not a race that merely makes the false broadcast unlikely.
+// The re-lock guard below changes correspondingly: since the old epoch's
+// identity was already cleared (not merely captured), "did anything else
+// claim the slot while I was tearing down the old screencast" is now
+// expressed as "is lv.listenCtx still nil" rather than a pointer comparison
+// against the (now-erased) old value.
 func (lv *LiveView) rebindScreencast(newCtx context.Context) {
 	lv.mu.Lock()
 	if !lv.isActiveLocked() {
@@ -609,7 +636,10 @@ func (lv *LiveView) rebindScreencast(newCtx context.Context) {
 	}
 	oldTabCtx := lv.tabCtx
 	oldStopListen := lv.stopListen
-	oldListenCtx := lv.listenCtx
+	// Nil the shared listen state now, under the same lock — see the F1 doc
+	// comment above for why this ordering is load-bearing.
+	lv.listenCtx = nil
+	lv.stopListen = nil
 	lv.mu.Unlock()
 
 	// Stop the old screencast + unsubscribe, bounded — mirrors detach()'s
@@ -624,9 +654,12 @@ func (lv *LiveView) rebindScreencast(newCtx context.Context) {
 	}
 
 	lv.mu.Lock()
-	if lv.listenCtx != oldListenCtx {
-		// A concurrent rebind or detach already superseded this epoch —
-		// nothing more to do.
+	if lv.listenCtx != nil {
+		// A concurrent attach()/rebind already reclaimed the slot while we
+		// were tearing down the old screencast (e.g. a fresh viewer
+		// attached mid-rebind, or a second onTabsChanged fired a
+		// concurrent rebind that won the race) — back off rather than
+		// clobber whatever it installed.
 		lv.mu.Unlock()
 		return
 	}
@@ -655,12 +688,26 @@ func (lv *LiveView) rebindScreencast(newCtx context.Context) {
 		logger.WarnCF("browser", "live view: rebind — start screencast on new active tab failed",
 			map[string]any{"error": err.Error(), "session_id": lv.sessionID})
 		lv.mu.Lock()
+		var sinks []StatusSink
 		if lv.listenCtx == listenCtx {
 			cancel()
 			lv.listenCtx = nil
 			lv.stopListen = nil
+			// F2 fix (7-reviewer HIGH, ADR-041 fix wave): without this, no
+			// StatusSink ever fires for this failure —
+			// watchForUnexpectedDeath is only armed AFTER a successful
+			// StartScreencast (see the "go lv.watchForUnexpectedDeath(...)"
+			// call below, never reached on this branch) — so every attached
+			// viewer keeps rendering the stale OLD tab's cached lastFrame
+			// under a tab strip that already says a DIFFERENT tab is
+			// active, with no error banner explaining why. Reuse the same
+			// fan-out mechanism watchForUnexpectedDeath uses.
+			sinks = lv.snapshotStatusSinksLocked()
 		}
 		lv.mu.Unlock()
+		for _, s := range sinks {
+			s("couldn't switch the live view to the new tab — re-attach to resume watching")
+		}
 		return
 	}
 
@@ -686,10 +733,7 @@ func (lv *LiveView) watchForUnexpectedDeath(watchedListenCtx context.Context) {
 	}
 	lv.listenCtx = nil
 	lv.stopListen = nil
-	sinks := make([]StatusSink, 0, len(lv.statusSinks))
-	for _, s := range lv.statusSinks {
-		sinks = append(sinks, s)
-	}
+	sinks := lv.snapshotStatusSinksLocked()
 	lv.mu.Unlock()
 
 	for _, s := range sinks {
@@ -1071,6 +1115,19 @@ func (lv *LiveView) getController() string {
 	lv.mu.Lock()
 	defer lv.mu.Unlock()
 	return lv.controller
+}
+
+// snapshotStatusSinksLocked returns every registered StatusSink (F2 fix,
+// ADR-041 fix wave: reused by rebindScreencast's start-new-screencast
+// failure branch, alongside watchForUnexpectedDeath's existing use). Must be
+// called with mu held; the returned sinks must be invoked with no lock held
+// (mirrors deliver()'s convention).
+func (lv *LiveView) snapshotStatusSinksLocked() []StatusSink {
+	sinks := make([]StatusSink, 0, len(lv.statusSinks))
+	for _, s := range lv.statusSinks {
+		sinks = append(sinks, s)
+	}
+	return sinks
 }
 
 // snapshotControlSinksExceptLocked returns every registered ControlSink
