@@ -15,6 +15,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chromedp/cdproto/emulation"
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
@@ -283,6 +285,23 @@ func (m *BrowserManager) ensureStarted() error {
 			"XDG_CACHE_HOME="+filepath.Join(chromeHome, "cache"),
 		),
 		chromedp.WindowSize(1280, 720),
+		// Anti-bot-detection ("stealth"): reduce the trivially-detectable
+		// automation signals that lead sites (notably Google) to serve a
+		// CAPTCHA even for a human driving the panel. `enable-automation`
+		// (added by DefaultExecAllocatorOptions) sets navigator.webdriver=true
+		// and shows the automation infobar; the AutomationControlled blink
+		// feature is the other source of navigator.webdriver. Removing both,
+		// plus the User-Agent de-Headless + navigator overrides in applyStealth
+		// (per new tab), covers the obvious fingerprint tells.
+		//
+		// IMPORTANT: this only hides browser fingerprints. It CANNOT overcome
+		// datacenter-IP reputation, which is the dominant factor for Google's
+		// "unusual traffic" CAPTCHA — a gateway on a cloud/datacenter IP (e.g.
+		// a Fly/pod preview) may still be challenged regardless. These help
+		// most on a self-hosted deployment browsing from a residential/office IP.
+		chromedp.Flag("enable-automation", false),
+		chromedp.Flag("disable-blink-features", "AutomationControlled"),
+		chromedp.Flag("lang", "en-US"),
 	)
 
 	if m.cfg.Headless {
@@ -422,6 +441,14 @@ func (m *BrowserManager) Session(sessionID string) (context.Context, error) {
 		// browser subsystem.
 		err := chromedp.Run(ctx)
 
+		// The target is now bound to ctx (above). Apply best-effort stealth on
+		// a bounded timeout CHILD of ctx — safe because cancelling a child of
+		// an already-bound target does NOT tear the tab down (same pattern the
+		// read-only tools use). Never fatal to tab creation.
+		if err == nil {
+			applyStealth(ctx, m.PageTimeout())
+		}
+
 		m.mu.Lock()
 		delete(m.pending, sessionID)
 		if err != nil {
@@ -434,6 +461,49 @@ func (m *BrowserManager) Session(sessionID string) (context.Context, error) {
 		m.mu.Unlock()
 		close(done)
 		return ctx, nil
+	}
+}
+
+// stealthInitScript runs before any page script on every new document, hiding
+// the residual automation tells that survive the launch flags. Kept minimal
+// and side-effect-free so it can never break a page.
+const stealthInitScript = `Object.defineProperty(navigator,'webdriver',{get:()=>undefined});` +
+	`window.chrome=window.chrome||{runtime:{}};` +
+	`Object.defineProperty(navigator,'languages',{get:()=>['en-US','en']});`
+
+// deHeadlessUA rewrites a chrome-headless-shell User-Agent into the equivalent
+// regular-Chrome string ("HeadlessChrome/…" → "Chrome/…"), removing the single
+// biggest automation giveaway. Returns "" if the input is empty.
+func deHeadlessUA(ua string) string {
+	if ua == "" {
+		return ""
+	}
+	s := strings.ReplaceAll(ua, "HeadlessChrome", "Chrome")
+	return strings.ReplaceAll(s, "Headless", "")
+}
+
+// applyStealth best-effort reduces automation fingerprints on an already-bound
+// tab (see Session): it de-Headlesses the User-Agent and installs
+// stealthInitScript so navigator.webdriver et al. read like a normal browser.
+// Every step is best-effort — a failure must NEVER break tab creation, so the
+// whole thing runs on a bounded timeout child and only logs on failure. This
+// lowers the odds of a CAPTCHA but cannot beat datacenter-IP reputation.
+func applyStealth(tabCtx context.Context, timeout time.Duration) {
+	ctx, cancel := context.WithTimeout(tabCtx, timeout)
+	defer cancel()
+	var ua string
+	if err := chromedp.Run(ctx,
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			_ = chromedp.Evaluate(`navigator.userAgent`, &ua).Do(ctx)
+			if clean := deHeadlessUA(ua); clean != "" && clean != ua {
+				_ = emulation.SetUserAgentOverride(clean).Do(ctx)
+			}
+			_, _ = page.AddScriptToEvaluateOnNewDocument(stealthInitScript).Do(ctx)
+			return nil
+		}),
+	); err != nil {
+		logger.WarnCF("browser", "stealth setup best-effort failed (tab still usable)",
+			map[string]any{"error": err.Error()})
 	}
 }
 
