@@ -189,12 +189,25 @@ export function ChatControls({ className }: ChatControlsProps) {
     return trimmed.length > 0 ? trimmed : null
   }, [agents, activeAgentId])
 
-  // Re-seed nextModel when session or agent changes.
+  // Re-seed nextModel when the user NAVIGATES to a different session/agent, so
+  // the selector shows that session's last-used model. Combined with the chat
+  // store no longer clearing nextModel after a send, this makes a model pick
+  // sticky within a conversation.
   const lastSeedKey = useRef<string>('')
   useEffect(() => {
     const seedKey = `${activeSessionId ?? ''}::${activeAgentId ?? ''}`
     if (seedKey === lastSeedKey.current) return
+    const prevSession = lastSeedKey.current.split('::')[0]
     lastSeedKey.current = seedKey
+    // Materialization guard: a fresh chat's first send creates a transient
+    // '__pending' bucket that then becomes the real session id
+    // ('' → '__pending' → realId). That is the SAME conversation continuing,
+    // NOT a navigation to a different session, so it must not clobber the model
+    // the user just picked for this message (which would otherwise reset to the
+    // default and fail to carry to the next message). Genuine navigation —
+    // opening/switching to a real session, or New Chat ('' target) — still
+    // re-seeds from that target's last-used model.
+    if (activeSessionId === '__pending' || prevSession === '__pending') return
     setNextModel(transcriptLastModel ?? activeAgentModel ?? null)
   }, [activeSessionId, activeAgentId, transcriptLastModel, activeAgentModel, setNextModel])
 
