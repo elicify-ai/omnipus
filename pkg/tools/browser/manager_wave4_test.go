@@ -223,6 +223,31 @@ func TestBrowserConfigParsing(t *testing.T) {
 	assert.Contains(t, cfg.ProfileDir, "profiles", "profile dir contains profiles segment")
 }
 
+// --- TestGetTextWaitTimeout_ShorterThanDefaultPageTimeout ---
+//
+// Unit-only wiring guard (no Chromium required) for the browser_get_text /
+// browser_wait fail-fast fix: a live, browser-gated proof lives in
+// execute_e2e_test.go's TestExecute_GetText_FailsFastOnInvisibleOrMissingSelector,
+// which SKIPs in any environment without a working Chromium/Chrome binary
+// (this devpod included — see skipIfNoBrowser). This test has no such gate,
+// so it still catches the class of regression that matters most here: someone
+// widening getTextWaitTimeout back up to (or past) PageTimeout, which would
+// silently reintroduce the ~30s hang the fix closes, without needing a real
+// browser to detect it.
+func TestGetTextWaitTimeout_ShorterThanDefaultPageTimeout(t *testing.T) {
+	cfg, err := DefaultConfig()
+	require.NoError(t, err)
+
+	require.Greater(t, cfg.PageTimeout, getTextWaitTimeout,
+		"getTextWaitTimeout must stay a SHORT, dedicated bound — well under the full "+
+			"page-load budget (PageTimeout) — or browser_get_text/browser_wait "+
+			"regress to blocking for the entire PageTimeout on a present-but-invisible "+
+			"or missing selector")
+	assert.Equal(t, 8*time.Second, getTextWaitTimeout,
+		"getTextWaitTimeout changed — update this assertion deliberately, and re-check "+
+			"it is still comfortably shorter than PageTimeout")
+}
+
 // --- TestBrowserShutdown ---
 // Traces to: wave4-whatsapp-browser-spec.md line 577 (Scenario: Graceful browser shutdown)
 // BDD: Given managed Chromium instance, When gateway shuts down (SIGTERM),
