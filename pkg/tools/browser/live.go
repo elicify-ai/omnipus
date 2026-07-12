@@ -65,7 +65,13 @@ type LiveInput struct {
 	DeltaY float64
 	Key    string
 	Code   string
-	Text   string
+	// KeyCode is the Windows virtual key code for key_down/key_up (the DOM
+	// KeyboardEvent.keyCode, e.g. Backspace=8, Enter=13, Delete=46,
+	// arrows=37-40). CDP's Input.dispatchKeyEvent needs it to actually PERFORM
+	// editing/navigation key actions and modifier shortcuts (Ctrl+A/C/V) —
+	// key/code alone deliver the event but do not delete/submit/move/select.
+	KeyCode int
+	Text    string
 	// URL is the target for the "navigate" kind (ADR-039 D-A2: user-driven
 	// address bar). Unlike every other kind, dispatchInput runs this through
 	// BrowserManager.ValidateURL — the same SSRF/scheme gate the agent's
@@ -973,6 +979,8 @@ func buildInputAction(in LiveInput) (chromedp.Action, error) {
 			WithKey(in.Key).
 			WithCode(in.Code).
 			WithText(in.Text).
+			WithWindowsVirtualKeyCode(int64(in.KeyCode)).
+			WithNativeVirtualKeyCode(int64(in.KeyCode)).
 			WithModifiers(mods), nil
 	case "key_up":
 		if in.Key == "" && in.Code == "" {
@@ -981,6 +989,8 @@ func buildInputAction(in LiveInput) (chromedp.Action, error) {
 		return input.DispatchKeyEvent(input.KeyUp).
 			WithKey(in.Key).
 			WithCode(in.Code).
+			WithWindowsVirtualKeyCode(int64(in.KeyCode)).
+			WithNativeVirtualKeyCode(int64(in.KeyCode)).
 			WithModifiers(mods), nil
 	case "text":
 		if in.Text == "" {
