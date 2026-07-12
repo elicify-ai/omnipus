@@ -14,7 +14,10 @@ import { act } from 'react'
 import type { BrowserLiveWsCallbacks } from '@/lib/browserLiveWs'
 
 const { mockSendControl, mockSendInput, mockConnect, mockDetach, mockClose, callbacksRef } = vi.hoisted(() => ({
-  mockSendControl: vi.fn(),
+  // Returns `true` by default (mirrors a successful send on an OPEN socket) —
+  // see BrowserLiveView.takeTheWheel.test.tsx's identical hoisted mock for
+  // why this matters (the auto-release effect now reacts to a falsy return).
+  mockSendControl: vi.fn(() => true),
   mockSendInput: vi.fn(),
   mockConnect: vi.fn(),
   mockDetach: vi.fn(),
@@ -339,9 +342,15 @@ describe('BrowserLiveView — ADR-040 D1 Pin toggle', () => {
     expect(button).toHaveAttribute('aria-pressed', 'true')
   })
 
-  it('hides the Pop out button while isPinned, even when onPopOut is provided', () => {
+  // ADR-040 D4 (reviewer finding): the internal `&& !isPinned` gate was
+  // removed — Pop-out now renders purely on `onPopOut` presence, exactly
+  // like onClose/onTogglePin. Not offering pop-out while pinned is now
+  // entirely the panel owner's responsibility (BrowserLivePanel.tsx simply
+  // stops passing `onPopOut` once pinned) rather than this view
+  // second-guessing a decision the host already has to make.
+  it('still renders Pop out while isPinned if the host still provides onPopOut (host now owns that decision)', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" isPinned onPopOut={vi.fn()} onTogglePin={vi.fn()} />)
-    expect(screen.queryByRole('button', { name: /pop out/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /pop out/i })).toBeInTheDocument()
   })
 
   it('shows the Pop out button when not pinned', () => {

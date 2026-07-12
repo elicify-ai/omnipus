@@ -335,6 +335,105 @@ describe('chat store — cancel/interrupt (test_cancel_preserves_partial)', () =
     })
     expect(mockSend).not.toHaveBeenCalled()
   })
+
+  // ADR-040: cancelStream() gained an optional sessionId so the browser
+  // panel's "Take over" can pause its own PINNED session even when a
+  // different chat is currently foreground, instead of unconditionally
+  // acting on activeSessionId.
+  function bucketFor(msgs: ChatMessage[]): SessionChatState {
+    return {
+      ...makeBucketMessages(msgs),
+      toolCalls: {},
+      toolCallOrder: [],
+      textAtToolCallStart: {},
+      isStreaming: true,
+      isReplaying: false,
+      replayCompletedForSession: null,
+      sessionTokens: 0,
+      sessionCost: 0,
+      rateLimitEvent: null,
+      lastUserMessageAt: null,
+      cancelStage: null,
+      lastReceivedEventTime: null,
+      spanByParentCallId: {},
+    }
+  }
+
+  it('cancelStream(sessionId) cancels/marks the specified (background) session, not the active one', () => {
+    const OTHER_SID = 'other-sid'
+    const mockSend = vi.fn()
+
+    const activeMsgs: ChatMessage[] = [
+      { id: 'asst_active', session_id: TEST_SESSION_ID, role: 'assistant', content: 'active turn...', timestamp: '2026-03-29T10:00:01Z', status: 'streaming', isStreaming: true },
+    ]
+    const otherMsgs: ChatMessage[] = [
+      { id: 'asst_other', session_id: OTHER_SID, role: 'assistant', content: 'other turn...', timestamp: '2026-03-29T10:00:01Z', status: 'streaming', isStreaming: true },
+    ]
+
+    act(() => {
+      useConnectionStore.setState({
+        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as any,
+        isConnected: true,
+      })
+      // Seed BOTH buckets directly (appendMessage always targets the active
+      // session, so the background OTHER_SID bucket can only be built via
+      // direct state manipulation — mirrors the H1-FE seeding pattern above).
+      useChatStore.setState({
+        sessionsById: {
+          [TEST_SESSION_ID]: bucketFor(activeMsgs),
+          [OTHER_SID]: bucketFor(otherMsgs),
+        },
+        // Sync foreground fields to the ACTIVE session, as the real store
+        // does after any bucket mutation.
+        isStreaming: true,
+        messages: activeMsgs,
+      })
+    })
+
+    act(() => {
+      useChatStore.getState().cancelStream(OTHER_SID)
+    })
+
+    // The cancel frame targets OTHER_SID only — never the active session.
+    expect(mockSend).toHaveBeenCalledTimes(1)
+    expect(mockSend).toHaveBeenCalledWith({ type: 'cancel', session_id: OTHER_SID })
+
+    // OTHER_SID's message is marked interrupted.
+    const otherBucket = useChatStore.getState().sessionsById[OTHER_SID]
+    const otherMsg = getMessages(otherBucket).find((m) => m.id === 'asst_other')
+    expect(otherMsg?.status).toBe('interrupted')
+    expect(otherMsg?.isStreaming).toBe(false)
+
+    // The ACTIVE session's message — and the foreground isStreaming
+    // projection derived from it — are completely untouched.
+    const activeBucket = useChatStore.getState().sessionsById[TEST_SESSION_ID]
+    const activeMsg = getMessages(activeBucket).find((m) => m.id === 'asst_active')
+    expect(activeMsg?.status).toBe('streaming')
+    expect(activeMsg?.isStreaming).toBe(true)
+    expect(useChatStore.getState().isStreaming).toBe(true)
+  })
+
+  it('cancelStream() with no argument still targets the active session (default behaviour unchanged)', () => {
+    const mockSend = vi.fn()
+    const activeMsgs: ChatMessage[] = [
+      { id: 'asst_default', session_id: TEST_SESSION_ID, role: 'assistant', content: 'active turn...', timestamp: '2026-03-29T10:00:01Z', status: 'streaming', isStreaming: true },
+    ]
+    act(() => {
+      useChatStore.setState({
+        sessionsById: { [TEST_SESSION_ID]: bucketFor(activeMsgs) },
+        isStreaming: true,
+        messages: activeMsgs,
+      })
+      useConnectionStore.setState({
+        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as any,
+        isConnected: true,
+      })
+      useChatStore.getState().cancelStream()
+    })
+    expect(mockSend).toHaveBeenCalledWith({ type: 'cancel', session_id: TEST_SESSION_ID })
+    const msg = useChatStore.getState().messages.find((m) => m.id === 'asst_default')
+    expect(msg?.status).toBe('interrupted')
+  })
 })
 
 describe('chat store — sendMessage optimistic render', () => {

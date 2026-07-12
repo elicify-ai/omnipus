@@ -12,9 +12,15 @@ import { render, screen, fireEvent } from '@testing-library/react'
 import { act } from 'react'
 import type { BrowserLiveWsCallbacks } from '@/lib/browserLiveWs'
 import { useChatStore, type SessionChatState } from '@/store/chat'
+import { useUiStore } from '@/store/ui'
 
 const { mockSendControl, mockSendInput, callbacksRef } = vi.hoisted(() => ({
-  mockSendControl: vi.fn(),
+  // Returns `true` by default — mirrors the real BrowserLiveWsConnection's
+  // "sent on an OPEN socket" success case. The auto-release effect (and any
+  // future caller) reacts to a falsy return as a failed send; tests that
+  // want to exercise that failure path override it per-call via
+  // `mockSendControl.mockReturnValueOnce(false)`.
+  mockSendControl: vi.fn(() => true),
   mockSendInput: vi.fn(),
   callbacksRef: { current: null as BrowserLiveWsCallbacks | null },
 }))
@@ -105,6 +111,9 @@ beforeEach(() => {
   // Reset the real chat store's per-session buckets between tests so a
   // prior test's isStreaming:true doesn't leak into the next one.
   useChatStore.setState({ sessionsById: {} }, false)
+  // Reset toasts between tests (the auto-release-resilience tests below
+  // assert on useUiStore.getState().toasts).
+  useUiStore.setState({ toasts: [] })
 })
 
 afterEach(() => {
@@ -150,12 +159,18 @@ describe('BrowserLiveView — click-to-drive (ADR-040 D2, agent idle)', () => {
     fireEvent.pointerDown(container, { clientX: 20, clientY: 20 })
     fireEvent.pointerUp(container, { clientX: 20, clientY: 20 })
     mockSendControl.mockClear()
+    mockSendInput.mockClear()
     // No browser_status('controlling') ack has arrived yet — the mock ws
     // never emits one on its own — so this is exactly the in-flight window
     // pendingTakeRef guards against.
     fireEvent.pointerDown(container, { clientX: 25, clientY: 25 })
 
     expect(mockSendControl).not.toHaveBeenCalled()
+    // Reviewer finding (pending-take residual): a SECOND gesture starting
+    // while the first take is still unacked must not dispatch ITS input
+    // either — we don't yet know whether the pending take will actually
+    // land (e.g. it could be rejected by another viewer beating us to it).
+    expect(mockSendInput).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_down' }))
   })
 
   it('sends control:take again for a NEW click after the previous take was acknowledged and released', () => {
@@ -208,6 +223,26 @@ describe('BrowserLiveView — watch-only while the agent is working (ADR-040 D2)
     expect(mockSendInput).not.toHaveBeenCalled()
   })
 
+  // Reviewer finding coverage: the wheel listener now consults the same
+  // driveMode gate as pointer/keyboard — this proves it's actually wired,
+  // AND that agent-working wins even with a stale "controlling" status still
+  // set (the exact ordering bug the driveMode refactor fixed: the cursor
+  // ternary used to check isControlling before agentWorking).
+  it('blocks wheel input while watch-only, even with a stale "controlling" status mid-release', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    const container = stubFrameRect()
+    act(() => {
+      callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' })
+    })
+    setAgentWorking('s1', true)
+    mockSendInput.mockClear()
+
+    fireEvent.wheel(container, { deltaX: 0, deltaY: 120 })
+
+    expect(mockSendInput).not.toHaveBeenCalled()
+  })
+
   it('shows the "Take over" button and a not-allowed cursor', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
     connectAndFrame()
@@ -246,7 +281,12 @@ describe('BrowserLiveView — watch-only while the agent is working (ADR-040 D2)
 })
 
 describe('BrowserLiveView — "Take over" (ADR-040 D2)', () => {
-  it('calls the chat store\'s cancelStream then acquires the lock', () => {
+  // CRITICAL reviewer finding: cancelStream now takes an explicit session id
+  // (defaulting to whichever session is ACTIVE in chat when omitted) — an
+  // unscoped call would pause the wrong turn whenever this panel's pinned
+  // session isn't the globally-active one. Take-over must always pass
+  // THIS panel's own pinned sessionId ("s1" here), never rely on the default.
+  it('calls the chat store\'s cancelStream WITH this panel\'s pinned sessionId, then acquires the lock', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
     connectAndFrame()
     setAgentWorking('s1', true)
@@ -255,12 +295,29 @@ describe('BrowserLiveView — "Take over" (ADR-040 D2)', () => {
     fireEvent.click(screen.getByRole('button', { name: /take over/i }))
 
     expect(cancelSpy).toHaveBeenCalledTimes(1)
+    expect(cancelSpy).toHaveBeenCalledWith('s1')
     expect(mockSendControl).toHaveBeenCalledWith('take')
     // cancel before take — the agent must be paused before this connection
     // claims the lock.
     const cancelOrder = cancelSpy.mock.invocationCallOrder[0]
     const takeOrder = mockSendControl.mock.invocationCallOrder[0]
     expect(cancelOrder).toBeLessThan(takeOrder)
+  })
+
+  // A DIFFERENT panel instance (different sessionId prop) must pass ITS OWN
+  // pinned session, not "s1" — proves the argument is wired from the prop,
+  // not hardcoded/defaulted.
+  it('scopes cancelStream to whichever session THIS instance is pinned to', () => {
+    render(<BrowserLiveView sessionId="s2" agentId="a1" />)
+    act(() => {
+      callbacksRef.current?.onConnected?.()
+    })
+    setAgentWorking('s2', true)
+    const cancelSpy = vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => {})
+
+    fireEvent.click(screen.getByRole('button', { name: /take over/i }))
+
+    expect(cancelSpy).toHaveBeenCalledWith('s2')
   })
 
   it('is disabled while disconnected', () => {
@@ -277,17 +334,96 @@ describe('BrowserLiveView — "Take over" (ADR-040 D2)', () => {
     expect(screen.queryByRole('button', { name: /take over/i })).not.toBeInTheDocument()
   })
 
-  it('does not render while the user already holds the lock', () => {
+  // Reviewer finding: this test's title used to claim the OPPOSITE of what it
+  // asserts ("does not render... " while actually asserting
+  // `toBeInTheDocument()`). What it really proves: agent-working AND
+  // isControlling-still-stale-true is a transient state (the auto-release
+  // effect fires immediately, but its ack hasn't landed yet) — driveMode
+  // gives `agent-working` top priority over `you-driving`, so Take-over
+  // still renders (and input still can't be dispatched) rather than
+  // incorrectly showing the driving chip/controls for that one tick.
+  it('still shows Take over even if the user already held the lock, transiently, before the auto-release ack lands', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
     connectAndFrame()
     act(() => {
       callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' })
     })
-    // Agent working AND user driving is transient — the auto-release effect
-    // fires immediately, but assert the button doesn't flash Take-over
-    // instead of the driving chip in that same tick regardless.
     setAgentWorking('s1', true)
     expect(screen.getByRole('button', { name: /take over/i })).toBeInTheDocument()
+  })
+})
+
+describe('BrowserLiveView — auto-release resilience (ADR-040 D2, reviewer finding)', () => {
+  it('surfaces a toast and clears the local lock if the auto-release send fails while agent-working', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    act(() => {
+      callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' })
+    })
+    // Simulate a send that fails despite the socket being "connected" (e.g.
+    // ws.send() throwing synchronously) — the auto-release effect's own
+    // sendControl('release') call.
+    mockSendControl.mockReturnValueOnce(false)
+
+    setAgentWorking('s1', true)
+
+    expect(mockSendControl).toHaveBeenCalledWith('release')
+    // Local lock state must not stay stuck at 'controlling' just because the
+    // release frame never actually reached the server — driveMode already
+    // gives agent-working priority for input-gating, but the CHIP itself
+    // must also stop claiming "You're driving".
+    expect(screen.getByTestId('browser-live-status-chip')).not.toHaveTextContent("You're driving")
+    expect(screen.getByTestId('browser-live-status-chip')).toHaveTextContent('is browsing')
+    expect(useUiStore.getState().toasts.some((t) => /could not confirm pausing/i.test(t.message))).toBe(true)
+  })
+
+  it('does not surface a failure toast when the release send succeeds', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    act(() => {
+      callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' })
+    })
+
+    setAgentWorking('s1', true)
+
+    expect(mockSendControl).toHaveBeenCalledWith('release')
+    expect(useUiStore.getState().toasts.some((t) => /could not confirm pausing/i.test(t.message))).toBe(false)
+  })
+})
+
+describe('BrowserLiveView — annotate mid-gesture resets take/implicit refs (ADR-040 D2/D3)', () => {
+  // Reviewer finding: entering annotate mode WHILE a click-to-drive gesture's
+  // take is still in flight (unacked) must fully abandon it — a take ack
+  // that lands LATE, after annotate mode is already active, must not resume
+  // driving out from under it.
+  it('a delayed take-ack after switching to annotate mode does not resume driving', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" canAnnotate />)
+    connectAndFrame()
+    const container = stubFrameRect()
+
+    // Gesture starts, implicitly takes the wheel — ack not landed yet.
+    fireEvent.pointerDown(container, { clientX: 20, clientY: 20 })
+    expect(mockSendControl).toHaveBeenCalledWith('take')
+
+    // Mid-gesture (before the ack, before pointerup), the user switches to
+    // annotate mode.
+    fireEvent.click(screen.getByRole('button', { name: /annotate a region/i }))
+    mockSendInput.mockClear()
+
+    // The take ack arrives late, AFTER annotate mode is already active.
+    act(() => {
+      callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' })
+    })
+
+    // Cursor and glow must still reflect annotating, not driving.
+    expect(container).toHaveStyle({ cursor: 'crosshair' })
+    expect(screen.getByTestId('browser-live-glow')).toHaveAttribute('data-visual-state', 'annotating')
+
+    // A subsequent pointer move must never dispatch remote drive input (it
+    // draws a local annotate selection box instead, gated on
+    // annotateDraggingRef which a stale gesture never set).
+    fireEvent.pointerMove(container, { clientX: 40, clientY: 40 })
+    expect(mockSendInput).not.toHaveBeenCalled()
   })
 })
 
@@ -328,5 +464,52 @@ describe('BrowserLiveView — D6 driving-state chip + glow border', () => {
     const glow = screen.getByTestId('browser-live-glow')
     expect(glow).toHaveAttribute('aria-hidden', 'true')
     expect(glow.className).toContain('pointer-events-none')
+  })
+
+  // `motion-safe:` is the sole reduced-motion mechanism (GLOW_BORDER_CLASSES'
+  // doc comment) — assert the class is actually present for the pulsing
+  // states and absent for the non-pulsing ones, rather than just checking
+  // `data-visual-state` (which says nothing about the pulse itself).
+  it('applies motion-safe:animate-pulse to the glow border while agent-working', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    setAgentWorking('s1', true)
+    expect(screen.getByTestId('browser-live-glow').className).toContain('motion-safe:animate-pulse')
+  })
+
+  it('applies motion-safe:animate-pulse to the glow border while you-driving', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    act(() => {
+      callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' })
+    })
+    expect(screen.getByTestId('browser-live-glow').className).toContain('motion-safe:animate-pulse')
+  })
+
+  it('does NOT apply motion-safe:animate-pulse to the glow border while idle', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    expect(screen.getByTestId('browser-live-glow').className).not.toContain('motion-safe:animate-pulse')
+  })
+
+  it('applies motion-safe:animate-pulse to the header chip\'s "live" dot while you-driving', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    act(() => {
+      callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' })
+    })
+    const chip = screen.getByTestId('browser-live-status-chip')
+    const dot = chip.querySelector('[aria-hidden="true"]')
+    expect(dot).not.toBeNull()
+    expect(dot?.className).toContain('motion-safe:animate-pulse')
+  })
+
+  it('does NOT apply motion-safe:animate-pulse to the header chip\'s dot while idle', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    const chip = screen.getByTestId('browser-live-status-chip')
+    const dot = chip.querySelector('[aria-hidden="true"]')
+    expect(dot).not.toBeNull()
+    expect(dot?.className).not.toContain('motion-safe:animate-pulse')
   })
 })

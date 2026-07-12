@@ -20,7 +20,10 @@ import type { BrowserLiveWsCallbacks } from '@/lib/browserLiveWs'
 import { useUiStore } from '@/store/ui'
 
 const { mockSendControl, mockSendInput, mockConnect, mockDetach, mockClose, callbacksRef } = vi.hoisted(() => ({
-  mockSendControl: vi.fn(),
+  // Returns `true` by default (mirrors a successful send on an OPEN socket) —
+  // see BrowserLiveView.takeTheWheel.test.tsx's identical hoisted mock for
+  // why this matters (the auto-release effect now reacts to a falsy return).
+  mockSendControl: vi.fn(() => true),
   mockSendInput: vi.fn(),
   mockConnect: vi.fn(),
   mockDetach: vi.fn(),
@@ -69,7 +72,7 @@ function takeControl() {
 beforeEach(() => {
   vi.clearAllMocks()
   callbacksRef.current = null
-  useUiStore.setState({ composerPrefill: null, toasts: [] })
+  useUiStore.setState({ toasts: [] })
 })
 
 describe('BrowserLiveView — omnibox (ADR-039 D-A2, ADR-040 D5 — always visible)', () => {
@@ -190,6 +193,48 @@ describe('BrowserLiveView — omnibox (ADR-039 D-A2, ADR-040 D5 — always visib
 
     expect(mockSendControl).not.toHaveBeenCalled()
     expect(mockSendInput).toHaveBeenCalledWith({ kind: 'navigate', url: 'https://example.com' })
+  })
+
+  // CRITICAL reviewer finding: the omnibox is now gated through the SAME
+  // driveMode as the pointer/keyboard handlers, not a hand-rolled duplicate
+  // guard — this proves controlled_by_other blocks the submit even when
+  // dispatched directly (bypassing the Go button's OWN `disabled` attribute,
+  // which already covers the click path — this is defense-in-depth for the
+  // handler itself, exercised via a direct form submit).
+  it('does not take the wheel nor navigate when controlled_by_other is true (direct submit, bypassing the disabled Go button)', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    act(() => {
+      callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'attached', controlled_by_other: true })
+    })
+
+    const input = screen.getByRole('textbox', { name: /address bar/i })
+    fireEvent.change(input, { target: { value: 'example.com' } })
+    const form = input.closest('form')
+    expect(form).not.toBeNull()
+    fireEvent.submit(form!)
+
+    expect(mockSendControl).not.toHaveBeenCalled()
+    expect(mockSendInput).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'navigate' }))
+  })
+
+  // Reviewer finding: the previous hand-rolled omnibox guard never accounted
+  // for annotate mode at all — closing that gap is a direct consequence of
+  // routing the omnibox through the same driveMode as everything else
+  // ("annotate excludes driving" applies here too now).
+  it('does not take the wheel nor navigate while annotate mode is active', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" canAnnotate />)
+    connectAndFrame()
+    fireEvent.click(screen.getByRole('button', { name: /annotate a region/i }))
+
+    const input = screen.getByRole('textbox', { name: /address bar/i })
+    fireEvent.change(input, { target: { value: 'example.com' } })
+    const form = input.closest('form')
+    expect(form).not.toBeNull()
+    fireEvent.submit(form!)
+
+    expect(mockSendControl).not.toHaveBeenCalled()
+    expect(mockSendInput).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'navigate' }))
   })
 })
 

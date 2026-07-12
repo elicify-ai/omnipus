@@ -42,7 +42,10 @@ export function normalizeNavigateUrl(raw: string): string | null {
  *   (which prepends "https://" when no scheme is present).
  * - anything else (contains a space, or has no "." — e.g. "cheap flights to
  *   tokyo", or a single bare word like "wikipedia") → a Google search for
- *   the raw (untrimmed-whitespace-collapsed) text.
+ *   the text. Only OUTER whitespace is trimmed (matching `normalizeNavigateUrl`'s
+ *   own `.trim()`) — interior whitespace between words is preserved exactly
+ *   as typed, not collapsed, so "cheap   flights" is searched with its
+ *   original spacing rather than being normalized to single spaces.
  *
  * Deliberately does NOT special-case "host:port" (e.g. "localhost:3000")
  * as a URL the way `normalizeNavigateUrl` alone might suggest — ADR-040 D5
