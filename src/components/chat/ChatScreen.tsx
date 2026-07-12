@@ -34,6 +34,7 @@ import { IconRenderer } from '@/components/shared/IconRenderer'
 import { SessionPanel } from './SessionPanel'
 import { GenericToolCall } from './tools/GenericToolCall'
 import { WebServeBlock } from './tools/WebServeUI'
+import { BrowserToolReplayBlock, isReplayBrowserToolName } from './tools/BrowserTool'
 import { RateLimitIndicator } from './RateLimitIndicator'
 import { ActivityBar } from './ActivityBar'
 import { MarkdownText } from './markdown-text'
@@ -616,6 +617,19 @@ function VirtualAssistantMessageRow({ message, liteMode }: { message: ChatMessag
   // In lite mode, tool calls start collapsed (expanded=false by default in GenericToolCall).
   const storeToolCallIds = (message.tool_calls ?? []).map((tc) => tc.id)
 
+  // D-fix: this row is also used by PlainMessageList (the ResizeObserver-
+  // unavailable fallback), which — unlike VirtualizedMessageListInner — does
+  // NOT split the live streaming placeholder out into ThreadPrimitive.Messages;
+  // it renders every message, including an in-flight one, through this
+  // component. Without this guard, a message with isStreaming:true and empty
+  // content would show the same "avatar + Copy, nothing to copy" broken bubble
+  // as the live path (see AssistantMessage's showEmptyPlaceholder).
+  const hasContent = !!message.content?.trim().length
+  const hasToolCalls = storeToolCallIds.length > 0
+  const hasMedia = mediaItems.length > 0
+  const hasSpans = (message.spans ?? []).length > 0
+  const showEmptyPlaceholder = !!message.isStreaming && !hasContent && !hasToolCalls && !hasMedia && !hasSpans
+
   return (
     <div
       data-testid="assistant-message"
@@ -642,8 +656,9 @@ function VirtualAssistantMessageRow({ message, liteMode }: { message: ChatMessag
           </span>
         )}
         <div className="text-sm leading-relaxed text-[var(--color-secondary)]">
+          {showEmptyPlaceholder && <ThinkingIndicator />}
           {/* Media attachments */}
-          {mediaItems.length > 0 && (
+          {!showEmptyPlaceholder && mediaItems.length > 0 && (
             <div className="flex flex-col gap-2 mb-2">
               {mediaItems.map((m, i) =>
                 m.type === 'image' ? (
@@ -696,6 +711,23 @@ function VirtualAssistantMessageRow({ message, liteMode }: { message: ChatMessag
                 />
               )
             }
+            // B-fix: the six browser.*/browser_* tools also have a registered
+            // live UI (BrowserToolBlock, dispatched via makeAssistantToolUI in
+            // OmnipusRuntimeProvider) that parses the tool's result into a
+            // screenshot/text/error card instead of showing raw JSON. Route
+            // replay through the same block for live/replay parity — see
+            // BrowserToolReplayBlock's doc comment for the full story.
+            if (isReplayBrowserToolName(tc.tool)) {
+              return (
+                <BrowserToolReplayBlock
+                  key={callId}
+                  toolName={tc.tool}
+                  args={tc.params}
+                  result={tc.result}
+                  status={{ type: 'complete' }}
+                />
+              )
+            }
             return (
               <GenericToolCall
                 key={callId}
@@ -717,10 +749,14 @@ function VirtualAssistantMessageRow({ message, liteMode }: { message: ChatMessag
           ))}
         </div>
 
-        {/* Action bar — always visible at reduced opacity, fully opaque on hover */}
-        <div className="flex items-center gap-1 opacity-70 hover:opacity-100 transition-opacity duration-150">
-          <StaticCopyButton text={message.content ?? ''} />
-        </div>
+        {/* Action bar — always visible at reduced opacity, fully opaque on hover.
+            Suppressed while showEmptyPlaceholder (D-fix): nothing has streamed
+            in yet, so there is nothing to copy. */}
+        {!showEmptyPlaceholder && (
+          <div className="flex items-center gap-1 opacity-70 hover:opacity-100 transition-opacity duration-150">
+            <StaticCopyButton text={message.content ?? ''} />
+          </div>
+        )}
 
         {/* Interrupted label */}
         {isInterrupted && (
@@ -972,6 +1008,24 @@ function AssistantMessage() {
   // FR-21: show (interrupted) suffix when the store marks this message interrupted.
   const isInterrupted = storeMsg?.status === 'interrupted'
 
+  // D-fix: the chat store's optimistic assistant placeholder starts as
+  // content:'' / status:'streaming' the instant a message is sent (store/chat.ts
+  // sendMessage), so this component mounts and renders for the window before the
+  // first token/tool-call/media/span arrives. Unconditionally rendering the Copy
+  // (+ Retry) action bar in that window shows a "Copy" affordance for literally
+  // nothing to copy — two live UAT testers flagged the resulting empty-bubble-
+  // with-Copy-button as looking broken. While running with nothing to show yet,
+  // render only the thinking indicator and suppress the action bar; both return
+  // the moment any real content lands (text, tool call, media, or subagent span).
+  const isRunning = message.status?.type === 'running'
+  const hasVisibleText = message.content?.some(
+    (part) => part.type === 'text' && part.text.trim().length > 0,
+  )
+  const hasToolCall = message.content?.some((part) => part.type === 'tool-call')
+  const hasMedia = !!storeMsg?.media?.length
+  const hasSpans = !!storeMsg?.spans?.length
+  const showEmptyPlaceholder = isRunning && !hasVisibleText && !hasToolCall && !hasMedia && !hasSpans
+
   return (
     <MessagePrimitive.Root
       data-testid="assistant-message"
@@ -985,55 +1039,67 @@ function AssistantMessage() {
           <span data-testid="agent-label" className="text-[10px] text-[var(--color-muted)]">{agentDisplayName}</span>
         )}
         <div className="text-sm leading-relaxed text-[var(--color-secondary)]">
-          {/* Media (screenshots, files) renders BEFORE the parts so the image
-              shows directly under the tool-call pill that produced it, with
-              streamed assistant text appearing below the image. Without this
-              order the image gets pinned to the bottom of the bubble while
-              new text streams above it — visually disconnecting the
-              screenshot from the "Here's your screenshot…" caption. */}
-          <InlineMedia />
-          {/* Use components prop so AssistantUI can inject registered tool UIs
-              (from makeAssistantToolUI) automatically by tool name. Unregistered
-              tools fall through to FallbackToolUI (generic JSON badge). */}
-          <MessagePrimitive.Parts
-            components={{
-              Text: AssistantTextPart,
-              tools: {
-                Fallback: FallbackToolUI as unknown as import('@assistant-ui/react').ToolCallMessagePartComponent,
-              },
-            }}
-          />
-          {/* Subagent spans — rendered per-message, keyed by span_id (FR-H-008) */}
-          <SubagentSpansRenderer />
-          {/* Trailing thinking indicator — sits at the bottom of the bubble
-              while the turn is running so the user always sees a "still
-              working" cue at the position where the next text/tool will
-              appear. Once a token streams in, the streamed text renders
-              above the indicator and pushes it further down. */}
-          <InlineThinkingIndicator />
+          {showEmptyPlaceholder ? (
+            // Nothing has streamed in yet — show only the thinking indicator,
+            // not an empty text bubble + Copy affordance (D-fix).
+            <InlineThinkingIndicator />
+          ) : (
+            <>
+              {/* Media (screenshots, files) renders BEFORE the parts so the image
+                  shows directly under the tool-call pill that produced it, with
+                  streamed assistant text appearing below the image. Without this
+                  order the image gets pinned to the bottom of the bubble while
+                  new text streams above it — visually disconnecting the
+                  screenshot from the "Here's your screenshot…" caption. */}
+              <InlineMedia />
+              {/* Use components prop so AssistantUI can inject registered tool UIs
+                  (from makeAssistantToolUI) automatically by tool name. Unregistered
+                  tools fall through to FallbackToolUI (generic JSON badge). */}
+              <MessagePrimitive.Parts
+                components={{
+                  Text: AssistantTextPart,
+                  tools: {
+                    Fallback: FallbackToolUI as unknown as import('@assistant-ui/react').ToolCallMessagePartComponent,
+                  },
+                }}
+              />
+              {/* Subagent spans — rendered per-message, keyed by span_id (FR-H-008) */}
+              <SubagentSpansRenderer />
+              {/* Trailing thinking indicator — sits at the bottom of the bubble
+                  while the turn is running so the user always sees a "still
+                  working" cue at the position where the next text/tool will
+                  appear. Once a token streams in, the streamed text renders
+                  above the indicator and pushes it further down. */}
+              <InlineThinkingIndicator />
+            </>
+          )}
         </div>
 
-        {/* Action bar — Copy + Retry buttons, always visible at reduced opacity */}
-        <ActionBarPrimitive.Root className="flex items-center gap-1 opacity-70 hover:opacity-100 transition-opacity duration-150">
-          <ActionBarPrimitive.Copy asChild>
-            <button
-              type="button"
-              aria-label="Copy message"
-              className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
-              title="Copy message"
-            >
-              <AuiIf condition={(s) => s.message.isCopied}>
-                <Check size={11} weight="bold" className="text-[var(--color-success)]" />
-                <span>Copied!</span>
-              </AuiIf>
-              <AuiIf condition={(s) => !s.message.isCopied}>
-                <Copy size={11} />
-                <span>Copy</span>
-              </AuiIf>
-            </button>
-          </ActionBarPrimitive.Copy>
-          <AssistantMessageRetryButton />
-        </ActionBarPrimitive.Root>
+        {/* Action bar — Copy + Retry buttons, always visible at reduced opacity.
+            Suppressed while showEmptyPlaceholder (D-fix): nothing has streamed
+            in yet, so there is nothing to copy or retry. */}
+        {!showEmptyPlaceholder && (
+          <ActionBarPrimitive.Root className="flex items-center gap-1 opacity-70 hover:opacity-100 transition-opacity duration-150">
+            <ActionBarPrimitive.Copy asChild>
+              <button
+                type="button"
+                aria-label="Copy message"
+                className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
+                title="Copy message"
+              >
+                <AuiIf condition={(s) => s.message.isCopied}>
+                  <Check size={11} weight="bold" className="text-[var(--color-success)]" />
+                  <span>Copied!</span>
+                </AuiIf>
+                <AuiIf condition={(s) => !s.message.isCopied}>
+                  <Copy size={11} />
+                  <span>Copy</span>
+                </AuiIf>
+              </button>
+            </ActionBarPrimitive.Copy>
+            <AssistantMessageRetryButton />
+          </ActionBarPrimitive.Root>
+        )}
         {/* FR-21: interrupted status label — shown when the turn was cancelled */}
         {isInterrupted && (
           <span className="text-[10px] text-[var(--color-muted)] italic px-1">(interrupted)</span>

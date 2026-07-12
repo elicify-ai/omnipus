@@ -399,3 +399,79 @@ const evaluate = createBrowserToolUI<BrowserEvaluateArgs>({
 })
 export const BrowserEvaluateUI = evaluate.dotUI
 export const BrowserEvaluateUnderscoreUI = evaluate.underscoreUI
+
+// ── Replay dispatch (B-fix) ────────────────────────────────────────────────
+//
+// The LIVE path dispatches a tool call to its registered UI by tool name via
+// makeAssistantToolUI (AssistantUI's MessagePrimitive.Parts `components.tools`
+// registry — see the six *UI exports above, wired in OmnipusRuntimeProvider).
+// The REPLAY path (ChatScreen.tsx's VirtualAssistantMessageRow, used once a
+// session has been reloaded from history and every message is "historical")
+// renders OUTSIDE AssistantUI's message-part context, so that registry does
+// not apply — it has its own hardcoded tool-call loop that, before this fix,
+// only special-cased web_serve/serve_workspace/run_in_workspace and fell back
+// to the generic raw-JSON GenericToolCall view for every other tool, INCLUDING
+// all six browser.* / browser_* tools. This is why a reloaded browser_screenshot
+// call showed a compact JSON blob instead of the parsed screenshot/text/error
+// card the live view shows.
+//
+// This lookup + block let the replay renderer reuse the exact same
+// BrowserToolBlock presentation (icon, summary, parsed result, "Watch live"
+// button) as the live path, keyed by either the canonical underscore name or
+// the legacy dot alias (see the naming-convention comment in
+// OmnipusRuntimeProvider.tsx).
+const BROWSER_TOOL_SPECS: Record<
+  string,
+  { icon: typeof Globe; summary: (args: Record<string, unknown>) => string; displayName: string }
+> = {
+  'browser.click': { icon: CursorClick, summary: (a) => clickSummary(a as BrowserClickArgs), displayName: 'browser.click' },
+  'browser_click': { icon: CursorClick, summary: (a) => clickSummary(a as BrowserClickArgs), displayName: 'browser.click' },
+  'browser.type': { icon: Keyboard, summary: (a) => typeSummary(a as BrowserTypeArgs), displayName: 'browser.type' },
+  'browser_type': { icon: Keyboard, summary: (a) => typeSummary(a as BrowserTypeArgs), displayName: 'browser.type' },
+  'browser.screenshot': { icon: Camera, summary: (a) => screenshotSummary(a as BrowserScreenshotArgs), displayName: 'browser.screenshot' },
+  'browser_screenshot': { icon: Camera, summary: (a) => screenshotSummary(a as BrowserScreenshotArgs), displayName: 'browser.screenshot' },
+  'browser.get_text': { icon: TextT, summary: (a) => getTextSummary(a as BrowserGetTextArgs), displayName: 'browser.get_text' },
+  'browser_get_text': { icon: TextT, summary: (a) => getTextSummary(a as BrowserGetTextArgs), displayName: 'browser.get_text' },
+  'browser.wait': { icon: Timer, summary: (a) => waitSummary(a as BrowserWaitArgs), displayName: 'browser.wait' },
+  'browser_wait': { icon: Timer, summary: (a) => waitSummary(a as BrowserWaitArgs), displayName: 'browser.wait' },
+  'browser.evaluate': { icon: Code, summary: (a) => evaluateSummary(a as BrowserEvaluateArgs), displayName: 'browser.evaluate' },
+  'browser_evaluate': { icon: Code, summary: (a) => evaluateSummary(a as BrowserEvaluateArgs), displayName: 'browser.evaluate' },
+}
+
+/** True when `toolName` is one of the six browser tools (dot or underscore form). */
+export function isReplayBrowserToolName(toolName: string): boolean {
+  return Object.prototype.hasOwnProperty.call(BROWSER_TOOL_SPECS, toolName)
+}
+
+/**
+ * Replay-path renderer for a browser tool call — the same BrowserToolBlock
+ * presentation the live path gets via makeAssistantToolUI, callable directly
+ * (no AssistantUI context required) from VirtualAssistantMessageRow. Returns
+ * null for an unrecognized tool name so callers can use it as a plain
+ * component without a separate isReplayBrowserToolName guard if preferred.
+ */
+export function BrowserToolReplayBlock({
+  toolName,
+  args,
+  result,
+  status,
+}: {
+  toolName: string
+  args: unknown
+  result: unknown
+  status: { type: string }
+}) {
+  const spec = BROWSER_TOOL_SPECS[toolName]
+  if (!spec) return null
+  const resolvedArgs = (args ?? {}) as Record<string, unknown>
+  return (
+    <BrowserToolBlock
+      toolName={spec.displayName}
+      icon={spec.icon}
+      args={resolvedArgs}
+      result={result}
+      status={status}
+      summary={spec.summary(resolvedArgs)}
+    />
+  )
+}
