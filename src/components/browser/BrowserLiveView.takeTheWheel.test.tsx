@@ -14,7 +14,7 @@ import type { BrowserLiveWsCallbacks } from '@/lib/browserLiveWs'
 import { useChatStore, type SessionChatState } from '@/store/chat'
 import { useUiStore } from '@/store/ui'
 
-const { mockSendControl, mockSendInput, callbacksRef } = vi.hoisted(() => ({
+const { mockSendControl, mockSendInput, mockSendTabAction, callbacksRef } = vi.hoisted(() => ({
   // Returns `true` by default — mirrors the real BrowserLiveWsConnection's
   // "sent on an OPEN socket" success case. The auto-release effect (and any
   // future caller) reacts to a falsy return as a failed send; tests that
@@ -22,6 +22,7 @@ const { mockSendControl, mockSendInput, callbacksRef } = vi.hoisted(() => ({
   // `mockSendControl.mockReturnValueOnce(false)`.
   mockSendControl: vi.fn(() => true),
   mockSendInput: vi.fn(),
+  mockSendTabAction: vi.fn(() => true),
   callbacksRef: { current: null as BrowserLiveWsCallbacks | null },
 }))
 
@@ -35,6 +36,7 @@ vi.mock('@/lib/browserLiveWs', () => ({
         close: vi.fn(),
         sendInput: mockSendInput,
         sendControl: mockSendControl,
+        sendTabAction: mockSendTabAction,
         isConnected: true,
       }
     },
@@ -53,6 +55,20 @@ function connectAndFrame() {
       data: 'AAAA',
       width: 1280,
       height: 720,
+    })
+  })
+}
+
+/** Emits a `browser_tabs` frame so the tab strip renders (ADR-041 D4) —
+ * mirrors BrowserLiveView.tabStrip.test.tsx's own helper, needed here for
+ * the UAT-fix tab-chip-while-streaming coverage below. */
+function emitTabs(activeIndex: number, tabs: Array<{ index: number; title?: string; url?: string; active?: boolean }>) {
+  act(() => {
+    callbacksRef.current?.onTabs?.({
+      type: 'browser_tabs',
+      session_id: 's1',
+      active_index: activeIndex,
+      tabs,
     })
   })
 }
@@ -197,21 +213,49 @@ describe('BrowserLiveView — click-to-drive (ADR-040 D2, agent idle)', () => {
 })
 
 describe('BrowserLiveView — watch-only while the agent is working (ADR-040 D2)', () => {
-  it('blocks pointerdown/move/up from dispatching input or taking the wheel', () => {
+  // UAT fix (two-click take-over bug): a click on the frame while the agent
+  // is working USED to be a hard no-op (see the old `if (mode ===
+  // 'agent-working') return` in handlePointerDown) — the user had to already
+  // know about the separate "Take over" button. It now takes the wheel in
+  // ONE action, exactly like the omnibox/Take-over/tab-chip paths.
+  it('a frame click while the agent is working pauses the agent, acquires the lock, and dispatches the SAME pointerdown as input (ONE click)', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
     connectAndFrame()
     setAgentWorking('s1', true)
+    const cancelSpy = vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => {})
     const container = stubFrameRect()
 
     fireEvent.pointerDown(container, { clientX: 20, clientY: 20 })
-    fireEvent.pointerMove(container, { clientX: 25, clientY: 25 })
-    fireEvent.pointerUp(container, { clientX: 25, clientY: 25 })
 
-    expect(mockSendControl).not.toHaveBeenCalled()
-    expect(mockSendInput).not.toHaveBeenCalled()
+    expect(cancelSpy).toHaveBeenCalledWith('s1')
+    expect(mockSendControl).toHaveBeenCalledWith('take')
+    expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_down', x: 20, y: 20 }))
+    // control:take must still be sent before the input dispatch, exactly
+    // like the idle click-to-drive path.
+    const takeOrder = mockSendControl.mock.invocationCallOrder[0]
+    const inputOrder = mockSendInput.mock.invocationCallOrder[0]
+    expect(takeOrder).toBeLessThan(inputOrder)
   })
 
-  it('blocks keyboard input while watch-only', () => {
+  it('continues dispatching pointerup for the SAME gesture that took the wheel from agent-working', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    setAgentWorking('s1', true)
+    vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => {})
+    const container = stubFrameRect()
+
+    fireEvent.pointerDown(container, { clientX: 20, clientY: 20 })
+    mockSendControl.mockClear()
+    mockSendInput.mockClear()
+    fireEvent.pointerUp(container, { clientX: 25, clientY: 25 })
+
+    // No second control:take for the tail of the SAME gesture (mirrors the
+    // idle click-to-drive coverage above).
+    expect(mockSendControl).not.toHaveBeenCalled()
+    expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_up' }))
+  })
+
+  it('a plain keyboard press (no prior click/take) is still blocked while watch-only — keyboard alone never implicitly acquires the wheel', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
     connectAndFrame()
     setAgentWorking('s1', true)
@@ -350,6 +394,131 @@ describe('BrowserLiveView — "Take over" (ADR-040 D2)', () => {
     })
     setAgentWorking('s1', true)
     expect(screen.getByRole('button', { name: /take over/i })).toBeInTheDocument()
+  })
+})
+
+// UAT fix (two-click take-over bug, MAJOR live-tester finding): "Take over"
+// and the tab-strip both funnel through takeWheelIfNeeded, exactly like the
+// omnibox — but store/chat.ts's cancelStream() does NOT flip this session's
+// isStreaming synchronously (it deliberately waits for the server's `done`
+// frame, which can take a few seconds — see that file's own doc comment).
+// The tests above (and the pre-existing A8 suite) all simulate "the agent
+// stops working" by calling `setAgentWorking(sessionId, false)` RIGHT AFTER
+// the click — which sidesteps the real race entirely. These tests
+// deliberately do NOT do that: they leave `agentWorking` real/stale-true,
+// matching production timing, and prove the fix (agentPausedByUser /
+// effectiveAgentWorking) makes ONE click land regardless.
+describe('BrowserLiveView — UAT fix: one-click take-over while isStreaming is still stale-true (real cancelStream timing)', () => {
+  it('"Take over" shows the driving chip immediately in ONE click, without waiting for isStreaming to catch up', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    setAgentWorking('s1', true)
+    vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => {})
+
+    fireEvent.click(screen.getByRole('button', { name: /take over/i }))
+
+    const chip = screen.getByTestId('browser-live-status-chip')
+    expect(chip).toHaveTextContent("You're driving")
+    expect(chip).not.toHaveTextContent('is browsing')
+    expect(chip).not.toHaveTextContent('Click to drive')
+  })
+
+  it('does NOT auto-release the lock once the take ack lands, even while isStreaming is still stale-true (the "instant revert" bug)', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    setAgentWorking('s1', true)
+    vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => {})
+
+    fireEvent.click(screen.getByRole('button', { name: /take over/i }))
+    mockSendControl.mockClear()
+    // The browser-control ack lands fast (an independent WS round trip) WHILE
+    // the store's isStreaming is still true — exactly the race that used to
+    // trip the auto-release effect into immediately handing the lock back.
+    act(() => {
+      callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' })
+    })
+
+    expect(mockSendControl).not.toHaveBeenCalledWith('release')
+    expect(screen.getByTestId('browser-live-status-chip')).toHaveTextContent("You're driving")
+  })
+
+  it('unlocks real input dispatch once the take ack lands, even while isStreaming is still stale-true', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    setAgentWorking('s1', true)
+    vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => {})
+    const container = stubFrameRect()
+
+    fireEvent.click(screen.getByRole('button', { name: /take over/i }))
+    act(() => {
+      callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' })
+    })
+    mockSendInput.mockClear()
+
+    fireEvent.pointerDown(container, { clientX: 30, clientY: 30 })
+
+    expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_down', x: 30, y: 30 }))
+  })
+
+  it('a tab-chip click shows the driving chip and switches tabs in ONE click, without waiting for isStreaming to catch up', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    emitTabs(0, [
+      { index: 0, title: 'Tab A', url: 'https://a.example.com' },
+      { index: 1, title: 'Tab B', url: 'https://b.example.com' },
+    ])
+    setAgentWorking('s1', true)
+    const cancelSpy = vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => {})
+
+    fireEvent.click(screen.getByTestId('browser-tab-1'))
+
+    expect(cancelSpy).toHaveBeenCalledWith('s1')
+    expect(mockSendControl).toHaveBeenCalledWith('take')
+    expect(mockSendTabAction).toHaveBeenCalledWith('switch', 1)
+    expect(screen.getByTestId('browser-live-status-chip')).toHaveTextContent("You're driving")
+  })
+
+  it('does NOT auto-release a lock acquired via a tab-chip click while isStreaming is still stale-true', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    emitTabs(0, [{ index: 0, title: 'Only tab', url: 'https://example.com' }])
+    setAgentWorking('s1', true)
+    vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => {})
+
+    fireEvent.click(screen.getByTestId('browser-tab-0'))
+    mockSendControl.mockClear()
+    act(() => {
+      callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' })
+    })
+
+    expect(mockSendControl).not.toHaveBeenCalledWith('release')
+  })
+
+  // Proves the fix is scoped correctly (doesn't leak forward): once the real
+  // store signal finally confirms the pause (isStreaming catches up to
+  // false), a LATER, genuinely NEW agent turn while the user is still
+  // driving must still trigger the pre-existing auto-release protection —
+  // agentPausedByUser is consumed, not stuck true forever.
+  it('a LATER spontaneous agent turn (after the override has been consumed) still triggers auto-release normally', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    setAgentWorking('s1', true)
+    vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => {})
+
+    fireEvent.click(screen.getByRole('button', { name: /take over/i }))
+    act(() => {
+      callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' })
+    })
+    // The store's `done` frame finally arrives, confirming the earlier
+    // cancellation — isStreaming catches up to false, consuming the override.
+    setAgentWorking('s1', false)
+    mockSendControl.mockClear()
+
+    // A brand-new, unrelated agent turn starts while the user is still
+    // driving from the take-over above.
+    setAgentWorking('s1', true)
+
+    expect(mockSendControl).toHaveBeenCalledWith('release')
   })
 })
 

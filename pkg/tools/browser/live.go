@@ -431,6 +431,38 @@ func (lv *LiveView) isActiveLocked() bool {
 	return lv.listenCtx != nil && lv.listenCtx.Err() == nil
 }
 
+// hasEpochLocked reports whether a screencast epoch is currently installed
+// on this LiveView (lv.listenCtx != nil) — regardless of whether its
+// underlying context has already died (lv.listenCtx.Err() != nil). Must be
+// called with mu held.
+//
+// Deliberately WEAKER than isActiveLocked, which additionally requires
+// Err() == nil — the right check for attach()'s piggyback decision and
+// detach()'s teardown decision, where an already-dead epoch correctly means
+// "not a live, running screencast to preserve/piggyback on". onTabsChanged
+// and rebindScreencastOnce need this weaker check instead (live-UAT fix,
+// 2026-07-12 — "closing the ACTIVE tab shows a false 'session ended'
+// banner and leaves the screencast frozen on stale content"):
+// BrowserManager.CloseTab cancels the closed tab's own chromedp context
+// BEFORE it calls notifyTabsChanged — and since lv.listenCtx is a CHILD of
+// the active tab's context, that cancellation SYNCHRONOUSLY kills
+// lv.listenCtx too, before onTabsChanged/rebindScreencastOnce ever run. By
+// the time either of them runs, the just-closed epoch therefore already
+// looks "dead" by isActiveLocked's definition even though nothing has
+// cleaned it up yet and the browsing context itself (plus every sibling
+// tab) is perfectly alive — closing any one tab, including the active one,
+// never tears down the browser (ADR-041's browserCtx fix). Gating the
+// rebind decision on isActiveLocked() (== alive) therefore deterministically
+// skipped the rebind in exactly this case. Gating on "an epoch is installed
+// at all" instead correctly recognizes there is still a (now-defunct) epoch
+// owed a replacement, whether or not its underlying context happened to
+// have already died by the time this runs. See watchForUnexpectedDeath's
+// doc comment for the matching false "session ended" broadcast half of this
+// fix.
+func (lv *LiveView) hasEpochLocked() bool {
+	return lv.listenCtx != nil
+}
+
 // attach registers viewerID's sinks and starts the CDP screencast if no
 // screencast is currently active for this session. onStatus may be nil.
 //
@@ -580,7 +612,11 @@ func (lv *LiveView) onTabsChanged(tabs []Tab, activeIdx int) {
 	}
 
 	lv.mu.Lock()
-	needsRebind := lv.isActiveLocked() && lv.tabCtx != newCtx
+	// hasEpochLocked, not isActiveLocked (live-UAT fix, 2026-07-12): see its
+	// doc comment — closing the ACTIVE tab already kills lv.listenCtx (a
+	// child of that tab's own context) by the time this runs, so gating on
+	// "alive" would deterministically skip the rebind this close owes.
+	needsRebind := lv.hasEpochLocked() && lv.tabCtx != newCtx
 	lv.mu.Unlock()
 	if needsRebind {
 		lv.rebindScreencast(newCtx)
@@ -702,7 +738,14 @@ func (lv *LiveView) rebindScreencast(newCtx context.Context) {
 // across any CDP call.
 func (lv *LiveView) rebindScreencastOnce(newCtx context.Context) (context.Context, bool) {
 	lv.mu.Lock()
-	if !lv.isActiveLocked() {
+	// hasEpochLocked, not isActiveLocked (live-UAT fix, 2026-07-12 — see its
+	// doc comment): the OLD epoch installed here may already be dead (its
+	// tab was just closed) by the time this runs, and that is exactly the
+	// case this function must still handle — tearing down a dead epoch and
+	// installing a fresh one on newCtx (the surviving tab). Only a truly
+	// UNINSTALLED epoch (lv.listenCtx == nil — nobody has ever attached, or
+	// a clean detach already cleared it) is a genuine no-op here.
+	if !lv.hasEpochLocked() {
 		lv.mu.Unlock()
 		return nil, false
 	}
@@ -798,20 +841,71 @@ func (lv *LiveView) rebindScreencastOnce(newCtx context.Context) (context.Contex
 	return newCtx, true
 }
 
-// watchForUnexpectedDeath blocks until watchedListenCtx is Done, then — ONLY
-// if lv.listenCtx is still that exact context (i.e. nothing else already
-// handled the teardown) — clears the active-screencast state and notifies
-// every attached viewer's StatusSink. detach() always nils lv.listenCtx out
-// BEFORE canceling it, so a context that dies while still installed as
-// lv.listenCtx can only mean an external cancellation (the tab/allocator
-// context above it died), never a normal detach.
+// watchForUnexpectedDeath blocks until watchedListenCtx is Done, then decides
+// whether that was a genuine, unexpected browser death or merely a tab
+// close/switch that happened to cancel THIS epoch's own listenCtx (a child
+// of the tab's own chromedp context) — only the former is ever broadcast to
+// attached viewers as "session ended". detach() always nils lv.listenCtx out
+// BEFORE canceling it, so watchedListenCtx dying while STILL installed as
+// lv.listenCtx never means a clean detach; it means either (a) the whole
+// browsing context died (BrowserManager.Shutdown/CloseSession, or a genuine
+// crash) or (b) CloseTab/SwitchTab (ADR-041) canceled the specific tab this
+// epoch was bound to while the browser and its sibling tabs stayed alive.
+//
+// Live-UAT fix (2026-07-12, "closing the ACTIVE tab shows a false 'session
+// ended unexpectedly' banner and leaves the screencast frozen on the closed
+// tab's stale content"): before this fix, this function could not tell (a)
+// from (b) — any dead watchedListenCtx was always treated as a genuine
+// death. Since the ADR-041 browserCtx fix, the browser (and every OTHER tab)
+// reliably SURVIVES closing any one tab, including the active one — so a
+// dead listenCtx no longer implies a dead browser. mgr.browserAlive is a
+// cheap, side-effect-free check (BrowserManager's own lock only — never a
+// CDP round trip, never Session()'s create-or-recover-on-death behavior, so
+// it can never accidentally relaunch a Chromium for what might be a
+// deliberate whole-manager Shutdown()) that distinguishes the two:
+//
+//   - Browsing context still alive (case b): deliberately leave
+//     lv.listenCtx/lv.stopListen UNTOUCHED and return WITHOUT broadcasting.
+//     CloseTab/SwitchTab's own notifyTabsChanged -> onTabsChanged call
+//     (which always fires, independent of this watcher goroutine's own
+//     scheduling) is what performs the actual rebind to the surviving/
+//     newly-active tab, via hasEpochLocked's weaker "an epoch is installed,
+//     dead or alive" gate (see its doc comment) rather than this now
+//     intentionally-untouched dead epoch being mistaken for "nothing to
+//     rebind". Leaving the watcher a no-op here — rather than having it ALSO
+//     attempt its own rebind — avoids a second, independent teardown/install
+//     racing onTabsChanged's; rebindScreencastOnce's own "did someone else
+//     already reclaim the slot" checks (F1/Finding A/B) are what make
+//     onTabsChanged's path safe to run unconditionally, exactly as they
+//     already do for the pre-existing SwitchTab case.
+//   - Browsing context genuinely gone (case a): the pre-fix behavior,
+//     preserved — clear the epoch and broadcast "session ended" so attached
+//     viewers know to re-attach.
 func (lv *LiveView) watchForUnexpectedDeath(watchedListenCtx context.Context) {
 	<-watchedListenCtx.Done()
 
 	lv.mu.Lock()
 	if lv.listenCtx != watchedListenCtx {
-		// A clean detach (or a subsequent attach cycle) already superseded
-		// this watcher — nothing unexpected happened.
+		// A clean detach, or a rebind already triggered elsewhere (e.g.
+		// onTabsChanged, possibly racing this very watcher), already
+		// superseded this epoch — nothing left for this watcher to do.
+		lv.mu.Unlock()
+		return
+	}
+	sessionID := lv.sessionID
+	mgr := lv.mgr
+	lv.mu.Unlock()
+
+	if mgr != nil && mgr.browserAlive(sessionID) {
+		// Not a death — a tab close/switch. See the doc comment above for
+		// why leaving lv.listenCtx exactly as-is (and returning without
+		// broadcasting) is what lets the real rebind proceed correctly.
+		return
+	}
+
+	lv.mu.Lock()
+	if lv.listenCtx != watchedListenCtx {
+		// Superseded while this goroutine was checking mgr.browserAlive.
 		lv.mu.Unlock()
 		return
 	}

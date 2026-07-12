@@ -31,9 +31,7 @@ import (
 //   - browser_list_tabs  — list the open tabs + which is active (ADR-041)
 //   - browser_switch_tab — make a tab active; tools + live view follow it (ADR-041)
 //   - browser_close_tab  — close a tab; never leaves zero tabs (ADR-041)
-//   - browser_list_tabs   — list the tab set (ADR-041 D3)
-//   - browser_switch_tab  — switch the active tab (ADR-041 D3)
-//   - browser_close_tab   — close a tab (ADR-041 D3)
+//   - browser_open_tab   — open a NEW tab (does not reuse the current one) and optionally navigate it
 func RegisterTools(
 	registry *tools.ToolRegistry,
 	cfg BrowserConfig,
@@ -59,6 +57,9 @@ func RegisterTools(
 	registry.Register(&ListTabsTool{mgr: mgr})
 	registry.Register(&SwitchTabTool{mgr: mgr})
 	registry.Register(&CloseTabTool{mgr: mgr})
+	// Opens a NEW tab (the agent-facing counterpart to the human "+" button)
+	// — distinct from browser_navigate, which reuses the current tab.
+	registry.Register(&OpenTabTool{mgr: mgr})
 
 	return mgr, nil
 }

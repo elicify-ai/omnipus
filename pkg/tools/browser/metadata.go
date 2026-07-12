@@ -46,5 +46,6 @@ func BrowserBuiltinMetadata() []tools.Tool {
 		&ListTabsTool{},
 		&SwitchTabTool{},
 		&CloseTabTool{},
+		&OpenTabTool{},
 	}
 }

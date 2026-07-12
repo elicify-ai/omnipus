@@ -219,7 +219,8 @@ func GetPrompt(id string) string {
 //   - 31 general builtin tools (pkg/tools/*.go, excluding pkg/tools/browser and
 //     the dynamic MCP-adapter tool names, which are per-server and can't be
 //     statically enumerated — see the Constraint #6 MCP exception).
-//   - 7 browser-automation tools (pkg/tools/browser/tools.go).
+//   - 11 browser-automation tools (pkg/tools/browser/tools.go +
+//     pkg/tools/browser/tabs.go).
 //   - 35 sysagent management tools (pkg/sysagent/tools/*.go).
 //
 // This is a hardcoded Go literal, NOT computed by importing pkg/tools or
@@ -247,7 +248,7 @@ var allStaticToolNames = []string{
 	"browser_navigate", "browser_click", "browser_type", "browser_screenshot",
 	"browser_get_text", "browser_wait", "browser_evaluate",
 	// Browser tab-management tools (ADR-041 D3).
-	"browser_list_tabs", "browser_switch_tab", "browser_close_tab",
+	"browser_list_tabs", "browser_switch_tab", "browser_close_tab", "browser_open_tab",
 
 	// Sysagent management tools.
 	"navigate",
@@ -455,7 +456,7 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 				"browser_screenshot", "browser_get_text", "browser_wait",
 				// ADR-041 D3 — tab-management, same allow as the rest of the
 				// interactive/visual browsing surface above.
-				"browser_list_tabs", "browser_switch_tab", "browser_close_tab",
+				"browser_list_tabs", "browser_switch_tab", "browser_close_tab", "browser_open_tab",
 			} {
 				overrides[b] = allow
 			}
@@ -474,7 +475,7 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 				"browser_screenshot", "browser_get_text", "browser_wait",
 				// ADR-041 D3 — tab-management, same allow as the rest of the
 				// interactive/visual browsing surface above.
-				"browser_list_tabs", "browser_switch_tab", "browser_close_tab",
+				"browser_list_tabs", "browser_switch_tab", "browser_close_tab", "browser_open_tab",
 			} {
 				overrides[b] = allow
 			}
@@ -580,6 +581,7 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			"browser_list_tabs":  allow,
 			"browser_switch_tab": allow,
 			"browser_close_tab":  allow,
+			"browser_open_tab":   allow,
 			// Local sources + writing up research results.
 			"read_file":      allow,
 			"list_directory": allow,
@@ -677,6 +679,7 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			"browser_list_tabs":  allow,
 			"browser_switch_tab": allow,
 			"browser_close_tab":  allow,
+			"browser_open_tab":   allow,
 			// Delete / remove operations are consent-gated (ask) — standing rule.
 			"delete_task":              ask,
 			"delete_task_in_workspace": ask,

@@ -8,6 +8,9 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/chromedp/chromedp"
+
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -151,6 +154,124 @@ func (t *CloseTabTool) Execute(ctx context.Context, args map[string]any) *tools.
 	return jsonResult(map[string]any{"tabs": tabsToWire(tabs), "active_index": activeIdx})
 }
 
+// --- browser_open_tab ---
+
+// OpenTabTool opens a brand-new tab in the shared browser session (via the
+// existing BrowserManager.OpenTab — the same primitive the human "+" button
+// drives over the WS, pkg/gateway/browser_ws.go), optionally navigates it to
+// a URL, and makes it the active tab. Before this tool existed, the agent's
+// ONLY way to end up with a second tab was clicking a target="_blank" link
+// (ADR-041 D2 adoption) — there was no way to deliberately OPEN one, e.g. to
+// check a second source without losing the current page. Gated by
+// controlledResult for the same reason as SwitchTabTool/CloseTabTool: it
+// changes what the live view screencasts and what subsequent interactive
+// tools act on, so it defers to a human currently holding the live-view
+// control lock rather than fighting for the cursor (ADR-038 D6).
+type OpenTabTool struct {
+	tools.BaseTool
+	mgr *BrowserManager
+}
+
+func (t *OpenTabTool) Name() string                 { return "browser_open_tab" }
+func (t *OpenTabTool) Scope() tools.ToolScope       { return tools.ScopeCore }
+func (t *OpenTabTool) Category() tools.ToolCategory { return tools.CategoryBrowser }
+func (t *OpenTabTool) Description() string {
+	return "Open a NEW tab in the shared browser session and make it active — unlike " +
+		"browser_navigate, which reuses the CURRENT tab, this always creates an additional one. " +
+		"Optionally navigate the new tab to a URL right away. Use this when you need a second tab " +
+		"alongside the current one, e.g. to check another source without losing your place on the " +
+		"page you already have open. Subject to the maximum concurrent tabs limit (see " +
+		"browser_list_tabs); a provided url is SSRF-checked the same as browser_navigate."
+}
+
+func (t *OpenTabTool) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"url": map[string]any{
+				"type": "string",
+				"description": "Optional URL to navigate the new tab to (http:// or https:// only). " +
+					"If omitted, the new tab opens blank.",
+			},
+		},
+	}
+}
+
+func (t *OpenTabTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
+	rawURL, _ := args["url"].(string)
+	if rawURL != "" {
+		if err := t.mgr.ValidateURL(ctx, rawURL); err != nil {
+			return tools.ErrorResult(err.Error())
+		}
+	}
+	if result := controlledResult(t.mgr, t.Name()); result != nil {
+		return result
+	}
+
+	tab, err := t.mgr.OpenTab(defaultSessionID)
+	if err != nil {
+		return tools.ErrorResult(fmt.Sprintf("browser_open_tab: %s", err))
+	}
+
+	if rawURL == "" {
+		return jsonResult(map[string]any{
+			"success":      true,
+			"active_index": tab.Index,
+			"title":        tab.Title,
+			"url":          tab.URL,
+		})
+	}
+
+	// OpenTab already made the new tab active, so Session(default) now
+	// resolves ITS context — mirrors NavigateTool.Execute's own
+	// navigate-then-verify-redirect flow (tools.go) so a provided url gets
+	// the SAME two-stage SSRF gate (initial + post-redirect), not a weaker
+	// one-off check.
+	tabCtx, err := t.mgr.Session(defaultSessionID)
+	if err != nil {
+		return tools.ErrorResult(fmt.Sprintf("browser_open_tab: %s", err))
+	}
+	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, t.mgr.PageTimeout())
+	defer timeoutCancel()
+
+	var title string
+	if err := chromedp.Run(tabCtx, chromedp.Navigate(rawURL), chromedp.Title(&title)); err != nil {
+		return tools.ErrorResult(fmt.Sprintf("browser_open_tab: opened the new tab but navigation failed: %s", err))
+	}
+
+	var finalURL string
+	if err := chromedp.Run(tabCtx, chromedp.Location(&finalURL)); err != nil {
+		logger.WarnCF("browser", "browser_open_tab: failed to detect final URL after redirect", map[string]any{
+			"requested_url": rawURL,
+			"error":         err.Error(),
+		})
+		finalURL = rawURL
+	}
+
+	// Post-redirect SSRF check (mirrors NavigateTool.Execute): Chrome's
+	// networking stack follows redirects internally, so a public URL could
+	// redirect to a private IP (e.g. 169.254.169.254). Validate the final
+	// URL and steer the new tab to about:blank if it lands somewhere blocked.
+	if finalURL != rawURL {
+		if err := t.mgr.ValidateURL(ctx, finalURL); err != nil {
+			_ = chromedp.Run(tabCtx, chromedp.Navigate("about:blank"))
+			return tools.ErrorResult(fmt.Sprintf(
+				"browser_open_tab: redirect from %s landed on blocked URL: %s", rawURL, err))
+		}
+	}
+
+	result := map[string]any{
+		"success":      true,
+		"active_index": tab.Index,
+		"title":        title,
+		"url":          finalURL,
+	}
+	if finalURL != rawURL {
+		result["redirected_from"] = rawURL
+	}
+	return jsonResult(result)
+}
+
 // intArg extracts an integer parameter from a JSON-decoded args map. JSON
 // numbers decode to float64 in Go's map[string]any — mirrors the
 // args["limit"].(float64) pattern used throughout pkg/tools (e.g.
@@ -187,4 +308,5 @@ var (
 	_ tools.Tool = (*ListTabsTool)(nil)
 	_ tools.Tool = (*SwitchTabTool)(nil)
 	_ tools.Tool = (*CloseTabTool)(nil)
+	_ tools.Tool = (*OpenTabTool)(nil)
 )

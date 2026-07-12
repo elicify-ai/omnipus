@@ -46,11 +46,12 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 	}
 
 	// The global map must be a full, wildcard-free enumeration (CLAUDE.md hard
-	// constraint 6) — 76 static builtin tools (31 general + 10 browser + 35
+	// constraint 6) — 77 static builtin tools (31 general + 11 browser + 35
 	// sysagent), matching pkg/coreagent's allStaticToolNames literal-for-literal.
 	// Browser gained browser_list_tabs / browser_switch_tab / browser_close_tab
-	// (ADR-041 multi-tab), taking browser from 7 to 10.
-	const wantToolCount = 76
+	// (ADR-041 multi-tab), taking browser from 7 to 10, then browser_open_tab
+	// (live-UAT finding, Alex — "no agent tool to open a new tab"), taking it to 11.
+	const wantToolCount = 77
 	if got := len(cfg.Sandbox.ToolPolicies); got != wantToolCount {
 		t.Errorf("expected sandbox.tool_policies to enumerate all %d static builtin tools, got %d entries", wantToolCount, got)
 	}

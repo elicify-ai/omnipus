@@ -262,4 +262,28 @@ describe('BrowserLivePanel', () => {
     expect(useUiStore.getState().browserPanel).toBeNull()
     expect(screen.queryByTestId('browser-live-panel-docked')).not.toBeInTheDocument()
   })
+
+  // UAT finding (leaked/duplicate close button): a live tester's DOM dump
+  // found TWO visible, clickable close controls stacked in the panel's
+  // top-right — the intended custom `aria-label="Close live browser panel"`
+  // button (rendered by BrowserLiveView's own header, wired to `onClose` ->
+  // this file's `mock-close` stand-in) AND Radix SheetContent's own
+  // unconditional built-in close (unlabeled, accessible name "Close" from
+  // its sr-only span). Only the Sheet (unpinned) branch renders a
+  // SheetContent at all — the pinned docked <aside> never had this bug.
+  it('does not render SheetContent\'s own built-in Radix close button (only the custom Close remains), unpinned', () => {
+    render(<BrowserLivePanel />)
+    act(() => {
+      useUiStore.getState().openBrowserPanel('sess-1', 'agent-1')
+    })
+
+    // The custom close (this file's mock stand-in for BrowserLiveView's own
+    // `aria-label="Close live browser panel"` button) is present...
+    expect(screen.getByRole('button', { name: 'mock-close' })).toBeInTheDocument()
+    // ...but Radix's own default close (accessible name "Close", from
+    // SheetContent's unconditional `<DialogPrimitive.Close>` + sr-only span)
+    // must be suppressed via `showClose={false}` — not a second, redundant
+    // close control stacked on top of the custom one.
+    expect(screen.queryByRole('button', { name: 'Close' })).not.toBeInTheDocument()
+  })
 })

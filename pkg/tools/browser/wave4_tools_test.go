@@ -10,12 +10,13 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
-// TestBrowserToolRegistration verifies that RegisterTools registers all 7 browser tools.
+// TestBrowserToolRegistration verifies that RegisterTools registers all 11 browser tools.
 // Traces to: wave4-whatsapp-browser-spec.md line 1001 (Test #11: TestBrowserToolRegistration)
 // BDD: Given an empty ToolRegistry,
 // When RegisterTools(registry, DefaultConfig(), nil) is called,
-// Then 7 tools are registered: browser_navigate, browser_click, browser_type,
-// browser_screenshot, browser_get_text, browser_wait, browser_evaluate.
+// Then 11 tools are registered: the original 7 (browser_navigate, browser_click, browser_type,
+// browser_screenshot, browser_get_text, browser_wait, browser_evaluate), the 3 ADR-041 tab-set
+// tools (browser_list_tabs, browser_switch_tab, browser_close_tab), and browser_open_tab.
 
 func TestBrowserToolRegistration(t *testing.T) {
 	// Traces to: wave4-whatsapp-browser-spec.md line 527 (Scenario: Launch managed Chromium)
@@ -42,6 +43,8 @@ func TestBrowserToolRegistration(t *testing.T) {
 		"browser_list_tabs",
 		"browser_switch_tab",
 		"browser_close_tab",
+		// Opens a NEW tab (live-UAT finding — no agent tool to open a new tab):
+		"browser_open_tab",
 	}
 
 	for _, name := range expectedTools {
@@ -52,8 +55,8 @@ func TestBrowserToolRegistration(t *testing.T) {
 		}
 	}
 
-	// 7 original browser tools (FR-009) + 3 ADR-041 multi-tab tools.
-	assert.Len(t, expectedTools, 10, "expected 10 browser tools (7 FR-009 + 3 ADR-041 tab tools)")
+	// 7 original browser tools (FR-009) + 3 ADR-041 multi-tab tools + browser_open_tab.
+	assert.Len(t, expectedTools, 11, "expected 11 browser tools (7 FR-009 + 3 ADR-041 tab tools + browser_open_tab)")
 }
 
 // TestBrowserToolNames verifies that each registered tool returns the correct name and
@@ -80,6 +83,7 @@ func TestBrowserToolNames(t *testing.T) {
 		"browser_list_tabs",
 		"browser_switch_tab",
 		"browser_close_tab",
+		"browser_open_tab",
 	}
 
 	for _, name := range toolNames {
