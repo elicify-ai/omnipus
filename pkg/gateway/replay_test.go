@@ -513,6 +513,52 @@ func TestReplay_SpawnSpan_StatusFromPersistedRecord_ErrorPropagates(t *testing.T
 	assert.EqualValues(t, 75, subEnd.DurationMs)
 }
 
+// TestReplay_SpawnSpan_InterruptedStatus_SpanMatchesLive_ButOuterBadgeClamps
+// is the regression proof for Finding F (A-I4 round 5): a synchronous
+// (await-mode) delegate call canceled by its parent turn now persists
+// tc.Status="interrupted" (pkg/agent/loop.go's tcStatus derivation,
+// ToolResult.Interrupted). The subagent_end frame — whose status enum
+// explicitly supports "interrupted" (SubagentEndFrame.yaml) — must read that
+// value back VERBATIM so reload matches exactly what the live WS stream
+// already showed ("interrupted (parent canceled)"), closing the "failed" on
+// reload / "interrupted" live divergence. The OUTER tool_call_result frame
+// for the SAME spawn call has a strictly binary success/error wire enum with
+// no "interrupted" value (ToolCallResultFrame.yaml) — it must clamp down to
+// "error" instead of emitting a contract-invalid frame the SPA would drop.
+func TestReplay_SpawnSpan_InterruptedStatus_SpanMatchesLive_ButOuterBadgeClamps(t *testing.T) {
+	spawnTC := session.ToolCall{
+		ID:         "c42",
+		Tool:       "delegate",
+		Status:     "interrupted", // persisted by pkg/agent/loop.go's tcStatus derivation
+		DurationMS: 340,
+	}
+	entries := []session.TranscriptEntry{
+		assistantEntry("delegating", "jim", spawnTC),
+	}
+
+	frames, _ := runReplay(t, entries)
+
+	subEnd := findFrame(frames, "subagent_end")
+	require.NotNil(t, subEnd, "subagent_end frame must be emitted")
+	assert.Equal(t, "interrupted", subEnd.Status,
+		"subagent_end.status must read the persisted \"interrupted\" status verbatim — this is "+
+			"the exact terminal status live already showed for a parent-canceled synchronous delegate")
+	assert.EqualValues(t, 340, subEnd.DurationMs)
+
+	resultFrames := filterByType(frames, "tool_call_result")
+	var spawnResult *replayFrameDecoder
+	for i := range resultFrames {
+		if resultFrames[i].CallID == "c42" {
+			spawnResult = &resultFrames[i]
+		}
+	}
+	require.NotNil(t, spawnResult, "spawn call's own tool_call_result frame must be emitted")
+	assert.Equal(t, "error", spawnResult.Status,
+		"the OUTER tool_call_result frame has no \"interrupted\" value on its wire contract — it "+
+			"must clamp to \"error\", matching live's own always-binary IsError-derived badge for "+
+			"the same call, not pass \"interrupted\" through and violate the contract")
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // TDD Row 9 — TestReplay_NoSpawnSpans_WhenNoChildren
 // ─────────────────────────────────────────────────────────────────────────────

@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -612,5 +613,75 @@ func TestDelegate_AsyncFalse_DoesNotRecordStatusTask(t *testing.T) {
 	tool.mu.Unlock()
 	if count != 0 {
 		t.Errorf("expected zero recorded tasks after a sync (async=false) call, got %d", count)
+	}
+}
+
+// TestDelegate_SyncInterrupted_PropagatesToResult is the regression proof for
+// Finding F (A-I4 round 5): a synchronous (await-mode) delegate call whose
+// child sub-turn was interrupted by a parent-turn cancellation must surface
+// ToolResult.Interrupted=true on executeSync's own return value — not fall
+// into the generic "Delegate execution failed" shortcut that used to discard
+// spawnSubTurn's Interrupted classification the instant err was non-nil
+// (indistinguishable, once folded into that shortcut, from a genuine
+// failure). pkg/agent/loop.go's tcStatus derivation reads exactly this field
+// to persist tc.Status="interrupted" instead of "error", which is what lets
+// a session reload's subagent_end frame match what live already showed.
+func TestDelegate_SyncInterrupted_PropagatesToResult(t *testing.T) {
+	tool := NewDelegateTool("test-model", 0, 0)
+	tool.SetDelegationDenyCheckerAwait(func(context.Context, string) *DelegationDenial { return nil })
+	// Simulates spawnSubTurn's OWN sync-conversion + cleanup-defer output for
+	// a canceled child context (pkg/agent/subturn.go): a non-nil err
+	// alongside a non-nil result carrying IsError=true (preserves the outer
+	// tool_call_result frame's existing "error" badge — that contract has no
+	// "interrupted" value) AND Interrupted=true (the richer, span-specific
+	// signal).
+	tool.SetSpawner(spawnerFunc(func(context.Context, SubTurnConfig) (*ToolResult, error) {
+		cancelErr := context.Canceled
+		return &ToolResult{
+			Err:         cancelErr,
+			ForLLM:      "SubTurn failed: context canceled",
+			IsError:     true,
+			Interrupted: true,
+		}, cancelErr
+	}))
+
+	result := tool.Execute(context.Background(), map[string]any{"task": "long work", "async": false})
+	if result == nil {
+		t.Fatal("expected a non-nil result")
+	}
+	if !result.IsError {
+		t.Error("expected IsError=true — the outer tool_call_result badge must stay 'error', unchanged by this fix")
+	}
+	if !result.Interrupted {
+		t.Error("expected Interrupted=true to survive onto executeSync's returned result — this is the field " +
+			"pkg/agent/loop.go's tcStatus derivation reads to persist status \"interrupted\" instead of \"error\"")
+	}
+	if strings.Contains(result.ForLLM, "Delegate execution failed") {
+		t.Errorf("interrupted sync delegation must NOT take the generic error shortcut, got ForLLM: %s", result.ForLLM)
+	}
+}
+
+// TestDelegate_SyncGenuineError_StillUsesGenericShortcut is the negative
+// counterpart to TestDelegate_SyncInterrupted_PropagatesToResult: a real
+// dispatch/execution failure (Interrupted=false) must still take the
+// existing generic "Delegate execution failed" path unchanged — the Finding
+// F fix narrows the shortcut's bypass to interruptions only, it must not
+// widen success/failure classification for every other error.
+func TestDelegate_SyncGenuineError_StillUsesGenericShortcut(t *testing.T) {
+	tool := NewDelegateTool("test-model", 0, 0)
+	tool.SetDelegationDenyCheckerAwait(func(context.Context, string) *DelegationDenial { return nil })
+	tool.SetSpawner(spawnerFunc(func(context.Context, SubTurnConfig) (*ToolResult, error) {
+		return nil, errors.New("dispatch rejected: depth limit exceeded")
+	}))
+
+	result := tool.Execute(context.Background(), map[string]any{"task": "long work", "async": false})
+	if result == nil || !result.IsError {
+		t.Fatalf("expected an error result, got: %+v", result)
+	}
+	if result.Interrupted {
+		t.Error("a genuine dispatch failure must never be classified as Interrupted")
+	}
+	if !strings.Contains(result.ForLLM, "Delegate execution failed") {
+		t.Errorf("a genuine dispatch failure must still use the generic shortcut message, got: %s", result.ForLLM)
 	}
 }

@@ -523,7 +523,19 @@ func (t *DelegateTool) executeSync(
 		Async:            false,
 		ResolvedMaxDepth: resolvedMaxDepth,
 	})
-	if err != nil {
+	// Finding F (A-I4 round 5): only take the generic "Delegate execution
+	// failed" shortcut for a genuine dispatch failure — result == nil (e.g.
+	// a panic spawnSubTurn's own recover() deliberately nils result for) or
+	// a real, non-interrupted error. A parent-cancellation interruption
+	// (result.Interrupted, set by spawnSubTurn's cleanup defer using the
+	// SAME classification the live subagent_end frame already reports —
+	// see ToolResult.Interrupted's doc comment) still returns a non-nil err
+	// here (the child's context WAS canceled), but must fall through to the
+	// normal formatting below so result.Interrupted survives onto the
+	// result this function returns — which pkg/agent/loop.go's tool-call-
+	// transcript persistence reads to decide whether a session reload shows
+	// "interrupted" (matching live) or "failed" (the bug this closes).
+	if result == nil || (err != nil && !result.Interrupted) {
 		return ErrorResult(fmt.Sprintf("Delegate execution failed: %v", err)).WithError(err)
 	}
 
@@ -545,11 +557,12 @@ func (t *DelegateTool) executeSync(
 		labelStr, result.ForLLM)
 
 	return &ToolResult{
-		ForLLM:  llmContent,
-		ForUser: userContent,
-		Silent:  false,
-		IsError: result.IsError,
-		Async:   false,
+		ForLLM:      llmContent,
+		ForUser:     userContent,
+		Silent:      false,
+		IsError:     result.IsError,
+		Interrupted: result.Interrupted,
+		Async:       false,
 	}
 }
 

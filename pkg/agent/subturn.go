@@ -1015,6 +1015,31 @@ func spawnSubTurn(
 			case err != nil:
 				endStatus = SubTurnStatusError
 			}
+
+			// Finding F (A-I4 round 5): mirror endStatus onto the returned/
+			// delivered result's Interrupted flag so BOTH delivery paths agree
+			// with the exact terminal status the live subagent_end frame
+			// (endStatus, just computed above) reports:
+			//   - Synchronous delegation: `result` here IS the value
+			//     spawnSubTurn returns to its caller (DelegateTool.executeSync,
+			//     pkg/tools/delegate.go), which pkg/agent/loop.go's tool-call-
+			//     transcript persistence (tcStatus derivation) reads to decide
+			//     what status a session reload will show for this span.
+			//   - Asynchronous delegation: `result` is delivered via
+			//     deliverSubTurnResult below; its own tc.Status correction
+			//     (updateToolCallStatusWithRetry, right below) already writes
+			//     endStatus onto the persisted record directly, so this is
+			//     redundant-but-harmless there — asyncCallback (loop.go) never
+			//     reads result.Interrupted.
+			// Without this, a canceled SYNCHRONOUS delegate's result only ever
+			// carried a generic non-nil err — indistinguishable, once folded
+			// into IsError=true/tcStatus="error", from a genuine failure — so
+			// reload showed "failed" for the very same span live correctly
+			// labeled "interrupted (parent canceled)".
+			if result != nil && (endStatus == SubTurnStatusInterrupted || endStatus == SubTurnStatusCancelled) {
+				result.Interrupted = true
+			}
+
 			subTurnDurationMS := time.Since(subTurnStartedAt).Milliseconds()
 			slog.Debug("subagent_end",
 				"span_id", spanID,
@@ -1189,9 +1214,18 @@ func spawnSubTurn(
 	// Convert turnResult to tools.ToolResult
 	if turnErr != nil {
 		err = turnErr
+		// IsError is set explicitly (rather than left at its zero value, as
+		// before) so this result is self-describing regardless of which
+		// caller inspects it — see the cleanup defer above, which may
+		// additionally mark this same result Interrupted for a
+		// parent-cancellation case; IsError stays true either way, matching
+		// the OUTER tool_call_result frame's existing (unchanged by that
+		// fix) always-"error"-on-any-non-nil-err behavior for a synchronous
+		// delegate call.
 		result = &tools.ToolResult{
-			Err:    turnErr,
-			ForLLM: fmt.Sprintf("SubTurn failed: %v", turnErr),
+			Err:     turnErr,
+			ForLLM:  fmt.Sprintf("SubTurn failed: %v", turnErr),
+			IsError: true,
 		}
 	} else {
 		result = &tools.ToolResult{
