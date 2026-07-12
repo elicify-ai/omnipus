@@ -1,7 +1,12 @@
-// BrowserLiveView.controlToggle.test.tsx — ADR-038 D5/D6 take/release control
-// toggle behaviour. Mocks BrowserLiveWsConnection entirely (unit-tests the
+// BrowserLiveView.controlToggle.test.tsx — ADR-040 D2 implicit control model
+// (formerly the ADR-038 explicit Take/Release control toggle, removed
+// entirely per D1). Mocks BrowserLiveWsConnection entirely (unit-tests the
 // component's reaction to callbacks, not the real WS transport — that's
 // covered separately in src/lib/browserLiveWs.test.ts).
+//
+// "Driving" is simulated the same way BrowserLiveView.mouseMoveThrottle.test.tsx
+// does — by emitting a browser_status{state:'controlling'} frame directly —
+// since there is no longer an explicit button to click to acquire the lock.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
@@ -35,65 +40,78 @@ vi.mock('@/lib/browserLiveWs', () => ({
 
 import { BrowserLiveView } from './BrowserLiveView'
 
+/** Stubs the frame container's layout rect to a clean 1:1 box so
+ * mapClientToDevice never short-circuits to null (jsdom reports all-zero
+ * rects by default) — same technique as the mouseMoveThrottle test suite. */
+function stubFrameRect() {
+  const container = screen.getByTestId('browser-live-frame')
+  vi.spyOn(container, 'getBoundingClientRect').mockReturnValue({
+    left: 0, top: 0, width: 1280, height: 720, right: 1280, bottom: 720, x: 0, y: 0,
+    toJSON() { return {} },
+  } as DOMRect)
+  return container
+}
+
+function connectAndFrame() {
+  act(() => {
+    callbacksRef.current?.onConnected?.()
+    callbacksRef.current?.onScreencast?.({
+      type: 'browser_screencast',
+      session_id: 's1',
+      seq: 1,
+      data: 'AAAA',
+      width: 1280,
+      height: 720,
+    })
+  })
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   callbacksRef.current = null
 })
 
-describe('BrowserLiveView — control toggle', () => {
-  it('starts in the "Connecting…" pill state with the take-control button disabled', () => {
+describe('BrowserLiveView — connection lifecycle chip (ADR-040 D6)', () => {
+  it('starts in the "Connecting…" chip state', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
-    expect(screen.getByTestId('browser-live-status-pill')).toHaveTextContent('Connecting…')
-    expect(screen.getByRole('button', { name: /take control/i })).toBeDisabled()
+    expect(screen.getByTestId('browser-live-status-chip')).toHaveTextContent('Connecting…')
   })
 
-  it('enables Take control once onConnected fires, and clicking it sends control:take', () => {
+  it('moves to "Click to drive" once connected with no frame-driving state yet', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
     act(() => {
       callbacksRef.current?.onConnected?.()
     })
-
-    const button = screen.getByRole('button', { name: /take control/i })
-    expect(button).not.toBeDisabled()
-
-    fireEvent.click(button)
-    expect(mockSendControl).toHaveBeenCalledWith('take')
+    expect(screen.getByTestId('browser-live-status-chip')).toHaveTextContent('Click to drive')
   })
 
-  it('reflects a browser_status "controlling" frame as "You\'re driving" / Release control', () => {
+  it('reflects a browser_status "controlling" frame as "You\'re driving"', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
     act(() => {
-      callbacksRef.current?.onConnected?.()
       callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' })
     })
-
-    expect(screen.getByTestId('browser-live-status-pill')).toHaveTextContent("You're driving")
-
-    const button = screen.getByRole('button', { name: /release control/i })
-    fireEvent.click(button)
-    expect(mockSendControl).toHaveBeenCalledWith('release')
+    expect(screen.getByTestId('browser-live-status-chip')).toHaveTextContent("You're driving")
   })
 
-  it('reverts to "Agent driving" once status moves back to released', () => {
+  it('reverts to "Click to drive" once status moves back to released', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
     act(() => {
-      callbacksRef.current?.onConnected?.()
       callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' })
       callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'released' })
     })
-
-    expect(screen.getByTestId('browser-live-status-pill')).toHaveTextContent('Agent driving')
-    expect(screen.getByRole('button', { name: /take control/i })).toBeInTheDocument()
+    expect(screen.getByTestId('browser-live-status-chip')).toHaveTextContent('Click to drive')
   })
 
-  it('shows an error pill + message when a server error frame arrives', () => {
+  it('shows an error chip + message when a server error frame arrives', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
     act(() => {
       callbacksRef.current?.onConnected?.()
       callbacksRef.current?.onError?.('session not found')
     })
 
-    expect(screen.getByTestId('browser-live-status-pill')).toHaveTextContent('Error')
+    expect(screen.getByTestId('browser-live-status-chip')).toHaveTextContent('Error')
     expect(screen.getByText('session not found')).toBeInTheDocument()
   })
 
@@ -113,7 +131,7 @@ describe('BrowserLiveView — control toggle', () => {
       })
     })
 
-    expect(screen.getByTestId('browser-live-status-pill')).toHaveTextContent('Error')
+    expect(screen.getByTestId('browser-live-status-chip')).toHaveTextContent('Error')
     expect(screen.getByText('This session already has a controller.')).toBeInTheDocument()
     expect(screen.queryByText('Connecting to the live browser…')).not.toBeInTheDocument()
     expect(screen.queryByText('Waiting for the first frame…')).not.toBeInTheDocument()
@@ -121,16 +139,8 @@ describe('BrowserLiveView — control toggle', () => {
 
   it('surfaces a browser_status error message in the persistent strip once a frame has already arrived', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
     act(() => {
-      callbacksRef.current?.onConnected?.()
-      callbacksRef.current?.onScreencast?.({
-        type: 'browser_screencast',
-        session_id: 's1',
-        seq: 1,
-        data: 'AAAA',
-        width: 1280,
-        height: 720,
-      })
       callbacksRef.current?.onStatus?.({
         type: 'browser_status',
         state: 'error',
@@ -138,77 +148,59 @@ describe('BrowserLiveView — control toggle', () => {
       })
     })
 
-    expect(screen.getByTestId('browser-live-status-pill')).toHaveTextContent('Error')
+    expect(screen.getByTestId('browser-live-status-chip')).toHaveTextContent('Error')
     expect(screen.getByRole('alert')).toHaveTextContent('Live view is disabled for this agent.')
   })
 
   // Reviewer finding: onDisconnected only cleared `connected`, leaving statusState
-  // (and therefore isControlling/controllingRef) at 'controlling' — the pill kept
+  // (and therefore isControlling/controllingRef) at 'controlling' — the chip kept
   // claiming "You're driving" and pointer/keyboard handlers kept attempting
   // sendInput (silently dropped by the transport) for the whole reconnect window.
   it('reverts control state and stops accepting input when the socket disconnects mid-control', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
     act(() => {
-      callbacksRef.current?.onConnected?.()
-      callbacksRef.current?.onScreencast?.({
-        type: 'browser_screencast',
-        session_id: 's1',
-        seq: 1,
-        data: 'AAAA',
-        width: 1280,
-        height: 720,
-      })
       callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' })
     })
-    expect(screen.getByTestId('browser-live-status-pill')).toHaveTextContent("You're driving")
-    expect(screen.getByRole('button', { name: /release control/i })).not.toBeDisabled()
+    expect(screen.getByTestId('browser-live-status-chip')).toHaveTextContent("You're driving")
 
     act(() => {
       callbacksRef.current?.onDisconnected?.()
     })
 
-    // Pill drops out of "controlling" — no human is actually driving anything
+    // Chip drops out of "controlling" — no human is actually driving anything
     // once the transport is gone.
-    expect(screen.getByTestId('browser-live-status-pill')).toHaveTextContent('Reconnecting…')
-    // The toggle button re-derives its disabled state from `connected`, which
-    // onDisconnected also clears.
-    expect(screen.getByRole('button', { name: /take control/i })).toBeDisabled()
+    expect(screen.getByTestId('browser-live-status-chip')).toHaveTextContent('Reconnecting…')
     // The synthetic cursor overlay is control-gated too — it must clear.
     expect(screen.queryByTestId('synthetic-cursor')).not.toBeInTheDocument()
 
     // Pointer/keyboard handlers must no-op while disconnected, not silently
-    // attempt (and drop) a send.
+    // attempt (and drop) a send — click-to-drive must not fire against a
+    // dead transport either (ADR-040 D2 addition: connectedRef guard).
     mockSendInput.mockClear()
-    const container = screen.getByTestId('browser-live-frame')
+    mockSendControl.mockClear()
+    const container = stubFrameRect()
     fireEvent.pointerMove(container, { clientX: 20, clientY: 20 })
     fireEvent.pointerDown(container, { clientX: 20, clientY: 20 })
     fireEvent.pointerUp(container, { clientX: 20, clientY: 20 })
     fireEvent.keyDown(container, { key: 'a' })
     fireEvent.keyUp(container, { key: 'a' })
     expect(mockSendInput).not.toHaveBeenCalled()
+    expect(mockSendControl).not.toHaveBeenCalled()
   })
 
   // Reviewer finding: onStatus overwrote statusState with EVERY frame,
   // including the routine `error` state a blocked `navigate` produces —
-  // that flipped isControlling to false (URL bar/cursor vanish, Take
-  // control reappears) even though the server never released control. A
-  // per-request error must surface without dropping the "You're driving"
-  // state.
+  // that flipped isControlling to false (URL bar/cursor vanish) even though
+  // the server never actually released control. A per-request error must
+  // surface without dropping the "You're driving" state.
   it('keeps "You\'re driving" and shows the error when a browser_status error frame arrives while controlling', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
     act(() => {
-      callbacksRef.current?.onConnected?.()
-      callbacksRef.current?.onScreencast?.({
-        type: 'browser_screencast',
-        session_id: 's1',
-        seq: 1,
-        data: 'AAAA',
-        width: 1280,
-        height: 720,
-      })
       callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' })
     })
-    expect(screen.getByTestId('browser-live-status-pill')).toHaveTextContent("You're driving")
+    expect(screen.getByTestId('browser-live-status-chip')).toHaveTextContent("You're driving")
 
     act(() => {
       callbacksRef.current?.onStatus?.({
@@ -218,25 +210,14 @@ describe('BrowserLiveView — control toggle', () => {
       })
     })
 
-    // Still driving — the pill must NOT flip to "Error" / the toggle must
-    // NOT revert to "Take control".
-    expect(screen.getByTestId('browser-live-status-pill')).toHaveTextContent("You're driving")
-    expect(screen.getByRole('button', { name: /release control/i })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /^take control$/i })).not.toBeInTheDocument()
+    // Still driving — the chip must NOT flip to "Error".
+    expect(screen.getByTestId('browser-live-status-chip')).toHaveTextContent("You're driving")
     // But the error itself is still surfaced.
     expect(screen.getByRole('alert')).toHaveTextContent('Navigation blocked: target resolves to a private address.')
 
     // And input keeps flowing — the human is still actually in control.
-    // jsdom performs no real layout (getBoundingClientRect() returns a 0×0
-    // rect by default), which mapClientToDevice treats as "unmeasurable" and
-    // no-ops on — stub it so a real device coordinate resolves, same pattern
-    // as BrowserLiveView.mouseMoveThrottle.test.tsx's mountControllingWithFrame.
     mockSendInput.mockClear()
-    const container = screen.getByTestId('browser-live-frame')
-    vi.spyOn(container, 'getBoundingClientRect').mockReturnValue({
-      left: 0, top: 0, width: 1280, height: 720, right: 1280, bottom: 720, x: 0, y: 0,
-      toJSON() { return {} },
-    } as DOMRect)
+    const container = stubFrameRect()
     fireEvent.pointerDown(container, { clientX: 20, clientY: 20 })
     expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_down' }))
   })
@@ -248,16 +229,8 @@ describe('BrowserLiveView — control toggle', () => {
   // this viewer.
   it('does not clear a pre-set error banner when a control_only frame arrives', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
     act(() => {
-      callbacksRef.current?.onConnected?.()
-      callbacksRef.current?.onScreencast?.({
-        type: 'browser_screencast',
-        session_id: 's1',
-        seq: 1,
-        data: 'AAAA',
-        width: 1280,
-        height: 720,
-      })
       callbacksRef.current?.onStatus?.({
         type: 'browser_status',
         state: 'error',
@@ -274,31 +247,23 @@ describe('BrowserLiveView — control toggle', () => {
       })
     })
 
-    // The error banner — and the Error pill — must survive: a control-only
+    // The error banner — and the Error chip — must survive: a control-only
     // broadcast is not a real lifecycle/error change.
     expect(screen.getByRole('alert')).toHaveTextContent('Live view is disabled for this agent.')
-    expect(screen.getByTestId('browser-live-status-pill')).toHaveTextContent('Error')
+    expect(screen.getByTestId('browser-live-status-chip')).toHaveTextContent('Error')
   })
 
   // Reviewer finding F1(b): a tab-death/error frame omits
   // `controlled_by_other` entirely (it's not a control-ownership frame) —
-  // resetting it to false via `?? false` wrongly re-enabled "Take control"
+  // resetting it to false via `?? false` wrongly re-enabled click-to-drive
   // while another viewer was still actually driving.
   it('does not reset a pre-set controlledByOther when an error frame omits the field', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
     act(() => {
-      callbacksRef.current?.onConnected?.()
-      callbacksRef.current?.onScreencast?.({
-        type: 'browser_screencast',
-        session_id: 's1',
-        seq: 1,
-        data: 'AAAA',
-        width: 1280,
-        height: 720,
-      })
       callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'attached', controlled_by_other: true })
     })
-    expect(screen.getByRole('button', { name: /someone else is currently driving/i })).toBeDisabled()
+    expect(screen.getByTestId('browser-live-status-chip')).toHaveTextContent('Someone else is driving')
 
     act(() => {
       callbacksRef.current?.onStatus?.({
@@ -308,10 +273,17 @@ describe('BrowserLiveView — control toggle', () => {
       })
     })
 
-    // Still gated — the error frame never reported controlled_by_other, so
-    // the prior true value must be left alone.
-    expect(screen.getByRole('button', { name: /someone else is currently driving/i })).toBeDisabled()
+    // Still gated at the STATE level — the error frame never reported
+    // controlled_by_other, so the prior true value must be left alone (the
+    // chip itself now shows "Error", since an active error takes display
+    // priority — but the underlying controlledByOther guard must survive,
+    // proven below by the click NOT sending `take`).
+    expect(screen.getByTestId('browser-live-status-chip')).toHaveTextContent('Error')
     expect(screen.getByRole('alert')).toHaveTextContent('browser session terminated unexpectedly')
+    mockSendControl.mockClear()
+    const container = stubFrameRect()
+    fireEvent.pointerDown(container, { clientX: 20, clientY: 20 })
+    expect(mockSendControl).not.toHaveBeenCalled()
   })
 
   it('calls detach() then close() on unmount so the backend engine can ref-count down', () => {
@@ -329,5 +301,51 @@ describe('BrowserLiveView — control toggle', () => {
     rerender(<BrowserLiveView sessionId="s1" agentId="a1" onPopOut={vi.fn()} onClose={vi.fn()} />)
     expect(screen.getByRole('button', { name: /pop out/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /close live browser panel/i })).toBeInTheDocument()
+  })
+
+  // ADR-040 D1: the old explicit Take control / Release control toggle and
+  // the Hand-to-agent button are both gone entirely.
+  it('never renders a Take control / Release control / Hand to agent button', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    act(() => {
+      callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' })
+    })
+    expect(screen.queryByRole('button', { name: /take control/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /release control/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /hand to agent/i })).not.toBeInTheDocument()
+  })
+})
+
+describe('BrowserLiveView — ADR-040 D1 Pin toggle', () => {
+  it('is hidden when onTogglePin is not provided', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    expect(screen.queryByRole('button', { name: /pin live browser panel/i })).not.toBeInTheDocument()
+  })
+
+  it('renders "Pin live browser panel" when unpinned and calls onTogglePin when clicked', () => {
+    const onTogglePin = vi.fn()
+    render(<BrowserLiveView sessionId="s1" agentId="a1" onTogglePin={onTogglePin} />)
+    const button = screen.getByRole('button', { name: /pin live browser panel/i })
+    expect(button).toHaveAttribute('aria-pressed', 'false')
+    fireEvent.click(button)
+    expect(onTogglePin).toHaveBeenCalledTimes(1)
+  })
+
+  it('renders "Unpin live browser panel" and aria-pressed=true when isPinned', () => {
+    const onTogglePin = vi.fn()
+    render(<BrowserLiveView sessionId="s1" agentId="a1" isPinned onTogglePin={onTogglePin} />)
+    const button = screen.getByRole('button', { name: /unpin live browser panel/i })
+    expect(button).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('hides the Pop out button while isPinned, even when onPopOut is provided', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" isPinned onPopOut={vi.fn()} onTogglePin={vi.fn()} />)
+    expect(screen.queryByRole('button', { name: /pop out/i })).not.toBeInTheDocument()
+  })
+
+  it('shows the Pop out button when not pinned', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" isPinned={false} onPopOut={vi.fn()} onTogglePin={vi.fn()} />)
+    expect(screen.getByRole('button', { name: /pop out/i })).toBeInTheDocument()
   })
 })

@@ -1,24 +1,44 @@
-// BrowserLiveView — shared live-view core for the ADR-038 interactive
+// BrowserLiveView — shared live-view core for the ADR-038/039/040 interactive
 // browser panel. Rendered by two callers:
-//   1. BrowserLivePanel.tsx  — inside the app-root Sheet overlay
+//   1. BrowserLivePanel.tsx  — inside the app-root Sheet overlay (or docked
+//      beside chat when pinned — layout is entirely the panel owner's call)
 //   2. routes/_app/browser-live.tsx — the fullscreen pop-out window
 //
 // Owns the second WS connection (browserLiveWs.ts), the latest screencast
-// frame, the take/release control toggle, and pointer/keyboard capture while
-// controlling. Deliberately has NO knowledge of how it's being hosted (Sheet
-// vs. fullscreen route) — onPopOut/onClose are optional callbacks so each
-// host wires up its own chrome semantics (window.open vs. store close vs.
-// window.close).
+// frame, the ADR-040 "implicit control" state machine (D2), and
+// pointer/keyboard capture while driving. Deliberately has NO knowledge of
+// how it's being hosted (Sheet vs. docked vs. fullscreen route) — onPopOut/
+// onClose/onTogglePin are optional callbacks so each host wires up its own
+// chrome semantics (window.open vs. store close vs. window.close vs. ui
+// store pin toggle).
+//
+// ADR-040 "Take the wheel" redesign: control is no longer a persistent
+// Take/Release toggle. It is implicit and contextual, derived from two
+// existing signals — the live-view control lock (unchanged, still owned by
+// this component) and the chat store's per-session `isStreaming` for THIS
+// panel's pinned (sessionId, agentId) (agent's turn in flight):
+//   - agent working (isStreaming) → watch-only: pointer/keyboard/wheel do
+//     NOT drive the page; a "Take over" affordance pauses the agent (reuses
+//     the chat store's existing cancelStream — the same action the chat
+//     Stop button calls) and then acquires the lock.
+//   - agent idle + user doesn't hold the lock → the first pointer
+//     interaction on the frame implicitly acquires the lock, then dispatches
+//     that same input.
+//   - user holds the lock → drives normally (unchanged from ADR-038/039).
+// The old "Hand to agent" button is gone — handing back is just sending a
+// chat message (the shared tab means the agent resumes on the current page).
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ArrowSquareOut,
   ChatCircleDots,
   Cursor,
+  Eye,
   HandGrabbing,
-  HandPalm,
   Monitor,
-  PaperPlaneTilt,
+  PushPin,
+  PushPinSlash,
+  Robot,
   SpinnerGap,
   WarningCircle,
   X,
@@ -38,87 +58,78 @@ import {
   scaleCropToImagePixels,
   type FrameCropRect,
 } from '@/lib/browserLiveCoords'
-import { normalizeNavigateUrl } from '@/lib/browserLiveUrl'
+import { resolveOmniboxInput } from '@/lib/browserLiveUrl'
 import { submitAnnotation, AnnotationBusyError } from '@/lib/browserAnnotate'
 import { useUiStore } from '@/store/ui'
+import { useChatStore } from '@/store/chat'
+import { queryClient } from '@/lib/queryClient'
+import type { Agent } from '@/lib/api'
 import type { BrowserScreencastFrame, BrowserStatusFrame } from '@/lib/api/generated/asyncapi-types'
 
 export interface BrowserLiveViewProps {
   sessionId: string
   agentId: string
-  /** Rendered as a header "Pop out" button when provided. */
+  /** Rendered as a header "Pop out" button when provided (hidden while `isPinned`). */
   onPopOut?: () => void
   /** Rendered as a header "Close" button when provided. */
   onClose?: () => void
   /**
-   * ADR-039 D-A3 "Hand to agent" — release control and let the caller drop a
-   * hint into the chat composer. Only meaningful when this view is hosted in
-   * the SAME JS realm as the AssistantUI runtime that owns the composer
-   * (ChatScreen) — i.e. the docked Sheet panel (BrowserLivePanel.tsx), never
-   * the fullscreen pop-out (`routes/_app/browser-live.tsx`), which is a
-   * separate `window.open` document with its own module/store instances, so
-   * writing composerPrefill there is invisible to the original tab's chat.
-   * The "Hand to agent" button is rendered ONLY when this is provided —
-   * omitting it (as the pop-out route does) hides the button entirely rather
-   * than rendering a control that would silently no-op.
-   */
-  onHandToAgent?: () => void
-  /**
-   * ADR-039 D-B1/B2 "Annotate a region" — like `onHandToAgent`, this mode
-   * only works when hosted in the SAME JS realm as the AssistantUI runtime
-   * (annotate's Send calls `useChatStore.sendMessage` directly, see
-   * browserAnnotate.ts). Defaults to `false` (dead-end-proof by default) so
-   * a future third host doesn't silently inherit annotate support it can't
-   * deliver on — the docked panel (BrowserLivePanel.tsx) explicitly opts in.
+   * ADR-039 D-B1/B2 "Annotate a region" — only works when hosted in the SAME
+   * JS realm as the AssistantUI runtime (annotate's Send calls
+   * `useChatStore.sendMessage` directly, see browserAnnotate.ts). Defaults
+   * to `false` (dead-end-proof by default) so a future third host doesn't
+   * silently inherit annotate support it can't deliver on — the docked
+   * panel (BrowserLivePanel.tsx) explicitly opts in.
    *
    * UAT finding FE-4: the fullscreen pop-out (`routes/_app/browser-live.tsx`)
    * is a separate `window.open` document with no chat store at all —
    * starting an annotation there and hitting Send could NEVER succeed
    * (submitAnnotation's own re-check always sees a mismatched/absent active
    * chat) and only "Cancel" escaped, discarding the drafted comment. Hiding
-   * the "Annotate" button there entirely removes the dead-end, exactly like
-   * "Hand to agent" is already hidden rather than rendering a no-op control.
+   * the "Annotate" button there entirely removes the dead-end.
    */
   canAnnotate?: boolean
+  /**
+   * ADR-040 D4/D6 — display-only: whether the panel owner currently has this
+   * view docked beside chat (pinned) rather than in the overlay Sheet. This
+   * view stays otherwise agnostic to the layout; the sole effect here is
+   * hiding the "Pop out" button while pinned (popping a docked panel out
+   * into its own window is a layout no-op the caller would have to reconcile
+   * anyway, so it's simplest to just not offer it).
+   */
+  isPinned?: boolean
+  /**
+   * ADR-040 D1/D4 — renders a header "Pin" toggle when provided; omitted
+   * entirely (button hidden) by hosts that don't support docking, exactly
+   * like `onPopOut`/`onClose`. The pin/unpin layout swap itself is owned by
+   * the caller (BrowserLivePanel.tsx + the `ui` store) — this view only
+   * renders the affordance and reflects `isPinned`'s current value.
+   */
+  onTogglePin?: () => void
   className?: string
 }
 
-type PillConfig = { label: string; className: string }
+/** ADR-040 D2/D6 — the three (+ one) mutually-exclusive visual/control states. */
+type VisualState = 'agent-working' | 'you-driving' | 'annotating' | 'error' | 'idle'
+
+/** ADR-040 D6 — breathing glow border per visual state. `motion-safe:` is the
+ * sole reduced-motion mechanism (a pure CSS media-query variant, no JS
+ * `matchMedia` needed) — under `prefers-reduced-motion: reduce` the border
+ * color still renders, just without the pulse. Module-level: purely a
+ * function of `VisualState`, no need to recompute the object per render. */
+const GLOW_BORDER_CLASSES: Record<VisualState, string> = {
+  'agent-working': 'border-[var(--color-info)] shadow-[0_0_18px_2px_var(--color-info)] motion-safe:animate-pulse',
+  'you-driving': 'border-[var(--color-accent)] shadow-[0_0_18px_2px_var(--color-accent)] motion-safe:animate-pulse',
+  annotating: 'border-[var(--color-accent)] shadow-[0_0_14px_1px_var(--color-accent)]/70',
+  error: 'border-[var(--color-error)]/60',
+  idle: 'border-[var(--color-border)]',
+}
 
 // Local-only pill states layered on top of the wire `BrowserStatusFrame.state`
 // enum: 'connecting' (never attached yet) and 'disconnected' (was attached,
 // the WS transport dropped, a reconnect is in flight) both describe SPA
 // connection lifecycle, not anything the backend ever sends as a status.
 type LiveStatus = BrowserStatusFrame['state'] | 'connecting' | 'disconnected'
-
-// UAT finding FE-6: `controlled_by_other` (BrowserStatusFrame) is set true by
-// the backend on a viewer whenever a DIFFERENT connection of the same
-// session holds control — e.g. the docked panel and the pop-out window both
-// watching the same agent. It can never be true together with state ===
-// 'controlling' (that would mean THIS connection is simultaneously the
-// controller and controlled by someone else), but the guard below is
-// defensive rather than relying on the backend never sending that
-// combination.
-function pillConfig(state: LiveStatus, controlledByOther: boolean): PillConfig {
-  if (controlledByOther && state !== 'controlling') {
-    return { label: 'Someone else is driving', className: 'bg-[var(--color-surface-3)] text-[var(--color-muted)]' }
-  }
-  switch (state) {
-    case 'controlling':
-      return { label: "You're driving", className: 'bg-[var(--color-accent)]/15 text-[var(--color-accent)]' }
-    case 'error':
-      return { label: 'Error', className: 'bg-[var(--color-error)]/15 text-[var(--color-error)]' }
-    case 'detached':
-      return { label: 'Detached', className: 'bg-[var(--color-surface-3)] text-[var(--color-muted)]' }
-    case 'connecting':
-      return { label: 'Connecting…', className: 'bg-[var(--color-surface-3)] text-[var(--color-muted)]' }
-    case 'disconnected':
-      return { label: 'Reconnecting…', className: 'bg-[var(--color-surface-3)] text-[var(--color-muted)]' }
-    default:
-      // 'attached' | 'idle' | 'released' — no human holds the control-lock.
-      return { label: 'Agent driving', className: 'bg-[var(--color-surface-3)] text-[var(--color-secondary)]' }
-  }
-}
 
 // UAT finding FE-7: the backend surfaces raw Go error strings verbatim on a
 // terminal browser_status{state:'error'} frame — e.g.
@@ -169,12 +180,53 @@ interface PendingAnnotation { // not-wire-format: local annotate-popover state, 
   point: { x: number; y: number }
 }
 
-export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, onHandToAgent, canAnnotate = false, className }: BrowserLiveViewProps) {
+export function BrowserLiveView({
+  sessionId,
+  agentId,
+  onPopOut,
+  onClose,
+  canAnnotate = false,
+  isPinned = false,
+  onTogglePin,
+  className,
+}: BrowserLiveViewProps) {
   const wsRef = useRef<BrowserLiveWsConnection | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const imgRef = useRef<HTMLImageElement | null>(null)
   const frameRef = useRef<BrowserScreencastFrame | null>(null)
   const controllingRef = useRef(false)
+  // ── ADR-040 D2 implicit control model ───────────────────────────────────
+  // agentWorkingRef mirrors the `agentWorking` (chat-store isStreaming for
+  // this session) state into a ref so the pointer/keyboard/wheel handlers
+  // below (all stable useCallbacks) always read the LATEST value without
+  // needing it in their dependency arrays — same rationale as
+  // frameRef/controllingRef.
+  const agentWorkingRef = useRef(false)
+  // True from the instant an implicit (click-to-drive) or explicit (Take
+  // over) `sendControl('take')` is sent until the server's 'controlling'
+  // browser_status round-trips back (or the take is superseded/abandoned).
+  // Prevents a double-fire: a second pointerdown (or a fast double-click on
+  // Take over) while a take is already in flight must NOT send a second
+  // redundant `browser_control{action:'take'}` frame.
+  const pendingTakeRef = useRef(false)
+  // True for the span of a single pointer gesture that implicitly acquired
+  // the lock (click-to-drive) — lets pointermove/pointerup for THAT SAME
+  // gesture keep dispatching input even though the server's 'controlling'
+  // ack (which flips controllingRef) may not have landed yet. Cleared on
+  // pointerup (end of the gesture) and whenever the agent starts working.
+  const implicitDriveRef = useRef(false)
+  // UAT finding FE-6, carried into the ADR-040 model: mirrors
+  // `controlledByOther` state so the click-to-drive / Take-over paths can
+  // avoid racing a control lock a DIFFERENT connection of this same session
+  // already holds (previously enforced by disabling the explicit Take
+  // control button; there is no such button anymore, so the guard moves
+  // into takeWheelIfNeeded itself).
+  const controlledByOtherRef = useRef(false)
+  // Mirrors `connected` — click-to-drive must never attempt to acquire the
+  // lock (or dispatch input) against a dead/reconnecting transport, matching
+  // the pre-ADR-040 regression coverage ("pointer/keyboard handlers must
+  // no-op while disconnected, not silently attempt and drop a send").
+  const connectedRef = useRef(false)
   // ── Annotate-a-region state (ADR-039 D-B1/B2) — a third interaction mode,
   // mutually exclusive with driving (isControlling). annotateDraggingRef +
   // selectionStartClientRef are refs (not state) so the pointerup handler
@@ -215,7 +267,7 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, onHandT
   // agent) — distinct from `isControlling`, which is about THIS connection.
   const [controlledByOther, setControlledByOther] = useState(false)
 
-  // ── URL bar (ADR-039 D-A2) ──────────────────────────────────────────────
+  // ── Omnibox (ADR-039 D-A2, ADR-040 D5 — always visible) ──────────────────
   const [urlInput, setUrlInput] = useState('')
 
   // ── Annotate mode (ADR-039 D-B1/B2) — container-relative CSS coords for
@@ -240,6 +292,40 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, onHandT
   // "!frame" branch and the persistent error strip below.
   const displayError = connError ?? (statusIsError ? statusMessage ?? 'The live browser session reported an error.' : null)
 
+  // ── ADR-040 D2 — "agent working" signal ───────────────────────────────────
+  // Read directly from the per-session bucket (`sessionsById[sessionId]`),
+  // NOT the store's top-level `isStreaming` foreground selector — the latter
+  // is derived from whichever session is currently ACTIVE in chat, which is
+  // not necessarily the (sessionId, agentId) pair this panel is pinned to
+  // (the panel's props are captured once at mount and never re-read from the
+  // session store — see the `key={sessionId:agentId}` comment on both hosts).
+  const agentWorking = useChatStore((s) => s.sessionsById[sessionId]?.isStreaming ?? false)
+
+  // ── ADR-040 D6 — agent display name for the header chip ──────────────────
+  // Best-effort, read-only cache lookup against the SAME `['agents']` query
+  // key the Activity Bar / Agents screen already populate (useRunningActivity.ts)
+  // — deliberately NOT a fresh `useQuery` subscription here: this component is
+  // mounted standalone by two very different hosts (the docked Sheet and the
+  // fullscreen pop-out, which has no app-wide providers set up beyond its own
+  // route tree), and a plain `queryClient.getQueryData` read needs no
+  // `QueryClientProvider` in the tree, never issues its own network request,
+  // and simply falls back to 'Agent' if the cache hasn't been populated yet.
+  const agentDisplayName = queryClient.getQueryData<Agent[]>(['agents'])?.find((a) => a.id === agentId)?.name ?? 'Agent'
+
+  // ── ADR-040 D2/D6 — the single derived "who's driving" state, used by both
+  // the header chip and the D6 glow border. Annotate takes visual priority
+  // over agent-working (a user actively mid-annotation is a more specific,
+  // intentional state than "the agent happens to be streaming right now").
+  const visualState: VisualState = annotateMode
+    ? 'annotating'
+    : agentWorking
+      ? 'agent-working'
+      : isControlling
+        ? 'you-driving'
+        : displayError
+          ? 'error'
+          : 'idle'
+
   useEffect(() => {
     frameRef.current = frame
   }, [frame])
@@ -248,7 +334,36 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, onHandT
     // Losing control (agent takes it back / released) clears the stale
     // cursor overlay rather than leaving it frozen at the last position.
     if (!isControlling) setCursorPos(null)
+    // ADR-040 D2: once the server confirms this connection holds the lock,
+    // any implicit/explicit take that was in flight has resolved — clear the
+    // in-flight guard so a FUTURE idle→drive transition can fire again.
+    if (isControlling) pendingTakeRef.current = false
   }, [isControlling])
+  useEffect(() => {
+    agentWorkingRef.current = agentWorking
+    // A gesture-scoped implicit-drive window (see implicitDriveRef's doc
+    // comment) is meaningless once the agent starts working — watch-only
+    // must win immediately, not just at the next pointerup.
+    if (agentWorking) implicitDriveRef.current = false
+  }, [agentWorking])
+  useEffect(() => {
+    controlledByOtherRef.current = controlledByOther
+  }, [controlledByOther])
+  useEffect(() => {
+    connectedRef.current = connected
+  }, [connected])
+  // ADR-040 D2 "must-handle": if the agent starts a turn while the user is
+  // mid-drive, watch-only wins — release the lock rather than letting the
+  // user's live input and the agent's tool input reach the tab
+  // simultaneously. (If the release races the agent's own first input frame,
+  // the backend's existing serialization on the browser session — not this
+  // component — is the actual correctness boundary; this is the client-side
+  // half of "never let both drive at once".)
+  useEffect(() => {
+    if (agentWorking && isControlling) {
+      wsRef.current?.sendControl('release')
+    }
+  }, [agentWorking, isControlling])
 
   // Keep pendingAnnotationRef in sync so the unmount-cleanup effect below
   // (which must run with empty deps, i.e. read only refs) always revokes the
@@ -301,6 +416,14 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, onHandT
       // updater (correct even for two onStatus calls delivered in the same
       // tick, since it reads the latest pending value, not a stale closure).
       onStatus: (f) => {
+        // ADR-040 D2: ANY status frame arriving means a full round-trip has
+        // completed on this connection, so a take that was in flight (either
+        // this one's or a stale one) has definitely been resolved one way or
+        // another by now — clear the in-flight guard unconditionally rather
+        // than only on the 'controlling' branch, so a REJECTED take (e.g. an
+        // error frame, or another viewer beat us to it) doesn't leave
+        // click-to-drive/Take-over permanently wedged.
+        pendingTakeRef.current = false
         // Reviewer finding F1: a `control_only` frame's SOLE purpose is to
         // broadcast a control-ownership change (take/release/detach) to the
         // OTHER viewers of this session — it carries no lifecycle/error
@@ -353,6 +476,11 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, onHandT
         // the fresh browser_attach → browser_status round-trip refreshes it.
         setControlledByOther(false)
         pendingMoveRef.current = null
+        // ADR-040 D2: a disconnect mid-take (or mid implicit-drive gesture)
+        // must not leave either guard stuck — the fresh browser_attach →
+        // browser_status round-trip after reconnect starts clean.
+        pendingTakeRef.current = false
+        implicitDriveRef.current = false
       },
     })
     wsRef.current = conn
@@ -373,6 +501,8 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, onHandT
     const el = containerRef.current
     if (!el) return undefined
     function onWheel(e: WheelEvent) {
+      // ADR-040 D2: watch-only never dispatches page input, wheel included.
+      if (agentWorkingRef.current) return
       if (!controllingRef.current || !frameRef.current) return
       e.preventDefault()
       const rect = el!.getBoundingClientRect()
@@ -435,10 +565,33 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, onHandT
     }
   }, [])
 
-  const handleToggleControl = useCallback(() => {
-    if (!wsRef.current) return
-    wsRef.current.sendControl(isControlling ? 'release' : 'take')
-  }, [isControlling])
+  // ── ADR-040 D2 — the single "acquire the wheel" entry point ──────────────
+  // Shared by click-to-drive (implicit, on the first pointerdown while idle),
+  // the omnibox submit handler (D5 — submitting while not driving takes the
+  // wheel first), and the explicit "Take over" button (D2 — shown only while
+  // watch-only). All refs, empty dep array: a stable identity forever, safe
+  // to reference from any other stable useCallback below.
+  const takeWheelIfNeeded = useCallback(() => {
+    // Defense in depth: the two OTHER callers (omnibox submit, "Take over")
+    // already gate their button on `disabled={!connected}`, but a dead
+    // transport must never attempt a take regardless of caller — mirrors the
+    // pre-ADR-040 "no silent send attempts while disconnected" coverage.
+    if (!connectedRef.current) return
+    if (controllingRef.current) return // already driving — nothing to acquire
+    if (pendingTakeRef.current) return // a take is already in flight — never double-fire
+    // UAT finding FE-6, preserved: don't race a DIFFERENT connection of this
+    // same session that already holds the lock (the pop-out and the docked
+    // panel can both be open on the same agent at once).
+    if (controlledByOtherRef.current) return
+    if (agentWorkingRef.current) {
+      // ADR-040 D2 "Take over": pause the agent FIRST, via the exact same
+      // chat-store action the chat Stop button calls — reusing it here
+      // rather than inventing a new backend path is the point of this ADR.
+      useChatStore.getState().cancelStream()
+    }
+    pendingTakeRef.current = true
+    wsRef.current?.sendControl('take')
+  }, [])
 
   // ── Annotate mode (ADR-039 D-B1/B2) ─────────────────────────────────────
 
@@ -469,6 +622,11 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, onHandT
     if (isControlling) {
       wsRef.current?.sendControl('release')
     }
+    // ADR-040 D2: also abandon any implicit-drive gesture/in-flight take —
+    // entering Pen mid-gesture must not let a delayed take ack silently
+    // start driving again out from under the now-active annotate mode.
+    implicitDriveRef.current = false
+    pendingTakeRef.current = false
     setAnnotateMode(true)
   }, [annotateMode, isControlling, handleCancelAnnotation])
 
@@ -558,13 +716,22 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, onHandT
     [cropFrameToFile, resetSelection],
   )
 
-  // ── URL bar (ADR-039 D-A2) ───────────────────────────────────────────────
-
-  const handleNavigateSubmit = useCallback(
+  // ── Omnibox (ADR-039 D-A2, ADR-040 D5 — always visible) ───────────────────
+  // Submitting is itself a driving action: if the viewer doesn't currently
+  // hold the lock, `takeWheelIfNeeded` acquires it first (pausing the agent
+  // first, via cancelStream, if it was mid-turn) — exactly the "Take over
+  // first, then navigate" behaviour D5 specifies — then the navigate input
+  // is dispatched on the same connection right after.
+  const handleOmniboxSubmit = useCallback(
     (e: React.FormEvent) => {
       e.preventDefault()
-      const normalized = normalizeNavigateUrl(urlInput)
-      if (!normalized) return
+      const resolved = resolveOmniboxInput(urlInput)
+      if (!resolved) return
+      // Mirrors takeWheelIfNeeded's own guards: don't even attempt the
+      // navigate dispatch if we're not driving AND can't legitimately start
+      // (dead transport, or a DIFFERENT connection already holds the lock —
+      // FE-6) — sending it anyway would just be a wasted/ignored frame.
+      if (!controllingRef.current && (!connectedRef.current || controlledByOtherRef.current)) return
       // UAT finding: a prior blocked-navigate error banner persisted through a
       // subsequent SUCCESSFUL navigate (a successful navigate emits only
       // screencast frames, never a browser_status, so nothing cleared it).
@@ -572,27 +739,12 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, onHandT
       // rejected, a fresh browser_status(error) re-raises the banner.
       setStatusMessage(null)
       setStatusIsError(false)
-      wsRef.current?.sendInput({ kind: 'navigate', url: normalized })
-      setUrlInput(normalized)
+      takeWheelIfNeeded()
+      wsRef.current?.sendInput({ kind: 'navigate', url: resolved })
+      setUrlInput(resolved)
     },
-    [urlInput],
+    [urlInput, takeWheelIfNeeded],
   )
-
-  // ── Hand to agent (ADR-039 D-A3) ─────────────────────────────────────────
-  // The composer-prefill bridge (useUiStore.composerPrefill → ChatScreen)
-  // only works when this view shares a JS realm with ChatScreen, which the
-  // fullscreen pop-out (routes/_app/browser-live.tsx) does NOT — it's a
-  // separate `window.open` document with its own store instances. Rather
-  // than reaching into useUiStore directly (which would silently no-op from
-  // the pop-out while still showing a success toast), that responsibility is
-  // delegated entirely to the caller-supplied `onHandToAgent`; this view
-  // only owns the one thing every host CAN do — release the WS control-lock
-  // — and the button itself is hidden whenever `onHandToAgent` is absent.
-
-  const handleHandToAgent = useCallback(() => {
-    wsRef.current?.sendControl('release')
-    onHandToAgent?.()
-  }, [onHandToAgent])
 
   const handlePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (annotateMode) {
@@ -601,7 +753,13 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, onHandT
       setSelectionCurrent({ x: e.clientX - rect.left, y: e.clientY - rect.top })
       return
     }
-    if (!controllingRef.current || !frameRef.current || !containerRef.current) return
+    // ADR-040 D2: watch-only — never dispatch page input while the agent is
+    // working, regardless of any stale/in-flight control-lock state.
+    if (agentWorkingRef.current) return
+    // Dispatch while EITHER actually driving OR mid-way through the same
+    // gesture that just implicitly acquired the lock (the server's ack may
+    // not have landed yet — see implicitDriveRef's doc comment).
+    if ((!controllingRef.current && !implicitDriveRef.current) || !frameRef.current || !containerRef.current) return
     const rect = containerRef.current.getBoundingClientRect()
     // Local cursor overlay updates immediately every event — only the
     // network send is throttled, so the synthetic cursor still tracks the
@@ -653,7 +811,27 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, onHandT
       setSelectionCurrent(point)
       return
     }
-    if (!controllingRef.current || !frameRef.current || !containerRef.current) return
+    // ADR-040 D2: watch-only — a click on the frame while the agent is
+    // working must never dispatch input NOR implicitly take the wheel; the
+    // explicit "Take over" button is the only path in that state.
+    if (agentWorkingRef.current) return
+    if (!controllingRef.current) {
+      // A dead/reconnecting transport, or a DIFFERENT connection of this
+      // same session already holding the lock (FE-6), must never attempt a
+      // take NOR dispatch input — matches the pre-ADR-040 "no silent send
+      // attempts" coverage (takeWheelIfNeeded also re-guards both cases, but
+      // bail out here too so the dispatch below never even runs).
+      if (!connectedRef.current || controlledByOtherRef.current) return
+      // Idle + not driving: the first pointer interaction implicitly takes
+      // the wheel (ADR-040 D2) — acquire the lock, then dispatch this SAME
+      // input immediately. Same-connection WS message ordering guarantees
+      // the server processes the `browser_control{take}` frame before this
+      // `browser_input{mouse_down}` frame, so there's no need to wait for
+      // the round-trip ack before dispatching.
+      takeWheelIfNeeded()
+      implicitDriveRef.current = true
+    }
+    if (!frameRef.current || !containerRef.current) return
     focusAndCapturePointer(e)
     const rect = containerRef.current.getBoundingClientRect()
     const device = mapClientToDevice(
@@ -672,7 +850,7 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, onHandT
       button: mapMouseButton(e.button),
       modifiers: computeModifiers(e),
     })
-  }, [annotateMode, focusAndCapturePointer])
+  }, [annotateMode, focusAndCapturePointer, takeWheelIfNeeded])
 
   const handlePointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (annotateMode) {
@@ -689,7 +867,12 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, onHandT
       }
       return
     }
-    if (!controllingRef.current || !frameRef.current || !containerRef.current) return
+    // The implicit-drive gesture window (if any) ends with this pointerup
+    // regardless of what happens below.
+    const wasImplicitDrive = implicitDriveRef.current
+    implicitDriveRef.current = false
+    if (agentWorkingRef.current) return
+    if ((!controllingRef.current && !wasImplicitDrive) || !frameRef.current || !containerRef.current) return
     const rect = containerRef.current.getBoundingClientRect()
     const device = mapClientToDevice(
       e.clientX,
@@ -743,6 +926,11 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, onHandT
   }, [pendingAnnotation, annotateComment, resetSelection, sessionId, agentId])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+    // ADR-040 D2: watch-only never dispatches page input, keyboard included —
+    // defensive against the brief async gap between the agent starting to
+    // work and the auto-release effect's `sendControl('release')` ack
+    // landing (during which controllingRef could still read stale-true).
+    if (agentWorkingRef.current) return
     if (!controllingRef.current) return
     // Escape is deliberately NOT forwarded and NOT preventDefault()'d: Radix's
     // Dialog/Sheet listens for it via a capture-phase document listener
@@ -766,6 +954,7 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, onHandT
   }, [])
 
   const handleKeyUp = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (agentWorkingRef.current) return
     if (!controllingRef.current) return
     if (e.key === 'Escape') return
     e.preventDefault()
@@ -776,25 +965,40 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, onHandT
     }
   }, [])
 
-  // UAT finding FE-5: entering annotate mode releases control (see
-  // handleToggleAnnotate), which used to flip the pill to the control-derived
-  // "Agent driving" label even though the user is actively mid-annotation —
-  // this branch takes priority over the control-derived pillConfig() result
-  // whenever annotateMode is on.
-  const pill = annotateMode
-    ? { label: "You're annotating", className: 'bg-[var(--color-accent)]/15 text-[var(--color-accent)]' }
-    : pillConfig(connError ? 'error' : statusState, controlledByOther)
-
-  // Reviewer finding F5: shared by both aria-label and title on the
-  // take/release-control button below (previously duplicated verbatim in
-  // both attributes) — the visible button TEXT intentionally keeps its own,
-  // narrower 2-branch ternary (isControlling ? 'Release control' : 'Take
-  // control'), unchanged.
-  const controlButtonLabel = isControlling
-    ? 'Release control'
-    : controlledByOther
-      ? 'Someone else is currently driving'
-      : 'Take control'
+  // ── ADR-040 D6 — header chip config (icon + text label + colour), derived
+  // from `visualState`. Words + icon back up the colour for accessibility
+  // (never colour alone). The 'idle' bucket further distinguishes connection
+  // lifecycle (connecting/reconnecting) from a genuinely idle, ready-to-drive
+  // frame — the old corner pill's connecting/disconnected states still need
+  // SOME visible home now that the pill itself is gone.
+  const driveChip = (() => {
+    if (visualState === 'agent-working') {
+      return { label: `${agentDisplayName} is browsing…`, Icon: Robot, textClass: 'text-[var(--color-info)]', dotClass: 'bg-[var(--color-info)]', pulse: true }
+    }
+    if (visualState === 'you-driving') {
+      return { label: "You're driving", Icon: Cursor, textClass: 'text-[var(--color-accent)]', dotClass: 'bg-[var(--color-accent)]', pulse: true }
+    }
+    if (visualState === 'annotating') {
+      return { label: "You're annotating", Icon: ChatCircleDots, textClass: 'text-[var(--color-accent)]', dotClass: 'bg-[var(--color-accent)]', pulse: false }
+    }
+    if (visualState === 'error') {
+      return { label: 'Error', Icon: WarningCircle, textClass: 'text-[var(--color-error)]', dotClass: 'bg-[var(--color-error)]', pulse: false }
+    }
+    // 'idle'
+    if (!connected) {
+      return {
+        label: statusState === 'disconnected' ? 'Reconnecting…' : 'Connecting…',
+        Icon: SpinnerGap,
+        textClass: 'text-[var(--color-muted)]',
+        dotClass: 'bg-[var(--color-muted)]',
+        pulse: false,
+      }
+    }
+    if (controlledByOther) {
+      return { label: 'Someone else is driving', Icon: Eye, textClass: 'text-[var(--color-muted)]', dotClass: 'bg-[var(--color-muted)]', pulse: false }
+    }
+    return { label: 'Click to drive', Icon: Eye, textClass: 'text-[var(--color-muted)]', dotClass: 'bg-[var(--color-muted)]', pulse: false }
+  })()
 
   return (
     <div className={cn('flex h-full min-h-0 flex-col bg-[var(--color-primary)]', className)}>
@@ -809,18 +1013,29 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, onHandT
       >
         <Monitor size={16} weight="duotone" className="shrink-0 text-[var(--color-accent)]" />
         <h2 className="shrink-0 font-headline text-sm font-semibold text-[var(--color-secondary)]">Live Browser</h2>
+        {/* ADR-040 D6 — header chip replaces the old take/release-control-derived
+            corner status pill: words + icon + a pulsing "live" dot back up the
+            colour (never colour alone) for who's currently driving. */}
         <span
-          data-testid="browser-live-status-pill"
-          className={cn('shrink-0 rounded px-2 py-0.5 text-[10px] font-medium whitespace-nowrap', pill.className)}
+          data-testid="browser-live-status-chip"
+          className={cn('flex shrink-0 items-center gap-1.5 rounded px-2 py-0.5 text-[11px] font-medium whitespace-nowrap', driveChip.textClass)}
         >
-          {pill.label}
+          <span
+            aria-hidden="true"
+            className={cn('h-1.5 w-1.5 shrink-0 rounded-full', driveChip.dotClass, driveChip.pulse && 'motion-safe:animate-pulse')}
+          />
+          <driveChip.Icon size={12} weight={driveChip.pulse ? 'fill' : 'regular'} />
+          {driveChip.label}
         </span>
         <div className="flex-1 min-w-2" />
-        {/* Annotate toggle (ADR-039 D-B1/B2) — a third interaction mode,
-            mutually exclusive with driving: entering it releases control
-            (handleToggleAnnotate), and Take control is disabled while it's
-            active (below), so the two states can never overlap. Hidden
-            entirely when !canAnnotate (FE-4) — see the prop's doc comment. */}
+        {/* ADR-040 D1 — minimal header: Pen (annotate) · Pin · Pop out · Close.
+            The old Take/Release-control toggle and Hand-to-agent button are
+            gone entirely — see the file header comment for the replacement
+            implicit-control model. */}
+        {/* Annotate toggle (ADR-039 D-B1/B2, ADR-040 D3) — a third interaction
+            mode, mutually exclusive with driving: entering it releases control
+            (handleToggleAnnotate). Hidden entirely when !canAnnotate (FE-4) —
+            see the prop's doc comment. */}
         {canAnnotate && (
           <button
             type="button"
@@ -840,40 +1055,31 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, onHandT
             {annotateMode ? 'Exit annotate' : 'Annotate'}
           </button>
         )}
-        <button
-          type="button"
-          onClick={handleToggleControl}
-          // FE-6: also disabled when another connection of this same session
-          // already holds control — taking it here would just race the
-          // other viewer for a lock this connection can't win any faster by
-          // clicking.
-          disabled={!connected || annotateMode || controlledByOther}
-          aria-label={controlButtonLabel}
-          title={controlButtonLabel}
-          className={cn(
-            'flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded px-2.5 py-1.5 text-xs font-medium transition-colors',
-            'disabled:cursor-not-allowed disabled:opacity-40',
-            isControlling
-              ? 'bg-[var(--color-accent)] text-[var(--color-primary)] hover:opacity-90'
-              : 'border border-[var(--color-border)] text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]',
-          )}
-        >
-          {isControlling ? <HandPalm size={13} /> : <HandGrabbing size={13} />}
-          {isControlling ? 'Release control' : 'Take control'}
-        </button>
-        {isControlling && onHandToAgent && (
+        {/* Pin (ADR-040 D1/D4) — hidden entirely when the host doesn't supply
+            onTogglePin (e.g. the fullscreen pop-out), exactly like Pop
+            out/Close below. Layout itself is entirely the panel owner's job;
+            this view only renders the toggle and reflects `isPinned`. */}
+        {onTogglePin && (
           <button
             type="button"
-            onClick={handleHandToAgent}
-            aria-label="Hand to agent"
-            title="Release control and let the agent continue from here"
-            className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded px-2.5 py-1.5 text-xs font-medium border border-[var(--color-border)] text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)]"
+            onClick={onTogglePin}
+            aria-label={isPinned ? 'Unpin live browser panel' : 'Pin live browser panel'}
+            aria-pressed={isPinned}
+            title={isPinned ? 'Unpin — return to overlay' : 'Pin — dock beside chat'}
+            className={cn(
+              'shrink-0 rounded p-1.5 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-accent)]',
+              isPinned
+                ? 'bg-[var(--color-accent)]/15 text-[var(--color-accent)] hover:bg-[var(--color-accent)]/25'
+                : 'text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]',
+            )}
           >
-            <PaperPlaneTilt size={13} />
-            Hand to agent
+            {isPinned ? <PushPinSlash size={15} weight="fill" /> : <PushPin size={15} />}
           </button>
         )}
-        {onPopOut && (
+        {/* Pop out — de-emphasised utility affordance (ADR-040 D1), hidden
+            while pinned (a docked panel popping into its own window is a
+            layout no-op the caller would have to reconcile anyway). */}
+        {onPopOut && !isPinned && (
           <button
             type="button"
             onClick={onPopOut}
@@ -897,42 +1103,51 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, onHandT
         )}
       </div>
 
-      {/* URL bar (ADR-039 D-A2) — shown + enabled only while the viewer holds
-          control; the server's ValidateURL SSRF gate (run on every `navigate`
-          input frame) is the real authority, and any rejection surfaces via
-          the existing browser_status(error) strip below.
-          `!annotateMode` matters beyond the isControlling check alone:
-          entering annotate mode releases control asynchronously (the
-          server's browser_status('released') round-trip hasn't landed yet),
-          so isControlling can still read stale-true for a brief window —
-          without this, a real `navigate` could be submitted through the
-          still-visible address bar while nominally in local-only annotate
-          mode. */}
-      {isControlling && !annotateMode && (
-        <form
-          onSubmit={handleNavigateSubmit}
-          className="flex shrink-0 items-center gap-2 border-b border-[var(--color-border)] px-4 py-2"
+      {/* Omnibox (ADR-039 D-A2, ADR-040 D5) — ALWAYS visible now, not gated on
+          driving/annotate state. The server's ValidateURL SSRF gate (run on
+          every `navigate` input frame) is the real authority on what may
+          actually be navigated to; any rejection surfaces via the existing
+          browser_status(error) strip below. Submitting while not currently
+          driving takes the wheel first (see handleOmniboxSubmit). */}
+      <form
+        onSubmit={handleOmniboxSubmit}
+        className="flex shrink-0 items-center gap-2 border-b border-[var(--color-border)] px-4 py-2"
+      >
+        <Input
+          type="text"
+          value={urlInput}
+          onChange={(e) => setUrlInput(e.target.value)}
+          placeholder="Search or enter a URL…"
+          aria-label="Address bar"
+          className="h-8 flex-1 text-xs"
+        />
+        <button
+          type="submit"
+          disabled={urlInput.trim().length === 0 || !connected || (controlledByOther && !isControlling)}
+          className="shrink-0 rounded-md bg-[var(--color-accent)] px-3 h-8 text-xs font-medium text-[var(--color-primary)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
         >
-          <Input
-            type="text"
-            value={urlInput}
-            onChange={(e) => setUrlInput(e.target.value)}
-            placeholder="Enter a URL and press Go…"
-            aria-label="Navigate to URL"
-            className="h-8 flex-1 text-xs"
-          />
-          <button
-            type="submit"
-            disabled={urlInput.trim().length === 0}
-            className="shrink-0 rounded-md bg-[var(--color-accent)] px-3 h-8 text-xs font-medium text-[var(--color-primary)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            Go
-          </button>
-        </form>
-      )}
+          Go
+        </button>
+      </form>
 
       {/* Body */}
       <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-black p-2">
+        {/* ADR-040 D6 — breathing glow border: a property of the WHOLE
+            surface so the driving mode can't be missed (change-blindness
+            fix). A separate absolutely-positioned overlay (rather than
+            applying the border/animation to the body div itself) so the
+            pulse never touches the actual frame `<img>`'s own opacity.
+            `motion-safe:animate-pulse` (baked into GLOW_BORDER_CLASSES) is
+            the sole reduced-motion mechanism — a pure CSS media-query
+            variant, so under `prefers-reduced-motion: reduce` the border
+            colour still renders, just without the pulse; no JS
+            `matchMedia` needed. */}
+        <div
+          aria-hidden="true"
+          data-testid="browser-live-glow"
+          data-visual-state={visualState}
+          className={cn('pointer-events-none absolute inset-0 z-30 border-2 transition-colors duration-500', GLOW_BORDER_CLASSES[visualState])}
+        />
         {!frame && (
           <div className="flex flex-col items-center gap-2 p-6 text-center text-sm text-[var(--color-muted)]">
             {displayError ? (
@@ -957,7 +1172,20 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, onHandT
             aria-label="Live browser view"
             data-testid="browser-live-frame"
             className="relative inline-block max-h-full max-w-full select-none outline-none"
-            style={{ cursor: annotateMode ? 'crosshair' : isControlling ? 'none' : 'default' }}
+            // ADR-040 D6 — hover cursor communicates the mode at the point of
+            // interaction: hidden (synthetic cursor takes over) while
+            // actually driving, "watching"/not-allowed while the agent works
+            // (pointer handlers no-op there — see handlePointerDown/Move/Up),
+            // a plain pointer while idle (click-to-drive is one click away).
+            style={{
+              cursor: annotateMode
+                ? 'crosshair'
+                : isControlling
+                  ? 'none'
+                  : agentWorking
+                    ? 'not-allowed'
+                    : 'pointer',
+            }}
             onPointerMove={handlePointerMove}
             onPointerDown={handlePointerDown}
             onPointerUp={handlePointerUp}
@@ -997,6 +1225,31 @@ export function BrowserLiveView({ sessionId, agentId, onPopOut, onClose, onHandT
                 }}
               />
             )}
+          </div>
+        )}
+
+        {/* ADR-040 D2/D6 — "Take over" — the ONLY affordance shown while
+            watch-only (agent working, user doesn't hold the lock). Adjacent
+            to the frame (not a header button — D1's header stays limited to
+            Close/Pin/Pen/Pop-out). Rendered whenever agent-working, even
+            before a frame has arrived, so the user can pause the agent
+            immediately rather than waiting on the first screencast frame. */}
+        {visualState === 'agent-working' && (
+          <div className="pointer-events-none absolute inset-x-0 top-3 z-20 flex justify-center">
+            <button
+              type="button"
+              onClick={takeWheelIfNeeded}
+              // FE-6, preserved: disabled while a DIFFERENT connection of
+              // this same session already holds the lock — clicking would
+              // just silently no-op (takeWheelIfNeeded's own guard).
+              disabled={!connected || controlledByOther}
+              aria-label={controlledByOther ? 'Someone else is currently driving' : `Take over — pause ${agentDisplayName} and take control`}
+              title={controlledByOther ? 'Someone else is currently driving' : `Take over — pause ${agentDisplayName} and take control`}
+              className="pointer-events-auto flex items-center gap-1.5 rounded-full border border-[var(--color-info)]/50 bg-[var(--color-surface-1)]/90 px-3 py-1.5 text-xs font-medium text-[var(--color-secondary)] shadow-lg backdrop-blur transition-colors hover:bg-[var(--color-surface-2)] disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <HandGrabbing size={13} />
+              Take over
+            </button>
           </div>
         )}
 

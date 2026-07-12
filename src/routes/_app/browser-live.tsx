@@ -68,8 +68,15 @@ function BrowserLiveRoute() {
       }}
       // canAnnotate deliberately omitted (defaults to false) — this route is
       // a separate `window.open` document with no chat store, so annotate's
-      // Send could never reach the chat here (UAT finding FE-4). Same
-      // reasoning as the already-omitted onHandToAgent prop above.
+      // Send could never reach the chat here (UAT finding FE-4).
+      //
+      // isPinned / onTogglePin (ADR-040 D4) are likewise deliberately
+      // omitted — there is no Pin concept in the fullscreen pop-out (it's
+      // already its own separate window; "dock beside the chat" doesn't
+      // apply here), so the view's header renders no 📌 button at all in
+      // this route. Same dead-end-proof-by-omission reasoning as canAnnotate
+      // above — omitting the prop hides the control rather than wiring it to
+      // a no-op.
       className="absolute inset-0"
     />
   )

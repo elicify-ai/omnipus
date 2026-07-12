@@ -119,6 +119,26 @@ interface UiStore {
   openBrowserPanel: (sessionId: string, agentId: string) => void
   closeBrowserPanel: () => void
 
+  // Live browser panel PIN state (ADR-040 D4) — false (default): the
+  // BrowserLivePanel above renders as today's right-side overlay `Sheet`.
+  // true: it renders as a docked flex column beside the chat instead (see
+  // BrowserLivePanel.tsx + AppShell.tsx). Lives in this store — not local
+  // component state — because AppShell also reads it indirectly (the docked
+  // panel becomes a normal flex sibling there) and because BrowserLiveView's
+  // header 📌 toggle (a different component) is what flips it.
+  //
+  // Deliberately NOT localStorage-persisted, unlike useSidebarStore's
+  // `isPinned` (a SEPARATE store that wraps itself in zustand's `persist`
+  // middleware for exactly that one field): no other field in THIS store
+  // persists across a reload either (sessionPanelOpen, notificationPanelOpen,
+  // mediaLightbox, browserPanel itself, …) — adding persistence here would
+  // make this the one and only persisted field of an otherwise entirely
+  // session-scoped store, for a narrow toggle nobody asked to survive a
+  // reload. Revisit (wrap this store in `persist` + `partialize`, mirroring
+  // sidebar.ts) if product wants the pin choice to survive a reload.
+  browserPanelPinned: boolean
+  toggleBrowserPanelPinned: () => void
+
   // Composer prefill bridge (ADR-039 D-A3) — "Hand to agent" in the live
   // browser panel sets this to drop a hint into the chat composer. The panel
   // is mounted OUTSIDE the AssistantRuntimeProvider (BrowserLivePanel is a
@@ -212,6 +232,9 @@ export const useUiStore = create<UiStore>((set, get) => ({
   browserPanel: null,
   openBrowserPanel: (sessionId, agentId) => set({ browserPanel: { sessionId, agentId } }),
   closeBrowserPanel: () => set({ browserPanel: null }),
+
+  browserPanelPinned: false,
+  toggleBrowserPanelPinned: () => set((state) => ({ browserPanelPinned: !state.browserPanelPinned })),
 
   composerPrefill: null,
   setComposerPrefill: (text) => set({ composerPrefill: text }),

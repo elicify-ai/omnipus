@@ -1,11 +1,39 @@
-// BrowserLivePanel — app-root overlay wrapper around BrowserLiveView
-// (ADR-038 D5). A SINGLE global instance mounted in AppShell.tsx, mirroring
-// MediaLightbox.tsx: state lives in the `ui` store (`browserPanel`) so any
-// "Watch live" affordance anywhere in the tree can open it without prop
-// drilling, and the Sheet survives virtualized-list row remounts.
+// BrowserLivePanel — app-root wrapper around BrowserLiveView (ADR-038 D5),
+// redesigned per ADR-040 D4 ("Take the wheel" — Pin / side-by-side). A
+// SINGLE global instance mounted in AppShell.tsx, mirroring MediaLightbox.tsx:
+// state lives in the `ui` store (`browserPanel`) so any "Watch live"
+// affordance anywhere in the tree can open it without prop drilling, and the
+// panel survives virtualized-list row remounts.
 //
-// Right-side overlay with `overlay={false}` (chat stays visible behind it),
-// mirroring ActivityPanel.tsx's Sheet usage.
+// Two layouts, switched by the `ui` store's `browserPanelPinned` (the header
+// 📌 Pin toggle lives inside BrowserLiveView — the OTHER owner in the
+// ADR-040 seam — but the backing boolean + AppShell layout are this file's
+// job):
+//   - Unpinned (default) — the right-side non-modal `Sheet` overlay, chat
+//     stays visible + clickable behind it. UNCHANGED from ADR-038/039.
+//   - Pinned — a plain docked flex column, NOT a Sheet. This component's own
+//     root element (the <aside> below) becomes a normal flex sibling of the
+//     chat region inside AppShell's outer `flex` row (`data-app-shell` in
+//     AppShell.tsx) — no extra wrapper needed there, the same mechanism
+//     Sidebar.tsx's pinned `<aside>` already uses. The chat region's existing
+//     `flex-1 min-w-0` (AppShell.tsx) shrinks automatically to share width
+//     with this column; the Sheet branch, by contrast, portals its content
+//     out of `data-app-shell`'s flow entirely (Radix's Dialog.Portal), so it
+//     never participated in the flex row to begin with.
+//
+// CAVEAT — the live WS survives a pin toggle only in the sense that it isn't
+// torn down GRATUITOUSLY (switching the (session, agent) pair, or nothing at
+// all, never remounts BrowserLiveView) — but flipping 📌 WHILE a session is
+// open DOES remount it: the Sheet branch and the docked branch are different
+// root element types (Radix's Dialog/Portal vs. a plain <aside>) at the same
+// position in AppShell's children. React always fully unmounts + remounts a
+// subtree when the root element type at a given position changes, regardless
+// of an inner element's `key` — `key` only preserves identity across
+// siblings within the SAME parent shape, not across two structurally
+// different trees. So toggling pin re-runs BrowserLiveView's WS
+// connect/detach lifecycle effect (a fresh `browser_attach`). ADR-040 D4
+// accepts this explicitly ("preserve … where practical") rather than forcing
+// a portal-based identity hack into Radix's Sheet/Dialog machinery.
 
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/ui/sheet'
 import { useUiStore } from '@/store/ui'
@@ -14,6 +42,71 @@ import { BrowserLiveView } from './BrowserLiveView'
 export function BrowserLivePanel() {
   const browserPanel = useUiStore((s) => s.browserPanel)
   const closeBrowserPanel = useUiStore((s) => s.closeBrowserPanel)
+  const browserPanelPinned = useUiStore((s) => s.browserPanelPinned)
+  const toggleBrowserPanelPinned = useUiStore((s) => s.toggleBrowserPanelPinned)
+
+  // Shared between both layouts below — same (session, agent)-keyed mount,
+  // same capability props, regardless of pin state.
+  const view = browserPanel && (
+    <BrowserLiveView
+      // Keys the mount to the (session, agent) pair so switching targets
+      // while the panel is already open (a second "Watch live" click) tears
+      // down the old WS connection and starts a fresh one, rather than
+      // leaving BrowserLiveView's internal WS effect pinned to the props it
+      // captured on first mount. Deliberately NOT also keyed by pin state —
+      // see the module-level caveat above for why toggling pin remounts
+      // anyway despite that.
+      key={`${browserPanel.sessionId}:${browserPanel.agentId}`}
+      sessionId={browserPanel.sessionId}
+      agentId={browserPanel.agentId}
+      onClose={closeBrowserPanel}
+      // UAT finding FE-4 (ADR-039): annotate needs the chat (submitAnnotation
+      // sends through useChatStore), which only this panel (docked or
+      // overlay) shares a JS realm with — the fullscreen pop-out route
+      // (browser-live.tsx) omits this so its "Annotate" button doesn't
+      // render at all, mirroring the isPinned/onTogglePin omission there
+      // rather than rendering a control that dead-ends.
+      canAnnotate
+      // ADR-040 D4 seam: display-only for the view (it hides its own
+      // Pop-out affordance while pinned) — this component owns the Pin
+      // control's backing state and passes it through, plus the toggle.
+      isPinned={browserPanelPinned}
+      onTogglePin={toggleBrowserPanelPinned}
+      onPopOut={() => {
+        // The auth token lives in sessionStorage (per-tab, for XSS hygiene)
+        // which window.open'd tabs do NOT inherit — so the pop-out would
+        // land on the login screen. Briefly mirror the token into
+        // localStorage as a same-origin hand-off; the /browser-live route
+        // migrates it back into sessionStorage and purges this copy on
+        // mount (see browser-live.tsx).
+        const token = sessionStorage.getItem('omnipus_auth_token')
+        if (token) localStorage.setItem('omnipus_auth_token', token)
+        const params = new URLSearchParams({
+          session: browserPanel.sessionId,
+          agent: browserPanel.agentId,
+        })
+        // The SPA uses HASH routing (#/…) — the route + search must live in
+        // the fragment, not the path, or the router ignores it and falls to
+        // the default route. Must be `/#/browser-live?…`, not `/browser-live?…`.
+        window.open(`/#/browser-live?${params.toString()}`, '_blank', 'noopener,noreferrer')
+      }}
+    />
+  )
+
+  // Pinned + open: dock as a normal flex column (ADR-040 D4) — see the
+  // module doc comment above for how this participates in AppShell's flex
+  // row with zero AppShell-side wiring, and the remount caveat.
+  if (browserPanel && browserPanelPinned) {
+    return (
+      <aside
+        data-testid="browser-live-panel-docked"
+        aria-label="Live browser panel"
+        className="flex h-full w-[45%] min-w-[320px] max-w-[720px] flex-shrink-0 flex-col overflow-hidden border-l border-[var(--color-border)] bg-[var(--color-surface-1)]"
+      >
+        {view}
+      </aside>
+    )
+  }
 
   return (
     // UAT finding FE-3(b): this Sheet used Radix's default modal=true, which
@@ -31,8 +124,19 @@ export function BrowserLivePanel() {
     // panel, defeating the point. Escape (onEscapeKeyDown, untouched) and
     // the built-in X button (DialogPrimitive.Close, untouched) still close
     // it explicitly.
-    <Sheet open={browserPanel !== null} onOpenChange={(open) => !open && closeBrowserPanel()} modal={false}>
-      {browserPanel && (
+    //
+    // `!browserPanelPinned` is folded into both `open` and the content gate
+    // below so this branch fully steps aside once pinned — the docked
+    // branch above takes over instead of the two ever rendering at once.
+    // When browserPanelPinned is false (the default, and the ONLY state this
+    // branch ever runs in the common case) both conditions reduce to exactly
+    // the original ADR-038/039 conditions — unpinned behaviour is unchanged.
+    <Sheet
+      open={browserPanel !== null && !browserPanelPinned}
+      onOpenChange={(open) => !open && closeBrowserPanel()}
+      modal={false}
+    >
+      {browserPanel && !browserPanelPinned && (
         <SheetContent
           side="right"
           overlay={false}
@@ -58,69 +162,7 @@ export function BrowserLivePanel() {
             Real-time view of the agent&apos;s live browser session. Take control to drive it yourself, or
             annotate a region to discuss it with the agent.
           </SheetDescription>
-          <BrowserLiveView
-            // Keys the mount to the (session, agent) pair so switching targets
-            // while the panel is already open (a second "Watch live" click)
-            // tears down the old WS connection and starts a fresh one, rather
-            // than leaving BrowserLiveView's internal WS effect pinned to the
-            // props it captured on first mount.
-            key={`${browserPanel.sessionId}:${browserPanel.agentId}`}
-            sessionId={browserPanel.sessionId}
-            agentId={browserPanel.agentId}
-            onClose={closeBrowserPanel}
-            // UAT finding FE-4: annotate needs the chat (submitAnnotation
-            // sends through useChatStore), which only this docked panel
-            // shares a JS realm with — the fullscreen pop-out route
-            // (browser-live.tsx) omits this so its "Annotate" button doesn't
-            // render at all, mirroring the onHandToAgent pattern below
-            // rather than rendering a control that dead-ends there.
-            canAnnotate
-            // Only the docked panel (this component) shares a JS realm with
-            // ChatScreen/the composer-prefill bridge — the fullscreen
-            // pop-out route (browser-live.tsx) deliberately omits this prop
-            // so its "Hand to agent" button doesn't render at all (it would
-            // otherwise silently no-op: writing composerPrefill from a
-            // separate `window.open` document is invisible to the original
-            // tab's chat). See BrowserLiveView's onHandToAgent doc comment.
-            onHandToAgent={() => {
-              // UAT finding FE-2: the original "Continue from the current
-              // page: " hint was too weak — the agent would reply "I don't
-              // have a browser page open" instead of actually reaching for
-              // its browser tools, even though the shared tab genuinely was
-              // still there. Spelling out WHICH tools to use first fixes it.
-              useUiStore
-                .getState()
-                .setComposerPrefill(
-                  "I've left a page open in your live browser session. Use your browser tools (take a screenshot and/or read the page text) to see what's currently loaded, then continue from there: ",
-                )
-              useUiStore.getState().addToast({
-                message: 'Control released — a hint was added to the chat composer.',
-                variant: 'default',
-              })
-              // UAT finding FE-3(a): auto-close so focus lands back on the
-              // now-usable, now-prefilled composer instead of leaving the
-              // user to discover they must close this panel by hand first.
-              closeBrowserPanel()
-            }}
-            onPopOut={() => {
-              // The auth token lives in sessionStorage (per-tab, for XSS
-              // hygiene) which window.open'd tabs do NOT inherit — so the
-              // pop-out would land on the login screen. Briefly mirror the
-              // token into localStorage as a same-origin hand-off; the
-              // /browser-live route migrates it back into sessionStorage and
-              // purges this copy on mount (see browser-live.tsx).
-              const token = sessionStorage.getItem('omnipus_auth_token')
-              if (token) localStorage.setItem('omnipus_auth_token', token)
-              const params = new URLSearchParams({
-                session: browserPanel.sessionId,
-                agent: browserPanel.agentId,
-              })
-              // The SPA uses HASH routing (#/…) — the route + search must live in
-              // the fragment, not the path, or the router ignores it and falls to
-              // the default route. Must be `/#/browser-live?…`, not `/browser-live?…`.
-              window.open(`/#/browser-live?${params.toString()}`, '_blank', 'noopener,noreferrer')
-            }}
-          />
+          {view}
         </SheetContent>
       )}
     </Sheet>
