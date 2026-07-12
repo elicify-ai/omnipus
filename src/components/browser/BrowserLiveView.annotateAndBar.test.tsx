@@ -1,7 +1,9 @@
-// BrowserLiveView.annotateAndBar.test.tsx — ADR-039 D-A2 (URL bar),
-// D-A3 (hand to agent), and D-B1/B2 (annotate mode ⟷ take-control mutual
-// exclusion) behaviour. Mocks BrowserLiveWsConnection entirely, same pattern
-// as BrowserLiveView.controlToggle.test.tsx.
+// BrowserLiveView.annotateAndBar.test.tsx — ADR-039/ADR-040 D5 (always-visible
+// omnibox) and D-B1/B2 (annotate mode ⟷ driving mutual exclusion) behaviour.
+// Mocks BrowserLiveWsConnection entirely, same pattern as
+// BrowserLiveView.controlToggle.test.tsx. The old "Hand to agent" button
+// (ADR-039 D-A3) is removed entirely by ADR-040 D1/D2 — handing back to the
+// agent is now just sending a chat message — so that coverage is dropped.
 //
 // The full drag→crop→popover→send success path needs a real canvas 2D
 // context, which jsdom does not provide (no `canvas` package installed —
@@ -70,18 +72,18 @@ beforeEach(() => {
   useUiStore.setState({ composerPrefill: null, toasts: [] })
 })
 
-describe('BrowserLiveView — URL bar (ADR-039 D-A2)', () => {
-  it('does not render the address bar while not controlling', () => {
+describe('BrowserLiveView — omnibox (ADR-039 D-A2, ADR-040 D5 — always visible)', () => {
+  it('renders the address bar even while not controlling (D5: always visible)', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
     connectAndFrame()
-    expect(screen.queryByRole('textbox', { name: /navigate to url/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: /address bar/i })).toBeInTheDocument()
   })
 
-  it('renders the address bar once the viewer takes control', () => {
+  it('renders the address bar once the viewer takes control too', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
     connectAndFrame()
     takeControl()
-    expect(screen.getByRole('textbox', { name: /navigate to url/i })).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: /address bar/i })).toBeInTheDocument()
   })
 
   it('normalizes a bare hostname and sends a navigate input frame on submit', () => {
@@ -89,7 +91,7 @@ describe('BrowserLiveView — URL bar (ADR-039 D-A2)', () => {
     connectAndFrame()
     takeControl()
 
-    const input = screen.getByRole('textbox', { name: /navigate to url/i })
+    const input = screen.getByRole('textbox', { name: /address bar/i })
     fireEvent.change(input, { target: { value: 'example.com' } })
     fireEvent.click(screen.getByRole('button', { name: /^go$/i }))
 
@@ -110,17 +112,36 @@ describe('BrowserLiveView — URL bar (ADR-039 D-A2)', () => {
     connectAndFrame()
     takeControl()
 
-    const input = screen.getByRole('textbox', { name: /navigate to url/i })
+    const input = screen.getByRole('textbox', { name: /address bar/i })
     fireEvent.change(input, { target: { value: 'https://example.com/path' } })
     fireEvent.click(screen.getByRole('button', { name: /^go$/i }))
 
     expect(mockSendInput).toHaveBeenCalledWith({ kind: 'navigate', url: 'https://example.com/path' })
   })
 
+  // ADR-040 D5: multi-word / no-dot input routes to a Google search instead
+  // of a raw navigate — resolveOmniboxInput's own decision logic is unit
+  // tested directly in browserLiveUrl.test.ts; this proves the component
+  // actually wires it in (not `normalizeNavigateUrl`).
+  it('routes a search-like phrase to a Google search navigate', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    takeControl()
+
+    const input = screen.getByRole('textbox', { name: /address bar/i })
+    fireEvent.change(input, { target: { value: 'cheap flights to tokyo' } })
+    fireEvent.click(screen.getByRole('button', { name: /^go$/i }))
+
+    expect(mockSendInput).toHaveBeenCalledWith({
+      kind: 'navigate',
+      url: 'https://www.google.com/search?q=cheap%20flights%20to%20tokyo',
+    })
+  })
+
   // F6 coverage gap: a prior blocked-navigate error banner used to persist
   // through a subsequent SUCCESSFUL navigate (a successful navigate emits
   // only screencast frames, never a browser_status, so nothing cleared it) —
-  // handleNavigateSubmit clears it optimistically on every new submit.
+  // handleOmniboxSubmit clears it optimistically on every new submit.
   it('clears a stale error banner when a new navigate is submitted', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
     connectAndFrame()
@@ -135,59 +156,57 @@ describe('BrowserLiveView — URL bar (ADR-039 D-A2)', () => {
     })
     expect(screen.getByRole('alert')).toHaveTextContent('That address is blocked for security reasons.')
 
-    const input = screen.getByRole('textbox', { name: /navigate to url/i })
+    const input = screen.getByRole('textbox', { name: /address bar/i })
     fireEvent.change(input, { target: { value: 'example.com' } })
     fireEvent.click(screen.getByRole('button', { name: /^go$/i }))
 
     expect(mockSendInput).toHaveBeenCalledWith({ kind: 'navigate', url: 'https://example.com' })
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
-})
 
-describe('BrowserLiveView — Hand to agent (ADR-039 D-A3)', () => {
-  it('is not rendered while not controlling', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" onHandToAgent={vi.fn()} />)
+  // ADR-040 D5 "must-handle": submitting while NOT currently driving takes
+  // the wheel first (sendControl('take')) before dispatching the navigate.
+  it('takes the wheel before navigating when submitted while not driving', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
     connectAndFrame()
-    expect(screen.queryByRole('button', { name: /hand to agent/i })).not.toBeInTheDocument()
+
+    const input = screen.getByRole('textbox', { name: /address bar/i })
+    fireEvent.change(input, { target: { value: 'example.com' } })
+    fireEvent.click(screen.getByRole('button', { name: /^go$/i }))
+
+    expect(mockSendControl).toHaveBeenCalledWith('take')
+    expect(mockSendInput).toHaveBeenCalledWith({ kind: 'navigate', url: 'https://example.com' })
   })
 
-  it('releases control and invokes the onHandToAgent callback', () => {
-    const onHandToAgent = vi.fn()
-    render(<BrowserLiveView sessionId="s1" agentId="a1" onHandToAgent={onHandToAgent} />)
-    connectAndFrame()
-    takeControl()
-
-    fireEvent.click(screen.getByRole('button', { name: /hand to agent/i }))
-
-    expect(mockSendControl).toHaveBeenCalledWith('release')
-    expect(onHandToAgent).toHaveBeenCalledTimes(1)
-  })
-
-  // Reviewer finding (CRITICAL): the pop-out window (routes/_app/browser-live.tsx)
-  // is a separate `window.open` JS realm with its own useUiStore instance —
-  // ChatScreen (the only composerPrefill consumer) isn't mounted there, so
-  // writing composerPrefill from that realm is a silent no-op with a false
-  // success toast. The fix hides the button entirely when the host doesn't
-  // provide onHandToAgent, rather than rendering a control that does nothing.
-  it('is hidden even while controlling when onHandToAgent is not provided (e.g. the pop-out window)', () => {
+  it('does not send control:take again when submitted while already driving', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
     connectAndFrame()
     takeControl()
+    mockSendControl.mockClear()
 
-    expect(screen.queryByRole('button', { name: /hand to agent/i })).not.toBeInTheDocument()
-    // Release control is still available from the pop-out — only the
-    // agent-hand-off affordance is gated on onHandToAgent.
-    expect(screen.getByRole('button', { name: /release control/i })).toBeInTheDocument()
+    const input = screen.getByRole('textbox', { name: /address bar/i })
+    fireEvent.change(input, { target: { value: 'example.com' } })
+    fireEvent.click(screen.getByRole('button', { name: /^go$/i }))
+
+    expect(mockSendControl).not.toHaveBeenCalled()
+    expect(mockSendInput).toHaveBeenCalledWith({ kind: 'navigate', url: 'https://example.com' })
   })
 })
 
-describe('BrowserLiveView — Annotate mode ⟷ take-control mutual exclusion (ADR-039 D-B1/B2)', () => {
-  it('disables Take control while annotate mode is active', () => {
+describe('BrowserLiveView — Annotate mode ⟷ driving mutual exclusion (ADR-039 D-B1/B2, ADR-040 D2/D3)', () => {
+  // ADR-040 D2: there's no more explicit "Take control" button to disable —
+  // mutual exclusion is now enforced by the pointer handlers branching on
+  // `annotateMode` BEFORE ever consulting the driving state, so a click on
+  // the frame while annotating must never implicitly take the wheel.
+  it('a click on the frame does not implicitly take the wheel while annotate mode is active', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" canAnnotate />)
     connectAndFrame()
 
     fireEvent.click(screen.getByRole('button', { name: /annotate a region/i }))
-    expect(screen.getByRole('button', { name: /take control/i })).toBeDisabled()
+    mockSendControl.mockClear()
+    const container = screen.getByTestId('browser-live-frame')
+    fireEvent.pointerDown(container, { clientX: 10, clientY: 10 })
+    expect(mockSendControl).not.toHaveBeenCalledWith('take')
   })
 
   it('releases control automatically when entering annotate mode while driving', () => {
@@ -221,17 +240,24 @@ describe('BrowserLiveView — Annotate mode ⟷ take-control mutual exclusion (A
     // emits one on its own — so this exercises exactly the stale-isControlling
     // window the race lived in.
     expect(screen.getByRole('button', { name: /exit annotate mode/i })).toBeInTheDocument()
-    expect(screen.queryByRole('textbox', { name: /navigate to url/i })).not.toBeInTheDocument()
     expect(screen.getByTestId('browser-live-frame')).toHaveStyle({ cursor: 'crosshair' })
   })
 
-  it('exiting annotate mode re-enables Take control', () => {
+  it('exiting annotate mode re-allows a pointer click to implicitly take the wheel', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" canAnnotate />)
     connectAndFrame()
 
     fireEvent.click(screen.getByRole('button', { name: /annotate a region/i }))
     fireEvent.click(screen.getByRole('button', { name: /exit annotate mode/i }))
-    expect(screen.getByRole('button', { name: /take control/i })).not.toBeDisabled()
+
+    mockSendControl.mockClear()
+    const container = screen.getByTestId('browser-live-frame')
+    vi.spyOn(container, 'getBoundingClientRect').mockReturnValue({
+      left: 0, top: 0, width: 1280, height: 720, right: 1280, bottom: 720, x: 0, y: 0,
+      toJSON() { return {} },
+    } as DOMRect)
+    fireEvent.pointerDown(container, { clientX: 20, clientY: 20 })
+    expect(mockSendControl).toHaveBeenCalledWith('take')
   })
 
   it('sets a crosshair cursor over the frame while annotating', () => {
@@ -293,16 +319,17 @@ describe('BrowserLiveView — Annotate mode ⟷ take-control mutual exclusion (A
   })
 
   // UAT finding FE-5: entering annotate mode releases control, which used to
-  // flip the header pill to the control-derived "Agent driving" label even
-  // though the user is actively mid-annotation and Take-control is disabled.
-  it('shows an "annotating" status pill instead of the control-derived label', () => {
+  // flip the header chip to the driving-derived "Click to drive" label even
+  // though the user is actively mid-annotation. `visualState` gives
+  // annotating display priority over every other derived state.
+  it('shows a "You\'re annotating" status chip instead of the driving-derived label', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" canAnnotate />)
     connectAndFrame()
 
     fireEvent.click(screen.getByRole('button', { name: /annotate a region/i }))
 
-    expect(screen.getByTestId('browser-live-status-pill')).toHaveTextContent(/annotating/i)
-    expect(screen.getByTestId('browser-live-status-pill')).not.toHaveTextContent(/agent driving/i)
+    expect(screen.getByTestId('browser-live-status-chip')).toHaveTextContent(/you're annotating/i)
+    expect(screen.getByTestId('browser-live-status-chip')).not.toHaveTextContent(/click to drive/i)
   })
 })
 
@@ -338,27 +365,44 @@ describe('BrowserLiveView — Annotate visibility gate (ADR-039 D-B1/B2, UAT FE-
 // by the backend on a viewer whenever a DIFFERENT connection of the same
 // browser session holds control (e.g. the docked panel and a pop-out both
 // watching the same agent).
-describe('BrowserLiveView — controlled_by_other (ADR-038, UAT FE-6)', () => {
-  it('disables Take control and shows "someone else is driving" when controlled_by_other is true', () => {
+describe('BrowserLiveView — controlled_by_other (ADR-038, UAT FE-6, carried into ADR-040 D2)', () => {
+  it('shows "Someone else is driving" and blocks click-to-drive when controlled_by_other is true', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
     connectAndFrame()
     act(() => {
       callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'attached', controlled_by_other: true })
     })
 
-    expect(screen.getByRole('button', { name: /someone else is currently driving/i })).toBeDisabled()
-    expect(screen.getByTestId('browser-live-status-pill')).toHaveTextContent(/someone else is driving/i)
+    expect(screen.getByTestId('browser-live-status-chip')).toHaveTextContent(/someone else is driving/i)
+
+    mockSendControl.mockClear()
+    mockSendInput.mockClear()
+    const container = screen.getByTestId('browser-live-frame')
+    vi.spyOn(container, 'getBoundingClientRect').mockReturnValue({
+      left: 0, top: 0, width: 1280, height: 720, right: 1280, bottom: 720, x: 0, y: 0,
+      toJSON() { return {} },
+    } as DOMRect)
+    fireEvent.pointerDown(container, { clientX: 20, clientY: 20 })
+    expect(mockSendControl).not.toHaveBeenCalled()
+    expect(mockSendInput).not.toHaveBeenCalled()
   })
 
-  it('leaves Take control enabled and shows "agent driving" when controlled_by_other is false/absent', () => {
+  it('shows "Click to drive" and allows click-to-drive when controlled_by_other is false/absent', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
     connectAndFrame()
     act(() => {
       callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'attached' })
     })
 
-    expect(screen.getByRole('button', { name: /^take control$/i })).not.toBeDisabled()
-    expect(screen.getByTestId('browser-live-status-pill')).toHaveTextContent(/agent driving/i)
+    expect(screen.getByTestId('browser-live-status-chip')).toHaveTextContent(/click to drive/i)
+
+    const container = screen.getByTestId('browser-live-frame')
+    vi.spyOn(container, 'getBoundingClientRect').mockReturnValue({
+      left: 0, top: 0, width: 1280, height: 720, right: 1280, bottom: 720, x: 0, y: 0,
+      toJSON() { return {} },
+    } as DOMRect)
+    fireEvent.pointerDown(container, { clientX: 20, clientY: 20 })
+    expect(mockSendControl).toHaveBeenCalledWith('take')
   })
 })
 

@@ -1,7 +1,9 @@
-// browserLiveUrl — pure URL-normalization helper for the live browser panel's
-// address bar (ADR-039 D-A2). Deliberately minimal: it only prepends a scheme
-// when one is missing, so a bare "example.com" typed into the address bar
-// becomes a navigable URL instead of silently failing to parse/resolve.
+// browserLiveUrl — pure URL-normalization helpers for the live browser
+// panel's always-visible omnibox (ADR-039 D-A2, ADR-040 D5). Deliberately
+// minimal: normalizeNavigateUrl only prepends a scheme when one is missing,
+// so a bare "example.com" typed into the address bar becomes a navigable URL
+// instead of silently failing to parse/resolve; resolveOmniboxInput layers a
+// Chrome-omnibox-style URL-vs-search decision on top of it.
 //
 // This is NOT a security check. The server-side `BrowserManager.ValidateURL`
 // SSRF gate (run on every `navigate` input frame, per ADR-039 D-A2) is the
@@ -28,4 +30,34 @@ export function normalizeNavigateUrl(raw: string): string | null {
     return trimmed
   }
   return `https://${trimmed}`
+}
+
+/**
+ * ADR-040 D5 — resolves a value typed into the always-visible omnibox into a
+ * navigable URL, exactly the way Chrome's address bar decides between
+ * "navigate" and "search":
+ * - empty/whitespace-only → null (nothing to do).
+ * - an explicit "scheme://" prefix, OR no whitespace AND at least one "." →
+ *   treated as a URL/bare domain and normalized via `normalizeNavigateUrl`
+ *   (which prepends "https://" when no scheme is present).
+ * - anything else (contains a space, or has no "." — e.g. "cheap flights to
+ *   tokyo", or a single bare word like "wikipedia") → a Google search for
+ *   the raw (untrimmed-whitespace-collapsed) text.
+ *
+ * Deliberately does NOT special-case "host:port" (e.g. "localhost:3000")
+ * as a URL the way `normalizeNavigateUrl` alone might suggest — ADR-040 D5
+ * defines the boundary strictly as "has a dot, no spaces, or an explicit
+ * scheme", so a bare host:port with no dot resolves to a search, matching
+ * the documented decision exactly (the user can still reach it by typing
+ * "http://localhost:3000", which has an explicit scheme).
+ */
+export function resolveOmniboxInput(raw: string): string | null {
+  const trimmed = raw.trim()
+  if (!trimmed) return null
+  const hasExplicitScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed)
+  const looksLikeUrl = hasExplicitScheme || (!/\s/.test(trimmed) && trimmed.includes('.'))
+  if (looksLikeUrl) {
+    return normalizeNavigateUrl(trimmed)
+  }
+  return `https://www.google.com/search?q=${encodeURIComponent(trimmed)}`
 }
