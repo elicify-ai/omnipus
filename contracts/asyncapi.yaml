@@ -149,6 +149,8 @@ channels:
         $ref: '#/components/messages/BrowserControlFrame'
       BrowserDetachFrame:
         $ref: '#/components/messages/BrowserDetachFrame'
+      BrowserTabActionFrame:
+        $ref: '#/components/messages/BrowserTabActionFrame'
       # ── Server → client ───────────────────────────────────────────────────────
       ErrorFrame:
         $ref: '#/components/messages/ErrorFrame'
@@ -156,6 +158,8 @@ channels:
         $ref: '#/components/messages/BrowserScreencastFrame'
       BrowserStatusFrame:
         $ref: '#/components/messages/BrowserStatusFrame'
+      BrowserTabsFrame:
+        $ref: '#/components/messages/BrowserTabsFrame'
 
 operations:
   # ── Client → server (action: send from SPA perspective) ─────────────────────
@@ -532,6 +536,17 @@ operations:
     messages:
       - $ref: '#/channels/browser/messages/BrowserDetachFrame'
 
+  sendBrowserTabAction:
+    action: send
+    channel:
+      $ref: '#/channels/browser'
+    summary: >
+      Switch the active tab, close a tab, or open a new blank tab in this
+      session's browsing context. The server replies with browser_tabs. Switch
+      re-binds the live screencast to the new active tab. See ADR-041.
+    messages:
+      - $ref: '#/channels/browser/messages/BrowserTabActionFrame'
+
   receiveBrowserScreencast:
     action: receive
     channel:
@@ -551,6 +566,17 @@ operations:
       released, detached, idle, error).
     messages:
       - $ref: '#/channels/browser/messages/BrowserStatusFrame'
+
+  receiveBrowserTabs:
+    action: receive
+    channel:
+      $ref: '#/channels/browser'
+    summary: >
+      The current set of open tabs + the active index, broadcast on any tab
+      open/close/switch/title-change. The SPA renders the tab strip; the live
+      screencast always reflects the active tab. See ADR-041.
+    messages:
+      - $ref: '#/channels/browser/messages/BrowserTabsFrame'
 
 components:
   messages:
@@ -854,6 +880,14 @@ components:
       payload:
         $ref: '#/components/schemas/BrowserDetachFrame'
 
+    BrowserTabActionFrame:
+      name: BrowserTabActionFrame
+      title: browser_tab_action
+      summary: Switch / close / open a tab in the live browser (client → server).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/BrowserTabActionFrame'
+
     BrowserScreencastFrame:
       name: BrowserScreencastFrame
       title: browser_screencast
@@ -869,6 +903,14 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/BrowserStatusFrame'
+
+    BrowserTabsFrame:
+      name: BrowserTabsFrame
+      title: browser_tabs
+      summary: Current open tabs + active index for the live browser (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/BrowserTabsFrame'
 
   schemas:
     WsFrameType:
@@ -914,6 +956,8 @@ components:
         - browser_detach
         - browser_screencast
         - browser_status
+        - browser_tab_action
+        - browser_tabs
 
     AuthFrame:
       title: AuthFrame
@@ -2288,3 +2332,88 @@ components:
             status/error banner untouched.
         session_id:
           type: string
+
+    BrowserTabActionFrame:
+      title: BrowserTabActionFrame
+      description: >
+        Client → server. A tab-management action on a live-browser session:
+        switch the active tab, close a tab, or open a new (blank) tab. Honoured
+        the same way as browser_input/browser_control — switch/close target the
+        active browsing context's tab set. index is required for switch/close,
+        ignored for open. See ADR-041.
+      type: object
+      required:
+        - type
+        - action
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: browser_tab_action
+        session_id:
+          type: string
+          maxLength: 128
+        agent_id:
+          type: string
+          maxLength: 128
+        action:
+          type: string
+          enum:
+            - switch
+            - close
+            - open
+        index:
+          type: integer
+          minimum: 0
+          description: Tab index for switch/close (ignored for open).
+
+    BrowserTabsFrame:
+      title: BrowserTabsFrame
+      description: >
+        Server → client. The current set of open tabs for a live-browser session
+        and which one is active, broadcast whenever a tab is opened (e.g. a
+        target=_blank click or window.open the agent/user followed), closed,
+        switched, or its title/url changes. The SPA renders this as the panel's
+        tab strip; the live screencast always reflects the active tab. See
+        ADR-041.
+      type: object
+      required:
+        - type
+        - tabs
+        - active_index
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: browser_tabs
+        session_id:
+          type: string
+          maxLength: 128
+        active_index:
+          type: integer
+          minimum: 0
+          description: Index into tabs of the currently-active (screencasted) tab.
+        tabs:
+          type: array
+          maxItems: 32
+          items:
+            type: object
+            required:
+              - index
+            additionalProperties: false
+            properties:
+              index:
+                type: integer
+                minimum: 0
+                description: Stable position of this tab in the set (0-based).
+              title:
+                type: string
+                maxLength: 512
+                description: The tab's document.title, when known.
+              url:
+                type: string
+                maxLength: 4096
+                description: The tab's current URL, when known.
+              active:
+                type: boolean
+                description: True for the active tab (mirrors active_index).

@@ -1,0 +1,30 @@
+title: BrowserTabActionFrame
+description: >
+  Client → server. A tab-management action on a live-browser session: switch the
+  active tab, close a tab, or open a new (blank) tab. Honoured the same way as
+  browser_input/browser_control — the switch/close target the active browsing
+  context's tab set. `index` is required for switch/close, ignored for open.
+  See ADR-041.
+type: object
+required:
+  - type
+  - action
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: browser_tab_action
+  session_id:
+    type: string
+  agent_id:
+    type: string
+  action:
+    type: string
+    enum:
+      - switch
+      - close
+      - open
+  index:
+    type: integer
+    minimum: 0
+    description: Tab index for switch/close (ignored for open).

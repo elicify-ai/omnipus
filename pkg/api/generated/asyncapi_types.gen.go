@@ -102,6 +102,30 @@ type BrowserStatusFrame struct {
 	Type              string  `json:"type"`
 }
 
+// BrowserTabActionFrame — Client → server. A tab-management action on a live-browser session: switch the active tab, close a tab, or open a new (blank) tab. Honoured the same way as browser_input/browser_control — switch/close target the active browsing context's tab set. index is required for switch/close, ignored for open. See ADR-041.
+type BrowserTabActionFrame struct {
+	Action  string  `json:"action"`
+	AgentId *string `json:"agent_id,omitempty"`
+	// Tab index for switch/close (ignored for open).
+	Index     *int    `json:"index,omitempty"`
+	SessionId *string `json:"session_id,omitempty"`
+	Type      string  `json:"type"`
+}
+
+// BrowserTabsFrame — Server → client. The current set of open tabs for a live-browser session and which one is active, broadcast whenever a tab is opened (e.g. a target=_blank click or window.open the agent/user followed), closed, switched, or its title/url changes. The SPA renders this as the panel's tab strip; the live screencast always reflects the active tab. See ADR-041.
+type BrowserTabsFrame struct {
+	// Index into tabs of the currently-active (screencasted) tab.
+	ActiveIndex int     `json:"active_index"`
+	SessionId   *string `json:"session_id,omitempty"`
+	Tabs        []struct {
+		Active *bool   `json:"active,omitempty"`
+		Index  int     `json:"index"`
+		Title  *string `json:"title,omitempty"`
+		Url    *string `json:"url,omitempty"`
+	} `json:"tabs"`
+	Type string `json:"type"`
+}
+
 // CancelFrame — Client → server cancel in-progress turn.
 type CancelFrame struct {
 	SessionId string `json:"session_id"`
@@ -489,4 +513,6 @@ const (
 	WsFrameTypeBrowserDetach            WsFrameType = "browser_detach"
 	WsFrameTypeBrowserScreencast        WsFrameType = "browser_screencast"
 	WsFrameTypeBrowserStatus            WsFrameType = "browser_status"
+	WsFrameTypeBrowserTabAction         WsFrameType = "browser_tab_action"
+	WsFrameTypeBrowserTabs              WsFrameType = "browser_tabs"
 )

@@ -6,7 +6,7 @@
 // Do not edit directly — re-run: node scripts/_gen-asyncapi-types.mjs
 // These extend the REST schemas above with all WS frame types.
 
-export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "subagent_start", "subagent_end", "task_status_changed", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_screencast", "browser_status"]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "subagent_start", "subagent_end", "task_status_changed", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_screencast", "browser_status", "browser_tab_action", "browser_tabs"]);
 
 export const AuthFrame = z
   .object({
@@ -474,6 +474,32 @@ export const BrowserStatusFrame = z
   })
   .strict();
 
+export const BrowserTabActionFrame = z
+  .object({
+    type: z.literal("browser_tab_action"),
+    session_id: z.string().max(128).optional(),
+    agent_id: z.string().max(128).optional(),
+    action: z.enum(["switch", "close", "open"]),
+    index: z.number().int().min(0).optional(),
+  })
+  .strict();
+
+export const BrowserTabsFrame = z
+  .object({
+    type: z.literal("browser_tabs"),
+    session_id: z.string().max(128).optional(),
+    active_index: z.number().int().min(0),
+    tabs: z.array(z
+    .object({
+      index: z.number().int().min(0),
+      title: z.string().max(512).optional(),
+      url: z.string().max(4096).optional(),
+      active: z.boolean().optional(),
+    })
+    .strict()).max(32),
+  })
+  .strict();
+
 // ── WS frame discriminated union ─────────────────────────────────────────────
 
 export const WsFrame = z.discriminatedUnion("type", [
@@ -515,6 +541,8 @@ export const WsFrame = z.discriminatedUnion("type", [
   BrowserDetachFrame,
   BrowserScreencastFrame,
   BrowserStatusFrame,
+  BrowserTabActionFrame,
+  BrowserTabsFrame,
 ]);
 
 export type WsFrameType = z.infer<typeof WsFrameType>;
