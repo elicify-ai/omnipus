@@ -53,6 +53,17 @@ properties:
     type: string
     maxLength: 64
     description: DOM code (key_down/key_up), e.g. "Enter", "KeyA".
+  key_code:
+    type: integer
+    minimum: 0
+    maximum: 255
+    description: >-
+      Windows virtual key code for key_down/key_up (the DOM
+      KeyboardEvent.keyCode, e.g. Backspace=8, Enter=13, Tab=9, Delete=46,
+      ArrowLeft/Up/Right/Down=37-40). CDP's Input.dispatchKeyEvent needs this to
+      actually PERFORM editing/navigation key actions and modifier shortcuts
+      (Ctrl+A/C/V) — key/code alone deliver an event but do not delete, submit,
+      move the caret, or trigger the shortcut. See ADR-039.
   text:
     type: string
     maxLength: 8192

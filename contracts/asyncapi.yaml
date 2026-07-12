@@ -2141,6 +2141,14 @@ components:
         code:
           type: string
           maxLength: 64
+        key_code:
+          type: integer
+          minimum: 0
+          maximum: 255
+          description: >-
+            Windows virtual key code for key_down/key_up (DOM
+            KeyboardEvent.keyCode) — required for CDP to perform editing/nav key
+            actions and modifier shortcuts. See ADR-039.
         text:
           type: string
           maxLength: 8192
