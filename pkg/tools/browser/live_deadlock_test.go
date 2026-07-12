@@ -36,11 +36,13 @@ import (
 	"errors"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -249,4 +251,199 @@ func TestLiveView_RunAckWorker_CoalescesToLatestFrame(t *testing.T) {
 	defer mu.Unlock()
 	require.Equal(t, []int64{1, 100}, ackedSessionIDs,
 		"the worker must ack frame 1 (already in flight) then the coalesced latest frame (100), never 2-99")
+}
+
+// ---------------------------------------------------------------------------
+// ADR-041 F1/F2 — rebindScreencast ordering + failure-notification regression
+// coverage (7-reviewer fix wave, 2026-07-12).
+//
+// F1's bug: rebindScreencast used to capture oldListenCtx under lock, then
+// release the lock and call oldStopListen() (canceling it) WITHOUT first
+// nilling lv.listenCtx — leaving lv.listenCtx pointing at the about-to-die
+// context for the entire teardown window. watchForUnexpectedDeath (armed for
+// that epoch by the earlier attach()) treats "my watched listenCtx died
+// while STILL installed as lv.listenCtx" as a genuine external death, so on
+// every ordinary tab switch it could race in, fire a FALSE "session ended
+// unexpectedly" broadcast to every viewer, and nil lv.listenCtx itself —
+// which then made rebindScreencast's own re-lock guard see a mismatch and
+// bail out without ever starting the new screencast. The fix mirrors
+// detach()'s discipline: nil lv.listenCtx/lv.stopListen under lv.mu BEFORE
+// releasing the lock and calling oldStopListen(), turning "the watcher never
+// observes it as still installed" into a genuine happens-before guarantee
+// rather than a race that's merely unlikely to lose.
+// ---------------------------------------------------------------------------
+
+// TestLiveView_RebindScreencast_NoFalseDeathBroadcast is the regression
+// guard for F1. It proves two things about a successful rebind:
+//  1. By the time the OLD screencast's StopScreencast CDP call is made,
+//     lv.listenCtx is ALREADY nil — the load-bearing ordering the fix
+//     requires (checked directly inside the runCDP stub, not inferred from
+//     timing).
+//  2. The real background watchForUnexpectedDeath goroutine attach() started
+//     for the OLD epoch never fires a status broadcast — because of (1) this
+//     is a deterministic non-race, not a best-effort "unlikely to catch it"
+//     timing assumption, so this assertion is safe from flaking.
+//
+// It also proves the second half of the postmortem: the new epoch (a fresh
+// listenCtx bound to the new active tab) is actually installed, so the live
+// view doesn't sit dead after the switch.
+func TestLiveView_RebindScreencast_NoFalseDeathBroadcast(t *testing.T) {
+	mgr := &BrowserManager{cfg: BrowserConfig{PageTimeout: 5 * time.Second}}
+
+	var statusMu sync.Mutex
+	var statusMessages []string
+	onStatus := func(msg string) {
+		statusMu.Lock()
+		statusMessages = append(statusMessages, msg)
+		statusMu.Unlock()
+	}
+
+	stopCalledWithNilListenCtx := make(chan bool, 1)
+
+	// Declared before assigning runCDP (rather than inline in the composite
+	// literal) so the closure below can close over lv itself — a `lv :=
+	// &LiveView{runCDP: func(...) { lv... } }` self-reference inside its own
+	// initializer would not compile (lv isn't in scope yet at that point).
+	lv := &LiveView{
+		mgr:          mgr,
+		sessionID:    "s1",
+		viewers:      make(map[string]FrameSink),
+		statusSinks:  make(map[string]StatusSink),
+		controlSinks: make(map[string]ControlSink),
+		tabsSinks:    make(map[string]TabsSink),
+		ackCh:        make(chan int64, 1),
+	}
+	lv.runCDP = func(ctx context.Context, timeout time.Duration, actions ...chromedp.Action) error {
+		for _, a := range actions {
+			if _, ok := a.(*page.StopScreencastParams); ok {
+				// The load-bearing F1 assertion: oldStopListen() (which
+				// wakes the OLD epoch's watchForUnexpectedDeath) is called
+				// BEFORE this runCDP invocation in rebindScreencast — so by
+				// now lv.listenCtx must already be nil if the fix's
+				// ordering is correct.
+				lv.mu.Lock()
+				stopCalledWithNilListenCtx <- lv.listenCtx == nil
+				lv.mu.Unlock()
+			}
+		}
+		return nil
+	}
+
+	oldTabCtx, oldCancel := chromedp.NewContext(context.Background())
+	defer oldCancel()
+
+	controlledByOther, err := lv.attach(oldTabCtx, "viewer1", func(LiveFrame) {}, onStatus, nil, nil)
+	require.NoError(t, err)
+	require.False(t, controlledByOther)
+
+	lv.mu.Lock()
+	oldListenCtx := lv.listenCtx
+	lv.mu.Unlock()
+	require.NotNil(t, oldListenCtx, "attach() must have installed an active epoch")
+
+	newTabCtx, newCancel := chromedp.NewContext(context.Background())
+	defer newCancel()
+
+	lv.rebindScreencast(newTabCtx)
+
+	select {
+	case ok := <-stopCalledWithNilListenCtx:
+		require.True(t, ok, "lv.listenCtx must already be nil by the time the OLD screencast's "+
+			"StopScreencast CDP call is made — the fix requires nilling it BEFORE oldStopListen()/the "+
+			"CDP stop call, not after (F1)")
+	case <-time.After(2 * time.Second):
+		t.Fatal("rebindScreencast never reached the StopScreencast CDP call")
+	}
+
+	// Give the REAL background watcher goroutine (started by attach() for
+	// the old epoch) every opportunity to misfire before asserting it
+	// didn't. Per the fix, this is a genuine happens-before guarantee, not
+	// an unlikely race — see the file-level comment above.
+	time.Sleep(100 * time.Millisecond)
+
+	statusMu.Lock()
+	got := append([]string(nil), statusMessages...)
+	statusMu.Unlock()
+	assert.Empty(t, got, "an ordinary tab switch must never emit a false "+
+		"'session ended unexpectedly' broadcast to attached viewers: %v", got)
+
+	lv.mu.Lock()
+	defer lv.mu.Unlock()
+	require.NotNil(t, lv.listenCtx, "rebindScreencast must install a new epoch's listenCtx after a "+
+		"successful switch, not leave the live view dead (F1)")
+	assert.True(t, lv.listenCtx != oldListenCtx, "the new epoch's listenCtx must be a fresh context, not the old one")
+	assert.Equal(t, newTabCtx, lv.tabCtx, "lv.tabCtx must now point at the newly active tab")
+}
+
+// TestLiveView_RebindScreencast_StartFailure_NotifiesStatusSink is the
+// regression guard for F2: when rebindScreencast's attempt to start the
+// screencast on the NEW active tab fails, every attached viewer's
+// StatusSink must be notified — before the fix, this failure branch only
+// logged a warning and cleared lv.listenCtx, so no StatusSink ever fired
+// (watchForUnexpectedDeath is only armed AFTER a successful StartScreencast,
+// never reached on this branch) and viewers were left silently staring at
+// the stale OLD tab's cached last frame under a tab strip claiming a
+// DIFFERENT tab was now active.
+func TestLiveView_RebindScreencast_StartFailure_NotifiesStatusSink(t *testing.T) {
+	mgr := &BrowserManager{cfg: BrowserConfig{PageTimeout: 5 * time.Second}}
+
+	var statusMu sync.Mutex
+	var statusMessages []string
+	onStatus := func(msg string) {
+		statusMu.Lock()
+		statusMessages = append(statusMessages, msg)
+		statusMu.Unlock()
+	}
+
+	startScreencastErr := errors.New("simulated start-screencast failure on the new tab")
+	var startCalls int32
+
+	lv := &LiveView{
+		mgr:          mgr,
+		sessionID:    "s1",
+		viewers:      make(map[string]FrameSink),
+		statusSinks:  make(map[string]StatusSink),
+		controlSinks: make(map[string]ControlSink),
+		tabsSinks:    make(map[string]TabsSink),
+		ackCh:        make(chan int64, 1),
+		runCDP: func(ctx context.Context, timeout time.Duration, actions ...chromedp.Action) error {
+			for _, a := range actions {
+				if _, ok := a.(*page.StartScreencastParams); ok {
+					if atomic.AddInt32(&startCalls, 1) == 1 {
+						return nil // attach()'s initial screencast succeeds
+					}
+					return startScreencastErr // rebind's new-tab attempt fails
+				}
+			}
+			return nil // StopScreencast / ack calls succeed
+		},
+	}
+
+	oldTabCtx, oldCancel := chromedp.NewContext(context.Background())
+	defer oldCancel()
+	_, err := lv.attach(oldTabCtx, "viewer1", func(LiveFrame) {}, onStatus, nil, nil)
+	require.NoError(t, err)
+
+	newTabCtx, newCancel := chromedp.NewContext(context.Background())
+	defer newCancel()
+
+	lv.rebindScreencast(newTabCtx)
+
+	require.Eventually(t, func() bool {
+		statusMu.Lock()
+		defer statusMu.Unlock()
+		return len(statusMessages) > 0
+	}, 2*time.Second, 10*time.Millisecond,
+		"F2: a rebind that fails to start the new tab's screencast must notify attached viewers' "+
+			"StatusSink, not leave them silently frozen on the stale old frame")
+
+	statusMu.Lock()
+	got := append([]string(nil), statusMessages...)
+	statusMu.Unlock()
+	require.Len(t, got, 1)
+	assert.Contains(t, got[0], "re-attach", "the failure message must tell the viewer how to recover")
+
+	lv.mu.Lock()
+	defer lv.mu.Unlock()
+	assert.Nil(t, lv.listenCtx, "a failed rebind must leave listenCtx cleared (no half-installed epoch)")
 }

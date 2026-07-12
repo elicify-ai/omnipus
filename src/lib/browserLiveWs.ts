@@ -218,8 +218,10 @@ export class BrowserLiveWsConnection {
    * 'switch'/'close' (identifies which tab) and omitted for 'open' (the
    * backend appends a fresh tab and reports it back on the next
    * `browser_tabs` frame). Carries session_id/agent_id explicitly, same as
-   * `browser_attach`/`detach()`, so the backend can route the action even if
-   * this connection is ever multiplexed across sessions.
+   * `browser_attach` (unlike `detach()`, whose `BrowserDetachFrame` carries
+   * only `session_id` — no `agent_id` field exists on that frame), so the
+   * backend can route the action even if this connection is ever
+   * multiplexed across sessions.
    */
   sendTabAction(action: 'switch' | 'close' | 'open', index?: number): boolean {
     const frame: BrowserTabActionFrame = {

@@ -774,9 +774,23 @@ func (h *BrowserWSHandler) handleControl(wc *browserWSConn, state *browserConnSt
 // wired at attach time (see handleAttach's onTabs callback) — this handler's
 // only DIRECT response to the caller is a browser_status(error) frame on
 // failure (an out-of-range index, no live session attached, an unknown
-// action). Unlike browser_control's take/release, a tab action has no
-// "who acted" distinction that needs excluding the actor from the broadcast,
-// so there is no direct success response either.
+// action, or the F3 control-lock rejection below). Unlike browser_control's
+// take/release, a tab action has no "who acted" distinction that needs
+// excluding the actor from the broadcast, so there is no direct success
+// response either.
+//
+// F3 control-lock gate (7-reviewer MAJOR, ADR-041 fix wave): honoured only
+// when the acting viewer currently holds the control lock, OR nobody holds
+// it (idle) — mirroring browser_input's dispatchInput gate exactly, via the
+// SAME accessor (LiveViewRegistry.Controller, the pure-read counterpart of
+// the getController() dispatchInput/controlledResult consult). Before this
+// fix, any merely-attached (non-controlling) viewer — a second panel or a
+// pop-out — could switch/close/open tabs with no check at all, yanking the
+// active tab out from under whoever DOES hold control (human or, per ADR-040,
+// the agent's own turn) or fighting the agent's own tab tools mid-flight.
+// The agent's own tab tools (browser_list_tabs/switch_tab/close_tab,
+// tabs.go) are UNAFFECTED — they call BrowserManager.SwitchTab/CloseTab/
+// OpenTab directly, never through this WS handler.
 func (h *BrowserWSHandler) handleTabAction(wc *browserWSConn, state *browserConnState, viewerID string, data []byte) {
 	if state.mgr == nil || state.sessionID == "" {
 		wc.sendCriticalGen(errorStatus("browser_tab_action: attach before managing tabs"),
@@ -794,6 +808,13 @@ func (h *BrowserWSHandler) handleTabAction(wc *browserWSConn, state *browserConn
 	// state.mgr below uses browser.DefaultSessionID, the agent's actual tab
 	// set (ADR-038 finding #1 / ADR-041) — see handleAttach's doc comment.
 	chatSessionID := state.sessionID
+
+	if controller := state.mgr.Live().Controller(browser.DefaultSessionID); controller != "" && controller != viewerID {
+		wc.sendCriticalGen(sessionErrorStatus(chatSessionID, "another viewer is driving — take control first to manage tabs"),
+			dropContext(chatSessionID, viewerID, "tab-action-not-controller"))
+		return
+	}
+
 	switch frame.Action {
 	case "switch":
 		if frame.Index == nil {
@@ -826,34 +847,35 @@ func (h *BrowserWSHandler) handleTabAction(wc *browserWSConn, state *browserConn
 	}
 }
 
-// tabsToBrowserTabsWire converts a []browser.Tab snapshot to the anonymous
-// struct slice type generated.BrowserTabsFrame.Tabs expects (oapi-codegen
-// inlines the `tabs.items` schema as an anonymous struct rather than a named
-// type, since it isn't referenced elsewhere — Constraint #8 still applies:
-// this is the SAME generated type, just spelled out structurally so a plain
-// []browser.Tab is assignable to it).
-func tabsToBrowserTabsWire(tabs []browser.Tab) []struct {
+// browserTabWire is the exact anonymous shape oapi-codegen generated for
+// generated.BrowserTabsFrame.Tabs' item type — same field names, types,
+// json tags, and ORDER (Go struct type identity considers field sequence).
+// A type ALIAS (`=`), not a new named type, so it and the inlined anonymous
+// struct field on BrowserTabsFrame remain the identical type — this is the
+// SAME generated wire shape, just given a name so tabsToBrowserTabsWire
+// doesn't have to respell it three times. Mirrors
+// rest_executor_preview.go's executorPreviewDroppedArg convention.
+type browserTabWire = struct { // not-wire-format: type alias of generated.BrowserTabsFrame.Tabs' inlined element shape, not a new wire type
 	Active *bool   `json:"active,omitempty"`
 	Index  int     `json:"index"`
 	Title  *string `json:"title,omitempty"`
 	Url    *string `json:"url,omitempty"`
-} {
-	out := make([]struct {
-		Active *bool   `json:"active,omitempty"`
-		Index  int     `json:"index"`
-		Title  *string `json:"title,omitempty"`
-		Url    *string `json:"url,omitempty"`
-	}, len(tabs))
+}
+
+// tabsToBrowserTabsWire converts a []browser.Tab snapshot to []browserTabWire
+// (generated.BrowserTabsFrame.Tabs' element type — see browserTabWire's doc
+// comment). A plain []browser.Tab is NOT directly assignable to it:
+// browser.Tab's fields are non-pointer and untagged, and its URL field is
+// spelled "URL" where the wire type spells it "Url" — every element must be
+// converted field-by-field, pointer-boxing Active/Title/Url per the wire
+// schema's omitempty semantics.
+func tabsToBrowserTabsWire(tabs []browser.Tab) []browserTabWire {
+	out := make([]browserTabWire, len(tabs))
 	for i, t := range tabs {
 		active := t.Active
 		title := t.Title
 		url := t.URL
-		out[i] = struct {
-			Active *bool   `json:"active,omitempty"`
-			Index  int     `json:"index"`
-			Title  *string `json:"title,omitempty"`
-			Url    *string `json:"url,omitempty"`
-		}{Active: &active, Index: t.Index, Title: &title, Url: &url}
+		out[i] = browserTabWire{Active: &active, Index: t.Index, Title: &title, Url: &url}
 	}
 	return out
 }

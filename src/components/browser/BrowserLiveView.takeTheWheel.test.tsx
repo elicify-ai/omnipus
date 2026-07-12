@@ -389,6 +389,65 @@ describe('BrowserLiveView — auto-release resilience (ADR-040 D2, reviewer find
     expect(mockSendControl).toHaveBeenCalledWith('release')
     expect(useUiStore.getState().toasts.some((t) => /could not confirm pausing/i.test(t.message))).toBe(false)
   })
+
+  // Reviewer finding F3: takeWheelIfNeeded used to discard sendControl('take')'s
+  // boolean return — a failed send left pendingTakeRef stuck true forever,
+  // wedging the "take control" affordance permanently at "you're driving"
+  // while real control never transferred, and blocking every later take via
+  // the pendingTakeRef.current in-flight guard.
+  it('click-to-drive: clears the optimistic pendingTake and toasts if sendControl("take") fails', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    const container = stubFrameRect()
+    mockSendControl.mockReturnValueOnce(false)
+
+    fireEvent.pointerDown(container, { clientX: 20, clientY: 20 })
+
+    // The optimistic "you're driving" chip must NOT stay stuck once the
+    // send is known to have failed.
+    expect(screen.getByTestId('browser-live-status-chip')).not.toHaveTextContent("You're driving")
+    expect(useUiStore.getState().toasts.some((t) => /could not confirm taking control/i.test(t.message))).toBe(true)
+  })
+
+  it('click-to-drive: a NEW gesture can retry control:take after a failed take was cleared', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    const container = stubFrameRect()
+    mockSendControl.mockReturnValueOnce(false)
+
+    fireEvent.pointerDown(container, { clientX: 20, clientY: 20 })
+    fireEvent.pointerUp(container, { clientX: 20, clientY: 20 })
+    mockSendControl.mockClear()
+
+    // pendingTakeRef must have been cleared by the failed-send recovery —
+    // otherwise this second gesture would be silently swallowed forever.
+    fireEvent.pointerDown(container, { clientX: 30, clientY: 30 })
+    expect(mockSendControl).toHaveBeenCalledWith('take')
+  })
+
+  it('"Take over": clears the optimistic pendingTake and toasts if sendControl("take") fails', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    setAgentWorking('s1', true)
+    vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => {})
+    mockSendControl.mockReturnValueOnce(false)
+
+    fireEvent.click(screen.getByRole('button', { name: /take over/i }))
+    setAgentWorking('s1', false)
+
+    expect(screen.getByTestId('browser-live-status-chip')).not.toHaveTextContent("You're driving")
+    expect(useUiStore.getState().toasts.some((t) => /could not confirm taking control/i.test(t.message))).toBe(true)
+  })
+
+  it('does not surface a take-failure toast when the take send succeeds', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    const container = stubFrameRect()
+
+    fireEvent.pointerDown(container, { clientX: 20, clientY: 20 })
+
+    expect(useUiStore.getState().toasts.some((t) => /could not confirm taking control/i.test(t.message))).toBe(false)
+  })
 })
 
 describe('BrowserLiveView — annotate mid-gesture resets take/implicit refs (ADR-040 D2/D3)', () => {

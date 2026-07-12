@@ -303,6 +303,147 @@ func TestCloseTab_CancelsTheClosedTabsContext(t *testing.T) {
 	assert.EqualValues(t, 1, atomic.LoadInt32(canceled), "closing a tab must cancel its chromedp context")
 }
 
+// --- ADR-041 fix F1: Session/OpenTab/CloseTab must not race to
+// independently create (and leak) the first tab of a not-yet-existing
+// browsing context ---
+
+// TestSession_ConcurrentWithOpenTab_NoOrphanedTabs is the F1 regression
+// guard: before the fix, OpenTab (and CloseTab's last-tab-replacement) did
+// NOT register in m.pending the way Session() did, so a human's "+ new tab"
+// (OpenTab) racing the agent's next Session() call for the SAME brand-new
+// sessionID could each independently call createTab (unlocked) and then
+// blindly overwrite m.sessions[sessionID] — whichever finished last won,
+// silently discarding (leaking: never canceled, never counted by
+// totalTabCountLocked, never reachable again) the other's freshly-created
+// tab.
+//
+// The invariant this asserts — every physically-created tab is EITHER
+// tracked in the surviving tab set OR explicitly canceled, with nothing
+// in-between — holds regardless of goroutine scheduling: OpenTab calls that
+// happen to observe the browsing context as not-yet-existing correctly
+// converge on ONE shared first tab via createFirstTab's m.pending dedup
+// (same as Session()); OpenTab calls that happen to observe it as
+// already-existing correctly append their OWN additional tab (that's
+// OpenTab's actual contract, not a bug) — so the raw tab COUNT is
+// scheduling-dependent and not a safe thing to pin exactly, but "nothing
+// vanishes without being tracked or canceled" always must hold.
+func TestSession_ConcurrentWithOpenTab_NoOrphanedTabs(t *testing.T) {
+	cfg, err := DefaultConfig()
+	require.NoError(t, err)
+	cfg.MaxTabs = 20
+	m := &BrowserManager{cfg: cfg, sessions: make(map[string]*sessionEntry), started: true}
+
+	fn, canceled := fakeTabFactory()
+	var created int32
+	m.createTabFn = func(allocCtx context.Context, targetID target.ID) (*tabEntry, error) {
+		atomic.AddInt32(&created, 1)
+		return fn(allocCtx, targetID)
+	}
+
+	const n = 6
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	for i := range n {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if i%2 == 0 {
+				_, errs[i] = m.Session(DefaultSessionID)
+			} else {
+				_, errs[i] = m.OpenTab(DefaultSessionID)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	for i := range n {
+		require.NoError(t, errs[i], "no concurrent Session/OpenTab call for a brand-new session should error")
+	}
+
+	m.mu.Lock()
+	se, ok := m.sessions[DefaultSessionID]
+	require.True(t, ok, "the browsing context must exist after the race")
+	survivingTabs := len(se.tabs)
+	total := m.totalTabCountLocked()
+	m.mu.Unlock()
+
+	assert.Equal(t, survivingTabs, total,
+		"totalTabCountLocked must exactly match the reachable tab count — no undercount from an "+
+			"orphaned overwrite")
+
+	createdN := atomic.LoadInt32(&created)
+	canceledN := atomic.LoadInt32(canceled)
+	assert.EqualValues(t, createdN, int32(survivingTabs)+canceledN,
+		"ADR-041 fix F1: every physically-created tab must be EITHER tracked in the surviving "+
+			"sessionEntry OR explicitly canceled — never orphaned (created, then silently discarded by "+
+			"a blind m.sessions[id]=... overwrite, with its chromedp context and goroutine leaked forever)")
+
+	tabs, _, err := m.ListTabs(DefaultSessionID)
+	require.NoError(t, err)
+	assert.Len(t, tabs, survivingTabs)
+	assert.GreaterOrEqual(t, survivingTabs, 1)
+}
+
+// TestCloseTab_LastTabReplacement_ConcurrentWithOpenTab_NoLeak is F1's
+// second regression guard: CloseTab's last-tab-replacement branch used to
+// build its own bare sessionEntry and blindly overwrite m.sessions[sessionID]
+// too, exactly like OpenTab did — a concurrent OpenTab racing the replacement
+// could suffer the identical leak. Drives that race directly and applies the
+// same "created == tracked + canceled" no-orphan invariant as the test above.
+func TestCloseTab_LastTabReplacement_ConcurrentWithOpenTab_NoLeak(t *testing.T) {
+	cfg, err := DefaultConfig()
+	require.NoError(t, err)
+	cfg.MaxTabs = 10
+	m := &BrowserManager{cfg: cfg, sessions: make(map[string]*sessionEntry), started: true}
+
+	fn, canceled := fakeTabFactory()
+	var created int32
+	m.createTabFn = func(allocCtx context.Context, targetID target.ID) (*tabEntry, error) {
+		atomic.AddInt32(&created, 1)
+		return fn(allocCtx, targetID)
+	}
+
+	_, err = m.Session(DefaultSessionID)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, atomic.LoadInt32(&created))
+
+	var wg sync.WaitGroup
+	var closeErr, openErr error
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, _, closeErr = m.CloseTab(DefaultSessionID, 0) // triggers last-tab-replacement
+	}()
+	go func() {
+		defer wg.Done()
+		_, openErr = m.OpenTab(DefaultSessionID)
+	}()
+	wg.Wait()
+
+	require.NoError(t, closeErr)
+	require.NoError(t, openErr)
+
+	m.mu.Lock()
+	se, ok := m.sessions[DefaultSessionID]
+	require.True(t, ok)
+	survivingTabs := len(se.tabs)
+	total := m.totalTabCountLocked()
+	m.mu.Unlock()
+
+	assert.Equal(t, survivingTabs, total, "totalTabCountLocked must match the actually-reachable tab count")
+	assert.GreaterOrEqual(t, survivingTabs, 1, "the browsing context must never end up with zero tabs")
+
+	createdN := atomic.LoadInt32(&created)
+	canceledN := atomic.LoadInt32(canceled)
+	assert.EqualValues(t, createdN, int32(survivingTabs)+canceledN,
+		"every physically-created tab (the original + whatever the race created) must be EITHER "+
+			"tracked or canceled — never orphaned")
+
+	tabs, _, err := m.ListTabs(DefaultSessionID)
+	require.NoError(t, err)
+	assert.Len(t, tabs, survivingTabs)
+}
+
 // --- ADR-041 D2: adoption + MaxTabs cap on adoption ---
 
 func TestAdoptTarget_AppendsAndActivatesNewTab(t *testing.T) {
@@ -310,11 +451,12 @@ func TestAdoptTarget_AppendsAndActivatesNewTab(t *testing.T) {
 	_, err := m.Session(DefaultSessionID)
 	require.NoError(t, err)
 
-	tab, err := m.adoptTarget(DefaultSessionID, target.ID("opened-by-window-open"))
+	result, err := m.adoptTarget(DefaultSessionID, target.ID("opened-by-window-open"))
 	require.NoError(t, err)
-	require.NotNil(t, tab)
-	assert.Equal(t, 1, tab.Index)
-	assert.True(t, tab.Active)
+	require.NotNil(t, result.Adopted)
+	assert.False(t, result.Unadopted)
+	assert.Equal(t, 1, result.Adopted.Index)
+	assert.True(t, result.Adopted.Active)
 
 	tabs, activeIdx, err := m.ListTabs(DefaultSessionID)
 	require.NoError(t, err)
@@ -328,27 +470,30 @@ func TestAdoptTarget_AlreadyTracked_IsNoop(t *testing.T) {
 	require.NoError(t, err)
 
 	tid := target.ID("dup-target")
-	tab1, err := m.adoptTarget(DefaultSessionID, tid)
+	result1, err := m.adoptTarget(DefaultSessionID, tid)
 	require.NoError(t, err)
-	require.NotNil(t, tab1)
+	require.NotNil(t, result1.Adopted)
 
-	tab2, err := m.adoptTarget(DefaultSessionID, tid)
+	result2, err := m.adoptTarget(DefaultSessionID, tid)
 	require.NoError(t, err)
-	assert.Nil(t, tab2, "adopting an already-tracked target must be a silent no-op")
+	assert.Nil(t, result2.Adopted, "adopting an already-tracked target must be a silent no-op")
+	assert.False(t, result2.Unadopted, "already-tracked is a true no-op, not a reportable Unadopted case")
 
 	tabs, _, err := m.ListTabs(DefaultSessionID)
 	require.NoError(t, err)
 	assert.Len(t, tabs, 2, "must not double-adopt the same target")
 }
 
-func TestAdoptTarget_MaxTabsCap_SilentlyRefuses(t *testing.T) {
+func TestAdoptTarget_MaxTabsCap_ReportsUnadopted(t *testing.T) {
 	m := newTestManagerWithFakeTabs(t, 1)
 	_, err := m.Session(DefaultSessionID)
 	require.NoError(t, err)
 
-	tab, err := m.adoptTarget(DefaultSessionID, target.ID("runaway-window-open"))
-	require.NoError(t, err, "capped adoption is a silent no-op, not an error — a runaway window.open loop must not error the caller")
-	assert.Nil(t, tab)
+	result, err := m.adoptTarget(DefaultSessionID, target.ID("runaway-window-open"))
+	require.NoError(t, err, "capped adoption is not an error — a runaway window.open loop must not error the caller")
+	assert.Nil(t, result.Adopted)
+	require.True(t, result.Unadopted, "ADR-041 fix F2: a detected-but-refused target must be reported, not silently dropped")
+	assert.Equal(t, tabAdoptReasonMaxTabs, result.Reason)
 
 	tabs, _, err := m.ListTabs(DefaultSessionID)
 	require.NoError(t, err)
@@ -358,9 +503,10 @@ func TestAdoptTarget_MaxTabsCap_SilentlyRefuses(t *testing.T) {
 func TestAdoptTarget_NoBrowsingContext_IsNoop(t *testing.T) {
 	m := newTestManagerWithFakeTabs(t, 5)
 	// No Session() call yet — nothing to adopt into.
-	tab, err := m.adoptTarget(DefaultSessionID, target.ID("orphan"))
+	result, err := m.adoptTarget(DefaultSessionID, target.ID("orphan"))
 	require.NoError(t, err)
-	assert.Nil(t, tab)
+	assert.Nil(t, result.Adopted)
+	assert.False(t, result.Unadopted)
 }
 
 func TestAdoptTarget_ConcurrentAdoptionOfSameTarget_OnlyOneWins(t *testing.T) {
@@ -371,7 +517,7 @@ func TestAdoptTarget_ConcurrentAdoptionOfSameTarget_OnlyOneWins(t *testing.T) {
 	tid := target.ID("raced-target")
 	const n = 8
 	var wg sync.WaitGroup
-	results := make([]*Tab, n)
+	results := make([]tabAdoptResult, n)
 	errs := make([]error, n)
 	for i := range n {
 		wg.Add(1)
@@ -385,7 +531,7 @@ func TestAdoptTarget_ConcurrentAdoptionOfSameTarget_OnlyOneWins(t *testing.T) {
 	adoptedCount := 0
 	for i := range n {
 		require.NoError(t, errs[i])
-		if results[i] != nil {
+		if results[i].Adopted != nil {
 			adoptedCount++
 		}
 	}
@@ -415,11 +561,12 @@ func TestReconcileTabs_AdoptsNewlyDetectedTarget(t *testing.T) {
 		}, nil
 	}
 
-	adopted, newActive, err := m.ReconcileTabs(DefaultSessionID)
+	outcome, err := m.ReconcileTabs(DefaultSessionID)
 	require.NoError(t, err)
-	require.True(t, adopted)
-	require.NotNil(t, newActive)
-	assert.Equal(t, 1, newActive.Index)
+	require.True(t, outcome.Adopted)
+	require.NotNil(t, outcome.NewActive)
+	assert.False(t, outcome.Unadopted)
+	assert.Equal(t, 1, outcome.NewActive.Index)
 
 	tabs, activeIdx, err := m.ListTabs(DefaultSessionID)
 	require.NoError(t, err)
@@ -448,10 +595,11 @@ func TestReconcileTabs_IgnoresUnrelatedAndAlreadyTrackedTargets(t *testing.T) {
 		}, nil
 	}
 
-	adopted, newActive, err := m.ReconcileTabs(DefaultSessionID)
+	outcome, err := m.ReconcileTabs(DefaultSessionID)
 	require.NoError(t, err)
-	assert.False(t, adopted)
-	assert.Nil(t, newActive)
+	assert.False(t, outcome.Adopted)
+	assert.Nil(t, outcome.NewActive)
+	assert.False(t, outcome.Unadopted)
 
 	tabs, _, err := m.ListTabs(DefaultSessionID)
 	require.NoError(t, err)
@@ -460,10 +608,11 @@ func TestReconcileTabs_IgnoresUnrelatedAndAlreadyTrackedTargets(t *testing.T) {
 
 func TestReconcileTabs_NoBrowsingContext_IsNoop(t *testing.T) {
 	m := newTestManagerWithFakeTabs(t, 5)
-	adopted, newActive, err := m.ReconcileTabs(DefaultSessionID)
+	outcome, err := m.ReconcileTabs(DefaultSessionID)
 	require.NoError(t, err)
-	assert.False(t, adopted)
-	assert.Nil(t, newActive)
+	assert.False(t, outcome.Adopted)
+	assert.Nil(t, outcome.NewActive)
+	assert.False(t, outcome.Unadopted)
 }
 
 func TestReconcileTabs_ListTargetsError_IsPropagated(t *testing.T) {
@@ -476,11 +625,93 @@ func TestReconcileTabs_ListTargetsError_IsPropagated(t *testing.T) {
 		return nil, wantErr
 	}
 
-	adopted, newActive, err := m.ReconcileTabs(DefaultSessionID)
+	outcome, err := m.ReconcileTabs(DefaultSessionID)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, wantErr)
-	assert.False(t, adopted)
-	assert.Nil(t, newActive)
+	assert.False(t, outcome.Adopted)
+	assert.Nil(t, outcome.NewActive)
+}
+
+// TestReconcileTabs_MaxTabsCap_ReportsUnadopted drives ReconcileTabs through
+// a full tab set (MaxTabs reached) and asserts the outcome reports the
+// stranded tab — ADR-041 fix F2's regression guard, the exact failure class
+// the ADR was written to prevent: a click opens a new tab that can't be
+// adopted, and the pre-fix code silently reported nothing at all instead of
+// telling the agent a tab was stranded. applyReconcileOutcome (tools.go) is
+// what turns this into browser_click's
+// tab_opened_but_not_adopted/reason/note result fields; this test proves the
+// manager-level signal it consumes is actually populated.
+func TestReconcileTabs_MaxTabsCap_ReportsUnadopted(t *testing.T) {
+	m := newTestManagerWithFakeTabs(t, 1) // cap of 1 — the root tab already fills it
+	_, err := m.Session(DefaultSessionID)
+	require.NoError(t, err)
+
+	m.mu.Lock()
+	rootTargetID := m.sessions[DefaultSessionID].tabs[0].targetID
+	m.mu.Unlock()
+
+	m.listTargets = func(ctx context.Context) ([]*target.Info, error) {
+		return []*target.Info{
+			{TargetID: rootTargetID, Type: "page", OpenerID: ""},
+			{TargetID: target.ID("stranded-target"), Type: "page", OpenerID: rootTargetID, URL: "https://cal.com/booking"},
+		}, nil
+	}
+
+	outcome, err := m.ReconcileTabs(DefaultSessionID)
+	require.NoError(t, err)
+	assert.False(t, outcome.Adopted)
+	assert.Nil(t, outcome.NewActive)
+	require.True(t, outcome.Unadopted, "a genuinely new tab was detected but could not be adopted — must be reported")
+	assert.Equal(t, tabAdoptReasonMaxTabs, outcome.Reason)
+
+	// The result map browser_click actually returns to the agent.
+	result := map[string]any{"success": true}
+	applyReconcileOutcome(result, outcome)
+	assert.Equal(t, true, result["tab_opened_but_not_adopted"])
+	assert.Equal(t, string(tabAdoptReasonMaxTabs), result["reason"])
+	assert.NotEmpty(t, result["note"], "the agent needs a human-readable explanation, not just a machine reason code")
+	assert.Nil(t, result["opened_new_tab"], "an unadopted tab must not ALSO be reported as opened_new_tab")
+}
+
+// TestApplyReconcileOutcome_AdoptedVsUnadoptedVsNoop pins the three
+// result-map shapes applyReconcileOutcome (tools.go) produces from a
+// BrowserManager.ReconcileOutcome — the mapping ClickTool.Execute relies on
+// to surface ADR-041 fix F2's unadopted signal to the agent.
+func TestApplyReconcileOutcome_AdoptedVsUnadoptedVsNoop(t *testing.T) {
+	t.Run("adopted", func(t *testing.T) {
+		tab := Tab{Index: 2, URL: "https://cal.com/booking", Active: true}
+		result := map[string]any{"success": true}
+		applyReconcileOutcome(result, ReconcileOutcome{Adopted: true, NewActive: &tab})
+		assert.Equal(t, true, result["opened_new_tab"])
+		assert.Equal(t, 2, result["new_tab_index"])
+		assert.Equal(t, "https://cal.com/booking", result["new_tab_url"])
+		assert.Nil(t, result["tab_opened_but_not_adopted"])
+	})
+
+	t.Run("unadopted_max_tabs", func(t *testing.T) {
+		result := map[string]any{"success": true}
+		applyReconcileOutcome(result, ReconcileOutcome{Unadopted: true, Reason: tabAdoptReasonMaxTabs})
+		assert.Equal(t, true, result["tab_opened_but_not_adopted"])
+		assert.Equal(t, "max_tabs_reached", result["reason"])
+		assert.Contains(t, result["note"], "browser_close_tab")
+		assert.Nil(t, result["opened_new_tab"])
+	})
+
+	t.Run("unadopted_attach_failed", func(t *testing.T) {
+		result := map[string]any{"success": true}
+		applyReconcileOutcome(result, ReconcileOutcome{Unadopted: true, Reason: tabAdoptReasonAttachFailed})
+		assert.Equal(t, true, result["tab_opened_but_not_adopted"])
+		assert.Equal(t, "attach_failed", result["reason"])
+		assert.Nil(t, result["opened_new_tab"])
+	})
+
+	t.Run("noop", func(t *testing.T) {
+		result := map[string]any{"success": true}
+		applyReconcileOutcome(result, ReconcileOutcome{})
+		assert.Nil(t, result["opened_new_tab"])
+		assert.Nil(t, result["tab_opened_but_not_adopted"])
+		assert.Nil(t, result["note"])
+	})
 }
 
 // --- ADR-041 D4: tabs-changed callback wiring ---

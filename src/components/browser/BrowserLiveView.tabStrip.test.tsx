@@ -196,4 +196,124 @@ describe('BrowserLiveView — tab strip (ADR-041 D4)', () => {
     expect(screen.getByTestId('browser-tab-close-0')).toBeDisabled()
     expect(screen.getByTestId('browser-tab-new')).toBeDisabled()
   })
+
+  // Reviewer finding F2: the close ✕/new-tab ＋ buttons were already gated
+  // on `disabled={!connected}`, but the clickable tab chip itself had no
+  // such gate — clicking it while the WS was reconnecting silently no-op'd
+  // (sendTabAction returning false, discarded). The chip must now be
+  // non-interactive (aria-disabled, no pointer cursor, click/Enter/Space
+  // no-op) while disconnected.
+  it('marks the tab chip aria-disabled and non-clickable while disconnected', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    emitTabs(0, [
+      { index: 0, title: 'First', active: true },
+      { index: 1, title: 'Second' },
+    ])
+
+    act(() => {
+      callbacksRef.current?.onDisconnected?.()
+    })
+
+    const chip = screen.getByTestId('browser-tab-1')
+    expect(chip).toHaveAttribute('aria-disabled', 'true')
+    expect(chip.className).toContain('cursor-not-allowed')
+    expect(chip.className).not.toContain('cursor-pointer')
+
+    fireEvent.click(chip)
+    expect(mockSendTabAction).not.toHaveBeenCalled()
+
+    fireEvent.keyDown(chip, { key: 'Enter' })
+    expect(mockSendTabAction).not.toHaveBeenCalled()
+  })
+
+  it('leaves the tab chip clickable (not aria-disabled) once connected', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    emitTabs(0, [
+      { index: 0, title: 'First', active: true },
+      { index: 1, title: 'Second' },
+    ])
+
+    const chip = screen.getByTestId('browser-tab-1')
+    expect(chip).toHaveAttribute('aria-disabled', 'false')
+    expect(chip.className).toContain('cursor-pointer')
+
+    fireEvent.click(chip)
+    expect(mockSendTabAction).toHaveBeenCalledWith('switch', 1)
+  })
+})
+
+describe('BrowserLiveView — tab strip actions take the wheel (ADR-041 D4 / F1)', () => {
+  // Reviewer finding F1: the backend only honours `browser_tab_action` when
+  // this connection holds the control lock, or nobody controls (idle) — a
+  // merely-watching viewer's tab action would be rejected. Every tab-strip
+  // handler must call takeWheelIfNeeded() (send control:take) BEFORE
+  // sendTabAction, exactly like the omnibox does before navigating.
+  it('switching a tab while idle sends control:take before browser_tab_action', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    emitTabs(0, [
+      { index: 0, title: 'First', active: true },
+      { index: 1, title: 'Second' },
+    ])
+
+    fireEvent.click(screen.getByTestId('browser-tab-1'))
+
+    expect(mockSendControl).toHaveBeenCalledWith('take')
+    expect(mockSendTabAction).toHaveBeenCalledWith('switch', 1)
+    const takeOrder = mockSendControl.mock.invocationCallOrder[0]
+    const switchOrder = mockSendTabAction.mock.invocationCallOrder[0]
+    expect(takeOrder).toBeLessThan(switchOrder)
+  })
+
+  it('closing a tab sends control:take before browser_tab_action', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    emitTabs(0, [
+      { index: 0, title: 'First', active: true },
+      { index: 1, title: 'Second' },
+    ])
+
+    fireEvent.click(screen.getByTestId('browser-tab-close-1'))
+
+    expect(mockSendControl).toHaveBeenCalledWith('take')
+    expect(mockSendTabAction).toHaveBeenCalledWith('close', 1)
+    const takeOrder = mockSendControl.mock.invocationCallOrder[0]
+    const closeOrder = mockSendTabAction.mock.invocationCallOrder[0]
+    expect(takeOrder).toBeLessThan(closeOrder)
+  })
+
+  it('opening a new tab sends control:take before browser_tab_action', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    emitTabs(0, [{ index: 0, title: 'Only tab', active: true }])
+
+    fireEvent.click(screen.getByTestId('browser-tab-new'))
+
+    expect(mockSendControl).toHaveBeenCalledWith('take')
+    expect(mockSendTabAction).toHaveBeenCalledWith('open')
+    const takeOrder = mockSendControl.mock.invocationCallOrder[0]
+    const openOrder = mockSendTabAction.mock.invocationCallOrder[0]
+    expect(takeOrder).toBeLessThan(openOrder)
+  })
+
+  // Reviewer finding F2: a failed sendTabAction (e.g. dead/reconnecting
+  // transport) must surface a toast rather than silently discarding the
+  // boolean return.
+  it('surfaces a toast when sendTabAction fails', async () => {
+    const { useUiStore } = await import('@/store/ui')
+    useUiStore.setState({ toasts: [] })
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    emitTabs(0, [
+      { index: 0, title: 'First', active: true },
+      { index: 1, title: 'Second' },
+    ])
+    mockSendTabAction.mockReturnValueOnce(false)
+
+    fireEvent.click(screen.getByTestId('browser-tab-1'))
+
+    expect(useUiStore.getState().toasts.some((t) => /could not switch tabs/i.test(t.message))).toBe(true)
+  })
 })
