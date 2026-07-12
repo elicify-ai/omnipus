@@ -428,9 +428,10 @@ describe('OmnipusComposer — model selector store contracts (FR-010)', () => {
     expect(last).toBeDefined()
     expect(last?.type).toBe('message')
     expect(last?.metadata?.model_name).toBe('z-ai/glm-5-turbo')
-    // And the store must clear nextModel after send (per spec §18 Q3:
-    // the picker is forward-looking, not persisted).
-    expect(useChatStore.getState().nextModel).toBeNull()
+    // Sticky model selection: the pick PERSISTS after a successful send (it is
+    // no longer cleared) so the composer keeps showing it and the next message
+    // defaults to the same model. Switching session/agent re-seeds it.
+    expect(useChatStore.getState().nextModel).toBe('z-ai/glm-5-turbo')
   })
 
   it('omits metadata.model_name when the user has not picked a model this session (store-level)', () => {
