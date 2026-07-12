@@ -386,6 +386,7 @@ export interface BrowserInputFrame {
   delta_y?: number;
   key?: string;
   code?: string;
+  key_code?: number;
   text?: string;
   modifiers?: number;
   url?: string;

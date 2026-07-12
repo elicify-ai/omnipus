@@ -426,6 +426,7 @@ export const BrowserInputFrame = z
     delta_y: z.number().optional(),
     key: z.string().max(64).optional(),
     code: z.string().max(64).optional(),
+    key_code: z.number().int().min(0).max(255).optional(),
     text: z.string().max(8192).optional(),
     modifiers: z.number().int().min(0).max(15).optional(),
     url: z.string().max(2048).optional(),

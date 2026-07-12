@@ -58,11 +58,13 @@ type BrowserDetachFrame struct {
 
 // BrowserInputFrame — Client → server. A viewer input event to inject into the live browser via CDP Input.dispatch*. Only honoured while the viewer holds control (browser_control action=take). Coordinates are device (CSS) pixels of the screencast frame.
 type BrowserInputFrame struct {
-	Button    *string  `json:"button,omitempty"`
-	Code      *string  `json:"code,omitempty"`
-	DeltaX    *float64 `json:"delta_x,omitempty"`
-	DeltaY    *float64 `json:"delta_y,omitempty"`
-	Key       *string  `json:"key,omitempty"`
+	Button *string  `json:"button,omitempty"`
+	Code   *string  `json:"code,omitempty"`
+	DeltaX *float64 `json:"delta_x,omitempty"`
+	DeltaY *float64 `json:"delta_y,omitempty"`
+	Key    *string  `json:"key,omitempty"`
+	// Windows virtual key code for key_down/key_up (DOM KeyboardEvent.keyCode) — required for CDP to perform editing/nav key actions and modifier shortcuts. See ADR-039.
+	KeyCode   *int     `json:"key_code,omitempty"`
 	Kind      string   `json:"kind"`
 	Modifiers *int     `json:"modifiers,omitempty"`
 	Text      *string  `json:"text,omitempty"`
