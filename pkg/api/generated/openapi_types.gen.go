@@ -1234,12 +1234,13 @@ func (e MessageStatus) Valid() bool {
 
 // Defines values for MessageToolCallsStatus.
 const (
-	MessageToolCallsStatusCancelled MessageToolCallsStatus = "cancelled"
-	MessageToolCallsStatusDenied    MessageToolCallsStatus = "denied"
-	MessageToolCallsStatusError     MessageToolCallsStatus = "error"
-	MessageToolCallsStatusPending   MessageToolCallsStatus = "pending"
-	MessageToolCallsStatusRunning   MessageToolCallsStatus = "running"
-	MessageToolCallsStatusSuccess   MessageToolCallsStatus = "success"
+	MessageToolCallsStatusCancelled   MessageToolCallsStatus = "cancelled"
+	MessageToolCallsStatusDenied      MessageToolCallsStatus = "denied"
+	MessageToolCallsStatusError       MessageToolCallsStatus = "error"
+	MessageToolCallsStatusInterrupted MessageToolCallsStatus = "interrupted"
+	MessageToolCallsStatusPending     MessageToolCallsStatus = "pending"
+	MessageToolCallsStatusRunning     MessageToolCallsStatus = "running"
+	MessageToolCallsStatusSuccess     MessageToolCallsStatus = "success"
 )
 
 // Valid indicates whether the value is a known member of the MessageToolCallsStatus enum.
@@ -1250,6 +1251,8 @@ func (e MessageToolCallsStatus) Valid() bool {
 	case MessageToolCallsStatusDenied:
 		return true
 	case MessageToolCallsStatusError:
+		return true
+	case MessageToolCallsStatusInterrupted:
 		return true
 	case MessageToolCallsStatusPending:
 		return true
@@ -2260,12 +2263,13 @@ func (e SessionDetailMessagesStatus) Valid() bool {
 
 // Defines values for SessionDetailMessagesToolCallsStatus.
 const (
-	SessionDetailMessagesToolCallsStatusCancelled SessionDetailMessagesToolCallsStatus = "cancelled"
-	SessionDetailMessagesToolCallsStatusDenied    SessionDetailMessagesToolCallsStatus = "denied"
-	SessionDetailMessagesToolCallsStatusError     SessionDetailMessagesToolCallsStatus = "error"
-	SessionDetailMessagesToolCallsStatusPending   SessionDetailMessagesToolCallsStatus = "pending"
-	SessionDetailMessagesToolCallsStatusRunning   SessionDetailMessagesToolCallsStatus = "running"
-	SessionDetailMessagesToolCallsStatusSuccess   SessionDetailMessagesToolCallsStatus = "success"
+	SessionDetailMessagesToolCallsStatusCancelled   SessionDetailMessagesToolCallsStatus = "cancelled"
+	SessionDetailMessagesToolCallsStatusDenied      SessionDetailMessagesToolCallsStatus = "denied"
+	SessionDetailMessagesToolCallsStatusError       SessionDetailMessagesToolCallsStatus = "error"
+	SessionDetailMessagesToolCallsStatusInterrupted SessionDetailMessagesToolCallsStatus = "interrupted"
+	SessionDetailMessagesToolCallsStatusPending     SessionDetailMessagesToolCallsStatus = "pending"
+	SessionDetailMessagesToolCallsStatusRunning     SessionDetailMessagesToolCallsStatus = "running"
+	SessionDetailMessagesToolCallsStatusSuccess     SessionDetailMessagesToolCallsStatus = "success"
 )
 
 // Valid indicates whether the value is a known member of the SessionDetailMessagesToolCallsStatus enum.
@@ -2276,6 +2280,8 @@ func (e SessionDetailMessagesToolCallsStatus) Valid() bool {
 	case SessionDetailMessagesToolCallsStatusDenied:
 		return true
 	case SessionDetailMessagesToolCallsStatusError:
+		return true
+	case SessionDetailMessagesToolCallsStatusInterrupted:
 		return true
 	case SessionDetailMessagesToolCallsStatusPending:
 		return true
@@ -2941,12 +2947,13 @@ func (e ToolApprovalResponseStatus) Valid() bool {
 
 // Defines values for ToolCallStatus.
 const (
-	ToolCallStatusCancelled ToolCallStatus = "cancelled"
-	ToolCallStatusDenied    ToolCallStatus = "denied"
-	ToolCallStatusError     ToolCallStatus = "error"
-	ToolCallStatusPending   ToolCallStatus = "pending"
-	ToolCallStatusRunning   ToolCallStatus = "running"
-	ToolCallStatusSuccess   ToolCallStatus = "success"
+	ToolCallStatusCancelled   ToolCallStatus = "cancelled"
+	ToolCallStatusDenied      ToolCallStatus = "denied"
+	ToolCallStatusError       ToolCallStatus = "error"
+	ToolCallStatusInterrupted ToolCallStatus = "interrupted"
+	ToolCallStatusPending     ToolCallStatus = "pending"
+	ToolCallStatusRunning     ToolCallStatus = "running"
+	ToolCallStatusSuccess     ToolCallStatus = "success"
 )
 
 // Valid indicates whether the value is a known member of the ToolCallStatus enum.
@@ -2957,6 +2964,8 @@ func (e ToolCallStatus) Valid() bool {
 	case ToolCallStatusDenied:
 		return true
 	case ToolCallStatusError:
+		return true
+	case ToolCallStatusInterrupted:
 		return true
 	case ToolCallStatusPending:
 		return true
@@ -3217,22 +3226,22 @@ func (e ListSessionsParamsType) Valid() bool {
 
 // Defines values for GetTokenStatsParamsPeriod.
 const (
-	All   GetTokenStatsParamsPeriod = "all"
-	Day   GetTokenStatsParamsPeriod = "day"
-	Month GetTokenStatsParamsPeriod = "month"
-	Week  GetTokenStatsParamsPeriod = "week"
+	GetTokenStatsParamsPeriodAll   GetTokenStatsParamsPeriod = "all"
+	GetTokenStatsParamsPeriodDay   GetTokenStatsParamsPeriod = "day"
+	GetTokenStatsParamsPeriodMonth GetTokenStatsParamsPeriod = "month"
+	GetTokenStatsParamsPeriodWeek  GetTokenStatsParamsPeriod = "week"
 )
 
 // Valid indicates whether the value is a known member of the GetTokenStatsParamsPeriod enum.
 func (e GetTokenStatsParamsPeriod) Valid() bool {
 	switch e {
-	case All:
+	case GetTokenStatsParamsPeriodAll:
 		return true
-	case Day:
+	case GetTokenStatsParamsPeriodDay:
 		return true
-	case Month:
+	case GetTokenStatsParamsPeriodMonth:
 		return true
-	case Week:
+	case GetTokenStatsParamsPeriodWeek:
 		return true
 	default:
 		return false
@@ -3241,31 +3250,31 @@ func (e GetTokenStatsParamsPeriod) Valid() bool {
 
 // Defines values for ListTasksParamsStatus.
 const (
-	Blocked    ListTasksParamsStatus = "blocked"
-	Done       ListTasksParamsStatus = "done"
-	Failed     ListTasksParamsStatus = "failed"
-	InProgress ListTasksParamsStatus = "in_progress"
-	Inbox      ListTasksParamsStatus = "inbox"
-	Next       ListTasksParamsStatus = "next"
-	Planning   ListTasksParamsStatus = "planning"
+	ListTasksParamsStatusBlocked    ListTasksParamsStatus = "blocked"
+	ListTasksParamsStatusDone       ListTasksParamsStatus = "done"
+	ListTasksParamsStatusFailed     ListTasksParamsStatus = "failed"
+	ListTasksParamsStatusInProgress ListTasksParamsStatus = "in_progress"
+	ListTasksParamsStatusInbox      ListTasksParamsStatus = "inbox"
+	ListTasksParamsStatusNext       ListTasksParamsStatus = "next"
+	ListTasksParamsStatusPlanning   ListTasksParamsStatus = "planning"
 )
 
 // Valid indicates whether the value is a known member of the ListTasksParamsStatus enum.
 func (e ListTasksParamsStatus) Valid() bool {
 	switch e {
-	case Blocked:
+	case ListTasksParamsStatusBlocked:
 		return true
-	case Done:
+	case ListTasksParamsStatusDone:
 		return true
-	case Failed:
+	case ListTasksParamsStatusFailed:
 		return true
-	case InProgress:
+	case ListTasksParamsStatusInProgress:
 		return true
-	case Inbox:
+	case ListTasksParamsStatusInbox:
 		return true
-	case Next:
+	case ListTasksParamsStatusNext:
 		return true
-	case Planning:
+	case ListTasksParamsStatusPlanning:
 		return true
 	default:
 		return false
@@ -5577,7 +5586,7 @@ type Message struct {
 		// Result Return value from the tool. Shape is tool-specific.
 		Result *map[string]interface{} `json:"result,omitempty"`
 
-		// Status Outcome of the tool call.
+		// Status Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case; unlike that frame, ToolCall carries no accompanying "reason" field here — subturn.go never persists one onto the ToolCall record (reason is WS-frame-only, via SubTurnEndPayload).
 		Status MessageToolCallsStatus `json:"status"`
 
 		// Tool Tool name as registered in the tool registry (e.g. "workspace.shell", "web_search").
@@ -5606,7 +5615,7 @@ type MessageRole string
 // MessageStatus Completion status of this message turn.
 type MessageStatus string
 
-// MessageToolCallsStatus Outcome of the tool call.
+// MessageToolCallsStatus Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case; unlike that frame, ToolCall carries no accompanying "reason" field here — subturn.go never persists one onto the ToolCall record (reason is WS-frame-only, via SubTurnEndPayload).
 type MessageToolCallsStatus string
 
 // MessageType Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
@@ -6894,7 +6903,7 @@ type SessionDetail struct {
 			// Result Return value from the tool. Shape is tool-specific.
 			Result *map[string]interface{} `json:"result,omitempty"`
 
-			// Status Outcome of the tool call.
+			// Status Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case; unlike that frame, ToolCall carries no accompanying "reason" field here — subturn.go never persists one onto the ToolCall record (reason is WS-frame-only, via SubTurnEndPayload).
 			Status SessionDetailMessagesToolCallsStatus `json:"status"`
 
 			// Tool Tool name as registered in the tool registry (e.g. "workspace.shell", "web_search").
@@ -7026,7 +7035,7 @@ type SessionDetailMessagesRole string
 // SessionDetailMessagesStatus Completion status of this message turn.
 type SessionDetailMessagesStatus string
 
-// SessionDetailMessagesToolCallsStatus Outcome of the tool call.
+// SessionDetailMessagesToolCallsStatus Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case; unlike that frame, ToolCall carries no accompanying "reason" field here — subturn.go never persists one onto the ToolCall record (reason is WS-frame-only, via SubTurnEndPayload).
 type SessionDetailMessagesToolCallsStatus string
 
 // SessionDetailMessagesType Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
@@ -7826,14 +7835,14 @@ type ToolCall struct {
 	// Result Return value from the tool. Shape is tool-specific.
 	Result *map[string]interface{} `json:"result,omitempty"`
 
-	// Status Outcome of the tool call.
+	// Status Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case; unlike that frame, ToolCall carries no accompanying "reason" field here — subturn.go never persists one onto the ToolCall record (reason is WS-frame-only, via SubTurnEndPayload).
 	Status ToolCallStatus `json:"status"`
 
 	// Tool Tool name as registered in the tool registry (e.g. "workspace.shell", "web_search").
 	Tool string `json:"tool"`
 }
 
-// ToolCallStatus Outcome of the tool call.
+// ToolCallStatus Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case; unlike that frame, ToolCall carries no accompanying "reason" field here — subturn.go never persists one onto the ToolCall record (reason is WS-frame-only, via SubTurnEndPayload).
 type ToolCallStatus string
 
 // ToolPolicy A policy value governing whether a tool call is allowed, requires approval, or is denied.

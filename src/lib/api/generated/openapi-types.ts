@@ -2836,11 +2836,11 @@ export interface components {
              */
             tool: string;
             /**
-             * @description Outcome of the tool call.
+             * @description Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case; unlike that frame, ToolCall carries no accompanying "reason" field here — subturn.go never persists one onto the ToolCall record (reason is WS-frame-only, via SubTurnEndPayload).
              * @example success
              * @enum {string}
              */
-            status: "success" | "error" | "pending" | "denied" | "running" | "cancelled";
+            status: "success" | "error" | "pending" | "denied" | "running" | "cancelled" | "interrupted";
             /**
              * Format: int64
              * @description Elapsed time in milliseconds. Absent when still running.

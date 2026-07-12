@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -1492,3 +1493,174 @@ func TestParseRetryAfterSeconds(t *testing.T) {
 }
 
 func ptrF(f float64) *float64 { return &f }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// A-I4 live/reload parity — multi-step delegation must not flatten a child
+// sub-turn's own narration into top-level bubbles on replay.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// TestReplay_MultiStepDelegation_ChildNarrationSuppressed is the core
+// regression test for the A-I4 live/reload parity fix (live re-verification,
+// 2026-07-12): a delegated child sub-turn shares its parent's
+// transcriptSessionID, so its own intermediate narration and its own
+// final-turn text land in the SAME transcript as the delegator's real
+// messages. Before this fix, streamReplay flattened every entry with
+// non-empty Content into a top-level replay_message frame — doubling the
+// visible bubble count and leaking the delegate's raw internal report as if
+// it were separate top-level turns, none of which ever appeared live (see
+// wsStreamer.Update's shadow-stream ownership gate).
+//
+// This scenario exercises a genuinely multi-step delegation: 5 nested tool
+// calls (web searches) interleaved with 4 rounds of the child's own
+// intermediate narration, plus the child's own final "raw report" text —
+// deliberately larger than the earlier A-I4 fix rounds' own coverage (a
+// 3-segment/2-tool-call case per the delivery report), which did not catch
+// this gap.
+//
+// Traces to: A-I4 (live vs. reload render parity), live re-verification
+// 2026-07-12.
+func TestReplay_MultiStepDelegation_ChildNarrationSuppressed(t *testing.T) {
+	const spawnCallID = "c1"
+	const delegateAgentID = "researcher"
+
+	spawnResultText := "Executive Summary\n\nKey Findings: ...\n\nFinal answer: the research is complete."
+	spawnTC := session.ToolCall{
+		ID:         session.ToolCallID(spawnCallID),
+		Tool:       "delegate",
+		Status:     "success",
+		DurationMS: 39500,
+		Parameters: map[string]any{
+			"task":     "research topic X across multiple sources",
+			"agent_id": delegateAgentID,
+		},
+		Result: map[string]any{"result": spawnResultText},
+	}
+
+	entries := []session.TranscriptEntry{
+		userEntry("please research topic X"),
+		// Parent's own kickoff bubble + the spawning "delegate" tool call.
+		assistantEntry("Let me delegate this to our researcher.", "jim", spawnTC),
+	}
+
+	// 5 nested tool calls (the child's own web searches), each correctly
+	// carrying the PRE-EXISTING ParentToolCallID correlation — unaffected by
+	// this fix, still nested under the spawn span exactly as before.
+	for i := 1; i <= 5; i++ {
+		nestedTC := session.ToolCall{
+			ID:               session.ToolCallID(fmt.Sprintf("t%d", i)),
+			Tool:             "web_search",
+			Status:           "success",
+			DurationMS:       int64(i * 100),
+			ParentToolCallID: session.ToolCallID(spawnCallID),
+		}
+		entries = append(entries, session.TranscriptEntry{
+			ID:        fmt.Sprintf("child-tool-entry-%d", i),
+			Role:      "assistant",
+			AgentID:   delegateAgentID,
+			ToolCalls: []session.ToolCall{nestedTC},
+		})
+	}
+
+	// 4 rounds of the child's OWN intermediate narration — the NEW
+	// ParentSpawnCallID correlation this fix adds. Before the fix, each of
+	// these produced its own top-level replay_message frame on reload,
+	// despite never appearing live.
+	childNarration := []string{
+		"Step 1: let me check available sources.",
+		"Step 2: found a promising lead, digging deeper.",
+		"Step 3: cross-checking against a second source.",
+		"Step 4: reconciling conflicting details before I finalize.",
+	}
+	for i, text := range childNarration {
+		entries = append(entries, session.TranscriptEntry{
+			ID:                fmt.Sprintf("child-narration-%d", i),
+			Role:              "assistant",
+			Content:           text,
+			AgentID:           delegateAgentID,
+			Model:             "z-ai/glm-5.2",
+			TurnID:            "child-turn-1",
+			ParentSpawnCallID: spawnCallID,
+		})
+	}
+
+	// The child's own FINAL raw report — a second, differently-worded
+	// "internal narration" entry distinct from the intermediate drafts
+	// above, and distinct from the delegator's own synthesized final answer
+	// below. This is exactly the "two entirely new blocks of raw text"
+	// symptom from the live re-verification report.
+	entries = append(entries, session.TranscriptEntry{
+		ID:                "child-final-report",
+		Role:              "assistant",
+		Content:           "Executive Summary\n\nKey Findings: ...\n\nConfidence & Gaps: ...\n\nSources: ...",
+		AgentID:           delegateAgentID,
+		Model:             "z-ai/glm-5.2",
+		TurnID:            "child-turn-1",
+		ParentSpawnCallID: spawnCallID,
+	})
+
+	// The delegator's OWN final synthesized answer — a genuine top-level
+	// message, no ParentSpawnCallID, must survive untouched.
+	entries = append(entries, session.TranscriptEntry{
+		ID:      "parent-final-answer",
+		Role:    "assistant",
+		Content: "Here's what I found across the sources you asked about: ...",
+		AgentID: "jim",
+	})
+
+	frames, _ := runReplay(t, entries)
+
+	replayMessages := filterByType(frames, "replay_message")
+
+	// Exactly 3 top-level replay_message frames: the user's own message, the
+	// delegator's kickoff bubble, and the delegator's own final synthesized
+	// answer — matching LIVE's "exactly 3 assistant bubbles" (the bug
+	// report's own reproduction). None of the 4 intermediate narration
+	// entries or the child's own final report entry (5 total suppressed
+	// entries) may leak through as a 4th/5th/6th/7th/8th bubble.
+	require.Len(t, replayMessages, 3,
+		"expected exactly 3 top-level replay_message frames (user + delegator kickoff + "+
+			"delegator final answer) — a regression that flattens the child sub-turn's own "+
+			"narration back into top-level bubbles would inflate this count; got %d: %+v",
+		len(replayMessages), replayMessages)
+
+	for _, m := range replayMessages {
+		assert.NotEqual(t, delegateAgentID, m.AgentID,
+			"no top-level replay_message may be attributed to the delegate's own identity — "+
+				"live rendering never produces a standalone bubble under the delegate's own "+
+				"name/avatar")
+		assert.Empty(t, m.Model,
+			"no top-level replay_message from this scenario may carry a model tag — live "+
+				"rendering never showed one for this delegation (only the top-nav model "+
+				"selector does)")
+		assert.NotContains(t, m.Content, "Executive Summary",
+			"the delegate's own raw internal report text must never surface as a top-level "+
+				"chat bubble")
+		assert.NotContains(t, m.Content, "Step 1:",
+			"the delegate's own intermediate narration must never surface as a top-level "+
+				"chat bubble")
+	}
+
+	// The genuine final answer is still present, byte-identical, at the end.
+	last := replayMessages[len(replayMessages)-1]
+	assert.Equal(t, "Here's what I found across the sources you asked about: ...", last.Content)
+	assert.Equal(t, "jim", last.AgentID)
+
+	// The child's own tool calls are UNAFFECTED by this fix — still nested
+	// under exactly one subagent span, bracketed by subagent_start/
+	// subagent_end, with all 5 nested tool_call_start/result pairs present.
+	require.Len(t, filterByType(frames, "subagent_start"), 1)
+	require.Len(t, filterByType(frames, "subagent_end"), 1)
+	nestedStarts := 0
+	for _, f := range filterByType(frames, "tool_call_start") {
+		if f.ParentCallID == spawnCallID {
+			nestedStarts++
+		}
+	}
+	assert.Equal(t, 5, nestedStarts,
+		"all 5 nested web_search tool calls must still replay, correctly bracketed under the "+
+			"spawn span — this fix only suppresses ASSISTANT TEXT entries, never tool calls")
+
+	// The done frame must still be exactly one, and framesEmitted must not
+	// count the 5 suppressed entries at all.
+	assert.Equal(t, "done", frames[len(frames)-1].Type)
+}

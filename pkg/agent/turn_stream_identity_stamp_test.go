@@ -8,14 +8,16 @@ import (
 )
 
 // producerAgentIDMockStreamer is a bus.Streamer that also records
-// SetProducerAgentID and SetTurnID calls, mirroring *gateway.wsStreamer's
-// methods of the same names. It lets stampStreamerProducerAgentID's and
-// stampStreamerTurnID's type-assertions be exercised without importing the
-// gateway package.
+// SetProducerAgentID, SetTurnID, and SetParentSpawnCallID calls, mirroring
+// *gateway.wsStreamer's methods of the same names. It lets
+// stampStreamerProducerAgentID's, stampStreamerTurnID's, and
+// stampStreamerParentSpawnCallID's type-assertions be exercised without
+// importing the gateway package.
 type producerAgentIDMockStreamer struct {
 	mockStreamer
-	setProducerAgentIDCalls []string
-	setTurnIDCalls          []string
+	setProducerAgentIDCalls   []string
+	setTurnIDCalls            []string
+	setParentSpawnCallIDCalls []string
 }
 
 func (m *producerAgentIDMockStreamer) SetProducerAgentID(agentID string) {
@@ -33,6 +35,14 @@ func (m *producerAgentIDMockStreamer) SetTurnID(turnID string) {
 		return
 	}
 	m.setTurnIDCalls = append(m.setTurnIDCalls, turnID)
+}
+
+// SetParentSpawnCallID mirrors *gateway.wsStreamer.SetParentSpawnCallID's own
+// semantics exactly: UNLIKE SetTurnID, it does NOT no-op on empty — an empty
+// parentSpawnCallID is the valid, common "root turn, not a delegation child"
+// value, so every call (including empty-string ones) is recorded.
+func (m *producerAgentIDMockStreamer) SetParentSpawnCallID(parentSpawnCallID string) {
+	m.setParentSpawnCallIDCalls = append(m.setParentSpawnCallIDCalls, parentSpawnCallID)
 }
 
 // TestStampStreamerProducerAgentID_UsesTurnsOwnAgent verifies FIX 5a's wiring:
@@ -151,4 +161,68 @@ func TestStampStreamerTurnID_NoOpWhenTurnIDEmpty(t *testing.T) {
 
 	assert.Empty(t, streamer.setTurnIDCalls,
 		"must not stamp the streamer when the turn has no ID")
+}
+
+// TestStampStreamerParentSpawnCallID_UsesTurnsOwnParentSpawnCallID verifies
+// the A-I4 live/reload parity fix's wiring: a delegation CHILD sub-turn's own
+// streamer must be stamped with childTS.parentSpawnCallID, the same
+// correlation subturn.go sets at spawnSubTurn construction — this is what
+// lets the transcript entry wsStreamer.Finalize writes carry the nesting
+// signal pkg/gateway/replay.go needs to withhold the child's own raw
+// narration/report from top-level replay.
+//
+// BDD:
+//
+//	Given a turnState for a delegation CHILD sub-turn (parentSpawnCallID ==
+//	  "call_abc123", the spawning "delegate" ToolCall.ID in the parent turn),
+//	When stampStreamerParentSpawnCallID is called with a streamer that
+//	  implements SetParentSpawnCallID,
+//	Then the streamer is stamped with "call_abc123".
+//
+// Traces to: pkg/agent/turn.go stampStreamerParentSpawnCallID; called from
+// pkg/agent/loop.go's streaming branch immediately after GetStreamer,
+// alongside stampStreamerProducerAgentID/stampStreamerTurnID.
+func TestStampStreamerParentSpawnCallID_UsesTurnsOwnParentSpawnCallID(t *testing.T) {
+	ts := &turnState{parentSpawnCallID: "call_abc123"}
+	streamer := &producerAgentIDMockStreamer{}
+
+	ts.stampStreamerParentSpawnCallID(streamer)
+
+	require.Len(t, streamer.setParentSpawnCallIDCalls, 1,
+		"SetParentSpawnCallID must be called exactly once")
+	assert.Equal(t, "call_abc123", streamer.setParentSpawnCallIDCalls[0],
+		"the streamer must be stamped with the CHILD turn's own spawning ToolCall.ID")
+}
+
+// TestStampStreamerParentSpawnCallID_RootTurnStampsEmpty verifies the
+// counterpart case: a ROOT (non-delegated) turn has parentSpawnCallID == "",
+// and — unlike stampStreamerTurnID, which relies on the streamer's own
+// no-op-on-empty guard — this call must still reach SetParentSpawnCallID
+// with the empty value, because empty is itself meaningful (it is what
+// tells Finalize's transcript entry "this is NOT a delegation child").
+// A silently-skipped call here would leave a REUSED wsStreamer instance
+// (unusual, but not structurally prevented) carrying a stale non-empty
+// value from a prior turn.
+func TestStampStreamerParentSpawnCallID_RootTurnStampsEmpty(t *testing.T) {
+	ts := &turnState{}
+	streamer := &producerAgentIDMockStreamer{}
+
+	ts.stampStreamerParentSpawnCallID(streamer)
+
+	require.Len(t, streamer.setParentSpawnCallIDCalls, 1,
+		"SetParentSpawnCallID must be called even for a root turn (empty value)")
+	assert.Equal(t, "", streamer.setParentSpawnCallIDCalls[0])
+}
+
+// TestStampStreamerParentSpawnCallID_NoOpWhenStreamerDoesNotImplementInterface
+// mirrors the sibling stamp functions' fallback tests: non-webchat streamers
+// (telegram, wecom, sse — none of which implement SetParentSpawnCallID) are
+// left untouched.
+func TestStampStreamerParentSpawnCallID_NoOpWhenStreamerDoesNotImplementInterface(t *testing.T) {
+	ts := &turnState{parentSpawnCallID: "call_abc123"}
+	streamer := &mockStreamer{} // does NOT implement SetParentSpawnCallID
+
+	assert.NotPanics(t, func() {
+		ts.stampStreamerParentSpawnCallID(streamer)
+	}, "must be a safe no-op for streamers without SetParentSpawnCallID")
 }

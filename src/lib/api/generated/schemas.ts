@@ -95,7 +95,14 @@ type Attachment = {
 type ToolCall = {
   id: string;
   tool: string;
-  status: "success" | "error" | "pending" | "denied" | "running" | "cancelled";
+  status:
+    | "success"
+    | "error"
+    | "pending"
+    | "denied"
+    | "running"
+    | "cancelled"
+    | "interrupted";
   duration_ms?: number | undefined;
   parameters?: {} | undefined;
   result?: {} | undefined;
@@ -1039,6 +1046,7 @@ export const ToolCall: z.ZodType<ToolCall> = z.object({
     "denied",
     "running",
     "cancelled",
+    "interrupted",
   ]),
   duration_ms: z.number().int().gte(0).optional(),
   parameters: z.object({}).partial().passthrough().optional(),

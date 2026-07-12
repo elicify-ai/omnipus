@@ -602,6 +602,34 @@ func (ts *turnState) stampStreamerTurnID(streamer bus.Streamer) {
 	}
 }
 
+// stampStreamerParentSpawnCallID stamps this turn's parentSpawnCallID (empty
+// for a root/non-delegated turn) onto a freshly-obtained streamer, before any
+// token can flow through it. Mirrors stampStreamerTurnID exactly.
+//
+// A delegated child sub-turn streams through the SAME wsStreamer/wsConn
+// machinery as any other turn (it shares its parent's chatID —
+// spawnSubTurn's opts.ChatID: parentTS.chatID), so the assistant-text entry
+// wsStreamer.Finalize persists must carry the same ParentSpawnCallID
+// correlation that appendIntermediateAssistantTranscript/
+// appendAssistantTranscript already stamp for the child's non-streaming
+// writes — otherwise a delegate's OWN final streamed response (the common
+// case: multi-step delegations stream their last round) would round-trip
+// through Finalize with no way for pkg/gateway/replay.go to tell it apart
+// from a genuine top-level parent message. See
+// session.TranscriptEntry.ParentSpawnCallID's doc comment for the full
+// root-cause writeup.
+//
+// Uses a type-assertion to an inline interface so bus.Streamer needs no new
+// method — non-webchat streamers (telegram, wecom, sse) are untouched; only
+// wsStreamer implements SetParentSpawnCallID.
+func (ts *turnState) stampStreamerParentSpawnCallID(streamer bus.Streamer) {
+	if pid, ok := streamer.(interface {
+		SetParentSpawnCallID(parentSpawnCallID string)
+	}); ok {
+		pid.SetParentSpawnCallID(ts.parentSpawnCallID)
+	}
+}
+
 // streamerStatsSetter is an optional interface a Streamer may implement to
 // receive turn-end stats (tokens, cost, duration) before Finalize is called.
 // The ws streamer uses this to populate the "done" frame so the chat UI shows
@@ -979,6 +1007,14 @@ func (ts *turnState) appendIntermediateAssistantTranscript(content string, produ
 		// ever exercised by tests that hand-seed TurnID directly. See
 		// appendAssistantTranscript's identical fix for the full rationale.
 		TurnID: ts.turnID,
+		// ParentSpawnCallID: non-empty only when ts is a CHILD delegation
+		// sub-turn (spawnSubTurn stamps childTS.parentSpawnCallID before any
+		// turn processing runs). Lets pkg/gateway/replay.go withhold this
+		// entry from top-level replay, matching live rendering — see
+		// session.TranscriptEntry.ParentSpawnCallID's doc comment for the
+		// full root-cause writeup (live/reload bubble-count divergence on
+		// multi-step delegation).
+		ParentSpawnCallID: ts.parentSpawnCallID,
 		// Tokens and Cost are intentionally 0 — the turn total is attributed to
 		// the final assistant entry only. See appendAssistantTranscript.
 	}
@@ -1039,6 +1075,10 @@ func (ts *turnState) appendAssistantTranscript(content string, producedModel ...
 		Model:            model,
 		CacheReadTokens:  turnCacheRead,
 		CacheWriteTokens: turnCacheWrite,
+		// ParentSpawnCallID: see appendIntermediateAssistantTranscript's
+		// identical stamp for the full rationale — non-empty only for a
+		// child delegation sub-turn's own final-turn text.
+		ParentSpawnCallID: ts.parentSpawnCallID,
 	}
 	if err := ts.transcriptStore.AppendTranscript(ts.transcriptSessionID, entry); err != nil {
 		logger.WarnCF("agent", "could not record assistant message to transcript",

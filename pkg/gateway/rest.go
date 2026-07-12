@@ -1556,6 +1556,22 @@ func applyAgentOverrides(ag *gen.Agent, ac *config.AgentConfig) {
 		}
 		ag.ShellPolicy = &sp
 	}
+	// fallback_models: P-F2 — this was persisted correctly (createAgent/updateAgent
+	// both write ac.FallbackModels to config.json) but never echoed back on ANY
+	// response path (list/get/update all built gen.Agent without ever touching
+	// this field), so a GET could never confirm what was saved and a reopened
+	// agent's UI always rendered the field empty even though it was safely on
+	// disk — mirrors the ShellPolicy fix above. config.FallbackModel.Provider is
+	// a bare string (empty when unset); gen.FallbackModel.Provider is a pointer,
+	// so translate unconditionally (mirrors getMemorySettings' identical
+	// config->wire FallbackModel translation for recap_fallback_models).
+	if len(ac.FallbackModels) > 0 {
+		fm := make([]gen.FallbackModel, len(ac.FallbackModels))
+		for i, m := range ac.FallbackModels {
+			fm[i] = gen.FallbackModel{Model: m.Model, Provider: &m.Provider}
+		}
+		ag.FallbackModels = &fm
+	}
 }
 
 // buildAgentDefaults populates the execution-related fields from config defaults.
@@ -3494,6 +3510,13 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 				if ac.UpdatedAt != nil {
 					ag.UpdatedAt = ac.UpdatedAt
 				}
+				// P-F2: echo shell_policy/fallback_models on the PUT response too —
+				// this loop previously never called applyAgentOverrides at all, so
+				// updateAgent's own response (unlike list/get) never reflected either
+				// field even though both persist correctly above. Runs before the
+				// request-value overrides below so an explicit req.MaxToolIterations
+				// (also touched by applyAgentOverrides) still wins.
+				applyAgentOverrides(&ag, &ac)
 				break
 			}
 		}

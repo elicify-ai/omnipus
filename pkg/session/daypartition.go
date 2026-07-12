@@ -179,6 +179,48 @@ type TranscriptEntry struct {
 	CancelledByChannel   string   `json:"canceled_by_channel,omitempty"`
 	CancelMethod         string   `json:"cancel_method,omitempty"` // "graceful" | "hard"
 	DescendantsCancelled []string `json:"descendants_canceled,omitempty"`
+
+	// ParentSpawnCallID marks this entry as an assistant-text entry produced
+	// by a CHILD delegation sub-turn, not a genuine top-level turn. It equals
+	// the spawning "delegate"/"spawn" ToolCall.ID in the PARENT's own turn —
+	// the same correlation anchor ToolCall.ParentToolCallID already uses to
+	// nest child tool calls under a subagent span (FR-H-001) — mirrored here
+	// for assistant TEXT entries, which have no ToolCall wrapper to carry
+	// ParentToolCallID.
+	//
+	// Populated only by pkg/agent/turn.go's appendIntermediateAssistantTranscript
+	// / appendAssistantTranscript and pkg/gateway/websocket.go's
+	// wsStreamer.Finalize, from turnState.parentSpawnCallID — non-empty ONLY
+	// for a child turnState created by pkg/agent/subturn.go's spawnSubTurn.
+	// Empty (and omitted from JSON) for every entry produced by a root
+	// (non-delegated) turn, so existing/legacy transcripts round-trip
+	// unchanged.
+	//
+	// WHY this field exists: a delegated child sub-turn shares its parent's
+	// transcriptSessionID (spawnSubTurn sets
+	// TranscriptSessionID: parentTS.transcriptSessionID, CoreTeam-scoped
+	// workspace design — there is no separate per-sub-turn transcript file),
+	// so the delegate's own intermediate narration and its own final-turn
+	// text land in the exact same transcript.jsonl as the delegator's real
+	// top-level messages, indistinguishable by any OTHER field (Role,
+	// Content, AgentID, TurnID are all populated normally for these entries
+	// too). LIVE rendering never shows this content as a chat bubble at all
+	// — pkg/gateway/websocket.go's wsStreamer.Update silently withholds the
+	// live TokenFrame for a child sub-turn's own streaming (the
+	// "shadow-stream" ownership gate: a different, still-live turn already
+	// owns TokenFrame delivery for the chatID) while still fully persisting
+	// the content via Finalize. Without this field, pkg/gateway/replay.go had
+	// no signal to replicate that suppression on reload — it flattened every
+	// entry with non-empty Content into a top-level replay_message frame,
+	// which doubled the visible bubble count and leaked the delegate's raw
+	// internal report text (plus a stray model tag/avatar it never carried
+	// live) as if each were a separate top-level turn.
+	//
+	// Backend-only: never serialized onto a wire frame. replay.go uses it to
+	// withhold the entry from replay entirely (matching live's silent
+	// suppression) rather than exposing it as a NEW nested-narration UI
+	// element that live rendering doesn't have either.
+	ParentSpawnCallID string `json:"parent_spawn_call_id,omitempty"`
 }
 
 // Attachment represents a file attached to a message.
