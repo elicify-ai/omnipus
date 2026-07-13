@@ -108,6 +108,10 @@ func GeneralBuiltinMetadata() []Tool {
 	out = append(out, NewRememberTool(nil, nil))
 	out = append(out, NewRecallMemoryTool(nil))
 	out = append(out, NewRetrospectiveTool(nil, nil))
+	// recall_conversation's executable impl lives in pkg/agent (it needs per-turn
+	// session context); this is its metadata-only mirror so the catalog + the
+	// Constraint #6 coverage universe see it — see recall_conversation_meta.go.
+	out = append(out, recallConversationMeta{})
 
 	// --- serve_web (CategoryWeb — Tier 1 static + Tier 3 dev server) ---
 	// Constructed with nil ServedSubdirs (metadata only; never executed).
