@@ -45,6 +45,16 @@ function LoginScreen() {
       if (isApiError(err)) {
         if (err.isNetworkError()) {
           setError('Could not reach the server. Check your connection.')
+        } else if (err.status === 401) {
+          // A 401 FROM THE LOGIN ENDPOINT means the username/password didn't
+          // match — it is NOT an expired session. api-error.ts intentionally
+          // maps every 401 to the generic "your session has expired" copy
+          // (masking the server's "invalid credentials" to avoid leaking
+          // server phrasing), which is correct for authenticated requests but
+          // actively misleading on the sign-in form. Show the real cause here.
+          setError('Incorrect username or password.')
+        } else if (err.status === 429) {
+          setError('Too many attempts. Please wait a moment and try again.')
         } else {
           setError(err.userMessage || 'Login failed')
         }
