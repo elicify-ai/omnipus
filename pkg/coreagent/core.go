@@ -238,7 +238,7 @@ var allStaticToolNames = []string{
 	"find_skills", "install_skill",
 	"delegate",
 	"list_tasks", "create_task", "update_task", "delete_task", "list_agents",
-	"remember", "recall_memory", "run_retrospective",
+	"remember", "recall_memory", "run_retrospective", "recall_conversation",
 	"serve_web",
 	"set_todos",
 	"read_inbox", "search_email", "read_message", "send_email", "reply",
@@ -442,6 +442,7 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			overrides["remember"] = allow
 			overrides["recall_memory"] = allow
 			overrides["run_retrospective"] = allow
+			overrides["recall_conversation"] = allow
 		case IDExplorer:
 			// File + memory exploration (internal context): read-only
 			// filesystem, persistent memory, plus interactive/visual
@@ -451,6 +452,7 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			overrides["remember"] = allow
 			overrides["recall_memory"] = allow
 			overrides["run_retrospective"] = allow
+			overrides["recall_conversation"] = allow
 			for _, b := range []string{
 				"browser_navigate", "browser_click", "browser_type",
 				"browser_screenshot", "browser_get_text", "browser_wait",
@@ -470,6 +472,7 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			overrides["remember"] = allow
 			overrides["recall_memory"] = allow
 			overrides["run_retrospective"] = allow
+			overrides["recall_conversation"] = allow
 			for _, b := range []string{
 				"browser_navigate", "browser_click", "browser_type",
 				"browser_screenshot", "browser_get_text", "browser_wait",
@@ -502,9 +505,10 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			"search_web":  allow,
 			"fetch_url":   allow,
 			// Persistent memory (FR-016/FR-017) — remember the user's design prefs.
-			"remember":          allow,
-			"recall_memory":     allow,
-			"run_retrospective": allow,
+			"remember":            allow,
+			"recall_memory":       allow,
+			"run_retrospective":   allow,
+			"recall_conversation": allow,
 			// Communication / handoff (hand back to Mia/Jim when out of scope).
 			"send_message":      allow,
 			"hand_off":          allow,
@@ -539,9 +543,10 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			"send_file":         allow, // share an artifact in chat
 			"navigate":          allow, // drive the UI ("show me my agents")
 			// Memory — her signature (memory-rich, cross-workspace recall).
-			"remember":          allow,
-			"recall_memory":     allow,
-			"run_retrospective": allow,
+			"remember":            allow,
+			"recall_memory":       allow,
+			"run_retrospective":   allow,
+			"recall_conversation": allow,
 			// Your tasks ("runs your tasks"). Delete is consent-gated (ask).
 			"create_task": allow,
 			"update_task": allow,
@@ -589,9 +594,10 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			"append_file":    allow,
 			"edit_file":      allow,
 			// Persistent memory (carries research context across sessions).
-			"remember":          allow,
-			"recall_memory":     allow,
-			"run_retrospective": allow,
+			"remember":            allow,
+			"recall_memory":       allow,
+			"run_retrospective":   allow,
+			"recall_conversation": allow,
 			// Deep-research delegation: fan out parallel research subagents
 			// (delegate → many workers/Researcher) and poll them, then synthesize.
 			// ADR-036 merged spawn/run_subagent/check_spawn_status into "delegate".
@@ -636,10 +642,11 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			"hand_off":          allow,
 			"return_to_default": allow,
 			// Persistent memory (carries planning context across sessions).
-			"remember":          allow,
-			"recall_memory":     allow,
-			"run_retrospective": allow,
-			"set_todos":         allow,
+			"remember":            allow,
+			"recall_memory":       allow,
+			"run_retrospective":   allow,
+			"recall_conversation": allow,
+			"set_todos":           allow,
 			// Delegation — delegate to subagents, poll them, list who's available.
 			// ADR-036 merged spawn/run_subagent/check_spawn_status into "delegate".
 			"delegate":    allow,
