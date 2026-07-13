@@ -708,8 +708,13 @@ func TestExecute_GetText_FailsFastOnInvisibleOrMissingSelector(t *testing.T) {
 	result = getTextTool.Execute(ctx, map[string]any{"selector": "#totally-absent-element"})
 	elapsed = time.Since(start)
 	assert.True(t, result.IsError, "browser_get_text on a missing selector must return IsError=true")
-	assert.Less(t, elapsed, 12*time.Second,
-		"browser_get_text on a missing selector must fail fast (bounded by getTextWaitTimeout, not the 20s PageTimeout); got %s", elapsed)
+	assert.Less(
+		t,
+		elapsed,
+		12*time.Second,
+		"browser_get_text on a missing selector must fail fast (bounded by getTextWaitTimeout, not the 20s PageTimeout); got %s",
+		elapsed,
+	)
 }
 
 // ---------------------------------------------------------------------------

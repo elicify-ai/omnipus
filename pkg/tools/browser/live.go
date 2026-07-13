@@ -263,7 +263,13 @@ func (r *LiveViewRegistry) lookup(sessionID string) (*LiveView, bool) {
 // newly-attaching connection (a second panel, a pop-out) can render the
 // correct "someone else is driving" state on its very first status frame
 // instead of only learning about it on the NEXT take/release broadcast.
-func (r *LiveViewRegistry) Attach(sessionID, viewerID string, onFrame FrameSink, onStatus StatusSink, onControl ControlSink, onTabs TabsSink) (bool, error) {
+func (r *LiveViewRegistry) Attach(
+	sessionID, viewerID string,
+	onFrame FrameSink,
+	onStatus StatusSink,
+	onControl ControlSink,
+	onTabs TabsSink,
+) (bool, error) {
 	sessionID = resolveSessionID(sessionID)
 	if viewerID == "" {
 		return false, fmt.Errorf("browser live: viewer id is required")
@@ -493,7 +499,14 @@ func (lv *LiveView) hasEpochLocked() bool {
 // already controlled by a viewer other than viewerID at the moment of this
 // attach — computed and returned under lv.mu before any CDP call, so it is
 // available even on the fast piggyback path below.
-func (lv *LiveView) attach(tabCtx context.Context, viewerID string, onFrame FrameSink, onStatus StatusSink, onControl ControlSink, onTabs TabsSink) (bool, error) {
+func (lv *LiveView) attach(
+	tabCtx context.Context,
+	viewerID string,
+	onFrame FrameSink,
+	onStatus StatusSink,
+	onControl ControlSink,
+	onTabs TabsSink,
+) (bool, error) {
 	lv.mu.Lock()
 	lv.viewers[viewerID] = onFrame
 	if onStatus != nil {
@@ -721,8 +734,11 @@ func (lv *LiveView) rebindScreencast(newCtx context.Context) {
 		}
 		// Finding B: the active tab moved again while we were rebinding —
 		// chase it instead of leaving the screencast bound to a tab the tab
-		// strip no longer shows as active.
-		newCtx = currentCtx
+		// strip no longer shows as active. Reassigning newCtx to the fresh,
+		// INDEPENDENT Session() context re-targets the next loop iteration; it
+		// is a deliberate target-swap, not a nested/growing context chain, so
+		// fatcontext's warning here is a false positive.
+		newCtx = currentCtx //nolint:fatcontext // intentional per-iteration target swap, not a wrapped/growing context
 	}
 }
 

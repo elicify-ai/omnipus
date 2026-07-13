@@ -6443,7 +6443,7 @@ turnLoop:
 							// by the isOverContextBudget check above — a conservative
 							// proactive heuristic (75% of the window), NOT a hard provider
 							// context-overflow rejection. So the window is not necessarily
-							// over the real limit, and cancelling the retry would abandon a
+							// over the real limit, and canceling the retry would abandon a
 							// call that often just succeeds on a second try (UAT: an 11th
 							// tool call tipped the 75% heuristic mid-task and a break here
 							// truncated a task that completed fine on retry). Fall through

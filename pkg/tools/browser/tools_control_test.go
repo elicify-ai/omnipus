@@ -125,9 +125,13 @@ func TestExecute_ControlLock_ReadOnlyToolsAreNotGated(t *testing.T) {
 			require.NotNil(t, result)
 			// It DOES fail — but for lack of a reachable browser, not because
 			// of the control lock. That distinction is the whole point.
-			assert.True(t, result.IsError,
+			assert.True(
+				t,
+				result.IsError,
 				"%s must attempt real execution and fail on the unreachable CDP endpoint; got IsError=false, ForLLM: %s",
-				tc.tool, result.ForLLM)
+				tc.tool,
+				result.ForLLM,
+			)
 			assert.NotContains(t, result.ForLLM, "human is currently controlling",
 				"%s must NOT be short-circuited by the control lock; got: %s", tc.tool, result.ForLLM)
 			assert.NotContains(t, result.ForLLM, "deferred",

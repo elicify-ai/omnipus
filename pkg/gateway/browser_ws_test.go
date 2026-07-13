@@ -516,29 +516,32 @@ func TestBrowserWS_ValidateInbound_RejectsMalformedInputFrame(t *testing.T) {
 		assert.Contains(t, resp.Message, "schema validation failed")
 	})
 
-	t.Run("validate_inbound=false lets the same frame through to handleInput, which silently no-ops", func(t *testing.T) {
-		handler, _ := newBrowserWSTestHandler(t, func(cfg *config.Config) {
-			cfg.Gateway.ValidateInbound = false
-		})
-		t.Cleanup(handler.Wait)
-		srv := httptest.NewServer(handler)
-		t.Cleanup(srv.Close)
+	t.Run(
+		"validate_inbound=false lets the same frame through to handleInput, which silently no-ops",
+		func(t *testing.T) {
+			handler, _ := newBrowserWSTestHandler(t, func(cfg *config.Config) {
+				cfg.Gateway.ValidateInbound = false
+			})
+			t.Cleanup(handler.Wait)
+			srv := httptest.NewServer(handler)
+			t.Cleanup(srv.Close)
 
-		conn := dialBrowserTestWS(t, srv)
-		t.Cleanup(func() { _ = conn.Close() })
-		conn.SetReadDeadline(time.Now().Add(3 * time.Second)) //nolint:errcheck
-		sendWSAuthFrameDevMode(t, conn)
+			conn := dialBrowserTestWS(t, srv)
+			t.Cleanup(func() { _ = conn.Close() })
+			conn.SetReadDeadline(time.Now().Add(3 * time.Second)) //nolint:errcheck
+			sendWSAuthFrameDevMode(t, conn)
 
-		require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
+			require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
 
-		// No live view is attached (state.mgr is nil), so handleInput's
-		// nil-mgr guard returns without any response. If ANY frame arrives
-		// here, schema validation (not something else) must have produced
-		// the previous subtest's error.
-		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond)) //nolint:errcheck
-		_, _, readErr := conn.ReadMessage()
-		assert.Error(t, readErr, "no frame should arrive when validate_inbound=false and no live view is attached")
-	})
+			// No live view is attached (state.mgr is nil), so handleInput's
+			// nil-mgr guard returns without any response. If ANY frame arrives
+			// here, schema validation (not something else) must have produced
+			// the previous subtest's error.
+			conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond)) //nolint:errcheck
+			_, _, readErr := conn.ReadMessage()
+			assert.Error(t, readErr, "no frame should arrive when validate_inbound=false and no live view is attached")
+		},
+	)
 }
 
 // ---------------------------------------------------------------------------
@@ -781,7 +784,7 @@ func TestBrowserWS_HandleTabAction_UnknownAction_Rejected(t *testing.T) {
 // from under whoever actually holds control. The fix mirrors
 // dispatchInput's gate (LiveView.dispatchInput's "lv.controller == viewerID"
 // check, reached here via the SAME read-only accessor handleControl already
-// uses: LiveViewRegistry.Controller): a tab action is honoured only when the
+// uses: LiveViewRegistry.Controller): a tab action is honored only when the
 // acting viewer holds control, or nobody does (idle).
 // ---------------------------------------------------------------------------
 
@@ -1310,20 +1313,42 @@ func TestBrowserWS_Control_ControlledByOther_BroadcastsToSecondConnection(t *tes
 
 	require.NoError(t, connA.WriteMessage(websocket.TextMessage, attachFrame("controlled-by-other-session")))
 	attachRespA := readBrowserStatusFrame(t, connA, 20*time.Second)
-	require.Equal(t, "attached", attachRespA.State, "conn A attach must succeed against a real headless Chromium: %+v", attachRespA)
+	require.Equal(
+		t,
+		"attached",
+		attachRespA.State,
+		"conn A attach must succeed against a real headless Chromium: %+v",
+		attachRespA,
+	)
 	require.NotNil(t, attachRespA.ControlledByOther)
 	assert.False(t, *attachRespA.ControlledByOther, "conn A attaches first — nobody controls yet")
-	assert.Nil(t, attachRespA.ControlOnly, "the initial attach response is a real lifecycle frame — control_only must not be set (B1)")
+	assert.Nil(
+		t,
+		attachRespA.ControlOnly,
+		"the initial attach response is a real lifecycle frame — control_only must not be set (B1)",
+	)
 
 	require.NoError(t, connB.WriteMessage(websocket.TextMessage, attachFrame("controlled-by-other-session")))
 	attachRespB := readBrowserStatusFrame(t, connB, 20*time.Second)
-	require.Equal(t, "attached", attachRespB.State, "conn B attach (piggyback on A's screencast) must succeed: %+v", attachRespB)
+	require.Equal(
+		t,
+		"attached",
+		attachRespB.State,
+		"conn B attach (piggyback on A's screencast) must succeed: %+v",
+		attachRespB,
+	)
 	require.NotNil(t, attachRespB.ControlledByOther)
 	assert.False(t, *attachRespB.ControlledByOther, "still nobody controls at conn B's attach time")
-	assert.Nil(t, attachRespB.ControlOnly, "the initial attach response is a real lifecycle frame — control_only must not be set (B1)")
+	assert.Nil(
+		t,
+		attachRespB.ControlOnly,
+		"the initial attach response is a real lifecycle frame — control_only must not be set (B1)",
+	)
 
 	control := func(action string) []byte {
-		data, err := json.Marshal(generated.BrowserControlFrame{Type: string(generated.WsFrameTypeBrowserControl), Action: action})
+		data, err := json.Marshal(
+			generated.BrowserControlFrame{Type: string(generated.WsFrameTypeBrowserControl), Action: action},
+		)
 		require.NoError(t, err)
 		return data
 	}
@@ -1333,19 +1358,42 @@ func TestBrowserWS_Control_ControlledByOther_BroadcastsToSecondConnection(t *tes
 	require.Equal(t, "controlling", takeRespA.State, "conn A's own take response: %+v", takeRespA)
 
 	broadcastToB := readBrowserStatusFrame(t, connB, 5*time.Second)
-	require.NotNil(t, broadcastToB.ControlledByOther, "conn B must receive an unprompted controlled_by_other broadcast: %+v", broadcastToB)
+	require.NotNil(
+		t,
+		broadcastToB.ControlledByOther,
+		"conn B must receive an unprompted controlled_by_other broadcast: %+v",
+		broadcastToB,
+	)
 	assert.True(t, *broadcastToB.ControlledByOther, "conn B never took control — it must be told someone else did")
-	require.NotNil(t, broadcastToB.ControlOnly, "a take/release fan-out frame must be flagged control_only (B1): %+v", broadcastToB)
-	assert.True(t, *broadcastToB.ControlOnly, "conn B's frame carries no real lifecycle/error meaning — the SPA must not treat it as a status change")
+	require.NotNil(
+		t,
+		broadcastToB.ControlOnly,
+		"a take/release fan-out frame must be flagged control_only (B1): %+v",
+		broadcastToB,
+	)
+	assert.True(
+		t,
+		*broadcastToB.ControlOnly,
+		"conn B's frame carries no real lifecycle/error meaning — the SPA must not treat it as a status change",
+	)
 
 	require.NoError(t, connA.WriteMessage(websocket.TextMessage, control("release")))
 	releaseRespA := readBrowserStatusFrame(t, connA, 5*time.Second)
 	require.Equal(t, "released", releaseRespA.State, "conn A's own release response: %+v", releaseRespA)
-	assert.Nil(t, releaseRespA.ControlOnly, "conn A's own direct browser_status response is a real lifecycle frame, not a broadcast (B1)")
+	assert.Nil(
+		t,
+		releaseRespA.ControlOnly,
+		"conn A's own direct browser_status response is a real lifecycle frame, not a broadcast (B1)",
+	)
 
 	broadcastToB2 := readBrowserStatusFrame(t, connB, 5*time.Second)
 	require.NotNil(t, broadcastToB2.ControlledByOther)
 	assert.False(t, *broadcastToB2.ControlledByOther, "conn B must be told the lock was freed")
-	require.NotNil(t, broadcastToB2.ControlOnly, "the release fan-out frame must also be flagged control_only (B1): %+v", broadcastToB2)
+	require.NotNil(
+		t,
+		broadcastToB2.ControlOnly,
+		"the release fan-out frame must also be flagged control_only (B1): %+v",
+		broadcastToB2,
+	)
 	assert.True(t, *broadcastToB2.ControlOnly)
 }

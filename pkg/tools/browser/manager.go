@@ -740,7 +740,12 @@ func (m *BrowserManager) createFirstTab(sessionID string) error {
 // sequence createFirstTab needs after successfully bootstrapping a session's
 // first-ever tab (ADR-041 fix F6: this sequence used to be duplicated inline
 // at each call site). Must be called with m.mu held.
-func (m *BrowserManager) registerFreshSessionLocked(sessionID string, tab *tabEntry, browserCtx context.Context, browserCancel context.CancelFunc) []Tab {
+func (m *BrowserManager) registerFreshSessionLocked(
+	sessionID string,
+	tab *tabEntry,
+	browserCtx context.Context,
+	browserCancel context.CancelFunc,
+) []Tab {
 	se := &sessionEntry{tabs: []*tabEntry{tab}, activeIdx: 0, browserCtx: browserCtx, browserCancel: browserCancel}
 	m.installTargetListenerLocked(sessionID, se)
 	m.sessions[sessionID] = se
@@ -795,8 +800,8 @@ func (m *BrowserManager) bootstrapBrowserCtx(allocCtx context.Context) (context.
 // tab-creating call site that can return an error to its caller uses
 // (ADR-041 fix F6: this string used to be duplicated across Session/
 // createFirstTab/OpenTab).
-func maxTabsReachedErr(max int) error {
-	return fmt.Errorf("maximum concurrent tabs (%d) reached. Close a tab first", max)
+func maxTabsReachedErr(maxTabs int) error {
+	return fmt.Errorf("maximum concurrent tabs (%d) reached. Close a tab first", maxTabs)
 }
 
 // lookupTabLocked resolves sessionID's browsing context and validates that
@@ -856,7 +861,7 @@ func (m *BrowserManager) createTab(parentCtx context.Context, targetID target.ID
 	}
 
 	// Best-effort stealth on a bounded timeout CHILD of ctx — safe because
-	// cancelling a child of an already-bound target does NOT tear the tab
+	// canceling a child of an already-bound target does NOT tear the tab
 	// down. Never fatal to tab creation.
 	applyStealth(ctx, m.PageTimeout())
 
@@ -978,11 +983,11 @@ func (m *BrowserManager) SwitchTab(sessionID string, index int) (Tab, error) {
 
 // CloseTab closes tab `index` in sessionID's browsing context (cancels its
 // chromedp target — a cheap, non-blocking call; see BrowserManager.
-// CloseSession's identical existing pattern). Cancelling a single tab's own
+// CloseSession's identical existing pattern). Canceling a single tab's own
 // context never tears down the browsing context's browser-owning
 // se.browserCtx (see sessionEntry's doc comment) — the browser, and every
 // OTHER tab in the set, stay alive and usable regardless of which tab is
-// closed, including tab 0. If the closed tab was the active tab, a neighbour
+// closed, including tab 0. If the closed tab was the active tab, a neighbor
 // is activated instead (the tab that slid into the same index; falls back to
 // the new last tab if the closed tab was the set's last). NEVER leaves the
 // browsing context with zero tabs (ADR-041 D3/Consequences) — closing the
