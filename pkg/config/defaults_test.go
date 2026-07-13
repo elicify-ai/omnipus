@@ -57,7 +57,11 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 	// (fail-closed) on every install — taking general from 31 to 32.
 	const wantToolCount = 78
 	if got := len(cfg.Sandbox.ToolPolicies); got != wantToolCount {
-		t.Errorf("expected sandbox.tool_policies to enumerate all %d static builtin tools, got %d entries", wantToolCount, got)
+		t.Errorf(
+			"expected sandbox.tool_policies to enumerate all %d static builtin tools, got %d entries",
+			wantToolCount,
+			got,
+		)
 	}
 
 	// Every non-destructive entry must be "allow" — this is an allow-by-default

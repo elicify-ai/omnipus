@@ -56,3 +56,13 @@ properties:
       recording landed (the UI omits the model field entirely for those — no
       placeholder text, no "(model not recorded)" string).
     maxLength: 256
+  turn_id:
+    type: string
+    description: >
+      Turn-correlation identifier, populated from TranscriptEntry.TurnID. Stamped
+      on assistant entries and turn-cancellation entries so the client can match a
+      replayed turn_canceled entry to the specific preceding assistant message it
+      cancels, without relying on unsafe positional/adjacency assumptions in the
+      replay stream (async delegation can interleave other agents'/turns' frames
+      in between). Omitted for legacy entries written before turn-id stamping
+      landed.

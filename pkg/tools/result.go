@@ -53,6 +53,27 @@ type ToolResult struct {
 	// form, e.g. "[file:/tmp/example.png]". This is used when a tool produced a
 	// reusable local artifact but did not deliver it to the user yet.
 	ArtifactTags []string `json:"artifact_tags,omitempty"`
+
+	// Interrupted indicates the tool's underlying work was cut short by a
+	// parent-turn cancellation (or a direct cancel targeting it) rather than
+	// a genuine execution failure. Currently set only by the synchronous
+	// delegate/spawn path (pkg/agent/subturn.go's spawnSubTurn cleanup defer,
+	// which is the single source of truth for the classification — mirrors
+	// the exact SubTurnStatusInterrupted/SubTurnStatusCancelled check used
+	// for the live subagent_end frame) so pkg/agent/loop.go's tool-call-
+	// transcript persistence can record status "interrupted" instead of
+	// folding it into the generic IsError=true/"error" bucket every other
+	// tool failure uses (Finding F / A-I4 round 5: without this, a session
+	// reload read the same persisted status a genuine failure would have
+	// produced, showing "failed" for a span live correctly labeled
+	// "interrupted (parent canceled)"). IsError is deliberately left true
+	// alongside this: the OUTER tool_call_result frame for the same call has
+	// a strict success/error wire enum with no "interrupted" value, and its
+	// live behavior for a canceled synchronous delegate has always been
+	// "error" — this flag only enriches the SPAN's own terminal status
+	// (SubagentEndFrame.status, which does support "interrupted"), it does
+	// not change the outer badge.
+	Interrupted bool `json:"interrupted,omitempty"`
 }
 
 // ContentForLLM returns the normalized textual content to append to the

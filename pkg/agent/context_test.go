@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -355,4 +357,92 @@ func TestBuildSystemPrompt_CustomAgentUsesDefaultIdentity(t *testing.T) {
 	if strings.Contains(prompt, "You are Jim") {
 		t.Error("non-core agent must NOT get a compiled prompt")
 	}
+}
+
+// TestBuildSystemPrompt_NoEmojiRule_AppliesUniformly is a regression test for
+// a live-UAT finding: the seeded Worker subagent's
+// self-identification reply persisted an emoji into the session transcript,
+// violating CLAUDE.md's "No emoji in stored data or UI chrome" rule. Worker's
+// compiled prompt is intentionally empty (coreagent.prompts["worker"] == ""),
+// so it falls through to the generic default identity — which, before this
+// fix, carried no style guidance against emoji at all.
+//
+// The fix adds Rule 6 ("No emoji") to getWorkspaceAndRules(), the ONE helper
+// shared by every BuildSystemPrompt branch (core agents with a compiled
+// prompt, custom agents with a SOUL.md, and agents with neither — Worker's
+// exact case). This test proves the rule reaches all three branches, so any
+// future seeded agent with an empty/absent soul inherits the same guidance
+// structurally rather than needing it hand-copied into each persona string.
+//
+// BDD: Given a ContextBuilder for (a) a core agent with a compiled prompt
+// (jim), (b) a custom agent with an on-disk SOUL.md, and (c) an agent with
+// neither (the Worker fallback case),
+//
+//	When BuildSystemPrompt is called for each,
+//	Then all three outputs contain the "No emoji" rule text.
+//
+// Traces to: CLAUDE.md "No emoji in stored data or UI chrome".
+func TestBuildSystemPrompt_NoEmojiRule_AppliesUniformly(t *testing.T) {
+	const noEmojiMarker = "**No emoji**"
+
+	t.Run("core agent with compiled prompt (jim)", func(t *testing.T) {
+		workspace := t.TempDir()
+		cb := NewContextBuilder(workspace)
+		cb.WithAgentInfo("jim", "Jim")
+
+		prompt := cb.BuildSystemPrompt()
+		if !strings.Contains(prompt, noEmojiMarker) {
+			t.Errorf(
+				"core-agent prompt missing %q, first 800 chars:\n%s",
+				noEmojiMarker,
+				prompt[:min(len(prompt), 800)],
+			)
+		}
+	})
+
+	t.Run("custom agent with on-disk SOUL.md", func(t *testing.T) {
+		workspace := t.TempDir()
+		soulDir := workspace
+		if err := os.MkdirAll(soulDir, 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(
+			filepath.Join(soulDir, "SOUL.md"),
+			[]byte("You are Custom Bot, a friendly helper."),
+			0o644,
+		); err != nil {
+			t.Fatalf("WriteFile SOUL.md: %v", err)
+		}
+
+		cb := NewContextBuilder(workspace)
+		cb.WithAgentInfo("custom-bot", "Custom Bot")
+
+		prompt := cb.BuildSystemPrompt()
+		if !strings.Contains(prompt, noEmojiMarker) {
+			t.Errorf(
+				"custom-agent (SOUL.md) prompt missing %q, first 800 chars:\n%s",
+				noEmojiMarker,
+				prompt[:min(len(prompt), 800)],
+			)
+		}
+	})
+
+	t.Run("agent with no compiled prompt and no SOUL.md (Worker fallback)", func(t *testing.T) {
+		workspace := t.TempDir()
+		cb := NewContextBuilder(workspace)
+		// "worker" resolves coreagent.GetPrompt("worker") == "" (empty by
+		// design), and the temp workspace has no SOUL.md — so this exercises
+		// the exact getIdentity() fallback branch that produced the
+		// unguarded "Hello! I'm Worker..." self-introduction in UAT.
+		cb.WithAgentInfo("worker", "Worker")
+
+		prompt := cb.BuildSystemPrompt()
+		if !strings.Contains(prompt, noEmojiMarker) {
+			t.Errorf(
+				"worker-fallback prompt missing %q, first 800 chars:\n%s",
+				noEmojiMarker,
+				prompt[:min(len(prompt), 800)],
+			)
+		}
+	})
 }

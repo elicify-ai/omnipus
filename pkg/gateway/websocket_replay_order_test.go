@@ -398,6 +398,79 @@ func TestWsStreamer_Update_DirectToSendChWhenNotReplaying(t *testing.T) {
 	assert.Equal(t, "world", f.Content)
 }
 
+// TestWsStreamer_FanOutToPeer_RespectsReplayDivert is the regression proof
+// for Finding E (A-I4 round 5): fanOutToSessionPeers used to write straight
+// into a peer wsConn's sendCh, bypassing the exact replay-divert protocol
+// TestWsStreamer_Update_RespectsReplayDivert (above) already proves the
+// ORIGINATING connection gets. A peer connection mid attach_session replay
+// (isReplayingLive=true) has no way to divert a directly-enqueued sendCh
+// write into its own replayDivertCh — the fanned-out frame lands
+// interleaved with that peer's own in-flight replay frames instead of being
+// correctly ordered after them once the drain completes. Live-verified: a
+// reload+reattach caught this as a stray, out-of-place live frame appearing
+// mid-replay. Routing fanOutToSessionPeers through sendRawFrameBytes (like
+// every other live-frame path) closes the gap.
+//
+// BDD:
+//
+//	Given two wsConns sharing one session — the originating connection
+//	(not replaying) and a peer connection currently mid attach_session
+//	replay (isReplayingLive=true),
+//	When wsStreamer.Update fans a token frame out to session peers,
+//	Then the origin connection receives it directly on sendCh,
+//	And the peer connection receives it via replayDivertCh, NOT sendCh.
+func TestWsStreamer_FanOutToPeer_RespectsReplayDivert(t *testing.T) {
+	handler, _, _ := newTestWSHandler(t)
+	t.Cleanup(handler.Wait)
+
+	originConn := makeTestConn()
+	peerConn := makeTestConn()
+	peerConn.replayDivertCh = make(chan []byte, replayLiveBufferCap)
+	peerConn.isReplayingLive.Store(true) // peer is mid attach_session replay
+
+	const (
+		originChat = "chat-origin"
+		peerChat   = "chat-peer"
+		sessionID  = "session-shared"
+	)
+
+	handler.mu.Lock()
+	handler.sessions[originChat] = originConn
+	handler.sessions[peerChat] = peerConn
+	handler.sessionIDs[originChat] = sessionID
+	handler.sessionIDs[peerChat] = sessionID
+	handler.mu.Unlock()
+
+	s := &wsStreamer{
+		conn:      originConn,
+		chatID:    originChat,
+		sessionID: sessionID,
+		channel:   newWebchatChannel(handler),
+	}
+
+	err := s.Update(context.Background(), "hello")
+	require.NoError(t, err, "Update must succeed")
+
+	// Origin connection is not replaying — direct sendCh delivery, unchanged.
+	require.Equal(t, 1, len(originConn.sendCh), "origin connection must receive the token frame directly")
+	raw := <-originConn.sendCh
+	var originFrame replayFrameDecoder
+	require.NoError(t, json.Unmarshal(raw, &originFrame))
+	assert.Equal(t, string(generated.WsFrameTypeToken), originFrame.Type)
+
+	// Peer is mid-replay: the fanned-out token must be diverted, not written
+	// directly into sendCh.
+	assert.Equal(t, 0, len(peerConn.sendCh),
+		"peer's sendCh must stay empty while it is mid-replay — the fanned-out token must be diverted")
+	require.Equal(t, 1, len(peerConn.replayDivertCh),
+		"the fanned-out token frame must land in the peer's replayDivertCh while it is mid-replay")
+	divertedRaw := <-peerConn.replayDivertCh
+	var peerFrame replayFrameDecoder
+	require.NoError(t, json.Unmarshal(divertedRaw, &peerFrame))
+	assert.Equal(t, string(generated.WsFrameTypeToken), peerFrame.Type)
+	assert.Equal(t, "hello", peerFrame.Content)
+}
+
 // TestReplayOrdering_ConcurrentUpdateDuringDrain verifies that a wsStreamer.Update
 // call that races with the drain+disarm sequence lands in the correct channel.
 //

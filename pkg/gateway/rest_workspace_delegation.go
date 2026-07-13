@@ -13,11 +13,42 @@ import (
 	"strings"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/agent"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
+
+// delegationDepthCeilingFallback mirrors agent.defaultMaxSubTurnDepth (the
+// subturn depth cap, default 3) for the case where the live config does not set
+// agents.defaults.subturn.max_depth. The agent package's constant is unexported
+// and pkg/gateway must not import pkg/agent's internals, so the ceiling is taken
+// from the configured SubTurn.MaxDepth (see delegationDepthCeiling) and only
+// falls back to this literal when that knob is unset (<= 0) — the exact same
+// fallback the agent loop applies in getSubTurnConfig.
+//
+// Relocated from the now-deleted rest_agent_delegation.go (ADR-037, Wave 2) —
+// this helper is not delegation-*policy*-specific, it is a shared depth-ceiling
+// lookup consumed by handleWorkspaceDelegationPut (this file, validating an
+// operator-submitted edge's depth) and by workspace create/team validation
+// (rest_workspaces.go, x2). NOT consumed by defaultWorkspaceDelegationEdges
+// below — that function seeds edges from the fixed coreagent matrix and
+// copies each seeded Depth verbatim, with no ceiling clamp (the coreagent
+// seed data is trusted, hardcoded Go, not operator input).
+const delegationDepthCeilingFallback = 3
+
+// delegationDepthCeiling returns the effective maximum delegation chain depth a
+// caller may request, reusing the global subturn depth cap rather than inventing
+// a new constant. It tracks getSubTurnConfig: the configured
+// agents.defaults.subturn.max_depth when set (> 0), else the default of 3.
+func delegationDepthCeiling(cfg *config.Config) int {
+	if cfg != nil && cfg.Agents.Defaults.SubTurn.MaxDepth > 0 {
+		return cfg.Agents.Defaults.SubTurn.MaxDepth
+	}
+	return delegationDepthCeilingFallback
+}
 
 // delegationEdgeToWire converts a storedDelegationEdge to the generated wire type.
 func delegationEdgeToWire(e storedDelegationEdge) gen.WorkspaceDelegationEdge {
@@ -43,8 +74,12 @@ func delegationEdgeToWire(e storedDelegationEdge) gen.WorkspaceDelegationEdge {
 
 // workspaceDelegationToWire builds the GET/PUT response body for a workspace's
 // delegation graph. The team node set is the union of the workspace core_team and
-// every agent referenced by an edge, sorted for stable output.
-func workspaceDelegationToWire(ws storedWorkspace) gen.WorkspaceDelegation {
+// every agent referenced by an edge, sorted for stable output. defaultDepth is
+// the already-computed depth ceiling (delegationDepthCeiling(cfg)) an edge
+// inherits when its own depth is unset — no new depth logic here, purely
+// exposing that existing value so the frontend can always pre-fill/display a
+// concrete number instead of an ambiguous blank/"∞" state.
+func workspaceDelegationToWire(ws storedWorkspace, defaultDepth int) gen.WorkspaceDelegation {
 	edges := make([]gen.WorkspaceDelegationEdge, 0, len(ws.Delegation))
 	teamSet := make(map[string]struct{}, len(ws.CoreTeam)+2*len(ws.Delegation))
 	for _, id := range ws.CoreTeam {
@@ -62,8 +97,9 @@ func workspaceDelegationToWire(ws storedWorkspace) gen.WorkspaceDelegation {
 	sort.Strings(team)
 
 	out := gen.WorkspaceDelegation{
-		WorkspaceId: ws.ID,
-		Edges:       edges,
+		WorkspaceId:  ws.ID,
+		Edges:        edges,
+		DefaultDepth: defaultDepth,
 	}
 	if len(team) > 0 {
 		out.Team = &team
@@ -82,7 +118,8 @@ func (a *restAPI) handleWorkspaceDelegationGet(w http.ResponseWriter, _ *http.Re
 	if !ok {
 		return
 	}
-	jsonOK(w, workspaceDelegationToWire(ws))
+	cfg := a.agentLoop.GetConfig()
+	jsonOK(w, workspaceDelegationToWire(ws, delegationDepthCeiling(cfg)))
 }
 
 // handleWorkspaceDelegationPut replaces the workspace's delegation edge set.
@@ -94,20 +131,22 @@ func (a *restAPI) handleWorkspaceDelegationGet(w http.ResponseWriter, _ *http.Re
 //     expand the team with an off-team agent
 //   - self-edges (from_agent == to_agent) are rejected
 //   - the resulting graph must be acyclic (no A→B→A delegation cycle)
-//   - modes ⊆ {await, background, task}
+//   - modes ⊆ {direct, task}
 //   - depth must be >= 0 and <= the global subturn depth ceiling
 //
 // Edges are deduplicated by (from_agent, to_agent); the last writer wins.
 //
-// This graph IS the runtime authority. Per-workspace delegation enforcement reads
-// these edges directly at delegation time (see workspace.ReadDelegation +
+// This graph IS the runtime authority — the ONLY delegation-enforcement
+// mechanism (ADR-037). Per-workspace delegation enforcement reads these edges
+// directly at delegation time (see workspace.ReadDelegation +
 // buildDelegationDenyChecker in pkg/agent/loop.go): a delegation caller→target is
 // permitted ONLY when a matching edge exists in the governing workspace's graph
-// (with the edge's modes/depth applied). The per-agent config.DelegationPolicy is
-// SEED-ONLY now — it seeds each new workspace's initial graph via
-// defaultWorkspaceDelegationEdges and is no longer consulted at runtime. Because
-// the checker reads the graph per-call, editing this graph takes effect on the
-// NEXT turn — no agent rebuild or reload is required.
+// (with the edge's modes/depth applied). coreagent's seeded trust graph
+// (coreagent.SeedDelegationEdges) is consulted ONLY to bootstrap each new
+// workspace's initial graph via defaultWorkspaceDelegationEdges — it plays no
+// role at delegation-enforcement time. Because the checker reads the graph
+// per-call, editing this graph takes effect on the NEXT turn — no agent
+// rebuild or reload is required.
 func (a *restAPI) handleWorkspaceDelegationPut(w http.ResponseWriter, r *http.Request, id string) {
 	if err := validateEntityID(id); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid workspace ID")
@@ -156,33 +195,74 @@ func (a *restAPI) handleWorkspaceDelegationPut(w http.ResponseWriter, r *http.Re
 		}
 	}
 
-	jsonOK(w, workspaceDelegationToWire(ws))
+	jsonOK(w, workspaceDelegationToWire(ws, ceiling))
 }
 
 // defaultWorkspaceDelegationEdges derives the seed delegation graph for a new
-// workspace from the per-agent delegation policies already seeded in config (M5).
-// Each agent's DelegationPolicy.To becomes one edge per target, carrying that
-// policy's modes and depth. This keeps a single source of truth: coreagent's
-// seeded trust graph (Jim→Ava/Ray/worker, Mia/Ray/Ava→worker, the Planner→
-// Explorer/Researcher specialist edges) is replayed onto the workspace graph so a
-// fresh workspace works out of the box. Remote-a2a refs and wildcard ("*") refs
-// are skipped — they have no concrete in-roster node to draw an edge to.
+// workspace directly from coreagent's seeded trust graph (ADR-037, Wave 2).
+// Each core agent ID's coreagent.SeedDelegationEdges result becomes one edge
+// per target, carrying that policy's modes and depth. This keeps a single
+// source of truth: coreagent's seeded trust graph (Jim→Ava/Ray/worker,
+// Mia/Ray/Ava→worker, the Planner→Explorer/Researcher specialist edges) is
+// replayed onto the workspace graph so a fresh workspace works out of the box.
+// Remote-a2a refs and wildcard ("*") refs are skipped — they have no concrete
+// in-roster node to draw an edge to.
+//
+// Before ADR-037 this read ac.DelegationPolicy off cfg.Agents.List — a field
+// that could, in principle, have been hand-edited via the now-retired global
+// /agents/trust screen. That screen never affected runtime enforcement (the
+// per-workspace graph always has), so reading the fixed coreagent seed data
+// directly here (rather than a field that no longer exists) produces the
+// IDENTICAL bootstrap graph for any config that has not gone through that
+// screen — i.e. every fresh install — which is the only case this function's
+// output is required to match byte-for-byte (see
+// TestDefaultWorkspaceDelegationEdges_MatchesCoreagentSeed).
+//
+// KNOWN, NARROW EXCEPTION (7-reviewer-gate follow-up to ADR-037,
+// silent-failure-hunter): an operator who, pre-upgrade, actually hand-edited
+// an agent's DelegationPolicy.To via the (decorative-for-enforcement, but
+// NOT decorative-for-seeding) /agents/trust screen — e.g. widened or
+// narrowed Jim's default targets before this upgrade — will silently lose
+// that customization's effect on any workspace created AFTER upgrading:
+// this function now always seeds from the fixed coreagent matrix, never from
+// whatever the operator last wrote to that field. This is a real, if narrow,
+// deviation from ADR-037's "no behavior change" framing, which covered
+// runtime *enforcement* only — it did not account for this seed-into-
+// NEW-workspace path specifically. Existing workspaces created before the
+// upgrade are entirely unaffected (their persisted Delegation[] edges are
+// untouched by this function, which only runs at workspace-creation time).
+// See ADR-037 §7 (Post-decision review) for the acknowledgment.
 func defaultWorkspaceDelegationEdges(cfg *config.Config) []storedDelegationEdge {
 	if cfg == nil {
 		return nil
 	}
 	var edges []storedDelegationEdge
+	// TestDefaultWorkspaceDelegationEdges_MatchesCoreagentSeed deliberately replays
+	// this exact loop independently (not via a shared helper) so it can catch a
+	// regression in THIS transformation logic; sharing a helper would make that test
+	// tautological (see the test's own doc comment for the full rationale).
 	for i := range cfg.Agents.List {
 		ac := &cfg.Agents.List[i]
-		dp := ac.DelegationPolicy
+		dp := coreagent.SeedDelegationEdges(coreagent.CoreAgentID(ac.ID))
 		if dp == nil || len(dp.To) == 0 {
 			continue
 		}
-		// config.DelegationMode → workspace.DelegationMode (both string types):
-		// seed the edge graph with the typed modes the stored edge now carries.
+		// Collapse+dedupe the coreagent seed's real 3-value tool-call vocabulary
+		// down to the trust edge's 2-value vocabulary via agent.EdgeModeCategory —
+		// the SAME function the enforcement gate uses (pkg/agent/loop.go) — deduped
+		// so a seed listing both Await and Background (e.g. Jim's [Task,
+		// Background, Await]) yields a single Direct entry, not two. pkg/gateway
+		// already imports pkg/agent extensively, so there is no package-boundary
+		// reason to maintain a separate copy of this collapse here.
 		modes := make([]workspace.DelegationMode, 0, len(dp.Modes))
+		seenMode := make(map[workspace.DelegationMode]bool, len(dp.Modes))
 		for _, m := range dp.Modes {
-			modes = append(modes, workspace.DelegationMode(m))
+			wm := agent.EdgeModeCategory(m)
+			if seenMode[wm] {
+				continue
+			}
+			seenMode[wm] = true
+			modes = append(modes, wm)
 		}
 		var depth *int
 		if dp.Depth != nil {
@@ -322,7 +402,7 @@ func buildWorkspaceDelegationEdges(
 		}
 
 		// Single shared authority for the per-edge invariants (non-empty, no
-		// self-edge, endpoints ∈ team, modes ⊆ {await,background,task}, depth in
+		// self-edge, endpoints ∈ team, modes ⊆ {direct,task}, depth in
 		// [0, ceiling]). Validate returns the canonical wire messages verbatim, so
 		// the 400 body is byte-identical to the previous inline checks. The
 		// whole-graph acyclicity check stays below (it is graph-level, not

@@ -13,6 +13,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -38,6 +39,11 @@ const replayResultPreviewBytes = 10 * 1024
 //
 // Contract:
 //   - Compaction entries are skipped (FR-I-006).
+//   - Entries carrying ParentSpawnCallID (a delegation child sub-turn's own
+//     narration/final-turn text) are skipped entirely — never emitted as a
+//     top-level replay_message, matching live rendering's silent suppression
+//     of the same content (A-I4 live/reload parity fix). See
+//     session.TranscriptEntry.ParentSpawnCallID's doc comment.
 //   - For user/system entries: emit replay_message{role, content, agent_id}.
 //   - For assistant entries: emit replay_message if content is non-empty, then
 //     for each ToolCall emit tool_call_start + tool_call_result (FR-I-001).
@@ -71,7 +77,29 @@ func streamReplay(
 	emit func(any) error,
 	mediaStore media.MediaStore,
 	toolStore *toolResultStore,
+	isSpanActive func(parentSpawnCallID string) bool,
 ) (framesEmitted int, err error) {
+	// isSpanActive lets a caller (handleAttachSession, wired to
+	// agent.AgentLoop.IsSubTurnActiveForSpawnCall) tell replay that a given
+	// spawn/delegate ToolCall's real sub-turn is STILL genuinely running,
+	// even though its persisted record may carry a placeholder terminal
+	// status (async delegation writes Status="success", DurationMS≈0 the
+	// instant the spawning call returns — see
+	// session.UnifiedStore.UpdateToolCallStatus's doc comment — well before
+	// the delegate itself finishes). When isSpanActive reports true for a
+	// call, streamReplay withholds that call's own terminal frame(s)
+	// (tool_call_result / subagent_end) so the client is never shown a
+	// fabricated "done" for a turn that has not actually completed — it
+	// sees only tool_call_start / subagent_start, the same "started, no
+	// result yet" shape a genuinely in-flight LIVE call would show. The
+	// real completion then arrives over the live WS event stream once the
+	// sub-turn actually finishes. nil is treated as "nothing is active"
+	// (never withhold) — callers that have no liveness authority (e.g.
+	// tests) can pass nil safely.
+	if isSpanActive == nil {
+		isSpanActive = func(string) bool { return false }
+	}
+
 	// Track underlying file paths already emitted so the SPA never receives
 	// two media frames for the same file. Older transcripts can carry
 	// multiple media:// refs pointing at the same on-disk file (browser.
@@ -87,6 +115,13 @@ func streamReplay(
 	// to bracket. See buildSpawnIDsWithChildren's own doc comment below for
 	// why both tool names are checked (ADR-036 spawn→delegate rename).
 	spawnIDsWithChildren := buildSpawnIDsWithChildren(entries)
+
+	// spanRealAgentIDs maps a spawn/delegate ToolCall.ID (that has at least
+	// one child) to the REAL delegate agent's own ID, resolved from its
+	// first nested child tool call's own transcript entry. See
+	// buildSpanRealAgentIDs' doc comment for why this differs from — and is
+	// more correct than — entry.AgentID on the OUTER spawn/delegate call.
+	spanRealAgentIDs := buildSpanRealAgentIDs(entries, spawnIDsWithChildren)
 
 	// deduped: for each ToolCall.ID keep only the index of the last occurrence
 	// across ALL entries.  key = ToolCall.ID, value = (entryIdx, tcIdx).
@@ -157,7 +192,7 @@ func streamReplay(
 			CallId:     string(tc.ID),
 			Tool:       tc.Tool,
 			Result:     resultPayload,
-			Status:     resolveStatus(tc.Status),
+			Status:     toolCallResultStatus(tc.Status),
 			DurationMs: &durationMs,
 		}
 		if agentID != "" {
@@ -176,6 +211,62 @@ func streamReplay(
 	for ei, entry := range entries {
 		// FR-I-006: skip compaction entries.
 		if entry.Type == session.EntryTypeCompaction {
+			continue
+		}
+
+		// Wave 3 fix 5c: emit a role:"turn_canceled" ReplayMessageFrame for
+		// EntryTypeTurnCancelled entries (pkg/agent/cancel.go's onCancelFinish
+		// callback, ~line 224). Before this fix, replay had no code path that
+		// read these persisted entries at all — a canceled turn simply
+		// vanished on reload instead of showing the same cancellation marker
+		// the live WS stream showed. entry.TurnID (stamped by the same
+		// callback) travels onto the frame's turn_id field so the client can
+		// match this cancellation to the specific preceding assistant message
+		// it interrupted without relying on stream-adjacency — async
+		// delegation can interleave other agents'/turns' frames in between.
+		// This entry type carries no Content (cancel.go's literal never sets
+		// it), so it needs its own unconditional branch rather than falling
+		// through the `entry.Content != ""` gate below.
+		if entry.Type == session.EntryTypeTurnCancelled {
+			cancelFrame := generated.ReplayMessageFrame{
+				Type:      string(generated.WsFrameTypeReplayMessage),
+				SessionId: sessionID,
+				Role:      "turn_canceled",
+				Content:   turnCancelledContent(entry),
+			}
+			if entry.TurnID != "" {
+				turnIDCopy := entry.TurnID
+				cancelFrame.TurnId = &turnIDCopy
+			}
+			if err2 := emitFrame(cancelFrame); err2 != nil {
+				return framesEmitted, err2
+			}
+			continue
+		}
+
+		// A-I4 live/reload parity fix: an assistant-text entry stamped with
+		// ParentSpawnCallID was produced by a CHILD delegation sub-turn, not
+		// a genuine top-level turn — pkg/agent/subturn.go's spawnSubTurn
+		// shares its parent's transcriptSessionID (CoreTeam-scoped workspace
+		// design), so the delegate's own intermediate narration and its own
+		// final-turn text land in the SAME transcript.jsonl as the
+		// delegator's real messages. LIVE never shows this content as a chat
+		// bubble at all — wsStreamer.Update's shadow-stream ownership gate
+		// silently withholds the live TokenFrame for a child sub-turn's own
+		// streaming while still fully persisting it via Finalize (and the
+		// non-streaming appendIntermediateAssistantTranscript /
+		// appendAssistantTranscript paths never had a live-frame counterpart
+		// to begin with). Skip the ENTIRE entry here — before the
+		// lastSeenAgentID update and the entry.Content branch below — so
+		// reload matches: no top-level bubble, no stray model tag/avatar, and
+		// this entry's AgentID (the delegate's own identity) never leaks into
+		// lastSeenAgentID as a fallback for a later, unrelated flat tool
+		// call. See session.TranscriptEntry.ParentSpawnCallID's doc comment
+		// for the full root-cause writeup. A child sub-turn's own TOOL CALLS
+		// are unaffected by this branch — they carry ParentToolCallID (not
+		// ParentSpawnCallID) and are already correctly nested under the
+		// spawn/delegate span by the isNested/parentIsSpawn logic below.
+		if entry.ParentSpawnCallID != "" {
 			continue
 		}
 
@@ -206,6 +297,19 @@ func streamReplay(
 			if entry.AgentID != "" {
 				agentIDCopy := entry.AgentID
 				msgFrame.AgentId = &agentIDCopy
+			}
+			// Wave 3 fix 5c/1: surface TranscriptEntry.TurnID — stamped on
+			// every real assistant entry at its three production write sites:
+			// pkg/agent/turn.go's appendIntermediateAssistantTranscript and
+			// appendAssistantTranscript (both set TurnID: ts.turnID), and
+			// pkg/gateway/websocket.go's wsStreamer.Finalize (stamped via
+			// SetTurnID, mirroring SetProducerAgentID's pattern) — so the
+			// client can correlate a later turn_canceled frame to the
+			// specific assistant message it cancels. Empty for legacy
+			// entries written before turn-id stamping landed.
+			if entry.TurnID != "" {
+				turnIDCopy := entry.TurnID
+				msgFrame.TurnId = &turnIDCopy
 			}
 			// Phase 1B (FR-013/FR-014): surface per-turn model. Populated from
 			// TranscriptEntry.Model on every assistant message written via
@@ -284,10 +388,49 @@ func streamReplay(
 				effectiveAgentID = lastSeenAgentID
 			}
 
-			// For spawn calls that have children: emit subagent_start before
-			// the nested frames, then subagent_end after.  We detect this
-			// entry as a spawn-parent if its own ID is in spawnIDsWithChildren.
-			isSpawnParent := spawnIDsWithChildren[tcID]
+			// isDelegateSpawnCall identifies a spawn/delegate tool call (the
+			// two names checked mirror buildSpawnIDsWithChildren's own
+			// ADR-036 rename note). Used below both to resolve span-level
+			// agent-id and to gate the still-active liveness check — a
+			// terminal snapshot is only ever withheld for THIS call kind,
+			// never for an ordinary tool call.
+			isDelegateSpawnCall := tc.Tool == "spawn" || tc.Tool == "delegate"
+
+			// Finding C (A-I4 round 4): every spawn/delegate call gets a
+			// subagent_start/subagent_end bracket on replay, matching live
+			// unconditionally — pkg/agent/subturn.go's spawnSubTurn always
+			// fires EventKindSubTurnSpawn/EventKindSubTurnEnd for a delegate
+			// call regardless of how many tool calls the CHILD itself made,
+			// so pkg/gateway/websocket.go's eventForwarder always emits a
+			// live subagent_start/subagent_end pair too. This used to be
+			// gated on spawnIDsWithChildren (spans requiring at least one
+			// RECORDED NESTED CHILD tool call) — correct for deciding
+			// whether emitNestedToolCalls has anything to emit, but wrong as
+			// the gate for whether to bracket at all: a delegate whose child
+			// replies directly with zero tool calls (a common case — many
+			// delegated tasks are simple, no-tool Q&A, and it's also exactly
+			// what a child interrupted before its first tool call looks
+			// like) got NO span bracket whatsoever on reload, silently
+			// dropping the nested "label, 0 steps, status, duration"
+			// progress row live always shows, even though the outer call's
+			// own Status/DurationMS are fully known and persisted either
+			// way. isDelegateSpawnCall (above) is the correct test — it
+			// doesn't require any children to exist; emitNestedToolCalls
+			// below naturally emits zero nested frames when there are none.
+			isSpawnParent := isDelegateSpawnCall
+
+			// stillActive is true when isSpanActive (wired to
+			// agent.AgentLoop.IsSubTurnActiveForSpawnCall) reports that this
+			// spawn/delegate call's REAL sub-turn has not actually finished
+			// yet, even though its persisted ToolCall record may already
+			// carry a terminal-looking Status/DurationMS (async delegation's
+			// placeholder ack — see streamReplay's isSpanActive doc comment
+			// above). When true, this call's OWN terminal frame(s) —
+			// tool_call_result / subagent_end — are withheld so the client
+			// is never shown a fabricated "done" for a turn that is, in
+			// truth, still working; the real completion arrives later over
+			// the live WS event stream.
+			stillActive := isDelegateSpawnCall && isSpanActive(tcID)
 
 			if isSpawnParent {
 				// Emit tool_call_start for the spawn call itself FIRST.
@@ -296,8 +439,25 @@ func streamReplay(
 				}
 
 				// Emit subagent_start to bracket nested frames.
+				//
+				// Span-level agent attribution: prefer the REAL delegate
+				// agent's own ID (resolved from its first nested child's own
+				// transcript entry, see buildSpanRealAgentIDs) over
+				// effectiveAgentID, which reflects the PARENT's active agent
+				// (the outer spawn/delegate ToolCall's own entry.AgentID is
+				// written by the PARENT turn's appendToolCallTranscript, not
+				// the child's). Live subagent_start/subagent_end frames
+				// (pkg/gateway/websocket.go's eventForwarder) already carry
+				// the child's real identity (SubTurnSpawnPayload.AgentID :=
+				// childTS.agentID, pkg/agent/subturn.go) — this makes replay
+				// match live instead of mislabeling the specialized
+				// per-agent span with the delegator's own identity.
 				spanID := "span_" + tcID
 				taskLabel := resolveTaskLabel(tc)
+				spanAgentID := effectiveAgentID
+				if realAgentID, ok := spanRealAgentIDs[tcID]; ok && realAgentID != "" {
+					spanAgentID = realAgentID
+				}
 				subStart := generated.SubagentStartFrame{
 					Type:         string(generated.WsFrameTypeSubagentStart),
 					SessionId:    sessionID,
@@ -305,8 +465,8 @@ func streamReplay(
 					ParentCallId: tcID,
 					TaskLabel:    taskLabel,
 				}
-				if effectiveAgentID != "" {
-					agentIDCopy := effectiveAgentID
+				if spanAgentID != "" {
+					agentIDCopy := spanAgentID
 					subStart.AgentId = &agentIDCopy
 				}
 				if err2 := emitFrame(subStart); err2 != nil {
@@ -314,24 +474,64 @@ func streamReplay(
 				}
 
 				// Emit all nested tool calls (children with ParentToolCallID == tc.ID).
-				nestedDurationMS, nestedStatus, nestedErr := emitNestedToolCalls(
+				// emitNestedToolCalls returns an aggregate (totalDurationMS,
+				// aggregateStatus) computed by summing/rolling up its own child
+				// tool calls — historically THIS CALLER (not the function
+				// itself) used that aggregate to set the outer span's own
+				// Status/DurationMs on the subagent_end frame below. Wave 3 fix
+				// 5b replaced that with tc's own persisted Status/DurationMS
+				// (see the comment there), so the aggregate is now discarded
+				// here (`_, _`) — deliberately, not an oversight. This call is
+				// still required regardless: it's what emits the individual
+				// nested child tool_call_start/tool_call_result frames. These
+				// are always emitted, even when stillActive — they are
+				// historical, already-completed child tool calls; only the
+				// OUTER span's own terminal frames are conditionally withheld
+				// below.
+				_, _, nestedErr := emitNestedToolCalls(
 					ctx, sessionID, tcID, entries, latestByID, effectiveAgentID, emitFrame, toolStore,
 				)
 				if nestedErr != nil {
 					return framesEmitted, nestedErr
 				}
 
+				if stillActive {
+					// Withhold subagent_end + the outer tool_call_result: the
+					// real sub-turn is still genuinely running. The client
+					// already has tool_call_start + subagent_start for this
+					// call from above, which is the same "started, no result
+					// yet" shape a genuinely in-flight LIVE call shows.
+					continue
+				}
+
 				// Emit subagent_end.
-				nestedDurMS := int(nestedDurationMS)
+				//
+				// Wave 3 fix 5b: the span's own Status/DurationMs are read directly
+				// from tc — the spawn/delegate ToolCall's OWN persisted record —
+				// instead of emitNestedToolCalls' aggregate over child tool calls.
+				// pkg/agent/subturn.go's spawnSubTurn (EventKindSubTurnEnd) now
+				// persists the sub-turn's REAL completion status/wall-clock
+				// duration onto this exact record via session.UnifiedStore.
+				// UpdateToolCallStatus once the child turn actually finishes. The
+				// aggregate is a fundamentally different, incompatible semantic —
+				// it flips to "error" whenever ANY child tool call was denied, even
+				// when the sub-turn itself legitimately completed "success" at the
+				// LLM level (a denied tool attempt is not itself a sub-turn
+				// failure), and its duration is a sum of child tool-call durations
+				// that structurally cannot reflect real wall-clock time. Live
+				// rendering (pkg/gateway/websocket.go's EventKindSubTurnEnd
+				// handler) has always used this real status/duration directly —
+				// this makes replay match it.
+				spanDurationMS := int(tc.DurationMS)
 				subEnd := generated.SubagentEndFrame{
 					Type:       string(generated.WsFrameTypeSubagentEnd),
 					SessionId:  sessionID,
 					SpanId:     spanID,
-					DurationMs: &nestedDurMS,
-					Status:     nestedStatus,
+					DurationMs: &spanDurationMS,
+					Status:     resolveStatus(tc.Status),
 				}
-				if effectiveAgentID != "" {
-					agentIDCopy := effectiveAgentID
+				if spanAgentID != "" {
+					agentIDCopy := spanAgentID
 					subEnd.AgentId = &agentIDCopy
 				}
 				if err2 := emitFrame(subEnd); err2 != nil {
@@ -359,6 +559,15 @@ func streamReplay(
 			}
 			if err2 := emitFrame(buildStart(tc, effectiveAgentID, parentForFlat)); err2 != nil {
 				return framesEmitted, err2
+			}
+			if stillActive {
+				// A spawn/delegate call whose real sub-turn is still running
+				// but has made no (recorded) nested tool calls yet — e.g. a
+				// background delegate reloaded before its first step landed
+				// (symptom: "0 steps working" live, "done 0ms" on reload).
+				// Withhold the result frame; the client sees only
+				// tool_call_start, i.e. genuinely in progress.
+				continue
 			}
 			if err2 := emitFrame(buildResult(tc, effectiveAgentID, parentForFlat)); err2 != nil {
 				return framesEmitted, err2
@@ -524,6 +733,60 @@ func buildSpawnIDsWithChildren(entries []session.TranscriptEntry) map[string]boo
 	return withChildren
 }
 
+// buildSpanRealAgentIDs maps each spawn/delegate ToolCall.ID present in
+// withChildren to the REAL delegate agent's own ID — resolved from the
+// AgentID recorded on its FIRST nested child tool call (document order),
+// i.e. the earliest transcript entry whose ParentToolCallID equals that
+// span's ID.
+//
+// This exists because the OUTER spawn/delegate ToolCall's own transcript
+// entry.AgentID is written by the PARENT turn (turnState.
+// appendToolCallTranscript's ts.resolveActiveAgentID(), called when the
+// parent's "delegate" tool call itself completes) — it reflects the
+// delegator's identity, never the delegate's. A nested CHILD tool call, by
+// contrast, is appended by the CHILD sub-turn's own turnState — per ADR-032
+// ("no inheritance from the parent"), childTS.agentID is the resolved
+// DELEGATE's real identity, so a child entry's AgentID is the correct
+// source. Live rendering already gets this right independently:
+// pkg/agent/subturn.go's spawnSubTurn stamps SubTurnSpawnPayload.AgentID :=
+// childTS.agentID directly, so the live subagent_start/subagent_end frames
+// (pkg/gateway/websocket.go's eventForwarder) always carry the delegate's
+// own identity. Without this helper, replay instead fell back to
+// entry.AgentID (the delegator) or lastSeenAgentID for the span-level
+// subagent_start/subagent_end AgentID — a live/replay mismatch that made a
+// delegation's specialized, per-agent span widget mismatch or fail to
+// render correctly after a reload, even though the flat "Delegate task"
+// pill (which intentionally keeps the delegator's own attribution) stayed
+// correct.
+//
+// A span with no children is never bracketed at all (see
+// buildSpawnIDsWithChildren), so this only needs to cover IDs already
+// present in withChildren.
+func buildSpanRealAgentIDs(entries []session.TranscriptEntry, withChildren map[string]bool) map[string]string {
+	if len(withChildren) == 0 {
+		return nil
+	}
+	realAgentIDs := make(map[string]string, len(withChildren))
+	for _, entry := range entries {
+		for _, tc := range entry.ToolCalls {
+			if tc.ParentToolCallID == "" {
+				continue
+			}
+			parentID := string(tc.ParentToolCallID)
+			if !withChildren[parentID] {
+				continue
+			}
+			if _, already := realAgentIDs[parentID]; already {
+				continue
+			}
+			if entry.AgentID != "" {
+				realAgentIDs[parentID] = entry.AgentID
+			}
+		}
+	}
+	return realAgentIDs
+}
+
 type tcAddr struct{ entryIdx, tcIdx int }
 
 // emitNestedToolCalls emits all tool calls across all entries whose
@@ -585,7 +848,7 @@ func emitNestedToolCalls(
 			}
 
 			resultPayload := truncateResult(sessionID, tc, toolStore)
-			status := resolveStatus(tc.Status)
+			status := toolCallResultStatus(tc.Status)
 			durationMs := int(tc.DurationMS)
 			resultFrame := generated.ToolCallResultFrame{
 				Type:         string(generated.WsFrameTypeToolCallResult),
@@ -678,6 +941,45 @@ func resolveStatus(s string) string {
 		return "success"
 	}
 	return s
+}
+
+// toolCallResultStatus normalises a persisted session.ToolCall.Status onto
+// ToolCallResultFrame's strict wire enum (success/error only —
+// ToolCallResultFrame.yaml has no "interrupted" value; only the richer
+// SubagentEndFrame.status enum does). pkg/agent/loop.go's tcStatus
+// derivation can now persist "interrupted" for a synchronous delegate call
+// canceled by its parent (Finding F / A-I4 round 5, ToolResult.Interrupted),
+// so tc.Status is no longer guaranteed to be one of ToolCallResultFrame's
+// two allowed values — passing it through resolveStatus verbatim, as this
+// function replaces at every ToolCallResultFrame call site, would emit a
+// contract-invalid frame the SPA's isValidFrame() drops. Any non-empty,
+// non-"success" value (error, interrupted, canceled, timeout, ...) reads as
+// "error" here, exactly matching what the LIVE EventKindToolExecEnd handler
+// already does for the same outer call — IsError is a plain bool there too,
+// with no room for a third state — so this clamp changes nothing about the
+// OUTER tool_call_result badge's live/reload parity; only the SPAN's own
+// subagent_end frame (built via resolveStatus, unclamped) is meant to ever
+// show "interrupted".
+func toolCallResultStatus(s string) string {
+	if s == "" || s == "success" {
+		return resolveStatus(s)
+	}
+	return "error"
+}
+
+// turnCancelledContent builds the required `content` string for a
+// role:"turn_canceled" ReplayMessageFrame. The SPA treats turn_canceled as
+// metadata-only (contracts/components/schemas/ReplayMessageFrame.yaml: "skips
+// turn_canceled" — no chat bubble is rendered for it), but `content` is still
+// a required field on the frame, so this returns a short human-readable
+// description rather than an empty string, for operator-facing traces (WS
+// debug logs, future consumers) — entry.Content itself is always empty for
+// EntryTypeTurnCancelled (pkg/agent/cancel.go's literal never sets it).
+func turnCancelledContent(entry session.TranscriptEntry) string {
+	if entry.CancelMethod != "" {
+		return fmt.Sprintf("Turn canceled (%s)", entry.CancelMethod)
+	}
+	return "Turn canceled"
 }
 
 // resolveErrorKind maps an error transcript entry to the wire-level `kind`
@@ -791,7 +1093,22 @@ type replayStats struct {
 func computeReplayStats(entries []session.TranscriptEntry) replayStats {
 	var rs replayStats
 	spawnIDsWithChildren := buildSpawnIDsWithChildren(entries)
-	rs.spanCount = len(spawnIDsWithChildren)
+	// Finding C (A-I4 round 4): count every delegate/spawn call here, not just
+	// ones with at least one recorded nested child (spawnIDsWithChildren) —
+	// streamReplay now brackets ALL of them with subagent_start/end (see its
+	// isSpawnParent), so this diagnostic (surfaced as span_count_detected in
+	// operator logs) must match what actually gets emitted, or a genuinely
+	// bracketed "0 steps" delegate call under-reports as if no span existed
+	// at all.
+	seenSpawnIDs := make(map[string]bool)
+	for _, entry := range entries {
+		for _, tc := range entry.ToolCalls {
+			if (tc.Tool == "spawn" || tc.Tool == "delegate") && tc.ID != "" {
+				seenSpawnIDs[string(tc.ID)] = true
+			}
+		}
+	}
+	rs.spanCount = len(seenSpawnIDs)
 
 	// Count duplicates: seenIDs tracks first occurrence; a second hit increments the counter.
 	seenIDs := make(map[string]bool, len(entries))

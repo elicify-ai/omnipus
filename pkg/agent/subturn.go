@@ -641,7 +641,6 @@ func spawnSubTurn(
 		LightCandidates:           execSource.LightCandidates,
 		LightProvider:             execSource.LightProvider,
 		AgentType:                 execSource.AgentType,
-		DelegationPolicy:          execSource.DelegationPolicy,
 		IsRoutingDefault:          execSource.IsRoutingDefault,
 	}
 	// providerPool is tied to the SAME Candidates it was built for — now that
@@ -695,18 +694,49 @@ func spawnSubTurn(
 	// target (agent.ID == targetAgent.ID, the real delegate).
 	al.ApprovalGrants().Inherit(parentTS.transcriptSessionID, parentTS.agentID, agent.ID)
 
-	// FR-H-006: exclude delegation-adjacent tools from the child's registry so
-	// it cannot recursively delegate to a grandchild or hand off. Registry-
-	// level filter — the tools are absent, not refused at execute time. One
-	// level only (owner decision 2026-04-20).
+	// FR-H-006 REVERSAL (live UAT, 2026-07-12): "delegate" is NO LONGER excluded
+	// from the child's registry. Note: distinct from the identity-swap
+	// load_tool bug documented just above (ID/ContextBuilder, ~line 663) —
+	// that one was wrong AGENT IDENTITY (an unswapped childTS.agentID made
+	// canLoad resolve the PARENT's policy instead of the child's own); this
+	// one is an INCOMPLETE TOOL SET for a correctly-identified agent (the
+	// child's identity was already right, but "delegate" was unconditionally
+	// missing from its registry regardless of identity or policy). Both
+	// happen to manifest through the same load_tool fabricated-success
+	// symptom described below, but the two are independent bugs with
+	// independent fixes — do not conflate them when debugging a future
+	// load_tool report. The original FR-H-006 rationale ("one level
+	// only for general subagents", owner decision 2026-04-20) predates the
+	// per-edge depth-cap + trust-graph delegation system that now exists
+	// (workspace.DelegationEdge.Depth, config.SubTurn.MaxDepth,
+	// resolveEffectiveDelegationDepth/enforceEdgeModeAndDepth — see
+	// delegation_depth.go and loop.go's buildDelegationDenyCheckerForDelegate),
+	// which ALREADY supports and correctly enforces multi-hop chains up to a
+	// configurable depth (default defaultMaxSubTurnDepth == 3) gated by the
+	// per-workspace trust graph. Excluding "delegate" from the registry was a
+	// blunt, unconditional, registry-level block layered UNDERNEATH that real
+	// gate — it did not just enforce "one level only", it made ANY grandchild
+	// delegation structurally impossible regardless of an explicit, wired,
+	// "unrestricted" trust edge, and it failed in a confusing way: the
+	// unified `load_tool` infra tool (ScopeCore, lazily loaded — see
+	// pkg/tools/tools_tool.go) reports a fabricated LOAD SUCCESS for
+	// "delegate" inside a child sub-turn (its canLoad/markLoaded closures
+	// resolve the caller's agent via al.registry.GetAgent(callerID), i.e. the
+	// PERSISTENT top-level agent instance, not this ephemeral child's own
+	// execSource.Tools clone), while the child's own ts.agent.Tools —
+	// consulted by loop.go's per-iteration filterTimePolicyMap / FR-079
+	// resolveToolPolicyAtExec TOCTOU re-check — never actually gained the
+	// tool. The LLM would then be told "delegate" loaded fine and immediately
+	// hit `{"error":"permission_denied", ...}` on the very next call, without
+	// ever reaching DelegateTool.Execute's real trust-set/mode/depth gate
+	// (delegationDenyBackground/Await, SetDelegationDepthResolver) at all —
+	// blocking every multi-hop chain (e.g. jim -> ray -> planner ->
+	// {explorer|researcher}) even when every edge in the chain was explicitly
+	// authorized. "hand_off" remains excluded: a nested sub-turn hijacking the
+	// ACTIVE parent session's agent is a distinct, still-valid concern
+	// (session takeover) unrelated to task-delegation chain depth, and is not
+	// governed by the depth-cap/trust-graph system at all.
 	//
-	// ADR-036 (2026-07-04) merged the former spawn (async delegation) and
-	// run_subagent (sync delegation) tools into one `delegate` tool, so what
-	// used to be two excluded names (ExcludedSpawn, ExcludedSubagent) is now
-	// one (ExcludedDelegate) — the "one level only" invariant itself is
-	// UNCHANGED by that merge, just re-expressed against the single tool name:
-	//   - delegate: the unified delegation tool (async AND sync modes)
-	//   - handoff:  agent switch
 	// Sourced from execSource (the resolved delegate, or baseAgent for
 	// self-delegation) — NOT unconditionally baseAgent. Workspace-scoped
 	// tools (read_file/write_file/edit_file/bash/...) bind their root
@@ -723,10 +753,21 @@ func spawnSubTurn(
 	// -workspace-bound tool objects, the same pattern already used for
 	// ContextBuilder.
 	if execSource.Tools != nil {
-		agent.Tools = execSource.Tools.CloneExcept(tools.ExcludedDelegate, tools.ExcludedHandoff)
+		// Known residual gap (not fixed here, documented only): unlike
+		// "delegate" above, "hand_off" is unconditionally excluded from
+		// EVERY child sub-turn's registry, and the SAME load_tool
+		// fabricated-success-then-permission_denied bug just cured for
+		// "delegate" is still live for "hand_off" — canLoad/markLoaded
+		// (pkg/tools/tools_tool.go) resolve the caller via
+		// al.registry.GetAgent(callerID), the PERSISTENT top-level agent,
+		// not this ephemeral child's own registry, so load_tool can still
+		// report a fabricated success for "hand_off" here even though it is
+		// structurally absent from agent.Tools. Root-caused but out of
+		// scope for this fix (tools_tool.go is a larger, separate change).
+		agent.Tools = execSource.Tools.CloneExcept(tools.ExcludedHandoff)
 		// Log the constructed registry so operators can debug "my subagent has no tools" issues.
 		slog.Info("subturn: child registry constructed",
-			"excluded", []string{"delegate", "hand_off"},
+			"excluded", []string{"hand_off"},
 			"remaining_count", agent.Tools.Count(),
 			"child_id", childID,
 		)
@@ -909,15 +950,178 @@ func spawnSubTurn(
 		// W1-12: only emit span end event when parentSpawnCallID was non-empty.
 		if emitSpanEvents {
 			endStatus := SubTurnStatusSuccess
-			if err != nil {
+			var endReason string
+			switch {
+			case err != nil && errors.Is(childCtx.Err(), context.Canceled) && childTS.cancelFired.Load():
+				// FIX 4 (7-reviewer-gate follow-up on FIX 5): this SPECIFIC
+				// sub-turn's own ClaimCancel was claimed — i.e. RequestCancel
+				// targeted THIS turn directly, not the parent. Reachable, if
+				// narrow: GetActiveTurnHookForSession's fallback (turn.go)
+				// resolves to a sub-turn when its session's ROOT turn has
+				// already finished but a Critical:true sub-turn (which
+				// survives a graceful parent finish by design — see
+				// SubTurnConfig.Critical's doc comment) is still running on
+				// that same session, and a later RequestCancel against that
+				// session finds and cancels the sub-turn itself. Distinct
+				// from — and takes priority over — the more common cascade
+				// case below (childTS.cancelFired stays false there because
+				// the parent's Finish(true) calls childTS.Finish(true)
+				// directly, bypassing ClaimCancel entirely). No `reason` is
+				// set: the wire contract documents reason as meaningful only
+				// "when status is interrupted", and this is a genuine direct
+				// cancel, not a parent-caused interruption.
+				endStatus = SubTurnStatusCancelled
+			case err != nil && errors.Is(childCtx.Err(), context.Canceled):
+				// FIX 5: the child's own context was explicitly canceled —
+				// reached via the parent's hard-abort cascade
+				// (turnState.Finish(true) calling childTS.cancelFunc(),
+				// which IS childCtx's own cancel func, assigned at
+				// childTS.cancelFunc = cancel above). A user-canceling the
+				// parent turn while this async delegate was in flight must
+				// read back on replay as "interrupted" — not "error", which
+				// is indistinguishable from a genuine failure sitting right
+				// next to the parent's own correctly-labeled
+				// "(interrupted)" entry. A genuine timeout
+				// (context.DeadlineExceeded, the sub-turn's own Timeout
+				// config expiring rather than an external cancel) falls
+				// through to SubTurnStatusError below — that IS a real
+				// failure, not a cancellation.
+				endStatus = SubTurnStatusInterrupted
+				// FIX 4: populate the wire contract's SubagentEndFrame.reason
+				// (frontend already renders it — src/components/chat/SubagentBlock.tsx
+				// — but no Go path ever set it before this fix, so it silently
+				// rendered without the "(reason)" detail chip for every
+				// interrupted span). parentTS.cancelFired is the cheapest
+				// honest signal available here: it is true whenever the
+				// PARENT's own ClaimCancel was claimed, which covers both a
+				// live user cancel (web SPA/CLI/Tier A/B -> RequestCancel)
+				// AND pkg/gateway/schedules.go's watchDeadline force-abort on
+				// a scheduled run's deadline (it too calls RequestCancel,
+				// with CancelCanceller{UserID:"scheduler",Channel:"cron"}) —
+				//nolint:misspell // documents the literal wire enum value, matches frontend TS union
+				// both are honestly summarized as "parent_cancelled" here.
+				// Distinguishing "the parent was explicitly canceled" from
+				// "the parent hit its own deadline" precisely would require
+				// threading the canceller identity through turnState, which
+				// is a bigger change than this fix's scope; "unknown" is the
+				// honest fallback for any other, rarer trigger (e.g. a hook
+				// decision's hard-abort) where parentTS.cancelFired never
+				// got set at all.
+				if parentTS.cancelFired.Load() {
+					endReason = "parent_cancelled" //nolint:misspell // wire value, frontend TS union
+				} else {
+					endReason = "unknown"
+				}
+			case err != nil:
 				endStatus = SubTurnStatusError
 			}
+
+			// Finding F (A-I4 round 5): mirror endStatus onto the returned/
+			// delivered result's Interrupted flag so BOTH delivery paths agree
+			// with the exact terminal status the live subagent_end frame
+			// (endStatus, just computed above) reports:
+			//   - Synchronous delegation: `result` here IS the value
+			//     spawnSubTurn returns to its caller (DelegateTool.executeSync,
+			//     pkg/tools/delegate.go), which pkg/agent/loop.go's tool-call-
+			//     transcript persistence (tcStatus derivation) reads to decide
+			//     what status a session reload will show for this span.
+			//   - Asynchronous delegation: `result` is delivered via
+			//     deliverSubTurnResult below; its own tc.Status correction
+			//     (updateToolCallStatusWithRetry, right below) already writes
+			//     endStatus onto the persisted record directly, so this is
+			//     redundant-but-harmless there — asyncCallback (loop.go) never
+			//     reads result.Interrupted.
+			// Without this, a canceled SYNCHRONOUS delegate's result only ever
+			// carried a generic non-nil err — indistinguishable, once folded
+			// into IsError=true/tcStatus="error", from a genuine failure — so
+			// reload showed "failed" for the very same span live correctly
+			// labeled "interrupted (parent canceled)".
+			if result != nil && (endStatus == SubTurnStatusInterrupted || endStatus == SubTurnStatusCancelled) {
+				result.Interrupted = true
+			}
+
 			subTurnDurationMS := time.Since(subTurnStartedAt).Milliseconds()
 			slog.Debug("subagent_end",
 				"span_id", spanID,
 				"parent_call_id", parentSpawnCallID,
 				"agent_id", childTS.agentID,
 			)
+
+			// Wave 3 fix 5b: persist the sub-turn's REAL terminal status/duration
+			// onto the spawning "delegate" tool call's own persisted
+			// session.ToolCall record. For async delegation (DelegateTool.
+			// executeAsync, pkg/tools/delegate.go) that record was already
+			// written moments after spawnSubTurn started, carrying a
+			// placeholder ack (Status="success", DurationMS≈0, from
+			// tools.AsyncResult) — this corrects it to the real value so a
+			// session reload (pkg/gateway/replay.go) shows the same
+			// status/duration the live WS stream showed, instead of
+			// emitNestedToolCalls re-deriving a different, incompatible
+			// aggregate from child tool calls (which flips to "error" on any
+			// single denied child tool, even when the sub-turn itself
+			// completed successfully). No-op for synchronous delegation — see
+			// UpdateToolCallStatus's doc comment for why.
+			//
+			// FIX 4: for ASYNC delegation specifically, "not found on the
+			// first attempt" is not necessarily a permanent no-op — it can be
+			// a genuine happens-before race: DelegateTool.executeAsync
+			// launches this sub-turn in a goroutine and returns to the
+			// parent immediately, while the parent only writes ITS OWN
+			// placeholder ack record after further processing (hooks, media,
+			// events) back in its own call stack. A fast-failing dispatch
+			// can reach this defer before that write lands.
+			// updateToolCallStatusWithRetry retries briefly (bounded, ~1s
+			// total) ONLY when cfg.Async is true, establishing real
+			// happens-before ordering instead of silently leaving the
+			// placeholder permanent.
+			if parentTS.transcriptStore != nil && parentTS.transcriptSessionID != "" {
+				found, updateErr := updateToolCallStatusWithRetry(
+					parentTS.transcriptStore,
+					parentTS.transcriptSessionID,
+					session.ToolCallID(parentSpawnCallID),
+					string(endStatus),
+					subTurnDurationMS,
+					cfg.Async,
+				)
+				switch {
+				case updateErr != nil:
+					slog.Warn("subturn: failed to persist real end status/duration onto spawn tool call",
+						"session_id", parentTS.transcriptSessionID,
+						"parent_spawn_call_id", parentSpawnCallID,
+						"error", updateErr,
+					)
+				case cfg.Async && !found:
+					// FIX 3 (7-reviewer-gate follow-up): updateErr == nil AND
+					// found == false means the retry budget (~935ms across 6
+					// attempts) was exhausted without ever locating the
+					// placeholder record — a real, named scenario in
+					// updateToolCallStatusWithRetry's own doc comment (the
+					// parent's hooks/media/event processing taking longer
+					// than the retry budget). Without this branch, that
+					// outcome was silently undiagnosable: no error, so no
+					// log — the delegate's transcript entry permanently
+					// keeps the stale placeholder ack (success/0ms) with
+					// zero trace of why. This is exactly the "reload
+					// silently disagrees with live" failure class this
+					// whole fix pass exists to close.
+					slog.Warn("subturn: gave up waiting for spawn tool call's placeholder record after "+
+						"exhausting retry budget; reload will show the stale placeholder ack instead of "+
+						"the real terminal status",
+						"session_id", parentTS.transcriptSessionID,
+						"parent_spawn_call_id", parentSpawnCallID,
+						"resolved_status", endStatus,
+					)
+				}
+			}
+
+			// The correction attempt (above) is now genuinely done — either it
+			// succeeded, it exhausted its retry budget (logged above), or there
+			// was nothing to correct (nil store/empty session ID). Only NOW is
+			// it safe for IsSubTurnActiveForSpawnCall to let a reload/replay
+			// trust this turn's persisted terminal record; see
+			// turnState.subTurnRecordPersisted's doc comment (turn.go).
+			childTS.subTurnRecordPersisted.Store(true)
+
 			al.emitEvent(EventKindSubTurnEnd,
 				childTS.eventMeta("spawnSubTurn", "subturn.end"),
 				SubTurnEndPayload{
@@ -928,6 +1132,7 @@ func spawnSubTurn(
 					DurationMS:        subTurnDurationMS,
 					ChatID:            parentTS.chatID,
 					SessionID:         parentTS.transcriptSessionID,
+					Reason:            endReason,
 				},
 			)
 		}
@@ -975,6 +1180,26 @@ func spawnSubTurn(
 	// Native path (default, existing behavior — unchanged).
 	turnRes, turnErr := al.runTurn(childCtx, childTS)
 
+	// Re-register childTS in activeTurnStates: runTurn's OWN internal defer
+	// chain (loop.go) already deleted it — al.clearActiveTurn(ts) (keyed by
+	// ts.sessionKey, which equals childID here) runs as part of runTurn's
+	// unwind BEFORE ts.Finish(false) even sets isFinished=true, deleting the
+	// exact map entry IsSubTurnActiveForSpawnCall's Range scan depends on to
+	// find this turn at all. Without this re-Store, the entry would be gone
+	// from activeTurnStates for the ENTIRE remainder of this function —
+	// including the persist-retry window below (up to ~935ms) — so
+	// IsSubTurnActiveForSpawnCall could never report "active" for THIS span
+	// again no matter what subTurnRecordPersisted says, defeating that fix
+	// entirely (Range finds nothing to check IsAlive()/subTurnRecordPersisted
+	// against in the first place). Re-storing under the SAME key (childID)
+	// used at construction (see "Register child turn state" above) makes the
+	// span findable again for exactly as long as the cleanup defer below
+	// needs it; the pre-existing `defer al.activeTurnStates.Delete(childID)`
+	// (registered earlier, so it runs AFTER the cleanup defer per LIFO order)
+	// removes it for real once that defer — including the persistence
+	// correction — has fully completed.
+	al.activeTurnStates.Store(childID, childTS)
+
 	// Release the concurrency semaphore immediately after runTurn completes,
 	// before the cleanup defer runs. This prevents a deadlock where:
 	// - All semaphore slots are held by sub-turns in their cleanup phase
@@ -989,9 +1214,18 @@ func spawnSubTurn(
 	// Convert turnResult to tools.ToolResult
 	if turnErr != nil {
 		err = turnErr
+		// IsError is set explicitly (rather than left at its zero value, as
+		// before) so this result is self-describing regardless of which
+		// caller inspects it — see the cleanup defer above, which may
+		// additionally mark this same result Interrupted for a
+		// parent-cancellation case; IsError stays true either way, matching
+		// the OUTER tool_call_result frame's existing (unchanged by that
+		// fix) always-"error"-on-any-non-nil-err behavior for a synchronous
+		// delegate call.
 		result = &tools.ToolResult{
-			Err:    turnErr,
-			ForLLM: fmt.Sprintf("SubTurn failed: %v", turnErr),
+			Err:     turnErr,
+			ForLLM:  fmt.Sprintf("SubTurn failed: %v", turnErr),
+			IsError: true,
 		}
 	} else {
 		result = &tools.ToolResult{
@@ -1001,6 +1235,73 @@ func spawnSubTurn(
 	}
 
 	return result, err
+}
+
+// updateToolCallStatusRetryDelays is the bounded backoff schedule
+// updateToolCallStatusWithRetry uses when retrying for async delegation.
+// Total budget: ~935ms across 6 retries (after the first, immediate
+// attempt) — comfortably covering the parent's own tool-result
+// post-processing (hooks/media/events) between ExecuteWithContext returning
+// and ts.appendToolCallTranscript actually persisting the placeholder ack,
+// without meaningfully delaying anything user-visible (this all runs inside
+// spawnSubTurn's cleanup defer, on the child sub-turn's OWN background
+// goroutine — never blocking the parent's turn).
+var updateToolCallStatusRetryDelays = []time.Duration{
+	10 * time.Millisecond,
+	25 * time.Millisecond,
+	50 * time.Millisecond,
+	100 * time.Millisecond,
+	250 * time.Millisecond,
+	500 * time.Millisecond,
+}
+
+// updateToolCallStatusWithRetry calls store.UpdateToolCallStatus, retrying
+// with updateToolCallStatusRetryDelays's bounded backoff when async is true
+// and the first attempt finds no matching record yet (found=false, err=nil).
+//
+// FIX 4 (confirmed independently by silent-failure-hunter, architect, and
+// code-reviewer): DelegateTool.executeAsync (pkg/tools/delegate.go) launches
+// the child sub-turn in a goroutine and returns to the parent turn
+// immediately; the PARENT writes this SAME tool call's own placeholder ack
+// record only after further processing (hooks, media, events) in its own
+// call stack, back in pkg/agent/loop.go's tool-execution loop. When the
+// child's dispatch fails fast (e.g. a depth-limit or target-resolution
+// rejection), spawnSubTurn's cleanup defer — this function's only caller —
+// can reach UpdateToolCallStatus BEFORE the parent's placeholder write
+// lands, and UpdateToolCallStatus's "not found" case was previously
+// (incorrectly, for this specific caller) treated as a terminal, expected
+// no-op. Retrying establishes REAL happens-before ordering without
+// requiring pkg/tools (which deliberately has no transcript-store access —
+// SubTurnSpawner/AsyncExecutor exist specifically to avoid an agent<->tools
+// import cycle) to change at all.
+//
+// For SYNCHRONOUS delegation (async=false), found=false on the first
+// attempt is the documented, PERMANENT, expected outcome — the caller
+// (DelegateTool.executeSync, via the tool-execution loop) will append the
+// record itself moments later, once spawnSubTurn returns with the real
+// result. Retrying in that case would only waste the full backoff budget on
+// every synchronous delegation for no benefit, so this makes a single,
+// no-retry attempt when async is false.
+func updateToolCallStatusWithRetry(
+	store *session.UnifiedStore,
+	sessionID string,
+	toolCallID session.ToolCallID,
+	status string,
+	durationMS int64,
+	async bool,
+) (found bool, err error) {
+	found, err = store.UpdateToolCallStatus(sessionID, toolCallID, status, durationMS)
+	if err != nil || found || !async {
+		return found, err
+	}
+	for _, delay := range updateToolCallStatusRetryDelays {
+		time.Sleep(delay)
+		found, err = store.UpdateToolCallStatus(sessionID, toolCallID, status, durationMS)
+		if err != nil || found {
+			return found, err
+		}
+	}
+	return false, nil
 }
 
 // ====================== Result Delivery ======================

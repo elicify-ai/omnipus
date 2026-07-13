@@ -554,6 +554,115 @@ func (al *AgentLoop) InterruptSessionHard(sessionID, hint string) (descendants [
 	return descendants, nil
 }
 
+// sessionTurnsStillAlive returns every turnState matching sessionID
+// (transcriptSessionID equality — the same predicate InterruptSession/
+// InterruptSessionHard/collectDescendantTurnIDs use) that has NOT yet
+// finished (turnState.IsAlive()).
+//
+// Root cause this closes (delegation-cancel bug, UAT persona "Alex"):
+// RequestCancel's PHASE B/C escalation timers (pkg/agent/cancel.go) used to
+// gate hard-abort escalation on `activeTurn.IsAlive()` alone, where
+// activeTurn is the SINGLE hook resolved once via GetActiveTurnHookForSession
+// — which always prefers the ROOT turn when one exists (see that method's
+// doc comment). A background (async) delegate sub-turn shares the parent's
+// transcriptSessionID but is a SEPARATE turnState; when the root/parent turn
+// finishes gracefully within the 3s escalation window (routine — the
+// graceful providerCancel() an interrupt fires usually unwinds the root's
+// own in-flight LLM call almost immediately), `activeTurn.IsAlive()` goes
+// false and the OLD code skipped InterruptSessionHard for the WHOLE
+// session — never reaching the still-running child at all. The child's own
+// graceful nudge (also delivered by InterruptSession's cascade) only aborts
+// its CURRENT in-flight LLM call; because the retry loop only treats a
+// canceled call as terminal when THIS turn's own hardAbortRequested() is
+// true (pkg/agent/loop.go, the `errors.Is(err, context.Canceled)` checks),
+// an un-hard-aborted child simply retries with a fresh, uncanceled context
+// and keeps running — invisibly, for as long as its own task takes (minutes,
+// for a multi-step delegate) — until it resurfaces, sometimes concurrently
+// with a later, unrelated delegate call on the same session.
+//
+// Callers use this to decide whether ANY turn in the session cascade —
+// not just the one originally resolved — is still alive and therefore
+// still needs the hard-abort escalation.
+func (al *AgentLoop) sessionTurnsStillAlive(sessionID string) []*turnState {
+	if sessionID == "" {
+		return nil
+	}
+	var alive []*turnState
+	al.activeTurnStates.Range(func(_, value any) bool {
+		ts := value.(*turnState)
+		if ts.transcriptSessionID == sessionID && ts.IsAlive() {
+			alive = append(alive, ts)
+		}
+		return true
+	})
+	return alive
+}
+
+// IsSubTurnActiveForSpawnCall reports whether a sub-turn spawned by the spawn
+// tool call identified by parentSpawnCallID is currently registered as an
+// active turn — meaning either not-yet-finished, OR finished but its
+// persisted spawn-call record has not yet been corrected with the real
+// terminal status (see the "Active therefore covers TWO distinct states"
+// paragraph below). Returns false for an empty ID or when no matching
+// turnState is found in activeTurnStates.
+//
+// Root cause this closes (reload/replay fabricated-status bug, live UAT
+// re-verification 2026-07): async delegation (DelegateTool.executeAsync)
+// persists a placeholder ack — Status="success", DurationMS≈0 — on the
+// spawning ToolCall record the instant the tool call itself returns, well
+// before the delegate's own sub-turn actually finishes (see
+// session.UnifiedStore.UpdateToolCallStatus's doc comment). That placeholder
+// is only corrected once the real EventKindSubTurnEnd fires, at the END of
+// spawnSubTurn's cleanup defer. A session reload/replay landing in the
+// window between the placeholder write and that correction previously read
+// the placeholder literally and presented a fabricated "done 0ms" snapshot
+// for a delegate that was, in truth, still working — invisible before
+// 7dd9e7a5 ("background delegate's final answer lost when parent finishes
+// first") because a delegate needing more than one LLM turn used to exit its
+// loop early the instant its parent turn ended, closing this window almost
+// immediately; Critical:true now lets it run for its full, genuine duration
+// (sometimes tens of seconds), making the window routinely observable.
+//
+// Callers (pkg/gateway/replay.go's isSpanActive, pkg/gateway/websocket.go's
+// orphan watchdog) use this to distinguish "genuinely still running" from
+// "genuinely finished" before trusting a persisted terminal snapshot or
+// synthesizing one of their own.
+//
+// "Active" therefore covers TWO distinct states, not one: genuinely still
+// running (ts.IsAlive()), OR finished but the spawning tool-call's placeholder
+// record has not yet been corrected with the real terminal status/duration
+// (!ts.subTurnRecordPersisted.Load()). Collapsing those into a single
+// "isFinished" check reopens the exact bug this primitive exists to close:
+// runTurn's own `defer ts.Finish(false)` (loop.go) flips isFinished true and
+// fully returns BEFORE spawnSubTurn's own cleanup defer (subturn.go) even
+// begins correcting the placeholder ToolCall record written earlier by
+// DelegateTool.executeAsync — a correction that can take up to ~935ms of
+// retry backoff plus real I/O. A reload/replay landing in that gap must still
+// see "active" so it withholds the fabricated "done 0ms" snapshot rather than
+// serving it as genuine. See turnState.subTurnRecordPersisted's doc comment
+// (turn.go) for the full mechanics.
+func (al *AgentLoop) IsSubTurnActiveForSpawnCall(parentSpawnCallID string) bool {
+	if parentSpawnCallID == "" {
+		return false
+	}
+	active := false
+	al.activeTurnStates.Range(func(_, value any) bool {
+		ts, ok := value.(*turnState)
+		if !ok {
+			return true
+		}
+		ts.mu.RLock()
+		matches := ts.parentSpawnCallID == parentSpawnCallID
+		ts.mu.RUnlock()
+		if matches && (ts.IsAlive() || !ts.subTurnRecordPersisted.Load()) {
+			active = true
+			return false // stop — found a live or persistence-pending match
+		}
+		return true
+	})
+	return active
+}
+
 func (al *AgentLoop) InterruptHard() error {
 	ts := al.getAnyActiveTurnState()
 	if ts == nil {

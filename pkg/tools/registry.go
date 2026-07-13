@@ -617,12 +617,25 @@ type ExcludedTool string
 
 const (
 	// ExcludedDelegate is the unified delegation tool (DelegateTool — ADR-036
-	// merge of the former spawn/run_subagent/check_spawn_status trio). Excluded
-	// from child sub-turn registries so grandchild delegation is impossible
-	// (FR-H-006, owner reversal 2026-04-20: "one level only for general
-	// subagents"). Prior to the merge this was two separate names, ExcludedSpawn
-	// ("spawn") and ExcludedSubagent ("run_subagent") — both collapsed into this
-	// one entry since both tools are now the same "delegate" registration.
+	// merge of the former spawn/run_subagent/check_spawn_status trio). Prior to
+	// the merge this was two separate names, ExcludedSpawn ("spawn") and
+	// ExcludedSubagent ("run_subagent") — both collapsed into this one entry
+	// since both tools are now the same "delegate" registration.
+	//
+	// REVERSED (ADR-040, 2026-07-12): this constant is no longer passed at the
+	// production call site (pkg/agent/subturn.go's spawnSubTurn now calls
+	// CloneExcept(tools.ExcludedHandoff) only — see that call site's own
+	// comment). FR-H-006's registry-level "one level only for general
+	// subagents" block pre-empted the per-workspace delegation trust-graph
+	// (ADR-037) from ever running for nested delegation, silently overriding
+	// an operator's explicit, wired, unrestricted trust edge. Nested
+	// delegation is now governed exclusively by that trust-graph/mode/depth
+	// gate (DelegateTool.Execute's deny-checker, `resolveEffectiveDelegationDepth`),
+	// which is fail-closed on its own and does not depend on this exclusion.
+	// ExcludedDelegate itself is NOT deleted — it remains a valid CloneExcept
+	// primitive, still exercised by tests, for any future caller that
+	// legitimately needs to omit `delegate` from a cloned registry; it is
+	// simply no longer applied unconditionally to every child sub-turn.
 	ExcludedDelegate ExcludedTool = "delegate"
 	// ExcludedHandoff is the agent-switch tool. Excluded from child registries to
 	// prevent sub-turns from hijacking the active agent session (FR-H-006).
@@ -631,10 +644,18 @@ const (
 
 // CloneExcept creates an independent copy of the registry omitting the named tools.
 // It is used to construct child sub-turn registries that must not have access to
-// certain tools (FR-H-006). The canonical call site is
-// CloneExcept(ExcludedDelegate, ExcludedHandoff): a child sub-turn must never be
-// able to delegate to a grandchild or hand off to another agent. The version
-// counter is reset to 0 in the clone as it is a new independent registry.
+// certain tools. The version counter is reset to 0 in the clone as it is a new
+// independent registry.
+//
+// The canonical production call site is now CloneExcept(ExcludedHandoff) only
+// (pkg/agent/subturn.go's spawnSubTurn) — a child sub-turn must never be able
+// to hijack the active agent session via hand_off, but CAN delegate onward to
+// a grandchild, governed instead by the per-workspace delegation trust-graph's
+// mode/depth gate. This reverses the prior "a child sub-turn must never be
+// able to delegate to a grandchild" rule that used to live here: see
+// ADR-040 (docs/internal/architecture/ADR-040-fr-h-006-nested-delegation-reversal.md)
+// for the full root-cause and rationale. ExcludedDelegate is unaffected as a
+// CloneExcept primitive — see its own doc comment above.
 //
 // Existence check: each ExcludedTool name is validated against the base registry.
 // If a named tool is absent, slog.Warn is emitted and processing continues — this

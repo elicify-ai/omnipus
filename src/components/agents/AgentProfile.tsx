@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
-import { Link } from '@tanstack/react-router'
 import {
   X,
   CaretDown,
@@ -62,7 +61,6 @@ import {
   fetchSkills,
   testAgentRunner,
   workspacesQueryKeys,
-  type Agent,
   type ActivityEvent,
   type AgentToolsCfg,
   type Skill,
@@ -72,6 +70,7 @@ import {
 } from '@/lib/api'
 import { isApiError } from '@/lib/api-error'
 import { formatTokens } from '@/lib/formatTokens'
+import { logDiagnostic } from '@/lib/telemetry'
 import { useUiStore } from '@/store/ui'
 import type { FallbackModel } from '@/lib/api/generated/openapi-types'
 import { type IconName, getIconComponent } from '@/lib/agentIcons'
@@ -202,12 +201,37 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // from the server's current row before saves resume.
   const conflictRef = useRef(false)
 
+  // UAT data-loss fix (fallback_models passive-repro, round 2): tracks the
+  // `updated_at` of the most recent `agent` snapshot we've actually
+  // incorporated into form state — via either the initial hydration or our
+  // own last successful save. The hydration effect below (which normally
+  // fires whenever the `agent` object reference changes and the form is
+  // not dirty) uses this to reject a hydration source that is NOT strictly
+  // newer than what we already have.
+  //
+  // Why this is needed even after making the save-success `setQueryData`
+  // patch use the FULL PUT response (see that call site's comment): the
+  // very next line still calls `queryClient.invalidateQueries(['agent',
+  // agentId])` to reconcile with a fresh GET. If THAT refetch resolves
+  // with a snapshot that is not newer than what this save already applied
+  // — a stale response racing in from network reordering, a read-replica
+  // lag, or (as a live regression test caught) simply a caller whose GET
+  // mock/cache hasn't caught up yet — the `agent` reference still changes,
+  // `isDirtyRef.current` is STILL already `false` (cleared by this same
+  // save's own success path), and the hydration effect would otherwise
+  // re-hydrate from that stale snapshot and revert the field just saved —
+  // reopening the exact same class of silent data loss one level further
+  // out. Comparing `updated_at` timestamps closes the window regardless of
+  // WHERE the stale `agent` reference came from.
+  const lastIncorporatedUpdatedAtRef = useRef<string | undefined>(undefined)
+
   // Reset flags when navigating to a different agent
   useEffect(() => {
     isDirtyRef.current = false
     hasHydrated.current = false
     conflictRef.current = false
     hbDirtyRef.current = false
+    lastIncorporatedUpdatedAtRef.current = undefined
   }, [agentId])
 
   // Hydrate heartbeat state from workspace member_configs when the workspace
@@ -224,8 +248,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   }, [workspaceData, agentId])
 
   // W6-B1 / I7 (WCAG 2.4.3): restore focus to the element that triggered the
-  // slide-over (typically the AgentCard button — also covers the TrustGraph
-  // row click and the /agents/:id route mount) on close.
+  // slide-over (typically the AgentCard button — also covers the
+  // /agents/:id route mount) on close.
   //
   // Wave 6 / B-fix: extracted to `useFocusRestore` hook so the same
   // proven pattern (capture-in-onOpenAutoFocus + restore-via-RAF + try/
@@ -317,6 +341,63 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     // We depend on the stable agentId prop (not agent?.id which can be undefined
     // during loading) so the effect re-runs reliably on agent navigation.
     if (isDirtyRef.current) return
+    // UAT data-loss fix (fallback_models passive-repro, round 2): reject a
+    // hydration source that is NOT strictly newer than what we've already
+    // incorporated (see `lastIncorporatedUpdatedAtRef`'s doc comment above
+    // for the exact race this closes — a same-tick optimistic cache patch
+    // or an `invalidateQueries` refetch resolving with a snapshot no newer
+    // than the save that just landed, either of which would otherwise
+    // silently revert a just-saved field). A missing `updated_at` on
+    // either side (e.g. brand-new agent, or a fixture/test double that
+    // doesn't model it) falls through to hydrate as before — this guard
+    // only ever SKIPS, never blocks the very first hydration.
+    if (lastIncorporatedUpdatedAtRef.current !== undefined && agent.updated_at !== undefined) {
+      const incomingTime = new Date(agent.updated_at).getTime()
+      const incorporatedTime = new Date(lastIncorporatedUpdatedAtRef.current).getTime()
+      // 7-reviewer-gate fix (3 independent reviewers): fail CLOSED, not
+      // open, when either timestamp fails to parse. `NaN <= NaN` (and any
+      // comparison involving NaN) evaluates to `false` in JS, so the
+      // original `new Date(x).getTime() <= new Date(y).getTime()` check
+      // would silently PROCEED to hydrate whenever either side was
+      // malformed/unparseable — backwards for a guard whose entire purpose
+      // is "never silently revert to stale data". When we can't confidently
+      // order the two snapshots we reject the hydration (and warn loudly)
+      // rather than gamble on it being newer.
+      if (Number.isNaN(incomingTime) || Number.isNaN(incorporatedTime)) {
+        console.warn('agentProfile.updatedAtGuardUnparseable', {
+          agentId,
+          incoming: agent.updated_at,
+          incorporated: lastIncorporatedUpdatedAtRef.current,
+        })
+        logDiagnostic('agentProfileUpdatedAtGuardUnparseable', {
+          agentId,
+          incoming: agent.updated_at,
+          incorporated: lastIncorporatedUpdatedAtRef.current,
+        })
+        return
+      }
+      if (incomingTime <= incorporatedTime) {
+        // 7-reviewer-gate fix: this guard used to be a bare early-`return`
+        // with no signal when it actually rejected a hydration. If this
+        // guard ever incorrectly rejects a legitimate hydration (e.g. clock
+        // skew between client and server), the UI would otherwise silently
+        // keep showing stale data with zero indication — exactly the
+        // "looks fine but is actually outdated" failure mode this whole
+        // track exists to prevent. Always leave a breadcrumb.
+        console.warn('agentProfile.updatedAtGuardRejectedHydration', {
+          agentId,
+          incoming: agent.updated_at,
+          incorporated: lastIncorporatedUpdatedAtRef.current,
+        })
+        logDiagnostic('agentProfileUpdatedAtGuardRejectedHydration', {
+          agentId,
+          incoming: agent.updated_at,
+          incorporated: lastIncorporatedUpdatedAtRef.current,
+        })
+        return
+      }
+    }
+    lastIncorporatedUpdatedAtRef.current = agent.updated_at
     setName(agent.name ?? '')
     setDescription(agent.description ?? '')
     setModel(agent.model ?? '')
@@ -591,15 +672,48 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       const payload = { ...stripped, updated_at: agent?.updated_at }
       try {
         const resp = await updateAgent(agentId, payload)
-        // I2: optimistically update the local agent.updated_at from the PUT
-        // response so the NEXT debounced save doesn't carry the stale pre-save
-        // timestamp and get a spurious 409 Conflict against the just-written
-        // row. The invalidateQueries below will reconcile with a fresh GET,
-        // but until that resolves the optimistic value is what the form reads.
-        if (resp?.updated_at) {
-          queryClient.setQueryData(['agent', agentId], (old: Agent | undefined) =>
-            old ? { ...old, updated_at: resp.updated_at } : old,
-          )
+        // I2 / UAT data-loss fix (passive fallback_models repro): seed the
+        // query cache with the FULL PUT response — `PUT /agents/{id}`
+        // contractually "returns the complete updated agent object"
+        // (contracts/openapi.yaml), identical in shape to the GET response —
+        // not just `updated_at`. The earlier version only patched
+        // `updated_at` via `{ ...old, updated_at: resp.updated_at }`, which
+        // left every OTHER field (including `fallback_models`) pointing at
+        // the STALE pre-save `old` snapshot. That partial patch still swaps
+        // in a brand-new `agent` object reference, which re-triggers the
+        // `[agentId, agent]` hydration effect below on React's next render —
+        // and by the time that effect actually runs, `isDirtyRef.current`
+        // has ALREADY been cleared to `false` by this same save's own
+        // success path (a few lines down), so the hydration guard does not
+        // block it. The effect then re-hydrates EVERY field (not just
+        // updated_at) from that Frankenstein object, silently reverting
+        // `fallbackModels` state back to its pre-edit value. That reversion
+        // is a real `formData` change from useAutoSave's point of view, so
+        // it fires a second, correctly-serialized (not overlapping) debounce
+        // cycle roughly one `debounceMs` later — carrying the now-reverted,
+        // fallback_models-less payload — which silently clobbers the
+        // first save. Using the full response keeps the optimistic cache
+        // patch fully consistent with what the server now actually has, so
+        // if the hydration effect races and re-runs before the
+        // `invalidateQueries` refetch below lands, it reproduces the SAME
+        // correct state and no spurious second save fires. The
+        // `invalidateQueries` call below still runs to reconcile with a
+        // fresh GET (e.g. server-side derived fields), but this is no
+        // longer the only thing standing between a save and a stale cache.
+        //
+        // Round 2 of this same regression test (see
+        // `lastIncorporatedUpdatedAtRef`'s doc comment above): even with
+        // the full-response cache patch, a STALE `invalidateQueries`
+        // refetch immediately below can still swap in an `agent` snapshot
+        // that isn't newer than what we just saved — so the hydration
+        // effect's own `updated_at` monotonic check is the layer that
+        // actually closes the window. Set the ref here too (synchronously,
+        // before `isDirtyRef.current` is even cleared below) so there is
+        // no gap between "we know what we just saved" and "the hydration
+        // effect is willing to trust it."
+        if (resp) {
+          queryClient.setQueryData(['agent', agentId], resp)
+          if (resp.updated_at) lastIncorporatedUpdatedAtRef.current = resp.updated_at
         }
       } catch (err) {
         // W6-contracts: on a 409 Conflict, surface a toast with a Refresh
@@ -953,38 +1067,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   />
                 </div>
               )}
-              {!isWorkerAgent && (() => {
-                const dp = agent.delegation_policy
-                const toCount = dp?.to?.length ?? 0
-                const acceptFromCount = dp?.accept_from?.length ?? 0
-                const modesCount = dp?.modes?.length ?? 0
-                const hasDepth = typeof dp?.depth === 'number'
-                const hasBudget = !!(dp?.budget && (dp.budget.max_cost_usd !== undefined || dp.budget.max_tokens !== undefined))
-                const ruleCount = toCount + acceptFromCount + modesCount + (hasDepth ? 1 : 0) + (hasBudget ? 1 : 0)
-                const rulesLabel = ruleCount === 1 ? '1 rule' : `${ruleCount} rules`
-                return (
-                  <div
-                    data-testid="delegation-policy-summary"
-                    className="flex items-center justify-between gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2.5"
-                  >
-                    <div className="min-w-0">
-                      <p className="text-sm text-[var(--color-secondary)]">Delegation policy</p>
-                      <p className="text-[11px] text-[var(--color-muted)] leading-snug">
-                        {rulesLabel} configured. Edit on the Trust graph.
-                      </p>
-                    </div>
-                    <Link
-                      to="/agents/trust"
-                      search={{ agent: resolvedAgentId }}
-                      className="inline-flex items-center gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2.5 py-1 text-xs font-medium text-[var(--color-secondary)] transition-colors hover:border-[var(--color-accent)]/40 hover:text-[var(--color-accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-primary)]"
-                      data-testid="delegation-policy-link"
-                      aria-label={`Edit delegation policy for ${agent.name}`}
-                    >
-                      Open Trust graph
-                    </Link>
-                  </div>
-                )
-              })()}
               {/* Operator decision 2026-07-03: color/icon become visible
                   READ-ONLY for locked core agents (previously hidden
                   entirely) — a static swatch/icon+label, not the

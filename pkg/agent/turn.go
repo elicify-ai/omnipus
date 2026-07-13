@@ -129,15 +129,33 @@ type turnState struct {
 	persistedMessages   []providers.Message
 
 	// SubTurn support
-	depth                int                    // SubTurn depth (0 for root turn)
-	parentTurnID         string                 // Parent turn ID (empty for root turn)
-	childTurnIDs         []string               // Child turn IDs
-	pendingResults       chan *tools.ToolResult // Channel for SubTurn results
-	concurrencySem       chan struct{}          // Semaphore for limiting concurrent SubTurns
-	isFinished           atomic.Bool            // Whether this turn has finished
-	session              session.SessionStore   // Session store reference
-	initialHistoryLength int                    // Snapshot of window (GetHistory) length at turn start
-	initialArchiveLen    int                    // Snapshot of archive (ReadArchive) line count at turn start — for Skip-preserving rollback
+	depth          int                    // SubTurn depth (0 for root turn)
+	parentTurnID   string                 // Parent turn ID (empty for root turn)
+	childTurnIDs   []string               // Child turn IDs
+	pendingResults chan *tools.ToolResult // Channel for SubTurn results
+	concurrencySem chan struct{}          // Semaphore for limiting concurrent SubTurns
+	isFinished     atomic.Bool            // Whether this turn has finished
+	// subTurnRecordPersisted is true once this sub-turn's OWN spawning
+	// "delegate"/"spawn" tool-call record (on the PARENT's transcript) has
+	// been corrected with the real terminal status/duration — or it has been
+	// determined that no correction attempt was needed/possible (no
+	// transcript store, no session ID). isFinished flips the instant runTurn
+	// returns (its own `defer ts.Finish(false)`), but spawnSubTurn's cleanup
+	// defer — which performs the correction via updateToolCallStatusWithRetry,
+	// up to ~935ms of retry backoff for async delegation — only runs AFTER
+	// that point, once spawnSubTurn itself returns. A reload/replay landing
+	// in that window previously read isFinished==true as "safe to trust the
+	// persisted record" and served the still-stale async placeholder ack
+	// (Status="success", DurationMS≈0) as genuine. IsSubTurnActiveForSpawnCall
+	// treats "finished but not yet persisted" as still active so callers
+	// withhold a terminal frame/replay snapshot until BOTH are true. Zero
+	// value (false) is correct for turns with no parentSpawnCallID too — they
+	// are never matched by IsSubTurnActiveForSpawnCall, which requires a
+	// non-empty parentSpawnCallID equality match first.
+	subTurnRecordPersisted atomic.Bool
+	session                session.SessionStore // Session store reference
+	initialHistoryLength   int                  // Snapshot of window (GetHistory) length at turn start
+	initialArchiveLen      int                  // Snapshot of archive (ReadArchive) line count at turn start — for Skip-preserving rollback
 	// parentSpawnCallID is the ToolCall.ID of the spawn tool call in the parent turn that
 	// triggered this sub-turn. Set by spawnSubTurn at child construction (FR-H-003).
 	// Empty for root turns. Used to populate ParentSpawnCallID on ToolExec* payloads
@@ -542,6 +560,76 @@ func (ts *turnState) markLastStreamerTranscriptPersisted() {
 	}
 }
 
+// stampStreamerProducerAgentID stamps the TRUE per-turn producer (ts.agent.ID)
+// onto a freshly-obtained streamer, before any token can flow through it.
+//
+// FIX 5a: without this, a streaming-capable streamer's own "active session
+// agent" guess (computed by the channel Manager/WSHandler at GetStreamer
+// time, from session metadata) leaks into both the live TokenFrame.AgentId
+// and the streamer's own Finalize transcript entry. That guess is correct
+// for an ordinary turn, but wrong for a background/delegated sub-turn: per
+// ADR-032 (no inheritance from the parent), the delegate runs as its own
+// identity, never the parent's, so the session's "active" (parent) agent and
+// this specific turn's real producer (ts.agent.ID) can legitimately differ.
+//
+// Uses a type-assertion to an inline interface so bus.Streamer needs no new
+// method — non-webchat streamers (telegram, wecom, sse) are untouched; only
+// wsStreamer implements SetProducerAgentID.
+func (ts *turnState) stampStreamerProducerAgentID(streamer bus.Streamer) {
+	if pas, ok := streamer.(interface{ SetProducerAgentID(agentID string) }); ok && ts.agent != nil {
+		pas.SetProducerAgentID(ts.agent.ID)
+	}
+}
+
+// stampStreamerTurnID stamps this turn's own ID onto a freshly-obtained
+// streamer, before any token can flow through it. Mirrors
+// stampStreamerProducerAgentID exactly.
+//
+// FIX 5c/1: without this, the assistant transcript entry Finalize writes
+// carries no TurnID at all — confirmed via live verification to break BOTH
+// the frontend's turn_canceled -> assistant-message replay correlation
+// (chatTurnCanceledNoMatch fires on every reload after a mid-stream cancel)
+// and MarkLastEntryTruncated's own turn-scoped backward-walk matching
+// (pkg/session/unified.go), silently disabling the Truncated flag for every
+// real cancel.
+//
+// Uses a type-assertion to an inline interface so bus.Streamer needs no new
+// method — non-webchat streamers (telegram, wecom, sse) are untouched; only
+// wsStreamer implements SetTurnID.
+func (ts *turnState) stampStreamerTurnID(streamer bus.Streamer) {
+	if tid, ok := streamer.(interface{ SetTurnID(turnID string) }); ok {
+		tid.SetTurnID(ts.turnID)
+	}
+}
+
+// stampStreamerParentSpawnCallID stamps this turn's parentSpawnCallID (empty
+// for a root/non-delegated turn) onto a freshly-obtained streamer, before any
+// token can flow through it. Mirrors stampStreamerTurnID exactly.
+//
+// A delegated child sub-turn streams through the SAME wsStreamer/wsConn
+// machinery as any other turn (it shares its parent's chatID —
+// spawnSubTurn's opts.ChatID: parentTS.chatID), so the assistant-text entry
+// wsStreamer.Finalize persists must carry the same ParentSpawnCallID
+// correlation that appendIntermediateAssistantTranscript/
+// appendAssistantTranscript already stamp for the child's non-streaming
+// writes — otherwise a delegate's OWN final streamed response (the common
+// case: multi-step delegations stream their last round) would round-trip
+// through Finalize with no way for pkg/gateway/replay.go to tell it apart
+// from a genuine top-level parent message. See
+// session.TranscriptEntry.ParentSpawnCallID's doc comment for the full
+// root-cause writeup.
+//
+// Uses a type-assertion to an inline interface so bus.Streamer needs no new
+// method — non-webchat streamers (telegram, wecom, sse) are untouched; only
+// wsStreamer implements SetParentSpawnCallID.
+func (ts *turnState) stampStreamerParentSpawnCallID(streamer bus.Streamer) {
+	if pid, ok := streamer.(interface {
+		SetParentSpawnCallID(parentSpawnCallID string)
+	}); ok {
+		pid.SetParentSpawnCallID(ts.parentSpawnCallID)
+	}
+}
+
 // streamerStatsSetter is an optional interface a Streamer may implement to
 // receive turn-end stats (tokens, cost, duration) before Finalize is called.
 // The ws streamer uses this to populate the "done" frame so the chat UI shows
@@ -586,14 +674,42 @@ func (ts *turnState) SetFinalContent(content string) {
 	ts.mu.Unlock()
 }
 
+// streamOwnershipReleaser is an optional interface a Streamer may implement
+// to release a live-stream ownership claim (see gateway's
+// WSHandler.streamOwners doc comment) without performing the rest of
+// Finalize's work — sending the done frame, persisting the transcript
+// entry. finalizeStreamer's B4 abandoned-turn early return deliberately
+// skips the full Finalize call so a stuck goroutine cannot send a spurious
+// done signal to the frontend, but it must still relinquish any live-stream
+// ownership claim the streamer holds: without this, a background delegate
+// that became the live owner for a chatID and was later MarkAbandoned()'d
+// by cancel.go's PHASE C left that chatID permanently shadowed — no other
+// release path runs for an abandoned turn (Finalize never fires; there's no
+// TTL or sweep on the gateway side either). Confirmed as a critical,
+// unanimous finding across a 7-reviewer gate.
+type streamOwnershipReleaser interface {
+	ReleaseStreamOwnership()
+}
+
 func (ts *turnState) finalizeStreamer(ctx context.Context) {
 	// B4: if the turn has been abandoned, suppress the final "done" frame so
 	// a stuck goroutine cannot send a spurious done signal to the frontend.
 	if ts.abandoned.Load() {
 		abandonedWritesSuppressed.Add(1)
 		ts.mu.Lock()
+		s := ts.lastStreamer
 		ts.lastStreamer = nil
 		ts.mu.Unlock()
+		// Even though the full Finalize (done frame + transcript write) is
+		// skipped above, this streamer may already hold a live-stream
+		// ownership claim for its chatID — claimed on its first Update()
+		// call, before abandonment occurred. Release it here so a later,
+		// unrelated turn on the same chatID is not shadowed forever.
+		if s != nil {
+			if releaser, ok := s.(streamOwnershipReleaser); ok {
+				releaser.ReleaseStreamOwnership()
+			}
+		}
 		return
 	}
 	ts.mu.Lock()
@@ -884,6 +1000,21 @@ func (ts *turnState) appendIntermediateAssistantTranscript(content string, produ
 		Content:   content,
 		Timestamp: time.Now().UTC(),
 		Model:     model,
+		// TurnID: without this, neither MarkLastEntryTruncated's own
+		// turn-scoped backward-walk (H2 fix — it matches on e.TurnID ==
+		// turnID) nor the frontend's turn_canceled -> assistant-message
+		// replay correlation can ever match a REAL entry; both were only
+		// ever exercised by tests that hand-seed TurnID directly. See
+		// appendAssistantTranscript's identical fix for the full rationale.
+		TurnID: ts.turnID,
+		// ParentSpawnCallID: non-empty only when ts is a CHILD delegation
+		// sub-turn (spawnSubTurn stamps childTS.parentSpawnCallID before any
+		// turn processing runs). Lets pkg/gateway/replay.go withhold this
+		// entry from top-level replay, matching live rendering — see
+		// session.TranscriptEntry.ParentSpawnCallID's doc comment for the
+		// full root-cause writeup (live/reload bubble-count divergence on
+		// multi-step delegation).
+		ParentSpawnCallID: ts.parentSpawnCallID,
 		// Tokens and Cost are intentionally 0 — the turn total is attributed to
 		// the final assistant entry only. See appendAssistantTranscript.
 	}
@@ -922,16 +1053,32 @@ func (ts *turnState) appendAssistantTranscript(content string, producedModel ...
 	turnTokens, turnCost := ts.GetTurnStats()
 	turnCacheRead, turnCacheWrite := ts.GetTurnCacheStats()
 	entry := session.TranscriptEntry{
-		ID:               uuid.New().String(),
-		Role:             "assistant",
-		AgentID:          agentID,
-		Content:          content,
+		ID:      uuid.New().String(),
+		Role:    "assistant",
+		AgentID: agentID,
+		Content: content,
+		// TurnID stamps this entry with its own producing turn. This is
+		// THE fix for the confirmed live-verification bug: before this,
+		// TurnID was set on the turn_canceled entry (cancel.go) but NEVER on
+		// the assistant entry it describes, so (1) the frontend's
+		// turn_canceled -> assistant-message replay correlation could never
+		// match a real entry (chatTurnCanceledNoMatch always fired on
+		// reload), and (2) MarkLastEntryTruncated's own turn-scoped
+		// backward-walk (which requires e.TurnID == turnID) could never
+		// match a real entry either, silently disabling the Truncated flag
+		// for every real cancel. Both were only ever exercised by tests that
+		// hand-seed TurnID directly on the entry.
+		TurnID:           ts.turnID,
 		Timestamp:        time.Now().UTC(),
 		Tokens:           int(turnTokens),
 		Cost:             turnCost,
 		Model:            model,
 		CacheReadTokens:  turnCacheRead,
 		CacheWriteTokens: turnCacheWrite,
+		// ParentSpawnCallID: see appendIntermediateAssistantTranscript's
+		// identical stamp for the full rationale — non-empty only for a
+		// child delegation sub-turn's own final-turn text.
+		ParentSpawnCallID: ts.parentSpawnCallID,
 	}
 	if err := ts.transcriptStore.AppendTranscript(ts.transcriptSessionID, entry); err != nil {
 		logger.WarnCF("agent", "could not record assistant message to transcript",

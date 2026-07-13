@@ -127,6 +127,85 @@ func TestGetSessionMessages_ToolCallEntries_PassesWireSchema(t *testing.T) {
 		"the seeded tool_call entry must round-trip through the handler with type=\"tool_call\"")
 }
 
+// TestGetSessionMessages_InterruptedToolCall_PassesWireSchema is the Bug-1
+// regression test for the hotfix/v0.1.1 live re-verification finding: a
+// ToolCall record carrying status="interrupted" (written by spawnSubTurn,
+// pkg/agent/subturn.go:989, onto the spawning delegate/spawn tool call's own
+// persisted record when the parent turn is canceled mid-flight) failed the
+// SPA's mandatory zod validation on reload because ToolCall.yaml's status
+// enum never listed "interrupted" — even though the equivalent live-WS
+// frame (SubagentEndFrame.yaml) already did. Any session containing an
+// interrupted delegation was therefore permanently unloadable
+// ("Could not load messages... Backend response failed validation").
+//
+// Traces to: contracts/components/schemas/ToolCall.yaml status enum.
+func TestGetSessionMessages_InterruptedToolCall_PassesWireSchema(t *testing.T) {
+	api, cleanup := newTestRestAPI(t)
+	defer cleanup()
+
+	sessionID := createTestSession(t, api)
+
+	store := api.agentLoop.GetSessionStore()
+	require.NotNil(t, store, "shared session store must be available")
+
+	interruptedEntry := session.TranscriptEntry{
+		ID:        "call_interrupted_001",
+		Type:      session.EntryType("tool_call"),
+		Timestamp: time.Date(2026, 7, 12, 4, 20, 0, 0, time.UTC),
+		AgentID:   "main",
+		ToolCalls: []session.ToolCall{
+			{
+				ID:         "call_interrupted_001",
+				Tool:       "delegate",
+				Status:     "interrupted",
+				DurationMS: 1500,
+				Parameters: map[string]any{"target_agent_id": "jim"},
+			},
+		},
+	}
+	require.NoError(t, store.AppendTranscript(sessionID, interruptedEntry),
+		"seeding an interrupted tool_call entry must succeed")
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/sessions/"+sessionID+"/messages", nil)
+	r.URL.Path = "/api/v1/sessions/" + sessionID + "/messages"
+	api.HandleSessions(w, r)
+	require.Equal(t, http.StatusOK, w.Code,
+		"GET /sessions/{id}/messages must return 200 for a session containing an "+
+			"interrupted delegation; got %d body=%s", w.Code, w.Body.String())
+
+	var entries []map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &entries),
+		"response must be a JSON array of message objects")
+	require.NotEmpty(t, entries, "must have at least one entry seeded")
+
+	// This is the exact assertion that failed pre-fix: the SPA's zod schema
+	// (generated 1:1 from ToolCall.yaml) rejected the whole payload on an
+	// unrecognized "interrupted" enum value. Validating against the compiled
+	// Message.yaml (which embeds ToolCall.yaml via tool_calls[]) reproduces
+	// that same rejection at the Go level.
+	schema := loadMessageSchema(t)
+	foundInterrupted := false
+	for i, entry := range entries {
+		raw, err := json.Marshal(entry)
+		require.NoError(t, err)
+		validationErr := schema.Validate(any(entry))
+		assert.NoErrorf(t, validationErr,
+			"entry[%d] must validate against Message.yaml (status=\"interrupted\" must be a "+
+				"declared ToolCall.status enum value); raw=%s", i, string(raw))
+		if toolCalls, ok := entry["tool_calls"].([]any); ok {
+			for _, tc := range toolCalls {
+				tcMap, ok := tc.(map[string]any)
+				if ok && tcMap["status"] == "interrupted" {
+					foundInterrupted = true
+				}
+			}
+		}
+	}
+	assert.True(t, foundInterrupted,
+		"the seeded interrupted tool call must round-trip through the handler with status=\"interrupted\"")
+}
+
 // TestGetSessionMessages_TurnCanceledEntry_PassesWireSchema covers the
 // second EntryType missing from the wire schema pre-fix. A real canceled
 // turn produces an entry with Type=turn_canceled plus cancel-specific

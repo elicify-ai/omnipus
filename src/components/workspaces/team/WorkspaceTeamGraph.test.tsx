@@ -64,9 +64,10 @@ const WORKER_IDS = new Set(['planner'])
 const STATE: TeamEditState = {
   members: ['mia', 'jim', 'planner'],
   edges: [
-    { from: 'mia', to: 'jim', modes: ['await', 'background'] },
+    { from: 'mia', to: 'jim', modes: ['direct'] },
     { from: 'jim', to: 'planner', modes: ['task'], depth: 2 },
   ],
+  defaultDepth: 3,
 }
 
 function renderGraph(overrides: Partial<Parameters<typeof WorkspaceTeamGraph>[0]> = {}) {
@@ -76,6 +77,7 @@ function renderGraph(overrides: Partial<Parameters<typeof WorkspaceTeamGraph>[0]
     edges: model.edges,
     workerIds: WORKER_IDS,
     editState: STATE,
+    defaultDepth: model.defaultDepth,
     onConnect: vi.fn(),
     onToggleMode: vi.fn(),
     onSetDepth: vi.fn(),

@@ -2886,11 +2886,11 @@ export interface components {
              */
             tool: string;
             /**
-             * @description Outcome of the tool call.
+             * @description Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case; unlike that frame, ToolCall carries no accompanying "reason" field here — subturn.go never persists one onto the ToolCall record (reason is WS-frame-only, via SubTurnEndPayload).
              * @example success
              * @enum {string}
              */
-            status: "success" | "error" | "pending" | "denied" | "running" | "cancelled";
+            status: "success" | "error" | "pending" | "denied" | "running" | "cancelled" | "interrupted";
             /**
              * Format: int64
              * @description Elapsed time in milliseconds. Absent when still running.
@@ -3055,7 +3055,6 @@ export interface components {
              * @example 2026-06-19T12:34:56Z
              */
             updated_at?: string;
-            delegation_policy?: components["schemas"]["DelegationPolicy"];
             /**
              * @description Per-agent persona voice identifier (e.g. a TTS voice name or voice model ID). Distinct from the global VoiceConfig engine settings (which hold the TTS/STT provider and API key). This field is schema-pinned but NOT used until v0.2.0 TTS feature delivery. Absent when not configured. Main only.
              * @example alloy
@@ -3336,7 +3335,6 @@ export interface components {
              * @example You are a focused research assistant...
              */
             soul: string;
-            delegation_policy?: components["schemas"]["DelegationPolicy"];
             /**
              * @description Per-agent persona voice identifier (Main only). Schema-pinned; not active until v0.2.0 TTS.
              * @example alloy
@@ -3469,7 +3467,6 @@ export interface components {
              * @example You are a focused research assistant...
              */
             soul: string;
-            delegation_policy?: components["schemas"]["DelegationPolicy"];
             shell_policy?: components["schemas"]["AgentShellPolicy"];
             /**
              * @description Maximum seconds a single agent turn may run before being interrupted.
@@ -3552,7 +3549,6 @@ export interface components {
              * @example You are a focused research assistant...
              */
             soul: string;
-            delegation_policy?: components["schemas"]["DelegationPolicy"];
             executor: components["schemas"]["ExecutorConfig"];
             /**
              * @description Maximum seconds a single agent turn may run before being interrupted.
@@ -3714,7 +3710,6 @@ export interface components {
              *     ]
              */
             skills?: string[];
-            delegation_policy?: components["schemas"]["DelegationPolicy"];
             /**
              * @description Per-agent persona voice identifier. Schema-pinned; not active until v0.2.0 TTS. Send null to clear. Main only.
              * @example alloy
@@ -3744,7 +3739,7 @@ export interface components {
         /**
          * @description Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
          *     "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
-         *     "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude receives the soul+instructions prompt via stdin with NO positional prompt argument at all (a bare "-" is read by this CLI as a literal one-character prompt string, not a stdin sentinel, so none is appended — claude -p consumes all of stdin automatically when no positional prompt is given); codex also receives it via stdin, but signals that with a trailing "-" positional argument (a real stdin sentinel for this CLI); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like shell_policy / tools_cfg / fallback_models / model_params / skills / delegation_policy are hidden for subagent_3p agents and rejected 400 on PUT if set.
+         *     "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude receives the soul+instructions prompt via stdin with NO positional prompt argument at all (a bare "-" is read by this CLI as a literal one-character prompt string, not a stdin sentinel, so none is appended — claude -p consumes all of stdin automatically when no positional prompt is given); codex also receives it via stdin, but signals that with a trailing "-" positional argument (a real stdin sentinel for this CLI); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like shell_policy / tools_cfg / fallback_models / model_params / skills are hidden for subagent_3p agents and rejected 400 on PUT if set.
          *     "cli" (required for subagent_3p agents when kind="external-cli") is locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
          *     "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
          *     The "kind" field is derived server-side from the agent's type (Main -> native, Subagent -> native, subagent_3p -> external-cli). It is exposed in responses but is NOT a writable field on create/update — clients cannot choose kind directly. Server-side derive at the handler boundary per the agent-form spec.
@@ -7513,20 +7508,20 @@ export interface components {
              */
             to_agent: string;
             /**
-             * @description Allowed delegation modes for this edge. An empty/absent list means all modes are allowed. Mirrors DelegationPolicy.modes semantics. "await" = synchronous subagent (blocks caller until result). "background" = async spawn (caller continues; result posted when done). "task" = task_create delegation (persistent task for another agent).
+             * @description Allowed delegation modes for this edge. An empty/absent list means all modes are allowed. "direct" = Direct Delegation — the delegate tool dispatches to the target agent, either synchronously (await) or as a background spawn. Which of the two happens is a runtime parameter of the delegate tool call itself, not a trust distinction the edge gates separately — an edge that allows "direct" allows both call patterns. "task" = Task Delegation — task_create-style delegation (a persistent task assigned to another agent).
              * @example [
-             *       "await",
+             *       "direct",
              *       "task"
              *     ]
              */
-            modes?: ("await" | "background" | "task")[];
+            modes?: ("direct" | "task")[];
             /**
              * @description Maximum delegation chain depth for this edge (number of hops). 0 = no onward delegation past this hop. Bounded by the global subturn depth ceiling. Absent means the workspace/global default applies.
              * @example 3
              */
             depth?: number;
         };
-        /** @description The per-workspace delegation graph (M5). This is the editable source of truth surfaced in the workspace Team tab and the Agents-area "Workspace Teams" view — always workspace-scoped, never global. Nodes are the workspace team's agents (core_team ∪ every agent named by an edge); edges are the directed delegation authorizations. The per-agent delegation_policy remains as an enforcement cap, but this graph is what the UI edits. */
+        /** @description The per-workspace delegation graph (M5). This is the editable source of truth surfaced in the workspace Team tab and the Agents-area "Workspace Teams" view — always workspace-scoped, never global. Nodes are the workspace team's agents (core_team ∪ every agent named by an edge); edges are the directed delegation authorizations. This graph is the sole delegation-enforcement mechanism — there is no separate global per-agent delegation policy; the graph is both what the UI edits and what the runtime enforces. */
         WorkspaceDelegation: {
             /**
              * @description ID of the workspace this delegation graph belongs to.
@@ -7546,6 +7541,11 @@ export interface components {
              *     ]
              */
             team?: string[];
+            /**
+             * @description The currently-resolved depth ceiling an edge inherits when its own `depth` is unset — the global configured default if set, otherwise the defaultMaxSubTurnDepth backstop. This is a read-only, already-computed value (no new depth logic; see delegationDepthCeiling) exposed purely so the UI can always pre-fill/display a concrete number for any edge instead of an ambiguous blank/"∞" state. It does NOT change per-edge enforcement: an edge with depth unset still dynamically tracks the live global default at enforcement time, this field is a snapshot for display purposes only.
+             * @example 3
+             */
+            default_depth: number;
         };
         /** @description Request body for PUT /workspaces/{id}/delegation. Replaces the workspace's delegation edge set wholesale (full replace, not a merge) so the Team-tab graph editor can persist the exact graph the operator drew. Every from_agent / to_agent must resolve to a known agent; self-edges and depths above the global subturn ceiling are rejected. */
         WorkspaceDelegationUpdateRequest: {
@@ -7714,70 +7714,6 @@ export interface components {
              * @example 1000
              */
             total: number;
-        };
-        /**
-         * @description Delegation policy for an agent. Controls which other agents this agent may delegate work to, and how delegation modes are gated.
-         *     The canonical "to" field unifies the three legacy allowlists:
-         *       - AgentConfig.CanDelegateTo (per-agent, task delegation)
-         *       - AgentDefaults.CanDelegateTo (global fallback, task delegation)
-         *       - SubagentsConfig.AllowAgents (spawn/subagent tool allowlist)
-         *
-         *     Precedence: agent-level "to" > defaults-level "to"; subagent allowlist merges into agent-level "to" when both are set.
-         *     "accept_from" and "budget" are present in the schema but NOT enforced in v0.1.0. A startup WARN is emitted if either field is non-empty, to avoid presenting them as an active authorization boundary.
-         */
-        DelegationPolicy: {
-            /** @description List of agent references this agent is allowed to delegate work to. An empty array means NO delegation is allowed (deny-by-default). Use [{"kind": "local", "id": "*"}] to allow delegation to any local agent. */
-            to?: {
-                /**
-                 * @description The kind of agent reference. "local" = a locally-registered agent resolved by id. "remote-a2a" = reserved for future A2A protocol external agent resolution; not enforced in v0.1.0.
-                 * @example local
-                 * @enum {string}
-                 */
-                kind: "local" | "remote-a2a";
-                /**
-                 * @description Agent identifier. For kind=local, this is the agent's ID (UUID or well-known string). The value "*" is a wildcard allowing delegation to any agent of the given kind.
-                 * @example ray
-                 */
-                id: string;
-            }[];
-            /** @description PRESENT BUT NOT ENFORCED in v0.1.0. List of agent references from which this agent accepts delegated work. A startup WARN is emitted if non-empty. Do not rely on this field as an authorization boundary until enforcement is shipped. */
-            accept_from?: {
-                /**
-                 * @example local
-                 * @enum {string}
-                 */
-                kind: "local" | "remote-a2a";
-                /** @example jim */
-                id: string;
-            }[];
-            /**
-             * @description Allowed delegation modes. Enforced in v0.1.0. "await" = synchronous subagent (blocks caller until result). "background" = async spawn (caller continues; result posted when done). "task" = task_create delegation (creates a persistent task for another agent).
-             * @example [
-             *       "await",
-             *       "background",
-             *       "task"
-             *     ]
-             */
-            modes?: ("await" | "background" | "task")[];
-            /**
-             * @description Maximum delegation chain depth (number of hops). 0 = no delegation allowed. Enforced in v0.1.0 as a safety cap. Default is uncapped when absent. Counts the number of nested delegation levels, not total agents involved.
-             * @example 3
-             */
-            depth?: number;
-            /** @description PRESENT BUT NOT ENFORCED in v0.1.0. Delegation spend budget. A startup WARN is emitted if non-empty. Do not rely on this as an authorization boundary. */
-            budget?: {
-                /**
-                 * Format: double
-                 * @description Maximum USD spend allowed for delegated work.
-                 * @example 1
-                 */
-                max_cost_usd?: number;
-                /**
-                 * @description Maximum token count allowed for delegated work.
-                 * @example 100000
-                 */
-                max_tokens?: number;
-            };
         };
         /**
          * ExternalCliTool

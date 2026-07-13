@@ -94,8 +94,16 @@ var subagent3pCreateOnlyExemptFields = map[string]string{
 // false) when none are set. Fields NOT in this list — model, provider,
 // timeout_seconds, color, icon, description, name, voice(*), steering_mode(*),
 // rate_limits, executor (cli_path/env_overrides/cli_args only — cli is
-// immutable after create, enforced separately), delegation_policy, default,
-// updated_at — are valid on a subagent_3p PUT.
+// immutable after create, enforced separately), default, updated_at — are
+// valid on a subagent_3p PUT.
+//
+// delegation_policy is NOT in this list, and is deliberately not this
+// function's concern: ADR-037 retired it from the wire entirely, so it is
+// now rejected 400 on EVERY agent type's PUT (not subagent_3p-specific) by
+// updateAgent's raw-body sniff in rest.go, ahead of decode — a third
+// mechanism alongside subagent3pForbiddenUpdateFields and
+// subagent3pCreateOnlyExemptFields, scoped to "retired wire field" rather
+// than "CLI-owned, worker-specific field."
 //
 // (*) voice and steering_mode are ALSO rejected for any worker (Subagent or
 // subagent_3p) by dedicated checks elsewhere in updateAgent — not because

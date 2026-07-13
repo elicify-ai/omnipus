@@ -297,7 +297,9 @@ type ReplayMessageFrame struct {
 	Role      string  `json:"role"`
 	SessionId string  `json:"session_id"`
 	Timestamp *string `json:"timestamp,omitempty"`
-	Type      string  `json:"type"`
+	// Turn-correlation identifier (from TranscriptEntry.TurnID), stamped on assistant entries and turn-cancellation entries. Lets the client match a replayed turn_canceled entry to the specific preceding assistant message it cancels, without relying on stream adjacency (async delegation can interleave other agents'/turns' frames in between). Omitted for legacy entries written before turn-id stamping landed.
+	TurnId *string `json:"turn_id,omitempty"`
+	Type   string  `json:"type"`
 }
 
 // ReplayWarningFrame — Server → client duplicate tool_call_ids detected.
@@ -393,9 +395,10 @@ type TaskStatusChangedFrame struct {
 
 // TokenFrame — Server → client partial LLM response token.
 type TokenFrame struct {
-	Content   string `json:"content"`
-	SessionId string `json:"session_id"`
-	Type      string `json:"type"`
+	AgentId   *string `json:"agent_id,omitempty"`
+	Content   string  `json:"content"`
+	SessionId string  `json:"session_id"`
+	Type      string  `json:"type"`
 }
 
 // ToolApprovalRequiredFrame — Server → client tool approval needed (FR-011, FR-082). CRITICAL: args MUST be object (never null). Backend coerces nil → {}. SPA calls Object.keys(args) — null crashes at render time (Ava-chat bug).

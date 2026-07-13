@@ -59,63 +59,6 @@ func (e ActivityEventsResponseEventsType) Valid() bool {
 	}
 }
 
-// Defines values for AgentDelegationPolicyAcceptFromKind.
-const (
-	AgentDelegationPolicyAcceptFromKindLocal     AgentDelegationPolicyAcceptFromKind = "local"
-	AgentDelegationPolicyAcceptFromKindRemoteA2a AgentDelegationPolicyAcceptFromKind = "remote-a2a"
-)
-
-// Valid indicates whether the value is a known member of the AgentDelegationPolicyAcceptFromKind enum.
-func (e AgentDelegationPolicyAcceptFromKind) Valid() bool {
-	switch e {
-	case AgentDelegationPolicyAcceptFromKindLocal:
-		return true
-	case AgentDelegationPolicyAcceptFromKindRemoteA2a:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for AgentDelegationPolicyModes.
-const (
-	AgentDelegationPolicyModesAwait      AgentDelegationPolicyModes = "await"
-	AgentDelegationPolicyModesBackground AgentDelegationPolicyModes = "background"
-	AgentDelegationPolicyModesTask       AgentDelegationPolicyModes = "task"
-)
-
-// Valid indicates whether the value is a known member of the AgentDelegationPolicyModes enum.
-func (e AgentDelegationPolicyModes) Valid() bool {
-	switch e {
-	case AgentDelegationPolicyModesAwait:
-		return true
-	case AgentDelegationPolicyModesBackground:
-		return true
-	case AgentDelegationPolicyModesTask:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for AgentDelegationPolicyToKind.
-const (
-	AgentDelegationPolicyToKindLocal     AgentDelegationPolicyToKind = "local"
-	AgentDelegationPolicyToKindRemoteA2a AgentDelegationPolicyToKind = "remote-a2a"
-)
-
-// Valid indicates whether the value is a known member of the AgentDelegationPolicyToKind enum.
-func (e AgentDelegationPolicyToKind) Valid() bool {
-	switch e {
-	case AgentDelegationPolicyToKindLocal:
-		return true
-	case AgentDelegationPolicyToKindRemoteA2a:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for AgentExecutorKind.
 const (
 	AgentExecutorKindExternalCli AgentExecutorKind = "external-cli"
@@ -227,63 +170,6 @@ func (e AgentType) Valid() bool {
 	}
 }
 
-// Defines values for AgentCreateRequestMainDelegationPolicyAcceptFromKind.
-const (
-	AgentCreateRequestMainDelegationPolicyAcceptFromKindLocal     AgentCreateRequestMainDelegationPolicyAcceptFromKind = "local"
-	AgentCreateRequestMainDelegationPolicyAcceptFromKindRemoteA2a AgentCreateRequestMainDelegationPolicyAcceptFromKind = "remote-a2a"
-)
-
-// Valid indicates whether the value is a known member of the AgentCreateRequestMainDelegationPolicyAcceptFromKind enum.
-func (e AgentCreateRequestMainDelegationPolicyAcceptFromKind) Valid() bool {
-	switch e {
-	case AgentCreateRequestMainDelegationPolicyAcceptFromKindLocal:
-		return true
-	case AgentCreateRequestMainDelegationPolicyAcceptFromKindRemoteA2a:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for AgentCreateRequestMainDelegationPolicyModes.
-const (
-	AgentCreateRequestMainDelegationPolicyModesAwait      AgentCreateRequestMainDelegationPolicyModes = "await"
-	AgentCreateRequestMainDelegationPolicyModesBackground AgentCreateRequestMainDelegationPolicyModes = "background"
-	AgentCreateRequestMainDelegationPolicyModesTask       AgentCreateRequestMainDelegationPolicyModes = "task"
-)
-
-// Valid indicates whether the value is a known member of the AgentCreateRequestMainDelegationPolicyModes enum.
-func (e AgentCreateRequestMainDelegationPolicyModes) Valid() bool {
-	switch e {
-	case AgentCreateRequestMainDelegationPolicyModesAwait:
-		return true
-	case AgentCreateRequestMainDelegationPolicyModesBackground:
-		return true
-	case AgentCreateRequestMainDelegationPolicyModesTask:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for AgentCreateRequestMainDelegationPolicyToKind.
-const (
-	AgentCreateRequestMainDelegationPolicyToKindLocal     AgentCreateRequestMainDelegationPolicyToKind = "local"
-	AgentCreateRequestMainDelegationPolicyToKindRemoteA2a AgentCreateRequestMainDelegationPolicyToKind = "remote-a2a"
-)
-
-// Valid indicates whether the value is a known member of the AgentCreateRequestMainDelegationPolicyToKind enum.
-func (e AgentCreateRequestMainDelegationPolicyToKind) Valid() bool {
-	switch e {
-	case AgentCreateRequestMainDelegationPolicyToKindLocal:
-		return true
-	case AgentCreateRequestMainDelegationPolicyToKindRemoteA2a:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for AgentCreateRequestMainSteeringMode.
 const (
 	AgentCreateRequestMainSteeringModeOneAtATime      AgentCreateRequestMainSteeringMode = "one-at-a-time"
@@ -338,63 +224,6 @@ func (e AgentCreateRequestMainType) Valid() bool {
 	}
 }
 
-// Defines values for AgentCreateRequestSubagentDelegationPolicyAcceptFromKind.
-const (
-	AgentCreateRequestSubagentDelegationPolicyAcceptFromKindLocal     AgentCreateRequestSubagentDelegationPolicyAcceptFromKind = "local"
-	AgentCreateRequestSubagentDelegationPolicyAcceptFromKindRemoteA2a AgentCreateRequestSubagentDelegationPolicyAcceptFromKind = "remote-a2a"
-)
-
-// Valid indicates whether the value is a known member of the AgentCreateRequestSubagentDelegationPolicyAcceptFromKind enum.
-func (e AgentCreateRequestSubagentDelegationPolicyAcceptFromKind) Valid() bool {
-	switch e {
-	case AgentCreateRequestSubagentDelegationPolicyAcceptFromKindLocal:
-		return true
-	case AgentCreateRequestSubagentDelegationPolicyAcceptFromKindRemoteA2a:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for AgentCreateRequestSubagentDelegationPolicyModes.
-const (
-	AgentCreateRequestSubagentDelegationPolicyModesAwait      AgentCreateRequestSubagentDelegationPolicyModes = "await"
-	AgentCreateRequestSubagentDelegationPolicyModesBackground AgentCreateRequestSubagentDelegationPolicyModes = "background"
-	AgentCreateRequestSubagentDelegationPolicyModesTask       AgentCreateRequestSubagentDelegationPolicyModes = "task"
-)
-
-// Valid indicates whether the value is a known member of the AgentCreateRequestSubagentDelegationPolicyModes enum.
-func (e AgentCreateRequestSubagentDelegationPolicyModes) Valid() bool {
-	switch e {
-	case AgentCreateRequestSubagentDelegationPolicyModesAwait:
-		return true
-	case AgentCreateRequestSubagentDelegationPolicyModesBackground:
-		return true
-	case AgentCreateRequestSubagentDelegationPolicyModesTask:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for AgentCreateRequestSubagentDelegationPolicyToKind.
-const (
-	AgentCreateRequestSubagentDelegationPolicyToKindLocal     AgentCreateRequestSubagentDelegationPolicyToKind = "local"
-	AgentCreateRequestSubagentDelegationPolicyToKindRemoteA2a AgentCreateRequestSubagentDelegationPolicyToKind = "remote-a2a"
-)
-
-// Valid indicates whether the value is a known member of the AgentCreateRequestSubagentDelegationPolicyToKind enum.
-func (e AgentCreateRequestSubagentDelegationPolicyToKind) Valid() bool {
-	switch e {
-	case AgentCreateRequestSubagentDelegationPolicyToKindLocal:
-		return true
-	case AgentCreateRequestSubagentDelegationPolicyToKindRemoteA2a:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for AgentCreateRequestSubagentToolsCfgBuiltinPolicies.
 const (
 	AgentCreateRequestSubagentToolsCfgBuiltinPoliciesAllow AgentCreateRequestSubagentToolsCfgBuiltinPolicies = "allow"
@@ -425,63 +254,6 @@ const (
 func (e AgentCreateRequestSubagentType) Valid() bool {
 	switch e {
 	case AgentCreateRequestSubagentTypeSubagent:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for AgentCreateRequestSubagent3pDelegationPolicyAcceptFromKind.
-const (
-	AgentCreateRequestSubagent3pDelegationPolicyAcceptFromKindLocal     AgentCreateRequestSubagent3pDelegationPolicyAcceptFromKind = "local"
-	AgentCreateRequestSubagent3pDelegationPolicyAcceptFromKindRemoteA2a AgentCreateRequestSubagent3pDelegationPolicyAcceptFromKind = "remote-a2a"
-)
-
-// Valid indicates whether the value is a known member of the AgentCreateRequestSubagent3pDelegationPolicyAcceptFromKind enum.
-func (e AgentCreateRequestSubagent3pDelegationPolicyAcceptFromKind) Valid() bool {
-	switch e {
-	case AgentCreateRequestSubagent3pDelegationPolicyAcceptFromKindLocal:
-		return true
-	case AgentCreateRequestSubagent3pDelegationPolicyAcceptFromKindRemoteA2a:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for AgentCreateRequestSubagent3pDelegationPolicyModes.
-const (
-	AgentCreateRequestSubagent3pDelegationPolicyModesAwait      AgentCreateRequestSubagent3pDelegationPolicyModes = "await"
-	AgentCreateRequestSubagent3pDelegationPolicyModesBackground AgentCreateRequestSubagent3pDelegationPolicyModes = "background"
-	AgentCreateRequestSubagent3pDelegationPolicyModesTask       AgentCreateRequestSubagent3pDelegationPolicyModes = "task"
-)
-
-// Valid indicates whether the value is a known member of the AgentCreateRequestSubagent3pDelegationPolicyModes enum.
-func (e AgentCreateRequestSubagent3pDelegationPolicyModes) Valid() bool {
-	switch e {
-	case AgentCreateRequestSubagent3pDelegationPolicyModesAwait:
-		return true
-	case AgentCreateRequestSubagent3pDelegationPolicyModesBackground:
-		return true
-	case AgentCreateRequestSubagent3pDelegationPolicyModesTask:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for AgentCreateRequestSubagent3pDelegationPolicyToKind.
-const (
-	AgentCreateRequestSubagent3pDelegationPolicyToKindLocal     AgentCreateRequestSubagent3pDelegationPolicyToKind = "local"
-	AgentCreateRequestSubagent3pDelegationPolicyToKindRemoteA2a AgentCreateRequestSubagent3pDelegationPolicyToKind = "remote-a2a"
-)
-
-// Valid indicates whether the value is a known member of the AgentCreateRequestSubagent3pDelegationPolicyToKind enum.
-func (e AgentCreateRequestSubagent3pDelegationPolicyToKind) Valid() bool {
-	switch e {
-	case AgentCreateRequestSubagent3pDelegationPolicyToKindLocal:
-		return true
-	case AgentCreateRequestSubagent3pDelegationPolicyToKindRemoteA2a:
 		return true
 	default:
 		return false
@@ -731,63 +503,6 @@ func (e AgentToolsUpdateRequestBuiltinPolicies) Valid() bool {
 	case AgentToolsUpdateRequestBuiltinPoliciesAsk:
 		return true
 	case AgentToolsUpdateRequestBuiltinPoliciesDeny:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for AgentUpdateRequestDelegationPolicyAcceptFromKind.
-const (
-	AgentUpdateRequestDelegationPolicyAcceptFromKindLocal     AgentUpdateRequestDelegationPolicyAcceptFromKind = "local"
-	AgentUpdateRequestDelegationPolicyAcceptFromKindRemoteA2a AgentUpdateRequestDelegationPolicyAcceptFromKind = "remote-a2a"
-)
-
-// Valid indicates whether the value is a known member of the AgentUpdateRequestDelegationPolicyAcceptFromKind enum.
-func (e AgentUpdateRequestDelegationPolicyAcceptFromKind) Valid() bool {
-	switch e {
-	case AgentUpdateRequestDelegationPolicyAcceptFromKindLocal:
-		return true
-	case AgentUpdateRequestDelegationPolicyAcceptFromKindRemoteA2a:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for AgentUpdateRequestDelegationPolicyModes.
-const (
-	AgentUpdateRequestDelegationPolicyModesAwait      AgentUpdateRequestDelegationPolicyModes = "await"
-	AgentUpdateRequestDelegationPolicyModesBackground AgentUpdateRequestDelegationPolicyModes = "background"
-	AgentUpdateRequestDelegationPolicyModesTask       AgentUpdateRequestDelegationPolicyModes = "task"
-)
-
-// Valid indicates whether the value is a known member of the AgentUpdateRequestDelegationPolicyModes enum.
-func (e AgentUpdateRequestDelegationPolicyModes) Valid() bool {
-	switch e {
-	case AgentUpdateRequestDelegationPolicyModesAwait:
-		return true
-	case AgentUpdateRequestDelegationPolicyModesBackground:
-		return true
-	case AgentUpdateRequestDelegationPolicyModesTask:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for AgentUpdateRequestDelegationPolicyToKind.
-const (
-	AgentUpdateRequestDelegationPolicyToKindLocal     AgentUpdateRequestDelegationPolicyToKind = "local"
-	AgentUpdateRequestDelegationPolicyToKindRemoteA2a AgentUpdateRequestDelegationPolicyToKind = "remote-a2a"
-)
-
-// Valid indicates whether the value is a known member of the AgentUpdateRequestDelegationPolicyToKind enum.
-func (e AgentUpdateRequestDelegationPolicyToKind) Valid() bool {
-	switch e {
-	case AgentUpdateRequestDelegationPolicyToKindLocal:
-		return true
-	case AgentUpdateRequestDelegationPolicyToKindRemoteA2a:
 		return true
 	default:
 		return false
@@ -1519,12 +1234,13 @@ func (e MessageStatus) Valid() bool {
 
 // Defines values for MessageToolCallsStatus.
 const (
-	MessageToolCallsStatusCancelled MessageToolCallsStatus = "cancelled"
-	MessageToolCallsStatusDenied    MessageToolCallsStatus = "denied"
-	MessageToolCallsStatusError     MessageToolCallsStatus = "error"
-	MessageToolCallsStatusPending   MessageToolCallsStatus = "pending"
-	MessageToolCallsStatusRunning   MessageToolCallsStatus = "running"
-	MessageToolCallsStatusSuccess   MessageToolCallsStatus = "success"
+	MessageToolCallsStatusCancelled   MessageToolCallsStatus = "cancelled"
+	MessageToolCallsStatusDenied      MessageToolCallsStatus = "denied"
+	MessageToolCallsStatusError       MessageToolCallsStatus = "error"
+	MessageToolCallsStatusInterrupted MessageToolCallsStatus = "interrupted"
+	MessageToolCallsStatusPending     MessageToolCallsStatus = "pending"
+	MessageToolCallsStatusRunning     MessageToolCallsStatus = "running"
+	MessageToolCallsStatusSuccess     MessageToolCallsStatus = "success"
 )
 
 // Valid indicates whether the value is a known member of the MessageToolCallsStatus enum.
@@ -1535,6 +1251,8 @@ func (e MessageToolCallsStatus) Valid() bool {
 	case MessageToolCallsStatusDenied:
 		return true
 	case MessageToolCallsStatusError:
+		return true
+	case MessageToolCallsStatusInterrupted:
 		return true
 	case MessageToolCallsStatusPending:
 		return true
@@ -2545,12 +2263,13 @@ func (e SessionDetailMessagesStatus) Valid() bool {
 
 // Defines values for SessionDetailMessagesToolCallsStatus.
 const (
-	SessionDetailMessagesToolCallsStatusCancelled SessionDetailMessagesToolCallsStatus = "cancelled"
-	SessionDetailMessagesToolCallsStatusDenied    SessionDetailMessagesToolCallsStatus = "denied"
-	SessionDetailMessagesToolCallsStatusError     SessionDetailMessagesToolCallsStatus = "error"
-	SessionDetailMessagesToolCallsStatusPending   SessionDetailMessagesToolCallsStatus = "pending"
-	SessionDetailMessagesToolCallsStatusRunning   SessionDetailMessagesToolCallsStatus = "running"
-	SessionDetailMessagesToolCallsStatusSuccess   SessionDetailMessagesToolCallsStatus = "success"
+	SessionDetailMessagesToolCallsStatusCancelled   SessionDetailMessagesToolCallsStatus = "cancelled"
+	SessionDetailMessagesToolCallsStatusDenied      SessionDetailMessagesToolCallsStatus = "denied"
+	SessionDetailMessagesToolCallsStatusError       SessionDetailMessagesToolCallsStatus = "error"
+	SessionDetailMessagesToolCallsStatusInterrupted SessionDetailMessagesToolCallsStatus = "interrupted"
+	SessionDetailMessagesToolCallsStatusPending     SessionDetailMessagesToolCallsStatus = "pending"
+	SessionDetailMessagesToolCallsStatusRunning     SessionDetailMessagesToolCallsStatus = "running"
+	SessionDetailMessagesToolCallsStatusSuccess     SessionDetailMessagesToolCallsStatus = "success"
 )
 
 // Valid indicates whether the value is a known member of the SessionDetailMessagesToolCallsStatus enum.
@@ -2561,6 +2280,8 @@ func (e SessionDetailMessagesToolCallsStatus) Valid() bool {
 	case SessionDetailMessagesToolCallsStatusDenied:
 		return true
 	case SessionDetailMessagesToolCallsStatusError:
+		return true
+	case SessionDetailMessagesToolCallsStatusInterrupted:
 		return true
 	case SessionDetailMessagesToolCallsStatusPending:
 		return true
@@ -3226,12 +2947,13 @@ func (e ToolApprovalResponseStatus) Valid() bool {
 
 // Defines values for ToolCallStatus.
 const (
-	ToolCallStatusCancelled ToolCallStatus = "cancelled"
-	ToolCallStatusDenied    ToolCallStatus = "denied"
-	ToolCallStatusError     ToolCallStatus = "error"
-	ToolCallStatusPending   ToolCallStatus = "pending"
-	ToolCallStatusRunning   ToolCallStatus = "running"
-	ToolCallStatusSuccess   ToolCallStatus = "success"
+	ToolCallStatusCancelled   ToolCallStatus = "cancelled"
+	ToolCallStatusDenied      ToolCallStatus = "denied"
+	ToolCallStatusError       ToolCallStatus = "error"
+	ToolCallStatusInterrupted ToolCallStatus = "interrupted"
+	ToolCallStatusPending     ToolCallStatus = "pending"
+	ToolCallStatusRunning     ToolCallStatus = "running"
+	ToolCallStatusSuccess     ToolCallStatus = "success"
 )
 
 // Valid indicates whether the value is a known member of the ToolCallStatus enum.
@@ -3242,6 +2964,8 @@ func (e ToolCallStatus) Valid() bool {
 	case ToolCallStatusDenied:
 		return true
 	case ToolCallStatusError:
+		return true
+	case ToolCallStatusInterrupted:
 		return true
 	case ToolCallStatusPending:
 		return true
@@ -3331,17 +3055,14 @@ func (e WorkspaceStatus) Valid() bool {
 
 // Defines values for WorkspaceDelegationEdgesModes.
 const (
-	WorkspaceDelegationEdgesModesAwait      WorkspaceDelegationEdgesModes = "await"
-	WorkspaceDelegationEdgesModesBackground WorkspaceDelegationEdgesModes = "background"
-	WorkspaceDelegationEdgesModesTask       WorkspaceDelegationEdgesModes = "task"
+	WorkspaceDelegationEdgesModesDirect WorkspaceDelegationEdgesModes = "direct"
+	WorkspaceDelegationEdgesModesTask   WorkspaceDelegationEdgesModes = "task"
 )
 
 // Valid indicates whether the value is a known member of the WorkspaceDelegationEdgesModes enum.
 func (e WorkspaceDelegationEdgesModes) Valid() bool {
 	switch e {
-	case WorkspaceDelegationEdgesModesAwait:
-		return true
-	case WorkspaceDelegationEdgesModesBackground:
+	case WorkspaceDelegationEdgesModesDirect:
 		return true
 	case WorkspaceDelegationEdgesModesTask:
 		return true
@@ -3352,17 +3073,14 @@ func (e WorkspaceDelegationEdgesModes) Valid() bool {
 
 // Defines values for WorkspaceDelegationEdgeModes.
 const (
-	WorkspaceDelegationEdgeModesAwait      WorkspaceDelegationEdgeModes = "await"
-	WorkspaceDelegationEdgeModesBackground WorkspaceDelegationEdgeModes = "background"
-	WorkspaceDelegationEdgeModesTask       WorkspaceDelegationEdgeModes = "task"
+	WorkspaceDelegationEdgeModesDirect WorkspaceDelegationEdgeModes = "direct"
+	WorkspaceDelegationEdgeModesTask   WorkspaceDelegationEdgeModes = "task"
 )
 
 // Valid indicates whether the value is a known member of the WorkspaceDelegationEdgeModes enum.
 func (e WorkspaceDelegationEdgeModes) Valid() bool {
 	switch e {
-	case WorkspaceDelegationEdgeModesAwait:
-		return true
-	case WorkspaceDelegationEdgeModesBackground:
+	case WorkspaceDelegationEdgeModesDirect:
 		return true
 	case WorkspaceDelegationEdgeModesTask:
 		return true
@@ -3373,17 +3091,14 @@ func (e WorkspaceDelegationEdgeModes) Valid() bool {
 
 // Defines values for WorkspaceDelegationUpdateRequestEdgesModes.
 const (
-	WorkspaceDelegationUpdateRequestEdgesModesAwait      WorkspaceDelegationUpdateRequestEdgesModes = "await"
-	WorkspaceDelegationUpdateRequestEdgesModesBackground WorkspaceDelegationUpdateRequestEdgesModes = "background"
-	WorkspaceDelegationUpdateRequestEdgesModesTask       WorkspaceDelegationUpdateRequestEdgesModes = "task"
+	WorkspaceDelegationUpdateRequestEdgesModesDirect WorkspaceDelegationUpdateRequestEdgesModes = "direct"
+	WorkspaceDelegationUpdateRequestEdgesModesTask   WorkspaceDelegationUpdateRequestEdgesModes = "task"
 )
 
 // Valid indicates whether the value is a known member of the WorkspaceDelegationUpdateRequestEdgesModes enum.
 func (e WorkspaceDelegationUpdateRequestEdgesModes) Valid() bool {
 	switch e {
-	case WorkspaceDelegationUpdateRequestEdgesModesAwait:
-		return true
-	case WorkspaceDelegationUpdateRequestEdgesModesBackground:
+	case WorkspaceDelegationUpdateRequestEdgesModesDirect:
 		return true
 	case WorkspaceDelegationUpdateRequestEdgesModesTask:
 		return true
@@ -3502,22 +3217,22 @@ func (e ListSessionsParamsType) Valid() bool {
 
 // Defines values for GetTokenStatsParamsPeriod.
 const (
-	All   GetTokenStatsParamsPeriod = "all"
-	Day   GetTokenStatsParamsPeriod = "day"
-	Month GetTokenStatsParamsPeriod = "month"
-	Week  GetTokenStatsParamsPeriod = "week"
+	GetTokenStatsParamsPeriodAll   GetTokenStatsParamsPeriod = "all"
+	GetTokenStatsParamsPeriodDay   GetTokenStatsParamsPeriod = "day"
+	GetTokenStatsParamsPeriodMonth GetTokenStatsParamsPeriod = "month"
+	GetTokenStatsParamsPeriodWeek  GetTokenStatsParamsPeriod = "week"
 )
 
 // Valid indicates whether the value is a known member of the GetTokenStatsParamsPeriod enum.
 func (e GetTokenStatsParamsPeriod) Valid() bool {
 	switch e {
-	case All:
+	case GetTokenStatsParamsPeriodAll:
 		return true
-	case Day:
+	case GetTokenStatsParamsPeriodDay:
 		return true
-	case Month:
+	case GetTokenStatsParamsPeriodMonth:
 		return true
-	case Week:
+	case GetTokenStatsParamsPeriodWeek:
 		return true
 	default:
 		return false
@@ -3526,31 +3241,31 @@ func (e GetTokenStatsParamsPeriod) Valid() bool {
 
 // Defines values for ListTasksParamsStatus.
 const (
-	Blocked    ListTasksParamsStatus = "blocked"
-	Done       ListTasksParamsStatus = "done"
-	Failed     ListTasksParamsStatus = "failed"
-	InProgress ListTasksParamsStatus = "in_progress"
-	Inbox      ListTasksParamsStatus = "inbox"
-	Next       ListTasksParamsStatus = "next"
-	Planning   ListTasksParamsStatus = "planning"
+	ListTasksParamsStatusBlocked    ListTasksParamsStatus = "blocked"
+	ListTasksParamsStatusDone       ListTasksParamsStatus = "done"
+	ListTasksParamsStatusFailed     ListTasksParamsStatus = "failed"
+	ListTasksParamsStatusInProgress ListTasksParamsStatus = "in_progress"
+	ListTasksParamsStatusInbox      ListTasksParamsStatus = "inbox"
+	ListTasksParamsStatusNext       ListTasksParamsStatus = "next"
+	ListTasksParamsStatusPlanning   ListTasksParamsStatus = "planning"
 )
 
 // Valid indicates whether the value is a known member of the ListTasksParamsStatus enum.
 func (e ListTasksParamsStatus) Valid() bool {
 	switch e {
-	case Blocked:
+	case ListTasksParamsStatusBlocked:
 		return true
-	case Done:
+	case ListTasksParamsStatusDone:
 		return true
-	case Failed:
+	case ListTasksParamsStatusFailed:
 		return true
-	case InProgress:
+	case ListTasksParamsStatusInProgress:
 		return true
-	case Inbox:
+	case ListTasksParamsStatusInbox:
 		return true
-	case Next:
+	case ListTasksParamsStatusNext:
 		return true
-	case Planning:
+	case ListTasksParamsStatusPlanning:
 		return true
 	default:
 		return false
@@ -3559,16 +3274,16 @@ func (e ListTasksParamsStatus) Valid() bool {
 
 // Defines values for ListTasksParamsSurface.
 const (
-	ListTasksParamsSurfaceHeartbeat ListTasksParamsSurface = "heartbeat"
-	ListTasksParamsSurfaceUser      ListTasksParamsSurface = "user"
+	Heartbeat ListTasksParamsSurface = "heartbeat"
+	User      ListTasksParamsSurface = "user"
 )
 
 // Valid indicates whether the value is a known member of the ListTasksParamsSurface enum.
 func (e ListTasksParamsSurface) Valid() bool {
 	switch e {
-	case ListTasksParamsSurfaceHeartbeat:
+	case Heartbeat:
 		return true
-	case ListTasksParamsSurfaceUser:
+	case User:
 		return true
 	default:
 		return false
@@ -3700,52 +3415,12 @@ type Agent struct {
 	// Default Whether this agent is the global default that handles inbound messages with no more-specific routing rule. At most one agent is default. Main only — workers never default.
 	Default *bool `json:"default,omitempty"`
 
-	// DelegationPolicy Delegation policy for an agent. Controls which other agents this agent may delegate work to, and how delegation modes are gated.
-	// The canonical "to" field unifies the three legacy allowlists:
-	//   - AgentConfig.CanDelegateTo (per-agent, task delegation)
-	//   - AgentDefaults.CanDelegateTo (global fallback, task delegation)
-	//   - SubagentsConfig.AllowAgents (spawn/subagent tool allowlist)
-	//
-	// Precedence: agent-level "to" > defaults-level "to"; subagent allowlist merges into agent-level "to" when both are set.
-	// "accept_from" and "budget" are present in the schema but NOT enforced in v0.1.0. A startup WARN is emitted if either field is non-empty, to avoid presenting them as an active authorization boundary.
-	DelegationPolicy *struct {
-		// AcceptFrom PRESENT BUT NOT ENFORCED in v0.1.0. List of agent references from which this agent accepts delegated work. A startup WARN is emitted if non-empty. Do not rely on this field as an authorization boundary until enforcement is shipped.
-		AcceptFrom *[]struct {
-			Id   string                              `json:"id"`
-			Kind AgentDelegationPolicyAcceptFromKind `json:"kind"`
-		} `json:"accept_from,omitempty"`
-
-		// Budget PRESENT BUT NOT ENFORCED in v0.1.0. Delegation spend budget. A startup WARN is emitted if non-empty. Do not rely on this as an authorization boundary.
-		Budget *struct {
-			// MaxCostUsd Maximum USD spend allowed for delegated work.
-			MaxCostUsd *float64 `json:"max_cost_usd,omitempty"`
-
-			// MaxTokens Maximum token count allowed for delegated work.
-			MaxTokens *int `json:"max_tokens,omitempty"`
-		} `json:"budget,omitempty"`
-
-		// Depth Maximum delegation chain depth (number of hops). 0 = no delegation allowed. Enforced in v0.1.0 as a safety cap. Default is uncapped when absent. Counts the number of nested delegation levels, not total agents involved.
-		Depth *int `json:"depth,omitempty"`
-
-		// Modes Allowed delegation modes. Enforced in v0.1.0. "await" = synchronous subagent (blocks caller until result). "background" = async spawn (caller continues; result posted when done). "task" = task_create delegation (creates a persistent task for another agent).
-		Modes *[]AgentDelegationPolicyModes `json:"modes,omitempty"`
-
-		// To List of agent references this agent is allowed to delegate work to. An empty array means NO delegation is allowed (deny-by-default). Use [{"kind": "local", "id": "*"}] to allow delegation to any local agent.
-		To *[]struct {
-			// Id Agent identifier. For kind=local, this is the agent's ID (UUID or well-known string). The value "*" is a wildcard allowing delegation to any agent of the given kind.
-			Id string `json:"id"`
-
-			// Kind The kind of agent reference. "local" = a locally-registered agent resolved by id. "remote-a2a" = reserved for future A2A protocol external agent resolution; not enforced in v0.1.0.
-			Kind AgentDelegationPolicyToKind `json:"kind"`
-		} `json:"to,omitempty"`
-	} `json:"delegation_policy,omitempty"`
-
 	// Description Short description of the agent's purpose.
 	Description *string `json:"description,omitempty"`
 
 	// Executor Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
 	// "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
-	// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude receives the soul+instructions prompt via stdin with NO positional prompt argument at all (a bare "-" is read by this CLI as a literal one-character prompt string, not a stdin sentinel, so none is appended — claude -p consumes all of stdin automatically when no positional prompt is given); codex also receives it via stdin, but signals that with a trailing "-" positional argument (a real stdin sentinel for this CLI); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like shell_policy / tools_cfg / fallback_models / model_params / skills / delegation_policy are hidden for subagent_3p agents and rejected 400 on PUT if set.
+	// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude receives the soul+instructions prompt via stdin with NO positional prompt argument at all (a bare "-" is read by this CLI as a literal one-character prompt string, not a stdin sentinel, so none is appended — claude -p consumes all of stdin automatically when no positional prompt is given); codex also receives it via stdin, but signals that with a trailing "-" positional argument (a real stdin sentinel for this CLI); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like shell_policy / tools_cfg / fallback_models / model_params / skills are hidden for subagent_3p agents and rejected 400 on PUT if set.
 	// "cli" (required for subagent_3p agents when kind="external-cli") is locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
 	// "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
 	// The "kind" field is derived server-side from the agent's type (Main -> native, Subagent -> native, subagent_3p -> external-cli). It is exposed in responses but is NOT a writable field on create/update — clients cannot choose kind directly. Server-side derive at the handler boundary per the agent-form spec.
@@ -3892,15 +3567,6 @@ type Agent struct {
 	Warning *string `json:"warning,omitempty"`
 }
 
-// AgentDelegationPolicyAcceptFromKind defines model for Agent.DelegationPolicy.AcceptFrom.Kind.
-type AgentDelegationPolicyAcceptFromKind string
-
-// AgentDelegationPolicyModes defines model for Agent.DelegationPolicy.Modes.
-type AgentDelegationPolicyModes string
-
-// AgentDelegationPolicyToKind The kind of agent reference. "local" = a locally-registered agent resolved by id. "remote-a2a" = reserved for future A2A protocol external agent resolution; not enforced in v0.1.0.
-type AgentDelegationPolicyToKind string
-
 // AgentExecutorKind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
 type AgentExecutorKind string
 
@@ -3925,46 +3591,6 @@ type AgentCreateRequest struct {
 type AgentCreateRequestMain struct {
 	// Color Hex color code for the agent avatar.
 	Color *string `json:"color,omitempty"`
-
-	// DelegationPolicy Delegation policy for an agent. Controls which other agents this agent may delegate work to, and how delegation modes are gated.
-	// The canonical "to" field unifies the three legacy allowlists:
-	//   - AgentConfig.CanDelegateTo (per-agent, task delegation)
-	//   - AgentDefaults.CanDelegateTo (global fallback, task delegation)
-	//   - SubagentsConfig.AllowAgents (spawn/subagent tool allowlist)
-	//
-	// Precedence: agent-level "to" > defaults-level "to"; subagent allowlist merges into agent-level "to" when both are set.
-	// "accept_from" and "budget" are present in the schema but NOT enforced in v0.1.0. A startup WARN is emitted if either field is non-empty, to avoid presenting them as an active authorization boundary.
-	DelegationPolicy *struct {
-		// AcceptFrom PRESENT BUT NOT ENFORCED in v0.1.0. List of agent references from which this agent accepts delegated work. A startup WARN is emitted if non-empty. Do not rely on this field as an authorization boundary until enforcement is shipped.
-		AcceptFrom *[]struct {
-			Id   string                                               `json:"id"`
-			Kind AgentCreateRequestMainDelegationPolicyAcceptFromKind `json:"kind"`
-		} `json:"accept_from,omitempty"`
-
-		// Budget PRESENT BUT NOT ENFORCED in v0.1.0. Delegation spend budget. A startup WARN is emitted if non-empty. Do not rely on this as an authorization boundary.
-		Budget *struct {
-			// MaxCostUsd Maximum USD spend allowed for delegated work.
-			MaxCostUsd *float64 `json:"max_cost_usd,omitempty"`
-
-			// MaxTokens Maximum token count allowed for delegated work.
-			MaxTokens *int `json:"max_tokens,omitempty"`
-		} `json:"budget,omitempty"`
-
-		// Depth Maximum delegation chain depth (number of hops). 0 = no delegation allowed. Enforced in v0.1.0 as a safety cap. Default is uncapped when absent. Counts the number of nested delegation levels, not total agents involved.
-		Depth *int `json:"depth,omitempty"`
-
-		// Modes Allowed delegation modes. Enforced in v0.1.0. "await" = synchronous subagent (blocks caller until result). "background" = async spawn (caller continues; result posted when done). "task" = task_create delegation (creates a persistent task for another agent).
-		Modes *[]AgentCreateRequestMainDelegationPolicyModes `json:"modes,omitempty"`
-
-		// To List of agent references this agent is allowed to delegate work to. An empty array means NO delegation is allowed (deny-by-default). Use [{"kind": "local", "id": "*"}] to allow delegation to any local agent.
-		To *[]struct {
-			// Id Agent identifier. For kind=local, this is the agent's ID (UUID or well-known string). The value "*" is a wildcard allowing delegation to any agent of the given kind.
-			Id string `json:"id"`
-
-			// Kind The kind of agent reference. "local" = a locally-registered agent resolved by id. "remote-a2a" = reserved for future A2A protocol external agent resolution; not enforced in v0.1.0.
-			Kind AgentCreateRequestMainDelegationPolicyToKind `json:"kind"`
-		} `json:"to,omitempty"`
-	} `json:"delegation_policy,omitempty"`
 
 	// Description Short description of the agent's purpose. Required (non-empty after trim) for Subagent and subagent_3p — the orchestrator uses it as the basis on which it decides which agent to delegate to. Optional for Main.
 	Description *string `json:"description,omitempty"`
@@ -4064,15 +3690,6 @@ type AgentCreateRequestMain struct {
 	Voice *string `json:"voice,omitempty"`
 }
 
-// AgentCreateRequestMainDelegationPolicyAcceptFromKind defines model for AgentCreateRequestMain.DelegationPolicy.AcceptFrom.Kind.
-type AgentCreateRequestMainDelegationPolicyAcceptFromKind string
-
-// AgentCreateRequestMainDelegationPolicyModes defines model for AgentCreateRequestMain.DelegationPolicy.Modes.
-type AgentCreateRequestMainDelegationPolicyModes string
-
-// AgentCreateRequestMainDelegationPolicyToKind The kind of agent reference. "local" = a locally-registered agent resolved by id. "remote-a2a" = reserved for future A2A protocol external agent resolution; not enforced in v0.1.0.
-type AgentCreateRequestMainDelegationPolicyToKind string
-
 // AgentCreateRequestMainSteeringMode Tool execution steering strategy. Main only; the server forces "one-at-a-time" for workers.
 type AgentCreateRequestMainSteeringMode string
 
@@ -4086,46 +3703,6 @@ type AgentCreateRequestMainType string
 type AgentCreateRequestSubagent struct {
 	// Color Hex color code for the agent avatar.
 	Color *string `json:"color,omitempty"`
-
-	// DelegationPolicy Delegation policy for an agent. Controls which other agents this agent may delegate work to, and how delegation modes are gated.
-	// The canonical "to" field unifies the three legacy allowlists:
-	//   - AgentConfig.CanDelegateTo (per-agent, task delegation)
-	//   - AgentDefaults.CanDelegateTo (global fallback, task delegation)
-	//   - SubagentsConfig.AllowAgents (spawn/subagent tool allowlist)
-	//
-	// Precedence: agent-level "to" > defaults-level "to"; subagent allowlist merges into agent-level "to" when both are set.
-	// "accept_from" and "budget" are present in the schema but NOT enforced in v0.1.0. A startup WARN is emitted if either field is non-empty, to avoid presenting them as an active authorization boundary.
-	DelegationPolicy *struct {
-		// AcceptFrom PRESENT BUT NOT ENFORCED in v0.1.0. List of agent references from which this agent accepts delegated work. A startup WARN is emitted if non-empty. Do not rely on this field as an authorization boundary until enforcement is shipped.
-		AcceptFrom *[]struct {
-			Id   string                                                   `json:"id"`
-			Kind AgentCreateRequestSubagentDelegationPolicyAcceptFromKind `json:"kind"`
-		} `json:"accept_from,omitempty"`
-
-		// Budget PRESENT BUT NOT ENFORCED in v0.1.0. Delegation spend budget. A startup WARN is emitted if non-empty. Do not rely on this as an authorization boundary.
-		Budget *struct {
-			// MaxCostUsd Maximum USD spend allowed for delegated work.
-			MaxCostUsd *float64 `json:"max_cost_usd,omitempty"`
-
-			// MaxTokens Maximum token count allowed for delegated work.
-			MaxTokens *int `json:"max_tokens,omitempty"`
-		} `json:"budget,omitempty"`
-
-		// Depth Maximum delegation chain depth (number of hops). 0 = no delegation allowed. Enforced in v0.1.0 as a safety cap. Default is uncapped when absent. Counts the number of nested delegation levels, not total agents involved.
-		Depth *int `json:"depth,omitempty"`
-
-		// Modes Allowed delegation modes. Enforced in v0.1.0. "await" = synchronous subagent (blocks caller until result). "background" = async spawn (caller continues; result posted when done). "task" = task_create delegation (creates a persistent task for another agent).
-		Modes *[]AgentCreateRequestSubagentDelegationPolicyModes `json:"modes,omitempty"`
-
-		// To List of agent references this agent is allowed to delegate work to. An empty array means NO delegation is allowed (deny-by-default). Use [{"kind": "local", "id": "*"}] to allow delegation to any local agent.
-		To *[]struct {
-			// Id Agent identifier. For kind=local, this is the agent's ID (UUID or well-known string). The value "*" is a wildcard allowing delegation to any agent of the given kind.
-			Id string `json:"id"`
-
-			// Kind The kind of agent reference. "local" = a locally-registered agent resolved by id. "remote-a2a" = reserved for future A2A protocol external agent resolution; not enforced in v0.1.0.
-			Kind AgentCreateRequestSubagentDelegationPolicyToKind `json:"kind"`
-		} `json:"to,omitempty"`
-	} `json:"delegation_policy,omitempty"`
 
 	// Description Short description of the agent's purpose. Required (non-empty after trim) for Subagent and subagent_3p — the orchestrator uses it as the basis on which it decides which agent to delegate to. Optional for Main.
 	Description *string `json:"description,omitempty"`
@@ -4219,15 +3796,6 @@ type AgentCreateRequestSubagent struct {
 	Type AgentCreateRequestSubagentType `json:"type"`
 }
 
-// AgentCreateRequestSubagentDelegationPolicyAcceptFromKind defines model for AgentCreateRequestSubagent.DelegationPolicy.AcceptFrom.Kind.
-type AgentCreateRequestSubagentDelegationPolicyAcceptFromKind string
-
-// AgentCreateRequestSubagentDelegationPolicyModes defines model for AgentCreateRequestSubagent.DelegationPolicy.Modes.
-type AgentCreateRequestSubagentDelegationPolicyModes string
-
-// AgentCreateRequestSubagentDelegationPolicyToKind The kind of agent reference. "local" = a locally-registered agent resolved by id. "remote-a2a" = reserved for future A2A protocol external agent resolution; not enforced in v0.1.0.
-type AgentCreateRequestSubagentDelegationPolicyToKind string
-
 // AgentCreateRequestSubagentToolsCfgBuiltinPolicies defines model for AgentCreateRequestSubagent.ToolsCfg.Builtin.Policies.
 type AgentCreateRequestSubagentToolsCfgBuiltinPolicies string
 
@@ -4239,52 +3807,12 @@ type AgentCreateRequestSubagent3p struct {
 	// Color Hex color code for the agent avatar.
 	Color *string `json:"color,omitempty"`
 
-	// DelegationPolicy Delegation policy for an agent. Controls which other agents this agent may delegate work to, and how delegation modes are gated.
-	// The canonical "to" field unifies the three legacy allowlists:
-	//   - AgentConfig.CanDelegateTo (per-agent, task delegation)
-	//   - AgentDefaults.CanDelegateTo (global fallback, task delegation)
-	//   - SubagentsConfig.AllowAgents (spawn/subagent tool allowlist)
-	//
-	// Precedence: agent-level "to" > defaults-level "to"; subagent allowlist merges into agent-level "to" when both are set.
-	// "accept_from" and "budget" are present in the schema but NOT enforced in v0.1.0. A startup WARN is emitted if either field is non-empty, to avoid presenting them as an active authorization boundary.
-	DelegationPolicy *struct {
-		// AcceptFrom PRESENT BUT NOT ENFORCED in v0.1.0. List of agent references from which this agent accepts delegated work. A startup WARN is emitted if non-empty. Do not rely on this field as an authorization boundary until enforcement is shipped.
-		AcceptFrom *[]struct {
-			Id   string                                                     `json:"id"`
-			Kind AgentCreateRequestSubagent3pDelegationPolicyAcceptFromKind `json:"kind"`
-		} `json:"accept_from,omitempty"`
-
-		// Budget PRESENT BUT NOT ENFORCED in v0.1.0. Delegation spend budget. A startup WARN is emitted if non-empty. Do not rely on this as an authorization boundary.
-		Budget *struct {
-			// MaxCostUsd Maximum USD spend allowed for delegated work.
-			MaxCostUsd *float64 `json:"max_cost_usd,omitempty"`
-
-			// MaxTokens Maximum token count allowed for delegated work.
-			MaxTokens *int `json:"max_tokens,omitempty"`
-		} `json:"budget,omitempty"`
-
-		// Depth Maximum delegation chain depth (number of hops). 0 = no delegation allowed. Enforced in v0.1.0 as a safety cap. Default is uncapped when absent. Counts the number of nested delegation levels, not total agents involved.
-		Depth *int `json:"depth,omitempty"`
-
-		// Modes Allowed delegation modes. Enforced in v0.1.0. "await" = synchronous subagent (blocks caller until result). "background" = async spawn (caller continues; result posted when done). "task" = task_create delegation (creates a persistent task for another agent).
-		Modes *[]AgentCreateRequestSubagent3pDelegationPolicyModes `json:"modes,omitempty"`
-
-		// To List of agent references this agent is allowed to delegate work to. An empty array means NO delegation is allowed (deny-by-default). Use [{"kind": "local", "id": "*"}] to allow delegation to any local agent.
-		To *[]struct {
-			// Id Agent identifier. For kind=local, this is the agent's ID (UUID or well-known string). The value "*" is a wildcard allowing delegation to any agent of the given kind.
-			Id string `json:"id"`
-
-			// Kind The kind of agent reference. "local" = a locally-registered agent resolved by id. "remote-a2a" = reserved for future A2A protocol external agent resolution; not enforced in v0.1.0.
-			Kind AgentCreateRequestSubagent3pDelegationPolicyToKind `json:"kind"`
-		} `json:"to,omitempty"`
-	} `json:"delegation_policy,omitempty"`
-
 	// Description Short description of the agent's purpose. Required (non-empty after trim) for Subagent and subagent_3p — the orchestrator uses it as the basis on which it decides which agent to delegate to. Optional for Main.
 	Description *string `json:"description,omitempty"`
 
 	// Executor Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
 	// "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
-	// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude receives the soul+instructions prompt via stdin with NO positional prompt argument at all (a bare "-" is read by this CLI as a literal one-character prompt string, not a stdin sentinel, so none is appended — claude -p consumes all of stdin automatically when no positional prompt is given); codex also receives it via stdin, but signals that with a trailing "-" positional argument (a real stdin sentinel for this CLI); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like shell_policy / tools_cfg / fallback_models / model_params / skills / delegation_policy are hidden for subagent_3p agents and rejected 400 on PUT if set.
+	// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude receives the soul+instructions prompt via stdin with NO positional prompt argument at all (a bare "-" is read by this CLI as a literal one-character prompt string, not a stdin sentinel, so none is appended — claude -p consumes all of stdin automatically when no positional prompt is given); codex also receives it via stdin, but signals that with a trailing "-" positional argument (a real stdin sentinel for this CLI); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like shell_policy / tools_cfg / fallback_models / model_params / skills are hidden for subagent_3p agents and rejected 400 on PUT if set.
 	// "cli" (required for subagent_3p agents when kind="external-cli") is locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
 	// "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
 	// The "kind" field is derived server-side from the agent's type (Main -> native, Subagent -> native, subagent_3p -> external-cli). It is exposed in responses but is NOT a writable field on create/update — clients cannot choose kind directly. Server-side derive at the handler boundary per the agent-form spec.
@@ -4342,15 +3870,6 @@ type AgentCreateRequestSubagent3p struct {
 	// Type Discriminator. Must be exactly "subagent_3p" for this variant.
 	Type AgentCreateRequestSubagent3pType `json:"type"`
 }
-
-// AgentCreateRequestSubagent3pDelegationPolicyAcceptFromKind defines model for AgentCreateRequestSubagent3p.DelegationPolicy.AcceptFrom.Kind.
-type AgentCreateRequestSubagent3pDelegationPolicyAcceptFromKind string
-
-// AgentCreateRequestSubagent3pDelegationPolicyModes defines model for AgentCreateRequestSubagent3p.DelegationPolicy.Modes.
-type AgentCreateRequestSubagent3pDelegationPolicyModes string
-
-// AgentCreateRequestSubagent3pDelegationPolicyToKind The kind of agent reference. "local" = a locally-registered agent resolved by id. "remote-a2a" = reserved for future A2A protocol external agent resolution; not enforced in v0.1.0.
-type AgentCreateRequestSubagent3pDelegationPolicyToKind string
 
 // AgentCreateRequestSubagent3pExecutorKind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
 type AgentCreateRequestSubagent3pExecutorKind string
@@ -4600,52 +4119,12 @@ type AgentUpdateRequest struct {
 	// Default Whether this agent is the global default that handles inbound messages with no more-specific routing rule. At most one agent is default. Omitting this field leaves the flag unchanged. Main only — workers never default.
 	Default *bool `json:"default,omitempty"`
 
-	// DelegationPolicy Delegation policy for an agent. Controls which other agents this agent may delegate work to, and how delegation modes are gated.
-	// The canonical "to" field unifies the three legacy allowlists:
-	//   - AgentConfig.CanDelegateTo (per-agent, task delegation)
-	//   - AgentDefaults.CanDelegateTo (global fallback, task delegation)
-	//   - SubagentsConfig.AllowAgents (spawn/subagent tool allowlist)
-	//
-	// Precedence: agent-level "to" > defaults-level "to"; subagent allowlist merges into agent-level "to" when both are set.
-	// "accept_from" and "budget" are present in the schema but NOT enforced in v0.1.0. A startup WARN is emitted if either field is non-empty, to avoid presenting them as an active authorization boundary.
-	DelegationPolicy *struct {
-		// AcceptFrom PRESENT BUT NOT ENFORCED in v0.1.0. List of agent references from which this agent accepts delegated work. A startup WARN is emitted if non-empty. Do not rely on this field as an authorization boundary until enforcement is shipped.
-		AcceptFrom *[]struct {
-			Id   string                                           `json:"id"`
-			Kind AgentUpdateRequestDelegationPolicyAcceptFromKind `json:"kind"`
-		} `json:"accept_from,omitempty"`
-
-		// Budget PRESENT BUT NOT ENFORCED in v0.1.0. Delegation spend budget. A startup WARN is emitted if non-empty. Do not rely on this as an authorization boundary.
-		Budget *struct {
-			// MaxCostUsd Maximum USD spend allowed for delegated work.
-			MaxCostUsd *float64 `json:"max_cost_usd,omitempty"`
-
-			// MaxTokens Maximum token count allowed for delegated work.
-			MaxTokens *int `json:"max_tokens,omitempty"`
-		} `json:"budget,omitempty"`
-
-		// Depth Maximum delegation chain depth (number of hops). 0 = no delegation allowed. Enforced in v0.1.0 as a safety cap. Default is uncapped when absent. Counts the number of nested delegation levels, not total agents involved.
-		Depth *int `json:"depth,omitempty"`
-
-		// Modes Allowed delegation modes. Enforced in v0.1.0. "await" = synchronous subagent (blocks caller until result). "background" = async spawn (caller continues; result posted when done). "task" = task_create delegation (creates a persistent task for another agent).
-		Modes *[]AgentUpdateRequestDelegationPolicyModes `json:"modes,omitempty"`
-
-		// To List of agent references this agent is allowed to delegate work to. An empty array means NO delegation is allowed (deny-by-default). Use [{"kind": "local", "id": "*"}] to allow delegation to any local agent.
-		To *[]struct {
-			// Id Agent identifier. For kind=local, this is the agent's ID (UUID or well-known string). The value "*" is a wildcard allowing delegation to any agent of the given kind.
-			Id string `json:"id"`
-
-			// Kind The kind of agent reference. "local" = a locally-registered agent resolved by id. "remote-a2a" = reserved for future A2A protocol external agent resolution; not enforced in v0.1.0.
-			Kind AgentUpdateRequestDelegationPolicyToKind `json:"kind"`
-		} `json:"to,omitempty"`
-	} `json:"delegation_policy,omitempty"`
-
 	// Description New description. Rejected on locked agents. Empty string removes it. For Subagent / subagent_3p, an empty string after trim is rejected 400 (description is required for workers per the routing contract).
 	Description *string `json:"description,omitempty"`
 
 	// Executor Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
 	// "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
-	// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude receives the soul+instructions prompt via stdin with NO positional prompt argument at all (a bare "-" is read by this CLI as a literal one-character prompt string, not a stdin sentinel, so none is appended — claude -p consumes all of stdin automatically when no positional prompt is given); codex also receives it via stdin, but signals that with a trailing "-" positional argument (a real stdin sentinel for this CLI); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like shell_policy / tools_cfg / fallback_models / model_params / skills / delegation_policy are hidden for subagent_3p agents and rejected 400 on PUT if set.
+	// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude receives the soul+instructions prompt via stdin with NO positional prompt argument at all (a bare "-" is read by this CLI as a literal one-character prompt string, not a stdin sentinel, so none is appended — claude -p consumes all of stdin automatically when no positional prompt is given); codex also receives it via stdin, but signals that with a trailing "-" positional argument (a real stdin sentinel for this CLI); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like shell_policy / tools_cfg / fallback_models / model_params / skills are hidden for subagent_3p agents and rejected 400 on PUT if set.
 	// "cli" (required for subagent_3p agents when kind="external-cli") is locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
 	// "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
 	// The "kind" field is derived server-side from the agent's type (Main -> native, Subagent -> native, subagent_3p -> external-cli). It is exposed in responses but is NOT a writable field on create/update — clients cannot choose kind directly. Server-side derive at the handler boundary per the agent-form spec.
@@ -4768,15 +4247,6 @@ type AgentUpdateRequest struct {
 	// Voice Per-agent persona voice identifier. Schema-pinned; not active until v0.2.0 TTS. Send null to clear. Main only.
 	Voice *string `json:"voice,omitempty"`
 }
-
-// AgentUpdateRequestDelegationPolicyAcceptFromKind defines model for AgentUpdateRequest.DelegationPolicy.AcceptFrom.Kind.
-type AgentUpdateRequestDelegationPolicyAcceptFromKind string
-
-// AgentUpdateRequestDelegationPolicyModes defines model for AgentUpdateRequest.DelegationPolicy.Modes.
-type AgentUpdateRequestDelegationPolicyModes string
-
-// AgentUpdateRequestDelegationPolicyToKind The kind of agent reference. "local" = a locally-registered agent resolved by id. "remote-a2a" = reserved for future A2A protocol external agent resolution; not enforced in v0.1.0.
-type AgentUpdateRequestDelegationPolicyToKind string
 
 // AgentUpdateRequestExecutorKind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
 type AgentUpdateRequestExecutorKind string
@@ -5537,7 +5007,7 @@ type ExecutorCommandPreviewResponsePromptDelivery string
 
 // ExecutorConfig Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
 // "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
-// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude receives the soul+instructions prompt via stdin with NO positional prompt argument at all (a bare "-" is read by this CLI as a literal one-character prompt string, not a stdin sentinel, so none is appended — claude -p consumes all of stdin automatically when no positional prompt is given); codex also receives it via stdin, but signals that with a trailing "-" positional argument (a real stdin sentinel for this CLI); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like shell_policy / tools_cfg / fallback_models / model_params / skills / delegation_policy are hidden for subagent_3p agents and rejected 400 on PUT if set.
+// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude receives the soul+instructions prompt via stdin with NO positional prompt argument at all (a bare "-" is read by this CLI as a literal one-character prompt string, not a stdin sentinel, so none is appended — claude -p consumes all of stdin automatically when no positional prompt is given); codex also receives it via stdin, but signals that with a trailing "-" positional argument (a real stdin sentinel for this CLI); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like shell_policy / tools_cfg / fallback_models / model_params / skills are hidden for subagent_3p agents and rejected 400 on PUT if set.
 // "cli" (required for subagent_3p agents when kind="external-cli") is locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
 // "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
 // The "kind" field is derived server-side from the agent's type (Main -> native, Subagent -> native, subagent_3p -> external-cli). It is exposed in responses but is NOT a writable field on create/update — clients cannot choose kind directly. Server-side derive at the handler boundary per the agent-form spec.
@@ -6140,7 +5610,7 @@ type Message struct {
 		// Result Return value from the tool. Shape is tool-specific.
 		Result *map[string]interface{} `json:"result,omitempty"`
 
-		// Status Outcome of the tool call.
+		// Status Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case; unlike that frame, ToolCall carries no accompanying "reason" field here — subturn.go never persists one onto the ToolCall record (reason is WS-frame-only, via SubTurnEndPayload).
 		Status MessageToolCallsStatus `json:"status"`
 
 		// Tool Tool name as registered in the tool registry (e.g. "workspace.shell", "web_search").
@@ -6169,7 +5639,7 @@ type MessageRole string
 // MessageStatus Completion status of this message turn.
 type MessageStatus string
 
-// MessageToolCallsStatus Outcome of the tool call.
+// MessageToolCallsStatus Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case; unlike that frame, ToolCall carries no accompanying "reason" field here — subturn.go never persists one onto the ToolCall record (reason is WS-frame-only, via SubTurnEndPayload).
 type MessageToolCallsStatus string
 
 // MessageType Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
@@ -7457,7 +6927,7 @@ type SessionDetail struct {
 			// Result Return value from the tool. Shape is tool-specific.
 			Result *map[string]interface{} `json:"result,omitempty"`
 
-			// Status Outcome of the tool call.
+			// Status Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case; unlike that frame, ToolCall carries no accompanying "reason" field here — subturn.go never persists one onto the ToolCall record (reason is WS-frame-only, via SubTurnEndPayload).
 			Status SessionDetailMessagesToolCallsStatus `json:"status"`
 
 			// Tool Tool name as registered in the tool registry (e.g. "workspace.shell", "web_search").
@@ -7589,7 +7059,7 @@ type SessionDetailMessagesRole string
 // SessionDetailMessagesStatus Completion status of this message turn.
 type SessionDetailMessagesStatus string
 
-// SessionDetailMessagesToolCallsStatus Outcome of the tool call.
+// SessionDetailMessagesToolCallsStatus Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case; unlike that frame, ToolCall carries no accompanying "reason" field here — subturn.go never persists one onto the ToolCall record (reason is WS-frame-only, via SubTurnEndPayload).
 type SessionDetailMessagesToolCallsStatus string
 
 // SessionDetailMessagesType Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
@@ -8389,14 +7859,14 @@ type ToolCall struct {
 	// Result Return value from the tool. Shape is tool-specific.
 	Result *map[string]interface{} `json:"result,omitempty"`
 
-	// Status Outcome of the tool call.
+	// Status Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case; unlike that frame, ToolCall carries no accompanying "reason" field here — subturn.go never persists one onto the ToolCall record (reason is WS-frame-only, via SubTurnEndPayload).
 	Status ToolCallStatus `json:"status"`
 
 	// Tool Tool name as registered in the tool registry (e.g. "workspace.shell", "web_search").
 	Tool string `json:"tool"`
 }
 
-// ToolCallStatus Outcome of the tool call.
+// ToolCallStatus Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case; unlike that frame, ToolCall carries no accompanying "reason" field here — subturn.go never persists one onto the ToolCall record (reason is WS-frame-only, via SubTurnEndPayload).
 type ToolCallStatus string
 
 // ToolPolicy A policy value governing whether a tool call is allowed, requires approval, or is denied.
@@ -8567,8 +8037,11 @@ type WorkspaceCreateRequest struct {
 	Repository *string `json:"repository,omitempty"`
 }
 
-// WorkspaceDelegation The per-workspace delegation graph (M5). This is the editable source of truth surfaced in the workspace Team tab and the Agents-area "Workspace Teams" view — always workspace-scoped, never global. Nodes are the workspace team's agents (core_team ∪ every agent named by an edge); edges are the directed delegation authorizations. The per-agent delegation_policy remains as an enforcement cap, but this graph is what the UI edits.
+// WorkspaceDelegation The per-workspace delegation graph (M5). This is the editable source of truth surfaced in the workspace Team tab and the Agents-area "Workspace Teams" view — always workspace-scoped, never global. Nodes are the workspace team's agents (core_team ∪ every agent named by an edge); edges are the directed delegation authorizations. This graph is the sole delegation-enforcement mechanism — there is no separate global per-agent delegation policy; the graph is both what the UI edits and what the runtime enforces.
 type WorkspaceDelegation struct {
+	// DefaultDepth The currently-resolved depth ceiling an edge inherits when its own `depth` is unset — the global configured default if set, otherwise the defaultMaxSubTurnDepth backstop. This is a read-only, already-computed value (no new depth logic; see delegationDepthCeiling) exposed purely so the UI can always pre-fill/display a concrete number for any edge instead of an ambiguous blank/"∞" state. It does NOT change per-edge enforcement: an edge with depth unset still dynamically tracks the live global default at enforcement time, this field is a snapshot for display purposes only.
+	DefaultDepth int `json:"default_depth"`
+
 	// Edges The directed delegation edges. May be empty (no delegation configured). Deduplicated by (from_agent, to_agent) at write time — last writer wins.
 	Edges []WorkspaceDelegationEdge `json:"edges"`
 
@@ -8590,7 +8063,7 @@ type WorkspaceDelegationEdge struct {
 	// FromAgent Agent ID of the delegating agent (the source node). Must be a member of the workspace team (present in core_team or referenced by another edge).
 	FromAgent string `json:"from_agent"`
 
-	// Modes Allowed delegation modes for this edge. An empty/absent list means all modes are allowed. Mirrors DelegationPolicy.modes semantics. "await" = synchronous subagent (blocks caller until result). "background" = async spawn (caller continues; result posted when done). "task" = task_create delegation (persistent task for another agent).
+	// Modes Allowed delegation modes for this edge. An empty/absent list means all modes are allowed. "direct" = Direct Delegation — the delegate tool dispatches to the target agent, either synchronously (await) or as a background spawn. Which of the two happens is a runtime parameter of the delegate tool call itself, not a trust distinction the edge gates separately — an edge that allows "direct" allows both call patterns. "task" = Task Delegation — task_create-style delegation (a persistent task assigned to another agent).
 	Modes *[]WorkspaceDelegationEdgeModes `json:"modes,omitempty"`
 
 	// ToAgent Agent ID of the delegate (the target node). Must be a member of the workspace team. Self-edges (from_agent == to_agent) are rejected.

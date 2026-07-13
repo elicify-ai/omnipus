@@ -67,6 +67,23 @@ func newTestRestAPIWithTaskExecutor(t *testing.T) *restAPI {
 	}
 }
 
+// getTaskStartedAt reads back a task via GET /api/v1/tasks/{id} and returns
+// its started_at pointer (nil when unset). Used by the launch-revert tests
+// below to confirm a reverted in_progress transition doesn't leave a phantom
+// "started" timestamp behind (see the store's StartedAt auto-stamp in
+// updateLocked).
+func getTaskStartedAt(t *testing.T, api *restAPI, id string) *time.Time {
+	t.Helper()
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/"+id, nil)
+	r.URL.Path = "/api/v1/tasks/" + id
+	api.HandleTasks(w, r)
+	require.Equal(t, http.StatusOK, w.Code, "getTaskStartedAt GET must return 200; body=%s", w.Body.String())
+	var tsk gen.Task
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &tsk))
+	return tsk.StartedAt
+}
+
 // advanceTaskToNext advances a task from inbox to next (adding a description for
 // the partial-task guard).
 func advanceTaskToNext(t *testing.T, api *restAPI, id string) {
@@ -104,6 +121,98 @@ func TestHandleTaskPatch_InProgress_NoAgentID(t *testing.T) {
 		"session_id must be nil when task has no agent assigned")
 }
 
+// TestHandleTaskPatch_InProgress_StampsStartedAt verifies the fix for the
+// Board card bug where "Started" never populated: PATCH status=in_progress
+// via the "Start" button path (no agent assigned, so no StartTaskNow launch —
+// isolates the store-level stamping from the executor) must persist a
+// non-empty started_at, both in the PATCH response and on a subsequent GET.
+//
+// Traces to: UAT bug — Board task card's "Started" field always showed "—"
+// even on completed tasks. Root cause: the REST PATCH "Start" action set
+// status=in_progress via task.Store.Update, which never stamped StartedAt on
+// that path (only TaskExecutor.ExecuteTask's ClaimForRun stamped it, and that
+// path is only reached via scheduler/heartbeat dispatch — not the human
+// "Start" click, which PATCHes status directly).
+//
+// BDD:
+//
+//	Given a task with no agent_id (isolates Update()'s auto-stamp from
+//	     StartTaskNow's own launch machinery),
+//	When PATCH /api/v1/tasks/{id} with {"status":"in_progress"} (no started_at
+//	     supplied by the client, matching the real frontend "Start" action),
+//	Then 200, the response carries a non-empty started_at, and a subsequent
+//	     GET returns the same started_at (it persisted to disk).
+func TestHandleTaskPatch_InProgress_StampsStartedAt(t *testing.T) {
+	api := newTestRestAPIWithTaskExecutor(t)
+	wsID := ensureTestWorkspace(t, api)
+
+	tsk := createTaskViaAPI(t, api, "StartedAtTask", wsID)
+	advanceTaskToNext(t, api, tsk.Id)
+
+	before := time.Now().UTC()
+	w := patchTask(t, api, tsk.Id, `{"status":"in_progress"}`)
+	require.Equal(t, http.StatusOK, w.Code,
+		"PATCH status=in_progress must return 200; body=%s", w.Body.String())
+
+	var updated gen.Task
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &updated))
+	assert.Equal(t, gen.TaskStatusInProgress, updated.Status)
+	require.NotNil(t, updated.StartedAt,
+		"started_at must be populated in the PATCH response, not left nil")
+	assert.False(t, updated.StartedAt.Before(before.Add(-time.Second)),
+		"started_at must reflect the real transition time, not a stale/zero value")
+
+	// Confirm it actually persisted (not just present in the response echo).
+	getW := httptest.NewRecorder()
+	getR := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/"+tsk.Id, nil)
+	getR.URL.Path = "/api/v1/tasks/" + tsk.Id
+	api.HandleTasks(getW, getR)
+	require.Equal(t, http.StatusOK, getW.Code)
+
+	var fetched gen.Task
+	require.NoError(t, json.Unmarshal(getW.Body.Bytes(), &fetched))
+	require.NotNil(t, fetched.StartedAt, "started_at must survive a round-trip GET after the PATCH")
+	assert.Equal(t, updated.StartedAt.Format(time.RFC3339), fetched.StartedAt.Format(time.RFC3339),
+		"GET must return the same started_at the PATCH persisted")
+}
+
+// TestHandleTaskPatch_InProgress_NoOpDoesNotRestampStartedAt verifies that a
+// second PATCH status=in_progress on an already-in_progress task (the
+// idempotent no-op case) does NOT re-stamp started_at — the field must
+// reflect the task's FIRST real execution start, not the most recent no-op
+// PATCH.
+//
+// BDD:
+//
+//	Given a task already in_progress with a started_at timestamp,
+//	When PATCH /api/v1/tasks/{id} with {"status":"in_progress"} again,
+//	Then 200 and started_at is unchanged from the first transition.
+func TestHandleTaskPatch_InProgress_NoOpDoesNotRestampStartedAt(t *testing.T) {
+	api := newTestRestAPIWithTaskExecutor(t)
+	wsID := ensureTestWorkspace(t, api)
+
+	tsk := createTaskViaAPI(t, api, "NoOpRestampTask", wsID)
+	advanceTaskToNext(t, api, tsk.Id)
+
+	w1 := patchTask(t, api, tsk.Id, `{"status":"in_progress"}`)
+	require.Equal(t, http.StatusOK, w1.Code)
+	var first gen.Task
+	require.NoError(t, json.Unmarshal(w1.Body.Bytes(), &first))
+	require.NotNil(t, first.StartedAt, "first transition must stamp started_at")
+
+	// Sleep past RFC 3339 second-precision so a bug that re-stamps would be
+	// observable as a strictly later timestamp.
+	time.Sleep(1100 * time.Millisecond)
+
+	w2 := patchTask(t, api, tsk.Id, `{"status":"in_progress"}`)
+	require.Equal(t, http.StatusOK, w2.Code)
+	var second gen.Task
+	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &second))
+	require.NotNil(t, second.StartedAt, "started_at must remain set on the no-op PATCH")
+	assert.Equal(t, first.StartedAt.Format(time.RFC3339), second.StartedAt.Format(time.RFC3339),
+		"a same-status no-op PATCH must not re-stamp started_at")
+}
+
 // TestHandleTaskPatch_InProgress_NilTaskExecutor verifies that PATCH
 // status=in_progress with an agent_id but a nil taskExecutor returns 503
 // Service Unavailable (gateway degraded — logs a warn, rejects the transition
@@ -137,6 +246,13 @@ func TestHandleTaskPatch_InProgress_NilTaskExecutor(t *testing.T) {
 	statusAfter := getTaskStatus(t, api, tsk.Id)
 	assert.Equal(t, gen.TaskStatusNext, statusAfter,
 		"task must revert to 'next' after nil-executor 503 (not left as in_progress)")
+
+	// StartedAt must be cleared, not left carrying a "started" timestamp from
+	// an attempt that never actually ran (the in_progress patch above stamped
+	// it before the nil-executor check reverted the status).
+	startedAtAfter := getTaskStartedAt(t, api, tsk.Id)
+	assert.Nil(t, startedAtAfter,
+		"task must have StartedAt cleared after nil-executor revert, not a phantom 'started' timestamp")
 }
 
 // TestHandleTaskPatch_InProgress_WithKnownAgent verifies that PATCH
@@ -357,6 +473,13 @@ func TestHandleTaskPatch_RunTask_StartErrRevertsStatus(t *testing.T) {
 	statusAfter := getTaskStatus(t, api, tsk.Id)
 	assert.Equal(t, gen.TaskStatusNext, statusAfter,
 		"task must revert to 'next' after StartTaskNow error (not left as in_progress)")
+
+	// StartedAt must be cleared, not left carrying a "started" timestamp from
+	// an attempt that never actually ran (the in_progress patch above stamped
+	// it before StartTaskNow's failure reverted the status).
+	startedAtAfter := getTaskStartedAt(t, api, tsk.Id)
+	assert.Nil(t, startedAtAfter,
+		"task must have StartedAt cleared after StartTaskNow-error revert, not a phantom 'started' timestamp")
 }
 
 // TestHandleTaskPatch_RunTask_DispatchCapReturns409 verifies that when the
@@ -411,6 +534,13 @@ func TestHandleTaskPatch_RunTask_DispatchCapReturns409(t *testing.T) {
 	statusAfter := getTaskStatus(t, api, tsk.Id)
 	assert.Equal(t, gen.TaskStatusNext, statusAfter,
 		"task must revert to 'next' after 409 (not left as in_progress)")
+
+	// StartedAt must be cleared, not left carrying a "started" timestamp from
+	// an attempt that never actually ran (the in_progress patch above stamped
+	// it before the dispatch-cap failure reverted the status).
+	startedAtAfter := getTaskStartedAt(t, api, tsk.Id)
+	assert.Nil(t, startedAtAfter,
+		"task must have StartedAt cleared after dispatch-cap revert, not a phantom 'started' timestamp")
 }
 
 // TestHandleTaskPatch_RunTask_NilExecutorReturns503 verifies that PATCH

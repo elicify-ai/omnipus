@@ -18,6 +18,11 @@ import (
 // edges into a workspace graph and assert the runtime gate enforces them. The
 // gateway's defaultWorkspaceDelegationEdges has its own round-trip test
 // (pkg/gateway) proving the seed→graph derivation.
+//
+// ADR-037 (Wave 2): AgentConfig.DelegationPolicy no longer exists — the seed
+// source of truth is now coreagent.SeedDelegationEdges (an exported wrapper
+// around coreAgentDelegation), consulted by id rather than read off a seeded
+// AgentConfig field.
 
 // seededAgent returns the seeded AgentConfig for id after running coreagent.SeedConfig.
 func seededAgent(t *testing.T, cfg *config.Config, id string) *config.AgentConfig {
@@ -31,15 +36,16 @@ func seededAgent(t *testing.T, cfg *config.Config, id string) *config.AgentConfi
 	return nil
 }
 
-// seedEdgesFromConfig replays a config's per-agent DelegationPolicy into the
-// equivalent workspace graph edges (the same derivation
+// seedEdgesFromConfig replays coreagent's per-agent seed delegation policy
+// (coreagent.SeedDelegationEdges, keyed by each agent id present in cfg) into
+// the equivalent workspace graph edges (the same derivation
 // defaultWorkspaceDelegationEdges performs in pkg/gateway). Local, non-wildcard,
 // non-self targets only.
 func seedEdgesFromConfig(cfg *config.Config) []graphEdge {
 	var edges []graphEdge
 	for i := range cfg.Agents.List {
 		ac := &cfg.Agents.List[i]
-		dp := ac.DelegationPolicy
+		dp := coreagent.SeedDelegationEdges(coreagent.CoreAgentID(ac.ID))
 		if dp == nil || len(dp.To) == 0 {
 			continue
 		}
@@ -67,18 +73,22 @@ func seedEdgesFromConfig(cfg *config.Config) []graphEdge {
 func TestSeedConfig_JimToAvaTaskEdgePresent(t *testing.T) {
 	cfg := &config.Config{}
 	coreagent.SeedConfig(cfg)
-	jim := seededAgent(t, cfg, string(coreagent.IDJim))
-	if jim.DelegationPolicy == nil {
+	// Confirm Jim still seeds into the roster — the delegation-edges check
+	// below is against the separate seed source, not this AgentConfig.
+	seededAgent(t, cfg, string(coreagent.IDJim))
+
+	jimDP := coreagent.SeedDelegationEdges(coreagent.IDJim)
+	if jimDP == nil {
 		t.Fatal("Jim must have a seeded DelegationPolicy")
 	}
 	found := false
-	for _, ref := range jim.DelegationPolicy.To {
+	for _, ref := range jimDP.To {
 		if ref.ID == string(coreagent.IDAva) {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("Jim's seeded trust set must include Ava, got: %+v", jim.DelegationPolicy.To)
+		t.Fatalf("Jim's seeded trust set must include Ava, got: %+v", jimDP.To)
 	}
 }
 
@@ -89,7 +99,11 @@ func TestSeededGraph_JimToAvaTaskAllowed(t *testing.T) {
 	coreagent.SeedConfig(cfg)
 	seedWorkspaceGraph(t, testWS, true, seedEdgesFromConfig(cfg))
 
-	check := buildDelegationDenyChecker(string(coreagent.IDJim), cfg.Agents.Defaults, config.DelegationModeTask)
+	check := buildDelegationDenyCheckerForTaskReassignment(
+		string(coreagent.IDJim),
+		cfg.Agents.Defaults,
+		config.DelegationModeTask,
+	)
 	if denial := check(ctxWS(testWS, 0), string(coreagent.IDAva)); denial != nil {
 		t.Fatalf("Jim → Ava (task) must be allowed, got deny: %+v", denial)
 	}
@@ -105,7 +119,11 @@ func TestSeededGraph_BaseToWorkerAllowed(t *testing.T) {
 	for _, id := range []coreagent.CoreAgentID{
 		coreagent.IDJim, coreagent.IDMia, coreagent.IDRay, coreagent.IDAva,
 	} {
-		check := buildDelegationDenyChecker(string(id), cfg.Agents.Defaults, config.DelegationModeTask)
+		check := buildDelegationDenyCheckerForTaskReassignment(
+			string(id),
+			cfg.Agents.Defaults,
+			config.DelegationModeTask,
+		)
 		if denial := check(ctxWS(testWS, 0), string(coreagent.IDWorker)); denial != nil {
 			t.Fatalf("%s → worker (task) must be allowed, got deny: %+v", id, denial)
 		}
@@ -119,27 +137,61 @@ func TestSeededGraph_DisallowedTargetDenied(t *testing.T) {
 	coreagent.SeedConfig(cfg)
 	seedWorkspaceGraph(t, testWS, true, seedEdgesFromConfig(cfg))
 
-	check := buildDelegationDenyChecker(string(coreagent.IDMia), cfg.Agents.Defaults, config.DelegationModeTask)
+	check := buildDelegationDenyCheckerForTaskReassignment(
+		string(coreagent.IDMia),
+		cfg.Agents.Defaults,
+		config.DelegationModeTask,
+	)
 	if denial := check(ctxWS(testWS, 0), string(coreagent.IDAva)); denial == nil {
 		t.Fatal("Mia → Ava must be DENIED (no edge in the seeded graph)")
 	}
 }
 
 // TestSeededGraph_JimAwaitModeAllowed verifies Jim's seeded policy permits the
-// synchronous (await) subagent mode, while a base worker-offloader (Mia) does NOT
-// permit await (only task/background seeded).
+// synchronous (await) subagent mode.
+//
+// This test previously also asserted the inverse for Mia (background-only
+// seeded ⇒ await denied), on the premise that a workspace-graph edge could
+// grant background dispatch without also granting await dispatch. That
+// premise is retired by the operator-ratified Team-graph edge simplification
+// (see docs/internal/architecture/ADR-040-fr-h-006-nested-delegation-reversal.md's
+// sibling decision, and pkg/workspace/delegation.go's DelegationMode doc
+// comment): the trust edge now only distinguishes Direct vs. Task delegation,
+// not sync vs. async within Direct — so any edge granting background dispatch
+// necessarily grants await dispatch too, by design, not by omission. Mia's
+// real seed (`task, background`) collapses to `task, direct` and therefore
+// now correctly allows await, matching Jim. Mode-restriction enforcement
+// itself (a genuinely task-only edge denying await/background) remains
+// covered by delegation_enforce_test.go, which constructs a synthetic
+// task-only edge directly rather than relying on seeded data — no real seed
+// in this codebase happens to be direct-only or task-only today, so this
+// seeded-graph-specific test can no longer exercise that case meaningfully.
 func TestSeededGraph_JimAwaitModeAllowed(t *testing.T) {
 	cfg := &config.Config{}
 	coreagent.SeedConfig(cfg)
 	seedWorkspaceGraph(t, testWS, true, seedEdgesFromConfig(cfg))
 
-	jimCheck := buildDelegationDenyChecker(string(coreagent.IDJim), cfg.Agents.Defaults, config.DelegationModeAwait)
+	jimCheck := buildDelegationDenyCheckerForDelegate(
+		string(coreagent.IDJim),
+		cfg.Agents.Defaults,
+		config.DelegationModeAwait,
+	)
 	if denial := jimCheck(ctxWS(testWS, 0), string(coreagent.IDWorker)); denial != nil {
 		t.Fatalf("Jim → worker (await) must be allowed, got deny: %+v", denial)
 	}
 
-	miaCheck := buildDelegationDenyChecker(string(coreagent.IDMia), cfg.Agents.Defaults, config.DelegationModeAwait)
-	if denial := miaCheck(ctxWS(testWS, 0), string(coreagent.IDWorker)); denial == nil {
-		t.Fatal("Mia → worker (await) must be DENIED — Mia only has task/background seeded")
+	// Mia's seed (task, background) collapses to (task, direct), which now
+	// correctly allows await too — background and await are no longer
+	// separately grantable at the trust-edge layer.
+	miaCheck := buildDelegationDenyCheckerForDelegate(
+		string(coreagent.IDMia),
+		cfg.Agents.Defaults,
+		config.DelegationModeAwait,
+	)
+	if denial := miaCheck(ctxWS(testWS, 0), string(coreagent.IDWorker)); denial != nil {
+		t.Fatalf(
+			"Mia → worker (await) must be allowed post-collapse (background⇒direct⇒await too), got deny: %+v",
+			denial,
+		)
 	}
 }

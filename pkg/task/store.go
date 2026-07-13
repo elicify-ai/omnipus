@@ -553,6 +553,22 @@ func (s *Store) updateLocked(id string, patch Patch) (*Task, error) {
 		if err := validateTransition(t.Status, *patch.Status, patch.allowBlockedSet); err != nil {
 			return nil, err
 		}
+		// A genuine transition INTO in_progress (not a same-status no-op) stamps
+		// the task's real execution start, unless the caller already supplied an
+		// explicit StartedAt in this same patch (which wins). This is the single
+		// choke point for every Update-based path that flips a task to
+		// in_progress: it closes the gap where the REST PATCH "Start" action
+		// (rest_tasks.go's handleTaskPatch, which only sets status and then
+		// hands off to TaskExecutor.StartTaskNow) left started_at permanently
+		// empty because neither of those steps stamped it. The scheduler/
+		// heartbeat dispatch path (TaskExecutor.ExecuteTask) does not go through
+		// Update at all — it claims via ClaimForRun, which already stamps
+		// StartedAt itself — so this is unaffected there. A retry (failed →
+		// in_progress) re-stamps to the new attempt's start time, which is the
+		// correct "most recent execution start" semantics.
+		if *patch.Status == StatusInProgress && t.Status != StatusInProgress && patch.StartedAt == nil {
+			t.StartedAt = time.Now().UTC().Format(time.RFC3339)
+		}
 		t.Status = *patch.Status
 	}
 	if patch.AgentID != nil {

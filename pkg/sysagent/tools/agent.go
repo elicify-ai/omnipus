@@ -131,11 +131,6 @@ func (t *AgentCreateTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Proactive scheduling instructions (written to HEARTBEAT.md)",
 			},
-			"can_delegate_to": map[string]any{
-				"type":        "array",
-				"items":       map[string]any{"type": "string"},
-				"description": "Agent IDs this agent can delegate tasks to. Use ['*'] for all.",
-			},
 			"max_tool_iterations": map[string]any{
 				"type":        "integer",
 				"description": "Max tool calls per turn (0 = system default)",
@@ -264,14 +259,12 @@ func (t *AgentCreateTool) Execute(_ context.Context, args map[string]any) *tools
 				}
 			}
 		}
-		// Optional: delegation targets.
-		if dt, ok := args["can_delegate_to"].([]any); ok && len(dt) > 0 {
-			for _, v := range dt {
-				if s, ok := v.(string); ok && s != "" {
-					newAgent.CanDelegateTo = append(newAgent.CanDelegateTo, s)
-				}
-			}
-		}
+		// ADR-037: can_delegate_to is retired — it was write-only (its last real
+		// reader, config.ResolveDelegationTo, was deleted as part of the
+		// delegation-policy removal). Delegation trust is configured
+		// exclusively via the per-workspace Team tab now
+		// (PUT /api/v1/workspaces/{id}/delegation); this tool does not — and
+		// must not — pretend to grant it.
 		// Seed the privilege rail (FR-008/FR-022, plus bash:deny per CRIT-001 /
 		// bash-tool-spec.md FR-B12): system.agent.create has no tools_cfg
 		// parameter (see Parameters() above — there is no caller-supplied
@@ -382,7 +375,6 @@ func (t *AgentUpdateTool) Parameters() map[string]any {
 			"color":                 map[string]any{"type": "string"},
 			"icon":                  map[string]any{"type": "string"},
 			"heartbeat":             map[string]any{"type": "string", "description": "New HEARTBEAT.md content"},
-			"can_delegate_to":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 			"max_tool_iterations":   map[string]any{"type": "integer"},
 			"timeout_seconds":       map[string]any{"type": "integer"},
 			"restrict_to_workspace": map[string]any{"type": "boolean"},
@@ -463,16 +455,9 @@ func (t *AgentUpdateTool) Execute(_ context.Context, args map[string]any) *tools
 				}
 				updated = append(updated, "model_fallbacks")
 			}
-			// Delegation.
-			if dt, ok := args["can_delegate_to"].([]any); ok {
-				a.CanDelegateTo = nil
-				for _, v := range dt {
-					if s, ok := v.(string); ok && s != "" {
-						a.CanDelegateTo = append(a.CanDelegateTo, s)
-					}
-				}
-				updated = append(updated, "can_delegate_to")
-			}
+			// ADR-037: can_delegate_to is retired — see the matching comment in
+			// AgentCreateTool.Execute above. The workspace Team tab is the only
+			// place delegation trust is configured.
 			return nil
 		}
 		return nil

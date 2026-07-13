@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -73,7 +74,7 @@ func runReplay(t *testing.T, entries []session.TranscriptEntry) ([]replayFrameDe
 	t.Helper()
 	sink := &sliceSink{}
 	rs := computeReplayStats(entries)
-	n, err := streamReplay(context.Background(), "session_test", entries, rs, sink.emit, nil, nil)
+	n, err := streamReplay(context.Background(), "session_test", entries, rs, sink.emit, nil, nil, nil)
 	require.NoError(t, err, "streamReplay must not return an error for valid input")
 	return sink.all(), n
 }
@@ -122,7 +123,7 @@ func TestStreamReplay_Extracted_TestableSignature(t *testing.T) {
 	sink := &sliceSink{}
 	// Pass pre-computed stats; nil entries produce an empty stats struct.
 	rs := computeReplayStats(nil)
-	n, err := streamReplay(context.Background(), "s1", nil, rs, sink.emit, nil, nil)
+	n, err := streamReplay(context.Background(), "s1", nil, rs, sink.emit, nil, nil, nil)
 	require.NoError(t, err, "streamReplay must accept a nil entry slice")
 	// Done frame is NOT counted in framesEmitted (content frames only).
 	assert.Equal(t, 0, n, "empty transcript must emit 0 content frames (done frame excluded from count)")
@@ -398,6 +399,167 @@ func TestReplay_SpawnSpan_Synthesizes_StartEnd(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Wave 3 fix 5b — subagent_end reads the spawn ToolCall's OWN persisted
+// Status/DurationMS, not emitNestedToolCalls' recomputed child aggregate.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// TestReplay_SpawnSpan_StatusFromPersistedRecord_NotChildAggregate is the
+// core regression test for fix 5b: a sub-turn that completed successfully at
+// the LLM level (pkg/agent/subturn.go persists Status="success" onto the
+// spawn/delegate ToolCall's own record via session.UnifiedStore.
+// UpdateToolCallStatus once EventKindSubTurnEnd fires) despite one denied
+// child tool call (Status="error" on the NESTED record) must replay with
+// subagent_end.status == "success" — matching live rendering — not "error".
+// Before the fix, emitNestedToolCalls' aggregateStatus flipped to "error"
+// whenever ANY child tool call had Status=="error", which is a fundamentally
+// different, incompatible semantic from the sub-turn's own real completion
+// status.
+//
+// Traces to: Wave 3 fix 5b (confirmed root cause: live-vs-reload divergence).
+func TestReplay_SpawnSpan_StatusFromPersistedRecord_NotChildAggregate(t *testing.T) {
+	spawnTC := session.ToolCall{
+		ID:         "c1",
+		Tool:       "delegate",
+		Status:     "success", // the REAL persisted end status (Wave 3 fix 5b)
+		DurationMS: 250,       // the REAL persisted wall-clock duration
+		Parameters: map[string]any{"task": "audit go files"},
+		Result:     map[string]any{"result": "done"},
+	}
+	// A denied/errored child tool call. Under the OLD (pre-fix) aggregate
+	// logic this alone would flip the outer span's status to "error" even
+	// though the sub-turn itself completed successfully.
+	deniedChildTC := session.ToolCall{
+		ID:               "t2",
+		Tool:             "bash",
+		Status:           "error",
+		DurationMS:       10,
+		ParentToolCallID: "c1",
+	}
+	entries := []session.TranscriptEntry{
+		assistantEntry("delegating", "jim", spawnTC, deniedChildTC),
+	}
+
+	frames, _ := runReplay(t, entries)
+
+	subEnd := findFrame(frames, "subagent_end")
+	require.NotNil(t, subEnd, "subagent_end frame must be emitted")
+	assert.Equal(t, "success", subEnd.Status,
+		"subagent_end.status must reflect the spawn ToolCall's own persisted status (success), "+
+			"not emitNestedToolCalls' aggregate flipped to error by the denied child")
+	assert.EqualValues(t, 250, subEnd.DurationMs,
+		"subagent_end.duration_ms must equal the spawn ToolCall's own persisted DurationMS (real "+
+			"wall-clock time), not the sum of child tool-call durations (10ms)")
+
+	// The outer tool_call_result frame for the spawn call itself must also
+	// reflect the same persisted success status (buildResult already read
+	// tc.Status/tc.DurationMS directly — this pins that it stays consistent
+	// with the subagent_end frame after the fix).
+	resultFrames := filterByType(frames, "tool_call_result")
+	var spawnResult *replayFrameDecoder
+	for i := range resultFrames {
+		if resultFrames[i].CallID == "c1" {
+			spawnResult = &resultFrames[i]
+		}
+	}
+	require.NotNil(t, spawnResult, "spawn call's own tool_call_result frame must be emitted")
+	assert.Equal(t, "success", spawnResult.Status)
+	assert.EqualValues(t, 250, spawnResult.DurationMs)
+
+	// The nested child's own tool_call_result frame must still independently
+	// report its real "error" status — only the OUTER span's status changed,
+	// per the fix's scope (nested frames are unaffected).
+	var childResult *replayFrameDecoder
+	for i := range resultFrames {
+		if resultFrames[i].CallID == "t2" {
+			childResult = &resultFrames[i]
+		}
+	}
+	require.NotNil(t, childResult, "nested child's own tool_call_result frame must be emitted")
+	assert.Equal(t, "error", childResult.Status,
+		"the nested child tool call's own status must remain 'error' — only the outer span status changed")
+}
+
+// TestReplay_SpawnSpan_StatusFromPersistedRecord_ErrorPropagates verifies the
+// mirror case: when the spawn ToolCall's own persisted Status is "error"
+// (the sub-turn's real EventKindSubTurnEnd/spawnSubTurn Go-level error),
+// subagent_end.status is "error" even when every child tool call succeeded —
+// proving the fix reads the persisted record directly rather than special-
+// casing "success" or silently keeping the old aggregate as a fallback.
+func TestReplay_SpawnSpan_StatusFromPersistedRecord_ErrorPropagates(t *testing.T) {
+	spawnTC := session.ToolCall{
+		ID:         "c9",
+		Tool:       "delegate",
+		Status:     "error",
+		DurationMS: 75,
+	}
+	childTC := session.ToolCall{
+		ID:               "t10",
+		Tool:             "read_file",
+		Status:           "success",
+		DurationMS:       5,
+		ParentToolCallID: "c9",
+	}
+	entries := []session.TranscriptEntry{
+		assistantEntry("delegating", "jim", spawnTC, childTC),
+	}
+
+	frames, _ := runReplay(t, entries)
+
+	subEnd := findFrame(frames, "subagent_end")
+	require.NotNil(t, subEnd)
+	assert.Equal(t, "error", subEnd.Status,
+		"subagent_end.status must reflect the spawn ToolCall's own persisted 'error' status "+
+			"even though the only child tool call succeeded")
+	assert.EqualValues(t, 75, subEnd.DurationMs)
+}
+
+// TestReplay_SpawnSpan_InterruptedStatus_SpanMatchesLive_ButOuterBadgeClamps
+// is the regression proof for Finding F (A-I4 round 5): a synchronous
+// (await-mode) delegate call canceled by its parent turn now persists
+// tc.Status="interrupted" (pkg/agent/loop.go's tcStatus derivation,
+// ToolResult.Interrupted). The subagent_end frame — whose status enum
+// explicitly supports "interrupted" (SubagentEndFrame.yaml) — must read that
+// value back VERBATIM so reload matches exactly what the live WS stream
+// already showed ("interrupted (parent canceled)"), closing the "failed" on
+// reload / "interrupted" live divergence. The OUTER tool_call_result frame
+// for the SAME spawn call has a strictly binary success/error wire enum with
+// no "interrupted" value (ToolCallResultFrame.yaml) — it must clamp down to
+// "error" instead of emitting a contract-invalid frame the SPA would drop.
+func TestReplay_SpawnSpan_InterruptedStatus_SpanMatchesLive_ButOuterBadgeClamps(t *testing.T) {
+	spawnTC := session.ToolCall{
+		ID:         "c42",
+		Tool:       "delegate",
+		Status:     "interrupted", // persisted by pkg/agent/loop.go's tcStatus derivation
+		DurationMS: 340,
+	}
+	entries := []session.TranscriptEntry{
+		assistantEntry("delegating", "jim", spawnTC),
+	}
+
+	frames, _ := runReplay(t, entries)
+
+	subEnd := findFrame(frames, "subagent_end")
+	require.NotNil(t, subEnd, "subagent_end frame must be emitted")
+	assert.Equal(t, "interrupted", subEnd.Status,
+		"subagent_end.status must read the persisted \"interrupted\" status verbatim — this is "+
+			"the exact terminal status live already showed for a parent-canceled synchronous delegate")
+	assert.EqualValues(t, 340, subEnd.DurationMs)
+
+	resultFrames := filterByType(frames, "tool_call_result")
+	var spawnResult *replayFrameDecoder
+	for i := range resultFrames {
+		if resultFrames[i].CallID == "c42" {
+			spawnResult = &resultFrames[i]
+		}
+	}
+	require.NotNil(t, spawnResult, "spawn call's own tool_call_result frame must be emitted")
+	assert.Equal(t, "error", spawnResult.Status,
+		"the OUTER tool_call_result frame has no \"interrupted\" value on its wire contract — it "+
+			"must clamp to \"error\", matching live's own always-binary IsError-derived badge for "+
+			"the same call, not pass \"interrupted\" through and violate the contract")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // TDD Row 9 — TestReplay_NoSpawnSpans_WhenNoChildren
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -518,6 +680,111 @@ func TestReplay_CompactionEntry_Skipped(t *testing.T) {
 		"compaction entry must produce zero frames before done")
 	// Done frame is excluded from framesEmitted (content frames only).
 	assert.Equal(t, 0, n, "compaction-only transcript produces 0 content frames")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Wave 3 fix 5c — EntryTypeTurnCancelled emits a role:"turn_canceled"
+// ReplayMessageFrame; assistant entries carry turn_id.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// TestReplay_TurnCancelledEntry_EmitsReplayMessage is the core regression test
+// for fix 5c: before this fix, streamReplay had NO code path that read
+// EntryTypeTurnCancelled entries at all — a canceled turn simply vanished on
+// reload. This verifies the entry now produces a replay_message frame with
+// role="turn_canceled" and turn_id set from TranscriptEntry.TurnID (mirroring
+// what pkg/agent/cancel.go's onCancelFinish callback persists).
+//
+// Traces to: Wave 3 fix 5c (confirmed root cause: live-vs-reload divergence).
+func TestReplay_TurnCancelledEntry_EmitsReplayMessage(t *testing.T) {
+	cancelEntry := session.TranscriptEntry{
+		ID:                   "session_x_canceled",
+		Type:                 session.EntryTypeTurnCancelled,
+		TurnID:               "turn-42",
+		CancelledByUser:      "user-1",
+		CancelledByChannel:   "webchat",
+		CancelMethod:         "graceful",
+		DescendantsCancelled: []string{"child-1"},
+	}
+	entries := []session.TranscriptEntry{cancelEntry}
+
+	frames, n := runReplay(t, entries)
+
+	types := frameTypes(frames)
+	require.Equal(t, []string{"replay_message", "done"}, types,
+		"a turn_canceled entry must produce exactly one replay_message frame before done")
+	assert.Equal(t, 1, n, "turn_canceled entry counts as one content frame")
+
+	msg := findFrame(frames, "replay_message")
+	require.NotNil(t, msg)
+	assert.Equal(t, "turn_canceled", msg.Role)
+	assert.Equal(t, "turn-42", msg.TurnID, "turn_id must be sourced from TranscriptEntry.TurnID")
+	assert.NotEmpty(t, msg.Content, "content is a required field on ReplayMessageFrame — must not be empty")
+}
+
+// TestReplay_TurnCancelledEntry_NoTurnID verifies that a legacy/degenerate
+// turn_canceled entry with an empty TurnID replays without setting turn_id on
+// the wire (rather than emitting an empty string), matching the same
+// omitempty convention already used for AgentID/Model on assistant frames.
+func TestReplay_TurnCancelledEntry_NoTurnID(t *testing.T) {
+	cancelEntry := session.TranscriptEntry{
+		ID:           "session_y_canceled",
+		Type:         session.EntryTypeTurnCancelled,
+		CancelMethod: "hard",
+	}
+	entries := []session.TranscriptEntry{cancelEntry}
+
+	frames, _ := runReplay(t, entries)
+
+	msg := findFrame(frames, "replay_message")
+	require.NotNil(t, msg)
+	assert.Equal(t, "turn_canceled", msg.Role)
+	assert.Empty(t, msg.TurnID, "turn_id must be omitted when TranscriptEntry.TurnID is empty")
+}
+
+// TestReplay_AssistantEntry_CarriesTurnID verifies that an ordinary assistant
+// entry's TurnID (stamped on every real assistant entry by
+// pkg/agent/turn.go's appendIntermediateAssistantTranscript and
+// appendAssistantTranscript — both set TurnID: ts.turnID — and by
+// pkg/gateway/websocket.go's wsStreamer.Finalize via SetTurnID) is surfaced
+// as turn_id on its replay_message frame — the second half of fix 5c, giving
+// the client the correlation data needed to match a later turn_canceled
+// frame to the specific assistant message it interrupted.
+func TestReplay_AssistantEntry_CarriesTurnID(t *testing.T) {
+	entries := []session.TranscriptEntry{
+		{
+			ID:      "asst-1",
+			Role:    "assistant",
+			Content: "Working on it...",
+			AgentID: "jim",
+			TurnID:  "turn-7",
+		},
+	}
+
+	frames, _ := runReplay(t, entries)
+
+	msg := findFrame(frames, "replay_message")
+	require.NotNil(t, msg)
+	assert.Equal(t, "turn-7", msg.TurnID)
+}
+
+// TestReplay_AssistantEntry_EmptyTurnID_OmitsField verifies that legacy
+// assistant entries written before turn-id stamping landed (TurnID=="") still
+// replay cleanly with no turn_id on the wire — no placeholder, no panic.
+func TestReplay_AssistantEntry_EmptyTurnID_OmitsField(t *testing.T) {
+	entries := []session.TranscriptEntry{
+		{
+			ID:      "asst-legacy",
+			Role:    "assistant",
+			Content: "Legacy entry, no turn id",
+			AgentID: "jim",
+		},
+	}
+
+	frames, _ := runReplay(t, entries)
+
+	msg := findFrame(frames, "replay_message")
+	require.NotNil(t, msg)
+	assert.Empty(t, msg.TurnID, "turn_id must be omitted for legacy entries with no TurnID")
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -682,7 +949,7 @@ func TestReplay_CtxCancelled_StopsCleanly(t *testing.T) {
 		return nil
 	}
 
-	_, err := streamReplay(ctx, "session_cancel", entries, computeReplayStats(entries), emitFn, nil, nil)
+	_, err := streamReplay(ctx, "session_cancel", entries, computeReplayStats(entries), emitFn, nil, nil, nil)
 	assert.ErrorIs(t, err, context.Canceled, "streamReplay must return context.Canceled on ctx cancellation")
 	// goleak.VerifyNone (deferred) will fail the test if any goroutine was leaked.
 }
@@ -1272,3 +1539,174 @@ func TestParseRetryAfterSeconds(t *testing.T) {
 }
 
 func ptrF(f float64) *float64 { return &f }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// A-I4 live/reload parity — multi-step delegation must not flatten a child
+// sub-turn's own narration into top-level bubbles on replay.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// TestReplay_MultiStepDelegation_ChildNarrationSuppressed is the core
+// regression test for the A-I4 live/reload parity fix (live re-verification,
+// 2026-07-12): a delegated child sub-turn shares its parent's
+// transcriptSessionID, so its own intermediate narration and its own
+// final-turn text land in the SAME transcript as the delegator's real
+// messages. Before this fix, streamReplay flattened every entry with
+// non-empty Content into a top-level replay_message frame — doubling the
+// visible bubble count and leaking the delegate's raw internal report as if
+// it were separate top-level turns, none of which ever appeared live (see
+// wsStreamer.Update's shadow-stream ownership gate).
+//
+// This scenario exercises a genuinely multi-step delegation: 5 nested tool
+// calls (web searches) interleaved with 4 rounds of the child's own
+// intermediate narration, plus the child's own final "raw report" text —
+// deliberately larger than the earlier A-I4 fix rounds' own coverage (a
+// 3-segment/2-tool-call case per the delivery report), which did not catch
+// this gap.
+//
+// Traces to: A-I4 (live vs. reload render parity), live re-verification
+// 2026-07-12.
+func TestReplay_MultiStepDelegation_ChildNarrationSuppressed(t *testing.T) {
+	const spawnCallID = "c1"
+	const delegateAgentID = "researcher"
+
+	spawnResultText := "Executive Summary\n\nKey Findings: ...\n\nFinal answer: the research is complete."
+	spawnTC := session.ToolCall{
+		ID:         session.ToolCallID(spawnCallID),
+		Tool:       "delegate",
+		Status:     "success",
+		DurationMS: 39500,
+		Parameters: map[string]any{
+			"task":     "research topic X across multiple sources",
+			"agent_id": delegateAgentID,
+		},
+		Result: map[string]any{"result": spawnResultText},
+	}
+
+	entries := []session.TranscriptEntry{
+		userEntry("please research topic X"),
+		// Parent's own kickoff bubble + the spawning "delegate" tool call.
+		assistantEntry("Let me delegate this to our researcher.", "jim", spawnTC),
+	}
+
+	// 5 nested tool calls (the child's own web searches), each correctly
+	// carrying the PRE-EXISTING ParentToolCallID correlation — unaffected by
+	// this fix, still nested under the spawn span exactly as before.
+	for i := 1; i <= 5; i++ {
+		nestedTC := session.ToolCall{
+			ID:               session.ToolCallID(fmt.Sprintf("t%d", i)),
+			Tool:             "web_search",
+			Status:           "success",
+			DurationMS:       int64(i * 100),
+			ParentToolCallID: session.ToolCallID(spawnCallID),
+		}
+		entries = append(entries, session.TranscriptEntry{
+			ID:        fmt.Sprintf("child-tool-entry-%d", i),
+			Role:      "assistant",
+			AgentID:   delegateAgentID,
+			ToolCalls: []session.ToolCall{nestedTC},
+		})
+	}
+
+	// 4 rounds of the child's OWN intermediate narration — the NEW
+	// ParentSpawnCallID correlation this fix adds. Before the fix, each of
+	// these produced its own top-level replay_message frame on reload,
+	// despite never appearing live.
+	childNarration := []string{
+		"Step 1: let me check available sources.",
+		"Step 2: found a promising lead, digging deeper.",
+		"Step 3: cross-checking against a second source.",
+		"Step 4: reconciling conflicting details before I finalize.",
+	}
+	for i, text := range childNarration {
+		entries = append(entries, session.TranscriptEntry{
+			ID:                fmt.Sprintf("child-narration-%d", i),
+			Role:              "assistant",
+			Content:           text,
+			AgentID:           delegateAgentID,
+			Model:             "z-ai/glm-5.2",
+			TurnID:            "child-turn-1",
+			ParentSpawnCallID: spawnCallID,
+		})
+	}
+
+	// The child's own FINAL raw report — a second, differently-worded
+	// "internal narration" entry distinct from the intermediate drafts
+	// above, and distinct from the delegator's own synthesized final answer
+	// below. This is exactly the "two entirely new blocks of raw text"
+	// symptom from the live re-verification report.
+	entries = append(entries, session.TranscriptEntry{
+		ID:                "child-final-report",
+		Role:              "assistant",
+		Content:           "Executive Summary\n\nKey Findings: ...\n\nConfidence & Gaps: ...\n\nSources: ...",
+		AgentID:           delegateAgentID,
+		Model:             "z-ai/glm-5.2",
+		TurnID:            "child-turn-1",
+		ParentSpawnCallID: spawnCallID,
+	})
+
+	// The delegator's OWN final synthesized answer — a genuine top-level
+	// message, no ParentSpawnCallID, must survive untouched.
+	entries = append(entries, session.TranscriptEntry{
+		ID:      "parent-final-answer",
+		Role:    "assistant",
+		Content: "Here's what I found across the sources you asked about: ...",
+		AgentID: "jim",
+	})
+
+	frames, _ := runReplay(t, entries)
+
+	replayMessages := filterByType(frames, "replay_message")
+
+	// Exactly 3 top-level replay_message frames: the user's own message, the
+	// delegator's kickoff bubble, and the delegator's own final synthesized
+	// answer — matching LIVE's "exactly 3 assistant bubbles" (the bug
+	// report's own reproduction). None of the 4 intermediate narration
+	// entries or the child's own final report entry (5 total suppressed
+	// entries) may leak through as a 4th/5th/6th/7th/8th bubble.
+	require.Len(t, replayMessages, 3,
+		"expected exactly 3 top-level replay_message frames (user + delegator kickoff + "+
+			"delegator final answer) — a regression that flattens the child sub-turn's own "+
+			"narration back into top-level bubbles would inflate this count; got %d: %+v",
+		len(replayMessages), replayMessages)
+
+	for _, m := range replayMessages {
+		assert.NotEqual(t, delegateAgentID, m.AgentID,
+			"no top-level replay_message may be attributed to the delegate's own identity — "+
+				"live rendering never produces a standalone bubble under the delegate's own "+
+				"name/avatar")
+		assert.Empty(t, m.Model,
+			"no top-level replay_message from this scenario may carry a model tag — live "+
+				"rendering never showed one for this delegation (only the top-nav model "+
+				"selector does)")
+		assert.NotContains(t, m.Content, "Executive Summary",
+			"the delegate's own raw internal report text must never surface as a top-level "+
+				"chat bubble")
+		assert.NotContains(t, m.Content, "Step 1:",
+			"the delegate's own intermediate narration must never surface as a top-level "+
+				"chat bubble")
+	}
+
+	// The genuine final answer is still present, byte-identical, at the end.
+	last := replayMessages[len(replayMessages)-1]
+	assert.Equal(t, "Here's what I found across the sources you asked about: ...", last.Content)
+	assert.Equal(t, "jim", last.AgentID)
+
+	// The child's own tool calls are UNAFFECTED by this fix — still nested
+	// under exactly one subagent span, bracketed by subagent_start/
+	// subagent_end, with all 5 nested tool_call_start/result pairs present.
+	require.Len(t, filterByType(frames, "subagent_start"), 1)
+	require.Len(t, filterByType(frames, "subagent_end"), 1)
+	nestedStarts := 0
+	for _, f := range filterByType(frames, "tool_call_start") {
+		if f.ParentCallID == spawnCallID {
+			nestedStarts++
+		}
+	}
+	assert.Equal(t, 5, nestedStarts,
+		"all 5 nested web_search tool calls must still replay, correctly bracketed under the "+
+			"spawn span — this fix only suppresses ASSISTANT TEXT entries, never tool calls")
+
+	// The done frame must still be exactly one, and framesEmitted must not
+	// count the 5 suppressed entries at all.
+	assert.Equal(t, "done", frames[len(frames)-1].Type)
+}

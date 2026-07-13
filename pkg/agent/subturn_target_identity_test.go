@@ -408,8 +408,11 @@ func TestSpawnSubTurn_NativeDispatch_AdoptsFullTargetIdentityIncludingModel(t *t
 	// ANY agent-level setting, including which model the delegate thinks
 	// with.
 	if sawModel != target.Model {
-		t.Errorf("LLM call model = %q, want the TARGET's model %q (native dispatch must not inherit the parent's Model)",
-			sawModel, target.Model)
+		t.Errorf(
+			"LLM call model = %q, want the TARGET's model %q (native dispatch must not inherit the parent's Model)",
+			sawModel,
+			target.Model,
+		)
 	}
 	// Workspace comes from the TARGET too — the identity fix's whole point is
 	// that the sub-turn's file/bash cwd and ContextBuilder-resolved context
@@ -590,7 +593,9 @@ func TestSpawnSubTurn_NativeDispatch_AdoptsTargetToolPolicy(t *testing.T) {
 		t.Fatal("turnStateFromContext(ctx).agent was nil during the sub-turn's own LLM call")
 	}
 	if policyNil {
-		t.Fatal("child sub-turn's LoadToolPolicy() returned nil — toolPolicy was never copied onto the child (deny-all bug)")
+		t.Fatal(
+			"child sub-turn's LoadToolPolicy() returned nil — toolPolicy was never copied onto the child (deny-all bug)",
+		)
 	}
 	if verdict != string(config.ToolPolicyDeny) {
 		t.Errorf(
@@ -769,7 +774,8 @@ func TestSpawnSubTurn_NativeDispatch_AdoptsTargetWorkspaceForFileTools(t *testin
 	if !strings.Contains(toolContent, targetContent) {
 		t.Errorf(
 			"read_file result = %q, want it to contain the TARGET's file content %q (native dispatch must adopt the target's own workspace-bound tool objects, not just the Workspace string field)",
-			toolContent, targetContent,
+			toolContent,
+			targetContent,
 		)
 	}
 }
@@ -887,7 +893,9 @@ func TestSpawnSubTurn_ProviderPoolCopiedFromParent(t *testing.T) {
 		t.Fatal("test setup: no default agent")
 	}
 	if parent.providerPool.Load() == nil {
-		t.Fatal("test setup invariant broken: parent's own providerPool is nil — NewAgentInstance did not publish one, this test cannot distinguish copied-vs-not")
+		t.Fatal(
+			"test setup invariant broken: parent's own providerPool is nil — NewAgentInstance did not publish one, this test cannot distinguish copied-vs-not",
+		)
 	}
 
 	parentTS := &turnState{
@@ -921,7 +929,9 @@ func TestSpawnSubTurn_ProviderPoolCopiedFromParent(t *testing.T) {
 		t.Fatal("mock provider Chat was never called — sub-turn did not run")
 	}
 	if poolNil {
-		t.Error("child sub-turn's providerPool is nil — not copied from baseAgent (FR-007 provider-pinned fallback candidates would silently fall back to the primary provider)")
+		t.Error(
+			"child sub-turn's providerPool is nil — not copied from baseAgent (FR-007 provider-pinned fallback candidates would silently fall back to the primary provider)",
+		)
 	}
 }
 

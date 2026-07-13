@@ -104,22 +104,16 @@ type DelegateTool struct {
 	tasks  map[string]*DelegateTaskState
 	nextID int
 
-	// allowlistCheck is the legacy trust-only fallback for the background
-	// (async=true) mode, consulted only when delegationDenyBackground is nil.
-	// Mirrors the pre-merge SpawnTool.allowlistCheck exactly.
-	allowlistCheck func(targetAgentID string) bool
-	// delegateChecker is the legacy trust-only fallback for the await
-	// (async=false) mode, consulted only when delegationDenyAwait is nil.
-	// Mirrors the pre-merge SubagentTool.delegateChecker exactly.
-	delegateChecker func() bool
-
 	// delegationDenyBackground applies the full delegation-policy gate
 	// (FR-6.2: trust set + mode("background") + depth) for async=true calls.
-	// Takes precedence over allowlistCheck.
+	// This is the ONLY gate for the background mode (ADR-037 retired the
+	// legacy trust-only allowlistCheck fallback — it was only ever consulted
+	// when this was nil, which never happens in production wiring).
 	delegationDenyBackground func(ctx context.Context, targetAgentID string) *DelegationDenial
 	// delegationDenyAwait applies the full delegation-policy gate (FR-6.2:
-	// trust set + mode("await") + depth) for async=false calls. Takes
-	// precedence over delegateChecker.
+	// trust set + mode("await") + depth) for async=false calls. This is the
+	// ONLY gate for the await mode (ADR-037 retired the legacy trust-only
+	// delegateChecker fallback — same reasoning as delegationDenyBackground).
 	delegationDenyAwait func(ctx context.Context, targetAgentID string) *DelegationDenial
 
 	// delegationDepthResolver, when non-nil, resolves the effective onward-
@@ -152,18 +146,6 @@ func NewDelegateTool(defaultModel string, maxTokens int, temperature float64) *D
 // SetSpawner sets the SubTurnSpawner used for both async and sync delegation.
 func (t *DelegateTool) SetSpawner(spawner SubTurnSpawner) {
 	t.spawner = spawner
-}
-
-// SetAllowlistChecker sets the legacy background-mode trust-only fallback,
-// consulted only when SetDelegationDenyCheckerBackground has not been set.
-func (t *DelegateTool) SetAllowlistChecker(check func(targetAgentID string) bool) {
-	t.allowlistCheck = check
-}
-
-// SetDelegateChecker sets the legacy await-mode trust-only fallback,
-// consulted only when SetDelegationDenyCheckerAwait has not been set.
-func (t *DelegateTool) SetDelegateChecker(check func() bool) {
-	t.delegateChecker = check
 }
 
 // SetDelegationDenyCheckerBackground installs the full delegation-policy gate
@@ -306,29 +288,49 @@ func (t *DelegateTool) executeRun(ctx context.Context, args map[string]any, cb A
 
 	// Delegation policy gate (FR-6.2): trust set + mode + depth, mode selected
 	// by the async flag ("background" vs "await") — applied identically
-	// regardless of async value (FR-D3).
+	// regardless of async value (FR-D3). ADR-037: this is now the ONLY gate —
+	// the legacy trust-only allowlistCheck/delegateChecker fallbacks (consulted
+	// only when these were nil, which never happened in production) are
+	// retired.
+	//
+	// FAIL CLOSED, not open, when no checker is wired: an unwired deny-checker
+	// is a configuration error, never a permission grant. This is unreachable
+	// in today's production wiring — pkg/agent/loop.go's registerSharedTools
+	// unconditionally calls SetDelegationDenyCheckerBackground/Await for every
+	// agent — but removing the legacy fallback (which was itself deny-by-
+	// default: config.IsDelegationAllowed/CanSpawnSubagent both returned false
+	// on an unset policy) must not also remove the safety net for the NEXT
+	// wiring bug: a new agent-construction path, a v0.3 plugin-system entry
+	// point, or a refactor slip that forgets to call the setter. Do NOT
+	// "simplify" this back to fail-open — CLAUDE.md Hard Constraint #6 exists
+	// precisely to forbid a silent runtime default here.
 	if async {
 		if t.delegationDenyBackground != nil {
 			if denial := t.delegationDenyBackground(ctx, agentID); denial != nil {
 				return DelegationDeniedResult("delegate", denial)
 			}
-		} else if agentID != "" && t.allowlistCheck != nil {
-			// Backward-compat: legacy trust-only allowlist check.
-			if !t.allowlistCheck(agentID) {
-				return ErrorResult(fmt.Sprintf("not allowed to spawn agent '%s'", agentID))
-			}
+		} else {
+			slog.Error("delegate: no background delegation-deny checker installed — denying by default",
+				"agent_id", agentID)
+			return DelegationDeniedResult("delegate", &DelegationDenial{
+				Reason:        "delegation is not configured for this agent (no policy gate installed) — denying by default",
+				Policy:        DenyTrustSet,
+				TargetAgentID: agentID,
+			})
 		}
 	} else {
 		if t.delegationDenyAwait != nil {
 			if denial := t.delegationDenyAwait(ctx, agentID); denial != nil {
 				return DelegationDeniedResult("delegate", denial)
 			}
-		} else if t.delegateChecker != nil && !t.delegateChecker() {
-			// Backward-compat: legacy boolean trust-only gate.
-			return ErrorResult(
-				"delegation not allowed: no target agent is permitted by this agent's delegation policy",
-			).
-				WithError(fmt.Errorf("delegation policy denied: agent has no delegation targets in its 'to' allowlist"))
+		} else {
+			slog.Error("delegate: no await delegation-deny checker installed — denying by default",
+				"agent_id", agentID)
+			return DelegationDeniedResult("delegate", &DelegationDenial{
+				Reason:        "delegation is not configured for this agent (no policy gate installed) — denying by default",
+				Policy:        DenyTrustSet,
+				TargetAgentID: agentID,
+			})
 		}
 	}
 
@@ -384,6 +386,29 @@ func (t *DelegateTool) executeAsync(
 	// delegate exposes its own soul and a soul-less worker runs with an empty
 	// system role (worker souls are OPTIONAL by design). The label, when set,
 	// is preserved as the task label for the WS subTurn_start frame.
+	//
+	// Critical: true is REQUIRED here, not optional. Background delegation's
+	// entire premise is "the parent moves on; tell me later" — the parent
+	// turn routinely finishes (its own follow-up LLM call after receiving
+	// this async ack, then Finish(false)) in well under the time it takes
+	// the delegate to run even one tool call. Without Critical:true, the
+	// child sub-turn's own loop (pkg/agent/loop.go's "Parent turn ended"
+	// check, evaluated early in each iteration, before the next LLM call)
+	// treats !ts.critical && ts.IsParentEnded() as a signal to exit
+	// gracefully — silently discarding the delegate's real answer for any
+	// task needing more than a single LLM turn (i.e.
+	// any task that calls a tool before its final answer). The delegate's
+	// pre-tool-call narration survives (persisted per-iteration), but the
+	// synthesized final answer is never produced at all: spawnSubTurn's
+	// result comes back with ForLLM/ForUser == "", and asyncCallback's
+	// `content == "" { return }` guard (pkg/agent/loop.go) then silently
+	// drops it — no error, no notification, nothing delivered to the user,
+	// live or on reload. Critical:true lets the child keep running past the
+	// parent's own finish (it still delivers as an "orphan" on the
+	// now-moot pendingResults channel — see deliverSubTurnResult — but its
+	// REAL delivery path, this same cb -> AsyncNotifier.Notify chain, is
+	// unaffected by parent lifecycle and fires correctly once the child
+	// actually finishes). See SubTurnConfig.Critical's doc comment.
 	go func() {
 		result, err := t.spawner.SpawnSubTurn(ctx, SubTurnConfig{
 			Model:            t.defaultModel,
@@ -393,6 +418,7 @@ func (t *DelegateTool) executeAsync(
 			MaxTokens:        t.maxTokens,
 			Temperature:      t.temperature,
 			Async:            true,
+			Critical:         true,
 			TaskLabel:        label,
 			ResolvedMaxDepth: resolvedMaxDepth,
 		})
@@ -415,8 +441,48 @@ func (t *DelegateTool) executeAsync(
 		}
 		t.mu.Unlock()
 
-		if err != nil {
+		switch {
+		case err != nil:
 			result = ErrorResult(fmt.Sprintf("Delegate failed: %v", err)).WithError(err)
+		case result != nil:
+			// Finding B (A-I4 round 4, live-verified): mirror executeSync's
+			// own wrapping below — the raw spawner result's ForUser field
+			// (spawnSubTurn / pkg/agent/subturn.go sets it to
+			// turnRes.finalContent, the CHILD's own unwrapped, first-person
+			// final text) must never reach pkg/agent/loop.go's asyncCallback
+			// unmodified. asyncCallback unconditionally does
+			// `if !result.Silent && result.ForUser != "" { PublishOutbound(...
+			// Content: result.ForUser ...) }` — a DIRECT, immediate publish
+			// with no relation to the wsStreamer/shadow-stream machinery at
+			// all (confirmed via a live background delegation: the leaked
+			// bubble appeared even with no cancellation involved, the moment
+			// the child's own final answer happened to require no wrapping —
+			// e.g. a policy-denied task explaining itself in its own voice).
+			// That silently turns the delegate's own raw narration into a
+			// second, unattributed top-level chat bubble the instant the
+			// parent's own turn has already ended — the common case for
+			// background delegation (Critical:true's own doc comment above:
+			// "the parent turn routinely finishes ... in well under the time
+			// it takes the delegate to run even one tool call"). This is
+			// exactly the content class the design intends to keep hidden,
+			// matching the already-correct sync/await case (executeSync
+			// below never independently publishes anything — its result only
+			// ever becomes a normal tool_call_result) and
+			// pkg/gateway/replay.go's ParentSpawnCallID skip. The LLM-facing
+			// AsyncNotifier continuation turn (still fed the wrapped ForLLM
+			// content below) already informs the user, in the DELEGATOR's
+			// own voice, that the delegation finished and what it found —
+			// clearing ForUser here removes the duplicate, unattributed raw
+			// dump without losing any user-facing information.
+			labelStr := label
+			if labelStr == "" {
+				labelStr = "(unnamed)"
+			}
+			result = &ToolResult{
+				ForLLM:  fmt.Sprintf("Subagent task completed:\nLabel: %s\nResult: %s", labelStr, result.ForLLM),
+				IsError: result.IsError,
+				Async:   true,
+			}
 		}
 
 		// Call callback if provided
@@ -457,7 +523,19 @@ func (t *DelegateTool) executeSync(
 		Async:            false,
 		ResolvedMaxDepth: resolvedMaxDepth,
 	})
-	if err != nil {
+	// Finding F (A-I4 round 5): only take the generic "Delegate execution
+	// failed" shortcut for a genuine dispatch failure — result == nil (e.g.
+	// a panic spawnSubTurn's own recover() deliberately nils result for) or
+	// a real, non-interrupted error. A parent-cancellation interruption
+	// (result.Interrupted, set by spawnSubTurn's cleanup defer using the
+	// SAME classification the live subagent_end frame already reports —
+	// see ToolResult.Interrupted's doc comment) still returns a non-nil err
+	// here (the child's context WAS canceled), but must fall through to the
+	// normal formatting below so result.Interrupted survives onto the
+	// result this function returns — which pkg/agent/loop.go's tool-call-
+	// transcript persistence reads to decide whether a session reload shows
+	// "interrupted" (matching live) or "failed" (the bug this closes).
+	if result == nil || (err != nil && !result.Interrupted) {
 		return ErrorResult(fmt.Sprintf("Delegate execution failed: %v", err)).WithError(err)
 	}
 
@@ -479,11 +557,12 @@ func (t *DelegateTool) executeSync(
 		labelStr, result.ForLLM)
 
 	return &ToolResult{
-		ForLLM:  llmContent,
-		ForUser: userContent,
-		Silent:  false,
-		IsError: result.IsError,
-		Async:   false,
+		ForLLM:      llmContent,
+		ForUser:     userContent,
+		Silent:      false,
+		IsError:     result.IsError,
+		Interrupted: result.Interrupted,
+		Async:       false,
 	}
 }
 

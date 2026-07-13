@@ -780,6 +780,18 @@ func HasSystemAllowsInConstructorSeed(agentID string) bool {
 // listed stays deny-by-default. Returns nil for an agent with no seeded
 // delegation (incl. Explorer/Researcher and the generic worker — leaves that do
 // not delegate onward by default).
+//
+// The modes above are this SEED's own 3-value vocabulary (config.DelegationMode:
+// task/background/await — the delegate tool's real runtime call parameter) and
+// deliberately do NOT change when the workspace trust-edge vocabulary collapses
+// to 2 values (workspace.DelegationMode: direct/task). pkg/gateway's
+// defaultWorkspaceDelegationEdges (via agent.EdgeModeCategory) is the ONE seam
+// that translates this matrix onto a fresh workspace's graph edges, collapsing
+// background/await into a single "direct" entry per edge (deduped) — so e.g.
+// Jim's seeded [task, background, await] becomes a graph edge with
+// Modes: [task, direct], not three separate entries. This function's own
+// output is never itself the graph; it stays a seed DTO consumed once, at
+// workspace-creation time.
 func coreAgentDelegation(id CoreAgentID) *config.DelegationPolicy {
 	ref := func(agentID CoreAgentID) config.AgentRef {
 		return config.AgentRef{Kind: config.AgentRefKindLocal, ID: string(agentID)}
@@ -835,19 +847,34 @@ func coreAgentDelegation(id CoreAgentID) *config.DelegationPolicy {
 		// load-bearing, not incidental: the worker's tool-policy map
 		// (coreAgentSeed's IDWorker branch) deliberately leaves "delegate"
 		// absent so it inherits the global ceiling's "allow" — the delegate
-		// tool's registration-time gates independently require a non-nil
-		// DelegationPolicy (or a workspace delegation-graph edge) before
-		// onward delegation is reachable, so today "delegate: allow" on the
-		// worker is inert. If a future change ever seeds a delegation edge
-		// FROM the worker, that edge plus this inherited "allow" would
-		// combine to make onward delegation real — revisit the worker's
-		// tool-policy overrides at the same time.
+		// tool's runtime gate (buildDelegationDenyChecker, ADR-037) requires a
+		// matching edge in the per-workspace delegation graph before onward
+		// delegation is reachable, so today "delegate: allow" on the worker is
+		// inert (no such edge is seeded FROM the worker). If a future change
+		// ever seeds a delegation edge FROM the worker, that edge plus this
+		// inherited "allow" would combine to make onward delegation real —
+		// revisit the worker's tool-policy overrides at the same time.
 		return nil
 	}
 }
 
 // intPtr returns a pointer to v. Used to set DelegationPolicy.Depth in seeds.
 func intPtr(v int) *int { return &v }
+
+// SeedDelegationEdges returns the seeded canonical delegation policy for a
+// core agent ID (ADR-037, Wave 2). AgentConfig.DelegationPolicy — the field
+// this used to be copied onto at boot — has been removed entirely; the
+// per-workspace delegation graph (pkg/workspace/delegation.go) is the sole
+// runtime delegation-enforcement mechanism. pkg/gateway's
+// defaultWorkspaceDelegationEdges now calls this directly to bootstrap a
+// fresh workspace's delegation graph, instead of reading
+// cfg.Agents.List[i].DelegationPolicy (which no longer exists). Returns nil
+// for any ID with no seeded delegation policy (Explorer/Researcher, the
+// generic worker, and any non-core/custom agent ID) — exactly what
+// coreAgentDelegation returned for those IDs before this export existed.
+func SeedDelegationEdges(id CoreAgentID) *config.DelegationPolicy {
+	return coreAgentDelegation(id)
+}
 
 // SeedConfig ensures all core agents exist in cfg.Agents.List with Locked=true
 // and with the correct constructor-seeded tool policy (FR-010, FR-022).
@@ -952,17 +979,13 @@ func SeedConfig(cfg *config.Config) bool {
 			}
 		}
 
-		// Idempotent delegation-policy migration: seed the base-agent trust graph
-		// only when the existing entry declares none (DelegationPolicy nil). An
-		// operator who customized delegation keeps their choice. Upgrades from a
-		// release that predated the seeded trust graph gain the defaults so
-		// orchestration + worker fan-out work without manual setup.
-		if a.DelegationPolicy == nil {
-			if seedDP := coreAgentDelegation(ca.ID); seedDP != nil {
-				a.DelegationPolicy = seedDP
-				modified = true
-			}
-		}
+		// ADR-037: the per-agent delegation-policy migration that used to live here
+		// (seeding AgentConfig.DelegationPolicy on existing agents) is retired —
+		// that field no longer exists. Delegation seeding now happens only at
+		// workspace-creation time via SeedDelegationEdges, reading coreAgentDelegation
+		// directly (see pkg/gateway/rest_workspace_delegation.go's
+		// defaultWorkspaceDelegationEdges) — there is nothing left to migrate onto
+		// AgentConfig itself.
 
 		// ADR-036: bash is now universally registered (like the old `exec`),
 		// governed exclusively by ToolPolicyCfg — there is no more
@@ -1008,10 +1031,11 @@ func SeedConfig(cfg *config.Config) bool {
 			// Per-agent skill allowlist (FR-9.4): default-DENY enforced at skill
 			// resolution. Nil for agents with no seeded skills (unrestricted).
 			Skills: coreAgentSkills(ca.ID),
-			// Seeded delegation policy so orchestration + worker fan-out work out
-			// of the box (deny-by-default for everything not listed). Nil for the
-			// worker (a leaf — it does not delegate onward by default).
-			DelegationPolicy: coreAgentDelegation(ca.ID),
+			// ADR-037: no more AgentConfig.DelegationPolicy field to seed here —
+			// the workspace-graph seed (SeedDelegationEdges, reading
+			// coreAgentDelegation) is applied at workspace-creation time instead
+			// (pkg/gateway/rest_workspace_delegation.go's
+			// defaultWorkspaceDelegationEdges), not at agent-creation time.
 			Tools: &config.AgentToolsCfg{
 				Builtin: config.AgentBuiltinToolsCfg{
 					Policies: policies,
@@ -1342,7 +1366,7 @@ Run a structured interview — one question at a time:
 3. **Personality**: "How should it communicate? Formal or casual? Concise or detailed?" — Get the voice right.
 4. **Model**: "Want to use the system default model, or pick a different one?" — Default to the system default model. **ALWAYS look up the EXACT model slug before creating — never guess or hand-type it.** Call list_models to get the real, case-sensitive slug from the configured provider (e.g. OpenRouter ids are lowercase like ` + "`minimax/minimax-m3`" + `, NOT ` + "`MiniMax-M3`" + `). A wrong slug means the agent silently can't run.
 5. **Tools**: Reference the "Available Resources" section injected into your context. Suggest tools that match the use case. Ask if they want all tools (inherit) or a specific set (explicit).
-6. **Advanced** (ask only if relevant): delegation targets, heartbeat scheduling, workspace restrictions, timeouts.
+6. **Advanced** (ask only if relevant): heartbeat scheduling, workspace restrictions, timeouts. If delegation comes up, tell the user delegation trust is NOT configured here — after the agent is created, they set which agents it may delegate to (and vice versa) in the workspace's Team tab. create_agent/update_agent have no delegation parameter.
 7. **Review**: Present a complete summary card. Ask for confirmation or adjustments.
 
 ## Summary card (present before creating)
@@ -1355,8 +1379,9 @@ Run a structured interview — one question at a time:
 | Color | {hex color} |
 | Icon | {phosphor icon name} |
 | Tools | {inherit / explicit: list} |
-| Delegation | {agent IDs or "none"} |
 | Soul | {first 2 lines of the prompt...} |
+
+Delegation is not part of this card — it's a separate, post-creation step in the workspace Team tab, not a create_agent parameter.
 
 ## Creating the agent
 
@@ -1364,9 +1389,10 @@ Once confirmed, call create_agent with ALL mandatory parameters:
 - **name**, **description**, **model**, **color**, **icon** — from the card
 - **soul** — the full personality prompt (10-30 lines covering: role, personality traits, how to work, what to avoid). This is the most important parameter.
 - **tools_mode** + **tools_visible** — if the user chose explicit tools
-- **can_delegate_to** — if delegation targets were discussed
 - **heartbeat** — if proactive scheduling was discussed
 - **model_fallbacks** — if fallback models were discussed
+
+After creation, if the user wants this agent to delegate to (or receive delegated work from) other agents, direct them to the workspace's Team tab — that is the only place delegation trust is configured; create_agent/update_agent cannot set it.
 
 Available colors: #22C55E (green), #3B82F6 (blue), #A855F7 (purple), #F97316 (orange), #EF4444 (red), #D4AF37 (gold), #6B7280 (gray), #EAB308 (yellow).
 Available icons: robot, pencil, book, chat-circle, lightning, magnifying-glass, wrench, lightbulb, code, globe, heart, star, brain, shield, music-note, camera, rocket, calendar, envelope, chart-bar.
