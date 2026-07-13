@@ -416,6 +416,20 @@ type processOptions struct {
 	// otherwise starts a fresh turn at depth 0. Interactive/chat turns leave
 	// this 0.
 	InitialDelegationDepth int
+
+	// IsTaskRun marks a turn as a native task-dispatch run (set by
+	// processTaskDirect's runAgentLoop call; false for interactive chat,
+	// heartbeat, and the external-CLI task path, which never reaches
+	// assembleMessages at all). assembleMessages reads it to decide whether to
+	// append a terse TASK_STATUS/TASK_SUMMARY marker reminder to the
+	// breadcrumb block (review B3): a task's marker instruction lives only in
+	// its first user turn (buildPrompt, task_executor.go), and windowTrim
+	// (ADR-028) can evict that turn on a long, tool-heavy task run — this flag
+	// is what lets the reminder re-surface exactly when (and only when) that
+	// eviction has actually happened, piggybacking on the breadcrumb's own
+	// eviction-survives-everything delivery mechanism rather than adding a
+	// second, parallel injection path.
+	IsTaskRun bool
 }
 
 // gatewayPrincipal returns the WS-authenticated gateway principal that an
@@ -3939,6 +3953,7 @@ func (al *AgentLoop) processTaskDirect(
 		TranscriptSessionID:    taskChatID,
 		TranscriptStore:        al.GetAgentStore(agentID),
 		InitialDelegationDepth: delegationDepth,
+		IsTaskRun:              true,
 	})
 }
 
@@ -3958,13 +3973,17 @@ func (al *AgentLoop) processTaskDirect(
 // the run, exactly like a native turn's.
 //
 // An external-CLI worker's tool registry is its OWN CLI's, never Omnipus's —
-// it has no task_update tool wired at all — so the caller
-// (TaskExecutor.finishTaskRun) always takes the "agent did not call
-// task_update" auto-complete-to-done branch for this dispatch kind, using the
-// aggregated CLI output (ForUser, falling back to ForLLM) as the task result
-// (see finishTaskRun's WARN log there — FIX 8 — flagging that an
-// external-CLI task's "success" is unverified prose, never a structured
-// signal).
+// it has no task_update tool wired at all — so buildPrompt's ADR-043
+// TASK_STATUS/TASK_SUMMARY marker instruction (task_executor.go) is this
+// dispatch kind's ONLY possible completion signal. The caller
+// (TaskExecutor.finishTaskRun) parses the aggregated CLI output (ForUser,
+// falling back to ForLLM) for that marker: a found "success"/"failure" line
+// lands the task Done/Failed with the marker's own reported words as Result;
+// no parseable marker at all fails the task closed (StatusFailed) — it is
+// NEVER auto-completed to Done on unverified prose alone. This replaced the
+// former "auto-complete to Done, WARN-only" default (ADR-042 §3's finding);
+// see ADR-043 for the full contract and finishTaskRun's own WarnCF log on the
+// fail-closed path.
 //
 // Delegation-depth bounding: the dispatched CLI child runs as a separate OS
 // process with its own tool registry — it has no delegate/create_task tools
@@ -8323,6 +8342,22 @@ func (al *AgentLoop) assembleMessages(
 			"Use the recall_conversation tool with a turn_range to retrieve them."
 	} else {
 		breadcrumb = buildBreadcrumb(archive, history, breadcrumbTokenCap)
+	}
+	// Review B3: a task's TASK_STATUS/TASK_SUMMARY marker instruction
+	// (buildPrompt, task_executor.go) lives only in the task's first user
+	// turn — a long, tool-heavy task run can trip windowTrim (ADR-028) and
+	// evict that turn entirely, silently dropping the instruction for the
+	// rest of the run. Piggyback a terse reminder onto the SAME breadcrumb
+	// block that already fires exactly when (and only when) something has
+	// been evicted (breadcrumb != ""), scoped to task runs only
+	// (ts.opts.IsTaskRun) — this re-surfaces the instruction precisely when
+	// it risks having been evicted, at near-zero token cost, without a
+	// second parallel injection mechanism.
+	if ts.opts.IsTaskRun && breadcrumb != "" {
+		breadcrumb += fmt.Sprintf(
+			"\n\nReminder (task run): end your final message with `%s: success` or `%s: failure` (ADR-043).",
+			taskStatusLabel, taskStatusLabel,
+		)
 	}
 	spanMsgs := al.activeRecallSpan(ts.sessionKey).Messages()
 	return ts.agent.ContextBuilder.BuildMessages(
