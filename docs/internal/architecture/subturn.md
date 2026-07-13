@@ -142,6 +142,134 @@ SubTurns emit specific events to the Omnipus `EventBus` for observability and de
 | `subturn_result_delivered` | Async result successfully delivered to parent | `SubTurnResultDeliveredPayload{TargetChannel, TargetChatID, ContentLen}` |
 | `subturn_orphan` | Result cannot be delivered (parent finished or channel full) | `SubTurnOrphanPayload{ParentTurnID, ChildTurnID, Reason}` |
 
+## Async Result Delivery (AsyncNotifier — Post-Turn Re-Injection)
+
+The mechanisms described so far — `pendingResults` polling (above, under
+[Agent Loop Integration](#agent-loop-integration)) and Orphan Results (below)
+— both assume the **parent turn is still the one that will consume the
+result**: either it is still running and polls for it, or it has finished and
+the result is simply dropped with an inert event. There is a third, separate
+mechanism for a different situation: an **async-capable tool's background work finishes and
+the result needs to reach the user as a genuinely new turn**, regardless of
+whether the originating turn (or even the originating WebSocket connection)
+still exists.
+
+### What Triggers It
+
+Any tool implementing `tools.AsyncExecutor` (e.g. `DelegateTool` with
+`async=true` — see `pkg/tools/delegate.go`) receives an `AsyncCallback` from
+`ToolRegistry.ExecuteWithContext` and invokes it when its background work
+completes, independent of the turn that launched it. In the agent loop, this
+callback is the `asyncCallback` closure constructed per tool call (around the
+tool-execution loop in `pkg/agent/loop.go`). When the callback fires with
+non-empty `result.ContentForLLM()`, it calls:
+
+```go
+al.asyncNotifier.Notify(ctx, AsyncNotifyEvent{
+    Channel:             ts.channel,
+    ChatID:              ts.chatID,
+    AgentID:             ts.agent.ID,             // the ORIGINATING turn's own agent
+    TranscriptSessionID: ts.transcriptSessionID,   // the ORIGINATING turn's transcript binding
+    SourceKind:          toolName,
+    Content:             content,
+})
+```
+
+`ts` here is the *originating* turn's own `turnState`, captured by the
+closure — critically, this identity is captured **at tool-launch time**, not
+re-derived later, because by the time the callback fires the originating turn
+may have already finished (that is precisely the scenario this mechanism
+exists to handle).
+
+### AsyncNotifier.Notify (`pkg/agent/async_notifier.go`)
+
+`Notify` is the single reusable implementation of this delivery path
+(async-notifier-spec.md). It:
+
+1. Rejects an ambiguous destination (empty `Channel`/`ChatID`) before doing
+   anything else.
+2. Truncates `Content` to a 1MB cap (mirroring `exec`'s background-output
+   buffering convention) and filters sensitive data via
+   `config.FilterSensitiveData`.
+3. Offers a copy of the event to every registered observer, independent of
+   publish outcome (a currently-unused extension point for a future Goals
+   feature — no producer populates it today).
+4. Publishes a synthetic `bus.InboundMessage` on the message bus:
+
+   ```go
+   bus.InboundMessage{
+       Channel: "system",
+       Sender:  bus.SenderInfo{CanonicalID: "async:<SourceKind>"},
+       ChatID:  "<Channel>:<ChatID>",
+       Content: content,
+       // Dedicated carriers (see pkg/bus/types.go) — the originating
+       // turn's real identity and transcript binding, threaded through so
+       // the consumer never has to guess.
+       AsyncOriginAgentID:       event.AgentID,
+       AsyncTranscriptSessionID: event.TranscriptSessionID,
+   }
+   ```
+
+5. Emits `EventKindFollowUpQueued` to the EventBus — but only *after* the
+   publish has actually succeeded (a failed publish never claims a
+   compensating "queued" state).
+
+### Consuming the Result: `processSystemMessage` Starts a Real New Turn
+
+`AgentLoop.Run()`'s dispatch loop routes every `Channel == "system"` inbound
+message directly to `processSystemMessage`, on its own bare goroutine (system
+messages bypass the per-session worker pool entirely — there is no
+serialization scope for them). `processSystemMessage`:
+
+1. Resolves the **originating agent**: if `msg.AsyncOriginAgentID` is set, it
+   looks up that exact agent via `GetRegistry().GetAgent(...)`.
+   `GetRegistry().GetDefaultAgent()` is used **only** as a last resort — an
+   unset origin (a message with no async provenance) or a named agent that no
+   longer exists.
+2. Resolves the **transcript session**: if `msg.AsyncTranscriptSessionID` is
+   set, it resolves the owning store via `AgentLoop.ResolveSessionStore(...)`
+   — the same "run a turn that must land in a specific, pre-existing session"
+   pattern `AgentLoop.ProcessScheduled` and `spawnSubTurn` (its
+   `TranscriptSessionID: parentTS.transcriptSessionID` threading) already use.
+3. Calls `runAgentLoop` with the resolved agent and
+   `TranscriptSessionID`/`TranscriptStore` set on `processOptions`. This is a
+   **genuine new turn**: the resolved agent's own LLM is invoked with
+   `"[System: <sender>] <content>"` as the user message, and — because a
+   transcript session is now bound — the response is persisted to
+   `transcript.jsonl` through the exact same paths any other turn uses
+   (`turnState.appendAssistantTranscript` on the non-streaming/no-live-
+   connection path, or the live `wsStreamer` path when a WebSocket connection
+   is still open for that chat). Persistence does **not** depend on a live
+   connection existing — it depends only on the transcript session still
+   resolving to a store.
+
+### Contrast With Orphan Results
+
+`SubTurnOrphanResultEvent` (see [Orphan Results](#orphan-results) below) is a
+narrower, SubTurn-specific signal: it fires only for a `Critical: true`
+sub-turn whose result can't reach its *still-in-memory* parent's
+`pendingResults` channel (channel full, or the parent has finished). It is
+genuinely inert — no new turn is started, nothing is persisted, and it exists
+purely for external/observability consumers. **AsyncNotifier is a different,
+more general mechanism** (any async-capable tool, not just `Critical`
+sub-turns) that *does* start a real, persisted turn. Do not conflate the two
+when tracing "what happens to a background result after its turn ends."
+
+### Historical Bug (Fixed)
+
+Before this delivery path threaded `AsyncOriginAgentID`/
+`AsyncTranscriptSessionID` through, `processSystemMessage` had no way to know
+either value: it always guessed `GetDefaultAgent()` (misattributing a live
+speaker when the true producer wasn't the default agent) and never bound a
+transcript session at all. Persistence then depended *entirely* on a live
+WebSocket connection still being open for the chat (via the gateway's
+`chatID`→`sessionID` `GetStreamer` lookup) — if that connection had already
+closed (tab close, reload, idle timeout) by the time the async result
+arrived, the result was silently, permanently lost: never written to
+`transcript.jsonl`, unrecoverable even by reopening the conversation. See
+`pkg/agent/async_result_persistence_test.go` for regression coverage of both
+the attribution fix and the persistence-without-a-live-connection fix.
+
 ## API Reference
 
 ### SpawnSubTurn (Public Entry Point)
@@ -239,6 +367,12 @@ When a result becomes orphan:
 - `SubTurnOrphanResultEvent` is emitted to EventBus
 - The result is **NOT** delivered to the LLM context
 - External systems can listen to this event for custom handling
+
+> **Not to be confused with [Async Result Delivery (AsyncNotifier)](#async-result-delivery-asyncnotifier--post-turn-re-injection)
+> above** — a separate, more general mechanism (any async-capable tool, not
+> just `Critical` sub-turns) that *does* start a real, persisted new turn
+> when a background result needs to reach the user after its originating
+> turn has ended. This section's orphan event is genuinely inert by design.
 
 ### Preventing Orphan Results
 - Use `Critical: true` for important SubTurns that must complete

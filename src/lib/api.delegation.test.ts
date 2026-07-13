@@ -50,8 +50,9 @@ describe('fetchWorkspaceDelegation', () => {
       workspace_id: 'ws-1',
       team: ['mia', 'jim', 'planner'],
       edges: [
-        { from_agent: 'jim', to_agent: 'planner', modes: ['await', 'task'], depth: 3 },
+        { from_agent: 'jim', to_agent: 'planner', modes: ['direct', 'task'], depth: 3 },
       ],
+      default_depth: 3,
     }
     fetchSpy.mockResolvedValueOnce(makeJsonResponse(payload))
 
@@ -69,13 +70,14 @@ describe('fetchWorkspaceDelegation', () => {
     expect(result.edges).toHaveLength(1)
     expect(result.edges[0].from_agent).toBe('jim')
     expect(result.edges[0].to_agent).toBe('planner')
-    expect(result.edges[0].modes).toEqual(['await', 'task'])
+    expect(result.edges[0].modes).toEqual(['direct', 'task'])
     expect(result.edges[0].depth).toBe(3)
+    expect(result.default_depth).toBe(3)
   })
 
   it('encodes the workspace id in the URL', async () => {
     fetchSpy.mockResolvedValueOnce(
-      makeJsonResponse({ workspace_id: 'ws weird/id', edges: [] }),
+      makeJsonResponse({ workspace_id: 'ws weird/id', edges: [], default_depth: 3 }),
     )
     const { fetchWorkspaceDelegation } = await import('./api')
     await fetchWorkspaceDelegation('ws weird/id')
@@ -109,12 +111,13 @@ describe('updateWorkspaceDelegation', () => {
     // Then PUT /api/v1/workspaces/{id}/delegation is requested,
     // And the body is { edges: [...] } (the WorkspaceDelegationUpdateRequest shape).
     const edges: WorkspaceDelegationEdge[] = [
-      { from_agent: 'jim', to_agent: 'explorer', modes: ['background'], depth: 2 },
+      { from_agent: 'jim', to_agent: 'explorer', modes: ['direct'], depth: 2 },
     ]
     const resp = {
       workspace_id: 'ws-2',
       team: ['jim', 'explorer'],
-      edges: [{ from_agent: 'jim', to_agent: 'explorer', modes: ['background'], depth: 2 }],
+      edges: [{ from_agent: 'jim', to_agent: 'explorer', modes: ['direct'], depth: 2 }],
+      default_depth: 3,
     }
     fetchSpy.mockResolvedValueOnce(makeJsonResponse(resp))
 
@@ -133,7 +136,7 @@ describe('updateWorkspaceDelegation', () => {
     expect(body.edges).toHaveLength(1)
     expect(body.edges[0].from_agent).toBe('jim')
     expect(body.edges[0].to_agent).toBe('explorer')
-    expect(body.edges[0].modes).toEqual(['background'])
+    expect(body.edges[0].modes).toEqual(['direct'])
     expect(body.edges[0].depth).toBe(2)
 
     expect(result.workspace_id).toBe('ws-2')
@@ -142,7 +145,7 @@ describe('updateWorkspaceDelegation', () => {
 
   it('sends { edges: [] } to clear all delegation', async () => {
     fetchSpy.mockResolvedValueOnce(
-      makeJsonResponse({ workspace_id: 'ws-3', team: ['mia'], edges: [] }),
+      makeJsonResponse({ workspace_id: 'ws-3', team: ['mia'], edges: [], default_depth: 3 }),
     )
     const { updateWorkspaceDelegation } = await import('./api')
     await updateWorkspaceDelegation('ws-3', [])
@@ -153,11 +156,15 @@ describe('updateWorkspaceDelegation', () => {
 
   it('differentiation: two workspaces hit different URLs with different bodies', async () => {
     fetchSpy
-      .mockResolvedValueOnce(makeJsonResponse({ workspace_id: 'ws-a', edges: [] }))
-      .mockResolvedValueOnce(makeJsonResponse({ workspace_id: 'ws-b', edges: [] }))
+      .mockResolvedValueOnce(
+        makeJsonResponse({ workspace_id: 'ws-a', edges: [], default_depth: 3 }),
+      )
+      .mockResolvedValueOnce(
+        makeJsonResponse({ workspace_id: 'ws-b', edges: [], default_depth: 3 }),
+      )
     const { updateWorkspaceDelegation } = await import('./api')
     await updateWorkspaceDelegation('ws-a', [
-      { from_agent: 'mia', to_agent: 'jim', modes: ['await'] },
+      { from_agent: 'mia', to_agent: 'jim', modes: ['direct'] },
     ])
     await updateWorkspaceDelegation('ws-b', [
       { from_agent: 'jim', to_agent: 'ray', modes: ['task'] },
@@ -184,7 +191,7 @@ describe('updateWorkspaceDelegation', () => {
     let thrown: unknown
     try {
       await updateWorkspaceDelegation('ws-x', [
-        { from_agent: 'mia', to_agent: 'mia', modes: ['await'] },
+        { from_agent: 'mia', to_agent: 'mia', modes: ['direct'] },
       ])
     } catch (err) {
       thrown = err

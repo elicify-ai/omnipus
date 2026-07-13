@@ -28,6 +28,7 @@ import {
   buildSaveEdges,
   buildTeamEditState,
   buildTeamGraphModel,
+  DEFAULT_DEPTH_FALLBACK,
   removeEdge,
   removeMember,
   setEdgeDepth,
@@ -295,7 +296,7 @@ export function WorkspaceTeamTab(_props: WorkspaceTeamTabProps) {
   const memberIds = useMemo(() => new Set(editState?.members ?? []), [editState])
 
   const graph = useMemo(() => {
-    if (!editState) return { nodes: [], edges: [] }
+    if (!editState) return { nodes: [], edges: [], defaultDepth: DEFAULT_DEPTH_FALLBACK }
     return buildTeamGraphModel(editState, agents)
   }, [editState, agents])
 
@@ -461,6 +462,7 @@ export function WorkspaceTeamTab(_props: WorkspaceTeamTabProps) {
             edges={graph.edges}
             workerIds={workerIds}
             editState={editState as TeamEditState}
+            defaultDepth={graph.defaultDepth}
             onConnect={handleConnect}
             onToggleMode={handleToggleMode}
             onSetDepth={handleSetDepth}

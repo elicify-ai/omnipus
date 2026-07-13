@@ -26,9 +26,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/elicify-ai/omnipus/pkg/agent"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
@@ -116,11 +118,18 @@ func TestWorkspaceDelegation_GetEmpty(t *testing.T) {
 	assert.Empty(t, d.Edges, "fresh workspace has no edges")
 	require.NotNil(t, d.Team, "team must reflect core_team")
 	assert.ElementsMatch(t, []string{"jim", "ava", "ray", "planner"}, *d.Team)
+	// default_depth is the already-computed delegationDepthCeiling(cfg) — the
+	// test fixture sets subturn.max_depth=3, so that's the exposed value.
+	assert.Equal(t, 3, d.DefaultDepth, "default_depth must expose the resolved depth ceiling")
 }
 
 func TestWorkspaceDelegation_PutAndRoundTrip(t *testing.T) {
 	api, id := buildWorkspaceDelegationTestAPI(t)
-	body := `{"edges":[{"from_agent":"jim","to_agent":"ava","modes":["task","background"],"depth":2},{"from_agent":"planner","to_agent":"ray","modes":["await"]}]}`
+	// Wire modes are the collapsed 2-value vocabulary (direct/task) — "await" and
+	// "background" are retired wire values (still readable from legacy-persisted
+	// disk JSON via DelegationEdge.UnmarshalJSON, but no longer accepted on a
+	// fresh PUT, which is validated against the new WorkspaceDelegationEdge enum).
+	body := `{"edges":[{"from_agent":"jim","to_agent":"ava","modes":["task","direct"],"depth":2},{"from_agent":"planner","to_agent":"ray","modes":["direct"]}]}`
 	w := putDelegation(t, api, id, body)
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 
@@ -138,6 +147,7 @@ func TestWorkspaceDelegation_PutAndRoundTrip(t *testing.T) {
 	assert.Equal(t, 2, *got.Edges[0].Depth)
 	require.NotNil(t, got.Edges[0].Modes)
 	assert.Len(t, *got.Edges[0].Modes, 2)
+	assert.Equal(t, 3, got.DefaultDepth, "default_depth must be present on the PUT response too")
 
 	// Persisted to the workspace file.
 	stored, err := readWorkspaceFile(api.homePath, id)
@@ -163,6 +173,23 @@ func TestWorkspaceDelegation_PutBadMode_400(t *testing.T) {
 	api, id := buildWorkspaceDelegationTestAPI(t)
 	w := putDelegation(t, api, id, `{"edges":[{"from_agent":"jim","to_agent":"ava","modes":["telepathy"]}]}`)
 	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+}
+
+// TestWorkspaceDelegation_PutRetiredLegacyMode_400 proves the RETIRED 3-value
+// wire modes ("await"/"background") are rejected on a fresh PUT — the
+// collapsed 2-value vocabulary (direct/task) is the only wire-accepted set
+// going forward. The legacy strings remain readable from already-persisted
+// disk JSON (DelegationEdge.UnmarshalJSON migrates them transparently), but
+// that migration is a read-path concern only; a new write must use the
+// current vocabulary.
+func TestWorkspaceDelegation_PutRetiredLegacyMode_400(t *testing.T) {
+	for _, mode := range []string{"await", "background"} {
+		t.Run(mode, func(t *testing.T) {
+			api, id := buildWorkspaceDelegationTestAPI(t)
+			w := putDelegation(t, api, id, `{"edges":[{"from_agent":"jim","to_agent":"ava","modes":["`+mode+`"]}]}`)
+			assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+		})
+	}
 }
 
 func TestWorkspaceDelegation_PutDepthExceeded_400(t *testing.T) {
@@ -308,7 +335,7 @@ func TestDelegationEdgeValidate_RejectionCases(t *testing.T) {
 			edge: storedDelegationEdge{
 				FromAgent: "jim",
 				ToAgent:   "ava",
-				Modes:     []workspace.DelegationMode{"task", "background"},
+				Modes:     []workspace.DelegationMode{"task", "direct"},
 				Depth:     intPtrGW(2),
 			},
 			wantErr: "",
@@ -364,7 +391,7 @@ func TestDelegationEdgeValidate_MatchesHandlerWireMessages(t *testing.T) {
 			team,
 			ceiling,
 		),
-		"delegation edge mode telepathy is invalid (valid: await, background, task)",
+		"delegation edge mode telepathy is invalid (valid: direct, task)",
 	)
 	assert.EqualError(t,
 		storedDelegationEdge{FromAgent: "jim", ToAgent: "ava", Depth: intPtrGW(-1)}.Validate(team, ceiling),
@@ -374,44 +401,57 @@ func TestDelegationEdgeValidate_MatchesHandlerWireMessages(t *testing.T) {
 		"delegation edge depth exceeds the maximum allowed depth")
 }
 
-// TestDelegationEdgeValidate_ModesMatchConfig pins the bare-string mode literals
-// duplicated in pkg/workspace (delegationModeAwait/Background/Task) against the
-// canonical config.DelegationMode{Await,Background,Task} constants. pkg/workspace
-// is deliberately dependency-free of pkg/config (to avoid an import cycle:
-// pkg/agent imports pkg/workspace, and pkg/config is imported by both), so the
-// edge-layer literals are NOT imported from config — they are re-declared. This
-// test is the promised single, test-pinned source of truth: it lives in
-// pkg/gateway (which CAN import BOTH packages) and asserts that every canonical
-// config mode is accepted verbatim by workspace.DelegationEdge.Validate, so a
-// future rename in pkg/config can no longer silently drift the edge literals.
+// TestDelegationEdgeValidate_ModesMatchConfig used to pin a 1:1 string-literal
+// equality between pkg/workspace's mode constants and the canonical
+// config.DelegationMode{Await,Background,Task} constants — back when the edge
+// vocabulary mirrored the tool's vocabulary exactly. That equality is GONE by
+// design: the edge vocabulary is now the collapsed {direct,task}, not a 1:1
+// mirror of the tool's 3-value {await,background,task} parameter. Its
+// replacement role: prove the collapse from every one of the 3 real
+// config.DelegationMode values down to the edge's 2-value vocabulary is
+// EXHAUSTIVE — every possible delegate-tool mode maps to a valid()
+// workspace.DelegationMode, none is left unmapped or maps to something the
+// edge validator would reject. This exercises agent.EdgeModeCategory directly
+// (pkg/gateway imports pkg/agent already, so defaultWorkspaceDelegationEdges
+// calls that single exported function rather than maintaining a duplicate
+// seed-side copy — there is no separate seedModeCategory anymore). The
+// enforcement-side call site (enforceEdgeModeAndDepth, pkg/agent/loop.go) has
+// its own exhaustiveness test, TestEdgeModeCategory_ExhaustiveOverConfigModes,
+// in pkg/agent, exercising the exact same function this test calls — both
+// must agree by construction since they are literally the same code, but both
+// tests are kept (rather than merged) so a regression in either package's
+// build tags/wiring still gets caught locally.
 func TestDelegationEdgeValidate_ModesMatchConfig(t *testing.T) {
 	team := map[string]bool{"jim": true, "ava": true}
 	const ceiling = 3
 
-	// Every canonical config mode MUST be accepted as a valid edge mode. If a
-	// config constant is renamed/retyped without updating the workspace literals,
-	// Validate will reject string(thatConstant) and this fails — exactly the drift
-	// the comment in pkg/workspace/delegation.go promises this test guards.
-	for _, mode := range []config.DelegationMode{
-		config.DelegationModeAwait,
-		config.DelegationModeBackground,
-		config.DelegationModeTask,
-	} {
-		edge := workspace.DelegationEdge{
-			FromAgent: "jim",
-			ToAgent:   "ava",
-			// Cross-package equality: config.DelegationMode → workspace.DelegationMode
-			// (both string types) must be accepted verbatim by the typed validator.
-			Modes: []workspace.DelegationMode{workspace.DelegationMode(mode)},
-		}
-		assert.NoErrorf(t, edge.Validate(team, ceiling),
-			"config mode %q must be accepted by the workspace edge validator (literal drift?)",
-			string(mode))
+	cases := []struct {
+		mode config.DelegationMode
+		want workspace.DelegationMode
+	}{
+		{config.DelegationModeAwait, workspace.ModeDirect},
+		{config.DelegationModeBackground, workspace.ModeDirect},
+		{config.DelegationModeTask, workspace.ModeTask},
 	}
 
-	// Negative control: a mode that is NOT one of the config constants must be
-	// rejected, proving Validate is genuinely gating on the literal set (not a
-	// vacuous accept-all that would mask a real drift).
+	for _, tc := range cases {
+		t.Run(string(tc.mode), func(t *testing.T) {
+			got := agent.EdgeModeCategory(tc.mode)
+			assert.Equal(t, tc.want, got, "collapse of config mode %q", tc.mode)
+			assert.True(t, got.Valid(), "collapsed mode %q must be a Valid() workspace.DelegationMode", got)
+
+			// End-to-end: the collapsed mode must actually be accepted by the
+			// shared edge validator, not just satisfy Valid() in isolation.
+			edge := workspace.DelegationEdge{FromAgent: "jim", ToAgent: "ava", Modes: []workspace.DelegationMode{got}}
+			assert.NoErrorf(t, edge.Validate(team, ceiling),
+				"collapsed mode %q (from config mode %q) must be accepted by the workspace edge validator",
+				got, tc.mode)
+		})
+	}
+
+	// Negative control: a mode that is NOT one of the collapsed constants must
+	// still be rejected, proving Validate is genuinely gating on the literal
+	// set (not a vacuous accept-all that would mask a real drift).
 	bogus := workspace.DelegationEdge{
 		FromAgent: "jim",
 		ToAgent:   "ava",
@@ -422,13 +462,19 @@ func TestDelegationEdgeValidate_ModesMatchConfig(t *testing.T) {
 	assert.Contains(t, err.Error(), "is invalid",
 		"rejection must come from the mode-validation branch")
 
-	// Direct cross-package constant equality: the typed workspace.Mode* constants
-	// must equal the config.DelegationMode* string values. This pins the lock-step
-	// the comment in pkg/workspace/delegation.go promises — a rename of either set
-	// that breaks the string equality fails here, independent of Validate.
-	assert.Equal(t, string(config.DelegationModeAwait), string(workspace.ModeAwait))
-	assert.Equal(t, string(config.DelegationModeBackground), string(workspace.ModeBackground))
-	assert.Equal(t, string(config.DelegationModeTask), string(workspace.ModeTask))
+	// Negative control 2: the RETIRED literal 3-value strings, cast directly
+	// (not through agent.EdgeModeCategory), are no longer valid edge modes —
+	// the old 1:1 lock-step this test used to pin is gone.
+	for _, retired := range []config.DelegationMode{config.DelegationModeAwait, config.DelegationModeBackground} {
+		raw := workspace.DelegationEdge{
+			FromAgent: "jim",
+			ToAgent:   "ava",
+			Modes:     []workspace.DelegationMode{workspace.DelegationMode(retired)},
+		}
+		err := raw.Validate(team, ceiling)
+		require.Errorf(t, err, "raw-cast retired mode %q must be rejected by the edge validator", retired)
+		assert.Contains(t, err.Error(), "is invalid")
+	}
 }
 
 // intPtrGW is a local *int helper for building delegation depth fields in the
@@ -437,27 +483,26 @@ func intPtrGW(n int) *int { return &n }
 
 // TestDefaultWorkspaceSeeder_TeamAndEdges proves ensureDefaultWorkspace seeds the
 // team + edges from a config carrying seeded per-agent delegation policies.
+//
+// ADR-037 (Wave 2) rewrote defaultWorkspaceDelegationEdges to read
+// coreagent.SeedDelegationEdges(id) directly instead of
+// cfg.Agents.List[i].DelegationPolicy — that field no longer exists on
+// AgentConfig at all. This test therefore can no longer construct arbitrary
+// custom DelegationPolicy values on the fixture AgentConfigs (there is
+// nowhere left to put them); it instead uses the REAL core-agent IDs so the
+// REAL coreagent seed matrix (coreAgentDelegation) drives the edges, and
+// asserts the exact resulting graph.
 func TestDefaultWorkspaceSeeder_TeamAndEdges(t *testing.T) {
 	home := t.TempDir()
-	depth := 3
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			List: []config.AgentConfig{
 				{ID: "mia", Type: config.AgentTypeCore},
-				{ID: "jim", Type: config.AgentTypeCore, DelegationPolicy: &config.DelegationPolicy{
-					To:    []config.AgentRef{{Kind: config.AgentRefKindLocal, ID: "planner"}},
-					Modes: []config.DelegationMode{config.DelegationModeTask},
-					Depth: &depth,
-				}},
+				{ID: "jim", Type: config.AgentTypeCore},
 				{ID: "ava", Type: config.AgentTypeCore},
 				{ID: "ray", Type: config.AgentTypeCore},
-				{ID: "planner", Type: config.AgentTypeWorker, DelegationPolicy: &config.DelegationPolicy{
-					To: []config.AgentRef{
-						{Kind: config.AgentRefKindLocal, ID: "explorer"},
-						{Kind: config.AgentRefKindLocal, ID: "researcher"},
-					},
-					Modes: []config.DelegationMode{config.DelegationModeAwait},
-				}},
+				{ID: "worker", Type: config.AgentTypeWorker},
+				{ID: "planner", Type: config.AgentTypeWorker},
 				{ID: "explorer", Type: config.AgentTypeWorker},
 				{ID: "researcher", Type: config.AgentTypeWorker},
 			},
@@ -470,18 +515,154 @@ func TestDefaultWorkspaceSeeder_TeamAndEdges(t *testing.T) {
 	require.Len(t, wss, 1)
 	ws := wss[0]
 	assert.True(t, ws.IsDefault)
+	// defaultWorkspaceTeam's hardcoded roster (pre-existing, untouched by
+	// ADR-037) deliberately excludes the general-purpose worker from the
+	// default workspace team — only the 4 base agents + the 3 specialists.
+	// seedEdgesForTeam then drops any edge whose endpoint is off-team, so
+	// every →worker edge in the coreagent seed matrix is filtered out below.
 	assert.ElementsMatch(t,
 		[]string{"mia", "jim", "ava", "ray", "planner", "explorer", "researcher"},
 		ws.CoreTeam)
-	// Edges: jim→planner, planner→explorer, planner→researcher.
-	require.Len(t, ws.Delegation, 3)
-	pairs := make(map[string]bool)
+
+	// Edges: the coreAgentDelegation seed matrix restricted to the default
+	// team (no "worker" node) — Jim→ava/ray (Jim→worker dropped, off-team),
+	// Mia→worker and Ava→worker dropped entirely (their only seeded target),
+	// Ray→researcher (Ray→worker dropped), Planner→explorer/researcher.
+	require.Len(t, ws.Delegation, 5)
+	byPair := make(map[string]storedDelegationEdge, len(ws.Delegation))
 	for _, e := range ws.Delegation {
-		pairs[e.FromAgent+"->"+e.ToAgent] = true
+		byPair[e.FromAgent+"->"+e.ToAgent] = e
 	}
-	assert.True(t, pairs["jim->planner"])
-	assert.True(t, pairs["planner->explorer"])
-	assert.True(t, pairs["planner->researcher"])
+	for _, want := range []string{
+		"jim->ava", "jim->ray",
+		"ray->researcher",
+		"planner->explorer", "planner->researcher",
+	} {
+		assert.Contains(t, byPair, want, "expected seeded edge %s", want)
+	}
+	for _, notWant := range []string{"jim->worker", "mia->worker", "ava->worker", "ray->worker"} {
+		assert.NotContains(t, byPair, notWant,
+			"edge %s must be dropped — worker is not on the default workspace team", notWant)
+	}
+
+	// Jim's SEED modes are still 3-valued (task, background, await —
+	// coreagent.coreAgentDelegation is unchanged), but the TRANSLATED graph
+	// edge collapses+dedupes them to the edge's 2-value vocabulary: task stays
+	// task, background+await collapse to a single direct entry.
+	jimToAva := byPair["jim->ava"]
+	assert.ElementsMatch(t,
+		[]workspace.DelegationMode{workspace.ModeTask, workspace.ModeDirect},
+		jimToAva.Modes, "jim->ava must carry Jim's seeded modes, collapsed+deduped to [direct, task]")
+
+	// Planner's edges are depth-bounded at 2 (bounded subagent delegation, M5).
+	// Planner's SEED modes are [await, task]; the translated edge collapses to
+	// [direct, task].
+	plannerToExplorer := byPair["planner->explorer"]
+	require.NotNil(t, plannerToExplorer.Depth, "planner->explorer must carry the seeded depth cap")
+	assert.Equal(t, 2, *plannerToExplorer.Depth)
+	assert.ElementsMatch(t,
+		[]workspace.DelegationMode{workspace.ModeDirect, workspace.ModeTask},
+		plannerToExplorer.Modes, "planner->explorer must carry Planner's seeded modes, collapsed to [direct, task]")
+
+	// The two research specialists are leaves: no outgoing edges seeded for them.
+	for _, e := range ws.Delegation {
+		assert.NotEqual(t, "explorer", e.FromAgent, "explorer must not have a seeded outgoing edge")
+		assert.NotEqual(t, "researcher", e.FromAgent, "researcher must not have a seeded outgoing edge")
+	}
+}
+
+// TestDefaultWorkspaceDelegationEdges_MatchesCoreagentSeed verifies the
+// TRANSFORMATION LOOP inside defaultWorkspaceDelegationEdges is correct
+// relative to whatever coreagent.SeedDelegationEdges currently returns: for
+// every agent id coreagent.SeedConfig seeds into a fresh config, the edges
+// defaultWorkspaceDelegationEdges derives match coreagent.SeedDelegationEdges(id)
+// field-for-field (target, modes, depth) — i.e. the per-agent →
+// per-target-edge expansion (mode conversion, depth-pointer copy, self/
+// wildcard/remote-a2a filtering) does not drop or corrupt data on the way
+// from the seed matrix to the workspace graph shape.
+//
+// NOTE (pr-test-analyzer, 7-reviewer-gate follow-up): this is a
+// SELF-CONSISTENCY check, not an independent pre/post-ADR-037 baseline —
+// both sides of the comparison ultimately call the same
+// coreagent.SeedDelegationEdges/coreAgentDelegation function, so corrupting
+// the seed DATA itself (as opposed to the transformation loop) would not
+// make this test fail (confirmed via fault injection). The actual content
+// pin — the test that WOULD catch a seed-data regression, because it asserts
+// hardcoded literal expected edges/modes/depths rather than deriving its
+// expectation from the same function under test — is the sibling
+// TestDefaultWorkspaceSeeder_TeamAndEdges above. Keep both: this one for the
+// transformation loop, that one for the actual seeded content.
+func TestDefaultWorkspaceDelegationEdges_MatchesCoreagentSeed(t *testing.T) {
+	cfg := &config.Config{}
+	require.True(t, coreagent.SeedConfig(cfg), "SeedConfig on empty config must modify")
+
+	got := defaultWorkspaceDelegationEdges(cfg)
+
+	// Build the expected edge set directly from coreagent.SeedDelegationEdges,
+	// independent of defaultWorkspaceDelegationEdges's own implementation, by
+	// replaying the exact same derivation the function's doc comment describes.
+	var want []storedDelegationEdge
+	// Deliberately replays defaultWorkspaceDelegationEdges's loop independently
+	// (not via a shared helper) so this test can catch a regression in THAT transformation
+	// logic; sharing a helper would make this test tautological (see the doc comment above).
+	for i := range cfg.Agents.List {
+		ac := &cfg.Agents.List[i]
+		dp := coreagent.SeedDelegationEdges(coreagent.CoreAgentID(ac.ID))
+		if dp == nil || len(dp.To) == 0 {
+			continue
+		}
+		// Independently replay the collapse+dedupe (config.DelegationMode's real
+		// 3-value tool vocabulary → workspace.DelegationMode's collapsed 2-value
+		// edge vocabulary) WITHOUT calling agent.EdgeModeCategory, so this test
+		// can catch a regression in that collapse rule too, not just the
+		// target/depth plumbing around it.
+		modes := make([]workspace.DelegationMode, 0, len(dp.Modes))
+		seenMode := make(map[workspace.DelegationMode]bool, len(dp.Modes))
+		for _, m := range dp.Modes {
+			wm := workspace.ModeDirect
+			if m == config.DelegationModeTask {
+				wm = workspace.ModeTask
+			}
+			if seenMode[wm] {
+				continue
+			}
+			seenMode[wm] = true
+			modes = append(modes, wm)
+		}
+		var depth *int
+		if dp.Depth != nil {
+			d := *dp.Depth
+			depth = &d
+		}
+		for _, ref := range dp.To {
+			if ref.Kind != config.AgentRefKindLocal || ref.ID == "*" || ref.ID == ac.ID {
+				continue
+			}
+			want = append(want, storedDelegationEdge{
+				FromAgent: ac.ID,
+				ToAgent:   ref.ID,
+				Modes:     append([]workspace.DelegationMode(nil), modes...),
+				Depth:     depth,
+			})
+		}
+	}
+
+	require.Len(t, got, len(want), "edge count must match the coreagent seed exactly")
+	gotByPair := make(map[string]storedDelegationEdge, len(got))
+	for _, e := range got {
+		gotByPair[e.FromAgent+"->"+e.ToAgent] = e
+	}
+	for _, w := range want {
+		g, ok := gotByPair[w.FromAgent+"->"+w.ToAgent]
+		require.True(t, ok, "expected edge %s->%s in defaultWorkspaceDelegationEdges output", w.FromAgent, w.ToAgent)
+		assert.ElementsMatch(t, w.Modes, g.Modes, "modes mismatch for %s->%s", w.FromAgent, w.ToAgent)
+		if w.Depth == nil {
+			assert.Nil(t, g.Depth, "depth mismatch for %s->%s (want nil)", w.FromAgent, w.ToAgent)
+		} else {
+			require.NotNil(t, g.Depth, "depth mismatch for %s->%s (want %d, got nil)", w.FromAgent, w.ToAgent, *w.Depth)
+			assert.Equal(t, *w.Depth, *g.Depth, "depth mismatch for %s->%s", w.FromAgent, w.ToAgent)
+		}
+	}
 }
 
 // TestSeedEdgesForTeam_PartialRosterDropsOffTeamEdge proves a custom core_team
@@ -528,6 +709,8 @@ func TestWorkspaceDelegation_Depth0AndEmptyModes_RoundTrip(t *testing.T) {
 
 	got := decodeDelegation(t, getDelegation(t, api, id).Body.Bytes())
 	require.Len(t, got.Edges, 2)
+	assert.Equal(t, 3, got.DefaultDepth,
+		"default_depth is exposed regardless of whether any edge sets its own depth")
 
 	byFrom := make(map[string]gen.WorkspaceDelegationEdge, 2)
 	for _, e := range got.Edges {

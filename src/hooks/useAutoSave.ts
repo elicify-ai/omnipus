@@ -86,20 +86,31 @@ export function useAutoSave<T>(
   // "pending" — the unmount flush + page-hide beacon still fire and retry it.
   // Without this, a thrown save would still mark the edit as saved and the
   // user's delegation-edge changes would silently vanish on reload.
-  //
-  // FIX 2 — stale-resolve guard: only advance this ref when the just-resolved
-  // save is the most recently FIRED one. Without this guard, a concurrent save
-  // A that fires before B but resolves after B writes json_A (stale) into
-  // lastSavedJsonRef while latestDataRef already holds json_B. That leaves
-  // hasPendingChanges()=true and an extra (correct-valued) PUT fires on unmount.
-  // Tracking the fired-sequence counter and comparing at resolution time prevents
-  // the stale write. Latest-wins correctness is preserved: save B always resolves
-  // its own json_B, and A's late resolution is simply ignored.
   const lastSavedJsonRef = useRef<string>('')
-  // Monotonically increasing counter: incremented each time a save is FIRED.
-  // Each save closure captures its own sequence number and only advances
-  // lastSavedJsonRef when its sequence equals the latest fired sequence.
-  const firedSeqRef = useRef<number>(0)
+  // FIX 3 — serialize saves, never let two be in flight at once. Without
+  // this, two debounce cycles firing more than `debounceMs` apart — but with
+  // the FIRST save's async work (network latency, or a pre-save step like an
+  // executor runner-test) still outstanding — dispatch TWO overlapping PUT
+  // requests for the same full-resource replacement. Whichever response the
+  // SERVER processes/returns last wins the write, even when it carries an
+  // OLDER form-state snapshot than the other in-flight request: a classic
+  // last-write-wins clobber (root cause of the agent fallback_models UAT
+  // data-loss bug — a debounced save fired from stale state arrived after a
+  // fresher save and silently wiped its fallback_models).
+  // An earlier stale-resolve guard (a fired-sequence counter compared at
+  // resolution time) only protected this hook's OWN bookkeeping from a
+  // stale-resolving concurrent save; it never stopped the second network
+  // request from going out in the first place, and is redundant now that
+  // serialization guarantees at most one save is ever in flight — it has
+  // been removed rather than kept as unreachable defensive code. Serializing
+  // — never fire while one is outstanding, always re-run against the LATEST
+  // data once the outstanding one settles — makes the final persisted state
+  // deterministic regardless of network ordering. This is strictly safer
+  // than aborting the in-flight fetch: once a PUT has been transmitted,
+  // cancelling the client's wait for the response does not guarantee the
+  // server discards the write.
+  const isSavingRef = useRef(false)
+  const rerunPendingRef = useRef(false)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const fadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const latestDataRef = useRef<T>(data)
@@ -113,25 +124,26 @@ export function useAutoSave<T>(
 
   const doSave = useCallback(async () => {
     if (disabled) return
+    // FIX 3: a save is already in flight — do not fire a second, concurrent
+    // request. Queue a re-run for when the in-flight one settles; that
+    // re-run reads `latestDataRef.current` at THAT time, so it always picks
+    // up the freshest edits rather than whatever snapshot existed when this
+    // call was attempted.
+    if (isSavingRef.current) {
+      rerunPendingRef.current = true
+      return
+    }
+    isSavingRef.current = true
     setStatus('saving')
     setError(undefined)
     // Snapshot what we're about to persist so success marks exactly that JSON
     // saved (data may change again while the request is in flight).
     const inFlightJson = JSON.stringify(latestDataRef.current)
-    // FIX 2: capture the sequence number for this particular fire so we can
-    // guard against a stale-resolving concurrent save clobbering lastSavedJsonRef.
-    firedSeqRef.current += 1
-    const thisSeq = firedSeqRef.current
     try {
       await saveFnRef.current(latestDataRef.current)
       // Only NOW is the data durable — advance the saved marker so
       // hasPendingChanges() flips false for this exact payload.
-      // FIX 2: only advance if no newer save has been fired since this one;
-      // a later-fired save that already resolved would have set a higher seq,
-      // and we must not regress lastSavedJsonRef to our (older) payload.
-      if (thisSeq === firedSeqRef.current) {
-        lastSavedJsonRef.current = inFlightJson
-      }
+      lastSavedJsonRef.current = inFlightJson
       setStatus('saved')
       setLastSavedAt(new Date())
       // Fade back to idle after 2s. Cancel any previous fade timer first to
@@ -152,6 +164,19 @@ export function useAutoSave<T>(
       }
       setStatus('error')
       setError(isApiError(err) ? err.userMessage : err instanceof Error ? err.message : String(err))
+    } finally {
+      // FIX 3: release the guard, then honor any re-run queued while this
+      // save was outstanding — but only if the data actually still differs
+      // from what just (successfully or not) became the persisted marker,
+      // so a queued re-run that this save's own outcome already covers
+      // doesn't fire a redundant no-op PUT.
+      isSavingRef.current = false
+      if (rerunPendingRef.current) {
+        rerunPendingRef.current = false
+        if (JSON.stringify(latestDataRef.current) !== lastSavedJsonRef.current) {
+          void doSave()
+        }
+      }
     }
   }, [disabled])
 
@@ -198,6 +223,42 @@ export function useAutoSave<T>(
   // used by the ~6 other callers that only ever write one endpoint.
   const flushBeacon = useCallback(() => {
     if ((!flushUrl && !beaconFlush) || !initializedRef.current || !hasPendingChanges()) return
+    // FIX 5 (7-reviewer-gate finding, supersedes FIX 4 below): FIX 4 gated
+    // this beacon fetch behind isSavingRef to close an overlapping-PUT race
+    // — correct in isolation, but it traded that race for a worse
+    // regression. flushBeacon only ever runs from
+    // visibilitychange/beforeunload/pagehide — exactly the moment a real
+    // tab-close might happen — and gating the keepalive fetch behind
+    // isSavingRef meant a save-in-flight-at-unload got NO keepalive fetch at
+    // all: the newest edit was queued through doSave()'s own `finally`
+    // block instead, which fires a non-keepalive fetch once the in-flight
+    // save settles — but a non-keepalive fetch has no guarantee of
+    // completing after the page has genuinely unloaded. Net effect: closing
+    // the tab within ~500ms of an edit (while a debounced save happens to be
+    // in flight) had a plausible path to silently drop the newest edit
+    // entirely — the exact class of data-loss bug this whole track exists
+    // to fix, just moved to a narrower trigger condition.
+    //
+    // Fix: fire the keepalive fetch (or the caller-supplied `beaconFlush`,
+    // which carries the same keepalive-on-unload contract — see its option
+    // doc comment) with the LATEST data regardless of whether a save is
+    // already in flight. Accepting a possible duplicate/overlapping
+    // keepalive write is strictly safer for data durability on genuine
+    // unload than guaranteeing none goes out (the backend's optimistic-
+    // concurrency handling, plus the `updated_at`-precision fix landing
+    // alongside this one, makes an overlapping pair of writes recoverable;
+    // a guaranteed-lost edit on tab-close is not). Still queue a re-run
+    // through doSave() too — belt-and-braces for the visibilitychange case,
+    // where the tab may just be backgrounded rather than genuinely closing,
+    // so a normal serialized save (with response handling / status update /
+    // `lastSavedJsonRef` advancement, none of which this raw fetch does)
+    // still happens once the in-flight one settles. This is a DELIBERATE
+    // divergence from the unmount-cleanup site's guard below (which still
+    // skips firing when a save is in flight) — see that comment for the
+    // full 4-site invariant and keep the two in sync on any future change.
+    if (isSavingRef.current) {
+      rerunPendingRef.current = true
+    }
     if (beaconFlush) {
       try {
         beaconFlush()
@@ -257,16 +318,42 @@ export function useAutoSave<T>(
         clearTimeout(fadeTimerRef.current)
         fadeTimerRef.current = null
       }
-      // Flush pending save (fire-and-forget — component is unmounting)
+      // Flush pending save (fire-and-forget — component is unmounting).
+      // Routed through `doSave()` itself — the same function the debounce
+      // timer and `saveNow` fire through — so THIS call site shares
+      // `doSave()`'s serialization guard rather than quietly depending on an
+      // invariant that lives elsewhere. `doSave()` re-checks `isSavingRef`
+      // on entry (a cheap, synchronous check before its own first `await`),
+      // so calling it here is safe.
+      //
+      // Note this hook has a 4th save-firing site — `flushBeacon` (above) —
+      // that does NOT route through `doSave()`: it needs `keepalive: true`
+      // (or a caller-supplied `beaconFlush`), which `doSave()`'s fetch does
+      // not use, so it duplicate-checks `isSavingRef`/`rerunPendingRef` by
+      // hand instead. Per FIX 5 (see `flushBeacon`'s own comment),
+      // `flushBeacon` deliberately does NOT skip firing when a save is
+      // already in flight — unlike this unmount site and the debounce-timer/
+      // `saveNow` sites, which do skip (queueing a re-run) to avoid an
+      // overlapping PUT. A future change to the guard invariant at ANY of
+      // these four sites must be checked against the other three —
+      // `flushBeacon`'s comment cross-references this one; keep them in
+      // sync.
       if (initializedRef.current) {
-        if (hasPendingChanges()) {
-          saveFnRef.current(latestDataRef.current).catch((err) => {
-            console.error('[useAutoSave] unmount flush save failed:', err)
-          })
+        // FIX 3: if a save is already in flight, do NOT fire a second,
+        // concurrent flush PUT straight past the serialize guard in
+        // `doSave` — that would reintroduce the exact overlapping-request
+        // race this hook exists to prevent. Queue a re-run instead; the
+        // in-flight save's own `finally` block re-checks the latest data
+        // and re-fires if anything changed. Refs/closures outlive the
+        // unmount, so this still runs to completion.
+        if (isSavingRef.current) {
+          rerunPendingRef.current = true
+        } else if (hasPendingChanges()) {
+          void doSave()
         }
       }
     }
-  }, [hasPendingChanges])
+  }, [hasPendingChanges, doSave])
 
   return { status, error, lastSavedAt, saveNow: doSave }
 }

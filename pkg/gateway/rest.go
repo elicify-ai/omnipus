@@ -1556,6 +1556,22 @@ func applyAgentOverrides(ag *gen.Agent, ac *config.AgentConfig) {
 		}
 		ag.ShellPolicy = &sp
 	}
+	// fallback_models: P-F2 — this was persisted correctly (createAgent/updateAgent
+	// both write ac.FallbackModels to config.json) but never echoed back on ANY
+	// response path (list/get/update all built gen.Agent without ever touching
+	// this field), so a GET could never confirm what was saved and a reopened
+	// agent's UI always rendered the field empty even though it was safely on
+	// disk — mirrors the ShellPolicy fix above. config.FallbackModel.Provider is
+	// a bare string (empty when unset); gen.FallbackModel.Provider is a pointer,
+	// so translate unconditionally (mirrors getMemorySettings' identical
+	// config->wire FallbackModel translation for recap_fallback_models).
+	if len(ac.FallbackModels) > 0 {
+		fm := make([]gen.FallbackModel, len(ac.FallbackModels))
+		for i, m := range ac.FallbackModels {
+			fm[i] = gen.FallbackModel{Model: m.Model, Provider: &m.Provider}
+		}
+		ag.FallbackModels = &fm
+	}
 }
 
 // buildAgentDefaults populates the execution-related fields from config defaults.
@@ -1652,7 +1668,6 @@ func (a *restAPI) listAgents(w http.ResponseWriter) {
 			ag.Skills = &skills
 		}
 		setAgentExecutorResponse(&ag, ac.Subagents)
-		setAgentDelegationPolicyResponse(&ag, ac.DelegationPolicy)
 		if ac.UpdatedAt != nil {
 			ag.UpdatedAt = ac.UpdatedAt
 		}
@@ -1708,7 +1723,6 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 				ag.Skills = &skills
 			}
 			setAgentExecutorResponse(&ag, ac.Subagents)
-			setAgentDelegationPolicyResponse(&ag, ac.DelegationPolicy)
 			if ac.UpdatedAt != nil {
 				ag.UpdatedAt = ac.UpdatedAt
 			}
@@ -2099,7 +2113,6 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		fallbackModels *[]gen.FallbackModel
 		shellPolicyIn  *agentCreateShellPolicyInput
 		toolsCfgIn     *agentCreateToolsCfgInput
-		delegationIn   *delegationPolicyInput
 		executorIn     *executorRequestInput
 	)
 
@@ -2120,7 +2133,6 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		fallbackModels = vreq.FallbackModels
 		shellPolicyIn = agentCreateShellPolicyFromWire(vreq.ShellPolicy)
 		toolsCfgIn = agentCreateToolsCfgFromWire(vreq.ToolsCfg)
-		delegationIn = delegationInputFromCreateRequestMain(&vreq)
 	case "Subagent":
 		var vreq gen.AgentCreateRequestSubagent
 		if !decodeAgentCreateVariant(w, raw, *typePeek.Type, variantName, &vreq) {
@@ -2137,7 +2149,6 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		fallbackModels = vreq.FallbackModels
 		shellPolicyIn = agentCreateShellPolicyFromWire(vreq.ShellPolicy)
 		toolsCfgIn = agentCreateToolsCfgFromWire(vreq.ToolsCfg)
-		delegationIn = delegationInputFromCreateRequestSubagent(&vreq)
 	case "subagent_3p":
 		var vreq gen.AgentCreateRequestSubagent3p
 		if !decodeAgentCreateVariant(w, raw, *typePeek.Type, variantName, &vreq) {
@@ -2150,7 +2161,6 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		color = vreq.Color
 		icon = vreq.Icon
 		soul = vreq.Soul
-		delegationIn = delegationInputFromCreateRequestSubagent3p(&vreq)
 		executorIn = &executorRequestInput{
 			Cli:          executorCliStr(vreq.Executor.Cli),
 			CliPath:      vreq.Executor.CliPath,
@@ -2311,28 +2321,9 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	// Delegation policy (to/modes/depth enforced; accept_from/budget inert). Mapped
-	// into AgentConfig.DelegationPolicy so it is actually persisted. Validate
-	// targets/modes/depth before any work so a bad request 400s rather than
-	// persisting an invalid policy. There is no existing stored policy on
-	// create, so inert fields come solely from the request. delegation_policy
-	// is allowed on all three variants, including subagent_3p (a behavior
-	// change from the pre-W1 flat contract, where a 3p create with
-	// delegation_policy 400'd).
-	if delegationIn != nil {
-		cfg := a.agentLoop.GetConfig()
-		// selfID = the new agent's id (known at create time) so a self-ref A→A is
-		// rejected. A Subagent/worker created with a non-empty to[] is now allowed
-		// (bounded by depth, not the worker tier). No existing stored policy on
-		// create → grandfathering is a no-op.
-		dp, errMsg := buildDelegationPolicy(delegationIn, nil, rosterIDSet(cfg), delegationDepthCeiling(cfg),
-			ac.ID, peerDelegationGraph(cfg, ac.ID))
-		if errMsg != "" {
-			jsonErr(w, http.StatusBadRequest, errMsg)
-			return
-		}
-		ac.DelegationPolicy = dp
-	}
+	// ADR-037: delegation_policy is retired from the wire entirely — the
+	// per-workspace delegation graph (Team tab) is the sole delegation
+	// mechanism. There is nothing left to map/validate/persist here.
 	// Seed the privilege rail (FR-008/FR-022): custom agents always get every
 	// static builtin tool explicitly denied except a narrow, conservative
 	// read-only allow-list (coreagent.NewCustomAgentToolsCfg —
@@ -2459,9 +2450,6 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 					"executor": executorConfigToMap(ac.Subagents.Executor),
 				}
 			}
-			if ac.DelegationPolicy != nil {
-				newAgent["delegation_policy"] = delegationPolicyToMap(ac.DelegationPolicy)
-			}
 			if ac.ShellPolicy != nil {
 				shellPolicyMap := map[string]any{}
 				if ac.ShellPolicy.EnableDenyPatterns {
@@ -2555,7 +2543,6 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		ag.Skills = &skillsResp
 	}
 	setAgentExecutorResponse(&ag, ac.Subagents)
-	setAgentDelegationPolicyResponse(&ag, ac.DelegationPolicy)
 	if createReloadWarning != "" {
 		ag.Warning = &createReloadWarning
 	}
@@ -2755,17 +2742,19 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 		return
 	}
 
-	// ADR-035: sandbox_profile is retired from the wire entirely.
-	// decodeAgentCreateVariant already rejects it on the create path via
-	// unconditional DisallowUnknownFields, but decodeAndValidate's fast path
-	// below is non-strict by default (validate_inbound defaults false) and
-	// gen.AgentUpdateRequest no longer has a SandboxProfile field at all —
-	// without this explicit raw-body sniff a client still sending
-	// {"sandbox_profile":...} would have the field silently dropped by Go's
-	// default JSON decode, and the PUT would report 200 with no change
-	// applied instead of the loud 400 this codebase's own create-path
-	// convention expects. Read+restore r.Body so the normal decode below is
-	// unaffected.
+	// ADR-035 / ADR-037: sandbox_profile and delegation_policy are retired from
+	// the wire entirely. decodeAgentCreateVariant already rejects retired
+	// fields on the create path via unconditional DisallowUnknownFields, but
+	// decodeAndValidate's fast path below is non-strict by default
+	// (validate_inbound defaults false) and gen.AgentUpdateRequest no longer
+	// has either field at all — without this explicit raw-body sniff a client
+	// still sending {"sandbox_profile":...} or {"delegation_policy":...} would
+	// have the field silently dropped by Go's default JSON decode, and the PUT
+	// would report 200 with no change applied instead of the loud 400 this
+	// codebase's own create-path convention expects (ADR-035 §7 established
+	// this raw-body-sniff pattern for exactly this failure mode; ADR-037
+	// follows the same precedent rather than accepting the silent drop). Read
+	// +restore r.Body so the normal decode below is unaffected.
 	rawBody, readErr := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if readErr != nil {
 		jsonErr(w, http.StatusBadRequest, "could not read request body")
@@ -2775,6 +2764,14 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	if bytes.Contains(rawBody, []byte(`"sandbox_profile"`)) {
 		jsonErr(w, http.StatusBadRequest,
 			`sandbox_profile is retired — use the global god-mode switch (POST /api/v1/gateway/god-mode)`)
+		return
+	}
+	if bytes.Contains(rawBody, []byte(`"delegation_policy"`)) {
+		jsonErr(
+			w,
+			http.StatusBadRequest,
+			`delegation_policy is retired — delegation is now configured exclusively via the workspace Team tab (PUT /api/v1/workspaces/{id}/delegation)`,
+		)
 		return
 	}
 
@@ -2959,30 +2956,11 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 		}
 		updatedExecutor = merged
 	}
-	// Delegation policy (to/modes/depth enforced; accept_from/budget inert).
-	// MERGE semantics: when req.DelegationPolicy is non-nil, set to/modes/depth from
-	// the request but PRESERVE any existing AcceptFrom/Budget already on the stored
-	// policy (the editor does not send those inert fields). When req.DelegationPolicy
-	// is nil, leave the stored policy untouched (do not wipe seeded delegation).
-	// Validate before any persistence so a bad target/mode/depth 400s.
-	var updatedDelegationPolicy *config.DelegationPolicy
-	delegationPolicyTouched := false
-	if dpIn := delegationInputFromUpdateRequest(&req); dpIn != nil {
-		delegationPolicyTouched = true
-		dp, errMsg := buildDelegationPolicy(
-			dpIn,
-			foundAgent.DelegationPolicy, // existing stored policy (may be nil)
-			rosterIDSet(cfg),
-			delegationDepthCeiling(cfg),
-			foundAgent.ID,                           // selfID: reject A→A self-delegation
-			peerDelegationGraph(cfg, foundAgent.ID), // reject multi-hop cycle (A→B→A)
-		)
-		if errMsg != "" {
-			jsonErr(w, http.StatusBadRequest, errMsg)
-			return
-		}
-		updatedDelegationPolicy = dp
-	}
+	// ADR-037: delegation_policy is retired from the wire entirely — the
+	// per-workspace delegation graph (Team tab) is the sole delegation
+	// mechanism. There is nothing left to merge/validate/persist here. See
+	// the raw-body sniff below (before decode) for the loud-400 rejection of
+	// a client still sending this retired field.
 	// Persist to config.json BEFORE mutating the live config.
 	// Capture the new values to apply after persistence succeeds.
 	newName := foundAgent.Name
@@ -3328,21 +3306,29 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 							delete(agentMap, "skills")
 						}
 					}
-					// Delegation policy: only write when the caller sent the field.
-					// When omitted (delegationPolicyTouched=false), the stored policy is
-					// left untouched so seeded delegation is not wiped. The merged value
-					// already preserves inert accept_from/budget from the stored policy.
-					if delegationPolicyTouched {
-						if updatedDelegationPolicy != nil {
-							agentMap["delegation_policy"] = delegationPolicyToMap(updatedDelegationPolicy)
-						} else {
-							delete(agentMap, "delegation_policy")
-						}
-					}
+					// ADR-037: delegation_policy is retired — no longer written here.
+					// A pre-upgrade config.json's stray delegation_policy key (if any)
+					// is left as an unknown field on disk; the loader ignores it.
 					// Heartbeat is workspace-scoped (ADR-027); per-agent heartbeat fields
 					// are ignored on PUT. Workspace handler manages member_configs.
 					// Optimistic concurrency timestamp: refresh on every successful save.
-					agentMap["updated_at"] = now.Format(time.RFC3339)
+					// RFC3339Nano (not RFC3339): the frontend uses this field as an
+					// ordinal "is this newer" comparator (lastIncorporatedUpdatedAtRef in
+					// AgentProfile.tsx). Whole-second RFC3339 precision let two distinct
+					// autosave writes within the same wall-clock second collide on an
+					// identical truncated timestamp, defeating the ordinal comparison and
+					// silently discarding a legitimate newer save (reopening the P-F2
+					// fallback_models data-loss class this fix wave closed). Sub-second
+					// precision is schema-safe: Agent.yaml/AgentUpdateRequest.yaml both
+					// declare updated_at as `format: date-time`, which permits RFC3339's
+					// optional fractional-second component, and time.Parse(time.RFC3339, ...)
+					// already parses fractional seconds correctly even though the RFC3339
+					// layout constant doesn't declare them (verified: Go's time.Parse
+					// special-cases a trailing fractional-second field regardless of
+					// layout) — so the read-back parse at persistedAt above, and
+					// config.AgentConfig.UpdatedAt's *time.Time JSON unmarshal, both keep
+					// working unmodified against the higher-precision value.
+					agentMap["updated_at"] = now.Format(time.RFC3339Nano)
 					break
 				}
 			}
@@ -3405,16 +3391,15 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	// config-only and do NOT need a reload — avoiding the WebSocket drop and context loss
 	// that a full reload causes mid-conversation.
 	//
-	// A delegation_policy change MUST reload: each agent instance's spawn/subagent/task
-	// delegation deny-checkers are bound to the config captured at agent-instance
-	// construction (registerSharedTools → buildDelegationDenyChecker, etc.). Persisting
-	// the new policy + SwapConfig alone does NOT rebuild those closures, so the running
-	// agent would keep enforcing the OLD allowlist — a tightening edit (revoke a target /
-	// drop a mode) would silently not apply until a restart. TriggerReload →
-	// executeReload → ReloadProviderAndConfig → registerSharedTools reconstructs every
-	// agent's deny-checkers from the swapped config, applying the new policy live.
-	needsReload := req.Soul != nil ||
-		req.DelegationPolicy != nil
+	// ADR-037: delegation_policy is retired, so it no longer appears in this
+	// condition. Delegation edits now go exclusively through the per-workspace
+	// delegation graph (PUT /api/v1/workspaces/{id}/delegation), which
+	// buildDelegationDenyChecker reads fresh from disk on every delegation
+	// call (workspace.ReadDelegation) rather than from a closure baked at
+	// agent-instance construction time — so a graph edit already takes effect
+	// on the NEXT turn with no reload required at all, unlike the old
+	// per-agent policy this replaced.
+	needsReload := req.Soul != nil
 	var reloadWarning string
 	if needsReload {
 		if err := a.agentLoop.TriggerReload(); err != nil {
@@ -3522,10 +3507,16 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 					ag.Skills = &skills
 				}
 				setAgentExecutorResponse(&ag, ac.Subagents)
-				setAgentDelegationPolicyResponse(&ag, ac.DelegationPolicy)
 				if ac.UpdatedAt != nil {
 					ag.UpdatedAt = ac.UpdatedAt
 				}
+				// P-F2: echo shell_policy/fallback_models on the PUT response too —
+				// this loop previously never called applyAgentOverrides at all, so
+				// updateAgent's own response (unlike list/get) never reflected either
+				// field even though both persist correctly above. Runs before the
+				// request-value overrides below so an explicit req.MaxToolIterations
+				// (also touched by applyAgentOverrides) still wins.
+				applyAgentOverrides(&ag, &ac)
 				break
 			}
 		}

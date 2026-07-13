@@ -309,6 +309,75 @@ func TestWindowTrim_NoDroppedMarker(t *testing.T) {
 		"windowTrim MUST NOT write any [dropped ...] marker")
 }
 
+// ---------- Bug 2 case 2: recall-span-drop-alone-under-budget ----------
+
+// TestWindowTrim_RecallSpanDropAloneReturnsOK is a regression test for a
+// windowTrim return-value bug found in review: when an active recall span
+// alone (not any window Turn) pushes the assembled context over the raw
+// ContextWindow threshold, and dropping that span brings the window back
+// under the compaction budget, windowTrim used to report this exactly like a
+// genuine compaction failure (ok=false, NothingToTrim=false) — even though a
+// real, useful eviction (FR-019: drop the recall span first) just happened.
+// That misclassification made runTurn's timeout-recovery branch treat it
+// identically to "TruncateHistory could not shrink the window" and abandon
+// the retry outright.
+//
+// windowTrim now reports this the same way it reports a normal window
+// eviction (ok=true) — dropping the recall span IS a real eviction (FR-019
+// is step 3 of the documented algorithm) — so the caller rebuilds the
+// assembled messages (dropping the now-stale recall-span content) and
+// retries, instead of abandoning the turn.
+//
+// Traces to: FR-019.
+func TestWindowTrim_RecallSpanDropAloneReturnsOK(t *testing.T) {
+	const (
+		cw = 100000
+		mt = 2000
+	)
+	al, _ := buildTrimTestAgentLoop(t, cw, mt)
+	const sk = "recall-drop-case2-session"
+
+	// A small persisted window — nowhere near the budget on its own.
+	history := makeTurn("earlier question", "earlier answer")
+	seedHistory(t, al, sk, history)
+
+	// A huge active recall span (~150,000 estimated tokens) that alone
+	// exceeds the 100,000-token ContextWindow, forcing windowTrim's FR-019
+	// drop-span-first branch. Once dropped, the tiny window above
+	// comfortably fits the compaction budget — this is case 2, distinct
+	// from both the "nothing to evict" (case 1) and "TruncateHistory
+	// genuinely failed" (case 3) paths.
+	hugeRecallContent := strings.Repeat("r", 375000) // ~150,000 estimated tokens
+	recallMsgs := []providers.Message{
+		trimTestMsg("user", hugeRecallContent),
+		trimTestMsg("assistant", "recalled answer"),
+	}
+	al.setRecallSpan(sk, newRecallSpan(1, 1, recallMsgs, []int{1}))
+
+	agent := al.GetRegistry().GetDefaultAgent()
+	require.NotNil(t, agent)
+	windowBefore := agent.Sessions.GetHistory(sk)
+
+	result, ok := al.windowTrim(agent, sk)
+
+	assert.True(t, ok,
+		"windowTrim must report ok=true when dropping the recall span alone "+
+			"brings the window back under budget (a real eviction happened)")
+	assert.False(t, result.NothingToTrim,
+		"NothingToTrim must not be set for a genuine recall-span eviction")
+	assert.Equal(t, 0, result.DroppedMessages,
+		"no window Turns were evicted — only the recall span was dropped")
+	assert.Equal(t, len(windowBefore), result.RemainingMessages,
+		"the window itself must be unchanged (only the recall span was evicted)")
+
+	windowAfter := agent.Sessions.GetHistory(sk)
+	assert.Equal(t, windowBefore, windowAfter,
+		"the persisted window must be untouched by a recall-span-only eviction")
+
+	assert.Nil(t, al.activeRecallSpan(sk),
+		"the recall span must have been dropped (FR-019 pressure eviction)")
+}
+
 // ---------- T19: TestModelSwitch_ReWindowsNoSummary ----------
 
 // TestModelSwitch_ReWindowsNoSummary verifies that handleModelSwitch re-fits

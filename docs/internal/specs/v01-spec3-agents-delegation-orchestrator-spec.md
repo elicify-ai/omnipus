@@ -1,5 +1,7 @@
 # Spec-3 — Agent Roster Re-cast, Delegation Policy, Orchestrator & Max-Parallel (v0.1.0 Foundation)
 
+> **⚠ Partially SUPERSEDED by [ADR-037](../architecture/ADR-037-remove-global-delegation-policy.md) (2026-07-11).** The "Delegation Policy" design described throughout this spec — the per-agent `delegation_policy` field (`to`/`accept_from`/`modes`/`depth`/`budget`), the legacy `can_delegate_to` field, the global `/agents/trust` trust-graph screen, and the `CanSpawnSubagent`/`buildDelegateChecker` enforcement — was **removed entirely**. It had been dead in the live enforcement path since commit `822202ad` (2026-06-27), which made the **per-workspace `Delegation[]` graph** (`pkg/workspace/delegation.go`) the sole runtime authority. Delegation trust is now **workspace-scoped only** (edit it in a workspace's Team tab). The roster re-cast, Orchestrator, and Max-parallel portions of this spec still stand; treat every `delegation_policy` / `/agents/trust` reference below as historical.
+
 - **Spec:** 3 of 6 (v0.1.0 Foundation)
 - **Source ADR:** [ADR-019](../architecture/ADR-019-v01-workspaces-foundation.md) — FR-3 + FR-6
 - **Status:** Draft → pending `/grill-spec` (GATE C)

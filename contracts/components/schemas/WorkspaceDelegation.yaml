@@ -4,11 +4,13 @@ description: >
   surfaced in the workspace Team tab and the Agents-area "Workspace Teams" view —
   always workspace-scoped, never global. Nodes are the workspace team's agents
   (core_team ∪ every agent named by an edge); edges are the directed delegation
-  authorizations. The per-agent delegation_policy remains as an enforcement cap,
-  but this graph is what the UI edits.
+  authorizations. This graph is the sole delegation-enforcement mechanism — there
+  is no separate global per-agent delegation policy; the graph is both what the
+  UI edits and what the runtime enforces.
 required:
   - workspace_id
   - edges
+  - default_depth
 properties:
   workspace_id:
     type: string
@@ -30,4 +32,17 @@ properties:
     items:
       type: string
     example: ["mia", "jim", "planner", "explorer", "researcher"]
+  default_depth:
+    type: integer
+    minimum: 0
+    description: >
+      The currently-resolved depth ceiling an edge inherits when its own `depth`
+      is unset — the global configured default if set, otherwise the
+      defaultMaxSubTurnDepth backstop. This is a read-only, already-computed
+      value (no new depth logic; see delegationDepthCeiling) exposed purely so
+      the UI can always pre-fill/display a concrete number for any edge instead
+      of an ambiguous blank/"∞" state. It does NOT change per-edge enforcement:
+      an edge with depth unset still dynamically tracks the live global default
+      at enforcement time, this field is a snapshot for display purposes only.
+    example: 3
 additionalProperties: false

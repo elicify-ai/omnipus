@@ -151,6 +151,9 @@ type replayFrameDecoder struct { // not-wire-format: decode-only test assertion 
 	TaskLabel    string `json:"task_label,omitempty"`
 	// Phase 1B (FR-013/FR-014): per-turn model on replay_message.
 	Model string `json:"model,omitempty"`
+	// Wave 3 fix 5c: turn-correlation id on replay_message (assistant and
+	// turn_canceled entries).
+	TurnID string `json:"turn_id,omitempty"`
 	// Phase 1B (FR-014): ReplayErrorFrame wire fields. Decoder-only — production
 	// code uses the generated type directly. The `Message` field above (the
 	// legacy ErrorFrame.message) doubles as the replay_error.message sink
@@ -216,6 +219,62 @@ type WSHandler struct {
 	// have to wait up to ~60 s before seeing any code.  The cache delivers the
 	// last-seen code immediately on subscribe via subscribePairingInterest.
 	lastPairingState sync.Map
+
+	// streamOwners tracks, per chatID, which turn currently "owns" live
+	// TokenFrame delivery to that chat connection. Keys are chatID (string);
+	// values are streamOwnerClaim (owning turnID + the time it claimed the
+	// slot, the latter backing the stale-claim reclaim safety net described
+	// below).
+	//
+	// Root cause this closes (live UAT bug, persona "Alex"): TokenFrame and
+	// DoneFrame (contracts/asyncapi.yaml) carry only session_id (+ an
+	// optional agent_id on TokenFrame) — no turn/span discriminator — and
+	// TokenFrame.yaml's own documented contract is "the SPA appends each
+	// token's content to the last assistant message bubble". That is correct
+	// only when a single turn streams to a given chatID at a time. A
+	// background (async) delegate sub-turn that outlives its own already-
+	// finished parent (see pkg/agent/steering.go's sessionTurnsStillAlive doc
+	// comment for that half of the bug) can resurface and stream
+	// concurrently with a LATER, unrelated turn's own delegate call on the
+	// SAME chatID; without this gate, both streamers' Update() calls race to
+	// send TokenFrames the client can only append to whichever bubble
+	// happens to be open, word-interleaving two unrelated narrations into
+	// one garbled message — confirmed live and reproducible on reload
+	// (the live view, not the transcript JSONL, is what a naive client
+	// caches and replays; each streamer's own transcript entry, keyed by its
+	// own TurnID, was already correctly isolated before this fix).
+	//
+	// claimStreamOwnership/wsStreamer.Update/wsStreamer.ReleaseStreamOwnership
+	// implement the gate: the first streamer to claim a chatID's slot for
+	// its turnID streams live as before (zero behavior change for the
+	// common single-active-stream case); any OTHER concurrent turnID's
+	// streamer still accumulates every token into its own private
+	// wsStreamer.accumulated (so its Finalize-written transcript entry stays
+	// fully correct) but withholds the live TokenFrame send until the owner
+	// releases its claim — so two concurrent streams can never interleave
+	// on the wire, regardless of what the frontend does with the frames it
+	// receives.
+	//
+	// Release points: wsStreamer.Finalize (the normal, once-per-turn path
+	// via turnState's deferred finalizeStreamer), wsStreamer.Cancel (no
+	// production call sites today, kept as defensive symmetry), and
+	// turnState.finalizeStreamer's B4 abandoned-turn early return
+	// (pkg/agent/turn.go) — which deliberately skips the rest of Finalize
+	// (no done frame, no transcript write for a stuck goroutine) but MUST
+	// still release any ownership claim its streamer held, via the
+	// streamOwnershipReleaser optional interface. Found missing in a
+	// 7-reviewer gate (architect/silent-failure-hunter/type-design-analyzer/
+	// pr-test-analyzer unanimous): a background delegate that became the
+	// live owner for a chatID and was later MarkAbandoned()'d by
+	// cancel.go's PHASE C left that chatID's entry pointing at the dead
+	// turn's ID forever — no other release path touched it, permanently
+	// shadowing every later turn on the same chat. claimStreamOwnership's
+	// staleness check (streamOwnershipStaleAfter) is the backstop for any
+	// FUTURE bug in this family: an unreleased claim older than the
+	// threshold can be force-reclaimed by a new claimant, so a leak
+	// degrades to "briefly wrong attribution" instead of "permanently mute
+	// chat".
+	streamOwners sync.Map
 
 	upgrader websocket.Upgrader
 }
@@ -1131,11 +1190,25 @@ func (h *WSHandler) handleChatMessage(
 				})
 				return
 			}
-			// M4: if the resumed session has no workspace binding yet but the
-			// client supplied one (workspace chat), stamp it now so tasks the
-			// agent creates this turn land on the active workspace's board. Never
-			// rewrite an existing binding — the first binding wins.
-			if workspaceID != "" && existingMeta != nil && existingMeta.WorkspaceID == "" {
+			// M4: track the ACTIVE workspace on every message, not just the first
+			// one. The SPA resends the CURRENTLY active workspace_id on every
+			// outbound frame (src/store/chat.ts sendMessage, read live from
+			// useWorkspacesStore) specifically so a task/delegation this turn
+			// creates lands on whatever workspace the operator is looking at
+			// right now — including an ongoing chat session that started in one
+			// workspace and is continuing in another. A stale "first binding
+			// wins" rule broke that: a delegation edge wired on a workspace's
+			// Team tab AFTER the session's first bind would never be consulted
+			// by resolveEffectiveWorkspaceID (pkg/agent/loop.go), which reads
+			// this same session meta fresh every turn — so the UI's "Saved just
+			// now" was genuine (see TestWorkspaceDelegation_EdgeWiredViaTeamTabPersistsForLiveSession)
+			// but the running session kept enforcing/advertising delegation against its
+			// ORIGINAL workspace until the operator started a brand new session.
+			// Only skip the rewrite when this message carries no workspace_id at
+			// all (workspaceID == "") — an absent value must never blank out an
+			// existing binding (e.g. a non-workspace-aware channel message
+			// resuming a workspace-bound session), it just leaves it as-is.
+			if workspaceID != "" && existingMeta != nil && existingMeta.WorkspaceID != workspaceID {
 				wsCopy := workspaceID
 				if err := store.SetMeta(sessionID, session.MetaPatch{WorkspaceID: &wsCopy}); err != nil {
 					slog.Warn("ws: could not bind workspace to session", "session_id", sessionID, "error", err)
@@ -1528,12 +1601,40 @@ func (h *WSHandler) handleAttachSession(
 	// h.sessions is keyed by chatID for the lifetime of the connection — do NOT
 	// add an attachID alias here. taskChatIDs maps chatID→attachID so the event
 	// forwarder can match events emitted under the attached session's ID.
+	//
+	// Finding E (A-I4 round 5): h.sessionIDs[chatID] — this connection's OWN
+	// chatID→session mapping, read by fanOutToSessionPeers/matchesEvent/
+	// GetStreamer to decide "does this connection currently belong to session
+	// X" — used to be written ONLY after replay+hydrate finished (see the
+	// second h.sessionIDs[chatID] assignment below, previously the sole
+	// writer). Between this function's entry and that later write, the
+	// mapping kept whatever value a PRIOR attach_session on this same
+	// connection last set it to (or "" for a brand-new connection). A
+	// connection that attaches twice in quick succession — e.g. a reconnect
+	// whose first attach_session targets a stale/leftover session id
+	// (frontend activeSessionId not yet corrected to the URL's real session)
+	// followed immediately by a second, correcting attach_session for the
+	// right session — left h.sessionIDs[chatID] pointing at the FIRST
+	// (wrong, unrelated) session for this whole replay window. Any OTHER,
+	// genuinely unrelated session's background delegate fanning out a live
+	// token/done frame during that window (fanOutToSessionPeers, matched
+	// purely by sessionID equality) found this connection listed as one of
+	// its peers and delivered straight into wc.sendCh — landing mid-replay,
+	// live-verified as a stray, uninstructed bubble duplicating another
+	// session's already-delivered content with a garbled leading fragment.
+	// Setting the real mapping HERE, atomically with taskChatIDs/the
+	// self-map, closes the window: from this point on h.sessionIDs[chatID]
+	// always reflects the CURRENT attach target, so no other session can
+	// ever be mistaken for a peer of this connection. Purely additive — the
+	// second assignment after replay/hydrate is left in place as a
+	// redundant, idempotent reaffirmation.
 	h.mu.Lock()
 	if oldTID, ok := h.taskChatIDs[chatID]; ok {
 		delete(h.sessionIDs, oldTID)
 	}
 	h.taskChatIDs[chatID] = attachID
 	h.sessionIDs[attachID] = attachID
+	h.sessionIDs[chatID] = attachID
 	h.mu.Unlock()
 
 	// Arm the divert: any sendConnGenFrame calls after this point will route live
@@ -1564,10 +1665,17 @@ func (h *WSHandler) handleAttachSession(
 	// Pass pre-computed rs into streamReplay so it doesn't rebuild
 	// spawnIDsWithChildren for a second time.
 	var mediaStore media.MediaStore
+	var isSpanActive func(string) bool
 	if h.agentLoop != nil {
 		mediaStore = h.agentLoop.GetMediaStore()
+		// Wire real sub-turn liveness into replay so a spawn/delegate call
+		// whose placeholder ack (async delegation: Status="success",
+		// DurationMS≈0) has not yet been corrected by the real
+		// EventKindSubTurnEnd is never shown as a fabricated "done" — see
+		// agent.AgentLoop.IsSubTurnActiveForSpawnCall's doc comment.
+		isSpanActive = h.agentLoop.IsSubTurnActiveForSpawnCall
 	}
-	framesEmitted, replayErr := streamReplay(ctx, attachID, entries, rs, emitFn, mediaStore, h.toolStore)
+	framesEmitted, replayErr := streamReplay(ctx, attachID, entries, rs, emitFn, mediaStore, h.toolStore, isSpanActive)
 
 	durationMS := time.Since(replayStart).Milliseconds()
 
@@ -1978,6 +2086,35 @@ func sendGenWSFrame(conn *websocket.Conn, frame any) {
 // runtime cap higher up the stack for legitimately stuck sub-turns.
 var orphanWatchdogTimeout = 60 * time.Second
 
+// orphanWatchdogMaxRechecks bounds how many times startOrphanWatchdog will
+// reschedule after agent.AgentLoop.IsSubTurnActiveForSpawnCall reports "still
+// active" before giving up and force-emitting the synthetic interrupted
+// terminal frame regardless of what the liveness check reports (fail-closed).
+//
+// The re-check-and-reschedule loop is correctly bounded for the NORMAL case
+// by the pre-existing sub-turn context timeout (pkg/agent/subturn.go's
+// defaultSubTurnTimeout, 5 minutes by default, or subturn.default_timeout_minutes
+// when configured) — that timeout cancels the child's context, runTurn
+// returns, and IsSubTurnActiveForSpawnCall eventually reports false once
+// spawnSubTurn's cleanup defer finishes persisting the real terminal status
+// (see turnState.subTurnRecordPersisted's doc comment, pkg/agent/turn.go).
+// But a genuinely wedged/deadlocked turn — a goroutine that neither returns
+// nor panics, e.g. blocked on a tool call that does not honor context
+// cancellation — has no ceiling of its own: IsSubTurnActiveForSpawnCall would
+// report "active" forever (isFinished never flips), and without this bound
+// the watchdog would reschedule indefinitely, logging only at slog.Debug
+// (invisible at typical production log levels) and never emitting a terminal
+// frame for that span.
+//
+// Default 15 reschedules x orphanWatchdogTimeout's default 60s = 15 minutes,
+// comfortably (~3x) above pkg/agent/subturn.go's defaultSubTurnTimeout (5
+// minutes) — a legitimately still-running sub-turn should never come close to
+// exhausting this many reschedules; long before it would, its own context
+// timeout has fired and IsSubTurnActiveForSpawnCall is already reporting
+// false. Configurable so tests can override to a small value without
+// sleeping for the real 15 minutes.
+var orphanWatchdogMaxRechecks = 15
+
 // openSpanEntry tracks an in-flight subagent span in the event forwarder.
 type openSpanEntry struct {
 	spanID          string
@@ -2011,6 +2148,46 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 		// Note: using exclusive lock for a read-only lookup. Acceptable for now;
 		// migrate h.mu to sync.RWMutex if contention becomes measurable.
 		return tid != "" && evtChatID == tid
+	}
+
+	// matchesEvent extends matchesChatID with a session-based fallback so a
+	// live event reaches a connection that reattached to the same PERSISTED
+	// session after a reload, even though the event's own ChatID still names
+	// a now-stale, pre-reload connection.
+	//
+	// Root cause this closes (reload/replay "never self-updates" bug, live
+	// UAT re-verification 2026-07): ServeHTTP mints a brand-new chatID
+	// ("webchat:" + uuid.New()) for EVERY WebSocket connection, including a
+	// browser reload — there is no client-supplied continuity. A turn's own
+	// ChatID (turnState.chatID, threaded onto every event payload below) is
+	// stamped ONCE at turn-dispatch time from whichever connection sent the
+	// message, and never changes even if that connection later closes. A
+	// background delegate (Critical:true, 7dd9e7a5) can legitimately keep
+	// running long after its ORIGINATING connection is gone — matchesChatID
+	// alone can then NEVER match its live completion event against a NEW
+	// connection that reattached via attach_session, because rule 1 compares
+	// against the stale chatID, and the taskChatIDs alias (rule 2) maps this
+	// connection's chatID to the session_id, not to that stale chatID. The
+	// browser was stuck showing whatever replay served at attach time until
+	// a SECOND reload happened to catch the by-then-corrected transcript.
+	//
+	// evtSessionID/currentSessionID compares by the durable session_id
+	// instead: h.sessionIDs[chatID] is the session THIS connection currently
+	// has open (set by handleAttachSession/handleChatMessage), and
+	// evtSessionID is threaded end-to-end on every relevant event payload
+	// (SubTurnSpawnPayload, SubTurnEndPayload, ToolExec*Payload,
+	// TurnEndPayload). session_id survives a reload; chatID does not.
+	matchesEvent := func(evtChatID, evtSessionID string) bool {
+		if matchesChatID(evtChatID) {
+			return true
+		}
+		if evtSessionID == "" {
+			return false
+		}
+		h.mu.Lock()
+		currentSessionID := h.sessionIDs[chatID]
+		h.mu.Unlock()
+		return currentSessionID != "" && evtSessionID == currentSessionID
 	}
 
 	// sessionIDForChat looks up the active session_id for a given chatID so every
@@ -2049,48 +2226,138 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 	// W1-9: the goroutine also exits cleanly when wc.doneCh is closed (connection torn down).
 	startOrphanWatchdog := func(entry *openSpanEntry, reason string) {
 		go func() {
-			select {
-			case <-entry.closeCh:
-				// Span resolved normally — nothing to do.
-				return
-			case <-wc.doneCh:
-				// Connection closed while waiting — exit cleanly without emitting.
-				return
-			case <-time.After(orphanWatchdogTimeout):
-				// Span is still open after timeout. Emit interrupted.
-				if reason == "unknown" {
-					slog.Error("ws: subagent span orphaned with unknown reason — synthesizing interrupted end",
-						"event", "span_orphan_interrupted",
-						"span_id", entry.spanID,
-						"parent_call_id", entry.parentCallID,
-						"reason", reason,
-					)
-				} else {
-					slog.Warn("ws: subagent span orphaned — synthesizing interrupted end",
-						"event", "span_orphan_interrupted",
-						"span_id", entry.spanID,
-						"parent_call_id", entry.parentCallID,
-						"reason", reason,
-					)
+			rechecks := 0
+			for {
+				select {
+				case <-entry.closeCh:
+					// Span resolved normally — nothing to do.
+					return
+				case <-wc.doneCh:
+					// Connection closed while waiting — exit cleanly without emitting.
+					return
+				case <-time.After(orphanWatchdogTimeout):
+					// Span is still open after timeout. Before declaring it
+					// orphaned, confirm the real sub-turn genuinely isn't
+					// still running.
+					//
+					// Root cause this closes (transient false "interrupted"
+					// status flicker, live UAT re-verification 2026-07): this
+					// watchdog arms the instant the PARENT turn ends
+					// (EventKindTurnEnd, IsRoot), which — for a background
+					// delegate — routinely happens within a second or two of
+					// dispatch. Before 7dd9e7a5 ("background delegate's
+					// final answer lost when parent finishes first"), a
+					// delegate needing more than one LLM turn silently exited
+					// its own loop early the instant its parent ended, so
+					// the real EventKindSubTurnEnd almost always arrived
+					// (closing this span via closeCh) well inside
+					// orphanWatchdogTimeout. Critical:true now lets it run
+					// for its full, genuine duration — so a normal,
+					// still-working delegation can legitimately still be
+					// open when this timer fires, and synthesizing
+					// status:"interrupted" here fabricated a false terminal
+					// state for a turn that was, in truth, still generating
+					// (self-correcting only once the real EventKindSubTurnEnd
+					// arrived later and overwrote it). Re-checking real
+					// liveness via agent.AgentLoop.IsSubTurnActiveForSpawnCall
+					// and rescheduling instead of firing turns this
+					// heuristic, timeout-only guess into a confirm-or-wait
+					// check — a genuinely orphaned span (the real check
+					// below returns false) is still reported exactly as
+					// before.
+					stillActive := h.agentLoop != nil && h.agentLoop.IsSubTurnActiveForSpawnCall(entry.parentCallID)
+					forceCeiling := false
+					if stillActive {
+						rechecks++
+						if rechecks > orphanWatchdogMaxRechecks {
+							// Ceiling exceeded: a genuinely wedged/deadlocked
+							// turn — a goroutine that neither returns nor
+							// panics, e.g. blocked on a tool call not
+							// honoring context cancellation — would
+							// otherwise keep IsSubTurnActiveForSpawnCall
+							// reporting "active" forever, and this loop
+							// would reschedule indefinitely, never emitting
+							// a terminal frame for the span. Fail closed:
+							// force the synthetic interrupted frame below
+							// regardless of what the liveness check
+							// reports, matching this codebase's established
+							// fail-closed posture elsewhere in delegation
+							// gating.
+							forceCeiling = true
+							slog.Error("ws: subagent span still reports active past the watchdog's reschedule "+
+								"ceiling — force-emitting interrupted (fail-closed)",
+								"event", "span_orphan_ceiling_exceeded",
+								"span_id", entry.spanID,
+								"parent_call_id", entry.parentCallID,
+								"reason", reason,
+								"rechecks", rechecks,
+								"max_rechecks", orphanWatchdogMaxRechecks,
+							)
+						} else {
+							// Escalate Debug -> Warn once the loop has
+							// re-checked more than once or twice, so a
+							// genuinely stuck span (heading toward the
+							// ceiling above) is discoverable by an operator
+							// without changing production log levels —
+							// Debug alone is invisible at typical
+							// production log levels.
+							logFn := slog.Debug
+							if rechecks > 2 {
+								logFn = slog.Warn
+							}
+							logFn("ws: subagent span still genuinely active past watchdog timeout — rescheduling",
+								"event", "span_orphan_recheck_still_alive",
+								"span_id", entry.spanID,
+								"parent_call_id", entry.parentCallID,
+								"reason", reason,
+								"rechecks", rechecks,
+								"max_rechecks", orphanWatchdogMaxRechecks,
+							)
+							continue
+						}
+					}
+					// Span is still open after timeout AND either the real
+					// sub-turn is confirmed no longer active, or the
+					// reschedule ceiling was exceeded (forceCeiling, already
+					// logged at Error level above). Emit interrupted.
+					switch {
+					case forceCeiling:
+						// Already logged above; avoid a second, redundant log line.
+					case reason == "unknown":
+						slog.Error("ws: subagent span orphaned with unknown reason — synthesizing interrupted end",
+							"event", "span_orphan_interrupted",
+							"span_id", entry.spanID,
+							"parent_call_id", entry.parentCallID,
+							"reason", reason,
+						)
+					default:
+						slog.Warn("ws: subagent span orphaned — synthesizing interrupted end",
+							"event", "span_orphan_interrupted",
+							"span_id", entry.spanID,
+							"parent_call_id", entry.parentCallID,
+							"reason", reason,
+						)
+					}
+					// Use generated.SubagentEndFrame (contract-first migration).
+					reason_ := reason // capture for pointer
+					agentID_ := entry.agentID
+					endFrame := generated.SubagentEndFrame{
+						Type:      string(generated.WsFrameTypeSubagentEnd),
+						SessionId: entry.sessionID,
+						SpanId:    entry.spanID,
+						Status:    "interrupted",
+						Message:   &reason_,
+					}
+					if agentID_ != "" {
+						endFrame.AgentId = &agentID_
+					}
+					if entry.parentCallID != "" {
+						pc := entry.parentCallID
+						endFrame.ParentCallId = &pc
+					}
+					sendConnGenFrame(wc, string(generated.WsFrameTypeSubagentEnd), endFrame)
+					return
 				}
-				// Use generated.SubagentEndFrame (contract-first migration).
-				reason_ := reason // capture for pointer
-				agentID_ := entry.agentID
-				endFrame := generated.SubagentEndFrame{
-					Type:      string(generated.WsFrameTypeSubagentEnd),
-					SessionId: entry.sessionID,
-					SpanId:    entry.spanID,
-					Status:    "interrupted",
-					Message:   &reason_,
-				}
-				if agentID_ != "" {
-					endFrame.AgentId = &agentID_
-				}
-				if entry.parentCallID != "" {
-					pc := entry.parentCallID
-					endFrame.ParentCallId = &pc
-				}
-				sendConnGenFrame(wc, string(generated.WsFrameTypeSubagentEnd), endFrame)
 			}
 		}()
 	}
@@ -2100,7 +2367,7 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 		case agent.EventKindSubTurnSpawn:
 			// FR-H-004: emit subagent_start when a sub-turn is spawned.
 			p, ok := evt.Payload.(agent.SubTurnSpawnPayload)
-			if !ok || !matchesChatID(p.ChatID) {
+			if !ok || !matchesEvent(p.ChatID, p.SessionID) {
 				continue
 			}
 			slog.Debug("ws: subagent_start",
@@ -2139,7 +2406,7 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 		case agent.EventKindSubTurnEnd:
 			// FR-H-004: emit subagent_end when a sub-turn finishes.
 			p, ok := evt.Payload.(agent.SubTurnEndPayload)
-			if !ok || !matchesChatID(p.ChatID) {
+			if !ok || !matchesEvent(p.ChatID, p.SessionID) {
 				continue
 			}
 			slog.Debug("ws: subagent_end",
@@ -2171,6 +2438,15 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 				pc := string(p.ParentSpawnCallID)
 				endFrameEnd.ParentCallId = &pc
 			}
+			// FIX 4 (7-reviewer-gate follow-up): surface SubTurnEndPayload.Reason
+			// (populated by spawnSubTurn's cleanup defer, pkg/agent/subturn.go,
+			// only when Status == "interrupted") as the wire contract's
+			// SubagentEndFrame.reason. The frontend (SubagentBlock.tsx) already
+			// renders this — it just never received a value before this fix.
+			if p.Reason != "" {
+				reason := p.Reason
+				endFrameEnd.Reason = &reason
+			}
 			sendConnGenFrame(wc, string(generated.WsFrameTypeSubagentEnd), endFrameEnd)
 			// Signal the watchdog that the span closed normally.
 			closeSpan(string(p.ParentSpawnCallID))
@@ -2181,7 +2457,7 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 			// (ChatID matches). Sub-turn ends from sibling sub-turns would otherwise
 			// spuriously interrupt still-running spans on this connection.
 			p, ok := evt.Payload.(agent.TurnEndPayload)
-			if !ok || !p.IsRoot || !matchesChatID(p.ChatID) {
+			if !ok || !p.IsRoot || !matchesEvent(p.ChatID, p.SessionID) {
 				continue
 			}
 			// Determine watchdog reason from the terminal status of the parent turn.
@@ -2205,7 +2481,7 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 
 		case agent.EventKindToolExecStart:
 			p, ok := evt.Payload.(agent.ToolExecStartPayload)
-			if !ok || !matchesChatID(p.ChatID) {
+			if !ok || !matchesEvent(p.ChatID, p.SessionID) {
 				continue
 			}
 			// Prefer SessionID from payload; fall back to map lookup for legacy events.
@@ -2239,7 +2515,7 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 			sendConnGenFrame(wc, string(generated.WsFrameTypeToolCallStart), startF)
 		case agent.EventKindToolExecEnd:
 			p, ok := evt.Payload.(agent.ToolExecEndPayload)
-			if !ok || !matchesChatID(p.ChatID) {
+			if !ok || !matchesEvent(p.ChatID, p.SessionID) {
 				continue
 			}
 			status := "success"
@@ -2488,13 +2764,45 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 // wsStreamer implements bus.Streamer, pushing token/done frames into a wsConn's send channel.
 // It also accumulates the full response to persist it to the session transcript on Finalize.
 type wsStreamer struct {
-	conn        *wsConn
-	chatID      string
-	sessionID   string                // for recording assistant message
-	agentStore  *session.UnifiedStore // for recording assistant message
-	agentID     string                // active agent at streamer creation time (for transcript AgentID)
-	channel     *webchatChannel       // to mark streaming complete and suppress duplicate Send()
-	accumulated strings.Builder       // accumulates full response text
+	conn       *wsConn
+	chatID     string
+	sessionID  string                // for recording assistant message
+	agentStore *session.UnifiedStore // for recording assistant message
+	// agentID identifies the producer this streamer's frames/transcript entry
+	// are attributed to. Initialized at streamer-creation time (GetStreamer) to
+	// the session's "active" agent — a reasonable default for the common case
+	// where the visibly-active chat agent is also the one producing this
+	// response. The agent loop overrides it via SetProducerAgentID with the
+	// TRUE per-turn producer (ts.agent.ID) immediately after obtaining the
+	// streamer for an LLM streaming call (FIX 5a) — required for
+	// background/delegated sub-turns, where the delegate's identity (per
+	// ADR-032, no inheritance from the parent) differs from the session's
+	// "active" (parent) agent. Guarded by statsMu since Update/Finalize may
+	// read it from a different goroutine than SetProducerAgentID writes it.
+	agentID string
+	// turnID identifies the turn that produced this streamer's transcript
+	// entry (FIX 5c/1). Stamped by the agent loop via SetTurnID immediately
+	// after obtaining the streamer, mirroring SetProducerAgentID's pattern
+	// exactly. Without this, the entry Finalize writes carries no TurnID at
+	// all — the confirmed cause of two real bugs: (1) the frontend's
+	// turn_canceled -> assistant-message replay correlation can never match
+	// a real entry (chatTurnCanceledNoMatch fires on every reload after a
+	// mid-stream cancel), and (2) MarkLastEntryTruncated's own turn-scoped
+	// backward-walk (pkg/session/unified.go, requires e.TurnID == turnID)
+	// can never match a real entry either, silently disabling the Truncated
+	// flag for every real cancel. Guarded by statsMu like agentID.
+	turnID string
+	// parentSpawnCallID identifies the spawning "delegate"/"spawn" ToolCall.ID
+	// in the PARENT turn when this streamer belongs to a CHILD delegation
+	// sub-turn (empty for a root/non-delegated turn). Stamped by the agent
+	// loop via SetParentSpawnCallID, mirroring SetTurnID's pattern exactly.
+	// Carried onto the transcript entry Finalize writes so
+	// pkg/gateway/replay.go can withhold a delegate's own streamed narration
+	// from top-level replay — see session.TranscriptEntry.ParentSpawnCallID's
+	// doc comment. Guarded by statsMu like turnID/agentID.
+	parentSpawnCallID string
+	channel           *webchatChannel // to mark streaming complete and suppress duplicate Send()
+	accumulated       strings.Builder // accumulates full response text
 
 	// producedModel is the model string that produced this streamed response.
 	// Set by the agent loop via SetProducedModel before Finalize so the
@@ -2523,6 +2831,96 @@ type wsStreamer struct {
 	// the lastStreamer that gets finalized). Guarded by statsMu, which Finalize
 	// already holds while reading stats.
 	transcriptPersisted bool
+
+	// shadowResolved/isShadowStream implement the concurrent-stream
+	// interleaving fix — see WSHandler.streamOwners' doc comment for the
+	// full root-cause writeup. isShadowStream is resolved once, lazily, on
+	// this streamer's first Update() call (via claimStreamOwnership) and
+	// reused for the rest of this instance's lifetime: a wsStreamer's
+	// Update() calls all run on the single goroutine driving its ChatStream
+	// callback, so no extra synchronization beyond the existing statsMu
+	// (already held for every Update/Finalize access to these fields) is
+	// needed. true means a DIFFERENT, still-live turnID already owns live
+	// delivery for this chatID — this streamer still accumulates every
+	// token (see `accumulated` above) but withholds the live TokenFrame send.
+	shadowResolved bool
+	isShadowStream bool
+}
+
+// streamOwnerClaim is the value stored in WSHandler.streamOwners: which turn
+// holds a chatID's live-stream slot, and when it claimed it. claimedAt backs
+// claimStreamOwnership's stale-claim force-reclaim safety net.
+type streamOwnerClaim struct {
+	turnID    string
+	claimedAt time.Time
+}
+
+// streamOwnershipStaleAfter bounds how long an unreleased live-stream
+// ownership claim is honored before a new claimant on the same chatID may
+// force-reclaim it. Deliberately generous — every real release path
+// (Finalize, Cancel, the abandoned-turn early return) frees the claim
+// immediately, well within this window — this exists purely as a backstop
+// against a future bug in this family leaving a claim permanently
+// unreleased, so such a leak degrades to "briefly wrong attribution" rather
+// than "permanently mute chat" (see WSHandler.streamOwners' doc comment).
+const streamOwnershipStaleAfter = 10 * time.Minute
+
+// claimStreamOwnership attempts to claim (or re-confirm) chatID's live
+// TokenFrame-delivery slot in owners for turnID. See WSHandler.streamOwners'
+// doc comment for the full rationale. Returns true when turnID owns the slot
+// — either because it just claimed an empty slot, because it already owned
+// it (a single turn typically opens several sequential wsStreamer instances
+// across its own tool-calling iterations — see turnState.lastStreamer/
+// finalizeStreamer in pkg/agent/turn.go — and each must see itself as "still
+// the owner", not a foreign claimant), or because the existing claim is
+// older than streamOwnershipStaleAfter and was force-reclaimed. Returns
+// false only when a DIFFERENT, still-fresh turnID already owns the slot.
+func claimStreamOwnership(owners *sync.Map, chatID, turnID string) bool {
+	now := time.Now()
+	newClaim := streamOwnerClaim{turnID: turnID, claimedAt: now}
+	actual, loaded := owners.LoadOrStore(chatID, newClaim)
+	for {
+		if !loaded {
+			return true
+		}
+		claim, ok := actual.(streamOwnerClaim)
+		if !ok || claim.turnID == turnID {
+			return true
+		}
+		if now.Sub(claim.claimedAt) < streamOwnershipStaleAfter {
+			return false
+		}
+		// The existing claim is stale — force-reclaim it. CompareAndSwap only
+		// succeeds if the entry is still exactly what we last observed, so a
+		// concurrent claimant racing us here safely retries instead of both
+		// believing they own the slot.
+		if owners.CompareAndSwap(chatID, actual, newClaim) {
+			return true
+		}
+		actual, loaded = owners.Load(chatID)
+	}
+}
+
+// releaseStreamOwnershipClaim releases turnID's live-stream ownership claim
+// for chatID in owners, if it currently holds it. A no-op when turnID never
+// held the claim (e.g. a shadow stream, or a turn that never called
+// Update()) or when it has already been released or force-reclaimed by a
+// stale-claim takeover. Load-then-CompareAndDelete rather than a bare delete
+// so a concurrent stale-claim reclaim racing this release can never clobber
+// a different, newer claimant's entry.
+func releaseStreamOwnershipClaim(owners *sync.Map, chatID, turnID string) {
+	if turnID == "" {
+		return
+	}
+	actual, ok := owners.Load(chatID)
+	if !ok {
+		return
+	}
+	claim, ok := actual.(streamOwnerClaim)
+	if !ok || claim.turnID != turnID {
+		return
+	}
+	owners.CompareAndDelete(chatID, actual)
 }
 
 // SetProducedModel stamps the model string that produced this streamed
@@ -2533,6 +2931,71 @@ type wsStreamer struct {
 func (s *wsStreamer) SetProducedModel(model string) {
 	s.statsMu.Lock()
 	s.producedModel = strings.TrimSpace(model)
+	s.statsMu.Unlock()
+}
+
+// SetProducerAgentID overrides the streamer's attributed agent with the TRUE
+// per-turn producer (ts.agent.ID). Called by the agent loop (via the inline
+// SetProducerAgentID interface, mirroring the SetProducedModel/
+// SuppressTranscriptWrite pattern) immediately after obtaining the streamer
+// for an LLM streaming call, before any Update/Finalize can observe it.
+//
+// FIX 5a: without this, both the live TokenFrame.AgentId (Update) and the
+// persisted transcript entry (Finalize) fall back to the "active session
+// agent" guess computed at GetStreamer time — correct for an ordinary turn,
+// but wrong for a background/delegated sub-turn, where ADR-032 guarantees
+// the delegate runs as its own identity, never the parent's. A no-op on an
+// empty agentID so a caller that genuinely has no resolved agent (should not
+// happen in practice) cannot blank out the GetStreamer-time guess.
+func (s *wsStreamer) SetProducerAgentID(agentID string) {
+	if agentID == "" {
+		return
+	}
+	s.statsMu.Lock()
+	s.agentID = agentID
+	s.statsMu.Unlock()
+}
+
+// SetTurnID stamps the turn ID that will be attributed to the transcript
+// entry Finalize writes. Called by the agent loop (via the inline SetTurnID
+// interface, mirroring SetProducerAgentID exactly) immediately after
+// obtaining the streamer for an LLM streaming call, before any Update/
+// Finalize can observe it.
+//
+// FIX 5c/1: without this, the assistant entry Finalize writes carries no
+// TurnID, so a mid-stream cancel's turn_canceled entry (which DOES carry
+// TurnID — see pkg/agent/cancel.go) can never be correlated with the
+// assistant message it interrupted on replay, and
+// MarkLastEntryTruncated's own turn-scoped matching can never find the
+// entry to flag. A no-op on an empty turnID so a caller with no resolved
+// turn ID (should not happen in practice) cannot blank out an
+// already-stamped value.
+func (s *wsStreamer) SetTurnID(turnID string) {
+	if turnID == "" {
+		return
+	}
+	s.statsMu.Lock()
+	s.turnID = turnID
+	s.statsMu.Unlock()
+}
+
+// SetParentSpawnCallID stamps the delegation-nesting correlation that will be
+// attributed to the transcript entry Finalize writes. Called by the agent
+// loop (via the inline SetParentSpawnCallID interface, mirroring SetTurnID
+// exactly) immediately after obtaining the streamer for an LLM streaming
+// call, before any Update/Finalize can observe it.
+//
+// Unlike SetTurnID/SetProducerAgentID, an EMPTY parentSpawnCallID is a valid,
+// common value — it means "this is a root turn, not a delegation child" —
+// so, unlike those two setters, this one does NOT no-op on empty; it always
+// stamps whatever the caller passes (including clearing back to "" for a
+// caller that resolves no parent span, which should never blank out a
+// previously-stamped value in practice since each wsStreamer instance is
+// single-use for one turn, but matches the field's own zero-value semantics
+// rather than silently refusing a legitimate "no parent" write).
+func (s *wsStreamer) SetParentSpawnCallID(parentSpawnCallID string) {
+	s.statsMu.Lock()
+	s.parentSpawnCallID = parentSpawnCallID
 	s.statsMu.Unlock()
 }
 
@@ -2585,11 +3048,80 @@ func (s *wsStreamer) SetTurnFailed(failed bool) {
 }
 
 func (s *wsStreamer) Update(_ context.Context, content string) error {
-	data, err := json.Marshal(generated.TokenFrame{
+	s.statsMu.Lock()
+	producerAgentID := s.agentID
+	// Guarded by statsMu so StreamedContentLen() (read by the agent loop's
+	// inline-retry guard, possibly from a different goroutine) observes a
+	// consistent length. Accumulate BEFORE the live-delivery gate below —
+	// a shadow (non-owning, see below) stream's content must still be fully
+	// captured for its own Finalize/transcript write even though it
+	// withholds live frames. Finalize reads accumulated only after
+	// streaming has completed, so it remains lock-free there.
+	s.accumulated.WriteString(content)
+	// Live-stream ownership gate (see WSHandler.streamOwners' doc comment):
+	// resolved once, lazily, on this streamer's first Update() call, then
+	// reused. A streamer with no turnID (legacy/best-effort caller) or no
+	// channel/wsHandler wired (e.g. a bare unit-test fixture) always streams
+	// live — the gate degrades to the pre-fix always-live behavior rather
+	// than silently withholding content it has no way to attribute.
+	//
+	// Finding B (A-I4 round 4): a delegated CHILD sub-turn (s.parentSpawnCallID
+	// != "", stamped by stampStreamerParentSpawnCallID before any Update/
+	// Finalize call can observe it) must NEVER become the live-stream owner
+	// for its shared chatID, full stop — never via claimStreamOwnership's
+	// normal empty-slot-wins/stale-reclaim paths either. The pre-fix
+	// claimStreamOwnership-only check let a background/async child win a
+	// vacated ownership claim and start streaming its own raw, hidden-by-
+	// design narration live: turnState.finalizeStreamer's B4 abandoned-turn
+	// path (pkg/agent/turn.go) calls ReleaseStreamOwnership() on the PARENT's
+	// claim the instant the parent is canceled (e.g. user clicks Stop) —
+	// but a background delegate is intentionally allowed to keep running
+	// past its parent's cancellation (see the Critical:true / "background
+	// delegate's final answer lost when parent finishes first" fix), so the
+	// child's NEXT streaming round (a fresh wsStreamer instance, its own
+	// lazy shadowResolved=false) then finds the slot empty and legitimately
+	// "wins" it under the old rule — even though a child's own token stream
+	// is supposed to stay hidden unconditionally, exactly like the
+	// already-correct sync/await case and replay.go's ParentSpawnCallID skip
+	// (see that doc comment). Live-verified: reproduced the leak (a second,
+	// delegate-authored top-level bubble with raw narration) via a
+	// background delegation canceled mid-flight, confirmed the fix removes
+	// it. A root/non-delegated turn is unaffected — this branch only ever
+	// narrows behavior for parentSpawnCallID != "".
+	if !s.shadowResolved {
+		if s.parentSpawnCallID != "" {
+			s.isShadowStream = true
+		} else if s.turnID != "" && s.channel != nil && s.channel.wsHandler != nil {
+			s.isShadowStream = !claimStreamOwnership(&s.channel.wsHandler.streamOwners, s.chatID, s.turnID)
+		}
+		s.shadowResolved = true
+	}
+	shadow := s.isShadowStream
+	s.statsMu.Unlock()
+
+	if shadow {
+		// A DIFFERENT, still-live turn already owns live TokenFrame delivery
+		// to this chatID. This stream's content is fully captured in
+		// s.accumulated above and will be persisted correctly by Finalize —
+		// withholding the live frame here is what prevents two concurrent
+		// delegate streams from interleaving their deltas into one garbled
+		// message, live or on a client that caches/replays the live view.
+		return nil
+	}
+
+	frame := generated.TokenFrame{
 		Type:      string(generated.WsFrameTypeToken),
 		Content:   content,
 		SessionId: s.sessionID,
-	})
+	}
+	// FIX 5a: attribute the frame to the turn's TRUE producer (stamped via
+	// SetProducerAgentID) rather than leaving the client to guess based on
+	// whichever agent it happens to be actively chatting with — wrong for
+	// background/delegated sub-turns.
+	if producerAgentID != "" {
+		frame.AgentId = &producerAgentID
+	}
+	data, err := json.Marshal(frame)
 	if err != nil {
 		return fmt.Errorf("ws: marshal token frame: %w", err)
 	}
@@ -2612,21 +3144,14 @@ func (s *wsStreamer) Update(_ context.Context, content string) error {
 	originalDropped := s.conn.droppedTokens.Load()
 	sendRawFrameBytes(s.conn, string(generated.WsFrameTypeToken), data)
 	if s.conn.droppedTokens.Load() > originalDropped {
-		slog.Warn("ws: token backpressure", "session_id", s.sessionID, "chat_id", s.chatID, "agent_id", s.agentID)
+		slog.Warn("ws: token backpressure", "session_id", s.sessionID, "chat_id", s.chatID, "agent_id", producerAgentID)
 		return fmt.Errorf("ws: token channel full, token dropped")
 	}
-	// Guarded by statsMu so StreamedContentLen() (read by the agent loop's
-	// inline-retry guard, possibly from a different goroutine) observes a
-	// consistent length. Finalize reads accumulated only after streaming has
-	// completed, so it remains lock-free there.
-	s.statsMu.Lock()
-	s.accumulated.WriteString(content)
-	s.statsMu.Unlock()
 	// Cross-browser session attach (#133): also forward the token to every
 	// other connection bound to the same session. The originating chat
 	// already received the frame above; secondary tabs see the live stream
 	// through this fan-out instead of waiting for a transcript reload.
-	s.fanOutToSessionPeers(data)
+	s.fanOutToSessionPeers(string(generated.WsFrameTypeToken), data)
 	return nil
 }
 
@@ -2634,7 +3159,23 @@ func (s *wsStreamer) Update(_ context.Context, content string) error {
 // streamer's session, skipping the originating connection. Used by Update
 // (token frames) and Finalize (done frame) so a second browser tab attached
 // mid-turn observes the live stream as it happens.
-func (s *wsStreamer) fanOutToSessionPeers(data []byte) {
+//
+// Finding E (A-I4 round 5): this used to write straight into peer.sendCh,
+// bypassing the exact replay-divert/backpressure protocol sendRawFrameBytes
+// implements for every other live-frame path (see that function's doc
+// comment — "shared by sendConnGenFrame and wsStreamer.Update", which this
+// method's own token/done sends already honor for the ORIGINATING
+// connection via the sendRawFrameBytes call just above, but never did for
+// fanned-out PEERS). A peer mid-attach_session-replay (wc.isReplayingLive
+// true) has no way to divert a directly-enqueued sendCh write into
+// replayDivertCh — the frame lands interleaved with that peer's own
+// in-flight replay frames instead of being correctly ordered after them,
+// live-verified as a stray, out-of-place bubble. Routing through
+// sendRawFrameBytes closes that gap unconditionally: it degrades to the
+// exact same direct-sendCh-with-backoff behavior this used to hand-roll
+// when the peer isn't replaying (the common case), and correctly diverts
+// when it is.
+func (s *wsStreamer) fanOutToSessionPeers(frameType string, data []byte) {
 	if s.channel == nil || s.sessionID == "" {
 		return
 	}
@@ -2654,12 +3195,7 @@ func (s *wsStreamer) fanOutToSessionPeers(data []byte) {
 	}
 	h.mu.Unlock()
 	for _, peer := range peers {
-		select {
-		case peer.sendCh <- data:
-		default:
-			peer.droppedTokens.Add(1)
-			slog.Warn("ws: peer token dropped", "session_id", s.sessionID)
-		}
+		sendRawFrameBytes(peer, frameType, data)
 	}
 }
 
@@ -2680,7 +3216,66 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 	transcriptAlreadyPersisted := s.transcriptPersisted
 	producedModel := s.producedModel
 	turnFailed := s.statsTurnFailed
+	// FIX 5a/5c: read under statsMu — SetProducerAgentID/SetTurnID (called by
+	// the agent loop at streaming-call start) may run on a different
+	// goroutine than Finalize (called at turn end).
+	producerAgentID := s.agentID
+	turnID := s.turnID
+	parentSpawnCallID := s.parentSpawnCallID
+	// A-I4 round 4 / Finding A: resolve the live-stream shadow gate HERE too,
+	// not just in Update(). Every turn — root OR a delegated child sub-turn —
+	// runs through the exact same pkg/agent/loop.go runTurn/finalizeStreamer
+	// path (spawnSubTurn calls al.runTurn(childCtx, childTS) directly, see
+	// subturn.go), so a child's own Finalize fires — sending an UNCONDITIONAL
+	// "done" WS frame to the CHATID IT SHARES WITH ITS PARENT — the instant
+	// the child's own sub-turn completes, even while the parent's own turn is
+	// still actively streaming (the common case for a synchronous/"await"
+	// delegate call, which blocks the parent mid-turn while the child runs).
+	// DoneFrame carries no turn/parent discriminator, so the client's `done`
+	// handler (src/store/chat.ts) has no way to tell "a nested child
+	// finished" from "the outer turn finished" — it unconditionally closes
+	// whichever bubble is current, so the parent's still-open bubble is
+	// finalized prematurely and every following narration segment opens a
+	// brand-new bubble. Live-verified via a real 3-round synchronous
+	// delegation: a `done` frame lands right after each child's
+	// subagent_start (duration_ms matching that child's own subagent_end),
+	// well before the parent's real, final `done` — producing N+1 bubbles for
+	// N sequential delegate calls instead of one continuous bubble matching
+	// the child's own hidden-narration invariant (replay.go's
+	// ParentSpawnCallID skip / this same Update() shadow gate already treat a
+	// child's own text as never visible — Finalize simply never enforced
+	// that for the "done" signal it also sends).
+	//
+	// Mirrors Update()'s lazy resolution exactly, including the same "a
+	// delegated child NEVER owns the live slot" rule Update() gained for
+	// Finding B below — a streamer whose Update() was never called (e.g. an
+	// immediate tool-only round with no narration text) would otherwise
+	// reach Finalize with shadowResolved still false and default to
+	// isShadowStream=false (treated as live), which is wrong for a child
+	// sub-turn that happened to stream zero tokens of its own.
+	if !s.shadowResolved {
+		if parentSpawnCallID != "" {
+			s.isShadowStream = true
+		} else if turnID != "" && s.channel != nil && s.channel.wsHandler != nil {
+			s.isShadowStream = !claimStreamOwnership(&s.channel.wsHandler.streamOwners, s.chatID, turnID)
+		}
+		s.shadowResolved = true
+	}
+	shadow := s.isShadowStream
 	s.statsMu.Unlock()
+
+	// Release this turn's live-stream ownership claim (if held) so a
+	// different, still-running turn on the same chatID can become the live
+	// owner (see WSHandler.streamOwners' doc comment). Finalize is the
+	// normal, once-per-turn release point via turnState's deferred
+	// finalizeStreamer (pkg/agent/turn.go) — safe/no-op when this stream was
+	// never the owner (a shadow stream) or never claimed at all (e.g. an
+	// immediate tool-only round with no narration text, so Update() was
+	// never called). See ReleaseStreamOwnership for the other release
+	// points (Cancel, and finalizeStreamer's B4 abandoned-turn path, which
+	// deliberately skips the rest of this method).
+	s.ReleaseStreamOwnership()
+
 	doneStats.Tokens = &tokensF
 	doneStats.Cost = &costF
 	doneStats.DurationMs = &durF
@@ -2693,18 +3288,29 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 		SessionId: s.sessionID,
 		Stats:     doneStats,
 	}
-	sendConnGenFrame(s.conn, string(generated.WsFrameTypeDone), doneFrame)
-	// Cross-browser session attach (#133): a second tab attached mid-turn
-	// needs the done frame too, otherwise its UI stays in "streaming" state
-	// forever even after our token fan-out delivered the full content.
-	if doneData, mErr := json.Marshal(doneFrame); mErr == nil {
-		s.fanOutToSessionPeers(doneData)
-	}
-	// Only mark as streamed if we actually sent content. If the LLM failed
-	// before producing any tokens, let the outbound Send path deliver the
-	// error message — otherwise the user sees a stuck "thinking" spinner.
-	if s.channel != nil && s.accumulated.Len() > 0 {
-		s.channel.markStreamed(s.chatID)
+	// A-I4 round 4 / Finding A: a shadow stream (a delegated child sub-turn
+	// that never owned — and, per the rule above, can never win — this
+	// chatID's live-stream slot) must not send its own "done" either. Its
+	// content was never shown live in the first place (Update() withheld
+	// every token); sending "done" anyway prematurely finalizes whatever
+	// bubble the OWNING (parent) turn currently has open. The transcript
+	// write below stays unconditional — persistence must not depend on live
+	// visibility — only the live-facing signals (done frame, peer fan-out,
+	// markStreamed) are gated.
+	if !shadow {
+		sendConnGenFrame(s.conn, string(generated.WsFrameTypeDone), doneFrame)
+		// Cross-browser session attach (#133): a second tab attached mid-turn
+		// needs the done frame too, otherwise its UI stays in "streaming" state
+		// forever even after our token fan-out delivered the full content.
+		if doneData, mErr := json.Marshal(doneFrame); mErr == nil {
+			s.fanOutToSessionPeers(string(generated.WsFrameTypeDone), doneData)
+		}
+		// Only mark as streamed if we actually sent content. If the LLM failed
+		// before producing any tokens, let the outbound Send path deliver the
+		// error message — otherwise the user sees a stuck "thinking" spinner.
+		if s.channel != nil && s.accumulated.Len() > 0 {
+			s.channel.markStreamed(s.chatID)
+		}
 	}
 	// Record the full assistant response to the session transcript — unless the
 	// agent loop already persisted this round's narration via
@@ -2726,14 +3332,27 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 		}
 		if content != "" {
 			entry := session.TranscriptEntry{
-				ID:        uuid.New().String(),
-				Role:      "assistant",
-				AgentID:   s.agentID,
+				ID:      uuid.New().String(),
+				Role:    "assistant",
+				AgentID: producerAgentID,
+				// TurnID (FIX 5c/1): stamped via SetTurnID so a mid-stream
+				// cancel's turn_canceled entry can be correlated with THIS
+				// entry on replay, and so MarkLastEntryTruncated's
+				// turn-scoped backward-walk can find it.
+				TurnID:    turnID,
 				Content:   content,
 				Timestamp: time.Now().UTC(),
 				Tokens:    int(tokensF),
 				Cost:      costF,
 				Model:     producedModel,
+				// ParentSpawnCallID: stamped via SetParentSpawnCallID so a
+				// delegation child sub-turn's own streamed narration/final
+				// response carries the same nesting correlation its
+				// non-streaming siblings (appendIntermediateAssistantTranscript
+				// / appendAssistantTranscript) already stamp — see
+				// session.TranscriptEntry.ParentSpawnCallID's doc comment.
+				// Empty (the common case) for a root turn.
+				ParentSpawnCallID: parentSpawnCallID,
 			}
 			if err := s.agentStore.AppendTranscript(s.sessionID, entry); err != nil {
 				slog.Warn("ws: could not record streamed assistant message", "session_id", s.sessionID, "error", err)
@@ -2744,5 +3363,39 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 }
 
 func (s *wsStreamer) Cancel(_ context.Context) {
+	// Defensive symmetry with Finalize's release: Cancel is not on the
+	// agent loop's normal per-turn path (finalizeStreamer always calls
+	// Finalize, never Cancel — see turn.go), but release the ownership
+	// claim here too so a future caller of Cancel cannot leak the chatID's
+	// live-stream slot forever.
+	s.ReleaseStreamOwnership()
 	s.conn.close()
+}
+
+// ReleaseStreamOwnership releases this streamer's live-stream ownership
+// claim for its chatID (if held), allowing a different, still-running turn
+// on the same chatID to become the live owner (see WSHandler.streamOwners'
+// doc comment). Safe to call multiple times, concurrently, or when the claim
+// was never held — releaseStreamOwnershipClaim only deletes an entry that
+// still matches this exact turnID.
+//
+// This is the single implementation shared by Finalize, Cancel, and — via
+// the streamOwnershipReleaser optional interface pkg/agent's finalizeStreamer
+// type-asserts for — the B4 abandoned-turn early return (pkg/agent/turn.go).
+// That early return deliberately skips the rest of Finalize (no done frame,
+// no transcript write, so a stuck goroutine cannot send a spurious signal to
+// the frontend) but was found, in a 7-reviewer gate, to also skip releasing
+// this claim: a background delegate that became the live owner for a chatID
+// and was later MarkAbandoned()'d by cancel.go's PHASE C left that chatID
+// permanently shadowed, since Finalize (the only other release point;
+// Cancel has no production call sites) never ran. Exported so pkg/agent can
+// reach it through bus.Streamer's optional-interface pattern without either
+// package importing the other's concrete type.
+func (s *wsStreamer) ReleaseStreamOwnership() {
+	s.statsMu.Lock()
+	turnID := s.turnID
+	s.statsMu.Unlock()
+	if s.channel != nil && s.channel.wsHandler != nil {
+		releaseStreamOwnershipClaim(&s.channel.wsHandler.streamOwners, s.chatID, turnID)
+	}
 }

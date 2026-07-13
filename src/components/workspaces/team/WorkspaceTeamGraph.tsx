@@ -19,6 +19,7 @@ import {
   type NodeChange,
   type EdgeProps,
   type IsValidConnection,
+  type OnConnectEnd,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import '../reactflow-theme.css'
@@ -28,6 +29,8 @@ import { cn } from '@/lib/utils'
 import { EdgeModeEditor, EdgeLabelChip } from './EdgeModeEditor'
 import {
   validateConnection,
+  rejectionMessageForFailedConnection,
+  REJECTION_MESSAGE,
   type DelegationMode,
   type TeamEdgeModel,
   type TeamNodeModel,
@@ -42,6 +45,7 @@ interface AgentNodeData extends Record<string, unknown> {
 }
 interface DelegationEdgeData extends Record<string, unknown> {
   model: TeamEdgeModel
+  defaultDepth: number
   onToggleMode: (from: string, to: string, mode: DelegationMode) => void
   onSetDepth: (from: string, to: string, depth: number | undefined) => void
   onDelete: (from: string, to: string) => void
@@ -322,13 +326,18 @@ function DelegationEdge({
           {selected ? (
             <EdgeModeEditor
               model={model}
+              defaultDepth={data.defaultDepth}
               onToggleMode={data.onToggleMode}
               onSetDepth={data.onSetDepth}
               onDelete={data.onDelete}
               onClose={() => data.onSelect(null)}
             />
           ) : (
-            <EdgeLabelChip model={model} onClick={() => data.onSelect(id)} />
+            <EdgeLabelChip
+              model={model}
+              defaultDepth={data.defaultDepth}
+              onClick={() => data.onSelect(id)}
+            />
           )}
         </div>
       </EdgeLabelRenderer>
@@ -345,6 +354,9 @@ export interface WorkspaceTeamGraphProps {
   workerIds: ReadonlySet<string>
   /** The current edit state — needed for live connection validation. */
   editState: TeamEditState
+  /** The workspace's currently-resolved depth ceiling — threaded down to
+   *  every edge's inline editor/label so depth always shows a concrete number. */
+  defaultDepth: number
   onConnect: (from: string, to: string) => void
   onToggleMode: (from: string, to: string, mode: DelegationMode) => void
   onSetDepth: (from: string, to: string, depth: number | undefined) => void
@@ -355,17 +367,12 @@ export interface WorkspaceTeamGraphProps {
   onOpenAgent?: (agentId: string) => void
 }
 
-const REJECTION_MESSAGE: Record<string, string> = {
-  'self-edge': 'An agent cannot delegate to itself.',
-  duplicate: 'That delegation edge already exists.',
-  'not-member': 'Both agents must be on the team first.',
-}
-
 function WorkspaceTeamGraphInner({
   nodes,
   edges,
   workerIds,
   editState,
+  defaultDepth,
   onConnect,
   onToggleMode,
   onSetDepth,
@@ -434,6 +441,7 @@ function WorkspaceTeamGraphInner({
         markerEnd: { type: MarkerType.ArrowClosed, color: 'var(--color-border)' },
         data: {
           model,
+          defaultDepth,
           onToggleMode,
           onSetDepth,
           onDelete: onDeleteEdge,
@@ -441,7 +449,7 @@ function WorkspaceTeamGraphInner({
           onSelect: handleSelectEdge,
         },
       })),
-    [edges, selectedEdgeId, onToggleMode, onSetDepth, onDeleteEdge, handleSelectEdge],
+    [edges, selectedEdgeId, defaultDepth, onToggleMode, onSetDepth, onDeleteEdge, handleSelectEdge],
   )
 
   const isValidConnection: IsValidConnection<DelegationFlowEdge> = useCallback(
@@ -467,6 +475,28 @@ function WorkspaceTeamGraphInner({
     [editState, workerIds, onConnect, onRejectConnection],
   )
 
+  // Bug fix (live-UAT): React Flow only calls `onConnect` when
+  // `isValidConnection` passed — a REJECTED drag (self-edge, duplicate,
+  // non-member) never reaches `handleConnect` above at all, so a self-edge
+  // drop (e.g. jim → jim) produced no edge and zero feedback, and the drop
+  // fell through to the node's own click handler (opening its profile panel)
+  // with no explanation. `onConnectEnd` is the one connect-lifecycle event
+  // React Flow fires unconditionally, valid or not, so it's the only place a
+  // rejected attempt can be observed and surfaced.
+  const handleConnectEnd = useCallback<OnConnectEnd>(
+    (_event, connectionState) => {
+      const message = rejectionMessageForFailedConnection(
+        connectionState.fromNode?.id,
+        connectionState.toNode?.id,
+        connectionState.isValid,
+        editState,
+        workerIds,
+      )
+      if (message) onRejectConnection(message)
+    },
+    [editState, workerIds, onRejectConnection],
+  )
+
   return (
     <div
       data-testid="team-graph-canvas"
@@ -480,6 +510,7 @@ function WorkspaceTeamGraphInner({
         edgeTypes={edgeTypes}
         onNodesChange={onNodesChange}
         onConnect={handleConnect}
+        onConnectEnd={handleConnectEnd}
         isValidConnection={isValidConnection}
         onPaneClick={() => setSelectedEdgeId(null)}
         nodesDraggable

@@ -1,11 +1,20 @@
 // Sprint H registry tests — FR-H-006
 // Traces to: sprint-h-subagent-block-spec.md TDD rows 2 & 3, BDD Scenario 9.
 //
-// FR-H-006 specifies delegation-adjacent tools excluded from child sub-turn
-// registries: delegate (the ADR-036 merge of spawn/run_subagent/check_spawn_status)
-// and hand_off. The canonical call is:
+// FR-H-006 originally specified delegation-adjacent tools excluded from child
+// sub-turn registries: delegate (the ADR-036 merge of
+// spawn/run_subagent/check_spawn_status) and hand_off, via:
 //
 //	CloneExcept(ExcludedDelegate, ExcludedHandoff)
+//
+// This file tests that CloneExcept PRIMITIVE directly (unchanged — it still
+// omits whatever names are passed to it). FR-H-006 REVERSAL (live UAT,
+// 2026-07-12): the actual production call site, pkg/agent/subturn.go's
+// spawnSubTurn, no longer passes ExcludedDelegate — only ExcludedHandoff — so
+// a delegated sub-turn can itself delegate onward, gated by the real
+// trust-graph/mode/depth system instead of a blanket registry-level omission.
+// See pkg/agent/subturn_delegate_nesting_test.go for the current production
+// regression coverage.
 
 package tools
 

@@ -6,22 +6,23 @@ import { ALL_MODES, type DelegationMode, type TeamEdgeModel } from './teamGraphM
 
 // Mode-chip accents (Sovereign Deep). Shared by the editor + the collapsed label.
 export const MODE_CHIP_CLASS: Record<DelegationMode, string> = {
-  await:
+  direct:
     'border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10 text-[var(--color-accent)]',
-  background:
-    'border-[var(--color-info)]/40 bg-[var(--color-info)]/10 text-[var(--color-info)]',
   task:
     'border-[var(--color-success)]/40 bg-[var(--color-success)]/10 text-[var(--color-success)]',
 }
 
-export const MODE_SHORT: Record<DelegationMode, string> = {
-  await: 'await',
-  background: 'bg',
-  task: 'task',
+/** Human-readable label for each delegation mode (chip title/tooltip + a11y label). */
+export const MODE_LABEL: Record<DelegationMode, string> = {
+  direct: 'Direct Delegation',
+  task: 'Task Delegation',
 }
 
 export interface EdgeModeEditorProps {
   model: TeamEdgeModel
+  /** The workspace's currently-resolved depth ceiling — pre-fills/redisplays
+   *  a concrete depth whenever the edge's own `model.depth` is unset. */
+  defaultDepth: number
   onToggleMode: (from: string, to: string, mode: DelegationMode) => void
   onSetDepth: (from: string, to: string, depth: number | undefined) => void
   onDelete: (from: string, to: string) => void
@@ -29,28 +30,29 @@ export interface EdgeModeEditorProps {
 }
 
 /**
- * The inline edge editor popover: multi-select delegation MODE chips (await /
- * background / task) + a DEPTH stepper + delete. Extracted from the React Flow
- * edge so it is unit-testable without a measured canvas (React Flow only paints
- * edge labels after node measurement, which jsdom doesn't do). The last
- * remaining mode can't be removed (an empty modes array reads as "all allowed"
- * on the backend), and an empty depth means "inherit the default".
+ * The inline edge editor popover: multi-select delegation MODE chips (Direct
+ * Delegation / Task Delegation) + a DEPTH stepper + delete. Extracted from the
+ * React Flow edge so it is unit-testable without a measured canvas (React Flow
+ * only paints edge labels after node measurement, which jsdom doesn't do). The
+ * last remaining mode can't be removed (an empty modes array reads as "all
+ * allowed" on the backend). Depth always shows a concrete number — there is no
+ * "∞"/inherit-blank state.
  */
 export function EdgeModeEditor({
   model,
+  defaultDepth,
   onToggleMode,
   onSetDepth,
   onDelete,
   onClose,
 }: EdgeModeEditorProps) {
   // Controlled depth draft so a partial value (empty field) doesn't fight the
-  // committed model value.
-  const [depthDraft, setDepthDraft] = useState<string>(
-    model.depth != null ? String(model.depth) : '',
-  )
+  // committed model value. Always concrete: falls back to defaultDepth when
+  // the edge's own depth is unset (e.g. a legacy edge never touched by this UI).
+  const [depthDraft, setDepthDraft] = useState<string>(String(model.depth ?? defaultDepth))
   useEffect(() => {
-    setDepthDraft(model.depth != null ? String(model.depth) : '')
-  }, [model.depth])
+    setDepthDraft(String(model.depth ?? defaultDepth))
+  }, [model.depth, defaultDepth])
 
   return (
     <div
@@ -82,12 +84,13 @@ export function EdgeModeEditor({
               disabled={isLastOn}
               aria-pressed={on}
               aria-disabled={isLastOn}
+              aria-label={MODE_LABEL[m]}
               title={
                 isLastOn
                   ? 'At least one mode is required — an edge with no modes would allow ALL modes.'
                   : on
-                    ? `Disable ${m}`
-                    : `Enable ${m}`
+                    ? `Disable ${MODE_LABEL[m]}`
+                    : `Enable ${MODE_LABEL[m]}`
               }
               onClick={() => onToggleMode(model.from, model.to, m)}
               className={cn(
@@ -98,7 +101,7 @@ export function EdgeModeEditor({
                 isLastOn && 'cursor-not-allowed',
               )}
             >
-              {m}
+              {MODE_LABEL[m]}
             </button>
           )
         })}
@@ -112,8 +115,7 @@ export function EdgeModeEditor({
           inputMode="numeric"
           data-testid="team-edge-depth"
           value={depthDraft}
-          placeholder="∞"
-          title="Max delegation hops for this edge. Empty = inherit the workspace/global default."
+          title="Max delegation hops for this edge. Edges you haven't changed keep tracking the workspace/global default automatically."
           onChange={(e) => {
             const v = e.target.value
             setDepthDraft(v)
@@ -144,11 +146,15 @@ export function EdgeModeEditor({
 
 export interface EdgeLabelChipProps {
   model: TeamEdgeModel
+  /** The workspace's currently-resolved depth ceiling — displayed whenever
+   *  the edge's own `model.depth` is unset, so the badge always shows a
+   *  concrete number. */
+  defaultDepth: number
   onClick: () => void
 }
 
 /** The collapsed edge label: mode chips (+ depth) that opens the editor. */
-export function EdgeLabelChip({ model, onClick }: EdgeLabelChipProps) {
+export function EdgeLabelChip({ model, defaultDepth, onClick }: EdgeLabelChipProps) {
   return (
     <button
       type="button"
@@ -167,16 +173,17 @@ export function EdgeLabelChip({ model, onClick }: EdgeLabelChipProps) {
               MODE_CHIP_CLASS[m],
             )}
           >
-            {MODE_SHORT[m]}
+            {m}
           </span>
         ))
       )}
-      {model.depth != null && (
-        <span className="ml-0.5 inline-flex items-center gap-0.5 text-[9px] text-[var(--color-muted)]">
-          <Stack size={9} weight="bold" />
-          {model.depth}
-        </span>
-      )}
+      {/* Depth is always a concrete number now — no more conditional "only
+          when set" rendering; an edge whose own depth is unset shows the
+          workspace's resolved default instead of hiding the badge. */}
+      <span className="ml-0.5 inline-flex items-center gap-0.5 text-[9px] text-[var(--color-muted)]">
+        <Stack size={9} weight="bold" />
+        {model.depth ?? defaultDepth}
+      </span>
     </button>
   )
 }

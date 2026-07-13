@@ -12,7 +12,35 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
+	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
+
+// seedModesToEdgeModes independently replays the same seed→edge collapse
+// (config.DelegationMode's real 3-value tool-call vocabulary →
+// workspace.DelegationMode's collapsed 2-value trust-edge vocabulary: Task→
+// ModeTask, Await|Background→ModeDirect, deduped) that pkg/gateway's
+// defaultWorkspaceDelegationEdges applies when bootstrapping a fresh
+// workspace's delegation graph from this package's seed data. It lives here
+// (rather than importing pkg/gateway, which is unexported at that seam and
+// would also risk an import-direction problem) purely so this test can assert
+// what the TRANSLATED graph edge looks like without duplicating the gateway's
+// production code.
+func seedModesToEdgeModes(modes []config.DelegationMode) []workspace.DelegationMode {
+	seen := make(map[workspace.DelegationMode]bool, len(modes))
+	out := make([]workspace.DelegationMode, 0, len(modes))
+	for _, m := range modes {
+		wm := workspace.ModeDirect
+		if m == config.DelegationModeTask {
+			wm = workspace.ModeTask
+		}
+		if seen[wm] {
+			continue
+		}
+		seen[wm] = true
+		out = append(out, wm)
+	}
+	return out
+}
 
 // findSeeded locates a seeded agent by id, or fails the test.
 func findSeeded(t *testing.T, cfg *config.Config, id string) config.AgentConfig {
@@ -73,9 +101,25 @@ func TestWorkerNotCoreAgent(t *testing.T) {
 //	Mia, Ray, Ava → [worker]   modes: [task, background]
 //
 // And the worker itself has no onward delegation (leaf, deny-by-default).
+//
+// ADR-037: AgentConfig.DelegationPolicy no longer exists — the per-workspace
+// delegation graph is the sole runtime authority now, and this seed data
+// (coreAgentDelegation, exported via coreagent.SeedDelegationEdges) survives
+// only as bootstrap data for a fresh workspace's graph
+// (defaultWorkspaceDelegationEdges), not as a field on the seeded AgentConfig.
+// This test now checks that seed source directly rather than the (removed)
+// AgentConfig field.
 func TestSeedBaseDelegationPolicies(t *testing.T) {
 	cfg := &config.Config{}
 	require.True(t, coreagent.SeedConfig(cfg))
+
+	// SeedConfig must still produce the base agents + worker in the roster —
+	// the delegation-edges check below is independent of AgentConfig.
+	findSeeded(t, cfg, string(coreagent.IDJim))
+	findSeeded(t, cfg, string(coreagent.IDMia))
+	findSeeded(t, cfg, string(coreagent.IDRay))
+	findSeeded(t, cfg, string(coreagent.IDAva))
+	findSeeded(t, cfg, string(coreagent.IDWorker))
 
 	hasTarget := func(p *config.DelegationPolicy, id string) bool {
 		if p == nil {
@@ -100,62 +144,42 @@ func TestSeedBaseDelegationPolicies(t *testing.T) {
 		return false
 	}
 
-	jim := findSeeded(t, cfg, string(coreagent.IDJim))
-	require.NotNil(t, jim.DelegationPolicy, "Jim must have a seeded delegation policy")
-	assert.True(t, hasTarget(jim.DelegationPolicy, string(coreagent.IDAva)), "Jim → Ava")
-	assert.True(t, hasTarget(jim.DelegationPolicy, string(coreagent.IDRay)), "Jim → Ray")
-	assert.True(t, hasTarget(jim.DelegationPolicy, string(coreagent.IDWorker)), "Jim → worker")
-	assert.True(t, hasMode(jim.DelegationPolicy, config.DelegationModeTask), "Jim allows task mode")
-	assert.True(t, hasMode(jim.DelegationPolicy, config.DelegationModeBackground), "Jim allows background mode")
-	assert.True(t, hasMode(jim.DelegationPolicy, config.DelegationModeAwait), "Jim allows await mode")
+	jimDP := coreagent.SeedDelegationEdges(coreagent.IDJim)
+	require.NotNil(t, jimDP, "Jim must have a seeded delegation policy")
+	assert.True(t, hasTarget(jimDP, string(coreagent.IDAva)), "Jim → Ava")
+	assert.True(t, hasTarget(jimDP, string(coreagent.IDRay)), "Jim → Ray")
+	assert.True(t, hasTarget(jimDP, string(coreagent.IDWorker)), "Jim → worker")
+	assert.True(t, hasMode(jimDP, config.DelegationModeTask), "Jim allows task mode")
+	assert.True(t, hasMode(jimDP, config.DelegationModeBackground), "Jim allows background mode")
+	assert.True(t, hasMode(jimDP, config.DelegationModeAwait), "Jim allows await mode")
+
+	// Companion assertion (mode collapse): Jim's seed DTO stays 3-valued
+	// (task/background/await, asserted above — coreAgentDelegation is
+	// deliberately unchanged), but the workspace GRAPH edge it bootstraps
+	// collapses+dedupes down to the trust edge's 2-value vocabulary.
+	assert.ElementsMatch(t,
+		[]workspace.DelegationMode{workspace.ModeTask, workspace.ModeDirect},
+		seedModesToEdgeModes(jimDP.Modes),
+		"Jim's seeded modes, translated onto a workspace graph edge, must collapse to [direct, task]")
 
 	for _, id := range []coreagent.CoreAgentID{coreagent.IDMia, coreagent.IDRay, coreagent.IDAva} {
-		a := findSeeded(t, cfg, string(id))
-		require.NotNil(t, a.DelegationPolicy, "%s must have a seeded delegation policy", id)
-		assert.True(t, hasTarget(a.DelegationPolicy, string(coreagent.IDWorker)),
+		dp := coreagent.SeedDelegationEdges(id)
+		require.NotNil(t, dp, "%s must have a seeded delegation policy", id)
+		assert.True(t, hasTarget(dp, string(coreagent.IDWorker)),
 			"%s must be able to delegate to the worker", id)
-		assert.True(t, hasMode(a.DelegationPolicy, config.DelegationModeTask), "%s allows task mode", id)
-		assert.True(t, hasMode(a.DelegationPolicy, config.DelegationModeBackground), "%s allows background mode", id)
+		assert.True(t, hasMode(dp, config.DelegationModeTask), "%s allows task mode", id)
+		assert.True(t, hasMode(dp, config.DelegationModeBackground), "%s allows background mode", id)
+
+		// Companion assertion: same collapse applies to Mia/Ray/Ava's seeded
+		// graph edges.
+		assert.ElementsMatch(t,
+			[]workspace.DelegationMode{workspace.ModeTask, workspace.ModeDirect},
+			seedModesToEdgeModes(dp.Modes),
+			"%s's seeded modes, translated onto a workspace graph edge, must collapse to [direct, task]", id)
 	}
 
-	worker := findSeeded(t, cfg, string(coreagent.IDWorker))
-	assert.Nil(t, worker.DelegationPolicy,
+	assert.Nil(t, coreagent.SeedDelegationEdges(coreagent.IDWorker),
 		"the worker is a leaf — it has no seeded onward delegation (deny-by-default)")
-}
-
-// TestSeedConfig_DoesNotReseedExplicitEmptyDelegation locks the architect's
-// load-bearing safety property for the delegation editor: an operator who has
-// explicitly set an agent's delegation policy to "deny all" (a non-nil but EMPTY
-// To list) must NOT have the seed trust graph re-applied on the next boot. The
-// re-seed migration only fires when DelegationPolicy is nil; a non-nil empty
-// policy is a deliberate operator choice and is preserved.
-//
-// Without this invariant, a tightening edit (revoke all delegation) would be
-// silently undone on every restart — the exact regression class the delegation
-// editor's reload fix guards against at runtime.
-func TestSeedConfig_DoesNotReseedExplicitEmptyDelegation(t *testing.T) {
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			List: []config.AgentConfig{
-				{
-					ID:   string(coreagent.IDJim),
-					Name: "Jim — Planner & Orchestrator",
-					Type: config.AgentTypeCore,
-					// Operator chose "deny all delegation": non-nil, empty To.
-					DelegationPolicy: &config.DelegationPolicy{To: []config.AgentRef{}},
-				},
-			},
-		},
-	}
-
-	coreagent.SeedConfig(cfg)
-
-	jim := findSeeded(t, cfg, string(coreagent.IDJim))
-	require.NotNil(t, jim.DelegationPolicy, "Jim's explicit policy must survive seeding")
-	assert.NotNil(t, jim.DelegationPolicy.To,
-		"explicit empty To must remain non-nil (deny-all is authoritative, not 'unset')")
-	assert.Empty(t, jim.DelegationPolicy.To,
-		"SeedConfig must NOT re-seed the trust graph over an operator's explicit deny-all policy")
 }
 
 // TestWorkerToolPolicyTightensGlobalCeiling verifies the worker's own policy

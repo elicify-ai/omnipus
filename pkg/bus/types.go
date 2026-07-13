@@ -72,8 +72,35 @@ type InboundMessage struct {
 	// turns leave audit.Entry.User empty structurally — not by a runtime
 	// guard. Empty under dev-mode bypass / legacy env-token auth (wc.userID
 	// is unset there); the audit stamp then stays empty rather than guessing.
-	GatewayUserID string            `json:"gateway_user_id,omitempty"`
-	Metadata      map[string]string `json:"metadata,omitempty"`
+	GatewayUserID string `json:"gateway_user_id,omitempty"`
+	// AsyncOriginAgentID is the agent whose turn produced this background
+	// result. Set ONLY by AsyncNotifier.Notify (pkg/agent/async_notifier.go,
+	// FIX 5d) when publishing a synthetic "system" channel message carrying an
+	// async tool/delegate result (AsyncNotifyEvent.AgentID). A DEDICATED
+	// carrier, following the same pattern as GatewayUserID above: without it,
+	// the consumer (processSystemMessage) has no way to know which agent
+	// actually produced the work and must guess via GetDefaultAgent() —
+	// the confirmed, exact cause of a live "Worker vs Jim" speaker-attribution
+	// flip when an async result from a non-default agent lands. Channel/
+	// task/scheduled inbound messages never set this field, so it is empty
+	// there structurally — not by a runtime guard.
+	AsyncOriginAgentID string `json:"async_origin_agent_id,omitempty"`
+	// AsyncTranscriptSessionID is the transcript-store session ID the
+	// originating turn was persisting to (turnState.transcriptSessionID). Set
+	// ONLY by AsyncNotifier.Notify (FIX 5d), mirroring AsyncOriginAgentID
+	// above. processSystemMessage resolves the owning store via
+	// AgentLoop.ResolveSessionStore and threads it into the reconstructed
+	// turn's TranscriptSessionID/TranscriptStore — the same "run a turn that
+	// must land in a specific, pre-existing session" pattern
+	// AgentLoop.ProcessScheduled and spawnSubTurn already use. Without this,
+	// persistence of the reconstructed turn depended ENTIRELY on a live
+	// WebSocket connection still being open (via the gateway's fragile
+	// chatID→sessionID GetStreamer lookup) — if that connection had already
+	// closed by the time the async result arrived, the result was silently,
+	// permanently lost (never written to transcript.jsonl, unrecoverable even
+	// by reopening the conversation).
+	AsyncTranscriptSessionID string            `json:"async_transcript_session_id,omitempty"`
+	Metadata                 map[string]string `json:"metadata,omitempty"`
 }
 
 type OutboundMessage struct {

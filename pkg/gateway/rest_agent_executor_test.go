@@ -726,60 +726,46 @@ func TestUpdateAgent_Worker_AcceptsValidPatch(t *testing.T) {
 // silently ignored — heartbeat is workspace-scoped (ADR-027). Worker-heartbeat
 // rejection now lives in workspace.ValidateMemberConfigs.
 
-// TestUpdateAgent_Subagent3p_AcceptsDelegationPolicy proves the worker-PUT-400
-// loosening: a subagent_3p PUT carrying a delegation_policy is no longer
-// rejected at the forbidden-field gate (a non-empty to[] is bounded by the
-// depth cap, and a modes/depth-only policy is accepted). Full assertion: the
-// PUT must be 200, the response must echo the policy, AND a subsequent GET
-// must show the same persisted policy (not just an absent-error-string
-// smoke test).
-func TestUpdateAgent_Subagent3p_AcceptsDelegationPolicy(t *testing.T) {
+// TestUpdateAgent_Subagent3p_RejectsDelegationPolicy proves ADR-037's wire
+// retirement of delegation_policy: a subagent_3p PUT carrying it is now
+// rejected 400 by updateAgent's raw-body sniff (rest.go) — the loud-400
+// mirror of ADR-035's precedent for a retired field, rather than the old
+// worker-PUT-400 loosening this test used to prove (which accepted and
+// echoed the policy). Also proves no side effect: the persisted config is
+// genuinely unchanged by the rejected PUT.
+func TestUpdateAgent_Subagent3p_RejectsDelegationPolicy(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 	id := createSubagent3p(t, api)
+
+	before, err := os.ReadFile(api.configPath())
+	require.NoError(t, err)
+
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+id,
 		strings.NewReader(`{"delegation_policy":{"modes":["await"],"depth":1}}`))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
-	require.Equal(t, http.StatusOK, w.Code,
-		"delegation_policy must no longer be a forbidden field on a subagent_3p PUT; body: %s", w.Body.String())
+	require.Equal(t, http.StatusBadRequest, w.Code,
+		"delegation_policy must be rejected on a subagent_3p PUT (ADR-037); body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "delegation_policy is retired")
 
-	updated := decodeAgentResp(t, w.Body.Bytes())
-	require.NotNil(t, updated.DelegationPolicy, "PUT response must echo the delegation policy")
-	require.NotNil(t, updated.DelegationPolicy.Modes)
-	require.Len(t, *updated.DelegationPolicy.Modes, 1)
-	assert.Equal(t, gen.AgentDelegationPolicyModes("await"), (*updated.DelegationPolicy.Modes)[0])
-	require.NotNil(t, updated.DelegationPolicy.Depth)
-	assert.Equal(t, 1, *updated.DelegationPolicy.Depth)
-
-	// Persistence: a subsequent GET must echo the same policy, not just the
-	// PUT response (which could echo a value that never actually landed).
-	getW := httptest.NewRecorder()
-	getR := httptest.NewRequest(http.MethodGet, "/api/v1/agents/"+id, nil)
-	api.HandleAgents(getW, getR)
-	require.Equal(t, http.StatusOK, getW.Code, "get body: %s", getW.Body.String())
-	got := decodeAgentResp(t, getW.Body.Bytes())
-	require.NotNil(t, got.DelegationPolicy, "GET must reflect the persisted delegation policy")
-	require.NotNil(t, got.DelegationPolicy.Modes)
-	require.Len(t, *got.DelegationPolicy.Modes, 1)
-	assert.Equal(t, gen.AgentDelegationPolicyModes("await"), (*got.DelegationPolicy.Modes)[0])
-	require.NotNil(t, got.DelegationPolicy.Depth)
-	assert.Equal(t, 1, *got.DelegationPolicy.Depth)
+	after, err := os.ReadFile(api.configPath())
+	require.NoError(t, err)
+	assert.Equal(t, string(before), string(after),
+		"config.json must be unchanged after a rejected delegation_policy PUT")
 }
 
 // TestCreateAgent_Subagent3p_ForbiddenFields_ValidationEnabled proves the six
-// CLI-owned fields (delegation_policy is EXCLUDED — see the behavior-change
-// note below) are rejected 400 at create time when ValidateInbound is
+// CLI-owned fields are rejected 400 at create time when ValidateInbound is
 // enabled: the discriminated-union AgentCreateRequestSubagent3p schema has no
 // matching property for any of them (additionalProperties: false). This
 // supersedes the old runtime firstForbiddenSubagent3pField check on create,
 // which is now enforced structurally by the schema instead (W2a).
 //
-// delegation_policy is intentionally NOT in this table any more — behavior
-// change (W2a): a subagent_3p create WITH delegation_policy used to 400
-// under the pre-W1 flat contract; the discriminated union now allows it on
-// every variant (subagent_3p is a valid delegation target). See
-// TestCreateAgent_Subagent3p_DelegationPolicyAccepted below.
+// delegation_policy is not in this table either — it is retired from the
+// wire entirely (ADR-037) rather than being a subagent_3p-specific forbidden
+// field; see TestCreateAgent_Subagent3p_DelegationPolicyRejected below, which
+// proves the same additionalProperties:false rejection applies to it too.
 func TestCreateAgent_Subagent3p_ForbiddenFields_ValidationEnabled(t *testing.T) {
 	cases := []struct {
 		name string
@@ -881,29 +867,31 @@ func TestCreateAgent_Subagent_SteeringModeFieldRejected(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "AgentCreateRequestSubagent")
 }
 
-// TestCreateAgent_Subagent3p_DelegationPolicyAccepted proves the behavior
-// change (W2a): delegation_policy is now allowed on a subagent_3p create
-// (201), whereas it used to 400 under the pre-W1 flat contract.
-func TestCreateAgent_Subagent3p_DelegationPolicyAccepted(t *testing.T) {
-	api := buildDelegationTestAPI(t)
+// TestCreateAgent_Subagent3p_DelegationPolicyRejected proves the ADR-037
+// behavior: delegation_policy is retired from the wire entirely, so a
+// subagent_3p create sending it is now rejected (400, additionalProperties:
+// false) rather than accepted (this test used to prove the opposite — the W2a
+// field-matrix unlock that made delegation_policy valid on ALL variants
+// including subagent_3p — before the field itself was retired).
+func TestCreateAgent_Subagent3p_DelegationPolicyRejected(t *testing.T) {
+	api := buildExecutorTestAPI(t)
 	body := `{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"},"delegation_policy":{"to":[{"kind":"local","id":"*"}],"modes":["task"],"depth":1}}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
-	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
-	created := decodeAgentResp(t, w.Body.Bytes())
-	assert.Equal(t, gen.AgentTypeSubagent3p, created.Type)
-	require.NotNil(t, created.DelegationPolicy, "create response must echo the policy")
-	require.NotNil(t, created.DelegationPolicy.To)
-	require.Len(t, *created.DelegationPolicy.To, 1)
-	assert.Equal(t, "*", (*created.DelegationPolicy.To)[0].Id)
+	require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "delegation_policy")
+	assert.Contains(t, w.Body.String(), "AgentCreateRequestSubagent3p")
 }
 
 // TestUpdateAgent_Subagent3p_ForbiddenFields rejects the CLI-owned fields on PUT.
-// worker-PUT-400: delegation_policy is NO LONGER in this set — it is a valid
-// worker field on PUT (a non-empty to[] is independently bounded by the depth
-// cap in buildDelegationPolicy). The remaining 5 stay forbidden because the
+// delegation_policy is covered separately by
+// TestUpdateAgent_Subagent3p_RejectsDelegationPolicy above (rest.go's
+// raw-body sniff) — ADR-037 retired it from the wire entirely, so it is no
+// longer part of this per-variant forbidden-field matrix at all; it 400s
+// unconditionally for every agent type via the sniff, not via this
+// executor-specific gate. The remaining 5 stay forbidden here because the
 // external CLI manages its own isolation/tools/skills (O13).
 func TestUpdateAgent_Subagent3p_ForbiddenFields(t *testing.T) {
 	api := buildExecutorTestAPI(t)

@@ -3102,25 +3102,6 @@ func TestContract_Workspace_ZeroValue(t *testing.T) {
 		"status is \"\" (not in [active, archived]) and name is \"\" (minLength: 1)")
 }
 
-func TestContract_DelegationPolicy_Populated(t *testing.T) {
-	assert.NoError(t,
-		validateAgainstComponentSchemaRawJSON(t, "DelegationPolicy", FixtureDelegationPolicy_PopulatedJSON()),
-		"fully-specified delegation policy must validate against DelegationPolicy.yaml")
-}
-
-func TestContract_DelegationPolicy_ZeroValue(t *testing.T) {
-	// No required fields → empty object is schema-valid (deny-by-default).
-	assert.NoError(t,
-		validateAgainstComponentSchemaRawJSON(t, "DelegationPolicy", FixtureDelegationPolicy_ZeroValueJSON()),
-		"empty delegation policy {} must validate (no required fields)")
-}
-
-func TestContract_DelegationPolicy_Invalid(t *testing.T) {
-	assert.Error(t,
-		validateAgainstComponentSchemaRawJSON(t, "DelegationPolicy", FixtureDelegationPolicy_InvalidJSON()),
-		"out-of-enum reference kind must FAIL DelegationPolicy.yaml validation")
-}
-
 func TestContract_ExecutorConfig_Populated(t *testing.T) {
 	mustPassComponent(t, "ExecutorConfig", FixtureExecutorConfig_Populated())
 }
@@ -3251,11 +3232,14 @@ func TestContract_AgentCreateRequestSubagent3p_ForbiddenFieldRejected(t *testing
 	)
 }
 
-func TestContract_AgentCreateRequestSubagent3p_DelegationPolicyAccepted(t *testing.T) {
-	// Behavior change (W2a): delegation_policy is now allowed on ALL variants
-	// including subagent_3p (a 3p create with delegation_policy used to 400
-	// under the flat contract; the discriminated union now permits it — 3p is
-	// a valid delegation *target*, per the field matrix).
+func TestContract_AgentCreateRequestSubagent3p_DelegationPolicyRejected(t *testing.T) {
+	// ADR-037: delegation_policy is retired from the wire entirely — the global
+	// per-agent delegation policy never drove enforcement (the per-workspace
+	// Delegation[] graph is the sole runtime authority) and has been removed
+	// from every Agent*/AgentCreateRequest*/AgentUpdateRequest schema. A
+	// client still sending delegation_policy on a subagent_3p create must now
+	// be rejected as an unknown field (additionalProperties: false), not
+	// silently accepted.
 	raw := []byte(`{
 		"type": "subagent_3p",
 		"name": "Delegatable 3p",
@@ -3263,8 +3247,8 @@ func TestContract_AgentCreateRequestSubagent3p_DelegationPolicyAccepted(t *testi
 		"executor": {"cli": "codex", "cli_path": "/usr/local/bin/codex"},
 		"delegation_policy": {"to": [{"kind": "local", "id": "ray"}], "modes": ["task"], "depth": 1}
 	}`)
-	assert.NoError(t, validateAgainstComponentSchemaRawJSON(t, "AgentCreateRequestSubagent3p", raw),
-		"subagent_3p with delegation_policy must be schema-valid (201, not 400)")
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "AgentCreateRequestSubagent3p", raw),
+		"subagent_3p with delegation_policy must now FAIL schema validation (field retired, ADR-037)")
 }
 
 // ── AgentUpdateRequest ───────────────────────────────────────────────────────

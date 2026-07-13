@@ -410,9 +410,10 @@ type processOptions struct {
 	// InitialDelegationDepth seeds the root turnState depth for a task run. A
 	// task created from within another task run carries a non-zero generation
 	// (task.Task.DelegationDepth); processTaskDirect seeds it here so the
-	// per-agent DelegationPolicy depth gate (currentDelegationDepth) trips on
-	// onward await/background delegation even though a task run otherwise starts
-	// a fresh turn at depth 0. Interactive/chat turns leave this 0.
+	// per-workspace delegation-graph edge's depth gate (currentDelegationDepth)
+	// trips on onward await/background delegation even though a task run
+	// otherwise starts a fresh turn at depth 0. Interactive/chat turns leave
+	// this 0.
 	InitialDelegationDepth int
 }
 
@@ -1479,43 +1480,25 @@ func registerSharedTools(
 			delegateTool := tools.NewDelegateTool(agent.Model, agent.MaxTokens, agent.Temperature)
 			delegateTool.SetSpawner(NewSubTurnSpawner(al))
 			currentAgentID := agentID
-			// delegate: repointed to unified DelegationPolicy.To (FR-6.3).
-			// Falls back to SubagentsConfig.AllowAgents via CanSpawnSubagent
-			// when DelegationPolicy is nil (backward compat, no silent widening).
-			delegateAgentCfg := findAgentConfig(cfg, currentAgentID)
-			delegateTool.SetAllowlistChecker(func(targetAgentID string) bool {
-				toList := config.ResolveDelegationTo(delegateAgentCfg, cfg.Agents.Defaults)
-				if toList != nil {
-					// Canonical unified policy is set — use it.
-					return config.IsDelegationAllowed(toList, targetAgentID)
-				}
-				// Unified policy not set for this agent — fall back to
-				// SubagentsConfig.AllowAgents (legacy path, deny-by-default preserved).
-				return registry.CanSpawnSubagent(currentAgentID, targetAgentID)
-			})
+			// ADR-037: the legacy DelegationPolicy.To / SubagentsConfig.AllowAgents
+			// allowlist checkers (SetAllowlistChecker / SetDelegateChecker) are
+			// retired — config.AgentConfig.DelegationPolicy no longer exists, and
+			// those checkers were only ever consulted as a fallback when the graph
+			// checkers below were nil, which never happens in production wiring.
+			// The per-workspace delegation graph (buildDelegationDenyChecker) is
+			// now the ONLY delegation gate.
+			//
 			// FR-6.2: full-policy gate for the background (async=true, the
-			// default) mode — trust set + mode("background") + depth. Takes
-			// precedence over the allowlist checker and surfaces a reason.
+			// default) mode — trust set + mode("background") + depth.
 			delegateTool.SetDelegationDenyCheckerBackground(
-				buildDelegationDenyChecker(currentAgentID, cfg.Agents.Defaults, config.DelegationModeBackground),
+				// ForDelegate bakes in exempt=false: delegate(agent_id=self) spawns a
+				// real sub-turn and MUST be graph-gated (and thus denied), never exempted.
+				buildDelegationDenyCheckerForDelegate(
+					currentAgentID,
+					cfg.Agents.Defaults,
+					config.DelegationModeBackground,
+				),
 			)
-			// FR-6.3: gate the await (async=false) mode too. Uses the unified
-			// DelegationPolicy.To via IsDelegationAllowedAny (no explicit
-			// target for the untargeted case; the check is "can delegate at all").
-			delegateTool.SetDelegateChecker(func() bool {
-				toList := config.ResolveDelegationTo(delegateAgentCfg, cfg.Agents.Defaults)
-				if toList != nil {
-					// Canonical policy present — allowed only if at least one target is permitted.
-					return config.IsDelegationAllowedAny(toList)
-				}
-				// No canonical policy — fall back to SubagentsConfig.AllowAgents existence.
-				// If AllowAgents is non-nil (even empty), the operator set a spawn policy;
-				// treat non-nil as opt-in allowed (AllowAgents nil → deny, per legacy semantics).
-				if delegateAgentCfg != nil && delegateAgentCfg.Subagents != nil {
-					return delegateAgentCfg.Subagents.AllowAgents != nil
-				}
-				return false
-			})
 			// FR-6.2: full-policy gate for the await (async=false) mode. Uses
 			// the same buildDelegationDenyChecker as the background gate
 			// above but with DelegationModeAwait, so a targeted
@@ -1523,7 +1506,9 @@ func registerSharedTools(
 			// caller→X edge for the "await" mode, and an untargeted call
 			// falls back to evalUntargetedDelegation.
 			delegateTool.SetDelegationDenyCheckerAwait(
-				buildDelegationDenyChecker(currentAgentID, cfg.Agents.Defaults, config.DelegationModeAwait),
+				// ForDelegate bakes in exempt=false: same reasoning as the background
+				// gate — a self-targeted await delegate() is real delegation, graph-gated.
+				buildDelegationDenyCheckerForDelegate(currentAgentID, cfg.Agents.Defaults, config.DelegationModeAwait),
 			)
 			// #477 / FR-D9-FR-D10: thread the SAME effective depth cap the
 			// gates above just authorized against into spawnSubTurn's own
@@ -1542,7 +1527,6 @@ func registerSharedTools(
 		// Task tools — require a task store (available after first NewAgentLoop call).
 		if al.taskStore != nil {
 			currentAgentID := agentID
-			agentCfg := findAgentConfig(cfg, currentAgentID)
 
 			agent.Tools.Register(tools.NewTaskListTool(al.taskStore))
 
@@ -1551,11 +1535,19 @@ func registerSharedTools(
 			// chat-delegated task has no workspace bound to the turn — never the
 			// literal "default" (which would land it in an invisible workspace).
 			taskCreate.SetHome(filepath.Dir(cfg.WorkspacePath()))
-			taskCreate.SetDelegateChecker(buildDelegateChecker(agentCfg, cfg.Agents.Defaults))
+			// ADR-037: the legacy boolean delegateCheck (SetDelegateChecker,
+			// backed by config.ResolveDelegationTo) is retired — the field it
+			// read no longer exists. The graph-based deny checker below is the
+			// only gate now (it was already the sole gate in production).
 			// FR-6.2: full-policy gate — trust set + mode("task") + depth.
-			// Takes precedence over the boolean delegate checker.
 			taskCreate.SetDelegationDenyChecker(
-				buildDelegationDenyChecker(currentAgentID, cfg.Agents.Defaults, config.DelegationModeTask),
+				// ForTaskReassignment bakes in exempt=true: assigning a NEW task to
+				// oneself is not delegation (no new instance spawned), not graph-gated.
+				buildDelegationDenyCheckerForTaskReassignment(
+					currentAgentID,
+					cfg.Agents.Defaults,
+					config.DelegationModeTask,
+				),
 			)
 			// Task-mode recursion bound: reject a task_create issued from within a
 			// task run whose delegation generation already sits at the ceiling. The
@@ -1591,11 +1583,18 @@ func registerSharedTools(
 				// drops jobs for terminal tasks); a non-terminal update re-syncs it.
 				al.NotifyTaskUpserted(t)
 			})
+			// ADR-037: legacy SetDelegateChecker retired here too — see the
+			// taskCreate comment above.
 			// FR-6.2: reassignment is re-delegation — gate agent_id changes through
 			// the same trust-set + mode("task") + depth policy as task_create.
-			taskUpdate.SetDelegateChecker(buildDelegateChecker(agentCfg, cfg.Agents.Defaults))
 			taskUpdate.SetDelegationDenyChecker(
-				buildDelegationDenyChecker(currentAgentID, cfg.Agents.Defaults, config.DelegationModeTask),
+				// ForTaskReassignment bakes in exempt=true: reassigning a task to its
+				// existing owner is a no-op reassignment, not delegation — not graph-gated.
+				buildDelegationDenyCheckerForTaskReassignment(
+					currentAgentID,
+					cfg.Agents.Defaults,
+					config.DelegationModeTask,
+				),
 			)
 			// Same subagent_3p reassignment guard as taskCreate above.
 			taskUpdate.SetExternalCLIWorkerChecker(cfg.IsExternalCLIWorkerID)
@@ -1704,15 +1703,27 @@ func registerSharedTools(
 		}
 
 		// recall_conversation (FR-008, FR-013, FR-019): session-scoped archive
-		// paging. The archive reader is the shared session store (ReadArchive
-		// reads the full log including evicted turns); the span setter is the
-		// AgentLoop itself (setRecallSpan / dropRecallSpan on al.recallSpans).
-		// The routing session key is read from ctx at Execute time
-		// (tools.ToolSessionKey) — no per-agent construction needed.
+		// paging. The archive reader MUST be agent.Sessions — the same store
+		// windowTrim evicts from and assembleMessages reads breadcrumbs from
+		// (turn.go's ts.session = agent.Sessions) — NOT al.GetSessionStore()'s
+		// shared store (rooted at $OMNIPUS_HOME/sessions/, used only for
+		// session routing metadata). The two are different UnifiedStore
+		// instances rooted at different directories for the same sessionKey;
+		// registering against the shared store means ReadArchive always finds
+		// an empty/unrelated file and recall_conversation can never reach the
+		// turns the breadcrumb just told the model about. The span setter is
+		// the AgentLoop itself (setRecallSpan / dropRecallSpan on
+		// al.recallSpans). The routing session key is read from ctx at
+		// Execute time (tools.ToolSessionKey) — no per-agent construction
+		// needed beyond binding the correct archive reader here.
 		// Excluded for the "main" gateway agent (no memory tools there either).
 		if agentID != "main" {
-			if sharedSessionStore := al.GetSessionStore(); sharedSessionStore != nil {
-				agent.Tools.Register(NewRecallConversationTool(sharedSessionStore, al))
+			if agent.Sessions != nil {
+				agent.Tools.Register(NewRecallConversationTool(agent.Sessions, al))
+			} else {
+				logger.WarnCF("agent",
+					"recall_conversation not registered — agent.Sessions is nil",
+					map[string]any{"agent_id": agentID})
 			}
 		}
 
@@ -1888,31 +1899,6 @@ func registerSharedTools(
 	}
 }
 
-// findAgentConfig returns the AgentConfig for the given agent ID, or nil if not found.
-func findAgentConfig(cfg *config.Config, agentID string) *config.AgentConfig {
-	for i := range cfg.Agents.List {
-		if cfg.Agents.List[i].ID == agentID {
-			return &cfg.Agents.List[i]
-		}
-	}
-	return nil
-}
-
-// buildDelegateChecker returns a function that checks whether delegation from agentCfg
-// to a target agent is allowed.
-//
-// FR-6.3 (Spec-3 keystone): repointed to the unified DelegationPolicy.To via
-// config.ResolveDelegationTo + config.IsDelegationAllowed. The legacy
-// CanDelegateTo fields remain as a backward-compat fallback when
-// DelegationPolicy is nil (handled inside ResolveDelegationTo).
-// No silent authz widening: deny-by-default is preserved when toList is nil.
-func buildDelegateChecker(agentCfg *config.AgentConfig, defaults config.AgentDefaults) func(string) bool {
-	toList := config.ResolveDelegationTo(agentCfg, defaults)
-	return func(targetAgentID string) bool {
-		return config.IsDelegationAllowed(toList, targetAgentID)
-	}
-}
-
 // currentDelegationDepth reports the delegation-chain depth of the turn that is
 // about to delegate, read from the turnState carried on ctx. The root user turn
 // has depth 0; each nested sub-turn increments it. Returns 0 when no turnState is
@@ -2014,12 +2000,57 @@ func findDelegationEdge(
 	}
 }
 
+// EdgeModeCategory maps the delegate tool's real 3-value runtime parameter
+// (config.DelegationMode: Await/Background/Task) down to the trust edge's
+// collapsed 2-value vocabulary (workspace.DelegationMode: Direct/Task). Task
+// maps 1:1 to workspace.ModeTask; both Await and Background — the sync-vs-async
+// choice is a delegate-tool call parameter, not something the trust edge gates
+// separately — map to workspace.ModeDirect. This is the single authority for
+// that collapse at the enforcement gate; the inverse expansion (Direct back to
+// both Await and Background for system-prompt advertising) lives in
+// wireDelegationInjectors (pkg/agent/loop_env.go), and defaultWorkspaceDelegationEdges
+// (pkg/gateway/rest_workspace_delegation.go) calls this function directly for
+// the collapse-on-seed case — pkg/gateway already imports pkg/agent extensively
+// (gateway.go, rest.go, rest_auth.go, ...), so there is no package-boundary
+// reason to duplicate this logic there; exported (not unexported) specifically
+// so that call site can reuse it instead of re-implementing the collapse.
+//
+// The switch below is deliberately exhaustive over the CLOSED 3-value
+// config.DelegationMode enum (Await/Background/Task) rather than an if/else on
+// the Task case with an implicit "else -> Direct" fallthrough: an if/else
+// fallback is invisible to golangci's exhaustive linter (which only inspects
+// real switch statements over enum-typed values) and would silently collapse
+// any future 4th mode value into ModeDirect with no signal anywhere. The
+// default case below keeps that same safe collapse (ModeDirect is the
+// currently-correct behavior per the closed 3-value enum) but makes an
+// unrecognized value NOISY via a warning log instead of silent, matching this
+// file's existing convention of logging every denial/exceptional path.
+func EdgeModeCategory(mode config.DelegationMode) workspace.DelegationMode {
+	switch mode {
+	case config.DelegationModeTask:
+		return workspace.ModeTask
+	case config.DelegationModeAwait, config.DelegationModeBackground:
+		return workspace.ModeDirect
+	default:
+		logger.WarnCF("agent",
+			"EdgeModeCategory: unrecognized config.DelegationMode value, defaulting to ModeDirect category",
+			map[string]any{"mode": string(mode)},
+		)
+		return workspace.ModeDirect
+	}
+}
+
 // enforceEdgeModeAndDepth applies the modes and depth constraints of a matched
 // delegation edge. Returns nil when the delegation is permitted, or a
 // *DelegationDenial (mode / depth) otherwise.
 //
-//   - modes: empty edge.Modes ⇒ all modes allowed; otherwise the current mode
-//     MUST be in edge.Modes.
+//   - modes: empty edge.Modes ⇒ all modes allowed; otherwise the current mode's
+//     CATEGORY (via EdgeModeCategory — Await/Background both collapse to
+//     Direct, Task stays Task) MUST be in edge.Modes. This is category
+//     membership, not a raw string/cast comparison: edge.Modes uses the
+//     collapsed 2-value workspace.DelegationMode vocabulary while mode is the
+//     tool's real 3-value config.DelegationMode parameter, so the two are never
+//     directly comparable.
 //   - depth: edge.Depth (when non-nil) is the per-edge onward-delegation cap; nil
 //     inherits — no per-edge cap. The global SubTurn.MaxDepth ceiling (passed as
 //     globalDepthCap, 0 = none) ALWAYS applies as an additional, independent cap.
@@ -2030,13 +2061,14 @@ func enforceEdgeModeAndDepth(
 	mode config.DelegationMode,
 	globalDepthCap int,
 ) *tools.DelegationDenial {
-	// Modes. edge.Modes is []workspace.DelegationMode (a string type); compare via
-	// a string cast to the request's config.DelegationMode. Empty edge.Modes ⇒ all
-	// modes allowed (handled by the len > 0 guard).
+	// Modes. Empty edge.Modes ⇒ all modes allowed (handled by the len > 0 guard).
+	// Otherwise compare the edge's collapsed vocabulary against mode's category,
+	// not mode itself.
 	if len(edge.Modes) > 0 {
+		category := EdgeModeCategory(mode)
 		allowed := false
 		for _, m := range edge.Modes {
-			if config.DelegationMode(m) == mode {
+			if m == category {
 				allowed = true
 				break
 			}
@@ -2122,8 +2154,9 @@ func errString(err error) string {
 // buildDelegationDenyChecker returns the per-workspace, graph-authoritative
 // delegation gate for a targeted delegation tool (delegate with async=true =
 // "background", create_task / update_task = "task"). The per-workspace
-// delegation graph (workspaces/<id>.json → Delegation[] edges) is the SOLE runtime authority:
-// the per-agent config.DelegationPolicy is seed-only and is NOT read here.
+// delegation graph (workspaces/<id>.json → Delegation[] edges) is the SOLE
+// runtime authority (ADR-037) — there is no separate per-agent delegation
+// policy at all; it is never read here.
 //
 // It enforces, in order, returning the first violation (nil = allowed):
 //
@@ -2131,8 +2164,8 @@ func errString(err error) string {
 //     delegation graph. No edge ⇒ DENY (trust_set). The workspace is the one
 //     bound to the turn, defaulting to the is_default workspace when none is
 //     bound — so a graph is ALWAYS consulted (never an implicit allow).
-//  2. mode      — the tool's delegation mode must be in the edge's Modes (empty
-//     Modes = all allowed).
+//  2. mode      — the tool's delegation mode's CATEGORY (via EdgeModeCategory)
+//     must be in the edge's Modes (empty Modes = all allowed).
 //  3. depth     — the current delegation-chain depth must be below the edge's
 //     Depth cap (nil = inherit; 0 = no onward delegation). The global
 //     SubTurn.MaxDepth ceiling always applies as an additional cap.
@@ -2144,24 +2177,74 @@ func errString(err error) string {
 // An empty targetAgentID means "no explicit target" (the LLM omitted agent_id);
 // the trust check is then skipped here — untargeted spawns resolve to the default
 // agent — while mode and depth (against any one of the caller's outgoing edges)
-// still apply. Self-assignment (target == caller) is NOT delegation and is
-// always allowed without consulting the graph.
+// still apply.
 //
-// defaults is only consulted for its SubTurn.MaxDepth global depth cap — the
-// per-agent config.DelegationPolicy it used to carry is no longer read (the
-// graph supersedes it).
+// selfAssignmentExempt controls the self-target (target == caller) case.
+//
+// DO NOT call this function directly at a wiring site. Use one of the two
+// intent-named wrappers instead, so the exempt value can never be flipped
+// wrong (a delegate-tool site with exempt=true silently reopens the
+// self-delegation bypass — a security regression; a task-tool site with
+// exempt=false merely denies a legitimate self-reassignment — loud and
+// harmless, but still wrong):
+//
+//   - buildDelegationDenyCheckerForDelegate         (exempt=false) — the
+//     `delegate` tool's background + await gates. delegate(agent_id=self) spawns
+//     a real sub-turn instance, so it IS delegation and is graph-gated (and, for
+//     self, ALWAYS denied — see below).
+//   - buildDelegationDenyCheckerForTaskReassignment (exempt=true)  — the task
+//     tools: create_task / update_task AND the cross-workspace
+//     create_task_in_workspace / update_task_in_workspace via
+//     NewSysagentDelegationDeny. Reassigning a task to the agent that already
+//     owns it is NOT delegation (no new instance is spawned), so it is allowed
+//     without consulting the graph.
+//
+// The exempt choice is a property of the CALLER (which tool wired this checker),
+// NOT of `mode`. NEVER derive selfAssignmentExempt from `mode` — the two happen
+// to correlate today (delegate uses background/await, tasks use task), but that
+// is coincidence, not an invariant: a future delegate-in-task-mode would reopen
+// the bypass if someone "simplified" by deriving the flag from the mode.
+//
+// When exempt is false, a self-target is DENIED directly here (defense-in-depth),
+// without relying solely on workspace.DelegationEdge.Validate's self-edge
+// prohibition as the guard, and with a distinct reason so the caught bypass
+// attempt is distinguishable from a routine trust_set denial.
+//
+// defaults is only consulted for its SubTurn.MaxDepth global depth cap — there
+// is no per-agent config.DelegationPolicy to read anymore (ADR-037); the
+// per-workspace graph is the sole authority.
 func buildDelegationDenyChecker(
 	currentAgentID string,
 	defaults config.AgentDefaults,
 	mode config.DelegationMode,
+	selfAssignmentExempt bool,
 ) func(ctx context.Context, targetAgentID string) *tools.DelegationDenial {
 	globalDepthCap := defaults.SubTurn.MaxDepth
 
 	return func(ctx context.Context, targetAgentID string) *tools.DelegationDenial {
-		// Self-assignment (target == caller) is NOT delegation — an agent
-		// creating/reassigning a task to itself does not consult the graph.
 		if targetAgentID == currentAgentID {
-			return nil
+			// Self-target. For the task tools (exempt=true) this is a no-op
+			// reassignment to the task's existing owner, not delegation — allow.
+			if selfAssignmentExempt {
+				return nil
+			}
+			// For the delegate tool (exempt=false) self-delegation IS delegation
+			// and is ALWAYS denied. Deny directly (defense-in-depth) instead of
+			// falling through to findDelegationEdge and relying on the graph's
+			// self-edge prohibition (DelegationEdge.Validate) as the sole guard. A
+			// distinct reason + log distinguishes this caught self-delegation
+			// bypass attempt from a routine "target not trusted" trust_set denial.
+			logger.WarnCF("agent", "delegation denied: self-delegation is not permitted", map[string]any{
+				"agent_id": currentAgentID, "target": targetAgentID, "mode": string(mode),
+			})
+			return &tools.DelegationDenial{
+				Reason: fmt.Sprintf(
+					"an agent cannot delegate to itself (%q): self-delegation is never permitted",
+					currentAgentID,
+				),
+				Policy:        tools.DenyTrustSet,
+				TargetAgentID: targetAgentID,
+			}
 		}
 
 		if targetAgentID != "" {
@@ -2179,6 +2262,33 @@ func buildDelegationDenyChecker(
 		// Mode + depth still apply against that edge.
 		return evalUntargetedDelegation(ctx, currentAgentID, mode, globalDepthCap)
 	}
+}
+
+// buildDelegationDenyCheckerForDelegate is the wiring-site constructor for the
+// `delegate` tool's background and await gates. It bakes in selfAssignmentExempt=false:
+// delegate(agent_id=self) spawns a real sub-turn instance, so it IS delegation and a
+// self-target is ALWAYS denied. Use this — never the raw core with a literal false —
+// so the security-critical exempt value can never be flipped wrong at a call site.
+func buildDelegationDenyCheckerForDelegate(
+	currentAgentID string,
+	defaults config.AgentDefaults,
+	mode config.DelegationMode,
+) func(ctx context.Context, targetAgentID string) *tools.DelegationDenial {
+	return buildDelegationDenyChecker(currentAgentID, defaults, mode, false)
+}
+
+// buildDelegationDenyCheckerForTaskReassignment is the wiring-site constructor for the
+// task tools: create_task / update_task and the cross-workspace
+// create_task_in_workspace / update_task_in_workspace (via NewSysagentDelegationDeny).
+// It bakes in selfAssignmentExempt=true: reassigning a task to the agent that already
+// owns it is NOT delegation (no new instance is spawned), so a self-target is allowed
+// without consulting the graph. Non-self targets are still fully graph-gated.
+func buildDelegationDenyCheckerForTaskReassignment(
+	currentAgentID string,
+	defaults config.AgentDefaults,
+	mode config.DelegationMode,
+) func(ctx context.Context, targetAgentID string) *tools.DelegationDenial {
+	return buildDelegationDenyChecker(currentAgentID, defaults, mode, true)
 }
 
 // evalUntargetedDelegation gates an untargeted delegation (no explicit target)
@@ -2267,10 +2377,12 @@ func evalUntargetedDelegation(
 // workspace DENIES (fail-closed) inside buildDelegationDenyChecker.
 func (al *AgentLoop) NewSysagentDelegationDeny() func(ctx context.Context, callerAgentID, targetAgentID string) *tools.DelegationDenial {
 	return func(ctx context.Context, callerAgentID, targetAgentID string) *tools.DelegationDenial {
-		// Self-assignment / untargeted is not delegation and is allowed before
-		// touching the graph, matching buildDelegationDenyChecker's own short
-		// circuits (the cross-workspace tools always supply a concrete target on a
-		// reassignment; an empty target here is a no-op assignment).
+		// Self-assignment / untargeted is a no-op reassignment, not delegation, and
+		// is allowed before touching the graph. This mirrors the exempt=true
+		// self-target short-circuit inside buildDelegationDenyCheckerForTaskReassignment
+		// (used below) and additionally covers the empty-target case (which the gate
+		// would otherwise route through evalUntargetedDelegation). The cross-workspace
+		// tools always supply a concrete target on a real reassignment.
 		if targetAgentID == "" || targetAgentID == callerAgentID {
 			return nil
 		}
@@ -2278,7 +2390,10 @@ func (al *AgentLoop) NewSysagentDelegationDeny() func(ctx context.Context, calle
 		if cfg := al.GetConfig(); cfg != nil {
 			defaults = cfg.Agents.Defaults
 		}
-		gate := buildDelegationDenyChecker(callerAgentID, defaults, config.DelegationModeTask)
+		// ForTaskReassignment (exempt=true): these are the cross-workspace TASK tools
+		// (create_task_in_workspace / update_task_in_workspace) — a self-target is a
+		// no-op task reassignment, not delegation (also short-circuited above).
+		gate := buildDelegationDenyCheckerForTaskReassignment(callerAgentID, defaults, config.DelegationModeTask)
 		return gate(ctx, targetAgentID)
 	}
 }
@@ -2313,6 +2428,23 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 			}
 
 			// System messages are handled inline in a goroutine (no scope).
+			//
+			// FIX 5d follow-up — tracked as elicify-ai/omnipus#505 (filed,
+			// not fixed in this pass): before FIX 5d, an AsyncNotifier-
+			// originated system message was inert here w.r.t. the origin
+			// session (no TranscriptSessionID/TranscriptStore bound), so
+			// this lack of per-session serialization was harmless. FIX 5d
+			// now threads AsyncOriginAgentID/AsyncTranscriptSessionID
+			// through processSystemMessage, so this goroutine CAN run a real
+			// turn concurrently against the SAME origin session as a live
+			// user turn (unlike every other inbound message, which IS
+			// serialized per session via the sessionWorker pool below).
+			// File-level writes stay safe (UnifiedStore's mutex +
+			// WriteFileAtomic), so this is not a NEW corruption risk on its
+			// own, but the single-writer-per-session invariant other turn
+			// types rely on no longer holds for this specific path. See
+			// #505 for the suggested follow-up (route through sessionWorker,
+			// or prove file-level locking is sufficient and close it).
 			if msg.Channel == "system" {
 				// Track in activeRequests so graceful shutdown's
 				// WaitForActiveRequests drains this turn before teardown —
@@ -3235,8 +3367,8 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	}
 
 	// Re-wire per-turn delegation injectors on the new registry so that the
-	// updated DelegationPolicy (from the fresh AgentInstances) is reflected
-	// on every agent's next turn without a static-prompt cache bust.
+	// updated per-workspace delegation graph (read fresh per call) is
+	// reflected on every agent's next turn without a static-prompt cache bust.
 	wireDelegationInjectors(al, registry)
 
 	// Re-wire per-turn working-directory injectors on the new registry, same
@@ -4861,23 +4993,117 @@ func (al *AgentLoop) processSystemMessage(
 		return "", nil
 	}
 
-	// Use default agent for system messages
-	agent := al.GetRegistry().GetDefaultAgent()
+	// FIX 5d (#1): resolve the TRUE originating agent when the message carries
+	// one (AsyncNotifier.Notify sets AsyncOriginAgentID for an async tool/
+	// delegate result) — never guess GetDefaultAgent() when the real producer
+	// is known. This is the confirmed, exact cause of a live "Worker vs Jim"
+	// speaker-attribution flip: an async result from a non-default agent used
+	// to be silently reattributed to whichever agent happens to be default.
+	// GetDefaultAgent() remains the fallback for messages with no async
+	// origin (or a named agent that has since been deleted) — a genuine
+	// last resort, not the primary path.
+	var agent *AgentInstance
+	if msg.AsyncOriginAgentID != "" {
+		if named, ok := al.GetRegistry().GetAgent(msg.AsyncOriginAgentID); ok && named != nil {
+			agent = named
+		} else {
+			logger.WarnCF(
+				"agent",
+				"processSystemMessage: named async origin agent not found; falling back to default agent",
+				map[string]any{"agent_id": msg.AsyncOriginAgentID},
+			)
+		}
+	}
+	if agent == nil {
+		agent = al.GetRegistry().GetDefaultAgent()
+	}
 	if agent == nil {
 		return "", fmt.Errorf("no default agent for system message")
 	}
 
-	// Use the origin session for context
+	// FIX 5d (#2): resolve the originating turn's transcript session/store so
+	// this reconstructed turn persists into the SAME session the producing
+	// turn was writing to — the same "run a turn that must land in a
+	// specific, pre-existing session" pattern ProcessScheduled and
+	// spawnSubTurn already use (al.ResolveSessionStore /
+	// TranscriptSessionID+TranscriptStore threading). Without this,
+	// persistence depended ENTIRELY on a live WebSocket connection still
+	// being open when the async result landed — if it had already closed,
+	// the result was silently, permanently lost. A session ID that no longer
+	// resolves to a store (deleted session) degrades to "not persisted" —
+	// the same outcome as before this fix, not a new failure mode.
+	var transcriptSessionID string
+	var transcriptStore *session.UnifiedStore
+	if msg.AsyncTranscriptSessionID != "" {
+		if store := al.ResolveSessionStore(msg.AsyncTranscriptSessionID); store != nil {
+			transcriptSessionID = msg.AsyncTranscriptSessionID
+			transcriptStore = store
+		} else {
+			logger.WarnCF(
+				"agent",
+				"processSystemMessage: async transcript session not found; result will not be persisted to a session",
+				map[string]any{"session_id": msg.AsyncTranscriptSessionID},
+			)
+		}
+	}
+
+	// A-I4 round 6, Priority 2: scope the reconstructed turn's SessionKey to
+	// the SPECIFIC originating session (mirroring agentSessionKey's
+	// "agent:<id>:session:<sid>" convention every regular routed turn
+	// already uses — pkg/agent/loop.go:4794) rather than the agent-wide
+	// routing.BuildAgentMainSessionKey "agent:<id>:main" bucket this used to
+	// hard-code unconditionally.
+	//
+	// SessionKey drives THREE things that must never be shared across
+	// unrelated originating sessions: (1) agent.Sessions.GetHistory/
+	// SetHistory/Save — the in-memory LLM conversation history this turn's
+	// prompt is built from (loop.go:5415, 6223, 6367, 7819, 7944, 8084,
+	// 8254, 8464, 8949-8951); (2) activeTurnStates registration/lookup; and
+	// (3) the per-scope sessionWorker (pkg/agent/session_worker.go) that
+	// serializes turns and steers same-scope late-arriving messages into an
+	// ALREADY-RUNNING turn rather than starting a new one.
+	//
+	// Root cause this closes (A-I4 round 6 Priority 2 cross-session leak,
+	// live-verified 2026-07): every delegate-completion notification for the
+	// SAME agent — regardless of which real chat session originated the
+	// underlying delegate/background work — used to collapse onto the ONE
+	// "agent:<id>:main" key. Two delegate completions for the same agent
+	// landing close together (routine under normal use — an orchestrator
+	// like Jim commonly has several concurrent background delegates) then
+	// shared: the same in-memory history bucket (so the second notify-turn's
+	// LLM prompt was contaminated with the first, unrelated notify-turn's
+	// conversation, producing a recap that blends or hallucinates facts from
+	// a DIFFERENT session's delegation — reproduced live: a session that
+	// only ever delegated to "Ava" received a persisted assistant turn
+	// narrating a nonexistent "delegation to Ray" pulled from an unrelated
+	// session's exchange); and the same sessionWorker scope (so the second
+	// notify-turn could be STEERED into the first's still-running turn as a
+	// mid-turn continuation instead of running as its own turn — see
+	// session_worker.go's enqueue doc comment — further blending two
+	// unrelated sessions' content into one LLM call).
+	//
+	// TranscriptSessionID/TranscriptStore (already correctly scoped by FIX
+	// 5d above) only controls WHERE the turn's output is persisted — it does
+	// nothing to isolate WHAT content that turn's own LLM call is built
+	// from. Both must agree for one session's recap to never see another
+	// session's data. Falls back to the unscoped main key only when no
+	// origin session is known (a system message with no AsyncNotifier
+	// origin), matching the pre-fix behavior for that narrower case.
 	sessionKey := routing.BuildAgentMainSessionKey(agent.ID)
+	if transcriptSessionID != "" {
+		sessionKey = fmt.Sprintf("agent:%s:session:%s", agent.ID, transcriptSessionID)
+	}
 
 	return al.runAgentLoop(ctx, agent, processOptions{
-		SessionKey:      sessionKey,
-		Channel:         originChannel,
-		ChatID:          originChatID,
-		UserMessage:     fmt.Sprintf("[System: %s] %s", msg.Sender.CanonicalID, msg.Content),
-		DefaultResponse: "Background task completed.",
-		EnableSummary:   false,
-		SendResponse:    true,
+		SessionKey:          sessionKey,
+		Channel:             originChannel,
+		ChatID:              originChatID,
+		UserMessage:         fmt.Sprintf("[System: %s] %s", msg.Sender.CanonicalID, msg.Content),
+		DefaultResponse:     "Background task completed.",
+		EnableSummary:       false,
+		SendResponse:        true,
+		TranscriptSessionID: transcriptSessionID,
+		TranscriptStore:     transcriptStore,
 	})
 }
 
@@ -5075,10 +5301,10 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	defer turnCancel()
 	ts.setTurnCancel(turnCancel)
 
-	// Finalize the streamer when the turn ends (regardless of how it exits).
-	// This sends the "done" frame exactly once, at turn completion, rather than
-	// after each intermediate LLM call that may be followed by tool execution.
-	defer ts.finalizeStreamer(ctx)
+	// NOTE: finalizeStreamer's defer is registered further below (after
+	// ts.Finish(false)/al.clearActiveTurn), not here — see that registration
+	// site's comment for why the ORDER relative to Finish is load-bearing
+	// (FIX 1/5c live-verification finding).
 
 	// Inject turnState and AgentLoop into context so tools (e.g. delegate) can retrieve them.
 	turnCtx = withTurnState(turnCtx, ts)
@@ -5193,13 +5419,53 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	turnCtx = tools.WithCitationTracker(turnCtx, citationTracker)
 
 	al.registerActiveTurn(ts)
-	// B1: Finish must run before clearActiveTurn so that IsAlive() goes false
-	// and the onCancelFinish callback fires on natural turn completion, not only
-	// on explicit cancel paths. closeOnce.Do inside Finish makes repeated calls
-	// safe — the cancel path may have already called Finish(true); the second
-	// call here is a no-op via isFinished.Store(true) being idempotent and
-	// closeOnce.Do executing at most once.
+	// Execution order (LIFO defer — registered in reverse of desired run
+	// order): clearActiveTurn runs FIRST, then finalizeStreamer, then
+	// Finish(false) LAST.
+	//
+	// clearActiveTurn must run before finalizeStreamer, which sends the
+	// "done" WS frame. IsAlive()/onCancelFinish are unaffected by
+	// clearActiveTurn's timing — they're driven by ts.isFinished/
+	// ts.cancelFired directly, never by activeTurnStates map membership — so
+	// an earlier version of this ordering (clearActiveTurn registered
+	// straight after Finish, i.e. running AFTER finalizeStreamer) was correct
+	// for that reasoning but wrong in practice: TestWS_Cancel_OnlyInterruptsTargetSession
+	// caught a real race. A client that receives "done" and immediately sends
+	// "cancel" for the same session_id can have that cancel reach
+	// handleCancel -> GetActiveTurnHookForSession before this goroutine's own
+	// remaining defers run — a loopback WS round trip can beat two sequential
+	// Go defer calls under scheduler contention. GetActiveTurnHookForSession
+	// then still finds the (already-finished) turnState in the map,
+	// ClaimCancel succeeds, and a spurious cancel_stage frame goes out for a
+	// turn the client already knows is done. Deleting the map entry before
+	// "done" is sent closes that window: any cancel arriving after closes on
+	// nothing to claim.
+	//
+	// finalizeStreamer must still run BEFORE ts.Finish(false) — registered
+	// here, between clearActiveTurn and Finish. finalizeStreamer is what
+	// calls wsStreamer.Finalize(), which writes the assistant transcript
+	// entry (FIX 1). Finish(false)'s onCancelFinish callback
+	// (pkg/agent/cancel.go) is what writes the turn_canceled entry AND calls
+	// MarkLastEntryTruncated to flag the assistant entry. Both depend on the
+	// assistant entry already existing in transcript.jsonl:
+	//   - MarkLastEntryTruncated's backward-walk finds nothing to flag if the
+	//     assistant entry isn't there yet (silently succeeds as a no-op —
+	//     Truncated never gets set).
+	//   - The frontend's turn_canceled -> assistant-message replay
+	//     correlation (chatTurnCanceledNoMatch) requires the assistant
+	//     ReplayMessageFrame to have already arrived on the wire before the
+	//     turn_canceled frame that references its TurnID — replay emits
+	//     frames in transcript.jsonl's on-disk order, so if turn_canceled is
+	//     written first, it replays first too, and the frontend's "find the
+	//     existing message" lookup always misses.
+	// Live-verified via a mid-stream cancel: transcript.jsonl showed user ->
+	// turn_canceled -> assistant (wrong order) when finalizeStreamer ran
+	// after Finish's callback; user -> assistant -> turn_canceled (correct)
+	// with finalizeStreamer running first. closeOnce.Do inside Finish makes
+	// repeated Finish calls safe — the cancel path may have already called
+	// Finish(true); this deferred Finish(false) is then a no-op.
 	defer ts.Finish(false)
+	defer ts.finalizeStreamer(ctx)
 	defer al.clearActiveTurn(ts)
 
 	turnStatus := TurnEndStatusCompleted
@@ -5827,6 +6093,17 @@ turnLoop:
 				logger.DebugCF("agent", "Provider supports streaming, checking for streamer", map[string]any{"channel": ts.channel, "chat_id": ts.chatID})
 				if streamer, hasStreamer := al.bus.GetStreamer(providerCtx, ts.channel, ts.chatID, ts.transcriptSessionID); hasStreamer {
 					logger.InfoCF("agent", "Using streaming for response", map[string]any{"channel": ts.channel, "chat_id": ts.chatID})
+					// FIX 5a/5c: stamp the TRUE per-turn producer and this turn's own
+					// ID before any token can flow — see stampStreamerProducerAgentID
+					// and stampStreamerTurnID's doc comments. stampStreamerParentSpawnCallID
+					// additionally stamps this turn's delegation-nesting correlation
+					// (empty for a root turn) so a delegate's own streamed final
+					// response round-trips through Finalize with the same
+					// ParentSpawnCallID its non-streaming siblings carry — see its
+					// own doc comment.
+					ts.stampStreamerProducerAgentID(streamer)
+					ts.stampStreamerTurnID(streamer)
+					ts.stampStreamerParentSpawnCallID(streamer)
 					var lastChunk string
 					resp, streamErr := sp.ChatStream(providerCtx, messagesForCall, toolDefsForCall, llmModel, llmOpts, func(accumulated string) {
 						// B4: if the turn has been abandoned (stuck-goroutine detach),
@@ -6104,7 +6381,18 @@ turnLoop:
 						callMessages, toolDefs, ts.agent.MaxTokens,
 					) {
 						compactionAttemptedOnTimeout = true
-						if compression, ok := al.windowTrim(ts.agent, ts.sessionKey); ok {
+						// windowTrim has three possible outcomes here:
+						//  1. ok=true — a real eviction occurred, either window Turns were
+						//     dropped or dropping the active recall span alone (FR-019)
+						//     brought the window back under budget — rebuild messages and
+						//     retry (this branch).
+						//  2. ok=false, NothingToTrim=true — nothing was eligible to evict
+						//     (e.g. a fresh turn with no compressible history) — not a
+						//     failure; fall through to backoff+retry unchanged.
+						//  3. ok=false, NothingToTrim=false — TruncateHistory was attempted
+						//     but the window genuinely did not shrink — abandon the retry.
+						compression, ok := al.windowTrim(ts.agent, ts.sessionKey)
+						if ok {
 							al.emitEvent(
 								EventKindContextCompress,
 								ts.eventMeta("runTurn", "turn.context.compress"),
@@ -6133,18 +6421,33 @@ turnLoop:
 							if gracefulTerminal {
 								callMessages = append(append([]providers.Message(nil), messages...), ts.interruptHintMessage())
 							}
+						} else if compression.NothingToTrim {
+							// Nothing eligible to evict (e.g. a fresh turn with a
+							// single-message window, no compressible history yet).
+							// This is not a compaction failure — the error that got us
+							// here was a transient network/streaming reset (isTimeoutError),
+							// not a genuine context-overflow rejection from the provider.
+							// Abandoning the whole retry here would defeat the timeout-
+							// retry path for any turn that happens to sit near the
+							// context-budget edge with little/no history. Fall through to
+							// the backoff-and-retry below with the existing messages
+							// unchanged — the retried call may simply succeed.
+							logger.DebugCF("agent", "Window trim skipped during timeout recovery: nothing eligible to evict; proceeding with retry",
+								map[string]any{"agent_id": ts.agent.ID, "iteration": iteration})
 						} else {
-							// Trim failed (e.g. nothing to evict yet on a fresh/short
-							// session — windowTrim refuses to shrink a <=1-message
-							// window). The isOverContextBudget check above is a
-							// conservative proactive heuristic (75% of the context
-							// window), not a hard limit, and the error being handled
-							// here is a transient transport drop (streaming reset /
-							// GOAWAY) that has nothing to do with context size — so an
-							// inability to compact must not cancel the retry. Mirrors
-							// the analogous C3 fix in the isContextError branch below:
-							// don't burn the retry budget looping on a compaction that
-							// can't succeed, but still let this one retry through.
+							// Trim was attempted against real compressible history and
+							// genuinely failed (e.g. TruncateHistory could not shrink the
+							// window). Unlike the isContextError path below, though, the
+							// error that got us HERE is a transient transport drop
+							// (streaming reset / GOAWAY), and the trim was triggered only
+							// by the isOverContextBudget check above — a conservative
+							// proactive heuristic (75% of the window), NOT a hard provider
+							// context-overflow rejection. So the window is not necessarily
+							// over the real limit, and cancelling the retry would abandon a
+							// call that often just succeeds on a second try (UAT: an 11th
+							// tool call tipped the 75% heuristic mid-task and a break here
+							// truncated a task that completed fine on retry). Fall through
+							// to the backoff-and-retry below rather than returning partial.
 							logger.WarnCF("agent", "Window trim failed during timeout recovery; proceeding to retry without compaction",
 								map[string]any{"agent_id": ts.agent.ID, "iteration": iteration})
 						}
@@ -6951,11 +7254,16 @@ turnLoop:
 					ts.scope.meta(toolIteration, "runTurn", "turn.follow_up.queued"),
 				)
 				if notifyErr := al.asyncNotifier.Notify(notifyCtx, AsyncNotifyEvent{
-					Channel:    ts.channel,
-					ChatID:     ts.chatID,
-					AgentID:    ts.agent.ID,
-					SourceKind: asyncToolName,
-					Content:    content,
+					Channel: ts.channel,
+					ChatID:  ts.chatID,
+					AgentID: ts.agent.ID,
+					// FIX 5d: thread the originating turn's transcript binding
+					// through so the reconstructed turn persists into the SAME
+					// session, independent of whether a live WS connection is
+					// still open when the async result lands.
+					TranscriptSessionID: ts.transcriptSessionID,
+					SourceKind:          asyncToolName,
+					Content:             content,
 				}); notifyErr != nil {
 					logger.ErrorCF("agent", "Failed to publish async tool result; result permanently lost",
 						map[string]any{"tool": asyncToolName, "channel": ts.channel, "error": notifyErr.Error()})
@@ -7222,7 +7530,27 @@ turnLoop:
 				},
 			)
 			tcStatus := "success"
-			if toolResult.IsError {
+			switch {
+			case toolResult.Interrupted:
+				// Finding F (A-I4 round 5): a synchronous delegate/spawn call
+				// whose child sub-turn was interrupted by a parent-turn
+				// cancellation — see pkg/agent/subturn.go's spawnSubTurn
+				// cleanup defer, the single source of truth for this
+				// classification (ToolResult.Interrupted's doc comment).
+				// Persisting "interrupted" here — rather than folding it into
+				// the generic "error" case below — is what lets a session
+				// reload's subagent_end frame (pkg/gateway/replay.go reads
+				// this exact tc.Status back) show the same terminal status
+				// the live WS stream already showed, instead of "failed"
+				// (SubagentEndFrame.yaml's status enum explicitly supports
+				// "interrupted" for this). The OUTER tool_call_result frame
+				// for this same call is unaffected — replay.go clamps any
+				// non-success tc.Status down to "error" for that stricter,
+				// binary wire enum, matching toolResult.IsError (still true
+				// here) and today's unchanged live behavior for the outer
+				// badge.
+				tcStatus = "interrupted"
+			case toolResult.IsError:
 				tcStatus = "error"
 			}
 			tcRecord := session.ToolCall{
@@ -7724,6 +8052,27 @@ func (al *AgentLoop) maybeSummarize(agent *AgentInstance, sessionKey string, tur
 type compressionResult struct {
 	DroppedMessages   int
 	RemainingMessages int
+	// NothingToTrim is set (alongside ok=false) when windowTrim declined to
+	// run because the live window had nothing eligible to evict (e.g. a
+	// fresh turn with a single-message window). Callers that treat ok=false
+	// as "compaction failed, abandon retry" should check this flag first: a
+	// no-op trim is not a failure of the compaction mechanism and should
+	// not, on its own, be grounds for giving up on a retry triggered by an
+	// unrelated transient error.
+	//
+	// windowTrim's other ok=false path — TruncateHistory was attempted but
+	// the window did not actually shrink — is a genuine failure and leaves
+	// this flag unset; the window is still over budget in that case, so
+	// retrying against it is unlikely to help.
+	//
+	// A third windowTrim outcome exists but is deliberately NOT reported
+	// through this flag: dropping the active recall span alone (FR-019) can
+	// bring the window back under budget without evicting any window Turns.
+	// That is a real, successful eviction, so windowTrim reports it the same
+	// way as a normal window eviction — ok=true with DroppedMessages==0 —
+	// rather than ok=false+NothingToTrim, so callers rebuild the assembled
+	// messages (dropping the now-stale recall-span content) before retrying.
+	NothingToTrim bool
 }
 
 // assembleMessages is the single consistent helper that reads the archive,
@@ -7807,7 +8156,7 @@ func (al *AgentLoop) windowTrim(agent *AgentInstance, sessionKey string) (compre
 	window := agent.Sessions.GetHistory(sessionKey)
 	if len(window) <= 1 {
 		// Nothing to evict: a single-message window cannot be shrunk further.
-		return compressionResult{}, false
+		return compressionResult{NothingToTrim: true}, false
 	}
 
 	toolDefs := agent.Tools.ToProviderDefs()
@@ -7863,7 +8212,15 @@ func (al *AgentLoop) windowTrim(agent *AgentInstance, sessionKey string) (compre
 		// Using raw contextWindow here would pass cases that the suffix walk
 		// would still reject, causing unnecessary evictions on the next call.
 		if currentWindowTokens+toolDefsTokens <= budget {
-			return compressionResult{}, false
+			// The recall span alone was the problem: dropping it brought the
+			// window back under budget without evicting any window Turns.
+			// This IS a real, successful eviction — FR-019 names the span
+			// drop as step 3 of the documented algorithm — so report
+			// ok=true, the same as a normal window eviction, rather than
+			// ok=false. That makes the caller rebuild the assembled
+			// messages (dropping the now-stale recall-span content) instead
+			// of treating a useful eviction as a compaction failure.
+			return compressionResult{RemainingMessages: len(window)}, true
 		}
 	}
 

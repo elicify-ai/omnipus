@@ -246,11 +246,11 @@ type Task struct { //nolint:revive // exported name matches package purpose
 	// created from a normal (root) chat/agent turn has depth 0; a task created
 	// from *within* a running task carries its spawning run's depth + 1. The
 	// task executor seeds the run's root turnState depth from this value so the
-	// per-agent DelegationPolicy depth gate (and the global subturn ceiling)
-	// bounds onward delegation, and task_create rejects a create that would
-	// exceed maxTaskDepth. This is an internal recursion-bound counter — it is
-	// NOT part of the gen.Task wire contract and never crosses the gateway/SPA
-	// boundary (the REST task mapper does not copy it).
+	// per-workspace delegation-graph edge's depth gate (and the global subturn
+	// ceiling) bounds onward delegation, and task_create rejects a create that
+	// would exceed maxTaskDepth. This is an internal recursion-bound counter —
+	// it is NOT part of the gen.Task wire contract and never crosses the
+	// gateway/SPA boundary (the REST task mapper does not copy it).
 	DelegationDepth int `json:"delegation_depth,omitempty"`
 }
 

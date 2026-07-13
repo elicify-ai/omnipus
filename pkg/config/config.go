@@ -771,7 +771,6 @@ type AgentConfig struct {
 	MaxToolIterations int              `json:"max_tool_iterations,omitempty"`
 	Skills            []string         `json:"skills,omitempty"`
 	Subagents         *SubagentsConfig `json:"subagents,omitempty"`
-	CanDelegateTo     []string         `json:"can_delegate_to,omitempty"`
 	// FallbackModels is the ordered fallback chain tried when the primary
 	// model returns an error. Each entry carries its own provider so a
 	// fallback can route through a different provider than the primary (e.g.
@@ -788,10 +787,6 @@ type AgentConfig struct {
 	// which resolves each string against the configured providers using the
 	// same passthrough lookup the chat-side model resolver uses.
 	FallbackModels FallbackModelSlice `json:"fallback_models,omitempty"`
-	// DelegationPolicy is the canonical unified delegation policy.
-	// When set, it takes precedence over CanDelegateTo and Subagents.AllowAgents.
-	// Nil means "unset — fall back to legacy fields for backward compatibility".
-	DelegationPolicy *DelegationPolicy `json:"delegation_policy,omitempty"`
 	// Voice is the per-agent persona voice identifier (e.g. TTS voice name).
 	// Distinct from the global VoiceConfig engine settings.
 	// Schema-pinned; not active until v0.2.0 TTS delivery.
@@ -977,9 +972,17 @@ const (
 	DelegationModeTask       DelegationMode = "task"
 )
 
-// AgentRefKind enumerates the legal values for AgentRef.Kind. A non-empty value
-// outside this set is REJECTED at config-load time (see AgentRef.Validate) so a
-// typo fails loudly instead of silently mis-resolving a delegation target.
+// AgentRefKind enumerates the legal values for AgentRef.Kind.
+//
+// AgentRef.Validate() checks a non-empty value against this set, but ADR-037
+// removed AgentRef's last production caller (AgentConfig.DelegationPolicy /
+// AgentDefaults.DelegationPolicy no longer exist, and nothing else in the
+// runtime constructs a user-supplied AgentRef) — Validate now has no
+// production caller at all; it is exercised only by TestAgentRef_Validate.
+// AgentRef itself survives as coreagent's compile-time seed-DTO shape
+// (config.DelegationPolicy.To — see coreagent.SeedDelegationEdges), which is
+// hardcoded Go data, not user input, so there is nothing left to validate at
+// load time.
 const (
 	// AgentRefKindLocal resolves the ref by id within the running instance.
 	AgentRefKindLocal = "local"
@@ -998,9 +1001,9 @@ type AgentRef struct {
 }
 
 // Validate rejects a non-empty AgentRef.Kind that is outside the known set.
-// An empty Kind is accepted for back-compat: callers (ResolveDelegationTo)
-// default an absent kind to "local". Only a present-but-unknown value (a typo)
-// is an error, so it fails loudly rather than silently downgrading routing.
+// An empty Kind is accepted for back-compat: callers default an absent kind to
+// "local". Only a present-but-unknown value (a typo) is an error, so it fails
+// loudly rather than silently downgrading routing.
 //
 // The Kind is canonicalized (lowercased + trimmed) BEFORE the membership check
 // so Validate accepts exactly what the API write path and route.go accept —
@@ -1018,195 +1021,25 @@ func (r AgentRef) Validate() error {
 	}
 }
 
-// DelegationPolicy is the unified delegation policy for an agent.
-// It unifies the three legacy allowlists:
-//   - AgentConfig.CanDelegateTo   (per-agent task delegation)
-//   - AgentDefaults.CanDelegateTo (global-default task delegation)
-//   - SubagentsConfig.AllowAgents (spawn/subagent tool allowlist)
-//
-// Precedence: agent-level To > defaults-level To; SubagentsConfig.AllowAgents
-// serves as a backward-compat fallback when To is nil.
-//
-// AcceptFrom and Budget are present but NOT enforced in v0.1.0. A startup WARN
-// is emitted when either is non-empty to prevent them being mistaken for an
-// active authorization boundary.
+// DelegationPolicy is a plain seed DTO for a core agent's bootstrap delegation
+// edges (ADR-037). It is NO LONGER attached to AgentConfig or AgentDefaults —
+// the per-workspace delegation graph (pkg/workspace/delegation.go) is the sole
+// runtime delegation-enforcement mechanism. This type survives only as the
+// shape coreagent.SeedDelegationEdges returns, consumed by
+// pkg/gateway/rest_workspace_delegation.go's defaultWorkspaceDelegationEdges to
+// bootstrap a fresh workspace's delegation graph. AcceptFrom and Budget (the
+// pre-ADR-037 schema's inert, never-enforced fields) are dropped — they carried
+// no seed data even before this removal.
 type DelegationPolicy struct {
 	// To is the list of agent references this agent may delegate work to.
-	// Nil means "unset — fall back to legacy fields".
-	// An explicitly empty slice means "no delegation allowed".
 	To []AgentRef `json:"to,omitempty"`
 
-	// AcceptFrom is INERT in v0.1.0. Listed here so configs that set it
-	// trigger a startup WARN rather than being silently ignored.
-	AcceptFrom []AgentRef `json:"accept_from,omitempty"`
-
-	// Modes lists allowed delegation modes. Enforced in v0.1.0.
-	// An empty/nil Modes list means all modes are allowed (when To permits).
+	// Modes lists allowed delegation modes for the seeded edges.
 	Modes []DelegationMode `json:"modes,omitempty"`
 
-	// Depth is the maximum delegation chain depth. Enforced as a safety cap.
+	// Depth is the maximum delegation chain depth for the seeded edges.
 	// Zero means uncapped (nil pointer = uncapped).
 	Depth *int `json:"depth,omitempty"`
-
-	// Budget is INERT in v0.1.0. Present to trigger a startup WARN when set.
-	Budget *DelegationBudget `json:"budget,omitempty"`
-}
-
-// DelegationBudget is present in the schema but not enforced until a later release.
-type DelegationBudget struct {
-	MaxCostUSD float64 `json:"max_cost_usd,omitempty"`
-	MaxTokens  int     `json:"max_tokens,omitempty"`
-}
-
-// WarnIfInertFieldsSet logs a startup WARN if accept_from or budget are non-empty.
-// This prevents operators from mistaking them for active authorization boundaries.
-func (dp *DelegationPolicy) WarnIfInertFieldsSet(agentID string) {
-	if dp == nil {
-		return
-	}
-	if len(dp.AcceptFrom) > 0 {
-		slog.Warn(
-			"delegation policy: accept_from is present but NOT enforced in v0.1.0 — do not rely on it as an authorization boundary",
-			"agent_id",
-			agentID,
-		)
-	}
-	if dp.Budget != nil {
-		slog.Warn(
-			"delegation policy: budget is present but NOT enforced in v0.1.0 — do not rely on it as an authorization boundary",
-			"agent_id",
-			agentID,
-		)
-	}
-}
-
-// ResolveDelegationTo returns the canonical unified "to" allowlist for an agent,
-// implementing the three-path precedence rules without silent authz widening.
-//
-// Precedence (first non-nil wins):
-//  1. agentCfg.DelegationPolicy.To  (canonical; set by Spec-3 code paths)
-//  2. agentCfg.CanDelegateTo        (legacy task delegation allowlist)
-//  3. defaults.DelegationPolicy.To  (global default canonical policy)
-//  4. defaults.CanDelegateTo        (global default legacy allowlist)
-//
-// Unset behavior per path:
-//   - If the agent has DelegationPolicy set (non-nil), its To list is used even
-//     if that list is empty — an empty explicit To means "deny all delegation".
-//   - If the agent has no DelegationPolicy and has CanDelegateTo, those string IDs
-//     are used as {kind:local, id:X} references (backward compat).
-//   - If neither agent field is set, the defaults chain is consulted the same way.
-//   - If nothing is set at any level, nil is returned (deny-by-default).
-//
-// SubagentsConfig.AllowAgents is NOT consulted here; it is used only as a
-// backward-compat fallback in CanSpawnSubagent when DelegationPolicy.To is nil.
-func ResolveDelegationTo(agentCfg *AgentConfig, defaults AgentDefaults) []AgentRef {
-	// 1. Agent-level canonical policy (DelegationPolicy.To takes precedence;
-	//    even an empty slice is authoritative — it means deny all).
-	if agentCfg != nil && agentCfg.DelegationPolicy != nil {
-		return agentCfg.DelegationPolicy.To
-	}
-
-	// 2. Agent-level legacy CanDelegateTo (backward compat: treat as local refs).
-	if agentCfg != nil && len(agentCfg.CanDelegateTo) > 0 {
-		refs := make([]AgentRef, len(agentCfg.CanDelegateTo))
-		for i, id := range agentCfg.CanDelegateTo {
-			refs[i] = AgentRef{Kind: "local", ID: id}
-		}
-		return refs
-	}
-
-	// 3. Global default canonical policy.
-	if defaults.DelegationPolicy != nil {
-		return defaults.DelegationPolicy.To
-	}
-
-	// 4. Global default legacy CanDelegateTo.
-	if len(defaults.CanDelegateTo) > 0 {
-		refs := make([]AgentRef, len(defaults.CanDelegateTo))
-		for i, id := range defaults.CanDelegateTo {
-			refs[i] = AgentRef{Kind: "local", ID: id}
-		}
-		return refs
-	}
-
-	// Nothing set at any level — deny-by-default.
-	return nil
-}
-
-// IsDelegationAllowed checks whether delegation from an agent to targetAgentID
-// is permitted by the unified to-allowlist. Returns false when toList is nil
-// (deny-by-default). Wildcards ("*") match any target.
-func IsDelegationAllowed(toList []AgentRef, targetAgentID string) bool {
-	for _, ref := range toList {
-		if ref.Kind != "local" && ref.Kind != "" {
-			// remote-a2a and unknown kinds are not enforced locally in v0.1.0.
-			continue
-		}
-		if ref.ID == "*" || ref.ID == targetAgentID {
-			return true
-		}
-	}
-	return false
-}
-
-// IsDelegationAllowedAny checks whether any delegation is permitted (used when
-// no specific target is known, e.g. the sync subagent tool that has no agent_id).
-// Returns true only if the toList contains at least one entry.
-func IsDelegationAllowedAny(toList []AgentRef) bool {
-	return len(toList) > 0
-}
-
-// ResolveDelegationPolicy returns the effective DelegationPolicy for an agent,
-// applying the same agent>defaults precedence used by ResolveDelegationTo. It is
-// used by the dispatch layer to enforce the policy's Modes and Depth fields
-// (FR-6.2) — which ResolveDelegationTo (which only resolves the To allowlist)
-// does not surface.
-//
-// Precedence (first non-nil wins):
-//  1. agentCfg.DelegationPolicy  (canonical per-agent policy)
-//  2. defaults.DelegationPolicy  (global default canonical policy)
-//
-// Returns nil when neither level sets a canonical DelegationPolicy. A nil result
-// means "no canonical Modes/Depth constraints" — callers treat that as
-// "all modes allowed / depth uncapped" so the legacy To-only paths are unaffected
-// (no silent behavior change for configs that never adopted DelegationPolicy).
-func ResolveDelegationPolicy(agentCfg *AgentConfig, defaults AgentDefaults) *DelegationPolicy {
-	if agentCfg != nil && agentCfg.DelegationPolicy != nil {
-		return agentCfg.DelegationPolicy
-	}
-	if defaults.DelegationPolicy != nil {
-		return defaults.DelegationPolicy
-	}
-	return nil
-}
-
-// IsDelegationModeAllowed reports whether the given delegation mode is permitted
-// by a DelegationPolicy (FR-6.2). The contract:
-//   - nil policy            → allowed (no canonical policy ⇒ no mode constraint).
-//   - non-nil, empty Modes  → allowed (empty/nil Modes means "all modes allowed").
-//   - non-nil, Modes set    → allowed only if mode is present in the list.
-func IsDelegationModeAllowed(dp *DelegationPolicy, mode DelegationMode) bool {
-	if dp == nil || len(dp.Modes) == 0 {
-		return true
-	}
-	for _, m := range dp.Modes {
-		if m == mode {
-			return true
-		}
-	}
-	return false
-}
-
-// ResolveDelegationDepth returns the effective max delegation-chain depth cap
-// from a DelegationPolicy (FR-6.2). The contract:
-//   - nil policy or nil/<=0 Depth → 0, meaning "uncapped by policy" (the global
-//     SubTurn.MaxDepth safety ceiling still applies independently).
-//   - positive Depth              → that value, an additional per-agent cap.
-func ResolveDelegationDepth(dp *DelegationPolicy) int {
-	if dp == nil || dp.Depth == nil || *dp.Depth <= 0 {
-		return 0
-	}
-	return *dp.Depth
 }
 
 // ExecutorKind enumerates the runtime used to execute a sub-agent task.
@@ -1362,12 +1195,7 @@ type AgentDefaults struct {
 	ToolFeedback              ToolFeedbackConfig `json:"tool_feedback,omitempty"`
 	SplitOnMarker             bool               `json:"split_on_marker"                 env:"OMNIPUS_AGENTS_DEFAULTS_SPLIT_ON_MARKER"` // split messages on <|[SPLIT]|> marker
 	TimeoutSeconds            int                `json:"timeout_seconds"                 env:"OMNIPUS_AGENTS_DEFAULTS_TIMEOUT_SECONDS"` // per-turn timeout in seconds; 0 = disabled
-	CanDelegateTo             []string           `json:"can_delegate_to,omitempty"`
-	// DelegationPolicy is the canonical unified delegation policy for the global
-	// default. When set, it takes precedence over CanDelegateTo.
-	// Nil means "unset — fall back to CanDelegateTo for backward compatibility".
-	DelegationPolicy *DelegationPolicy `json:"delegation_policy,omitempty"`
-	DefaultAgentID   string            `json:"default_agent_id,omitempty"  env:"OMNIPUS_DEFAULT_AGENT_ID"`
+	DefaultAgentID            string             `json:"default_agent_id,omitempty"      env:"OMNIPUS_DEFAULT_AGENT_ID"`
 
 	// AutoRecapEnabled gates the session-end recap pipeline (FR-033).
 	// When false, CloseSession is a no-op and no background LLM calls are made.
@@ -1849,12 +1677,12 @@ func canonicalizeKind(kind string) string {
 	return strings.ToLower(strings.TrimSpace(kind))
 }
 
-// validateIdentityAndAgentRefKinds rejects any non-empty ChannelIdentity.Kind or
-// AgentRef.Kind that is outside its known set. This runs at config load so a typo
-// fails loudly with a clear error instead of silently downgrading routing (a
-// mis-spelled channel identity kind would otherwise fall through to user routing
-// in route.go) or mis-resolving a delegation target. Empty/absent kinds keep
-// their documented defaults and are NOT rejected (back-compat).
+// validateIdentityKinds rejects any non-empty ChannelIdentity.Kind that is
+// outside its known set. This runs at config load so a typo fails loudly with
+// a clear error instead of silently downgrading routing (a mis-spelled channel
+// identity kind would otherwise fall through to user routing in route.go).
+// Empty/absent kinds keep their documented defaults and are NOT rejected
+// (back-compat).
 //
 // On success it also normalizes the stored Kind in place (lowercase + trim) so a
 // value the API accepted in mixed case (e.g. {"kind":"Agent"}) is persisted in
@@ -1863,7 +1691,13 @@ func canonicalizeKind(kind string) string {
 // write time and what is loaded later. Validate already normalizes before
 // comparing, so this is belt-and-suspenders: even an un-normalized stored value
 // would load, but we canonicalize it here so it does not stay mixed-case forever.
-func validateIdentityAndAgentRefKinds(cfg *Config) error {
+//
+// ADR-037: this used to also validate AgentRef.Kind inside each agent's (and
+// the global default's) DelegationPolicy — that field no longer exists on
+// AgentConfig/AgentDefaults (the per-workspace delegation graph is the sole
+// delegation mechanism now), so there is nothing left to validate there.
+// Renamed from validateIdentityAndAgentRefKinds to reflect the narrower scope.
+func validateIdentityKinds(cfg *Config) error {
 	// Channel instance identity overrides.
 	for key, inst := range cfg.Channels {
 		if inst.Identity == nil {
@@ -1880,38 +1714,6 @@ func validateIdentityAndAgentRefKinds(cfg *Config) error {
 		}
 	}
 
-	// Agent delegation-policy refs (per-agent and global defaults). Both the
-	// active To list and the inert AcceptFrom list are validated so a typo'd kind
-	// is caught regardless of where it sits.
-	validatePolicy := func(scope string, dp *DelegationPolicy) error {
-		if dp == nil {
-			return nil
-		}
-		// dp.To / dp.AcceptFrom are slices of value type AgentRef; index to mutate
-		// the stored element rather than the loop copy so normalization persists.
-		for i := range dp.To {
-			if err := dp.To[i].Validate(); err != nil {
-				return fmt.Errorf("%s delegation_policy.to: %w", scope, err)
-			}
-			dp.To[i].Kind = canonicalizeKind(dp.To[i].Kind)
-		}
-		for i := range dp.AcceptFrom {
-			if err := dp.AcceptFrom[i].Validate(); err != nil {
-				return fmt.Errorf("%s delegation_policy.accept_from: %w", scope, err)
-			}
-			dp.AcceptFrom[i].Kind = canonicalizeKind(dp.AcceptFrom[i].Kind)
-		}
-		return nil
-	}
-	if err := validatePolicy("agents.defaults", cfg.Agents.Defaults.DelegationPolicy); err != nil {
-		return err
-	}
-	for _, ag := range cfg.Agents.List {
-		scope := fmt.Sprintf("agent %q", ag.ID)
-		if err := validatePolicy(scope, ag.DelegationPolicy); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
@@ -3398,11 +3200,11 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	// Normalize channel map: populate Type from map key when absent, drop unknown types.
 	cfg.Channels = normalizeChannelMap(cfg.Channels)
 
-	// Reject typo'd identity / agent-ref Kind values so a mis-spelled kind fails
+	// Reject typo'd channel identity Kind values so a mis-spelled kind fails
 	// loudly here instead of silently downgrading routing (route.go treats any
-	// non-"agent" identity kind as the user fallback) or mis-resolving a
-	// delegation target. Empty/absent kinds keep their documented defaults.
-	if err := validateIdentityAndAgentRefKinds(cfg); err != nil {
+	// non-"agent" identity kind as the user fallback). Empty/absent kinds keep
+	// their documented defaults.
+	if err := validateIdentityKinds(cfg); err != nil {
 		return nil, err
 	}
 

@@ -356,3 +356,87 @@ func TestTurnState_MarkTurnFailed_PropagatesToStreamer(t *testing.T) {
 		assert.False(t, *fs.receivedFailed, "SetTurnFailed must be called with false for a normal turn")
 	})
 }
+
+// --- Suite 7: B4 abandoned-turn live-stream ownership release regression ---
+//
+// Regression coverage for a CRITICAL bug unanimously flagged by a 7-reviewer
+// gate (architect, silent-failure-hunter, type-design-analyzer,
+// pr-test-analyzer): finalizeStreamer's B4 abandoned-turn early return
+// skipped Finalize entirely — Finalize being the ONLY place a wsStreamer
+// released its WSHandler.streamOwners live-stream ownership claim (see
+// pkg/gateway/websocket.go). A background delegate that became the live
+// owner for a chatID and was later MarkAbandoned()'d by cancel.go's PHASE C
+// (newly reachable for delegates via this session's own
+// sessionTurnsStillAlive fix) left that chatID's ownership entry stuck on
+// the dead turn's ID forever — no TTL, no sweep, no WS-teardown hook —
+// permanently shadowing every later turn on that chat: the bubble sits
+// blank while "streaming," then the spinner just stops.
+
+// releaseTrackingMockStreamer is a bus.Streamer that also implements the
+// streamOwnershipReleaser optional interface (mirroring *gateway.wsStreamer's
+// real ReleaseStreamOwnership method), letting tests assert that
+// finalizeStreamer's abandoned-turn path releases a live-stream ownership
+// claim even though it deliberately skips calling Finalize.
+type releaseTrackingMockStreamer struct {
+	mockStreamer
+	releaseCalled int
+}
+
+func (m *releaseTrackingMockStreamer) ReleaseStreamOwnership() {
+	m.releaseCalled++
+}
+
+var (
+	_ bus.Streamer            = (*releaseTrackingMockStreamer)(nil)
+	_ streamOwnershipReleaser = (*releaseTrackingMockStreamer)(nil)
+)
+
+// TestTurnState_Abandoned_ReleasesStreamOwnership is the direct regression
+// test for the bug: it fails without the fix because, before it, the B4
+// early return never touched the streamer at all beyond nil-ing out
+// ts.lastStreamer — releaseCalled would remain 0.
+//
+// BDD: Given a turnState with an active streamer implementing the optional
+// streamOwnershipReleaser interface,
+// When the turn is marked abandoned and finalizeStreamer is called,
+// Then ReleaseStreamOwnership is invoked exactly once on the streamer,
+// AND Finalize is never called (the pre-existing B4 done-frame suppression
+// must be preserved),
+// AND the suppressed-writes counter still increments as before.
+//
+// Traces to: pkg/agent/turn.go — finalizeStreamer B4 guard / streamOwnershipReleaser.
+func TestTurnState_Abandoned_ReleasesStreamOwnership(t *testing.T) {
+	ts := &turnState{}
+	rs := &releaseTrackingMockStreamer{}
+	ts.setLastStreamer(rs)
+	ts.abandoned.Store(true)
+
+	before := AbandonedWritesSuppressed()
+	ts.finalizeStreamer(context.Background())
+
+	assert.Equal(t, before+1, AbandonedWritesSuppressed(), "suppressed counter must still increment")
+	assert.Equal(t, 0, rs.finalizeCalled,
+		"Finalize must NOT be called when abandoned — the B4 done-frame suppression must be preserved")
+	assert.Equal(t, 1, rs.releaseCalled,
+		"BUG REGRESSION: ReleaseStreamOwnership must be called exactly once even though Finalize is "+
+			"skipped — otherwise an abandoned turn that had claimed live-stream ownership leaves its "+
+			"chatID permanently shadowed for every later turn")
+}
+
+// TestTurnState_Abandoned_StreamerWithoutReleaseInterface_DoesNotPanic verifies
+// that a streamer NOT implementing streamOwnershipReleaser (e.g. a bare
+// bus.Streamer test fixture, or any future non-WS Streamer implementation
+// with no concept of live-stream ownership) is handled safely — the type
+// assertion simply fails and finalizeStreamer returns without invoking
+// anything extra.
+func TestTurnState_Abandoned_StreamerWithoutReleaseInterface_DoesNotPanic(t *testing.T) {
+	ts := &turnState{}
+	ms := &mockStreamer{}
+	ts.setLastStreamer(ms)
+	ts.abandoned.Store(true)
+
+	require.NotPanics(t, func() {
+		ts.finalizeStreamer(context.Background())
+	})
+	assert.Equal(t, 0, ms.finalizeCalled)
+}

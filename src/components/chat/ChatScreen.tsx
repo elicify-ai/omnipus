@@ -57,7 +57,7 @@ import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import { fetchAgents, fetchSessionMessages, fetchCommands, fetchSkills } from '@/lib/api'
-import type { SlashCommand, Skill } from '@/lib/api'
+import type { SlashCommand, Skill, Agent } from '@/lib/api'
 import { AttachmentCard, AttachmentRemoveX, useFilePreview } from './AttachmentCard'
 import { cn } from '@/lib/utils'
 import { HistoricalMessageMarkdown } from './historical-markdown'
@@ -376,20 +376,15 @@ function SubagentSpansRenderer() {
   )
 }
 
-// Bug 2 (UAT, ADR-040 browser-panel round): `messageAgentId` is the CALLER's
-// already-resolved `message.agentId ?? activeAgentId` (see AssistantMessage
-// below) — the same per-message-first precedence VirtualAssistantMessageRow
-// uses for historical rows. Previously this component derived its own agent
-// straight from activeAgentId, so switching the agent picker mid-turn would
-// instantly repaint the CURRENTLY STREAMING bubble's avatar to the
-// newly-picked agent while its (correctly per-message-scoped) name label kept
-// showing the original agent — a live, user-visible mismatch that only
-// self-corrected on reload. Accepting the resolved id as a prop keeps a
-// single source of truth between the label and the avatar.
-function AssistantMessageAvatar({ messageAgentId }: { messageAgentId: string | null }) {
-  const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
-  const agent = agents.find((a) => a.id === messageAgentId)
-
+// Bug 2 (UAT, ADR-040 browser-panel round): renders the agent the CALLER
+// already resolved per-message (`message.agentId ?? activeAgentId`), passed in
+// as `agent`. It must NOT re-derive from the live activeAgentId — otherwise
+// switching the agent picker mid-turn would instantly repaint the currently
+// streaming bubble's avatar to the newly-picked agent while its (correctly
+// per-message-scoped) name label kept the original: a live, user-visible
+// mismatch that only self-corrected on reload. Taking the resolved agent as a
+// prop keeps a single source of truth between the label and the avatar.
+function AssistantMessageAvatar({ agent }: { agent?: Agent }) {
   return (
     <div
       className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-[var(--color-secondary)]"
@@ -1042,7 +1037,7 @@ function AssistantMessage() {
       data-status={message.status?.type ?? 'complete'}
       className="group flex gap-3 px-4 py-3"
     >
-      <AssistantMessageAvatar messageAgentId={messageAgentId} />
+      <AssistantMessageAvatar agent={agent} />
       <div className="flex flex-col gap-1 max-w-[85%] min-w-0 flex-1">
         {agentDisplayName && (
           <span data-testid="agent-label" className="text-[10px] text-[var(--color-muted)]">{agentDisplayName}</span>

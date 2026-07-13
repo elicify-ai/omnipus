@@ -35,7 +35,7 @@ acceptance criteria.
 - Bulk import of agents (e.g., from a YAML manifest).
 - Templates / cloning existing agents. Future work.
 - Per-channel routing UI for tool feedback. Already handled at runtime (webchat never, messaging always).
-- The full `delegation_policy` editor. That lives in the trust graph UI (`/agents/trust`); this spec only covers the *link* to it.
+- ~~The full `delegation_policy` editor. That lives in the trust graph UI (`/agents/trust`); this spec only covers the *link* to it.~~ **Removed by [ADR-037](../architecture/ADR-037-remove-global-delegation-policy.md)** — the per-agent `delegation_policy` field and the `/agents/trust` editor are deleted; delegation is workspace-scoped (workspace Team tab). Treat every `delegation_policy` / `/agents/trust` reference in this spec as historical.
 
 ---
 
@@ -117,7 +117,7 @@ Convention:
 | 22 | `executor.env_overrides` | — | — | — | — | O |
 | 23 | `executor.cli_args` | — | — | — | — | O |
 | 24 | `rate_limits.{use_global_defaults, max_llm_calls_per_hour, max_tool_calls_per_minute, max_cost_per_day}` | O | O | O | O | O |
-| 25 | `delegation_policy.{to[], accept_from, modes, depth, budget}` | ro (seeded) | **—** | **external editor** (`/agents/trust`) | **—** | **—** |
+| 25 | ~~`delegation_policy.{to[], accept_from, modes, depth, budget}`~~ **removed by ADR-037** (workspace-scoped; workspace Team tab) | — | — | — | — | — |
 | 26 | `default` (G3 toggle) | ro (Mia seeded) | **—** | O | **—** | **—** |
 | 27 | `timeout_seconds` | R (seeded) | R (seeded) | R (UI default 300) | R (UI default 300) | R (UI default 300) |
 | 28 | `max_tool_iterations` | R (seeded) | R (seeded) | R (UI default 50) | R (UI default 50) | R (UI default 50) |
@@ -356,7 +356,7 @@ valid** on `PUT /api/v1/agents/{id}`. The backend rejects them with
 - `model_params` — CLI may not support these flags.
 - `sandbox_profile` — CLI manages its own isolation.
 - `shell_policy` — same reason.
-- `delegation_policy` — workers don't delegate.
+- ~~`delegation_policy` — workers don't delegate.~~ (field removed entirely by ADR-037; delegation is workspace-scoped)
 
 This is a deliberate choice over silent-drop: silent-drop is the worst
 of both worlds (200 OK + no UI feedback = "I set this and it doesn't
@@ -371,15 +371,21 @@ should never let the user submit one of these fields.
 Optional everywhere. When `use_global_defaults: true` (default), the
 global `agents.defaults.rate_limits` applies.
 
-### 4.21 `delegation_policy.*` (row 25)
-Edited in the **delegation graph UI** (`/agents/trust`), never in the
-agent form. **Main agents only** — workers don't delegate.
+### 4.21 `delegation_policy.*` (row 25) — REMOVED by ADR-037
+The per-agent `delegation_policy` field and the `/agents/trust` delegation-graph
+editor were **deleted entirely by [ADR-037](../architecture/ADR-037-remove-global-delegation-policy.md)**.
+Delegation trust is **workspace-scoped** — edit it in a workspace's **Team tab**
+(the per-workspace `Delegation[]` edge list, `pkg/workspace/delegation.go`, has
+been the sole runtime authority since commit `822202ad`). The `to[]` / `modes` /
+`depth` enforcement described below now lives entirely on the workspace edge; the
+`accept_from` / `budget` advisory fields no longer exist even in the retained
+seed DTO. The struck text is kept only as a record of the removed surface.
 
-**⚠ v0.1.0 enforcement scope (locked in v0.1.0, additive over time):**
-- `to[]` — **ENFORCED** (delegation target must appear here; `*` wildcard allowed).
-- `modes` — **ENFORCED** (`await` / `background` / `task`).
-- `depth` — **ENFORCED** as a safety cap.
-- `accept_from`, `budget` — **schema present, NOT enforced in v0.1.0.** They appear in the trust-graph UI as advisory only, and a startup WARN is emitted if either is non-empty. Surfacing them as an active authz boundary would be a lie; do not present them as one.
+> ~~Edited in the delegation graph UI (`/agents/trust`), never in the agent form.
+> Main agents only. **v0.1.0 enforcement scope:** `to[]` ENFORCED (target must
+> appear here; `*` allowed), `modes` ENFORCED (`await`/`background`/`task`),
+> `depth` ENFORCED as a safety cap; `accept_from` / `budget` schema-present but
+> NOT enforced (advisory-only, startup WARN if non-empty).~~
 
 ### 4.22 `default` (row 26)
 **Main only** — the G3 toggle. Workers never default.
@@ -492,7 +498,7 @@ The `type` (and `cli`, for External) is shown as a locked chip at the top.
 | **① Identity** | `color` (default: `Verdant`), `icon` (default: `Robot`), `name` *, `description`, `model` * (picker) |
 | **② Personality** | `soul` * ⭐, `instructions`, `heartbeat`, `heartbeat_enabled`, `heartbeat_interval`, `voice` (dynamic widget) |
 | **③ Tools** | `tools_cfg` (ToolPolicyEditor, default `deny`), `skills[]`, `fallback_models[]` (max 2) |
-| **Advanced** | `model_params`, `sandbox_profile`, `shell_policy`, `rate_limits`, `delegation_policy` (link to `/agents/trust`), `timeout_seconds` (default 300), `max_tool_iterations` (default 50), `steering_mode` (default `one-at-a-time`) |
+| **Advanced** | `model_params`, `sandbox_profile`, `shell_policy`, `rate_limits`, ~~`delegation_policy` (link to `/agents/trust`)~~ **[removed — ADR-037]**, `timeout_seconds` (default 300), `max_tool_iterations` (default 50), `steering_mode` (default `one-at-a-time`) |
 
 ### 5.4 Wizard — `Subagent` (3 steps + Advanced)
 
@@ -501,7 +507,7 @@ The `type` (and `cli`, for External) is shown as a locked chip at the top.
 | **① Identity** | `color`, `icon`, `name` *, **`description` * (required for routing)**, `model` * (picker) |
 | **② Personality** | `soul` * ⭐ (label: *"Soul / task prompt"*), `instructions` (no Heartbeat, no Voice) |
 | **③ Tools** | `tools_cfg` (default `deny`), `skills[]`, `fallback_models[]` (max 2) |
-| **Advanced** | `model_params`, `sandbox_profile`, `shell_policy`, `rate_limits`, `timeout_seconds`, `max_tool_iterations` (no steering_mode, no delegation_policy, no Heartbeat, no Voice) |
+| **Advanced** | `model_params`, `sandbox_profile`, `shell_policy`, `rate_limits`, `timeout_seconds`, `max_tool_iterations` (no steering_mode, no delegation_policy [field removed entirely — ADR-037], no Heartbeat, no Voice) |
 
 ### 5.5 Wizard — `Subagent (External)` (3 steps + Advanced)
 
@@ -575,7 +581,7 @@ indicator honest while letting the user keep typing.
 │  ▼ Tools (visible)                                   │
 │   ToolPolicyEditor · Skills · Fallback models         │
 │  ▼ Advanced                                          │
-│   Sandbox · Shell · Rate limits · Delegation → /trust │
+│   Sandbox · Shell · Rate limits                      │
 │   Timeout · Max iter · Steering                      │
 │                                                      │
 ├──────────────────────────────────────────────────────┤
@@ -590,7 +596,7 @@ Identical to Main, except:
 - No `Voice` in Basics
 - No `Heartbeat` in Personality
 - No `Steering mode` in Advanced
-- No `Delegation policy` link in Advanced (workers don't delegate)
+- No `Delegation policy` link in Advanced (the link and the `delegation_policy` field were removed entirely — ADR-037; delegation is workspace-scoped)
 
 ### 6.4 Edit — `Subagent (External)` (5 tabs: Basics, Personality, Tools, Runtime, Advanced)
 
@@ -842,7 +848,7 @@ requirement.
 | `PUT /api/v1/agents/{id}` on `Subagent (External)`, `model_params: {...}` | **400** — same code |
 | `PUT /api/v1/agents/{id}` on `Subagent (External)`, `sandbox_profile: "workspace"` | **400** — same code |
 | `PUT /api/v1/agents/{id}` on `Subagent (External)`, `shell_policy: {...}` | **400** — same code |
-| `PUT /api/v1/agents/{id}` on `Subagent (External)`, `delegation_policy: {...}` | **400** — same code |
+| `PUT /api/v1/agents/{id}` on `Subagent (External)`, `delegation_policy: {...}` | **400** — post-ADR-037: `delegation_policy` is a retired field for ALL agent types; the handler raw-body-sniffs it and 400s (mirrors the ADR-035 `sandbox_profile` precedent), not the former subagent_3p-specific rejection |
 | `PUT /api/v1/agents/{id}` on `Subagent (External)` created with `cli: claude-code`, body `{executor: {cli: codex}}` | **400** — `executor.cli is immutable after create; create a new agent to use a different CLI` (F-10) |
 | `PUT /api/v1/agents/{id}` on `Subagent (External)`, `executor.cli_path: "/new/path"` | **200** — `cli_path` IS mutable (unlike `cli`); allows binary upgrades without re-creating the agent |
 | `PUT /api/v1/agents/{id}` on `Main`, `description: ""` | **200** — empty string is valid for Main |
@@ -1280,7 +1286,7 @@ All pickers and editors reuse the existing primitives:
 | Model picker | Same — Sheet (full-width on phone); the existing `<SmartSelect>` / model-selector handles narrow viewports | No change |
 | Voice picker | Same — Sheet or inline text input on a single-line form if the provider has no enum | No change |
 | ToolPolicyEditor | Vertical list with a per-tool 3-way toggle (allow/ask/deny); the existing component already wraps on narrow viewports | No change |
-| Delegation policy link | Tap pushes within the SPA router to `/agents/trust` (TanStack Router). The trust-graph screen renders its own mobile layout per its own spec | No change |
+| ~~Delegation policy link~~ **[removed — ADR-037]** | ~~Tap pushes within the SPA router to `/agents/trust`~~ — the `/agents/trust` screen and the link are deleted; delegation is workspace-scoped (workspace Team tab) | Removed |
 | Skill picker | Multi-select chips, wrapping naturally on narrow screens via flex-wrap | No change |
 | Fallback models | Drag handles (`⋮⋮`) hidden on phone via `hidden sm:inline`; "+ Add fallback" expands a full-width row | One-line class addition |
 

@@ -2032,40 +2032,6 @@ func FixtureWorkspace_ZeroValue() Workspace {
 	return Workspace{}
 }
 
-// ── DelegationPolicy ─────────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/DelegationPolicy.yaml
-//
-// DelegationPolicy is not promoted to a named top-level component (oapi-codegen
-// inlines it as an anonymous struct inside Agent / AgentCreateRequest /
-// AgentUpdateRequest). The wire shape served by the gateway is the Agent's
-// `delegation_policy` sub-object, so these fixtures return that exact serialized
-// shape as raw JSON for validation against the schema file. Note: the schema has
-// no required fields, so the empty object ({}) is VALID (deny-by-default).
-
-// FixtureDelegationPolicy_PopulatedJSON returns the serialized shape the gateway
-// emits for a fully-specified delegation policy.
-func FixtureDelegationPolicy_PopulatedJSON() []byte {
-	return []byte(`{
-		"to": [{"kind": "local", "id": "ray"}],
-		"accept_from": [{"kind": "local", "id": "jim"}],
-		"modes": ["await", "background", "task"],
-		"depth": 3,
-		"budget": {"max_cost_usd": 1.0, "max_tokens": 100000}
-	}`)
-}
-
-// FixtureDelegationPolicy_ZeroValueJSON is the empty object the gateway emits
-// when no delegation is configured. Expected to PASS: no required fields.
-func FixtureDelegationPolicy_ZeroValueJSON() []byte {
-	return []byte(`{}`)
-}
-
-// FixtureDelegationPolicy_InvalidJSON has an out-of-enum reference kind.
-// Expected to FAIL: to[].kind must be one of [local, remote-a2a].
-func FixtureDelegationPolicy_InvalidJSON() []byte {
-	return []byte(`{"to": [{"kind": "telepathy", "id": "ray"}]}`)
-}
-
 // ── ExecutorConfig ───────────────────────────────────────────────────────────
 // Traces to: contracts/components/schemas/ExecutorConfig.yaml
 
@@ -2152,7 +2118,7 @@ func FixturePerformanceSettings_ZeroValue() PerformanceSettings {
 //   - Subagent: like Main minus voice/steering_mode, no executor (server
 //     derives native).
 //   - Subagent3p: ONLY type/name/description/model/provider/color/icon/
-//     rate_limits/soul/delegation_policy/executor/timeout_seconds — executor
+//     rate_limits/soul/executor/timeout_seconds — executor
 //     is REQUIRED. All Main/Subagent-only fields (tools_cfg, skills,
 //     fallback_models, model_params, shell_policy, voice,
 //     steering_mode, max_tool_iterations) do not exist as properties on this
@@ -2165,8 +2131,6 @@ func FixtureAgentCreateRequestMain_Populated() AgentCreateRequestMain {
 	enabled := true
 	deny := AgentCreateRequestMainToolsCfgBuiltinPoliciesDeny
 	steering := AgentCreateRequestMainSteeringModeOneAtATime
-	mode := AgentCreateRequestMainDelegationPolicyModesAwait
-	toKind := AgentCreateRequestMainDelegationPolicyToKindLocal
 	description := "Focused research assistant"
 	temperature := 0.7
 	maxTokens := 4096
@@ -2218,29 +2182,6 @@ func FixtureAgentCreateRequestMain_Populated() AgentCreateRequestMain {
 			EnableDenyPatterns: &enabled,
 			CustomDenyPatterns: &[]string{"rm -rf /"},
 		},
-		DelegationPolicy: &struct {
-			AcceptFrom *[]struct {
-				Id   string                                               `json:"id"`
-				Kind AgentCreateRequestMainDelegationPolicyAcceptFromKind `json:"kind"`
-			} `json:"accept_from,omitempty"`
-			Budget *struct {
-				MaxCostUsd *float64 `json:"max_cost_usd,omitempty"`
-				MaxTokens  *int     `json:"max_tokens,omitempty"`
-			} `json:"budget,omitempty"`
-			Depth *int                                           `json:"depth,omitempty"`
-			Modes *[]AgentCreateRequestMainDelegationPolicyModes `json:"modes,omitempty"`
-			To    *[]struct {
-				Id   string                                       `json:"id"`
-				Kind AgentCreateRequestMainDelegationPolicyToKind `json:"kind"`
-			} `json:"to,omitempty"`
-		}{
-			Depth: intPtr(3),
-			Modes: &[]AgentCreateRequestMainDelegationPolicyModes{mode},
-			To: &[]struct {
-				Id   string                                       `json:"id"`
-				Kind AgentCreateRequestMainDelegationPolicyToKind `json:"kind"`
-			}{{Id: "ray", Kind: toKind}},
-		},
 		ToolsCfg: &struct {
 			Builtin *struct {
 				Policies map[string]AgentCreateRequestMainToolsCfgBuiltinPolicies `json:"policies"`
@@ -2291,8 +2232,6 @@ func FixtureAgentCreateRequestSubagent_Populated() AgentCreateRequestSubagent {
 	model := "claude-sonnet-4-6"
 	description := "Native delegation-only research worker"
 	deny := AgentCreateRequestSubagentToolsCfgBuiltinPoliciesDeny
-	mode := AgentCreateRequestSubagentDelegationPolicyModesTask
-	toKind := AgentCreateRequestSubagentDelegationPolicyToKindLocal
 	maxToolIterations := 40
 
 	return AgentCreateRequestSubagent{
@@ -2307,29 +2246,6 @@ func FixtureAgentCreateRequestSubagent_Populated() AgentCreateRequestSubagent {
 		MaxToolIterations: &maxToolIterations,
 		FallbackModels: &[]FallbackModel{
 			{Model: "claude-sonnet-4-6", Provider: strPtr("anthropic")},
-		},
-		DelegationPolicy: &struct {
-			AcceptFrom *[]struct {
-				Id   string                                                   `json:"id"`
-				Kind AgentCreateRequestSubagentDelegationPolicyAcceptFromKind `json:"kind"`
-			} `json:"accept_from,omitempty"`
-			Budget *struct {
-				MaxCostUsd *float64 `json:"max_cost_usd,omitempty"`
-				MaxTokens  *int     `json:"max_tokens,omitempty"`
-			} `json:"budget,omitempty"`
-			Depth *int                                               `json:"depth,omitempty"`
-			Modes *[]AgentCreateRequestSubagentDelegationPolicyModes `json:"modes,omitempty"`
-			To    *[]struct {
-				Id   string                                           `json:"id"`
-				Kind AgentCreateRequestSubagentDelegationPolicyToKind `json:"kind"`
-			} `json:"to,omitempty"`
-		}{
-			Depth: intPtr(1),
-			Modes: &[]AgentCreateRequestSubagentDelegationPolicyModes{mode},
-			To: &[]struct {
-				Id   string                                           `json:"id"`
-				Kind AgentCreateRequestSubagentDelegationPolicyToKind `json:"kind"`
-			}{{Id: "ray", Kind: toKind}},
 		},
 		ToolsCfg: &struct {
 			Builtin *struct {
@@ -2365,7 +2281,7 @@ func FixtureAgentCreateRequestSubagent_InvalidType() AgentCreateRequestSubagent 
 
 // FixtureAgentCreateRequestSubagent3p_Populated — every field this variant
 // allows: type/name/description/model/provider/color/icon/rate_limits/soul/
-// delegation_policy/executor/timeout_seconds. executor is REQUIRED.
+// executor/timeout_seconds. executor is REQUIRED.
 func FixtureAgentCreateRequestSubagent3p_Populated() AgentCreateRequestSubagent3p {
 	color := "#f542a7"
 	icon := "Terminal"
@@ -2377,8 +2293,6 @@ func FixtureAgentCreateRequestSubagent3p_Populated() AgentCreateRequestSubagent3
 	maxCalls := 100
 	maxTools := 60
 	timeoutSeconds := 300
-	mode := AgentCreateRequestSubagent3pDelegationPolicyModesTask
-	toKind := AgentCreateRequestSubagent3pDelegationPolicyToKindLocal
 	cli := ClaudeCode
 	cliPath := "/usr/local/bin/claude"
 
@@ -2402,29 +2316,6 @@ func FixtureAgentCreateRequestSubagent3p_Populated() AgentCreateRequestSubagent3
 			MaxCostPerDay:         &maxCost,
 			MaxLlmCallsPerHour:    &maxCalls,
 			MaxToolCallsPerMinute: &maxTools,
-		},
-		DelegationPolicy: &struct {
-			AcceptFrom *[]struct {
-				Id   string                                                     `json:"id"`
-				Kind AgentCreateRequestSubagent3pDelegationPolicyAcceptFromKind `json:"kind"`
-			} `json:"accept_from,omitempty"`
-			Budget *struct {
-				MaxCostUsd *float64 `json:"max_cost_usd,omitempty"`
-				MaxTokens  *int     `json:"max_tokens,omitempty"`
-			} `json:"budget,omitempty"`
-			Depth *int                                                 `json:"depth,omitempty"`
-			Modes *[]AgentCreateRequestSubagent3pDelegationPolicyModes `json:"modes,omitempty"`
-			To    *[]struct {
-				Id   string                                             `json:"id"`
-				Kind AgentCreateRequestSubagent3pDelegationPolicyToKind `json:"kind"`
-			} `json:"to,omitempty"`
-		}{
-			Depth: intPtr(1),
-			Modes: &[]AgentCreateRequestSubagent3pDelegationPolicyModes{mode},
-			To: &[]struct {
-				Id   string                                             `json:"id"`
-				Kind AgentCreateRequestSubagent3pDelegationPolicyToKind `json:"kind"`
-			}{{Id: "ray", Kind: toKind}},
 		},
 		Executor: struct {
 			Cli          *ExternalCliTool                          `json:"cli,omitempty"`
@@ -2492,8 +2383,6 @@ func FixtureAgentUpdateRequest_Populated() AgentUpdateRequest {
 	topP := 0.9
 	allow := AgentUpdateRequestToolsCfgBuiltinPoliciesAllow
 	steering := QueueAndProcess
-	mode := AgentUpdateRequestDelegationPolicyModesBackground
-	toKind := AgentUpdateRequestDelegationPolicyToKindLocal
 	heartbeat := "Check queue every hour."
 	soul := "You are a helpful assistant."
 	voice := "alloy"
@@ -2538,29 +2427,6 @@ func FixtureAgentUpdateRequest_Populated() AgentUpdateRequest {
 					"bash": allow,
 				},
 			},
-		},
-		DelegationPolicy: &struct {
-			AcceptFrom *[]struct {
-				Id   string                                           `json:"id"`
-				Kind AgentUpdateRequestDelegationPolicyAcceptFromKind `json:"kind"`
-			} `json:"accept_from,omitempty"`
-			Budget *struct {
-				MaxCostUsd *float64 `json:"max_cost_usd,omitempty"`
-				MaxTokens  *int     `json:"max_tokens,omitempty"`
-			} `json:"budget,omitempty"`
-			Depth *int                                       `json:"depth,omitempty"`
-			Modes *[]AgentUpdateRequestDelegationPolicyModes `json:"modes,omitempty"`
-			To    *[]struct {
-				Id   string                                   `json:"id"`
-				Kind AgentUpdateRequestDelegationPolicyToKind `json:"kind"`
-			} `json:"to,omitempty"`
-		}{
-			Depth: intPtr(2),
-			Modes: &[]AgentUpdateRequestDelegationPolicyModes{mode},
-			To: &[]struct {
-				Id   string                                   `json:"id"`
-				Kind AgentUpdateRequestDelegationPolicyToKind `json:"kind"`
-			}{{Id: "m", Kind: toKind}},
 		},
 		UpdatedAt: &updatedAt,
 	}

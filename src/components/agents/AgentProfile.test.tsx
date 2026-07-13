@@ -33,16 +33,6 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
     ...actual,
     useNavigate: () => mockNavigate,
     useParams: () => ({}),
-    // W6-C1 / G2: AgentProfile now renders a <Link to="/agents/trust"> so
-    // the operator can jump to the delegation graph. TanStack Router's
-    // real <Link> calls useLinkProps → useRouter, which throws without
-    // a RouterProvider; stub it with a plain anchor so the screen renders
-    // in isolation (these tests assert content, not navigation behaviour).
-    Link: ({ children, to, ...rest }: { children?: React.ReactNode; to?: string } & Record<string, unknown>) => (
-      <a href={typeof to === 'string' ? to : '#'} {...(rest as Record<string, unknown>)}>
-        {children}
-      </a>
-    ),
   }
 })
 
@@ -770,6 +760,90 @@ describe('AgentProfile — provider-aware fallback editor', () => {
     ])
   })
 
+  it('a single fallback-model change fires exactly one PUT — no phantom passive-idle second PUT (UAT data-loss regression)', async () => {
+    // Regression for a live UAT data-loss bug: adding a fallback model via
+    // this exact picker fired a SECOND `PUT /api/v1/agents/{id}` ~600ms
+    // after the first, purely passively — no tab switch, no visibility
+    // change, no further user action, just idle time passing — and that
+    // second PUT omitted `fallback_models` entirely, silently clobbering
+    // the correct first save.
+    //
+    // Root cause: the save-success handler in AgentProfile.tsx patched the
+    // React Query cache with ONLY `updated_at` from the PUT response
+    // (`{ ...old, updated_at: resp.updated_at }`) instead of the full
+    // response, leaving every OTHER field on the cached `agent` object —
+    // including `fallback_models` — pointing at the STALE pre-save
+    // snapshot. That still-new object reference re-triggered the
+    // `[agentId, agent]` hydration effect; its only guard,
+    // `isDirtyRef.current`, had ALREADY been cleared to `false` by this
+    // same save's own success path moments earlier, so the effect
+    // re-hydrated every field from the stale-except-updated_at object,
+    // silently reverting local `fallbackModels` state back to empty. That
+    // reversion looked like a genuine new edit to `useAutoSave`, which
+    // fired a second, correctly-serialized (non-overlapping — FIX 3 was
+    // never at fault here) debounce cycle carrying the wrong, reverted
+    // data.
+    //
+    // `updateAgent` here echoes back the FULL updated agent (mirroring the
+    // real backend's PUT contract — "returns the complete updated agent
+    // object" per contracts/openapi.yaml) rather than the static
+    // `mockCoreAgent` stub the other tests in this file use — this test
+    // would have failed against the pre-fix code, which discarded
+    // everything from that response except `updated_at`.
+    //
+    // `updated_at` is set on BOTH the initial `fetchAgent` fixture and
+    // each `updateAgent` response, strictly increasing, so the
+    // monotonic-`updated_at` hydration guard can actually engage: the
+    // `fetchAgent` mock stays STATIC for the lifetime of this test (it
+    // does not learn about the save), so the background refetch that
+    // `invalidateQueries` fires after the save is itself a second,
+    // independent source of a stale (older `updated_at`) `agent`
+    // snapshot — proving the guard, not just the full-response cache
+    // patch, is what keeps a stale reference from reverting local state.
+    const baseUpdatedAt = Date.parse('2026-01-01T00:00:00.000Z')
+    let callCount = 0
+    vi.mocked(updateAgent).mockReset().mockImplementation(async (_id, body) => {
+      callCount += 1
+      return {
+        ...mockCoreAgent,
+        ...body,
+        updated_at: new Date(baseUpdatedAt + callCount * 1000).toISOString(),
+      } as Agent
+    })
+    await openFallbackEditor({
+      ...mockCoreAgent,
+      fallback_models: [],
+      updated_at: new Date(baseUpdatedAt).toISOString(),
+    })
+
+    fireEvent.click(screen.getByTestId('fallback-add-trigger'))
+    const item = await screen.findByTestId('fallback-add-item-claude-sonnet-4-6')
+    fireEvent.click(item)
+
+    // The first (and — this test asserts — ONLY) debounced save.
+    await waitFor(
+      () => expect(vi.mocked(updateAgent).mock.calls.length).toBeGreaterThan(0),
+      { timeout: 3000 },
+    )
+    const firstCallCount = vi.mocked(updateAgent).mock.calls.length
+    expect(firstCallCount).toBe(1)
+    const firstPayload = vi.mocked(updateAgent).mock.calls[0][1]
+    expect(firstPayload.fallback_models).toEqual([
+      { model: 'claude-sonnet-4-6', provider: 'anthropic' },
+    ])
+
+    // PASSIVE idle wait — no further clicks, no tab switch, no
+    // visibility/unload event — mirrors the UAT tester's exact repro
+    // ("do nothing else — wait ~2s"). Wait comfortably past another full
+    // debounce interval (default 500ms) so a phantom second save gets
+    // every chance to fire.
+    await new Promise((resolve) => setTimeout(resolve, 1200))
+
+    // Exactly one PUT must have fired — no stale-closure second PUT
+    // silently clobbering the first, correct save.
+    expect(vi.mocked(updateAgent).mock.calls.length).toBe(firstCallCount)
+  })
+
   it('locked core agents: read-only fallback summary, no add-trigger, no provider picker (G6)', async () => {
     // W6-C2 / G6: `fallback_models` is wire-allowed for locked core
     // agents but the editor strips it via `canEdit`. Pre-C2 operators
@@ -1364,6 +1438,169 @@ describe('AgentProfile — 409 conflict handling', () => {
     const conflictToast = state.toasts.find((t: { message: string }) => /changed elsewhere/i.test(t.message))
     expect(conflictToast?.action?.label).toBe('Refresh')
   })
+
+  it('Refresh after a 409 re-hydrates from the fresher server snapshot — the updated_at staleness guard must not block it (7-reviewer-gate regression)', async () => {
+    // Regression for an interaction between two guards added in the same
+    // fix wave: `lastIncorporatedUpdatedAtRef` (the monotonic `updated_at`
+    // hydration guard, AgentProfile.tsx) and the pre-existing 409-conflict
+    // "Refresh" flow. On a 409, the failed `updateAgent` call's `resp` is
+    // never assigned, so `lastIncorporatedUpdatedAtRef.current` is left at
+    // whatever it was BEFORE this failed save attempt (here: the initial
+    // fetch's `updated_at`, t0) — never advanced to reflect the rejected
+    // edit. The subsequent `refetchAgent()` (fired by clicking Refresh)
+    // resolves with the "changed elsewhere" server snapshot at t1 > t0, so
+    // the guard must accept it and re-hydrate the form. Verified by test,
+    // not just by reading the code, per the pr-test-analyzer review finding
+    // — two guards interacting in a surprising way is exactly the class of
+    // bug (P-F2) this whole track exists to fix.
+    const t0 = '2026-01-01T00:00:00.000Z'
+    const t1 = '2026-01-01T00:05:00.000Z' // strictly newer — "changed elsewhere"
+
+    vi.mocked(fetchAgent).mockReset()
+      .mockResolvedValueOnce({ ...mockCoreAgent, updated_at: t0 })
+      .mockResolvedValue({ ...mockCoreAgent, updated_at: t1, description: 'Changed elsewhere by another operator' })
+    vi.mocked(updateAgent).mockReset().mockRejectedValueOnce(new ApiError(409, 'conflict'))
+
+    const { useUiStore } = await import('@/store/ui')
+    // Toasts live in a module-level zustand store that persists across
+    // tests in this file (the preceding 409 test in this same describe
+    // block leaves its own "changed elsewhere" toast behind, un-dismissed).
+    // Snapshot the count BEFORE triggering our own conflict so we only ever
+    // act on a toast this test itself produced — grabbing a stale toast
+    // object from an earlier test's (unmounted) component would invoke a
+    // `refetchAgent` closure bound to that OTHER test's query client, which
+    // would never touch the component instance under test here.
+    const toastsBefore = useUiStore.getState().toasts.length
+
+    renderProfile('general-assistant')
+    await screen.findByText('General Assistant')
+
+    // Trigger a save by changing a field — this is the edit that will 409.
+    // Desktop Tabs and mobile Accordion both render the field (see the
+    // fallback-summary tests above for the same pattern) — use the first.
+    fireEvent.change(screen.getAllByTestId('agent-name-input')[0], { target: { value: 'My Rejected Local Edit' } })
+
+    await waitFor(() => {
+      expect(vi.mocked(updateAgent)).toHaveBeenCalled()
+    }, { timeout: 5000 })
+
+    await waitFor(() => {
+      expect(useUiStore.getState().toasts.length).toBeGreaterThan(toastsBefore)
+    }, { timeout: 3000 })
+
+    const newToasts = useUiStore.getState().toasts.slice(toastsBefore)
+    const conflictToast = newToasts.find((t) => /changed elsewhere/i.test(t.message))
+    expect(conflictToast?.action?.label).toBe('Refresh')
+    conflictToast?.action?.onClick()
+
+    // The Refresh action's refetchAgent() resolves with the fresher (t1)
+    // snapshot — the hydration effect must accept it (t1 > t0), NOT reject
+    // it as "not strictly newer" and leave the form stuck on the rejected
+    // local edit.
+    await waitFor(() => {
+      expect(screen.getAllByTestId('agent-description-input')[0]).toHaveValue('Changed elsewhere by another operator')
+    }, { timeout: 3000 })
+    expect(screen.getAllByTestId('agent-name-input')[0]).not.toHaveValue('My Rejected Local Edit')
+  })
+})
+
+// ── updated_at staleness guard: warn-on-reject + fail-CLOSED on NaN ──────────
+// 7-reviewer-gate finding (3 independent reviewers): the lastIncorporatedUpdatedAtRef
+// guard used to (1) reject a stale hydration with a bare early-return (no
+// signal at all) and (2) FAIL OPEN (silently proceed to hydrate) whenever
+// either timestamp failed to parse, since `NaN <= NaN` is `false` in JS. Both
+// are backwards for a guard whose whole purpose is "never silently show
+// stale/unordered data". These tests drive the guard directly through the
+// component (it has no standalone export) rather than just reading the code.
+
+describe('AgentProfile — updated_at staleness guard', () => {
+  beforeEach(() => {
+    vi.mocked(fetchAgent).mockReset()
+    vi.mocked(updateAgent).mockReset()
+    vi.mocked(fetchSkills).mockReset().mockResolvedValue([])
+  })
+
+  it('warns via console.warn + logDiagnostic when it rejects a background refetch snapshot that is not strictly newer', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const t0 = '2026-02-01T00:00:00.000Z'
+
+    vi.mocked(fetchAgent).mockResolvedValue({ ...mockCoreAgent, updated_at: t0 })
+    // A save that SUCCEEDS but whose response — and the STATIC fetchAgent
+    // mock used by the subsequent invalidateQueries background refetch —
+    // both carry the SAME (not strictly newer) updated_at as what's already
+    // incorporated. Mirrors the "fallback_models passive-repro round 2"
+    // scenario this guard was built for.
+    vi.mocked(updateAgent).mockResolvedValue({ ...mockCoreAgent, name: 'Edited Name', updated_at: t0 })
+
+    renderProfile('general-assistant')
+    await screen.findByText('General Assistant')
+
+    fireEvent.change(screen.getAllByTestId('agent-name-input')[0], { target: { value: 'Edited Name' } })
+
+    await waitFor(() => {
+      expect(vi.mocked(updateAgent)).toHaveBeenCalled()
+    }, { timeout: 5000 })
+
+    // The save's own success handler seeds the cache with a same-`updated_at`
+    // response, and `invalidateQueries` fires a background refetch that
+    // resolves with the same static (not-newer) snapshot — both are
+    // rejected by the guard. Wait for at least one rejection warning.
+    await waitFor(() => {
+      expect(warnSpy).toHaveBeenCalledWith(
+        'agentProfile.updatedAtGuardRejectedHydration',
+        expect.objectContaining({ agentId: 'general-assistant' }),
+      )
+    }, { timeout: 3000 })
+  })
+
+  it('fails CLOSED (rejects the hydration, does not silently adopt it) and warns when updated_at cannot be parsed', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const t0 = '2026-02-01T00:00:00.000Z'
+    const t1 = '2026-02-01T00:05:00.000Z' // strictly newer, and validly parseable
+
+    vi.mocked(fetchAgent).mockReset()
+      .mockResolvedValueOnce({ ...mockCoreAgent, updated_at: t0, description: 'Original description' })
+      // The background refetch fired by invalidateQueries after the save
+      // below — a fresh, VALIDLY-parseable, strictly newer snapshot. Must
+      // still be REJECTED because the INCORPORATED side (set from the
+      // save's own malformed response, below) cannot be parsed, so the
+      // guard cannot confidently order the two and fails closed.
+      .mockResolvedValue({ ...mockCoreAgent, updated_at: t1, description: 'Fresher description from elsewhere' })
+    // The save response's `updated_at` is malformed — this is what gets
+    // written into `lastIncorporatedUpdatedAtRef.current` directly by the
+    // save-success handler (AgentProfile.tsx, `if (resp.updated_at) …`).
+    vi.mocked(updateAgent).mockResolvedValue({
+      ...mockCoreAgent,
+      name: 'Edited Name',
+      description: 'Original description',
+      updated_at: 'not-a-real-timestamp',
+    })
+
+    renderProfile('general-assistant')
+    await screen.findByText('General Assistant')
+
+    fireEvent.change(screen.getAllByTestId('agent-name-input')[0], { target: { value: 'Edited Name' } })
+
+    await waitFor(() => {
+      expect(vi.mocked(updateAgent)).toHaveBeenCalled()
+    }, { timeout: 5000 })
+
+    // The background refetch (fetchAgent's 2nd+ resolution, t1) must be
+    // rejected — the "unparseable" branch, not silently adopted.
+    await waitFor(() => {
+      expect(warnSpy).toHaveBeenCalledWith(
+        'agentProfile.updatedAtGuardUnparseable',
+        expect.objectContaining({ agentId: 'general-assistant' }),
+      )
+    }, { timeout: 3000 })
+
+    // The fresher-but-unorderable snapshot's description must NOT have
+    // silently replaced what's in the form — proves fail-CLOSED, not
+    // fail-OPEN. (The form still shows the user's own locally-known
+    // description, never touched by this edit.)
+    expect(screen.getAllByTestId('agent-description-input')[0]).not.toHaveValue('Fresher description from elsewhere')
+    expect(screen.getAllByTestId('agent-description-input')[0]).toHaveValue('Original description')
+  })
 })
 
 // ── subagent_3p payload restriction ───────────────────────────────────────────
@@ -1405,7 +1642,6 @@ describe('AgentProfile — subagent_3p payload restriction', () => {
     expect(payload).not.toHaveProperty('shell_policy')
     expect(payload).not.toHaveProperty('fallback_models')
     expect(payload).not.toHaveProperty('model_params')
-    expect(payload).not.toHaveProperty('delegation_policy')
     // agent-types-field-matrix.md, Decisions #1 (resolved 2026-07-03):
     // excluded — max_tool_iterations is excluded for subagent_3p.
     expect(payload).not.toHaveProperty('max_tool_iterations')
@@ -2011,12 +2247,11 @@ describe('AgentProfile — locked core agent shell_policy persistence (live-bug 
   })
 })
 
-// Test-coverage gap (test-analyzer): the Default-agent toggle row and the
-// delegation-policy summary are gated on `!isWorkerAgent` only — NOT
-// `!isLocked` (operator decision 2026-07-03: locked core agents keep these
-// editable/visible). No prior test asserted either fact for a locked core
-// agent, nor their absence for a worker.
-describe('AgentProfile — Default-agent toggle and delegation-policy summary visibility (field matrix, W2c)', () => {
+// Test-coverage gap (test-analyzer): the Default-agent toggle row is gated
+// on `!isWorkerAgent` only — NOT `!isLocked` (operator decision 2026-07-03:
+// locked core agents keep it editable/visible). No prior test asserted
+// either fact for a locked core agent, nor its absence for a worker.
+describe('AgentProfile — Default-agent toggle visibility (field matrix, W2c)', () => {
   it('shows the Default-agent toggle row for a locked core agent', async () => {
     vi.mocked(fetchAgent).mockResolvedValue(mockLockedCoreAgent)
     renderProfile('mia')
@@ -2024,21 +2259,13 @@ describe('AgentProfile — Default-agent toggle and delegation-policy summary vi
     expect((await screen.findAllByTestId('default-toggle-row')).length).toBeGreaterThanOrEqual(1)
   })
 
-  it('shows the delegation-policy summary for a locked core agent', async () => {
-    vi.mocked(fetchAgent).mockResolvedValue(mockLockedCoreAgent)
-    renderProfile('mia')
-    await screen.findByText('Mia')
-    expect((await screen.findAllByTestId('delegation-policy-summary')).length).toBeGreaterThanOrEqual(1)
-  })
-
-  it('hides the Default-agent toggle row and delegation-policy summary for a worker (Subagent)', async () => {
+  it('hides the Default-agent toggle row for a worker (Subagent)', async () => {
     vi.mocked(fetchAgent).mockResolvedValue(mockWorkerAgent)
     renderProfile('web-researcher')
     await screen.findByText('Web Researcher')
     await waitFor(() => {
       expect(screen.queryAllByTestId('default-toggle-row').length).toBe(0)
     })
-    expect(screen.queryAllByTestId('delegation-policy-summary').length).toBe(0)
   })
 })
 

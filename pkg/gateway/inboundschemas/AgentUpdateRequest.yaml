@@ -182,8 +182,6 @@ properties:
       (CLI doesn't see Omnipus skills).
     example:
       - "web-research"
-  delegation_policy:
-    $ref: './DelegationPolicy.yaml'
   voice:
     type: string
     nullable: true

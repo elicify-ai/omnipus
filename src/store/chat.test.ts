@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { act } from 'react'
-import { useChatStore, getMessages, makeBucketMessages, MAX_MESSAGES_PER_SESSION, clampToolResult, isClientTruncatedResult, evictMessageFromBucket, findLastAssistantMessageId } from './chat'
+import { useChatStore, getMessages, makeBucketMessages, MAX_MESSAGES_PER_SESSION, clampToolResult, isClientTruncatedResult, evictMessageFromBucket, findLastAssistantMessageId, findAssistantMessageIdByTurnId } from './chat'
 import type { SessionChatState, ChatMessage } from './chat'
 import { useConnectionStore } from './connection'
 import { useSessionStore } from './session'
@@ -1320,7 +1320,21 @@ describe('ChatStore_ReplaySequence_MatchesLiveSequence', () => {
     const liveContent = liveAssistant!.content
     // After done, tool calls are baked into message.tool_calls and live map is cleared.
     const liveBakedToolCalls = liveAssistant!.tool_calls ?? []
-    expect(liveContent).toBe('AB')
+    // Live-UAT regression fix: a tool call starting while the
+    // bubble still holds text is a new-logical-unit boundary — the next token
+    // gets a paragraph break instead of gluing directly onto the trailing
+    // text (previously 'AB' with zero separator, matching the exact bug
+    // repro shape "...now.Now delegating..."). See `pendingTextBoundary` on
+    // ChatMessage. This diverges from the byte-for-byte live/replay parity
+    // asserted below ONLY in this whitespace-formatting respect: the real
+    // backend persists a tool-call-interrupted turn's pre/post narration as
+    // SEPARATE transcript entries (pkg/agent/turn.go
+    // appendIntermediateAssistantTranscript, Bug #416 fix), which replay
+    // reconstructs as separate bubbles — not the single reused-bubble shape
+    // this synthetic fixture exercises — so real replay never hits the glue
+    // bug this fixes. The content-parity assertion below is normalized to
+    // ignore this whitespace-only difference accordingly.
+    expect(liveContent).toBe('A\n\nB')
     expect(liveBakedToolCalls).toHaveLength(1)
     expect(liveBakedToolCalls[0].tool).toBe('shell')
     expect(liveBakedToolCalls[0].status).toBe('success')
@@ -1372,8 +1386,13 @@ describe('ChatStore_ReplaySequence_MatchesLiveSequence', () => {
     expect(replayAssistant).toBeDefined()
 
     // ── Assert shape parity ────────────────────────────────────────────────────
-    // Content must match
-    expect(replayAssistant!.content).toBe(liveContent)
+    // Content must match modulo whitespace: the live path now inserts a
+    // paragraph break at the tool-call boundary (see comment above
+    // `liveContent`'s assertion) — replay's single `replay_message` fixture
+    // here has no equivalent boundary to break at, so it stays 'AB'. The
+    // WORDS must still be identical; only the deliberate live-only
+    // formatting differs.
+    expect(replayAssistant!.content.replace(/\s+/g, '')).toBe(liveContent.replace(/\s+/g, ''))
 
     // Tool-call count must match (both baked into message.tool_calls after done)
     const replayBakedToolCalls = replayAssistant!.tool_calls ?? []
@@ -1388,6 +1407,286 @@ describe('ChatStore_ReplaySequence_MatchesLiveSequence', () => {
     expect(replayAssistant!.isStreaming).toBe(false)
     // Live and replay both settle identically after done
     expect(replayAssistant!.isStreaming).toBe(liveAssistant!.isStreaming)
+  })
+})
+
+// TDD row 18b: ChatStore_ReplaySequence_InterleavedTurn_TwoFrames
+// Traces to: sprint-i-historical-replay-fidelity-spec.md FR-I-010
+//
+// Bug 1 fix (live/reload rendering parity regression, UAT A-I4): a real
+// interleaved (narration -> tool call -> narration) turn persists as TWO
+// SEPARATE transcript entries — pkg/agent/turn.go's
+// appendIntermediateAssistantTranscript writes the pre-tool-call segment as
+// its own entry, separate from the post-tool-call segment (the pre-existing
+// "Bug #416" fix) — both stamped with the SAME ts.turnID. pkg/gateway/replay.go
+// emits ONE replay_message frame per non-empty-content entry with no signal
+// distinguishing "a new turn" from "the next segment of a still-in-progress
+// turn", so a real interleaved turn replays as TWO SEPARATE replay_message
+// frames ("A" then "B") — not the single merged frame the synthetic fixture
+// in ChatStore_ReplaySequence_MatchesLiveSequence above uses.
+//
+// This test previously PINNED (documented, did not fix) a structural
+// divergence: two replay_message frames used to produce two separate
+// bubbles, not the single merged "A\n\nB" bubble live rendering produces for
+// the same underlying turn (live's `token`-frame agent_id-boundary rule, Fix
+// 5a, keeps one bubble open across a producer's whole turn). The
+// `replay_message` reducer now merges consecutive same-turn_id/same-agent_id
+// segments into one bubble (with a pendingTextBoundary-driven paragraph
+// break, mirroring the live path exactly), so this test now asserts the
+// FIXED behavior instead of merely documenting the gap.
+describe('ChatStore_ReplaySequence_InterleavedTurn_TwoFrames', () => {
+  it('two same-turn_id replay_message frames (matching real interleaved-turn backend output) merge into ONE bubble, matching live rendering', () => {
+    act(() => { useChatStore.getState().resetSession() })
+
+    // Entry 1: pre-tool-call narration, persisted as its own transcript entry
+    // with the tool call attached to it (mirrors appendIntermediateAssistantTranscript).
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'replay_message',
+        role: 'assistant',
+        content: 'A',
+        id: 'entry-1',
+        agent_id: 'agent-ray',
+        turn_id: 'turn-interleaved-1',
+        session_id: TEST_SESSION_ID,
+      })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'tool_call_start',
+        call_id: 'tc_interleaved_1',
+        tool: 'shell',
+        params: { cmd: 'echo hi' },
+        agent_id: 'agent-ray',
+        session_id: TEST_SESSION_ID,
+      })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'tool_call_result',
+        call_id: 'tc_interleaved_1',
+        tool: 'shell',
+        result: { stdout: 'hi\n' },
+        status: 'success',
+        duration_ms: 42,
+        session_id: TEST_SESSION_ID,
+      })
+    })
+    // Entry 2: post-tool-call narration — its OWN separate transcript entry,
+    // same turn_id AND same agent_id as entry 1 (both stamped from the same
+    // ts.turnID / ts.resolveActiveAgentID() during the same turnState).
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'replay_message',
+        role: 'assistant',
+        content: 'B',
+        id: 'entry-2',
+        agent_id: 'agent-ray',
+        turn_id: 'turn-interleaved-1',
+        session_id: TEST_SESSION_ID,
+      })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'done', session_id: TEST_SESSION_ID })
+    })
+
+    const state = useChatStore.getState()
+    const assistantMsgs = state.messages.filter((m) => m.role === 'assistant')
+
+    // THE FIX: exactly ONE bubble — matching the single "A\n\nB" bubble the
+    // live path produces for the same underlying turn — not two.
+    expect(assistantMsgs).toHaveLength(1)
+    expect(assistantMsgs[0].content).toBe('A\n\nB')
+    expect(assistantMsgs[0].agentId).toBe('agent-ray')
+
+    // The tool call lands on the single merged bubble.
+    const toolCalls = assistantMsgs[0].tool_calls ?? []
+    expect(toolCalls).toHaveLength(1)
+    expect(toolCalls[0].tool).toBe('shell')
+
+    // A reconnect that re-replays the same window (attach_session `since`
+    // cursor) must not re-merge entry-2 a second time and duplicate content.
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'replay_message',
+        role: 'assistant',
+        content: 'B',
+        id: 'entry-2',
+        agent_id: 'agent-ray',
+        turn_id: 'turn-interleaved-1',
+        session_id: TEST_SESSION_ID,
+      })
+    })
+    const afterReplay = useChatStore.getState()
+    const afterAssistantMsgs = afterReplay.messages.filter((m) => m.role === 'assistant')
+    expect(afterAssistantMsgs).toHaveLength(1)
+    expect(afterAssistantMsgs[0].content).toBe('A\n\nB')
+  })
+
+  it('two replay_message frames with DIFFERENT turn_id (two genuinely separate turns by the same agent) stay as two separate bubbles', () => {
+    act(() => { useChatStore.getState().resetSession() })
+
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'replay_message',
+        role: 'assistant',
+        content: 'First turn reply',
+        id: 'entry-turn-1',
+        agent_id: 'agent-ray',
+        turn_id: 'turn-1',
+        session_id: TEST_SESSION_ID,
+      })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'replay_message',
+        role: 'user',
+        content: 'Follow-up question',
+        id: 'entry-user-2',
+        session_id: TEST_SESSION_ID,
+      })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'replay_message',
+        role: 'assistant',
+        content: 'Second turn reply',
+        id: 'entry-turn-2',
+        agent_id: 'agent-ray',
+        turn_id: 'turn-2',
+        session_id: TEST_SESSION_ID,
+      })
+    })
+
+    const state = useChatStore.getState()
+    const assistantMsgs = state.messages.filter((m) => m.role === 'assistant')
+    expect(assistantMsgs).toHaveLength(2)
+    expect(assistantMsgs[0].content).toBe('First turn reply')
+    expect(assistantMsgs[1].content).toBe('Second turn reply')
+  })
+
+  // 7-reviewer-gate finding (2 independent reviewers): the dedup check used
+  // to consult ONLY the current tail bubble's `mergedReplayIds`. That is
+  // correct at MERGE time (a merge always targets the then-current tail) but
+  // wrong at DEDUP-CHECK time, which can run LATER on a WS reconnect. Trace:
+  // entry B merges into bubble A (tail at merge time, B's id recorded in
+  // A.mergedReplayIds). A new turn later produces bubble D (now the tail). A
+  // WS reconnect re-replays the window including B again:
+  // findLastAssistantMessageId now resolves to D, not A; D.mergedReplayIds
+  // doesn't contain B's id, so the old tail-only check said "not merged";
+  // the merge branch's own `sameTurn` check also fails (B belongs to an
+  // earlier turn than D); execution fell through to pushing B as a
+  // brand-new standalone message — a visible duplicate bubble of content
+  // already rendered. Fixed via a session-scoped `mergedReplayMessageIds`
+  // set (checked instead of the single-tail-bubble field) — see that
+  // field's doc comment on SessionChatState.
+  it('a WS reconnect re-replaying an already-merged entry after a LATER turn has become the tail does not duplicate it as a new bubble', () => {
+    act(() => { useChatStore.getState().resetSession() })
+
+    // Entry A: opens turn-1.
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'replay_message',
+        role: 'assistant',
+        content: 'A',
+        id: 'entry-a',
+        agent_id: 'agent-ray',
+        turn_id: 'turn-1',
+        session_id: TEST_SESSION_ID,
+      })
+    })
+    // Entry B: same turn_id + agent_id as A — merges into A's bubble (A is
+    // the tail at merge time). A.mergedReplayIds now contains 'entry-b'.
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'replay_message',
+        role: 'assistant',
+        content: 'B',
+        id: 'entry-b',
+        agent_id: 'agent-ray',
+        turn_id: 'turn-1',
+        session_id: TEST_SESSION_ID,
+      })
+    })
+
+    let state = useChatStore.getState()
+    let assistantMsgs = state.messages.filter((m) => m.role === 'assistant')
+    expect(assistantMsgs).toHaveLength(1)
+    expect(assistantMsgs[0].content).toBe('A\n\nB')
+
+    // Entry D: a genuinely LATER, separate turn (turn-2) — becomes the new
+    // tail bubble. A (with B merged in) is no longer the tail.
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'replay_message',
+        role: 'assistant',
+        content: 'D',
+        id: 'entry-d',
+        agent_id: 'agent-ray',
+        turn_id: 'turn-2',
+        session_id: TEST_SESSION_ID,
+      })
+    })
+
+    state = useChatStore.getState()
+    assistantMsgs = state.messages.filter((m) => m.role === 'assistant')
+    expect(assistantMsgs).toHaveLength(2)
+    expect(assistantMsgs[1].content).toBe('D')
+
+    // WS reconnect re-replays the window, including entry B again — same id,
+    // same content, same turn_id — even though D is now the tail bubble.
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'replay_message',
+        role: 'assistant',
+        content: 'B',
+        id: 'entry-b',
+        agent_id: 'agent-ray',
+        turn_id: 'turn-1',
+        session_id: TEST_SESSION_ID,
+      })
+    })
+
+    state = useChatStore.getState()
+    assistantMsgs = state.messages.filter((m) => m.role === 'assistant')
+    // THE FIX: still exactly 2 assistant bubbles — B must NOT reappear as a
+    // third, standalone duplicate bubble.
+    expect(assistantMsgs).toHaveLength(2)
+    expect(assistantMsgs[0].content).toBe('A\n\nB')
+    expect(assistantMsgs[1].content).toBe('D')
+  })
+
+  it('two same-turn_id replay_message frames from DIFFERENT agents (delegate hands back to delegator) stay as two separate bubbles', () => {
+    act(() => { useChatStore.getState().resetSession() })
+
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'replay_message',
+        role: 'assistant',
+        content: "Ray's research notes",
+        id: 'entry-ray-1',
+        agent_id: 'agent-ray',
+        turn_id: 'shared-turn',
+        session_id: TEST_SESSION_ID,
+      })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'replay_message',
+        role: 'assistant',
+        content: "Delegator's synthesis",
+        id: 'entry-delegator-1',
+        agent_id: 'agent-delegator',
+        turn_id: 'shared-turn',
+        session_id: TEST_SESSION_ID,
+      })
+    })
+
+    const state = useChatStore.getState()
+    const assistantMsgs = state.messages.filter((m) => m.role === 'assistant')
+    expect(assistantMsgs).toHaveLength(2)
+    expect(assistantMsgs[0].agentId).toBe('agent-ray')
+    expect(assistantMsgs[1].agentId).toBe('agent-delegator')
   })
 })
 
@@ -2613,5 +2912,224 @@ describe('chat store — B1: placeholder agentId stamped at creation, not at ren
     const msg = afterSwitch.messages.find((m) => m.role === 'assistant')
     expect(msg).toBeDefined()
     expect(msg?.agentId).toBe('agent-mia')
+  })
+})
+
+// Wave 3 Fix 5a: TokenFrame.agent_id is now populated by the backend with the
+// real producer's agent id at the point tokens are emitted. Live attribution
+// must consume it instead of the client-side activeAgentId guess, which is
+// wrong for background/delegated sub-turns where the true producer isn't
+// "whoever the user happens to be chatting with".
+describe('chat store — Fix 5a: live token attribution consumes TokenFrame.agent_id', () => {
+  it('token frame carrying agent_id attributes a new placeholder to that agent, not activeAgentId', () => {
+    act(() => {
+      useSessionStore.setState({ activeSessionId: TEST_SESSION_ID, activeAgentId: 'agent-mia', activeAgentType: null })
+      useChatStore.getState().handleFrame({
+        type: 'token',
+        content: 'Hello',
+        session_id: TEST_SESSION_ID,
+        agent_id: 'agent-jim', // real producer per the backend, differs from the client's activeAgentId guess
+      })
+    })
+    const placeholder = useChatStore.getState().messages.find((m) => m.role === 'assistant')
+    expect(placeholder).toBeDefined()
+    expect(placeholder?.agentId).toBe('agent-jim')
+  })
+
+  it('token frame carrying agent_id backfills attribution onto the optimistic sendMessage() placeholder (no agentId yet)', () => {
+    // This is the actual real-world path: sendMessage() creates an assistant
+    // placeholder synchronously with no agentId (the true producer isn't known
+    // at send time), then the first 'token' frame for the reply arrives and
+    // reuses that SAME bubble (still isStreaming) rather than creating a new
+    // one. Fix 5a must stamp agentId on this reuse path too, not only at
+    // placeholder-creation time.
+    const mockSend = vi.fn().mockReturnValue(true)
+    act(() => {
+      useConnectionStore.setState({
+        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as any,
+        isConnected: true,
+      })
+      useSessionStore.setState({ activeSessionId: TEST_SESSION_ID, activeAgentId: 'agent-mia', activeAgentType: null })
+    })
+    act(() => {
+      useChatStore.getState().sendMessage('hi there')
+    })
+    const optimisticPlaceholder = useChatStore.getState().messages.find((m) => m.role === 'assistant')
+    expect(optimisticPlaceholder).toBeDefined()
+    expect(optimisticPlaceholder?.agentId).toBeUndefined()
+
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'token',
+        content: 'Hello',
+        session_id: TEST_SESSION_ID,
+        agent_id: 'agent-jim',
+      })
+    })
+    const afterToken = useChatStore.getState().messages.find((m) => m.role === 'assistant')
+    expect(afterToken?.agentId).toBe('agent-jim')
+    expect(afterToken?.content).toBe('Hello')
+  })
+
+  it('token frame WITHOUT agent_id still falls back to the activeAgentId guess (no regression)', () => {
+    act(() => {
+      useSessionStore.setState({ activeSessionId: TEST_SESSION_ID, activeAgentId: 'agent-mia', activeAgentType: null })
+      useChatStore.getState().handleFrame({
+        type: 'token',
+        content: 'Hello',
+        session_id: TEST_SESSION_ID,
+        // agent_id omitted — legacy/older-format frame.
+      })
+    })
+    const placeholder = useChatStore.getState().messages.find((m) => m.role === 'assistant')
+    expect(placeholder).toBeDefined()
+    expect(placeholder?.agentId).toBe('agent-mia')
+  })
+})
+
+// Wave 3 Fix 5c: pkg/gateway/replay.go now emits a role:"turn_canceled"
+// ReplayMessageFrame carrying a turn_id that correlates to the specific
+// assistant replay_message entry it interrupted (both stamped from
+// TranscriptEntry.TurnID). The frontend must consume this to mark that exact
+// message interrupted, matching the live-cancel rendering
+// (markLastMessageInterrupted), instead of silently discarding the frame.
+describe('chat store — Fix 5c: turn_canceled replay correlation via turn_id', () => {
+  it('turn_canceled replay frame with a matching turn_id marks the correct message interrupted', () => {
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'replay_message',
+        role: 'user',
+        content: 'do the thing',
+        session_id: TEST_SESSION_ID,
+      })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'replay_message',
+        role: 'assistant',
+        content: 'partial respo',
+        session_id: TEST_SESSION_ID,
+        turn_id: 'turn-abc',
+      } as Parameters<ReturnType<typeof useChatStore.getState>['handleFrame']>[0])
+    })
+    const beforeCancel = useChatStore.getState().messages.find((m) => m.role === 'assistant')
+    expect(beforeCancel?.status).toBe('done')
+
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'replay_message',
+        role: 'turn_canceled',
+        content: '',
+        session_id: TEST_SESSION_ID,
+        turn_id: 'turn-abc',
+      } as Parameters<ReturnType<typeof useChatStore.getState>['handleFrame']>[0])
+    })
+
+    const state = useChatStore.getState()
+    const assistantMsgs = state.messages.filter((m) => m.role === 'assistant')
+    // The turn_canceled entry itself must never render as its own bubble.
+    expect(assistantMsgs).toHaveLength(1)
+    expect(assistantMsgs[0].content).toBe('partial respo')
+    expect(assistantMsgs[0].status).toBe('interrupted')
+    expect(assistantMsgs[0].isStreaming).toBe(false)
+  })
+
+  it('turn_canceled correctly targets the matching turn among multiple assistant turns (not just the last one)', () => {
+    // Simulates async delegation interleaving: turn-1 finishes, turn-2 starts
+    // and is still the "last" assistant message, but the cancellation belongs
+    // to turn-1. Correlation must be by turn_id, never by stream adjacency.
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'replay_message', role: 'user', content: 'q1', session_id: TEST_SESSION_ID,
+      })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'replay_message', role: 'assistant', content: 'turn 1 reply', session_id: TEST_SESSION_ID, turn_id: 'turn-1',
+      } as Parameters<ReturnType<typeof useChatStore.getState>['handleFrame']>[0])
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'replay_message', role: 'user', content: 'q2', session_id: TEST_SESSION_ID,
+      })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'replay_message', role: 'assistant', content: 'turn 2 reply', session_id: TEST_SESSION_ID, turn_id: 'turn-2',
+      } as Parameters<ReturnType<typeof useChatStore.getState>['handleFrame']>[0])
+    })
+
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'replay_message', role: 'turn_canceled', content: '', session_id: TEST_SESSION_ID, turn_id: 'turn-1',
+      } as Parameters<ReturnType<typeof useChatStore.getState>['handleFrame']>[0])
+    })
+
+    const state = useChatStore.getState()
+    const [turn1Msg, turn2Msg] = state.messages.filter((m) => m.role === 'assistant')
+    expect(turn1Msg.content).toBe('turn 1 reply')
+    expect(turn1Msg.status).toBe('interrupted')
+    // turn 2 must be completely unaffected — no false-positive interruption.
+    expect(turn2Msg.content).toBe('turn 2 reply')
+    expect(turn2Msg.status).toBe('done')
+  })
+
+  it('turn_canceled frame with no matching message is handled gracefully — no crash, no false-positive interruption', () => {
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'replay_message', role: 'user', content: 'q1', session_id: TEST_SESSION_ID,
+      })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'replay_message', role: 'assistant', content: 'unrelated reply', session_id: TEST_SESSION_ID, turn_id: 'turn-real',
+      } as Parameters<ReturnType<typeof useChatStore.getState>['handleFrame']>[0])
+    })
+
+    expect(() => {
+      act(() => {
+        useChatStore.getState().handleFrame({
+          type: 'replay_message', role: 'turn_canceled', content: '', session_id: TEST_SESSION_ID, turn_id: 'turn-nonexistent',
+        } as Parameters<ReturnType<typeof useChatStore.getState>['handleFrame']>[0])
+      })
+    }).not.toThrow()
+
+    const state = useChatStore.getState()
+    const assistantMsgs = state.messages.filter((m) => m.role === 'assistant')
+    expect(assistantMsgs).toHaveLength(1)
+    // The unrelated message must NOT be mis-marked as interrupted.
+    expect(assistantMsgs[0].status).toBe('done')
+  })
+
+  it('turn_canceled frame with no turn_id at all is dropped gracefully (legacy frame, nothing to correlate)', () => {
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'replay_message', role: 'assistant', content: 'some reply', session_id: TEST_SESSION_ID, turn_id: 'turn-x',
+      } as Parameters<ReturnType<typeof useChatStore.getState>['handleFrame']>[0])
+    })
+
+    expect(() => {
+      act(() => {
+        useChatStore.getState().handleFrame({
+          type: 'replay_message', role: 'turn_canceled', content: '', session_id: TEST_SESSION_ID,
+          // turn_id omitted entirely.
+        } as Parameters<ReturnType<typeof useChatStore.getState>['handleFrame']>[0])
+      })
+    }).not.toThrow()
+
+    const msg = useChatStore.getState().messages.find((m) => m.role === 'assistant')
+    expect(msg?.status).toBe('done')
+  })
+
+  it('findAssistantMessageIdByTurnId finds the assistant message by turnId, ignoring role and scanning backward', () => {
+    const messagesById: Record<string, ChatMessage> = {
+      u1: { id: 'u1', role: 'user', content: 'hi', timestamp: 't', status: 'done' },
+      a1: { id: 'a1', role: 'assistant', content: 'r1', timestamp: 't', status: 'done', turnId: 'turn-1' },
+      a2: { id: 'a2', role: 'assistant', content: 'r2', timestamp: 't', status: 'done', turnId: 'turn-2' },
+    }
+    const order = ['u1', 'a1', 'a2']
+    expect(findAssistantMessageIdByTurnId(order, messagesById, 'turn-1')).toBe('a1')
+    expect(findAssistantMessageIdByTurnId(order, messagesById, 'turn-2')).toBe('a2')
+    expect(findAssistantMessageIdByTurnId(order, messagesById, 'turn-missing')).toBeNull()
   })
 })

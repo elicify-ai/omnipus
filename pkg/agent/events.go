@@ -363,13 +363,40 @@ const (
 	SubTurnStatusSuccess SubTurnStatus = "success"
 	// SubTurnStatusError indicates the sub-turn ended with an error.
 	SubTurnStatusError SubTurnStatus = "error"
-	// SubTurnStatusCancelled indicates the sub-turn was explicitly canceled by the user.
+	// SubTurnStatusCancelled indicates THIS sub-turn's own cancel was
+	// explicitly claimed — i.e. RequestCancel targeted the sub-turn
+	// directly (childTS.cancelFired == true when its context was
+	// canceled), not merely inherited via a parent's hard-abort cascade.
+	// Reachable, if narrow (FIX 4, 7-reviewer-gate follow-up on the Wave 3
+	// fix pass — see spawnSubTurn's cleanup defer, pkg/agent/subturn.go):
+	// a Critical:true sub-turn survives a graceful parent finish by design
+	// (SubTurnConfig.Critical) and keeps running under its own session ID;
+	// a later RequestCancel against that same session (GetActiveTurnHookForSession's
+	// fallback match, pkg/agent/turn.go) can find and cancel the sub-turn
+	// itself once its parent has already finished. Distinct from
+	// SubTurnStatusInterrupted below, which covers the cascade case
+	// (childTS.cancelFired stays false there — the parent's Finish(true)
+	// cascades via Finish(true) directly on children, bypassing
+	// ClaimCancel entirely).
 	//
 	//nolint:misspell // wire value "cancelled" matches frontend TS union in src/store/chat.ts, src/lib/ws.ts
 	SubTurnStatusCancelled SubTurnStatus = "cancelled"
-	// SubTurnStatusInterrupted indicates the sub-turn was interrupted by its parent.
+	// SubTurnStatusInterrupted indicates the sub-turn was interrupted by its
+	// parent's hard-abort cascade (the common case — see spawnSubTurn's
+	// cleanup defer for the childCtx.Err()==context.Canceled check). The
+	// wire contract's SubagentEndFrame.reason field (surfaced from
+	// SubTurnEndPayload.Reason) is populated only for this status.
 	SubTurnStatusInterrupted SubTurnStatus = "interrupted"
-	// SubTurnStatusTimeout indicates the sub-turn exceeded its configured timeout.
+	// SubTurnStatusTimeout indicates the sub-turn exceeded its configured
+	// timeout. Deliberately routed to SubTurnStatusError in practice, not
+	// this value — spawnSubTurn's cleanup defer distinguishes an external
+	// cancel (context.Canceled) from every other error case, including a
+	// genuine context.DeadlineExceeded from the sub-turn's own Timeout
+	// config expiring, which falls through to SubTurnStatusError (a real
+	// failure, not a cancellation, from the sub-turn's own point of view).
+	// This value remains declared for wire-contract completeness (the
+	// SPA's SUBAGENT_END_STATUSES validation set already includes it) and
+	// as a documented, intentional design choice, not an oversight.
 	SubTurnStatusTimeout SubTurnStatus = "timeout"
 )
 
@@ -407,6 +434,20 @@ type SubTurnEndPayload struct {
 	ChatID string
 	// SessionID is the transcript-store session ID for this turn.
 	SessionID string
+	// Reason is populated ONLY when Status == SubTurnStatusInterrupted (FIX 4,
+	// 7-reviewer-gate follow-up on the Wave 3 fix pass), mirroring the wire
+	// contract's SubagentEndFrame.reason field ("why the sub-turn was
+	//nolint:misspell // documents the literal wire enum value, matches frontend TS union
+	// interrupted by the parent" — parent_timeout | parent_cancelled |
+	// parent_done_early | unknown). spawnSubTurn's cleanup defer sets this
+	// from the cheapest honest signal available at that point
+	// (parentTS.cancelFired) — see its doc comment for the deliberate
+	// coarseness (this does NOT yet distinguish a live user cancel from a
+	// scheduled run's deadline force-abort, both of which reach
+	// parentTS.cancelFired via the same RequestCancel path; a finer split
+	// would require threading the canceller identity through turnState,
+	// out of scope for this fix). Empty for every other Status value.
+	Reason string
 }
 
 // SubTurnResultDeliveredPayload describes delivery of a sub-turn result.
