@@ -492,18 +492,44 @@ func resolveTextTarget(tabCtx context.Context, cssScope, needle string, exact bo
 		}
 		select {
 		case <-tabCtx.Done():
-			return "", fmt.Errorf("text selector: %w", tabCtx.Err())
+			// The outer tab context ended (deadline or cancel) mid-wait. Resolve
+			// through the SAME priority as the end-of-loop path below so a
+			// definitive no-match an earlier poll already established wins over
+			// the bare context error. UAT caught the old bare-return here leaking
+			// "context deadline exceeded" when the tab's (shorter) deadline fired
+			// during a sleep, even though prior polls had cleanly established the
+			// element was absent — the agent must read the same actionable "no
+			// visible element matching text …" whether the resolver's own
+			// deadline or the tab's shorter one expired first.
+			return "", resolvePendingErr(needle, lastNoMatchErr, lastEvalErr, tabCtx.Err())
 		case <-time.After(sleepFor):
 		}
 	}
 
-	if lastNoMatchErr != nil {
-		return "", lastNoMatchErr
+	return "", resolvePendingErr(needle, lastNoMatchErr, lastEvalErr, nil)
+}
+
+// resolvePendingErr picks the error resolveTextTarget reports once it stops
+// polling — from EITHER exit path: its own timeout budget elapsing, or the
+// outer tab context ending mid-wait. A definitive "no visible element matching
+// text" answer an earlier poll already established wins over a bare context or
+// evaluation error. This is the 7-reviewer intent (a doomed final CDP round
+// trip must not override a clean prior result) extended to the tabCtx.Done()
+// path that a UAT run caught leaking a raw "context deadline exceeded". Every
+// branch NAMES the needle and none exposes the internal marker attribute, so
+// the agent always gets an actionable, consistent message regardless of which
+// deadline fired.
+func resolvePendingErr(needle string, lastNoMatchErr, lastEvalErr, ctxErr error) error {
+	switch {
+	case lastNoMatchErr != nil:
+		return lastNoMatchErr
+	case lastEvalErr != nil:
+		return lastEvalErr
+	case ctxErr != nil:
+		return fmt.Errorf("text selector: %w while waiting for %q", ctxErr, needle)
+	default:
+		return fmt.Errorf("no visible element matching text %q", needle)
 	}
-	if lastEvalErr != nil {
-		return "", lastEvalErr
-	}
-	return "", fmt.Errorf("no visible element matching text %q", needle)
 }
 
 // removeTextMarker best-effort strips the marker attribute resolveTextTarget
