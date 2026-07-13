@@ -8,7 +8,7 @@ import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useSidebarStore } from '@/store/sidebar'
 import { useSessionStore } from '@/store/session'
 import { ChatControls } from '@/components/chat/ChatControls'
-import { WorkspaceTabBar, resolveActiveSegment, WORKSPACE_TABS } from './WorkspaceTabBar'
+import { WorkspaceTabBar, resolveActiveSegment } from './WorkspaceTabBar'
 
 // React context carrying the resolved workspace to every tab.
 const WorkspaceContext = createContext<Workspace | null>(null)
@@ -31,8 +31,7 @@ interface WorkspaceTabContainerProps {
  * workspace, manages session lifecycle via enterWorkspaceChat, and renders:
  *
  *   Row 1 — top bar: [hamburger] [WorkspaceTabBar] [spacer] [ChatControls (chat only)]
- *   Row 2 — breadcrumb: "WorkspaceName › ActiveTab"
- *   Row 3 — tab content (Outlet)
+ *   Row 2 — tab content (Outlet)
  *
  * Session lifecycle: enterWorkspaceChat(workspace.id) fires whenever the
  * workspaceId changes (NOT on tab switches within the same workspace), so
@@ -135,9 +134,12 @@ function WorkspaceTabContainerView({
   return (
     <WorkspaceContext.Provider value={workspace}>
       <div className="absolute inset-0 flex flex-col overflow-hidden">
-        {/* Row 1: top bar — semantic <header> (banner landmark) so the token/cost
+        {/* Top bar — semantic <header> (banner landmark) so the token/cost
             counter is reachable via both getByRole('banner') and a `header` CSS
-            selector. @container enables container-query variants on children. */}
+            selector. @container enables container-query variants on children.
+            No secondary breadcrumb row: the tab strip already names the
+            workspace + active view, so a second chrome line was redundant and
+            broke the flat 44px shell alignment. */}
         <header
           role="banner"
           className="@container flex items-center h-chrome-header min-h-chrome-header bg-[var(--color-surface-1)]/95 backdrop-blur-sm flex-shrink-0"
@@ -163,10 +165,7 @@ function WorkspaceTabContainerView({
           )}
         </header>
 
-        {/* Row 2: breadcrumb */}
-        <WorkspaceBreadcrumbBar workspace={workspace} />
-
-        {/* Row 3: tab content */}
+        {/* Tab content */}
         <div className="flex-1 min-h-0 relative">
           <Outlet />
         </div>
@@ -209,30 +208,6 @@ function WorkspaceNotFoundState() {
       >
         Back to my workspace
       </button>
-    </div>
-  )
-}
-
-function WorkspaceBreadcrumbBar({ workspace }: { workspace: Workspace }) {
-  const location = useLocation()
-  const activeSegment = resolveActiveSegment(location.pathname, workspace.id)
-  const activeTab = WORKSPACE_TABS.find((t) => t.segment === activeSegment)
-
-  return (
-    <div
-      className="flex items-center gap-1.5 px-4 py-1 border-b border-[var(--color-border)]/50 bg-[var(--color-surface-1)]/80 backdrop-blur-sm"
-      data-testid="workspace-breadcrumb"
-      aria-label="Workspace breadcrumb"
-    >
-      <span className="text-xs font-semibold text-[var(--color-secondary)] truncate max-w-[200px]">
-        {workspace.name}
-      </span>
-      {activeTab && (
-        <>
-          <span className="text-xs text-[var(--color-muted)]" aria-hidden="true">›</span>
-          <span className="text-xs text-[var(--color-muted)]">{activeTab.label}</span>
-        </>
-      )}
     </div>
   )
 }
