@@ -47,6 +47,9 @@ func newExternalCLITaskTestLoop(t *testing.T, provider providers.LLMProvider) (a
 		},
 	}
 	al = mustNewAgentLoop(t, cfg, bus.NewMessageBus(), provider)
+	// See newNativeTaskCompletionTestLoop's identical Close() cleanup (same
+	// rationale: drain session workers/recaps before t.TempDir() cleanup runs).
+	t.Cleanup(func() { al.Close() })
 	return al, workspace
 }
 
@@ -145,15 +148,19 @@ func TestProcessTaskDirect_ExternalCLIWorker_NoSoul_ComposesTaskOnly(t *testing.
 	}
 }
 
-// TestTaskExecutor_ExternalCLIWorker_AutoCompletesTaskViaExternalCLI proves
-// the full end-to-end path: TaskExecutor.ExecuteTask dispatches a task
-// assigned to a subagent_3p worker, which runs via runExternalCLISubTurn (fake
-// driver) instead of the native engine, and — since an external-CLI worker's
-// tool registry is its own CLI's and has no task_update tool wired to Omnipus
-// at all — TaskExecutor.finishTaskRun takes the "agent did not call
-// task_update" branch and auto-completes the task to StatusDone with the
-// aggregated CLI output as the result.
-func TestTaskExecutor_ExternalCLIWorker_AutoCompletesTaskViaExternalCLI(t *testing.T) {
+// TestTaskExecutor_ExternalCLIWorker_CompletesViaStatusMarker (renamed from
+// ...AutoCompletesTaskViaExternalCLI — review D4: the old name described the
+// retired ADR-042 §3 auto-complete-to-Done default; this test now proves the
+// ADR-043 marker contract instead) proves the full end-to-end path:
+// TaskExecutor.ExecuteTask dispatches a task assigned to a subagent_3p
+// worker, which runs via runExternalCLISubTurn (fake driver) instead of the
+// native engine, and — since an external-CLI worker's tool registry is its
+// own CLI's and has no task_update tool wired to Omnipus at all —
+// TaskExecutor.finishTaskRun takes the "agent did not call task_update"
+// branch and completes the task from the standardized TASK_STATUS completion
+// marker (ADR-043) the fake driver's output carries, using the aggregated CLI
+// output (marker included, no TASK_SUMMARY here) as the result.
+func TestTaskExecutor_ExternalCLIWorker_CompletesViaStatusMarker(t *testing.T) {
 	provider := &countingProvider{}
 	al, _ := newExternalCLITaskTestLoop(t, provider)
 
@@ -163,7 +170,7 @@ func TestTaskExecutor_ExternalCLIWorker_AutoCompletesTaskViaExternalCLI(t *testi
 	go func() {
 		fr.InjectEvent(runner.RunEvent{
 			Kind:   runner.EventKindOutput,
-			Output: &runner.OutputEvent{Text: "task finished by external CLI"},
+			Output: &runner.OutputEvent{Text: "task finished by external CLI\nTASK_STATUS: success"},
 		})
 		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
 		fr.Cancel()

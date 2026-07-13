@@ -237,8 +237,9 @@ func (te *TaskExecutor) runTask(ctx context.Context, t *task.Task, cancel contex
 
 // finishTaskRun handles the shared post-execution logic for both runTask and
 // runTaskFromInProgress. It appends the failure/success transcript entry,
-// updates the session meta, and auto-completes the task to StatusDone when
-// the agent did not call task_update itself.
+// updates the session meta, and — when the agent did not call task_update
+// itself — resolves completion from the standardized TASK_STATUS/TASK_SUMMARY
+// marker (ADR-043), failing the task closed when no marker is parseable.
 //
 // logSuffix is appended to the "Agent execution failed" log message so
 // callers can be identified in structured logs (e.g. " (StartTaskNow path)").
@@ -308,43 +309,79 @@ func (te *TaskExecutor) finishTaskRun(t *task.Task, taskSessionID, resp string, 
 		return
 	}
 
-	// Agent did not call task_update — auto-complete to done.
+	// Agent did not call task_update — no explicit signal. ADR-043 (superseding
+	// the ADR-042 §3 auto-complete-to-done default this replaces): defaulting
+	// to success on no signal is forbidden. Parse the agent's final output for
+	// the standardized TASK_STATUS completion marker instead.
 	//
-	// FIX 8 (7-reviewer gate, false-success visibility): an external-CLI
-	// (subagent_3p) worker ALWAYS lands here — it has no task_update tool to
-	// call at all (buildPrompt's dispatch-aware instruction, FIX 3, doesn't
-	// change that) — so a prose-level failure ("I couldn't do it") with a
-	// clean process exit auto-completes to Done exactly the same as a real
-	// success, and Done unblocks any blocked_by dependent task. WARN-log the
-	// external-CLI case specifically (distinguishable in logs from the rare
-	// native "agent forgot to call task_update" case, which this same branch
-	// also reaches) so an operator scanning logs has a signal to check the
-	// result text before trusting the auto-advance. This does NOT change the
-	// auto-advance semantics itself — requiring an explicit success signal
-	// for a 3p-assigned dependent chain is a deferred product decision (see
-	// ADR-042 §3).
-	if te.dispatchesExternalCLI(t.AgentID) {
+	// This is uniform across native and external-CLI (subagent_3p) dispatch —
+	// an external-CLI worker ALWAYS lands here (it has no task_update tool to
+	// call at all; buildPrompt's dispatch-aware instruction reflects that), so
+	// the marker is its ONLY completion signal; a native agent reaches here
+	// only when it forgot to call task_update but still emitted output.
+	signal := parseTaskCompletionSignal(resp)
+	if !signal.Found() {
 		logger.WarnCF("task_executor",
-			"auto-completing task to done for an external-CLI (subagent_3p) worker — "+
-				"it has no task_update tool, so this is UNVERIFIED prose-level success, not a "+
-				"structured completion signal; review the result before trusting downstream "+
-				"blocked_by auto-advance",
+			"agent finished with no parseable TASK_STATUS completion signal — failing the task "+
+				"closed rather than defaulting to success (ADR-043)",
 			map[string]any{"task_id": t.ID, "agent_id": t.AgentID})
+		rawOutput := resp
+		if strings.TrimSpace(rawOutput) == "" {
+			rawOutput = "(agent produced no output)"
+		} else {
+			rawOutput = truncateTaskOutput(rawOutput)
+		}
+		reason := fmt.Sprintf(
+			"agent finished without a completion signal (TASK_STATUS line) — review the run "+
+				"transcript and re-run; raw output follows:\n\n%s",
+			rawOutput,
+		)
+		te.completeTaskWithResult(t, taskSessionID, false, reason)
+		return
 	}
+
+	te.completeTaskWithResult(t, taskSessionID, signal.Status() == task.StatusDone, signal.Result)
+}
+
+// completeTaskWithResult marks task t terminal — Done when success is true,
+// Failed otherwise — with the given result text, archives its session (if
+// any), and runs the shared post-completion hooks (status-changed event,
+// parent follow-up, and — for a Done status only, per onTaskComplete's own
+// gate — blocked-dependent advance) plus source-channel notification. Shared
+// by finishTaskRun's three non-error completion paths (explicit success
+// marker, explicit failure marker, fail-closed no-signal). NOT used by the
+// hard "agent execution error" branch above, which keeps failTask's existing,
+// deliberately narrower shape (no parent follow-up) — that asymmetry predates
+// this change and is out of scope here.
+//
+// The parameter is deliberately a plain bool, not a task.Status (review C1):
+// completeTaskWithResult only ever writes one of the two terminal statuses,
+// so narrowing the signature to "success or not" makes writing a non-terminal
+// status here a compile error instead of a reviewable-but-possible mistake.
+func (te *TaskExecutor) completeTaskWithResult(t *task.Task, taskSessionID string, success bool, result string) {
+	status := task.StatusDone
+	if !success {
+		status = task.StatusFailed
+	}
+	sessStore := te.agentLoop.GetAgentStore(t.AgentID)
 	now := time.Now().UTC().Format(time.RFC3339)
-	result := resp
-	if result == "" {
-		result = "Task completed"
-	}
-	doneStatus := task.StatusDone
 	final, uerr := te.store.Update(t.ID, task.Patch{
-		Status:      &doneStatus,
+		Status:      &status,
 		Result:      &result,
 		CompletedAt: &now,
 	})
 	if uerr != nil {
-		logger.ErrorCF("task_executor", "Auto-complete task failed",
-			map[string]any{"task_id": t.ID, "error": uerr.Error()})
+		// Known, accepted limitation (ADR-043 §3): the task is left stuck at
+		// whatever non-terminal status it had before this call (typically
+		// in_progress) — we do not retry and we do not force a second write
+		// with a synthesized failure status. A persistent store failure here
+		// (disk full, permissions, corrupt file) would very likely fail a
+		// retry identically, and forcing a follow-up write risks compounding
+		// a partially-written/corrupted task file rather than recovering it.
+		// An operator must notice this ERROR log and manually resolve the
+		// stuck task (e.g. via a direct store fix or `omnipus` CLI update).
+		logger.ErrorCF("task_executor", "Completion update failed",
+			map[string]any{"task_id": t.ID, "status": string(status), "error": uerr.Error()})
 		return
 	}
 	if taskSessionID != "" && sessStore != nil {
@@ -396,13 +433,32 @@ func (te *TaskExecutor) notifySourceChannel(t *task.Task) {
 
 // buildPrompt constructs the prompt sent to the agent for a task.
 //
-// FIX 3 (7-reviewer gate, prompt/capability mismatch): the task_update
-// instruction is dispatch-aware. A subagent_3p (external-CLI) worker's tool
-// registry is its own CLI's, never Omnipus's — it has no task_update tool
-// wired at all (see processTaskDirectExternalCLI's doc comment, loop.go) — so
-// telling it to "call task_update" describes a capability it structurally
-// cannot use. The native prompt (the common case) is byte-identical to
-// before this fix; only the external-CLI branch differs.
+// ADR-043 (task completion contract): every dispatch kind is instructed to
+// end its final message with a standardized TASK_STATUS/TASK_SUMMARY marker
+// — this is the fail-closed fallback finishTaskRun parses when there is no
+// explicit task_update call. Native agents ADDITIONALLY get the task_update
+// instruction (an explicit tool call remains the preferred signal and wins
+// outright — see finishTaskRun's task.IsTerminal check).
+//
+// Echo-safety (review B1/B2): with the marker grammar now tolerant of
+// trailing content (parseTaskCompletionSignal / taskStatusLineRe), a model
+// that echoes this instruction block VERBATIM as its own "final message"
+// (without ever emitting a real signal) must not resolve to verdictSuccess —
+// that would be a false success from the instruction text itself, not from
+// anything the agent actually reported. The two TASK_STATUS lines below are
+// listed as separate, clean lines with the FAILURE variant deliberately
+// LAST: parseTaskCompletionSignal's "last occurrence wins" rule means a raw
+// echo of just this block resolves to verdictFailure (the safe direction),
+// never verdictSuccess. TestBuildPrompt_InstructionEchoNeverResolvesToSuccess
+// (task_completion_contract_test.go) pins this invariant for both dispatch
+// kinds — do not reorder the two status lines without re-verifying it holds.
+//
+// FIX 3 (7-reviewer gate, prompt/capability mismatch, predates ADR-043): the
+// task_update instruction stays dispatch-aware. A subagent_3p (external-CLI)
+// worker's tool registry is its own CLI's, never Omnipus's — it has no
+// task_update tool wired at all (see processTaskDirectExternalCLI's doc
+// comment, loop.go) — so telling it to call the tool describes a capability
+// it structurally cannot use; it gets the marker instruction only.
 func (te *TaskExecutor) buildPrompt(t *task.Task) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("# Task: %s\n\n", t.Title))
@@ -412,14 +468,23 @@ func (te *TaskExecutor) buildPrompt(t *task.Task) string {
 	}
 	sb.WriteString(fmt.Sprintf("Priority: %d (1=highest, 5=lowest)\n", t.EffectivePriority()))
 	sb.WriteString(fmt.Sprintf("Task ID: %s\n\n", t.ID))
+
+	sb.WriteString("When you are done, end your final message with ONE of the two status lines " +
+		"below (never both), plus an optional one-line summary:\n")
+	sb.WriteString("  " + taskStatusLabel + ": success\n")
+	sb.WriteString("  " + taskStatusLabel + ": failure\n")
+	sb.WriteString("  " + taskSummaryLabel + ": <one-paragraph summary of the outcome>\n")
+
 	if te.dispatchesExternalCLI(t.AgentID) {
-		sb.WriteString(
-			"There is no task_update tool available to you for this task. Your final " +
-				"response's text becomes the task result automatically once you finish.\n",
-		)
 		return sb.String()
 	}
-	sb.WriteString("When you have finished this task, call `task_update` with:\n")
+
+	// NOTE: the tool's real registered name is "update_task" (pkg/tools/task.go
+	// TaskUpdateTool.Name()) — this instruction was previously misnamed
+	// "task_update" (a name no registered tool answers to); fixed alongside the
+	// B1 rewrite since this block was already being touched.
+	sb.WriteString("Prefer calling `update_task` explicitly when you finish " +
+		"(it takes priority over the marker above):\n")
 	sb.WriteString(fmt.Sprintf("  task_id: %q\n", t.ID))
 	sb.WriteString("  status: \"done\" (or \"failed\" if unsuccessful)\n")
 	sb.WriteString("  result: a brief summary of what was accomplished\n")
