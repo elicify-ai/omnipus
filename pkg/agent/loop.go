@@ -1655,15 +1655,27 @@ func registerSharedTools(
 		}
 
 		// recall_conversation (FR-008, FR-013, FR-019): session-scoped archive
-		// paging. The archive reader is the shared session store (ReadArchive
-		// reads the full log including evicted turns); the span setter is the
-		// AgentLoop itself (setRecallSpan / dropRecallSpan on al.recallSpans).
-		// The routing session key is read from ctx at Execute time
-		// (tools.ToolSessionKey) — no per-agent construction needed.
+		// paging. The archive reader MUST be agent.Sessions — the same store
+		// windowTrim evicts from and assembleMessages reads breadcrumbs from
+		// (turn.go's ts.session = agent.Sessions) — NOT al.GetSessionStore()'s
+		// shared store (rooted at $OMNIPUS_HOME/sessions/, used only for
+		// session routing metadata). The two are different UnifiedStore
+		// instances rooted at different directories for the same sessionKey;
+		// registering against the shared store means ReadArchive always finds
+		// an empty/unrelated file and recall_conversation can never reach the
+		// turns the breadcrumb just told the model about. The span setter is
+		// the AgentLoop itself (setRecallSpan / dropRecallSpan on
+		// al.recallSpans). The routing session key is read from ctx at
+		// Execute time (tools.ToolSessionKey) — no per-agent construction
+		// needed beyond binding the correct archive reader here.
 		// Excluded for the "main" gateway agent (no memory tools there either).
 		if agentID != "main" {
-			if sharedSessionStore := al.GetSessionStore(); sharedSessionStore != nil {
-				agent.Tools.Register(NewRecallConversationTool(sharedSessionStore, al))
+			if agent.Sessions != nil {
+				agent.Tools.Register(NewRecallConversationTool(agent.Sessions, al))
+			} else {
+				logger.WarnCF("agent",
+					"recall_conversation not registered — agent.Sessions is nil",
+					map[string]any{"agent_id": agentID})
 			}
 		}
 
