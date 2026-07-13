@@ -352,17 +352,17 @@ function ScheduleDetailSheet({
     <Sheet open={Boolean(schedule)} onOpenChange={onOpenChange}>
       <SheetContent
         side="right"
-        className="sm:w-[480px] bg-[var(--color-surface-0)] border-[var(--color-border)] overflow-y-auto"
+        className="sm:w-[480px] bg-[var(--color-surface-0)] border-[var(--color-border)] overflow-y-auto p-0"
       >
         {schedule && (
           <>
-            <SheetHeader className="-mx-6 -mt-6 mb-0 px-6">
+            <SheetHeader className="px-6 pr-14">
               <SheetTitle>
                 {schedule.name}
               </SheetTitle>
             </SheetHeader>
 
-            <div className="pt-5 space-y-5">
+            <div className="px-6 pt-5 space-y-5">
               <div className="space-y-1.5 text-xs text-[var(--color-muted)]">
                 <div>Owner: <span className="text-[var(--color-secondary)]">{agentName}</span></div>
                 <div>Trigger: <span className="text-[var(--color-secondary)]">{triggerSummary(schedule.trigger)}</span></div>

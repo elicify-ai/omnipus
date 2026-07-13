@@ -151,7 +151,7 @@ function WorkspaceTabContainerView({
             onClick={toggle}
             aria-label="Toggle navigation sidebar"
             data-testid="workspace-hamburger"
-            className="flex items-center justify-center h-11 w-10 text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors flex-shrink-0"
+            className="flex items-center justify-center h-chrome-header min-h-chrome-header w-10 text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors flex-shrink-0"
           >
             <List size={20} />
           </button>
@@ -215,7 +215,7 @@ function WorkspaceNotFoundState() {
 function WorkspaceShellSkeleton() {
   return (
     <div className="absolute inset-0 flex flex-col">
-      <div className="flex gap-2 px-3 border-b border-[var(--color-border)] bg-[var(--color-surface-1)]">
+      <div className="flex gap-2 px-3 h-chrome-header min-h-chrome-header bg-[var(--color-surface-0)]">
         {[1, 2, 3, 4, 5, 6, 7].map((i) => (
           <div key={i} className="h-11 w-20 my-1 rounded bg-[var(--color-surface-2)] animate-pulse" />
         ))}

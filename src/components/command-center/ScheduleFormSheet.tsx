@@ -441,15 +441,15 @@ export function ScheduleFormSheet({
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
         side="right"
-        className="sm:w-[480px] bg-[var(--color-surface-0)] border-[var(--color-border)] overflow-y-auto"
+        className="sm:w-[480px] bg-[var(--color-surface-0)] border-[var(--color-border)] overflow-y-auto p-0"
       >
-        <SheetHeader className="-mx-6 -mt-6 mb-0 px-6">
+        <SheetHeader className="px-6 pr-14">
           <SheetTitle>
             {isEdit ? 'Edit schedule' : 'New schedule'}
           </SheetTitle>
         </SheetHeader>
 
-        <div className="pt-5 space-y-5">
+        <div className="px-6 pt-5 space-y-5">
           {/* ── Primary fields (US-A1: simple-first; novice sees only these) ─── */}
 
           {/* Which agent (owner) */}

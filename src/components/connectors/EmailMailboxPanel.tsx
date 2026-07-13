@@ -459,10 +459,10 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox, mailboxes = [] 
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
         side="right"
-        className="sm:w-[480px] bg-[var(--color-surface-0)] border-[var(--color-border)] overflow-y-auto"
+        className="sm:w-[480px] bg-[var(--color-surface-0)] border-[var(--color-border)] overflow-y-auto p-0"
         aria-describedby="mailbox-panel-desc"
       >
-        <SheetHeader className="-mx-6 -mt-6 mb-0 px-6">
+        <SheetHeader className="px-6 pr-14">
           <SheetTitle className="flex items-center gap-2">
             <Envelope size={16} weight="duotone" />
             Email Mailbox Account
@@ -470,13 +470,13 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox, mailboxes = [] 
         </SheetHeader>
         <SheetDescription
           id="mailbox-panel-desc"
-          className="text-xs text-[var(--color-muted)] leading-relaxed pt-3"
+          className="text-xs text-[var(--color-muted)] leading-relaxed px-6 pt-3"
         >
           Configure an IMAP/SMTP mailbox for the owning agent. The agent reads
           its inbox on heartbeat and routes unhandled mail to Board tasks.
         </SheetDescription>
 
-        <div className="pt-5 space-y-5">
+        <div className="px-6 pt-5 space-y-5">
           {/* Explainer callout */}
           <div
             className="flex gap-2 p-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)]"

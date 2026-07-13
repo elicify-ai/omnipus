@@ -31,7 +31,7 @@ export function ScreenHeader({ title, actions }: ScreenHeaderProps) {
         type="button"
         onClick={toggle}
         aria-label="Toggle navigation sidebar"
-        className="flex items-center justify-center h-11 w-10 -ml-2 rounded-md text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors flex-shrink-0"
+        className="flex items-center justify-center h-chrome-header min-h-chrome-header w-10 -ml-2 rounded-md text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors flex-shrink-0"
       >
         <List size={20} />
       </button>

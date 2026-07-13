@@ -377,13 +377,13 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
       <Sheet open={open} onOpenChange={onOpenChange}>
         <SheetContent
           side="right"
-          className="w-full sm:max-w-md flex flex-col overflow-y-auto"
+          className="w-full sm:max-w-md flex flex-col overflow-y-auto p-0"
           data-testid="mcp-sheet"
         >
-          <SheetHeader className="-mx-6 -mt-6 mb-0 px-6">
+          <SheetHeader className="px-6 pr-14">
             <SheetTitle>{editMode ? 'Edit MCP server' : 'Add MCP Server'}</SheetTitle>
           </SheetHeader>
-          <SheetDescription className="pt-3">
+          <SheetDescription className="px-6 pt-3">
             {editMode
               ? 'Update the configuration for this MCP server.'
               : <>Connect a Model Context Protocol server to extend agent capabilities.{' '}
@@ -398,7 +398,7 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
             }
           </SheetDescription>
 
-          <div className="flex-1 py-4 space-y-4">
+          <div className="flex-1 px-6 py-4 space-y-4">
             {/* Server name */}
             <div className="space-y-1">
               <label htmlFor="mcp-name" className="text-xs text-[var(--color-muted)]">Name</label>
