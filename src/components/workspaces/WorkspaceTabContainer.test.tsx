@@ -175,18 +175,15 @@ describe('WorkspaceTabContainer — layout', () => {
     expect(screen.queryByTestId('chat-controls-mock')).toBeNull()
   })
 
-  it('renders the breadcrumb AFTER (below) the top bar in the DOM', async () => {
+  it('does NOT render a secondary breadcrumb row below the top bar', async () => {
     await act(async () => {
       render(<WorkspaceTabContainer workspaceId="ws-1" />)
     })
 
-    const topBar = screen.getByTestId('workspace-top-bar')
-    const breadcrumb = screen.getByTestId('workspace-breadcrumb')
-
-    // In a flex-col layout, DOM order == visual order.
-    // DOCUMENT_POSITION_FOLLOWING = 4 means breadcrumb comes after topBar.
-    const position = topBar.compareDocumentPosition(breadcrumb)
-    expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    // The breadcrumb row was removed for flat 44px shell alignment — the tab
+    // strip already names the workspace + active view, so the second chrome
+    // line was redundant. Guard against reintroduction.
+    expect(screen.queryByTestId('workspace-breadcrumb')).toBeNull()
   })
 
   it('calls sidebar toggle when the hamburger is clicked', async () => {

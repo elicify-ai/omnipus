@@ -1597,7 +1597,7 @@ export function BrowserLiveView({
           driving takes the wheel first (see handleOmniboxSubmit). */}
       <form
         onSubmit={handleOmniboxSubmit}
-        className="flex shrink-0 items-center gap-2 border-b border-[var(--color-border)] px-4 py-2"
+        className="flex shrink-0 items-center gap-2 px-4 py-2"
       >
         <Input
           type="text"
@@ -1630,7 +1630,7 @@ export function BrowserLiveView({
           role="tablist"
           aria-label="Open tabs"
           data-testid="browser-tab-strip"
-          className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-[var(--color-border)] px-2 py-1.5"
+          className="flex shrink-0 items-center gap-1 overflow-x-auto px-2 py-1.5"
           style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' } as React.CSSProperties}
         >
           {tabState.tabs.map((tab) => {

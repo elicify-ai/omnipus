@@ -883,8 +883,9 @@ export function SessionPanel() {
           <SheetTitle>Sessions</SheetTitle>
         </SheetHeader>
 
-        {/* Search input */}
-        <div className="px-4 py-2 border-b border-[var(--color-border)]">
+        {/* Search input — no border-b: keeps the title flowing into content
+            so the panel reads as one flat surface, not a boxed header zone. */}
+        <div className="px-4 py-2">
           <div className="flex items-center gap-2 rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)] px-3 py-1.5">
             <MagnifyingGlass size={13} className="text-[var(--color-muted)] shrink-0" />
             <input
@@ -908,7 +909,7 @@ export function SessionPanel() {
           {/* Pinned heartbeat sessions — always rendered above workspace groups (FR-021/028) */}
           {heartbeatSessions.length > 0 && (
             <div
-              className="border-b border-[var(--color-border)] pb-1 pt-2"
+              className="pb-1 pt-2"
               aria-label="Pinned heartbeat sessions"
             >
               <div className="px-3 pb-1 flex items-center gap-1.5">
