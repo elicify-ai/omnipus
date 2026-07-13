@@ -12,6 +12,7 @@ package browser
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -31,6 +32,7 @@ func TestParseTextPseudo(t *testing.T) {
 		wantNeedle    string
 		wantExact     bool
 		wantIsText    bool
+		wantErr       bool
 	}{
 		{
 			name:          "has-text double quotes",
@@ -132,11 +134,37 @@ func TestParseTextPseudo(t *testing.T) {
 			wantExact:     true,
 			wantIsText:    true,
 		},
+		// --- 7-reviewer finding #8: chained text pseudos ---
+		{
+			name:     "chained pseudos — has-text then text-is — rejected",
+			selector: `div:has-text("a"):text-is("b")`,
+			wantErr:  true,
+		},
+		{
+			name:     "chained pseudos — two has-text — rejected",
+			selector: `div:has-text("a"):has-text("b")`,
+			wantErr:  true,
+		},
+		{
+			name:     "chained pseudos — mixed quote styles — rejected",
+			selector: `div:has-text("a"):text-is('b')`,
+			wantErr:  true,
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			cssPrefix, needle, exact, isText := parseTextPseudo(tc.selector)
+			cssPrefix, needle, exact, isText, err := parseTextPseudo(tc.selector)
+			if tc.wantErr {
+				require.Error(t, err, "expected chained-pseudo error for %q", tc.selector)
+				assert.Contains(t, err.Error(), "chained text pseudos are not supported")
+				assert.False(t, isText)
+				assert.Equal(t, "", cssPrefix)
+				assert.Equal(t, "", needle)
+				assert.False(t, exact)
+				return
+			}
+			require.NoError(t, err, "unexpected error for %q", tc.selector)
 			assert.Equal(t, tc.wantIsText, isText, "isText mismatch for %q", tc.selector)
 			if !tc.wantIsText {
 				return
@@ -290,4 +318,46 @@ func TestResolveTextTarget_EmptyNeedle_NoChromiumNeeded(t *testing.T) {
 	_, err := resolveTextTarget(nil, "*", "   ", false, 0)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "empty text to match")
+}
+
+// ---------------------------------------------------------------------------
+// resolveTextTarget — no-browser guard (oversized needle/scope, finding #10)
+// ---------------------------------------------------------------------------
+
+// TestResolveTextTarget_OversizedNeedle_NoChromiumNeeded proves the
+// maxTextSelectorInputLen cap on `needle` fires before any chromedp/CDP
+// call — needs no browser (7-reviewer finding #10, security-lead minor: cap
+// needle/scope length before embedding into the JS).
+func TestResolveTextTarget_OversizedNeedle_NoChromiumNeeded(t *testing.T) {
+	oversizedNeedle := strings.Repeat("a", maxTextSelectorInputLen+1)
+	_, err := resolveTextTarget(nil, "*", oversizedNeedle, false, 0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "text argument exceeds")
+	assert.Contains(t, err.Error(), fmt.Sprintf("%d-byte limit", maxTextSelectorInputLen))
+}
+
+// TestResolveTextTarget_OversizedScope_NoChromiumNeeded proves the identical
+// cap on `cssScope`.
+func TestResolveTextTarget_OversizedScope_NoChromiumNeeded(t *testing.T) {
+	oversizedScope := strings.Repeat("div ", (maxTextSelectorInputLen/4)+1)
+	_, err := resolveTextTarget(nil, oversizedScope, "Confirm", false, 0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "selector scope exceeds")
+	assert.Contains(t, err.Error(), fmt.Sprintf("%d-byte limit", maxTextSelectorInputLen))
+}
+
+// TestBuildTextSelectorScript_AtLimitNeedle_EncodesFine proves the cap is a
+// strict "exceeds", not "at or exceeds": an exactly-maxTextSelectorInputLen
+// needle still encodes correctly through buildTextSelectorScript (the pure
+// rendering step, no chromedp/CDP involved) — resolveTextTarget's guard
+// itself is a simple `len(needle) > maxTextSelectorInputLen`, so this proves
+// there's no off-by-one truncation anywhere downstream of a boundary-sized
+// input.
+func TestBuildTextSelectorScript_AtLimitNeedle_EncodesFine(t *testing.T) {
+	atLimitNeedle := strings.Repeat("a", maxTextSelectorInputLen)
+	script, err := buildTextSelectorScript("*", atLimitNeedle, false, "tok")
+	require.NoError(t, err)
+	wantJSON, err := json.Marshal(atLimitNeedle)
+	require.NoError(t, err)
+	assert.Contains(t, script, string(wantJSON))
 }

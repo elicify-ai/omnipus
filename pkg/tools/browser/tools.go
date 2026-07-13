@@ -184,6 +184,11 @@ func (t *ClickTool) Execute(ctx context.Context, args map[string]any) *tools.Too
 	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, t.mgr.PageTimeout())
 	defer timeoutCancel()
 
+	// The ORIGINAL user-facing locator — never the internal marker selector
+	// resolveActionSelector may produce — for error messages and the echoed
+	// success payload (7-reviewer finding #6).
+	displayTarget := displayLocator(selector, text)
+
 	target, cleanup, rerr := resolveActionSelector(tabCtx, "browser_click", selector, text, t.mgr.PageTimeout())
 	defer cleanup()
 	if rerr != nil {
@@ -195,15 +200,28 @@ func (t *ClickTool) Execute(ctx context.Context, args map[string]any) *tools.Too
 		chromedp.Click(target, chromedp.ByQuery),
 	)
 	if err != nil {
-		return tools.ErrorResult(fmt.Sprintf("browser_click: element not found or not clickable: %s", err))
+		// Explicitly NAME displayTarget in the outer message — never rely
+		// solely on scrubMarkerFromError finding (and replacing) an
+		// occurrence of the marker inside err's own text, since some
+		// chromedp failure modes (a bare context-deadline timeout, in
+		// particular) don't embed the selector in their error text at all,
+		// which would otherwise leave the agent with no indication of what
+		// was being acted on (7-reviewer finding #6). scrubMarkerFromError
+		// remains defense in depth for the failure modes that DO embed the
+		// marker (e.g. chromedp's "could not find node with given
+		// selector" DOM errors).
+		return tools.ErrorResult(fmt.Sprintf("browser_click: element %q not found or not clickable: %s",
+			displayTarget, scrubMarkerFromError(err, target, displayTarget)))
 	}
 
 	// Echo back what the caller passed (existing contract); fall back to the
-	// resolved target only for the text-only case (selector == ""), where
-	// echoing an empty string would be a confusing no-op-looking field.
+	// `text` argument only for the text-only case (selector == "") — NEVER
+	// the resolved marker selector (7-reviewer finding #6: this used to echo
+	// the internal data-omnipus-tsel marker straight into the agent-facing
+	// success payload).
 	echoSelector := selector
 	if echoSelector == "" {
-		echoSelector = target
+		echoSelector = text
 	}
 	result := map[string]any{"success": true, "selector": echoSelector}
 
@@ -294,10 +312,15 @@ func (t *TypeTool) Scope() tools.ToolScope       { return tools.ScopeCore }
 func (t *TypeTool) Category() tools.ToolCategory { return tools.CategoryBrowser }
 func (t *TypeTool) Description() string {
 	return "Type text into an input element matching a CSS selector. selector may also end in a " +
-		"Playwright-style text pseudo — e.g. input:has-text(\"...\") or :text-is(\"...\") — to match by " +
+		"Playwright-style text pseudo — e.g. div:has-text(\"...\") or :text-is(\"...\") — to match by " +
 		"visible text instead of CSS; note the `text` parameter here is the VALUE typed into the element, " +
 		"not a way to locate it (unlike browser_click/browser_get_text/browser_wait, which accept a " +
-		"separate `text` param to locate an element by its visible label)."
+		"separate `text` param to locate an element by its visible label). LIMITATION: a bare <input> or " +
+		"<textarea> has no visible text of its own, so the text-pseudo route can never resolve TO one " +
+		"directly — it can only match an element whose own rendered text contains the needle (e.g. a " +
+		"label or button), which is not the input you want to type into. To target a form field, use a " +
+		"CSS/attribute selector instead: input[name=...], input[placeholder*=...], input[type=...], or a " +
+		"stable id/class."
 }
 
 func (t *TypeTool) Parameters() map[string]any {
@@ -343,7 +366,13 @@ func (t *TypeTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 		chromedp.SendKeys(target, text, chromedp.ByQuery),
 	)
 	if err != nil {
-		return tools.ErrorResult(fmt.Sprintf("browser_type: %s", err))
+		// browser_type's only locator is `selector` (its `text` arg is the
+		// VALUE typed, never a locator). Explicitly NAME it in the outer
+		// message rather than relying solely on scrubMarkerFromError finding
+		// an occurrence inside err's own text — some chromedp failure modes
+		// (a bare context-deadline timeout) don't embed the selector at all
+		// (7-reviewer finding #6).
+		return tools.ErrorResult(fmt.Sprintf("browser_type: element %q: %s", selector, scrubMarkerFromError(err, target, selector)))
 	}
 
 	return jsonResult(map[string]any{"success": true})
@@ -490,6 +519,11 @@ func (t *GetTextTool) Execute(ctx context.Context, args map[string]any) *tools.T
 	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, t.mgr.PageTimeout())
 	defer timeoutCancel()
 
+	// The ORIGINAL user-facing locator — never the internal marker selector
+	// resolveActionSelector may produce — for error messages (7-reviewer
+	// finding #6).
+	displayTarget := displayLocator(selector, text)
+
 	target, cleanup, rerr := resolveActionSelector(tabCtx, "browser_get_text", selector, text, getTextWaitTimeout)
 	defer cleanup()
 	if rerr != nil {
@@ -506,13 +540,20 @@ func (t *GetTextTool) Execute(ctx context.Context, args map[string]any) *tools.T
 	err = chromedp.Run(waitCtx, chromedp.WaitReady(target, chromedp.ByQuery))
 	waitCancel()
 	if err != nil {
-		return tools.ErrorResult(fmt.Sprintf("browser_get_text: element not found: %s", err))
+		// Explicitly NAME displayTarget — see ClickTool.Execute's identical
+		// rationale (7-reviewer finding #6): some chromedp failure modes
+		// (bare context-deadline timeouts) don't embed the selector in their
+		// own error text, so scrubMarkerFromError alone can't guarantee the
+		// locator appears in the message.
+		return tools.ErrorResult(fmt.Sprintf("browser_get_text: element %q not found: %s",
+			displayTarget, scrubMarkerFromError(err, target, displayTarget)))
 	}
 
 	var resultText string
 	err = chromedp.Run(tabCtx, chromedp.Text(target, &resultText, chromedp.ByQuery))
 	if err != nil {
-		return tools.ErrorResult(fmt.Sprintf("browser_get_text: element not found: %s", err))
+		return tools.ErrorResult(fmt.Sprintf("browser_get_text: element %q not found: %s",
+			displayTarget, scrubMarkerFromError(err, target, displayTarget)))
 	}
 
 	if len(resultText) > maxGetTextBytes {
@@ -568,11 +609,10 @@ func (t *WaitTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 	// Used for the timeout error message below: prefer echoing the CSS
 	// selector the caller gave; fall back to the text query when only `text`
 	// was supplied, so the error always names what the agent was looking for
-	// rather than an opaque internal marker selector.
-	displayTarget := selector
-	if displayTarget == "" {
-		displayTarget = text
-	}
+	// rather than an opaque internal marker selector (7-reviewer finding #6
+	// — now the shared displayLocator helper, mirrored consistently across
+	// click/type/get_text/wait, since this is where that pattern started).
+	displayTarget := displayLocator(selector, text)
 
 	target, cleanup, rerr := resolveActionSelector(tabCtx, "browser_wait", selector, text, getTextWaitTimeout)
 	defer cleanup()
@@ -584,11 +624,19 @@ func (t *WaitTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 	// doc comment): a selector that never appears would otherwise block for
 	// the full PageTimeout (commonly 30s) before failing. Bound the wait with
 	// the same short, dedicated timeout so a missing selector fails fast.
+	//
+	// NOTE: resolveActionSelector above already POLLS for up to
+	// getTextWaitTimeout for a text-resolved target to appear (7-reviewer
+	// finding #1) — this WaitVisible call is a second, short wait for the
+	// now-marked element to additionally become visible, which is normally
+	// instantaneous since resolveTextTarget only ever marks a visible
+	// element in the first place.
 	waitCtx, waitCancel := context.WithTimeout(tabCtx, getTextWaitTimeout)
 	err = chromedp.Run(waitCtx, chromedp.WaitVisible(target, chromedp.ByQuery))
 	waitCancel()
 	if err != nil {
-		return tools.ErrorResult(fmt.Sprintf("browser_wait: timeout waiting for %q: %s", displayTarget, err))
+		return tools.ErrorResult(fmt.Sprintf("browser_wait: timeout waiting for %q: %s",
+			displayTarget, scrubMarkerFromError(err, target, displayTarget)))
 	}
 
 	return jsonResult(map[string]any{"found": true})
