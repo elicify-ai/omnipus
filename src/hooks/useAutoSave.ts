@@ -209,6 +209,21 @@ export function useAutoSave<T>(
     }
   }, [data, debounceMs, disabled, doSave])
 
+  // Clear the "saved → idle" fade timer on unmount. The data-change effect
+  // above only clears the debounce timer (timerRef); a fade timer armed by a
+  // save within 2s of unmount would otherwise fire setStatus AFTER the
+  // component is gone. In the app that is a harmless no-op; in jsdom the
+  // callback runs after environment teardown, so setStatus dereferences a
+  // torn-down `window` and throws an UNHANDLED "ReferenceError: window is not
+  // defined" that fails the whole vitest run (a flaky false-positive that CI
+  // caught). Mount-once so it runs only on final unmount.
+  useEffect(() => {
+    return () => {
+      if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current)
+      if (timerRef.current) clearTimeout(timerRef.current)
+    }
+  }, [])
+
   // Best-effort flush of pending changes when the page is hidden or unloaded.
   // Uses `fetch(..., { keepalive: true })` rather than `navigator.sendBeacon`
   // because keepalive fetch can carry an `Authorization: Bearer` header —
