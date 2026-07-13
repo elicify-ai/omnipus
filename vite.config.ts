@@ -33,10 +33,16 @@ export default defineConfig({
   },
   server: {
     port: 18790,
+    // Devpod preview: the public Fly URL ($DEVPOD_PREVIEW_URL) reaches this
+    // Vite server through the proxy, so Vite must accept that Host header.
+    allowedHosts: process.env.DEVPOD_PREVIEW_URL
+      ? [new URL(process.env.DEVPOD_PREVIEW_URL).hostname]
+      : true,
     proxy: {
       '/api': {
-        target: 'http://localhost:18790',
+        target: 'http://127.0.0.1:5000',
         changeOrigin: true,
+        ws: true,
       },
     },
   },
