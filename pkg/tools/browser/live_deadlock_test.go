@@ -708,7 +708,7 @@ func TestLiveView_RebindScreencast_ConcurrentRebind_ConvergesOnLatestActiveTab(t
 // gap), opens a second tab, closes the ACTIVE tab, and asserts (a) the
 // StatusSink never receives a "session ended"/error status, and (b) the
 // LiveView's tabCtx converges on the surviving tab (the screencast follows
-// the neighbour) rather than staying stuck on the closed tab or going dead.
+// the neighbor) rather than staying stuck on the closed tab or going dead.
 func TestLiveView_CloseActiveTab_NoFalseDeathAndRebindsToSurvivor(t *testing.T) {
 	m := newTestManagerWithFakeTabs(t, 5)
 	reg := newLiveViewRegistry(m)
@@ -753,7 +753,12 @@ func TestLiveView_CloseActiveTab_NoFalseDeathAndRebindsToSurvivor(t *testing.T) 
 	require.Equal(t, int32(1), atomic.LoadInt32(&startScreencastCalls), "attach() must have started its own screencast")
 
 	lv.mu.Lock()
-	require.Equal(t, survivorCtxBeforeClose, lv.tabCtx, "sanity: the live view must be bound to tab 1 (the active tab) before the close")
+	require.Equal(
+		t,
+		survivorCtxBeforeClose,
+		lv.tabCtx,
+		"sanity: the live view must be bound to tab 1 (the active tab) before the close",
+	)
 	lv.mu.Unlock()
 
 	// Close the ACTIVE tab (index 1) — the exact live-UAT repro. Tab 0 slides
@@ -765,7 +770,12 @@ func TestLiveView_CloseActiveTab_NoFalseDeathAndRebindsToSurvivor(t *testing.T) 
 
 	survivorCtx, err := m.Session(DefaultSessionID)
 	require.NoError(t, err)
-	require.NotEqual(t, survivorCtxBeforeClose, survivorCtx, "sanity: the survivor is a genuinely different tab context than the closed one")
+	require.NotEqual(
+		t,
+		survivorCtxBeforeClose,
+		survivorCtx,
+		"sanity: the survivor is a genuinely different tab context than the closed one",
+	)
 
 	// (b) The live view must rebind to the surviving tab — not stay stuck on
 	// the closed tab, and not go dead (nil listenCtx).

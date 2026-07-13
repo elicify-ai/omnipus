@@ -6,6 +6,7 @@
 // Gated by skipIfNoBrowser so the suite stays green where no working Chromium is
 // present. Uses a local httptest fixture (SSRF allows 127.0.0.1) so it is
 // deterministic and needs no external network.
+
 package browser
 
 import (
@@ -167,7 +168,7 @@ func TestOpenTab_RealChromium_SecondTabSharesSameBrowser(t *testing.T) {
 //
 // Before the fix, tab 0 (the first tab created for a browsing context) was
 // itself the chromedp context chromedp binds the running *Browser to (its
-// "c.first" target) — cancelling THAT context is what chromedp.Cancel's own
+// "c.first" target) — canceling THAT context is what chromedp.Cancel's own
 // doc comment calls "graceful[ly] clos[ing]" the whole browser. So closing
 // tab 0 specifically (as opposed to any other tab) used to kill the ENTIRE
 // Chromium process, taking every sibling tab down with it. The browserCtx
@@ -407,7 +408,12 @@ func TestExecute_OpenTab_RealChromium_OpensBlankTab(t *testing.T) {
 	require.NoError(t, err)
 	var heading string
 	require.NoError(t, chromedp.Run(tab0Ctx, chromedp.Text("h1", &heading, chromedp.ByQuery)))
-	assert.Equal(t, "Contact", heading, "tab 0 must still show its own page — browser_open_tab must not have navigated it away")
+	assert.Equal(
+		t,
+		"Contact",
+		heading,
+		"tab 0 must still show its own page — browser_open_tab must not have navigated it away",
+	)
 }
 
 // TestExecute_OpenTab_RealChromium_NavigatesToURL is the real-Chromium

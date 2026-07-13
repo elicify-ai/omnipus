@@ -191,7 +191,10 @@ func TestLiveView_DispatchInput_RateLimited(t *testing.T) {
 // newNavigateTestLiveView builds a LiveView backed by a real BrowserManager
 // (so ValidateURL's SSRF/scheme logic is genuinely exercised, not mocked)
 // with a stub runCDP so no real chromedp/Chromium connection is needed.
-func newNavigateTestLiveView(t *testing.T, runCDP func(ctx context.Context, timeout time.Duration, actions ...chromedp.Action) error) *LiveView {
+func newNavigateTestLiveView(
+	t *testing.T,
+	runCDP func(ctx context.Context, timeout time.Duration, actions ...chromedp.Action) error,
+) *LiveView {
 	t.Helper()
 	mgr, err := NewBrowserManager(BrowserConfig{PageTimeout: 5 * time.Second}, security.NewSSRFChecker(nil))
 	require.NoError(t, err)
@@ -214,8 +217,11 @@ func TestLiveView_DispatchInput_Navigate_SSRFBlocked_PrivateIPNotDispatched(t *t
 
 	err := lv.dispatchInput("viewerA", LiveInput{Kind: "navigate", URL: "http://127.0.0.1/admin"})
 	require.Error(t, err)
-	require.False(t, IsBenignLiveInputError(err),
-		"a blocked navigate URL must be a REAL error so the gateway surfaces browser_status(error) — never silently dropped as benign")
+	require.False(
+		t,
+		IsBenignLiveInputError(err),
+		"a blocked navigate URL must be a REAL error so the gateway surfaces browser_status(error) — never silently dropped as benign",
+	)
 	require.Contains(t, err.Error(), "navigate blocked")
 	require.False(t, dispatched, "an SSRF-blocked URL must never reach CDP dispatch")
 }
@@ -560,7 +566,11 @@ func TestLiveView_TakeReleaseControl_BroadcastsToOtherViewers(t *testing.T) {
 	require.True(t, lv.takeControl("connA"))
 
 	requireControlBroadcast(t, gotB, true, "conn B (not the new controller) must be told someone else now controls")
-	requireNoControlBroadcast(t, gotA, "the acting connection is never broadcast to — it gets its own direct browser_status response instead")
+	requireNoControlBroadcast(
+		t,
+		gotA,
+		"the acting connection is never broadcast to — it gets its own direct browser_status response instead",
+	)
 
 	lv.releaseControl("connA")
 
@@ -622,7 +632,12 @@ func TestLiveView_Detach_ImplicitReleaseBroadcastsToOtherViewers(t *testing.T) {
 	lv.detach("viewerA")
 
 	require.Equal(t, "", lv.getController(), "a departing controller must never leave the lock dangling")
-	requireControlBroadcast(t, gotB, false, "viewerB must learn the lock was implicitly freed by viewerA's detach, not just an explicit release")
+	requireControlBroadcast(
+		t,
+		gotB,
+		false,
+		"viewerB must learn the lock was implicitly freed by viewerA's detach, not just an explicit release",
+	)
 }
 
 // TestLiveView_Attach_ReturnsControlledByOtherForNewViewer covers the
@@ -650,7 +665,11 @@ func TestLiveView_Attach_ReturnsControlledByOtherForNewViewer(t *testing.T) {
 
 	controlledByOther, err := lv.attach(context.Background(), "viewerB", func(LiveFrame) {}, nil, nil, nil)
 	require.NoError(t, err)
-	require.True(t, controlledByOther, "a new viewer attaching while another viewer already controls must see controlled_by_other=true")
+	require.True(
+		t,
+		controlledByOther,
+		"a new viewer attaching while another viewer already controls must see controlled_by_other=true",
+	)
 
 	// The controller itself sees controlled_by_other=false on its own (re-)attach.
 	controlledByOther, err = lv.attach(context.Background(), "viewerA", func(LiveFrame) {}, nil, nil, nil)
@@ -762,7 +781,11 @@ func TestBuildInputAction(t *testing.T) {
 		// 7-reviewer LOW finding (type-safety defense-in-depth): a navigate
 		// input must not also carry mouse coordinates — see LiveInput.URL's
 		// doc comment.
-		{"navigate must not carry coordinates", LiveInput{Kind: "navigate", URL: "http://example.com/", HasXY: true}, true},
+		{
+			"navigate must not carry coordinates",
+			LiveInput{Kind: "navigate", URL: "http://example.com/", HasXY: true},
+			true,
+		},
 		{"unknown kind", LiveInput{Kind: "bogus"}, true},
 		// ADR-038 finding #5: per-kind validation added alongside the
 		// pre-existing "text" guard — mouse/wheel kinds need real

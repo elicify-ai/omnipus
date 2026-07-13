@@ -12,6 +12,7 @@
 //
 // Gated by skipIfNoBrowser so the suite stays green where no working
 // Chromium is present, mirroring every other *_e2e_test.go in this package.
+
 package browser
 
 import (
@@ -130,8 +131,13 @@ func TestTextSel_Click_HasTextPseudo_ClicksLink(t *testing.T) {
 	// marker element received a REAL trusted mouse click, not a JS el.click()
 	// (trusted clicks are what makes target="_blank" tab adoption fire).
 	clickData := decodeJSON(t, clickRes.ForLLM)
-	assert.Equal(t, true, clickData["opened_new_tab"],
-		":has-text click on a target=_blank link must report opened_new_tab=true (trusted click preserved); got: %s", clickRes.ForLLM)
+	assert.Equal(
+		t,
+		true,
+		clickData["opened_new_tab"],
+		":has-text click on a target=_blank link must report opened_new_tab=true (trusted click preserved); got: %s",
+		clickRes.ForLLM,
+	)
 
 	tabs, activeIdx, err := mgr.ListTabs(defaultSessionID)
 	require.NoError(t, err)
@@ -470,10 +476,19 @@ func TestTextSel_Wait_PollsForAsyncElement(t *testing.T) {
 	elapsed := time.Since(start)
 
 	require.NotNil(t, result)
-	assert.False(t, result.IsError,
-		"browser_wait{text:\"Confirm\"} must POLL until the setTimeout-appended button renders, not fail on a single pre-render scan; got: %s", result.ForLLM)
-	assert.GreaterOrEqual(t, elapsed, 1200*time.Millisecond,
-		"wait resolved suspiciously fast (%s) for a button appended after a 1500ms setTimeout — the poll doesn't appear to actually be retrying", elapsed)
+	assert.False(
+		t,
+		result.IsError,
+		"browser_wait{text:\"Confirm\"} must POLL until the setTimeout-appended button renders, not fail on a single pre-render scan; got: %s",
+		result.ForLLM,
+	)
+	assert.GreaterOrEqual(
+		t,
+		elapsed,
+		1200*time.Millisecond,
+		"wait resolved suspiciously fast (%s) for a button appended after a 1500ms setTimeout — the poll doesn't appear to actually be retrying",
+		elapsed,
+	)
 }
 
 // ---------------------------------------------------------------------------
@@ -515,7 +530,12 @@ func TestTextSel_Specificity_NoExtraProse_ClicksButtonNotDiv(t *testing.T) {
 	click := mustGetTool(t, registry, "browser_click")
 	clickRes := click.Execute(ctx, map[string]any{"text": "Confirm"})
 	require.NotNil(t, clickRes)
-	require.False(t, clickRes.IsError, "click must resolve even with an equal-length wrapping div; got: %s", clickRes.ForLLM)
+	require.False(
+		t,
+		clickRes.IsError,
+		"click must resolve even with an equal-length wrapping div; got: %s",
+		clickRes.ForLLM,
+	)
 
 	getText := mustGetTool(t, registry, "browser_get_text")
 	resultRes := getText.Execute(ctx, map[string]any{"selector": "#result-noprose"})
@@ -683,10 +703,26 @@ func TestTextSel_Invisibility_And_ScriptSource_NotMatched(t *testing.T) {
 		args    map[string]any
 		wantWhy string
 	}{
-		{"visibility:hidden", map[string]any{"selector": "button", "text": "Ghost Alpha"}, "a visibility:hidden element must NOT be matched by text selection"},
-		{"opacity:0", map[string]any{"selector": "button", "text": "Ghost Beta"}, "an opacity:0 element must NOT be matched by text selection"},
-		{"zero-size sr-only-style clip", map[string]any{"selector": "button", "text": "Ghost Gamma"}, "a zero-size (sr-only-style clipped) element must NOT be matched by text selection"},
-		{"script tag source", map[string]any{"text": "SecretNeedle123"}, "a <script> tag's SOURCE text must never leak into text matching via a textContent fallback"},
+		{
+			"visibility:hidden",
+			map[string]any{"selector": "button", "text": "Ghost Alpha"},
+			"a visibility:hidden element must NOT be matched by text selection",
+		},
+		{
+			"opacity:0",
+			map[string]any{"selector": "button", "text": "Ghost Beta"},
+			"an opacity:0 element must NOT be matched by text selection",
+		},
+		{
+			"zero-size sr-only-style clip",
+			map[string]any{"selector": "button", "text": "Ghost Gamma"},
+			"a zero-size (sr-only-style clipped) element must NOT be matched by text selection",
+		},
+		{
+			"script tag source",
+			map[string]any{"text": "SecretNeedle123"},
+			"a <script> tag's SOURCE text must never leak into text matching via a textContent fallback",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -736,8 +772,18 @@ func TestTextSel_AmbiguousSiblings_ReturnsClearError(t *testing.T) {
 	click := mustGetTool(t, registry, "browser_click")
 	result := click.Execute(ctx, map[string]any{"text": "Delete"})
 	require.NotNil(t, result)
-	require.True(t, result.IsError, "two indistinguishable sibling matches must be reported as ambiguous, not silently resolved to the first")
-	assert.Contains(t, result.ForLLM, "2 elements match text", "ambiguity error must name the count; got: %s", result.ForLLM)
+	require.True(
+		t,
+		result.IsError,
+		"two indistinguishable sibling matches must be reported as ambiguous, not silently resolved to the first",
+	)
+	assert.Contains(
+		t,
+		result.ForLLM,
+		"2 elements match text",
+		"ambiguity error must name the count; got: %s",
+		result.ForLLM,
+	)
 	assert.Contains(t, result.ForLLM, `"Delete"`, "ambiguity error must name the needle; got: %s", result.ForLLM)
 }
 
@@ -777,8 +823,12 @@ func TestTextSel_CaseInsensitive_And_WhitespaceNormalized(t *testing.T) {
 	getText := mustGetTool(t, registry, "browser_get_text")
 	result := getText.Execute(ctx, map[string]any{"text": "HELLO THERE, FRIEND"})
 	require.NotNil(t, result)
-	require.False(t, result.IsError,
-		"a differently-cased, single-spaced needle must match DOM text with irregular internal whitespace; got: %s", result.ForLLM)
+	require.False(
+		t,
+		result.IsError,
+		"a differently-cased, single-spaced needle must match DOM text with irregular internal whitespace; got: %s",
+		result.ForLLM,
+	)
 	data := decodeJSON(t, result.ForLLM)
 	assert.Contains(t, data["text"], "Hello")
 }
@@ -850,7 +900,12 @@ func TestTextSel_TypeTool_PseudoSelector_TypesIntoContentEditable(t *testing.T) 
 		"text":     " appended",
 	})
 	require.NotNil(t, typeRes)
-	require.False(t, typeRes.IsError, "typing via a REAL pseudo selector (isText=true path) must succeed; got: %s", typeRes.ForLLM)
+	require.False(
+		t,
+		typeRes.IsError,
+		"typing via a REAL pseudo selector (isText=true path) must succeed; got: %s",
+		typeRes.ForLLM,
+	)
 
 	evalTool := mustGetTool(t, registry, "browser_evaluate")
 	evalRes := evalTool.Execute(ctx, map[string]any{"js": `document.getElementById("editable-note").textContent`})

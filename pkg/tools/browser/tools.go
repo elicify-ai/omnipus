@@ -156,12 +156,19 @@ func (t *ClickTool) Description() string {
 		"(case-insensitive substring match); when both selector and text are given, text is matched only " +
 		"among elements inside selector. Provide selector OR text (or both)."
 }
+
 func (t *ClickTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"selector": map[string]any{"type": "string", "description": "CSS selector of the element to click, optionally ending in :has-text(\"...\") / :text-is(\"...\") to match by visible text"},
-			"text":     map[string]any{"type": "string", "description": "Match an element by its visible text (case-insensitive substring) instead of — or scoped within — selector"},
+			"selector": map[string]any{
+				"type":        "string",
+				"description": "CSS selector of the element to click, optionally ending in :has-text(\"...\") / :text-is(\"...\") to match by visible text",
+			},
+			"text": map[string]any{
+				"type":        "string",
+				"description": "Match an element by its visible text (case-insensitive substring) instead of — or scoped within — selector",
+			},
 		},
 	}
 }
@@ -267,7 +274,10 @@ func applyReconcileOutcome(result map[string]any, outcome ReconcileOutcome) {
 		result["opened_new_tab"] = true
 		result["new_tab_index"] = outcome.NewActive.Index
 		result["new_tab_url"] = outcome.NewActive.URL
-		notes = append(notes, fmt.Sprintf("opened and switched to new tab %d: %s", outcome.NewActive.Index, outcome.NewActive.URL))
+		notes = append(
+			notes,
+			fmt.Sprintf("opened and switched to new tab %d: %s", outcome.NewActive.Index, outcome.NewActive.URL),
+		)
 	}
 
 	if outcome.Unadopted {
@@ -327,8 +337,14 @@ func (t *TypeTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"selector": map[string]any{"type": "string", "description": "CSS selector of the input element, optionally ending in :has-text(\"...\") / :text-is(\"...\") to match by visible text"},
-			"text":     map[string]any{"type": "string", "description": "Text to type into the element (this is the value typed, not a locator)"},
+			"selector": map[string]any{
+				"type":        "string",
+				"description": "CSS selector of the input element, optionally ending in :has-text(\"...\") / :text-is(\"...\") to match by visible text",
+			},
+			"text": map[string]any{
+				"type":        "string",
+				"description": "Text to type into the element (this is the value typed, not a locator)",
+			},
 		},
 		"required": []string{"selector", "text"},
 	}
@@ -372,7 +388,9 @@ func (t *TypeTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 		// an occurrence inside err's own text — some chromedp failure modes
 		// (a bare context-deadline timeout) don't embed the selector at all
 		// (7-reviewer finding #6).
-		return tools.ErrorResult(fmt.Sprintf("browser_type: element %q: %s", selector, scrubMarkerFromError(err, target, selector)))
+		return tools.ErrorResult(
+			fmt.Sprintf("browser_type: element %q: %s", selector, scrubMarkerFromError(err, target, selector)),
+		)
 	}
 
 	return jsonResult(map[string]any{"success": true})
@@ -498,8 +516,14 @@ func (t *GetTextTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"selector": map[string]any{"type": "string", "description": "CSS selector of the element, optionally ending in :has-text(\"...\") / :text-is(\"...\") to match by visible text"},
-			"text":     map[string]any{"type": "string", "description": "Match an element by its visible text (case-insensitive substring) instead of — or scoped within — selector"},
+			"selector": map[string]any{
+				"type":        "string",
+				"description": "CSS selector of the element, optionally ending in :has-text(\"...\") / :text-is(\"...\") to match by visible text",
+			},
+			"text": map[string]any{
+				"type":        "string",
+				"description": "Match an element by its visible text (case-insensitive substring) instead of — or scoped within — selector",
+			},
 		},
 	}
 }
@@ -585,8 +609,14 @@ func (t *WaitTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"selector": map[string]any{"type": "string", "description": "CSS selector to wait for, optionally ending in :has-text(\"...\") / :text-is(\"...\") to match by visible text"},
-			"text":     map[string]any{"type": "string", "description": "Wait for an element with this visible text (case-insensitive substring) instead of — or scoped within — selector"},
+			"selector": map[string]any{
+				"type":        "string",
+				"description": "CSS selector to wait for, optionally ending in :has-text(\"...\") / :text-is(\"...\") to match by visible text",
+			},
+			"text": map[string]any{
+				"type":        "string",
+				"description": "Wait for an element with this visible text (case-insensitive substring) instead of — or scoped within — selector",
+			},
 		},
 	}
 }

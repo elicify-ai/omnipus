@@ -31,6 +31,7 @@
 // ever touch BrowserManager.mu — that is the actual ADR-038 invariant (see
 // manager.go's "ADR-038 rule" comments: never hold the manager's lock across
 // a CDP call), not a literal "exactly one call" constraint.
+
 package browser
 
 import (
@@ -134,7 +135,7 @@ var textPseudoRe = regexp.MustCompile(`(?s)^(.*?):(has-text|text-is|text)\((?:"(
 // parseTextPseudo detects and parses a trailing text pseudo-selector on
 // selector. Returns isText=false for a plain CSS selector (no trailing text
 // pseudo) — callers keep the existing ByQuery fast path unchanged in that
-// case, exactly zero behaviour change for every selector written before this
+// case, exactly zero behavior change for every selector written before this
 // feature existed.
 //
 // cssPrefix is everything before the pseudo, trimmed; an empty prefix (e.g.
@@ -188,7 +189,8 @@ func parseTextPseudo(selector string) (cssPrefix, needle string, exact, isText b
 func tokenFromMarkerSelector(marker string) string {
 	prefix := `[` + textMarkerAttr + `="`
 	const suffix = `"]`
-	if !strings.HasPrefix(marker, prefix) || !strings.HasSuffix(marker, suffix) || len(marker) < len(prefix)+len(suffix) {
+	if !strings.HasPrefix(marker, prefix) || !strings.HasSuffix(marker, suffix) ||
+		len(marker) < len(prefix)+len(suffix) {
 		return ""
 	}
 	return marker[len(prefix) : len(marker)-len(suffix)]
@@ -429,7 +431,12 @@ func buildTextSelectorScript(cssScope, needle string, exact bool, token string) 
 // narrowly misses that sliver produces a bare "context deadline exceeded" —
 // that is an infra hiccup on the LAST poll, not a signal that overrides
 // what every prior poll already established cleanly.
-func resolveTextTarget(tabCtx context.Context, cssScope, needle string, exact bool, timeout time.Duration) (markerSelector string, err error) {
+func resolveTextTarget(
+	tabCtx context.Context,
+	cssScope, needle string,
+	exact bool,
+	timeout time.Duration,
+) (markerSelector string, err error) {
 	if strings.TrimSpace(needle) == "" {
 		return "", fmt.Errorf("text selector: empty text to match")
 	}
@@ -470,7 +477,11 @@ func resolveTextTarget(tabCtx context.Context, cssScope, needle string, exact bo
 		case res.InvalidScope:
 			return "", fmt.Errorf("text selector: invalid selector scope %q", cssScope)
 		case res.Ambiguous:
-			return "", fmt.Errorf("text selector: %d elements match text %q — narrow it with a selector scope", res.Count, needle)
+			return "", fmt.Errorf(
+				"text selector: %d elements match text %q — narrow it with a selector scope",
+				res.Count,
+				needle,
+			)
 		case res.Marker != "":
 			return res.Marker, nil
 		default:
@@ -609,7 +620,11 @@ func removeTextMarker(tabCtx context.Context, token string) {
 // duplicated in both: extract the token from the marker selector, build a
 // cleanup closure over it, and prefix a resolution error with the tool
 // name).
-func wrapTextMatch(tabCtx context.Context, toolName, marker string, rerr error) (target string, cleanup func(), err error) {
+func wrapTextMatch(
+	tabCtx context.Context,
+	toolName, marker string,
+	rerr error,
+) (target string, cleanup func(), err error) {
 	if rerr != nil {
 		return "", func() {}, fmt.Errorf("%s: %w", toolName, rerr)
 	}
@@ -643,7 +658,7 @@ func textScopeFromSelector(selector string) (string, error) {
 // resolvePseudoOnlySelector resolves selector when it carries a trailing text
 // pseudo (:has-text/:text/:text-is) into a marker selector via
 // resolveTextTarget; returns selector UNCHANGED, with a no-op cleanup, for
-// plain CSS — the existing ByQuery fast path, zero behaviour change.
+// plain CSS — the existing ByQuery fast path, zero behavior change.
 //
 // Used directly by browser_type, which has no separate "locate by visible
 // text" PARAMETER: its existing `text` argument is already the value typed
@@ -658,7 +673,11 @@ func textScopeFromSelector(selector string) (string, error) {
 // matches can be, which is a different element than the input the caller
 // almost certainly means to type into. Use a CSS/attribute selector
 // (input[name=…], input[placeholder*=…], input[type=…]) to target a field.
-func resolvePseudoOnlySelector(tabCtx context.Context, toolName, selector string, timeout time.Duration) (target string, cleanup func(), err error) {
+func resolvePseudoOnlySelector(
+	tabCtx context.Context,
+	toolName, selector string,
+	timeout time.Duration,
+) (target string, cleanup func(), err error) {
 	cssPrefix, needle, exact, isText, perr := parseTextPseudo(selector)
 	if perr != nil {
 		return "", func() {}, fmt.Errorf("%s: %w", toolName, perr)
@@ -688,7 +707,11 @@ func resolvePseudoOnlySelector(tabCtx context.Context, toolName, selector string
 // Returns the selector for the caller's EXISTING chromedp action(s), and a
 // cleanup func the caller MUST defer immediately (always safe to call — a
 // no-op when no marker was set, including on the error path).
-func resolveActionSelector(tabCtx context.Context, toolName, selector, text string, timeout time.Duration) (target string, cleanup func(), err error) {
+func resolveActionSelector(
+	tabCtx context.Context,
+	toolName, selector, text string,
+	timeout time.Duration,
+) (target string, cleanup func(), err error) {
 	if text != "" {
 		scope, serr := textScopeFromSelector(selector)
 		if serr != nil {

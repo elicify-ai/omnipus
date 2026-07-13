@@ -1,7 +1,7 @@
 package browser
 
 // tabs_test.go — ADR-041 D1/D2/D3 unit coverage for the tab-set model:
-// add/switch/close/neighbour-activation, MaxTabs enforcement on both
+// add/switch/close/neighbor-activation, MaxTabs enforcement on both
 // Session() and adoption, Session(default) following the active tab,
 // ReconcileTabs adopting a newly-detected target, and the
 // never-zero-tabs invariant. Every test here uses BrowserManager.createTabFn
@@ -102,7 +102,12 @@ func TestSession_FollowsActiveTabAfterSwitch(t *testing.T) {
 	// ACTIVE tab's context").
 	secondCtx, err := m.Session(DefaultSessionID)
 	require.NoError(t, err)
-	require.NotEqual(t, firstCtx, secondCtx, "Session must follow the active tab, not stay pinned to the first tab created")
+	require.NotEqual(
+		t,
+		firstCtx,
+		secondCtx,
+		"Session must follow the active tab, not stay pinned to the first tab created",
+	)
 
 	// Switching back to tab 0 makes Session() return the first tab's ctx again.
 	_, err = m.SwitchTab(DefaultSessionID, 0)
@@ -126,7 +131,7 @@ func TestSession_MaxTabsCap_ReturnsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "1")
 }
 
-// --- Tab-set add/switch/close/neighbour-activation (ADR-041 D1/D3) ---
+// --- Tab-set add/switch/close/neighbor-activation (ADR-041 D1/D3) ---
 
 func TestOpenTab_AppendsAndActivates(t *testing.T) {
 	m := newTestManagerWithFakeTabs(t, 5)
@@ -574,7 +579,11 @@ func TestAdoptTarget_MaxTabsCap_ReportsUnadopted(t *testing.T) {
 	result, err := m.adoptTarget(DefaultSessionID, target.ID("runaway-window-open"))
 	require.NoError(t, err, "capped adoption is not an error — a runaway window.open loop must not error the caller")
 	assert.Nil(t, result.Adopted)
-	require.True(t, result.Unadopted, "ADR-041 fix F2: a detected-but-refused target must be reported, not silently dropped")
+	require.True(
+		t,
+		result.Unadopted,
+		"ADR-041 fix F2: a detected-but-refused target must be reported, not silently dropped",
+	)
 	assert.Equal(t, tabAdoptReasonMaxTabs, result.Reason)
 
 	tabs, _, err := m.ListTabs(DefaultSessionID)
@@ -660,7 +669,12 @@ func TestReconcileTabs_AdoptsNewlyDetectedTarget(t *testing.T) {
 	m.listTargets = func(ctx context.Context) ([]*target.Info, error) {
 		return []*target.Info{
 			{TargetID: rootTargetID, Type: "page", OpenerID: ""},
-			{TargetID: target.ID("new-blank-target"), Type: "page", OpenerID: rootTargetID, URL: "https://cal.com/booking"},
+			{
+				TargetID: target.ID("new-blank-target"),
+				Type:     "page",
+				OpenerID: rootTargetID,
+				URL:      "https://cal.com/booking",
+			},
 		}, nil
 	}
 
@@ -756,7 +770,12 @@ func TestReconcileTabs_MaxTabsCap_ReportsUnadopted(t *testing.T) {
 	m.listTargets = func(ctx context.Context) ([]*target.Info, error) {
 		return []*target.Info{
 			{TargetID: rootTargetID, Type: "page", OpenerID: ""},
-			{TargetID: target.ID("stranded-target"), Type: "page", OpenerID: rootTargetID, URL: "https://cal.com/booking"},
+			{
+				TargetID: target.ID("stranded-target"),
+				Type:     "page",
+				OpenerID: rootTargetID,
+				URL:      "https://cal.com/booking",
+			},
 		}, nil
 	}
 
@@ -800,8 +819,18 @@ func TestReconcileTabs_OneClickTwoNewTargets_OneAdoptedOneStranded(t *testing.T)
 	m.listTargets = func(ctx context.Context) ([]*target.Info, error) {
 		return []*target.Info{
 			{TargetID: rootTargetID, Type: "page", OpenerID: ""},
-			{TargetID: target.ID("adoptable-target"), Type: "page", OpenerID: rootTargetID, URL: "https://example.com/a"},
-			{TargetID: target.ID("stranded-target"), Type: "page", OpenerID: rootTargetID, URL: "https://example.com/b"},
+			{
+				TargetID: target.ID("adoptable-target"),
+				Type:     "page",
+				OpenerID: rootTargetID,
+				URL:      "https://example.com/a",
+			},
+			{
+				TargetID: target.ID("stranded-target"),
+				Type:     "page",
+				OpenerID: rootTargetID,
+				URL:      "https://example.com/b",
+			},
 		}, nil
 	}
 

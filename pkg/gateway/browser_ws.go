@@ -289,7 +289,11 @@ func (h *BrowserWSHandler) authenticate(conn *websocket.Conn) (string, bool) {
 	}
 
 	var authFrame generated.AuthFrame
-	if jsonErr := json.Unmarshal(data, &authFrame); jsonErr != nil || authFrame.Type != string(generated.WsFrameTypeAuth) {
+	if jsonErr := json.Unmarshal(
+		data,
+		&authFrame,
+	); jsonErr != nil ||
+		authFrame.Type != string(generated.WsFrameTypeAuth) {
 		sendGenWSFrame(conn, generated.ErrorFrame{
 			Type:    string(generated.WsFrameTypeError),
 			Message: "first message must be {\"type\":\"auth\",\"token\":\"...\"}",
@@ -400,7 +404,12 @@ func (h *BrowserWSHandler) pingPump(wc *browserWSConn) {
 // attachment this connection still held (also releasing control, if held) so
 // a disconnect without an explicit browser_detach never leaves a dangling
 // viewer or a stuck control lock.
-func (h *BrowserWSHandler) readLoop(conn *websocket.Conn, wc *browserWSConn, viewerID, userID string, cfg *config.Config) {
+func (h *BrowserWSHandler) readLoop(
+	conn *websocket.Conn,
+	wc *browserWSConn,
+	viewerID, userID string,
+	cfg *config.Config,
+) {
 	conn.SetReadLimit(browserWSMaxMessageBytes)
 
 	var state browserConnState
@@ -448,8 +457,10 @@ func (h *BrowserWSHandler) readLoop(conn *websocket.Conn, wc *browserWSConn, vie
 						slog.Warn("browser-ws: inbound frame schema validation failed — dropping",
 							"schema", schemaName, "frame_type", typ.Type, "error", errMsg)
 					}
-					wc.sendCriticalGen(errorStatus(fmt.Sprintf("frame schema validation failed (%s): %s", schemaName, errMsg)),
-						dropContext("", viewerID, "schema-invalid:"+typ.Type))
+					wc.sendCriticalGen(
+						errorStatus(fmt.Sprintf("frame schema validation failed (%s): %s", schemaName, errMsg)),
+						dropContext("", viewerID, "schema-invalid:"+typ.Type),
+					)
 					continue
 				}
 			}
@@ -493,7 +504,12 @@ func (h *BrowserWSHandler) readLoop(conn *websocket.Conn, wc *browserWSConn, vie
 // frame.SessionId is retained ONLY as chatSessionID below, for logging and
 // for echoing back on outgoing wire frames so the client can correlate
 // responses with its own chat session.
-func (h *BrowserWSHandler) handleAttach(wc *browserWSConn, state *browserConnState, viewerID, userID string, data []byte) {
+func (h *BrowserWSHandler) handleAttach(
+	wc *browserWSConn,
+	state *browserConnState,
+	viewerID, userID string,
+	data []byte,
+) {
 	var frame generated.BrowserAttachFrame
 	if err := json.Unmarshal(data, &frame); err != nil {
 		wc.sendCriticalGen(errorStatus("browser_attach: invalid frame"), dropContext("", viewerID, "attach-invalid"))
@@ -513,8 +529,13 @@ func (h *BrowserWSHandler) handleAttach(wc *browserWSConn, state *browserConnSta
 
 	mgr, ok := h.agentLoop.BrowserManagerForAgent(frame.AgentId)
 	if !ok {
-		wc.sendCriticalGen(sessionErrorStatus(frame.SessionId,
-			fmt.Sprintf("no browser manager for agent %q (browser tools may not be registered for this agent)", frame.AgentId)),
+		wc.sendCriticalGen(sessionErrorStatus(
+			frame.SessionId,
+			fmt.Sprintf(
+				"no browser manager for agent %q (browser tools may not be registered for this agent)",
+				frame.AgentId,
+			),
+		),
 			dropContext(frame.SessionId, viewerID, "attach-no-manager"))
 		return
 	}
@@ -542,7 +563,10 @@ func (h *BrowserWSHandler) handleAttach(wc *browserWSConn, state *browserConnSta
 		// client so it can re-attach (which resolves the CURRENT manager via
 		// BrowserManagerForAgent) instead of silently watching a frozen frame
 		// forever.
-		wc.sendCriticalGen(sessionErrorStatus(chatSessionID, message), dropContext(chatSessionID, viewerID, "status-death"))
+		wc.sendCriticalGen(
+			sessionErrorStatus(chatSessionID, message),
+			dropContext(chatSessionID, viewerID, "status-death"),
+		)
 	}, func(controlledByOther bool) {
 		// ADR-039 UAT BE-1: fan-out from LiveView.takeControl/releaseControl —
 		// some OTHER connection on this session just took or released
@@ -712,7 +736,13 @@ func (h *BrowserWSHandler) handleInput(wc *browserWSConn, state *browserConnStat
 // cooperative/first-come, no preemption. Every take/release outcome is
 // audit-logged per the ADR's "take/release control is audit-logged"
 // requirement.
-func (h *BrowserWSHandler) handleControl(wc *browserWSConn, state *browserConnState, viewerID, userID string, data []byte, cfg *config.Config) {
+func (h *BrowserWSHandler) handleControl(
+	wc *browserWSConn,
+	state *browserConnState,
+	viewerID, userID string,
+	data []byte,
+	cfg *config.Config,
+) {
 	if state.mgr == nil || state.sessionID == "" {
 		wc.sendCriticalGen(errorStatus("browser_control: attach before requesting control"),
 			dropContext("", viewerID, "control-not-attached"))
@@ -779,7 +809,7 @@ func (h *BrowserWSHandler) handleControl(wc *browserWSConn, state *browserConnSt
 // excluding the actor from the broadcast, so there is no direct success
 // response either.
 //
-// F3 control-lock gate (7-reviewer MAJOR, ADR-041 fix wave): honoured only
+// F3 control-lock gate (7-reviewer MAJOR, ADR-041 fix wave): honored only
 // when the acting viewer currently holds the control lock, OR nobody holds
 // it (idle) — mirroring browser_input's dispatchInput gate exactly, via the
 // SAME accessor (LiveViewRegistry.Controller, the pure-read counterpart of
@@ -810,8 +840,10 @@ func (h *BrowserWSHandler) handleTabAction(wc *browserWSConn, state *browserConn
 	chatSessionID := state.sessionID
 
 	if controller := state.mgr.Live().Controller(browser.DefaultSessionID); controller != "" && controller != viewerID {
-		wc.sendCriticalGen(sessionErrorStatus(chatSessionID, "another viewer is driving — take control first to manage tabs"),
-			dropContext(chatSessionID, viewerID, "tab-action-not-controller"))
+		wc.sendCriticalGen(
+			sessionErrorStatus(chatSessionID, "another viewer is driving — take control first to manage tabs"),
+			dropContext(chatSessionID, viewerID, "tab-action-not-controller"),
+		)
 		return
 	}
 

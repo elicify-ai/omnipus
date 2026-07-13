@@ -8,6 +8,7 @@
 // querySelector) rejects outright. parseTextPseudo must recognize that shape
 // and split it into a CSS scope + text needle + exactness so
 // resolveTextTarget can match by visible text instead.
+
 package browser
 
 import (
