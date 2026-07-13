@@ -37,6 +37,9 @@ import { WebServeBlock } from './tools/WebServeUI'
 import { BrowserToolReplayBlock, isReplayBrowserToolName } from './tools/BrowserTool'
 import { RateLimitIndicator } from './RateLimitIndicator'
 import { ActivityBar } from './ActivityBar'
+import { AgentPicker } from './composer/AgentPicker'
+import { ModelPicker } from './composer/ModelPicker'
+import { TokenCounter } from './composer/TokenCounter'
 import { MarkdownText } from './markdown-text'
 import { SubagentBlock } from './SubagentBlock'
 import { ModelFooter } from './ModelFooter'
@@ -1196,6 +1199,15 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   // easy to miss when the textarea looks fully interactive.
   const inputEnabled = !agentRemoved && !isReplaying && !(reconnectPhase === 'gave_up') && isConnected
 
+  // Attach affordance gate — shared by the AddAttachment button AND the
+  // drag-drop handlers/overlay below (same read-only conditions: agent
+  // removed, streaming, replaying, gateway unreachable, or gave up on
+  // reconnect). A single source of truth keeps the two from drifting: without
+  // this, a drag-drop in a read-only (agentRemoved / gave_up) session could
+  // attach a chip that can never be sent, even though the attach button
+  // itself was correctly disabled.
+  const attachDisabled = !isConnected || isStreaming || isReplaying || reconnectPhase === 'gave_up' || agentRemoved
+
   // The 3 previously-tangled composer concerns (slash/skill palette, file
   // upload incl. harmful-file confirm, stop/cancel state machine) each own
   // their own state via a dedicated hook — see src/hooks/useSlashMenu.ts,
@@ -1242,11 +1254,11 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   return (
     <div
       className="relative"
-      onDragOver={fileUpload.onDragOver}
-      onDragLeave={fileUpload.onDragLeave}
-      onDrop={fileUpload.onDrop}
+      onDragOver={attachDisabled ? undefined : fileUpload.onDragOver}
+      onDragLeave={attachDisabled ? undefined : fileUpload.onDragLeave}
+      onDrop={attachDisabled ? undefined : fileUpload.onDrop}
     >
-      {fileUpload.isDragging && (
+      {fileUpload.isDragging && !attachDisabled && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-[var(--color-primary)]/80 border-2 border-dashed border-[var(--color-accent)] rounded-lg">
           <p className="text-[var(--color-accent)] font-medium">Drop files here</p>
         </div>
@@ -1385,164 +1397,210 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
         </div>
       )}
 
-      {/* Pending attachments — native AssistantUI composer attachments. Shows a
-          chip for each attached file (via paperclip, drag-drop, or paste); the
-          AttachmentAdapter (src/lib/attachment-adapter.ts) uploads them on send
-          and threads the media:// ref into our transport via onNew. */}
-      <div className="flex flex-wrap gap-2 px-2 empty:hidden [&:has(*)]:pb-2">
-        <ComposerPrimitive.Attachments components={{ Attachment: ComposerAttachmentChip }} />
-      </div>
-
-      <div className="flex items-end gap-2 px-2 py-2">
-        {/* Attach button — native; opens the file picker scoped to the adapter's
-            accept list. Replaces the old custom paperclip + hidden <input>. */}
-        <ComposerPrimitive.AddAttachment
-          disabled={!isConnected || isStreaming || isReplaying || reconnectPhase === 'gave_up'}
-          className="shrink-0 w-11 h-11 rounded-xl flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-          aria-label="Attach file"
-          title="Attach file"
-        >
-          <Paperclip size={16} />
-        </ComposerPrimitive.AddAttachment>
-
-      <ComposerPrimitive.Root
-        className="flex items-end gap-2 flex-1"
-        onSubmit={(e) => {
-          // Block Enter-submit while streaming; slash-menu Enter is handled in handleKeyDown.
-          if (isStreaming) {
-            e.preventDefault()
-            return
-          }
-          // Send-path interception: if the typed text is exactly a client-delivery
-          // slash command (e.g. "/clear", "/help", "/model", "/cancel"), handle it
-          // locally and prevent it from reaching the backend. This converges the
-          // typed+Enter path with the palette selection path.
-          if (slashMenu.interceptClientCommand()) {
-            e.preventDefault()
-          }
-        }}
+      {/* Composer card — one self-contained surface. Context row (attach +
+          agent + model + tokens) sits above the input row (textarea + send /
+          stop); attachment chips and live background activity fold below.
+          The input row is now a single ComposerPrimitive.Root holding only
+          the textarea + send/stop (one items-end flex container = one shared
+          baseline); attach moved UP into the context row above, removing the
+          old two-container split that left attach/send 7px below the input's
+          bottom edge. @container: lets TokenCounter below gate on the card's
+          own width instead of a distant ancestor's container. */}
+      <div
+        data-testid="composer-card"
+        className="@container rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface-2)] overflow-hidden"
       >
-        {/* Ghost text wrapper — positioned overlay approach */}
-        <div className="relative flex-1">
-        <ComposerPrimitive.Input
-          data-testid="chat-input"
-          placeholder={agentRemoved ? 'Agent has been removed — this session is read-only' : composerPlaceholder(isConnected || reconnectPhase === 'reconnecting' || reconnectPhase === 'slow', isStreaming, isReplaying, activeAgentName, reconnectPhase === 'gave_up')}
-          // FR-3a: the slash menu must be reachable mid-stream, which means the
-          // textarea has to accept keystrokes during streaming. Submission is
-          // blocked elsewhere: the ComposerPrimitive.Root's onSubmit handler
-          // above preventDefaults while isStreaming, and the composer's
-          // onKeyDown handler (handleKeyDown) swallows Enter while streaming
-          // unless the slash menu is open. So gate visual-only
-          // (cursor-not-allowed/opacity) on isStreaming via the className
-          // below, not the disabled attribute.
-          disabled={!inputEnabled}
-          aria-disabled={!inputEnabled || isStreaming || undefined}
-          rows={1}
-          cancelOnEscape={false}
-          className={cn(
-            'w-full resize-none rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface-2)] px-4 py-2.5 text-sm text-[var(--color-secondary)] outline-none',
-            'placeholder:text-[var(--color-muted)] min-h-[24px] max-h-[200px] leading-6 overflow-hidden',
-            'focus:border-[var(--color-accent)]/50 focus:ring-1 focus:ring-[var(--color-accent)]/20',
-            (!inputEnabled || isStreaming) && 'opacity-60 cursor-not-allowed',
-          )}
-          aria-label="Message input"
-          onChange={(e) => {
-            const val = (e.target as HTMLTextAreaElement).value
-            slashMenu.onInputChange(val)
-            if (val.length > 1_000_000) {
-              if (!hasWarnedLargeInput.current) {
-                hasWarnedLargeInput.current = true
-                useUiStore.getState().addToast({
-                  message: `Large input (${(val.length / 1_000_000).toFixed(1)}MB). This may be slow to process.`,
-                  variant: 'default',
-                })
-              }
-            } else {
-              hasWarnedLargeInput.current = false
-            }
-          }}
-          onKeyDown={handleKeyDown}
-          onBlur={slashMenu.onInputBlur}
-          onPaste={fileUpload.onPaste}
-        />
-        {/* Ghost text overlay — shown when value is exactly `/<skillId> ` after skill selection.
-            F3-frontend/FR-006/R3: shows the skill's argument_hint when declared, else `<message>`.
-            The hint comes from the skill selected from the menu. */}
-        {slashMenu.showGhostText && (
-          <div
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-0 px-4 py-2.5 text-sm leading-6 flex items-start"
-            data-testid="ghost-text"
+        {/* Context row — per-message scope. Agent/model/tokens relocated here
+            from the workspace top-bar (Gestalt proximity: they belong next to
+            the input they scope); attach moved up here from the old input row
+            below. */}
+        <div
+          className="flex items-center gap-1.5 min-w-0 overflow-x-auto px-2 pt-2 pb-1"
+          style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' } as React.CSSProperties}
+        >
+          {/* Attach — opens the file picker scoped to the adapter's accept list.
+              Lives in the context row so the input row is just textarea + send. */}
+          <ComposerPrimitive.AddAttachment
+            disabled={attachDisabled}
+            className="shrink-0 h-8 w-8 rounded-md flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-3)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
+            aria-label="Attach file"
+            title="Attach file"
           >
-            <span className="invisible whitespace-pre">{slashMenu.inputValue}</span>
-            <span className="text-[var(--color-muted)] opacity-60">
-              {slashMenu.ghostText}
-            </span>
-          </div>
-        )}
+            <Paperclip size={16} />
+          </ComposerPrimitive.AddAttachment>
+
+          <AgentPicker disabled={agentRemoved} />
+          <ModelPicker disabled={agentRemoved} />
+          <span className="flex-1" />
+          {/* Token counter — status; hidden below @2xl of the card's own
+              @container (~42rem card width), replacing the old top-bar
+              container gate now that the card carries its own @container. */}
+          <TokenCounter className="hidden @2xl:flex" />
         </div>
 
-        {isStreaming || cancelState.stopLabel === 'stopping' ? (
-          <button
-            type="button"
-            data-testid="stop-btn"
-            onClick={() => {
-              // EC-15 / FR-21: cancelUnconditional() sets the label synchronously
-              // so the UI updates within the same React render tick, before the
-              // cancel network round-trip starts (no perceived latency). It does
-              // NOT guard on isStreaming — see useCancelState's doc comment for
-              // why guarding here would silently no-op on the render/click race.
-              cancelState.cancelUnconditional()
-            }}
-            className={cn(
-              'shrink-0 rounded-xl flex items-center justify-center transition-colors',
-              cancelState.stopLabel === 'stopping'
-                ? 'px-3 h-11 gap-1.5 text-xs font-medium bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30'
-                : 'w-11 h-11',
-              isStreaming
-                ? 'bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30'
-                : 'bg-[var(--color-surface-3)] text-[var(--color-muted)] cursor-wait',
-            )}
-            aria-label={cancelState.stopLabel === 'stopping' ? 'Stopping...' : 'Stop generation'}
-            title="Stop (Escape)"
-          >
-            <Stop size={15} weight="fill" />
-            {cancelState.stopLabel === 'stopping' && <span>Stopping...</span>}
-          </button>
-        ) : (
-          // FR-I-014: also disabled during replay so user cannot send out-of-order.
-          // Fix 3: when reconnecting (fast or slow), allow send — messages go to
-          // the outbound queue and drain automatically on reconnect.
-          //
-          // Native ComposerPrimitive.Send: calls composer.send() → onNew, which
-          // now carries text AND attachments. Send and Enter both go through
-          // composer.send(), so they are identical. Send auto-disables when the
-          // composer is empty (no text and no attachments) via the runtime's
-          // canSend, so no manual empty-check is needed here.
-          <ComposerPrimitive.Send
-            disabled={!inputEnabled || isReplaying}
-            data-testid="chat-send"
-            className={cn(
-              'shrink-0 w-11 h-11 rounded-xl flex items-center justify-center transition-colors',
-              inputEnabled && !isReplaying
-                ? reconnectPhase === 'reconnecting' || reconnectPhase === 'slow'
-                  // Muted accent while reconnecting — functional but visually signals
-                  // the message will queue rather than send immediately.
-                  ? 'bg-[var(--color-accent)]/50 text-[var(--color-primary)] hover:bg-[var(--color-accent)]/70'
-                  : 'bg-[var(--color-accent)] text-[var(--color-primary)] hover:bg-[var(--color-accent-hover)] disabled:bg-[var(--color-surface-3)] disabled:text-[var(--color-muted)] disabled:cursor-not-allowed'
-                : 'bg-[var(--color-surface-3)] text-[var(--color-muted)] cursor-not-allowed',
-            )}
-            aria-label={
-              reconnectPhase === 'reconnecting' || reconnectPhase === 'slow'
-                ? 'Queue message (will send on reconnect)'
-                : 'Send message'
+        {/* Input row — single ComposerPrimitive.Root, items-end: textarea and
+            send/stop share one flex container + one bottom baseline. */}
+        <ComposerPrimitive.Root
+          className="flex items-end gap-2 px-2 pb-2"
+          onSubmit={(e) => {
+            // Block Enter-submit while streaming; slash-menu Enter is handled in handleKeyDown.
+            if (isStreaming) {
+              e.preventDefault()
+              return
             }
-            aria-disabled={isReplaying || undefined}
-          >
-            <PaperPlaneRight size={15} weight="bold" />
-          </ComposerPrimitive.Send>
-        )}
-      </ComposerPrimitive.Root>
+            // Send-path interception: if the typed text is exactly a client-delivery
+            // slash command (e.g. "/clear", "/help", "/model", "/cancel"), handle it
+            // locally and prevent it from reaching the backend. This converges the
+            // typed+Enter path with the palette selection path.
+            if (slashMenu.interceptClientCommand()) {
+              e.preventDefault()
+            }
+          }}
+        >
+          {/* Ghost text wrapper — positioned overlay approach */}
+          <div className="relative flex-1 min-w-0">
+            <ComposerPrimitive.Input
+              data-testid="chat-input"
+              placeholder={agentRemoved ? 'Agent has been removed — this session is read-only' : composerPlaceholder(isConnected || reconnectPhase === 'reconnecting' || reconnectPhase === 'slow', isStreaming, isReplaying, activeAgentName, reconnectPhase === 'gave_up')}
+              // FR-3a: the slash menu must be reachable mid-stream, which means the
+              // textarea has to accept keystrokes during streaming. Submission is
+              // blocked elsewhere: the ComposerPrimitive.Root's onSubmit handler
+              // above preventDefaults while isStreaming, and the composer's
+              // onKeyDown handler (handleKeyDown) swallows Enter while streaming
+              // unless the slash menu is open. So gate visual-only
+              // (cursor-not-allowed/opacity) on isStreaming via the className
+              // below, not the disabled attribute.
+              disabled={!inputEnabled}
+              aria-disabled={!inputEnabled || isStreaming || undefined}
+              rows={1}
+              cancelOnEscape={false}
+              className={cn(
+                // Transparent + borderless: the card is the visible surface now,
+                // so the textarea blends in (flat) instead of drawing its own box.
+                // `block`: textareas are inline-block by default, which leaves a
+                // ~6px descender line-box gap below the element inside its block
+                // wrapper — the wrapper (not the textarea) is what items-end
+                // aligns, so the gap read as send sitting below the input.
+                'block w-full resize-none bg-transparent px-3 py-2.5 text-sm text-[var(--color-secondary)] outline-none',
+                'placeholder:text-[var(--color-muted)] min-h-[24px] max-h-[200px] leading-6 overflow-hidden',
+                'focus:outline-none focus:ring-0',
+                (!inputEnabled || isStreaming) && 'opacity-60 cursor-not-allowed',
+              )}
+              aria-label="Message input"
+              onChange={(e) => {
+                const val = (e.target as HTMLTextAreaElement).value
+                slashMenu.onInputChange(val)
+                if (val.length > 1_000_000) {
+                  if (!hasWarnedLargeInput.current) {
+                    hasWarnedLargeInput.current = true
+                    useUiStore.getState().addToast({
+                      message: `Large input (${(val.length / 1_000_000).toFixed(1)}MB). This may be slow to process.`,
+                      variant: 'default',
+                    })
+                  }
+                } else {
+                  hasWarnedLargeInput.current = false
+                }
+              }}
+              onKeyDown={handleKeyDown}
+              onBlur={slashMenu.onInputBlur}
+              onPaste={fileUpload.onPaste}
+            />
+            {/* Ghost text overlay — shown when value is exactly `/<skillId> ` after skill selection.
+                F3-frontend/FR-006/R3: shows the skill's argument_hint when declared, else `<message>`.
+                The hint comes from the skill selected from the menu. */}
+            {slashMenu.showGhostText && (
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-0 px-3 py-2.5 text-sm leading-6 flex items-start"
+                data-testid="ghost-text"
+              >
+                <span className="invisible whitespace-pre">{slashMenu.inputValue}</span>
+                <span className="text-[var(--color-muted)] opacity-60">
+                  {slashMenu.ghostText}
+                </span>
+              </div>
+            )}
+          </div>
+
+          {isStreaming || cancelState.stopLabel === 'stopping' ? (
+            <button
+              type="button"
+              data-testid="stop-btn"
+              onClick={() => {
+                // EC-15 / FR-21: cancelUnconditional() sets the label synchronously
+                // so the UI updates within the same React render tick, before the
+                // cancel network round-trip starts (no perceived latency). It does
+                // NOT guard on isStreaming — see useCancelState's doc comment for
+                // why guarding here would silently no-op on the render/click race.
+                cancelState.cancelUnconditional()
+              }}
+              className={cn(
+                'shrink-0 rounded-xl flex items-center justify-center transition-colors',
+                cancelState.stopLabel === 'stopping'
+                  ? 'px-3 h-11 gap-1.5 text-xs font-medium bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30'
+                  : 'w-11 h-11',
+                isStreaming
+                  ? 'bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30'
+                  : 'bg-[var(--color-surface-3)] text-[var(--color-muted)] cursor-wait',
+              )}
+              aria-label={cancelState.stopLabel === 'stopping' ? 'Stopping...' : 'Stop generation'}
+              title="Stop (Escape)"
+            >
+              <Stop size={15} weight="fill" />
+              {cancelState.stopLabel === 'stopping' && <span>Stopping...</span>}
+            </button>
+          ) : (
+            // FR-I-014: also disabled during replay so user cannot send out-of-order.
+            // Fix 3: when reconnecting (fast or slow), allow send — messages go to
+            // the outbound queue and drain automatically on reconnect.
+            //
+            // Native ComposerPrimitive.Send: calls composer.send() → onNew, which
+            // now carries text AND attachments. Send and Enter both go through
+            // composer.send(), so they are identical. Send auto-disables when the
+            // composer is empty (no text and no attachments) via the runtime's
+            // canSend, so no manual empty-check is needed here.
+            <ComposerPrimitive.Send
+              disabled={!inputEnabled || isReplaying}
+              data-testid="chat-send"
+              className={cn(
+                'shrink-0 w-11 h-11 rounded-xl flex items-center justify-center transition-colors',
+                inputEnabled && !isReplaying
+                  ? reconnectPhase === 'reconnecting' || reconnectPhase === 'slow'
+                    // Muted accent while reconnecting — functional but visually signals
+                    // the message will queue rather than send immediately.
+                    ? 'bg-[var(--color-accent)]/50 text-[var(--color-primary)] hover:bg-[var(--color-accent)]/70'
+                    : 'bg-[var(--color-accent)] text-[var(--color-primary)] hover:bg-[var(--color-accent-hover)] disabled:bg-[var(--color-surface-3)] disabled:text-[var(--color-muted)] disabled:cursor-not-allowed'
+                  : 'bg-[var(--color-surface-3)] text-[var(--color-muted)] cursor-not-allowed',
+              )}
+              aria-label={
+                reconnectPhase === 'reconnecting' || reconnectPhase === 'slow'
+                  ? 'Queue message (will send on reconnect)'
+                  : 'Send message'
+              }
+              aria-disabled={isReplaying || undefined}
+            >
+              <PaperPlaneRight size={15} weight="bold" />
+            </ComposerPrimitive.Send>
+          )}
+        </ComposerPrimitive.Root>
+
+        {/* Pending attachments — native AssistantUI composer attachments. Shows a
+            chip for each attached file (via paperclip, drag-drop, or paste); the
+            AttachmentAdapter (src/lib/attachment-adapter.ts) uploads them on send
+            and threads the media:// ref into our transport via onNew. */}
+        <div className="flex flex-wrap gap-2 px-2 empty:hidden [&:has(*)]:pb-2">
+          <ComposerPrimitive.Attachments components={{ Attachment: ComposerAttachmentChip }} />
+        </div>
+
+        {/* Live background activity (delegate spans + background bash runs) —
+            folded below the input (Claude-Code style). Opens the ActivityPanel
+            slide-out on click. Wrapper owns the row's padding; ActivityBar
+            itself renders null when idle, so `empty:hidden` collapses this
+            wrapper too — no stray padding artifact when nothing is running. */}
+        <div className="px-2 pb-2 empty:hidden">
+          <ActivityBar />
+        </div>
       </div>
 
       <p className="mt-1.5 text-[10px] text-[var(--color-muted)] text-center">
@@ -1782,14 +1840,8 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
             </div>
           )}
 
-          {/* Activity Bar — persistent strip showing live background agent/shell
-              activity (delegate spans + background bash runs). Opens a slide-out
-              detail panel on click. See src/components/chat/ActivityBar.tsx. */}
-          <div className="px-4 pb-2">
-            <ActivityBar />
-          </div>
-
-          {/* Composer — centered, ChatGPT-style floating layout */}
+          {/* Composer — centered, ChatGPT-style floating layout. The ActivityBar
+              now renders inside the composer card (folded below the input). */}
           <div className="relative w-full">
             {/* Gradient fade above composer */}
             <div className="absolute -top-8 left-0 right-0 h-8 bg-gradient-to-t from-[var(--color-primary)] to-transparent pointer-events-none" />

@@ -186,6 +186,16 @@ vi.mock('./SubagentBlock', () => ({ SubagentBlock: () => null }))
 vi.mock('./markdown-text', () => ({ MarkdownText: () => null }))
 vi.mock('./tools/GenericToolCall', () => ({ GenericToolCall: () => null }))
 vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null }))
+// Composer Redesign (variant A1): AgentPicker/ModelPicker/TokenCounter are
+// self-contained sub-components rendered inside OmnipusComposer's context row
+// (src/components/chat/composer/*). None of the tests in this file assert on
+// the picker/model/token UI, so they're stubbed to null — this avoids having
+// to mock the workspaces/providers query plumbing (fetchWorkspaces,
+// workspacesQueryKeys, isWorker) those sub-components own. Their own behavior
+// is covered by composer/AgentPicker.test.tsx (+ .agent-selector-open.test.tsx).
+vi.mock('./composer/AgentPicker', () => ({ AgentPicker: () => null }))
+vi.mock('./composer/ModelPicker', () => ({ ModelPicker: () => null }))
+vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
 
 // ── Store reset ───────────────────────────────────────────────────────────────
 
@@ -381,11 +391,18 @@ describe('T15 / US-4: slash menu — API-driven palette, delivery dispatch, stre
 // ── Wave 2 / FR-008/009/010: chat composer model selector ────────────────────
 //
 // NOTE: The ModelSelector UI (FR-008) and the nextModel seed effect (FR-009)
-// moved from OmnipusComposer → ChatControls. UI + seed tests now live in
-// src/components/chat/ChatControls.test.tsx.
+// briefly moved from OmnipusComposer → ChatControls, then moved AGAIN with the
+// Composer Redesign (variant A1): they now live in the composer's own
+// context row via the extracted src/components/chat/composer/ModelPicker.tsx
+// sub-component (mocked to null in this file's other describe blocks — see
+// the composer-render mocks above — since none of them assert on picker UI).
+// UI + seed-effect tests for the picker itself belong in
+// src/components/chat/composer/ModelPicker.test.tsx.
 //
 // This describe block retains only the store-level contracts that are
-// independent of which component renders the picker:
+// independent of which component renders the picker — these tests call the
+// store directly and never render OmnipusComposer/ModelPicker, so they are
+// unaffected by which component currently owns the UI:
 //   • FR-010: sendMessage forwards nextModel as metadata.model_name
 //   • FR-010 converse: omits metadata.model_name when nextModel is null
 describe('OmnipusComposer — model selector store contracts (FR-010)', () => {

@@ -120,6 +120,15 @@ vi.mock('./SubagentBlock', () => ({ SubagentBlock: () => null }))
 vi.mock('./markdown-text', () => ({ MarkdownText: () => null }))
 vi.mock('./tools/GenericToolCall', () => ({ GenericToolCall: () => null }))
 vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null }))
+// Composer Redesign (variant A1): the harmful-upload flow is independent of
+// the picker/model/token sub-components — stub them to null so their
+// workspaces/providers query plumbing doesn't need mocking here. This doesn't
+// change the drop-zone structure: the drag/drop handlers (onDragOver/
+// onDragLeave/onDrop) live on OmnipusComposer's outermost wrapper div,
+// unaffected by what renders in the context row above the input.
+vi.mock('./composer/AgentPicker', () => ({ AgentPicker: () => null }))
+vi.mock('./composer/ModelPicker', () => ({ ModelPicker: () => null }))
+vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
 
 function resetStores() {
   act(() => {
