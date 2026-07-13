@@ -284,12 +284,19 @@ func defaultWorkspaceDelegationEdges(cfg *config.Config) []storedDelegationEdge 
 	return edges
 }
 
-// defaultWorkspaceTeam returns the default workspace roster (M6): the 4 base
-// agents plus the seeded specialist subagents (Planner / Explorer / Researcher).
-// Only agents that actually exist in the config are included, so a lite/custom
-// roster never produces a dangling team member.
+// defaultWorkspaceTeam returns the default workspace roster for a fresh
+// install / new workspace with no explicit core_team: every agent the product
+// delivers on install (coreagent.All — 4 base chat agents + general Worker +
+// Planner/Explorer/Researcher specialists), filtered to IDs that actually
+// exist in the live config so a lite/custom roster never produces a dangling
+// team member.
+//
+// Worker is intentionally included. Omitting it used to drop every →worker
+// seed edge in seedEdgesForTeam (both endpoints must be on-team), so Jim/Mia/
+// Ava/Ray could not delegate to Worker on a pristine default workspace even
+// though coreagent.SeedDelegationEdges defines those edges. That was UAT
+// DEF-001 (2026-07-13).
 func defaultWorkspaceTeam(cfg *config.Config) []string {
-	want := []string{"mia", "jim", "ava", "ray", "planner", "explorer", "researcher"}
 	if cfg == nil {
 		return nil
 	}
@@ -297,8 +304,13 @@ func defaultWorkspaceTeam(cfg *config.Config) []string {
 	for i := range cfg.Agents.List {
 		present[cfg.Agents.List[i].ID] = true
 	}
-	team := make([]string, 0, len(want))
-	for _, id := range want {
+	// Display order follows coreagent.All() so the Team tab matches the
+	// Agents library seed order (Mia first, then Jim/Ava/Ray, Worker, then
+	// the three specialists).
+	all := coreagent.All()
+	team := make([]string, 0, len(all))
+	for _, a := range all {
+		id := string(a.ID)
 		if present[id] {
 			team = append(team, id)
 		}
