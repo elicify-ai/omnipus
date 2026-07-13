@@ -352,7 +352,7 @@ function ScheduleDetailSheet({
     <Sheet open={Boolean(schedule)} onOpenChange={onOpenChange}>
       <SheetContent
         side="right"
-        className="sm:w-[480px] bg-[var(--color-surface-1)] border-[var(--color-border)] overflow-y-auto"
+        className="sm:w-[480px] bg-[var(--color-surface-0)] border-[var(--color-border)] overflow-y-auto"
       >
         {schedule && (
           <>

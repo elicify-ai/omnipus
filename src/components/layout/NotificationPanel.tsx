@@ -87,7 +87,7 @@ export function NotificationPanel() {
     <Sheet open={open} onOpenChange={(v) => (v ? undefined : closePanel())}>
       <SheetContent
         side="right"
-        className="sm:w-[360px] bg-[var(--color-surface-1)] border-[var(--color-border)] overflow-y-auto p-0"
+        className="sm:w-[360px] bg-[var(--color-surface-0)] border-[var(--color-border)] overflow-y-auto p-0"
       >
         <SheetHeader className="justify-between">
           <SheetTitle>

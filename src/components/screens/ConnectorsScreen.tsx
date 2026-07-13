@@ -529,7 +529,7 @@ function CreateChannelSheet({
     <Sheet open={open} onOpenChange={handleOpenChange}>
       <SheetContent
         side="right"
-        className="sm:w-[420px] bg-[var(--color-surface-1)] border-[var(--color-border)] overflow-y-auto"
+        className="sm:w-[420px] bg-[var(--color-surface-0)] border-[var(--color-border)] overflow-y-auto"
         data-testid="create-channel-sheet"
       >
         <SheetHeader className="-mx-6 -mt-6 mb-0 px-6">

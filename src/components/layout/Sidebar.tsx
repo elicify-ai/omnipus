@@ -552,7 +552,7 @@ export function Sidebar() {
       {/* FR-015: Pinned mode — permanent panel, only rendered when ≥1024px AND user chose to pin */}
       {effectivelyPinned && (
         <aside
-          className="flex flex-col h-full flex-shrink-0 bg-[var(--color-surface-1)] border-r border-[var(--color-border)]"
+          className="flex flex-col h-full flex-shrink-0 bg-[var(--color-surface-0)] border-r border-[var(--color-border)]"
           style={{
             width: 'var(--spacing-sidebar)',
             paddingTop: 'env(safe-area-inset-top)',
@@ -573,7 +573,7 @@ export function Sidebar() {
             animate={{ x: 0 }}
             exit={{ x: '-100%' }}
             transition={{ type: 'tween', duration: 0.22, ease: [0.4, 0, 0.2, 1] }}
-            className="fixed left-0 top-0 z-40 flex h-full flex-col bg-[var(--color-surface-1)] border-r border-[var(--color-border)] shadow-2xl"
+            className="fixed left-0 top-0 z-40 flex h-full flex-col bg-[var(--color-surface-0)] border-r border-[var(--color-border)] shadow-2xl"
             style={{
               width: 'var(--spacing-sidebar)',
               paddingTop: 'env(safe-area-inset-top)',

@@ -83,7 +83,10 @@ const SheetContent = React.forwardRef<
       // pair it with aria-modal="true" so AT knows outside content is inert.
       aria-modal="true"
       className={cn(
-        'fixed z-50 bg-[var(--color-surface-1)] p-6 shadow-xl transition ease-in-out',
+        // surface-0 (Deep Space Black): panels match the app background so the
+        // shell reads as one flat dark surface; cards/inputs (surface-2/3) still
+        // lift above it for contrast.
+        'fixed z-50 bg-[var(--color-surface-0)] p-6 shadow-xl transition ease-in-out',
         'data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:duration-300 data-[state=open]:duration-500',
         sideVariants[side],
         // Default per-side width (e.g. left/right = sm:w-80). The widthClass
