@@ -516,14 +516,38 @@ func resolveTextTarget(tabCtx context.Context, cssScope, needle string, exact bo
 // evaluation error. This is the 7-reviewer intent (a doomed final CDP round
 // trip must not override a clean prior result) extended to the tabCtx.Done()
 // path that a UAT run caught leaking a raw "context deadline exceeded". Every
-// branch NAMES the needle and none exposes the internal marker attribute, so
-// the agent always gets an actionable, consistent message regardless of which
-// deadline fired.
+// no-match/fallback branch NAMES the needle (the eval-error branch does not —
+// a failed CDP evaluation is a distinct "evaluation itself failed" signal, not
+// an "element absent" one, so it surfaces its own message, with only the
+// internal marker attr name redacted if the raw CDP text ever echoed it); no
+// branch exposes the internal marker attribute, so the agent gets an
+// actionable, consistent message regardless of which deadline fired.
 func resolvePendingErr(needle string, lastNoMatchErr, lastEvalErr, ctxErr error) error {
 	switch {
 	case lastNoMatchErr != nil:
+		// A definitive no-match an earlier poll established wins even over a
+		// LATER eval error. Deliberate, knowingly-accepted tradeoff (originally a
+		// 7-reviewer call for the common case: a tail CDP round trip narrowly
+		// missing the deadline is an infra hiccup, not a real signal, and must
+		// not override what healthy prior polls already proved). The rarer flip
+		// side a UAT-review raised — a genuine mid-poll tab crash AFTER an
+		// initial clean no-match reported as "not found" rather than "evaluation
+		// failed" — is accepted so both exit paths stay consistent; the agent
+		// re-driving a broken tab surfaces the real breakage on its next action
+		// anyway. Distinguishing a one-off hiccup from a sustained crash would
+		// need per-poll failure-run tracking not warranted for this race.
 		return lastNoMatchErr
 	case lastEvalErr != nil:
+		// lastEvalErr wraps a raw chromedp/CDP error whose text is outside our
+		// control, and the evaluation SCRIPT embeds the marker attribute name —
+		// so a pathological CDP error echoing script source could carry it.
+		// Redact the internal attr name (only when actually present, keeping the
+		// %w chain intact in the overwhelmingly common case) so the
+		// no-marker-leak guarantee holds for this branch too, matching the other
+		// three that are marker-free by construction.
+		if s := lastEvalErr.Error(); strings.Contains(s, textMarkerAttr) {
+			return fmt.Errorf("%s", strings.ReplaceAll(s, textMarkerAttr, "[text-marker]"))
+		}
 		return lastEvalErr
 	case ctxErr != nil:
 		return fmt.Errorf("text selector: %w while waiting for %q", ctxErr, needle)

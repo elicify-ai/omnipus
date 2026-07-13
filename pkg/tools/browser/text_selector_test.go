@@ -410,8 +410,27 @@ func TestResolvePendingErr(t *testing.T) {
 			wantContains: "evaluation failed",
 		},
 		{
-			name:            "bare ctx error is named+wrapped, never leaked raw",
+			// A raw CDP error can echo the evaluation script source, which embeds
+			// the marker attr name; the eval-error branch must redact it. The
+			// blanket NotContains(textMarkerAttr) invariant below is what proves
+			// no leak — this case is the one that actually exercises the scrub
+			// (the plain evalErr fixture above never contains the attr).
+			name:         "eval error echoing the marker attr is redacted, never leaked",
+			lastEval:     fmt.Errorf("text selector: evaluation failed: SyntaxError in [%s=\"tok\"]", textMarkerAttr),
+			wantContains: "[text-marker]",
+		},
+		{
+			name:            "bare deadline ctx error is named+wrapped, never leaked raw",
 			ctxErr:          context.DeadlineExceeded,
+			wantContains:    needle,
+			wantNamesNeedle: true,
+			wantIsCtxErr:    true,
+		},
+		{
+			// tabCtx.Done()'s real-world source is either a deadline OR a cancel
+			// (tab closed); both must resolve the same actionable, named way.
+			name:            "canceled ctx (tab closed) is named+wrapped like a deadline",
+			ctxErr:          context.Canceled,
 			wantContains:    needle,
 			wantNamesNeedle: true,
 			wantIsCtxErr:    true,
