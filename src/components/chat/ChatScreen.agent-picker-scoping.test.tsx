@@ -82,6 +82,14 @@ vi.mock('./tools/GenericToolCall', () => ({ GenericToolCall: () => null }))
 // so AssistantMessageAvatar/VirtualAssistantMessageRow fall through to the Robot glyph;
 // what we're asserting is the `title` attribute (agent name), not the icon itself.
 vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null }))
+// Composer Redesign (variant A1): stub the composer's picker sub-components —
+// this file targets AssistantMessage/AssistantMessageAvatar/VirtualAssistantMessageRow's
+// per-message agent resolution (Bug 2), not the agent PICKER's own UI (that's
+// covered by composer/AgentPicker.test.tsx). Stubbing avoids mocking the
+// workspaces/providers query plumbing those sub-components own.
+vi.mock('./composer/AgentPicker', () => ({ AgentPicker: () => null }))
+vi.mock('./composer/ModelPicker', () => ({ ModelPicker: () => null }))
+vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
 vi.mock('./markdown-text', () => ({
   MarkdownText: () => {
     const { text } = useMessagePartText()

@@ -134,9 +134,10 @@ function WorkspaceTabContainerView({
   return (
     <WorkspaceContext.Provider value={workspace}>
       <div className="absolute inset-0 flex flex-col overflow-hidden">
-        {/* Top bar — semantic <header> (banner landmark) so the token/cost
-            counter is reachable via both getByRole('banner') and a `header` CSS
-            selector. @container enables container-query variants on children.
+        {/* Top bar — semantic <header> (banner landmark) for accessible
+            landmark navigation, reachable via both getByRole('banner') and a
+            `header` CSS selector. @container enables container-query variants
+            on children (used by ChatControls' Sessions/Open-browser labels).
             No secondary breadcrumb row: the tab strip already names the
             workspace + active view, so a second chrome line was redundant and
             broke the flat 44px shell alignment. */}

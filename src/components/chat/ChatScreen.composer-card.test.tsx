@@ -1,9 +1,32 @@
-// ChatScreen replay-mode tests — TDD row 22
-// Traces to: sprint-i-historical-replay-fidelity-spec.md FR-I-014
-// BDD: "send button disabled while isReplaying, enabled once done"
+// ChatScreen composer-card integration test.
+//
+// Coverage gap found by the Composer Redesign variant A1 review: every one
+// of the (at the time) 12 ChatScreen test files stubs the three composer
+// sub-components (AgentPicker / ModelPicker / TokenCounter) to `null`
+// (see ChatScreen.replay.test.tsx and its siblings), so deleting
+// `<AgentPicker />` from the context row in src/components/chat/ChatScreen.tsx
+// would keep every one of those files green while the picker silently
+// vanished from the product. This file closes that gap by stubbing the
+// three sub-components to non-null SENTINEL elements and asserting the
+// composer card actually mounts all of its context-row slots.
+//
+// Scaffolding (mocks for @assistant-ui/react, @tanstack/react-query,
+// @tanstack/react-router, @/lib/api, the SVG asset, and the deep child
+// components) is copied from ChatScreen.replay.test.tsx's minimal
+// OmnipusComposer mount setup rather than invented fresh, per the sibling
+// file's precedent.
+//
+// NOTE: this file deliberately does NOT assert against the composer card's
+// FULL className string (e.g. exact border/background/rounding utilities) —
+// only the presence of its `@container` query-context class (load-bearing:
+// TokenCounter's `@2xl:flex` gate below reads off THIS container, not a
+// distant ancestor) plus the sentinel testids for its child slots. The
+// contract under test is slot presence/placement and the @container
+// context, not the card's cosmetic styling, which is free to change without
+// this file needing an update.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import * as React from 'react'
 import { act } from 'react'
 import { useChatStore } from '@/store/chat'
@@ -12,13 +35,15 @@ import { useSessionStore } from '@/store/session'
 
 // Static import: vi.mock() calls are hoisted before this import, so all mocks
 // are in place when the module resolves. This avoids per-test dynamic import
-// contention that caused intermittent timeouts under full-suite parallel load.
+// contention that caused intermittent timeouts under full-suite parallel load
+// (see ChatScreen.replay.test.tsx for the same rationale).
 import { OmnipusComposer } from './ChatScreen'
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
 // Mock AssistantUI primitives — ChatScreen uses ThreadPrimitive, ComposerPrimitive, etc.
-// We only care about ComposerPrimitive.Send's disabled state, so render it as a real button.
+// We only need the composer card's shell rendered as real DOM so its child
+// slots (attach control + the three composer sub-components) are queryable.
 vi.mock('@assistant-ui/react', () => {
   return {
     useThreadViewportStore: () => ({ getState: () => ({ isAtBottom: true }) }),
@@ -126,13 +151,31 @@ vi.mock('./SubagentBlock', () => ({ SubagentBlock: () => null }))
 vi.mock('./markdown-text', () => ({ MarkdownText: () => null }))
 vi.mock('./tools/GenericToolCall', () => ({ GenericToolCall: () => null }))
 vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null }))
-// Composer Redesign (variant A1): TDD row 22 targets the send/input disabled
-// state during replay, not the composer's picker/model/token sub-components —
-// stub them to null so their workspaces/providers query plumbing doesn't need
-// mocking here.
-vi.mock('./composer/AgentPicker', () => ({ AgentPicker: () => null }))
-vi.mock('./composer/ModelPicker', () => ({ ModelPicker: () => null }))
-vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
+
+// The point of THIS file: stub the three composer sub-components to
+// non-null SENTINELS (not null, unlike every other ChatScreen test file) so
+// we can assert the composer card actually mounts all of its slots. The
+// AgentPicker/ModelPicker stubs also surface the `disabled` prop via
+// data-disabled so the agentRemoved read-only-passthrough test below can
+// assert on it without needing the real components.
+vi.mock('./composer/AgentPicker', () => ({
+  AgentPicker: ({ disabled }: { disabled?: boolean }) => (
+    <div data-testid="agent-picker-stub" data-disabled={disabled ? 'true' : 'false'} />
+  ),
+}))
+vi.mock('./composer/ModelPicker', () => ({
+  ModelPicker: ({ disabled }: { disabled?: boolean }) => (
+    <div data-testid="model-picker-stub" data-disabled={disabled ? 'true' : 'false'} />
+  ),
+}))
+vi.mock('./composer/TokenCounter', () => ({
+  TokenCounter: ({ className }: { className?: string }) => (
+    <div data-testid="token-counter-stub" data-cls={className} />
+  ),
+}))
+// ActivityBar sentinel — live background activity folds below the input,
+// inside the composer card (see ChatScreen.tsx's composer card JSX).
+vi.mock('./ActivityBar', () => ({ ActivityBar: () => <div data-testid="activity-bar-stub" /> }))
 
 // ── Store reset ───────────────────────────────────────────────────────────────
 
@@ -148,11 +191,11 @@ function resetStores() {
     })
     useConnectionStore.setState({
       connection: null,
-      isConnected: true, // connected so we can isolate the isReplaying effect
+      isConnected: true,
       connectionError: null,
     })
     useSessionStore.setState({
-      activeSessionId: 'sess_replay_test',
+      activeSessionId: 'sess_composer_card_test',
       activeAgentId: 'general-assistant',
       activeAgentType: null,
     })
@@ -161,58 +204,47 @@ function resetStores() {
 
 beforeEach(resetStores)
 
-// ── TDD row 22: ChatScreen_Replay_SendDisabled ────────────────────────────────
+// ── Composer card slot coverage ───────────────────────────────────────────────
 
-describe('ChatScreen_Replay_SendDisabled (TDD row 22)', () => {
-  it('send button is disabled while isReplaying is true', async () => {
-    // Set isReplaying = true before render
-    act(() => {
-      useChatStore.setState({ isReplaying: true })
-    })
-
+describe('OmnipusComposer — composer card mounts all context-row slots', () => {
+  it('mounts the attach control, AgentPicker, ModelPicker, TokenCounter, and ActivityBar inside the composer card', async () => {
     render(<OmnipusComposer />)
 
-    const sendButton = screen.getByTestId('chat-send')
-    expect(sendButton).toBeDisabled()
+    const card = screen.getByTestId('composer-card')
+    // @container is load-bearing: TokenCounter's `@2xl:flex` gate below reads
+    // off THIS container's width, not a distant ancestor's.
+    expect(card.className).toContain('@container')
+
+    const withinCard = within(card)
+
+    // Attach control (ComposerPrimitive.AddAttachment) is present INSIDE the card.
+    expect(withinCard.getByTestId('add-attachment')).toBeInTheDocument()
+
+    // The three composer sub-components are actually mounted INSIDE the card
+    // — not deleted from the context row, and not relocated outside it. This
+    // is the assertion that would have caught the coverage gap: every other
+    // ChatScreen test file stubs these to null, so a deleted (or relocated)
+    // <AgentPicker /> would still pass there.
+    expect(withinCard.getByTestId('agent-picker-stub')).toBeInTheDocument()
+    expect(withinCard.getByTestId('model-picker-stub')).toBeInTheDocument()
+
+    const tokenCounter = withinCard.getByTestId('token-counter-stub')
+    expect(tokenCounter).toBeInTheDocument()
+    expect(tokenCounter.getAttribute('data-cls')).toContain('hidden')
+    expect(tokenCounter.getAttribute('data-cls')).toContain('@2xl:flex')
+
+    // Live background activity (delegate spans, background bash runs) folds
+    // below the input, inside the card.
+    expect(withinCard.getByTestId('activity-bar-stub')).toBeInTheDocument()
   })
 
-  it('send button is enabled when isReplaying is false and connected', async () => {
-    // isReplaying starts false, connection is up
-    act(() => {
-      useChatStore.setState({ isReplaying: false })
-      useConnectionStore.setState({ isConnected: true })
-    })
+  it('disables the attach control and passes disabled=true through to both pickers when agentRemoved', async () => {
+    render(<OmnipusComposer agentRemoved />)
 
-    render(<OmnipusComposer />)
+    const withinCard = within(screen.getByTestId('composer-card'))
 
-    const sendButton = screen.getByTestId('chat-send')
-    expect(sendButton).not.toBeDisabled()
-  })
-
-  it('composer input is disabled while isReplaying is true', async () => {
-    act(() => {
-      useChatStore.setState({ isReplaying: true })
-    })
-
-    render(<OmnipusComposer />)
-
-    const input = screen.getByTestId('composer-input')
-    expect(input).toBeDisabled()
-  })
-
-  it('toggling isReplaying from true to false enables the send button', async () => {
-    act(() => {
-      useChatStore.setState({ isReplaying: true })
-    })
-
-    render(<OmnipusComposer />)
-
-    expect(screen.getByTestId('chat-send')).toBeDisabled()
-
-    act(() => {
-      useChatStore.setState({ isReplaying: false })
-    })
-
-    expect(screen.getByTestId('chat-send')).not.toBeDisabled()
+    expect(withinCard.getByTestId('add-attachment')).toBeDisabled()
+    expect(withinCard.getByTestId('agent-picker-stub').getAttribute('data-disabled')).toBe('true')
+    expect(withinCard.getByTestId('model-picker-stub').getAttribute('data-disabled')).toBe('true')
   })
 })

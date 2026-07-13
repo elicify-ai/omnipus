@@ -1,28 +1,20 @@
-// ChatControls — agentSelectorOpen controlled DropdownMenu.
+// AgentPicker — agentSelectorOpen controlled DropdownMenu.
 // Tests that the agent picker DropdownMenu is driven by the ui store's
 // agentSelectorOpen flag, enabling the /agents slash command to open it.
+//
+// Migrated from src/components/chat/ChatControls.agent-selector-open.test.tsx
+// (Composer Redesign variant A1): the agent picker moved out of ChatControls
+// into its own composer sub-component, so this file now mounts <AgentPicker/>
+// directly instead of <ChatControls/>. Same behavior, same assertions.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { act } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { useChatStore } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import * as api from '@/lib/api'
-
-const mockNavigate = vi.fn()
-let mockPathname = '/'
-
-vi.mock('@tanstack/react-router', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@tanstack/react-router')>()
-  return {
-    ...actual,
-    useNavigate: () => mockNavigate,
-    useLocation: () => ({ pathname: mockPathname }),
-  }
-})
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
@@ -46,15 +38,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
       },
     ]),
     fetchWorkspaces: vi.fn().mockResolvedValue([]),
-    fetchProviders: vi.fn().mockResolvedValue([
-      {
-        id: 'openrouter',
-        name: 'openrouter',
-        display_name: 'OpenRouter',
-        status: 'connected',
-        models: ['z-ai/glm-5.2'],
-      },
-    ]),
   }
 })
 
@@ -74,38 +57,36 @@ if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
   Element.prototype.scrollIntoView = function () {}
 }
 
-import { ChatControls } from './ChatControls'
+import { AgentPicker } from './AgentPicker'
 
 function makeClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false } } })
 }
 
-function renderControls() {
+function renderPicker() {
   return render(
     <QueryClientProvider client={makeClient()}>
-      <ChatControls />
+      <AgentPicker />
     </QueryClientProvider>,
   )
 }
 
 beforeEach(() => {
   vi.clearAllMocks()
-  mockPathname = '/'
   act(() => {
     useSessionStore.setState({ activeAgentId: 'mia', activeSessionId: 'sess_1' })
-    useChatStore.setState({ sessionTokens: 0, isStreaming: false, nextModel: null, messages: [] })
     useUiStore.setState({ agentSelectorOpen: false, sessionPanelOpen: false })
     useWorkspacesStore.setState({ activeWorkspaceId: null })
   })
 })
 
-describe('ChatControls — agentSelectorOpen controlled DropdownMenu', () => {
+describe('AgentPicker — agentSelectorOpen controlled DropdownMenu', () => {
   it('agentSelectorOpen defaults to false in ui store', () => {
     expect(useUiStore.getState().agentSelectorOpen).toBe(false)
   })
 
   it('setting agentSelectorOpen=true via store opens the agent dropdown', async () => {
-    renderControls()
+    renderPicker()
 
     // Wait for agents to load
     await vi.waitFor(() => screen.getAllByText('Mia').length > 0)
@@ -124,7 +105,7 @@ describe('ChatControls — agentSelectorOpen controlled DropdownMenu', () => {
   })
 
   it('setting agentSelectorOpen=false closes the dropdown', async () => {
-    renderControls()
+    renderPicker()
     await vi.waitFor(() => screen.getAllByText('Mia').length > 0)
 
     act(() => { useUiStore.getState().setAgentSelectorOpen(true) })
@@ -135,7 +116,7 @@ describe('ChatControls — agentSelectorOpen controlled DropdownMenu', () => {
   })
 
   it('DropdownMenu onOpenChange updates ui store when toggled by user click', async () => {
-    renderControls()
+    renderPicker()
 
     // Wait for agents to load
     await vi.waitFor(() => screen.getAllByText('Mia').length > 0)
@@ -158,7 +139,7 @@ describe('ChatControls — agentSelectorOpen controlled DropdownMenu', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ] as any[])
 
-    renderControls()
+    renderPicker()
     await vi.waitFor(() => screen.getAllByText('Mia').length > 0)
 
     // Opening the selector does not affect the list contents
@@ -180,7 +161,7 @@ describe('ChatControls — agentSelectorOpen controlled DropdownMenu', () => {
 //
 // The test MUST fail if handleAgentSelect is changed to pass null as the
 // session id (the new-session regression it guards against).
-describe('ChatControls — handleAgentSelect keeps current session (SC-005/US5.2)', () => {
+describe('AgentPicker — handleAgentSelect keeps current session (SC-005/US5.2)', () => {
   it('setActiveSession is called with the current activeSessionId when switching agents', async () => {
     const setActiveSessionSpy = vi.fn()
     const origSetActiveSession = useSessionStore.getState().setActiveSession
@@ -194,7 +175,7 @@ describe('ChatControls — handleAgentSelect keeps current session (SC-005/US5.2
       })
     })
 
-    renderControls()
+    renderPicker()
 
     // Wait for both Mia items (trigger label + Jim in content after open)
     await vi.waitFor(() => screen.getAllByText('Mia').length > 0)

@@ -221,7 +221,8 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     }
 
     if (name === 'model') {
-      // US-4/AC-2: open the model selector in the chat header (ChatControls).
+      // US-4/AC-2: open the model selector in the composer card
+      // (composer/ModelPicker.tsx).
       // Setting modelSelectorOpen=true drives the controlled Popover in
       // ModelSelector without the user having to click it directly. Per A4:
       // web-only client action; opens the chat model selector, not the
@@ -231,7 +232,7 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     }
 
     if (name === 'agents') {
-      // Open the agent selector in the chat header (ChatControls) via the ui store flag.
+      // Open the agent selector in the composer card (composer/AgentPicker.tsx) via the ui store flag.
       useUiStore.getState().setAgentSelectorOpen(true)
       return true
     }

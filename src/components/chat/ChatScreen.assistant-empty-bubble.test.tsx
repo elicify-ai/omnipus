@@ -75,6 +75,13 @@ vi.mock('./SubagentBlock', () => ({ SubagentBlock: () => null }))
 vi.mock('./ActivityBar', () => ({ ActivityBar: () => null }))
 vi.mock('./tools/GenericToolCall', () => ({ GenericToolCall: () => null }))
 vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null }))
+// Composer Redesign (variant A1): this file targets the live AssistantMessage()
+// bubble render, not the composer's picker/model/token sub-components — stub
+// them to null so their workspaces/providers query plumbing doesn't need
+// mocking here (this file uses a real, unmocked QueryClient).
+vi.mock('./composer/AgentPicker', () => ({ AgentPicker: () => null }))
+vi.mock('./composer/ModelPicker', () => ({ ModelPicker: () => null }))
+vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
 // Real MarkdownText pulls in Shiki/Mermaid/KaTeX — far more than this test needs.
 // Replace it with a minimal renderer built on the REAL useMessagePartText hook
 // (unmocked '@assistant-ui/react') so the DOM still reflects the actual streamed

@@ -1,11 +1,11 @@
-// ActivityBar — compact, non-scrolling indicator above the composer showing
-// live background agent/shell activity (native delegate spans, external-CLI
-// 3rd-party delegate spans, and background `bash` runs). Click opens the
-// ActivityPanel slide-out for full detail.
+// ActivityBar — compact, non-scrolling indicator showing live background
+// agent/shell activity (native delegate spans, external-CLI 3rd-party
+// delegate spans, and background `bash` runs). Click opens the ActivityPanel
+// slide-out for full detail.
 //
-// Mounted once by ChatScreen.tsx, immediately after RateLimitIndicator and
-// before the composer wrapper. Unlike the earlier revision, this renders
-// NOTHING when idle (runningCount === 0) — mirroring RateLimitIndicator's own
+// Mounted once by OmnipusComposer (ChatScreen.tsx), inside the composer card,
+// below the input row and attachment chips. Unlike the earlier revision, this
+// renders NOTHING when idle (runningCount === 0) — mirroring RateLimitIndicator's own
 // precedent of conditional mounting rather than showing an empty/idle state
 // (found via /visual-qa live inspection: an always-visible, full-width
 // "No active background work" bar reads as noise, not signal, exactly the

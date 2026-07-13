@@ -15,16 +15,18 @@ export const sendButton = (page: Page) =>
   page.locator('button[aria-label="Send message"]').first();
 
 /**
- * Agent picker button — rendered in the workspace top-bar ChatControls with
- * data-testid="agent-picker-trigger". The button shows only the agent name
- * (e.g. "Jim", "Mia") — NOT the old "Name — Tagline" format.
+ * Agent picker button — rendered inside the composer card's context row
+ * (src/components/chat/composer/AgentPicker.tsx), not the workspace top-bar
+ * banner, with data-testid="agent-picker-trigger". The button shows only the
+ * agent name (e.g. "Jim", "Mia") — NOT the old "Name — Tagline" format.
  *
- * Ground truth: ChatControls.tsx DropdownMenuTrigger > Button carries
- * data-testid="agent-picker-trigger". Scoped to the banner landmark for
- * stability; the testid gives an exact anchor that survives UI restructuring.
+ * Ground truth: composer/AgentPicker.tsx DropdownMenuTrigger > Button carries
+ * data-testid="agent-picker-trigger". Scoped directly by testid (no banner
+ * ancestor) — the composer card renders below the banner, so a
+ * getByRole('banner') scope would never match it.
  */
 export const agentPicker = (page: Page) =>
-  page.getByRole('banner').locator('[data-testid="agent-picker-trigger"]');
+  page.locator('[data-testid="agent-picker-trigger"]');
 
 /**
  * Completed assistant messages — only counts messages whose data-status is not
@@ -74,7 +76,7 @@ export const newChatButton = (page: Page) =>
   page.getByRole('banner').getByRole('button', { name: 'New Chat' });
 
 /**
- * Switch the active chat agent via the header agent picker.
+ * Switch the active chat agent via the composer's agent picker.
  *
  * Delegate-dependent E2E specs must run against a general-purpose task agent
  * (default: Jim) rather than the default agent Mia: Mia's "guide" persona makes
@@ -90,6 +92,6 @@ export const selectAgent = async (page: Page, name: string | RegExp = /Jim/i) =>
   await picker.click();
   await page.getByRole('menuitem', { name }).click();
   // Assert the picker label updated so we know the switch took effect.
-  // ChatControls shows only the agent name (no em-dash tagline).
+  // AgentPicker shows only the agent name (no em-dash tagline).
   await expect(picker).toContainText(name, { timeout: 5_000 });
 };
