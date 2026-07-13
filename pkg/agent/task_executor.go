@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -308,6 +309,28 @@ func (te *TaskExecutor) finishTaskRun(t *task.Task, taskSessionID, resp string, 
 	}
 
 	// Agent did not call task_update — auto-complete to done.
+	//
+	// FIX 8 (7-reviewer gate, false-success visibility): an external-CLI
+	// (subagent_3p) worker ALWAYS lands here — it has no task_update tool to
+	// call at all (buildPrompt's dispatch-aware instruction, FIX 3, doesn't
+	// change that) — so a prose-level failure ("I couldn't do it") with a
+	// clean process exit auto-completes to Done exactly the same as a real
+	// success, and Done unblocks any blocked_by dependent task. WARN-log the
+	// external-CLI case specifically (distinguishable in logs from the rare
+	// native "agent forgot to call task_update" case, which this same branch
+	// also reaches) so an operator scanning logs has a signal to check the
+	// result text before trusting the auto-advance. This does NOT change the
+	// auto-advance semantics itself — requiring an explicit success signal
+	// for a 3p-assigned dependent chain is a deferred product decision (see
+	// ADR-042 §3).
+	if te.dispatchesExternalCLI(t.AgentID) {
+		logger.WarnCF("task_executor",
+			"auto-completing task to done for an external-CLI (subagent_3p) worker — "+
+				"it has no task_update tool, so this is UNVERIFIED prose-level success, not a "+
+				"structured completion signal; review the result before trusting downstream "+
+				"blocked_by auto-advance",
+			map[string]any{"task_id": t.ID, "agent_id": t.AgentID})
+	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	result := resp
 	if result == "" {
@@ -372,6 +395,14 @@ func (te *TaskExecutor) notifySourceChannel(t *task.Task) {
 }
 
 // buildPrompt constructs the prompt sent to the agent for a task.
+//
+// FIX 3 (7-reviewer gate, prompt/capability mismatch): the task_update
+// instruction is dispatch-aware. A subagent_3p (external-CLI) worker's tool
+// registry is its own CLI's, never Omnipus's — it has no task_update tool
+// wired at all (see processTaskDirectExternalCLI's doc comment, loop.go) — so
+// telling it to "call task_update" describes a capability it structurally
+// cannot use. The native prompt (the common case) is byte-identical to
+// before this fix; only the external-CLI branch differs.
 func (te *TaskExecutor) buildPrompt(t *task.Task) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("# Task: %s\n\n", t.Title))
@@ -381,11 +412,50 @@ func (te *TaskExecutor) buildPrompt(t *task.Task) string {
 	}
 	sb.WriteString(fmt.Sprintf("Priority: %d (1=highest, 5=lowest)\n", t.EffectivePriority()))
 	sb.WriteString(fmt.Sprintf("Task ID: %s\n\n", t.ID))
+	if te.dispatchesExternalCLI(t.AgentID) {
+		sb.WriteString(
+			"There is no task_update tool available to you for this task. Your final " +
+				"response's text becomes the task result automatically once you finish.\n",
+		)
+		return sb.String()
+	}
 	sb.WriteString("When you have finished this task, call `task_update` with:\n")
 	sb.WriteString(fmt.Sprintf("  task_id: %q\n", t.ID))
 	sb.WriteString("  status: \"done\" (or \"failed\" if unsuccessful)\n")
 	sb.WriteString("  result: a brief summary of what was accomplished\n")
 	return sb.String()
+}
+
+// dispatchesExternalCLI reports whether agentID's configured executor
+// resolves to external-CLI dispatch (subagent_3p) rather than the native
+// Omnipus engine — the same runner.ResolveDispatch gate processTaskDirect
+// (pkg/agent/loop.go) uses to decide HOW a task actually runs. Fails closed
+// to "native" (false) on any resolution failure (unknown agent, nil
+// registry, unresolvable executor kind) so a config problem never silently
+// strips the task_update instruction from a run that will actually need it.
+func (te *TaskExecutor) dispatchesExternalCLI(agentID string) bool {
+	registry := te.agentLoop.GetRegistry()
+	if registry == nil {
+		logger.DebugCF("task_executor", "dispatchesExternalCLI: nil agent registry — failing closed to native dispatch",
+			map[string]any{"agent_id": agentID})
+		return false
+	}
+	ag, ok := registry.GetAgent(agentID)
+	if !ok || ag == nil {
+		logger.DebugCF("task_executor", "dispatchesExternalCLI: agent not found — failing closed to native dispatch",
+			map[string]any{"agent_id": agentID})
+		return false
+	}
+	kind, err := runner.ResolveDispatch(executorConfigOf(ag))
+	if err != nil {
+		logger.DebugCF(
+			"task_executor",
+			"dispatchesExternalCLI: ResolveDispatch failed — failing closed to native dispatch",
+			map[string]any{"agent_id": agentID, "error": err.Error()},
+		)
+		return false
+	}
+	return kind == runner.DispatchKindExternalCLI
 }
 
 // onTaskComplete handles post-completion logic: parent notification + the

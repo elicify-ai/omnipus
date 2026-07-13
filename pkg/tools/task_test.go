@@ -1447,21 +1447,27 @@ func TestTaskUpdate_AgentIDReassignment_SameAgentSkipsGate(t *testing.T) {
 	}
 }
 
-// --- subagent_3p (external-CLI) worker task-assignment guard (SEC) ---
+// --- subagent_3p (external-CLI) worker task assignment (Fix C) ---
 //
-// Closes the gap where a legitimate delegation-deny ALLOW (a real, allowed
-// trust-set/mode/depth edge to a subagent_3p target) was sufficient on its own
-// to let create_task/update_task persist agent_id=<subagent_3p>, even though
-// TaskExecutor.processTaskDirect routes every task run through the native
-// engine unconditionally — silently mis-executing on the wrong engine with
-// full system-level tool access instead of the configured external CLI.
+// Historically create_task/update_task rejected any agent_id naming a
+// subagent_3p (external-CLI) worker outright, because
+// TaskExecutor.processTaskDirect routed every task run through the native
+// engine unconditionally — assigning a task to an external-CLI worker would
+// have silently mis-executed it on the wrong engine with full system-level
+// tool access instead of the configured external CLI. AgentLoop.
+// processTaskDirect (pkg/agent/loop.go) now branches on runner.ResolveDispatch
+// the same way spawnSubTurn does for agent-to-agent delegation, dispatching a
+// subagent_3p's task run through runExternalCLISubTurn — so the tool-layer
+// guard (and its SetExternalCLIWorkerChecker plumbing) was removed. The tests
+// below prove a subagent_3p target is now accepted like any other delegate,
+// governed solely by the ordinary delegation-policy gate.
 
-// TestTaskCreate_RejectsSubagent3pWorker_EvenWhenDelegationAllows proves the
-// externalCLIWorkerCheck guard blocks task creation for a subagent_3p target
-// even when the delegation-policy gate ALLOWS it (a real, permitted edge) —
-// the two checks are independent, and the exploit this closes is specifically
-// that delegation-allow was previously sufficient on its own.
-func TestTaskCreate_RejectsSubagent3pWorker_EvenWhenDelegationAllows(t *testing.T) {
+// TestTaskCreate_AllowsSubagent3pWorker_WhenDelegationAllows proves
+// create_task persists agent_id=<subagent_3p target> when the delegation
+// policy gate allows it — the engine-limitation rejection that used to fire
+// independently of that gate is gone now that processTaskDirect can dispatch
+// the run correctly.
+func TestTaskCreate_AllowsSubagent3pWorker_WhenDelegationAllows(t *testing.T) {
 	t.Parallel()
 	store := task.New(t.TempDir())
 	tool := NewTaskCreateTool(store)
@@ -1470,73 +1476,34 @@ func TestTaskCreate_RejectsSubagent3pWorker_EvenWhenDelegationAllows(t *testing.
 	tool.SetDelegationDenyChecker(func(context.Context, string) *DelegationDenial {
 		return nil
 	})
-	// The target is a subagent_3p (external-CLI) worker.
-	var checkedID string
-	tool.SetExternalCLIWorkerChecker(func(agentID string) bool {
-		checkedID = agentID
-		return agentID == "external-worker"
-	})
-
-	ctx := WithAgentID(context.Background(), "jim")
-	res := tool.Execute(ctx, map[string]any{
-		"title":    "leaks to external CLI",
-		"prompt":   "do it",
-		"agent_id": "external-worker",
-	})
-
-	if res == nil || !res.IsError {
-		t.Fatalf("expected the subagent_3p target to be rejected, got %+v", res)
-	}
-	if !strings.Contains(res.ForLLM, "subagent_3p") {
-		t.Errorf("expected the error to name subagent_3p, got: %s", res.ForLLM)
-	}
-	if checkedID != "external-worker" {
-		t.Errorf("expected the checker to receive 'external-worker', got %q", checkedID)
-	}
-
-	// The task must NOT have been created at all.
-	tasks, err := store.List(task.Filter{})
-	if err != nil {
-		t.Fatalf("list: %v", err)
-	}
-	if len(tasks) != 0 {
-		t.Errorf("expected zero tasks persisted after a rejected create, got %d", len(tasks))
-	}
-}
-
-// TestTaskCreate_ExternalCLICheck_NilFailsOpen proves the established
-// fail-open-when-unwired convention for externalCLIWorkerCheck specifically:
-// when SetExternalCLIWorkerChecker is never called (nil), task creation is
-// unaffected by that guard. This is a control proving the guard's absence is
-// benign in standalone/test contexts, not that it is silently bypassable in
-// production — the production agent loop wires it (see pkg/agent/loop.go).
-//
-// NOTE: this fail-open convention is externalCLIWorkerCheck-specific.
-// delegationDeny is NOT fail-open when unwired (7-reviewer-gate follow-up —
-// see TestTaskCreateTool_NilDenyChecker_FailsClosed in
-// delegation_deny_wiring_test.go) — a permissive delegationDeny checker is
-// wired below so this test isolates the externalCLIWorkerCheck behavior only.
-func TestTaskCreate_ExternalCLICheck_NilFailsOpen(t *testing.T) {
-	t.Parallel()
-	store := task.New(t.TempDir())
-	tool := NewTaskCreateTool(store)
-	tool.SetDelegationDenyChecker(func(context.Context, string) *DelegationDenial { return nil })
 
 	ctx := WithAgentID(context.Background(), "jim")
 	ctx = WithWorkspaceID(ctx, "ws-1")
 	res := tool.Execute(ctx, map[string]any{
-		"title":    "unaffected",
+		"title":    "dispatched to external CLI",
 		"prompt":   "do it",
-		"agent_id": "some-agent",
+		"agent_id": "external-worker",
 	})
-	if res.IsError {
-		t.Fatalf("expected success with an unwired checker, got: %s", res.ForLLM)
+
+	if res == nil || res.IsError {
+		t.Fatalf("expected the subagent_3p target to be accepted, got %+v", res)
+	}
+
+	tasks, err := store.List(task.Filter{})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("expected exactly one task persisted, got %d", len(tasks))
+	}
+	if tasks[0].AgentID != "external-worker" {
+		t.Errorf("expected agent_id %q, got %q", "external-worker", tasks[0].AgentID)
 	}
 }
 
-// TestTaskUpdate_RejectsSubagent3pWorkerReassignment_EvenWhenDelegationAllows
+// TestTaskUpdate_AllowsSubagent3pWorkerReassignment_WhenDelegationAllows
 // mirrors the create-path test above for update_task's reassignment path.
-func TestTaskUpdate_RejectsSubagent3pWorkerReassignment_EvenWhenDelegationAllows(t *testing.T) {
+func TestTaskUpdate_AllowsSubagent3pWorkerReassignment_WhenDelegationAllows(t *testing.T) {
 	t.Parallel()
 	store := task.New(t.TempDir())
 	tk := seedTask(t, store, "agent-a", "agent-a", "ws-1")
@@ -1545,9 +1512,6 @@ func TestTaskUpdate_RejectsSubagent3pWorkerReassignment_EvenWhenDelegationAllows
 	tool.SetDelegationDenyChecker(func(context.Context, string) *DelegationDenial {
 		return nil // delegation policy ALLOWS
 	})
-	tool.SetExternalCLIWorkerChecker(func(agentID string) bool {
-		return agentID == "external-worker"
-	})
 
 	ctx := WithAgentID(context.Background(), "agent-a")
 	res := tool.Execute(ctx, map[string]any{
@@ -1555,19 +1519,15 @@ func TestTaskUpdate_RejectsSubagent3pWorkerReassignment_EvenWhenDelegationAllows
 		"agent_id": "external-worker",
 	})
 
-	if res == nil || !res.IsError {
-		t.Fatalf("expected the subagent_3p reassignment to be rejected, got %+v", res)
-	}
-	if !strings.Contains(res.ForLLM, "subagent_3p") {
-		t.Errorf("expected the error to name subagent_3p, got: %s", res.ForLLM)
+	if res == nil || res.IsError {
+		t.Fatalf("expected the subagent_3p reassignment to be accepted, got %+v", res)
 	}
 
-	// The task must NOT have been reassigned.
 	got, err := store.Get(tk.ID)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if got.AgentID != "agent-a" {
-		t.Errorf("agent_id must be unchanged after a rejected reassignment, got %q", got.AgentID)
+	if got.AgentID != "external-worker" {
+		t.Errorf("expected agent_id %q after reassignment, got %q", "external-worker", got.AgentID)
 	}
 }

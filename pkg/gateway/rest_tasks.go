@@ -309,8 +309,13 @@ func (a *restAPI) computeRollup(parentID string) *[]struct {
 }
 
 // validateTaskAgentID checks that a human-assigned agent_id exists in the
-// registry, is a member of the task's workspace TEAM, and — if it is a
-// subagent_3p (external-CLI) worker — is rejected outright.
+// registry and is a member of the task's workspace TEAM. A subagent_3p
+// (external-CLI) worker is no longer rejected here: AgentLoop.processTaskDirect
+// (pkg/agent/loop.go) now branches on runner.ResolveDispatch the same way
+// spawnSubTurn does for agent-to-agent delegation, dispatching an
+// external-CLI worker's task run through runExternalCLISubTurn instead of
+// silently falling into the native engine — see processTaskDirect's doc
+// comment for the dispatch design.
 //
 // This is the human/REST-surface assignment path (SPA task create/edit): a
 // human assigning a task via the SPA is the workspace owner directing work,
@@ -325,35 +330,16 @@ func (a *restAPI) computeRollup(parentID string) *[]struct {
 // graph PUT validate edge endpoints against; see
 // rest_workspace_delegation.go). An agent absent from that set — worker or
 // not — cannot be assigned a task in this workspace. A worker that IS a team
-// member CAN be assigned directly now (this is the fix: workers were
-// previously banned outright regardless of team membership).
+// member CAN be assigned directly (native or subagent_3p alike).
 //
-// subagent_3p (external-CLI) workers are rejected unconditionally, regardless
-// of team membership, WHENEVER this function actually reaches the check: both
-// of its call sites (handleTaskCreate, handleTaskPatch) already dereference
-// a.agentLoop.GetConfig() before ever calling validateTaskAgentID, so
-// a.agentLoop is guaranteed non-nil by the time this function runs from either
-// of them, and the registry populated by agent.NewAgentRegistry always
-// contains at least the "main" sentinel — the two guards immediately below
-// exist purely as defense-in-depth for a hypothetical future caller that does
-// NOT share that precondition (e.g. narrow test scaffolding constructing a
-// restAPI/agentLoop by hand). Per the codebase's established convention for
-// an uninitialized dependency (see rest_god_mode.go, rest_sandbox_config.go,
+// The two guards immediately below (nil agentLoop, empty registry) exist
+// purely as defense-in-depth for a hypothetical future caller that does NOT
+// share the call sites' precondition that a.agentLoop.GetConfig() already
+// succeeded (e.g. narrow test scaffolding constructing a restAPI/agentLoop by
+// hand). Per the codebase's established convention for an uninitialized
+// dependency (see rest_god_mode.go, rest_sandbox_config.go,
 // rest_security_wave5.go: "agent loop not initialized" -> 503), these guards
-// FAIL CLOSED (deny) rather than silently allowing the assignment through —
-// they used to `return nil` here, which would have silently skipped BOTH the
-// subagent_3p rejection and the team-membership check for any caller that hit
-// them. TaskExecutor.runTask / runTaskFromInProgress both route through
-// AgentLoop.processTaskDirect -> runAgentLoop -> runTurn unconditionally —
-// there is no ResolveDispatch/executor-kind branch on the task-run path
-// (unlike the agent-to-agent sub-turn path in subturn.go, which DOES branch
-// via runner.ResolveDispatch before deciding native vs.
-// runExternalCLISubTurn). Assigning a task to a subagent_3p today would
-// silently run it on the NATIVE Omnipus engine instead of the configured
-// external CLI, defeating the whole point of the agent. Until TaskExecutor
-// is taught to dispatch external-CLI task runs through the same
-// runExternalCLISubTurn machinery, this must fail closed with a clear,
-// distinct error rather than silently mis-executing.
+// FAIL CLOSED (deny) rather than silently allowing the assignment through.
 //
 // Returns nil only when agent_id is empty (no assignment to validate — not a
 // fail-open case, there is simply nothing to check). A non-nil agentID with an
@@ -377,12 +363,6 @@ func (a *restAPI) validateTaskAgentID(agentID, workspaceID string) error {
 	}
 	if _, ok := reg.GetAgent(agentID); !ok {
 		return fmt.Errorf("agent %q not found", agentID)
-	}
-	if cfg := a.agentLoop.GetConfig(); cfg.IsExternalCLIWorkerID(agentID) {
-		return fmt.Errorf(
-			"agent %q is a subagent_3p (external-CLI) worker — task execution for external-CLI workers is not yet supported; assign the task to a native agent instead",
-			agentID,
-		)
 	}
 	if workspaceID == "" {
 		return fmt.Errorf(

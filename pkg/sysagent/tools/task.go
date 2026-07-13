@@ -53,21 +53,6 @@ func validateBlockersSameWorkspace(store *task.Store, dependentWorkspaceID strin
 	return nil
 }
 
-// externalCLIWorkerDenialMessage is the rejection text for a task assignment
-// targeting a subagent_3p (external-CLI) worker. Mirrors
-// pkg/gateway/rest_tasks.go's validateTaskAgentID rejection message/reasoning
-// (and pkg/tools/task.go's identical helper of the same name — duplicated
-// rather than shared because the two packages are not otherwise coupled and
-// an unexported helper cannot cross the package boundary) so every
-// task-assignment surface presents the same explanation for the same engine
-// limitation.
-func externalCLIWorkerDenialMessage(agentID string) string {
-	return fmt.Sprintf(
-		"agent %q is a subagent_3p (external-CLI) worker — task execution for external-CLI workers is not yet supported; assign the task to a native agent instead",
-		agentID,
-	)
-}
-
 // delegationDenied evaluates the FR-6.2 delegation gate for an update/delete
 // mutation that targets a task assigned to (or being reassigned to) targetAgentID.
 // It returns the structured denial to DENY, or nil to ALLOW. When the hook is
@@ -164,24 +149,11 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *tool
 	if v, ok := args["agent_id"].(string); ok {
 		tk.AgentID = v
 	}
-	// subagent_3p (external-CLI) worker guard (SEC): TaskExecutor.processTaskDirect
-	// routes every task run through the native runAgentLoop path unconditionally
-	// (pkg/agent/loop.go) — there is no executor-kind branch — so a task
-	// assigned to a subagent_3p worker would silently run natively with full
-	// system-level tool access instead of the configured external CLI. This
-	// mirrors pkg/gateway/rest_tasks.go's validateTaskAgentID rejection for the
-	// human/SPA path; the DelegationDeny gate below only proves the CALLER may
-	// delegate to the target, not that the target is safe to task-assign given
-	// this engine limitation, so this check runs FIRST and independently of it.
-	// deps.GetCfg is nil only in narrow test scaffolding (the production gateway
-	// always wires it — see pkg/gateway/gateway.go); nil fails OPEN, matching the
-	// established convention for every other GetCfg-gated check in this package.
-	if tk.AgentID != "" && t.deps.GetCfg != nil {
-		if cfg := t.deps.GetCfg(); cfg.IsExternalCLIWorkerID(tk.AgentID) {
-			return tools.ErrorResult(errorJSON("INVALID_INPUT",
-				externalCLIWorkerDenialMessage(tk.AgentID), "agent_id"))
-		}
-	}
+	// subagent_3p (external-CLI) worker task assignment is no longer guarded
+	// here: AgentLoop.processTaskDirect (pkg/agent/loop.go) now branches on
+	// runner.ResolveDispatch and routes an external-CLI worker's task run
+	// through runExternalCLISubTurn instead of the native engine — see its
+	// doc comment for the dispatch design.
 	if t.deps.DelegationDeny != nil && tk.AgentID != "" && tk.AgentID != caller {
 		if denial := t.deps.DelegationDeny(ctx, caller, tk.AgentID); denial != nil {
 			return tools.DelegationDeniedResult(t.Name(), denial)
@@ -312,19 +284,8 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *tool
 		updated = append(updated, "status")
 	}
 	if v, ok := args["agent_id"].(string); ok && v != "" {
-		// subagent_3p (external-CLI) worker guard (SEC): same rationale as
-		// TaskCreateTool.Execute above. Checked here — right at the point the
-		// field is actually persisted — rather than only inside the
-		// delegation-gate branch, so it also catches a same-agent PATCH
-		// (v == existing.AgentID, a no-op reassignment that the delegation
-		// gate above skips) and stays correct regardless of how the
-		// delegation-branching logic evolves.
-		if t.deps.GetCfg != nil {
-			if cfg := t.deps.GetCfg(); cfg.IsExternalCLIWorkerID(v) {
-				return tools.ErrorResult(errorJSON("INVALID_INPUT",
-					externalCLIWorkerDenialMessage(v), "agent_id"))
-			}
-		}
+		// subagent_3p (external-CLI) worker reassignment is no longer guarded
+		// here — same rationale as create_task_in_workspace above.
 		patch.AgentID = &v
 		updated = append(updated, "agent_id")
 	}
