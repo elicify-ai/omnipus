@@ -784,22 +784,58 @@ export function isWorker(a: { type?: string | null }): boolean {
   return a.type === 'Subagent' || a.type === 'subagent_3p' || a.type === 'worker'
 }
 
+// AssigneeTeamScope — F2: an explicit choice, not an absent optional. The
+// prior signature took `teamIds?: Set<string>` as a bare positional, which
+// meant a future `buildTaskAssigneeItems(agents)` call silently compiled and
+// returned the unscoped roster (the omission is invisible at the call site).
+// Forcing callers to name their intent (`scoped` vs `unscoped`) makes that
+// mistake a type error instead of a silent behavior change. Mirrors the
+// `{ kind: '...' }` discriminated-union idiom already used for hook state in
+// this codebase (see `CliValidationState` in useCliPathValidation.ts).
+// not-wire-format: UI-only helper type consumed by buildTaskAssigneeItems; never serialized across the gateway/SPA boundary
+export type AssigneeTeamScope =
+  | { kind: 'scoped'; ids: Set<string> }
+  | { kind: 'unscoped' }
+
 // buildTaskAssigneeItems — shared task-assignee `SmartSelect` item list,
 // deduped out of `TaskDetailPanel` and `CreateTaskSlideOver` (Simplify
-// finding, Agent System P0 fix-wave). Subagent workers are valid assignees
-// when they belong to the workspace's team — the backend enforces team
-// membership, not worker-vs-main kind (see validateTaskAgentID). subagent_3p
-// (external-CLI) workers are still unconditionally rejected server-side:
-// task execution isn't wired through the external-CLI dispatch path yet, so
-// they are excluded here too (offering them would be a guaranteed-400 dead
-// end). A " · Worker" suffix keeps the delegation-only kind visually
-// distinguishable (mirrors AddAgentPicker's " · leaf" convention). Callers
-// prepend their own "Unassigned" (`__none__`) item.
+// finding, Agent System P0 fix-wave). Scoped to the task's WORKSPACE TEAM
+// (core_team ∪ every delegation edge endpoint — see `useWorkspaceTeamIds`)
+// so the picker mirrors what the backend actually allows instead of the
+// global agent roster: `validateTaskAgentID` (`pkg/gateway/rest_tasks.go`)
+// 400s any assignee outside that set. subagent_3p (external-CLI) workers are
+// NO LONGER unconditionally excluded here (Fix B) — team membership is the
+// only gate task assignment goes through now that external-CLI task
+// execution is being wired up alongside this change, so a 3p worker that IS
+// on the team is a legitimate, non-dead-end assignee. A " · Worker" suffix
+// keeps every delegation-only kind (Subagent / subagent_3p / legacy worker)
+// visually distinguishable (mirrors AddAgentPicker's " · leaf" convention).
+// Callers prepend their own "Unassigned" (`__none__`) item.
+//
+// `options.teamScope` (F2 — see `AssigneeTeamScope` above):
+//   - `{ kind: 'scoped', ids }` → scope the list to `ids`' members (the
+//     normal, team-scoped case).
+//   - `{ kind: 'unscoped' }` → NO scoping — every known agent is offered.
+//     Callers pass this explicitly for the deliberate fallback when the
+//     team-set query ERRORS (or has no data yet) — the backend still
+//     enforces team membership server-side, so an unscoped list here is a
+//     graceful degrade (matches this picker's pre-scoping behaviour) rather
+//     than an empty, unusable picker. Pair an error-driven `unscoped` choice
+//     with an inline "team unavailable" hint at the call site (see
+//     `useWorkspaceTeamIds`) so the degrade is visible, not silent.
+//
+// `options.currentAssigneeId`, when given, is always included even if it
+// falls outside a `scoped` set — an existing task's already-assigned agent
+// (e.g. one later dropped from the workspace team — legacy data) must still
+// render as the selected value instead of silently vanishing from its own
+// picker.
 export function buildTaskAssigneeItems(
   agents: Agent[],
+  options: { teamScope: AssigneeTeamScope; currentAssigneeId?: string | null },
 ): { value: string; label: string; className: string }[] {
+  const { teamScope, currentAssigneeId } = options
   return agents
-    .filter((a) => a.type !== 'subagent_3p')
+    .filter((a) => teamScope.kind === 'unscoped' || teamScope.ids.has(a.id) || a.id === currentAssigneeId)
     .map((a) => ({
       value: a.id,
       label: isWorker(a) ? `${a.name} · Worker` : a.name,

@@ -76,6 +76,20 @@ async function pickDateTime(
   selectOption('Minute', minute)
 }
 
+// Open the Agent field's SmartSelect. Fix B: the trigger is `disabled` while
+// the workspace-team query (fetchWorkspaceDelegation) is in flight, so a
+// click fired before it settles would silently no-op (Radix's Select ignores
+// open-triggering clicks while disabled) instead of opening the dropdown —
+// wait for it to become enabled first.
+async function openAgentPicker(): Promise<HTMLElement> {
+  const agentLabel = await screen.findByText('Agent')
+  const fieldRoot = agentLabel.parentElement as HTMLElement
+  const agentTrigger = fieldRoot.querySelector('[role="combobox"]') as HTMLElement
+  await waitFor(() => expect(agentTrigger).not.toBeDisabled())
+  fireEvent.click(agentTrigger)
+  return agentTrigger
+}
+
 // ── API mock ─────────────────────────────────────────────────────────────────
 
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -85,17 +99,30 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchAgents: vi.fn().mockResolvedValue([]),
     fetchMilestones: vi.fn().mockResolvedValue([]),
     fetchTasks: vi.fn().mockResolvedValue([]),
+    // Fix B: the assignee picker's workspace-team scoping — see the
+    // "assignee picker is workspace-team-scoped" describe block below.
+    fetchWorkspaceDelegation: vi.fn(),
     createTask: vi.fn(),
     updateTask: vi.fn(),
     tasksQueryKeys: { list: () => ['tasks'] },
     boardTasksQueryKeys: { list: () => ['tasks'] },
-    workspacesQueryKeys: { list: () => ['workspaces'] },
+    workspacesQueryKeys: {
+      list: () => ['workspaces'],
+      delegation: (id: string) => ['workspaces', id, 'delegation'],
+    },
     milestonesQueryKeys: { list: (id: string) => ['milestones', id] },
     isApiError: vi.fn().mockReturnValue(false),
   }
 })
 
-import { createTask, updateTask, fetchAgents, fetchMilestones, fetchTasks } from '@/lib/api'
+import {
+  createTask,
+  updateTask,
+  fetchAgents,
+  fetchMilestones,
+  fetchTasks,
+  fetchWorkspaceDelegation,
+} from '@/lib/api'
 
 const mockAddToast = vi.fn()
 
@@ -163,6 +190,12 @@ beforeEach(() => {
   vi.mocked(fetchAgents).mockResolvedValue([])
   vi.mocked(fetchMilestones).mockResolvedValue([])
   vi.mocked(fetchTasks).mockResolvedValue([])
+  // Default: the workspace-team query fails (unmocked in most tests, which
+  // don't care about team-scoping) — this is the DEGRADED fallback path
+  // (buildTaskAssigneeItems / useWorkspaceTeamIds), which offers the full
+  // unscoped agent list, i.e. today's pre-scoping behaviour. Tests that
+  // exercise team-scoping itself override this per-test.
+  vi.mocked(fetchWorkspaceDelegation).mockReset().mockRejectedValue(new Error('not mocked'))
   vi.mocked(createTask).mockReset()
   vi.mocked(updateTask).mockReset()
   mockAddToast.mockReset()
@@ -348,11 +381,7 @@ describe('CreateTaskSlideOver — worker-type agents are offered as assignees', 
 
     renderSlideOver()
 
-    const agentLabel = await screen.findByText('Agent')
-    const fieldRoot = agentLabel.parentElement as HTMLElement
-    const agentTrigger = fieldRoot.querySelector('[role="combobox"]') as HTMLElement
-    expect(agentTrigger).toBeTruthy()
-    fireEvent.click(agentTrigger)
+    await openAgentPicker()
 
     await waitFor(() => {
       const options = Array.from(document.querySelectorAll('[role="option"]')).map(
@@ -374,10 +403,7 @@ describe('CreateTaskSlideOver — worker-type agents are offered as assignees', 
 
     renderSlideOver()
 
-    const agentLabel = await screen.findByText('Agent')
-    const fieldRoot = agentLabel.parentElement as HTMLElement
-    const agentTrigger = fieldRoot.querySelector('[role="combobox"]') as HTMLElement
-    fireEvent.click(agentTrigger)
+    await openAgentPicker()
 
     const workerOption = await screen.findByRole('option', { name: /Builder Worker/i })
     fireEvent.pointerDown(workerOption, { pointerId: 1, button: 0 })
@@ -400,10 +426,7 @@ describe('CreateTaskSlideOver — worker-type agents are offered as assignees', 
 
     renderSlideOver()
 
-    const agentLabel = await screen.findByText('Agent')
-    const fieldRoot = agentLabel.parentElement as HTMLElement
-    const agentTrigger = fieldRoot.querySelector('[role="combobox"]') as HTMLElement
-    fireEvent.click(agentTrigger)
+    await openAgentPicker()
 
     const workerOption = await screen.findByRole('option', { name: /Builder Worker/i })
     fireEvent.pointerDown(workerOption, { pointerId: 1, button: 0 })
@@ -419,33 +442,153 @@ describe('CreateTaskSlideOver — worker-type agents are offered as assignees', 
     delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
   })
 
-  it('still excludes subagent_3p (external-CLI) workers — task execution is not wired for them', async () => {
-    // Backend (validateTaskAgentID) unconditionally rejects subagent_3p task
-    // assignment regardless of team membership — offering it in the picker
-    // would be a guaranteed-400 dead end, unlike Subagent (native worker)
-    // which the backend now allows when it's a workspace-team member.
+  it('includes a subagent_3p (external-CLI) worker when it IS a member of the workspace team', async () => {
+    // Fix B: subagent_3p is no longer unconditionally excluded from the
+    // picker — the backend's ONLY gate is workspace-team membership now
+    // (validateTaskAgentID / workspaceTeamSet), and the external-CLI
+    // task-execution path is being wired up alongside this change. A 3p
+    // worker that IS on the team must be offered, distinguished by the same
+    // " · Worker" suffix as a native Subagent.
     vi.mocked(fetchAgents).mockResolvedValue([
       { id: 'mia', name: 'Mia', type: 'core', default: false },
       { id: 'ext', name: 'External Runner', type: 'subagent_3p', default: false },
     ] as never)
+    vi.mocked(fetchWorkspaceDelegation).mockResolvedValue({
+      workspace_id: 'proj-test',
+      edges: [],
+      team: ['mia', 'ext'],
+      default_depth: 3,
+    } as never)
     Element.prototype.scrollIntoView = vi.fn()
 
     renderSlideOver()
 
-    const agentLabel = await screen.findByText('Agent')
-    const fieldRoot = agentLabel.parentElement as HTMLElement
-    const agentTrigger = fieldRoot.querySelector('[role="combobox"]') as HTMLElement
-    fireEvent.click(agentTrigger)
+    await openAgentPicker()
 
     await waitFor(() => {
       const options = Array.from(document.querySelectorAll('[role="option"]')).map(
         (el) => el.textContent ?? '',
       )
       expect(options.some((t) => t.includes('Mia'))).toBe(true)
-      expect(options.some((t) => t.includes('External Runner'))).toBe(false)
+      expect(options.some((t) => t.includes('External Runner') && t.includes('Worker'))).toBe(true)
     })
 
     delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
+  })
+})
+
+describe('CreateTaskSlideOver — assignee picker is workspace-team-scoped (Fix B)', () => {
+  it('excludes an agent that is NOT a member of the workspace team, regardless of kind', async () => {
+    // Team-scoping is the real gate now, not worker-vs-main kind: an
+    // off-team CORE agent must be excluded exactly like an off-team worker
+    // would be — mirrors the backend's workspaceTeamSet.
+    vi.mocked(fetchAgents).mockResolvedValue([
+      { id: 'mia', name: 'Mia', type: 'core', default: false },
+      { id: 'offteam', name: 'Off Team Agent', type: 'core', default: false },
+    ] as never)
+    vi.mocked(fetchWorkspaceDelegation).mockResolvedValue({
+      workspace_id: 'proj-test',
+      edges: [],
+      team: ['mia'],
+      default_depth: 3,
+    } as never)
+    Element.prototype.scrollIntoView = vi.fn()
+
+    renderSlideOver()
+
+    await openAgentPicker()
+
+    await waitFor(() => {
+      const options = Array.from(document.querySelectorAll('[role="option"]')).map(
+        (el) => el.textContent ?? '',
+      )
+      expect(options.some((t) => t.includes('Mia'))).toBe(true)
+      expect(options.some((t) => t.includes('Off Team Agent'))).toBe(false)
+    })
+
+    delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
+  })
+
+  it('falls back to the full unscoped agent list when the workspace-team query errors', async () => {
+    // Degraded behavior (item 3 of the fix): a failed team-set fetch must not
+    // leave the picker empty — it falls back to the pre-scoping unscoped
+    // list, same as today's behaviour. The backend still enforces team
+    // membership server-side, so this is a graceful degrade, not a bypass.
+    vi.mocked(fetchAgents).mockResolvedValue([
+      { id: 'mia', name: 'Mia', type: 'core', default: false },
+      { id: 'offteam', name: 'Off Team Agent', type: 'core', default: false },
+    ] as never)
+    vi.mocked(fetchWorkspaceDelegation).mockRejectedValue(new Error('network down'))
+    Element.prototype.scrollIntoView = vi.fn()
+
+    renderSlideOver()
+
+    await openAgentPicker()
+
+    await waitFor(() => {
+      const options = Array.from(document.querySelectorAll('[role="option"]')).map(
+        (el) => el.textContent ?? '',
+      )
+      expect(options.some((t) => t.includes('Mia'))).toBe(true)
+      expect(options.some((t) => t.includes('Off Team Agent'))).toBe(true)
+    })
+
+    delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
+  })
+
+  it('F1: shows an inline "team unavailable" hint next to the picker when the workspace-team query errors', async () => {
+    // The degraded unscoped fallback above must not be silent — a muted hint
+    // renders next to the Agent picker so the degrade is visible, not
+    // indistinguishable from a healthy, unrestricted workspace.
+    vi.mocked(fetchAgents).mockResolvedValue([
+      { id: 'mia', name: 'Mia', type: 'core', default: false },
+    ] as never)
+    vi.mocked(fetchWorkspaceDelegation).mockRejectedValue(new Error('network down'))
+
+    renderSlideOver()
+
+    expect(await screen.findByText(/team list unavailable — showing all agents/i)).toBeInTheDocument()
+  })
+
+  it('does NOT show the "team unavailable" hint when the workspace-team query succeeds', async () => {
+    vi.mocked(fetchAgents).mockResolvedValue([
+      { id: 'mia', name: 'Mia', type: 'core', default: false },
+    ] as never)
+    vi.mocked(fetchWorkspaceDelegation).mockResolvedValue({
+      workspace_id: 'proj-test',
+      edges: [],
+      team: ['mia'],
+      default_depth: 3,
+    } as never)
+
+    renderSlideOver()
+
+    await waitFor(() => expect(screen.getByText('Agent')).toBeInTheDocument())
+    expect(screen.queryByText(/team list unavailable/i)).toBeNull()
+  })
+
+  it('disables the picker with a loading placeholder while the team query is in flight', async () => {
+    let resolveDelegation: (v: unknown) => void = () => {}
+    vi.mocked(fetchWorkspaceDelegation).mockReturnValue(
+      new Promise((resolve) => { resolveDelegation = resolve }) as never,
+    )
+    vi.mocked(fetchAgents).mockResolvedValue([
+      { id: 'mia', name: 'Mia', type: 'core', default: false },
+    ] as never)
+
+    renderSlideOver()
+
+    const agentLabel = await screen.findByText('Agent')
+    const fieldRoot = agentLabel.parentElement as HTMLElement
+    const agentTrigger = fieldRoot.querySelector('[role="combobox"]') as HTMLElement
+    // The real signal (item 3 of the fix): the picker is disabled while the
+    // team-set query is in flight, rather than offering a stale/unscoped
+    // list or an interactive-but-wrong picker.
+    expect(agentTrigger).toBeDisabled()
+
+    // Resolve so the pending promise doesn't leak into the next test.
+    resolveDelegation({ workspace_id: 'proj-test', edges: [], team: ['mia'], default_depth: 3 })
+    await waitFor(() => expect(agentTrigger).not.toBeDisabled())
   })
 })
 

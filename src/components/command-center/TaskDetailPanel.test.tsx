@@ -90,6 +90,9 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchMilestones: vi.fn().mockResolvedValue([]),
     fetchWorkspaces: vi.fn().mockResolvedValue([]),
     fetchTasks: vi.fn().mockResolvedValue([]),
+    // Fix B: the assignee picker's workspace-team scoping — see the
+    // "assignee picker is workspace-team-scoped" describe block below.
+    fetchWorkspaceDelegation: vi.fn(),
     updateTask: vi.fn().mockResolvedValue({}),
     deleteTask: vi.fn().mockResolvedValue(undefined),
     setTaskTodos: vi.fn().mockResolvedValue({}),
@@ -175,6 +178,12 @@ beforeEach(async () => {
   vi.mocked(api.setTaskDependencies).mockReset().mockResolvedValue({} as never)
   vi.mocked(api.fetchTasks).mockReset().mockResolvedValue([])
   vi.mocked(api.fetchSubtasks).mockReset().mockResolvedValue([])
+  // Default: the workspace-team query fails (unmocked in most tests, which
+  // don't care about team-scoping) — this is the DEGRADED fallback path
+  // (buildTaskAssigneeItems / useWorkspaceTeamIds), which offers the full
+  // unscoped agent list, i.e. today's pre-scoping behaviour. Tests that
+  // exercise team-scoping itself override this per-test.
+  vi.mocked(api.fetchWorkspaceDelegation).mockReset().mockRejectedValue(new Error('not mocked'))
   mockAddToast.mockReset()
 })
 
@@ -411,12 +420,22 @@ describe('TaskDetailPanel — renders todos checklist', () => {
 // workers alongside base agents, distinguished by a " · Worker" suffix
 // (mirrors AddAgentPicker's " · leaf" convention).
 
-async function assertAgentPickerIncludesWorker(): Promise<void> {
+// Open the Agent field's SmartSelect. Fix B: the trigger is `disabled` while
+// the workspace-team query (fetchWorkspaceDelegation) is in flight, so a
+// click fired before it settles would silently no-op (Radix's Select ignores
+// open-triggering clicks while disabled) instead of opening the dropdown —
+// wait for it to become enabled first.
+async function openAgentPicker(): Promise<HTMLElement> {
   const agentLabel = await screen.findByText('Agent')
   const fieldRoot = agentLabel.parentElement as HTMLElement
   const agentTrigger = fieldRoot.querySelector('[role="combobox"]') as HTMLElement
-  expect(agentTrigger).toBeTruthy()
+  await waitFor(() => expect(agentTrigger).not.toBeDisabled())
   fireEvent.click(agentTrigger)
+  return agentTrigger
+}
+
+async function assertAgentPickerIncludesWorker(): Promise<void> {
+  await openAgentPicker()
 
   await waitFor(() => {
     const options = Array.from(document.querySelectorAll('[role="option"]')).map(
@@ -457,10 +476,7 @@ describe('TaskDetailPanel — worker-type agents are offered as assignees', () =
 
     renderPanel(taskWithPrompt)
 
-    const agentLabel = await screen.findByText('Agent')
-    const fieldRoot = agentLabel.parentElement as HTMLElement
-    const agentTrigger = fieldRoot.querySelector('[role="combobox"]') as HTMLElement
-    fireEvent.click(agentTrigger)
+    await openAgentPicker()
 
     const workerOption = await screen.findByRole('option', { name: /Builder Worker/i })
     fireEvent.pointerDown(workerOption, { pointerId: 1, button: 0 })
@@ -483,10 +499,7 @@ describe('TaskDetailPanel — worker-type agents are offered as assignees', () =
 
     renderPanel(taskWithPrompt)
 
-    const agentLabel = await screen.findByText('Agent')
-    const fieldRoot = agentLabel.parentElement as HTMLElement
-    const agentTrigger = fieldRoot.querySelector('[role="combobox"]') as HTMLElement
-    fireEvent.click(agentTrigger)
+    await openAgentPicker()
 
     const workerOption = await screen.findByRole('option', { name: /Builder Worker/i })
     fireEvent.pointerDown(workerOption, { pointerId: 1, button: 0 })
@@ -499,15 +512,109 @@ describe('TaskDetailPanel — worker-type agents are offered as assignees', () =
     delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
   })
 
-  it('still excludes subagent_3p (external-CLI) workers — task execution is not wired for them', async () => {
-    // Backend (validateTaskAgentID) unconditionally rejects subagent_3p task
-    // assignment regardless of team membership — offering it in the picker
-    // would be a guaranteed-400 dead end, unlike Subagent (native worker)
-    // which the backend now allows when it's a workspace-team member.
-    const { fetchAgents } = await import('@/lib/api')
+  it('includes a subagent_3p (external-CLI) worker when it IS a member of the workspace team', async () => {
+    // Fix B: subagent_3p is no longer unconditionally excluded from the
+    // picker — the backend's ONLY gate is workspace-team membership now
+    // (validateTaskAgentID / workspaceTeamSet), and the external-CLI
+    // task-execution path is being wired up alongside this change. A 3p
+    // worker that IS on the team must be offered, distinguished by the same
+    // " · Worker" suffix as a native Subagent.
+    const { fetchAgents, fetchWorkspaceDelegation } = await import('@/lib/api')
     vi.mocked(fetchAgents).mockResolvedValue([
       { id: 'mia', name: 'Mia', type: 'core', default: false },
       { id: 'ext', name: 'External Runner', type: 'subagent_3p', default: false },
+    ] as never)
+    vi.mocked(fetchWorkspaceDelegation).mockResolvedValue({
+      workspace_id: 'ws-test',
+      edges: [],
+      team: ['mia', 'ext'],
+      default_depth: 3,
+    } as never)
+
+    renderPanel(taskWithPrompt)
+
+    await openAgentPicker()
+
+    await waitFor(() => {
+      const options = Array.from(document.querySelectorAll('[role="option"]')).map(
+        (el) => el.textContent ?? '',
+      )
+      expect(options.some((t) => t.includes('Mia'))).toBe(true)
+      expect(options.some((t) => t.includes('External Runner') && t.includes('Worker'))).toBe(true)
+    })
+
+    delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
+  })
+})
+
+// ── Team-scoping (Fix B) ──────────────────────────────────────────────────────
+// The assignee picker is scoped to task.workspace_id's TEAM (core_team ∪
+// delegation edges) — see useWorkspaceTeamIds / buildTaskAssigneeItems.
+
+describe('TaskDetailPanel — assignee picker is workspace-team-scoped (Fix B)', () => {
+  beforeEach(() => {
+    Element.prototype.scrollIntoView = vi.fn()
+  })
+
+  it('excludes an agent that is NOT a member of the workspace team, regardless of kind', async () => {
+    const { fetchAgents, fetchWorkspaceDelegation } = await import('@/lib/api')
+    vi.mocked(fetchAgents).mockResolvedValue([
+      { id: 'mia', name: 'Mia', type: 'core', default: false },
+      { id: 'offteam', name: 'Off Team Agent', type: 'core', default: false },
+    ] as never)
+    vi.mocked(fetchWorkspaceDelegation).mockResolvedValue({
+      workspace_id: 'ws-test',
+      edges: [],
+      team: ['mia'],
+      default_depth: 3,
+    } as never)
+
+    renderPanel(taskWithPrompt)
+
+    await openAgentPicker()
+
+    await waitFor(() => {
+      const options = Array.from(document.querySelectorAll('[role="option"]')).map(
+        (el) => el.textContent ?? '',
+      )
+      expect(options.some((t) => t.includes('Mia'))).toBe(true)
+      expect(options.some((t) => t.includes('Off Team Agent'))).toBe(false)
+    })
+
+    delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
+  })
+
+  it('falls back to the full unscoped agent list when the workspace-team query errors', async () => {
+    const { fetchAgents, fetchWorkspaceDelegation } = await import('@/lib/api')
+    vi.mocked(fetchAgents).mockResolvedValue([
+      { id: 'mia', name: 'Mia', type: 'core', default: false },
+      { id: 'offteam', name: 'Off Team Agent', type: 'core', default: false },
+    ] as never)
+    vi.mocked(fetchWorkspaceDelegation).mockRejectedValue(new Error('network down'))
+
+    renderPanel(taskWithPrompt)
+
+    await openAgentPicker()
+
+    await waitFor(() => {
+      const options = Array.from(document.querySelectorAll('[role="option"]')).map(
+        (el) => el.textContent ?? '',
+      )
+      expect(options.some((t) => t.includes('Mia'))).toBe(true)
+      expect(options.some((t) => t.includes('Off Team Agent'))).toBe(true)
+    })
+
+    delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
+  })
+
+  it('disables the picker while the team query is in flight', async () => {
+    const { fetchAgents, fetchWorkspaceDelegation } = await import('@/lib/api')
+    let resolveDelegation: (v: unknown) => void = () => {}
+    vi.mocked(fetchWorkspaceDelegation).mockReturnValue(
+      new Promise((resolve) => { resolveDelegation = resolve }) as never,
+    )
+    vi.mocked(fetchAgents).mockResolvedValue([
+      { id: 'mia', name: 'Mia', type: 'core', default: false },
     ] as never)
 
     renderPanel(taskWithPrompt)
@@ -515,17 +622,149 @@ describe('TaskDetailPanel — worker-type agents are offered as assignees', () =
     const agentLabel = await screen.findByText('Agent')
     const fieldRoot = agentLabel.parentElement as HTMLElement
     const agentTrigger = fieldRoot.querySelector('[role="combobox"]') as HTMLElement
-    fireEvent.click(agentTrigger)
+    // The real signal (item 3 of the fix): the picker is disabled while the
+    // team-set query is in flight, rather than offering a stale/unscoped
+    // list or an interactive-but-wrong picker.
+    expect(agentTrigger).toBeDisabled()
 
+    // Resolve so the pending promise doesn't leak into the next test.
+    resolveDelegation({ workspace_id: 'ws-test', edges: [], team: ['mia'], default_depth: 3 })
+    await waitFor(() => expect(agentTrigger).not.toBeDisabled())
+
+    delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
+  })
+
+  it('F1: shows an inline "team unavailable" hint next to the picker when the workspace-team query errors', async () => {
+    // The degraded unscoped fallback must not be silent — a muted hint
+    // renders next to the Agent picker so the degrade is visible, not
+    // indistinguishable from a healthy, unrestricted workspace.
+    const { fetchAgents, fetchWorkspaceDelegation } = await import('@/lib/api')
+    vi.mocked(fetchAgents).mockResolvedValue([
+      { id: 'mia', name: 'Mia', type: 'core', default: false },
+    ] as never)
+    vi.mocked(fetchWorkspaceDelegation).mockRejectedValue(new Error('network down'))
+
+    renderPanel(taskWithPrompt)
+
+    expect(await screen.findByText(/team list unavailable — showing all agents/i)).toBeInTheDocument()
+  })
+
+  it('does NOT show the "team unavailable" hint when the workspace-team query succeeds', async () => {
+    const { fetchAgents, fetchWorkspaceDelegation } = await import('@/lib/api')
+    vi.mocked(fetchAgents).mockResolvedValue([
+      { id: 'mia', name: 'Mia', type: 'core', default: false },
+    ] as never)
+    vi.mocked(fetchWorkspaceDelegation).mockResolvedValue({
+      workspace_id: 'ws-test',
+      edges: [],
+      team: ['mia'],
+      default_depth: 3,
+    } as never)
+
+    renderPanel(taskWithPrompt)
+
+    await waitFor(() => expect(screen.getByText('Agent')).toBeInTheDocument())
+    expect(screen.queryByText(/team list unavailable/i)).toBeNull()
+  })
+
+  it('legacy edge case: an already-assigned agent that has fallen off the workspace team still renders as the current value', async () => {
+    // A task assigned to an agent that was later removed from core_team /
+    // delegation edges (legacy data) must still show that assignee in the
+    // picker instead of a broken/empty select — buildTaskAssigneeItems always
+    // includes `currentAssigneeId` even when it's outside `teamIds`.
+    const { fetchAgents, fetchWorkspaceDelegation } = await import('@/lib/api')
+    const legacyTask = makeTask({
+      id: 'task-legacy-assignee',
+      title: 'Legacy assignment',
+      agent_id: 'retired-agent',
+      workspace_id: 'ws-test',
+    })
+    vi.mocked(fetchAgents).mockResolvedValue([
+      { id: 'mia', name: 'Mia', type: 'core', default: false },
+      { id: 'retired-agent', name: 'Retired Agent', type: 'core', default: false },
+    ] as never)
+    // The team no longer includes 'retired-agent'.
+    vi.mocked(fetchWorkspaceDelegation).mockResolvedValue({
+      workspace_id: 'ws-test',
+      edges: [],
+      team: ['mia'],
+      default_depth: 3,
+    } as never)
+
+    renderPanel(legacyTask)
+
+    const agentLabel = await screen.findByText('Agent')
+    const fieldRoot = agentLabel.parentElement as HTMLElement
+    const agentTrigger = fieldRoot.querySelector('[role="combobox"]') as HTMLElement
+    // The currently-assigned (off-team) agent's name still renders as the
+    // picker's current value instead of a blank/broken trigger.
+    await waitFor(() => expect(agentTrigger.textContent ?? '').toMatch(/retired agent/i))
+
+    // And it is present as a selectable option (not silently dropped).
+    await waitFor(() => expect(agentTrigger).not.toBeDisabled())
+    fireEvent.click(agentTrigger)
     await waitFor(() => {
       const options = Array.from(document.querySelectorAll('[role="option"]')).map(
         (el) => el.textContent ?? '',
       )
+      expect(options.some((t) => t.includes('Retired Agent'))).toBe(true)
       expect(options.some((t) => t.includes('Mia'))).toBe(true)
-      expect(options.some((t) => t.includes('External Runner'))).toBe(false)
     })
 
     delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
+  })
+})
+
+// ── Workspace-less task guard (F3) ────────────────────────────────────────────
+// A persisted task can predate the `workspace_id is required` guard
+// (pkg/task/store.go::normalize only runs on Create/Update, never on load) —
+// a legacy/hand-edited task.json with an empty workspace_id still loads and
+// renders. validateTaskAgentID (pkg/gateway/rest_tasks.go) unconditionally
+// 400s ANY agent_id assignment for such a task, so the picker must disable
+// itself with an explanatory hint instead of offering guaranteed-400 choices.
+
+describe('TaskDetailPanel — workspace-less task disables the assignee picker (F3)', () => {
+  it('disables the Agent picker and shows an "assignment unavailable" hint when the task has no workspace_id', async () => {
+    const { fetchAgents } = await import('@/lib/api')
+    vi.mocked(fetchAgents).mockResolvedValue([
+      { id: 'mia', name: 'Mia', type: 'core', default: false },
+    ] as never)
+
+    const workspacelessTask = makeTask({
+      id: 'task-no-workspace',
+      title: 'Orphaned task',
+      workspace_id: '',
+    })
+
+    renderPanel(workspacelessTask)
+
+    const agentLabel = await screen.findByText('Agent')
+    const fieldRoot = agentLabel.parentElement as HTMLElement
+    const agentTrigger = fieldRoot.querySelector('[role="combobox"]') as HTMLElement
+
+    // Disabled immediately — this is NOT the loading state (useWorkspaceTeamIds
+    // is `enabled:false` for a falsy workspaceId, so isLoading is false too);
+    // it is the distinct "no workspace to validate against" guard.
+    expect(agentTrigger).toBeDisabled()
+    expect(await screen.findByText(/task has no workspace — assignment unavailable/i)).toBeInTheDocument()
+  })
+
+  it('does not show the workspace-less hint for a task that has a workspace_id', async () => {
+    const { fetchAgents, fetchWorkspaceDelegation } = await import('@/lib/api')
+    vi.mocked(fetchAgents).mockResolvedValue([
+      { id: 'mia', name: 'Mia', type: 'core', default: false },
+    ] as never)
+    vi.mocked(fetchWorkspaceDelegation).mockResolvedValue({
+      workspace_id: 'ws-test',
+      edges: [],
+      team: ['mia'],
+      default_depth: 3,
+    } as never)
+
+    renderPanel(taskWithPrompt)
+
+    await waitFor(() => expect(screen.getByText('Agent')).toBeInTheDocument())
+    expect(screen.queryByText(/assignment unavailable/i)).toBeNull()
   })
 })
 

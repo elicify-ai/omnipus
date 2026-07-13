@@ -180,17 +180,22 @@ describe('NewWorkspaceSlideOver — create flow', () => {
     expect(onOpenChange).not.toHaveBeenCalledWith(false)
   })
 
-  it('excludes workers from the core-team agent picker; lists base agents', async () => {
-    // BDD: Given the agents list contains a worker (type:'worker'),
+  it('includes worker agents (Subagent, subagent_3p) in the core-team picker; excludes system agents', async () => {
+    // BDD: Given the agents list contains a Subagent-type worker, a subagent_3p-type
+    // worker, a core agent, and a legacy system agent,
     // When the user opens the core-team "Add agent" picker,
-    // Then the worker is NOT offered as a selectable option,
-    // And base agents ARE offered.
-    // The concept treats workers as non-roster, delegation-only labour, so they
-    // must never seed a workspace core team (which seeds the assignee pickers).
+    // Then both worker types ARE offered as selectable options (labelled "· leaf",
+    // matching AddAgentPicker's convention),
+    // And the core agent is offered,
+    // And the system agent is NOT offered.
+    // ADR-032/ADR-037: workers are valid workspace team members (delegation
+    // targets), so the core-team picker must match the Team tab's AddAgentPicker,
+    // which only excludes type:'system'.
     vi.mocked(fetchAgents).mockResolvedValue([
       { id: 'mia', name: 'Mia', type: 'core', default: false },
-      { id: 'jim', name: 'Jim', type: 'core', default: false },
-      { id: 'builder', name: 'Builder Worker', type: 'worker', default: false },
+      { id: 'sub-native', name: 'Native Worker', type: 'Subagent', default: false },
+      { id: 'sub-external', name: 'External Worker', type: 'subagent_3p', default: false },
+      { id: 'legacy-sys', name: 'Legacy System Agent', type: 'system', default: false },
     ] as never)
     // jsdom lacks scrollIntoView; Radix Select calls it when opening the listbox.
     Element.prototype.scrollIntoView = vi.fn()
@@ -206,8 +211,9 @@ describe('NewWorkspaceSlideOver — create flow', () => {
         (el) => el.textContent ?? '',
       )
       expect(options.some((t) => t.includes('Mia'))).toBe(true)
-      expect(options.some((t) => t.includes('Jim'))).toBe(true)
-      expect(options.some((t) => t.includes('Builder Worker'))).toBe(false)
+      expect(options.some((t) => t.includes('Native Worker') && t.includes('· leaf'))).toBe(true)
+      expect(options.some((t) => t.includes('External Worker') && t.includes('· leaf'))).toBe(true)
+      expect(options.some((t) => t.includes('Legacy System Agent'))).toBe(false)
     })
 
     delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
