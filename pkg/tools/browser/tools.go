@@ -148,20 +148,28 @@ type ClickTool struct {
 func (t *ClickTool) Name() string                 { return "browser_click" }
 func (t *ClickTool) Scope() tools.ToolScope       { return tools.ScopeCore }
 func (t *ClickTool) Category() tools.ToolCategory { return tools.CategoryBrowser }
-func (t *ClickTool) Description() string          { return "Click an element matching a CSS selector." }
+func (t *ClickTool) Description() string {
+	return "Click an element. Provide `selector` as a standard CSS selector (e.g. \"button.confirm\"), " +
+		"OR a trailing Playwright-style text pseudo — button:has-text(\"Confirm\") (case-insensitive " +
+		"substring) or a:text-is(\"Book now\") (exact match) — to match by visible text instead of CSS. " +
+		"Alternatively (or additionally), pass `text` to target an element by its visible label directly " +
+		"(case-insensitive substring match); when both selector and text are given, text is matched only " +
+		"among elements inside selector. Provide selector OR text (or both)."
+}
 func (t *ClickTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"selector": map[string]any{"type": "string", "description": "CSS selector of the element to click"},
+			"selector": map[string]any{"type": "string", "description": "CSS selector of the element to click, optionally ending in :has-text(\"...\") / :text-is(\"...\") to match by visible text"},
+			"text":     map[string]any{"type": "string", "description": "Match an element by its visible text (case-insensitive substring) instead of — or scoped within — selector"},
 		},
-		"required": []string{"selector"},
 	}
 }
 
 func (t *ClickTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	selector, _ := args["selector"].(string)
-	if selector == "" {
+	text, _ := args["text"].(string)
+	if selector == "" && text == "" {
 		return tools.ErrorResult("browser_click: 'selector' parameter is required")
 	}
 	if result := controlledResult(t.mgr, t.Name()); result != nil {
@@ -176,15 +184,28 @@ func (t *ClickTool) Execute(ctx context.Context, args map[string]any) *tools.Too
 	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, t.mgr.PageTimeout())
 	defer timeoutCancel()
 
+	target, cleanup, rerr := resolveActionSelector(tabCtx, "browser_click", selector, text, t.mgr.PageTimeout())
+	defer cleanup()
+	if rerr != nil {
+		return tools.ErrorResult(rerr.Error())
+	}
+
 	err = chromedp.Run(tabCtx,
-		chromedp.WaitVisible(selector, chromedp.ByQuery),
-		chromedp.Click(selector, chromedp.ByQuery),
+		chromedp.WaitVisible(target, chromedp.ByQuery),
+		chromedp.Click(target, chromedp.ByQuery),
 	)
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("browser_click: element not found or not clickable: %s", err))
 	}
 
-	result := map[string]any{"success": true, "selector": selector}
+	// Echo back what the caller passed (existing contract); fall back to the
+	// resolved target only for the text-only case (selector == ""), where
+	// echoing an empty string would be a confusing no-op-looking field.
+	echoSelector := selector
+	if echoSelector == "" {
+		echoSelector = target
+	}
+	result := map[string]any{"success": true, "selector": echoSelector}
 
 	// ADR-041 D2: a click on a target="_blank" link or an element that calls
 	// window.open may have spawned a new browser tab. Reconcile
@@ -272,15 +293,19 @@ func (t *TypeTool) Name() string                 { return "browser_type" }
 func (t *TypeTool) Scope() tools.ToolScope       { return tools.ScopeCore }
 func (t *TypeTool) Category() tools.ToolCategory { return tools.CategoryBrowser }
 func (t *TypeTool) Description() string {
-	return "Type text into an input element matching a CSS selector."
+	return "Type text into an input element matching a CSS selector. selector may also end in a " +
+		"Playwright-style text pseudo — e.g. input:has-text(\"...\") or :text-is(\"...\") — to match by " +
+		"visible text instead of CSS; note the `text` parameter here is the VALUE typed into the element, " +
+		"not a way to locate it (unlike browser_click/browser_get_text/browser_wait, which accept a " +
+		"separate `text` param to locate an element by its visible label)."
 }
 
 func (t *TypeTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"selector": map[string]any{"type": "string", "description": "CSS selector of the input element"},
-			"text":     map[string]any{"type": "string", "description": "Text to type into the element"},
+			"selector": map[string]any{"type": "string", "description": "CSS selector of the input element, optionally ending in :has-text(\"...\") / :text-is(\"...\") to match by visible text"},
+			"text":     map[string]any{"type": "string", "description": "Text to type into the element (this is the value typed, not a locator)"},
 		},
 		"required": []string{"selector", "text"},
 	}
@@ -304,9 +329,18 @@ func (t *TypeTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, t.mgr.PageTimeout())
 	defer timeoutCancel()
 
+	// browser_type has no separate "locate by visible text" PARAMETER (its
+	// `text` arg is already the value to type) — only the pseudo-selector
+	// route applies here. See resolvePseudoOnlySelector's doc comment.
+	target, cleanup, rerr := resolvePseudoOnlySelector(tabCtx, "browser_type", selector, t.mgr.PageTimeout())
+	defer cleanup()
+	if rerr != nil {
+		return tools.ErrorResult(rerr.Error())
+	}
+
 	err = chromedp.Run(tabCtx,
-		chromedp.WaitVisible(selector, chromedp.ByQuery),
-		chromedp.SendKeys(selector, text, chromedp.ByQuery),
+		chromedp.WaitVisible(target, chromedp.ByQuery),
+		chromedp.SendKeys(target, text, chromedp.ByQuery),
 	)
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("browser_type: %s", err))
@@ -424,22 +458,27 @@ func (t *GetTextTool) Name() string                 { return "browser_get_text" 
 func (t *GetTextTool) Scope() tools.ToolScope       { return tools.ScopeCore }
 func (t *GetTextTool) Category() tools.ToolCategory { return tools.CategoryBrowser }
 func (t *GetTextTool) Description() string {
-	return "Get the inner text of an element matching a CSS selector."
+	return "Get the inner text of an element. Provide `selector` as a standard CSS selector, OR a trailing " +
+		"Playwright-style text pseudo — :has-text(\"...\") (substring) / :text-is(\"...\") (exact) — to " +
+		"match by visible text. Alternatively (or additionally), pass `text` to target an element by its " +
+		"visible label directly (case-insensitive substring match); when both are given, text is matched " +
+		"only among elements inside selector. Provide selector OR text (or both)."
 }
 
 func (t *GetTextTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"selector": map[string]any{"type": "string", "description": "CSS selector of the element"},
+			"selector": map[string]any{"type": "string", "description": "CSS selector of the element, optionally ending in :has-text(\"...\") / :text-is(\"...\") to match by visible text"},
+			"text":     map[string]any{"type": "string", "description": "Match an element by its visible text (case-insensitive substring) instead of — or scoped within — selector"},
 		},
-		"required": []string{"selector"},
 	}
 }
 
 func (t *GetTextTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	selector, _ := args["selector"].(string)
-	if selector == "" {
+	text, _ := args["text"].(string)
+	if selector == "" && text == "" {
 		return tools.ErrorResult("browser_get_text: 'selector' parameter is required")
 	}
 
@@ -451,6 +490,12 @@ func (t *GetTextTool) Execute(ctx context.Context, args map[string]any) *tools.T
 	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, t.mgr.PageTimeout())
 	defer timeoutCancel()
 
+	target, cleanup, rerr := resolveActionSelector(tabCtx, "browser_get_text", selector, text, getTextWaitTimeout)
+	defer cleanup()
+	if rerr != nil {
+		return tools.ErrorResult(rerr.Error())
+	}
+
 	// Wait for the node to exist with a SHORT, dedicated timeout — not the
 	// full PageTimeout — and use WaitReady (DOM presence) rather than
 	// WaitVisible (rendered/visible). A node like <title> is present but
@@ -458,23 +503,23 @@ func (t *GetTextTool) Execute(ctx context.Context, args map[string]any) *tools.T
 	// every such selector before failing. See getTextWaitTimeout's doc
 	// comment for the observed 30s hang this fixes.
 	waitCtx, waitCancel := context.WithTimeout(tabCtx, getTextWaitTimeout)
-	err = chromedp.Run(waitCtx, chromedp.WaitReady(selector, chromedp.ByQuery))
+	err = chromedp.Run(waitCtx, chromedp.WaitReady(target, chromedp.ByQuery))
 	waitCancel()
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("browser_get_text: element not found: %s", err))
 	}
 
-	var text string
-	err = chromedp.Run(tabCtx, chromedp.Text(selector, &text, chromedp.ByQuery))
+	var resultText string
+	err = chromedp.Run(tabCtx, chromedp.Text(target, &resultText, chromedp.ByQuery))
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("browser_get_text: element not found: %s", err))
 	}
 
-	if len(text) > maxGetTextBytes {
-		text = text[:maxGetTextBytes] + "\n[truncated at 100KB]"
+	if len(resultText) > maxGetTextBytes {
+		resultText = resultText[:maxGetTextBytes] + "\n[truncated at 100KB]"
 	}
 
-	return jsonResult(map[string]any{"text": text})
+	return jsonResult(map[string]any{"text": resultText})
 }
 
 // --- browser_wait (US-5) ---
@@ -488,22 +533,27 @@ func (t *WaitTool) Name() string                 { return "browser_wait" }
 func (t *WaitTool) Scope() tools.ToolScope       { return tools.ScopeCore }
 func (t *WaitTool) Category() tools.ToolCategory { return tools.CategoryBrowser }
 func (t *WaitTool) Description() string {
-	return "Wait for an element matching a CSS selector to appear in the DOM."
+	return "Wait for an element to appear in the DOM. Provide `selector` as a standard CSS selector, OR a " +
+		"trailing Playwright-style text pseudo — :has-text(\"...\") (substring) / :text-is(\"...\") " +
+		"(exact) — to match by visible text. Alternatively (or additionally), pass `text` to wait for an " +
+		"element with the given visible text directly (case-insensitive substring match); when both are " +
+		"given, text is matched only among elements inside selector. Provide selector OR text (or both)."
 }
 
 func (t *WaitTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"selector": map[string]any{"type": "string", "description": "CSS selector to wait for"},
+			"selector": map[string]any{"type": "string", "description": "CSS selector to wait for, optionally ending in :has-text(\"...\") / :text-is(\"...\") to match by visible text"},
+			"text":     map[string]any{"type": "string", "description": "Wait for an element with this visible text (case-insensitive substring) instead of — or scoped within — selector"},
 		},
-		"required": []string{"selector"},
 	}
 }
 
 func (t *WaitTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	selector, _ := args["selector"].(string)
-	if selector == "" {
+	text, _ := args["text"].(string)
+	if selector == "" && text == "" {
 		return tools.ErrorResult("browser_wait: 'selector' parameter is required")
 	}
 
@@ -515,15 +565,30 @@ func (t *WaitTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, t.mgr.PageTimeout())
 	defer timeoutCancel()
 
+	// Used for the timeout error message below: prefer echoing the CSS
+	// selector the caller gave; fall back to the text query when only `text`
+	// was supplied, so the error always names what the agent was looking for
+	// rather than an opaque internal marker selector.
+	displayTarget := selector
+	if displayTarget == "" {
+		displayTarget = text
+	}
+
+	target, cleanup, rerr := resolveActionSelector(tabCtx, "browser_wait", selector, text, getTextWaitTimeout)
+	defer cleanup()
+	if rerr != nil {
+		return tools.ErrorResult(rerr.Error())
+	}
+
 	// Same fail-fast rationale as browser_get_text (see getTextWaitTimeout's
 	// doc comment): a selector that never appears would otherwise block for
 	// the full PageTimeout (commonly 30s) before failing. Bound the wait with
 	// the same short, dedicated timeout so a missing selector fails fast.
 	waitCtx, waitCancel := context.WithTimeout(tabCtx, getTextWaitTimeout)
-	err = chromedp.Run(waitCtx, chromedp.WaitVisible(selector, chromedp.ByQuery))
+	err = chromedp.Run(waitCtx, chromedp.WaitVisible(target, chromedp.ByQuery))
 	waitCancel()
 	if err != nil {
-		return tools.ErrorResult(fmt.Sprintf("browser_wait: timeout waiting for %q: %s", selector, err))
+		return tools.ErrorResult(fmt.Sprintf("browser_wait: timeout waiting for %q: %s", displayTarget, err))
 	}
 
 	return jsonResult(map[string]any{"found": true})
