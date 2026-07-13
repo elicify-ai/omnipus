@@ -1,0 +1,723 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Omnipus — Header row alignment visual QA</title>
+<style>
+  :root {
+    --color-primary: #0a0a0b;
+    --color-secondary: #e2e8f0;
+    --color-accent: #d4af37;
+    --color-surface-0: #0a0a0b;
+    --color-surface-1: #111113;
+    --color-surface-2: #1a1a1e;
+    --color-surface-3: #222228;
+    --color-muted: #9ca3af;
+    --color-border: #2d3748;
+    --font-headline: 'Outfit', system-ui, -apple-system, sans-serif;
+    --font-body: 'Inter', system-ui, -apple-system, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--color-primary);
+    color: var(--color-secondary);
+    font-family: var(--font-body);
+    padding: 24px;
+    line-height: 1.4;
+  }
+  h1 {
+    font-family: var(--font-headline);
+    font-size: 22px;
+    margin: 0 0 6px;
+  }
+  .sub {
+    color: var(--color-muted);
+    font-size: 13px;
+    margin-bottom: 28px;
+    max-width: 900px;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 28px;
+  }
+  .card {
+    border: 1px solid var(--color-border);
+    border-radius: 12px;
+    overflow: hidden;
+    background: var(--color-surface-0);
+  }
+  .card-label {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 16px;
+    background: var(--color-surface-2);
+    border-bottom: 1px solid var(--color-border);
+  }
+  .card-label h2 {
+    font-family: var(--font-headline);
+    font-size: 15px;
+    margin: 0;
+  }
+  .badge {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--color-border);
+    color: var(--color-muted);
+    white-space: nowrap;
+  }
+  .badge.rec {
+    color: #0a0a0b;
+    background: var(--color-accent);
+    border-color: var(--color-accent);
+  }
+  .badge.fail {
+    color: #fecaca;
+    border-color: #7f1d1d;
+    background: #450a0a;
+  }
+  .badge.warn {
+    color: #fde68a;
+    border-color: #854d0e;
+    background: #422006;
+  }
+  .stage {
+    position: relative;
+    height: 220px;
+    background: var(--color-primary);
+    overflow: hidden;
+  }
+  /* shared shell */
+  .shell {
+    display: flex;
+    height: 100%;
+  }
+  .sidebar {
+    width: 220px;
+    background: var(--color-surface-1);
+    border-right: 1px solid var(--color-border);
+    display: flex;
+    flex-direction: column;
+  }
+  .main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    position: relative;
+  }
+  .content {
+    flex: 1;
+    background: linear-gradient(180deg, var(--color-surface-0), #0d0d10);
+    padding: 16px;
+    color: var(--color-muted);
+    font-size: 12px;
+  }
+  .panel {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 300px;
+    background: var(--color-surface-1);
+    border-left: 1px solid var(--color-border);
+    box-shadow: -12px 0 32px rgba(0,0,0,.35);
+    display: flex;
+    flex-direction: column;
+    z-index: 5;
+  }
+  .panel-body {
+    flex: 1;
+    padding: 12px 16px;
+    color: var(--color-muted);
+    font-size: 12px;
+  }
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+  .title {
+    font-family: var(--font-headline);
+    font-weight: 700;
+  }
+  .muted { color: var(--color-muted); font-size: 11px; }
+  .chip {
+    height: 24px;
+    border-radius: 6px;
+    background: var(--color-surface-2);
+    border: 1px solid var(--color-border);
+    padding: 0 8px;
+    font-size: 11px;
+    display: inline-flex;
+    align-items: center;
+    color: var(--color-muted);
+  }
+  .tab {
+    padding: 0 12px;
+    height: 100%;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--font-headline);
+    font-size: 13px;
+    color: var(--color-muted);
+  }
+  .tab.active {
+    color: var(--color-accent);
+    box-shadow: inset 0 -2px 0 var(--color-accent);
+  }
+  .measure {
+    position: absolute;
+    left: 0; right: 0;
+    pointer-events: none;
+    z-index: 20;
+  }
+  .measure.workspace {
+    border-bottom: 1px dashed rgba(212,175,55,.55);
+  }
+  .measure.panel {
+    border-bottom: 1px dashed rgba(239,68,68,.55);
+  }
+  .measure-label {
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 10px;
+    font-family: ui-monospace, monospace;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: rgba(0,0,0,.7);
+  }
+  .measure.workspace .measure-label { color: var(--color-accent); }
+  .measure.panel .measure-label { color: #fca5a5; }
+  .gap-band {
+    position: absolute;
+    left: 0; right: 0;
+    background: rgba(239,68,68,.12);
+    border-top: 1px solid rgba(239,68,68,.35);
+    border-bottom: 1px solid rgba(239,68,68,.35);
+    z-index: 15;
+    pointer-events: none;
+  }
+  .gap-band span {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 10px;
+    color: #fca5a5;
+    background: rgba(0,0,0,.75);
+    padding: 1px 6px;
+    border-radius: 4px;
+    white-space: nowrap;
+  }
+  .meta {
+    padding: 12px 16px;
+    font-size: 12px;
+    color: var(--color-muted);
+    border-top: 1px solid var(--color-border);
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px 16px;
+  }
+  .meta strong { color: var(--color-secondary); font-weight: 600; }
+  .pill-row { display:flex; gap:6px; flex-wrap:wrap; }
+  .pill {
+    font-size: 10px;
+    padding: 2px 7px;
+    border-radius: 999px;
+    border: 1px solid var(--color-border);
+  }
+  .pill.ok { color: #6ee7b7; border-color: #065f46; background:#022c22; }
+  .pill.bad { color: #fca5a5; border-color: #7f1d1d; background:#450a0a; }
+  .pill.mid { color: #fde68a; border-color: #854d0e; background:#422006; }
+
+  /* ========== VARIANT: CURRENT ========== */
+  /* Workspace top bar: h-11 hamburger + py-3 tabs ≈ 44px */
+  .v-current .ws-header {
+    height: 44px;
+    padding: 0 0 0 0;
+    border-bottom: 1px solid var(--color-border);
+    background: color-mix(in srgb, var(--color-surface-1) 95%, transparent);
+    display: flex;
+    align-items: center;
+  }
+  .v-current .ws-header .ham {
+    width: 40px; height: 44px;
+    display:flex; align-items:center; justify-content:center;
+    color: var(--color-secondary);
+  }
+  .v-current .sidebar-header {
+    /* py-5 + h-8 logo ≈ 20+32+20 = 72 */
+    height: 72px;
+    padding: 0 16px;
+    border-bottom: 1px solid var(--color-border);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .v-current .sidebar-header .logo {
+    width: 32px; height: 32px; border-radius: 6px;
+    background: linear-gradient(135deg, #d4af37, #8b7355);
+  }
+  .v-current .sidebar-header .brand {
+    font-family: var(--font-headline);
+    font-weight: 700;
+    font-size: 17px;
+  }
+  /* ScreenHeader: py-3 (12*2) + h-8 (32) = 56 */
+  .v-current .screen-header {
+    height: 56px;
+    padding: 0 16px;
+    border-bottom: 1px solid var(--color-border);
+    background: var(--color-surface-1);
+    display:flex; align-items:center; gap:12px;
+  }
+  /* Session/Activity panel: pt-5 pb-3 + title ~28 ≈ 20+12+28 = 60 */
+  .v-current .panel-header.tall {
+    height: 60px;
+    padding: 0 16px;
+    border-bottom: 1px solid var(--color-border);
+    display:flex; align-items:center;
+  }
+  .v-current .panel-header.tall .title { font-size: 18px; }
+  /* Notification: py-3 + text-base ≈ 12*2+24 = 48 */
+  .v-current .panel-header.mid {
+    height: 48px;
+    padding: 0 16px;
+    border-bottom: 1px solid var(--color-border);
+    display:flex; align-items:center; justify-content:space-between;
+  }
+  .v-current .panel-header.mid .title { font-size: 16px; font-weight: 600; }
+  /* Default SheetHeader inside p-6 content: effectively sits below 24px pad + title */
+  .v-current .panel.form {
+    padding: 24px;
+  }
+  .v-current .panel.form .panel-header.form {
+    height: auto;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--color-border);
+    margin: 0 0 12px 0;
+  }
+  .v-current .panel.form .panel-header.form .title { font-size: 18px; }
+  .v-current .panel.form .panel-body { padding: 0; }
+
+  /* ========== VARIANT: HEIGHT SYNC ONLY ========== */
+  .v-height .ws-header,
+  .v-height .sidebar-header,
+  .v-height .screen-header,
+  .v-height .panel-header {
+    height: 44px;
+    min-height: 44px;
+    padding: 0 16px;
+    border-bottom: 1px solid var(--color-border);
+    background: var(--color-surface-1);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .v-height .ws-header { padding-left: 0; }
+  .v-height .ws-header .ham {
+    width: 40px; height: 44px;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .v-height .sidebar-header .logo {
+    width: 24px; height: 24px; border-radius: 5px;
+    background: linear-gradient(135deg, #d4af37, #8b7355);
+  }
+  .v-height .sidebar-header .brand {
+    font-family: var(--font-headline);
+    font-weight: 700;
+    font-size: 15px;
+  }
+  .v-height .panel-header .title { font-size: 14px; font-weight: 600; }
+  .v-height .screen-header .title { font-size: 14px; font-weight: 600; }
+  .v-height .panel { /* no extra pad on content sheet for header row */ }
+  .v-height .panel.form { padding: 0; }
+  .v-height .panel.form .panel-body { padding: 16px; }
+
+  /* ========== VARIANT: BORDERLESS ONLY ========== */
+  .v-borderless .ws-header {
+    height: 44px;
+    border-bottom: none;
+    background: color-mix(in srgb, var(--color-surface-1) 95%, transparent);
+    display:flex; align-items:center;
+  }
+  .v-borderless .ws-header .ham {
+    width: 40px; height: 44px;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .v-borderless .sidebar-header {
+    height: 72px;
+    padding: 0 16px;
+    border-bottom: none;
+    display:flex; align-items:center; gap:12px;
+  }
+  .v-borderless .sidebar-header .logo {
+    width: 32px; height: 32px; border-radius: 6px;
+    background: linear-gradient(135deg, #d4af37, #8b7355);
+  }
+  .v-borderless .sidebar-header .brand {
+    font-family: var(--font-headline);
+    font-weight: 700; font-size: 17px;
+  }
+  .v-borderless .screen-header {
+    height: 56px; padding: 0 16px;
+    border-bottom: none;
+    background: var(--color-surface-1);
+    display:flex; align-items:center; gap:12px;
+  }
+  .v-borderless .panel-header.tall {
+    height: 60px; padding: 0 16px;
+    border-bottom: none;
+    display:flex; align-items:center;
+  }
+  .v-borderless .panel-header.tall .title { font-size: 18px; }
+  .v-borderless .panel-header.mid {
+    height: 48px; padding: 0 16px;
+    border-bottom: none;
+    display:flex; align-items:center; justify-content:space-between;
+  }
+  .v-borderless .panel-header.mid .title { font-size: 16px; font-weight:600; }
+
+  /* ========== VARIANT: BOTH (RECOMMENDED) ========== */
+  .v-both .ws-header,
+  .v-both .sidebar-header,
+  .v-both .screen-header,
+  .v-both .panel-header {
+    height: 44px;
+    min-height: 44px;
+    padding: 0 16px;
+    border-bottom: none; /* flat */
+    background: var(--color-surface-1);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .v-both .ws-header { padding-left: 0; }
+  .v-both .ws-header .ham {
+    width: 40px; height: 44px;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .v-both .sidebar-header .logo {
+    width: 24px; height: 24px; border-radius: 5px;
+    background: linear-gradient(135deg, #d4af37, #8b7355);
+  }
+  .v-both .sidebar-header .brand {
+    font-family: var(--font-headline);
+    font-weight: 700; font-size: 15px;
+  }
+  .v-both .panel-header .title,
+  .v-both .screen-header .title { font-size: 14px; font-weight: 600; }
+  .v-both .panel.form { padding: 0; }
+  .v-both .panel.form .panel-body { padding: 16px; }
+  /* subtle surface step still separates body without a hairline */
+  .v-both .panel-body {
+    background: var(--color-surface-0);
+  }
+  .v-both .content {
+    /* breadcrumb-like soft divider via surface, not border */
+  }
+
+  /* ruler helpers for current */
+  .stage { --ws-h: 44px; }
+  .v-current .measure.workspace { top: 0; height: 44px; }
+  .v-current .measure.panel.sessions { top: 0; height: 60px; }
+  .v-current .gap-band.sessions { top: 44px; height: 16px; }
+
+  .v-height .measure.workspace,
+  .v-height .measure.panel.sessions,
+  .v-both .measure.workspace,
+  .v-both .measure.panel.sessions { top: 0; height: 44px; }
+
+  .v-borderless .measure.workspace { top: 0; height: 44px; }
+  .v-borderless .measure.panel.sessions { top: 0; height: 60px; }
+  .v-borderless .gap-band.sessions { top: 44px; height: 16px; }
+
+  .legend {
+    display: flex; gap: 16px; flex-wrap: wrap;
+    margin: 8px 0 20px;
+    font-size: 12px;
+    color: var(--color-muted);
+  }
+  .legend i {
+    display: inline-block; width: 18px; height: 0;
+    border-bottom: 1px dashed; vertical-align: middle; margin-right: 6px;
+  }
+  .legend .g { border-color: var(--color-accent); }
+  .legend .r { border-color: #fca5a5; }
+  .legend .band {
+    display:inline-block; width: 18px; height: 10px;
+    background: rgba(239,68,68,.18);
+    border: 1px solid rgba(239,68,68,.4);
+    vertical-align: middle; margin-right: 6px;
+  }
+  .verdict {
+    margin-top: 28px;
+    padding: 16px 18px;
+    border: 1px solid color-mix(in srgb, var(--color-accent) 40%, var(--color-border));
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--color-accent) 8%, var(--color-surface-1));
+  }
+  .verdict h2 {
+    font-family: var(--font-headline);
+    font-size: 16px;
+    margin: 0 0 8px;
+    color: var(--color-accent);
+  }
+  .verdict p { margin: 0 0 8px; font-size: 13px; color: var(--color-secondary); }
+  .verdict ul { margin: 0; padding-left: 18px; font-size: 13px; color: var(--color-muted); }
+  .verdict li { margin-bottom: 4px; }
+  code { font-family: ui-monospace, monospace; font-size: 11px; color: var(--color-accent); }
+</style>
+</head>
+<body>
+  <h1>Header row alignment — visual comparison</h1>
+  <p class="sub">
+    Measured from current code on <code>bugfixes2</code>. Workspace top bar is the reference
+    (hamburger <code>h-11</code> / tab <code>py-3</code> → <strong>44px</strong>).
+    Panel headers vary: Session/Activity <code>pt-5 pb-3</code> ≈ <strong>60px</strong>,
+    Notification <code>py-3</code> ≈ <strong>48px</strong>, Sidebar brand <code>py-5</code> ≈ <strong>72px</strong>,
+    ScreenHeader <code>py-3 + h-8</code> ≈ <strong>56px</strong>, default Sheet padding <code>p-6</code> adds more offset.
+  </p>
+  <div class="legend">
+    <span><i class="g"></i> workspace header edge (44px)</span>
+    <span><i class="r"></i> panel header edge</span>
+    <span><span class="band"></span> height mismatch band</span>
+  </div>
+
+  <div class="grid">
+
+    <!-- CURRENT -->
+    <section class="card" id="current">
+      <div class="card-label">
+        <h2>0 · Current (as shipped)</h2>
+        <span class="badge fail">misaligned</span>
+      </div>
+      <div class="stage v-current">
+        <div class="shell">
+          <aside class="sidebar">
+            <div class="sidebar-header">
+              <div class="logo"></div>
+              <div class="brand">Omnipus</div>
+            </div>
+            <div style="padding:12px 16px; color:var(--color-muted); font-size:11px;">Workspaces…</div>
+          </aside>
+          <div class="main">
+            <div class="ws-header">
+              <div class="ham">☰</div>
+              <div class="tab active">Chat</div>
+              <div class="tab">Board</div>
+              <div class="tab">List</div>
+              <div style="flex:1"></div>
+              <div class="chip" style="margin-right:12px">Sessions</div>
+            </div>
+            <div class="content">Chat stream…</div>
+            <div class="panel">
+              <div class="panel-header tall">
+                <div class="title">Sessions</div>
+              </div>
+              <div class="panel-body">search + session list…</div>
+            </div>
+          </div>
+        </div>
+        <div class="measure workspace"><span class="measure-label">ws 44px</span></div>
+        <div class="measure panel sessions"><span class="measure-label" style="right:auto;left:8px;">panel 60px</span></div>
+        <div class="gap-band sessions"><span>+16px taller · borders fight</span></div>
+      </div>
+      <div class="meta">
+        <div><strong>Heights</strong><br/>WS 44 · Panel 60 · Sidebar 72 · Screen 56</div>
+        <div><strong>Borders</strong><br/>Every chrome row has <code>border-b</code> → stacked hairlines</div>
+        <div class="pill-row">
+          <span class="pill bad">Continuity broken</span>
+          <span class="pill bad">Common region over-drawn</span>
+          <span class="pill bad">Cognitive load (chrome noise)</span>
+        </div>
+        <div class="pill-row">
+          <span class="pill bad">Alignment axes &gt; 1</span>
+          <span class="pill mid">Looks “nested admin UI”</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- HEIGHT ONLY -->
+    <section class="card" id="height-only">
+      <div class="card-label">
+        <h2>A · Height sync only (keep borders)</h2>
+        <span class="badge warn">partial</span>
+      </div>
+      <div class="stage v-height">
+        <div class="shell">
+          <aside class="sidebar">
+            <div class="sidebar-header">
+              <div class="logo"></div>
+              <div class="brand">Omnipus</div>
+            </div>
+            <div style="padding:12px 16px; color:var(--color-muted); font-size:11px;">Workspaces…</div>
+          </aside>
+          <div class="main">
+            <div class="ws-header">
+              <div class="ham">☰</div>
+              <div class="tab active">Chat</div>
+              <div class="tab">Board</div>
+              <div class="tab">List</div>
+              <div style="flex:1"></div>
+              <div class="chip" style="margin-right:12px">Sessions</div>
+            </div>
+            <div class="content">Chat stream…</div>
+            <div class="panel">
+              <div class="panel-header">
+                <div class="title">Sessions</div>
+              </div>
+              <div class="panel-body">search + session list…</div>
+            </div>
+          </div>
+        </div>
+        <div class="measure workspace"><span class="measure-label">ws 44px</span></div>
+        <div class="measure panel sessions"><span class="measure-label" style="right:auto;left:8px;">panel 44px ✓</span></div>
+      </div>
+      <div class="meta">
+        <div><strong>Heights</strong><br/>All chrome rows locked to <code>44px</code> (h-11)</div>
+        <div><strong>Borders</strong><br/>Still present → double line where panel meets workspace bar</div>
+        <div class="pill-row">
+          <span class="pill ok">Continuity restored</span>
+          <span class="pill ok">Spatial memory</span>
+          <span class="pill mid">Border still fragments</span>
+        </div>
+        <div class="pill-row">
+          <span class="pill mid">Still “boxed” chrome</span>
+          <span class="pill ok">Touch target ≥44</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- BORDERLESS ONLY -->
+    <section class="card" id="borderless-only">
+      <div class="card-label">
+        <h2>B · Borderless only (keep uneven heights)</h2>
+        <span class="badge warn">partial</span>
+      </div>
+      <div class="stage v-borderless">
+        <div class="shell">
+          <aside class="sidebar">
+            <div class="sidebar-header">
+              <div class="logo"></div>
+              <div class="brand">Omnipus</div>
+            </div>
+            <div style="padding:12px 16px; color:var(--color-muted); font-size:11px;">Workspaces…</div>
+          </aside>
+          <div class="main">
+            <div class="ws-header">
+              <div class="ham">☰</div>
+              <div class="tab active">Chat</div>
+              <div class="tab">Board</div>
+              <div class="tab">List</div>
+              <div style="flex:1"></div>
+              <div class="chip" style="margin-right:12px">Sessions</div>
+            </div>
+            <div class="content">Chat stream…</div>
+            <div class="panel">
+              <div class="panel-header tall">
+                <div class="title">Sessions</div>
+              </div>
+              <div class="panel-body">search + session list…</div>
+            </div>
+          </div>
+        </div>
+        <div class="measure workspace"><span class="measure-label">ws 44px</span></div>
+        <div class="measure panel sessions"><span class="measure-label" style="right:auto;left:8px;">panel 60px</span></div>
+        <div class="gap-band sessions"><span>+16px still misaligned</span></div>
+      </div>
+      <div class="meta">
+        <div><strong>Heights</strong><br/>Still uneven — eye still catches the step</div>
+        <div><strong>Borders</strong><br/>Removed → flatter, less admin-chrome noise</div>
+        <div class="pill-row">
+          <span class="pill ok">Less visual noise</span>
+          <span class="pill bad">Continuity still broken</span>
+          <span class="pill mid">Flat but crooked</span>
+        </div>
+        <div class="pill-row">
+          <span class="pill mid">Common region weaker without height lock</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- BOTH -->
+    <section class="card" id="both">
+      <div class="card-label">
+        <h2>C · Height sync + borderless (recommended)</h2>
+        <span class="badge rec">best</span>
+      </div>
+      <div class="stage v-both">
+        <div class="shell">
+          <aside class="sidebar">
+            <div class="sidebar-header">
+              <div class="logo"></div>
+              <div class="brand">Omnipus</div>
+            </div>
+            <div style="padding:12px 16px; color:var(--color-muted); font-size:11px;">Workspaces…</div>
+          </aside>
+          <div class="main">
+            <div class="ws-header">
+              <div class="ham">☰</div>
+              <div class="tab active">Chat</div>
+              <div class="tab">Board</div>
+              <div class="tab">List</div>
+              <div style="flex:1"></div>
+              <div class="chip" style="margin-right:12px">Sessions</div>
+            </div>
+            <div class="content">Chat stream…</div>
+            <div class="panel">
+              <div class="panel-header">
+                <div class="title">Sessions</div>
+              </div>
+              <div class="panel-body">search + session list…</div>
+            </div>
+          </div>
+        </div>
+        <div class="measure workspace"><span class="measure-label">ws 44px</span></div>
+        <div class="measure panel sessions"><span class="measure-label" style="right:auto;left:8px;">panel 44px ✓ flat</span></div>
+      </div>
+      <div class="meta">
+        <div><strong>Heights</strong><br/>Single shared chrome row: <code>h-11 / 44px</code></div>
+        <div><strong>Borders</strong><br/>No header <code>border-b</code>; separation via surface step / content</div>
+        <div class="pill-row">
+          <span class="pill ok">Continuity</span>
+          <span class="pill ok">Common region via height</span>
+          <span class="pill ok">Cognitive load ↓</span>
+        </div>
+        <div class="pill-row">
+          <span class="pill ok">Aesthetic-usability</span>
+          <span class="pill ok">Flat modern shell</span>
+          <span class="pill ok">1 alignment axis</span>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <section class="verdict">
+    <h2>Recommendation</h2>
+    <p>
+      <strong>Do both</strong> — lock all shell/panel header rows to the workspace top-bar height
+      (<code>44px / h-11</code>, already the WCAG 2.5.8 floor used by the hamburger) <em>and</em>
+      drop the header hairline borders in favour of a flat surface (content can still use spacing
+      or a subtler surface step). Height alone leaves stacked borders; borders alone leave the step.
+    </p>
+    <ul>
+      <li><strong>Token:</strong> introduce something like <code>--spacing-chrome-header: 2.75rem /* 44px */</code> and a shared <code>SheetHeader</code> / chrome class.</li>
+      <li><strong>Keep</strong> panel side borders and the sheet elevation shadow — only the <em>header row</em> border goes.</li>
+      <li><strong>Exception:</strong> multi-line headers (title + description, e.g. ChannelConfig) should keep min-height 44px on the title row, not force single-line truncation of the description.</li>
+      <li><strong>Sidebar brand:</strong> shrink logo 32→24 and padding so the brand row also hits 44px — otherwise the left rail still reads taller than the workspace bar.</li>
+    </ul>
+  </section>
+</body>
+</html>
