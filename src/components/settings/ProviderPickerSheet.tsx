@@ -59,15 +59,17 @@ export function ProviderPickerSheet({
         className="flex h-full flex-col"
         data-testid="provider-picker-sheet"
       >
-        <SheetHeader className="mb-4 shrink-0">
+        <SheetHeader className="-mx-6 -mt-6 mb-0 px-6">
           <SheetTitle>Connect a provider</SheetTitle>
-          <SheetDescription>Choose a provider to connect an API key.</SheetDescription>
         </SheetHeader>
+        <SheetDescription className="pt-3 shrink-0">
+          Choose a provider to connect an API key.
+        </SheetDescription>
 
         {/* Header + search stay fixed; only the provider list below scrolls.
             (`overflow-y-auto` needs a bounded height — the previous wrapper had
             none, so long lists just clipped instead of scrolling.) */}
-        <div className="flex min-h-0 flex-1 flex-col gap-4">
+        <div className="flex min-h-0 flex-1 flex-col gap-4 pt-4">
           <div className="relative shrink-0">
             <MagnifyingGlass
               size={13}

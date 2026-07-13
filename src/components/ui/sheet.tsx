@@ -106,8 +106,24 @@ const SheetContent = React.forwardRef<
 ))
 SheetContent.displayName = DialogPrimitive.Content.displayName
 
+/**
+ * SheetHeader — flat chrome header row shared with the workspace top bar.
+ *
+ * Defaults to a single 44px (`h-chrome-header`) horizontal row with no
+ * bottom border so open panels align with the main shell instead of
+ * sitting taller with stacked hairlines. Override with `h-auto min-h-0
+ * flex-col items-start py-3` (and put description content below the
+ * title) when a multi-line header is required — never reintroduce
+ * `border-b` on chrome rows.
+ */
 const SheetHeader = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
-  <div className={cn('flex flex-col space-y-2 text-left', className)} {...props} />
+  <div
+    className={cn(
+      'flex flex-row items-center gap-2 text-left h-chrome-header min-h-chrome-header px-4 shrink-0',
+      className,
+    )}
+    {...props}
+  />
 )
 SheetHeader.displayName = 'SheetHeader'
 
@@ -122,7 +138,12 @@ const SheetTitle = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Title
     ref={ref}
-    className={cn('font-headline text-lg font-bold text-[var(--color-secondary)]', className)}
+    className={cn(
+      // text-sm / semibold keeps the title inside the 44px chrome row without
+      // forcing the panel header taller than the workspace top bar.
+      'font-headline text-sm font-semibold text-[var(--color-secondary)] truncate',
+      className,
+    )}
     {...props}
   />
 ))

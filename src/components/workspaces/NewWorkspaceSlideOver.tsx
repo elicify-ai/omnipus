@@ -102,14 +102,14 @@ export function NewWorkspaceSlideOver({ open, onOpenChange }: NewWorkspaceSlideO
 
   return (
     <Sheet open={open} onOpenChange={handleOpenChange}>
-      <SheetContent side="right" className="w-full sm:max-w-md flex flex-col">
-        <SheetHeader>
-          <SheetTitle className="font-headline text-[var(--color-secondary)]">
+      <SheetContent side="right" className="w-full sm:max-w-md flex flex-col p-0">
+        <SheetHeader className="px-6 pr-14">
+          <SheetTitle>
             New workspace
           </SheetTitle>
         </SheetHeader>
 
-        <form onSubmit={handleSubmit} className="flex flex-col flex-1 gap-5 py-4">
+        <form onSubmit={handleSubmit} className="flex flex-col flex-1 gap-5 px-6 py-4">
           {/* Name */}
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="new-workspace-name" className="text-[var(--color-secondary)]">
@@ -266,7 +266,7 @@ export function NewWorkspaceSlideOver({ open, onOpenChange }: NewWorkspaceSlideO
 
           <div className="flex-1" />
 
-          <SheetFooter className="flex-row gap-2 pt-2">
+          <SheetFooter className="flex-row gap-2 px-0 py-2">
             <Button
               type="button"
               variant="ghost"

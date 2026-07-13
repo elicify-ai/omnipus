@@ -11,21 +11,27 @@ interface ScreenHeaderProps {
  *
  * Hosts the hamburger (sidebar toggle) at the left, the screen title in the
  * centre-left, and an optional right-aligned actions slot for per-screen
- * controls (e.g. buttons, icon triggers). Height and padding match the
- * workspace chat header for visual consistency across the app.
+ * controls (e.g. buttons, icon triggers).
+ *
+ * Height is locked to the shared chrome header token (`h-chrome-header` =
+ * 44px) and has no bottom border so it lines up with the workspace top bar and
+ * open panel headers (flat shell chrome).
  */
 export function ScreenHeader({ title, actions }: ScreenHeaderProps) {
   const toggle = useSidebarStore((s) => s.toggle)
 
   return (
-    <header role="banner" className="flex items-center gap-3 px-4 py-3 border-b border-[var(--color-border)] bg-[var(--color-surface-1)] flex-shrink-0">
-      {/* Hamburger — sidebar toggle */}
+    <header
+      role="banner"
+      className="flex items-center gap-3 px-4 h-chrome-header min-h-chrome-header bg-[var(--color-surface-1)] flex-shrink-0"
+    >
+      {/* Hamburger — sidebar toggle (full chrome-row height for Fitts / AA) */}
       <button
         id="sidebar-hamburger"
         type="button"
         onClick={toggle}
         aria-label="Toggle navigation sidebar"
-        className="flex items-center justify-center h-8 w-8 rounded-md text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors flex-shrink-0"
+        className="flex items-center justify-center h-11 w-10 -ml-2 rounded-md text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors flex-shrink-0"
       >
         <List size={20} />
       </button>
@@ -37,7 +43,7 @@ export function ScreenHeader({ title, actions }: ScreenHeaderProps) {
 
       {/* Optional right-aligned actions slot */}
       {actions && (
-        <div className="flex items-center gap-2 flex-shrink-0">
+        <div className="flex items-center gap-2 flex-shrink-0" data-testid="screen-header-actions">
           {actions}
         </div>
       )}

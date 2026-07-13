@@ -98,11 +98,9 @@ export function ActivityPanel({ open, onOpenChange, running, recentlyFinished }:
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="right" className="w-[90vw] sm:w-[22.5rem] p-0 flex flex-col" overlay={false}>
-        <SheetHeader className="px-4 pt-5 pb-3 border-b border-[var(--color-border)]">
-          <div className="flex items-center gap-2">
-            <SheetTitle>Activity</SheetTitle>
-            <Badge variant={running.length > 0 ? 'default' : 'muted'}>{running.length} running</Badge>
-          </div>
+        <SheetHeader>
+          <SheetTitle>Activity</SheetTitle>
+          <Badge variant={running.length > 0 ? 'default' : 'muted'}>{running.length} running</Badge>
         </SheetHeader>
 
         <div className="flex-1 overflow-y-auto px-3 py-3 space-y-4">

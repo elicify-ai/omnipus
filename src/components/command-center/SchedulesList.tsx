@@ -356,8 +356,8 @@ function ScheduleDetailSheet({
       >
         {schedule && (
           <>
-            <SheetHeader className="pb-4 border-b border-[var(--color-border)]">
-              <SheetTitle className="font-headline text-base font-semibold text-[var(--color-secondary)]">
+            <SheetHeader className="-mx-6 -mt-6 mb-0 px-6">
+              <SheetTitle>
                 {schedule.name}
               </SheetTitle>
             </SheetHeader>

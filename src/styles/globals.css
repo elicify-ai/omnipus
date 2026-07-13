@@ -58,6 +58,13 @@
   --spacing-tap-target-min: 44px;            /* WCAG 2.5.8 AA minimum */
   --spacing-tap-target-comfortable: 40px;    /* swatch-style controls without inner content */
 
+  /* Shell / panel chrome header row.
+     Shared height for workspace top bar, ScreenHeader, sidebar brand,
+     and SheetHeader panel chrome so open panels align with the main shell.
+     Matches h-11 / tap-target-min (44px). Prefer the `h-chrome-header`
+     utility over ad-hoc py-* on header rows. */
+  --spacing-chrome-header: 44px;
+
   /* Animation */
   --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
 }
@@ -81,6 +88,16 @@
 }
 @utility min-w-tap-target-comfortable {
   min-width: var(--spacing-tap-target-comfortable);
+}
+
+/* Flat 44px chrome header row — workspace top bar, ScreenHeader, sidebar
+   brand, SheetHeader. No border-b: separation comes from surface steps /
+   content spacing so open panels share one continuous top edge with the shell. */
+@utility h-chrome-header {
+  height: var(--spacing-chrome-header);
+}
+@utility min-h-chrome-header {
+  min-height: var(--spacing-chrome-header);
 }
 
 /* ------------------------------------------------------------------ */

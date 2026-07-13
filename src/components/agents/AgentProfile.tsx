@@ -2102,25 +2102,32 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       title={`Edit ${agent.name}`}
       onOpenAutoFocus={handleOpenAutoFocus}
     >
-      <SheetHeader className="px-8 pt-7 pb-5 border-b border-[var(--color-border)] shrink-0">
-          <div className="flex items-center gap-4">
-            <AvatarHeader color={selectedColor} />
-            <div className="min-w-0">
-              <h1 className="font-headline text-xl font-bold text-[var(--color-secondary)]">{agent.name}</h1>
-              <div className="flex items-center gap-2 mt-1">
-                <Badge variant={agent.type === 'core' ? 'secondary' : 'outline'}>
-                  {agent.type}
-                </Badge>
-                {agent.locked && (
-                  <Badge variant="outline" className="text-[var(--color-muted)] border-[var(--color-border)]">
-                    read-only
-                  </Badge>
-                )}
-                <span className="text-xs text-[var(--color-muted)]">{agent.description}</span>
-          </div>
+      {/* Title row locked to 44px chrome; badges/description sit below so the
+          open panel aligns with the workspace top bar (flat shell chrome). */}
+      <SheetHeader className="px-6 sm:px-8 pr-14">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <AvatarHeader
+            color={selectedColor}
+            className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 [&>svg]:!w-3.5 [&>svg]:!h-3.5"
+          />
+          <h1 className="font-headline text-sm font-semibold text-[var(--color-secondary)] truncate">
+            {agent.name}
+          </h1>
         </div>
-        </div>
-        </SheetHeader>
+      </SheetHeader>
+      <div className="px-6 sm:px-8 pb-3 flex items-center gap-2 min-w-0 flex-wrap">
+        <Badge variant={agent.type === 'core' ? 'secondary' : 'outline'}>
+          {agent.type}
+        </Badge>
+        {agent.locked && (
+          <Badge variant="outline" className="text-[var(--color-muted)] border-[var(--color-border)]">
+            read-only
+          </Badge>
+        )}
+        {agent.description && (
+          <span className="text-xs text-[var(--color-muted)] truncate">{agent.description}</span>
+        )}
+      </div>
 
       {/* Wave 5 / spec §6 BDD #13 + §6.4: locked-banner for built-in core
           agents. Pinned at the top of the body, above the tab bar, so the

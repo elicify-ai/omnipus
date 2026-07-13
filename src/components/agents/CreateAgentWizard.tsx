@@ -374,8 +374,10 @@ export function CreateAgentWizard({
         // shifts focus into the dialog, then restores focus on close.
         onOpenAutoFocus={onOpenAutoFocus}
       >
-        <SheetHeader className="px-4 sm:px-8 pt-5 sm:pt-7 pb-4 sm:pb-5 border-b border-[var(--color-border)] shrink-0">
+        <SheetHeader className="px-4 sm:px-8">
           <SheetTitle>+ New agent</SheetTitle>
+        </SheetHeader>
+        <div className="px-4 sm:px-8 pt-3 pb-4 shrink-0">
           <SheetDescription>
             Configure the agent's identity, personality, and tools.
           </SheetDescription>
@@ -446,7 +448,7 @@ export function CreateAgentWizard({
               )
             })}
           </ol>
-        </SheetHeader>
+        </div>
 
         <div
           className="flex-1 overflow-auto px-4 sm:px-8 py-6 space-y-4"

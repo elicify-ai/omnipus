@@ -83,7 +83,9 @@ export function WorkspaceTabBar({ workspaceId }: WorkspaceTabBarProps) {
               aria-label={label}
               data-testid={`workspace-tab-${segment}`}
               className={cn(
-                'group relative flex items-center gap-1.5 px-3 py-3 text-sm font-headline whitespace-nowrap outline-none transition-colors',
+                // h-full fills the shared 44px chrome header; no py-3 so the
+                // tab strip cannot push the workspace top bar taller than panels.
+                'group relative flex items-center gap-1.5 px-3 h-full text-sm font-headline whitespace-nowrap outline-none transition-colors',
                 'focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/50 rounded-t-sm',
                 isActive
                   ? 'text-[var(--color-accent)]'
@@ -95,7 +97,7 @@ export function WorkspaceTabBar({ workspaceId }: WorkspaceTabBarProps) {
               {isActive && (
                 <motion.div
                   layoutId="workspace-tab-underline"
-                  className="absolute inset-x-1 -bottom-px h-0.5 rounded-full bg-[var(--color-accent)]"
+                  className="absolute inset-x-1 bottom-0 h-0.5 rounded-full bg-[var(--color-accent)]"
                   transition={{ type: 'spring', stiffness: 500, damping: 32 }}
                 />
               )}

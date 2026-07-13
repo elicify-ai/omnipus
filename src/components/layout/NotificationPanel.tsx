@@ -89,8 +89,8 @@ export function NotificationPanel() {
         side="right"
         className="sm:w-[360px] bg-[var(--color-surface-1)] border-[var(--color-border)] overflow-y-auto p-0"
       >
-        <SheetHeader className="flex flex-row items-center justify-between gap-2 px-4 py-3 border-b border-[var(--color-border)] space-y-0">
-          <SheetTitle className="font-headline text-base font-semibold text-[var(--color-secondary)]">
+        <SheetHeader className="justify-between">
+          <SheetTitle>
             Notifications
           </SheetTitle>
           {unreadCount > 0 && (
