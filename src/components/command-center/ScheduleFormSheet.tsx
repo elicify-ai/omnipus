@@ -443,8 +443,8 @@ export function ScheduleFormSheet({
         side="right"
         className="sm:w-[480px] bg-[var(--color-surface-1)] border-[var(--color-border)] overflow-y-auto"
       >
-        <SheetHeader className="pb-4 border-b border-[var(--color-border)]">
-          <SheetTitle className="font-headline text-base font-semibold text-[var(--color-secondary)]">
+        <SheetHeader className="-mx-6 -mt-6 mb-0 px-6">
+          <SheetTitle>
             {isEdit ? 'Edit schedule' : 'New schedule'}
           </SheetTitle>
         </SheetHeader>

@@ -1473,7 +1473,7 @@ export function BrowserLiveView({
           regardless (harmless, and other Sheet-hosted content elsewhere in
           the app still relies on the default). */}
       <div
-        className="flex shrink-0 items-center gap-2 overflow-x-auto border-b border-[var(--color-border)] pl-4 pr-14 py-3"
+        className="flex shrink-0 items-center gap-2 overflow-x-auto h-chrome-header min-h-chrome-header pl-4 pr-14"
         style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' } as React.CSSProperties}
       >
         <Monitor size={16} weight="duotone" className="shrink-0 text-[var(--color-accent)]" />

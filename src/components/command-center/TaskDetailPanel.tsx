@@ -980,13 +980,15 @@ export function WorkflowTaskDetailPanel({
 }) {
   return (
     <Sheet open={task != null} onOpenChange={(open) => { if (!open) onClose() }}>
-      <SheetContent side="right" className="w-full sm:w-[380px] md:w-[460px] overflow-y-auto">
-        <SheetHeader className="mb-5">
-          <SheetTitle className="pr-6 leading-snug">{task?.title ?? ''}</SheetTitle>
+      <SheetContent side="right" className="w-full sm:w-[380px] md:w-[460px] overflow-y-auto p-0">
+        <SheetHeader className="px-6 pr-14">
+          <SheetTitle>{task?.title ?? ''}</SheetTitle>
         </SheetHeader>
 
         {task && (
-          <TaskDetailPanel task={task} onClose={onClose} onTaskSelect={onTaskSelect} />
+          <div className="px-6 py-4">
+            <TaskDetailPanel task={task} onClose={onClose} onTaskSelect={onTaskSelect} />
+          </div>
         )}
       </SheetContent>
     </Sheet>

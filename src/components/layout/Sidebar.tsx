@@ -172,14 +172,14 @@ export function Sidebar() {
   // Sidebar content shared between pinned and overlay modes
   const sidebarContent = (
     <nav className="flex h-full flex-col" aria-label="Main navigation">
-      {/* Brand mark */}
-      <div className="flex items-center gap-3 px-4 py-5 border-b border-[var(--color-border)]">
+      {/* Brand mark — 44px chrome row, no border-b (flat shell alignment) */}
+      <div className="flex items-center gap-2.5 px-4 h-chrome-header min-h-chrome-header shrink-0">
         <img
           src={avatarUrl}
           alt="Omnipus"
-          className="h-8 w-8 flex-shrink-0"
+          className="h-6 w-6 flex-shrink-0"
         />
-        <span className="font-headline text-lg font-bold text-[var(--color-secondary)]">
+        <span className="font-headline text-sm font-bold text-[var(--color-secondary)]">
           Omnipus
         </span>
       </div>

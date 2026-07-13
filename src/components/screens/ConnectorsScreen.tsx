@@ -532,17 +532,17 @@ function CreateChannelSheet({
         className="sm:w-[420px] bg-[var(--color-surface-1)] border-[var(--color-border)] overflow-y-auto"
         data-testid="create-channel-sheet"
       >
-        <SheetHeader className="pb-4 border-b border-[var(--color-border)]">
-          <SheetTitle className="font-headline text-base font-semibold text-[var(--color-secondary)]">
+        <SheetHeader className="-mx-6 -mt-6 mb-0 px-6">
+          <SheetTitle>
             Add a channel
           </SheetTitle>
-          <SheetDescription className="text-xs text-[var(--color-muted)] leading-relaxed">
-            Pick the channel, the workspace it serves, and the agent that answers.
-            It goes live once you configure its credentials.
-          </SheetDescription>
         </SheetHeader>
+        <SheetDescription className="text-xs text-[var(--color-muted)] leading-relaxed pt-3">
+          Pick the channel, the workspace it serves, and the agent that answers.
+          It goes live once you configure its credentials.
+        </SheetDescription>
 
-        <form onSubmit={handleSubmit} className="space-y-4 pt-5">
+        <form onSubmit={handleSubmit} className="space-y-4 pt-4">
           {/* Channel type — locked when opened from a group's "Add another…" */}
           <div className="space-y-1.5">
             <Label htmlFor="channel-type-select" className="text-xs font-medium text-[var(--color-secondary)]">

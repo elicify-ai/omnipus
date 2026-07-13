@@ -140,7 +140,7 @@ function WorkspaceTabContainerView({
             selector. @container enables container-query variants on children. */}
         <header
           role="banner"
-          className="@container flex items-center border-b border-[var(--color-border)] bg-[var(--color-surface-1)]/95 backdrop-blur-sm flex-shrink-0"
+          className="@container flex items-center h-chrome-header min-h-chrome-header bg-[var(--color-surface-1)]/95 backdrop-blur-sm flex-shrink-0"
           data-testid="workspace-top-bar"
         >
           <button

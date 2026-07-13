@@ -677,22 +677,24 @@ export function ChannelConfigPanel({
         className="sm:w-[480px] bg-[var(--color-surface-1)] border-[var(--color-border)] overflow-y-auto"
         aria-describedby={descriptionId}
       >
-        <SheetHeader className="pb-4 border-b border-[var(--color-border)]">
-          <SheetTitle className="font-headline text-base font-semibold text-[var(--color-secondary)]">
+        <SheetHeader className="-mx-6 -mt-6 mb-0 px-6">
+          <SheetTitle>
             Configure {channelName}
           </SheetTitle>
-          {/* #326 — aria-describedby target: the "How to connect" intro */}
-          <SheetDescription
-            id={descriptionId}
-            className="text-xs text-[var(--color-muted)] leading-relaxed"
-          >
-            {isGoogleChat
-              ? 'Choose how you want to connect Google Chat, then fill in the credentials below.'
-              : isWhatsApp
-              ? 'Link your WhatsApp account by scanning the QR code with your phone.'
-              : `Enter your ${channelName} credentials to connect the bot.`}
-          </SheetDescription>
         </SheetHeader>
+        {/* #326 — aria-describedby target: the "How to connect" intro.
+            Description sits below the 44px chrome title row so multi-line
+            copy does not push the panel header taller than the shell. */}
+        <SheetDescription
+          id={descriptionId}
+          className="text-xs text-[var(--color-muted)] leading-relaxed pt-3"
+        >
+          {isGoogleChat
+            ? 'Choose how you want to connect Google Chat, then fill in the credentials below.'
+            : isWhatsApp
+            ? 'Link your WhatsApp account by scanning the QR code with your phone.'
+            : `Enter your ${channelName} credentials to connect the bot.`}
+        </SheetDescription>
 
         {isLoading ? (
           <div className="space-y-4 pt-6">
