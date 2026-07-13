@@ -395,8 +395,8 @@ function ProviderConfigSheet({
 
   return (
     <Sheet open={open} onOpenChange={(o) => { if (!o) handleClose() }}>
-      <SheetContent side="right" widthClass="w-[90vw] sm:max-w-lg" data-testid="provider-config-sheet">
-        <SheetHeader className="-mx-6 -mt-6 mb-0 px-6">
+      <SheetContent side="right" widthClass="w-[90vw] sm:max-w-lg" className="p-0" data-testid="provider-config-sheet">
+        <SheetHeader className="px-6 pr-14">
           <div className="flex items-center gap-2 min-w-0">
             {entry && (
               <BrandIcon
@@ -408,9 +408,9 @@ function ProviderConfigSheet({
             <SheetTitle>{sheetTitle}</SheetTitle>
           </div>
         </SheetHeader>
-        <SheetDescription className="pt-3">{sheetDescription}</SheetDescription>
+        <SheetDescription className="px-6 pt-3">{sheetDescription}</SheetDescription>
 
-        <div className="space-y-5 overflow-y-auto pr-1 pt-4">
+        <div className="px-6 space-y-5 overflow-y-auto pr-1 pt-4">
           {/* View-only variant info — Plan/Region/Endpoint(+format). Wire is a
               config detail, not a display row (FIX-5) — the Endpoint-format
               toggle below is interactive ONLY in connect mode; configure mode

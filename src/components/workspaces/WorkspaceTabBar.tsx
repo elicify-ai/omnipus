@@ -54,7 +54,8 @@ interface WorkspaceTabBarProps {
  * tests at 1280px viewport (container ≥1152px) still find them.
  *
  * Sits inline inside the WorkspaceTabContainer top-bar row (Row 1). The parent
- * row owns border-bottom and background; this component only renders the tab list.
+ * row owns the background (no border — flat shell alignment); this component
+ * only renders the tab list.
  */
 export function WorkspaceTabBar({ workspaceId }: WorkspaceTabBarProps) {
   const location = useLocation()
@@ -83,9 +84,14 @@ export function WorkspaceTabBar({ workspaceId }: WorkspaceTabBarProps) {
               aria-label={label}
               data-testid={`workspace-tab-${segment}`}
               className={cn(
-                // h-full fills the shared 44px chrome header; no py-3 so the
-                // tab strip cannot push the workspace top bar taller than panels.
-                'group relative flex items-center gap-1.5 px-3 h-full text-sm font-headline whitespace-nowrap outline-none transition-colors',
+                // h-chrome-header (the literal 44px token, NOT h-11) makes the tab
+                // fill the workspace top bar's exact height so the active underline
+                // lands flush on the bar's bottom edge. h-11 is rem-based and would
+                // be 38.5px at the default 14px root font-size (globals.css clamps
+                // root to 14px), leaving the underline ~5px high. NOT h-full either:
+                // the parent header uses items-center, so height:100% resolves to
+                // auto (no-op) and the underline would float mid-header.
+                'group relative flex items-center gap-1.5 px-3 h-chrome-header min-h-chrome-header text-sm font-headline whitespace-nowrap outline-none transition-colors',
                 'focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/50 rounded-t-sm',
                 isActive
                   ? 'text-[var(--color-accent)]'
@@ -97,7 +103,7 @@ export function WorkspaceTabBar({ workspaceId }: WorkspaceTabBarProps) {
               {isActive && (
                 <motion.div
                   layoutId="workspace-tab-underline"
-                  className="absolute inset-x-1 bottom-0 h-0.5 rounded-full bg-[var(--color-accent)]"
+                  className="absolute inset-x-1 -bottom-px h-0.5 rounded-full bg-[var(--color-accent)]"
                   transition={{ type: 'spring', stiffness: 500, damping: 32 }}
                 />
               )}

@@ -114,10 +114,11 @@ SheetContent.displayName = DialogPrimitive.Content.displayName
  *
  * Defaults to a single 44px (`h-chrome-header`) horizontal row with no
  * bottom border so open panels align with the main shell instead of
- * sitting taller with stacked hairlines. Override with `h-auto min-h-0
- * flex-col items-start py-3` (and put description content below the
- * title) when a multi-line header is required — never reintroduce
- * `border-b` on chrome rows.
+ * sitting taller with stacked hairlines. For a multi-line header, pass
+ * `h-auto min-h-0 flex-col items-start` (registered in the twMerge config
+ * in lib/utils.ts so the override wins over the base token) and move
+ * description content to a sibling below — never reintroduce `border-b`
+ * on chrome rows.
  */
 const SheetHeader = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
   <div
@@ -143,8 +144,9 @@ const SheetTitle = React.forwardRef<
     ref={ref}
     className={cn(
       // text-sm / semibold keeps the title inside the 44px chrome row without
-      // forcing the panel header taller than the workspace top bar.
-      'font-headline text-sm font-semibold text-[var(--color-secondary)] truncate',
+      // forcing the panel header taller than the workspace top bar. min-w-0 lets
+      // the flex item shrink so truncate actually ellipses long titles.
+      'font-headline text-sm font-semibold text-[var(--color-secondary)] truncate min-w-0',
       className,
     )}
     {...props}

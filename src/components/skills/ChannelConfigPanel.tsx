@@ -674,10 +674,10 @@ export function ChannelConfigPanel({
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
         side="right"
-        className="sm:w-[480px] bg-[var(--color-surface-0)] border-[var(--color-border)] overflow-y-auto"
+        className="sm:w-[480px] bg-[var(--color-surface-0)] border-[var(--color-border)] overflow-y-auto p-0"
         aria-describedby={descriptionId}
       >
-        <SheetHeader className="-mx-6 -mt-6 mb-0 px-6">
+        <SheetHeader className="px-6 pr-14">
           <SheetTitle>
             Configure {channelName}
           </SheetTitle>
@@ -687,7 +687,7 @@ export function ChannelConfigPanel({
             copy does not push the panel header taller than the shell. */}
         <SheetDescription
           id={descriptionId}
-          className="text-xs text-[var(--color-muted)] leading-relaxed pt-3"
+          className="text-xs text-[var(--color-muted)] leading-relaxed px-6 pt-3"
         >
           {isGoogleChat
             ? 'Choose how you want to connect Google Chat, then fill in the credentials below.'
@@ -697,13 +697,13 @@ export function ChannelConfigPanel({
         </SheetDescription>
 
         {isLoading ? (
-          <div className="space-y-4 pt-6">
+          <div className="px-6 pt-6 space-y-4">
             {[1, 2, 3].map((i) => (
               <div key={i} className="h-10 rounded-md bg-[var(--color-surface-2)] animate-pulse" />
             ))}
           </div>
         ) : (
-          <div className="pt-5 space-y-5">
+          <div className="px-6 pt-5 space-y-5">
             {/* #324 — Google Chat auth method picker */}
             {isGoogleChat && (
               <div className="space-y-3">
