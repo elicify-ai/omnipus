@@ -11,7 +11,9 @@
 package browser
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -360,4 +362,85 @@ func TestBuildTextSelectorScript_AtLimitNeedle_EncodesFine(t *testing.T) {
 	wantJSON, err := json.Marshal(atLimitNeedle)
 	require.NoError(t, err)
 	assert.Contains(t, script, string(wantJSON))
+}
+
+// ---------------------------------------------------------------------------
+// resolvePendingErr — the shared exit-resolution both poll-exit paths use
+// ---------------------------------------------------------------------------
+
+// TestResolvePendingErr covers the fix for a UAT finding: when the outer tab
+// context ends mid-wait (tabCtx.Done()), resolveTextTarget used to return a
+// bare "context deadline exceeded", discarding a definitive no-match a prior
+// poll had already established — so the SAME absent-text outcome read either as
+// the friendly "no visible element matching text …" (own-deadline exit) or the
+// cryptic context error (tab-deadline exit), depending only on which timer won
+// a race. resolvePendingErr is the single resolution both exits now funnel
+// through; this table proves the priority (no-match > eval-err > ctx-err >
+// friendly-fallback), that EVERY branch names the needle, and that NONE leaks
+// the internal marker attribute — all without a live browser.
+func TestResolvePendingErr(t *testing.T) {
+	const needle = "Book a call"
+	noMatch := fmt.Errorf("no visible element matching text %q", needle)
+	evalErr := fmt.Errorf("text selector: evaluation failed: boom")
+
+	tests := []struct {
+		name            string
+		lastNoMatch     error
+		lastEval        error
+		ctxErr          error
+		wantContains    string
+		wantNamesNeedle bool // agent-facing no-match/fallback must name the text searched
+		wantIsCtxErr    bool // the returned error must wrap ctxErr (errors.Is)
+	}{
+		{
+			name:            "no-match wins even when the tab deadline also fired",
+			lastNoMatch:     noMatch,
+			lastEval:        evalErr,
+			ctxErr:          context.DeadlineExceeded,
+			wantContains:    "no visible element matching text",
+			wantNamesNeedle: true,
+		},
+		{
+			// A genuine CDP-evaluation failure (page crashed / tab detached) is
+			// distinct from "element absent"; it legitimately need not embed the
+			// needle, but it must still take priority over a bare ctx error.
+			name:         "eval error surfaces when no clean no-match was ever established",
+			lastEval:     evalErr,
+			ctxErr:       context.DeadlineExceeded,
+			wantContains: "evaluation failed",
+		},
+		{
+			name:            "bare ctx error is named+wrapped, never leaked raw",
+			ctxErr:          context.DeadlineExceeded,
+			wantContains:    needle,
+			wantNamesNeedle: true,
+			wantIsCtxErr:    true,
+		},
+		{
+			name:            "own-deadline exit (nil ctxErr) falls back to the friendly no-match",
+			wantContains:    "no visible element matching text",
+			wantNamesNeedle: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := resolvePendingErr(needle, tc.lastNoMatch, tc.lastEval, tc.ctxErr)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantContains)
+			if tc.wantNamesNeedle {
+				// The agent-facing no-match/fallback message must name the text it
+				// searched for — never a bare, needle-less "context deadline
+				// exceeded" (the exact UAT regression this guards).
+				assert.Contains(t, err.Error(), needle,
+					"a no-match/fallback result must name the needle so the agent can course-correct")
+			}
+			// Invariant (all branches): the internal marker attribute never leaks.
+			assert.NotContains(t, err.Error(), textMarkerAttr)
+			if tc.wantIsCtxErr {
+				assert.True(t, errors.Is(err, tc.ctxErr),
+					"the fallback must wrap ctxErr so callers can still detect a genuine timeout/cancel")
+			}
+		})
+	}
 }
