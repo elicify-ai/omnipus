@@ -23,6 +23,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/channels"
@@ -1555,13 +1556,14 @@ func registerSharedTools(
 			// task run starts a fresh turn at depth 0 (see processTaskDirect depth
 			// seeding); this hard ceiling closes that gap.
 			taskCreate.SetMaxDelegationDepth(maxTaskDepth)
-			// subagent_3p task-assignment guard: TaskExecutor.processTaskDirect
-			// always runs a task on the native engine — there is no executor-kind
-			// branch to dispatch an external-CLI worker's own runner — so a task
-			// assigned to one would silently mis-execute with system-level tool
-			// access instead of the configured external CLI. Mirrors the same
-			// check on the REST path (rest_tasks.go's validateTaskAgentID).
-			taskCreate.SetExternalCLIWorkerChecker(cfg.IsExternalCLIWorkerID)
+			// subagent_3p (external-CLI) worker task assignment is no longer
+			// guarded here: processTaskDirect (this file) now branches on
+			// runner.ResolveDispatch and routes an external-CLI worker's task
+			// run through runExternalCLISubTurn instead of the native engine —
+			// see its doc comment for the dispatch design. The former
+			// SetExternalCLIWorkerChecker rejection (mirrored on the REST path's
+			// validateTaskAgentID) is retired now that the engine gap it
+			// papered over is closed.
 			taskCreate.SetOnCreate(func(entity *task.Task) {
 				al.EmitTaskStatusChanged(TaskStatusChangedPayload{
 					TaskID:    entity.ID,
@@ -1596,8 +1598,9 @@ func registerSharedTools(
 					config.DelegationModeTask,
 				),
 			)
-			// Same subagent_3p reassignment guard as taskCreate above.
-			taskUpdate.SetExternalCLIWorkerChecker(cfg.IsExternalCLIWorkerID)
+			// Same rationale as taskCreate above: the subagent_3p reassignment
+			// guard is retired now that processTaskDirect dispatches an
+			// external-CLI worker's task run through runExternalCLISubTurn.
 			agent.Tools.Register(taskUpdate)
 
 			setTodos := tools.NewSetTodosTool(al.taskStore)
@@ -3906,6 +3909,24 @@ func (al *AgentLoop) processTaskDirect(
 		taskChatID = "task:" + sessionKey
 	}
 
+	// Fix C: a task assigned to a subagent_3p (external-CLI) worker must
+	// dispatch through the SAME external-CLI machinery the agent-to-agent
+	// delegation path uses (runner.ResolveDispatch / runExternalCLISubTurn —
+	// see subturn.go's identical gate ahead of spawnSubTurn's native/external
+	// branch) rather than unconditionally falling into runAgentLoop below.
+	// Running a subagent_3p's task on the native engine would silently
+	// mis-execute it with full system-level Omnipus tool access instead of the
+	// configured external CLI — exactly the gap the assignment-time guards in
+	// rest_tasks.go / pkg/tools/task.go / pkg/sysagent/tools/task.go existed to
+	// paper over. This dispatch branch is what lets those guards be relaxed.
+	dispatchKind, dispatchErr := runner.ResolveDispatch(executorConfigOf(ag))
+	if dispatchErr != nil {
+		return "", fmt.Errorf("processTaskDirect: %w", dispatchErr)
+	}
+	if dispatchKind == runner.DispatchKindExternalCLI {
+		return al.processTaskDirectExternalCLI(taskCtx, ag, prompt, sessionKey, taskChatID, delegationDepth)
+	}
+
 	return al.runAgentLoop(taskCtx, ag, processOptions{
 		SessionKey:             sessionKey,
 		Channel:                "webchat",
@@ -3919,6 +3940,199 @@ func (al *AgentLoop) processTaskDirect(
 		TranscriptStore:        al.GetAgentStore(agentID),
 		InitialDelegationDepth: delegationDepth,
 	})
+}
+
+// processTaskDirectExternalCLI runs a task assigned to a subagent_3p
+// (external-CLI) worker through runExternalCLISubTurn — the same dispatch
+// machinery spawnSubTurn uses for agent-to-agent delegation (subturn.go). A
+// task run has no parent turnState to derive a child from (unlike a delegated
+// sub-turn), so this builds a minimal turnState directly for the target agent
+// via newTurnState, wiring the agent snapshot, the task's transcript session
+// (so the run is replayable on reload, same as the native task path), and the
+// task's WorkspaceID (so workspace.FindForAgentPreferring can route the run
+// into the workspace's shared work/ directory when the agent is a workspace
+// CoreTeam member — mirrors the native runTurn resolution). Channel/ChatID/
+// SenderID/UserMessage are ALSO set on opts — not inert: since FIX 5 (below)
+// registers this turnState in al.activeTurnStates, turnState.snapshot() (via
+// GetActiveTurn/GetActiveTurnBySession) now surfaces them for the duration of
+// the run, exactly like a native turn's.
+//
+// An external-CLI worker's tool registry is its OWN CLI's, never Omnipus's —
+// it has no task_update tool wired at all — so the caller
+// (TaskExecutor.finishTaskRun) always takes the "agent did not call
+// task_update" auto-complete-to-done branch for this dispatch kind, using the
+// aggregated CLI output (ForUser, falling back to ForLLM) as the task result
+// (see finishTaskRun's WARN log there — FIX 8 — flagging that an
+// external-CLI task's "success" is unverified prose, never a structured
+// signal).
+//
+// Delegation-depth bounding: the dispatched CLI child runs as a separate OS
+// process with its own tool registry — it has no delegate/create_task tools
+// wired to Omnipus at all — so it structurally cannot recurse into another
+// Omnipus delegation or task chain regardless of depth. ts.depth is still
+// seeded from the caller's delegationDepth for observability/symmetry with
+// the native branch's opts.InitialDelegationDepth.
+//
+// FIX 5 (7-reviewer gate, visibility): this turnState IS now registered in
+// al.activeTurnStates for the run's duration (register/defer-clear below,
+// mirroring native runTurn's registerActiveTurn/clearActiveTurn pair and
+// spawnSubTurn's childTS registration, subturn.go:880-881) — ts.depth is read
+// by cancel.go's activeTurnStates.Range-based readers now that the turn is
+// reachable there (it previously was not: an unregistered turnState made
+// ts.depth dead for every purpose except this function's own local seeding).
+// Registering also means:
+//   - writeTurnCancelledRestartForActiveTurns' FR-048 graceful-shutdown scan
+//     now covers an in-flight external-CLI task run (previously it silently
+//     vanished from the transcript on a mid-run restart).
+//   - GetActiveTurn/GetActiveAgentIDs now report this run like any other.
+//   - A RequestCancel against this session (transcriptSessionID == taskChatID)
+//     can reach and ClaimCancel this turnState. Verified tolerant: ts.al is
+//     set (FIX 5) but ts.cancelFunc/ts.providerCancel are both left nil (this
+//     dispatch path has no native LLM call to cancel and no delegate/
+//     create_task tools that could spawn a child turnState under
+//     ts.childTurnIDs) — every cancel.go/steering.go call site that touches
+//     those fields nil-checks first, so a cancel here safely claims
+//     cancelFired, fires the turn_canceled transcript callback, and no-ops
+//     the graceful/hard escalation timers rather than panicking. It does NOT
+//     actually stop the already-dispatched external CLI process (no
+//     cancelFunc wired to runExternalCLISubTurn's ctx) — a best-effort,
+//     observability-only posture, the same one runner/consent.go already
+//     documents for external-CLI permission requests.
+func (al *AgentLoop) processTaskDirectExternalCLI(
+	ctx context.Context,
+	liveAgent *AgentInstance,
+	prompt, sessionKey, taskChatID string,
+	delegationDepth int,
+) (string, error) {
+	// FIX 1 (7-reviewer gate, data race): liveAgent is the LIVE registry
+	// *AgentInstance (registry.GetAgent, in processTaskDirect above) —
+	// SwitchModel/ApplyAgentModel may concurrently rewrite its
+	// Model/Provider/Candidates/ThinkingLevel tuple (+ providerPool) while
+	// this run is in flight (AgentInstance.mu's doc, instance.go:28-30), and
+	// runExternalCLISubTurn reads agent.Model unlocked (transcript
+	// attribution + RunOptions.Model) — a read/write race with SwitchModel.
+	// snapshotForExternalDispatch takes a single RLock and copies the whole
+	// mutex-protected quad together into a private AgentInstance value
+	// nothing else can mutate, mirroring spawnSubTurn's execSource-snapshot
+	// pattern (subturn.go ~603-662, which the native delegation path already
+	// relies on for the identical reason). Every field below (opts,
+	// newTurnState, composeDelegateInput) reads from this snapshot, never
+	// liveAgent directly.
+	agent := liveAgent.snapshotForExternalDispatch()
+
+	opts := processOptions{
+		SessionKey:          sessionKey,
+		Channel:             "webchat",
+		ChatID:              taskChatID,
+		SenderID:            "task-executor",
+		UserMessage:         prompt,
+		TranscriptSessionID: taskChatID,
+		TranscriptStore:     al.GetAgentStore(agent.ID),
+		// WorkspaceID is already on ctx via tools.WithWorkspaceID (set by the
+		// task executor before calling processTaskDirect); thread it through
+		// processOptions explicitly too so runExternalCLISubTurn's
+		// workspace.FindForAgentPreferring(..., childTS.opts.WorkspaceID) call
+		// sees it — that field reads ts.opts, not the context.
+		WorkspaceID: tools.ToolWorkspaceID(ctx),
+	}
+	ts := newTurnState(agent, opts, al.newTurnEventScope(agent.ID, sessionKey))
+	ts.depth = delegationDepth
+	ts.al = al // FIX 5: back-ref for hard-abort cascade (mirrors subturn.go:831)
+
+	// FIX 5: register for the run's duration — see this function's doc
+	// comment for the full reachability analysis.
+	al.registerActiveTurn(ts)
+	// FINAL-GATE FIX (2026-07-13, cancel audit-trail gap): FIX 5 registered
+	// this turnState so a RequestCancel could reach and ClaimCancel it, but
+	// nothing on this path ever called ts.Finish — the ONE place that fires
+	// the onCancelFinish callback RequestCancel installs via
+	// SetOnCancelFinish (pkg/agent/cancel.go). Without it, a cancel here
+	// claimed cancelFired (CancelOutcome{Fired: true}) but produced NO
+	// turn_canceled transcript entry, NO MarkLastEntryTruncated, and NO
+	// audit.EventTurnCancelled — silently contradicting this function's own
+	// doc comment above, which already (incorrectly, until this fix)
+	// described the callback as firing.
+	//
+	// Finish(false) is safe to add here: ts.cancelFunc/ts.providerCancel are
+	// both nil (nil-checked internally by Finish), isHardAbort is false so
+	// the child-cascade branch is unreachable, and Finish's closeOnce.Do +
+	// the cancelFired-swap-then-nil-check around onCancelFinish make a
+	// second Finish call (e.g. a concurrent InterruptSessionHard elsewhere
+	// calling Finish(true) on this same ts via steering.go) idempotent — the
+	// identical safety runTurn's own `defer ts.Finish(false)` already relies
+	// on for the hard-abort-then-graceful-defer sequence (loop.go, "closeOnce.Do
+	// inside Finish makes repeated Finish calls safe" comment).
+	//
+	// Ordering matches runTurn's LIFO defer pattern (loop.go, "Execution
+	// order (LIFO defer...)" comment): clearActiveTurn must run BEFORE
+	// Finish, so a cancel racing the tail end of this dispatch cannot find a
+	// since-finished turnState still reachable via
+	// GetActiveTurnHookForSession and register a callback that can now never
+	// fire — the same class of race that ordering guards against in
+	// runTurn. Defers execute LIFO, so writing Finish's defer first and
+	// clearActiveTurn's defer second makes clearActiveTurn run FIRST and
+	// Finish run LAST, exactly like runTurn's `defer ts.Finish(false)` /
+	// `defer al.clearActiveTurn(ts)` pair.
+	defer ts.Finish(false)
+	defer al.clearActiveTurn(ts)
+
+	rtCfg := al.getSubTurnConfig()
+
+	// ADDITIONAL FINDING (surfaced while writing pr-test-analyzer's T2, not
+	// one of the 11 numbered fixes): runExternalCLISubTurn never wraps its
+	// own ctx with a deadline — it derives runCtx via plain
+	// context.WithCancel(ctx) (external_dispatch.go) and only forwards
+	// rtCfg.defaultTimeout to the DRIVER as RunOptions.TimeoutSeconds, a hint
+	// each real driver applies itself (driver_claude.go/driver_codex.go/
+	// driver_opencode.go all do `context.WithTimeout(runCtx,
+	// TimeoutSeconds*time.Second)` internally). spawnSubTurn's native
+	// delegation path already has its OWN Go-level safety-net timeout
+	// (subturn.go ~458-473: `context.WithTimeout(context.Background(),
+	// timeout)`) precisely so a driver that never honors/emits an end event
+	// cannot hang the dispatch forever; this task-mode dispatch had no
+	// equivalent — a stuck external CLI would tie up a dispatch-semaphore
+	// slot indefinitely with nothing to notice. Unlike spawnSubTurn's
+	// Background()-rooted child (deliberately independent so a Critical
+	// sub-turn survives its parent's graceful finish), this derives the
+	// deadline FROM the incoming ctx — consistent with the native task path,
+	// where runTurn's own turnTimeout is likewise derived from the given ctx
+	// (loop.go) — so a TaskExecutor-level cancel (te.running[taskID].cancel(),
+	// ExecuteTask/StartTaskNow) still takes effect immediately in addition to
+	// this deadline.
+	dispatchCtx, dispatchCancel := context.WithTimeout(ctx, rtCfg.defaultTimeout)
+	defer dispatchCancel()
+
+	// FIX 2 (7-reviewer gate, persona dropped): compose the same (soul, task)
+	// pair the native delegation path uses ahead of its own
+	// runExternalCLISubTurn call (subturn.go composeDelegateInput call site)
+	// so the target's own soul/persona travels with a TASK-mode dispatch too,
+	// not just an agent-to-agent delegate call. An empty soul (the worker
+	// case, where a soul is OPTIONAL) yields task-only input, identical to
+	// the pre-fix behavior.
+	externalInput := composeDelegateInput(al, prompt, "", agent.ID)
+
+	result, err := runExternalCLISubTurn(dispatchCtx, al, ts, externalInput, rtCfg.defaultTimeout)
+	if err != nil {
+		return "", fmt.Errorf("processTaskDirect: external-cli dispatch: %w", err)
+	}
+	// FIX 6 (7-reviewer gate, dead defensive branch): runExternalCLISubTurn's
+	// only two return statements are `return nil, fmt.Errorf(...)` (already
+	// handled by the err != nil check above — a non-nil err is ALWAYS paired
+	// with a nil result on that path) and the terminal `return result,
+	// result.Err` (drainExternalRun always returns a non-nil *tools.ToolResult,
+	// so result.Err is nil exactly when err here is nil). So once err == nil,
+	// result == nil and result.Err != nil are BOTH unreachable. The old `if
+	// result == nil { return "", nil }` silently reported task SUCCESS for a
+	// broken invariant instead of surfacing it — fail loudly so a future
+	// change that breaks the invariant is caught immediately, not masked as
+	// an empty-but-successful task result.
+	if result == nil {
+		return "", fmt.Errorf("processTaskDirect: external-cli dispatch: nil result with no error")
+	}
+	if result.ForUser != "" {
+		return result.ForUser, nil
+	}
+	return result.ForLLM, nil
 }
 
 // ExecuteBoardTask dispatches a GTD board task to the agent loop in a background

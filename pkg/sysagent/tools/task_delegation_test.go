@@ -351,23 +351,27 @@ func TestDeleteTaskInWorkspace_OwnershipAllowedForOwner(t *testing.T) {
 	require.False(t, result.IsError, "owner must be able to delete its own task; got: %s", result.ForLLM)
 }
 
-// --- subagent_3p (external-CLI) worker task-assignment guard (SEC) ---
+// --- subagent_3p (external-CLI) worker task assignment (Fix C) ---
 //
-// Closes the gap where a legitimate FR-6.2 delegation ALLOW (a real, permitted
-// trust-set/mode/depth edge to a subagent_3p target) was sufficient on its own
-// to let create_task_in_workspace/update_task_in_workspace persist
-// agent_id=<subagent_3p>, even though TaskExecutor.processTaskDirect routes
-// every task run through the native engine unconditionally (pkg/agent/loop.go)
-// — silently mis-executing on the wrong engine with full system-level tool
-// access instead of the configured external CLI. This guard is independent
-// of, and checked before, the delegation-policy gate above.
+// Historically create_task_in_workspace/update_task_in_workspace rejected any
+// agent_id naming a subagent_3p (external-CLI) worker outright — even when the
+// FR-6.2 delegation gate ALLOWED the target — because
+// TaskExecutor.processTaskDirect routed every task run through the native
+// engine unconditionally (pkg/agent/loop.go), which would have silently
+// mis-executed the task on the wrong engine with full system-level tool
+// access instead of the configured external CLI. AgentLoop.processTaskDirect
+// now branches on runner.ResolveDispatch the same way spawnSubTurn does for
+// agent-to-agent delegation, dispatching a subagent_3p's task run through
+// runExternalCLISubTurn — so the tool-layer guard (and its GetCfg-gated
+// IsExternalCLIWorkerID check) was removed. The tests below prove a
+// subagent_3p target is now accepted like any other delegate, governed solely
+// by the ordinary FR-6.2 delegation-policy gate.
 
 const externalCLIWorkerID = "external-worker"
 
 // seedExternalCLIWorker registers a subagent_3p (external-CLI) worker with the
-// given ID directly on deps' live config, so (*config.Config).IsExternalCLIWorkerID
-// resolves it via deps.GetCfg — the exact lookup path
-// create_task_in_workspace/update_task_in_workspace use in production.
+// given ID directly on deps' live config, matching the production shape a
+// real subagent_3p agent config takes.
 func seedExternalCLIWorker(t *testing.T, deps *systools.Deps, id string) {
 	t.Helper()
 	require.NotNil(t, deps.GetCfg, "seedExternalCLIWorker: deps.GetCfg must be wired")
@@ -385,11 +389,12 @@ func seedExternalCLIWorker(t *testing.T, deps *systools.Deps, id string) {
 	})
 }
 
-// TestCreateTaskInWorkspace_RejectsSubagent3pWorker_EvenWhenDelegationAllows
-// proves the subagent_3p guard blocks task creation even when the FR-6.2
-// delegation gate ALLOWS the target — the exploit this closes is specifically
-// that a real, permitted delegation edge was previously sufficient on its own.
-func TestCreateTaskInWorkspace_RejectsSubagent3pWorker_EvenWhenDelegationAllows(t *testing.T) {
+// TestCreateTaskInWorkspace_AllowsSubagent3pWorker_WhenDelegationAllows proves
+// create_task_in_workspace persists agent_id=<subagent_3p target> when the
+// FR-6.2 delegation gate allows it — the engine-limitation rejection that
+// used to fire independently of that gate is gone now that
+// processTaskDirect can dispatch the run correctly.
+func TestCreateTaskInWorkspace_AllowsSubagent3pWorker_WhenDelegationAllows(t *testing.T) {
 	deps, home := newTestDepsWithHome(t)
 	seedWorkspace(t, home, testWorkspaceID)
 	seedExternalCLIWorker(t, deps, externalCLIWorkerID)
@@ -400,21 +405,21 @@ func TestCreateTaskInWorkspace_RejectsSubagent3pWorker_EvenWhenDelegationAllows(
 	create := systools.NewTaskCreateTool(deps)
 	ctx := tools.WithAgentID(context.Background(), "jim")
 	result := create.Execute(ctx, map[string]any{
-		"name":         "Leaks to external CLI",
+		"name":         "Dispatched to external CLI",
 		"workspace_id": testWorkspaceID,
 		"agent_id":     externalCLIWorkerID,
 	})
 
-	require.True(t, result.IsError, "expected the subagent_3p target to be rejected; got: %s", result.ForLLM)
-	assert.Contains(t, result.ForLLM, "subagent_3p", "the error must name subagent_3p/external-CLI")
+	require.False(t, result.IsError, "expected the subagent_3p target to be accepted; got: %s", result.ForLLM)
 
-	entries, _ := os.ReadDir(filepath.Join(home, "tasks"))
-	assert.Empty(t, entries, "a rejected create must not persist a task")
+	entries, err := os.ReadDir(filepath.Join(home, "tasks"))
+	require.NoError(t, err)
+	assert.NotEmpty(t, entries, "an accepted create must persist a task")
 }
 
-// TestUpdateTaskInWorkspace_RejectsSubagent3pWorkerReassignment_EvenWhenDelegationAllows
+// TestUpdateTaskInWorkspace_AllowsSubagent3pWorkerReassignment_WhenDelegationAllows
 // mirrors the create-path test for update_task_in_workspace's reassignment path.
-func TestUpdateTaskInWorkspace_RejectsSubagent3pWorkerReassignment_EvenWhenDelegationAllows(t *testing.T) {
+func TestUpdateTaskInWorkspace_AllowsSubagent3pWorkerReassignment_WhenDelegationAllows(t *testing.T) {
 	deps, home := newTestDepsWithHome(t)
 	seedWorkspace(t, home, testWorkspaceID)
 	seedExternalCLIWorker(t, deps, externalCLIWorkerID)
@@ -438,31 +443,11 @@ func TestUpdateTaskInWorkspace_RejectsSubagent3pWorkerReassignment_EvenWhenDeleg
 		"agent_id": externalCLIWorkerID,
 	})
 
-	require.True(t, result.IsError,
-		"expected the subagent_3p reassignment to be rejected; got: %s", result.ForLLM)
-	assert.Contains(t, result.ForLLM, "subagent_3p", "the error must name subagent_3p/external-CLI")
+	require.False(t, result.IsError,
+		"expected the subagent_3p reassignment to be accepted; got: %s", result.ForLLM)
 
 	store := task.New(filepath.Join(home, "tasks"))
 	got, err := store.Get("01JXSUBAGENT3P00000000001")
 	require.NoError(t, err)
-	assert.Equal(t, "caller-agent", got.AgentID, "agent_id must be unchanged after a rejected reassignment")
-}
-
-// TestCreateTaskInWorkspace_ExternalCLICheck_NilGetCfgFailsOpen proves that when
-// deps.GetCfg is unwired (nil) the subagent_3p guard is skipped — matching every
-// other GetCfg-gated check in this package (e.g. get_usage's exclude filter).
-// The production gateway always wires GetCfg (pkg/gateway/gateway.go).
-func TestCreateTaskInWorkspace_ExternalCLICheck_NilGetCfgFailsOpen(t *testing.T) {
-	home := t.TempDir()
-	seedWorkspace(t, home, testWorkspaceID)
-	deps := &systools.Deps{Home: home} // GetCfg intentionally left nil
-
-	create := systools.NewTaskCreateTool(deps)
-	ctx := tools.WithAgentID(context.Background(), "caller-agent")
-	result := create.Execute(ctx, map[string]any{
-		"name":         "Unwired GetCfg",
-		"workspace_id": testWorkspaceID,
-		"agent_id":     externalCLIWorkerID,
-	})
-	require.False(t, result.IsError, "unwired GetCfg must fail-open; got: %s", result.ForLLM)
+	assert.Equal(t, externalCLIWorkerID, got.AgentID, "agent_id must reflect the accepted reassignment")
 }
