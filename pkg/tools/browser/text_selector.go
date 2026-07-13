@@ -17,16 +17,20 @@
 //     parsed by parseTextPseudo.
 //  2. An explicit `text` parameter (see each tool's Execute in tools.go).
 //
-// Both funnel into resolveTextTarget, which runs ONE bounded chromedp.Evaluate
-// call to find the most-specific visible match, tags it with a unique marker
-// attribute, and hands the caller back an ordinary CSS attribute selector —
-// so every existing chromedp.WaitVisible/Click/SendKeys/Text call downstream
-// is completely unchanged; only the selector string fed into it differs.
+// Both funnel into resolveTextTarget, which POLLS a bounded chromedp.Evaluate
+// call (7-reviewer finding #1 — see its doc comment) to find the
+// most-specific visible match, tags it with a unique marker attribute, and
+// hands the caller back an ordinary CSS attribute selector — so every
+// existing chromedp.WaitVisible/Click/SendKeys/Text call downstream is
+// completely unchanged; only the selector string fed into it differs.
 //
-// ADR-038 deadlock discipline preserved throughout: resolveTextTarget and
-// removeTextMarker each run exactly one bounded (context.WithTimeout)
-// chromedp.Run call against the tab context they're given, and never touch
-// BrowserManager.mu.
+// ADR-038 deadlock discipline preserved throughout: every chromedp.Run call
+// this file makes (resolveTextTarget's poll loop now makes several, not just
+// one — see resolveTextTarget's doc comment) is individually bounded via
+// context.WithTimeout against the tab context it's given, and NONE of them
+// ever touch BrowserManager.mu — that is the actual ADR-038 invariant (see
+// manager.go's "ADR-038 rule" comments: never hold the manager's lock across
+// a CDP call), not a literal "exactly one call" constraint.
 package browser
 
 import (
@@ -57,43 +61,75 @@ const textMarkerAttr = "data-omnipus-tsel"
 // unique token), never load-bearing for tool correctness.
 const textMarkerCleanupTimeout = 2 * time.Second
 
-// textSelectorSeq is a process-wide counter mixed into every marker token
-// (alongside a nanosecond timestamp) so two resolveTextTarget calls that
-// land in the same nanosecond — plausible under concurrent tool dispatch —
-// still never collide.
+// textResolvePollInterval is the delay between retries in resolveTextTarget's
+// poll loop (7-reviewer finding #1: a Cal.com confirmation banner, or a
+// setTimeout-appended button, renders ASYNCHRONOUSLY — the original
+// implementation ran exactly one chromedp.Evaluate scan before the caller's
+// own WaitVisible ever got a chance to wait, so browser_wait{text:...}
+// against an element that hadn't rendered yet failed in ~1ms instead of
+// honoring its timeout budget). Short enough that a typical async render
+// (hundreds of ms) is caught within a tick or two; long enough not to hammer
+// the CDP connection with a busy-loop.
+const textResolvePollInterval = 150 * time.Millisecond
+
+// maxTextSelectorInputLen caps needle/scope length before they are embedded
+// into the generated JS (7-reviewer finding #10, security-lead minor). This
+// is independent of — and does not weaken — buildTextSelectorScript's
+// injection-safety (every value is still json.Marshal'd, never
+// raw-concatenated); it is a defense-in-depth bound against handing this
+// path megabytes of text.
+const maxTextSelectorInputLen = 2048
+
+// textSelectorSeq is a process-wide counter mixed into every marker token so
+// two resolveTextTarget calls — including two poll attempts in the same
+// resolveTextTarget call, or two calls that land concurrently under
+// concurrent tool dispatch — never collide. The counter alone is
+// sufficient: monotonic and process-wide, so a nanosecond timestamp
+// alongside it (the original implementation's approach) added nothing but
+// noise (7-reviewer finding #13).
 var textSelectorSeq uint64
 
 // nextTextSelectorToken returns a fresh, unique marker token.
 func nextTextSelectorToken() string {
 	n := atomic.AddUint64(&textSelectorSeq, 1)
-	return fmt.Sprintf("omnipus-tsel-%d-%d", time.Now().UnixNano(), n)
+	return fmt.Sprintf("omnipus-tsel-%d", n)
 }
 
 // ---------------------------------------------------------------------------
 // Pseudo-selector parsing
 // ---------------------------------------------------------------------------
 
-// textPseudoDoubleQuoteRe and textPseudoSingleQuoteRe both recognize a
-// TRAILING Playwright-style text pseudo — :has-text("…")/:text("…")
-// (substring) or :text-is("…") (exact) — on an otherwise-ordinary selector
-// string. Two separate regexes (one per quote style) because Go's RE2 engine
-// does not support backreferences, so a single pattern like
-// `:(kind)\((['"])(.*)\2\)$` (matching the SAME quote char that opened) isn't
-// expressible directly.
+// textPseudoStartRe matches the START of any of the three text-pseudo forms.
+// Used only to COUNT how many appear in a selector, so a second one is
+// rejected with a clear error instead of being silently mis-parsed by
+// textPseudoRe's single-pseudo, greedy-capture pattern (7-reviewer finding
+// #8: `div:has-text("a"):text-is("b")` previously parsed as prefix="div",
+// kind="has-text", needle=`a"):text-is("b` — garbage — because the greedy
+// needle capture happily swallowed the second pseudo's literal syntax on its
+// way to satisfying the trailing `"\)\s*$` anchor).
+var textPseudoStartRe = regexp.MustCompile(`:(?:has-text|text-is|text)\(`)
+
+// textPseudoRe recognizes a TRAILING Playwright-style text pseudo —
+// :has-text("…")/:text("…") (substring) or :text-is("…") (exact) — on an
+// otherwise-ordinary selector string, accepting either quote style via one
+// alternation (7-reviewer finding #12 — collapses what used to be two
+// separate regexes, one per quote style, since Go's RE2 engine doesn't
+// support backreferences and so can't match "whichever quote opened").
 //
 // (?s) makes `.` match newlines too, in case an agent's text argument spans
-// lines. The prefix capture is non-greedy so `cssPrefix` stops at the
-// EARLIEST plausible pseudo start; RE2's leftmost-first semantics (see the
-// package regexp docs: it returns "the match that a backtracking search
-// would have found first") guarantee the overall match is still correct even
-// though `(has-text|text-is|text)` are tried in that order — a candidate
+// lines. The prefix capture is non-greedy so it stops at the EARLIEST
+// plausible pseudo start; RE2's leftmost-first semantics (see the package
+// regexp docs: it returns "the match that a backtracking search would have
+// found first") guarantee the overall match is still correct even though
+// `(has-text|text-is|text)` are tried in that order — a candidate
 // alternative that doesn't lead to a full match is discarded automatically,
 // so e.g. "text-is" is never partially matched as "text" leaving "-is(...)"
-// unconsumed.
-var (
-	textPseudoDoubleQuoteRe = regexp.MustCompile(`(?s)^(.*?):(has-text|text-is|text)\("(.*)"\)\s*$`)
-	textPseudoSingleQuoteRe = regexp.MustCompile(`(?s)^(.*?):(has-text|text-is|text)\('(.*)'\)\s*$`)
-)
+// unconsumed. FindStringSubmatchIndex (not FindStringSubmatch) is used to
+// read the result, because FindStringSubmatch returns "" both for an
+// UNMATCHED group (the alternative branch not taken) and for a matched-but-
+// EMPTY capture (e.g. :text-is("")) — those two cases must be told apart to
+// know which quote-style branch actually fired.
+var textPseudoRe = regexp.MustCompile(`(?s)^(.*?):(has-text|text-is|text)\((?:"(.*)"|'(.*)')\)\s*$`)
 
 // parseTextPseudo detects and parses a trailing text pseudo-selector on
 // selector. Returns isText=false for a plain CSS selector (no trailing text
@@ -105,25 +141,39 @@ var (
 // bare `:has-text("x")`) becomes "*" (match any element). exact is true only
 // for :text-is(...) (exact, normalized-text equality); :has-text(...) and
 // :text(...) are both substring matches.
-func parseTextPseudo(selector string) (cssPrefix, needle string, exact bool, isText bool) {
+//
+// Returns a non-nil err — cssPrefix/needle/exact/isText all zero-valued —
+// when selector carries TWO OR MORE text pseudos chained together (7-reviewer
+// finding #8): that shape is rejected outright rather than silently
+// mis-parsed.
+func parseTextPseudo(selector string) (cssPrefix, needle string, exact, isText bool, err error) {
 	trimmed := strings.TrimRight(selector, " \t\r\n")
 
-	m := textPseudoDoubleQuoteRe.FindStringSubmatch(trimmed)
-	if m == nil {
-		m = textPseudoSingleQuoteRe.FindStringSubmatch(trimmed)
-	}
-	if m == nil {
-		return "", "", false, false
+	if len(textPseudoStartRe.FindAllStringIndex(trimmed, 2)) > 1 {
+		return "", "", false, false, fmt.Errorf("chained text pseudos are not supported — use one")
 	}
 
-	prefix := strings.TrimSpace(m[1])
+	idx := textPseudoRe.FindStringSubmatchIndex(trimmed)
+	if idx == nil {
+		return "", "", false, false, nil
+	}
+
+	prefix := strings.TrimSpace(trimmed[idx[2]:idx[3]])
 	if prefix == "" {
 		prefix = "*"
 	}
-	pseudoKind := m[2]
-	text := m[3]
+	pseudoKind := trimmed[idx[4]:idx[5]]
 
-	return prefix, text, pseudoKind == "text-is", true
+	var text string
+	if idx[6] != -1 {
+		// Double-quoted branch participated: `"(.*)"`.
+		text = trimmed[idx[6]:idx[7]]
+	} else {
+		// Single-quoted branch participated: `'(.*)'`.
+		text = trimmed[idx[8]:idx[9]]
+	}
+
+	return prefix, text, pseudoKind == "text-is", true, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -144,55 +194,167 @@ func tokenFromMarkerSelector(marker string) string {
 	return marker[len(prefix) : len(marker)-len(suffix)]
 }
 
+// displayLocator returns the ORIGINAL, user-facing locator for a
+// selector/text pair — used in error messages and echoed success payloads so
+// the internal data-omnipus-tsel marker selector never surfaces to the agent
+// (7-reviewer finding #6). Mirrors the pattern browser_wait's Execute
+// originally introduced locally; now shared by every text-resolving tool for
+// consistency: prefer `selector` when given (it is the more specific of the
+// two when both are present — `text` is then merely scoping context already
+// implied by a successful resolution), falling back to `text` only when
+// selector is empty.
+func displayLocator(selector, text string) string {
+	if selector != "" {
+		return selector
+	}
+	return text
+}
+
+// scrubMarkerFromError replaces any literal occurrence of the internal
+// marker selector (target) inside err's message with the ORIGINAL
+// user-facing locator (displayTarget), so a POST-resolution chromedp failure
+// — e.g. the resolved element vanished between resolveTextTarget marking it
+// and the caller's own WaitVisible/Click/SendKeys/Text running (7-reviewer
+// finding #6) — never leaks data-omnipus-tsel to the agent. A no-op
+// (including on a nil err) when target and displayTarget are identical,
+// i.e. no text resolution happened (plain CSS fast path).
+func scrubMarkerFromError(err error, target, displayTarget string) error {
+	if err == nil || target == displayTarget {
+		return err
+	}
+	return fmt.Errorf("%s", strings.ReplaceAll(err.Error(), target, displayTarget))
+}
+
 // ---------------------------------------------------------------------------
 // JS-side resolution
 // ---------------------------------------------------------------------------
 
+// textResolveJSResult is the JSON shape textSelectorJSTemplateFmt returns,
+// decoded directly by chromedp.Evaluate: chromedp's parseRemoteObject
+// json.Unmarshal's the evaluated value straight into a struct destination
+// (see github.com/chromedp/chromedp's eval.go) — no manual byte-then-
+// unmarshal step needed, and the existing InspectPoint code path
+// (inspect.go) already relies on the identical mechanism.
+type textResolveJSResult struct {
+	// Marker is the CSS attribute selector for the matched+tagged element;
+	// "" when nothing matched and both InvalidScope and Ambiguous are false.
+	Marker string `json:"marker"`
+	// InvalidScope is true when `scope` was not valid CSS — querySelectorAll
+	// threw (7-reviewer finding #3b): a deterministic, non-retryable
+	// condition. The JS must never silently fall back to scanning the whole
+	// document on a scope error.
+	InvalidScope bool `json:"invalidScope"`
+	// Ambiguous is true when more than one mutually-non-containing element
+	// tied for the most specific match (7-reviewer finding #7) — also
+	// non-retryable: the caller gets a clear "N elements match" error
+	// instead of a silent first-match.
+	Ambiguous bool `json:"ambiguous"`
+	// Count is the number of tied elements when Ambiguous is true.
+	Count int `json:"count"`
+}
+
 // textSelectorJSTemplateFmt is evaluated in the page (via chromedp.Evaluate)
 // to find the most-specific VISIBLE element within scope whose normalized
-// text matches needle, mark it with a unique attribute, and return the CSS
-// selector for that marker — or "" when nothing matches. scope/needle/exact/
-// token/attr are substituted as %s placeholders holding json.Marshal'd
-// (therefore injection-safe) JS literals — see buildTextSelectorScript.
+// text matches needle, mark it with a unique attribute, and return a
+// textResolveJSResult. scope/needle/exact/token/attr are substituted as %s
+// placeholders holding json.Marshal'd (therefore injection-safe) JS literals
+// — see buildTextSelectorScript. This injection-safety design is
+// load-bearing and must not be weakened: page content or model-supplied
+// text is ALWAYS embedded as inert string data via json.Marshal, never
+// raw-concatenated.
 //
-// "Most specific" = smallest normalized-text length among matches, ties
-// broken by DOM order (document.querySelectorAll order) — so
-// `:has-text("Confirm")` resolves to <button>Confirm</button> itself, not a
-// wrapping <div> that also contains the word "Confirm" by virtue of
-// containing the button.
+// Visibility (7-reviewer finding #4): an element must have a non-empty
+// getClientRects() (excludes display:none), getComputedStyle().visibility
+// !== 'hidden', a non-negligible opacity, AND at least one rect with
+// non-zero width/height — a display:none, visibility:hidden, opacity:0, or
+// zero-size-clipped element is never a candidate.
+//
+// Text source (7-reviewer finding #5): matching uses el.innerText ONLY — no
+// `|| textContent` fallback. innerText is layout-aware (only rendered,
+// visible text); textContent is not, and would otherwise leak the literal
+// SOURCE of a non-rendered <script>/<style> descendant into matching. An
+// element with empty innerText is treated as having no visible text and
+// skipped.
+//
+// Specificity / innermost selection (7-reviewer findings #2 and #7): among
+// all matching candidates, any candidate that CONTAINS another candidate is
+// excluded first (this is what makes `<div><button>Confirm</button></div>`
+// resolve to the BUTTON even when the div's own normalized text is IDENTICAL
+// to the button's, i.e. no extra prose in the div — the old strict-`<`
+// "smallest wins" comparison kept the ancestor on a length tie because
+// document order visits ancestors before descendants). Among the SURVIVING
+// (mutually non-containing) candidates, the smallest normalized-text length
+// wins; if more than one of those ties for smallest, the match is genuinely
+// ambiguous (e.g. two sibling `<button>Delete</button>` elements) and an
+// error is returned instead of silently picking the first one in DOM order.
+// An ancestor/descendant pair can never register as "two matches" for
+// ambiguity purposes, because the ancestor is always removed by the
+// containment exclusion before the tie-break ever runs.
 const textSelectorJSTemplateFmt = `(function(){
   var scope = %s;
   var rawNeedle = %s;
   var exact = %s;
   var token = %s;
   var attr = %s;
+  var noMatch = {marker: '', invalidScope: false, ambiguous: false, count: 0};
   var needle = rawNeedle.replace(/\s+/g, ' ').trim().toLowerCase();
-  if (!needle) { return ''; }
+  if (!needle) { return noMatch; }
   var nodes;
   try {
     nodes = document.querySelectorAll(scope || '*');
   } catch (e) {
-    nodes = document.querySelectorAll('*');
+    return {marker: '', invalidScope: true, ambiguous: false, count: 0};
   }
-  var best = null;
-  var bestLen = -1;
+  var candidates = [];
   for (var i = 0; i < nodes.length; i++) {
     var el = nodes[i];
     var rects = el.getClientRects();
     if (!rects || rects.length === 0) { continue; }
-    var raw = (el.innerText || el.textContent || '');
+    var hasSize = false;
+    for (var r = 0; r < rects.length; r++) {
+      if (rects[r].width > 0 && rects[r].height > 0) { hasSize = true; break; }
+    }
+    if (!hasSize) { continue; }
+    var cs = getComputedStyle(el);
+    if (cs.visibility === 'hidden') { continue; }
+    var opacity = parseFloat(cs.opacity);
+    if (!isNaN(opacity) && opacity <= 0) { continue; }
+    var raw = el.innerText || '';
     var norm = raw.replace(/\s+/g, ' ').trim().toLowerCase();
     if (!norm) { continue; }
     var isMatch = exact ? (norm === needle) : (norm.indexOf(needle) !== -1);
     if (!isMatch) { continue; }
-    if (best === null || norm.length < bestLen) {
-      best = el;
-      bestLen = norm.length;
+    candidates.push({el: el, len: norm.length});
+  }
+  if (candidates.length === 0) { return noMatch; }
+
+  var innermost = [];
+  for (var a = 0; a < candidates.length; a++) {
+    var containsOther = false;
+    for (var b = 0; b < candidates.length; b++) {
+      if (a === b) { continue; }
+      if (candidates[a].el.contains(candidates[b].el)) { containsOther = true; break; }
+    }
+    if (!containsOther) { innermost.push(candidates[a]); }
+  }
+
+  var bestLen = -1;
+  var winners = [];
+  for (var k = 0; k < innermost.length; k++) {
+    if (bestLen === -1 || innermost[k].len < bestLen) {
+      bestLen = innermost[k].len;
+      winners = [innermost[k]];
+    } else if (innermost[k].len === bestLen) {
+      winners.push(innermost[k]);
     }
   }
-  if (best === null) { return ''; }
+  if (winners.length > 1) {
+    return {marker: '', invalidScope: false, ambiguous: true, count: winners.length};
+  }
+
+  var best = winners[0].el;
   best.setAttribute(attr, token);
-  return '[' + attr + '="' + token + '"]';
+  return {marker: '[' + attr + '="' + token + '"]', invalidScope: false, ambiguous: false, count: 1};
 })()`
 
 // buildTextSelectorScript renders textSelectorJSTemplateFmt with cssScope,
@@ -203,7 +365,7 @@ const textSelectorJSTemplateFmt = `(function(){
 // >, and & too), so page content or model-supplied text — including a
 // needle containing `"`, `</script>`, or `);alert(` — is embedded as inert
 // STRING DATA and can never terminate the literal early or inject executable
-// JS. Never raw string-concatenated.
+// JS. Never raw string-concatenated. (Security-reviewed; do not weaken.)
 func buildTextSelectorScript(cssScope, needle string, exact bool, token string) (string, error) {
 	scopeJSON, err := json.Marshal(cssScope)
 	if err != nil {
@@ -235,36 +397,113 @@ func buildTextSelectorScript(cssScope, needle string, exact bool, token string) 
 // selector ([data-omnipus-tsel="<token>"]) that resolves to exactly that
 // element via the EXISTING chromedp.ByQuery path.
 //
-// Runs exactly ONE bounded (context.WithTimeout(tabCtx, timeout))
-// chromedp.Evaluate call. Never acquires BrowserManager.mu (ADR-038) — tabCtx
-// is the only thing this function touches.
+// POLLS (7-reviewer finding #1): retries the resolution scan every
+// textResolvePollInterval until either a definitive result is found — a
+// match, an ambiguity, or an invalid scope — or timeout elapses, so an
+// element that renders ASYNCHRONOUSLY after this call starts (a
+// setTimeout-appended button, a fetch-driven confirmation banner) is still
+// caught, not missed by a single scan that ran before it existed. This is
+// ESSENTIAL for browser_wait, whose entire purpose is waiting for exactly
+// that kind of element — see WaitTool.Execute in tools.go, which passes its
+// own timeout budget (getTextWaitTimeout / PageTimeout) straight through as
+// this function's timeout, so the poll runs for that whole budget rather
+// than failing after one ~1ms scan.
+//
+// Every individual chromedp.Run call this makes is bounded via
+// context.WithTimeout against tabCtx, and this function never acquires
+// BrowserManager.mu (ADR-038) — tabCtx is the only thing it touches. An
+// "ambiguous" or "invalid scope" result is NOT retried — both are
+// deterministic outcomes for a given DOM/scope pair, not a "not rendered
+// yet" condition, so retrying would only waste the timeout budget.
 //
 // Returns a clear "no visible element matching text %q" error — never the
-// cryptic underlying DOM/CDP error — when nothing matches, so the calling
-// tool's error message tells the agent exactly what went wrong instead of a
-// bare "-32000" style CDP fault.
+// cryptic underlying DOM/CDP error — when nothing matches by the deadline,
+// so the calling tool's error message tells the agent exactly what went
+// wrong instead of a bare "-32000" style CDP fault.
+//
+// A DEFINITIVE "no visible element matching text" answer from any earlier
+// attempt always wins over a transient evaluation error from a later one
+// (see lastNoMatchErr/lastEvalErr below): near the tail of the poll budget,
+// an attempt's own per-call context can legitimately end up bounded by only
+// a few milliseconds of the OVERALL deadline, and a CDP round trip that
+// narrowly misses that sliver produces a bare "context deadline exceeded" —
+// that is an infra hiccup on the LAST poll, not a signal that overrides
+// what every prior poll already established cleanly.
 func resolveTextTarget(tabCtx context.Context, cssScope, needle string, exact bool, timeout time.Duration) (markerSelector string, err error) {
 	if strings.TrimSpace(needle) == "" {
 		return "", fmt.Errorf("text selector: empty text to match")
 	}
-
-	token := nextTextSelectorToken()
-	script, err := buildTextSelectorScript(cssScope, needle, exact, token)
-	if err != nil {
-		return "", fmt.Errorf("text selector: %w", err)
+	if len(needle) > maxTextSelectorInputLen {
+		return "", fmt.Errorf("text selector: text argument exceeds the %d-byte limit", maxTextSelectorInputLen)
+	}
+	if len(cssScope) > maxTextSelectorInputLen {
+		return "", fmt.Errorf("text selector: selector scope exceeds the %d-byte limit", maxTextSelectorInputLen)
 	}
 
-	ctx, cancel := context.WithTimeout(tabCtx, timeout)
-	defer cancel()
+	deadline := time.Now().Add(timeout)
+	var lastNoMatchErr, lastEvalErr error
 
-	var marker string
-	if runErr := chromedp.Run(ctx, chromedp.Evaluate(script, &marker)); runErr != nil {
-		return "", fmt.Errorf("text selector: evaluation failed: %w", runErr)
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			// No budget left for another attempt — stop polling and report
+			// whatever the last attempt(s) already established, rather than
+			// firing off a CDP round trip against an already-expired
+			// context that can only ever fail.
+			break
+		}
+
+		token := nextTextSelectorToken()
+		script, berr := buildTextSelectorScript(cssScope, needle, exact, token)
+		if berr != nil {
+			return "", fmt.Errorf("text selector: %w", berr)
+		}
+
+		evalCtx, cancel := context.WithTimeout(tabCtx, remaining)
+		var res textResolveJSResult
+		runErr := chromedp.Run(evalCtx, chromedp.Evaluate(script, &res))
+		cancel()
+
+		switch {
+		case runErr != nil:
+			lastEvalErr = fmt.Errorf("text selector: evaluation failed: %w", runErr)
+		case res.InvalidScope:
+			return "", fmt.Errorf("text selector: invalid selector scope %q", cssScope)
+		case res.Ambiguous:
+			return "", fmt.Errorf("text selector: %d elements match text %q — narrow it with a selector scope", res.Count, needle)
+		case res.Marker != "":
+			return res.Marker, nil
+		default:
+			lastNoMatchErr = fmt.Errorf("no visible element matching text %q", needle)
+		}
+
+		// Cap the inter-poll sleep to whatever's left of the budget so it
+		// can never overshoot the deadline — overshooting would otherwise
+		// hand the NEXT attempt an already-expired (or near-zero) context,
+		// which is exactly the doomed-final-attempt shape lastNoMatchErr's
+		// priority above also guards against; capping the sleep avoids
+		// wasting that attempt in the first place.
+		sleepFor := textResolvePollInterval
+		if remaining := time.Until(deadline); remaining < sleepFor {
+			sleepFor = remaining
+		}
+		if sleepFor <= 0 {
+			break
+		}
+		select {
+		case <-tabCtx.Done():
+			return "", fmt.Errorf("text selector: %w", tabCtx.Err())
+		case <-time.After(sleepFor):
+		}
 	}
-	if marker == "" {
-		return "", fmt.Errorf("no visible element matching text %q", needle)
+
+	if lastNoMatchErr != nil {
+		return "", lastNoMatchErr
 	}
-	return marker, nil
+	if lastEvalErr != nil {
+		return "", lastEvalErr
+	}
+	return "", fmt.Errorf("no visible element matching text %q", needle)
 }
 
 // removeTextMarker best-effort strips the marker attribute resolveTextTarget
@@ -314,6 +553,43 @@ func removeTextMarker(tabCtx context.Context, token string) {
 // Tool-facing resolution
 // ---------------------------------------------------------------------------
 
+// wrapTextMatch wraps a resolveTextTarget outcome into the (target, cleanup,
+// err) triple both resolveActionSelector and resolvePseudoOnlySelector
+// return (7-reviewer finding #11 — factored out of what used to be
+// duplicated in both: extract the token from the marker selector, build a
+// cleanup closure over it, and prefix a resolution error with the tool
+// name).
+func wrapTextMatch(tabCtx context.Context, toolName, marker string, rerr error) (target string, cleanup func(), err error) {
+	if rerr != nil {
+		return "", func() {}, fmt.Errorf("%s: %w", toolName, rerr)
+	}
+	token := tokenFromMarkerSelector(marker)
+	return marker, func() { removeTextMarker(tabCtx, token) }, nil
+}
+
+// textScopeFromSelector returns the CSS scope resolveActionSelector should
+// use when `text` is given alongside `selector` (7-reviewer finding #3a): if
+// selector itself carries a trailing text pseudo, its CSS PREFIX is used as
+// the scope — the pseudo's own needle is discarded, since the explicit
+// `text` argument always takes priority for what to match. A plain CSS
+// selector (or "") is returned unchanged. Returns an error for a
+// malformed/chained pseudo (parseTextPseudo) so the caller never falls back
+// to passing untrusted, potentially-invalid CSS straight through as a scope
+// — the JS-side invalidScope guard (see textSelectorJSTemplateFmt) is
+// defense in depth for scope strings that are invalid CSS WITHOUT a
+// trailing pseudo; this is the fix for the specific case where a pseudo on
+// `selector` would otherwise poison the scope with its own needle syntax.
+func textScopeFromSelector(selector string) (string, error) {
+	cssPrefix, _, _, isText, err := parseTextPseudo(selector)
+	if err != nil {
+		return "", err
+	}
+	if isText {
+		return cssPrefix, nil
+	}
+	return selector, nil
+}
+
 // resolvePseudoOnlySelector resolves selector when it carries a trailing text
 // pseudo (:has-text/:text/:text-is) into a marker selector via
 // resolveTextTarget; returns selector UNCHANGED, with a no-op cleanup, for
@@ -326,18 +602,22 @@ func removeTextMarker(tabCtx context.Context, token string) {
 // would silently break every existing browser_type caller and its "text"
 // parameter validation test. browser_type therefore supports ONLY the
 // pseudo-selector route for text-based targeting — see TypeTool's
-// Description for the documented limitation.
+// Description for the documented limitation (7-reviewer finding #9): a bare
+// `<input>` has no visible text of its own, so it can never be the resolved
+// element via this route — only a container/label whose OWN visible text
+// matches can be, which is a different element than the input the caller
+// almost certainly means to type into. Use a CSS/attribute selector
+// (input[name=…], input[placeholder*=…], input[type=…]) to target a field.
 func resolvePseudoOnlySelector(tabCtx context.Context, toolName, selector string, timeout time.Duration) (target string, cleanup func(), err error) {
-	cssPrefix, needle, exact, isText := parseTextPseudo(selector)
+	cssPrefix, needle, exact, isText, perr := parseTextPseudo(selector)
+	if perr != nil {
+		return "", func() {}, fmt.Errorf("%s: %w", toolName, perr)
+	}
 	if !isText {
 		return selector, func() {}, nil
 	}
 	marker, rerr := resolveTextTarget(tabCtx, cssPrefix, needle, exact, timeout)
-	if rerr != nil {
-		return "", func() {}, fmt.Errorf("%s: %w", toolName, rerr)
-	}
-	token := tokenFromMarkerSelector(marker)
-	return marker, func() { removeTextMarker(tabCtx, token) }, nil
+	return wrapTextMatch(tabCtx, toolName, marker, rerr)
 }
 
 // resolveActionSelector computes which selector chromedp should actually act
@@ -346,7 +626,11 @@ func resolvePseudoOnlySelector(tabCtx context.Context, toolName, selector string
 // resolution order documented on each tool's Description:
 //
 //  1. text non-empty → resolve by visible text, scoped to `selector` (or the
-//     whole document when selector is "") — always a SUBSTRING match.
+//     whole document when selector is "") — always a SUBSTRING match. When
+//     selector itself carries a trailing text pseudo, only its CSS PREFIX is
+//     used as the scope (textScopeFromSelector, 7-reviewer finding #3a) —
+//     the pseudo's own needle is discarded in favor of the explicit `text`
+//     argument.
 //  2. else, selector carries a trailing text pseudo → resolve using its
 //     parsed prefix/needle/exactness (resolvePseudoOnlySelector).
 //  3. else → selector is returned unchanged (existing ByQuery fast path).
@@ -356,12 +640,12 @@ func resolvePseudoOnlySelector(tabCtx context.Context, toolName, selector string
 // no-op when no marker was set, including on the error path).
 func resolveActionSelector(tabCtx context.Context, toolName, selector, text string, timeout time.Duration) (target string, cleanup func(), err error) {
 	if text != "" {
-		marker, rerr := resolveTextTarget(tabCtx, selector, text, false, timeout)
-		if rerr != nil {
-			return "", func() {}, fmt.Errorf("%s: %w", toolName, rerr)
+		scope, serr := textScopeFromSelector(selector)
+		if serr != nil {
+			return "", func() {}, fmt.Errorf("%s: %w", toolName, serr)
 		}
-		token := tokenFromMarkerSelector(marker)
-		return marker, func() { removeTextMarker(tabCtx, token) }, nil
+		marker, rerr := resolveTextTarget(tabCtx, scope, text, false, timeout)
+		return wrapTextMatch(tabCtx, toolName, marker, rerr)
 	}
 	return resolvePseudoOnlySelector(tabCtx, toolName, selector, timeout)
 }
