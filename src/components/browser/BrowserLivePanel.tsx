@@ -124,7 +124,7 @@ export function BrowserLivePanel() {
       <aside
         data-testid="browser-live-panel-docked"
         aria-label="Live browser panel"
-        className="flex h-full w-[45%] min-w-[320px] max-w-[720px] flex-shrink-0 flex-col overflow-hidden border-l border-[var(--color-border)] bg-[var(--color-surface-1)]"
+        className="flex h-full w-[45%] min-w-[320px] max-w-[720px] flex-shrink-0 flex-col overflow-hidden border-l border-[var(--color-border)] bg-[var(--color-surface-0)]"
       >
         {view}
       </aside>

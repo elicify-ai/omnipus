@@ -23,7 +23,7 @@ export function ScreenHeader({ title, actions }: ScreenHeaderProps) {
   return (
     <header
       role="banner"
-      className="flex items-center gap-3 px-4 h-chrome-header min-h-chrome-header bg-[var(--color-surface-1)] flex-shrink-0"
+      className="flex items-center gap-3 px-4 h-chrome-header min-h-chrome-header bg-[var(--color-surface-0)] flex-shrink-0"
     >
       {/* Hamburger — sidebar toggle (full chrome-row height for Fitts / AA) */}
       <button

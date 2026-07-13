@@ -674,7 +674,7 @@ export function ChannelConfigPanel({
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
         side="right"
-        className="sm:w-[480px] bg-[var(--color-surface-1)] border-[var(--color-border)] overflow-y-auto"
+        className="sm:w-[480px] bg-[var(--color-surface-0)] border-[var(--color-border)] overflow-y-auto"
         aria-describedby={descriptionId}
       >
         <SheetHeader className="-mx-6 -mt-6 mb-0 px-6">

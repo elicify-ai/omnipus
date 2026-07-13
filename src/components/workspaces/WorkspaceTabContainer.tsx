@@ -142,7 +142,7 @@ function WorkspaceTabContainerView({
             broke the flat 44px shell alignment. */}
         <header
           role="banner"
-          className="@container flex items-center h-chrome-header min-h-chrome-header bg-[var(--color-surface-1)]/95 backdrop-blur-sm flex-shrink-0"
+          className="@container flex items-center h-chrome-header min-h-chrome-header bg-[var(--color-surface-0)] flex-shrink-0"
           data-testid="workspace-top-bar"
         >
           <button
