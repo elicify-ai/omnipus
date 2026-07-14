@@ -11,7 +11,10 @@ async function selectFirstModel(page: Page) {
   await expect(modelTrigger).toBeVisible()
   await modelTrigger.click()
   const firstOption = page.locator('[role="option"]').first()
-  await expect(firstOption).toBeVisible({ timeout: 5_000 })
+  // Model-catalog options load asynchronously; 5s was too tight under CI load
+  // (flaked as "[role=option] not visible"). 15s gives headroom without masking
+  // a genuinely broken selector.
+  await expect(firstOption).toBeVisible({ timeout: 15_000 })
   await firstOption.click()
 }
 
