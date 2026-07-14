@@ -32,10 +32,6 @@ This file tracks features referenced by E2E tests that are not yet implemented i
   The chat store (`useChatStore`) does not implement a message queue for offline mode.
   Messages sent while `context.setOffline(true)` are dropped rather than queued.
 
-- [ ] **Approval modal with stable testid** (`command-center.spec.ts (b)`)
-  `ExecApprovalBlock` renders inside the chat composer area but does not use
-  `data-testid="approval-modal"`. There is no stable selector to drive the approve flow.
-
 - [x] **Subagent collapsed block UI** (`handoff.spec.ts (b)`, `subagent.spec.ts`)
   RESOLVED by Sprint H (H1+H2): `SubagentBlock.tsx` implements `data-testid="subagent-collapsed"`
   (collapsed header) and `data-testid="subagent-expanded"` (expanded body). The backend now emits

@@ -53,7 +53,7 @@ describe('DefaultWorkspaceRedirect — folded-route redirect map', () => {
     })
   })
 
-  it('redirects /tasks + /command-center to the Board tab', async () => {
+  it('redirects /tasks to the Board tab', async () => {
     renderRedirect('board')
     await waitFor(() => {
       expect(mockNavigate).toHaveBeenCalledWith({

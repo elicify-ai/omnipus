@@ -92,7 +92,7 @@ test('(c) dev_mode_bypass = true shows red persistent banner on every route', as
  * Token rotation recovery: auth tests do fresh logins which generate a new token
  * for the `admin` user, invalidating the previous token stored in admin.json.
  * After auth tests complete, re-login and update the shared storageState so all
- * subsequent spec files (chat, command-center, settings, etc.) get a valid token.
+ * subsequent spec files (chat, settings, etc.) get a valid token.
  *
  * This is necessary because the gateway issues a new token per login and the old
  * token becomes invalid. Without this, all post-auth tests fail with 401.
