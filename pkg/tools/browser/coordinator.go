@@ -16,9 +16,9 @@ package browser
 //     (gateway Close). Release + reload never touch the process.
 //
 // Locking discipline (ADR-038 / spec round-2 MAJ-007): Register/Release/
-// TryOpenTab/TotalOpenTabs/PID take c.mu for bookkeeping only; Register (and the
-// crash-relaunch path) RELEASE c.mu across the blocking Chrome launch + CDP
-// context-create, mirroring manager.go ensureStarted's unlock/relock pattern —
+// RemoveAgent/TryOpenTab/ReleaseTab/PID take c.mu for bookkeeping only; Register
+// (and the crash-relaunch path) RELEASE c.mu across the blocking Chrome launch +
+// CDP context-create, mirroring manager.go ensureStarted's unlock/relock pattern —
 // never hold c.mu across a CDP/exec call.
 
 import (
@@ -75,8 +75,19 @@ type BrowserCoordinator struct {
 	cfg     BrowserConfig
 
 	// maxTotalTabs is the global cross-agent tab budget (spec D7, default 30).
-	// A browser_open_tab that would exceed it is denied by TryOpenTab.
+	// A browser_open_tab that would exceed it is denied by TryOpenTab. Mutable
+	// under c.mu — SetMaxTotalTabs/ApplyRuntimeConfig update it on reload so a
+	// config change to max_total_tabs takes effect without a gateway restart.
 	maxTotalTabs int
+	// reservedTabs counts in-flight tab RESERVATIONS (I-1/W3/C1): each
+	// TryOpenTab that passes the budget check increments this BEFORE the
+	// opener's createTab actually opens the tab, so N concurrent openers at
+	// the boundary see exactly one winner instead of all passing the
+	// check-then-act race. Decremented by ReleaseTab (on close) and by the
+	// OpenTab-failure return path (when reserve succeeded but the open itself
+	// failed). totalOpenTabsLocked()+reservedTabs is the true live+in-flight
+	// count TryOpenTab must gate on.
+	reservedTabs int
 
 	// execPath holds the exec-path resolution caches, reused from the manager
 	// (resolveBrowserExecPath). Resolved once per process; a successful
@@ -100,7 +111,7 @@ type BrowserCoordinator struct {
 	// contexts are in-memory, lost on process restart) and on Shutdown.
 	contexts map[string]*agentBrowserContext
 
-	// Registered managers — for TotalOpenTabs (sum OpenTabCount) and crash
+	// Registered managers — for totalOpenTabsLocked (sum OpenTabCount) and crash
 	// notification (invalidateConnection on each). The manager ref is dropped
 	// on Release; the context entry above intentionally is NOT.
 	managers map[string]*BrowserManager
@@ -170,6 +181,15 @@ func (c *BrowserCoordinator) Register(ctx context.Context, agentID string, mgr *
 	// case: Release dropped only the manager ref, the context survived). This
 	// is the CRIT-002 persistence: the SAME browserCtxID is returned across a
 	// reload, so cookies/localStorage/login survive a Settings save.
+	//
+	// LOW-1: c.managers[agentID] is installed BEFORE the context-create (which
+	// can fail) rather than after. This is deliberate: the reload re-adopt
+	// early-return path below MUST install the new manager so TotalOpenTabs +
+	// Release find it, and that path never creates a context. A failed
+	// context-create on the fresh-agent path leaves a manager with no context
+	// in the map, but that is harmless — a fresh manager has OpenTabCount()==0
+	// (so it doesn't inflate the budget) and Release's dropConnection on a
+	// never-started manager is a no-op.
 	c.mu.Lock()
 	c.managers[agentID] = mgr
 	if ac, ok := c.contexts[agentID]; ok && ac != nil {
@@ -227,6 +247,13 @@ func (c *BrowserCoordinator) Register(ctx context.Context, agentID string, mgr *
 // login survive a Settings save). Open TABS may be lost on reload (the manager
 // drops its remote-allocator connection; targets are connection-scoped and
 // agents reopen them). Returns the remaining registered-manager count.
+//
+// D4 invariant 3 (W1/C2/F-INFO-3): the reload path in pkg/agent/loop.go calls
+// this — NOT manager.Shutdown() — so the coordinator's managers map is cleaned
+// on every Settings save. Release internally calls the registered manager's
+// dropConnection (connection-only teardown = Shutdown in coordinator mode,
+// which never kills Chrome or disposes the context), making Release a full
+// substitute for the old prior.Shutdown() reload call.
 func (c *BrowserCoordinator) Release(agentID string) int {
 	c.mu.Lock()
 	mgr := c.managers[agentID]
@@ -249,42 +276,141 @@ func (c *BrowserCoordinator) Release(agentID string) int {
 	return remaining
 }
 
-// TryOpenTab atomically checks the global tab budget and, if under it, reserves
-// a slot — under ONE coordinator lock — so concurrent openers at the boundary
-// see exactly one winner (spec round-2 MAJ-007). Returns (allowed, reason). The
-// reservation is advisory bookkeeping; the per-agent manager still enforces its
-// own MaxTabs courtesy cap. ReleaseTab returns a slot when a tab closes.
+// RemoveAgent disposes a REMOVED agent's browser context + drops its manager
+// ref (W4). Unlike Release (reload — the context is preserved for re-adoption),
+// RemoveAgent CANCELS the owning chromedp context so chromedp runs
+// Target.disposeBrowserContext, freeing that agent's cookie/localStorage
+// partition. Called by registerSharedTools for agentIDs present in the
+// coordinator's map but no longer in cfg.Agents. Safe to call for an agentID
+// that was never registered (no-op).
+func (c *BrowserCoordinator) RemoveAgent(agentID string) {
+	c.mu.Lock()
+	mgr := c.managers[agentID]
+	delete(c.managers, agentID)
+	ac := c.contexts[agentID]
+	delete(c.contexts, agentID)
+	stopping := c.shutdown
+	c.mu.Unlock()
+
+	if mgr != nil && !stopping {
+		mgr.dropConnection()
+	}
+	// Cancel the OWNING context (WithNewBrowserContext marked it owner, so
+	// chromedp disposes the CDP browser context on cancel). This is the
+	// difference from Release: a truly-removed agent's partition is freed,
+	// not preserved.
+	if ac != nil && ac.cancel != nil && !stopping {
+		ac.cancel()
+	}
+	logger.InfoCF("browser", "coordinator: removed agent (context disposed)", map[string]any{
+		"agent_id": agentID,
+	})
+}
+
+// RegisteredAgents returns a snapshot of agentIDs currently in the coordinator's
+// managers map (W4: the reload-removal diff iterates this). NOTE: registration
+// is lazy (a manager is added only on its first ensureStarted → Register), so
+// this undercounts agents that exist in config but have never used a browser
+// tool — the reload-removal diff in registerSharedTools keys off
+// al.browserMgrs instead, which is the authoritative per-agent set.
+func (c *BrowserCoordinator) RegisteredAgents() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]string, 0, len(c.managers))
+	for id := range c.managers {
+		out = append(out, id)
+	}
+	return out
+}
+
+// SetMaxTotalTabs updates the global tab budget at runtime (MED-1). Cheap and
+// live: TryOpenTab reads c.maxTotalTabs under c.mu on every open, so a reload
+// that changes tools.browser.max_total_tabs takes effect immediately — no
+// gateway restart needed. Bounds n to >=1 to avoid an accidental zero disabling
+// all tab opens.
+func (c *BrowserCoordinator) SetMaxTotalTabs(n int) {
+	if n <= 0 {
+		return
+	}
+	c.mu.Lock()
+	old := c.maxTotalTabs
+	c.maxTotalTabs = n
+	c.mu.Unlock()
+	if old != n {
+		logger.InfoCF("browser", "coordinator: max_total_tabs updated on reload", map[string]any{
+			"old": old,
+			"new": n,
+		})
+	}
+}
+
+// ApplyRuntimeConfig applies the runtime-cheap portions of an updated
+// BrowserConfig to a coordinator that survived a reload (MED-1).
+// max_total_tabs is a live policy (TryOpenTab reads it under c.mu) and is
+// applied immediately via SetMaxTotalTabs. headless/exec_path/profile_dir are
+// launch-time properties of the ALREADY-RUNNING Chrome and cannot take effect
+// without restarting the gateway; changes to them are warn-logged as "applies
+// after gateway restart" so an operator is not silently misled. CRIT-002 stays
+// intact: the coordinator itself is never rebuilt on reload.
+func (c *BrowserCoordinator) ApplyRuntimeConfig(newCfg BrowserConfig, newMaxTotalTabs int) {
+	c.SetMaxTotalTabs(newMaxTotalTabs)
+	c.mu.Lock()
+	oldCfg := c.cfg
+	c.mu.Unlock()
+	if oldCfg.Headless != newCfg.Headless {
+		logger.WarnCF("browser", "coordinator: tools.browser.headless changed on reload — applies after gateway restart (Chrome already running)", map[string]any{
+			"old": oldCfg.Headless,
+			"new": newCfg.Headless,
+		})
+	}
+	if oldCfg.ExecPath != newCfg.ExecPath {
+		logger.WarnCF("browser", "coordinator: tools.browser.exec_path changed on reload — applies after gateway restart (Chrome already running)", nil)
+	}
+	if oldCfg.ProfileDir != newCfg.ProfileDir {
+		logger.WarnCF("browser", "coordinator: tools.browser.profile_dir changed on reload — applies after gateway restart (Chrome already running)", nil)
+	}
+}
+
+// TryOpenTab atomically checks the global tab budget AND reserves a slot under
+// ONE coordinator lock — so concurrent openers at the boundary see exactly one
+// winner (I-1/W3/C1, spec round-2 MAJ-007). It counts live tabs
+// (totalOpenTabsLocked — the sum of every registered manager's OpenTabCount)
+// PLUS in-flight reservations (c.reservedTabs — slots held by openers between
+// this reserve and their createTab completing). Returns (allowed, reason). The
+// per-agent manager still enforces its own MaxTabs courtesy cap. The caller
+// MUST return the slot via ReleaseTab when the open SUCCEEDS, or via the
+// manager's releaseGlobalTab when the open FAILS after reserve succeeded.
 func (c *BrowserCoordinator) TryOpenTab(agentID string) (bool, string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.totalOpenTabsLocked() >= c.maxTotalTabs {
+	if c.totalOpenTabsLocked()+c.reservedTabs >= c.maxTotalTabs {
 		return false, fmt.Sprintf(
 			"global tab budget reached (tools.browser.max_total_tabs=%d); close a tab with browser_close_tab first",
 			c.maxTotalTabs)
 	}
+	c.reservedTabs++
 	return true, ""
 }
 
-// ReleaseTab returns a reserved global-tab slot when an agent closes a tab. Best
-// effort + advisory (mirrors TryOpenTab): the budget is enforced at open time;
-// a close that forgets to call this only makes the coordinator conservative
-// (it under-counts free slots), never permissive.
+// ReleaseTab returns a reserved global-tab slot when an agent closes a tab
+// (decrements c.reservedTabs). Each successful TryOpenTab reserved one slot;
+// the matching return is: ReleaseTab on a successful open+later close, OR the
+// OpenTab-failure return path (manager.releaseGlobalTab) when the open itself
+// failed after the reserve. A close that forgets to call ReleaseTab would leak
+// a reservation (the coordinator grows conservative, never permissive); the
+// OpenTab-failure path forgetting to return its reservation would do the same.
 func (c *BrowserCoordinator) ReleaseTab(agentID string) {
-	// No per-slot counter is held today (TotalOpenTabs sums live managers'
-	// OpenTabCount), so this is a no-op placeholder kept for the contract +
-	// future move to a counted budget. Documented honestly rather than removed.
-	_ = agentID
-}
-
-// TotalOpenTabs sums open tabs across all registered managers' OpenTabCount
-// (spec round-1 MAJ-001). Used by TryOpenTab's budget check + Stream D's
-// browser_open_tab enforcement.
-func (c *BrowserCoordinator) TotalOpenTabs() int {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.totalOpenTabsLocked()
+	if c.reservedTabs > 0 {
+		c.reservedTabs--
+	}
+	c.mu.Unlock()
 }
 
+// totalOpenTabsLocked sums open tabs across all registered managers'
+// OpenTabCount (spec round-1 MAJ-001). Used by TryOpenTab's budget check (which
+// adds c.reservedTabs for the live+in-flight count). Must be called with c.mu
+// held.
 func (c *BrowserCoordinator) totalOpenTabsLocked() int {
 	n := 0
 	for _, mgr := range c.managers {
@@ -411,14 +537,53 @@ func (c *BrowserCoordinator) ensureLaunched(ctx context.Context) error {
 	c.launching = true
 	c.mu.Unlock()
 
-	launchErr := c.launchChrome(ctx)
-
-	c.mu.Lock()
-	c.launching = false
-	c.launchDone.Broadcast() // wake all waiters regardless of outcome
-	if launchErr != nil {
+	// CRIT-2 (panic-safety): c.launching MUST always be cleared + c.launchDone
+	// broadcast, even if launchChrome panics — otherwise every future Register
+	// deadlocks on c.launchDone.Wait(). The cleanup runs via defer so a panic
+	// in launchChrome (chromedp internals, a nil deref in a CDP handler) can
+	// never wedge the single-flight latch. launchChrome's own chromedp.Run-
+	// failure cleanup (rootCancel/allocCancel on its locals) is separate and
+	// still runs for the ordinary error path.
+	defer func() {
+		c.mu.Lock()
+		c.launching = false
+		c.launchDone.Broadcast() // wake all waiters regardless of outcome
 		c.mu.Unlock()
-		return launchErr
+	}()
+
+	if err := c.launchChrome(ctx); err != nil {
+		return err
+	}
+
+	// CRIT-1 (Shutdown races in-flight launch → orphan Chrome): there is a
+	// window between chromedp.Run succeeding (Chrome alive) and launchChrome
+	// installing c.allocCancel/c.rootCancel (~the marker write + lock dance).
+	// If Shutdown runs in that window it sees nil cancels, logs a FALSE
+	// "process killed", and returns — then launchChrome installs the LIVE
+	// Chrome's cancels AFTER Shutdown, producing an unkillable orphan. Close
+	// the window: re-check c.shutdown now (launchChrome has installed the
+	// cancels by the time it returned nil). If Shutdown won the race, tear
+	// down the just-launched Chrome ourselves and return an error; do NOT set
+	// c.launched=true. (If Shutdown already read non-nil cancels and called
+	// them, they are nil here — no double-kill; chromedp cancels are
+	// idempotent regardless.)
+	c.mu.Lock()
+	if c.shutdown {
+		rootCancel := c.rootCancel
+		allocCancel := c.allocCancel
+		c.rootCtx = nil
+		c.rootCancel = nil
+		c.allocCtx = nil
+		c.allocCancel = nil
+		c.cmd = nil
+		c.mu.Unlock()
+		if rootCancel != nil {
+			rootCancel()
+		}
+		if allocCancel != nil {
+			allocCancel()
+		}
+		return fmt.Errorf("browser: shared Chrome launch aborted by concurrent shutdown")
 	}
 	c.launched = true
 	c.mu.Unlock()
@@ -479,10 +644,20 @@ func (c *BrowserCoordinator) launchChrome(ctx context.Context) error {
 		}
 	}
 	product := readBrowserProduct(rootCtx)
-	if werr := c.writeOwnershipMarker(pid, product); werr != nil {
-		logger.WarnCF("browser", "coordinator: failed to write ownership marker (continuing)", map[string]any{
-			"error": werr.Error(),
-		})
+	// MED-2: a pid of 0 (Process()==nil — e.g. chromedp couldn't capture the
+	// cmd handle) MUST NOT be written as a marker. preflightPort treats a held
+	// port + a marker with a dead/zero pid as FOREIGN (the dead pid can't be
+	// holding the port), so a 0 marker would cause the NEXT launch to reject
+	// our own live Chrome as foreign. Skip the write + warn instead; the hard
+	// guarantee is the port-bind preflight, the marker is the identity layer.
+	if pid > 0 {
+		if werr := c.writeOwnershipMarker(pid, product); werr != nil {
+			logger.WarnCF("browser", "coordinator: failed to write ownership marker (continuing)", map[string]any{
+				"error": werr.Error(),
+			})
+		}
+	} else {
+		logger.WarnCF("browser", "coordinator: could not capture Chrome pid — ownership marker NOT written (preflight identity check disabled until a pid is available)", nil)
 	}
 
 	c.mu.Lock()
@@ -520,14 +695,14 @@ func (c *BrowserCoordinator) launchChrome(ctx context.Context) error {
 // coordinator.PID() is a fresh live pid within the recovery bound T (CRIT-001:
 // recovery is into FRESH empty contexts — prior per-agent cookies/login are lost
 // by definition since CDP contexts are in-memory).
+//
+// HIGH-1/N2: this blocks until chromedp closes LostConnection on transport
+// drop. There is no fallback if it doesn't — chromedp's allocator goroutine
+// owns cmd.Wait and closes LostConnection as soon as the process exits, so this
+// is the canonical, race-free signal. (A bounded pidAlive poll OR'd via select
+// was considered as defense-in-depth but adds complexity for a path chromedp
+// already covers; the honest single-channel block is preferred.)
 func (c *BrowserCoordinator) watchForCrash(b *chromedp.Browser, currentManagers []*BrowserManager) {
-	select {
-	case <-b.LostConnection:
-	case <-time.After(0):
-		// LostConnection may already be closed at attach time; fall through.
-	}
-	// Also handle the case where LostConnection never fires but the process is
-	// gone — block on the channel (it always closes on transport drop).
 	<-b.LostConnection
 
 	c.mu.Lock()

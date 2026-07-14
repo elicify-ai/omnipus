@@ -212,12 +212,17 @@ func (t *OpenTabTool) Execute(ctx context.Context, args map[string]any) *tools.T
 
 	// ADR-043 D7: global tab budget across all agents' contexts. Deny a new tab
 	// when the shared Chrome is at the cap; the agent can browser_close_tab first.
+	// I-1/W3/C1: reserveGlobalTab atomically RESERVES a slot (live tabs + in-flight
+	// reservations) under the coordinator lock; if the subsequent OpenTab itself
+	// fails, that reservation MUST be returned (releaseGlobalTab) so the budget
+	// doesn't grow permanently conservative on every failed open.
 	if ok, reason := t.mgr.reserveGlobalTab(); !ok {
 		return tools.ErrorResult(fmt.Sprintf("browser_open_tab: global tab budget reached (%s) — close a tab with browser_close_tab first", reason))
 	}
 
 	tab, err := t.mgr.OpenTab(defaultSessionID)
 	if err != nil {
+		t.mgr.releaseGlobalTab()
 		return tools.ErrorResult(fmt.Sprintf("browser_open_tab: %s", err))
 	}
 
