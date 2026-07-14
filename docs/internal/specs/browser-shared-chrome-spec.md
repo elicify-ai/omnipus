@@ -52,35 +52,44 @@ Five streams with **explicit interfaces** so dev agents run concurrently without
 
 ### Shared interface contract (all streams code against this — define FIRST, in Stream A's first commit)
 ```go
-// pkg/tools/browser/coordinator.go (new)
+// pkg/tools/browser/coordinator.go (new) — placement RESOLVED (round-2 MIN-007):
+// same package as BrowserManager (avoids import cycle; owns Chrome + contexts).
 type BrowserCoordinator struct { /* ... */ }
 
 // Register associates a manager with the coordinator and returns the cdpURL to
-// dial + the agent's STABLE browser-context id (created if first time,
-// re-adopted if this agent had a context on the still-living Chrome — grill CRIT-002).
-// Launches Chrome if none live. Errors if launch fails.
+// dial + the agent's STABLE browser-context id. THE COORDINATOR CREATES+OWNS the
+// context (WithNewBrowserContext on the coordinator's own long-lived chromedp
+// context, which survives reload because ReloadProviderAndConfig reuses the same
+// *AgentLoop). The manager RE-ADOPTS it non-owningly via WithExistingBrowserContext(id)
+// (chromedp.go:511-518 — non-owning, no auto-dispose). This is the CRIT-003 fix:
+// a WithNewBrowserContext on a MANAGER path would auto-dispose on the manager's
+// reload-time cancel, destroying cookies every Settings save.
+// INVARIANT: no WithNewBrowserContext call exists on any *BrowserManager path.
+// Launches Chrome if none live (without holding the coordinator mutex across the
+// blocking launch — ADR-038 discipline, round-2 MAJ-007). Errors if launch fails.
 func (c *BrowserCoordinator) Register(ctx context.Context, agentID string, mgr *BrowserManager) (cdpURL string, browserCtxID cdp.BrowserContextID, err error)
 
-// Release drops an agent's manager ref on reload (the manager's DialCtx is closed).
-// Does NOT kill Chrome and, on the RELOAD path, does NOT dispose the agent's
-// browser context — it persists keyed by agentID so the new manager re-adopts it.
-// Disposal happens only on agent-removal or gateway Close() (grill CRIT-002).
+// Release drops an agent's manager ref on reload. Does NOT kill Chrome and does NOT
+// dispose the agent's browser context (the coordinator owns it; it persists keyed
+// by agentID so the next Register re-adopts it — cookies/localStorage/login survive
+// a Settings save). Open TABS may be lost on reload (targets are session-owned;
+// agents reopen) — round-2 MAJ-006. Disposal happens only on agent-removal/Close().
 func (c *BrowserCoordinator) Release(agentID string) int
 
-// TotalOpenTabs sums open tabs across all REGISTERED managers' contexts (Stream D).
-// Implement by querying registered managers (each exposes OpenTabCount()), not by
-// the coordinator owning their tab maps (grill MAJ-001).
+// TryOpenTab atomically checks the global tab budget and, if under it, reserves a
+// slot — under ONE coordinator lock — so concurrent openers at the boundary see
+// exactly one winner (round-2 MAJ-007; the §10 budget-race dataset). Returns
+// (allowed bool, reason string).
+func (c *BrowserCoordinator) TryOpenTab(agentID string) (bool, string)
+
+// TotalOpenTabs sums open tabs across registered managers' OpenTabCount() (round-1 MAJ-001).
 func (c *BrowserCoordinator) TotalOpenTabs() int
-
-// PID returns the shared Chrome process pid (0 if none) — used by R1/R3 tests to
-// assert process identity across reload (grill MAJ-005).
+// PID returns the shared Chrome pid (0 if none) — R1/R3 tests (round-1 MAJ-005).
 func (c *BrowserCoordinator) PID() int
-
-// Shutdown disposes all contexts + kills the Chrome process — called ONLY by
-// gateway Close().
+// Shutdown disposes all contexts + kills the Chrome process — called ONLY by gateway Close().
 func (c *BrowserCoordinator) Shutdown()
 ```
-The `BrowserManager` gains: a `coordinator *BrowserCoordinator` field; an exported `OpenTabCount() int` (Stream D reads it); and `ensureStarted` managed-mode calls `coordinator.Register(ctx, agentID, m)` and builds a `NewRemoteAllocator` from the returned `cdpURL`, then scopes its tab-set to the returned `browserCtxID`. The coordinator holds the stable `agentID → browserCtxID` map so a reload re-adopts the same context (cookies/login survive). **No per-agent code path constructs or cancels an ExecAllocator.**
+**Coordinator locking discipline (round-2 MAJ-007):** `Register`/`Release`/`TryOpenTab`/`TotalOpenTabs`/`PID` take a coordinator mutex for bookkeeping; `Register` RELEASES it around the blocking Chrome launch+context-create (never holds it across a CDP/exec call — ADR-038 no-lock-across-blocking-call). `TryOpenTab` is the one atomic check-and-reserve so the budget boundary is race-free. The `BrowserManager` gains: a `coordinator *BrowserCoordinator` field; an exported `OpenTabCount() int`; `ensureStarted` calls `coordinator.Register` → builds `NewRemoteAllocator(cdpURL)` → re-adopts `browserCtxID` via `WithExistingBrowserContext`. `Close()` (`loop.go:2785-2798`) adds a single `coordinator.Shutdown()` as the SOLE process-kill path (round-2 MIN-008); per-manager `Shutdown()` drops only the manager's connection.
 
 ### Stream A — Coordinator (D1 + D4) [CRITICAL PATH]
 **Owns:** `pkg/tools/browser/coordinator.go` (new), the `BrowserManager.coordinator` field + `ensureStarted`/`Shutdown` rewrites, `registerSharedTools` Release change, the `loop.go:1712` reload path, gateway `Close()` wiring.
@@ -90,11 +99,12 @@ The `BrowserManager` gains: a `coordinator *BrowserCoordinator` field; an export
 **Ownership marker (grill M2):** `$OMNIPUS_HOME/browser/shared-chrome.pid` (pid + chrome-for-testing version); a cold start verifies a holder is *our* Chrome before adopting; foreign holders are rejected (no probe-and-dial).
 
 ### Stream B — Per-agent browser contexts (D2) [SPIKE-GATED]
-**Owns:** `bootstrapBrowserCtx` `WithNewBrowserContext()` adoption; tab creation/inheritance of `BrowserContextID`; `adoptTarget` on a child context; screencast re-bind to a context's active tab.
-**Depends on:** Stream A's coordinator connection (managers get a connection, then create their context on it).
+**Owns:** tab creation/inheritance of `BrowserContextID` within the **coordinator-owned** context; `adoptTarget` on a child context; screencast re-bind to a context's active tab; the manager's non-owning re-adoption of its context via `WithExistingBrowserContext(browserCtxID)`.
+**Depends on:** Stream A's coordinator (which creates+owns each agent's context and returns its id via `Register`).
 **TDD test #1 (the spike — gates the whole stream):** *a `window.open` from agent A's tab creates the new target in agent A's browser context, invisible to agent B* (the O1 property; CDP defaults new targets to the opener's context — verify, don't assume).
-**Spike fallback (grill MAJ-003):** if the O1 property does NOT hold, this is a stop-work decision point — escalate to re-ADR (the fallback options are: (a) per-agent Chrome **profiles** within one Chrome instead of contexts — heavier but isolates; or (b) revert to serialize-until-fixed). Do NOT silently ship cross-agent cookie bleed. The spike result is recorded before Stream B implementation proceeds.
-**Interface out:** a manager's tab-set is fully scoped to its context; `Live().Attach` binds to the active tab within that context; `OpenTabCount()` exposes the per-agent count for Stream D.
+**CRIT-003 invariant (load-bearing):** the manager NEVER calls `WithNewBrowserContext` — it only re-adopts the coordinator-owned context non-owningly (`WithExistingBrowserContext`). A `WithNewBrowserContext` on the manager path would auto-dispose on the manager's reload-time cancel, destroying cookies every Settings save.
+**Spike fallback (grill MAJ-003):** if the O1 property does NOT hold, this is a stop-work decision point — escalate to re-ADR (fallback: per-agent Chrome **profiles** within one Chrome instead of contexts, or revert to serialize-until-fixed). Do NOT silently ship cross-agent cookie bleed.
+**Interface out:** a manager's tab-set is scoped to its re-adopted context; `Live().Attach` binds to the active tab within that context; `OpenTabCount()` exposes the per-agent count for Stream D.
 
 ### Stream C — Live-view per-agent binding + contract (D3)
 **Owns:** confirm `browser_ws.go:530,544` already disambiguates by `agent_id` (no code change expected); `BrowserAttachFrame.yaml` description prose update; SPA `BrowserLivePanel` multi-agent UX (show *which agent's* context is driven — the header/chip).
@@ -112,7 +122,7 @@ The `BrowserManager` gains: a `coordinator *BrowserCoordinator` field; an export
 ## 4. Behavioral contract (observable)
 - When ≥2 browser-using agents call browser tools concurrently, each gets its own isolated browsing session; none fails with "port in use".
 - When an agent logs into a site in its context, no other agent is logged in as it.
-- When the operator saves any Settings while agents are browsing, **browsing state survives** — the shared Chrome process is not killed AND each agent's browser context is re-adopted (cookies/localStorage/login/tabs preserved), because contexts persist for the Chrome process lifetime and are keyed by `agentID` (grill CRIT-002).
+- When the operator saves any Settings while agents are browsing, **login/localStorage survive** — the shared Chrome process is not killed AND each agent's browser context is **coordinator-owned** (survives the manager swap; re-adopted by the new manager via `WithExistingBrowserContext`). Open **tabs may be lost** on reload (targets are session-owned; agents reopen them) — round-2 MAJ-006. (grill CRIT-002 + CRIT-003.)
 - When the shared Chrome **crashes** mid-session, all agents recover into **fresh empty contexts** within a bounded T (CDP contexts are in-memory and do not survive a process restart — per-agent cookies/login are lost on a crash by definition; grill CRIT-001). This is the accepted single-Chrome blast radius.
 - When the total open tabs across all agents would exceed `max_total_tabs`, `browser_open_tab` is denied with an actionable error.
 - When the gateway stops, the Chrome process is killed exactly once.
@@ -141,8 +151,8 @@ The `BrowserManager` gains: a `coordinator *BrowserCoordinator` field; an export
 **US-2 (P0) Per-agent cookie isolation.** As an operator, I want agents isolated so one agent's login never leaks to another.
 - AC1: **Given** agent A logs into a site in its context, **When** agent B opens the same site, **Then** B is not authenticated as A.
 
-**US-3 (P0) Hot-reload safety (grill C1 + CRIT-002).** As an operator, saving Settings while agents browse must not drop browsing **state**.
-- AC1: **Given** two agents are actively browsing with logins, **When** `ReloadProviderAndConfig` runs (any Settings save), **Then** the shared Chrome PID is unchanged AND both agents' contexts are re-adopted (logins/tabs preserved).
+**US-3 (P0) Hot-reload safety (grill C1 + CRIT-002 + CRIT-003).** As an operator, saving Settings while agents browse must not drop **login/localStorage**.
+- AC1: **Given** two agents are browsing with a site login each, **When** `ReloadProviderAndConfig` runs (any Settings save), **Then** the shared Chrome PID is unchanged AND each agent's **coordinator-owned** context is re-adopted (the login/localStorage persists); open tabs may be lost (agents reopen).
 
 **US-4 (P0) Crash recovery (grill M1 + CRIT-001).** As an operator, a Chrome crash must self-heal within a bound — into fresh contexts (cookies lost by definition).
 - AC1: **Given** agents are browsing, **When** the Chrome process is killed, **Then** all agents recover within T (≤10 s) into fresh empty contexts (browsing works again; per-agent logins are NOT preserved — documented limitation).
@@ -156,6 +166,15 @@ The `BrowserManager` gains: a `coordinator *BrowserCoordinator` field; an export
 **US-7 (P1) No wire change (D3).** As a maintainer, the contract must not break.
 - AC1: **Given** the implementation, **When** `make verify-contracts` runs, **Then** it is green (only `BrowserAttachFrame.yaml` description prose changed).
 
+**US-8 (P1) No foreign-Chrome adoption (grill M2 / FR-007).** As an operator, the gateway must never silently drive an unrelated Chrome already on 9223.
+- AC1: **Given** an unrelated Chrome (wrong version / no marker) holds 9223 at start, **When** the coordinator initializes, **Then** it rejects (not adopts) the foreign Chrome and surfaces a clear error.
+
+**US-9 (P1) Gateway stop is the only kill (FR-008).** As an operator, the Chrome process must die exactly once, only on gateway stop.
+- AC1: **Given** agents are browsing, **When** reloads + per-agent `Release` happen, **Then** `coordinator` killCount stays 0; **and when** `Close()` runs, **then** killCount becomes 1 and the pid is dead.
+
+**US-10 (P1) Live-view binds per agent (FR-010 / D3).** As a human, watching agent N shows N's context.
+- AC1: **Given** multiple agents browsing, **When** the WS handler resolves `BrowserManagerForAgent(N)`, **Then** the screencast binds to N's context's active tab only.
+
 ## 8. BDD scenarios (key — full traceability in §9)
 
 **Scenario: two agents browse concurrently (Happy Path) — Traces to US-1/AC1, FR-001**
@@ -168,10 +187,10 @@ The `BrowserManager` gains: a `coordinator *BrowserCoordinator` field; an export
 - **When** A clicks the link (opens a new tab)
 - **Then** the new target's `browserContextId` equals A's context id AND B's `browser_list_tabs` does not include it
 
-**Scenario: hot-reload preserves browsing state (grill C1 + CRIT-002) — Traces to US-3, FR-004**
-- **Given** the shared Chrome PID is `coordinator.PID()==P` and two agents are browsing with a site login each
+**Scenario: hot-reload preserves login/localStorage (grill C1 + CRIT-002 + CRIT-003) — Traces to US-3, FR-004**
+- **Given** the shared Chrome PID is `coordinator.PID()==P` and two agents are browsing with a site login each (coordinator-owned contexts)
 - **When** `ReloadProviderAndConfig` runs
-- **Then** `coordinator.PID()==P` still (process not killed) AND each agent's context is re-adopted (the login persists) AND both agents' next `browser_get_text` reflects their still-logged-in state
+- **Then** `coordinator.PID()==P` still (process not killed) AND each agent's context is re-adopted by the new manager (the **login/localStorage persists**) AND no `WithNewBrowserContext` was called on any manager path
 
 **Scenario: Chrome crash recovers into fresh contexts within bound (grill M1 + CRIT-001) — Traces to US-4, FR-005**
 - **Given** agents are browsing
@@ -192,6 +211,18 @@ The `BrowserManager` gains: a `coordinator *BrowserCoordinator` field; an export
 - **Given** the implementation is complete
 - **When** `make verify-contracts` runs
 - **Then** it exits 0 with only `BrowserAttachFrame.yaml` description prose changed (no field/enum/maxLength delta)
+
+**Scenario: gateway stop is the sole Chrome kill (FR-008) — Traces to US-9, FR-008**
+- **Given** agents are browsing and `coordinator.killCount==0`
+- **When** a reload + per-agent `Release` occur
+- **Then** `killCount` is still 0 and `coordinator.PID()` is unchanged
+- **And when** `AgentLoop.Close()` runs
+- **Then** `killCount==1` and the pid is no longer in `/proc`
+
+**Scenario: live-view binds to the attached agent's context (FR-010) — Traces to US-10, FR-010**
+- **Given** agents Jim and Ray are browsing in distinct contexts
+- **When** a viewer attaches with `agent_id=Ray`
+- **Then** the screencast renders Ray's context's active tab and NOT Jim's
 
 ## 9. Traceability matrix (FR ↔ US ↔ BDD ↔ test ↔ ADR/grill)
 
@@ -243,12 +274,12 @@ The `BrowserManager` gains: a `coordinator *BrowserCoordinator` field; an export
 | Same agent, 2 concurrent tool calls | both succeed, same context (no internal lock contention deadlock) | FR-001 |
 | Empty context, 0 tabs, agent calls browser_get_text | clean empty/no-element result, no crash | FR-001 |
 | 2 agents race `browser_open_tab` at budget boundary (max_total_tabs=2, 1 open) | exactly ONE succeeds, the other is denied | FR-006 |
-| Chrome crash then immediate tool call | tool retries/queues until recovery (≤10s), then succeeds in fresh context | FR-005 |
+| Chrome crash then immediate tool call | tool retries/queues until recovery (≤10s), then succeeds in a FRESH context (prior cookies/login NOT present — CRIT-001) | FR-005 |
 
 ## 11. Functional requirements & success criteria
 - **FR-001..FR-010** as in §9 (MUST).
 - **SC-001:** 2 agents browse concurrently with zero "port in use" failures over a 60s mixed-load run.
-- **SC-002 (headline):** **5 agents** browse concurrently (distinct sites, mixed navigation) for ≥60s on this devpod — all isolated, live-view correct per agent, no crash, **total browsing RSS < 4 GB** (concrete cap: measured 91 MB baseline + ≤5 tabs × ~600 MB heavy-site headroom, sized for the 3.8 GB pod floor; if the pod has <8 GB free, cap tabs per agent to keep under 4 GB). (The **10-agent** claim is validated on the `ci-omnipus` 16 GB worker with RSS < 8 GB, not this pod — grill O4.)
+- **SC-002 (headline):** **5 agents** browse concurrently (distinct sites, mixed navigation) for ≥60s on this devpod — all isolated, live-view correct per agent, no crash, **total browsing RSS < 4 GB**. Measurement (round-2 MAJ-009): sum `VmRSS` (kB) from `/proc/<pid>/status` across the shared Chrome's process tree (the coordinator's pid + all descendants via the pgid), sampled at the 60s mark. Sized for the 3.8 GB pod floor (measured 91 MB baseline + per-tab headroom; if the pod has <8 GB free, cap tabs per agent to keep under 4 GB). (The **10-agent** claim is validated on the `ci-omnipus` 16 GB worker with RSS < 8 GB — grill O4.)
 - **SC-003:** hot-reload mid-browse kills 0 Chrome processes (R1).
 - **SC-004:** crash recovery ≤10 s for all agents (R2).
 - **SC-005:** `make verify-contracts` green (no wire-schema change).
@@ -256,7 +287,7 @@ The `BrowserManager` gains: a `coordinator *BrowserCoordinator` field; an export
 ## 12. Ambiguity self-audit (resolved inline per operator directive — documented as assumptions)
 | Ambiguity | Resolution (assumption, recorded) |
 |---|---|
-| Coordinator placement (gateway pkg vs browser pkg) | **Assume:** `pkg/tools/browser/coordinator.go` (same package as manager — avoids an import cycle and keeps the whole browser subsystem cohesive); the gateway holds a ref. Grill M5/UNKNOWN. |
+| Coordinator placement (gateway pkg vs browser pkg) | **DECIDED (round-2):** `pkg/tools/browser/coordinator.go` — same package as `BrowserManager` (avoids an import cycle; the coordinator now OWNS the contexts, so it must live with the manager). Load-bearing given CRIT-003. |
 | Recovery bound T | **Assume:** ≤10 s (SC-004); tunable. |
 | `max_total_tabs` default | **Assume:** 30 (sized from the measured 91 MB baseline; D7). Tunable. |
 | 10-simultaneous validation host | **Assume:** `ci-omnipus` 16 GB worker (O4); this pod validates 5. |
