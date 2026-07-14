@@ -1550,7 +1550,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                       return (
                         <label
                           key={skill.id}
-                          className={`flex items-start gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2.5 transition-colors ${isLocked ? 'cursor-not-allowed opacity-60' : 'cursor-pointer hover:bg-[var(--color-surface-2)]'}`}
+                          className={`flex items-start gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2.5 transition-colors ${isLocked ? 'cursor-not-allowed opacity-60' : 'cursor-pointer hover:bg-[var(--color-surface-3)]'}`}
                         >
                           <input
                             type="checkbox"

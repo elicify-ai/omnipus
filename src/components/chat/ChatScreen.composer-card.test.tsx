@@ -8,7 +8,8 @@
 // would keep every one of those files green while the picker silently
 // vanished from the product. This file closes that gap by stubbing the
 // three sub-components to non-null SENTINEL elements and asserting the
-// composer card actually mounts all of its context-row slots.
+// composer layout contract: context-row slots bare ABOVE the card, the
+// input surface inside the card, activity pills bare BELOW it.
 //
 // Scaffolding (mocks for @assistant-ui/react, @tanstack/react-query,
 // @tanstack/react-router, @/lib/api, the SVG asset, and the deep child
@@ -18,12 +19,12 @@
 //
 // NOTE: this file deliberately does NOT assert against the composer card's
 // FULL className string (e.g. exact border/background/rounding utilities) —
-// only the presence of its `@container` query-context class (load-bearing:
-// TokenCounter's `@2xl:flex` gate below reads off THIS container, not a
-// distant ancestor) plus the sentinel testids for its child slots. The
-// contract under test is slot presence/placement and the @container
-// context, not the card's cosmetic styling, which is free to change without
-// this file needing an update.
+// only the `@container` query-context class on the composer ROOT
+// (load-bearing: TokenCounter's `@2xl:flex` gate reads off that container;
+// without it the counter is permanently hidden) plus the sentinel testids
+// and their placement relative to the card. The contract under test is slot
+// presence/placement and the @container context, not cosmetic styling,
+// which is free to change without this file needing an update.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, within } from '@testing-library/react'
@@ -42,8 +43,8 @@ import { OmnipusComposer } from './ChatScreen'
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
 // Mock AssistantUI primitives — ChatScreen uses ThreadPrimitive, ComposerPrimitive, etc.
-// We only need the composer card's shell rendered as real DOM so its child
-// slots (attach control + the three composer sub-components) are queryable.
+// We only need the composer's shell elements rendered as real DOM so the
+// slots and their placement relative to the card are queryable.
 vi.mock('@assistant-ui/react', () => {
   return {
     useThreadViewportStore: () => ({ getState: () => ({ isAtBottom: true }) }),
@@ -154,7 +155,8 @@ vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null })
 
 // The point of THIS file: stub the three composer sub-components to
 // non-null SENTINELS (not null, unlike every other ChatScreen test file) so
-// we can assert the composer card actually mounts all of its slots. The
+// we can assert the composer layout mounts all of its slots in the right
+// places (context row above the card, input inside, pills below). The
 // AgentPicker/ModelPicker stubs also surface the `disabled` prop via
 // data-disabled so the agentRemoved read-only-passthrough test below can
 // assert on it without needing the real components.
@@ -173,8 +175,8 @@ vi.mock('./composer/TokenCounter', () => ({
     <div data-testid="token-counter-stub" data-cls={className} />
   ),
 }))
-// ActivityBar sentinel — live background activity folds below the input,
-// inside the composer card (see ChatScreen.tsx's composer card JSX).
+// ActivityBar sentinel — activity pills render below the card, outside its
+// frame (asserted below via not-in-card + document order).
 vi.mock('./ActivityBar', () => ({ ActivityBar: () => <div data-testid="activity-bar-stub" /> }))
 
 // ── Store reset ───────────────────────────────────────────────────────────────
@@ -206,45 +208,62 @@ beforeEach(resetStores)
 
 // ── Composer card slot coverage ───────────────────────────────────────────────
 
-describe('OmnipusComposer — composer card mounts all context-row slots', () => {
-  it('mounts the attach control, AgentPicker, ModelPicker, TokenCounter, and ActivityBar inside the composer card', async () => {
+describe('OmnipusComposer — composer layout contract (bare context row · card · bare pills)', () => {
+  it('mounts the context-row slots ABOVE the card, the input inside it, and ActivityBar BELOW it', async () => {
     render(<OmnipusComposer />)
 
     const card = screen.getByTestId('composer-card')
-    // @container is load-bearing: TokenCounter's `@2xl:flex` gate below reads
-    // off THIS container's width, not a distant ancestor's.
-    expect(card.className).toContain('@container')
+
+    // @container moved UP to the composer root when the context row left the
+    // card (the row renders bare on the shell now): TokenCounter's
+    // `@2xl:flex` gate reads the ROOT's width. Load-bearing — without a
+    // query container the counter is permanently hidden.
+    expect(card.className).not.toContain('@container')
 
     const withinCard = within(card)
 
-    // Attach control (ComposerPrimitive.AddAttachment) is present INSIDE the card.
-    expect(withinCard.getByTestId('add-attachment')).toBeInTheDocument()
+    // Context-row slots: present in the composer, deliberately OUTSIDE the
+    // card frame (bare on the black shell — operator direction), and in
+    // document order BEFORE the card. These are the assertions that catch a
+    // deleted, relocated-into-card, or reordered-below-card slot: every
+    // other ChatScreen test file stubs the sub-components to null.
+    for (const id of ['add-attachment', 'agent-picker-stub', 'model-picker-stub', 'token-counter-stub']) {
+      const slot = screen.getByTestId(id)
+      expect(slot).toBeInTheDocument()
+      expect(withinCard.queryByTestId(id)).not.toBeInTheDocument()
+      expect(card.compareDocumentPosition(slot) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy()
+    }
 
-    // The three composer sub-components are actually mounted INSIDE the card
-    // — not deleted from the context row, and not relocated outside it. This
-    // is the assertion that would have caught the coverage gap: every other
-    // ChatScreen test file stubs these to null, so a deleted (or relocated)
-    // <AgentPicker /> would still pass there.
-    expect(withinCard.getByTestId('agent-picker-stub')).toBeInTheDocument()
-    expect(withinCard.getByTestId('model-picker-stub')).toBeInTheDocument()
+    // The input surface itself lives INSIDE the card.
+    expect(withinCard.getByTestId('composer-input')).toBeInTheDocument()
 
-    const tokenCounter = withinCard.getByTestId('token-counter-stub')
-    expect(tokenCounter).toBeInTheDocument()
+    const tokenCounter = screen.getByTestId('token-counter-stub')
     expect(tokenCounter.getAttribute('data-cls')).toContain('hidden')
     expect(tokenCounter.getAttribute('data-cls')).toContain('@2xl:flex')
 
-    // Live background activity (delegate spans, background bash runs) folds
-    // below the input, inside the card.
-    expect(withinCard.getByTestId('activity-bar-stub')).toBeInTheDocument()
+    // TokenCounter's query container: some ancestor of the counter carries
+    // `@container`, and that same container spans the card too (wrapper-proof
+    // form — an innocent intermediate div must not break this contract).
+    const container = tokenCounter.closest('[class*="@container"]')
+    expect(container).not.toBeNull()
+    expect((container as HTMLElement).contains(card)).toBe(true)
+
+    // Live background activity pills: present, OUTSIDE the card, and in
+    // document order AFTER it (visually below the composer).
+    const activity = screen.getByTestId('activity-bar-stub')
+    expect(withinCard.queryByTestId('activity-bar-stub')).not.toBeInTheDocument()
+    expect(card.compareDocumentPosition(activity) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+    // The "Agents can make mistakes" disclaimer was removed (operator
+    // direction) — guard against reintroduction.
+    expect(screen.queryByText(/agents can make mistakes/i)).not.toBeInTheDocument()
   })
 
   it('disables the attach control and passes disabled=true through to both pickers when agentRemoved', async () => {
     render(<OmnipusComposer agentRemoved />)
 
-    const withinCard = within(screen.getByTestId('composer-card'))
-
-    expect(withinCard.getByTestId('add-attachment')).toBeDisabled()
-    expect(withinCard.getByTestId('agent-picker-stub').getAttribute('data-disabled')).toBe('true')
-    expect(withinCard.getByTestId('model-picker-stub').getAttribute('data-disabled')).toBe('true')
+    expect(screen.getByTestId('add-attachment')).toBeDisabled()
+    expect(screen.getByTestId('agent-picker-stub').getAttribute('data-disabled')).toBe('true')
+    expect(screen.getByTestId('model-picker-stub').getAttribute('data-disabled')).toBe('true')
   })
 })

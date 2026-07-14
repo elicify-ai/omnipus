@@ -116,7 +116,7 @@ export function Step3Tools({
               return (
                 <label
                   key={skill.id}
-                  className="flex items-start gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2.5 cursor-pointer hover:bg-[var(--color-surface-2)] transition-colors"
+                  className="flex items-start gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2.5 cursor-pointer hover:bg-[var(--color-surface-3)] transition-colors"
                 >
                   <input
                     type="checkbox"

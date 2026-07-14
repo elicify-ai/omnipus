@@ -92,7 +92,7 @@ export function SubagentBlock({ span }: SubagentBlockProps) {
         onKeyDown={handleKeyDown}
         aria-expanded={expanded}
         aria-label={`Subagent: ${label}, ${stepCountText(stepCount)}, status ${span.status}`}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-[var(--color-surface-2)] cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/50"
+        className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-[var(--color-surface-3)] cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/50"
       >
         {/* Subagent icon */}
         <UserCircle size={13} className="text-[var(--color-muted)] shrink-0" aria-hidden="true" />

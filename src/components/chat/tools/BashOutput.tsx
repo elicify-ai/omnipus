@@ -129,7 +129,7 @@ function BashOutputBlock({
       <button
         type="button"
         onClick={() => setExpanded((e) => !e)}
-        className="flex w-full items-center gap-2 px-3 py-2 bg-[var(--color-surface-1)] hover:bg-[var(--color-surface-2)] transition-colors text-left cursor-pointer"
+        className="flex w-full items-center gap-2 px-3 py-2 bg-[var(--color-surface-1)] hover:bg-[var(--color-surface-3)] transition-colors text-left cursor-pointer"
         aria-expanded={expanded}
       >
         <Terminal

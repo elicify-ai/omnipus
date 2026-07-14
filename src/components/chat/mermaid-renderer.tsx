@@ -207,7 +207,7 @@ async function getMermaid() {
           secondaryColor: '#2b2b33',
           secondaryBorderColor: '#3a3a44',
           secondaryTextColor: '#e2e8f0',
-          tertiaryColor: '#1a1a1e',
+          tertiaryColor: '#141416', // = --color-surface-2 (keep in sync with globals.css)
           tertiaryBorderColor: '#2d3748',
           tertiaryTextColor: '#cbd5e1',
 
@@ -217,7 +217,7 @@ async function getMermaid() {
           nodeBorder: '#d4af37',
           mainBkg: '#23232a',
           nodeTextColor: '#e2e8f0',
-          edgeLabelBackground: '#1a1a1e',
+          edgeLabelBackground: '#141416', // = --color-surface-2 (keep in sync with globals.css)
           clusterBkg: '#111113',
           clusterBorder: '#2d3748',
 

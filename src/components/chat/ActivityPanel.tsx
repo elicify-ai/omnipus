@@ -50,7 +50,7 @@ function ActivityRow({ item }: { item: ActivityItem }) {
         aria-expanded={canExpand ? expanded : undefined}
         className={cn(
           'flex w-full items-center gap-2 px-3 py-2 text-left transition-colors',
-          canExpand ? 'hover:bg-[var(--color-surface-2)] cursor-pointer' : 'cursor-default',
+          canExpand ? 'hover:bg-[var(--color-surface-3)] cursor-pointer' : 'cursor-default',
         )}
       >
         <ActivityAvatar item={item} size="sm" />

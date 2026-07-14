@@ -150,8 +150,9 @@ beforeEach(() => {
   resetStores()
 })
 
-// Drops files onto the composer dropzone (the OmnipusComposer root <div>), which
-// drives handleFilesSelected via onDrop reading dataTransfer.files.
+// Drops files onto the composer card (composer-form's parent element); the
+// drop event bubbles to the OmnipusComposer root <div>, whose onDrop drives
+// handleFilesSelected via dataTransfer.files.
 function dropFiles(files: File[]) {
   const dropzone = screen.getByTestId('composer-form').parentElement as HTMLElement
   fireEvent.drop(dropzone, { dataTransfer: { files } })
