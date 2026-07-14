@@ -12,11 +12,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/target"
@@ -270,42 +270,39 @@ type BrowserManager struct {
 	pending map[string]chan struct{}
 	started bool
 
-	// execPathMu guards the two exec-path caches below — a dedicated lock,
-	// deliberately separate from m.mu. resolveExecPath's PATH-candidate
-	// validation (probeChromiumBinary) shells out to each candidate binary
-	// (`--version`, bounded by chromiumProbeTimeout) and, on a full miss,
-	// can trigger a managed chrome-for-testing download — either of which
-	// can take real wall-clock time on first resolution. Keeping that
-	// entirely off m.mu means a slow/broken probe or an in-flight download
-	// never blocks the tab/session bookkeeping every other browser tool
-	// call needs m.mu for (ADR-038 discipline — see Session()'s and
-	// ensureStarted's doc comments).
+	// execPath holds the Chromium-binary resolution caches (success + negative),
+	// refactored into a reusable struct shared with the BrowserCoordinator
+	// (exec_resolver.go). A dedicated lock (execPath.mu), deliberately separate
+	// from m.mu, so the (potentially slow) PATH probe or chrome-for-testing
+	// download never blocks the tab/session bookkeeping every other browser
+	// tool call needs m.mu for (ADR-038 discipline — see Session()'s and
+	// ensureStarted's doc comments). See execPathCaches.resolve for the full
+	// caching rationale (success cache re-validated with os.Stat per hit;
+	// negative cache returned verbatim within its TTL to avoid re-probing on
+	// every browser_* call on a dead host).
+	execPath execPathCaches
+
+	// coordinator (ADR-043) is the gateway-scoped shared-Chrome owner. nil in
+	// remote-CDP-override mode (cfg.CDPURL set) and in tests that exercise the
+	// legacy one-manager-one-Chrome path. When non-nil, ensureStarted's managed-
+	// mode branch asks the coordinator to launch+provide the shared Chrome
+	// instead of building its own ExecAllocator, and bootstrapBrowserCtx
+	// re-adopts the coordinator-owned browserCtxID non-owningly.
 	//
-	// Two caches, mutually exclusive (a successful resolution clears the
-	// failure cache, and storing a failure clears the success cache):
-	//
-	//   - execPathCache (success): the last successfully-resolved binary
-	//     path. Validated with os.Stat on each hit (a cached path whose
-	//     binary was since deleted by apt remove / cache clean / rm would
-	//     otherwise make every launch fail with a generic chromedp exec
-	//     error until restart — see resolveExecPath); on stat miss/dir the
-	//     entry is dropped and resolution re-runs (which may re-download).
-	//     cfg never changes after NewBrowserManager, so the path VALUE is
-	//     stable; the stat check only guards the "binary vanished from
-	//     disk after it was cached" edge case.
-	//   - execPathFailErr / execPathFailUntil (negative cache): the last
-	//     resolution ERROR, returned verbatim (without re-probing) until
-	//     execPathFailUntil. Within the TTL a subsequent resolveExecPath
-	//     returns the SAME error — on a dead host (broken PATH + no
-	//     network, the exact devpod/Fly case) a full resolution otherwise
-	//     re-probes all 4 PATH candidates (~20s) and re-hits the CfT
-	//     manifest (~30s) on every browser_* call, forever. The WARN is
-	//     logged once when a fresh failure is stored; short-circuited
-	//     returns inside the TTL log at DEBUG (no WARN storm).
-	execPathMu        sync.Mutex
-	execPathCache     string
-	execPathFailErr   error
-	execPathFailUntil time.Time
+	// CRIT-003 (load-bearing): when coordinator != nil, NO manager path ever
+	// calls chromedp.WithNewBrowserContext — that would auto-dispose the
+	// context on the manager's reload-time cancel, destroying cookies every
+	// Settings save. The manager only ever re-adopts via WithExistingBrowserContext.
+	coordinator *BrowserCoordinator
+	// agentID identifies this per-agent manager to the coordinator (Register/
+	// Release are keyed by it). Set via SetSharedChrome.
+	agentID string
+	// browserCtxID is the coordinator-owned browser context id this manager
+	// re-adopts. Set by ensureStarted's coordinator branch from Register's
+	// return; cleared by dropConnection/invalidateConnection on reload/crash.
+	// Empty in remote-CDP-override mode + the no-coordinator test fallback
+	// (those paths use Chrome's default "" browser context).
+	browserCtxID cdp.BrowserContextID
 
 	// pendingAdopt tracks CDP target IDs currently being adopted (ADR-041
 	// D2's adoptTarget), mirroring `pending`'s exact race-guard shape: the
@@ -401,6 +398,18 @@ func (m *BrowserManager) Live() *LiveViewRegistry {
 	return m.live
 }
 
+// AttachSharedChrome wires this per-agent manager to the gateway-scoped shared
+// Chrome coordinator (ADR-043). When set, ensureStarted asks the coordinator to
+// launch/provide the shared Chrome and re-adopts the coordinator-owned browser
+// context non-owningly (CRIT-003: no WithNewBrowserContext on a manager path).
+// A nil coordinator (the default for direct/test construction) keeps the legacy
+// per-manager ExecAllocator behavior. agentID identifies this manager to the
+// coordinator (Register/Release/TotalOpenTabs) and keys its stable context.
+func (m *BrowserManager) AttachSharedChrome(coordinator *BrowserCoordinator, agentID string) {
+	m.coordinator = coordinator
+	m.agentID = agentID
+}
+
 // blockedSchemes are URL schemes that bypass network-level SSRF and must be
 // denied at the application layer. file:// would bypass Landlock restrictions.
 var blockedSchemes = map[string]bool{
@@ -469,7 +478,8 @@ func (m *BrowserManager) ensureStarted() error {
 	}
 
 	if m.cfg.CDPURL != "" {
-		// US-6: Remote CDP mode — connect to external Chromium
+		// US-6: Remote CDP mode — connect to external Chromium (operator
+		// override; the coordinator is bypassed entirely here).
 		allocCtx, cancel := chromedp.NewRemoteAllocator(context.Background(), m.cfg.CDPURL)
 		m.allocCtx = allocCtx
 		m.allocCancel = cancel
@@ -480,7 +490,45 @@ func (m *BrowserManager) ensureStarted() error {
 		return nil
 	}
 
-	// US-4: Managed mode — launch local Chromium
+	// ADR-043 shared-Chrome mode: when a coordinator is wired (the normal
+	// gateway case), ask it to launch+provide the ONE shared Chrome instead of
+	// building a per-manager ExecAllocator. The coordinator owns the Chrome
+	// process + this agent's browser context; the manager builds only a remote-
+	// allocator connection against the coordinator's cdpURL and re-adopts the
+	// coordinator-owned browserCtxID non-owningly (CRIT-003: WithNewBrowserContext
+	// is NEVER called on a manager path — only the coordinator does that).
+	//
+	// Register blocks on the (possibly cold) Chrome launch, so m.mu is released
+	// around it — same ADR-038 no-lock-across-blocking-call discipline as the
+	// resolveExecPath unlock/relock below. A concurrent ensureStarted that won
+	// while m.mu was released is handled by the post-relock m.started check.
+	if m.coordinator != nil {
+		agentID := m.agentID
+		m.mu.Unlock()
+		cdpURL, browserCtxID, regErr := m.coordinator.Register(context.Background(), agentID, m)
+		m.mu.Lock()
+		if regErr != nil {
+			return fmt.Errorf("browser: shared Chrome unavailable: %w", regErr)
+		}
+		if m.started {
+			// A concurrent ensureStarted won while m.mu was released. Discard
+			// our redundant resolution; the winner already set m.allocCtx.
+			return nil
+		}
+		allocCtx, cancel := chromedp.NewRemoteAllocator(context.Background(), cdpURL)
+		m.allocCtx = allocCtx
+		m.allocCancel = cancel
+		m.browserCtxID = browserCtxID
+		m.started = true
+		logger.InfoCF("browser", "Browser connected to shared Chrome (coordinator mode)", map[string]any{
+			"agent_id":       agentID,
+			"browser_ctx_id": string(browserCtxID),
+		})
+		return nil
+	}
+
+	// US-4: Managed mode — launch local Chromium (no coordinator: tests +
+	// the legacy one-manager-one-Chrome path).
 	if err := os.MkdirAll(m.cfg.ProfileDir, 0o700); err != nil {
 		return fmt.Errorf("browser: cannot create profile directory %s: %w", m.cfg.ProfileDir, err)
 	}
@@ -525,81 +573,11 @@ func (m *BrowserManager) ensureStarted() error {
 		return nil
 	}
 
-	// Point Chrome's HOME and XDG dirs at the profile directory so any stray
-	// writes (Crash Reports, GPUCache, Singleton locks, etc.) land inside
-	// the Landlock-allowed workspace instead of $HOME/.config/google-chrome.
-	// Use the profile directory itself as a self-contained jail so this
-	// stays correct regardless of the configured layout (test tempdirs,
-	// custom paths, $OMNIPUS_HOME, etc.).
-	chromeHome := m.cfg.ProfileDir
-
-	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.ExecPath(execPath),
-		chromedp.UserDataDir(m.cfg.ProfileDir),
-		chromedp.DisableGPU,
-		chromedp.Flag("no-first-run", true),
-		chromedp.Flag("no-default-browser-check", true),
-		// Crash reporting writes to ~/.config/google-chrome/Crash Reports
-		// which is outside the Landlock-allowed paths. Disable it to avoid
-		// "Permission denied" spam during browser startup.
-		chromedp.Flag("disable-crash-reporter", true),
-		chromedp.Flag("disable-breakpad", true),
-		// /dev/shm is frequently tiny (or absent) in containers; Chrome falls
-		// back to disk-backed shared memory for renderer<->GPU transport when
-		// this is set, avoiding renderer crashes under container defaults
-		// (ADR-038 D4 — needed for the CDP screencast to stream reliably from
-		// a containerized gateway).
-		chromedp.Flag("disable-dev-shm-usage", true),
-		// Pin the DevTools WebSocket to a fixed loopback port so the
-		// gateway's Landlock NET_CONNECT_TCP allow-list can include it
-		// (v0.1 fix for "browser_navigate: dial tcp 127.0.0.1:<random>:
-		// connect: permission denied"). Without this, chromedp picks an
-		// ephemeral port and Landlock blocks the dial because only
-		// {53, 80, 443} + dev-server ports are allow-listed by default.
-		// 9223 was chosen to sit just above Chrome's traditional 9222
-		// debug port (which we avoid to reduce collision risk with
-		// operator workstations that may already have a remote-debugged
-		// Chrome listening on 9222). pkg/gateway/sandbox_apply.go appends
-		// this port to ConnectPortRules when the browser tool is enabled.
-		chromedp.Flag("remote-debugging-port", browserDebugPort),
-		chromedp.Env(
-			"HOME="+chromeHome,
-			"XDG_CONFIG_HOME="+filepath.Join(chromeHome, "config"),
-			"XDG_CACHE_HOME="+filepath.Join(chromeHome, "cache"),
-		),
-		chromedp.WindowSize(1280, 720),
-		// Anti-bot-detection ("stealth"): reduce the trivially-detectable
-		// automation signals that lead sites (notably Google) to serve a
-		// CAPTCHA even for a human driving the panel. `enable-automation`
-		// (added by DefaultExecAllocatorOptions) sets navigator.webdriver=true
-		// and shows the automation infobar; the AutomationControlled blink
-		// feature is the other source of navigator.webdriver. Removing both,
-		// plus the User-Agent de-Headless + navigator overrides in applyStealth
-		// (per new tab), covers the obvious fingerprint tells.
-		//
-		// IMPORTANT: this only hides browser fingerprints. It CANNOT overcome
-		// datacenter-IP reputation, which is the dominant factor for Google's
-		// "unusual traffic" CAPTCHA — a gateway on a cloud/datacenter IP (e.g.
-		// a Fly/pod preview) may still be challenged regardless. These help
-		// most on a self-hosted deployment browsing from a residential/office IP.
-		chromedp.Flag("enable-automation", false),
-		chromedp.Flag("disable-blink-features", "AutomationControlled"),
-		chromedp.Flag("lang", "en-US"),
-	)
-
-	if m.cfg.Headless {
-		opts = append(opts, chromedp.Headless)
-	}
-
-	// Chromium's zygote sandbox depends on creating new user namespaces, which
-	// the gateway's Landlock+PR_SET_NO_NEW_PRIVS policy blocks. The gateway
-	// already enforces an outer filesystem and network sandbox, so Chrome's
-	// inner sandbox is redundant — disable it by default to avoid the
-	// permission-denied init failures. Operators can opt out by setting
-	// OMNIPUS_BROWSER_NO_SANDBOX=0 if they run the gateway without Landlock.
-	if os.Getenv("OMNIPUS_BROWSER_NO_SANDBOX") != "0" {
-		opts = append(opts, chromedp.NoSandbox)
-	}
+	// Build the ExecAllocator options via the shared helper (managedExecAllocatorOpts,
+	// exec_resolver.go) — identical to the coordinator's launch path, so the two
+	// never diverge. See that helper for the per-flag rationale (fixed CDP port,
+	// sandbox disable, stealth flags, XDG/HOME jail, etc.).
+	opts := managedExecAllocatorOpts(execPath, m.cfg)
 
 	// Preflight the fixed CDP debug port before committing to a launch.
 	// Without this, a port already held by something else (observed live: an
@@ -631,167 +609,24 @@ func (m *BrowserManager) ensureStarted() error {
 }
 
 // resolveExecPath returns the path to the Chromium binary chromedp should
-// launch. Resolution order:
+// launch. Thin wrapper over the shared execPathCaches.resolve (exec_resolver.go)
+// — see that method's doc comment for the full resolution order + rationale
+// (cfg.ExecPath override → validated $PATH candidate → managed chrome-for-
+// testing install; success + negative caches). Kept as a manager method so the
+// existing tests + Preprovision call site are unchanged by the ADR-043 refactor.
 //
-//  1. cfg.ExecPath (operator override) — used as-is, trusted after a real
-//     on-disk check (os.Stat + directory + executable-bit; not probed with
-//     `--version` like the PATH candidates below, which would be slower and
-//     would second-guess an explicit choice). An operator who explicitly
-//     configured exec_path gets a loud, immediate, debuggable failure naming
-//     exec_path if it's wrong (missing / a directory / not executable) rather
-//     than this package silently falling back to a DIFFERENT binary than the
-//     one configured — that would be far more confusing to debug than a
-//     clear exec_path error. The exec-bit check is skipped on Windows, where
-//     Go's os.FileMode does not carry Unix execute bits.
-//  2. System chromium/google-chrome on $PATH — preferred when present, but
-//     only after confirming the binary actually runs (probeChromiumBinary),
-//     not merely that exec.LookPath found an executable file. A distro
-//     package-manager stub is the canonical failure this guards against:
-//     Ubuntu ships /usr/bin/chromium-browser as a snap redirector script
-//     that passes LookPath but exits with "... requires the chromium snap"
-//     the moment it actually runs — on a host with no snapd (any Fly.io
-//     machine, most minimal containers), the pre-fix code committed to
-//     this candidate and every browser tool failed at first use instead of
-//     falling through to the next candidate or the managed install below.
-//  3. Managed install under <ProfileDir>/../chromium/ — downloaded from
-//     Chrome for Testing on first call. Cached on disk across restarts
-//     (EnsureChromium/findInstalledBinary) so the download cost is
-//     amortized once per host, AND cached in-process (execPathCache) once
-//     resolved here, so a later resolveExecPath call in the SAME process
-//     never re-probes $PATH or re-lists the install directory.
-//
-// Safe to call without m.mu held, and safe to call WHILE some other
-// goroutine holds m.mu: the only BrowserManager state this method touches
-// (the exec-path caches: execPathCache / execPathFailErr / execPathFailUntil)
-// is guarded by its own dedicated execPathMu, never m.mu. ensureStarted relies
-// on this — it releases m.mu before calling here specifically so a slow
-// first-time probe/download never blocks concurrent tab/session bookkeeping
-// (see ensureStarted's doc comment).
+// Safe to call without m.mu held, and safe to call WHILE some other goroutine
+// holds m.mu: the only state resolve touches is execPathCaches.mu, never m.mu.
+// ensureStarted relies on this — it releases m.mu before calling here so a slow
+// first-time probe/download never blocks concurrent tab/session bookkeeping.
 func (m *BrowserManager) resolveExecPath(ctx context.Context) (string, error) {
-	if m.cfg.ExecPath != "" {
-		info, err := os.Stat(m.cfg.ExecPath)
-		if err != nil {
-			return "", fmt.Errorf("configured exec_path %s: %w", m.cfg.ExecPath, err)
-		}
-		if info.IsDir() {
-			return "", fmt.Errorf(
-				"configured exec_path %s is a directory, not an executable file", m.cfg.ExecPath)
-		}
-		// Exec-bit check is POSIX-only: on Windows os.FileMode does not carry
-		// Unix execute bits, so this guard would wrongly reject every .exe.
-		if runtime.GOOS != "windows" && info.Mode()&0o111 == 0 {
-			return "", fmt.Errorf(
-				"configured exec_path %s is not executable (check its file mode)", m.cfg.ExecPath)
-		}
-		return m.cfg.ExecPath, nil
-	}
-
-	m.execPathMu.Lock()
-	cached := m.execPathCache
-	failErr := m.execPathFailErr
-	failUntil := m.execPathFailUntil
-	m.execPathMu.Unlock()
-
-	// Success cache hit — validate the binary is still on disk (L2). A cached
-	// path whose binary was since deleted (apt remove, cache clean, rm) would
-	// otherwise make every launch fail with a generic chromedp exec error that
-	// never names the real cause, until process restart. One syscall; on stat
-	// miss OR directory, drop the entry and fall through to re-resolution
-	// (which may re-download) rather than erroring here.
-	if cached != "" {
-		if info, statErr := os.Stat(cached); statErr == nil && !info.IsDir() {
-			return cached, nil
-		}
-		m.execPathMu.Lock()
-		m.execPathCache = ""
-		m.execPathMu.Unlock()
-	}
-
-	// Negative cache (L1): within the TTL, return the SAME error without
-	// re-probing. On a dead host (broken PATH + no network — the exact
-	// devpod/Fly case) a full resolution re-probes all 4 PATH candidates
-	// (~20s) and re-hits fetchCFTManifest (~30s) on every browser_* call,
-	// re-emitting 4 WARNs each time, forever. The WARN for a fresh failure
-	// was logged once when it was stored (cacheExecPathFailure); these
-	// short-circuited returns stay at DEBUG so there's no WARN storm.
-	if failErr != nil && time.Now().Before(failUntil) {
-		logger.DebugCF("browser", "chromium resolution still negative-cached — short-circuiting",
-			map[string]any{
-				"ttl_remaining_seconds": int64(time.Until(failUntil).Seconds()),
-			})
-		return "", failErr
-	}
-
-	// Operators can force the managed install path (skipping the $PATH
-	// lookup) by setting OMNIPUS_BROWSER_FORCE_MANAGED=1. Useful for
-	// pinning a deterministic Chromium version even when a system
-	// google-chrome is present, and for exercising the install flow in
-	// CI / staging hosts that already have Chrome installed.
-	forceManaged := os.Getenv("OMNIPUS_BROWSER_FORCE_MANAGED") == "1"
-	if !forceManaged {
-		for _, name := range []string{"google-chrome", "google-chrome-stable", "chromium", "chromium-browser"} {
-			path, err := exec.LookPath(name)
-			if err != nil {
-				continue
-			}
-			if !probeChromiumBinary(ctx, path) {
-				logger.WarnCF("browser", "chromium candidate on PATH did not execute successfully — skipping",
-					map[string]any{
-						"name": name,
-						"path": path,
-					})
-				continue
-			}
-			m.cacheExecPath(path)
-			return path, nil
-		}
-	}
-	installRoot := filepath.Join(filepath.Dir(filepath.Clean(m.cfg.ProfileDir)), "..", "chromium")
-	installRoot = filepath.Clean(installRoot)
-	managedPath, err := EnsureChromium(ctx, installRoot)
-	if err != nil {
-		m.cacheExecPathFailure(err)
-		return "", err
-	}
-	m.cacheExecPath(managedPath)
-	return managedPath, nil
+	return m.execPath.resolve(ctx, m.cfg)
 }
 
-// cacheExecPath records path as the resolved Chromium binary. Guarded by
-// execPathMu — a lock dedicated to the exec-path caches, deliberately separate
-// from m.mu (see resolveExecPath's doc comment). Also clears any prior failure
-// cache entry: a successful resolution supersedes a stale negative cache.
-// The cached path is re-validated with os.Stat on each hit (see resolveExecPath
-// L2), so "cached for the process lifetime" is about avoiding re-resolution,
-// not about trusting a path whose binary may have vanished from disk.
-func (m *BrowserManager) cacheExecPath(path string) {
-	m.execPathMu.Lock()
-	m.execPathCache = path
-	m.execPathFailErr = nil
-	m.execPathFailUntil = time.Time{}
-	m.execPathMu.Unlock()
-}
-
-// cacheExecPathFailure stores err as the last resolution failure and arms the
-// negative-cache deadline (execPathNegativeCacheTTL from now). The WARN is
-// emitted HERE, exactly once per fresh failure investigation — callers that
-// hit the still-valid cache afterwards short-circuit at DEBUG, so a dead host
-// does not produce a WARN storm on every browser_* call. Also clears any prior
-// success cache entry (the two caches are mutually exclusive). Guarded by
-// execPathMu, never m.mu — see resolveExecPath's doc comment.
-func (m *BrowserManager) cacheExecPathFailure(err error) {
-	m.execPathMu.Lock()
-	m.execPathFailErr = err
-	m.execPathFailUntil = time.Now().Add(execPathNegativeCacheTTL)
-	m.execPathCache = ""
-	m.execPathMu.Unlock()
-	logger.WarnCF("browser",
-		"chromium resolution failed — negative-caching for the TTL to avoid re-probing on every browser_* call",
-		map[string]any{
-			"ttl_seconds": int64(execPathNegativeCacheTTL.Seconds()),
-			"error":       err.Error(),
-		})
-}
+// cacheExecPath / cacheExecPathFailure remain as thin wrappers for any external
+// caller; the caching itself now lives in execPathCaches (exec_resolver.go).
+func (m *BrowserManager) cacheExecPath(path string)      { m.execPath.cacheSuccess(path) }
+func (m *BrowserManager) cacheExecPathFailure(err error) { m.execPath.cacheFailure(err) }
 
 // execPathNegativeCacheTTL bounds how long a failed resolution is remembered
 // (and returned verbatim, without re-probing) before resolveExecPath retries
@@ -1096,7 +931,19 @@ func (m *BrowserManager) bootstrapBrowserCtx(allocCtx context.Context) (context.
 		ctx, cancel := context.WithCancel(context.Background())
 		return ctx, cancel, nil
 	}
-	ctx, cancel := chromedp.NewContext(allocCtx)
+	var opts []chromedp.ContextOption
+	if m.browserCtxID != "" {
+		// ADR-043 (CRIT-003): re-adopt the coordinator-owned browser context
+		// non-owningly. Safe here because chromedp forces c.first=false for a
+		// RemoteAllocator context (the shared-Chrome + cdp_url paths); it would
+		// panic on a first/root ExecAllocator context, but the manager's
+		// browserCtxID is only set in coordinator/cdp_url mode, never the
+		// no-coordinator managed-mode fallback. Non-owning = no auto-dispose on
+		// cancel, so Shutdown/Release detach tabs + close the WS connection
+		// WITHOUT disposing the browser context or killing Chrome (CRIT-002/C1).
+		opts = append(opts, chromedp.WithExistingBrowserContext(m.browserCtxID))
+	}
+	ctx, cancel := chromedp.NewContext(allocCtx, opts...)
 	if err := chromedp.Run(ctx); err != nil {
 		cancel()
 		return nil, nil, fmt.Errorf("browser: failed to launch browser: %w", err)
@@ -2066,7 +1913,15 @@ func (m *BrowserManager) Preprovision(ctx context.Context) (string, error) {
 	return m.resolveExecPath(ctx)
 }
 
-// Shutdown gracefully shuts down the browser process and all sessions.
+// Shutdown drops this manager's connection + all its sessions. In ADR-043
+// shared-Chrome mode (coordinator wired), m.allocCancel is the REMOTE
+// allocator's cancel — canceling it closes the manager's WS connection and
+// detaches its tabs, but kills NEITHER the Chrome process NOR disposes the
+// agent's browser context (CRIT-002/C1: the coordinator owns both). In the
+// no-coordinator managed-mode fallback (tests), m.allocCancel is the
+// ExecAllocator's cancel and DOES kill this manager's own Chrome — preserved
+// for the one-manager-one-Chrome test path. Either way the bookkeeping
+// (sessions, started, allocCancel) is reset cleanly and idempotently.
 func (m *BrowserManager) Shutdown() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -2086,6 +1941,110 @@ func (m *BrowserManager) Shutdown() {
 		m.allocCancel = nil
 	}
 	m.started = false
+	m.browserCtxID = ""
 
-	logger.InfoCF("browser", "Browser shut down", nil)
+	logger.InfoCF("browser", "Browser manager connection shut down", map[string]any{
+		"agent_id":    m.agentID,
+		"coordinator": m.coordinator != nil,
+	})
+}
+
+// SetSharedChrome wires this per-agent manager to the gateway-scoped shared
+// Chrome coordinator (ADR-043). Called once per manager in registerSharedTools
+// (loop.go), right after RegisterTools constructs the manager. The coordinator
+// is gateway-scoped (lives on *AgentLoop, survives reload); agentID keys this
+// manager's browser context in the coordinator. When set, ensureStarted's
+// managed-mode branch asks the coordinator instead of building its own
+// ExecAllocator, and bootstrapBrowserCtx re-adopts the coordinator-owned
+// browserCtxID non-owningly (CRIT-003).
+func (m *BrowserManager) SetSharedChrome(c *BrowserCoordinator, agentID string) {
+	m.mu.Lock()
+	m.coordinator = c
+	m.agentID = agentID
+	m.mu.Unlock()
+}
+
+// Coordinator returns the wired shared-Chrome coordinator (nil in remote-CDP
+// override mode + the no-coordinator test fallback).
+func (m *BrowserManager) Coordinator() *BrowserCoordinator {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.coordinator
+}
+
+// OpenTabCount returns the number of currently-open tabs across this manager's
+// browsing contexts (ADR-043 Stream D / spec round-1 MAJ-001). The coordinator
+// sums this across registered managers to enforce the global tab budget. The
+// read takes m.mu briefly (the same lock totalTabCountLocked uses), so callers
+// must NOT already hold m.mu.
+func (m *BrowserManager) OpenTabCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.totalTabCountLocked()
+}
+
+// reserveGlobalTab asks the shared-Chrome coordinator for a global tab-budget
+// slot before opening a tab (ADR-043 D7). No-op (always allowed) in legacy mode
+// (no coordinator): the budget only applies to the shared Chrome. Only the
+// agent-facing browser_open_tab tool calls this; an agent's FIRST tab
+// (createFirstTab via Session) is intentionally not gated, so a budget full of
+// OTHER agents' tabs never blocks a new agent from browsing at all.
+func (m *BrowserManager) reserveGlobalTab() (bool, string) {
+	if m.coordinator == nil {
+		return true, ""
+	}
+	return m.coordinator.TryOpenTab(m.agentID)
+}
+
+// releaseGlobalTab returns a global tab-budget slot when an agent closes a tab.
+func (m *BrowserManager) releaseGlobalTab() {
+	if m.coordinator != nil {
+		m.coordinator.ReleaseTab(m.agentID)
+	}
+}
+
+// dropConnection closes this manager's remote-allocator connection + all its
+// sessions WITHOUT touching the Chrome process or the agent's browser context
+// (CRIT-002/C1). Called by the coordinator on Release (reload): the old
+// manager's WS connection is torn down (so it doesn't leak), but the shared
+// Chrome keeps running and the agent's context persists for the next manager
+// to re-adopt. Identical in effect to Shutdown in coordinator mode, but named
+// separately to make the reload-path intent explicit.
+func (m *BrowserManager) dropConnection() {
+	m.Shutdown()
+}
+
+// invalidateConnection resets this connector manager's "started" latch and
+// clears its stale remote-allocator state so its next ensureStarted re-asks the
+// coordinator (grill M1 / R2 crash recovery). Called by the coordinator when it
+// detects the shared Chrome has crashed: the manager's remote-allocator
+// connection is dead, but m.started is still true (it was only ever reset by
+// Shutdown), so without this reset the manager would keep reusing its dead
+// connection forever. After this call, the next browser tool's ensureStarted
+// re-registers with the coordinator, which blocks until the proactive relaunch
+// completes, then returns a fresh connection + a fresh browserCtxID (CRIT-001:
+// fresh empty context — prior cookies/login are lost by definition on crash).
+func (m *BrowserManager) invalidateConnection() {
+	m.mu.Lock()
+	for id, se := range m.sessions {
+		for _, t := range se.tabs {
+			t.cancel()
+		}
+		if se.browserCancel != nil {
+			se.browserCancel()
+		}
+		delete(m.sessions, id)
+	}
+	// Cancel the dead remote allocator if present (no-op on an already-dead
+	// connection). Do NOT nil it under lock in a way that races a concurrent
+	// ensureStarted — the next ensureStarted runs under m.mu and overwrites
+	// allocCtx/allocCancel/browserCtxID atomically after observing started==false.
+	if m.allocCancel != nil {
+		m.allocCancel()
+		m.allocCancel = nil
+	}
+	m.allocCtx = nil
+	m.started = false
+	m.browserCtxID = ""
+	m.mu.Unlock()
 }

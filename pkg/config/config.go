@@ -2997,6 +2997,11 @@ type BrowserToolConfig struct {
 	// a validated google-chrome/chromium binary on $PATH, else a managed
 	// install under <profile_dir>/../chromium/.
 	ExecPath string `json:"exec_path" env:"OMNIPUS_TOOLS_BROWSER_EXEC_PATH"`
+	// MaxTotalTabs is the GLOBAL tab budget across ALL agents' browser contexts
+	// in the shared Chrome (ADR-043 D7). 0/unset → default (30). Bounds total
+	// browsing RSS so ~10 concurrent agents can't OOM the host. Enforced by the
+	// coordinator's TryOpenTab (browser_open_tab is denied when over budget).
+	MaxTotalTabs int `json:"max_total_tabs" env:"OMNIPUS_TOOLS_BROWSER_MAX_TOTAL_TABS"`
 	// EvaluateEnabled gates browser.evaluate (arbitrary JS execution).
 	// Defaults to false (deny-by-default per SEC-04/SEC-06). Must be explicitly
 	// opted in by the operator since evaluate runs arbitrary JavaScript.
