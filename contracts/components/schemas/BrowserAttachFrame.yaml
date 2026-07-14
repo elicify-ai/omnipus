@@ -1,10 +1,12 @@
 title: BrowserAttachFrame
 description: >
-  Client → server. Binds this browser-live WebSocket connection to a session's
-  browser and starts the screencast. agent_id is the binding key — it selects
-  which agent's BrowserManager (and, per ADR-043, which agent's own isolated
-  browser context) the live view attaches to; session_id is carried for
-  correlation only. See ADR-038 and ADR-043.
+  Client → server. Binds this browser-live WebSocket connection to a
+  session's browser and starts the screencast. Per ADR-043 agents browse
+  concurrently in isolated per-agent browser contexts within one shared
+  Chrome; agent_id is the binding key (selects which agent's
+  BrowserManager + browser context the live view attaches to), and
+  session_id is correlation-only (the server binds to the active tab in
+  that agent's context). See ADR-038 and ADR-043.
 type: object
 required:
   - type
