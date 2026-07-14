@@ -151,6 +151,8 @@ func (t *CloseTabTool) Execute(ctx context.Context, args map[string]any) *tools.
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("browser_close_tab: %s", err))
 	}
+	// ADR-043 D7: return the global tab-budget slot this tab held.
+	t.mgr.releaseGlobalTab()
 	return jsonResult(map[string]any{"tabs": tabsToWire(tabs), "active_index": activeIdx})
 }
 
@@ -206,6 +208,12 @@ func (t *OpenTabTool) Execute(ctx context.Context, args map[string]any) *tools.T
 	}
 	if result := controlledResult(t.mgr, t.Name()); result != nil {
 		return result
+	}
+
+	// ADR-043 D7: global tab budget across all agents' contexts. Deny a new tab
+	// when the shared Chrome is at the cap; the agent can browser_close_tab first.
+	if ok, reason := t.mgr.reserveGlobalTab(); !ok {
+		return tools.ErrorResult(fmt.Sprintf("browser_open_tab: global tab budget reached (%s) — close a tab with browser_close_tab first", reason))
 	}
 
 	tab, err := t.mgr.OpenTab(defaultSessionID)

@@ -37,7 +37,7 @@ type AuthFrame struct {
 	Type  string `json:"type"`
 }
 
-// BrowserAttachFrame — Client → server. Binds this browser-live WebSocket connection to a session's browser and starts the screencast. session_id selects the tab (the agent's default browser session); agent_id selects which agent's BrowserManager the live view attaches to.
+// BrowserAttachFrame — Client → server. Binds this browser-live WebSocket connection to a session's browser and starts the screencast. Per ADR-043 agents browse concurrently in isolated per-agent browser contexts within one shared Chrome; agent_id is the binding key (selects which agent's BrowserManager + browser context the live view attaches to), and session_id is correlation-only (the server binds to the active tab in that agent's context).
 type BrowserAttachFrame struct {
 	AgentId   string `json:"agent_id"`
 	SessionId string `json:"session_id"`

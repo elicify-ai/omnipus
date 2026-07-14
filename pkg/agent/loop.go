@@ -184,6 +184,16 @@ type AgentLoop struct {
 	// not "whichever agent registered last."
 	browserMgrs map[string]*browser.BrowserManager
 
+	// browserCoordinator (ADR-043) is the gateway-scoped owner of the ONE
+	// shared Chrome + every agent's browser context. Constructed once and
+	// reused across hot-reload (ReloadProviderAndConfig reuses this *AgentLoop,
+	// so the coordinator — and the per-agent contexts it owns — survive a
+	// Settings save). nil only in tests that construct managers directly.
+	browserCoordinator *browser.BrowserCoordinator
+	// homePath is $OMNIPUS_HOME (the parent of the workspace path), stored so
+	// registerSharedTools can build the coordinator's ownership-marker path.
+	homePath string
+
 	// Tier 1/3 deps — stored so WireTier13Deps can re-run on hot reload.
 	// Without this, hot-reload would drop web_serve, workspace.shell, and
 	// workspace.shell_bg from every agent because ReloadProviderAndConfig
@@ -560,6 +570,7 @@ func NewAgentLoop(
 	// Initialize the unified task store at ~/.omnipus/tasks/ (the single store —
 	// the legacy GTD tasks/ and workflow-tasks/ split was removed in Sprint 2).
 	homePath := filepath.Dir(cfg.WorkspacePath())
+	al.homePath = homePath
 	al.taskStore = task.New(filepath.Join(homePath, "tasks"))
 	al.taskExecutor = newTaskExecutor(al, al.taskStore)
 
@@ -1675,7 +1686,22 @@ func registerSharedTools(
 				// pkg/policy.builtinToolPolicies entry is advisory; that path is
 				// test-only, not a live dispatch gate.)
 				evaluateEnabled := cfg.Sandbox.BrowserEvaluateEnabled
+				// ADR-043: ensure the gateway-scoped shared-Chrome coordinator
+				// exists (constructed once; reused across hot-reload so the
+				// per-agent browser contexts it owns — and thus agents' login
+				// state — survive a Settings save). An agent configured with an
+				// explicit tools.browser.cdp_url bypasses the coordinator: its
+				// ensureStarted takes the CDPURL branch first.
+				al.mu.Lock()
+				if al.browserCoordinator == nil {
+					al.browserCoordinator = browser.NewBrowserCoordinator(al.homePath, browserCfg, cfg.Tools.Browser.MaxTotalTabs)
+				}
+				coordinator := al.browserCoordinator
+				al.mu.Unlock()
 				mgr, regErr := browser.RegisterTools(agent.Tools, browserCfg, browserSSRF, evaluateEnabled)
+				if regErr == nil {
+					mgr.AttachSharedChrome(coordinator, agentID)
+				}
 				if regErr != nil {
 					logger.ErrorCF("agent", "Failed to register browser tools — "+
 						"ensure Chromium/Chrome is installed or set tools.browser.cdp_url",
@@ -2794,6 +2820,16 @@ func (al *AgentLoop) Close() {
 		delete(al.browserMgrs, agentID)
 	}
 	al.mu.Unlock()
+
+	// ADR-043: the coordinator owns the ONE shared Chrome process. Per-manager
+	// Shutdown() above only dropped each agent's connection (the manager no
+	// longer cancels an ExecAllocator in coordinator mode). This is the SOLE
+	// process-kill path — disposes every agent's browser context + kills Chrome
+	// (MIN-008 / FR-008: Close() is the only kill).
+	if al.browserCoordinator != nil {
+		al.browserCoordinator.Shutdown()
+		al.browserCoordinator = nil
+	}
 
 	mcpManager := al.mcp.takeManager()
 

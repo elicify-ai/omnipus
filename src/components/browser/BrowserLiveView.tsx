@@ -54,6 +54,7 @@ import {
 import { cn } from '@/lib/utils'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
+import { IconRenderer } from '@/components/shared/IconRenderer'
 import { BrowserLiveWsConnection } from '@/lib/browserLiveWs'
 import {
   computeCropRect,
@@ -452,7 +453,7 @@ export function BrowserLiveView({
   // all) — both intentionally keep reading the real, un-overridden signal.
   const effectiveAgentWorking = agentWorking && !agentPausedByUser
 
-  // ── ADR-040 D6 — agent display name for the header chip ──────────────────
+  // ── ADR-040 D6 / ADR-043 D3 — agent identity for the header chip ──────────
   // Best-effort, read-only cache lookup against the SAME `['agents']` query
   // key the Activity Bar / Agents screen already populate (useRunningActivity.ts)
   // — deliberately NOT a fresh `useQuery` subscription here: this component is
@@ -464,7 +465,15 @@ export function BrowserLiveView({
   // and the UAT-fix hand-back hint below each pick their own grammatically
   // appropriate fallback rather than sharing one ('Agent' reads fine as a
   // chip label; a hint sentence needs "the agent").
-  const resolvedAgentName = queryClient.getQueryData<Agent[]>(['agents'])?.find((a) => a.id === agentId)?.name
+  //
+  // ADR-043 D3 / US-6: the full agent object (not just the name) is resolved
+  // so the header's agent-identity chip can render the agent's avatar colour
+  // + Phosphor icon the SAME way the composer AgentPicker / message avatars
+  // do (reuse, not reinvent). With multiple agents browsing concurrently in
+  // isolated per-agent browser contexts, this chip is the persistent identity
+  // anchor that disambiguates WHICH agent's context the human is driving.
+  const resolvedAgent = queryClient.getQueryData<Agent[]>(['agents'])?.find((a) => a.id === agentId)
+  const resolvedAgentName = resolvedAgent?.name
   const agentDisplayName = resolvedAgentName ?? 'Agent'
 
   // ── ADR-040 D2 refactor — the single AUTHORITATIVE "who can actually
@@ -1478,6 +1487,37 @@ export function BrowserLiveView({
       >
         <Monitor size={16} weight="duotone" className="shrink-0 text-[var(--color-accent)]" />
         <h2 className="shrink-0 font-headline text-sm font-semibold text-[var(--color-secondary)]">Live Browser</h2>
+        {/* ADR-043 D3 / US-6 (multi-agent clarity) — agent-identity chip.
+            Unambiguously labels WHICH agent's browser context this panel is
+            driving. With multiple agents browsing concurrently (each in its
+            own isolated per-agent browser context per ADR-043 D2), this is the
+            persistent identity anchor — DISTINCT from the drive-status chip
+            below, which shows who is currently driving (agent vs. you vs.
+            someone else). The avatar reuses the exact same colour-circle +
+            IconRenderer/initial pattern as the composer AgentPicker and
+            message avatars (do not reinvent). Falls back to a muted 'Agent'
+            label on a query-cache miss (same fallback the drive chip already
+            uses) — never a dead or empty affordance. */}
+        <span
+          data-testid="browser-live-agent-chip"
+          title={`Driving ${agentDisplayName}'s browser context`}
+          className="flex shrink-0 items-center gap-1.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-0.5 text-[11px] font-medium text-[var(--color-secondary)] whitespace-nowrap"
+        >
+          <span
+            aria-hidden="true"
+            className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[8px] font-bold text-[var(--color-primary)]"
+            style={{ backgroundColor: resolvedAgent?.color ?? 'var(--color-surface-3)' }}
+          >
+            {resolvedAgent?.icon ? (
+              <IconRenderer icon={resolvedAgent.icon} size={9} />
+            ) : resolvedAgent ? (
+              resolvedAgent.name.charAt(0).toUpperCase()
+            ) : (
+              <Robot size={9} />
+            )}
+          </span>
+          <span className="max-w-[140px] truncate">{agentDisplayName}</span>
+        </span>
         {/* ADR-040 D6 — header chip replaces the old take/release-control-derived
             corner status pill: words + icon + a pulsing "live" dot back up the
             colour (never colour alone) for who's currently driving. */}
