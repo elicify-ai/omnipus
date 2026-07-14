@@ -1584,13 +1584,11 @@ export function BrowserLiveView({
             aria-pressed={isPinned}
             title={isPinned ? 'Unpin — return to overlay' : 'Pin — dock beside chat'}
             className={cn(
-              'shrink-0 rounded p-1.5 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-accent)]',
-              isPinned
-                ? 'bg-[var(--color-accent)]/15 text-[var(--color-accent)] hover:bg-[var(--color-accent)]/25'
-                : 'text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]',
+              'shrink-0 rounded p-1.5 transition-colors',
+              'text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]',
             )}
           >
-            {isPinned ? <PushPinSlash size={15} weight="fill" /> : <PushPin size={15} />}
+            {isPinned ? <PushPinSlash size={15} /> : <PushPin size={15} />}
           </button>
         )}
         {/* Pop out — de-emphasised utility affordance (ADR-040 D1). Gated on
