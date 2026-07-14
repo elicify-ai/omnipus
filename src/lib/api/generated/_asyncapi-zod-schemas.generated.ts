@@ -420,7 +420,7 @@ export const BrowserAttachFrame = z
 export const BrowserInputFrame = z
   .object({
     type: z.literal("browser_input"),
-    kind: z.enum(["mouse_move", "mouse_down", "mouse_up", "wheel", "key_down", "key_up", "text", "navigate"]),
+    kind: z.enum(["mouse_move", "mouse_down", "mouse_up", "wheel", "key_down", "key_up", "text", "navigate", "navigate_back", "reload"]),
     x: z.number().optional(),
     y: z.number().optional(),
     button: z.enum(["none", "left", "middle", "right", "back", "forward"]).optional(),

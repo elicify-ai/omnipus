@@ -24,6 +24,8 @@ properties:
       - key_up
       - text
       - navigate
+      - navigate_back
+      - reload
   x:
     type: number
     description: Device (CSS) x for mouse/wheel events.

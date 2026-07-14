@@ -382,7 +382,7 @@ export interface BrowserAttachFrame {
 
 export interface BrowserInputFrame {
   type: "browser_input";
-  kind: "mouse_move" | "mouse_down" | "mouse_up" | "wheel" | "key_down" | "key_up" | "text" | "navigate";
+  kind: "mouse_move" | "mouse_down" | "mouse_up" | "wheel" | "key_down" | "key_up" | "text" | "navigate" | "navigate_back" | "reload";
   x?: number;
   y?: number;
   button?: "none" | "left" | "middle" | "right" | "back" | "forward";
