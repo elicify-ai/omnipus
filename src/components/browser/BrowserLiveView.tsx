@@ -366,7 +366,10 @@ export function BrowserLiveView({
   const [statusIsError, setStatusIsError] = useState(false)
   const [connError, setConnError] = useState<string | null>(null)
   const [connected, setConnected] = useState(false)
-  const [cursorPos, setCursorPos] = useState<{ x: number; y: number } | null>(null)
+  // cursorPos state removed — the synthetic cursor overlay is gone (native
+  // cursor only). This eliminates a per-pointer-move setState that re-rendered
+  // the entire component (including the screencast <img>) on every coalesced
+  // move, which competed with wheel/scroll event processing and caused lag.
   // UAT finding FE-6: true whenever the LATEST browser_status frame reported
   // another connection of this same browser session is the one holding
   // control (e.g. the docked panel and a pop-out both watching the same
@@ -546,7 +549,11 @@ export function BrowserLiveView({
   } else if (driveMode === 'agent-working') {
     cursorStyle = 'not-allowed'
   } else if (driveMode === 'you-driving') {
-    cursorStyle = 'none'
+    // Native cursor — no synthetic overlay (the user sees their real cursor,
+    // which is more accurate than a rendered icon). The old 'none' + synthetic
+    // cursor caused a double-cursor (native + yellow overlay) when cursor:none
+    // didn't apply cleanly to the <img> child.
+    cursorStyle = 'default'
   } else {
     cursorStyle = 'pointer'
   }
@@ -575,9 +582,6 @@ export function BrowserLiveView({
   }, [frame])
   useEffect(() => {
     controllingRef.current = isControlling
-    // Losing control (agent takes it back / released) clears the stale
-    // cursor overlay rather than leaving it frozen at the last position.
-    if (!isControlling) setCursorPos(null)
     // ADR-040 D2: once the server confirms this connection holds the lock,
     // any implicit/explicit take that was in flight has resolved — clear the
     // in-flight guard so a FUTURE idle→drive transition can fire again.
@@ -1216,7 +1220,6 @@ export function BrowserLiveView({
     // Local cursor overlay updates immediately every event — only the
     // network send is throttled, so the synthetic cursor still tracks the
     // pointer at full native resolution.
-    setCursorPos({ x: e.clientX - rect.left, y: e.clientY - rect.top })
     const device = mapClientToDevice(
       e.clientX,
       e.clientY,
@@ -1821,15 +1824,9 @@ export function BrowserLiveView({
               draggable={false}
               className="block h-auto max-h-full w-auto max-w-full select-none"
             />
-            {isControlling && cursorPos && (
-              <div
-                data-testid="synthetic-cursor"
-                className="pointer-events-none absolute z-10"
-                style={{ left: cursorPos.x, top: cursorPos.y, transform: 'translate(-2px, -2px)' }}
-              >
-                <Cursor size={20} weight="fill" className="text-[var(--color-accent)] drop-shadow" />
-              </div>
-            )}
+            {/* Synthetic cursor removed — the native cursor is used directly
+                when driving (more accurate, no double-cursor). The agent's
+                pointer is visible in the screencast image itself. */}
             {/* Selection-box overlay (ADR-039 D-B1/B2) — container-relative CSS
                 coords, drawn live while dragging and frozen once the
                 selection finalizes into pendingAnnotation (comment popover

@@ -112,7 +112,7 @@ export function BrowserLivePanel() {
       // inside an already-docked panel.
       isPinned={browserPanelPinned}
       onTogglePin={toggleBrowserPanelPinned}
-      {...(browserPanelPinned ? {} : { onPopOut: handlePopOut })}
+      onPopOut={handlePopOut}
     />
   )
 
