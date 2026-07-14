@@ -719,13 +719,17 @@ describe('BrowserLiveView — D6 driving-state chip + glow border', () => {
     expect(screen.getByTestId('browser-live-glow').className).not.toContain('motion-safe:animate-pulse')
   })
 
-  it('PULSES the border only on error (the one needs-attention state)', () => {
+  it('the glow overlay is borderless (frame removed) but tracks visual state', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
     connectAndFrame()
     act(() => {
       callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'error', message: 'boom' })
     })
-    expect(screen.getByTestId('browser-live-glow').className).toContain('motion-safe:animate-pulse')
+    const glow = screen.getByTestId('browser-live-glow')
+    expect(glow).toHaveAttribute('data-visual-state', 'error')
+    // No border/pulse classes — the visible frame is removed per operator direction.
+    expect(glow.className).not.toContain('border')
+    expect(glow.className).not.toContain('animate-pulse')
   })
 
   it('does NOT apply motion-safe:animate-pulse to the glow border while idle', () => {
