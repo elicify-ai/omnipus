@@ -1617,8 +1617,14 @@ func registerSharedTools(
 
 		// Browser automation tools (US-4/US-6/US-7).
 		// Tools are always registered; whether an agent can actually invoke them
-		// is determined by the policy engine. Chromium presence is checked lazily
-		// at first use and produces a clear error if missing.
+		// is determined by the policy engine. Chromium presence/download is now
+		// preprovisioned in the background at gateway boot (BrowserManager.
+		// Preprovision, kicked off from RunContextWithOptions right after
+		// NewAgentLoop returns) so a fresh install's managed download starts
+		// immediately instead of at an agent's first browser tool call; a first
+		// tool call still resolves (and, in the rare case preprovisioning hasn't
+		// finished yet, blocks on) the same resolution logic and produces a
+		// clear error if a binary genuinely cannot be found/installed.
 		// browser.evaluate is denied by default via its executeEnabled gate
 		// (cfg.Sandbox.BrowserEvaluateEnabled); see pkg/tools/browser. (#438: the
 		// pkg/policy.builtinToolPolicies entry is advisory — that path is test-only.)
@@ -1641,6 +1647,16 @@ func registerSharedTools(
 				if cfg.Tools.Browser.ProfileDir != "" {
 					browserCfg.ProfileDir = cfg.Tools.Browser.ProfileDir
 				}
+				if cfg.Tools.Browser.ExecPath != "" {
+					browserCfg.ExecPath = cfg.Tools.Browser.ExecPath
+				}
+				// Headless is intentionally NOT copied from
+				// cfg.Tools.Browser.Headless here: browser.DefaultConfig()
+				// always sets Headless=true, and a bare bool config field
+				// can't distinguish "operator explicitly set false" from
+				// "unset" — honoring a zero-value false would silently break
+				// every display-less server deployment (the common case).
+				// There is no supported way to run non-headless today.
 				browserCfg.PersistSession = cfg.Tools.Browser.PersistSession
 
 				// Use the singleton SSRF checker (built from config, honors
@@ -3453,6 +3469,25 @@ func (al *AgentLoop) BrowserManagerForAgent(agentID string) (*browser.BrowserMan
 	defer al.mu.RUnlock()
 	mgr, ok := al.browserMgrs[agentID]
 	return mgr, ok
+}
+
+// BrowserManagers returns a defensive-copy snapshot of every BrowserManager
+// currently registered — one per agent that got browser tools during
+// registerSharedTools' browser.RegisterTools call. Used by gateway boot
+// (RunContextWithOptions) to kick off BrowserManager.Preprovision for each
+// manager in the background right after NewAgentLoop returns, so a fresh
+// install's managed Chromium download starts at boot instead of at an
+// agent's first browser tool call. Thread-safe; the returned slice is safe
+// to range over after this call returns even if browserMgrs is later
+// mutated (e.g. by a hot reload's Shutdown()+replace in registerSharedTools).
+func (al *AgentLoop) BrowserManagers() []*browser.BrowserManager {
+	al.mu.RLock()
+	defer al.mu.RUnlock()
+	out := make([]*browser.BrowserManager, 0, len(al.browserMgrs))
+	for _, mgr := range al.browserMgrs {
+		out = append(out, mgr)
+	}
+	return out
 }
 
 // ResolveApprovalToolPolicy returns the effective tool policy ("allow"/"ask"/
