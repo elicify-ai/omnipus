@@ -98,6 +98,78 @@ func childrenOf(ppid int) []int {
 	return out
 }
 
+// ppidOf reads the parent pid from /proc/<pid>/stat (mirrors childrenOf's stat
+// parsing). Returns 0 on any failure.
+func ppidOf(pid int) int {
+	stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return 0
+	}
+	s := string(stat)
+	idx := strings.LastIndex(s, ")")
+	if idx < 0 {
+		return 0
+	}
+	rest := strings.Fields(s[idx+1:])
+	if len(rest) >= 2 {
+		if p, err := strconv.Atoi(rest[1]); err == nil {
+			return p
+		}
+	}
+	return 0
+}
+
+// cmdlineOf reads /proc/<pid>/cmdline (NUL-separated args joined by spaces).
+func cmdlineOf(pid int) string {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+	if err != nil {
+		return ""
+	}
+	return strings.ReplaceAll(string(data), "\x00", " ")
+}
+
+// countTopLevelChromeProcesses counts chrome-headless-shell processes whose
+// parent is NOT itself a chrome-headless-shell process (G8). One coordinator
+// launch = exactly ONE such top-level process (its renderer/GPU/zygote children
+// are all descendants, so they don't count). Two leaked coordinators would make
+// this 2. Linux-only; returns 0 elsewhere.
+func countTopLevelChromeProcesses() int {
+	if runtime.GOOS != "linux" {
+		return 0
+	}
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return 0
+	}
+	type procInfo struct {
+		ppid     int
+		isChrome bool
+	}
+	procs := make(map[int]procInfo, len(entries))
+	for _, e := range entries {
+		pid, perr := strconv.Atoi(e.Name())
+		if perr != nil {
+			continue
+		}
+		cmd := cmdlineOf(pid)
+		isChrome := strings.Contains(cmd, "chrome-headless-shell") || strings.Contains(cmd, "headless_shell")
+		procs[pid] = procInfo{ppid: ppidOf(pid), isChrome: isChrome}
+	}
+	n := 0
+	for _, p := range procs {
+		if !p.isChrome {
+			continue
+		}
+		parent, ok := procs[p.ppid]
+		// A top-level chrome process: its parent is either absent or NOT a
+		// chrome process itself (e.g. the test binary / init).
+		if !ok || !parent.isChrome {
+			n++
+		}
+	}
+	return n
+}
+
 func TestFiveAgents_ConcurrentStress(t *testing.T) {
 	if testing.Short() {
 		t.Skip("stress test needs a real Chrome")
@@ -192,7 +264,19 @@ func TestFiveAgents_ConcurrentStress(t *testing.T) {
 
 	rssMB := chromeTreeRSSKB(t, coord) / 1024
 	t.Logf("5-agent concurrent stress: 1 Chrome pid=%d, %d contexts, tree RSS=%d MB", pid, coord.contextCount(), rssMB)
-	if rssMB > 6144 {
-		t.Errorf("5-agent browsing RSS %d MB exceeds the 6 GB sanity bound", rssMB)
+	// G8: tighten the RSS bound from the loose 6 GB sanity cap to the
+	// documented 4 GB ceiling. Five light http pages + their contexts should
+	// sit comfortably under this.
+	if rssMB > 4096 {
+		t.Errorf("5-agent browsing RSS %d MB exceeds the 4 GB documented cap", rssMB)
+	}
+
+	// G8: assert exactly ONE top-level chrome-headless-shell process — the
+	// headline "one Chrome for N agents" acceptance. A second top-level
+	// process would mean a coordinator leak (two Chrome instances).
+	topLevel := countTopLevelChromeProcesses()
+	t.Logf("top-level chrome-headless-shell processes: %d", topLevel)
+	if topLevel != 1 {
+		t.Errorf("expected exactly 1 top-level chrome-headless-shell process (one shared Chrome); got %d", topLevel)
 	}
 }

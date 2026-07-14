@@ -163,16 +163,22 @@ type AgentLoop struct {
 	// browserMgrs holds one BrowserManager per agent (US-4/US-6/US-7; ADR-038
 	// D4). Populated in registerSharedTools, keyed by agentID; guarded by mu
 	// (the same lock the old single al.browserMgr field used). Every entry's
-	// Shutdown() is called in AgentLoop.Close() — AND, per ADR-038 finding
-	// #2, whenever registerSharedTools replaces an existing agentID's entry
-	// on hot-reload (see the Shutdown() call at that site): a Chromium
-	// subprocess is only killed by calling Shutdown() (which cancels the
-	// chromedp allocator context) — dropping the Go *BrowserManager
-	// reference does NOT kill it, since the allocator context is parented on
-	// context.Background(), not on anything that goes away with the
-	// reference. registerSharedTools re-runs on every
-	// ReloadProviderAndConfig (any Settings save), so failing to Shutdown()
-	// the replaced entry leaked one headless Chromium process per reload.
+	// connection is torn down in AgentLoop.Close() — AND, per ADR-038 finding
+	// #2 + ADR-043, whenever registerSharedTools replaces an existing agentID's
+	// entry on hot-reload (see the Release/Shutdown call at that site). In
+	// ADR-043 shared-Chrome mode (the normal gateway case) that teardown is
+	// coordinator.Release(agentID) — it drops only the manager's WS connection
+	// (CRIT-002/C1: does NOT kill Chrome, does NOT dispose the browser
+	// context, which survives for the new manager to re-adopt). The Chrome
+	// process itself is killed solely by coordinator.Shutdown() in Close().
+	// In the no-coordinator test/legacy path the old manager IS its own Chrome
+	// owner, so manager.Shutdown() (which cancels the chromedp allocator
+	// context) is the real process kill there. Dropping the Go
+	// *BrowserManager reference alone never kills anything — the allocator
+	// context is parented on context.Background(), not on the reference — so
+	// the explicit Release/Shutdown on reload is what prevents a per-reload
+	// Chromium leak in that legacy path. registerSharedTools re-runs on every
+	// ReloadProviderAndConfig (any Settings save).
 	//
 	// Before ADR-038 D4 this was a single `browserMgr *browser.BrowserManager`
 	// field, overwritten (with the prior value Shutdown()'d) on every agent
@@ -190,8 +196,9 @@ type AgentLoop struct {
 	// so the coordinator — and the per-agent contexts it owns — survive a
 	// Settings save). nil only in tests that construct managers directly.
 	browserCoordinator *browser.BrowserCoordinator
-	// homePath is $OMNIPUS_HOME (the parent of the workspace path), stored so
-	// registerSharedTools can build the coordinator's ownership-marker path.
+	// homePath is $OMNIPUS_HOME (the parent of the workspace path), handed to
+	// NewBrowserCoordinator, which builds the ownership-marker path
+	// (<homePath>/browser/shared-chrome.pid) from it.
 	homePath string
 
 	// Tier 1/3 deps — stored so WireTier13Deps can re-run on hot reload.
@@ -1692,9 +1699,20 @@ func registerSharedTools(
 				// state — survive a Settings save). An agent configured with an
 				// explicit tools.browser.cdp_url bypasses the coordinator: its
 				// ensureStarted takes the CDPURL branch first.
+				//
+				// MED-1: on a RELOAD (coordinator already exists), apply the
+				// runtime-cheap config deltas. max_total_tabs is a live policy
+				// (TryOpenTab reads it under c.mu) and takes effect immediately;
+				// headless/exec_path/profile_dir are launch-time properties of
+				// the already-running Chrome and cannot hot-apply —
+				// ApplyRuntimeConfig warn-logs those so an operator isn't
+				// silently misled. CRIT-002 stays intact: the coordinator is
+				// never rebuilt on reload.
 				al.mu.Lock()
 				if al.browserCoordinator == nil {
 					al.browserCoordinator = browser.NewBrowserCoordinator(al.homePath, browserCfg, cfg.Tools.Browser.MaxTotalTabs)
+				} else {
+					al.browserCoordinator.ApplyRuntimeConfig(browserCfg, cfg.Tools.Browser.MaxTotalTabs)
 				}
 				coordinator := al.browserCoordinator
 				al.mu.Unlock()
@@ -1707,39 +1725,62 @@ func registerSharedTools(
 						"ensure Chromium/Chrome is installed or set tools.browser.cdp_url",
 						map[string]any{"error": regErr.Error()})
 				} else {
-					// ADR-038 D4/finding #2: store per-agent, keyed by
-					// agentID. registerSharedTools can re-run on hot reload
-					// (ReloadProviderAndConfig, any Settings save) — when it
-					// does, Shutdown() the PRIOR manager for this SAME
-					// agentID (if any) before installing the new one. This
-					// is a restoration of the pre-ADR-038 D4 behavior: an
-					// earlier version of this comment argued the old
-					// manager's Chromium process would be "reaped by the OS
-					// once the allocator context has no remaining
-					// references" and could be safely dropped — that claim
-					// is wrong. Only BrowserManager.Shutdown() (which cancels
-					// the chromedp allocator context) kills the subprocess;
-					// dropping the Go reference does nothing, because the
-					// allocator context is parented on context.Background(),
-					// not on this reference. Without the Shutdown() call
-					// below, every hot reload leaked one headless Chromium
-					// process.
+					// ADR-038 D4/finding #2 + ADR-043: store per-agent, keyed by
+					// agentID. registerSharedTools re-runs on every hot reload
+					// (ReloadProviderAndConfig, any Settings save). When it
+					// does, the PRIOR manager for this SAME agentID must be
+					// torn down before installing the new one.
+					//
+					// W1/C2/F-INFO-3 (D4 invariant 3): in ADR-043 shared-Chrome
+					// mode the teardown goes through the COORDINATOR's Release,
+					// not a bare manager.Shutdown(). Release drops the old
+					// manager's ref from the coordinator's bookkeeping (so
+					// TotalOpenTabs stops counting its tabs) AND calls its
+					// dropConnection (= Shutdown in coordinator mode = close
+					// the WS connection + detach tabs) — WITHOUT killing Chrome
+					// or disposing the agent's browser context (CRIT-002/C1:
+					// the coordinator owns both; the context persists so the
+					// next Register re-adopts it and login survives the save).
+					// In the no-coordinator test/legacy path (coordinator==nil)
+					// the old manager IS its own Chrome owner, so Shutdown() it
+					// directly (the pre-ADR-043 behavior — only
+					// BrowserManager.Shutdown, which cancels the chromedp
+					// allocator context, kills the subprocess; dropping the Go
+					// reference does nothing). Release is a full substitute for
+					// the prior.Shutdown() reload call it replaces: the
+					// registered manager is guaranteed to be the same object as
+					// `prior` (Register is the only c.managers writer, and a
+					// manager registers itself under its own agentID), so
+					// Release's internal dropConnection reaches `prior` exactly.
+					// An unregistered prior (no browser tool used since the last
+					// reload) has started==false in coordinator mode, so there
+					// is no local state to clean — Release's no-op for an absent
+					// c.managers entry is correct.
 					//
 					// A viewer attached to the OLD manager's live view is not
-					// silently orphaned by this: BrowserManager.Shutdown()
-					// cancels every session's chromedp context, which
+					// silently orphaned: the connection teardown cancels every
+					// session's chromedp context, which
 					// LiveView.watchForUnexpectedDeath (pkg/tools/browser/live.go,
 					// also finding #2) detects and reports to any attached
 					// viewer as a browser_status(error) frame, so the SPA can
 					// re-attach — which resolves the NEW manager via
-					// BrowserManagerForAgent. Shutdown() for ALL entries
-					// still also happens, unconditionally, in Close().
+					// BrowserManagerForAgent. Teardown for ALL entries still
+					// also happens, unconditionally, in Close().
 					al.mu.Lock()
-					if prior, ok := al.browserMgrs[agentID]; ok && prior != nil {
-						prior.Shutdown()
-					}
+					prior := al.browserMgrs[agentID]
+					coord := al.browserCoordinator
 					al.browserMgrs[agentID] = mgr
 					al.mu.Unlock()
+					if coord != nil {
+						// CRIT-002 path: connection-only teardown, Chrome +
+						// browser context survive for the new manager to
+						// re-adopt.
+						coord.Release(agentID)
+					} else if prior != nil {
+						// No-coordinator test/legacy path: the old manager owns
+						// its own Chrome, so Shutdown actually kills it.
+						prior.Shutdown()
+					}
 				}
 			}
 		}
@@ -1938,6 +1979,41 @@ func registerSharedTools(
 				agent.Tools.Register(toolsTool)
 			}
 		}
+	}
+
+	// W4 (agent-removal doesn't dispose context): a REMOVED agent is skipped by
+	// the per-agent loop above, so its BrowserManager stays in al.browserMgrs
+	// and — worse — its coordinator-owned browser context (cookie/localStorage
+	// partition) leaks forever in c.contexts. Diff the registered set against
+	// the current config: any agentID still in al.browserMgrs but no longer in
+	// the registry has been removed — dispose its context via
+	// coordinator.RemoveAgent (which cancels the OWNING chromedp context so
+	// chromedp runs Target.disposeBrowserContext, unlike reload-Release which
+	// preserves it) and drop it from al.browserMgrs. Distinguishes a reload
+	// (agent still present → Release preserves the context) from a removal
+	// (agent gone → RemoveAgent frees the partition).
+	registeredAgentIDs := registry.ListAgentIDs()
+	stillPresent := make(map[string]bool, len(registeredAgentIDs))
+	for _, id := range registeredAgentIDs {
+		stillPresent[id] = true
+	}
+	al.mu.Lock()
+	coord := al.browserCoordinator
+	var removedAgentIDs []string
+	for id := range al.browserMgrs {
+		if !stillPresent[id] {
+			removedAgentIDs = append(removedAgentIDs, id)
+			delete(al.browserMgrs, id)
+		}
+	}
+	al.mu.Unlock()
+	for _, id := range removedAgentIDs {
+		if coord != nil {
+			coord.RemoveAgent(id)
+		}
+		logger.InfoCF("agent", "removed browser manager for deleted agent", map[string]any{
+			"agent_id": id,
+		})
 	}
 }
 
@@ -2812,8 +2888,12 @@ func (al *AgentLoop) Close() {
 	// own context; a double-cancel is a no-op.
 	al.stopSessionWorkers()
 
-	// Shutdown every agent's browser manager (ADR-038 D4) to kill their
-	// Chromium subprocesses.
+	// Drop every agent's browser-manager connection (ADR-038 D4). In ADR-043
+	// shared-Chrome mode this closes each manager's WS connection + detaches
+	// its tabs but does NOT kill the Chrome process — that is the coordinator's
+	// job, done by coordinator.Shutdown() immediately below (the SOLE process-
+	// kill path, MIN-008/FR-008). In the no-coordinator test/legacy path each
+	// manager IS its own Chrome owner, so manager.Shutdown() kills its Chrome.
 	al.mu.Lock()
 	for agentID, mgr := range al.browserMgrs {
 		mgr.Shutdown()

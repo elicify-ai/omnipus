@@ -295,7 +295,7 @@ type BrowserManager struct {
 	// Settings save. The manager only ever re-adopts via WithExistingBrowserContext.
 	coordinator *BrowserCoordinator
 	// agentID identifies this per-agent manager to the coordinator (Register/
-	// Release are keyed by it). Set via SetSharedChrome.
+	// Release/RemoveAgent are keyed by it). Set via AttachSharedChrome.
 	agentID string
 	// browserCtxID is the coordinator-owned browser context id this manager
 	// re-adopts. Set by ensureStarted's coordinator branch from Register's
@@ -404,7 +404,7 @@ func (m *BrowserManager) Live() *LiveViewRegistry {
 // context non-owningly (CRIT-003: no WithNewBrowserContext on a manager path).
 // A nil coordinator (the default for direct/test construction) keeps the legacy
 // per-manager ExecAllocator behavior. agentID identifies this manager to the
-// coordinator (Register/Release/TotalOpenTabs) and keys its stable context.
+// coordinator (Register/Release/RemoveAgent are keyed by it).
 func (m *BrowserManager) AttachSharedChrome(coordinator *BrowserCoordinator, agentID string) {
 	m.coordinator = coordinator
 	m.agentID = agentID
@@ -1949,29 +1949,6 @@ func (m *BrowserManager) Shutdown() {
 	})
 }
 
-// SetSharedChrome wires this per-agent manager to the gateway-scoped shared
-// Chrome coordinator (ADR-043). Called once per manager in registerSharedTools
-// (loop.go), right after RegisterTools constructs the manager. The coordinator
-// is gateway-scoped (lives on *AgentLoop, survives reload); agentID keys this
-// manager's browser context in the coordinator. When set, ensureStarted's
-// managed-mode branch asks the coordinator instead of building its own
-// ExecAllocator, and bootstrapBrowserCtx re-adopts the coordinator-owned
-// browserCtxID non-owningly (CRIT-003).
-func (m *BrowserManager) SetSharedChrome(c *BrowserCoordinator, agentID string) {
-	m.mu.Lock()
-	m.coordinator = c
-	m.agentID = agentID
-	m.mu.Unlock()
-}
-
-// Coordinator returns the wired shared-Chrome coordinator (nil in remote-CDP
-// override mode + the no-coordinator test fallback).
-func (m *BrowserManager) Coordinator() *BrowserCoordinator {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.coordinator
-}
-
 // OpenTabCount returns the number of currently-open tabs across this manager's
 // browsing contexts (ADR-043 Stream D / spec round-1 MAJ-001). The coordinator
 // sums this across registered managers to enforce the global tab budget. The
@@ -1989,17 +1966,32 @@ func (m *BrowserManager) OpenTabCount() int {
 // agent-facing browser_open_tab tool calls this; an agent's FIRST tab
 // (createFirstTab via Session) is intentionally not gated, so a budget full of
 // OTHER agents' tabs never blocks a new agent from browsing at all.
+//
+// MAJ-2: m.coordinator/m.agentID are set once before use (AttachSharedChrome in
+// registerSharedTools, before any tool call can reach here) but are read under
+// m.mu for consistency with every other field on this struct.
 func (m *BrowserManager) reserveGlobalTab() (bool, string) {
-	if m.coordinator == nil {
+	m.mu.Lock()
+	coord := m.coordinator
+	agentID := m.agentID
+	m.mu.Unlock()
+	if coord == nil {
 		return true, ""
 	}
-	return m.coordinator.TryOpenTab(m.agentID)
+	return coord.TryOpenTab(agentID)
 }
 
-// releaseGlobalTab returns a global tab-budget slot when an agent closes a tab.
+// releaseGlobalTab returns a global tab-budget slot when an agent closes a tab,
+// OR when an OpenTab that reserved a slot then failed the actual createTab
+// (I-1/W3/C1: the reservation must be returned so the budget doesn't grow
+// permanently conservative on every failed open).
 func (m *BrowserManager) releaseGlobalTab() {
-	if m.coordinator != nil {
-		m.coordinator.ReleaseTab(m.agentID)
+	m.mu.Lock()
+	coord := m.coordinator
+	agentID := m.agentID
+	m.mu.Unlock()
+	if coord != nil {
+		coord.ReleaseTab(agentID)
 	}
 }
 

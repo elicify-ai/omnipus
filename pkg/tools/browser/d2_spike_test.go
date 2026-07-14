@@ -17,7 +17,9 @@ package browser
 
 import (
 	"context"
-	"path/filepath"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -30,11 +32,11 @@ func TestD2Spike_BrowserContextIsolation(t *testing.T) {
 	if testing.Short() {
 		t.Skip("spike needs a real Chrome")
 	}
-	installRoot := filepath.Join(t.TempDir(), "chromium")
-	binPath, err := EnsureChromium(context.Background(), installRoot)
-	if err != nil {
-		t.Skipf("no managed Chrome for spike: %v", err)
-	}
+	// Reuse the shared cached managed Chrome (resolveTestBinary) instead of
+	// re-downloading ~130MB into a fresh tempdir on every run — the original
+	// EnsureChromium(tempdir) call made this test take minutes + OOM-risk on a
+	// disk/RAM-constrained devpod for no coverage benefit (same binary).
+	binPath := resolveTestBinary(t)
 
 	allocOpts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.ExecPath(binPath),
@@ -60,8 +62,15 @@ func TestD2Spike_BrowserContextIsolation(t *testing.T) {
 	ctxB, cancelB := chromedp.NewContext(rootCtx, chromedp.WithNewBrowserContext())
 	defer cancelB()
 
-	// Navigate each so a target exists.
-	if err := chromedp.Run(ctxA, chromedp.Navigate("about:blank")); err != nil {
+	// O1 (G6 fix): navigate A to a REAL loopback page, not about:blank —
+	// Chrome blocks popups (window.open) on about:blank, which made the
+	// original O1 assertion tautological ("inconclusive"). A real http origin
+	// allows the popup, so O1 becomes a real pass/fail.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, "<html><body><h1>opener</h1></body></html>")
+	}))
+	defer srv.Close()
+	if err := chromedp.Run(ctxA, chromedp.Navigate(srv.URL)); err != nil {
 		t.Fatalf("nav A: %v", err)
 	}
 	if err := chromedp.Run(ctxB, chromedp.Navigate("about:blank")); err != nil {
@@ -81,31 +90,67 @@ func TestD2Spike_BrowserContextIsolation(t *testing.T) {
 	}
 
 	// Property 2 (O1): window.open from A's tab lands in A's context.
+	// Capture the BEFORE set of page targets so we can identify the NEW one.
+	browser := chromedp.FromContext(ctxA).Browser
+	beforeInfos, err := target.GetTargets().Do(cdp.WithExecutor(ctxA, browser))
+	if err != nil {
+		t.Fatalf("GetTargets (before): %v", err)
+	}
+	beforeSet := make(map[target.ID]struct{}, len(beforeInfos))
+	for _, ti := range beforeInfos {
+		if ti.Type == "page" {
+			beforeSet[ti.TargetID] = struct{}{}
+		}
+	}
+
 	chromedp.ListenTarget(ctxA, func(ev any) {
 		// drain
 		_ = ev
 	})
 	if err := chromedp.Run(ctxA,
 		// comma-operator returns undefined so CDP doesn't try to serialize the Window object
-		chromedp.Evaluate(`(window.open("about:blank", "_blank"), undefined)`, nil),
+		chromedp.Evaluate(fmt.Sprintf(`(window.open(%q, "_blank"), undefined)`, srv.URL), nil),
 	); err != nil {
 		t.Fatalf("window.open in A: %v", err)
 	}
-	// Give the new target a moment to register.
-	time.Sleep(500 * time.Millisecond)
 
-	infos, err := target.GetTargets().Do(cdp.WithExecutor(ctxA, chromedp.FromContext(ctxA).Browser))
-	if err != nil {
-		t.Fatalf("GetTargets: %v", err)
-	}
-	var openerTarget *target.Info
-	for i := range infos {
-		if infos[i].Type == "page" && infos[i].URL == "about:blank" && infos[i].BrowserContextID == cdp.BrowserContextID(idA) {
-			// the opened target (not A's original, which we can't easily distinguish here)
-			openerTarget = infos[i]
+	// Poll getTargets until a NEW page target (not in the before-set) appears,
+	// or ~3s timeout. O1 is now a hard pass/fail: a real http origin allows the
+	// popup, so "no new target" is a genuine failure, not "inconclusive".
+	var newTarget *target.Info
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		infos, gerr := target.GetTargets().Do(cdp.WithExecutor(ctxA, browser))
+		if gerr != nil {
+			t.Fatalf("GetTargets (poll): %v", gerr)
 		}
+		for _, ti := range infos {
+			if ti.Type != "page" {
+				continue
+			}
+			if _, seen := beforeSet[ti.TargetID]; seen {
+				continue
+			}
+			newTarget = ti
+			break
+		}
+		if newTarget != nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
-	// Count targets whose context == A vs == B.
+	if newTarget == nil {
+		t.Fatalf("FATAL (O1 FAILED): no new page target appeared within 3s of window.open — " +
+			"popup did not fire (expected to fire on a real http origin)")
+	}
+	t.Logf("new window.open target: id=%q url=%q context=%q", newTarget.TargetID, newTarget.URL, newTarget.BrowserContextID)
+	if newTarget.BrowserContextID != cdp.BrowserContextID(idA) {
+		t.Fatalf("FATAL (O1 FAILED): window.open target landed in context %q, expected A %q",
+			newTarget.BrowserContextID, idA)
+	}
+
+	// Count targets whose context == A vs == B (diagnostic only now).
+	infos, _ := target.GetTargets().Do(cdp.WithExecutor(ctxA, browser))
 	var inA, inB int
 	for _, ti := range infos {
 		if ti.Type != "page" {
@@ -119,21 +164,6 @@ func TestD2Spike_BrowserContextIsolation(t *testing.T) {
 	}
 	t.Logf("page targets in A=%d in B=%d (infos=%d)", inA, inB, len(infos))
 
-	if openerTarget == nil {
-		// window.open on about:blank can be blocked by some Chrome versions; if so,
-		// the distinct-ID property (Property 1) already proves isolation. Flag but
-		// don't hard-fail — record the outcome.
-		t.Logf("NOTE: no window.open target observed in A (about:blank opener may block popups); " +
-			"isolation is still proven by distinct context ids (Property 1)")
-	} else if openerTarget.BrowserContextID != cdp.BrowserContextID(idA) {
-		t.Fatalf("FATAL (O1 FAILED): window.open target landed in context %q, expected A %q",
-			openerTarget.BrowserContextID, idA)
-	}
-	t.Logf("D2 SPIKE PASSED: distinct browser contexts (%q != %q); O1 window.open-in-opener-context %s",
-		idA, idB, func() string {
-			if openerTarget != nil {
-				return "VERIFIED"
-			}
-			return "inconclusive (popup blocked) — isolation verified via distinct ids"
-		}())
+	t.Logf("D2 SPIKE PASSED: distinct browser contexts (%q != %q); O1 window.open-in-opener-context VERIFIED (new target in A)",
+		idA, idB)
 }
