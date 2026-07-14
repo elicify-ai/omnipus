@@ -571,13 +571,13 @@ function OnboardingWizard() {
 
   return (
     <div
-      className="min-h-screen flex flex-col items-center justify-center p-6 relative overflow-hidden"
+      className="h-screen flex flex-col items-center p-6 relative overflow-y-auto overflow-x-hidden"
       style={{ backgroundColor: 'var(--color-primary)', color: 'var(--color-secondary)' }}
     >
       {/* Atmospheric depth — subtle Forge Gold radial glow */}
       <div
         aria-hidden
-        className="absolute inset-0 pointer-events-none"
+        className="fixed inset-0 pointer-events-none"
         style={{
           background:
             'radial-gradient(ellipse 65% 55% at 50% 50%, rgba(212,175,55,0.055) 0%, transparent 68%)',
@@ -586,7 +586,7 @@ function OnboardingWizard() {
       {/* Top edge accent line */}
       <div
         aria-hidden
-        className="absolute top-0 left-0 right-0 h-px pointer-events-none"
+        className="fixed top-0 left-0 right-0 h-px pointer-events-none"
         style={{
           background:
             'linear-gradient(90deg, transparent 0%, rgba(212,175,55,0.35) 50%, transparent 100%)',
@@ -597,12 +597,19 @@ function OnboardingWizard() {
       {appStateBannerMessage && (
         <div
           role="alert"
-          className="absolute top-4 left-1/2 -translate-x-1/2 w-full max-w-md z-20 rounded-md border border-red-500/40 bg-red-500/10 px-4 py-2.5 text-sm text-red-400"
+          className="fixed top-4 left-1/2 -translate-x-1/2 w-full max-w-md z-20 rounded-md border border-red-500/40 bg-red-500/10 px-4 py-2.5 text-sm text-red-400"
         >
           {appStateBannerMessage}
         </div>
       )}
 
+      {/* Safe-centering wrapper: my-auto centers the step block vertically when
+          it fits the viewport, but collapses to 0 and lets the page scroll when
+          content overflows (e.g. Step 3 with a multi-variant provider like ZAI
+          expands the plan/region panel + API-key field and would otherwise push
+          the Back / Complete Setup buttons below the fold with no way to scroll
+          — overflow-hidden + justify-center clipped both ends). */}
+      <div className="w-full flex flex-col items-center my-auto">
       {/* Step indicator — labeled for assistive tech so screen readers announce
           progress. The dots themselves are decorative (aria-hidden); the
           progressbar role + valuenow/min/max + aria-label carry the semantics,
@@ -744,6 +751,7 @@ function OnboardingWizard() {
             </motion.div>
           )}
         </AnimatePresence>
+      </div>
       </div>
     </div>
   )
