@@ -571,8 +571,8 @@ function OnboardingWizard() {
 
   return (
     <div
-      className="h-screen flex flex-col items-center p-6 relative overflow-y-auto overflow-x-hidden"
-      style={{ backgroundColor: 'var(--color-primary)', color: 'var(--color-secondary)' }}
+      className="h-screen flex flex-col items-center p-6 relative overflow-y-auto overflow-x-hidden overscroll-y-contain"
+      style={{ backgroundColor: 'var(--color-primary)', color: 'var(--color-secondary)', justifyContent: 'safe center' }}
     >
       {/* Atmospheric depth — subtle Forge Gold radial glow */}
       <div
@@ -609,7 +609,7 @@ function OnboardingWizard() {
           expands the plan/region panel + API-key field and would otherwise push
           the Back / Complete Setup buttons below the fold with no way to scroll
           — overflow-hidden + justify-center clipped both ends). */}
-      <div className="w-full flex flex-col items-center my-auto">
+      <div className="w-full flex flex-col items-center">
       {/* Step indicator — labeled for assistive tech so screen readers announce
           progress. The dots themselves are decorative (aria-hidden); the
           progressbar role + valuenow/min/max + aria-label carry the semantics,
@@ -1092,6 +1092,12 @@ function ModelKeyStep({
   probeValidation?: ProviderValidation
 }) {
   const [searchQuery, setSearchQuery] = useState('')
+  // Provider-picker accordion: once a company is selected the tall search+grid
+  // collapses into a one-line summary (the grid is the single tallest element on
+  // this step), keeping the form short enough to fit the viewport without
+  // scrolling — critical on touch/iPad, where a scrollable form can rubber-band
+  // the submit button back below the fold. "Change" re-expands the grid.
+  const [pickerOpen, setPickerOpen] = useState(() => !selectedCompany)
 
   // Derive filtered company list (search + stable priority order for the grid).
   // filterCompanies already returns companies with priority companies first.
@@ -1147,7 +1153,48 @@ function ModelKeyStep({
         </p>
       </div>
 
+      {/* Selected-provider summary — collapses the search + company grid below
+          it once a company is picked, so this step stays short. */}
+      {selectedCompany && !pickerOpen && (
+        <div
+          className="rounded-lg border p-3 flex items-center justify-between gap-2"
+          style={{ borderColor: 'var(--color-accent)', backgroundColor: 'rgba(212,175,55,0.06)' }}
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <BrandIcon
+              slug={logoSlugForCompany(providers, selectedCompany)}
+              size={18}
+              decorative
+              className="shrink-0"
+            />
+            <div className="min-w-0">
+              <p className="text-sm font-medium truncate" style={{ color: 'var(--color-secondary)' }}>
+                {selectedCompany}
+              </p>
+              <p className="text-xs truncate" style={{ color: 'var(--color-muted)' }}>
+                {[
+                  PLAN_LABELS[selectedPlan],
+                  hasRegionForPlan && selectedRegion ? REGION_LABELS[selectedRegion] : null,
+                  resolvedEntry?.endpointHint,
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setPickerOpen(true)}
+            className="shrink-0 text-xs font-medium px-2.5 py-1.5 rounded transition-colors"
+            style={{ color: 'var(--color-accent)' }}
+          >
+            Change
+          </button>
+        </div>
+      )}
+
       {/* ── L1: Search + company grid ───────────────────────────────────── */}
+      {(pickerOpen || !selectedCompany) && (
       <div className="space-y-2">
         {/* Search box — spec: >25 items → searchable (NN/g) */}
         <div className="relative">
@@ -1176,7 +1223,10 @@ function ModelKeyStep({
               <button
                 key={company}
                 type="button"
-                onClick={() => onSelectCompany(company)}
+                onClick={() => {
+                  onSelectCompany(company)
+                  setPickerOpen(false)
+                }}
                 className="px-3 py-2.5 rounded-lg border text-sm font-medium transition-all duration-150 text-left focus-visible:outline-none focus-visible:ring-2 flex items-center justify-between gap-1"
                 aria-pressed={isSelected}
                 style={
@@ -1218,6 +1268,7 @@ function ModelKeyStep({
           )}
         </div>
       </div>
+      )}
 
       {/* ── L2: Plan + Region (inline, only for multi-variant companies) ── */}
       <AnimatePresence>
