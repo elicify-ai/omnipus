@@ -17,7 +17,7 @@ interface ChatControlsProps {
  * ChatControls — workspace top-bar cluster: New Chat · Sessions · Open browser.
  *
  * The Agent picker, Model selector, and Token counter used to live here but
- * moved into the composer card's context row (src/components/chat/composer/
+ * moved into the composer's context row, above the card (src/components/chat/composer/
  * {AgentPicker,ModelPicker,TokenCounter}.tsx) so they sit next to the input
  * they scope, per the Composer Redesign (variant A1).
  *

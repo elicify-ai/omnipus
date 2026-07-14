@@ -3,7 +3,7 @@
  *
  * ChatControls was stripped down to New Chat · Sessions · Open browser per
  * the Composer Redesign (variant A1) — the Agent picker, Model selector, and
- * Token counter moved into the composer card's context row
+ * Token counter moved into the composer's context row (above the card)
  * (src/components/chat/composer/{AgentPicker,ModelPicker,TokenCounter}.tsx).
  * Their assertions moved with them (see AgentPicker.test.tsx for the
  * agent-scoping coverage, AgentPicker.agent-selector-open.test.tsx for SC-005,
@@ -163,8 +163,8 @@ describe('ChatControls — all controls present (single cluster)', () => {
     expect(screen.getByRole('button', { name: /open browser/i })).toBeInTheDocument()
 
     // Negative guard: the pickers must NEVER come back to the header cluster.
-    // AgentPicker's auto-select effect assumes a single mount (inside the
-    // composer card) — re-adding the picker here would race two writers.
+    // AgentPicker's auto-select effect assumes a single mount (in the
+    // composer's context row) — re-adding it here would race two writers.
     expect(screen.queryByTestId('agent-picker-trigger')).not.toBeInTheDocument()
     expect(screen.queryByTestId('composer-model-selector')).not.toBeInTheDocument()
     expect(screen.queryByTestId('session-token-counter')).not.toBeInTheDocument()

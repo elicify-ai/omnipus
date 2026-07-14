@@ -2,7 +2,7 @@
  * AgentPicker tests.
  *
  * AgentPicker was extracted out of ChatControls (Composer Redesign variant
- * A1) — it now lives in the composer card's context row instead of the
+ * A1) — it now lives in the composer's context row (rendered above the card) instead of the
  * workspace header — logic unchanged except the auto-select
  * session-preservation fix and the error/read-only hardening (see
  * AgentPicker.tsx's own header comment). Assertions are ported from

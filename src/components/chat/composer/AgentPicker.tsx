@@ -32,8 +32,8 @@ import { cn } from '@/lib/utils'
  *
  * Side-effect contract: the auto-select effect writes to the global session
  * store (`setActiveSession`) as a side effect of mounting, so this component
- * is expected to be mounted exactly once per screen (inside the composer
- * card) — mounting it twice would race two auto-select writers.
+ * is expected to be mounted exactly once per screen (in the composer's
+ * context row) — mounting it twice would race two auto-select writers.
  */
 export function AgentPicker({
   className,

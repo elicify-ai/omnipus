@@ -26,10 +26,14 @@
   --color-accent-hover: #c49e2f;
   --color-error-hover: #dc2626;
 
-  /* Surface elevations (dark-first) */
+  /* Surface elevations (dark-first).
+     surface-2 was darkened #1a1a1e → #141416 (operator request, composer
+     redesign follow-up): raised panels should sit closer to the black
+     shell — less contrast, flatter look. Applies everywhere the token is
+     used (composer card, chips, panel fills, hover tints). */
   --color-surface-0: #0a0a0b;
   --color-surface-1: #111113;
-  --color-surface-2: #1a1a1e;
+  --color-surface-2: #141416;
   --color-surface-3: #222228;
 
   /* Muted text / borders.

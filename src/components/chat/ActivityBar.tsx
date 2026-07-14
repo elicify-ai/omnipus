@@ -3,8 +3,8 @@
 // delegate spans, and background `bash` runs). Click opens the ActivityPanel
 // slide-out for full detail.
 //
-// Mounted once by OmnipusComposer (ChatScreen.tsx), inside the composer card,
-// below the input row and attachment chips. Unlike the earlier revision, this
+// Mounted once by OmnipusComposer (ChatScreen.tsx), rendered BELOW the
+// composer card, bare on the shell background. Unlike the earlier revision, this
 // renders NOTHING when idle (runningCount === 0) — mirroring RateLimitIndicator's own
 // precedent of conditional mounting rather than showing an empty/idle state
 // (found via /visual-qa live inspection: an always-visible, full-width
@@ -45,7 +45,7 @@ export function ActivityBar() {
         aria-haspopup="dialog"
         aria-expanded={panelOpen}
         aria-label={`Activity — ${runningCount} running`}
-        className="inline-flex max-w-full items-center gap-2.5 self-start rounded-full border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1.5 text-left text-xs transition-colors hover:bg-[var(--color-surface-2)]"
+        className="inline-flex max-w-full items-center gap-2.5 self-start rounded-full border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1.5 text-left text-xs transition-colors hover:bg-[var(--color-surface-3)]"
       >
         <div className="flex -space-x-2 shrink-0">
           {stackItems.map((item) => (

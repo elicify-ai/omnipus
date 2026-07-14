@@ -81,7 +81,7 @@ export function ToolCallBadge({ toolCall }: ToolCallBadgeProps) {
         onClick={() => toolCall.status !== 'running' && setExpanded((e) => !e)}
         className={cn(
           'flex w-full items-center gap-2 px-3 py-2 text-left transition-colors',
-          toolCall.status !== 'running' && 'hover:bg-[var(--color-surface-2)] cursor-pointer',
+          toolCall.status !== 'running' && 'hover:bg-[var(--color-surface-3)] cursor-pointer',
           toolCall.status === 'running' && 'cursor-default'
         )}
         aria-expanded={expanded}

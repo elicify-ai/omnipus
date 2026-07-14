@@ -69,7 +69,7 @@ function FileTreeBlock({
         onClick={() => !isRunning && setExpanded((e) => !e)}
         className={cn(
           'flex w-full items-center gap-2 px-3 py-2 bg-[var(--color-surface-1)] transition-colors text-left',
-          !isRunning && 'hover:bg-[var(--color-surface-2)] cursor-pointer',
+          !isRunning && 'hover:bg-[var(--color-surface-3)] cursor-pointer',
           isRunning && 'cursor-default'
         )}
         aria-expanded={expanded}

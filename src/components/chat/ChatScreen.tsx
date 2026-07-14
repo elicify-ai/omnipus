@@ -1252,8 +1252,12 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   }
 
   return (
+    // @container on the composer root: TokenCounter's `@2xl:flex` gate in the
+    // context row below reads THIS element's width. It sat on the card while
+    // the context row lived inside it; the row now renders outside the card
+    // (bare, on the black shell), so the query context moved up here.
     <div
-      className="relative"
+      className="relative @container"
       onDragOver={attachDisabled ? undefined : fileUpload.onDragOver}
       onDragLeave={attachDisabled ? undefined : fileUpload.onDragLeave}
       onDrop={attachDisabled ? undefined : fileUpload.onDrop}
@@ -1397,51 +1401,48 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
         </div>
       )}
 
-      {/* Composer card — one self-contained surface. Context row (attach +
-          agent + model + tokens) sits above the input row (textarea + send /
-          stop); attachment chips and live background activity fold below.
-          The input row is now a single ComposerPrimitive.Root holding only
-          the textarea + send/stop (one items-end flex container = one shared
-          baseline); attach moved UP into the context row above, removing the
-          old two-container split that left attach/send 7px below the input's
-          bottom edge. @container: lets TokenCounter below gate on the card's
-          own width instead of a distant ancestor's container. */}
+      {/* Context row — per-message scope (attach · agent · model · tokens).
+          Renders BARE on the black shell, deliberately outside the card
+          frame (operator direction: only the input surface reads as a card;
+          the scope controls float above it). Agent/model/tokens relocated
+          here from the workspace top-bar (Gestalt proximity); attach moved
+          up from the old input row. */}
+      <div
+        className="flex items-center gap-1.5 min-w-0 overflow-x-auto px-1 pb-1.5"
+        style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' } as React.CSSProperties}
+      >
+        {/* Attach — opens the file picker scoped to the adapter's accept list.
+            Lives in the context row so the input row is just textarea + send. */}
+        <ComposerPrimitive.AddAttachment
+          disabled={attachDisabled}
+          className="shrink-0 h-8 w-8 rounded-md flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-3)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
+          aria-label="Attach file"
+          title="Attach file"
+        >
+          <Paperclip size={16} />
+        </ComposerPrimitive.AddAttachment>
+
+        <AgentPicker disabled={agentRemoved} />
+        <ModelPicker disabled={agentRemoved} />
+        <span className="flex-1" />
+        {/* Token counter — status; hidden below @2xl of the composer root's
+            @container (~42rem). */}
+        <TokenCounter className="hidden @2xl:flex" />
+      </div>
+
+      {/* Composer card — now just the input surface: a single
+          ComposerPrimitive.Root (textarea + send/stop on one items-end
+          baseline) plus pending-attachment chips. The context row above and
+          the activity pills below render outside the frame on the shell
+          background. */}
       <div
         data-testid="composer-card"
-        className="@container rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface-2)] overflow-hidden"
+        className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface-2)] overflow-hidden"
       >
-        {/* Context row — per-message scope. Agent/model/tokens relocated here
-            from the workspace top-bar (Gestalt proximity: they belong next to
-            the input they scope); attach moved up here from the old input row
-            below. */}
-        <div
-          className="flex items-center gap-1.5 min-w-0 overflow-x-auto px-2 pt-2 pb-1"
-          style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' } as React.CSSProperties}
-        >
-          {/* Attach — opens the file picker scoped to the adapter's accept list.
-              Lives in the context row so the input row is just textarea + send. */}
-          <ComposerPrimitive.AddAttachment
-            disabled={attachDisabled}
-            className="shrink-0 h-8 w-8 rounded-md flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-3)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
-            aria-label="Attach file"
-            title="Attach file"
-          >
-            <Paperclip size={16} />
-          </ComposerPrimitive.AddAttachment>
-
-          <AgentPicker disabled={agentRemoved} />
-          <ModelPicker disabled={agentRemoved} />
-          <span className="flex-1" />
-          {/* Token counter — status; hidden below @2xl of the card's own
-              @container (~42rem card width), replacing the old top-bar
-              container gate now that the card carries its own @container. */}
-          <TokenCounter className="hidden @2xl:flex" />
-        </div>
-
         {/* Input row — single ComposerPrimitive.Root, items-end: textarea and
             send/stop share one flex container + one bottom baseline. */}
         <ComposerPrimitive.Root
-          className="flex items-end gap-2 px-2 pb-2"
+          className="flex items-end gap-2 p-2"
           onSubmit={(e) => {
             // Block Enter-submit while streaming; slash-menu Enter is handled in handleKeyDown.
             if (isStreaming) {
@@ -1593,19 +1594,16 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           <ComposerPrimitive.Attachments components={{ Attachment: ComposerAttachmentChip }} />
         </div>
 
-        {/* Live background activity (delegate spans + background bash runs) —
-            folded below the input (Claude-Code style). Opens the ActivityPanel
-            slide-out on click. Wrapper owns the row's padding; ActivityBar
-            itself renders null when idle, so `empty:hidden` collapses this
-            wrapper too — no stray padding artifact when nothing is running. */}
-        <div className="px-2 pb-2 empty:hidden">
-          <ActivityBar />
-        </div>
       </div>
 
-      <p className="mt-1.5 text-[10px] text-[var(--color-muted)] text-center">
-        Agents can make mistakes. Verify important information.
-      </p>
+      {/* Live background activity (delegate spans + background bash runs) —
+          pills render BELOW the card, bare on the shell background (operator
+          direction), Claude-Code style. Opens the ActivityPanel slide-out on
+          click. ActivityBar renders null when idle, so `empty:hidden`
+          collapses this wrapper — no stray padding when nothing runs. */}
+      <div className="px-1 pt-1.5 empty:hidden">
+        <ActivityBar />
+      </div>
 
       {/* Harmful-file upload double-confirm — replaces the native window.confirm pair.
           Stage 1 warns and lists the flagged files; stage 2 is the second
@@ -1840,8 +1838,9 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
             </div>
           )}
 
-          {/* Composer — centered, ChatGPT-style floating layout. The ActivityBar
-              now renders inside the composer card (folded below the input). */}
+          {/* Composer — centered, ChatGPT-style floating layout. The context
+              row and ActivityBar pills render bare on the shell (above /
+              below the card); only the input surface reads as a card. */}
           <div className="relative w-full">
             {/* Gradient fade above composer */}
             <div className="absolute -top-8 left-0 right-0 h-8 bg-gradient-to-t from-[var(--color-primary)] to-transparent pointer-events-none" />
