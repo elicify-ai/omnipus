@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Brain, ArrowUp, ArrowDown, X, Warning } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { ModelSelector } from '@/components/ui/model-selector'
 import { fetchMemorySettings, updateMemorySettings, fetchProviders, getErrorMessage } from '@/lib/api'
 import type { MemorySettings, FallbackModel } from '@/lib/api'
@@ -90,7 +91,7 @@ function NumberRow({ id, label, description, value, min = 0, step = 1, unit, onC
         <p className="text-xs text-[var(--color-muted)] leading-relaxed">{description}</p>
       )}
       <div className="flex items-center gap-2">
-        <input
+        <Input
           id={id}
           type="number"
           min={min}

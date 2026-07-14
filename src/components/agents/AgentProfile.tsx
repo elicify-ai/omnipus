@@ -1398,7 +1398,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                           aria-label={`Provider for fallback ${entry.model}`}
                           value={entry.provider}
                           onChange={(e) => { markDirty(); setFallbackProvider(entry.model, e.target.value) }}
-                          className="appearance-none bg-transparent text-[var(--color-muted)] hover:text-[var(--color-secondary)] pl-1 pr-3 py-0 text-[9px] focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent)] rounded cursor-pointer"
+                          className="appearance-none bg-transparent text-[var(--color-muted)] hover:text-[var(--color-secondary)] pl-1 pr-3 py-0 text-[9px] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent)] focus-visible:border-[var(--color-accent)] rounded cursor-pointer"
                         >
                           <option value="" data-testid={`fallback-provider-option-empty-${entry.model}`}>—</option>
                           {connectedProviders.map((p) => (
