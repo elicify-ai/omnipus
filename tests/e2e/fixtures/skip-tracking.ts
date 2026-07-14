@@ -135,16 +135,6 @@ export const SKIP_ALLOWLIST: { test: string; issue: string; until: string; note?
     until: '2026-09-30',
     note: 'Same root cause as (d).',
   },
-  // command-center.spec.ts — AgentToolsUpdateRequest schema changed in the v0.1.0
-  // tool-registry redesign. The test PUTs the OLD shape
-  // (builtin.{default_policy, policies}) which the gateway now rejects.
-  // Tracked: https://github.com/elicify-ai/omnipus/issues/426
-  {
-    test: '(b) approval-queue: policy=ask tool call triggers approval modal and Approve routes it through',
-    issue: 'https://github.com/elicify-ai/omnipus/issues/426',
-    until: '2026-09-30',
-    note: 'PUT /api/v1/agents/{id}/tools body uses the old `{builtin: {default_policy, policies: ...}}` shape; the v0.1.0 redesign moved per-tool policies into the `sandbox.tool_policies` model. Rewrite the test against AgentToolsUpdateRequest.',
-  },
   // agents.spec.ts — slideover refactor removed the branded 404 page for unknown
   // agent IDs. The transient /_app/agents/$agentId route silently opens the slideover
   // and navigates back to /#/agents for unknown IDs.
@@ -156,8 +146,8 @@ export const SKIP_ALLOWLIST: { test: string; issue: string; until: string; note?
     note: 'The /_app/agents/$agentId route (src/routes/_app/agents.$agentId.tsx) is a transient "open slideover + navigate back" handler. Unknown agent IDs do not render a branded 404 page. Either add the 404 page or drop the test.',
   },
   // subagent.spec.ts — known LLM timing flake (per the run-ci configuration
-  // comment in playwright.config.ts). The 9 Group-A failures (subagent×5,
-  // handoff b, media a, command-center b) all share the same symptom: under
+  // comment in playwright.config.ts). The 8 Group-A failures (subagent×5,
+  // handoff b, media a) all share the same symptom: under
   // prolonged suite load (~12 min total wall-clock) the LLM occasionally takes
   // >40s to emit the expected tool call, even though every test passes alone
   // in 5-25s. Retries are NOT a cover for real bugs — the design-flaw fix
