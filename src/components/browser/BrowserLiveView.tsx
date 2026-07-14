@@ -474,7 +474,9 @@ export function BrowserLiveView({
   // anchor that disambiguates WHICH agent's context the human is driving.
   const resolvedAgent = queryClient.getQueryData<Agent[]>(['agents'])?.find((a) => a.id === agentId)
   const resolvedAgentName = resolvedAgent?.name
-  const agentDisplayName = resolvedAgentName ?? 'Agent'
+  // `|| 'Agent'` (not `??`): an agent with an EMPTY name ("") should fall back
+  // to "Agent" too, not render an empty chip label.
+  const agentDisplayName = resolvedAgentName || 'Agent'
 
   // ── ADR-040 D2 refactor — the single AUTHORITATIVE "who can actually
   // drive right now" mode (see computeDriveMode's doc comment above for the
@@ -1510,7 +1512,7 @@ export function BrowserLiveView({
           >
             {resolvedAgent?.icon ? (
               <IconRenderer icon={resolvedAgent.icon} size={9} />
-            ) : resolvedAgent ? (
+            ) : resolvedAgent && resolvedAgent.name ? (
               resolvedAgent.name.charAt(0).toUpperCase()
             ) : (
               <Robot size={9} />
