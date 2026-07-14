@@ -219,7 +219,7 @@ describe('BrowserLivePanel', () => {
       localStorage.clear()
     })
 
-    it('does NOT wire onPopOut when pinned (docked layout) — Pop-out makes no sense from an already-docked panel', () => {
+    it('wires onPopOut even when pinned (fullscreen is always available per operator direction)', () => {
       const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
       useUiStore.setState({ browserPanelPinned: true })
 
@@ -228,13 +228,11 @@ describe('BrowserLivePanel', () => {
         useUiStore.getState().openBrowserPanel('sess-1', 'agent-1')
       })
 
-      // BrowserLiveView gates its own Pop-out affordance purely on
-      // `onPopOut`'s presence — omitting the prop while pinned hides it.
-      expect(screen.queryByRole('button', { name: 'mock-pop-out' })).not.toBeInTheDocument()
+      // onPopOut is always wired now (the Pop-out/fullscreen button is always
+      // available, even from the docked pinned layout).
       const calledProps = mockBrowserLiveViewProps.mock.calls[0]?.[0] as Record<string, unknown>
       expect(calledProps).toBeDefined()
-      expect('onPopOut' in calledProps).toBe(false)
-      expect(openSpy).not.toHaveBeenCalled()
+      expect('onPopOut' in calledProps).toBe(true)
 
       openSpy.mockRestore()
       localStorage.clear()
