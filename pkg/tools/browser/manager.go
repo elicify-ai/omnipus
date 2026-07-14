@@ -7,10 +7,12 @@ package browser
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -41,6 +43,58 @@ const DebugPort = 9223
 // the flag value as a string). Kept private so callers use DebugPort.
 const browserDebugPort = "9223"
 
+// checkDebugPortAvailable is a best-effort preflight: it attempts to bind
+// port on loopback and immediately releases it, returning a clear,
+// diagnosable error if the bind fails. Exists because chromedp's own
+// failure mode when the fixed CDP debug port (DebugPort) is already held by
+// something else is an opaque, slow "websocket url timeout reached" deep
+// inside the CDP handshake — it never names the port or says it's in use.
+// The motivating live incident: an orphaned Chrome process left over from an
+// unrelated prior run was squatting DebugPort, and every subsequent launch
+// timed out with no indication of the real cause.
+//
+// Deliberately NOT a reason to make DebugPort configurable or random —
+// pkg/gateway/sandbox_apply.go's kernel-enforced bind-port allow-list
+// depends on it being fixed and known at sandbox-policy-build time (see
+// DebugPort's doc comment). This function only makes the failure
+// diagnosable when the fixed port is unexpectedly unavailable.
+//
+// TOCTOU CAVEAT: this is a check-then-act race by construction — the
+// listener opened here is closed immediately, and nothing prevents some
+// other process from binding the port in the (typically sub-millisecond)
+// window between this check and chromedp's own real bind moments later.
+// This function is a diagnostics aid for the common case (a long-lived
+// squatter already holding the port when we start), not a guarantee; a
+// failure that slips past this check still surfaces as chromedp's own
+// (less clear, but not silent) launch error.
+func checkDebugPortAvailable(port uint16) error {
+	// Deliberately IPv4-only (127.0.0.1), not [::1]/"localhost": the managed-
+	// mode allocator never sets --remote-debugging-address, so Chrome binds
+	// 127.0.0.1 by default and chromedp dials ws://127.0.0.1:<port>. A process
+	// squatting ONLY the v6 loopback ([::1]) therefore cannot conflict with
+	// our launch — probing v6 here would solve a non-problem and risks a false
+	// positive on a legitimate v6-only listener. Matching the actual bind
+	// family keeps this preflight truthful.
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf(
+			"browser: CDP debug port %d is already in use by another process — "+
+				"close it or stop the other instance (%w)", port, err)
+	}
+	// The bind itself is the whole check — it already succeeded. A failure
+	// to close the (immediately-discarded) probe listener does not mean the
+	// port is unavailable, so it is logged, not treated as this function's
+	// result.
+	if closeErr := ln.Close(); closeErr != nil {
+		logger.WarnCF("browser", "debug port preflight: failed to close probe listener", map[string]any{
+			"port":  port,
+			"error": closeErr.Error(),
+		})
+	}
+	return nil
+}
+
 // BrowserConfig holds browser automation configuration.
 // Mapped from config.json: tools.browser.*
 type BrowserConfig struct {
@@ -53,7 +107,9 @@ type BrowserConfig struct {
 	ProfileDir     string        `json:"profile_dir"`     // User data dir (default ~/.omnipus/browser/profiles/default/)
 	// ExecPath overrides Chromium discovery. When empty the manager prefers
 	// a system chromium/google-chrome on PATH and falls back to a managed
-	// install under <ProfileDir>/../chromium/ (downloaded on first use).
+	// install under <ProfileDir>/../chromium/ (downloaded in the background
+	// at gateway boot via Preprovision, or lazily on first tool use as a
+	// fallback).
 	ExecPath string `json:"exec_path,omitempty"`
 }
 
@@ -214,6 +270,43 @@ type BrowserManager struct {
 	pending map[string]chan struct{}
 	started bool
 
+	// execPathMu guards the two exec-path caches below — a dedicated lock,
+	// deliberately separate from m.mu. resolveExecPath's PATH-candidate
+	// validation (probeChromiumBinary) shells out to each candidate binary
+	// (`--version`, bounded by chromiumProbeTimeout) and, on a full miss,
+	// can trigger a managed chrome-for-testing download — either of which
+	// can take real wall-clock time on first resolution. Keeping that
+	// entirely off m.mu means a slow/broken probe or an in-flight download
+	// never blocks the tab/session bookkeeping every other browser tool
+	// call needs m.mu for (ADR-038 discipline — see Session()'s and
+	// ensureStarted's doc comments).
+	//
+	// Two caches, mutually exclusive (a successful resolution clears the
+	// failure cache, and storing a failure clears the success cache):
+	//
+	//   - execPathCache (success): the last successfully-resolved binary
+	//     path. Validated with os.Stat on each hit (a cached path whose
+	//     binary was since deleted by apt remove / cache clean / rm would
+	//     otherwise make every launch fail with a generic chromedp exec
+	//     error until restart — see resolveExecPath); on stat miss/dir the
+	//     entry is dropped and resolution re-runs (which may re-download).
+	//     cfg never changes after NewBrowserManager, so the path VALUE is
+	//     stable; the stat check only guards the "binary vanished from
+	//     disk after it was cached" edge case.
+	//   - execPathFailErr / execPathFailUntil (negative cache): the last
+	//     resolution ERROR, returned verbatim (without re-probing) until
+	//     execPathFailUntil. Within the TTL a subsequent resolveExecPath
+	//     returns the SAME error — on a dead host (broken PATH + no
+	//     network, the exact devpod/Fly case) a full resolution otherwise
+	//     re-probes all 4 PATH candidates (~20s) and re-hits the CfT
+	//     manifest (~30s) on every browser_* call, forever. The WARN is
+	//     logged once when a fresh failure is stored; short-circuited
+	//     returns inside the TTL log at DEBUG (no WARN storm).
+	execPathMu        sync.Mutex
+	execPathCache     string
+	execPathFailErr   error
+	execPathFailUntil time.Time
+
 	// pendingAdopt tracks CDP target IDs currently being adopted (ADR-041
 	// D2's adoptTarget), mirroring `pending`'s exact race-guard shape: the
 	// best-effort passive listener (installTargetListenerLocked) and a
@@ -346,6 +439,30 @@ func (m *BrowserManager) ValidateURL(ctx context.Context, rawURL string) error {
 }
 
 // ensureStarted lazily initializes the browser. Must be called under m.mu.
+//
+// ADR-038 discipline extended to exec-path resolution: resolveExecPath
+// (below) can now shell out to probe PATH candidates (`--version`, up to
+// chromiumProbeTimeout each) or even trigger a managed chrome-for-testing
+// download on first use. Neither may run with m.mu held — a slow/broken
+// probe or an in-flight 100+MB download would otherwise freeze every OTHER
+// browser tool call (any session, any tab) for its entire duration,
+// recreating the exact "single global mutex held across a blocking external
+// call" shape Session()'s doc comment describes as the ADR-038 postmortem
+// bug, just with exec(1) standing in for CDP. So: m.mu is released for the
+// resolveExecPath call only, then re-acquired before continuing. A
+// concurrent caller that raced in during that window (another
+// Session()/createFirstTab()/OpenTab() call, still seeing m.started ==
+// false) and ALSO ran ensureStarted's managed-mode setup to completion is
+// detected by re-checking m.started immediately after re-acquiring the
+// lock — this goroutine's own (fully valid, just redundant) exec-path
+// resolution is then discarded in favor of whichever goroutine's
+// chromedp.NewExecAllocator call and m.allocCtx/m.started assignment
+// happened to win, mirroring the discard-the-loser pattern
+// createFirstTab/OpenTab already use for a redundant tab. This never
+// double-launches a subprocess: chromedp.NewExecAllocator only builds an
+// allocator config, it does not spawn Chromium — that happens later and
+// lazily, in bootstrapBrowserCtx's chromedp.Run, which only ever reads the
+// WINNING m.allocCtx field, never a discarded local variable.
 func (m *BrowserManager) ensureStarted() error {
 	if m.started {
 		return nil
@@ -391,9 +508,21 @@ func (m *BrowserManager) ensureStarted() error {
 		}
 	}
 
+	// Release m.mu across exec-path resolution — see this function's doc
+	// comment above for why (the probe/download it can trigger must never
+	// run with m.mu held).
+	m.mu.Unlock()
 	execPath, err := m.resolveExecPath(context.Background())
+	m.mu.Lock()
 	if err != nil {
 		return fmt.Errorf("browser: cannot locate chromium: %w", err)
+	}
+	if m.started {
+		// A concurrent ensureStarted() call raced in and already finished
+		// setting up the allocator while m.mu was released above — discard
+		// our own now-redundant resolution instead of launching a second
+		// allocator. See this function's doc comment.
+		return nil
 	}
 
 	// Point Chrome's HOME and XDG dirs at the profile directory so any stray
@@ -472,6 +601,22 @@ func (m *BrowserManager) ensureStarted() error {
 		opts = append(opts, chromedp.NoSandbox)
 	}
 
+	// Preflight the fixed CDP debug port before committing to a launch.
+	// Without this, a port already held by something else (observed live: an
+	// orphaned Chrome process left over from an unrelated prior run) makes
+	// chromedp's launch fail with an opaque "websocket url timeout reached"
+	// deep inside the CDP handshake — nothing names the real cause. This
+	// runs exactly once per manager (ensureStarted's managed-mode branch is
+	// itself latched by m.started, checked above after the resolveExecPath
+	// re-lock), guaranteed to happen before this manager has ever launched
+	// its own Chrome — so, unlike a check placed at every bootstrapBrowserCtx
+	// call (which runs once per NEW browsing context, not just once per
+	// manager), it can never mistake a healthy earlier launch of OUR OWN
+	// Chrome for "something else is squatting the port."
+	if err := checkDebugPortAvailable(DebugPort); err != nil {
+		return err
+	}
+
 	allocCtx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
 	m.allocCtx = allocCtx
 	m.allocCancel = cancel
@@ -488,18 +633,95 @@ func (m *BrowserManager) ensureStarted() error {
 // resolveExecPath returns the path to the Chromium binary chromedp should
 // launch. Resolution order:
 //
-//  1. cfg.ExecPath (operator override) — used as-is.
-//  2. System chromium/google-chrome on $PATH — preferred when present.
+//  1. cfg.ExecPath (operator override) — used as-is, trusted after a real
+//     on-disk check (os.Stat + directory + executable-bit; not probed with
+//     `--version` like the PATH candidates below, which would be slower and
+//     would second-guess an explicit choice). An operator who explicitly
+//     configured exec_path gets a loud, immediate, debuggable failure naming
+//     exec_path if it's wrong (missing / a directory / not executable) rather
+//     than this package silently falling back to a DIFFERENT binary than the
+//     one configured — that would be far more confusing to debug than a
+//     clear exec_path error. The exec-bit check is skipped on Windows, where
+//     Go's os.FileMode does not carry Unix execute bits.
+//  2. System chromium/google-chrome on $PATH — preferred when present, but
+//     only after confirming the binary actually runs (probeChromiumBinary),
+//     not merely that exec.LookPath found an executable file. A distro
+//     package-manager stub is the canonical failure this guards against:
+//     Ubuntu ships /usr/bin/chromium-browser as a snap redirector script
+//     that passes LookPath but exits with "... requires the chromium snap"
+//     the moment it actually runs — on a host with no snapd (any Fly.io
+//     machine, most minimal containers), the pre-fix code committed to
+//     this candidate and every browser tool failed at first use instead of
+//     falling through to the next candidate or the managed install below.
 //  3. Managed install under <ProfileDir>/../chromium/ — downloaded from
-//     Chrome for Testing on first call. Cached across restarts so the
-//     download cost is amortized once per host.
+//     Chrome for Testing on first call. Cached on disk across restarts
+//     (EnsureChromium/findInstalledBinary) so the download cost is
+//     amortized once per host, AND cached in-process (execPathCache) once
+//     resolved here, so a later resolveExecPath call in the SAME process
+//     never re-probes $PATH or re-lists the install directory.
+//
+// Safe to call without m.mu held, and safe to call WHILE some other
+// goroutine holds m.mu: the only BrowserManager state this method touches
+// (the exec-path caches: execPathCache / execPathFailErr / execPathFailUntil)
+// is guarded by its own dedicated execPathMu, never m.mu. ensureStarted relies
+// on this — it releases m.mu before calling here specifically so a slow
+// first-time probe/download never blocks concurrent tab/session bookkeeping
+// (see ensureStarted's doc comment).
 func (m *BrowserManager) resolveExecPath(ctx context.Context) (string, error) {
 	if m.cfg.ExecPath != "" {
-		if _, err := os.Stat(m.cfg.ExecPath); err != nil {
+		info, err := os.Stat(m.cfg.ExecPath)
+		if err != nil {
 			return "", fmt.Errorf("configured exec_path %s: %w", m.cfg.ExecPath, err)
+		}
+		if info.IsDir() {
+			return "", fmt.Errorf(
+				"configured exec_path %s is a directory, not an executable file", m.cfg.ExecPath)
+		}
+		// Exec-bit check is POSIX-only: on Windows os.FileMode does not carry
+		// Unix execute bits, so this guard would wrongly reject every .exe.
+		if runtime.GOOS != "windows" && info.Mode()&0o111 == 0 {
+			return "", fmt.Errorf(
+				"configured exec_path %s is not executable (check its file mode)", m.cfg.ExecPath)
 		}
 		return m.cfg.ExecPath, nil
 	}
+
+	m.execPathMu.Lock()
+	cached := m.execPathCache
+	failErr := m.execPathFailErr
+	failUntil := m.execPathFailUntil
+	m.execPathMu.Unlock()
+
+	// Success cache hit — validate the binary is still on disk (L2). A cached
+	// path whose binary was since deleted (apt remove, cache clean, rm) would
+	// otherwise make every launch fail with a generic chromedp exec error that
+	// never names the real cause, until process restart. One syscall; on stat
+	// miss OR directory, drop the entry and fall through to re-resolution
+	// (which may re-download) rather than erroring here.
+	if cached != "" {
+		if info, statErr := os.Stat(cached); statErr == nil && !info.IsDir() {
+			return cached, nil
+		}
+		m.execPathMu.Lock()
+		m.execPathCache = ""
+		m.execPathMu.Unlock()
+	}
+
+	// Negative cache (L1): within the TTL, return the SAME error without
+	// re-probing. On a dead host (broken PATH + no network — the exact
+	// devpod/Fly case) a full resolution re-probes all 4 PATH candidates
+	// (~20s) and re-hits fetchCFTManifest (~30s) on every browser_* call,
+	// re-emitting 4 WARNs each time, forever. The WARN for a fresh failure
+	// was logged once when it was stored (cacheExecPathFailure); these
+	// short-circuited returns stay at DEBUG so there's no WARN storm.
+	if failErr != nil && time.Now().Before(failUntil) {
+		logger.DebugCF("browser", "chromium resolution still negative-cached — short-circuiting",
+			map[string]any{
+				"ttl_remaining_seconds": int64(time.Until(failUntil).Seconds()),
+			})
+		return "", failErr
+	}
+
 	// Operators can force the managed install path (skipping the $PATH
 	// lookup) by setting OMNIPUS_BROWSER_FORCE_MANAGED=1. Useful for
 	// pinning a deterministic Chromium version even when a system
@@ -508,14 +730,100 @@ func (m *BrowserManager) resolveExecPath(ctx context.Context) (string, error) {
 	forceManaged := os.Getenv("OMNIPUS_BROWSER_FORCE_MANAGED") == "1"
 	if !forceManaged {
 		for _, name := range []string{"google-chrome", "google-chrome-stable", "chromium", "chromium-browser"} {
-			if path, err := exec.LookPath(name); err == nil {
-				return path, nil
+			path, err := exec.LookPath(name)
+			if err != nil {
+				continue
 			}
+			if !probeChromiumBinary(ctx, path) {
+				logger.WarnCF("browser", "chromium candidate on PATH did not execute successfully — skipping",
+					map[string]any{
+						"name": name,
+						"path": path,
+					})
+				continue
+			}
+			m.cacheExecPath(path)
+			return path, nil
 		}
 	}
 	installRoot := filepath.Join(filepath.Dir(filepath.Clean(m.cfg.ProfileDir)), "..", "chromium")
 	installRoot = filepath.Clean(installRoot)
-	return EnsureChromium(ctx, installRoot)
+	managedPath, err := EnsureChromium(ctx, installRoot)
+	if err != nil {
+		m.cacheExecPathFailure(err)
+		return "", err
+	}
+	m.cacheExecPath(managedPath)
+	return managedPath, nil
+}
+
+// cacheExecPath records path as the resolved Chromium binary. Guarded by
+// execPathMu — a lock dedicated to the exec-path caches, deliberately separate
+// from m.mu (see resolveExecPath's doc comment). Also clears any prior failure
+// cache entry: a successful resolution supersedes a stale negative cache.
+// The cached path is re-validated with os.Stat on each hit (see resolveExecPath
+// L2), so "cached for the process lifetime" is about avoiding re-resolution,
+// not about trusting a path whose binary may have vanished from disk.
+func (m *BrowserManager) cacheExecPath(path string) {
+	m.execPathMu.Lock()
+	m.execPathCache = path
+	m.execPathFailErr = nil
+	m.execPathFailUntil = time.Time{}
+	m.execPathMu.Unlock()
+}
+
+// cacheExecPathFailure stores err as the last resolution failure and arms the
+// negative-cache deadline (execPathNegativeCacheTTL from now). The WARN is
+// emitted HERE, exactly once per fresh failure investigation — callers that
+// hit the still-valid cache afterwards short-circuit at DEBUG, so a dead host
+// does not produce a WARN storm on every browser_* call. Also clears any prior
+// success cache entry (the two caches are mutually exclusive). Guarded by
+// execPathMu, never m.mu — see resolveExecPath's doc comment.
+func (m *BrowserManager) cacheExecPathFailure(err error) {
+	m.execPathMu.Lock()
+	m.execPathFailErr = err
+	m.execPathFailUntil = time.Now().Add(execPathNegativeCacheTTL)
+	m.execPathCache = ""
+	m.execPathMu.Unlock()
+	logger.WarnCF("browser",
+		"chromium resolution failed — negative-caching for the TTL to avoid re-probing on every browser_* call",
+		map[string]any{
+			"ttl_seconds": int64(execPathNegativeCacheTTL.Seconds()),
+			"error":       err.Error(),
+		})
+}
+
+// execPathNegativeCacheTTL bounds how long a failed resolution is remembered
+// (and returned verbatim, without re-probing) before resolveExecPath retries
+// the real PATH/managed resolution. Long enough that a dead host's repeated
+// browser_* calls do not each pay the full ~50s re-probe cost (4 PATH
+// candidates at up to chromiumProbeTimeout each + a CfT manifest fetch); short
+// enough that a transient failure (network flap, partial download) is retried
+// reasonably soon.
+const execPathNegativeCacheTTL = 60 * time.Second
+
+// chromiumProbeTimeout bounds each PATH-candidate `--version` probe in
+// resolveExecPath. Short enough that even a fully broken/hanging set of
+// candidates (all four names in the loop) adds at most ~20s to a single
+// first-time resolution — bounded, and no longer running with m.mu held
+// (see ensureStarted's doc comment) — while comfortably long enough for a
+// real Chromium/Chrome binary's `--version` to return (typically well under
+// a second).
+const chromiumProbeTimeout = 5 * time.Second
+
+// probeChromiumBinary reports whether path is a real, runnable
+// Chromium/Chrome binary by actually executing it (`--version`), not merely
+// checking that it exists and is executable — which exec.LookPath, the only
+// check the pre-fix resolveExecPath performed, already confirmed. LookPath
+// alone is insufficient: a distro package-manager stub can be a perfectly
+// valid, executable file on $PATH that nonetheless fails the moment it
+// actually runs (see resolveExecPath's doc comment for the motivating
+// Ubuntu snap-redirector case). Bounded by chromiumProbeTimeout so a
+// hanging candidate cannot stall resolution indefinitely.
+func probeChromiumBinary(ctx context.Context, path string) bool {
+	probeCtx, cancel := context.WithTimeout(ctx, chromiumProbeTimeout)
+	defer cancel()
+	return exec.CommandContext(probeCtx, path, "--version").Run() == nil
 }
 
 // Session returns the ACTIVE tab's context for the given browsing context
@@ -1709,6 +2017,53 @@ func (m *BrowserManager) Started() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.started
+}
+
+// Preprovision resolves — and, if resolution lands on the managed
+// fallback with no binary installed yet, downloads — a Chromium/
+// headless-shell binary for this manager, WITHOUT starting the browser
+// allocator itself (that stays lazy, triggered by the first real
+// Session() call, exactly as before). It runs the identical resolution
+// logic ensureStarted's managed-mode branch uses (resolveExecPath:
+// validated $PATH candidate, else the managed chrome-for-testing
+// install), so calling this at gateway boot means the (potentially
+// 100+MB, multi-second) download already happened in the background by
+// the time an agent's first browser_navigate needs it, instead of that
+// first tool call being the one to discover — and pay for — a missing
+// browser.
+//
+// True bundling of a Chromium/headless-shell binary directly into the Go
+// binary (e.g. go:embed) was considered and rejected: the smallest viable
+// chrome-for-testing headless-shell build is on the order of 100+MB,
+// which would multiply the omnipus binary size many times over and
+// violates Hard Constraint #1 — the single, lean, statically-linked Go
+// binary distribution model this project ships by design (CLAUDE.md). This
+// is a binary/distribution-footprint argument, NOT the resident-memory
+// Hard Constraint #3 (<10MB RAM overhead), which is about runtime cost
+// and is unaffected by bundling. Downloading once, lazily-but-eagerly
+// (at boot, in the background) and caching the extracted binary under
+// <ProfileDir>/../chromium/ is the chosen middle ground: zero footprint
+// for operators who never touch the browser tools (CDPURL configured to a
+// remote Chromium, or the tools simply unused), and a one-time background
+// fetch for everyone else.
+//
+// Idempotent and cheap to call repeatedly, including concurrently across
+// multiple BrowserManagers that happen to share an install root: a
+// validated system Chromium/Chrome on $PATH short-circuits with no
+// network call at all (and is cached in-process — see resolveExecPath),
+// and a managed binary already installed under installRoot is found by
+// EnsureChromium's own findInstalledBinary check before any download is
+// attempted; concurrent first-time downloads are serialized by
+// EnsureChromium's own installMu.
+//
+// No-op — returns ("", nil), not an error — when cfg.CDPURL is set: remote
+// CDP mode attaches to an operator-managed Chromium elsewhere and never
+// needs a local binary.
+func (m *BrowserManager) Preprovision(ctx context.Context) (string, error) {
+	if m.cfg.CDPURL != "" {
+		return "", nil
+	}
+	return m.resolveExecPath(ctx)
 }
 
 // Shutdown gracefully shuts down the browser process and all sessions.

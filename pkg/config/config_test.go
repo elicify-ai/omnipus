@@ -667,6 +667,52 @@ func TestLoadConfig_WebToolsProxy(t *testing.T) {
 	}
 }
 
+// TestLoadConfig_BrowserExecPath verifies tools.browser.exec_path round
+// trips through LoadConfig into cfg.Tools.Browser.ExecPath. This field is
+// consumed downstream by pkg/agent/loop.go's registerSharedTools, which
+// copies cfg.Tools.Browser.ExecPath into browser.BrowserConfig.ExecPath
+// (only when non-empty, mirroring the other optional overrides in that same
+// copy block) before calling browser.RegisterTools — that copy is exercised
+// end-to-end by pkg/tools/browser's own manager tests, not here, since
+// registerSharedTools has no seam for a config-only unit test.
+func TestLoadConfig_BrowserExecPath(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.json")
+	configJSON := `{"version":1,"tools":{"browser":{"exec_path":"/opt/custom-chromium/chrome"}}}`
+	if err := os.WriteFile(configPath, []byte(configJSON), 0o600); err != nil {
+		t.Fatalf("os.WriteFile() error: %v", err)
+	}
+
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error: %v", err)
+	}
+	if cfg.Tools.Browser.ExecPath != "/opt/custom-chromium/chrome" {
+		t.Fatalf("Tools.Browser.ExecPath = %q, want %q", cfg.Tools.Browser.ExecPath, "/opt/custom-chromium/chrome")
+	}
+}
+
+// TestLoadConfig_BrowserExecPathDefaultsEmpty verifies that omitting
+// tools.browser.exec_path leaves it empty — the auto-discover default (see
+// pkg/tools/browser.BrowserManager.resolveExecPath) — rather than some
+// zero-value that could be mistaken for an explicit override.
+func TestLoadConfig_BrowserExecPathDefaultsEmpty(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.json")
+	configJSON := `{"version":1,"tools":{"browser":{"max_tabs":3}}}`
+	if err := os.WriteFile(configPath, []byte(configJSON), 0o600); err != nil {
+		t.Fatalf("os.WriteFile() error: %v", err)
+	}
+
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error: %v", err)
+	}
+	if cfg.Tools.Browser.ExecPath != "" {
+		t.Fatalf("Tools.Browser.ExecPath = %q, want empty when unset", cfg.Tools.Browser.ExecPath)
+	}
+}
+
 func TestLoadConfig_HooksProcessConfig(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.json")

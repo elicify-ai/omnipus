@@ -961,6 +961,49 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		return fmt.Errorf("gateway: agent loop boot failed: %w", err)
 	}
 
+	// Boot-time browser provisioning: NewAgentLoop above just finished
+	// registering browser tools for every agent (registerSharedTools →
+	// browser.RegisterTools), each backed by its own *browser.BrowserManager.
+	// Historically the managed Chromium/headless-shell binary was resolved
+	// (and, on a fresh install, downloaded — chrome-for-testing, 100+MB) only
+	// lazily, at an agent's FIRST browser tool call. Kick that resolution off
+	// NOW instead, in the background, so a fresh install's download is
+	// already in flight (or done) well before any agent needs it — this is
+	// also where a broken $PATH candidate (e.g. Ubuntu's chromium-browser
+	// snap stub on a host with no snapd) gets discovered and skipped in
+	// favor of the managed fallback, rather than surfacing as a "chrome
+	// failed to start" error deep inside a user's first browser_navigate.
+	//
+	// Uses ctx (the gateway's own shutdown-aware context — canceled when the
+	// gateway is asked to stop, per RunContext's doc comment), the same
+	// pattern already used for other detached boot-time background work
+	// below (e.g. go agentLoop.BootstrapRecapPass(ctx)). Non-blocking: boot
+	// must not stall on a multi-second download (CLAUDE.md graceful
+	// degradation, Hard Constraint #4). Non-fatal: a failure here only means
+	// resolution/download is retried lazily at first real use, exactly the
+	// pre-existing behavior — so it is logged at WARN, never returned as a
+	// boot error.
+	for _, browserMgr := range agentLoop.BrowserManagers() {
+		// Go 1.22+ loop semantics: browserMgr is per-iteration already, no
+		// shadow copy needed before capturing it in the goroutine below.
+		go func() {
+			path, ppErr := browserMgr.Preprovision(ctx)
+			if ppErr != nil {
+				// logger (not slog): slog writes to fd 2, which boot's
+				// initPanicFile redirects to gateway_panic.log — operators
+				// read gateway.log for runtime diagnostics, so route this
+				// through zerolog like the rest of the browser package.
+				logger.WarnCF("browser", "preprovision failed — will retry lazily at first browser tool use",
+					map[string]any{"error": ppErr.Error()})
+				return
+			}
+			if path != "" {
+				logger.InfoCF("browser", "preprovision resolved",
+					map[string]any{"exec_path": path})
+			}
+		}()
+	}
+
 	// B1.2(d): wire the per-thread restrict-failure audit emitter into the
 	// sandbox package now that the agent loop (and thus the audit logger) is
 	// constructed. The hook bridges sandbox → audit without an import cycle —

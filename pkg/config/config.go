@@ -2989,6 +2989,14 @@ type BrowserToolConfig struct {
 	MaxTabs        int    `                                   json:"max_tabs"        env:"OMNIPUS_TOOLS_BROWSER_MAX_TABS"`
 	PersistSession bool   `                                   json:"persist_session" env:"OMNIPUS_TOOLS_BROWSER_PERSIST_SESSION"`
 	ProfileDir     string `                                   json:"profile_dir"     env:"OMNIPUS_TOOLS_BROWSER_PROFILE_DIR"`
+	// ExecPath overrides Chromium/Chrome binary discovery entirely — when
+	// set, pkg/tools/browser.BrowserManager.resolveExecPath trusts this path
+	// as-is (a stat check only, not the `--version` probe applied to $PATH
+	// candidates) instead of probing $PATH or falling back to a managed
+	// chrome-for-testing download. Empty (the default) means auto-discover:
+	// a validated google-chrome/chromium binary on $PATH, else a managed
+	// install under <profile_dir>/../chromium/.
+	ExecPath string `json:"exec_path" env:"OMNIPUS_TOOLS_BROWSER_EXEC_PATH"`
 	// EvaluateEnabled gates browser.evaluate (arbitrary JS execution).
 	// Defaults to false (deny-by-default per SEC-04/SEC-06). Must be explicitly
 	// opted in by the operator since evaluate runs arbitrary JavaScript.
