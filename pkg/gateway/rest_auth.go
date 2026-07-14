@@ -180,8 +180,14 @@ var (
 	validateLimiter = newAPIRateLimiter(30, 1*time.Minute)
 	// /api/v1/onboarding/complete — 3 requests/minute per IP (highly sensitive).
 	onboardingCompleteLimiter = newAPIRateLimiter(3, 1*time.Minute)
-	// /api/v1/config — 30 requests/minute per IP.
-	configLimiter = newAPIRateLimiter(30, 1*time.Minute)
+	// /api/v1/config and /api/v1/workspaces* (incl. read GETs: list, single,
+	// milestones, delegation) — 240 requests/minute per IP. Raised from 30: the
+	// SPA fires a burst of workspace reads on every navigation (list + milestones
+	// + delegation + tasks), and 30/min throttled legitimate rapid workspace
+	// switching — surfacing as transient "Failed to load workspace" (429) in the
+	// e2e calendar suite and for heavy real users. Mutations stay rate-limited;
+	// this only widens the per-IP read budget.
+	configLimiter = newAPIRateLimiter(240, 1*time.Minute)
 	// /api/v1/auth/reauth — 10 requests/minute per IP. A password re-verification
 	// (sensitive), but a legitimate user may mistype a few times; tighter than
 	// login, not punitive (Spec-6 FR-12.2).
