@@ -37,6 +37,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ArrowSquareOut,
+  ArrowsClockwise,
+  CaretLeft,
   ChatCircleDots,
   Cursor,
   Eye,
@@ -166,16 +168,21 @@ function computeDriveMode(state: {
   return 'idle'
 }
 
-/** ADR-040 D6 — breathing glow border per visual state. `motion-safe:` is the
- * sole reduced-motion mechanism (a pure CSS media-query variant, no JS
- * `matchMedia` needed) — under `prefers-reduced-motion: reduce` the border
- * color still renders, just without the pulse. Module-level: purely a
- * function of `VisualState`, no need to recompute the object per render. */
+/** ADR-040 D6 (revised) — the "who is driving" indicator. Von Restorff +
+ * cry-wolf avoidance: high salience (pulse) is reserved for the ONE state that
+ * needs a behavior change — ERROR. Everything else is a calm 1px SOLID border
+ * (no glow, no pulse): gold = you hold the wheel; neutral = ambient
+ * observation (agent browsing / idle / annotating / someone else driving).
+ * Red is error-only (color-semantics convention). Contrast (WCAG 1.4.11 ≥3:1):
+ * accent gold #D4AF37 ≈ 8.8:1 on black ✓; error red ≈ 5.5:1 ✓; neutral idle
+ * is an intentionally subtle decorative state cue (the panel's structural frame
+ * is separate). The header chip carries the text label; the border is the
+ * calm secondary cue. `motion-safe:` gates the error pulse only. */
 const GLOW_BORDER_CLASSES: Record<VisualState, string> = {
-  'agent-working': 'border-[var(--color-info)] shadow-[0_0_18px_2px_var(--color-info)] motion-safe:animate-pulse',
-  'you-driving': 'border-[var(--color-accent)] shadow-[0_0_18px_2px_var(--color-accent)] motion-safe:animate-pulse',
-  annotating: 'border-[var(--color-accent)] shadow-[0_0_14px_1px_var(--color-accent)]/70',
-  error: 'border-[var(--color-error)]/60',
+  'agent-working': 'border-[var(--color-border)]',
+  'you-driving': 'border-[var(--color-accent)]',
+  annotating: 'border-[var(--color-accent)]/70',
+  error: 'border-[var(--color-error)] motion-safe:animate-pulse',
   idle: 'border-[var(--color-border)]',
 }
 
@@ -1148,6 +1155,22 @@ export function BrowserLiveView({
     [urlInput, takeWheelIfNeeded],
   )
 
+  // Back / Refresh toolbar actions — Chrome-style nav controls. Same drive-
+  // acquisition discipline as the omnibox (D5): take the wheel first, then
+  // dispatch navigate_back / reload on the same connection so the server
+  // honours them (these are control-gated input kinds, like navigate).
+  const handleToolbarNav = useCallback(
+    (kind: 'navigate_back' | 'reload') => {
+      const mode = driveModeRef.current
+      if (mode !== 'you-driving' && mode !== 'agent-working' && mode !== 'idle') return
+      setStatusMessage(null)
+      setStatusIsError(false)
+      takeWheelIfNeeded()
+      wsRef.current?.sendInput({ kind })
+    },
+    [takeWheelIfNeeded],
+  )
+
   // ── Tab strip actions (ADR-041 D4) — switching/opening/closing a tab is a
   // driving action, exactly like the omnibox (D5): the backend only honours
   // `browser_tab_action` when this connection holds the control lock, or
@@ -1631,33 +1654,6 @@ export function BrowserLiveView({
         </p>
       )}
 
-      {/* Omnibox (ADR-039 D-A2, ADR-040 D5) — ALWAYS visible now, not gated on
-          driving/annotate state. The server's ValidateURL SSRF gate (run on
-          every `navigate` input frame) is the real authority on what may
-          actually be navigated to; any rejection surfaces via the existing
-          browser_status(error) strip below. Submitting while not currently
-          driving takes the wheel first (see handleOmniboxSubmit). */}
-      <form
-        onSubmit={handleOmniboxSubmit}
-        className="flex shrink-0 items-center gap-2 px-4 py-2"
-      >
-        <Input
-          type="text"
-          value={urlInput}
-          onChange={(e) => setUrlInput(e.target.value)}
-          placeholder="Search or enter a URL…"
-          aria-label="Address bar"
-          className="h-8 flex-1 text-xs"
-        />
-        <button
-          type="submit"
-          disabled={urlInput.trim().length === 0 || !connected || (controlledByOther && !isControlling)}
-          className="shrink-0 rounded-md bg-[var(--color-accent)] px-3 h-8 text-xs font-medium text-[var(--color-primary)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          Go
-        </button>
-      </form>
-
       {/* Tab strip (ADR-041 D4) — open tabs: favicon-or-globe + truncated
           title/hostname + active highlight + close ✕, plus a trailing ＋ to
           open a new tab. Rendered whenever the tab list is known (the
@@ -1744,6 +1740,47 @@ export function BrowserLiveView({
           </button>
         </div>
       )}
+
+      {/* Omnibox toolbar (ADR-039 D-A2, ADR-040 D5) — Chrome-style: sits BELOW
+          the tab strip, with [back] [refresh] [address bar]. Enter submits (no
+          Go button — Hick/Fitts: the keyboard path is already the fastest, the
+          button is redundant). ALWAYS visible; the server's ValidateURL SSRF
+          gate is the authority on navigate. Back (navigate_back) / refresh
+          (reload) take the wheel first, like the omnibox (D5). Icon-only
+          buttons carry aria-labels (WCAG 4.1.2) + 44px coarse-pointer targets. */}
+      <form
+        onSubmit={handleOmniboxSubmit}
+        className="flex shrink-0 items-center gap-1 px-2 py-1.5"
+      >
+        <button
+          type="button"
+          onClick={() => handleToolbarNav('navigate_back')}
+          disabled={!connected || (controlledByOther && !isControlling)}
+          aria-label="Go back"
+          title="Back"
+          className="shrink-0 flex h-8 w-8 items-center justify-center rounded-md text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-40 pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
+        >
+          <CaretLeft size={16} weight="bold" />
+        </button>
+        <button
+          type="button"
+          onClick={() => handleToolbarNav('reload')}
+          disabled={!connected || (controlledByOther && !isControlling)}
+          aria-label="Refresh page"
+          title="Refresh"
+          className="shrink-0 flex h-8 w-8 items-center justify-center rounded-md text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-40 pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
+        >
+          <ArrowsClockwise size={15} />
+        </button>
+        <Input
+          type="text"
+          value={urlInput}
+          onChange={(e) => setUrlInput(e.target.value)}
+          placeholder="Search or enter a URL…"
+          aria-label="Address bar"
+          className="h-8 flex-1 text-xs"
+        />
+      </form>
 
       {/* Body */}
       <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-black p-2">

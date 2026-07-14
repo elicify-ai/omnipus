@@ -96,17 +96,18 @@ describe('BrowserLiveView — omnibox (ADR-039 D-A2, ADR-040 D5 — always visib
 
     const input = screen.getByRole('textbox', { name: /address bar/i })
     fireEvent.change(input, { target: { value: 'example.com' } })
-    fireEvent.click(screen.getByRole('button', { name: /^go$/i }))
+    fireEvent.submit(screen.getByRole('textbox', { name: /address bar/i }).closest('form')!)
 
     expect(mockSendInput).toHaveBeenCalledWith({ kind: 'navigate', url: 'https://example.com' })
   })
 
-  it('does not send when the address bar is empty', () => {
+  it('does not send when the address bar is empty (no Go button — Enter submits)', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
     connectAndFrame()
     takeControl()
 
-    expect(screen.getByRole('button', { name: /^go$/i })).toBeDisabled()
+    // No Go button anymore; submitting an empty bar is a no-op (resolveOmniboxInput returns falsy).
+    fireEvent.submit(screen.getByRole('textbox', { name: /address bar/i }).closest('form')!)
     expect(mockSendInput).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'navigate' }))
   })
 
@@ -117,7 +118,7 @@ describe('BrowserLiveView — omnibox (ADR-039 D-A2, ADR-040 D5 — always visib
 
     const input = screen.getByRole('textbox', { name: /address bar/i })
     fireEvent.change(input, { target: { value: 'https://example.com/path' } })
-    fireEvent.click(screen.getByRole('button', { name: /^go$/i }))
+    fireEvent.submit(screen.getByRole('textbox', { name: /address bar/i }).closest('form')!)
 
     expect(mockSendInput).toHaveBeenCalledWith({ kind: 'navigate', url: 'https://example.com/path' })
   })
@@ -133,7 +134,7 @@ describe('BrowserLiveView — omnibox (ADR-039 D-A2, ADR-040 D5 — always visib
 
     const input = screen.getByRole('textbox', { name: /address bar/i })
     fireEvent.change(input, { target: { value: 'cheap flights to tokyo' } })
-    fireEvent.click(screen.getByRole('button', { name: /^go$/i }))
+    fireEvent.submit(screen.getByRole('textbox', { name: /address bar/i }).closest('form')!)
 
     expect(mockSendInput).toHaveBeenCalledWith({
       kind: 'navigate',
@@ -161,7 +162,7 @@ describe('BrowserLiveView — omnibox (ADR-039 D-A2, ADR-040 D5 — always visib
 
     const input = screen.getByRole('textbox', { name: /address bar/i })
     fireEvent.change(input, { target: { value: 'example.com' } })
-    fireEvent.click(screen.getByRole('button', { name: /^go$/i }))
+    fireEvent.submit(screen.getByRole('textbox', { name: /address bar/i }).closest('form')!)
 
     expect(mockSendInput).toHaveBeenCalledWith({ kind: 'navigate', url: 'https://example.com' })
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
@@ -175,7 +176,7 @@ describe('BrowserLiveView — omnibox (ADR-039 D-A2, ADR-040 D5 — always visib
 
     const input = screen.getByRole('textbox', { name: /address bar/i })
     fireEvent.change(input, { target: { value: 'example.com' } })
-    fireEvent.click(screen.getByRole('button', { name: /^go$/i }))
+    fireEvent.submit(screen.getByRole('textbox', { name: /address bar/i }).closest('form')!)
 
     expect(mockSendControl).toHaveBeenCalledWith('take')
     expect(mockSendInput).toHaveBeenCalledWith({ kind: 'navigate', url: 'https://example.com' })
@@ -189,7 +190,7 @@ describe('BrowserLiveView — omnibox (ADR-039 D-A2, ADR-040 D5 — always visib
 
     const input = screen.getByRole('textbox', { name: /address bar/i })
     fireEvent.change(input, { target: { value: 'example.com' } })
-    fireEvent.click(screen.getByRole('button', { name: /^go$/i }))
+    fireEvent.submit(screen.getByRole('textbox', { name: /address bar/i }).closest('form')!)
 
     expect(mockSendControl).not.toHaveBeenCalled()
     expect(mockSendInput).toHaveBeenCalledWith({ kind: 'navigate', url: 'https://example.com' })

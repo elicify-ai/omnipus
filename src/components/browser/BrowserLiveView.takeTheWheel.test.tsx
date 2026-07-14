@@ -698,18 +698,32 @@ describe('BrowserLiveView — D6 driving-state chip + glow border', () => {
   // doc comment) — assert the class is actually present for the pulsing
   // states and absent for the non-pulsing ones, rather than just checking
   // `data-visual-state` (which says nothing about the pulse itself).
-  it('applies motion-safe:animate-pulse to the glow border while agent-working', () => {
+  // ADR-040 D6 (revised): the border is a calm 1px solid line — gold for
+  // you-driving, neutral for ambient states. The pulse is reserved for ERROR
+  // only (Von Restorff + cry-wolf avoidance: pulsing every non-idle state
+  // trains the user to ignore the signal). agent-working/you-driving must NOT
+  // pulse.
+  it('does NOT pulse the border while agent-working (pulse is error-only)', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
     connectAndFrame()
     setAgentWorking('s1', true)
-    expect(screen.getByTestId('browser-live-glow').className).toContain('motion-safe:animate-pulse')
+    expect(screen.getByTestId('browser-live-glow').className).not.toContain('motion-safe:animate-pulse')
   })
 
-  it('applies motion-safe:animate-pulse to the glow border while you-driving', () => {
+  it('does NOT pulse the border while you-driving (pulse is error-only)', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
     connectAndFrame()
     act(() => {
       callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' })
+    })
+    expect(screen.getByTestId('browser-live-glow').className).not.toContain('motion-safe:animate-pulse')
+  })
+
+  it('PULSES the border only on error (the one needs-attention state)', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    act(() => {
+      callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'error', message: 'boom' })
     })
     expect(screen.getByTestId('browser-live-glow').className).toContain('motion-safe:animate-pulse')
   })

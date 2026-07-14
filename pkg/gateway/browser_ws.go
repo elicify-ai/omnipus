@@ -718,7 +718,7 @@ func (h *BrowserWSHandler) handleInput(wc *browserWSConn, state *browserConnStat
 		// even though their submission was refused again. Navigate errors
 		// therefore always emit; every other kind keeps the content-aware
 		// cooldown.
-		throttled := frame.Kind != "navigate" &&
+		throttled := !inputKindIsDiscrete(frame.Kind) &&
 			message == state.lastInputErrorMessage &&
 			now.Sub(state.lastInputErrorSentAt) < minInputErrorInterval
 		if !throttled {
@@ -728,6 +728,20 @@ func (h *BrowserWSHandler) handleInput(wc *browserWSConn, state *browserConnStat
 				dropContext(state.sessionID, viewerID, "input-error"))
 		}
 	}
+}
+
+// inputKindIsDiscrete reports whether an input kind is a one-shot action
+// (navigate / navigate_back / reload) rather than high-frequency pointer input
+// (mouse_move/wheel/key). Discrete kinds are exempt from the repeated-error
+// cooldown (minInputErrorInterval) so a refused navigate/back/reload always
+// surfaces its reason immediately, exactly as "navigate" did before
+// navigate_back/reload were added.
+func inputKindIsDiscrete(kind string) bool {
+	switch kind {
+	case "navigate", "navigate_back", "reload":
+		return true
+	}
+	return false
 }
 
 // handleControl processes a take/release control request (ADR-038 D6).

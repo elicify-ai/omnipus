@@ -1440,6 +1440,19 @@ func buildInputAction(in LiveInput) (chromedp.Action, error) {
 			return nil, fmt.Errorf("browser live: navigate input requires a non-empty url field")
 		}
 		return chromedp.Navigate(in.URL), nil
+	case "navigate_back":
+		// History back — no URL (goes to a previously-navigated page, already
+		// SSRF-cleared on its original navigate). Discrete, like navigate.
+		if in.HasXY || in.URL != "" {
+			return nil, fmt.Errorf("browser live: navigate_back input must not carry x/y or url")
+		}
+		return chromedp.NavigateBack(), nil
+	case "reload":
+		// Reload the current URL (already SSRF-cleared). Discrete, like navigate.
+		if in.HasXY || in.URL != "" {
+			return nil, fmt.Errorf("browser live: reload input must not carry x/y or url")
+		}
+		return chromedp.Reload(), nil
 	default:
 		return nil, fmt.Errorf("browser live: unknown input kind %q", in.Kind)
 	}
