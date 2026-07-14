@@ -1,6 +1,13 @@
 import { useMutation } from '@tanstack/react-query'
 import { CheckCircle, WarningCircle, XCircle, Spinner, Info } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { testAgentRunner } from '@/lib/api'
 import type { ExecutorConfig, RunnerTestResponse } from '@/lib/api'
 import { getErrorMessage } from '@/lib/api'
@@ -17,7 +24,10 @@ import { getErrorMessage } from '@/lib/api'
 // When kind=external-cli the operator can run a connection test that validates the
 // CLI binary is present, runs, and is authenticated WITHOUT spending any tokens.
 
-type ExecutorKind = ExecutorConfig['kind']
+// NonNullable: ExecutorConfig is Partial<…>, so ['kind'] otherwise includes
+// undefined. The Radix <Select> value/SelectItem value props require a real
+// string; narrowing here mirrors the existing ExecutorCLI treatment below.
+type ExecutorKind = NonNullable<ExecutorConfig['kind']>
 type ExecutorCLI = NonNullable<ExecutorConfig['cli']>
 
 const KIND_OPTIONS: ReadonlyArray<{ value: ExecutorKind; label: string }> = [
@@ -105,36 +115,41 @@ export function ExecutorSelector({ value, onChange, agentId, disabled = false, e
         <label htmlFor="executor-kind" className="text-xs text-[var(--color-muted)]">
           Runtime
         </label>
-        <select
-          id="executor-kind"
-          data-testid="executor-kind-select"
+        <Select
           value={kind}
+          onValueChange={(v) => handleKindChange(v as ExecutorKind)}
           disabled={disabled}
-          onChange={(e) => handleKindChange(e.target.value as ExecutorKind)}
-          aria-describedby={errorId}
-          aria-invalid={hasError || undefined}
-          title={isCoreAgent ? 'Core agents run native only. External CLI is for workers only.' : undefined}
-          className="w-full h-9 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 text-sm text-[var(--color-secondary)] outline-none focus:border-[var(--color-accent)] disabled:opacity-60 disabled:cursor-not-allowed"
         >
-          {KIND_OPTIONS.map((o) => {
-            // G9: core agents cannot pick external-cli — the backend rejects
-            // the wire payload with 400. Render the option but disable it with
-            // a tooltip that explains why; the testid lets tests verify the
-            // disabled flag without scraping the DOM.
-            const disableForCore = isCoreAgent && o.value === 'external-cli'
-            return (
-              <option
-                key={o.value}
-                value={o.value}
-                disabled={disableForCore || undefined}
-                title={disableForCore ? 'Core agents run native only. External CLI is for workers only.' : undefined}
-                data-testid={`executor-kind-option-${o.value}`}
-              >
-                {disableForCore ? `${o.label} (workers only)` : o.label}
-              </option>
-            )
-          })}
-        </select>
+          <SelectTrigger
+            id="executor-kind"
+            data-testid="executor-kind-select"
+            aria-describedby={errorId}
+            aria-invalid={hasError || undefined}
+            title={isCoreAgent ? 'Core agents run native only. External CLI is for workers only.' : undefined}
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {KIND_OPTIONS.map((o) => {
+              // G9: core agents cannot pick external-cli — the backend rejects
+              // the wire payload with 400. Render the option but disable it with
+              // a tooltip that explains why; the testid lets tests verify the
+              // disabled flag without scraping the DOM.
+              const disableForCore = isCoreAgent && o.value === 'external-cli'
+              return (
+                <SelectItem
+                  key={o.value}
+                  value={o.value}
+                  disabled={disableForCore || undefined}
+                  title={disableForCore ? 'Core agents run native only. External CLI is for workers only.' : undefined}
+                  data-testid={`executor-kind-option-${o.value}`}
+                >
+                  {disableForCore ? `${o.label} (workers only)` : o.label}
+                </SelectItem>
+              )
+            })}
+          </SelectContent>
+        </Select>
         <p className="text-[11px] text-[var(--color-muted)] leading-snug">
           {kind === 'native'
             ? 'Runs the sub-agent inside the Omnipus agent loop. The default and only fully-wired runtime.'
@@ -149,20 +164,22 @@ export function ExecutorSelector({ value, onChange, agentId, disabled = false, e
           <label htmlFor="executor-cli" className="text-xs text-[var(--color-muted)]">
             CLI tool
           </label>
-          <select
-            id="executor-cli"
-            data-testid="executor-cli-select"
+          <Select
             value={cli ?? 'claude-code'}
+            onValueChange={(v) => handleCliChange(v as ExecutorCLI)}
             disabled={disabled}
-            onChange={(e) => handleCliChange(e.target.value as ExecutorCLI)}
-            className="w-full h-9 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 text-sm text-[var(--color-secondary)] outline-none focus:border-[var(--color-accent)] disabled:opacity-60 disabled:cursor-not-allowed"
           >
-            {CLI_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger id="executor-cli" data-testid="executor-cli-select">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {CLI_OPTIONS.map((o) => (
+                <SelectItem key={o.value} value={o.value}>
+                  {o.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           {agentId && !disabled && (
             <RunnerTestButton agentId={agentId} />
           )}

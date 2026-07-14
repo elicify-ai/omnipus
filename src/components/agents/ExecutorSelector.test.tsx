@@ -12,7 +12,7 @@
  *  - the test button is hidden when no agentId is provided (create flow)
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ExecutorSelector } from './ExecutorSelector'
@@ -30,6 +30,34 @@ vi.mock('@/lib/api', async (importOriginal) => {
 import { testAgentRunner } from '@/lib/api'
 
 const mockedTest = vi.mocked(testAgentRunner)
+
+// Radix Select (portal + pointer events) needs these jsdom polyfills to open
+// under jsdom — same gap noted in CreateTaskSlideOver.test.tsx.
+beforeAll(() => {
+  if (!Element.prototype.hasPointerCapture) {
+    Element.prototype.hasPointerCapture = () => false
+  }
+  if (!Element.prototype.scrollIntoView) {
+    Element.prototype.scrollIntoView = () => {}
+  }
+  if (typeof window !== 'undefined' && !window.ResizeObserver) {
+    window.ResizeObserver = class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    } as unknown as typeof ResizeObserver
+  }
+})
+
+// Open a shadcn/ui <Select> (by trigger testid) and pick the option whose
+// accessible name matches. Radix renders options into a portal only when open;
+// mirrors CreateTaskSlideOver.test.tsx::selectOption.
+function pickFromSelect(triggerTestId: string, optionName: RegExp) {
+  fireEvent.click(screen.getByTestId(triggerTestId))
+  const option = screen.getByRole('option', { name: optionName })
+  fireEvent.pointerDown(option, { pointerId: 1, button: 0 })
+  fireEvent.click(option)
+}
 
 function makeClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
@@ -59,8 +87,9 @@ beforeEach(() => {
 describe('ExecutorSelector — kind + cli persistence', () => {
   it('defaults the runtime select to native when value is undefined', () => {
     renderSelector()
-    const kind = screen.getByTestId('executor-kind-select') as HTMLSelectElement
-    expect(kind.value).toBe('native')
+    const kind = screen.getByTestId('executor-kind-select')
+    // Radix SelectValue renders the selected item's label as the trigger text.
+    expect(kind).toHaveTextContent(/Native/i)
     // No cli block, no remote note in the native default.
     expect(screen.queryByTestId('executor-cli-block')).toBeNull()
     expect(screen.queryByTestId('executor-remote-a2a-note')).toBeNull()
@@ -68,33 +97,27 @@ describe('ExecutorSelector — kind + cli persistence', () => {
 
   it('reflects an existing external-cli executor value', () => {
     renderSelector({ value: { kind: 'external-cli', cli: 'codex' } })
-    const kind = screen.getByTestId('executor-kind-select') as HTMLSelectElement
-    expect(kind.value).toBe('external-cli')
-    const cli = screen.getByTestId('executor-cli-select') as HTMLSelectElement
-    expect(cli.value).toBe('codex')
+    const kind = screen.getByTestId('executor-kind-select')
+    expect(kind).toHaveTextContent(/External CLI/i)
+    const cli = screen.getByTestId('executor-cli-select')
+    expect(cli).toHaveTextContent(/Codex/i)
   })
 
   it('switching to external-cli emits kind+cli with claude-code default', () => {
     const { onChange } = renderSelector()
-    fireEvent.change(screen.getByTestId('executor-kind-select'), {
-      target: { value: 'external-cli' },
-    })
+    pickFromSelect('executor-kind-select', /External CLI/i)
     expect(onChange).toHaveBeenCalledWith({ kind: 'external-cli', cli: 'claude-code' })
   })
 
   it('changing the cli select persists the chosen cli', () => {
     const { onChange } = renderSelector({ value: { kind: 'external-cli', cli: 'claude-code' } })
-    fireEvent.change(screen.getByTestId('executor-cli-select'), {
-      target: { value: 'opencode' },
-    })
+    pickFromSelect('executor-cli-select', /^opencode$/i)
     expect(onChange).toHaveBeenCalledWith({ kind: 'external-cli', cli: 'opencode' })
   })
 
   it('switching back to native emits a cli-less native executor', () => {
     const { onChange } = renderSelector({ value: { kind: 'external-cli', cli: 'codex' } })
-    fireEvent.change(screen.getByTestId('executor-kind-select'), {
-      target: { value: 'native' },
-    })
+    pickFromSelect('executor-kind-select', /Native/i)
     expect(onChange).toHaveBeenCalledWith({ kind: 'native' })
   })
 })
@@ -110,9 +133,7 @@ describe('ExecutorSelector — remote-a2a reserved note', () => {
 
   it('emits a cli-less remote-a2a executor when selected', () => {
     const { onChange } = renderSelector()
-    fireEvent.change(screen.getByTestId('executor-kind-select'), {
-      target: { value: 'remote-a2a' },
-    })
+    pickFromSelect('executor-kind-select', /Remote/i)
     expect(onChange).toHaveBeenCalledWith({ kind: 'remote-a2a' })
   })
 
@@ -140,34 +161,46 @@ describe('ExecutorSelector — remote-a2a reserved note', () => {
 describe('ExecutorSelector — core-agent gate (G9)', () => {
   it('renders external-cli option disabled with the workers-only tooltip when isCoreAgent', () => {
     renderSelector({ isCoreAgent: true })
-    const opt = screen.getByTestId('executor-kind-option-external-cli') as HTMLOptionElement
-    expect(opt).toBeInTheDocument()
-    expect(opt.disabled).toBe(true)
-    expect(opt.title).toMatch(/core agents run native only/i)
-    expect(opt.textContent).toMatch(/workers only/i)
+    // Radix only mounts SelectContent (the options) when the trigger opens.
+    fireEvent.click(screen.getByTestId('executor-kind-select'))
+    const opt = screen.getByTestId('executor-kind-option-external-cli')
+    // Radix SelectItem disabled → data-disabled attribute + aria-disabled.
+    expect(opt).toHaveAttribute('data-disabled')
+    expect(opt.getAttribute('title')).toMatch(/core agents run native only/i)
+    expect(opt).toHaveTextContent(/workers only/i)
   })
 
   it('keeps native + remote-a2a options enabled for core agents', () => {
     renderSelector({ isCoreAgent: true })
-    const native = screen.getByTestId('executor-kind-option-native') as HTMLOptionElement
-    const a2a = screen.getByTestId('executor-kind-option-remote-a2a') as HTMLOptionElement
-    expect(native.disabled).toBe(false)
-    expect(a2a.disabled).toBe(false)
+    fireEvent.click(screen.getByTestId('executor-kind-select'))
+    const native = screen.getByTestId('executor-kind-option-native')
+    const a2a = screen.getByTestId('executor-kind-option-remote-a2a')
+    expect(native).not.toHaveAttribute('data-disabled')
+    expect(a2a).not.toHaveAttribute('data-disabled')
   })
 
   it('leaves external-cli option enabled for non-core (worker) agents', () => {
     renderSelector()
-    const opt = screen.getByTestId('executor-kind-option-external-cli') as HTMLOptionElement
-    expect(opt.disabled).toBe(false)
-    expect(opt.title).toBe('')
+    fireEvent.click(screen.getByTestId('executor-kind-select'))
+    const opt = screen.getByTestId('executor-kind-option-external-cli')
+    expect(opt).not.toHaveAttribute('data-disabled')
+    expect(opt.getAttribute('title') ?? '').toBe('')
   })
 
-  it('clamps the kind back to native when isCoreAgent is true (defence-in-depth)', () => {
+  // Originally this synthetically fired a native `change` with value
+  // 'external-cli' to prove handleKindChange clamps core agents back to
+  // native. Radix Select's onValueChange cannot be driven with a disabled
+  // value through the rendered trigger — a disabled SelectItem is a no-op on
+  // click — so the real, user-reachable protection is "no external-cli
+  // payload is ever emitted for a core agent", asserted here. (Backend G9
+  // gate remains the independent last line of defence.)
+  it('never emits an external-cli payload for a core agent (option disabled, onValueChange not fired)', () => {
     const { onChange } = renderSelector({ isCoreAgent: true })
-    fireEvent.change(screen.getByTestId('executor-kind-select'), {
-      target: { value: 'external-cli' },
-    })
-    expect(onChange).toHaveBeenCalledWith({ kind: 'native' })
+    fireEvent.click(screen.getByTestId('executor-kind-select'))
+    const opt = screen.getByTestId('executor-kind-option-external-cli')
+    fireEvent.pointerDown(opt, { pointerId: 1, button: 0 })
+    fireEvent.click(opt)
+    expect(onChange).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'external-cli' }))
   })
 
   it('surfaces the core-agent tooltip on the kind select itself', () => {

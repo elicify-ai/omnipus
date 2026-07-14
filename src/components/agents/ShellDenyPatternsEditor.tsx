@@ -7,6 +7,8 @@
  * - Parent receives the array immediately on change (backend revalidates).
  */
 
+import { Textarea } from '@/components/ui/textarea'
+
 interface Props {
   value: string[]
   onChange: (next: string[]) => void
@@ -57,7 +59,7 @@ export function ShellDenyPatternsEditor({ value, onChange }: Props) {
       </div>
 
       {/* Textarea */}
-      <textarea
+      <Textarea
         value={text}
         onChange={(e) => handleChange(e.target.value)}
         placeholder={"^rm -rf\n.*--force.*\n# one pattern per line"}

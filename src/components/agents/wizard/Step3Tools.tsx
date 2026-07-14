@@ -17,6 +17,13 @@
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import type {
   FallbackModel,
   RegistryTool,
@@ -251,19 +258,25 @@ function FallbackEditor({ payload, setField, providers }: FallbackEditorProps) {
               className="font-mono text-xs h-7 flex-1"
               data-testid={`wizard-fallback-model-${idx}`}
             />
-            <select
-              value={entry.provider ?? ''}
-              onChange={(e) => updateFallback(idx, { provider: e.target.value })}
-              className="h-7 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-2 text-xs text-[var(--color-secondary)]"
-              data-testid={`wizard-fallback-provider-${idx}`}
+            <Select
+              value={entry.provider || '__auto__'}
+              onValueChange={(v) => updateFallback(idx, { provider: v === '__auto__' ? '' : v })}
             >
-              <option value="">auto</option>
-              {providers.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {providerNameById.get(p.id) ?? p.id}
-                </option>
-              ))}
-            </select>
+              <SelectTrigger
+                className="h-7 px-2 text-xs"
+                data-testid={`wizard-fallback-provider-${idx}`}
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__auto__">auto</SelectItem>
+                {providers.map((p) => (
+                  <SelectItem key={p.id} value={p.id}>
+                    {providerNameById.get(p.id) ?? p.id}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <button
               type="button"
               onClick={() => removeFallback(idx)}

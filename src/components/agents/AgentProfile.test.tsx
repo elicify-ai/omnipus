@@ -19,6 +19,10 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
 if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
   Element.prototype.scrollIntoView = function () {}
 }
+// Radix Select (portal + pointer events) needs hasPointerCapture to open in jsdom.
+if (typeof Element !== 'undefined' && !Element.prototype.hasPointerCapture) {
+  Element.prototype.hasPointerCapture = () => false
+}
 
 // test_agent_profile_sections (test #13)
 // Traces to: wave5a-wire-ui-spec.md — Scenario: Agent profile renders with type-appropriate sections
@@ -397,6 +401,15 @@ describe('AgentProfile — B-2: Skills picker read-only for locked agents', () =
   })
 })
 
+// Open the ExecutorSelector Runtime <Select> (Radix) and pick an option by
+// accessible name. Radix renders options into a portal only when open.
+function pickExecutorKind(optionName: RegExp) {
+  fireEvent.click(screen.getByTestId('executor-kind-select'))
+  const option = screen.getByRole('option', { name: optionName })
+  fireEvent.pointerDown(option, { pointerId: 1, button: 0 })
+  fireEvent.click(option)
+}
+
 // Spec-4 FR-4.1 — Executor section wired into the worker agent profile.
 // Workers are the only tier that gets an executor accordion. Base agents
 // (core/custom/system) run native/in-process only — no third-party
@@ -412,9 +425,9 @@ describe('AgentProfile — Executor section is worker-only (Spec-4)', () => {
     if (!screen.queryByTestId('executor-kind-select')) {
       switchTab('tab-advanced')
     }
-    const kind = (await screen.findByTestId('executor-kind-select')) as HTMLSelectElement
-    // Absent executor → native default.
-    expect(kind.value).toBe('native')
+    const kind = await screen.findByTestId('executor-kind-select')
+    // Absent executor → native default (Radix SelectValue renders the label).
+    expect(kind).toHaveTextContent(/Native/i)
   })
 
   it('hydrates an existing external-cli executor and its cli on a worker', async () => {
@@ -427,10 +440,10 @@ describe('AgentProfile — Executor section is worker-only (Spec-4)', () => {
     if (!screen.queryByTestId('executor-kind-select')) {
       switchTab('tab-advanced')
     }
-    const kind = (await screen.findByTestId('executor-kind-select')) as HTMLSelectElement
-    expect(kind.value).toBe('external-cli')
-    const cli = (await screen.findByTestId('executor-cli-select')) as HTMLSelectElement
-    expect(cli.value).toBe('codex')
+    const kind = await screen.findByTestId('executor-kind-select')
+    expect(kind).toHaveTextContent(/External CLI/i)
+    const cli = await screen.findByTestId('executor-cli-select')
+    expect(cli).toHaveTextContent(/Codex/i)
   })
 
   it('persists a worker runtime change through updateAgent (auto-save)', async () => {
@@ -441,11 +454,11 @@ describe('AgentProfile — Executor section is worker-only (Spec-4)', () => {
     if (!screen.queryByTestId('executor-kind-select')) {
       switchTab('tab-advanced')
     }
-    const kind = await screen.findByTestId('executor-kind-select')
-    fireEvent.change(kind, { target: { value: 'external-cli' } })
+    await screen.findByTestId('executor-kind-select')
+    pickExecutorKind(/External CLI/i)
     // The cli select now appears with the claude-code default.
-    const cli = (await screen.findByTestId('executor-cli-select')) as HTMLSelectElement
-    expect(cli.value).toBe('claude-code')
+    const cli = await screen.findByTestId('executor-cli-select')
+    expect(cli).toHaveTextContent(/Claude Code/i)
     // Auto-save debounces, then PUTs the executor with the worker id.
     await waitFor(
       () => {
@@ -468,8 +481,8 @@ describe('AgentProfile — Executor section is worker-only (Spec-4)', () => {
     if (!screen.queryByTestId('executor-kind-select')) {
       switchTab('tab-advanced')
     }
-    const kind = (await screen.findByTestId('executor-kind-select')) as HTMLSelectElement
-    expect(kind.disabled).toBe(true)
+    const kind = await screen.findByTestId('executor-kind-select')
+    expect(kind).toBeDisabled()
     // The test button is hidden for locked agents.
     expect(screen.queryByTestId('runner-test-button')).toBeNull()
   })
@@ -486,8 +499,8 @@ describe('AgentProfile — Executor section is worker-only (Spec-4)', () => {
     if (!screen.queryByTestId('executor-kind-select')) {
       switchTab('tab-advanced')
     }
-    const kind = await screen.findByTestId('executor-kind-select')
-    fireEvent.change(kind, { target: { value: 'external-cli' } })
+    await screen.findByTestId('executor-kind-select')
+    pickExecutorKind(/External CLI/i)
     await waitFor(() => {
       expect(testAgentRunner).toHaveBeenCalledWith('web-researcher')
     }, { timeout: 3000 })
@@ -508,8 +521,8 @@ describe('AgentProfile — Executor section is worker-only (Spec-4)', () => {
     if (!screen.queryByTestId('executor-kind-select')) {
       switchTab('tab-advanced')
     }
-    const kind = await screen.findByTestId('executor-kind-select')
-    fireEvent.change(kind, { target: { value: 'external-cli' } })
+    await screen.findByTestId('executor-kind-select')
+    pickExecutorKind(/External CLI/i)
     await waitFor(() => expect(testAgentRunner).toHaveBeenCalled(), { timeout: 3000 })
     // Give the auto-save a chance to attempt the save.
     await new Promise((r) => setTimeout(r, 800))

@@ -16,6 +16,7 @@ import {
 import { IconRenderer } from '@/components/shared/IconRenderer'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
 import { useUiStore } from '@/store/ui'
 import { useSessionStore } from '@/store/session'
 import { useChatStore } from '@/store/chat'
@@ -359,7 +360,7 @@ function SessionItem({
       {/* Title / rename input */}
       <div className="flex-1 min-w-0">
         {isEditing ? (
-          <input
+          <Input
             ref={inputRef}
             value={editValue}
             onChange={(e) => setEditValue(e.target.value)}
@@ -888,7 +889,7 @@ export function SessionPanel() {
         <div className="px-4 py-2">
           <div className="flex items-center gap-2 rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)] px-3 py-1.5">
             <MagnifyingGlass size={13} className="text-[var(--color-muted)] shrink-0" />
-            <input
+            <Input
               type="text"
               value={searchValue}
               onChange={handleSearchChange}
