@@ -14,6 +14,11 @@ Consequence (investigated, 2026-07-14): **only the first browser-using agent can
 
 Operator decision (2026-07-14): fix the concurrency limit now (not defer to v0.3). Four options were evaluated; the operator chose **C + ADR-041 hybrid** — one shared Chrome + per-agent tab-sets.
 
+### Scale & isolation profile (operator-confirmed 2026-07-14)
+[FACT — operator input] The target is up to **~10 browser-using agents** whose browsing is **often simultaneous** (parallel research / scraping / multi-site workflows — multiple agents actively loading pages at once, not just occasional lookups). [FACT — operator input] **Cookie/login isolation per agent is sufficient**; hard *process*-level isolation between agents' browsers is **not required** for v1, and one Chrome crash taking down all browsing simultaneously is an **accepted** trade-off.
+
+This profile is load-bearing for the decision: it confirms the hybrid (one Chrome + per-agent contexts) and **rules out Option B (per-agent Chromes) and the pool variant for v1** — both trade extra Chrome-process RAM (≈ 4–5 GB and ≈ 2.2–2.5 GB respectively at 10 agents, vs ≈ 1.5–2 GB for the hybrid; rough order-of-magnitude estimates, not measured) for process isolation the operator has explicitly declined. *(RAM caveat: browser contexts isolate cookies/storage but NOT renderer processes — each tab is its own renderer (~50–300 MB, well-known range); the hybrid pays the browser-process overhead once but renderers still scale with total live tabs.)* Process-level isolation and a tunable process-count ("pool") are recorded below as a **deferred escape hatch**, not v1 scope.
+
 ## Decisions
 
 ### D1 — One gateway-scoped shared Chrome; managers connect, not launch
@@ -40,7 +45,8 @@ One managed Chrome already exceeds the *spirit* of Hard Constraint #3 (<10 MB se
 **Risks / must-handle:**
 - **Coordinator correctness (D4):** a botched get-or-launch election can double-launch (two Chromes fight for 9223) or orphan the process on shutdown. Must be deadlock-safe per ADR-038 (no manager mutex across the launch/connect CDP call) and leak-free on hot-reload (the D4 amendment's `Shutdown()` discipline extends to the shared Chrome's refcount). Single biggest implementation risk.
 - **Browser-context adoption (D2):** mapping ADR-041's per-session tab-set onto per-agent browser contexts, and re-binding the screencast to a context's active tab, is the bulk of the work. Verify contexts don't fight the shared `SingletonLock`/profile (contexts are in-memory partitions, so they should not — but confirm).
-- **Shared-process blast radius:** one Chrome crash kills every agent's browsing simultaneously (today only one agent is affected because only one runs). Acceptable for v1; the coordinator must relaunch cleanly.
+- **Shared-process blast radius:** one Chrome crash kills every agent's browsing simultaneously (today only one agent is affected because only one runs). **Accepted for v1** (operator-confirmed: cookie-level isolation suffices); the coordinator must relaunch cleanly.
+- **Global tab budget under simultaneous load:** [INFERENCE] with ADR-041's `MaxTabs` (default 5) and ~10 agents whose browsing is *often simultaneous*, total live renderers can reach ≈ Σ tabs across agents (up to ~50 worst case). Each tab is its own renderer (~50–300 MB). The per-agent `MaxTabs` cap is therefore **necessary but not sufficient** for one-Chrome-at-10-agents — D2/D3 implementation must add (or expose) a **global tab budget** across all agents' contexts, and the coordinator should treat renderer-pressure as a real operational concern. This is the primary cost of the "often simultaneous" profile landing on a single Chrome; it does not change the architecture, only the caps.
 - **Take-the-wheel multi-agent UX (ADR-040):** when one Chrome serves several agents, the live panel must make unambiguous *which agent's* context the human is driving (the active-tab + agent identity in the frame). The `browser_tabs`/`browser_status` frames already carry `session_id`; D3's per-agent binding is what disambiguates.
 - **Contract semantics (D3):** if the wire schema does need a delta, Constraint #8's 5-step process applies (spec first, regen, commit artifacts).
 
@@ -56,6 +62,9 @@ One managed Chrome already exceeds the *spirit* of Hard Constraint #3 (<10 MB se
 - **[UNKNOWN]** Exact coordinator placement: gateway-owned type in `pkg/gateway` vs a shared singleton in `pkg/tools/browser` constructed by the first manager. Affects testability and the import graph.
 - **[INFERENCE]** The `browser_*` wire schema likely needs no field changes (agent identity already present), but the binding semantics change — confirm by auditing every frame consumer (SPA + gateway WS) in plan-spec.
 - **[ASSUMPTION]** Browser contexts isolate cookies/localStorage/indexedDB/cache but are NOT separate renderer processes; a renderer compromise is therefore not isolated per agent. Out of scope for this ADR (true of N Chromes only partially, and the threat model is agent-isolation-from-agent, not browser-RCE).
+
+### Deferred escape hatch (NOT v1 — grounded in operator-confirmed profile)
+A tunable **browser-process pool** (raise the shared-Chrome count from 1 → M, distributing agents across M Chromes via contexts) and/or a **per-agent hard-isolation opt-in** (one agent gets its own dedicated Chrome process) are the natural answers if, later, either (a) process-level browser isolation becomes a requirement, or (b) concurrent browser-using agents grow well beyond ~20 and the single-Chrome crash/pressure blast radius stops being acceptable. Both are **out of scope for v1** — the operator confirmed cookie-level isolation suffices and accepted the single-Chrome blast radius — but the architecture (D1's coordinator + D2's contexts) is shaped to admit them later without redesign.
 
 ## Confidence (per decision)
 - **D1 shared Chrome + connect:** **High.** Basis: remote-allocator path exists in code; auto-detect is net-new but well-scoped. Missing: the precise dial-vs-launch probe.
