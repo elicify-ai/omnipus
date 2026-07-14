@@ -44,7 +44,6 @@ import {
   Eye,
   Globe,
   HandGrabbing,
-  Monitor,
   Plus,
   PushPin,
   PushPinSlash,
@@ -168,23 +167,10 @@ function computeDriveMode(state: {
   return 'idle'
 }
 
-/** ADR-040 D6 (revised) — the "who is driving" indicator. Von Restorff +
- * cry-wolf avoidance: high salience (pulse) is reserved for the ONE state that
- * needs a behavior change — ERROR. Everything else is a calm 1px SOLID border
- * (no glow, no pulse): gold = you hold the wheel; neutral = ambient
- * observation (agent browsing / idle / annotating / someone else driving).
- * Red is error-only (color-semantics convention). Contrast (WCAG 1.4.11 ≥3:1):
- * accent gold #D4AF37 ≈ 8.8:1 on black ✓; error red ≈ 5.5:1 ✓; neutral idle
- * is an intentionally subtle decorative state cue (the panel's structural frame
- * is separate). The header chip carries the text label; the border is the
- * calm secondary cue. `motion-safe:` gates the error pulse only. */
-const GLOW_BORDER_CLASSES: Record<VisualState, string> = {
-  'agent-working': 'border-[var(--color-border)]',
-  'you-driving': 'border-[var(--color-accent)]',
-  annotating: 'border-[var(--color-accent)]/70',
-  error: 'border-[var(--color-error)] motion-safe:animate-pulse',
-  idle: 'border-[var(--color-border)]',
-}
+// The visible border/frame around the browser panel is REMOVED per operator
+// direction. The header chip (agent identity + drive-status) is the sole
+// driving-state signal. The data-visual-state attribute on the (invisible)
+// overlay is kept for tests + potential future use.
 
 // Local-only pill states layered on top of the wire `BrowserStatusFrame.state`
 // enum: 'connecting' (never attached yet) and 'disconnected' (was attached,
@@ -1510,8 +1496,6 @@ export function BrowserLiveView({
         className="flex shrink-0 items-center gap-2 overflow-x-auto h-chrome-header min-h-chrome-header pl-4 pr-14"
         style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' } as React.CSSProperties}
       >
-        <Monitor size={16} weight="duotone" className="shrink-0 text-[var(--color-accent)]" />
-        <h2 className="shrink-0 font-headline text-sm font-semibold text-[var(--color-secondary)]">Live Browser</h2>
         {/* ADR-043 D3 / US-6 (multi-agent clarity) — agent-identity chip.
             Unambiguously labels WHICH agent's browser context this panel is
             driving. With multiple agents browsing concurrently (each in its
@@ -1784,21 +1768,14 @@ export function BrowserLiveView({
 
       {/* Body */}
       <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-black p-2">
-        {/* ADR-040 D6 — breathing glow border: a property of the WHOLE
-            surface so the driving mode can't be missed (change-blindness
-            fix). A separate absolutely-positioned overlay (rather than
-            applying the border/animation to the body div itself) so the
-            pulse never touches the actual frame `<img>`'s own opacity.
-            `motion-safe:animate-pulse` (baked into GLOW_BORDER_CLASSES) is
-            the sole reduced-motion mechanism — a pure CSS media-query
-            variant, so under `prefers-reduced-motion: reduce` the border
-            colour still renders, just without the pulse; no JS
-            `matchMedia` needed. */}
+        {/* State overlay — kept for the data-visual-state attribute (tests +
+            future use) but the visible border/frame is REMOVED per operator
+            direction. The header chip is the sole driving-state signal now. */}
         <div
           aria-hidden="true"
           data-testid="browser-live-glow"
           data-visual-state={visualState}
-          className={cn('pointer-events-none absolute inset-0 z-30 border-2 transition-colors duration-500', GLOW_BORDER_CLASSES[visualState])}
+          className="pointer-events-none absolute inset-0 z-30"
         />
         {!frame && (
           <div className="flex flex-col items-center gap-2 p-6 text-center text-sm text-[var(--color-muted)]">
