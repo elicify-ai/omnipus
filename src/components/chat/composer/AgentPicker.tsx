@@ -38,10 +38,13 @@ import { cn } from '@/lib/utils'
 export function AgentPicker({
   className,
   disabled = false,
+  tabIndex,
 }: {
   className?: string
   /** Read-only mode (e.g. agentRemoved) — disables the trigger and skips auto-select. */
   disabled?: boolean
+  /** Explicit tab-order position (composer tab ring: input=1 agent=2 model=3 attach=4 browser=5). */
+  tabIndex?: number
 }) {
   const { activeAgentId, activeSessionId, setActiveSession } = useSessionStore()
   const agentSelectorOpen = useUiStore((s) => s.agentSelectorOpen)
@@ -171,6 +174,7 @@ export function AgentPicker({
           size="sm"
           data-testid="agent-picker-trigger"
           disabled={disabled}
+          tabIndex={tabIndex}
           className={cn(
             'flex items-center gap-2 h-8 px-2 text-xs font-medium max-w-[200px] min-w-0',
             'pointer-coarse:min-h-[44px] pointer-coarse:px-3',

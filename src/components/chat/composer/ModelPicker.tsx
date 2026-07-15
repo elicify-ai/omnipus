@@ -20,10 +20,13 @@ import { cn } from '@/lib/utils'
 export function ModelPicker({
   className,
   disabled = false,
+  tabIndex,
 }: {
   className?: string
   /** Read-only mode (e.g. agentRemoved) — disables the underlying ModelSelector trigger. */
   disabled?: boolean
+  /** Explicit tab-order position (composer tab ring). */
+  tabIndex?: number
 }) {
   const messages = useChatStore((s) => s.messages)
   const nextModel = useChatStore((s) => s.nextModel)
@@ -113,6 +116,7 @@ export function ModelPicker({
         open={modelSelectorOpen}
         onOpenChange={setModelSelectorOpen}
         disabled={disabled}
+        tabIndex={tabIndex}
       />
     </div>
   )
