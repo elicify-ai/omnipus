@@ -116,7 +116,7 @@ var defaultExemptPaths = []string{
 //     deliberately does not overlap /api/v1/* — that surface keeps full CSRF
 //     enforcement (FR-012).
 var defaultExemptPrefixes = []string{
-	"/preview/",
+	PreviewPathPrefix,
 }
 
 // stateChangingMethods lists the HTTP verbs that trigger CSRF enforcement.
@@ -208,26 +208,6 @@ func WithExemptPaths(paths ...string) Option {
 			}
 			c.exempt[p] = struct{}{}
 		}
-	}
-}
-
-// WithExemptPrefix appends a path PREFIX to the exempt set: any request
-// whose r.URL.Path starts with prefix bypasses the CSRF check for ALL
-// methods (including state-changing ones). Use this for tokenized routes
-// (like /preview/<agent>/<token>/…) where an exact-path match can never
-// work. Unlike WithExemptPath, this does NOT mark the config as
-// caller-customized — it is additive to the always-installed
-// defaultExemptPrefixes set (currently just "/preview/"), not a replacement
-// for it.
-func WithExemptPrefix(prefix string) Option {
-	return func(c *csrfConfig) {
-		if prefix == "" {
-			panic("middleware.WithExemptPrefix: empty prefix; pass a non-empty prefix or omit the option")
-		}
-		if c.exemptPrefixes == nil {
-			c.exemptPrefixes = make(map[string]struct{})
-		}
-		c.exemptPrefixes[prefix] = struct{}{}
 	}
 }
 

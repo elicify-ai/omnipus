@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sync"
 	"testing"
 	"time"
 
@@ -693,4 +694,80 @@ func TestBrowserSSRFAllowsGatewayLocalhostOnly(t *testing.T) {
 		errLoopback := checker.CheckURL(ctx, "http://127.0.0.1:5000/x")
 		require.Error(t, errLoopback, "loopback expansion must NOT apply when the configured gateway host isn't 'localhost'")
 	})
+}
+
+// TestCloneWithGatewayOrigin_DoesNotMutateSingleton is the regression for
+// code-review M2: the gateway-origin exception is granted to the agent browser
+// via a CLONE, so it must NOT leak onto the shared singleton that provider
+// base_url / skill-installer URL validation also consult.
+func TestCloneWithGatewayOrigin_DoesNotMutateSingleton(t *testing.T) {
+	ctx := context.Background()
+	const gwPort = 5000
+
+	singleton := security.NewSSRFChecker(nil)
+	clone := singleton.CloneWithGatewayOrigin("localhost", gwPort)
+
+	// The CLONE reaches the gateway's own preview origin (literal + resolved forms).
+	assert.NoError(t, clone.CheckURL(ctx, "http://localhost:5000/preview/a/tok/"),
+		"the clone must allow the gateway's own localhost:<port> preview origin")
+	assert.NoError(t, clone.CheckURL(ctx, "http://127.0.0.1:5000/x"),
+		"the clone must allow the resolved-loopback gateway origin")
+
+	// The shared singleton is UNCHANGED — still blocks the gateway origin, so
+	// provider/skill URL validation is not silently widened.
+	require.Error(t, singleton.CheckURL(ctx, "http://localhost:5000/preview/a/tok/"),
+		"the shared singleton must NOT be mutated — localhost:<port> stays blocked for provider/skill validation")
+	require.Error(t, singleton.CheckURL(ctx, "http://127.0.0.1:5000/x"),
+		"the shared singleton must still block the resolved-loopback gateway origin")
+
+	// The clone still enforces the shared base block-list — it is not a wide-open
+	// checker, and its exception is scoped to exactly the gateway port.
+	require.Error(t, clone.CheckURL(ctx, "http://169.254.169.254/latest/meta-data/"),
+		"the clone must still block cloud-metadata (shares the base block-list)")
+	require.Error(t, clone.CheckURL(ctx, "http://127.0.0.1:5001/x"),
+		"the clone's exception is scoped to the gateway port only")
+	assert.NoError(t, clone.CheckURL(ctx, "http://8.8.8.8/dns"),
+		"the clone still passes public hosts")
+
+	// Clearing the exception on the clone must not affect any base behavior.
+	clone.AllowGatewayOrigin("", 0)
+	require.Error(t, clone.CheckURL(ctx, "http://127.0.0.1:5000/x"),
+		"after clearing, the clone falls back to the fail-closed default")
+}
+
+// TestAllowGatewayOrigin_ConcurrentWithCheckURL exercises the gwMu RWMutex under
+// concurrent writers (AllowGatewayOrigin) and readers (CheckURL) — meaningful
+// under `go test -race`. Uses only literal-IP URLs so no goroutine touches DNS.
+func TestAllowGatewayOrigin_ConcurrentWithCheckURL(t *testing.T) {
+	ctx := context.Background()
+	checker := security.NewSSRFChecker(nil)
+
+	const workers = 8
+	const iters = 50
+	var wg sync.WaitGroup
+
+	// Writers: toggle the exception on/off for varying ports.
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func(port int) {
+			defer wg.Done()
+			for j := 0; j < iters; j++ {
+				checker.AllowGatewayOrigin("localhost", 5000+port)
+				_ = checker.CheckURL(ctx, "http://127.0.0.1:5000/x")
+				checker.AllowGatewayOrigin("", 0)
+			}
+		}(i)
+	}
+	// Readers: pure CheckURL against a literal loopback IP (no DNS).
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < iters; j++ {
+				_ = checker.CheckURL(ctx, "http://127.0.0.1:5000/x")
+			}
+		}()
+	}
+	wg.Wait()
+	// Reaching here without the race detector firing means the RWMutex is sound.
 }

@@ -3459,11 +3459,16 @@ func (c *Config) ValidateProviders() error {
 // to false. Read live on every call (ADR-044, FR-006) — not restart-gated.
 // Receiver is *Config (not *GatewayConfig) per the shared cross-agent
 // contract for this feature — callers use cfg.IsPreviewEnabled() directly.
+//
+// Nil-receiver-safe: a nil *Config returns the semantic default (true) rather
+// than panicking on c.Gateway, so callers need not guard the call (some do, some
+// don't — this makes both correct). Uses the package's ResolveBool helper for
+// the *bool-with-default pattern.
 func (c *Config) IsPreviewEnabled() bool {
-	if c.Gateway.PreviewEnabled != nil {
-		return *c.Gateway.PreviewEnabled
+	if c == nil {
+		return true
 	}
-	return true
+	return ResolveBool(c.Gateway.PreviewEnabled, true)
 }
 
 // ApplyWarmupTimeoutDefault ensures the web_serve dev-mode warmup timeout

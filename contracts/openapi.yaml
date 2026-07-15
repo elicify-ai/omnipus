@@ -67,7 +67,7 @@ components:
     BearerAuth:
       type: http
       scheme: bearer
-      description: 'Bearer token issued by /auth/login or /onboarding/complete. Store in sessionStorage under "omnipus_auth_token".
+      description: 'Programmatic/CLI bearer token. The browser SPA does NOT use this: since ADR-044 it authenticates via the HttpOnly `omnipus-session` cookie (set by /auth/login and /onboarding/complete, sent automatically with credentials:include) and stores no JS-readable token. Bearer remains accepted server-side as an additive path for CLI/programmatic clients.
 
         '
   schemas:

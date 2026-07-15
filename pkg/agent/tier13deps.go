@@ -36,20 +36,8 @@ type Tier13Deps struct {
 	// Non-nil when the gateway has initialized it at boot.
 	DevServerRegistry *sandbox.DevServerRegistry
 
-	// GatewayPreviewBaseURL is REMOVED (preview-on-main-listener v5, ADR-044
-	// D2, FR-003/FR-005). There is no more separate preview listener and no
-	// more boot-frozen preview base URL: /preview/ is served on the SAME main
-	// gateway listener as everything else, and WebServeTool now takes a live
-	// `getConfig func() *config.Config` accessor (see tools.NewWebServeTool)
-	// so it builds its URL from middleware.CanonicalGatewayOrigin(cfg) fresh
-	// on every call and reads gateway.preview_enabled live — see
-	// pkg/agent/loop.go's wireTier13DepsLocked, which now passes al.GetConfig
-	// directly instead of reading a field off this struct.
-	//
-	// bash's background-session mode ("bash" — ADR-036 unified the retired
-	// "exec"/"workspace_shell"/"workspace_shell_bg" tools into it) never used
-	// this field: the equivalent port-exposure/preview-URL capability was
-	// dropped, not ported, when workspace_shell_bg was merged (ADR-036 §3.1)
-	// — bash's background mode is a plain run-in-background + poll/kill
-	// capability with no preview URL.
+	// (The former GatewayPreviewBaseURL field was removed by ADR-044: /preview/
+	// is served on the main gateway listener and WebServeTool now derives its
+	// URL live via a getConfig accessor — see tools.NewWebServeTool and
+	// loop.go's wireTier13DepsLocked, which passes al.GetConfig directly.)
 }

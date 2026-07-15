@@ -1666,15 +1666,6 @@ func registerSharedTools(
 				}
 				browserCfg.PersistSession = cfg.Tools.Browser.PersistSession
 
-				// Use the singleton SSRF checker (built from config, honors
-				// allow_internal). Fall back to a default checker (no allowlist)
-				// when SSRF is not explicitly enabled — browser tools always
-				// require a non-nil SSRFChecker (see browser.NewBrowserManager).
-				browserSSRF := al.ssrfChecker
-				if browserSSRF == nil {
-					browserSSRF = security.NewSSRFChecker(nil)
-				}
-
 				// preview-on-main-listener v5 (FR-018/US-10, S21): let the agent's
 				// built-in browser reach the gateway's OWN preview origin.
 				// serve_web mints http://localhost:<gateway.port>/preview/...
@@ -1682,15 +1673,28 @@ func registerSharedTools(
 				// are otherwise port-blind, so without a scoped exception the
 				// gateway's own preview would either need a blanket loopback
 				// allow (rejected by the ADR — opens every local dev port) or
-				// stay blocked entirely. AllowGatewayOrigin(host, port) (see
-				// pkg/security/ssrf.go) scopes the exception to exactly this
+				// stay blocked entirely. The exception scopes to exactly this
 				// host:port pair — passing "localhost" (its documented expected
 				// caller usage) also accepts the resolved "127.0.0.1"/"::1"
-				// loopback forms for the SAME port, per r4 OBS-003. Called
-				// per-agent (not hoisted above the loop) because the
-				// SSRF-disabled branch above mints a FRESH *security.SSRFChecker
-				// per agent with no allowlist carried over.
-				browserSSRF.AllowGatewayOrigin("localhost", cfg.Gateway.Port)
+				// loopback forms for the SAME port, per r4 OBS-003.
+				//
+				// CRITICAL (code-review M2): the exception MUST live on a checker
+				// dedicated to the browser tool, NOT on al.ssrfChecker. That
+				// singleton is shared with provider base_url and skill-installer
+				// URL validation (rest.go/rest_onboarding.go/gateway.go CheckURL
+				// callers); mutating it in place would silently allow
+				// localhost:<gateway.port> there too — the blanket-loopback
+				// widening the ADR rejected. CloneWithGatewayOrigin returns an
+				// independent checker sharing the singleton's block-lists/allowlist
+				// but carrying its own exception. The SSRF-disabled branch already
+				// mints a fresh per-agent checker, so it takes the exception directly.
+				var browserSSRF *security.SSRFChecker
+				if al.ssrfChecker != nil {
+					browserSSRF = al.ssrfChecker.CloneWithGatewayOrigin("localhost", cfg.Gateway.Port)
+				} else {
+					browserSSRF = security.NewSSRFChecker(nil)
+					browserSSRF.AllowGatewayOrigin("localhost", cfg.Gateway.Port)
+				}
 
 				// browser.evaluate registration: always register the tool so the
 				// LLM sees it in its tool list. The live safety floor (deny by

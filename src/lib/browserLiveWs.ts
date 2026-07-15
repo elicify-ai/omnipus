@@ -162,8 +162,9 @@ export class BrowserLiveWsConnection {
       this.callbacks.onDisconnected?.()
       if (this.intentionalClose) return
 
-      // 1008 = policy violation / auth rejected by the gateway. Retrying
-      // with the same token would loop forever — surface once and stop.
+      // 1008 = policy violation / auth rejected by the gateway; reconnecting
+      // would just be rejected again (the cookie hasn't changed), so surface
+      // once and stop.
       if (event.code === 1008) {
         this.callbacks.onError('Authentication failed for the live browser view. Reload and try again.')
         return

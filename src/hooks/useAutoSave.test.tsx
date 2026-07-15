@@ -51,7 +51,7 @@ describe('useAutoSave', () => {
     let data = { name: 'initial' }
 
     const { result, rerender } = renderHook(
-      ({ d }) => useAutoSave(d, saveFn, { flushUrl: '/api/v1/agents/test', flushAuthToken: 'tok', debounceMs: 10000 }),
+      ({ d }) => useAutoSave(d, saveFn, { flushUrl: '/api/v1/agents/test', debounceMs: 10000 }),
       { initialProps: { d: data } },
     )
 
@@ -70,7 +70,7 @@ describe('useAutoSave', () => {
   it('registers and cleans up flush event listeners', () => {
     const saveFn = vi.fn().mockResolvedValue(undefined)
     const { unmount } = renderHook(
-      ({ d }) => useAutoSave(d, saveFn, { flushUrl: '/api/v1/agents/test', flushAuthToken: 'tok' }),
+      ({ d }) => useAutoSave(d, saveFn, { flushUrl: '/api/v1/agents/test' }),
       { initialProps: { d: { name: 'test' } } },
     )
 
@@ -176,7 +176,6 @@ describe('useAutoSave', () => {
       ({ d }) =>
         useAutoSave(d, saveFn, {
           flushUrl: '/api/v1/agents/test',
-          flushAuthToken: 'tok',
           debounceMs: 10000,
           beaconFlush,
         }),
@@ -712,7 +711,7 @@ describe('useAutoSave', () => {
     let data = { v: 1 }
 
     const { rerender } = renderHook(
-      ({ d }) => useAutoSave(d, saveFn, { flushUrl: '/api/v1/agents/test', flushAuthToken: 'tok', debounceMs: 50 }),
+      ({ d }) => useAutoSave(d, saveFn, { flushUrl: '/api/v1/agents/test', debounceMs: 50 }),
       { initialProps: { d: data } },
     )
 
@@ -765,7 +764,7 @@ describe('useAutoSave', () => {
     let data = { name: 'initial' }
 
     const { rerender } = renderHook(
-      ({ d }) => useAutoSave(d, saveFn, { flushUrl: '/api/v1/agents/test-id', flushAuthToken: 'my-token', debounceMs: 10000 }),
+      ({ d }) => useAutoSave(d, saveFn, { flushUrl: '/api/v1/agents/test-id', debounceMs: 10000 }),
       { initialProps: { d: data } },
     )
 
@@ -783,7 +782,7 @@ describe('useAutoSave', () => {
     expect(init).toMatchObject({
       method: 'PUT',
       keepalive: true,
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer my-token' },
+      headers: { 'Content-Type': 'application/json' },
     })
     expect(JSON.parse(init!.body as string)).toEqual({ name: 'changed' })
     // saveFn (the normal doSave() path) must NOT have been called by the

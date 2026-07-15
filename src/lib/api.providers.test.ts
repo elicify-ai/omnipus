@@ -48,7 +48,6 @@ beforeEach(() => {
   vi.stubGlobal('fetch', fetchSpy)
   // CSRF cookie so PUT passes the client-side gate.
   stubCookie('__Host-csrf=test-csrf-token')
-  sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
 })
 
 afterEach(() => {

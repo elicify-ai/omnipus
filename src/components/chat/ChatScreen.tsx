@@ -702,7 +702,7 @@ function VirtualAssistantMessageRow({ message, liteMode }: { message: ChatMessag
             if (!tc) return null
             // Parity with the live AssistantUI dispatch in OmnipusRuntimeProvider:
             // web_serve / serve_workspace / run_in_workspace go through WebServeBlock
-            // here too, so replayed sessions render the iframe (or the malformed
+            // here too, so replayed sessions render the preview link (or the malformed
             // result block) instead of a collapsed generic badge.
             if (tc.tool === 'serve_workspace' || tc.tool === 'run_in_workspace' || tc.tool === 'web_serve') {
               return (

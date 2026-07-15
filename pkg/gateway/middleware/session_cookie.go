@@ -73,7 +73,7 @@ import (
 // come from SameSite=Strict + HttpOnly + Path=/, not the cookie-prefix layer.
 const SessionCookieName = "omnipus-session"
 
-// SessionCookieMaxAge is the cookie lifetime in seconds (24 h per ).
+// SessionCookieMaxAge is the cookie lifetime in seconds (24 h).
 // Browsers persist the cookie across tab/window close within this window.
 const SessionCookieMaxAge = 86400
 

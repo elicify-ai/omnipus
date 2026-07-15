@@ -507,12 +507,10 @@ jobs:
               tests/e2e/about.spec.ts
               tests/e2e/api-errors.spec.ts
               tests/e2e/fresh-install.spec.ts
-              tests/e2e/iframe-preview-5xx.spec.ts
               tests/e2e/iframe-preview-warmup.spec.ts
               tests/e2e/mcp-add.spec.ts
               tests/e2e/profile-fontsize.spec.ts
               tests/e2e/providers.spec.ts
-              tests/e2e/serve-iframe.spec.ts
               tests/e2e/settings-gateway.spec.ts
               tests/e2e/version-drift.spec.ts
               tests/e2e/web-serve-canonical.spec.ts

@@ -38,6 +38,7 @@ import { useWorkspacesStore } from '@/store/workspacesStore'
 import { fetchWorkspaces, workspacesQueryKeys, logout } from '@/lib/api'
 import { NewWorkspaceSlideOver } from '@/components/workspaces/NewWorkspaceSlideOver'
 import { cn } from '@/lib/utils'
+import { logError } from '@/lib/telemetry'
 import avatarUrl from '@/assets/logo/omnipus-avatar.svg?url'
 
 // Global libraries — reusable assets that live outside any single workspace.
@@ -89,8 +90,11 @@ export function Sidebar() {
     // client-side clearing alone would leave the omnipus-session cookie
     // valid and replayable. Best-effort: proceed to local teardown even if
     // the network call fails (e.g. offline), so the user is never stuck.
-    void logout().catch(() => {
-      // Swallow — the user is signing out regardless; see comment above.
+    void logout().catch((err) => {
+      // The user is signing out regardless (see comment above) — but a
+      // server-side revoke failure must not vanish silently. Log it so an
+      // operator can spot a cookie that stayed valid server-side.
+      logError({ event: 'logoutRevokeFailed', error: String(err) })
     }).finally(() => {
       useAuthStore.getState().clearAuth()
       navigate({ to: '/login' })

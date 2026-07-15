@@ -376,6 +376,21 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// Issue the __Host-csrf cookie here too — BEFORE committed=true — so a
+	// cookie-issuance failure fails closed consistently with the session cookie
+	// above (never mark onboarding complete; the still-false `committed` lets the
+	// deferred ReleaseReservation run so the client can retry cleanly). This used
+	// to run AFTER commitOnboarding, so an RNG failure returned 500 for an
+	// onboarding that had actually already committed. The onboarding client has
+	// had no cookie up to this point (/api/v1/onboarding/complete is CSRF-exempt
+	// for exactly that reason — see pkg/gateway/middleware/csrf.go), so it needs
+	// this to make subsequent state-changing requests without a 403. Issue #97.
+	if err := middleware.IssueCSRFCookie(w, r); err != nil {
+		slog.Error("onboarding: issue CSRF cookie failed", "error", err)
+		jsonErr(w, http.StatusInternalServerError, "session init failed")
+		return
+	}
+
 	// config.json written successfully. Now commit state.json (phase 2).
 	// If this fails, the instance is in a recoverable state: next boot
 	// will re-enter onboarding, detect the admin user exists, and succeed.
@@ -396,16 +411,6 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 	// Reload failure is non-fatal — token is on disk and active after next config poll.
 	if err := a.triggerReloadAndWait(); err != nil {
 		slog.Warn("onboarding: hot-reload after complete failed; token active after next restart", "error", err)
-	}
-
-	// Issue a __Host-csrf cookie so the onboarding client (which up to this
-	// point had no cookie — /api/v1/onboarding/complete is exempt from the
-	// CSRF gate for exactly that reason, see pkg/gateway/middleware/csrf.go)
-	// can make subsequent state-changing requests without a 403. Issue #97.
-	if err := middleware.IssueCSRFCookie(w, r); err != nil {
-		slog.Error("onboarding: issue CSRF cookie failed", "error", err)
-		jsonErr(w, http.StatusInternalServerError, "session init failed")
-		return
 	}
 
 	slog.Info("onboarding: completed", "username", body.Admin.Username)
