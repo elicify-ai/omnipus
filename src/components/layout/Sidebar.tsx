@@ -28,6 +28,14 @@ import { useNotificationsStore } from '@/store/notifications'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { fetchWorkspaces, workspacesQueryKeys } from '@/lib/api'
 import { NewWorkspaceSlideOver } from '@/components/workspaces/NewWorkspaceSlideOver'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
 import avatarUrl from '@/assets/logo/omnipus-avatar.svg?url'
 
@@ -57,7 +65,6 @@ export function Sidebar() {
   const [newProjectOpen, setNewProjectOpen] = useState(false)
   const [projectsExpanded, setProjectsExpanded] = useState(false)
   const [archiveOpen, setArchiveOpen] = useState(false)
-  const [advancedOpen, setAdvancedOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [showSearch, setShowSearch] = useState(false)
   const searchInputRef = useRef<HTMLInputElement>(null)
@@ -115,11 +122,6 @@ export function Sidebar() {
     ...pinnedProjects,
     ...visibleUnpinned,
   ]
-
-  // Active-route checks for library / footer items
-  const userActive = location.pathname === '/profile' || location.pathname.startsWith('/profile/')
-  const usageActive = location.pathname === '/usage'
-  const settingsActive = location.pathname === '/settings'
 
   // US-5: Cmd+B / Ctrl+B keyboard shortcut + Escape to close
   const handleKeydown = useCallback(
@@ -389,7 +391,10 @@ export function Sidebar() {
 
       </div>
 
-      {/* Library items (fixed bottom section — not scrollable) */}
+      {/* Tiny divider between scrollable workspaces and fixed library items */}
+      <div className="mx-4 my-1 border-t border-[var(--color-border)]" />
+
+      {/* Library items (fixed bottom — not scrollable, only 3 items) */}
       <div className="shrink-0 py-2" role="group" aria-label="Library">
         {LIBRARY_ITEMS.map(({ to, label, Icon }) => {
           const isActive = location.pathname === to || location.pathname.startsWith(`${to}/`)
@@ -418,116 +423,80 @@ export function Sidebar() {
             </Link>
           )
         })}
-
-        {/* User — profile */}
-        <Link
-          to="/profile"
-          aria-label="User"
-          aria-current={userActive ? 'page' : undefined}
-          onClick={() => {
-            if (!effectivelyPinned) close()
-          }}
-          className={cn(
-            'flex items-center gap-3 px-4 py-2.5 mx-2 rounded-lg text-sm transition-colors',
-            userActive
-              ? 'bg-[var(--color-surface-2)] text-[var(--color-accent)] font-medium'
-              : 'text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]',
-          )}
-        >
-          <UserCircle
-            size={18}
-            weight={userActive ? 'fill' : 'regular'}
-            className={userActive ? 'text-[var(--color-accent)]' : ''}
-          />
-          <span className="flex-1 truncate">{username ?? 'User'}</span>
-        </Link>
-
-        {/* Advanced — collapsible */}
-        <button
-          type="button"
-          onClick={() => setAdvancedOpen((v) => !v)}
-          aria-expanded={advancedOpen}
-          aria-label="Advanced"
-          className="flex items-center gap-3 px-4 py-2.5 mx-2 rounded-lg text-sm text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] transition-colors w-[calc(100%-16px)]"
-        >
-          {advancedOpen ? (
-            <CaretDown size={14} className="flex-shrink-0" />
-          ) : (
-            <CaretRight size={14} className="flex-shrink-0" />
-          )}
-          <span className="flex-1 text-left">Advanced</span>
-        </button>
-
-        {advancedOpen && (
-          <div role="group" aria-label="Advanced settings">
-            {/* Notification — opens the notification panel */}
-            <button
-              type="button"
-              onClick={toggleNotificationPanel}
-              aria-label="Notifications"
-              data-testid="sidebar-notifications"
-              className="relative flex items-center gap-3 pl-8 pr-4 py-2 mx-2 rounded-lg text-sm text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] transition-colors w-[calc(100%-16px)]"
-            >
-              <Tray size={18} className="flex-shrink-0" />
-              <span className="flex-1 text-left">Notification</span>
-              {unreadCount > 0 && (
-                <span
-                  data-testid="sidebar-notification-badge"
-                  className="flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-medium leading-none bg-[var(--color-error)] text-white"
-                >
-                  {unreadCount > 99 ? '99+' : unreadCount}
-                </span>
-              )}
-            </button>
-
-            {/* Usage */}
-            <Link
-              to="/usage"
-              aria-label="Usage"
-              aria-current={usageActive ? 'page' : undefined}
-              onClick={() => {
-                if (!effectivelyPinned) close()
-              }}
-              className={cn(
-                'flex items-center gap-3 pl-8 pr-4 py-2 mx-2 rounded-lg text-sm transition-colors',
-                usageActive
-                  ? 'bg-[var(--color-surface-2)] text-[var(--color-accent)] font-medium'
-                  : 'text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]',
-              )}
-            >
-              <ChartBar
-                size={18}
-                weight={usageActive ? 'fill' : 'regular'}
-                className={usageActive ? 'text-[var(--color-accent)]' : ''}
-              />
-              <span className="flex-1">Usage</span>
-            </Link>
-
-            {/* Settings */}
-            <Link
-              to="/settings"
-              aria-label="Settings"
-              aria-current={settingsActive ? 'page' : undefined}
-              onClick={() => {
-                if (!effectivelyPinned) close()
-              }}
-              className={cn(
-                'flex items-center gap-3 pl-8 pr-4 py-2 mx-2 rounded-lg text-sm transition-colors',
-                settingsActive
-                  ? 'bg-[var(--color-surface-2)] text-[var(--color-accent)] font-medium'
-                  : 'text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]',
-              )}
-            >
-              <Gear
-                size={18}
-                weight={settingsActive ? 'fill' : 'regular'}
-                className={settingsActive ? 'text-[var(--color-accent)]' : ''}
-              />
-              <span className="flex-1">Settings</span>
-            </Link>
-          </div>
-        )}
       </div>
+
+      {/* Username — stable at the very bottom, opens a popup menu */}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            aria-label="Open user menu"
+            data-testid="sidebar-profile-trigger"
+            className="flex items-center gap-3 px-4 py-2.5 mx-2 rounded-lg text-sm text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] transition-colors w-[calc(100%-16px)]"
+          >
+            <UserCircle size={18} weight="regular" />
+            <span className="flex-1 text-left truncate">{username ?? 'User'}</span>
+            {unreadCount > 0 && (
+              <span
+                data-testid="sidebar-notification-badge"
+                className="flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-medium leading-none bg-[var(--color-error)] text-white"
+              >
+                {unreadCount > 99 ? '99+' : unreadCount}
+              </span>
+            )}
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          side="top"
+          align="start"
+          className="min-w-[180px] bg-[var(--color-surface-1)] border border-[var(--color-border)]"
+        >
+          <DropdownMenuLabel className="text-[10px] uppercase tracking-widest text-[var(--color-muted)]">
+            {username ?? 'Account'}
+          </DropdownMenuLabel>
+          <DropdownMenuSeparator className="bg-[var(--color-border)]" />
+          <DropdownMenuItem
+            data-testid="sidebar-notifications"
+            onSelect={() => { toggleNotificationPanel(); if (!effectivelyPinned) close() }}
+            className="flex items-center gap-2 cursor-pointer"
+          >
+            <Tray size={14} />
+            Notifications
+            {unreadCount > 0 && (
+              <span className="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-medium leading-none bg-[var(--color-error)] text-white">
+                {unreadCount > 99 ? '99+' : unreadCount}
+              </span>
+            )}
+          </DropdownMenuItem>
+          <DropdownMenuItem asChild>
+            <Link to="/usage" className="flex items-center gap-2 cursor-pointer">
+              <ChartBar size={14} />
+              Usage
+            </Link>
+          </DropdownMenuItem>
+          <DropdownMenuItem asChild>
+            <Link to="/profile" className="flex items-center gap-2 cursor-pointer">
+              <UserCircle size={14} />
+              Profile
+            </Link>
+          </DropdownMenuItem>
+          <DropdownMenuItem asChild>
+            <Link to="/settings" className="flex items-center gap-2 cursor-pointer">
+              <Gear size={14} />
+              Settings
+            </Link>
+          </DropdownMenuItem>
+          <DropdownMenuSeparator className="bg-[var(--color-border)]" />
+          <DropdownMenuItem
+            onSelect={handleLogout}
+            aria-label="Sign out"
+            className="flex items-center gap-2 cursor-pointer text-[var(--color-muted)]"
+          >
+            <SignOut size={14} />
+            Sign out
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
 
       {/* Pin toggle — only shown when the viewport is wide enough to support it (≥1024px) */}
       {canPin && (
@@ -542,17 +511,6 @@ export function Sidebar() {
           {isPinned ? 'Unpin sidebar' : 'Pin sidebar'}
         </button>
       )}
-
-      {/* Sign out */}
-      <button
-        type="button"
-        onClick={handleLogout}
-        aria-label="Sign out"
-        className="flex items-center gap-3 px-4 py-2.5 mx-2 rounded-lg text-sm text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] transition-colors w-[calc(100%-16px)]"
-      >
-        <SignOut size={18} className="flex-shrink-0" />
-        <span className="flex-1 text-left">Sign out</span>
-      </button>
 
       {/* New workspace slide-over — rendered inside nav to avoid stacking context issues */}
       <NewWorkspaceSlideOver open={newProjectOpen} onOpenChange={setNewProjectOpen} />

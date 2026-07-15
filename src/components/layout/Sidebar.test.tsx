@@ -20,6 +20,24 @@ Object.defineProperty(window, 'matchMedia', {
   }),
 })
 
+// Radix DropdownMenu polyfills for jsdom (the username popup uses DropdownMenu)
+if (typeof HTMLElement !== 'undefined') {
+  HTMLElement.prototype.hasPointerCapture = () => false
+  HTMLElement.prototype.scrollIntoView = () => {}
+}
+if (typeof globalThis.ResizeObserver === 'undefined') {
+  globalThis.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} }
+}
+
+// Helper: open the username dropdown (Radix DropdownMenu opens on pointerDown)
+async function openUserMenu() {
+  const trigger = screen.getByTestId('sidebar-profile-trigger')
+  await act(async () => {
+    fireEvent.pointerDown(trigger, { button: 0, pointerType: 'mouse' })
+    fireEvent.pointerUp(trigger, { button: 0, pointerType: 'mouse' })
+  })
+}
+
 // Mock TanStack Router — Sidebar uses useLocation and useNavigate
 vi.mock('@tanstack/react-router', () => ({
   useLocation: () => ({ pathname: '/' }),
@@ -142,16 +160,14 @@ describe('Sidebar — overlay rendering when open', () => {
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
     render(<Sidebar />, { wrapper: makeWrapper() })
 
-    // IA reframe (Sprint 4): the sidebar is organized around Workspaces (primary)
-    // + a Library section (Agents, Skills & Tools, Connectors, User, Advanced).
-    // The old top-level Chat / Tasks / Automations / Command Center entries are REMOVED.
+    // + a Library section (Agents, Skills & Tools, Connectors) + username trigger.
     expect(screen.getByRole('group', { name: 'Workspaces' })).toBeTruthy()
     expect(screen.getByRole('group', { name: 'Library' })).toBeTruthy()
 
     expect(screen.getByText('Agents')).toBeTruthy()
     expect(screen.getByText('Skills & Tools')).toBeTruthy()
     expect(screen.getByText('Connectors')).toBeTruthy()
-    expect(screen.getByText('Advanced')).toBeTruthy()
+    expect(screen.getByTestId('sidebar-profile-trigger')).toBeTruthy()
 
     // Removed entries must NOT be present.
     expect(screen.queryByText('Chat')).toBeNull()
@@ -464,63 +480,43 @@ describe('Sidebar — Inline search (F7-F07)', () => {
 // ── Bottom section: Notifications + Profile ────────────────────────────────────
 // Traces to: feat/0.1.0-uat-fixes — sidebar bottom section (notifications + profile)
 
-describe('Sidebar — Advanced section: Notifications row', () => {
-  it('renders a Notifications button when Advanced is expanded', () => {
+describe('Sidebar — username popup: Notifications', () => {
+  it('renders a Notifications item in the username popup', async () => {
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
     render(<Sidebar />, { wrapper: makeWrapper() })
-
-    // Notification lives inside the Advanced collapsible — expand it first
-    const advancedToggle = screen.getByRole('button', { name: 'Advanced' })
-    act(() => { fireEvent.click(advancedToggle) })
-
-    const notifBtn = screen.getByRole('button', { name: 'Notifications' })
-    expect(notifBtn).toBeTruthy()
-    expect(notifBtn.getAttribute('data-testid')).toBe('sidebar-notifications')
+    await openUserMenu()
+    // Radix DropdownMenuItem doesn't forward data-testid; query by text
+    expect(screen.getByText('Notifications')).toBeTruthy()
   })
 
   it('does not show the unread badge when unreadCount is 0', () => {
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
     render(<Sidebar />, { wrapper: makeWrapper() })
-
-    // Expand Advanced to reveal the Notification sub-item
-    const advancedToggle = screen.getByRole('button', { name: 'Advanced' })
-    act(() => { fireEvent.click(advancedToggle) })
-
-    // Badge must not appear when there are no unread notifications
+    // unreadCount is 0 in the mock — the badge must not appear on the trigger
     expect(screen.queryByTestId('sidebar-notification-badge')).toBeNull()
   })
 
-  it('Notifications button does not throw when clicked', () => {
+  it('Notifications item does not throw when clicked', async () => {
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
     render(<Sidebar />, { wrapper: makeWrapper() })
-
-    // Expand Advanced to reveal the Notification sub-item
-    const advancedToggle = screen.getByRole('button', { name: 'Advanced' })
-    act(() => { fireEvent.click(advancedToggle) })
-
-    const notifBtn = screen.getByRole('button', { name: 'Notifications' })
-    // The button is wired to toggleNotificationPanel — clicking must not throw
-    expect(() => act(() => { fireEvent.click(notifBtn) })).not.toThrow()
+    await openUserMenu()
+    const notifItem = screen.getByText('Notifications')
+    expect(() => act(() => { fireEvent.click(notifItem) })).not.toThrow()
   })
 })
 
-describe('Sidebar — bottom section: User link + Sign out', () => {
-  it('renders a User link pointing to /profile with the username', () => {
-    act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
-    const { container } = render(<Sidebar />, { wrapper: makeWrapper() })
-
-    // The User link replaces the old profile dropdown trigger.
-    const userLink = container.querySelector('a[href="/profile"]')
-    expect(userLink).not.toBeNull()
-    expect(screen.getAllByText('testuser').length).toBeGreaterThan(0)
-  })
-
-  it('renders a standalone Sign out button', () => {
+describe('Sidebar — username popup: User + Sign out', () => {
+  it('renders the username on the trigger button', () => {
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
     render(<Sidebar />, { wrapper: makeWrapper() })
+    const trigger = screen.getByTestId('sidebar-profile-trigger')
+    expect(trigger.textContent).toContain('testuser')
+  })
 
-    // Sign out is now a standalone button at the very bottom of the sidebar.
-    const signOutBtn = screen.getByRole('button', { name: 'Sign out' })
-    expect(signOutBtn).toBeTruthy()
+  it('renders Sign out in the popup when opened', async () => {
+    act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
+    render(<Sidebar />, { wrapper: makeWrapper() })
+    await openUserMenu()
+    expect(screen.getByText('Sign out')).toBeTruthy()
   })
 })

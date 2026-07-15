@@ -15,6 +15,15 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useSidebarStore } from '@/store/sidebar'
 import React from 'react'
 
+// Radix DropdownMenu polyfills for jsdom
+if (typeof HTMLElement !== 'undefined') {
+  HTMLElement.prototype.hasPointerCapture = () => false
+  HTMLElement.prototype.scrollIntoView = () => {}
+}
+if (typeof globalThis.ResizeObserver === 'undefined') {
+  globalThis.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} }
+}
+
 // Mock TanStack Router
 vi.mock('@tanstack/react-router', () => ({
   useLocation: () => ({ pathname: '/' }),
@@ -296,13 +305,13 @@ describe('Sidebar — aria-current on active library items', () => {
     expect(connectorsLink.getAttribute('aria-current')).toBeNull()
   })
 
-  it('Settings link is not active at pathname "/"', () => {
+  it('Settings link is not active at pathname "/"', async () => {
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
     render(<Sidebar />, { wrapper: makeWrapper() })
 
-    // Settings lives inside the Advanced collapsible — expand it first
-    const advancedToggle = screen.getByRole('button', { name: 'Advanced' })
-    act(() => { fireEvent.click(advancedToggle) })
+    // Settings lives inside the username popup — open it first
+    const trigger = screen.getByTestId('sidebar-profile-trigger')
+    await act(async () => { fireEvent.click(trigger) })
 
     const settingsLink = screen.getByRole('link', { name: 'Settings' })
     expect(settingsLink.getAttribute('aria-current')).toBeNull()
