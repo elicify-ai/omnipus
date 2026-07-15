@@ -38,7 +38,6 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
-import avatarUrl from '@/assets/logo/omnipus-avatar.svg?url'
 import { Wordmark } from '@/components/shared/Wordmark'
 
 // Library items — reusable assets that live outside any single workspace.
@@ -243,13 +242,9 @@ export function Sidebar() {
   // Sidebar content shared between pinned and overlay modes
   const sidebarContent = (
     <nav className="flex h-full flex-col" aria-label="Main navigation">
-      {/* Brand mark — 44px chrome row, no border-b (flat shell alignment) */}
+      {/* Brand row — wordmark only (no logo mark; the mark lives on login/
+          onboarding/landing). 44px chrome row, no border-b (flat shell). */}
       <div className="flex items-center gap-2.5 px-4 h-chrome-header min-h-chrome-header shrink-0">
-        <img
-          src={avatarUrl}
-          alt="omnipus.ai"
-          className="h-6 w-6 flex-shrink-0"
-        />
         <Wordmark className="text-sm" />
         {/* Search icon — opens the cross-workspace session search modal */}
         <button
