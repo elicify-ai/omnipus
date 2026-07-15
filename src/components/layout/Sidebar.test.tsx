@@ -138,20 +138,20 @@ beforeEach(() => {
 // test_sidebar_overlay_rendering
 // Traces to: wave0-brand-design-spec.md Scenario: Sidebar opens as overlay (US-5 AC2, FR-011)
 describe('Sidebar — overlay rendering when open', () => {
-  it('renders the Workspaces section + Global libraries when sidebar is open', () => {
+  it('renders the Workspaces section + Library when sidebar is open', () => {
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
     render(<Sidebar />, { wrapper: makeWrapper() })
 
     // IA reframe (Sprint 4): the sidebar is organized around Workspaces (primary)
-    // + a Global libraries section (Agents, Connectors, Skills & Tools). The old
-    // top-level Chat / Tasks / Automations / Command Center entries are REMOVED.
+    // + a Library section (Agents, Skills & Tools, Connectors, User, Advanced).
+    // The old top-level Chat / Tasks / Automations / Command Center entries are REMOVED.
     expect(screen.getByRole('group', { name: 'Workspaces' })).toBeTruthy()
-    expect(screen.getByRole('group', { name: 'Global libraries' })).toBeTruthy()
+    expect(screen.getByRole('group', { name: 'Library' })).toBeTruthy()
 
     expect(screen.getByText('Agents')).toBeTruthy()
-    expect(screen.getByText('Connectors')).toBeTruthy()
     expect(screen.getByText('Skills & Tools')).toBeTruthy()
-    expect(screen.getByText('Settings')).toBeTruthy()
+    expect(screen.getByText('Connectors')).toBeTruthy()
+    expect(screen.getByText('Advanced')).toBeTruthy()
 
     // Removed entries must NOT be present.
     expect(screen.queryByText('Chat')).toBeNull()
@@ -464,10 +464,14 @@ describe('Sidebar — Inline search (F7-F07)', () => {
 // ── Bottom section: Notifications + Profile ────────────────────────────────────
 // Traces to: feat/0.1.0-uat-fixes — sidebar bottom section (notifications + profile)
 
-describe('Sidebar — bottom section: Notifications row', () => {
-  it('renders a Notifications button when sidebar is open', () => {
+describe('Sidebar — Advanced section: Notifications row', () => {
+  it('renders a Notifications button when Advanced is expanded', () => {
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
     render(<Sidebar />, { wrapper: makeWrapper() })
+
+    // Notification lives inside the Advanced collapsible — expand it first
+    const advancedToggle = screen.getByRole('button', { name: 'Advanced' })
+    act(() => { fireEvent.click(advancedToggle) })
 
     const notifBtn = screen.getByRole('button', { name: 'Notifications' })
     expect(notifBtn).toBeTruthy()
@@ -478,6 +482,10 @@ describe('Sidebar — bottom section: Notifications row', () => {
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
     render(<Sidebar />, { wrapper: makeWrapper() })
 
+    // Expand Advanced to reveal the Notification sub-item
+    const advancedToggle = screen.getByRole('button', { name: 'Advanced' })
+    act(() => { fireEvent.click(advancedToggle) })
+
     // Badge must not appear when there are no unread notifications
     expect(screen.queryByTestId('sidebar-notification-badge')).toBeNull()
   })
@@ -486,37 +494,32 @@ describe('Sidebar — bottom section: Notifications row', () => {
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
     render(<Sidebar />, { wrapper: makeWrapper() })
 
+    // Expand Advanced to reveal the Notification sub-item
+    const advancedToggle = screen.getByRole('button', { name: 'Advanced' })
+    act(() => { fireEvent.click(advancedToggle) })
+
     const notifBtn = screen.getByRole('button', { name: 'Notifications' })
     // The button is wired to toggleNotificationPanel — clicking must not throw
     expect(() => act(() => { fireEvent.click(notifBtn) })).not.toThrow()
   })
 })
 
-describe('Sidebar — bottom section: Profile row', () => {
-  it('renders the profile trigger button with the username', () => {
+describe('Sidebar — bottom section: User link + Sign out', () => {
+  it('renders a User link pointing to /profile with the username', () => {
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
-    render(<Sidebar />, { wrapper: makeWrapper() })
+    const { container } = render(<Sidebar />, { wrapper: makeWrapper() })
 
-    // The profile trigger shows the mocked username "testuser"
-    const profileTrigger = screen.getByTestId('sidebar-profile-trigger')
-    expect(profileTrigger).toBeTruthy()
+    // The User link replaces the old profile dropdown trigger.
+    const userLink = container.querySelector('a[href="/profile"]')
+    expect(userLink).not.toBeNull()
     expect(screen.getAllByText('testuser').length).toBeGreaterThan(0)
   })
 
-  it('renders Profile and Appearance items in the dropdown', () => {
+  it('renders a standalone Sign out button', () => {
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
     render(<Sidebar />, { wrapper: makeWrapper() })
 
-    // DropdownMenuContent is mocked to render inline, so items are in the DOM
-    expect(screen.getByText('Profile')).toBeTruthy()
-    expect(screen.getByText('Appearance')).toBeTruthy()
-  })
-
-  it('renders a Sign out action in the profile dropdown', () => {
-    act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
-    render(<Sidebar />, { wrapper: makeWrapper() })
-
-    // Sign out is in the dropdown (mocked as a button with aria-label="Sign out")
+    // Sign out is now a standalone button at the very bottom of the sidebar.
     const signOutBtn = screen.getByRole('button', { name: 'Sign out' })
     expect(signOutBtn).toBeTruthy()
   })

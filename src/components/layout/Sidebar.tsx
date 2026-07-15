@@ -19,16 +19,7 @@ import {
   WarningCircle,
   ArrowClockwise,
   UserCircle,
-  Sun,
 } from '@phosphor-icons/react'
-import {
-  DropdownMenu,
-  DropdownMenuTrigger,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-} from '@/components/ui/dropdown-menu'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSidebarStore, SIDEBAR_PIN_BREAKPOINT } from '@/store/sidebar'
 import { useAuthStore } from '@/store/auth'
@@ -40,14 +31,13 @@ import { NewWorkspaceSlideOver } from '@/components/workspaces/NewWorkspaceSlide
 import { cn } from '@/lib/utils'
 import avatarUrl from '@/assets/logo/omnipus-avatar.svg?url'
 
-// Global libraries — reusable assets that live outside any single workspace.
+// Library items — reusable assets that live outside any single workspace.
 // (Per-workspace work — chat, tasks, calendar, team — lives inside the
 // workspace tabs, not the sidebar.)
 const LIBRARY_ITEMS = [
   { to: '/agents', label: 'Agents', Icon: Robot },
-  { to: '/connectors', label: 'Connectors', Icon: PlugsConnected },
   { to: '/skills', label: 'Skills & Tools', Icon: PuzzlePiece },
-  { to: '/usage', label: 'Usage', Icon: ChartBar },
+  { to: '/connectors', label: 'Connectors', Icon: PlugsConnected },
 ] as const
 
 const PROJECT_COLLAPSE_THRESHOLD = 5
@@ -67,6 +57,7 @@ export function Sidebar() {
   const [newProjectOpen, setNewProjectOpen] = useState(false)
   const [projectsExpanded, setProjectsExpanded] = useState(false)
   const [archiveOpen, setArchiveOpen] = useState(false)
+  const [advancedOpen, setAdvancedOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [showSearch, setShowSearch] = useState(false)
   const searchInputRef = useRef<HTMLInputElement>(null)
@@ -124,6 +115,11 @@ export function Sidebar() {
     ...pinnedProjects,
     ...visibleUnpinned,
   ]
+
+  // Active-route checks for library / footer items
+  const userActive = location.pathname === '/profile' || location.pathname.startsWith('/profile/')
+  const usageActive = location.pathname === '/usage'
+  const settingsActive = location.pathname === '/settings'
 
   // US-5: Cmd+B / Ctrl+B keyboard shortcut + Escape to close
   const handleKeydown = useCallback(
@@ -184,7 +180,7 @@ export function Sidebar() {
         </span>
       </div>
 
-      {/* Workspaces (primary) + Global libraries */}
+      {/* Workspaces (primary, scrollable) */}
       <div className="flex-1 overflow-y-auto py-3">
         {/* Workspaces section */}
         <div
@@ -391,156 +387,172 @@ export function Sidebar() {
           })}
         </div>
 
-        {/* Global libraries section */}
-        <div className="mt-4" role="group" aria-label="Global libraries">
-          <div className="px-4 py-1">
-            <span className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-muted)]">
-              Library
-            </span>
-          </div>
-          {LIBRARY_ITEMS.map(({ to, label, Icon }) => {
-            const isActive = location.pathname === to || location.pathname.startsWith(`${to}/`)
-            return (
-              <Link
-                key={to}
-                to={to}
-                aria-label={label}
-                aria-current={isActive ? 'page' : undefined}
-                onClick={() => {
-                  if (!effectivelyPinned) close()
-                }}
-                className={cn(
-                  'flex items-center gap-3 px-4 py-2.5 mx-2 rounded-lg text-sm transition-colors',
-                  isActive
-                    ? 'bg-[var(--color-surface-2)] text-[var(--color-accent)] font-medium'
-                    : 'text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]',
-                )}
-              >
-                <Icon
-                  size={18}
-                  weight={isActive ? 'fill' : 'regular'}
-                  className={isActive ? 'text-[var(--color-accent)]' : ''}
-                />
-                <span className="flex-1">{label}</span>
-              </Link>
-            )
-          })}
-        </div>
       </div>
 
-      {/* Bottom: Notifications + Settings + Profile + Pin toggle */}
-      <div className="border-t border-[var(--color-border)] py-3">
-        {/* Notifications row — Tray icon + unread badge */}
-        <button
-          type="button"
-          onClick={toggleNotificationPanel}
-          aria-label="Notifications"
-          data-testid="sidebar-notifications"
-          className="relative flex items-center gap-3 px-4 py-2.5 mx-2 rounded-lg text-sm text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors w-[calc(100%-16px)]"
-        >
-          <Tray size={18} />
-          <span className="flex-1 text-left">Notifications</span>
-          {unreadCount > 0 && (
-            <span
-              data-testid="sidebar-notification-badge"
-              className="flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-medium leading-none bg-[var(--color-error)] text-white"
+      {/* Library items (fixed bottom section — not scrollable) */}
+      <div className="shrink-0 py-2" role="group" aria-label="Library">
+        {LIBRARY_ITEMS.map(({ to, label, Icon }) => {
+          const isActive = location.pathname === to || location.pathname.startsWith(`${to}/`)
+          return (
+            <Link
+              key={to}
+              to={to}
+              aria-label={label}
+              aria-current={isActive ? 'page' : undefined}
+              onClick={() => {
+                if (!effectivelyPinned) close()
+              }}
+              className={cn(
+                'flex items-center gap-3 px-4 py-2.5 mx-2 rounded-lg text-sm transition-colors',
+                isActive
+                  ? 'bg-[var(--color-surface-2)] text-[var(--color-accent)] font-medium'
+                  : 'text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]',
+              )}
             >
-              {unreadCount > 99 ? '99+' : unreadCount}
-            </span>
-          )}
-        </button>
+              <Icon
+                size={18}
+                weight={isActive ? 'fill' : 'regular'}
+                className={isActive ? 'text-[var(--color-accent)]' : ''}
+              />
+              <span className="flex-1">{label}</span>
+            </Link>
+          )
+        })}
 
-        {/* Settings */}
+        {/* User — profile */}
         <Link
-          to="/settings"
-          aria-label="Settings"
-          aria-current={location.pathname === '/settings' ? 'page' : undefined}
-          onClick={() => { if (!effectivelyPinned) close() }}
+          to="/profile"
+          aria-label="User"
+          aria-current={userActive ? 'page' : undefined}
+          onClick={() => {
+            if (!effectivelyPinned) close()
+          }}
           className={cn(
             'flex items-center gap-3 px-4 py-2.5 mx-2 rounded-lg text-sm transition-colors',
-            location.pathname === '/settings'
+            userActive
               ? 'bg-[var(--color-surface-2)] text-[var(--color-accent)] font-medium'
-              : 'text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]'
+              : 'text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]',
           )}
         >
-          <Gear
+          <UserCircle
             size={18}
-            weight={location.pathname === '/settings' ? 'fill' : 'regular'}
+            weight={userActive ? 'fill' : 'regular'}
+            className={userActive ? 'text-[var(--color-accent)]' : ''}
           />
-          Settings
+          <span className="flex-1 truncate">{username ?? 'User'}</span>
         </Link>
 
-        {/* Profile dropdown — opens upward */}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
+        {/* Advanced — collapsible */}
+        <button
+          type="button"
+          onClick={() => setAdvancedOpen((v) => !v)}
+          aria-expanded={advancedOpen}
+          aria-label="Advanced"
+          className="flex items-center gap-3 px-4 py-2.5 mx-2 rounded-lg text-sm text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] transition-colors w-[calc(100%-16px)]"
+        >
+          {advancedOpen ? (
+            <CaretDown size={14} className="flex-shrink-0" />
+          ) : (
+            <CaretRight size={14} className="flex-shrink-0" />
+          )}
+          <span className="flex-1 text-left">Advanced</span>
+        </button>
+
+        {advancedOpen && (
+          <div role="group" aria-label="Advanced settings">
+            {/* Notification — opens the notification panel */}
             <button
               type="button"
-              aria-label="Open profile menu"
-              data-testid="sidebar-profile-trigger"
-              className="flex items-center gap-3 px-4 py-2.5 mx-2 rounded-lg text-sm text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors w-[calc(100%-16px)]"
+              onClick={toggleNotificationPanel}
+              aria-label="Notifications"
+              data-testid="sidebar-notifications"
+              className="relative flex items-center gap-3 pl-8 pr-4 py-2 mx-2 rounded-lg text-sm text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] transition-colors w-[calc(100%-16px)]"
             >
-              <UserCircle size={18} weight="regular" />
-              <span className="flex-1 text-left truncate">
-                {username ?? 'Profile'}
-              </span>
+              <Tray size={18} className="flex-shrink-0" />
+              <span className="flex-1 text-left">Notification</span>
+              {unreadCount > 0 && (
+                <span
+                  data-testid="sidebar-notification-badge"
+                  className="flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-medium leading-none bg-[var(--color-error)] text-white"
+                >
+                  {unreadCount > 99 ? '99+' : unreadCount}
+                </span>
+              )}
             </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent
-            side="top"
-            align="start"
-            className="min-w-[180px] bg-[var(--color-surface-1)] border border-[var(--color-border)]"
-          >
-            <DropdownMenuLabel className="text-[10px] uppercase tracking-widest text-[var(--color-muted)]">
-              {username ?? 'Account'}
-            </DropdownMenuLabel>
-            <DropdownMenuSeparator className="bg-[var(--color-border)]" />
-            <DropdownMenuItem asChild>
-              <Link
-                to="/profile"
-                className={cn(
-                  'flex items-center gap-2 cursor-pointer',
-                  location.pathname === '/profile' && 'text-[var(--color-accent)]',
-                )}
-              >
-                <UserCircle size={14} />
-                Profile
-              </Link>
-            </DropdownMenuItem>
-            <DropdownMenuItem asChild>
-              <Link
-                to="/profile"
-                className="flex items-center gap-2 cursor-pointer"
-              >
-                <Sun size={14} />
-                Appearance
-              </Link>
-            </DropdownMenuItem>
-            <DropdownMenuSeparator className="bg-[var(--color-border)]" />
-            <DropdownMenuItem
-              onSelect={handleLogout}
-              aria-label="Sign out"
-              className="flex items-center gap-2 cursor-pointer text-[var(--color-muted)]"
-            >
-              <SignOut size={14} />
-              Sign out
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
 
-        {/* Pin toggle — only shown when the viewport is wide enough to support it (≥1024px) */}
-        {canPin && (
-          <button
-            onClick={togglePin}
-            aria-label={isPinned ? 'Unpin sidebar' : 'Pin sidebar'}
-            aria-pressed={isPinned}
-            title={isPinned ? 'Unpin sidebar' : 'Pin sidebar'}
-            className="flex items-center gap-3 px-4 py-2.5 mx-2 rounded-lg text-sm text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] transition-colors w-[calc(100%-16px)]"
-          >
-            {isPinned ? <PushPinSlash size={18} /> : <PushPin size={18} />}
-            {isPinned ? 'Unpin sidebar' : 'Pin sidebar'}
-          </button>
+            {/* Usage */}
+            <Link
+              to="/usage"
+              aria-label="Usage"
+              aria-current={usageActive ? 'page' : undefined}
+              onClick={() => {
+                if (!effectivelyPinned) close()
+              }}
+              className={cn(
+                'flex items-center gap-3 pl-8 pr-4 py-2 mx-2 rounded-lg text-sm transition-colors',
+                usageActive
+                  ? 'bg-[var(--color-surface-2)] text-[var(--color-accent)] font-medium'
+                  : 'text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]',
+              )}
+            >
+              <ChartBar
+                size={18}
+                weight={usageActive ? 'fill' : 'regular'}
+                className={usageActive ? 'text-[var(--color-accent)]' : ''}
+              />
+              <span className="flex-1">Usage</span>
+            </Link>
+
+            {/* Settings */}
+            <Link
+              to="/settings"
+              aria-label="Settings"
+              aria-current={settingsActive ? 'page' : undefined}
+              onClick={() => {
+                if (!effectivelyPinned) close()
+              }}
+              className={cn(
+                'flex items-center gap-3 pl-8 pr-4 py-2 mx-2 rounded-lg text-sm transition-colors',
+                settingsActive
+                  ? 'bg-[var(--color-surface-2)] text-[var(--color-accent)] font-medium'
+                  : 'text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]',
+              )}
+            >
+              <Gear
+                size={18}
+                weight={settingsActive ? 'fill' : 'regular'}
+                className={settingsActive ? 'text-[var(--color-accent)]' : ''}
+              />
+              <span className="flex-1">Settings</span>
+            </Link>
+          </div>
         )}
       </div>
+
+      {/* Pin toggle — only shown when the viewport is wide enough to support it (≥1024px) */}
+      {canPin && (
+        <button
+          onClick={togglePin}
+          aria-label={isPinned ? 'Unpin sidebar' : 'Pin sidebar'}
+          aria-pressed={isPinned}
+          title={isPinned ? 'Unpin sidebar' : 'Pin sidebar'}
+          className="flex items-center gap-3 px-4 py-2.5 mx-2 rounded-lg text-sm text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] transition-colors w-[calc(100%-16px)]"
+        >
+          {isPinned ? <PushPinSlash size={18} /> : <PushPin size={18} />}
+          {isPinned ? 'Unpin sidebar' : 'Pin sidebar'}
+        </button>
+      )}
+
+      {/* Sign out */}
+      <button
+        type="button"
+        onClick={handleLogout}
+        aria-label="Sign out"
+        className="flex items-center gap-3 px-4 py-2.5 mx-2 rounded-lg text-sm text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] transition-colors w-[calc(100%-16px)]"
+      >
+        <SignOut size={18} className="flex-shrink-0" />
+        <span className="flex-1 text-left">Sign out</span>
+      </button>
 
       {/* New workspace slide-over — rendered inside nav to avoid stacking context issues */}
       <NewWorkspaceSlideOver open={newProjectOpen} onOpenChange={setNewProjectOpen} />
