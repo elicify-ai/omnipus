@@ -164,6 +164,7 @@ function SessionRow({ session, isActive, onSelect, onRename, onDelete, deleting 
 export function SearchModal() {
   const open = useUiStore((s) => s.searchModalOpen)
   const close = useUiStore((s) => s.closeSearchModal)
+  const wsFilter = useUiStore((s) => s.searchModalWorkspaceFilter)
   const queryClient = useQueryClient()
   const addToast = useUiStore((s) => s.addToast)
 
@@ -219,6 +220,8 @@ export function SearchModal() {
     const toT = toDate ? new Date(`${toDate}T23:59:59`).getTime() : null
 
     const filtered = sessions.filter((s) => {
+      // Workspace pre-filter (from the sidebar "More…" button)
+      if (wsFilter && s.workspace_id !== wsFilter) return false
       if (q) {
         const wsName = s.workspace_id ? (wsMap.get(s.workspace_id)?.name ?? '').toLowerCase() : ''
         if (!(s.title ?? '').toLowerCase().includes(q) && !wsName.includes(q)) return false
@@ -255,7 +258,7 @@ export function SearchModal() {
       return new Date(b.agentGroups[0]?.sessions[0]?.updated_at ?? '').getTime() - new Date(a.agentGroups[0]?.sessions[0]?.updated_at ?? '').getTime()
     })
     return result
-  }, [sessions, workspaces, agents, debouncedSearch, fromDate, toDate])
+  }, [sessions, workspaces, agents, debouncedSearch, fromDate, toDate, wsFilter])
 
   const total = groups.reduce((n, g) => n + g.totalCount, 0)
   const loading = sLoading || wLoading
@@ -269,6 +272,14 @@ export function SearchModal() {
           <DialogTitle className="flex items-center gap-2 text-base mb-2">
             <MagnifyingGlass size={16} className="text-[var(--color-accent)]" />
             Search sessions
+            {wsFilter && (
+              <span className="ml-1 inline-flex items-center gap-1 rounded-full bg-[var(--color-surface-2)] px-2 py-0.5 text-[10px] font-normal text-[var(--color-secondary)]">
+                {workspaces.find((w) => w.id === wsFilter)?.name ?? 'Filtered'}
+                <button type="button" onClick={() => useUiStore.setState({ searchModalWorkspaceFilter: null })} className="text-[var(--color-muted)] hover:text-[var(--color-secondary)]" aria-label="Clear workspace filter">
+                  <X size={10} />
+                </button>
+              </span>
+            )}
             {total > 0 && <span className="ml-auto text-xs font-normal text-[var(--color-muted)]">{total} results</span>}
           </DialogTitle>
           <DialogDescription className="sr-only">Search sessions across all workspaces, grouped by workspace and agent.</DialogDescription>
