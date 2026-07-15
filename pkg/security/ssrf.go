@@ -240,12 +240,48 @@ func (sc *SSRFChecker) AllowGatewayOrigin(host string, port int) {
 	sc.gatewayPort = port
 }
 
+// CloneWithGatewayOrigin returns an INDEPENDENT SSRFChecker that shares this
+// checker's immutable (post-construction) block-lists, allowlist, and resolver
+// but carries its OWN gateway-origin exception. Setting or clearing the clone's
+// exception never affects the receiver.
+//
+// Use this to grant a single tool (e.g. an agent's built-in browser) reach to
+// the gateway's own origin via AllowGatewayOrigin WITHOUT widening the shared
+// singleton that provider base_url and skill-installer URL validation also
+// consult (ADR-044 D2). Calling AllowGatewayOrigin directly on the shared
+// singleton would silently allow http://localhost:<gateway.port> on those
+// unrelated CheckURL paths too — the "blanket loopback" the ADR rejected.
+//
+// The shared fields are read-only after NewSSRFChecker populates them, so
+// aliasing them by reference across the receiver and the clone is safe for
+// concurrent reads. The clone gets fresh sync primitives (its own initOnce and
+// gwMu); ensureInit on the clone is a no-op because the aliased block-lists are
+// already populated.
+func (sc *SSRFChecker) CloneWithGatewayOrigin(host string, port int) *SSRFChecker {
+	sc.ensureInit() // populate the shared block-lists/resolver before aliasing them
+	clone := &SSRFChecker{
+		ipv4Nets:   sc.ipv4Nets,
+		ipv6Nets:   sc.ipv6Nets,
+		allowList:  sc.allowList,
+		allowCIDRs: sc.allowCIDRs,
+		resolver:   sc.resolver,
+	}
+	clone.AllowGatewayOrigin(host, port)
+	return clone
+}
+
 // isAllowedGatewayOrigin reports whether rawURL's literal (pre-resolution)
 // host:port exactly matches the gateway origin configured via
 // AllowGatewayOrigin. Fails closed: if no gateway origin has been
 // configured, or rawURL carries no explicit port, or the port doesn't
 // match, this always returns false and CheckURL falls through to the full
 // SSRF path.
+//
+// The match is on host:port only, NOT scheme: both http:// and https:// to the
+// configured gateway host:port are accepted. This is intentional and harmless —
+// a scheme mismatch against a plain-HTTP loopback gateway simply fails at the
+// transport layer, and the exception exists only so the agent can reach its own
+// gateway's preview origin, which is a single host:port regardless of scheme.
 func (sc *SSRFChecker) isAllowedGatewayOrigin(rawURL string) bool {
 	sc.gwMu.RLock()
 	gwHost, gwPort := sc.gatewayHost, sc.gatewayPort

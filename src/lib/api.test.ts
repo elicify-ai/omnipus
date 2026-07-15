@@ -359,7 +359,6 @@ describe('Security API helpers', () => {
   beforeEach(() => {
     fetchSpy = vi.fn()
     vi.stubGlobal('fetch', fetchSpy)
-    sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
     stubCookie('__Host-csrf=test-csrf-token')
   })
 
@@ -784,7 +783,6 @@ describe('request() with Zod schema — validation errors', () => {
     resetApiSchemaErrorCount()
     fetchSpy = vi.fn()
     vi.stubGlobal('fetch', fetchSpy)
-    sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
     stubCookie2('__Host-csrf=test-csrf-token')
   })
 
@@ -898,7 +896,6 @@ describe('fetchSessionMessages: wire parameters → SPA params transform', () =>
   beforeEach(() => {
     fetchSpy = vi.fn()
     vi.stubGlobal('fetch', fetchSpy)
-    sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
     // fetchSessionMessages is a GET, no CSRF needed — but setting the cookie
     // avoids CSRF guard triggering on any incidental state-changing helpers.
     stubCookieLocal('__Host-csrf=test-csrf-token')
@@ -1189,7 +1186,6 @@ describe('updateConfig: sends wire shape to backend', () => {
   beforeEach(() => {
     fetchSpy = vi.fn()
     vi.stubGlobal('fetch', fetchSpy)
-    sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
     stubCookieLocal2('__Host-csrf=test-csrf-token')
   })
 
@@ -1295,7 +1291,6 @@ describe('fetchCredentials: string[] → CredentialKey[] transform (fix-T BUG 2)
   beforeEach(() => {
     fetchSpy = vi.fn()
     vi.stubGlobal('fetch', fetchSpy)
-    sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
     stubCookie('__Host-csrf=test-csrf-token')
   })
 
@@ -1372,7 +1367,6 @@ describe('enableChannel / disableChannel: ChannelEnabledResponse validation (fix
   beforeEach(() => {
     fetchSpy = vi.fn()
     vi.stubGlobal('fetch', fetchSpy)
-    sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
     stubCookie('__Host-csrf=test-csrf-token')
   })
 
@@ -1469,7 +1463,6 @@ describe('rawToFrontendConfig: preserves agents.defaults.model_name and provider
   beforeEach(() => {
     fetchSpy = vi.fn()
     vi.stubGlobal('fetch', fetchSpy)
-    sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
     stubCookieLocal3('__Host-csrf=test-csrf-token')
   })
 
@@ -1586,7 +1579,6 @@ describe('rotateGatewayToken: schema validation', () => {
   beforeEach(() => {
     fetchSpy = vi.fn()
     vi.stubGlobal('fetch', fetchSpy)
-    sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
     stubCookieLocal4('__Host-csrf=test-csrf-token')
   })
 
@@ -1665,7 +1657,6 @@ describe('validEnum / _configCoercionCount', () => {
   beforeEach(() => {
     fetchSpy = vi.fn()
     vi.stubGlobal('fetch', fetchSpy)
-    sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
   })
 
   afterEach(() => {
@@ -1783,7 +1774,6 @@ describe('castString/castNumber/castOptionalNumber: wrong-shaped value coercion 
   beforeEach(() => {
     fetchSpy = vi.fn()
     vi.stubGlobal('fetch', fetchSpy)
-    sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
     resetConfigCoercionCount()
   })
 
@@ -1955,7 +1945,6 @@ describe('Skill registry helpers (ClawHub search + install-by-slug)', () => {
   beforeEach(() => {
     fetchSpy = vi.fn()
     vi.stubGlobal('fetch', fetchSpy)
-    sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
     stubCookie('__Host-csrf=test-csrf-token')
   })
 
@@ -2104,7 +2093,6 @@ describe('fetchWorkspaceInstructions / updateWorkspaceInstructions', () => {
   beforeEach(() => {
     fetchSpy = vi.fn()
     vi.stubGlobal('fetch', fetchSpy)
-    sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
     stubCookieLocal5('__Host-csrf=test-csrf-token')
   })
 

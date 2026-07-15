@@ -5,6 +5,15 @@ import { expectA11yClean } from './fixtures/a11y';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
+// ADR-044 / US-5 (2026-07-15): auth is the browser-managed `omnipus-session`
+// HttpOnly cookie — the SPA never reads or writes a JS-visible bearer token
+// (src/lib/api.ts deleted getAuthHeaders(); every request goes out with
+// credentials:'include'). `HandleLogin` (pkg/gateway/rest_auth.go) sets the
+// cookie via middleware.WriteSessionCookie; `HandleLogout` clears it via
+// middleware.ClearSessionCookie. Tests below assert on that cookie directly
+// rather than on any local/session storage token.
+const SESSION_COOKIE_NAME = 'omnipus-session';
+
 // Mirror playwright.config.ts:storageState and global-setup.ts:AUTH_FILE —
 // honor OMNIPUS_AUTH_FILE so the afterAll refreshed-token write lands in the
 // same file that storageState reads. Hardcoding the path caused every
@@ -29,6 +38,18 @@ test('(a) valid credentials land on dashboard', async ({ page }) => {
   // The sidebar nav is NOT the auth indicator — it only renders while the overlay drawer is open.
   await expect(page.getByRole('banner')).toBeVisible({ timeout: 15_000 });
   await expect(page).not.toHaveURL(/\/#\/(login|onboarding)/);
+
+  // ADR-044 / US-5 (S8/S9): login authenticates via the browser-managed
+  // omnipus-session HttpOnly cookie — assert the real credential landed in
+  // the browser's cookie jar, not just that the UI looks logged in. This is
+  // the cookie HandleLogin's middleware.WriteSessionCookie sets; the SPA
+  // itself never sees or stores it (HttpOnly), so document.cookie can't be
+  // used here — only the Playwright context's cookie jar can observe it.
+  const cookies = await page.context().cookies();
+  const sessionCookie = cookies.find((c) => c.name === SESSION_COOKIE_NAME);
+  expect(sessionCookie, 'omnipus-session cookie must be set after login').toBeTruthy();
+  expect(sessionCookie?.httpOnly, 'omnipus-session cookie must be HttpOnly').toBe(true);
+  expect(sessionCookie?.value, 'omnipus-session cookie must carry a non-empty token').not.toBe('');
 
   await expectA11yClean(page);
 });
@@ -88,14 +109,63 @@ test('(c) dev_mode_bypass = true shows red persistent banner on every route', as
   await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
 
+test('(d) sign out clears the omnipus-session cookie server-side', async ({ page }) => {
+  // Traces to: preview-on-main-listener-spec.md S14 / FR-020.
+  // Given a logged-in browser (real cookie-issuing login, not a mock).
+  await loginAs(page, 'admin', 'admin123');
+
+  const cookiesAfterLogin = await page.context().cookies();
+  expect(
+    cookiesAfterLogin.find((c) => c.name === SESSION_COOKIE_NAME),
+    'omnipus-session cookie must be present after login',
+  ).toBeTruthy();
+
+  // When the SPA's "Sign out" action fires — Sidebar.tsx handleLogout calls
+  // POST /api/v1/auth/logout (HandleLogout → middleware.ClearSessionCookie)
+  // BEFORE clearing local UI state and navigating away. Drive the real menu,
+  // not api.ts's logout() directly, so this exercises the actual wiring a
+  // regression could break (e.g. a future edit that clears local state first
+  // and skips the network call entirely).
+  const hamburger = page.locator('#sidebar-hamburger');
+  await expect(hamburger).toBeVisible({ timeout: 10_000 });
+  await hamburger.click();
+
+  const profileTrigger = page.locator('[data-testid="sidebar-profile-trigger"]');
+  await expect(profileTrigger).toBeVisible({ timeout: 10_000 });
+  await profileTrigger.click();
+
+  await page.getByRole('menuitem', { name: 'Sign out' }).click();
+
+  // Then the response clears omnipus-session, and a later /api/v1/* replaying
+  // the old cookie would 401 — handleLogout's own navigate({to:'/login'})
+  // confirms the round trip settled (it fires in a .finally() after the
+  // logout() call resolves or rejects).
+  await expect(page).toHaveURL(/\/#\/login/, { timeout: 15_000 });
+
+  // The Set-Cookie: omnipus-session=; Max-Age=0 response expires the cookie
+  // immediately — browsers drop expired cookies from the jar outright, so it
+  // must no longer appear at all (not just have an empty value).
+  const cookiesAfterLogout = await page.context().cookies();
+  expect(
+    cookiesAfterLogout.find((c) => c.name === SESSION_COOKIE_NAME),
+    'omnipus-session cookie must be cleared after logout',
+  ).toBeUndefined();
+});
+
 /**
- * Token rotation recovery: auth tests do fresh logins which generate a new token
- * for the `admin` user, invalidating the previous token stored in admin.json.
- * After auth tests complete, re-login and update the shared storageState so all
- * subsequent spec files (chat, settings, etc.) get a valid token.
+ * Session-cookie rotation recovery: auth tests do fresh logins, and each
+ * login OVERWRITES the single-slot session_token_hash for the `admin` user
+ * (pkg/gateway/rest_auth.go HandleLogin) — so every earlier omnipus-session
+ * cookie (including the one global-setup.ts captured before this file ran,
+ * and test (d)'s explicitly-cleared one) is invalidated. After auth tests
+ * complete, re-login (a real UI login, exactly what the spec's regression
+ * note #7 asks for) and update the shared storageState so all subsequent
+ * spec files (chat, settings, etc.) get a valid session.
  *
- * This is necessary because the gateway issues a new token per login and the old
- * token becomes invalid. Without this, all post-auth tests fail with 401.
+ * context.storageState() captures whatever the browser context is actually
+ * holding after loginAs() — the real omnipus-session + CSRF cookies the
+ * server just issued — there is nothing left to mirror by hand (the SPA has
+ * no JS-visible token to copy from sessionStorage anymore, ADR-044).
  */
 test.afterAll(async () => {
   const browser = await chromium.launch();
@@ -105,13 +175,6 @@ test.afterAll(async () => {
   const page = await context.newPage();
   await page.goto('/');
   await loginAs(page, 'admin', 'admin123');
-  // Mirror token to localStorage for storageState capture (same as global-setup.ts)
-  await page.evaluate(() => {
-    const token = sessionStorage.getItem('omnipus_auth_token');
-    if (token) {
-      localStorage.setItem('omnipus_auth_token', token);
-    }
-  });
   await context.storageState({ path: AUTH_FILE });
   await browser.close();
 });

@@ -13,22 +13,17 @@ interface UseAutoSaveOptions {
    * Optional endpoint to receive a best-effort flush of the pending data
    * when the page is hidden or unloaded. Uses `fetch(..., { keepalive: true })`
    * (preferred over `navigator.sendBeacon` because keepalive fetch can carry
-   * an `Authorization` header, which sendBeacon cannot). If not provided, no
-   * flush is attempted.
+   * the CSRF double-submit header the PUT requires, which sendBeacon cannot
+   * set). Auth itself rides the `omnipus-session` HttpOnly cookie via
+   * `credentials: 'include'` — there is no bearer token to attach. If not
+   * provided, no flush is attempted.
    */
   flushUrl?: string
   /**
-   * Optional bearer token sent as `Authorization: Bearer <token>` on the
-   * keepalive flush request. Required when the flush endpoint requires auth
-   * (the Omnipus gateway validates every state-changing call against the
-   * account's bearer token); without it the flush will 401 and silently drop.
-   */
-  flushAuthToken?: string
-  /**
    * Optional component-supplied override for the page-hide/unload flush.
    * When provided, `flushBeacon` calls THIS instead of the built-in
-   * single-URL `fetch(flushUrl, { keepalive: true, ... })`. `flushUrl` /
-   * `flushAuthToken` are ignored when this is supplied.
+   * single-URL `fetch(flushUrl, { keepalive: true, ... })`. `flushUrl` is
+   * ignored when this is supplied.
    *
    * Needed when a component's `saveFn` writes to more than one endpoint in a
    * load-bearing order (e.g. WorkspaceTeamTab's core_team-before-edges
@@ -70,7 +65,7 @@ export function useAutoSave<T>(
   saveFn: (data: T) => Promise<unknown>,
   options?: UseAutoSaveOptions,
 ): UseAutoSaveResult {
-  const { debounceMs = 500, disabled = false, flushUrl, flushAuthToken, beaconFlush } = options ?? {}
+  const { debounceMs = 500, disabled = false, flushUrl, beaconFlush } = options ?? {}
   const [status, setStatus] = useState<AutoSaveStatus>('idle')
   const [error, setError] = useState<string>()
   const [lastSavedAt, setLastSavedAt] = useState<Date | undefined>(undefined)
@@ -226,12 +221,12 @@ export function useAutoSave<T>(
 
   // Best-effort flush of pending changes when the page is hidden or unloaded.
   // Uses `fetch(..., { keepalive: true })` rather than `navigator.sendBeacon`
-  // because keepalive fetch can carry an `Authorization: Bearer` header —
-  // the Omnipus gateway validates every state-changing call against the
-  // account's bearer token, and sendBeacon cannot set request headers, so a
-  // sendBeacon flush would 401 and silently drop the pending edit. This
-  // prevents silently losing edits on tab close, browser reload, or
-  // background throttling.
+  // because keepalive fetch can carry the CSRF double-submit header the PUT
+  // requires — sendBeacon cannot set request headers, so a sendBeacon flush
+  // would fail CSRF validation and silently drop the pending edit. Auth
+  // itself is the `omnipus-session` HttpOnly cookie, sent automatically via
+  // `credentials: 'include'`. This prevents silently losing edits on tab
+  // close, browser reload, or background throttling.
   //
   // When `beaconFlush` is supplied it takes over entirely (see the option's
   // doc comment) — the built-in single-URL fetch below is the default path
@@ -286,7 +281,6 @@ export function useAutoSave<T>(
     }
     const payload = JSON.stringify(latestDataRef.current)
     const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-    if (flushAuthToken) headers['Authorization'] = `Bearer ${flushAuthToken}`
     // PUT is state-changing — auth is the omnipus-session cookie (US-5 /
     // FR-010), which requires the CSRF double-submit header alongside it.
     // Read fresh (never cache — see getCsrfCookie's own doc comment).
@@ -303,7 +297,7 @@ export function useAutoSave<T>(
     } catch {
       // Best-effort — browser may block outbound requests during unload.
     }
-  }, [flushUrl, flushAuthToken, hasPendingChanges, beaconFlush])
+  }, [flushUrl, hasPendingChanges, beaconFlush])
 
   useEffect(() => {
     if ((!flushUrl && !beaconFlush) || disabled) return
@@ -323,7 +317,7 @@ export function useAutoSave<T>(
       window.removeEventListener('beforeunload', onBeforeUnload)
       window.removeEventListener('pagehide', onPageHide)
     }
-  }, [flushUrl, flushAuthToken, disabled, flushBeacon, beaconFlush])
+  }, [flushUrl, disabled, flushBeacon, beaconFlush])
 
   // Cleanup on unmount: cancel timers and flush any pending save so changes
   // made just before navigation/unmount are not silently dropped.

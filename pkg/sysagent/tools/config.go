@@ -151,8 +151,18 @@ func validateConfigKey(key string) error {
 }
 
 // isRestartRequired returns true for config keys that require a restart.
+//
+// This list must stay consistent with the gateway's RestartGatedKeys
+// (pkg/gateway/rest_pending_restart.go), which is the authoritative set the
+// REST layer honors. It is duplicated here (rather than imported) because
+// pkg/gateway depends on this package, so importing RestartGatedKeys back would
+// be a cycle. gateway.public_url is restart-gated (ADR-044 D2 / FR-007): it
+// feeds the boot-frozen CanonicalGatewayOrigin that serve_web's "no desync"
+// guarantee and CSP/CORS/WS CheckOrigin all depend on, so an agent that sets it
+// must be told requires_restart:true — omitting it let serve_web/CSP silently
+// desync until a manual restart.
 func isRestartRequired(key string) bool {
-	for _, prefix := range []string{"gateway.port", "gateway.host", "gateway.bind", "sandbox.", "security."} {
+	for _, prefix := range []string{"gateway.port", "gateway.host", "gateway.bind", "gateway.public_url", "sandbox.", "security."} {
 		if strings.HasPrefix(key, prefix) || key == strings.TrimSuffix(prefix, ".") {
 			return true
 		}

@@ -40,8 +40,6 @@ beforeEach(() => {
   vi.stubGlobal('fetch', fetchSpy)
   // Provide a valid CSRF cookie so state-changing calls pass the CSRF gate.
   stubCookie('__Host-csrf=test-csrf-token')
-  // Provide a bearer token so auth headers are populated.
-  sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
 })
 
 afterEach(() => {

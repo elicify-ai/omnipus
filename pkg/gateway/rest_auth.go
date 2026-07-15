@@ -346,6 +346,21 @@ func (a *restAPI) withOptionalAuth(handler http.HandlerFunc) http.HandlerFunc {
 				return
 			}
 		}
+		// Cookie fallback (ADR-044, FR-009): the SPA no longer sends a bearer
+		// token — it authenticates via the omnipus-session HttpOnly cookie. Resolve
+		// it here (the same lookup checkBearerAuth/authenticateWS/browser_ws use) so
+		// optional-auth routes that DO require a user post-onboarding — e.g.
+		// PUT /providers/{id}, POST /providers/{id}/test and /refresh-models, whose
+		// handlers 401 when UserContextKey is nil — see the logged-in identity
+		// instead of falling through to anonymous. Like a non-matching bearer above,
+		// a cookie-parse error or no match is NOT a hard 401 here: it falls through
+		// to anonymous pass-through, keeping this the *optional*-auth path.
+		if user, err := middleware.ResolveUserFromCookie(r, cfg.Gateway.Users); err == nil && user != nil {
+			ctx := context.WithValue(r.Context(), UserContextKey{}, user)
+			a.setCORSHeaders(w, r)
+			handler(w, r.WithContext(ctx))
+			return
+		}
 		// No auth or invalid token in dev mode — pass through unauthenticated.
 		a.setCORSHeaders(w, r)
 		handler(w, r)

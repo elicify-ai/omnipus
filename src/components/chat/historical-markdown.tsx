@@ -7,15 +7,12 @@
 import { useState, useRef, useEffect } from 'react'
 import type { ReactNode } from 'react'
 import { Copy, Check } from '@phosphor-icons/react'
-import { useQuery } from '@tanstack/react-query'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
 import 'katex/dist/katex.min.css'
 import { rehypePhosphorEmoji } from '@/lib/rehype-phosphor-emoji'
-import { resolveEffectivePreview } from '@/lib/preview-url'
-import { fetchAboutInfo } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { copyText } from './media-actions'
 import {
@@ -95,12 +92,6 @@ function HistoricalCodeBlock({ code, className, children, language }: Historical
 }
 
 export function HistoricalMessageMarkdown({ content }: { content: string }) {
-  const { data: aboutInfo } = useQuery({ queryKey: ['about'], queryFn: fetchAboutInfo, staleTime: 5 * 60 * 1000 })
-  const effectivePreview = resolveEffectivePreview(
-    aboutInfo ?? null,
-    typeof window !== 'undefined' ? window.location.hostname : '',
-  )
-
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm, remarkMath]}
@@ -134,11 +125,16 @@ export function HistoricalMessageMarkdown({ content }: { content: string }) {
           )
         },
 
-        // Phosphor-emoji spans (from rehypePhosphorEmoji), lightbox images, and links
-        // (legacy-host rewrite + scheme allow-list) — all shared.
+        // Phosphor-emoji spans (from rehypePhosphorEmoji) and lightbox images — shared.
         span: PhosphorEmojiSpan,
         img: MarkdownImage,
-        a: createLinkRenderer(effectivePreview),
+
+        // Links: scheme allow-list only. Since ADR-044 (preview-on-main-listener),
+        // `/preview/` shares the SPA's own origin — there is no operator-configured
+        // preview host/port to fetch from /api/v1/about, so links render exactly as
+        // the backend returned them (createLinkRenderer(null) is the shared
+        // "no rewrite" case in markdown-shared.tsx — mirrors markdown-text.tsx).
+        a: createLinkRenderer(null),
       }}
     >
       {content}

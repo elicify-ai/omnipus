@@ -617,6 +617,87 @@ func TestNoCredentialReturns401(t *testing.T) {
 	})
 }
 
+// TestWithOptionalAuthAcceptsSessionCookie is the withOptionalAuth counterpart
+// to TestWithAuthAcceptsSessionCookie above — code-review finding C1
+// (preview-on-main-listener, ADR-044). Before this fix, withOptionalAuth
+// (rest_auth.go) checked ONLY the Authorization: Bearer header and the legacy
+// OMNIPUS_BEARER_TOKEN env var before falling through to anonymous
+// pass-through — it never consulted the omnipus-session cookie at all. Once
+// the SPA stopped sending a bearer token (Wave 1 cutover), every
+// withOptionalAuth route whose handler upgrades behavior for a logged-in user
+// (e.g. PUT /providers/{id}, POST /providers/{id}/test and /refresh-models,
+// which 401 when UserContextKey is nil) silently downgraded a cookie-only
+// browser session to anonymous. The fix adds a
+// middleware.ResolveUserFromCookie fallback (mirroring withAuth's), which
+// this test exercises through the real withOptionalAuth method — not a
+// reimplementation of its branching.
+// BDD: Given a logged-in browser with only the omnipus-session cookie (no
+// Authorization header at all), When a withOptionalAuth-wrapped route is
+// called, Then the handler observes the resolved user in context, not
+// anonymous; and given neither a cookie nor a bearer token, the request must
+// still pass through anonymously (UserContextKey nil), not be rejected.
+// Traces to: preview-on-main-listener-spec.md FR-009; pr-review C1.
+func TestWithOptionalAuthAcceptsSessionCookie(t *testing.T) {
+	os.Unsetenv("OMNIPUS_BEARER_TOKEN")
+
+	plaintext, hash, err := middleware.MintSessionToken()
+	require.NoError(t, err)
+
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{
+			Users: []config.UserConfig{
+				{Username: "opt-cookie-user", SessionTokenHash: config.BcryptHash(hash)},
+			},
+		},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+		},
+	}
+	api := &restAPI{
+		agentLoop:     mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{}),
+		allowedOrigin: "http://localhost:3000",
+	}
+
+	var gotUser *config.UserConfig
+	handler := api.withOptionalAuth(func(w http.ResponseWriter, r *http.Request) {
+		gotUser, _ = r.Context().Value(UserContextKey{}).(*config.UserConfig)
+		w.WriteHeader(http.StatusOK)
+	})
+
+	t.Run("valid session cookie resolves the user, not anonymous", func(t *testing.T) {
+		gotUser = nil
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/providers/openai", nil)
+		r.AddCookie(&http.Cookie{Name: middleware.SessionCookieName, Value: plaintext})
+		// Deliberately no Authorization header — the SPA no longer sends one
+		// (Wave 1 cutover).
+		handler(w, r)
+
+		require.Equal(t, http.StatusOK, w.Code, "the wrapped handler must still run")
+		require.NotNil(t, gotUser,
+			"C1: a valid omnipus-session cookie must resolve a user in context through "+
+				"withOptionalAuth, not fall through to anonymous")
+		assert.Equal(t, "opt-cookie-user", gotUser.Username,
+			"resolved identity must be the cookie's matching user")
+	})
+
+	t.Run("no cookie and no bearer still passes through anonymously", func(t *testing.T) {
+		// Poison gotUser first so a no-op handler run couldn't produce a false pass.
+		gotUser = &config.UserConfig{Username: "sentinel-must-be-cleared"}
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/state", nil)
+		// Neither an Authorization header nor a cookie.
+		handler(w, r)
+
+		require.Equal(t, http.StatusOK, w.Code,
+			"withOptionalAuth must still pass an unauthenticated request through, not reject it")
+		assert.Nil(t, gotUser,
+			"no credential at all must resolve to anonymous (nil user in context), not error "+
+				"and not leak a stale/sentinel identity")
+	})
+}
+
 // dialTestWSWithCookie dials the chat WebSocket endpoint carrying the given
 // omnipus-session cookie value on the upgrade request itself (the browser's
 // automatic same-origin cookie attachment during the WS handshake). Proves

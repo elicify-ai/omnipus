@@ -488,7 +488,7 @@ export function AgentListScreen() {
   // there is no JS-visible token to gate on anymore, so this uses the
   // display-only `username` (set at the same point login/onboarding used to
   // set the token) as the "we've completed sign-in" signal instead.
-  const authToken = useAuthStore((s) => s.username)
+  const username = useAuthStore((s) => s.username)
   const queryClient = useQueryClient()
 
   const { data: agents = [], isLoading: agentsLoading, isError: agentsError, refetch: refetchAgents } = useQuery({
@@ -521,7 +521,7 @@ export function AgentListScreen() {
   const [cliDetectFailed, setCliDetectFailed] = useState(false)
   useEffect(() => {
     if (typeof window === 'undefined') return
-    if (!authToken) return
+    if (!username) return
     let cancelled = false
     // UAT fix: go through the authed `fetchCliDetect()` (request() wrapper)
     // so the bearer token is sent. The previous raw fetch had no auth header
@@ -539,7 +539,7 @@ export function AgentListScreen() {
     return () => {
       cancelled = true
     }
-  }, [authToken])
+  }, [username])
 
   const { mutate: doSetDefault } = useMutation({
     mutationFn: (agent: Agent) =>

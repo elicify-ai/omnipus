@@ -234,9 +234,9 @@ OMNIPUS_BEARER_TOKEN="" ./omnipus gateway --allow-empty &
 
 Onboarding flow → Chat (multi-turn, token/cost) → Agents (list, create, profile) → System agent (read-only sections) → Settings (all tabs) → Command Center → Skills & Tools tabs → Sidebar nav → zero console errors (WS reconnect warnings OK).
 
-### Two-port preview
+### Preview on the main listener (ADR-044)
 
-Gateway opens two listeners by default: `gateway.port` (5000, SPA + authenticated API) and `gateway.preview_port` (5001, agent-generated HTML previews on a separate origin for browser isolation). `gateway.preview_listener_enabled=false` fully disables iframe preview (second listener not started, `/preview/` not registered → 404; `web_serve` URLs won't resolve). No single-port fallback. Reverse-proxy operators set `gateway.public_url` and `gateway.preview_origin` to the FQ HTTPS URLs the browser reaches (for correct CSP / `frame-ancestors`) — see `docs/operations/reverse-proxy.md`. On Android/Termux, `preview_listener_enabled` defaults to false (can't bind a second port).
+The gateway serves the SPA, the authenticated API, AND agent-generated dev previews on a **single** listener (`gateway.port`, default 5000): `/preview/<agent>/<token>/…` is registered **bare** (token-authenticated, CSRF/Origin prefix-exempt) on the main mux. There is **no** separate preview listener — the `preview_port`/`preview_host`/`preview_origin`/`preview_listener_enabled` config keys were **deleted** with no back-compat. The live `gateway.preview_enabled` flag (default true, read per-request, **no restart**) 404s `/preview/` when disabled. Chat renders a preview **link** (no embedded iframe); the agent reviews/presents it via the built-in browser live panel. Reverse-proxy operators set `gateway.public_url` (still **restart-gated**) to the FQ HTTPS URL the browser reaches — it drives the boot-frozen `CanonicalGatewayOrigin` that `web_serve` preview URLs and CSP/CORS/WS `CheckOrigin` all use — see `docs/operations/reverse-proxy.md`.
 
 ### Local PR-runner (ci-omnipus Fly worker)
 

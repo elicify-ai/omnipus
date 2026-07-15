@@ -4880,7 +4880,7 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 // registration closed — registrations are short-lived (max 24h), so nothing
 // minted before the migration could still be valid.
 func (a *restAPI) registerPreviewEndpoints(cm httpHandlerRegistrar) {
-	cm.RegisterHTTPHandler("/preview/", http.HandlerFunc(a.HandlePreview))
+	cm.RegisterHTTPHandler(middleware.PreviewPathPrefix, http.HandlerFunc(a.HandlePreview))
 }
 
 // rotateGatewayToken generates a new random bearer token, persists it to config, and returns it.

@@ -43,6 +43,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
@@ -580,6 +581,54 @@ func TestHandleAbout_PreviewFields_Differentiation(t *testing.T) {
 	}
 	assert.NotEqual(t, bodies[0]["preview_enabled"], bodies[1]["preview_enabled"],
 		"Different preview_enabled configs must produce different about responses")
+}
+
+// TestHandleAbout_PreviewFields_GeneratedContractType strengthens
+// TestHandleAbout_PreviewFields (pr-test-analyzer finding #24): decoding the
+// response into map[string]any only proves the field NAMES are present — it
+// cannot catch a JSON-type/schema drift (e.g. preview_enabled serialized as a
+// string, or a field silently renamed) because map[string]any accepts any
+// shape. This decodes the SAME /api/v1/about response into the GENERATED
+// gen.AboutResponse struct (Constraint #8 — the one legal cross-boundary type
+// for this response, per contracts/components/schemas/AboutResponse.yaml)
+// and asserts PreviewEnabled round-trips correctly for both the true default
+// and an explicitly-disabled config, proving HandleAbout emits schema-valid
+// JSON for the new field — not just JSON that happens to have the right key
+// when decoded loosely.
+// Traces to: preview-on-main-listener-spec.md FR-015 (US-8); pr-test #24.
+func TestHandleAbout_PreviewFields_GeneratedContractType(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		t.Run(fmt.Sprintf("preview_enabled=%v", enabled), func(t *testing.T) {
+			api := newPreviewTestAPI(t)
+			cfg := api.agentLoop.GetConfig()
+			cfg.Gateway.Port = 5000
+			v := enabled
+			cfg.Gateway.PreviewEnabled = &v
+			cfg.Tools.RunInWorkspace.WarmupTimeoutSeconds = 60
+
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodGet, "/api/v1/about", nil)
+			api.HandleAbout(w, r)
+
+			require.Equal(t, http.StatusOK, w.Code, "/api/v1/about must return 200")
+
+			var resp gen.AboutResponse
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp),
+				"FR-015: /api/v1/about response must decode into the GENERATED gen.AboutResponse "+
+					"contract type without error — a type-mismatched or malformed field would fail "+
+					"here even though a map[string]any decode would silently accept it")
+
+			assert.Equal(t, enabled, resp.PreviewEnabled,
+				"gen.AboutResponse.PreviewEnabled must reflect the configured value")
+			assert.Equal(t, 60, resp.WarmupTimeoutSeconds,
+				"gen.AboutResponse.WarmupTimeoutSeconds must match the configured warmup timeout")
+			assert.NotEmpty(t, resp.Version, "gen.AboutResponse.Version must be populated")
+			assert.NotEmpty(t, resp.GoVersion, "gen.AboutResponse.GoVersion must be populated")
+			assert.NotEmpty(t, resp.Os, "gen.AboutResponse.Os must be populated")
+			assert.NotEmpty(t, resp.Arch, "gen.AboutResponse.Arch must be populated")
+			assert.Positive(t, resp.Pid, "gen.AboutResponse.Pid must be a real positive PID")
+		})
+	}
 }
 
 // ---------------------------------------------------------------------------

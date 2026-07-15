@@ -121,14 +121,20 @@ func originMatches(requestOrigin, expectedOrigin string) bool {
 		strings.TrimRight(expectedOrigin, "/"))
 }
 
-// previewPathPrefix is the reverse-proxied dev-preview surface
-// (rest_preview.go HandlePreview). Mirrors csrf.go's defaultExemptPrefixes:
-// preview URLs are tokenized (/preview/<agent>/<token>/…) so an exact-path
+// PreviewPathPrefix is the reverse-proxied dev-preview surface
+// (rest_preview.go HandlePreview) and the single source of truth for that path
+// prefix across the security boundary: csrf.go's defaultExemptPrefixes and this
+// file's Origin-check exemption both reference it, so the CSRF-exempt and
+// Origin-exempt prefixes can never drift apart. The gateway package
+// (rest.go registration, rest_preview.go path-strip) references it as
+// middleware.PreviewPathPrefix for the same reason.
+//
+// Preview URLs are tokenized (/preview/<agent>/<token>/…) so an exact-path
 // exemption can never match, and the path token IS the credential — a
 // previewed app must be able to submit state-changing requests through the
 // proxy without carrying an Origin header the SPA's main origin recognises
 // (ADR-044 / FR-012).
-const previewPathPrefix = "/preview/"
+const PreviewPathPrefix = "/preview/"
 
 // isStateChangingMethod returns true for HTTP methods that modify state
 // (POST, PUT, PATCH, DELETE). GET, HEAD, OPTIONS are safe by RFC 7231
@@ -166,8 +172,8 @@ func RequireMatchingOriginOnStateChanging(
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// /preview/ is prefix-exempt for ALL methods (FR-012) — see
-			// previewPathPrefix's doc comment.
-			if strings.HasPrefix(r.URL.Path, previewPathPrefix) {
+			// PreviewPathPrefix's doc comment.
+			if strings.HasPrefix(r.URL.Path, PreviewPathPrefix) {
 				next.ServeHTTP(w, r)
 				return
 			}

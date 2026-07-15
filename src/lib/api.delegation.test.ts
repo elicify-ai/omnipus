@@ -30,7 +30,6 @@ beforeEach(() => {
   fetchSpy = vi.fn()
   vi.stubGlobal('fetch', fetchSpy)
   stubCookie('__Host-csrf=test-csrf-token')
-  sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
 })
 
 afterEach(() => {

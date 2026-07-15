@@ -326,3 +326,42 @@ func TestPreviewProxyNeutralizesSetCookie(t *testing.T) {
 	assert.Equal(t, "legit-value", byName["my-app-cookie"],
 		"differentiation: the previewed app's own cookie must pass through untouched")
 }
+
+// TestNeutralizeReservedSetCookies_MalformedValueStillStripped is the regression
+// for the silent-failure-hunter CRITICAL: a previewed app that emits a
+// reserved-name Set-Cookie whose VALUE contains a byte net/http's strict RFC 6265
+// parser rejects (so resp.Cookies() silently DROPS the line) must STILL have that
+// line stripped. The old resp.Cookies()-based implementation left it in the raw
+// header — invisible to Cookies() but stored by more-lenient real browsers,
+// clobbering the operator's real omnipus-session.
+func TestNeutralizeReservedSetCookies_MalformedValueStillStripped(t *testing.T) {
+	// Reserved cookies whose values carry a raw backslash (0x5C) and bytes above
+	// 0x7E — all outside net/http's valid cookie-value grammar, so
+	// http.Response.Cookies() omits these lines entirely.
+	malformedSession := "omnipus-session=a\\b\x80; Path=/"
+	malformedCSRF := "csrf=x\x7f; Path=/"
+	legitApp := "my-app-cookie=legit-value; Path=/"
+
+	resp := &http.Response{Header: http.Header{}}
+	resp.Header["Set-Cookie"] = []string{malformedSession, malformedCSRF, legitApp}
+
+	// Precondition: net/http's own parser is BLIND to the malformed reserved
+	// lines (it returns only the valid app cookie) — the exact gap a
+	// parse-based filter would fall into.
+	preNames := map[string]bool{}
+	for _, c := range resp.Cookies() {
+		preNames[c.Name] = true
+	}
+	require.False(t, preNames["omnipus-session"], "precondition: net/http Cookies() is blind to the malformed reserved omnipus-session line")
+	require.False(t, preNames["csrf"], "precondition: net/http Cookies() is blind to the malformed reserved csrf line")
+
+	neutralizeReservedSetCookies(resp)
+
+	for _, line := range resp.Header["Set-Cookie"] {
+		name := cookieNameFromSetCookieLine(line)
+		assert.NotEqual(t, "omnipus-session", name, "malformed reserved omnipus-session must be stripped: %q", line)
+		assert.NotEqual(t, "csrf", name, "malformed reserved csrf must be stripped: %q", line)
+	}
+	require.Contains(t, resp.Header["Set-Cookie"], legitApp,
+		"the previewed app's own (valid) cookie must pass through byte-for-byte")
+}

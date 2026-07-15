@@ -142,7 +142,7 @@ vi.mock('@tanstack/react-router', () => ({
 vi.mock('@/lib/api', () => ({
   fetchAgents: vi.fn().mockResolvedValue([]),
   fetchSessionMessages: vi.fn().mockResolvedValue([]),
-  fetchAboutInfo: vi.fn().mockResolvedValue({ preview_port: 5001 }),
+  fetchAboutInfo: vi.fn().mockResolvedValue({}),
   createSession: vi.fn(),
   uploadFiles: vi.fn(),
   fetchProviders: vi.fn().mockResolvedValue([]),

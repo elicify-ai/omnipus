@@ -10,6 +10,8 @@ import {
   isWorker,
   ApiError,
   isApiError,
+  getCsrfCookie,
+  CSRF_HEADER_NAME,
   type Workspace,
   type WorkspaceDelegation,
   type WorkspaceUpdateRequest,
@@ -52,17 +54,6 @@ import {
 
 interface WorkspaceTeamTabProps {
   workspaceId: string
-}
-
-function readAuthToken(): string | undefined {
-  // Same inline read the rest of the app uses (sessionStorage preferred,
-  // localStorage fallback) — keeps the keepalive flush authorized.
-  if (typeof sessionStorage === 'undefined') return undefined
-  return (
-    sessionStorage.getItem('omnipus_auth_token') ??
-    localStorage.getItem('omnipus_auth_token') ??
-    undefined
-  )
 }
 
 export function WorkspaceTeamTab(_props: WorkspaceTeamTabProps) {
@@ -236,14 +227,20 @@ export function WorkspaceTeamTab(_props: WorkspaceTeamTabProps) {
   // change (new/extended wire schema), deferred.
   const beaconFlush = useCallback(() => {
     if (!hydratedRef.current || !editState) return
-    const token = readAuthToken()
+    // Auth is the omnipus-session HttpOnly cookie (US-5 / FR-010) — sent
+    // automatically via `credentials: 'include'`. A state-changing PUT still
+    // requires the CSRF double-submit header alongside it (read fresh, never
+    // cached — see getCsrfCookie's own doc comment). Mirrors the pattern in
+    // useAutoSave.ts's own built-in flushBeacon path.
     const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-    if (token) headers['Authorization'] = `Bearer ${token}`
+    const csrf = getCsrfCookie()
+    if (csrf) headers[CSRF_HEADER_NAME] = csrf
 
     const putKeepalive = (url: string, payload: unknown, label: string): Promise<void> =>
       fetch(url, {
         method: 'PUT',
         keepalive: true,
+        credentials: 'include',
         headers,
         body: JSON.stringify(payload),
       })

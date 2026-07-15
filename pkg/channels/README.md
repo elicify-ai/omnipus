@@ -216,16 +216,19 @@ Failed channels after a successful construction are tracked in `Manager.failedCh
 3. Launches `runWorker` + `runMediaWorker` goroutines
 4. Launches `dispatchOutbound` + `dispatchOutboundMedia` goroutines
 5. Launches `runTTLJanitor` goroutine (10 second interval)
-6. Starts the shared HTTP server and preview server (if configured)
+6. Starts the shared HTTP server (if configured)
 7. Calls `RegisterCommands` on every `CommandRegistrarCapable` channel (30s timeout, WARN on failure)
 
 `StopAll` (`pkg/channels/manager.go:835-909`):
 1. Shuts down the shared HTTP server (5s graceful)
-2. Shuts down the preview server (5s graceful)
-3. Cancels the dispatch context
-4. Closes text worker queues; waits for drain
-5. Closes media worker queues; waits for drain
-6. Calls `channel.Stop(ctx)` for each channel
+2. Cancels the dispatch context
+3. Closes text worker queues; waits for drain
+4. Closes media worker queues; waits for drain
+5. Calls `channel.Stop(ctx)` for each channel
+
+> **ADR-044 (preview-on-main-listener, 2026-07-15):** `Manager` no longer owns a
+> separate preview server/listener at all — see §12.4 below. There is nothing
+> preview-related left in `StartAll`/`StopAll` to start or stop.
 
 ### 4.4 Hot Reload
 
@@ -705,7 +708,9 @@ Reference format: `media://<uuid>`. Scope format: produced by `channels.BuildMed
 
 ### 12.4 Shared HTTP Server
 
-Manager creates a `dynamicServeMux` (`pkg/channels/dynamic_mux.go`) that supports runtime `Handle` / `Unhandle`. Channels implementing `WebhookHandler` are registered automatically during `initChannel` and `StartAll`. A separate preview server (`SetupPreviewServer`) hosts `/serve/` and `/dev/` routes on a different port for agent-generated HTML previews.
+Manager creates a `dynamicServeMux` (`pkg/channels/dynamic_mux.go`) that supports runtime `Handle` / `Unhandle`. Channels implementing `WebhookHandler` are registered automatically during `initChannel` and `StartAll`.
+
+**Preview (ADR-044, 2026-07-15 — supersedes the pre-2026-07-15 "separate preview server" design described here previously):** agent-generated HTML previews (`web_serve`/`serve_web` tool, dev + static modes) are served by `HandlePreview` (`pkg/gateway/rest_preview.go`) at `/preview/{agent}/{token}/...` on the **main gateway listener** — the same origin, same port as the SPA and the rest of `/api/v1/*`. There is no second TCP listener, no separate preview mux, and no operator-configured preview host/port/origin: the `Manager`-owned `SetupPreviewServer` / `RegisterPreviewHandler` / `WrapPreviewHandler` methods and the second `previewMux`/`previewServer` they drove were **deleted entirely**, along with the `preview_port` / `preview_host` / `preview_origin` / `preview_listener_enabled` config keys — no back-compat. The legacy `/serve/` and `/dev/` path prefixes are still accepted by `HandlePreview` for old-transcript replay; they resolve through the same handler, not a different port. A single live boolean, `gateway.preview_enabled` (`cfg.IsPreviewEnabled()`, default `true`), gates the whole surface — checked on every request, no restart required to flip it; when `false`, `/preview/` 404s and `serve_web` refuses with a clear error. `AboutResponse` (`GET /api/v1/about`) reports the live value as `preview_enabled`, replacing the retired `preview_port`/`preview_listener_enabled` fields. The SPA never embeds the preview in an iframe (same-origin embedding would defeat the isolation the old two-port design relied on) — it renders a clickable link the user opens in their own browser tab; see `src/components/chat/IframePreview.tsx` and `docs/internal/architecture/ADR-044-preview-on-main-listener.md`.
 
 HTTP server timeout: `ReadTimeout = 30s`, `WriteTimeout = 30s` (`pkg/channels/manager.go`).
 

@@ -13,7 +13,7 @@
 // api.test.ts / queryClient.auth.test.ts for the same reason.
 //
 // Traces to: docs/internal/specs/preview-on-main-listener-spec.md
-//   — S8 (no JS token after login/onboarding), TDD #25 (auth.store.test.ts).
+//   — S8 (no JS token after login/onboarding), TDD #25 (src/store/auth.test.ts).
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { act } from 'react'
