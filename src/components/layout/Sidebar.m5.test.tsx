@@ -10,7 +10,7 @@
 // Traces to: src/components/layout/Sidebar.tsx — SIDEBAR_PIN_BREAKPOINT, canPin state
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, act } from '@testing-library/react'
+import { render, screen, act, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useSidebarStore } from '@/store/sidebar'
 import React from 'react'
@@ -299,6 +299,10 @@ describe('Sidebar — aria-current on active library items', () => {
   it('Settings link is not active at pathname "/"', () => {
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
     render(<Sidebar />, { wrapper: makeWrapper() })
+
+    // Settings lives inside the Advanced collapsible — expand it first
+    const advancedToggle = screen.getByRole('button', { name: 'Advanced' })
+    act(() => { fireEvent.click(advancedToggle) })
 
     const settingsLink = screen.getByRole('link', { name: 'Settings' })
     expect(settingsLink.getAttribute('aria-current')).toBeNull()
