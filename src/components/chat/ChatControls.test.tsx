@@ -82,52 +82,19 @@ beforeEach(() => {
 //
 // New Chat always shows icon + "New Chat" label in the single inline cluster.
 
-describe('ChatControls — New Chat button', () => {
-  it('renders a New Chat button with a visible label', async () => {
-    renderControls()
-    const btn = await vi.waitFor(() => {
-      const b = screen.getByRole('button', { name: /new chat/i })
-      if (!b) throw new Error('not rendered')
-      return b
-    })
-    expect(btn).toBeInTheDocument()
-    // Label text is always present in the single-cluster layout
-    expect(btn.textContent).toMatch(/new chat/i)
-  })
-
-  it('navigates to "/" when clicked on the global chat route', async () => {
-    mockPathname = '/'
-    renderControls()
-    const btn = await vi.waitFor(() => screen.getByRole('button', { name: /new chat/i }))
-    fireEvent.click(btn)
-    expect(mockNavigate).toHaveBeenCalledWith({ to: '/' })
-  })
-
-  it('calls startNewSession in-place inside a workspace chat tab', async () => {
-    mockPathname = '/workspaces/ws-123/chat'
-    renderControls()
-    const btn = await vi.waitFor(() => screen.getByRole('button', { name: /new chat/i }))
-    fireEvent.click(btn)
-    expect(mockNavigate).not.toHaveBeenCalled()
-    await vi.waitFor(() => {
-      expect(useSessionStore.getState().activeSessionId).toBeNull()
-    })
-    expect(useSessionStore.getState().activeAgentId).toBe('mia')
-  })
-})
-
 // ── All controls render in the single inline cluster ─────────────────────────
 
 describe('ChatControls — all controls present (single cluster)', () => {
-  it('renders New Chat and Open browser in the DOM', async () => {
+  it('renders Open browser and NOT New Chat (removed — sidebar + /new cover it)', async () => {
     renderControls()
 
-    // 1. New Chat — single button with visible label
-    const newChat = await vi.waitFor(() => screen.getByRole('button', { name: /new chat/i }))
-    expect(newChat.textContent).toMatch(/new chat/i)
+    // Open browser is the sole remaining control
+    const openBrowser = await vi.waitFor(() => screen.getByRole('button', { name: /open browser/i }))
+    expect(openBrowser).toBeInTheDocument()
 
-    // 2. Open browser button
-    expect(screen.getByRole('button', { name: /open browser/i })).toBeInTheDocument()
+    // New Chat was removed from the header (redundant with the sidebar's
+    // per-workspace New chat row and the /new slash command).
+    expect(screen.queryByRole('button', { name: /new chat/i })).not.toBeInTheDocument()
 
     // Negative guard: the pickers must NEVER come back to the header cluster.
     expect(screen.queryByTestId('agent-picker-trigger')).not.toBeInTheDocument()
@@ -137,37 +104,18 @@ describe('ChatControls — all controls present (single cluster)', () => {
 })
 
 // ── No kebab / "More" popover ─────────────────────────────────────────────────
-//
-// The old More popover has been removed. No chat-controls-more-trigger in DOM.
 
 describe('ChatControls — no More/kebab popover', () => {
   it('does NOT render the old "More chat controls" kebab trigger', async () => {
     renderControls()
-    await vi.waitFor(() => screen.getByRole('button', { name: /new chat/i }))
+    await vi.waitFor(() => screen.getByRole('button', { name: /open browser/i }))
     expect(screen.queryByTestId('chat-controls-more-trigger')).toBeNull()
   })
 
   it('does NOT render any DotsThreeVertical icon (no kebab)', async () => {
     const { container } = renderControls()
-    await vi.waitFor(() => screen.getByRole('button', { name: /new chat/i }))
+    await vi.waitFor(() => screen.getByRole('button', { name: /open browser/i }))
     expect(container.querySelector('[data-phosphor-icon="DotsThreeVertical"]')).toBeNull()
-  })
-})
-
-// ── Responsive layout: single inline cluster structural check ─────────────────
-//
-// jsdom does not perform real CSS layout, so we verify the class structure
-// rather than computed visibility. The single cluster always renders once.
-
-describe('ChatControls — responsive layout (structural)', () => {
-  it('New Chat label is always in the DOM (no icon-only variant)', async () => {
-    renderControls()
-    const btn = await vi.waitFor(() => screen.getByRole('button', { name: /new chat/i }))
-    // The label text "New Chat" must be part of the button's content
-    expect(btn.textContent).toMatch(/new chat/i)
-    // Should be exactly one New Chat button in the single-cluster layout
-    const allNewChat = screen.getAllByRole('button', { name: /new chat/i })
-    expect(allNewChat).toHaveLength(1)
   })
 })
 

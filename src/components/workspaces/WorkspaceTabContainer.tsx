@@ -129,6 +129,7 @@ function WorkspaceTabContainerView({
   toggle: () => void
 }) {
   const location = useLocation()
+  const navigate = useNavigate()
   const activeSegment = resolveActiveSegment(location.pathname, workspace.id)
 
   return (
@@ -152,9 +153,25 @@ function WorkspaceTabContainerView({
             onClick={toggle}
             aria-label="Toggle navigation sidebar"
             data-testid="workspace-hamburger"
-            className="flex items-center justify-center h-chrome-header min-h-chrome-header w-10 text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors flex-shrink-0"
+            className="flex items-center justify-center h-chrome-header min-h-chrome-header w-11 text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors flex-shrink-0"
           >
             <List size={20} />
+          </button>
+
+          {/* Workspace name — the wayfinding anchor (which workspace am I in?).
+              Clicking it opens workspace settings (Notion-style: the container's
+              name IS the entry point for configuring the container). */}
+          <button
+            type="button"
+            onClick={() =>
+              navigate({ to: '/workspaces/$workspaceId/settings', params: { workspaceId: workspace.id } })
+            }
+            title="Workspace settings"
+            aria-label={`${workspace.name} — workspace settings`}
+            data-testid="workspace-name-button"
+            className="flex items-center gap-1.5 px-2 h-chrome-header min-h-chrome-header max-w-[20ch] flex-shrink-0 text-sm font-headline font-semibold text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-accent)] transition-colors"
+          >
+            <span className="truncate">{workspace.name}</span>
           </button>
 
           <WorkspaceTabBar workspaceId={workspace.id} />

@@ -68,7 +68,7 @@ vi.mock('@/components/ui/dropdown-menu', () => ({
 import { WorkspaceTabBar, WORKSPACE_TABS, resolveActiveSegment } from './WorkspaceTabBar'
 
 describe('WorkspaceTabBar — full strip (hidden @6xl:flex)', () => {
-  it('renders all seven workspace tab links in the full strip with correct test ids and hrefs', () => {
+  it('renders all six workspace tab links in the full strip with correct test ids and hrefs', () => {
     mockPathname = '/workspaces/ws-1/chat'
     render(<WorkspaceTabBar workspaceId="ws-1" />)
 
@@ -115,7 +115,6 @@ describe('WorkspaceTabBar — full strip (hidden @6xl:flex)', () => {
       'graph',
       'calendar',
       'team',
-      'settings',
     ])
   })
 })

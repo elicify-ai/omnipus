@@ -41,8 +41,9 @@ func TestBuiltinHelpHandler_ReturnsFormattedMessage(t *testing.T) {
 		t.Fatalf("/help handler error: %v", err)
 	}
 
-	// Canonical commands must appear (10; /skill hard-removed per D1).
-	for _, name := range []string{"clear", "help", "model", "cancel", "agents", "tasks", "skills", "channels", "status", "config"} {
+	// Canonical commands must appear (10; /skill hard-removed per D1;
+	// /clear renamed to /new with 'clear' as a hidden alias).
+	for _, name := range []string{"new", "help", "model", "cancel", "agents", "tasks", "skills", "channels", "status", "config"} {
 		if !strings.Contains(reply, "/"+name) {
 			t.Errorf("/help cli: missing /%s in output:\n%s", name, reply)
 		}

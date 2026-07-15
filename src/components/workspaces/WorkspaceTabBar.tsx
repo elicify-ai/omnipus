@@ -8,7 +8,6 @@ import {
   Graph,
   CalendarBlank,
   UsersThree,
-  Folder,
   CaretDown,
 } from '@phosphor-icons/react'
 import type { Icon } from '@phosphor-icons/react'
@@ -37,9 +36,9 @@ export const WORKSPACE_TABS: WorkspaceTab[] = [
   { segment: 'graph', label: 'Graph', Icon: Graph },
   { segment: 'calendar', label: 'Calendar', Icon: CalendarBlank },
   { segment: 'team', label: 'Team', Icon: UsersThree },
-  // Workspace settings — a workspace glyph (Folder), icon-only per operator
-  // direction (not a gear, no visible "Settings" text).
-  { segment: 'settings', label: 'Workspace settings', Icon: Folder, iconOnly: true },
+  // NOTE: workspace settings is deliberately NOT a tab — settings is chrome,
+  // not a view. It's reached by clicking the workspace NAME in the top bar
+  // (WorkspaceTabContainer), Notion-style. The /settings route still exists.
 ]
 
 interface WorkspaceTabBarProps {

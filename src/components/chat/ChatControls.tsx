@@ -1,13 +1,9 @@
 import { useState } from 'react'
-import { useLocation, useNavigate } from '@tanstack/react-router'
-import { PencilSimpleLine, Monitor, SpinnerGap } from '@phosphor-icons/react'
+import { Monitor, SpinnerGap } from '@phosphor-icons/react'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import { createSession } from '@/lib/api'
 import { cn } from '@/lib/utils'
-
-// Matches /workspaces/<id>/chat so New Chat can stay in-workspace.
-const WORKSPACE_CHAT_RE = /^\/workspaces\/[^/]+\/chat$/
 
 interface ChatControlsProps {
   className?: string
@@ -29,23 +25,7 @@ interface ChatControlsProps {
  */
 export function ChatControls({ className }: ChatControlsProps) {
   const { activeAgentId, activeSessionId, setActiveSession } = useSessionStore()
-  const startNewSession = useSessionStore((s) => s.startNewSession)
   const addToast = useUiStore((s) => s.addToast)
-
-  const navigate = useNavigate()
-  const location = useLocation()
-
-  // When inside a workspace chat tab, New Chat stays in-place instead of
-  // navigating away, preserving the workspace context and the active agent.
-  const isWorkspaceChat = WORKSPACE_CHAT_RE.test(location.pathname)
-
-  const handleNewChat = () => {
-    if (isWorkspaceChat) {
-      startNewSession(activeAgentId, null)
-      return
-    }
-    void navigate({ to: '/' })
-  }
 
   // ADR-039 D-A1: persistent "Open browser" launcher. The backend
   // BrowserManager.Session() lazily creates a blank tab on WS attach, so
@@ -113,21 +93,9 @@ export function ChatControls({ className }: ChatControlsProps) {
       )}
       style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' } as React.CSSProperties}
     >
-      {/* 1. New Chat — always icon + label */}
-      <button
-        type="button"
-        onClick={handleNewChat}
-        aria-label="New chat"
-        className={cn(
-          'flex items-center gap-1.5 shrink-0 px-2 h-8 rounded-md text-xs',
-          'text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)]',
-          'transition-colors whitespace-nowrap',
-          'pointer-coarse:min-h-[44px] pointer-coarse:px-3',
-        )}
-      >
-        <PencilSimpleLine size={15} />
-        <span>New Chat</span>
-      </button>
+      {/* New Chat was removed from the header — three paths for one action was
+          redundant (Hick's Law). It lives where the user already is: the
+          sidebar's per-workspace "New chat" row and the /new slash command. */}
 
       {/* Open browser — ADR-039 D-A1: user-initiated live browser session,
           independent of any agent tool call. */}
