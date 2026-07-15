@@ -27,6 +27,7 @@ import { useUiStore } from '@/store/ui'
 import { useNotificationsStore } from '@/store/notifications'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { fetchWorkspaces, createWorkspace, workspacesQueryKeys, fetchSessions, fetchAgents } from '@/lib/api'
+import type { Workspace } from '@/lib/api'
 import { useSessionStore } from '@/store/session'
 import { useSelectSession } from '@/components/chat/useSelectSession'
 import {
@@ -72,10 +73,21 @@ export function Sidebar() {
   const createWorkspaceMut = useMutation({
     mutationFn: (name: string) => createWorkspace({ name }),
     onSuccess: (ws) => {
-      queryClient.invalidateQueries({ queryKey: workspacesQueryKeys.list() })
+      // Seed the active-list cache with the created workspace SYNCHRONOUSLY
+      // before navigating — WorkspaceTabContainer resolves the workspace from
+      // this cache, and an invalidate alone refetches asynchronously (the
+      // container would look up the id in the stale list and render
+      // "Workspace not found"). Note: keys must match exactly — the list is
+      // cached under {status:'active'}; a bare list() key matches nothing.
+      queryClient.setQueryData<Workspace[]>(
+        workspacesQueryKeys.list({ status: 'active' }),
+        (old) => (old ? [...old, ws] : [ws]),
+      )
+      // Background refetch for canonical ordering/fields ('workspaces' prefix
+      // matches every params variant).
+      queryClient.invalidateQueries({ queryKey: ['workspaces'] })
       setCreatingWorkspace(false)
       setNewWorkspaceName('')
-      // Land in the new workspace immediately.
       setActiveWorkspaceId(ws.id)
       navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: ws.id } })
     },
