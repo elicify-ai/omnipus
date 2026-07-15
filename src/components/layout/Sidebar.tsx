@@ -35,7 +35,7 @@ import { useAuthStore } from '@/store/auth'
 import { useUiStore } from '@/store/ui'
 import { useNotificationsStore } from '@/store/notifications'
 import { useWorkspacesStore } from '@/store/workspacesStore'
-import { fetchWorkspaces, workspacesQueryKeys } from '@/lib/api'
+import { fetchWorkspaces, workspacesQueryKeys, logout } from '@/lib/api'
 import { NewWorkspaceSlideOver } from '@/components/workspaces/NewWorkspaceSlideOver'
 import { cn } from '@/lib/utils'
 import avatarUrl from '@/assets/logo/omnipus-avatar.svg?url'
@@ -85,8 +85,16 @@ export function Sidebar() {
   const wasOverlayOpenRef = useRef(false)
 
   const handleLogout = useCallback(() => {
-    useAuthStore.getState().clearAuth()
-    navigate({ to: '/login' })
+    // FR-020: revoke the session server-side BEFORE clearing local state —
+    // client-side clearing alone would leave the omnipus-session cookie
+    // valid and replayable. Best-effort: proceed to local teardown even if
+    // the network call fails (e.g. offline), so the user is never stuck.
+    void logout().catch(() => {
+      // Swallow — the user is signing out regardless; see comment above.
+    }).finally(() => {
+      useAuthStore.getState().clearAuth()
+      navigate({ to: '/login' })
+    })
   }, [navigate])
 
   // Workspaces query — refetch every 30s

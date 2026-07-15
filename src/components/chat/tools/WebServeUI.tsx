@@ -8,9 +8,14 @@
  * old transcripts replay correctly; all new sessions use WebServeUI directly.
  *
  * Spec: FR-008 / FR-008a / FR-010 / FR-011 / FR-012 / FR-013 / FR-014 / FR-015 / FR-019.
+ * Also: docs/internal/specs/preview-on-main-listener-spec.md FR-016/FR-017 (US-9) —
+ * `/preview/` now shares the SPA's own gateway listener (ADR-044), so BOTH
+ * modes render as a clickable link via IframePreview — never an embedded
+ * same-origin iframe.
  *
- * kind="static": Globe icon + path label, iframe mounts immediately (no warmup).
- * kind="dev":    Terminal icon + command + port label, warmup state machine.
+ * kind="static": Globe icon + path label, preview link renders immediately (no warmup).
+ * kind="dev":    Terminal icon + command + port label, warmup state machine, then
+ *                a preview link (same-origin HEAD-poll warmup, no iframe).
  *                Default grace period is 60 s (tools.run_in_workspace
  *                .warmup_timeout_seconds in config.json). The config key retains
  *                the pre-unification name for back-compat with deployed configs.
@@ -42,7 +47,15 @@ import { cn } from '@/lib/utils'
 export interface WebServeResult {
   /** Discriminator for the two modes. */
   kind?: 'static' | 'dev'
-  /** Relative preview path, e.g. "/preview/<agent>/<token>/". */
+  /**
+   * The preview URL. Since ADR-044 (preview-on-main-listener), the backend
+   * builds this from the canonical gateway origin — e.g.
+   * "https://pod.example.com/preview/<agent>/<token>/" or
+   * "http://localhost:<gateway.port>/preview/<agent>/<token>/" — the SAME
+   * origin the SPA itself is served from. Legacy/replay transcripts may
+   * still carry a relative path here (e.g. "/preview/<agent>/<token>/");
+   * IframePreview's URL resolution (resolvePreviewHref) handles both shapes.
+   */
   url: string
   /** ISO-8601 token expiry timestamp. */
   expires_at: string

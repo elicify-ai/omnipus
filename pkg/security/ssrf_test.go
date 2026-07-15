@@ -6,6 +6,7 @@ package security_test
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -581,4 +582,115 @@ func TestSSRFChecker_CheckRedirect_TooManyRedirectsRejected(t *testing.T) {
 	}
 	require.Error(t, err, "an infinite same-origin redirect loop must eventually be rejected")
 	assert.Contains(t, err.Error(), "too many redirects")
+}
+
+// ---------------------------------------------------------------------------
+// TestBrowserSSRFAllowsGatewayLocalhostOnly — FR-018 / ADR-044 D2 / r4 OBS-003
+// Traces to: docs/internal/specs/preview-on-main-listener-spec.md
+//
+//	US-10 (Agent built-in browser reaches the preview, SSRF scoped, new code)
+//	S21   (Browser SSRF allows the gateway origin only, localhost form)
+//	TDD Plan row 23: TestBrowserSSRFAllowsGatewayLocalhostOnly
+//
+// serve_web emits the literal, pre-resolution form
+// "http://localhost:<gateway.port>/preview/…" when gateway.public_url is
+// unset (D2). The checker is otherwise port-blind (extractHost historically
+// strips the port) and 127.0.0.0/8 is a blanket CIDR block, so without a
+// port-aware exception the built-in browser could never reach its own
+// gateway. AllowGatewayOrigin's exception MUST be scoped to the exact
+// gateway host:port — every other local port, and blanket loopback, must
+// stay blocked (Non-Behaviors: "MUST NOT allowlist 'all localhost'").
+// ---------------------------------------------------------------------------
+func TestBrowserSSRFAllowsGatewayLocalhostOnly(t *testing.T) {
+	const gwPort = 5000
+	const otherPort = 5001
+
+	ctx := context.Background()
+
+	t.Run("literal localhost:<gateway.port> preview URL passes", func(t *testing.T) {
+		checker := security.NewSSRFChecker(nil)
+		checker.AllowGatewayOrigin("localhost", gwPort)
+
+		err := checker.CheckURL(ctx, "http://localhost:5000/preview/agent-1/tok3n/")
+		assert.NoError(t, err, "the gateway's own literal localhost:<port> preview URL must pass SSRF")
+	})
+
+	t.Run("resolved-loopback form 127.0.0.1:<gateway.port> passes", func(t *testing.T) {
+		checker := security.NewSSRFChecker(nil)
+		checker.AllowGatewayOrigin("localhost", gwPort)
+
+		err := checker.CheckURL(ctx, "http://127.0.0.1:5000/x")
+		assert.NoError(t, err, "the resolved IPv4 loopback form at the gateway port must pass")
+	})
+
+	t.Run("resolved-loopback form [::1]:<gateway.port> passes", func(t *testing.T) {
+		checker := security.NewSSRFChecker(nil)
+		checker.AllowGatewayOrigin("localhost", gwPort)
+
+		err := checker.CheckURL(ctx, "http://[::1]:5000/x")
+		assert.NoError(t, err, "the resolved IPv6 loopback form at the gateway port must pass")
+	})
+
+	t.Run("a DIFFERENT local port is still blocked", func(t *testing.T) {
+		checker := security.NewSSRFChecker(nil)
+		checker.AllowGatewayOrigin("localhost", gwPort)
+
+		err := checker.CheckURL(ctx, fmt.Sprintf("http://localhost:%d/x", otherPort))
+		require.Error(t, err, "a different local port must remain blocked even with the gateway origin allowed")
+		assert.Contains(t, err.Error(), "SSRF")
+	})
+
+	t.Run("127.0.0.1 on a non-gateway port is still blocked", func(t *testing.T) {
+		checker := security.NewSSRFChecker(nil)
+		checker.AllowGatewayOrigin("localhost", gwPort)
+
+		err := checker.CheckURL(ctx, fmt.Sprintf("http://127.0.0.1:%d/x", otherPort))
+		require.Error(t, err, "the resolved-loopback form on a non-gateway port must remain blocked")
+		assert.Contains(t, err.Error(), "SSRF")
+	})
+
+	t.Run("no gateway origin configured: localhost at the would-be gateway port is blocked (fail closed)", func(t *testing.T) {
+		checker := security.NewSSRFChecker(nil) // AllowGatewayOrigin never called
+
+		err := checker.CheckURL(ctx, "http://localhost:5000/x")
+		require.Error(t, err, "with no gateway origin configured, localhost must stay blocked by default")
+		assert.Contains(t, err.Error(), "SSRF")
+	})
+
+	t.Run("public host still passes, independent of the gateway origin exception", func(t *testing.T) {
+		checker := security.NewSSRFChecker(nil)
+		checker.AllowGatewayOrigin("localhost", gwPort)
+
+		err := checker.CheckURL(ctx, "http://8.8.8.8/dns")
+		assert.NoError(t, err, "a public IP must still pass — unaffected by the gateway-origin exception")
+	})
+
+	t.Run("private non-gateway IP still blocked", func(t *testing.T) {
+		checker := security.NewSSRFChecker(nil)
+		checker.AllowGatewayOrigin("localhost", gwPort)
+
+		err := checker.CheckURL(ctx, "http://10.0.0.5/api")
+		require.Error(t, err, "a private IP unrelated to the gateway origin must remain blocked")
+		assert.Contains(t, err.Error(), "SSRF")
+	})
+
+	t.Run("clearing the gateway origin restores the fail-closed default", func(t *testing.T) {
+		checker := security.NewSSRFChecker(nil)
+		checker.AllowGatewayOrigin("localhost", gwPort)
+		checker.AllowGatewayOrigin("", 0) // explicit clear (empty host)
+
+		err := checker.CheckURL(ctx, "http://localhost:5000/x")
+		require.Error(t, err, "clearing the gateway origin must restore the fail-closed default")
+	})
+
+	t.Run("non-localhost configured gateway host: exact literal match passes, no loopback expansion", func(t *testing.T) {
+		checker := security.NewSSRFChecker(nil)
+		checker.AllowGatewayOrigin("gateway.internal.example", gwPort)
+
+		err := checker.CheckURL(ctx, "http://gateway.internal.example:5000/x")
+		assert.NoError(t, err, "an exact literal host:port match must pass without needing DNS resolution")
+
+		errLoopback := checker.CheckURL(ctx, "http://127.0.0.1:5000/x")
+		require.Error(t, errLoopback, "loopback expansion must NOT apply when the configured gateway host isn't 'localhost'")
+	})
 }

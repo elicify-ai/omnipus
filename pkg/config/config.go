@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"log/slog"
 	mathrand "math/rand"
-	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -2585,27 +2584,19 @@ type GatewayConfig struct {
 	Users         []UserConfig `json:"users,omitempty"           env:"-"` // Per-account bearer-token list (single-user model: holds at most one entry)
 	DevModeBypass bool         `json:"dev_mode_bypass,omitempty" env:"-"` // Opt-in flag to allow unauthenticated access in development. NEVER set to true in production.
 
-	// Preview listener fields (FR-001..FR-005, FR-027, FR-028).
-	// PreviewPort is the port for the preview listener that serves /serve/ and /dev/.
-	// When zero, defaults to Port+1 at boot. Must differ from Port when preview is enabled.
-	PreviewPort int32 `json:"preview_port,omitempty" env:"OMNIPUS_GATEWAY_PREVIEW_PORT"`
-	// PreviewHost is the bind host for the preview listener.
-	// When empty, defaults to Host at boot. Operators set to 127.0.0.1 to keep
-	// the preview listener private behind a reverse proxy.
-	PreviewHost string `json:"preview_host,omitempty" env:"OMNIPUS_GATEWAY_PREVIEW_HOST"`
-	// PreviewOrigin is the browser-facing origin of the preview listener, used when
-	// a reverse proxy is in front (e.g. "https://preview.omnipus.acme.com").
-	// When set, PreviewListenerEnabled must be true. Must parse as a URL with scheme.
-	PreviewOrigin string `json:"preview_origin,omitempty" env:"OMNIPUS_GATEWAY_PREVIEW_ORIGIN"`
 	// PublicURL is the browser-facing origin of the main gateway listener, used when
 	// a reverse proxy is in front (e.g. "https://omnipus.acme.com").
 	// When set, it overrides the Host:Port-derived origin in frame-ancestors CSP directives.
+	// Restart-gated (config.GatewayPublicURL / RestartGatedKeys) because it drives
+	// boot-frozen CORS/CSP/WS-origin fences (ADR-044).
 	PublicURL string `json:"public_url,omitempty" env:"OMNIPUS_GATEWAY_PUBLIC_URL"`
-	// PreviewListenerEnabled controls whether the preview listener is started.
-	// Defaults to true on Linux/macOS/Windows, false on Android/Termux.
-	// Setting false disables the preview listener entirely and forces link-only
-	// rendering in tool UIs (emergency rollback knob).
-	PreviewListenerEnabled *bool `json:"preview_listener_enabled,omitempty" env:"OMNIPUS_GATEWAY_PREVIEW_LISTENER_ENABLED"`
+	// PreviewEnabled controls whether /preview/ (served on the main gateway
+	// listener) and serve_web are live. Semantic default is TRUE — a nil value
+	// means enabled. Read live (NOT restart-gated): toggling takes effect on the
+	// next request, no process restart required (ADR-044, FR-006/FR-007).
+	// Setting false 404s /preview/ and errors serve_web immediately; it does NOT
+	// force-kill already-running dev servers (they idle-TTL out).
+	PreviewEnabled *bool `json:"preview_enabled,omitempty" env:"OMNIPUS_GATEWAY_PREVIEW_ENABLED"`
 
 	// AuthMismatchLogLevel controls the log level emitted when the gateway
 	// detects an authentication mismatch (e.g. token supplied but does not
@@ -2999,9 +2990,9 @@ type BrowserToolConfig struct {
 	// IMPORTANT: this does NOT control whether the /api/v1/browser/ws route
 	// or HTTP handler exists — that WebSocket endpoint is ALWAYS registered
 	// on the gateway's single listener (see gateway.go's newBrowserWSHandler
-	// call site), unlike gateway.preview_listener_enabled, which really does
-	// start/skip a SECOND TCP listener on gateway.preview_port. Setting this
-	// false only changes what happens AFTER a client connects and
+	// call site). The gateway has exactly one listener: ADR-044 retired the
+	// separate preview listener/port, so /preview/ is now served on this same
+	// main listener too. Setting this false only changes what happens AFTER a client connects and
 	// authenticates: the gateway accepts the WS upgrade as normal, then
 	// refuses the first browser_attach with a browser_status(error) frame
 	// instead of starting a screencast. This is deliberate (ADR-038 D6's
@@ -3463,119 +3454,16 @@ func (c *Config) ValidateProviders() error {
 	return nil
 }
 
-// previewListenerEnabledDefault returns the platform-appropriate default for
-// gateway.preview_listener_enabled: true on Linux/macOS/Windows, false on Android.
-// Per FR-027 / MR-09.
-func previewListenerEnabledDefault() bool {
-	return runtime.GOOS != "android"
-}
-
-// normaliseIPv6Host strips surrounding brackets from an IPv6 address so that
-// "[::]" and "::" compare as equal. Per FR-028.
-func normaliseIPv6Host(h string) string {
-	h = strings.TrimPrefix(h, "[")
-	h = strings.TrimSuffix(h, "]")
-	return h
-}
-
-// IsPreviewListenerEnabled resolves the effective value of gateway.preview_listener_enabled.
-// Returns the configured value when set; falls back to the platform default
-// (true on Linux/macOS/Windows, false on Android/Termux — FR-027/MR-09).
-func (g *GatewayConfig) IsPreviewListenerEnabled() bool {
-	if g.PreviewListenerEnabled != nil {
-		return *g.PreviewListenerEnabled
+// IsPreviewEnabled resolves the effective value of gateway.preview_enabled.
+// Semantic default is TRUE: returns true unless the field is explicitly set
+// to false. Read live on every call (ADR-044, FR-006) — not restart-gated.
+// Receiver is *Config (not *GatewayConfig) per the shared cross-agent
+// contract for this feature — callers use cfg.IsPreviewEnabled() directly.
+func (c *Config) IsPreviewEnabled() bool {
+	if c.Gateway.PreviewEnabled != nil {
+		return *c.Gateway.PreviewEnabled
 	}
-	return previewListenerEnabledDefault()
-}
-
-// ValidateAndApplyPreviewDefaults validates gateway preview fields and applies
-// computed defaults (preview port derivation, preview host defaulting,
-// warmup timeout default). It MUTATES g in place.
-//
-// Validation order (FR-027c, MR-06, MR-08, MN-01):
-//  1. Main port ∈ [1, 65535]
-//  2. Resolve preview_listener_enabled (default: platform-specific)
-//  3. If preview disabled → skip remaining preview checks
-//  4. Resolve preview_port (field if set, else port+1; overflow → error)
-//  5. preview_port ∈ [1, 65535]
-//  6. preview_port != port (only when preview enabled)
-//  7. Resolve preview_host (default to host); normalise IPv6 brackets
-//  8. If preview_origin set → must parse with scheme
-//  9. If public_url set → must parse with scheme
-//  10. If preview_origin set but preview_listener_enabled=false → error
-func (g *GatewayConfig) ValidateAndApplyPreviewDefaults() error {
-	// 1. Main port range check.
-	if g.Port < 1 || g.Port > 65535 {
-		return fmt.Errorf("gateway.port %d is out of range [1, 65535]", g.Port)
-	}
-
-	// 2. Resolve preview_listener_enabled.
-	enabled := g.IsPreviewListenerEnabled()
-
-	// 3. Skip remaining checks when preview is disabled.
-	if !enabled {
-		// 10. preview_origin requires enabled=true.
-		if g.PreviewOrigin != "" {
-			return fmt.Errorf("preview_origin requires preview_listener_enabled = true")
-		}
-		return nil
-	}
-
-	// 4. Resolve preview_port.
-	if g.PreviewPort == 0 {
-		derived := int64(g.Port) + 1
-		if derived > 65535 {
-			return fmt.Errorf(
-				"auto-derived preview port %s is out of range; set gateway.preview_port explicitly",
-				strconv.FormatInt(derived, 10),
-			)
-		}
-		g.PreviewPort = int32(derived)
-	}
-
-	// 5. Preview port range check.
-	if g.PreviewPort < 1 || g.PreviewPort > 65535 {
-		return fmt.Errorf("gateway.preview_port %d is out of range [1, 65535]", g.PreviewPort)
-	}
-
-	// 6. Preview port must differ from main port.
-	if int(g.PreviewPort) == g.Port {
-		return fmt.Errorf("gateway.preview_port must differ from gateway.port")
-	}
-
-	// 7. Resolve preview_host (default to host); normalise IPv6 brackets.
-	if g.PreviewHost == "" {
-		g.PreviewHost = g.Host
-	}
-	// Normalise both sides for the comparison to avoid spurious bind-twice failures
-	// (e.g. "[::] == ::").
-	if normaliseIPv6Host(g.PreviewHost) == normaliseIPv6Host(g.Host) && g.PreviewHost != g.Host {
-		g.PreviewHost = g.Host
-	}
-
-	// 8. preview_origin must parse with scheme if set.
-	if g.PreviewOrigin != "" {
-		u, err := url.Parse(g.PreviewOrigin)
-		if err != nil || u.Scheme == "" {
-			return fmt.Errorf(
-				"gateway.preview_origin %q must be a URL with a scheme (e.g. https://preview.example.com)",
-				g.PreviewOrigin,
-			)
-		}
-	}
-
-	// 9. public_url must parse with scheme if set.
-	if g.PublicURL != "" {
-		u, err := url.Parse(g.PublicURL)
-		if err != nil || u.Scheme == "" {
-			return fmt.Errorf(
-				"gateway.public_url %q must be a URL with a scheme (e.g. https://omnipus.example.com)",
-				g.PublicURL,
-			)
-		}
-	}
-
-	return nil
+	return true
 }
 
 // ApplyWarmupTimeoutDefault ensures the web_serve dev-mode warmup timeout

@@ -4861,19 +4861,26 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	cm.RegisterHTTPHandler("/api/v1/browser/inspect", a.withAuth(a.HandleBrowserInspect))
 }
 
-// registerPreviewEndpoints registers /preview/ on the preview mux ONLY
-// (FR-005, FR-006). Not registered on the main mux.
+// registerPreviewEndpoints registers /preview/ on the MAIN mux (ADR-044,
+// FR-001/FR-002/FR-003). There is no separate preview listener/mux anymore —
+// /preview/ shares gateway.port with the SPA and /api/v1/*.
 //
-// Auth model: token-only (FR-023). No RequireSessionCookieOrBearer, no
-// RequireMatchingOriginOnStateChanging (FR-023a).
+// Auth model: token-only (FR-023). Registered bare — no withAuth/session
+// wrapping, no RequireMatchingOriginOnStateChanging (FR-023a) — the URL path
+// token is the credential. It DOES inherit the global configSnapshotMiddleware
+// (and the CSRF middleware, which exempts the /preview/ prefix — see
+// middleware/csrf.go's defaultExemptPrefixes) because those are wrapped around
+// the whole main mux in gateway.go, not per-route. HandlePreview itself checks
+// cfg.IsPreviewEnabled() live on every request and 404s when disabled
+// (FR-006) — toggling it never requires a restart.
 //
 // /preview/ is the unified route for the web_serve tool. The legacy /serve/
 // and /dev/ back-compat handlers (for registrations produced before /preview/
 // landed, 2026-05-04) were removed once the safety window for any such
 // registration closed — registrations are short-lived (max 24h), so nothing
 // minted before the migration could still be valid.
-func (a *restAPI) registerPreviewEndpoints(cm previewHandlerRegistrar) {
-	cm.RegisterPreviewHandler("/preview/", http.HandlerFunc(a.HandlePreview))
+func (a *restAPI) registerPreviewEndpoints(cm httpHandlerRegistrar) {
+	cm.RegisterHTTPHandler("/preview/", http.HandlerFunc(a.HandlePreview))
 }
 
 // rotateGatewayToken generates a new random bearer token, persists it to config, and returns it.
@@ -4917,17 +4924,11 @@ func (a *restAPI) rotateGatewayToken(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, gen.RotateTokenResponse{Token: newToken})
 }
 
-// httpHandlerRegistrar is the subset of channels.Manager used for route registration.
+// httpHandlerRegistrar is the subset of channels.Manager used for route
+// registration on the main mux. registerPreviewEndpoints (ADR-044) uses this
+// same interface — /preview/ no longer has its own registrar/mux.
 type httpHandlerRegistrar interface {
 	RegisterHTTPHandler(pattern string, handler http.Handler)
-}
-
-// previewHandlerRegistrar is the subset of channels.Manager used to register
-// routes on the preview mux (FR-005). Separate from httpHandlerRegistrar so
-// that existing test mocks implementing the main-mux interface do not need to
-// be updated when preview routes are added.
-type previewHandlerRegistrar interface {
-	RegisterPreviewHandler(pattern string, handler http.Handler)
 }
 
 // --- App State ---

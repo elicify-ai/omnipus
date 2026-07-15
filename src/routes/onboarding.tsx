@@ -531,9 +531,11 @@ function OnboardingWizard() {
   }
 
   // Step 3 → completion: fire the atomic onboarding transaction. On success,
-  // store the auth token and reveal the "Meet your Assistant" screen. On
-  // failure, surface the error inline on step 3 so the user can retry without
-  // losing their place.
+  // the gateway has already issued the omnipus-session HttpOnly cookie
+  // (US-5 / FR-011) — the SPA only needs to remember the display-only
+  // username, then reveal the "Meet your Assistant" screen. On failure,
+  // surface the error inline on step 3 so the user can retry without losing
+  // their place.
   const handleComplete = async () => {
     setIsSaving(true)
     setFinishError('')
@@ -552,7 +554,7 @@ function OnboardingWizard() {
           password: adminPassword,
         },
       })
-      useAuthStore.getState().setToken(resp.token, resp.username)
+      useAuthStore.getState().setUsername(resp.username)
       setCompleted(true)
     } catch (err) {
       // Surface the failure both inline (so the user stays on step 3 and can

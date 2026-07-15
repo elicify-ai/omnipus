@@ -1,11 +1,21 @@
 // REST API client — all calls go through the backend gateway.
-// Auth: Authorization: Bearer <token> header. Token read from sessionStorage (preferred) or localStorage ('omnipus_auth_token'). Backend validates against the account's bearer-token hashes or legacy OMNIPUS_BEARER_TOKEN env var.
-// CSRF: X-CSRF-Token header echoes the __Host-csrf cookie value on every
-// state-changing request (double-submit cookie, issue #97). The cookie is
-// issued by the backend on /auth/login and /onboarding/complete.
-// State-changing calls made before the cookie exists fail fast client-side
-// so the UI surfaces an actionable error instead of waiting for the
-// server's 403.
+// Auth (US-5 / FR-010): the browser-managed `omnipus-session` HttpOnly cookie.
+// Every request sends `credentials: 'include'` so the cookie rides along
+// automatically; the SPA never reads, stores, or sends a JS-visible bearer
+// token (that remains a *server*-side path for programmatic/CLI clients only
+// — see ADR-044). Logout is server-authoritative: `logout()` below calls
+// `POST /api/v1/auth/logout`, which clears the cookie.
+// CSRF: X-CSRF-Token header echoes the __Host-csrf (or plain-HTTP `csrf`)
+// cookie value, read FRESH from document.cookie on every state-changing
+// request (never cached — see readCSRFCookie). The cookie is issued by the
+// backend on /auth/login and /onboarding/complete, and re-minted on any
+// authenticated safe (GET) request that lacks it (FR-019). State-changing
+// calls made before the cookie exists fail fast client-side so the UI
+// surfaces an actionable error instead of waiting for the server's 403; a
+// 403 caused by an actually-expired/missing cookie (e.g. a returning user's
+// first action is a POST) is recovered automatically by issuing a safe GET
+// (which triggers the server re-mint) and retrying the original request
+// once — see the retry logic in request().
 //
 // Errors: request() throws ApiError on non-2xx responses and on transport
 // failures (network down, fetch threw). Callers should branch on err.status
@@ -557,7 +567,7 @@ const BASE_URL = import.meta.env.VITE_API_URL ?? ''
 // Keep both constants in sync with pkg/gateway/middleware/csrf.go.
 const CSRF_COOKIE_NAME = '__Host-csrf'
 const CSRF_COOKIE_NAME_HTTP = 'csrf'
-const CSRF_HEADER_NAME = 'X-CSRF-Token'
+export const CSRF_HEADER_NAME = 'X-CSRF-Token'
 const STATE_CHANGING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
 
 // CSRF_EXEMPT_PATHS lists state-changing endpoints whose handler's job is to
@@ -576,10 +586,11 @@ const CSRF_EXEMPT_PATHS = new Set<string>([
   '/api/v1/auth/login',
 ])
 
-// readCSRFCookie parses document.cookie and returns the __Host-csrf value,
-// or null if the cookie is absent. We intentionally do not cache — cookies
-// can change after login/logout/onboarding and caching would cause stale
-// tokens on the next state-changing call.
+// readCSRFCookie parses document.cookie and returns the __Host-csrf (or
+// plain-HTTP `csrf`) value, or null if neither cookie is present. We
+// intentionally do not cache — cookies can change after login/logout/
+// onboarding/re-mint, and caching would cause stale tokens on the next
+// state-changing call. Called fresh on every request (FR-010, r4-MAJ-004).
 function readCSRFCookie(): string | null {
   if (typeof document === 'undefined') return null
   // Try __Host-csrf (TLS) first, then the plain-HTTP fallback.
@@ -605,20 +616,28 @@ function readCSRFCookie(): string | null {
   return null
 }
 
-function getAuthHeaders(): HeadersInit {
-  const token = sessionStorage.getItem('omnipus_auth_token') ?? localStorage.getItem('omnipus_auth_token')
-  return token ? { Authorization: `Bearer ${token}` } : {}
+/**
+ * getCsrfCookie is the public form of readCSRFCookie, for the rare caller
+ * that must build its own fetch() outside request() (e.g. the useAutoSave
+ * pagehide/visibilitychange keepalive beacon, which fires a raw
+ * `fetch(..., {keepalive:true})` that cannot go through the async request()
+ * pipeline). Kept as a thin wrapper so there is exactly one cookie-parsing
+ * implementation — see the "byte-for-byte identical" caution in
+ * api.test.ts's own reimplementation of this logic.
+ */
+export function getCsrfCookie(): string | null {
+  return readCSRFCookie()
 }
 
 // buildHeaders composes the standard request headers, layering (in order):
-// content-type → bearer auth → CSRF header → caller overrides. The CSRF
-// header is added unconditionally when the cookie exists; safe GETs pass
-// it through too because doing so is harmless and keeps the code simple.
+// content-type → CSRF header (read fresh) → caller overrides. There is no
+// Authorization header here: the SPA authenticates via the omnipus-session
+// cookie (sent automatically by the browser via credentials:'include' in
+// performRequest below), never a JS-visible bearer token (US-5 / FR-010).
 function buildHeaders(extra?: HeadersInit): HeadersInit {
   const csrf = readCSRFCookie()
   return {
     'Content-Type': 'application/json',
-    ...getAuthHeaders(),
     ...(csrf ? { [CSRF_HEADER_NAME]: csrf } : {}),
     ...extra,
   }
@@ -629,6 +648,53 @@ function buildHeaders(extra?: HeadersInit): HeadersInit {
 // see CSRF_EXEMPT_PATHS.
 function isPathCSRFExempt(apiPath: string): boolean {
   return CSRF_EXEMPT_PATHS.has(`/api/v1${apiPath}`)
+}
+
+// isCsrfFailureBody distinguishes a CSRF-caused 403 from a generic
+// authorization/permission 403 (e.g. RBAC denial, agent-locked). The
+// gateway's CSRF middleware (pkg/gateway/middleware/csrf.go writeCSRFError)
+// always responds with {"error":"csrf cookie missing"|"csrf header
+// missing"|"csrf token mismatch"} on a CSRF rejection — every other 403
+// uses unrelated wording. We match on this fixed vocabulary (via
+// ApiError.body, the raw response text) rather than a machine code because
+// the endpoint does not emit one.
+function isCsrfFailureBody(body: string | undefined): boolean {
+  if (!body) return false
+  return /csrf/i.test(body)
+}
+
+/**
+ * withCsrfRetry wraps a single state-changing attempt and recovers from a
+ * CSRF-specific 403 exactly once (FR-010 / FR-019 / r4-MAJ-004): a returning
+ * user whose CSRF cookie expired (browser reopened same-day) — or whose very
+ * first action is a state-changing call before any GET has hit the server —
+ * gets rejected by the server's double-submit check even though a client-
+ * side presence check (where one exists) saw a cookie. Recovery: issue a
+ * safe GET (the gateway re-mints the CSRF cookie on any authenticated safe
+ * request that lacks one), then re-run `attempt` with a freshly read cookie.
+ * If the retry also fails, that failure is surfaced — this can never loop
+ * more than once because `attempt` is invoked directly, not through this
+ * wrapper again.
+ *
+ * Shared by request() (JSON calls) and the two multipart raw-fetch call
+ * sites (uploadFiles, transcribeAudio) so the recovery logic isn't
+ * duplicated three times.
+ */
+async function withCsrfRetry<T>(attempt: () => Promise<T>): Promise<T> {
+  try {
+    return await attempt()
+  } catch (err) {
+    if (isApiErrorFn(err) && err.status === 403 && isCsrfFailureBody(err.body)) {
+      try {
+        await performRequest('/state', undefined, undefined)
+      } catch {
+        // Best-effort re-mint trigger — proceed to retry regardless of
+        // whether the GET itself succeeded.
+      }
+      return await attempt()
+    }
+    throw err
+  }
 }
 
 async function request<T>(path: string, init?: RequestInit, schema?: ZodType<T>): Promise<T> {
@@ -643,8 +709,9 @@ async function request<T>(path: string, init?: RequestInit, schema?: ZodType<T>)
   // string-match the message. The message text is preserved verbatim from
   // the previous implementation for any caller that hasn't migrated yet.
   const method = (init?.method ?? 'GET').toUpperCase()
+  const stateChanging = STATE_CHANGING_METHODS.has(method)
   if (
-    STATE_CHANGING_METHODS.has(method) &&
+    stateChanging &&
     !isPathCSRFExempt(path) &&
     readCSRFCookie() === null
   ) {
@@ -656,10 +723,20 @@ async function request<T>(path: string, init?: RequestInit, schema?: ZodType<T>)
     )
   }
 
+  const attempt = () => performRequest<T>(path, init, schema)
+  return stateChanging ? withCsrfRetry(attempt) : attempt()
+}
+
+async function performRequest<T>(path: string, init?: RequestInit, schema?: ZodType<T>): Promise<T> {
+  const method = (init?.method ?? 'GET').toUpperCase()
   let res: Response
   try {
     res = await fetch(`${BASE_URL}/api/v1${path}`, {
       ...init,
+      // Auth is the omnipus-session HttpOnly cookie — always send it (and
+      // accept the server's Set-Cookie, e.g. a CSRF re-mint) even when
+      // BASE_URL points at a different origin in dev (US-5 / FR-010).
+      credentials: 'include',
       headers: buildHeaders(init?.headers),
     })
   } catch (cause) {
@@ -1386,6 +1463,8 @@ export interface Config { // not-wire-format: SPA-internal configuration shape p
     // config PUT endpoint (which blocks it via blockedPaths). The UI uses this
     // to hide admin-only controls that are inoperative when bypass is on.
     dev_mode_bypass?: boolean
+    // preview_enabled: live toggle for /preview/ (ADR-044/FR-006). Default enabled.
+    preview_enabled?: boolean
   }
   security: {
     policy_mode: 'allow' | 'deny'
@@ -1549,6 +1628,8 @@ function rawToFrontendConfig(raw: Record<string, unknown>): Config {
       hot_reload: gateway.hot_reload as boolean | undefined,
       log_level: gateway.log_level as string | undefined,
       dev_mode_bypass: gateway.dev_mode_bypass as boolean | undefined,
+      // ADR-044/FR-006 semantic default: absent/null → enabled; only explicit false disables.
+      preview_enabled: gateway.preview_enabled !== false,
     },
     security: {
       policy_mode: validEnum(security.policy_mode, VALID_POLICY_MODES, 'deny', 'security.policy_mode'),
@@ -1618,6 +1699,7 @@ function frontendToRawConfig(data: Partial<Config>): Record<string, unknown> {
     if (data.gateway.token !== undefined) gw.token = data.gateway.token
     if (data.gateway.hot_reload !== undefined) gw.hot_reload = data.gateway.hot_reload
     if (data.gateway.log_level !== undefined) gw.log_level = data.gateway.log_level
+    if (data.gateway.preview_enabled !== undefined) gw.preview_enabled = data.gateway.preview_enabled
     // dev_mode_bypass is intentionally omitted — PUT /config blocks that field.
     raw.gateway = gw
   }
@@ -2275,6 +2357,21 @@ export async function login(username: string, password: string): Promise<LoginRe
   }, LoginResponseSchema)
 }
 
+/**
+ * logout revokes the current session server-side (FR-020): clears
+ * token_hash/session_token_hash in config.json and expires both the
+ * omnipus-session and __Host-csrf cookies via Set-Cookie. Returns 204 (no
+ * body) on success. Callers (Sidebar "Sign out") MUST call this BEFORE
+ * clearing local UI state and navigating to /login — client-side clearing
+ * alone is not a complete logout (a replayed cookie would still authenticate).
+ * Contrast with forceLogout() (src/lib/authLogout.ts), which is the
+ * server-already-rejected path (401/WS 1008) and has no cookie left worth
+ * revoking.
+ */
+export async function logout(): Promise<void> {
+  return request<void>('/auth/logout', { method: 'POST' })
+}
+
 export async function completeOnboardingTransaction(req: OnboardingCompleteRequest): Promise<LoginResponse> {
   return request<LoginResponse>('/onboarding/complete', {
     method: 'POST',
@@ -2444,24 +2541,22 @@ export function deleteSession(id: string): Promise<OperationResult> {
 
 // ── About ─────────────────────────────────────────────────────────────────────
 
-export interface AboutInfo { // not-wire-format: SPA-internal backward-compatible subset of AboutResponse. The generated AboutResponse has required fields (uptime, pid, frame_ancestors_fallback) and different optionality for preview_port/preview_listener_enabled. The SPA uses this looser interface to maintain backward compatibility with older gateway versions that may not send all AboutResponse fields.
+export interface AboutInfo { // not-wire-format: SPA-internal backward-compatible subset of AboutResponse. The generated AboutResponse has required fields (uptime, pid, frame_ancestors_fallback) and different optionality for preview_enabled. The SPA uses this looser interface to maintain backward compatibility with older gateway versions that may not send all AboutResponse fields.
   version: string
   go_version: string
   os: string
   arch: string
   uptime_seconds: number
-  // Preview listener fields — added by FR-009 / iframe-preview feature.
-  // preview_port is the port the preview listener is bound on (default:
-  // gateway.port + 1). Absent when preview_listener_enabled is false.
-  preview_port?: number
-  // preview_origin is the fully-qualified origin operators set via
-  // gateway.preview_origin (e.g. "https://preview.acme.com"). Absent when
-  // not configured — the SPA constructs the iframe URL from hostname +
-  // preview_port in that case.
-  preview_origin?: string
-  // preview_listener_enabled reflects whether the preview listener is bound.
-  // Absent on old gateway versions that predate this feature (treat as true).
-  preview_listener_enabled?: boolean
+  // preview_enabled reflects whether gateway.preview_enabled is currently on
+  // (US-4 / FR-006/FR-015, ADR-044). When true, /preview/ is served on the
+  // main gateway listener (no separate preview listener/port/origin exists
+  // anymore — the preview_port/preview_origin/preview_listener_enabled
+  // fields this replaces are retired, not deprecated). Read live: toggling
+  // the Settings → Gateway "Preview" switch takes effect on the next fetch,
+  // no restart. Absent on old gateway versions that predate the field
+  // (treat as true — the same long-standing-default-on convention the
+  // retired preview_listener_enabled used).
+  preview_enabled?: boolean
   // warmup_timeout_seconds is sourced from
   // cfg.Tools.RunInWorkspace.WarmupTimeoutSeconds (default 60). Used by
   // RunInWorkspaceUI to cap the warmup polling loop.
@@ -2469,8 +2564,8 @@ export interface AboutInfo { // not-wire-format: SPA-internal backward-compatibl
   // device_pairing_enabled reflects Sandbox.Experimental.DevicePairingEnabled —
   // a dark-launched flag (default false). Absent on old gateway versions that
   // predate the field (treat as false — opposite default from
-  // preview_listener_enabled, since this is a new opt-in feature, not a
-  // long-standing one being made optional).
+  // preview_enabled, since this is a new opt-in feature, not a long-standing
+  // one being made optional).
   device_pairing_enabled?: boolean
 }
 
@@ -2487,9 +2582,7 @@ const AboutInfoSchema: ZodType<AboutInfo> = z.object({
   os: z.string(),
   arch: z.string(),
   uptime_seconds: z.number(),
-  preview_port: z.number().optional(),
-  preview_origin: z.string().optional(),
-  preview_listener_enabled: z.boolean().optional(),
+  preview_enabled: z.boolean().optional(),
   warmup_timeout_seconds: z.number().optional(),
   device_pairing_enabled: z.boolean().optional(),
 })
@@ -2501,11 +2594,11 @@ export function fetchAboutInfo(): Promise<AboutInfo> {
 /**
  * Returns the gateway's version string and build SHA. Used by the
  * `useVersionCheck` hook to detect version drift. The `/version` endpoint
- * is unauthenticated and lives outside the regular auth/CSRF envelope,
- * so we go through `request` (not raw `fetch`) to add the
- * `Authorization` header when present and keep the request shape uniform
- * with every other call. The response is validated by the generated
- * `VersionResponse` Zod schema (per `contracts/openapi.yaml`).
+ * is unauthenticated and lives outside the regular auth/CSRF envelope, so we
+ * go through `request` (not raw `fetch`) to keep the request shape uniform
+ * with every other call (credentials, error handling). The response is
+ * validated by the generated `VersionResponse` Zod schema (per
+ * `contracts/openapi.yaml`).
  */
 export function fetchVersion(): Promise<VersionResponse> {
   return request<VersionResponse>(
@@ -2530,20 +2623,22 @@ export function fetchVoiceProvider(): Promise<VoiceProvider> {
 }
 
 /**
- * Returns whether the preview listener is enabled.
+ * Returns whether the preview feature (gateway.preview_enabled) is on.
  *
- * `preview_listener_enabled` is an optional bool where `undefined` means "true"
- * — old gateway versions that predate the field did not include it, and those
- * versions always ran the preview listener. Reading the field directly risks
- * treating `undefined` as falsy; use this accessor instead.
+ * `preview_enabled` is an optional bool where `undefined` means "true" — old
+ * gateway versions that predate the field did not include it, and those
+ * versions always served previews. Reading the field directly risks
+ * treating `undefined` as falsy; use this accessor instead. Live: re-fetch
+ * `/about` after toggling Settings → Gateway to see the new value (no
+ * restart required — US-4/FR-006).
  */
-export function isPreviewListenerEnabled(info: AboutInfo | undefined): boolean {
-  return info?.preview_listener_enabled !== false
+export function isPreviewEnabled(info: AboutInfo | undefined): boolean {
+  return info?.preview_enabled !== false
 }
 
 /**
  * Returns whether the (dark-launched) device-pairing feature is enabled.
- * Unlike `isPreviewListenerEnabled`, `undefined` means "false" here — this is
+ * Unlike `isPreviewEnabled`, `undefined` means "false" here — this is
  * a new opt-in feature (default off), not a long-standing one being made
  * backward-compatibly optional.
  */
@@ -2588,30 +2683,34 @@ export async function uploadFiles(sessionId: string, files: File[]): Promise<Upl
   for (const file of files) {
     formData.append('files', file)
   }
-  const token = sessionStorage.getItem('omnipus_auth_token') ?? localStorage.getItem('omnipus_auth_token')
-  const csrf = readCSRFCookie()
   // Upload is a state-changing POST — fail fast if we have no CSRF cookie
-  // (see request() for the same pattern). We still send the header on the
-  // off chance the user explicitly set the cookie externally.
-  if (csrf === null) {
+  // (see request() for the same pattern).
+  if (readCSRFCookie() === null) {
     throw new ApiError(
       403,
       'CSRF cookie missing — cannot upload files. Log in first so the server can issue the CSRF cookie.',
       { code: 'csrf_missing' },
     )
   }
+  // FormData holds File/Blob references (not a consumed stream), so retrying
+  // with the same formData on a CSRF-recovery pass (withCsrfRetry) re-sends
+  // the same bytes safely.
+  return withCsrfRetry(() => doUploadFiles(formData))
+}
+
+async function doUploadFiles(formData: FormData): Promise<UploadFilesResponse> {
+  // Read fresh — never cache (see readCSRFCookie).
+  const csrf = readCSRFCookie()
   // Build headers by hand because FormData must NOT have a Content-Type
-  // set — the browser needs to fill in the multipart boundary itself.
-  const headers: Record<string, string> = {
-    [CSRF_HEADER_NAME]: csrf,
-  }
-  if (token) {
-    headers.Authorization = `Bearer ${token}`
-  }
+  // set — the browser needs to fill in the multipart boundary itself. No
+  // Authorization header: auth is the omnipus-session cookie (US-5 / FR-010).
+  const headers: Record<string, string> = {}
+  if (csrf) headers[CSRF_HEADER_NAME] = csrf
   let res: Response
   try {
     res = await fetch(`${BASE_URL}/api/v1/upload`, {
       method: 'POST',
+      credentials: 'include',
       headers,
       body: formData,
     })
@@ -2714,7 +2813,8 @@ export function configureIntegrationProvider(
 //
 // transcribeAudio uploads a recorded audio Blob to the active transcriber and
 // returns the recognised text. Multipart form-data; the request() helper is
-// JSON-only, so this uses fetch directly with the auth + CSRF headers.
+// JSON-only, so this uses fetch directly with the CSRF header (auth is the
+// omnipus-session cookie, sent via credentials:'include' below — US-5 / FR-010).
 // MIME-type-fragment → file-extension lookup for transcribeAudio, in priority
 // order. 'webm' is both the first check and the fallback, so no matching
 // fragment falls through to the same value a match on 'webm' would produce.
@@ -2736,14 +2836,21 @@ export async function transcribeAudio(audio: Blob): Promise<TranscribeResponse> 
   const ext = audioFileExtension(audio.type)
   form.append('audio', audio, `recording.${ext}`)
 
+  // Blob is not a consumed stream, so retrying with the same form on a
+  // CSRF-recovery pass (withCsrfRetry) re-sends the same bytes safely.
+  return withCsrfRetry(() => doTranscribeAudio(form))
+}
+
+async function doTranscribeAudio(form: FormData): Promise<TranscribeResponse> {
+  // Read fresh — never cache (see readCSRFCookie).
   const csrf = readCSRFCookie()
   let res: Response
   try {
     res = await fetch(`${BASE_URL}/api/v1/voice/transcribe`, {
       method: 'POST',
+      credentials: 'include',
       // NOTE: do NOT set Content-Type — the browser sets the multipart boundary.
       headers: {
-        ...getAuthHeaders(),
         ...(csrf ? { [CSRF_HEADER_NAME]: csrf } : {}),
       },
       body: form,

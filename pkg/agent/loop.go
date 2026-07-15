@@ -1194,7 +1194,6 @@ func (al *AgentLoop) wireTier13DepsLocked(registry *AgentRegistry, deps Tier13De
 		// Registered whenever ServedSubdirs is available; dev mode is gated to
 		// Linux at runtime inside the tool itself (Tier3UnsupportedMessage).
 		if deps.ServedSubdirs != nil {
-			previewURL := deps.GatewayPreviewBaseURL
 			portRange := cfg.Sandbox.DevServerPortRange
 			webServeCfg := tools.WebServeDevConfig{
 				Tier3Commands:   cfg.Sandbox.Tier3Commands,
@@ -1203,10 +1202,16 @@ func (al *AgentLoop) wireTier13DepsLocked(registry *AgentRegistry, deps Tier13De
 				EgressAllowList: cfg.Sandbox.EgressAllowList,
 				AuditFailClosed: resolveBoolWithDefault(cfg.Sandbox.PathGuardAuditFailClosed, cfg.Sandbox.AuditLog),
 			}
+			// preview-on-main-listener v5 (FR-005/FR-006): web_serve no longer
+			// takes a constructor-frozen preview base URL. It gets al.GetConfig
+			// (thread-safe, RLock-protected) so every serve_web call builds its
+			// URL from the LIVE canonical gateway origin and reads
+			// gateway.preview_enabled live — no restart, no re-wiring on hot
+			// reload required for the toggle to take effect.
 			webServeTool := tools.NewWebServeTool(
 				ag.Workspace,
 				ag.ID,
-				previewURL,
+				al.GetConfig,
 				deps.ServedSubdirs,
 				deps.DevServerRegistry, // nil on non-Linux; tool guards internally
 				webServeCfg,
@@ -1228,7 +1233,8 @@ func (al *AgentLoop) wireTier13DepsLocked(registry *AgentRegistry, deps Tier13De
 	}
 
 	logger.InfoCF("agent", "Tier 1/3 tools wired into agent registry", map[string]any{
-		"preview_base_url":          deps.GatewayPreviewBaseURL,
+		// preview-on-main-listener v5: no more boot-frozen preview_base_url —
+		// web_serve now derives its URL live from al.GetConfig on every call.
 		"served_subdirs_ready":      deps.ServedSubdirs != nil,
 		"dev_server_registry_ready": deps.DevServerRegistry != nil,
 		"egress_proxy_ready":        deps.EgressProxy != nil,
@@ -1668,6 +1674,24 @@ func registerSharedTools(
 				if browserSSRF == nil {
 					browserSSRF = security.NewSSRFChecker(nil)
 				}
+
+				// preview-on-main-listener v5 (FR-018/US-10, S21): let the agent's
+				// built-in browser reach the gateway's OWN preview origin.
+				// serve_web mints http://localhost:<gateway.port>/preview/...
+				// when gateway.public_url is unset (US-1 AS-2); CheckHost/CheckIP
+				// are otherwise port-blind, so without a scoped exception the
+				// gateway's own preview would either need a blanket loopback
+				// allow (rejected by the ADR — opens every local dev port) or
+				// stay blocked entirely. AllowGatewayOrigin(host, port) (see
+				// pkg/security/ssrf.go) scopes the exception to exactly this
+				// host:port pair — passing "localhost" (its documented expected
+				// caller usage) also accepts the resolved "127.0.0.1"/"::1"
+				// loopback forms for the SAME port, per r4 OBS-003. Called
+				// per-agent (not hoisted above the loop) because the
+				// SSRF-disabled branch above mints a FRESH *security.SSRFChecker
+				// per agent with no allowlist carried over.
+				browserSSRF.AllowGatewayOrigin("localhost", cfg.Gateway.Port)
+
 				// browser.evaluate registration: always register the tool so the
 				// LLM sees it in its tool list. The live safety floor (deny by
 				// default, SEC-04/SEC-06) is the tool's own executeEnabled gate —

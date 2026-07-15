@@ -36,20 +36,20 @@ type Tier13Deps struct {
 	// Non-nil when the gateway has initialized it at boot.
 	DevServerRegistry *sandbox.DevServerRegistry
 
-	// GatewayPreviewBaseURL is the base URL of the gateway's PREVIEW
-	// listener, e.g. "http://localhost:3001" or "https://preview.acme.com".
-	// Sourced from cfg.Gateway.PreviewOrigin when set, otherwise computed
-	// from cfg.Gateway.Host + cfg.Gateway.PreviewPort at boot.
+	// GatewayPreviewBaseURL is REMOVED (preview-on-main-listener v5, ADR-044
+	// D2, FR-003/FR-005). There is no more separate preview listener and no
+	// more boot-frozen preview base URL: /preview/ is served on the SAME main
+	// gateway listener as everything else, and WebServeTool now takes a live
+	// `getConfig func() *config.Config` accessor (see tools.NewWebServeTool)
+	// so it builds its URL from middleware.CanonicalGatewayOrigin(cfg) fresh
+	// on every call and reads gateway.preview_enabled live — see
+	// pkg/agent/loop.go's wireTier13DepsLocked, which now passes al.GetConfig
+	// directly instead of reading a field off this struct.
 	//
-	// web_serve dev mode uses this to build the absolute
-	// /preview/<agent>/<token>/ URL returned in tool results. bash's
-	// background-session mode ("bash" — ADR-036 unified the retired
-	// "exec"/"workspace_shell"/"workspace_shell_bg" tools into it) does NOT
-	// use this: the equivalent port-exposure/preview-URL capability was
+	// bash's background-session mode ("bash" — ADR-036 unified the retired
+	// "exec"/"workspace_shell"/"workspace_shell_bg" tools into it) never used
+	// this field: the equivalent port-exposure/preview-URL capability was
 	// dropped, not ported, when workspace_shell_bg was merged (ADR-036 §3.1)
 	// — bash's background mode is a plain run-in-background + poll/kill
-	// capability with no preview URL. The preview origin is browser-cross-
-	// origin to the SPA's main origin, providing the T-01 mitigation
-	// (parent.localStorage access throws SecurityError).
-	GatewayPreviewBaseURL string
+	// capability with no preview URL.
 }

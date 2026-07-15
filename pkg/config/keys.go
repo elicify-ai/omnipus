@@ -30,12 +30,12 @@ const (
 	GatewayUsers          ConfigKey = "gateway.users"
 	GatewayDevModeBypass  ConfigKey = "gateway.dev_mode_bypass"
 
-	// GatewayPreviewPort and related keys are preview-listener restart-gated keys (FR-027b).
-	GatewayPreviewPort            ConfigKey = "gateway.preview_port"
-	GatewayPreviewHost            ConfigKey = "gateway.preview_host"
-	GatewayPreviewOrigin          ConfigKey = "gateway.preview_origin"
-	GatewayPublicURL              ConfigKey = "gateway.public_url"
-	GatewayPreviewListenerEnabled ConfigKey = "gateway.preview_listener_enabled"
+	// GatewayPublicURL drives boot-frozen CORS/CSP/WS-origin fences
+	// (CanonicalGatewayOrigin) — it MUST stay restart-gated (ADR-044).
+	GatewayPublicURL ConfigKey = "gateway.public_url"
+	// GatewayPreviewEnabled gates /preview/ and serve_web. Read live — it is
+	// deliberately NOT in RestartGatedKeys (ADR-044, FR-006/FR-007).
+	GatewayPreviewEnabled ConfigKey = "gateway.preview_enabled"
 	// ToolsWebServeWarmup is the dotted JSON path of the web_serve warmup
 	// timeout in config.json. The on-disk key is still named
 	// `tools.run_in_workspace.warmup_timeout_seconds` for backwards

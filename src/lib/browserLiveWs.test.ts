@@ -1,10 +1,11 @@
 /**
- * browserLiveWs.test.ts — BrowserLiveWsConnection tests (ADR-038 D1/D5).
+ * browserLiveWs.test.ts — BrowserLiveWsConnection tests (ADR-038 D1/D5, ADR-044).
  *
- * Covers: connect → auth + browser_attach handshake, frame parse/dispatch
- * (browser_screencast / browser_status / error), sendInput/sendControl/detach
- * wire shapes, close-code 1008 (no reconnect), and bounded reconnect on
- * unexpected close.
+ * Covers: connect → browser_attach handshake (auth rides the same-origin
+ * omnipus-session HttpOnly cookie — no client-sent auth frame, no JS-readable
+ * token per ADR-044), frame parse/dispatch (browser_screencast /
+ * browser_status / error), sendInput/sendControl/detach wire shapes, close-code
+ * 1008 (no reconnect), and bounded reconnect on unexpected close.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -64,8 +65,9 @@ function sentFrames(): unknown[] {
 beforeEach(() => {
   MockWebSocket.mockClear()
   vi.stubGlobal('WebSocket', MockWebSocket)
-  vi.stubGlobal('sessionStorage', { getItem: vi.fn(() => 'test-token') })
-  vi.stubGlobal('localStorage', { getItem: vi.fn(() => null) })
+  // No storage stubs: post-ADR-044 the client reads no token from
+  // session/localStorage — auth rides the omnipus-session cookie on the
+  // WS handshake, so the connection never touches web storage.
   vi.useFakeTimers()
 })
 
@@ -76,14 +78,13 @@ afterEach(() => {
 })
 
 describe('BrowserLiveWsConnection — connect handshake', () => {
-  it('sends auth then browser_attach, in order, on open', () => {
+  it('sends only browser_attach on open (cookie auth — no client-sent auth frame)', () => {
     const conn = new BrowserLiveWsConnection('sess-1', 'agent-1', makeCallbacks())
     conn.connect()
     openSocket()
 
     const frames = sentFrames()
     expect(frames).toEqual([
-      { type: 'auth', token: 'test-token' },
       { type: 'browser_attach', session_id: 'sess-1', agent_id: 'agent-1' },
     ])
   })
@@ -96,17 +97,20 @@ describe('BrowserLiveWsConnection — connect handshake', () => {
     expect(callbacks.onConnected).toHaveBeenCalledTimes(1)
   })
 
-  it('surfaces an error and closes without attaching when no auth token is present', () => {
-    vi.stubGlobal('sessionStorage', { getItem: vi.fn(() => null) })
-    vi.stubGlobal('localStorage', { getItem: vi.fn(() => null) })
+  it('attaches without error even with no JS token present (auth rides the omnipus-session cookie)', () => {
+    // ADR-044: the client no longer reads or sends any token — the browser
+    // attaches the same-origin HttpOnly cookie on the handshake automatically.
+    // Missing web storage must therefore NOT block the attach.
     const callbacks = makeCallbacks()
     const conn = new BrowserLiveWsConnection('sess-1', 'agent-1', callbacks)
     conn.connect()
     openSocket()
 
-    expect(callbacks.onError).toHaveBeenCalledWith(expect.stringContaining('No auth token'))
-    expect(lastWsInstance.send).not.toHaveBeenCalled()
-    expect(lastWsInstance.close).toHaveBeenCalled()
+    expect(sentFrames()).toEqual([
+      { type: 'browser_attach', session_id: 'sess-1', agent_id: 'agent-1' },
+    ])
+    expect(callbacks.onError).not.toHaveBeenCalled()
+    expect(lastWsInstance.close).not.toHaveBeenCalled()
   })
 })
 
@@ -356,11 +360,10 @@ describe('BrowserLiveWsConnection — close / reconnect', () => {
     vi.advanceTimersByTime(1000) // first backoff delay
     expect(MockWebSocket.mock.calls.length).toBe(wsInstanceCountBefore + 1)
 
-    // New socket re-runs the auth + attach handshake.
+    // New socket re-runs the browser_attach handshake (cookie auth — no auth frame).
     lastWsInstance.send.mockClear()
     openSocket()
     expect(sentFrames()).toEqual([
-      { type: 'auth', token: 'test-token' },
       { type: 'browser_attach', session_id: 'sess-1', agent_id: 'agent-1' },
     ])
   })

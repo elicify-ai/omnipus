@@ -472,3 +472,150 @@ func TestIssueCSRFCookie_ForwardedProtoHonored(t *testing.T) {
 	assert.Equal(t, CSRFCookieName, cookies[0].Name,
 		"X-Forwarded-Proto=https from a terminating proxy must pick the __Host- branch")
 }
+
+// --- preview-on-main-listener (v5 spec, FR-012 + FR-019) coverage ---
+
+// TestIssueCSRFCookie_MaxAge verifies FR-019: both cookie flavors (secure
+// __Host-csrf and the plain-HTTP fallback) carry MaxAge=86400 (24h),
+// matching the session cookie's lifetime (SessionCookieMaxAge). Before this
+// change the cookie had no MaxAge at all and died on browser close, which
+// is shorter than the 24h session — the CSRF cookie could expire out from
+// under a still-valid session.
+func TestIssueCSRFCookie_MaxAge(t *testing.T) {
+	t.Run("secure __Host-csrf", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "https://example.com/", nil)
+		req.TLS = &tls.ConnectionState{}
+		rec := httptest.NewRecorder()
+		require.NoError(t, IssueCSRFCookie(rec, req))
+
+		cookies := rec.Result().Cookies()
+		require.Len(t, cookies, 1)
+		assert.Equal(t, SessionCookieMaxAge, cookies[0].MaxAge, "MaxAge must be 86400 (24h), matching the session cookie")
+	})
+
+	t.Run("plain-HTTP fallback csrf", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
+		rec := httptest.NewRecorder()
+		require.NoError(t, IssueCSRFCookie(rec, req))
+
+		cookies := rec.Result().Cookies()
+		require.Len(t, cookies, 1)
+		assert.Equal(t, SessionCookieMaxAge, cookies[0].MaxAge, "fallback cookie MaxAge must also be 86400 (24h)")
+	})
+}
+
+// TestCSRF_PreviewPrefixExempt_AllMethods verifies FR-012 / US-7: any method
+// to a tokenized /preview/<agent>/<token>/... path passes through the CSRF
+// gate WITHOUT a cookie or header, because an exact-path exemption can
+// never match a tokenized URL.
+func TestCSRF_PreviewPrefixExempt_AllMethods(t *testing.T) {
+	h := buildMW()
+	for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete} {
+		t.Run(method, func(t *testing.T) {
+			req := httptest.NewRequest(method, "/preview/my-agent/tok123abc/x", bytes.NewReader([]byte(`{}`)))
+			// Deliberately no CSRF cookie, no X-Csrf-Token header.
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+
+			assert.Equal(t, http.StatusOK, rec.Code,
+				"%s /preview/<token>/... must bypass CSRF without a cookie/header", method)
+			assert.Equal(t, "next-ran", rec.Body.String())
+		})
+	}
+}
+
+// TestCSRF_PreviewPrefixDoesNotExemptAPI verifies the /preview/ prefix
+// exemption is scoped exactly — it must never bleed into /api/v1/*, which
+// keeps full CSRF enforcement (FR-012 non-behavior: "MUST NOT weaken
+// CSRF/origin on /api/v1/*").
+func TestCSRF_PreviewPrefixDoesNotExemptAPI(t *testing.T) {
+	h := buildMW()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/foo", bytes.NewReader([]byte(`{}`)))
+	// No cookie, no header.
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusForbidden, rec.Code, "/api/v1/* must still require CSRF")
+	var body map[string]string
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Equal(t, "csrf cookie missing", body["error"])
+}
+
+// TestCSRF_SafeMethodRemintsWhenCookieMissing verifies FR-019: a GET request
+// with no CSRF cookie causes the middleware to mint one via IssueCSRFCookie,
+// with MaxAge=86400. This closes the "returning user" lockout: a browser
+// reopened after the CSRF cookie expired (or a fresh profile) can never
+// otherwise acquire a first cookie without an explicit issuer endpoint.
+func TestCSRF_SafeMethodRemintsWhenCookieMissing(t *testing.T) {
+	h := buildMW()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/state", nil)
+	// No X-Forwarded-Proto / TLS → plain-HTTP fallback cookie flavor.
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	cookies := rec.Result().Cookies()
+	require.Len(t, cookies, 1, "a GET lacking the CSRF cookie must get one re-minted")
+	assert.Equal(t, CSRFCookieNameHTTP, cookies[0].Name)
+	assert.Equal(t, SessionCookieMaxAge, cookies[0].MaxAge, "re-minted cookie must carry MaxAge=86400")
+	assert.NotEmpty(t, cookies[0].Value)
+}
+
+// TestCSRF_SafeMethodDoesNotRemintWhenCookiePresent verifies the re-mint
+// only fires when the cookie is ACTUALLY missing — a safe request that
+// already carries a valid cookie must not get a second, different one
+// minted underneath it (that would needlessly invalidate any header the
+// SPA already cached for this cookie value).
+func TestCSRF_SafeMethodDoesNotRemintWhenCookiePresent(t *testing.T) {
+	h := buildMW()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/state", nil)
+	req.AddCookie(&http.Cookie{Name: CSRFCookieNameHTTP, Value: "existing-token"})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Empty(t, rec.Result().Cookies(), "must not re-mint when a CSRF cookie is already present")
+}
+
+// TestCSRF_StateChangingMethodDoesNotRemint verifies FR-019's negative case:
+// a state-changing request (POST) that lacks the CSRF cookie must NOT get
+// one re-minted — it must still 403. Re-minting on a state-changing method
+// would let a request silently acquire a fresh token to pass its own
+// check, defeating the double-submit invariant.
+func TestCSRF_StateChangingMethodDoesNotRemint(t *testing.T) {
+	h := buildMW()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agents", bytes.NewReader([]byte(`{}`)))
+	// No cookie, no header.
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusForbidden, rec.Code, "POST lacking the CSRF cookie must still 403")
+	assert.Empty(t, rec.Result().Cookies(), "a rejected state-changing request must not have a cookie re-minted")
+	var body map[string]string
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Equal(t, "csrf cookie missing", body["error"])
+}
+
+// TestCSRFMiddleware_BearerBypass_StillIntactAfterPreviewChanges re-asserts
+// (alongside the pre-existing TestCSRFMiddleware_BearerBypass) that the
+// Authorization: Bearer skip path is unaffected by the /preview/ prefix
+// exemption and safe-method re-mint added by this change — a Bearer-
+// authenticated state-changing request to a NON-preview, NON-exempt path
+// still bypasses the cookie/header check entirely, and (being a
+// state-changing method) must not have anything re-minted either.
+func TestCSRFMiddleware_BearerBypass_StillIntactAfterPreviewChanges(t *testing.T) {
+	reached := false
+	h := CSRFMiddleware()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/agents/abc", nil)
+	req.Header.Set("Authorization", "Bearer sk-test-token")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code, "Bearer bypass must still work after the preview/re-mint changes")
+	assert.True(t, reached)
+	assert.Empty(t, rec.Result().Cookies(), "Bearer path is state-changing; it must not get a cookie re-minted")
+}

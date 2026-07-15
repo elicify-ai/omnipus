@@ -9,7 +9,8 @@
 // (go:embed), auth (auth.go/rest_auth.go), and the credential/service boot
 // sequence (this file's Run/RunWithOptions/RunContext) that wires config,
 // credentials, the agent loop, and the channel manager together and starts
-// the gateway.port/preview_port listeners. REST handlers that persist
+// the gateway.port listener (ADR-044: /preview/ shares this same listener —
+// there is no separate preview_port anymore). REST handlers that persist
 // config always go through safeUpdateConfigJSON (never config.SaveConfig)
 // so encrypted credential references in config.json are never clobbered.
 package gateway
@@ -21,7 +22,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -1859,11 +1859,6 @@ func setupAndStartServices(
 		fmt.Println("⚠ Warning: No channels enabled")
 	}
 
-	// Validate preview config and apply computed defaults (FR-001..FR-005, FR-027, FR-028).
-	// ValidateAndApplyPreviewDefaults mutates cfg.Gateway in-place.
-	if err = cfg.Gateway.ValidateAndApplyPreviewDefaults(); err != nil {
-		return nil, fmt.Errorf("gateway config: %w", err)
-	}
 	// Apply warmup timeout default (FR-013 / CR-04).
 	cfg.Tools.ApplyWarmupTimeoutDefault()
 
@@ -1888,42 +1883,6 @@ func setupAndStartServices(
 			"host", cfg.Gateway.Host)
 	}
 
-	// Set up the preview listener when enabled (FR-001, FR-020).
-	previewListenerEnabled := cfg.Gateway.IsPreviewListenerEnabled()
-	var gatewayPreviewBaseURL string
-	if previewListenerEnabled {
-		previewHost := cfg.Gateway.PreviewHost
-		previewPort := int(cfg.Gateway.PreviewPort)
-		previewAddr := fmt.Sprintf("%s:%d", previewHost, previewPort)
-		runningServices.ChannelManager.SetupPreviewServer(previewAddr)
-		// Warn when the preview listener is bound on a wildcard address but
-		// gateway.preview_origin is not configured. In that case the computed
-		// preview URL will contain "0.0.0.0" or "::" which is unreachable from
-		// a browser (R3 in the per-agent sandbox plan).
-		if shouldWarnPreviewOrigin(previewHost, cfg.Gateway.PreviewOrigin) {
-			slog.Warn("gateway listening on wildcard with empty gateway.preview_origin — " +
-				"preview URLs will use 0.0.0.0 and be unreachable from a browser. " +
-				"Set gateway.preview_origin to your public hostname or IP " +
-				"(e.g. https://your.host:6061).")
-		}
-		// Compute the preview base URL for tool result generation.
-		if cfg.Gateway.PreviewOrigin != "" {
-			gatewayPreviewBaseURL = cfg.Gateway.PreviewOrigin
-		} else {
-			scheme := "http"
-			if cfg.Gateway.PublicURL != "" {
-				// Inherit the scheme from PublicURL when preview_origin is not set.
-				if len(cfg.Gateway.PublicURL) >= 5 && cfg.Gateway.PublicURL[:5] == "https" {
-					scheme = "https"
-				}
-			}
-			gatewayPreviewBaseURL = fmt.Sprintf(
-				"%s://%s",
-				scheme,
-				net.JoinHostPort(previewHost, strconv.Itoa(previewPort)),
-			)
-		}
-	}
 	// Fix-5: warn when bash's hardened path is running on a non-Linux host
 	// where the kernel sandbox (Landlock + seccomp) is unavailable. Single-shot
 	// at boot. Pre-ADR-036 this only fired when the (now-retired)
@@ -1947,8 +1906,9 @@ func setupAndStartServices(
 	emitGHSARemovalWarn(cfg)
 
 	// Construct the web_serve static-mode (Tier 1) and dev-mode (Tier 3)
-	// shared registries. These are created regardless of previewListenerEnabled so
-	// that operators who run on the single-port fallback still get static-mode serving.
+	// shared registries. These are always created; gateway.preview_enabled
+	// (ADR-044) gates /preview/ and serve_web live, per-request — it does not
+	// affect whether these registries themselves are constructed.
 	// Dev mode requires the DevServerRegistry; the tool itself gates to Linux.
 	servedSubdirs := agent.NewServedSubdirs()
 	devServers := sandbox.NewDevServerRegistry()
@@ -2007,11 +1967,14 @@ func setupAndStartServices(
 	}
 
 	// Build and wire Tier13Deps into every agent via the agent loop.
+	// GatewayPreviewBaseURL is retired (ADR-044, FR-003/FR-005): web_serve now
+	// derives its URL live from al.GetConfig / middleware.CanonicalGatewayOrigin
+	// on every call instead of a boot-frozen base URL — see
+	// AgentLoop.wireTier13DepsLocked.
 	tier13 := agent.Tier13Deps{
-		ServedSubdirs:         servedSubdirs,
-		DevServerRegistry:     devServers,
-		EgressProxy:           egressProxy,
-		GatewayPreviewBaseURL: gatewayPreviewBaseURL,
+		ServedSubdirs:     servedSubdirs,
+		DevServerRegistry: devServers,
+		EgressProxy:       egressProxy,
 	}
 	agentLoop.WireTier13Deps(tier13)
 
@@ -2036,7 +1999,8 @@ func setupAndStartServices(
 
 	// Live interactive browser panel WebSocket (ADR-038 D1) — a dedicated
 	// socket, separate from chat, on this SAME gateway listener (there is no
-	// second TCP port here, unlike gateway.preview_port). The route is
+	// second TCP port at all — ADR-044 retired the separate preview
+	// listener/port, so /preview/ is served on this same listener too). The route is
 	// registered UNCONDITIONALLY, regardless of
 	// tools.browser.live_view_enabled/take_control_enabled — those are
 	// per-connection, POST-AUTH config gates that BrowserWSHandler.ServeHTTP
@@ -2190,14 +2154,16 @@ func setupAndStartServices(
 	// serve HTML (which causes "Unexpected token '<'" JSON parse errors).
 	api.registerAdditionalEndpoints(runningServices.ChannelManager)
 
-	// Register /preview/ (canonical web_serve URL) plus back-compat /serve/ and /dev/
-	// shims on the preview mux (FR-005, FR-006). These paths are intentionally absent
-	// from the main mux — any hit on <main_host>:<port>/preview/... returns 404 from
-	// the catch-all handler. The preview mux has no auth middleware: the URL path
-	// token is the credential (FR-023). All handlers live in rest_preview.go.
-	if previewListenerEnabled {
-		api.registerPreviewEndpoints(runningServices.ChannelManager)
-	}
+	// Register /preview/ (canonical web_serve URL) on the MAIN mux (ADR-044,
+	// FR-001/FR-002/FR-003). There is no separate preview listener anymore —
+	// /preview/ shares gateway.port with the SPA and /api/v1/*. It is
+	// registered bare: no withAuth/session/CSRF/origin wrapping — the URL path
+	// token is the credential (FR-023) — but it DOES inherit the global
+	// configSnapshotMiddleware wrap applied below (FR-002: race-free live-config
+	// reads). HandlePreview itself checks cfg.IsPreviewEnabled() live on every
+	// request and 404s when disabled (FR-006) — no restart required to flip it.
+	// All handlers live in rest_preview.go.
+	api.registerPreviewEndpoints(runningServices.ChannelManager)
 
 	// Catch-all for any /api/ path not registered — returns JSON 404 instead of SPA HTML.
 	// Do not echo r.URL.Path in the response; that leaks internal routing details.
@@ -2227,16 +2193,11 @@ func setupAndStartServices(
 	if err = runningServices.ChannelManager.WrapHTTPHandler(api.configSnapshotMiddleware); err != nil {
 		return nil, fmt.Errorf("wrapping HTTP handler: %w", err)
 	}
-	// F-13: wrap the preview server with the same middleware. Without this,
-	// HandlePreview's configFromContext(r.Context()) call returns nil and
-	// falls back to a live read of the config pointer — a torn read during
-	// hot-reload.
-	// WrapPreviewHandler is a no-op when the preview listener is disabled.
-	if previewListenerEnabled {
-		if err = runningServices.ChannelManager.WrapPreviewHandler(api.configSnapshotMiddleware); err != nil {
-			return nil, fmt.Errorf("wrapping preview handler: %w", err)
-		}
-	}
+	// F-13 / ADR-044: /preview/ is registered on this SAME main mux (see
+	// registerPreviewEndpoints above), so the WrapHTTPHandler(configSnapshotMiddleware)
+	// call above already covers it — HandlePreview's configFromContext(r.Context())
+	// gets a race-free snapshot with no separate wrap needed. There is no more
+	// preview-only server/mux to wrap.
 
 	// Wrap with CSRF double-submit-cookie middleware (SEC / issue #97).
 	//
@@ -2333,14 +2294,15 @@ func setupAndStartServices(
 		}
 	}()
 
-	// Boot logging (FR-020): main listener first, then preview (or disabled message).
+	// Boot logging: main listener (ADR-044: /preview/ shares this same listener,
+	// no separate preview port/address to log). preview_enabled is read live
+	// (not restart-gated), so this line only reflects the value at boot time.
 	mainAddr := fmt.Sprintf("%s:%d", cfg.Gateway.Host, cfg.Gateway.Port)
 	slog.Info("gateway listening on " + mainAddr)
-	if previewListenerEnabled {
-		previewAddr := fmt.Sprintf("%s:%d", cfg.Gateway.PreviewHost, int(cfg.Gateway.PreviewPort))
-		slog.Info("preview listening on " + previewAddr)
+	if cfg.IsPreviewEnabled() {
+		slog.Info("preview enabled: /preview/ served on the main listener")
 	} else {
-		slog.Info("preview listener disabled by config")
+		slog.Info("preview disabled by config (gateway.preview_enabled=false)")
 	}
 
 	// Write port file so external callers (e.g. eval-runner) can discover the bound port.
@@ -2904,18 +2866,6 @@ func setupCronTool(
 type agentCheckerFunc func(agentID string) bool
 
 func (f agentCheckerFunc) IsRegistered(agentID string) bool { return f(agentID) }
-
-// shouldWarnPreviewOrigin returns true when the preview listener is bound on a
-// wildcard address (0.0.0.0 or "::") and gateway.preview_origin is empty.
-// In that situation the computed preview URL will contain the literal string
-// "0.0.0.0" which browsers cannot reach. Extracted as a pure function so it
-// can be unit-tested without starting a full gateway.
-func shouldWarnPreviewOrigin(previewHost, previewOrigin string) bool {
-	if previewOrigin != "" {
-		return false
-	}
-	return previewHost == "0.0.0.0" || previewHost == "::"
-}
 
 // emitGHSARemovalWarn logs a WARN when any agent that has a remote channel
 // mapping does NOT explicitly deny the bash tool. The GHSA-pv8c-p6jf-3fpp

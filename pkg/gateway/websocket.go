@@ -30,6 +30,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/channels"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/pairing"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -574,7 +575,7 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		doneCh: make(chan struct{}),
 	}
 
-	if !h.authenticateWS(conn, wc) {
+	if !h.authenticateWS(conn, wc, r) {
 		return
 	}
 
@@ -641,16 +642,35 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.readLoop(r.Context(), conn, wc, chatID)
 }
 
-// authenticateWS reads the first frame and validates the token.
-// Loops every account in Gateway.Users first (bcrypt; the single-user model
-// normally holds exactly one, but a pre-single-user-model install may still
-// carry leftover extra accounts — config.warnAboutExtraUsers flags that at
-// load time as an advisory; every configured account still authenticates
-// here, same as checkBearerAuth), then the CLI's dedicated Gateway.CLIToken,
-// then falls back to OMNIPUS_BEARER_TOKEN env var for backward
-// compatibility. Sets wc.userID to the resolved identity on success, and
-// wc.isCLIToken when that identity came from the CLIToken branch.
-func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn) bool {
+// authenticateWS authenticates the WS handshake via EITHER the omnipus-session
+// cookie (checked first, synchronously, against the upgrade request r) OR the
+// legacy first-message {"type":"auth","token":...} frame (FR-009). The SPA no
+// longer sends an auth frame at all post-Wave-1 cutover — the browser
+// auto-attaches the cookie on the upgrade request (same-origin) — so the
+// cookie check MUST happen before blocking on the first frame read, or a
+// cookie-only client would hang waiting for a frame that will never arrive.
+// Programmatic/CLI clients that don't carry the cookie still authenticate via
+// the frame path below, unaffected.
+//
+// The frame path loops every account in Gateway.Users first (bcrypt; the
+// single-user model normally holds exactly one, but a pre-single-user-model
+// install may still carry leftover extra accounts — config.warnAboutExtraUsers
+// flags that at load time as an advisory; every configured account still
+// authenticates here, same as checkBearerAuth), then the CLI's dedicated
+// Gateway.CLIToken, then falls back to OMNIPUS_BEARER_TOKEN env var for
+// backward compatibility. Sets wc.userID to the resolved identity on success,
+// and wc.isCLIToken when that identity came from the CLIToken branch (the
+// cookie path never sets isCLIToken — a cookie always identifies a real human
+// Gateway.Users account, never the synthetic CLI identity).
+func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn, r *http.Request) bool {
+	cfg := h.agentLoop.GetConfig()
+
+	if user, err := middleware.ResolveUserFromCookie(r, cfg.Gateway.Users); err == nil && user != nil {
+		wc.userID = user.Username // FR-073: needed for session_state user scoping
+		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		return true
+	}
+
 	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 	_, data, err := conn.ReadMessage()
 	if err != nil {
@@ -670,7 +690,6 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn) bool {
 		return false
 	}
 
-	cfg := h.agentLoop.GetConfig()
 	rawToken := authFrame.Token
 
 	// 1 & 2. Configured identities — human Gateway.Users accounts, then the
