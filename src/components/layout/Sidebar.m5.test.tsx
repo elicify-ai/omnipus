@@ -57,6 +57,8 @@ vi.mock('@/store/auth', () => {
 // Mock fetchWorkspaces so the Sidebar's useQuery never hits the network in tests.
 vi.mock('@/lib/api', () => ({
   fetchWorkspaces: () => Promise.resolve([]),
+  fetchSessions: () => Promise.resolve([]),
+  fetchAgents: () => Promise.resolve([]),
   workspacesQueryKeys: {
     list: (params?: unknown) => ['workspaces', params],
   },
@@ -68,6 +70,26 @@ vi.mock('@/store/workspacesStore', () => ({
     const state = { activeWorkspaceId: null, setActiveWorkspaceId: vi.fn() }
     return selector ? selector(state) : state
   },
+}))
+
+// Mock session/chat stores (used by the workspace accordion)
+vi.mock('@/store/session', () => ({
+  useSessionStore: (selector?: (s: unknown) => unknown) => {
+    const state = { activeSessionId: null, startNewSession: vi.fn() }
+    return selector ? selector(state) : state
+  },
+}))
+vi.mock('@/store/chat', () => ({
+  useChatStore: (selector?: (s: unknown) => unknown) => {
+    const state = { sessionsById: {} }
+    return selector ? selector(state) : state
+  },
+}))
+vi.mock('@/components/chat/SessionItem', () => ({
+  SessionItem: () => null,
+}))
+vi.mock('@/components/chat/useSelectSession', () => ({
+  useSelectSession: () => vi.fn(),
 }))
 
 // Mock useUiStore — Sidebar calls toggleNotificationPanel

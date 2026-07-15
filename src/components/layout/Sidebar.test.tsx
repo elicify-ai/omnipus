@@ -61,6 +61,8 @@ vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: '/mock-avatar.
 // Using vi.fn() so individual tests can override the resolved value with mockResolvedValueOnce.
 vi.mock('@/lib/api', () => ({
   fetchWorkspaces: vi.fn().mockResolvedValue([]),
+  fetchSessions: vi.fn().mockResolvedValue([]),
+  fetchAgents: vi.fn().mockResolvedValue([]),
   workspacesQueryKeys: {
     list: (params?: unknown) => ['workspaces', params],
   },
@@ -72,6 +74,26 @@ vi.mock('@/store/workspacesStore', () => ({
     const state = { activeWorkspaceId: null, setActiveWorkspaceId: vi.fn() }
     return selector ? selector(state) : state
   },
+}))
+
+// Mock useSessionStore + useChatStore (used by the workspace accordion's session list)
+vi.mock('@/store/session', () => ({
+  useSessionStore: (selector?: (s: unknown) => unknown) => {
+    const state = { activeSessionId: null, startNewSession: vi.fn() }
+    return selector ? selector(state) : state
+  },
+}))
+vi.mock('@/store/chat', () => ({
+  useChatStore: (selector?: (s: unknown) => unknown) => {
+    const state = { sessionsById: {} }
+    return selector ? selector(state) : state
+  },
+}))
+vi.mock('@/components/chat/SessionItem', () => ({
+  SessionItem: () => null,
+}))
+vi.mock('@/components/chat/useSelectSession', () => ({
+  useSelectSession: () => vi.fn(),
 }))
 
 // Mock useAuthStore used by Sidebar (handleLogout + username hook)

@@ -6,6 +6,7 @@ import { ToastContainer } from '@/components/ui/toast-container'
 import { ToolApprovalModal } from '@/components/agents/ToolApprovalModal'
 import { MediaLightbox } from '@/components/chat/MediaLightbox'
 import { BrowserLivePanel } from '@/components/browser/BrowserLivePanel'
+import { SearchModal } from '@/components/search/SearchModal'
 import { OmnipusRuntimeProvider } from '@/components/chat/OmnipusRuntimeProvider'
 import { ErrorBoundary } from '@/components/ui/error-boundary'
 import { queryClient } from '@/lib/queryClient'
@@ -67,7 +68,12 @@ export function AppShell() {
   // falls back to (100dvh, 0) where visualViewport is unavailable / pre-hydrate.
   useEffect(() => {
     const vv = window.visualViewport
-    if (!vv) return undefined
+    // Only track visualViewport on touch devices (iOS Safari needs it for
+    // toolbar/keyboard behavior). On desktop, visualViewport.height can differ
+    // slightly from the actual viewport (scrollbar, devtools, proxy chrome),
+    // causing the pinned sidebar to be cut off at the bottom. The CSS fallback
+    // (100dvh, 0px) is always correct on desktop.
+    if (!vv || !window.matchMedia('(pointer: coarse)').matches) return undefined
     let raf = 0
     const setAppMetrics = () => {
       cancelAnimationFrame(raf)
@@ -158,6 +164,10 @@ export function AppShell() {
       {/* Global enlarged-media overlay (images + diagrams) — single instance,
           decoupled from the virtualized chat list so it survives row remounts */}
       <MediaLightbox />
+
+      {/* Cross-workspace session search — store-driven single instance opened
+          from the sidebar search icon and the /search slash command (step 6). */}
+      <SearchModal />
 
       {/* Global toast notifications */}
       <ToastContainer />

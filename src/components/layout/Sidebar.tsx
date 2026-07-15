@@ -26,7 +26,11 @@ import { useAuthStore } from '@/store/auth'
 import { useUiStore } from '@/store/ui'
 import { useNotificationsStore } from '@/store/notifications'
 import { useWorkspacesStore } from '@/store/workspacesStore'
-import { fetchWorkspaces, workspacesQueryKeys } from '@/lib/api'
+import { fetchWorkspaces, workspacesQueryKeys, fetchSessions, fetchAgents } from '@/lib/api'
+import { useSessionStore } from '@/store/session'
+import { useChatStore } from '@/store/chat'
+import { SessionItem } from '@/components/chat/SessionItem'
+import { useSelectSession } from '@/components/chat/useSelectSession'
 import { NewWorkspaceSlideOver } from '@/components/workspaces/NewWorkspaceSlideOver'
 import {
   DropdownMenu,
@@ -107,6 +111,46 @@ export function Sidebar() {
     staleTime: 30_000,
   })
 
+  // Sessions + agents — used by the workspace accordion's expanded session list.
+  const { data: allSessions = [] } = useQuery({
+    queryKey: ['sessions'],
+    queryFn: () => fetchSessions(),
+    staleTime: 15_000,
+  })
+  const { data: agents = [] } = useQuery({
+    queryKey: ['agents'],
+    queryFn: fetchAgents,
+    staleTime: 30_000,
+  })
+
+  // Currently-active session — drives SessionItem's isActive highlight.
+  const activeSessionId = useSessionStore((s) => s.activeSessionId)
+  // Per-session streaming flags — drives SessionItem's isStreaming pulse.
+  const sessionsById = useChatStore((s) => s.sessionsById)
+
+  // Reusable session-selection logic (attach WS + navigate + close sidebar).
+  const selectSession = useSelectSession({
+    agents,
+    workspaces: projects,
+    onClose: () => {
+      if (!effectivelyPinned) close()
+    },
+  })
+
+  // Workspace accordion expansion state.
+  const [expandedWorkspaceIds, setExpandedWorkspaceIds] = useState<Set<string>>(new Set())
+  const toggleWorkspaceExpansion = useCallback((workspaceId: string) => {
+    setExpandedWorkspaceIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(workspaceId)) {
+        next.delete(workspaceId)
+      } else {
+        next.add(workspaceId)
+      }
+      return next
+    })
+  }, [])
+
   // Inbox workspace (is_default: true) always appears first; other workspaces: pinned then unpinned.
   const inboxProject = projects.find((p) => p.is_default)
   const nonInboxProjects = projects.filter((p) => !p.is_default)
@@ -180,6 +224,29 @@ export function Sidebar() {
         <span className="font-headline text-sm font-bold text-[var(--color-secondary)]">
           Omnipus
         </span>
+        {/* Search icon — opens the cross-workspace session search modal */}
+        <button
+          type="button"
+          onClick={() => useUiStore.getState().openSearchModal()}
+          aria-label="Search sessions"
+          title="Search sessions"
+          className="ml-auto shrink-0 rounded p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] transition-colors"
+        >
+          <MagnifyingGlass size={16} />
+        </button>
+        {/* Pin toggle — icon-only in the brand row (not a full-width bottom button) */}
+        {canPin && (
+          <button
+            type="button"
+            onClick={togglePin}
+            aria-label={isPinned ? 'Unpin sidebar' : 'Pin sidebar'}
+            aria-pressed={isPinned}
+            title={isPinned ? 'Unpin sidebar' : 'Pin sidebar'}
+            className="shrink-0 rounded p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] transition-colors"
+          >
+            {isPinned ? <PushPinSlash size={16} /> : <PushPin size={16} />}
+          </button>
+        )}
       </div>
 
       {/* Workspaces (primary, scrollable) */}
@@ -285,46 +352,95 @@ export function Sidebar() {
             </div>
           )}
 
-          {/* Workspace list — filtered by search query when showSearch is active */}
+          {/* Workspace list — accordion: click name navigates, click chevron expands sessions */}
           {!projectsLoading && visibleProjects
             .filter((p) => !showSearch || p.name.toLowerCase().includes(searchQuery.toLowerCase()))
             .map((project) => {
             const isActive = activeWorkspaceId === project.id
             const isInbox = project.is_default === true
+            const isExpanded = expandedWorkspaceIds.has(project.id)
+            const workspaceSessions = allSessions
+              .filter((s) => s.workspace_id === project.id)
+              .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
             return (
-              <button
-                key={project.id}
-                type="button"
-                onClick={() => {
-                  setActiveWorkspaceId(project.id)
-                  navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: project.id } })
-                  if (!effectivelyPinned) close()
-                }}
-                className={cn(
-                  'flex items-center gap-2 w-full px-4 py-2 mx-0 text-sm transition-colors text-left',
-                  isActive
-                    ? 'text-[var(--color-accent)] font-medium'
-                    : 'text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]'
+              <div key={project.id}>
+                <div
+                  className={cn(
+                    'flex items-center gap-2 w-full px-4 py-2 mx-0 text-sm transition-colors text-left',
+                    isActive
+                      ? 'text-[var(--color-accent)] font-medium'
+                      : 'text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]'
+                  )}
+                >
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveWorkspaceId(project.id)
+                      navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: project.id } })
+                      if (!effectivelyPinned) close()
+                    }}
+                    className="flex items-center gap-2 flex-1 min-w-0 text-left"
+                  >
+                    {isActive ? (
+                      <span className="w-2 h-2 rounded-full bg-[var(--color-accent)] animate-pulse flex-shrink-0" aria-hidden="true" />
+                    ) : isInbox ? (
+                      <Tray size={14} className="flex-shrink-0 text-[var(--color-accent)]" />
+                    ) : (
+                      <Folder size={14} className="flex-shrink-0 text-[var(--color-muted)]" />
+                    )}
+                    <span className="flex-1 truncate">{project.name}</span>
+                    {project.task_count > 0 && (
+                      <span className="text-[10px] text-[var(--color-muted)] flex-shrink-0">
+                        {project.task_count}
+                      </span>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); toggleWorkspaceExpansion(project.id) }}
+                    aria-expanded={isExpanded}
+                    aria-label={isExpanded ? `Collapse ${project.name} sessions` : `Expand ${project.name} sessions`}
+                    className="shrink-0 rounded p-0.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] transition-colors"
+                  >
+                    {isExpanded ? <CaretDown size={12} /> : <CaretRight size={12} />}
+                  </button>
+                </div>
+                {isExpanded && (
+                  <div className="pb-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveWorkspaceId(project.id)
+                        useSessionStore.getState().startNewSession()
+                        navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: project.id } })
+                        if (!effectivelyPinned) close()
+                      }}
+                      className="flex items-center gap-2 w-full pl-8 pr-4 py-1.5 text-xs text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)] transition-colors"
+                    >
+                      <Plus size={11} /> New chat
+                    </button>
+                    {workspaceSessions.length === 0 ? (
+                      <p className="pl-8 pr-4 py-1 text-xs text-[var(--color-muted)] opacity-60">No sessions yet</p>
+                    ) : (
+                      workspaceSessions.slice(0, 20).map((s) => {
+                        const sActive = s.id === activeSessionId
+                        const sStreaming = sessionsById[s.id]?.isStreaming ?? false
+                        return (
+                          <SessionItem
+                            key={s.id}
+                            session={s}
+                            agents={agents}
+                            isActive={sActive}
+                            isStreaming={sStreaming}
+                            onSelect={selectSession}
+                            onDeleted={() => queryClient.invalidateQueries({ queryKey: ['sessions'] })}
+                          />
+                        )
+                      })
+                    )}
+                  </div>
                 )}
-              >
-                {/* Active indicator: gold pulsing dot; Inbox uses Tray icon */}
-                {isActive ? (
-                  <span
-                    className="w-2 h-2 rounded-full bg-[var(--color-accent)] animate-pulse flex-shrink-0"
-                    aria-hidden="true"
-                  />
-                ) : isInbox ? (
-                  <Tray size={14} className="flex-shrink-0 text-[var(--color-accent)]" />
-                ) : (
-                  <Folder size={14} className="flex-shrink-0 text-[var(--color-muted)]" />
-                )}
-                <span className="flex-1 truncate">{project.name}</span>
-                {project.task_count > 0 && (
-                  <span className="text-[10px] text-[var(--color-muted)] flex-shrink-0">
-                    {project.task_count}
-                  </span>
-                )}
-              </button>
+              </div>
             )
           })}
 
@@ -497,20 +613,6 @@ export function Sidebar() {
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
-
-      {/* Pin toggle — only shown when the viewport is wide enough to support it (≥1024px) */}
-      {canPin && (
-        <button
-          onClick={togglePin}
-          aria-label={isPinned ? 'Unpin sidebar' : 'Pin sidebar'}
-          aria-pressed={isPinned}
-          title={isPinned ? 'Unpin sidebar' : 'Pin sidebar'}
-          className="flex items-center gap-3 px-4 py-2.5 mx-2 rounded-lg text-sm text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] transition-colors w-[calc(100%-16px)]"
-        >
-          {isPinned ? <PushPinSlash size={18} /> : <PushPin size={18} />}
-          {isPinned ? 'Unpin sidebar' : 'Pin sidebar'}
-        </button>
-      )}
 
       {/* New workspace slide-over — rendered inside nav to avoid stacking context issues */}
       <NewWorkspaceSlideOver open={newProjectOpen} onOpenChange={setNewProjectOpen} />

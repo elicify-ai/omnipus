@@ -21,6 +21,15 @@ interface UiStore {
   openSessionPanel: () => void
   closeSessionPanel: () => void
 
+  // Search modal — cross-workspace session search (step 6 of the sidebar-merge
+  // plan). Same store-driven pattern as sessionPanelOpen; opened from the
+  // sidebar search icon (Sidebar.tsx) and the /search slash command
+  // (useSlashMenu.ts). The SearchModal component is mounted once at the AppShell
+  // root, so either entry point drives the same single instance.
+  searchModalOpen: boolean
+  openSearchModal: () => void
+  closeSearchModal: () => void
+
   // Create agent modal
   createAgentModalOpen: boolean
   /**
@@ -154,6 +163,10 @@ export const useUiStore = create<UiStore>((set, get) => ({
   sessionPanelOpen: false,
   openSessionPanel: () => set({ sessionPanelOpen: true }),
   closeSessionPanel: () => set({ sessionPanelOpen: false }),
+
+  searchModalOpen: false,
+  openSearchModal: () => set({ searchModalOpen: true }),
+  closeSearchModal: () => set({ searchModalOpen: false }),
 
   createAgentModalOpen: false,
   createAgentModalType: 'Main',

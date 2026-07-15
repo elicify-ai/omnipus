@@ -118,28 +118,27 @@ describe('ChatControls — New Chat button', () => {
 
 // ── Control: Sessions button ──────────────────────────────────────────────────
 
-describe('ChatControls — Sessions button', () => {
-  it('renders a Sessions button', async () => {
+describe('ChatControls — Sessions/Search button', () => {
+  it('renders a Search sessions button', async () => {
     renderControls()
     const btn = await vi.waitFor(() =>
-      screen.getByRole('button', { name: /open sessions panel/i }),
+      screen.getByRole('button', { name: /search sessions/i }),
     )
     expect(btn).toBeInTheDocument()
   })
 
-  it('calls openSessionPanel when clicked', async () => {
+  it('calls openSearchModal when clicked', async () => {
     renderControls()
     const btn = await vi.waitFor(() =>
-      screen.getByRole('button', { name: /open sessions panel/i }),
+      screen.getByRole('button', { name: /search sessions/i }),
     )
     fireEvent.click(btn)
-    expect(useUiStore.getState().sessionPanelOpen).toBe(true)
+    expect(useUiStore.getState().searchModalOpen).toBe(true)
   })
 
   it('Sessions text label is in the DOM with the @2xl: responsive class', async () => {
     renderControls()
-    await vi.waitFor(() => screen.getByRole('button', { name: /open sessions panel/i }))
-    // The "Sessions" span exists with the container-query class
+    await vi.waitFor(() => screen.getByRole('button', { name: /search sessions/i }))
     const sessionSpan = screen.getByText('Sessions')
     expect(sessionSpan.className).toContain('hidden')
     expect(sessionSpan.className).toContain('@2xl:inline')
@@ -157,7 +156,7 @@ describe('ChatControls — all controls present (single cluster)', () => {
     expect(newChat.textContent).toMatch(/new chat/i)
 
     // 2. Sessions button
-    expect(screen.getByRole('button', { name: /open sessions panel/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /search sessions/i })).toBeInTheDocument()
 
     // 3. Open browser button
     expect(screen.getByRole('button', { name: /open browser/i })).toBeInTheDocument()
@@ -208,7 +207,7 @@ describe('ChatControls — responsive layout (structural)', () => {
   it('Sessions button is present exactly once (single inline cluster)', async () => {
     renderControls()
     const sessionBtns = await vi.waitFor(() =>
-      screen.getAllByRole('button', { name: /open sessions panel/i }),
+      screen.getAllByRole('button', { name: /search sessions/i }),
     )
     expect(sessionBtns).toHaveLength(1)
   })
