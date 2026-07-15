@@ -76,25 +76,19 @@ export function AppShell() {
     const setAppMetrics = () => {
       cancelAnimationFrame(raf)
       raf = requestAnimationFrame(() => {
-        // KEYBOARD-ONLY tracking (the stable version of this hook — earlier
-        // revisions repositioned on EVERY vv scroll/resize and made the whole
-        // shell — sidebar + top menu included — drift off-screen whenever a
-        // trackpad/momentum scroll nudged the visual viewport on iPad).
-        //
-        // Detection: the keyboard shrinks vv.height far below the layout
-        // viewport. Toolbar collapse/expand changes it only slightly (< 100px).
-        // Only when the keyboard is actually up do we pin the shell to the
-        // visual viewport (height + offsetTop); in every other state the vars
-        // are REMOVED so the CSS fallback (100dvh anchored at 0) rules and no
-        // scroll can ever displace the layout.
-        const keyboardUp = window.innerHeight - vv.height > 100
-        if (keyboardUp) {
-          document.documentElement.style.setProperty('--app-vh', `${Math.round(vv.height)}px`)
-          document.documentElement.style.setProperty('--app-top', `${Math.round(vv.offsetTop)}px`)
-        } else {
-          document.documentElement.style.removeProperty('--app-vh')
-          document.documentElement.style.removeProperty('--app-top')
-        }
+        // Always-on tracking, paired with `body { position: fixed }` in
+        // globals.css — the pair is the stable design:
+        //  • body-fixed stops scroll gestures on non-scrollable chrome from
+        //    panning the visual viewport (the sidebar/header drift bug), so
+        //    following vv here can no longer be dragged around by scrolls.
+        //  • Following vv is REQUIRED for the on-screen keyboard: iOS pans
+        //    the visual viewport to reveal the focused input, and the shell
+        //    must follow (offsetTop) or the header slides off-screen.
+        // (An earlier "keyboard-only" gate compared window.innerHeight to
+        // vv.height — on iOS those track each other, the gate never fired,
+        // and the keyboard bug returned. Don't reintroduce a gate.)
+        document.documentElement.style.setProperty('--app-vh', `${Math.round(vv.height)}px`)
+        document.documentElement.style.setProperty('--app-top', `${Math.round(vv.offsetTop)}px`)
       })
     }
     setAppMetrics()
