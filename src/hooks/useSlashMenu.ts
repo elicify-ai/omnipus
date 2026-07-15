@@ -112,9 +112,20 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
   })
 
   // Merge frontend-only client commands with the backend-served list so the
-  // synthetic entries (e.g. /search) participate in palette filtering, /help,
-  // and the send-path interception identically to a real backend command.
-  const allCommands: SlashCommand[] = [...commands]
+  // synthetic entries participate in palette filtering, /help, and the
+  // send-path interception identically to a real backend command.
+  // /resume is web-client-only: opens the cross-workspace session search
+  // modal (the same one the sidebar search icon opens) to resume a session.
+  const allCommands: SlashCommand[] = [
+    {
+      name: 'resume',
+      label: '/resume',
+      description: 'Resume a session — search across all workspaces',
+      delivery: 'client',
+      available_while_streaming: true,
+    },
+    ...commands,
+  ]
 
   // Skills query: always enabled when input is enabled (not gated on
   // skill-arg mode). staleTime of 60s matches the commands query — skills
@@ -258,6 +269,13 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
       // Escape handler — only morph the button to "Stopping..." if the turn
       // is actively streaming.
       cancelIfStreaming()
+      return true
+    }
+
+    if (name === 'resume') {
+      // Web-only: open the cross-workspace session search modal to pick a
+      // session to resume — same single instance the sidebar icon opens.
+      useUiStore.getState().openSearchModal()
       return true
     }
 

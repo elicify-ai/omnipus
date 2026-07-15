@@ -110,8 +110,8 @@ function AgentHeader({ agent, name, isCollapsed, onToggle, panelId }: { agent: A
 
 // ── session row with metadata + edit/delete ──────────────────────────────────
 
-function SessionRow({ session, isActive, isFirstResult, onSelect, onRename, onDelete, deleting }: {
-  session: Session; isActive: boolean; isFirstResult?: boolean; onSelect: () => void; onRename: (t: string) => void; onDelete: () => void; deleting: boolean
+function SessionRow({ session, isActive, isHighlighted, onSelect, onRename, onDelete, deleting }: {
+  session: Session; isActive: boolean; isHighlighted?: boolean; onSelect: () => void; onRename: (t: string) => void; onDelete: () => void; deleting: boolean
 }) {
   const [editing, setEditing] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
@@ -159,15 +159,15 @@ function SessionRow({ session, isActive, isFirstResult, onSelect, onRename, onDe
   }
 
   return (
-    <div className={cn(
+    <div id={`search-result-${session.id}`} className={cn(
       'group flex items-center gap-2 rounded-md px-3 py-2 mx-1 transition-colors hover:bg-[var(--color-surface-2)]',
-      // First result = what Enter selects; visible cue [Recognition over Recall]
-      isFirstResult && 'bg-[var(--color-surface-2)]',
+      // Keyboard highlight = what Enter selects; follows ArrowUp/Down.
+      isHighlighted && 'bg-[var(--color-surface-2)]',
     )}>
       <button type="button" onClick={onSelect} className="min-w-0 flex-1 text-left">
         <div className={cn('truncate text-sm font-medium flex items-center gap-1.5', isActive ? 'text-[var(--color-accent)]' : 'text-[var(--color-secondary)]')}>
           <span className="truncate">{session.title || 'Untitled session'}</span>
-          {isFirstResult && (
+          {isHighlighted && (
             <span className="shrink-0 rounded border border-[var(--color-border)] px-1 text-[9px] font-normal text-[var(--color-muted)]" aria-hidden="true">↵</span>
           )}
         </div>
@@ -294,7 +294,33 @@ export function SearchModal() {
 
   const total = groups.reduce((n, g) => n + g.totalCount, 0)
   const loading = sLoading || wLoading
-  const firstResult = groups[0]?.agentGroups[0]?.sessions[0]
+
+  // Flat, in-render-order list of VISIBLE sessions (collapsed groups excluded)
+  // — the arrow-key navigation space. Index 0 is what Enter selects by default.
+  const flatSessions = useMemo<Session[]>(() => {
+    const out: Session[] = []
+    for (const g of groups) {
+      const wsKey = g.workspace?.id ?? 'unfiled'
+      if (collapsedWs.has(wsKey)) continue
+      for (const ag of g.agentGroups) {
+        if (collapsedAgent.has(`${wsKey}::${ag.agentId}`)) continue
+        out.push(...ag.sessions)
+      }
+    }
+    return out
+  }, [groups, collapsedWs, collapsedAgent])
+
+  // Keyboard highlight — follows ArrowUp/ArrowDown from the search input;
+  // resets to the top whenever the result set changes.
+  const [highlightIndex, setHighlightIndex] = useState(0)
+  useEffect(() => { setHighlightIndex(0) }, [debouncedSearch, fromDate, toDate, wsFilter, flatSessions.length])
+  const highlighted = flatSessions[highlightIndex]
+
+  // Keep the highlighted row scrolled into view as the user arrows through.
+  useEffect(() => {
+    if (!highlighted) return
+    document.getElementById(`search-result-${highlighted.id}`)?.scrollIntoView({ block: 'nearest' })
+  }, [highlighted])
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) close() }}>
@@ -320,7 +346,18 @@ export function SearchModal() {
             <MagnifyingGlass size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-muted)]" />
             <Input autoFocus placeholder="Search by title or workspace..." value={searchText}
               onChange={(e) => setSearchText(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter' && firstResult) { e.preventDefault(); selectSession(firstResult) } }}
+              onKeyDown={(e) => {
+                if (e.key === 'ArrowDown') {
+                  e.preventDefault()
+                  setHighlightIndex((i) => Math.min(i + 1, flatSessions.length - 1))
+                } else if (e.key === 'ArrowUp') {
+                  e.preventDefault()
+                  setHighlightIndex((i) => Math.max(i - 1, 0))
+                } else if (e.key === 'Enter' && highlighted) {
+                  e.preventDefault()
+                  selectSession(highlighted)
+                }
+              }}
               className="pl-9" aria-label="Search sessions" />
             <button type="button" onClick={() => setShowDateFilter((v) => !v)}
               className={cn('absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded transition-colors',
@@ -380,7 +417,7 @@ export function SearchModal() {
                             {!agentCollapsed && (
                               <div id={`agent-panel-${agentKey}`} role="region" className={cn('space-y-0.5', group.agentGroups.length > 1 && 'pl-3')}>
                                 {ag.sessions.map((s) => (
-                                  <SessionRow key={s.id} session={s} isActive={false} isFirstResult={s.id === firstResult?.id} onSelect={() => selectSession(s)}
+                                  <SessionRow key={s.id} session={s} isActive={false} isHighlighted={s.id === highlighted?.id} onSelect={() => selectSession(s)}
                                     onRename={(t) => renameMut.mutate({ id: s.id, title: t })}
                                     onDelete={() => deleteMut.mutate(s.id)}
                                     deleting={deleteMut.isPending && deleteMut.variables === s.id} />
