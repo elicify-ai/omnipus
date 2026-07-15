@@ -349,11 +349,6 @@ export function Sidebar() {
                       <Folder size={14} className="flex-shrink-0 text-[var(--color-muted)]" />
                     )}
                     <span className="flex-1 truncate">{project.name}</span>
-                    {project.task_count > 0 && (
-                      <span className="text-[10px] text-[var(--color-muted)] flex-shrink-0">
-                        {project.task_count}
-                      </span>
-                    )}
                   </button>
                   <button
                     type="button"
@@ -477,11 +472,6 @@ export function Sidebar() {
               >
                 <Folder size={14} className="flex-shrink-0 text-[var(--color-muted)]" />
                 <span className="flex-1 truncate">{project.name}</span>
-                {project.task_count > 0 && (
-                  <span className="text-[10px] text-[var(--color-muted)] flex-shrink-0">
-                    {project.task_count}
-                  </span>
-                )}
               </button>
             )
           })}
