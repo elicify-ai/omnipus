@@ -20,16 +20,15 @@ import {
   ArrowClockwise,
   UserCircle,
 } from '@phosphor-icons/react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useSidebarStore, SIDEBAR_PIN_BREAKPOINT } from '@/store/sidebar'
 import { useAuthStore } from '@/store/auth'
 import { useUiStore } from '@/store/ui'
 import { useNotificationsStore } from '@/store/notifications'
 import { useWorkspacesStore } from '@/store/workspacesStore'
-import { fetchWorkspaces, workspacesQueryKeys, fetchSessions, fetchAgents } from '@/lib/api'
+import { fetchWorkspaces, createWorkspace, workspacesQueryKeys, fetchSessions, fetchAgents } from '@/lib/api'
 import { useSessionStore } from '@/store/session'
 import { useSelectSession } from '@/components/chat/useSelectSession'
-import { NewWorkspaceSlideOver } from '@/components/workspaces/NewWorkspaceSlideOver'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -64,9 +63,34 @@ export function Sidebar() {
   const username = useAuthStore((s) => s.username)
 
   const queryClient = useQueryClient()
-  const [newProjectOpen, setNewProjectOpen] = useState(false)
   const [projectsExpanded, setProjectsExpanded] = useState(false)
   const [archiveOpen, setArchiveOpen] = useState(false)
+
+  // Inline workspace creation — name-only, edited directly in the list.
+  const [creatingWorkspace, setCreatingWorkspace] = useState(false)
+  const [newWorkspaceName, setNewWorkspaceName] = useState('')
+  const createWorkspaceMut = useMutation({
+    mutationFn: (name: string) => createWorkspace({ name }),
+    onSuccess: (ws) => {
+      queryClient.invalidateQueries({ queryKey: workspacesQueryKeys.list() })
+      setCreatingWorkspace(false)
+      setNewWorkspaceName('')
+      // Land in the new workspace immediately.
+      setActiveWorkspaceId(ws.id)
+      navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: ws.id } })
+    },
+    onError: (err) => {
+      useUiStore.getState().addToast({
+        message: err instanceof Error ? err.message : 'Could not create workspace',
+        variant: 'error',
+      })
+    },
+  })
+  const commitCreateWorkspace = () => {
+    const name = newWorkspaceName.trim()
+    if (!name || createWorkspaceMut.isPending) return
+    createWorkspaceMut.mutate(name)
+  }
 
   // Track whether the viewport is wide enough to allow pinning (≥1024px).
   const [canPin, setCanPin] = useState<boolean>(
@@ -258,13 +282,45 @@ export function Sidebar() {
             </span>
             <button
               type="button"
-              onClick={() => setNewProjectOpen(true)}
+              onClick={() => setCreatingWorkspace(true)}
               aria-label="New workspace"
               className="rounded p-0.5 text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
             >
               <Plus size={14} />
             </button>
           </div>
+
+          {/* Inline workspace creation — name is the only required field.
+              + adds an editable row right in the list; Enter creates, Escape cancels. */}
+          {creatingWorkspace && (
+            <div className="flex items-center gap-2 px-4 py-1.5">
+              <Folder size={14} className="flex-shrink-0 text-[var(--color-muted)]" />
+              <input
+                autoFocus
+                type="text"
+                value={newWorkspaceName}
+                onChange={(e) => setNewWorkspaceName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    commitCreateWorkspace()
+                  } else if (e.key === 'Escape') {
+                    setCreatingWorkspace(false)
+                    setNewWorkspaceName('')
+                  }
+                }}
+                onBlur={() => {
+                  // Commit on blur if a name was typed; otherwise cancel quietly.
+                  if (newWorkspaceName.trim()) commitCreateWorkspace()
+                  else { setCreatingWorkspace(false); setNewWorkspaceName('') }
+                }}
+                placeholder="Workspace name…"
+                aria-label="New workspace name"
+                disabled={createWorkspaceMut.isPending}
+                className="flex-1 min-w-0 rounded border border-[var(--color-accent)] bg-[var(--color-surface-1)] px-2 py-1 text-sm text-[var(--color-secondary)] outline-none placeholder:text-[var(--color-muted)] disabled:opacity-50"
+              />
+            </div>
+          )}
 
           {/* Error state (Fix 6) */}
           {projectsError && (
@@ -301,7 +357,7 @@ export function Sidebar() {
               <span className="text-xs text-[var(--color-muted)]">No workspaces yet — </span>
               <button
                 type="button"
-                onClick={() => setNewProjectOpen(true)}
+                onClick={() => setCreatingWorkspace(true)}
                 className="text-xs text-[var(--color-accent)] hover:underline"
               >
                 New workspace
@@ -590,8 +646,6 @@ export function Sidebar() {
         </DropdownMenuContent>
       </DropdownMenu>
 
-      {/* New workspace slide-over — rendered inside nav to avoid stacking context issues */}
-      <NewWorkspaceSlideOver open={newProjectOpen} onOpenChange={setNewProjectOpen} />
     </nav>
   )
 
