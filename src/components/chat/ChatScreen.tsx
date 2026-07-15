@@ -1355,7 +1355,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
       {slashMenu.shouldShowSlash && slashMenu.slashOpen && (
         <div
           data-testid="slash-menu"
-          className="mb-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] overflow-hidden shadow-lg"
+          className="mb-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-0)] overflow-hidden shadow-2xl"
         >
           {slashMenu.slashItems.map((item, globalIndex) => {
             const prevSection = globalIndex > 0 ? slashMenu.slashItems[globalIndex - 1].section : null
@@ -1378,7 +1378,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                     'w-full flex items-baseline gap-3 px-3 py-2 text-left transition-colors',
                     globalIndex === slashMenu.slashHighlight
                       ? 'bg-[var(--color-accent)]/10 text-[var(--color-secondary)]'
-                      : 'text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-secondary)]',
+                      : 'text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]',
                   )}
                   onMouseDown={(e) => {
                     e.preventDefault()
