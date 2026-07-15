@@ -67,9 +67,6 @@ export function Sidebar() {
   const [newProjectOpen, setNewProjectOpen] = useState(false)
   const [projectsExpanded, setProjectsExpanded] = useState(false)
   const [archiveOpen, setArchiveOpen] = useState(false)
-  const [searchQuery, setSearchQuery] = useState('')
-  const [showSearch, setShowSearch] = useState(false)
-  const searchInputRef = useRef<HTMLInputElement>(null)
 
   // Track whether the viewport is wide enough to allow pinning (≥1024px).
   const [canPin, setCanPin] = useState<boolean>(
@@ -247,20 +244,10 @@ export function Sidebar() {
 
       {/* Workspaces (primary, scrollable) */}
       <div className="flex-1 overflow-y-auto py-3">
-        {/* Workspaces section */}
-        <div
-          className="mb-1"
-          role="group"
-          aria-label="Workspaces"
-          tabIndex={-1}
-          onKeyDown={(e: React.KeyboardEvent<HTMLDivElement>) => {
-            if (e.key === '/' && !showSearch) {
-              e.preventDefault()
-              setShowSearch(true)
-              setTimeout(() => searchInputRef.current?.focus(), 0)
-            }
-          }}
-        >
+        {/* Workspaces section. The old hidden `/`-to-filter input is removed —
+            undiscoverable (no visual hint, focus-dependent) and a subset of
+            what the search modal does; workspace lookup lives there now. */}
+        <div className="mb-1" role="group" aria-label="Workspaces">
           {/* Section header */}
           <div className="flex items-center justify-between px-4 py-1">
             <span className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-muted)]">
@@ -275,35 +262,6 @@ export function Sidebar() {
               <Plus size={14} />
             </button>
           </div>
-
-          {/* Inline search input (Fix 10) */}
-          {showSearch && (
-            <div className="px-3 pb-1">
-              <div className="flex items-center gap-1.5 rounded bg-[var(--color-surface-2)] border border-[var(--color-border)] px-2 py-1">
-                <MagnifyingGlass size={12} className="text-[var(--color-muted)] flex-shrink-0" />
-                <input
-                  ref={searchInputRef}
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Escape') {
-                      setSearchQuery('')
-                      setShowSearch(false)
-                    }
-                    e.stopPropagation()
-                  }}
-                  onBlur={() => {
-                    setSearchQuery('')
-                    setShowSearch(false)
-                  }}
-                  placeholder="Filter workspaces…"
-                  aria-label="Filter workspaces"
-                  className="flex-1 bg-transparent text-xs text-[var(--color-secondary)] outline-none placeholder:text-[var(--color-muted)]"
-                />
-              </div>
-            </div>
-          )}
 
           {/* Error state (Fix 6) */}
           {projectsError && (
@@ -350,7 +308,6 @@ export function Sidebar() {
 
           {/* Workspace list — accordion: click name navigates, click chevron expands sessions */}
           {!projectsLoading && visibleProjects
-            .filter((p) => !showSearch || p.name.toLowerCase().includes(searchQuery.toLowerCase()))
             .map((project) => {
             const isActive = activeWorkspaceId === project.id
             const isInbox = project.is_default === true
@@ -427,42 +384,29 @@ export function Sidebar() {
                     ) : workspaceSessions.length === 0 ? (
                       <p className="pl-8 pr-4 py-1 text-xs text-[var(--color-muted)] opacity-60">No sessions yet</p>
                     ) : (
+                      // Pure navigation rows — no per-row manage icon (that
+                      // duplicated "More…" below, which is always visible and
+                      // opens the same search-&-manage view for this workspace).
                       visibleSessions.map((s) => {
                         const sActive = s.id === activeSessionId
                         return (
-                          <div
+                          <button
                             key={s.id}
+                            type="button"
+                            onClick={() => selectSession(s)}
                             className={cn(
-                              'group/ses flex items-center gap-1.5 w-full pl-8 pr-2 py-1 text-xs transition-colors text-left',
+                              'flex items-center gap-1.5 w-full pl-8 pr-4 py-1 text-xs transition-colors text-left',
                               sActive
                                 ? 'text-[var(--color-accent)] font-medium'
                                 : 'text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]'
                             )}
                           >
-                            <button
-                              type="button"
-                              onClick={() => selectSession(s)}
-                              className="flex items-center gap-1.5 flex-1 min-w-0 text-left"
-                            >
-                              {sActive && <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] flex-shrink-0" />}
-                              <span className="flex-1 truncate">{s.title || 'Untitled'}</span>
-                              {s.type === 'heartbeat' && (
-                                <span className="text-[9px] uppercase tracking-wider text-[var(--color-muted)] flex-shrink-0">HB</span>
-                              )}
-                            </button>
-                            {/* Manage (rename/delete) — lives in the search modal's rich editor.
-                                MagnifyingGlass (not pencil): the click opens search-&-manage, not
-                                an inline rename — the icon must not promise what it doesn't do. */}
-                            <button
-                              type="button"
-                              onClick={() => useUiStore.getState().openSearchModal(project.id)}
-                              className="shrink-0 rounded p-1 text-[var(--color-muted)] opacity-0 group-hover/ses:opacity-100 [@media(hover:none)]:opacity-100 hover:text-[var(--color-accent)] transition-all"
-                              aria-label={`Manage ${s.title || 'Untitled'}`}
-                              title="Search & manage"
-                            >
-                              <MagnifyingGlass size={11} />
-                            </button>
-                          </div>
+                            {sActive && <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] flex-shrink-0" />}
+                            <span className="flex-1 truncate">{s.title || 'Untitled'}</span>
+                            {s.type === 'heartbeat' && (
+                              <span className="text-[9px] uppercase tracking-wider text-[var(--color-muted)] flex-shrink-0">HB</span>
+                            )}
+                          </button>
                         )
                       })
                     )}
@@ -483,7 +427,7 @@ export function Sidebar() {
           })}
 
           {/* Show more / less toggle */}
-          {!projectsLoading && hasMore && !showSearch && (
+          {!projectsLoading && hasMore && (
             <button
               type="button"
               onClick={() => setProjectsExpanded((v) => !v)}
