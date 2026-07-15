@@ -289,7 +289,7 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
           data-unresolved={valueUnresolved || undefined}
           className={
             isGhost
-              ? 'flex items-center gap-1 h-8 rounded-md px-2 text-xs pointer-coarse:min-h-[44px] pointer-coarse:px-3 transition-colors focus-visible:outline-none focus-visible:ring-1 disabled:cursor-not-allowed disabled:opacity-50 hover:bg-[var(--color-surface-2)]'
+              ? 'flex items-center gap-1 h-7 rounded-md px-1.5 text-xs pointer-coarse:min-h-[44px] pointer-coarse:px-3 transition-colors focus-visible:outline-none focus-visible:ring-1 disabled:cursor-not-allowed disabled:opacity-50 hover:bg-[var(--color-surface-2)]'
               : 'flex w-full items-center justify-between h-10 rounded-md border px-3 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 disabled:cursor-not-allowed disabled:opacity-50'
           }
           style={

@@ -245,7 +245,7 @@ export function Sidebar() {
       {/* Brand row — wordmark only (no logo mark; the mark lives on login/
           onboarding/landing). 44px chrome row, no border-b (flat shell). */}
       <div className="flex items-center gap-2.5 px-4 h-chrome-header min-h-chrome-header shrink-0">
-        <Wordmark className="text-sm" />
+        <Wordmark className="text-base" />
         {/* Search icon — opens the cross-workspace session search modal */}
         <button
           type="button"

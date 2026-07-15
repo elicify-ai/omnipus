@@ -1445,24 +1445,28 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           the scope controls float above it). Agent/model/tokens relocated
           here from the workspace top-bar (Gestalt proximity); attach moved
           up from the old input row. */}
+      {/* py-0.5 (not overflow-clipping padding-bottom only): the row uses
+          overflow-x-auto, which also clips vertically — without symmetric
+          vertical breathing room the focus ring on the controls was cut off
+          at the top. Compact h-7 controls + py-0.5 keeps the ring visible. */}
       <div
-        className="flex items-center gap-1.5 min-w-0 overflow-x-auto px-1 pb-1.5"
+        className="flex items-center gap-1.5 min-w-0 overflow-x-auto px-1 py-0.5 mb-1"
         style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' } as React.CSSProperties}
       >
-        {/* Attach — opens the file picker scoped to the adapter's accept list.
-            Lives in the context row so the input row is just textarea + send. */}
+        {/* Order per operator spec: agent → model → attach. */}
+        <AgentPicker disabled={agentRemoved} tabIndex={2} />
+        <ModelPicker disabled={agentRemoved} tabIndex={3} />
+
+        {/* Attach — opens the file picker scoped to the adapter's accept list. */}
         <ComposerPrimitive.AddAttachment
           disabled={attachDisabled}
           tabIndex={4}
-          className="shrink-0 h-8 w-8 rounded-md flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-3)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
+          className="shrink-0 h-7 w-7 rounded-md flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-3)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
           aria-label="Attach file"
           title="Attach file"
         >
-          <Paperclip size={16} />
+          <Paperclip size={15} />
         </ComposerPrimitive.AddAttachment>
-
-        <AgentPicker disabled={agentRemoved} tabIndex={2} />
-        <ModelPicker disabled={agentRemoved} tabIndex={3} />
         <span className="flex-1" />
         {/* Token counter — status; hidden below @2xl of the composer root's
             @container (~42rem). */}
