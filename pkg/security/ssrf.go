@@ -60,7 +60,21 @@ var privateIPv6Ranges = []string{
 // that NewSSRFChecker reads from allowInternal, and correctly stay empty on
 // a zero value since there is no config to read.
 type SSRFChecker struct {
-	initOnce   sync.Once
+	initOnce sync.Once
+
+	// ipv4Nets, ipv6Nets, allowList, allowCIDRs (TDA-2): READ-ONLY after
+	// NewSSRFChecker (or ensureInit, for a zero-value checker) populates
+	// them. Do NOT add a mutator (e.g. an "AddAllowEntry"/"AppendCIDR"
+	// method) that appends or replaces these in place. CloneWithGatewayOrigin
+	// aliases these slices/map BY REFERENCE across every clone it produces
+	// AND the process-wide shared singleton (the one provider base_url and
+	// skill-installer URL validation also consult) — they are never deep-
+	// copied. An in-place mutation on any one checker would silently widen
+	// (or narrow) the SSRF allow-list for every other checker sharing these
+	// fields, including checkers the mutator's author never intended to
+	// touch. If a genuinely new allow-list needs to be built, construct a
+	// fresh SSRFChecker via NewSSRFChecker instead of mutating an existing
+	// one's fields.
 	ipv4Nets   []*net.IPNet
 	ipv6Nets   []*net.IPNet
 	allowList  map[string]bool // Allowlisted exact IPs and hostnames

@@ -1640,9 +1640,11 @@ func TestLoadConfig_LegacyPreviewFields_Ignored(t *testing.T) {
 	}
 }
 
-// TestConfig_IsPreviewEnabled verifies the semantic default of
-// gateway.preview_enabled (ADR-044, FR-006): nil resolves to true; the field
-// resolves to its explicit value otherwise. The method lives on *Config (not
+// TestConfig_IsPreviewEnabled verifies the semantics of
+// gateway.preview_enabled (ADR-044, FR-006, TDA-1): a nil *Config RECEIVER
+// fails closed (false — no config to consult); a non-nil *Config with the
+// field unset resolves to the field-level default (true); the field resolves
+// to its explicit value otherwise. The method lives on *Config (not
 // *GatewayConfig) per the shared cross-agent contract for this feature.
 func TestConfig_IsPreviewEnabled(t *testing.T) {
 	trueVal := true
@@ -1653,7 +1655,8 @@ func TestConfig_IsPreviewEnabled(t *testing.T) {
 		cfg  *Config
 		want bool
 	}{
-		{name: "unset (nil) defaults to true", cfg: &Config{}, want: true},
+		{name: "nil receiver fails closed (false) — no config to consult", cfg: nil, want: false},
+		{name: "non-nil config, field unset, defaults to true", cfg: &Config{}, want: true},
 		{name: "explicit true", cfg: &Config{Gateway: GatewayConfig{PreviewEnabled: &trueVal}}, want: true},
 		{name: "explicit false", cfg: &Config{Gateway: GatewayConfig{PreviewEnabled: &falseVal}}, want: false},
 	}
@@ -1665,5 +1668,27 @@ func TestConfig_IsPreviewEnabled(t *testing.T) {
 				t.Errorf("IsPreviewEnabled() = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestConfig_IsPreviewEnabled_NilPointerExplicit is a standalone, unmistakably
+// explicit regression pin for TDA-1: a literal `var nilCfg *Config` (as
+// opposed to a table-driven `cfg: nil` field, which some readers might assume
+// gets boxed into a non-nil zero value) must resolve IsPreviewEnabled() to
+// false. Calling a method on a nil pointer receiver is valid Go as long as
+// the method doesn't dereference before its own nil check, which is exactly
+// what IsPreviewEnabled's `if c == nil` guard exists to allow.
+func TestConfig_IsPreviewEnabled_NilPointerExplicit(t *testing.T) {
+	var nilCfg *Config
+	if got := nilCfg.IsPreviewEnabled(); got != false {
+		t.Errorf("nilCfg.IsPreviewEnabled() = %v, want false (fail-closed on nil receiver)", got)
+	}
+
+	// Differentiation: a real, non-nil *Config{} with the field unset must
+	// resolve to the OPPOSITE value (true) — proving the nil-receiver check
+	// and the field-level ResolveBool default are two genuinely different
+	// code paths, not one masking the other.
+	if got := (&Config{}).IsPreviewEnabled(); got != true {
+		t.Errorf("(&Config{}).IsPreviewEnabled() = %v, want true (field-level default)", got)
 	}
 }

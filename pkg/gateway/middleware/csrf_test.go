@@ -619,3 +619,63 @@ func TestCSRFMiddleware_BearerBypass_StillIntactAfterPreviewChanges(t *testing.T
 	assert.True(t, reached)
 	assert.Empty(t, rec.Result().Cookies(), "Bearer path is state-changing; it must not get a cookie re-minted")
 }
+
+// --- CR-2 coverage (7-reviewer gate, pass 2): anonymous pre-login re-mint ---
+
+// TestCSRF_SafeMethodRemint_AnonymousPreLogin_NoSessionRequired verifies
+// CR-2 / FR-019: an anonymous, PRE-LOGIN safe-method GET — no
+// __Host-csrf/csrf cookie, no omnipus-session cookie, no Authorization
+// header, nothing at all identifying the caller — still gets a fresh,
+// server-random CSRF cookie minted in the response. This is distinct from
+// TestCSRF_SafeMethodRemintsWhenCookieMissing (which only proves the
+// re-mint fires and carries the right MaxAge): this test additionally
+// proves (1) the minted value is genuinely random, not a fixed/hardcoded
+// placeholder — two independent anonymous requests must mint two DIFFERENT
+// tokens — and (2) the re-mint never sets or otherwise depends on a session
+// cookie: CSRFMiddleware has no session store dependency at all, so an
+// entirely unauthenticated visitor can acquire a CSRF cookie before ever
+// logging in, without that act establishing a session.
+func TestCSRF_SafeMethodRemint_AnonymousPreLogin_NoSessionRequired(t *testing.T) {
+	h := buildMW()
+
+	// A brand-new, anonymous browser hitting the SPA for the very first
+	// time: zero cookies, zero auth headers.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/state", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code, "an anonymous safe-method GET must never be rejected")
+	assert.Equal(t, "next-ran", rec.Body.String(), "the request must reach the next handler unblocked")
+
+	cookies := rec.Result().Cookies()
+	require.Len(t, cookies, 1, "exactly one cookie (the re-minted CSRF cookie) must be set")
+	minted := cookies[0]
+
+	assert.Contains(t, []string{CSRFCookieName, CSRFCookieNameHTTP}, minted.Name,
+		"minted cookie must be one of the two CSRF cookie flavors")
+	assert.NotEmpty(t, minted.Value, "minted token must be non-empty (server-random), not a placeholder")
+	assert.Len(t, minted.Value, 43,
+		"minted token must be the real 32-byte random value base64url-encoded, not a stub/constant")
+
+	// Differentiation: a SECOND, independent anonymous request must mint a
+	// DIFFERENT token. A hardcoded "random" value would make this fail while
+	// still passing every assertion above.
+	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/state", nil)
+	rec2 := httptest.NewRecorder()
+	h.ServeHTTP(rec2, req2)
+	cookies2 := rec2.Result().Cookies()
+	require.Len(t, cookies2, 1)
+	assert.NotEqual(t, minted.Value, cookies2[0].Value,
+		"two independent anonymous requests must mint two distinct tokens, proving the value is "+
+			"actually server-random and not a fixed constant")
+
+	// No session-establishing cookie of any kind is set by this middleware.
+	// CSRFMiddleware has no dependency on (and no knowledge of) session
+	// state — the re-mint is purely "does this safe request carry a CSRF
+	// cookie", independent of whether the caller is logged in.
+	for _, c := range cookies {
+		assert.NotContains(t, strings.ToLower(c.Name), "session",
+			"the CSRF re-mint must never set a session cookie — minting a CSRF token is not a "+
+				"login/session-establishing action")
+	}
+}

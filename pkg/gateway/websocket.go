@@ -670,6 +670,11 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn, r *http.Req
 		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 		return true
 	}
+	// SFH-1: surface "cookie present but invalid" (replay/probe/stale
+	// cookie) as a log line — silent for the routine "no cookie at all"
+	// case (see LogInvalidSessionCookiePresent's doc). Log-only: falling
+	// through to the frame-based auth path below is unchanged either way.
+	middleware.LogInvalidSessionCookiePresent(r, cfg)
 
 	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 	_, data, err := conn.ReadMessage()

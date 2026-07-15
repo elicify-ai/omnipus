@@ -3455,18 +3455,29 @@ func (c *Config) ValidateProviders() error {
 }
 
 // IsPreviewEnabled resolves the effective value of gateway.preview_enabled.
-// Semantic default is TRUE: returns true unless the field is explicitly set
-// to false. Read live on every call (ADR-044, FR-006) — not restart-gated.
-// Receiver is *Config (not *GatewayConfig) per the shared cross-agent
-// contract for this feature — callers use cfg.IsPreviewEnabled() directly.
+// Read live on every call (ADR-044, FR-006) — not restart-gated. Receiver is
+// *Config (not *GatewayConfig) per the shared cross-agent contract for this
+// feature — callers use cfg.IsPreviewEnabled() directly.
 //
-// Nil-receiver-safe: a nil *Config returns the semantic default (true) rather
-// than panicking on c.Gateway, so callers need not guard the call (some do, some
-// don't — this makes both correct). Uses the package's ResolveBool helper for
-// the *bool-with-default pattern.
+// Nil-receiver contract (fail-closed, TDA-1): a nil *Config means there is no
+// config to consult at all — e.g. a wiring bug, or a caller invoked before
+// config is loaded — and this returns FALSE. Preview serves agent-workspace
+// files and proxies loopback dev servers over the gateway's main listener;
+// when we cannot even determine whether the feature is enabled, the safe
+// default is to never serve it.
+//
+// This is deliberately DIFFERENT from the field-level default: once a real,
+// non-nil *Config exists, an unset gateway.preview_enabled field still
+// resolves to true via ResolveBool — the feature is on by default for a
+// normal install. Only the "no config at all" case fails closed; "config
+// exists but doesn't mention preview_enabled" does not.
+//
+// Existing call sites written as `cfg == nil || !cfg.IsPreviewEnabled()` are
+// now redundant-but-harmless belt-and-suspenders — the method itself already
+// returns false for a nil cfg — and do not need to change.
 func (c *Config) IsPreviewEnabled() bool {
 	if c == nil {
-		return true
+		return false
 	}
 	return ResolveBool(c.Gateway.PreviewEnabled, true)
 }

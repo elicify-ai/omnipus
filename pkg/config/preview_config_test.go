@@ -11,9 +11,11 @@
 // preview listener (it defaults tools.run_in_workspace.warmup_timeout_seconds)
 // and survives untouched, so its test remains here.
 //
-// The new gateway.preview_enabled semantics (default true, read live via
-// GatewayConfig.IsPreviewEnabled) are covered by TestGatewayConfig_IsPreviewEnabled
-// and TestLoadConfig_LegacyPreviewFields_Ignored in config_test.go, and
+// The new gateway.preview_enabled semantics (field-level default true, but a
+// nil *Config RECEIVER fails closed to false per TDA-1 — read live via
+// Config.IsPreviewEnabled) are covered by TestConfig_IsPreviewEnabled,
+// TestConfig_IsPreviewEnabled_NilPointerExplicit, and
+// TestLoadConfig_LegacyPreviewFields_Ignored in config_test.go, and
 // TestRestartGatedKeys_KeepsPublicURL_DropsPreview in
 // pkg/gateway/rest_pending_restart_test.go.
 

@@ -231,6 +231,28 @@ func previewDisabledResult() *ToolResult {
 	}
 }
 
+// previewOriginUnresolvedResult builds the fail-closed IsError result
+// returned when preview IS enabled but middleware.CanonicalGatewayOrigin(cfg)
+// cannot resolve a usable origin — the case where gateway.host is a wildcard
+// bind ("0.0.0.0", "::", "::0") and gateway.public_url is unset. Before this
+// guard, web_serve concatenated the empty origin with the /preview/ path and
+// returned a schemeless/hostless URL (e.g. "/preview/<agent>/<token>/") as a
+// SUCCESS result — a fail-open regression from the deleted H4 guard (SFH-2).
+// Deliberately distinct wording from previewDisabledResult: this is not "the
+// feature is off", it's "the feature is on but the gateway's own public
+// origin cannot be determined", so the fix is different (set public_url, not
+// flip the preview toggle).
+func previewOriginUnresolvedResult() *ToolResult {
+	return &ToolResult{
+		IsError: true,
+		ForLLM: "web_serve: cannot resolve the gateway's public origin — gateway.host is bound to a " +
+			"wildcard address (0.0.0.0/::) and gateway.public_url is unset, so no usable /preview/ URL " +
+			"can be minted; set gateway.public_url to the gateway's externally-reachable https:// URL",
+		ForUser: "Preview cannot generate a working link because the gateway is bound to a wildcard address " +
+			"with no public URL configured. Set Settings → Gateway → Public URL to the gateway's reachable address.",
+	}
+}
+
 // SetAuditLogger satisfies auditLoggerAware.
 func (t *WebServeTool) SetAuditLogger(logger *audit.Logger) {
 	t.auditLogger = logger
@@ -298,6 +320,18 @@ func (t *WebServeTool) executeStatic(ctx context.Context, rawPath string, args m
 		return previewDisabledResult()
 	}
 
+	// SFH-2: resolve the canonical gateway origin BEFORE any registration
+	// side effect. middleware.CanonicalGatewayOrigin(cfg) returns "" when
+	// gateway.host is a wildcard bind (0.0.0.0/::/::0) and gateway.public_url
+	// is unset — there is then no usable host to embed in the /preview/ URL.
+	// Fail closed here instead of concatenating the empty origin with the
+	// path, which would mint a schemeless/hostless URL and report it as a
+	// SUCCESS.
+	origin := middleware.CanonicalGatewayOrigin(cfg)
+	if origin == "" {
+		return previewOriginUnresolvedResult()
+	}
+
 	// Resolve and validate the path within the workspace.
 	absDir, err := ValidateWorkspacePath(rawPath, t.workspace, true, nil)
 	if err != nil {
@@ -327,7 +361,9 @@ func (t *WebServeTool) executeStatic(ctx context.Context, rawPath string, args m
 	// origin CORS/CSP/WS CheckOrigin use — so serve_web can never desync from
 	// those fences. gateway.public_url (the dominant input) is restart-gated,
 	// so this is boot-stable even though it's recomputed on every call.
-	url := middleware.CanonicalGatewayOrigin(cfg) + path
+	// origin was already resolved (and fail-closed-checked for emptiness)
+	// above, before the registration side effect.
+	url := origin + path
 
 	return NewToolResult(fmt.Sprintf(
 		`{"kind":"static","path":%q,"url":%q,"expires_at":%q}`,
@@ -460,6 +496,17 @@ func (t *WebServeTool) executeDev(ctx context.Context, rawPath, command string, 
 	cfg := t.currentConfig()
 	if cfg == nil || !cfg.IsPreviewEnabled() {
 		return previewDisabledResult()
+	}
+
+	// SFH-2: resolve the canonical gateway origin BEFORE reserving a port or
+	// spawning the dev-server child. See the identical guard in
+	// executeStatic for the full rationale — failing here, before any spawn,
+	// also avoids leaking a running dev-server process that no caller could
+	// ever be told the URL for (an empty origin would otherwise only be
+	// discovered after the child was already running).
+	origin := middleware.CanonicalGatewayOrigin(cfg)
+	if origin == "" {
+		return previewOriginUnresolvedResult()
 	}
 
 	if t.devReg == nil {
@@ -604,10 +651,12 @@ func (t *WebServeTool) executeDev(ctx context.Context, rawPath, command string, 
 	path := fmt.Sprintf("/preview/%s/%s/", agentID, token)
 	// US-3 AS-3: host MUST equal the canonical gateway origin — the SAME
 	// origin CORS/CSP/WS CheckOrigin use (middleware.CanonicalGatewayOrigin),
-	// recomputed live from cfg but boot-stable because gateway.public_url is
-	// restart-gated. sandbox.BuildDevURL is not used here — see its package
-	// doc comment (unused in production, kept as reference + test fixture).
-	url := middleware.CanonicalGatewayOrigin(cfg) + path
+	// resolved live from cfg but boot-stable because gateway.public_url is
+	// restart-gated; origin was already resolved (and fail-closed-checked
+	// for emptiness) above, before the port reservation/spawn. sandbox.
+	// BuildDevURL is not used here — see its package doc comment (unused in
+	// production, kept as reference + test fixture).
+	url := origin + path
 
 	deadline := startedAt.Add(sandbox.HardTimeout).UTC().Format(time.RFC3339)
 	summary := fmt.Sprintf(

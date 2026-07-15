@@ -4866,13 +4866,17 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 // /preview/ shares gateway.port with the SPA and /api/v1/*.
 //
 // Auth model: token-only (FR-023). Registered bare — no withAuth/session
-// wrapping, no RequireMatchingOriginOnStateChanging (FR-023a) — the URL path
-// token is the credential. It DOES inherit the global configSnapshotMiddleware
-// (and the CSRF middleware, which exempts the /preview/ prefix — see
-// middleware/csrf.go's defaultExemptPrefixes) because those are wrapped around
-// the whole main mux in gateway.go, not per-route. HandlePreview itself checks
-// cfg.IsPreviewEnabled() live on every request and 404s when disabled
-// (FR-006) — toggling it never requires a restart.
+// wrapping — the URL path token is the credential. (There is also no live
+// Origin-check middleware in this handler chain to opt out of:
+// middleware.RequireMatchingOriginOnStateChanging exists in origin.go as a
+// tested reference helper — FR-023a documents the /preview/ exemption it
+// would need — but it is not wired into gateway.go for ANY route, so this is
+// not something /preview/ specifically forgoes.) It DOES inherit the global
+// configSnapshotMiddleware (and the CSRF middleware, which exempts the
+// /preview/ prefix — see middleware/csrf.go's defaultExemptPrefixes) because
+// those are wrapped around the whole main mux in gateway.go, not per-route.
+// HandlePreview itself checks cfg.IsPreviewEnabled() live on every request
+// and 404s when disabled (FR-006) — toggling it never requires a restart.
 //
 // /preview/ is the unified route for the web_serve tool. The legacy /serve/
 // and /dev/ back-compat handlers (for registrations produced before /preview/

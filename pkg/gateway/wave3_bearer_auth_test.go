@@ -698,6 +698,83 @@ func TestWithOptionalAuthAcceptsSessionCookie(t *testing.T) {
 	})
 }
 
+// TestWithOptionalAuthInvalidCookie_FallsThroughToAnonymous is the PTA-3
+// negative-case regression companion to TestWithOptionalAuthAcceptsSessionCookie
+// above: a request carrying an omnipus-session cookie whose VALUE does NOT
+// bcrypt-match any configured user (a stale, forged, or replayed cookie) must
+// fall through to anonymous pass-through exactly like "no cookie at all" —
+// never panic, never 500, and never resolve to some other/stale identity.
+// BDD: Given a request with an omnipus-session cookie present but invalid
+// (bcrypt-matches no configured user), When a withOptionalAuth-wrapped route
+// is called, Then the wrapped handler still runs (200) and the context user
+// is nil (anonymous) — not an error response and not a crash.
+// Traces to: preview-on-main-listener-spec.md FR-009; pr-review PTA-3
+// (pass-2 fix round).
+//
+// Note on scope: SFH-1 (same fix round) wires
+// middleware.LogInvalidSessionCookiePresent into the three LIVE
+// cookie-fallback sites that are fail-CLOSED on a cookie miss —
+// checkBearerAuth (auth.go), authenticateWS (websocket.go), and
+// BrowserWSHandler.authenticate (browser_ws.go). withOptionalAuth's own
+// cookie fallback is deliberately NOT one of those three: it is fail-OPEN by
+// design (this is the *optional*-auth path — see withOptionalAuth's doc in
+// rest_auth.go), so an unmatched cookie here is an expected, routine
+// anonymous fallback rather than a probe/replay signal worth flagging. This
+// test therefore only asserts the outcome (anonymous, no panic/500) — it
+// does not require a log line, since withOptionalAuth is not wired to the
+// new helper.
+func TestWithOptionalAuthInvalidCookie_FallsThroughToAnonymous(t *testing.T) {
+	os.Unsetenv("OMNIPUS_BEARER_TOKEN")
+
+	_, hash, err := middleware.MintSessionToken()
+	require.NoError(t, err)
+
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{
+			Users: []config.UserConfig{
+				{Username: "real-cookie-user", SessionTokenHash: config.BcryptHash(hash)},
+			},
+		},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+		},
+	}
+	api := &restAPI{
+		agentLoop:     mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{}),
+		allowedOrigin: "http://localhost:3000",
+	}
+
+	var gotUser *config.UserConfig
+	called := false
+	handler := api.withOptionalAuth(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		gotUser, _ = r.Context().Value(UserContextKey{}).(*config.UserConfig)
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// Poison gotUser first so a no-op handler run couldn't produce a false pass.
+	gotUser = &config.UserConfig{Username: "sentinel-must-be-cleared"}
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/state", nil)
+	r.AddCookie(&http.Cookie{
+		Name:  middleware.SessionCookieName,
+		Value: "this-cookie-value-bcrypt-matches-no-configured-user-at-all",
+	})
+	// Deliberately no Authorization header — isolating the cookie-fallback path.
+
+	require.NotPanics(t, func() { handler(w, r) },
+		"a present-but-invalid session cookie must never panic withOptionalAuth")
+
+	require.Equal(t, http.StatusOK, w.Code,
+		"a present-but-invalid cookie must fall through to anonymous pass-through (200), not 401/500")
+	assert.True(t, called, "the wrapped handler must still run — optional auth never rejects")
+	assert.Nil(t, gotUser,
+		"a cookie that bcrypt-matches no configured user must resolve to anonymous (nil), not error "+
+			"and not leak a stale/sentinel identity")
+}
+
 // dialTestWSWithCookie dials the chat WebSocket endpoint carrying the given
 // omnipus-session cookie value on the upgrade request itself (the browser's
 // automatic same-origin cookie attachment during the WS handshake). Proves

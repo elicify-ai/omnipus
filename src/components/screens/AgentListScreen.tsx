@@ -524,8 +524,9 @@ export function AgentListScreen() {
     if (!username) return
     let cancelled = false
     // UAT fix: go through the authed `fetchCliDetect()` (request() wrapper)
-    // so the bearer token is sent. The previous raw fetch had no auth header
-    // and 401'd, producing a false "Could not detect installed CLIs" banner.
+    // so the omnipus-session cookie is sent (credentials:'include'). The
+    // previous raw fetch had no credentials and 401'd, producing a false
+    // "Could not detect installed CLIs" banner.
     fetchCliDetect()
       .then((d) => {
         if (!cancelled) setHostClis(d)
