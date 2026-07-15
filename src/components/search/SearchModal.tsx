@@ -343,7 +343,6 @@ export function SearchModal() {
                 </button>
               </span>
             )}
-            {total > 0 && <span className="ml-auto text-xs font-normal text-[var(--color-muted)]">{total} results</span>}
           </DialogTitle>
           <DialogDescription className="sr-only">Search sessions across all workspaces, grouped by workspace and agent.</DialogDescription>
 
