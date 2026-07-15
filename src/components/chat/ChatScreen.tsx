@@ -1213,6 +1213,28 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   // their own state via a dedicated hook — see src/hooks/useSlashMenu.ts,
   // useFileUpload.ts, useCancelState.ts. cancelState is instantiated first
   // because the slash menu's `/cancel` command delegates to it.
+  // Focus discipline: the chat input is the page's home position. Focus it
+  // (1) on arrival at the chat page (mount), (2) when the search modal
+  // closes, and (3) when the slash menu closes — the user should never have
+  // to click back into the input after any of these.
+  const focusChatInput = useCallback(() => {
+    // rAF: run after Radix's own focus-restore (Dialog returns focus to its
+    // trigger on close) so ours wins.
+    requestAnimationFrame(() => {
+      const el = document.querySelector<HTMLTextAreaElement>('[data-testid="chat-input"]')
+      el?.focus()
+    })
+  }, [])
+  useEffect(() => {
+    focusChatInput()
+  }, [focusChatInput])
+  const searchModalOpenForFocus = useUiStore((s) => s.searchModalOpen)
+  const prevSearchOpenRef = useRef(searchModalOpenForFocus)
+  useEffect(() => {
+    if (prevSearchOpenRef.current && !searchModalOpenForFocus) focusChatInput()
+    prevSearchOpenRef.current = searchModalOpenForFocus
+  }, [searchModalOpenForFocus, focusChatInput])
+
   const cancelState = useCancelState(isStreaming, cancelStream)
   const fileUpload = useFileUpload(composerRuntime)
   const slashMenu = useSlashMenu({
@@ -1393,6 +1415,9 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                   onMouseDown={(e) => {
                     e.preventDefault()
                     item.onSelect()
+                    // Click-selecting a slash item must land focus back in the
+                    // input (keyboard selection never loses it; mouse would).
+                    focusChatInput()
                   }}
                   onMouseEnter={() => slashMenu.onHoverItem(globalIndex)}
                 >
@@ -1428,6 +1453,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
             Lives in the context row so the input row is just textarea + send. */}
         <ComposerPrimitive.AddAttachment
           disabled={attachDisabled}
+          tabIndex={4}
           className="shrink-0 h-8 w-8 rounded-md flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-3)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
           aria-label="Attach file"
           title="Attach file"
@@ -1435,8 +1461,8 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           <Paperclip size={16} />
         </ComposerPrimitive.AddAttachment>
 
-        <AgentPicker disabled={agentRemoved} />
-        <ModelPicker disabled={agentRemoved} />
+        <AgentPicker disabled={agentRemoved} tabIndex={2} />
+        <ModelPicker disabled={agentRemoved} tabIndex={3} />
         <span className="flex-1" />
         {/* Token counter — status; hidden below @2xl of the composer root's
             @container (~42rem). */}
@@ -1475,6 +1501,11 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           <div className="relative flex-1 min-w-0">
             <ComposerPrimitive.Input
               data-testid="chat-input"
+              // Explicit tab order 1: chat input first, then agent(2) →
+              // model(3) → attach(4) → browser(5), then natural DOM order
+              // (the header tab menu). Deliberate positive tabIndex on this
+              // closed 5-control set per operator direction.
+              tabIndex={1}
               placeholder={agentRemoved ? 'Agent has been removed — this session is read-only' : composerPlaceholder(isConnected || reconnectPhase === 'reconnecting' || reconnectPhase === 'slow', isStreaming, isReplaying, activeAgentName, reconnectPhase === 'gave_up')}
               // FR-3a: the slash menu must be reachable mid-stream, which means the
               // textarea has to accept keystrokes during streaming. Submission is

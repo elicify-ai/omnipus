@@ -41,6 +41,8 @@ interface ModelSelectorProps {
    * all current call sites.
    */
   triggerTestId?: string
+  /** Explicit tab-order position forwarded to the trigger element. */
+  tabIndex?: number
   /** Prefix for each item's data-testid. The full id is `${itemTestIdPrefix}${model}`. */
   itemTestIdPrefix?: string
   /**
@@ -115,7 +117,7 @@ interface ModelSelectorProps {
   onOpenChange?: (open: boolean) => void
 }
 
-export function ModelSelector({ models, value, onChange, placeholder, disabled, providerGroups, triggerTestId, itemTestIdPrefix, onUnknownModel, onPairChange, showUnresolvedIndicator = true, constrainToCatalog = false, allowFreeTextWhenEmpty = false, emptyCatalogHint, variant = 'default', open: controlledOpen, onOpenChange: controlledOnOpenChange }: ModelSelectorProps) {
+export function ModelSelector({ models, value, onChange, placeholder, disabled, providerGroups, triggerTestId, tabIndex, itemTestIdPrefix, onUnknownModel, onPairChange, showUnresolvedIndicator = true, constrainToCatalog = false, allowFreeTextWhenEmpty = false, emptyCatalogHint, variant = 'default', open: controlledOpen, onOpenChange: controlledOnOpenChange }: ModelSelectorProps) {
   const [internalOpen, setInternalOpen] = React.useState(false)
   const isControlled = controlledOpen !== undefined
   const open = isControlled ? controlledOpen : internalOpen
@@ -282,6 +284,7 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
           aria-invalid={valueUnresolved || undefined}
           aria-describedby={valueUnresolved ? `${descriptionId}-unresolved` : undefined}
           disabled={disabled}
+          tabIndex={tabIndex}
           data-testid={triggerTestId}
           data-unresolved={valueUnresolved || undefined}
           className={
